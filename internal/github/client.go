@@ -211,6 +211,9 @@ func (c *Client) get(ctx context.Context, path string, params map[string]string,
 		return fmt.Errorf("request github: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == 429 || (resp.StatusCode == 403 && resp.Header.Get("X-RateLimit-Remaining") == "0") {
+		return &RateLimitError{RetryAfter: parseRateLimitReset(resp.Header)}
+	}
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("github api error: %s", resp.Status)
 	}
@@ -231,4 +234,29 @@ func HasLabel(labels []Label, target string) bool {
 		}
 	}
 	return false
+}
+
+// RateLimitError is returned when the GitHub API rate limit is exceeded.
+type RateLimitError struct {
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitError) Error() string {
+	return fmt.Sprintf("github rate limit exceeded, retry after %s", e.RetryAfter)
+}
+
+func parseRateLimitReset(header http.Header) time.Duration {
+	if ra := header.Get("Retry-After"); ra != "" {
+		if seconds, err := strconv.Atoi(ra); err == nil {
+			return time.Duration(seconds) * time.Second
+		}
+	}
+	if reset := header.Get("X-RateLimit-Reset"); reset != "" {
+		if epoch, err := strconv.ParseInt(reset, 10, 64); err == nil {
+			if d := time.Until(time.Unix(epoch, 0)); d > 0 {
+				return d
+			}
+		}
+	}
+	return 60 * time.Second
 }

@@ -11,12 +11,19 @@ import (
 
 func NewLogger(cfg config.LogConfig) zerolog.Logger {
 	level := zerolog.InfoLevel
+	var levelErr error
 	if cfg.Level != "" {
 		parsed, err := zerolog.ParseLevel(strings.ToLower(cfg.Level))
 		if err == nil {
 			level = parsed
+		} else {
+			levelErr = err
 		}
 	}
 	zerolog.SetGlobalLevel(level)
-	return zerolog.New(os.Stdout).With().Timestamp().Logger()
+	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	if levelErr != nil {
+		logger.Warn().Str("configured_level", cfg.Level).Err(levelErr).Msg("invalid log level, defaulting to info")
+	}
+	return logger
 }

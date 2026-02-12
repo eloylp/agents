@@ -144,15 +144,23 @@ func (r *Runner) promptMeta(prompt string) promptMeta {
 }
 
 func truncatePrompt(prompt string, maxChars int) string {
-	if maxChars <= 0 || len(prompt) <= maxChars {
+	if maxChars <= 0 {
 		return prompt
 	}
-	return prompt[:maxChars]
+	runes := []rune(prompt)
+	if len(runes) <= maxChars {
+		return prompt
+	}
+	return string(runes[:maxChars])
 }
 
-func truncateString(value string, max int) string {
-	if max <= 0 || len(value) <= max {
+func truncateString(value string, maxChars int) string {
+	if maxChars <= 0 {
 		return value
 	}
-	return value[:max]
+	runes := []rune(value)
+	if len(runes) <= maxChars {
+		return value
+	}
+	return string(runes[:maxChars])
 }

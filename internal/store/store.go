@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	_ "embed"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,64 +12,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-const schemaSQL = `
-CREATE TABLE IF NOT EXISTS repos (
-id bigserial PRIMARY KEY,
-full_name text UNIQUE NOT NULL,
-enabled bool NOT NULL DEFAULT true,
-poll_interval_seconds int NOT NULL DEFAULT 60,
-last_issue_updated_at timestamptz NULL,
-last_pr_updated_at timestamptz NULL,
-created_at timestamptz DEFAULT now(),
-updated_at timestamptz DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS work_items (
-id bigserial PRIMARY KEY,
-repo_full_name text NOT NULL,
-kind text NOT NULL,
-number int NOT NULL,
-last_seen_updated_at timestamptz NULL,
-last_seen_head_sha text NULL,
-created_at timestamptz DEFAULT now(),
-updated_at timestamptz DEFAULT now(),
-UNIQUE (repo_full_name, kind, number)
-);
-
-CREATE TABLE IF NOT EXISTS workflow_runs (
-id bigserial PRIMARY KEY,
-work_item_id bigint REFERENCES work_items(id),
-workflow text NOT NULL,
-fingerprint text NOT NULL,
-status text NOT NULL,
-error text NULL,
-started_at timestamptz DEFAULT now(),
-finished_at timestamptz NULL,
-UNIQUE (work_item_id, workflow, fingerprint)
-);
-
-CREATE TABLE IF NOT EXISTS posted_artifacts (
-id bigserial PRIMARY KEY,
-workflow_run_id bigint REFERENCES workflow_runs(id),
-artifact_type text NOT NULL,
-part_key text NOT NULL,
-github_id text NOT NULL,
-url text NULL,
-created_at timestamptz DEFAULT now(),
-UNIQUE (workflow_run_id, artifact_type, part_key)
-);
-
-CREATE TABLE IF NOT EXISTS locks (
-work_item_id bigint PRIMARY KEY REFERENCES work_items(id),
-locked_until timestamptz NOT NULL,
-owner text NOT NULL,
-updated_at timestamptz DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_work_items_repo_kind_number ON work_items(repo_full_name, kind, number);
-CREATE INDEX IF NOT EXISTS idx_workflow_runs_item_workflow ON workflow_runs(work_item_id, workflow);
-CREATE INDEX IF NOT EXISTS idx_posted_artifacts_run ON posted_artifacts(workflow_run_id);
-`
+//go:embed schema.sql
+var schemaSQL string
 
 const maxErrorLength = 2000
 
@@ -260,7 +205,7 @@ WHERE id = $1
 }
 
 func (s *Store) RecordArtifact(ctx context.Context, artifact Artifact) (bool, error) {
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 INSERT INTO posted_artifacts (workflow_run_id, artifact_type, part_key, github_id, url)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (workflow_run_id, artifact_type, part_key)
@@ -269,7 +214,11 @@ DO NOTHING
 	if err != nil {
 		return false, fmt.Errorf("record artifact: %w", err)
 	}
-	return true, nil
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("record artifact rows affected: %w", err)
+	}
+	return rows > 0, nil
 }
 
 func (s *Store) CountWorkflowRunsSince(ctx context.Context, workItemID int64, workflow string, since time.Time) (int, error) {
@@ -285,6 +234,39 @@ AND started_at >= $3
 		return 0, fmt.Errorf("count workflow runs: %w", err)
 	}
 	return count, nil
+}
+
+func (s *Store) TryLock(ctx context.Context, workItemID int64, owner string, duration time.Duration) (bool, error) {
+	lockedUntil := time.Now().Add(duration)
+	row := s.db.QueryRowContext(ctx, `
+INSERT INTO locks (work_item_id, locked_until, owner, updated_at)
+VALUES ($1, $2, $3, now())
+ON CONFLICT (work_item_id) DO UPDATE
+SET locked_until = EXCLUDED.locked_until,
+    owner = EXCLUDED.owner,
+    updated_at = now()
+WHERE locks.locked_until < now()
+RETURNING work_item_id
+`, workItemID, lockedUntil, owner)
+	var id int64
+	switch err := row.Scan(&id); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	default:
+		return false, fmt.Errorf("try lock: %w", err)
+	}
+}
+
+func (s *Store) Unlock(ctx context.Context, workItemID int64, owner string) error {
+	_, err := s.db.ExecContext(ctx, `
+DELETE FROM locks WHERE work_item_id = $1 AND owner = $2
+`, workItemID, owner)
+	if err != nil {
+		return fmt.Errorf("unlock: %w", err)
+	}
+	return nil
 }
 
 func SanitizeError(err error) *string {

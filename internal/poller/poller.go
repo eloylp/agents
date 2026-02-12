@@ -59,6 +59,7 @@ func (p *Poller) Run(ctx context.Context) error {
 		}
 	}
 	if len(p.states) == 0 {
+		p.logger.Warn().Msg("no enabled repos found, exiting")
 		return nil
 	}
 
@@ -155,11 +156,14 @@ func (p *Poller) pollIssues(ctx context.Context, state *repoState, logger zerolo
 		if issue.UpdatedAt.After(latest) {
 			latest = issue.UpdatedAt
 		}
-		if err := p.engine.HandleIssue(ctx, state.repo, issue); err != nil {
+		ran, err := p.engine.HandleIssue(ctx, state.repo, issue)
+		if err != nil {
 			logger.Error().Err(err).Int("issue_number", issue.Number).Msg("issue workflow failed")
 			continue
 		}
-		updated = true
+		if ran {
+			updated = true
+		}
 	}
 	if !latest.IsZero() {
 		state.record.LastIssueUpdatedAt = &latest
@@ -184,11 +188,14 @@ func (p *Poller) pollPRs(ctx context.Context, state *repoState, logger zerolog.L
 		if pr.UpdatedAt.After(latest) {
 			latest = pr.UpdatedAt
 		}
-		if err := p.engine.HandlePullRequest(ctx, state.repo, pr); err != nil {
+		ran, err := p.engine.HandlePullRequest(ctx, state.repo, pr)
+		if err != nil {
 			logger.Error().Err(err).Int("pr_number", pr.Number).Msg("pr workflow failed")
 			continue
 		}
-		updated = true
+		if ran {
+			updated = true
+		}
 	}
 	if !latest.IsZero() {
 		state.record.LastPRUpdatedAt = &latest

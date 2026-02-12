@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"os"
 	"os/signal"
@@ -66,7 +67,7 @@ func main() {
 	poller := poller.New(cfg, storeClient, githubClient, engine, logger)
 
 	logger.Info().Msg("agent daemon started")
-	if err := poller.Run(ctx); err != nil && err != context.Canceled {
+	if err := poller.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Fatal().Err(err).Msg("poller stopped with error")
 	}
 	logger.Info().Msg("agent daemon stopped")
