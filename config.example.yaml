@@ -27,8 +27,7 @@ claude:
   mode: command
   command: claude
   args:
-    - "--mcp"
-    - "github"
+    - "-p"
   timeout_seconds: 600
   max_prompt_chars: 12000
   redaction_salt_env: LOG_SALT
