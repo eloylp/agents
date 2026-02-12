@@ -53,6 +53,7 @@ func (e *Engine) HandleIssue(ctx context.Context, repo config.RepoConfig, issue 
 		labelGate = e.cfg.Poller.IssueLabel
 	}
 	if !github.HasLabel(issue.Labels, labelGate) {
+		e.logger.Info().Str("repo", repo.FullName).Int("issue_number", issue.Number).Str("required_label", labelGate).Msg("issue skipped, missing label")
 		return false, nil
 	}
 	comments, err := e.github.ListIssueComments(ctx, repo.FullName, issue.Number, e.cfg.Poller.CommentFingerprintLimit)
@@ -106,6 +107,7 @@ func (e *Engine) HandleIssue(ctx context.Context, repo config.RepoConfig, issue 
 	}
 
 	prompt := claude.BuildIssueRefinePrompt(repo.FullName, issue.Number, fingerprint, labelGate)
+	logger.Info().Msg("invoking claude for issue refinement")
 	response, err := e.runner.Run(ctx, claude.Request{
 		Workflow:    workflowIssueRefine,
 		Repo:        repo.FullName,
@@ -144,6 +146,7 @@ func (e *Engine) HandleIssue(ctx context.Context, repo config.RepoConfig, issue 
 
 func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, pr github.PullRequest) (bool, error) {
 	if pr.Draft {
+		e.logger.Info().Str("repo", repo.FullName).Int("pr_number", pr.Number).Msg("pull request skipped, draft")
 		return false, nil
 	}
 	labelGate := repo.PRLabel
@@ -151,6 +154,7 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 		labelGate = e.cfg.Poller.PRLabel
 	}
 	if !github.HasLabel(pr.Labels, labelGate) {
+		e.logger.Info().Str("repo", repo.FullName).Int("pr_number", pr.Number).Str("required_label", labelGate).Msg("pull request skipped, missing label")
 		return false, nil
 	}
 	files, err := e.github.ListPullRequestFiles(ctx, repo.FullName, pr.Number, e.cfg.Poller.FileFingerprintLimit)
@@ -204,6 +208,7 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 	}
 
 	prompt := claude.BuildPRReviewPrompt(repo.FullName, pr.Number, fingerprint, labelGate)
+	logger.Info().Msg("invoking claude for pr review")
 	response, err := e.runner.Run(ctx, claude.Request{
 		Workflow:    workflowPRReview,
 		Repo:        repo.FullName,

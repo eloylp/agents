@@ -72,6 +72,7 @@ func (p *Poller) Run(ctx context.Context) error {
 
 		nextRepo, sleepFor := p.nextDue()
 		if sleepFor > 0 {
+			p.logger.Info().Str("repo", nextRepo.repo.FullName).Dur("sleep", sleepFor).Msg("waiting for next poll cycle")
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -81,9 +82,13 @@ func (p *Poller) Run(ctx context.Context) error {
 		if nextRepo == nil {
 			continue
 		}
+		p.logger.Info().Str("repo", nextRepo.repo.FullName).Msg("polling repo")
 		updated, err := p.pollRepo(ctx, nextRepo)
 		if err != nil {
 			p.logger.Error().Err(err).Str("repo", nextRepo.repo.FullName).Msg("poll failed")
+		}
+		if !updated {
+			p.logger.Info().Str("repo", nextRepo.repo.FullName).Msg("no new updates found")
 		}
 		p.scheduleNext(nextRepo, updated)
 	}
@@ -148,8 +153,10 @@ func (p *Poller) pollIssues(ctx context.Context, state *repoState, logger zerolo
 		return false, err
 	}
 	if len(issues) == 0 {
+		logger.Info().Msg("no updated issues found")
 		return false, nil
 	}
+	logger.Info().Int("count", len(issues)).Msg("processing updated issues")
 	updated := false
 	var latest time.Time
 	for _, issue := range issues {
@@ -180,8 +187,10 @@ func (p *Poller) pollPRs(ctx context.Context, state *repoState, logger zerolog.L
 		return false, err
 	}
 	if len(prs) == 0 {
+		logger.Info().Msg("no updated pull requests found")
 		return false, nil
 	}
+	logger.Info().Int("count", len(prs)).Msg("processing updated pull requests")
 	updated := false
 	var latest time.Time
 	for _, pr := range prs {

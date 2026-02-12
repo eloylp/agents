@@ -212,7 +212,9 @@ func (c *Client) get(ctx context.Context, path string, params map[string]string,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 429 || (resp.StatusCode == 403 && resp.Header.Get("X-RateLimit-Remaining") == "0") {
-		return &RateLimitError{RetryAfter: parseRateLimitReset(resp.Header)}
+		retryAfter := parseRateLimitReset(resp.Header)
+		c.logger.Warn().Str("path", path).Dur("retry_after", retryAfter).Msg("github rate limit hit")
+		return &RateLimitError{RetryAfter: retryAfter}
 	}
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("github api error: %s", resp.Status)

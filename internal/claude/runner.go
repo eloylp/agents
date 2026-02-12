@@ -85,6 +85,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Response, error) {
 		if r.command == "" {
 			return Response{}, fmt.Errorf("claude command is required when mode=command")
 		}
+		logger.Info().Str("command", r.command).Msg("executing claude command")
 		return r.runCommand(ctx, logger, req, prompt)
 	default:
 		return Response{}, fmt.Errorf("unknown claude mode: %s", r.mode)
@@ -123,6 +124,7 @@ func (r *Runner) runCommand(ctx context.Context, logger zerolog.Logger, req Requ
 		logger.Error().Err(err).Str("stdout", truncateString(stdout.String(), 2000)).Msg("invalid claude response")
 		return Response{}, fmt.Errorf("parse claude response: %w", err)
 	}
+	logger.Info().Int("artifacts", len(response.Artifacts)).Msg("claude command completed")
 	return response, nil
 }
 
