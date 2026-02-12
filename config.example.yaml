@@ -1,0 +1,41 @@
+log:
+  level: info
+
+database:
+  dsn_env: DATABASE_URL
+  auto_migrate: true
+
+github:
+  token_env: GITHUB_TOKEN
+  api_base_url: https://api.github.com
+
+poller:
+  per_page: 50
+  max_items_per_poll: 200
+  issue_label: "ai:refine"
+  pr_label: "ai:review"
+  max_idle_interval_seconds: 600
+  jitter_seconds: 5
+  comment_fingerprint_limit: 5
+  file_fingerprint_limit: 50
+  max_fingerprint_bytes: 20000
+  max_posts_per_run: 10
+  max_runs_per_hour: 5
+  max_runs_per_day: 20
+
+claude:
+  mode: command
+  command: claude
+  args:
+    - "--mcp"
+    - "github"
+  timeout_seconds: 600
+  max_prompt_chars: 12000
+  redaction_salt_env: LOG_SALT
+
+repos:
+  - full_name: "owner/repo"
+    enabled: true
+    poll_interval_seconds: 60
+    issue_label: "ai:refine"
+    pr_label: "ai:review"
