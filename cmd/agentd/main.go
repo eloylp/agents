@@ -3,11 +3,9 @@ package main
 import (
 	"context"
 	"flag"
-	"math/rand"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/rs/zerolog"
 
@@ -34,8 +32,6 @@ func main() {
 
 	logger := logging.NewLogger(cfg.Log)
 	zerolog.DefaultContextLogger = &logger
-
-	rand.Seed(time.Now().UnixNano())
 
 	storeClient, err := store.Open(ctx, cfg.Database.DSN)
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/eloylp/agents/internal/github"
 )
@@ -54,13 +55,17 @@ func truncateBytes(value string, maxBytes int) string {
 	if maxBytes <= 0 || len(value) <= maxBytes {
 		return value
 	}
-	runes := []rune(value)
-	if len(runes) == 0 {
+	if value == "" {
 		return value
 	}
-	truncated := string(runes)
-	if len(truncated) <= maxBytes {
-		return truncated
+	used := 0
+	for i := 0; i < len(value); {
+		_, size := utf8.DecodeRuneInString(value[i:])
+		if used+size > maxBytes {
+			return value[:i]
+		}
+		used += size
+		i += size
 	}
-	return truncated[:maxBytes]
+	return value
 }
