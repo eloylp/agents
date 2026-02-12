@@ -19,7 +19,7 @@ This Go daemon polls GitHub repositories for issue/PR updates (no webhooks) and 
 - Go 1.22+
 - Postgres 14+
 - GitHub token with read access to the monitored repositories
-- Claude runner capable of using the GitHub MCP server (CLI or wrapper command)
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) with the GitHub MCP server configured (`claude mcp add github`)
 
 ## Configuration
 
@@ -55,8 +55,7 @@ claude:
   mode: command
   command: claude
   args:
-    - "--mcp"
-    - "github"
+    - "-p"
   timeout_seconds: 600
   max_prompt_chars: 12000
   redaction_salt_env: LOG_SALT
