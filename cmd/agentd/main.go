@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/claude"
@@ -22,6 +23,9 @@ import (
 func main() {
 	configPath := flag.String("config", "config.yaml", "Path to config file")
 	flag.Parse()
+
+	// Load .env file if present, ignore error if file doesn't exist.
+	_ = godotenv.Load()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
