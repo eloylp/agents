@@ -195,7 +195,7 @@ func (e *Engine) enforceQuota(ctx context.Context, logger zerolog.Logger, workIt
 		if err != nil {
 			return err
 		}
-		if count >= e.cfg.Poller.MaxRunsPerHour {
+		if count > e.cfg.Poller.MaxRunsPerHour {
 			logger.Warn().Msg("workflow run skipped due to hourly quota")
 			return e.store.UpdateWorkflowRunStatus(ctx, runID, "skipped", store.SanitizeError(fmt.Errorf("hourly quota exceeded")))
 		}
@@ -205,7 +205,7 @@ func (e *Engine) enforceQuota(ctx context.Context, logger zerolog.Logger, workIt
 		if err != nil {
 			return err
 		}
-		if count >= e.cfg.Poller.MaxRunsPerDay {
+		if count > e.cfg.Poller.MaxRunsPerDay {
 			logger.Warn().Msg("workflow run skipped due to daily quota")
 			return e.store.UpdateWorkflowRunStatus(ctx, runID, "skipped", store.SanitizeError(fmt.Errorf("daily quota exceeded")))
 		}
