@@ -38,6 +38,13 @@ Adjust part number based on how many comments you post. Use GitHub-flavored Mark
 
 ### Output Plan
 Post the comments directly using GitHub MCP issue comment tools. If you need to split, use Part 1/2/3 with the footer marker updated per part.
+
+### STDOUT JSON (mandatory)
+After posting all comments, you MUST print exactly one JSON object to stdout (no other text before or after it) with the artifacts you created:
+
+{"summary":"<one-line summary>","artifacts":[{"type":"issue_comment","part_key":"issue/<partN>","github_id":"<comment_id>","url":"<comment_url>"}]}
+
+Do NOT output anything else to stdout. Only the JSON object above.
 `, repo, number, fingerprint, labelLine, fingerprint)
 }
 
@@ -79,5 +86,12 @@ Include this marker in the top-level review body:
 
 ### Output Plan
 Post the PR review via GitHub MCP pull request review tools with inline comments where possible.
+
+### STDOUT JSON (mandatory)
+After posting the review, you MUST print exactly one JSON object to stdout (no other text before or after it) with the artifacts you created:
+
+{"summary":"<one-line summary>","artifacts":[{"type":"pr_review","part_key":"review/<partN>","github_id":"<review_id>","url":"<review_url>"}]}
+
+Do NOT output anything else to stdout. Only the JSON object above.
 `, repo, number, fingerprint, labelLine, fingerprint)
 }
