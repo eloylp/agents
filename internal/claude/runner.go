@@ -115,13 +115,16 @@ func (r *Runner) runCommand(ctx context.Context, logger zerolog.Logger, req Requ
 		return Response{}, fmt.Errorf("claude command failed: %w", err)
 	}
 
+	rawOut := stdout.String()
+	logger.Debug().Str("raw_stdout", truncateString(rawOut, 4000)).Msg("claude raw output")
+
 	var response Response
 	if stdout.Len() == 0 {
 		logger.Info().Msg("claude command returned no output")
 		return Response{}, nil
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
-		logger.Error().Err(err).Str("stdout", truncateString(stdout.String(), 2000)).Msg("invalid claude response")
+		logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msg("invalid claude response")
 		return Response{}, fmt.Errorf("parse claude response: %w", err)
 	}
 	logger.Info().Int("artifacts", len(response.Artifacts)).Msg("claude command completed")
