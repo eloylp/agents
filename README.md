@@ -1,6 +1,6 @@
 # agents
 
-A Go daemon that polls GitHub repositories for issues and pull requests, then launches [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions to provide automated feedback via the GitHub MCP server. No webhooks required.
+A Go daemon that polls GitHub repositories for issues and pull requests, then launches an AI CLI backend ([Claude Code](https://docs.anthropic.com/en/docs/claude-code) or Codex) to provide automated feedback via the GitHub MCP server. No webhooks required.
 
 ## Available workflows
 
@@ -49,7 +49,7 @@ The daemon only performs minimal GitHub REST polling for detection and fingerpri
 - **Go** 1.22+
 - **PostgreSQL** 14+
 - **GitHub CLI** (`gh`) authenticated with access to monitored repositories
-- **Claude Code CLI** with the GitHub MCP server configured
+- **AI CLI backend**: Claude Code CLI or Codex CLI, with the GitHub MCP server configured
 - **GitHub token** with read access to the monitored repositories
 
 ### Setting up the GitHub CLI
@@ -82,6 +82,12 @@ Verify the server is registered:
 claude mcp list
 ```
 
+### Setting up Codex CLI with the GitHub MCP server
+
+Follow the official Codex + GitHub MCP setup guide:
+
+https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-codex.md
+
 ## Configuration
 
 Copy `config.example.yaml` to `config.yaml` and adjust:
@@ -112,12 +118,23 @@ poller:
   max_runs_per_hour: 5         # per work item
   max_runs_per_day: 20         # per work item
 
+ai_backend: claude             # claude | openai
+
 claude:
   mode: command
   command: claude
   args:
     - "-p"                              # print mode (non-interactive)
     - "--dangerously-skip-permissions"  # required for headless operation
+  timeout_seconds: 600
+  max_prompt_chars: 12000
+  redaction_salt_env: LOG_SALT  # env var for prompt hash salt (optional)
+
+openai:
+  mode: command
+  command: codex
+  args:
+    - "-p"
   timeout_seconds: 600
   max_prompt_chars: 12000
   redaction_salt_env: LOG_SALT  # env var for prompt hash salt (optional)
@@ -151,9 +168,9 @@ go build -o agentd ./cmd/agentd
 ./agentd -config config.yaml
 ```
 
-## Claude runner contract
+## AI runner contract
 
-When `claude.mode=command`, the daemon executes the configured command and sends the prompt via STDIN. After performing actions through MCP tools, the command must output a single JSON object to STDOUT:
+When `<backend>.mode=command`, the daemon executes the configured command and sends the prompt via STDIN. After performing actions through MCP tools, the command must output a single JSON object to STDOUT:
 
 ```json
 {

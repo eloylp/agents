@@ -11,10 +11,12 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
 
+	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/claude"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/github"
 	"github.com/eloylp/agents/internal/logging"
+	"github.com/eloylp/agents/internal/openai"
 	"github.com/eloylp/agents/internal/poller"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
@@ -66,7 +68,13 @@ func main() {
 	}
 
 	githubClient := github.NewClient(cfg.GitHub, logger)
-	runner := claude.NewRunner(cfg.Claude, logger)
+	var runner ai.Runner
+	switch cfg.AIBackend {
+	case "openai":
+		runner = openai.NewRunner(cfg.OpenAI, logger)
+	default:
+		runner = claude.NewRunner(cfg.Claude, logger)
+	}
 	engine := workflow.NewEngine(cfg, storeClient, githubClient, runner, logger)
 	poller := poller.New(cfg, storeClient, githubClient, engine, logger)
 

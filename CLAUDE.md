@@ -79,9 +79,9 @@ Both workflows follow the same pattern:
 
 `workflow/fingerprint.go` produces deterministic SHA256 hashes of issue/PR content. Format: `<type>:<version>:<key>:<hash>`. Content is truncated to `max_fingerprint_bytes` before hashing. Duplicate fingerprints cause the workflow to skip (idempotency).
 
-### Claude Integration
+### AI CLI Integration
 
-`claude.Runner` executes the Claude CLI as a subprocess. Prompts are sent via STDIN; JSON responses are expected on STDOUT. Environment variables (`AI_DAEMON_WORKFLOW`, `AI_DAEMON_REPO`, `AI_DAEMON_NUMBER`, `AI_DAEMON_FINGERPRINT`) are passed to the subprocess. Supports `noop` mode for testing and `command` mode for production.
+The configured backend runner executes the selected AI CLI as a subprocess. Prompts are sent via STDIN; JSON responses are expected on STDOUT. Environment variables (`AI_DAEMON_WORKFLOW`, `AI_DAEMON_REPO`, `AI_DAEMON_NUMBER`, `AI_DAEMON_FINGERPRINT`) are passed to the subprocess. Supports `noop` mode for testing and `command` mode for production.
 
 ### Database Layer
 
@@ -94,7 +94,7 @@ All packages use `zerolog` with component-scoped loggers (`logger.With().Str("co
 ## Code Conventions
 
 - **Go standard layout**: `cmd/` for entry points, `internal/` for private packages
-- **No interfaces for internal types**: Concrete struct types are used throughout (`*store.Store`, `*github.Client`, `*claude.Runner`, `*workflow.Engine`)
+- **Limited interfaces for boundary abstractions**: Concrete struct types are preferred, with targeted interfaces where backend selection requires it (for example, `ai.Runner`)
 - **Constructor pattern**: `New*()` or `Open()` functions return initialized structs
 - **Error wrapping**: All errors use `fmt.Errorf("context: %w", err)` for wrapping
 - **Sentinel errors**: Package-level `var errQuotaExceeded = errors.New(...)` for control flow

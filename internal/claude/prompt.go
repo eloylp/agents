@@ -9,7 +9,7 @@ func BuildIssueRefinePrompt(repo string, number int, fingerprint string, labelGa
 	}
 
 	return fmt.Sprintf(`# Mission
-You are Claude running with GitHub MCP tools (repos, issues, pull_requests). You must not push code, create branches, open PRs, merge, or modify repository contents. Read and comment only.
+You are an AI assistant running with GitHub MCP tools (repos, issues, pull_requests). You must not push code, create branches, open PRs, merge, or modify repository contents. Read and comment only.
 
 Repository: %s
 Issue: #%d
@@ -55,7 +55,7 @@ func BuildPRReviewPrompt(repo string, number int, fingerprint string, labelGate 
 	}
 
 	return fmt.Sprintf(`# Mission
-You are Claude running with GitHub MCP tools (repos, issues, pull_requests). You must not push code, create branches, open PRs, merge, or modify repository contents. Read and review only.
+You are an AI assistant running with GitHub MCP tools (repos, issues, pull_requests). You must not push code, create branches, open PRs, merge, or modify repository contents. Read and review only.
 
 Repository: %s
 PR: #%d

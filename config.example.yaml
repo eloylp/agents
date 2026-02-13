@@ -23,12 +23,23 @@ poller:
   max_runs_per_hour: 5
   max_runs_per_day: 20
 
+ai_backend: claude
+
 claude:
   mode: command
   command: claude
   args:
     - "-p"
     - "--dangerously-skip-permissions"
+  timeout_seconds: 600
+  max_prompt_chars: 12000
+  redaction_salt_env: LOG_SALT
+
+openai:
+  mode: command
+  command: codex
+  args:
+    - "-p"
   timeout_seconds: 600
   max_prompt_chars: 12000
   redaction_salt_env: LOG_SALT

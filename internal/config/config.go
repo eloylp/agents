@@ -26,12 +26,14 @@ const (
 )
 
 type Config struct {
-	Log      LogConfig      `yaml:"log"`
-	Database DatabaseConfig `yaml:"database"`
-	GitHub   GitHubConfig   `yaml:"github"`
-	Poller   PollerConfig   `yaml:"poller"`
-	Claude   ClaudeConfig   `yaml:"claude"`
-	Repos    []RepoConfig   `yaml:"repos"`
+	Log       LogConfig      `yaml:"log"`
+	Database  DatabaseConfig `yaml:"database"`
+	GitHub    GitHubConfig   `yaml:"github"`
+	Poller    PollerConfig   `yaml:"poller"`
+	AIBackend string         `yaml:"ai_backend"`
+	Claude    ClaudeConfig   `yaml:"claude"`
+	OpenAI    OpenAIConfig   `yaml:"openai"`
+	Repos     []RepoConfig   `yaml:"repos"`
 }
 
 type LogConfig struct {
@@ -66,6 +68,15 @@ type PollerConfig struct {
 }
 
 type ClaudeConfig struct {
+	Mode             string   `yaml:"mode"`
+	Command          string   `yaml:"command"`
+	Args             []string `yaml:"args"`
+	TimeoutSeconds   int      `yaml:"timeout_seconds"`
+	MaxPromptChars   int      `yaml:"max_prompt_chars"`
+	RedactionSaltEnv string   `yaml:"redaction_salt_env"`
+}
+
+type OpenAIConfig struct {
 	Mode             string   `yaml:"mode"`
 	Command          string   `yaml:"command"`
 	Args             []string `yaml:"args"`
@@ -143,6 +154,12 @@ func (c *Config) applyDefaults() {
 	if c.Claude.MaxPromptChars == 0 {
 		c.Claude.MaxPromptChars = defaultMaxPromptChars
 	}
+	if c.OpenAI.TimeoutSeconds == 0 {
+		c.OpenAI.TimeoutSeconds = defaultClaudeTimeoutSeconds
+	}
+	if c.OpenAI.MaxPromptChars == 0 {
+		c.OpenAI.MaxPromptChars = defaultMaxPromptChars
+	}
 	for i := range c.Repos {
 		if c.Repos[i].PollIntervalSeconds == 0 {
 			c.Repos[i].PollIntervalSeconds = defaultPollIntervalSeconds
@@ -170,7 +187,23 @@ func (c *Config) resolveEnv() error {
 	if c.Claude.Mode == "" {
 		c.Claude.Mode = "noop"
 	}
+	if c.OpenAI.Mode == "" {
+		c.OpenAI.Mode = "noop"
+	}
+	if c.AIBackend == "" {
+		c.AIBackend = "claude"
+	}
+	if c.AIBackend != "claude" && c.AIBackend != "openai" {
+		return fmt.Errorf("config: ai_backend must be one of claude, openai")
+	}
 	return nil
+}
+
+func (c *Config) AIBackendTimeoutSeconds() int {
+	if c.AIBackend == "openai" {
+		return c.OpenAI.TimeoutSeconds
+	}
+	return c.Claude.TimeoutSeconds
 }
 
 func (c *Config) RepoByName(fullName string) (RepoConfig, bool) {

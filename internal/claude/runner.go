@@ -13,6 +13,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
 )
 
@@ -24,26 +25,6 @@ type Runner struct {
 	maxPromptChars int
 	redactionSalt  []byte
 	logger         zerolog.Logger
-}
-
-type Request struct {
-	Workflow    string
-	Repo        string
-	Number      int
-	Fingerprint string
-	Prompt      string
-}
-
-type Artifact struct {
-	Type     string  `json:"type"`
-	PartKey  string  `json:"part_key"`
-	GitHubID string  `json:"github_id"`
-	URL      *string `json:"url"`
-}
-
-type Response struct {
-	Artifacts []Artifact `json:"artifacts"`
-	Summary   string     `json:"summary"`
 }
 
 func NewRunner(cfg config.ClaudeConfig, logger zerolog.Logger) *Runner {
@@ -65,7 +46,7 @@ func NewRunner(cfg config.ClaudeConfig, logger zerolog.Logger) *Runner {
 	}
 }
 
-func (r *Runner) Run(ctx context.Context, req Request) (Response, error) {
+func (r *Runner) Run(ctx context.Context, req ai.Request) (ai.Response, error) {
 	prompt := truncatePrompt(req.Prompt, r.maxPromptChars)
 	promptMeta := r.promptMeta(prompt)
 	logger := r.logger.With().
@@ -80,19 +61,19 @@ func (r *Runner) Run(ctx context.Context, req Request) (Response, error) {
 	switch r.mode {
 	case "noop":
 		logger.Info().Msg("claude runner noop")
-		return Response{}, nil
+		return ai.Response{}, nil
 	case "command":
 		if r.command == "" {
-			return Response{}, fmt.Errorf("claude command is required when mode=command")
+			return ai.Response{}, fmt.Errorf("claude command is required when mode=command")
 		}
 		logger.Info().Str("command", r.command).Msg("executing claude command")
 		return r.runCommand(ctx, logger, req, prompt)
 	default:
-		return Response{}, fmt.Errorf("unknown claude mode: %s", r.mode)
+		return ai.Response{}, fmt.Errorf("unknown claude mode: %s", r.mode)
 	}
 }
 
-func (r *Runner) runCommand(ctx context.Context, logger zerolog.Logger, req Request, prompt string) (Response, error) {
+func (r *Runner) runCommand(ctx context.Context, logger zerolog.Logger, req ai.Request, prompt string) (ai.Response, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 
@@ -112,20 +93,20 @@ func (r *Runner) runCommand(ctx context.Context, logger zerolog.Logger, req Requ
 
 	if err := cmd.Run(); err != nil {
 		logger.Error().Err(err).Str("stderr", truncateString(stderr.String(), 2000)).Msg("claude command failed")
-		return Response{}, fmt.Errorf("claude command failed: %w", err)
+		return ai.Response{}, fmt.Errorf("claude command failed: %w", err)
 	}
 
 	rawOut := stdout.String()
 	logger.Debug().Str("raw_stdout", truncateString(rawOut, 4000)).Msg("claude raw output")
 
-	var response Response
+	var response ai.Response
 	if stdout.Len() == 0 {
 		logger.Info().Msg("claude command returned no output")
-		return Response{}, nil
+		return ai.Response{}, nil
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
 		logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msg("invalid claude response")
-		return Response{}, fmt.Errorf("parse claude response: %w", err)
+		return ai.Response{}, fmt.Errorf("parse claude response: %w", err)
 	}
 	logger.Info().Int("artifacts", len(response.Artifacts)).Msg("claude command completed")
 	return response, nil
