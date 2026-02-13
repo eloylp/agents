@@ -1,81 +1,163 @@
 # agents
 
-Claude-powered issue refinement and PR specialist review daemon for GitHub repositories.
+A Go daemon that polls GitHub repositories for issues and pull requests, then launches [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions to provide automated feedback via the GitHub MCP server. No webhooks required.
 
-## Overview
+## Available workflows
 
-This Go daemon polls GitHub repositories for issue/PR updates (no webhooks) and launches Claude sessions that use the GitHub MCP server to read context and post feedback. The daemon itself only performs minimal GitHub REST polling for detection and fingerprinting; all detailed reads and writes are delegated to Claude via MCP tools.
+### Issue refinement (`ai:refine` label)
 
-### Key features
+Claude reads the issue context (title, body, comments, repo docs) and posts 1-3 structured comments covering feasibility, complexity, recommended approach, and acceptance criteria.
 
-- Polls issues and PRs with adaptive intervals and jitter.
-- Maintains idempotency with fingerprints and persisted workflow runs.
-- Persists state in Postgres (repos, work items, runs, posted artifacts).
-- Produces structured JSON logs with correlation metadata.
-- Supports issue refinement and PR specialist review workflows.
+### PR specialist review (`ai:review` label)
+
+Claude reads the PR diff and changed files, then submits a GitHub review with a summary and inline suggestion comments. The review covers engineering, security, performance, and testing perspectives.
+
+## Flow
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant GH as GitHub
+    participant Daemon
+    participant Claude
+
+    User->>GH: Create issue
+    User->>GH: Add "ai:refine" label
+
+    Daemon->>GH: Poll detects issue update
+    Daemon->>Claude: Send issue refinement prompt
+    Claude->>GH: Read issue context (MCP)
+    Claude->>GH: Post issue comments
+    Claude-->>Daemon: Return artifacts JSON
+
+    User->>GH: Assign issue to Copilot
+    Note over GH: Copilot creates PR
+
+    User->>GH: Add "ai:review" label
+
+    Daemon->>GH: Poll detects PR update
+    Daemon->>Claude: Send PR review prompt
+    Claude->>GH: Read PR diff & files (MCP)
+    Claude->>GH: Submit review with suggestions
+    Claude-->>Daemon: Return artifacts JSON
+```
+
+The daemon only performs minimal GitHub REST polling for detection and fingerprinting. All detailed reads and writes (issue comments, PR reviews) are delegated to Claude via MCP tools.
 
 ## Requirements
 
-- Go 1.22+
-- Postgres 14+
-- GitHub token with read access to the monitored repositories
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) with the GitHub MCP server configured (`claude mcp add github`)
+- **Go** 1.22+
+- **PostgreSQL** 14+
+- **GitHub CLI** (`gh`) authenticated with access to monitored repositories
+- **Claude Code CLI** with the GitHub MCP server configured
+- **GitHub token** with read access to the monitored repositories
+
+### Setting up the GitHub CLI
+
+Install and authenticate:
+
+```bash
+# Install (macOS)
+brew install gh
+
+# Authenticate
+gh auth login
+```
+
+### Setting up Claude Code CLI with the GitHub MCP server
+
+Install Claude Code and add the GitHub MCP server:
+
+```bash
+# Install Claude Code
+npm install -g @anthropic-ai/claude-code
+
+# Add the GitHub MCP server (uses the gh CLI under the hood)
+claude mcp add github -- gh copilot mcp
+```
+
+Verify the server is registered:
+
+```bash
+claude mcp list
+```
 
 ## Configuration
 
-Create `config.yaml` (or pass `-config`):
+Copy `config.example.yaml` to `config.yaml` and adjust:
 
 ```yaml
 log:
   level: info
 
 database:
-  dsn_env: DATABASE_URL
-  auto_migrate: true
+  dsn_env: DATABASE_URL       # env var containing the Postgres DSN
+  auto_migrate: true           # apply schema on startup
 
 github:
-  token_env: GITHUB_TOKEN
+  token_env: GITHUB_TOKEN      # env var containing the GitHub token
   api_base_url: https://api.github.com
 
 poller:
-  per_page: 50
-  max_items_per_poll: 200
-  issue_label: "ai:refine"
-  pr_label: "ai:review"
+  per_page: 50                 # items per GitHub API page
+  max_items_per_poll: 200      # max items fetched per poll cycle
+  issue_label: "ai:refine"    # default label gate for issues
+  pr_label: "ai:review"       # default label gate for PRs
   max_idle_interval_seconds: 600
   jitter_seconds: 5
   comment_fingerprint_limit: 5
   file_fingerprint_limit: 50
   max_fingerprint_bytes: 20000
   max_posts_per_run: 10
-  max_runs_per_hour: 5
-  max_runs_per_day: 20
+  max_runs_per_hour: 5         # per work item
+  max_runs_per_day: 20         # per work item
 
 claude:
   mode: command
   command: claude
   args:
-    - "-p"
-    - "--dangerously-skip-permissions"
+    - "-p"                              # print mode (non-interactive)
+    - "--dangerously-skip-permissions"  # required for headless operation
   timeout_seconds: 600
   max_prompt_chars: 12000
-  redaction_salt_env: LOG_SALT
+  redaction_salt_env: LOG_SALT  # env var for prompt hash salt (optional)
 
 repos:
   - full_name: "owner/repo"
     enabled: true
     poll_interval_seconds: 60
-    issue_label: "ai:refine"   # optional override
-    pr_label: "ai:review"      # optional override
+    issue_label: "ai:refine"   # optional per-repo override
+    pr_label: "ai:review"      # optional per-repo override
 ```
 
-### Claude runner contract
+You can also create a `.env` file in the project root. The daemon loads it automatically on startup:
 
-When `claude.mode=command`, the daemon executes the configured command and sends the prompt via STDIN. The command should output JSON to STDOUT:
+```
+DATABASE_URL=postgresql://user:pass@localhost:5432/agents
+GITHUB_TOKEN=ghp_...
+LOG_SALT=optional-salt
+```
+
+## Running
+
+```bash
+go run ./cmd/agentd -config config.yaml
+```
+
+Or build and run:
+
+```bash
+go build -o agentd ./cmd/agentd
+./agentd -config config.yaml
+```
+
+## Claude runner contract
+
+When `claude.mode=command`, the daemon executes the configured command and sends the prompt via STDIN. After performing actions through MCP tools, the command must output a single JSON object to STDOUT:
 
 ```json
 {
-  "summary": "optional run summary",
+  "summary": "one-line summary of what was done",
   "artifacts": [
     {
       "type": "issue_comment",
@@ -87,46 +169,25 @@ When `claude.mode=command`, the daemon executes the configured command and sends
 }
 ```
 
-The daemon persists these artifacts for idempotency. Use GitHub MCP toolsets (`repos`, `issues`, `pull_requests`) inside Claude to read context and post comments/reviews.
+The daemon persists these artifacts for idempotency (same fingerprint = no duplicate run).
 
-## Database schema
+## Database
 
-The schema matches the issue specification and is available at `migrations/001_init.sql`. Set `database.auto_migrate: true` to let the daemon apply it on startup.
+The schema is embedded in the binary at `internal/store/schema.sql`. Set `database.auto_migrate: true` to let the daemon apply it on startup. Tables:
 
-## Running
-
-```bash
-export DATABASE_URL=postgres://user:pass@localhost:5432/agents?sslmode=disable
-export GITHUB_TOKEN=ghp_...
-export LOG_SALT=optional-salt
-
-go run ./cmd/agentd -config config.yaml
-```
+- **repos** -- registered repositories and poll cursors
+- **work_items** -- individual issues/PRs being tracked
+- **workflow_runs** -- execution records, deduplicated by content fingerprint
+- **posted_artifacts** -- outputs produced by each run (idempotency guard)
+- **locks** -- pessimistic locks preventing concurrent processing of the same work item
 
 ## Logging
 
-Logs are JSON with correlation fields such as `repo`, `issue_number`/`pr_number`, and `fingerprint`. Prompts are never logged directly; only their hash/length is recorded.
-
-## Workflow summary
-
-### Issue refinement
-
-Trigger: issue created/edited (optionally label-gated). Claude posts 1–3 issue comments with a deterministic footer marker:
-
-```
-<!-- ai-daemon:issue-refine v1; fingerprint=...; part=1/3 -->
-```
-
-### PR specialist review
-
-Trigger: PR opened/updated/ready-for-review (optionally label-gated). Claude posts a review summary and inline comments with suggestion blocks where possible. The top-level review includes:
-
-```
-<!-- ai-daemon:pr-review v1; fingerprint=... -->
-```
+Structured JSON logs with correlation fields: `repo`, `issue_number`/`pr_number`, `fingerprint`, and `component`. Prompts are never logged directly; only their hash and length are recorded.
 
 ## Security
 
-- No webhook handling or GitHub write access in Go.
+- The Go daemon has **read-only** GitHub access (polling only). All writes go through Claude via MCP.
 - MCP toolsets should be allow-listed to `repos`, `issues`, and `pull_requests`.
+- `--dangerously-skip-permissions` is required for headless operation. Ensure the host environment is trusted.
 - Prompts are hashed in logs; secrets are never logged.
