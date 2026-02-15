@@ -28,12 +28,12 @@ const (
 var defaultRoles = []string{"architect", "security", "testing", "devops", "ux"}
 
 type Config struct {
-	Log      LogConfig              `yaml:"log"`
-	Database DatabaseConfig         `yaml:"database"`
-	GitHub   GitHubConfig           `yaml:"github"`
-	Poller   PollerConfig           `yaml:"poller"`
-	Agents   map[string]AgentConfig `yaml:"agents"`
-	Repos    []RepoConfig           `yaml:"repos"`
+	Log        LogConfig                  `yaml:"log"`
+	Database   DatabaseConfig             `yaml:"database"`
+	GitHub     GitHubConfig               `yaml:"github"`
+	Poller     PollerConfig               `yaml:"poller"`
+	AIBackends map[string]AIBackendConfig `yaml:"ai_backends"`
+	Repos      []RepoConfig               `yaml:"repos"`
 }
 
 type LogConfig struct {
@@ -89,14 +89,14 @@ type RepoConfig struct {
 	PollIntervalSeconds int    `yaml:"poll_interval_seconds"`
 }
 
-type AgentConfig struct {
+type AIBackendConfig struct {
 	Mode             string   `yaml:"mode"`
 	Command          string   `yaml:"command"`
 	Args             []string `yaml:"args"`
 	TimeoutSeconds   int      `yaml:"timeout_seconds"`
 	MaxPromptChars   int      `yaml:"max_prompt_chars"`
 	RedactionSaltEnv string   `yaml:"redaction_salt_env"`
-	Roles            []string `yaml:"roles"`
+	Agents           []string `yaml:"agents"`
 }
 
 func Load(path string) (*Config, error) {
@@ -154,30 +154,30 @@ func (c *Config) applyDefaults() {
 	if c.Poller.MaxRunsPerDay == 0 {
 		c.Poller.MaxRunsPerDay = defaultMaxRunsPerDay
 	}
-	normalizedAgents := make(map[string]AgentConfig, len(c.Agents))
-	for name, agent := range c.Agents {
+	normalizedBackends := make(map[string]AIBackendConfig, len(c.AIBackends))
+	for name, backend := range c.AIBackends {
 		normalizedName := strings.ToLower(strings.TrimSpace(name))
 		if normalizedName == "" {
 			continue
 		}
-		if agent.Mode == "" {
-			agent.Mode = "noop"
+		if backend.Mode == "" {
+			backend.Mode = "noop"
 		}
-		if agent.TimeoutSeconds == 0 {
-			agent.TimeoutSeconds = defaultAITimeoutSeconds
+		if backend.TimeoutSeconds == 0 {
+			backend.TimeoutSeconds = defaultAITimeoutSeconds
 		}
-		if agent.MaxPromptChars == 0 {
-			agent.MaxPromptChars = defaultMaxPromptChars
+		if backend.MaxPromptChars == 0 {
+			backend.MaxPromptChars = defaultMaxPromptChars
 		}
-		if len(agent.Roles) == 0 {
-			agent.Roles = append([]string(nil), defaultRoles...)
+		if len(backend.Agents) == 0 {
+			backend.Agents = append([]string(nil), defaultRoles...)
 		}
-		for i := range agent.Roles {
-			agent.Roles[i] = strings.ToLower(strings.TrimSpace(agent.Roles[i]))
+		for i := range backend.Agents {
+			backend.Agents[i] = strings.ToLower(strings.TrimSpace(backend.Agents[i]))
 		}
-		normalizedAgents[normalizedName] = agent
+		normalizedBackends[normalizedName] = backend
 	}
-	c.Agents = normalizedAgents
+	c.AIBackends = normalizedBackends
 	for i := range c.Repos {
 		if c.Repos[i].PollIntervalSeconds == 0 {
 			c.Repos[i].PollIntervalSeconds = defaultPollIntervalSeconds
@@ -202,12 +202,12 @@ func (c *Config) resolveEnv() error {
 	if c.GitHub.APIBaseURL == "" {
 		c.GitHub.APIBaseURL = "https://api.github.com"
 	}
-	if len(c.Agents) == 0 {
-		return errors.New("config: at least one agent is required")
+	if len(c.AIBackends) == 0 {
+		return errors.New("config: at least one ai_backends entry is required")
 	}
-	for name := range c.Agents {
+	for name := range c.AIBackends {
 		if name != "claude" && name != "codex" {
-			return fmt.Errorf("config: unsupported agent %q (supported: claude, codex)", name)
+			return fmt.Errorf("config: unsupported ai backend %q (supported: claude, codex)", name)
 		}
 	}
 	return nil
@@ -215,9 +215,9 @@ func (c *Config) resolveEnv() error {
 
 func (c *Config) MaxAgentTimeoutSeconds() int {
 	maxTimeout := 0
-	for _, agent := range c.Agents {
-		if agent.TimeoutSeconds > maxTimeout {
-			maxTimeout = agent.TimeoutSeconds
+	for _, backend := range c.AIBackends {
+		if backend.TimeoutSeconds > maxTimeout {
+			maxTimeout = backend.TimeoutSeconds
 		}
 	}
 	if maxTimeout == 0 {
@@ -235,11 +235,11 @@ func (c *Config) RepoByName(fullName string) (RepoConfig, bool) {
 	return RepoConfig{}, false
 }
 
-func (c *Config) DefaultConfiguredAgent() string {
-	if _, ok := c.Agents["claude"]; ok {
+func (c *Config) DefaultConfiguredBackend() string {
+	if _, ok := c.AIBackends["claude"]; ok {
 		return "claude"
 	}
-	if _, ok := c.Agents["codex"]; ok {
+	if _, ok := c.AIBackends["codex"]; ok {
 		return "codex"
 	}
 	return ""

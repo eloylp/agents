@@ -21,7 +21,7 @@ poller:
   max_runs_per_hour: 5
   max_runs_per_day: 20
 
-agents:
+ai_backends:
   claude:
     mode: command
     command: claude
@@ -31,7 +31,7 @@ agents:
     timeout_seconds: 600
     max_prompt_chars: 12000
     redaction_salt_env: LOG_SALT
-    roles: [architect, security, testing, devops, ux]
+    agents: [architect, security, testing, devops, ux]
   codex:
     mode: command
     command: codex
@@ -40,7 +40,7 @@ agents:
     timeout_seconds: 600
     max_prompt_chars: 12000
     redaction_salt_env: LOG_SALT
-    roles: [architect, security, testing, devops, ux]
+    agents: [architect, security, testing, devops, ux]
 
 repos:
   - full_name: "owner/repo"

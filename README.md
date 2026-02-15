@@ -10,9 +10,9 @@ Labels:
 - `ai:refine`
 - `ai:refine:<agent>`
 
-Supported agents: `claude`, `codex`.
+Supported backends: `claude`, `codex`.
 
-Each matched agent posts exactly one structured issue comment.
+Each issue refinement run uses exactly one backend and posts exactly one structured issue comment.
 
 ### PR specialist review (`ai:review` labels)
 
@@ -23,7 +23,7 @@ Labels:
 
 Roles: `architect`, `security`, `testing`, `devops`, `ux`.
 
-`all` expands to all roles configured for that agent and runs them concurrently. Each role counts as one run against quota limits.
+`all` expands to all specialist agents configured for that backend and runs them concurrently. Each role label still counts as one run against quota limits.
 
 ## Flow
 
@@ -129,7 +129,7 @@ poller:
   max_runs_per_hour: 5         # per work item (across all roles/agents)
   max_runs_per_day: 20         # per work item (across all roles/agents)
 
-agents:
+ai_backends:
   claude:
     mode: command
     command: claude
@@ -139,7 +139,7 @@ agents:
     timeout_seconds: 600
     max_prompt_chars: 12000
     redaction_salt_env: LOG_SALT
-    roles: [architect, security, testing, devops, ux] # allowed values for <role>; :all expands to all listed roles
+    agents: [architect, security, testing, devops, ux] # allowed values for <role>; :all expands to all listed specialist agents
   codex:
     mode: command
     command: codex
@@ -148,7 +148,7 @@ agents:
     timeout_seconds: 600
     max_prompt_chars: 12000
     redaction_salt_env: LOG_SALT
-    roles: [architect, security, testing, devops, ux] # allowed values for <role>; :all expands to all listed roles
+    agents: [architect, security, testing, devops, ux] # allowed values for <role>; :all expands to all listed specialist agents
 
 repos:
   - full_name: "owner/repo"
@@ -179,7 +179,7 @@ go build -o agentd ./cmd/agentd
 
 ## AI runner contract
 
-When `agents.<name>.mode=command`, the daemon executes the configured command and sends the prompt via STDIN. After performing actions through MCP tools, the command must output a single JSON object to STDOUT:
+When `ai_backends.<name>.mode=command`, the daemon executes the configured command and sends the prompt via STDIN. After performing actions through MCP tools, the command must output a single JSON object to STDOUT:
 
 ```json
 {

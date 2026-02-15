@@ -15,7 +15,7 @@ func TestLoadRequiresSupportedAgentNames(t *testing.T) {
   dsn_env: DATABASE_URL
 github:
   token_env: GITHUB_TOKEN
-agents:
+ai_backends:
   openai:
     mode: noop
 repos:
@@ -26,7 +26,7 @@ repos:
 	}
 
 	if _, err := Load(path); err == nil {
-		t.Fatalf("expected load to fail for unsupported agent name")
+		t.Fatalf("expected load to fail for unsupported ai backend name")
 	}
 }
 
@@ -39,7 +39,7 @@ func TestLoadAppliesAgentDefaults(t *testing.T) {
   dsn_env: DATABASE_URL
 github:
   token_env: GITHUB_TOKEN
-agents:
+ai_backends:
   claude:
     mode: noop
 repos:
@@ -53,26 +53,26 @@ repos:
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	agent := cfg.Agents["claude"]
-	if agent.TimeoutSeconds != defaultAITimeoutSeconds {
-		t.Fatalf("expected timeout default %d, got %d", defaultAITimeoutSeconds, agent.TimeoutSeconds)
+	backend := cfg.AIBackends["claude"]
+	if backend.TimeoutSeconds != defaultAITimeoutSeconds {
+		t.Fatalf("expected timeout default %d, got %d", defaultAITimeoutSeconds, backend.TimeoutSeconds)
 	}
-	if len(agent.Roles) == 0 {
-		t.Fatalf("expected default roles")
+	if len(backend.Agents) == 0 {
+		t.Fatalf("expected default specialist agents")
 	}
 }
 
-func TestDefaultConfiguredAgent(t *testing.T) {
-	cfg := Config{Agents: map[string]AgentConfig{"codex": {}, "claude": {}}}
-	if got := cfg.DefaultConfiguredAgent(); got != "claude" {
+func TestDefaultConfiguredBackend(t *testing.T) {
+	cfg := Config{AIBackends: map[string]AIBackendConfig{"codex": {}, "claude": {}}}
+	if got := cfg.DefaultConfiguredBackend(); got != "claude" {
 		t.Fatalf("expected claude, got %q", got)
 	}
-	cfg = Config{Agents: map[string]AgentConfig{"codex": {}}}
-	if got := cfg.DefaultConfiguredAgent(); got != "codex" {
+	cfg = Config{AIBackends: map[string]AIBackendConfig{"codex": {}}}
+	if got := cfg.DefaultConfiguredBackend(); got != "codex" {
 		t.Fatalf("expected codex, got %q", got)
 	}
 	cfg = Config{}
-	if got := cfg.DefaultConfiguredAgent(); got != "" {
-		t.Fatalf("expected empty default agent, got %q", got)
+	if got := cfg.DefaultConfiguredBackend(); got != "" {
+		t.Fatalf("expected empty default backend, got %q", got)
 	}
 }

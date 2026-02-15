@@ -66,16 +66,16 @@ func main() {
 	}
 
 	githubClient := github.NewClient(cfg.GitHub, logger)
-	runners := make(map[string]ai.Runner, len(cfg.Agents))
-	for name, agentCfg := range cfg.Agents {
+	runners := make(map[string]ai.Runner, len(cfg.AIBackends))
+	for name, backendCfg := range cfg.AIBackends {
 		runners[name] = ai.NewCommandRunner(
 			name,
-			agentCfg.Mode,
-			agentCfg.Command,
-			agentCfg.Args,
-			agentCfg.TimeoutSeconds,
-			agentCfg.MaxPromptChars,
-			agentCfg.RedactionSaltEnv,
+			backendCfg.Mode,
+			backendCfg.Command,
+			backendCfg.Args,
+			backendCfg.TimeoutSeconds,
+			backendCfg.MaxPromptChars,
+			backendCfg.RedactionSaltEnv,
 			logger.With().Str("component", "ai_runner").Str("agent", name).Logger(),
 		)
 	}

@@ -52,7 +52,7 @@ func NewEngine(cfg *config.Config, store *store.Store, githubClient *github.Clie
 }
 
 func (e *Engine) HandleIssue(ctx context.Context, repo config.RepoConfig, issue github.Issue) (bool, error) {
-	agents := make([]string, 0, 2)
+	selectedBackend := ""
 	for _, label := range issue.Labels {
 		workflow, agent, _, ok := ParseAILabel(label.Name)
 		if !ok {
@@ -69,10 +69,15 @@ func (e *Engine) HandleIssue(ctx context.Context, repo config.RepoConfig, issue 
 			e.logger.Warn().Str("label", label.Name).Int("issue_number", issue.Number).Str("repo", repo.FullName).Msg("issue label references unknown agent, skipping")
 			continue
 		}
-		agents = append(agents, resolved)
+		if selectedBackend == "" {
+			selectedBackend = resolved
+			continue
+		}
+		if selectedBackend != resolved {
+			e.logger.Warn().Str("repo", repo.FullName).Int("issue_number", issue.Number).Str("selected_backend", selectedBackend).Str("ignored_backend", resolved).Msg("multiple ai:refine backends found; using first detected backend")
+		}
 	}
-	agents = uniqueStrings(agents)
-	if len(agents) == 0 {
+	if selectedBackend == "" {
 		e.logger.Info().Str("repo", repo.FullName).Int("issue_number", issue.Number).Msg("issue skipped, missing ai refine label")
 		return false, nil
 	}
@@ -110,68 +115,62 @@ func (e *Engine) HandleIssue(ctx context.Context, repo config.RepoConfig, issue 
 		}
 	}()
 
-	ranAny := false
-	for _, agent := range agents {
-		workflowName := fmt.Sprintf("%s:%s", workflowIssueRefine, agent)
-		run, created, err := e.store.CreateWorkflowRun(ctx, item.ID, workflowName, fingerprint)
-		if err != nil {
-			return false, err
-		}
-		if !created {
-			logger.Info().Str("agent", agent).Msg("workflow run already exists")
-			continue
-		}
-		if err := e.enforceQuota(ctx, logger, item.ID, workflowIssueRefine, run.ID); err != nil {
-			if errors.Is(err, errQuotaExceeded) {
-				continue
-			}
-			return false, err
-		}
-		runner, ok := e.runners[agent]
-		if !ok {
-			logger.Warn().Str("agent", agent).Msg("runner missing for agent, skipping")
-			_ = e.store.UpdateWorkflowRunStatus(ctx, run.ID, "skipped", store.SanitizeError(fmt.Errorf("runner missing for agent %s", agent)))
-			continue
-		}
-		prompt := ai.BuildIssueRefinePrompt(agent, repo.FullName, issue.Number, fingerprint)
-		logger.Info().Str("agent", agent).Msg("invoking ai agent for issue refinement")
-		response, err := runner.Run(ctx, ai.Request{
-			Workflow:    workflowName,
-			Repo:        repo.FullName,
-			Number:      issue.Number,
-			Fingerprint: fingerprint,
-			Prompt:      prompt,
-		})
-		if err != nil {
-			logger.Error().Err(err).Str("agent", agent).Msg("ai run failed")
-			updateErr := e.store.UpdateWorkflowRunStatus(ctx, run.ID, "failed", store.SanitizeError(err))
-			if updateErr != nil {
-				logger.Error().Err(updateErr).Msg("failed to update workflow run")
-			}
-			continue
-		}
-		storedCount, err := e.storeArtifacts(ctx, run.ID, response.Artifacts)
-		if err != nil {
-			logger.Error().Err(err).Str("agent", agent).Msg("failed to store artifacts")
-			updateErr := e.store.UpdateWorkflowRunStatus(ctx, run.ID, "failed", store.SanitizeError(err))
-			if updateErr != nil {
-				logger.Error().Err(updateErr).Msg("failed to update workflow run")
-			}
-			continue
-		}
-		logger.Info().Str("agent", agent).Int("artifacts_stored", storedCount).Msg("issue refinement completed")
-		if err := e.store.UpdateWorkflowRunStatus(ctx, run.ID, "success", nil); err != nil {
-			return false, err
-		}
-		ranAny = true
+	workflowName := fmt.Sprintf("%s:%s", workflowIssueRefine, selectedBackend)
+	run, created, err := e.store.CreateWorkflowRun(ctx, item.ID, workflowName, fingerprint)
+	if err != nil {
+		return false, err
 	}
-
-	if ranAny {
-		if err := e.store.UpdateWorkItemState(ctx, item.ID, &issue.UpdatedAt, nil); err != nil {
-			return false, err
-		}
+	if !created {
+		logger.Info().Str("backend", selectedBackend).Msg("workflow run already exists")
+		return false, nil
 	}
-	return ranAny, nil
+	if err := e.enforceQuota(ctx, logger, item.ID, workflowIssueRefine, run.ID); err != nil {
+		if errors.Is(err, errQuotaExceeded) {
+			logger.Info().Str("backend", selectedBackend).Msg("issue refinement skipped due to quota")
+			return false, nil
+		}
+		return false, err
+	}
+	runner, ok := e.runners[selectedBackend]
+	if !ok {
+		logger.Warn().Str("backend", selectedBackend).Msg("runner missing for backend, skipping")
+		_ = e.store.UpdateWorkflowRunStatus(ctx, run.ID, "skipped", store.SanitizeError(fmt.Errorf("runner missing for backend %s", selectedBackend)))
+		return false, nil
+	}
+	prompt := ai.BuildIssueRefinePrompt(selectedBackend, repo.FullName, issue.Number, fingerprint)
+	logger.Info().Str("backend", selectedBackend).Msg("invoking ai backend for issue refinement")
+	response, err := runner.Run(ctx, ai.Request{
+		Workflow:    workflowName,
+		Repo:        repo.FullName,
+		Number:      issue.Number,
+		Fingerprint: fingerprint,
+		Prompt:      prompt,
+	})
+	if err != nil {
+		logger.Error().Err(err).Str("backend", selectedBackend).Msg("ai run failed")
+		updateErr := e.store.UpdateWorkflowRunStatus(ctx, run.ID, "failed", store.SanitizeError(err))
+		if updateErr != nil {
+			logger.Error().Err(updateErr).Msg("failed to update workflow run")
+		}
+		return false, nil
+	}
+	storedCount, err := e.storeArtifacts(ctx, run.ID, response.Artifacts)
+	if err != nil {
+		logger.Error().Err(err).Str("backend", selectedBackend).Msg("failed to store artifacts")
+		updateErr := e.store.UpdateWorkflowRunStatus(ctx, run.ID, "failed", store.SanitizeError(err))
+		if updateErr != nil {
+			logger.Error().Err(updateErr).Msg("failed to update workflow run")
+		}
+		return false, nil
+	}
+	logger.Info().Str("backend", selectedBackend).Int("artifacts_stored", storedCount).Msg("issue refinement completed")
+	if err := e.store.UpdateWorkflowRunStatus(ctx, run.ID, "success", nil); err != nil {
+		return false, err
+	}
+	if err := e.store.UpdateWorkItemState(ctx, item.ID, &issue.UpdatedAt, nil); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, pr github.PullRequest) (bool, error) {
@@ -196,7 +195,7 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 			e.logger.Warn().Str("label", label.Name).Int("pr_number", pr.Number).Str("repo", repo.FullName).Msg("pr label references unknown agent, skipping")
 			continue
 		}
-		agentCfg, found := e.cfg.Agents[resolvedAgent]
+		backendCfg, found := e.cfg.AIBackends[resolvedAgent]
 		if !found {
 			continue
 		}
@@ -204,12 +203,12 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 			targets[resolvedAgent] = map[string]struct{}{}
 		}
 		if role == "all" {
-			for _, configuredRole := range agentCfg.Roles {
+			for _, configuredRole := range backendCfg.Agents {
 				targets[resolvedAgent][configuredRole] = struct{}{}
 			}
 			continue
 		}
-		if !slices.Contains(agentCfg.Roles, role) {
+		if !slices.Contains(backendCfg.Agents, role) {
 			e.logger.Warn().Str("label", label.Name).Str("agent", resolvedAgent).Str("role", role).Int("pr_number", pr.Number).Str("repo", repo.FullName).Msg("pr label references unsupported role, skipping")
 			continue
 		}
@@ -348,14 +347,14 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 
 func (e *Engine) resolveAgent(agent string) string {
 	if strings.TrimSpace(agent) == "" {
-		defaultAgent := e.cfg.DefaultConfiguredAgent()
+		defaultAgent := e.cfg.DefaultConfiguredBackend()
 		if defaultAgent == "" {
 			e.logger.Error().Msg("no default agent configured; expected one of claude or codex")
 		}
 		return defaultAgent
 	}
 	agent = strings.ToLower(strings.TrimSpace(agent))
-	if _, ok := e.cfg.Agents[agent]; !ok {
+	if _, ok := e.cfg.AIBackends[agent]; !ok {
 		return ""
 	}
 	return agent

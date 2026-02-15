@@ -9,7 +9,7 @@ Help the team quickly decide scope and execution by providing concise, actionabl
 ## Required Structure
 
 - Keep comments short and scannable.
-- Post exactly 1 comment per agent run.
+- Post exactly 1 comment per issue refinement run.
 - Include:
   - Feasibility assessment (missing context, dependencies, risks)
   - Complexity estimate (`S`, `M`, or `L`) with rationale
