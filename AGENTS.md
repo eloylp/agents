@@ -33,7 +33,7 @@ This file defines repo-specific guidance for future coding agents working in thi
   - Prompt templates and stdout JSON artifact contract for issue and PR workflows.
 - `internal/ai/cmdrunner.go`
   - Shared `noop`/`command` runner implementation for configured AI backends.
-- `internal/claude/*`, `internal/openai/*`
+- `internal/claude/*`, `internal/codex/*`
   - Thin compatibility wrappers over `internal/ai` interfaces.
 - `internal/github/client.go`
   - GitHub REST reads (issues, PRs, comments, files), pagination, and rate-limit handling.
@@ -51,8 +51,8 @@ This file defines repo-specific guidance for future coding agents working in thi
   - prompts require one JSON object on stdout,
   - `internal/ai/cmdrunner.go` expects parseable JSON when output is non-empty.
 - Preserve current label semantics:
-  - issue: `ai:refine` and `ai:refine:<agent>`,
-  - PR: `ai:review`, `ai:review:<agent>:<role>`, and `ai:review:<agent>:all`.
+  - issue: `ai:refine` and `ai:refine:<backend>`,
+  - PR: `ai:review`, `ai:review:<backend>:<role>`, and `ai:review:<backend>:all`.
 
 ## Editing Checklist
 
@@ -76,7 +76,7 @@ This file defines repo-specific guidance for future coding agents working in thi
   - prompt content/format (`internal/claude/prompt_test.go`),
   - fingerprint logic (`internal/workflow/fingerprint_test.go`),
   - label parsing (`internal/workflow/labels_test.go`),
-  - parsing/contract behavior in runner (`internal/openai/runner_test.go`).
+  - parsing/contract behavior in runner (`internal/codex/runner_test.go`).
 
 ## Operational Notes
 

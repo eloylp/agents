@@ -74,7 +74,7 @@ type ClaudeConfig struct {
 	RedactionSaltEnv string   `yaml:"redaction_salt_env"`
 }
 
-type OpenAIConfig struct {
+type CodexConfig struct {
 	Mode             string   `yaml:"mode"`
 	Command          string   `yaml:"command"`
 	Args             []string `yaml:"args"`

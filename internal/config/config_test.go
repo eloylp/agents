@@ -16,7 +16,7 @@ func TestLoadRequiresSupportedAgentNames(t *testing.T) {
 github:
   token_env: GITHUB_TOKEN
 ai_backends:
-  openai:
+	unsupported:
     mode: noop
 repos:
   - full_name: "owner/repo"
