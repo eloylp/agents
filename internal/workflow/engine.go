@@ -179,6 +179,7 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 		return false, nil
 	}
 	targets := map[string]map[string]struct{}{}
+	loggedBareReviewAll := false
 	for _, label := range pr.Labels {
 		workflow, agent, role, ok := ParseAILabel(label.Name)
 		if !ok {
@@ -203,6 +204,14 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 			targets[resolvedAgent] = map[string]struct{}{}
 		}
 		if role == "all" {
+			if agent == "" && !loggedBareReviewAll {
+				e.logger.Warn().
+					Str("repo", repo.FullName).
+					Int("pr_number", pr.Number).
+					Str("backend", resolvedAgent).
+					Msg("bare ai:review label expands to all specialist agents on default backend")
+				loggedBareReviewAll = true
+			}
 			for _, configuredRole := range backendCfg.Agents {
 				targets[resolvedAgent][configuredRole] = struct{}{}
 			}
@@ -413,20 +422,4 @@ func (e *Engine) storeArtifacts(ctx context.Context, runID int64, artifacts []ai
 		}
 	}
 	return stored, nil
-}
-
-func uniqueStrings(values []string) []string {
-	if len(values) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(values))
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
 }

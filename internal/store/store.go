@@ -227,7 +227,9 @@ func (s *Store) CountWorkflowRunsSince(ctx context.Context, workItemID int64, wo
 SELECT COUNT(1)
 FROM workflow_runs
 WHERE work_item_id = $1
--- include role/agent-specific workflow suffixes (e.g. pr_review:claude:security)
+-- include role/agent-specific workflow suffixes (e.g. pr_review:claude:security).
+-- $2 is always passed from internal workflow constants (not user input), and current
+-- workflow names do not include SQL LIKE wildcard characters (% or _).
 AND (workflow = $2 OR workflow LIKE $2 || ':%')
 AND started_at >= $3
 `, workItemID, workflow, since)

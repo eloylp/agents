@@ -2,6 +2,7 @@ package poller
 
 import (
 	"context"
+	"errors"
 	"math/rand"
 	"time"
 
@@ -21,6 +22,8 @@ type Poller struct {
 	logger zerolog.Logger
 	states map[string]*repoState
 }
+
+const pollCycleSafetyTimeoutBuffer = 120 * time.Second
 
 type repoState struct {
 	repo     config.RepoConfig
@@ -83,8 +86,15 @@ func (p *Poller) Run(ctx context.Context) error {
 			continue
 		}
 		p.logger.Info().Str("repo", nextRepo.repo.FullName).Msg("polling repo")
-		pollCtx := context.WithoutCancel(ctx)
+		pollCtx, cancelPoll := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			time.Duration(p.cfg.MaxAgentTimeoutSeconds())*time.Second+pollCycleSafetyTimeoutBuffer,
+		)
 		updated, err := p.pollRepo(pollCtx, nextRepo)
+		cancelPoll()
+		if errors.Is(err, context.DeadlineExceeded) {
+			p.logger.Warn().Str("repo", nextRepo.repo.FullName).Msg("poll cycle hit safety timeout")
+		}
 		if err != nil {
 			p.logger.Error().Err(err).Str("repo", nextRepo.repo.FullName).Msg("poll failed")
 		}
