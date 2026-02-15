@@ -7,13 +7,10 @@ import (
 )
 
 func TestLoadRequiresSupportedAgentNames(t *testing.T) {
-	t.Setenv("GITHUB_TOKEN", "token")
 	t.Setenv("WEBHOOK_SECRET", "secret")
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	content := `github:
-  token_env: GITHUB_TOKEN
-http:
+	content := `http:
   webhook_secret_env: WEBHOOK_SECRET
 ai_backends:
 	unsupported:
@@ -31,13 +28,10 @@ repos:
 }
 
 func TestLoadAppliesAgentDefaults(t *testing.T) {
-	t.Setenv("GITHUB_TOKEN", "token")
 	t.Setenv("WEBHOOK_SECRET", "secret")
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	content := `github:
-  token_env: GITHUB_TOKEN
-http:
+	content := `http:
   webhook_secret_env: WEBHOOK_SECRET
 ai_backends:
   claude:

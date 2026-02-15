@@ -11,21 +11,29 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
-	"github.com/eloylp/agents/internal/github"
+	"github.com/eloylp/agents/internal/workflow"
 )
 
 type stubWorkflowHandler struct {
-	issueCalls int
-	prCalls    int
+	issueCalls  int
+	prCalls     int
+	issueLabel  string
+	prLabel     string
+	issueAction string
+	prAction    string
 }
 
-func (s *stubWorkflowHandler) HandleIssue(context.Context, config.RepoConfig, github.Issue) (bool, error) {
+func (s *stubWorkflowHandler) HandleIssueLabelEvent(_ context.Context, _ config.RepoConfig, _ workflow.Issue, action, label string) (bool, error) {
 	s.issueCalls++
+	s.issueLabel = label
+	s.issueAction = action
 	return true, nil
 }
 
-func (s *stubWorkflowHandler) HandlePullRequest(context.Context, config.RepoConfig, github.PullRequest) (bool, error) {
+func (s *stubWorkflowHandler) HandlePullRequestLabelEvent(_ context.Context, _ config.RepoConfig, _ workflow.PullRequest, action, label string) (bool, error) {
 	s.prCalls++
+	s.prLabel = label
+	s.prAction = action
 	return true, nil
 }
 
@@ -97,6 +105,35 @@ func TestHandleWebhookIgnoresNonAILabel(t *testing.T) {
 	}
 	if handler.prCalls != 0 {
 		t.Fatalf("expected no pr calls, got %d", handler.prCalls)
+	}
+}
+
+func TestHandleIssueWebhookUsesEventLabelAsTrigger(t *testing.T) {
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{
+			MaxBodyBytes:       1024,
+			WebhookSecret:      "secret",
+			DeliveryTTLSeconds: 3600,
+		},
+		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
+	}
+	handler := &stubWorkflowHandler{}
+	server := NewServer(cfg, handler, NewDeliveryStore(time.Hour), zerolog.Nop())
+
+	body := `{"action":"labeled","label":{"name":"ai:refine:codex"},"repository":{"full_name":"owner/repo"},"issue":{"number":3,"title":"t","body":"b","updated_at":"2026-02-15T00:00:00Z","labels":[{"name":"ai:refine:claude"}]}}`
+	sig := signatureForTests([]byte(body), "secret")
+
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "issues")
+	req.Header.Set("X-GitHub-Delivery", "delivery-3")
+	req.Header.Set("X-Hub-Signature-256", sig)
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, req)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, rr.Code)
+	}
+	if handler.issueLabel != "ai:refine:codex" || handler.issueAction != "labeled" {
+		t.Fatalf("expected event label/action to be forwarded, got label=%q action=%q", handler.issueLabel, handler.issueAction)
 	}
 }
 

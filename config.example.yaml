@@ -1,10 +1,6 @@
 log:
   level: info
 
-github:
-  token_env: GITHUB_TOKEN
-  api_base_url: https://api.github.com
-
 http:
   listen_addr: ":8080"
   status_path: /status
@@ -21,8 +17,6 @@ workflow:
   file_fingerprint_limit: 50
   max_fingerprint_bytes: 20000
   max_posts_per_run: 10
-  max_runs_per_hour: 5
-  max_runs_per_day: 20
 
 ai_backends:
   claude:

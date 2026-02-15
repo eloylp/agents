@@ -6,41 +6,27 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
-
-	"github.com/eloylp/agents/internal/github"
 )
 
 const fingerprintVersion = "v1"
 
-func IssueFingerprint(issue github.Issue, comments []github.Comment, maxBytes int) string {
+func IssueFingerprint(issue Issue, maxBytes int) string {
 	builder := strings.Builder{}
 	builder.WriteString(issue.Title)
 	builder.WriteString("\n")
 	builder.WriteString(issue.Body)
-	for _, comment := range comments {
-		builder.WriteString("\n")
-		builder.WriteString(comment.Body)
-	}
 	content := truncateBytes(builder.String(), maxBytes)
 	contentHash := sha256Hex(content)
 	return fmt.Sprintf("issue:%s:%d:%s:%s", fingerprintVersion, issue.Number, issue.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"), contentHash)
 }
 
-func PRFingerprint(pr github.PullRequest, role string, files []github.PullFile, maxBytes int) string {
+func PRFingerprint(pr PullRequest, role string, maxBytes int) string {
 	builder := strings.Builder{}
 	builder.WriteString(pr.Head.SHA)
-	for _, file := range files {
-		builder.WriteString("\n")
-		builder.WriteString(file.Filename)
-		builder.WriteString("|")
-		builder.WriteString(file.Status)
-		builder.WriteString("|")
-		builder.WriteString(fmt.Sprintf("%d/%d", file.Additions, file.Deletions))
-		if file.Patch != "" {
-			builder.WriteString("|")
-			builder.WriteString(file.Patch)
-		}
-	}
+	builder.WriteString("\n")
+	builder.WriteString(pr.Title)
+	builder.WriteString("\n")
+	builder.WriteString(pr.Body)
 	content := truncateBytes(builder.String(), maxBytes)
 	contentHash := sha256Hex(content)
 	return fmt.Sprintf("pr:%s:%d:%s:%s:%s", fingerprintVersion, pr.Number, role, pr.Head.SHA, contentHash)

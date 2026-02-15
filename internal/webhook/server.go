@@ -16,12 +16,12 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
-	"github.com/eloylp/agents/internal/github"
+	"github.com/eloylp/agents/internal/workflow"
 )
 
 type workflowHandler interface {
-	HandleIssue(context.Context, config.RepoConfig, github.Issue) (bool, error)
-	HandlePullRequest(context.Context, config.RepoConfig, github.PullRequest) (bool, error)
+	HandleIssueLabelEvent(context.Context, config.RepoConfig, workflow.Issue, string, string) (bool, error)
+	HandlePullRequestLabelEvent(context.Context, config.RepoConfig, workflow.PullRequest, string, string) (bool, error)
 }
 
 type Server struct {
@@ -115,9 +115,9 @@ type webhookRepository struct {
 
 type issueWebhookPayload struct {
 	Action     string            `json:"action"`
-	Label      github.Label      `json:"label"`
+	Label      workflow.Label    `json:"label"`
 	Repository webhookRepository `json:"repository"`
-	Issue      github.Issue      `json:"issue"`
+	Issue      workflow.Issue    `json:"issue"`
 }
 
 func (s *Server) handleIssueEvent(w http.ResponseWriter, r *http.Request, body []byte) {
@@ -139,7 +139,7 @@ func (s *Server) handleIssueEvent(w http.ResponseWriter, r *http.Request, body [
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	if _, err := s.handler.HandleIssue(r.Context(), repo, payload.Issue); err != nil {
+	if _, err := s.handler.HandleIssueLabelEvent(r.Context(), repo, payload.Issue, payload.Action, payload.Label.Name); err != nil {
 		s.logger.Error().Err(err).Str("repo", repo.FullName).Int("issue_number", payload.Issue.Number).Msg("failed to process issue webhook")
 		http.Error(w, "failed to process webhook", http.StatusInternalServerError)
 		return
@@ -148,10 +148,10 @@ func (s *Server) handleIssueEvent(w http.ResponseWriter, r *http.Request, body [
 }
 
 type prWebhookPayload struct {
-	Action      string             `json:"action"`
-	Label       github.Label       `json:"label"`
-	Repository  webhookRepository  `json:"repository"`
-	PullRequest github.PullRequest `json:"pull_request"`
+	Action      string               `json:"action"`
+	Label       workflow.Label       `json:"label"`
+	Repository  webhookRepository    `json:"repository"`
+	PullRequest workflow.PullRequest `json:"pull_request"`
 }
 
 func (s *Server) handlePREvent(w http.ResponseWriter, r *http.Request, body []byte) {
@@ -169,7 +169,7 @@ func (s *Server) handlePREvent(w http.ResponseWriter, r *http.Request, body []by
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	if _, err := s.handler.HandlePullRequest(r.Context(), repo, payload.PullRequest); err != nil {
+	if _, err := s.handler.HandlePullRequestLabelEvent(r.Context(), repo, payload.PullRequest, payload.Action, payload.Label.Name); err != nil {
 		s.logger.Error().Err(err).Str("repo", repo.FullName).Int("pr_number", payload.PullRequest.Number).Msg("failed to process pr webhook")
 		http.Error(w, "failed to process webhook", http.StatusInternalServerError)
 		return

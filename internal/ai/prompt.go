@@ -13,7 +13,7 @@ Issue: #%d
 Fingerprint: %s
 
 ## Required reading
-1. Issue title/body and recent comments.
+1. Issue title/body and all previous issue comments.
 2. Repo context files if present:
    - .ai/issue_refine_rules.md
    - .ai/architecture.md
@@ -70,7 +70,7 @@ PR: #%d
 Fingerprint: %s
 
 ## Required reading
-1. PR title/body and diff.
+1. PR title/body and all previous PR comments/reviews.
 2. Changed files and relevant code context.
 
 ## Task

@@ -17,13 +17,13 @@ This file defines repo-specific guidance for future coding agents working in thi
 ## Code Map
 
 - `cmd/agentd/main.go`
-  - Wires config, logger, store, GitHub client, AI backend runners, workflow engine, and poller.
+  - Wires config, logger, AI backend runners, workflow engine, and webhook server.
 - `internal/config/config.go`
   - Config schema, defaults, env resolution, and AI backend validation.
 - `internal/webhook/*`
   - HTTP server, webhook signature verification, and short-lived delivery dedupe.
 - `internal/workflow/engine.go`
-  - Label parsing/routing, dedupe fingerprints, locking, quotas, runner calls, and artifact persistence.
+  - Label parsing/routing from webhook events, fingerprinting, and runner invocation.
 - `internal/workflow/labels.go`
   - Parses supported `ai:*` labels into workflow/backend/role targets.
 - `internal/workflow/fingerprint.go`
@@ -34,18 +34,12 @@ This file defines repo-specific guidance for future coding agents working in thi
   - Shared `noop`/`command` runner implementation for configured AI backends.
 - `internal/claude/*`, `internal/codex/*`
   - Thin compatibility wrappers over `internal/ai` interfaces.
-- `internal/github/client.go`
-  - GitHub REST reads (issues, PRs, comments, files), pagination, and rate-limit handling.
-- `internal/store/store.go` and `internal/store/schema.sql`
-  - Legacy persistence package (not used by webhook runtime path).
 
 ## Behavioral Guardrails
 
 - Keep the daemon read-only against GitHub REST APIs. Write actions should continue to happen through AI CLI + GitHub MCP workflows.
 - Preserve idempotency guarantees:
-  - fingerprints drive run dedupe (`workflow_runs` unique path),
-  - artifacts are deduped by `(workflow_run_id, artifact_type, part_key)`.
-- Preserve lock semantics (`locks` table) before workflow execution to prevent concurrent processing.
+  - fingerprints remain deterministic for the same payload/context.
 - Keep prompt/runner contract consistent:
   - prompts require one JSON object on stdout,
   - `internal/ai/cmdrunner.go` expects parseable JSON when output is non-empty.
@@ -59,10 +53,6 @@ This file defines repo-specific guidance for future coding agents working in thi
   - update defaults/validation in `internal/config/config.go`,
   - update `config.example.yaml`,
   - update README configuration docs.
-- For schema changes:
-  - edit `internal/store/schema.sql`,
-  - update store queries if needed,
-  - verify startup migration path (`EnsureSchema`) still works.
 - For workflow behavior changes:
   - update prompt text and engine logic together when contracts change,
   - update `internal/workflow/labels.go` + tests when label grammar changes,
@@ -80,5 +70,5 @@ This file defines repo-specific guidance for future coding agents working in thi
 ## Operational Notes
 
 - `.env` is auto-loaded on startup (`godotenv.Load()`).
-- Required runtime secrets come from config or env (`DATABASE_URL`, `GITHUB_TOKEN`).
+- Required runtime secret comes from config or env (`GITHUB_WEBHOOK_SECRET`).
 - Avoid printing secrets or raw prompt bodies in logs; prompt hashing/redaction is already implemented.

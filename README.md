@@ -62,7 +62,6 @@ The daemon reacts only to `issues` / `pull_request` webhook events with `action`
 - **Go** 1.22+
 - **GitHub CLI** (`gh`) authenticated with access to monitored repositories
 - **AI CLI backend**: Claude Code CLI or Codex CLI, with the GitHub MCP server configured
-- **GitHub token** with read access to the monitored repositories
 
 ### Setting up the GitHub CLI
 
@@ -108,10 +107,6 @@ Copy `config.example.yaml` to `config.yaml` and adjust:
 log:
   level: info
 
-github:
-  token_env: GITHUB_TOKEN      # env var containing the GitHub token
-  api_base_url: https://api.github.com
-
 http:
   listen_addr: ":8080"
   status_path: /status
@@ -128,8 +123,6 @@ workflow:
   file_fingerprint_limit: 50
   max_fingerprint_bytes: 20000
   max_posts_per_run: 10
-  max_runs_per_hour: 5         # per work item (across all roles/agents)
-  max_runs_per_day: 20         # per work item (across all roles/agents)
 
 ai_backends:
   claude:
@@ -160,7 +153,6 @@ repos:
 You can also create a `.env` file in the project root. The daemon loads it automatically on startup:
 
 ```
-GITHUB_TOKEN=ghp_...
 GITHUB_WEBHOOK_SECRET=...
 LOG_SALT=optional-salt
 ```

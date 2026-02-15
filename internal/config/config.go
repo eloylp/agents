@@ -22,8 +22,6 @@ const (
 	defaultFileFingerprintLimit    = 50
 	defaultMaxFingerprintBytes     = 20000
 	defaultMaxPostsPerRun          = 10
-	defaultMaxRunsPerHour          = 5
-	defaultMaxRunsPerDay           = 20
 	defaultAITimeoutSeconds        = 600
 	defaultMaxPromptChars          = 12000
 )
@@ -32,7 +30,6 @@ var defaultRoles = []string{"architect", "security", "testing", "devops", "ux"}
 
 type Config struct {
 	Log        LogConfig                  `yaml:"log"`
-	GitHub     GitHubConfig               `yaml:"github"`
 	HTTP       HTTPConfig                 `yaml:"http"`
 	Workflow   WorkflowConfig             `yaml:"workflow"`
 	AIBackends map[string]AIBackendConfig `yaml:"ai_backends"`
@@ -41,12 +38,6 @@ type Config struct {
 
 type LogConfig struct {
 	Level string `yaml:"level"`
-}
-
-type GitHubConfig struct {
-	Token      string `yaml:"token"`
-	TokenEnv   string `yaml:"token_env"`
-	APIBaseURL string `yaml:"api_base_url"`
 }
 
 type HTTPConfig struct {
@@ -67,8 +58,6 @@ type WorkflowConfig struct {
 	FileFingerprintLimit    int `yaml:"file_fingerprint_limit"`
 	MaxFingerprintBytes     int `yaml:"max_fingerprint_bytes"`
 	MaxPostsPerRun          int `yaml:"max_posts_per_run"`
-	MaxRunsPerHour          int `yaml:"max_runs_per_hour"`
-	MaxRunsPerDay           int `yaml:"max_runs_per_day"`
 }
 
 type ClaudeConfig struct {
@@ -165,12 +154,6 @@ func (c *Config) applyDefaults() {
 	if c.Workflow.MaxPostsPerRun == 0 {
 		c.Workflow.MaxPostsPerRun = defaultMaxPostsPerRun
 	}
-	if c.Workflow.MaxRunsPerHour == 0 {
-		c.Workflow.MaxRunsPerHour = defaultMaxRunsPerHour
-	}
-	if c.Workflow.MaxRunsPerDay == 0 {
-		c.Workflow.MaxRunsPerDay = defaultMaxRunsPerDay
-	}
 	normalizedBackends := make(map[string]AIBackendConfig, len(c.AIBackends))
 	for name, backend := range c.AIBackends {
 		normalizedName := strings.ToLower(strings.TrimSpace(name))
@@ -201,15 +184,6 @@ func (c *Config) applyDefaults() {
 }
 
 func (c *Config) resolveEnv() error {
-	if c.GitHub.Token == "" && c.GitHub.TokenEnv != "" {
-		c.GitHub.Token = os.Getenv(c.GitHub.TokenEnv)
-	}
-	if c.GitHub.Token == "" {
-		return errors.New("config: github token is required")
-	}
-	if c.GitHub.APIBaseURL == "" {
-		c.GitHub.APIBaseURL = "https://api.github.com"
-	}
 	if c.HTTP.WebhookSecret == "" && c.HTTP.WebhookSecretEnv != "" {
 		c.HTTP.WebhookSecret = os.Getenv(c.HTTP.WebhookSecretEnv)
 	}

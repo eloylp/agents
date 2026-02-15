@@ -14,7 +14,6 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
-	"github.com/eloylp/agents/internal/github"
 	"github.com/eloylp/agents/internal/logging"
 	"github.com/eloylp/agents/internal/webhook"
 	"github.com/eloylp/agents/internal/workflow"
@@ -38,7 +37,6 @@ func main() {
 	logger := logging.NewLogger(cfg.Log)
 	zerolog.DefaultContextLogger = &logger
 
-	githubClient := github.NewClient(cfg.GitHub, logger)
 	runners := make(map[string]ai.Runner, len(cfg.AIBackends))
 	for name, backendCfg := range cfg.AIBackends {
 		runners[name] = ai.NewCommandRunner(
@@ -52,7 +50,7 @@ func main() {
 			logger.With().Str("component", "ai_runner").Str("agent", name).Logger(),
 		)
 	}
-	engine := workflow.NewEngine(cfg, nil, githubClient, runners, logger)
+	engine := workflow.NewEngine(cfg, runners, logger)
 	webhookServer := webhook.NewServer(
 		cfg,
 		engine,
