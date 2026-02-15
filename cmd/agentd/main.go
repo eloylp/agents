@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
@@ -15,8 +16,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/github"
 	"github.com/eloylp/agents/internal/logging"
-	"github.com/eloylp/agents/internal/poller"
-	"github.com/eloylp/agents/internal/store"
+	"github.com/eloylp/agents/internal/webhook"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -38,33 +38,6 @@ func main() {
 	logger := logging.NewLogger(cfg.Log)
 	zerolog.DefaultContextLogger = &logger
 
-	storeClient, err := store.Open(ctx, cfg.Database.DSN)
-	if err != nil {
-		logger.Fatal().Err(err).Msg("failed to open database")
-	}
-	defer func() {
-		if err := storeClient.Close(); err != nil {
-			logger.Error().Err(err).Msg("failed to close database")
-		}
-	}()
-
-	if cfg.Database.AutoMigrate {
-		if err := storeClient.EnsureSchema(ctx); err != nil {
-			logger.Fatal().Err(err).Msg("failed to migrate schema")
-		}
-	}
-
-	for _, repo := range cfg.Repos {
-		record := store.RepoRecord{
-			FullName:            repo.FullName,
-			Enabled:             repo.Enabled,
-			PollIntervalSeconds: repo.PollIntervalSeconds,
-		}
-		if err := storeClient.UpsertRepo(ctx, record); err != nil {
-			logger.Fatal().Err(err).Str("repo", repo.FullName).Msg("failed to register repo")
-		}
-	}
-
 	githubClient := github.NewClient(cfg.GitHub, logger)
 	runners := make(map[string]ai.Runner, len(cfg.AIBackends))
 	for name, backendCfg := range cfg.AIBackends {
@@ -79,12 +52,17 @@ func main() {
 			logger.With().Str("component", "ai_runner").Str("agent", name).Logger(),
 		)
 	}
-	engine := workflow.NewEngine(cfg, storeClient, githubClient, runners, logger)
-	poller := poller.New(cfg, storeClient, githubClient, engine, logger)
+	engine := workflow.NewEngine(cfg, nil, githubClient, runners, logger)
+	webhookServer := webhook.NewServer(
+		cfg,
+		engine,
+		webhook.NewDeliveryStore(time.Duration(cfg.HTTP.DeliveryTTLSeconds)*time.Second),
+		logger,
+	)
 
 	logger.Info().Msg("agent daemon started")
-	if err := poller.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		logger.Fatal().Err(err).Msg("poller stopped with error")
+	if err := webhookServer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		logger.Fatal().Err(err).Msg("webhook server stopped with error")
 	}
 	logger.Info().Msg("agent daemon stopped")
 }

@@ -1,6 +1,6 @@
 # agents
 
-A Go daemon that polls GitHub repositories for issues and pull requests, then launches AI CLI agents ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), Codex, etc.) selected dynamically from labels to provide automated feedback via the GitHub MCP server. No webhooks required.
+A Go daemon that receives GitHub webhooks for issues and pull requests, then launches AI CLI agents ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), Codex, etc.) selected dynamically from labels to provide automated feedback via the GitHub MCP server.
 
 ## Available workflows
 
@@ -37,7 +37,7 @@ sequenceDiagram
     User->>GH: Create issue
     User->>GH: Add "ai:refine:claude" label
 
-    Daemon->>GH: Poll detects issue update
+    GH->>Daemon: Webhook (issues:labeled)
     Daemon->>Claude: Send issue refinement prompt
     Claude->>GH: Read issue context (MCP)
     Claude->>GH: Post issue comments
@@ -48,19 +48,18 @@ sequenceDiagram
 
     User->>GH: Add "ai:review:claude:all" label
 
-    Daemon->>GH: Poll detects PR update
+    GH->>Daemon: Webhook (pull_request:labeled)
     Daemon->>Claude: Send PR review prompt
     Claude->>GH: Read PR diff & files (MCP)
     Claude->>GH: Submit review with suggestions
     Claude-->>Daemon: Return artifacts JSON
 ```
 
-The daemon only performs minimal GitHub REST polling for detection and fingerprinting. All detailed reads and writes (issue comments, PR reviews) are delegated to Claude via MCP tools.
+The daemon reacts only to `issues` / `pull_request` webhook events with `action` `labeled` or `unlabeled`. All detailed reads and writes (issue comments, PR reviews) are delegated to the configured AI backend via MCP tools.
 
 ## Requirements
 
 - **Go** 1.22+
-- **PostgreSQL** 14+
 - **GitHub CLI** (`gh`) authenticated with access to monitored repositories
 - **AI CLI backend**: Claude Code CLI or Codex CLI, with the GitHub MCP server configured
 - **GitHub token** with read access to the monitored repositories
@@ -109,19 +108,22 @@ Copy `config.example.yaml` to `config.yaml` and adjust:
 log:
   level: info
 
-database:
-  dsn_env: DATABASE_URL       # env var containing the Postgres DSN
-  auto_migrate: true           # apply schema on startup
-
 github:
   token_env: GITHUB_TOKEN      # env var containing the GitHub token
   api_base_url: https://api.github.com
 
-poller:
-  per_page: 50                 # items per GitHub API page
-  max_items_per_poll: 200      # max items fetched per poll cycle
-  max_idle_interval_seconds: 600
-  jitter_seconds: 5
+http:
+  listen_addr: ":8080"
+  status_path: /status
+  webhook_path: /webhooks/github
+  read_timeout_seconds: 15
+  write_timeout_seconds: 15
+  idle_timeout_seconds: 60
+  max_body_bytes: 1048576
+  webhook_secret_env: GITHUB_WEBHOOK_SECRET
+  delivery_ttl_seconds: 3600
+
+workflow:
   comment_fingerprint_limit: 5
   file_fingerprint_limit: 50
   max_fingerprint_bytes: 20000
@@ -153,14 +155,13 @@ ai_backends:
 repos:
   - full_name: "owner/repo"
     enabled: true
-    poll_interval_seconds: 60
 ```
 
 You can also create a `.env` file in the project root. The daemon loads it automatically on startup:
 
 ```
-DATABASE_URL=postgresql://user:pass@localhost:5432/agents
 GITHUB_TOKEN=ghp_...
+GITHUB_WEBHOOK_SECRET=...
 LOG_SALT=optional-salt
 ```
 
@@ -197,15 +198,12 @@ When `ai_backends.<name>.mode=command`, the daemon executes the configured comma
 
 The daemon persists these artifacts for idempotency (same fingerprint = no duplicate run).
 
-## Database
+## Webhook endpoints
 
-The schema is embedded in the binary at `internal/store/schema.sql`. Set `database.auto_migrate: true` to let the daemon apply it on startup. Tables:
+- `GET /status` -- health endpoint
+- `POST /webhooks/github` -- GitHub webhook receiver with `X-Hub-Signature-256` verification
 
-- **repos** -- registered repositories and poll cursors
-- **work_items** -- individual issues/PRs being tracked
-- **workflow_runs** -- execution records, deduplicated by content fingerprint
-- **posted_artifacts** -- outputs produced by each run (idempotency guard)
-- **locks** -- pessimistic locks preventing concurrent processing of the same work item
+Duplicate deliveries are ignored using `X-GitHub-Delivery` and a short-lived in-memory TTL cache.
 
 ## Logging
 
@@ -213,7 +211,8 @@ Structured JSON logs with correlation fields: `repo`, `issue_number`/`pr_number`
 
 ## Security
 
-- The Go daemon has **read-only** GitHub access (polling only). All writes go through Claude via MCP.
+- The Go daemon verifies all webhook payloads with `X-Hub-Signature-256`.
+- The Go daemon has **read-only** GitHub access for context reads. All writes go through the configured AI backend via MCP.
 - MCP toolsets should be allow-listed to `repos`, `issues`, and `pull_requests`.
 - `--dangerously-skip-permissions` is required for headless operation. Ensure the host environment is trusted.
 - Prompts are hashed in logs; secrets are never logged.

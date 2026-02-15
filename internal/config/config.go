@@ -10,11 +10,14 @@ import (
 )
 
 const (
-	defaultPollIntervalSeconds     = 60
-	defaultPerPage                 = 50
-	defaultMaxItemsPerPoll         = 200
-	defaultMaxIdleIntervalSeconds  = 600
-	defaultJitterSeconds           = 5
+	defaultHTTPListenAddr          = ":8080"
+	defaultHTTPStatusPath          = "/status"
+	defaultHTTPWebhookPath         = "/webhooks/github"
+	defaultHTTPReadTimeoutSeconds  = 15
+	defaultHTTPWriteTimeoutSeconds = 15
+	defaultHTTPIdleTimeoutSeconds  = 60
+	defaultHTTPMaxBodyBytes        = 1 << 20
+	defaultDeliveryTTLSeconds      = 3600
 	defaultCommentFingerprintLimit = 5
 	defaultFileFingerprintLimit    = 50
 	defaultMaxFingerprintBytes     = 20000
@@ -29,9 +32,9 @@ var defaultRoles = []string{"architect", "security", "testing", "devops", "ux"}
 
 type Config struct {
 	Log        LogConfig                  `yaml:"log"`
-	Database   DatabaseConfig             `yaml:"database"`
 	GitHub     GitHubConfig               `yaml:"github"`
-	Poller     PollerConfig               `yaml:"poller"`
+	HTTP       HTTPConfig                 `yaml:"http"`
+	Workflow   WorkflowConfig             `yaml:"workflow"`
 	AIBackends map[string]AIBackendConfig `yaml:"ai_backends"`
 	Repos      []RepoConfig               `yaml:"repos"`
 }
@@ -40,23 +43,26 @@ type LogConfig struct {
 	Level string `yaml:"level"`
 }
 
-type DatabaseConfig struct {
-	DSN         string `yaml:"dsn"`
-	DSNEnv      string `yaml:"dsn_env"`
-	AutoMigrate bool   `yaml:"auto_migrate"`
-}
-
 type GitHubConfig struct {
 	Token      string `yaml:"token"`
 	TokenEnv   string `yaml:"token_env"`
 	APIBaseURL string `yaml:"api_base_url"`
 }
 
-type PollerConfig struct {
-	PerPage                 int `yaml:"per_page"`
-	MaxItemsPerPoll         int `yaml:"max_items_per_poll"`
-	MaxIdleIntervalSeconds  int `yaml:"max_idle_interval_seconds"`
-	JitterSeconds           int `yaml:"jitter_seconds"`
+type HTTPConfig struct {
+	ListenAddr          string `yaml:"listen_addr"`
+	StatusPath          string `yaml:"status_path"`
+	WebhookPath         string `yaml:"webhook_path"`
+	ReadTimeoutSeconds  int    `yaml:"read_timeout_seconds"`
+	WriteTimeoutSeconds int    `yaml:"write_timeout_seconds"`
+	IdleTimeoutSeconds  int    `yaml:"idle_timeout_seconds"`
+	MaxBodyBytes        int64  `yaml:"max_body_bytes"`
+	WebhookSecret       string `yaml:"webhook_secret"`
+	WebhookSecretEnv    string `yaml:"webhook_secret_env"`
+	DeliveryTTLSeconds  int    `yaml:"delivery_ttl_seconds"`
+}
+
+type WorkflowConfig struct {
 	CommentFingerprintLimit int `yaml:"comment_fingerprint_limit"`
 	FileFingerprintLimit    int `yaml:"file_fingerprint_limit"`
 	MaxFingerprintBytes     int `yaml:"max_fingerprint_bytes"`
@@ -84,9 +90,8 @@ type CodexConfig struct {
 }
 
 type RepoConfig struct {
-	FullName            string `yaml:"full_name"`
-	Enabled             bool   `yaml:"enabled"`
-	PollIntervalSeconds int    `yaml:"poll_interval_seconds"`
+	FullName string `yaml:"full_name"`
+	Enabled  bool   `yaml:"enabled"`
 }
 
 type AIBackendConfig struct {
@@ -124,35 +129,47 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) applyDefaults() {
-	if c.Poller.PerPage == 0 {
-		c.Poller.PerPage = defaultPerPage
+	if strings.TrimSpace(c.HTTP.ListenAddr) == "" {
+		c.HTTP.ListenAddr = defaultHTTPListenAddr
 	}
-	if c.Poller.MaxItemsPerPoll == 0 {
-		c.Poller.MaxItemsPerPoll = defaultMaxItemsPerPoll
+	if strings.TrimSpace(c.HTTP.StatusPath) == "" {
+		c.HTTP.StatusPath = defaultHTTPStatusPath
 	}
-	if c.Poller.MaxIdleIntervalSeconds == 0 {
-		c.Poller.MaxIdleIntervalSeconds = defaultMaxIdleIntervalSeconds
+	if strings.TrimSpace(c.HTTP.WebhookPath) == "" {
+		c.HTTP.WebhookPath = defaultHTTPWebhookPath
 	}
-	if c.Poller.JitterSeconds == 0 {
-		c.Poller.JitterSeconds = defaultJitterSeconds
+	if c.HTTP.ReadTimeoutSeconds == 0 {
+		c.HTTP.ReadTimeoutSeconds = defaultHTTPReadTimeoutSeconds
 	}
-	if c.Poller.CommentFingerprintLimit == 0 {
-		c.Poller.CommentFingerprintLimit = defaultCommentFingerprintLimit
+	if c.HTTP.WriteTimeoutSeconds == 0 {
+		c.HTTP.WriteTimeoutSeconds = defaultHTTPWriteTimeoutSeconds
 	}
-	if c.Poller.FileFingerprintLimit == 0 {
-		c.Poller.FileFingerprintLimit = defaultFileFingerprintLimit
+	if c.HTTP.IdleTimeoutSeconds == 0 {
+		c.HTTP.IdleTimeoutSeconds = defaultHTTPIdleTimeoutSeconds
 	}
-	if c.Poller.MaxFingerprintBytes == 0 {
-		c.Poller.MaxFingerprintBytes = defaultMaxFingerprintBytes
+	if c.HTTP.MaxBodyBytes == 0 {
+		c.HTTP.MaxBodyBytes = defaultHTTPMaxBodyBytes
 	}
-	if c.Poller.MaxPostsPerRun == 0 {
-		c.Poller.MaxPostsPerRun = defaultMaxPostsPerRun
+	if c.HTTP.DeliveryTTLSeconds == 0 {
+		c.HTTP.DeliveryTTLSeconds = defaultDeliveryTTLSeconds
 	}
-	if c.Poller.MaxRunsPerHour == 0 {
-		c.Poller.MaxRunsPerHour = defaultMaxRunsPerHour
+	if c.Workflow.CommentFingerprintLimit == 0 {
+		c.Workflow.CommentFingerprintLimit = defaultCommentFingerprintLimit
 	}
-	if c.Poller.MaxRunsPerDay == 0 {
-		c.Poller.MaxRunsPerDay = defaultMaxRunsPerDay
+	if c.Workflow.FileFingerprintLimit == 0 {
+		c.Workflow.FileFingerprintLimit = defaultFileFingerprintLimit
+	}
+	if c.Workflow.MaxFingerprintBytes == 0 {
+		c.Workflow.MaxFingerprintBytes = defaultMaxFingerprintBytes
+	}
+	if c.Workflow.MaxPostsPerRun == 0 {
+		c.Workflow.MaxPostsPerRun = defaultMaxPostsPerRun
+	}
+	if c.Workflow.MaxRunsPerHour == 0 {
+		c.Workflow.MaxRunsPerHour = defaultMaxRunsPerHour
+	}
+	if c.Workflow.MaxRunsPerDay == 0 {
+		c.Workflow.MaxRunsPerDay = defaultMaxRunsPerDay
 	}
 	normalizedBackends := make(map[string]AIBackendConfig, len(c.AIBackends))
 	for name, backend := range c.AIBackends {
@@ -179,20 +196,11 @@ func (c *Config) applyDefaults() {
 	}
 	c.AIBackends = normalizedBackends
 	for i := range c.Repos {
-		if c.Repos[i].PollIntervalSeconds == 0 {
-			c.Repos[i].PollIntervalSeconds = defaultPollIntervalSeconds
-		}
 		c.Repos[i].FullName = strings.TrimSpace(c.Repos[i].FullName)
 	}
 }
 
 func (c *Config) resolveEnv() error {
-	if c.Database.DSN == "" && c.Database.DSNEnv != "" {
-		c.Database.DSN = os.Getenv(c.Database.DSNEnv)
-	}
-	if c.Database.DSN == "" {
-		return errors.New("config: database dsn is required")
-	}
 	if c.GitHub.Token == "" && c.GitHub.TokenEnv != "" {
 		c.GitHub.Token = os.Getenv(c.GitHub.TokenEnv)
 	}
@@ -201,6 +209,12 @@ func (c *Config) resolveEnv() error {
 	}
 	if c.GitHub.APIBaseURL == "" {
 		c.GitHub.APIBaseURL = "https://api.github.com"
+	}
+	if c.HTTP.WebhookSecret == "" && c.HTTP.WebhookSecretEnv != "" {
+		c.HTTP.WebhookSecret = os.Getenv(c.HTTP.WebhookSecretEnv)
+	}
+	if c.HTTP.WebhookSecret == "" {
+		return errors.New("config: http webhook secret is required")
 	}
 	if len(c.AIBackends) == 0 {
 		return errors.New("config: at least one ai_backends entry is required")

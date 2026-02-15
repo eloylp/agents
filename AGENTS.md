@@ -6,8 +6,7 @@ This file defines repo-specific guidance for future coding agents working in thi
 
 - Language: Go (`go 1.22`).
 - Binary entrypoint: `cmd/agentd/main.go`.
-- Purpose: poll GitHub issues/PRs and trigger AI CLI workflows (Claude/Codex) for issue refinement (`ai:refine`) and PR review (`ai:review`).
-- Persistence: PostgreSQL via `internal/store`.
+- Purpose: receive GitHub webhook events and trigger AI CLI workflows (Claude/Codex) for issue refinement (`ai:refine`) and PR review (`ai:review`).
 
 ## Quick Commands
 
@@ -21,8 +20,8 @@ This file defines repo-specific guidance for future coding agents working in thi
   - Wires config, logger, store, GitHub client, AI backend runners, workflow engine, and poller.
 - `internal/config/config.go`
   - Config schema, defaults, env resolution, and AI backend validation.
-- `internal/poller/poller.go`
-  - Repo polling loop, backoff, jitter, and issue/PR dispatch.
+- `internal/webhook/*`
+  - HTTP server, webhook signature verification, and short-lived delivery dedupe.
 - `internal/workflow/engine.go`
   - Label parsing/routing, dedupe fingerprints, locking, quotas, runner calls, and artifact persistence.
 - `internal/workflow/labels.go`
@@ -38,7 +37,7 @@ This file defines repo-specific guidance for future coding agents working in thi
 - `internal/github/client.go`
   - GitHub REST reads (issues, PRs, comments, files), pagination, and rate-limit handling.
 - `internal/store/store.go` and `internal/store/schema.sql`
-  - DB schema, repo/work item/run/artifact records, and locking primitives.
+  - Legacy persistence package (not used by webhook runtime path).
 
 ## Behavioral Guardrails
 

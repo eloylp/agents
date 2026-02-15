@@ -1,19 +1,22 @@
 log:
   level: info
 
-database:
-  dsn_env: DATABASE_URL
-  auto_migrate: true
-
 github:
   token_env: GITHUB_TOKEN
   api_base_url: https://api.github.com
 
-poller:
-  per_page: 50
-  max_items_per_poll: 200
-  max_idle_interval_seconds: 600
-  jitter_seconds: 5
+http:
+  listen_addr: ":8080"
+  status_path: /status
+  webhook_path: /webhooks/github
+  read_timeout_seconds: 15
+  write_timeout_seconds: 15
+  idle_timeout_seconds: 60
+  max_body_bytes: 1048576
+  webhook_secret_env: GITHUB_WEBHOOK_SECRET
+  delivery_ttl_seconds: 3600
+
+workflow:
   comment_fingerprint_limit: 5
   file_fingerprint_limit: 50
   max_fingerprint_bytes: 20000
@@ -45,4 +48,3 @@ ai_backends:
 repos:
   - full_name: "owner/repo"
     enabled: true
-    poll_interval_seconds: 60

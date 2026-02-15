@@ -82,11 +82,14 @@ func (e *Engine) HandleIssue(ctx context.Context, repo config.RepoConfig, issue 
 		return false, nil
 	}
 
-	comments, err := e.github.ListIssueComments(ctx, repo.FullName, issue.Number, e.cfg.Poller.CommentFingerprintLimit)
+	comments, err := e.github.ListIssueComments(ctx, repo.FullName, issue.Number, e.cfg.Workflow.CommentFingerprintLimit)
 	if err != nil {
 		return false, fmt.Errorf("list issue comments: %w", err)
 	}
-	fingerprint := IssueFingerprint(issue, comments, e.cfg.Poller.MaxFingerprintBytes)
+	fingerprint := IssueFingerprint(issue, comments, e.cfg.Workflow.MaxFingerprintBytes)
+	if e.store == nil {
+		return e.handleIssueStateless(ctx, repo, issue, selectedBackend, fingerprint)
+	}
 
 	item, err := e.store.EnsureWorkItem(ctx, repo.FullName, "issue", issue.Number)
 	if err != nil {
@@ -228,9 +231,12 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 		return false, nil
 	}
 
-	files, err := e.github.ListPullRequestFiles(ctx, repo.FullName, pr.Number, e.cfg.Poller.FileFingerprintLimit)
+	files, err := e.github.ListPullRequestFiles(ctx, repo.FullName, pr.Number, e.cfg.Workflow.FileFingerprintLimit)
 	if err != nil {
 		return false, fmt.Errorf("list pull files: %w", err)
+	}
+	if e.store == nil {
+		return e.handlePRStateless(ctx, repo, pr, targets, files)
 	}
 
 	item, err := e.store.EnsureWorkItem(ctx, repo.FullName, "pr", pr.Number)
@@ -275,7 +281,7 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 			continue
 		}
 		for role := range roles {
-			fingerprint := PRFingerprint(pr, role, files, e.cfg.Poller.MaxFingerprintBytes)
+			fingerprint := PRFingerprint(pr, role, files, e.cfg.Workflow.MaxFingerprintBytes)
 			workflowName := fmt.Sprintf("%s:%s:%s", workflowPRReview, agent, role)
 			run, created, err := e.store.CreateWorkflowRun(ctx, item.ID, workflowName, fingerprint)
 			if err != nil {
@@ -305,7 +311,6 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 	)
 	group, groupCtx := errgroup.WithContext(ctx)
 	for _, rr := range roleRuns {
-		rr := rr
 		group.Go(func() error {
 			prompt := ai.BuildPRReviewPrompt(rr.agent, rr.role, repo.FullName, pr.Number, rr.fingerprint)
 			logger.Info().Str("agent", rr.agent).Str("role", rr.role).Msg("invoking ai agent for pr review")
@@ -354,6 +359,113 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 	return ranAny, nil
 }
 
+func (e *Engine) handleIssueStateless(ctx context.Context, repo config.RepoConfig, issue github.Issue, backend, fingerprint string) (bool, error) {
+	logger := e.logger.With().
+		Str("repo", repo.FullName).
+		Int("issue_number", issue.Number).
+		Str("fingerprint", fingerprint).
+		Logger()
+	runner, ok := e.runners[backend]
+	if !ok {
+		logger.Warn().Str("backend", backend).Msg("runner missing for backend, skipping")
+		return false, nil
+	}
+	prompt := ai.BuildIssueRefinePrompt(backend, repo.FullName, issue.Number, fingerprint)
+	logger.Info().Str("backend", backend).Msg("invoking ai backend for issue refinement")
+	response, err := runner.Run(ctx, ai.Request{
+		Workflow:    fmt.Sprintf("%s:%s", workflowIssueRefine, backend),
+		Repo:        repo.FullName,
+		Number:      issue.Number,
+		Fingerprint: fingerprint,
+		Prompt:      prompt,
+	})
+	if err != nil {
+		logger.Error().Err(err).Str("backend", backend).Msg("ai run failed")
+		return false, nil
+	}
+	maxPosts := e.cfg.Workflow.MaxPostsPerRun
+	storedCount := len(response.Artifacts)
+	if maxPosts > 0 && storedCount > maxPosts {
+		storedCount = maxPosts
+	}
+	logger.Info().Str("backend", backend).Int("artifacts_stored", storedCount).Msg("issue refinement completed")
+	return true, nil
+}
+
+func (e *Engine) handlePRStateless(ctx context.Context, repo config.RepoConfig, pr github.PullRequest, targets map[string]map[string]struct{}, files []github.PullFile) (bool, error) {
+	logger := e.logger.With().
+		Str("repo", repo.FullName).
+		Int("pr_number", pr.Number).
+		Logger()
+
+	type agentRoleExecution struct {
+		agent       string
+		role        string
+		workflow    string
+		fingerprint string
+		runner      ai.Runner
+	}
+	roleRuns := make([]agentRoleExecution, 0)
+	for agent, roles := range targets {
+		runner, ok := e.runners[agent]
+		if !ok {
+			e.logger.Warn().Str("agent", agent).Msg("runner missing for agent, skipping")
+			continue
+		}
+		for role := range roles {
+			fingerprint := PRFingerprint(pr, role, files, e.cfg.Workflow.MaxFingerprintBytes)
+			roleRuns = append(roleRuns, agentRoleExecution{
+				agent:       agent,
+				role:        role,
+				workflow:    fmt.Sprintf("%s:%s:%s", workflowPRReview, agent, role),
+				fingerprint: fingerprint,
+				runner:      runner,
+			})
+		}
+	}
+	if len(roleRuns) == 0 {
+		logger.Info().Msg("pull request skipped because no runnable agent roles were resolved")
+		return false, nil
+	}
+
+	var (
+		mu     sync.Mutex
+		ranAny bool
+	)
+	group, groupCtx := errgroup.WithContext(ctx)
+	for _, rr := range roleRuns {
+		group.Go(func() error {
+			prompt := ai.BuildPRReviewPrompt(rr.agent, rr.role, repo.FullName, pr.Number, rr.fingerprint)
+			logger.Info().Str("agent", rr.agent).Str("role", rr.role).Msg("invoking ai agent for pr review")
+			response, err := rr.runner.Run(groupCtx, ai.Request{
+				Workflow:    rr.workflow,
+				Repo:        repo.FullName,
+				Number:      pr.Number,
+				Fingerprint: rr.fingerprint,
+				Prompt:      prompt,
+			})
+			if err != nil {
+				logger.Error().Err(err).Str("agent", rr.agent).Str("role", rr.role).Msg("ai run failed")
+				return nil
+			}
+			maxPosts := e.cfg.Workflow.MaxPostsPerRun
+			storedCount := len(response.Artifacts)
+			if maxPosts > 0 && storedCount > maxPosts {
+				storedCount = maxPosts
+			}
+			logger.Info().Str("agent", rr.agent).Str("role", rr.role).Int("artifacts_stored", storedCount).Msg("pr review completed")
+			mu.Lock()
+			ranAny = true
+			mu.Unlock()
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return false, err
+	}
+	return ranAny, nil
+}
+
 func (e *Engine) resolveAgent(agent string) string {
 	if strings.TrimSpace(agent) == "" {
 		defaultAgent := e.cfg.DefaultConfiguredBackend()
@@ -370,12 +482,12 @@ func (e *Engine) resolveAgent(agent string) string {
 }
 
 func (e *Engine) enforceQuota(ctx context.Context, logger zerolog.Logger, workItemID int64, workflowPrefix string, runID int64) error {
-	if e.cfg.Poller.MaxRunsPerHour > 0 {
+	if e.cfg.Workflow.MaxRunsPerHour > 0 {
 		count, err := e.store.CountWorkflowRunsSince(ctx, workItemID, workflowPrefix, time.Now().Add(-1*time.Hour))
 		if err != nil {
 			return err
 		}
-		if count > e.cfg.Poller.MaxRunsPerHour {
+		if count > e.cfg.Workflow.MaxRunsPerHour {
 			logger.Warn().Msg("workflow run skipped due to hourly quota")
 			if err := e.store.UpdateWorkflowRunStatus(ctx, runID, "skipped", store.SanitizeError(fmt.Errorf("hourly quota exceeded"))); err != nil {
 				return err
@@ -383,12 +495,12 @@ func (e *Engine) enforceQuota(ctx context.Context, logger zerolog.Logger, workIt
 			return errQuotaExceeded
 		}
 	}
-	if e.cfg.Poller.MaxRunsPerDay > 0 {
+	if e.cfg.Workflow.MaxRunsPerDay > 0 {
 		count, err := e.store.CountWorkflowRunsSince(ctx, workItemID, workflowPrefix, time.Now().Add(-24*time.Hour))
 		if err != nil {
 			return err
 		}
-		if count > e.cfg.Poller.MaxRunsPerDay {
+		if count > e.cfg.Workflow.MaxRunsPerDay {
 			logger.Warn().Msg("workflow run skipped due to daily quota")
 			if err := e.store.UpdateWorkflowRunStatus(ctx, runID, "skipped", store.SanitizeError(fmt.Errorf("daily quota exceeded"))); err != nil {
 				return err
@@ -400,7 +512,7 @@ func (e *Engine) enforceQuota(ctx context.Context, logger zerolog.Logger, workIt
 }
 
 func (e *Engine) storeArtifacts(ctx context.Context, runID int64, artifacts []ai.Artifact) (int, error) {
-	maxPosts := e.cfg.Poller.MaxPostsPerRun
+	maxPosts := e.cfg.Workflow.MaxPostsPerRun
 	stored := 0
 	for i, artifact := range artifacts {
 		if maxPosts > 0 && i >= maxPosts {

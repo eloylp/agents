@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**agents** (`agentd`) is a Go daemon that polls GitHub repositories for issue and PR updates, then invokes Claude (via CLI with GitHub MCP tools) to post automated issue refinement comments and PR specialist reviews. It uses REST API polling (no webhooks), PostgreSQL for state/idempotency, and structured JSON logging.
+**agents** (`agentd`) is a Go daemon that receives GitHub webhook events for issue and PR label updates, then invokes Claude (via CLI with GitHub MCP tools) to post automated issue refinement comments and PR specialist reviews.
 
 ## Directory Structure
 
@@ -17,7 +17,7 @@ internal/
   workflow/
     engine.go                # Workflow orchestration (label gating, locking, quota, Claude invocation)
     fingerprint.go           # SHA256-based content fingerprinting for idempotency
-  poller/poller.go           # Main polling loop with adaptive backoff
+  webhook/*                  # HTTP server, GitHub webhook verification/handling, delivery dedupe
   store/
     store.go                 # PostgreSQL data access (repos, work items, runs, artifacts, locks)
     schema.sql               # Database schema (embedded via go:embed)
@@ -26,7 +26,7 @@ internal/
 
 ## Build & Run
 
-**Prerequisites:** Go 1.24+, PostgreSQL 14+
+**Prerequisites:** Go 1.24+
 
 ```bash
 # Run tests

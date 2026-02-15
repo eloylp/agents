@@ -7,14 +7,14 @@ import (
 )
 
 func TestLoadRequiresSupportedAgentNames(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db")
 	t.Setenv("GITHUB_TOKEN", "token")
+	t.Setenv("WEBHOOK_SECRET", "secret")
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	content := `database:
-  dsn_env: DATABASE_URL
-github:
+	content := `github:
   token_env: GITHUB_TOKEN
+http:
+  webhook_secret_env: WEBHOOK_SECRET
 ai_backends:
 	unsupported:
     mode: noop
@@ -31,14 +31,14 @@ repos:
 }
 
 func TestLoadAppliesAgentDefaults(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db")
 	t.Setenv("GITHUB_TOKEN", "token")
+	t.Setenv("WEBHOOK_SECRET", "secret")
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	content := `database:
-  dsn_env: DATABASE_URL
-github:
+	content := `github:
   token_env: GITHUB_TOKEN
+http:
+  webhook_secret_env: WEBHOOK_SECRET
 ai_backends:
   claude:
     mode: noop
