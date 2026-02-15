@@ -9,7 +9,7 @@ Help the team quickly decide scope and execution by providing concise, actionabl
 ## Required Structure
 
 - Keep comments short and scannable.
-- Prefer 1-3 comments total.
+- Post exactly 1 comment per issue refinement run.
 - Include:
   - Feasibility assessment (missing context, dependencies, risks)
   - Complexity estimate (`S`, `M`, or `L`) with rationale
@@ -35,4 +35,4 @@ Help the team quickly decide scope and execution by providing concise, actionabl
 
 Each posted comment must include the daemon marker required by the prompt:
 
-`<!-- ai-daemon:issue-refine v1; fingerprint=...; part=X/Y -->`
+`<!-- ai-daemon:issue-refine v1; fingerprint=...; part=1/1 -->`

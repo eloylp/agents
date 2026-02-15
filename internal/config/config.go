@@ -25,22 +25,15 @@ const (
 	defaultMaxPromptChars          = 12000
 )
 
-type AIBackend string
-
-const (
-	AIBackendClaude AIBackend = "claude"
-	AIBackendOpenAI AIBackend = "openai"
-)
+var defaultRoles = []string{"architect", "security", "testing", "devops", "ux"}
 
 type Config struct {
-	Log       LogConfig      `yaml:"log"`
-	Database  DatabaseConfig `yaml:"database"`
-	GitHub    GitHubConfig   `yaml:"github"`
-	Poller    PollerConfig   `yaml:"poller"`
-	AIBackend AIBackend      `yaml:"ai_backend"`
-	Claude    ClaudeConfig   `yaml:"claude"`
-	OpenAI    OpenAIConfig   `yaml:"openai"`
-	Repos     []RepoConfig   `yaml:"repos"`
+	Log        LogConfig                  `yaml:"log"`
+	Database   DatabaseConfig             `yaml:"database"`
+	GitHub     GitHubConfig               `yaml:"github"`
+	Poller     PollerConfig               `yaml:"poller"`
+	AIBackends map[string]AIBackendConfig `yaml:"ai_backends"`
+	Repos      []RepoConfig               `yaml:"repos"`
 }
 
 type LogConfig struct {
@@ -60,18 +53,16 @@ type GitHubConfig struct {
 }
 
 type PollerConfig struct {
-	PerPage                 int    `yaml:"per_page"`
-	MaxItemsPerPoll         int    `yaml:"max_items_per_poll"`
-	IssueLabel              string `yaml:"issue_label"`
-	PRLabel                 string `yaml:"pr_label"`
-	MaxIdleIntervalSeconds  int    `yaml:"max_idle_interval_seconds"`
-	JitterSeconds           int    `yaml:"jitter_seconds"`
-	CommentFingerprintLimit int    `yaml:"comment_fingerprint_limit"`
-	FileFingerprintLimit    int    `yaml:"file_fingerprint_limit"`
-	MaxFingerprintBytes     int    `yaml:"max_fingerprint_bytes"`
-	MaxPostsPerRun          int    `yaml:"max_posts_per_run"`
-	MaxRunsPerHour          int    `yaml:"max_runs_per_hour"`
-	MaxRunsPerDay           int    `yaml:"max_runs_per_day"`
+	PerPage                 int `yaml:"per_page"`
+	MaxItemsPerPoll         int `yaml:"max_items_per_poll"`
+	MaxIdleIntervalSeconds  int `yaml:"max_idle_interval_seconds"`
+	JitterSeconds           int `yaml:"jitter_seconds"`
+	CommentFingerprintLimit int `yaml:"comment_fingerprint_limit"`
+	FileFingerprintLimit    int `yaml:"file_fingerprint_limit"`
+	MaxFingerprintBytes     int `yaml:"max_fingerprint_bytes"`
+	MaxPostsPerRun          int `yaml:"max_posts_per_run"`
+	MaxRunsPerHour          int `yaml:"max_runs_per_hour"`
+	MaxRunsPerDay           int `yaml:"max_runs_per_day"`
 }
 
 type ClaudeConfig struct {
@@ -96,8 +87,16 @@ type RepoConfig struct {
 	FullName            string `yaml:"full_name"`
 	Enabled             bool   `yaml:"enabled"`
 	PollIntervalSeconds int    `yaml:"poll_interval_seconds"`
-	IssueLabel          string `yaml:"issue_label"`
-	PRLabel             string `yaml:"pr_label"`
+}
+
+type AIBackendConfig struct {
+	Mode             string   `yaml:"mode"`
+	Command          string   `yaml:"command"`
+	Args             []string `yaml:"args"`
+	TimeoutSeconds   int      `yaml:"timeout_seconds"`
+	MaxPromptChars   int      `yaml:"max_prompt_chars"`
+	RedactionSaltEnv string   `yaml:"redaction_salt_env"`
+	Agents           []string `yaml:"agents"`
 }
 
 func Load(path string) (*Config, error) {
@@ -155,18 +154,30 @@ func (c *Config) applyDefaults() {
 	if c.Poller.MaxRunsPerDay == 0 {
 		c.Poller.MaxRunsPerDay = defaultMaxRunsPerDay
 	}
-	if c.Claude.TimeoutSeconds == 0 {
-		c.Claude.TimeoutSeconds = defaultAITimeoutSeconds
+	normalizedBackends := make(map[string]AIBackendConfig, len(c.AIBackends))
+	for name, backend := range c.AIBackends {
+		normalizedName := strings.ToLower(strings.TrimSpace(name))
+		if normalizedName == "" {
+			continue
+		}
+		if backend.Mode == "" {
+			backend.Mode = "noop"
+		}
+		if backend.TimeoutSeconds == 0 {
+			backend.TimeoutSeconds = defaultAITimeoutSeconds
+		}
+		if backend.MaxPromptChars == 0 {
+			backend.MaxPromptChars = defaultMaxPromptChars
+		}
+		if len(backend.Agents) == 0 {
+			backend.Agents = append([]string(nil), defaultRoles...)
+		}
+		for i := range backend.Agents {
+			backend.Agents[i] = strings.ToLower(strings.TrimSpace(backend.Agents[i]))
+		}
+		normalizedBackends[normalizedName] = backend
 	}
-	if c.Claude.MaxPromptChars == 0 {
-		c.Claude.MaxPromptChars = defaultMaxPromptChars
-	}
-	if c.OpenAI.TimeoutSeconds == 0 {
-		c.OpenAI.TimeoutSeconds = defaultAITimeoutSeconds
-	}
-	if c.OpenAI.MaxPromptChars == 0 {
-		c.OpenAI.MaxPromptChars = defaultMaxPromptChars
-	}
+	c.AIBackends = normalizedBackends
 	for i := range c.Repos {
 		if c.Repos[i].PollIntervalSeconds == 0 {
 			c.Repos[i].PollIntervalSeconds = defaultPollIntervalSeconds
@@ -191,26 +202,28 @@ func (c *Config) resolveEnv() error {
 	if c.GitHub.APIBaseURL == "" {
 		c.GitHub.APIBaseURL = "https://api.github.com"
 	}
-	if c.Claude.Mode == "" {
-		c.Claude.Mode = "noop"
+	if len(c.AIBackends) == 0 {
+		return errors.New("config: at least one ai_backends entry is required")
 	}
-	if c.OpenAI.Mode == "" {
-		c.OpenAI.Mode = "noop"
-	}
-	if c.AIBackend == "" {
-		c.AIBackend = AIBackendClaude
-	}
-	if c.AIBackend != AIBackendClaude && c.AIBackend != AIBackendOpenAI {
-		return fmt.Errorf("config: ai_backend must be one of %s, %s", AIBackendClaude, AIBackendOpenAI)
+	for name := range c.AIBackends {
+		if name != "claude" && name != "codex" {
+			return fmt.Errorf("config: unsupported ai backend %q (supported: claude, codex)", name)
+		}
 	}
 	return nil
 }
 
-func (c *Config) AIBackendTimeoutSeconds() int {
-	if c.AIBackend == AIBackendOpenAI {
-		return c.OpenAI.TimeoutSeconds
+func (c *Config) MaxAgentTimeoutSeconds() int {
+	maxTimeout := 0
+	for _, backend := range c.AIBackends {
+		if backend.TimeoutSeconds > maxTimeout {
+			maxTimeout = backend.TimeoutSeconds
+		}
 	}
-	return c.Claude.TimeoutSeconds
+	if maxTimeout == 0 {
+		return defaultAITimeoutSeconds
+	}
+	return maxTimeout
 }
 
 func (c *Config) RepoByName(fullName string) (RepoConfig, bool) {
@@ -220,4 +233,14 @@ func (c *Config) RepoByName(fullName string) (RepoConfig, bool) {
 		}
 	}
 	return RepoConfig{}, false
+}
+
+func (c *Config) DefaultConfiguredBackend() string {
+	if _, ok := c.AIBackends["claude"]; ok {
+		return "claude"
+	}
+	if _, ok := c.AIBackends["codex"]; ok {
+		return "codex"
+	}
+	return ""
 }

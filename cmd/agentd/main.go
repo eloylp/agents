@@ -12,11 +12,9 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/ai"
-	"github.com/eloylp/agents/internal/claude"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/github"
 	"github.com/eloylp/agents/internal/logging"
-	"github.com/eloylp/agents/internal/openai"
 	"github.com/eloylp/agents/internal/poller"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
@@ -68,14 +66,20 @@ func main() {
 	}
 
 	githubClient := github.NewClient(cfg.GitHub, logger)
-	var runner ai.Runner
-	switch cfg.AIBackend {
-	case config.AIBackendOpenAI:
-		runner = openai.NewRunner(cfg.OpenAI, logger)
-	default:
-		runner = claude.NewRunner(cfg.Claude, logger)
+	runners := make(map[string]ai.Runner, len(cfg.AIBackends))
+	for name, backendCfg := range cfg.AIBackends {
+		runners[name] = ai.NewCommandRunner(
+			name,
+			backendCfg.Mode,
+			backendCfg.Command,
+			backendCfg.Args,
+			backendCfg.TimeoutSeconds,
+			backendCfg.MaxPromptChars,
+			backendCfg.RedactionSaltEnv,
+			logger.With().Str("component", "ai_runner").Str("agent", name).Logger(),
+		)
 	}
-	engine := workflow.NewEngine(cfg, storeClient, githubClient, runner, logger)
+	engine := workflow.NewEngine(cfg, storeClient, githubClient, runners, logger)
 	poller := poller.New(cfg, storeClient, githubClient, engine, logger)
 
 	logger.Info().Msg("agent daemon started")
