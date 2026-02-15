@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestLoadUsesLegacyAIBackendShim(t *testing.T) {
+func TestLoadRequiresSupportedAgentNames(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db")
 	t.Setenv("GITHUB_TOKEN", "token")
 
@@ -15,38 +15,6 @@ func TestLoadUsesLegacyAIBackendShim(t *testing.T) {
   dsn_env: DATABASE_URL
 github:
   token_env: GITHUB_TOKEN
-ai_backend: openai
-openai:
-  mode: noop
-repos:
-  - full_name: "owner/repo"
-`
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-	if cfg.DefaultAgent != "openai" {
-		t.Fatalf("expected default_agent=openai, got %q", cfg.DefaultAgent)
-	}
-	if _, ok := cfg.Agents["openai"]; !ok {
-		t.Fatalf("expected openai agent to be migrated")
-	}
-}
-
-func TestLoadRequiresConfiguredDefaultAgent(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db")
-	t.Setenv("GITHUB_TOKEN", "token")
-
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	content := `database:
-  dsn_env: DATABASE_URL
-github:
-  token_env: GITHUB_TOKEN
-default_agent: claude
 agents:
   openai:
     mode: noop
@@ -58,7 +26,7 @@ repos:
 	}
 
 	if _, err := Load(path); err == nil {
-		t.Fatalf("expected load to fail for missing default agent")
+		t.Fatalf("expected load to fail for unsupported agent name")
 	}
 }
 
@@ -71,7 +39,6 @@ func TestLoadAppliesAgentDefaults(t *testing.T) {
   dsn_env: DATABASE_URL
 github:
   token_env: GITHUB_TOKEN
-default_agent: claude
 agents:
   claude:
     mode: noop
@@ -92,5 +59,20 @@ repos:
 	}
 	if len(agent.Roles) == 0 {
 		t.Fatalf("expected default roles")
+	}
+}
+
+func TestDefaultConfiguredAgent(t *testing.T) {
+	cfg := Config{Agents: map[string]AgentConfig{"codex": {}, "claude": {}}}
+	if got := cfg.DefaultConfiguredAgent(); got != "claude" {
+		t.Fatalf("expected claude, got %q", got)
+	}
+	cfg = Config{Agents: map[string]AgentConfig{"codex": {}}}
+	if got := cfg.DefaultConfiguredAgent(); got != "codex" {
+		t.Fatalf("expected codex, got %q", got)
+	}
+	cfg = Config{}
+	if got := cfg.DefaultConfiguredAgent(); got != "" {
+		t.Fatalf("expected empty default agent, got %q", got)
 	}
 }

@@ -37,9 +37,6 @@ func main() {
 
 	logger := logging.NewLogger(cfg.Log)
 	zerolog.DefaultContextLogger = &logger
-	if cfg.UsedLegacyBackendConfig {
-		logger.Warn().Msg("ai_backend is deprecated; migrate to default_agent + agents config")
-	}
 
 	storeClient, err := store.Open(ctx, cfg.Database.DSN)
 	if err != nil {

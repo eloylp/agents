@@ -2,6 +2,12 @@ package workflow
 
 import "strings"
 
+// ParseAILabel maps supported ai:* labels into workflow, agent, and role tokens.
+// Supported forms:
+// - ai:refine
+// - ai:refine:<agent>
+// - ai:review
+// - ai:review:<agent>:<role>
 func ParseAILabel(label string) (workflow, agent, role string, ok bool) {
 	normalized := strings.ToLower(strings.TrimSpace(label))
 	if normalized == "ai:refine" {

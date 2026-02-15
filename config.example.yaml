@@ -21,8 +21,6 @@ poller:
   max_runs_per_hour: 5
   max_runs_per_day: 20
 
-default_agent: claude
-
 agents:
   claude:
     mode: command
@@ -34,7 +32,7 @@ agents:
     max_prompt_chars: 12000
     redaction_salt_env: LOG_SALT
     roles: [architect, security, testing, devops, ux]
-  openai:
+  codex:
     mode: command
     command: codex
     args:

@@ -10,6 +10,8 @@ Labels:
 - `ai:refine`
 - `ai:refine:<agent>`
 
+Supported agents: `claude`, `codex`.
+
 Each matched agent posts exactly one structured issue comment.
 
 ### PR specialist review (`ai:review` labels)
@@ -127,8 +129,6 @@ poller:
   max_runs_per_hour: 5         # per work item (across all roles/agents)
   max_runs_per_day: 20         # per work item (across all roles/agents)
 
-default_agent: claude
-
 agents:
   claude:
     mode: command
@@ -139,8 +139,8 @@ agents:
     timeout_seconds: 600
     max_prompt_chars: 12000
     redaction_salt_env: LOG_SALT
-    roles: [architect, security, testing, devops, ux]
-  openai:
+    roles: [architect, security, testing, devops, ux] # allowed values for <role>; :all expands to all listed roles
+  codex:
     mode: command
     command: codex
     args:
@@ -148,15 +148,13 @@ agents:
     timeout_seconds: 600
     max_prompt_chars: 12000
     redaction_salt_env: LOG_SALT
-    roles: [architect, security, testing, devops, ux]
+    roles: [architect, security, testing, devops, ux] # allowed values for <role>; :all expands to all listed roles
 
 repos:
   - full_name: "owner/repo"
     enabled: true
     poll_interval_seconds: 60
 ```
-
-Backward compatibility: if `agents` is not set, legacy `ai_backend` + `claude`/`openai` blocks are still accepted and auto-migrated at load time.
 
 You can also create a `.env` file in the project root. The daemon loads it automatically on startup:
 

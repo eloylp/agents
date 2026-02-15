@@ -55,7 +55,13 @@ func (e *Engine) HandleIssue(ctx context.Context, repo config.RepoConfig, issue 
 	agents := make([]string, 0, 2)
 	for _, label := range issue.Labels {
 		workflow, agent, _, ok := ParseAILabel(label.Name)
-		if !ok || workflow != workflowIssueRefine {
+		if !ok {
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(label.Name)), "ai:") {
+				e.logger.Info().Str("label", label.Name).Int("issue_number", issue.Number).Str("repo", repo.FullName).Msg("issue skipped label with invalid ai format")
+			}
+			continue
+		}
+		if workflow != workflowIssueRefine {
 			continue
 		}
 		resolved := e.resolveAgent(agent)
@@ -176,7 +182,13 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 	targets := map[string]map[string]struct{}{}
 	for _, label := range pr.Labels {
 		workflow, agent, role, ok := ParseAILabel(label.Name)
-		if !ok || workflow != workflowPRReview {
+		if !ok {
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(label.Name)), "ai:") {
+				e.logger.Info().Str("label", label.Name).Int("pr_number", pr.Number).Str("repo", repo.FullName).Msg("pull request skipped label with invalid ai format")
+			}
+			continue
+		}
+		if workflow != workflowPRReview {
 			continue
 		}
 		resolvedAgent := e.resolveAgent(agent)
@@ -275,6 +287,7 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 		}
 	}
 	if len(roleRuns) == 0 {
+		logger.Info().Msg("pull request skipped because no runnable agent roles were resolved")
 		return false, nil
 	}
 
@@ -335,7 +348,11 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 
 func (e *Engine) resolveAgent(agent string) string {
 	if strings.TrimSpace(agent) == "" {
-		return e.cfg.DefaultAgent
+		defaultAgent := e.cfg.DefaultConfiguredAgent()
+		if defaultAgent == "" {
+			e.logger.Error().Msg("no default agent configured; expected one of claude or codex")
+		}
+		return defaultAgent
 	}
 	agent = strings.ToLower(strings.TrimSpace(agent))
 	if _, ok := e.cfg.Agents[agent]; !ok {

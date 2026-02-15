@@ -27,25 +27,13 @@ const (
 
 var defaultRoles = []string{"architect", "security", "testing", "devops", "ux"}
 
-type AIBackend string
-
-const (
-	AIBackendClaude AIBackend = "claude"
-	AIBackendOpenAI AIBackend = "openai"
-)
-
 type Config struct {
-	Log                     LogConfig              `yaml:"log"`
-	Database                DatabaseConfig         `yaml:"database"`
-	GitHub                  GitHubConfig           `yaml:"github"`
-	Poller                  PollerConfig           `yaml:"poller"`
-	DefaultAgent            string                 `yaml:"default_agent"`
-	Agents                  map[string]AgentConfig `yaml:"agents"`
-	AIBackend               AIBackend              `yaml:"ai_backend"`
-	Claude                  ClaudeConfig           `yaml:"claude"`
-	OpenAI                  OpenAIConfig           `yaml:"openai"`
-	Repos                   []RepoConfig           `yaml:"repos"`
-	UsedLegacyBackendConfig bool                   `yaml:"-"`
+	Log      LogConfig              `yaml:"log"`
+	Database DatabaseConfig         `yaml:"database"`
+	GitHub   GitHubConfig           `yaml:"github"`
+	Poller   PollerConfig           `yaml:"poller"`
+	Agents   map[string]AgentConfig `yaml:"agents"`
+	Repos    []RepoConfig           `yaml:"repos"`
 }
 
 type LogConfig struct {
@@ -166,19 +154,6 @@ func (c *Config) applyDefaults() {
 	if c.Poller.MaxRunsPerDay == 0 {
 		c.Poller.MaxRunsPerDay = defaultMaxRunsPerDay
 	}
-	if c.Claude.TimeoutSeconds == 0 {
-		c.Claude.TimeoutSeconds = defaultAITimeoutSeconds
-	}
-	if c.Claude.MaxPromptChars == 0 {
-		c.Claude.MaxPromptChars = defaultMaxPromptChars
-	}
-	if c.OpenAI.TimeoutSeconds == 0 {
-		c.OpenAI.TimeoutSeconds = defaultAITimeoutSeconds
-	}
-	if c.OpenAI.MaxPromptChars == 0 {
-		c.OpenAI.MaxPromptChars = defaultMaxPromptChars
-	}
-	c.migrateDeprecatedBackend()
 	normalizedAgents := make(map[string]AgentConfig, len(c.Agents))
 	for name, agent := range c.Agents {
 		normalizedName := strings.ToLower(strings.TrimSpace(name))
@@ -203,10 +178,6 @@ func (c *Config) applyDefaults() {
 		normalizedAgents[normalizedName] = agent
 	}
 	c.Agents = normalizedAgents
-	c.DefaultAgent = strings.ToLower(strings.TrimSpace(c.DefaultAgent))
-	if c.DefaultAgent == "" {
-		c.DefaultAgent = string(c.AIBackend)
-	}
 	for i := range c.Repos {
 		if c.Repos[i].PollIntervalSeconds == 0 {
 			c.Repos[i].PollIntervalSeconds = defaultPollIntervalSeconds
@@ -235,19 +206,9 @@ func (c *Config) resolveEnv() error {
 		return errors.New("config: at least one agent is required")
 	}
 	for name := range c.Agents {
-		if strings.TrimSpace(name) == "" {
-			return errors.New("config: agent name is required")
+		if name != "claude" && name != "codex" {
+			return fmt.Errorf("config: unsupported agent %q (supported: claude, codex)", name)
 		}
-	}
-	if c.DefaultAgent == "" {
-		return errors.New("config: default_agent is required")
-	}
-	agent, ok := c.Agents[c.DefaultAgent]
-	if !ok {
-		return fmt.Errorf("config: default_agent %q is not configured", c.DefaultAgent)
-	}
-	if len(agent.Roles) == 0 {
-		return fmt.Errorf("config: agent %q must define at least one role", c.DefaultAgent)
 	}
 	return nil
 }
@@ -274,39 +235,12 @@ func (c *Config) RepoByName(fullName string) (RepoConfig, bool) {
 	return RepoConfig{}, false
 }
 
-func (c *Config) migrateDeprecatedBackend() {
-	if c.AIBackend == "" {
-		c.AIBackend = AIBackendClaude
+func (c *Config) DefaultConfiguredAgent() string {
+	if _, ok := c.Agents["claude"]; ok {
+		return "claude"
 	}
-	if len(c.Agents) > 0 {
-		return
+	if _, ok := c.Agents["codex"]; ok {
+		return "codex"
 	}
-	c.UsedLegacyBackendConfig = true
-	switch c.AIBackend {
-	case AIBackendClaude:
-		c.Agents = map[string]AgentConfig{
-			"claude": {
-				Mode:             c.Claude.Mode,
-				Command:          c.Claude.Command,
-				Args:             c.Claude.Args,
-				TimeoutSeconds:   c.Claude.TimeoutSeconds,
-				MaxPromptChars:   c.Claude.MaxPromptChars,
-				RedactionSaltEnv: c.Claude.RedactionSaltEnv,
-			},
-		}
-	case AIBackendOpenAI:
-		c.Agents = map[string]AgentConfig{
-			"openai": {
-				Mode:             c.OpenAI.Mode,
-				Command:          c.OpenAI.Command,
-				Args:             c.OpenAI.Args,
-				TimeoutSeconds:   c.OpenAI.TimeoutSeconds,
-				MaxPromptChars:   c.OpenAI.MaxPromptChars,
-				RedactionSaltEnv: c.OpenAI.RedactionSaltEnv,
-			},
-		}
-	}
-	if c.DefaultAgent == "" {
-		c.DefaultAgent = string(c.AIBackend)
-	}
+	return ""
 }
