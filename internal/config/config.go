@@ -25,6 +25,8 @@ const (
 	defaultMaxPromptChars          = 12000
 )
 
+var defaultRoles = []string{"architect", "security", "testing", "devops", "ux"}
+
 type AIBackend string
 
 const (
@@ -193,7 +195,7 @@ func (c *Config) applyDefaults() {
 			agent.MaxPromptChars = defaultMaxPromptChars
 		}
 		if len(agent.Roles) == 0 {
-			agent.Roles = []string{"architect", "security", "testing", "devops", "ux"}
+			agent.Roles = append([]string(nil), defaultRoles...)
 		}
 		for i := range agent.Roles {
 			agent.Roles[i] = strings.ToLower(strings.TrimSpace(agent.Roles[i]))

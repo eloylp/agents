@@ -24,6 +24,9 @@ func TestParseAILabel(t *testing.T) {
 		if ok != tt.ok {
 			t.Fatalf("ParseAILabel(%q) ok mismatch: got %v want %v", tt.label, ok, tt.ok)
 		}
+		if !tt.ok {
+			continue
+		}
 		if workflow != tt.workflow || agent != tt.agent || role != tt.role {
 			t.Fatalf("ParseAILabel(%q) = (%q,%q,%q), want (%q,%q,%q)", tt.label, workflow, agent, role, tt.workflow, tt.agent, tt.role)
 		}

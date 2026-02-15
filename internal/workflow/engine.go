@@ -127,7 +127,7 @@ func (e *Engine) HandleIssue(ctx context.Context, repo config.RepoConfig, issue 
 			_ = e.store.UpdateWorkflowRunStatus(ctx, run.ID, "skipped", store.SanitizeError(fmt.Errorf("runner missing for agent %s", agent)))
 			continue
 		}
-		prompt := ai.BuildIssueRefinePrompt(agent, repo.FullName, issue.Number, fingerprint, "")
+		prompt := ai.BuildIssueRefinePrompt(agent, repo.FullName, issue.Number, fingerprint)
 		logger.Info().Str("agent", agent).Msg("invoking ai agent for issue refinement")
 		response, err := runner.Run(ctx, ai.Request{
 			Workflow:    workflowName,
@@ -239,7 +239,7 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 		}
 	}()
 
-	type roleRun struct {
+	type agentRoleExecution struct {
 		agent       string
 		role        string
 		workflow    string
@@ -247,7 +247,7 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 		runner      ai.Runner
 		runID       int64
 	}
-	roleRuns := make([]roleRun, 0, 8)
+	roleRuns := make([]agentRoleExecution, 0)
 	for agent, roles := range targets {
 		runner, ok := e.runners[agent]
 		if !ok {
@@ -271,7 +271,7 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 				}
 				return false, err
 			}
-			roleRuns = append(roleRuns, roleRun{agent: agent, role: role, workflow: workflowName, fingerprint: fingerprint, runner: runner, runID: run.ID})
+			roleRuns = append(roleRuns, agentRoleExecution{agent: agent, role: role, workflow: workflowName, fingerprint: fingerprint, runner: runner, runID: run.ID})
 		}
 	}
 	if len(roleRuns) == 0 {
@@ -286,7 +286,7 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 	for _, rr := range roleRuns {
 		rr := rr
 		group.Go(func() error {
-			prompt := ai.BuildPRReviewPrompt(rr.agent, rr.role, repo.FullName, pr.Number, rr.fingerprint, "")
+			prompt := ai.BuildPRReviewPrompt(rr.agent, rr.role, repo.FullName, pr.Number, rr.fingerprint)
 			logger.Info().Str("agent", rr.agent).Str("role", rr.role).Msg("invoking ai agent for pr review")
 			response, err := rr.runner.Run(groupCtx, ai.Request{
 				Workflow:    rr.workflow,

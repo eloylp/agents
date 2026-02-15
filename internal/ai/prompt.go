@@ -2,11 +2,7 @@ package ai
 
 import "fmt"
 
-func BuildIssueRefinePrompt(agent string, repo string, number int, fingerprint string, labelGate string) string {
-	labelLine := ""
-	if labelGate != "" {
-		labelLine = fmt.Sprintf("Only run if label '%s' is present.", labelGate)
-	}
+func BuildIssueRefinePrompt(agent string, repo string, number int, fingerprint string) string {
 	heading := fmt.Sprintf("## %s refinement", agent)
 
 	return fmt.Sprintf(`# Mission
@@ -15,7 +11,6 @@ You are an AI assistant running with GitHub MCP tools (repos, issues, pull_reque
 Repository: %s
 Issue: #%d
 Fingerprint: %s
-%s
 
 ## Required reading
 1. Issue title/body and recent comments.
@@ -50,14 +45,10 @@ After posting all comments, you MUST print exactly one JSON object to stdout (no
 {"summary":"<one-line summary>","artifacts":[{"type":"issue_comment","part_key":"issue/%s","github_id":"<comment_id>","url":"<comment_url>"}]}
 
 Do NOT output anything else to stdout. Only the JSON object above.
-`, repo, number, fingerprint, labelLine, heading, fingerprint, agent)
+`, repo, number, fingerprint, heading, fingerprint, agent)
 }
 
-func BuildPRReviewPrompt(agent string, role string, repo string, number int, fingerprint string, labelGate string) string {
-	labelLine := ""
-	if labelGate != "" {
-		labelLine = fmt.Sprintf("Only run if label '%s' is present.", labelGate)
-	}
+func BuildPRReviewPrompt(agent string, role string, repo string, number int, fingerprint string) string {
 	heading := fmt.Sprintf("## %s specialist: %s", agent, role)
 	roleInstructions := map[string]string{
 		"architect": "Focus on architecture, boundaries, coupling, and long-term maintainability.",
@@ -77,7 +68,6 @@ You are an AI assistant running with GitHub MCP tools (repos, issues, pull_reque
 Repository: %s
 PR: #%d
 Fingerprint: %s
-%s
 
 ## Required reading
 1. PR title/body and diff.
@@ -109,5 +99,5 @@ After posting the review, you MUST print exactly one JSON object to stdout (no o
 {"summary":"<one-line summary>","artifacts":[{"type":"pr_review","part_key":"review/%s/%s","github_id":"<review_id>","url":"<review_url>"}]}
 
 Do NOT output anything else to stdout. Only the JSON object above.
-`, repo, number, fingerprint, labelLine, heading, instruction, fingerprint, agent, role)
+`, repo, number, fingerprint, heading, instruction, fingerprint, agent, role)
 }
