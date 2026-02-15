@@ -21,17 +21,26 @@ const (
 	defaultMaxPostsPerRun          = 10
 	defaultMaxRunsPerHour          = 5
 	defaultMaxRunsPerDay           = 20
-	defaultClaudeTimeoutSeconds    = 600
+	defaultAITimeoutSeconds        = 600
 	defaultMaxPromptChars          = 12000
 )
 
+type AIBackend string
+
+const (
+	AIBackendClaude AIBackend = "claude"
+	AIBackendOpenAI AIBackend = "openai"
+)
+
 type Config struct {
-	Log      LogConfig      `yaml:"log"`
-	Database DatabaseConfig `yaml:"database"`
-	GitHub   GitHubConfig   `yaml:"github"`
-	Poller   PollerConfig   `yaml:"poller"`
-	Claude   ClaudeConfig   `yaml:"claude"`
-	Repos    []RepoConfig   `yaml:"repos"`
+	Log       LogConfig      `yaml:"log"`
+	Database  DatabaseConfig `yaml:"database"`
+	GitHub    GitHubConfig   `yaml:"github"`
+	Poller    PollerConfig   `yaml:"poller"`
+	AIBackend AIBackend      `yaml:"ai_backend"`
+	Claude    ClaudeConfig   `yaml:"claude"`
+	OpenAI    OpenAIConfig   `yaml:"openai"`
+	Repos     []RepoConfig   `yaml:"repos"`
 }
 
 type LogConfig struct {
@@ -66,6 +75,15 @@ type PollerConfig struct {
 }
 
 type ClaudeConfig struct {
+	Mode             string   `yaml:"mode"`
+	Command          string   `yaml:"command"`
+	Args             []string `yaml:"args"`
+	TimeoutSeconds   int      `yaml:"timeout_seconds"`
+	MaxPromptChars   int      `yaml:"max_prompt_chars"`
+	RedactionSaltEnv string   `yaml:"redaction_salt_env"`
+}
+
+type OpenAIConfig struct {
 	Mode             string   `yaml:"mode"`
 	Command          string   `yaml:"command"`
 	Args             []string `yaml:"args"`
@@ -138,10 +156,16 @@ func (c *Config) applyDefaults() {
 		c.Poller.MaxRunsPerDay = defaultMaxRunsPerDay
 	}
 	if c.Claude.TimeoutSeconds == 0 {
-		c.Claude.TimeoutSeconds = defaultClaudeTimeoutSeconds
+		c.Claude.TimeoutSeconds = defaultAITimeoutSeconds
 	}
 	if c.Claude.MaxPromptChars == 0 {
 		c.Claude.MaxPromptChars = defaultMaxPromptChars
+	}
+	if c.OpenAI.TimeoutSeconds == 0 {
+		c.OpenAI.TimeoutSeconds = defaultAITimeoutSeconds
+	}
+	if c.OpenAI.MaxPromptChars == 0 {
+		c.OpenAI.MaxPromptChars = defaultMaxPromptChars
 	}
 	for i := range c.Repos {
 		if c.Repos[i].PollIntervalSeconds == 0 {
@@ -170,7 +194,23 @@ func (c *Config) resolveEnv() error {
 	if c.Claude.Mode == "" {
 		c.Claude.Mode = "noop"
 	}
+	if c.OpenAI.Mode == "" {
+		c.OpenAI.Mode = "noop"
+	}
+	if c.AIBackend == "" {
+		c.AIBackend = AIBackendClaude
+	}
+	if c.AIBackend != AIBackendClaude && c.AIBackend != AIBackendOpenAI {
+		return fmt.Errorf("config: ai_backend must be one of %s, %s", AIBackendClaude, AIBackendOpenAI)
+	}
 	return nil
+}
+
+func (c *Config) AIBackendTimeoutSeconds() int {
+	if c.AIBackend == AIBackendOpenAI {
+		return c.OpenAI.TimeoutSeconds
+	}
+	return c.Claude.TimeoutSeconds
 }
 
 func (c *Config) RepoByName(fullName string) (RepoConfig, bool) {

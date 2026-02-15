@@ -1,4 +1,4 @@
-package claude
+package openai
 
 import (
 	"context"
@@ -13,17 +13,17 @@ type Runner struct {
 	runner *ai.CommandRunner
 }
 
-func NewRunner(cfg config.ClaudeConfig, logger zerolog.Logger) *Runner {
+func NewRunner(cfg config.OpenAIConfig, logger zerolog.Logger) *Runner {
 	return &Runner{
 		runner: ai.NewCommandRunner(
-			"claude",
+			"openai",
 			cfg.Mode,
 			cfg.Command,
 			cfg.Args,
 			cfg.TimeoutSeconds,
 			cfg.MaxPromptChars,
 			cfg.RedactionSaltEnv,
-			logger.With().Str("component", "claude_runner").Logger(),
+			logger.With().Str("component", "openai_runner").Logger(),
 		),
 	}
 }

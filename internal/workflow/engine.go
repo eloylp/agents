@@ -9,7 +9,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/eloylp/agents/internal/claude"
+	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/github"
 	"github.com/eloylp/agents/internal/store"
@@ -26,16 +26,16 @@ type Engine struct {
 	cfg          *config.Config
 	store        *store.Store
 	github       *github.Client
-	runner       *claude.Runner
+	runner       ai.Runner
 	logger       zerolog.Logger
 	lockOwner    string
 	lockDuration time.Duration
 }
 
-func NewEngine(cfg *config.Config, store *store.Store, githubClient *github.Client, runner *claude.Runner, logger zerolog.Logger) *Engine {
+func NewEngine(cfg *config.Config, store *store.Store, githubClient *github.Client, runner ai.Runner, logger zerolog.Logger) *Engine {
 	hostname, _ := os.Hostname()
 	owner := fmt.Sprintf("%s:%d", hostname, os.Getpid())
-	lockDuration := time.Duration(cfg.Claude.TimeoutSeconds+60) * time.Second
+	lockDuration := time.Duration(cfg.AIBackendTimeoutSeconds()+60) * time.Second
 	return &Engine{
 		cfg:          cfg,
 		store:        store,
@@ -106,9 +106,9 @@ func (e *Engine) HandleIssue(ctx context.Context, repo config.RepoConfig, issue 
 		return false, err
 	}
 
-	prompt := claude.BuildIssueRefinePrompt(repo.FullName, issue.Number, fingerprint, labelGate)
-	logger.Info().Msg("invoking claude for issue refinement")
-	response, err := e.runner.Run(ctx, claude.Request{
+	prompt := ai.BuildIssueRefinePrompt(repo.FullName, issue.Number, fingerprint, labelGate)
+	logger.Info().Str("backend", string(e.cfg.AIBackend)).Msg("invoking ai backend for issue refinement")
+	response, err := e.runner.Run(ctx, ai.Request{
 		Workflow:    workflowIssueRefine,
 		Repo:        repo.FullName,
 		Number:      issue.Number,
@@ -116,7 +116,7 @@ func (e *Engine) HandleIssue(ctx context.Context, repo config.RepoConfig, issue 
 		Prompt:      prompt,
 	})
 	if err != nil {
-		logger.Error().Err(err).Msg("claude run failed")
+		logger.Error().Err(err).Str("backend", string(e.cfg.AIBackend)).Msg("ai run failed")
 		updateErr := e.store.UpdateWorkflowRunStatus(ctx, run.ID, "failed", store.SanitizeError(err))
 		if updateErr != nil {
 			logger.Error().Err(updateErr).Msg("failed to update workflow run")
@@ -207,9 +207,9 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 		return false, err
 	}
 
-	prompt := claude.BuildPRReviewPrompt(repo.FullName, pr.Number, fingerprint, labelGate)
-	logger.Info().Msg("invoking claude for pr review")
-	response, err := e.runner.Run(ctx, claude.Request{
+	prompt := ai.BuildPRReviewPrompt(repo.FullName, pr.Number, fingerprint, labelGate)
+	logger.Info().Str("backend", string(e.cfg.AIBackend)).Msg("invoking ai backend for pr review")
+	response, err := e.runner.Run(ctx, ai.Request{
 		Workflow:    workflowPRReview,
 		Repo:        repo.FullName,
 		Number:      pr.Number,
@@ -217,7 +217,7 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 		Prompt:      prompt,
 	})
 	if err != nil {
-		logger.Error().Err(err).Msg("claude run failed")
+		logger.Error().Err(err).Str("backend", string(e.cfg.AIBackend)).Msg("ai run failed")
 		updateErr := e.store.UpdateWorkflowRunStatus(ctx, run.ID, "failed", store.SanitizeError(err))
 		if updateErr != nil {
 			logger.Error().Err(updateErr).Msg("failed to update workflow run")
@@ -275,7 +275,7 @@ func (e *Engine) enforceQuota(ctx context.Context, logger zerolog.Logger, workIt
 	return nil
 }
 
-func (e *Engine) storeArtifacts(ctx context.Context, runID int64, artifacts []claude.Artifact) (int, error) {
+func (e *Engine) storeArtifacts(ctx context.Context, runID int64, artifacts []ai.Artifact) (int, error) {
 	maxPosts := e.cfg.Poller.MaxPostsPerRun
 	stored := 0
 	for i, artifact := range artifacts {
