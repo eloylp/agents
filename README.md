@@ -55,7 +55,7 @@ sequenceDiagram
     Claude-->>Daemon: Return artifacts JSON
 ```
 
-The daemon reacts only to `issues` / `pull_request` webhook events with `action` `labeled` or `unlabeled`. All detailed reads and writes (issue comments, PR reviews) are delegated to the configured AI backend via MCP tools.
+The daemon reacts only to `issues` / `pull_request` webhook events with `action` `labeled`. All detailed reads and writes (issue comments, PR reviews) are delegated to the configured AI backend via MCP tools.
 
 ## Requirements
 
@@ -117,12 +117,6 @@ http:
   max_body_bytes: 1048576
   webhook_secret_env: GITHUB_WEBHOOK_SECRET
   delivery_ttl_seconds: 3600
-
-workflow:
-  comment_fingerprint_limit: 5
-  file_fingerprint_limit: 50
-  max_fingerprint_bytes: 20000
-  max_posts_per_run: 10
 
 ai_backends:
   claude:
@@ -188,7 +182,7 @@ When `ai_backends.<name>.mode=command`, the daemon executes the configured comma
 }
 ```
 
-The daemon persists these artifacts for idempotency (same fingerprint = no duplicate run).
+The daemon consumes the JSON artifact metadata for observability and run summaries.
 
 ## Webhook endpoints
 
@@ -199,7 +193,7 @@ Duplicate deliveries are ignored using `X-GitHub-Delivery` and a short-lived in-
 
 ## Logging
 
-Structured JSON logs with correlation fields: `repo`, `issue_number`/`pr_number`, `fingerprint`, and `component`. Prompts are never logged directly; only their hash and length are recorded.
+Structured JSON logs with correlation fields like `repo`, `issue_number`/`pr_number`, and `component`. Prompts are never logged directly; only their hash and length are recorded.
 
 ## Security
 

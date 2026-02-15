@@ -23,11 +23,9 @@ This file defines repo-specific guidance for future coding agents working in thi
 - `internal/webhook/*`
   - HTTP server, webhook signature verification, and short-lived delivery dedupe.
 - `internal/workflow/engine.go`
-  - Label parsing/routing from webhook events, fingerprinting, and runner invocation.
+  - Label parsing/routing from webhook events and runner invocation.
 - `internal/workflow/labels.go`
   - Parses supported `ai:*` labels into workflow/backend/role targets.
-- `internal/workflow/fingerprint.go`
-  - Deterministic issue/PR fingerprint generation.
 - `internal/ai/prompt.go`
   - Prompt templates and stdout JSON artifact contract for issue and PR workflows.
 - `internal/ai/cmdrunner.go`
@@ -38,8 +36,6 @@ This file defines repo-specific guidance for future coding agents working in thi
 ## Behavioral Guardrails
 
 - Keep the daemon read-only against GitHub REST APIs. Write actions should continue to happen through AI CLI + GitHub MCP workflows.
-- Preserve idempotency guarantees:
-  - fingerprints remain deterministic for the same payload/context.
 - Keep prompt/runner contract consistent:
   - prompts require one JSON object on stdout,
   - `internal/ai/cmdrunner.go` expects parseable JSON when output is non-empty.
@@ -55,15 +51,13 @@ This file defines repo-specific guidance for future coding agents working in thi
   - update README configuration docs.
 - For workflow behavior changes:
   - update prompt text and engine logic together when contracts change,
-  - update `internal/workflow/labels.go` + tests when label grammar changes,
-  - keep fingerprint inputs stable unless intentional (document version bumps).
+  - update `internal/workflow/labels.go` + tests when label grammar changes.
 
 ## Testing Expectations
 
 - Always run `go test ./...` after non-trivial changes.
 - Add or update focused tests when changing:
   - prompt content/format (`internal/claude/prompt_test.go`),
-  - fingerprint logic (`internal/workflow/fingerprint_test.go`),
   - label parsing (`internal/workflow/labels_test.go`),
   - parsing/contract behavior in runner (`internal/codex/runner_test.go`).
 

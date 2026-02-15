@@ -18,10 +18,6 @@ const (
 	defaultHTTPIdleTimeoutSeconds  = 60
 	defaultHTTPMaxBodyBytes        = 1 << 20
 	defaultDeliveryTTLSeconds      = 3600
-	defaultCommentFingerprintLimit = 5
-	defaultFileFingerprintLimit    = 50
-	defaultMaxFingerprintBytes     = 20000
-	defaultMaxPostsPerRun          = 10
 	defaultAITimeoutSeconds        = 600
 	defaultMaxPromptChars          = 12000
 )
@@ -31,7 +27,6 @@ var defaultRoles = []string{"architect", "security", "testing", "devops", "ux"}
 type Config struct {
 	Log        LogConfig                  `yaml:"log"`
 	HTTP       HTTPConfig                 `yaml:"http"`
-	Workflow   WorkflowConfig             `yaml:"workflow"`
 	AIBackends map[string]AIBackendConfig `yaml:"ai_backends"`
 	Repos      []RepoConfig               `yaml:"repos"`
 }
@@ -51,13 +46,6 @@ type HTTPConfig struct {
 	WebhookSecret       string `yaml:"webhook_secret"`
 	WebhookSecretEnv    string `yaml:"webhook_secret_env"`
 	DeliveryTTLSeconds  int    `yaml:"delivery_ttl_seconds"`
-}
-
-type WorkflowConfig struct {
-	CommentFingerprintLimit int `yaml:"comment_fingerprint_limit"`
-	FileFingerprintLimit    int `yaml:"file_fingerprint_limit"`
-	MaxFingerprintBytes     int `yaml:"max_fingerprint_bytes"`
-	MaxPostsPerRun          int `yaml:"max_posts_per_run"`
 }
 
 type ClaudeConfig struct {
@@ -141,18 +129,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.HTTP.DeliveryTTLSeconds == 0 {
 		c.HTTP.DeliveryTTLSeconds = defaultDeliveryTTLSeconds
-	}
-	if c.Workflow.CommentFingerprintLimit == 0 {
-		c.Workflow.CommentFingerprintLimit = defaultCommentFingerprintLimit
-	}
-	if c.Workflow.FileFingerprintLimit == 0 {
-		c.Workflow.FileFingerprintLimit = defaultFileFingerprintLimit
-	}
-	if c.Workflow.MaxFingerprintBytes == 0 {
-		c.Workflow.MaxFingerprintBytes = defaultMaxFingerprintBytes
-	}
-	if c.Workflow.MaxPostsPerRun == 0 {
-		c.Workflow.MaxPostsPerRun = defaultMaxPostsPerRun
 	}
 	normalizedBackends := make(map[string]AIBackendConfig, len(c.AIBackends))
 	for name, backend := range c.AIBackends {

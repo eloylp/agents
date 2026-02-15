@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -29,18 +30,26 @@ type Server struct {
 	handler  workflowHandler
 	delivery *DeliveryStore
 	logger   zerolog.Logger
+
+	workersOnce sync.Once
+	issueQueue  *UnboundedQueue[issueEvent]
+	prQueue     *UnboundedQueue[prEvent]
 }
 
 func NewServer(cfg *config.Config, handler workflowHandler, delivery *DeliveryStore, logger zerolog.Logger) *Server {
 	return &Server{
-		cfg:      cfg,
-		handler:  handler,
-		delivery: delivery,
-		logger:   logger.With().Str("component", "webhook_server").Logger(),
+		cfg:        cfg,
+		handler:    handler,
+		delivery:   delivery,
+		logger:     logger.With().Str("component", "webhook_server").Logger(),
+		issueQueue: NewUnboundedQueue[issueEvent](),
+		prQueue:    NewUnboundedQueue[prEvent](),
 	}
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	s.startWorkers(ctx)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.cfg.HTTP.StatusPath, s.handleStatus)
 	mux.HandleFunc(s.cfg.HTTP.WebhookPath, s.handleGitHubWebhook)
@@ -101,9 +110,9 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	event := strings.TrimSpace(r.Header.Get("X-GitHub-Event"))
 	switch event {
 	case "issues":
-		s.handleIssueEvent(w, r, body)
+		s.handleIssueEvent(w, body)
 	case "pull_request":
-		s.handlePREvent(w, r, body)
+		s.handlePREvent(w, body)
 	default:
 		w.WriteHeader(http.StatusAccepted)
 	}
@@ -120,7 +129,14 @@ type issueWebhookPayload struct {
 	Issue      workflow.Issue    `json:"issue"`
 }
 
-func (s *Server) handleIssueEvent(w http.ResponseWriter, r *http.Request, body []byte) {
+type issueEvent struct {
+	repo   config.RepoConfig
+	issue  workflow.Issue
+	action string
+	label  string
+}
+
+func (s *Server) handleIssueEvent(w http.ResponseWriter, body []byte) {
 	var payload issueWebhookPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
@@ -139,11 +155,7 @@ func (s *Server) handleIssueEvent(w http.ResponseWriter, r *http.Request, body [
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	if _, err := s.handler.HandleIssueLabelEvent(r.Context(), repo, payload.Issue, payload.Action, payload.Label.Name); err != nil {
-		s.logger.Error().Err(err).Str("repo", repo.FullName).Int("issue_number", payload.Issue.Number).Msg("failed to process issue webhook")
-		http.Error(w, "failed to process webhook", http.StatusInternalServerError)
-		return
-	}
+	s.issueQueue.Enqueue(issueEvent{repo: repo, issue: payload.Issue, action: payload.Action, label: payload.Label.Name})
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -154,7 +166,14 @@ type prWebhookPayload struct {
 	PullRequest workflow.PullRequest `json:"pull_request"`
 }
 
-func (s *Server) handlePREvent(w http.ResponseWriter, r *http.Request, body []byte) {
+type prEvent struct {
+	repo   config.RepoConfig
+	pr     workflow.PullRequest
+	action string
+	label  string
+}
+
+func (s *Server) handlePREvent(w http.ResponseWriter, body []byte) {
 	var payload prWebhookPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
@@ -169,17 +188,13 @@ func (s *Server) handlePREvent(w http.ResponseWriter, r *http.Request, body []by
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	if _, err := s.handler.HandlePullRequestLabelEvent(r.Context(), repo, payload.PullRequest, payload.Action, payload.Label.Name); err != nil {
-		s.logger.Error().Err(err).Str("repo", repo.FullName).Int("pr_number", payload.PullRequest.Number).Msg("failed to process pr webhook")
-		http.Error(w, "failed to process webhook", http.StatusInternalServerError)
-		return
-	}
+	s.prQueue.Enqueue(prEvent{repo: repo, pr: payload.PullRequest, action: payload.Action, label: payload.Label.Name})
 	w.WriteHeader(http.StatusAccepted)
 }
 
 func isRelevantAction(action string) bool {
 	action = strings.ToLower(strings.TrimSpace(action))
-	return action == "labeled" || action == "unlabeled"
+	return action == "labeled"
 }
 
 func isAILabel(label string) bool {
@@ -201,4 +216,61 @@ func signatureForTests(payload []byte, secret string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write(payload)
 	return fmt.Sprintf("sha256=%s", hex.EncodeToString(mac.Sum(nil)))
+}
+
+func (s *Server) startWorkers(ctx context.Context) {
+	s.workersOnce.Do(func() {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					s.drainIssueQueue()
+					return
+				case event := <-s.issueQueue.Out():
+					if _, err := s.handler.HandleIssueLabelEvent(ctx, event.repo, event.issue, event.action, event.label); err != nil {
+						s.logger.Error().Err(err).Str("repo", event.repo.FullName).Int("issue_number", event.issue.Number).Msg("failed to process issue webhook")
+					}
+				}
+			}
+		}()
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					s.drainPRQueue()
+					return
+				case event := <-s.prQueue.Out():
+					if _, err := s.handler.HandlePullRequestLabelEvent(ctx, event.repo, event.pr, event.action, event.label); err != nil {
+						s.logger.Error().Err(err).Str("repo", event.repo.FullName).Int("pr_number", event.pr.Number).Msg("failed to process pr webhook")
+					}
+				}
+			}
+		}()
+	})
+}
+
+func (s *Server) drainIssueQueue() {
+	for {
+		select {
+		case event := <-s.issueQueue.Out():
+			if _, err := s.handler.HandleIssueLabelEvent(context.Background(), event.repo, event.issue, event.action, event.label); err != nil {
+				s.logger.Error().Err(err).Str("repo", event.repo.FullName).Int("issue_number", event.issue.Number).Msg("failed to process issue webhook during shutdown drain")
+			}
+		default:
+			return
+		}
+	}
+}
+
+func (s *Server) drainPRQueue() {
+	for {
+		select {
+		case event := <-s.prQueue.Out():
+			if _, err := s.handler.HandlePullRequestLabelEvent(context.Background(), event.repo, event.pr, event.action, event.label); err != nil {
+				s.logger.Error().Err(err).Str("repo", event.repo.FullName).Int("pr_number", event.pr.Number).Msg("failed to process pr webhook during shutdown drain")
+			}
+		default:
+			return
+		}
+	}
 }

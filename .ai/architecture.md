@@ -15,8 +15,7 @@ Content creation (issue comments, PR reviews) is delegated to configured AI back
 2. Receive GitHub webhook events on `/webhooks/github`.
 3. Verify `X-Hub-Signature-256` and dedupe by `X-GitHub-Delivery`.
 4. Route `issues` / `pull_request` label events to workflow engine.
-5. Compute deterministic fingerprint from webhook payload.
-6. Build workflow prompt and invoke selected backend runner.
+5. Build workflow prompt and invoke selected backend runner.
 
 ## Key Components
 
@@ -29,4 +28,3 @@ Content creation (issue comments, PR reviews) is delegated to configured AI back
 - Maintain output contract for Claude command mode:
   - exactly one JSON object on stdout when output is provided,
   - `summary` + `artifacts[]` fields.
-- Keep fingerprint determinism stable unless versioning is intentionally changed.

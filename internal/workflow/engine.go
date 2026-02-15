@@ -43,39 +43,33 @@ func (e *Engine) HandleIssueLabelEvent(ctx context.Context, repo config.RepoConf
 		e.logger.Info().Str("repo", repo.FullName).Int("issue_number", issue.Number).Str("label", labelName).Msg("issue label skipped")
 		return false, nil
 	}
-	selectedBackend := e.resolveAgent(agent)
+	selectedBackend := e.resolveBackend(agent)
 	if selectedBackend == "" {
 		e.logger.Warn().Str("label", labelName).Int("issue_number", issue.Number).Str("repo", repo.FullName).Msg("issue label references unknown agent, skipping")
 		return false, nil
 	}
-	fingerprint := IssueFingerprint(issue, e.cfg.Workflow.MaxFingerprintBytes)
 	logger := e.logger.With().
 		Str("repo", repo.FullName).
 		Int("issue_number", issue.Number).
-		Str("fingerprint", fingerprint).
 		Logger()
 	runner, ok := e.runners[selectedBackend]
 	if !ok {
 		logger.Warn().Str("backend", selectedBackend).Msg("runner missing for backend, skipping")
 		return false, nil
 	}
-	prompt := ai.BuildIssueRefinePrompt(selectedBackend, repo.FullName, issue.Number, fingerprint)
+	prompt := ai.BuildIssueRefinePrompt(selectedBackend, repo.FullName, issue.Number)
 	logger.Info().Str("backend", selectedBackend).Msg("invoking ai backend for issue refinement")
 	response, err := runner.Run(ctx, ai.Request{
-		Workflow:    fmt.Sprintf("%s:%s", workflowIssueRefine, selectedBackend),
-		Repo:        repo.FullName,
-		Number:      issue.Number,
-		Fingerprint: fingerprint,
-		Prompt:      prompt,
+		Workflow: fmt.Sprintf("%s:%s", workflowIssueRefine, selectedBackend),
+		Repo:     repo.FullName,
+		Number:   issue.Number,
+		Prompt:   prompt,
 	})
 	if err != nil {
 		logger.Error().Err(err).Str("backend", selectedBackend).Msg("ai run failed")
 		return false, nil
 	}
 	storedCount := len(response.Artifacts)
-	if maxPosts := e.cfg.Workflow.MaxPostsPerRun; maxPosts > 0 && storedCount > maxPosts {
-		storedCount = maxPosts
-	}
 	logger.Info().Str("backend", selectedBackend).Int("artifacts_stored", storedCount).Msg("issue refinement completed")
 	return true, nil
 }
@@ -94,7 +88,7 @@ func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, repo config.Re
 		e.logger.Info().Str("repo", repo.FullName).Int("pr_number", pr.Number).Str("label", labelName).Msg("pull request label skipped")
 		return false, nil
 	}
-	resolvedAgent := e.resolveAgent(agent)
+	resolvedAgent := e.resolveBackend(agent)
 	if resolvedAgent == "" {
 		e.logger.Warn().Str("label", labelName).Int("pr_number", pr.Number).Str("repo", repo.FullName).Msg("pr label references unknown agent, skipping")
 		return false, nil
@@ -125,11 +119,10 @@ func (e *Engine) handlePRStateless(ctx context.Context, repo config.RepoConfig, 
 		Logger()
 
 	type agentRoleExecution struct {
-		agent       string
-		role        string
-		workflow    string
-		fingerprint string
-		runner      ai.Runner
+		agent    string
+		role     string
+		workflow string
+		runner   ai.Runner
 	}
 	roleRuns := make([]agentRoleExecution, 0)
 	for agent, roles := range targets {
@@ -139,13 +132,11 @@ func (e *Engine) handlePRStateless(ctx context.Context, repo config.RepoConfig, 
 			continue
 		}
 		for role := range roles {
-			fingerprint := PRFingerprint(pr, role, e.cfg.Workflow.MaxFingerprintBytes)
 			roleRuns = append(roleRuns, agentRoleExecution{
-				agent:       agent,
-				role:        role,
-				workflow:    fmt.Sprintf("%s:%s:%s", workflowPRReview, agent, role),
-				fingerprint: fingerprint,
-				runner:      runner,
+				agent:    agent,
+				role:     role,
+				workflow: fmt.Sprintf("%s:%s:%s", workflowPRReview, agent, role),
+				runner:   runner,
 			})
 		}
 	}
@@ -161,23 +152,19 @@ func (e *Engine) handlePRStateless(ctx context.Context, repo config.RepoConfig, 
 	group, groupCtx := errgroup.WithContext(ctx)
 	for _, rr := range roleRuns {
 		group.Go(func() error {
-			prompt := ai.BuildPRReviewPrompt(rr.agent, rr.role, repo.FullName, pr.Number, rr.fingerprint)
+			prompt := ai.BuildPRReviewPrompt(rr.agent, rr.role, repo.FullName, pr.Number)
 			logger.Info().Str("agent", rr.agent).Str("role", rr.role).Msg("invoking ai agent for pr review")
 			response, err := rr.runner.Run(groupCtx, ai.Request{
-				Workflow:    rr.workflow,
-				Repo:        repo.FullName,
-				Number:      pr.Number,
-				Fingerprint: rr.fingerprint,
-				Prompt:      prompt,
+				Workflow: rr.workflow,
+				Repo:     repo.FullName,
+				Number:   pr.Number,
+				Prompt:   prompt,
 			})
 			if err != nil {
 				logger.Error().Err(err).Str("agent", rr.agent).Str("role", rr.role).Msg("ai run failed")
 				return nil
 			}
 			storedCount := len(response.Artifacts)
-			if maxPosts := e.cfg.Workflow.MaxPostsPerRun; maxPosts > 0 && storedCount > maxPosts {
-				storedCount = maxPosts
-			}
 			logger.Info().Str("agent", rr.agent).Str("role", rr.role).Int("artifacts_stored", storedCount).Msg("pr review completed")
 			mu.Lock()
 			ranAny = true
@@ -191,7 +178,7 @@ func (e *Engine) handlePRStateless(ctx context.Context, repo config.RepoConfig, 
 	return ranAny, nil
 }
 
-func (e *Engine) resolveAgent(agent string) string {
+func (e *Engine) resolveBackend(agent string) string {
 	if strings.TrimSpace(agent) == "" {
 		defaultAgent := e.cfg.DefaultConfiguredBackend()
 		if defaultAgent == "" {

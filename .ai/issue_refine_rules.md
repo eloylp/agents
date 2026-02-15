@@ -31,8 +31,6 @@ Help the team quickly decide scope and execution by providing concise, actionabl
 - Favor minimal, incremental changes first.
 - If multiple approaches exist, provide one recommended path and brief alternatives.
 
-## Footer Marker
+## Output Contract
 
-Each posted comment must include the daemon marker required by the prompt:
-
-`<!-- ai-daemon:issue-refine v1; fingerprint=...; part=1/1 -->`
+The agent should post one issue comment and report created artifacts via the JSON stdout contract required by the daemon.

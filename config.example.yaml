@@ -12,12 +12,6 @@ http:
   webhook_secret_env: GITHUB_WEBHOOK_SECRET
   delivery_ttl_seconds: 3600
 
-workflow:
-  comment_fingerprint_limit: 5
-  file_fingerprint_limit: 50
-  max_fingerprint_bytes: 20000
-  max_posts_per_run: 10
-
 ai_backends:
   claude:
     mode: command

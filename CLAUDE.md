@@ -11,7 +11,7 @@ cmd/agentd/main.go          # Daemon entry point
 internal/
   config/config.go          # YAML config parsing, env var resolution, defaults
   ai/*                      # Prompt generation + command runner contract
-  workflow/*                # Label parsing, event-driven orchestration, fingerprints
+  workflow/*                # Label parsing and event-driven orchestration
   webhook/*                 # HTTP server, signature verification, delivery dedupe
   logging/logging.go        # zerolog structured logger setup
 ```
@@ -42,7 +42,7 @@ Optional prompt-log redaction salt:
   - `POST /webhooks/github`
 - Relevant webhook events:
   - `issues` and `pull_request`
-  - `action` in `labeled` / `unlabeled`
+  - `action` in `labeled`
   - trigger label from `payload.label.name`
 - Duplicate webhook delivery suppression by `X-GitHub-Delivery` with TTL cache.
 - Workflow execution is stateless in-process (no persistent workflow-tracking database).

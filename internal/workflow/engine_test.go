@@ -25,7 +25,6 @@ func (s *stubRunner) Run(_ context.Context, req ai.Request) (ai.Response, error)
 func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
 	runner := &stubRunner{}
 	cfg := &config.Config{
-		Workflow: config.WorkflowConfig{MaxFingerprintBytes: 20000, MaxPostsPerRun: 10},
 		AIBackends: map[string]config.AIBackendConfig{
 			"claude": {Agents: []string{"architect"}},
 			"codex":  {Agents: []string{"architect"}},
@@ -58,7 +57,6 @@ func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
 func TestHandleIssueLabelEventIgnoresUnlabeledAction(t *testing.T) {
 	runner := &stubRunner{}
 	cfg := &config.Config{
-		Workflow: config.WorkflowConfig{MaxFingerprintBytes: 20000, MaxPostsPerRun: 10},
 		AIBackends: map[string]config.AIBackendConfig{
 			"claude": {Agents: []string{"architect"}},
 		},
