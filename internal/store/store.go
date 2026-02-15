@@ -227,7 +227,7 @@ func (s *Store) CountWorkflowRunsSince(ctx context.Context, workItemID int64, wo
 SELECT COUNT(1)
 FROM workflow_runs
 WHERE work_item_id = $1
-AND workflow = $2
+AND (workflow = $2 OR workflow LIKE $2 || ':%')
 AND started_at >= $3
 `, workItemID, workflow, since)
 	if err := row.Scan(&count); err != nil {

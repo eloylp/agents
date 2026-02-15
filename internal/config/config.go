@@ -33,14 +33,17 @@ const (
 )
 
 type Config struct {
-	Log       LogConfig      `yaml:"log"`
-	Database  DatabaseConfig `yaml:"database"`
-	GitHub    GitHubConfig   `yaml:"github"`
-	Poller    PollerConfig   `yaml:"poller"`
-	AIBackend AIBackend      `yaml:"ai_backend"`
-	Claude    ClaudeConfig   `yaml:"claude"`
-	OpenAI    OpenAIConfig   `yaml:"openai"`
-	Repos     []RepoConfig   `yaml:"repos"`
+	Log                     LogConfig              `yaml:"log"`
+	Database                DatabaseConfig         `yaml:"database"`
+	GitHub                  GitHubConfig           `yaml:"github"`
+	Poller                  PollerConfig           `yaml:"poller"`
+	DefaultAgent            string                 `yaml:"default_agent"`
+	Agents                  map[string]AgentConfig `yaml:"agents"`
+	AIBackend               AIBackend              `yaml:"ai_backend"`
+	Claude                  ClaudeConfig           `yaml:"claude"`
+	OpenAI                  OpenAIConfig           `yaml:"openai"`
+	Repos                   []RepoConfig           `yaml:"repos"`
+	UsedLegacyBackendConfig bool                   `yaml:"-"`
 }
 
 type LogConfig struct {
@@ -60,18 +63,16 @@ type GitHubConfig struct {
 }
 
 type PollerConfig struct {
-	PerPage                 int    `yaml:"per_page"`
-	MaxItemsPerPoll         int    `yaml:"max_items_per_poll"`
-	IssueLabel              string `yaml:"issue_label"`
-	PRLabel                 string `yaml:"pr_label"`
-	MaxIdleIntervalSeconds  int    `yaml:"max_idle_interval_seconds"`
-	JitterSeconds           int    `yaml:"jitter_seconds"`
-	CommentFingerprintLimit int    `yaml:"comment_fingerprint_limit"`
-	FileFingerprintLimit    int    `yaml:"file_fingerprint_limit"`
-	MaxFingerprintBytes     int    `yaml:"max_fingerprint_bytes"`
-	MaxPostsPerRun          int    `yaml:"max_posts_per_run"`
-	MaxRunsPerHour          int    `yaml:"max_runs_per_hour"`
-	MaxRunsPerDay           int    `yaml:"max_runs_per_day"`
+	PerPage                 int `yaml:"per_page"`
+	MaxItemsPerPoll         int `yaml:"max_items_per_poll"`
+	MaxIdleIntervalSeconds  int `yaml:"max_idle_interval_seconds"`
+	JitterSeconds           int `yaml:"jitter_seconds"`
+	CommentFingerprintLimit int `yaml:"comment_fingerprint_limit"`
+	FileFingerprintLimit    int `yaml:"file_fingerprint_limit"`
+	MaxFingerprintBytes     int `yaml:"max_fingerprint_bytes"`
+	MaxPostsPerRun          int `yaml:"max_posts_per_run"`
+	MaxRunsPerHour          int `yaml:"max_runs_per_hour"`
+	MaxRunsPerDay           int `yaml:"max_runs_per_day"`
 }
 
 type ClaudeConfig struct {
@@ -96,8 +97,16 @@ type RepoConfig struct {
 	FullName            string `yaml:"full_name"`
 	Enabled             bool   `yaml:"enabled"`
 	PollIntervalSeconds int    `yaml:"poll_interval_seconds"`
-	IssueLabel          string `yaml:"issue_label"`
-	PRLabel             string `yaml:"pr_label"`
+}
+
+type AgentConfig struct {
+	Mode             string   `yaml:"mode"`
+	Command          string   `yaml:"command"`
+	Args             []string `yaml:"args"`
+	TimeoutSeconds   int      `yaml:"timeout_seconds"`
+	MaxPromptChars   int      `yaml:"max_prompt_chars"`
+	RedactionSaltEnv string   `yaml:"redaction_salt_env"`
+	Roles            []string `yaml:"roles"`
 }
 
 func Load(path string) (*Config, error) {
@@ -167,6 +176,35 @@ func (c *Config) applyDefaults() {
 	if c.OpenAI.MaxPromptChars == 0 {
 		c.OpenAI.MaxPromptChars = defaultMaxPromptChars
 	}
+	c.migrateDeprecatedBackend()
+	normalizedAgents := make(map[string]AgentConfig, len(c.Agents))
+	for name, agent := range c.Agents {
+		normalizedName := strings.ToLower(strings.TrimSpace(name))
+		if normalizedName == "" {
+			continue
+		}
+		if agent.Mode == "" {
+			agent.Mode = "noop"
+		}
+		if agent.TimeoutSeconds == 0 {
+			agent.TimeoutSeconds = defaultAITimeoutSeconds
+		}
+		if agent.MaxPromptChars == 0 {
+			agent.MaxPromptChars = defaultMaxPromptChars
+		}
+		if len(agent.Roles) == 0 {
+			agent.Roles = []string{"architect", "security", "testing", "devops", "ux"}
+		}
+		for i := range agent.Roles {
+			agent.Roles[i] = strings.ToLower(strings.TrimSpace(agent.Roles[i]))
+		}
+		normalizedAgents[normalizedName] = agent
+	}
+	c.Agents = normalizedAgents
+	c.DefaultAgent = strings.ToLower(strings.TrimSpace(c.DefaultAgent))
+	if c.DefaultAgent == "" {
+		c.DefaultAgent = string(c.AIBackend)
+	}
 	for i := range c.Repos {
 		if c.Repos[i].PollIntervalSeconds == 0 {
 			c.Repos[i].PollIntervalSeconds = defaultPollIntervalSeconds
@@ -191,26 +229,38 @@ func (c *Config) resolveEnv() error {
 	if c.GitHub.APIBaseURL == "" {
 		c.GitHub.APIBaseURL = "https://api.github.com"
 	}
-	if c.Claude.Mode == "" {
-		c.Claude.Mode = "noop"
+	if len(c.Agents) == 0 {
+		return errors.New("config: at least one agent is required")
 	}
-	if c.OpenAI.Mode == "" {
-		c.OpenAI.Mode = "noop"
+	for name := range c.Agents {
+		if strings.TrimSpace(name) == "" {
+			return errors.New("config: agent name is required")
+		}
 	}
-	if c.AIBackend == "" {
-		c.AIBackend = AIBackendClaude
+	if c.DefaultAgent == "" {
+		return errors.New("config: default_agent is required")
 	}
-	if c.AIBackend != AIBackendClaude && c.AIBackend != AIBackendOpenAI {
-		return fmt.Errorf("config: ai_backend must be one of %s, %s", AIBackendClaude, AIBackendOpenAI)
+	agent, ok := c.Agents[c.DefaultAgent]
+	if !ok {
+		return fmt.Errorf("config: default_agent %q is not configured", c.DefaultAgent)
+	}
+	if len(agent.Roles) == 0 {
+		return fmt.Errorf("config: agent %q must define at least one role", c.DefaultAgent)
 	}
 	return nil
 }
 
-func (c *Config) AIBackendTimeoutSeconds() int {
-	if c.AIBackend == AIBackendOpenAI {
-		return c.OpenAI.TimeoutSeconds
+func (c *Config) MaxAgentTimeoutSeconds() int {
+	maxTimeout := 0
+	for _, agent := range c.Agents {
+		if agent.TimeoutSeconds > maxTimeout {
+			maxTimeout = agent.TimeoutSeconds
+		}
 	}
-	return c.Claude.TimeoutSeconds
+	if maxTimeout == 0 {
+		return defaultAITimeoutSeconds
+	}
+	return maxTimeout
 }
 
 func (c *Config) RepoByName(fullName string) (RepoConfig, bool) {
@@ -220,4 +270,41 @@ func (c *Config) RepoByName(fullName string) (RepoConfig, bool) {
 		}
 	}
 	return RepoConfig{}, false
+}
+
+func (c *Config) migrateDeprecatedBackend() {
+	if c.AIBackend == "" {
+		c.AIBackend = AIBackendClaude
+	}
+	if len(c.Agents) > 0 {
+		return
+	}
+	c.UsedLegacyBackendConfig = true
+	switch c.AIBackend {
+	case AIBackendClaude:
+		c.Agents = map[string]AgentConfig{
+			"claude": {
+				Mode:             c.Claude.Mode,
+				Command:          c.Claude.Command,
+				Args:             c.Claude.Args,
+				TimeoutSeconds:   c.Claude.TimeoutSeconds,
+				MaxPromptChars:   c.Claude.MaxPromptChars,
+				RedactionSaltEnv: c.Claude.RedactionSaltEnv,
+			},
+		}
+	case AIBackendOpenAI:
+		c.Agents = map[string]AgentConfig{
+			"openai": {
+				Mode:             c.OpenAI.Mode,
+				Command:          c.OpenAI.Command,
+				Args:             c.OpenAI.Args,
+				TimeoutSeconds:   c.OpenAI.TimeoutSeconds,
+				MaxPromptChars:   c.OpenAI.MaxPromptChars,
+				RedactionSaltEnv: c.OpenAI.RedactionSaltEnv,
+			},
+		}
+	}
+	if c.DefaultAgent == "" {
+		c.DefaultAgent = string(c.AIBackend)
+	}
 }

@@ -1,16 +1,27 @@
 # agents
 
-A Go daemon that polls GitHub repositories for issues and pull requests, then launches an AI CLI backend ([Claude Code](https://docs.anthropic.com/en/docs/claude-code) or Codex) to provide automated feedback via the GitHub MCP server. No webhooks required.
+A Go daemon that polls GitHub repositories for issues and pull requests, then launches AI CLI agents ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), Codex, etc.) selected dynamically from labels to provide automated feedback via the GitHub MCP server. No webhooks required.
 
 ## Available workflows
 
-### Issue refinement (`ai:refine` label)
+### Issue refinement (`ai:refine` labels)
 
-Claude reads the issue context (title, body, comments, repo docs) and posts 1-3 structured comments covering feasibility, complexity, recommended approach, and acceptance criteria.
+Labels:
+- `ai:refine`
+- `ai:refine:<agent>`
 
-### PR specialist review (`ai:review` label)
+Each matched agent posts exactly one structured issue comment.
 
-Claude reads the PR diff and changed files, then submits a GitHub review with a summary and inline suggestion comments. The review covers engineering, security, performance, and testing perspectives.
+### PR specialist review (`ai:review` labels)
+
+Labels:
+- `ai:review`
+- `ai:review:<agent>:<role>`
+- `ai:review:<agent>:all`
+
+Roles: `architect`, `security`, `testing`, `devops`, `ux`.
+
+`all` expands to all roles configured for that agent and runs them concurrently. Each role counts as one run against quota limits.
 
 ## Flow
 
@@ -22,7 +33,7 @@ sequenceDiagram
     participant Claude
 
     User->>GH: Create issue
-    User->>GH: Add "ai:refine" label
+    User->>GH: Add "ai:refine:claude" label
 
     Daemon->>GH: Poll detects issue update
     Daemon->>Claude: Send issue refinement prompt
@@ -33,7 +44,7 @@ sequenceDiagram
     User->>GH: Assign issue to Copilot
     Note over GH: Copilot creates PR
 
-    User->>GH: Add "ai:review" label
+    User->>GH: Add "ai:review:claude:all" label
 
     Daemon->>GH: Poll detects PR update
     Daemon->>Claude: Send PR review prompt
@@ -107,45 +118,45 @@ github:
 poller:
   per_page: 50                 # items per GitHub API page
   max_items_per_poll: 200      # max items fetched per poll cycle
-  issue_label: "ai:refine"    # default label gate for issues
-  pr_label: "ai:review"       # default label gate for PRs
   max_idle_interval_seconds: 600
   jitter_seconds: 5
   comment_fingerprint_limit: 5
   file_fingerprint_limit: 50
   max_fingerprint_bytes: 20000
   max_posts_per_run: 10
-  max_runs_per_hour: 5         # per work item
-  max_runs_per_day: 20         # per work item
+  max_runs_per_hour: 5         # per work item (across all roles/agents)
+  max_runs_per_day: 20         # per work item (across all roles/agents)
 
-ai_backend: claude             # claude | openai
+default_agent: claude
 
-claude:
-  mode: command
-  command: claude
-  args:
-    - "-p"                              # print mode (non-interactive)
-    - "--dangerously-skip-permissions"  # required for headless operation
-  timeout_seconds: 600
-  max_prompt_chars: 12000
-  redaction_salt_env: LOG_SALT  # env var for prompt hash salt (optional)
-
-openai:
-  mode: command
-  command: codex
-  args:
-    - "-p"
-  timeout_seconds: 600
-  max_prompt_chars: 12000
-  redaction_salt_env: LOG_SALT  # env var for prompt hash salt (optional)
+agents:
+  claude:
+    mode: command
+    command: claude
+    args:
+      - "-p"                              # print mode (non-interactive)
+      - "--dangerously-skip-permissions"  # required for headless operation
+    timeout_seconds: 600
+    max_prompt_chars: 12000
+    redaction_salt_env: LOG_SALT
+    roles: [architect, security, testing, devops, ux]
+  openai:
+    mode: command
+    command: codex
+    args:
+      - "-p"
+    timeout_seconds: 600
+    max_prompt_chars: 12000
+    redaction_salt_env: LOG_SALT
+    roles: [architect, security, testing, devops, ux]
 
 repos:
   - full_name: "owner/repo"
     enabled: true
     poll_interval_seconds: 60
-    issue_label: "ai:refine"   # optional per-repo override
-    pr_label: "ai:review"      # optional per-repo override
 ```
+
+Backward compatibility: if `agents` is not set, legacy `ai_backend` + `claude`/`openai` blocks are still accepted and auto-migrated at load time.
 
 You can also create a `.env` file in the project root. The daemon loads it automatically on startup:
 
@@ -170,7 +181,7 @@ go build -o agentd ./cmd/agentd
 
 ## AI runner contract
 
-When `<backend>.mode=command`, the daemon executes the configured command and sends the prompt via STDIN. After performing actions through MCP tools, the command must output a single JSON object to STDOUT:
+When `agents.<name>.mode=command`, the daemon executes the configured command and sends the prompt via STDIN. After performing actions through MCP tools, the command must output a single JSON object to STDOUT:
 
 ```json
 {

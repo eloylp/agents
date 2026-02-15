@@ -2,10 +2,10 @@ package claude
 
 import "github.com/eloylp/agents/internal/ai"
 
-func BuildIssueRefinePrompt(repo string, number int, fingerprint string, labelGate string) string {
-	return ai.BuildIssueRefinePrompt(repo, number, fingerprint, labelGate)
+func BuildIssueRefinePrompt(agent string, repo string, number int, fingerprint string, labelGate string) string {
+	return ai.BuildIssueRefinePrompt(agent, repo, number, fingerprint, labelGate)
 }
 
-func BuildPRReviewPrompt(repo string, number int, fingerprint string, labelGate string) string {
-	return ai.BuildPRReviewPrompt(repo, number, fingerprint, labelGate)
+func BuildPRReviewPrompt(agent string, role string, repo string, number int, fingerprint string, labelGate string) string {
+	return ai.BuildPRReviewPrompt(agent, role, repo, number, fingerprint, labelGate)
 }

@@ -26,7 +26,7 @@ func IssueFingerprint(issue github.Issue, comments []github.Comment, maxBytes in
 	return fmt.Sprintf("issue:%s:%d:%s:%s", fingerprintVersion, issue.Number, issue.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"), contentHash)
 }
 
-func PRFingerprint(pr github.PullRequest, files []github.PullFile, maxBytes int) string {
+func PRFingerprint(pr github.PullRequest, role string, files []github.PullFile, maxBytes int) string {
 	builder := strings.Builder{}
 	builder.WriteString(pr.Head.SHA)
 	for _, file := range files {
@@ -43,7 +43,7 @@ func PRFingerprint(pr github.PullRequest, files []github.PullFile, maxBytes int)
 	}
 	content := truncateBytes(builder.String(), maxBytes)
 	contentHash := sha256Hex(content)
-	return fmt.Sprintf("pr:%s:%d:%s:%s", fingerprintVersion, pr.Number, pr.Head.SHA, contentHash)
+	return fmt.Sprintf("pr:%s:%d:%s:%s:%s", fingerprintVersion, pr.Number, role, pr.Head.SHA, contentHash)
 }
 
 func sha256Hex(value string) string {

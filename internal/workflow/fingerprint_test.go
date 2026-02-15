@@ -28,10 +28,21 @@ func TestPRFingerprintChangesWithHead(t *testing.T) {
 	}
 	pr.Head.SHA = "abc"
 	files := []github.PullFile{{Filename: "main.go", Status: "modified", Additions: 1, Deletions: 0, Patch: "diff"}}
-	first := PRFingerprint(pr, files, 2000)
+	first := PRFingerprint(pr, "security", files, 2000)
 	pr.Head.SHA = "def"
-	second := PRFingerprint(pr, files, 2000)
+	second := PRFingerprint(pr, "security", files, 2000)
 	if first == second {
 		t.Fatalf("expected fingerprint to change when head SHA changes")
+	}
+}
+
+func TestPRFingerprintChangesWithRole(t *testing.T) {
+	pr := github.PullRequest{Number: 9}
+	pr.Head.SHA = "abc"
+	files := []github.PullFile{{Filename: "main.go", Status: "modified"}}
+	security := PRFingerprint(pr, "security", files, 2000)
+	testingRole := PRFingerprint(pr, "testing", files, 2000)
+	if security == testingRole {
+		t.Fatalf("expected fingerprint to change when role changes")
 	}
 }

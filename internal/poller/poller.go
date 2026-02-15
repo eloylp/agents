@@ -83,7 +83,8 @@ func (p *Poller) Run(ctx context.Context) error {
 			continue
 		}
 		p.logger.Info().Str("repo", nextRepo.repo.FullName).Msg("polling repo")
-		updated, err := p.pollRepo(ctx, nextRepo)
+		pollCtx := context.WithoutCancel(ctx)
+		updated, err := p.pollRepo(pollCtx, nextRepo)
 		if err != nil {
 			p.logger.Error().Err(err).Str("repo", nextRepo.repo.FullName).Msg("poll failed")
 		}
