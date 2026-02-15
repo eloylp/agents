@@ -70,7 +70,7 @@ func main() {
 	githubClient := github.NewClient(cfg.GitHub, logger)
 	var runner ai.Runner
 	switch cfg.AIBackend {
-	case "openai":
+	case config.AIBackendOpenAI:
 		runner = openai.NewRunner(cfg.OpenAI, logger)
 	default:
 		runner = claude.NewRunner(cfg.Claude, logger)

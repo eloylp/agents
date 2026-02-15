@@ -10,7 +10,6 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/ai"
-	"github.com/eloylp/agents/internal/claude"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/github"
 	"github.com/eloylp/agents/internal/store"
@@ -107,8 +106,8 @@ func (e *Engine) HandleIssue(ctx context.Context, repo config.RepoConfig, issue 
 		return false, err
 	}
 
-	prompt := claude.BuildIssueRefinePrompt(repo.FullName, issue.Number, fingerprint, labelGate)
-	logger.Info().Msg("invoking claude for issue refinement")
+	prompt := ai.BuildIssueRefinePrompt(repo.FullName, issue.Number, fingerprint, labelGate)
+	logger.Info().Str("backend", string(e.cfg.AIBackend)).Msg("invoking ai backend for issue refinement")
 	response, err := e.runner.Run(ctx, ai.Request{
 		Workflow:    workflowIssueRefine,
 		Repo:        repo.FullName,
@@ -117,7 +116,7 @@ func (e *Engine) HandleIssue(ctx context.Context, repo config.RepoConfig, issue 
 		Prompt:      prompt,
 	})
 	if err != nil {
-		logger.Error().Err(err).Msg("claude run failed")
+		logger.Error().Err(err).Str("backend", string(e.cfg.AIBackend)).Msg("ai run failed")
 		updateErr := e.store.UpdateWorkflowRunStatus(ctx, run.ID, "failed", store.SanitizeError(err))
 		if updateErr != nil {
 			logger.Error().Err(updateErr).Msg("failed to update workflow run")
@@ -208,8 +207,8 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 		return false, err
 	}
 
-	prompt := claude.BuildPRReviewPrompt(repo.FullName, pr.Number, fingerprint, labelGate)
-	logger.Info().Msg("invoking claude for pr review")
+	prompt := ai.BuildPRReviewPrompt(repo.FullName, pr.Number, fingerprint, labelGate)
+	logger.Info().Str("backend", string(e.cfg.AIBackend)).Msg("invoking ai backend for pr review")
 	response, err := e.runner.Run(ctx, ai.Request{
 		Workflow:    workflowPRReview,
 		Repo:        repo.FullName,
@@ -218,7 +217,7 @@ func (e *Engine) HandlePullRequest(ctx context.Context, repo config.RepoConfig, 
 		Prompt:      prompt,
 	})
 	if err != nil {
-		logger.Error().Err(err).Msg("claude run failed")
+		logger.Error().Err(err).Str("backend", string(e.cfg.AIBackend)).Msg("ai run failed")
 		updateErr := e.store.UpdateWorkflowRunStatus(ctx, run.ID, "failed", store.SanitizeError(err))
 		if updateErr != nil {
 			logger.Error().Err(updateErr).Msg("failed to update workflow run")
