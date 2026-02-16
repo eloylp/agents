@@ -33,36 +33,36 @@ func NewEngine(cfg *config.Config, runners map[string]ai.Runner, logger zerolog.
 	}
 }
 
-func (e *Engine) HandleIssueLabelEvent(ctx context.Context, repo config.RepoConfig, issue Issue, action, labelName string) (bool, error) {
-	if strings.TrimSpace(strings.ToLower(action)) != "labeled" {
-		e.logger.Info().Str("repo", repo.FullName).Int("issue_number", issue.Number).Str("action", action).Str("label", labelName).Msg("issue label event ignored")
+func (e *Engine) HandleIssueLabelEvent(ctx context.Context, req IssueRequest) (bool, error) {
+	if strings.TrimSpace(strings.ToLower(req.Action)) != "labeled" {
+		e.logger.Info().Str("repo", req.Repo.FullName).Int("issue_number", req.Issue.Number).Str("action", req.Action).Str("label", req.Label).Msg("issue label event ignored")
 		return false, nil
 	}
-	workflow, agent, _, ok := ParseAILabel(labelName)
+	workflow, agent, _, ok := ParseAILabel(req.Label)
 	if !ok || workflow != workflowIssueRefine {
-		e.logger.Info().Str("repo", repo.FullName).Int("issue_number", issue.Number).Str("label", labelName).Msg("issue label skipped")
+		e.logger.Info().Str("repo", req.Repo.FullName).Int("issue_number", req.Issue.Number).Str("label", req.Label).Msg("issue label skipped")
 		return false, nil
 	}
 	selectedBackend := e.resolveBackend(agent)
 	if selectedBackend == "" {
-		e.logger.Warn().Str("label", labelName).Int("issue_number", issue.Number).Str("repo", repo.FullName).Msg("issue label references unknown agent, skipping")
+		e.logger.Warn().Str("label", req.Label).Int("issue_number", req.Issue.Number).Str("repo", req.Repo.FullName).Msg("issue label references unknown agent, skipping")
 		return false, nil
 	}
 	logger := e.logger.With().
-		Str("repo", repo.FullName).
-		Int("issue_number", issue.Number).
+		Str("repo", req.Repo.FullName).
+		Int("issue_number", req.Issue.Number).
 		Logger()
 	runner, ok := e.runners[selectedBackend]
 	if !ok {
 		logger.Warn().Str("backend", selectedBackend).Msg("runner missing for backend, skipping")
 		return false, nil
 	}
-	prompt := ai.BuildIssueRefinePrompt(selectedBackend, repo.FullName, issue.Number)
+	prompt := ai.BuildIssueRefinePrompt(selectedBackend, req.Repo.FullName, req.Issue.Number)
 	logger.Info().Str("backend", selectedBackend).Msg("invoking ai backend for issue refinement")
 	response, err := runner.Run(ctx, ai.Request{
 		Workflow: fmt.Sprintf("%s:%s", workflowIssueRefine, selectedBackend),
-		Repo:     repo.FullName,
-		Number:   issue.Number,
+		Repo:     req.Repo.FullName,
+		Number:   req.Issue.Number,
 		Prompt:   prompt,
 	})
 	if err != nil {
@@ -74,23 +74,23 @@ func (e *Engine) HandleIssueLabelEvent(ctx context.Context, repo config.RepoConf
 	return true, nil
 }
 
-func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, repo config.RepoConfig, pr PullRequest, action, labelName string) (bool, error) {
-	if strings.TrimSpace(strings.ToLower(action)) != "labeled" {
-		e.logger.Info().Str("repo", repo.FullName).Int("pr_number", pr.Number).Str("action", action).Str("label", labelName).Msg("pull request label event ignored")
+func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest) (bool, error) {
+	if strings.TrimSpace(strings.ToLower(req.Action)) != "labeled" {
+		e.logger.Info().Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Str("action", req.Action).Str("label", req.Label).Msg("pull request label event ignored")
 		return false, nil
 	}
-	if pr.Draft {
-		e.logger.Info().Str("repo", repo.FullName).Int("pr_number", pr.Number).Msg("pull request skipped, draft")
+	if req.PR.Draft {
+		e.logger.Info().Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Msg("pull request skipped, draft")
 		return false, nil
 	}
-	workflow, agent, role, ok := ParseAILabel(labelName)
+	workflow, agent, role, ok := ParseAILabel(req.Label)
 	if !ok || workflow != workflowPRReview {
-		e.logger.Info().Str("repo", repo.FullName).Int("pr_number", pr.Number).Str("label", labelName).Msg("pull request label skipped")
+		e.logger.Info().Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Str("label", req.Label).Msg("pull request label skipped")
 		return false, nil
 	}
 	resolvedAgent := e.resolveBackend(agent)
 	if resolvedAgent == "" {
-		e.logger.Warn().Str("label", labelName).Int("pr_number", pr.Number).Str("repo", repo.FullName).Msg("pr label references unknown agent, skipping")
+		e.logger.Warn().Str("label", req.Label).Int("pr_number", req.PR.Number).Str("repo", req.Repo.FullName).Msg("pr label references unknown agent, skipping")
 		return false, nil
 	}
 	backendCfg := e.cfg.AIBackends[resolvedAgent]
@@ -101,12 +101,12 @@ func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, repo config.Re
 		}
 	} else {
 		if !slices.Contains(backendCfg.Agents, role) {
-			e.logger.Warn().Str("label", labelName).Str("agent", resolvedAgent).Str("role", role).Int("pr_number", pr.Number).Str("repo", repo.FullName).Msg("pr label references unsupported role, skipping")
+			e.logger.Warn().Str("label", req.Label).Str("agent", resolvedAgent).Str("role", role).Int("pr_number", req.PR.Number).Str("repo", req.Repo.FullName).Msg("pr label references unsupported role, skipping")
 			return false, nil
 		}
 		targets[resolvedAgent][role] = struct{}{}
 	}
-	return e.handlePRStateless(ctx, repo, pr, targets)
+	return e.handlePRStateless(ctx, req.Repo, req.PR, targets)
 }
 
 func (e *Engine) handlePRStateless(ctx context.Context, repo config.RepoConfig, pr PullRequest, targets map[string]map[string]struct{}) (bool, error) {

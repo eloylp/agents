@@ -27,17 +27,17 @@ type stubWorkflowHandler struct {
 	prAction    string
 }
 
-func (s *stubWorkflowHandler) HandleIssueLabelEvent(_ context.Context, _ config.RepoConfig, _ workflow.Issue, action, label string) (bool, error) {
+func (s *stubWorkflowHandler) HandleIssueLabelEvent(_ context.Context, req workflow.IssueRequest) (bool, error) {
 	s.issueCalls++
-	s.issueLabel = label
-	s.issueAction = action
+	s.issueLabel = req.Label
+	s.issueAction = req.Action
 	return true, nil
 }
 
-func (s *stubWorkflowHandler) HandlePullRequestLabelEvent(_ context.Context, _ config.RepoConfig, _ workflow.PullRequest, action, label string) (bool, error) {
+func (s *stubWorkflowHandler) HandlePullRequestLabelEvent(_ context.Context, req workflow.PRRequest) (bool, error) {
 	s.prCalls++
-	s.prLabel = label
-	s.prAction = action
+	s.prLabel = req.Label
+	s.prAction = req.Action
 	return true, nil
 }
 

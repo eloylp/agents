@@ -34,7 +34,12 @@ func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
 		Number: 10,
 	}
 
-	ran, err := engine.HandleIssueLabelEvent(context.Background(), config.RepoConfig{FullName: "owner/repo", Enabled: true}, issue, "labeled", "ai:refine:codex")
+	ran, err := engine.HandleIssueLabelEvent(context.Background(), IssueRequest{
+		Repo:   config.RepoConfig{FullName: "owner/repo", Enabled: true},
+		Issue:  issue,
+		Action: "labeled",
+		Label:  "ai:refine:codex",
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -60,7 +65,12 @@ func TestHandleIssueLabelEventIgnoresUnlabeledAction(t *testing.T) {
 	issue := Issue{
 		Number: 10,
 	}
-	ran, err := engine.HandleIssueLabelEvent(context.Background(), config.RepoConfig{FullName: "owner/repo", Enabled: true}, issue, "unlabeled", "ai:refine")
+	ran, err := engine.HandleIssueLabelEvent(context.Background(), IssueRequest{
+		Repo:   config.RepoConfig{FullName: "owner/repo", Enabled: true},
+		Issue:  issue,
+		Action: "unlabeled",
+		Label:  "ai:refine",
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

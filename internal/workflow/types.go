@@ -1,5 +1,7 @@
 package workflow
 
+import "github.com/eloylp/agents/internal/config"
+
 type Label struct {
 	Name string `json:"name"`
 }
@@ -12,4 +14,18 @@ type Issue struct {
 type PullRequest struct {
 	Number int  `json:"number"`
 	Draft  bool `json:"draft"`
+}
+
+type IssueRequest struct {
+	Repo   config.RepoConfig
+	Issue  Issue
+	Action string
+	Label  string
+}
+
+type PRRequest struct {
+	Repo   config.RepoConfig
+	PR     PullRequest
+	Action string
+	Label  string
 }
