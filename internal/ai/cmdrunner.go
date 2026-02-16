@@ -53,7 +53,6 @@ func (r *CommandRunner) Run(ctx context.Context, req Request) (Response, error) 
 		Str("workflow", req.Workflow).
 		Str("repo", req.Repo).
 		Int("number", req.Number).
-		Str("fingerprint", req.Fingerprint).
 		Str("prompt_hash", promptMeta.Hash).
 		Int("prompt_chars", promptMeta.Length).
 		Logger()
@@ -161,7 +160,6 @@ func buildCommandEnv(req Request) []string {
 		"AI_DAEMON_WORKFLOW="+req.Workflow,
 		"AI_DAEMON_REPO="+req.Repo,
 		fmt.Sprintf("AI_DAEMON_NUMBER=%d", req.Number),
-		"AI_DAEMON_FINGERPRINT="+req.Fingerprint,
 	)
 	return env
 }

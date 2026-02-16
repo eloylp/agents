@@ -2,7 +2,7 @@ package ai
 
 import "fmt"
 
-func BuildIssueRefinePrompt(agent string, repo string, number int, fingerprint string) string {
+func BuildIssueRefinePrompt(agent string, repo string, number int) string {
 	heading := fmt.Sprintf("## %s refinement", agent)
 
 	return fmt.Sprintf(`# Mission
@@ -10,10 +10,9 @@ You are an AI assistant running with GitHub MCP tools (repos, issues, pull_reque
 
 Repository: %s
 Issue: #%d
-Fingerprint: %s
 
 ## Required reading
-1. Issue title/body and recent comments.
+1. Issue title/body and all previous issue comments.
 2. Repo context files if present:
    - .ai/issue_refine_rules.md
    - .ai/architecture.md
@@ -23,10 +22,6 @@ Fingerprint: %s
 Produce exactly 1 issue comment (short, scannable) and start it with this heading:
 
 %s
-
-The comment must include this footer marker:
-
-<!-- ai-daemon:issue-refine v1; fingerprint=%s; part=1/1 -->
 
 Use GitHub-flavored Markdown. Prefer checklists for acceptance criteria and tasks.
 
@@ -45,10 +40,10 @@ After posting all comments, you MUST print exactly one JSON object to stdout (no
 {"summary":"<one-line summary>","artifacts":[{"type":"issue_comment","part_key":"issue/%s","github_id":"<comment_id>","url":"<comment_url>"}]}
 
 Do NOT output anything else to stdout. Only the JSON object above.
-`, repo, number, fingerprint, heading, fingerprint, agent)
+`, repo, number, heading, agent)
 }
 
-func BuildPRReviewPrompt(agent string, role string, repo string, number int, fingerprint string) string {
+func BuildPRReviewPrompt(agent string, role string, repo string, number int) string {
 	heading := fmt.Sprintf("## %s specialist: %s", agent, role)
 	roleInstructions := map[string]string{
 		"architect": "Focus on architecture, boundaries, coupling, and long-term maintainability.",
@@ -67,10 +62,9 @@ You are an AI assistant running with GitHub MCP tools (repos, issues, pull_reque
 
 Repository: %s
 PR: #%d
-Fingerprint: %s
 
 ## Required reading
-1. PR title/body and diff.
+1. PR title/body and all previous PR comments/reviews.
 2. Changed files and relevant code context.
 
 ## Task
@@ -85,11 +79,6 @@ Role guidance: %s
 - Add inline review comments only when there is a clear actionable issue.
 - Keep changes minimal; propose follow-up issues for large refactors.
 
-### Footer marker
-Include this marker in the top-level review body:
-
-<!-- ai-daemon:pr-review v1; fingerprint=%s -->
-
 ### Output Plan
 Post the PR review via GitHub MCP pull request review tools with inline comments where possible.
 
@@ -99,5 +88,5 @@ After posting the review, you MUST print exactly one JSON object to stdout (no o
 {"summary":"<one-line summary>","artifacts":[{"type":"pr_review","part_key":"review/%s/%s","github_id":"<review_id>","url":"<review_url>"}]}
 
 Do NOT output anything else to stdout. Only the JSON object above.
-`, repo, number, fingerprint, heading, instruction, fingerprint, agent, role)
+`, repo, number, heading, instruction, agent, role)
 }

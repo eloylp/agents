@@ -7,11 +7,10 @@ type Runner interface {
 }
 
 type Request struct {
-	Workflow    string
-	Repo        string
-	Number      int
-	Fingerprint string
-	Prompt      string
+	Workflow string
+	Repo     string
+	Number   int
+	Prompt   string
 }
 
 type Artifact struct {
