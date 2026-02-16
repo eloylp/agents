@@ -146,11 +146,11 @@ func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest)
 
 func (e *Engine) resolveBackend(backend string) string {
 	if strings.TrimSpace(backend) == "" {
-		defaultAgent := e.cfg.DefaultConfiguredBackend()
-		if defaultAgent == "" {
-			e.logger.Error().Msg("no default agent configured; expected one of claude or codex")
+		defaultBackend := e.cfg.DefaultConfiguredBackend()
+		if defaultBackend == "" {
+			e.logger.Error().Msg("no default backend configured; expected one of claude or codex")
 		}
-		return defaultAgent
+		return defaultBackend
 	}
 	backend = strings.ToLower(strings.TrimSpace(backend))
 	if _, ok := e.cfg.AIBackends[backend]; !ok {
