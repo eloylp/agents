@@ -189,6 +189,28 @@ go build -o agentd ./cmd/agentd
 ./agentd -config config.yaml
 ```
 
+### 🐳 Docker
+
+The project includes a multi-stage Dockerfile that produces a minimal (~9 MB) scratch-based image containing only the static binary and CA certificates.
+
+```bash
+# Build and start
+docker compose up -d
+
+# Rebuild after code changes
+docker compose up -d --build
+
+# View logs
+docker compose logs -f agentd
+
+# Stop
+docker compose down
+```
+
+The compose file expects:
+- `config.yaml` in the project root (mounted read-only at `/etc/agentd/config.yaml`)
+- `.env` in the project root with `GITHUB_WEBHOOK_SECRET` (and optionally `LOG_SALT`)
+
 ---
 
 ## 🔌 Webhook endpoints

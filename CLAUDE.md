@@ -24,6 +24,15 @@ go build -o agentd ./cmd/agentd
 go run ./cmd/agentd -config config.yaml
 ```
 
+## Docker
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+The image uses a multi-stage build (golang alpine builder + scratch runtime) to produce a minimal container with only the static binary and CA certificates. The compose file mounts `config.yaml` read-only into `/etc/agentd/` and loads secrets from `.env`.
+
 ## Configuration
 
 Main runtime secret:

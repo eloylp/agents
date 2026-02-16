@@ -1,0 +1,10 @@
+services:
+  agentd:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/etc/agentd/config.yaml:ro
+    env_file:
+      - .env
+    restart: unless-stopped
