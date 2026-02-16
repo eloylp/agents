@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -33,20 +34,20 @@ func NewEngine(cfg *config.Config, runners map[string]ai.Runner, logger zerolog.
 	}
 }
 
-func (e *Engine) HandleIssueLabelEvent(ctx context.Context, req IssueRequest) (bool, error) {
+func (e *Engine) HandleIssueLabelEvent(ctx context.Context, req IssueRequest) error {
 	if strings.TrimSpace(strings.ToLower(req.Action)) != "labeled" {
 		e.logger.Info().Str("repo", req.Repo.FullName).Int("issue_number", req.Issue.Number).Str("action", req.Action).Str("label", req.Label).Msg("issue label event ignored")
-		return false, nil
+		return nil
 	}
 	backend, ok := ParseRefineLabel(req.Label)
 	if !ok {
 		e.logger.Info().Str("repo", req.Repo.FullName).Int("issue_number", req.Issue.Number).Str("label", req.Label).Msg("issue label skipped")
-		return false, nil
+		return nil
 	}
 	selectedBackend := e.resolveBackend(backend)
 	if selectedBackend == "" {
 		e.logger.Warn().Str("label", req.Label).Int("issue_number", req.Issue.Number).Str("repo", req.Repo.FullName).Msg("issue label references unknown backend, skipping")
-		return false, nil
+		return nil
 	}
 	logger := e.logger.With().
 		Str("repo", req.Repo.FullName).
@@ -55,7 +56,7 @@ func (e *Engine) HandleIssueLabelEvent(ctx context.Context, req IssueRequest) (b
 	runner, ok := e.runners[selectedBackend]
 	if !ok {
 		logger.Warn().Str("backend", selectedBackend).Msg("runner missing for backend, skipping")
-		return false, nil
+		return nil
 	}
 	prompt := ai.BuildIssueRefinePrompt(req.Repo.FullName, req.Issue.Number)
 	logger.Info().Str("backend", selectedBackend).Msg("invoking ai backend for issue refinement")
@@ -66,113 +67,81 @@ func (e *Engine) HandleIssueLabelEvent(ctx context.Context, req IssueRequest) (b
 		Prompt:   prompt,
 	})
 	if err != nil {
-		logger.Error().Err(err).Str("backend", selectedBackend).Msg("ai run failed")
-		return false, nil
+		return fmt.Errorf("agent %s: %w", selectedBackend, err)
 	}
 	storedCount := len(response.Artifacts)
 	logger.Info().Str("backend", selectedBackend).Int("artifacts_stored", storedCount).Msg("issue refinement completed")
-	return true, nil
+	return nil
 }
 
-func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest) (bool, error) {
+func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest) error {
 	if strings.TrimSpace(strings.ToLower(req.Action)) != "labeled" {
 		e.logger.Info().Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Str("action", req.Action).Str("label", req.Label).Msg("pull request label event ignored")
-		return false, nil
+		return nil
 	}
 	if req.PR.Draft {
 		e.logger.Info().Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Msg("pull request skipped, draft")
-		return false, nil
+		return nil
 	}
 	backend, agent, ok := ParseReviewLabel(req.Label)
 	if !ok {
 		e.logger.Info().Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Str("label", req.Label).Msg("pull request label skipped")
-		return false, nil
+		return nil
 	}
 	resolvedBackend := e.resolveBackend(backend)
 	if resolvedBackend == "" {
 		e.logger.Warn().Str("label", req.Label).Int("pr_number", req.PR.Number).Str("repo", req.Repo.FullName).Msg("pr label references unknown backend, skipping")
-		return false, nil
+		return nil
 	}
 	backendCfg := e.cfg.AIBackends[resolvedBackend]
-	targets := map[string]map[string]struct{}{resolvedBackend: {}}
+	var agents []string
 	if agent == "all" {
-		for _, configuredAgent := range backendCfg.Agents {
-			targets[resolvedBackend][configuredAgent] = struct{}{}
-		}
+		agents = backendCfg.Agents
 	} else {
 		if !slices.Contains(backendCfg.Agents, agent) {
 			e.logger.Warn().Str("label", req.Label).Str("backend", resolvedBackend).Str("agent", agent).Int("pr_number", req.PR.Number).Str("repo", req.Repo.FullName).Msg("pr label references unsupported agent, skipping")
-			return false, nil
+			return nil
 		}
-		targets[resolvedBackend][agent] = struct{}{}
+		agents = []string{agent}
 	}
-	return e.handlePRStateless(ctx, req.Repo, req.PR, targets)
-}
-
-func (e *Engine) handlePRStateless(ctx context.Context, repo config.RepoConfig, pr PullRequest, targets map[string]map[string]struct{}) (bool, error) {
+	runner, ok := e.runners[resolvedBackend]
+	if !ok {
+		e.logger.Warn().Str("backend", resolvedBackend).Msg("runner missing for backend, skipping")
+		return nil
+	}
 	logger := e.logger.With().
-		Str("repo", repo.FullName).
-		Int("pr_number", pr.Number).
+		Str("repo", req.Repo.FullName).
+		Int("pr_number", req.PR.Number).
 		Logger()
-
-	type agentExecution struct {
-		backend  string
-		agent    string
-		workflow string
-		runner   ai.Runner
-	}
-	agentRuns := make([]agentExecution, 0)
-	for backend, agents := range targets {
-		runner, ok := e.runners[backend]
-		if !ok {
-			e.logger.Warn().Str("backend", backend).Msg("runner missing for backend, skipping")
-			continue
-		}
-		for agent := range agents {
-			agentRuns = append(agentRuns, agentExecution{
-				backend:  backend,
-				agent:    agent,
-				workflow: fmt.Sprintf("%s:%s:%s", workflowPRReview, backend, agent),
-				runner:   runner,
-			})
-		}
-	}
-	if len(agentRuns) == 0 {
-		logger.Info().Msg("pull request skipped because no runnable agents were resolved")
-		return false, nil
-	}
-
 	var (
-		mu     sync.Mutex
-		ranAny bool
+		mu      sync.Mutex
+		agentErrs []error
 	)
 	group, groupCtx := errgroup.WithContext(ctx)
-	for _, ar := range agentRuns {
+	for _, ag := range agents {
 		group.Go(func() error {
-			prompt := ai.BuildPRReviewPrompt(ar.backend, ar.agent, repo.FullName, pr.Number)
-			logger.Info().Str("backend", ar.backend).Str("agent", ar.agent).Msg("invoking ai agent for pr review")
-			response, err := ar.runner.Run(groupCtx, ai.Request{
-				Workflow: ar.workflow,
-				Repo:     repo.FullName,
-				Number:   pr.Number,
+			wf := fmt.Sprintf("%s:%s:%s", workflowPRReview, resolvedBackend, ag)
+			prompt := ai.BuildPRReviewPrompt(resolvedBackend, ag, req.Repo.FullName, req.PR.Number)
+			logger.Info().Str("backend", resolvedBackend).Str("agent", ag).Msg("invoking ai agent for pr review")
+			response, err := runner.Run(groupCtx, ai.Request{
+				Workflow: wf,
+				Repo:     req.Repo.FullName,
+				Number:   req.PR.Number,
 				Prompt:   prompt,
 			})
 			if err != nil {
-				logger.Error().Err(err).Str("backend", ar.backend).Str("agent", ar.agent).Msg("ai run failed")
+				mu.Lock()
+				agentErrs = append(agentErrs, fmt.Errorf("agent %s/%s: %w", resolvedBackend, ag, err))
+				mu.Unlock()
 				return nil
 			}
 			storedCount := len(response.Artifacts)
-			logger.Info().Str("backend", ar.backend).Str("agent", ar.agent).Int("artifacts_stored", storedCount).Msg("pr review completed")
-			mu.Lock()
-			ranAny = true
-			mu.Unlock()
+			logger.Info().Str("backend", resolvedBackend).Str("agent", ag).Int("artifacts_stored", storedCount).Msg("pr review completed")
 			return nil
 		})
 	}
-	if err := group.Wait(); err != nil {
-		return false, err
-	}
-	return ranAny, nil
+	_ = group.Wait()
+	return errors.Join(agentErrs...)
 }
 
 func (e *Engine) resolveBackend(backend string) string {

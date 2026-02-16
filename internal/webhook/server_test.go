@@ -27,18 +27,18 @@ type stubWorkflowHandler struct {
 	prAction    string
 }
 
-func (s *stubWorkflowHandler) HandleIssueLabelEvent(_ context.Context, req workflow.IssueRequest) (bool, error) {
+func (s *stubWorkflowHandler) HandleIssueLabelEvent(_ context.Context, req workflow.IssueRequest) error {
 	s.issueCalls++
 	s.issueLabel = req.Label
 	s.issueAction = req.Action
-	return true, nil
+	return nil
 }
 
-func (s *stubWorkflowHandler) HandlePullRequestLabelEvent(_ context.Context, req workflow.PRRequest) (bool, error) {
+func (s *stubWorkflowHandler) HandlePullRequestLabelEvent(_ context.Context, req workflow.PRRequest) error {
 	s.prCalls++
 	s.prLabel = req.Label
 	s.prAction = req.Action
-	return true, nil
+	return nil
 }
 
 func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {

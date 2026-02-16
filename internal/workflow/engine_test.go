@@ -34,7 +34,7 @@ func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
 		Number: 10,
 	}
 
-	ran, err := engine.HandleIssueLabelEvent(context.Background(), IssueRequest{
+	err := engine.HandleIssueLabelEvent(context.Background(), IssueRequest{
 		Repo:   config.RepoConfig{FullName: "owner/repo", Enabled: true},
 		Issue:  issue,
 		Action: "labeled",
@@ -42,9 +42,6 @@ func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if !ran {
-		t.Fatalf("expected run for labeled ai event")
 	}
 	if runner.calls != 1 {
 		t.Fatalf("expected one runner call, got %d", runner.calls)
@@ -65,7 +62,7 @@ func TestHandleIssueLabelEventIgnoresUnlabeledAction(t *testing.T) {
 	issue := Issue{
 		Number: 10,
 	}
-	ran, err := engine.HandleIssueLabelEvent(context.Background(), IssueRequest{
+	err := engine.HandleIssueLabelEvent(context.Background(), IssueRequest{
 		Repo:   config.RepoConfig{FullName: "owner/repo", Enabled: true},
 		Issue:  issue,
 		Action: "unlabeled",
@@ -73,9 +70,6 @@ func TestHandleIssueLabelEventIgnoresUnlabeledAction(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if ran {
-		t.Fatalf("expected no run for unlabeled action")
 	}
 	if runner.calls != 0 {
 		t.Fatalf("expected no runner calls, got %d", runner.calls)

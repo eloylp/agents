@@ -20,8 +20,8 @@ import (
 )
 
 type workflowHandler interface {
-	HandleIssueLabelEvent(context.Context, workflow.IssueRequest) (bool, error)
-	HandlePullRequestLabelEvent(context.Context, workflow.PRRequest) (bool, error)
+	HandleIssueLabelEvent(context.Context, workflow.IssueRequest) error
+	HandlePullRequestLabelEvent(context.Context, workflow.PRRequest) error
 }
 
 type Server struct {
@@ -206,7 +206,7 @@ func (s *Server) startWorkers(ctx context.Context) {
 					s.drainIssueQueue()
 					return
 				case req := <-s.issueQueue:
-					if _, err := s.handler.HandleIssueLabelEvent(ctx, req); err != nil {
+					if err := s.handler.HandleIssueLabelEvent(ctx, req); err != nil {
 						s.logger.Error().Err(err).Str("repo", req.Repo.FullName).Int("issue_number", req.Issue.Number).Msg("failed to process issue webhook")
 					}
 				}
@@ -219,7 +219,7 @@ func (s *Server) startWorkers(ctx context.Context) {
 					s.drainPRQueue()
 					return
 				case req := <-s.prQueue:
-					if _, err := s.handler.HandlePullRequestLabelEvent(ctx, req); err != nil {
+					if err := s.handler.HandlePullRequestLabelEvent(ctx, req); err != nil {
 						s.logger.Error().Err(err).Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Msg("failed to process pr webhook")
 					}
 				}
@@ -232,7 +232,7 @@ func (s *Server) drainIssueQueue() {
 	for {
 		select {
 		case req := <-s.issueQueue:
-			if _, err := s.handler.HandleIssueLabelEvent(context.Background(), req); err != nil {
+			if err := s.handler.HandleIssueLabelEvent(context.Background(), req); err != nil {
 				s.logger.Error().Err(err).Str("repo", req.Repo.FullName).Int("issue_number", req.Issue.Number).Msg("failed to process issue webhook during shutdown drain")
 			}
 		default:
@@ -245,7 +245,7 @@ func (s *Server) drainPRQueue() {
 	for {
 		select {
 		case req := <-s.prQueue:
-			if _, err := s.handler.HandlePullRequestLabelEvent(context.Background(), req); err != nil {
+			if err := s.handler.HandlePullRequestLabelEvent(context.Background(), req); err != nil {
 				s.logger.Error().Err(err).Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Msg("failed to process pr webhook during shutdown drain")
 			}
 		default:
