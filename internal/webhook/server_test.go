@@ -43,6 +43,8 @@ func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
 			MaxBodyBytes:       1024,
 			WebhookSecret:      "secret",
 			DeliveryTTLSeconds: 3600,
+			IssueQueueBuffer:   8,
+			PRQueueBuffer:      8,
 		},
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
@@ -84,6 +86,8 @@ func TestHandleWebhookIgnoresNonAILabel(t *testing.T) {
 			MaxBodyBytes:       1024,
 			WebhookSecret:      "secret",
 			DeliveryTTLSeconds: 3600,
+			IssueQueueBuffer:   8,
+			PRQueueBuffer:      8,
 		},
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
@@ -114,6 +118,8 @@ func TestHandleIssueWebhookUsesEventLabelAsTrigger(t *testing.T) {
 			MaxBodyBytes:       1024,
 			WebhookSecret:      "secret",
 			DeliveryTTLSeconds: 3600,
+			IssueQueueBuffer:   8,
+			PRQueueBuffer:      8,
 		},
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}

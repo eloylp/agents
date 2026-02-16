@@ -18,6 +18,8 @@ const (
 	defaultHTTPIdleTimeoutSeconds  = 60
 	defaultHTTPMaxBodyBytes        = 1 << 20
 	defaultDeliveryTTLSeconds      = 3600
+	defaultIssueQueueBufferSize    = 256
+	defaultPRQueueBufferSize       = 256
 	defaultAITimeoutSeconds        = 600
 	defaultMaxPromptChars          = 12000
 )
@@ -46,6 +48,8 @@ type HTTPConfig struct {
 	WebhookSecret       string `yaml:"webhook_secret"`
 	WebhookSecretEnv    string `yaml:"webhook_secret_env"`
 	DeliveryTTLSeconds  int    `yaml:"delivery_ttl_seconds"`
+	IssueQueueBuffer    int    `yaml:"issue_queue_buffer"`
+	PRQueueBuffer       int    `yaml:"pr_queue_buffer"`
 }
 
 type ClaudeConfig struct {
@@ -129,6 +133,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.HTTP.DeliveryTTLSeconds == 0 {
 		c.HTTP.DeliveryTTLSeconds = defaultDeliveryTTLSeconds
+	}
+	if c.HTTP.IssueQueueBuffer == 0 {
+		c.HTTP.IssueQueueBuffer = defaultIssueQueueBufferSize
+	}
+	if c.HTTP.PRQueueBuffer == 0 {
+		c.HTTP.PRQueueBuffer = defaultPRQueueBufferSize
 	}
 	normalizedBackends := make(map[string]AIBackendConfig, len(c.AIBackends))
 	for name, backend := range c.AIBackends {

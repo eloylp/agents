@@ -54,6 +54,12 @@ repos:
 	if len(backend.Agents) == 0 {
 		t.Fatalf("expected default specialist agents")
 	}
+	if cfg.HTTP.IssueQueueBuffer != defaultIssueQueueBufferSize {
+		t.Fatalf("expected issue queue buffer default %d, got %d", defaultIssueQueueBufferSize, cfg.HTTP.IssueQueueBuffer)
+	}
+	if cfg.HTTP.PRQueueBuffer != defaultPRQueueBufferSize {
+		t.Fatalf("expected pr queue buffer default %d, got %d", defaultPRQueueBufferSize, cfg.HTTP.PRQueueBuffer)
+	}
 }
 
 func TestDefaultConfiguredBackend(t *testing.T) {

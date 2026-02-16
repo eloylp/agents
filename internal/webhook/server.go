@@ -32,8 +32,8 @@ type Server struct {
 	logger   zerolog.Logger
 
 	workersOnce sync.Once
-	issueQueue  *UnboundedQueue[issueEvent]
-	prQueue     *UnboundedQueue[prEvent]
+	issueQueue  chan issueEvent
+	prQueue     chan prEvent
 }
 
 func NewServer(cfg *config.Config, handler workflowHandler, delivery *DeliveryStore, logger zerolog.Logger) *Server {
@@ -42,8 +42,8 @@ func NewServer(cfg *config.Config, handler workflowHandler, delivery *DeliverySt
 		handler:    handler,
 		delivery:   delivery,
 		logger:     logger.With().Str("component", "webhook_server").Logger(),
-		issueQueue: NewUnboundedQueue[issueEvent](),
-		prQueue:    NewUnboundedQueue[prEvent](),
+		issueQueue: make(chan issueEvent, cfg.HTTP.IssueQueueBuffer),
+		prQueue:    make(chan prEvent, cfg.HTTP.PRQueueBuffer),
 	}
 }
 
@@ -155,7 +155,7 @@ func (s *Server) handleIssueEvent(w http.ResponseWriter, body []byte) {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	s.issueQueue.Enqueue(issueEvent{repo: repo, issue: payload.Issue, action: payload.Action, label: payload.Label.Name})
+	s.issueQueue <- issueEvent{repo: repo, issue: payload.Issue, action: payload.Action, label: payload.Label.Name}
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -188,7 +188,7 @@ func (s *Server) handlePREvent(w http.ResponseWriter, body []byte) {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	s.prQueue.Enqueue(prEvent{repo: repo, pr: payload.PullRequest, action: payload.Action, label: payload.Label.Name})
+	s.prQueue <- prEvent{repo: repo, pr: payload.PullRequest, action: payload.Action, label: payload.Label.Name}
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -226,7 +226,7 @@ func (s *Server) startWorkers(ctx context.Context) {
 				case <-ctx.Done():
 					s.drainIssueQueue()
 					return
-				case event := <-s.issueQueue.Out():
+				case event := <-s.issueQueue:
 					if _, err := s.handler.HandleIssueLabelEvent(ctx, event.repo, event.issue, event.action, event.label); err != nil {
 						s.logger.Error().Err(err).Str("repo", event.repo.FullName).Int("issue_number", event.issue.Number).Msg("failed to process issue webhook")
 					}
@@ -239,7 +239,7 @@ func (s *Server) startWorkers(ctx context.Context) {
 				case <-ctx.Done():
 					s.drainPRQueue()
 					return
-				case event := <-s.prQueue.Out():
+				case event := <-s.prQueue:
 					if _, err := s.handler.HandlePullRequestLabelEvent(ctx, event.repo, event.pr, event.action, event.label); err != nil {
 						s.logger.Error().Err(err).Str("repo", event.repo.FullName).Int("pr_number", event.pr.Number).Msg("failed to process pr webhook")
 					}
@@ -252,7 +252,7 @@ func (s *Server) startWorkers(ctx context.Context) {
 func (s *Server) drainIssueQueue() {
 	for {
 		select {
-		case event := <-s.issueQueue.Out():
+		case event := <-s.issueQueue:
 			if _, err := s.handler.HandleIssueLabelEvent(context.Background(), event.repo, event.issue, event.action, event.label); err != nil {
 				s.logger.Error().Err(err).Str("repo", event.repo.FullName).Int("issue_number", event.issue.Number).Msg("failed to process issue webhook during shutdown drain")
 			}
@@ -265,7 +265,7 @@ func (s *Server) drainIssueQueue() {
 func (s *Server) drainPRQueue() {
 	for {
 		select {
-		case event := <-s.prQueue.Out():
+		case event := <-s.prQueue:
 			if _, err := s.handler.HandlePullRequestLabelEvent(context.Background(), event.repo, event.pr, event.action, event.label); err != nil {
 				s.logger.Error().Err(err).Str("repo", event.repo.FullName).Int("pr_number", event.pr.Number).Msg("failed to process pr webhook during shutdown drain")
 			}
