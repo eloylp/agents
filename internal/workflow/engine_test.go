@@ -3,7 +3,6 @@ package workflow
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/rs/zerolog"
 
@@ -32,11 +31,7 @@ func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
 	}
 	engine := NewEngine(cfg, map[string]ai.Runner{"claude": runner, "codex": runner}, zerolog.Nop())
 	issue := Issue{
-		Number:    10,
-		Title:     "title",
-		Body:      "body",
-		UpdatedAt: time.Now().UTC(),
-		Labels:    []Label{{Name: "ai:refine:claude"}},
+		Number: 10,
 	}
 
 	ran, err := engine.HandleIssueLabelEvent(context.Background(), config.RepoConfig{FullName: "owner/repo", Enabled: true}, issue, "labeled", "ai:refine:codex")
@@ -63,10 +58,7 @@ func TestHandleIssueLabelEventIgnoresUnlabeledAction(t *testing.T) {
 	}
 	engine := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, zerolog.Nop())
 	issue := Issue{
-		Number:    10,
-		Title:     "title",
-		Body:      "body",
-		UpdatedAt: time.Now().UTC(),
+		Number: 10,
 	}
 	ran, err := engine.HandleIssueLabelEvent(context.Background(), config.RepoConfig{FullName: "owner/repo", Enabled: true}, issue, "unlabeled", "ai:refine")
 	if err != nil {

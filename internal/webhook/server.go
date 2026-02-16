@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -210,12 +209,6 @@ func verifySignature(payload []byte, secret, signature string) bool {
 	_, _ = mac.Write(payload)
 	expected := hex.EncodeToString(mac.Sum(nil))
 	return hmac.Equal([]byte(expected), []byte(signature))
-}
-
-func signatureForTests(payload []byte, secret string) string {
-	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = mac.Write(payload)
-	return fmt.Sprintf("sha256=%s", hex.EncodeToString(mac.Sum(nil)))
 }
 
 func (s *Server) startWorkers(ctx context.Context) {

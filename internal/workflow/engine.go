@@ -93,10 +93,7 @@ func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, repo config.Re
 		e.logger.Warn().Str("label", labelName).Int("pr_number", pr.Number).Str("repo", repo.FullName).Msg("pr label references unknown agent, skipping")
 		return false, nil
 	}
-	backendCfg, found := e.cfg.AIBackends[resolvedAgent]
-	if !found {
-		return false, nil
-	}
+	backendCfg := e.cfg.AIBackends[resolvedAgent]
 	targets := map[string]map[string]struct{}{resolvedAgent: {}}
 	if role == "all" {
 		for _, configuredRole := range backendCfg.Agents {

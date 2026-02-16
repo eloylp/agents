@@ -52,24 +52,6 @@ type HTTPConfig struct {
 	PRQueueBuffer       int    `yaml:"pr_queue_buffer"`
 }
 
-type ClaudeConfig struct {
-	Mode             string   `yaml:"mode"`
-	Command          string   `yaml:"command"`
-	Args             []string `yaml:"args"`
-	TimeoutSeconds   int      `yaml:"timeout_seconds"`
-	MaxPromptChars   int      `yaml:"max_prompt_chars"`
-	RedactionSaltEnv string   `yaml:"redaction_salt_env"`
-}
-
-type CodexConfig struct {
-	Mode             string   `yaml:"mode"`
-	Command          string   `yaml:"command"`
-	Args             []string `yaml:"args"`
-	TimeoutSeconds   int      `yaml:"timeout_seconds"`
-	MaxPromptChars   int      `yaml:"max_prompt_chars"`
-	RedactionSaltEnv string   `yaml:"redaction_salt_env"`
-}
-
 type RepoConfig struct {
 	FullName string `yaml:"full_name"`
 	Enabled  bool   `yaml:"enabled"`
@@ -185,19 +167,6 @@ func (c *Config) resolveEnv() error {
 		}
 	}
 	return nil
-}
-
-func (c *Config) MaxAgentTimeoutSeconds() int {
-	maxTimeout := 0
-	for _, backend := range c.AIBackends {
-		if backend.TimeoutSeconds > maxTimeout {
-			maxTimeout = backend.TimeoutSeconds
-		}
-	}
-	if maxTimeout == 0 {
-		return defaultAITimeoutSeconds
-	}
-	return maxTimeout
 }
 
 func (c *Config) RepoByName(fullName string) (RepoConfig, bool) {
