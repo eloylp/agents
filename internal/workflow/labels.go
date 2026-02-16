@@ -2,47 +2,44 @@ package workflow
 
 import "strings"
 
-// ParseAILabel maps supported ai:* labels into workflow, backend, and agent tokens.
+// ParseRefineLabel parses an issue refinement label.
 // Supported forms:
-// - ai:refine
-// - ai:refine:<backend>
-// - ai:review
-// - ai:review:<backend>:<agent>
-func ParseAILabel(label string) (workflow, backend, agent string, ok bool) {
+//   - ai:refine          (uses default backend)
+//   - ai:refine:<backend> (targets a specific backend)
+//
+// Returns the selected backend (empty for default) and whether the label matched.
+func ParseRefineLabel(label string) (backend string, ok bool) {
 	normalized := strings.ToLower(strings.TrimSpace(label))
-	if workflow, backend, ok := parseRefineLabel(normalized); ok {
-		return workflow, backend, "", true
-	}
-	if workflow, backend, agent, ok := parseReviewLabel(normalized); ok {
-		return workflow, backend, agent, true
-	}
-	return "", "", "", false
-}
-
-func parseRefineLabel(normalized string) (workflow, backend string, ok bool) {
 	if normalized == "ai:refine" {
-		return workflowIssueRefine, "", true
+		return "", true
 	}
 	if !strings.HasPrefix(normalized, "ai:refine:") {
-		return "", "", false
+		return "", false
 	}
 	parts := strings.Split(normalized, ":")
 	if len(parts) != 3 || parts[2] == "" {
-		return "", "", false
+		return "", false
 	}
-	return workflowIssueRefine, parts[2], true
+	return parts[2], true
 }
 
-func parseReviewLabel(normalized string) (workflow, backend, agent string, ok bool) {
+// ParseReviewLabel parses a PR review label.
+// Supported forms:
+//   - ai:review                    (all agents on default backend)
+//   - ai:review:<backend>:<agent>  (specific agent on specific backend)
+//
+// Returns the selected backend (empty for default), agent name, and whether the label matched.
+func ParseReviewLabel(label string) (backend, agent string, ok bool) {
+	normalized := strings.ToLower(strings.TrimSpace(label))
 	if normalized == "ai:review" {
-		return workflowPRReview, "", "all", true
+		return "", "all", true
 	}
 	if !strings.HasPrefix(normalized, "ai:review:") {
-		return "", "", "", false
+		return "", "", false
 	}
 	parts := strings.Split(normalized, ":")
 	if len(parts) != 4 || parts[2] == "" || parts[3] == "" {
-		return "", "", "", false
+		return "", "", false
 	}
-	return workflowPRReview, parts[2], parts[3], true
+	return parts[2], parts[3], true
 }
