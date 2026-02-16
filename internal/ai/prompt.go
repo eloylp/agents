@@ -2,9 +2,7 @@ package ai
 
 import "fmt"
 
-func BuildIssueRefinePrompt(agent string, repo string, number int) string {
-	heading := fmt.Sprintf("## %s refinement", agent)
-
+func BuildIssueRefinePrompt(repo string, number int) string {
 	return fmt.Sprintf(`# Mission
 You are an AI assistant running with GitHub MCP tools (repos, issues, pull_requests). You must not push code, create branches, open PRs, merge, or modify repository contents. Read and comment only.
 
@@ -21,14 +19,18 @@ Issue: #%d
 ## Task
 Produce exactly 1 issue comment (short, scannable) and start it with this heading:
 
-%s
+## Issue refinement
+
+Ensure the issue is understandable, provides enough context, and has clear goals.
 
 Use GitHub-flavored Markdown. Prefer checklists for acceptance criteria and tasks.
 
 ### Content requirements
+- Clarity: is the issue well-written and understandable?
+- Context: does it provide enough background for someone unfamiliar?
+- Goals: are the objectives and expected outcomes clearly stated?
 - Feasibility: missing info, affected components
 - Complexity: S/M/L plus risks
-- Recommended approach + alternatives
 - Acceptance criteria + tasks + questions (only if truly blocking)
 
 ### Output Plan
@@ -37,24 +39,24 @@ Post the comment directly using GitHub MCP issue comment tools.
 ### STDOUT JSON (mandatory)
 After posting all comments, you MUST print exactly one JSON object to stdout (no other text before or after it) with the artifacts you created:
 
-{"summary":"<one-line summary>","artifacts":[{"type":"issue_comment","part_key":"issue/%s","github_id":"<comment_id>","url":"<comment_url>"}]}
+{"summary":"<one-line summary>","artifacts":[{"type":"issue_comment","part_key":"issue/refine","github_id":"<comment_id>","url":"<comment_url>"}]}
 
 Do NOT output anything else to stdout. Only the JSON object above.
-`, repo, number, heading, agent)
+`, repo, number)
 }
 
-func BuildPRReviewPrompt(agent string, role string, repo string, number int) string {
-	heading := fmt.Sprintf("## %s specialist: %s", agent, role)
-	roleInstructions := map[string]string{
+func BuildPRReviewPrompt(backend string, agent string, repo string, number int) string {
+	heading := fmt.Sprintf("## %s specialist: %s", backend, agent)
+	agentInstructions := map[string]string{
 		"architect": "Focus on architecture, boundaries, coupling, and long-term maintainability.",
 		"security":  "Focus on security vulnerabilities, trust boundaries, secrets handling, and unsafe defaults.",
 		"testing":   "Focus on test coverage gaps, fragile tests, and missing validation scenarios.",
 		"devops":    "Focus on CI/CD, deployment safety, observability, and runtime operability.",
 		"ux":        "Focus on developer/user experience, clarity, ergonomics, and error messaging.",
 	}
-	instruction := roleInstructions[role]
+	instruction := agentInstructions[agent]
 	if instruction == "" {
-		instruction = "Focus on the requested specialist role."
+		instruction = "Focus on the requested specialist agent."
 	}
 
 	return fmt.Sprintf(`# Mission
@@ -72,7 +74,7 @@ Provide exactly one specialist review comment using this heading:
 
 %s
 
-Role guidance: %s
+Agent guidance: %s
 
 ### Output requirements
 - Post one top-level PR review summary comment.
@@ -88,5 +90,5 @@ After posting the review, you MUST print exactly one JSON object to stdout (no o
 {"summary":"<one-line summary>","artifacts":[{"type":"pr_review","part_key":"review/%s/%s","github_id":"<review_id>","url":"<review_url>"}]}
 
 Do NOT output anything else to stdout. Only the JSON object above.
-`, repo, number, heading, instruction, agent, role)
+`, repo, number, heading, instruction, backend, agent)
 }

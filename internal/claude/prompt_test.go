@@ -6,9 +6,9 @@ import (
 )
 
 func TestBuildIssueRefinePromptIncludesRequirements(t *testing.T) {
-	prompt := BuildIssueRefinePrompt("claude", "owner/repo", 12)
-	if !strings.Contains(prompt, "## claude refinement") {
-		t.Fatalf("expected agent heading in prompt")
+	prompt := BuildIssueRefinePrompt("owner/repo", 12)
+	if !strings.Contains(prompt, "## Issue refinement") {
+		t.Fatalf("expected issue refinement heading in prompt")
 	}
 	if !strings.Contains(prompt, "all previous issue comments") {
 		t.Fatalf("expected full issue comment reading requirement in prompt")

@@ -2,7 +2,7 @@ package workflow
 
 import "strings"
 
-// ParseAILabel maps supported ai:* labels into workflow, backend, and role tokens.
+// ParseAILabel maps supported ai:* labels into workflow, backend, and agent tokens.
 // Supported forms:
 // - ai:refine
 // - ai:refine:<backend>

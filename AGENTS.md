@@ -25,7 +25,7 @@ This file defines repo-specific guidance for future coding agents working in thi
 - `internal/workflow/engine.go`
   - Label parsing/routing from webhook events and runner invocation.
 - `internal/workflow/labels.go`
-  - Parses supported `ai:*` labels into workflow/backend/role targets.
+  - Parses supported `ai:*` labels into workflow/backend/agent targets.
 - `internal/ai/prompt.go`
   - Prompt templates and stdout JSON artifact contract for issue and PR workflows.
 - `internal/ai/cmdrunner.go`
@@ -41,7 +41,7 @@ This file defines repo-specific guidance for future coding agents working in thi
   - `internal/ai/cmdrunner.go` expects parseable JSON when output is non-empty.
 - Preserve current label semantics:
   - issue: `ai:refine` and `ai:refine:<backend>`,
-  - PR: `ai:review`, `ai:review:<backend>:<role>`, and `ai:review:<backend>:all`.
+  - PR: `ai:review`, `ai:review:<backend>:<agent>`, and `ai:review:<backend>:all`.
 
 ## Editing Checklist
 

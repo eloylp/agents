@@ -24,7 +24,7 @@ const (
 	defaultMaxPromptChars          = 12000
 )
 
-var defaultRoles = []string{"architect", "security", "testing", "devops", "ux"}
+var defaultAgents = []string{"architect", "security", "testing", "devops", "ux"}
 
 type Config struct {
 	Log        LogConfig                  `yaml:"log"`
@@ -138,7 +138,7 @@ func (c *Config) applyDefaults() {
 			backend.MaxPromptChars = defaultMaxPromptChars
 		}
 		if len(backend.Agents) == 0 {
-			backend.Agents = append([]string(nil), defaultRoles...)
+			backend.Agents = append([]string(nil), defaultAgents...)
 		}
 		for i := range backend.Agents {
 			backend.Agents[i] = strings.ToLower(strings.TrimSpace(backend.Agents[i]))

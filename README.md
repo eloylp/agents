@@ -45,7 +45,7 @@ The daemon is **event-driven only** — no polling. It accepts the webhook, queu
 
 ## 🏷️ Label architecture
 
-Labels are the control plane. Their format tells `agentd` **what** to do, **which backend** to use, and **which role** to activate.
+Labels are the control plane. Their format tells `agentd` **what** to do, **which backend** to use, and **which agent** to activate.
 
 ### Issue refinement — `ai:refine`
 
@@ -60,13 +60,13 @@ Produces **one structured comment** on the issue covering feasibility, complexit
 
 | Label | Behavior |
 |---|---|
-| `ai:review` | Review with the default backend, **all** specialist roles |
-| `ai:review:<backend>:<role>` | Review with a specific backend and **single** role |
-| `ai:review:<backend>:all` | Review with a specific backend, **all** roles concurrently |
+| `ai:review` | Review with the default backend, **all** specialist agents |
+| `ai:review:<backend>:<agent>` | Review with a specific backend and **single** agent |
+| `ai:review:<backend>:all` | Review with a specific backend, **all** agents concurrently |
 
-Available roles:
+Available agents:
 
-| Role | Focus area |
+| Agent | Focus area |
 |---|---|
 | 🏛️ `architect` | Architecture, boundaries, coupling, maintainability |
 | 🔒 `security` | Vulnerabilities, trust boundaries, secrets, unsafe defaults |
@@ -74,14 +74,14 @@ Available roles:
 | ⚙️ `devops` | CI/CD, deployment safety, observability, operability |
 | 🎨 `ux` | Developer/user experience, clarity, ergonomics, error messages |
 
-When using `:all`, every configured role runs **concurrently** — one review comment per specialist.
+When using `:all`, every configured agent runs **concurrently** — one review comment per specialist.
 
 ### Label parsing rules
 
 ```
 ai:<workflow>
 ai:<workflow>:<backend>
-ai:<workflow>:<backend>:<role>
+ai:<workflow>:<backend>:<agent>
 ```
 
 - Labels are **case-insensitive** and trimmed.
