@@ -9,7 +9,15 @@ COPY . .
 ARG TARGETOS TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /agentd ./cmd/agentd
 
-FROM scratch
+FROM node:22-alpine
+
+RUN apk add --no-cache github-cli \
+    && npm install -g @anthropic-ai/claude-code @openai/codex \
+    && npm cache clean --force
+
+RUN adduser -D -h /home/agentd agentd
+ENV HOME=/home/agentd
+
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /agentd /agentd
 ENTRYPOINT ["/agentd"]
