@@ -1,15 +1,15 @@
 services:
-  agentd:
+  agents:
     build: .
     ports:
       - "8080:8080"
     environment:
-      - HOME=/home/agentd
+      - HOME=/home/agents
     volumes:
-      - ./config.yaml:/etc/agentd/config.yaml:ro
-      - ~/.claude:/home/agentd/.claude
-      - ~/.codex:/home/agentd/.codex
-      - ~/.config/gh:/home/agentd/.config/gh:ro
+      - ./config.yaml:/etc/agents/config.yaml:ro
+      - ~/.claude:/home/agents/.claude
+      - ~/.codex:/home/agents/.codex
+      - ~/.config/gh:/home/agents/.config/gh:ro
     env_file:
       - .env
     restart: unless-stopped

@@ -2,12 +2,12 @@
 
 ## Project Overview
 
-**agents** (`agentd`) is a Go daemon that receives GitHub webhook events for issue and PR label updates, then invokes Claude/Codex CLIs (via MCP tools) to post issue refinement comments and PR specialist reviews.
+**agents** is a Go daemon that receives GitHub webhook events for issue and PR label updates, then invokes Claude/Codex CLIs (via MCP tools) to post issue refinement comments and PR specialist reviews.
 
 ## Directory Structure
 
 ```
-cmd/agentd/main.go          # Daemon entry point
+cmd/agents/main.go          # Daemon entry point
 internal/
   config/config.go          # YAML config parsing, env var resolution, defaults
   ai/*                      # Prompt generation + command runner contract
@@ -20,8 +20,8 @@ internal/
 
 ```bash
 go test ./...
-go build -o agentd ./cmd/agentd
-go run ./cmd/agentd -config config.yaml
+go build -o agents ./cmd/agents
+go run ./cmd/agents -config config.yaml
 ```
 
 ## Docker
@@ -31,7 +31,7 @@ docker compose build
 docker compose up -d
 ```
 
-The image uses a multi-stage build (golang alpine builder + scratch runtime) to produce a minimal container with only the static binary and CA certificates. The compose file mounts `config.yaml` read-only into `/etc/agentd/` and loads secrets from `.env`.
+The image uses a multi-stage build (golang alpine builder + scratch runtime) to produce a minimal container with only the static binary and CA certificates. The compose file mounts `config.yaml` read-only into `/etc/agents/` and loads secrets from `.env`.
 
 ## Configuration
 

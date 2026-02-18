@@ -1,4 +1,4 @@
-# 🤖 agents (`agentd`)
+# agents
 
 **Turn GitHub labels into AI-powered code reviews and issue refinements — automatically.**
 
@@ -6,7 +6,7 @@ A lightweight Go daemon that listens for GitHub webhook events and dispatches AI
 
 ---
 
-## ✨ Why?
+## Why?
 
 - **Zero-friction** — your team already uses labels. No new tools to learn.
 - **Multi-backend** — plug in Claude, Codex, or any CLI that speaks MCP.
@@ -16,13 +16,13 @@ A lightweight Go daemon that listens for GitHub webhook events and dispatches AI
 
 ---
 
-## 🏗️ How it works
+## How it works
 
 ```mermaid
 sequenceDiagram
-    actor Dev as 👩‍💻 Developer
+    actor Dev as Developer
     participant GH as GitHub
-    participant D as agentd
+    participant D as agents
     participant AI as AI Backend<br/>(Claude / Codex)
 
     Dev->>GH: Create issue / open PR
@@ -36,16 +36,16 @@ sequenceDiagram
     AI->>GH: Post comment / review via MCP tools
     AI-->>D: Return artifacts JSON
 
-    Note over Dev,GH: 💬 AI feedback appears<br/>as a native GitHub comment
+    Note over Dev,GH: AI feedback appears<br/>as a native GitHub comment
 ```
 
 The daemon is **event-driven only** — no polling. It accepts the webhook, queues it internally, and dispatches work to the configured AI backend asynchronously.
 
 ---
 
-## 🏷️ Label architecture
+## Label architecture
 
-Labels are the control plane. Their format tells `agentd` **what** to do, **which backend** to use, and **which agent** to activate.
+Labels are the control plane. Their format tells `agents` **what** to do, **which backend** to use, and **which agent** to activate.
 
 ### Issue refinement — `ai:refine`
 
@@ -68,11 +68,11 @@ Available agents:
 
 | Agent | Focus area |
 |---|---|
-| 🏛️ `architect` | Architecture, boundaries, coupling, maintainability |
-| 🔒 `security` | Vulnerabilities, trust boundaries, secrets, unsafe defaults |
-| 🧪 `testing` | Coverage gaps, fragile tests, missing validation |
-| ⚙️ `devops` | CI/CD, deployment safety, observability, operability |
-| 🎨 `ux` | Developer/user experience, clarity, ergonomics, error messages |
+| `architect` | Architecture, boundaries, coupling, maintainability |
+| `security` | Vulnerabilities, trust boundaries, secrets, unsafe defaults |
+| `testing` | Coverage gaps, fragile tests, missing validation |
+| `devops` | CI/CD, deployment safety, observability, operability |
+| `ux` | Developer/user experience, clarity, ergonomics, error messages |
 
 When using `:all`, every configured agent runs **concurrently** — one review comment per specialist.
 
@@ -91,7 +91,7 @@ ai:<workflow>:<backend>:<agent>
 
 ---
 
-## 📋 Requirements
+## Requirements
 
 | Dependency | Purpose |
 |---|---|
@@ -99,7 +99,7 @@ ai:<workflow>:<backend>:<agent>
 | **GitHub CLI** (`gh`) | Authenticated access to your repos |
 | **AI CLI** (Claude Code or Codex) | The actual AI backend, with GitHub MCP server configured |
 
-### 🔧 Setup GitHub CLI
+### Setup GitHub CLI
 
 ```bash
 # Install (macOS)
@@ -109,7 +109,7 @@ brew install gh
 gh auth login
 ```
 
-### 🔧 Setup Claude Code + GitHub MCP
+### Setup Claude Code + GitHub MCP
 
 ```bash
 # Install Claude Code
@@ -122,14 +122,14 @@ claude mcp add github -- gh copilot mcp
 claude mcp list
 ```
 
-### 🔧 Setup Codex + GitHub MCP
+### Setup Codex + GitHub MCP
 
 Follow the official guide:
 https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-codex.md
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 Copy `config.example.yaml` to `config.yaml` and adapt it to your environment:
 
@@ -178,18 +178,18 @@ LOG_SALT=optional-redaction-salt
 
 ---
 
-## 🚀 Running
+## Running
 
 ```bash
 # Run directly
-go run ./cmd/agentd -config config.yaml
+go run ./cmd/agents -config config.yaml
 
 # Or build first
-go build -o agentd ./cmd/agentd
-./agentd -config config.yaml
+go build -o agents ./cmd/agents
+./agents -config config.yaml
 ```
 
-### 🐳 Docker
+### Docker
 
 The project includes a multi-stage Dockerfile that produces a minimal (~9 MB) scratch-based image containing only the static binary and CA certificates.
 
@@ -201,19 +201,19 @@ docker compose up -d
 docker compose up -d --build
 
 # View logs
-docker compose logs -f agentd
+docker compose logs -f agents
 
 # Stop
 docker compose down
 ```
 
 The compose file expects:
-- `config.yaml` in the project root (mounted read-only at `/etc/agentd/config.yaml`)
+- `config.yaml` in the project root (mounted read-only at `/etc/agents/config.yaml`)
 - `.env` in the project root with `GITHUB_WEBHOOK_SECRET` (and optionally `LOG_SALT`)
 
 ---
 
-## 🔌 Webhook endpoints
+## Webhook endpoints
 
 | Method | Path | Description |
 |---|---|---|
@@ -224,7 +224,7 @@ Duplicate deliveries are automatically suppressed using `X-GitHub-Delivery` with
 
 ---
 
-## 📤 AI runner contract
+## AI runner contract
 
 When `mode: command`, the daemon executes the CLI and sends the prompt via **stdin**. The CLI performs its work through MCP tools and must print a **single JSON object to stdout**:
 
@@ -246,17 +246,17 @@ The daemon uses this metadata for observability, logging, and run summaries.
 
 ---
 
-## 🔒 Security
+## Security
 
 - **Webhook verification** — all payloads are validated with HMAC SHA-256 (`X-Hub-Signature-256`).
-- **Read-only daemon** — `agentd` itself never writes to GitHub. All writes go through the AI backend via MCP tools.
+- **Read-only daemon** — `agents` itself never writes to GitHub. All writes go through the AI backend via MCP tools.
 - **Prompt redaction** — prompts are never logged in plaintext; only their hash and length are recorded.
 - **MCP scoping** — toolsets should be allow-listed to `repos`, `issues`, and `pull_requests`.
 - **`--dangerously-skip-permissions`** — required for headless Claude Code operation. Ensure the host environment is trusted.
 
 ---
 
-## 📝 Logging
+## Logging
 
 Structured JSON logs with correlation fields:
 
@@ -268,7 +268,7 @@ Every log entry includes `repo`, `issue_number` or `pr_number`, and `component` 
 
 ---
 
-## 🧪 Testing
+## Testing
 
 ```bash
 go test ./...
@@ -276,10 +276,10 @@ go test ./...
 
 ---
 
-## 📁 Project structure
+## Project structure
 
 ```
-cmd/agentd/main.go            # Daemon entry point
+cmd/agents/main.go            # Daemon entry point
 internal/
   config/config.go             # YAML config parsing, env var resolution
   ai/                          # Prompt generation + runner contract

@@ -7,7 +7,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG TARGETOS TARGETARCH
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /agentd ./cmd/agentd
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /agents ./cmd/agents
 
 FROM node:22-alpine
 
@@ -15,10 +15,10 @@ RUN apk add --no-cache github-cli \
     && npm install -g @anthropic-ai/claude-code @openai/codex \
     && npm cache clean --force
 
-RUN adduser -D -h /home/agentd agentd
-ENV HOME=/home/agentd
+RUN adduser -D -h /home/agents agents
+ENV HOME=/home/agents
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=builder /agentd /agentd
-ENTRYPOINT ["/agentd"]
-CMD ["-config", "/etc/agentd/config.yaml"]
+COPY --from=builder /agents /agents
+ENTRYPOINT ["/agents"]
+CMD ["-config", "/etc/agents/config.yaml"]

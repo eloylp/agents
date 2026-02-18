@@ -5,18 +5,18 @@ This file defines repo-specific guidance for future coding agents working in thi
 ## Project Summary
 
 - Language: Go (`go 1.22`).
-- Binary entrypoint: `cmd/agentd/main.go`.
+- Binary entrypoint: `cmd/agents/main.go`.
 - Purpose: receive GitHub webhook events and trigger AI CLI workflows (Claude/Codex) for issue refinement (`ai:refine`) and PR review (`ai:review`).
 
 ## Quick Commands
 
 - Run tests: `go test ./...`
-- Build: `go build ./cmd/agentd`
-- Run daemon: `go run ./cmd/agentd -config config.yaml`
+- Build: `go build ./cmd/agents`
+- Run daemon: `go run ./cmd/agents -config config.yaml`
 
 ## Code Map
 
-- `cmd/agentd/main.go`
+- `cmd/agents/main.go`
   - Wires config, logger, AI backend runners, workflow engine, and webhook server.
 - `internal/config/config.go`
   - Config schema, defaults, env resolution, and AI backend validation.

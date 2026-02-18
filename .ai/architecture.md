@@ -2,7 +2,7 @@
 
 ## What This Service Does
 
-`agentd` is an event-driven daemon that receives GitHub webhooks and triggers AI-assisted workflows:
+`agents` is an event-driven daemon that receives GitHub webhooks and triggers AI-assisted workflows:
 
 - Issue refinement for labeled issues (default: `ai:refine`)
 - PR specialist review for labeled pull requests (default: `ai:review`)
