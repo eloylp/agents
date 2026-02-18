@@ -191,7 +191,7 @@ go build -o agents ./cmd/agents
 
 ### Docker
 
-The project includes a multi-stage Dockerfile that produces a minimal (~9 MB) scratch-based image containing only the static binary and CA certificates.
+The project includes a multi-stage Dockerfile that produces a minimal image based on `node:22-alpine`, containing the static Go binary, the AI CLIs (Claude Code, Codex), GitHub CLI, and CA certificates. The container runs as a non-root `agents` user (required by Claude Code's `--dangerously-skip-permissions` flag, which refuses to run as root).
 
 ```bash
 # Build and start
@@ -210,6 +210,53 @@ docker compose down
 The compose file expects:
 - `config.yaml` in the project root (mounted read-only at `/etc/agents/config.yaml`)
 - `.env` in the project root with `GITHUB_WEBHOOK_SECRET` (and optionally `LOG_SALT`)
+
+#### Volume mounts
+
+The container needs access to host CLI configurations to authenticate with AI backends and GitHub:
+
+| Host path | Container path | Purpose |
+|---|---|---|
+| `~/.claude` | `/home/agents/.claude` | Claude Code session data, project settings |
+| `~/.claude.json` | `/home/agents/.claude.json` | Claude Code main config (auth, MCP servers) |
+| `~/.codex` | `/home/agents/.codex` | Codex configuration |
+| `~/.config/gh` | `/home/agents/.config/gh` (read-only) | GitHub CLI auth tokens |
+
+#### Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `HOME=/home/agents` | Ensures CLIs find their config under the non-root user's home |
+| `GITHUB_WEBHOOK_SECRET` | Webhook signature verification (loaded from `.env`) |
+| `GITHUB_PAT_TOKEN` | GitHub personal access token for Codex backend |
+
+#### MCP server configuration
+
+Claude Code stores MCP server configuration **per-project**, keyed by working directory path in `~/.claude.json`. Since the container's working directory is `/`, you must ensure `~/.claude.json` has a project entry for `/` with the MCP servers configured. For example:
+
+```json
+{
+  "projects": {
+    "/": {
+      "mcpServers": {
+        "github": {
+          "type": "http",
+          "url": "https://api.githubcopilot.com/mcp",
+          "headers": {
+            "Authorization": "Bearer <your-github-token>"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Without this entry, Claude Code inside the container will not find any MCP servers. You can verify with:
+
+```bash
+docker exec agents claude mcp list
+```
 
 ---
 
