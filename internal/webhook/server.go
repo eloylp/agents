@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
@@ -49,13 +50,13 @@ func NewServer(cfg *config.Config, handler workflowHandler, delivery *DeliverySt
 func (s *Server) Run(ctx context.Context) error {
 	s.startWorkers(ctx)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc(s.cfg.HTTP.StatusPath, s.handleStatus)
-	mux.HandleFunc(s.cfg.HTTP.WebhookPath, s.handleGitHubWebhook)
+	router := mux.NewRouter()
+	router.HandleFunc(s.cfg.HTTP.StatusPath, s.handleStatus).Methods(http.MethodGet)
+	router.HandleFunc(s.cfg.HTTP.WebhookPath, s.handleGitHubWebhook).Methods(http.MethodPost)
 
 	srv := &http.Server{
 		Addr:         s.cfg.HTTP.ListenAddr,
-		Handler:      mux,
+		Handler:      router,
 		ReadTimeout:  time.Duration(s.cfg.HTTP.ReadTimeoutSeconds) * time.Second,
 		WriteTimeout: time.Duration(s.cfg.HTTP.WriteTimeoutSeconds) * time.Second,
 		IdleTimeout:  time.Duration(s.cfg.HTTP.IdleTimeoutSeconds) * time.Second,
@@ -82,10 +83,6 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	deliveryID := strings.TrimSpace(r.Header.Get("X-GitHub-Delivery"))
 	if deliveryID == "" {
 		http.Error(w, "missing delivery id", http.StatusBadRequest)
