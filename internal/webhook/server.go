@@ -110,6 +110,7 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	case "pull_request":
 		s.handlePREvent(w, body)
 	default:
+		s.logger.Warn().Str("event", event).Str("delivery_id", deliveryID).Msg("unhandled webhook event type")
 		w.WriteHeader(http.StatusAccepted)
 	}
 }
