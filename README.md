@@ -111,16 +111,9 @@ gh auth login
 
 ### Setup Claude Code + GitHub MCP
 
-```bash
-# Install Claude Code
-npm install -g @anthropic-ai/claude-code
-
-# Add the GitHub MCP server
-claude mcp add github -- gh copilot mcp
-
-# Verify
-claude mcp list
-```
+Follow the official guides:
+- Claude Code setup: https://code.claude.com/docs/en/setup
+- GitHub MCP server for Claude: https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-claude.md
 
 ### Setup Codex + GitHub MCP
 
