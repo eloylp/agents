@@ -85,13 +85,15 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	cmd.Stderr = &stderr
 	cmd.Stdin = bytes.NewBufferString(prompt)
 
-	if err := cmd.Run(); err != nil {
-		logger.Error().Err(err).Str("stderr", truncateString(stderr.String(), 2000)).Msg(fmt.Sprintf("%s command failed", r.backendName))
-		return Response{}, fmt.Errorf("%s command failed: %w", r.backendName, err)
-	}
+	cmdErr := cmd.Run()
 
 	rawOut := stdout.String()
 	logger.Debug().Str("raw_stdout", truncateString(rawOut, 4000)).Msg(fmt.Sprintf("%s raw output", r.backendName))
+
+	if cmdErr != nil && stdout.Len() == 0 {
+		logger.Error().Err(cmdErr).Str("stderr", truncateString(stderr.String(), 2000)).Msg(fmt.Sprintf("%s command failed", r.backendName))
+		return Response{}, fmt.Errorf("%s command failed: %w", r.backendName, cmdErr)
+	}
 
 	var response Response
 	if stdout.Len() == 0 {
@@ -101,6 +103,9 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
 		logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msg(fmt.Sprintf("invalid %s response", r.backendName))
 		return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
+	}
+	if cmdErr != nil {
+		logger.Warn().Err(cmdErr).Str("stderr", truncateString(stderr.String(), 2000)).Msg(fmt.Sprintf("%s command exited non-zero but produced valid output", r.backendName))
 	}
 	logger.Info().Int("artifacts", len(response.Artifacts)).Msg(fmt.Sprintf("%s command completed", r.backendName))
 	return response, nil
