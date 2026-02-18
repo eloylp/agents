@@ -20,5 +20,6 @@ ENV HOME=/home/agents
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /agents /agents
+USER agents
 ENTRYPOINT ["/agents"]
 CMD ["-config", "/etc/agents/config.yaml"]
