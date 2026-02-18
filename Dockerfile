@@ -11,11 +11,13 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w
 
 FROM node:22-alpine
 
-RUN apk add --no-cache github-cli \
+RUN apk add --no-cache bash github-cli \
     && npm install -g @anthropic-ai/claude-code @openai/codex \
     && npm cache clean --force
 
-RUN adduser -D -h /home/agents agents
+SHELL ["/bin/bash", "-c"]
+
+RUN adduser -D -h /home/agents -s /bin/bash agents
 ENV HOME=/home/agents
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
