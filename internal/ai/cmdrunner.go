@@ -100,7 +100,12 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 		logger.Info().Msg(fmt.Sprintf("%s command returned no output", r.backendName))
 		return Response{}, nil
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+	jsonBytes, err := extractJSON(stdout.Bytes())
+	if err != nil {
+		logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msg(fmt.Sprintf("invalid %s response", r.backendName))
+		return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
+	}
+	if err := json.Unmarshal(jsonBytes, &response); err != nil {
 		logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msg(fmt.Sprintf("invalid %s response", r.backendName))
 		return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
 	}
@@ -167,6 +172,50 @@ func buildCommandEnv(req Request) []string {
 		fmt.Sprintf("AI_DAEMON_NUMBER=%d", req.Number),
 	)
 	return env
+}
+
+// extractJSON finds the last top-level JSON object in data.
+// AI CLIs sometimes emit conversational text before the JSON payload;
+// this function scans backwards to locate the closing '}' and then
+// walks back to find its matching '{', accounting for nested braces
+// and JSON strings.
+func extractJSON(data []byte) ([]byte, error) {
+	// Find last '}'.
+	end := -1
+	for i := len(data) - 1; i >= 0; i-- {
+		if data[i] == '}' {
+			end = i
+			break
+		}
+	}
+	if end < 0 {
+		return nil, fmt.Errorf("no JSON object found in output")
+	}
+
+	// Walk backwards from end to find the matching '{'.
+	depth := 0
+	inString := false
+	for i := end; i >= 0; i-- {
+		b := data[i]
+		if inString {
+			if b == '"' && (i == 0 || data[i-1] != '\\') {
+				inString = false
+			}
+			continue
+		}
+		switch b {
+		case '"':
+			inString = true
+		case '}':
+			depth++
+		case '{':
+			depth--
+			if depth == 0 {
+				return data[i : end+1], nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("no matching '{' found for JSON object in output")
 }
 
 func allowCommandEnvKey(key string) bool {

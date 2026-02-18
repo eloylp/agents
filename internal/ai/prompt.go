@@ -36,12 +36,15 @@ Use GitHub-flavored Markdown. Prefer checklists for acceptance criteria and task
 ### Output Plan
 Post the comment directly using GitHub MCP issue comment tools.
 
-### STDOUT JSON (mandatory)
-After posting all comments, you MUST print exactly one JSON object to stdout (no other text before or after it) with the artifacts you created:
+### STDOUT JSON (mandatory, strict)
+After posting all comments, you MUST print exactly one JSON object to stdout with the artifacts you created. This is a machine-to-machine contract — your stdout is parsed by software, not read by a human.
+
+CRITICAL RULES:
+- Do NOT print any text, explanation, or status messages to stdout.
+- Do NOT describe what you did before the JSON.
+- Your entire stdout must be ONLY the JSON object below, nothing else.
 
 {"summary":"<one-line summary>","artifacts":[{"type":"issue_comment","part_key":"issue/refine","github_id":"<comment_id>","url":"<comment_url>"}]}
-
-Do NOT output anything else to stdout. Only the JSON object above.
 `, repo, number)
 }
 
@@ -84,11 +87,14 @@ Agent guidance: %s
 ### Output Plan
 Post the PR review via GitHub MCP pull request review tools with inline comments where possible.
 
-### STDOUT JSON (mandatory)
-After posting the review, you MUST print exactly one JSON object to stdout (no other text before or after it) with the artifacts you created:
+### STDOUT JSON (mandatory, strict)
+After posting the review, you MUST print exactly one JSON object to stdout with the artifacts you created. This is a machine-to-machine contract — your stdout is parsed by software, not read by a human.
+
+CRITICAL RULES:
+- Do NOT print any text, explanation, or status messages to stdout.
+- Do NOT describe what you did before the JSON.
+- Your entire stdout must be ONLY the JSON object below, nothing else.
 
 {"summary":"<one-line summary>","artifacts":[{"type":"pr_review","part_key":"review/%s/%s","github_id":"<review_id>","url":"<review_url>"}]}
-
-Do NOT output anything else to stdout. Only the JSON object above.
 `, repo, number, heading, instruction, backend, agent)
 }
