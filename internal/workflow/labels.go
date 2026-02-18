@@ -26,6 +26,7 @@ func ParseRefineLabel(label string) (backend string, ok bool) {
 // ParseReviewLabel parses a PR review label.
 // Supported forms:
 //   - ai:review                    (all agents on default backend)
+//   - ai:review:<backend>          (all agents on specific backend)
 //   - ai:review:<backend>:<agent>  (specific agent on specific backend)
 //
 // Returns the selected backend (empty for default), agent name, and whether the label matched.
@@ -38,8 +39,18 @@ func ParseReviewLabel(label string) (backend, agent string, ok bool) {
 		return "", "", false
 	}
 	parts := strings.Split(normalized, ":")
-	if len(parts) != 4 || parts[2] == "" || parts[3] == "" {
+	switch len(parts) {
+	case 3:
+		if parts[2] == "" {
+			return "", "", false
+		}
+		return parts[2], "all", true
+	case 4:
+		if parts[2] == "" || parts[3] == "" {
+			return "", "", false
+		}
+		return parts[2], parts[3], true
+	default:
 		return "", "", false
 	}
-	return parts[2], parts[3], true
 }

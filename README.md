@@ -61,8 +61,9 @@ Produces **one structured comment** on the issue covering feasibility, complexit
 | Label | Behavior |
 |---|---|
 | `ai:review` | Review with the default backend, **all** specialist agents |
+| `ai:review:<backend>` | Review with a specific backend, **all** agents concurrently |
 | `ai:review:<backend>:<agent>` | Review with a specific backend and **single** agent |
-| `ai:review:<backend>:all` | Review with a specific backend, **all** agents concurrently |
+| `ai:review:<backend>:all` | Review with a specific backend, **all** agents concurrently (explicit) |
 
 Available agents:
 

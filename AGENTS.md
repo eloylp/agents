@@ -41,7 +41,7 @@ This file defines repo-specific guidance for future coding agents working in thi
   - `internal/ai/cmdrunner.go` expects parseable JSON when output is non-empty.
 - Preserve current label semantics:
   - issue: `ai:refine` and `ai:refine:<backend>`,
-  - PR: `ai:review`, `ai:review:<backend>:<agent>`, and `ai:review:<backend>:all`.
+  - PR: `ai:review`, `ai:review:<backend>`, `ai:review:<backend>:<agent>`, and `ai:review:<backend>:all`.
 
 ## Editing Checklist
 

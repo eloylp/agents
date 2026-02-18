@@ -37,9 +37,11 @@ func TestParseReviewLabel(t *testing.T) {
 		ok      bool
 	}{
 		{label: "ai:review", agent: "all", ok: true},
+		{label: "ai:review:claude", backend: "claude", agent: "all", ok: true},
 		{label: "ai:review:claude:security", backend: "claude", agent: "security", ok: true},
 		{label: "ai:review:claude:all", backend: "claude", agent: "all", ok: true},
 		{label: "ai:review:claude:", ok: false},
+		{label: "ai:review:", ok: false},
 		{label: "ai:refine", ok: false},
 		{label: "unrelated", ok: false},
 	}
