@@ -5,9 +5,11 @@ services:
       - "8080:8080"
     environment:
       - HOME=/home/agents
+      - GITHUB_PAT_TOKEN=${GITHUB_PAT_TOKEN}
     volumes:
       - ./config.yaml:/etc/agents/config.yaml:ro
       - ~/.claude:/home/agents/.claude
+      - ~/.claude.json:/home/agents/.claude.json
       - ~/.codex:/home/agents/.codex
       - ~/.config/gh:/home/agents/.config/gh:ro
     env_file:
