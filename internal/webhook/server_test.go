@@ -42,6 +42,7 @@ func (s *stubWorkflowHandler) HandlePullRequestLabelEvent(_ context.Context, req
 	return nil
 }
 
+// blockingWorkflowHandler pauses issue handling until releaseIssue is closed; used to ensure Run blocks for in-flight work.
 type blockingWorkflowHandler struct {
 	issueStarted chan struct{}
 	releaseIssue chan struct{}
