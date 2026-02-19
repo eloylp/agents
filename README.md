@@ -112,13 +112,13 @@ gh auth login
 ### Setup Claude Code + GitHub MCP
 
 Follow the official guides:
-- Claude Code setup: https://code.claude.com/docs/en/setup
-- GitHub MCP server for Claude: https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-claude.md
+- [Claude Code setup](https://code.claude.com/docs/en/setup)
+- [GitHub MCP server for Claude](https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-claude.md)
 
 ### Setup Codex + GitHub MCP
 
 Follow the official guide:
-https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-codex.md
+[GitHub MCP server for Codex](https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-codex.md)
 
 ---
 
