@@ -32,6 +32,7 @@ type Server struct {
 	logger   zerolog.Logger
 
 	workersOnce sync.Once
+	wg          sync.WaitGroup
 	issueQueue  chan workflow.IssueRequest
 	prQueue     chan workflow.PRRequest
 }
@@ -74,7 +75,9 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
-	return <-errCh
+	err := <-errCh
+	s.wg.Wait()
+	return err
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
@@ -197,7 +200,9 @@ func verifySignature(payload []byte, secret, signature string) bool {
 
 func (s *Server) startWorkers(ctx context.Context) {
 	s.workersOnce.Do(func() {
+		s.wg.Add(2)
 		go func() {
+			defer s.wg.Done()
 			for {
 				select {
 				case <-ctx.Done():
@@ -211,6 +216,7 @@ func (s *Server) startWorkers(ctx context.Context) {
 			}
 		}()
 		go func() {
+			defer s.wg.Done()
 			for {
 				select {
 				case <-ctx.Done():

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,6 +39,22 @@ func (s *stubWorkflowHandler) HandlePullRequestLabelEvent(_ context.Context, req
 	s.prCalls++
 	s.prLabel = req.Label
 	s.prAction = req.Action
+	return nil
+}
+
+type blockingWorkflowHandler struct {
+	issueStarted chan struct{}
+	releaseIssue chan struct{}
+	issueOnce    sync.Once
+}
+
+func (b *blockingWorkflowHandler) HandleIssueLabelEvent(_ context.Context, _ workflow.IssueRequest) error {
+	b.issueOnce.Do(func() { close(b.issueStarted) })
+	<-b.releaseIssue
+	return nil
+}
+
+func (b *blockingWorkflowHandler) HandlePullRequestLabelEvent(_ context.Context, _ workflow.PRRequest) error {
 	return nil
 }
 
@@ -158,6 +175,62 @@ func TestVerifySignature(t *testing.T) {
 	}
 	if verifySignature(body, secret, "sha256=deadbeef") {
 		t.Fatalf("expected invalid signature to fail")
+	}
+}
+
+func TestRunWaitsForWorkersOnShutdown(t *testing.T) {
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{
+			ListenAddr:         "127.0.0.1:0",
+			StatusPath:         "/status",
+			WebhookPath:        "/webhooks/github",
+			ReadTimeoutSeconds: 1, WriteTimeoutSeconds: 1, IdleTimeoutSeconds: 1,
+			MaxBodyBytes:       1024,
+			DeliveryTTLSeconds: 1,
+			IssueQueueBuffer:   1,
+			PRQueueBuffer:      1,
+		},
+		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
+	}
+	handler := &blockingWorkflowHandler{
+		issueStarted: make(chan struct{}),
+		releaseIssue: make(chan struct{}),
+	}
+	server := NewServer(cfg, handler, NewDeliveryStore(time.Second), zerolog.Nop())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runCh := make(chan error, 1)
+	go func() {
+		runCh <- server.Run(ctx)
+	}()
+
+	server.issueQueue <- workflow.IssueRequest{Repo: cfg.Repos[0], Issue: workflow.Issue{Number: 1}, Action: "labeled", Label: "ai:refine"}
+
+	select {
+	case <-handler.issueStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("issue handler did not start")
+	}
+
+	cancel()
+
+	select {
+	case err := <-runCh:
+		t.Fatalf("server run returned before handler finished: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(handler.releaseIssue)
+
+	select {
+	case err := <-runCh:
+		if err != nil {
+			t.Fatalf("server run returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("server run did not finish after handler completed")
 	}
 }
 
