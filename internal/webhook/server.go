@@ -20,6 +20,8 @@ import (
 	"github.com/eloylp/agents/internal/workflow"
 )
 
+const workerShutdownTimeout = 30 * time.Second
+
 type workflowHandler interface {
 	HandleIssueLabelEvent(context.Context, workflow.IssueRequest) error
 	HandlePullRequestLabelEvent(context.Context, workflow.PRRequest) error
@@ -76,7 +78,18 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 	err := <-errCh
-	s.wg.Wait()
+	waitCh := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(waitCh)
+	}()
+	s.logger.Info().Msg("waiting for background workers to finish")
+	select {
+	case <-waitCh:
+		s.logger.Info().Msg("background workers finished, shutdown complete")
+	case <-time.After(workerShutdownTimeout):
+		s.logger.Warn().Dur("timeout", workerShutdownTimeout).Msg("background workers did not finish before shutdown timeout")
+	}
 	return err
 }
 
@@ -233,10 +246,12 @@ func (s *Server) startWorkers(ctx context.Context) {
 }
 
 func (s *Server) drainIssueQueue() {
+	ctx, cancel := context.WithTimeout(context.Background(), workerShutdownTimeout)
+	defer cancel()
 	for {
 		select {
 		case req := <-s.issueQueue:
-			if err := s.handler.HandleIssueLabelEvent(context.Background(), req); err != nil {
+			if err := s.handler.HandleIssueLabelEvent(ctx, req); err != nil {
 				s.logger.Error().Err(err).Str("repo", req.Repo.FullName).Int("issue_number", req.Issue.Number).Msg("failed to process issue webhook during shutdown drain")
 			}
 		default:
@@ -246,10 +261,12 @@ func (s *Server) drainIssueQueue() {
 }
 
 func (s *Server) drainPRQueue() {
+	ctx, cancel := context.WithTimeout(context.Background(), workerShutdownTimeout)
+	defer cancel()
 	for {
 		select {
 		case req := <-s.prQueue:
-			if err := s.handler.HandlePullRequestLabelEvent(context.Background(), req); err != nil {
+			if err := s.handler.HandlePullRequestLabelEvent(ctx, req); err != nil {
 				s.logger.Error().Err(err).Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Msg("failed to process pr webhook during shutdown drain")
 			}
 		default:
