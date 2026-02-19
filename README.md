@@ -90,6 +90,23 @@ ai:<workflow>:<backend>:<agent>
 - Only labels prefixed with `ai:` are considered; all others are silently ignored.
 - The trigger label comes from the **webhook event payload** (`payload.label.name`), not the issue's current label list.
 
+### Applying review fixes — branch ownership
+
+When an AI backend creates a PR (e.g. Codex opens a branch from an issue), **that same backend must apply any subsequent fixes** to the branch. This is because the backend that created the branch owns the local working context — a different backend cannot safely commit to it.
+
+After a specialist review surfaces actionable feedback, **@mention the original backend** in the review comments you want addressed:
+
+- If **Codex** opened the PR → mention `@codex` in the review comment.
+- If **Claude** opened the PR → mention `@claude` in the review comment.
+
+This ensures the correct backend picks up the fix request and commits the amendments to its own branch.
+
+> **Example flow:**
+> 1. Codex opens a PR with the implementation.
+> 2. Label the PR with `ai:review:claude` → Claude reviews the PR.
+> 3. Claude leaves review comments with suggested fixes.
+> 4. Reply to the relevant review comments mentioning `@codex` → Codex applies the fixes to its branch.
+
 ---
 
 ## Requirements
