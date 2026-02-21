@@ -1,6 +1,8 @@
 package logging
 
 import (
+	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -21,9 +23,25 @@ func NewLogger(cfg config.LogConfig) zerolog.Logger {
 		}
 	}
 	zerolog.SetGlobalLevel(level)
-	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+
+	var formatErr error
+	var writer io.Writer
+	switch strings.ToLower(strings.TrimSpace(cfg.Format)) {
+	case "json":
+		writer = os.Stdout
+	case "text", "":
+		writer = zerolog.ConsoleWriter{Out: os.Stdout}
+	default:
+		writer = zerolog.ConsoleWriter{Out: os.Stdout}
+		formatErr = fmt.Errorf("unknown log format %q", cfg.Format)
+	}
+
+	logger := zerolog.New(writer).With().Timestamp().Logger()
 	if levelErr != nil {
 		logger.Warn().Str("configured_level", cfg.Level).Err(levelErr).Msg("invalid log level, defaulting to info")
+	}
+	if formatErr != nil {
+		logger.Warn().Str("configured_format", cfg.Format).Err(formatErr).Msg("unknown log format, defaulting to text")
 	}
 	return logger
 }

@@ -1,5 +1,6 @@
 log:
   level: info
+  format: text
 
 http:
   listen_addr: ":8080"
