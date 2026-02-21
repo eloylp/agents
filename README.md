@@ -150,6 +150,7 @@ Copy `config.example.yaml` to `config.yaml` and adapt it to your environment:
 ```yaml
 log:
   level: info           # debug | info | warn | error
+  format: text          # text (human-readable, default) | json (raw JSON lines)
 
 http:
   listen_addr: ":8080"
@@ -277,6 +278,21 @@ docker exec agents claude mcp list
 
 ---
 
+## GitHub webhook setup
+
+Once the daemon is running and reachable, register the webhook in each repository you want to monitor:
+
+1. Go to **Settings → Webhooks → Add webhook** in your GitHub repository.
+2. Set **Payload URL** to `https://<your-host>/webhooks/github`.
+3. Set **Content type** to `application/json`.
+4. Set **Secret** to the same value as `GITHUB_WEBHOOK_SECRET`.
+5. Under **Which events?**, choose **Let me select individual events** and enable:
+   - **Issues**
+   - **Pull requests**
+6. Make sure **Active** is checked, then click **Add webhook**.
+
+GitHub will send a ping event immediately — the daemon will receive it and log the delivery ID.
+
 ## Webhook endpoints
 
 | Method | Path | Description |
@@ -322,13 +338,18 @@ The daemon uses this metadata for observability, logging, and run summaries.
 
 ## Logging
 
-Structured JSON logs with correlation fields:
+Two formats are available via `log.format` in `config.yaml`:
+
+- **`text`** (default) — coloured, human-readable output, good for terminals and development.
+- **`json`** — raw JSON lines, good for log aggregation pipelines (Loki, Datadog, etc.).
+
+Every log entry includes `repo`, `issue_number` or `pr_number`, and `component` for easy filtering and tracing.
+
+Example JSON entry:
 
 ```json
 {"level":"info","component":"workflow_engine","repo":"owner/repo","issue_number":42,"backend":"claude","message":"invoking ai backend for issue refinement"}
 ```
-
-Every log entry includes `repo`, `issue_number` or `pr_number`, and `component` for easy filtering and tracing.
 
 ---
 
