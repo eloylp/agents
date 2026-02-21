@@ -115,8 +115,11 @@ func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest)
 		Str("repo", req.Repo.FullName).
 		Int("pr_number", req.PR.Number).
 		Logger()
+	// Errors are collected into agentErrs rather than returned via errgroup so
+	// that a failing agent does not cancel the context and abort the others.
+	// All errors are joined and returned once every goroutine has finished.
 	var (
-		mu      sync.Mutex
+		mu        sync.Mutex
 		agentErrs []error
 	)
 	group, groupCtx := errgroup.WithContext(ctx)
@@ -146,6 +149,10 @@ func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest)
 	return errors.Join(agentErrs...)
 }
 
+// resolveBackend maps a label backend token to a configured backend name.
+// An empty token falls back to the default configured backend. An explicit
+// token that does not match any configured backend returns "" so the caller
+// can skip the event rather than fail.
 func (e *Engine) resolveBackend(backend string) string {
 	if strings.TrimSpace(backend) == "" {
 		defaultBackend := e.cfg.DefaultConfiguredBackend()

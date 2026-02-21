@@ -24,6 +24,9 @@ func NewDataChannels(issueBuffer, prBuffer int) *DataChannels {
 	}
 }
 
+// PushIssue enqueues a request without blocking. The select has three arms:
+// context cancellation (caller is shutting down), successful enqueue, and the
+// default case which fires immediately when the channel buffer is full.
 func (dc *DataChannels) PushIssue(ctx context.Context, req IssueRequest) error {
 	select {
 	case <-ctx.Done():
@@ -54,6 +57,8 @@ func (dc *DataChannels) PRChan() <-chan PRRequest {
 	return dc.prQueue
 }
 
+// Close shuts down both queues. sync.Once prevents a double-close panic if
+// Stop is called concurrently or more than once.
 func (dc *DataChannels) Close() {
 	dc.closeOnce.Do(func() {
 		close(dc.issueQueue)

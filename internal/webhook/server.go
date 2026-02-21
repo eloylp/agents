@@ -48,6 +48,9 @@ func (s *Server) Run(ctx context.Context) error {
 		IdleTimeout:  time.Duration(s.cfg.HTTP.IdleTimeoutSeconds) * time.Second,
 	}
 
+	// A background goroutine watches for ctx cancellation and triggers HTTP
+	// graceful shutdown. ListenAndServe returns ErrServerClosed once Shutdown
+	// completes, at which point we return the Shutdown error from errCh.
 	errCh := make(chan error, 1)
 	go func() {
 		<-ctx.Done()
@@ -74,6 +77,10 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing delivery id", http.StatusBadRequest)
 		return
 	}
+	// Delivery dedup is checked before signature verification to avoid
+	// computing the HMAC for replayed deliveries. GitHub retries failed
+	// deliveries with the same X-GitHub-Delivery ID, so 202 is returned to
+	// suppress retries without reprocessing.
 	if s.delivery.SeenOrAdd(deliveryID, time.Now()) {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -188,6 +195,9 @@ func isAILabel(label string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(label)), "ai:")
 }
 
+// verifySignature checks the HMAC-SHA256 signature from X-Hub-Signature-256.
+// hmac.Equal is used for the final comparison to avoid timing attacks that
+// could leak information about the expected value through execution time.
 func verifySignature(payload []byte, secret, signature string) bool {
 	signature = strings.TrimPrefix(strings.TrimSpace(signature), "sha256=")
 	if signature == "" || secret == "" {

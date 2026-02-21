@@ -63,6 +63,8 @@ func run() error {
 	}
 	logger.Info().Msg("shutdown signal received")
 
+	// A fresh context is required here because the run ctx is already cancelled.
+	// The shutdown deadline is used to drain the processor queues.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.HTTP.ShutdownTimeoutSeconds)*time.Second)
 	defer cancel()
 

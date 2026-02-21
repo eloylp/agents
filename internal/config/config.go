@@ -97,6 +97,9 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// applyDefaults fills in zero-value fields and normalises backend and agent
+// names to lowercase so that label parsing can use simple string comparisons
+// without re-normalising on every lookup.
 func (c *Config) applyDefaults() {
 	if strings.TrimSpace(c.HTTP.ListenAddr) == "" {
 		c.HTTP.ListenAddr = defaultHTTPListenAddr
@@ -187,6 +190,9 @@ func (c *Config) RepoByName(fullName string) (RepoConfig, bool) {
 	return RepoConfig{}, false
 }
 
+// DefaultConfiguredBackend returns the name of the preferred backend when no
+// explicit backend is specified in a label. claude is preferred over codex
+// when both are configured.
 func (c *Config) DefaultConfiguredBackend() string {
 	if _, ok := c.AIBackends["claude"]; ok {
 		return "claude"

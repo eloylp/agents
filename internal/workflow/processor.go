@@ -42,6 +42,10 @@ func (p *Processor) Start(ctx context.Context) *DataChannels {
 	return p.channels
 }
 
+// Stop signals workers to drain and waits for them to finish.
+// The provided ctx is stored as the drain context before the channels are
+// closed, so items already in the queues are processed under the shutdown
+// deadline rather than the already-cancelled run context.
 func (p *Processor) Stop(ctx context.Context) {
 	p.stopOnce.Do(func() {
 		p.logger.Info().Msg("stopping workflow processor")
@@ -80,6 +84,12 @@ func (p *Processor) runPRWorker(ctx context.Context) {
 	p.logger.Info().Msg("pr queue drained")
 }
 
+// processingCtx returns the appropriate context for a queued item.
+// During normal operation the run context is returned as-is. Once shutdown
+// begins the run context is already cancelled, so we fall back to the drain
+// context (set by Stop) which carries the shutdown deadline. This lets
+// workers finish in-flight items without being aborted the moment the
+// shutdown signal arrives.
 func (p *Processor) processingCtx(ctx context.Context) context.Context {
 	if ctx.Err() == nil {
 		return ctx

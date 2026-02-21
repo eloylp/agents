@@ -90,6 +90,10 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	rawOut := stdout.String()
 	logger.Debug().Str("raw_stdout", truncateString(rawOut, 4000)).Msg(fmt.Sprintf("%s raw output", r.backendName))
 
+	// If the command exited non-zero but produced no stdout, treat it as a
+	// hard failure. If stdout has data we still attempt JSON parsing because
+	// some AI CLIs emit non-zero exit codes even on a successful run (e.g.
+	// after posting a GitHub comment via MCP tools).
 	if cmdErr != nil && stdout.Len() == 0 {
 		logger.Error().Err(cmdErr).Str("stderr", truncateString(stderr.String(), 2000)).Msg(fmt.Sprintf("%s command failed", r.backendName))
 		return Response{}, fmt.Errorf("%s command failed: %w", r.backendName, cmdErr)
@@ -121,6 +125,9 @@ type promptMeta struct {
 	Length int
 }
 
+// promptMeta returns a salted SHA-256 hash of the prompt for log attribution.
+// The salt is prepended so that the hash cannot be reversed to recover the
+// prompt even if the hash output is observed.
 func (r *CommandRunner) promptMeta(prompt string) promptMeta {
 	hasher := sha256.New()
 	if len(r.redactionSalt) > 0 {
@@ -155,6 +162,9 @@ func truncateString(value string, maxChars int) string {
 	return string(runes[:maxChars])
 }
 
+// buildCommandEnv constructs the subprocess environment from an allowlist of
+// the host environment plus workflow-specific AI_DAEMON_* variables. The
+// allowlist prevents leaking unintended host secrets to the AI backend process.
 func buildCommandEnv(req Request) []string {
 	env := make([]string, 0, 32)
 	for _, entry := range os.Environ() {
@@ -218,6 +228,9 @@ func extractJSON(data []byte) ([]byte, error) {
 	return nil, fmt.Errorf("no matching '{' found for JSON object in output")
 }
 
+// allowCommandEnvKey reports whether key is safe to forward to the AI backend
+// subprocess. Only variables required for tool operation (auth tokens, paths,
+// locale) are permitted; everything else is excluded.
 func allowCommandEnvKey(key string) bool {
 	switch key {
 	case "PATH", "HOME", "USER", "SHELL", "TMPDIR", "TMP", "TEMP", "LANG", "TERM", "NO_COLOR", "COLORTERM", "EDITOR", "VISUAL", "PAGER", "SSH_AUTH_SOCK", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "GH_TOKEN", "GH_HOST", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "GITHUB_API_URL":

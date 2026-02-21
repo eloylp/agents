@@ -18,6 +18,9 @@ func NewDeliveryStore(ttl time.Duration) *DeliveryStore {
 	}
 }
 
+// SeenOrAdd returns true if id has been seen within the TTL window, otherwise
+// it records id and returns false. Expired entries are lazily evicted on each
+// call to avoid a separate background goroutine.
 func (s *DeliveryStore) SeenOrAdd(id string, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
