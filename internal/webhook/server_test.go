@@ -18,29 +18,6 @@ import (
 	"github.com/eloylp/agents/internal/workflow"
 )
 
-type stubWorkflowHandler struct {
-	issueCalls  int
-	prCalls     int
-	issueLabel  string
-	prLabel     string
-	issueAction string
-	prAction    string
-}
-
-func (s *stubWorkflowHandler) HandleIssueLabelEvent(_ context.Context, req workflow.IssueRequest) error {
-	s.issueCalls++
-	s.issueLabel = req.Label
-	s.issueAction = req.Action
-	return nil
-}
-
-func (s *stubWorkflowHandler) HandlePullRequestLabelEvent(_ context.Context, req workflow.PRRequest) error {
-	s.prCalls++
-	s.prLabel = req.Label
-	s.prAction = req.Action
-	return nil
-}
-
 func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
 	cfg := &config.Config{
 		HTTP: config.HTTPConfig{
@@ -52,9 +29,8 @@ func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
 		},
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
-	handler := &stubWorkflowHandler{}
-	server := NewServer(cfg, handler, NewDeliveryStore(time.Hour), zerolog.Nop())
-	server.startWorkers(context.Background())
+	dataChannels := workflow.NewDataChannels(1, 1)
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, zerolog.Nop())
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":1,"title":"t","body":"b","updated_at":"2026-02-15T00:00:00Z","labels":[{"name":"ai:refine"}]}}`
 	sig := signatureForTests([]byte(body), "secret")
@@ -68,7 +44,14 @@ func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("expected status %d, got %d", http.StatusAccepted, rr.Code)
 	}
-	waitFor(t, func() bool { return handler.issueCalls == 1 })
+	select {
+	case msg := <-dataChannels.IssueChan():
+		if msg.Label != "ai:refine" {
+			t.Fatalf("expected ai:refine label enqueued, got %q", msg.Label)
+		}
+	default:
+		t.Fatalf("expected issue message enqueued")
+	}
 
 	req2 := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
 	req2.Header.Set("X-GitHub-Event", "issues")
@@ -79,8 +62,10 @@ func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
 	if rr2.Code != http.StatusAccepted {
 		t.Fatalf("expected duplicate status %d, got %d", http.StatusAccepted, rr2.Code)
 	}
-	if handler.issueCalls != 1 {
-		t.Fatalf("expected deduplicated issue calls to stay at 1, got %d", handler.issueCalls)
+	select {
+	case <-dataChannels.IssueChan():
+		t.Fatalf("expected duplicate delivery to be ignored")
+	default:
 	}
 }
 
@@ -95,9 +80,8 @@ func TestHandleWebhookIgnoresNonAILabel(t *testing.T) {
 		},
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
-	handler := &stubWorkflowHandler{}
-	server := NewServer(cfg, handler, NewDeliveryStore(time.Hour), zerolog.Nop())
-	server.startWorkers(context.Background())
+	dataChannels := workflow.NewDataChannels(1, 1)
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, zerolog.Nop())
 
 	body := `{"action":"labeled","label":{"name":"bug"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":2,"title":"t","body":"b","updated_at":"2026-02-15T00:00:00Z","labels":[{"name":"bug"}],"head":{"sha":"abc"}}}`
 	sig := signatureForTests([]byte(body), "secret")
@@ -111,8 +95,10 @@ func TestHandleWebhookIgnoresNonAILabel(t *testing.T) {
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("expected status %d, got %d", http.StatusAccepted, rr.Code)
 	}
-	if handler.prCalls != 0 {
-		t.Fatalf("expected no pr calls, got %d", handler.prCalls)
+	select {
+	case <-dataChannels.PRChan():
+		t.Fatalf("expected no pr messages enqueued")
+	default:
 	}
 }
 
@@ -127,9 +113,8 @@ func TestHandleIssueWebhookUsesEventLabelAsTrigger(t *testing.T) {
 		},
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
-	handler := &stubWorkflowHandler{}
-	server := NewServer(cfg, handler, NewDeliveryStore(time.Hour), zerolog.Nop())
-	server.startWorkers(context.Background())
+	dataChannels := workflow.NewDataChannels(1, 1)
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, zerolog.Nop())
 
 	body := `{"action":"labeled","label":{"name":"ai:refine:codex"},"repository":{"full_name":"owner/repo"},"issue":{"number":3,"title":"t","body":"b","updated_at":"2026-02-15T00:00:00Z","labels":[{"name":"ai:refine:claude"}]}}`
 	sig := signatureForTests([]byte(body), "secret")
@@ -143,9 +128,44 @@ func TestHandleIssueWebhookUsesEventLabelAsTrigger(t *testing.T) {
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("expected status %d, got %d", http.StatusAccepted, rr.Code)
 	}
-	waitFor(t, func() bool { return handler.issueCalls == 1 })
-	if handler.issueLabel != "ai:refine:codex" || handler.issueAction != "labeled" {
-		t.Fatalf("expected event label/action to be forwarded, got label=%q action=%q", handler.issueLabel, handler.issueAction)
+	select {
+	case msg := <-dataChannels.IssueChan():
+		if msg.Label != "ai:refine:codex" || msg.Action != "labeled" {
+			t.Fatalf("expected event label/action to be forwarded, got label=%q action=%q", msg.Label, msg.Action)
+		}
+	default:
+		t.Fatalf("expected issue message enqueued")
+	}
+}
+
+func TestHandleIssueWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) {
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{
+			MaxBodyBytes:       1024,
+			WebhookSecret:      "secret",
+			DeliveryTTLSeconds: 3600,
+			IssueQueueBuffer:   1,
+			PRQueueBuffer:      1,
+		},
+		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
+	}
+	dataChannels := workflow.NewDataChannels(1, 1)
+	if err := dataChannels.PushIssue(context.Background(), workflow.IssueRequest{Repo: cfg.Repos[0], Issue: workflow.Issue{Number: 99}, Action: "labeled", Label: "ai:refine"}); err != nil {
+		t.Fatalf("preload issue queue: %v", err)
+	}
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, zerolog.Nop())
+
+	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":2}}`
+	sig := signatureForTests([]byte(body), "secret")
+
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "issues")
+	req.Header.Set("X-GitHub-Delivery", "delivery-queue-full")
+	req.Header.Set("X-Hub-Signature-256", sig)
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, req)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rr.Code)
 	}
 }
 
@@ -159,18 +179,6 @@ func TestVerifySignature(t *testing.T) {
 	if verifySignature(body, secret, "sha256=deadbeef") {
 		t.Fatalf("expected invalid signature to fail")
 	}
-}
-
-func waitFor(t *testing.T, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("condition not met before timeout")
 }
 
 func signatureForTests(payload []byte, secret string) string {

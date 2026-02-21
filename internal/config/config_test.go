@@ -60,6 +60,9 @@ repos:
 	if cfg.HTTP.PRQueueBuffer != defaultPRQueueBufferSize {
 		t.Fatalf("expected pr queue buffer default %d, got %d", defaultPRQueueBufferSize, cfg.HTTP.PRQueueBuffer)
 	}
+	if cfg.HTTP.ShutdownTimeoutSeconds != defaultHTTPShutdownSeconds {
+		t.Fatalf("expected shutdown timeout default %d, got %d", defaultHTTPShutdownSeconds, cfg.HTTP.ShutdownTimeoutSeconds)
+	}
 }
 
 func TestDefaultConfiguredBackend(t *testing.T) {

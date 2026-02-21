@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -20,36 +19,23 @@ import (
 	"github.com/eloylp/agents/internal/workflow"
 )
 
-type workflowHandler interface {
-	HandleIssueLabelEvent(context.Context, workflow.IssueRequest) error
-	HandlePullRequestLabelEvent(context.Context, workflow.PRRequest) error
-}
-
 type Server struct {
 	cfg      *config.Config
-	handler  workflowHandler
 	delivery *DeliveryStore
 	logger   zerolog.Logger
-
-	workersOnce sync.Once
-	issueQueue  chan workflow.IssueRequest
-	prQueue     chan workflow.PRRequest
+	channels *workflow.DataChannels
 }
 
-func NewServer(cfg *config.Config, handler workflowHandler, delivery *DeliveryStore, logger zerolog.Logger) *Server {
+func NewServer(cfg *config.Config, delivery *DeliveryStore, channels *workflow.DataChannels, logger zerolog.Logger) *Server {
 	return &Server{
-		cfg:        cfg,
-		handler:    handler,
-		delivery:   delivery,
-		logger:     logger.With().Str("component", "webhook_server").Logger(),
-		issueQueue: make(chan workflow.IssueRequest, cfg.HTTP.IssueQueueBuffer),
-		prQueue:    make(chan workflow.PRRequest, cfg.HTTP.PRQueueBuffer),
+		cfg:      cfg,
+		delivery: delivery,
+		logger:   logger.With().Str("component", "webhook_server").Logger(),
+		channels: channels,
 	}
 }
 
 func (s *Server) Run(ctx context.Context) error {
-	s.startWorkers(ctx)
-
 	router := mux.NewRouter()
 	router.HandleFunc(s.cfg.HTTP.StatusPath, s.handleStatus).Methods(http.MethodGet)
 	router.HandleFunc(s.cfg.HTTP.WebhookPath, s.handleGitHubWebhook).Methods(http.MethodPost)
@@ -106,9 +92,9 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	event := strings.TrimSpace(r.Header.Get("X-GitHub-Event"))
 	switch event {
 	case "issues":
-		s.handleIssueEvent(w, body)
+		s.handleIssueEvent(r.Context(), w, body)
 	case "pull_request":
-		s.handlePREvent(w, body)
+		s.handlePREvent(r.Context(), w, body)
 	default:
 		s.logger.Warn().Str("event", event).Str("delivery_id", deliveryID).Msg("unhandled webhook event type")
 		w.WriteHeader(http.StatusAccepted)
@@ -126,7 +112,7 @@ type issueWebhookPayload struct {
 	Issue      workflow.Issue    `json:"issue"`
 }
 
-func (s *Server) handleIssueEvent(w http.ResponseWriter, body []byte) {
+func (s *Server) handleIssueEvent(ctx context.Context, w http.ResponseWriter, body []byte) {
 	var payload issueWebhookPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
@@ -145,7 +131,16 @@ func (s *Server) handleIssueEvent(w http.ResponseWriter, body []byte) {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	s.issueQueue <- workflow.IssueRequest{Repo: repo, Issue: payload.Issue, Action: payload.Action, Label: payload.Label.Name}
+	req := workflow.IssueRequest{Repo: repo, Issue: payload.Issue, Action: payload.Action, Label: payload.Label.Name}
+	if err := s.channels.PushIssue(ctx, req); err != nil {
+		if errors.Is(err, workflow.ErrIssueQueueFull) {
+			s.logger.Warn().Str("repo", repo.FullName).Msg("issue queue full, dropping webhook")
+			http.Error(w, "issue queue full, retry later", http.StatusServiceUnavailable)
+			return
+		}
+		http.Error(w, "request cancelled", http.StatusRequestTimeout)
+		return
+	}
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -156,7 +151,7 @@ type prWebhookPayload struct {
 	PullRequest workflow.PullRequest `json:"pull_request"`
 }
 
-func (s *Server) handlePREvent(w http.ResponseWriter, body []byte) {
+func (s *Server) handlePREvent(ctx context.Context, w http.ResponseWriter, body []byte) {
 	var payload prWebhookPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
@@ -171,7 +166,16 @@ func (s *Server) handlePREvent(w http.ResponseWriter, body []byte) {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	s.prQueue <- workflow.PRRequest{Repo: repo, PR: payload.PullRequest, Action: payload.Action, Label: payload.Label.Name}
+	req := workflow.PRRequest{Repo: repo, PR: payload.PullRequest, Action: payload.Action, Label: payload.Label.Name}
+	if err := s.channels.PushPR(ctx, req); err != nil {
+		if errors.Is(err, workflow.ErrPRQueueFull) {
+			s.logger.Warn().Str("repo", repo.FullName).Msg("pr queue full, dropping webhook")
+			http.Error(w, "pr queue full, retry later", http.StatusServiceUnavailable)
+			return
+		}
+		http.Error(w, "request cancelled", http.StatusRequestTimeout)
+		return
+	}
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -193,61 +197,4 @@ func verifySignature(payload []byte, secret, signature string) bool {
 	_, _ = mac.Write(payload)
 	expected := hex.EncodeToString(mac.Sum(nil))
 	return hmac.Equal([]byte(expected), []byte(signature))
-}
-
-func (s *Server) startWorkers(ctx context.Context) {
-	s.workersOnce.Do(func() {
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					s.drainIssueQueue()
-					return
-				case req := <-s.issueQueue:
-					if err := s.handler.HandleIssueLabelEvent(ctx, req); err != nil {
-						s.logger.Error().Err(err).Str("repo", req.Repo.FullName).Int("issue_number", req.Issue.Number).Msg("failed to process issue webhook")
-					}
-				}
-			}
-		}()
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					s.drainPRQueue()
-					return
-				case req := <-s.prQueue:
-					if err := s.handler.HandlePullRequestLabelEvent(ctx, req); err != nil {
-						s.logger.Error().Err(err).Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Msg("failed to process pr webhook")
-					}
-				}
-			}
-		}()
-	})
-}
-
-func (s *Server) drainIssueQueue() {
-	for {
-		select {
-		case req := <-s.issueQueue:
-			if err := s.handler.HandleIssueLabelEvent(context.Background(), req); err != nil {
-				s.logger.Error().Err(err).Str("repo", req.Repo.FullName).Int("issue_number", req.Issue.Number).Msg("failed to process issue webhook during shutdown drain")
-			}
-		default:
-			return
-		}
-	}
-}
-
-func (s *Server) drainPRQueue() {
-	for {
-		select {
-		case req := <-s.prQueue:
-			if err := s.handler.HandlePullRequestLabelEvent(context.Background(), req); err != nil {
-				s.logger.Error().Err(err).Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Msg("failed to process pr webhook during shutdown drain")
-			}
-		default:
-			return
-		}
-	}
 }

@@ -13,6 +13,7 @@ http:
   delivery_ttl_seconds: 3600
   issue_queue_buffer: 256
   pr_queue_buffer: 256
+  shutdown_timeout_seconds: 15
 
 ai_backends:
   claude:
