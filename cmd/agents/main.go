@@ -49,7 +49,7 @@ func run() error {
 	}
 	engine := workflow.NewEngine(cfg, runners, logger)
 
-	dataChannels := workflow.NewDataChannels(cfg.HTTP.IssueQueueBuffer, cfg.HTTP.PRQueueBuffer)
+	dataChannels := workflow.NewDataChannels(cfg.Processor.IssueQueueBuffer, cfg.Processor.PRQueueBuffer)
 
 	var wg sync.WaitGroup
 	processor := workflow.NewProcessor(dataChannels, engine, &wg, logger)

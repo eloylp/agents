@@ -11,9 +11,11 @@ http:
   max_body_bytes: 1048576
   webhook_secret_env: GITHUB_WEBHOOK_SECRET
   delivery_ttl_seconds: 3600
+  shutdown_timeout_seconds: 15
+
+processor:
   issue_queue_buffer: 256
   pr_queue_buffer: 256
-  shutdown_timeout_seconds: 15
 
 ai_backends:
   claude:

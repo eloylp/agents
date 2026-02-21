@@ -54,11 +54,11 @@ repos:
 	if len(backend.Agents) == 0 {
 		t.Fatalf("expected default specialist agents")
 	}
-	if cfg.HTTP.IssueQueueBuffer != defaultIssueQueueBufferSize {
-		t.Fatalf("expected issue queue buffer default %d, got %d", defaultIssueQueueBufferSize, cfg.HTTP.IssueQueueBuffer)
+	if cfg.Processor.IssueQueueBuffer != defaultIssueQueueBufferSize {
+		t.Fatalf("expected issue queue buffer default %d, got %d", defaultIssueQueueBufferSize, cfg.Processor.IssueQueueBuffer)
 	}
-	if cfg.HTTP.PRQueueBuffer != defaultPRQueueBufferSize {
-		t.Fatalf("expected pr queue buffer default %d, got %d", defaultPRQueueBufferSize, cfg.HTTP.PRQueueBuffer)
+	if cfg.Processor.PRQueueBuffer != defaultPRQueueBufferSize {
+		t.Fatalf("expected pr queue buffer default %d, got %d", defaultPRQueueBufferSize, cfg.Processor.PRQueueBuffer)
 	}
 	if cfg.HTTP.ShutdownTimeoutSeconds != defaultHTTPShutdownSeconds {
 		t.Fatalf("expected shutdown timeout default %d, got %d", defaultHTTPShutdownSeconds, cfg.HTTP.ShutdownTimeoutSeconds)

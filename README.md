@@ -153,9 +153,11 @@ http:
   webhook_path: /webhooks/github
   status_path: /status
   webhook_secret_env: GITHUB_WEBHOOK_SECRET   # env var name (not the secret itself)
+  shutdown_timeout_seconds: 15
+
+processor:
   issue_queue_buffer: 256
   pr_queue_buffer: 256
-  shutdown_timeout_seconds: 15
 
 ai_backends:
   claude:
