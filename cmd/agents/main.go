@@ -41,7 +41,7 @@ func run() error {
 	}
 
 	logger := logging.NewLogger(cfg.Log)
-	logger.Info().Int("shutdown_timeout_seconds", cfg.HTTP.ShutdownTimeoutSeconds).Msg("starting agents daemon")
+	logger.Info().Msg("starting agents daemon")
 
 	runners := make(map[string]ai.Runner, len(cfg.AIBackends))
 	for name, backend := range cfg.AIBackends {
@@ -58,22 +58,10 @@ func run() error {
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.HTTP.DeliveryTTLSeconds) * time.Second)
 	server := webhook.NewServer(cfg, deliveryStore, dataChannels, logger)
 
-	serverErr := make(chan error, 1)
-	go func() {
-		serverErr <- server.Run(ctx)
-	}()
-
-	select {
-	case err := <-serverErr:
-		if err != nil {
-			return err
-		}
-	case <-ctx.Done():
-		logger.Info().Msg("shutdown signal received")
-		if err := <-serverErr; err != nil {
-			return err
-		}
+	if err := server.Run(ctx); err != nil {
+		logger.Error().Err(err).Msg("webhook server exited with error")
 	}
+	logger.Info().Msg("shutdown signal received")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.HTTP.ShutdownTimeoutSeconds)*time.Second)
 	defer cancel()
