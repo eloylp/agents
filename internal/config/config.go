@@ -30,6 +30,7 @@ var defaultAgents = []string{"architect", "security", "testing", "devops", "ux"}
 type Config struct {
 	Log        LogConfig                  `yaml:"log"`
 	HTTP       HTTPConfig                 `yaml:"http"`
+	Processor  ProcessorConfig            `yaml:"processor"`
 	AIBackends map[string]AIBackendConfig `yaml:"ai_backends"`
 	Repos      []RepoConfig               `yaml:"repos"`
 }
@@ -49,9 +50,12 @@ type HTTPConfig struct {
 	WebhookSecret          string `yaml:"webhook_secret"`
 	WebhookSecretEnv       string `yaml:"webhook_secret_env"`
 	DeliveryTTLSeconds     int    `yaml:"delivery_ttl_seconds"`
-	IssueQueueBuffer       int    `yaml:"issue_queue_buffer"`
-	PRQueueBuffer          int    `yaml:"pr_queue_buffer"`
 	ShutdownTimeoutSeconds int    `yaml:"shutdown_timeout_seconds"`
+}
+
+type ProcessorConfig struct {
+	IssueQueueBuffer int `yaml:"issue_queue_buffer"`
+	PRQueueBuffer    int `yaml:"pr_queue_buffer"`
 }
 
 type RepoConfig struct {
@@ -118,11 +122,11 @@ func (c *Config) applyDefaults() {
 	if c.HTTP.DeliveryTTLSeconds == 0 {
 		c.HTTP.DeliveryTTLSeconds = defaultDeliveryTTLSeconds
 	}
-	if c.HTTP.IssueQueueBuffer == 0 {
-		c.HTTP.IssueQueueBuffer = defaultIssueQueueBufferSize
+	if c.Processor.IssueQueueBuffer == 0 {
+		c.Processor.IssueQueueBuffer = defaultIssueQueueBufferSize
 	}
-	if c.HTTP.PRQueueBuffer == 0 {
-		c.HTTP.PRQueueBuffer = defaultPRQueueBufferSize
+	if c.Processor.PRQueueBuffer == 0 {
+		c.Processor.PRQueueBuffer = defaultPRQueueBufferSize
 	}
 	if c.HTTP.ShutdownTimeoutSeconds == 0 {
 		c.HTTP.ShutdownTimeoutSeconds = defaultHTTPShutdownSeconds
