@@ -20,6 +20,7 @@ const (
 	defaultDeliveryTTLSeconds      = 3600
 	defaultIssueQueueBufferSize    = 256
 	defaultPRQueueBufferSize       = 256
+	defaultHTTPShutdownSeconds     = 15
 	defaultAITimeoutSeconds        = 600
 	defaultMaxPromptChars          = 12000
 )
@@ -38,18 +39,19 @@ type LogConfig struct {
 }
 
 type HTTPConfig struct {
-	ListenAddr          string `yaml:"listen_addr"`
-	StatusPath          string `yaml:"status_path"`
-	WebhookPath         string `yaml:"webhook_path"`
-	ReadTimeoutSeconds  int    `yaml:"read_timeout_seconds"`
-	WriteTimeoutSeconds int    `yaml:"write_timeout_seconds"`
-	IdleTimeoutSeconds  int    `yaml:"idle_timeout_seconds"`
-	MaxBodyBytes        int64  `yaml:"max_body_bytes"`
-	WebhookSecret       string `yaml:"webhook_secret"`
-	WebhookSecretEnv    string `yaml:"webhook_secret_env"`
-	DeliveryTTLSeconds  int    `yaml:"delivery_ttl_seconds"`
-	IssueQueueBuffer    int    `yaml:"issue_queue_buffer"`
-	PRQueueBuffer       int    `yaml:"pr_queue_buffer"`
+	ListenAddr             string `yaml:"listen_addr"`
+	StatusPath             string `yaml:"status_path"`
+	WebhookPath            string `yaml:"webhook_path"`
+	ReadTimeoutSeconds     int    `yaml:"read_timeout_seconds"`
+	WriteTimeoutSeconds    int    `yaml:"write_timeout_seconds"`
+	IdleTimeoutSeconds     int    `yaml:"idle_timeout_seconds"`
+	MaxBodyBytes           int64  `yaml:"max_body_bytes"`
+	WebhookSecret          string `yaml:"webhook_secret"`
+	WebhookSecretEnv       string `yaml:"webhook_secret_env"`
+	DeliveryTTLSeconds     int    `yaml:"delivery_ttl_seconds"`
+	IssueQueueBuffer       int    `yaml:"issue_queue_buffer"`
+	PRQueueBuffer          int    `yaml:"pr_queue_buffer"`
+	ShutdownTimeoutSeconds int    `yaml:"shutdown_timeout_seconds"`
 }
 
 type RepoConfig struct {
@@ -121,6 +123,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.HTTP.PRQueueBuffer == 0 {
 		c.HTTP.PRQueueBuffer = defaultPRQueueBufferSize
+	}
+	if c.HTTP.ShutdownTimeoutSeconds == 0 {
+		c.HTTP.ShutdownTimeoutSeconds = defaultHTTPShutdownSeconds
 	}
 	normalizedBackends := make(map[string]AIBackendConfig, len(c.AIBackends))
 	for name, backend := range c.AIBackends {

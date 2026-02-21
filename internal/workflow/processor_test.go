@@ -32,21 +32,20 @@ func (s *stubProcessorHandler) HandlePullRequestLabelEvent(_ context.Context, _ 
 }
 
 func TestProcessorStartStopDrainsQueues(t *testing.T) {
-	cfg := &config.Config{
-		HTTP: config.HTTPConfig{
-			IssueQueueBuffer: 4,
-			PRQueueBuffer:    4,
-		},
-	}
+	dataChannels := NewDataChannels(4, 4)
 	handler := &stubProcessorHandler{}
 	var wg sync.WaitGroup
-	processor := NewProcessor(cfg, handler, &wg, zerolog.Nop())
+	processor := NewProcessor(dataChannels, handler, &wg, zerolog.Nop())
 
 	ctx, cancel := context.WithCancel(context.Background())
-	issueQueue, prQueue := processor.Start(ctx)
+	channels := processor.Start(ctx)
 
-	issueQueue <- IssueRequest{Repo: config.RepoConfig{FullName: "owner/repo"}, Issue: Issue{Number: 1}, Action: "labeled", Label: "ai:refine"}
-	prQueue <- PRRequest{Repo: config.RepoConfig{FullName: "owner/repo"}, PR: PullRequest{Number: 2}, Action: "labeled", Label: "ai:review"}
+	if err := channels.PushIssue(context.Background(), IssueRequest{Repo: config.RepoConfig{FullName: "owner/repo"}, Issue: Issue{Number: 1}, Action: "labeled", Label: "ai:refine"}); err != nil {
+		t.Fatalf("push issue: %v", err)
+	}
+	if err := channels.PushPR(context.Background(), PRRequest{Repo: config.RepoConfig{FullName: "owner/repo"}, PR: PullRequest{Number: 2}, Action: "labeled", Label: "ai:review"}); err != nil {
+		t.Fatalf("push pr: %v", err)
+	}
 
 	cancel()
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)

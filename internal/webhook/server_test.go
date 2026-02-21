@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -28,9 +29,8 @@ func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
 		},
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
-	issueQueue := make(chan workflow.IssueRequest, 1)
-	prQueue := make(chan workflow.PRRequest, 1)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), zerolog.Nop(), issueQueue, prQueue)
+	dataChannels := workflow.NewDataChannels(1, 1)
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, zerolog.Nop())
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":1,"title":"t","body":"b","updated_at":"2026-02-15T00:00:00Z","labels":[{"name":"ai:refine"}]}}`
 	sig := signatureForTests([]byte(body), "secret")
@@ -45,7 +45,7 @@ func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusAccepted, rr.Code)
 	}
 	select {
-	case msg := <-issueQueue:
+	case msg := <-dataChannels.IssueChan():
 		if msg.Label != "ai:refine" {
 			t.Fatalf("expected ai:refine label enqueued, got %q", msg.Label)
 		}
@@ -62,8 +62,10 @@ func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
 	if rr2.Code != http.StatusAccepted {
 		t.Fatalf("expected duplicate status %d, got %d", http.StatusAccepted, rr2.Code)
 	}
-	if len(issueQueue) != 0 {
+	select {
+	case <-dataChannels.IssueChan():
 		t.Fatalf("expected duplicate delivery to be ignored")
+	default:
 	}
 }
 
@@ -78,9 +80,8 @@ func TestHandleWebhookIgnoresNonAILabel(t *testing.T) {
 		},
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
-	issueQueue := make(chan workflow.IssueRequest, 1)
-	prQueue := make(chan workflow.PRRequest, 1)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), zerolog.Nop(), issueQueue, prQueue)
+	dataChannels := workflow.NewDataChannels(1, 1)
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, zerolog.Nop())
 
 	body := `{"action":"labeled","label":{"name":"bug"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":2,"title":"t","body":"b","updated_at":"2026-02-15T00:00:00Z","labels":[{"name":"bug"}],"head":{"sha":"abc"}}}`
 	sig := signatureForTests([]byte(body), "secret")
@@ -94,8 +95,10 @@ func TestHandleWebhookIgnoresNonAILabel(t *testing.T) {
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("expected status %d, got %d", http.StatusAccepted, rr.Code)
 	}
-	if len(prQueue) != 0 {
+	select {
+	case <-dataChannels.PRChan():
 		t.Fatalf("expected no pr messages enqueued")
+	default:
 	}
 }
 
@@ -110,9 +113,8 @@ func TestHandleIssueWebhookUsesEventLabelAsTrigger(t *testing.T) {
 		},
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
-	issueQueue := make(chan workflow.IssueRequest, 1)
-	prQueue := make(chan workflow.PRRequest, 1)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), zerolog.Nop(), issueQueue, prQueue)
+	dataChannels := workflow.NewDataChannels(1, 1)
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, zerolog.Nop())
 
 	body := `{"action":"labeled","label":{"name":"ai:refine:codex"},"repository":{"full_name":"owner/repo"},"issue":{"number":3,"title":"t","body":"b","updated_at":"2026-02-15T00:00:00Z","labels":[{"name":"ai:refine:claude"}]}}`
 	sig := signatureForTests([]byte(body), "secret")
@@ -127,12 +129,43 @@ func TestHandleIssueWebhookUsesEventLabelAsTrigger(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusAccepted, rr.Code)
 	}
 	select {
-	case msg := <-issueQueue:
+	case msg := <-dataChannels.IssueChan():
 		if msg.Label != "ai:refine:codex" || msg.Action != "labeled" {
 			t.Fatalf("expected event label/action to be forwarded, got label=%q action=%q", msg.Label, msg.Action)
 		}
 	default:
 		t.Fatalf("expected issue message enqueued")
+	}
+}
+
+func TestHandleIssueWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) {
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{
+			MaxBodyBytes:       1024,
+			WebhookSecret:      "secret",
+			DeliveryTTLSeconds: 3600,
+			IssueQueueBuffer:   1,
+			PRQueueBuffer:      1,
+		},
+		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
+	}
+	dataChannels := workflow.NewDataChannels(1, 1)
+	if err := dataChannels.PushIssue(context.Background(), workflow.IssueRequest{Repo: cfg.Repos[0], Issue: workflow.Issue{Number: 99}, Action: "labeled", Label: "ai:refine"}); err != nil {
+		t.Fatalf("preload issue queue: %v", err)
+	}
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, zerolog.Nop())
+
+	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":2}}`
+	sig := signatureForTests([]byte(body), "secret")
+
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "issues")
+	req.Header.Set("X-GitHub-Delivery", "delivery-queue-full")
+	req.Header.Set("X-Hub-Signature-256", sig)
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, req)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rr.Code)
 	}
 }
 

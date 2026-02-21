@@ -41,7 +41,7 @@ func run() error {
 	}
 
 	logger := logging.NewLogger(cfg.Log)
-	logger.Info().Msg("starting agents daemon")
+	logger.Info().Int("shutdown_timeout_seconds", cfg.HTTP.ShutdownTimeoutSeconds).Msg("starting agents daemon")
 
 	runners := make(map[string]ai.Runner, len(cfg.AIBackends))
 	for name, backend := range cfg.AIBackends {
@@ -49,12 +49,14 @@ func run() error {
 	}
 	engine := workflow.NewEngine(cfg, runners, logger)
 
+	dataChannels := workflow.NewDataChannels(cfg.HTTP.IssueQueueBuffer, cfg.HTTP.PRQueueBuffer)
+
 	var wg sync.WaitGroup
-	processor := workflow.NewProcessor(cfg, engine, &wg, logger)
-	issueQueue, prQueue := processor.Start(ctx)
+	processor := workflow.NewProcessor(dataChannels, engine, &wg, logger)
+	processor.Start(ctx)
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.HTTP.DeliveryTTLSeconds) * time.Second)
-	server := webhook.NewServer(cfg, deliveryStore, logger, issueQueue, prQueue)
+	server := webhook.NewServer(cfg, deliveryStore, dataChannels, logger)
 
 	serverErr := make(chan error, 1)
 	go func() {
@@ -73,18 +75,13 @@ func run() error {
 		}
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.HTTP.ShutdownTimeoutSeconds)*time.Second)
 	defer cancel()
 
 	processor.Stop(shutdownCtx)
-	wgDone := make(chan struct{})
-	go func() {
+	if shutdownCtx.Err() == nil {
 		wg.Wait()
-		close(wgDone)
-	}()
-	select {
-	case <-wgDone:
-	case <-shutdownCtx.Done():
+	} else {
 		logger.Warn().Msg("shutdown timed out waiting for background tasks")
 	}
 

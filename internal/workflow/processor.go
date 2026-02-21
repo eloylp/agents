@@ -5,8 +5,6 @@ import (
 	"sync"
 
 	"github.com/rs/zerolog"
-
-	"github.com/eloylp/agents/internal/config"
 )
 
 type processorHandler interface {
@@ -15,63 +13,57 @@ type processorHandler interface {
 }
 
 type Processor struct {
-	handler    processorHandler
-	wg         *sync.WaitGroup
-	workerWg   sync.WaitGroup
-	issueQueue chan IssueRequest
-	prQueue    chan PRRequest
-	startOnce  sync.Once
-	stopOnce   sync.Once
-	logger     zerolog.Logger
+	handler   processorHandler
+	wg        *sync.WaitGroup
+	channels  *DataChannels
+	startOnce sync.Once
+	stopOnce  sync.Once
+	logger    zerolog.Logger
+	ctxMu     sync.RWMutex
+	drainCtx  context.Context
 }
 
-func NewProcessor(cfg *config.Config, handler processorHandler, wg *sync.WaitGroup, logger zerolog.Logger) *Processor {
+func NewProcessor(channels *DataChannels, handler processorHandler, wg *sync.WaitGroup, logger zerolog.Logger) *Processor {
 	return &Processor{
-		handler:    handler,
-		wg:         wg,
-		issueQueue: make(chan IssueRequest, cfg.HTTP.IssueQueueBuffer),
-		prQueue:    make(chan PRRequest, cfg.HTTP.PRQueueBuffer),
-		logger:     logger.With().Str("component", "workflow_processor").Logger(),
+		handler:  handler,
+		wg:       wg,
+		channels: channels,
+		logger:   logger.With().Str("component", "workflow_processor").Logger(),
 	}
 }
 
-func (p *Processor) Start(ctx context.Context) (chan<- IssueRequest, chan<- PRRequest) {
+func (p *Processor) Start(ctx context.Context) *DataChannels {
 	p.startOnce.Do(func() {
 		p.logger.Info().Msg("starting workflow processor")
-		p.workerWg.Add(2)
 		p.wg.Add(2)
 		go p.runIssueWorker(ctx)
 		go p.runPRWorker(ctx)
 	})
-	return p.issueQueue, p.prQueue
+	return p.channels
 }
 
 func (p *Processor) Stop(ctx context.Context) {
 	p.stopOnce.Do(func() {
 		p.logger.Info().Msg("stopping workflow processor")
-		close(p.issueQueue)
-		close(p.prQueue)
+		p.setDrainCtx(ctx)
+		p.channels.Close()
 		done := make(chan struct{})
 		go func() {
-			p.workerWg.Wait()
+			p.wg.Wait()
 			close(done)
 		}()
 		select {
 		case <-done:
 		case <-ctx.Done():
+			p.logger.Warn().Msg("processor stop timed out, workers may still be running")
 		}
 	})
 }
 
 func (p *Processor) runIssueWorker(ctx context.Context) {
-	defer p.workerWg.Done()
 	defer p.wg.Done()
-	for req := range p.issueQueue {
-		processCtx := ctx
-		if ctx.Err() != nil {
-			processCtx = context.Background()
-		}
-		if err := p.handler.HandleIssueLabelEvent(processCtx, req); err != nil {
+	for req := range p.channels.IssueChan() {
+		if err := p.handler.HandleIssueLabelEvent(p.processingCtx(ctx), req); err != nil {
 			p.logger.Error().Err(err).Str("repo", req.Repo.FullName).Int("issue_number", req.Issue.Number).Msg("failed to process issue webhook")
 		}
 	}
@@ -79,16 +71,29 @@ func (p *Processor) runIssueWorker(ctx context.Context) {
 }
 
 func (p *Processor) runPRWorker(ctx context.Context) {
-	defer p.workerWg.Done()
 	defer p.wg.Done()
-	for req := range p.prQueue {
-		processCtx := ctx
-		if ctx.Err() != nil {
-			processCtx = context.Background()
-		}
-		if err := p.handler.HandlePullRequestLabelEvent(processCtx, req); err != nil {
+	for req := range p.channels.PRChan() {
+		if err := p.handler.HandlePullRequestLabelEvent(p.processingCtx(ctx), req); err != nil {
 			p.logger.Error().Err(err).Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Msg("failed to process pr webhook")
 		}
 	}
 	p.logger.Info().Msg("pr queue drained")
+}
+
+func (p *Processor) processingCtx(ctx context.Context) context.Context {
+	if ctx.Err() == nil {
+		return ctx
+	}
+	p.ctxMu.RLock()
+	defer p.ctxMu.RUnlock()
+	if p.drainCtx != nil {
+		return p.drainCtx
+	}
+	return ctx
+}
+
+func (p *Processor) setDrainCtx(ctx context.Context) {
+	p.ctxMu.Lock()
+	defer p.ctxMu.Unlock()
+	p.drainCtx = ctx
 }
