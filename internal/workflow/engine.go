@@ -35,10 +35,6 @@ func NewEngine(cfg *config.Config, runners map[string]ai.Runner, logger zerolog.
 }
 
 func (e *Engine) HandleIssueLabelEvent(ctx context.Context, req IssueRequest) error {
-	if strings.TrimSpace(strings.ToLower(req.Action)) != "labeled" {
-		e.logger.Info().Str("repo", req.Repo.FullName).Int("issue_number", req.Issue.Number).Str("action", req.Action).Str("label", req.Label).Msg("issue label event ignored")
-		return nil
-	}
 	e.logger.Info().Str("repo", req.Repo.FullName).Int("issue_number", req.Issue.Number).Str("label", req.Label).Msg("processing issue label event")
 	backend, ok := ParseRefineLabel(req.Label)
 	if !ok {
@@ -54,11 +50,7 @@ func (e *Engine) HandleIssueLabelEvent(ctx context.Context, req IssueRequest) er
 		Str("repo", req.Repo.FullName).
 		Int("issue_number", req.Issue.Number).
 		Logger()
-	runner, ok := e.runners[selectedBackend]
-	if !ok {
-		logger.Warn().Str("backend", selectedBackend).Msg("runner missing for backend, skipping")
-		return nil
-	}
+	runner := e.runners[selectedBackend]
 	prompt := ai.BuildIssueRefinePrompt(req.Repo.FullName, req.Issue.Number)
 	logger.Info().Str("backend", selectedBackend).Msg("invoking ai backend for issue refinement")
 	response, err := runner.Run(ctx, ai.Request{
@@ -76,10 +68,6 @@ func (e *Engine) HandleIssueLabelEvent(ctx context.Context, req IssueRequest) er
 }
 
 func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest) error {
-	if strings.TrimSpace(strings.ToLower(req.Action)) != "labeled" {
-		e.logger.Info().Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Str("action", req.Action).Str("label", req.Label).Msg("pull request label event ignored")
-		return nil
-	}
 	e.logger.Info().Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Str("label", req.Label).Msg("processing pull request label event")
 	if req.PR.Draft {
 		e.logger.Info().Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Msg("pull request skipped, draft")
@@ -106,11 +94,7 @@ func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest)
 		}
 		agents = []string{agent}
 	}
-	runner, ok := e.runners[resolvedBackend]
-	if !ok {
-		e.logger.Warn().Str("backend", resolvedBackend).Msg("runner missing for backend, skipping")
-		return nil
-	}
+	runner := e.runners[resolvedBackend]
 	logger := e.logger.With().
 		Str("repo", req.Repo.FullName).
 		Int("pr_number", req.PR.Number).

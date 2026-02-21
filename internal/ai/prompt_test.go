@@ -1,4 +1,4 @@
-package claude
+package ai
 
 import (
 	"strings"

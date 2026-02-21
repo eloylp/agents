@@ -50,28 +50,3 @@ func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
 		t.Fatalf("expected event label backend codex, got %q", runner.last.Workflow)
 	}
 }
-
-func TestHandleIssueLabelEventIgnoresUnlabeledAction(t *testing.T) {
-	runner := &stubRunner{}
-	cfg := &config.Config{
-		AIBackends: map[string]config.AIBackendConfig{
-			"claude": {Agents: []string{"architect"}},
-		},
-	}
-	engine := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, zerolog.Nop())
-	issue := Issue{
-		Number: 10,
-	}
-	err := engine.HandleIssueLabelEvent(context.Background(), IssueRequest{
-		Repo:   config.RepoConfig{FullName: "owner/repo", Enabled: true},
-		Issue:  issue,
-		Action: "unlabeled",
-		Label:  "ai:refine",
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if runner.calls != 0 {
-		t.Fatalf("expected no runner calls, got %d", runner.calls)
-	}
-}
