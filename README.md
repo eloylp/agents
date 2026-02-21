@@ -117,6 +117,9 @@ This ensures the correct backend picks up the fix request and commits the amendm
 | **GitHub CLI** (`gh`) | Authenticated access to your repos |
 | **AI CLI** (Claude Code or Codex) | The actual AI backend, with GitHub MCP server configured |
 
+> **Why is `gh` needed if MCP tools handle GitHub writes?**
+> The `agents` daemon never calls `gh` directly — it only spawns the configured AI CLI (`claude` or `codex`) and passes it a prompt. Those CLIs use their built-in GitHub MCP tools to read context and post comments. The MCP tools rely on `gh` under the hood for authentication. So `gh` is an implicit dependency of the AI CLIs, not of the daemon itself. Removing it would silently break GitHub writes even though the daemon never invokes it.
+
 ### Setup GitHub CLI
 
 ```bash
