@@ -13,6 +13,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/eloylp/agents/internal/ai"
+	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/logging"
 	"github.com/eloylp/agents/internal/webhook"
@@ -43,17 +44,29 @@ func run() error {
 	logger := logging.NewLogger(cfg.Log)
 	logger.Info().Msg("starting agents daemon")
 
+	promptStore, err := ai.NewPromptStore(cfg.AgentsDir)
+	if err != nil {
+		return err
+	}
+
 	runners := make(map[string]ai.Runner, len(cfg.AIBackends))
 	for name, backend := range cfg.AIBackends {
 		runners[name] = ai.NewCommandRunner(name, backend.Mode, backend.Command, backend.Args, backend.TimeoutSeconds, backend.MaxPromptChars, backend.RedactionSaltEnv, logger)
 	}
-	engine := workflow.NewEngine(cfg, runners, logger)
+	engine := workflow.NewEngine(cfg, runners, promptStore, logger)
 
 	dataChannels := workflow.NewDataChannels(cfg.Processor.IssueQueueBuffer, cfg.Processor.PRQueueBuffer)
 
 	var wg sync.WaitGroup
 	processor := workflow.NewProcessor(dataChannels, engine, &wg, logger)
 	processor.Start(ctx)
+
+	memoryStore := autonomous.NewMemoryStore(cfg.AgentsDir)
+	scheduler, err := autonomous.NewScheduler(cfg, runners, promptStore, memoryStore, logger)
+	if err != nil {
+		return err
+	}
+	go scheduler.Start(ctx)
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.HTTP.DeliveryTTLSeconds) * time.Second)
 	server := webhook.NewServer(cfg, deliveryStore, dataChannels, logger)

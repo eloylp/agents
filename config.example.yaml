@@ -18,6 +18,8 @@ processor:
   issue_queue_buffer: 256
   pr_queue_buffer: 256
 
+agents_dir: "./agents"
+
 ai_backends:
   claude:
     mode: command
@@ -42,3 +44,11 @@ ai_backends:
 repos:
   - full_name: "owner/repo"
     enabled: true
+
+autonomous_agents:
+  - repo: "owner/repo"
+    enabled: true
+    agents:
+      - name: "architect"
+        description: "Architecture sweeps looking for design drift and risky coupling."
+        cron: "0 9 * * *"

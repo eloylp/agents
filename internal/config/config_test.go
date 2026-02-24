@@ -63,6 +63,9 @@ repos:
 	if cfg.HTTP.ShutdownTimeoutSeconds != defaultHTTPShutdownSeconds {
 		t.Fatalf("expected shutdown timeout default %d, got %d", defaultHTTPShutdownSeconds, cfg.HTTP.ShutdownTimeoutSeconds)
 	}
+	if cfg.AgentsDir != defaultAgentsDir {
+		t.Fatalf("expected default agents dir %q, got %q", defaultAgentsDir, cfg.AgentsDir)
+	}
 }
 
 func TestDefaultConfiguredBackend(t *testing.T) {
@@ -77,5 +80,31 @@ func TestDefaultConfiguredBackend(t *testing.T) {
 	cfg = Config{}
 	if got := cfg.DefaultConfiguredBackend(); got != "" {
 		t.Fatalf("expected empty default backend, got %q", got)
+	}
+}
+
+func TestAutonomousValidation(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+repos:
+  - full_name: "owner/repo"
+autonomous_agents:
+  - repo: ""
+    enabled: true
+    agents:
+      - name: ""
+        cron: ""
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatalf("expected validation error for autonomous agents")
 	}
 }

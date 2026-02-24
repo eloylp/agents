@@ -1,100 +1,163 @@
 package ai
 
-import "fmt"
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"text/template"
+)
 
-func BuildIssueRefinePrompt(repo string, number int) string {
-	return fmt.Sprintf(`# Mission
-You are an AI assistant running with GitHub MCP tools (repos, issues, pull_requests). You must not push code, create branches, open PRs, merge, or modify repository contents. Read and comment only.
-
-Repository: %s
-Issue: #%d
-
-## Required reading
-1. Issue title/body and all previous issue comments.
-2. Repo context files if present:
-   - .ai/issue_refine_rules.md
-   - .ai/architecture.md
-   - README/CONTRIBUTING (if relevant)
-
-## Task
-Produce exactly 1 issue comment (short, scannable) and start it with this heading:
-
-## Issue refinement
-
-Ensure the issue is understandable, provides enough context, and has clear goals.
-
-Use GitHub-flavored Markdown. Prefer checklists for acceptance criteria and tasks.
-
-### Content requirements
-- Clarity: is the issue well-written and understandable?
-- Context: does it provide enough background for someone unfamiliar?
-- Goals: are the objectives and expected outcomes clearly stated?
-- Feasibility: missing info, affected components
-- Complexity: S/M/L plus risks
-- Acceptance criteria + tasks + questions (only if truly blocking)
-
-### Output Plan
-Post the comment directly using GitHub MCP issue comment tools.
-
-### STDOUT JSON (mandatory, strict)
-After posting all comments, you MUST print exactly one JSON object to stdout with the artifacts you created. This is a machine-to-machine contract — your stdout is parsed by software, not read by a human.
-
-CRITICAL RULES:
-- Do NOT print any text, explanation, or status messages to stdout.
-- Do NOT describe what you did before the JSON.
-- Your entire stdout must be ONLY the JSON object below, nothing else.
-
-{"summary":"<one-line summary>","artifacts":[{"type":"issue_comment","part_key":"issue/refine","github_id":"<comment_id>","url":"<comment_url>"}]}
-`, repo, number)
+type IssuePromptData struct {
+	Repo   string
+	Number int
 }
 
-func BuildPRReviewPrompt(backend string, agent string, repo string, number int) string {
-	heading := fmt.Sprintf("## %s specialist: %s", backend, agent)
-	agentInstructions := map[string]string{
-		"architect": "Focus on architecture, boundaries, coupling, and long-term maintainability.",
-		"security":  "Focus on security vulnerabilities, trust boundaries, secrets handling, and unsafe defaults.",
-		"testing":   "Focus on test coverage gaps, fragile tests, and missing validation scenarios.",
-		"devops":    "Focus on CI/CD, deployment safety, observability, and runtime operability.",
-		"ux":        "Focus on developer/user experience, clarity, ergonomics, and error messaging.",
+type PRReviewPromptData struct {
+	Repo            string
+	Number          int
+	Backend         string
+	Agent           string
+	AgentHeading    string
+	AgentGuidance   string
+	WorkflowPartKey string
+}
+
+type AutonomousPromptData struct {
+	Repo        string
+	AgentName   string
+	Description string
+	Task        string
+	Memory      string
+	MemoryPath  string
+}
+
+type PromptStore struct {
+	baseDir      string
+	issueTpl     *template.Template
+	prTemplates  map[string]*template.Template
+	autoTemplate map[string]*template.Template
+	mu           sync.Mutex
+}
+
+func NewPromptStore(baseDir string) (*PromptStore, error) {
+	if strings.TrimSpace(baseDir) == "" {
+		return nil, fmt.Errorf("prompt store base directory is required")
 	}
-	instruction := agentInstructions[agent]
-	if instruction == "" {
-		instruction = "Focus on the requested specialist agent."
+	return &PromptStore{
+		baseDir:      baseDir,
+		prTemplates:  make(map[string]*template.Template),
+		autoTemplate: make(map[string]*template.Template),
+	}, nil
+}
+
+func (p *PromptStore) IssueRefinePrompt(repo string, number int) (string, error) {
+	p.mu.Lock()
+	tpl := p.issueTpl
+	p.mu.Unlock()
+	if tpl == nil {
+		loaded, err := p.loadTemplate(filepath.Join(p.baseDir, "issue_refinement_prompts", "PROMPT.md"))
+		if err != nil {
+			return "", err
+		}
+		p.mu.Lock()
+		p.issueTpl = loaded
+		tpl = loaded
+		p.mu.Unlock()
 	}
+	data := IssuePromptData{Repo: repo, Number: number}
+	return executeTemplate(tpl, data, "issue refine")
+}
 
-	return fmt.Sprintf(`# Mission
-You are an AI assistant running with GitHub MCP tools (repos, issues, pull_requests). You must not push code, create branches, open PRs, merge, or modify repository contents. Read and review only.
+func (p *PromptStore) PRReviewPrompt(agent string, backend string, repo string, number int) (string, error) {
+	normalizedAgent := normalizeToken(agent)
+	p.mu.Lock()
+	tpl := p.prTemplates[normalizedAgent]
+	p.mu.Unlock()
+	if tpl == nil {
+		loaded, err := p.loadTemplate(filepath.Join(p.baseDir, "pr_review_prompts", normalizedAgent, "PROMPT.md"))
+		if err != nil {
+			return "", err
+		}
+		p.mu.Lock()
+		p.prTemplates[normalizedAgent] = loaded
+		tpl = loaded
+		p.mu.Unlock()
+	}
+	guidance := agentGuidance(normalizedAgent)
+	data := PRReviewPromptData{
+		Repo:            repo,
+		Number:          number,
+		Backend:         backend,
+		Agent:           normalizedAgent,
+		AgentHeading:    fmt.Sprintf("## %s specialist: %s", backend, normalizedAgent),
+		AgentGuidance:   guidance,
+		WorkflowPartKey: fmt.Sprintf("%s/%s", backend, normalizedAgent),
+	}
+	return executeTemplate(tpl, data, "pr review")
+}
 
-Repository: %s
-PR: #%d
+func (p *PromptStore) AutonomousPrompt(agent string, data AutonomousPromptData) (string, error) {
+	normalizedAgent := normalizeToken(agent)
+	p.mu.Lock()
+	tpl := p.autoTemplate[normalizedAgent]
+	p.mu.Unlock()
+	if tpl == nil {
+		loaded, err := p.loadTemplate(filepath.Join(p.baseDir, "autonomous", normalizedAgent, "PROMPT.md"))
+		if err != nil {
+			return "", err
+		}
+		p.mu.Lock()
+		p.autoTemplate[normalizedAgent] = loaded
+		tpl = loaded
+		p.mu.Unlock()
+	}
+	if strings.TrimSpace(data.AgentName) == "" {
+		data.AgentName = normalizedAgent
+	}
+	return executeTemplate(tpl, data, "autonomous agent")
+}
 
-## Required reading
-1. PR title/body and all previous PR comments/reviews.
-2. Changed files and relevant code context.
+func (p *PromptStore) loadTemplate(path string) (*template.Template, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("load prompt %s: %w", path, err)
+	}
+	tpl, err := template.New(filepath.Base(path)).Option("missingkey=error").Parse(string(content))
+	if err != nil {
+		return nil, fmt.Errorf("parse prompt %s: %w", path, err)
+	}
+	return tpl, nil
+}
 
-## Task
-Provide exactly one specialist review comment using this heading:
+func executeTemplate(tpl *template.Template, data any, name string) (string, error) {
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("render %s prompt: %w", name, err)
+	}
+	return buf.String(), nil
+}
 
-%s
+func agentGuidance(agent string) string {
+	switch agent {
+	case "architect":
+		return "Focus on architecture, boundaries, coupling, and long-term maintainability."
+	case "security":
+		return "Focus on security vulnerabilities, trust boundaries, secrets handling, and unsafe defaults."
+	case "testing":
+		return "Focus on test coverage gaps, fragile tests, and missing validation scenarios."
+	case "devops":
+		return "Focus on CI/CD, deployment safety, observability, and runtime operability."
+	case "ux":
+		return "Focus on developer/user experience, clarity, ergonomics, and error messaging."
+	default:
+		return "Focus on the requested specialist agent."
+	}
+}
 
-Agent guidance: %s
-
-### Output requirements
-- Post one top-level PR review summary comment.
-- Add inline review comments only when there is a clear actionable issue.
-- Keep changes minimal; propose follow-up issues for large refactors.
-
-### Output Plan
-Post the PR review via GitHub MCP pull request review tools with inline comments where possible.
-
-### STDOUT JSON (mandatory, strict)
-After posting the review, you MUST print exactly one JSON object to stdout with the artifacts you created. This is a machine-to-machine contract — your stdout is parsed by software, not read by a human.
-
-CRITICAL RULES:
-- Do NOT print any text, explanation, or status messages to stdout.
-- Do NOT describe what you did before the JSON.
-- Your entire stdout must be ONLY the JSON object below, nothing else.
-
-{"summary":"<one-line summary>","artifacts":[{"type":"pr_review","part_key":"review/%s/%s","github_id":"<review_id>","url":"<review_url>"}]}
-`, repo, number, heading, instruction, backend, agent)
+func normalizeToken(token string) string {
+	token = strings.ToLower(strings.TrimSpace(token))
+	return strings.ReplaceAll(token, string(filepath.Separator), "_")
 }

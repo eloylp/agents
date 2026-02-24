@@ -23,6 +23,7 @@ const (
 	defaultHTTPShutdownSeconds     = 15
 	defaultAITimeoutSeconds        = 600
 	defaultMaxPromptChars          = 12000
+	defaultAgentsDir               = "agents"
 )
 
 var defaultAgents = []string{"architect", "security", "testing", "devops", "ux"}
@@ -33,6 +34,9 @@ type Config struct {
 	Processor  ProcessorConfig            `yaml:"processor"`
 	AIBackends map[string]AIBackendConfig `yaml:"ai_backends"`
 	Repos      []RepoConfig               `yaml:"repos"`
+	AgentsDir  string                     `yaml:"agents_dir"`
+
+	AutonomousAgents []AutonomousRepoConfig `yaml:"autonomous_agents"`
 }
 
 type LogConfig struct {
@@ -74,6 +78,18 @@ type AIBackendConfig struct {
 	Agents           []string `yaml:"agents"`
 }
 
+type AutonomousRepoConfig struct {
+	Repo    string                  `yaml:"repo"`
+	Enabled bool                    `yaml:"enabled"`
+	Agents  []AutonomousAgentConfig `yaml:"agents"`
+}
+
+type AutonomousAgentConfig struct {
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
+	Cron        string `yaml:"cron"`
+}
+
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -102,6 +118,9 @@ func Load(path string) (*Config, error) {
 // names to lowercase so that label parsing can use simple string comparisons
 // without re-normalising on every lookup.
 func (c *Config) applyDefaults() {
+	if strings.TrimSpace(c.AgentsDir) == "" {
+		c.AgentsDir = defaultAgentsDir
+	}
 	if strings.TrimSpace(c.HTTP.ListenAddr) == "" {
 		c.HTTP.ListenAddr = defaultHTTPListenAddr
 	}
@@ -162,6 +181,14 @@ func (c *Config) applyDefaults() {
 	for i := range c.Repos {
 		c.Repos[i].FullName = strings.TrimSpace(c.Repos[i].FullName)
 	}
+	for i := range c.AutonomousAgents {
+		c.AutonomousAgents[i].Repo = strings.TrimSpace(c.AutonomousAgents[i].Repo)
+		for j := range c.AutonomousAgents[i].Agents {
+			c.AutonomousAgents[i].Agents[j].Name = strings.ToLower(strings.TrimSpace(c.AutonomousAgents[i].Agents[j].Name))
+			c.AutonomousAgents[i].Agents[j].Cron = strings.TrimSpace(c.AutonomousAgents[i].Agents[j].Cron)
+			c.AutonomousAgents[i].Agents[j].Description = strings.TrimSpace(c.AutonomousAgents[i].Agents[j].Description)
+		}
+	}
 }
 
 func (c *Config) resolveEnv() error {
@@ -177,6 +204,19 @@ func (c *Config) resolveEnv() error {
 	for name := range c.AIBackends {
 		if name != "claude" && name != "codex" {
 			return fmt.Errorf("config: unsupported ai backend %q (supported: claude, codex)", name)
+		}
+	}
+	for _, repo := range c.AutonomousAgents {
+		if repo.Repo == "" {
+			return errors.New("config: autonomous agent repo is required")
+		}
+		for _, agent := range repo.Agents {
+			if agent.Name == "" {
+				return fmt.Errorf("config: autonomous agent name required for repo %s", repo.Repo)
+			}
+			if agent.Cron == "" {
+				return fmt.Errorf("config: autonomous agent cron required for repo %s", repo.Repo)
+			}
 		}
 	}
 	return nil

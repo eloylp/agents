@@ -39,7 +39,7 @@ sequenceDiagram
     Note over Dev,GH: AI feedback appears<br/>as a native GitHub comment
 ```
 
-The daemon is **event-driven only** — no polling. It accepts the webhook, queues it internally, and dispatches work to the configured AI backend asynchronously.
+The daemon is event-driven for label-based workflows and also supports optional scheduled autonomous agents. Webhook events are queued and dispatched asynchronously; autonomous agents run on cron schedules you configure.
 
 ---
 
@@ -163,6 +163,8 @@ processor:
   issue_queue_buffer: 256
   pr_queue_buffer: 256
 
+agents_dir: "./agents"  # root directory for prompts and autonomous memories
+
 ai_backends:
   claude:
     mode: command
@@ -185,6 +187,49 @@ ai_backends:
 repos:
   - full_name: "owner/repo"
     enabled: true
+
+autonomous_agents:
+  - repo: "owner/repo"   # must also exist in repos[]
+    enabled: true
+    agents:
+      - name: "architect"
+        description: "Architecture sweeps looking for design drift and risky coupling."
+        cron: "0 9 * * *"   # standard cron syntax
+```
+
+Prompts are loaded directly from `agents_dir` (no embedded defaults). The daemon fails fast if any required prompt file is missing. The repository ships a starter `agents/` directory you can point to or copy and edit.
+
+Autonomous agents only run for repositories that are also present and enabled under `repos`. Each scheduled run performs two parallel passes:
+- Sweep open issues and add a single comment only if this agent has not commented yet.
+- Sweep the codebase for improvements; open an issue for large/uncertain work or open a PR when the change is small and high-confidence.
+
+Agent memory is stored per repo at `agents_dir/autonomous/<agent>/<owner_repo>/MEMORY.md` (repo slashes are replaced with `_`). The daemon serializes writes so concurrent runs cannot corrupt memory; the file is created automatically if missing.
+
+A default prompt and memory layout is included:
+
+```
+agents/
+├── autonomous/
+│   ├── architect/
+│   │   ├── PROMPT.md
+│   │   └── owner_repo/
+│   │       └── MEMORY.md   # created on first run
+│   ├── devops/
+│   │   └── PROMPT.md
+│   ├── security/
+│   │   └── PROMPT.md
+│   ├── testing/
+│   │   └── PROMPT.md
+│   └── ux/
+│       └── PROMPT.md
+├── issue_refinement_prompts/
+│   └── PROMPT.md
+└── pr_review_prompts/
+    ├── architect/PROMPT.md
+    ├── devops/PROMPT.md
+    ├── security/PROMPT.md
+    ├── testing/PROMPT.md
+    └── ux/PROMPT.md
 ```
 
 Create a `.env` file in the project root for secrets (loaded automatically):
@@ -368,7 +413,9 @@ cmd/agents/main.go            # Daemon entry point
 internal/
   config/config.go             # YAML config parsing, env var resolution
   ai/                          # Prompt generation + runner contract
+  autonomous/                  # Cron scheduler + filesystem-backed agent memory
   workflow/                    # Label parsing, request types, event orchestration
   webhook/                     # HTTP server, signature verification, delivery dedupe
   logging/logging.go           # Structured logger setup (zerolog)
+agents/                        # Filesystem prompts for refinement, reviews, autonomous agents
 ```
