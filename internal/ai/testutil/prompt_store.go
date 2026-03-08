@@ -48,5 +48,8 @@ pr {{.Repo}} #{{.Number}} {{.WorkflowPartKey}} {{.AgentGuidance}}`
 	if err != nil {
 		t.Fatalf("prompt store: %v", err)
 	}
+	if err := store.Validate(prAgents, autoAgents); err != nil {
+		t.Fatalf("prompt validate: %v", err)
+	}
 	return store
 }

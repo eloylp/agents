@@ -23,6 +23,7 @@ func (s *stubRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
 
 func TestSchedulerRunsAutonomousTasks(t *testing.T) {
 	dir := t.TempDir()
+	writeIssuePrompt(t, dir)
 	autoDir := filepath.Join(dir, "autonomous", "architect")
 	if err := os.MkdirAll(autoDir, 0o755); err != nil {
 		t.Fatalf("mkdir autonomous prompt dir: %v", err)
@@ -33,6 +34,9 @@ func TestSchedulerRunsAutonomousTasks(t *testing.T) {
 	prompts, err := ai.NewPromptStore(dir)
 	if err != nil {
 		t.Fatalf("prompt store: %v", err)
+	}
+	if err := prompts.Validate([]string{}, []string{"architect"}); err != nil {
+		t.Fatalf("validate prompts: %v", err)
 	}
 	cfg := &config.Config{
 		AgentsDir: dir,
@@ -68,6 +72,7 @@ func TestSchedulerRunsAutonomousTasks(t *testing.T) {
 
 func TestSchedulerSkipsDisabledRepo(t *testing.T) {
 	dir := t.TempDir()
+	writeIssuePrompt(t, dir)
 	autoDir := filepath.Join(dir, "autonomous", "architect")
 	if err := os.MkdirAll(autoDir, 0o755); err != nil {
 		t.Fatalf("mkdir autonomous prompt dir: %v", err)
@@ -78,6 +83,9 @@ func TestSchedulerSkipsDisabledRepo(t *testing.T) {
 	prompts, err := ai.NewPromptStore(dir)
 	if err != nil {
 		t.Fatalf("prompt store: %v", err)
+	}
+	if err := prompts.Validate([]string{}, []string{"architect"}); err != nil {
+		t.Fatalf("validate prompts: %v", err)
 	}
 	cfg := &config.Config{
 		AgentsDir: dir,
@@ -110,6 +118,7 @@ func TestSchedulerSkipsDisabledRepo(t *testing.T) {
 
 func TestSchedulerRejectsInvalidCron(t *testing.T) {
 	dir := t.TempDir()
+	writeIssuePrompt(t, dir)
 	autoDir := filepath.Join(dir, "autonomous", "architect")
 	if err := os.MkdirAll(autoDir, 0o755); err != nil {
 		t.Fatalf("mkdir autonomous prompt dir: %v", err)
@@ -120,6 +129,9 @@ func TestSchedulerRejectsInvalidCron(t *testing.T) {
 	prompts, err := ai.NewPromptStore(dir)
 	if err != nil {
 		t.Fatalf("prompt store: %v", err)
+	}
+	if err := prompts.Validate([]string{}, []string{"architect"}); err != nil {
+		t.Fatalf("validate prompts: %v", err)
 	}
 	cfg := &config.Config{
 		AgentsDir: dir,
@@ -143,5 +155,16 @@ func TestSchedulerRejectsInvalidCron(t *testing.T) {
 	runner := &stubRunner{}
 	if _, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, prompts, memory, zerolog.Nop()); err == nil {
 		t.Fatalf("expected cron parse error")
+	}
+}
+
+func writeIssuePrompt(t *testing.T, dir string) {
+	t.Helper()
+	issueDir := filepath.Join(dir, "issue_refinement_prompts")
+	if err := os.MkdirAll(issueDir, 0o755); err != nil {
+		t.Fatalf("mkdir issue prompt dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(issueDir, "PROMPT.md"), []byte("{{.Repo}} #{{.Number}}"), 0o644); err != nil {
+		t.Fatalf("write issue prompt: %v", err)
 	}
 }
