@@ -146,6 +146,9 @@ func (p *PromptStore) loadTemplate(path string) (*template.Template, error) {
 }
 
 func (p *PromptStore) loadCompositeTemplates(paths ...string) (*template.Template, error) {
+	// loadCompositeTemplates parses a base template followed by one or more
+	// extension templates so shared structure and agent-specific guidance can
+	// be composed without duplicating files.
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("no template paths provided")
 	}

@@ -65,6 +65,7 @@ pr {{.Repo}} #{{.Number}} {{.WorkflowPartKey}}`
 
 func writeAgentTemplate(t *testing.T, dir string, filename string, body string) {
 	t.Helper()
+	// writeAgentTemplate writes a small template fragment used to inject guidance into a base template.
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir agent prompts: %v", err)
 	}

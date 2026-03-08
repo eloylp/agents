@@ -156,6 +156,7 @@ func writeIssuePrompt(t *testing.T, dir string) {
 
 func writeAutonomousBase(t *testing.T, dir string) {
 	t.Helper()
+	// writeAutonomousBase seeds the shared autonomous base template expected by Validate.
 	autoBase := filepath.Join(dir, "autonomous", "base")
 	if err := os.MkdirAll(autoBase, 0o755); err != nil {
 		t.Fatalf("mkdir auto base: %v", err)
@@ -167,6 +168,7 @@ func writeAutonomousBase(t *testing.T, dir string) {
 
 func writeGuidance(t *testing.T, dir string, agent string) {
 	t.Helper()
+	// writeGuidance adds the agent-specific guidance fragment consumed by base templates.
 	guidanceDir := filepath.Join(dir, "guidance")
 	if err := os.MkdirAll(guidanceDir, 0o755); err != nil {
 		t.Fatalf("mkdir guidance: %v", err)
