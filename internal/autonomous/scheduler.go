@@ -6,7 +6,6 @@ import (
 
 	"github.com/robfig/cron/v3"
 	"github.com/rs/zerolog"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
@@ -94,14 +93,11 @@ func (s *Scheduler) runAgent(repo string, agent config.AutonomousAgentConfig) fu
 			return
 		}
 		err := s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
-			group, ctx := errgroup.WithContext(context.Background())
-			group.Go(func() error {
-				return s.runIssueTask(ctx, runner, backend, repo, agent, memoryPath, memory, logger)
-			})
-			group.Go(func() error {
-				return s.runCodeTask(ctx, runner, backend, repo, agent, memoryPath, memory, logger)
-			})
-			return group.Wait()
+			ctx := context.Background()
+			if err := s.runIssueTask(ctx, runner, backend, repo, agent, memoryPath, memory, logger); err != nil {
+				return err
+			}
+			return s.runCodeTask(ctx, runner, backend, repo, agent, memoryPath, memory, logger)
 		})
 		if err != nil {
 			logger.Error().Err(err).Msg("autonomous agent run completed with errors")

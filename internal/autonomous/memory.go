@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/eloylp/agents/internal/ai"
 )
 
 type MemoryStore struct {
@@ -39,7 +41,7 @@ func (s *MemoryStore) WithLock(agent string, repo string, fn func(memoryPath str
 }
 
 func (s *MemoryStore) ensureMemoryFile(agent string, repo string) (string, error) {
-	dir := filepath.Join(s.baseDir, "autonomous", sanitize(agent), sanitize(repo))
+	dir := filepath.Join(s.baseDir, "autonomous", ai.NormalizeToken(agent), ai.NormalizeToken(repo))
 	cleanBase := filepath.Clean(s.baseDir)
 	cleanDir := filepath.Clean(dir)
 	if !strings.HasPrefix(cleanDir+string(filepath.Separator), cleanBase+string(filepath.Separator)) {
@@ -63,7 +65,7 @@ func (s *MemoryStore) ensureMemoryFile(agent string, repo string) (string, error
 }
 
 func (s *MemoryStore) lockFor(agent string, repo string) *sync.Mutex {
-	key := fmt.Sprintf("%s|%s", sanitize(agent), sanitize(repo))
+	key := fmt.Sprintf("%s|%s", ai.NormalizeToken(agent), ai.NormalizeToken(repo))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if lock, ok := s.locks[key]; ok {
@@ -72,13 +74,4 @@ func (s *MemoryStore) lockFor(agent string, repo string) *sync.Mutex {
 	lock := &sync.Mutex{}
 	s.locks[key] = lock
 	return lock
-}
-
-func sanitize(value string) string {
-	value = filepath.Clean(value)
-	value = strings.TrimLeft(value, string(filepath.Separator))
-	value = strings.ReplaceAll(value, "..", "_")
-	value = strings.ReplaceAll(value, string(filepath.Separator), "_")
-	value = strings.ReplaceAll(value, "\x00", "_")
-	return value
 }

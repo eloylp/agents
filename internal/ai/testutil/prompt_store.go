@@ -53,12 +53,9 @@ pr {{.Repo}} #{{.Number}} {{.WorkflowPartKey}}`
 	for _, agent := range autoAgents {
 		writeAgentTemplate(t, guidanceDir, agent+".md", "{{define \"agent_guidance\"}}auto guidance "+agent+"{{end}}")
 	}
-	store, err := ai.NewPromptStore(dir)
+	store, err := ai.NewPromptStore(dir, prAgents, autoAgents)
 	if err != nil {
 		t.Fatalf("prompt store: %v", err)
-	}
-	if err := store.Validate(prAgents, autoAgents); err != nil {
-		t.Fatalf("prompt validate: %v", err)
 	}
 	return store
 }

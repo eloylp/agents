@@ -26,12 +26,9 @@ func TestSchedulerRunsAutonomousTasks(t *testing.T) {
 	writeIssuePrompt(t, dir)
 	writeAutonomousBase(t, dir)
 	writeGuidance(t, dir, "architect")
-	prompts, err := ai.NewPromptStore(dir)
+	prompts, err := ai.NewPromptStore(dir, []string{}, []string{"architect"})
 	if err != nil {
 		t.Fatalf("prompt store: %v", err)
-	}
-	if err := prompts.Validate([]string{}, []string{"architect"}); err != nil {
-		t.Fatalf("validate prompts: %v", err)
 	}
 	cfg := &config.Config{
 		AgentsDir: dir,
@@ -70,12 +67,9 @@ func TestSchedulerSkipsDisabledRepo(t *testing.T) {
 	writeIssuePrompt(t, dir)
 	writeAutonomousBase(t, dir)
 	writeGuidance(t, dir, "architect")
-	prompts, err := ai.NewPromptStore(dir)
+	prompts, err := ai.NewPromptStore(dir, []string{}, []string{"architect"})
 	if err != nil {
 		t.Fatalf("prompt store: %v", err)
-	}
-	if err := prompts.Validate([]string{}, []string{"architect"}); err != nil {
-		t.Fatalf("validate prompts: %v", err)
 	}
 	cfg := &config.Config{
 		AgentsDir: dir,
@@ -111,12 +105,9 @@ func TestSchedulerRejectsInvalidCron(t *testing.T) {
 	writeIssuePrompt(t, dir)
 	writeAutonomousBase(t, dir)
 	writeGuidance(t, dir, "architect")
-	prompts, err := ai.NewPromptStore(dir)
+	prompts, err := ai.NewPromptStore(dir, []string{}, []string{"architect"})
 	if err != nil {
 		t.Fatalf("prompt store: %v", err)
-	}
-	if err := prompts.Validate([]string{}, []string{"architect"}); err != nil {
-		t.Fatalf("validate prompts: %v", err)
 	}
 	cfg := &config.Config{
 		AgentsDir: dir,
@@ -156,7 +147,7 @@ func writeIssuePrompt(t *testing.T, dir string) {
 
 func writeAutonomousBase(t *testing.T, dir string) {
 	t.Helper()
-	// writeAutonomousBase seeds the shared autonomous base template expected by Validate.
+	// writeAutonomousBase seeds the shared autonomous base template.
 	autoBase := filepath.Join(dir, "autonomous", "base")
 	if err := os.MkdirAll(autoBase, 0o755); err != nil {
 		t.Fatalf("mkdir auto base: %v", err)

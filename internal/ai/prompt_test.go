@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/ai/testutil"
 )
 
@@ -39,8 +40,8 @@ func TestBuildPRReviewPromptIncludesRequirements(t *testing.T) {
 }
 
 func TestPromptStoreValidateFailsOnMissingTemplate(t *testing.T) {
-	store := testutil.BuildPromptStore(t, nil, nil)
-	if err := store.Validate([]string{"security"}, []string{"architect"}); err == nil {
-		t.Fatalf("expected validation failure for missing templates")
+	dir := t.TempDir()
+	if _, err := ai.NewPromptStore(dir, []string{"security"}, []string{"architect"}); err == nil {
+		t.Fatalf("expected construction failure for missing templates")
 	}
 }

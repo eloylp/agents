@@ -44,13 +44,9 @@ func run() error {
 	logger := logging.NewLogger(cfg.Log)
 	logger.Info().Msg("starting agents daemon")
 
-	promptStore, err := ai.NewPromptStore(cfg.AgentsDir)
+	prAgents, autoAgents := collectAgents(cfg)
+	promptStore, err := ai.NewPromptStore(cfg.AgentsDir, prAgents, autoAgents)
 	if err != nil {
-		return err
-	}
-	prAgents := collectPRAgents(cfg)
-	autoAgents := collectAutonomousAgents(cfg)
-	if err := promptStore.Validate(prAgents, autoAgents); err != nil {
 		return err
 	}
 	logger.Info().Str("agents_dir", cfg.AgentsDir).Msg("prompt store initialized")
@@ -98,30 +94,25 @@ func run() error {
 	return nil
 }
 
-func collectPRAgents(cfg *config.Config) []string {
-	seen := make(map[string]struct{})
+func collectAgents(cfg *config.Config) (prAgents []string, autoAgents []string) {
+	prSeen := make(map[string]struct{})
 	for _, backend := range cfg.AIBackends {
 		for _, agent := range backend.Agents {
-			seen[agent] = struct{}{}
+			prSeen[agent] = struct{}{}
 		}
 	}
-	agents := make([]string, 0, len(seen))
-	for a := range seen {
-		agents = append(agents, a)
+	for agent := range prSeen {
+		prAgents = append(prAgents, agent)
 	}
-	return agents
-}
 
-func collectAutonomousAgents(cfg *config.Config) []string {
-	seen := make(map[string]struct{})
+	autoSeen := make(map[string]struct{})
 	for _, repo := range cfg.AutonomousAgents {
 		for _, agent := range repo.Agents {
-			seen[agent.Name] = struct{}{}
+			autoSeen[agent.Name] = struct{}{}
 		}
 	}
-	agents := make([]string, 0, len(seen))
-	for a := range seen {
-		agents = append(agents, a)
+	for agent := range autoSeen {
+		autoAgents = append(autoAgents, agent)
 	}
-	return agents
+	return prAgents, autoAgents
 }

@@ -115,9 +115,9 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// applyDefaults fills in zero-value fields and normalises backend and agent
-// names to lowercase so that label parsing can use simple string comparisons
-// without re-normalising on every lookup.
+// applyDefaults fills in zero-value fields and normalises backend agent names
+// to lowercase so that label parsing can use simple string comparisons without
+// re-normalising on every lookup.
 func (c *Config) applyDefaults() {
 	if strings.TrimSpace(c.AgentsDir) == "" {
 		c.AgentsDir = defaultAgentsDir
@@ -186,7 +186,7 @@ func (c *Config) applyDefaults() {
 	for i := range c.AutonomousAgents {
 		c.AutonomousAgents[i].Repo = strings.TrimSpace(c.AutonomousAgents[i].Repo)
 		for j := range c.AutonomousAgents[i].Agents {
-			c.AutonomousAgents[i].Agents[j].Name = strings.ToLower(strings.TrimSpace(c.AutonomousAgents[i].Agents[j].Name))
+			c.AutonomousAgents[i].Agents[j].Name = strings.TrimSpace(c.AutonomousAgents[i].Agents[j].Name)
 			c.AutonomousAgents[i].Agents[j].Cron = strings.TrimSpace(c.AutonomousAgents[i].Agents[j].Cron)
 			c.AutonomousAgents[i].Agents[j].Description = strings.TrimSpace(c.AutonomousAgents[i].Agents[j].Description)
 		}

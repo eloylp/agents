@@ -39,30 +39,34 @@ type PromptStore struct {
 	autoTemplates map[string]*template.Template
 }
 
-func NewPromptStore(baseDir string) (*PromptStore, error) {
+func NewPromptStore(baseDir string, prAgents []string, autonomousAgents []string) (*PromptStore, error) {
 	if strings.TrimSpace(baseDir) == "" {
 		return nil, fmt.Errorf("prompt store base directory is required")
 	}
-	return &PromptStore{
+	store := &PromptStore{
 		baseDir:       baseDir,
 		prTemplates:   make(map[string]*template.Template),
 		autoTemplates: make(map[string]*template.Template),
-	}, nil
+	}
+	if err := store.loadTemplates(prAgents, autonomousAgents); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 func (p *PromptStore) IssueRefinePrompt(repo string, number int) (string, error) {
 	if p.issueTpl == nil {
-		return "", fmt.Errorf("issue prompt not loaded; call Validate before use")
+		return "", fmt.Errorf("issue prompt not loaded")
 	}
 	data := IssuePromptData{Repo: repo, Number: number}
 	return executeTemplate(p.issueTpl, data, "issue refine")
 }
 
 func (p *PromptStore) PRReviewPrompt(agent string, backend string, repo string, number int) (string, error) {
-	normalizedAgent := normalizeToken(agent)
+	normalizedAgent := NormalizeToken(agent)
 	pl, ok := p.prTemplates[normalizedAgent]
 	if !ok {
-		return "", fmt.Errorf("pr review prompt for agent %s not loaded; call Validate", normalizedAgent)
+		return "", fmt.Errorf("pr review prompt for agent %s not loaded", normalizedAgent)
 	}
 	data := PRReviewPromptData{
 		Repo:            repo,
@@ -76,10 +80,10 @@ func (p *PromptStore) PRReviewPrompt(agent string, backend string, repo string, 
 }
 
 func (p *PromptStore) AutonomousPrompt(agent string, data AutonomousPromptData) (string, error) {
-	normalizedAgent := normalizeToken(agent)
+	normalizedAgent := NormalizeToken(agent)
 	pl, ok := p.autoTemplates[normalizedAgent]
 	if !ok {
-		return "", fmt.Errorf("autonomous prompt for agent %s not loaded; call Validate", normalizedAgent)
+		return "", fmt.Errorf("autonomous prompt for agent %s not loaded", normalizedAgent)
 	}
 	if strings.TrimSpace(data.AgentName) == "" {
 		data.AgentName = normalizedAgent
@@ -87,7 +91,7 @@ func (p *PromptStore) AutonomousPrompt(agent string, data AutonomousPromptData) 
 	return executeTemplate(pl, data, "autonomous agent")
 }
 
-func (p *PromptStore) Validate(prAgents []string, autonomousAgents []string) error {
+func (p *PromptStore) loadTemplates(prAgents []string, autonomousAgents []string) error {
 	issueTpl, err := p.loadTemplate(filepath.Join(p.baseDir, "issue_refinement_prompts", "PROMPT.md"))
 	if err != nil {
 		return err
@@ -95,12 +99,8 @@ func (p *PromptStore) Validate(prAgents []string, autonomousAgents []string) err
 	p.issueTpl = issueTpl
 
 	p.prTemplates = make(map[string]*template.Template)
-	seenPR := make(map[string]struct{})
-	for _, agent := range prAgents {
-		normalized := normalizeToken(agent)
-		if _, ok := seenPR[normalized]; ok {
-			continue
-		}
+	for _, agent := range dedupeTokens(prAgents) {
+		normalized := NormalizeToken(agent)
 		tpl, err := p.loadCompositeTemplates(
 			filepath.Join(p.baseDir, "pr_review_prompts", "base", "PROMPT.md"),
 			filepath.Join(p.baseDir, "guidance", normalized+".md"),
@@ -109,16 +109,11 @@ func (p *PromptStore) Validate(prAgents []string, autonomousAgents []string) err
 			return err
 		}
 		p.prTemplates[normalized] = tpl
-		seenPR[normalized] = struct{}{}
 	}
 
 	p.autoTemplates = make(map[string]*template.Template)
-	seenAuto := make(map[string]struct{})
-	for _, agent := range autonomousAgents {
-		normalized := normalizeToken(agent)
-		if _, ok := seenAuto[normalized]; ok {
-			continue
-		}
+	for _, agent := range dedupeTokens(autonomousAgents) {
+		normalized := NormalizeToken(agent)
 		tpl, err := p.loadCompositeTemplates(
 			filepath.Join(p.baseDir, "autonomous", "base", "PROMPT.md"),
 			filepath.Join(p.baseDir, "guidance", normalized+".md"),
@@ -127,7 +122,6 @@ func (p *PromptStore) Validate(prAgents []string, autonomousAgents []string) err
 			return err
 		}
 		p.autoTemplates[normalized] = tpl
-		seenAuto[normalized] = struct{}{}
 	}
 
 	return nil
@@ -181,11 +175,29 @@ func executeTemplate(tpl *template.Template, data any, name string) (string, err
 	return buf.String(), nil
 }
 
-func normalizeToken(token string) string {
+// NormalizeToken canonicalises user-provided agent or backend identifiers so
+// they can be safely used as map keys and filesystem fragments.
+func NormalizeToken(token string) string {
 	token = strings.ToLower(strings.TrimSpace(token))
 	token = filepath.Clean(token)
 	token = strings.TrimLeft(token, string(filepath.Separator)+".")
 	token = strings.ReplaceAll(token, "..", "_")
 	token = strings.ReplaceAll(token, string(filepath.Separator), "_")
+	token = strings.ReplaceAll(token, "\\", "_")
+	token = strings.ReplaceAll(token, "\x00", "_")
 	return token
+}
+
+func dedupeTokens(tokens []string) []string {
+	seen := make(map[string]struct{})
+	unique := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		normalized := NormalizeToken(token)
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		unique = append(unique, normalized)
+	}
+	return unique
 }
