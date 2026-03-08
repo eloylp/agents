@@ -40,13 +40,18 @@ func (s *MemoryStore) WithLock(agent string, repo string, fn func(memoryPath str
 
 func (s *MemoryStore) ensureMemoryFile(agent string, repo string) (string, error) {
 	dir := filepath.Join(s.baseDir, "autonomous", sanitize(agent), sanitize(repo))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	cleanBase := filepath.Clean(s.baseDir)
+	cleanDir := filepath.Clean(dir)
+	if !strings.HasPrefix(cleanDir+string(filepath.Separator), cleanBase+string(filepath.Separator)) {
+		return "", fmt.Errorf("memory path escapes base dir: %s", dir)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create memory dir %s: %w", dir, err)
 	}
 	path := filepath.Join(dir, "MEMORY.md")
 	_, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		if writeErr := os.WriteFile(path, []byte{}, 0o644); writeErr != nil {
+		if writeErr := os.WriteFile(path, []byte{}, 0o600); writeErr != nil {
 			return "", fmt.Errorf("create memory file %s: %w", path, writeErr)
 		}
 		return path, nil
@@ -70,6 +75,10 @@ func (s *MemoryStore) lockFor(agent string, repo string) *sync.Mutex {
 }
 
 func sanitize(value string) string {
+	value = filepath.Clean(value)
+	value = strings.TrimLeft(value, string(filepath.Separator))
 	value = strings.ReplaceAll(value, "..", "_")
-	return strings.ReplaceAll(value, string(filepath.Separator), "_")
+	value = strings.ReplaceAll(value, string(filepath.Separator), "_")
+	value = strings.ReplaceAll(value, "\x00", "_")
+	return value
 }

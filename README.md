@@ -164,6 +164,7 @@ processor:
   pr_queue_buffer: 256
 
 agents_dir: "./agents"  # root directory for prompts and autonomous memories
+allow_autonomous_prs: false  # require explicit opt-in for autonomous PR creation
 
 ai_backends:
   claude:
@@ -201,7 +202,7 @@ Prompts are loaded directly from `agents_dir` (no embedded defaults). The daemon
 
 Autonomous agents only run for repositories that are also present and enabled under `repos`. Each scheduled run performs two parallel passes:
 - Sweep open issues and add a single comment only if this agent has not commented yet.
-- Sweep the codebase for improvements; open an issue for large/uncertain work or open a PR when the change is small and high-confidence.
+- Sweep the codebase for improvements; open an issue for large/uncertain work or open a PR when the change is small and high-confidence (PR creation is gated by `allow_autonomous_prs`, default `false`).
 
 Agent memory is stored per repo at `agents_dir/autonomous/<agent>/<owner_repo>/MEMORY.md` (repo slashes are replaced with `_`). The daemon serializes writes so concurrent runs cannot corrupt memory; the file is created automatically if missing.
 

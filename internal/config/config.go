@@ -29,12 +29,13 @@ const (
 var defaultAgents = []string{"architect", "security", "testing", "devops", "ux"}
 
 type Config struct {
-	Log        LogConfig                  `yaml:"log"`
-	HTTP       HTTPConfig                 `yaml:"http"`
-	Processor  ProcessorConfig            `yaml:"processor"`
-	AIBackends map[string]AIBackendConfig `yaml:"ai_backends"`
-	Repos      []RepoConfig               `yaml:"repos"`
-	AgentsDir  string                     `yaml:"agents_dir"`
+	Log                LogConfig                  `yaml:"log"`
+	HTTP               HTTPConfig                 `yaml:"http"`
+	Processor          ProcessorConfig            `yaml:"processor"`
+	AIBackends         map[string]AIBackendConfig `yaml:"ai_backends"`
+	Repos              []RepoConfig               `yaml:"repos"`
+	AgentsDir          string                     `yaml:"agents_dir"`
+	AllowAutonomousPRs bool                       `yaml:"allow_autonomous_prs"`
 
 	AutonomousAgents []AutonomousRepoConfig `yaml:"autonomous_agents"`
 }
@@ -121,6 +122,7 @@ func (c *Config) applyDefaults() {
 	if strings.TrimSpace(c.AgentsDir) == "" {
 		c.AgentsDir = defaultAgentsDir
 	}
+	// default AllowAutonomousPRs stays false unless explicitly enabled.
 	if strings.TrimSpace(c.HTTP.ListenAddr) == "" {
 		c.HTTP.ListenAddr = defaultHTTPListenAddr
 	}
@@ -211,6 +213,9 @@ func (c *Config) resolveEnv() error {
 			return errors.New("config: autonomous agent repo is required")
 		}
 		for _, agent := range repo.Agents {
+			if agent.Name != strings.ToLower(strings.TrimSpace(agent.Name)) {
+				return fmt.Errorf("config: autonomous agent name must be lowercase and trimmed for repo %s", repo.Repo)
+			}
 			if agent.Name == "" {
 				return fmt.Errorf("config: autonomous agent name required for repo %s", repo.Repo)
 			}

@@ -64,10 +64,17 @@ func (s *Scheduler) registerJobs() error {
 			continue
 		}
 		for _, agent := range repoCfg.Agents {
-			if _, err := s.cron.AddFunc(agent.Cron, s.runAgent(repo.FullName, agent)); err != nil {
+			id, err := s.cron.AddFunc(agent.Cron, s.runAgent(repo.FullName, agent))
+			if err != nil {
 				return fmt.Errorf("schedule autonomous agent %s for repo %s: %w", agent.Name, repo.FullName, err)
 			}
-			s.logger.Info().Str("repo", repo.FullName).Str("agent", agent.Name).Str("cron", agent.Cron).Msg("autonomous agent scheduled")
+			entry := s.cron.Entry(id)
+			s.logger.Info().
+				Str("repo", repo.FullName).
+				Str("agent", agent.Name).
+				Str("cron", agent.Cron).
+				Time("next_run", entry.Next).
+				Msg("autonomous agent scheduled")
 		}
 	}
 	return nil
@@ -86,18 +93,17 @@ func (s *Scheduler) runAgent(repo string, agent config.AutonomousAgentConfig) fu
 			logger.Error().Str("backend", backend).Msg("no runner for configured backend")
 			return
 		}
-		group, ctx := errgroup.WithContext(context.Background())
-		group.Go(func() error {
-			return s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
+		err := s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
+			group, ctx := errgroup.WithContext(context.Background())
+			group.Go(func() error {
 				return s.runIssueTask(ctx, runner, backend, repo, agent, memoryPath, memory, logger)
 			})
-		})
-		group.Go(func() error {
-			return s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
+			group.Go(func() error {
 				return s.runCodeTask(ctx, runner, backend, repo, agent, memoryPath, memory, logger)
 			})
+			return group.Wait()
 		})
-		if err := group.Wait(); err != nil {
+		if err != nil {
 			logger.Error().Err(err).Msg("autonomous agent run completed with errors")
 		}
 	}
@@ -131,6 +137,9 @@ func (s *Scheduler) runIssueTask(ctx context.Context, runner ai.Runner, backend 
 
 func (s *Scheduler) runCodeTask(ctx context.Context, runner ai.Runner, backend string, repo string, agent config.AutonomousAgentConfig, memoryPath string, memory string, logger zerolog.Logger) error {
 	task := "Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, open a PR directly."
+	if !s.cfg.AllowAutonomousPRs {
+		task = "Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, describe the diff in an issue but do not open a PR."
+	}
 	prompt, err := s.prompts.AutonomousPrompt(agent.Name, ai.AutonomousPromptData{
 		Repo:        repo,
 		AgentName:   agent.Name,

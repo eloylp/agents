@@ -19,6 +19,7 @@ processor:
   pr_queue_buffer: 256
 
 agents_dir: "./agents"
+allow_autonomous_prs: false
 
 ai_backends:
   claude:

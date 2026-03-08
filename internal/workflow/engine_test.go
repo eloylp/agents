@@ -2,13 +2,12 @@ package workflow
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/ai"
+	"github.com/eloylp/agents/internal/ai/testutil"
 	"github.com/eloylp/agents/internal/config"
 )
 
@@ -31,7 +30,7 @@ func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
 			"codex":  {Agents: []string{"architect"}},
 		},
 	}
-	promptStore := buildTestPrompts(t)
+	promptStore := testutil.BuildPromptStore(t, []string{"architect"}, nil)
 	engine := NewEngine(cfg, map[string]ai.Runner{"claude": runner, "codex": runner}, promptStore, zerolog.Nop())
 	issue := Issue{
 		Number: 10,
@@ -52,28 +51,4 @@ func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
 	if runner.last.Workflow != "issue_refine:codex" {
 		t.Fatalf("expected event label backend codex, got %q", runner.last.Workflow)
 	}
-}
-
-func buildTestPrompts(t *testing.T) *ai.PromptStore {
-	t.Helper()
-	dir := t.TempDir()
-	issuePath := filepath.Join(dir, "issue_refinement_prompts")
-	prPath := filepath.Join(dir, "pr_review_prompts", "architect")
-	if err := os.MkdirAll(issuePath, 0o755); err != nil {
-		t.Fatalf("create issue prompt dir: %v", err)
-	}
-	if err := os.MkdirAll(prPath, 0o755); err != nil {
-		t.Fatalf("create pr prompt dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(issuePath, "PROMPT.md"), []byte("issue {{.Repo}} #{{.Number}}"), 0o644); err != nil {
-		t.Fatalf("write issue prompt: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(prPath, "PROMPT.md"), []byte("pr {{.Repo}} #{{.Number}} {{.AgentHeading}} {{.WorkflowPartKey}}"), 0o644); err != nil {
-		t.Fatalf("write pr prompt: %v", err)
-	}
-	store, err := ai.NewPromptStore(dir)
-	if err != nil {
-		t.Fatalf("build prompt store: %v", err)
-	}
-	return store
 }

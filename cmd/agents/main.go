@@ -48,6 +48,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	prAgents := collectPRAgents(cfg)
+	autoAgents := collectAutonomousAgents(cfg)
+	if err := promptStore.Validate(prAgents, autoAgents); err != nil {
+		return err
+	}
+	logger.Info().Str("agents_dir", cfg.AgentsDir).Msg("prompt store initialized")
 
 	runners := make(map[string]ai.Runner, len(cfg.AIBackends))
 	for name, backend := range cfg.AIBackends {
@@ -90,4 +96,32 @@ func run() error {
 
 	logger.Info().Msg("agents daemon stopped")
 	return nil
+}
+
+func collectPRAgents(cfg *config.Config) []string {
+	seen := make(map[string]struct{})
+	for _, backend := range cfg.AIBackends {
+		for _, agent := range backend.Agents {
+			seen[agent] = struct{}{}
+		}
+	}
+	agents := make([]string, 0, len(seen))
+	for a := range seen {
+		agents = append(agents, a)
+	}
+	return agents
+}
+
+func collectAutonomousAgents(cfg *config.Config) []string {
+	seen := make(map[string]struct{})
+	for _, repo := range cfg.AutonomousAgents {
+		for _, agent := range repo.Agents {
+			seen[agent.Name] = struct{}{}
+		}
+	}
+	agents := make([]string, 0, len(seen))
+	for a := range seen {
+		agents = append(agents, a)
+	}
+	return agents
 }

@@ -66,6 +66,9 @@ repos:
 	if cfg.AgentsDir != defaultAgentsDir {
 		t.Fatalf("expected default agents dir %q, got %q", defaultAgentsDir, cfg.AgentsDir)
 	}
+	if cfg.AllowAutonomousPRs {
+		t.Fatalf("expected autonomous prs default false")
+	}
 }
 
 func TestDefaultConfiguredBackend(t *testing.T) {
@@ -100,6 +103,11 @@ autonomous_agents:
     agents:
       - name: ""
         cron: ""
+  - repo: "owner/repo"
+    enabled: true
+    agents:
+      - name: "UpperCase"
+        cron: "* * * * *"
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)

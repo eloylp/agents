@@ -65,3 +65,83 @@ func TestSchedulerRunsAutonomousTasks(t *testing.T) {
 		t.Fatalf("expected two autonomous tasks, got %d", runner.calls)
 	}
 }
+
+func TestSchedulerSkipsDisabledRepo(t *testing.T) {
+	dir := t.TempDir()
+	autoDir := filepath.Join(dir, "autonomous", "architect")
+	if err := os.MkdirAll(autoDir, 0o755); err != nil {
+		t.Fatalf("mkdir autonomous prompt dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(autoDir, "PROMPT.md"), []byte("{{.Task}}"), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	prompts, err := ai.NewPromptStore(dir)
+	if err != nil {
+		t.Fatalf("prompt store: %v", err)
+	}
+	cfg := &config.Config{
+		AgentsDir: dir,
+		AIBackends: map[string]config.AIBackendConfig{
+			"claude": {},
+		},
+		Repos: []config.RepoConfig{
+			{FullName: "owner/repo", Enabled: false},
+		},
+		AutonomousAgents: []config.AutonomousRepoConfig{
+			{
+				Repo:    "owner/repo",
+				Enabled: true,
+				Agents: []config.AutonomousAgentConfig{
+					{Name: "architect", Description: "desc", Cron: "* * * * *"},
+				},
+			},
+		},
+	}
+	memory := NewMemoryStore(dir)
+	runner := &stubRunner{}
+	scheduler, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, prompts, memory, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("scheduler: %v", err)
+	}
+	if got := len(scheduler.cron.Entries()); got != 0 {
+		t.Fatalf("expected no scheduled entries, got %d", got)
+	}
+}
+
+func TestSchedulerRejectsInvalidCron(t *testing.T) {
+	dir := t.TempDir()
+	autoDir := filepath.Join(dir, "autonomous", "architect")
+	if err := os.MkdirAll(autoDir, 0o755); err != nil {
+		t.Fatalf("mkdir autonomous prompt dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(autoDir, "PROMPT.md"), []byte("{{.Task}}"), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	prompts, err := ai.NewPromptStore(dir)
+	if err != nil {
+		t.Fatalf("prompt store: %v", err)
+	}
+	cfg := &config.Config{
+		AgentsDir: dir,
+		AIBackends: map[string]config.AIBackendConfig{
+			"claude": {},
+		},
+		Repos: []config.RepoConfig{
+			{FullName: "owner/repo", Enabled: true},
+		},
+		AutonomousAgents: []config.AutonomousRepoConfig{
+			{
+				Repo:    "owner/repo",
+				Enabled: true,
+				Agents: []config.AutonomousAgentConfig{
+					{Name: "architect", Description: "desc", Cron: "invalid"},
+				},
+			},
+		},
+	}
+	memory := NewMemoryStore(dir)
+	runner := &stubRunner{}
+	if _, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, prompts, memory, zerolog.Nop()); err == nil {
+		t.Fatalf("expected cron parse error")
+	}
+}
