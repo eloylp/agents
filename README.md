@@ -198,7 +198,7 @@ autonomous_agents:
         cron: "0 9 * * *"   # standard cron syntax
 ```
 
-Prompts are loaded directly from `agents_dir` (no embedded defaults). The daemon fails fast if any required prompt file is missing. The repository ships a starter `agents/` directory you can point to or copy and edit.
+Prompts are loaded directly from `agents_dir` (no embedded defaults). The daemon fails fast if any required prompt file is missing. The repository ships a starter `agents/` directory you can point to or copy and edit. Base templates hold the shared structure; agent-specific files only define the guidance text via Go templates.
 
 Autonomous agents only run for repositories that are also present and enabled under `repos`. Each scheduled run performs two parallel passes:
 - Sweep open issues and add a single comment only if this agent has not commented yet.
@@ -211,6 +211,7 @@ A default prompt and memory layout is included:
 ```
 agents/
 ├── autonomous/
+│   ├── base/PROMPT.md
 │   ├── architect/
 │   │   ├── PROMPT.md
 │   │   └── owner_repo/
@@ -226,6 +227,7 @@ agents/
 ├── issue_refinement_prompts/
 │   └── PROMPT.md
 └── pr_review_prompts/
+    ├── base/PROMPT.md
     ├── architect/PROMPT.md
     ├── devops/PROMPT.md
     ├── security/PROMPT.md

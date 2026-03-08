@@ -33,6 +33,9 @@ func TestBuildPRReviewPromptIncludesRequirements(t *testing.T) {
 	if !strings.Contains(prompt, "all previous PR comments/reviews") {
 		t.Fatalf("expected full pr comments/reviews reading requirement in prompt")
 	}
+	if !strings.Contains(prompt, "pr guidance security") {
+		t.Fatalf("expected agent-specific guidance in prompt")
+	}
 }
 
 func TestPromptStoreValidateFailsOnMissingTemplate(t *testing.T) {

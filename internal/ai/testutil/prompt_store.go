@@ -23,26 +23,31 @@ issue {{.Repo}} #{{.Number}}`
 	if err := os.WriteFile(filepath.Join(issueDir, "PROMPT.md"), []byte(issueBody), 0o644); err != nil {
 		t.Fatalf("write issue prompt: %v", err)
 	}
-	for _, agent := range prAgents {
-		prDir := filepath.Join(dir, "pr_review_prompts", agent)
-		if err := os.MkdirAll(prDir, 0o755); err != nil {
-			t.Fatalf("mkdir pr prompts: %v", err)
-		}
-		prBody := `{{.AgentHeading}}
+	prBaseDir := filepath.Join(dir, "pr_review_prompts", "base")
+	if err := os.MkdirAll(prBaseDir, 0o755); err != nil {
+		t.Fatalf("mkdir pr base: %v", err)
+	}
+	prBaseBody := `{{.AgentHeading}}
 all previous PR comments/reviews
-pr {{.Repo}} #{{.Number}} {{.WorkflowPartKey}} {{.AgentGuidance}}`
-		if err := os.WriteFile(filepath.Join(prDir, "PROMPT.md"), []byte(prBody), 0o644); err != nil {
-			t.Fatalf("write pr prompt: %v", err)
-		}
+{{template "agent_guidance" .}}
+pr {{.Repo}} #{{.Number}} {{.WorkflowPartKey}}`
+	if err := os.WriteFile(filepath.Join(prBaseDir, "PROMPT.md"), []byte(prBaseBody), 0o644); err != nil {
+		t.Fatalf("write pr base: %v", err)
+	}
+	for _, agent := range prAgents {
+		writeAgentTemplate(t, filepath.Join(dir, "pr_review_prompts", agent), "{{define \"agent_guidance\"}}pr guidance "+agent+"{{end}}")
+	}
+	autoBaseDir := filepath.Join(dir, "autonomous", "base")
+	if err := os.MkdirAll(autoBaseDir, 0o755); err != nil {
+		t.Fatalf("mkdir auto base: %v", err)
+	}
+	autoBaseBody := `auto {{.AgentName}} {{.Repo}} {{.Task}} {{.MemoryPath}}
+{{template "agent_guidance" .}}`
+	if err := os.WriteFile(filepath.Join(autoBaseDir, "PROMPT.md"), []byte(autoBaseBody), 0o644); err != nil {
+		t.Fatalf("write auto base: %v", err)
 	}
 	for _, agent := range autoAgents {
-		autoDir := filepath.Join(dir, "autonomous", agent)
-		if err := os.MkdirAll(autoDir, 0o755); err != nil {
-			t.Fatalf("mkdir auto prompts: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(autoDir, "PROMPT.md"), []byte("auto {{.AgentName}} {{.Repo}} {{.Task}} {{.MemoryPath}} {{.Memory}}"), 0o644); err != nil {
-			t.Fatalf("write auto prompt: %v", err)
-		}
+		writeAgentTemplate(t, filepath.Join(dir, "autonomous", agent), "{{define \"agent_guidance\"}}auto guidance "+agent+"{{end}}")
 	}
 	store, err := ai.NewPromptStore(dir)
 	if err != nil {
@@ -52,4 +57,14 @@ pr {{.Repo}} #{{.Number}} {{.WorkflowPartKey}} {{.AgentGuidance}}`
 		t.Fatalf("prompt validate: %v", err)
 	}
 	return store
+}
+
+func writeAgentTemplate(t *testing.T, dir string, body string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir agent prompts: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "PROMPT.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write agent prompt: %v", err)
+	}
 }

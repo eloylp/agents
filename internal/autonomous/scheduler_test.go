@@ -24,11 +24,12 @@ func (s *stubRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
 func TestSchedulerRunsAutonomousTasks(t *testing.T) {
 	dir := t.TempDir()
 	writeIssuePrompt(t, dir)
+	writeAutonomousBase(t, dir)
 	autoDir := filepath.Join(dir, "autonomous", "architect")
 	if err := os.MkdirAll(autoDir, 0o755); err != nil {
 		t.Fatalf("mkdir autonomous prompt dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(autoDir, "PROMPT.md"), []byte("{{.Task}} {{.MemoryPath}}"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(autoDir, "PROMPT.md"), []byte("{{define \"agent_guidance\"}}architect{{end}}"), 0o644); err != nil {
 		t.Fatalf("write prompt: %v", err)
 	}
 	prompts, err := ai.NewPromptStore(dir)
@@ -73,11 +74,12 @@ func TestSchedulerRunsAutonomousTasks(t *testing.T) {
 func TestSchedulerSkipsDisabledRepo(t *testing.T) {
 	dir := t.TempDir()
 	writeIssuePrompt(t, dir)
+	writeAutonomousBase(t, dir)
 	autoDir := filepath.Join(dir, "autonomous", "architect")
 	if err := os.MkdirAll(autoDir, 0o755); err != nil {
 		t.Fatalf("mkdir autonomous prompt dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(autoDir, "PROMPT.md"), []byte("{{.Task}}"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(autoDir, "PROMPT.md"), []byte("{{define \"agent_guidance\"}}architect{{end}}"), 0o644); err != nil {
 		t.Fatalf("write prompt: %v", err)
 	}
 	prompts, err := ai.NewPromptStore(dir)
@@ -119,11 +121,12 @@ func TestSchedulerSkipsDisabledRepo(t *testing.T) {
 func TestSchedulerRejectsInvalidCron(t *testing.T) {
 	dir := t.TempDir()
 	writeIssuePrompt(t, dir)
+	writeAutonomousBase(t, dir)
 	autoDir := filepath.Join(dir, "autonomous", "architect")
 	if err := os.MkdirAll(autoDir, 0o755); err != nil {
 		t.Fatalf("mkdir autonomous prompt dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(autoDir, "PROMPT.md"), []byte("{{.Task}}"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(autoDir, "PROMPT.md"), []byte("{{define \"agent_guidance\"}}architect{{end}}"), 0o644); err != nil {
 		t.Fatalf("write prompt: %v", err)
 	}
 	prompts, err := ai.NewPromptStore(dir)
@@ -166,5 +169,16 @@ func writeIssuePrompt(t *testing.T, dir string) {
 	}
 	if err := os.WriteFile(filepath.Join(issueDir, "PROMPT.md"), []byte("{{.Repo}} #{{.Number}}"), 0o644); err != nil {
 		t.Fatalf("write issue prompt: %v", err)
+	}
+}
+
+func writeAutonomousBase(t *testing.T, dir string) {
+	t.Helper()
+	autoBase := filepath.Join(dir, "autonomous", "base")
+	if err := os.MkdirAll(autoBase, 0o755); err != nil {
+		t.Fatalf("mkdir auto base: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(autoBase, "PROMPT.md"), []byte("{{.Task}} {{.MemoryPath}} {{template \"agent_guidance\" .}}"), 0o644); err != nil {
+		t.Fatalf("write auto base: %v", err)
 	}
 }

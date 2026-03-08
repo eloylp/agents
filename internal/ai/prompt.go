@@ -20,7 +20,6 @@ type PRReviewPromptData struct {
 	Backend         string
 	Agent           string
 	AgentHeading    string
-	AgentGuidance   string
 	WorkflowPartKey string
 }
 
@@ -65,14 +64,12 @@ func (p *PromptStore) PRReviewPrompt(agent string, backend string, repo string, 
 	if !ok {
 		return "", fmt.Errorf("pr review prompt for agent %s not loaded; call Validate", normalizedAgent)
 	}
-	guidance := agentGuidance(normalizedAgent)
 	data := PRReviewPromptData{
 		Repo:            repo,
 		Number:          number,
 		Backend:         backend,
 		Agent:           normalizedAgent,
 		AgentHeading:    fmt.Sprintf("## %s specialist: %s", backend, normalizedAgent),
-		AgentGuidance:   guidance,
 		WorkflowPartKey: fmt.Sprintf("%s/%s", backend, normalizedAgent),
 	}
 	return executeTemplate(pl, data, "pr review")
@@ -104,7 +101,10 @@ func (p *PromptStore) Validate(prAgents []string, autonomousAgents []string) err
 		if _, ok := seenPR[normalized]; ok {
 			continue
 		}
-		tpl, err := p.loadTemplate(filepath.Join(p.baseDir, "pr_review_prompts", normalized, "PROMPT.md"))
+		tpl, err := p.loadCompositeTemplate(
+			filepath.Join(p.baseDir, "pr_review_prompts", "base", "PROMPT.md"),
+			filepath.Join(p.baseDir, "pr_review_prompts", normalized, "PROMPT.md"),
+		)
 		if err != nil {
 			return err
 		}
@@ -119,7 +119,10 @@ func (p *PromptStore) Validate(prAgents []string, autonomousAgents []string) err
 		if _, ok := seenAuto[normalized]; ok {
 			continue
 		}
-		tpl, err := p.loadTemplate(filepath.Join(p.baseDir, "autonomous", normalized, "PROMPT.md"))
+		tpl, err := p.loadCompositeTemplate(
+			filepath.Join(p.baseDir, "autonomous", "base", "PROMPT.md"),
+			filepath.Join(p.baseDir, "autonomous", normalized, "PROMPT.md"),
+		)
 		if err != nil {
 			return err
 		}
@@ -142,29 +145,32 @@ func (p *PromptStore) loadTemplate(path string) (*template.Template, error) {
 	return tpl, nil
 }
 
+func (p *PromptStore) loadCompositeTemplate(basePath string, agentPath string) (*template.Template, error) {
+	baseContent, err := os.ReadFile(basePath)
+	if err != nil {
+		return nil, fmt.Errorf("load prompt %s: %w", basePath, err)
+	}
+	tpl, err := template.New(filepath.Base(basePath)).Option("missingkey=error").Parse(string(baseContent))
+	if err != nil {
+		return nil, fmt.Errorf("parse prompt %s: %w", basePath, err)
+	}
+	agentContent, err := os.ReadFile(agentPath)
+	if err != nil {
+		return nil, fmt.Errorf("load prompt %s: %w", agentPath, err)
+	}
+	tpl, err = tpl.Parse(string(agentContent))
+	if err != nil {
+		return nil, fmt.Errorf("parse prompt %s: %w", agentPath, err)
+	}
+	return tpl, nil
+}
+
 func executeTemplate(tpl *template.Template, data any, name string) (string, error) {
 	var buf bytes.Buffer
 	if err := tpl.Execute(&buf, data); err != nil {
 		return "", fmt.Errorf("render %s prompt: %w", name, err)
 	}
 	return buf.String(), nil
-}
-
-func agentGuidance(agent string) string {
-	switch agent {
-	case "architect":
-		return "Focus on architecture, boundaries, coupling, and long-term maintainability."
-	case "security":
-		return "Focus on security vulnerabilities, trust boundaries, secrets handling, and unsafe defaults."
-	case "testing":
-		return "Focus on test coverage gaps, fragile tests, and missing validation scenarios."
-	case "devops":
-		return "Focus on CI/CD, deployment safety, observability, and runtime operability."
-	case "ux":
-		return "Focus on developer/user experience, clarity, ergonomics, and error messaging."
-	default:
-		return "Focus on the requested specialist agent."
-	}
 }
 
 func normalizeToken(token string) string {
