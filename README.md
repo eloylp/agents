@@ -212,27 +212,19 @@ A default prompt and memory layout is included:
 agents/
 ├── autonomous/
 │   ├── base/PROMPT.md
-│   ├── architect/
-│   │   ├── PROMPT.md
-│   │   └── owner_repo/
-│   │       └── MEMORY.md   # created on first run
-│   ├── devops/
-│   │   └── PROMPT.md
-│   ├── security/
-│   │   └── PROMPT.md
-│   ├── testing/
-│   │   └── PROMPT.md
-│   └── ux/
-│       └── PROMPT.md
+│   └── owner_repo/
+│       └── MEMORY.md   # created on first run
 ├── issue_refinement_prompts/
 │   └── PROMPT.md
 └── pr_review_prompts/
     ├── base/PROMPT.md
-    ├── architect/PROMPT.md
-    ├── devops/PROMPT.md
-    ├── security/PROMPT.md
-    ├── testing/PROMPT.md
-    └── ux/PROMPT.md
+    └── (uses shared guidance files)
+guidance/
+├── architect.md
+├── devops.md
+├── security.md
+├── testing.md
+└── ux.md
 ```
 
 Create a `.env` file in the project root for secrets (loaded automatically):

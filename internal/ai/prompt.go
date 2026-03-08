@@ -101,9 +101,9 @@ func (p *PromptStore) Validate(prAgents []string, autonomousAgents []string) err
 		if _, ok := seenPR[normalized]; ok {
 			continue
 		}
-		tpl, err := p.loadCompositeTemplate(
+		tpl, err := p.loadCompositeTemplates(
 			filepath.Join(p.baseDir, "pr_review_prompts", "base", "PROMPT.md"),
-			filepath.Join(p.baseDir, "pr_review_prompts", normalized, "PROMPT.md"),
+			filepath.Join(p.baseDir, "guidance", normalized+".md"),
 		)
 		if err != nil {
 			return err
@@ -119,9 +119,9 @@ func (p *PromptStore) Validate(prAgents []string, autonomousAgents []string) err
 		if _, ok := seenAuto[normalized]; ok {
 			continue
 		}
-		tpl, err := p.loadCompositeTemplate(
+		tpl, err := p.loadCompositeTemplates(
 			filepath.Join(p.baseDir, "autonomous", "base", "PROMPT.md"),
-			filepath.Join(p.baseDir, "autonomous", normalized, "PROMPT.md"),
+			filepath.Join(p.baseDir, "guidance", normalized+".md"),
 		)
 		if err != nil {
 			return err
@@ -145,22 +145,27 @@ func (p *PromptStore) loadTemplate(path string) (*template.Template, error) {
 	return tpl, nil
 }
 
-func (p *PromptStore) loadCompositeTemplate(basePath string, agentPath string) (*template.Template, error) {
-	baseContent, err := os.ReadFile(basePath)
-	if err != nil {
-		return nil, fmt.Errorf("load prompt %s: %w", basePath, err)
+func (p *PromptStore) loadCompositeTemplates(paths ...string) (*template.Template, error) {
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("no template paths provided")
 	}
-	tpl, err := template.New(filepath.Base(basePath)).Option("missingkey=error").Parse(string(baseContent))
+	content, err := os.ReadFile(paths[0])
 	if err != nil {
-		return nil, fmt.Errorf("parse prompt %s: %w", basePath, err)
+		return nil, fmt.Errorf("load prompt %s: %w", paths[0], err)
 	}
-	agentContent, err := os.ReadFile(agentPath)
+	tpl, err := template.New(filepath.Base(paths[0])).Option("missingkey=error").Parse(string(content))
 	if err != nil {
-		return nil, fmt.Errorf("load prompt %s: %w", agentPath, err)
+		return nil, fmt.Errorf("parse prompt %s: %w", paths[0], err)
 	}
-	tpl, err = tpl.Parse(string(agentContent))
-	if err != nil {
-		return nil, fmt.Errorf("parse prompt %s: %w", agentPath, err)
+	for _, path := range paths[1:] {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("load prompt %s: %w", path, err)
+		}
+		tpl, err = tpl.Parse(string(content))
+		if err != nil {
+			return nil, fmt.Errorf("parse prompt %s: %w", path, err)
+		}
 	}
 	return tpl, nil
 }

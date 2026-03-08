@@ -25,13 +25,7 @@ func TestSchedulerRunsAutonomousTasks(t *testing.T) {
 	dir := t.TempDir()
 	writeIssuePrompt(t, dir)
 	writeAutonomousBase(t, dir)
-	autoDir := filepath.Join(dir, "autonomous", "architect")
-	if err := os.MkdirAll(autoDir, 0o755); err != nil {
-		t.Fatalf("mkdir autonomous prompt dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(autoDir, "PROMPT.md"), []byte("{{define \"agent_guidance\"}}architect{{end}}"), 0o644); err != nil {
-		t.Fatalf("write prompt: %v", err)
-	}
+	writeGuidance(t, dir, "architect")
 	prompts, err := ai.NewPromptStore(dir)
 	if err != nil {
 		t.Fatalf("prompt store: %v", err)
@@ -75,13 +69,7 @@ func TestSchedulerSkipsDisabledRepo(t *testing.T) {
 	dir := t.TempDir()
 	writeIssuePrompt(t, dir)
 	writeAutonomousBase(t, dir)
-	autoDir := filepath.Join(dir, "autonomous", "architect")
-	if err := os.MkdirAll(autoDir, 0o755); err != nil {
-		t.Fatalf("mkdir autonomous prompt dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(autoDir, "PROMPT.md"), []byte("{{define \"agent_guidance\"}}architect{{end}}"), 0o644); err != nil {
-		t.Fatalf("write prompt: %v", err)
-	}
+	writeGuidance(t, dir, "architect")
 	prompts, err := ai.NewPromptStore(dir)
 	if err != nil {
 		t.Fatalf("prompt store: %v", err)
@@ -122,13 +110,7 @@ func TestSchedulerRejectsInvalidCron(t *testing.T) {
 	dir := t.TempDir()
 	writeIssuePrompt(t, dir)
 	writeAutonomousBase(t, dir)
-	autoDir := filepath.Join(dir, "autonomous", "architect")
-	if err := os.MkdirAll(autoDir, 0o755); err != nil {
-		t.Fatalf("mkdir autonomous prompt dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(autoDir, "PROMPT.md"), []byte("{{define \"agent_guidance\"}}architect{{end}}"), 0o644); err != nil {
-		t.Fatalf("write prompt: %v", err)
-	}
+	writeGuidance(t, dir, "architect")
 	prompts, err := ai.NewPromptStore(dir)
 	if err != nil {
 		t.Fatalf("prompt store: %v", err)
@@ -180,5 +162,16 @@ func writeAutonomousBase(t *testing.T, dir string) {
 	}
 	if err := os.WriteFile(filepath.Join(autoBase, "PROMPT.md"), []byte("{{.Task}} {{.MemoryPath}} {{template \"agent_guidance\" .}}"), 0o644); err != nil {
 		t.Fatalf("write auto base: %v", err)
+	}
+}
+
+func writeGuidance(t *testing.T, dir string, agent string) {
+	t.Helper()
+	guidanceDir := filepath.Join(dir, "guidance")
+	if err := os.MkdirAll(guidanceDir, 0o755); err != nil {
+		t.Fatalf("mkdir guidance: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(guidanceDir, agent+".md"), []byte("{{define \"agent_guidance\"}}"+agent+"{{end}}"), 0o644); err != nil {
+		t.Fatalf("write guidance: %v", err)
 	}
 }
