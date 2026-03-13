@@ -6,14 +6,14 @@ import (
 	"testing"
 )
 
-func TestLoadRequiresSupportedAgentNames(t *testing.T) {
+func TestLoadRequiresSupportedBackendNames(t *testing.T) {
 	t.Setenv("WEBHOOK_SECRET", "secret")
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	content := `http:
   webhook_secret_env: WEBHOOK_SECRET
 ai_backends:
-	unsupported:
+  unsupported:
     mode: noop
 repos:
   - full_name: "owner/repo"
@@ -27,7 +27,7 @@ repos:
 	}
 }
 
-func TestLoadAppliesAgentDefaults(t *testing.T) {
+func TestLoadAppliesDefaults(t *testing.T) {
 	t.Setenv("WEBHOOK_SECRET", "secret")
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
@@ -36,6 +36,9 @@ func TestLoadAppliesAgentDefaults(t *testing.T) {
 ai_backends:
   claude:
     mode: noop
+agents:
+  - name: architect
+    prompt: "focus on architecture"
 repos:
   - full_name: "owner/repo"
 `
@@ -51,9 +54,6 @@ repos:
 	if backend.TimeoutSeconds != defaultAITimeoutSeconds {
 		t.Fatalf("expected timeout default %d, got %d", defaultAITimeoutSeconds, backend.TimeoutSeconds)
 	}
-	if len(backend.Agents) == 0 {
-		t.Fatalf("expected default specialist agents")
-	}
 	if cfg.Processor.IssueQueueBuffer != defaultIssueQueueBufferSize {
 		t.Fatalf("expected issue queue buffer default %d, got %d", defaultIssueQueueBufferSize, cfg.Processor.IssueQueueBuffer)
 	}
@@ -65,6 +65,15 @@ repos:
 	}
 	if cfg.AgentsDir != defaultAgentsDir {
 		t.Fatalf("expected default agents dir %q, got %q", defaultAgentsDir, cfg.AgentsDir)
+	}
+	if cfg.Prompts.IssueRefinement.PromptFile != defaultIssueRefinementPromptFile {
+		t.Fatalf("expected default issue prompt file %q, got %q", defaultIssueRefinementPromptFile, cfg.Prompts.IssueRefinement.PromptFile)
+	}
+	if cfg.Prompts.PRReview.PromptFile != defaultPRReviewPromptFile {
+		t.Fatalf("expected default pr prompt file %q, got %q", defaultPRReviewPromptFile, cfg.Prompts.PRReview.PromptFile)
+	}
+	if cfg.Prompts.Autonomous.PromptFile != defaultAutonomousPromptFile {
+		t.Fatalf("expected default auto prompt file %q, got %q", defaultAutonomousPromptFile, cfg.Prompts.Autonomous.PromptFile)
 	}
 	if cfg.AllowAutonomousPRs {
 		t.Fatalf("expected autonomous prs default false")
@@ -86,6 +95,151 @@ func TestDefaultConfiguredBackend(t *testing.T) {
 	}
 }
 
+func TestAgentValidation(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "duplicate agent name",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+agents:
+  - name: architect
+    prompt: "focus on architecture"
+  - name: architect
+    prompt: "duplicate"
+repos:
+  - full_name: "owner/repo"
+`,
+		},
+		{
+			name: "agent missing both prompt and prompt_file",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+agents:
+  - name: architect
+repos:
+  - full_name: "owner/repo"
+`,
+		},
+		{
+			name: "agent has both prompt and prompt_file",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+agents:
+  - name: architect
+    prompt: "inline"
+    prompt_file: "architect.md"
+repos:
+  - full_name: "owner/repo"
+`,
+		},
+		{
+			name: "autonomous references unknown agent",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+agents:
+  - name: architect
+    prompt: "focus on architecture"
+repos:
+  - full_name: "owner/repo"
+autonomous_agents:
+  - repo: "owner/repo"
+    enabled: true
+    agents:
+      - name: "nonexistent"
+        cron: "* * * * *"
+`,
+		},
+		{
+			name: "prompts has both prompt and prompt_file",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+agents:
+  - name: architect
+    prompt: "focus on architecture"
+prompts:
+  issue_refinement:
+    prompt_file: "issue.md"
+    prompt: "inline issue"
+repos:
+  - full_name: "owner/repo"
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatalf("expected validation error")
+			}
+		})
+	}
+}
+
+func TestAgentValidAccepted(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+agents:
+  - name: architect
+    prompt: "focus on architecture"
+  - name: security
+    prompt: |
+      Focus on authentication, authorization,
+      and input validation.
+repos:
+  - full_name: "owner/repo"
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("expected valid config, got: %v", err)
+	}
+	if len(cfg.Agents) != 2 {
+		t.Fatalf("expected 2 agents, got %d", len(cfg.Agents))
+	}
+	if _, ok := cfg.AgentByName("architect"); !ok {
+		t.Fatalf("expected to find architect agent")
+	}
+	if _, ok := cfg.AgentByName("nonexistent"); ok {
+		t.Fatalf("expected nonexistent agent to not be found")
+	}
+	names := cfg.AgentNames()
+	if len(names) != 2 {
+		t.Fatalf("expected 2 agent names, got %d", len(names))
+	}
+}
+
 func TestAutonomousValidation(t *testing.T) {
 	t.Setenv("WEBHOOK_SECRET", "secret")
 	dir := t.TempDir()
@@ -95,6 +249,9 @@ func TestAutonomousValidation(t *testing.T) {
 ai_backends:
   claude:
     mode: noop
+agents:
+  - name: architect
+    prompt: "focus on architecture"
 repos:
   - full_name: "owner/repo"
 autonomous_agents:

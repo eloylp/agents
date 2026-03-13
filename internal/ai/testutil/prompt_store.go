@@ -38,9 +38,22 @@ pr {{.Repo}} #{{.Number}} {{.WorkflowPartKey}}`
 	if err := os.MkdirAll(guidanceDir, 0o755); err != nil {
 		t.Fatalf("mkdir guidance: %v", err)
 	}
+
+	// Build agent guidance with file-based prompts.
+	var agents []ai.AgentGuidance
+	allNames := make(map[string]struct{})
 	for _, agent := range prAgents {
-		writeAgentTemplate(t, guidanceDir, agent+".md", "{{define \"agent_guidance\"}}pr guidance "+agent+"{{end}}")
+		allNames[agent] = struct{}{}
 	}
+	for _, agent := range autoAgents {
+		allNames[agent] = struct{}{}
+	}
+	for name := range allNames {
+		filePath := filepath.Join(guidanceDir, name+".md")
+		writeAgentTemplate(t, guidanceDir, name+".md", "{{define \"agent_guidance\"}}pr guidance "+name+"{{end}}")
+		agents = append(agents, ai.AgentGuidance{Name: name, PromptFile: filePath})
+	}
+
 	autoBaseDir := filepath.Join(dir, "autonomous", "base")
 	if err := os.MkdirAll(autoBaseDir, 0o755); err != nil {
 		t.Fatalf("mkdir auto base: %v", err)
@@ -50,10 +63,12 @@ pr {{.Repo}} #{{.Number}} {{.WorkflowPartKey}}`
 	if err := os.WriteFile(filepath.Join(autoBaseDir, "PROMPT.md"), []byte(autoBaseBody), 0o644); err != nil {
 		t.Fatalf("write auto base: %v", err)
 	}
-	for _, agent := range autoAgents {
-		writeAgentTemplate(t, guidanceDir, agent+".md", "{{define \"agent_guidance\"}}auto guidance "+agent+"{{end}}")
-	}
-	store, err := ai.NewPromptStore(dir, prAgents, autoAgents)
+
+	issueBase := ai.PromptSource{PromptFile: filepath.Join(issueDir, "PROMPT.md")}
+	prBase := ai.PromptSource{PromptFile: filepath.Join(prBaseDir, "PROMPT.md")}
+	autoBase := ai.PromptSource{PromptFile: filepath.Join(autoBaseDir, "PROMPT.md")}
+
+	store, err := ai.NewPromptStore(issueBase, prBase, autoBase, agents, autoAgents)
 	if err != nil {
 		t.Fatalf("prompt store: %v", err)
 	}
@@ -62,7 +77,6 @@ pr {{.Repo}} #{{.Number}} {{.WorkflowPartKey}}`
 
 func writeAgentTemplate(t *testing.T, dir string, filename string, body string) {
 	t.Helper()
-	// writeAgentTemplate writes a small template fragment used to inject guidance into a base template.
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir agent prompts: %v", err)
 	}

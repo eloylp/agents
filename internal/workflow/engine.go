@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 
@@ -88,13 +87,12 @@ func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest)
 		e.logger.Warn().Str("label", req.Label).Int("pr_number", req.PR.Number).Str("repo", req.Repo.FullName).Msg("pr label references unknown backend, skipping")
 		return nil
 	}
-	backendCfg := e.cfg.AIBackends[resolvedBackend]
 	var agents []string
 	if agent == "all" {
-		agents = backendCfg.Agents
+		agents = e.cfg.AgentNames()
 	} else {
-		if !slices.Contains(backendCfg.Agents, agent) {
-			e.logger.Warn().Str("label", req.Label).Str("backend", resolvedBackend).Str("agent", agent).Int("pr_number", req.PR.Number).Str("repo", req.Repo.FullName).Msg("pr label references unsupported agent, skipping")
+		if _, ok := e.cfg.AgentByName(agent); !ok {
+			e.logger.Warn().Str("label", req.Label).Str("backend", resolvedBackend).Str("agent", agent).Int("pr_number", req.PR.Number).Str("repo", req.Repo.FullName).Msg("pr label references unknown agent, skipping")
 			return nil
 		}
 		agents = []string{agent}

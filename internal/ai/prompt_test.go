@@ -1,6 +1,8 @@
 package ai_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -39,9 +41,44 @@ func TestBuildPRReviewPromptIncludesRequirements(t *testing.T) {
 	}
 }
 
-func TestPromptStoreValidateFailsOnMissingTemplate(t *testing.T) {
+func TestBuildPRReviewPromptWithInlineAgent(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := ai.NewPromptStore(dir, []string{"security"}, []string{"architect"}); err == nil {
+	issueDir := filepath.Join(dir, "issue_refinement_prompts")
+	_ = os.MkdirAll(issueDir, 0o755)
+	_ = os.WriteFile(filepath.Join(issueDir, "PROMPT.md"), []byte("issue {{.Repo}} #{{.Number}}"), 0o644)
+	prBaseDir := filepath.Join(dir, "pr_review_prompts", "base")
+	_ = os.MkdirAll(prBaseDir, 0o755)
+	prBasePath := filepath.Join(prBaseDir, "PROMPT.md")
+	_ = os.WriteFile(prBasePath, []byte(`{{.AgentHeading}}
+{{template "agent_guidance" .}}`), 0o644)
+
+	agents := []ai.AgentGuidance{
+		{Name: "custom", Prompt: "Focus on custom things like widgets and gadgets."},
+	}
+	issueBase := ai.PromptSource{PromptFile: filepath.Join(issueDir, "PROMPT.md")}
+	prBase := ai.PromptSource{PromptFile: prBasePath}
+	autoBase := ai.PromptSource{Prompt: "{{.Task}} {{template \"agent_guidance\" .}}"}
+	store, err := ai.NewPromptStore(issueBase, prBase, autoBase, agents, nil)
+	if err != nil {
+		t.Fatalf("prompt store: %v", err)
+	}
+	prompt, err := store.PRReviewPrompt("custom", "claude", "owner/repo", 1)
+	if err != nil {
+		t.Fatalf("pr prompt error: %v", err)
+	}
+	if !strings.Contains(prompt, "widgets and gadgets") {
+		t.Fatalf("expected inline guidance in prompt, got: %s", prompt)
+	}
+}
+
+func TestPromptStoreValidateFailsOnMissingTemplate(t *testing.T) {
+	agents := []ai.AgentGuidance{
+		{Name: "security", PromptFile: "/nonexistent/security.md"},
+	}
+	issueBase := ai.PromptSource{PromptFile: "/nonexistent/issue.md"}
+	prBase := ai.PromptSource{PromptFile: "/nonexistent/pr.md"}
+	autoBase := ai.PromptSource{PromptFile: "/nonexistent/auto.md"}
+	if _, err := ai.NewPromptStore(issueBase, prBase, autoBase, agents, nil); err == nil {
 		t.Fatalf("expected construction failure for missing templates")
 	}
 }

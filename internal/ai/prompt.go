@@ -32,23 +32,38 @@ type AutonomousPromptData struct {
 	MemoryPath  string
 }
 
+// PromptSource holds either a file path or an inline prompt string.
+type PromptSource struct {
+	PromptFile string // absolute path, mutually exclusive with Prompt
+	Prompt     string // inline text, mutually exclusive with PromptFile
+}
+
+// AgentGuidance holds the resolved guidance for an agent, either from
+// a file path or an inline prompt string.
+type AgentGuidance struct {
+	Name       string
+	PromptFile string // absolute path, mutually exclusive with Prompt
+	Prompt     string // inline text, mutually exclusive with PromptFile
+}
+
 type PromptStore struct {
-	baseDir       string
+	agents        map[string]AgentGuidance
 	issueTpl      *template.Template
 	prTemplates   map[string]*template.Template
 	autoTemplates map[string]*template.Template
 }
 
-func NewPromptStore(baseDir string, prAgents []string, autonomousAgents []string) (*PromptStore, error) {
-	if strings.TrimSpace(baseDir) == "" {
-		return nil, fmt.Errorf("prompt store base directory is required")
+func NewPromptStore(issueBase PromptSource, prBase PromptSource, autoBase PromptSource, agents []AgentGuidance, autonomousAgentNames []string) (*PromptStore, error) {
+	agentMap := make(map[string]AgentGuidance, len(agents))
+	for _, a := range agents {
+		agentMap[NormalizeToken(a.Name)] = a
 	}
 	store := &PromptStore{
-		baseDir:       baseDir,
+		agents:        agentMap,
 		prTemplates:   make(map[string]*template.Template),
 		autoTemplates: make(map[string]*template.Template),
 	}
-	if err := store.loadTemplates(prAgents, autonomousAgents); err != nil {
+	if err := store.loadTemplates(issueBase, prBase, autoBase, agents, autonomousAgentNames); err != nil {
 		return nil, err
 	}
 	return store, nil
@@ -91,33 +106,39 @@ func (p *PromptStore) AutonomousPrompt(agent string, data AutonomousPromptData) 
 	return executeTemplate(pl, data, "autonomous agent")
 }
 
-func (p *PromptStore) loadTemplates(prAgents []string, autonomousAgents []string) error {
-	issueTpl, err := p.loadTemplate(filepath.Join(p.baseDir, "issue_refinement_prompts", "PROMPT.md"))
+func (p *PromptStore) loadTemplates(issueBase PromptSource, prBase PromptSource, autoBase PromptSource, agents []AgentGuidance, autonomousAgentNames []string) error {
+	issueTpl, err := loadPromptSource(issueBase)
 	if err != nil {
 		return err
 	}
 	p.issueTpl = issueTpl
 
+	prBaseTpl, err := loadPromptSource(prBase)
+	if err != nil {
+		return err
+	}
+
+	// All defined agents get a PR review template.
 	p.prTemplates = make(map[string]*template.Template)
-	for _, agent := range dedupeTokens(prAgents) {
-		normalized := NormalizeToken(agent)
-		tpl, err := p.loadCompositeTemplates(
-			filepath.Join(p.baseDir, "pr_review_prompts", "base", "PROMPT.md"),
-			filepath.Join(p.baseDir, "guidance", normalized+".md"),
-		)
+	for _, agent := range agents {
+		normalized := NormalizeToken(agent.Name)
+		tpl, err := p.composeAgentTemplate(prBaseTpl, normalized)
 		if err != nil {
 			return err
 		}
 		p.prTemplates[normalized] = tpl
 	}
 
+	autoBaseTpl, err := loadPromptSource(autoBase)
+	if err != nil {
+		return err
+	}
+
+	// Only autonomous agents get an autonomous template.
 	p.autoTemplates = make(map[string]*template.Template)
-	for _, agent := range dedupeTokens(autonomousAgents) {
-		normalized := NormalizeToken(agent)
-		tpl, err := p.loadCompositeTemplates(
-			filepath.Join(p.baseDir, "autonomous", "base", "PROMPT.md"),
-			filepath.Join(p.baseDir, "guidance", normalized+".md"),
-		)
+	for _, name := range dedupeTokens(autonomousAgentNames) {
+		normalized := NormalizeToken(name)
+		tpl, err := p.composeAgentTemplate(autoBaseTpl, normalized)
 		if err != nil {
 			return err
 		}
@@ -127,44 +148,57 @@ func (p *PromptStore) loadTemplates(prAgents []string, autonomousAgents []string
 	return nil
 }
 
-func (p *PromptStore) loadTemplate(path string) (*template.Template, error) {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("load prompt %s: %w", path, err)
+// composeAgentTemplate clones a base template and appends the agent's guidance,
+// either from a file or from an inline prompt string.
+func (p *PromptStore) composeAgentTemplate(baseTpl *template.Template, agent string) (*template.Template, error) {
+	ag, ok := p.agents[agent]
+	if !ok {
+		return nil, fmt.Errorf("no guidance defined for agent %q", agent)
 	}
-	tpl, err := template.New(filepath.Base(path)).Option("missingkey=error").Parse(string(content))
+	clone, err := baseTpl.Clone()
 	if err != nil {
-		return nil, fmt.Errorf("parse prompt %s: %w", path, err)
+		return nil, fmt.Errorf("clone base template for agent %q: %w", agent, err)
 	}
-	return tpl, nil
+	if ag.PromptFile != "" {
+		content, err := os.ReadFile(ag.PromptFile)
+		if err != nil {
+			return nil, fmt.Errorf("load guidance %s: %w", ag.PromptFile, err)
+		}
+		clone, err = clone.Parse(string(content))
+		if err != nil {
+			return nil, fmt.Errorf("parse guidance %s: %w", ag.PromptFile, err)
+		}
+		return clone, nil
+	}
+	inlineBlock := fmt.Sprintf("{{define \"agent_guidance\"}}%s{{end}}", ag.Prompt)
+	clone, err = clone.Parse(inlineBlock)
+	if err != nil {
+		return nil, fmt.Errorf("parse inline guidance for agent %q: %w", agent, err)
+	}
+	return clone, nil
 }
 
-func (p *PromptStore) loadCompositeTemplates(paths ...string) (*template.Template, error) {
-	// loadCompositeTemplates parses a base template followed by one or more
-	// extension templates so shared structure and agent-specific guidance can
-	// be composed without duplicating files.
-	if len(paths) == 0 {
-		return nil, fmt.Errorf("no template paths provided")
-	}
-	content, err := os.ReadFile(paths[0])
-	if err != nil {
-		return nil, fmt.Errorf("load prompt %s: %w", paths[0], err)
-	}
-	tpl, err := template.New(filepath.Base(paths[0])).Option("missingkey=error").Parse(string(content))
-	if err != nil {
-		return nil, fmt.Errorf("parse prompt %s: %w", paths[0], err)
-	}
-	for _, path := range paths[1:] {
-		content, err := os.ReadFile(path)
+// loadPromptSource parses a template from either a file path or inline string.
+func loadPromptSource(src PromptSource) (*template.Template, error) {
+	if src.PromptFile != "" {
+		content, err := os.ReadFile(src.PromptFile)
 		if err != nil {
-			return nil, fmt.Errorf("load prompt %s: %w", path, err)
+			return nil, fmt.Errorf("load prompt %s: %w", src.PromptFile, err)
 		}
-		tpl, err = tpl.Parse(string(content))
+		tpl, err := template.New(filepath.Base(src.PromptFile)).Option("missingkey=error").Parse(string(content))
 		if err != nil {
-			return nil, fmt.Errorf("parse prompt %s: %w", path, err)
+			return nil, fmt.Errorf("parse prompt %s: %w", src.PromptFile, err)
 		}
+		return tpl, nil
 	}
-	return tpl, nil
+	if src.Prompt != "" {
+		tpl, err := template.New("inline").Option("missingkey=error").Parse(src.Prompt)
+		if err != nil {
+			return nil, fmt.Errorf("parse inline prompt: %w", err)
+		}
+		return tpl, nil
+	}
+	return nil, fmt.Errorf("prompt source has neither file nor inline content")
 }
 
 func executeTemplate(tpl *template.Template, data any, name string) (string, error) {

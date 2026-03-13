@@ -60,22 +60,14 @@ Produces **one structured comment** on the issue covering feasibility, complexit
 
 | Label | Behavior |
 |---|---|
-| `ai:review` | Review with the default backend, **all** specialist agents |
+| `ai:review` | Review with the default backend, **all** agents |
 | `ai:review:<backend>` | Review with a specific backend, **all** agents concurrently |
 | `ai:review:<backend>:<agent>` | Review with a specific backend and **single** agent |
 | `ai:review:<backend>:all` | Review with a specific backend, **all** agents concurrently (explicit) |
 
-Available agents:
+Available agents are defined in the `agents` section of `config.yaml`. The default configuration ships with: `architect`, `security`, `testing`, `devops`, and `ux`. You can add new agents without code changes — just add an entry to `agents` with a `prompt_file` or inline `prompt`. Any defined agent can be used with any backend via labels.
 
-| Agent | Focus area |
-|---|---|
-| `architect` | Architecture, boundaries, coupling, maintainability |
-| `security` | Vulnerabilities, trust boundaries, secrets, unsafe defaults |
-| `testing` | Coverage gaps, fragile tests, missing validation |
-| `devops` | CI/CD, deployment safety, observability, operability |
-| `ux` | Developer/user experience, clarity, ergonomics, error messages |
-
-When using `:all`, every configured agent runs **concurrently** — one review comment per specialist.
+When using `:all`, every defined agent runs **concurrently** — one review comment per specialist.
 
 ### Label parsing rules
 
@@ -163,8 +155,35 @@ processor:
   issue_queue_buffer: 256
   pr_queue_buffer: 256
 
-agents_dir: "./agents"  # root directory for prompts and autonomous memories
+agents_dir: "./agents"  # root directory for prompt files and autonomous memories
 allow_autonomous_prs: false  # require explicit opt-in for autonomous PR creation
+
+# Base prompt templates — defaults point to files under agents_dir.
+# Override with prompt_file (relative to agents_dir) or inline prompt.
+# prompts:
+#   issue_refinement:
+#     prompt_file: issue_refinement_prompts/PROMPT.md
+#   pr_review:
+#     prompt_file: pr_review_prompts/base/PROMPT.md
+#   autonomous:
+#     prompt_file: autonomous/base/PROMPT.md
+
+agents:
+  - name: architect
+    prompt_file: guidance/architect.md    # relative to agents_dir
+  - name: security
+    prompt_file: guidance/security.md
+  - name: testing
+    prompt_file: guidance/testing.md
+  - name: devops
+    prompt_file: guidance/devops.md
+  - name: ux
+    prompt_file: guidance/ux.md
+  # inline prompt example:
+  # - name: performance
+  #   prompt: |
+  #     Focus on performance bottlenecks, memory allocations,
+  #     hot paths, and benchmark regressions.
 
 ai_backends:
   claude:
@@ -174,7 +193,6 @@ ai_backends:
     timeout_seconds: 600
     max_prompt_chars: 12000
     redaction_salt_env: LOG_SALT
-    agents: [architect, security, testing, devops, ux]
 
   codex:
     mode: command
@@ -183,7 +201,6 @@ ai_backends:
     timeout_seconds: 600
     max_prompt_chars: 12000
     redaction_salt_env: LOG_SALT
-    agents: [architect, security, testing, devops, ux]
 
 repos:
   - full_name: "owner/repo"
@@ -193,12 +210,16 @@ autonomous_agents:
   - repo: "owner/repo"   # must also exist in repos[]
     enabled: true
     agents:
-      - name: "architect"
+      - name: "architect"                # must reference a defined agent
         description: "Architecture sweeps looking for design drift and risky coupling."
         cron: "0 9 * * *"   # standard cron syntax
 ```
 
-Prompts are loaded directly from `agents_dir` (no embedded defaults). The daemon fails fast if any required prompt file is missing. The repository ships a starter `agents/` directory you can point to or copy and edit. Base templates hold the shared structure; agent-specific files only define the guidance text via Go templates.
+Agents are defined in the top-level `agents` section. Each agent must provide either a `prompt_file` (relative to `agents_dir`) or an inline `prompt` — not both. Agent names must be unique. The daemon fails fast if any required prompt file is missing or if names collide.
+
+Base prompt templates (issue refinement, PR review, autonomous) default to files under `agents_dir` but can be overridden via the `prompts` section using the same `prompt_file`/`prompt` pattern.
+
+Any defined agent can be used with any backend via labels — there is no per-backend agent allowlist. Autonomous agents must reference agents defined in the top-level `agents` list.
 
 Autonomous agents only run for repositories that are also present and enabled under `repos`. Each scheduled run performs two parallel passes:
 - Sweep open issues and add a single comment only if this agent has not commented yet.
@@ -211,20 +232,19 @@ A default prompt and memory layout is included:
 ```
 agents/
 ├── autonomous/
-│   ├── base/PROMPT.md
+│   ├── base/PROMPT.md           # autonomous base template (default)
 │   └── owner_repo/
-│       └── MEMORY.md   # created on first run
+│       └── MEMORY.md            # created on first run
+├── guidance/
+│   ├── architect.md             # agent prompt files
+│   ├── devops.md
+│   ├── security.md
+│   ├── testing.md
+│   └── ux.md
 ├── issue_refinement_prompts/
-│   └── PROMPT.md
+│   └── PROMPT.md                # issue refinement base template (default)
 └── pr_review_prompts/
-    ├── base/PROMPT.md
-    └── (uses shared guidance files)
-guidance/
-├── architect.md
-├── devops.md
-├── security.md
-├── testing.md
-└── ux.md
+    └── base/PROMPT.md           # PR review base template (default)
 ```
 
 Create a `.env` file in the project root for secrets (loaded automatically):
@@ -267,6 +287,7 @@ docker compose down
 
 The compose file expects:
 - `config.yaml` in the project root (mounted read-only at `/etc/agents/config.yaml`)
+- `agents/` directory in the project root (mounted read-only at `/etc/agents/agents`)
 - `.env` in the project root with `GITHUB_WEBHOOK_SECRET` (and optionally `LOG_SALT`)
 
 #### Volume mounts
@@ -275,6 +296,7 @@ The container needs access to host CLI configurations to authenticate with AI ba
 
 | Host path | Container path | Purpose |
 |---|---|---|
+| `agents/` | `/etc/agents/agents` (read-only) | Agent prompts, base templates, and autonomous memory |
 | `~/.claude` | `/home/agents/.claude` | Claude Code session data, project settings |
 | `~/.claude.json` | `/home/agents/.claude.json` | Claude Code main config (auth, MCP servers) |
 | `~/.codex` | `/home/agents/.codex` | Codex configuration |

@@ -21,15 +21,25 @@ func (s *stubRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
 	return ai.Response{}, nil
 }
 
-func TestSchedulerRunsAutonomousTasks(t *testing.T) {
-	dir := t.TempDir()
+func buildTestPromptStore(t *testing.T, dir string) *ai.PromptStore {
+	t.Helper()
 	writeIssuePrompt(t, dir)
 	writeAutonomousBase(t, dir)
-	writeGuidance(t, dir, "architect")
-	prompts, err := ai.NewPromptStore(dir, []string{}, []string{"architect"})
+	guidancePath := writeGuidance(t, dir, "architect")
+	agents := []ai.AgentGuidance{{Name: "architect", PromptFile: guidancePath}}
+	issueBase := ai.PromptSource{PromptFile: filepath.Join(dir, "issue_refinement_prompts", "PROMPT.md")}
+	prBase := ai.PromptSource{Prompt: "{{.AgentHeading}} {{template \"agent_guidance\" .}}"}
+	autoBase := ai.PromptSource{PromptFile: filepath.Join(dir, "autonomous", "base", "PROMPT.md")}
+	prompts, err := ai.NewPromptStore(issueBase, prBase, autoBase, agents, []string{"architect"})
 	if err != nil {
 		t.Fatalf("prompt store: %v", err)
 	}
+	return prompts
+}
+
+func TestSchedulerRunsAutonomousTasks(t *testing.T) {
+	dir := t.TempDir()
+	prompts := buildTestPromptStore(t, dir)
 	cfg := &config.Config{
 		AgentsDir: dir,
 		AIBackends: map[string]config.AIBackendConfig{
@@ -64,13 +74,7 @@ func TestSchedulerRunsAutonomousTasks(t *testing.T) {
 
 func TestSchedulerSkipsDisabledRepo(t *testing.T) {
 	dir := t.TempDir()
-	writeIssuePrompt(t, dir)
-	writeAutonomousBase(t, dir)
-	writeGuidance(t, dir, "architect")
-	prompts, err := ai.NewPromptStore(dir, []string{}, []string{"architect"})
-	if err != nil {
-		t.Fatalf("prompt store: %v", err)
-	}
+	prompts := buildTestPromptStore(t, dir)
 	cfg := &config.Config{
 		AgentsDir: dir,
 		AIBackends: map[string]config.AIBackendConfig{
@@ -102,13 +106,7 @@ func TestSchedulerSkipsDisabledRepo(t *testing.T) {
 
 func TestSchedulerRejectsInvalidCron(t *testing.T) {
 	dir := t.TempDir()
-	writeIssuePrompt(t, dir)
-	writeAutonomousBase(t, dir)
-	writeGuidance(t, dir, "architect")
-	prompts, err := ai.NewPromptStore(dir, []string{}, []string{"architect"})
-	if err != nil {
-		t.Fatalf("prompt store: %v", err)
-	}
+	prompts := buildTestPromptStore(t, dir)
 	cfg := &config.Config{
 		AgentsDir: dir,
 		AIBackends: map[string]config.AIBackendConfig{
@@ -147,7 +145,6 @@ func writeIssuePrompt(t *testing.T, dir string) {
 
 func writeAutonomousBase(t *testing.T, dir string) {
 	t.Helper()
-	// writeAutonomousBase seeds the shared autonomous base template.
 	autoBase := filepath.Join(dir, "autonomous", "base")
 	if err := os.MkdirAll(autoBase, 0o755); err != nil {
 		t.Fatalf("mkdir auto base: %v", err)
@@ -157,14 +154,15 @@ func writeAutonomousBase(t *testing.T, dir string) {
 	}
 }
 
-func writeGuidance(t *testing.T, dir string, agent string) {
+func writeGuidance(t *testing.T, dir string, agent string) string {
 	t.Helper()
-	// writeGuidance adds the agent-specific guidance fragment consumed by base templates.
 	guidanceDir := filepath.Join(dir, "guidance")
 	if err := os.MkdirAll(guidanceDir, 0o755); err != nil {
 		t.Fatalf("mkdir guidance: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(guidanceDir, agent+".md"), []byte("{{define \"agent_guidance\"}}"+agent+"{{end}}"), 0o644); err != nil {
+	path := filepath.Join(guidanceDir, agent+".md")
+	if err := os.WriteFile(path, []byte("{{define \"agent_guidance\"}}"+agent+"{{end}}"), 0o644); err != nil {
 		t.Fatalf("write guidance: %v", err)
 	}
+	return path
 }

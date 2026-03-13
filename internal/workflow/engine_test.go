@@ -26,8 +26,11 @@ func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
 	runner := &stubRunner{}
 	cfg := &config.Config{
 		AIBackends: map[string]config.AIBackendConfig{
-			"claude": {Agents: []string{"architect"}},
-			"codex":  {Agents: []string{"architect"}},
+			"claude": {},
+			"codex":  {},
+		},
+		Agents: []config.AgentConfig{
+			{Name: "architect", Prompt: "focus on architecture"},
 		},
 	}
 	promptStore := testutil.BuildPromptStore(t, []string{"architect"}, nil)
@@ -39,8 +42,7 @@ func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
 	err := engine.HandleIssueLabelEvent(context.Background(), IssueRequest{
 		Repo:   config.RepoConfig{FullName: "owner/repo", Enabled: true},
 		Issue:  issue,
-		Action: "labeled",
-		Label:  "ai:refine:codex",
+		Label: "ai:refine:codex",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

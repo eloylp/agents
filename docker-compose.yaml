@@ -8,6 +8,7 @@ services:
       - GITHUB_PAT_TOKEN=${GITHUB_PAT_TOKEN}
     volumes:
       - ./config.yaml:/etc/agents/config.yaml:ro
+      - ./agents:/etc/agents/agents:ro
       - ~/.claude:/home/agents/.claude
       - ~/.claude.json:/home/agents/.claude.json
       - ~/.codex:/home/agents/.codex

@@ -94,10 +94,15 @@ func (s *Scheduler) runAgent(repo string, agent config.AutonomousAgentConfig) fu
 		}
 		err := s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
 			ctx := context.Background()
-			if err := s.runIssueTask(ctx, runner, backend, repo, agent, memoryPath, memory, logger); err != nil {
+			issueTask := "Scan all open issues and add one succinct comment per issue only if this agent has not commented before. Avoid duplicate comments."
+			if err := s.runTask(ctx, runner, backend, repo, agent, "issues", issueTask, memoryPath, memory, logger); err != nil {
 				return err
 			}
-			return s.runCodeTask(ctx, runner, backend, repo, agent, memoryPath, memory, logger)
+			codeTask := "Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, open a PR directly."
+			if !s.cfg.AllowAutonomousPRs {
+				codeTask = "Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, describe the diff in an issue but do not open a PR."
+			}
+			return s.runTask(ctx, runner, backend, repo, agent, "code", codeTask, memoryPath, memory, logger)
 		})
 		if err != nil {
 			logger.Error().Err(err).Msg("autonomous agent run completed with errors")
@@ -105,57 +110,27 @@ func (s *Scheduler) runAgent(repo string, agent config.AutonomousAgentConfig) fu
 	}
 }
 
-func (s *Scheduler) runIssueTask(ctx context.Context, runner ai.Runner, backend string, repo string, agent config.AutonomousAgentConfig, memoryPath string, memory string, logger zerolog.Logger) error {
-	task := "Scan all open issues and add one succinct comment per issue only if this agent has not commented before. Avoid duplicate comments."
+func (s *Scheduler) runTask(ctx context.Context, runner ai.Runner, backend string, repo string, agent config.AutonomousAgentConfig, taskType string, taskText string, memoryPath string, memory string, logger zerolog.Logger) error {
 	prompt, err := s.prompts.AutonomousPrompt(agent.Name, ai.AutonomousPromptData{
 		Repo:        repo,
 		AgentName:   agent.Name,
 		Description: agent.Description,
-		Task:        task,
+		Task:        taskText,
 		Memory:      memory,
 		MemoryPath:  memoryPath,
 	})
 	if err != nil {
-		return fmt.Errorf("issue task prompt: %w", err)
+		return fmt.Errorf("%s task prompt: %w", taskType, err)
 	}
-	logger.Info().Msg("running autonomous issue pass")
+	logger.Info().Str("task_type", taskType).Msg("running autonomous pass")
 	resp, err := runner.Run(ctx, ai.Request{
-		Workflow: fmt.Sprintf("autonomous:%s:%s:issues", backend, agent.Name),
+		Workflow: fmt.Sprintf("autonomous:%s:%s:%s", backend, agent.Name, taskType),
 		Repo:     repo,
 		Prompt:   prompt,
 	})
 	if err != nil {
-		return fmt.Errorf("issue task: %w", err)
+		return fmt.Errorf("%s task: %w", taskType, err)
 	}
-	logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Msg("autonomous issue pass completed")
-	return nil
-}
-
-func (s *Scheduler) runCodeTask(ctx context.Context, runner ai.Runner, backend string, repo string, agent config.AutonomousAgentConfig, memoryPath string, memory string, logger zerolog.Logger) error {
-	task := "Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, open a PR directly."
-	if !s.cfg.AllowAutonomousPRs {
-		task = "Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, describe the diff in an issue but do not open a PR."
-	}
-	prompt, err := s.prompts.AutonomousPrompt(agent.Name, ai.AutonomousPromptData{
-		Repo:        repo,
-		AgentName:   agent.Name,
-		Description: agent.Description,
-		Task:        task,
-		Memory:      memory,
-		MemoryPath:  memoryPath,
-	})
-	if err != nil {
-		return fmt.Errorf("code task prompt: %w", err)
-	}
-	logger.Info().Msg("running autonomous code pass")
-	resp, err := runner.Run(ctx, ai.Request{
-		Workflow: fmt.Sprintf("autonomous:%s:%s:code", backend, agent.Name),
-		Repo:     repo,
-		Prompt:   prompt,
-	})
-	if err != nil {
-		return fmt.Errorf("code task: %w", err)
-	}
-	logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Msg("autonomous code pass completed")
+	logger.Info().Str("task_type", taskType).Int("artifacts_stored", len(resp.Artifacts)).Msg("autonomous pass completed")
 	return nil
 }

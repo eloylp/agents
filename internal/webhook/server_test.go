@@ -124,8 +124,8 @@ func TestHandleIssueWebhookUsesEventLabelAsTrigger(t *testing.T) {
 	}
 	select {
 	case msg := <-dataChannels.IssueChan():
-		if msg.Label != "ai:refine:codex" || msg.Action != "labeled" {
-			t.Fatalf("expected event label/action to be forwarded, got label=%q action=%q", msg.Label, msg.Action)
+		if msg.Label != "ai:refine:codex" {
+			t.Fatalf("expected event label to be forwarded, got label=%q", msg.Label)
 		}
 	default:
 		t.Fatalf("expected issue message enqueued")
@@ -142,7 +142,7 @@ func TestHandleIssueWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) 
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
 	dataChannels := workflow.NewDataChannels(1, 1)
-	if err := dataChannels.PushIssue(context.Background(), workflow.IssueRequest{Repo: cfg.Repos[0], Issue: workflow.Issue{Number: 99}, Action: "labeled", Label: "ai:refine"}); err != nil {
+	if err := dataChannels.PushIssue(context.Background(), workflow.IssueRequest{Repo: cfg.Repos[0], Issue: workflow.Issue{Number: 99}, Label: "ai:refine"}); err != nil {
 		t.Fatalf("preload issue queue: %v", err)
 	}
 	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, zerolog.Nop())
