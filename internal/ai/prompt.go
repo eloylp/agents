@@ -1,100 +1,237 @@
 package ai
 
-import "fmt"
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"text/template"
+)
 
-func BuildIssueRefinePrompt(repo string, number int) string {
-	return fmt.Sprintf(`# Mission
-You are an AI assistant running with GitHub MCP tools (repos, issues, pull_requests). You must not push code, create branches, open PRs, merge, or modify repository contents. Read and comment only.
-
-Repository: %s
-Issue: #%d
-
-## Required reading
-1. Issue title/body and all previous issue comments.
-2. Repo context files if present:
-   - .ai/issue_refine_rules.md
-   - .ai/architecture.md
-   - README/CONTRIBUTING (if relevant)
-
-## Task
-Produce exactly 1 issue comment (short, scannable) and start it with this heading:
-
-## Issue refinement
-
-Ensure the issue is understandable, provides enough context, and has clear goals.
-
-Use GitHub-flavored Markdown. Prefer checklists for acceptance criteria and tasks.
-
-### Content requirements
-- Clarity: is the issue well-written and understandable?
-- Context: does it provide enough background for someone unfamiliar?
-- Goals: are the objectives and expected outcomes clearly stated?
-- Feasibility: missing info, affected components
-- Complexity: S/M/L plus risks
-- Acceptance criteria + tasks + questions (only if truly blocking)
-
-### Output Plan
-Post the comment directly using GitHub MCP issue comment tools.
-
-### STDOUT JSON (mandatory, strict)
-After posting all comments, you MUST print exactly one JSON object to stdout with the artifacts you created. This is a machine-to-machine contract — your stdout is parsed by software, not read by a human.
-
-CRITICAL RULES:
-- Do NOT print any text, explanation, or status messages to stdout.
-- Do NOT describe what you did before the JSON.
-- Your entire stdout must be ONLY the JSON object below, nothing else.
-
-{"summary":"<one-line summary>","artifacts":[{"type":"issue_comment","part_key":"issue/refine","github_id":"<comment_id>","url":"<comment_url>"}]}
-`, repo, number)
+type IssuePromptData struct {
+	Repo   string
+	Number int
 }
 
-func BuildPRReviewPrompt(backend string, agent string, repo string, number int) string {
-	heading := fmt.Sprintf("## %s specialist: %s", backend, agent)
-	agentInstructions := map[string]string{
-		"architect": "Focus on architecture, boundaries, coupling, and long-term maintainability.",
-		"security":  "Focus on security vulnerabilities, trust boundaries, secrets handling, and unsafe defaults.",
-		"testing":   "Focus on test coverage gaps, fragile tests, and missing validation scenarios.",
-		"devops":    "Focus on CI/CD, deployment safety, observability, and runtime operability.",
-		"ux":        "Focus on developer/user experience, clarity, ergonomics, and error messaging.",
+type PRReviewPromptData struct {
+	Repo            string
+	Number          int
+	Backend         string
+	Agent           string
+	AgentHeading    string
+	WorkflowPartKey string
+}
+
+type AutonomousPromptData struct {
+	Repo        string
+	AgentName   string
+	Description string
+	Task        string
+	Memory      string
+	MemoryPath  string
+}
+
+// PromptSource holds either a file path or an inline prompt string.
+type PromptSource struct {
+	PromptFile string // absolute path, mutually exclusive with Prompt
+	Prompt     string // inline text, mutually exclusive with PromptFile
+}
+
+// AgentGuidance holds the resolved guidance for an agent, either from
+// a file path or an inline prompt string.
+type AgentGuidance struct {
+	Name       string
+	PromptFile string // absolute path, mutually exclusive with Prompt
+	Prompt     string // inline text, mutually exclusive with PromptFile
+}
+
+type PromptStore struct {
+	agents        map[string]AgentGuidance
+	issueTpl      *template.Template
+	prTemplates   map[string]*template.Template
+	autoTemplates map[string]*template.Template
+}
+
+func NewPromptStore(issueBase PromptSource, prBase PromptSource, autoBase PromptSource, agents []AgentGuidance, autonomousAgentNames []string) (*PromptStore, error) {
+	agentMap := make(map[string]AgentGuidance, len(agents))
+	for _, a := range agents {
+		agentMap[NormalizeToken(a.Name)] = a
 	}
-	instruction := agentInstructions[agent]
-	if instruction == "" {
-		instruction = "Focus on the requested specialist agent."
+	store := &PromptStore{
+		agents:        agentMap,
+		prTemplates:   make(map[string]*template.Template),
+		autoTemplates: make(map[string]*template.Template),
+	}
+	if err := store.loadTemplates(issueBase, prBase, autoBase, agents, autonomousAgentNames); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+func (p *PromptStore) IssueRefinePrompt(repo string, number int) (string, error) {
+	if p.issueTpl == nil {
+		return "", fmt.Errorf("issue prompt not loaded")
+	}
+	data := IssuePromptData{Repo: repo, Number: number}
+	return executeTemplate(p.issueTpl, data, "issue refine")
+}
+
+func (p *PromptStore) PRReviewPrompt(agent string, backend string, repo string, number int) (string, error) {
+	normalizedAgent := NormalizeToken(agent)
+	pl, ok := p.prTemplates[normalizedAgent]
+	if !ok {
+		return "", fmt.Errorf("pr review prompt for agent %s not loaded", normalizedAgent)
+	}
+	data := PRReviewPromptData{
+		Repo:            repo,
+		Number:          number,
+		Backend:         backend,
+		Agent:           normalizedAgent,
+		AgentHeading:    fmt.Sprintf("## %s specialist: %s", backend, normalizedAgent),
+		WorkflowPartKey: fmt.Sprintf("%s/%s", backend, normalizedAgent),
+	}
+	return executeTemplate(pl, data, "pr review")
+}
+
+func (p *PromptStore) AutonomousPrompt(agent string, data AutonomousPromptData) (string, error) {
+	normalizedAgent := NormalizeToken(agent)
+	pl, ok := p.autoTemplates[normalizedAgent]
+	if !ok {
+		return "", fmt.Errorf("autonomous prompt for agent %s not loaded", normalizedAgent)
+	}
+	if strings.TrimSpace(data.AgentName) == "" {
+		data.AgentName = normalizedAgent
+	}
+	return executeTemplate(pl, data, "autonomous agent")
+}
+
+func (p *PromptStore) loadTemplates(issueBase PromptSource, prBase PromptSource, autoBase PromptSource, agents []AgentGuidance, autonomousAgentNames []string) error {
+	issueTpl, err := loadPromptSource(issueBase)
+	if err != nil {
+		return err
+	}
+	p.issueTpl = issueTpl
+
+	prBaseTpl, err := loadPromptSource(prBase)
+	if err != nil {
+		return err
 	}
 
-	return fmt.Sprintf(`# Mission
-You are an AI assistant running with GitHub MCP tools (repos, issues, pull_requests). You must not push code, create branches, open PRs, merge, or modify repository contents. Read and review only.
+	// All defined agents get a PR review template.
+	p.prTemplates = make(map[string]*template.Template)
+	for _, agent := range agents {
+		normalized := NormalizeToken(agent.Name)
+		tpl, err := p.composeAgentTemplate(prBaseTpl, normalized)
+		if err != nil {
+			return err
+		}
+		p.prTemplates[normalized] = tpl
+	}
 
-Repository: %s
-PR: #%d
+	autoBaseTpl, err := loadPromptSource(autoBase)
+	if err != nil {
+		return err
+	}
 
-## Required reading
-1. PR title/body and all previous PR comments/reviews.
-2. Changed files and relevant code context.
+	// Only autonomous agents get an autonomous template.
+	p.autoTemplates = make(map[string]*template.Template)
+	for _, name := range dedupeTokens(autonomousAgentNames) {
+		normalized := NormalizeToken(name)
+		tpl, err := p.composeAgentTemplate(autoBaseTpl, normalized)
+		if err != nil {
+			return err
+		}
+		p.autoTemplates[normalized] = tpl
+	}
 
-## Task
-Provide exactly one specialist review comment using this heading:
+	return nil
+}
 
-%s
+// composeAgentTemplate clones a base template and appends the agent's guidance,
+// either from a file or from an inline prompt string.
+func (p *PromptStore) composeAgentTemplate(baseTpl *template.Template, agent string) (*template.Template, error) {
+	ag, ok := p.agents[agent]
+	if !ok {
+		return nil, fmt.Errorf("no guidance defined for agent %q", agent)
+	}
+	clone, err := baseTpl.Clone()
+	if err != nil {
+		return nil, fmt.Errorf("clone base template for agent %q: %w", agent, err)
+	}
+	if ag.PromptFile != "" {
+		content, err := os.ReadFile(ag.PromptFile)
+		if err != nil {
+			return nil, fmt.Errorf("load guidance %s: %w", ag.PromptFile, err)
+		}
+		clone, err = clone.Parse(string(content))
+		if err != nil {
+			return nil, fmt.Errorf("parse guidance %s: %w", ag.PromptFile, err)
+		}
+		return clone, nil
+	}
+	inlineBlock := fmt.Sprintf("{{define \"agent_guidance\"}}%s{{end}}", ag.Prompt)
+	clone, err = clone.Parse(inlineBlock)
+	if err != nil {
+		return nil, fmt.Errorf("parse inline guidance for agent %q: %w", agent, err)
+	}
+	return clone, nil
+}
 
-Agent guidance: %s
+// loadPromptSource parses a template from either a file path or inline string.
+func loadPromptSource(src PromptSource) (*template.Template, error) {
+	if src.PromptFile != "" {
+		content, err := os.ReadFile(src.PromptFile)
+		if err != nil {
+			return nil, fmt.Errorf("load prompt %s: %w", src.PromptFile, err)
+		}
+		tpl, err := template.New(filepath.Base(src.PromptFile)).Option("missingkey=error").Parse(string(content))
+		if err != nil {
+			return nil, fmt.Errorf("parse prompt %s: %w", src.PromptFile, err)
+		}
+		return tpl, nil
+	}
+	if src.Prompt != "" {
+		tpl, err := template.New("inline").Option("missingkey=error").Parse(src.Prompt)
+		if err != nil {
+			return nil, fmt.Errorf("parse inline prompt: %w", err)
+		}
+		return tpl, nil
+	}
+	return nil, fmt.Errorf("prompt source has neither file nor inline content")
+}
 
-### Output requirements
-- Post one top-level PR review summary comment.
-- Add inline review comments only when there is a clear actionable issue.
-- Keep changes minimal; propose follow-up issues for large refactors.
+func executeTemplate(tpl *template.Template, data any, name string) (string, error) {
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("render %s prompt: %w", name, err)
+	}
+	return buf.String(), nil
+}
 
-### Output Plan
-Post the PR review via GitHub MCP pull request review tools with inline comments where possible.
+// NormalizeToken canonicalises user-provided agent or backend identifiers so
+// they can be safely used as map keys and filesystem fragments.
+func NormalizeToken(token string) string {
+	token = strings.ToLower(strings.TrimSpace(token))
+	token = filepath.Clean(token)
+	token = strings.TrimLeft(token, string(filepath.Separator)+".")
+	token = strings.ReplaceAll(token, "..", "_")
+	token = strings.ReplaceAll(token, string(filepath.Separator), "_")
+	token = strings.ReplaceAll(token, "\\", "_")
+	token = strings.ReplaceAll(token, "\x00", "_")
+	return token
+}
 
-### STDOUT JSON (mandatory, strict)
-After posting the review, you MUST print exactly one JSON object to stdout with the artifacts you created. This is a machine-to-machine contract — your stdout is parsed by software, not read by a human.
-
-CRITICAL RULES:
-- Do NOT print any text, explanation, or status messages to stdout.
-- Do NOT describe what you did before the JSON.
-- Your entire stdout must be ONLY the JSON object below, nothing else.
-
-{"summary":"<one-line summary>","artifacts":[{"type":"pr_review","part_key":"review/%s/%s","github_id":"<review_id>","url":"<review_url>"}]}
-`, repo, number, heading, instruction, backend, agent)
+func dedupeTokens(tokens []string) []string {
+	seen := make(map[string]struct{})
+	unique := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		normalized := NormalizeToken(token)
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		unique = append(unique, normalized)
+	}
+	return unique
 }

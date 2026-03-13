@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 
@@ -23,13 +22,15 @@ const (
 type Engine struct {
 	cfg     *config.Config
 	runners map[string]ai.Runner
+	prompts *ai.PromptStore
 	logger  zerolog.Logger
 }
 
-func NewEngine(cfg *config.Config, runners map[string]ai.Runner, logger zerolog.Logger) *Engine {
+func NewEngine(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.PromptStore, logger zerolog.Logger) *Engine {
 	return &Engine{
 		cfg:     cfg,
 		runners: runners,
+		prompts: prompts,
 		logger:  logger.With().Str("component", "workflow_engine").Logger(),
 	}
 }
@@ -51,7 +52,10 @@ func (e *Engine) HandleIssueLabelEvent(ctx context.Context, req IssueRequest) er
 		Int("issue_number", req.Issue.Number).
 		Logger()
 	runner := e.runners[selectedBackend]
-	prompt := ai.BuildIssueRefinePrompt(req.Repo.FullName, req.Issue.Number)
+	prompt, err := e.prompts.IssueRefinePrompt(req.Repo.FullName, req.Issue.Number)
+	if err != nil {
+		return fmt.Errorf("issue refine prompt: %w", err)
+	}
 	logger.Info().Str("backend", selectedBackend).Msg("invoking ai backend for issue refinement")
 	response, err := runner.Run(ctx, ai.Request{
 		Workflow: fmt.Sprintf("%s:%s", workflowIssueRefine, selectedBackend),
@@ -83,13 +87,12 @@ func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest)
 		e.logger.Warn().Str("label", req.Label).Int("pr_number", req.PR.Number).Str("repo", req.Repo.FullName).Msg("pr label references unknown backend, skipping")
 		return nil
 	}
-	backendCfg := e.cfg.AIBackends[resolvedBackend]
 	var agents []string
 	if agent == "all" {
-		agents = backendCfg.Agents
+		agents = e.cfg.AgentNames()
 	} else {
-		if !slices.Contains(backendCfg.Agents, agent) {
-			e.logger.Warn().Str("label", req.Label).Str("backend", resolvedBackend).Str("agent", agent).Int("pr_number", req.PR.Number).Str("repo", req.Repo.FullName).Msg("pr label references unsupported agent, skipping")
+		if _, ok := e.cfg.AgentByName(agent); !ok {
+			e.logger.Warn().Str("label", req.Label).Str("backend", resolvedBackend).Str("agent", agent).Int("pr_number", req.PR.Number).Str("repo", req.Repo.FullName).Msg("pr label references unknown agent, skipping")
 			return nil
 		}
 		agents = []string{agent}
@@ -110,7 +113,13 @@ func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest)
 	for _, ag := range agents {
 		group.Go(func() error {
 			wf := fmt.Sprintf("%s:%s:%s", workflowPRReview, resolvedBackend, ag)
-			prompt := ai.BuildPRReviewPrompt(resolvedBackend, ag, req.Repo.FullName, req.PR.Number)
+			prompt, err := e.prompts.PRReviewPrompt(ag, resolvedBackend, req.Repo.FullName, req.PR.Number)
+			if err != nil {
+				mu.Lock()
+				agentErrs = append(agentErrs, fmt.Errorf("prompt %s/%s: %w", resolvedBackend, ag, err))
+				mu.Unlock()
+				return nil
+			}
 			logger.Info().Str("backend", resolvedBackend).Str("agent", ag).Msg("invoking ai agent for pr review")
 			response, err := runner.Run(groupCtx, ai.Request{
 				Workflow: wf,

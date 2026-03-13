@@ -17,15 +17,13 @@ type PullRequest struct {
 }
 
 type IssueRequest struct {
-	Repo   config.RepoConfig
-	Issue  Issue
-	Action string
-	Label  string
+	Repo  config.RepoConfig
+	Issue Issue
+	Label string
 }
 
 type PRRequest struct {
-	Repo   config.RepoConfig
-	PR     PullRequest
-	Action string
-	Label  string
+	Repo  config.RepoConfig
+	PR    PullRequest
+	Label string
 }

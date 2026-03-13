@@ -138,7 +138,7 @@ func (s *Server) handleIssueEvent(ctx context.Context, w http.ResponseWriter, bo
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	req := workflow.IssueRequest{Repo: repo, Issue: payload.Issue, Action: payload.Action, Label: payload.Label.Name}
+	req := workflow.IssueRequest{Repo: repo, Issue: payload.Issue, Label: payload.Label.Name}
 	if err := s.channels.PushIssue(ctx, req); err != nil {
 		if errors.Is(err, workflow.ErrIssueQueueFull) {
 			s.logger.Warn().Str("repo", repo.FullName).Msg("issue queue full, dropping webhook")
@@ -173,7 +173,7 @@ func (s *Server) handlePREvent(ctx context.Context, w http.ResponseWriter, body 
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	req := workflow.PRRequest{Repo: repo, PR: payload.PullRequest, Action: payload.Action, Label: payload.Label.Name}
+	req := workflow.PRRequest{Repo: repo, PR: payload.PullRequest, Label: payload.Label.Name}
 	if err := s.channels.PushPR(ctx, req); err != nil {
 		if errors.Is(err, workflow.ErrPRQueueFull) {
 			s.logger.Warn().Str("repo", repo.FullName).Msg("pr queue full, dropping webhook")

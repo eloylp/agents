@@ -18,6 +18,36 @@ processor:
   issue_queue_buffer: 256
   pr_queue_buffer: 256
 
+agents_dir: "./agents"
+allow_autonomous_prs: false
+
+# Base prompt templates — defaults point to files under agents_dir.
+# Override with prompt_file (relative to agents_dir) or inline prompt.
+# prompts:
+#   issue_refinement:
+#     prompt_file: issue_refinement_prompts/PROMPT.md
+#   pr_review:
+#     prompt_file: pr_review_prompts/base/PROMPT.md
+#   autonomous:
+#     prompt_file: autonomous/base/PROMPT.md
+
+agents:
+  - name: architect
+    prompt_file: guidance/architect.md    # relative to agents_dir
+  - name: security
+    prompt_file: guidance/security.md
+  - name: testing
+    prompt_file: guidance/testing.md
+  - name: devops
+    prompt_file: guidance/devops.md
+  - name: ux
+    prompt_file: guidance/ux.md
+  # Example: inline prompt instead of a file
+  # - name: performance
+  #   prompt: |
+  #     Focus on performance bottlenecks, memory allocations,
+  #     hot paths, and benchmark regressions.
+
 ai_backends:
   claude:
     mode: command
@@ -28,7 +58,6 @@ ai_backends:
     timeout_seconds: 600
     max_prompt_chars: 12000
     redaction_salt_env: LOG_SALT
-    agents: [architect, security, testing, devops, ux]
   codex:
     mode: command
     command: codex
@@ -37,8 +66,15 @@ ai_backends:
     timeout_seconds: 600
     max_prompt_chars: 12000
     redaction_salt_env: LOG_SALT
-    agents: [architect, security, testing, devops, ux]
 
 repos:
   - full_name: "owner/repo"
     enabled: true
+
+autonomous_agents:
+  - repo: "owner/repo"
+    enabled: true
+    agents:
+      - name: "architect"
+        description: "Architecture sweeps looking for design drift and risky coupling."
+        cron: "0 9 * * *"

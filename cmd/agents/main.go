@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/ai"
+	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/logging"
 	"github.com/eloylp/agents/internal/webhook"
@@ -43,17 +46,24 @@ func run() error {
 	logger := logging.NewLogger(cfg.Log)
 	logger.Info().Msg("starting agents daemon")
 
-	runners := make(map[string]ai.Runner, len(cfg.AIBackends))
-	for name, backend := range cfg.AIBackends {
-		runners[name] = ai.NewCommandRunner(name, backend.Mode, backend.Command, backend.Args, backend.TimeoutSeconds, backend.MaxPromptChars, backend.RedactionSaltEnv, logger)
+	promptStore, err := setupPromptStore(cfg, logger)
+	if err != nil {
+		return err
 	}
-	engine := workflow.NewEngine(cfg, runners, logger)
 
+	runners := setupRunners(cfg, logger)
+	engine := workflow.NewEngine(cfg, runners, promptStore, logger)
 	dataChannels := workflow.NewDataChannels(cfg.Processor.IssueQueueBuffer, cfg.Processor.PRQueueBuffer)
 
 	var wg sync.WaitGroup
 	processor := workflow.NewProcessor(dataChannels, engine, &wg, logger)
 	processor.Start(ctx)
+
+	scheduler, err := setupScheduler(cfg, runners, promptStore, logger)
+	if err != nil {
+		return err
+	}
+	go scheduler.Start(ctx)
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.HTTP.DeliveryTTLSeconds) * time.Second)
 	server := webhook.NewServer(cfg, deliveryStore, dataChannels, logger)
@@ -61,10 +71,39 @@ func run() error {
 	if err := server.Run(ctx); err != nil {
 		logger.Error().Err(err).Msg("webhook server exited with error")
 	}
-	logger.Info().Msg("shutdown signal received")
 
-	// A fresh context is required here because the run ctx is already cancelled.
-	// The shutdown deadline is used to drain the processor queues.
+	awaitShutdown(cfg, processor, &wg, logger)
+	return nil
+}
+
+func setupPromptStore(cfg *config.Config, logger zerolog.Logger) (*ai.PromptStore, error) {
+	agents := resolveAgents(cfg)
+	autoAgentNames := collectAutonomousAgentNames(cfg)
+	issueBase, prBase, autoBase := resolvePrompts(cfg)
+
+	store, err := ai.NewPromptStore(issueBase, prBase, autoBase, agents, autoAgentNames)
+	if err != nil {
+		return nil, err
+	}
+	logger.Info().Str("agents_dir", cfg.AgentsDir).Int("agents", len(agents)).Msg("prompt store initialized")
+	return store, nil
+}
+
+func setupRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runner {
+	runners := make(map[string]ai.Runner, len(cfg.AIBackends))
+	for name, backend := range cfg.AIBackends {
+		runners[name] = ai.NewCommandRunner(name, backend.Mode, backend.Command, backend.Args, backend.TimeoutSeconds, backend.MaxPromptChars, backend.RedactionSaltEnv, logger)
+	}
+	return runners
+}
+
+func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.PromptStore, logger zerolog.Logger) (*autonomous.Scheduler, error) {
+	memoryStore := autonomous.NewMemoryStore(cfg.AgentsDir)
+	return autonomous.NewScheduler(cfg, runners, prompts, memoryStore, logger)
+}
+
+func awaitShutdown(cfg *config.Config, processor *workflow.Processor, wg *sync.WaitGroup, logger zerolog.Logger) {
+	logger.Info().Msg("shutdown signal received")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.HTTP.ShutdownTimeoutSeconds)*time.Second)
 	defer cancel()
 
@@ -74,7 +113,41 @@ func run() error {
 	} else {
 		logger.Warn().Msg("shutdown timed out waiting for background tasks")
 	}
-
 	logger.Info().Msg("agents daemon stopped")
-	return nil
+}
+
+func resolveAgents(cfg *config.Config) []ai.AgentGuidance {
+	agents := make([]ai.AgentGuidance, 0, len(cfg.Agents))
+	for _, a := range cfg.Agents {
+		ag := ai.AgentGuidance{Name: a.Name, Prompt: a.Prompt}
+		if a.PromptFile != "" {
+			ag.PromptFile = filepath.Join(cfg.AgentsDir, a.PromptFile)
+		}
+		agents = append(agents, ag)
+	}
+	return agents
+}
+
+func resolvePrompts(cfg *config.Config) (issue ai.PromptSource, pr ai.PromptSource, auto ai.PromptSource) {
+	resolve := func(src config.PromptSourceConfig) ai.PromptSource {
+		if src.Prompt != "" {
+			return ai.PromptSource{Prompt: src.Prompt}
+		}
+		return ai.PromptSource{PromptFile: filepath.Join(cfg.AgentsDir, src.PromptFile)}
+	}
+	return resolve(cfg.Prompts.IssueRefinement), resolve(cfg.Prompts.PRReview), resolve(cfg.Prompts.Autonomous)
+}
+
+func collectAutonomousAgentNames(cfg *config.Config) []string {
+	seen := make(map[string]struct{})
+	var names []string
+	for _, repo := range cfg.AutonomousAgents {
+		for _, agent := range repo.Agents {
+			if _, ok := seen[agent.Name]; !ok {
+				seen[agent.Name] = struct{}{}
+				names = append(names, agent.Name)
+			}
+		}
+	}
+	return names
 }
