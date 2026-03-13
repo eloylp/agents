@@ -98,7 +98,7 @@ func setupRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runne
 }
 
 func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.PromptStore, logger zerolog.Logger) (*autonomous.Scheduler, error) {
-	memoryStore := autonomous.NewMemoryStore(cfg.AgentsDir)
+	memoryStore := autonomous.NewMemoryStore(cfg.MemoryDir)
 	return autonomous.NewScheduler(cfg, runners, prompts, memoryStore, logger)
 }
 

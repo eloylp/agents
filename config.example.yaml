@@ -19,6 +19,7 @@ processor:
   pr_queue_buffer: 256
 
 agents_dir: "./agents"
+memory_dir: "/var/lib/agents/memory"
 allow_autonomous_prs: false
 
 # Base prompt templates — defaults point to files under agents_dir.

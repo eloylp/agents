@@ -41,7 +41,7 @@ func (s *MemoryStore) WithLock(agent string, repo string, fn func(memoryPath str
 }
 
 func (s *MemoryStore) ensureMemoryFile(agent string, repo string) (string, error) {
-	dir := filepath.Join(s.baseDir, "autonomous", ai.NormalizeToken(agent), ai.NormalizeToken(repo))
+	dir := filepath.Join(s.baseDir, ai.NormalizeToken(agent), ai.NormalizeToken(repo))
 	cleanBase := filepath.Clean(s.baseDir)
 	cleanDir := filepath.Clean(dir)
 	if !strings.HasPrefix(cleanDir+string(filepath.Separator), cleanBase+string(filepath.Separator)) {

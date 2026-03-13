@@ -9,6 +9,7 @@ services:
     volumes:
       - ./config.yaml:/etc/agents/config.yaml:ro
       - ./agents:/etc/agents/agents:ro
+      - agents-memory:/var/lib/agents/memory
       - ~/.claude:/home/agents/.claude
       - ~/.claude.json:/home/agents/.claude.json
       - ~/.codex:/home/agents/.codex
@@ -16,3 +17,6 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+
+volumes:
+  agents-memory:

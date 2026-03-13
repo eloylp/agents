@@ -24,6 +24,7 @@ const (
 	defaultAITimeoutSeconds        = 600
 	defaultMaxPromptChars          = 12000
 	defaultAgentsDir               = "agents"
+	defaultMemoryDir               = "/var/lib/agents/memory"
 
 	defaultIssueRefinementPromptFile = "issue_refinement_prompts/PROMPT.md"
 	defaultPRReviewPromptFile        = "pr_review_prompts/base/PROMPT.md"
@@ -37,6 +38,7 @@ type Config struct {
 	AIBackends         map[string]AIBackendConfig `yaml:"ai_backends"`
 	Repos              []RepoConfig               `yaml:"repos"`
 	AgentsDir          string                     `yaml:"agents_dir"`
+	MemoryDir          string                     `yaml:"memory_dir"`
 	Prompts            PromptsConfig              `yaml:"prompts"`
 	Agents             []AgentConfig              `yaml:"agents"`
 	AllowAutonomousPRs bool                       `yaml:"allow_autonomous_prs"`
@@ -129,6 +131,7 @@ func Load(path string) (*Config, error) {
 
 func (c *Config) applyDefaults() {
 	setDefault(&c.AgentsDir, defaultAgentsDir)
+	setDefault(&c.MemoryDir, defaultMemoryDir)
 	c.applyPromptDefaults()
 	c.applyHTTPDefaults()
 	c.applyProcessorDefaults()

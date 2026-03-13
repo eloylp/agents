@@ -66,6 +66,9 @@ repos:
 	if cfg.AgentsDir != defaultAgentsDir {
 		t.Fatalf("expected default agents dir %q, got %q", defaultAgentsDir, cfg.AgentsDir)
 	}
+	if cfg.MemoryDir != defaultMemoryDir {
+		t.Fatalf("expected default memory dir %q, got %q", defaultMemoryDir, cfg.MemoryDir)
+	}
 	if cfg.Prompts.IssueRefinement.PromptFile != defaultIssueRefinementPromptFile {
 		t.Fatalf("expected default issue prompt file %q, got %q", defaultIssueRefinementPromptFile, cfg.Prompts.IssueRefinement.PromptFile)
 	}
