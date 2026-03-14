@@ -13,14 +13,11 @@ func ParseRefineLabel(label string) (backend string, ok bool) {
 	if normalized == "ai:refine" {
 		return "", true
 	}
-	if !strings.HasPrefix(normalized, "ai:refine:") {
+	rest, hasPrefix := strings.CutPrefix(normalized, "ai:refine:")
+	if !hasPrefix || rest == "" || strings.Contains(rest, ":") {
 		return "", false
 	}
-	parts := strings.Split(normalized, ":")
-	if len(parts) != 3 || parts[2] == "" {
-		return "", false
-	}
-	return parts[2], true
+	return rest, true
 }
 
 // ParseReviewLabel parses a PR review label.
@@ -35,22 +32,19 @@ func ParseReviewLabel(label string) (backend, agent string, ok bool) {
 	if normalized == "ai:review" {
 		return "", "all", true
 	}
-	if !strings.HasPrefix(normalized, "ai:review:") {
+	rest, hasPrefix := strings.CutPrefix(normalized, "ai:review:")
+	if !hasPrefix || rest == "" {
 		return "", "", false
 	}
-	parts := strings.Split(normalized, ":")
-	switch len(parts) {
-	case 3:
-		if parts[2] == "" {
-			return "", "", false
-		}
-		return parts[2], "all", true
-	case 4:
-		if parts[2] == "" || parts[3] == "" {
-			return "", "", false
-		}
-		return parts[2], parts[3], true
-	default:
+	backend, agent, hasAgent := strings.Cut(rest, ":")
+	if backend == "" {
 		return "", "", false
 	}
+	if !hasAgent {
+		return backend, "all", true
+	}
+	if agent == "" || strings.Contains(agent, ":") {
+		return "", "", false
+	}
+	return backend, agent, true
 }
