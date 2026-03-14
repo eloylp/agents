@@ -98,8 +98,32 @@ func setupRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runne
 }
 
 func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.PromptStore, logger zerolog.Logger) (*autonomous.Scheduler, error) {
+	taskPrompts, err := resolveTaskPrompts(cfg)
+	if err != nil {
+		return nil, err
+	}
 	memoryStore := autonomous.NewMemoryStore(cfg.MemoryDir)
-	return autonomous.NewScheduler(cfg, runners, prompts, memoryStore, logger)
+	return autonomous.NewScheduler(cfg, runners, prompts, taskPrompts, memoryStore, logger)
+}
+
+func resolveTaskPrompts(cfg *config.Config) (autonomous.TaskPrompts, error) {
+	issueTask, err := cfg.Prompts.AutonomousIssueTask.Resolve(cfg.AgentsDir)
+	if err != nil {
+		return autonomous.TaskPrompts{}, fmt.Errorf("resolve autonomous issue task prompt: %w", err)
+	}
+	codeTask, err := cfg.Prompts.AutonomousCodeTask.Resolve(cfg.AgentsDir)
+	if err != nil {
+		return autonomous.TaskPrompts{}, fmt.Errorf("resolve autonomous code task prompt: %w", err)
+	}
+	codeTaskNoPRs, err := cfg.Prompts.AutonomousCodeTaskNoPRs.Resolve(cfg.AgentsDir)
+	if err != nil {
+		return autonomous.TaskPrompts{}, fmt.Errorf("resolve autonomous code task (no PRs) prompt: %w", err)
+	}
+	return autonomous.TaskPrompts{
+		IssueTask:     issueTask,
+		CodeTask:      codeTask,
+		CodeTaskNoPRs: codeTaskNoPRs,
+	}, nil
 }
 
 func awaitShutdown(cfg *config.Config, processor *workflow.Processor, wg *sync.WaitGroup, logger zerolog.Logger) {

@@ -11,25 +11,34 @@ import (
 	"github.com/eloylp/agents/internal/config"
 )
 
-type Scheduler struct {
-	cfg      *config.Config
-	runners  map[string]ai.Runner
-	prompts  *ai.PromptStore
-	memories *MemoryStore
-	cron     *cron.Cron
-	logger   zerolog.Logger
+// TaskPrompts holds the resolved task instruction texts for autonomous runs.
+type TaskPrompts struct {
+	IssueTask     string
+	CodeTask      string
+	CodeTaskNoPRs string
 }
 
-func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.PromptStore, memories *MemoryStore, logger zerolog.Logger) (*Scheduler, error) {
+type Scheduler struct {
+	cfg         *config.Config
+	runners     map[string]ai.Runner
+	prompts     *ai.PromptStore
+	taskPrompts TaskPrompts
+	memories    *MemoryStore
+	cron        *cron.Cron
+	logger      zerolog.Logger
+}
+
+func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.PromptStore, taskPrompts TaskPrompts, memories *MemoryStore, logger zerolog.Logger) (*Scheduler, error) {
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	c := cron.New(cron.WithParser(parser))
 	s := &Scheduler{
-		cfg:      cfg,
-		runners:  runners,
-		prompts:  prompts,
-		memories: memories,
-		cron:     c,
-		logger:   logger.With().Str("component", "autonomous_scheduler").Logger(),
+		cfg:         cfg,
+		runners:     runners,
+		prompts:     prompts,
+		taskPrompts: taskPrompts,
+		memories:    memories,
+		cron:        c,
+		logger:      logger.With().Str("component", "autonomous_scheduler").Logger(),
 	}
 	if err := s.registerJobs(); err != nil {
 		return nil, err
@@ -94,13 +103,12 @@ func (s *Scheduler) runAgent(repo string, agent config.AutonomousAgentConfig) fu
 		}
 		err := s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
 			ctx := context.Background()
-			issueTask := "Scan all open issues and add one succinct comment per issue only if this agent has not commented before. Avoid duplicate comments."
-			if err := s.runTask(ctx, runner, backend, repo, agent, "issues", issueTask, memoryPath, memory, logger); err != nil {
+			if err := s.runTask(ctx, runner, backend, repo, agent, "issues", s.taskPrompts.IssueTask, memoryPath, memory, logger); err != nil {
 				return err
 			}
-			codeTask := "Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, open a PR directly."
+			codeTask := s.taskPrompts.CodeTask
 			if !s.cfg.AllowAutonomousPRs {
-				codeTask = "Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, describe the diff in an issue but do not open a PR."
+				codeTask = s.taskPrompts.CodeTaskNoPRs
 			}
 			return s.runTask(ctx, runner, backend, repo, agent, "code", codeTask, memoryPath, memory, logger)
 		})

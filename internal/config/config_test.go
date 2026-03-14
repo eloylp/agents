@@ -78,6 +78,15 @@ repos:
 	if cfg.Prompts.Autonomous.PromptFile != defaultAutonomousPromptFile {
 		t.Fatalf("expected default auto prompt file %q, got %q", defaultAutonomousPromptFile, cfg.Prompts.Autonomous.PromptFile)
 	}
+	if cfg.Prompts.AutonomousIssueTask.Prompt != defaultAutonomousIssueTask {
+		t.Fatalf("expected default autonomous issue task prompt")
+	}
+	if cfg.Prompts.AutonomousCodeTask.Prompt != defaultAutonomousCodeTask {
+		t.Fatalf("expected default autonomous code task prompt")
+	}
+	if cfg.Prompts.AutonomousCodeTaskNoPRs.Prompt != defaultAutonomousCodeTaskNoPRs {
+		t.Fatalf("expected default autonomous code task (no PRs) prompt")
+	}
 	if cfg.AllowAutonomousPRs {
 		t.Fatalf("expected autonomous prs default false")
 	}

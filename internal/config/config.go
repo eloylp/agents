@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -29,6 +30,10 @@ const (
 	defaultIssueRefinementPromptFile = "issue_refinement_prompts/PROMPT.md"
 	defaultPRReviewPromptFile        = "pr_review_prompts/base/PROMPT.md"
 	defaultAutonomousPromptFile      = "autonomous/base/PROMPT.md"
+
+	defaultAutonomousIssueTask = "Scan all open issues and add one succinct comment per issue only if this agent has not commented before. Avoid duplicate comments."
+	defaultAutonomousCodeTask  = "Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, open a PR directly."
+	defaultAutonomousCodeTaskNoPRs = "Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, describe the diff in an issue but do not open a PR."
 )
 
 type Config struct {
@@ -47,14 +52,34 @@ type Config struct {
 }
 
 type PromptsConfig struct {
-	IssueRefinement PromptSourceConfig `yaml:"issue_refinement"`
-	PRReview        PromptSourceConfig `yaml:"pr_review"`
-	Autonomous      PromptSourceConfig `yaml:"autonomous"`
+	IssueRefinement        PromptSourceConfig `yaml:"issue_refinement"`
+	PRReview               PromptSourceConfig `yaml:"pr_review"`
+	Autonomous             PromptSourceConfig `yaml:"autonomous"`
+	AutonomousIssueTask    PromptSourceConfig `yaml:"autonomous_issue_task"`
+	AutonomousCodeTask     PromptSourceConfig `yaml:"autonomous_code_task"`
+	AutonomousCodeTaskNoPRs PromptSourceConfig `yaml:"autonomous_code_task_no_prs"`
 }
 
 type PromptSourceConfig struct {
 	PromptFile string `yaml:"prompt_file"`
 	Prompt     string `yaml:"prompt"`
+}
+
+// Resolve returns the prompt content. If Prompt is set it is returned directly.
+// Otherwise the file at baseDir/PromptFile is read.
+func (p PromptSourceConfig) Resolve(baseDir string) (string, error) {
+	if p.Prompt != "" {
+		return p.Prompt, nil
+	}
+	path := p.PromptFile
+	if baseDir != "" {
+		path = filepath.Join(baseDir, p.PromptFile)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read prompt file %s: %w", path, err)
+	}
+	return string(data), nil
 }
 
 type AgentConfig struct {
@@ -146,6 +171,9 @@ func (c *Config) applyPromptDefaults() {
 	applyPromptSourceDefault(&c.Prompts.IssueRefinement, defaultIssueRefinementPromptFile)
 	applyPromptSourceDefault(&c.Prompts.PRReview, defaultPRReviewPromptFile)
 	applyPromptSourceDefault(&c.Prompts.Autonomous, defaultAutonomousPromptFile)
+	applyPromptSourceInlineDefault(&c.Prompts.AutonomousIssueTask, defaultAutonomousIssueTask)
+	applyPromptSourceInlineDefault(&c.Prompts.AutonomousCodeTask, defaultAutonomousCodeTask)
+	applyPromptSourceInlineDefault(&c.Prompts.AutonomousCodeTaskNoPRs, defaultAutonomousCodeTaskNoPRs)
 }
 
 func applyPromptSourceDefault(src *PromptSourceConfig, defaultFile string) {
@@ -153,6 +181,14 @@ func applyPromptSourceDefault(src *PromptSourceConfig, defaultFile string) {
 	src.Prompt = strings.TrimSpace(src.Prompt)
 	if src.PromptFile == "" && src.Prompt == "" {
 		src.PromptFile = defaultFile
+	}
+}
+
+func applyPromptSourceInlineDefault(src *PromptSourceConfig, defaultPrompt string) {
+	src.PromptFile = strings.TrimSpace(src.PromptFile)
+	src.Prompt = strings.TrimSpace(src.Prompt)
+	if src.PromptFile == "" && src.Prompt == "" {
+		src.Prompt = defaultPrompt
 	}
 }
 
@@ -266,9 +302,12 @@ func (c *Config) validateRepos() error {
 
 func (c *Config) validatePromptSources() error {
 	sources := map[string]PromptSourceConfig{
-		"prompts.issue_refinement": c.Prompts.IssueRefinement,
-		"prompts.pr_review":        c.Prompts.PRReview,
-		"prompts.autonomous":       c.Prompts.Autonomous,
+		"prompts.issue_refinement":          c.Prompts.IssueRefinement,
+		"prompts.pr_review":                 c.Prompts.PRReview,
+		"prompts.autonomous":                c.Prompts.Autonomous,
+		"prompts.autonomous_issue_task":     c.Prompts.AutonomousIssueTask,
+		"prompts.autonomous_code_task":      c.Prompts.AutonomousCodeTask,
+		"prompts.autonomous_code_task_no_prs": c.Prompts.AutonomousCodeTaskNoPRs,
 	}
 	for name, src := range sources {
 		if src.PromptFile != "" && src.Prompt != "" {

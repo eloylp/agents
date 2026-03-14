@@ -60,7 +60,12 @@ func TestSchedulerRunsAutonomousTasks(t *testing.T) {
 	}
 	memory := NewMemoryStore(dir)
 	runner := &stubRunner{}
-	scheduler, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, prompts, memory, zerolog.Nop())
+	taskPrompts := TaskPrompts{
+		IssueTask:     "scan issues",
+		CodeTask:      "inspect code",
+		CodeTaskNoPRs: "inspect code no prs",
+	}
+	scheduler, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, prompts, taskPrompts, memory, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("scheduler: %v", err)
 	}
@@ -95,7 +100,8 @@ func TestSchedulerSkipsDisabledRepo(t *testing.T) {
 	}
 	memory := NewMemoryStore(dir)
 	runner := &stubRunner{}
-	scheduler, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, prompts, memory, zerolog.Nop())
+	taskPrompts := TaskPrompts{IssueTask: "t", CodeTask: "t", CodeTaskNoPRs: "t"}
+	scheduler, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, prompts, taskPrompts, memory, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("scheduler: %v", err)
 	}
@@ -127,7 +133,8 @@ func TestSchedulerRejectsInvalidCron(t *testing.T) {
 	}
 	memory := NewMemoryStore(dir)
 	runner := &stubRunner{}
-	if _, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, prompts, memory, zerolog.Nop()); err == nil {
+	taskPrompts := TaskPrompts{IssueTask: "t", CodeTask: "t", CodeTaskNoPRs: "t"}
+	if _, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, prompts, taskPrompts, memory, zerolog.Nop()); err == nil {
 		t.Fatalf("expected cron parse error")
 	}
 }
