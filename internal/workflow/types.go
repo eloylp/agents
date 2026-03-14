@@ -1,7 +1,5 @@
 package workflow
 
-import "github.com/eloylp/agents/internal/config"
-
 type Label struct {
 	Name string `json:"name"`
 }
@@ -16,14 +14,22 @@ type PullRequest struct {
 	Draft  bool `json:"draft"`
 }
 
+// RepoRef is a minimal repository descriptor used by workflow types.
+// It contains only the fields needed by the workflow package, avoiding
+// a direct dependency on config.RepoConfig.
+type RepoRef struct {
+	FullName string
+	Enabled  bool
+}
+
 type IssueRequest struct {
-	Repo  config.RepoConfig
+	Repo  RepoRef
 	Issue Issue
 	Label string
 }
 
 type PRRequest struct {
-	Repo  config.RepoConfig
+	Repo  RepoRef
 	PR    PullRequest
 	Label string
 }
