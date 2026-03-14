@@ -36,12 +36,12 @@ func TestProcessorStartStopDrainsQueues(t *testing.T) {
 	processor := NewProcessor(dataChannels, handler, &wg, zerolog.Nop())
 
 	ctx, cancel := context.WithCancel(context.Background())
-	channels := processor.Start(ctx)
+	processor.Start(ctx)
 
-	if err := channels.PushIssue(context.Background(), IssueRequest{Repo: RepoRef{FullName: "owner/repo"}, Issue: Issue{Number: 1}, Label: "ai:refine"}); err != nil {
+	if err := dataChannels.PushIssue(context.Background(), IssueRequest{Repo: RepoRef{FullName: "owner/repo"}, Issue: Issue{Number: 1}, Label: "ai:refine"}); err != nil {
 		t.Fatalf("push issue: %v", err)
 	}
-	if err := channels.PushPR(context.Background(), PRRequest{Repo: RepoRef{FullName: "owner/repo"}, PR: PullRequest{Number: 2}, Label: "ai:review"}); err != nil {
+	if err := dataChannels.PushPR(context.Background(), PRRequest{Repo: RepoRef{FullName: "owner/repo"}, PR: PullRequest{Number: 2}, Label: "ai:review"}); err != nil {
 		t.Fatalf("push pr: %v", err)
 	}
 

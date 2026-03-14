@@ -32,14 +32,13 @@ func NewProcessor(channels *DataChannels, handler processorHandler, wg *sync.Wai
 	}
 }
 
-func (p *Processor) Start(ctx context.Context) *DataChannels {
+func (p *Processor) Start(ctx context.Context) {
 	p.startOnce.Do(func() {
 		p.logger.Info().Msg("starting workflow processor")
 		p.wg.Add(2)
 		go p.runIssueWorker(ctx)
 		go p.runPRWorker(ctx)
 	})
-	return p.channels
 }
 
 // Stop signals workers to drain and waits for them to finish.
