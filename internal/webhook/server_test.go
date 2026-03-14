@@ -142,7 +142,11 @@ func TestHandleIssueWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) 
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
 	dataChannels := workflow.NewDataChannels(1, 1)
-	if err := dataChannels.PushIssue(context.Background(), workflow.IssueRequest{Repo: cfg.Repos[0], Issue: workflow.Issue{Number: 99}, Label: "ai:refine"}); err != nil {
+	if err := dataChannels.PushIssue(context.Background(), workflow.IssueRequest{
+		Repo:  workflow.RepoRef{FullName: cfg.Repos[0].FullName, Enabled: cfg.Repos[0].Enabled},
+		Issue: workflow.Issue{Number: 99},
+		Label: "ai:refine",
+	}); err != nil {
 		t.Fatalf("preload issue queue: %v", err)
 	}
 	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, zerolog.Nop())

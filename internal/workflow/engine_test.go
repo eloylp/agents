@@ -40,8 +40,8 @@ func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
 	}
 
 	err := engine.HandleIssueLabelEvent(context.Background(), IssueRequest{
-		Repo:   config.RepoConfig{FullName: "owner/repo", Enabled: true},
-		Issue:  issue,
+		Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
+		Issue: issue,
 		Label: "ai:refine:codex",
 	})
 	if err != nil {
