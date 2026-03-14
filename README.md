@@ -51,7 +51,7 @@ Labels are the control plane. Their format tells `agents` **what** to do, **whic
 
 | Label | Behavior |
 |---|---|
-| `ai:refine` | Refine with the **default** backend (first configured) |
+| `ai:refine` | Refine with the **default** backend (`claude` if configured, otherwise `codex`) |
 | `ai:refine:<backend>` | Refine with a **specific** backend (e.g. `ai:refine:codex`) |
 
 Produces **one structured comment** on the issue covering feasibility, complexity, recommended approach, acceptance criteria, and open questions.
@@ -60,7 +60,7 @@ Produces **one structured comment** on the issue covering feasibility, complexit
 
 | Label | Behavior |
 |---|---|
-| `ai:review` | Review with the default backend, **all** agents |
+| `ai:review` | Review with the default backend (`claude` if configured, otherwise `codex`), **all** agents |
 | `ai:review:<backend>` | Review with a specific backend, **all** agents concurrently |
 | `ai:review:<backend>:<agent>` | Review with a specific backend and **single** agent |
 | `ai:review:<backend>:all` | Review with a specific backend, **all** agents concurrently (explicit) |
