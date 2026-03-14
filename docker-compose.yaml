@@ -8,7 +8,9 @@ services:
       - GITHUB_PAT_TOKEN=${GITHUB_PAT_TOKEN}
     volumes:
       - ./config.yaml:/etc/agents/config.yaml:ro
+      # Optional: required only when config uses prompt_file paths under agents_dir.
       - ./agents:/etc/agents/agents:ro
+      # Recommended: persists autonomous MEMORY.md files across restarts.
       - agents-memory:/var/lib/agents/memory
       - ~/.claude:/home/agents/.claude
       - ~/.claude.json:/home/agents/.claude.json

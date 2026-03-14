@@ -155,35 +155,52 @@ processor:
   issue_queue_buffer: 256
   pr_queue_buffer: 256
 
-agents_dir: "./agents"  # root directory for prompt files and autonomous memories
+agents_dir: "./agents"  # optional prompt_file base dir + autonomous memory root
 allow_autonomous_prs: false  # require explicit opt-in for autonomous PR creation
 
-# Base prompt templates — defaults point to files under agents_dir.
-# Override with prompt_file (relative to agents_dir) or inline prompt.
-# prompts:
-#   issue_refinement:
-#     prompt_file: issue_refinement_prompts/PROMPT.md
-#   pr_review:
-#     prompt_file: pr_review_prompts/base/PROMPT.md
-#   autonomous:
-#     prompt_file: autonomous/base/PROMPT.md
+# Inline-first prompt configuration.
+# You can replace any `prompt` with `prompt_file` (relative to agents_dir) if preferred.
+prompts:
+  issue_refinement:
+    prompt: |
+      Refine issue #{{.Number}} in {{.Repo}}.
+      Post exactly one concise GitHub comment and return one JSON object on stdout.
+  pr_review:
+    prompt: |
+      {{.AgentHeading}}
+      Review PR #{{.Number}} in {{.Repo}} from the perspective of {{.Agent}}.
+      {{template "agent_guidance" .}}
+  autonomous:
+    prompt: |
+      Autonomous run for {{.Repo}} as {{.AgentName}}.
+      Task: {{.Task}}
+      {{template "agent_guidance" .}}
+  autonomous_issue_task:
+    prompt: |
+      Scan all open issues and add one succinct comment per issue only if this agent has not commented before. Avoid duplicate comments.
+  autonomous_code_task:
+    prompt: |
+      Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, open a PR directly.
+  autonomous_code_task_no_prs:
+    prompt: |
+      Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, describe the diff in an issue but do not open a PR.
 
 agents:
   - name: architect
-    prompt_file: guidance/architect.md    # relative to agents_dir
+    prompt: |
+      Focus on architecture boundaries, coupling, extensibility, and maintainability risks.
   - name: security
-    prompt_file: guidance/security.md
+    prompt: |
+      Focus on authn/authz, secrets exposure, injection vectors, and unsafe defaults.
   - name: testing
-    prompt_file: guidance/testing.md
+    prompt: |
+      Focus on missing tests, brittle tests, regression coverage, and testability.
   - name: devops
-    prompt_file: guidance/devops.md
+    prompt: |
+      Focus on reliability, deployment safety, observability, and operational simplicity.
   - name: ux
-    prompt_file: guidance/ux.md
-  # inline prompt example:
-  # - name: performance
-  #   prompt: |
-  #     Focus on performance bottlenecks, memory allocations,
-  #     hot paths, and benchmark regressions.
+    prompt: |
+      Focus on clarity, accessibility, copy quality, and user flow friction.
 
 ai_backends:
   claude:
@@ -216,9 +233,9 @@ autonomous_agents:
         backend: "auto"     # auto | claude | codex (default: auto)
 ```
 
-Agents are defined in the top-level `agents` section. Each agent must provide either a `prompt_file` (relative to `agents_dir`) or an inline `prompt` — not both. Agent names must be unique. The daemon fails fast if any required prompt file is missing or if names collide.
+Agents are defined in the top-level `agents` section. Inline `prompt` is the recommended default for fast iteration. `prompt_file` (relative to `agents_dir`) is optional for longer shared prompts. Each agent must provide exactly one of `prompt` or `prompt_file`, and agent names must be unique.
 
-Base prompt templates (issue refinement, PR review, autonomous) default to files under `agents_dir` but can be overridden via the `prompts` section using the same `prompt_file`/`prompt` pattern.
+Base prompt templates and autonomous task prompts follow the same inline-first pattern; each entry supports either `prompt` or `prompt_file`.
 
 Any defined agent can be used with any backend via labels — there is no per-backend agent allowlist. Autonomous agents must reference agents defined in the top-level `agents` list.
 
@@ -293,7 +310,7 @@ docker compose down
 
 The compose file expects:
 - `config.yaml` in the project root (mounted read-only at `/etc/agents/config.yaml`)
-- `agents/` directory in the project root (mounted read-only at `/etc/agents/agents`)
+- `agents/` directory in the project root (mounted read-only at `/etc/agents/agents`) only if you use `prompt_file`
 - `.env` in the project root with `GITHUB_WEBHOOK_SECRET` (and optionally `LOG_SALT`)
 
 #### Volume mounts
@@ -302,11 +319,13 @@ The container needs access to host CLI configurations to authenticate with AI ba
 
 | Host path | Container path | Purpose |
 |---|---|---|
-| `agents/` | `/etc/agents/agents` (read-only) | Agent prompts, base templates, and autonomous memory |
+| `agents/` | `/etc/agents/agents` (read-only) | Optional prompt_file source directory (not needed for fully inline prompts) |
 | `~/.claude` | `/home/agents/.claude` | Claude Code session data, project settings |
 | `~/.claude.json` | `/home/agents/.claude.json` | Claude Code main config (auth, MCP servers) |
 | `~/.codex` | `/home/agents/.codex` | Codex configuration |
 | `~/.config/gh` | `/home/agents/.config/gh` (read-only) | GitHub CLI auth tokens |
+
+The `agents-memory` Docker volume (mounted at `/var/lib/agents/memory`) is recommended to persist autonomous memory across container restarts.
 
 #### Environment variables
 

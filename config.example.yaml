@@ -22,46 +22,56 @@ agents_dir: "./agents"
 memory_dir: "/var/lib/agents/memory"
 allow_autonomous_prs: false
 
-# Base prompt templates — defaults point to files under agents_dir.
-# Override with prompt_file (relative to agents_dir) or inline prompt.
-# prompts:
-#   issue_refinement:
-#     prompt_file: issue_refinement_prompts/PROMPT.md
-#   pr_review:
-#     prompt_file: pr_review_prompts/base/PROMPT.md
-#   autonomous:
-#     prompt_file: autonomous/base/PROMPT.md
-#   autonomous_issue_task:
-#     prompt: |
-#       Scan all open issues and add one succinct comment per issue
-#       only if this agent has not commented before. Avoid duplicate comments.
-#   autonomous_code_task:
-#     prompt: |
-#       Inspect the codebase for improvements. If changes are large or
-#       uncertain, open an issue describing them. If changes are small
-#       and high-confidence, open a PR directly.
-#   autonomous_code_task_no_prs:
-#     prompt: |
-#       Inspect the codebase for improvements. If changes are large or
-#       uncertain, open an issue describing them. If changes are small
-#       and high-confidence, describe the diff in an issue but do not open a PR.
+# Inline-first prompts for easy tuning in one file.
+# You can still use prompt_file (relative to agents_dir) instead of prompt.
+prompts:
+  issue_refinement:
+    prompt: |
+      Refine issue #{{.Number}} in {{.Repo}}.
+      Post exactly one concise GitHub comment with: feasibility, approach, acceptance criteria, and open questions.
+      Return one JSON object on stdout.
+  pr_review:
+    prompt: |
+      {{.AgentHeading}}
+      Review PR #{{.Number}} in {{.Repo}} from the perspective of {{.Agent}}.
+      {{template "agent_guidance" .}}
+      Post one high-signal review comment and return one JSON object on stdout.
+  autonomous:
+    prompt: |
+      Autonomous run for {{.Repo}} as {{.AgentName}}.
+      Focus: {{.Description}}
+      Task: {{.Task}}
+      Memory file: {{.MemoryPath}}
+      Existing memory:
+      {{.Memory}}
+      {{template "agent_guidance" .}}
+      Return one JSON object on stdout.
+  autonomous_issue_task:
+    prompt: |
+      Scan all open issues and add one succinct comment per issue only if this agent has not commented before. Avoid duplicate comments.
+  autonomous_code_task:
+    prompt: |
+      Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, open a PR directly.
+  autonomous_code_task_no_prs:
+    prompt: |
+      Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, describe the diff in an issue but do not open a PR.
 
 agents:
   - name: architect
-    prompt_file: guidance/architect.md    # relative to agents_dir
+    prompt: |
+      Focus on architecture boundaries, coupling, extensibility, and maintainability risks.
   - name: security
-    prompt_file: guidance/security.md
+    prompt: |
+      Focus on authn/authz, secrets exposure, injection vectors, and unsafe defaults.
   - name: testing
-    prompt_file: guidance/testing.md
+    prompt: |
+      Focus on missing tests, brittle tests, regression coverage, and testability.
   - name: devops
-    prompt_file: guidance/devops.md
+    prompt: |
+      Focus on reliability, deployment safety, observability, and operational simplicity.
   - name: ux
-    prompt_file: guidance/ux.md
-  # Example: inline prompt instead of a file
-  # - name: performance
-  #   prompt: |
-  #     Focus on performance bottlenecks, memory allocations,
-  #     hot paths, and benchmark regressions.
+    prompt: |
+      Focus on clarity, accessibility, copy quality, and user flow friction.
 
 ai_backends:
   claude:
