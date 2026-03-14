@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"time"
 	"sync"
 
 	"github.com/rs/zerolog"
@@ -14,57 +15,53 @@ type processorHandler interface {
 
 type Processor struct {
 	handler   processorHandler
-	wg        *sync.WaitGroup
 	channels  *DataChannels
-	startOnce sync.Once
-	stopOnce  sync.Once
+	shutdown  time.Duration
 	logger    zerolog.Logger
 	ctxMu     sync.RWMutex
 	drainCtx  context.Context
 }
 
-func NewProcessor(channels *DataChannels, handler processorHandler, wg *sync.WaitGroup, logger zerolog.Logger) *Processor {
+func NewProcessor(channels *DataChannels, handler processorHandler, shutdownTimeout time.Duration, logger zerolog.Logger) *Processor {
 	return &Processor{
 		handler:  handler,
-		wg:       wg,
 		channels: channels,
+		shutdown: shutdownTimeout,
 		logger:   logger.With().Str("component", "workflow_processor").Logger(),
 	}
 }
 
-func (p *Processor) Start(ctx context.Context) {
-	p.startOnce.Do(func() {
-		p.logger.Info().Msg("starting workflow processor")
-		p.wg.Add(2)
-		go p.runIssueWorker(ctx)
-		go p.runPRWorker(ctx)
-	})
+// Run starts workers and blocks until ctx is cancelled and queues are drained
+// (or the shutdown timeout elapses).
+func (p *Processor) Run(ctx context.Context) error {
+	p.logger.Info().Msg("starting workflow processor")
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go p.runIssueWorker(ctx, &wg)
+	go p.runPRWorker(ctx, &wg)
+
+	<-ctx.Done()
+	p.logger.Info().Msg("stopping workflow processor")
+	drainCtx, cancel := context.WithTimeout(context.Background(), p.shutdown)
+	defer cancel()
+	p.setDrainCtx(drainCtx)
+	p.channels.Close()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-drainCtx.Done():
+		p.logger.Warn().Msg("processor stop timed out, workers may still be running")
+	}
+	return nil
 }
 
-// Stop signals workers to drain and waits for them to finish.
-// The provided ctx is stored as the drain context before the channels are
-// closed, so items already in the queues are processed under the shutdown
-// deadline rather than the already-cancelled run context.
-func (p *Processor) Stop(ctx context.Context) {
-	p.stopOnce.Do(func() {
-		p.logger.Info().Msg("stopping workflow processor")
-		p.setDrainCtx(ctx)
-		p.channels.Close()
-		done := make(chan struct{})
-		go func() {
-			p.wg.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-ctx.Done():
-			p.logger.Warn().Msg("processor stop timed out, workers may still be running")
-		}
-	})
-}
-
-func (p *Processor) runIssueWorker(ctx context.Context) {
-	defer p.wg.Done()
+func (p *Processor) runIssueWorker(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
 	for req := range p.channels.IssueChan() {
 		if err := p.handler.HandleIssueLabelEvent(p.processingCtx(ctx), req); err != nil {
 			p.logger.Error().Err(err).Str("repo", req.Repo.FullName).Int("issue_number", req.Issue.Number).Msg("failed to process issue webhook")
@@ -73,8 +70,8 @@ func (p *Processor) runIssueWorker(ctx context.Context) {
 	p.logger.Info().Msg("issue queue drained")
 }
 
-func (p *Processor) runPRWorker(ctx context.Context) {
-	defer p.wg.Done()
+func (p *Processor) runPRWorker(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
 	for req := range p.channels.PRChan() {
 		if err := p.handler.HandlePullRequestLabelEvent(p.processingCtx(ctx), req); err != nil {
 			p.logger.Error().Err(err).Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Msg("failed to process pr webhook")

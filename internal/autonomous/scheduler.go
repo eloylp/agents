@@ -49,20 +49,19 @@ func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.
 	return s, nil
 }
 
-func (s *Scheduler) Start(ctx context.Context) {
+func (s *Scheduler) Run(ctx context.Context) error {
 	s.setRunCtx(ctx)
 	if len(s.cron.Entries()) == 0 {
 		s.logger.Info().Msg("no autonomous agents configured")
-		return
+		return nil
 	}
 	s.logger.Info().Int("jobs", len(s.cron.Entries())).Msg("starting autonomous scheduler")
 	s.cron.Start()
-	select {
-	case <-ctx.Done():
-	}
+	<-ctx.Done()
 	stopped := s.cron.Stop()
 	<-stopped.Done()
 	s.logger.Info().Msg("autonomous scheduler stopped")
+	return nil
 }
 
 func (s *Scheduler) registerJobs() error {

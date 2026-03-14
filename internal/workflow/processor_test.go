@@ -29,14 +29,17 @@ func (s *stubProcessorHandler) HandlePullRequestLabelEvent(_ context.Context, _ 
 	return nil
 }
 
-func TestProcessorStartStopDrainsQueues(t *testing.T) {
+func TestProcessorRunDrainsQueuesOnCancellation(t *testing.T) {
 	dataChannels := NewDataChannels(4, 4)
 	handler := &stubProcessorHandler{}
-	var wg sync.WaitGroup
-	processor := NewProcessor(dataChannels, handler, &wg, zerolog.Nop())
+	processor := NewProcessor(dataChannels, handler, time.Second, zerolog.Nop())
 
 	ctx, cancel := context.WithCancel(context.Background())
-	processor.Start(ctx)
+	done := make(chan struct{})
+	go func() {
+		_ = processor.Run(ctx)
+		close(done)
+	}()
 
 	if err := dataChannels.PushIssue(context.Background(), IssueRequest{Repo: RepoRef{FullName: "owner/repo"}, Issue: Issue{Number: 1}, Label: "ai:refine"}); err != nil {
 		t.Fatalf("push issue: %v", err)
@@ -46,15 +49,6 @@ func TestProcessorStartStopDrainsQueues(t *testing.T) {
 	}
 
 	cancel()
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
-	defer stopCancel()
-	processor.Stop(stopCtx)
-
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
 
 	select {
 	case <-done:

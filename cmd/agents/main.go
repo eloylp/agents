@@ -2,17 +2,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/autonomous"
@@ -54,30 +55,28 @@ func run() error {
 	runners := setupRunners(cfg, logger)
 	engine := workflow.NewEngine(cfg, runners, promptStore, logger)
 	dataChannels := workflow.NewDataChannels(cfg.Processor.IssueQueueBuffer, cfg.Processor.PRQueueBuffer)
-
-	var wg sync.WaitGroup
-	processor := workflow.NewProcessor(dataChannels, engine, &wg, logger)
-	processor.Start(ctx)
+	processor := workflow.NewProcessor(dataChannels, engine, time.Duration(cfg.HTTP.ShutdownTimeoutSeconds)*time.Second, logger)
 
 	scheduler, err := setupScheduler(cfg, runners, promptStore, logger)
 	if err != nil {
 		return err
 	}
-	var schedulerWG sync.WaitGroup
-	schedulerWG.Add(1)
-	go func() {
-		defer schedulerWG.Done()
-		scheduler.Start(ctx)
-	}()
-
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.HTTP.DeliveryTTLSeconds) * time.Second)
 	server := webhook.NewServer(cfg, deliveryStore, dataChannels, logger)
-
-	if err := server.Run(ctx); err != nil {
-		logger.Error().Err(err).Msg("webhook server exited with error")
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		return processor.Run(groupCtx)
+	})
+	group.Go(func() error {
+		return scheduler.Run(groupCtx)
+	})
+	group.Go(func() error {
+		return server.Run(groupCtx)
+	})
+	if err := group.Wait(); err != nil && !errors.Is(err, context.Canceled) {
+		return err
 	}
-
-	awaitShutdown(cfg, processor, &schedulerWG, logger)
+	logger.Info().Msg("agents daemon stopped")
 	return nil
 }
 
@@ -129,16 +128,6 @@ func resolveTaskPrompts(cfg *config.Config) (autonomous.TaskPrompts, error) {
 		CodeTask:      codeTask,
 		CodeTaskNoPRs: codeTaskNoPRs,
 	}, nil
-}
-
-func awaitShutdown(cfg *config.Config, processor *workflow.Processor, schedulerWG *sync.WaitGroup, logger zerolog.Logger) {
-	logger.Info().Msg("shutdown signal received")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.HTTP.ShutdownTimeoutSeconds)*time.Second)
-	defer cancel()
-
-	processor.Stop(shutdownCtx)
-	schedulerWG.Wait()
-	logger.Info().Msg("agents daemon stopped")
 }
 
 func resolveAgents(cfg *config.Config) []ai.AgentGuidance {

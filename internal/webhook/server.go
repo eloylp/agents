@@ -54,7 +54,7 @@ func (s *Server) Run(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.HTTP.ShutdownTimeoutSeconds)*time.Second)
 		defer cancel()
 		errCh <- srv.Shutdown(shutdownCtx)
 	}()
