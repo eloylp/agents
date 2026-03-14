@@ -38,3 +38,10 @@ func (s *DeliveryStore) SeenOrAdd(id string, now time.Time) bool {
 	s.deliveries[id] = now.Add(s.ttl)
 	return false
 }
+
+// Delete removes a delivery id from the dedupe cache.
+func (s *DeliveryStore) Delete(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.deliveries, id)
+}

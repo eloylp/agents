@@ -99,9 +99,9 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	event := strings.TrimSpace(r.Header.Get("X-GitHub-Event"))
 	switch event {
 	case "issues":
-		s.handleIssueEvent(r.Context(), w, body)
+		s.handleIssueEvent(r.Context(), w, body, deliveryID)
 	case "pull_request":
-		s.handlePREvent(r.Context(), w, body)
+		s.handlePREvent(r.Context(), w, body, deliveryID)
 	default:
 		s.logger.Warn().Str("event", event).Str("delivery_id", deliveryID).Msg("unhandled webhook event type")
 		w.WriteHeader(http.StatusAccepted)
@@ -119,7 +119,7 @@ type issueWebhookPayload struct {
 	Issue      workflow.Issue    `json:"issue"`
 }
 
-func (s *Server) handleIssueEvent(ctx context.Context, w http.ResponseWriter, body []byte) {
+func (s *Server) handleIssueEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
 	var payload issueWebhookPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
@@ -145,10 +145,12 @@ func (s *Server) handleIssueEvent(ctx context.Context, w http.ResponseWriter, bo
 	}
 	if err := s.channels.PushIssue(ctx, req); err != nil {
 		if errors.Is(err, workflow.ErrIssueQueueFull) {
+			s.delivery.Delete(deliveryID)
 			s.logger.Warn().Str("repo", repo.FullName).Msg("issue queue full, dropping webhook")
 			http.Error(w, "issue queue full, retry later", http.StatusServiceUnavailable)
 			return
 		}
+		s.delivery.Delete(deliveryID)
 		http.Error(w, "request cancelled", http.StatusRequestTimeout)
 		return
 	}
@@ -162,7 +164,7 @@ type prWebhookPayload struct {
 	PullRequest workflow.PullRequest `json:"pull_request"`
 }
 
-func (s *Server) handlePREvent(ctx context.Context, w http.ResponseWriter, body []byte) {
+func (s *Server) handlePREvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
 	var payload prWebhookPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
@@ -184,10 +186,12 @@ func (s *Server) handlePREvent(ctx context.Context, w http.ResponseWriter, body 
 	}
 	if err := s.channels.PushPR(ctx, req); err != nil {
 		if errors.Is(err, workflow.ErrPRQueueFull) {
+			s.delivery.Delete(deliveryID)
 			s.logger.Warn().Str("repo", repo.FullName).Msg("pr queue full, dropping webhook")
 			http.Error(w, "pr queue full, retry later", http.StatusServiceUnavailable)
 			return
 		}
+		s.delivery.Delete(deliveryID)
 		http.Error(w, "request cancelled", http.StatusRequestTimeout)
 		return
 	}

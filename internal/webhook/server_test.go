@@ -163,6 +163,23 @@ func TestHandleIssueWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) 
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rr.Code)
 	}
+
+	// Drain one item to make room, then retry with the same delivery ID.
+	select {
+	case <-dataChannels.IssueChan():
+	default:
+		t.Fatalf("expected preloaded queue item")
+	}
+
+	reqRetry := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
+	reqRetry.Header.Set("X-GitHub-Event", "issues")
+	reqRetry.Header.Set("X-GitHub-Delivery", "delivery-queue-full")
+	reqRetry.Header.Set("X-Hub-Signature-256", sig)
+	rrRetry := httptest.NewRecorder()
+	server.handleGitHubWebhook(rrRetry, reqRetry)
+	if rrRetry.Code != http.StatusAccepted {
+		t.Fatalf("expected retry status %d, got %d", http.StatusAccepted, rrRetry.Code)
+	}
 }
 
 func TestVerifySignature(t *testing.T) {
