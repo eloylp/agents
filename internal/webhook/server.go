@@ -77,14 +77,6 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing delivery id", http.StatusBadRequest)
 		return
 	}
-	// Delivery dedup is checked before signature verification to avoid
-	// computing the HMAC for replayed deliveries. GitHub retries failed
-	// deliveries with the same X-GitHub-Delivery ID, so 202 is returned to
-	// suppress retries without reprocessing.
-	if s.delivery.SeenOrAdd(deliveryID, time.Now()) {
-		w.WriteHeader(http.StatusAccepted)
-		return
-	}
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.cfg.HTTP.MaxBodyBytes))
 	if err != nil {
@@ -93,6 +85,12 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	if !verifySignature(body, s.cfg.HTTP.WebhookSecret, r.Header.Get("X-Hub-Signature-256")) {
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
+	}
+	// Delivery dedup is checked only after signature verification so
+	// unauthenticated requests cannot poison the dedupe cache.
+	if s.delivery.SeenOrAdd(deliveryID, time.Now()) {
+		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 

@@ -98,6 +98,46 @@ func TestHandleWebhookIgnoresNonAILabel(t *testing.T) {
 	}
 }
 
+func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{
+			MaxBodyBytes:       1024,
+			WebhookSecret:      "secret",
+			DeliveryTTLSeconds: 3600,
+		},
+		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
+	}
+	dataChannels := workflow.NewDataChannels(1, 1)
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, zerolog.Nop())
+
+	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":7}}`
+
+	reqBad := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
+	reqBad.Header.Set("X-GitHub-Event", "issues")
+	reqBad.Header.Set("X-GitHub-Delivery", "delivery-poison")
+	reqBad.Header.Set("X-Hub-Signature-256", "sha256=deadbeef")
+	rrBad := httptest.NewRecorder()
+	server.handleGitHubWebhook(rrBad, reqBad)
+	if rrBad.Code != http.StatusUnauthorized {
+		t.Fatalf("expected invalid signature status %d, got %d", http.StatusUnauthorized, rrBad.Code)
+	}
+
+	reqGood := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
+	reqGood.Header.Set("X-GitHub-Event", "issues")
+	reqGood.Header.Set("X-GitHub-Delivery", "delivery-poison")
+	reqGood.Header.Set("X-Hub-Signature-256", signatureForTests([]byte(body), "secret"))
+	rrGood := httptest.NewRecorder()
+	server.handleGitHubWebhook(rrGood, reqGood)
+	if rrGood.Code != http.StatusAccepted {
+		t.Fatalf("expected valid retry status %d, got %d", http.StatusAccepted, rrGood.Code)
+	}
+	select {
+	case <-dataChannels.IssueChan():
+	default:
+		t.Fatalf("expected valid signed delivery to enqueue")
+	}
+}
+
 func TestHandleIssueWebhookUsesEventLabelAsTrigger(t *testing.T) {
 	cfg := &config.Config{
 		HTTP: config.HTTPConfig{
