@@ -139,6 +139,49 @@ func TestSchedulerRejectsInvalidCron(t *testing.T) {
 	}
 }
 
+func TestRunAgentSkipsWhenSchedulerContextCancelled(t *testing.T) {
+	dir := t.TempDir()
+	prompts := buildTestPromptStore(t, dir)
+	cfg := &config.Config{
+		AgentsDir: dir,
+		AIBackends: map[string]config.AIBackendConfig{
+			"claude": {},
+		},
+		Repos: []config.RepoConfig{
+			{FullName: "owner/repo", Enabled: true},
+		},
+		AutonomousAgents: []config.AutonomousRepoConfig{
+			{
+				Repo:    "owner/repo",
+				Enabled: true,
+				Agents: []config.AutonomousAgentConfig{
+					{Name: "architect", Description: "desc", Cron: "* * * * *"},
+				},
+			},
+		},
+	}
+	memory := NewMemoryStore(dir)
+	runner := &stubRunner{}
+	taskPrompts := TaskPrompts{
+		IssueTask:     "scan issues",
+		CodeTask:      "inspect code",
+		CodeTaskNoPRs: "inspect code no prs",
+	}
+	scheduler, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, prompts, taskPrompts, memory, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("scheduler: %v", err)
+	}
+	runCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	scheduler.setRunCtx(runCtx)
+
+	scheduler.runAgent("owner/repo", config.AutonomousAgentConfig{Name: "architect", Description: "desc"})()
+
+	if runner.calls != 0 {
+		t.Fatalf("expected no autonomous tasks after context cancellation, got %d", runner.calls)
+	}
+}
+
 func writeIssuePrompt(t *testing.T, dir string) {
 	t.Helper()
 	issueDir := filepath.Join(dir, "issue_refinement_prompts")

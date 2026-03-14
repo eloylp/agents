@@ -63,7 +63,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	go scheduler.Start(ctx)
+	var schedulerWG sync.WaitGroup
+	schedulerWG.Add(1)
+	go func() {
+		defer schedulerWG.Done()
+		scheduler.Start(ctx)
+	}()
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.HTTP.DeliveryTTLSeconds) * time.Second)
 	server := webhook.NewServer(cfg, deliveryStore, dataChannels, logger)
@@ -72,7 +77,7 @@ func run() error {
 		logger.Error().Err(err).Msg("webhook server exited with error")
 	}
 
-	awaitShutdown(cfg, processor, &wg, logger)
+	awaitShutdown(cfg, processor, &wg, &schedulerWG, logger)
 	return nil
 }
 
@@ -126,7 +131,7 @@ func resolveTaskPrompts(cfg *config.Config) (autonomous.TaskPrompts, error) {
 	}, nil
 }
 
-func awaitShutdown(cfg *config.Config, processor *workflow.Processor, wg *sync.WaitGroup, logger zerolog.Logger) {
+func awaitShutdown(cfg *config.Config, processor *workflow.Processor, wg *sync.WaitGroup, schedulerWG *sync.WaitGroup, logger zerolog.Logger) {
 	logger.Info().Msg("shutdown signal received")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.HTTP.ShutdownTimeoutSeconds)*time.Second)
 	defer cancel()
@@ -137,6 +142,7 @@ func awaitShutdown(cfg *config.Config, processor *workflow.Processor, wg *sync.W
 	} else {
 		logger.Warn().Msg("shutdown timed out waiting for background tasks")
 	}
+	schedulerWG.Wait()
 	logger.Info().Msg("agents daemon stopped")
 }
 

@@ -3,6 +3,7 @@ package autonomous
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/robfig/cron/v3"
 	"github.com/rs/zerolog"
@@ -26,6 +27,8 @@ type Scheduler struct {
 	memories    *MemoryStore
 	cron        *cron.Cron
 	logger      zerolog.Logger
+	ctxMu       sync.RWMutex
+	runCtx      context.Context
 }
 
 func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.PromptStore, taskPrompts TaskPrompts, memories *MemoryStore, logger zerolog.Logger) (*Scheduler, error) {
@@ -47,6 +50,7 @@ func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.
 }
 
 func (s *Scheduler) Start(ctx context.Context) {
+	s.setRunCtx(ctx)
 	if len(s.cron.Entries()) == 0 {
 		s.logger.Info().Msg("no autonomous agents configured")
 		return
@@ -90,6 +94,10 @@ func (s *Scheduler) registerJobs() error {
 
 func (s *Scheduler) runAgent(repo string, agent config.AutonomousAgentConfig) func() {
 	return func() {
+		ctx := s.currentRunCtx()
+		if ctx.Err() != nil {
+			return
+		}
 		logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Logger()
 		backend := s.cfg.DefaultConfiguredBackend()
 		if backend == "" {
@@ -102,7 +110,6 @@ func (s *Scheduler) runAgent(repo string, agent config.AutonomousAgentConfig) fu
 			return
 		}
 		err := s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
-			ctx := context.Background()
 			if err := s.runTask(ctx, runner, backend, repo, agent, "issues", s.taskPrompts.IssueTask, memoryPath, memory, logger); err != nil {
 				return err
 			}
@@ -116,6 +123,21 @@ func (s *Scheduler) runAgent(repo string, agent config.AutonomousAgentConfig) fu
 			logger.Error().Err(err).Msg("autonomous agent run completed with errors")
 		}
 	}
+}
+
+func (s *Scheduler) setRunCtx(ctx context.Context) {
+	s.ctxMu.Lock()
+	defer s.ctxMu.Unlock()
+	s.runCtx = ctx
+}
+
+func (s *Scheduler) currentRunCtx() context.Context {
+	s.ctxMu.RLock()
+	defer s.ctxMu.RUnlock()
+	if s.runCtx == nil {
+		return context.Background()
+	}
+	return s.runCtx
 }
 
 func (s *Scheduler) runTask(ctx context.Context, runner ai.Runner, backend string, repo string, agent config.AutonomousAgentConfig, taskType string, taskText string, memoryPath string, memory string, logger zerolog.Logger) error {
