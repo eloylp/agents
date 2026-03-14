@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -13,11 +15,16 @@ import (
 )
 
 type stubRunner struct {
-	calls int
+	mu        sync.Mutex
+	calls     int
+	workflows []string
 }
 
-func (s *stubRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
+func (s *stubRunner) Run(_ context.Context, req ai.Request) (ai.Response, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.calls++
+	s.workflows = append(s.workflows, req.Workflow)
 	return ai.Response{}, nil
 }
 
@@ -72,6 +79,8 @@ func TestSchedulerRunsAutonomousTasks(t *testing.T) {
 
 	scheduler.runAgent("owner/repo", config.AutonomousAgentConfig{Name: "architect", Description: "desc"})()
 
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
 	if runner.calls != 2 {
 		t.Fatalf("expected two autonomous tasks, got %d", runner.calls)
 	}
@@ -177,8 +186,85 @@ func TestRunAgentSkipsWhenSchedulerContextCancelled(t *testing.T) {
 
 	scheduler.runAgent("owner/repo", config.AutonomousAgentConfig{Name: "architect", Description: "desc"})()
 
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
 	if runner.calls != 0 {
 		t.Fatalf("expected no autonomous tasks after context cancellation, got %d", runner.calls)
+	}
+}
+
+func TestSchedulerRunAgentUsesExplicitConfiguredBackend(t *testing.T) {
+	dir := t.TempDir()
+	prompts := buildTestPromptStore(t, dir)
+	cfg := &config.Config{
+		AgentsDir: dir,
+		AIBackends: map[string]config.AIBackendConfig{
+			"claude": {},
+			"codex":  {},
+		},
+	}
+	claudeRunner := &stubRunner{}
+	codexRunner := &stubRunner{}
+	scheduler, err := NewScheduler(
+		cfg,
+		map[string]ai.Runner{"claude": claudeRunner, "codex": codexRunner},
+		prompts,
+		TaskPrompts{IssueTask: "i", CodeTask: "c", CodeTaskNoPRs: "cnp"},
+		NewMemoryStore(dir),
+		zerolog.Nop(),
+	)
+	if err != nil {
+		t.Fatalf("scheduler: %v", err)
+	}
+
+	scheduler.runAgent("owner/repo", config.AutonomousAgentConfig{Name: "architect", Backend: "codex"})()
+
+	claudeRunner.mu.Lock()
+	claudeCalls := claudeRunner.calls
+	claudeRunner.mu.Unlock()
+	if claudeCalls != 0 {
+		t.Fatalf("expected claude to not run, got %d calls", claudeCalls)
+	}
+	codexRunner.mu.Lock()
+	defer codexRunner.mu.Unlock()
+	if codexRunner.calls != 2 {
+		t.Fatalf("expected codex to run two tasks, got %d", codexRunner.calls)
+	}
+	for _, wf := range codexRunner.workflows {
+		if !strings.HasPrefix(wf, "autonomous:codex:") {
+			t.Fatalf("expected codex workflow prefix, got %q", wf)
+		}
+	}
+}
+
+func TestSchedulerRunAgentAutoFallsBackToDefaultConfiguredBackend(t *testing.T) {
+	dir := t.TempDir()
+	prompts := buildTestPromptStore(t, dir)
+	cfg := &config.Config{
+		AgentsDir: dir,
+		AIBackends: map[string]config.AIBackendConfig{
+			"codex": {},
+		},
+	}
+	codexRunner := &stubRunner{}
+	scheduler, err := NewScheduler(
+		cfg,
+		map[string]ai.Runner{"codex": codexRunner},
+		prompts,
+		TaskPrompts{IssueTask: "i", CodeTask: "c", CodeTaskNoPRs: "cnp"},
+		NewMemoryStore(dir),
+		zerolog.Nop(),
+	)
+	if err != nil {
+		t.Fatalf("scheduler: %v", err)
+	}
+
+	scheduler.runAgent("owner/repo", config.AutonomousAgentConfig{Name: "architect", Backend: "auto"})()
+
+	codexRunner.mu.Lock()
+	defer codexRunner.mu.Unlock()
+	if codexRunner.calls != 2 {
+		t.Fatalf("expected codex fallback to run two tasks, got %d", codexRunner.calls)
 	}
 }
 

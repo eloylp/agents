@@ -93,3 +93,4 @@ autonomous_agents:
       - name: "architect"
         description: "Architecture sweeps looking for design drift and risky coupling."
         cron: "0 9 * * *"
+        backend: "auto" # auto | claude | codex (default: auto)

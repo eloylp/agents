@@ -98,9 +98,9 @@ func (s *Scheduler) runAgent(repo string, agent config.AutonomousAgentConfig) fu
 			return
 		}
 		logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Logger()
-		backend := s.cfg.DefaultConfiguredBackend()
+		backend := s.resolveBackend(agent.Backend)
 		if backend == "" {
-			logger.Error().Msg("no configured backend for autonomous agent run")
+			logger.Error().Str("configured_backend", agent.Backend).Msg("no configured backend for autonomous agent run")
 			return
 		}
 		runner, ok := s.runners[backend]
@@ -122,6 +122,17 @@ func (s *Scheduler) runAgent(repo string, agent config.AutonomousAgentConfig) fu
 			logger.Error().Err(err).Msg("autonomous agent run completed with errors")
 		}
 	}
+}
+
+func (s *Scheduler) resolveBackend(configured string) string {
+	configured = ai.NormalizeToken(configured)
+	if configured == "" || configured == "auto" {
+		return s.cfg.DefaultConfiguredBackend()
+	}
+	if _, ok := s.cfg.AIBackends[configured]; !ok {
+		return ""
+	}
+	return configured
 }
 
 func (s *Scheduler) setRunCtx(ctx context.Context) {

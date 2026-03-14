@@ -213,6 +213,7 @@ autonomous_agents:
       - name: "architect"                # must reference a defined agent
         description: "Architecture sweeps looking for design drift and risky coupling."
         cron: "0 9 * * *"   # standard cron syntax
+        backend: "auto"     # auto | claude | codex (default: auto)
 ```
 
 Agents are defined in the top-level `agents` section. Each agent must provide either a `prompt_file` (relative to `agents_dir`) or an inline `prompt` — not both. Agent names must be unique. The daemon fails fast if any required prompt file is missing or if names collide.
@@ -220,6 +221,11 @@ Agents are defined in the top-level `agents` section. Each agent must provide ei
 Base prompt templates (issue refinement, PR review, autonomous) default to files under `agents_dir` but can be overridden via the `prompts` section using the same `prompt_file`/`prompt` pattern.
 
 Any defined agent can be used with any backend via labels — there is no per-backend agent allowlist. Autonomous agents must reference agents defined in the top-level `agents` list.
+
+Each autonomous agent can select its backend independently with `backend`:
+- `auto` (default): use the daemon default (`claude` if configured, otherwise `codex`)
+- `claude`: force Claude backend for that agent
+- `codex`: force Codex backend for that agent
 
 Autonomous agents only run for repositories that are also present and enabled under `repos`. Each scheduled run performs two parallel passes:
 - Sweep open issues and add a single comment only if this agent has not commented yet.

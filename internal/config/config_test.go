@@ -41,6 +41,12 @@ agents:
     prompt: "focus on architecture"
 repos:
   - full_name: "owner/repo"
+autonomous_agents:
+  - repo: "owner/repo"
+    enabled: true
+    agents:
+      - name: "architect"
+        cron: "* * * * *"
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -89,6 +95,12 @@ repos:
 	}
 	if cfg.AllowAutonomousPRs {
 		t.Fatalf("expected autonomous prs default false")
+	}
+	if len(cfg.AutonomousAgents) != 1 || len(cfg.AutonomousAgents[0].Agents) != 1 {
+		t.Fatalf("expected one autonomous agent configured")
+	}
+	if got := cfg.AutonomousAgents[0].Agents[0].Backend; got != "auto" {
+		t.Fatalf("expected autonomous backend default auto, got %q", got)
 	}
 }
 
@@ -176,6 +188,27 @@ autonomous_agents:
     agents:
       - name: "nonexistent"
         cron: "* * * * *"
+`,
+		},
+		{
+			name: "autonomous agent backend invalid",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+agents:
+  - name: architect
+    prompt: "focus on architecture"
+repos:
+  - full_name: "owner/repo"
+autonomous_agents:
+  - repo: "owner/repo"
+    enabled: true
+    agents:
+      - name: "architect"
+        cron: "* * * * *"
+        backend: "gpt4"
 `,
 		},
 		{

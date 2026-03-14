@@ -31,8 +31,8 @@ const (
 	defaultPRReviewPromptFile        = "pr_review_prompts/base/PROMPT.md"
 	defaultAutonomousPromptFile      = "autonomous/base/PROMPT.md"
 
-	defaultAutonomousIssueTask = "Scan all open issues and add one succinct comment per issue only if this agent has not commented before. Avoid duplicate comments."
-	defaultAutonomousCodeTask  = "Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, open a PR directly."
+	defaultAutonomousIssueTask     = "Scan all open issues and add one succinct comment per issue only if this agent has not commented before. Avoid duplicate comments."
+	defaultAutonomousCodeTask      = "Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, open a PR directly."
 	defaultAutonomousCodeTaskNoPRs = "Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, describe the diff in an issue but do not open a PR."
 )
 
@@ -52,11 +52,11 @@ type Config struct {
 }
 
 type PromptsConfig struct {
-	IssueRefinement        PromptSourceConfig `yaml:"issue_refinement"`
-	PRReview               PromptSourceConfig `yaml:"pr_review"`
-	Autonomous             PromptSourceConfig `yaml:"autonomous"`
-	AutonomousIssueTask    PromptSourceConfig `yaml:"autonomous_issue_task"`
-	AutonomousCodeTask     PromptSourceConfig `yaml:"autonomous_code_task"`
+	IssueRefinement         PromptSourceConfig `yaml:"issue_refinement"`
+	PRReview                PromptSourceConfig `yaml:"pr_review"`
+	Autonomous              PromptSourceConfig `yaml:"autonomous"`
+	AutonomousIssueTask     PromptSourceConfig `yaml:"autonomous_issue_task"`
+	AutonomousCodeTask      PromptSourceConfig `yaml:"autonomous_code_task"`
 	AutonomousCodeTaskNoPRs PromptSourceConfig `yaml:"autonomous_code_task_no_prs"`
 }
 
@@ -136,6 +136,7 @@ type AutonomousAgentConfig struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
 	Cron        string `yaml:"cron"`
+	Backend     string `yaml:"backend"`
 }
 
 func Load(path string) (*Config, error) {
@@ -246,6 +247,10 @@ func (c *Config) normalizeAutonomousAgents() {
 			a.Name = strings.TrimSpace(a.Name)
 			a.Cron = strings.TrimSpace(a.Cron)
 			a.Description = strings.TrimSpace(a.Description)
+			a.Backend = strings.ToLower(strings.TrimSpace(a.Backend))
+			if a.Backend == "" {
+				a.Backend = "auto"
+			}
 		}
 	}
 }
@@ -302,11 +307,11 @@ func (c *Config) validateRepos() error {
 
 func (c *Config) validatePromptSources() error {
 	sources := map[string]PromptSourceConfig{
-		"prompts.issue_refinement":          c.Prompts.IssueRefinement,
-		"prompts.pr_review":                 c.Prompts.PRReview,
-		"prompts.autonomous":                c.Prompts.Autonomous,
-		"prompts.autonomous_issue_task":     c.Prompts.AutonomousIssueTask,
-		"prompts.autonomous_code_task":      c.Prompts.AutonomousCodeTask,
+		"prompts.issue_refinement":            c.Prompts.IssueRefinement,
+		"prompts.pr_review":                   c.Prompts.PRReview,
+		"prompts.autonomous":                  c.Prompts.Autonomous,
+		"prompts.autonomous_issue_task":       c.Prompts.AutonomousIssueTask,
+		"prompts.autonomous_code_task":        c.Prompts.AutonomousCodeTask,
 		"prompts.autonomous_code_task_no_prs": c.Prompts.AutonomousCodeTaskNoPRs,
 	}
 	for name, src := range sources {
@@ -353,6 +358,9 @@ func (c *Config) validateAutonomousAgents(agentNames map[string]struct{}) error 
 			}
 			if agent.Cron == "" {
 				return fmt.Errorf("config: autonomous agent cron required for repo %s", repo.Repo)
+			}
+			if agent.Backend != "auto" && agent.Backend != "claude" && agent.Backend != "codex" {
+				return fmt.Errorf("config: autonomous agent backend %q for repo %s must be one of auto, claude, codex", agent.Backend, repo.Repo)
 			}
 			if _, ok := agentNames[agent.Name]; !ok {
 				return fmt.Errorf("config: autonomous agent %q for repo %s references unknown agent", agent.Name, repo.Repo)
