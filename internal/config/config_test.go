@@ -36,9 +36,12 @@ func TestLoadAppliesDefaults(t *testing.T) {
 ai_backends:
   claude:
     mode: noop
-agents:
+skills:
   - name: architect
     prompt: "focus on architecture"
+agents:
+  - name: architect
+    skills: [architect]
 repos:
   - full_name: "owner/repo"
 autonomous_agents:
@@ -47,6 +50,10 @@ autonomous_agents:
     agents:
       - name: "architect"
         cron: "* * * * *"
+        skills: [architect]
+        tasks:
+          - name: "issues"
+            prompt: "scan issues"
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -84,18 +91,6 @@ autonomous_agents:
 	if cfg.Prompts.Autonomous.PromptFile != defaultAutonomousPromptFile {
 		t.Fatalf("expected default auto prompt file %q, got %q", defaultAutonomousPromptFile, cfg.Prompts.Autonomous.PromptFile)
 	}
-	if cfg.Prompts.AutonomousIssueTask.Prompt != defaultAutonomousIssueTask {
-		t.Fatalf("expected default autonomous issue task prompt")
-	}
-	if cfg.Prompts.AutonomousCodeTask.Prompt != defaultAutonomousCodeTask {
-		t.Fatalf("expected default autonomous code task prompt")
-	}
-	if cfg.Prompts.AutonomousCodeTaskNoPRs.Prompt != defaultAutonomousCodeTaskNoPRs {
-		t.Fatalf("expected default autonomous code task (no PRs) prompt")
-	}
-	if cfg.AllowAutonomousPRs {
-		t.Fatalf("expected autonomous prs default false")
-	}
 	if len(cfg.AutonomousAgents) != 1 || len(cfg.AutonomousAgents[0].Agents) != 1 {
 		t.Fatalf("expected one autonomous agent configured")
 	}
@@ -119,6 +114,81 @@ func TestDefaultConfiguredBackend(t *testing.T) {
 	}
 }
 
+func TestSkillValidation(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "duplicate skill name",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+skills:
+  - name: architect
+    prompt: "focus on architecture"
+  - name: architect
+    prompt: "duplicate"
+agents:
+  - name: architect
+    skills: [architect]
+repos:
+  - full_name: "owner/repo"
+`,
+		},
+		{
+			name: "skill missing both prompt and prompt_file",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+skills:
+  - name: architect
+agents:
+  - name: architect
+    skills: [architect]
+repos:
+  - full_name: "owner/repo"
+`,
+		},
+		{
+			name: "skill has both prompt and prompt_file",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+skills:
+  - name: architect
+    prompt: "inline"
+    prompt_file: "architect.md"
+agents:
+  - name: architect
+    skills: [architect]
+repos:
+  - full_name: "owner/repo"
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatalf("expected validation error")
+			}
+		})
+	}
+}
+
 func TestAgentValidation(t *testing.T) {
 	t.Setenv("WEBHOOK_SECRET", "secret")
 
@@ -133,61 +203,76 @@ func TestAgentValidation(t *testing.T) {
 ai_backends:
   claude:
     mode: noop
-agents:
+skills:
   - name: architect
     prompt: "focus on architecture"
+agents:
   - name: architect
-    prompt: "duplicate"
+    skills: [architect]
+  - name: architect
+    skills: [architect]
 repos:
   - full_name: "owner/repo"
 `,
 		},
 		{
-			name: "agent missing both prompt and prompt_file",
+			name: "agent missing skills",
 			content: `http:
   webhook_secret_env: WEBHOOK_SECRET
 ai_backends:
   claude:
     mode: noop
-agents:
-  - name: architect
-repos:
-  - full_name: "owner/repo"
-`,
-		},
-		{
-			name: "agent has both prompt and prompt_file",
-			content: `http:
-  webhook_secret_env: WEBHOOK_SECRET
-ai_backends:
-  claude:
-    mode: noop
-agents:
-  - name: architect
-    prompt: "inline"
-    prompt_file: "architect.md"
-repos:
-  - full_name: "owner/repo"
-`,
-		},
-		{
-			name: "autonomous references unknown agent",
-			content: `http:
-  webhook_secret_env: WEBHOOK_SECRET
-ai_backends:
-  claude:
-    mode: noop
-agents:
+skills:
   - name: architect
     prompt: "focus on architecture"
+agents:
+  - name: architect
+repos:
+  - full_name: "owner/repo"
+`,
+		},
+		{
+			name: "agent references unknown skill",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+skills:
+  - name: architect
+    prompt: "focus on architecture"
+agents:
+  - name: architect
+    skills: [nonexistent]
+repos:
+  - full_name: "owner/repo"
+`,
+		},
+		{
+			name: "autonomous references unknown skill",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+skills:
+  - name: architect
+    prompt: "focus on architecture"
+agents:
+  - name: architect
+    skills: [architect]
 repos:
   - full_name: "owner/repo"
 autonomous_agents:
   - repo: "owner/repo"
     enabled: true
     agents:
-      - name: "nonexistent"
+      - name: "sweep"
         cron: "* * * * *"
+        skills: [nonexistent]
+        tasks:
+          - name: "issues"
+            prompt: "scan issues"
 `,
 		},
 		{
@@ -197,9 +282,12 @@ autonomous_agents:
 ai_backends:
   claude:
     mode: noop
-agents:
+skills:
   - name: architect
     prompt: "focus on architecture"
+agents:
+  - name: architect
+    skills: [architect]
 repos:
   - full_name: "owner/repo"
 autonomous_agents:
@@ -209,6 +297,60 @@ autonomous_agents:
       - name: "architect"
         cron: "* * * * *"
         backend: "gpt4"
+        skills: [architect]
+        tasks:
+          - name: "issues"
+            prompt: "scan issues"
+`,
+		},
+		{
+			name: "autonomous agent missing tasks",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+skills:
+  - name: architect
+    prompt: "focus on architecture"
+agents:
+  - name: architect
+    skills: [architect]
+repos:
+  - full_name: "owner/repo"
+autonomous_agents:
+  - repo: "owner/repo"
+    enabled: true
+    agents:
+      - name: "architect"
+        cron: "* * * * *"
+        skills: [architect]
+`,
+		},
+		{
+			name: "autonomous agent task missing prompt",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+skills:
+  - name: architect
+    prompt: "focus on architecture"
+agents:
+  - name: architect
+    skills: [architect]
+repos:
+  - full_name: "owner/repo"
+autonomous_agents:
+  - repo: "owner/repo"
+    enabled: true
+    agents:
+      - name: "architect"
+        cron: "* * * * *"
+        skills: [architect]
+        tasks:
+          - name: "issues"
 `,
 		},
 		{
@@ -218,9 +360,12 @@ autonomous_agents:
 ai_backends:
   claude:
     mode: noop
-agents:
+skills:
   - name: architect
     prompt: "focus on architecture"
+agents:
+  - name: architect
+    skills: [architect]
 prompts:
   issue_refinement:
     prompt_file: "issue.md"
@@ -253,13 +398,18 @@ func TestAgentValidAccepted(t *testing.T) {
 ai_backends:
   claude:
     mode: noop
-agents:
+skills:
   - name: architect
     prompt: "focus on architecture"
   - name: security
     prompt: |
       Focus on authentication, authorization,
       and input validation.
+agents:
+  - name: architect
+    skills: [architect]
+  - name: security
+    skills: [security]
 repos:
   - full_name: "owner/repo"
 `
@@ -294,9 +444,12 @@ func TestAutonomousValidation(t *testing.T) {
 ai_backends:
   claude:
     mode: noop
-agents:
+skills:
   - name: architect
     prompt: "focus on architecture"
+agents:
+  - name: architect
+    skills: [architect]
 repos:
   - full_name: "owner/repo"
 autonomous_agents:

@@ -12,36 +12,27 @@ import (
 	"github.com/eloylp/agents/internal/config"
 )
 
-// TaskPrompts holds the resolved task instruction texts for autonomous runs.
-type TaskPrompts struct {
-	IssueTask     string
-	CodeTask      string
-	CodeTaskNoPRs string
-}
-
 type Scheduler struct {
-	cfg         *config.Config
-	runners     map[string]ai.Runner
-	prompts     *ai.PromptStore
-	taskPrompts TaskPrompts
-	memories    *MemoryStore
-	cron        *cron.Cron
-	logger      zerolog.Logger
-	ctxMu       sync.RWMutex
-	runCtx      context.Context
+	cfg      *config.Config
+	runners  map[string]ai.Runner
+	prompts  *ai.PromptStore
+	memories *MemoryStore
+	cron     *cron.Cron
+	logger   zerolog.Logger
+	ctxMu    sync.RWMutex
+	runCtx   context.Context
 }
 
-func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.PromptStore, taskPrompts TaskPrompts, memories *MemoryStore, logger zerolog.Logger) (*Scheduler, error) {
+func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.PromptStore, memories *MemoryStore, logger zerolog.Logger) (*Scheduler, error) {
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	c := cron.New(cron.WithParser(parser))
 	s := &Scheduler{
-		cfg:         cfg,
-		runners:     runners,
-		prompts:     prompts,
-		taskPrompts: taskPrompts,
-		memories:    memories,
-		cron:        c,
-		logger:      logger.With().Str("component", "autonomous_scheduler").Logger(),
+		cfg:      cfg,
+		runners:  runners,
+		prompts:  prompts,
+		memories: memories,
+		cron:     c,
+		logger:   logger.With().Str("component", "autonomous_scheduler").Logger(),
 	}
 	if err := s.registerJobs(); err != nil {
 		return nil, err
@@ -109,14 +100,12 @@ func (s *Scheduler) runAgent(repo string, agent config.AutonomousAgentConfig) fu
 			return
 		}
 		err := s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
-			if err := s.runTask(ctx, runner, backend, repo, agent, "issues", s.taskPrompts.IssueTask, memoryPath, memory, logger); err != nil {
-				return err
+			for _, task := range agent.Tasks {
+				if err := s.runTask(ctx, runner, backend, repo, agent, task.Name, task.Prompt, memoryPath, memory, logger); err != nil {
+					return err
+				}
 			}
-			codeTask := s.taskPrompts.CodeTask
-			if !s.cfg.AllowAutonomousPRs {
-				codeTask = s.taskPrompts.CodeTaskNoPRs
-			}
-			return s.runTask(ctx, runner, backend, repo, agent, "code", codeTask, memoryPath, memory, logger)
+			return nil
 		})
 		if err != nil {
 			logger.Error().Err(err).Msg("autonomous agent run completed with errors")

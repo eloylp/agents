@@ -1,7 +1,13 @@
+# ──────────────────────────────────────────────
+# Logging
+# ──────────────────────────────────────────────
 log:
-  level: info
-  format: text
+  level: info    # trace, debug, info, warn, error, fatal
+  format: text   # text (human-readable) or json (structured)
 
+# ──────────────────────────────────────────────
+# HTTP server — webhook ingestion + health check
+# ──────────────────────────────────────────────
 http:
   listen_addr: ":8080"
   status_path: /status
@@ -9,21 +15,35 @@ http:
   read_timeout_seconds: 15
   write_timeout_seconds: 15
   idle_timeout_seconds: 60
-  max_body_bytes: 1048576
-  webhook_secret_env: GITHUB_WEBHOOK_SECRET
-  delivery_ttl_seconds: 3600
-  shutdown_timeout_seconds: 15
+  max_body_bytes: 1048576               # 1 MiB cap on webhook payloads
+  webhook_secret_env: GITHUB_WEBHOOK_SECRET  # env var holding the HMAC shared secret
+  delivery_ttl_seconds: 3600            # how long to remember delivery IDs for dedup
+  shutdown_timeout_seconds: 15          # grace period for in-flight work on SIGTERM
 
+# ──────────────────────────────────────────────
+# Internal event queues (webhook → processor)
+# ──────────────────────────────────────────────
 processor:
   issue_queue_buffer: 256
   pr_queue_buffer: 256
 
-agents_dir: "./agents"
-memory_dir: "/var/lib/agents/memory"
-allow_autonomous_prs: false
+# ──────────────────────────────────────────────
+# Paths
+# ──────────────────────────────────────────────
+agents_dir: "./agents"                  # base directory for prompt templates and skill guidance files
+memory_dir: "/var/lib/agents/memory"    # persistent memory root for autonomous agents
 
-# Inline-first prompts for easy tuning in one file.
-# You can still use prompt_file (relative to agents_dir) instead of prompt.
+# ──────────────────────────────────────────────
+# Base prompt templates
+#
+# Each entry can use either:
+#   prompt:      inline text (Go template syntax)
+#   prompt_file: path relative to agents_dir
+#
+# Templates use {{.Field}} placeholders filled at
+# runtime and {{template "agent_guidance" .}} to
+# inject the composed skill guidance for the agent.
+# ──────────────────────────────────────────────
 prompts:
   issue_refinement:
     prompt: |
@@ -46,17 +66,19 @@ prompts:
       {{.Memory}}
       {{template "agent_guidance" .}}
       Return one JSON object on stdout.
-  autonomous_issue_task:
-    prompt: |
-      Scan all open issues and add one succinct comment per issue only if this agent has not commented before. Avoid duplicate comments.
-  autonomous_code_task:
-    prompt: |
-      Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, open a PR directly.
-  autonomous_code_task_no_prs:
-    prompt: |
-      Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, describe the diff in an issue but do not open a PR.
 
-agents:
+# ──────────────────────────────────────────────
+# Skills — reusable knowledge clusters
+#
+# A skill defines domain-specific guidance that is
+# injected into prompt templates. Skills can be
+# composed: an agent referencing [architect, security]
+# receives the concatenated guidance from both.
+#
+# Use prompt_file (relative to agents_dir) for longer
+# guidance, or inline prompt for short directives.
+# ──────────────────────────────────────────────
+skills:
   - name: architect
     prompt: |
       Focus on architecture boundaries, coupling, extensibility, and maintainability risks.
@@ -73,6 +95,32 @@ agents:
     prompt: |
       Focus on clarity, accessibility, copy quality, and user flow friction.
 
+# ──────────────────────────────────────────────
+# Agents — actors that compose skills
+#
+# Each agent has a name (used in GitHub labels like
+# ai:review:claude:<agent>) and references one or
+# more skills whose guidance is merged at runtime.
+# ──────────────────────────────────────────────
+agents:
+  - name: arch-reviewer
+    skills: [architect]
+  - name: sec-reviewer
+    skills: [security]
+  - name: test-reviewer
+    skills: [testing]
+  - name: ops-reviewer
+    skills: [devops]
+  - name: ux-reviewer
+    skills: [ux]
+
+# ──────────────────────────────────────────────
+# AI backends — CLI tools used to run prompts
+#
+# Supported backends: claude, codex.
+# When no explicit backend is specified in a label,
+# claude is preferred over codex if both are configured.
+# ──────────────────────────────────────────────
 ai_backends:
   claude:
     mode: command
@@ -92,15 +140,36 @@ ai_backends:
     max_prompt_chars: 12000
     redaction_salt_env: LOG_SALT
 
+# ──────────────────────────────────────────────
+# Repositories — repos this daemon handles
+# ──────────────────────────────────────────────
 repos:
   - full_name: "owner/repo"
     enabled: true
 
+# ──────────────────────────────────────────────
+# Autonomous agents — cron-scheduled sweeps
+#
+# Each autonomous agent defines its own skills and
+# tasks. Tasks run sequentially on each cron trigger;
+# the agent receives persistent memory across runs.
+#
+# backend: auto | claude | codex
+#   "auto" picks the default configured backend.
+# ──────────────────────────────────────────────
 autonomous_agents:
   - repo: "owner/repo"
     enabled: true
     agents:
-      - name: "architect"
+      - name: "codebase-scout"
         description: "Architecture sweeps looking for design drift and risky coupling."
         cron: "0 9 * * *"
-        backend: "auto" # auto | claude | codex (default: auto)
+        backend: "auto"
+        skills: [architect]
+        tasks:
+          - name: "issues"
+            prompt: |
+              Scan all open issues and add one succinct comment per issue only if this agent has not commented before. Avoid duplicate comments.
+          - name: "code"
+            prompt: |
+              Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, describe the diff in an issue but do not open a PR.

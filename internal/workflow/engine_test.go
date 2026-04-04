@@ -30,7 +30,7 @@ func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
 			"codex":  {},
 		},
 		Agents: []config.AgentConfig{
-			{Name: "architect", Prompt: "focus on architecture"},
+			{Name: "architect", Skills: []string{"architect"}},
 		},
 	}
 	promptStore := testutil.BuildPromptStore(t, []string{"architect"}, nil)

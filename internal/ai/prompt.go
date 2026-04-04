@@ -38,32 +38,38 @@ type PromptSource struct {
 	Prompt     string // inline text, mutually exclusive with PromptFile
 }
 
-// AgentGuidance holds the resolved guidance for an agent, either from
+// SkillGuidance holds the resolved guidance for a skill, either from
 // a file path or an inline prompt string.
-type AgentGuidance struct {
+type SkillGuidance struct {
 	Name       string
 	PromptFile string // absolute path, mutually exclusive with Prompt
 	Prompt     string // inline text, mutually exclusive with PromptFile
 }
 
+// AgentSkills maps an agent name to the skills it composes.
+type AgentSkills struct {
+	Name   string
+	Skills []string
+}
+
 type PromptStore struct {
-	agents        map[string]AgentGuidance
+	skills        map[string]SkillGuidance
 	issueTpl      *template.Template
 	prTemplates   map[string]*template.Template
 	autoTemplates map[string]*template.Template
 }
 
-func NewPromptStore(issueBase PromptSource, prBase PromptSource, autoBase PromptSource, agents []AgentGuidance, autonomousAgentNames []string) (*PromptStore, error) {
-	agentMap := make(map[string]AgentGuidance, len(agents))
-	for _, a := range agents {
-		agentMap[NormalizeToken(a.Name)] = a
+func NewPromptStore(issueBase PromptSource, prBase PromptSource, autoBase PromptSource, skills []SkillGuidance, prAgents []AgentSkills, autoAgents []AgentSkills) (*PromptStore, error) {
+	skillMap := make(map[string]SkillGuidance, len(skills))
+	for _, s := range skills {
+		skillMap[NormalizeToken(s.Name)] = s
 	}
 	store := &PromptStore{
-		agents:        agentMap,
+		skills:        skillMap,
 		prTemplates:   make(map[string]*template.Template),
 		autoTemplates: make(map[string]*template.Template),
 	}
-	if err := store.loadTemplates(issueBase, prBase, autoBase, agents, autonomousAgentNames); err != nil {
+	if err := store.loadTemplates(issueBase, prBase, autoBase, prAgents, autoAgents); err != nil {
 		return nil, err
 	}
 	return store, nil
@@ -106,7 +112,7 @@ func (p *PromptStore) AutonomousPrompt(agent string, data AutonomousPromptData) 
 	return executeTemplate(pl, data, "autonomous agent")
 }
 
-func (p *PromptStore) loadTemplates(issueBase PromptSource, prBase PromptSource, autoBase PromptSource, agents []AgentGuidance, autonomousAgentNames []string) error {
+func (p *PromptStore) loadTemplates(issueBase PromptSource, prBase PromptSource, autoBase PromptSource, prAgents []AgentSkills, autoAgents []AgentSkills) error {
 	issueTpl, err := loadPromptSource(issueBase)
 	if err != nil {
 		return err
@@ -118,11 +124,10 @@ func (p *PromptStore) loadTemplates(issueBase PromptSource, prBase PromptSource,
 		return err
 	}
 
-	// All defined agents get a PR review template.
 	p.prTemplates = make(map[string]*template.Template)
-	for _, agent := range agents {
+	for _, agent := range prAgents {
 		normalized := NormalizeToken(agent.Name)
-		tpl, err := p.composeAgentTemplate(prBaseTpl, normalized)
+		tpl, err := p.composeSkillsTemplate(prBaseTpl, normalized, agent.Skills)
 		if err != nil {
 			return err
 		}
@@ -134,11 +139,10 @@ func (p *PromptStore) loadTemplates(issueBase PromptSource, prBase PromptSource,
 		return err
 	}
 
-	// Only autonomous agents get an autonomous template.
 	p.autoTemplates = make(map[string]*template.Template)
-	for _, name := range dedupeTokens(autonomousAgentNames) {
-		normalized := NormalizeToken(name)
-		tpl, err := p.composeAgentTemplate(autoBaseTpl, normalized)
+	for _, agent := range autoAgents {
+		normalized := NormalizeToken(agent.Name)
+		tpl, err := p.composeSkillsTemplate(autoBaseTpl, normalized, agent.Skills)
 		if err != nil {
 			return err
 		}
@@ -148,32 +152,34 @@ func (p *PromptStore) loadTemplates(issueBase PromptSource, prBase PromptSource,
 	return nil
 }
 
-// composeAgentTemplate clones a base template and appends the agent's guidance,
-// either from a file or from an inline prompt string.
-func (p *PromptStore) composeAgentTemplate(baseTpl *template.Template, agent string) (*template.Template, error) {
-	ag, ok := p.agents[agent]
-	if !ok {
-		return nil, fmt.Errorf("no guidance defined for agent %q", agent)
-	}
+// composeSkillsTemplate clones a base template and appends the concatenated
+// guidance from all referenced skills as a single "agent_guidance" block.
+func (p *PromptStore) composeSkillsTemplate(baseTpl *template.Template, agent string, skillNames []string) (*template.Template, error) {
 	clone, err := baseTpl.Clone()
 	if err != nil {
 		return nil, fmt.Errorf("clone base template for agent %q: %w", agent, err)
 	}
-	if ag.PromptFile != "" {
-		content, err := os.ReadFile(ag.PromptFile)
-		if err != nil {
-			return nil, fmt.Errorf("load guidance %s: %w", ag.PromptFile, err)
+	var guidance strings.Builder
+	for _, name := range skillNames {
+		sg, ok := p.skills[NormalizeToken(name)]
+		if !ok {
+			return nil, fmt.Errorf("no guidance defined for skill %q (agent %q)", name, agent)
 		}
-		clone, err = clone.Parse(string(content))
-		if err != nil {
-			return nil, fmt.Errorf("parse guidance %s: %w", ag.PromptFile, err)
+		if sg.PromptFile != "" {
+			content, err := os.ReadFile(sg.PromptFile)
+			if err != nil {
+				return nil, fmt.Errorf("load guidance %s: %w", sg.PromptFile, err)
+			}
+			guidance.Write(content)
+		} else {
+			guidance.WriteString(sg.Prompt)
 		}
-		return clone, nil
+		guidance.WriteString("\n")
 	}
-	inlineBlock := fmt.Sprintf("{{define \"agent_guidance\"}}%s{{end}}", ag.Prompt)
-	clone, err = clone.Parse(inlineBlock)
+	block := fmt.Sprintf("{{define \"agent_guidance\"}}%s{{end}}", guidance.String())
+	clone, err = clone.Parse(block)
 	if err != nil {
-		return nil, fmt.Errorf("parse inline guidance for agent %q: %w", agent, err)
+		return nil, fmt.Errorf("parse guidance for agent %q: %w", agent, err)
 	}
 	return clone, nil
 }
@@ -220,18 +226,4 @@ func NormalizeToken(token string) string {
 	token = strings.ReplaceAll(token, "\\", "_")
 	token = strings.ReplaceAll(token, "\x00", "_")
 	return token
-}
-
-func dedupeTokens(tokens []string) []string {
-	seen := make(map[string]struct{})
-	unique := make([]string, 0, len(tokens))
-	for _, token := range tokens {
-		normalized := NormalizeToken(token)
-		if _, ok := seen[normalized]; ok {
-			continue
-		}
-		seen[normalized] = struct{}{}
-		unique = append(unique, normalized)
-	}
-	return unique
 }

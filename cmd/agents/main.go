@@ -81,15 +81,16 @@ func run() error {
 }
 
 func setupPromptStore(cfg *config.Config, logger zerolog.Logger) (*ai.PromptStore, error) {
-	agents := resolveAgents(cfg)
-	autoAgentNames := collectAutonomousAgentNames(cfg)
+	skills := resolveSkills(cfg)
+	prAgents := collectPRAgentSkills(cfg)
+	autoAgents := collectAutonomousAgentSkills(cfg)
 	issueBase, prBase, autoBase := resolvePrompts(cfg)
 
-	store, err := ai.NewPromptStore(issueBase, prBase, autoBase, agents, autoAgentNames)
+	store, err := ai.NewPromptStore(issueBase, prBase, autoBase, skills, prAgents, autoAgents)
 	if err != nil {
 		return nil, err
 	}
-	logger.Info().Str("agents_dir", cfg.AgentsDir).Int("agents", len(agents)).Msg("prompt store initialized")
+	logger.Info().Str("agents_dir", cfg.AgentsDir).Int("skills", len(skills)).Msg("prompt store initialized")
 	return store, nil
 }
 
@@ -102,44 +103,42 @@ func setupRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runne
 }
 
 func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.PromptStore, logger zerolog.Logger) (*autonomous.Scheduler, error) {
-	taskPrompts, err := resolveTaskPrompts(cfg)
-	if err != nil {
-		return nil, err
-	}
 	memoryStore := autonomous.NewMemoryStore(cfg.MemoryDir)
-	return autonomous.NewScheduler(cfg, runners, prompts, taskPrompts, memoryStore, logger)
+	return autonomous.NewScheduler(cfg, runners, prompts, memoryStore, logger)
 }
 
-func resolveTaskPrompts(cfg *config.Config) (autonomous.TaskPrompts, error) {
-	issueTask, err := cfg.Prompts.AutonomousIssueTask.Resolve(cfg.AgentsDir)
-	if err != nil {
-		return autonomous.TaskPrompts{}, fmt.Errorf("resolve autonomous issue task prompt: %w", err)
-	}
-	codeTask, err := cfg.Prompts.AutonomousCodeTask.Resolve(cfg.AgentsDir)
-	if err != nil {
-		return autonomous.TaskPrompts{}, fmt.Errorf("resolve autonomous code task prompt: %w", err)
-	}
-	codeTaskNoPRs, err := cfg.Prompts.AutonomousCodeTaskNoPRs.Resolve(cfg.AgentsDir)
-	if err != nil {
-		return autonomous.TaskPrompts{}, fmt.Errorf("resolve autonomous code task (no PRs) prompt: %w", err)
-	}
-	return autonomous.TaskPrompts{
-		IssueTask:     issueTask,
-		CodeTask:      codeTask,
-		CodeTaskNoPRs: codeTaskNoPRs,
-	}, nil
-}
-
-func resolveAgents(cfg *config.Config) []ai.AgentGuidance {
-	agents := make([]ai.AgentGuidance, 0, len(cfg.Agents))
-	for _, a := range cfg.Agents {
-		ag := ai.AgentGuidance{Name: a.Name, Prompt: a.Prompt}
-		if a.PromptFile != "" {
-			ag.PromptFile = filepath.Join(cfg.AgentsDir, a.PromptFile)
+func resolveSkills(cfg *config.Config) []ai.SkillGuidance {
+	skills := make([]ai.SkillGuidance, 0, len(cfg.Skills))
+	for _, s := range cfg.Skills {
+		sg := ai.SkillGuidance{Name: s.Name, Prompt: s.Prompt}
+		if s.PromptFile != "" {
+			sg.PromptFile = filepath.Join(cfg.AgentsDir, s.PromptFile)
 		}
-		agents = append(agents, ag)
+		skills = append(skills, sg)
 	}
-	return agents
+	return skills
+}
+
+func collectPRAgentSkills(cfg *config.Config) []ai.AgentSkills {
+	result := make([]ai.AgentSkills, len(cfg.Agents))
+	for i, a := range cfg.Agents {
+		result[i] = ai.AgentSkills{Name: a.Name, Skills: a.Skills}
+	}
+	return result
+}
+
+func collectAutonomousAgentSkills(cfg *config.Config) []ai.AgentSkills {
+	var result []ai.AgentSkills
+	seen := make(map[string]struct{})
+	for _, repo := range cfg.AutonomousAgents {
+		for _, agent := range repo.Agents {
+			if _, ok := seen[agent.Name]; !ok {
+				seen[agent.Name] = struct{}{}
+				result = append(result, ai.AgentSkills{Name: agent.Name, Skills: agent.Skills})
+			}
+		}
+	}
+	return result
 }
 
 func resolvePrompts(cfg *config.Config) (issue ai.PromptSource, pr ai.PromptSource, auto ai.PromptSource) {
@@ -152,16 +151,3 @@ func resolvePrompts(cfg *config.Config) (issue ai.PromptSource, pr ai.PromptSour
 	return resolve(cfg.Prompts.IssueRefinement), resolve(cfg.Prompts.PRReview), resolve(cfg.Prompts.Autonomous)
 }
 
-func collectAutonomousAgentNames(cfg *config.Config) []string {
-	seen := make(map[string]struct{})
-	var names []string
-	for _, repo := range cfg.AutonomousAgents {
-		for _, agent := range repo.Agents {
-			if _, ok := seen[agent.Name]; !ok {
-				seen[agent.Name] = struct{}{}
-				names = append(names, agent.Name)
-			}
-		}
-	}
-	return names
-}

@@ -31,33 +31,27 @@ const (
 	defaultPRReviewPromptFile        = "pr_review_prompts/base/PROMPT.md"
 	defaultAutonomousPromptFile      = "autonomous/base/PROMPT.md"
 
-	defaultAutonomousIssueTask     = "Scan all open issues and add one succinct comment per issue only if this agent has not commented before. Avoid duplicate comments."
-	defaultAutonomousCodeTask      = "Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, open a PR directly."
-	defaultAutonomousCodeTaskNoPRs = "Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, describe the diff in an issue but do not open a PR."
 )
 
 type Config struct {
-	Log                LogConfig                  `yaml:"log"`
-	HTTP               HTTPConfig                 `yaml:"http"`
-	Processor          ProcessorConfig            `yaml:"processor"`
-	AIBackends         map[string]AIBackendConfig `yaml:"ai_backends"`
-	Repos              []RepoConfig               `yaml:"repos"`
-	AgentsDir          string                     `yaml:"agents_dir"`
-	MemoryDir          string                     `yaml:"memory_dir"`
-	Prompts            PromptsConfig              `yaml:"prompts"`
-	Agents             []AgentConfig              `yaml:"agents"`
-	AllowAutonomousPRs bool                       `yaml:"allow_autonomous_prs"`
+	Log        LogConfig                  `yaml:"log"`
+	HTTP       HTTPConfig                 `yaml:"http"`
+	Processor  ProcessorConfig            `yaml:"processor"`
+	AIBackends map[string]AIBackendConfig `yaml:"ai_backends"`
+	Repos      []RepoConfig               `yaml:"repos"`
+	AgentsDir  string                     `yaml:"agents_dir"`
+	MemoryDir  string                     `yaml:"memory_dir"`
+	Prompts    PromptsConfig              `yaml:"prompts"`
+	Skills     []SkillConfig              `yaml:"skills"`
+	Agents     []AgentConfig              `yaml:"agents"`
 
 	AutonomousAgents []AutonomousRepoConfig `yaml:"autonomous_agents"`
 }
 
 type PromptsConfig struct {
-	IssueRefinement         PromptSourceConfig `yaml:"issue_refinement"`
-	PRReview                PromptSourceConfig `yaml:"pr_review"`
-	Autonomous              PromptSourceConfig `yaml:"autonomous"`
-	AutonomousIssueTask     PromptSourceConfig `yaml:"autonomous_issue_task"`
-	AutonomousCodeTask      PromptSourceConfig `yaml:"autonomous_code_task"`
-	AutonomousCodeTaskNoPRs PromptSourceConfig `yaml:"autonomous_code_task_no_prs"`
+	IssueRefinement PromptSourceConfig `yaml:"issue_refinement"`
+	PRReview        PromptSourceConfig `yaml:"pr_review"`
+	Autonomous      PromptSourceConfig `yaml:"autonomous"`
 }
 
 type PromptSourceConfig struct {
@@ -82,10 +76,20 @@ func (p PromptSourceConfig) Resolve(baseDir string) (string, error) {
 	return string(data), nil
 }
 
-type AgentConfig struct {
+type SkillConfig struct {
 	Name       string `yaml:"name"`
 	PromptFile string `yaml:"prompt_file"`
 	Prompt     string `yaml:"prompt"`
+}
+
+type AgentConfig struct {
+	Name   string   `yaml:"name"`
+	Skills []string `yaml:"skills"`
+}
+
+type TaskConfig struct {
+	Name   string `yaml:"name"`
+	Prompt string `yaml:"prompt"`
 }
 
 type LogConfig struct {
@@ -133,10 +137,12 @@ type AutonomousRepoConfig struct {
 }
 
 type AutonomousAgentConfig struct {
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	Cron        string `yaml:"cron"`
-	Backend     string `yaml:"backend"`
+	Name        string       `yaml:"name"`
+	Description string       `yaml:"description"`
+	Cron        string       `yaml:"cron"`
+	Backend     string       `yaml:"backend"`
+	Skills      []string     `yaml:"skills"`
+	Tasks       []TaskConfig `yaml:"tasks"`
 }
 
 func Load(path string) (*Config, error) {
@@ -161,6 +167,7 @@ func (c *Config) applyDefaults() {
 	c.applyPromptDefaults()
 	c.applyHTTPDefaults()
 	c.applyProcessorDefaults()
+	c.normalizeSkills()
 	c.normalizeAgents()
 	c.normalizeBackends()
 	c.normalizeRepos()
@@ -172,9 +179,6 @@ func (c *Config) applyPromptDefaults() {
 	applyPromptSourceDefault(&c.Prompts.IssueRefinement, defaultIssueRefinementPromptFile)
 	applyPromptSourceDefault(&c.Prompts.PRReview, defaultPRReviewPromptFile)
 	applyPromptSourceDefault(&c.Prompts.Autonomous, defaultAutonomousPromptFile)
-	applyPromptSourceInlineDefault(&c.Prompts.AutonomousIssueTask, defaultAutonomousIssueTask)
-	applyPromptSourceInlineDefault(&c.Prompts.AutonomousCodeTask, defaultAutonomousCodeTask)
-	applyPromptSourceInlineDefault(&c.Prompts.AutonomousCodeTaskNoPRs, defaultAutonomousCodeTaskNoPRs)
 }
 
 func applyPromptSourceDefault(src *PromptSourceConfig, defaultFile string) {
@@ -182,14 +186,6 @@ func applyPromptSourceDefault(src *PromptSourceConfig, defaultFile string) {
 	src.Prompt = strings.TrimSpace(src.Prompt)
 	if src.PromptFile == "" && src.Prompt == "" {
 		src.PromptFile = defaultFile
-	}
-}
-
-func applyPromptSourceInlineDefault(src *PromptSourceConfig, defaultPrompt string) {
-	src.PromptFile = strings.TrimSpace(src.PromptFile)
-	src.Prompt = strings.TrimSpace(src.Prompt)
-	if src.PromptFile == "" && src.Prompt == "" {
-		src.Prompt = defaultPrompt
 	}
 }
 
@@ -210,11 +206,20 @@ func (c *Config) applyProcessorDefaults() {
 	setDefaultInt(&c.Processor.PRQueueBuffer, defaultPRQueueBufferSize)
 }
 
+func (c *Config) normalizeSkills() {
+	for i := range c.Skills {
+		c.Skills[i].Name = strings.ToLower(strings.TrimSpace(c.Skills[i].Name))
+		c.Skills[i].PromptFile = strings.TrimSpace(c.Skills[i].PromptFile)
+		c.Skills[i].Prompt = strings.TrimSpace(c.Skills[i].Prompt)
+	}
+}
+
 func (c *Config) normalizeAgents() {
 	for i := range c.Agents {
 		c.Agents[i].Name = strings.ToLower(strings.TrimSpace(c.Agents[i].Name))
-		c.Agents[i].PromptFile = strings.TrimSpace(c.Agents[i].PromptFile)
-		c.Agents[i].Prompt = strings.TrimSpace(c.Agents[i].Prompt)
+		for j := range c.Agents[i].Skills {
+			c.Agents[i].Skills[j] = strings.ToLower(strings.TrimSpace(c.Agents[i].Skills[j]))
+		}
 	}
 }
 
@@ -251,6 +256,13 @@ func (c *Config) normalizeAutonomousAgents() {
 			if a.Backend == "" {
 				a.Backend = "auto"
 			}
+			for k := range a.Skills {
+				a.Skills[k] = strings.ToLower(strings.TrimSpace(a.Skills[k]))
+			}
+			for k := range a.Tasks {
+				a.Tasks[k].Name = strings.ToLower(strings.TrimSpace(a.Tasks[k].Name))
+				a.Tasks[k].Prompt = strings.TrimSpace(a.Tasks[k].Prompt)
+			}
 		}
 	}
 }
@@ -274,11 +286,14 @@ func (c *Config) validate() error {
 	if err := c.validatePromptSources(); err != nil {
 		return err
 	}
-	agentNames, err := c.validateAgents()
+	skillNames, err := c.validateSkills()
 	if err != nil {
 		return err
 	}
-	return c.validateAutonomousAgents(agentNames)
+	if err := c.validateAgents(skillNames); err != nil {
+		return err
+	}
+	return c.validateAutonomousAgents(skillNames)
 }
 
 func (c *Config) validateBackends() error {
@@ -307,12 +322,9 @@ func (c *Config) validateRepos() error {
 
 func (c *Config) validatePromptSources() error {
 	sources := map[string]PromptSourceConfig{
-		"prompts.issue_refinement":            c.Prompts.IssueRefinement,
-		"prompts.pr_review":                   c.Prompts.PRReview,
-		"prompts.autonomous":                  c.Prompts.Autonomous,
-		"prompts.autonomous_issue_task":       c.Prompts.AutonomousIssueTask,
-		"prompts.autonomous_code_task":        c.Prompts.AutonomousCodeTask,
-		"prompts.autonomous_code_task_no_prs": c.Prompts.AutonomousCodeTaskNoPRs,
+		"prompts.issue_refinement": c.Prompts.IssueRefinement,
+		"prompts.pr_review":        c.Prompts.PRReview,
+		"prompts.autonomous":       c.Prompts.Autonomous,
 	}
 	for name, src := range sources {
 		if src.PromptFile != "" && src.Prompt != "" {
@@ -322,29 +334,51 @@ func (c *Config) validatePromptSources() error {
 	return nil
 }
 
-func (c *Config) validateAgents() (map[string]struct{}, error) {
-	names := make(map[string]struct{}, len(c.Agents))
-	for _, agent := range c.Agents {
-		if agent.Name == "" {
-			return nil, errors.New("config: agent name is required")
+func (c *Config) validateSkills() (map[string]struct{}, error) {
+	names := make(map[string]struct{}, len(c.Skills))
+	for _, skill := range c.Skills {
+		if skill.Name == "" {
+			return nil, errors.New("config: skill name is required")
 		}
-		if _, dup := names[agent.Name]; dup {
-			return nil, fmt.Errorf("config: duplicate agent name %q", agent.Name)
+		if _, dup := names[skill.Name]; dup {
+			return nil, fmt.Errorf("config: duplicate skill name %q", skill.Name)
 		}
-		hasFile := agent.PromptFile != ""
-		hasInline := agent.Prompt != ""
+		hasFile := skill.PromptFile != ""
+		hasInline := skill.Prompt != ""
 		if !hasFile && !hasInline {
-			return nil, fmt.Errorf("config: agent %q must have either prompt_file or prompt", agent.Name)
+			return nil, fmt.Errorf("config: skill %q must have either prompt_file or prompt", skill.Name)
 		}
 		if hasFile && hasInline {
-			return nil, fmt.Errorf("config: agent %q must have only one of prompt_file or prompt, not both", agent.Name)
+			return nil, fmt.Errorf("config: skill %q must have only one of prompt_file or prompt, not both", skill.Name)
 		}
-		names[agent.Name] = struct{}{}
+		names[skill.Name] = struct{}{}
 	}
 	return names, nil
 }
 
-func (c *Config) validateAutonomousAgents(agentNames map[string]struct{}) error {
+func (c *Config) validateAgents(skillNames map[string]struct{}) error {
+	names := make(map[string]struct{}, len(c.Agents))
+	for _, agent := range c.Agents {
+		if agent.Name == "" {
+			return errors.New("config: agent name is required")
+		}
+		if _, dup := names[agent.Name]; dup {
+			return fmt.Errorf("config: duplicate agent name %q", agent.Name)
+		}
+		if len(agent.Skills) == 0 {
+			return fmt.Errorf("config: agent %q must reference at least one skill", agent.Name)
+		}
+		for _, skill := range agent.Skills {
+			if _, ok := skillNames[skill]; !ok {
+				return fmt.Errorf("config: agent %q references unknown skill %q", agent.Name, skill)
+			}
+		}
+		names[agent.Name] = struct{}{}
+	}
+	return nil
+}
+
+func (c *Config) validateAutonomousAgents(skillNames map[string]struct{}) error {
 	for _, repo := range c.AutonomousAgents {
 		if repo.Repo == "" {
 			return errors.New("config: autonomous agent repo is required")
@@ -362,8 +396,24 @@ func (c *Config) validateAutonomousAgents(agentNames map[string]struct{}) error 
 			if agent.Backend != "auto" && agent.Backend != "claude" && agent.Backend != "codex" {
 				return fmt.Errorf("config: autonomous agent backend %q for repo %s must be one of auto, claude, codex", agent.Backend, repo.Repo)
 			}
-			if _, ok := agentNames[agent.Name]; !ok {
-				return fmt.Errorf("config: autonomous agent %q for repo %s references unknown agent", agent.Name, repo.Repo)
+			if len(agent.Skills) == 0 {
+				return fmt.Errorf("config: autonomous agent %q for repo %s must reference at least one skill", agent.Name, repo.Repo)
+			}
+			for _, skill := range agent.Skills {
+				if _, ok := skillNames[skill]; !ok {
+					return fmt.Errorf("config: autonomous agent %q for repo %s references unknown skill %q", agent.Name, repo.Repo, skill)
+				}
+			}
+			if len(agent.Tasks) == 0 {
+				return fmt.Errorf("config: autonomous agent %q for repo %s must define at least one task", agent.Name, repo.Repo)
+			}
+			for _, task := range agent.Tasks {
+				if task.Name == "" {
+					return fmt.Errorf("config: autonomous agent %q for repo %s has a task with empty name", agent.Name, repo.Repo)
+				}
+				if task.Prompt == "" {
+					return fmt.Errorf("config: autonomous agent %q for repo %s task %q must have a prompt", agent.Name, repo.Repo, task.Name)
+				}
 			}
 		}
 	}
