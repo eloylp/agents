@@ -9,12 +9,14 @@ import (
 var (
 	ErrIssueQueueFull = errors.New("issue queue full")
 	ErrPRQueueFull    = errors.New("pr queue full")
+	ErrQueueClosed    = errors.New("queue closed")
 )
 
 type DataChannels struct {
 	issueQueue chan IssueRequest
 	prQueue    chan PRRequest
-	closeOnce  sync.Once
+	mu         sync.RWMutex
+	closed     bool
 }
 
 func NewDataChannels(issueBuffer, prBuffer int) *DataChannels {
@@ -28,6 +30,11 @@ func NewDataChannels(issueBuffer, prBuffer int) *DataChannels {
 // context cancellation (caller is shutting down), successful enqueue, and the
 // default case which fires immediately when the channel buffer is full.
 func (dc *DataChannels) PushIssue(ctx context.Context, req IssueRequest) error {
+	dc.mu.RLock()
+	defer dc.mu.RUnlock()
+	if dc.closed {
+		return ErrQueueClosed
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -39,6 +46,11 @@ func (dc *DataChannels) PushIssue(ctx context.Context, req IssueRequest) error {
 }
 
 func (dc *DataChannels) PushPR(ctx context.Context, req PRRequest) error {
+	dc.mu.RLock()
+	defer dc.mu.RUnlock()
+	if dc.closed {
+		return ErrQueueClosed
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -57,11 +69,16 @@ func (dc *DataChannels) PRChan() <-chan PRRequest {
 	return dc.prQueue
 }
 
-// Close shuts down both queues. sync.Once prevents a double-close panic if
-// Stop is called concurrently or more than once.
+// Close shuts down both queues. The write lock ensures no in-flight Push call
+// can race with channel closure. Subsequent Close calls are safe because the
+// closed flag is checked first.
 func (dc *DataChannels) Close() {
-	dc.closeOnce.Do(func() {
-		close(dc.issueQueue)
-		close(dc.prQueue)
-	})
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	if dc.closed {
+		return
+	}
+	dc.closed = true
+	close(dc.issueQueue)
+	close(dc.prQueue)
 }

@@ -148,6 +148,11 @@ func (s *Server) handleIssueEvent(ctx context.Context, w http.ResponseWriter, bo
 			http.Error(w, "issue queue full, retry later", http.StatusServiceUnavailable)
 			return
 		}
+		if errors.Is(err, workflow.ErrQueueClosed) {
+			s.logger.Warn().Str("repo", repo.FullName).Msg("queue closed during shutdown, dropping webhook")
+			http.Error(w, "shutting down, retry later", http.StatusServiceUnavailable)
+			return
+		}
 		s.delivery.Delete(deliveryID)
 		http.Error(w, "request cancelled", http.StatusRequestTimeout)
 		return
@@ -187,6 +192,11 @@ func (s *Server) handlePREvent(ctx context.Context, w http.ResponseWriter, body 
 			s.delivery.Delete(deliveryID)
 			s.logger.Warn().Str("repo", repo.FullName).Msg("pr queue full, dropping webhook")
 			http.Error(w, "pr queue full, retry later", http.StatusServiceUnavailable)
+			return
+		}
+		if errors.Is(err, workflow.ErrQueueClosed) {
+			s.logger.Warn().Str("repo", repo.FullName).Msg("queue closed during shutdown, dropping webhook")
+			http.Error(w, "shutting down, retry later", http.StatusServiceUnavailable)
 			return
 		}
 		s.delivery.Delete(deliveryID)
