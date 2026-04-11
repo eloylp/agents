@@ -6,6 +6,29 @@ import (
 	"testing"
 )
 
+func TestExampleConfigLoadsAndHasCorrectCodexArgs(t *testing.T) {
+	t.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
+	t.Setenv("LOG_SALT", "salt")
+
+	// Resolve path to the root-level config.example.yaml relative to this package.
+	examplePath := filepath.Join("..", "..", "config.example.yaml")
+	cfg, err := Load(examplePath)
+	if err != nil {
+		t.Fatalf("config.example.yaml failed to load: %v", err)
+	}
+
+	codex, ok := cfg.AIBackends["codex"]
+	if !ok {
+		t.Fatal("config.example.yaml must define a codex ai_backend")
+	}
+	if len(codex.Args) == 0 {
+		t.Fatal("codex backend args must not be empty")
+	}
+	if codex.Args[0] != "exec" {
+		t.Fatalf("codex backend first arg must be \"exec\", got %q (wrong -p flag causes '--profile' parse error)", codex.Args[0])
+	}
+}
+
 func TestLoadRequiresSupportedBackendNames(t *testing.T) {
 	t.Setenv("WEBHOOK_SECRET", "secret")
 
