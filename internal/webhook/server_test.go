@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -28,7 +29,7 @@ func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
 	dataChannels := workflow.NewDataChannels(1, 1)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, zerolog.Nop())
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop())
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":1,"title":"t","body":"b","updated_at":"2026-02-15T00:00:00Z","labels":[{"name":"ai:refine"}]}}`
 	sig := signatureForTests([]byte(body), "secret")
@@ -77,7 +78,7 @@ func TestHandleWebhookIgnoresNonAILabel(t *testing.T) {
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
 	dataChannels := workflow.NewDataChannels(1, 1)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, zerolog.Nop())
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop())
 
 	body := `{"action":"labeled","label":{"name":"bug"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":2,"title":"t","body":"b","updated_at":"2026-02-15T00:00:00Z","labels":[{"name":"bug"}],"head":{"sha":"abc"}}}`
 	sig := signatureForTests([]byte(body), "secret")
@@ -108,7 +109,7 @@ func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
 	dataChannels := workflow.NewDataChannels(1, 1)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, zerolog.Nop())
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop())
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":7}}`
 
@@ -148,7 +149,7 @@ func TestHandleIssueWebhookUsesEventLabelAsTrigger(t *testing.T) {
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
 	dataChannels := workflow.NewDataChannels(1, 1)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, zerolog.Nop())
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop())
 
 	body := `{"action":"labeled","label":{"name":"ai:refine:codex"},"repository":{"full_name":"owner/repo"},"issue":{"number":3,"title":"t","body":"b","updated_at":"2026-02-15T00:00:00Z","labels":[{"name":"ai:refine:claude"}]}}`
 	sig := signatureForTests([]byte(body), "secret")
@@ -189,7 +190,7 @@ func TestHandleIssueWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("preload issue queue: %v", err)
 	}
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, zerolog.Nop())
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop())
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":2}}`
 	sig := signatureForTests([]byte(body), "secret")
@@ -232,6 +233,112 @@ func TestVerifySignature(t *testing.T) {
 	if verifySignature(body, secret, "sha256=deadbeef") {
 		t.Fatalf("expected invalid signature to fail")
 	}
+}
+
+func TestHandleStatusReturnsJSON(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{
+			MaxBodyBytes:       1024,
+			WebhookSecret:      "secret",
+			DeliveryTTLSeconds: 3600,
+		},
+		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
+	}
+	dataChannels := workflow.NewDataChannels(8, 4)
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop())
+
+	req := httptest.NewRequest(http.MethodGet, "/status", nil)
+	rr := httptest.NewRecorder()
+	server.handleStatus(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("expected Content-Type application/json, got %q", ct)
+	}
+
+	var resp struct {
+		Status        string `json:"status"`
+		UptimeSeconds int64  `json:"uptime_seconds"`
+		Queues        struct {
+			Issues struct {
+				Buffered int `json:"buffered"`
+				Capacity int `json:"capacity"`
+			} `json:"issues"`
+			PRs struct {
+				Buffered int `json:"buffered"`
+				Capacity int `json:"capacity"`
+			} `json:"prs"`
+		} `json:"queues"`
+		Agents []AgentStatus `json:"agents"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Status != "ok" {
+		t.Errorf("expected status ok, got %q", resp.Status)
+	}
+	if resp.Queues.Issues.Capacity != 8 {
+		t.Errorf("expected issue queue capacity 8, got %d", resp.Queues.Issues.Capacity)
+	}
+	if resp.Queues.PRs.Capacity != 4 {
+		t.Errorf("expected PR queue capacity 4, got %d", resp.Queues.PRs.Capacity)
+	}
+	if resp.Agents == nil {
+		t.Errorf("expected non-nil agents slice")
+	}
+}
+
+func TestHandleStatusIncludesAgentStatuses(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{
+			MaxBodyBytes:       1024,
+			WebhookSecret:      "secret",
+			DeliveryTTLSeconds: 3600,
+		},
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	provider := &stubStatusProvider{
+		statuses: []AgentStatus{
+			{Name: "bug-fixer", Repo: "owner/repo", LastRun: &now, NextRun: now.Add(time.Hour), LastStatus: "success"},
+		},
+	}
+	dataChannels := workflow.NewDataChannels(1, 1)
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, provider, zerolog.Nop())
+
+	req := httptest.NewRequest(http.MethodGet, "/status", nil)
+	rr := httptest.NewRecorder()
+	server.handleStatus(rr, req)
+
+	var resp struct {
+		Agents []AgentStatus `json:"agents"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(resp.Agents))
+	}
+	if resp.Agents[0].Name != "bug-fixer" {
+		t.Errorf("expected agent name bug-fixer, got %q", resp.Agents[0].Name)
+	}
+	if resp.Agents[0].LastStatus != "success" {
+		t.Errorf("expected last_status success, got %q", resp.Agents[0].LastStatus)
+	}
+	if resp.Agents[0].LastRun == nil {
+		t.Errorf("expected last_run to be set")
+	}
+}
+
+type stubStatusProvider struct {
+	statuses []AgentStatus
+}
+
+func (s *stubStatusProvider) AgentStatuses() []AgentStatus {
+	return s.statuses
 }
 
 func signatureForTests(payload []byte, secret string) string {

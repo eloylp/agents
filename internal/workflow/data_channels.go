@@ -69,6 +69,21 @@ func (dc *DataChannels) PRChan() <-chan PRRequest {
 	return dc.prQueue
 }
 
+// QueueStat describes the current depth and capacity of one event queue.
+type QueueStat struct {
+	Buffered int
+	Capacity int
+}
+
+// QueueStats returns the current depth and capacity of the issue and PR queues.
+// Reading channel length and capacity is safe without holding the mutex because
+// these are intrinsic properties of the channel value and the lock only guards
+// the closed flag and send operations.
+func (dc *DataChannels) QueueStats() (issues, prs QueueStat) {
+	return QueueStat{len(dc.issueQueue), cap(dc.issueQueue)},
+		QueueStat{len(dc.prQueue), cap(dc.prQueue)}
+}
+
 // Close shuts down both queues. The write lock ensures no in-flight Push call
 // can race with channel closure. Subsequent Close calls are safe because the
 // closed flag is checked first.

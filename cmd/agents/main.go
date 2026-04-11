@@ -62,7 +62,7 @@ func run() error {
 		return err
 	}
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.HTTP.DeliveryTTLSeconds) * time.Second)
-	server := webhook.NewServer(cfg, deliveryStore, dataChannels, logger)
+	server := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, logger)
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.Go(func() error {
 		return processor.Run(groupCtx)
@@ -139,6 +139,28 @@ func collectAutonomousAgentSkills(cfg *config.Config) []ai.AgentSkills {
 		}
 	}
 	return result
+}
+
+// schedulerStatusAdapter adapts *autonomous.Scheduler to webhook.StatusProvider,
+// converting autonomous.AgentStatus to webhook.AgentStatus without coupling the
+// two packages to each other.
+type schedulerStatusAdapter struct {
+	s *autonomous.Scheduler
+}
+
+func (a schedulerStatusAdapter) AgentStatuses() []webhook.AgentStatus {
+	raw := a.s.AgentStatuses()
+	out := make([]webhook.AgentStatus, len(raw))
+	for i, s := range raw {
+		out[i] = webhook.AgentStatus{
+			Name:       s.Name,
+			Repo:       s.Repo,
+			LastRun:    s.LastRun,
+			NextRun:    s.NextRun,
+			LastStatus: s.LastStatus,
+		}
+	}
+	return out
 }
 
 func resolvePrompts(cfg *config.Config) (issue ai.PromptSource, pr ai.PromptSource, auto ai.PromptSource) {

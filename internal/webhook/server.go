@@ -19,19 +19,38 @@ import (
 	"github.com/eloylp/agents/internal/workflow"
 )
 
-type Server struct {
-	cfg      *config.Config
-	delivery *DeliveryStore
-	logger   zerolog.Logger
-	channels *workflow.DataChannels
+// AgentStatus is the runtime state of one autonomous agent as reported by /status.
+type AgentStatus struct {
+	Name       string     `json:"name"`
+	Repo       string     `json:"repo"`
+	LastRun    *time.Time `json:"last_run,omitempty"`
+	NextRun    time.Time  `json:"next_run"`
+	LastStatus string     `json:"last_status,omitempty"`
 }
 
-func NewServer(cfg *config.Config, delivery *DeliveryStore, channels *workflow.DataChannels, logger zerolog.Logger) *Server {
+// StatusProvider reports the current scheduling state of autonomous agents.
+// The implementation is optional; passing nil results in an empty agents list.
+type StatusProvider interface {
+	AgentStatuses() []AgentStatus
+}
+
+type Server struct {
+	cfg       *config.Config
+	delivery  *DeliveryStore
+	logger    zerolog.Logger
+	channels  *workflow.DataChannels
+	provider  StatusProvider
+	startTime time.Time
+}
+
+func NewServer(cfg *config.Config, delivery *DeliveryStore, channels *workflow.DataChannels, provider StatusProvider, logger zerolog.Logger) *Server {
 	return &Server{
-		cfg:      cfg,
-		delivery: delivery,
-		logger:   logger.With().Str("component", "webhook_server").Logger(),
-		channels: channels,
+		cfg:       cfg,
+		delivery:  delivery,
+		logger:    logger.With().Str("component", "webhook_server").Logger(),
+		channels:  channels,
+		provider:  provider,
+		startTime: time.Now(),
 	}
 }
 
@@ -67,8 +86,38 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	issueQ, prQ := s.channels.QueueStats()
+
+	type queueJSON struct {
+		Buffered int `json:"buffered"`
+		Capacity int `json:"capacity"`
+	}
+	type statusJSON struct {
+		Status        string               `json:"status"`
+		UptimeSeconds int64                `json:"uptime_seconds"`
+		Queues        map[string]queueJSON `json:"queues"`
+		Agents        []AgentStatus        `json:"agents"`
+	}
+
+	agents := []AgentStatus{}
+	if s.provider != nil {
+		if got := s.provider.AgentStatuses(); len(got) > 0 {
+			agents = got
+		}
+	}
+
+	resp := statusJSON{
+		Status:        "ok",
+		UptimeSeconds: int64(time.Since(s.startTime).Seconds()),
+		Queues: map[string]queueJSON{
+			"issues": {Buffered: issueQ.Buffered, Capacity: issueQ.Capacity},
+			"prs":    {Buffered: prQ.Buffered, Capacity: prQ.Capacity},
+		},
+		Agents: agents,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
