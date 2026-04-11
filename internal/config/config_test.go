@@ -496,34 +496,19 @@ repos:
 	}
 }
 
-// TestCodexExampleConfigArgs verifies the recommended codex args use exec and --skip-git-repo-check.
-// This is a regression test for issues #61 and #64.
+// TestCodexExampleConfigArgs verifies the recommended codex args in config.example.yaml
+// include exec, --skip-git-repo-check, and --dangerously-bypass-approvals-and-sandbox.
+// This is a regression test for issues #61 and #64: it loads the actual example file so
+// any future drift from the required args will be caught by CI.
 func TestCodexExampleConfigArgs(t *testing.T) {
-	t.Setenv("WEBHOOK_SECRET", "secret")
+	t.Setenv("GITHUB_WEBHOOK_SECRET", "secret")
 
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	content := `http:
-  webhook_secret_env: WEBHOOK_SECRET
-ai_backends:
-  codex:
-    mode: command
-    command: codex
-    args:
-      - "exec"
-      - "--skip-git-repo-check"
-repos:
-  - full_name: "owner/repo"
-`
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	cfg, err := Load(path)
+	cfg, err := Load("../../config.example.yaml")
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
 	codex := cfg.AIBackends["codex"]
-	wantArgs := []string{"exec", "--skip-git-repo-check"}
+	wantArgs := []string{"exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"}
 	if len(codex.Args) != len(wantArgs) {
 		t.Fatalf("expected codex args %v, got %v", wantArgs, codex.Args)
 	}
