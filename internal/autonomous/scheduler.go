@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/robfig/cron/v3"
 	"github.com/rs/zerolog"
@@ -12,15 +13,40 @@ import (
 	"github.com/eloylp/agents/internal/config"
 )
 
+// AgentStatus is the runtime state of a single registered autonomous agent.
+type AgentStatus struct {
+	Name       string
+	Repo       string
+	LastRun    *time.Time // nil if the agent has never run in this process lifetime
+	NextRun    time.Time
+	LastStatus string // "success", "error", or "" if never run
+}
+
+// agentEntry records the metadata for a registered cron job.
+type agentEntry struct {
+	name   string
+	repo   string
+	cronID cron.EntryID
+}
+
+// lastRunRecord holds the outcome of the most recent agent execution.
+type lastRunRecord struct {
+	at     time.Time
+	status string
+}
+
 type Scheduler struct {
-	cfg      *config.Config
-	runners  map[string]ai.Runner
-	prompts  *ai.PromptStore
-	memories *MemoryStore
-	cron     *cron.Cron
-	logger   zerolog.Logger
-	ctxMu    sync.RWMutex
-	runCtx   context.Context
+	cfg          *config.Config
+	runners      map[string]ai.Runner
+	prompts      *ai.PromptStore
+	memories     *MemoryStore
+	cron         *cron.Cron
+	logger       zerolog.Logger
+	ctxMu        sync.RWMutex
+	runCtx       context.Context
+	agentEntries []agentEntry
+	lastRunsMu   sync.RWMutex
+	lastRuns     map[string]lastRunRecord // key: "name\x00repo"
 }
 
 func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.PromptStore, memories *MemoryStore, logger zerolog.Logger) (*Scheduler, error) {
@@ -33,6 +59,7 @@ func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.
 		memories: memories,
 		cron:     c,
 		logger:   logger.With().Str("component", "autonomous_scheduler").Logger(),
+		lastRuns: make(map[string]lastRunRecord),
 	}
 	if err := s.registerJobs(); err != nil {
 		return nil, err
@@ -70,6 +97,7 @@ func (s *Scheduler) registerJobs() error {
 			if err != nil {
 				return fmt.Errorf("schedule autonomous agent %s for repo %s: %w", agent.Name, repo.FullName, err)
 			}
+			s.agentEntries = append(s.agentEntries, agentEntry{name: agent.Name, repo: repo.FullName, cronID: id})
 			entry := s.cron.Entry(id)
 			s.logger.Info().
 				Str("repo", repo.FullName).
@@ -107,10 +135,63 @@ func (s *Scheduler) runAgent(repo string, agent config.AutonomousAgentConfig) fu
 			}
 			return nil
 		})
+		runStatus := "success"
 		if err != nil {
 			logger.Error().Err(err).Msg("autonomous agent run completed with errors")
+			runStatus = "error"
 		}
+		s.recordLastRun(agent.Name, repo, time.Now(), runStatus)
 	}
+}
+
+func (s *Scheduler) recordLastRun(name, repo string, at time.Time, status string) {
+	key := name + "\x00" + repo
+	s.lastRunsMu.Lock()
+	s.lastRuns[key] = lastRunRecord{at: at, status: status}
+	s.lastRunsMu.Unlock()
+}
+
+// AgentStatuses returns the current scheduling state for all registered agents.
+func (s *Scheduler) AgentStatuses() []AgentStatus {
+	s.lastRunsMu.RLock()
+	runs := make(map[string]lastRunRecord, len(s.lastRuns))
+	for k, v := range s.lastRuns {
+		runs[k] = v
+	}
+	s.lastRunsMu.RUnlock()
+
+	entries := s.cron.Entries()
+	entryByID := make(map[cron.EntryID]cron.Entry, len(entries))
+	for _, e := range entries {
+		entryByID[e.ID] = e
+	}
+
+	statuses := make([]AgentStatus, 0, len(s.agentEntries))
+	for _, ae := range s.agentEntries {
+		entry, ok := entryByID[ae.cronID]
+		if !ok {
+			continue
+		}
+		key := ae.name + "\x00" + ae.repo
+		lr := runs[key]
+		var lastRun *time.Time
+		if !lr.at.IsZero() {
+			t := lr.at
+			lastRun = &t
+		}
+		nextRun := entry.Next
+		if nextRun.IsZero() && entry.Schedule != nil {
+			nextRun = entry.Schedule.Next(time.Now())
+		}
+		statuses = append(statuses, AgentStatus{
+			Name:       ae.name,
+			Repo:       ae.repo,
+			LastRun:    lastRun,
+			NextRun:    nextRun,
+			LastStatus: lr.status,
+		})
+	}
+	return statuses
 }
 
 func (s *Scheduler) resolveBackend(configured string) string {

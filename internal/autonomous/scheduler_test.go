@@ -284,6 +284,101 @@ func TestSchedulerRunAgentAutoFallsBackToDefaultConfiguredBackend(t *testing.T) 
 	}
 }
 
+func TestSchedulerAgentStatusesBeforeFirstRun(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	prompts := buildTestPromptStore(t, dir)
+	cfg := &config.Config{
+		AgentsDir: dir,
+		AIBackends: map[string]config.AIBackendConfig{
+			"claude": {},
+		},
+		Repos: []config.RepoConfig{
+			{FullName: "owner/repo", Enabled: true},
+		},
+		AutonomousAgents: []config.AutonomousRepoConfig{
+			{
+				Repo:    "owner/repo",
+				Enabled: true,
+				Agents: []config.AutonomousAgentConfig{
+					{Name: "architect", Description: "desc", Cron: "0 9 * * *", Skills: []string{"architect"},
+						Tasks: []config.TaskConfig{{Name: "scan", Prompt: "scan issues"}}},
+				},
+			},
+		},
+	}
+	scheduler, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, prompts, NewMemoryStore(dir), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("scheduler: %v", err)
+	}
+
+	statuses := scheduler.AgentStatuses()
+	if len(statuses) != 1 {
+		t.Fatalf("expected 1 agent status, got %d", len(statuses))
+	}
+	if statuses[0].Name != "architect" {
+		t.Errorf("expected agent name architect, got %q", statuses[0].Name)
+	}
+	if statuses[0].Repo != "owner/repo" {
+		t.Errorf("expected repo owner/repo, got %q", statuses[0].Repo)
+	}
+	if statuses[0].LastRun != nil {
+		t.Errorf("expected last_run nil before first run, got %v", statuses[0].LastRun)
+	}
+	if statuses[0].LastStatus != "" {
+		t.Errorf("expected empty last_status before first run, got %q", statuses[0].LastStatus)
+	}
+	if statuses[0].NextRun.IsZero() {
+		t.Errorf("expected non-zero next_run")
+	}
+}
+
+func TestSchedulerAgentStatusesAfterRun(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	prompts := buildTestPromptStore(t, dir)
+	agentCfg := config.AutonomousAgentConfig{
+		Name:    "architect",
+		Cron:    "0 9 * * *",
+		Backend: "claude",
+		Skills:  []string{"architect"},
+		Tasks:   []config.TaskConfig{{Name: "scan", Prompt: "scan issues"}},
+	}
+	cfg := &config.Config{
+		AgentsDir: dir,
+		AIBackends: map[string]config.AIBackendConfig{
+			"claude": {},
+		},
+		Repos: []config.RepoConfig{
+			{FullName: "owner/repo", Enabled: true},
+		},
+		AutonomousAgents: []config.AutonomousRepoConfig{
+			{
+				Repo:    "owner/repo",
+				Enabled: true,
+				Agents:  []config.AutonomousAgentConfig{agentCfg},
+			},
+		},
+	}
+	scheduler, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, prompts, NewMemoryStore(dir), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("scheduler: %v", err)
+	}
+
+	scheduler.runAgent("owner/repo", agentCfg)()
+
+	statuses := scheduler.AgentStatuses()
+	if len(statuses) != 1 {
+		t.Fatalf("expected 1 agent status, got %d", len(statuses))
+	}
+	if statuses[0].LastStatus != "success" {
+		t.Errorf("expected last_status success, got %q", statuses[0].LastStatus)
+	}
+	if statuses[0].LastRun == nil {
+		t.Errorf("expected last_run to be set after a run")
+	}
+}
+
 func writeIssuePrompt(t *testing.T, dir string) {
 	t.Helper()
 	issueDir := filepath.Join(dir, "issue_refinement_prompts")
