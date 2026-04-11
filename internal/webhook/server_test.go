@@ -238,14 +238,23 @@ func (s *stubTriggerer) TriggerAgent(_ context.Context, agentName, repo string) 
 	return s.err
 }
 
+const testAPIKey = "test-secret-key"
+
 func newRunServer(triggerer AgentTriggerer) *Server {
 	cfg := &config.Config{
 		HTTP: config.HTTPConfig{
 			MaxBodyBytes:  1024,
 			AgentsRunPath: "/agents/run",
+			APIKey:        testAPIKey,
 		},
 	}
 	return NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1, 1), nil, zerolog.Nop(), triggerer)
+}
+
+func authedRequest(method, path string, body string) *http.Request {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+testAPIKey)
+	return req
 }
 
 func TestHandleAgentsRunCallsTriggerer(t *testing.T) {
@@ -253,8 +262,7 @@ func TestHandleAgentsRunCallsTriggerer(t *testing.T) {
 	trig := &stubTriggerer{}
 	server := newRunServer(trig)
 
-	body := `{"agent":"bug-fixer","repo":"owner/repo"}`
-	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(body))
+	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":"bug-fixer","repo":"owner/repo"}`)
 	rr := httptest.NewRecorder()
 	server.handleAgentsRun(rr, req)
 
@@ -266,6 +274,48 @@ func TestHandleAgentsRunCallsTriggerer(t *testing.T) {
 	}
 	if trig.agentName != "bug-fixer" || trig.repo != "owner/repo" {
 		t.Fatalf("unexpected args: agent=%q repo=%q", trig.agentName, trig.repo)
+	}
+}
+
+func TestHandleAgentsRunRejectsNoAuth(t *testing.T) {
+	t.Parallel()
+	server := newRunServer(&stubTriggerer{})
+	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
+	rr := httptest.NewRecorder()
+	server.handleAgentsRun(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rr.Code)
+	}
+}
+
+func TestHandleAgentsRunRejectsWrongToken(t *testing.T) {
+	t.Parallel()
+	server := newRunServer(&stubTriggerer{})
+	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
+	req.Header.Set("Authorization", "Bearer wrong-key")
+	rr := httptest.NewRecorder()
+	server.handleAgentsRun(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rr.Code)
+	}
+}
+
+func TestHandleAgentsRunReturnsForbiddenWhenNoAPIKeyConfigured(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{
+			MaxBodyBytes:  1024,
+			AgentsRunPath: "/agents/run",
+			APIKey:        "", // no key configured
+		},
+	}
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1, 1), nil, zerolog.Nop(), &stubTriggerer{})
+	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
+	req.Header.Set("Authorization", "Bearer something")
+	rr := httptest.NewRecorder()
+	server.handleAgentsRun(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected %d, got %d", http.StatusForbidden, rr.Code)
 	}
 }
 
@@ -284,7 +334,7 @@ func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			server := newRunServer(&stubTriggerer{})
-			req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(tc.body))
+			req := authedRequest(http.MethodPost, "/agents/run", tc.body)
 			rr := httptest.NewRecorder()
 			server.handleAgentsRun(rr, req)
 			if rr.Code != http.StatusBadRequest {
@@ -296,8 +346,15 @@ func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
 
 func TestHandleAgentsRunReturnsNotImplementedWhenNoTriggerer(t *testing.T) {
 	t.Parallel()
-	server := newRunServer(nil)
-	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{
+			MaxBodyBytes:  1024,
+			AgentsRunPath: "/agents/run",
+			APIKey:        testAPIKey,
+		},
+	}
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1, 1), nil, zerolog.Nop(), nil)
+	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":"a","repo":"r"}`)
 	rr := httptest.NewRecorder()
 	server.handleAgentsRun(rr, req)
 	if rr.Code != http.StatusNotImplemented {
@@ -309,8 +366,7 @@ func TestHandleAgentsRunReturnsInternalServerErrorOnTriggerFailure(t *testing.T)
 	t.Parallel()
 	trig := &stubTriggerer{err: errors.New("agent not found")}
 	server := newRunServer(trig)
-	body := `{"agent":"nonexistent","repo":"owner/repo"}`
-	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(body))
+	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":"nonexistent","repo":"owner/repo"}`)
 	rr := httptest.NewRecorder()
 	server.handleAgentsRun(rr, req)
 	if rr.Code != http.StatusInternalServerError {

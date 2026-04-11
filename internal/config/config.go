@@ -103,6 +103,8 @@ type HTTPConfig struct {
 	StatusPath             string `yaml:"status_path"`
 	WebhookPath            string `yaml:"webhook_path"`
 	AgentsRunPath          string `yaml:"agents_run_path"`
+	APIKeyEnv              string `yaml:"api_key_env"`
+	APIKey                 string `yaml:"-"`
 	ReadTimeoutSeconds     int    `yaml:"read_timeout_seconds"`
 	WriteTimeoutSeconds    int    `yaml:"write_timeout_seconds"`
 	IdleTimeoutSeconds     int    `yaml:"idle_timeout_seconds"`
@@ -175,6 +177,7 @@ func (c *Config) applyDefaults() {
 	c.normalizeRepos()
 	c.normalizeAutonomousAgents()
 	c.resolveWebhookSecret()
+	c.resolveAPIKey()
 }
 
 func (c *Config) applyPromptDefaults() {
@@ -273,6 +276,12 @@ func (c *Config) normalizeAutonomousAgents() {
 func (c *Config) resolveWebhookSecret() {
 	if c.HTTP.WebhookSecret == "" && c.HTTP.WebhookSecretEnv != "" {
 		c.HTTP.WebhookSecret = os.Getenv(c.HTTP.WebhookSecretEnv)
+	}
+}
+
+func (c *Config) resolveAPIKey() {
+	if c.HTTP.APIKey == "" && c.HTTP.APIKeyEnv != "" {
+		c.HTTP.APIKey = os.Getenv(c.HTTP.APIKeyEnv)
 	}
 }
 

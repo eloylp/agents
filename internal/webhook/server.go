@@ -134,6 +134,15 @@ type agentsRunRequest struct {
 }
 
 func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.HTTP.APIKey == "" {
+		http.Error(w, "endpoint disabled: no API key configured", http.StatusForbidden)
+		return
+	}
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if token == "" || token != s.cfg.HTTP.APIKey {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	if s.triggerer == nil {
 		http.Error(w, "no autonomous agents configured", http.StatusNotImplemented)
 		return
@@ -149,7 +158,7 @@ func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.triggerer.TriggerAgent(r.Context(), req.Agent, req.Repo); err != nil {
 		s.logger.Error().Err(err).Str("agent", req.Agent).Str("repo", req.Repo).Msg("on-demand agent run failed")
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "agent run failed", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
