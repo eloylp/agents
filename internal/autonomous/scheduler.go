@@ -3,6 +3,7 @@ package autonomous
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -116,27 +117,9 @@ func (s *Scheduler) runAgent(repo string, agent config.AutonomousAgentConfig) fu
 		if ctx.Err() != nil {
 			return
 		}
-		logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Logger()
-		backend := s.resolveBackend(agent.Backend)
-		if backend == "" {
-			logger.Error().Str("configured_backend", agent.Backend).Msg("no configured backend for autonomous agent run")
-			return
-		}
-		runner, ok := s.runners[backend]
-		if !ok {
-			logger.Error().Str("backend", backend).Msg("no runner for configured backend")
-			return
-		}
-		err := s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
-			for _, task := range agent.Tasks {
-				if err := s.runTask(ctx, runner, backend, repo, agent, task.Name, task.Prompt, memoryPath, memory, logger); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
 		runStatus := "success"
-		if err != nil {
+		if err := s.executeAgentRun(ctx, repo, agent); err != nil {
+			logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Logger()
 			logger.Error().Err(err).Msg("autonomous agent run completed with errors")
 			runStatus = "error"
 		}
@@ -192,6 +175,50 @@ func (s *Scheduler) AgentStatuses() []AgentStatus {
 		})
 	}
 	return statuses
+}
+
+// TriggerAgent runs the named agent for the given repo synchronously using the
+// provided context. It returns an error if the agent or repo is not found, or
+// if the run itself fails.
+func (s *Scheduler) TriggerAgent(ctx context.Context, agentName, repo string) error {
+	agentName = strings.ToLower(strings.TrimSpace(agentName))
+	repo = strings.TrimSpace(repo)
+	for _, repoCfg := range s.cfg.AutonomousAgents {
+		if !strings.EqualFold(repoCfg.Repo, repo) || !repoCfg.Enabled {
+			continue
+		}
+		repoInfo, ok := s.cfg.RepoByName(repo)
+		if !ok || !repoInfo.Enabled {
+			return fmt.Errorf("repo %q is disabled or not found in repos list", repo)
+		}
+		for _, agent := range repoCfg.Agents {
+			if agent.Name == agentName {
+				return s.executeAgentRun(ctx, repoInfo.FullName, agent)
+			}
+		}
+		return fmt.Errorf("autonomous agent %q not found for repo %q", agentName, repo)
+	}
+	return fmt.Errorf("no autonomous agents configured for repo %q", repo)
+}
+
+func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent config.AutonomousAgentConfig) error {
+	logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Logger()
+	backend := s.resolveBackend(agent.Backend)
+	if backend == "" {
+		return fmt.Errorf("no configured backend for autonomous agent run (configured: %q)", agent.Backend)
+	}
+	runner, ok := s.runners[backend]
+	if !ok {
+		return fmt.Errorf("no runner for configured backend %q", backend)
+	}
+	return s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
+		for _, task := range agent.Tasks {
+			if err := s.runTask(ctx, runner, backend, repo, agent, task.Name, task.Prompt, memoryPath, memory, logger); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (s *Scheduler) resolveBackend(configured string) string {

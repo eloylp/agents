@@ -284,6 +284,32 @@ func TestSchedulerRunAgentAutoFallsBackToDefaultConfiguredBackend(t *testing.T) 
 	}
 }
 
+func buildTestConfig(t *testing.T, dir string) *config.Config {
+	t.Helper()
+	return &config.Config{
+		AgentsDir: dir,
+		AIBackends: map[string]config.AIBackendConfig{
+			"claude": {},
+		},
+		Repos: []config.RepoConfig{
+			{FullName: "owner/repo", Enabled: true},
+		},
+		AutonomousAgents: []config.AutonomousRepoConfig{
+			{
+				Repo:    "owner/repo",
+				Enabled: true,
+				Agents: []config.AutonomousAgentConfig{
+					{Name: "architect", Description: "desc", Cron: "* * * * *", Skills: []string{"architect"},
+						Tasks: []config.TaskConfig{
+							{Name: "issues", Prompt: "scan issues"},
+							{Name: "code", Prompt: "inspect code"},
+						}},
+				},
+			},
+		},
+	}
+}
+
 func TestSchedulerAgentStatusesBeforeFirstRun(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -376,6 +402,98 @@ func TestSchedulerAgentStatusesAfterRun(t *testing.T) {
 	}
 	if statuses[0].LastRun == nil {
 		t.Errorf("expected last_run to be set after a run")
+	}
+}
+
+func TestTriggerAgentRunsTasksSynchronously(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	prompts := buildTestPromptStore(t, dir)
+	cfg := buildTestConfig(t, dir)
+	memory := NewMemoryStore(dir)
+	runner := &stubRunner{}
+	scheduler, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, prompts, memory, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("scheduler: %v", err)
+	}
+
+	if err := scheduler.TriggerAgent(context.Background(), "architect", "owner/repo"); err != nil {
+		t.Fatalf("TriggerAgent: %v", err)
+	}
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if runner.calls != 2 {
+		t.Fatalf("expected two tasks, got %d", runner.calls)
+	}
+}
+
+func TestTriggerAgentReturnsErrorForUnknownAgent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	prompts := buildTestPromptStore(t, dir)
+	cfg := buildTestConfig(t, dir)
+	memory := NewMemoryStore(dir)
+	runner := &stubRunner{}
+	scheduler, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, prompts, memory, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("scheduler: %v", err)
+	}
+
+	if err := scheduler.TriggerAgent(context.Background(), "unknown-agent", "owner/repo"); err == nil {
+		t.Fatal("expected error for unknown agent, got nil")
+	}
+}
+
+func TestTriggerAgentReturnsErrorForUnknownRepo(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	prompts := buildTestPromptStore(t, dir)
+	cfg := buildTestConfig(t, dir)
+	memory := NewMemoryStore(dir)
+	runner := &stubRunner{}
+	scheduler, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, prompts, memory, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("scheduler: %v", err)
+	}
+
+	if err := scheduler.TriggerAgent(context.Background(), "architect", "nobody/nothere"); err == nil {
+		t.Fatal("expected error for unknown repo, got nil")
+	}
+}
+
+func TestTriggerAgentReturnsErrorForDisabledRepo(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	prompts := buildTestPromptStore(t, dir)
+	cfg := &config.Config{
+		AgentsDir: dir,
+		AIBackends: map[string]config.AIBackendConfig{
+			"claude": {},
+		},
+		Repos: []config.RepoConfig{
+			{FullName: "owner/repo", Enabled: false},
+		},
+		AutonomousAgents: []config.AutonomousRepoConfig{
+			{
+				Repo:    "owner/repo",
+				Enabled: true,
+				Agents: []config.AutonomousAgentConfig{
+					{Name: "architect", Description: "desc", Cron: "* * * * *", Skills: []string{"architect"},
+						Tasks: []config.TaskConfig{{Name: "issues", Prompt: "scan"}}},
+				},
+			},
+		},
+	}
+	memory := NewMemoryStore(dir)
+	runner := &stubRunner{}
+	scheduler, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, prompts, memory, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("scheduler: %v", err)
+	}
+
+	if err := scheduler.TriggerAgent(context.Background(), "architect", "owner/repo"); err == nil {
+		t.Fatal("expected error for disabled repo, got nil")
 	}
 }
 

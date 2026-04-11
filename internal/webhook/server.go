@@ -34,6 +34,11 @@ type StatusProvider interface {
 	AgentStatuses() []AgentStatus
 }
 
+// AgentTriggerer can run a named autonomous agent on demand.
+type AgentTriggerer interface {
+	TriggerAgent(ctx context.Context, agentName, repo string) error
+}
+
 type Server struct {
 	cfg       *config.Config
 	delivery  *DeliveryStore
@@ -41,9 +46,10 @@ type Server struct {
 	channels  *workflow.DataChannels
 	provider  StatusProvider
 	startTime time.Time
+	triggerer AgentTriggerer
 }
 
-func NewServer(cfg *config.Config, delivery *DeliveryStore, channels *workflow.DataChannels, provider StatusProvider, logger zerolog.Logger) *Server {
+func NewServer(cfg *config.Config, delivery *DeliveryStore, channels *workflow.DataChannels, provider StatusProvider, logger zerolog.Logger, triggerer AgentTriggerer) *Server {
 	return &Server{
 		cfg:       cfg,
 		delivery:  delivery,
@@ -51,6 +57,7 @@ func NewServer(cfg *config.Config, delivery *DeliveryStore, channels *workflow.D
 		channels:  channels,
 		provider:  provider,
 		startTime: time.Now(),
+		triggerer: triggerer,
 	}
 }
 
@@ -58,6 +65,7 @@ func (s *Server) Run(ctx context.Context) error {
 	router := mux.NewRouter()
 	router.HandleFunc(s.cfg.HTTP.StatusPath, s.handleStatus).Methods(http.MethodGet)
 	router.HandleFunc(s.cfg.HTTP.WebhookPath, s.handleGitHubWebhook).Methods(http.MethodPost)
+	router.HandleFunc(s.cfg.HTTP.AgentsRunPath, s.handleAgentsRun).Methods(http.MethodPost)
 
 	srv := &http.Server{
 		Addr:         s.cfg.HTTP.ListenAddr,
@@ -78,7 +86,7 @@ func (s *Server) Run(ctx context.Context) error {
 		errCh <- srv.Shutdown(shutdownCtx)
 	}()
 
-	s.logger.Info().Str("addr", s.cfg.HTTP.ListenAddr).Str("status_path", s.cfg.HTTP.StatusPath).Str("webhook_path", s.cfg.HTTP.WebhookPath).Msg("starting webhook server")
+	s.logger.Info().Str("addr", s.cfg.HTTP.ListenAddr).Str("status_path", s.cfg.HTTP.StatusPath).Str("webhook_path", s.cfg.HTTP.WebhookPath).Str("agents_run_path", s.cfg.HTTP.AgentsRunPath).Msg("starting webhook server")
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
@@ -118,6 +126,33 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+type agentsRunRequest struct {
+	Agent string `json:"agent"`
+	Repo  string `json:"repo"`
+}
+
+func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
+	if s.triggerer == nil {
+		http.Error(w, "no autonomous agents configured", http.StatusNotImplemented)
+		return
+	}
+	var req agentsRunRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, s.cfg.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Agent == "" || req.Repo == "" {
+		http.Error(w, "agent and repo fields are required", http.StatusBadRequest)
+		return
+	}
+	if err := s.triggerer.TriggerAgent(r.Context(), req.Agent, req.Repo); err != nil {
+		s.logger.Error().Err(err).Str("agent", req.Agent).Str("repo", req.Repo).Msg("on-demand agent run failed")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {

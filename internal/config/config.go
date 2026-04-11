@@ -14,6 +14,7 @@ const (
 	defaultHTTPListenAddr          = ":8080"
 	defaultHTTPStatusPath          = "/status"
 	defaultHTTPWebhookPath         = "/webhooks/github"
+	defaultHTTPAgentsRunPath       = "/agents/run"
 	defaultHTTPReadTimeoutSeconds  = 15
 	defaultHTTPWriteTimeoutSeconds = 15
 	defaultHTTPIdleTimeoutSeconds  = 60
@@ -101,6 +102,7 @@ type HTTPConfig struct {
 	ListenAddr             string `yaml:"listen_addr"`
 	StatusPath             string `yaml:"status_path"`
 	WebhookPath            string `yaml:"webhook_path"`
+	AgentsRunPath          string `yaml:"agents_run_path"`
 	ReadTimeoutSeconds     int    `yaml:"read_timeout_seconds"`
 	WriteTimeoutSeconds    int    `yaml:"write_timeout_seconds"`
 	IdleTimeoutSeconds     int    `yaml:"idle_timeout_seconds"`
@@ -193,6 +195,7 @@ func (c *Config) applyHTTPDefaults() {
 	setDefault(&c.HTTP.ListenAddr, defaultHTTPListenAddr)
 	setDefault(&c.HTTP.StatusPath, defaultHTTPStatusPath)
 	setDefault(&c.HTTP.WebhookPath, defaultHTTPWebhookPath)
+	setDefault(&c.HTTP.AgentsRunPath, defaultHTTPAgentsRunPath)
 	setDefaultInt(&c.HTTP.ReadTimeoutSeconds, defaultHTTPReadTimeoutSeconds)
 	setDefaultInt(&c.HTTP.WriteTimeoutSeconds, defaultHTTPWriteTimeoutSeconds)
 	setDefaultInt(&c.HTTP.IdleTimeoutSeconds, defaultHTTPIdleTimeoutSeconds)

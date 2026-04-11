@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -29,7 +30,7 @@ func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
 	dataChannels := workflow.NewDataChannels(1, 1)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop())
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop(), nil)
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":1,"title":"t","body":"b","updated_at":"2026-02-15T00:00:00Z","labels":[{"name":"ai:refine"}]}}`
 	sig := signatureForTests([]byte(body), "secret")
@@ -78,7 +79,7 @@ func TestHandleWebhookIgnoresNonAILabel(t *testing.T) {
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
 	dataChannels := workflow.NewDataChannels(1, 1)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop())
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop(), nil)
 
 	body := `{"action":"labeled","label":{"name":"bug"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":2,"title":"t","body":"b","updated_at":"2026-02-15T00:00:00Z","labels":[{"name":"bug"}],"head":{"sha":"abc"}}}`
 	sig := signatureForTests([]byte(body), "secret")
@@ -109,7 +110,7 @@ func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
 	dataChannels := workflow.NewDataChannels(1, 1)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop())
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop(), nil)
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":7}}`
 
@@ -149,7 +150,7 @@ func TestHandleIssueWebhookUsesEventLabelAsTrigger(t *testing.T) {
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
 	dataChannels := workflow.NewDataChannels(1, 1)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop())
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop(), nil)
 
 	body := `{"action":"labeled","label":{"name":"ai:refine:codex"},"repository":{"full_name":"owner/repo"},"issue":{"number":3,"title":"t","body":"b","updated_at":"2026-02-15T00:00:00Z","labels":[{"name":"ai:refine:claude"}]}}`
 	sig := signatureForTests([]byte(body), "secret")
@@ -190,7 +191,7 @@ func TestHandleIssueWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("preload issue queue: %v", err)
 	}
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop())
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop(), nil)
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":2}}`
 	sig := signatureForTests([]byte(body), "secret")
@@ -223,6 +224,100 @@ func TestHandleIssueWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) 
 	}
 }
 
+type stubTriggerer struct {
+	called    bool
+	agentName string
+	repo      string
+	err       error
+}
+
+func (s *stubTriggerer) TriggerAgent(_ context.Context, agentName, repo string) error {
+	s.called = true
+	s.agentName = agentName
+	s.repo = repo
+	return s.err
+}
+
+func newRunServer(triggerer AgentTriggerer) *Server {
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{
+			MaxBodyBytes:  1024,
+			AgentsRunPath: "/agents/run",
+		},
+	}
+	return NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1, 1), nil, zerolog.Nop(), triggerer)
+}
+
+func TestHandleAgentsRunCallsTriggerer(t *testing.T) {
+	t.Parallel()
+	trig := &stubTriggerer{}
+	server := newRunServer(trig)
+
+	body := `{"agent":"bug-fixer","repo":"owner/repo"}`
+	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	server.handleAgentsRun(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d: %s", http.StatusOK, rr.Code, rr.Body.String())
+	}
+	if !trig.called {
+		t.Fatal("expected TriggerAgent to be called")
+	}
+	if trig.agentName != "bug-fixer" || trig.repo != "owner/repo" {
+		t.Fatalf("unexpected args: agent=%q repo=%q", trig.agentName, trig.repo)
+	}
+}
+
+func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"missing agent", `{"repo":"owner/repo"}`},
+		{"missing repo", `{"agent":"bug-fixer"}`},
+		{"empty body", `{}`},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server := newRunServer(&stubTriggerer{})
+			req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(tc.body))
+			rr := httptest.NewRecorder()
+			server.handleAgentsRun(rr, req)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("expected %d, got %d", http.StatusBadRequest, rr.Code)
+			}
+		})
+	}
+}
+
+func TestHandleAgentsRunReturnsNotImplementedWhenNoTriggerer(t *testing.T) {
+	t.Parallel()
+	server := newRunServer(nil)
+	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
+	rr := httptest.NewRecorder()
+	server.handleAgentsRun(rr, req)
+	if rr.Code != http.StatusNotImplemented {
+		t.Fatalf("expected %d, got %d", http.StatusNotImplemented, rr.Code)
+	}
+}
+
+func TestHandleAgentsRunReturnsInternalServerErrorOnTriggerFailure(t *testing.T) {
+	t.Parallel()
+	trig := &stubTriggerer{err: errors.New("agent not found")}
+	server := newRunServer(trig)
+	body := `{"agent":"nonexistent","repo":"owner/repo"}`
+	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	server.handleAgentsRun(rr, req)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected %d, got %d", http.StatusInternalServerError, rr.Code)
+	}
+}
+
 func TestVerifySignature(t *testing.T) {
 	body := []byte(`{"hello":"world"}`)
 	secret := "secret"
@@ -246,7 +341,7 @@ func TestHandleStatusReturnsJSON(t *testing.T) {
 		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
 	}
 	dataChannels := workflow.NewDataChannels(8, 4)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop())
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/status", nil)
 	rr := httptest.NewRecorder()
@@ -307,7 +402,7 @@ func TestHandleStatusIncludesAgentStatuses(t *testing.T) {
 		},
 	}
 	dataChannels := workflow.NewDataChannels(1, 1)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, provider, zerolog.Nop())
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, provider, zerolog.Nop(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/status", nil)
 	rr := httptest.NewRecorder()
