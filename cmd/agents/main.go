@@ -37,6 +37,8 @@ func run() error {
 	_ = godotenv.Load()
 
 	configPath := flag.String("config", "config.yaml", "path to config file")
+	runAgent := flag.String("run-agent", "", "run a single autonomous agent pass and exit (requires --repo)")
+	runRepo := flag.String("repo", "", "repo to target when using --run-agent (e.g. owner/repo)")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
@@ -45,7 +47,6 @@ func run() error {
 	}
 
 	logger := logging.NewLogger(cfg.Log)
-	logger.Info().Msg("starting agents daemon")
 
 	promptStore, err := setupPromptStore(cfg, logger)
 	if err != nil {
@@ -53,16 +54,32 @@ func run() error {
 	}
 
 	runners := setupRunners(cfg, logger)
-	engine := workflow.NewEngine(cfg, runners, promptStore, logger)
-	dataChannels := workflow.NewDataChannels(cfg.Processor.IssueQueueBuffer, cfg.Processor.PRQueueBuffer)
-	processor := workflow.NewProcessor(dataChannels, engine, time.Duration(cfg.HTTP.ShutdownTimeoutSeconds)*time.Second, logger)
 
 	scheduler, err := setupScheduler(cfg, runners, promptStore, logger)
 	if err != nil {
 		return err
 	}
+
+	// --run-agent mode: execute one agent pass synchronously and exit.
+	if *runAgent != "" {
+		if *runRepo == "" {
+			return fmt.Errorf("--repo is required when using --run-agent")
+		}
+		logger.Info().Str("agent", *runAgent).Str("repo", *runRepo).Msg("running autonomous agent on demand")
+		if err := scheduler.TriggerAgent(ctx, *runAgent, *runRepo); err != nil {
+			return fmt.Errorf("run agent: %w", err)
+		}
+		logger.Info().Str("agent", *runAgent).Str("repo", *runRepo).Msg("on-demand agent run completed")
+		return nil
+	}
+
+	logger.Info().Msg("starting agents daemon")
+
+	engine := workflow.NewEngine(cfg, runners, promptStore, logger)
+	dataChannels := workflow.NewDataChannels(cfg.Processor.IssueQueueBuffer, cfg.Processor.PRQueueBuffer)
+	processor := workflow.NewProcessor(dataChannels, engine, time.Duration(cfg.HTTP.ShutdownTimeoutSeconds)*time.Second, logger)
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.HTTP.DeliveryTTLSeconds) * time.Second)
-	server := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, logger)
+	server := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, logger, scheduler)
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.Go(func() error {
 		return processor.Run(groupCtx)
