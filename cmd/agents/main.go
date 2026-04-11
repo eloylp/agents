@@ -19,6 +19,7 @@ import (
 	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/logging"
+	"github.com/eloylp/agents/internal/setup"
 	"github.com/eloylp/agents/internal/webhook"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -33,6 +34,13 @@ func main() {
 func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Handle the "setup" subcommand before loading any config — it has no
+	// dependency on a config file and must be usable before one exists.
+	if len(os.Args) > 1 && os.Args[1] == "setup" {
+		dryRun := len(os.Args) > 2 && os.Args[2] == "--dry-run"
+		return setup.Run(setup.NewCommandRunner(), dryRun, os.Stdout, os.Stderr)
+	}
 
 	_ = godotenv.Load()
 
