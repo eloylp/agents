@@ -17,6 +17,7 @@ http:
   idle_timeout_seconds: 60
   max_body_bytes: 1048576               # 1 MiB cap on webhook payloads
   webhook_secret_env: GITHUB_WEBHOOK_SECRET  # env var holding the HMAC shared secret
+  api_key_env: AGENTS_API_KEY           # env var holding Bearer token for POST /agents/run
   delivery_ttl_seconds: 3600            # how long to remember delivery IDs for dedup
   shutdown_timeout_seconds: 15          # grace period for in-flight work on SIGTERM
 
@@ -135,7 +136,9 @@ ai_backends:
     mode: command
     command: codex
     args:
-      - "-p"
+      - "exec"
+      - "--skip-git-repo-check"
+      - "--dangerously-bypass-approvals-and-sandbox"
     timeout_seconds: 600
     max_prompt_chars: 12000
     redaction_salt_env: LOG_SALT
