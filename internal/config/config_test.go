@@ -435,6 +435,105 @@ repos:
 	}
 }
 
+func TestCodexBackendArgsInConfig(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr bool
+	}{
+		{
+			name:    "correct args exec and skip-git-repo-check",
+			args:    []string{"exec", "--skip-git-repo-check"},
+			wantErr: false,
+		},
+		{
+			name:    "wrong args -p only",
+			args:    []string{"-p"},
+			wantErr: false, // config load doesn't validate args content, just that config parses
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			argsYAML := ""
+			for _, a := range tt.args {
+				argsYAML += "\n      - " + `"` + a + `"`
+			}
+			content := `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  codex:
+    mode: command
+    command: codex
+    args:` + argsYAML + `
+repos:
+  - full_name: "owner/repo"
+`
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, err := Load(path)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Load() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil {
+				got := cfg.AIBackends["codex"].Args
+				if len(got) != len(tt.args) {
+					t.Fatalf("expected args %v, got %v", tt.args, got)
+				}
+				for i, a := range tt.args {
+					if got[i] != a {
+						t.Fatalf("arg[%d]: expected %q, got %q", i, a, got[i])
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestCodexExampleConfigArgs verifies the recommended codex args use exec and --skip-git-repo-check.
+// This is a regression test for issues #61 and #64.
+func TestCodexExampleConfigArgs(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  codex:
+    mode: command
+    command: codex
+    args:
+      - "exec"
+      - "--skip-git-repo-check"
+repos:
+  - full_name: "owner/repo"
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	codex := cfg.AIBackends["codex"]
+	wantArgs := []string{"exec", "--skip-git-repo-check"}
+	if len(codex.Args) != len(wantArgs) {
+		t.Fatalf("expected codex args %v, got %v", wantArgs, codex.Args)
+	}
+	for i, want := range wantArgs {
+		if codex.Args[i] != want {
+			t.Fatalf("codex arg[%d]: expected %q, got %q", i, want, codex.Args[i])
+		}
+	}
+}
+
 func TestAutonomousValidation(t *testing.T) {
 	t.Setenv("WEBHOOK_SECRET", "secret")
 	dir := t.TempDir()
