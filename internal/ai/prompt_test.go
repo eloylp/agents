@@ -125,3 +125,67 @@ func TestPromptStoreValidateFailsOnMissingTemplate(t *testing.T) {
 		t.Fatalf("expected construction failure for missing templates")
 	}
 }
+
+func TestPromptStoreRejectsIssueTemplateWithUnknownField(t *testing.T) {
+	t.Parallel()
+	// {{.Nubmer}} is a typo for {{.Number}}; the error must surface at startup.
+	issueBase := ai.PromptSource{Prompt: "issue {{.Repo}} #{{.Nubmer}}"}
+	prBase := ai.PromptSource{Prompt: `{{template "agent_guidance" .}}`}
+	autoBase := ai.PromptSource{Prompt: `{{template "agent_guidance" .}}`}
+	_, err := ai.NewPromptStore(issueBase, prBase, autoBase, nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected error for unknown field .Nubmer in issue template, got nil")
+	}
+	if !strings.Contains(err.Error(), "Nubmer") {
+		t.Fatalf("expected error to mention the unknown field, got: %v", err)
+	}
+}
+
+func TestPromptStoreRejectsPRTemplateWithUnknownField(t *testing.T) {
+	t.Parallel()
+	// {{.AgentHeadng}} is a typo for {{.AgentHeading}}.
+	issueBase := ai.PromptSource{Prompt: "issue {{.Repo}} #{{.Number}}"}
+	prBase := ai.PromptSource{Prompt: `{{.AgentHeadng}} {{template "agent_guidance" .}}`}
+	autoBase := ai.PromptSource{Prompt: `{{template "agent_guidance" .}}`}
+	skills := []ai.SkillGuidance{{Name: "sec", Prompt: "security guidance"}}
+	prAgents := []ai.AgentSkills{{Name: "sec", Skills: []string{"sec"}}}
+	_, err := ai.NewPromptStore(issueBase, prBase, autoBase, skills, prAgents, nil)
+	if err == nil {
+		t.Fatal("expected error for unknown field .AgentHeadng in pr template, got nil")
+	}
+	if !strings.Contains(err.Error(), "AgentHeadng") {
+		t.Fatalf("expected error to mention the unknown field, got: %v", err)
+	}
+}
+
+func TestPromptStoreRejectsAutonomousTemplateWithUnknownField(t *testing.T) {
+	t.Parallel()
+	// {{.AgentNam}} is a typo for {{.AgentName}}.
+	issueBase := ai.PromptSource{Prompt: "issue {{.Repo}} #{{.Number}}"}
+	prBase := ai.PromptSource{Prompt: `{{template "agent_guidance" .}}`}
+	autoBase := ai.PromptSource{Prompt: `{{.AgentNam}} {{template "agent_guidance" .}}`}
+	skills := []ai.SkillGuidance{{Name: "sec", Prompt: "security guidance"}}
+	autoAgents := []ai.AgentSkills{{Name: "sec", Skills: []string{"sec"}}}
+	_, err := ai.NewPromptStore(issueBase, prBase, autoBase, skills, nil, autoAgents)
+	if err == nil {
+		t.Fatal("expected error for unknown field .AgentNam in autonomous template, got nil")
+	}
+	if !strings.Contains(err.Error(), "AgentNam") {
+		t.Fatalf("expected error to mention the unknown field, got: %v", err)
+	}
+}
+
+func TestPromptStoreErrorIncludesSourceDescription(t *testing.T) {
+	t.Parallel()
+	// Confirm the error message includes a useful source reference.
+	issueBase := ai.PromptSource{Prompt: "issue {{.Nubmer}}"}
+	prBase := ai.PromptSource{Prompt: `{{template "agent_guidance" .}}`}
+	autoBase := ai.PromptSource{Prompt: `{{template "agent_guidance" .}}`}
+	_, err := ai.NewPromptStore(issueBase, prBase, autoBase, nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected construction error, got nil")
+	}
+	if !strings.Contains(err.Error(), "inline prompt") {
+		t.Fatalf("expected error to reference 'inline prompt', got: %v", err)
+	}
+}

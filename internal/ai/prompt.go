@@ -38,6 +38,13 @@ type PromptSource struct {
 	Prompt     string // inline text, mutually exclusive with PromptFile
 }
 
+func (s PromptSource) description() string {
+	if s.PromptFile != "" {
+		return s.PromptFile
+	}
+	return "inline prompt"
+}
+
 // SkillGuidance holds the resolved guidance for a skill, either from
 // a file path or an inline prompt string.
 type SkillGuidance struct {
@@ -117,6 +124,9 @@ func (p *PromptStore) loadTemplates(issueBase PromptSource, prBase PromptSource,
 	if err != nil {
 		return err
 	}
+	if err := dryRunTemplate(issueTpl, IssuePromptData{}, issueBase.description()); err != nil {
+		return err
+	}
 	p.issueTpl = issueTpl
 
 	prBaseTpl, err := loadPromptSource(prBase)
@@ -129,6 +139,9 @@ func (p *PromptStore) loadTemplates(issueBase PromptSource, prBase PromptSource,
 		normalized := NormalizeToken(agent.Name)
 		tpl, err := p.composeSkillsTemplate(prBaseTpl, normalized, agent.Skills)
 		if err != nil {
+			return err
+		}
+		if err := dryRunTemplate(tpl, PRReviewPromptData{}, fmt.Sprintf("%s (pr review agent %q)", prBase.description(), normalized)); err != nil {
 			return err
 		}
 		p.prTemplates[normalized] = tpl
@@ -144,6 +157,9 @@ func (p *PromptStore) loadTemplates(issueBase PromptSource, prBase PromptSource,
 		normalized := NormalizeToken(agent.Name)
 		tpl, err := p.composeSkillsTemplate(autoBaseTpl, normalized, agent.Skills)
 		if err != nil {
+			return err
+		}
+		if err := dryRunTemplate(tpl, AutonomousPromptData{}, fmt.Sprintf("%s (autonomous agent %q)", autoBase.description(), normalized)); err != nil {
 			return err
 		}
 		p.autoTemplates[normalized] = tpl
@@ -205,6 +221,17 @@ func loadPromptSource(src PromptSource) (*template.Template, error) {
 		return tpl, nil
 	}
 	return nil, fmt.Errorf("prompt source has neither file nor inline content")
+}
+
+// dryRunTemplate executes a template with zero-value data to catch field
+// access errors (e.g. typos like {{.Nubmer}}) at startup rather than at the
+// first real invocation, which may be hours later for cron-scheduled agents.
+func dryRunTemplate(tpl *template.Template, data any, source string) error {
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("prompt template validation failed for %s: %w", source, err)
+	}
+	return nil
 }
 
 func executeTemplate(tpl *template.Template, data any, name string) (string, error) {
