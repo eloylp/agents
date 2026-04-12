@@ -270,7 +270,7 @@ Each autonomous agent selects its backend with `backend`:
 - `auto` (default): use the daemon default (`claude` if configured, otherwise `codex`)
 - `claude` / `codex`: force a specific backend
 
-Autonomous agents only run for repositories present under `repos`.
+Autonomous agents only run for repositories present under `repos` with `enabled: true`.
 
 Create a `.env` file in the project root for secrets (loaded automatically):
 
