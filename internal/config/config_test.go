@@ -116,7 +116,7 @@ autonomous_agents:
 	if len(cfg.AutonomousAgents) != 1 || len(cfg.AutonomousAgents[0].Agents) != 1 {
 		t.Fatalf("expected one autonomous agent configured")
 	}
-	if got := cfg.AutonomousAgents[0].Agents[0].Backend; got != "auto" {
+	if got := cfg.AutonomousAgents[0].Agents[0].Backend; got != backendAuto {
 		t.Fatalf("expected autonomous backend default auto, got %q", got)
 	}
 }
@@ -150,7 +150,7 @@ func TestResolveBackend(t *testing.T) {
 		want  string
 	}{
 		{"empty falls back to default", "", "claude"},
-		{"auto falls back to default", "auto", "claude"},
+		{"auto falls back to default", backendAuto, "claude"},
 		{"AUTO case-insensitive", "AUTO", "claude"},
 		{"explicit claude", "claude", "claude"},
 		{"explicit codex", "codex", "codex"},
