@@ -135,9 +135,9 @@ type HTTPConfig struct {
 }
 
 type ProcessorConfig struct {
-	IssueQueueBuffer    int `yaml:"issue_queue_buffer"`
-	PRQueueBuffer       int `yaml:"pr_queue_buffer"`
-	MaxConcurrentAgents int `yaml:"max_concurrent_agents"`
+	IssueQueueBuffer    int  `yaml:"issue_queue_buffer"`
+	PRQueueBuffer       int  `yaml:"pr_queue_buffer"`
+	MaxConcurrentAgents *int `yaml:"max_concurrent_agents"`
 }
 
 type RepoConfig struct {
@@ -237,7 +237,10 @@ func (c *Config) applyHTTPDefaults() {
 func (c *Config) applyProcessorDefaults() {
 	setDefaultInt(&c.Processor.IssueQueueBuffer, defaultIssueQueueBufferSize)
 	setDefaultInt(&c.Processor.PRQueueBuffer, defaultPRQueueBufferSize)
-	setDefaultInt(&c.Processor.MaxConcurrentAgents, defaultMaxConcurrentAgents)
+	if c.Processor.MaxConcurrentAgents == nil {
+		v := defaultMaxConcurrentAgents
+		c.Processor.MaxConcurrentAgents = &v
+	}
 }
 
 func (c *Config) normalizeSkills() {
@@ -342,8 +345,8 @@ func (c *Config) validate() error {
 }
 
 func (c *Config) validateProcessor() error {
-	if c.Processor.MaxConcurrentAgents < 1 {
-		return fmt.Errorf("config: processor.max_concurrent_agents must be >= 1, got %d", c.Processor.MaxConcurrentAgents)
+	if c.Processor.MaxConcurrentAgents != nil && *c.Processor.MaxConcurrentAgents < 1 {
+		return fmt.Errorf("config: processor.max_concurrent_agents must be >= 1, got %d", *c.Processor.MaxConcurrentAgents)
 	}
 	return nil
 }

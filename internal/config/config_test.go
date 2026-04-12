@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -73,8 +75,12 @@ autonomous_agents:
 	if cfg.Processor.PRQueueBuffer != defaultPRQueueBufferSize {
 		t.Fatalf("expected pr queue buffer default %d, got %d", defaultPRQueueBufferSize, cfg.Processor.PRQueueBuffer)
 	}
-	if cfg.Processor.MaxConcurrentAgents != defaultMaxConcurrentAgents {
-		t.Fatalf("expected max_concurrent_agents default %d, got %d", defaultMaxConcurrentAgents, cfg.Processor.MaxConcurrentAgents)
+	if cfg.Processor.MaxConcurrentAgents == nil || *cfg.Processor.MaxConcurrentAgents != defaultMaxConcurrentAgents {
+		got := 0
+		if cfg.Processor.MaxConcurrentAgents != nil {
+			got = *cfg.Processor.MaxConcurrentAgents
+		}
+		t.Fatalf("expected max_concurrent_agents default %d, got %d", defaultMaxConcurrentAgents, got)
 	}
 	if cfg.HTTP.ShutdownTimeoutSeconds != defaultHTTPShutdownSeconds {
 		t.Fatalf("expected shutdown timeout default %d, got %d", defaultHTTPShutdownSeconds, cfg.HTTP.ShutdownTimeoutSeconds)
@@ -809,11 +815,8 @@ autonomous_agents:
 	}
 }
 
-func TestLoadRejectsNegativeMaxConcurrentAgents(t *testing.T) {
-	t.Setenv("WEBHOOK_SECRET", "secret")
-
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	content := `http:
+func TestLoadRejectsInvalidMaxConcurrentAgents(t *testing.T) {
+	baseYAML := `http:
   webhook_secret_env: WEBHOOK_SECRET
 ai_backends:
   claude:
@@ -821,13 +824,24 @@ ai_backends:
 repos:
   - full_name: "owner/repo"
 processor:
-  max_concurrent_agents: -1
+  max_concurrent_agents: %d
 `
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	_, err := Load(path)
-	if err == nil {
-		t.Fatalf("expected Load to fail for negative max_concurrent_agents, but it succeeded")
+	for _, invalidValue := range []int{0, -1} {
+		invalidValue := invalidValue
+		t.Run(fmt.Sprintf("value=%d", invalidValue), func(t *testing.T) {
+			t.Setenv("WEBHOOK_SECRET", "secret")
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			content := fmt.Sprintf(baseYAML, invalidValue)
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("expected Load to fail for max_concurrent_agents=%d, but it succeeded", invalidValue)
+			}
+			if !strings.Contains(err.Error(), "max_concurrent_agents") {
+				t.Errorf("expected error to mention max_concurrent_agents, got: %v", err)
+			}
+		})
 	}
 }

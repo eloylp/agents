@@ -35,7 +35,10 @@ type Engine struct {
 }
 
 func NewEngine(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.PromptStore, logger zerolog.Logger) *Engine {
-	maxConcurrent := cfg.Processor.MaxConcurrentAgents
+	maxConcurrent := 0
+	if cfg.Processor.MaxConcurrentAgents != nil {
+		maxConcurrent = *cfg.Processor.MaxConcurrentAgents
+	}
 	if maxConcurrent <= 0 {
 		maxConcurrent = defaultMaxConcurrentAgents
 	}

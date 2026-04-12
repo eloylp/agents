@@ -13,6 +13,8 @@ import (
 	"github.com/eloylp/agents/internal/config"
 )
 
+func intPtr(v int) *int { return &v }
+
 type stubRunner struct {
 	calls int
 	last  ai.Request
@@ -34,7 +36,7 @@ func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
 		Agents: []config.AgentConfig{
 			{Name: "architect", Skills: []string{"architect"}},
 		},
-		Processor: config.ProcessorConfig{MaxConcurrentAgents: 4},
+		Processor: config.ProcessorConfig{MaxConcurrentAgents: intPtr(4)},
 	}
 	promptStore := testutil.BuildPromptStore(t, []string{"architect"}, nil)
 	engine := NewEngine(cfg, map[string]ai.Runner{"claude": runner, "codex": runner}, promptStore, zerolog.Nop())
@@ -96,13 +98,19 @@ type concurrencyTrackingRunner struct {
 	mu      sync.Mutex
 	current int
 	peak    int
+	// started is sent to once each time a Run call begins, allowing tests to
+	// synchronize on exactly N calls being in-flight simultaneously.
+	started chan struct{}
 	// blockUntil is closed to unblock all in-flight Run calls simultaneously,
 	// ensuring overlap is measurable.
 	blockUntil chan struct{}
 }
 
 func newConcurrencyTrackingRunner() *concurrencyTrackingRunner {
-	return &concurrencyTrackingRunner{blockUntil: make(chan struct{})}
+	return &concurrencyTrackingRunner{
+		started:    make(chan struct{}, 16),
+		blockUntil: make(chan struct{}),
+	}
 }
 
 func (r *concurrencyTrackingRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
@@ -113,6 +121,8 @@ func (r *concurrencyTrackingRunner) Run(_ context.Context, _ ai.Request) (ai.Res
 	}
 	r.mu.Unlock()
 
+	r.started <- struct{}{} // notify test that one more Run is in-flight
+
 	<-r.blockUntil // hold the slot until the test releases all callers
 
 	r.mu.Lock()
@@ -122,8 +132,8 @@ func (r *concurrencyTrackingRunner) Run(_ context.Context, _ ai.Request) (ai.Res
 }
 
 // TestHandlePRLabelEventRespectsConcurrencyLimit verifies that when
-// agent=all fans out to more agents than MaxConcurrentAgents, at most
-// MaxConcurrentAgents subprocesses run at any one time.
+// agent=all fans out to more agents than MaxConcurrentAgents, the semaphore
+// saturates at exactly the configured limit before any call is released.
 func TestHandlePRLabelEventRespectsConcurrencyLimit(t *testing.T) {
 	t.Parallel()
 	const limit = 2
@@ -138,7 +148,7 @@ func TestHandlePRLabelEventRespectsConcurrencyLimit(t *testing.T) {
 			{Name: "coder", Skills: []string{"coder"}},
 			{Name: "reviewer", Skills: []string{"reviewer"}},
 		},
-		Processor: config.ProcessorConfig{MaxConcurrentAgents: limit},
+		Processor: config.ProcessorConfig{MaxConcurrentAgents: intPtr(limit)},
 	}
 	promptStore := testutil.BuildPromptStore(t, agents, nil)
 	engine := NewEngine(cfg, map[string]ai.Runner{"claude": tracker}, promptStore, zerolog.Nop())
@@ -153,15 +163,22 @@ func TestHandlePRLabelEventRespectsConcurrencyLimit(t *testing.T) {
 		})
 	}()
 
-	// Give the fan-out time to fill up to the limit and block.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for exactly `limit` Run calls to start and block, proving the
+	// semaphore has been fully saturated before we inspect peak.
+	for i := 0; i < limit; i++ {
+		select {
+		case <-tracker.started:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for Run call %d/%d to start", i+1, limit)
+		}
+	}
 
 	tracker.mu.Lock()
-	peakSoFar := tracker.peak
+	peakAtSaturation := tracker.peak
 	tracker.mu.Unlock()
 
-	if peakSoFar > limit {
-		t.Errorf("peak concurrency %d exceeds limit %d before all agents were released", peakSoFar, limit)
+	if peakAtSaturation != limit {
+		t.Errorf("expected peak == limit (%d) when semaphore is saturated, got %d", limit, peakAtSaturation)
 	}
 
 	// Release all blocked runners so the handler can complete.
