@@ -506,6 +506,13 @@ repos:
 	if len(names) != 2 {
 		t.Fatalf("expected 2 agent names, got %d", len(names))
 	}
+
+	if !cfg.HasAgent("architect") {
+		t.Fatal("HasAgent: expected true for existing agent")
+	}
+	if cfg.HasAgent("nonexistent") {
+		t.Fatal("HasAgent: expected false for unknown agent")
+	}
 }
 
 func TestCodexBackendArgsInConfig(t *testing.T) {

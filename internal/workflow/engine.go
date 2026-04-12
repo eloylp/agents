@@ -12,8 +12,17 @@ import (
 	"golang.org/x/sync/semaphore"
 
 	"github.com/eloylp/agents/internal/ai"
-	"github.com/eloylp/agents/internal/config"
 )
+
+// agentRegistry is the subset of *config.Config that Engine needs. Defining
+// it here keeps the workflow package free of a compile-time dependency on the
+// config package's concrete types.
+type agentRegistry interface {
+	AgentNames() []string
+	HasAgent(name string) bool
+	ResolveBackend(raw string) string
+	MaxConcurrentAgents() int
+}
 
 const (
 	workflowIssueRefine = "issue_refine"
@@ -27,18 +36,15 @@ const (
 )
 
 type Engine struct {
-	cfg                 *config.Config
+	cfg                 agentRegistry
 	maxConcurrentAgents int
 	runners             map[string]ai.Runner
 	prompts             *ai.PromptStore
 	logger              zerolog.Logger
 }
 
-func NewEngine(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.PromptStore, logger zerolog.Logger) *Engine {
-	maxConcurrent := 0
-	if cfg.Processor.MaxConcurrentAgents != nil {
-		maxConcurrent = *cfg.Processor.MaxConcurrentAgents
-	}
+func NewEngine(cfg agentRegistry, runners map[string]ai.Runner, prompts *ai.PromptStore, logger zerolog.Logger) *Engine {
+	maxConcurrent := cfg.MaxConcurrentAgents()
 	if maxConcurrent <= 0 {
 		maxConcurrent = defaultMaxConcurrentAgents
 	}
@@ -107,7 +113,7 @@ func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest)
 	if agent == "all" {
 		agents = e.cfg.AgentNames()
 	} else {
-		if _, ok := e.cfg.AgentByName(agent); !ok {
+		if !e.cfg.HasAgent(agent) {
 			e.logger.Warn().Str("label", req.Label).Str("backend", resolvedBackend).Str("agent", agent).Int("pr_number", req.PR.Number).Str("repo", req.Repo.FullName).Msg("pr label references unknown agent, skipping")
 			return nil
 		}

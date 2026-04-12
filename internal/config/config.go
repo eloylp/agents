@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -499,6 +500,22 @@ func (c *Config) AgentNames() []string {
 		names[i] = agent.Name
 	}
 	return names
+}
+
+// HasAgent reports whether an agent with the given name is configured.
+func (c *Config) HasAgent(name string) bool {
+	_, ok := c.AgentByName(name)
+	return ok
+}
+
+// MaxConcurrentAgents returns the configured concurrency limit for agent
+// goroutines. Returns 0 if the field was not set (caller should apply a
+// default).
+func (c *Config) MaxConcurrentAgents() int {
+	if c.Processor.MaxConcurrentAgents == nil {
+		return 0
+	}
+	return *c.Processor.MaxConcurrentAgents
 }
 
 func (c *Config) RepoByName(fullName string) (RepoConfig, bool) {
