@@ -27,6 +27,7 @@ http:
 processor:
   issue_queue_buffer: 256
   pr_queue_buffer: 256
+  workers: 4                              # goroutines per event type (issue / PR); allows concurrent processing across repos
   # Maximum number of agent goroutines that may run concurrently for a single
   # PR-review fan-out event. Limits subprocess resource usage when many agents
   # are configured and ai:review (agent=all) labels are used frequently.
