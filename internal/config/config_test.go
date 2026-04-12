@@ -354,6 +354,34 @@ autonomous_agents:
 `,
 		},
 		{
+			name: "autonomous agent task has both prompt and prompt_file",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+skills:
+  - name: architect
+    prompt: "focus on architecture"
+agents:
+  - name: architect
+    skills: [architect]
+repos:
+  - full_name: "owner/repo"
+autonomous_agents:
+  - repo: "owner/repo"
+    enabled: true
+    agents:
+      - name: "architect"
+        cron: "* * * * *"
+        skills: [architect]
+        tasks:
+          - name: "issues"
+            prompt: "inline"
+            prompt_file: "tasks/issues.md"
+`,
+		},
+		{
 			name: "prompts has both prompt and prompt_file",
 			content: `http:
   webhook_secret_env: WEBHOOK_SECRET
@@ -635,5 +663,113 @@ repos:
 				t.Fatalf("unexpected error for mode=%q: %v", tc.mode, err)
 			}
 		})
+	}
+}
+
+func TestTaskConfigResolve(t *testing.T) {
+	t.Parallel()
+
+	t.Run("inline prompt returned directly", func(t *testing.T) {
+		t.Parallel()
+		tc := TaskConfig{Name: "scan", Prompt: "scan all issues"}
+		got, err := tc.Resolve("")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "scan all issues" {
+			t.Fatalf("expected %q, got %q", "scan all issues", got)
+		}
+	})
+
+	t.Run("prompt_file with relative path joined to baseDir", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "task.md"), []byte("file prompt"), 0o644); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+		tc := TaskConfig{Name: "scan", PromptFile: "task.md"}
+		got, err := tc.Resolve(dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "file prompt" {
+			t.Fatalf("expected %q, got %q", "file prompt", got)
+		}
+	})
+
+	t.Run("prompt_file with absolute path ignores baseDir", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		absPath := filepath.Join(dir, "abs_task.md")
+		if err := os.WriteFile(absPath, []byte("absolute prompt"), 0o644); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+		tc := TaskConfig{Name: "scan", PromptFile: absPath}
+		got, err := tc.Resolve("/some/other/dir")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "absolute prompt" {
+			t.Fatalf("expected %q, got %q", "absolute prompt", got)
+		}
+	})
+
+	t.Run("prompt_file missing returns error", func(t *testing.T) {
+		t.Parallel()
+		tc := TaskConfig{Name: "scan", PromptFile: "nonexistent.md"}
+		if _, err := tc.Resolve(t.TempDir()); err == nil {
+			t.Fatal("expected error for missing file")
+		}
+	})
+}
+
+func TestTaskConfigPromptFileAccepted(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	dir := t.TempDir()
+	promptFile := filepath.Join(dir, "issues.md")
+	if err := os.WriteFile(promptFile, []byte("scan all issues"), 0o644); err != nil {
+		t.Fatalf("write prompt file: %v", err)
+	}
+
+	cfgPath := filepath.Join(dir, "config.yaml")
+	content := `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+skills:
+  - name: architect
+    prompt: "focus on architecture"
+agents:
+  - name: architect
+    skills: [architect]
+repos:
+  - full_name: "owner/repo"
+autonomous_agents:
+  - repo: "owner/repo"
+    enabled: true
+    agents:
+      - name: "sweep"
+        cron: "* * * * *"
+        skills: [architect]
+        tasks:
+          - name: "issues"
+            prompt_file: "issues.md"
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("expected valid config, got: %v", err)
+	}
+	task := cfg.AutonomousAgents[0].Agents[0].Tasks[0]
+	if task.PromptFile != "issues.md" {
+		t.Fatalf("expected PromptFile %q, got %q", "issues.md", task.PromptFile)
+	}
+	if task.Prompt != "" {
+		t.Fatalf("expected empty inline Prompt, got %q", task.Prompt)
 	}
 }
