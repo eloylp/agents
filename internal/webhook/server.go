@@ -39,17 +39,25 @@ type AgentTriggerer interface {
 	TriggerAgent(ctx context.Context, agentName, repo string) error
 }
 
+// EventQueue accepts issue and PR webhook events for async processing and
+// reports queue depth. *workflow.DataChannels satisfies this interface.
+type EventQueue interface {
+	PushIssue(ctx context.Context, req workflow.IssueRequest) error
+	PushPR(ctx context.Context, req workflow.PRRequest) error
+	QueueStats() (issues, prs workflow.QueueStat)
+}
+
 type Server struct {
 	cfg       *config.Config
 	delivery  *DeliveryStore
 	logger    zerolog.Logger
-	channels  *workflow.DataChannels
+	channels  EventQueue
 	provider  StatusProvider
 	startTime time.Time
 	triggerer AgentTriggerer
 }
 
-func NewServer(cfg *config.Config, delivery *DeliveryStore, channels *workflow.DataChannels, provider StatusProvider, logger zerolog.Logger, triggerer AgentTriggerer) *Server {
+func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue, provider StatusProvider, logger zerolog.Logger, triggerer AgentTriggerer) *Server {
 	return &Server{
 		cfg:       cfg,
 		delivery:  delivery,
