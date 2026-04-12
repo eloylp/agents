@@ -15,6 +15,11 @@ import (
 // Adding a new backend only requires updating this slice.
 var validAIBackendNames = []string{"claude", "codex"}
 
+// backendAuto is the sentinel token that means "use the default configured
+// backend". It is accepted in autonomous_agents[].backend and in
+// ResolveBackend; it is never a valid backend name in ai_backends.
+const backendAuto = "auto"
+
 const (
 	defaultHTTPListenAddr          = ":8080"
 	defaultHTTPStatusPath          = "/status"
@@ -293,7 +298,7 @@ func (c *Config) normalizeAutonomousAgents() {
 			a.Description = strings.TrimSpace(a.Description)
 			a.Backend = strings.ToLower(strings.TrimSpace(a.Backend))
 			if a.Backend == "" {
-				a.Backend = "auto"
+				a.Backend = backendAuto
 			}
 			for k := range a.Skills {
 				a.Skills[k] = strings.ToLower(strings.TrimSpace(a.Skills[k]))
@@ -480,7 +485,7 @@ func (c *Config) validateAutonomousAgents(skillNames map[string]struct{}) error 
 			if agent.Cron == "" {
 				return fmt.Errorf("config: autonomous agent cron required for repo %s", repo.Repo)
 			}
-			validBackend := agent.Backend == "auto"
+			validBackend := agent.Backend == backendAuto
 			for _, n := range validAIBackendNames {
 				if agent.Backend == n {
 					validBackend = true
@@ -488,7 +493,7 @@ func (c *Config) validateAutonomousAgents(skillNames map[string]struct{}) error 
 				}
 			}
 			if !validBackend {
-				return fmt.Errorf("config: autonomous agent backend %q for repo %s must be one of auto, %s", agent.Backend, repo.Repo, strings.Join(validAIBackendNames, ", "))
+				return fmt.Errorf("config: autonomous agent backend %q for repo %s must be one of %s, %s", agent.Backend, repo.Repo, backendAuto, strings.Join(validAIBackendNames, ", "))
 			}
 			if len(agent.Skills) == 0 {
 				return fmt.Errorf("config: autonomous agent %q for repo %s must reference at least one skill", agent.Name, repo.Repo)
@@ -582,7 +587,7 @@ func (c *Config) DefaultConfiguredBackend() string {
 // match any configured backend returns "" so the caller can skip the event.
 func (c *Config) ResolveBackend(raw string) string {
 	normalized := strings.ToLower(strings.TrimSpace(raw))
-	if normalized == "" || normalized == "auto" {
+	if normalized == "" || normalized == backendAuto {
 		return c.DefaultConfiguredBackend()
 	}
 	if _, ok := c.AIBackends[normalized]; !ok {
