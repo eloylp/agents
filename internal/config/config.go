@@ -336,6 +336,12 @@ func (c *Config) validateBackends() error {
 		if backend.Mode == "command" && strings.TrimSpace(backend.Command) == "" {
 			return fmt.Errorf("config: ai backend %q has mode=command but no command specified", name)
 		}
+		if backend.TimeoutSeconds != nil && *backend.TimeoutSeconds < 0 {
+			return fmt.Errorf("config: ai backend %q has negative timeout_seconds %d (use 0 to disable the timeout)", name, *backend.TimeoutSeconds)
+		}
+		if backend.MaxPromptChars != nil && *backend.MaxPromptChars < 0 {
+			return fmt.Errorf("config: ai backend %q has negative max_prompt_chars %d (use 0 to disable truncation)", name, *backend.MaxPromptChars)
+		}
 	}
 	return nil
 }

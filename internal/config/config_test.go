@@ -688,6 +688,60 @@ repos:
 	}
 }
 
+func TestLoadRejectsNegativeBackendFields(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	tests := []struct {
+		name       string
+		yaml       string
+		wantErrMsg string
+	}{
+		{
+			name: "negative timeout_seconds rejected",
+			yaml: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+    timeout_seconds: -1
+repos:
+  - full_name: "owner/repo"
+`,
+			wantErrMsg: `config: ai backend "claude" has negative timeout_seconds -1 (use 0 to disable the timeout)`,
+		},
+		{
+			name: "negative max_prompt_chars rejected",
+			yaml: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+    max_prompt_chars: -10
+repos:
+  - full_name: "owner/repo"
+`,
+			wantErrMsg: `config: ai backend "claude" has negative max_prompt_chars -10 (use 0 to disable truncation)`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.yaml), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if err.Error() != tt.wantErrMsg {
+				t.Errorf("error message:\n  got:  %q\n  want: %q", err.Error(), tt.wantErrMsg)
+			}
+		})
+	}
+}
+
 func TestLoadAcceptsSupportedBackendModes(t *testing.T) {
 	t.Setenv("WEBHOOK_SECRET", "secret")
 
