@@ -97,9 +97,12 @@ skills:
   - name: devops
     prompt: |
       Focus on reliability, deployment safety, observability, and operational simplicity.
-  - name: ux
+  - name: dx
     prompt: |
-      Focus on clarity, accessibility, copy quality, and user flow friction.
+      Focus on developer experience: config ergonomics, error clarity, onboarding friction, documentation accuracy.
+  - name: product
+    prompt: |
+      Focus on product-market fit: user value, competitive positioning, feature gaps vs. bloat, adoption friction.
 
 # ──────────────────────────────────────────────
 # Agents — actors that compose skills
@@ -117,8 +120,8 @@ agents:
     skills: [testing]
   - name: ops-reviewer
     skills: [devops]
-  - name: ux-reviewer
-    skills: [ux]
+  - name: dx-reviewer
+    skills: [dx]
 
 # ──────────────────────────────────────────────
 # AI backends — CLI tools used to run prompts
@@ -164,6 +167,8 @@ repos:
 #
 # backend: auto | claude | codex
 #   "auto" picks the default configured backend.
+# enabled: optional, defaults to true. Set to false to
+#   register the agent without scheduling it.
 # ──────────────────────────────────────────────
 autonomous_agents:
   - repo: "owner/repo"
@@ -181,3 +186,34 @@ autonomous_agents:
           - name: "code"
             prompt: |
               Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, describe the diff in an issue but do not open a PR.
+
+      - name: "coder"
+        description: "Pick open issues, implement fixes with tests, and open PRs."
+        cron: "0 10 * * *"
+        backend: "claude"
+        skills: [architect, testing]
+        tasks:
+          - name: "fix"
+            prompt: |
+              Pick one open issue, implement the minimal fix with tests, and open a PR. Address review feedback on your open PRs before picking new work.
+
+      - name: "pr-reviewer"
+        description: "Review open PRs for correctness, idiomatic code, and test coverage."
+        cron: "0 11 * * *"
+        backend: "codex"
+        skills: [architect, testing, security]
+        tasks:
+          - name: "review"
+            prompt: |
+              List open PRs and post a review comment on each one that hasn't been reviewed yet.
+
+      - name: "product-strategist"
+        description: "Product strategy and market fit. Files issues with external context."
+        enabled: false                   # disabled by default; flip to true when ready
+        cron: "0 8 * * *"
+        backend: "claude"
+        skills: [product, dx]
+        tasks:
+          - name: "audit"
+            prompt: |
+              Audit the project from a product perspective. Use web search to research competitors and trends. File one issue per run with sources cited.
