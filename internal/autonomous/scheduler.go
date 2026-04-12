@@ -14,6 +14,28 @@ import (
 	"github.com/eloylp/agents/internal/config"
 )
 
+// zerologCronLogger adapts zerolog.Logger to the cron.Logger interface required
+// by chain wrappers such as SkipIfStillRunning.
+type zerologCronLogger struct {
+	logger zerolog.Logger
+}
+
+func (z zerologCronLogger) Info(msg string, keysAndValues ...interface{}) {
+	e := z.logger.Info()
+	for i := 0; i+1 < len(keysAndValues); i += 2 {
+		e = e.Interface(fmt.Sprintf("%v", keysAndValues[i]), keysAndValues[i+1])
+	}
+	e.Msg(msg)
+}
+
+func (z zerologCronLogger) Error(err error, msg string, keysAndValues ...interface{}) {
+	e := z.logger.Error().Err(err)
+	for i := 0; i+1 < len(keysAndValues); i += 2 {
+		e = e.Interface(fmt.Sprintf("%v", keysAndValues[i]), keysAndValues[i+1])
+	}
+	e.Msg(msg)
+}
+
 // AgentStatus is the runtime state of a single registered autonomous agent.
 type AgentStatus struct {
 	Name       string
@@ -52,7 +74,11 @@ type Scheduler struct {
 
 func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.PromptStore, memories *MemoryStore, logger zerolog.Logger) (*Scheduler, error) {
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
-	c := cron.New(cron.WithParser(parser))
+	cronLogger := zerologCronLogger{logger: logger.With().Str("component", "autonomous_scheduler").Logger()}
+	c := cron.New(
+		cron.WithParser(parser),
+		cron.WithChain(cron.SkipIfStillRunning(cronLogger)),
+	)
 	s := &Scheduler{
 		cfg:      cfg,
 		runners:  runners,

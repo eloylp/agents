@@ -28,6 +28,23 @@ func (s *stubRunner) Run(_ context.Context, req ai.Request) (ai.Response, error)
 	return ai.Response{}, nil
 }
 
+// blockingRunner signals on ready when a run starts, then blocks until block is closed.
+type blockingRunner struct {
+	mu    sync.Mutex
+	calls int
+	ready chan struct{}
+	block chan struct{}
+}
+
+func (b *blockingRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
+	b.mu.Lock()
+	b.calls++
+	b.mu.Unlock()
+	b.ready <- struct{}{}
+	<-b.block
+	return ai.Response{}, nil
+}
+
 func buildTestPromptStore(t *testing.T, dir string) *ai.PromptStore {
 	t.Helper()
 	writeIssuePrompt(t, dir)
@@ -494,6 +511,66 @@ func TestTriggerAgentReturnsErrorForDisabledRepo(t *testing.T) {
 
 	if err := scheduler.TriggerAgent(context.Background(), "architect", "owner/repo"); err == nil {
 		t.Fatal("expected error for disabled repo, got nil")
+	}
+}
+
+func TestSchedulerSkipsJobWhenPreviousRunStillRunning(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	prompts := buildTestPromptStore(t, dir)
+
+	ready := make(chan struct{}, 1)
+	block := make(chan struct{})
+	runner := &blockingRunner{ready: ready, block: block}
+
+	cfg := &config.Config{
+		AgentsDir: dir,
+		AIBackends: map[string]config.AIBackendConfig{
+			"claude": {},
+		},
+		Repos: []config.RepoConfig{
+			{FullName: "owner/repo", Enabled: true},
+		},
+		AutonomousAgents: []config.AutonomousRepoConfig{
+			{
+				Repo:    "owner/repo",
+				Enabled: true,
+				Agents: []config.AutonomousAgentConfig{
+					{Name: "architect", Description: "desc", Cron: "* * * * *", Skills: []string{"architect"},
+						Tasks: []config.TaskConfig{{Name: "scan", Prompt: "scan"}}},
+				},
+			},
+		},
+	}
+	scheduler, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, prompts, NewMemoryStore(dir), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("scheduler: %v", err)
+	}
+
+	wrappedJob := scheduler.cron.Entry(scheduler.agentEntries[0].cronID).WrappedJob
+
+	// Start first run in background — it blocks until we close block.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		wrappedJob.Run()
+	}()
+
+	// Wait until the first run has started so the skip-guard token is held.
+	<-ready
+
+	// This second invocation should be skipped (not queued) by SkipIfStillRunning.
+	wrappedJob.Run()
+
+	// Unblock the first run and wait for it to finish.
+	close(block)
+	<-done
+
+	runner.mu.Lock()
+	calls := runner.calls
+	runner.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("expected exactly 1 runner invocation (second should be skipped), got %d", calls)
 	}
 }
 
