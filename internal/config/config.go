@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -466,6 +467,11 @@ func (c *Config) validateAgents(skillNames map[string]struct{}) error {
 }
 
 func (c *Config) validateAutonomousAgents(skillNames map[string]struct{}) error {
+	// globalAgentSkills tracks the skill set registered for each agent name across
+	// all repos. collectAutonomousAgentSkills deduplicates by name, so an agent
+	// with the same name in multiple repos must have identical skills — otherwise
+	// one repo silently receives the wrong prompt.
+	globalAgentSkills := make(map[string][]string)
 	for _, repo := range c.AutonomousAgents {
 		if repo.Repo == "" {
 			return errors.New("config: autonomous agent repo is required")
@@ -519,9 +525,35 @@ func (c *Config) validateAutonomousAgents(skillNames map[string]struct{}) error 
 					return fmt.Errorf("config: autonomous agent %q for repo %s task %q must have only one of prompt or prompt_file, not both", agent.Name, repo.Repo, task.Name)
 				}
 			}
+			if first, seen := globalAgentSkills[agent.Name]; seen {
+				if !sameStringSet(first, agent.Skills) {
+					return fmt.Errorf("config: autonomous agent %q in repo %s has skills %v that conflict with skills %v registered under the same name in another repo", agent.Name, repo.Repo, agent.Skills, first)
+				}
+			} else {
+				globalAgentSkills[agent.Name] = agent.Skills
+			}
 		}
 	}
 	return nil
+}
+
+// sameStringSet reports whether a and b contain the same strings (order-independent).
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	ca := make([]string, len(a))
+	cb := make([]string, len(b))
+	copy(ca, a)
+	copy(cb, b)
+	sort.Strings(ca)
+	sort.Strings(cb)
+	for i := range ca {
+		if ca[i] != cb[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // AgentByName returns the agent configuration for the given name.

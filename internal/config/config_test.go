@@ -697,6 +697,100 @@ autonomous_agents:
 	}
 }
 
+func TestValidateAutonomousAgentCrossRepoSkillConflict(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	baseYAML := `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+skills:
+  - name: architect
+    prompt: "focus on architecture"
+  - name: security
+    prompt: "focus on security"
+repos:
+  - full_name: "owner/repo-a"
+    enabled: true
+  - full_name: "owner/repo-b"
+    enabled: true
+`
+	validAgentBlock := func(skills string) string {
+		return `    agents:
+      - name: scout
+        cron: "* * * * *"
+        skills: [` + skills + `]
+        tasks:
+          - name: scan
+            prompt: "scan the repo"
+`
+	}
+
+	tests := []struct {
+		name       string
+		repoA      string
+		repoB      string
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{
+			name:    "same name same skills across repos accepted",
+			repoA:   validAgentBlock("architect"),
+			repoB:   validAgentBlock("architect"),
+			wantErr: false,
+		},
+		{
+			name:       "same name different skills across repos rejected",
+			repoA:      validAgentBlock("architect"),
+			repoB:      validAgentBlock("security"),
+			wantErr:    true,
+			wantErrMsg: `config: autonomous agent "scout" in repo owner/repo-b has skills [security] that conflict with skills [architect] registered under the same name in another repo`,
+		},
+		{
+			name:    "different names across repos accepted",
+			repoA:   validAgentBlock("architect"),
+			repoB: `    agents:
+      - name: guardian
+        cron: "* * * * *"
+        skills: [security]
+        tasks:
+          - name: audit
+            prompt: "audit security"
+`,
+			wantErr: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			content := baseYAML + `autonomous_agents:
+  - repo: "owner/repo-a"
+    enabled: true
+` + tc.repoA + `  - repo: "owner/repo-b"
+    enabled: true
+` + tc.repoB
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(path)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error but Load succeeded")
+				}
+				if err.Error() != tc.wantErrMsg {
+					t.Fatalf("wrong error\ngot:  %q\nwant: %q", err.Error(), tc.wantErrMsg)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestValidateAutonomousAgentsRepoExists(t *testing.T) {
 	t.Setenv("WEBHOOK_SECRET", "secret")
 
@@ -817,6 +911,7 @@ autonomous_agents:
 		})
 	}
 }
+
 
 func TestLoadRejectsCommandModeWithEmptyCommand(t *testing.T) {
 	t.Setenv("WEBHOOK_SECRET", "secret")
