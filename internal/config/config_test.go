@@ -73,6 +73,9 @@ autonomous_agents:
 	if cfg.Processor.PRQueueBuffer != defaultPRQueueBufferSize {
 		t.Fatalf("expected pr queue buffer default %d, got %d", defaultPRQueueBufferSize, cfg.Processor.PRQueueBuffer)
 	}
+	if cfg.Processor.MaxConcurrentAgents != defaultMaxConcurrentAgents {
+		t.Fatalf("expected max_concurrent_agents default %d, got %d", defaultMaxConcurrentAgents, cfg.Processor.MaxConcurrentAgents)
+	}
 	if cfg.HTTP.ShutdownTimeoutSeconds != defaultHTTPShutdownSeconds {
 		t.Fatalf("expected shutdown timeout default %d, got %d", defaultHTTPShutdownSeconds, cfg.HTTP.ShutdownTimeoutSeconds)
 	}
@@ -803,5 +806,28 @@ autonomous_agents:
 	}
 	if task.Prompt != "" {
 		t.Fatalf("expected empty inline Prompt, got %q", task.Prompt)
+	}
+}
+
+func TestLoadRejectsNegativeMaxConcurrentAgents(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+repos:
+  - full_name: "owner/repo"
+processor:
+  max_concurrent_agents: -1
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatalf("expected Load to fail for negative max_concurrent_agents, but it succeeded")
 	}
 }

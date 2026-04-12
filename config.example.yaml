@@ -27,6 +27,11 @@ http:
 processor:
   issue_queue_buffer: 256
   pr_queue_buffer: 256
+  # Maximum number of agent goroutines that may run concurrently for a single
+  # PR-review fan-out event. Limits subprocess resource usage when many agents
+  # are configured and ai:review (agent=all) labels are used frequently.
+  # Default: 4. Must be >= 1.
+  max_concurrent_agents: 4
 
 # ──────────────────────────────────────────────
 # Paths

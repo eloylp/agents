@@ -9,6 +9,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
@@ -109,9 +110,19 @@ func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest)
 		mu        sync.Mutex
 		agentErrs []error
 	)
+	// sem limits the number of agent goroutines that run concurrently for this
+	// event. The cap is per-event (not global) so a large fan-out on one PR
+	// cannot starve another. Acquiring before group.Go avoids spawning goroutines
+	// that immediately block, keeping OS resource usage proportional to the limit.
+	sem := semaphore.NewWeighted(int64(e.cfg.Processor.MaxConcurrentAgents))
 	group, groupCtx := errgroup.WithContext(ctx)
 	for _, ag := range agents {
+		if err := sem.Acquire(groupCtx, 1); err != nil {
+			// groupCtx was cancelled; skip remaining agents.
+			break
+		}
 		group.Go(func() error {
+			defer sem.Release(1)
 			wf := fmt.Sprintf("%s:%s:%s", workflowPRReview, resolvedBackend, ag)
 			prompt, err := e.prompts.PRReviewPrompt(ag, resolvedBackend, req.Repo.FullName, req.PR.Number)
 			if err != nil {
