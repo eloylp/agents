@@ -216,7 +216,7 @@ ai_backends:
   codex:
     mode: command
     command: codex
-    args: ["-p"]
+    args: ["exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"]
     timeout_seconds: 600
     max_prompt_chars: 12000
     redaction_salt_env: LOG_SALT
