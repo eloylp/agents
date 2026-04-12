@@ -8,6 +8,12 @@ import (
 func TestAgentsPath(t *testing.T) {
 	t.Parallel()
 
+	// Use real OS temp dirs so absolute-path assertions are portable across
+	// platforms (filepath.IsAbs uses OS-specific rules; hard-coded Unix paths
+	// would fail on Windows).
+	absBase := t.TempDir()
+	absPromptFile := filepath.Join(t.TempDir(), "custom", "PROMPT.md")
+
 	cases := []struct {
 		name       string
 		agentsDir  string
@@ -16,38 +22,37 @@ func TestAgentsPath(t *testing.T) {
 	}{
 		{
 			name:       "relative-path-joined",
-			agentsDir:  "/base/agents",
-			promptFile: "prompts/review.md",
-			want:       "/base/agents/prompts/review.md",
+			agentsDir:  absBase,
+			promptFile: filepath.Join("prompts", "review.md"),
+			want:       filepath.Join(absBase, "prompts", "review.md"),
 		},
 		{
 			name:       "absolute-path-unchanged",
-			agentsDir:  "/base/agents",
-			promptFile: "/etc/custom/PROMPT.md",
-			want:       "/etc/custom/PROMPT.md",
+			agentsDir:  absBase,
+			promptFile: absPromptFile,
+			want:       absPromptFile,
 		},
 		{
 			name:       "absolute-path-not-concatenated",
-			agentsDir:  "/base/agents",
-			promptFile: "/etc/custom/PROMPT.md",
-			// filepath.Join would produce /base/agents/etc/custom/PROMPT.md (wrong)
-			want: "/etc/custom/PROMPT.md",
+			agentsDir:  absBase,
+			promptFile: absPromptFile,
+			// filepath.Join would absorb the absolute promptFile into agentsDir (wrong)
+			want: absPromptFile,
 		},
 		{
 			name:       "relative-no-subdir",
-			agentsDir:  "/agents",
+			agentsDir:  absBase,
 			promptFile: "PROMPT.md",
-			want:       "/agents/PROMPT.md",
+			want:       filepath.Join(absBase, "PROMPT.md"),
 		},
 		{
 			name:       "empty-promptfile-returns-agentsdir",
-			agentsDir:  "/agents",
+			agentsDir:  absBase,
 			promptFile: "",
-			want:       filepath.Join("/agents", ""),
+			want:       filepath.Join(absBase, ""),
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := agentsPath(tc.agentsDir, tc.promptFile)
