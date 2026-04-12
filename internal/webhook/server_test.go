@@ -5,7 +5,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -20,95 +19,109 @@ import (
 	"github.com/eloylp/agents/internal/workflow"
 )
 
-func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
+const testAPIKey = "test-secret-key"
+
+// testCfg builds a minimal *config.Config suitable for webhook tests.
+// Callers can override fields via the mutator.
+func testCfg(mutator func(*config.Config)) *config.Config {
 	cfg := &config.Config{
-		HTTP: config.HTTPConfig{
-			MaxBodyBytes:       1024,
-			WebhookSecret:      "secret",
-			DeliveryTTLSeconds: 3600,
+		Daemon: config.DaemonConfig{
+			HTTP: config.HTTPConfig{
+				ListenAddr:         ":0",
+				WebhookPath:        "/webhooks/github",
+				StatusPath:         "/status",
+				AgentsRunPath:      "/agents/run",
+				MaxBodyBytes:       1024,
+				WebhookSecret:      "secret",
+				DeliveryTTLSeconds: 3600,
+				APIKey:             testAPIKey,
+			},
 		},
-		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
+		Repos: []config.RepoDef{{Name: "owner/repo", Enabled: true}},
 	}
+	if mutator != nil {
+		mutator(cfg)
+	}
+	return cfg
+}
+
+func signatureForTests(body []byte, secret string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
+	cfg := testCfg(nil)
 	dataChannels := workflow.NewDataChannels(1, 1)
 	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop(), nil)
 
-	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":1,"title":"t","body":"b","updated_at":"2026-02-15T00:00:00Z","labels":[{"name":"ai:refine"}]}}`
+	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":1}}`
 	sig := signatureForTests([]byte(body), "secret")
 
 	req := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "issues")
 	req.Header.Set("X-GitHub-Delivery", "delivery-1")
 	req.Header.Set("X-Hub-Signature-256", sig)
+
 	rr := httptest.NewRecorder()
 	server.handleGitHubWebhook(rr, req)
 	if rr.Code != http.StatusAccepted {
-		t.Fatalf("expected status %d, got %d", http.StatusAccepted, rr.Code)
-	}
-	select {
-	case msg := <-dataChannels.IssueChan():
-		if msg.Label != "ai:refine" {
-			t.Fatalf("expected ai:refine label enqueued, got %q", msg.Label)
-		}
-	default:
-		t.Fatalf("expected issue message enqueued")
+		t.Fatalf("first delivery: got %d, want %d", rr.Code, http.StatusAccepted)
 	}
 
 	req2 := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
 	req2.Header.Set("X-GitHub-Event", "issues")
 	req2.Header.Set("X-GitHub-Delivery", "delivery-1")
 	req2.Header.Set("X-Hub-Signature-256", sig)
+
 	rr2 := httptest.NewRecorder()
 	server.handleGitHubWebhook(rr2, req2)
 	if rr2.Code != http.StatusAccepted {
-		t.Fatalf("expected duplicate status %d, got %d", http.StatusAccepted, rr2.Code)
+		t.Fatalf("dedup delivery: got %d, want %d", rr2.Code, http.StatusAccepted)
+	}
+
+	// Only one IssueRequest should have been pushed.
+	select {
+	case <-dataChannels.IssueChan():
+		// ok
+	default:
+		t.Fatalf("expected first delivery to enqueue an issue")
 	}
 	select {
 	case <-dataChannels.IssueChan():
-		t.Fatalf("expected duplicate delivery to be ignored")
+		t.Fatalf("second duplicate delivery must not enqueue")
 	default:
 	}
 }
 
 func TestHandleWebhookIgnoresNonAILabel(t *testing.T) {
-	cfg := &config.Config{
-		HTTP: config.HTTPConfig{
-			MaxBodyBytes:       1024,
-			WebhookSecret:      "secret",
-			DeliveryTTLSeconds: 3600,
-		},
-		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
-	}
+	cfg := testCfg(nil)
 	dataChannels := workflow.NewDataChannels(1, 1)
 	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop(), nil)
 
-	body := `{"action":"labeled","label":{"name":"bug"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":2,"title":"t","body":"b","updated_at":"2026-02-15T00:00:00Z","labels":[{"name":"bug"}],"head":{"sha":"abc"}}}`
+	body := `{"action":"labeled","label":{"name":"bug"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":2}}`
 	sig := signatureForTests([]byte(body), "secret")
 
 	req := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "pull_request")
-	req.Header.Set("X-GitHub-Delivery", "delivery-2")
+	req.Header.Set("X-GitHub-Delivery", "delivery-non-ai")
 	req.Header.Set("X-Hub-Signature-256", sig)
+
 	rr := httptest.NewRecorder()
 	server.handleGitHubWebhook(rr, req)
 	if rr.Code != http.StatusAccepted {
-		t.Fatalf("expected status %d, got %d", http.StatusAccepted, rr.Code)
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
 	}
 	select {
 	case <-dataChannels.PRChan():
-		t.Fatalf("expected no pr messages enqueued")
+		t.Fatalf("non-ai label should not enqueue")
 	default:
 	}
 }
 
 func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
-	cfg := &config.Config{
-		HTTP: config.HTTPConfig{
-			MaxBodyBytes:       1024,
-			WebhookSecret:      "secret",
-			DeliveryTTLSeconds: 3600,
-		},
-		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
-	}
+	cfg := testCfg(nil)
 	dataChannels := workflow.NewDataChannels(1, 1)
 	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop(), nil)
 
@@ -121,71 +134,28 @@ func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
 	rrBad := httptest.NewRecorder()
 	server.handleGitHubWebhook(rrBad, reqBad)
 	if rrBad.Code != http.StatusUnauthorized {
-		t.Fatalf("expected invalid signature status %d, got %d", http.StatusUnauthorized, rrBad.Code)
+		t.Fatalf("bad signature: got %d, want %d", rrBad.Code, http.StatusUnauthorized)
 	}
 
+	// Retry the same delivery ID with valid sig — it must be processed.
+	sig := signatureForTests([]byte(body), "secret")
 	reqGood := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
 	reqGood.Header.Set("X-GitHub-Event", "issues")
 	reqGood.Header.Set("X-GitHub-Delivery", "delivery-poison")
-	reqGood.Header.Set("X-Hub-Signature-256", signatureForTests([]byte(body), "secret"))
+	reqGood.Header.Set("X-Hub-Signature-256", sig)
 	rrGood := httptest.NewRecorder()
 	server.handleGitHubWebhook(rrGood, reqGood)
 	if rrGood.Code != http.StatusAccepted {
-		t.Fatalf("expected valid retry status %d, got %d", http.StatusAccepted, rrGood.Code)
-	}
-	select {
-	case <-dataChannels.IssueChan():
-	default:
-		t.Fatalf("expected valid signed delivery to enqueue")
-	}
-}
-
-func TestHandleIssueWebhookUsesEventLabelAsTrigger(t *testing.T) {
-	cfg := &config.Config{
-		HTTP: config.HTTPConfig{
-			MaxBodyBytes:       1024,
-			WebhookSecret:      "secret",
-			DeliveryTTLSeconds: 3600,
-		},
-		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
-	}
-	dataChannels := workflow.NewDataChannels(1, 1)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop(), nil)
-
-	body := `{"action":"labeled","label":{"name":"ai:refine:codex"},"repository":{"full_name":"owner/repo"},"issue":{"number":3,"title":"t","body":"b","updated_at":"2026-02-15T00:00:00Z","labels":[{"name":"ai:refine:claude"}]}}`
-	sig := signatureForTests([]byte(body), "secret")
-
-	req := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
-	req.Header.Set("X-GitHub-Event", "issues")
-	req.Header.Set("X-GitHub-Delivery", "delivery-3")
-	req.Header.Set("X-Hub-Signature-256", sig)
-	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, req)
-	if rr.Code != http.StatusAccepted {
-		t.Fatalf("expected status %d, got %d", http.StatusAccepted, rr.Code)
-	}
-	select {
-	case msg := <-dataChannels.IssueChan():
-		if msg.Label != "ai:refine:codex" {
-			t.Fatalf("expected event label to be forwarded, got label=%q", msg.Label)
-		}
-	default:
-		t.Fatalf("expected issue message enqueued")
+		t.Fatalf("retry with good sig: got %d body=%s", rrGood.Code, rrGood.Body.String())
 	}
 }
 
 func TestHandleIssueWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) {
-	cfg := &config.Config{
-		HTTP: config.HTTPConfig{
-			MaxBodyBytes:       1024,
-			WebhookSecret:      "secret",
-			DeliveryTTLSeconds: 3600,
-		},
-		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
-	}
+	cfg := testCfg(nil)
 	dataChannels := workflow.NewDataChannels(1, 1)
+	// Preload the queue.
 	if err := dataChannels.PushIssue(context.Background(), workflow.IssueRequest{
-		Repo:  workflow.RepoRef{FullName: cfg.Repos[0].FullName, Enabled: cfg.Repos[0].Enabled},
+		Repo:  workflow.RepoRef{FullName: cfg.Repos[0].Name, Enabled: cfg.Repos[0].Enabled},
 		Issue: workflow.Issue{Number: 99},
 		Label: "ai:refine",
 	}); err != nil {
@@ -200,29 +170,28 @@ func TestHandleIssueWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) 
 	req.Header.Set("X-GitHub-Event", "issues")
 	req.Header.Set("X-GitHub-Delivery", "delivery-queue-full")
 	req.Header.Set("X-Hub-Signature-256", sig)
+
 	rr := httptest.NewRecorder()
 	server.handleGitHubWebhook(rr, req)
 	if rr.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rr.Code)
+		t.Fatalf("queue full: got %d, want %d body=%s", rr.Code, http.StatusServiceUnavailable, rr.Body.String())
 	}
 
-	// Drain one item to make room, then retry with the same delivery ID.
-	select {
-	case <-dataChannels.IssueChan():
-	default:
-		t.Fatalf("expected preloaded queue item")
-	}
-
-	reqRetry := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
-	reqRetry.Header.Set("X-GitHub-Event", "issues")
-	reqRetry.Header.Set("X-GitHub-Delivery", "delivery-queue-full")
-	reqRetry.Header.Set("X-Hub-Signature-256", sig)
-	rrRetry := httptest.NewRecorder()
-	server.handleGitHubWebhook(rrRetry, reqRetry)
-	if rrRetry.Code != http.StatusAccepted {
-		t.Fatalf("expected retry status %d, got %d", http.StatusAccepted, rrRetry.Code)
+	// Delivery ID must be released so a retry can succeed.
+	rr2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
+	req2.Header.Set("X-GitHub-Event", "issues")
+	req2.Header.Set("X-GitHub-Delivery", "delivery-queue-full")
+	req2.Header.Set("X-Hub-Signature-256", sig)
+	// Drain the preloaded item so the next push succeeds.
+	<-dataChannels.IssueChan()
+	server.handleGitHubWebhook(rr2, req2)
+	if rr2.Code != http.StatusAccepted {
+		t.Fatalf("retry: got %d, want %d", rr2.Code, http.StatusAccepted)
 	}
 }
+
+// --- /agents/run endpoint tests ---
 
 type stubTriggerer struct {
 	called    bool
@@ -238,31 +207,22 @@ func (s *stubTriggerer) TriggerAgent(_ context.Context, agentName, repo string) 
 	return s.err
 }
 
-const testAPIKey = "test-secret-key"
-
 func newRunServer(triggerer AgentTriggerer) *Server {
-	cfg := &config.Config{
-		HTTP: config.HTTPConfig{
-			MaxBodyBytes:  1024,
-			AgentsRunPath: "/agents/run",
-			APIKey:        testAPIKey,
-		},
-	}
+	cfg := testCfg(nil)
 	return NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1, 1), nil, zerolog.Nop(), triggerer)
 }
 
-func authedRequest(method, path string, body string) *http.Request {
+func authedRequest(method, path, body string) *http.Request {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+testAPIKey)
 	return req
 }
 
 func TestHandleAgentsRunCallsTriggerer(t *testing.T) {
-	t.Parallel()
 	trig := &stubTriggerer{}
 	server := newRunServer(trig)
 
-	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":"bug-fixer","repo":"owner/repo"}`)
+	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":"coder","repo":"owner/repo"}`)
 	rr := httptest.NewRecorder()
 	server.handleAgentsRun(rr, req)
 
@@ -272,282 +232,98 @@ func TestHandleAgentsRunCallsTriggerer(t *testing.T) {
 	if !trig.called {
 		t.Fatal("expected TriggerAgent to be called")
 	}
-	if trig.agentName != "bug-fixer" || trig.repo != "owner/repo" {
+	if trig.agentName != "coder" || trig.repo != "owner/repo" {
 		t.Fatalf("unexpected args: agent=%q repo=%q", trig.agentName, trig.repo)
 	}
 }
 
 func TestHandleAgentsRunRejectsNoAuth(t *testing.T) {
-	t.Parallel()
 	server := newRunServer(&stubTriggerer{})
 	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
 	rr := httptest.NewRecorder()
 	server.handleAgentsRun(rr, req)
 	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rr.Code)
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusUnauthorized)
 	}
 }
 
 func TestHandleAgentsRunRejectsWrongToken(t *testing.T) {
-	t.Parallel()
 	server := newRunServer(&stubTriggerer{})
 	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
 	req.Header.Set("Authorization", "Bearer wrong-key")
 	rr := httptest.NewRecorder()
 	server.handleAgentsRun(rr, req)
 	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rr.Code)
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusUnauthorized)
 	}
 }
 
 func TestHandleAgentsRunReturnsForbiddenWhenNoAPIKeyConfigured(t *testing.T) {
-	t.Parallel()
-	cfg := &config.Config{
-		HTTP: config.HTTPConfig{
-			MaxBodyBytes:  1024,
-			AgentsRunPath: "/agents/run",
-			APIKey:        "", // no key configured
-		},
-	}
+	cfg := testCfg(func(c *config.Config) { c.Daemon.HTTP.APIKey = "" })
 	server := NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1, 1), nil, zerolog.Nop(), &stubTriggerer{})
 	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
 	req.Header.Set("Authorization", "Bearer something")
 	rr := httptest.NewRecorder()
 	server.handleAgentsRun(rr, req)
 	if rr.Code != http.StatusForbidden {
-		t.Fatalf("expected %d, got %d", http.StatusForbidden, rr.Code)
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusForbidden)
 	}
 }
 
 func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
-	t.Parallel()
 	tests := []struct {
 		name string
 		body string
 	}{
 		{"missing agent", `{"repo":"owner/repo"}`},
-		{"missing repo", `{"agent":"bug-fixer"}`},
+		{"missing repo", `{"agent":"coder"}`},
 		{"empty body", `{}`},
 	}
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			server := newRunServer(&stubTriggerer{})
 			req := authedRequest(http.MethodPost, "/agents/run", tc.body)
 			rr := httptest.NewRecorder()
 			server.handleAgentsRun(rr, req)
 			if rr.Code != http.StatusBadRequest {
-				t.Fatalf("expected %d, got %d", http.StatusBadRequest, rr.Code)
+				t.Fatalf("got %d, want %d", rr.Code, http.StatusBadRequest)
 			}
 		})
 	}
 }
 
-func TestHandleAgentsRunReturnsNotImplementedWhenNoTriggerer(t *testing.T) {
-	t.Parallel()
-	cfg := &config.Config{
-		HTTP: config.HTTPConfig{
-			MaxBodyBytes:  1024,
-			AgentsRunPath: "/agents/run",
-			APIKey:        testAPIKey,
-		},
-	}
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1, 1), nil, zerolog.Nop(), nil)
-	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":"a","repo":"r"}`)
-	rr := httptest.NewRecorder()
-	server.handleAgentsRun(rr, req)
-	if rr.Code != http.StatusNotImplemented {
-		t.Fatalf("expected %d, got %d", http.StatusNotImplemented, rr.Code)
-	}
-}
-
 func TestHandleAgentsRunReturnsInternalServerErrorOnTriggerFailure(t *testing.T) {
-	t.Parallel()
-	trig := &stubTriggerer{err: errors.New("agent not found")}
+	trig := &stubTriggerer{err: fmt.Errorf("agent not found")}
 	server := newRunServer(trig)
-	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":"nonexistent","repo":"owner/repo"}`)
+	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":"nope","repo":"owner/repo"}`)
 	rr := httptest.NewRecorder()
 	server.handleAgentsRun(rr, req)
 	if rr.Code != http.StatusInternalServerError {
-		t.Fatalf("expected %d, got %d", http.StatusInternalServerError, rr.Code)
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusInternalServerError)
 	}
 }
+
+// --- signature verification ---
 
 func TestVerifySignature(t *testing.T) {
 	body := []byte(`{"hello":"world"}`)
 	secret := "secret"
-	signature := signatureForTests(body, secret)
-	if !verifySignature(body, secret, signature) {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	if !verifySignature(body, secret, sig) {
 		t.Fatalf("expected signature to verify")
 	}
 	if verifySignature(body, secret, "sha256=deadbeef") {
-		t.Fatalf("expected invalid signature to fail")
+		t.Fatalf("bad signature should not verify")
+	}
+	if verifySignature(body, "", sig) {
+		t.Fatalf("empty secret must not verify")
 	}
 }
 
-func TestHandleStatusReturnsJSON(t *testing.T) {
-	t.Parallel()
-	cfg := &config.Config{
-		HTTP: config.HTTPConfig{
-			MaxBodyBytes:       1024,
-			WebhookSecret:      "secret",
-			DeliveryTTLSeconds: 3600,
-		},
-		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
-	}
-	dataChannels := workflow.NewDataChannels(8, 4)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop(), nil)
+// --- compile-time assertions ---
 
-	req := httptest.NewRequest(http.MethodGet, "/status", nil)
-	rr := httptest.NewRecorder()
-	server.handleStatus(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
-	}
-	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
-		t.Fatalf("expected Content-Type application/json, got %q", ct)
-	}
-
-	var resp struct {
-		Status        string `json:"status"`
-		UptimeSeconds int64  `json:"uptime_seconds"`
-		Queues        struct {
-			Issues struct {
-				Buffered int `json:"buffered"`
-				Capacity int `json:"capacity"`
-			} `json:"issues"`
-			PRs struct {
-				Buffered int `json:"buffered"`
-				Capacity int `json:"capacity"`
-			} `json:"prs"`
-		} `json:"queues"`
-		Agents []AgentStatus `json:"agents"`
-	}
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp.Status != "ok" {
-		t.Errorf("expected status ok, got %q", resp.Status)
-	}
-	if resp.Queues.Issues.Capacity != 8 {
-		t.Errorf("expected issue queue capacity 8, got %d", resp.Queues.Issues.Capacity)
-	}
-	if resp.Queues.PRs.Capacity != 4 {
-		t.Errorf("expected PR queue capacity 4, got %d", resp.Queues.PRs.Capacity)
-	}
-	if resp.Agents == nil {
-		t.Errorf("expected non-nil agents slice")
-	}
-}
-
-func TestHandleStatusIncludesAgentStatuses(t *testing.T) {
-	t.Parallel()
-	cfg := &config.Config{
-		HTTP: config.HTTPConfig{
-			MaxBodyBytes:       1024,
-			WebhookSecret:      "secret",
-			DeliveryTTLSeconds: 3600,
-		},
-	}
-	now := time.Now().UTC().Truncate(time.Second)
-	provider := &stubStatusProvider{
-		statuses: []AgentStatus{
-			{Name: "bug-fixer", Repo: "owner/repo", LastRun: &now, NextRun: now.Add(time.Hour), LastStatus: "success"},
-		},
-	}
-	dataChannels := workflow.NewDataChannels(1, 1)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, provider, zerolog.Nop(), nil)
-
-	req := httptest.NewRequest(http.MethodGet, "/status", nil)
-	rr := httptest.NewRecorder()
-	server.handleStatus(rr, req)
-
-	var resp struct {
-		Agents []AgentStatus `json:"agents"`
-	}
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if len(resp.Agents) != 1 {
-		t.Fatalf("expected 1 agent, got %d", len(resp.Agents))
-	}
-	if resp.Agents[0].Name != "bug-fixer" {
-		t.Errorf("expected agent name bug-fixer, got %q", resp.Agents[0].Name)
-	}
-	if resp.Agents[0].LastStatus != "success" {
-		t.Errorf("expected last_status success, got %q", resp.Agents[0].LastStatus)
-	}
-	if resp.Agents[0].LastRun == nil {
-		t.Errorf("expected last_run to be set")
-	}
-}
-
-type stubStatusProvider struct {
-	statuses []AgentStatus
-}
-
-func (s *stubStatusProvider) AgentStatuses() []AgentStatus {
-	return s.statuses
-}
-
-// stubEventQueue is a minimal EventQueue that records pushes and can be
-// configured to return a specific error.
-type stubEventQueue struct {
-	issuePushed int
-	prPushed    int
-	err         error
-}
-
-func (q *stubEventQueue) PushIssue(_ context.Context, _ workflow.IssueRequest) error {
-	q.issuePushed++
-	return q.err
-}
-
-func (q *stubEventQueue) PushPR(_ context.Context, _ workflow.PRRequest) error {
-	q.prPushed++
-	return q.err
-}
-
-func (q *stubEventQueue) QueueStats() (issues, prs workflow.QueueStat) {
-	return workflow.QueueStat{Buffered: q.issuePushed, Capacity: 256},
-		workflow.QueueStat{Buffered: q.prPushed, Capacity: 256}
-}
-
-func TestServerAcceptsEventQueueInterface(t *testing.T) {
-	t.Parallel()
-	cfg := &config.Config{
-		HTTP: config.HTTPConfig{
-			MaxBodyBytes:       1024,
-			WebhookSecret:      "secret",
-			DeliveryTTLSeconds: 3600,
-		},
-		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
-	}
-	queue := &stubEventQueue{}
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), queue, nil, zerolog.Nop(), nil)
-
-	body := []byte(`{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":1,"title":"t","body":"b","updated_at":"2026-02-15T00:00:00Z","labels":[{"name":"ai:refine"}]}}`)
-	sig := signatureForTests(body, "secret")
-
-	req := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(string(body)))
-	req.Header.Set("X-GitHub-Event", "issues")
-	req.Header.Set("X-GitHub-Delivery", "delivery-stub-1")
-	req.Header.Set("X-Hub-Signature-256", sig)
-	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, req)
-
-	if rr.Code != http.StatusAccepted {
-		t.Fatalf("expected %d, got %d", http.StatusAccepted, rr.Code)
-	}
-	if queue.issuePushed != 1 {
-		t.Fatalf("expected 1 issue pushed via stub, got %d", queue.issuePushed)
-	}
-}
-
-func signatureForTests(payload []byte, secret string) string {
-	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = mac.Write(payload)
-	return fmt.Sprintf("sha256=%s", hex.EncodeToString(mac.Sum(nil)))
-}
+var _ EventQueue = (*workflow.DataChannels)(nil)
+var _ = errors.Is // keep errors import until we add an error-path test

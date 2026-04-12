@@ -71,16 +71,16 @@ func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue,
 
 func (s *Server) Run(ctx context.Context) error {
 	router := mux.NewRouter()
-	router.HandleFunc(s.cfg.HTTP.StatusPath, s.handleStatus).Methods(http.MethodGet)
-	router.HandleFunc(s.cfg.HTTP.WebhookPath, s.handleGitHubWebhook).Methods(http.MethodPost)
-	router.HandleFunc(s.cfg.HTTP.AgentsRunPath, s.handleAgentsRun).Methods(http.MethodPost)
+	router.HandleFunc(s.cfg.Daemon.HTTP.StatusPath, s.handleStatus).Methods(http.MethodGet)
+	router.HandleFunc(s.cfg.Daemon.HTTP.WebhookPath, s.handleGitHubWebhook).Methods(http.MethodPost)
+	router.HandleFunc(s.cfg.Daemon.HTTP.AgentsRunPath, s.handleAgentsRun).Methods(http.MethodPost)
 
 	srv := &http.Server{
-		Addr:         s.cfg.HTTP.ListenAddr,
+		Addr:         s.cfg.Daemon.HTTP.ListenAddr,
 		Handler:      router,
-		ReadTimeout:  time.Duration(s.cfg.HTTP.ReadTimeoutSeconds) * time.Second,
-		WriteTimeout: time.Duration(s.cfg.HTTP.WriteTimeoutSeconds) * time.Second,
-		IdleTimeout:  time.Duration(s.cfg.HTTP.IdleTimeoutSeconds) * time.Second,
+		ReadTimeout:  time.Duration(s.cfg.Daemon.HTTP.ReadTimeoutSeconds) * time.Second,
+		WriteTimeout: time.Duration(s.cfg.Daemon.HTTP.WriteTimeoutSeconds) * time.Second,
+		IdleTimeout:  time.Duration(s.cfg.Daemon.HTTP.IdleTimeoutSeconds) * time.Second,
 	}
 
 	// A background goroutine watches for ctx cancellation and triggers HTTP
@@ -89,12 +89,12 @@ func (s *Server) Run(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.HTTP.ShutdownTimeoutSeconds)*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.Daemon.HTTP.ShutdownTimeoutSeconds)*time.Second)
 		defer cancel()
 		errCh <- srv.Shutdown(shutdownCtx)
 	}()
 
-	s.logger.Info().Str("addr", s.cfg.HTTP.ListenAddr).Str("status_path", s.cfg.HTTP.StatusPath).Str("webhook_path", s.cfg.HTTP.WebhookPath).Str("agents_run_path", s.cfg.HTTP.AgentsRunPath).Msg("starting webhook server")
+	s.logger.Info().Str("addr", s.cfg.Daemon.HTTP.ListenAddr).Str("status_path", s.cfg.Daemon.HTTP.StatusPath).Str("webhook_path", s.cfg.Daemon.HTTP.WebhookPath).Str("agents_run_path", s.cfg.Daemon.HTTP.AgentsRunPath).Msg("starting webhook server")
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
@@ -142,12 +142,12 @@ type agentsRunRequest struct {
 }
 
 func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.HTTP.APIKey == "" {
+	if s.cfg.Daemon.HTTP.APIKey == "" {
 		http.Error(w, "endpoint disabled: no API key configured", http.StatusForbidden)
 		return
 	}
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if token == "" || token != s.cfg.HTTP.APIKey {
+	if token == "" || token != s.cfg.Daemon.HTTP.APIKey {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -156,7 +156,7 @@ func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req agentsRunRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, s.cfg.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, s.cfg.Daemon.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -179,12 +179,12 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.cfg.HTTP.MaxBodyBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.cfg.Daemon.HTTP.MaxBodyBytes))
 	if err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if !verifySignature(body, s.cfg.HTTP.WebhookSecret, r.Header.Get("X-Hub-Signature-256")) {
+	if !verifySignature(body, s.cfg.Daemon.HTTP.WebhookSecret, r.Header.Get("X-Hub-Signature-256")) {
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
 	}
@@ -238,19 +238,19 @@ func (s *Server) handleIssueEvent(ctx context.Context, w http.ResponseWriter, bo
 		return
 	}
 	req := workflow.IssueRequest{
-		Repo:  workflow.RepoRef{FullName: repo.FullName, Enabled: repo.Enabled},
+		Repo:  workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
 		Issue: payload.Issue,
 		Label: payload.Label.Name,
 	}
 	if err := s.channels.PushIssue(ctx, req); err != nil {
 		if errors.Is(err, workflow.ErrIssueQueueFull) {
 			s.delivery.Delete(deliveryID)
-			s.logger.Warn().Str("repo", repo.FullName).Msg("issue queue full, dropping webhook")
+			s.logger.Warn().Str("repo", repo.Name).Msg("issue queue full, dropping webhook")
 			http.Error(w, "issue queue full, retry later", http.StatusServiceUnavailable)
 			return
 		}
 		if errors.Is(err, workflow.ErrQueueClosed) {
-			s.logger.Warn().Str("repo", repo.FullName).Msg("queue closed during shutdown, dropping webhook")
+			s.logger.Warn().Str("repo", repo.Name).Msg("queue closed during shutdown, dropping webhook")
 			http.Error(w, "shutting down, retry later", http.StatusServiceUnavailable)
 			return
 		}
@@ -284,19 +284,19 @@ func (s *Server) handlePREvent(ctx context.Context, w http.ResponseWriter, body 
 		return
 	}
 	req := workflow.PRRequest{
-		Repo:  workflow.RepoRef{FullName: repo.FullName, Enabled: repo.Enabled},
+		Repo:  workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
 		PR:    payload.PullRequest,
 		Label: payload.Label.Name,
 	}
 	if err := s.channels.PushPR(ctx, req); err != nil {
 		if errors.Is(err, workflow.ErrPRQueueFull) {
 			s.delivery.Delete(deliveryID)
-			s.logger.Warn().Str("repo", repo.FullName).Msg("pr queue full, dropping webhook")
+			s.logger.Warn().Str("repo", repo.Name).Msg("pr queue full, dropping webhook")
 			http.Error(w, "pr queue full, retry later", http.StatusServiceUnavailable)
 			return
 		}
 		if errors.Is(err, workflow.ErrQueueClosed) {
-			s.logger.Warn().Str("repo", repo.FullName).Msg("queue closed during shutdown, dropping webhook")
+			s.logger.Warn().Str("repo", repo.Name).Msg("queue closed during shutdown, dropping webhook")
 			http.Error(w, "shutting down, retry later", http.StatusServiceUnavailable)
 			return
 		}
