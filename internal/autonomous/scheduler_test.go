@@ -609,6 +609,123 @@ func writeGuidance(t *testing.T, dir string, skill string) string {
 	return path
 }
 
+// buildTestPromptStoreWithMemory is like buildTestPromptStore but uses a
+// template that renders {{.Memory}} so tests can assert on its value.
+func buildTestPromptStoreWithMemory(t *testing.T, dir string) *ai.PromptStore {
+	t.Helper()
+	writeIssuePrompt(t, dir)
+	autoBase := filepath.Join(dir, "autonomous", "base")
+	if err := os.MkdirAll(autoBase, 0o755); err != nil {
+		t.Fatalf("mkdir auto base: %v", err)
+	}
+	body := `{{.Task}} memory={{.Memory}} {{template "agent_guidance" .}}`
+	if err := os.WriteFile(filepath.Join(autoBase, "PROMPT.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write auto base: %v", err)
+	}
+	guidancePath := writeGuidance(t, dir, "architect")
+	skills := []ai.SkillGuidance{{Name: "architect", PromptFile: guidancePath}}
+	prAgents := []ai.AgentSkills{{Name: "architect", Skills: []string{"architect"}}}
+	autoAgents := []ai.AgentSkills{{Name: "architect", Skills: []string{"architect"}}}
+	issueBase := ai.PromptSource{PromptFile: filepath.Join(dir, "issue_refinement_prompts", "PROMPT.md")}
+	prBase := ai.PromptSource{Prompt: "{{.AgentHeading}} {{template \"agent_guidance\" .}}"}
+	autoBaseSource := ai.PromptSource{PromptFile: filepath.Join(autoBase, "PROMPT.md")}
+	store, err := ai.NewPromptStore(issueBase, prBase, autoBaseSource, skills, prAgents, autoAgents)
+	if err != nil {
+		t.Fatalf("prompt store: %v", err)
+	}
+	return store
+}
+
+// TestRunAgentRefreshesMemoryBetweenTasks verifies that each task in a
+// multi-task agent run sees the memory content written by the previous task
+// rather than a stale snapshot captured at lock-acquisition time.
+func TestRunAgentRefreshesMemoryBetweenTasks(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	prompts := buildTestPromptStoreWithMemory(t, dir)
+
+	// Pre-compute where the MemoryStore will write the MEMORY.md file.
+	memoryPath := filepath.Join(dir,
+		ai.NormalizeToken("architect"),
+		ai.NormalizeToken("owner/repo"),
+		"MEMORY.md")
+
+	const initialMemory = "initial-memory"
+	const task1Write = "task1-updated-memory"
+
+	// Seed the memory file with an initial value so WithLock finds it.
+	if err := os.MkdirAll(filepath.Dir(memoryPath), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(memoryPath, []byte(initialMemory), 0o600); err != nil {
+		t.Fatalf("write initial memory: %v", err)
+	}
+
+	// memoryCapturingRunner records the prompt seen by each Run call and on the
+	// first call writes task1Write to the memory file to simulate agent output.
+	runner := &memoryWritingRunner{memoryPath: memoryPath, writeOn1: task1Write}
+
+	cfg := &config.Config{
+		AgentsDir: dir,
+		AIBackends: map[string]config.AIBackendConfig{"claude": {}},
+		Repos:      []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
+		AutonomousAgents: []config.AutonomousRepoConfig{{
+			Repo:    "owner/repo",
+			Enabled: true,
+			Agents: []config.AutonomousAgentConfig{{
+				Name: "architect", Description: "desc",
+				Cron:   "* * * * *",
+				Skills: []string{"architect"},
+				Tasks: []config.TaskConfig{
+					{Name: "task1", Prompt: "first task"},
+					{Name: "task2", Prompt: "second task"},
+				},
+			}},
+		}},
+	}
+	scheduler, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, prompts, NewMemoryStore(dir), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("scheduler: %v", err)
+	}
+
+	scheduler.runAgent("owner/repo", cfg.AutonomousAgents[0].Agents[0])()
+
+	runner.mu.Lock()
+	got := runner.prompts
+	runner.mu.Unlock()
+
+	if len(got) != 2 {
+		t.Fatalf("expected 2 runner calls, got %d", len(got))
+	}
+	if !strings.Contains(got[0], initialMemory) {
+		t.Errorf("task1 prompt should contain initial memory %q, got: %s", initialMemory, got[0])
+	}
+	if !strings.Contains(got[1], task1Write) {
+		t.Errorf("task2 prompt should contain updated memory %q, got: %s", task1Write, got[1])
+	}
+}
+
+// memoryWritingRunner records prompts and on call 1 writes writeOn1 to memoryPath.
+type memoryWritingRunner struct {
+	mu         sync.Mutex
+	memoryPath string
+	writeOn1   string
+	prompts    []string
+}
+
+func (r *memoryWritingRunner) Run(_ context.Context, req ai.Request) (ai.Response, error) {
+	r.mu.Lock()
+	n := len(r.prompts)
+	r.prompts = append(r.prompts, req.Prompt)
+	r.mu.Unlock()
+	if n == 0 {
+		if err := os.WriteFile(r.memoryPath, []byte(r.writeOn1), 0o600); err != nil {
+			return ai.Response{}, err
+		}
+	}
+	return ai.Response{}, nil
+}
+
 func TestSchedulerSkipsDisabledAgents(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

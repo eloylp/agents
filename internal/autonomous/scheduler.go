@@ -3,6 +3,7 @@ package autonomous
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -256,6 +257,13 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 			if err := s.runTask(ctx, runner, backend, repo, agent, task.Name, prompt, memoryPath, memory, logger); err != nil {
 				return err
 			}
+			// Re-read the memory file so the next task sees any updates written
+			// by this task rather than the stale snapshot from lock acquisition.
+			updated, err := os.ReadFile(memoryPath)
+			if err != nil {
+				return fmt.Errorf("re-read memory after task %q: %w", task.Name, err)
+			}
+			memory = string(updated)
 		}
 		return nil
 	})
