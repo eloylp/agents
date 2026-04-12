@@ -72,9 +72,7 @@ func NewPromptStore(issueBase PromptSource, prBase PromptSource, autoBase Prompt
 		skillMap[NormalizeToken(s.Name)] = s
 	}
 	store := &PromptStore{
-		skills:        skillMap,
-		prTemplates:   make(map[string]*template.Template),
-		autoTemplates: make(map[string]*template.Template),
+		skills: skillMap,
 	}
 	if err := store.loadTemplates(issueBase, prBase, autoBase, prAgents, autoAgents); err != nil {
 		return nil, err
