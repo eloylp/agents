@@ -1,220 +1,136 @@
 # ──────────────────────────────────────────────
-# Logging
+# daemon — how the service runs
 # ──────────────────────────────────────────────
-log:
-  level: info    # trace, debug, info, warn, error, fatal
-  format: text   # text (human-readable) or json (structured)
+daemon:
+  log:
+    level: info           # trace, debug, info, warn, error, fatal
+    format: text          # text or json
+
+  http:
+    listen_addr: ":8080"
+    status_path: /status
+    webhook_path: /webhooks/github
+    agents_run_path: /agents/run
+    webhook_secret_env: GITHUB_WEBHOOK_SECRET   # HMAC shared secret env var
+    api_key_env: AGENTS_API_KEY                 # Bearer token for /agents/run
+    read_timeout_seconds: 15
+    write_timeout_seconds: 15
+    idle_timeout_seconds: 60
+    max_body_bytes: 1048576                     # 1 MiB cap on webhook payloads
+    delivery_ttl_seconds: 3600                  # dedupe window for webhook IDs
+    shutdown_timeout_seconds: 15
+
+  processor:
+    issue_queue_buffer: 256
+    pr_queue_buffer: 256
+    max_concurrent_agents: 4                    # per-PR fan-out cap
+
+  memory_dir: /var/lib/agents/memory            # persistent agent memory root
+
+  ai_backends:
+    claude:
+      command: claude
+      args:
+        - "-p"
+        - "--dangerously-skip-permissions"
+      timeout_seconds: 1500
+      max_prompt_chars: 12000
+      redaction_salt_env: LOG_SALT
+
+    codex:
+      command: codex
+      args:
+        - "exec"
+        - "--skip-git-repo-check"
+        - "--dangerously-bypass-approvals-and-sandbox"
+      timeout_seconds: 600
+      max_prompt_chars: 12000
+      redaction_salt_env: LOG_SALT
 
 # ──────────────────────────────────────────────
-# HTTP server — webhook ingestion + health check
-# ──────────────────────────────────────────────
-http:
-  listen_addr: ":8080"
-  status_path: /status
-  webhook_path: /webhooks/github
-  read_timeout_seconds: 15
-  write_timeout_seconds: 15
-  idle_timeout_seconds: 60
-  max_body_bytes: 1048576               # 1 MiB cap on webhook payloads
-  webhook_secret_env: GITHUB_WEBHOOK_SECRET  # env var holding the HMAC shared secret
-  api_key_env: AGENTS_API_KEY           # env var holding Bearer token for POST /agents/run
-  delivery_ttl_seconds: 3600            # how long to remember delivery IDs for dedup
-  shutdown_timeout_seconds: 15          # grace period for in-flight work on SIGTERM
-
-# ──────────────────────────────────────────────
-# Internal event queues (webhook → processor)
-# ──────────────────────────────────────────────
-processor:
-  issue_queue_buffer: 256
-  pr_queue_buffer: 256
-  workers: 4                              # goroutines per event type (issue / PR); allows concurrent processing across repos
-  # Maximum number of agent goroutines that may run concurrently for a single
-  # PR-review fan-out event. Limits subprocess resource usage when many agents
-  # are configured and ai:review (agent=all) labels are used frequently.
-  # Default: 4. Must be >= 1.
-  max_concurrent_agents: 4
-
-# ──────────────────────────────────────────────
-# Paths
-# ──────────────────────────────────────────────
-agents_dir: "./agents"                  # base directory for prompt templates and skill guidance files
-memory_dir: "/var/lib/agents/memory"    # persistent memory root for autonomous agents
-
-# ──────────────────────────────────────────────
-# Base prompt templates
+# skills — reusable guidance blocks
 #
-# Each entry can use either:
-#   prompt:      inline text (Go template syntax)
-#   prompt_file: path relative to agents_dir
-#
-# Templates use {{.Field}} placeholders filled at
-# runtime and {{template "agent_guidance" .}} to
-# inject the composed skill guidance for the agent.
-# ──────────────────────────────────────────────
-prompts:
-  issue_refinement:
-    prompt: |
-      Refine issue #{{.Number}} in {{.Repo}}.
-      Post exactly one concise GitHub comment with: feasibility, approach, acceptance criteria, and open questions.
-      Return one JSON object on stdout.
-  pr_review:
-    prompt: |
-      {{.AgentHeading}}
-      Review PR #{{.Number}} in {{.Repo}} from the perspective of {{.Agent}}.
-      {{template "agent_guidance" .}}
-      Post one high-signal review comment and return one JSON object on stdout.
-  autonomous:
-    prompt: |
-      Autonomous run for {{.Repo}} as {{.AgentName}}.
-      Focus: {{.Description}}
-      Task: {{.Task}}
-      Memory file: {{.MemoryPath}}
-      Existing memory:
-      {{.Memory}}
-      {{template "agent_guidance" .}}
-      Return one JSON object on stdout.
-
-# ──────────────────────────────────────────────
-# Skills — reusable knowledge clusters
-#
-# A skill defines domain-specific guidance that is
-# injected into prompt templates. Skills can be
-# composed: an agent referencing [architect, security]
-# receives the concatenated guidance from both.
-#
-# Use prompt_file (relative to agents_dir) for longer
-# guidance, or inline prompt for short directives.
+# Each skill is a named chunk of guidance. Agents reference skills by
+# name; at runtime the guidance is concatenated into the agent's prompt.
 # ──────────────────────────────────────────────
 skills:
-  - name: architect
+  architect:
     prompt: |
       Focus on architecture boundaries, coupling, extensibility, and maintainability risks.
-  - name: security
+
+  security:
     prompt: |
       Focus on authn/authz, secrets exposure, injection vectors, and unsafe defaults.
-  - name: testing
+
+  testing:
     prompt: |
       Focus on missing tests, brittle tests, regression coverage, and testability.
-  - name: devops
+
+  devops:
     prompt: |
       Focus on reliability, deployment safety, observability, and operational simplicity.
-  - name: dx
+
+  dx:
     prompt: |
       Focus on developer experience: config ergonomics, error clarity, onboarding friction, documentation accuracy.
-  - name: product
+
+  product:
     prompt: |
-      Focus on product-market fit: user value, competitive positioning, feature gaps vs. bloat, adoption friction.
+      Focus on product-market fit: user value, competitive positioning, feature gaps vs bloat, adoption friction.
 
 # ──────────────────────────────────────────────
-# Agents — actors that compose skills
+# agents — named capabilities
 #
-# Each agent has a name (used in GitHub labels like
-# ai:review:claude:<agent>) and references one or
-# more skills whose guidance is merged at runtime.
+# Each agent is a capability definition: a name, a backend, the skills
+# it uses, and a prompt. Agents don't run on their own — repos below
+# decide when and where they run.
+#
+# backend: auto | claude | codex   ("auto" picks the default)
+# prompt: inline text, OR
+# prompt_file: path relative to the config file's directory
 # ──────────────────────────────────────────────
 agents:
+  # Inline prompt — good for short, simple agents.
   - name: arch-reviewer
+    backend: auto
     skills: [architect]
+    prompt: |
+      You are an architecture-focused PR reviewer. Post one high-signal
+      review comment on the PR.
+
+  # Prompt loaded from a file — recommended for longer prompts.
+  # The path is resolved relative to the config file's directory.
   - name: sec-reviewer
+    backend: auto
     skills: [security]
+    prompt_file: prompts/sec-reviewer.md
+
   - name: test-reviewer
+    backend: auto
     skills: [testing]
-  - name: ops-reviewer
-    skills: [devops]
-  - name: dx-reviewer
-    skills: [dx]
+    prompt_file: prompts/test-reviewer.md
 
 # ──────────────────────────────────────────────
-# AI backends — CLI tools used to run prompts
+# repos — wiring: where and when agents run
 #
-# Supported backends: claude, codex.
-# When no explicit backend is specified in a label,
-# claude is preferred over codex if both are configured.
-# ──────────────────────────────────────────────
-ai_backends:
-  claude:
-    mode: command
-    command: claude
-    args:
-      - "-p"
-      - "--dangerously-skip-permissions"
-    timeout_seconds: 600
-    max_prompt_chars: 12000
-    redaction_salt_env: LOG_SALT
-  codex:
-    mode: command
-    command: codex
-    args:
-      - "exec"
-      - "--skip-git-repo-check"
-      - "--dangerously-bypass-approvals-and-sandbox"
-    timeout_seconds: 600
-    max_prompt_chars: 12000
-    redaction_salt_env: LOG_SALT
-
-# ──────────────────────────────────────────────
-# Repositories — repos this daemon handles
+# Each repo lists the agents it uses and the triggers that activate
+# them. An agent can be referenced multiple times with different
+# triggers on the same repo.
+#
+# Triggers:
+#   labels:    [ai:review:arch-reviewer, ...]  — GitHub label events
+#   cron:      "0,15 8-18 * * *"               — time-based schedule
+#   enabled:   optional, default true          — disable without deletion
 # ──────────────────────────────────────────────
 repos:
-  - full_name: "owner/repo"
+  - name: "owner/repo"
     enabled: true
+    use:
+      - agent: arch-reviewer
+        labels: ["ai:review:arch-reviewer"]
 
-# ──────────────────────────────────────────────
-# Autonomous agents — cron-scheduled sweeps
-#
-# Each autonomous agent defines its own skills and
-# tasks. Tasks run sequentially on each cron trigger;
-# the agent receives persistent memory across runs.
-#
-# backend: auto | claude | codex
-#   "auto" picks the default configured backend.
-# enabled: optional, defaults to true. Set to false to
-#   register the agent without scheduling it.
-# ──────────────────────────────────────────────
-autonomous_agents:
-  - repo: "owner/repo"
-    enabled: true
-    agents:
-      - name: "codebase-scout"
-        description: "Architecture sweeps looking for design drift and risky coupling."
-        cron: "0 9 * * *"
-        backend: "auto"
-        skills: [architect]
-        tasks:
-          - name: "issues"
-            prompt: |
-              Scan all open issues and add one succinct comment per issue only if this agent has not commented before. Avoid duplicate comments.
-          - name: "code"
-            prompt: |
-              Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, describe the diff in an issue but do not open a PR.
+      - agent: sec-reviewer
+        labels: ["ai:review:sec-reviewer"]
 
-      - name: "coder"
-        description: "Pick open issues, implement fixes with tests, and open PRs."
-        cron: "0 10 * * *"
-        backend: "claude"
-        skills: [architect, testing]
-        tasks:
-          - name: "fix"
-            prompt: |
-              Pick one open issue, implement the minimal fix with tests, and open a PR. Address review feedback on your open PRs before picking new work.
-
-      - name: "pr-reviewer"
-        description: "Review open PRs for correctness, idiomatic code, and test coverage."
-        cron: "0 11 * * *"
-        backend: "codex"
-        skills: [architect, testing, security]
-        tasks:
-          - name: "review"
-            prompt: |
-              List open PRs and post a review comment on each one that hasn't been reviewed yet.
-
-      - name: "product-strategist"
-        description: "Product strategy and market fit. Files issues with external context."
-        enabled: false                   # disabled by default; flip to true when ready
-        cron: "0 8 * * *"
-        backend: "claude"
-        skills: [product, dx]
-        tasks:
-          - name: "audit"
-            prompt: |
-              Audit the project from a product perspective. Use web search to research competitors and trends. File one issue per run with sources cited.
+      - agent: test-reviewer
+        labels: ["ai:review:test-reviewer"]

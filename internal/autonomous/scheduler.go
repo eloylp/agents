@@ -3,7 +3,6 @@ package autonomous
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -15,8 +14,8 @@ import (
 	"github.com/eloylp/agents/internal/config"
 )
 
-// zerologCronLogger adapts zerolog.Logger to the cron.Logger interface required
-// by chain wrappers such as SkipIfStillRunning.
+// zerologCronLogger adapts zerolog.Logger to the cron.Logger interface
+// required by chain wrappers such as SkipIfStillRunning.
 type zerologCronLogger struct {
 	logger zerolog.Logger
 }
@@ -37,11 +36,11 @@ func (z zerologCronLogger) Error(err error, msg string, keysAndValues ...interfa
 	e.Msg(msg)
 }
 
-// AgentStatus is the runtime state of a single registered autonomous agent.
+// AgentStatus is the runtime state of a single registered autonomous binding.
 type AgentStatus struct {
 	Name       string
 	Repo       string
-	LastRun    *time.Time // nil if the agent has never run in this process lifetime
+	LastRun    *time.Time // nil if never run in this process lifetime
 	NextRun    time.Time
 	LastStatus string // "success", "error", or "" if never run
 }
@@ -53,16 +52,17 @@ type agentEntry struct {
 	cronID cron.EntryID
 }
 
-// lastRunRecord holds the outcome of the most recent agent execution.
+// lastRunRecord holds the outcome of the most recent binding execution.
 type lastRunRecord struct {
 	at     time.Time
 	status string
 }
 
+// Scheduler wires cron-triggered agent bindings from the config into the
+// robfig/cron engine.
 type Scheduler struct {
 	cfg          *config.Config
 	runners      map[string]ai.Runner
-	prompts      *ai.PromptStore
 	memories     *MemoryStore
 	cron         *cron.Cron
 	logger       zerolog.Logger
@@ -73,7 +73,9 @@ type Scheduler struct {
 	lastRuns     map[string]lastRunRecord // key: "name\x00repo"
 }
 
-func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.PromptStore, memories *MemoryStore, logger zerolog.Logger) (*Scheduler, error) {
+// NewScheduler builds a scheduler and registers all cron-triggered bindings
+// found in cfg.Repos[].Use.
+func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, memories *MemoryStore, logger zerolog.Logger) (*Scheduler, error) {
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	cronLogger := zerologCronLogger{logger: logger.With().Str("component", "autonomous_scheduler").Logger()}
 	c := cron.New(
@@ -83,7 +85,6 @@ func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.
 	s := &Scheduler{
 		cfg:      cfg,
 		runners:  runners,
-		prompts:  prompts,
 		memories: memories,
 		cron:     c,
 		logger:   logger.With().Str("component", "autonomous_scheduler").Logger(),
@@ -95,10 +96,11 @@ func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.
 	return s, nil
 }
 
+// Run starts the cron engine and blocks until ctx is cancelled.
 func (s *Scheduler) Run(ctx context.Context) error {
 	s.setRunCtx(ctx)
 	if len(s.cron.Entries()) == 0 {
-		s.logger.Info().Msg("no autonomous agents configured")
+		s.logger.Info().Msg("no autonomous bindings configured")
 		return nil
 	}
 	s.logger.Info().Int("jobs", len(s.cron.Entries())).Msg("starting autonomous scheduler")
@@ -111,33 +113,30 @@ func (s *Scheduler) Run(ctx context.Context) error {
 }
 
 func (s *Scheduler) registerJobs() error {
-	for _, repoCfg := range s.cfg.AutonomousAgents {
-		if !repoCfg.Enabled {
+	for _, repo := range s.cfg.Repos {
+		if !repo.Enabled {
 			continue
 		}
-		repo, ok := s.cfg.RepoByName(repoCfg.Repo)
-		if !ok || !repo.Enabled {
-			s.logger.Info().Str("repo", repoCfg.Repo).Msg("autonomous agents skipped, repo disabled or missing")
-			continue
-		}
-		for _, agent := range repoCfg.Agents {
-			if !agent.IsEnabled() {
-				s.logger.Info().
-					Str("repo", repo.FullName).
-					Str("agent", agent.Name).
-					Msg("autonomous agent skipped, disabled in config")
+		for _, binding := range repo.Use {
+			if !binding.IsEnabled() || !binding.IsCron() {
 				continue
 			}
-			id, err := s.cron.AddFunc(agent.Cron, s.runAgent(repo.FullName, agent))
-			if err != nil {
-				return fmt.Errorf("schedule autonomous agent %s for repo %s: %w", agent.Name, repo.FullName, err)
+			agent, ok := s.cfg.AgentByName(binding.Agent)
+			if !ok {
+				// Validation at config load should have caught this; defensive.
+				return fmt.Errorf("binding references unknown agent %q on repo %q", binding.Agent, repo.Name)
 			}
-			s.agentEntries = append(s.agentEntries, agentEntry{name: agent.Name, repo: repo.FullName, cronID: id})
+			job := s.makeCronJob(repo.Name, agent)
+			id, err := s.cron.AddFunc(binding.Cron, job)
+			if err != nil {
+				return fmt.Errorf("schedule agent %q for repo %q: %w", agent.Name, repo.Name, err)
+			}
+			s.agentEntries = append(s.agentEntries, agentEntry{name: agent.Name, repo: repo.Name, cronID: id})
 			entry := s.cron.Entry(id)
 			s.logger.Info().
-				Str("repo", repo.FullName).
+				Str("repo", repo.Name).
 				Str("agent", agent.Name).
-				Str("cron", agent.Cron).
+				Str("cron", binding.Cron).
 				Time("next_run", entry.Next).
 				Msg("autonomous agent scheduled")
 		}
@@ -145,19 +144,18 @@ func (s *Scheduler) registerJobs() error {
 	return nil
 }
 
-func (s *Scheduler) runAgent(repo string, agent config.AutonomousAgentConfig) func() {
+func (s *Scheduler) makeCronJob(repo string, agent config.AgentDef) func() {
 	return func() {
 		ctx := s.currentRunCtx()
 		if ctx.Err() != nil {
 			return
 		}
-		runStatus := "success"
+		status := "success"
 		if err := s.executeAgentRun(ctx, repo, agent); err != nil {
-			logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Logger()
-			logger.Error().Err(err).Msg("autonomous agent run completed with errors")
-			runStatus = "error"
+			s.logger.Error().Str("repo", repo).Str("agent", agent.Name).Err(err).Msg("autonomous agent run completed with errors")
+			status = "error"
 		}
-		s.recordLastRun(agent.Name, repo, time.Now(), runStatus)
+		s.recordLastRun(agent.Name, repo, time.Now(), status)
 	}
 }
 
@@ -168,7 +166,7 @@ func (s *Scheduler) recordLastRun(name, repo string, at time.Time, status string
 	s.lastRunsMu.Unlock()
 }
 
-// AgentStatuses returns the current scheduling state for all registered agents.
+// AgentStatuses returns the current scheduling state for all registered bindings.
 func (s *Scheduler) AgentStatuses() []AgentStatus {
 	s.lastRunsMu.RLock()
 	runs := make(map[string]lastRunRecord, len(s.lastRuns))
@@ -211,62 +209,80 @@ func (s *Scheduler) AgentStatuses() []AgentStatus {
 	return statuses
 }
 
-// TriggerAgent runs the named agent for the given repo synchronously using the
-// provided context. It returns an error if the agent or repo is not found, or
-// if the run itself fails.
+// TriggerAgent runs the named agent for the given repo synchronously. It
+// returns an error if the agent is not found, not bound to the repo, or if
+// the run itself fails.
 func (s *Scheduler) TriggerAgent(ctx context.Context, agentName, repo string) error {
 	agentName = strings.ToLower(strings.TrimSpace(agentName))
-	repo = strings.TrimSpace(repo)
-	for _, repoCfg := range s.cfg.AutonomousAgents {
-		if !strings.EqualFold(repoCfg.Repo, repo) || !repoCfg.Enabled {
-			continue
-		}
-		repoInfo, ok := s.cfg.RepoByName(repo)
-		if !ok || !repoInfo.Enabled {
-			return fmt.Errorf("repo %q is disabled or not found in repos list", repo)
-		}
-		for _, agent := range repoCfg.Agents {
-			if agent.Name == agentName {
-				if !agent.IsEnabled() {
-					return fmt.Errorf("autonomous agent %q is disabled in config", agentName)
-				}
-				return s.executeAgentRun(ctx, repoInfo.FullName, agent)
-			}
-		}
-		return fmt.Errorf("autonomous agent %q not found for repo %q", agentName, repo)
+	repoDef, ok := s.cfg.RepoByName(repo)
+	if !ok || !repoDef.Enabled {
+		return fmt.Errorf("repo %q is disabled or not found", repo)
 	}
-	return fmt.Errorf("no autonomous agents configured for repo %q", repo)
+	agent, ok := s.cfg.AgentByName(agentName)
+	if !ok {
+		return fmt.Errorf("agent %q not found", agentName)
+	}
+	// The agent must actually be bound to this repo (any trigger kind is
+	// sufficient for on-demand execution).
+	bound := false
+	for _, b := range repoDef.Use {
+		if b.Agent == agentName && b.IsEnabled() {
+			bound = true
+			break
+		}
+	}
+	if !bound {
+		return fmt.Errorf("agent %q is not bound to repo %q", agentName, repo)
+	}
+	return s.executeAgentRun(ctx, repoDef.Name, agent)
 }
 
-func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent config.AutonomousAgentConfig) error {
-	logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Logger()
-	backend := s.cfg.ResolveBackend(agent.Backend)
+func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent config.AgentDef) error {
+	backend := s.resolveBackend(agent.Backend)
 	if backend == "" {
-		return fmt.Errorf("no configured backend for autonomous agent run (configured: %q)", agent.Backend)
+		return fmt.Errorf("no configured backend for agent %q (configured: %q)", agent.Name, agent.Backend)
 	}
 	runner, ok := s.runners[backend]
 	if !ok {
-		return fmt.Errorf("no runner for configured backend %q", backend)
+		return fmt.Errorf("no runner for backend %q", backend)
 	}
+	logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Str("backend", backend).Logger()
 	return s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
-		for _, task := range agent.Tasks {
-			prompt, err := task.Resolve(s.cfg.AgentsDir)
-			if err != nil {
-				return fmt.Errorf("resolve prompt for task %q: %w", task.Name, err)
-			}
-			if err := s.runTask(ctx, runner, backend, repo, agent, task.Name, prompt, memoryPath, memory, logger); err != nil {
-				return err
-			}
-			// Re-read the memory file so the next task sees any updates written
-			// by this task rather than the stale snapshot from lock acquisition.
-			updated, err := os.ReadFile(memoryPath)
-			if err != nil {
-				return fmt.Errorf("re-read memory after task %q: %w", task.Name, err)
-			}
-			memory = string(updated)
+		prompt, err := ai.RenderAgentPrompt(agent, s.cfg.Skills, ai.PromptContext{
+			Repo:       repo,
+			Backend:    backend,
+			Memory:     memory,
+			MemoryPath: memoryPath,
+		})
+		if err != nil {
+			return fmt.Errorf("render prompt: %w", err)
 		}
+		logger.Info().Msg("running autonomous pass")
+		resp, err := runner.Run(ctx, ai.Request{
+			Workflow: fmt.Sprintf("autonomous:%s:%s", backend, agent.Name),
+			Repo:     repo,
+			Prompt:   prompt,
+		})
+		if err != nil {
+			return fmt.Errorf("agent run: %w", err)
+		}
+		logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Msg("autonomous pass completed")
 		return nil
 	})
+}
+
+// resolveBackend returns the concrete backend name for the given agent
+// configuration value. "auto" or empty resolves to the default configured
+// backend; an explicit name is returned as-is if it's configured.
+func (s *Scheduler) resolveBackend(configured string) string {
+	configured = strings.ToLower(strings.TrimSpace(configured))
+	if configured == "" || configured == "auto" {
+		return s.cfg.DefaultBackend()
+	}
+	if _, ok := s.cfg.Daemon.AIBackends[configured]; !ok {
+		return ""
+	}
+	return configured
 }
 
 func (s *Scheduler) setRunCtx(ctx context.Context) {
@@ -282,29 +298,4 @@ func (s *Scheduler) currentRunCtx() context.Context {
 		return context.Background()
 	}
 	return s.runCtx
-}
-
-func (s *Scheduler) runTask(ctx context.Context, runner ai.Runner, backend string, repo string, agent config.AutonomousAgentConfig, taskType string, taskText string, memoryPath string, memory string, logger zerolog.Logger) error {
-	prompt, err := s.prompts.AutonomousPrompt(agent.Name, ai.AutonomousPromptData{
-		Repo:        repo,
-		AgentName:   agent.Name,
-		Description: agent.Description,
-		Task:        taskText,
-		Memory:      memory,
-		MemoryPath:  memoryPath,
-	})
-	if err != nil {
-		return fmt.Errorf("%s task prompt: %w", taskType, err)
-	}
-	logger.Info().Str("task_type", taskType).Msg("running autonomous pass")
-	resp, err := runner.Run(ctx, ai.Request{
-		Workflow: fmt.Sprintf("autonomous:%s:%s:%s", backend, agent.Name, taskType),
-		Repo:     repo,
-		Prompt:   prompt,
-	})
-	if err != nil {
-		return fmt.Errorf("%s task: %w", taskType, err)
-	}
-	logger.Info().Str("task_type", taskType).Int("artifacts_stored", len(resp.Artifacts)).Msg("autonomous pass completed")
-	return nil
 }

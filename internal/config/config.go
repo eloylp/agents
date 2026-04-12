@@ -1,3 +1,13 @@
+// Package config defines the agents daemon configuration schema and loader.
+//
+// The config file is structured in three top-level sections:
+//
+//   daemon — how the service runs (logging, HTTP, queues, AI backends)
+//   skills — reusable guidance blocks referenced by agents
+//   agents — named capabilities (backend + skills + prompt)
+//   repos  — wiring: which agents run on which repo, and when
+//
+// See config.example.yaml for a complete annotated example.
 package config
 
 import (
@@ -5,21 +15,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 // validAIBackendNames is the canonical ordered list of supported AI backend
-// names. Preference order for DefaultConfiguredBackend follows slice order.
-// Adding a new backend only requires updating this slice.
+// names. Preference order for the "auto" backend resolution follows slice
+// order. Adding a new backend only requires updating this slice.
 var validAIBackendNames = []string{"claude", "codex"}
-
-// backendAuto is the sentinel token that means "use the default configured
-// backend". It is accepted in autonomous_agents[].backend and in
-// ResolveBackend; it is never a valid backend name in ai_backends.
-const backendAuto = "auto"
 
 const (
 	defaultHTTPListenAddr          = ":8080"
@@ -31,148 +35,136 @@ const (
 	defaultHTTPIdleTimeoutSeconds  = 60
 	defaultHTTPMaxBodyBytes        = 1 << 20
 	defaultDeliveryTTLSeconds      = 3600
-	defaultIssueQueueBufferSize    = 256
-	defaultPRQueueBufferSize       = 256
-	defaultProcessorWorkers        = 4
-	defaultMaxConcurrentAgents     = 4
 	defaultHTTPShutdownSeconds     = 15
-	defaultAITimeoutSeconds        = 600
-	defaultMaxPromptChars          = 12000
-	defaultAgentsDir               = "agents"
-	defaultMemoryDir               = "/var/lib/agents/memory"
 
-	defaultIssueRefinementPromptFile = "issue_refinement_prompts/PROMPT.md"
-	defaultPRReviewPromptFile        = "pr_review_prompts/base/PROMPT.md"
-	defaultAutonomousPromptFile      = "autonomous/base/PROMPT.md"
+	defaultIssueQueueBufferSize = 256
+	defaultPRQueueBufferSize    = 256
+	defaultMaxConcurrentAgents  = 4
 
+	defaultAITimeoutSeconds = 600
+	defaultMaxPromptChars   = 12000
+
+	defaultMemoryDir = "/var/lib/agents/memory"
 )
 
+// Config is the root configuration loaded from YAML.
 type Config struct {
+	Daemon DaemonConfig        `yaml:"daemon"`
+	Skills map[string]SkillDef `yaml:"skills"`
+	Agents []AgentDef          `yaml:"agents"`
+	Repos  []RepoDef           `yaml:"repos"`
+
+	// configDir is the directory containing the config file, used to resolve
+	// prompt_file paths.
+	configDir string `yaml:"-"`
+}
+
+// DaemonConfig holds infrastructure-level configuration for the running
+// daemon. Nothing here is specific to any particular agent or repo.
+type DaemonConfig struct {
 	Log        LogConfig                  `yaml:"log"`
 	HTTP       HTTPConfig                 `yaml:"http"`
 	Processor  ProcessorConfig            `yaml:"processor"`
-	AIBackends map[string]AIBackendConfig `yaml:"ai_backends"`
-	Repos      []RepoConfig               `yaml:"repos"`
-	AgentsDir  string                     `yaml:"agents_dir"`
 	MemoryDir  string                     `yaml:"memory_dir"`
-	Prompts    PromptsConfig              `yaml:"prompts"`
-	Skills     []SkillConfig              `yaml:"skills"`
-	Agents     []AgentConfig              `yaml:"agents"`
-
-	AutonomousAgents []AutonomousRepoConfig `yaml:"autonomous_agents"`
+	AIBackends map[string]AIBackendConfig `yaml:"ai_backends"`
 }
 
-type PromptsConfig struct {
-	IssueRefinement PromptSourceConfig `yaml:"issue_refinement"`
-	PRReview        PromptSourceConfig `yaml:"pr_review"`
-	Autonomous      PromptSourceConfig `yaml:"autonomous"`
-}
-
-type PromptSourceConfig struct {
-	PromptFile string `yaml:"prompt_file"`
-	Prompt     string `yaml:"prompt"`
-}
-
-
-type SkillConfig struct {
-	Name       string `yaml:"name"`
-	PromptFile string `yaml:"prompt_file"`
-	Prompt     string `yaml:"prompt"`
-}
-
-type AgentConfig struct {
-	Name   string   `yaml:"name"`
-	Skills []string `yaml:"skills"`
-}
-
-type TaskConfig struct {
-	Name       string `yaml:"name"`
-	PromptFile string `yaml:"prompt_file"`
-	Prompt     string `yaml:"prompt"`
-}
-
-// Resolve returns the task prompt content. If Prompt is set it is returned
-// directly. Otherwise the file at baseDir/PromptFile is read.
-func (t TaskConfig) Resolve(baseDir string) (string, error) {
-	if t.Prompt != "" {
-		return t.Prompt, nil
-	}
-	path := t.PromptFile
-	if baseDir != "" && !filepath.IsAbs(path) {
-		path = filepath.Join(baseDir, path)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read task prompt file %s: %w", path, err)
-	}
-	return string(data), nil
-}
-
+// LogConfig controls daemon logging output.
 type LogConfig struct {
 	Level  string `yaml:"level"`
 	Format string `yaml:"format"`
 }
 
+// HTTPConfig controls the daemon's HTTP server (webhooks + /status + /agents/run).
 type HTTPConfig struct {
 	ListenAddr             string `yaml:"listen_addr"`
 	StatusPath             string `yaml:"status_path"`
 	WebhookPath            string `yaml:"webhook_path"`
 	AgentsRunPath          string `yaml:"agents_run_path"`
+	WebhookSecretEnv       string `yaml:"webhook_secret_env"`
 	APIKeyEnv              string `yaml:"api_key_env"`
-	APIKey                 string `yaml:"-"`
 	ReadTimeoutSeconds     int    `yaml:"read_timeout_seconds"`
 	WriteTimeoutSeconds    int    `yaml:"write_timeout_seconds"`
 	IdleTimeoutSeconds     int    `yaml:"idle_timeout_seconds"`
 	MaxBodyBytes           int64  `yaml:"max_body_bytes"`
-	WebhookSecret          string `yaml:"webhook_secret"`
-	WebhookSecretEnv       string `yaml:"webhook_secret_env"`
 	DeliveryTTLSeconds     int    `yaml:"delivery_ttl_seconds"`
 	ShutdownTimeoutSeconds int    `yaml:"shutdown_timeout_seconds"`
+
+	// WebhookSecret and APIKey are resolved from the *Env fields at load time
+	// and not present in the YAML source.
+	WebhookSecret string `yaml:"-"`
+	APIKey        string `yaml:"-"`
 }
 
+// ProcessorConfig controls internal event queues and agent concurrency.
 type ProcessorConfig struct {
-	IssueQueueBuffer    int  `yaml:"issue_queue_buffer"`
-	PRQueueBuffer       int  `yaml:"pr_queue_buffer"`
-	Workers             *int `yaml:"workers"`
-	MaxConcurrentAgents *int `yaml:"max_concurrent_agents"`
+	IssueQueueBuffer    int `yaml:"issue_queue_buffer"`
+	PRQueueBuffer       int `yaml:"pr_queue_buffer"`
+	MaxConcurrentAgents int `yaml:"max_concurrent_agents"`
 }
 
-type RepoConfig struct {
-	FullName string `yaml:"full_name"`
-	Enabled  bool   `yaml:"enabled"`
-}
-
+// AIBackendConfig describes how to invoke a CLI-based AI backend.
 type AIBackendConfig struct {
-	Mode             string   `yaml:"mode"`
 	Command          string   `yaml:"command"`
 	Args             []string `yaml:"args"`
-	TimeoutSeconds   *int     `yaml:"timeout_seconds"`
-	MaxPromptChars   *int     `yaml:"max_prompt_chars"`
+	TimeoutSeconds   int      `yaml:"timeout_seconds"`
+	MaxPromptChars   int      `yaml:"max_prompt_chars"`
 	RedactionSaltEnv string   `yaml:"redaction_salt_env"`
 }
 
-type AutonomousRepoConfig struct {
-	Repo    string                  `yaml:"repo"`
-	Enabled bool                    `yaml:"enabled"`
-	Agents  []AutonomousAgentConfig `yaml:"agents"`
+// SkillDef is a reusable block of guidance that agents can compose.
+// After loading, Prompt always contains the resolved guidance text; PromptFile
+// is retained only for debugging/logging.
+type SkillDef struct {
+	Prompt     string `yaml:"prompt"`
+	PromptFile string `yaml:"prompt_file"`
 }
 
-type AutonomousAgentConfig struct {
-	Name        string       `yaml:"name"`
-	Description string       `yaml:"description"`
-	Cron        string       `yaml:"cron"`
-	Backend     string       `yaml:"backend"`
-	Enabled     *bool        `yaml:"enabled"`
-	Skills      []string     `yaml:"skills"`
-	Tasks       []TaskConfig `yaml:"tasks"`
+// AgentDef is a named capability: a backend, a set of skills, and a prompt.
+// Agents are pure definitions — they don't run on their own. Repos bind them
+// to triggers.
+type AgentDef struct {
+	Name       string   `yaml:"name"`
+	Backend    string   `yaml:"backend"`
+	Skills     []string `yaml:"skills"`
+	Prompt     string   `yaml:"prompt"`
+	PromptFile string   `yaml:"prompt_file"`
 }
 
-// IsEnabled reports whether this agent should be scheduled. When the field is
-// omitted from config, agents are enabled by default.
-func (a AutonomousAgentConfig) IsEnabled() bool {
-	return a.Enabled == nil || *a.Enabled
+// RepoDef describes a single GitHub repo the daemon operates on and the
+// agents bound to it.
+type RepoDef struct {
+	Name    string    `yaml:"name"`
+	Enabled bool      `yaml:"enabled"`
+	Use     []Binding `yaml:"use"`
 }
 
+// Binding wires an agent to one or more triggers on a specific repo.
+// An agent can appear multiple times in a repo's Use list with different
+// triggers.
+type Binding struct {
+	Agent   string   `yaml:"agent"`
+	Labels  []string `yaml:"labels"`
+	Cron    string   `yaml:"cron"`
+	Events  []string `yaml:"events"`
+	Enabled *bool    `yaml:"enabled"`
+}
+
+// IsEnabled reports whether this binding should be active. Absent =
+// enabled; only explicit `enabled: false` disables.
+func (b Binding) IsEnabled() bool {
+	return b.Enabled == nil || *b.Enabled
+}
+
+// IsCron reports whether this binding is cron-triggered.
+func (b Binding) IsCron() bool { return strings.TrimSpace(b.Cron) != "" }
+
+// IsLabel reports whether this binding is label-triggered.
+func (b Binding) IsLabel() bool { return len(b.Labels) > 0 }
+
+// Load reads, parses, validates, and resolves a config file at the given
+// path. Prompt files referenced by PromptFile fields are read eagerly;
+// any I/O or validation error is reported here.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -182,208 +174,278 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve config path: %w", err)
+	}
+	cfg.configDir = filepath.Dir(abs)
+
 	cfg.applyDefaults()
+	cfg.normalize()
+	cfg.resolveSecrets()
+	if err := cfg.loadPromptFiles(); err != nil {
+		return nil, err
+	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
 }
 
+// RepoByName returns the repo definition with the given full name
+// (case-insensitive).
+func (c *Config) RepoByName(name string) (RepoDef, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	for _, r := range c.Repos {
+		if strings.ToLower(r.Name) == name {
+			return r, true
+		}
+	}
+	return RepoDef{}, false
+}
+
+// AgentByName returns the agent definition with the given name
+// (case-insensitive).
+func (c *Config) AgentByName(name string) (AgentDef, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	for _, a := range c.Agents {
+		if a.Name == name {
+			return a, true
+		}
+	}
+	return AgentDef{}, false
+}
+
+// DefaultBackend returns the first configured backend from validAIBackendNames.
+// Used when an agent specifies backend: "auto" or leaves it empty.
+func (c *Config) DefaultBackend() string {
+	for _, name := range validAIBackendNames {
+		if _, ok := c.Daemon.AIBackends[name]; ok {
+			return name
+		}
+	}
+	return ""
+}
+
+// ─── internal: defaults, normalization, secrets, prompt loading, validation ──
+
 func (c *Config) applyDefaults() {
-	setDefault(&c.AgentsDir, defaultAgentsDir)
-	setDefault(&c.MemoryDir, defaultMemoryDir)
-	c.applyPromptDefaults()
-	c.applyHTTPDefaults()
-	c.applyProcessorDefaults()
-	c.normalizeSkills()
-	c.normalizeAgents()
-	c.normalizeBackends()
-	c.normalizeRepos()
-	c.normalizeAutonomousAgents()
-	c.resolveWebhookSecret()
-	c.resolveAPIKey()
-}
-
-func (c *Config) applyPromptDefaults() {
-	applyPromptSourceDefault(&c.Prompts.IssueRefinement, defaultIssueRefinementPromptFile)
-	applyPromptSourceDefault(&c.Prompts.PRReview, defaultPRReviewPromptFile)
-	applyPromptSourceDefault(&c.Prompts.Autonomous, defaultAutonomousPromptFile)
-}
-
-func applyPromptSourceDefault(src *PromptSourceConfig, defaultFile string) {
-	src.PromptFile = strings.TrimSpace(src.PromptFile)
-	src.Prompt = strings.TrimSpace(src.Prompt)
-	if src.PromptFile == "" && src.Prompt == "" {
-		src.PromptFile = defaultFile
+	// daemon.memory_dir
+	if strings.TrimSpace(c.Daemon.MemoryDir) == "" {
+		c.Daemon.MemoryDir = defaultMemoryDir
 	}
-}
 
-func (c *Config) applyHTTPDefaults() {
-	setDefault(&c.HTTP.ListenAddr, defaultHTTPListenAddr)
-	setDefault(&c.HTTP.StatusPath, defaultHTTPStatusPath)
-	setDefault(&c.HTTP.WebhookPath, defaultHTTPWebhookPath)
-	setDefault(&c.HTTP.AgentsRunPath, defaultHTTPAgentsRunPath)
-	setDefaultInt(&c.HTTP.ReadTimeoutSeconds, defaultHTTPReadTimeoutSeconds)
-	setDefaultInt(&c.HTTP.WriteTimeoutSeconds, defaultHTTPWriteTimeoutSeconds)
-	setDefaultInt(&c.HTTP.IdleTimeoutSeconds, defaultHTTPIdleTimeoutSeconds)
-	setDefaultInt64(&c.HTTP.MaxBodyBytes, defaultHTTPMaxBodyBytes)
-	setDefaultInt(&c.HTTP.DeliveryTTLSeconds, defaultDeliveryTTLSeconds)
-	setDefaultInt(&c.HTTP.ShutdownTimeoutSeconds, defaultHTTPShutdownSeconds)
-}
+	// daemon.http
+	setDefault(&c.Daemon.HTTP.ListenAddr, defaultHTTPListenAddr)
+	setDefault(&c.Daemon.HTTP.StatusPath, defaultHTTPStatusPath)
+	setDefault(&c.Daemon.HTTP.WebhookPath, defaultHTTPWebhookPath)
+	setDefault(&c.Daemon.HTTP.AgentsRunPath, defaultHTTPAgentsRunPath)
+	setDefaultInt(&c.Daemon.HTTP.ReadTimeoutSeconds, defaultHTTPReadTimeoutSeconds)
+	setDefaultInt(&c.Daemon.HTTP.WriteTimeoutSeconds, defaultHTTPWriteTimeoutSeconds)
+	setDefaultInt(&c.Daemon.HTTP.IdleTimeoutSeconds, defaultHTTPIdleTimeoutSeconds)
+	setDefaultInt64(&c.Daemon.HTTP.MaxBodyBytes, defaultHTTPMaxBodyBytes)
+	setDefaultInt(&c.Daemon.HTTP.DeliveryTTLSeconds, defaultDeliveryTTLSeconds)
+	setDefaultInt(&c.Daemon.HTTP.ShutdownTimeoutSeconds, defaultHTTPShutdownSeconds)
 
-func (c *Config) applyProcessorDefaults() {
-	setDefaultInt(&c.Processor.IssueQueueBuffer, defaultIssueQueueBufferSize)
-	setDefaultInt(&c.Processor.PRQueueBuffer, defaultPRQueueBufferSize)
-	if c.Processor.Workers == nil {
-		v := defaultProcessorWorkers
-		c.Processor.Workers = &v
+	// daemon.processor
+	setDefaultInt(&c.Daemon.Processor.IssueQueueBuffer, defaultIssueQueueBufferSize)
+	setDefaultInt(&c.Daemon.Processor.PRQueueBuffer, defaultPRQueueBufferSize)
+	setDefaultInt(&c.Daemon.Processor.MaxConcurrentAgents, defaultMaxConcurrentAgents)
+
+	// daemon.ai_backends defaults
+	for name, backend := range c.Daemon.AIBackends {
+		if backend.TimeoutSeconds == 0 {
+			backend.TimeoutSeconds = defaultAITimeoutSeconds
+		}
+		if backend.MaxPromptChars == 0 {
+			backend.MaxPromptChars = defaultMaxPromptChars
+		}
+		c.Daemon.AIBackends[name] = backend
 	}
-	if c.Processor.MaxConcurrentAgents == nil {
-		v := defaultMaxConcurrentAgents
-		c.Processor.MaxConcurrentAgents = &v
+
+	// agents: default backend to "auto" when empty
+	for i := range c.Agents {
+		if strings.TrimSpace(c.Agents[i].Backend) == "" {
+			c.Agents[i].Backend = "auto"
+		}
 	}
+
+	// repos: default enabled to true when field absent is ambiguous; YAML
+	// zero-value is false. We leave it as-is — absent means false here,
+	// because repos are an explicit allow-list.
 }
 
-func (c *Config) normalizeSkills() {
-	for i := range c.Skills {
-		c.Skills[i].Name = strings.ToLower(strings.TrimSpace(c.Skills[i].Name))
-		c.Skills[i].PromptFile = strings.TrimSpace(c.Skills[i].PromptFile)
-		c.Skills[i].Prompt = strings.TrimSpace(c.Skills[i].Prompt)
+func (c *Config) normalize() {
+	// Lowercase backend keys for case-insensitive matching.
+	if len(c.Daemon.AIBackends) > 0 {
+		lower := make(map[string]AIBackendConfig, len(c.Daemon.AIBackends))
+		for name, backend := range c.Daemon.AIBackends {
+			key := strings.ToLower(strings.TrimSpace(name))
+			backend.Command = strings.TrimSpace(backend.Command)
+			lower[key] = backend
+		}
+		c.Daemon.AIBackends = lower
 	}
-}
 
-func (c *Config) normalizeAgents() {
+	// Lowercase skill keys.
+	if len(c.Skills) > 0 {
+		lower := make(map[string]SkillDef, len(c.Skills))
+		for name, skill := range c.Skills {
+			key := strings.ToLower(strings.TrimSpace(name))
+			skill.Prompt = strings.TrimSpace(skill.Prompt)
+			skill.PromptFile = strings.TrimSpace(skill.PromptFile)
+			lower[key] = skill
+		}
+		c.Skills = lower
+	}
+
+	// Agents.
 	for i := range c.Agents {
 		c.Agents[i].Name = strings.ToLower(strings.TrimSpace(c.Agents[i].Name))
+		c.Agents[i].Backend = strings.ToLower(strings.TrimSpace(c.Agents[i].Backend))
+		c.Agents[i].Prompt = strings.TrimSpace(c.Agents[i].Prompt)
+		c.Agents[i].PromptFile = strings.TrimSpace(c.Agents[i].PromptFile)
 		for j := range c.Agents[i].Skills {
 			c.Agents[i].Skills[j] = strings.ToLower(strings.TrimSpace(c.Agents[i].Skills[j]))
 		}
 	}
-}
 
-func (c *Config) normalizeBackends() {
-	normalized := make(map[string]AIBackendConfig, len(c.AIBackends))
-	for name, backend := range c.AIBackends {
-		key := strings.ToLower(strings.TrimSpace(name))
-		if key == "" {
-			continue
-		}
-		setDefault(&backend.Mode, "noop")
-		if backend.TimeoutSeconds == nil {
-			v := defaultAITimeoutSeconds
-			backend.TimeoutSeconds = &v
-		}
-		if backend.MaxPromptChars == nil {
-			v := defaultMaxPromptChars
-			backend.MaxPromptChars = &v
-		}
-		backend.Command = strings.TrimSpace(backend.Command)
-		normalized[key] = backend
-	}
-	c.AIBackends = normalized
-}
-
-func (c *Config) normalizeRepos() {
+	// Repos.
 	for i := range c.Repos {
-		c.Repos[i].FullName = strings.TrimSpace(c.Repos[i].FullName)
-	}
-}
-
-func (c *Config) normalizeAutonomousAgents() {
-	for i := range c.AutonomousAgents {
-		c.AutonomousAgents[i].Repo = strings.TrimSpace(c.AutonomousAgents[i].Repo)
-		for j := range c.AutonomousAgents[i].Agents {
-			a := &c.AutonomousAgents[i].Agents[j]
-			a.Name = strings.ToLower(strings.TrimSpace(a.Name))
-			a.Cron = strings.TrimSpace(a.Cron)
-			a.Description = strings.TrimSpace(a.Description)
-			a.Backend = strings.ToLower(strings.TrimSpace(a.Backend))
-			if a.Backend == "" {
-				a.Backend = backendAuto
-			}
-			for k := range a.Skills {
-				a.Skills[k] = strings.ToLower(strings.TrimSpace(a.Skills[k]))
-			}
-			for k := range a.Tasks {
-				a.Tasks[k].Name = strings.ToLower(strings.TrimSpace(a.Tasks[k].Name))
-				a.Tasks[k].PromptFile = strings.TrimSpace(a.Tasks[k].PromptFile)
-				a.Tasks[k].Prompt = strings.TrimSpace(a.Tasks[k].Prompt)
-			}
+		c.Repos[i].Name = strings.TrimSpace(c.Repos[i].Name)
+		for j := range c.Repos[i].Use {
+			c.Repos[i].Use[j].Agent = strings.ToLower(strings.TrimSpace(c.Repos[i].Use[j].Agent))
+			c.Repos[i].Use[j].Cron = strings.TrimSpace(c.Repos[i].Use[j].Cron)
 		}
 	}
 }
 
-func (c *Config) resolveWebhookSecret() {
-	if c.HTTP.WebhookSecret == "" && c.HTTP.WebhookSecretEnv != "" {
-		c.HTTP.WebhookSecret = os.Getenv(c.HTTP.WebhookSecretEnv)
+func (c *Config) resolveSecrets() {
+	if c.Daemon.HTTP.WebhookSecret == "" && c.Daemon.HTTP.WebhookSecretEnv != "" {
+		c.Daemon.HTTP.WebhookSecret = os.Getenv(c.Daemon.HTTP.WebhookSecretEnv)
+	}
+	if c.Daemon.HTTP.APIKey == "" && c.Daemon.HTTP.APIKeyEnv != "" {
+		c.Daemon.HTTP.APIKey = os.Getenv(c.Daemon.HTTP.APIKeyEnv)
 	}
 }
 
-func (c *Config) resolveAPIKey() {
-	if c.HTTP.APIKey == "" && c.HTTP.APIKeyEnv != "" {
-		c.HTTP.APIKey = os.Getenv(c.HTTP.APIKeyEnv)
+// loadPromptFiles reads any prompt_file references in skills and agents,
+// populating the Prompt field with the resolved content. Paths are resolved
+// relative to the config file's directory.
+func (c *Config) loadPromptFiles() error {
+	for name, skill := range c.Skills {
+		content, err := c.resolvePrompt("skill "+name, skill.Prompt, skill.PromptFile)
+		if err != nil {
+			return err
+		}
+		skill.Prompt = content
+		c.Skills[name] = skill
 	}
-}
-
-func (c *Config) validate() error {
-	if c.HTTP.WebhookSecret == "" {
-		return errors.New("config: http webhook secret is required")
-	}
-	if *c.Processor.Workers < 1 {
-		return fmt.Errorf("config: processor.workers must be >= 1, got %d", *c.Processor.Workers)
-	}
-	if err := c.validateProcessor(); err != nil {
-		return err
-	}
-	if err := c.validateBackends(); err != nil {
-		return err
-	}
-	if err := c.validateRepos(); err != nil {
-		return err
-	}
-	if err := c.validatePromptSources(); err != nil {
-		return err
-	}
-	skillNames, err := c.validateSkills()
-	if err != nil {
-		return err
-	}
-	if err := c.validateAgents(skillNames); err != nil {
-		return err
-	}
-	return c.validateAutonomousAgents(skillNames)
-}
-
-func (c *Config) validateProcessor() error {
-	if c.Processor.MaxConcurrentAgents != nil && *c.Processor.MaxConcurrentAgents < 1 {
-		return fmt.Errorf("config: processor.max_concurrent_agents must be >= 1, got %d", *c.Processor.MaxConcurrentAgents)
+	for i := range c.Agents {
+		content, err := c.resolvePrompt("agent "+c.Agents[i].Name, c.Agents[i].Prompt, c.Agents[i].PromptFile)
+		if err != nil {
+			return err
+		}
+		c.Agents[i].Prompt = content
 	}
 	return nil
 }
 
+// resolvePrompt returns the resolved prompt text. Exactly one of prompt or
+// promptFile must be set.
+func (c *Config) resolvePrompt(ownerLabel, prompt, promptFile string) (string, error) {
+	prompt = strings.TrimSpace(prompt)
+	promptFile = strings.TrimSpace(promptFile)
+	switch {
+	case prompt != "" && promptFile != "":
+		return "", fmt.Errorf("%s: set either prompt or prompt_file, not both", ownerLabel)
+	case prompt != "":
+		return prompt, nil
+	case promptFile != "":
+		path := promptFile
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(c.configDir, path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("%s: read prompt_file %s: %w", ownerLabel, path, err)
+		}
+		return strings.TrimSpace(string(data)), nil
+	default:
+		return "", fmt.Errorf("%s: must set either prompt or prompt_file", ownerLabel)
+	}
+}
+
+func (c *Config) validate() error {
+	if c.Daemon.HTTP.WebhookSecret == "" {
+		return errors.New("config: http webhook secret is required (set webhook_secret_env)")
+	}
+	if err := c.validateBackends(); err != nil {
+		return err
+	}
+	if err := c.validateSkills(); err != nil {
+		return err
+	}
+	if err := c.validateAgents(); err != nil {
+		return err
+	}
+	return c.validateRepos()
+}
+
 func (c *Config) validateBackends() error {
-	if len(c.AIBackends) == 0 {
+	if len(c.Daemon.AIBackends) == 0 {
 		return errors.New("config: at least one ai_backends entry is required")
 	}
-	allowed := make(map[string]struct{}, len(validAIBackendNames))
-	for _, n := range validAIBackendNames {
-		allowed[n] = struct{}{}
-	}
-	for name, backend := range c.AIBackends {
-		if _, ok := allowed[name]; !ok {
+	for name, backend := range c.Daemon.AIBackends {
+		if !isValidBackendName(name) {
 			return fmt.Errorf("config: unsupported ai backend %q (supported: %s)", name, strings.Join(validAIBackendNames, ", "))
 		}
-		if backend.Mode != "noop" && backend.Mode != "command" {
-			return fmt.Errorf("config: backend %q has unsupported mode %q (supported: noop, command)", name, backend.Mode)
+		if backend.Command == "" {
+			return fmt.Errorf("config: ai backend %q: command is required", name)
 		}
-		if backend.Mode == "command" && strings.TrimSpace(backend.Command) == "" {
-			return fmt.Errorf("config: ai backend %q has mode=command but no command specified", name)
+	}
+	return nil
+}
+
+func (c *Config) validateSkills() error {
+	for name, skill := range c.Skills {
+		if strings.TrimSpace(name) == "" {
+			return errors.New("config: skill name is required")
 		}
-		if backend.TimeoutSeconds != nil && *backend.TimeoutSeconds < 0 {
-			return fmt.Errorf("config: ai backend %q has negative timeout_seconds %d (use 0 to disable the timeout)", name, *backend.TimeoutSeconds)
+		if skill.Prompt == "" {
+			return fmt.Errorf("config: skill %q: prompt is empty after resolution", name)
 		}
-		if backend.MaxPromptChars != nil && *backend.MaxPromptChars < 0 {
-			return fmt.Errorf("config: ai backend %q has negative max_prompt_chars %d (use 0 to disable truncation)", name, *backend.MaxPromptChars)
+	}
+	return nil
+}
+
+func (c *Config) validateAgents() error {
+	if len(c.Agents) == 0 {
+		return errors.New("config: at least one agent is required")
+	}
+	seen := make(map[string]struct{}, len(c.Agents))
+	for _, a := range c.Agents {
+		if a.Name == "" {
+			return errors.New("config: agent name is required")
+		}
+		if _, dup := seen[a.Name]; dup {
+			return fmt.Errorf("config: duplicate agent name %q", a.Name)
+		}
+		seen[a.Name] = struct{}{}
+
+		if a.Backend != "auto" {
+			if _, ok := c.Daemon.AIBackends[a.Backend]; !ok {
+				return fmt.Errorf("config: agent %q: unknown backend %q", a.Name, a.Backend)
+			}
+		}
+		for _, s := range a.Skills {
+			if _, ok := c.Skills[s]; !ok {
+				return fmt.Errorf("config: agent %q: unknown skill %q", a.Name, s)
+			}
+		}
+		if a.Prompt == "" {
+			return fmt.Errorf("config: agent %q: prompt is empty after resolution", a.Name)
 		}
 	}
 	return nil
@@ -394,254 +456,60 @@ func (c *Config) validateRepos() error {
 		return errors.New("config: at least one repo is required")
 	}
 	enabledCount := 0
-	for _, repo := range c.Repos {
-		if repo.FullName == "" {
-			return errors.New("config: repo full_name is required")
+	seen := make(map[string]struct{}, len(c.Repos))
+	for _, r := range c.Repos {
+		if r.Name == "" {
+			return errors.New("config: repo name is required")
 		}
-		if repo.Enabled {
+		key := strings.ToLower(r.Name)
+		if _, dup := seen[key]; dup {
+			return fmt.Errorf("config: duplicate repo %q", r.Name)
+		}
+		seen[key] = struct{}{}
+		if r.Enabled {
 			enabledCount++
+		}
+		for i, b := range r.Use {
+			if b.Agent == "" {
+				return fmt.Errorf("config: repo %q: binding #%d has no agent", r.Name, i)
+			}
+			if _, ok := c.AgentByName(b.Agent); !ok {
+				return fmt.Errorf("config: repo %q: binding references unknown agent %q", r.Name, b.Agent)
+			}
+			if !b.IsCron() && !b.IsLabel() && len(b.Events) == 0 {
+				return fmt.Errorf("config: repo %q: binding for agent %q has no trigger (set cron, labels, or events)", r.Name, b.Agent)
+			}
 		}
 	}
 	if enabledCount == 0 {
-		return errors.New("config: at least one repo must have enabled: true")
+		return errors.New("config: at least one repo must be enabled")
 	}
 	return nil
 }
 
-func (c *Config) validatePromptSources() error {
-	sources := map[string]PromptSourceConfig{
-		"prompts.issue_refinement": c.Prompts.IssueRefinement,
-		"prompts.pr_review":        c.Prompts.PRReview,
-		"prompts.autonomous":       c.Prompts.Autonomous,
-	}
-	for name, src := range sources {
-		if src.PromptFile != "" && src.Prompt != "" {
-			return fmt.Errorf("config: %s must have only one of prompt_file or prompt, not both", name)
+func isValidBackendName(name string) bool {
+	for _, v := range validAIBackendNames {
+		if v == name {
+			return true
 		}
 	}
-	return nil
+	return false
 }
 
-func (c *Config) validateSkills() (map[string]struct{}, error) {
-	names := make(map[string]struct{}, len(c.Skills))
-	for _, skill := range c.Skills {
-		if skill.Name == "" {
-			return nil, errors.New("config: skill name is required")
-		}
-		if _, dup := names[skill.Name]; dup {
-			return nil, fmt.Errorf("config: duplicate skill name %q", skill.Name)
-		}
-		hasFile := skill.PromptFile != ""
-		hasInline := skill.Prompt != ""
-		if !hasFile && !hasInline {
-			return nil, fmt.Errorf("config: skill %q must have either prompt_file or prompt", skill.Name)
-		}
-		if hasFile && hasInline {
-			return nil, fmt.Errorf("config: skill %q must have only one of prompt_file or prompt, not both", skill.Name)
-		}
-		names[skill.Name] = struct{}{}
-	}
-	return names, nil
-}
-
-func (c *Config) validateAgents(skillNames map[string]struct{}) error {
-	names := make(map[string]struct{}, len(c.Agents))
-	for _, agent := range c.Agents {
-		if agent.Name == "" {
-			return errors.New("config: agent name is required")
-		}
-		if _, dup := names[agent.Name]; dup {
-			return fmt.Errorf("config: duplicate agent name %q", agent.Name)
-		}
-		if len(agent.Skills) == 0 {
-			return fmt.Errorf("config: agent %q must reference at least one skill", agent.Name)
-		}
-		for _, skill := range agent.Skills {
-			if _, ok := skillNames[skill]; !ok {
-				return fmt.Errorf("config: agent %q references unknown skill %q", agent.Name, skill)
-			}
-		}
-		names[agent.Name] = struct{}{}
-	}
-	return nil
-}
-
-func (c *Config) validateAutonomousAgents(skillNames map[string]struct{}) error {
-	// globalAgentSkills tracks the skill set registered for each agent name across
-	// all repos. collectAutonomousAgentSkills deduplicates by name, so an agent
-	// with the same name in multiple repos must have identical skills — otherwise
-	// one repo silently receives the wrong prompt.
-	globalAgentSkills := make(map[string][]string)
-	for _, repo := range c.AutonomousAgents {
-		if repo.Repo == "" {
-			return errors.New("config: autonomous agent repo is required")
-		}
-		if _, ok := c.RepoByName(repo.Repo); !ok {
-			return fmt.Errorf("config: autonomous_agents references unknown repo %q (not found in repos list)", repo.Repo)
-		}
-		names := make(map[string]struct{}, len(repo.Agents))
-		for _, agent := range repo.Agents {
-			if agent.Name == "" {
-				return fmt.Errorf("config: autonomous agent name required for repo %s", repo.Repo)
-			}
-			if _, dup := names[agent.Name]; dup {
-				return fmt.Errorf("config: duplicate autonomous agent name %q for repo %s", agent.Name, repo.Repo)
-			}
-			names[agent.Name] = struct{}{}
-			if agent.Cron == "" {
-				return fmt.Errorf("config: autonomous agent cron required for repo %s", repo.Repo)
-			}
-			validBackend := agent.Backend == backendAuto
-			for _, n := range validAIBackendNames {
-				if agent.Backend == n {
-					validBackend = true
-					break
-				}
-			}
-			if !validBackend {
-				return fmt.Errorf("config: autonomous agent backend %q for repo %s must be one of %s, %s", agent.Backend, repo.Repo, backendAuto, strings.Join(validAIBackendNames, ", "))
-			}
-			if len(agent.Skills) == 0 {
-				return fmt.Errorf("config: autonomous agent %q for repo %s must reference at least one skill", agent.Name, repo.Repo)
-			}
-			for _, skill := range agent.Skills {
-				if _, ok := skillNames[skill]; !ok {
-					return fmt.Errorf("config: autonomous agent %q for repo %s references unknown skill %q", agent.Name, repo.Repo, skill)
-				}
-			}
-			if len(agent.Tasks) == 0 {
-				return fmt.Errorf("config: autonomous agent %q for repo %s must define at least one task", agent.Name, repo.Repo)
-			}
-			for _, task := range agent.Tasks {
-				if task.Name == "" {
-					return fmt.Errorf("config: autonomous agent %q for repo %s has a task with empty name", agent.Name, repo.Repo)
-				}
-				hasPrompt := task.Prompt != ""
-				hasFile := task.PromptFile != ""
-				if !hasPrompt && !hasFile {
-					return fmt.Errorf("config: autonomous agent %q for repo %s task %q must have either prompt or prompt_file", agent.Name, repo.Repo, task.Name)
-				}
-				if hasPrompt && hasFile {
-					return fmt.Errorf("config: autonomous agent %q for repo %s task %q must have only one of prompt or prompt_file, not both", agent.Name, repo.Repo, task.Name)
-				}
-			}
-			if first, seen := globalAgentSkills[agent.Name]; seen {
-				if !sameStringSet(first, agent.Skills) {
-					return fmt.Errorf("config: autonomous agent %q in repo %s has skills %v that conflict with skills %v registered under the same name in another repo", agent.Name, repo.Repo, agent.Skills, first)
-				}
-			} else {
-				globalAgentSkills[agent.Name] = agent.Skills
-			}
-		}
-	}
-	return nil
-}
-
-// sameStringSet reports whether a and b contain the same strings (order-independent).
-func sameStringSet(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	ca := make([]string, len(a))
-	cb := make([]string, len(b))
-	copy(ca, a)
-	copy(cb, b)
-	sort.Strings(ca)
-	sort.Strings(cb)
-	for i := range ca {
-		if ca[i] != cb[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// AgentByName returns the agent configuration for the given name.
-func (c *Config) AgentByName(name string) (AgentConfig, bool) {
-	normalized := strings.ToLower(strings.TrimSpace(name))
-	for _, agent := range c.Agents {
-		if agent.Name == normalized {
-			return agent, true
-		}
-	}
-	return AgentConfig{}, false
-}
-
-// AgentNames returns all defined agent names.
-func (c *Config) AgentNames() []string {
-	names := make([]string, len(c.Agents))
-	for i, agent := range c.Agents {
-		names[i] = agent.Name
-	}
-	return names
-}
-
-// HasAgent reports whether an agent with the given name is configured.
-func (c *Config) HasAgent(name string) bool {
-	_, ok := c.AgentByName(name)
-	return ok
-}
-
-// MaxConcurrentAgents returns the configured concurrency limit for agent
-// goroutines. Returns 0 if the field was not set (caller should apply a
-// default).
-func (c *Config) MaxConcurrentAgents() int {
-	if c.Processor.MaxConcurrentAgents == nil {
-		return 0
-	}
-	return *c.Processor.MaxConcurrentAgents
-}
-
-func (c *Config) RepoByName(fullName string) (RepoConfig, bool) {
-	for _, repo := range c.Repos {
-		if strings.EqualFold(repo.FullName, fullName) {
-			return repo, true
-		}
-	}
-	return RepoConfig{}, false
-}
-
-// DefaultConfiguredBackend returns the name of the preferred backend when no
-// explicit backend is specified in a label. Preference follows the order of
-// validAIBackendNames (claude before codex).
-func (c *Config) DefaultConfiguredBackend() string {
-	for _, name := range validAIBackendNames {
-		if _, ok := c.AIBackends[name]; ok {
-			return name
-		}
-	}
-	return ""
-}
-
-// ResolveBackend maps a raw backend token from a label or config field to a
-// configured backend name. An empty token or the special value "auto" falls
-// back to the default configured backend. An explicit token that does not
-// match any configured backend returns "" so the caller can skip the event.
-func (c *Config) ResolveBackend(raw string) string {
-	normalized := strings.ToLower(strings.TrimSpace(raw))
-	if normalized == "" || normalized == backendAuto {
-		return c.DefaultConfiguredBackend()
-	}
-	if _, ok := c.AIBackends[normalized]; !ok {
-		return ""
-	}
-	return normalized
-}
-
-func setDefault(field *string, value string) {
-	if strings.TrimSpace(*field) == "" {
-		*field = value
+func setDefault(dst *string, def string) {
+	if strings.TrimSpace(*dst) == "" {
+		*dst = def
 	}
 }
 
-func setDefaultInt(field *int, value int) {
-	if *field == 0 {
-		*field = value
+func setDefaultInt(dst *int, def int) {
+	if *dst == 0 {
+		*dst = def
 	}
 }
 
-func setDefaultInt64(field *int64, value int64) {
-	if *field == 0 {
-		*field = value
+func setDefaultInt64(dst *int64, def int64) {
+	if *dst == 0 {
+		*dst = def
 	}
 }

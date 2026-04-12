@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -35,8 +34,8 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Handle the "setup" subcommand before loading any config — it has no
-	// dependency on a config file and must be usable before one exists.
+	// Handle the "setup" subcommand before loading any config — it must be
+	// usable before one exists.
 	if len(os.Args) > 1 && os.Args[1] == "setup" {
 		dryRun := len(os.Args) > 2 && os.Args[2] == "--dry-run"
 		return setup.Run(setup.NewCommandRunner(), dryRun, os.Stdin, os.Stdout, os.Stderr)
@@ -54,16 +53,10 @@ func run() error {
 		return err
 	}
 
-	logger := logging.NewLogger(cfg.Log)
-
-	promptStore, err := setupPromptStore(cfg, logger)
-	if err != nil {
-		return err
-	}
+	logger := logging.NewLogger(cfg.Daemon.Log)
 
 	runners := setupRunners(cfg, logger)
-
-	scheduler, err := setupScheduler(cfg, runners, promptStore, logger)
+	scheduler, err := setupScheduler(cfg, runners, logger)
 	if err != nil {
 		return err
 	}
@@ -83,21 +76,18 @@ func run() error {
 
 	logger.Info().Msg("starting agents daemon")
 
-	engine := workflow.NewEngine(cfg, runners, promptStore, logger)
-	dataChannels := workflow.NewDataChannels(cfg.Processor.IssueQueueBuffer, cfg.Processor.PRQueueBuffer)
-	processor := workflow.NewProcessor(dataChannels, engine, *cfg.Processor.Workers, time.Duration(cfg.HTTP.ShutdownTimeoutSeconds)*time.Second, logger)
-	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.HTTP.DeliveryTTLSeconds) * time.Second)
+	engine := workflow.NewEngine(cfg, runners, logger)
+	dataChannels := workflow.NewDataChannels(cfg.Daemon.Processor.IssueQueueBuffer, cfg.Daemon.Processor.PRQueueBuffer)
+	shutdown := time.Duration(cfg.Daemon.HTTP.ShutdownTimeoutSeconds) * time.Second
+	workers := cfg.Daemon.Processor.MaxConcurrentAgents
+	processor := workflow.NewProcessor(dataChannels, engine, workers, shutdown, logger)
+	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
 	server := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, logger, scheduler)
+
 	group, groupCtx := errgroup.WithContext(ctx)
-	group.Go(func() error {
-		return processor.Run(groupCtx)
-	})
-	group.Go(func() error {
-		return scheduler.Run(groupCtx)
-	})
-	group.Go(func() error {
-		return server.Run(groupCtx)
-	})
+	group.Go(func() error { return processor.Run(groupCtx) })
+	group.Go(func() error { return scheduler.Run(groupCtx) })
+	group.Go(func() error { return server.Run(groupCtx) })
 	if err := group.Wait(); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
@@ -105,70 +95,31 @@ func run() error {
 	return nil
 }
 
-func setupPromptStore(cfg *config.Config, logger zerolog.Logger) (*ai.PromptStore, error) {
-	skills := resolveSkills(cfg)
-	prAgents := collectPRAgentSkills(cfg)
-	autoAgents := collectAutonomousAgentSkills(cfg)
-	issueBase, prBase, autoBase := resolvePrompts(cfg)
-
-	store, err := ai.NewPromptStore(issueBase, prBase, autoBase, skills, prAgents, autoAgents)
-	if err != nil {
-		return nil, err
-	}
-	logger.Info().Str("agents_dir", cfg.AgentsDir).Int("skills", len(skills)).Msg("prompt store initialized")
-	return store, nil
-}
-
 func setupRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runner {
-	runners := make(map[string]ai.Runner, len(cfg.AIBackends))
-	for name, backend := range cfg.AIBackends {
-		runners[name] = ai.NewCommandRunner(name, backend.Mode, backend.Command, backend.Args, *backend.TimeoutSeconds, *backend.MaxPromptChars, backend.RedactionSaltEnv, logger)
+	runners := make(map[string]ai.Runner, len(cfg.Daemon.AIBackends))
+	for name, backend := range cfg.Daemon.AIBackends {
+		runners[name] = ai.NewCommandRunner(
+			name,
+			"command",
+			backend.Command,
+			backend.Args,
+			backend.TimeoutSeconds,
+			backend.MaxPromptChars,
+			backend.RedactionSaltEnv,
+			logger,
+		)
 	}
 	return runners
 }
 
-func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.PromptStore, logger zerolog.Logger) (*autonomous.Scheduler, error) {
-	memoryStore := autonomous.NewMemoryStore(cfg.MemoryDir)
-	return autonomous.NewScheduler(cfg, runners, prompts, memoryStore, logger)
-}
-
-func resolveSkills(cfg *config.Config) []ai.SkillGuidance {
-	skills := make([]ai.SkillGuidance, 0, len(cfg.Skills))
-	for _, s := range cfg.Skills {
-		sg := ai.SkillGuidance{Name: s.Name, Prompt: s.Prompt}
-		if s.PromptFile != "" {
-			sg.PromptFile = agentsPath(cfg.AgentsDir, s.PromptFile)
-		}
-		skills = append(skills, sg)
-	}
-	return skills
-}
-
-func collectPRAgentSkills(cfg *config.Config) []ai.AgentSkills {
-	result := make([]ai.AgentSkills, len(cfg.Agents))
-	for i, a := range cfg.Agents {
-		result[i] = ai.AgentSkills{Name: a.Name, Skills: a.Skills}
-	}
-	return result
-}
-
-func collectAutonomousAgentSkills(cfg *config.Config) []ai.AgentSkills {
-	var result []ai.AgentSkills
-	seen := make(map[string]struct{})
-	for _, repo := range cfg.AutonomousAgents {
-		for _, agent := range repo.Agents {
-			if _, ok := seen[agent.Name]; !ok {
-				seen[agent.Name] = struct{}{}
-				result = append(result, ai.AgentSkills{Name: agent.Name, Skills: agent.Skills})
-			}
-		}
-	}
-	return result
+func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, logger zerolog.Logger) (*autonomous.Scheduler, error) {
+	memoryStore := autonomous.NewMemoryStore(cfg.Daemon.MemoryDir)
+	return autonomous.NewScheduler(cfg, runners, memoryStore, logger)
 }
 
 // schedulerStatusAdapter adapts *autonomous.Scheduler to webhook.StatusProvider,
-// converting autonomous.AgentStatus to webhook.AgentStatus without coupling the
-// two packages to each other.
+// converting autonomous.AgentStatus to webhook.AgentStatus without coupling
+// those packages to each other.
 type schedulerStatusAdapter struct {
 	s *autonomous.Scheduler
 }
@@ -187,24 +138,3 @@ func (a schedulerStatusAdapter) AgentStatuses() []webhook.AgentStatus {
 	}
 	return out
 }
-
-func resolvePrompts(cfg *config.Config) (issue ai.PromptSource, pr ai.PromptSource, auto ai.PromptSource) {
-	resolve := func(src config.PromptSourceConfig) ai.PromptSource {
-		if src.Prompt != "" {
-			return ai.PromptSource{Prompt: src.Prompt}
-		}
-		return ai.PromptSource{PromptFile: agentsPath(cfg.AgentsDir, src.PromptFile)}
-	}
-	return resolve(cfg.Prompts.IssueRefinement), resolve(cfg.Prompts.PRReview), resolve(cfg.Prompts.Autonomous)
-}
-
-// agentsPath resolves a prompt file path relative to agentsDir unless it is
-// already absolute, in which case it is returned unchanged. This mirrors the
-// POSIX convention that an absolute path always names an exact location.
-func agentsPath(agentsDir, promptFile string) string {
-	if filepath.IsAbs(promptFile) {
-		return promptFile
-	}
-	return filepath.Join(agentsDir, promptFile)
-}
-
