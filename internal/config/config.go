@@ -127,7 +127,7 @@ type HTTPConfig struct {
 type ProcessorConfig struct {
 	IssueQueueBuffer    int  `yaml:"issue_queue_buffer"`
 	PRQueueBuffer       int  `yaml:"pr_queue_buffer"`
-	Workers             int  `yaml:"workers"`
+	Workers             *int `yaml:"workers"`
 	MaxConcurrentAgents *int `yaml:"max_concurrent_agents"`
 }
 
@@ -228,7 +228,10 @@ func (c *Config) applyHTTPDefaults() {
 func (c *Config) applyProcessorDefaults() {
 	setDefaultInt(&c.Processor.IssueQueueBuffer, defaultIssueQueueBufferSize)
 	setDefaultInt(&c.Processor.PRQueueBuffer, defaultPRQueueBufferSize)
-	setDefaultInt(&c.Processor.Workers, defaultProcessorWorkers)
+	if c.Processor.Workers == nil {
+		v := defaultProcessorWorkers
+		c.Processor.Workers = &v
+	}
 	if c.Processor.MaxConcurrentAgents == nil {
 		v := defaultMaxConcurrentAgents
 		c.Processor.MaxConcurrentAgents = &v
@@ -320,8 +323,8 @@ func (c *Config) validate() error {
 	if c.HTTP.WebhookSecret == "" {
 		return errors.New("config: http webhook secret is required")
 	}
-	if c.Processor.Workers < 1 {
-		return fmt.Errorf("config: processor.workers must be >= 1, got %d", c.Processor.Workers)
+	if *c.Processor.Workers < 1 {
+		return fmt.Errorf("config: processor.workers must be >= 1, got %d", *c.Processor.Workers)
 	}
 	if err := c.validateProcessor(); err != nil {
 		return err

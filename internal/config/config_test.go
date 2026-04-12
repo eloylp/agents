@@ -81,8 +81,12 @@ autonomous_agents:
 	if cfg.Processor.PRQueueBuffer != defaultPRQueueBufferSize {
 		t.Fatalf("expected pr queue buffer default %d, got %d", defaultPRQueueBufferSize, cfg.Processor.PRQueueBuffer)
 	}
-	if cfg.Processor.Workers != defaultProcessorWorkers {
-		t.Fatalf("expected processor workers default %d, got %d", defaultProcessorWorkers, cfg.Processor.Workers)
+	if cfg.Processor.Workers == nil || *cfg.Processor.Workers != defaultProcessorWorkers {
+		got := 0
+		if cfg.Processor.Workers != nil {
+			got = *cfg.Processor.Workers
+		}
+		t.Fatalf("expected processor workers default %d, got %d", defaultProcessorWorkers, got)
 	}
 	if cfg.Processor.MaxConcurrentAgents == nil || *cfg.Processor.MaxConcurrentAgents != defaultMaxConcurrentAgents {
 		got := 0
@@ -1345,9 +1349,7 @@ processor:
 
 func TestProcessorWorkersValidation(t *testing.T) {
 	t.Parallel()
-	// workers: -1 is used because setDefaultInt only fills in the zero value;
-	// an explicit negative value bypasses defaulting and reaches validation.
-	const minimalYAML = `
+	const baseYAML = `
 http:
   webhook_secret: secret
 ai_backends:
@@ -1358,17 +1360,24 @@ repos:
   - full_name: owner/repo
     enabled: true
 processor:
-  workers: -1
+  workers: %d
 `
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(minimalYAML), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	_, err := Load(path)
-	if err == nil {
-		t.Fatal("expected error for workers=0, got nil")
-	}
-	if !strings.Contains(err.Error(), "processor.workers") {
-		t.Fatalf("expected error mentioning processor.workers, got: %v", err)
+	for _, workers := range []int{0, -1} {
+		workers := workers
+		t.Run(fmt.Sprintf("workers=%d", workers), func(t *testing.T) {
+			t.Parallel()
+			yaml := fmt.Sprintf(baseYAML, workers)
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("expected error for workers=%d, got nil", workers)
+			}
+			if !strings.Contains(err.Error(), "processor.workers") {
+				t.Fatalf("expected error mentioning processor.workers, got: %v", err)
+			}
+		})
 	}
 }
