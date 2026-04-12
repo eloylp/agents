@@ -569,3 +569,71 @@ repos:
 		t.Errorf("expected normalized command %q, got %q", "claude", got)
 	}
 }
+
+func TestLoadRejectsUnsupportedBackendMode(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	cases := []struct {
+		name string
+		mode string
+	}{
+		{"typo", "cmd"},
+		{"unknown", "subprocess"},
+		{"empty-like", "nOop"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			content := `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: ` + tc.mode + `
+repos:
+  - full_name: "owner/repo"
+`
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("expected load to fail for mode=%q", tc.mode)
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsSupportedBackendModes(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	cases := []struct {
+		name string
+		mode string
+	}{
+		{"noop", "noop"},
+		{"command", "command"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			var commandLine string
+			if tc.mode == "command" {
+				commandLine = "\n    command: claude"
+			}
+			content := `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: ` + tc.mode + commandLine + `
+repos:
+  - full_name: "owner/repo"
+`
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			if _, err := Load(path); err != nil {
+				t.Fatalf("unexpected error for mode=%q: %v", tc.mode, err)
+			}
+		})
+	}
+}

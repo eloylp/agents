@@ -324,6 +324,9 @@ func (c *Config) validateBackends() error {
 		if name != "claude" && name != "codex" {
 			return fmt.Errorf("config: unsupported ai backend %q (supported: claude, codex)", name)
 		}
+		if backend.Mode != "noop" && backend.Mode != "command" {
+			return fmt.Errorf("config: backend %q has unsupported mode %q (supported: noop, command)", name, backend.Mode)
+		}
 		if backend.Mode == "command" && strings.TrimSpace(backend.Command) == "" {
 			return fmt.Errorf("config: ai backend %q has mode=command but no command specified", name)
 		}
