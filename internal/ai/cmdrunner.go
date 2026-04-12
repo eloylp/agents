@@ -185,47 +185,30 @@ func buildCommandEnv(req Request) []string {
 }
 
 // extractJSON finds the last top-level JSON object in data.
-// AI CLIs sometimes emit conversational text before the JSON payload;
-// this function scans backwards to locate the closing '}' and then
-// walks back to find its matching '{', accounting for nested braces
-// and JSON strings.
+// AI CLIs sometimes emit conversational text before the JSON payload.
+// This function scans forward through data looking for '{' characters and
+// attempts to decode a complete JSON object at each one using encoding/json.
+// The last successfully decoded object is returned.  Using the standard
+// decoder avoids the string-escape edge cases in a hand-rolled backward
+// scanner (e.g. a string ending with '\\' would be misread as an escaped
+// quote by a naive backward scan).
 func extractJSON(data []byte) ([]byte, error) {
-	// Find last '}'.
-	end := -1
-	for i := len(data) - 1; i >= 0; i-- {
-		if data[i] == '}' {
-			end = i
-			break
-		}
-	}
-	if end < 0 {
-		return nil, fmt.Errorf("no JSON object found in output")
-	}
-
-	// Walk backwards from end to find the matching '{'.
-	depth := 0
-	inString := false
-	for i := end; i >= 0; i-- {
-		b := data[i]
-		if inString {
-			if b == '"' && (i == 0 || data[i-1] != '\\') {
-				inString = false
-			}
+	var last json.RawMessage
+	for i := 0; i < len(data); i++ {
+		if data[i] != '{' {
 			continue
 		}
-		switch b {
-		case '"':
-			inString = true
-		case '}':
-			depth++
-		case '{':
-			depth--
-			if depth == 0 {
-				return data[i : end+1], nil
-			}
+		dec := json.NewDecoder(bytes.NewReader(data[i:]))
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err == nil {
+			last = raw
+			i += len(raw) - 1 // advance past the decoded object
 		}
 	}
-	return nil, fmt.Errorf("no matching '{' found for JSON object in output")
+	if last == nil {
+		return nil, fmt.Errorf("no JSON object found in output")
+	}
+	return last, nil
 }
 
 // allowCommandEnvKey reports whether key is safe to forward to the AI backend
