@@ -488,6 +488,21 @@ func (c *Config) DefaultConfiguredBackend() string {
 	return ""
 }
 
+// ResolveBackend maps a raw backend token from a label or config field to a
+// configured backend name. An empty token or the special value "auto" falls
+// back to the default configured backend. An explicit token that does not
+// match any configured backend returns "" so the caller can skip the event.
+func (c *Config) ResolveBackend(raw string) string {
+	normalized := strings.ToLower(strings.TrimSpace(raw))
+	if normalized == "" || normalized == "auto" {
+		return c.DefaultConfiguredBackend()
+	}
+	if _, ok := c.AIBackends[normalized]; !ok {
+		return ""
+	}
+	return normalized
+}
+
 func setDefault(field *string, value string) {
 	if strings.TrimSpace(*field) == "" {
 		*field = value

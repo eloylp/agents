@@ -147,16 +147,9 @@ func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest)
 // token that does not match any configured backend returns "" so the caller
 // can skip the event rather than fail.
 func (e *Engine) resolveBackend(backend string) string {
-	if strings.TrimSpace(backend) == "" {
-		defaultBackend := e.cfg.DefaultConfiguredBackend()
-		if defaultBackend == "" {
-			e.logger.Error().Msg("no default backend configured; expected one of claude or codex")
-		}
-		return defaultBackend
+	resolved := e.cfg.ResolveBackend(backend)
+	if resolved == "" && strings.TrimSpace(backend) == "" {
+		e.logger.Error().Msg("no default backend configured; expected one of claude or codex")
 	}
-	backend = strings.ToLower(strings.TrimSpace(backend))
-	if _, ok := e.cfg.AIBackends[backend]; !ok {
-		return ""
-	}
-	return backend
+	return resolved
 }

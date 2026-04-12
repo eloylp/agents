@@ -114,6 +114,38 @@ func TestDefaultConfiguredBackend(t *testing.T) {
 	}
 }
 
+func TestResolveBackend(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		AIBackends: map[string]AIBackendConfig{
+			"claude": {},
+			"codex":  {},
+		},
+	}
+	tests := []struct {
+		name  string
+		raw   string
+		want  string
+	}{
+		{"empty falls back to default", "", "claude"},
+		{"auto falls back to default", "auto", "claude"},
+		{"AUTO case-insensitive", "AUTO", "claude"},
+		{"explicit claude", "claude", "claude"},
+		{"explicit codex", "codex", "codex"},
+		{"uppercase CLAUDE normalised", "CLAUDE", "claude"},
+		{"whitespace-padded token", "  claude  ", "claude"},
+		{"unknown backend returns empty", "gpt", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := cfg.ResolveBackend(tt.raw); got != tt.want {
+				t.Fatalf("ResolveBackend(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSkillValidation(t *testing.T) {
 	t.Setenv("WEBHOOK_SECRET", "secret")
 

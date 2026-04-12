@@ -258,14 +258,7 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 }
 
 func (s *Scheduler) resolveBackend(configured string) string {
-	configured = ai.NormalizeToken(configured)
-	if configured == "" || configured == "auto" {
-		return s.cfg.DefaultConfiguredBackend()
-	}
-	if _, ok := s.cfg.AIBackends[configured]; !ok {
-		return ""
-	}
-	return configured
+	return s.cfg.ResolveBackend(configured)
 }
 
 func (s *Scheduler) setRunCtx(ctx context.Context) {
