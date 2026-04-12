@@ -179,8 +179,10 @@ func buildCommandEnv(req Request) []string {
 	env = append(env,
 		"AI_DAEMON_WORKFLOW="+req.Workflow,
 		"AI_DAEMON_REPO="+req.Repo,
-		fmt.Sprintf("AI_DAEMON_NUMBER=%d", req.Number),
 	)
+	if req.Number != 0 {
+		env = append(env, fmt.Sprintf("AI_DAEMON_NUMBER=%d", req.Number))
+	}
 	return env
 }
 
