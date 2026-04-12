@@ -2,6 +2,8 @@ package workflow
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,18 +17,44 @@ import (
 
 func intPtr(v int) *int { return &v }
 
+// stubRunner records all Run invocations and optionally delegates to runFn for
+// error injection. It is safe for concurrent use from multiple goroutines.
 type stubRunner struct {
-	calls int
-	last  ai.Request
+	mu    sync.Mutex
+	calls []ai.Request
+	runFn func(ai.Request) error // if nil, every Run succeeds
 }
 
 func (s *stubRunner) Run(_ context.Context, req ai.Request) (ai.Response, error) {
-	s.calls++
-	s.last = req
+	s.mu.Lock()
+	s.calls = append(s.calls, req)
+	s.mu.Unlock()
+	if s.runFn != nil {
+		if err := s.runFn(req); err != nil {
+			return ai.Response{}, err
+		}
+	}
 	return ai.Response{Artifacts: []ai.Artifact{{Type: "issue_comment", PartKey: "p", GitHubID: "1"}}}, nil
 }
 
+func (s *stubRunner) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.calls)
+}
+
+func (s *stubRunner) workflows() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.calls))
+	for i, c := range s.calls {
+		out[i] = c.Workflow
+	}
+	return out
+}
+
 func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
+	t.Parallel()
 	runner := &stubRunner{}
 	cfg := &config.Config{
 		AIBackends: map[string]config.AIBackendConfig{
@@ -52,11 +80,164 @@ func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if runner.calls != 1 {
-		t.Fatalf("expected one runner call, got %d", runner.calls)
+	if runner.callCount() != 1 {
+		t.Fatalf("expected one runner call, got %d", runner.callCount())
 	}
-	if runner.last.Workflow != "issue_refine:codex" {
-		t.Fatalf("expected event label backend codex, got %q", runner.last.Workflow)
+	if wf := runner.workflows()[0]; wf != "issue_refine:codex" {
+		t.Fatalf("expected event label backend codex, got %q", wf)
+	}
+}
+
+func TestHandlePullRequestLabelEvent(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		AIBackends: map[string]config.AIBackendConfig{
+			"claude": {},
+			"codex":  {},
+		},
+		Agents: []config.AgentConfig{
+			{Name: "architect", Skills: []string{"architect"}},
+			{Name: "scout", Skills: []string{"scout"}},
+		},
+	}
+	promptStore := testutil.BuildPromptStore(t, []string{"architect", "scout"}, nil)
+
+	tests := []struct {
+		name               string
+		pr                 PullRequest
+		label              string
+		runFn              func(ai.Request) error
+		wantCalls          int
+		wantWorkflows      []string // non-empty: exact multiset of expected workflows (each entry must appear exactly once)
+		wantErrContains    string
+		wantAllErrContains []string // all substrings that must appear in the joined error
+	}{
+		{
+			name:      "draft-pr-skipped",
+			pr:        PullRequest{Number: 1, Draft: true},
+			label:     "ai:review:claude:architect",
+			wantCalls: 0,
+		},
+		{
+			name:      "unrecognised-label-skipped",
+			pr:        PullRequest{Number: 2},
+			label:     "ci:lint",
+			wantCalls: 0,
+		},
+		{
+			name:      "unknown-backend-skipped",
+			pr:        PullRequest{Number: 3},
+			label:     "ai:review:gpt:architect",
+			wantCalls: 0,
+		},
+		{
+			name:      "unknown-agent-skipped",
+			pr:        PullRequest{Number: 4},
+			label:     "ai:review:claude:unknown",
+			wantCalls: 0,
+		},
+		{
+			name:          "specific-agent-one-call",
+			pr:            PullRequest{Number: 5},
+			label:         "ai:review:claude:architect",
+			wantCalls:     1,
+			wantWorkflows: []string{"pr_review:claude:architect"},
+		},
+		{
+			name:          "all-agents-fan-out",
+			pr:            PullRequest{Number: 6},
+			label:         "ai:review:claude",
+			wantCalls:     2,
+			wantWorkflows: []string{"pr_review:claude:architect", "pr_review:claude:scout"},
+		},
+		{
+			name:  "one-agent-fails-others-still-run",
+			pr:    PullRequest{Number: 7},
+			label: "ai:review:claude",
+			runFn: func(req ai.Request) error {
+				if strings.HasSuffix(req.Workflow, ":architect") {
+					return errors.New("architect failed")
+				}
+				return nil
+			},
+			wantCalls:       2,
+			wantErrContains: "architect failed",
+		},
+		{
+			name:  "all-agents-fail-errors-joined",
+			pr:    PullRequest{Number: 8},
+			label: "ai:review:claude",
+			runFn: func(req ai.Request) error {
+				if strings.HasSuffix(req.Workflow, ":architect") {
+					return errors.New("architect runner down")
+				}
+				return errors.New("scout runner down")
+			},
+			wantCalls:          2,
+			wantAllErrContains: []string{"architect runner down", "scout runner down"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			runner := &stubRunner{runFn: tt.runFn}
+			engine := NewEngine(cfg, map[string]ai.Runner{"claude": runner, "codex": runner}, promptStore, zerolog.Nop())
+
+			err := engine.HandlePullRequestLabelEvent(context.Background(), PRRequest{
+				Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
+				PR:    tt.pr,
+				Label: tt.label,
+			})
+
+			if tt.wantErrContains != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErrContains)
+				}
+				if !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Fatalf("expected error %q to contain %q", err.Error(), tt.wantErrContains)
+				}
+			} else if len(tt.wantAllErrContains) > 0 {
+				if err == nil {
+					t.Fatalf("expected error containing all of %v, got nil", tt.wantAllErrContains)
+				}
+				for _, sub := range tt.wantAllErrContains {
+					if !strings.Contains(err.Error(), sub) {
+						t.Fatalf("expected error %q to contain %q", err.Error(), sub)
+					}
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if got := runner.callCount(); got != tt.wantCalls {
+				t.Fatalf("runner calls: got %d, want %d", got, tt.wantCalls)
+			}
+
+			if len(tt.wantWorkflows) > 0 {
+				// Build a count map for the expected multiset.
+				wantCounts := make(map[string]int, len(tt.wantWorkflows))
+				for _, wf := range tt.wantWorkflows {
+					wantCounts[wf]++
+				}
+				// Build a count map for what was actually dispatched.
+				gotCounts := make(map[string]int)
+				for _, wf := range runner.workflows() {
+					gotCounts[wf]++
+				}
+				for wf, want := range wantCounts {
+					if got := gotCounts[wf]; got != want {
+						t.Fatalf("workflow %q: dispatched %d time(s), want %d", wf, got, want)
+					}
+				}
+				for wf, got := range gotCounts {
+					if _, ok := wantCounts[wf]; !ok {
+						t.Fatalf("unexpected workflow %q dispatched %d time(s)", wf, got)
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -85,11 +266,11 @@ func TestHandleIssueLabelEventAutoBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if runner.calls != 1 {
-		t.Fatalf("expected one runner call for auto backend, got %d", runner.calls)
+	if got := runner.callCount(); got != 1 {
+		t.Fatalf("expected one runner call for auto backend, got %d", got)
 	}
-	if runner.last.Workflow != "issue_refine:claude" {
-		t.Fatalf("auto backend should resolve to claude, got workflow %q", runner.last.Workflow)
+	if wfs := runner.workflows(); wfs[0] != "issue_refine:claude" {
+		t.Fatalf("auto backend should resolve to claude, got workflow %q", wfs[0])
 	}
 }
 
