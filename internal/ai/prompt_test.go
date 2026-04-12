@@ -42,25 +42,13 @@ func TestBuildPRReviewPromptIncludesRequirements(t *testing.T) {
 }
 
 func TestBuildPRReviewPromptWithInlineSkill(t *testing.T) {
-	dir := t.TempDir()
-	issueDir := filepath.Join(dir, "issue_refinement_prompts")
-	_ = os.MkdirAll(issueDir, 0o755)
-	_ = os.WriteFile(filepath.Join(issueDir, "PROMPT.md"), []byte("issue {{.Repo}} #{{.Number}}"), 0o644)
-	prBaseDir := filepath.Join(dir, "pr_review_prompts", "base")
-	_ = os.MkdirAll(prBaseDir, 0o755)
-	prBasePath := filepath.Join(prBaseDir, "PROMPT.md")
-	_ = os.WriteFile(prBasePath, []byte(`{{.AgentHeading}}
-{{template "agent_guidance" .}}`), 0o644)
-
+	issueBase, prBase, autoBase := makeTestPromptSources(t)
 	skills := []ai.SkillGuidance{
 		{Name: "custom", Prompt: "Focus on custom things like widgets and gadgets."},
 	}
 	prAgents := []ai.AgentSkills{
 		{Name: "custom", Skills: []string{"custom"}},
 	}
-	issueBase := ai.PromptSource{PromptFile: filepath.Join(issueDir, "PROMPT.md")}
-	prBase := ai.PromptSource{PromptFile: prBasePath}
-	autoBase := ai.PromptSource{Prompt: "{{.Task}} {{template \"agent_guidance\" .}}"}
 	store, err := ai.NewPromptStore(issueBase, prBase, autoBase, skills, prAgents, nil)
 	if err != nil {
 		t.Fatalf("prompt store: %v", err)
@@ -75,16 +63,7 @@ func TestBuildPRReviewPromptWithInlineSkill(t *testing.T) {
 }
 
 func TestBuildPRReviewPromptWithMultipleSkills(t *testing.T) {
-	dir := t.TempDir()
-	issueDir := filepath.Join(dir, "issue_refinement_prompts")
-	_ = os.MkdirAll(issueDir, 0o755)
-	_ = os.WriteFile(filepath.Join(issueDir, "PROMPT.md"), []byte("issue {{.Repo}} #{{.Number}}"), 0o644)
-	prBaseDir := filepath.Join(dir, "pr_review_prompts", "base")
-	_ = os.MkdirAll(prBaseDir, 0o755)
-	prBasePath := filepath.Join(prBaseDir, "PROMPT.md")
-	_ = os.WriteFile(prBasePath, []byte(`{{.AgentHeading}}
-{{template "agent_guidance" .}}`), 0o644)
-
+	issueBase, prBase, autoBase := makeTestPromptSources(t)
 	skills := []ai.SkillGuidance{
 		{Name: "architect", Prompt: "Focus on architecture."},
 		{Name: "security", Prompt: "Focus on security."},
@@ -92,9 +71,6 @@ func TestBuildPRReviewPromptWithMultipleSkills(t *testing.T) {
 	prAgents := []ai.AgentSkills{
 		{Name: "full-reviewer", Skills: []string{"architect", "security"}},
 	}
-	issueBase := ai.PromptSource{PromptFile: filepath.Join(issueDir, "PROMPT.md")}
-	prBase := ai.PromptSource{PromptFile: prBasePath}
-	autoBase := ai.PromptSource{Prompt: "{{.Task}} {{template \"agent_guidance\" .}}"}
 	store, err := ai.NewPromptStore(issueBase, prBase, autoBase, skills, prAgents, nil)
 	if err != nil {
 		t.Fatalf("prompt store: %v", err)
@@ -109,6 +85,32 @@ func TestBuildPRReviewPromptWithMultipleSkills(t *testing.T) {
 	if !strings.Contains(prompt, "Focus on security.") {
 		t.Fatalf("expected security guidance in prompt, got: %s", prompt)
 	}
+}
+
+// makeTestPromptSources creates minimal on-disk fixture files for issue and PR
+// base prompts, returning the three PromptSource values used by most PR prompt
+// tests. Errors are fatal so callers don't need to check them.
+func makeTestPromptSources(t *testing.T) (issueBase, prBase, autoBase ai.PromptSource) {
+	t.Helper()
+	dir := t.TempDir()
+	issueDir := filepath.Join(dir, "issue_refinement_prompts")
+	if err := os.MkdirAll(issueDir, 0o755); err != nil {
+		t.Fatalf("mkdir issue prompts: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(issueDir, "PROMPT.md"), []byte("issue {{.Repo}} #{{.Number}}"), 0o644); err != nil {
+		t.Fatalf("write issue prompt: %v", err)
+	}
+	prBaseDir := filepath.Join(dir, "pr_review_prompts", "base")
+	if err := os.MkdirAll(prBaseDir, 0o755); err != nil {
+		t.Fatalf("mkdir pr base: %v", err)
+	}
+	prBasePath := filepath.Join(prBaseDir, "PROMPT.md")
+	if err := os.WriteFile(prBasePath, []byte("{{.AgentHeading}}\n{{template \"agent_guidance\" .}}"), 0o644); err != nil {
+		t.Fatalf("write pr base prompt: %v", err)
+	}
+	return ai.PromptSource{PromptFile: filepath.Join(issueDir, "PROMPT.md")},
+		ai.PromptSource{PromptFile: prBasePath},
+		ai.PromptSource{Prompt: `{{.Task}} {{template "agent_guidance" .}}`}
 }
 
 func TestPromptStoreValidateFailsOnMissingTemplate(t *testing.T) {
