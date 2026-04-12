@@ -282,7 +282,7 @@ func (c *Config) normalizeAutonomousAgents() {
 		c.AutonomousAgents[i].Repo = strings.TrimSpace(c.AutonomousAgents[i].Repo)
 		for j := range c.AutonomousAgents[i].Agents {
 			a := &c.AutonomousAgents[i].Agents[j]
-			a.Name = strings.TrimSpace(a.Name)
+			a.Name = strings.ToLower(strings.TrimSpace(a.Name))
 			a.Cron = strings.TrimSpace(a.Cron)
 			a.Description = strings.TrimSpace(a.Description)
 			a.Backend = strings.ToLower(strings.TrimSpace(a.Backend))
@@ -456,13 +456,15 @@ func (c *Config) validateAutonomousAgents(skillNames map[string]struct{}) error 
 		if repo.Repo == "" {
 			return errors.New("config: autonomous agent repo is required")
 		}
+		names := make(map[string]struct{}, len(repo.Agents))
 		for _, agent := range repo.Agents {
-			if agent.Name != strings.ToLower(strings.TrimSpace(agent.Name)) {
-				return fmt.Errorf("config: autonomous agent name must be lowercase and trimmed for repo %s", repo.Repo)
-			}
 			if agent.Name == "" {
 				return fmt.Errorf("config: autonomous agent name required for repo %s", repo.Repo)
 			}
+			if _, dup := names[agent.Name]; dup {
+				return fmt.Errorf("config: duplicate autonomous agent name %q for repo %s", agent.Name, repo.Repo)
+			}
+			names[agent.Name] = struct{}{}
 			if agent.Cron == "" {
 				return fmt.Errorf("config: autonomous agent cron required for repo %s", repo.Repo)
 			}
