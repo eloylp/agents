@@ -240,7 +240,7 @@ func (s *Scheduler) TriggerAgent(ctx context.Context, agentName, repo string) er
 
 func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent config.AutonomousAgentConfig) error {
 	logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Logger()
-	backend := s.resolveBackend(agent.Backend)
+	backend := s.cfg.ResolveBackend(agent.Backend)
 	if backend == "" {
 		return fmt.Errorf("no configured backend for autonomous agent run (configured: %q)", agent.Backend)
 	}
@@ -267,10 +267,6 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		}
 		return nil
 	})
-}
-
-func (s *Scheduler) resolveBackend(configured string) string {
-	return s.cfg.ResolveBackend(configured)
 }
 
 func (s *Scheduler) setRunCtx(ctx context.Context) {
