@@ -355,3 +355,86 @@ func TestHandlePullRequestLabelEventCollectsAllAgentErrors(t *testing.T) {
 		t.Errorf("expected errors.Is match for runner.err; got %v", err)
 	}
 }
+
+func TestNewEngineDefaultsMaxConcurrentAgentsWhenZeroValue(t *testing.T) {
+	t.Parallel()
+	// A zero-value config (as created in unit tests without config.Load) must
+	// not deadlock: NewEngine must fall back to defaultMaxConcurrentAgents.
+	cfg := &config.Config{}
+	engine := NewEngine(cfg, nil, nil, zerolog.Nop())
+	if engine.maxConcurrentAgents != defaultMaxConcurrentAgents {
+		t.Fatalf("expected maxConcurrentAgents=%d for zero-value config, got %d",
+			defaultMaxConcurrentAgents, engine.maxConcurrentAgents)
+	}
+}
+
+// blockingRunner blocks until released, allowing control over in-flight goroutine count.
+type blockingRunner struct {
+	calls  atomic.Int64
+	gate   chan struct{} // close to unblock all
+	start  chan struct{} // receives a token for each Run that starts
+}
+
+func (r *blockingRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
+	r.calls.Add(1)
+	r.start <- struct{}{}
+	<-r.gate
+	return ai.Response{Artifacts: []ai.Artifact{{Type: "pr_comment", PartKey: "p", GitHubID: "1"}}}, nil
+}
+
+func TestHandlePullRequestLabelEventRespectsMaxConcurrentAgents(t *testing.T) {
+	t.Parallel()
+
+	const agentCount = 4
+	const cap = 2 // semaphore cap — only 2 agents may run at once
+
+	agents := make([]config.AgentConfig, agentCount)
+	skills := make([]string, agentCount)
+	for i := range agents {
+		name := fmt.Sprintf("agent%d", i)
+		agents[i] = config.AgentConfig{Name: name, Skills: []string{name}}
+		skills[i] = name
+	}
+
+	capVal := cap
+	cfg := &config.Config{
+		AIBackends: map[string]config.AIBackendConfig{"claude": {}},
+		Agents:     agents,
+		Processor:  config.ProcessorConfig{MaxConcurrentAgents: &capVal},
+	}
+	promptStore := testutil.BuildPromptStore(t, skills, nil)
+
+	runner := &blockingRunner{
+		gate:  make(chan struct{}),
+		start: make(chan struct{}, agentCount),
+	}
+	engine := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, promptStore, zerolog.Nop())
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = engine.HandlePullRequestLabelEvent(context.Background(), PRRequest{
+			Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
+			PR:    PullRequest{Number: 1},
+			Label: "ai:review",
+		})
+	}()
+
+	// Wait for exactly `cap` goroutines to start, confirming the semaphore is
+	// saturated and the remaining agents are queued behind it.
+	for i := 0; i < cap; i++ {
+		<-runner.start
+	}
+	if got := runner.calls.Load(); got != int64(cap) {
+		t.Fatalf("expected exactly %d concurrent runners with cap=%d, got %d", cap, cap, got)
+	}
+
+	// Unblock all runners and wait for the handler to finish.
+	close(runner.gate)
+	wg.Wait()
+
+	if got := runner.calls.Load(); got != int64(agentCount) {
+		t.Fatalf("expected all %d agents to run, got %d", agentCount, got)
+	}
+}
