@@ -492,6 +492,60 @@ func (s *stubStatusProvider) AgentStatuses() []AgentStatus {
 	return s.statuses
 }
 
+// stubEventQueue is a minimal EventQueue that records pushes and can be
+// configured to return a specific error.
+type stubEventQueue struct {
+	issuePushed int
+	prPushed    int
+	err         error
+}
+
+func (q *stubEventQueue) PushIssue(_ context.Context, _ workflow.IssueRequest) error {
+	q.issuePushed++
+	return q.err
+}
+
+func (q *stubEventQueue) PushPR(_ context.Context, _ workflow.PRRequest) error {
+	q.prPushed++
+	return q.err
+}
+
+func (q *stubEventQueue) QueueStats() (issues, prs workflow.QueueStat) {
+	return workflow.QueueStat{Buffered: q.issuePushed, Capacity: 256},
+		workflow.QueueStat{Buffered: q.prPushed, Capacity: 256}
+}
+
+func TestServerAcceptsEventQueueInterface(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		HTTP: config.HTTPConfig{
+			MaxBodyBytes:       1024,
+			WebhookSecret:      "secret",
+			DeliveryTTLSeconds: 3600,
+		},
+		Repos: []config.RepoConfig{{FullName: "owner/repo", Enabled: true}},
+	}
+	queue := &stubEventQueue{}
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), queue, nil, zerolog.Nop(), nil)
+
+	body := []byte(`{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":1,"title":"t","body":"b","updated_at":"2026-02-15T00:00:00Z","labels":[{"name":"ai:refine"}]}}`)
+	sig := signatureForTests(body, "secret")
+
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(string(body)))
+	req.Header.Set("X-GitHub-Event", "issues")
+	req.Header.Set("X-GitHub-Delivery", "delivery-stub-1")
+	req.Header.Set("X-Hub-Signature-256", sig)
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, req)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected %d, got %d", http.StatusAccepted, rr.Code)
+	}
+	if queue.issuePushed != 1 {
+		t.Fatalf("expected 1 issue pushed via stub, got %d", queue.issuePushed)
+	}
+}
+
 func signatureForTests(payload []byte, secret string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write(payload)
