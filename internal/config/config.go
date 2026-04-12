@@ -10,6 +10,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// validAIBackendNames is the canonical ordered list of supported AI backend
+// names. Preference order for DefaultConfiguredBackend follows slice order.
+// Adding a new backend only requires updating this slice.
+var validAIBackendNames = []string{"claude", "codex"}
+
 const (
 	defaultHTTPListenAddr          = ":8080"
 	defaultHTTPStatusPath          = "/status"
@@ -345,9 +350,13 @@ func (c *Config) validateBackends() error {
 	if len(c.AIBackends) == 0 {
 		return errors.New("config: at least one ai_backends entry is required")
 	}
+	allowed := make(map[string]struct{}, len(validAIBackendNames))
+	for _, n := range validAIBackendNames {
+		allowed[n] = struct{}{}
+	}
 	for name, backend := range c.AIBackends {
-		if name != "claude" && name != "codex" {
-			return fmt.Errorf("config: unsupported ai backend %q (supported: claude, codex)", name)
+		if _, ok := allowed[name]; !ok {
+			return fmt.Errorf("config: unsupported ai backend %q (supported: %s)", name, strings.Join(validAIBackendNames, ", "))
 		}
 		if backend.Mode != "noop" && backend.Mode != "command" {
 			return fmt.Errorf("config: backend %q has unsupported mode %q (supported: noop, command)", name, backend.Mode)
@@ -457,8 +466,15 @@ func (c *Config) validateAutonomousAgents(skillNames map[string]struct{}) error 
 			if agent.Cron == "" {
 				return fmt.Errorf("config: autonomous agent cron required for repo %s", repo.Repo)
 			}
-			if agent.Backend != "auto" && agent.Backend != "claude" && agent.Backend != "codex" {
-				return fmt.Errorf("config: autonomous agent backend %q for repo %s must be one of auto, claude, codex", agent.Backend, repo.Repo)
+			validBackend := agent.Backend == "auto"
+			for _, n := range validAIBackendNames {
+				if agent.Backend == n {
+					validBackend = true
+					break
+				}
+			}
+			if !validBackend {
+				return fmt.Errorf("config: autonomous agent backend %q for repo %s must be one of auto, %s", agent.Backend, repo.Repo, strings.Join(validAIBackendNames, ", "))
 			}
 			if len(agent.Skills) == 0 {
 				return fmt.Errorf("config: autonomous agent %q for repo %s must reference at least one skill", agent.Name, repo.Repo)
@@ -535,14 +551,13 @@ func (c *Config) RepoByName(fullName string) (RepoConfig, bool) {
 }
 
 // DefaultConfiguredBackend returns the name of the preferred backend when no
-// explicit backend is specified in a label. claude is preferred over codex
-// when both are configured.
+// explicit backend is specified in a label. Preference follows the order of
+// validAIBackendNames (claude before codex).
 func (c *Config) DefaultConfiguredBackend() string {
-	if _, ok := c.AIBackends["claude"]; ok {
-		return "claude"
-	}
-	if _, ok := c.AIBackends["codex"]; ok {
-		return "codex"
+	for _, name := range validAIBackendNames {
+		if _, ok := c.AIBackends[name]; ok {
+			return name
+		}
 	}
 	return ""
 }
