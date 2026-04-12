@@ -471,3 +471,50 @@ autonomous_agents:
 		t.Fatalf("expected validation error for autonomous agents")
 	}
 }
+
+func TestLoadRejectsCommandModeWithEmptyCommand(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: command
+    # command field intentionally omitted
+    args: ["-p", "--dangerously-skip-permissions"]
+repos:
+  - full_name: "owner/repo"
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected load to fail when mode=command and command is empty")
+	}
+}
+
+func TestLoadAcceptsCommandModeWithNonEmptyCommand(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: command
+    command: claude
+    args: ["-p", "--dangerously-skip-permissions"]
+repos:
+  - full_name: "owner/repo"
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(path); err != nil {
+		t.Fatalf("unexpected error for valid command mode config: %v", err)
+	}
+}
