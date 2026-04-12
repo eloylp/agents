@@ -129,8 +129,8 @@ type AIBackendConfig struct {
 	Mode             string   `yaml:"mode"`
 	Command          string   `yaml:"command"`
 	Args             []string `yaml:"args"`
-	TimeoutSeconds   int      `yaml:"timeout_seconds"`
-	MaxPromptChars   int      `yaml:"max_prompt_chars"`
+	TimeoutSeconds   *int     `yaml:"timeout_seconds"`
+	MaxPromptChars   *int     `yaml:"max_prompt_chars"`
 	RedactionSaltEnv string   `yaml:"redaction_salt_env"`
 }
 
@@ -244,8 +244,14 @@ func (c *Config) normalizeBackends() {
 			continue
 		}
 		setDefault(&backend.Mode, "noop")
-		setDefaultInt(&backend.TimeoutSeconds, defaultAITimeoutSeconds)
-		setDefaultInt(&backend.MaxPromptChars, defaultMaxPromptChars)
+		if backend.TimeoutSeconds == nil {
+			v := defaultAITimeoutSeconds
+			backend.TimeoutSeconds = &v
+		}
+		if backend.MaxPromptChars == nil {
+			v := defaultMaxPromptChars
+			backend.MaxPromptChars = &v
+		}
 		backend.Command = strings.TrimSpace(backend.Command)
 		normalized[key] = backend
 	}

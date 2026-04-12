@@ -73,7 +73,13 @@ func (r *CommandRunner) Run(ctx context.Context, req Request) (Response, error) 
 }
 
 func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, req Request, prompt string) (Response, error) {
-	cmdCtx, cancel := context.WithTimeout(ctx, r.timeout)
+	var cmdCtx context.Context
+	var cancel context.CancelFunc
+	if r.timeout > 0 {
+		cmdCtx, cancel = context.WithTimeout(ctx, r.timeout)
+	} else {
+		cmdCtx, cancel = ctx, func() {}
+	}
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, r.command, r.args...)

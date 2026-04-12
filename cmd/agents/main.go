@@ -122,7 +122,7 @@ func setupPromptStore(cfg *config.Config, logger zerolog.Logger) (*ai.PromptStor
 func setupRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runner {
 	runners := make(map[string]ai.Runner, len(cfg.AIBackends))
 	for name, backend := range cfg.AIBackends {
-		runners[name] = ai.NewCommandRunner(name, backend.Mode, backend.Command, backend.Args, backend.TimeoutSeconds, backend.MaxPromptChars, backend.RedactionSaltEnv, logger)
+		runners[name] = ai.NewCommandRunner(name, backend.Mode, backend.Command, backend.Args, *backend.TimeoutSeconds, *backend.MaxPromptChars, backend.RedactionSaltEnv, logger)
 	}
 	return runners
 }
