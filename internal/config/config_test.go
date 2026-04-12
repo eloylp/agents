@@ -639,17 +639,54 @@ autonomous_agents:
     agents:
       - name: ""
         cron: ""
-  - repo: "owner/repo"
-    enabled: true
-    agents:
-      - name: "UpperCase"
-        cron: "* * * * *"
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	if _, err := Load(path); err == nil {
 		t.Fatalf("expected validation error for autonomous agents")
+	}
+}
+
+func TestAutonomousAgentNameNormalized(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+skills:
+  - name: architect
+    prompt: "focus on architecture"
+agents:
+  - name: architect
+    skills: [architect]
+repos:
+  - full_name: "owner/repo"
+    enabled: true
+autonomous_agents:
+  - repo: "owner/repo"
+    enabled: true
+    agents:
+      - name: "Scout"
+        cron: "* * * * *"
+        skills: [architect]
+        tasks:
+          - name: "scan"
+            prompt: "scan issues"
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("expected Load to succeed for mixed-case autonomous agent name, got: %v", err)
+	}
+	if got := cfg.AutonomousAgents[0].Agents[0].Name; got != "scout" {
+		t.Errorf("expected name normalized to %q, got %q", "scout", got)
 	}
 }
 
@@ -1069,6 +1106,144 @@ autonomous_agents:
 	}
 	if task.Prompt != "" {
 		t.Fatalf("expected empty inline Prompt, got %q", task.Prompt)
+	}
+}
+
+func TestLoadRejectsDuplicateAutonomousAgentNames(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	tests := []struct {
+		name       string
+		content    string
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{
+			name: "exact duplicate names rejected",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+skills:
+  - name: architect
+    prompt: "focus on architecture"
+agents:
+  - name: architect
+    skills: [architect]
+repos:
+  - full_name: "owner/repo"
+    enabled: true
+autonomous_agents:
+  - repo: "owner/repo"
+    enabled: true
+    agents:
+      - name: "scout"
+        cron: "* * * * *"
+        skills: [architect]
+        tasks:
+          - name: "scan"
+            prompt: "scan issues"
+      - name: "scout"
+        cron: "* * * * *"
+        skills: [architect]
+        tasks:
+          - name: "scan"
+            prompt: "scan issues"
+`,
+			wantErr:    true,
+			wantErrMsg: `config: duplicate autonomous agent name "scout" for repo owner/repo`,
+		},
+		{
+			name: "case-only duplicates collapse after normalization and are rejected",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+skills:
+  - name: architect
+    prompt: "focus on architecture"
+agents:
+  - name: architect
+    skills: [architect]
+repos:
+  - full_name: "owner/repo"
+    enabled: true
+autonomous_agents:
+  - repo: "owner/repo"
+    enabled: true
+    agents:
+      - name: "Scout"
+        cron: "* * * * *"
+        skills: [architect]
+        tasks:
+          - name: "scan"
+            prompt: "scan issues"
+      - name: "scout"
+        cron: "* * * * *"
+        skills: [architect]
+        tasks:
+          - name: "scan"
+            prompt: "scan issues"
+`,
+			wantErr:    true,
+			wantErrMsg: `config: duplicate autonomous agent name "scout" for repo owner/repo`,
+		},
+		{
+			name: "distinct names in same repo accepted",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+skills:
+  - name: architect
+    prompt: "focus on architecture"
+agents:
+  - name: architect
+    skills: [architect]
+repos:
+  - full_name: "owner/repo"
+    enabled: true
+autonomous_agents:
+  - repo: "owner/repo"
+    enabled: true
+    agents:
+      - name: "scout"
+        cron: "* * * * *"
+        skills: [architect]
+        tasks:
+          - name: "scan"
+            prompt: "scan issues"
+      - name: "architect"
+        cron: "* * * * *"
+        skills: [architect]
+        tasks:
+          - name: "review"
+            prompt: "review issues"
+`,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(path)
+			if tt.wantErr && err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if tt.wantErr && err != nil && tt.wantErrMsg != "" && err.Error() != tt.wantErrMsg {
+				t.Fatalf("expected error %q, got %q", tt.wantErrMsg, err.Error())
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("expected valid config, got: %v", err)
+			}
+		})
 	}
 }
 
