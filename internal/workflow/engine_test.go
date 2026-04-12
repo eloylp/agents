@@ -3,10 +3,11 @@ package workflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/rs/zerolog"
 
@@ -53,6 +54,20 @@ func (s *stubRunner) workflows() []string {
 	return out
 }
 
+// countingRunner records how many times Run is called, atomically.
+type countingRunner struct {
+	calls atomic.Int64
+	err   error
+}
+
+func (r *countingRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
+	r.calls.Add(1)
+	if r.err != nil {
+		return ai.Response{}, r.err
+	}
+	return ai.Response{Artifacts: []ai.Artifact{{Type: "pr_comment", PartKey: "p", GitHubID: "1"}}}, nil
+}
+
 func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
 	t.Parallel()
 	runner := &stubRunner{}
@@ -64,7 +79,6 @@ func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
 		Agents: []config.AgentConfig{
 			{Name: "architect", Skills: []string{"architect"}},
 		},
-		Processor: config.ProcessorConfig{MaxConcurrentAgents: intPtr(4)},
 	}
 	promptStore := testutil.BuildPromptStore(t, []string{"architect"}, nil)
 	engine := NewEngine(cfg, map[string]ai.Runner{"claude": runner, "codex": runner}, promptStore, zerolog.Nop())
@@ -274,136 +288,153 @@ func TestHandleIssueLabelEventAutoBackend(t *testing.T) {
 	}
 }
 
-// concurrencyTrackingRunner records the peak number of concurrent Run calls.
-type concurrencyTrackingRunner struct {
-	mu      sync.Mutex
-	current int
-	peak    int
-	// started is sent to once each time a Run call begins, allowing tests to
-	// synchronize on exactly N calls being in-flight simultaneously.
-	started chan struct{}
-	// blockUntil is closed to unblock all in-flight Run calls simultaneously,
-	// ensuring overlap is measurable.
-	blockUntil chan struct{}
-}
-
-func newConcurrencyTrackingRunner() *concurrencyTrackingRunner {
-	return &concurrencyTrackingRunner{
-		started:    make(chan struct{}, 16),
-		blockUntil: make(chan struct{}),
-	}
-}
-
-func (r *concurrencyTrackingRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
-	r.mu.Lock()
-	r.current++
-	if r.current > r.peak {
-		r.peak = r.current
-	}
-	r.mu.Unlock()
-
-	r.started <- struct{}{} // notify test that one more Run is in-flight
-
-	<-r.blockUntil // hold the slot until the test releases all callers
-
-	r.mu.Lock()
-	r.current--
-	r.mu.Unlock()
-	return ai.Response{}, nil
-}
-
-// TestHandlePRLabelEventRespectsConcurrencyLimit verifies that when
-// agent=all fans out to more agents than MaxConcurrentAgents, the semaphore
-// saturates at exactly the configured limit before any call is released.
-func TestHandlePRLabelEventRespectsConcurrencyLimit(t *testing.T) {
+func TestHandlePullRequestLabelEventInvokesAllAgents(t *testing.T) {
 	t.Parallel()
-	const limit = 2
-	agents := []string{"architect", "scout", "coder", "reviewer"}
-
-	tracker := newConcurrencyTrackingRunner()
+	runner := &countingRunner{}
 	cfg := &config.Config{
-		AIBackends: map[string]config.AIBackendConfig{"claude": {}},
+		AIBackends: map[string]config.AIBackendConfig{
+			"claude": {},
+		},
 		Agents: []config.AgentConfig{
 			{Name: "architect", Skills: []string{"architect"}},
-			{Name: "scout", Skills: []string{"scout"}},
-			{Name: "coder", Skills: []string{"coder"}},
 			{Name: "reviewer", Skills: []string{"reviewer"}},
 		},
-		Processor: config.ProcessorConfig{MaxConcurrentAgents: intPtr(limit)},
 	}
-	promptStore := testutil.BuildPromptStore(t, agents, nil)
-	engine := NewEngine(cfg, map[string]ai.Runner{"claude": tracker}, promptStore, zerolog.Nop())
+	promptStore := testutil.BuildPromptStore(t, []string{"architect", "reviewer"}, nil)
+	engine := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, promptStore, zerolog.Nop())
 
-	done := make(chan struct{})
+	err := engine.HandlePullRequestLabelEvent(context.Background(), PRRequest{
+		Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
+		PR:    PullRequest{Number: 5},
+		Label: "ai:review",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := runner.calls.Load(); got != 2 {
+		t.Fatalf("expected 2 runner calls (one per agent), got %d", got)
+	}
+}
+
+func TestHandlePullRequestLabelEventCollectsAllAgentErrors(t *testing.T) {
+	t.Parallel()
+	runner := &countingRunner{err: errors.New("backend unavailable")}
+	cfg := &config.Config{
+		AIBackends: map[string]config.AIBackendConfig{
+			"claude": {},
+		},
+		Agents: []config.AgentConfig{
+			{Name: "architect", Skills: []string{"architect"}},
+			{Name: "reviewer", Skills: []string{"reviewer"}},
+		},
+	}
+	promptStore := testutil.BuildPromptStore(t, []string{"architect", "reviewer"}, nil)
+	engine := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, promptStore, zerolog.Nop())
+
+	err := engine.HandlePullRequestLabelEvent(context.Background(), PRRequest{
+		Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
+		PR:    PullRequest{Number: 5},
+		Label: "ai:review",
+	})
+	if err == nil {
+		t.Fatal("expected error from failing agents, got nil")
+	}
+	// Both agents should have been attempted despite the first one erroring.
+	if got := runner.calls.Load(); got != 2 {
+		t.Fatalf("expected 2 runner calls, got %d — one agent may have been skipped", got)
+	}
+	// Both agent-specific error prefixes must appear in the joined error.
+	errStr := err.Error()
+	for _, agent := range []string{"architect", "reviewer"} {
+		wantSubstr := fmt.Sprintf("agent claude/%s:", agent)
+		if !strings.Contains(errStr, wantSubstr) {
+			t.Errorf("expected error to contain %q; got: %v", wantSubstr, err)
+		}
+	}
+	if !errors.Is(err, runner.err) {
+		t.Errorf("expected errors.Is match for runner.err; got %v", err)
+	}
+}
+
+func TestNewEngineDefaultsMaxConcurrentAgentsWhenZeroValue(t *testing.T) {
+	t.Parallel()
+	// A zero-value config (as created in unit tests without config.Load) must
+	// not deadlock: NewEngine must fall back to defaultMaxConcurrentAgents.
+	cfg := &config.Config{}
+	engine := NewEngine(cfg, nil, nil, zerolog.Nop())
+	if engine.maxConcurrentAgents != defaultMaxConcurrentAgents {
+		t.Fatalf("expected maxConcurrentAgents=%d for zero-value config, got %d",
+			defaultMaxConcurrentAgents, engine.maxConcurrentAgents)
+	}
+}
+
+// blockingRunner blocks until released, allowing control over in-flight goroutine count.
+type blockingRunner struct {
+	calls  atomic.Int64
+	gate   chan struct{} // close to unblock all
+	start  chan struct{} // receives a token for each Run that starts
+}
+
+func (r *blockingRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
+	r.calls.Add(1)
+	r.start <- struct{}{}
+	<-r.gate
+	return ai.Response{Artifacts: []ai.Artifact{{Type: "pr_comment", PartKey: "p", GitHubID: "1"}}}, nil
+}
+
+func TestHandlePullRequestLabelEventRespectsMaxConcurrentAgents(t *testing.T) {
+	t.Parallel()
+
+	const agentCount = 4
+	const cap = 2 // semaphore cap — only 2 agents may run at once
+
+	agents := make([]config.AgentConfig, agentCount)
+	skills := make([]string, agentCount)
+	for i := range agents {
+		name := fmt.Sprintf("agent%d", i)
+		agents[i] = config.AgentConfig{Name: name, Skills: []string{name}}
+		skills[i] = name
+	}
+
+	capVal := cap
+	cfg := &config.Config{
+		AIBackends: map[string]config.AIBackendConfig{"claude": {}},
+		Agents:     agents,
+		Processor:  config.ProcessorConfig{MaxConcurrentAgents: &capVal},
+	}
+	promptStore := testutil.BuildPromptStore(t, skills, nil)
+
+	runner := &blockingRunner{
+		gate:  make(chan struct{}),
+		start: make(chan struct{}, agentCount),
+	}
+	engine := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, promptStore, zerolog.Nop())
+
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
-		defer close(done)
+		defer wg.Done()
 		_ = engine.HandlePullRequestLabelEvent(context.Background(), PRRequest{
-			Repo:  RepoRef{FullName: "owner/repo"},
+			Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
 			PR:    PullRequest{Number: 1},
 			Label: "ai:review",
 		})
 	}()
 
-	// Wait for exactly `limit` Run calls to start and block, proving the
-	// semaphore has been fully saturated before we inspect peak.
-	for i := 0; i < limit; i++ {
-		select {
-		case <-tracker.started:
-		case <-time.After(5 * time.Second):
-			t.Fatalf("timed out waiting for Run call %d/%d to start", i+1, limit)
-		}
+	// Wait for exactly `cap` goroutines to start, confirming the semaphore is
+	// saturated and the remaining agents are queued behind it.
+	for i := 0; i < cap; i++ {
+		<-runner.start
+	}
+	if got := runner.calls.Load(); got != int64(cap) {
+		t.Fatalf("expected exactly %d concurrent runners with cap=%d, got %d", cap, cap, got)
 	}
 
-	tracker.mu.Lock()
-	peakAtSaturation := tracker.peak
-	tracker.mu.Unlock()
+	// Unblock all runners and wait for the handler to finish.
+	close(runner.gate)
+	wg.Wait()
 
-	if peakAtSaturation != limit {
-		t.Errorf("expected peak == limit (%d) when semaphore is saturated, got %d", limit, peakAtSaturation)
-	}
-
-	// Release all blocked runners so the handler can complete.
-	close(tracker.blockUntil)
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("HandlePullRequestLabelEvent did not complete after releasing runners")
-	}
-
-	if tracker.peak > limit {
-		t.Errorf("peak concurrency %d exceeds configured limit %d", tracker.peak, limit)
-	}
-}
-
-// TestNewEngineZeroMaxConcurrentAgentsFallsBackToDefault verifies that
-// NewEngine applied to a zero-value Config (as test code often builds)
-// does not create a semaphore with weight 0, which would block every
-// Acquire call indefinitely.
-func TestNewEngineZeroMaxConcurrentAgentsFallsBackToDefault(t *testing.T) {
-	t.Parallel()
-	// Config with MaxConcurrentAgents unset (zero value).
-	cfg := &config.Config{
-		AIBackends: map[string]config.AIBackendConfig{"claude": {}},
-		Agents:     []config.AgentConfig{{Name: "architect", Skills: []string{"architect"}}},
-	}
-	runner := &stubRunner{}
-	promptStore := testutil.BuildPromptStore(t, []string{"architect"}, nil)
-	engine := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, promptStore, zerolog.Nop())
-
-	if engine.maxConcurrentAgents <= 0 {
-		t.Fatalf("expected maxConcurrentAgents > 0, got %d", engine.maxConcurrentAgents)
-	}
-
-	// A PR-review fan-out must complete without deadlocking.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	err := engine.HandlePullRequestLabelEvent(ctx, PRRequest{
-		Repo:  RepoRef{FullName: "owner/repo"},
-		PR:    PullRequest{Number: 1},
-		Label: "ai:review",
-	})
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
+	if got := runner.calls.Load(); got != int64(agentCount) {
+		t.Fatalf("expected all %d agents to run, got %d", agentCount, got)
 	}
 }
