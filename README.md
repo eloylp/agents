@@ -67,7 +67,7 @@ Produces **one structured comment** on the issue covering feasibility, complexit
 | `ai:review:<backend>:<agent>` | Review with a specific backend and **single** agent |
 | `ai:review:<backend>:all` | Review with a specific backend, **all** agents concurrently (explicit) |
 
-Available agents are defined in the `agents` section of `config.yaml`. The default configuration ships with: `architect`, `security`, `testing`, `devops`, and `ux`. You can add new agents without code changes — just add an entry to `agents` with a `prompt_file` or inline `prompt`. Any defined agent can be used with any backend via labels.
+Available agents are defined in the `agents` section of `config.yaml`. Each agent references one or more `skills` that carry the domain guidance. The example config ships with: `arch-reviewer`, `sec-reviewer`, `test-reviewer`, `ops-reviewer`, and `ux-reviewer`. You can add new agents without code changes — just add an entry to `agents` with the desired `skills`. Any defined agent can be used with any backend via labels.
 
 When using `:all`, every defined agent runs **concurrently** — one review comment per specialist.
 
@@ -143,25 +143,27 @@ Copy `config.example.yaml` to `config.yaml` and adapt it to your environment:
 
 ```yaml
 log:
-  level: info           # debug | info | warn | error
-  format: text          # text (human-readable, default) | json (raw JSON lines)
+  level: info    # trace, debug, info, warn, error, fatal
+  format: text   # text (human-readable) or json (structured)
 
 http:
   listen_addr: ":8080"
   webhook_path: /webhooks/github
   status_path: /status
-  webhook_secret_env: GITHUB_WEBHOOK_SECRET   # env var name (not the secret itself)
+  agents_run_path: /agents/run          # POST endpoint for on-demand agent triggers
+  webhook_secret_env: GITHUB_WEBHOOK_SECRET
+  api_key_env: AGENTS_API_KEY           # Bearer token for POST /agents/run (optional)
   shutdown_timeout_seconds: 15
 
 processor:
   issue_queue_buffer: 256
   pr_queue_buffer: 256
+  max_concurrent_agents: 4             # max parallel agent goroutines per PR fan-out
 
-agents_dir: "./agents"  # optional prompt_file base dir + autonomous memory root
-allow_autonomous_prs: false  # require explicit opt-in for autonomous PR creation
+agents_dir: "./agents"                 # base dir for prompt_file paths
+memory_dir: "/var/lib/agents/memory"   # persistent memory root for autonomous agents
 
-# Inline-first prompt configuration.
-# You can replace any `prompt` with `prompt_file` (relative to agents_dir) if preferred.
+# Base prompt templates (inline or prompt_file relative to agents_dir)
 prompts:
   issue_refinement:
     prompt: |
@@ -172,22 +174,21 @@ prompts:
       {{.AgentHeading}}
       Review PR #{{.Number}} in {{.Repo}} from the perspective of {{.Agent}}.
       {{template "agent_guidance" .}}
+      Post one high-signal review comment and return one JSON object on stdout.
   autonomous:
     prompt: |
       Autonomous run for {{.Repo}} as {{.AgentName}}.
+      Focus: {{.Description}}
       Task: {{.Task}}
+      Memory file: {{.MemoryPath}}
+      Existing memory:
+      {{.Memory}}
       {{template "agent_guidance" .}}
-  autonomous_issue_task:
-    prompt: |
-      Scan all open issues and add one succinct comment per issue only if this agent has not commented before. Avoid duplicate comments.
-  autonomous_code_task:
-    prompt: |
-      Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, open a PR directly.
-  autonomous_code_task_no_prs:
-    prompt: |
-      Inspect the codebase for improvements. If changes are large or uncertain, open an issue describing them. If changes are small and high-confidence, describe the diff in an issue but do not open a PR.
+      Return one JSON object on stdout.
 
-agents:
+# Skills — reusable knowledge clusters injected into prompt templates.
+# An agent referencing multiple skills receives their guidance merged.
+skills:
   - name: architect
     prompt: |
       Focus on architecture boundaries, coupling, extensibility, and maintainability risks.
@@ -203,6 +204,20 @@ agents:
   - name: ux
     prompt: |
       Focus on clarity, accessibility, copy quality, and user flow friction.
+
+# Agents — actors that compose skills.
+# Names are used in labels: ai:review:claude:<agent>
+agents:
+  - name: arch-reviewer
+    skills: [architect]
+  - name: sec-reviewer
+    skills: [security]
+  - name: test-reviewer
+    skills: [testing]
+  - name: ops-reviewer
+    skills: [devops]
+  - name: ux-reviewer
+    skills: [ux]
 
 ai_backends:
   claude:
@@ -229,48 +244,33 @@ autonomous_agents:
   - repo: "owner/repo"   # must also exist in repos[]
     enabled: true
     agents:
-      - name: "architect"                # must reference a defined agent
+      - name: "codebase-scout"
         description: "Architecture sweeps looking for design drift and risky coupling."
         cron: "0 9 * * *"   # standard cron syntax
         backend: "auto"     # auto | claude | codex (default: auto)
+        skills: [architect]
+        tasks:
+          - name: "issues"
+            prompt: |
+              Scan all open issues and add one succinct comment per issue only
+              if this agent has not commented before. Avoid duplicate comments.
+          - name: "code"
+            prompt: |
+              Inspect the codebase for improvements. If changes are large or
+              uncertain, open an issue describing them.
 ```
 
-Agents are defined in the top-level `agents` section. Inline `prompt` is the recommended default for fast iteration. `prompt_file` (relative to `agents_dir`) is optional for longer shared prompts. Each agent must provide exactly one of `prompt` or `prompt_file`, and agent names must be unique.
+### Config model
 
-Base prompt templates and autonomous task prompts follow the same inline-first pattern; each entry supports either `prompt` or `prompt_file`.
+**Skills** define reusable domain guidance (the prompts formerly inlined on agents). **Agents** reference one or more skills by name; their guidance is merged at runtime via the `{{template "agent_guidance" .}}` placeholder in the base prompt templates. Agent names must be unique and are used directly in GitHub labels.
 
-Any defined agent can be used with any backend via labels — there is no per-backend agent allowlist. Autonomous agents must reference agents defined in the top-level `agents` list.
+**Autonomous agents** run on a cron schedule. Each defines its own `skills` list and a sequence of `tasks` that run in order on each trigger. Tasks carry their own `prompt` or `prompt_file`. Agent memory is persisted at `<memory_dir>/<agent>/<owner>_<repo>/MEMORY.md` and is read before each task run and updated after.
 
-Each autonomous agent can select its backend independently with `backend`:
+Each autonomous agent selects its backend with `backend`:
 - `auto` (default): use the daemon default (`claude` if configured, otherwise `codex`)
-- `claude`: force Claude backend for that agent
-- `codex`: force Codex backend for that agent
+- `claude` / `codex`: force a specific backend
 
-Autonomous agents only run for repositories that are also present and enabled under `repos`. Each scheduled run performs two parallel passes:
-- Sweep open issues and add a single comment only if this agent has not commented yet.
-- Sweep the codebase for improvements; open an issue for large/uncertain work or open a PR when the change is small and high-confidence (PR creation is gated by `allow_autonomous_prs`, default `false`).
-
-Agent memory is stored per repo at `agents_dir/autonomous/<agent>/<owner_repo>/MEMORY.md` (repo slashes are replaced with `_`). The daemon serializes writes so concurrent runs cannot corrupt memory; the file is created automatically if missing.
-
-A default prompt and memory layout is included:
-
-```
-agents/
-├── autonomous/
-│   ├── base/PROMPT.md           # autonomous base template (default)
-│   └── owner_repo/
-│       └── MEMORY.md            # created on first run
-├── guidance/
-│   ├── architect.md             # agent prompt files
-│   ├── devops.md
-│   ├── security.md
-│   ├── testing.md
-│   └── ux.md
-├── issue_refinement_prompts/
-│   └── PROMPT.md                # issue refinement base template (default)
-└── pr_review_prompts/
-    └── base/PROMPT.md           # PR review base template (default)
-```
+Autonomous agents only run for repositories present under `repos` with `enabled: true`.
 
 Create a `.env` file in the project root for secrets (loaded automatically):
 
@@ -291,6 +291,16 @@ go run ./cmd/agents -config config.yaml
 go build -o agents ./cmd/agents
 ./agents -config config.yaml
 ```
+
+### On-demand agent pass
+
+Run one autonomous agent synchronously and exit (useful for testing a new config):
+
+```bash
+./agents -config config.yaml --run-agent codebase-scout --repo owner/repo
+```
+
+Both `--run-agent` (agent name) and `--repo` (`owner/repo` format) are required together. The daemon loads the config, runs the named agent against the repo, and exits.
 
 ### Docker
 
@@ -384,12 +394,21 @@ GitHub will send a ping event immediately — the daemon will receive it and log
 
 ## Webhook endpoints
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/status` | Health check — returns `ok` |
-| `POST` | `/webhooks/github` | Webhook receiver with `X-Hub-Signature-256` verification |
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/status` | none | Health check — returns JSON with uptime, queue depths, and agent schedules |
+| `POST` | `/webhooks/github` | `X-Hub-Signature-256` HMAC | Webhook receiver |
+| `POST` | `/agents/run` | `Authorization: Bearer <key>` | Trigger an autonomous agent on demand (requires `api_key_env`) |
 
-Duplicate deliveries are automatically suppressed using `X-GitHub-Delivery` with an in-memory TTL cache.
+The `/agents/run` endpoint accepts:
+
+```json
+{"agent": "codebase-scout", "repo": "owner/repo"}
+```
+
+It runs the agent synchronously, blocks until the agent finishes, and returns `200 OK` on success. If `api_key_env` is not configured the endpoint returns `403 Forbidden`.
+
+Duplicate webhook deliveries are automatically suppressed using `X-GitHub-Delivery` with an in-memory TTL cache (configurable via `delivery_ttl_seconds`).
 
 ---
 
