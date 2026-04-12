@@ -39,7 +39,7 @@ func run() error {
 	// dependency on a config file and must be usable before one exists.
 	if len(os.Args) > 1 && os.Args[1] == "setup" {
 		dryRun := len(os.Args) > 2 && os.Args[2] == "--dry-run"
-		return setup.Run(setup.NewCommandRunner(), dryRun, os.Stdout, os.Stderr)
+		return setup.Run(setup.NewCommandRunner(), dryRun, os.Stdin, os.Stdout, os.Stderr)
 	}
 
 	_ = godotenv.Load()

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"strings"
 )
 
 //go:embed prompt.md
@@ -37,21 +36,22 @@ func (execCommandRunner) Run(name string, args []string, stdin io.Reader, stdout
 // When dryRun is true the embedded setup prompt is printed to stdout and the
 // runner is not called — useful for inspecting the prompt or scripting.
 //
-// When dryRun is false the prompt is piped into:
+// When dryRun is false the embedded prompt is passed as a positional argument to:
 //
-//	claude -p --dangerously-skip-permissions
+//	claude --dangerously-skip-permissions <prompt>
 //
-// which launches an interactive Claude session that guides the user through
-// the full setup flow.
-func Run(runner CommandRunner, dryRun bool, stdout, stderr io.Writer) error {
+// Passing the prompt as a CLI argument (rather than via stdin) preserves the
+// caller's stdin so the interactive Claude session can receive user input
+// throughout the multi-phase setup flow.
+func Run(runner CommandRunner, dryRun bool, stdin io.Reader, stdout, stderr io.Writer) error {
 	if dryRun {
 		_, err := fmt.Fprint(stdout, embeddedPrompt)
 		return err
 	}
 	return runner.Run(
 		"claude",
-		[]string{"-p", "--dangerously-skip-permissions"},
-		strings.NewReader(embeddedPrompt),
+		[]string{"--dangerously-skip-permissions", embeddedPrompt},
+		stdin,
 		stdout,
 		stderr,
 	)
