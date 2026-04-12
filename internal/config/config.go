@@ -239,6 +239,7 @@ func (c *Config) normalizeBackends() {
 		setDefault(&backend.Mode, "noop")
 		setDefaultInt(&backend.TimeoutSeconds, defaultAITimeoutSeconds)
 		setDefaultInt(&backend.MaxPromptChars, defaultMaxPromptChars)
+		backend.Command = strings.TrimSpace(backend.Command)
 		normalized[key] = backend
 	}
 	c.AIBackends = normalized
@@ -312,9 +313,12 @@ func (c *Config) validateBackends() error {
 	if len(c.AIBackends) == 0 {
 		return errors.New("config: at least one ai_backends entry is required")
 	}
-	for name := range c.AIBackends {
+	for name, backend := range c.AIBackends {
 		if name != "claude" && name != "codex" {
 			return fmt.Errorf("config: unsupported ai backend %q (supported: claude, codex)", name)
+		}
+		if backend.Mode == "command" && strings.TrimSpace(backend.Command) == "" {
+			return fmt.Errorf("config: ai backend %q has mode=command but no command specified", name)
 		}
 	}
 	return nil
