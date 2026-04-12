@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -60,22 +59,6 @@ type PromptSourceConfig struct {
 	Prompt     string `yaml:"prompt"`
 }
 
-// Resolve returns the prompt content. If Prompt is set it is returned directly.
-// Otherwise the file at baseDir/PromptFile is read.
-func (p PromptSourceConfig) Resolve(baseDir string) (string, error) {
-	if p.Prompt != "" {
-		return p.Prompt, nil
-	}
-	path := p.PromptFile
-	if baseDir != "" {
-		path = filepath.Join(baseDir, p.PromptFile)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read prompt file %s: %w", path, err)
-	}
-	return string(data), nil
-}
 
 type SkillConfig struct {
 	Name       string `yaml:"name"`
