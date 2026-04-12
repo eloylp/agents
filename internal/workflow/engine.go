@@ -9,6 +9,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
@@ -17,21 +18,36 @@ import (
 const (
 	workflowIssueRefine = "issue_refine"
 	workflowPRReview    = "pr_review"
+
+	// defaultMaxConcurrentAgents is the fallback used by NewEngine when the
+	// caller provides a zero-value Config (e.g. in unit tests that construct
+	// config.Config{} directly without running config.Load).  It matches the
+	// default set by config.applyDefaults so behaviour is consistent.
+	defaultMaxConcurrentAgents = 4
 )
 
 type Engine struct {
-	cfg     *config.Config
-	runners map[string]ai.Runner
-	prompts *ai.PromptStore
-	logger  zerolog.Logger
+	cfg                 *config.Config
+	maxConcurrentAgents int
+	runners             map[string]ai.Runner
+	prompts             *ai.PromptStore
+	logger              zerolog.Logger
 }
 
 func NewEngine(cfg *config.Config, runners map[string]ai.Runner, prompts *ai.PromptStore, logger zerolog.Logger) *Engine {
+	maxConcurrent := 0
+	if cfg.Processor.MaxConcurrentAgents != nil {
+		maxConcurrent = *cfg.Processor.MaxConcurrentAgents
+	}
+	if maxConcurrent <= 0 {
+		maxConcurrent = defaultMaxConcurrentAgents
+	}
 	return &Engine{
-		cfg:     cfg,
-		runners: runners,
-		prompts: prompts,
-		logger:  logger.With().Str("component", "workflow_engine").Logger(),
+		cfg:                 cfg,
+		maxConcurrentAgents: maxConcurrent,
+		runners:             runners,
+		prompts:             prompts,
+		logger:              logger.With().Str("component", "workflow_engine").Logger(),
 	}
 }
 
@@ -109,9 +125,19 @@ func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest)
 		mu        sync.Mutex
 		agentErrs []error
 	)
+	// sem limits the number of agent goroutines that run concurrently for this
+	// event. The cap is per-event (not global) so a large fan-out on one PR
+	// cannot starve another. Acquiring before group.Go avoids spawning goroutines
+	// that immediately block, keeping OS resource usage proportional to the limit.
+	sem := semaphore.NewWeighted(int64(e.maxConcurrentAgents))
 	group, groupCtx := errgroup.WithContext(ctx)
 	for _, ag := range agents {
+		if err := sem.Acquire(groupCtx, 1); err != nil {
+			// groupCtx was cancelled; skip remaining agents.
+			break
+		}
 		group.Go(func() error {
+			defer sem.Release(1)
 			wf := fmt.Sprintf("%s:%s:%s", workflowPRReview, resolvedBackend, ag)
 			prompt, err := e.prompts.PRReviewPrompt(ag, resolvedBackend, req.Repo.FullName, req.PR.Number)
 			if err != nil {
