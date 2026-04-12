@@ -465,6 +465,9 @@ func (c *Config) validateAutonomousAgents(skillNames map[string]struct{}) error 
 		if repo.Repo == "" {
 			return errors.New("config: autonomous agent repo is required")
 		}
+		if _, ok := c.RepoByName(repo.Repo); !ok {
+			return fmt.Errorf("config: autonomous_agents references unknown repo %q (not found in repos list)", repo.Repo)
+		}
 		names := make(map[string]struct{}, len(repo.Agents))
 		for _, agent := range repo.Agents {
 			if agent.Name == "" {
