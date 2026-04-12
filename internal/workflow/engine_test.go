@@ -3,8 +3,10 @@ package workflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -51,6 +53,20 @@ func (s *stubRunner) workflows() []string {
 		out[i] = c.Workflow
 	}
 	return out
+}
+
+// countingRunner records how many times Run is called, atomically.
+type countingRunner struct {
+	calls atomic.Int64
+	err   error
+}
+
+func (r *countingRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
+	r.calls.Add(1)
+	if r.err != nil {
+		return ai.Response{}, r.err
+	}
+	return ai.Response{Artifacts: []ai.Artifact{{Type: "pr_comment", PartKey: "p", GitHubID: "1"}}}, nil
 }
 
 func TestHandleIssueLabelEventUsesPayloadLabel(t *testing.T) {
@@ -405,5 +421,73 @@ func TestNewEngineZeroMaxConcurrentAgentsFallsBackToDefault(t *testing.T) {
 	})
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestHandlePullRequestLabelEventInvokesAllAgents(t *testing.T) {
+	t.Parallel()
+	runner := &countingRunner{}
+	cfg := &config.Config{
+		AIBackends: map[string]config.AIBackendConfig{
+			"claude": {},
+		},
+		Agents: []config.AgentConfig{
+			{Name: "architect", Skills: []string{"architect"}},
+			{Name: "reviewer", Skills: []string{"reviewer"}},
+		},
+	}
+	promptStore := testutil.BuildPromptStore(t, []string{"architect", "reviewer"}, nil)
+	engine := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, promptStore, zerolog.Nop())
+
+	err := engine.HandlePullRequestLabelEvent(context.Background(), PRRequest{
+		Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
+		PR:    PullRequest{Number: 5},
+		Label: "ai:review",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := runner.calls.Load(); got != 2 {
+		t.Fatalf("expected 2 runner calls (one per agent), got %d", got)
+	}
+}
+
+func TestHandlePullRequestLabelEventCollectsAllAgentErrors(t *testing.T) {
+	t.Parallel()
+	runner := &countingRunner{err: errors.New("backend unavailable")}
+	cfg := &config.Config{
+		AIBackends: map[string]config.AIBackendConfig{
+			"claude": {},
+		},
+		Agents: []config.AgentConfig{
+			{Name: "architect", Skills: []string{"architect"}},
+			{Name: "reviewer", Skills: []string{"reviewer"}},
+		},
+	}
+	promptStore := testutil.BuildPromptStore(t, []string{"architect", "reviewer"}, nil)
+	engine := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, promptStore, zerolog.Nop())
+
+	err := engine.HandlePullRequestLabelEvent(context.Background(), PRRequest{
+		Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
+		PR:    PullRequest{Number: 5},
+		Label: "ai:review",
+	})
+	if err == nil {
+		t.Fatal("expected error from failing agents, got nil")
+	}
+	// Both agents should have been attempted despite the first one erroring.
+	if got := runner.calls.Load(); got != 2 {
+		t.Fatalf("expected 2 runner calls, got %d — one agent may have been skipped", got)
+	}
+	// Both agent-specific error prefixes must appear in the joined error.
+	errStr := err.Error()
+	for _, agent := range []string{"architect", "reviewer"} {
+		wantSubstr := fmt.Sprintf("agent claude/%s:", agent)
+		if !strings.Contains(errStr, wantSubstr) {
+			t.Errorf("expected error to contain %q; got: %v", wantSubstr, err)
+		}
+	}
+	if !errors.Is(err, runner.err) {
+		t.Errorf("expected errors.Is match for runner.err; got %v", err)
 	}
 }

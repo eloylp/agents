@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/rs/zerolog"
-	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 
 	"github.com/eloylp/agents/internal/ai"
@@ -124,25 +123,27 @@ func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest)
 		Str("repo", req.Repo.FullName).
 		Int("pr_number", req.PR.Number).
 		Logger()
-	// Errors are collected into agentErrs rather than returned via errgroup so
-	// that a failing agent does not cancel the context and abort the others.
+	// Errors are collected into agentErrs rather than propagated via context
+	// cancellation so that a failing agent does not abort the remaining ones.
 	// All errors are joined and returned once every goroutine has finished.
 	var (
+		wg        sync.WaitGroup
 		mu        sync.Mutex
 		agentErrs []error
 	)
 	// sem limits the number of agent goroutines that run concurrently for this
 	// event. The cap is per-event (not global) so a large fan-out on one PR
-	// cannot starve another. Acquiring before group.Go avoids spawning goroutines
-	// that immediately block, keeping OS resource usage proportional to the limit.
+	// cannot starve another. Acquiring before spawning avoids goroutines that
+	// immediately block on the semaphore.
 	sem := semaphore.NewWeighted(int64(e.maxConcurrentAgents))
-	group, groupCtx := errgroup.WithContext(ctx)
 	for _, ag := range agents {
-		if err := sem.Acquire(groupCtx, 1); err != nil {
-			// groupCtx was cancelled; skip remaining agents.
+		if err := sem.Acquire(ctx, 1); err != nil {
+			// ctx was cancelled; skip remaining agents.
 			break
 		}
-		group.Go(func() error {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 			defer sem.Release(1)
 			wf := fmt.Sprintf("%s:%s:%s", workflowPRReview, resolvedBackend, ag)
 			prompt, err := e.prompts.PRReviewPrompt(ag, resolvedBackend, req.Repo.FullName, req.PR.Number)
@@ -150,10 +151,10 @@ func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest)
 				mu.Lock()
 				agentErrs = append(agentErrs, fmt.Errorf("prompt %s/%s: %w", resolvedBackend, ag, err))
 				mu.Unlock()
-				return nil
+				return
 			}
 			logger.Info().Str("backend", resolvedBackend).Str("agent", ag).Msg("invoking ai agent for pr review")
-			response, err := runner.Run(groupCtx, ai.Request{
+			response, err := runner.Run(ctx, ai.Request{
 				Workflow: wf,
 				Repo:     req.Repo.FullName,
 				Number:   req.PR.Number,
@@ -163,14 +164,13 @@ func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest)
 				mu.Lock()
 				agentErrs = append(agentErrs, fmt.Errorf("agent %s/%s: %w", resolvedBackend, ag, err))
 				mu.Unlock()
-				return nil
+				return
 			}
 			storedCount := len(response.Artifacts)
 			logger.Info().Str("backend", resolvedBackend).Str("agent", ag).Int("artifacts_stored", storedCount).Msg("pr review completed")
-			return nil
-		})
+		}()
 	}
-	_ = group.Wait()
+	wg.Wait()
 	return errors.Join(agentErrs...)
 }
 
