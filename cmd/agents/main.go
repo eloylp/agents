@@ -137,7 +137,7 @@ func resolveSkills(cfg *config.Config) []ai.SkillGuidance {
 	for _, s := range cfg.Skills {
 		sg := ai.SkillGuidance{Name: s.Name, Prompt: s.Prompt}
 		if s.PromptFile != "" {
-			sg.PromptFile = filepath.Join(cfg.AgentsDir, s.PromptFile)
+			sg.PromptFile = agentsPath(cfg.AgentsDir, s.PromptFile)
 		}
 		skills = append(skills, sg)
 	}
@@ -193,8 +193,18 @@ func resolvePrompts(cfg *config.Config) (issue ai.PromptSource, pr ai.PromptSour
 		if src.Prompt != "" {
 			return ai.PromptSource{Prompt: src.Prompt}
 		}
-		return ai.PromptSource{PromptFile: filepath.Join(cfg.AgentsDir, src.PromptFile)}
+		return ai.PromptSource{PromptFile: agentsPath(cfg.AgentsDir, src.PromptFile)}
 	}
 	return resolve(cfg.Prompts.IssueRefinement), resolve(cfg.Prompts.PRReview), resolve(cfg.Prompts.Autonomous)
+}
+
+// agentsPath resolves a prompt file path relative to agentsDir unless it is
+// already absolute, in which case it is returned unchanged. This mirrors the
+// POSIX convention that an absolute path always names an exact location.
+func agentsPath(agentsDir, promptFile string) string {
+	if filepath.IsAbs(promptFile) {
+		return promptFile
+	}
+	return filepath.Join(agentsDir, promptFile)
 }
 
