@@ -239,6 +239,7 @@ func (c *Config) normalizeBackends() {
 		setDefault(&backend.Mode, "noop")
 		setDefaultInt(&backend.TimeoutSeconds, defaultAITimeoutSeconds)
 		setDefaultInt(&backend.MaxPromptChars, defaultMaxPromptChars)
+		backend.Command = strings.TrimSpace(backend.Command)
 		normalized[key] = backend
 	}
 	c.AIBackends = normalized
