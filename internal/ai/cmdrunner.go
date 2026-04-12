@@ -47,7 +47,7 @@ func NewCommandRunner(backendName string, mode string, command string, args []st
 }
 
 func (r *CommandRunner) Run(ctx context.Context, req Request) (Response, error) {
-	prompt := truncatePrompt(req.Prompt, r.maxPromptChars)
+	prompt := truncateString(req.Prompt, r.maxPromptChars)
 	promptMeta := r.promptMeta(prompt)
 	logger := r.logger.With().
 		Str("workflow", req.Workflow).
@@ -138,17 +138,6 @@ func (r *CommandRunner) promptMeta(prompt string) promptMeta {
 		Hash:   hex.EncodeToString(hasher.Sum(nil)),
 		Length: len(prompt),
 	}
-}
-
-func truncatePrompt(prompt string, maxChars int) string {
-	if maxChars <= 0 {
-		return prompt
-	}
-	runes := []rune(prompt)
-	if len(runes) <= maxChars {
-		return prompt
-	}
-	return string(runes[:maxChars])
 }
 
 func truncateString(value string, maxChars int) string {
