@@ -149,8 +149,8 @@ type AIBackendConfig struct {
 	Mode             string   `yaml:"mode"`
 	Command          string   `yaml:"command"`
 	Args             []string `yaml:"args"`
-	TimeoutSeconds   int      `yaml:"timeout_seconds"`
-	MaxPromptChars   int      `yaml:"max_prompt_chars"`
+	TimeoutSeconds   *int     `yaml:"timeout_seconds"`
+	MaxPromptChars   *int     `yaml:"max_prompt_chars"`
 	RedactionSaltEnv string   `yaml:"redaction_salt_env"`
 }
 
@@ -268,8 +268,14 @@ func (c *Config) normalizeBackends() {
 			continue
 		}
 		setDefault(&backend.Mode, "noop")
-		setDefaultInt(&backend.TimeoutSeconds, defaultAITimeoutSeconds)
-		setDefaultInt(&backend.MaxPromptChars, defaultMaxPromptChars)
+		if backend.TimeoutSeconds == nil {
+			v := defaultAITimeoutSeconds
+			backend.TimeoutSeconds = &v
+		}
+		if backend.MaxPromptChars == nil {
+			v := defaultMaxPromptChars
+			backend.MaxPromptChars = &v
+		}
 		backend.Command = strings.TrimSpace(backend.Command)
 		normalized[key] = backend
 	}
@@ -364,6 +370,12 @@ func (c *Config) validateBackends() error {
 		}
 		if backend.Mode == "command" && strings.TrimSpace(backend.Command) == "" {
 			return fmt.Errorf("config: ai backend %q has mode=command but no command specified", name)
+		}
+		if backend.TimeoutSeconds != nil && *backend.TimeoutSeconds < 0 {
+			return fmt.Errorf("config: ai backend %q has negative timeout_seconds %d (use 0 to disable the timeout)", name, *backend.TimeoutSeconds)
+		}
+		if backend.MaxPromptChars != nil && *backend.MaxPromptChars < 0 {
+			return fmt.Errorf("config: ai backend %q has negative max_prompt_chars %d (use 0 to disable truncation)", name, *backend.MaxPromptChars)
 		}
 	}
 	return nil

@@ -66,8 +66,12 @@ autonomous_agents:
 		t.Fatalf("load config: %v", err)
 	}
 	backend := cfg.AIBackends["claude"]
-	if backend.TimeoutSeconds != defaultAITimeoutSeconds {
-		t.Fatalf("expected timeout default %d, got %d", defaultAITimeoutSeconds, backend.TimeoutSeconds)
+	if backend.TimeoutSeconds == nil || *backend.TimeoutSeconds != defaultAITimeoutSeconds {
+		got := 0
+		if backend.TimeoutSeconds != nil {
+			got = *backend.TimeoutSeconds
+		}
+		t.Fatalf("expected timeout default %d, got %d", defaultAITimeoutSeconds, got)
 	}
 	if cfg.Processor.IssueQueueBuffer != defaultIssueQueueBufferSize {
 		t.Fatalf("expected issue queue buffer default %d, got %d", defaultIssueQueueBufferSize, cfg.Processor.IssueQueueBuffer)
@@ -751,6 +755,141 @@ repos:
 			_, err := Load(path)
 			if err == nil {
 				t.Fatalf("expected load to fail for mode=%q", tc.mode)
+			}
+		})
+	}
+}
+
+func TestExplicitZeroBackendFieldsHonoured(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	tests := []struct {
+		name          string
+		yaml          string
+		wantTimeout   int
+		wantMaxPrompt int
+	}{
+		{
+			name: "explicit zero timeout_seconds disables subprocess timeout",
+			yaml: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+    timeout_seconds: 0
+repos:
+  - full_name: "owner/repo"
+`,
+			wantTimeout:   0,
+			wantMaxPrompt: defaultMaxPromptChars,
+		},
+		{
+			name: "explicit zero max_prompt_chars disables prompt truncation",
+			yaml: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+    max_prompt_chars: 0
+repos:
+  - full_name: "owner/repo"
+`,
+			wantTimeout:   defaultAITimeoutSeconds,
+			wantMaxPrompt: 0,
+		},
+		{
+			name: "both explicit zeros honoured",
+			yaml: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+    timeout_seconds: 0
+    max_prompt_chars: 0
+repos:
+  - full_name: "owner/repo"
+`,
+			wantTimeout:   0,
+			wantMaxPrompt: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.yaml), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("unexpected load error: %v", err)
+			}
+			backend := cfg.AIBackends["claude"]
+			if backend.TimeoutSeconds == nil {
+				t.Fatal("TimeoutSeconds is nil, expected a pointer to an int")
+			}
+			if *backend.TimeoutSeconds != tt.wantTimeout {
+				t.Errorf("TimeoutSeconds: got %d, want %d", *backend.TimeoutSeconds, tt.wantTimeout)
+			}
+			if backend.MaxPromptChars == nil {
+				t.Fatal("MaxPromptChars is nil, expected a pointer to an int")
+			}
+			if *backend.MaxPromptChars != tt.wantMaxPrompt {
+				t.Errorf("MaxPromptChars: got %d, want %d", *backend.MaxPromptChars, tt.wantMaxPrompt)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsNegativeBackendFields(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	tests := []struct {
+		name       string
+		yaml       string
+		wantErrMsg string
+	}{
+		{
+			name: "negative timeout_seconds rejected",
+			yaml: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+    timeout_seconds: -1
+repos:
+  - full_name: "owner/repo"
+`,
+			wantErrMsg: `config: ai backend "claude" has negative timeout_seconds -1 (use 0 to disable the timeout)`,
+		},
+		{
+			name: "negative max_prompt_chars rejected",
+			yaml: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+    max_prompt_chars: -10
+repos:
+  - full_name: "owner/repo"
+`,
+			wantErrMsg: `config: ai backend "claude" has negative max_prompt_chars -10 (use 0 to disable truncation)`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.yaml), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if err.Error() != tt.wantErrMsg {
+				t.Errorf("error message:\n  got:  %q\n  want: %q", err.Error(), tt.wantErrMsg)
 			}
 		})
 	}
