@@ -29,24 +29,56 @@ func (s *stubProcessorHandler) HandlePullRequestLabelEvent(_ context.Context, _ 
 	return nil
 }
 
-// TestProcessorProcessingCtxDrainCtxNeverNil verifies that processingCtx
-// always returns a non-nil context and never panics, even before the real drain
-// context is installed by Run. This guards against the race window described in
-// issue #36: between ctx cancellation and setDrainCtx being called in Run, a
-// worker that dequeues an item must not receive a nil fallback.
-func TestProcessorProcessingCtxDrainCtxNeverNil(t *testing.T) {
+// TestProcessorProcessingCtxReturnsDrainContextWithDeadline is the regression
+// test for issue #36. It simulates the race window where the run ctx is already
+// cancelled but setDrainCtx has not yet been called, and asserts that
+// processingCtx blocks until the real drain context (with a live deadline) is
+// installed — not an already-cancelled sentinel.
+func TestProcessorProcessingCtxReturnsDrainContextWithDeadline(t *testing.T) {
 	t.Parallel()
 	dataChannels := NewDataChannels(1, 1)
 	processor := NewProcessor(dataChannels, &stubProcessorHandler{}, time.Second, zerolog.Nop())
 
-	// Simulate the race window: run ctx is already cancelled but setDrainCtx
-	// has not been called yet. processingCtx must still return a valid context.
+	// Simulate shutdown: run ctx is cancelled.
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	got := processor.processingCtx(cancelledCtx)
-	if got == nil {
-		t.Fatal("processingCtx returned nil; want a non-nil context")
+	// processingCtx must block until setDrainCtx is called.
+	var got context.Context
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		got = processor.processingCtx(cancelledCtx)
+	}()
+
+	// Simulate the brief gap before Run installs the real drain context.
+	time.Sleep(20 * time.Millisecond)
+
+	// Confirm the goroutine is still blocked (has not yet returned).
+	select {
+	case <-done:
+		t.Fatal("processingCtx returned before setDrainCtx was called; expected it to block")
+	default:
+	}
+
+	// Install the real drain context — this should unblock processingCtx.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer drainCancel()
+	processor.setDrainCtx(drainCtx)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("processingCtx did not unblock after setDrainCtx")
+	}
+
+	// The returned context must be the live drain context: not yet cancelled
+	// and carrying the shutdown deadline.
+	if got.Err() != nil {
+		t.Errorf("processingCtx returned an already-cancelled context; want a live drain context")
+	}
+	if _, hasDeadline := got.Deadline(); !hasDeadline {
+		t.Errorf("processingCtx returned a context without a deadline; want the drain context with shutdown deadline")
 	}
 }
 

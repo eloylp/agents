@@ -2,8 +2,8 @@ package workflow
 
 import (
 	"context"
-	"time"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog"
 )
@@ -14,27 +14,21 @@ type processorHandler interface {
 }
 
 type Processor struct {
-	handler   processorHandler
-	channels  *DataChannels
-	shutdown  time.Duration
-	logger    zerolog.Logger
-	ctxMu     sync.RWMutex
-	drainCtx  context.Context
+	handler    processorHandler
+	channels   *DataChannels
+	shutdown   time.Duration
+	logger     zerolog.Logger
+	drainCtx   context.Context
+	drainReady chan struct{} // closed by setDrainCtx; processingCtx waits on it
 }
 
 func NewProcessor(channels *DataChannels, handler processorHandler, shutdownTimeout time.Duration, logger zerolog.Logger) *Processor {
-	// Pre-initialise drainCtx to a cancelled context so processingCtx never
-	// sees a nil pointer during the brief window between ctx cancellation and
-	// setDrainCtx being called in Run. This eliminates the race described in
-	// https://github.com/eloylp/agents/issues/36.
-	deadCtx, deadCancel := context.WithCancel(context.Background())
-	deadCancel()
 	return &Processor{
-		handler:  handler,
-		channels: channels,
-		shutdown: shutdownTimeout,
-		logger:   logger.With().Str("component", "workflow_processor").Logger(),
-		drainCtx: deadCtx,
+		handler:    handler,
+		channels:   channels,
+		shutdown:   shutdownTimeout,
+		logger:     logger.With().Str("component", "workflow_processor").Logger(),
+		drainReady: make(chan struct{}),
 	}
 }
 
@@ -89,21 +83,26 @@ func (p *Processor) runPRWorker(ctx context.Context, wg *sync.WaitGroup) {
 
 // processingCtx returns the appropriate context for a queued item.
 // During normal operation the run context is returned as-is. Once shutdown
-// begins the run context is already cancelled, so we fall back to the drain
-// context which carries the shutdown deadline. drainCtx is always non-nil
-// (initialised to a cancelled context in NewProcessor), so there is no race
-// window between ctx cancellation and the real drain context being set.
+// begins, the run context is already cancelled, so processingCtx blocks on
+// drainReady until Run installs the real drain context via setDrainCtx.
+// This guarantees that any item dequeued during the brief race window between
+// ctx cancellation and setDrainCtx being called still receives a live context
+// with the full shutdown deadline — not an already-cancelled sentinel.
+// The channel close in setDrainCtx provides the happens-before guarantee so
+// no separate mutex is required on the drainCtx read.
 func (p *Processor) processingCtx(ctx context.Context) context.Context {
 	if ctx.Err() == nil {
 		return ctx
 	}
-	p.ctxMu.RLock()
-	defer p.ctxMu.RUnlock()
+	// Wait for Run to install the real drain context. After drainReady is
+	// closed the write to drainCtx has already happened (setDrainCtx closes
+	// the channel only after assigning drainCtx), so reading drainCtx here is
+	// safe without additional synchronisation.
+	<-p.drainReady
 	return p.drainCtx
 }
 
 func (p *Processor) setDrainCtx(ctx context.Context) {
-	p.ctxMu.Lock()
-	defer p.ctxMu.Unlock()
 	p.drainCtx = ctx
+	close(p.drainReady)
 }
