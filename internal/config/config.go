@@ -369,10 +369,17 @@ func (c *Config) validateRepos() error {
 	if len(c.Repos) == 0 {
 		return errors.New("config: at least one repo is required")
 	}
+	enabledCount := 0
 	for _, repo := range c.Repos {
 		if repo.FullName == "" {
 			return errors.New("config: repo full_name is required")
 		}
+		if repo.Enabled {
+			enabledCount++
+		}
+	}
+	if enabledCount == 0 {
+		return errors.New("config: at least one repo must have enabled: true")
 	}
 	return nil
 }

@@ -19,6 +19,7 @@ ai_backends:
     mode: noop
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -46,6 +47,7 @@ agents:
     skills: [architect]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 autonomous_agents:
   - repo: "owner/repo"
     enabled: true
@@ -183,6 +185,7 @@ agents:
     skills: [architect]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `,
 		},
 		{
@@ -199,6 +202,7 @@ agents:
     skills: [architect]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `,
 		},
 		{
@@ -217,6 +221,7 @@ agents:
     skills: [architect]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `,
 		},
 	}
@@ -258,6 +263,7 @@ agents:
     skills: [architect]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `,
 		},
 		{
@@ -274,6 +280,7 @@ agents:
   - name: architect
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `,
 		},
 		{
@@ -291,6 +298,7 @@ agents:
     skills: [nonexistent]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `,
 		},
 		{
@@ -308,6 +316,7 @@ agents:
     skills: [architect]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 autonomous_agents:
   - repo: "owner/repo"
     enabled: true
@@ -335,6 +344,7 @@ agents:
     skills: [architect]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 autonomous_agents:
   - repo: "owner/repo"
     enabled: true
@@ -363,6 +373,7 @@ agents:
     skills: [architect]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 autonomous_agents:
   - repo: "owner/repo"
     enabled: true
@@ -387,6 +398,7 @@ agents:
     skills: [architect]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 autonomous_agents:
   - repo: "owner/repo"
     enabled: true
@@ -413,6 +425,7 @@ agents:
     skills: [architect]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 autonomous_agents:
   - repo: "owner/repo"
     enabled: true
@@ -445,6 +458,7 @@ prompts:
     prompt: "inline issue"
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `,
 		},
 	}
@@ -485,6 +499,7 @@ agents:
     skills: [security]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -546,6 +561,7 @@ ai_backends:
     args:` + argsYAML + `
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `
 			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 				t.Fatalf("write config: %v", err)
@@ -609,6 +625,7 @@ agents:
     skills: [architect]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 autonomous_agents:
   - repo: ""
     enabled: true
@@ -642,6 +659,7 @@ ai_backends:
     args: ["-p", "--dangerously-skip-permissions"]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -666,6 +684,7 @@ ai_backends:
     args: ["-p", "--dangerously-skip-permissions"]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -689,6 +708,7 @@ ai_backends:
     args: ["-p", "--dangerously-skip-permissions"]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -713,6 +733,7 @@ ai_backends:
     args: ["-p", "--dangerously-skip-permissions"]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -748,6 +769,7 @@ ai_backends:
     mode: ` + tc.mode + `
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `
 			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 				t.Fatalf("write config: %v", err)
@@ -779,6 +801,7 @@ ai_backends:
     timeout_seconds: 0
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `,
 			wantTimeout:   0,
 			wantMaxPrompt: defaultMaxPromptChars,
@@ -793,6 +816,7 @@ ai_backends:
     max_prompt_chars: 0
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `,
 			wantTimeout:   defaultAITimeoutSeconds,
 			wantMaxPrompt: 0,
@@ -808,6 +832,7 @@ ai_backends:
     max_prompt_chars: 0
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `,
 			wantTimeout:   0,
 			wantMaxPrompt: 0,
@@ -919,6 +944,7 @@ ai_backends:
     mode: ` + tc.mode + commandLine + `
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `
 			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 				t.Fatalf("write config: %v", err)
@@ -1010,6 +1036,7 @@ agents:
     skills: [architect]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 autonomous_agents:
   - repo: "owner/repo"
     enabled: true
@@ -1035,6 +1062,68 @@ autonomous_agents:
 	}
 	if task.Prompt != "" {
 		t.Fatalf("expected empty inline Prompt, got %q", task.Prompt)
+	}
+}
+
+func TestValidateReposAllDisabled(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	tests := []struct {
+		name       string
+		content    string
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{
+			name: "all repos disabled rejects at startup",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+repos:
+  - full_name: "owner/repo"
+    enabled: false
+  - full_name: "owner/other"
+    enabled: false
+`,
+			wantErr:    true,
+			wantErrMsg: "config: at least one repo must have enabled: true",
+		},
+		{
+			name: "single enabled repo is accepted",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+repos:
+  - full_name: "owner/repo"
+    enabled: false
+  - full_name: "owner/other"
+    enabled: true
+`,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(path)
+			if tt.wantErr && err == nil {
+				t.Fatalf("expected validation error for all-disabled repos, got nil")
+			}
+			if tt.wantErr && err != nil && tt.wantErrMsg != "" && err.Error() != tt.wantErrMsg {
+				t.Fatalf("expected error %q, got %q", tt.wantErrMsg, err.Error())
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("expected valid config, got: %v", err)
+			}
+		})
 	}
 }
 
