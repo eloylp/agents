@@ -3,6 +3,7 @@ module github.com/eloylp/agents
 go 1.24.12
 
 require (
+	github.com/gorilla/mux v1.8.1
 	github.com/joho/godotenv v1.5.1
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/rs/zerolog v1.34.0
@@ -11,7 +12,6 @@ require (
 )
 
 require (
-	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/kr/pretty v0.3.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.19 // indirect
