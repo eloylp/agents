@@ -23,11 +23,18 @@ type Processor struct {
 }
 
 func NewProcessor(channels *DataChannels, handler processorHandler, shutdownTimeout time.Duration, logger zerolog.Logger) *Processor {
+	// Pre-initialise drainCtx to a cancelled context so processingCtx never
+	// sees a nil pointer during the brief window between ctx cancellation and
+	// setDrainCtx being called in Run. This eliminates the race described in
+	// https://github.com/eloylp/agents/issues/36.
+	deadCtx, deadCancel := context.WithCancel(context.Background())
+	deadCancel()
 	return &Processor{
 		handler:  handler,
 		channels: channels,
 		shutdown: shutdownTimeout,
 		logger:   logger.With().Str("component", "workflow_processor").Logger(),
+		drainCtx: deadCtx,
 	}
 }
 
@@ -83,19 +90,16 @@ func (p *Processor) runPRWorker(ctx context.Context, wg *sync.WaitGroup) {
 // processingCtx returns the appropriate context for a queued item.
 // During normal operation the run context is returned as-is. Once shutdown
 // begins the run context is already cancelled, so we fall back to the drain
-// context (set by Stop) which carries the shutdown deadline. This lets
-// workers finish in-flight items without being aborted the moment the
-// shutdown signal arrives.
+// context which carries the shutdown deadline. drainCtx is always non-nil
+// (initialised to a cancelled context in NewProcessor), so there is no race
+// window between ctx cancellation and the real drain context being set.
 func (p *Processor) processingCtx(ctx context.Context) context.Context {
 	if ctx.Err() == nil {
 		return ctx
 	}
 	p.ctxMu.RLock()
 	defer p.ctxMu.RUnlock()
-	if p.drainCtx != nil {
-		return p.drainCtx
-	}
-	return ctx
+	return p.drainCtx
 }
 
 func (p *Processor) setDrainCtx(ctx context.Context) {
