@@ -37,6 +37,42 @@ func TestExtractJSON(t *testing.T) {
 			want:  `{"key":"value with } and { inside"}`,
 		},
 		{
+			// Escaped backslash immediately before closing quote: the JSON value
+			// "path\\" ends with 0x5c 0x5c 0x22 in the byte stream.  The old
+			// backward scanner misread the final '"' as escaped (the preceding
+			// byte is '\'), so it walked past the true object boundary.
+			name:  "string ending with escaped backslash",
+			input: `{"path":"C:\\Users\\foo\\"}`,
+			want:  `{"path":"C:\\Users\\foo\\"}`,
+		},
+		{
+			name:  "text before json with escaped backslash in value",
+			input: "Preamble.\n" + `{"path":"C:\\Users\\foo\\"}`,
+			want:  `{"path":"C:\\Users\\foo\\"}`,
+		},
+		{
+			// When the output contains multiple top-level JSON objects the last
+			// one is returned (matches original backward-scan contract).
+			name:  "multiple top-level objects returns last",
+			input: `{"a":1} some text {"b":2}`,
+			want:  `{"b":2}`,
+		},
+		{
+			// A top-level JSON array whose only element is an object: the scanner
+			// locates the '{' inside the array and returns that object.  This pins
+			// the documented contract — future changes that alter this behaviour
+			// should update this test intentionally.
+			name:  "top-level array containing object returns the inner object",
+			input: `[{"a":1}]`,
+			want:  `{"a":1}`,
+		},
+		{
+			// A top-level array followed by a top-level object returns the object.
+			name:  "top-level array then object returns object",
+			input: `[1,2,3] {"summary":"ok"}`,
+			want:  `{"summary":"ok"}`,
+		},
+		{
 			name:    "no json",
 			input:   "just plain text",
 			wantErr: true,
