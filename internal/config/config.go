@@ -89,8 +89,26 @@ type AgentConfig struct {
 }
 
 type TaskConfig struct {
-	Name   string `yaml:"name"`
-	Prompt string `yaml:"prompt"`
+	Name       string `yaml:"name"`
+	PromptFile string `yaml:"prompt_file"`
+	Prompt     string `yaml:"prompt"`
+}
+
+// Resolve returns the task prompt content. If Prompt is set it is returned
+// directly. Otherwise the file at baseDir/PromptFile is read.
+func (t TaskConfig) Resolve(baseDir string) (string, error) {
+	if t.Prompt != "" {
+		return t.Prompt, nil
+	}
+	path := t.PromptFile
+	if baseDir != "" && !filepath.IsAbs(path) {
+		path = filepath.Join(baseDir, path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read task prompt file %s: %w", path, err)
+	}
+	return string(data), nil
 }
 
 type LogConfig struct {
@@ -275,6 +293,7 @@ func (c *Config) normalizeAutonomousAgents() {
 			}
 			for k := range a.Tasks {
 				a.Tasks[k].Name = strings.ToLower(strings.TrimSpace(a.Tasks[k].Name))
+				a.Tasks[k].PromptFile = strings.TrimSpace(a.Tasks[k].PromptFile)
 				a.Tasks[k].Prompt = strings.TrimSpace(a.Tasks[k].Prompt)
 			}
 		}
@@ -437,8 +456,13 @@ func (c *Config) validateAutonomousAgents(skillNames map[string]struct{}) error 
 				if task.Name == "" {
 					return fmt.Errorf("config: autonomous agent %q for repo %s has a task with empty name", agent.Name, repo.Repo)
 				}
-				if task.Prompt == "" {
-					return fmt.Errorf("config: autonomous agent %q for repo %s task %q must have a prompt", agent.Name, repo.Repo, task.Name)
+				hasPrompt := task.Prompt != ""
+				hasFile := task.PromptFile != ""
+				if !hasPrompt && !hasFile {
+					return fmt.Errorf("config: autonomous agent %q for repo %s task %q must have either prompt or prompt_file", agent.Name, repo.Repo, task.Name)
+				}
+				if hasPrompt && hasFile {
+					return fmt.Errorf("config: autonomous agent %q for repo %s task %q must have only one of prompt or prompt_file, not both", agent.Name, repo.Repo, task.Name)
 				}
 			}
 		}

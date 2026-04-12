@@ -249,7 +249,11 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	}
 	return s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
 		for _, task := range agent.Tasks {
-			if err := s.runTask(ctx, runner, backend, repo, agent, task.Name, task.Prompt, memoryPath, memory, logger); err != nil {
+			prompt, err := task.Resolve(s.cfg.AgentsDir)
+			if err != nil {
+				return fmt.Errorf("resolve prompt for task %q: %w", task.Name, err)
+			}
+			if err := s.runTask(ctx, runner, backend, repo, agent, task.Name, prompt, memoryPath, memory, logger); err != nil {
 				return err
 			}
 		}
