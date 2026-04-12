@@ -191,8 +191,16 @@ func Load(path string) (*Config, error) {
 	// started from. Relative paths are joined with the config file's
 	// directory so that `agents_dir: agents` (the default) resolves to
 	// <config-dir>/agents, not <cwd>/agents.
+	//
+	// filepath.Abs is called first to handle a relative config path (e.g.
+	// `-config config.yaml`); without it filepath.Dir returns "." and the
+	// join still leaves AgentsDir relative.
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve config path: %w", err)
+	}
 	if !filepath.IsAbs(cfg.AgentsDir) {
-		cfg.AgentsDir = filepath.Join(filepath.Dir(path), cfg.AgentsDir)
+		cfg.AgentsDir = filepath.Join(filepath.Dir(absPath), cfg.AgentsDir)
 	}
 	cfg.absolutePromptPaths()
 	if err := cfg.validate(); err != nil {

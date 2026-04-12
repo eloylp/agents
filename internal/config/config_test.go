@@ -1579,8 +1579,6 @@ func TestAbsolutePromptPaths(t *testing.T) {
 func TestLoadMakesAgentsDirAbsoluteRelativeToConfigFile(t *testing.T) {
 	t.Setenv("WEBHOOK_SECRET", "secret")
 
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.yaml")
 	content := `http:
   webhook_secret_env: WEBHOOK_SECRET
 ai_backends:
@@ -1595,26 +1593,62 @@ agents:
 repos:
   - full_name: "owner/repo"
 `
-	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+	t.Run("absolute-config-path", func(t *testing.T) {
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "config.yaml")
+		if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
 
-	cfg, err := Load(cfgPath)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+		cfg, err := Load(cfgPath)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
 
-	// AgentsDir defaults to "agents" relative to the config file's directory.
-	wantDir := filepath.Join(dir, defaultAgentsDir)
-	if cfg.AgentsDir != wantDir {
-		t.Fatalf("expected AgentsDir %q, got %q", wantDir, cfg.AgentsDir)
-	}
-	// Prompt file paths must be absolute so they can be opened independently
-	// of the process working directory.
-	if !filepath.IsAbs(cfg.Prompts.IssueRefinement.PromptFile) {
-		t.Errorf("IssueRefinement.PromptFile should be absolute, got %q", cfg.Prompts.IssueRefinement.PromptFile)
-	}
-	if !filepath.IsAbs(cfg.Prompts.PRReview.PromptFile) {
-		t.Errorf("PRReview.PromptFile should be absolute, got %q", cfg.Prompts.PRReview.PromptFile)
-	}
+		wantDir := filepath.Join(dir, defaultAgentsDir)
+		if cfg.AgentsDir != wantDir {
+			t.Fatalf("expected AgentsDir %q, got %q", wantDir, cfg.AgentsDir)
+		}
+		if !filepath.IsAbs(cfg.Prompts.IssueRefinement.PromptFile) {
+			t.Errorf("IssueRefinement.PromptFile should be absolute, got %q", cfg.Prompts.IssueRefinement.PromptFile)
+		}
+		if !filepath.IsAbs(cfg.Prompts.PRReview.PromptFile) {
+			t.Errorf("PRReview.PromptFile should be absolute, got %q", cfg.Prompts.PRReview.PromptFile)
+		}
+	})
+
+	// When the daemon is started with `-config config.yaml` (no leading path),
+	// filepath.Dir returns ".".  Verify that Load still produces absolute paths
+	// by calling filepath.Abs on the config path before deriving AgentsDir.
+	t.Run("relative-config-path", func(t *testing.T) {
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "config.yaml")
+		if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+
+		// Change into the config's directory so that "config.yaml" resolves to
+		// the file we just wrote, then restore the original cwd when done.
+		origDir, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("getwd: %v", err)
+		}
+		if err := os.Chdir(dir); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+		cfg, err := Load("config.yaml")
+		if err != nil {
+			t.Fatalf("Load with relative path: %v", err)
+		}
+
+		if !filepath.IsAbs(cfg.AgentsDir) {
+			t.Errorf("AgentsDir should be absolute when config path is relative, got %q", cfg.AgentsDir)
+		}
+		wantDir := filepath.Join(dir, defaultAgentsDir)
+		if cfg.AgentsDir != wantDir {
+			t.Fatalf("expected AgentsDir %q, got %q", wantDir, cfg.AgentsDir)
+		}
+	})
 }
