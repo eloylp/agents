@@ -406,7 +406,7 @@ The `/agents/run` endpoint accepts:
 {"agent": "codebase-scout", "repo": "owner/repo"}
 ```
 
-It runs the agent asynchronously and returns `202 Accepted`. If `api_key_env` is not configured the endpoint returns `403 Forbidden`.
+It runs the agent synchronously, blocks until the agent finishes, and returns `200 OK` on success. If `api_key_env` is not configured the endpoint returns `403 Forbidden`.
 
 Duplicate webhook deliveries are automatically suppressed using `X-GitHub-Delivery` with an in-memory TTL cache (configurable via `delivery_ttl_seconds`).
 
