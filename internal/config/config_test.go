@@ -690,6 +690,127 @@ autonomous_agents:
 	}
 }
 
+func TestValidateAutonomousAgentsRepoExists(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	tests := []struct {
+		name       string
+		content    string
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{
+			name: "typo in autonomous repo name rejected at startup",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+skills:
+  - name: architect
+    prompt: "focus on architecture"
+agents:
+  - name: architect
+    skills: [architect]
+repos:
+  - full_name: "acme/platform"
+    enabled: true
+autonomous_agents:
+  - repo: "acme/platfrom"
+    enabled: true
+    agents:
+      - name: "scout"
+        cron: "* * * * *"
+        skills: [architect]
+        tasks:
+          - name: "scan"
+            prompt: "scan issues"
+`,
+			wantErr:    true,
+			wantErrMsg: `config: autonomous_agents references unknown repo "acme/platfrom" (not found in repos list)`,
+		},
+		{
+			name: "valid repo name accepted",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+skills:
+  - name: architect
+    prompt: "focus on architecture"
+agents:
+  - name: architect
+    skills: [architect]
+repos:
+  - full_name: "acme/platform"
+    enabled: true
+autonomous_agents:
+  - repo: "acme/platform"
+    enabled: true
+    agents:
+      - name: "scout"
+        cron: "* * * * *"
+        skills: [architect]
+        tasks:
+          - name: "scan"
+            prompt: "scan issues"
+`,
+			wantErr: false,
+		},
+		{
+			name: "disabled repo reference still passes validation",
+			content: `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+skills:
+  - name: architect
+    prompt: "focus on architecture"
+agents:
+  - name: architect
+    skills: [architect]
+repos:
+  - full_name: "acme/platform"
+    enabled: false
+  - full_name: "acme/other"
+    enabled: true
+autonomous_agents:
+  - repo: "acme/platform"
+    enabled: true
+    agents:
+      - name: "scout"
+        cron: "* * * * *"
+        skills: [architect]
+        tasks:
+          - name: "scan"
+            prompt: "scan issues"
+`,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(path)
+			if tt.wantErr && err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if tt.wantErr && err != nil && tt.wantErrMsg != "" && err.Error() != tt.wantErrMsg {
+				t.Fatalf("expected error %q, got %q", tt.wantErrMsg, err.Error())
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("expected valid config, got: %v", err)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsCommandModeWithEmptyCommand(t *testing.T) {
 	t.Setenv("WEBHOOK_SECRET", "secret")
 
