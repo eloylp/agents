@@ -1592,6 +1592,7 @@ agents:
     skills: [architect]
 repos:
   - full_name: "owner/repo"
+    enabled: true
 `
 	t.Run("absolute-config-path", func(t *testing.T) {
 		dir := t.TempDir()
