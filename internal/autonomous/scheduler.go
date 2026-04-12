@@ -120,6 +120,13 @@ func (s *Scheduler) registerJobs() error {
 			continue
 		}
 		for _, agent := range repoCfg.Agents {
+			if !agent.IsEnabled() {
+				s.logger.Info().
+					Str("repo", repo.FullName).
+					Str("agent", agent.Name).
+					Msg("autonomous agent skipped, disabled in config")
+				continue
+			}
 			id, err := s.cron.AddFunc(agent.Cron, s.runAgent(repo.FullName, agent))
 			if err != nil {
 				return fmt.Errorf("schedule autonomous agent %s for repo %s: %w", agent.Name, repo.FullName, err)
@@ -219,6 +226,9 @@ func (s *Scheduler) TriggerAgent(ctx context.Context, agentName, repo string) er
 		}
 		for _, agent := range repoCfg.Agents {
 			if agent.Name == agentName {
+				if !agent.IsEnabled() {
+					return fmt.Errorf("autonomous agent %q is disabled in config", agentName)
+				}
 				return s.executeAgentRun(ctx, repoInfo.FullName, agent)
 			}
 		}

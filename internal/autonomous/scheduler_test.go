@@ -608,3 +608,77 @@ func writeGuidance(t *testing.T, dir string, skill string) string {
 	}
 	return path
 }
+
+func TestSchedulerSkipsDisabledAgents(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	prompts := buildTestPromptStore(t, dir)
+	disabled := false
+	cfg := &config.Config{
+		AgentsDir: dir,
+		AIBackends: map[string]config.AIBackendConfig{
+			"claude": {},
+		},
+		Repos: []config.RepoConfig{
+			{FullName: "owner/repo", Enabled: true},
+		},
+		AutonomousAgents: []config.AutonomousRepoConfig{
+			{
+				Repo:    "owner/repo",
+				Enabled: true,
+				Agents: []config.AutonomousAgentConfig{
+					{Name: "active", Cron: "* * * * *", Skills: []string{"architect"},
+						Tasks: []config.TaskConfig{{Name: "issues", Prompt: "scan"}}},
+					{Name: "disabled", Cron: "* * * * *", Enabled: &disabled, Skills: []string{"architect"},
+						Tasks: []config.TaskConfig{{Name: "issues", Prompt: "scan"}}},
+				},
+			},
+		},
+	}
+	memory := NewMemoryStore(dir)
+	scheduler, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, prompts, memory, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("scheduler: %v", err)
+	}
+	if got := len(scheduler.agentEntries); got != 1 {
+		t.Fatalf("expected 1 scheduled agent, got %d", got)
+	}
+	if scheduler.agentEntries[0].name != "active" {
+		t.Fatalf("expected 'active' scheduled, got %q", scheduler.agentEntries[0].name)
+	}
+}
+
+func TestTriggerAgentReturnsErrorForDisabledAgent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	prompts := buildTestPromptStore(t, dir)
+	disabled := false
+	cfg := &config.Config{
+		AgentsDir: dir,
+		AIBackends: map[string]config.AIBackendConfig{
+			"claude": {},
+		},
+		Repos: []config.RepoConfig{
+			{FullName: "owner/repo", Enabled: true},
+		},
+		AutonomousAgents: []config.AutonomousRepoConfig{
+			{
+				Repo:    "owner/repo",
+				Enabled: true,
+				Agents: []config.AutonomousAgentConfig{
+					{Name: "architect", Cron: "* * * * *", Enabled: &disabled, Skills: []string{"architect"},
+						Tasks: []config.TaskConfig{{Name: "issues", Prompt: "scan"}}},
+				},
+			},
+		},
+	}
+	memory := NewMemoryStore(dir)
+	scheduler, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, prompts, memory, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("scheduler: %v", err)
+	}
+	err = scheduler.TriggerAgent(context.Background(), "architect", "owner/repo")
+	if err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("expected 'disabled' error, got %v", err)
+	}
+}

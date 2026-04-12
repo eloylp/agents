@@ -145,8 +145,15 @@ type AutonomousAgentConfig struct {
 	Description string       `yaml:"description"`
 	Cron        string       `yaml:"cron"`
 	Backend     string       `yaml:"backend"`
+	Enabled     *bool        `yaml:"enabled"`
 	Skills      []string     `yaml:"skills"`
 	Tasks       []TaskConfig `yaml:"tasks"`
+}
+
+// IsEnabled reports whether this agent should be scheduled. When the field is
+// omitted from config, agents are enabled by default.
+func (a AutonomousAgentConfig) IsEnabled() bool {
+	return a.Enabled == nil || *a.Enabled
 }
 
 func Load(path string) (*Config, error) {
