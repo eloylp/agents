@@ -37,7 +37,7 @@ func (s *stubProcessorHandler) HandlePullRequestLabelEvent(_ context.Context, _ 
 func TestProcessorProcessingCtxReturnsDrainContextWithDeadline(t *testing.T) {
 	t.Parallel()
 	dataChannels := NewDataChannels(1, 1)
-	processor := NewProcessor(dataChannels, &stubProcessorHandler{}, time.Second, zerolog.Nop())
+	processor := NewProcessor(dataChannels, &stubProcessorHandler{}, 1, time.Second, zerolog.Nop())
 
 	// Simulate shutdown: run ctx is cancelled.
 	cancelledCtx, cancel := context.WithCancel(context.Background())
@@ -85,7 +85,7 @@ func TestProcessorProcessingCtxReturnsDrainContextWithDeadline(t *testing.T) {
 func TestProcessorRunDrainsQueuesOnCancellation(t *testing.T) {
 	dataChannels := NewDataChannels(4, 4)
 	handler := &stubProcessorHandler{}
-	processor := NewProcessor(dataChannels, handler, time.Second, zerolog.Nop())
+	processor := NewProcessor(dataChannels, handler, 1, time.Second, zerolog.Nop())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -113,5 +113,124 @@ func TestProcessorRunDrainsQueuesOnCancellation(t *testing.T) {
 	defer handler.mu.Unlock()
 	if handler.issueCalls != 1 || handler.prCalls != 1 {
 		t.Fatalf("expected 1 call each, got issue=%d pr=%d", handler.issueCalls, handler.prCalls)
+	}
+}
+
+// blockingProcessorHandler blocks until released, tracking peak concurrency.
+type blockingProcessorHandler struct {
+	mu          sync.Mutex
+	issueCalls  int
+	prCalls     int
+	issuePeak   int
+	prPeak      int
+	issueActive int
+	prActive    int
+	blockUntil  chan struct{}
+}
+
+func newBlockingProcessorHandler() *blockingProcessorHandler {
+	return &blockingProcessorHandler{blockUntil: make(chan struct{})}
+}
+
+func (b *blockingProcessorHandler) HandleIssueLabelEvent(_ context.Context, _ IssueRequest) error {
+	b.mu.Lock()
+	b.issueActive++
+	b.issueCalls++
+	if b.issueActive > b.issuePeak {
+		b.issuePeak = b.issueActive
+	}
+	b.mu.Unlock()
+	<-b.blockUntil
+	b.mu.Lock()
+	b.issueActive--
+	b.mu.Unlock()
+	return nil
+}
+
+func (b *blockingProcessorHandler) HandlePullRequestLabelEvent(_ context.Context, _ PRRequest) error {
+	b.mu.Lock()
+	b.prActive++
+	b.prCalls++
+	if b.prActive > b.prPeak {
+		b.prPeak = b.prActive
+	}
+	b.mu.Unlock()
+	<-b.blockUntil
+	b.mu.Lock()
+	b.prActive--
+	b.mu.Unlock()
+	return nil
+}
+
+// TestProcessorWorkerPoolAllowsConcurrentProcessing verifies that with
+// workers=N, up to N issue events and N PR events can be handled concurrently
+// rather than being serialized through a single goroutine.
+func TestProcessorWorkerPoolAllowsConcurrentProcessing(t *testing.T) {
+	t.Parallel()
+	const workers = 3
+	const events = workers // saturate the pool
+
+	dataChannels := NewDataChannels(events*2, events*2)
+	handler := newBlockingProcessorHandler()
+	processor := NewProcessor(dataChannels, handler, workers, 5*time.Second, zerolog.Nop())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		_ = processor.Run(ctx)
+		close(done)
+	}()
+
+	// Push enough events to fill all workers.
+	for i := range events {
+		if err := dataChannels.PushIssue(context.Background(), IssueRequest{
+			Repo:  RepoRef{FullName: "owner/repo"},
+			Issue: Issue{Number: i + 1},
+			Label: "ai:refine",
+		}); err != nil {
+			t.Fatalf("push issue %d: %v", i, err)
+		}
+		if err := dataChannels.PushPR(context.Background(), PRRequest{
+			Repo:  RepoRef{FullName: "owner/repo"},
+			PR:    PullRequest{Number: i + 1},
+			Label: "ai:review",
+		}); err != nil {
+			t.Fatalf("push pr %d: %v", i, err)
+		}
+	}
+
+	// Wait until all worker slots are occupied.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		handler.mu.Lock()
+		ic, pc := handler.issueCalls, handler.prCalls
+		handler.mu.Unlock()
+		if ic >= workers && pc >= workers {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	handler.mu.Lock()
+	issuePeak := handler.issuePeak
+	prPeak := handler.prPeak
+	handler.mu.Unlock()
+
+	if issuePeak < workers {
+		t.Errorf("expected issue peak concurrency >= %d, got %d", workers, issuePeak)
+	}
+	if prPeak < workers {
+		t.Errorf("expected PR peak concurrency >= %d, got %d", workers, prPeak)
+	}
+
+	// Release all blocked handlers and let the processor drain.
+	close(handler.blockUntil)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("processor did not stop after cancel")
 	}
 }

@@ -85,7 +85,7 @@ func run() error {
 
 	engine := workflow.NewEngine(cfg, runners, promptStore, logger)
 	dataChannels := workflow.NewDataChannels(cfg.Processor.IssueQueueBuffer, cfg.Processor.PRQueueBuffer)
-	processor := workflow.NewProcessor(dataChannels, engine, time.Duration(cfg.HTTP.ShutdownTimeoutSeconds)*time.Second, logger)
+	processor := workflow.NewProcessor(dataChannels, engine, *cfg.Processor.Workers, time.Duration(cfg.HTTP.ShutdownTimeoutSeconds)*time.Second, logger)
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.HTTP.DeliveryTTLSeconds) * time.Second)
 	server := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, logger, scheduler)
 	group, groupCtx := errgroup.WithContext(ctx)

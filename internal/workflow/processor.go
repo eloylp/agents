@@ -16,16 +16,21 @@ type processorHandler interface {
 type Processor struct {
 	handler    processorHandler
 	channels   *DataChannels
+	workers    int
 	shutdown   time.Duration
 	logger     zerolog.Logger
 	drainCtx   context.Context
 	drainReady chan struct{} // closed by setDrainCtx; processingCtx waits on it
 }
 
-func NewProcessor(channels *DataChannels, handler processorHandler, shutdownTimeout time.Duration, logger zerolog.Logger) *Processor {
+func NewProcessor(channels *DataChannels, handler processorHandler, workers int, shutdownTimeout time.Duration, logger zerolog.Logger) *Processor {
+	if workers <= 0 {
+		workers = 1
+	}
 	return &Processor{
 		handler:    handler,
 		channels:   channels,
+		workers:    workers,
 		shutdown:   shutdownTimeout,
 		logger:     logger.With().Str("component", "workflow_processor").Logger(),
 		drainReady: make(chan struct{}),
@@ -35,11 +40,13 @@ func NewProcessor(channels *DataChannels, handler processorHandler, shutdownTime
 // Run starts workers and blocks until ctx is cancelled and queues are drained
 // (or the shutdown timeout elapses).
 func (p *Processor) Run(ctx context.Context) error {
-	p.logger.Info().Msg("starting workflow processor")
+	p.logger.Info().Int("workers_per_type", p.workers).Msg("starting workflow processor")
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go p.runIssueWorker(ctx, &wg)
-	go p.runPRWorker(ctx, &wg)
+	wg.Add(p.workers * 2)
+	for range p.workers {
+		go p.runIssueWorker(ctx, &wg)
+		go p.runPRWorker(ctx, &wg)
+	}
 
 	<-ctx.Done()
 	p.logger.Info().Msg("stopping workflow processor")
@@ -68,7 +75,6 @@ func (p *Processor) runIssueWorker(ctx context.Context, wg *sync.WaitGroup) {
 			p.logger.Error().Err(err).Str("repo", req.Repo.FullName).Int("issue_number", req.Issue.Number).Msg("failed to process issue webhook")
 		}
 	}
-	p.logger.Info().Msg("issue queue drained")
 }
 
 func (p *Processor) runPRWorker(ctx context.Context, wg *sync.WaitGroup) {
@@ -78,7 +84,6 @@ func (p *Processor) runPRWorker(ctx context.Context, wg *sync.WaitGroup) {
 			p.logger.Error().Err(err).Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Msg("failed to process pr webhook")
 		}
 	}
-	p.logger.Info().Msg("pr queue drained")
 }
 
 // processingCtx returns the appropriate context for a queued item.
