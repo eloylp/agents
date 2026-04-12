@@ -177,3 +177,35 @@ func TestHandlePRLabelEventRespectsConcurrencyLimit(t *testing.T) {
 		t.Errorf("peak concurrency %d exceeds configured limit %d", tracker.peak, limit)
 	}
 }
+
+// TestNewEngineZeroMaxConcurrentAgentsFallsBackToDefault verifies that
+// NewEngine applied to a zero-value Config (as test code often builds)
+// does not create a semaphore with weight 0, which would block every
+// Acquire call indefinitely.
+func TestNewEngineZeroMaxConcurrentAgentsFallsBackToDefault(t *testing.T) {
+	t.Parallel()
+	// Config with MaxConcurrentAgents unset (zero value).
+	cfg := &config.Config{
+		AIBackends: map[string]config.AIBackendConfig{"claude": {}},
+		Agents:     []config.AgentConfig{{Name: "architect", Skills: []string{"architect"}}},
+	}
+	runner := &stubRunner{}
+	promptStore := testutil.BuildPromptStore(t, []string{"architect"}, nil)
+	engine := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, promptStore, zerolog.Nop())
+
+	if engine.maxConcurrentAgents <= 0 {
+		t.Fatalf("expected maxConcurrentAgents > 0, got %d", engine.maxConcurrentAgents)
+	}
+
+	// A PR-review fan-out must complete without deadlocking.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := engine.HandlePullRequestLabelEvent(ctx, PRRequest{
+		Repo:  RepoRef{FullName: "owner/repo"},
+		PR:    PullRequest{Number: 1},
+		Label: "ai:review",
+	})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
