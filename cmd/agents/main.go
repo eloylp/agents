@@ -135,11 +135,7 @@ func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, prompts *a
 func resolveSkills(cfg *config.Config) []ai.SkillGuidance {
 	skills := make([]ai.SkillGuidance, 0, len(cfg.Skills))
 	for _, s := range cfg.Skills {
-		sg := ai.SkillGuidance{Name: s.Name, Prompt: s.Prompt}
-		if s.PromptFile != "" {
-			sg.PromptFile = agentsPath(cfg.AgentsDir, s.PromptFile)
-		}
-		skills = append(skills, sg)
+		skills = append(skills, ai.SkillGuidance{Name: s.Name, Prompt: s.Prompt, PromptFile: s.PromptFile})
 	}
 	return skills
 }
@@ -190,10 +186,7 @@ func (a schedulerStatusAdapter) AgentStatuses() []webhook.AgentStatus {
 
 func resolvePrompts(cfg *config.Config) (issue ai.PromptSource, pr ai.PromptSource, auto ai.PromptSource) {
 	resolve := func(src config.PromptSourceConfig) ai.PromptSource {
-		if src.Prompt != "" {
-			return ai.PromptSource{Prompt: src.Prompt}
-		}
-		return ai.PromptSource{PromptFile: agentsPath(cfg.AgentsDir, src.PromptFile)}
+		return ai.PromptSource{Prompt: src.Prompt, PromptFile: src.PromptFile}
 	}
 	return resolve(cfg.Prompts.IssueRefinement), resolve(cfg.Prompts.PRReview), resolve(cfg.Prompts.Autonomous)
 }

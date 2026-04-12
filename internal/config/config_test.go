@@ -104,14 +104,17 @@ autonomous_agents:
 	if cfg.MemoryDir != defaultMemoryDir {
 		t.Fatalf("expected default memory dir %q, got %q", defaultMemoryDir, cfg.MemoryDir)
 	}
-	if cfg.Prompts.IssueRefinement.PromptFile != defaultIssueRefinementPromptFile {
-		t.Fatalf("expected default issue prompt file %q, got %q", defaultIssueRefinementPromptFile, cfg.Prompts.IssueRefinement.PromptFile)
+	wantIssueFile := filepath.Join(defaultAgentsDir, defaultIssueRefinementPromptFile)
+	if cfg.Prompts.IssueRefinement.PromptFile != wantIssueFile {
+		t.Fatalf("expected default issue prompt file %q, got %q", wantIssueFile, cfg.Prompts.IssueRefinement.PromptFile)
 	}
-	if cfg.Prompts.PRReview.PromptFile != defaultPRReviewPromptFile {
-		t.Fatalf("expected default pr prompt file %q, got %q", defaultPRReviewPromptFile, cfg.Prompts.PRReview.PromptFile)
+	wantPRFile := filepath.Join(defaultAgentsDir, defaultPRReviewPromptFile)
+	if cfg.Prompts.PRReview.PromptFile != wantPRFile {
+		t.Fatalf("expected default pr prompt file %q, got %q", wantPRFile, cfg.Prompts.PRReview.PromptFile)
 	}
-	if cfg.Prompts.Autonomous.PromptFile != defaultAutonomousPromptFile {
-		t.Fatalf("expected default auto prompt file %q, got %q", defaultAutonomousPromptFile, cfg.Prompts.Autonomous.PromptFile)
+	wantAutoFile := filepath.Join(defaultAgentsDir, defaultAutonomousPromptFile)
+	if cfg.Prompts.Autonomous.PromptFile != wantAutoFile {
+		t.Fatalf("expected default auto prompt file %q, got %q", wantAutoFile, cfg.Prompts.Autonomous.PromptFile)
 	}
 	if len(cfg.AutonomousAgents) != 1 || len(cfg.AutonomousAgents[0].Agents) != 1 {
 		t.Fatalf("expected one autonomous agent configured")
@@ -1134,7 +1137,7 @@ func TestTaskConfigResolve(t *testing.T) {
 	t.Run("inline prompt returned directly", func(t *testing.T) {
 		t.Parallel()
 		tc := TaskConfig{Name: "scan", Prompt: "scan all issues"}
-		got, err := tc.Resolve("")
+		got, err := tc.Resolve()
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1143,14 +1146,15 @@ func TestTaskConfigResolve(t *testing.T) {
 		}
 	})
 
-	t.Run("prompt_file with relative path joined to baseDir", func(t *testing.T) {
+	t.Run("prompt_file reads content from absolute path", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "task.md"), []byte("file prompt"), 0o644); err != nil {
+		absPath := filepath.Join(dir, "task.md")
+		if err := os.WriteFile(absPath, []byte("file prompt"), 0o644); err != nil {
 			t.Fatalf("write file: %v", err)
 		}
-		tc := TaskConfig{Name: "scan", PromptFile: "task.md"}
-		got, err := tc.Resolve(dir)
+		tc := TaskConfig{Name: "scan", PromptFile: absPath}
+		got, err := tc.Resolve()
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1159,27 +1163,10 @@ func TestTaskConfigResolve(t *testing.T) {
 		}
 	})
 
-	t.Run("prompt_file with absolute path ignores baseDir", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		absPath := filepath.Join(dir, "abs_task.md")
-		if err := os.WriteFile(absPath, []byte("absolute prompt"), 0o644); err != nil {
-			t.Fatalf("write file: %v", err)
-		}
-		tc := TaskConfig{Name: "scan", PromptFile: absPath}
-		got, err := tc.Resolve("/some/other/dir")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if got != "absolute prompt" {
-			t.Fatalf("expected %q, got %q", "absolute prompt", got)
-		}
-	})
-
 	t.Run("prompt_file missing returns error", func(t *testing.T) {
 		t.Parallel()
-		tc := TaskConfig{Name: "scan", PromptFile: "nonexistent.md"}
-		if _, err := tc.Resolve(t.TempDir()); err == nil {
+		tc := TaskConfig{Name: "scan", PromptFile: "/nonexistent/path/task.md"}
+		if _, err := tc.Resolve(); err == nil {
 			t.Fatal("expected error for missing file")
 		}
 	})
@@ -1189,14 +1176,19 @@ func TestTaskConfigPromptFileAccepted(t *testing.T) {
 	t.Setenv("WEBHOOK_SECRET", "secret")
 
 	dir := t.TempDir()
-	promptFile := filepath.Join(dir, "issues.md")
+	agentsDir := filepath.Join(dir, "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatalf("mkdir agents_dir: %v", err)
+	}
+	promptFile := filepath.Join(agentsDir, "issues.md")
 	if err := os.WriteFile(promptFile, []byte("scan all issues"), 0o644); err != nil {
 		t.Fatalf("write prompt file: %v", err)
 	}
 
 	cfgPath := filepath.Join(dir, "config.yaml")
-	content := `http:
+	content := fmt.Sprintf(`http:
   webhook_secret_env: WEBHOOK_SECRET
+agents_dir: %s
 ai_backends:
   claude:
     mode: noop
@@ -1219,7 +1211,7 @@ autonomous_agents:
         tasks:
           - name: "issues"
             prompt_file: "issues.md"
-`
+`, agentsDir)
 	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -1229,8 +1221,10 @@ autonomous_agents:
 		t.Fatalf("expected valid config, got: %v", err)
 	}
 	task := cfg.AutonomousAgents[0].Agents[0].Tasks[0]
-	if task.PromptFile != "issues.md" {
-		t.Fatalf("expected PromptFile %q, got %q", "issues.md", task.PromptFile)
+	// After loading, relative PromptFile paths are joined with AgentsDir.
+	wantFile := filepath.Join(agentsDir, "issues.md")
+	if task.PromptFile != wantFile {
+		t.Fatalf("expected PromptFile %q, got %q", wantFile, task.PromptFile)
 	}
 	if task.Prompt != "" {
 		t.Fatalf("expected empty inline Prompt, got %q", task.Prompt)
@@ -1501,4 +1495,81 @@ processor:
 			}
 		})
 	}
+}
+func TestAbsolutePromptPaths(t *testing.T) {
+	t.Parallel()
+
+	t.Run("relative PromptFile is joined with AgentsDir", func(t *testing.T) {
+		t.Parallel()
+		c := &Config{
+			AgentsDir: "/agents",
+			Prompts: PromptsConfig{
+				IssueRefinement: PromptSourceConfig{PromptFile: "issue.md"},
+				PRReview:        PromptSourceConfig{PromptFile: "pr.md"},
+				Autonomous:      PromptSourceConfig{PromptFile: "auto.md"},
+			},
+			Skills: []SkillConfig{{Name: "arch", PromptFile: "arch.md"}},
+			AutonomousAgents: []AutonomousRepoConfig{{
+				Agents: []AutonomousAgentConfig{{
+					Tasks: []TaskConfig{{Name: "t", PromptFile: "task.md"}},
+				}},
+			}},
+		}
+		c.absolutePromptPaths()
+
+		if got := c.Prompts.IssueRefinement.PromptFile; got != "/agents/issue.md" {
+			t.Errorf("IssueRefinement: got %q, want /agents/issue.md", got)
+		}
+		if got := c.Prompts.PRReview.PromptFile; got != "/agents/pr.md" {
+			t.Errorf("PRReview: got %q, want /agents/pr.md", got)
+		}
+		if got := c.Prompts.Autonomous.PromptFile; got != "/agents/auto.md" {
+			t.Errorf("Autonomous: got %q, want /agents/auto.md", got)
+		}
+		if got := c.Skills[0].PromptFile; got != "/agents/arch.md" {
+			t.Errorf("Skills[0]: got %q, want /agents/arch.md", got)
+		}
+		if got := c.AutonomousAgents[0].Agents[0].Tasks[0].PromptFile; got != "/agents/task.md" {
+			t.Errorf("Tasks[0]: got %q, want /agents/task.md", got)
+		}
+	})
+
+	t.Run("absolute PromptFile is not modified", func(t *testing.T) {
+		t.Parallel()
+		c := &Config{
+			AgentsDir: "/agents",
+			Prompts: PromptsConfig{
+				IssueRefinement: PromptSourceConfig{PromptFile: "/absolute/issue.md"},
+			},
+			AutonomousAgents: []AutonomousRepoConfig{{
+				Agents: []AutonomousAgentConfig{{
+					Tasks: []TaskConfig{{Name: "t", PromptFile: "/absolute/task.md"}},
+				}},
+			}},
+		}
+		c.absolutePromptPaths()
+
+		if got := c.Prompts.IssueRefinement.PromptFile; got != "/absolute/issue.md" {
+			t.Errorf("IssueRefinement: got %q, want /absolute/issue.md", got)
+		}
+		if got := c.AutonomousAgents[0].Agents[0].Tasks[0].PromptFile; got != "/absolute/task.md" {
+			t.Errorf("Tasks[0]: got %q, want /absolute/task.md", got)
+		}
+	})
+
+	t.Run("empty PromptFile is not modified", func(t *testing.T) {
+		t.Parallel()
+		c := &Config{
+			AgentsDir: "/agents",
+			Prompts: PromptsConfig{
+				IssueRefinement: PromptSourceConfig{Prompt: "inline"},
+			},
+		}
+		c.absolutePromptPaths()
+
+		if got := c.Prompts.IssueRefinement.PromptFile; got != "" {
+			t.Errorf("PromptFile should remain empty, got %q", got)
+		}
+	})
+
 }

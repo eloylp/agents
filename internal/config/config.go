@@ -67,6 +67,18 @@ type PromptSourceConfig struct {
 	Prompt     string `yaml:"prompt"`
 }
 
+// Resolve returns the prompt content. If Prompt is set it is returned directly.
+// Otherwise PromptFile (already an absolute path after config loading) is read.
+func (p PromptSourceConfig) Resolve() (string, error) {
+	if p.Prompt != "" {
+		return p.Prompt, nil
+	}
+	data, err := os.ReadFile(p.PromptFile)
+	if err != nil {
+		return "", fmt.Errorf("read prompt file %s: %w", p.PromptFile, err)
+	}
+	return string(data), nil
+}
 
 type SkillConfig struct {
 	Name       string `yaml:"name"`
@@ -86,18 +98,15 @@ type TaskConfig struct {
 }
 
 // Resolve returns the task prompt content. If Prompt is set it is returned
-// directly. Otherwise the file at baseDir/PromptFile is read.
-func (t TaskConfig) Resolve(baseDir string) (string, error) {
+// directly. Otherwise PromptFile (already an absolute path after config loading)
+// is read.
+func (t TaskConfig) Resolve() (string, error) {
 	if t.Prompt != "" {
 		return t.Prompt, nil
 	}
-	path := t.PromptFile
-	if baseDir != "" && !filepath.IsAbs(path) {
-		path = filepath.Join(baseDir, path)
-	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(t.PromptFile)
 	if err != nil {
-		return "", fmt.Errorf("read task prompt file %s: %w", path, err)
+		return "", fmt.Errorf("read task prompt file %s: %w", t.PromptFile, err)
 	}
 	return string(data), nil
 }
@@ -194,8 +203,36 @@ func (c *Config) applyDefaults() {
 	c.normalizeBackends()
 	c.normalizeRepos()
 	c.normalizeAutonomousAgents()
+	c.absolutePromptPaths()
 	c.resolveWebhookSecret()
 	c.resolveAPIKey()
+}
+
+// absolutePromptPaths converts all relative PromptFile fields to absolute paths
+// by joining them with AgentsDir. Absolute paths and empty strings are left
+// unchanged. This must be called after AgentsDir is set and after all
+// normalization passes that trim PromptFile strings.
+func (c *Config) absolutePromptPaths() {
+	abs := func(p string) string {
+		if p == "" || filepath.IsAbs(p) {
+			return p
+		}
+		return filepath.Join(c.AgentsDir, p)
+	}
+	c.Prompts.IssueRefinement.PromptFile = abs(c.Prompts.IssueRefinement.PromptFile)
+	c.Prompts.PRReview.PromptFile = abs(c.Prompts.PRReview.PromptFile)
+	c.Prompts.Autonomous.PromptFile = abs(c.Prompts.Autonomous.PromptFile)
+	for i := range c.Skills {
+		c.Skills[i].PromptFile = abs(c.Skills[i].PromptFile)
+	}
+	for i := range c.AutonomousAgents {
+		for j := range c.AutonomousAgents[i].Agents {
+			for k := range c.AutonomousAgents[i].Agents[j].Tasks {
+				c.AutonomousAgents[i].Agents[j].Tasks[k].PromptFile =
+					abs(c.AutonomousAgents[i].Agents[j].Tasks[k].PromptFile)
+			}
+		}
+	}
 }
 
 func (c *Config) applyPromptDefaults() {

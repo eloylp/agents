@@ -250,7 +250,7 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	}
 	return s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
 		for _, task := range agent.Tasks {
-			prompt, err := task.Resolve(s.cfg.AgentsDir)
+			prompt, err := task.Resolve()
 			if err != nil {
 				return fmt.Errorf("resolve prompt for task %q: %w", task.Name, err)
 			}
