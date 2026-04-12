@@ -22,6 +22,9 @@ internal/
 go test ./...
 go build -o agents ./cmd/agents
 go run ./cmd/agents -config config.yaml
+
+# On-demand single agent pass (synchronous, exits after completion)
+./agents -config config.yaml --run-agent <agent-name> --repo owner/repo
 ```
 
 ## Docker
@@ -45,16 +48,18 @@ Optional prompt-log redaction salt:
 
 ## Architecture Notes
 
-- Event-driven only (no polling loop).
+- Event-driven for label-based workflows; cron scheduler for autonomous agents.
 - HTTP endpoints:
-  - `GET /status`
-  - `POST /webhooks/github`
+  - `GET /status` — returns JSON with uptime, queue depths, and agent schedules
+  - `POST /webhooks/github` — HMAC-verified webhook receiver
+  - `POST /agents/run` — on-demand agent trigger (requires `http.api_key_env`)
 - Relevant webhook events:
   - `issues` and `pull_request`
   - `action` in `labeled`
   - trigger label from `payload.label.name`
 - Duplicate webhook delivery suppression by `X-GitHub-Delivery` with TTL cache.
 - Workflow execution is stateless in-process (no persistent workflow-tracking database).
+- Autonomous agents run on cron schedules; each agent defines its own `skills` and sequential `tasks`. Agent memory is persisted under `memory_dir`.
 
 ## Security Notes
 
