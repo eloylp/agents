@@ -186,6 +186,15 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	cfg.applyDefaults()
+	// Resolve AgentsDir to an absolute path so that absolutePromptPaths
+	// produces real absolute file paths regardless of where the daemon is
+	// started from. Relative paths are joined with the config file's
+	// directory so that `agents_dir: agents` (the default) resolves to
+	// <config-dir>/agents, not <cwd>/agents.
+	if !filepath.IsAbs(cfg.AgentsDir) {
+		cfg.AgentsDir = filepath.Join(filepath.Dir(path), cfg.AgentsDir)
+	}
+	cfg.absolutePromptPaths()
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -203,7 +212,6 @@ func (c *Config) applyDefaults() {
 	c.normalizeBackends()
 	c.normalizeRepos()
 	c.normalizeAutonomousAgents()
-	c.absolutePromptPaths()
 	c.resolveWebhookSecret()
 	c.resolveAPIKey()
 }

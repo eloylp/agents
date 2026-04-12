@@ -98,21 +98,24 @@ autonomous_agents:
 	if cfg.HTTP.ShutdownTimeoutSeconds != defaultHTTPShutdownSeconds {
 		t.Fatalf("expected shutdown timeout default %d, got %d", defaultHTTPShutdownSeconds, cfg.HTTP.ShutdownTimeoutSeconds)
 	}
-	if cfg.AgentsDir != defaultAgentsDir {
-		t.Fatalf("expected default agents dir %q, got %q", defaultAgentsDir, cfg.AgentsDir)
+	// AgentsDir must be absolute after Load; relative defaults are anchored to
+	// the directory that contains the config file.
+	wantAgentsDir := filepath.Join(filepath.Dir(path), defaultAgentsDir)
+	if cfg.AgentsDir != wantAgentsDir {
+		t.Fatalf("expected agents dir %q, got %q", wantAgentsDir, cfg.AgentsDir)
 	}
 	if cfg.MemoryDir != defaultMemoryDir {
 		t.Fatalf("expected default memory dir %q, got %q", defaultMemoryDir, cfg.MemoryDir)
 	}
-	wantIssueFile := filepath.Join(defaultAgentsDir, defaultIssueRefinementPromptFile)
+	wantIssueFile := filepath.Join(wantAgentsDir, defaultIssueRefinementPromptFile)
 	if cfg.Prompts.IssueRefinement.PromptFile != wantIssueFile {
 		t.Fatalf("expected default issue prompt file %q, got %q", wantIssueFile, cfg.Prompts.IssueRefinement.PromptFile)
 	}
-	wantPRFile := filepath.Join(defaultAgentsDir, defaultPRReviewPromptFile)
+	wantPRFile := filepath.Join(wantAgentsDir, defaultPRReviewPromptFile)
 	if cfg.Prompts.PRReview.PromptFile != wantPRFile {
 		t.Fatalf("expected default pr prompt file %q, got %q", wantPRFile, cfg.Prompts.PRReview.PromptFile)
 	}
-	wantAutoFile := filepath.Join(defaultAgentsDir, defaultAutonomousPromptFile)
+	wantAutoFile := filepath.Join(wantAgentsDir, defaultAutonomousPromptFile)
 	if cfg.Prompts.Autonomous.PromptFile != wantAutoFile {
 		t.Fatalf("expected default auto prompt file %q, got %q", wantAutoFile, cfg.Prompts.Autonomous.PromptFile)
 	}
@@ -1571,5 +1574,47 @@ func TestAbsolutePromptPaths(t *testing.T) {
 			t.Errorf("PromptFile should remain empty, got %q", got)
 		}
 	})
+}
 
+func TestLoadMakesAgentsDirAbsoluteRelativeToConfigFile(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "secret")
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	content := `http:
+  webhook_secret_env: WEBHOOK_SECRET
+ai_backends:
+  claude:
+    mode: noop
+skills:
+  - name: architect
+    prompt: "focus on architecture"
+agents:
+  - name: architect
+    skills: [architect]
+repos:
+  - full_name: "owner/repo"
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// AgentsDir defaults to "agents" relative to the config file's directory.
+	wantDir := filepath.Join(dir, defaultAgentsDir)
+	if cfg.AgentsDir != wantDir {
+		t.Fatalf("expected AgentsDir %q, got %q", wantDir, cfg.AgentsDir)
+	}
+	// Prompt file paths must be absolute so they can be opened independently
+	// of the process working directory.
+	if !filepath.IsAbs(cfg.Prompts.IssueRefinement.PromptFile) {
+		t.Errorf("IssueRefinement.PromptFile should be absolute, got %q", cfg.Prompts.IssueRefinement.PromptFile)
+	}
+	if !filepath.IsAbs(cfg.Prompts.PRReview.PromptFile) {
+		t.Errorf("PRReview.PromptFile should be absolute, got %q", cfg.Prompts.PRReview.PromptFile)
+	}
 }
