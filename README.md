@@ -1,5 +1,7 @@
 # agents
 
+![agents](docs/agents.jpg)
+
 **Turn GitHub labels into AI-powered code reviews and issue refinements — automatically.**
 
 A lightweight Go daemon that listens for GitHub webhook events and dispatches AI CLI agents ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), ...) to analyze issues and review pull requests. Just add a label, and the right AI agent shows up in seconds.
