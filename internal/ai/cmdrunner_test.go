@@ -2,6 +2,7 @@ package ai
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -33,7 +34,7 @@ func TestBuildCommandEnvDaemonNumber(t *testing.T) {
 				Number:   tc.number,
 			})
 			hasNumber := slices.ContainsFunc(env, func(e string) bool {
-				return len(e) >= len("AI_DAEMON_NUMBER=") && e[:len("AI_DAEMON_NUMBER=")] == "AI_DAEMON_NUMBER="
+				return strings.HasPrefix(e, "AI_DAEMON_NUMBER=")
 			})
 			if hasNumber != tc.wantNumberVar {
 				t.Errorf("AI_DAEMON_NUMBER present=%v, want present=%v (env=%v)", hasNumber, tc.wantNumberVar, env)
