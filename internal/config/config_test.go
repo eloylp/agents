@@ -357,3 +357,36 @@ func TestConfigExampleYAMLLoads(t *testing.T) {
 		t.Fatal("example has no skills")
 	}
 }
+
+func TestLoadRejectsNegativeDeliveryTTL(t *testing.T) {
+	t.Setenv("TEST_SECRET", "secret")
+
+	content := `
+daemon:
+  http:
+    webhook_secret_env: TEST_SECRET
+    delivery_ttl_seconds: -1
+  ai_backends:
+    claude:
+      command: claude
+      args: ["-p"]
+skills:
+  architect:
+    prompt: "Focus on architecture."
+agents:
+  - name: reviewer
+    backend: claude
+    skills: [architect]
+    prompt: "You review PRs."
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+      - agent: reviewer
+        labels: ["ai:review:reviewer"]
+`
+	path := writeConfig(t, content)
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected validation error for negative delivery_ttl_seconds")
+	}
+}

@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -18,18 +19,45 @@ func NewDeliveryStore(ttl time.Duration) *DeliveryStore {
 	}
 }
 
-// SeenOrAdd returns true if id has been seen within the TTL window, otherwise
-// it records id and returns false. Expired entries are lazily evicted on each
-// call to avoid a separate background goroutine.
-func (s *DeliveryStore) SeenOrAdd(id string, now time.Time) bool {
+// Start launches a background goroutine that periodically evicts expired entries.
+// It runs until ctx is cancelled. Call this once after constructing the store.
+// If the TTL is non-positive Start is a no-op; entries will never be evicted in
+// the background (they are still correctly expired on SeenOrAdd access).
+func (s *DeliveryStore) Start(ctx context.Context) {
+	if s.ttl <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(s.ttl / 4)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				s.evict(now)
+			}
+		}
+	}()
+}
+
+// evict removes all entries whose TTL has expired. Callers must not hold s.mu.
+func (s *DeliveryStore) evict(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	for key, expiresAt := range s.deliveries {
 		if now.After(expiresAt) {
 			delete(s.deliveries, key)
 		}
 	}
+}
+
+// SeenOrAdd returns true if id has been seen within the TTL window, otherwise
+// it records id and returns false. Expired entries are evicted by the background
+// goroutine started with Start.
+func (s *DeliveryStore) SeenOrAdd(id string, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	if expiresAt, ok := s.deliveries[id]; ok && now.Before(expiresAt) {
 		return true
