@@ -338,6 +338,10 @@ func (c *Config) normalize() {
 			c.Repos[i].Use[j].Cron = strings.TrimSpace(c.Repos[i].Use[j].Cron)
 		}
 	}
+
+	// Log.
+	c.Daemon.Log.Level = strings.ToLower(strings.TrimSpace(c.Daemon.Log.Level))
+	c.Daemon.Log.Format = strings.ToLower(strings.TrimSpace(c.Daemon.Log.Format))
 }
 
 func (c *Config) resolveSecrets() {
@@ -403,6 +407,9 @@ func (c *Config) validate() error {
 	if c.Daemon.HTTP.DeliveryTTLSeconds < 0 {
 		return fmt.Errorf("config: http delivery_ttl_seconds must be positive, got %d", c.Daemon.HTTP.DeliveryTTLSeconds)
 	}
+	if err := c.validateLogConfig(); err != nil {
+		return err
+	}
 	if err := c.validateBackends(); err != nil {
 		return err
 	}
@@ -413,6 +420,26 @@ func (c *Config) validate() error {
 		return err
 	}
 	return c.validateRepos()
+}
+
+var validLogLevels = map[string]struct{}{
+	"trace": {}, "debug": {}, "info": {}, "warn": {},
+	"error": {}, "fatal": {}, "panic": {}, "disabled": {},
+}
+
+func (c *Config) validateLogConfig() error {
+	if c.Daemon.Log.Level != "" {
+		if _, ok := validLogLevels[c.Daemon.Log.Level]; !ok {
+			return fmt.Errorf("config: invalid log level %q (supported: trace, debug, info, warn, error, fatal, panic, disabled)", c.Daemon.Log.Level)
+		}
+	}
+	switch c.Daemon.Log.Format {
+	case "json", "text", "":
+		// valid
+	default:
+		return fmt.Errorf("config: unknown log format %q (supported: json, text)", c.Daemon.Log.Format)
+	}
+	return nil
 }
 
 func (c *Config) validateBackends() error {

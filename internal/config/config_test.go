@@ -390,3 +390,165 @@ repos:
 		t.Fatal("expected validation error for negative delivery_ttl_seconds")
 	}
 }
+
+func logLevelYAML(level string) string {
+	return `
+daemon:
+  http:
+    webhook_secret_env: TEST_SECRET
+  ai_backends:
+    claude:
+      command: claude
+      args: ["-p"]
+  log:
+    level: ` + level + `
+skills:
+  architect:
+    prompt: "Focus on architecture."
+agents:
+  - name: reviewer
+    backend: claude
+    skills: [architect]
+    prompt: "You review PRs."
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+      - agent: reviewer
+        labels: ["ai:review:reviewer"]
+`
+}
+
+func logFormatYAML(format string) string {
+	return `
+daemon:
+  http:
+    webhook_secret_env: TEST_SECRET
+  ai_backends:
+    claude:
+      command: claude
+      args: ["-p"]
+  log:
+    format: ` + format + `
+skills:
+  architect:
+    prompt: "Focus on architecture."
+agents:
+  - name: reviewer
+    backend: claude
+    skills: [architect]
+    prompt: "You review PRs."
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+      - agent: reviewer
+        labels: ["ai:review:reviewer"]
+`
+}
+
+func TestLoadRejectsInvalidLogLevel(t *testing.T) {
+	t.Setenv("TEST_SECRET", "secret")
+
+	cases := []struct {
+		name       string
+		level      string
+		wantErrMsg string
+	}{
+		{
+			name:       "typo",
+			level:      "debg",
+			wantErrMsg: `config: invalid log level "debg" (supported: trace, debug, info, warn, error, fatal, panic, disabled)`,
+		},
+		{
+			name:       "uppercase-invalid",
+			level:      "VERBOSE",
+			wantErrMsg: `config: invalid log level "verbose" (supported: trace, debug, info, warn, error, fatal, panic, disabled)`,
+		},
+		{
+			name:       "numeric",
+			level:      "1",
+			wantErrMsg: `config: invalid log level "1" (supported: trace, debug, info, warn, error, fatal, panic, disabled)`,
+		},
+		{
+			name:       "warning-not-accepted",
+			level:      "warning",
+			wantErrMsg: `config: invalid log level "warning" (supported: trace, debug, info, warn, error, fatal, panic, disabled)`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeConfig(t, logLevelYAML(tc.level))
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("expected error for log level %q", tc.level)
+			}
+			if err.Error() != tc.wantErrMsg {
+				t.Errorf("error message = %q, want %q", err.Error(), tc.wantErrMsg)
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsValidLogLevels(t *testing.T) {
+	t.Setenv("TEST_SECRET", "secret")
+
+	levels := []string{"trace", "debug", "info", "warn", "error", "fatal", "panic", "disabled", "DEBUG", "INFO", "", "  debug  "}
+	for _, level := range levels {
+		level := level
+		t.Run("level="+level, func(t *testing.T) {
+			path := writeConfig(t, logLevelYAML(level))
+			if _, err := Load(path); err != nil {
+				t.Fatalf("unexpected error for log level %q: %v", level, err)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidLogFormat(t *testing.T) {
+	t.Setenv("TEST_SECRET", "secret")
+
+	cases := []struct {
+		name       string
+		format     string
+		wantErrMsg string
+	}{
+		{
+			name:       "unknown-format",
+			format:     "yaml",
+			wantErrMsg: `config: unknown log format "yaml" (supported: json, text)`,
+		},
+		{
+			name:       "typo",
+			format:     "jsn",
+			wantErrMsg: `config: unknown log format "jsn" (supported: json, text)`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeConfig(t, logFormatYAML(tc.format))
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("expected error for log format %q", tc.format)
+			}
+			if err.Error() != tc.wantErrMsg {
+				t.Errorf("error message = %q, want %q", err.Error(), tc.wantErrMsg)
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsValidLogFormats(t *testing.T) {
+	t.Setenv("TEST_SECRET", "secret")
+
+	formats := []string{"json", "text", "JSON", "TEXT", ""}
+	for _, format := range formats {
+		format := format
+		t.Run("format="+format, func(t *testing.T) {
+			path := writeConfig(t, logFormatYAML(format))
+			if _, err := Load(path); err != nil {
+				t.Fatalf("unexpected error for log format %q: %v", format, err)
+			}
+		})
+	}
+}
