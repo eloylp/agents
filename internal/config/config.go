@@ -129,6 +129,10 @@ type AgentDef struct {
 	Skills     []string `yaml:"skills"`
 	Prompt     string   `yaml:"prompt"`
 	PromptFile string   `yaml:"prompt_file"`
+	// AllowPRs controls whether the agent is permitted to open pull requests.
+	// Defaults to false; the scheduler prepends a hard no-PR instruction when
+	// false so the gate is code-level rather than relying on prompt wording.
+	AllowPRs bool `yaml:"allow_prs"`
 }
 
 // RepoDef describes a single GitHub repo the daemon operates on and the

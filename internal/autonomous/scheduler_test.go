@@ -253,3 +253,74 @@ func TestSchedulerSkipsJobWhenPreviousRunStillRunning(t *testing.T) {
 		t.Errorf("expected 1 invocation (second skipped), got %d", calls)
 	}
 }
+
+// promptCapturingRunner records the prompt from each Run call for inspection.
+type promptCapturingRunner struct {
+	mu      sync.Mutex
+	prompts []string
+}
+
+func (r *promptCapturingRunner) Run(_ context.Context, req ai.Request) (ai.Response, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.prompts = append(r.prompts, req.Prompt)
+	return ai.Response{}, nil
+}
+
+func TestSchedulerPrependsNoPRInstructionWhenAllowPRsFalse(t *testing.T) {
+	t.Parallel()
+	runner := &promptCapturingRunner{}
+	cfg := baseCfg(func(c *config.Config) {
+		c.Agents = []config.AgentDef{
+			{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Review PRs.", AllowPRs: false},
+		}
+	})
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
+		t.Fatalf("TriggerAgent: %v", err)
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if len(runner.prompts) != 1 {
+		t.Fatalf("expected 1 prompt, got %d", len(runner.prompts))
+	}
+	noPRPrefix := "Do not open or create pull requests under any circumstances."
+	if !strings.Contains(runner.prompts[0], noPRPrefix) {
+		t.Errorf("expected no-PR instruction in prompt, got: %q", runner.prompts[0])
+	}
+	if !strings.Contains(runner.prompts[0], "Review PRs.") {
+		t.Errorf("expected original prompt text to be present, got: %q", runner.prompts[0])
+	}
+}
+
+func TestSchedulerDoesNotPrependNoPRInstructionWhenAllowPRsTrue(t *testing.T) {
+	t.Parallel()
+	runner := &promptCapturingRunner{}
+	cfg := baseCfg(func(c *config.Config) {
+		c.Agents = []config.AgentDef{
+			{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Open a PR with the fix.", AllowPRs: true},
+		}
+	})
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
+		t.Fatalf("TriggerAgent: %v", err)
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if len(runner.prompts) != 1 {
+		t.Fatalf("expected 1 prompt, got %d", len(runner.prompts))
+	}
+	noPRPrefix := "Do not open or create pull requests under any circumstances."
+	if strings.Contains(runner.prompts[0], noPRPrefix) {
+		t.Errorf("expected no no-PR instruction when allow_prs=true, got: %q", runner.prompts[0])
+	}
+	if !strings.Contains(runner.prompts[0], "Open a PR with the fix.") {
+		t.Errorf("expected original prompt text to be present, got: %q", runner.prompts[0])
+	}
+}
