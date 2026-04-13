@@ -228,6 +228,21 @@ func (c *Config) DefaultBackend() string {
 	return ""
 }
 
+// ResolveBackend returns the concrete backend name for the given agent
+// configuration value. "auto" or empty resolves to the default configured
+// backend; an explicit name is returned as-is if it is present in
+// ai_backends. Returns "" if the name is explicit but not configured.
+func (c *Config) ResolveBackend(configured string) string {
+	configured = strings.ToLower(strings.TrimSpace(configured))
+	if configured == "" || configured == "auto" {
+		return c.DefaultBackend()
+	}
+	if _, ok := c.Daemon.AIBackends[configured]; !ok {
+		return ""
+	}
+	return configured
+}
+
 // ─── internal: defaults, normalization, secrets, prompt loading, validation ──
 
 func (c *Config) applyDefaults() {

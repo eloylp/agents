@@ -121,7 +121,7 @@ func (e *Engine) agentsForLabel(repoName, label string) []config.AgentDef {
 }
 
 func (e *Engine) runAgent(ctx context.Context, repo string, number int, agent config.AgentDef, kind string) error {
-	backend := e.resolveBackend(agent.Backend)
+	backend := e.cfg.ResolveBackend(agent.Backend)
 	if backend == "" {
 		return fmt.Errorf("agent %q: no runner available for backend %q", agent.Name, agent.Backend)
 	}
@@ -151,17 +151,6 @@ func (e *Engine) runAgent(ctx context.Context, repo string, number int, agent co
 	}
 	logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Msg("agent run completed")
 	return nil
-}
-
-func (e *Engine) resolveBackend(configured string) string {
-	configured = strings.ToLower(strings.TrimSpace(configured))
-	if configured == "" || configured == "auto" {
-		return e.cfg.DefaultBackend()
-	}
-	if _, ok := e.cfg.Daemon.AIBackends[configured]; !ok {
-		return ""
-	}
-	return configured
 }
 
 func containsLabel(labels []string, target string) bool {
