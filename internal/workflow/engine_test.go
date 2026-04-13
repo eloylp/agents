@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -202,7 +203,7 @@ func TestEngineJoinsErrorsAcrossAgents(t *testing.T) {
 		}
 	})
 	runner.runFn = func(req ai.Request) error {
-		if contains(req.Workflow, "sec-reviewer") {
+		if strings.Contains(req.Workflow, "sec-reviewer") {
 			return boom
 		}
 		return nil
@@ -221,15 +222,3 @@ func TestEngineJoinsErrorsAcrossAgents(t *testing.T) {
 	}
 }
 
-func contains(haystack, needle string) bool {
-	return len(haystack) >= len(needle) && (haystack == needle || indexOf(haystack, needle) >= 0)
-}
-
-func indexOf(haystack, needle string) int {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return i
-		}
-	}
-	return -1
-}
