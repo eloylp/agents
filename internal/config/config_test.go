@@ -493,7 +493,7 @@ func TestLoadRejectsInvalidLogLevel(t *testing.T) {
 func TestLoadAcceptsValidLogLevels(t *testing.T) {
 	t.Setenv("TEST_SECRET", "secret")
 
-	levels := []string{"trace", "debug", "info", "warn", "error", "fatal", "panic", "disabled", "DEBUG", "INFO", "", "  debug  "}
+	levels := []string{"trace", "debug", "info", "warn", "error", "fatal", "panic", "disabled", "DEBUG", "INFO", "", "\"  debug  \""}
 	for _, level := range levels {
 		level := level
 		t.Run("level="+level, func(t *testing.T) {
@@ -541,7 +541,7 @@ func TestLoadRejectsInvalidLogFormat(t *testing.T) {
 func TestLoadAcceptsValidLogFormats(t *testing.T) {
 	t.Setenv("TEST_SECRET", "secret")
 
-	formats := []string{"json", "text", "JSON", "TEXT", ""}
+	formats := []string{"json", "text", "JSON", "TEXT", "", "\"  json  \""}
 	for _, format := range formats {
 		format := format
 		t.Run("format="+format, func(t *testing.T) {
