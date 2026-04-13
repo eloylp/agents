@@ -280,7 +280,6 @@ func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
 		{"empty body", `{}`},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			server := newRunServer(&stubTriggerer{})
 			req := authedRequest(http.MethodPost, "/agents/run", tc.body)
