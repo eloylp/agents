@@ -238,7 +238,7 @@ func (s *Scheduler) TriggerAgent(ctx context.Context, agentName, repo string) er
 }
 
 func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent config.AgentDef) error {
-	backend := s.resolveBackend(agent.Backend)
+	backend := s.cfg.ResolveBackend(agent.Backend)
 	if backend == "" {
 		return fmt.Errorf("no configured backend for agent %q (configured: %q)", agent.Name, agent.Backend)
 	}
@@ -269,20 +269,6 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Msg("autonomous pass completed")
 		return nil
 	})
-}
-
-// resolveBackend returns the concrete backend name for the given agent
-// configuration value. "auto" or empty resolves to the default configured
-// backend; an explicit name is returned as-is if it's configured.
-func (s *Scheduler) resolveBackend(configured string) string {
-	configured = strings.ToLower(strings.TrimSpace(configured))
-	if configured == "" || configured == "auto" {
-		return s.cfg.DefaultBackend()
-	}
-	if _, ok := s.cfg.Daemon.AIBackends[configured]; !ok {
-		return ""
-	}
-	return configured
 }
 
 func (s *Scheduler) setRunCtx(ctx context.Context) {

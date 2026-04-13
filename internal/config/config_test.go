@@ -307,6 +307,32 @@ func TestDefaultBackendPrefersFirstConfigured(t *testing.T) {
 	}
 }
 
+func TestResolveBackend(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Daemon: DaemonConfig{
+			AIBackends: map[string]AIBackendConfig{
+				"claude": {Command: "claude"},
+			},
+		},
+	}
+	cases := []struct {
+		configured string
+		want       string
+	}{
+		{"", "claude"},
+		{"auto", "claude"},
+		{"claude", "claude"},
+		{"codex", ""},  // not in ai_backends
+		{"CLAUDE", "claude"}, // case-folded
+	}
+	for _, tc := range cases {
+		if got := cfg.ResolveBackend(tc.configured); got != tc.want {
+			t.Errorf("ResolveBackend(%q): got %q, want %q", tc.configured, got, tc.want)
+		}
+	}
+}
+
 func TestConfigExampleYAMLLoads(t *testing.T) {
 	t.Setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
 	t.Setenv("AGENTS_API_KEY", "apikey")
