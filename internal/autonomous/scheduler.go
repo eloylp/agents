@@ -257,6 +257,9 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		if err != nil {
 			return fmt.Errorf("render prompt: %w", err)
 		}
+		if !agent.AllowPRs {
+			prompt = "Do not open or create pull requests under any circumstances.\n" + prompt
+		}
 		logger.Info().Msg("running autonomous pass")
 		resp, err := runner.Run(ctx, ai.Request{
 			Workflow: fmt.Sprintf("autonomous:%s:%s", backend, agent.Name),

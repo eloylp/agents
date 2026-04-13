@@ -86,6 +86,10 @@ skills:
 # decide when and where they run.
 #
 # backend: auto | claude | codex   ("auto" picks the default)
+# allow_prs: false (default) | true
+#   When false the scheduler prepends a hard "do not open PRs" instruction
+#   before the agent's prompt. Set to true only for agents explicitly
+#   designed to open pull requests.
 # prompt: inline text, OR
 # prompt_file: path relative to the config file's directory
 # ──────────────────────────────────────────────

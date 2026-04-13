@@ -183,7 +183,7 @@ Skills are referenced by name from agents. You can also use `prompt_file: path/t
 
 ```yaml
 agents:
-  # Short inline prompt
+  # Short inline prompt — reviewer that never opens PRs (default)
   - name: arch-reviewer
     backend: auto              # auto | claude | codex
     skills: [architect]
@@ -191,10 +191,12 @@ agents:
       You are an architecture-focused PR reviewer. Post one high-signal review comment.
 
   # Prompt loaded from a file (recommended for longer prompts)
+  # allow_prs: true lets this agent open pull requests
   - name: coder
     backend: claude
     skills: [architect, testing]
     prompt_file: prompts/coder.md
+    allow_prs: true            # required for agents that open PRs
 ```
 
 Each agent is a pure capability definition: backend + skills + prompt. Agents don't run until a repo binds them to a trigger.
@@ -202,6 +204,10 @@ Each agent is a pure capability definition: backend + skills + prompt. Agents do
 - `backend: auto` picks the first configured backend in `daemon.ai_backends` (claude before codex).
 - `prompt_file` paths are resolved relative to the config file's directory.
 - Agent names must be unique.
+- `allow_prs` (default `false`) — when `false`, the scheduler prepends a hard instruction
+  forbidding the agent from opening pull requests, regardless of what the prompt says. Set
+  `allow_prs: true` only on agents that are explicitly meant to author PRs (e.g. coders,
+  refactorers). Reviewer-only agents should leave this unset.
 
 ### `repos` — wiring
 
