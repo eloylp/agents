@@ -9,6 +9,7 @@ import (
 )
 
 func TestRenderAgentPromptComposesSkillsAndPrompt(t *testing.T) {
+	t.Parallel()
 	skills := map[string]config.SkillDef{
 		"architect": {Prompt: "Focus on architecture."},
 		"testing":   {Prompt: "Focus on tests."},
@@ -45,6 +46,7 @@ func TestRenderAgentPromptComposesSkillsAndPrompt(t *testing.T) {
 }
 
 func TestRenderAgentPromptWithMemory(t *testing.T) {
+	t.Parallel()
 	agent := config.AgentDef{
 		Name:   "autonomous",
 		Prompt: "Do your job.",
@@ -66,6 +68,7 @@ func TestRenderAgentPromptWithMemory(t *testing.T) {
 }
 
 func TestRenderAgentPromptEmptyMemoryFormattedExplicitly(t *testing.T) {
+	t.Parallel()
 	agent := config.AgentDef{Prompt: "Go."}
 	got, err := ai.RenderAgentPrompt(agent, nil, ai.PromptContext{
 		Repo:       "owner/repo",
@@ -80,6 +83,7 @@ func TestRenderAgentPromptEmptyMemoryFormattedExplicitly(t *testing.T) {
 }
 
 func TestRenderAgentPromptUnknownSkillErrors(t *testing.T) {
+	t.Parallel()
 	agent := config.AgentDef{
 		Name:   "bad",
 		Skills: []string{"missing"},
@@ -92,6 +96,7 @@ func TestRenderAgentPromptUnknownSkillErrors(t *testing.T) {
 }
 
 func TestRenderAgentPromptOmitsRuntimeSectionWhenEmpty(t *testing.T) {
+	t.Parallel()
 	agent := config.AgentDef{Prompt: "Do X."}
 	got, err := ai.RenderAgentPrompt(agent, nil, ai.PromptContext{})
 	if err != nil {
@@ -103,6 +108,7 @@ func TestRenderAgentPromptOmitsRuntimeSectionWhenEmpty(t *testing.T) {
 }
 
 func TestNormalizeTokenSanitizesForFilesystemUse(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		in, want string
 	}{
