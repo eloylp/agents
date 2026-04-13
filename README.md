@@ -1,4 +1,4 @@
-# agents
+# Agents
 
 ![agents](docs/agents.jpg)
 
