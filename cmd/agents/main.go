@@ -85,6 +85,7 @@ func run() error {
 	server := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, logger, scheduler)
 
 	group, groupCtx := errgroup.WithContext(ctx)
+	deliveryStore.Start(groupCtx)
 	group.Go(func() error { return processor.Run(groupCtx) })
 	group.Go(func() error { return scheduler.Run(groupCtx) })
 	group.Go(func() error { return server.Run(groupCtx) })

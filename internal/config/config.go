@@ -381,6 +381,9 @@ func (c *Config) validate() error {
 	if c.Daemon.HTTP.WebhookSecret == "" {
 		return errors.New("config: http webhook secret is required (set webhook_secret_env)")
 	}
+	if c.Daemon.HTTP.DeliveryTTLSeconds < 0 {
+		return fmt.Errorf("config: http delivery_ttl_seconds must be positive, got %d", c.Daemon.HTTP.DeliveryTTLSeconds)
+	}
 	if err := c.validateBackends(); err != nil {
 		return err
 	}
