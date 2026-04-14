@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -155,10 +156,7 @@ func (e *Engine) runAgent(ctx context.Context, repo string, number int, agent co
 
 func containsLabel(labels []string, target string) bool {
 	target = strings.ToLower(strings.TrimSpace(target))
-	for _, l := range labels {
-		if strings.ToLower(strings.TrimSpace(l)) == target {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(labels, func(l string) bool {
+		return strings.ToLower(strings.TrimSpace(l)) == target
+	})
 }
