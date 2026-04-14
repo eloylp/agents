@@ -87,10 +87,10 @@ func TestProcessorRunDrainsQueueOnCancellation(t *testing.T) {
 		close(done)
 	}()
 
-	if err := dataChannels.PushEvent(context.Background(), LabelEvent{Repo: RepoRef{FullName: "owner/repo"}, Kind: "issue", Number: 1, Label: "ai:refine"}); err != nil {
+	if err := dataChannels.PushEvent(context.Background(), LabelEvent{Repo: RepoRef{FullName: "owner/repo"}, Number: 1, Label: "ai:refine"}); err != nil {
 		t.Fatalf("push issue event: %v", err)
 	}
-	if err := dataChannels.PushEvent(context.Background(), LabelEvent{Repo: RepoRef{FullName: "owner/repo"}, Kind: "pr", Number: 2, Label: "ai:review"}); err != nil {
+	if err := dataChannels.PushEvent(context.Background(), LabelEvent{Repo: RepoRef{FullName: "owner/repo"}, Number: 2, Label: "ai:review"}); err != nil {
 		t.Fatalf("push pr event: %v", err)
 	}
 
@@ -162,7 +162,6 @@ func TestProcessorWorkerPoolAllowsConcurrentProcessing(t *testing.T) {
 	for i := range events {
 		if err := dataChannels.PushEvent(context.Background(), LabelEvent{
 			Repo:   RepoRef{FullName: "owner/repo"},
-			Kind:   "issue",
 			Number: i + 1,
 			Label:  "ai:refine",
 		}); err != nil {

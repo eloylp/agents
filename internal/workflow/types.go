@@ -22,12 +22,10 @@ type RepoRef struct {
 	Enabled  bool
 }
 
-// LabelEvent is the single event type for both issue and PR label triggers.
-// Kind is "issue" or "pr". Draft is only meaningful for PRs; ignored elsewhere.
+// LabelEvent is the single in-process event type for label-triggered workflows.
+// Draft filtering happens at the webhook boundary before the event is enqueued.
 type LabelEvent struct {
 	Repo   RepoRef
-	Kind   string // "issue" | "pr"
 	Number int
 	Label  string
-	Draft  bool
 }

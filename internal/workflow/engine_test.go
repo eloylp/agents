@@ -49,7 +49,7 @@ func (s *stubRunner) agentNames() []string {
 }
 
 // newTestEngine builds an Engine with a canned agent set. The cfgMutator
-// hook lets tests override bindings, drafts, etc.
+// hook lets tests override bindings, backends, etc.
 func newTestEngine(cfgMutator func(*config.Config)) (*Engine, *stubRunner) {
 	runner := &stubRunner{}
 	cfg := &config.Config{
@@ -92,7 +92,6 @@ func TestHandleLabelEventIssueRunsMatchingBinding(t *testing.T) {
 	})
 	err := e.HandleLabelEvent(context.Background(), LabelEvent{
 		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
-		Kind:   "issue",
 		Number: 7,
 		Label:  "ai:refine",
 	})
@@ -109,7 +108,6 @@ func TestHandleLabelEventPRRunsSingleAgent(t *testing.T) {
 	e, runner := newTestEngine(nil)
 	err := e.HandleLabelEvent(context.Background(), LabelEvent{
 		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
-		Kind:   "pr",
 		Number: 1,
 		Label:  "ai:review:arch-reviewer",
 	})
@@ -131,7 +129,6 @@ func TestHandleLabelEventPRFansOutToMultipleBindings(t *testing.T) {
 	})
 	err := e.HandleLabelEvent(context.Background(), LabelEvent{
 		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
-		Kind:   "pr",
 		Number: 1,
 		Label:  "ai:review:all",
 	})
@@ -143,30 +140,11 @@ func TestHandleLabelEventPRFansOutToMultipleBindings(t *testing.T) {
 	}
 }
 
-func TestHandleLabelEventSkipsDraftPRs(t *testing.T) {
-	t.Parallel()
-	e, runner := newTestEngine(nil)
-	err := e.HandleLabelEvent(context.Background(), LabelEvent{
-		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
-		Kind:   "pr",
-		Number: 1,
-		Label:  "ai:review:arch-reviewer",
-		Draft:  true,
-	})
-	if err != nil {
-		t.Fatalf("HandleLabelEvent: %v", err)
-	}
-	if runner.callCount() != 0 {
-		t.Errorf("expected 0 runs for draft PR, got %d", runner.callCount())
-	}
-}
-
 func TestEngineSkipsUnmatchedLabel(t *testing.T) {
 	t.Parallel()
 	e, runner := newTestEngine(nil)
 	err := e.HandleLabelEvent(context.Background(), LabelEvent{
 		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
-		Kind:   "pr",
 		Number: 1,
 		Label:  "ai:review:no-such-agent",
 	})
@@ -186,7 +164,6 @@ func TestEngineSkipsDisabledBinding(t *testing.T) {
 	})
 	err := e.HandleLabelEvent(context.Background(), LabelEvent{
 		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
-		Kind:   "pr",
 		Number: 1,
 		Label:  "ai:review:arch-reviewer",
 	})
@@ -215,7 +192,6 @@ func TestEngineJoinsErrorsAcrossAgents(t *testing.T) {
 	}
 	err := e.HandleLabelEvent(context.Background(), LabelEvent{
 		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
-		Kind:   "pr",
 		Number: 1,
 		Label:  "ai:review:all",
 	})

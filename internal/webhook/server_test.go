@@ -160,7 +160,6 @@ func TestHandleWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) {
 	// Preload the queue.
 	if err := dc.PushEvent(context.Background(), workflow.LabelEvent{
 		Repo:   workflow.RepoRef{FullName: cfg.Repos[0].Name, Enabled: cfg.Repos[0].Enabled},
-		Kind:   "issue",
 		Number: 99,
 		Label:  "ai:refine",
 	}); err != nil {
@@ -332,6 +331,30 @@ func TestVerifySignature(t *testing.T) {
 	}
 	if verifySignature(body, "", sig) {
 		t.Fatalf("empty secret must not verify")
+	}
+}
+
+func TestHandleDraftPRWebhookDoesNotEnqueue(t *testing.T) {
+	t.Parallel()
+	server, dc := newTestServer(testCfg(nil))
+
+	body := `{"action":"labeled","label":{"name":"ai:review"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":5,"draft":true}}`
+	sig := signatureForTests([]byte(body), "secret")
+
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-GitHub-Delivery", "delivery-draft")
+	req.Header.Set("X-Hub-Signature-256", sig)
+
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, req)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	}
+	select {
+	case <-dc.EventChan():
+		t.Fatalf("draft PR must not enqueue a label event")
+	default:
 	}
 }
 

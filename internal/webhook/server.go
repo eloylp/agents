@@ -244,20 +244,21 @@ func (s *Server) handleLabelEvent(ctx context.Context, w http.ResponseWriter, bo
 	}
 
 	var number int
-	var draft bool
 	if kind == "pr" {
+		if payload.PullRequest.Draft {
+			s.logger.Info().Str("repo", repo.Name).Int("number", payload.PullRequest.Number).Msg("pull request skipped, draft")
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
 		number = payload.PullRequest.Number
-		draft = payload.PullRequest.Draft
 	} else {
 		number = payload.Issue.Number
 	}
 
 	ev := workflow.LabelEvent{
 		Repo:   workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
-		Kind:   kind,
 		Number: number,
 		Label:  payload.Label.Name,
-		Draft:  draft,
 	}
 	if err := s.channels.PushEvent(ctx, ev); err != nil {
 		if errors.Is(err, workflow.ErrEventQueueFull) {
