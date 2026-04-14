@@ -52,6 +52,7 @@ func signatureForTests(body []byte, secret string) string {
 }
 
 func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
+	t.Parallel()
 	cfg := testCfg(nil)
 	dataChannels := workflow.NewDataChannels(1, 1)
 	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop(), nil)
@@ -96,6 +97,7 @@ func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
 }
 
 func TestHandleWebhookIgnoresNonAILabel(t *testing.T) {
+	t.Parallel()
 	cfg := testCfg(nil)
 	dataChannels := workflow.NewDataChannels(1, 1)
 	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop(), nil)
@@ -121,6 +123,7 @@ func TestHandleWebhookIgnoresNonAILabel(t *testing.T) {
 }
 
 func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
+	t.Parallel()
 	cfg := testCfg(nil)
 	dataChannels := workflow.NewDataChannels(1, 1)
 	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop(), nil)
@@ -151,6 +154,7 @@ func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
 }
 
 func TestHandleIssueWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) {
+	t.Parallel()
 	cfg := testCfg(nil)
 	dataChannels := workflow.NewDataChannels(1, 1)
 	// Preload the queue.
@@ -219,6 +223,7 @@ func authedRequest(method, path, body string) *http.Request {
 }
 
 func TestHandleAgentsRunCallsTriggerer(t *testing.T) {
+	t.Parallel()
 	trig := &stubTriggerer{}
 	server := newRunServer(trig)
 
@@ -238,6 +243,7 @@ func TestHandleAgentsRunCallsTriggerer(t *testing.T) {
 }
 
 func TestHandleAgentsRunRejectsNoAuth(t *testing.T) {
+	t.Parallel()
 	server := newRunServer(&stubTriggerer{})
 	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
 	rr := httptest.NewRecorder()
@@ -248,6 +254,7 @@ func TestHandleAgentsRunRejectsNoAuth(t *testing.T) {
 }
 
 func TestHandleAgentsRunRejectsWrongToken(t *testing.T) {
+	t.Parallel()
 	server := newRunServer(&stubTriggerer{})
 	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
 	req.Header.Set("Authorization", "Bearer wrong-key")
@@ -259,6 +266,7 @@ func TestHandleAgentsRunRejectsWrongToken(t *testing.T) {
 }
 
 func TestHandleAgentsRunReturnsForbiddenWhenNoAPIKeyConfigured(t *testing.T) {
+	t.Parallel()
 	cfg := testCfg(func(c *config.Config) { c.Daemon.HTTP.APIKey = "" })
 	server := NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1, 1), nil, zerolog.Nop(), &stubTriggerer{})
 	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
@@ -271,6 +279,7 @@ func TestHandleAgentsRunReturnsForbiddenWhenNoAPIKeyConfigured(t *testing.T) {
 }
 
 func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		body string
@@ -281,6 +290,7 @@ func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			server := newRunServer(&stubTriggerer{})
 			req := authedRequest(http.MethodPost, "/agents/run", tc.body)
 			rr := httptest.NewRecorder()
@@ -293,6 +303,7 @@ func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
 }
 
 func TestHandleAgentsRunReturnsInternalServerErrorOnTriggerFailure(t *testing.T) {
+	t.Parallel()
 	trig := &stubTriggerer{err: fmt.Errorf("agent not found")}
 	server := newRunServer(trig)
 	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":"nope","repo":"owner/repo"}`)
@@ -306,6 +317,7 @@ func TestHandleAgentsRunReturnsInternalServerErrorOnTriggerFailure(t *testing.T)
 // --- signature verification ---
 
 func TestVerifySignature(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"hello":"world"}`)
 	secret := "secret"
 	mac := hmac.New(sha256.New, []byte(secret))
