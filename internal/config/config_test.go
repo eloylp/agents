@@ -495,7 +495,6 @@ func TestLoadAcceptsValidLogLevels(t *testing.T) {
 
 	levels := []string{"trace", "debug", "info", "warn", "error", "fatal", "panic", "disabled", "DEBUG", "INFO", "", "\"  debug  \""}
 	for _, level := range levels {
-		level := level
 		t.Run("level="+level, func(t *testing.T) {
 			path := writeConfig(t, logLevelYAML(level))
 			if _, err := Load(path); err != nil {
@@ -543,7 +542,6 @@ func TestLoadAcceptsValidLogFormats(t *testing.T) {
 
 	formats := []string{"json", "text", "JSON", "TEXT", "", "\"  json  \""}
 	for _, format := range formats {
-		format := format
 		t.Run("format="+format, func(t *testing.T) {
 			path := writeConfig(t, logFormatYAML(format))
 			if _, err := Load(path); err != nil {
