@@ -8,6 +8,7 @@ import (
 )
 
 func TestMemoryStoreCreatesPerRepoMemory(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	store := NewMemoryStore(dir)
 	var capturedPath string
@@ -48,6 +49,7 @@ func TestMemoryStoreCreatesPerRepoMemory(t *testing.T) {
 }
 
 func TestMemoryStoreRejectsPathEscapes(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	store := NewMemoryStore(dir)
 	var path string
