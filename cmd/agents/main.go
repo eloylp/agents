@@ -77,7 +77,7 @@ func run() error {
 	logger.Info().Msg("starting agents daemon")
 
 	engine := workflow.NewEngine(cfg, runners, logger)
-	dataChannels := workflow.NewDataChannels(cfg.Daemon.Processor.IssueQueueBuffer, cfg.Daemon.Processor.PRQueueBuffer)
+	dataChannels := workflow.NewDataChannels(cfg.Daemon.Processor.EventQueueBuffer)
 	shutdown := time.Duration(cfg.Daemon.HTTP.ShutdownTimeoutSeconds) * time.Second
 	workers := cfg.Daemon.Processor.MaxConcurrentAgents
 	processor := workflow.NewProcessor(dataChannels, engine, workers, shutdown, logger)

@@ -38,22 +38,15 @@ func NewEngine(cfg *config.Config, runners map[string]ai.Runner, logger zerolog.
 	}
 }
 
-// HandleIssueLabelEvent runs every agent bound to req.Repo whose binding
-// includes req.Label.
-func (e *Engine) HandleIssueLabelEvent(ctx context.Context, req IssueRequest) error {
-	e.logger.Info().Str("repo", req.Repo.FullName).Int("issue_number", req.Issue.Number).Str("label", req.Label).Msg("processing issue label event")
-	return e.dispatch(ctx, req.Repo.FullName, req.Label, req.Issue.Number, "issue")
-}
-
-// HandlePullRequestLabelEvent runs every agent bound to req.Repo whose
-// binding includes req.Label. Draft PRs are skipped.
-func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest) error {
-	e.logger.Info().Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Str("label", req.Label).Msg("processing pull request label event")
-	if req.PR.Draft {
-		e.logger.Info().Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Msg("pull request skipped, draft")
+// HandleLabelEvent runs every agent bound to ev.Repo whose binding includes
+// ev.Label. Draft PRs are skipped.
+func (e *Engine) HandleLabelEvent(ctx context.Context, ev LabelEvent) error {
+	e.logger.Info().Str("repo", ev.Repo.FullName).Str("kind", ev.Kind).Int("number", ev.Number).Str("label", ev.Label).Msg("processing label event")
+	if ev.Kind == "pr" && ev.Draft {
+		e.logger.Info().Str("repo", ev.Repo.FullName).Int("number", ev.Number).Msg("pull request skipped, draft")
 		return nil
 	}
-	return e.dispatch(ctx, req.Repo.FullName, req.Label, req.PR.Number, "pr")
+	return e.dispatch(ctx, ev.Repo.FullName, ev.Label, ev.Number, ev.Kind)
 }
 
 // dispatch runs all agents bound to the given repo with a label matching

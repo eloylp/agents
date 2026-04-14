@@ -135,8 +135,7 @@ http:
   shutdown_timeout_seconds: 15
 
 processor:
-  issue_queue_buffer: 256
-  pr_queue_buffer: 256
+  event_queue_buffer: 256
 
 agents_dir: "./agents"
 memory_dir: "/var/lib/agents/memory"

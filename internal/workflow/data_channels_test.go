@@ -8,27 +8,24 @@ import (
 
 func TestPushAfterCloseReturnsErrQueueClosed(t *testing.T) {
 	t.Parallel()
-	dc := NewDataChannels(4, 4)
+	dc := NewDataChannels(4)
 	dc.Close()
 
-	if err := dc.PushIssue(context.Background(), IssueRequest{}); err != ErrQueueClosed {
-		t.Fatalf("PushIssue after close: got %v, want ErrQueueClosed", err)
-	}
-	if err := dc.PushPR(context.Background(), PRRequest{}); err != ErrQueueClosed {
-		t.Fatalf("PushPR after close: got %v, want ErrQueueClosed", err)
+	if err := dc.PushEvent(context.Background(), LabelEvent{}); err != ErrQueueClosed {
+		t.Fatalf("PushEvent after close: got %v, want ErrQueueClosed", err)
 	}
 }
 
 func TestDoubleCloseDoesNotPanic(t *testing.T) {
 	t.Parallel()
-	dc := NewDataChannels(4, 4)
+	dc := NewDataChannels(4)
 	dc.Close()
 	dc.Close() // must not panic
 }
 
 func TestConcurrentPushAndCloseDoesNotPanic(t *testing.T) {
 	t.Parallel()
-	dc := NewDataChannels(64, 64)
+	dc := NewDataChannels(64)
 	var wg sync.WaitGroup
 
 	// Spawn writers that push continuously until they get ErrQueueClosed or
@@ -38,17 +35,7 @@ func TestConcurrentPushAndCloseDoesNotPanic(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for {
-				err := dc.PushIssue(context.Background(), IssueRequest{})
-				if err != nil {
-					return
-				}
-			}
-		}()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				err := dc.PushPR(context.Background(), PRRequest{})
+				err := dc.PushEvent(context.Background(), LabelEvent{})
 				if err != nil {
 					return
 				}

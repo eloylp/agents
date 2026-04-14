@@ -84,74 +84,77 @@ func newTestEngine(cfgMutator func(*config.Config)) (*Engine, *stubRunner) {
 	return NewEngine(cfg, map[string]ai.Runner{"claude": runner}, zerolog.Nop()), runner
 }
 
-func TestHandleIssueLabelEventRunsMatchingBinding(t *testing.T) {
+func TestHandleLabelEventIssueRunsMatchingBinding(t *testing.T) {
 	t.Parallel()
 	e, runner := newTestEngine(func(c *config.Config) {
-		// Add an issue-style binding.
 		c.Agents = append(c.Agents, config.AgentDef{Name: "refiner", Backend: "claude", Prompt: "Refine the issue."})
 		c.Repos[0].Use = append(c.Repos[0].Use, config.Binding{Agent: "refiner", Labels: []string{"ai:refine"}})
 	})
-	err := e.HandleIssueLabelEvent(context.Background(), IssueRequest{
-		Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
-		Issue: Issue{Number: 7},
-		Label: "ai:refine",
+	err := e.HandleLabelEvent(context.Background(), LabelEvent{
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "issue",
+		Number: 7,
+		Label:  "ai:refine",
 	})
 	if err != nil {
-		t.Fatalf("HandleIssueLabelEvent: %v", err)
+		t.Fatalf("HandleLabelEvent: %v", err)
 	}
 	if runner.callCount() != 1 {
 		t.Errorf("expected 1 run, got %d", runner.callCount())
 	}
 }
 
-func TestHandlePullRequestLabelEventRunsSingleAgent(t *testing.T) {
+func TestHandleLabelEventPRRunsSingleAgent(t *testing.T) {
 	t.Parallel()
 	e, runner := newTestEngine(nil)
-	err := e.HandlePullRequestLabelEvent(context.Background(), PRRequest{
-		Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
-		PR:    PullRequest{Number: 1},
-		Label: "ai:review:arch-reviewer",
+	err := e.HandleLabelEvent(context.Background(), LabelEvent{
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "pr",
+		Number: 1,
+		Label:  "ai:review:arch-reviewer",
 	})
 	if err != nil {
-		t.Fatalf("HandlePullRequestLabelEvent: %v", err)
+		t.Fatalf("HandleLabelEvent: %v", err)
 	}
 	if runner.callCount() != 1 {
 		t.Errorf("expected 1 run, got %d", runner.callCount())
 	}
 }
 
-func TestHandlePullRequestLabelEventFansOutToMultipleBindings(t *testing.T) {
+func TestHandleLabelEventPRFansOutToMultipleBindings(t *testing.T) {
 	t.Parallel()
 	e, runner := newTestEngine(func(c *config.Config) {
-		// Wire both reviewers to the same shared label.
 		c.Repos[0].Use = []config.Binding{
 			{Agent: "arch-reviewer", Labels: []string{"ai:review:all"}},
 			{Agent: "sec-reviewer", Labels: []string{"ai:review:all"}},
 		}
 	})
-	err := e.HandlePullRequestLabelEvent(context.Background(), PRRequest{
-		Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
-		PR:    PullRequest{Number: 1},
-		Label: "ai:review:all",
+	err := e.HandleLabelEvent(context.Background(), LabelEvent{
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "pr",
+		Number: 1,
+		Label:  "ai:review:all",
 	})
 	if err != nil {
-		t.Fatalf("HandlePullRequestLabelEvent: %v", err)
+		t.Fatalf("HandleLabelEvent: %v", err)
 	}
 	if runner.callCount() != 2 {
 		t.Errorf("expected 2 runs for fan-out, got %d", runner.callCount())
 	}
 }
 
-func TestHandlePullRequestLabelEventSkipsDraftPRs(t *testing.T) {
+func TestHandleLabelEventSkipsDraftPRs(t *testing.T) {
 	t.Parallel()
 	e, runner := newTestEngine(nil)
-	err := e.HandlePullRequestLabelEvent(context.Background(), PRRequest{
-		Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
-		PR:    PullRequest{Number: 1, Draft: true},
-		Label: "ai:review:arch-reviewer",
+	err := e.HandleLabelEvent(context.Background(), LabelEvent{
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "pr",
+		Number: 1,
+		Label:  "ai:review:arch-reviewer",
+		Draft:  true,
 	})
 	if err != nil {
-		t.Fatalf("HandlePullRequestLabelEvent: %v", err)
+		t.Fatalf("HandleLabelEvent: %v", err)
 	}
 	if runner.callCount() != 0 {
 		t.Errorf("expected 0 runs for draft PR, got %d", runner.callCount())
@@ -161,13 +164,14 @@ func TestHandlePullRequestLabelEventSkipsDraftPRs(t *testing.T) {
 func TestEngineSkipsUnmatchedLabel(t *testing.T) {
 	t.Parallel()
 	e, runner := newTestEngine(nil)
-	err := e.HandlePullRequestLabelEvent(context.Background(), PRRequest{
-		Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
-		PR:    PullRequest{Number: 1},
-		Label: "ai:review:no-such-agent",
+	err := e.HandleLabelEvent(context.Background(), LabelEvent{
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "pr",
+		Number: 1,
+		Label:  "ai:review:no-such-agent",
 	})
 	if err != nil {
-		t.Fatalf("HandlePullRequestLabelEvent: %v", err)
+		t.Fatalf("HandleLabelEvent: %v", err)
 	}
 	if runner.callCount() != 0 {
 		t.Errorf("expected 0 runs, got %d", runner.callCount())
@@ -180,13 +184,14 @@ func TestEngineSkipsDisabledBinding(t *testing.T) {
 	e, runner := newTestEngine(func(c *config.Config) {
 		c.Repos[0].Use[0].Enabled = &f
 	})
-	err := e.HandlePullRequestLabelEvent(context.Background(), PRRequest{
-		Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
-		PR:    PullRequest{Number: 1},
-		Label: "ai:review:arch-reviewer",
+	err := e.HandleLabelEvent(context.Background(), LabelEvent{
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "pr",
+		Number: 1,
+		Label:  "ai:review:arch-reviewer",
 	})
 	if err != nil {
-		t.Fatalf("HandlePullRequestLabelEvent: %v", err)
+		t.Fatalf("HandleLabelEvent: %v", err)
 	}
 	if runner.callCount() != 0 {
 		t.Errorf("expected 0 runs for disabled binding, got %d", runner.callCount())
@@ -208,10 +213,11 @@ func TestEngineJoinsErrorsAcrossAgents(t *testing.T) {
 		}
 		return nil
 	}
-	err := e.HandlePullRequestLabelEvent(context.Background(), PRRequest{
-		Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
-		PR:    PullRequest{Number: 1},
-		Label: "ai:review:all",
+	err := e.HandleLabelEvent(context.Background(), LabelEvent{
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "pr",
+		Number: 1,
+		Label:  "ai:review:all",
 	})
 	if err == nil || !errors.Is(err, boom) {
 		t.Fatalf("expected joined error containing boom, got %v", err)
@@ -221,4 +227,3 @@ func TestEngineJoinsErrorsAcrossAgents(t *testing.T) {
 		t.Errorf("expected both agents to be attempted, got %d calls", runner.callCount())
 	}
 }
-

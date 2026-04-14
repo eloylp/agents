@@ -7,29 +7,26 @@ import (
 )
 
 var (
-	ErrIssueQueueFull = errors.New("issue queue full")
-	ErrPRQueueFull    = errors.New("pr queue full")
+	ErrEventQueueFull = errors.New("event queue full")
 	ErrQueueClosed    = errors.New("queue closed")
 )
 
 type DataChannels struct {
-	issueQueue chan IssueRequest
-	prQueue    chan PRRequest
+	eventQueue chan LabelEvent
 	mu         sync.RWMutex
 	closed     bool
 }
 
-func NewDataChannels(issueBuffer, prBuffer int) *DataChannels {
+func NewDataChannels(buffer int) *DataChannels {
 	return &DataChannels{
-		issueQueue: make(chan IssueRequest, issueBuffer),
-		prQueue:    make(chan PRRequest, prBuffer),
+		eventQueue: make(chan LabelEvent, buffer),
 	}
 }
 
-// PushIssue enqueues a request without blocking. The select has three arms:
+// PushEvent enqueues a label event without blocking. The select has three arms:
 // context cancellation (caller is shutting down), successful enqueue, and the
 // default case which fires immediately when the channel buffer is full.
-func (dc *DataChannels) PushIssue(ctx context.Context, req IssueRequest) error {
+func (dc *DataChannels) PushEvent(ctx context.Context, ev LabelEvent) error {
 	dc.mu.RLock()
 	defer dc.mu.RUnlock()
 	if dc.closed {
@@ -38,55 +35,34 @@ func (dc *DataChannels) PushIssue(ctx context.Context, req IssueRequest) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case dc.issueQueue <- req:
+	case dc.eventQueue <- ev:
 		return nil
 	default:
-		return ErrIssueQueueFull
+		return ErrEventQueueFull
 	}
 }
 
-func (dc *DataChannels) PushPR(ctx context.Context, req PRRequest) error {
-	dc.mu.RLock()
-	defer dc.mu.RUnlock()
-	if dc.closed {
-		return ErrQueueClosed
-	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case dc.prQueue <- req:
-		return nil
-	default:
-		return ErrPRQueueFull
-	}
+func (dc *DataChannels) EventChan() <-chan LabelEvent {
+	return dc.eventQueue
 }
 
-func (dc *DataChannels) IssueChan() <-chan IssueRequest {
-	return dc.issueQueue
-}
-
-func (dc *DataChannels) PRChan() <-chan PRRequest {
-	return dc.prQueue
-}
-
-// QueueStat describes the current depth and capacity of one event queue.
+// QueueStat describes the current depth and capacity of the event queue.
 type QueueStat struct {
 	Buffered int
 	Capacity int
 }
 
-// QueueStats returns the current depth and capacity of the issue and PR queues.
+// QueueStats returns the current depth and capacity of the event queue.
 // Reading channel length and capacity is safe without holding the mutex because
 // these are intrinsic properties of the channel value and the lock only guards
 // the closed flag and send operations.
-func (dc *DataChannels) QueueStats() (issues, prs QueueStat) {
-	return QueueStat{len(dc.issueQueue), cap(dc.issueQueue)},
-		QueueStat{len(dc.prQueue), cap(dc.prQueue)}
+func (dc *DataChannels) QueueStats() QueueStat {
+	return QueueStat{len(dc.eventQueue), cap(dc.eventQueue)}
 }
 
-// Close shuts down both queues. The write lock ensures no in-flight Push call
-// can race with channel closure. Subsequent Close calls are safe because the
-// closed flag is checked first.
+// Close shuts down the event queue. The write lock ensures no in-flight Push
+// call can race with channel closure. Subsequent Close calls are safe because
+// the closed flag is checked first.
 func (dc *DataChannels) Close() {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
@@ -94,6 +70,5 @@ func (dc *DataChannels) Close() {
 		return
 	}
 	dc.closed = true
-	close(dc.issueQueue)
-	close(dc.prQueue)
+	close(dc.eventQueue)
 }

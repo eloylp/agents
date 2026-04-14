@@ -51,11 +51,14 @@ func signatureForTests(body []byte, secret string) string {
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
+func newTestServer(cfg *config.Config) (*Server, *workflow.DataChannels) {
+	dc := workflow.NewDataChannels(1)
+	return NewServer(cfg, NewDeliveryStore(time.Hour), dc, nil, zerolog.Nop(), nil), dc
+}
+
 func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
 	t.Parallel()
-	cfg := testCfg(nil)
-	dataChannels := workflow.NewDataChannels(1, 1)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop(), nil)
+	server, dc := newTestServer(testCfg(nil))
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":1}}`
 	sig := signatureForTests([]byte(body), "secret")
@@ -82,15 +85,15 @@ func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
 		t.Fatalf("dedup delivery: got %d, want %d", rr2.Code, http.StatusAccepted)
 	}
 
-	// Only one IssueRequest should have been pushed.
+	// Only one LabelEvent should have been pushed.
 	select {
-	case <-dataChannels.IssueChan():
+	case <-dc.EventChan():
 		// ok
 	default:
-		t.Fatalf("expected first delivery to enqueue an issue")
+		t.Fatalf("expected first delivery to enqueue an event")
 	}
 	select {
-	case <-dataChannels.IssueChan():
+	case <-dc.EventChan():
 		t.Fatalf("second duplicate delivery must not enqueue")
 	default:
 	}
@@ -98,9 +101,7 @@ func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
 
 func TestHandleWebhookIgnoresNonAILabel(t *testing.T) {
 	t.Parallel()
-	cfg := testCfg(nil)
-	dataChannels := workflow.NewDataChannels(1, 1)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop(), nil)
+	server, dc := newTestServer(testCfg(nil))
 
 	body := `{"action":"labeled","label":{"name":"bug"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":2}}`
 	sig := signatureForTests([]byte(body), "secret")
@@ -116,7 +117,7 @@ func TestHandleWebhookIgnoresNonAILabel(t *testing.T) {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
 	}
 	select {
-	case <-dataChannels.PRChan():
+	case <-dc.EventChan():
 		t.Fatalf("non-ai label should not enqueue")
 	default:
 	}
@@ -124,9 +125,7 @@ func TestHandleWebhookIgnoresNonAILabel(t *testing.T) {
 
 func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
 	t.Parallel()
-	cfg := testCfg(nil)
-	dataChannels := workflow.NewDataChannels(1, 1)
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop(), nil)
+	server, dc := newTestServer(testCfg(nil))
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":7}}`
 
@@ -151,21 +150,23 @@ func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
 	if rrGood.Code != http.StatusAccepted {
 		t.Fatalf("retry with good sig: got %d body=%s", rrGood.Code, rrGood.Body.String())
 	}
+	_ = dc
 }
 
-func TestHandleIssueWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) {
+func TestHandleWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(nil)
-	dataChannels := workflow.NewDataChannels(1, 1)
+	dc := workflow.NewDataChannels(1)
 	// Preload the queue.
-	if err := dataChannels.PushIssue(context.Background(), workflow.IssueRequest{
-		Repo:  workflow.RepoRef{FullName: cfg.Repos[0].Name, Enabled: cfg.Repos[0].Enabled},
-		Issue: workflow.Issue{Number: 99},
-		Label: "ai:refine",
+	if err := dc.PushEvent(context.Background(), workflow.LabelEvent{
+		Repo:   workflow.RepoRef{FullName: cfg.Repos[0].Name, Enabled: cfg.Repos[0].Enabled},
+		Kind:   "issue",
+		Number: 99,
+		Label:  "ai:refine",
 	}); err != nil {
-		t.Fatalf("preload issue queue: %v", err)
+		t.Fatalf("preload event queue: %v", err)
 	}
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dataChannels, nil, zerolog.Nop(), nil)
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dc, nil, zerolog.Nop(), nil)
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":2}}`
 	sig := signatureForTests([]byte(body), "secret")
@@ -188,7 +189,7 @@ func TestHandleIssueWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) 
 	req2.Header.Set("X-GitHub-Delivery", "delivery-queue-full")
 	req2.Header.Set("X-Hub-Signature-256", sig)
 	// Drain the preloaded item so the next push succeeds.
-	<-dataChannels.IssueChan()
+	<-dc.EventChan()
 	server.handleGitHubWebhook(rr2, req2)
 	if rr2.Code != http.StatusAccepted {
 		t.Fatalf("retry: got %d, want %d", rr2.Code, http.StatusAccepted)
@@ -213,7 +214,7 @@ func (s *stubTriggerer) TriggerAgent(_ context.Context, agentName, repo string) 
 
 func newRunServer(triggerer AgentTriggerer) *Server {
 	cfg := testCfg(nil)
-	return NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1, 1), nil, zerolog.Nop(), triggerer)
+	return NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1), nil, zerolog.Nop(), triggerer)
 }
 
 func authedRequest(method, path, body string) *http.Request {
@@ -268,7 +269,7 @@ func TestHandleAgentsRunRejectsWrongToken(t *testing.T) {
 func TestHandleAgentsRunReturnsForbiddenWhenNoAPIKeyConfigured(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) { c.Daemon.HTTP.APIKey = "" })
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1, 1), nil, zerolog.Nop(), &stubTriggerer{})
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1), nil, zerolog.Nop(), &stubTriggerer{})
 	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
 	req.Header.Set("Authorization", "Bearer something")
 	rr := httptest.NewRecorder()

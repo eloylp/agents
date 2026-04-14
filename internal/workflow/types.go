@@ -22,14 +22,12 @@ type RepoRef struct {
 	Enabled  bool
 }
 
-type IssueRequest struct {
-	Repo  RepoRef
-	Issue Issue
-	Label string
-}
-
-type PRRequest struct {
-	Repo  RepoRef
-	PR    PullRequest
-	Label string
+// LabelEvent is the single event type for both issue and PR label triggers.
+// Kind is "issue" or "pr". Draft is only meaningful for PRs; ignored elsewhere.
+type LabelEvent struct {
+	Repo   RepoRef
+	Kind   string // "issue" | "pr"
+	Number int
+	Label  string
+	Draft  bool
 }
