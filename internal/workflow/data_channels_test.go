@@ -7,6 +7,7 @@ import (
 )
 
 func TestPushAfterCloseReturnsErrQueueClosed(t *testing.T) {
+	t.Parallel()
 	dc := NewDataChannels(4, 4)
 	dc.Close()
 
@@ -19,12 +20,14 @@ func TestPushAfterCloseReturnsErrQueueClosed(t *testing.T) {
 }
 
 func TestDoubleCloseDoesNotPanic(t *testing.T) {
+	t.Parallel()
 	dc := NewDataChannels(4, 4)
 	dc.Close()
 	dc.Close() // must not panic
 }
 
 func TestConcurrentPushAndCloseDoesNotPanic(t *testing.T) {
+	t.Parallel()
 	dc := NewDataChannels(64, 64)
 	var wg sync.WaitGroup
 
