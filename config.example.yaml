@@ -52,58 +52,79 @@ daemon:
 #
 # Each skill is a named chunk of guidance. Agents reference skills by
 # name; at runtime the guidance is concatenated into the agent's prompt.
+# Use `prompt:` for short inline guidance or `prompt_file:` to load from
+# a file (path relative to this config).
 # ──────────────────────────────────────────────
 skills:
   architect:
-    prompt: |
-      Focus on architecture boundaries, coupling, extensibility, and maintainability risks.
-
+    prompt_file: skills/architect.md
   security:
-    prompt: |
-      Focus on authn/authz, secrets exposure, injection vectors, and unsafe defaults.
-
+    prompt_file: skills/security.md
   testing:
-    prompt: |
-      Focus on missing tests, brittle tests, regression coverage, and testability.
-
+    prompt_file: skills/testing.md
   devops:
-    prompt: |
-      Focus on reliability, deployment safety, observability, and operational simplicity.
-
+    prompt_file: skills/devops.md
   dx:
-    prompt: |
-      Focus on developer experience: config ergonomics, error clarity, onboarding friction, documentation accuracy.
-
+    prompt_file: skills/dx.md
   product:
-    prompt: |
-      Focus on product-market fit: user value, competitive positioning, feature gaps vs bloat, adoption friction.
+    prompt_file: skills/product.md
 
 # ──────────────────────────────────────────────
 # agents — named capabilities
 #
 # Each agent is a capability definition: a name, a backend, the skills
-# it uses, and a prompt. Agents don't run on their own — repos below
-# decide when and where they run.
+# it uses, and a prompt file. Agents don't run on their own — repos
+# below decide when and where they run.
 #
 # backend: auto | claude | codex   ("auto" picks the default)
 # allow_prs: false (default) | true
 #   When false the scheduler prepends a hard "do not open PRs" instruction
 #   before the agent's prompt. Set to true only for agents explicitly
-#   designed to open pull requests.
-# prompt: inline text, OR
-# prompt_file: path relative to the config file's directory
+#   designed to open pull requests (coders, refactorers).
+# prompt_file: path relative to the config file's directory.
 # ──────────────────────────────────────────────
 agents:
-  # Inline prompt — good for short, simple agents.
+  # Autonomous scouts — survey the codebase and open issues for follow-up.
+  - name: scout-issues
+    backend: auto
+    skills: &scout-skills [architect, dx]
+    prompt_file: prompts/codebase-scout-issues.md
+
+  - name: scout-code
+    backend: auto
+    skills: *scout-skills
+    prompt_file: prompts/codebase-scout-code.md
+
+  # PR-authoring agents — require allow_prs: true.
+  - name: coder
+    backend: claude
+    skills: [architect, testing]
+    prompt_file: prompts/coder.md
+    allow_prs: true
+
+  - name: refactorer
+    backend: claude
+    skills: [architect, testing, dx]
+    prompt_file: prompts/refactorer.md
+    allow_prs: true
+
+  # PR-reviewing agent — comments only, no PRs (default allow_prs: false).
+  - name: pr-reviewer
+    backend: codex
+    skills: [architect, testing, security]
+    prompt_file: prompts/pr-reviewer.md
+
+  - name: product-strategist
+    backend: claude
+    skills: [product, dx]
+    prompt_file: prompts/product-strategist.md
+
+  # Single-axis review agents, one per skill.
   - name: arch-reviewer
     backend: auto
     skills: [architect]
-    prompt: |
-      You are an architecture-focused PR reviewer. Post one high-signal
-      review comment on the PR.
+    prompt_file: prompts/arch-reviewer.md
 
-  # Prompt loaded from a file — recommended for longer prompts.
-  # The path is resolved relative to the config file's directory.
   - name: sec-reviewer
     backend: auto
     skills: [security]
@@ -113,6 +134,16 @@ agents:
     backend: auto
     skills: [testing]
     prompt_file: prompts/test-reviewer.md
+
+  - name: ops-reviewer
+    backend: auto
+    skills: [devops]
+    prompt_file: prompts/ops-reviewer.md
+
+  - name: dx-reviewer
+    backend: auto
+    skills: [dx]
+    prompt_file: prompts/dx-reviewer.md
 
 # ──────────────────────────────────────────────
 # repos — wiring: where and when agents run
@@ -130,11 +161,31 @@ repos:
   - name: "owner/repo"
     enabled: true
     use:
+      # Label-triggered reviewers (event-driven).
       - agent: arch-reviewer
         labels: ["ai:review:arch-reviewer"]
-
       - agent: sec-reviewer
         labels: ["ai:review:sec-reviewer"]
-
       - agent: test-reviewer
         labels: ["ai:review:test-reviewer"]
+      - agent: ops-reviewer
+        labels: ["ai:review:ops-reviewer"]
+      - agent: dx-reviewer
+        labels: ["ai:review:dx-reviewer"]
+
+      # Cron-scheduled autonomous agents.
+      - agent: scout-issues
+        cron: "0 0 30 2 *"   # effectively disabled (Feb 30 never fires)
+        enabled: false
+      - agent: scout-code
+        cron: "0 0 30 2 *"
+        enabled: false
+      - agent: coder
+        cron: "0,15,30,45 8-18 * * *"
+      - agent: pr-reviewer
+        cron: "5,20,35,50 8-19 * * *"
+      - agent: refactorer
+        cron: "0 9,11,13,15,17 * * *"
+      - agent: product-strategist
+        cron: "0 8 * * *"
+        enabled: false
