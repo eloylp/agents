@@ -142,6 +142,31 @@ func (s *DispatchDedupStore) Remove(target, repo string, number int) {
 	delete(s.entries, key)
 }
 
+// MarkCronRun records that a cron or manual (--run-agent) execution has
+// started for (agent, repo). The mark persists for the full TTL window.
+// It lives in a separate key namespace ("cron\x00…") from dispatch entries
+// so that repeated cron runs are never suppressed by this mark — only
+// dispatches are. The mark should be written at the start of an autonomous
+// run so that both concurrent and post-run dispatches within the window are
+// collapsed.
+func (s *DispatchDedupStore) MarkCronRun(agent, repo string, now time.Time) {
+	key := "cron\x00" + agent + "\x00" + repo
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.entries[key] = now.Add(s.ttl)
+}
+
+// SeenCronRun returns true if a cron or manual run has been recorded for
+// (agent, repo) within the TTL window. Used by ProcessDispatches to
+// suppress dispatches targeting an agent that already ran (or is running).
+func (s *DispatchDedupStore) SeenCronRun(agent, repo string, now time.Time) bool {
+	key := "cron\x00" + agent + "\x00" + repo
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	expiresAt, ok := s.entries[key]
+	return ok && now.Before(expiresAt)
+}
+
 // Dispatcher validates and enqueues inter-agent dispatch requests produced by
 // agent runs. It enforces whitelist, opt-in, self-dispatch, depth, fanout, and
 // dedup safety limits.
@@ -234,7 +259,17 @@ func (d *Dispatcher) ProcessDispatches(
 			continue
 		}
 
-		// Dedup check.
+		// Cron-vs-dispatch collapse: if a cron/manual run of the target has
+		// been recorded within the dedup window, suppress the dispatch without
+		// writing to the dispatch key space (so retries after the window are
+		// not further blocked).
+		if d.dedup.SeenCronRun(req.Agent, ev.Repo.FullName, time.Now()) {
+			logBase.Debug().Msg("dispatch deduped: cron run already executed within window")
+			d.counters.deduped.Add(1)
+			continue
+		}
+
+		// Dispatch-to-dispatch dedup check.
 		if d.dedup.SeenOrAdd(req.Agent, ev.Repo.FullName, number, time.Now()) {
 			logBase.Debug().Msg("dispatch deduped: already seen within window")
 			d.counters.deduped.Add(1)
@@ -270,23 +305,23 @@ func (d *Dispatcher) ProcessDispatches(
 	}
 }
 
-// CheckAndMarkAutonomousRun checks whether the dedup slot (agentName, repo, 0)
-// is already held by a dispatch. If not, it marks the slot so near-simultaneous
-// dispatches targeting the same agent/repo see the running autonomous execution
-// as already in-flight and are suppressed. Returns true when a dispatch already
-// claimed the slot (cron/manual run should be skipped); false when we claimed it.
+// CheckAndMarkAutonomousRun checks whether a dispatch has already claimed the
+// (agentName, repo, 0) slot in the dispatch dedup namespace (dispatch-first
+// ordering). If not, it writes a cron activity mark in the separate cron
+// namespace so that both concurrent and post-run dispatches targeting the
+// same agent within dedup_window_seconds are suppressed (cron-first ordering).
 //
-// The caller MUST call ClearAutonomousRunMark (typically via defer) when the run
-// finishes so that the next scheduled run is not suppressed for the full TTL window.
+// The cron mark uses a different key namespace from dispatch entries, so
+// repeated cron runs are never blocked by this mark — only dispatches are.
+// There is no corresponding "clear" call: the mark persists for the full
+// dedup_window_seconds by design, collapsing all dispatch attempts that
+// arrive within that window after the autonomous run.
 func (d *Dispatcher) CheckAndMarkAutonomousRun(agentName, repo string, now time.Time) bool {
-	return d.dedup.SeenOrAdd(agentName, repo, 0, now)
-}
-
-// ClearAutonomousRunMark removes the dedup slot written by CheckAndMarkAutonomousRun.
-// It must be called (typically via defer) when an autonomous run completes so that
-// the next scheduled run is not suppressed for the full dedup window.
-func (d *Dispatcher) ClearAutonomousRunMark(agentName, repo string) {
-	d.dedup.Remove(agentName, repo, 0)
+	if d.dedup.Seen(agentName, repo, 0, now) {
+		return true
+	}
+	d.dedup.MarkCronRun(agentName, repo, now)
+	return false
 }
 
 // Stats returns a snapshot of the current dispatch counters.

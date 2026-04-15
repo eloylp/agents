@@ -441,9 +441,9 @@ func TestSchedulerCronRunSkippedWhenAlreadySeenInDedup(t *testing.T) {
 	s.WithDispatcher(dispatcher)
 
 	// Simulate a dispatch having arrived first for (reviewer, owner/repo, 0):
-	// write the dedup key directly on the store (same key format that
-	// ProcessDispatches would write). CheckAndMarkAutonomousRun is check-only
-	// and must not be used to seed the entry.
+	// write the dispatch-namespace dedup key directly, as ProcessDispatches
+	// would. CheckAndMarkAutonomousRun checks this dispatch namespace and must
+	// detect the prior dispatch and skip the cron run.
 	_ = dedup.SeenOrAdd("reviewer", "owner/repo", 0, time.Now())
 
 	// TriggerAgent must skip the run — the dedup entry is already present.
@@ -460,9 +460,9 @@ func TestSchedulerCronRunSkippedWhenAlreadySeenInDedup(t *testing.T) {
 }
 
 // TestSchedulerCronRunNotSuppressedByPriorCronRun verifies that two consecutive
-// cron runs for the same agent both execute. CheckAndMarkAutonomousRun now writes
-// to the dedup store, but executeAgentRun clears the mark via defer on completion,
-// so subsequent runs within the TTL window are not suppressed.
+// cron runs for the same agent both execute. CheckAndMarkAutonomousRun writes a
+// cron-namespace mark (not a dispatch-namespace entry), and cron runs only check
+// the dispatch namespace, so the cron mark never suppresses subsequent cron runs.
 func TestSchedulerCronRunNotSuppressedByPriorCronRun(t *testing.T) {
 	t.Parallel()
 	cfg := dispatchCfgForTest()

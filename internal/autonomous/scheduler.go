@@ -254,9 +254,11 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 				Msg("autonomous run skipped: already seen within dispatch dedup window")
 			return nil
 		}
-		// We marked the slot; clear it when done so the next scheduled run
-		// is not suppressed for the full TTL window.
-		defer s.dispatcher.ClearAutonomousRunMark(agent.Name, repo)
+		// CheckAndMarkAutonomousRun wrote a cron-namespace mark that persists
+		// for the full dedup_window_seconds. No cleanup is needed: the mark
+		// intentionally suppresses dispatches to the same target for that
+		// entire window, while subsequent cron runs check only the dispatch
+		// namespace and are therefore unaffected.
 	}
 	backend := s.cfg.ResolveBackend(agent.Backend)
 	if backend == "" {

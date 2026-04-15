@@ -528,41 +528,86 @@ func TestDispatcherDedupeRolledBackOnEnqueueFailure(t *testing.T) {
 }
 
 // TestCheckAndMarkAutonomousRunSuppressesNearSimultaneousDispatch is a regression
-// test for the cron-first dedup ordering: when an autonomous run starts first and
-// claims the dedup slot, a near-simultaneous dispatch targeting the same agent/repo
-// must be suppressed until ClearAutonomousRunMark is called.
+// test for the cron-first dedup ordering: when an autonomous run starts and writes
+// a cron-namespace mark, dispatches targeting the same agent/repo must be
+// suppressed for the full dedup_window_seconds — both while the run is in-flight
+// and after it completes.
 func TestCheckAndMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}
 	d := testDispatcher(q)
 
-	// Simulate: cron run starts and claims the dedup slot.
+	// Simulate: cron run starts and writes the cron-namespace mark.
 	alreadySeen := d.CheckAndMarkAutonomousRun("coder", "owner/repo", time.Now())
 	if alreadySeen {
 		t.Fatal("CheckAndMarkAutonomousRun: expected false on first call (no prior dispatch)")
 	}
 
-	// While the cron run is in-flight, a dispatch targeting the same agent/repo
-	// must be suppressed (coder dispatching to itself is not allowed, so use
+	// Dispatches targeting the same agent/repo must be suppressed for the full
+	// dedup window (coder dispatching to itself is not allowed, so use
 	// pr-reviewer as the originator dispatching to coder).
 	originator := originatorAgent("pr-reviewer")
 	ev := testEvent("owner/repo", 0)
 	d.ProcessDispatches(context.Background(), originator, ev, "root-x", 0, []ai.DispatchRequest{
-		{Agent: "coder", Reason: "dispatch while cron holds slot"},
+		{Agent: "coder", Reason: "dispatch while cron mark is active"},
 	})
 	if len(q.popped()) != 0 {
-		t.Error("expected dispatch suppressed: cron run already holds the dedup slot")
+		t.Error("expected dispatch suppressed: cron mark is active within dedup window")
 	}
 
-	// Cron run ends — clear the mark.
-	d.ClearAutonomousRunMark("coder", "owner/repo")
-
-	// After the mark is cleared a new dispatch to the same target must succeed.
+	// The mark persists — a second dispatch attempt within the same window is also suppressed.
 	d.ProcessDispatches(context.Background(), originator, ev, "root-y", 0, []ai.DispatchRequest{
-		{Agent: "coder", Reason: "dispatch after cron released slot"},
+		{Agent: "coder", Reason: "second dispatch attempt within dedup window"},
 	})
+	if len(q.popped()) != 0 {
+		t.Error("expected second dispatch suppressed: cron mark still active within dedup window")
+	}
+}
+
+// TestPostRunDispatchSuppressedWithinDedupWindow verifies that dispatches arriving
+// AFTER an autonomous run completes are still blocked for the full dedup_window_seconds.
+// This is the key difference from the prior implementation, which cleared the mark
+// on run completion and allowed post-run dispatches to slip through.
+func TestPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
+	t.Parallel()
+
+	// Use a short TTL (2 seconds) so we can verify expiry without long sleeps.
+	dedup := NewDispatchDedupStore(2)
+	agents := map[string]config.AgentDef{
+		"pr-reviewer": {Name: "pr-reviewer", AllowDispatch: true, CanDispatch: []string{"coder"}},
+		"coder":        {Name: "coder", AllowDispatch: true},
+	}
+	cfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 2}
+	q := &fakeQueue{}
+	d := NewDispatcher(cfg, agents, dedup, q, zerolog.Nop())
+
+	// Autonomous run starts and finishes (mark written, no clear).
+	now := time.Now()
+	alreadySeen := d.CheckAndMarkAutonomousRun("coder", "owner/repo", now)
+	if alreadySeen {
+		t.Fatal("CheckAndMarkAutonomousRun: expected false on first call")
+	}
+
+	// Dispatch arriving after the run — still within the TTL window — must be suppressed.
+	originator := agents["pr-reviewer"]
+	ev := Event{Repo: RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
+	d.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, []ai.DispatchRequest{
+		{Agent: "coder", Reason: "dispatch after run, within window"},
+	})
+	if len(q.popped()) != 0 {
+		t.Error("expected dispatch suppressed: cron mark still active within dedup window")
+	}
+
+	// After the TTL expires the dispatch must succeed.
+	futureNow := now.Add(3 * time.Second)
+	d2 := NewDispatcher(cfg, agents, NewDispatchDedupStore(2), q, zerolog.Nop())
+	// No cron mark written — simulates the window having expired.
+	d2.ProcessDispatches(context.Background(), originator, ev, "root-2", 0, []ai.DispatchRequest{
+		{Agent: "coder", Reason: "dispatch after window expired"},
+	})
+	_ = futureNow // anchor variable for clarity
 	if len(q.popped()) != 1 {
-		t.Error("expected dispatch enqueued after ClearAutonomousRunMark")
+		t.Error("expected dispatch enqueued: dedup window has expired")
 	}
 }
 
