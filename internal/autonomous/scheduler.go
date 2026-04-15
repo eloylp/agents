@@ -3,6 +3,7 @@ package autonomous
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -224,14 +225,9 @@ func (s *Scheduler) TriggerAgent(ctx context.Context, agentName, repo string) er
 	}
 	// The agent must actually be bound to this repo (any trigger kind is
 	// sufficient for on-demand execution).
-	bound := false
-	for _, b := range repoDef.Use {
-		if b.Agent == agentName && b.IsEnabled() {
-			bound = true
-			break
-		}
-	}
-	if !bound {
+	if !slices.ContainsFunc(repoDef.Use, func(b config.Binding) bool {
+		return b.Agent == agentName && b.IsEnabled()
+	}) {
 		return fmt.Errorf("agent %q is not bound to repo %q", agentName, repo)
 	}
 	return s.executeAgentRun(ctx, repoDef.Name, agent)
