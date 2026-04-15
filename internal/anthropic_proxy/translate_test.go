@@ -412,6 +412,44 @@ func jsonBlocks(blocks []ContentBlock) json.RawMessage {
 	return json.RawMessage(b)
 }
 
+// TestToOpenAI_UnsupportedUserBlock verifies that a user turn containing an
+// unsupported content block type (e.g. "image") returns a translation error
+// rather than silently dropping the block.
+func TestToOpenAI_UnsupportedUserBlock(t *testing.T) {
+	t.Parallel()
+	req := MessagesRequest{
+		Messages: []AnthropicMessage{
+			{
+				Role:    "user",
+				Content: jsonBlocks([]ContentBlock{{Type: "image", Text: ""}}),
+			},
+		},
+	}
+	_, err := ToOpenAI(req, "gpt-4")
+	if err == nil {
+		t.Fatal("expected error for unsupported user block type, got nil")
+	}
+}
+
+// TestToOpenAI_UnsupportedAssistantBlock verifies that an assistant turn
+// containing an unsupported content block type (e.g. "thinking") returns a
+// translation error rather than silently dropping the block.
+func TestToOpenAI_UnsupportedAssistantBlock(t *testing.T) {
+	t.Parallel()
+	req := MessagesRequest{
+		Messages: []AnthropicMessage{
+			{
+				Role:    "assistant",
+				Content: jsonBlocks([]ContentBlock{{Type: "thinking", Text: "some chain of thought"}}),
+			},
+		},
+	}
+	_, err := ToOpenAI(req, "gpt-4")
+	if err == nil {
+		t.Fatal("expected error for unsupported assistant block type, got nil")
+	}
+}
+
 func assertMsg(t *testing.T, msg ChatMessage, role, content string, toolCalls []ToolCall) {
 	t.Helper()
 	if msg.Role != role {

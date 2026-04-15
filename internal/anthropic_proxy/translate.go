@@ -111,6 +111,8 @@ func translateUserMessage(text string, blocks []ContentBlock) ([]ChatMessage, er
 				ToolCallID: b.ToolUseID,
 				Content:    content,
 			})
+		default:
+			return nil, fmt.Errorf("unsupported user content block type %q", b.Type)
 		}
 	}
 
@@ -130,8 +132,14 @@ func translateAssistantMessage(text string, blocks []ContentBlock) ([]ChatMessag
 	msg := ChatMessage{Role: "assistant", Content: text}
 
 	for _, b := range blocks {
-		if b.Type != "tool_use" {
+		switch b.Type {
+		case "text":
+			// Already captured in the text parameter via parseContent; skip.
 			continue
+		case "tool_use":
+			// Handled below.
+		default:
+			return nil, fmt.Errorf("unsupported assistant content block type %q", b.Type)
 		}
 		args, err := rawJSONToString(b.Input)
 		if err != nil {
