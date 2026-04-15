@@ -24,6 +24,12 @@ daemon:
     event_queue_buffer: 256
     max_concurrent_agents: 4                    # per-event fan-out cap
 
+    # dispatch — inter-agent dispatch safety limits
+    dispatch:
+      max_depth: 3             # max dispatch chain length before drop + WARN
+      max_fanout: 4            # max dispatches per single agent run
+      dedup_window_seconds: 300  # suppress duplicate (target, repo, number) within window
+
   memory_dir: /var/lib/agents/memory            # persistent agent memory root
 
   # Built-in Anthropic↔OpenAI translation proxy (disabled by default).
@@ -116,29 +122,44 @@ skills:
 #   When false the scheduler prepends a hard "do not open PRs" instruction
 #   before the agent's prompt. Set to true only for agents explicitly
 #   designed to open pull requests (coders, refactorers).
+# description: short human-readable summary of the agent's role.
+#   Required when the agent appears in any other agent's can_dispatch list.
+# allow_dispatch: false (default) | true
+#   Opt-in gate: only agents with allow_dispatch: true can be dispatched.
+# can_dispatch: [agent-name, ...]
+#   Whitelist of agents this agent is allowed to dispatch. Entries must
+#   reference real agents in this config; self-reference is rejected.
 # prompt_file: path relative to the config file's directory.
 # ──────────────────────────────────────────────
 agents:
   # Autonomous scouts — survey the codebase and open issues for follow-up.
   - name: scout-issues
     backend: auto
+    description: "Surveys the codebase for issues worth tracking in the issue tracker"
     skills: &scout-skills [architect, dx]
     prompt_file: prompts/codebase-scout-issues.md
+    can_dispatch: [product-strategist]
 
   - name: scout-code
     backend: auto
+    description: "Surveys the codebase for code-quality and architectural concerns"
     skills: *scout-skills
     prompt_file: prompts/codebase-scout-code.md
+    can_dispatch: [product-strategist]
 
   # PR-authoring agents — require allow_prs: true.
   - name: coder
     backend: claude
+    description: "Implements fixes and features; opens pull requests"
     skills: [architect, testing]
     prompt_file: prompts/coder.md
     allow_prs: true
+    allow_dispatch: true    # can be dispatched by pr-reviewer on REQUEST_CHANGES
+    can_dispatch: [pr-reviewer]
 
   - name: refactorer
     backend: claude
+    description: "Refactors existing code for readability and maintainability"
     skills: [architect, testing, dx]
     prompt_file: prompts/refactorer.md
     allow_prs: true
@@ -146,37 +167,48 @@ agents:
   # PR-reviewing agent — comments only, no PRs (default allow_prs: false).
   - name: pr-reviewer
     backend: codex
+    description: "Reviews pull requests for quality, test coverage, and correctness"
     skills: [architect, testing, security]
     prompt_file: prompts/pr-reviewer.md
+    allow_dispatch: true    # can be dispatched by coder when PR is ready
+    can_dispatch: [coder, sec-reviewer]
 
   - name: product-strategist
     backend: claude
+    description: "Translates technical findings into product-level insights and priorities"
     skills: [product, dx]
     prompt_file: prompts/product-strategist.md
+    allow_dispatch: true    # scouts dispatch here with product-facing findings
 
   # Single-axis review agents, one per skill.
   - name: arch-reviewer
     backend: auto
+    description: "Reviews architecture and design decisions"
     skills: [architect]
     prompt_file: prompts/arch-reviewer.md
 
   - name: sec-reviewer
     backend: auto
+    description: "Reviews security concerns and potential vulnerabilities"
     skills: [security]
     prompt_file: prompts/sec-reviewer.md
+    allow_dispatch: true    # pr-reviewer escalates security smells here
 
   - name: test-reviewer
     backend: auto
+    description: "Reviews test coverage and testing strategy"
     skills: [testing]
     prompt_file: prompts/test-reviewer.md
 
   - name: ops-reviewer
     backend: auto
+    description: "Reviews operational concerns: CI, deployment, observability"
     skills: [devops]
     prompt_file: prompts/ops-reviewer.md
 
   - name: dx-reviewer
     backend: auto
+    description: "Reviews developer experience: docs, tooling, onboarding"
     skills: [dx]
     prompt_file: prompts/dx-reviewer.md
 

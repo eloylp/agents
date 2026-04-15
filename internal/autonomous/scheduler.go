@@ -243,12 +243,14 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		return fmt.Errorf("no runner for backend %q", backend)
 	}
 	logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Str("backend", backend).Logger()
+	roster := s.buildRoster(repo, agent.Name)
 	return s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
 		prompt, err := ai.RenderAgentPrompt(agent, s.cfg.Skills, ai.PromptContext{
 			Repo:       repo,
 			Backend:    backend,
 			Memory:     memory,
 			MemoryPath: memoryPath,
+			Roster:     roster,
 		})
 		if err != nil {
 			return fmt.Errorf("render prompt: %w", err)
@@ -268,6 +270,37 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Msg("autonomous pass completed")
 		return nil
 	})
+}
+
+// buildRoster returns the roster of peer agents for the given repo, excluding
+// the current agent.
+func (s *Scheduler) buildRoster(repoName, currentAgentName string) []ai.RosterEntry {
+	repoDef, ok := s.cfg.RepoByName(repoName)
+	if !ok {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var roster []ai.RosterEntry
+	for _, b := range repoDef.Use {
+		if !b.IsEnabled() || b.Agent == currentAgentName {
+			continue
+		}
+		if _, dup := seen[b.Agent]; dup {
+			continue
+		}
+		agent, ok := s.cfg.AgentByName(b.Agent)
+		if !ok {
+			continue
+		}
+		seen[b.Agent] = struct{}{}
+		roster = append(roster, ai.RosterEntry{
+			Name:          agent.Name,
+			Description:   agent.Description,
+			Skills:        agent.Skills,
+			AllowDispatch: agent.AllowDispatch,
+		})
+	}
+	return roster
 }
 
 func (s *Scheduler) setRunCtx(ctx context.Context) {

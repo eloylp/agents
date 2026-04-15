@@ -20,7 +20,17 @@ type Artifact struct {
 	URL      *string `json:"url"`
 }
 
+// DispatchRequest is a request from an agent to dispatch another agent on the
+// same repo. The daemon validates these requests against whitelist and safety
+// limits before enqueuing a synthetic "agent.dispatch" event.
+type DispatchRequest struct {
+	Agent  string `json:"agent"`
+	Number int    `json:"number,omitempty"`
+	Reason string `json:"reason"`
+}
+
 type Response struct {
-	Artifacts []Artifact `json:"artifacts"`
-	Summary   string     `json:"summary"`
+	Artifacts []Artifact        `json:"artifacts"`
+	Summary   string            `json:"summary"`
+	Dispatch  []DispatchRequest `json:"dispatch,omitempty"`
 }

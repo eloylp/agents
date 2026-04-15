@@ -70,7 +70,7 @@ func newTestEngine(cfgMutator func(*config.Config)) (*Engine, *stubRunner) {
 	if cfgMutator != nil {
 		cfgMutator(cfg)
 	}
-	return NewEngine(cfg, map[string]ai.Runner{"claude": runner}, zerolog.Nop()), runner
+	return NewEngine(cfg, map[string]ai.Runner{"claude": runner}, nil, zerolog.Nop()), runner
 }
 
 // labelEvent builds an Event for a labeled trigger (issues or pull_request).

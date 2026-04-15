@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -194,5 +195,45 @@ func TestExtractJSON(t *testing.T) {
 				t.Fatalf("got %q, want %q", string(got), tt.want)
 			}
 		})
+	}
+}
+
+func TestResponseWithDispatchRoundTrips(t *testing.T) {
+	t.Parallel()
+	src := Response{
+		Summary: "ok",
+		Artifacts: []Artifact{
+			{Type: "comment", PartKey: "body", GitHubID: "123"},
+		},
+		Dispatch: []DispatchRequest{
+			{Agent: "pr-reviewer", Number: 42, Reason: "ready for review"},
+		},
+	}
+	data, err := json.Marshal(src)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got Response
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Dispatch) != 1 {
+		t.Fatalf("dispatch length: got %d, want 1", len(got.Dispatch))
+	}
+	d := got.Dispatch[0]
+	if d.Agent != "pr-reviewer" || d.Number != 42 || d.Reason != "ready for review" {
+		t.Errorf("dispatch mismatch: %+v", d)
+	}
+}
+
+func TestResponseDispatchOmittedWhenEmpty(t *testing.T) {
+	t.Parallel()
+	r := Response{Summary: "ok"}
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(data), "dispatch") {
+		t.Errorf("dispatch should be omitted when empty; got: %s", string(data))
 	}
 }

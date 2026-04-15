@@ -610,6 +610,146 @@ func TestLoadAcceptsValidLogFormats(t *testing.T) {
 	}
 }
 
+// ─── dispatch wiring validation ───────────────────────────────────────────────
+
+func dispatchYAML(agentBlock string) string {
+	return fmt.Sprintf(`
+daemon:
+  http:
+    webhook_secret_env: TEST_SECRET
+  ai_backends:
+    claude:
+      command: claude
+      args: ["-p"]
+
+skills:
+  architect:
+    prompt: "Focus on architecture."
+
+agents:
+%s
+
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+      - agent: coder
+        labels: ["ai:code"]
+`, agentBlock)
+}
+
+func TestDispatchCanDispatchUnknownAgentRejected(t *testing.T) {
+	t.Setenv("TEST_SECRET", "s3cret")
+	yaml := dispatchYAML(`
+  - name: coder
+    backend: claude
+    skills: [architect]
+    prompt: "Write code."
+    can_dispatch: [nonexistent-agent]
+`)
+	path := writeConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "unknown agent") {
+		t.Fatalf("expected unknown-agent error, got %v", err)
+	}
+}
+
+func TestDispatchCanDispatchSelfRejected(t *testing.T) {
+	t.Setenv("TEST_SECRET", "s3cret")
+	yaml := dispatchYAML(`
+  - name: coder
+    backend: claude
+    skills: [architect]
+    prompt: "Write code."
+    can_dispatch: [coder]
+`)
+	path := writeConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "itself") {
+		t.Fatalf("expected self-reference error, got %v", err)
+	}
+}
+
+func TestDispatchTargetRequiresDescription(t *testing.T) {
+	t.Setenv("TEST_SECRET", "s3cret")
+	yaml := dispatchYAML(`
+  - name: coder
+    backend: claude
+    skills: [architect]
+    prompt: "Write code."
+    can_dispatch: [pr-reviewer]
+  - name: pr-reviewer
+    backend: claude
+    skills: [architect]
+    prompt: "Review PRs."
+    allow_dispatch: true
+    # description intentionally omitted
+`)
+	path := writeConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "description") {
+		t.Fatalf("expected description-required error, got %v", err)
+	}
+}
+
+func TestDispatchValidConfigAccepted(t *testing.T) {
+	t.Setenv("TEST_SECRET", "s3cret")
+	yaml := dispatchYAML(`
+  - name: coder
+    backend: claude
+    skills: [architect]
+    prompt: "Write code."
+    can_dispatch: [pr-reviewer]
+  - name: pr-reviewer
+    backend: claude
+    skills: [architect]
+    prompt: "Review PRs."
+    description: "Reviews pull requests for quality and correctness"
+    allow_dispatch: true
+`)
+	path := writeConfig(t, yaml)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	coder, ok := cfg.AgentByName("coder")
+	if !ok {
+		t.Fatal("coder not found")
+	}
+	if len(coder.CanDispatch) != 1 || coder.CanDispatch[0] != "pr-reviewer" {
+		t.Errorf("can_dispatch not normalized: %v", coder.CanDispatch)
+	}
+	reviewer, ok := cfg.AgentByName("pr-reviewer")
+	if !ok {
+		t.Fatal("pr-reviewer not found")
+	}
+	if !reviewer.AllowDispatch {
+		t.Error("allow_dispatch should be true for pr-reviewer")
+	}
+	if reviewer.Description == "" {
+		t.Error("description should be set for pr-reviewer")
+	}
+}
+
+func TestDispatchDefaultsApplied(t *testing.T) {
+	t.Setenv("TEST_SECRET", "s3cret")
+	path := writeConfig(t, minimalYAML(""))
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	d := cfg.Daemon.Processor.Dispatch
+	if d.MaxDepth != 3 {
+		t.Errorf("MaxDepth default: got %d, want 3", d.MaxDepth)
+	}
+	if d.MaxFanout != 4 {
+		t.Errorf("MaxFanout default: got %d, want 4", d.MaxFanout)
+	}
+	if d.DedupWindowSeconds != 300 {
+		t.Errorf("DedupWindowSeconds default: got %d, want 300", d.DedupWindowSeconds)
+	}
+}
+
 // ── proxy config ───────────────────────────────────────────────────────────────
 
 func proxyYAML(proxyBlock string) string {

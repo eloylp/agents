@@ -35,6 +35,12 @@ type StatusProvider interface {
 	AgentStatuses() []AgentStatus
 }
 
+// DispatchStatsProvider reports aggregate dispatch statistics.
+// The implementation is optional; passing nil omits the dispatch section.
+type DispatchStatsProvider interface {
+	DispatchStats() workflow.DispatchStats
+}
+
 // AgentTriggerer can run a named autonomous agent on demand.
 type AgentTriggerer interface {
 	TriggerAgent(ctx context.Context, agentName, repo string) error
@@ -48,25 +54,27 @@ type EventQueue interface {
 }
 
 type Server struct {
-	cfg       *config.Config
-	delivery  *DeliveryStore
-	logger    zerolog.Logger
-	channels  EventQueue
-	provider  StatusProvider
-	startTime time.Time
-	triggerer AgentTriggerer
-	proxy     *anthropicproxy.Handler
+	cfg           *config.Config
+	delivery      *DeliveryStore
+	logger        zerolog.Logger
+	channels      EventQueue
+	provider      StatusProvider
+	dispatchStats DispatchStatsProvider
+	startTime     time.Time
+	triggerer     AgentTriggerer
+	proxy         *anthropicproxy.Handler
 }
 
-func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue, provider StatusProvider, logger zerolog.Logger, triggerer AgentTriggerer) *Server {
+func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue, provider StatusProvider, dispatchStats DispatchStatsProvider, logger zerolog.Logger, triggerer AgentTriggerer) *Server {
 	s := &Server{
-		cfg:       cfg,
-		delivery:  delivery,
-		logger:    logger.With().Str("component", "webhook_server").Logger(),
-		channels:  channels,
-		provider:  provider,
-		startTime: time.Now(),
-		triggerer: triggerer,
+		cfg:           cfg,
+		delivery:      delivery,
+		logger:        logger.With().Str("component", "webhook_server").Logger(),
+		channels:      channels,
+		provider:      provider,
+		dispatchStats: dispatchStats,
+		startTime:     time.Now(),
+		triggerer:     triggerer,
 	}
 	if cfg.Daemon.Proxy.Enabled {
 		up := cfg.Daemon.Proxy.Upstream
@@ -130,10 +138,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		Capacity int `json:"capacity"`
 	}
 	type statusJSON struct {
-		Status        string               `json:"status"`
-		UptimeSeconds int64                `json:"uptime_seconds"`
-		Queues        map[string]queueJSON `json:"queues"`
-		Agents        []AgentStatus        `json:"agents"`
+		Status        string                  `json:"status"`
+		UptimeSeconds int64                   `json:"uptime_seconds"`
+		Queues        map[string]queueJSON    `json:"queues"`
+		Agents        []AgentStatus           `json:"agents"`
+		Dispatch      *workflow.DispatchStats `json:"dispatch,omitempty"`
 	}
 
 	agents := []AgentStatus{}
@@ -150,6 +159,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 			"events": {Buffered: q.Buffered, Capacity: q.Capacity},
 		},
 		Agents: agents,
+	}
+	if s.dispatchStats != nil {
+		stats := s.dispatchStats.DispatchStats()
+		resp.Dispatch = &stats
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -311,6 +324,7 @@ func (s *Server) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, b
 	switch payload.Action {
 	case "labeled":
 		ev := workflow.Event{
+			ID:     deliveryID,
 			Repo:   repoRef,
 			Kind:   "issues.labeled",
 			Number: payload.Issue.Number,
@@ -322,6 +336,7 @@ func (s *Server) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, b
 		s.enqueue(ctx, w, ev, deliveryID)
 	case "opened", "edited", "reopened", "closed":
 		ev := workflow.Event{
+			ID:     deliveryID,
 			Repo:   repoRef,
 			Kind:   "issues." + payload.Action,
 			Number: payload.Issue.Number,
@@ -369,6 +384,7 @@ func (s *Server) handlePullRequestEvent(ctx context.Context, w http.ResponseWrit
 			return
 		}
 		ev := workflow.Event{
+			ID:     deliveryID,
 			Repo:   repoRef,
 			Kind:   "pull_request.labeled",
 			Number: payload.PullRequest.Number,
@@ -387,6 +403,7 @@ func (s *Server) handlePullRequestEvent(ctx context.Context, w http.ResponseWrit
 			eventPayload["merged"] = payload.PullRequest.Merged
 		}
 		ev := workflow.Event{
+			ID:      deliveryID,
 			Repo:    repoRef,
 			Kind:    "pull_request." + payload.Action,
 			Number:  payload.PullRequest.Number,
@@ -425,6 +442,7 @@ func (s *Server) handleIssueCommentEvent(ctx context.Context, w http.ResponseWri
 	}
 
 	ev := workflow.Event{
+		ID:     deliveryID,
 		Repo:   workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
 		Kind:   "issue_comment.created",
 		Number: payload.Issue.Number,
@@ -462,6 +480,7 @@ func (s *Server) handlePullRequestReviewEvent(ctx context.Context, w http.Respon
 	}
 
 	ev := workflow.Event{
+		ID:     deliveryID,
 		Repo:   workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
 		Kind:   "pull_request_review.submitted",
 		Number: payload.PullRequest.Number,
@@ -500,6 +519,7 @@ func (s *Server) handlePullRequestReviewCommentEvent(ctx context.Context, w http
 	}
 
 	ev := workflow.Event{
+		ID:     deliveryID,
 		Repo:   workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
 		Kind:   "pull_request_review_comment.created",
 		Number: payload.PullRequest.Number,
@@ -539,6 +559,7 @@ func (s *Server) handlePushEvent(ctx context.Context, w http.ResponseWriter, bod
 	}
 
 	ev := workflow.Event{
+		ID:    deliveryID,
 		Repo:  workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
 		Kind:  "push",
 		Actor: payload.Sender.Login,

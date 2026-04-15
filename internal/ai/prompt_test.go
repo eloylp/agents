@@ -154,6 +154,111 @@ func TestRenderAgentPromptMultilinePayloadBodyIsIndented(t *testing.T) {
 	}
 }
 
+func TestRenderAgentPromptRosterRenderedAlphabetically(t *testing.T) {
+	t.Parallel()
+	agent := config.AgentDef{Prompt: "Do work."}
+	ctx := ai.PromptContext{
+		Repo: "owner/repo",
+		Roster: []ai.RosterEntry{
+			{Name: "pr-reviewer", Description: "Reviews PRs", Skills: []string{"testing"}, AllowDispatch: true},
+			{Name: "arch-reviewer", Description: "Reviews arch", Skills: []string{"architect"}, AllowDispatch: false},
+			{Name: "sec-reviewer", Description: "Reviews security", Skills: []string{"security"}, AllowDispatch: true},
+		},
+	}
+	got, err := ai.RenderAgentPrompt(agent, nil, ctx)
+	if err != nil {
+		t.Fatalf("RenderAgentPrompt: %v", err)
+	}
+	if !strings.Contains(got, "## Available experts") {
+		t.Errorf("missing experts section:\n%s", got)
+	}
+	archIdx := strings.Index(got, "arch-reviewer")
+	prIdx := strings.Index(got, "pr-reviewer")
+	secIdx := strings.Index(got, "sec-reviewer")
+	if !(archIdx < prIdx && prIdx < secIdx) {
+		t.Errorf("roster not alphabetical: arch=%d pr=%d sec=%d", archIdx, prIdx, secIdx)
+	}
+	// Dispatchable agents have [dispatchable] marker.
+	if !strings.Contains(got, "pr-reviewer") || !strings.Contains(got, "[dispatchable]") {
+		t.Errorf("dispatchable marker missing:\n%s", got)
+	}
+	// Non-dispatchable agents lack the marker after their entry.
+	if strings.Contains(got, "arch-reviewer: Reviews arch (skills: architect) [dispatchable]") {
+		t.Errorf("non-dispatchable agent should not have [dispatchable] marker")
+	}
+}
+
+func TestRenderAgentPromptRosterExcludesSelfFromRoster(t *testing.T) {
+	t.Parallel()
+	// The current agent ("coder") should not appear in its own roster.
+	agent := config.AgentDef{Name: "coder", Prompt: "Code."}
+	ctx := ai.PromptContext{
+		Repo: "owner/repo",
+		Roster: []ai.RosterEntry{
+			{Name: "pr-reviewer", Description: "Reviews PRs"},
+		},
+	}
+	got, err := ai.RenderAgentPrompt(agent, nil, ctx)
+	if err != nil {
+		t.Fatalf("RenderAgentPrompt: %v", err)
+	}
+	// The RosterEntry for coder is not present (caller omits self from Roster).
+	if strings.Contains(got, "**coder**") {
+		t.Errorf("current agent should not appear in roster:\n%s", got)
+	}
+}
+
+func TestRenderAgentPromptRosterOmittedWhenEmpty(t *testing.T) {
+	t.Parallel()
+	agent := config.AgentDef{Prompt: "Do X."}
+	got, err := ai.RenderAgentPrompt(agent, nil, ai.PromptContext{Repo: "owner/repo"})
+	if err != nil {
+		t.Fatalf("RenderAgentPrompt: %v", err)
+	}
+	if strings.Contains(got, "## Available experts") {
+		t.Errorf("empty roster should not produce the experts section:\n%s", got)
+	}
+}
+
+func TestRenderAgentPromptDispatchContextIncluded(t *testing.T) {
+	t.Parallel()
+	agent := config.AgentDef{Prompt: "React to dispatch."}
+	got, err := ai.RenderAgentPrompt(agent, nil, ai.PromptContext{
+		Repo:          "owner/repo",
+		InvokedBy:     "coder",
+		Reason:        "PR is ready for review",
+		RootEventID:   "abc-123",
+		DispatchDepth: 1,
+	})
+	if err != nil {
+		t.Fatalf("RenderAgentPrompt: %v", err)
+	}
+	for _, want := range []string{
+		"Invoked by: coder",
+		"Dispatch reason: PR is ready for review",
+		"Root event ID: abc-123",
+		"Dispatch depth: 1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestRenderAgentPromptDispatchContextOmittedWhenNotDispatched(t *testing.T) {
+	t.Parallel()
+	agent := config.AgentDef{Prompt: "Normal run."}
+	got, err := ai.RenderAgentPrompt(agent, nil, ai.PromptContext{Repo: "owner/repo"})
+	if err != nil {
+		t.Fatalf("RenderAgentPrompt: %v", err)
+	}
+	for _, unwanted := range []string{"Invoked by:", "Dispatch reason:", "Dispatch depth:"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("dispatch context should be omitted on non-dispatch run; found %q:\n%s", unwanted, got)
+		}
+	}
+}
+
 func TestNormalizeTokenSanitizesForFilesystemUse(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

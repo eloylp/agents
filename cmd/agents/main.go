@@ -76,16 +76,17 @@ func run() error {
 
 	logger.Info().Msg("starting agents daemon")
 
-	engine := workflow.NewEngine(cfg, runners, logger)
 	dataChannels := workflow.NewDataChannels(cfg.Daemon.Processor.EventQueueBuffer)
+	engine := workflow.NewEngine(cfg, runners, dataChannels, logger)
 	shutdown := time.Duration(cfg.Daemon.HTTP.ShutdownTimeoutSeconds) * time.Second
 	workers := cfg.Daemon.Processor.MaxConcurrentAgents
 	processor := workflow.NewProcessor(dataChannels, engine, workers, shutdown, logger)
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
-	server := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, logger, scheduler)
+	server := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, engine, logger, scheduler)
 
 	group, groupCtx := errgroup.WithContext(ctx)
 	deliveryStore.Start(groupCtx)
+	engine.StartDispatchDedup(groupCtx)
 	group.Go(func() error { return processor.Run(groupCtx) })
 	group.Go(func() error { return scheduler.Run(groupCtx) })
 	group.Go(func() error { return server.Run(groupCtx) })
