@@ -107,6 +107,30 @@ func TestRenderAgentPromptOmitsRuntimeSectionWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestRenderAgentPromptIncludesEventContext(t *testing.T) {
+	t.Parallel()
+	agent := config.AgentDef{Prompt: "React to comments."}
+	got, err := ai.RenderAgentPrompt(agent, nil, ai.PromptContext{
+		Repo:      "owner/repo",
+		Number:    3,
+		EventKind: "issue_comment.created",
+		Actor:     "octocat",
+		Payload:   map[string]any{"body": "LGTM"},
+	})
+	if err != nil {
+		t.Fatalf("RenderAgentPrompt: %v", err)
+	}
+	if !strings.Contains(got, "Event: issue_comment.created") {
+		t.Errorf("missing event kind:\n%s", got)
+	}
+	if !strings.Contains(got, "Actor: octocat") {
+		t.Errorf("missing actor:\n%s", got)
+	}
+	if !strings.Contains(got, "body: LGTM") {
+		t.Errorf("missing payload body:\n%s", got)
+	}
+}
+
 func TestNormalizeTokenSanitizesForFilesystemUse(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

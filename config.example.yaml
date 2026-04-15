@@ -152,9 +152,18 @@ agents:
 # triggers on the same repo.
 #
 # Triggers:
-#   labels:    [ai:review:arch-reviewer, ...]  — GitHub label events
+#   labels:    [ai:review:arch-reviewer, ...]  — GitHub label events (issues.labeled / pull_request.labeled)
+#   events:    [issue_comment.created, push]   — broader GitHub event types
 #   cron:      "0,15 8-18 * * *"               — time-based schedule
 #   enabled:   optional, default true          — disable without deletion
+#
+# Supported event kinds for events:
+#   issues.labeled           issues.opened  issues.edited  issues.reopened  issues.closed
+#   pull_request.labeled     pull_request.opened  pull_request.synchronize
+#   pull_request.ready_for_review  pull_request.closed
+#   issue_comment.created
+#   pull_request_review.submitted
+#   push
 # ──────────────────────────────────────────────
 repos:
   - name: "owner/repo"

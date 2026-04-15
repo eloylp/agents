@@ -165,6 +165,9 @@ func (b Binding) IsCron() bool { return strings.TrimSpace(b.Cron) != "" }
 // IsLabel reports whether this binding is label-triggered.
 func (b Binding) IsLabel() bool { return len(b.Labels) > 0 }
 
+// IsEvent reports whether this binding is event-triggered (via the events: field).
+func (b Binding) IsEvent() bool { return len(b.Events) > 0 }
+
 // Load reads, parses, validates, and resolves a config file at the given
 // path. Prompt files referenced by PromptFile fields are read eagerly;
 // any I/O or validation error is reported here.
@@ -334,6 +337,9 @@ func (c *Config) normalize() {
 		for j := range c.Repos[i].Use {
 			c.Repos[i].Use[j].Agent = strings.ToLower(strings.TrimSpace(c.Repos[i].Use[j].Agent))
 			c.Repos[i].Use[j].Cron = strings.TrimSpace(c.Repos[i].Use[j].Cron)
+			for k := range c.Repos[i].Use[j].Events {
+				c.Repos[i].Use[j].Events[k] = strings.ToLower(strings.TrimSpace(c.Repos[i].Use[j].Events[k]))
+			}
 		}
 	}
 

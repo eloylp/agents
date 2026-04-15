@@ -14,7 +14,7 @@ type stubProcessorHandler struct {
 	calls int
 }
 
-func (s *stubProcessorHandler) HandleLabelEvent(_ context.Context, _ LabelEvent) error {
+func (s *stubProcessorHandler) HandleEvent(_ context.Context, _ Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
@@ -87,10 +87,10 @@ func TestProcessorRunDrainsQueueOnCancellation(t *testing.T) {
 		close(done)
 	}()
 
-	if err := dataChannels.PushEvent(context.Background(), LabelEvent{Repo: RepoRef{FullName: "owner/repo"}, Number: 1, Label: "ai:refine"}); err != nil {
+	if err := dataChannels.PushEvent(context.Background(), Event{Repo: RepoRef{FullName: "owner/repo"}, Kind: "issues.labeled", Number: 1}); err != nil {
 		t.Fatalf("push issue event: %v", err)
 	}
-	if err := dataChannels.PushEvent(context.Background(), LabelEvent{Repo: RepoRef{FullName: "owner/repo"}, Number: 2, Label: "ai:review"}); err != nil {
+	if err := dataChannels.PushEvent(context.Background(), Event{Repo: RepoRef{FullName: "owner/repo"}, Kind: "pull_request.labeled", Number: 2}); err != nil {
 		t.Fatalf("push pr event: %v", err)
 	}
 
@@ -122,7 +122,7 @@ func newBlockingProcessorHandler() *blockingProcessorHandler {
 	return &blockingProcessorHandler{blockUntil: make(chan struct{})}
 }
 
-func (b *blockingProcessorHandler) HandleLabelEvent(_ context.Context, _ LabelEvent) error {
+func (b *blockingProcessorHandler) HandleEvent(_ context.Context, _ Event) error {
 	b.mu.Lock()
 	b.active++
 	b.calls++
@@ -160,10 +160,10 @@ func TestProcessorWorkerPoolAllowsConcurrentProcessing(t *testing.T) {
 
 	// Push enough events to fill all workers.
 	for i := range events {
-		if err := dataChannels.PushEvent(context.Background(), LabelEvent{
+		if err := dataChannels.PushEvent(context.Background(), Event{
 			Repo:   RepoRef{FullName: "owner/repo"},
+			Kind:   "issues.labeled",
 			Number: i + 1,
-			Label:  "ai:refine",
 		}); err != nil {
 			t.Fatalf("push event %d: %v", i, err)
 		}

@@ -84,15 +84,19 @@ repos:
       # Cron-scheduled agent on the same repo
       - agent: coder
         cron: "0,30 8-18 * * *"
+
+      # Event-triggered agent (react to any new comment)
+      - agent: coder
+        events: ["issue_comment.created"]
 ```
 
 Rules:
 
-- Labels are case-insensitive and trimmed.
-- Only the `labeled` action triggers processing (not `unlabeled`).
+- Labels are case-insensitive and trimmed. Only `labeled` actions fire (not `unlabeled`).
 - The trigger label comes from the webhook event payload, not the issue/PR's current label set.
-- Draft PRs skip label-triggered agents.
-- Multiple bindings matching the same label fan out in parallel (capped by `daemon.processor.max_concurrent_agents`).
+- Draft PRs skip label-triggered (`labels:`) agents; they may still receive other event types.
+- `events:` bindings fire on the exact event kinds listed, with no additional filtering.
+- Multiple bindings matching the same event fan out in parallel (capped by `daemon.processor.max_concurrent_agents`).
 
 ---
 
@@ -226,7 +230,27 @@ repos:
         enabled: false                       # temporarily off without deletion
 ```
 
-Each `use` entry binds one agent to one trigger. An agent can appear multiple times with different triggers. A binding must have at least one of `labels:` or `cron:`.
+Each `use` entry binds one agent to one trigger. An agent can appear multiple times with different triggers. A binding must have at least one of `labels:`, `events:`, or `cron:`.
+
+The `events:` field accepts any of the supported GitHub event kinds:
+
+| Kind | When |
+|------|------|
+| `issues.labeled` | Issue receives a label (also via `labels:` for AI-prefixed labels) |
+| `issues.opened` | Issue opened |
+| `issues.edited` | Issue body or title edited |
+| `issues.reopened` | Issue reopened |
+| `issues.closed` | Issue closed |
+| `pull_request.labeled` | PR receives a label (also via `labels:` for AI-prefixed labels) |
+| `pull_request.opened` | PR opened |
+| `pull_request.synchronize` | New commit pushed to PR branch |
+| `pull_request.ready_for_review` | Draft PR marked ready |
+| `pull_request.closed` | PR closed or merged |
+| `issue_comment.created` | Comment posted on an issue or PR |
+| `pull_request_review.submitted` | Formal GitHub review submitted |
+| `push` | Commit pushed to the repo |
+
+Event-triggered agents receive the full event context in their prompt: `Event`, `Actor`, and event-specific payload fields (label name, comment body, ref, head SHA, etc.).
 
 ### Environment variables
 
