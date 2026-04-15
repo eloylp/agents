@@ -450,6 +450,64 @@ func TestToOpenAI_UnsupportedAssistantBlock(t *testing.T) {
 	}
 }
 
+// TestToOpenAI_InterleavedAssistantBlocks verifies that an assistant turn with
+// a text block following a tool_use block is rejected. OpenAI's message schema
+// cannot represent this ordering without data loss, so the proxy must fail fast
+// rather than silently reorder the content.
+func TestToOpenAI_InterleavedAssistantBlocks(t *testing.T) {
+	t.Parallel()
+	toolInput := json.RawMessage(`{"key":"val"}`)
+	// Pattern: text("before"), tool_use(A), text("after") — trailing text after tool_use.
+	req := MessagesRequest{
+		Messages: []AnthropicMessage{
+			{
+				Role: "assistant",
+				Content: jsonBlocks([]ContentBlock{
+					{Type: "text", Text: "before"},
+					{Type: "tool_use", ID: "tu_1", Name: "my_tool", Input: toolInput},
+					{Type: "text", Text: "after"},
+				}),
+			},
+		},
+	}
+	_, err := ToOpenAI(req, "gpt-4")
+	if err == nil {
+		t.Fatal("expected error for interleaved text/tool_use ordering, got nil")
+	}
+}
+
+// TestToOpenAI_LeadingTextThenToolUseIsValid verifies that the common pattern
+// of text-then-tool_use (non-interleaved) translates without error.
+func TestToOpenAI_LeadingTextThenToolUseIsValid(t *testing.T) {
+	t.Parallel()
+	toolInput := json.RawMessage(`{}`)
+	req := MessagesRequest{
+		Messages: []AnthropicMessage{
+			{
+				Role: "assistant",
+				Content: jsonBlocks([]ContentBlock{
+					{Type: "text", Text: "Let me call the tool."},
+					{Type: "tool_use", ID: "tu_1", Name: "do_it", Input: toolInput},
+				}),
+			},
+		},
+	}
+	got, err := ToOpenAI(req, "gpt-4")
+	if err != nil {
+		t.Fatalf("unexpected error for valid text-then-tool_use turn: %v", err)
+	}
+	if len(got.Messages) != 1 {
+		t.Fatalf("message count: got %d, want 1", len(got.Messages))
+	}
+	msg := got.Messages[0]
+	if msg.Content != "Let me call the tool." {
+		t.Errorf("content: got %q, want %q", msg.Content, "Let me call the tool.")
+	}
+	if len(msg.ToolCalls) != 1 {
+		t.Errorf("tool_calls count: got %d, want 1", len(msg.ToolCalls))
+	}
+}
+
 // TestToOpenAI_UnsupportedToolResultBlock verifies that a tool_result whose
 // content array contains an unsupported nested block type (e.g. "image")
 // returns a translation error rather than silently dropping the block and

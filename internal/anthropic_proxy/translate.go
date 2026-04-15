@@ -128,7 +128,27 @@ func translateUserMessage(text string, blocks []ContentBlock) ([]ChatMessage, er
 
 // translateAssistantMessage handles role:assistant Anthropic messages.
 // Tool use blocks become OpenAI tool_calls; text blocks become the content.
+//
+// OpenAI's message schema places text in content and tool calls in tool_calls,
+// with no provision for interleaved ordering. Mixed turns where a text block
+// follows a tool_use block cannot be represented faithfully, so they are
+// rejected. Turns with leading text followed by tool_use blocks (the common
+// pattern) translate without loss.
 func translateAssistantMessage(text string, blocks []ContentBlock) ([]ChatMessage, error) {
+	// Detect interleaved text-after-tool_use ordering, which cannot be
+	// preserved in the OpenAI message shape.
+	seenToolUse := false
+	for _, b := range blocks {
+		switch b.Type {
+		case "tool_use":
+			seenToolUse = true
+		case "text":
+			if seenToolUse {
+				return nil, fmt.Errorf("unsupported assistant block ordering: text block follows tool_use block")
+			}
+		}
+	}
+
 	msg := ChatMessage{Role: "assistant", Content: text}
 
 	for _, b := range blocks {
