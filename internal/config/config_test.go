@@ -535,6 +535,7 @@ func TestLoadRejectsInvalidLogLevel(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			path := writeConfig(t, logConfigYAML("level", tc.level))
 			_, err := Load(path)
 			if err == nil {
@@ -553,6 +554,7 @@ func TestLoadAcceptsValidLogLevels(t *testing.T) {
 	levels := []string{"trace", "debug", "info", "warn", "error", "fatal", "panic", "disabled", "DEBUG", "INFO", "", "\"  debug  \""}
 	for _, level := range levels {
 		t.Run("level="+level, func(t *testing.T) {
+			t.Parallel()
 			path := writeConfig(t, logConfigYAML("level", level))
 			if _, err := Load(path); err != nil {
 				t.Fatalf("unexpected error for log level %q: %v", level, err)
@@ -582,6 +584,7 @@ func TestLoadRejectsInvalidLogFormat(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			path := writeConfig(t, logConfigYAML("format", tc.format))
 			_, err := Load(path)
 			if err == nil {
@@ -600,6 +603,7 @@ func TestLoadAcceptsValidLogFormats(t *testing.T) {
 	formats := []string{"json", "text", "JSON", "TEXT", "", "\"  json  \""}
 	for _, format := range formats {
 		t.Run("format="+format, func(t *testing.T) {
+			t.Parallel()
 			path := writeConfig(t, logConfigYAML("format", format))
 			if _, err := Load(path); err != nil {
 				t.Fatalf("unexpected error for log format %q: %v", format, err)
