@@ -685,3 +685,45 @@ func TestDispatchDedupStoreStartSmallTTLDoesNotPanic(t *testing.T) {
 		cancel()
 	}
 }
+
+// TestRemoveCronMarkWithOverlappingRunsRefcount verifies that a rollback from one
+// failed autonomous run does not clear a cron mark that a second overlapping run
+// is still relying on. Without refcount semantics, the first rollback would delete
+// the shared key and allow dispatches to slip through while the second run is
+// still in flight.
+func TestRemoveCronMarkWithOverlappingRunsRefcount(t *testing.T) {
+	t.Parallel()
+	q := &fakeQueue{}
+	d := testDispatcher(q)
+
+	now := time.Now()
+	// Simulate two overlapping autonomous runs for the same (agent, repo).
+	d.MarkAutonomousRun("coder", "owner/repo", now)
+	d.MarkAutonomousRun("coder", "owner/repo", now)
+
+	// First run fails: rolls back. The second run is still in flight, so
+	// dispatches must still be suppressed.
+	d.RollbackAutonomousRun("coder", "owner/repo")
+
+	originator := originatorAgent("pr-reviewer")
+	ev := testEvent("owner/repo", 0)
+	d.ProcessDispatches(context.Background(), originator, ev, "root-overlap", 0, []ai.DispatchRequest{
+		{Agent: "coder", Reason: "dispatch while second run is still in flight"},
+	})
+	if len(q.popped()) != 0 {
+		t.Error("expected dispatch suppressed: second in-flight run's cron mark must survive the first run's rollback")
+	}
+
+	// Second run also fails: mark is now fully released.
+	d.RollbackAutonomousRun("coder", "owner/repo")
+
+	// A new dispatcher with a fresh store simulates the expired/cleared state.
+	q2 := &fakeQueue{}
+	d2 := testDispatcher(q2)
+	d2.ProcessDispatches(context.Background(), originator, ev, "root-after", 0, []ai.DispatchRequest{
+		{Agent: "coder", Reason: "dispatch after both runs rolled back"},
+	})
+	if len(q2.popped()) != 1 {
+		t.Error("expected dispatch enqueued: all cron marks cleared after both rollbacks")
+	}
+}

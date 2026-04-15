@@ -64,16 +64,18 @@ func (c *dispatchCounters) snapshot() DispatchStats {
 // requests within a configurable TTL window. It mirrors the shape of
 // webhook.DeliveryStore.
 type DispatchDedupStore struct {
-	ttl     time.Duration
-	mu      sync.Mutex
-	entries map[string]time.Time
+	ttl           time.Duration
+	mu            sync.Mutex
+	entries       map[string]time.Time
+	cronRefCounts map[string]int // active in-flight run count per cron key
 }
 
 // NewDispatchDedupStore returns a store with the given TTL window in seconds.
 func NewDispatchDedupStore(ttlSeconds int) *DispatchDedupStore {
 	return &DispatchDedupStore{
-		ttl:     time.Duration(ttlSeconds) * time.Second,
-		entries: make(map[string]time.Time),
+		ttl:           time.Duration(ttlSeconds) * time.Second,
+		entries:       make(map[string]time.Time),
+		cronRefCounts: make(map[string]int),
 	}
 }
 
@@ -106,6 +108,7 @@ func (s *DispatchDedupStore) evict(now time.Time) {
 	for key, expiresAt := range s.entries {
 		if now.After(expiresAt) {
 			delete(s.entries, key)
+			delete(s.cronRefCounts, key)
 		}
 	}
 }
@@ -143,29 +146,40 @@ func (s *DispatchDedupStore) Remove(target, repo string, number int) {
 	delete(s.entries, key)
 }
 
-// MarkCronRun records that a cron or manual (--run-agent) execution has
-// started for (agent, repo, number). The mark persists for the full TTL
-// window. It lives in a separate key namespace ("cron\x00…") from dispatch
-// entries so that repeated cron runs are never suppressed by this mark —
-// only dispatches are. Autonomous runs always pass number=0 because they
-// are not tied to a specific issue or PR. This scoping ensures that a
-// cron run for a repo-level context (number=0) does not suppress dispatches
-// for unrelated items such as PR #42.
+// MarkCronRun records that a cron or manual (--run-agent) execution has started
+// for (agent, repo, number). The mark persists for the full TTL window and lives
+// in a separate key namespace ("cron\x00…") from dispatch entries so that
+// repeated cron runs are never suppressed by this mark — only dispatches are.
+// Autonomous runs always pass number=0 because they are not tied to a specific
+// issue or PR; this scoping ensures that a cron run for a repo-level context
+// (number=0) does not suppress dispatches for unrelated items such as PR #42.
+//
+// An internal reference count is incremented on each call so that a rollback
+// from one failed overlapping run does not clear a mark that a concurrently
+// running autonomous pass is still holding.
 func (s *DispatchDedupStore) MarkCronRun(agent, repo string, number int, now time.Time) {
 	key := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries[key] = now.Add(s.ttl)
+	s.cronRefCounts[key]++
 }
 
-// RemoveCronMark deletes the cron-namespace entry for (agent, repo, number).
-// It is used to roll back a MarkCronRun call when the corresponding run fails,
-// so that a transient error does not suppress dispatches for the full TTL.
+// RemoveCronMark decrements the in-flight reference count for the cron-namespace
+// entry (agent, repo, number). The entry is only deleted from the dedup store
+// when the count reaches zero, ensuring that a rollback from one failed run does
+// not remove a mark that a concurrently-running autonomous pass is still relying
+// on to suppress duplicates.
 func (s *DispatchDedupStore) RemoveCronMark(agent, repo string, number int) {
 	key := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.entries, key)
+	if s.cronRefCounts[key] <= 1 {
+		delete(s.entries, key)
+		delete(s.cronRefCounts, key)
+	} else {
+		s.cronRefCounts[key]--
+	}
 }
 
 // SeenCronRun returns true if a cron or manual run has been recorded for
