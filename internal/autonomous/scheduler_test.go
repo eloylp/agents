@@ -267,60 +267,56 @@ func (r *promptCapturingRunner) Run(_ context.Context, req ai.Request) (ai.Respo
 	return ai.Response{}, nil
 }
 
-func TestSchedulerPrependsNoPRInstructionWhenAllowPRsFalse(t *testing.T) {
+func TestSchedulerAllowPRsPromptPrefixing(t *testing.T) {
 	t.Parallel()
-	runner := &promptCapturingRunner{}
-	cfg := baseCfg(func(c *config.Config) {
-		c.Agents = []config.AgentDef{
-			{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Review PRs.", AllowPRs: false},
-		}
-	})
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
+	const noPRPrefix = "Do not open or create pull requests under any circumstances."
+	tests := []struct {
+		name     string
+		allowPRs bool
+		prompt   string
+		wantNoPR bool
+	}{
+		{
+			name:     "no-PR instruction prepended when allow_prs=false",
+			allowPRs: false,
+			prompt:   "Review PRs.",
+			wantNoPR: true,
+		},
+		{
+			name:     "no-PR instruction absent when allow_prs=true",
+			allowPRs: true,
+			prompt:   "Open a PR with the fix.",
+			wantNoPR: false,
+		},
 	}
-	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
-		t.Fatalf("TriggerAgent: %v", err)
-	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	if len(runner.prompts) != 1 {
-		t.Fatalf("expected 1 prompt, got %d", len(runner.prompts))
-	}
-	noPRPrefix := "Do not open or create pull requests under any circumstances."
-	if !strings.Contains(runner.prompts[0], noPRPrefix) {
-		t.Errorf("expected no-PR instruction in prompt, got: %q", runner.prompts[0])
-	}
-	if !strings.Contains(runner.prompts[0], "Review PRs.") {
-		t.Errorf("expected original prompt text to be present, got: %q", runner.prompts[0])
-	}
-}
-
-func TestSchedulerDoesNotPrependNoPRInstructionWhenAllowPRsTrue(t *testing.T) {
-	t.Parallel()
-	runner := &promptCapturingRunner{}
-	cfg := baseCfg(func(c *config.Config) {
-		c.Agents = []config.AgentDef{
-			{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Open a PR with the fix.", AllowPRs: true},
-		}
-	})
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
-		t.Fatalf("TriggerAgent: %v", err)
-	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	if len(runner.prompts) != 1 {
-		t.Fatalf("expected 1 prompt, got %d", len(runner.prompts))
-	}
-	noPRPrefix := "Do not open or create pull requests under any circumstances."
-	if strings.Contains(runner.prompts[0], noPRPrefix) {
-		t.Errorf("expected no no-PR instruction when allow_prs=true, got: %q", runner.prompts[0])
-	}
-	if !strings.Contains(runner.prompts[0], "Open a PR with the fix.") {
-		t.Errorf("expected original prompt text to be present, got: %q", runner.prompts[0])
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runner := &promptCapturingRunner{}
+			cfg := baseCfg(func(c *config.Config) {
+				c.Agents = []config.AgentDef{
+					{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: tc.prompt, AllowPRs: tc.allowPRs},
+				}
+			})
+			s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+			if err != nil {
+				t.Fatalf("NewScheduler: %v", err)
+			}
+			if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
+				t.Fatalf("TriggerAgent: %v", err)
+			}
+			runner.mu.Lock()
+			defer runner.mu.Unlock()
+			if len(runner.prompts) != 1 {
+				t.Fatalf("expected 1 prompt, got %d", len(runner.prompts))
+			}
+			hasNoPR := strings.Contains(runner.prompts[0], noPRPrefix)
+			if hasNoPR != tc.wantNoPR {
+				t.Errorf("no-PR prefix present=%v, want %v; prompt: %q", hasNoPR, tc.wantNoPR, runner.prompts[0])
+			}
+			if !strings.Contains(runner.prompts[0], tc.prompt) {
+				t.Errorf("expected original prompt text %q to be present, got: %q", tc.prompt, runner.prompts[0])
+			}
+		})
 	}
 }
