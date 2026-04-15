@@ -181,6 +181,15 @@ repos:
       - agent: dx-reviewer
         labels: ["ai:review:dx-reviewer"]
 
+      # Event-triggered agents — each binding uses exactly one trigger type.
+      # See README for the full list of supported event kinds and payload fields.
+      - agent: pr-reviewer
+        events: ["pull_request.opened", "pull_request.synchronize"]
+      - agent: coder
+        events: ["issue_comment.created"]   # fires for comments on issues and PRs
+      - agent: sec-reviewer
+        events: ["push"]                    # fires on branch pushes (not tags or deletions)
+
       # Cron-scheduled autonomous agents.
       - agent: scout-issues
         cron: "0 0 30 2 *"   # effectively disabled (Feb 30 never fires)

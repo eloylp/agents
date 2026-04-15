@@ -232,25 +232,57 @@ repos:
 
 Each `use` entry binds one agent to one trigger. An agent can appear multiple times with different triggers. A binding must have at least one of `labels:`, `events:`, or `cron:`.
 
-The `events:` field accepts any of the supported GitHub event kinds:
+```yaml
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+      # Label-triggered reviewer
+      - agent: arch-reviewer
+        labels: ["ai:review:arch-reviewer"]
 
-| Kind | When |
-|------|------|
-| `issues.labeled` | Issue receives a label (also via `labels:` for AI-prefixed labels) |
-| `issues.opened` | Issue opened |
-| `issues.edited` | Issue body or title edited |
-| `issues.reopened` | Issue reopened |
-| `issues.closed` | Issue closed |
-| `pull_request.labeled` | PR receives a label (also via `labels:` for AI-prefixed labels) |
-| `pull_request.opened` | PR opened |
-| `pull_request.synchronize` | New commit pushed to PR branch |
-| `pull_request.ready_for_review` | Draft PR marked ready |
-| `pull_request.closed` | PR closed or merged |
-| `issue_comment.created` | Comment posted on an issue or PR |
-| `pull_request_review.submitted` | Formal GitHub review submitted |
-| `push` | Commit pushed to the repo |
+      # React to every new issue comment (issues and PRs alike)
+      - agent: coder
+        events: ["issue_comment.created"]
 
-Event-triggered agents receive the full event context in their prompt: `Event`, `Actor`, and event-specific payload fields (label name, comment body, ref, head SHA, etc.).
+      # React to new commits pushed to any branch
+      - agent: sec-reviewer
+        events: ["push"]
+
+      # Multiple event kinds in one binding (fan-out fires the agent once per match)
+      - agent: pr-reviewer
+        events: ["pull_request.opened", "pull_request.synchronize"]
+```
+
+A binding must set exactly one of `labels:`, `events:`, or `cron:` — mixing trigger types in a single binding is rejected at startup.
+
+#### Supported event kinds
+
+The `events:` field accepts any of the following GitHub event kinds. Each event delivers a `## Runtime context` block into the agent's prompt with `Event`, `Actor` (the GitHub login that triggered it), an issue/PR number where applicable, and the payload fields listed below.
+
+| Kind | When | Payload fields |
+|------|------|----------------|
+| `issues.labeled` | Issue receives a label (also via `labels:` for AI-prefixed labels) | `label` |
+| `issues.opened` | Issue opened | `title`, `body` |
+| `issues.edited` | Issue body or title edited | `title`, `body` |
+| `issues.reopened` | Issue reopened | `title`, `body` |
+| `issues.closed` | Issue closed | `title`, `body` |
+| `pull_request.labeled` | PR receives a label (also via `labels:` for AI-prefixed labels) | `label` |
+| `pull_request.opened` | PR opened | `title`, `draft` |
+| `pull_request.synchronize` | New commit pushed to PR branch | `title`, `draft` |
+| `pull_request.ready_for_review` | Draft PR marked ready | `title`, `draft` |
+| `pull_request.closed` | PR closed or merged | `title`, `draft` |
+| `issue_comment.created` | Comment posted on an issue or PR | `body` |
+| `pull_request_review.submitted` | Formal GitHub review submitted | `state`, `body` |
+| `push` | Commit pushed to a branch | `ref` (e.g. `refs/heads/main`), `head_sha` |
+
+> **`push` scope:** only branch pushes fire the event. Tag pushes, branch deletions, and pushes to non-`refs/heads/` refs are silently dropped. The agent receives the branch ref and the resulting head SHA — there is no PR number in the context.
+
+Additional rules:
+
+- `issues.*` events that originate from a PR-backed GitHub issue are dropped; the corresponding `pull_request.*` event covers them instead.
+- Draft PRs fire `pull_request.opened` and `pull_request.synchronize` events but skip `labels:`-triggered agents. Use `events: ["pull_request.ready_for_review"]` to act when a draft is marked ready.
+- Unknown event kinds are rejected at config load time with a clear error listing the supported set.
 
 ### Environment variables
 
