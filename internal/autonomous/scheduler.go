@@ -266,15 +266,6 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		return fmt.Errorf("no runner for backend %q", backend)
 	}
 
-	// Write the cron-namespace mark now that the run is confirmed to proceed.
-	// The mark persists for the full dedup_window_seconds, collapsing any
-	// dispatches targeting the same autonomous context (agent, repo, number=0)
-	// within that window. Subsequent cron runs are unaffected because they
-	// check the dispatch namespace (via DispatchAlreadyClaimed), not the cron
-	// namespace.
-	if s.dispatcher != nil {
-		s.dispatcher.MarkAutonomousRun(agent.Name, repo, time.Now())
-	}
 	logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Str("backend", backend).Logger()
 	roster := s.buildRoster(repo, agent.Name)
 	return s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
@@ -301,6 +292,14 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 			return fmt.Errorf("agent run: %w", err)
 		}
 		logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Int("dispatch_requests", len(resp.Dispatch)).Msg("autonomous pass completed")
+		// Write the cron-namespace mark only after the run has definitely
+		// completed. Moving the mark here (post-runner.Run) prevents
+		// transient failures in memories.WithLock, prompt rendering, or the
+		// runner itself from leaving a stale mark that suppresses autonomous-
+		// context dispatches for the full dedup_window_seconds.
+		if s.dispatcher != nil {
+			s.dispatcher.MarkAutonomousRun(agent.Name, repo, time.Now())
+		}
 		if s.dispatcher != nil && len(resp.Dispatch) > 0 {
 			// Synthesize a minimal event to carry repo context into the dispatcher.
 			// Autonomous runs have no originating GitHub event, so Kind="autonomous"

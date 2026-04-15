@@ -570,6 +570,80 @@ func TestSchedulerCronMarkNotWrittenOnBackendResolutionFailure(t *testing.T) {
 	}
 }
 
+// TestSchedulerCronMarkNotWrittenOnRunnerFailure verifies that if runner.Run
+// returns an error, the cron-namespace mark is never written. Without this
+// guarantee a transient runner error would leave a stale MarkAutonomousRun
+// entry that suppresses autonomous-context dispatches for the full
+// dedup_window_seconds even though no run completed.
+func TestSchedulerCronMarkNotWrittenOnRunnerFailure(t *testing.T) {
+	t.Parallel()
+	// "notifier" can dispatch to "reviewer"; "reviewer" has allow_dispatch so
+	// whitelist and opt-in checks pass and we can isolate the cron-mark behavior.
+	cfg := baseCfg(func(c *config.Config) {
+		c.Agents = []config.AgentDef{
+			{
+				Name:          "reviewer",
+				Backend:       "claude",
+				Prompt:        "review",
+				AllowDispatch: true,
+			},
+			{
+				Name:        "notifier",
+				Backend:     "claude",
+				Prompt:      "notify",
+				CanDispatch: []string{"reviewer"},
+			},
+		}
+		c.Repos[0].Use = []config.Binding{
+			{Agent: "reviewer", Cron: "* * * * *"},
+			{Agent: "notifier", Cron: "0 0 * * *"},
+		}
+	})
+
+	runErr := errors.New("backend unavailable")
+	failRunner := &errorRunner{err: runErr}
+	q := &fakeQueue{}
+	agentMap := map[string]config.AgentDef{
+		"reviewer": cfg.Agents[0],
+		"notifier": cfg.Agents[1],
+	}
+	dedup := workflow.NewDispatchDedupStore(300)
+	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
+	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
+
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": failRunner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithDispatcher(dispatcher)
+
+	// TriggerAgent must fail because the runner returns an error.
+	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err == nil {
+		t.Fatal("TriggerAgent: expected error from runner, got nil")
+	}
+
+	// Despite the failure, a subsequent autonomous-context dispatch targeting
+	// reviewer (number=0) must NOT be suppressed — no cron mark should have
+	// been written because runner.Run never succeeded.
+	originator := agentMap["notifier"]
+	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
+	dispatcher.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, []ai.DispatchRequest{
+		{Agent: "reviewer", Reason: "retry after transient failure"},
+	})
+	if len(q.popped()) != 1 {
+		t.Error("expected dispatch enqueued: no cron mark should have been written on runner failure")
+	}
+}
+
+// errorRunner satisfies ai.Runner and always returns the configured error.
+type errorRunner struct {
+	err error
+}
+
+func (r *errorRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
+	return ai.Response{}, r.err
+}
+
 // TestSchedulerDispatchEnqueueFailurePropagates verifies that when the event
 // queue rejects an enqueue during ProcessDispatches, the error bubbles up
 // through executeAgentRun and out of TriggerAgent instead of being silently
