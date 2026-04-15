@@ -472,6 +472,14 @@ func (s *Server) handlePushEvent(ctx context.Context, w http.ResponseWriter, bod
 		return
 	}
 
+	// Ignore branch deletions (After is all-zero SHA) and non-branch refs
+	// (tags, notes). Only "new commit pushed to a branch" maps to push events.
+	const deletedSHA = "0000000000000000000000000000000000000000"
+	if payload.After == deletedSHA || !strings.HasPrefix(payload.Ref, "refs/heads/") {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
 	ev := workflow.Event{
 		Repo:  workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
 		Kind:  "push",

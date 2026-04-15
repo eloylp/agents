@@ -26,6 +26,25 @@ import (
 // order. Adding a new backend only requires updating this slice.
 var validAIBackendNames = []string{"claude", "codex"}
 
+// validEventKinds is the set of event kind strings accepted in the events:
+// binding field. It must be kept in sync with the kinds emitted by the webhook
+// server handlers.
+var validEventKinds = map[string]struct{}{
+	"issues.labeled":              {},
+	"issues.opened":               {},
+	"issues.edited":               {},
+	"issues.reopened":             {},
+	"issues.closed":               {},
+	"pull_request.labeled":        {},
+	"pull_request.opened":         {},
+	"pull_request.synchronize":    {},
+	"pull_request.ready_for_review": {},
+	"pull_request.closed":         {},
+	"issue_comment.created":       {},
+	"pull_request_review.submitted": {},
+	"push":                        {},
+}
+
 const (
 	defaultHTTPListenAddr          = ":8080"
 	defaultHTTPStatusPath          = "/status"
@@ -534,6 +553,17 @@ func (c *Config) validateRepos() error {
 			}
 			if b.IsLabel() && b.IsEvent() {
 				return fmt.Errorf("config: repo %q: binding for agent %q mixes labels and events triggers; use separate bindings", r.Name, b.Agent)
+			}
+			for _, kind := range b.Events {
+				if _, ok := validEventKinds[kind]; !ok {
+					supported := make([]string, 0, len(validEventKinds))
+					for k := range validEventKinds {
+						supported = append(supported, k)
+					}
+					slices.Sort(supported)
+					return fmt.Errorf("config: repo %q: binding for agent %q has unknown event kind %q (supported: %s)",
+						r.Name, b.Agent, kind, strings.Join(supported, ", "))
+				}
 			}
 		}
 	}

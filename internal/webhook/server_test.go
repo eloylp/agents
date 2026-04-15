@@ -372,6 +372,33 @@ func TestHandlePushEnqueuesEvent(t *testing.T) {
 	}
 }
 
+func TestHandlePushIgnoresNonBranchRefs(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		ref  string
+		sha  string
+	}{
+		{name: "tag push", ref: "refs/tags/v1.0.0", sha: "abc123"},
+		{name: "branch deletion", ref: "refs/heads/main", sha: "0000000000000000000000000000000000000000"},
+		{name: "notes ref", ref: "refs/notes/commits", sha: "abc123"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server, dc := newTestServer(testCfg(nil))
+			body := `{"ref":"` + tc.ref + `","after":"` + tc.sha + `","repository":{"full_name":"owner/repo"},"sender":{"login":"pusher"}}`
+			rr := httptest.NewRecorder()
+			server.handleGitHubWebhook(rr, webhookRequest(t, "push", "d-push-"+tc.name, body))
+			if rr.Code != http.StatusAccepted {
+				t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+			}
+			assertNoEvent(t, dc)
+		})
+	}
+}
+
 // ─── unknown event ────────────────────────────────────────────────────────────
 
 func TestHandleUnknownEventReturnsAccepted(t *testing.T) {
