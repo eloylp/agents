@@ -450,6 +450,30 @@ func TestToOpenAI_UnsupportedAssistantBlock(t *testing.T) {
 	}
 }
 
+// TestToOpenAI_UnsupportedToolResultBlock verifies that a tool_result whose
+// content array contains an unsupported nested block type (e.g. "image")
+// returns a translation error rather than silently dropping the block and
+// producing lossy/partial text content.
+func TestToOpenAI_UnsupportedToolResultBlock(t *testing.T) {
+	t.Parallel()
+	// tool_result with a content array that includes an image block.
+	toolResultContent := json.RawMessage(`[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"abc"}}]`)
+	req := MessagesRequest{
+		Messages: []AnthropicMessage{
+			{
+				Role: "user",
+				Content: jsonBlocks([]ContentBlock{
+					{Type: "tool_result", ToolUseID: "tc_1", Content: toolResultContent},
+				}),
+			},
+		},
+	}
+	_, err := ToOpenAI(req, "gpt-4")
+	if err == nil {
+		t.Fatal("expected error for unsupported tool_result nested block type, got nil")
+	}
+}
+
 func assertMsg(t *testing.T, msg ChatMessage, role, content string, toolCalls []ToolCall) {
 	t.Helper()
 	if msg.Role != role {

@@ -283,11 +283,14 @@ func toolResultContent(raw json.RawMessage) (string, error) {
 		}
 		var out string
 		for _, b := range blocks {
-			if b.Type == "text" {
+			switch b.Type {
+			case "text":
 				if out != "" {
 					out += "\n"
 				}
 				out += b.Text
+			default:
+				return "", fmt.Errorf("unsupported tool_result content block type %q", b.Type)
 			}
 		}
 		return out, nil
