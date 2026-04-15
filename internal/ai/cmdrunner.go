@@ -59,13 +59,13 @@ func (r *CommandRunner) Run(ctx context.Context, req Request) (Response, error) 
 
 	switch r.mode {
 	case "noop":
-		logger.Info().Msg(fmt.Sprintf("%s runner noop", r.backendName))
+		logger.Info().Msgf("%s runner noop", r.backendName)
 		return Response{}, nil
 	case "command":
 		if r.command == "" {
 			return Response{}, fmt.Errorf("%s command is required when mode=command", r.backendName)
 		}
-		logger.Info().Str("command", r.command).Msg(fmt.Sprintf("executing %s command", r.backendName))
+		logger.Info().Str("command", r.command).Msgf("executing %s command", r.backendName)
 		return r.runCommand(ctx, logger, req, prompt)
 	default:
 		return Response{}, fmt.Errorf("unknown %s mode: %s", r.backendName, r.mode)
@@ -94,35 +94,35 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	cmdErr := cmd.Run()
 
 	rawOut := stdout.String()
-	logger.Debug().Str("raw_stdout", truncateString(rawOut, 4000)).Msg(fmt.Sprintf("%s raw output", r.backendName))
+	logger.Debug().Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("%s raw output", r.backendName)
 
 	// If the command exited non-zero but produced no stdout, treat it as a
 	// hard failure. If stdout has data we still attempt JSON parsing because
 	// some AI CLIs emit non-zero exit codes even on a successful run (e.g.
 	// after posting a GitHub comment via MCP tools).
 	if cmdErr != nil && stdout.Len() == 0 {
-		logger.Error().Err(cmdErr).Str("stderr", truncateString(stderr.String(), 2000)).Msg(fmt.Sprintf("%s command failed", r.backendName))
+		logger.Error().Err(cmdErr).Str("stderr", truncateString(stderr.String(), 2000)).Msgf("%s command failed", r.backendName)
 		return Response{}, fmt.Errorf("%s command failed: %w", r.backendName, cmdErr)
 	}
 
 	var response Response
 	if stdout.Len() == 0 {
-		logger.Info().Msg(fmt.Sprintf("%s command returned no output", r.backendName))
+		logger.Info().Msgf("%s command returned no output", r.backendName)
 		return Response{}, nil
 	}
 	jsonBytes, err := extractJSON(stdout.Bytes())
 	if err != nil {
-		logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msg(fmt.Sprintf("invalid %s response", r.backendName))
+		logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s response", r.backendName)
 		return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
 	}
 	if err := json.Unmarshal(jsonBytes, &response); err != nil {
-		logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msg(fmt.Sprintf("invalid %s response", r.backendName))
+		logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s response", r.backendName)
 		return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
 	}
 	if cmdErr != nil {
-		logger.Warn().Err(cmdErr).Str("stderr", truncateString(stderr.String(), 2000)).Msg(fmt.Sprintf("%s command exited non-zero but produced valid output", r.backendName))
+		logger.Warn().Err(cmdErr).Str("stderr", truncateString(stderr.String(), 2000)).Msgf("%s command exited non-zero but produced valid output", r.backendName)
 	}
-	logger.Info().Int("artifacts", len(response.Artifacts)).Msg(fmt.Sprintf("%s command completed", r.backendName))
+	logger.Info().Int("artifacts", len(response.Artifacts)).Msgf("%s command completed", r.backendName)
 	return response, nil
 }
 
