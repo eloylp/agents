@@ -527,6 +527,45 @@ func TestDispatcherDedupeRolledBackOnEnqueueFailure(t *testing.T) {
 	}
 }
 
+// TestCheckAndMarkAutonomousRunSuppressesNearSimultaneousDispatch is a regression
+// test for the cron-first dedup ordering: when an autonomous run starts first and
+// claims the dedup slot, a near-simultaneous dispatch targeting the same agent/repo
+// must be suppressed until ClearAutonomousRunMark is called.
+func TestCheckAndMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.T) {
+	t.Parallel()
+	q := &fakeQueue{}
+	d := testDispatcher(q)
+
+	// Simulate: cron run starts and claims the dedup slot.
+	alreadySeen := d.CheckAndMarkAutonomousRun("coder", "owner/repo", time.Now())
+	if alreadySeen {
+		t.Fatal("CheckAndMarkAutonomousRun: expected false on first call (no prior dispatch)")
+	}
+
+	// While the cron run is in-flight, a dispatch targeting the same agent/repo
+	// must be suppressed (coder dispatching to itself is not allowed, so use
+	// pr-reviewer as the originator dispatching to coder).
+	originator := originatorAgent("pr-reviewer")
+	ev := testEvent("owner/repo", 0)
+	d.ProcessDispatches(context.Background(), originator, ev, "root-x", 0, []ai.DispatchRequest{
+		{Agent: "coder", Reason: "dispatch while cron holds slot"},
+	})
+	if len(q.popped()) != 0 {
+		t.Error("expected dispatch suppressed: cron run already holds the dedup slot")
+	}
+
+	// Cron run ends — clear the mark.
+	d.ClearAutonomousRunMark("coder", "owner/repo")
+
+	// After the mark is cleared a new dispatch to the same target must succeed.
+	d.ProcessDispatches(context.Background(), originator, ev, "root-y", 0, []ai.DispatchRequest{
+		{Agent: "coder", Reason: "dispatch after cron released slot"},
+	})
+	if len(q.popped()) != 1 {
+		t.Error("expected dispatch enqueued after ClearAutonomousRunMark")
+	}
+}
+
 func TestDispatchDedupStoreStartSmallTTLDoesNotPanic(t *testing.T) {
 	t.Parallel()
 	// TTL values of 1, 2, 3 seconds previously could produce a very small

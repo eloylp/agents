@@ -254,6 +254,9 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 				Msg("autonomous run skipped: already seen within dispatch dedup window")
 			return nil
 		}
+		// We marked the slot; clear it when done so the next scheduled run
+		// is not suppressed for the full TTL window.
+		defer s.dispatcher.ClearAutonomousRunMark(agent.Name, repo)
 	}
 	backend := s.cfg.ResolveBackend(agent.Backend)
 	if backend == "" {

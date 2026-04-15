@@ -459,9 +459,10 @@ func TestSchedulerCronRunSkippedWhenAlreadySeenInDedup(t *testing.T) {
 	}
 }
 
-// TestSchedulerCronRunNotSuppressedByPriorCronRun is a regression test for the
-// case where CheckAndMarkAutonomousRun was incorrectly writing to the shared
-// dedup store, causing the second cron run for the same agent to be skipped.
+// TestSchedulerCronRunNotSuppressedByPriorCronRun verifies that two consecutive
+// cron runs for the same agent both execute. CheckAndMarkAutonomousRun now writes
+// to the dedup store, but executeAgentRun clears the mark via defer on completion,
+// so subsequent runs within the TTL window are not suppressed.
 func TestSchedulerCronRunNotSuppressedByPriorCronRun(t *testing.T) {
 	t.Parallel()
 	cfg := dispatchCfgForTest()

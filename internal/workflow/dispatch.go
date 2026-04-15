@@ -270,14 +270,23 @@ func (d *Dispatcher) ProcessDispatches(
 	}
 }
 
-// CheckAndMarkAutonomousRun checks whether a dispatch has already claimed the
-// dedup slot (agentName, repo, 0). Returns true if a dispatch is already in
-// the dedup window for this target — meaning the cron/manual run should be
-// skipped to avoid duplicate execution. Cron and manual runs do not write to
-// the dedup store; only dispatches do. This asymmetry is intentional: a cron
-// run must not block subsequent cron runs for the same agent.
+// CheckAndMarkAutonomousRun checks whether the dedup slot (agentName, repo, 0)
+// is already held by a dispatch. If not, it marks the slot so near-simultaneous
+// dispatches targeting the same agent/repo see the running autonomous execution
+// as already in-flight and are suppressed. Returns true when a dispatch already
+// claimed the slot (cron/manual run should be skipped); false when we claimed it.
+//
+// The caller MUST call ClearAutonomousRunMark (typically via defer) when the run
+// finishes so that the next scheduled run is not suppressed for the full TTL window.
 func (d *Dispatcher) CheckAndMarkAutonomousRun(agentName, repo string, now time.Time) bool {
-	return d.dedup.Seen(agentName, repo, 0, now)
+	return d.dedup.SeenOrAdd(agentName, repo, 0, now)
+}
+
+// ClearAutonomousRunMark removes the dedup slot written by CheckAndMarkAutonomousRun.
+// It must be called (typically via defer) when an autonomous run completes so that
+// the next scheduled run is not suppressed for the full dedup window.
+func (d *Dispatcher) ClearAutonomousRunMark(agentName, repo string) {
+	d.dedup.Remove(agentName, repo, 0)
 }
 
 // Stats returns a snapshot of the current dispatch counters.
