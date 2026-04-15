@@ -39,10 +39,10 @@ type AgentTriggerer interface {
 	TriggerAgent(ctx context.Context, agentName, repo string) error
 }
 
-// EventQueue accepts label events for async processing and reports queue depth.
+// EventQueue accepts events for async processing and reports queue depth.
 // *workflow.DataChannels satisfies this interface.
 type EventQueue interface {
-	PushEvent(ctx context.Context, ev workflow.LabelEvent) error
+	PushEvent(ctx context.Context, ev workflow.Event) error
 	QueueStats() workflow.QueueStat
 }
 
@@ -196,79 +196,349 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	event := strings.TrimSpace(r.Header.Get("X-GitHub-Event"))
 	switch event {
 	case "issues":
-		s.handleLabelEvent(r.Context(), w, body, deliveryID, "issue")
+		s.handleIssuesEvent(r.Context(), w, body, deliveryID)
 	case "pull_request":
-		s.handleLabelEvent(r.Context(), w, body, deliveryID, "pr")
+		s.handlePullRequestEvent(r.Context(), w, body, deliveryID)
+	case "issue_comment":
+		s.handleIssueCommentEvent(r.Context(), w, body, deliveryID)
+	case "pull_request_review":
+		s.handlePullRequestReviewEvent(r.Context(), w, body, deliveryID)
+	case "pull_request_review_comment":
+		s.handlePullRequestReviewCommentEvent(r.Context(), w, body, deliveryID)
+	case "push":
+		s.handlePushEvent(r.Context(), w, body, deliveryID)
 	default:
 		s.logger.Warn().Str("event", event).Str("delivery_id", deliveryID).Msg("unhandled webhook event type")
 		w.WriteHeader(http.StatusAccepted)
 	}
 }
 
+// ─── webhook payload shapes ───────────────────────────────────────────────────
+
 type webhookRepository struct {
 	FullName string `json:"full_name"`
 }
 
-// labelWebhookPayload is the common shape of issues.labeled and
-// pull_request.labeled payloads. The Issue and PullRequest fields are
-// populated only for their respective event types; the other is zero.
-type labelWebhookPayload struct {
-	Action     string            `json:"action"`
-	Label      workflow.Label    `json:"label"`
-	Repository webhookRepository `json:"repository"`
-	Issue      workflow.Issue    `json:"issue"`
-	// PullRequest is populated for pull_request events.
-	PullRequest workflow.PullRequest `json:"pull_request"`
+type webhookSender struct {
+	Login string `json:"login"`
 }
 
-func (s *Server) handleLabelEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID, kind string) {
-	var payload labelWebhookPayload
+type webhookLabel struct {
+	Name string `json:"name"`
+}
+
+type webhookIssue struct {
+	Number      int       `json:"number"`
+	Title       string    `json:"title"`
+	Body        string    `json:"body"`
+	PullRequest *struct{} `json:"pull_request,omitempty"`
+}
+
+type webhookPullRequest struct {
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	Draft  bool   `json:"draft"`
+	Merged bool   `json:"merged"`
+}
+
+type webhookComment struct {
+	Body string `json:"body"`
+}
+
+type webhookReview struct {
+	Body  string `json:"body"`
+	State string `json:"state"`
+}
+
+// ─── event-type handlers ──────────────────────────────────────────────────────
+
+// handleIssuesEvent handles X-GitHub-Event: issues.
+// For "labeled" actions it filters to AI labels and emits "issues.labeled".
+// For lifecycle actions (opened, edited, reopened, closed) it emits the
+// corresponding "issues.{action}" event.
+// Events from issues that are pull requests (GitHub sends both) are dropped
+// for the "labeled" action; the pull_request event handles those.
+func (s *Server) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
+	var payload struct {
+		Action     string             `json:"action"`
+		Label      webhookLabel       `json:"label"`
+		Issue      webhookIssue       `json:"issue"`
+		Repository webhookRepository  `json:"repository"`
+		Sender     webhookSender      `json:"sender"`
+	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	if !isRelevantAction(payload.Action) || !isAILabel(payload.Label.Name) {
-		w.WriteHeader(http.StatusAccepted)
-		return
-	}
-	// issues events can also fire for pull requests (GitHub sends both); skip
-	// those here — the pull_request event handles them.
-	if kind == "issue" && payload.Issue.PullRequest != nil {
-		w.WriteHeader(http.StatusAccepted)
-		return
-	}
+
 	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
-	var number int
-	if kind == "pr" {
+	repoRef := workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled}
+
+	// GitHub sends issues events for PR-backed issues too; the pull_request event
+	// handles those, so drop all issue events that belong to a pull request.
+	if payload.Issue.PullRequest != nil {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	switch payload.Action {
+	case "labeled":
+		ev := workflow.Event{
+			Repo:   repoRef,
+			Kind:   "issues.labeled",
+			Number: payload.Issue.Number,
+			Actor:  payload.Sender.Login,
+			Payload: map[string]any{
+				"label": payload.Label.Name,
+			},
+		}
+		s.enqueue(ctx, w, ev, deliveryID)
+	case "opened", "edited", "reopened", "closed":
+		ev := workflow.Event{
+			Repo:   repoRef,
+			Kind:   "issues." + payload.Action,
+			Number: payload.Issue.Number,
+			Actor:  payload.Sender.Login,
+			Payload: map[string]any{
+				"title": payload.Issue.Title,
+				"body":  payload.Issue.Body,
+			},
+		}
+		s.enqueue(ctx, w, ev, deliveryID)
+	default:
+		w.WriteHeader(http.StatusAccepted)
+	}
+}
+
+// handlePullRequestEvent handles X-GitHub-Event: pull_request.
+// For "labeled" actions it filters to AI labels (and skips drafts) and emits
+// "pull_request.labeled". For lifecycle actions it emits "pull_request.{action}".
+func (s *Server) handlePullRequestEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
+	var payload struct {
+		Action      string             `json:"action"`
+		Label       webhookLabel       `json:"label"`
+		PullRequest webhookPullRequest `json:"pull_request"`
+		Repository  webhookRepository  `json:"repository"`
+		Sender      webhookSender      `json:"sender"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
+	if !ok || !repo.Enabled {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	repoRef := workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled}
+
+	switch payload.Action {
+	case "labeled":
 		if payload.PullRequest.Draft {
 			s.logger.Info().Str("repo", repo.Name).Int("number", payload.PullRequest.Number).Msg("pull request skipped, draft")
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
-		number = payload.PullRequest.Number
-	} else {
-		number = payload.Issue.Number
+		ev := workflow.Event{
+			Repo:   repoRef,
+			Kind:   "pull_request.labeled",
+			Number: payload.PullRequest.Number,
+			Actor:  payload.Sender.Login,
+			Payload: map[string]any{
+				"label": payload.Label.Name,
+			},
+		}
+		s.enqueue(ctx, w, ev, deliveryID)
+	case "opened", "synchronize", "ready_for_review", "closed":
+		eventPayload := map[string]any{
+			"title": payload.PullRequest.Title,
+			"draft": payload.PullRequest.Draft,
+		}
+		if payload.Action == "closed" {
+			eventPayload["merged"] = payload.PullRequest.Merged
+		}
+		ev := workflow.Event{
+			Repo:    repoRef,
+			Kind:    "pull_request." + payload.Action,
+			Number:  payload.PullRequest.Number,
+			Actor:   payload.Sender.Login,
+			Payload: eventPayload,
+		}
+		s.enqueue(ctx, w, ev, deliveryID)
+	default:
+		w.WriteHeader(http.StatusAccepted)
+	}
+}
+
+// handleIssueCommentEvent handles X-GitHub-Event: issue_comment.
+// Only "created" actions are forwarded as "issue_comment.created".
+func (s *Server) handleIssueCommentEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
+	var payload struct {
+		Action     string            `json:"action"`
+		Comment    webhookComment    `json:"comment"`
+		Issue      webhookIssue      `json:"issue"`
+		Repository webhookRepository `json:"repository"`
+		Sender     webhookSender     `json:"sender"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	if payload.Action != "created" {
+		w.WriteHeader(http.StatusAccepted)
+		return
 	}
 
-	ev := workflow.LabelEvent{
-		Repo:   workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
-		Number: number,
-		Label:  payload.Label.Name,
+	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
+	if !ok || !repo.Enabled {
+		w.WriteHeader(http.StatusAccepted)
+		return
 	}
+
+	ev := workflow.Event{
+		Repo:   workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+		Kind:   "issue_comment.created",
+		Number: payload.Issue.Number,
+		Actor:  payload.Sender.Login,
+		Payload: map[string]any{
+			"body": payload.Comment.Body,
+		},
+	}
+	s.enqueue(ctx, w, ev, deliveryID)
+}
+
+// handlePullRequestReviewEvent handles X-GitHub-Event: pull_request_review.
+// Only "submitted" actions are forwarded as "pull_request_review.submitted".
+func (s *Server) handlePullRequestReviewEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
+	var payload struct {
+		Action      string             `json:"action"`
+		Review      webhookReview      `json:"review"`
+		PullRequest webhookPullRequest `json:"pull_request"`
+		Repository  webhookRepository  `json:"repository"`
+		Sender      webhookSender      `json:"sender"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	if payload.Action != "submitted" {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
+	if !ok || !repo.Enabled {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	ev := workflow.Event{
+		Repo:   workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+		Kind:   "pull_request_review.submitted",
+		Number: payload.PullRequest.Number,
+		Actor:  payload.Sender.Login,
+		Payload: map[string]any{
+			"state": payload.Review.State,
+			"body":  payload.Review.Body,
+		},
+	}
+	s.enqueue(ctx, w, ev, deliveryID)
+}
+
+// handlePullRequestReviewCommentEvent handles X-GitHub-Event: pull_request_review_comment.
+// Only "created" actions are forwarded as "pull_request_review_comment.created".
+func (s *Server) handlePullRequestReviewCommentEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
+	var payload struct {
+		Action      string             `json:"action"`
+		Comment     webhookComment     `json:"comment"`
+		PullRequest webhookPullRequest `json:"pull_request"`
+		Repository  webhookRepository  `json:"repository"`
+		Sender      webhookSender      `json:"sender"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	if payload.Action != "created" {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
+	if !ok || !repo.Enabled {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	ev := workflow.Event{
+		Repo:   workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+		Kind:   "pull_request_review_comment.created",
+		Number: payload.PullRequest.Number,
+		Actor:  payload.Sender.Login,
+		Payload: map[string]any{
+			"body": payload.Comment.Body,
+		},
+	}
+	s.enqueue(ctx, w, ev, deliveryID)
+}
+
+// handlePushEvent handles X-GitHub-Event: push.
+func (s *Server) handlePushEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
+	var payload struct {
+		Ref        string            `json:"ref"`
+		After      string            `json:"after"`
+		Repository webhookRepository `json:"repository"`
+		Sender     webhookSender     `json:"sender"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
+	if !ok || !repo.Enabled {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	// Ignore branch deletions (After is all-zero SHA) and non-branch refs
+	// (tags, notes). Only "new commit pushed to a branch" maps to push events.
+	const deletedSHA = "0000000000000000000000000000000000000000"
+	if payload.After == deletedSHA || !strings.HasPrefix(payload.Ref, "refs/heads/") {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	ev := workflow.Event{
+		Repo:  workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+		Kind:  "push",
+		Actor: payload.Sender.Login,
+		Payload: map[string]any{
+			"ref":      payload.Ref,
+			"head_sha": payload.After,
+		},
+	}
+	s.enqueue(ctx, w, ev, deliveryID)
+}
+
+// enqueue pushes ev onto the event queue, handling all error cases.
+func (s *Server) enqueue(ctx context.Context, w http.ResponseWriter, ev workflow.Event, deliveryID string) {
 	if err := s.channels.PushEvent(ctx, ev); err != nil {
 		if errors.Is(err, workflow.ErrEventQueueFull) {
 			s.delivery.Delete(deliveryID)
-			s.logger.Warn().Str("repo", repo.Name).Str("kind", kind).Msg("event queue full, dropping webhook")
+			s.logger.Warn().Str("repo", ev.Repo.FullName).Str("kind", ev.Kind).Msg("event queue full, dropping webhook")
 			http.Error(w, "event queue full, retry later", http.StatusServiceUnavailable)
 			return
 		}
 		if errors.Is(err, workflow.ErrQueueClosed) {
-			s.logger.Warn().Str("repo", repo.Name).Msg("queue closed during shutdown, dropping webhook")
+			s.logger.Warn().Str("repo", ev.Repo.FullName).Msg("queue closed during shutdown, dropping webhook")
 			http.Error(w, "shutting down, retry later", http.StatusServiceUnavailable)
 			return
 		}
@@ -277,15 +547,6 @@ func (s *Server) handleLabelEvent(ctx context.Context, w http.ResponseWriter, bo
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
-}
-
-func isRelevantAction(action string) bool {
-	action = strings.ToLower(strings.TrimSpace(action))
-	return action == "labeled"
-}
-
-func isAILabel(label string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(label)), "ai:")
 }
 
 // verifySignature checks the HMAC-SHA256 signature from X-Hub-Signature-256.

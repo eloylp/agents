@@ -56,146 +56,513 @@ func newTestServer(cfg *config.Config) (*Server, *workflow.DataChannels) {
 	return NewServer(cfg, NewDeliveryStore(time.Hour), dc, nil, zerolog.Nop(), nil), dc
 }
 
+// webhookRequest builds a signed POST request to /webhooks/github.
+func webhookRequest(t *testing.T, event, deliveryID, body string) *http.Request {
+	t.Helper()
+	sig := signatureForTests([]byte(body), "secret")
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
+	req.Header.Set("X-GitHub-Event", event)
+	req.Header.Set("X-GitHub-Delivery", deliveryID)
+	req.Header.Set("X-Hub-Signature-256", sig)
+	return req
+}
+
+// drainEvent returns the next Event from dc or fails the test.
+func drainEvent(t *testing.T, dc *workflow.DataChannels) workflow.Event {
+	t.Helper()
+	select {
+	case ev := <-dc.EventChan():
+		return ev
+	default:
+		t.Fatal("expected an event in the queue but found none")
+		panic("unreachable")
+	}
+}
+
+// assertNoEvent fails if dc has a queued event.
+func assertNoEvent(t *testing.T, dc *workflow.DataChannels) {
+	t.Helper()
+	select {
+	case <-dc.EventChan():
+		t.Fatal("expected no event in the queue but found one")
+	default:
+	}
+}
+
+// ─── issues events ────────────────────────────────────────────────────────────
+
 func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
 	t.Parallel()
 	server, dc := newTestServer(testCfg(nil))
 
-	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":1}}`
-	sig := signatureForTests([]byte(body), "secret")
-
-	req := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
-	req.Header.Set("X-GitHub-Event", "issues")
-	req.Header.Set("X-GitHub-Delivery", "delivery-1")
-	req.Header.Set("X-Hub-Signature-256", sig)
+	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":1},"sender":{"login":"octocat"}}`
 
 	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, req)
+	server.handleGitHubWebhook(rr, webhookRequest(t, "issues", "delivery-1", body))
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("first delivery: got %d, want %d", rr.Code, http.StatusAccepted)
 	}
 
-	req2 := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
-	req2.Header.Set("X-GitHub-Event", "issues")
-	req2.Header.Set("X-GitHub-Delivery", "delivery-1")
-	req2.Header.Set("X-Hub-Signature-256", sig)
-
 	rr2 := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr2, req2)
+	server.handleGitHubWebhook(rr2, webhookRequest(t, "issues", "delivery-1", body))
 	if rr2.Code != http.StatusAccepted {
 		t.Fatalf("dedup delivery: got %d, want %d", rr2.Code, http.StatusAccepted)
 	}
 
-	// Only one LabelEvent should have been pushed.
-	select {
-	case <-dc.EventChan():
-		// ok
-	default:
-		t.Fatalf("expected first delivery to enqueue an event")
-	}
-	select {
-	case <-dc.EventChan():
-		t.Fatalf("second duplicate delivery must not enqueue")
-	default:
-	}
+	// Only one Event should have been pushed.
+	drainEvent(t, dc)
+	assertNoEvent(t, dc)
 }
 
-func TestHandleWebhookIgnoresNonAILabel(t *testing.T) {
+func TestHandleIssuesLabeledEnqueuesEventWithLabel(t *testing.T) {
 	t.Parallel()
 	server, dc := newTestServer(testCfg(nil))
 
-	body := `{"action":"labeled","label":{"name":"bug"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":2}}`
-	sig := signatureForTests([]byte(body), "secret")
-
-	req := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
-	req.Header.Set("X-GitHub-Event", "pull_request")
-	req.Header.Set("X-GitHub-Delivery", "delivery-non-ai")
-	req.Header.Set("X-Hub-Signature-256", sig)
-
+	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":7},"sender":{"login":"octocat"}}`
 	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, req)
+	server.handleGitHubWebhook(rr, webhookRequest(t, "issues", "d-1", body))
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
 	}
-	select {
-	case <-dc.EventChan():
-		t.Fatalf("non-ai label should not enqueue")
-	default:
+
+	ev := drainEvent(t, dc)
+	if ev.Kind != "issues.labeled" {
+		t.Errorf("kind: got %q, want %q", ev.Kind, "issues.labeled")
+	}
+	if ev.Number != 7 {
+		t.Errorf("number: got %d, want 7", ev.Number)
+	}
+	if ev.Actor != "octocat" {
+		t.Errorf("actor: got %q, want %q", ev.Actor, "octocat")
+	}
+	if ev.Payload["label"] != "ai:refine" {
+		t.Errorf("payload label: got %v, want %q", ev.Payload["label"], "ai:refine")
 	}
 }
 
-func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
+func TestHandleIssuesOpenedEnqueuesEvent(t *testing.T) {
 	t.Parallel()
 	server, dc := newTestServer(testCfg(nil))
 
-	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":7}}`
-
-	reqBad := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
-	reqBad.Header.Set("X-GitHub-Event", "issues")
-	reqBad.Header.Set("X-GitHub-Delivery", "delivery-poison")
-	reqBad.Header.Set("X-Hub-Signature-256", "sha256=deadbeef")
-	rrBad := httptest.NewRecorder()
-	server.handleGitHubWebhook(rrBad, reqBad)
-	if rrBad.Code != http.StatusUnauthorized {
-		t.Fatalf("bad signature: got %d, want %d", rrBad.Code, http.StatusUnauthorized)
+	body := `{"action":"opened","repository":{"full_name":"owner/repo"},"issue":{"number":10,"title":"Bug","body":"desc"},"sender":{"login":"dev"}}`
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, webhookRequest(t, "issues", "d-opened", body))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
 	}
 
-	// Retry the same delivery ID with valid sig — it must be processed.
-	sig := signatureForTests([]byte(body), "secret")
-	reqGood := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
-	reqGood.Header.Set("X-GitHub-Event", "issues")
-	reqGood.Header.Set("X-GitHub-Delivery", "delivery-poison")
-	reqGood.Header.Set("X-Hub-Signature-256", sig)
-	rrGood := httptest.NewRecorder()
-	server.handleGitHubWebhook(rrGood, reqGood)
-	if rrGood.Code != http.StatusAccepted {
-		t.Fatalf("retry with good sig: got %d body=%s", rrGood.Code, rrGood.Body.String())
+	ev := drainEvent(t, dc)
+	if ev.Kind != "issues.opened" {
+		t.Errorf("kind: got %q, want %q", ev.Kind, "issues.opened")
 	}
-	_ = dc
+	if ev.Number != 10 {
+		t.Errorf("number: got %d, want 10", ev.Number)
+	}
+	if ev.Actor != "dev" {
+		t.Errorf("actor: got %q, want %q", ev.Actor, "dev")
+	}
 }
+
+func TestHandleWebhookNonAILabelEnqueues(t *testing.T) {
+	t.Parallel()
+	server, dc := newTestServer(testCfg(nil))
+
+	// Non-AI labels on pull_request.labeled must be enqueued so that
+	// event-based bindings (events: ["pull_request.labeled"]) can match them.
+	// Label-based bindings are still filtered by the engine via agentsForEvent.
+	body := `{"action":"labeled","label":{"name":"bug"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":2},"sender":{"login":"dev"}}`
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request", "delivery-non-ai", body))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	}
+	ev := drainEvent(t, dc)
+	if ev.Kind != "pull_request.labeled" {
+		t.Errorf("kind: got %q, want %q", ev.Kind, "pull_request.labeled")
+	}
+	if ev.Payload["label"] != "bug" {
+		t.Errorf("payload label: got %v", ev.Payload["label"])
+	}
+}
+
+func TestHandleIssuesLabeledNonAILabelEnqueues(t *testing.T) {
+	t.Parallel()
+	server, dc := newTestServer(testCfg(nil))
+
+	// Non-AI labels on issues.labeled must be enqueued so that
+	// event-based bindings (events: ["issues.labeled"]) can match them.
+	body := `{"action":"labeled","label":{"name":"enhancement"},"repository":{"full_name":"owner/repo"},"issue":{"number":9},"sender":{"login":"dev"}}`
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, webhookRequest(t, "issues", "delivery-issue-non-ai", body))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	}
+	ev := drainEvent(t, dc)
+	if ev.Kind != "issues.labeled" {
+		t.Errorf("kind: got %q, want %q", ev.Kind, "issues.labeled")
+	}
+	if ev.Payload["label"] != "enhancement" {
+		t.Errorf("payload label: got %v", ev.Payload["label"])
+	}
+}
+
+func TestHandleIssuesEventDropsPRLabeledAction(t *testing.T) {
+	t.Parallel()
+	server, dc := newTestServer(testCfg(nil))
+
+	// GitHub sends an issues event for PR labels too; it must be silently dropped.
+	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":3,"pull_request":{}}}`
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, webhookRequest(t, "issues", "d-pr-label", body))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	}
+	assertNoEvent(t, dc)
+}
+
+func TestHandleIssuesEventDropsPRLifecycleActions(t *testing.T) {
+	t.Parallel()
+	for _, action := range []string{"opened", "edited", "reopened", "closed"} {
+		action := action
+		t.Run(action, func(t *testing.T) {
+			t.Parallel()
+			server, dc := newTestServer(testCfg(nil))
+
+			// GitHub sends issues lifecycle events for PR-backed issues too; drop them.
+			body := `{"action":"` + action + `","repository":{"full_name":"owner/repo"},"issue":{"number":3,"title":"t","body":"b","pull_request":{}},"sender":{"login":"dev"}}`
+			rr := httptest.NewRecorder()
+			server.handleGitHubWebhook(rr, webhookRequest(t, "issues", "d-pr-"+action, body))
+			if rr.Code != http.StatusAccepted {
+				t.Fatalf("action %q: got %d, want %d", action, rr.Code, http.StatusAccepted)
+			}
+			assertNoEvent(t, dc)
+		})
+	}
+}
+
+// ─── pull_request events ──────────────────────────────────────────────────────
+
+func TestHandlePullRequestLabeledEnqueuesEvent(t *testing.T) {
+	t.Parallel()
+	server, dc := newTestServer(testCfg(nil))
+
+	body := `{"action":"labeled","label":{"name":"ai:review"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":5},"sender":{"login":"bot"}}`
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request", "d-pr-labeled", body))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	}
+
+	ev := drainEvent(t, dc)
+	if ev.Kind != "pull_request.labeled" {
+		t.Errorf("kind: got %q, want %q", ev.Kind, "pull_request.labeled")
+	}
+	if ev.Payload["label"] != "ai:review" {
+		t.Errorf("payload label: got %v", ev.Payload["label"])
+	}
+}
+
+func TestHandleDraftPRWebhookDoesNotEnqueue(t *testing.T) {
+	t.Parallel()
+	server, dc := newTestServer(testCfg(nil))
+
+	body := `{"action":"labeled","label":{"name":"ai:review"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":5,"draft":true}}`
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request", "delivery-draft", body))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	}
+	assertNoEvent(t, dc)
+}
+
+func TestHandlePullRequestOpenedEnqueuesEvent(t *testing.T) {
+	t.Parallel()
+	server, dc := newTestServer(testCfg(nil))
+
+	body := `{"action":"opened","repository":{"full_name":"owner/repo"},"pull_request":{"number":8,"title":"feat","draft":false},"sender":{"login":"dev"}}`
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request", "d-pr-opened", body))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	}
+
+	ev := drainEvent(t, dc)
+	if ev.Kind != "pull_request.opened" {
+		t.Errorf("kind: got %q, want %q", ev.Kind, "pull_request.opened")
+	}
+	if ev.Number != 8 {
+		t.Errorf("number: got %d, want 8", ev.Number)
+	}
+}
+
+func TestHandlePullRequestClosedPayloadIncludesMerged(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		merged     bool
+		deliveryID string
+	}{
+		{name: "merged close", merged: true, deliveryID: "d-pr-closed-merged"},
+		{name: "non-merged close", merged: false, deliveryID: "d-pr-closed-ordinary"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server, dc := newTestServer(testCfg(nil))
+
+			mergedVal := "false"
+			if tc.merged {
+				mergedVal = "true"
+			}
+			body := `{"action":"closed","repository":{"full_name":"owner/repo"},"pull_request":{"number":12,"title":"feat","draft":false,"merged":` + mergedVal + `},"sender":{"login":"dev"}}`
+			rr := httptest.NewRecorder()
+			server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request", tc.deliveryID, body))
+			if rr.Code != http.StatusAccepted {
+				t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+			}
+
+			ev := drainEvent(t, dc)
+			if ev.Kind != "pull_request.closed" {
+				t.Errorf("kind: got %q, want %q", ev.Kind, "pull_request.closed")
+			}
+			if ev.Number != 12 {
+				t.Errorf("number: got %d, want 12", ev.Number)
+			}
+			got, ok := ev.Payload["merged"].(bool)
+			if !ok {
+				t.Fatalf("payload[merged] missing or not bool: %v", ev.Payload["merged"])
+			}
+			if got != tc.merged {
+				t.Errorf("payload[merged]: got %v, want %v", got, tc.merged)
+			}
+		})
+	}
+}
+
+// ─── issue_comment events ─────────────────────────────────────────────────────
+
+func TestHandleIssueCommentCreatedEnqueuesEvent(t *testing.T) {
+	t.Parallel()
+	server, dc := newTestServer(testCfg(nil))
+
+	body := `{"action":"created","comment":{"body":"LGTM"},"issue":{"number":11},"repository":{"full_name":"owner/repo"},"sender":{"login":"reviewer"}}`
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, webhookRequest(t, "issue_comment", "d-comment", body))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	}
+
+	ev := drainEvent(t, dc)
+	if ev.Kind != "issue_comment.created" {
+		t.Errorf("kind: got %q, want %q", ev.Kind, "issue_comment.created")
+	}
+	if ev.Number != 11 {
+		t.Errorf("number: got %d, want 11", ev.Number)
+	}
+	if ev.Actor != "reviewer" {
+		t.Errorf("actor: got %q, want %q", ev.Actor, "reviewer")
+	}
+	if ev.Payload["body"] != "LGTM" {
+		t.Errorf("payload body: got %v", ev.Payload["body"])
+	}
+}
+
+func TestHandleIssueCommentNonCreatedIgnored(t *testing.T) {
+	t.Parallel()
+	server, dc := newTestServer(testCfg(nil))
+
+	body := `{"action":"edited","comment":{"body":"updated"},"issue":{"number":1},"repository":{"full_name":"owner/repo"},"sender":{"login":"u"}}`
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, webhookRequest(t, "issue_comment", "d-edit", body))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	}
+	assertNoEvent(t, dc)
+}
+
+// ─── pull_request_review events ───────────────────────────────────────────────
+
+func TestHandlePullRequestReviewSubmittedEnqueuesEvent(t *testing.T) {
+	t.Parallel()
+	server, dc := newTestServer(testCfg(nil))
+
+	body := `{"action":"submitted","review":{"state":"approved","body":"LGTM"},"pull_request":{"number":9},"repository":{"full_name":"owner/repo"},"sender":{"login":"approver"}}`
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request_review", "d-review", body))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	}
+
+	ev := drainEvent(t, dc)
+	if ev.Kind != "pull_request_review.submitted" {
+		t.Errorf("kind: got %q, want %q", ev.Kind, "pull_request_review.submitted")
+	}
+	if ev.Number != 9 {
+		t.Errorf("number: got %d, want 9", ev.Number)
+	}
+	if ev.Payload["state"] != "approved" {
+		t.Errorf("payload state: got %v", ev.Payload["state"])
+	}
+}
+
+func TestHandlePullRequestReviewNonSubmittedIgnored(t *testing.T) {
+	t.Parallel()
+	server, dc := newTestServer(testCfg(nil))
+
+	body := `{"action":"dismissed","review":{"state":"dismissed"},"pull_request":{"number":1},"repository":{"full_name":"owner/repo"},"sender":{"login":"u"}}`
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request_review", "d-dismissed", body))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	}
+	assertNoEvent(t, dc)
+}
+
+// ─── pull_request_review_comment events ──────────────────────────────────────
+
+func TestHandlePullRequestReviewCommentCreatedEnqueuesEvent(t *testing.T) {
+	t.Parallel()
+	server, dc := newTestServer(testCfg(nil))
+
+	body := `{"action":"created","comment":{"body":"nit: rename this"},"pull_request":{"number":7},"repository":{"full_name":"owner/repo"},"sender":{"login":"reviewer"}}`
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request_review_comment", "d-rc-1", body))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	}
+
+	ev := drainEvent(t, dc)
+	if ev.Kind != "pull_request_review_comment.created" {
+		t.Errorf("kind: got %q, want %q", ev.Kind, "pull_request_review_comment.created")
+	}
+	if ev.Number != 7 {
+		t.Errorf("number: got %d, want 7", ev.Number)
+	}
+	if ev.Actor != "reviewer" {
+		t.Errorf("actor: got %q, want %q", ev.Actor, "reviewer")
+	}
+	if ev.Payload["body"] != "nit: rename this" {
+		t.Errorf("payload body: got %v", ev.Payload["body"])
+	}
+}
+
+func TestHandlePullRequestReviewCommentNonCreatedIgnored(t *testing.T) {
+	t.Parallel()
+	server, dc := newTestServer(testCfg(nil))
+
+	body := `{"action":"edited","comment":{"body":"updated"},"pull_request":{"number":7},"repository":{"full_name":"owner/repo"},"sender":{"login":"u"}}`
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request_review_comment", "d-rc-2", body))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	}
+	assertNoEvent(t, dc)
+}
+
+// ─── push events ─────────────────────────────────────────────────────────────
+
+func TestHandlePushEnqueuesEvent(t *testing.T) {
+	t.Parallel()
+	server, dc := newTestServer(testCfg(nil))
+
+	body := `{"ref":"refs/heads/main","after":"abc123","repository":{"full_name":"owner/repo"},"sender":{"login":"pusher"}}`
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, webhookRequest(t, "push", "d-push", body))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	}
+
+	ev := drainEvent(t, dc)
+	if ev.Kind != "push" {
+		t.Errorf("kind: got %q, want %q", ev.Kind, "push")
+	}
+	if ev.Actor != "pusher" {
+		t.Errorf("actor: got %q, want %q", ev.Actor, "pusher")
+	}
+	if ev.Payload["ref"] != "refs/heads/main" {
+		t.Errorf("payload ref: got %v", ev.Payload["ref"])
+	}
+	if ev.Payload["head_sha"] != "abc123" {
+		t.Errorf("payload head_sha: got %v", ev.Payload["head_sha"])
+	}
+}
+
+func TestHandlePushIgnoresNonBranchRefs(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		ref  string
+		sha  string
+	}{
+		{name: "tag push", ref: "refs/tags/v1.0.0", sha: "abc123"},
+		{name: "branch deletion", ref: "refs/heads/main", sha: "0000000000000000000000000000000000000000"},
+		{name: "notes ref", ref: "refs/notes/commits", sha: "abc123"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server, dc := newTestServer(testCfg(nil))
+			body := `{"ref":"` + tc.ref + `","after":"` + tc.sha + `","repository":{"full_name":"owner/repo"},"sender":{"login":"pusher"}}`
+			rr := httptest.NewRecorder()
+			server.handleGitHubWebhook(rr, webhookRequest(t, "push", "d-push-"+tc.name, body))
+			if rr.Code != http.StatusAccepted {
+				t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+			}
+			assertNoEvent(t, dc)
+		})
+	}
+}
+
+// ─── unknown event ────────────────────────────────────────────────────────────
+
+func TestHandleUnknownEventReturnsAccepted(t *testing.T) {
+	t.Parallel()
+	server, dc := newTestServer(testCfg(nil))
+
+	body := `{"action":"something"}`
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, webhookRequest(t, "unknown_event", "d-unknown", body))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	}
+	assertNoEvent(t, dc)
+}
+
+// ─── queue-full ───────────────────────────────────────────────────────────────
 
 func TestHandleWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(nil)
 	dc := workflow.NewDataChannels(1)
 	// Preload the queue.
-	if err := dc.PushEvent(context.Background(), workflow.LabelEvent{
+	if err := dc.PushEvent(context.Background(), workflow.Event{
 		Repo:   workflow.RepoRef{FullName: cfg.Repos[0].Name, Enabled: cfg.Repos[0].Enabled},
+		Kind:   "issues.labeled",
 		Number: 99,
-		Label:  "ai:refine",
 	}); err != nil {
 		t.Fatalf("preload event queue: %v", err)
 	}
 	server := NewServer(cfg, NewDeliveryStore(time.Hour), dc, nil, zerolog.Nop(), nil)
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":2}}`
-	sig := signatureForTests([]byte(body), "secret")
-
-	req := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
-	req.Header.Set("X-GitHub-Event", "issues")
-	req.Header.Set("X-GitHub-Delivery", "delivery-queue-full")
-	req.Header.Set("X-Hub-Signature-256", sig)
-
 	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, req)
+	server.handleGitHubWebhook(rr, webhookRequest(t, "issues", "delivery-queue-full", body))
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("queue full: got %d, want %d body=%s", rr.Code, http.StatusServiceUnavailable, rr.Body.String())
 	}
 
 	// Delivery ID must be released so a retry can succeed.
-	rr2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
-	req2.Header.Set("X-GitHub-Event", "issues")
-	req2.Header.Set("X-GitHub-Delivery", "delivery-queue-full")
-	req2.Header.Set("X-Hub-Signature-256", sig)
-	// Drain the preloaded item so the next push succeeds.
 	<-dc.EventChan()
-	server.handleGitHubWebhook(rr2, req2)
+	rr2 := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr2, webhookRequest(t, "issues", "delivery-queue-full", body))
 	if rr2.Code != http.StatusAccepted {
 		t.Fatalf("retry: got %d, want %d", rr2.Code, http.StatusAccepted)
 	}
 }
 
-// --- /agents/run endpoint tests ---
+// ─── /agents/run endpoint tests ───────────────────────────────────────────────
 
 type stubTriggerer struct {
 	called    bool
@@ -314,7 +681,7 @@ func TestHandleAgentsRunReturnsInternalServerErrorOnTriggerFailure(t *testing.T)
 	}
 }
 
-// --- signature verification ---
+// ─── signature verification ───────────────────────────────────────────────────
 
 func TestVerifySignature(t *testing.T) {
 	t.Parallel()
@@ -334,31 +701,37 @@ func TestVerifySignature(t *testing.T) {
 	}
 }
 
-func TestHandleDraftPRWebhookDoesNotEnqueue(t *testing.T) {
+func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
 	t.Parallel()
 	server, dc := newTestServer(testCfg(nil))
 
-	body := `{"action":"labeled","label":{"name":"ai:review"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":5,"draft":true}}`
+	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":7}}`
+
+	reqBad := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
+	reqBad.Header.Set("X-GitHub-Event", "issues")
+	reqBad.Header.Set("X-GitHub-Delivery", "delivery-poison")
+	reqBad.Header.Set("X-Hub-Signature-256", "sha256=deadbeef")
+	rrBad := httptest.NewRecorder()
+	server.handleGitHubWebhook(rrBad, reqBad)
+	if rrBad.Code != http.StatusUnauthorized {
+		t.Fatalf("bad signature: got %d, want %d", rrBad.Code, http.StatusUnauthorized)
+	}
+
+	// Retry the same delivery ID with valid sig — it must be processed.
 	sig := signatureForTests([]byte(body), "secret")
-
-	req := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
-	req.Header.Set("X-GitHub-Event", "pull_request")
-	req.Header.Set("X-GitHub-Delivery", "delivery-draft")
-	req.Header.Set("X-Hub-Signature-256", sig)
-
-	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, req)
-	if rr.Code != http.StatusAccepted {
-		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	reqGood := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
+	reqGood.Header.Set("X-GitHub-Event", "issues")
+	reqGood.Header.Set("X-GitHub-Delivery", "delivery-poison")
+	reqGood.Header.Set("X-Hub-Signature-256", sig)
+	rrGood := httptest.NewRecorder()
+	server.handleGitHubWebhook(rrGood, reqGood)
+	if rrGood.Code != http.StatusAccepted {
+		t.Fatalf("retry with good sig: got %d body=%s", rrGood.Code, rrGood.Body.String())
 	}
-	select {
-	case <-dc.EventChan():
-		t.Fatalf("draft PR must not enqueue a label event")
-	default:
-	}
+	_ = dc
 }
 
-// --- compile-time assertions ---
+// ─── compile-time assertions ──────────────────────────────────────────────────
 
 var _ EventQueue = (*workflow.DataChannels)(nil)
 var _ = errors.Is // keep errors import until we add an error-path test

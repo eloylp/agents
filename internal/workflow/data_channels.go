@@ -12,21 +12,21 @@ var (
 )
 
 type DataChannels struct {
-	eventQueue chan LabelEvent
+	eventQueue chan Event
 	mu         sync.RWMutex
 	closed     bool
 }
 
 func NewDataChannels(buffer int) *DataChannels {
 	return &DataChannels{
-		eventQueue: make(chan LabelEvent, buffer),
+		eventQueue: make(chan Event, buffer),
 	}
 }
 
-// PushEvent enqueues a label event without blocking. The select has three arms:
+// PushEvent enqueues an event without blocking. The select has three arms:
 // context cancellation (caller is shutting down), successful enqueue, and the
 // default case which fires immediately when the channel buffer is full.
-func (dc *DataChannels) PushEvent(ctx context.Context, ev LabelEvent) error {
+func (dc *DataChannels) PushEvent(ctx context.Context, ev Event) error {
 	dc.mu.RLock()
 	defer dc.mu.RUnlock()
 	if dc.closed {
@@ -42,7 +42,7 @@ func (dc *DataChannels) PushEvent(ctx context.Context, ev LabelEvent) error {
 	}
 }
 
-func (dc *DataChannels) EventChan() <-chan LabelEvent {
+func (dc *DataChannels) EventChan() <-chan Event {
 	return dc.eventQueue
 }
 

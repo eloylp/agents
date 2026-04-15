@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -227,6 +228,88 @@ repos:
 	_, err := Load(writeConfig(t, minimalYAML(repo)))
 	if err == nil || !strings.Contains(err.Error(), "no trigger") {
 		t.Fatalf("expected no-trigger error, got %v", err)
+	}
+}
+
+func TestLoadRejectsBindingWithMixedTriggers(t *testing.T) {
+	t.Setenv("TEST_SECRET", "s3cret")
+	cases := []struct {
+		name string
+		use  string
+	}{
+		{
+			name: "labels and events",
+			use: `      - agent: reviewer
+        labels: ["ai:review"]
+        events: ["issues.opened"]`,
+		},
+		{
+			name: "cron and events",
+			use: `      - agent: reviewer
+        cron: "0 * * * *"
+        events: ["issues.opened"]`,
+		},
+		{
+			name: "cron and labels",
+			use: `      - agent: reviewer
+        cron: "0 * * * *"
+        labels: ["ai:review"]`,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			repo := fmt.Sprintf(`
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+%s
+`, tc.use)
+			_, err := Load(writeConfig(t, minimalYAML(repo)))
+			if err == nil || !strings.Contains(err.Error(), "mixes multiple trigger types") {
+				t.Fatalf("expected mixed-trigger error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsUnknownEventKind(t *testing.T) {
+	t.Setenv("TEST_SECRET", "s3cret")
+	repo := `
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+      - agent: reviewer
+        events: ["issue_comments.created"]
+`
+	_, err := Load(writeConfig(t, minimalYAML(repo)))
+	if err == nil || !strings.Contains(err.Error(), "unknown event kind") {
+		t.Fatalf("expected unknown-event-kind error, got %v", err)
+	}
+}
+
+func TestLoadAcceptsValidEventKinds(t *testing.T) {
+	t.Setenv("TEST_SECRET", "s3cret")
+	for kind := range validEventKinds {
+		kind := kind
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			repo := fmt.Sprintf(`
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+      - agent: reviewer
+        events: [%q]
+`, kind)
+			_, err := Load(writeConfig(t, minimalYAML(repo)))
+			if err != nil {
+				t.Fatalf("kind %q should be valid, got: %v", kind, err)
+			}
+		})
 	}
 }
 

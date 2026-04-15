@@ -26,6 +26,26 @@ import (
 // order. Adding a new backend only requires updating this slice.
 var validAIBackendNames = []string{"claude", "codex"}
 
+// validEventKinds is the set of event kind strings accepted in the events:
+// binding field. It must be kept in sync with the kinds emitted by the webhook
+// server handlers.
+var validEventKinds = map[string]struct{}{
+	"issues.labeled":              {},
+	"issues.opened":               {},
+	"issues.edited":               {},
+	"issues.reopened":             {},
+	"issues.closed":               {},
+	"pull_request.labeled":        {},
+	"pull_request.opened":         {},
+	"pull_request.synchronize":    {},
+	"pull_request.ready_for_review": {},
+	"pull_request.closed":         {},
+	"issue_comment.created":       {},
+	"pull_request_review.submitted":         {},
+	"pull_request_review_comment.created":   {},
+	"push":                                  {},
+}
+
 const (
 	defaultHTTPListenAddr          = ":8080"
 	defaultHTTPStatusPath          = "/status"
@@ -164,6 +184,9 @@ func (b Binding) IsCron() bool { return strings.TrimSpace(b.Cron) != "" }
 
 // IsLabel reports whether this binding is label-triggered.
 func (b Binding) IsLabel() bool { return len(b.Labels) > 0 }
+
+// IsEvent reports whether this binding is event-triggered (via the events: field).
+func (b Binding) IsEvent() bool { return len(b.Events) > 0 }
 
 // Load reads, parses, validates, and resolves a config file at the given
 // path. Prompt files referenced by PromptFile fields are read eagerly;
@@ -334,6 +357,9 @@ func (c *Config) normalize() {
 		for j := range c.Repos[i].Use {
 			c.Repos[i].Use[j].Agent = strings.ToLower(strings.TrimSpace(c.Repos[i].Use[j].Agent))
 			c.Repos[i].Use[j].Cron = strings.TrimSpace(c.Repos[i].Use[j].Cron)
+			for k := range c.Repos[i].Use[j].Events {
+				c.Repos[i].Use[j].Events[k] = strings.ToLower(strings.TrimSpace(c.Repos[i].Use[j].Events[k]))
+			}
 		}
 	}
 
@@ -525,6 +551,30 @@ func (c *Config) validateRepos() error {
 			}
 			if !b.IsCron() && !b.IsLabel() && len(b.Events) == 0 {
 				return fmt.Errorf("config: repo %q: binding for agent %q has no trigger (set cron, labels, or events)", r.Name, b.Agent)
+			}
+			triggerCount := 0
+			if b.IsLabel() {
+				triggerCount++
+			}
+			if b.IsEvent() {
+				triggerCount++
+			}
+			if b.IsCron() {
+				triggerCount++
+			}
+			if triggerCount > 1 {
+				return fmt.Errorf("config: repo %q: binding for agent %q mixes multiple trigger types (labels, events, cron); each binding must use exactly one trigger", r.Name, b.Agent)
+			}
+			for _, kind := range b.Events {
+				if _, ok := validEventKinds[kind]; !ok {
+					supported := make([]string, 0, len(validEventKinds))
+					for k := range validEventKinds {
+						supported = append(supported, k)
+					}
+					slices.Sort(supported)
+					return fmt.Errorf("config: repo %q: binding for agent %q has unknown event kind %q (supported: %s)",
+						r.Name, b.Agent, kind, strings.Join(supported, ", "))
+				}
 			}
 		}
 	}

@@ -152,9 +152,19 @@ agents:
 # triggers on the same repo.
 #
 # Triggers:
-#   labels:    [ai:review:arch-reviewer, ...]  — GitHub label events
+#   labels:    [ai:review:arch-reviewer, ...]  — GitHub label events (issues.labeled / pull_request.labeled)
+#   events:    [issue_comment.created, push]   — broader GitHub event types
 #   cron:      "0,15 8-18 * * *"               — time-based schedule
 #   enabled:   optional, default true          — disable without deletion
+#
+# Supported event kinds for events:
+#   issues.labeled           issues.opened  issues.edited  issues.reopened  issues.closed
+#   pull_request.labeled     pull_request.opened  pull_request.synchronize
+#   pull_request.ready_for_review  pull_request.closed
+#   issue_comment.created
+#   pull_request_review.submitted
+#   pull_request_review_comment.created
+#   push
 # ──────────────────────────────────────────────
 repos:
   - name: "owner/repo"
@@ -171,6 +181,15 @@ repos:
         labels: ["ai:review:ops-reviewer"]
       - agent: dx-reviewer
         labels: ["ai:review:dx-reviewer"]
+
+      # Event-triggered agents — each binding uses exactly one trigger type.
+      # See README for the full list of supported event kinds and payload fields.
+      - agent: pr-reviewer
+        events: ["pull_request.opened", "pull_request.synchronize"]
+      - agent: coder
+        events: ["issue_comment.created"]   # fires for comments on issues and PRs
+      - agent: sec-reviewer
+        events: ["push"]                    # fires on branch pushes (not tags or deletions)
 
       # Cron-scheduled autonomous agents.
       - agent: scout-issues

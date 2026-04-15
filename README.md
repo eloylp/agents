@@ -84,15 +84,19 @@ repos:
       # Cron-scheduled agent on the same repo
       - agent: coder
         cron: "0,30 8-18 * * *"
+
+      # Event-triggered agent (react to any new comment)
+      - agent: coder
+        events: ["issue_comment.created"]
 ```
 
 Rules:
 
-- Labels are case-insensitive and trimmed.
-- Only the `labeled` action triggers processing (not `unlabeled`).
+- Labels are case-insensitive and trimmed. Only `labeled` actions fire (not `unlabeled`).
 - The trigger label comes from the webhook event payload, not the issue/PR's current label set.
-- Draft PRs skip label-triggered agents.
-- Multiple bindings matching the same label fan out in parallel (capped by `daemon.processor.max_concurrent_agents`).
+- Draft PRs skip `pull_request.labeled` for both `labels:` and `events:` bindings; they may still receive other event kinds such as `pull_request.opened` and `pull_request.synchronize`.
+- `events:` bindings fire on the exact event kinds listed, with no additional filtering.
+- Multiple bindings matching the same event fan out in parallel (capped by `daemon.processor.max_concurrent_agents`).
 
 ---
 
@@ -226,7 +230,60 @@ repos:
         enabled: false                       # temporarily off without deletion
 ```
 
-Each `use` entry binds one agent to one trigger. An agent can appear multiple times with different triggers. A binding must have at least one of `labels:` or `cron:`.
+Each `use` entry binds one agent to one trigger. An agent can appear multiple times with different triggers. A binding must have at least one of `labels:`, `events:`, or `cron:`.
+
+```yaml
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+      # Label-triggered reviewer
+      - agent: arch-reviewer
+        labels: ["ai:review:arch-reviewer"]
+
+      # React to every new issue comment (issues and PRs alike)
+      - agent: coder
+        events: ["issue_comment.created"]
+
+      # React to new commits pushed to any branch
+      - agent: sec-reviewer
+        events: ["push"]
+
+      # Multiple event kinds in one binding (fan-out fires the agent once per match)
+      - agent: pr-reviewer
+        events: ["pull_request.opened", "pull_request.synchronize"]
+```
+
+A binding must set exactly one of `labels:`, `events:`, or `cron:` — mixing trigger types in a single binding is rejected at startup.
+
+#### Supported event kinds
+
+The `events:` field accepts any of the following GitHub event kinds. Each event delivers a `## Runtime context` block into the agent's prompt with `Event`, `Actor` (the GitHub login that triggered it), an issue/PR number where applicable, and the payload fields listed below.
+
+| Kind | When | Payload fields |
+|------|------|----------------|
+| `issues.labeled` | Issue receives any label | `label` |
+| `issues.opened` | Issue opened | `title`, `body` |
+| `issues.edited` | Issue body or title edited | `title`, `body` |
+| `issues.reopened` | Issue reopened | `title`, `body` |
+| `issues.closed` | Issue closed | `title`, `body` |
+| `pull_request.labeled` | PR receives any label (draft PRs are skipped) | `label` |
+| `pull_request.opened` | PR opened | `title`, `draft` |
+| `pull_request.synchronize` | New commit pushed to PR branch | `title`, `draft` |
+| `pull_request.ready_for_review` | Draft PR marked ready | `title`, `draft` |
+| `pull_request.closed` | PR closed or merged | `title`, `draft`, `merged` (`true` when PR was merged, `false` when closed without merge) |
+| `issue_comment.created` | Comment posted on an issue or PR | `body` |
+| `pull_request_review.submitted` | Formal GitHub review submitted | `state`, `body` |
+| `pull_request_review_comment.created` | Inline review comment posted on a PR diff | `body` |
+| `push` | Commit pushed to a branch | `ref` (e.g. `refs/heads/main`), `head_sha` |
+
+> **`push` scope:** only branch pushes fire the event. Tag pushes, branch deletions, and pushes to non-`refs/heads/` refs are silently dropped. The agent receives the branch ref and the resulting head SHA — there is no PR number in the context.
+
+Additional rules:
+
+- `issues.*` events that originate from a PR-backed GitHub issue are dropped; the corresponding `pull_request.*` event covers them instead.
+- `pull_request.labeled` events on draft PRs are dropped at the webhook boundary. Use `events: ["pull_request.ready_for_review"]` to act when a draft is marked ready.
+- Unknown event kinds are rejected at config load time with a clear error listing the supported set.
 
 ### Environment variables
 

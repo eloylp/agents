@@ -9,7 +9,7 @@ import (
 )
 
 type processorHandler interface {
-	HandleLabelEvent(context.Context, LabelEvent) error
+	HandleEvent(context.Context, Event) error
 }
 
 type Processor struct {
@@ -69,8 +69,8 @@ func (p *Processor) Run(ctx context.Context) error {
 func (p *Processor) runWorker(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for ev := range p.channels.EventChan() {
-		if err := p.handler.HandleLabelEvent(p.processingCtx(ctx), ev); err != nil {
-			p.logger.Error().Err(err).Str("repo", ev.Repo.FullName).Int("number", ev.Number).Msg("failed to process webhook event")
+		if err := p.handler.HandleEvent(p.processingCtx(ctx), ev); err != nil {
+			p.logger.Error().Err(err).Str("repo", ev.Repo.FullName).Str("kind", ev.Kind).Int("number", ev.Number).Msg("failed to process webhook event")
 		}
 	}
 }

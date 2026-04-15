@@ -11,7 +11,7 @@ func TestPushAfterCloseReturnsErrQueueClosed(t *testing.T) {
 	dc := NewDataChannels(4)
 	dc.Close()
 
-	if err := dc.PushEvent(context.Background(), LabelEvent{}); err != ErrQueueClosed {
+	if err := dc.PushEvent(context.Background(), Event{}); err != ErrQueueClosed {
 		t.Fatalf("PushEvent after close: got %v, want ErrQueueClosed", err)
 	}
 }
@@ -35,7 +35,7 @@ func TestConcurrentPushAndCloseDoesNotPanic(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for {
-				err := dc.PushEvent(context.Background(), LabelEvent{})
+				err := dc.PushEvent(context.Background(), Event{})
 				if err != nil {
 					return
 				}

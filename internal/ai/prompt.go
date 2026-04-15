@@ -3,6 +3,7 @@ package ai
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/eloylp/agents/internal/config"
@@ -17,6 +18,9 @@ type PromptContext struct {
 	Backend    string // resolved backend name (claude, codex, ...)
 	Memory     string // existing memory snapshot for autonomous runs
 	MemoryPath string // path the agent should update after the run
+	EventKind  string         // e.g. "issues.labeled", "push" — empty for autonomous runs
+	Actor      string         // GitHub login that triggered the event; empty for autonomous runs
+	Payload    map[string]any // kind-specific event fields; nil for autonomous runs
 }
 
 // RenderAgentPrompt composes the final prompt text for an agent. The result
@@ -69,6 +73,31 @@ func renderRuntimeContext(ctx PromptContext) string {
 	}
 	if ctx.Backend != "" {
 		fmt.Fprintf(&b, "Backend: %s\n", ctx.Backend)
+	}
+	if ctx.EventKind != "" {
+		fmt.Fprintf(&b, "Event: %s\n", ctx.EventKind)
+	}
+	if ctx.Actor != "" {
+		fmt.Fprintf(&b, "Actor: %s\n", ctx.Actor)
+	}
+	if len(ctx.Payload) > 0 {
+		// Sort keys for deterministic output.
+		keys := make([]string, 0, len(ctx.Payload))
+		for k := range ctx.Payload {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			v := ctx.Payload[k]
+			if s, ok := v.(string); ok && strings.Contains(s, "\n") {
+				fmt.Fprintf(&b, "%s:\n", k)
+				for _, line := range strings.Split(s, "\n") {
+					fmt.Fprintf(&b, "  %s\n", line)
+				}
+			} else {
+				fmt.Fprintf(&b, "%s: %v\n", k, v)
+			}
+		}
 	}
 	if ctx.MemoryPath != "" {
 		fmt.Fprintf(&b, "Memory file: %s\n", ctx.MemoryPath)
