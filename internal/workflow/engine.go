@@ -124,9 +124,9 @@ func (e *Engine) agentsForEvent(ev Event) []config.AgentDef {
 		var matches bool
 		switch {
 		case b.IsLabel() && isLabeled && label != "":
-			matches = containsLabel(b.Labels, label)
+			matches = containsNormalized(b.Labels, label)
 		case b.IsEvent():
-			matches = containsEvent(b.Events, ev.Kind)
+			matches = containsNormalized(b.Events, ev.Kind)
 		}
 		if !matches {
 			continue
@@ -185,16 +185,9 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) 
 	return nil
 }
 
-func containsLabel(labels []string, target string) bool {
-	target = strings.ToLower(strings.TrimSpace(target))
-	return slices.ContainsFunc(labels, func(l string) bool {
-		return strings.ToLower(strings.TrimSpace(l)) == target
-	})
-}
-
-func containsEvent(events []string, kind string) bool {
-	kind = strings.ToLower(strings.TrimSpace(kind))
-	return slices.ContainsFunc(events, func(e string) bool {
-		return strings.ToLower(strings.TrimSpace(e)) == kind
+func containsNormalized(haystack []string, needle string) bool {
+	needle = strings.ToLower(strings.TrimSpace(needle))
+	return slices.ContainsFunc(haystack, func(s string) bool {
+		return strings.ToLower(strings.TrimSpace(s)) == needle
 	})
 }
