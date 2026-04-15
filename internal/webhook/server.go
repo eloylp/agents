@@ -236,6 +236,7 @@ type webhookPullRequest struct {
 	Number int    `json:"number"`
 	Title  string `json:"title"`
 	Draft  bool   `json:"draft"`
+	Merged bool   `json:"merged"`
 }
 
 type webhookComment struct {
@@ -354,15 +355,19 @@ func (s *Server) handlePullRequestEvent(ctx context.Context, w http.ResponseWrit
 		}
 		s.enqueue(ctx, w, ev, deliveryID)
 	case "opened", "synchronize", "ready_for_review", "closed":
+		eventPayload := map[string]any{
+			"title": payload.PullRequest.Title,
+			"draft": payload.PullRequest.Draft,
+		}
+		if payload.Action == "closed" {
+			eventPayload["merged"] = payload.PullRequest.Merged
+		}
 		ev := workflow.Event{
-			Repo:   repoRef,
-			Kind:   "pull_request." + payload.Action,
-			Number: payload.PullRequest.Number,
-			Actor:  payload.Sender.Login,
-			Payload: map[string]any{
-				"title": payload.PullRequest.Title,
-				"draft": payload.PullRequest.Draft,
-			},
+			Repo:    repoRef,
+			Kind:    "pull_request." + payload.Action,
+			Number:  payload.PullRequest.Number,
+			Actor:   payload.Sender.Login,
+			Payload: eventPayload,
 		}
 		s.enqueue(ctx, w, ev, deliveryID)
 	default:

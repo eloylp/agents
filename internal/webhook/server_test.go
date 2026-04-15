@@ -295,6 +295,51 @@ func TestHandlePullRequestOpenedEnqueuesEvent(t *testing.T) {
 	}
 }
 
+func TestHandlePullRequestClosedPayloadIncludesMerged(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		merged     bool
+		deliveryID string
+	}{
+		{name: "merged close", merged: true, deliveryID: "d-pr-closed-merged"},
+		{name: "non-merged close", merged: false, deliveryID: "d-pr-closed-ordinary"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server, dc := newTestServer(testCfg(nil))
+
+			mergedVal := "false"
+			if tc.merged {
+				mergedVal = "true"
+			}
+			body := `{"action":"closed","repository":{"full_name":"owner/repo"},"pull_request":{"number":12,"title":"feat","draft":false,"merged":` + mergedVal + `},"sender":{"login":"dev"}}`
+			rr := httptest.NewRecorder()
+			server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request", tc.deliveryID, body))
+			if rr.Code != http.StatusAccepted {
+				t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+			}
+
+			ev := drainEvent(t, dc)
+			if ev.Kind != "pull_request.closed" {
+				t.Errorf("kind: got %q, want %q", ev.Kind, "pull_request.closed")
+			}
+			if ev.Number != 12 {
+				t.Errorf("number: got %d, want 12", ev.Number)
+			}
+			got, ok := ev.Payload["merged"].(bool)
+			if !ok {
+				t.Fatalf("payload[merged] missing or not bool: %v", ev.Payload["merged"])
+			}
+			if got != tc.merged {
+				t.Errorf("payload[merged]: got %v, want %v", got, tc.merged)
+			}
+		})
+	}
+}
+
 // ─── issue_comment events ─────────────────────────────────────────────────────
 
 func TestHandleIssueCommentCreatedEnqueuesEvent(t *testing.T) {

@@ -271,7 +271,7 @@ The `events:` field accepts any of the following GitHub event kinds. Each event 
 | `pull_request.opened` | PR opened | `title`, `draft` |
 | `pull_request.synchronize` | New commit pushed to PR branch | `title`, `draft` |
 | `pull_request.ready_for_review` | Draft PR marked ready | `title`, `draft` |
-| `pull_request.closed` | PR closed or merged | `title`, `draft` |
+| `pull_request.closed` | PR closed or merged | `title`, `draft`, `merged` (`true` when PR was merged, `false` when closed without merge) |
 | `issue_comment.created` | Comment posted on an issue or PR | `body` |
 | `pull_request_review.submitted` | Formal GitHub review submitted | `state`, `body` |
 | `push` | Commit pushed to a branch | `ref` (e.g. `refs/heads/main`), `head_sha` |
