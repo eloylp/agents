@@ -397,9 +397,12 @@ func TestSchedulerAutonomousDispatchCarriesNonEmptyRootEventID(t *testing.T) {
 	if !ok || rootEventID == "" {
 		t.Errorf("root_event_id: got %v, want non-empty string", ev.Payload["root_event_id"])
 	}
-	// ev.ID should match root_event_id (it is the root).
-	if ev.ID != rootEventID {
-		t.Errorf("ev.ID: got %q, want %q (root_event_id)", ev.ID, rootEventID)
+	// ev.ID is the synthetic event's own identity and must differ from root_event_id.
+	if ev.ID == "" {
+		t.Error("dispatch event ID must not be empty")
+	}
+	if ev.ID == rootEventID {
+		t.Errorf("ev.ID must differ from root_event_id %q", rootEventID)
 	}
 }
 

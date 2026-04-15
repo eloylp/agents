@@ -114,6 +114,13 @@ func TestDispatcherEnqueuesValidRequest(t *testing.T) {
 	if ev.Payload["root_event_id"] != "root-123" {
 		t.Errorf("root_event_id: got %v", ev.Payload["root_event_id"])
 	}
+	// The synthetic event must carry its own unique ID, not the root correlation ID.
+	if ev.ID == "" {
+		t.Error("dispatch event ID must not be empty")
+	}
+	if ev.ID == "root-123" {
+		t.Error("dispatch event ID must differ from root_event_id")
+	}
 
 	stats := d.Stats()
 	if stats.RequestedTotal != 1 {
@@ -121,6 +128,32 @@ func TestDispatcherEnqueuesValidRequest(t *testing.T) {
 	}
 	if stats.Enqueued != 1 {
 		t.Errorf("enqueued: got %d, want 1", stats.Enqueued)
+	}
+}
+
+func TestDispatcherEventIDIsUniquePerHop(t *testing.T) {
+	t.Parallel()
+	q := &fakeQueue{}
+	d := testDispatcher(q)
+
+	// Dispatch the same agent against two different issue numbers from the same
+	// root event. Each synthetic event must carry a distinct ID that is not
+	// equal to rootEventID. (dedup keys differ by number so both are enqueued)
+	reqs := []ai.DispatchRequest{
+		{Agent: "pr-reviewer", Number: 1, Reason: "review pr 1"},
+		{Agent: "pr-reviewer", Number: 2, Reason: "review pr 2"},
+	}
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-xyz", 0, reqs)
+
+	events := q.popped()
+	if len(events) != 2 {
+		t.Fatalf("expected 2 enqueued events, got %d", len(events))
+	}
+	if events[0].ID == "root-xyz" || events[1].ID == "root-xyz" {
+		t.Error("dispatch event IDs must not equal rootEventID")
+	}
+	if events[0].ID == events[1].ID {
+		t.Error("consecutive dispatch events must have distinct IDs")
 	}
 }
 

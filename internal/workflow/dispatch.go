@@ -284,7 +284,7 @@ func (d *Dispatcher) ProcessDispatches(
 		}
 
 		dispatchEv := Event{
-			ID:     rootEventID,
+			ID:     GenEventID(),
 			Repo:   ev.Repo,
 			Kind:   "agent.dispatch",
 			Number: number,
