@@ -143,24 +143,26 @@ func (s *DispatchDedupStore) Remove(target, repo string, number int) {
 }
 
 // MarkCronRun records that a cron or manual (--run-agent) execution has
-// started for (agent, repo). The mark persists for the full TTL window.
-// It lives in a separate key namespace ("cron\x00…") from dispatch entries
-// so that repeated cron runs are never suppressed by this mark — only
-// dispatches are. The mark should be written at the start of an autonomous
-// run so that both concurrent and post-run dispatches within the window are
-// collapsed.
-func (s *DispatchDedupStore) MarkCronRun(agent, repo string, now time.Time) {
-	key := "cron\x00" + agent + "\x00" + repo
+// started for (agent, repo, number). The mark persists for the full TTL
+// window. It lives in a separate key namespace ("cron\x00…") from dispatch
+// entries so that repeated cron runs are never suppressed by this mark —
+// only dispatches are. Autonomous runs always pass number=0 because they
+// are not tied to a specific issue or PR. This scoping ensures that a
+// cron run for a repo-level context (number=0) does not suppress dispatches
+// for unrelated items such as PR #42.
+func (s *DispatchDedupStore) MarkCronRun(agent, repo string, number int, now time.Time) {
+	key := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries[key] = now.Add(s.ttl)
 }
 
 // SeenCronRun returns true if a cron or manual run has been recorded for
-// (agent, repo) within the TTL window. Used by ProcessDispatches to
-// suppress dispatches targeting an agent that already ran (or is running).
-func (s *DispatchDedupStore) SeenCronRun(agent, repo string, now time.Time) bool {
-	key := "cron\x00" + agent + "\x00" + repo
+// (agent, repo, number) within the TTL window. Used by ProcessDispatches
+// to suppress dispatches targeting an agent that already ran (or is
+// running) in the same item context.
+func (s *DispatchDedupStore) SeenCronRun(agent, repo string, number int, now time.Time) bool {
+	key := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	expiresAt, ok := s.entries[key]
@@ -260,10 +262,12 @@ func (d *Dispatcher) ProcessDispatches(
 		}
 
 		// Cron-vs-dispatch collapse: if a cron/manual run of the target has
-		// been recorded within the dedup window, suppress the dispatch without
-		// writing to the dispatch key space (so retries after the window are
-		// not further blocked).
-		if d.dedup.SeenCronRun(req.Agent, ev.Repo.FullName, time.Now()) {
+		// been recorded within the dedup window for the same item context
+		// (same number), suppress the dispatch without writing to the dispatch
+		// key space (so retries after the window are not further blocked).
+		// Using number here ensures that a cron run (number=0) only suppresses
+		// autonomous-context dispatches, not dispatches for specific PRs/issues.
+		if d.dedup.SeenCronRun(req.Agent, ev.Repo.FullName, number, time.Now()) {
 			logBase.Debug().Msg("dispatch deduped: cron run already executed within window")
 			d.counters.deduped.Add(1)
 			continue
@@ -305,23 +309,30 @@ func (d *Dispatcher) ProcessDispatches(
 	}
 }
 
-// CheckAndMarkAutonomousRun checks whether a dispatch has already claimed the
-// (agentName, repo, 0) slot in the dispatch dedup namespace (dispatch-first
-// ordering). If not, it writes a cron activity mark in the separate cron
-// namespace so that both concurrent and post-run dispatches targeting the
-// same agent within dedup_window_seconds are suppressed (cron-first ordering).
+// DispatchAlreadyClaimed returns true if a dispatch has already claimed the
+// (agentName, repo, 0) slot in the dispatch dedup namespace within the
+// current dedup window (dispatch-first ordering). A true result means a
+// dispatch is already targeting this agent in an autonomous context, and
+// the scheduled cron run should be skipped to avoid duplicate execution.
 //
-// The cron mark uses a different key namespace from dispatch entries, so
-// repeated cron runs are never blocked by this mark — only dispatches are.
-// There is no corresponding "clear" call: the mark persists for the full
-// dedup_window_seconds by design, collapsing all dispatch attempts that
-// arrive within that window after the autonomous run.
-func (d *Dispatcher) CheckAndMarkAutonomousRun(agentName, repo string, now time.Time) bool {
-	if d.dedup.Seen(agentName, repo, 0, now) {
-		return true
-	}
-	d.dedup.MarkCronRun(agentName, repo, now)
-	return false
+// This is a read-only check; it does not write to the store. Call
+// MarkAutonomousRun separately, only once the run is confirmed to proceed.
+func (d *Dispatcher) DispatchAlreadyClaimed(agentName, repo string, now time.Time) bool {
+	return d.dedup.Seen(agentName, repo, 0, now)
+}
+
+// MarkAutonomousRun writes a cron-namespace activity mark for (agentName,
+// repo, 0) that persists for the full dedup_window_seconds. It should be
+// called only once the autonomous run has been confirmed to proceed (i.e.,
+// after backend and runner resolution succeed), so that transient config
+// errors do not leave a stale mark that suppresses dispatches for the
+// entire dedup window.
+//
+// The cron mark lives in a different key namespace from dispatch entries,
+// so repeated cron runs are never blocked by this mark — only dispatches
+// that share the same item context (number=0, the autonomous context) are.
+func (d *Dispatcher) MarkAutonomousRun(agentName, repo string, now time.Time) {
+	d.dedup.MarkCronRun(agentName, repo, 0, now)
 }
 
 // Stats returns a snapshot of the current dispatch counters.

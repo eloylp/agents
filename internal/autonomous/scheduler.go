@@ -245,21 +245,18 @@ func (s *Scheduler) TriggerAgent(ctx context.Context, agentName, repo string) er
 }
 
 func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent config.AgentDef) error {
-	// Collapse cron-vs-dispatch races: if a dispatch for the same (agent, repo)
-	// pair is already in-flight (or vice-versa), skip this run so the two paths
-	// do not execute the same agent twice within the dedup window.
-	if s.dispatcher != nil {
-		if s.dispatcher.CheckAndMarkAutonomousRun(agent.Name, repo, time.Now()) {
-			s.logger.Info().Str("repo", repo).Str("agent", agent.Name).
-				Msg("autonomous run skipped: already seen within dispatch dedup window")
-			return nil
-		}
-		// CheckAndMarkAutonomousRun wrote a cron-namespace mark that persists
-		// for the full dedup_window_seconds. No cleanup is needed: the mark
-		// intentionally suppresses dispatches to the same target for that
-		// entire window, while subsequent cron runs check only the dispatch
-		// namespace and are therefore unaffected.
+	// Dispatch-first ordering: if a dispatch has already claimed the
+	// (agent, repo, 0) slot, skip this cron/manual run to avoid duplicate
+	// execution within the dedup window.
+	if s.dispatcher != nil && s.dispatcher.DispatchAlreadyClaimed(agent.Name, repo, time.Now()) {
+		s.logger.Info().Str("repo", repo).Str("agent", agent.Name).
+			Msg("autonomous run skipped: already seen within dispatch dedup window")
+		return nil
 	}
+
+	// Resolve backend and runner before writing the cron mark. If either
+	// fails (bad config, missing runner), the mark is never written and
+	// subsequent dispatches for this agent are not spuriously suppressed.
 	backend := s.cfg.ResolveBackend(agent.Backend)
 	if backend == "" {
 		return fmt.Errorf("no configured backend for agent %q (configured: %q)", agent.Name, agent.Backend)
@@ -267,6 +264,16 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	runner, ok := s.runners[backend]
 	if !ok {
 		return fmt.Errorf("no runner for backend %q", backend)
+	}
+
+	// Write the cron-namespace mark now that the run is confirmed to proceed.
+	// The mark persists for the full dedup_window_seconds, collapsing any
+	// dispatches targeting the same autonomous context (agent, repo, number=0)
+	// within that window. Subsequent cron runs are unaffected because they
+	// check the dispatch namespace (via DispatchAlreadyClaimed), not the cron
+	// namespace.
+	if s.dispatcher != nil {
+		s.dispatcher.MarkAutonomousRun(agent.Name, repo, time.Now())
 	}
 	logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Str("backend", backend).Logger()
 	roster := s.buildRoster(repo, agent.Name)

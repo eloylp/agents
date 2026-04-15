@@ -460,9 +460,10 @@ func TestSchedulerCronRunSkippedWhenAlreadySeenInDedup(t *testing.T) {
 }
 
 // TestSchedulerCronRunNotSuppressedByPriorCronRun verifies that two consecutive
-// cron runs for the same agent both execute. CheckAndMarkAutonomousRun writes a
+// cron runs for the same agent both execute. MarkAutonomousRun writes a
 // cron-namespace mark (not a dispatch-namespace entry), and cron runs only check
-// the dispatch namespace, so the cron mark never suppresses subsequent cron runs.
+// the dispatch namespace via DispatchAlreadyClaimed, so the cron mark never
+// suppresses subsequent cron runs.
 func TestSchedulerCronRunNotSuppressedByPriorCronRun(t *testing.T) {
 	t.Parallel()
 	cfg := dispatchCfgForTest()
@@ -497,6 +498,70 @@ func TestSchedulerCronRunNotSuppressedByPriorCronRun(t *testing.T) {
 	runner.mu.Unlock()
 	if calls != 2 {
 		t.Errorf("expected runner to be called twice (both runs should execute), got %d call(s)", calls)
+	}
+}
+
+// TestSchedulerCronMarkNotWrittenOnBackendResolutionFailure verifies that if
+// executeAgentRun fails early (bad backend / missing runner) the cron-namespace
+// mark is never written. Without this guarantee a transient config error would
+// leave a stale MarkAutonomousRun entry that suppresses all autonomous-context
+// dispatches for the full dedup_window_seconds even though the agent never ran.
+func TestSchedulerCronMarkNotWrittenOnBackendResolutionFailure(t *testing.T) {
+	t.Parallel()
+	// "notifier" can dispatch to "reviewer"; "reviewer" has allow_dispatch so
+	// whitelist and opt-in checks pass and we can isolate the cron-mark behavior.
+	cfg := baseCfg(func(c *config.Config) {
+		c.Agents = []config.AgentDef{
+			{
+				Name:          "reviewer",
+				Backend:       "claude",
+				Prompt:        "review",
+				AllowDispatch: true,
+			},
+			{
+				Name:        "notifier",
+				Backend:     "claude",
+				Prompt:      "notify",
+				CanDispatch: []string{"reviewer"},
+			},
+		}
+		c.Repos[0].Use = []config.Binding{
+			{Agent: "reviewer", Cron: "* * * * *"},
+			{Agent: "notifier", Cron: "0 0 * * *"},
+		}
+	})
+
+	q := &fakeQueue{}
+	agentMap := map[string]config.AgentDef{
+		"reviewer": cfg.Agents[0],
+		"notifier": cfg.Agents[1],
+	}
+	dedup := workflow.NewDispatchDedupStore(300)
+	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
+	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
+
+	// Register no runners — runner-lookup will fail for every backend.
+	s, err := NewScheduler(cfg, map[string]ai.Runner{}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithDispatcher(dispatcher)
+
+	// TriggerAgent must fail (no runner for "claude").
+	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err == nil {
+		t.Fatal("TriggerAgent: expected error (no runner registered), got nil")
+	}
+
+	// Despite the failure, a subsequent autonomous-context dispatch targeting
+	// reviewer (number=0) must NOT be suppressed — no cron mark should have
+	// been written because the run never proceeded past runner-resolution.
+	originator := agentMap["notifier"]
+	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
+	dispatcher.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, []ai.DispatchRequest{
+		{Agent: "reviewer", Reason: "retry after config fix"},
+	})
+	if len(q.popped()) != 1 {
+		t.Error("expected dispatch enqueued: no cron mark should have been written on runner-resolution failure")
 	}
 }
 

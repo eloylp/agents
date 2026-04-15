@@ -527,24 +527,26 @@ func TestDispatcherDedupeRolledBackOnEnqueueFailure(t *testing.T) {
 	}
 }
 
-// TestCheckAndMarkAutonomousRunSuppressesNearSimultaneousDispatch is a regression
-// test for the cron-first dedup ordering: when an autonomous run starts and writes
-// a cron-namespace mark, dispatches targeting the same agent/repo must be
-// suppressed for the full dedup_window_seconds — both while the run is in-flight
-// and after it completes.
-func TestCheckAndMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.T) {
+// TestMarkAutonomousRunSuppressesNearSimultaneousDispatch is a regression
+// test for the cron-first dedup ordering: when an autonomous run starts and
+// MarkAutonomousRun writes a cron-namespace mark, dispatches targeting the
+// same agent/repo with number=0 (autonomous context) must be suppressed for
+// the full dedup_window_seconds — both while the run is in-flight and after
+// it completes.
+func TestMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}
 	d := testDispatcher(q)
 
-	// Simulate: cron run starts and writes the cron-namespace mark.
-	alreadySeen := d.CheckAndMarkAutonomousRun("coder", "owner/repo", time.Now())
-	if alreadySeen {
-		t.Fatal("CheckAndMarkAutonomousRun: expected false on first call (no prior dispatch)")
+	// Simulate: cron run confirms it will proceed and writes the cron-namespace mark.
+	alreadyClaimed := d.DispatchAlreadyClaimed("coder", "owner/repo", time.Now())
+	if alreadyClaimed {
+		t.Fatal("DispatchAlreadyClaimed: expected false on first call (no prior dispatch)")
 	}
+	d.MarkAutonomousRun("coder", "owner/repo", time.Now())
 
-	// Dispatches targeting the same agent/repo must be suppressed for the full
-	// dedup window (coder dispatching to itself is not allowed, so use
+	// Dispatches targeting the same agent/repo with number=0 must be suppressed
+	// for the full dedup window (coder dispatching to itself is not allowed, so use
 	// pr-reviewer as the originator dispatching to coder).
 	originator := originatorAgent("pr-reviewer")
 	ev := testEvent("owner/repo", 0)
@@ -561,6 +563,31 @@ func TestCheckAndMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.
 	})
 	if len(q.popped()) != 0 {
 		t.Error("expected second dispatch suppressed: cron mark still active within dedup window")
+	}
+}
+
+// TestMarkAutonomousRunDoesNotSuppressDispatchForDifferentNumber verifies that
+// a cron mark (number=0, autonomous context) does not suppress dispatches
+// targeting a different item number on the same repo. This guards against the
+// cron mark being too broad and blocking valid event-driven dispatches such as
+// "coder → pr-reviewer for PR #42" just because pr-reviewer had a cron run.
+func TestMarkAutonomousRunDoesNotSuppressDispatchForDifferentNumber(t *testing.T) {
+	t.Parallel()
+	q := &fakeQueue{}
+	d := testDispatcher(q)
+
+	// Cron run for pr-reviewer marks (pr-reviewer, owner/repo, 0).
+	d.MarkAutonomousRun("coder", "owner/repo", time.Now())
+
+	// A dispatch targeting coder for PR #42 (number=42) must still be enqueued
+	// — it is a different item context from the autonomous cron run (number=0).
+	originator := originatorAgent("pr-reviewer")
+	ev := testEvent("owner/repo", 42)
+	d.ProcessDispatches(context.Background(), originator, ev, "root-pr42", 0, []ai.DispatchRequest{
+		{Agent: "coder", Number: 42, Reason: "review this specific PR"},
+	})
+	if len(q.popped()) != 1 {
+		t.Error("expected dispatch enqueued: cron mark (number=0) must not suppress dispatch for PR #42 (number=42)")
 	}
 }
 
@@ -581,12 +608,12 @@ func TestPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 	q := &fakeQueue{}
 	d := NewDispatcher(cfg, agents, dedup, q, zerolog.Nop())
 
-	// Autonomous run starts and finishes (mark written, no clear).
+	// Autonomous run confirms it will proceed and writes the cron mark.
 	now := time.Now()
-	alreadySeen := d.CheckAndMarkAutonomousRun("coder", "owner/repo", now)
-	if alreadySeen {
-		t.Fatal("CheckAndMarkAutonomousRun: expected false on first call")
+	if d.DispatchAlreadyClaimed("coder", "owner/repo", now) {
+		t.Fatal("DispatchAlreadyClaimed: expected false on first call (no prior dispatch)")
 	}
+	d.MarkAutonomousRun("coder", "owner/repo", now)
 
 	// Dispatch arriving after the run — still within the TTL window — must be suppressed.
 	originator := agents["pr-reviewer"]
