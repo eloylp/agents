@@ -230,6 +230,23 @@ repos:
 	}
 }
 
+func TestLoadRejectsBindingWithMixedLabelsAndEvents(t *testing.T) {
+	t.Setenv("TEST_SECRET", "s3cret")
+	repo := `
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+      - agent: reviewer
+        labels: ["ai:review"]
+        events: ["issues.opened"]
+`
+	_, err := Load(writeConfig(t, minimalYAML(repo)))
+	if err == nil || !strings.Contains(err.Error(), "mixes labels and events") {
+		t.Fatalf("expected mixed-trigger error, got %v", err)
+	}
+}
+
 func TestLoadRejectsAllReposDisabled(t *testing.T) {
 	t.Setenv("TEST_SECRET", "s3cret")
 	repo := `

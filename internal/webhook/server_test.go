@@ -190,6 +190,26 @@ func TestHandleIssuesEventDropsPRLabeledAction(t *testing.T) {
 	assertNoEvent(t, dc)
 }
 
+func TestHandleIssuesEventDropsPRLifecycleActions(t *testing.T) {
+	t.Parallel()
+	for _, action := range []string{"opened", "edited", "reopened", "closed"} {
+		action := action
+		t.Run(action, func(t *testing.T) {
+			t.Parallel()
+			server, dc := newTestServer(testCfg(nil))
+
+			// GitHub sends issues lifecycle events for PR-backed issues too; drop them.
+			body := `{"action":"` + action + `","repository":{"full_name":"owner/repo"},"issue":{"number":3,"title":"t","body":"b","pull_request":{}},"sender":{"login":"dev"}}`
+			rr := httptest.NewRecorder()
+			server.handleGitHubWebhook(rr, webhookRequest(t, "issues", "d-pr-"+action, body))
+			if rr.Code != http.StatusAccepted {
+				t.Fatalf("action %q: got %d, want %d", action, rr.Code, http.StatusAccepted)
+			}
+			assertNoEvent(t, dc)
+		})
+	}
+}
+
 // ─── pull_request events ──────────────────────────────────────────────────────
 
 func TestHandlePullRequestLabeledEnqueuesEvent(t *testing.T) {

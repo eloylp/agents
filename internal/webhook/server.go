@@ -276,14 +276,15 @@ func (s *Server) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, b
 
 	repoRef := workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled}
 
+	// GitHub sends issues events for PR-backed issues too; the pull_request event
+	// handles those, so drop all issue events that belong to a pull request.
+	if payload.Issue.PullRequest != nil {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
 	switch payload.Action {
 	case "labeled":
-		// GitHub sends an issues event for PR labels too; the pull_request event
-		// handles those, so skip here.
-		if payload.Issue.PullRequest != nil {
-			w.WriteHeader(http.StatusAccepted)
-			return
-		}
 		if !isAILabel(payload.Label.Name) {
 			w.WriteHeader(http.StatusAccepted)
 			return
