@@ -75,68 +75,49 @@ func baseCfg(modify func(*config.Config)) *config.Config {
 	return cfg
 }
 
-func TestNewSchedulerRegistersCronBindings(t *testing.T) {
+func TestNewSchedulerEntryRegistration(t *testing.T) {
 	t.Parallel()
-	cfg := baseCfg(nil)
-	runners := map[string]ai.Runner{"claude": &stubRunner{}}
-	memories := NewMemoryStore(t.TempDir())
-
-	s, err := NewScheduler(cfg, runners, memories, zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
+	tests := []struct {
+		name      string
+		mutate    func(*config.Config)
+		wantCount int
+	}{
+		{
+			name:      "cron binding registered",
+			wantCount: 1,
+		},
+		{
+			name:      "skips disabled repo",
+			mutate:    func(c *config.Config) { c.Repos[0].Enabled = false },
+			wantCount: 0,
+		},
+		{
+			name: "skips disabled binding",
+			mutate: func(c *config.Config) {
+				f := false
+				c.Repos[0].Use[0].Enabled = &f
+			},
+			wantCount: 0,
+		},
+		{
+			name: "skips label-only binding",
+			mutate: func(c *config.Config) {
+				c.Repos[0].Use[0] = config.Binding{Agent: "reviewer", Labels: []string{"ai:review"}}
+			},
+			wantCount: 0,
+		},
 	}
-	if len(s.agentEntries) != 1 {
-		t.Errorf("expected 1 registered entry, got %d", len(s.agentEntries))
-	}
-}
-
-func TestSchedulerSkipsDisabledRepo(t *testing.T) {
-	t.Parallel()
-	cfg := baseCfg(func(c *config.Config) { c.Repos[0].Enabled = false })
-	runners := map[string]ai.Runner{"claude": &stubRunner{}}
-	memories := NewMemoryStore(t.TempDir())
-
-	s, err := NewScheduler(cfg, runners, memories, zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	if len(s.agentEntries) != 0 {
-		t.Errorf("expected 0 registered entries for disabled repo, got %d", len(s.agentEntries))
-	}
-}
-
-func TestSchedulerSkipsDisabledBinding(t *testing.T) {
-	t.Parallel()
-	f := false
-	cfg := baseCfg(func(c *config.Config) {
-		c.Repos[0].Use[0].Enabled = &f
-	})
-	runners := map[string]ai.Runner{"claude": &stubRunner{}}
-	memories := NewMemoryStore(t.TempDir())
-
-	s, err := NewScheduler(cfg, runners, memories, zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	if len(s.agentEntries) != 0 {
-		t.Errorf("expected 0 registered entries for disabled binding, got %d", len(s.agentEntries))
-	}
-}
-
-func TestSchedulerSkipsLabelOnlyBinding(t *testing.T) {
-	t.Parallel()
-	cfg := baseCfg(func(c *config.Config) {
-		c.Repos[0].Use[0] = config.Binding{Agent: "reviewer", Labels: []string{"ai:review"}}
-	})
-	runners := map[string]ai.Runner{"claude": &stubRunner{}}
-	memories := NewMemoryStore(t.TempDir())
-
-	s, err := NewScheduler(cfg, runners, memories, zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	if len(s.agentEntries) != 0 {
-		t.Errorf("expected 0 cron entries for label-only binding, got %d", len(s.agentEntries))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s, err := NewScheduler(baseCfg(tc.mutate), map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+			if err != nil {
+				t.Fatalf("NewScheduler: %v", err)
+			}
+			if len(s.agentEntries) != tc.wantCount {
+				t.Errorf("agentEntries = %d, want %d", len(s.agentEntries), tc.wantCount)
+			}
+		})
 	}
 }
 
