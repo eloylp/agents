@@ -109,8 +109,8 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 
 	var response Response
 	if stdout.Len() == 0 {
-		logger.Info().Msgf("%s command returned no output", r.backendName)
-		return Response{}, nil
+		logger.Error().Msgf("%s command returned no output", r.backendName)
+		return Response{}, fmt.Errorf("parse %s response: empty response (no output)", r.backendName)
 	}
 	jsonBytes, err := extractJSON(stdout.Bytes())
 	if err != nil {

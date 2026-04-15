@@ -1,10 +1,13 @@
 package ai
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/rs/zerolog"
 )
 
 func TestBuildCommandEnvDaemonNumber(t *testing.T) {
@@ -235,5 +238,21 @@ func TestResponseDispatchOmittedWhenEmpty(t *testing.T) {
 	}
 	if strings.Contains(string(data), "dispatch") {
 		t.Errorf("dispatch should be omitted when empty; got: %s", string(data))
+	}
+}
+
+// TestCommandRunnerEmptyStdoutIsError verifies that a backend command that
+// exits zero but produces no output is treated as a failed run rather than a
+// silent success with an empty Response.
+func TestCommandRunnerEmptyStdoutIsError(t *testing.T) {
+	t.Parallel()
+	// "true" exits 0 with no stdout — the canonical empty-output case.
+	r := NewCommandRunner("test", "command", "true", nil, 10, 4000, "", zerolog.Nop())
+	_, err := r.Run(context.Background(), Request{Workflow: "wf", Repo: "owner/repo"})
+	if err == nil {
+		t.Fatal("expected error for empty stdout, got nil")
+	}
+	if !strings.Contains(err.Error(), "empty response") {
+		t.Errorf("expected 'empty response' in error, got: %v", err)
 	}
 }

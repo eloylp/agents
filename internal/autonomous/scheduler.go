@@ -315,7 +315,9 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 				Kind:  "autonomous",
 				Actor: agent.Name,
 			}
-			s.dispatcher.ProcessDispatches(ctx, agent, syntheticEv, rootEventID, 0, resp.Dispatch)
+			if err := s.dispatcher.ProcessDispatches(ctx, agent, syntheticEv, rootEventID, 0, resp.Dispatch); err != nil {
+				return fmt.Errorf("agent %q: dispatch: %w", agent.Name, err)
+			}
 		}
 		return nil
 	})

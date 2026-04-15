@@ -2,6 +2,7 @@ package autonomous
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -263,9 +264,13 @@ func (r *dispatchingRunner) Run(_ context.Context, _ ai.Request) (ai.Response, e
 type fakeQueue struct {
 	mu     sync.Mutex
 	events []workflow.Event
+	err    error
 }
 
 func (q *fakeQueue) PushEvent(_ context.Context, ev workflow.Event) error {
+	if q.err != nil {
+		return q.err
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.events = append(q.events, ev)
@@ -562,6 +567,44 @@ func TestSchedulerCronMarkNotWrittenOnBackendResolutionFailure(t *testing.T) {
 	})
 	if len(q.popped()) != 1 {
 		t.Error("expected dispatch enqueued: no cron mark should have been written on runner-resolution failure")
+	}
+}
+
+// TestSchedulerDispatchEnqueueFailurePropagates verifies that when the event
+// queue rejects an enqueue during ProcessDispatches, the error bubbles up
+// through executeAgentRun and out of TriggerAgent instead of being silently
+// swallowed.
+func TestSchedulerDispatchEnqueueFailurePropagates(t *testing.T) {
+	t.Parallel()
+	cfg := dispatchCfgForTest()
+
+	runner := &dispatchingRunner{
+		dispatches: []ai.DispatchRequest{
+			{Agent: "notifier", Reason: "review done", Number: 42},
+		},
+	}
+	queueErr := errors.New("queue full")
+	q := &fakeQueue{err: queueErr}
+	agentMap := map[string]config.AgentDef{
+		"reviewer": cfg.Agents[0],
+		"notifier": cfg.Agents[1],
+	}
+	dedup := workflow.NewDispatchDedupStore(300)
+	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
+	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
+
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithDispatcher(dispatcher)
+
+	err = s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
+	if err == nil {
+		t.Fatal("expected error when dispatch enqueue fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "dispatch") {
+		t.Errorf("expected 'dispatch' in error, got: %v", err)
 	}
 }
 
