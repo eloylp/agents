@@ -393,7 +393,7 @@ repos:
 	}
 }
 
-func logLevelYAML(level string) string {
+func logConfigYAML(field, value string) string {
 	return `
 daemon:
   http:
@@ -403,35 +403,7 @@ daemon:
       command: claude
       args: ["-p"]
   log:
-    level: ` + level + `
-skills:
-  architect:
-    prompt: "Focus on architecture."
-agents:
-  - name: reviewer
-    backend: claude
-    skills: [architect]
-    prompt: "You review PRs."
-repos:
-  - name: "owner/repo"
-    enabled: true
-    use:
-      - agent: reviewer
-        labels: ["ai:review:reviewer"]
-`
-}
-
-func logFormatYAML(format string) string {
-	return `
-daemon:
-  http:
-    webhook_secret_env: TEST_SECRET
-  ai_backends:
-    claude:
-      command: claude
-      args: ["-p"]
-  log:
-    format: ` + format + `
+    ` + field + `: ` + value + `
 skills:
   architect:
     prompt: "Focus on architecture."
@@ -480,7 +452,7 @@ func TestLoadRejectsInvalidLogLevel(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			path := writeConfig(t, logLevelYAML(tc.level))
+			path := writeConfig(t, logConfigYAML("level", tc.level))
 			_, err := Load(path)
 			if err == nil {
 				t.Fatalf("expected error for log level %q", tc.level)
@@ -498,7 +470,7 @@ func TestLoadAcceptsValidLogLevels(t *testing.T) {
 	levels := []string{"trace", "debug", "info", "warn", "error", "fatal", "panic", "disabled", "DEBUG", "INFO", "", "\"  debug  \""}
 	for _, level := range levels {
 		t.Run("level="+level, func(t *testing.T) {
-			path := writeConfig(t, logLevelYAML(level))
+			path := writeConfig(t, logConfigYAML("level", level))
 			if _, err := Load(path); err != nil {
 				t.Fatalf("unexpected error for log level %q: %v", level, err)
 			}
@@ -527,7 +499,7 @@ func TestLoadRejectsInvalidLogFormat(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			path := writeConfig(t, logFormatYAML(tc.format))
+			path := writeConfig(t, logConfigYAML("format", tc.format))
 			_, err := Load(path)
 			if err == nil {
 				t.Fatalf("expected error for log format %q", tc.format)
@@ -545,7 +517,7 @@ func TestLoadAcceptsValidLogFormats(t *testing.T) {
 	formats := []string{"json", "text", "JSON", "TEXT", "", "\"  json  \""}
 	for _, format := range formats {
 		t.Run("format="+format, func(t *testing.T) {
-			path := writeConfig(t, logFormatYAML(format))
+			path := writeConfig(t, logConfigYAML("format", format))
 			if _, err := Load(path); err != nil {
 				t.Fatalf("unexpected error for log format %q: %v", format, err)
 			}
