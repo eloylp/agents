@@ -282,6 +282,7 @@ repos:
 }
 
 func TestBindingIsEnabledDefaultsTrue(t *testing.T) {
+	t.Parallel()
 	var b Binding
 	if !b.IsEnabled() {
 		t.Errorf("expected enabled by default")
@@ -294,6 +295,7 @@ func TestBindingIsEnabledDefaultsTrue(t *testing.T) {
 }
 
 func TestDefaultBackendPrefersFirstConfigured(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{
 		Daemon: DaemonConfig{
 			AIBackends: map[string]AIBackendConfig{
