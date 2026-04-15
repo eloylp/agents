@@ -607,3 +607,152 @@ func TestLoadAcceptsValidLogFormats(t *testing.T) {
 		})
 	}
 }
+
+// ── proxy config ───────────────────────────────────────────────────────────────
+
+func proxyYAML(proxyBlock string) string {
+	return fmt.Sprintf(`
+daemon:
+  http:
+    webhook_secret_env: TEST_SECRET
+  ai_backends:
+    claude:
+      command: claude
+      args: ["-p"]
+  proxy:
+%s
+
+agents:
+  - name: reviewer
+    backend: claude
+    prompt: "You review PRs."
+
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+      - agent: reviewer
+        labels: ["ai:review"]
+`, proxyBlock)
+}
+
+func TestProxyDisabledByDefault(t *testing.T) {
+	t.Setenv("TEST_SECRET", "s3cret")
+	path := writeConfig(t, minimalYAML(""))
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Daemon.Proxy.Enabled {
+		t.Error("proxy should be disabled by default")
+	}
+}
+
+func TestProxyDefaultsApplied(t *testing.T) {
+	t.Setenv("TEST_SECRET", "s3cret")
+	path := writeConfig(t, minimalYAML(""))
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Daemon.Proxy.Path != defaultProxyPath {
+		t.Errorf("proxy path default: got %q, want %q", cfg.Daemon.Proxy.Path, defaultProxyPath)
+	}
+	if cfg.Daemon.Proxy.Upstream.TimeoutSeconds != defaultProxyTimeoutSeconds {
+		t.Errorf("proxy timeout default: got %d, want %d", cfg.Daemon.Proxy.Upstream.TimeoutSeconds, defaultProxyTimeoutSeconds)
+	}
+}
+
+func TestProxyValidConfigLoads(t *testing.T) {
+	t.Setenv("TEST_SECRET", "s3cret")
+	t.Setenv("LLM_KEY", "key-abc")
+	block := `
+    enabled: true
+    upstream:
+      url: http://localhost:8001/v1
+      model: qwen
+      api_key_env: LLM_KEY
+      timeout_seconds: 60`
+	path := writeConfig(t, proxyYAML(block))
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Daemon.Proxy.Enabled {
+		t.Error("proxy not enabled")
+	}
+	if cfg.Daemon.Proxy.Upstream.URL != "http://localhost:8001/v1" {
+		t.Errorf("upstream url: got %q", cfg.Daemon.Proxy.Upstream.URL)
+	}
+	if cfg.Daemon.Proxy.Upstream.Model != "qwen" {
+		t.Errorf("upstream model: got %q", cfg.Daemon.Proxy.Upstream.Model)
+	}
+	if cfg.Daemon.Proxy.Upstream.APIKey != "key-abc" {
+		t.Errorf("upstream api key not resolved: got %q", cfg.Daemon.Proxy.Upstream.APIKey)
+	}
+	if cfg.Daemon.Proxy.Upstream.TimeoutSeconds != 60 {
+		t.Errorf("upstream timeout: got %d", cfg.Daemon.Proxy.Upstream.TimeoutSeconds)
+	}
+}
+
+func TestProxyValidationErrors(t *testing.T) {
+	t.Setenv("TEST_SECRET", "s3cret")
+
+	tests := []struct {
+		name       string
+		block      string
+		wantErrMsg string
+	}{
+		{
+			name: "missing url",
+			block: `
+    enabled: true
+    upstream:
+      model: qwen`,
+			wantErrMsg: "config: proxy.upstream.url is required when proxy.enabled is true",
+		},
+		{
+			name: "missing model",
+			block: `
+    enabled: true
+    upstream:
+      url: http://localhost:8001/v1`,
+			wantErrMsg: "config: proxy.upstream.model is required when proxy.enabled is true",
+		},
+		{
+			name: "path without slash",
+			block: `
+    enabled: true
+    path: v1/messages
+    upstream:
+      url: http://localhost:8001/v1
+      model: qwen`,
+			wantErrMsg: `config: proxy.path must start with '/', got "v1/messages"`,
+		},
+		{
+			name: "non-positive timeout",
+			block: `
+    enabled: true
+    upstream:
+      url: http://localhost:8001/v1
+      model: qwen
+      timeout_seconds: -1`,
+			wantErrMsg: "config: proxy.upstream.timeout_seconds must be positive, got -1",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := writeConfig(t, proxyYAML(tc.block))
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if err.Error() != tc.wantErrMsg {
+				t.Errorf("error: got %q, want %q", err.Error(), tc.wantErrMsg)
+			}
+		})
+	}
+}

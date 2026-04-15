@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
 
+	"github.com/eloylp/agents/internal/anthropic_proxy"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -54,10 +55,11 @@ type Server struct {
 	provider  StatusProvider
 	startTime time.Time
 	triggerer AgentTriggerer
+	proxy     *anthropicproxy.Handler
 }
 
 func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue, provider StatusProvider, logger zerolog.Logger, triggerer AgentTriggerer) *Server {
-	return &Server{
+	s := &Server{
 		cfg:       cfg,
 		delivery:  delivery,
 		logger:    logger.With().Str("component", "webhook_server").Logger(),
@@ -66,6 +68,17 @@ func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue,
 		startTime: time.Now(),
 		triggerer: triggerer,
 	}
+	if cfg.Daemon.Proxy.Enabled {
+		up := cfg.Daemon.Proxy.Upstream
+		s.proxy = anthropicproxy.NewHandler(anthropicproxy.UpstreamConfig{
+			URL:       up.URL,
+			Model:     up.Model,
+			APIKey:    up.APIKey,
+			Timeout:   time.Duration(up.TimeoutSeconds) * time.Second,
+			ExtraBody: up.ExtraBody,
+		}, logger)
+	}
+	return s
 }
 
 func (s *Server) Run(ctx context.Context) error {
@@ -73,6 +86,10 @@ func (s *Server) Run(ctx context.Context) error {
 	router.HandleFunc(s.cfg.Daemon.HTTP.StatusPath, s.handleStatus).Methods(http.MethodGet)
 	router.HandleFunc(s.cfg.Daemon.HTTP.WebhookPath, s.handleGitHubWebhook).Methods(http.MethodPost)
 	router.HandleFunc(s.cfg.Daemon.HTTP.AgentsRunPath, s.handleAgentsRun).Methods(http.MethodPost)
+	if s.proxy != nil {
+		router.Handle(s.cfg.Daemon.Proxy.Path, s.proxy).Methods(http.MethodPost)
+		s.logger.Info().Str("path", s.cfg.Daemon.Proxy.Path).Str("upstream", s.cfg.Daemon.Proxy.Upstream.URL).Msg("anthropic proxy enabled")
+	}
 
 	srv := &http.Server{
 		Addr:         s.cfg.Daemon.HTTP.ListenAddr,
@@ -93,7 +110,11 @@ func (s *Server) Run(ctx context.Context) error {
 		errCh <- srv.Shutdown(shutdownCtx)
 	}()
 
-	s.logger.Info().Str("addr", s.cfg.Daemon.HTTP.ListenAddr).Str("status_path", s.cfg.Daemon.HTTP.StatusPath).Str("webhook_path", s.cfg.Daemon.HTTP.WebhookPath).Str("agents_run_path", s.cfg.Daemon.HTTP.AgentsRunPath).Msg("starting webhook server")
+	logEvent := s.logger.Info().Str("addr", s.cfg.Daemon.HTTP.ListenAddr).Str("status_path", s.cfg.Daemon.HTTP.StatusPath).Str("webhook_path", s.cfg.Daemon.HTTP.WebhookPath).Str("agents_run_path", s.cfg.Daemon.HTTP.AgentsRunPath)
+	if s.proxy != nil {
+		logEvent = logEvent.Str("proxy_path", s.cfg.Daemon.Proxy.Path)
+	}
+	logEvent.Msg("starting webhook server")
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

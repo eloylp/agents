@@ -26,6 +26,23 @@ daemon:
 
   memory_dir: /var/lib/agents/memory            # persistent agent memory root
 
+  # Built-in Anthropic↔OpenAI translation proxy (disabled by default).
+  # Enable to run `ANTHROPIC_BASE_URL=http://localhost:8080 claude -p "hi"`
+  # against any OpenAI-compatible backend (llama.cpp, Ollama, vLLM, etc.)
+  # without a separate sidecar like LiteLLM.
+  #
+  # proxy:
+  #   enabled: false
+  #   path: /v1/messages          # path the claude CLI hits
+  #   upstream:
+  #     url: http://ts-vortex:8001/v1   # OpenAI-compat base URL
+  #     model: qwen3                    # model name forwarded upstream
+  #     api_key_env: LOCAL_LLM_API_KEY  # optional; empty if not required
+  #     timeout_seconds: 120
+  #     extra_body:                     # merged into every upstream request
+  #       chat_template_kwargs:
+  #         enable_thinking: false
+
   ai_backends:
     claude:
       command: claude

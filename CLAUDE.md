@@ -69,6 +69,7 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, 
   - `GET /status` — JSON with uptime, queue depths, agent schedules
   - `POST /webhooks/github` — HMAC-verified webhook receiver
   - `POST /agents/run` — on-demand agent trigger (requires Bearer token)
+  - `POST /v1/messages` — Anthropic↔OpenAI translation proxy (disabled by default; enabled via `daemon.proxy.enabled: true`)
 - Relevant webhook events: `issues.labeled`, `pull_request.labeled`. Trigger label comes from `payload.label.name`.
 - Duplicate webhook suppression via `X-GitHub-Delivery` TTL cache.
 - Workflow execution is stateless in-process. Only autonomous agents persist memory (per-agent, per-repo markdown file under `memory_dir`).
