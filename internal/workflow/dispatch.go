@@ -260,6 +260,16 @@ func (d *Dispatcher) ProcessDispatches(
 	}
 }
 
+// CheckAndMarkAutonomousRun checks the dedup store for the key
+// (agentName, repo, 0), which represents an autonomous (cron or manual)
+// execution. Returns true if this (agent, repo) pair was already seen within
+// the dedup window — meaning the caller should skip the run to avoid racing
+// with an in-flight dispatch to the same target. If not seen, records the key
+// so a near-simultaneous dispatch is collapsed against it.
+func (d *Dispatcher) CheckAndMarkAutonomousRun(agentName, repo string, now time.Time) bool {
+	return d.dedup.SeenOrAdd(agentName, repo, 0, now)
+}
+
 // Stats returns a snapshot of the current dispatch counters.
 func (d *Dispatcher) Stats() DispatchStats {
 	return d.counters.snapshot()

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -417,6 +418,45 @@ func TestSchedulerDispatchesIgnoredWhenNoDispatcherAttached(t *testing.T) {
 		t.Fatalf("TriggerAgent: %v", err)
 	}
 	// No panic or error: success.
+}
+
+func TestSchedulerCronRunSkippedWhenAlreadySeenInDedup(t *testing.T) {
+	t.Parallel()
+	cfg := dispatchCfgForTest()
+
+	runner := &stubRunner{}
+	q := &fakeQueue{}
+	agentMap := map[string]config.AgentDef{
+		"reviewer": cfg.Agents[0],
+		"notifier": cfg.Agents[1],
+	}
+	dedup := workflow.NewDispatchDedupStore(300)
+	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
+	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
+
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithDispatcher(dispatcher)
+
+	// Simulate a dispatch having arrived first for (reviewer, owner/repo, 0):
+	// calling CheckAndMarkAutonomousRun seeds the same dedup key that
+	// executeAgentRun checks before running. Use time.Now() so the entry is
+	// within the 300s TTL window.
+	_ = dispatcher.CheckAndMarkAutonomousRun("reviewer", "owner/repo", time.Now())
+
+	// TriggerAgent must skip the run — the dedup entry is already present.
+	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
+		t.Fatalf("TriggerAgent: %v", err)
+	}
+
+	runner.mu.Lock()
+	calls := runner.calls
+	runner.mu.Unlock()
+	if calls != 0 {
+		t.Errorf("expected runner not to be called (run skipped by dedup), got %d call(s)", calls)
+	}
 }
 
 func TestSchedulerAllowPRsPromptPrefixing(t *testing.T) {

@@ -245,6 +245,16 @@ func (s *Scheduler) TriggerAgent(ctx context.Context, agentName, repo string) er
 }
 
 func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent config.AgentDef) error {
+	// Collapse cron-vs-dispatch races: if a dispatch for the same (agent, repo)
+	// pair is already in-flight (or vice-versa), skip this run so the two paths
+	// do not execute the same agent twice within the dedup window.
+	if s.dispatcher != nil {
+		if s.dispatcher.CheckAndMarkAutonomousRun(agent.Name, repo, time.Now()) {
+			s.logger.Info().Str("repo", repo).Str("agent", agent.Name).
+				Msg("autonomous run skipped: already seen within dispatch dedup window")
+			return nil
+		}
+	}
 	backend := s.cfg.ResolveBackend(agent.Backend)
 	if backend == "" {
 		return fmt.Errorf("no configured backend for agent %q (configured: %q)", agent.Name, agent.Backend)
