@@ -37,17 +37,6 @@ func (s *stubRunner) callCount() int {
 	return len(s.calls)
 }
 
-func (s *stubRunner) agentNames() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]string, 0, len(s.calls))
-	for _, c := range s.calls {
-		// The agent name is the last colon-separated part of the workflow tag.
-		out = append(out, c.Workflow)
-	}
-	return out
-}
-
 // newTestEngine builds an Engine with a canned agent set. The cfgMutator
 // hook lets tests override bindings, backends, etc.
 func newTestEngine(cfgMutator func(*config.Config)) (*Engine, *stubRunner) {
