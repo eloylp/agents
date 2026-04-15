@@ -74,6 +74,14 @@ func (e *Engine) DispatchStats() DispatchStats {
 	return e.dispatcher.Stats()
 }
 
+// Dispatcher returns the configured Dispatcher, or nil if dispatch is not
+// enabled. The returned value can be shared with other components (e.g. the
+// autonomous scheduler) so that all dispatch paths use the same safety limits
+// and dedup store.
+func (e *Engine) Dispatcher() *Dispatcher {
+	return e.dispatcher
+}
+
 // HandleEvent runs every agent bound to ev.Repo whose binding matches ev.
 // Label bindings (labels:) match when ev.Kind is a labeled event and the
 // label in ev.Payload["label"] appears in the binding's label list.

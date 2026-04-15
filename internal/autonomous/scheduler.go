@@ -13,6 +13,7 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/workflow"
 )
 
 // zerologCronLogger adapts zerolog.Logger to the cron.Logger interface
@@ -72,6 +73,16 @@ type Scheduler struct {
 	agentEntries []agentEntry
 	lastRunsMu   sync.RWMutex
 	lastRuns     map[string]lastRunRecord // key: "name\x00repo"
+	dispatcher   *workflow.Dispatcher    // nil when dispatch is not configured
+}
+
+// WithDispatcher attaches a Dispatcher to the Scheduler so that dispatch
+// requests returned by autonomous agent runs are enqueued and safety-checked
+// through the same limits and dedup store used by the event-driven path.
+// Call this after creating both the Scheduler and the Engine but before
+// starting the Scheduler.
+func (s *Scheduler) WithDispatcher(d *workflow.Dispatcher) {
+	s.dispatcher = d
 }
 
 // NewScheduler builds a scheduler and registers all cron-triggered bindings
@@ -267,7 +278,19 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		if err != nil {
 			return fmt.Errorf("agent run: %w", err)
 		}
-		logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Msg("autonomous pass completed")
+		logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Int("dispatch_requests", len(resp.Dispatch)).Msg("autonomous pass completed")
+		if s.dispatcher != nil && len(resp.Dispatch) > 0 {
+			// Synthesize a minimal event to carry repo context into the dispatcher.
+			// Autonomous runs have no originating GitHub event, so Kind="autonomous"
+			// and Number=0. If the agent omitted number in a dispatch request, the
+			// dispatcher will fall back to this 0.
+			syntheticEv := workflow.Event{
+				Repo:  workflow.RepoRef{FullName: repo, Enabled: true},
+				Kind:  "autonomous",
+				Actor: agent.Name,
+			}
+			s.dispatcher.ProcessDispatches(ctx, agent, syntheticEv, "", 0, resp.Dispatch)
+		}
 		return nil
 	})
 }

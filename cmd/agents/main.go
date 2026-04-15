@@ -78,6 +78,7 @@ func run() error {
 
 	dataChannels := workflow.NewDataChannels(cfg.Daemon.Processor.EventQueueBuffer)
 	engine := workflow.NewEngine(cfg, runners, dataChannels, logger)
+	scheduler.WithDispatcher(engine.Dispatcher())
 	shutdown := time.Duration(cfg.Daemon.HTTP.ShutdownTimeoutSeconds) * time.Second
 	workers := cfg.Daemon.Processor.MaxConcurrentAgents
 	processor := workflow.NewProcessor(dataChannels, engine, workers, shutdown, logger)

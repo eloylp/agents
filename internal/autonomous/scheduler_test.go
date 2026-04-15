@@ -10,6 +10,7 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/workflow"
 )
 
 type stubRunner struct {
@@ -246,6 +247,130 @@ func (r *promptCapturingRunner) Run(_ context.Context, req ai.Request) (ai.Respo
 	defer r.mu.Unlock()
 	r.prompts = append(r.prompts, req.Prompt)
 	return ai.Response{}, nil
+}
+
+// dispatchingRunner returns a fixed dispatch request on every Run call.
+type dispatchingRunner struct {
+	dispatches []ai.DispatchRequest
+}
+
+func (r *dispatchingRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
+	return ai.Response{Summary: "done", Dispatch: r.dispatches}, nil
+}
+
+// fakeQueue records events pushed to it, satisfying workflow.EventEnqueuer.
+type fakeQueue struct {
+	mu     sync.Mutex
+	events []workflow.Event
+}
+
+func (q *fakeQueue) PushEvent(_ context.Context, ev workflow.Event) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.events = append(q.events, ev)
+	return nil
+}
+
+func (q *fakeQueue) popped() []workflow.Event {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make([]workflow.Event, len(q.events))
+	copy(out, q.events)
+	return out
+}
+
+// dispatchCfgForTest builds a minimal config where "reviewer" can dispatch
+// "notifier" and "notifier" has allow_dispatch: true.
+func dispatchCfgForTest() *config.Config {
+	return baseCfg(func(c *config.Config) {
+		c.Agents = []config.AgentDef{
+			{
+				Name:        "reviewer",
+				Backend:     "claude",
+				Prompt:      "Review PRs.",
+				CanDispatch: []string{"notifier"},
+			},
+			{
+				Name:          "notifier",
+				Backend:       "claude",
+				Prompt:        "Notify team.",
+				AllowDispatch: true,
+			},
+		}
+		c.Repos[0].Use = []config.Binding{
+			{Agent: "reviewer", Cron: "* * * * *"},
+			{Agent: "notifier", Cron: "0 0 * * *"},
+		}
+	})
+}
+
+func TestSchedulerDispatchesEnqueuedWhenDispatcherAttached(t *testing.T) {
+	t.Parallel()
+	cfg := dispatchCfgForTest()
+
+	runner := &dispatchingRunner{
+		dispatches: []ai.DispatchRequest{
+			{Agent: "notifier", Reason: "review done", Number: 42},
+		},
+	}
+	q := &fakeQueue{}
+	agentMap := map[string]config.AgentDef{
+		"reviewer": cfg.Agents[0],
+		"notifier": cfg.Agents[1],
+	}
+	dedup := workflow.NewDispatchDedupStore(300)
+	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
+	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
+
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithDispatcher(dispatcher)
+
+	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
+		t.Fatalf("TriggerAgent: %v", err)
+	}
+
+	events := q.popped()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 dispatched event, got %d", len(events))
+	}
+	ev := events[0]
+	if ev.Kind != "agent.dispatch" {
+		t.Errorf("event kind: got %q, want %q", ev.Kind, "agent.dispatch")
+	}
+	if got, ok := ev.Payload["target_agent"].(string); !ok || got != "notifier" {
+		t.Errorf("target_agent: got %v, want %q", ev.Payload["target_agent"], "notifier")
+	}
+	if ev.Number != 42 {
+		t.Errorf("event number: got %d, want 42", ev.Number)
+	}
+	if ev.Repo.FullName != "owner/repo" {
+		t.Errorf("event repo: got %q, want %q", ev.Repo.FullName, "owner/repo")
+	}
+}
+
+func TestSchedulerDispatchesIgnoredWhenNoDispatcherAttached(t *testing.T) {
+	t.Parallel()
+	cfg := dispatchCfgForTest()
+
+	runner := &dispatchingRunner{
+		dispatches: []ai.DispatchRequest{
+			{Agent: "notifier", Reason: "review done"},
+		},
+	}
+
+	// No dispatcher attached — TriggerAgent should still succeed and just log.
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
+		t.Fatalf("TriggerAgent: %v", err)
+	}
+	// No panic or error: success.
 }
 
 func TestSchedulerAllowPRsPromptPrefixing(t *testing.T) {
