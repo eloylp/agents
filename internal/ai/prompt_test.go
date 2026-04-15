@@ -131,6 +131,29 @@ func TestRenderAgentPromptIncludesEventContext(t *testing.T) {
 	}
 }
 
+func TestRenderAgentPromptMultilinePayloadBodyIsIndented(t *testing.T) {
+	t.Parallel()
+	agent := config.AgentDef{Prompt: "React to comments."}
+	body := "first line\nsecond line\nthird line"
+	got, err := ai.RenderAgentPrompt(agent, nil, ai.PromptContext{
+		Repo:      "owner/repo",
+		Number:    7,
+		EventKind: "issue_comment.created",
+		Actor:     "octocat",
+		Payload:   map[string]any{"body": body},
+	})
+	if err != nil {
+		t.Fatalf("RenderAgentPrompt: %v", err)
+	}
+	// Multiline values must be rendered as indented block, not bare continuation lines.
+	if strings.Contains(got, "body: first line") {
+		t.Errorf("multiline body rendered inline (not indented):\n%s", got)
+	}
+	if !strings.Contains(got, "body:\n  first line\n  second line\n  third line\n") {
+		t.Errorf("multiline body not rendered as indented block:\n%s", got)
+	}
+}
+
 func TestNormalizeTokenSanitizesForFilesystemUse(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

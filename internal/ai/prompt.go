@@ -88,7 +88,15 @@ func renderRuntimeContext(ctx PromptContext) string {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			fmt.Fprintf(&b, "%s: %v\n", k, ctx.Payload[k])
+			v := ctx.Payload[k]
+			if s, ok := v.(string); ok && strings.Contains(s, "\n") {
+				fmt.Fprintf(&b, "%s:\n", k)
+				for _, line := range strings.Split(s, "\n") {
+					fmt.Fprintf(&b, "  %s\n", line)
+				}
+			} else {
+				fmt.Fprintf(&b, "%s: %v\n", k, v)
+			}
 		}
 	}
 	if ctx.MemoryPath != "" {
