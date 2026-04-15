@@ -249,7 +249,6 @@ repos:
 }
 
 func TestLoadRejectsUnknownEventKind(t *testing.T) {
-	t.Parallel()
 	t.Setenv("TEST_SECRET", "s3cret")
 	repo := `
 repos:
@@ -266,7 +265,6 @@ repos:
 }
 
 func TestLoadAcceptsValidEventKinds(t *testing.T) {
-	t.Parallel()
 	t.Setenv("TEST_SECRET", "s3cret")
 	for kind := range validEventKinds {
 		kind := kind
