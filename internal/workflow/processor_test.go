@@ -83,6 +83,7 @@ func TestProcessorProcessingCtxReturnsDrainContextWithDeadline(t *testing.T) {
 }
 
 func TestProcessorRunDrainsQueuesOnCancellation(t *testing.T) {
+	t.Parallel()
 	dataChannels := NewDataChannels(4, 4)
 	handler := &stubProcessorHandler{}
 	processor := NewProcessor(dataChannels, handler, 1, time.Second, zerolog.Nop())
