@@ -38,8 +38,7 @@ const (
 	defaultDeliveryTTLSeconds      = 3600
 	defaultHTTPShutdownSeconds     = 15
 
-	defaultIssueQueueBufferSize = 256
-	defaultPRQueueBufferSize    = 256
+	defaultEventQueueBufferSize = 256
 	defaultMaxConcurrentAgents  = 4
 
 	defaultAITimeoutSeconds = 600
@@ -97,10 +96,9 @@ type HTTPConfig struct {
 	APIKey        string `yaml:"-"`
 }
 
-// ProcessorConfig controls internal event queues and agent concurrency.
+// ProcessorConfig controls the internal event queue and agent concurrency.
 type ProcessorConfig struct {
-	IssueQueueBuffer    int `yaml:"issue_queue_buffer"`
-	PRQueueBuffer       int `yaml:"pr_queue_buffer"`
+	EventQueueBuffer    int `yaml:"event_queue_buffer"`
 	MaxConcurrentAgents int `yaml:"max_concurrent_agents"`
 }
 
@@ -269,8 +267,7 @@ func (c *Config) applyDefaults() {
 	setDefaultInt(&c.Daemon.HTTP.ShutdownTimeoutSeconds, defaultHTTPShutdownSeconds)
 
 	// daemon.processor
-	setDefaultInt(&c.Daemon.Processor.IssueQueueBuffer, defaultIssueQueueBufferSize)
-	setDefaultInt(&c.Daemon.Processor.PRQueueBuffer, defaultPRQueueBufferSize)
+	setDefaultInt(&c.Daemon.Processor.EventQueueBuffer, defaultEventQueueBufferSize)
 	setDefaultInt(&c.Daemon.Processor.MaxConcurrentAgents, defaultMaxConcurrentAgents)
 
 	// daemon.ai_backends defaults

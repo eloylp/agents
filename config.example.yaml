@@ -21,9 +21,8 @@ daemon:
     shutdown_timeout_seconds: 15
 
   processor:
-    issue_queue_buffer: 256
-    pr_queue_buffer: 256
-    max_concurrent_agents: 4                    # per-PR fan-out cap
+    event_queue_buffer: 256
+    max_concurrent_agents: 4                    # per-event fan-out cap
 
   memory_dir: /var/lib/agents/memory            # persistent agent memory root
 

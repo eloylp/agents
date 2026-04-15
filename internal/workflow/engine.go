@@ -38,28 +38,17 @@ func NewEngine(cfg *config.Config, runners map[string]ai.Runner, logger zerolog.
 	}
 }
 
-// HandleIssueLabelEvent runs every agent bound to req.Repo whose binding
-// includes req.Label.
-func (e *Engine) HandleIssueLabelEvent(ctx context.Context, req IssueRequest) error {
-	e.logger.Info().Str("repo", req.Repo.FullName).Int("issue_number", req.Issue.Number).Str("label", req.Label).Msg("processing issue label event")
-	return e.dispatch(ctx, req.Repo.FullName, req.Label, req.Issue.Number, "issue")
-}
-
-// HandlePullRequestLabelEvent runs every agent bound to req.Repo whose
-// binding includes req.Label. Draft PRs are skipped.
-func (e *Engine) HandlePullRequestLabelEvent(ctx context.Context, req PRRequest) error {
-	e.logger.Info().Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Str("label", req.Label).Msg("processing pull request label event")
-	if req.PR.Draft {
-		e.logger.Info().Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Msg("pull request skipped, draft")
-		return nil
-	}
-	return e.dispatch(ctx, req.Repo.FullName, req.Label, req.PR.Number, "pr")
+// HandleLabelEvent runs every agent bound to ev.Repo whose binding includes
+// ev.Label. Draft PRs are filtered at the webhook boundary before enqueueing.
+func (e *Engine) HandleLabelEvent(ctx context.Context, ev LabelEvent) error {
+	e.logger.Info().Str("repo", ev.Repo.FullName).Int("number", ev.Number).Str("label", ev.Label).Msg("processing label event")
+	return e.dispatch(ctx, ev.Repo.FullName, ev.Label, ev.Number)
 }
 
 // dispatch runs all agents bound to the given repo with a label matching
 // `label`. Runs are parallel, capped by e.maxConcurrent. A failing agent
 // does not abort the others; all errors are joined and returned.
-func (e *Engine) dispatch(ctx context.Context, repoName, label string, number int, kind string) error {
+func (e *Engine) dispatch(ctx context.Context, repoName, label string, number int) error {
 	matched := e.agentsForLabel(repoName, label)
 	if len(matched) == 0 {
 		e.logger.Info().Str("repo", repoName).Str("label", label).Msg("no bindings matched label, skipping")
@@ -81,7 +70,7 @@ func (e *Engine) dispatch(ctx context.Context, repoName, label string, number in
 		go func(a config.AgentDef) {
 			defer wg.Done()
 			defer sem.Release(1)
-			if err := e.runAgent(ctx, repoName, number, a, kind); err != nil {
+			if err := e.runAgent(ctx, repoName, number, a); err != nil {
 				mu.Lock()
 				errs = append(errs, err)
 				mu.Unlock()
@@ -121,7 +110,7 @@ func (e *Engine) agentsForLabel(repoName, label string) []config.AgentDef {
 	return matched
 }
 
-func (e *Engine) runAgent(ctx context.Context, repo string, number int, agent config.AgentDef, kind string) error {
+func (e *Engine) runAgent(ctx context.Context, repo string, number int, agent config.AgentDef) error {
 	backend := e.cfg.ResolveBackend(agent.Backend)
 	if backend == "" {
 		return fmt.Errorf("agent %q: no runner available for backend %q", agent.Name, agent.Backend)
@@ -138,7 +127,7 @@ func (e *Engine) runAgent(ctx context.Context, repo string, number int, agent co
 	if err != nil {
 		return fmt.Errorf("agent %q: render prompt: %w", agent.Name, err)
 	}
-	workflow := fmt.Sprintf("%s:%s:%s", kind, backend, agent.Name)
+	workflow := fmt.Sprintf("%s:%s", backend, agent.Name)
 	logger := e.logger.With().Str("repo", repo).Int("number", number).Str("agent", agent.Name).Str("backend", backend).Logger()
 	logger.Info().Str("workflow", workflow).Msg("invoking ai agent")
 	resp, err := runner.Run(ctx, ai.Request{

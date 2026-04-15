@@ -39,12 +39,11 @@ type AgentTriggerer interface {
 	TriggerAgent(ctx context.Context, agentName, repo string) error
 }
 
-// EventQueue accepts issue and PR webhook events for async processing and
-// reports queue depth. *workflow.DataChannels satisfies this interface.
+// EventQueue accepts label events for async processing and reports queue depth.
+// *workflow.DataChannels satisfies this interface.
 type EventQueue interface {
-	PushIssue(ctx context.Context, req workflow.IssueRequest) error
-	PushPR(ctx context.Context, req workflow.PRRequest) error
-	QueueStats() (issues, prs workflow.QueueStat)
+	PushEvent(ctx context.Context, ev workflow.LabelEvent) error
+	QueueStats() workflow.QueueStat
 }
 
 type Server struct {
@@ -102,7 +101,7 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
-	issueQ, prQ := s.channels.QueueStats()
+	q := s.channels.QueueStats()
 
 	type queueJSON struct {
 		Buffered int `json:"buffered"`
@@ -126,8 +125,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		Status:        "ok",
 		UptimeSeconds: int64(time.Since(s.startTime).Seconds()),
 		Queues: map[string]queueJSON{
-			"issues": {Buffered: issueQ.Buffered, Capacity: issueQ.Capacity},
-			"prs":    {Buffered: prQ.Buffered, Capacity: prQ.Capacity},
+			"events": {Buffered: q.Buffered, Capacity: q.Capacity},
 		},
 		Agents: agents,
 	}
@@ -198,9 +196,9 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	event := strings.TrimSpace(r.Header.Get("X-GitHub-Event"))
 	switch event {
 	case "issues":
-		s.handleIssueEvent(r.Context(), w, body, deliveryID)
+		s.handleLabelEvent(r.Context(), w, body, deliveryID, "issue")
 	case "pull_request":
-		s.handlePREvent(r.Context(), w, body, deliveryID)
+		s.handleLabelEvent(r.Context(), w, body, deliveryID, "pr")
 	default:
 		s.logger.Warn().Str("event", event).Str("delivery_id", deliveryID).Msg("unhandled webhook event type")
 		w.WriteHeader(http.StatusAccepted)
@@ -211,65 +209,20 @@ type webhookRepository struct {
 	FullName string `json:"full_name"`
 }
 
-type issueWebhookPayload struct {
+// labelWebhookPayload is the common shape of issues.labeled and
+// pull_request.labeled payloads. The Issue and PullRequest fields are
+// populated only for their respective event types; the other is zero.
+type labelWebhookPayload struct {
 	Action     string            `json:"action"`
 	Label      workflow.Label    `json:"label"`
 	Repository webhookRepository `json:"repository"`
 	Issue      workflow.Issue    `json:"issue"`
-}
-
-func (s *Server) handleIssueEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	var payload issueWebhookPayload
-	if err := json.Unmarshal(body, &payload); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
-		return
-	}
-	if !isRelevantAction(payload.Action) || !isAILabel(payload.Label.Name) {
-		w.WriteHeader(http.StatusAccepted)
-		return
-	}
-	if payload.Issue.PullRequest != nil {
-		w.WriteHeader(http.StatusAccepted)
-		return
-	}
-	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
-	if !ok || !repo.Enabled {
-		w.WriteHeader(http.StatusAccepted)
-		return
-	}
-	req := workflow.IssueRequest{
-		Repo:  workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
-		Issue: payload.Issue,
-		Label: payload.Label.Name,
-	}
-	if err := s.channels.PushIssue(ctx, req); err != nil {
-		if errors.Is(err, workflow.ErrIssueQueueFull) {
-			s.delivery.Delete(deliveryID)
-			s.logger.Warn().Str("repo", repo.Name).Msg("issue queue full, dropping webhook")
-			http.Error(w, "issue queue full, retry later", http.StatusServiceUnavailable)
-			return
-		}
-		if errors.Is(err, workflow.ErrQueueClosed) {
-			s.logger.Warn().Str("repo", repo.Name).Msg("queue closed during shutdown, dropping webhook")
-			http.Error(w, "shutting down, retry later", http.StatusServiceUnavailable)
-			return
-		}
-		s.delivery.Delete(deliveryID)
-		http.Error(w, "request cancelled", http.StatusRequestTimeout)
-		return
-	}
-	w.WriteHeader(http.StatusAccepted)
-}
-
-type prWebhookPayload struct {
-	Action      string               `json:"action"`
-	Label       workflow.Label       `json:"label"`
-	Repository  webhookRepository    `json:"repository"`
+	// PullRequest is populated for pull_request events.
 	PullRequest workflow.PullRequest `json:"pull_request"`
 }
 
-func (s *Server) handlePREvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	var payload prWebhookPayload
+func (s *Server) handleLabelEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID, kind string) {
+	var payload labelWebhookPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
@@ -278,21 +231,40 @@ func (s *Server) handlePREvent(ctx context.Context, w http.ResponseWriter, body 
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
+	// issues events can also fire for pull requests (GitHub sends both); skip
+	// those here — the pull_request event handles them.
+	if kind == "issue" && payload.Issue.PullRequest != nil {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
 	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	req := workflow.PRRequest{
-		Repo:  workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
-		PR:    payload.PullRequest,
-		Label: payload.Label.Name,
+
+	var number int
+	if kind == "pr" {
+		if payload.PullRequest.Draft {
+			s.logger.Info().Str("repo", repo.Name).Int("number", payload.PullRequest.Number).Msg("pull request skipped, draft")
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		number = payload.PullRequest.Number
+	} else {
+		number = payload.Issue.Number
 	}
-	if err := s.channels.PushPR(ctx, req); err != nil {
-		if errors.Is(err, workflow.ErrPRQueueFull) {
+
+	ev := workflow.LabelEvent{
+		Repo:   workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+		Number: number,
+		Label:  payload.Label.Name,
+	}
+	if err := s.channels.PushEvent(ctx, ev); err != nil {
+		if errors.Is(err, workflow.ErrEventQueueFull) {
 			s.delivery.Delete(deliveryID)
-			s.logger.Warn().Str("repo", repo.Name).Msg("pr queue full, dropping webhook")
-			http.Error(w, "pr queue full, retry later", http.StatusServiceUnavailable)
+			s.logger.Warn().Str("repo", repo.Name).Str("kind", kind).Msg("event queue full, dropping webhook")
+			http.Error(w, "event queue full, retry later", http.StatusServiceUnavailable)
 			return
 		}
 		if errors.Is(err, workflow.ErrQueueClosed) {

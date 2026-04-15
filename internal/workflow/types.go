@@ -22,14 +22,10 @@ type RepoRef struct {
 	Enabled  bool
 }
 
-type IssueRequest struct {
-	Repo  RepoRef
-	Issue Issue
-	Label string
-}
-
-type PRRequest struct {
-	Repo  RepoRef
-	PR    PullRequest
-	Label string
+// LabelEvent is the single in-process event type for label-triggered workflows.
+// Draft filtering happens at the webhook boundary before the event is enqueued.
+type LabelEvent struct {
+	Repo   RepoRef
+	Number int
+	Label  string
 }

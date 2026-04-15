@@ -10,22 +10,14 @@ import (
 )
 
 type stubProcessorHandler struct {
-	mu         sync.Mutex
-	issueCalls int
-	prCalls    int
+	mu    sync.Mutex
+	calls int
 }
 
-func (s *stubProcessorHandler) HandleIssueLabelEvent(_ context.Context, _ IssueRequest) error {
+func (s *stubProcessorHandler) HandleLabelEvent(_ context.Context, _ LabelEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.issueCalls++
-	return nil
-}
-
-func (s *stubProcessorHandler) HandlePullRequestLabelEvent(_ context.Context, _ PRRequest) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.prCalls++
+	s.calls++
 	return nil
 }
 
@@ -36,7 +28,7 @@ func (s *stubProcessorHandler) HandlePullRequestLabelEvent(_ context.Context, _ 
 // installed — not an already-cancelled sentinel.
 func TestProcessorProcessingCtxReturnsDrainContextWithDeadline(t *testing.T) {
 	t.Parallel()
-	dataChannels := NewDataChannels(1, 1)
+	dataChannels := NewDataChannels(1)
 	processor := NewProcessor(dataChannels, &stubProcessorHandler{}, 1, time.Second, zerolog.Nop())
 
 	// Simulate shutdown: run ctx is cancelled.
@@ -82,9 +74,9 @@ func TestProcessorProcessingCtxReturnsDrainContextWithDeadline(t *testing.T) {
 	}
 }
 
-func TestProcessorRunDrainsQueuesOnCancellation(t *testing.T) {
+func TestProcessorRunDrainsQueueOnCancellation(t *testing.T) {
 	t.Parallel()
-	dataChannels := NewDataChannels(4, 4)
+	dataChannels := NewDataChannels(4)
 	handler := &stubProcessorHandler{}
 	processor := NewProcessor(dataChannels, handler, 1, time.Second, zerolog.Nop())
 
@@ -95,11 +87,11 @@ func TestProcessorRunDrainsQueuesOnCancellation(t *testing.T) {
 		close(done)
 	}()
 
-	if err := dataChannels.PushIssue(context.Background(), IssueRequest{Repo: RepoRef{FullName: "owner/repo"}, Issue: Issue{Number: 1}, Label: "ai:refine"}); err != nil {
-		t.Fatalf("push issue: %v", err)
+	if err := dataChannels.PushEvent(context.Background(), LabelEvent{Repo: RepoRef{FullName: "owner/repo"}, Number: 1, Label: "ai:refine"}); err != nil {
+		t.Fatalf("push issue event: %v", err)
 	}
-	if err := dataChannels.PushPR(context.Background(), PRRequest{Repo: RepoRef{FullName: "owner/repo"}, PR: PullRequest{Number: 2}, Label: "ai:review"}); err != nil {
-		t.Fatalf("push pr: %v", err)
+	if err := dataChannels.PushEvent(context.Background(), LabelEvent{Repo: RepoRef{FullName: "owner/repo"}, Number: 2, Label: "ai:review"}); err != nil {
+		t.Fatalf("push pr event: %v", err)
 	}
 
 	cancel()
@@ -112,66 +104,48 @@ func TestProcessorRunDrainsQueuesOnCancellation(t *testing.T) {
 
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
-	if handler.issueCalls != 1 || handler.prCalls != 1 {
-		t.Fatalf("expected 1 call each, got issue=%d pr=%d", handler.issueCalls, handler.prCalls)
+	if handler.calls != 2 {
+		t.Fatalf("expected 2 calls, got %d", handler.calls)
 	}
 }
 
 // blockingProcessorHandler blocks until released, tracking peak concurrency.
 type blockingProcessorHandler struct {
-	mu          sync.Mutex
-	issueCalls  int
-	prCalls     int
-	issuePeak   int
-	prPeak      int
-	issueActive int
-	prActive    int
-	blockUntil  chan struct{}
+	mu         sync.Mutex
+	calls      int
+	peak       int
+	active     int
+	blockUntil chan struct{}
 }
 
 func newBlockingProcessorHandler() *blockingProcessorHandler {
 	return &blockingProcessorHandler{blockUntil: make(chan struct{})}
 }
 
-func (b *blockingProcessorHandler) HandleIssueLabelEvent(_ context.Context, _ IssueRequest) error {
+func (b *blockingProcessorHandler) HandleLabelEvent(_ context.Context, _ LabelEvent) error {
 	b.mu.Lock()
-	b.issueActive++
-	b.issueCalls++
-	if b.issueActive > b.issuePeak {
-		b.issuePeak = b.issueActive
+	b.active++
+	b.calls++
+	if b.active > b.peak {
+		b.peak = b.active
 	}
 	b.mu.Unlock()
 	<-b.blockUntil
 	b.mu.Lock()
-	b.issueActive--
-	b.mu.Unlock()
-	return nil
-}
-
-func (b *blockingProcessorHandler) HandlePullRequestLabelEvent(_ context.Context, _ PRRequest) error {
-	b.mu.Lock()
-	b.prActive++
-	b.prCalls++
-	if b.prActive > b.prPeak {
-		b.prPeak = b.prActive
-	}
-	b.mu.Unlock()
-	<-b.blockUntil
-	b.mu.Lock()
-	b.prActive--
+	b.active--
 	b.mu.Unlock()
 	return nil
 }
 
 // TestProcessorWorkerPoolAllowsConcurrentProcessing verifies that with
-// workers=N, up to N issue events and N PR events can be handled concurrently
-// rather than being serialized through a single goroutine.
+// workers=N, up to N events can be handled concurrently rather than being
+// serialized through a single goroutine.
 func TestProcessorWorkerPoolAllowsConcurrentProcessing(t *testing.T) {
 	t.Parallel()
 	const workers = 3
 	const events = workers // saturate the pool
 
-	dataChannels := NewDataChannels(events*2, events*2)
+	dataChannels := NewDataChannels(events * 2)
 	handler := newBlockingProcessorHandler()
 	processor := NewProcessor(dataChannels, handler, workers, 5*time.Second, zerolog.Nop())
 
@@ -186,19 +160,12 @@ func TestProcessorWorkerPoolAllowsConcurrentProcessing(t *testing.T) {
 
 	// Push enough events to fill all workers.
 	for i := range events {
-		if err := dataChannels.PushIssue(context.Background(), IssueRequest{
-			Repo:  RepoRef{FullName: "owner/repo"},
-			Issue: Issue{Number: i + 1},
-			Label: "ai:refine",
+		if err := dataChannels.PushEvent(context.Background(), LabelEvent{
+			Repo:   RepoRef{FullName: "owner/repo"},
+			Number: i + 1,
+			Label:  "ai:refine",
 		}); err != nil {
-			t.Fatalf("push issue %d: %v", i, err)
-		}
-		if err := dataChannels.PushPR(context.Background(), PRRequest{
-			Repo:  RepoRef{FullName: "owner/repo"},
-			PR:    PullRequest{Number: i + 1},
-			Label: "ai:review",
-		}); err != nil {
-			t.Fatalf("push pr %d: %v", i, err)
+			t.Fatalf("push event %d: %v", i, err)
 		}
 	}
 
@@ -206,24 +173,20 @@ func TestProcessorWorkerPoolAllowsConcurrentProcessing(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		handler.mu.Lock()
-		ic, pc := handler.issueCalls, handler.prCalls
+		c := handler.calls
 		handler.mu.Unlock()
-		if ic >= workers && pc >= workers {
+		if c >= workers {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 
 	handler.mu.Lock()
-	issuePeak := handler.issuePeak
-	prPeak := handler.prPeak
+	peak := handler.peak
 	handler.mu.Unlock()
 
-	if issuePeak < workers {
-		t.Errorf("expected issue peak concurrency >= %d, got %d", workers, issuePeak)
-	}
-	if prPeak < workers {
-		t.Errorf("expected PR peak concurrency >= %d, got %d", workers, prPeak)
+	if peak < workers {
+		t.Errorf("expected peak concurrency >= %d, got %d", workers, peak)
 	}
 
 	// Release all blocked handlers and let the processor drain.

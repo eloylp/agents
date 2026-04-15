@@ -9,8 +9,7 @@ import (
 )
 
 type processorHandler interface {
-	HandleIssueLabelEvent(context.Context, IssueRequest) error
-	HandlePullRequestLabelEvent(context.Context, PRRequest) error
+	HandleLabelEvent(context.Context, LabelEvent) error
 }
 
 type Processor struct {
@@ -37,15 +36,14 @@ func NewProcessor(channels *DataChannels, handler processorHandler, workers int,
 	}
 }
 
-// Run starts workers and blocks until ctx is cancelled and queues are drained
+// Run starts workers and blocks until ctx is cancelled and the queue is drained
 // (or the shutdown timeout elapses).
 func (p *Processor) Run(ctx context.Context) error {
-	p.logger.Info().Int("workers_per_type", p.workers).Msg("starting workflow processor")
+	p.logger.Info().Int("workers", p.workers).Msg("starting workflow processor")
 	var wg sync.WaitGroup
-	wg.Add(p.workers * 2)
+	wg.Add(p.workers)
 	for range p.workers {
-		go p.runIssueWorker(ctx, &wg)
-		go p.runPRWorker(ctx, &wg)
+		go p.runWorker(ctx, &wg)
 	}
 
 	<-ctx.Done()
@@ -68,20 +66,11 @@ func (p *Processor) Run(ctx context.Context) error {
 	return nil
 }
 
-func (p *Processor) runIssueWorker(ctx context.Context, wg *sync.WaitGroup) {
+func (p *Processor) runWorker(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
-	for req := range p.channels.IssueChan() {
-		if err := p.handler.HandleIssueLabelEvent(p.processingCtx(ctx), req); err != nil {
-			p.logger.Error().Err(err).Str("repo", req.Repo.FullName).Int("issue_number", req.Issue.Number).Msg("failed to process issue webhook")
-		}
-	}
-}
-
-func (p *Processor) runPRWorker(ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for req := range p.channels.PRChan() {
-		if err := p.handler.HandlePullRequestLabelEvent(p.processingCtx(ctx), req); err != nil {
-			p.logger.Error().Err(err).Str("repo", req.Repo.FullName).Int("pr_number", req.PR.Number).Msg("failed to process pr webhook")
+	for ev := range p.channels.EventChan() {
+		if err := p.handler.HandleLabelEvent(p.processingCtx(ctx), ev); err != nil {
+			p.logger.Error().Err(err).Str("repo", ev.Repo.FullName).Int("number", ev.Number).Msg("failed to process webhook event")
 		}
 	}
 }
