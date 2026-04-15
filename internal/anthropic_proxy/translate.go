@@ -70,16 +70,38 @@ func translateAnthropicMessage(msg AnthropicMessage) ([]ChatMessage, error) {
 	}
 }
 
-// translateUserMessage handles role:user Anthropic messages. Tool result blocks
-// are emitted as role:tool messages; remaining text is emitted as role:user.
+// translateUserMessage handles role:user Anthropic messages. Blocks are
+// emitted in their original order: text blocks become role:user messages
+// (consecutive text blocks are merged) and tool_result blocks become
+// role:tool messages, preserving mixed-content ordering.
 func translateUserMessage(text string, blocks []ContentBlock) ([]ChatMessage, error) {
+	// Plain string content (no block array) — emit as-is.
+	if len(blocks) == 0 {
+		if text != "" {
+			return []ChatMessage{{Role: "user", Content: text}}, nil
+		}
+		return []ChatMessage{{Role: "user"}}, nil
+	}
+
 	var out []ChatMessage
+	var pending string
+
+	flushText := func() {
+		if pending != "" {
+			out = append(out, ChatMessage{Role: "user", Content: pending})
+			pending = ""
+		}
+	}
 
 	for _, b := range blocks {
 		switch b.Type {
 		case "text":
-			// accumulated below
+			if pending != "" {
+				pending += "\n"
+			}
+			pending += b.Text
 		case "tool_result":
+			flushText()
 			content, err := toolResultContent(b.Content)
 			if err != nil {
 				return nil, fmt.Errorf("tool_result content: %w", err)
@@ -92,11 +114,11 @@ func translateUserMessage(text string, blocks []ContentBlock) ([]ChatMessage, er
 		}
 	}
 
-	if text != "" {
-		out = append([]ChatMessage{{Role: "user", Content: text}}, out...)
-	} else if len(out) == 0 {
+	flushText()
+
+	if len(out) == 0 {
 		// No text, no tool results — emit an empty user message to preserve turn order.
-		out = append(out, ChatMessage{Role: "user"})
+		return []ChatMessage{{Role: "user"}}, nil
 	}
 
 	return out, nil

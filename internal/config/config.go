@@ -498,6 +498,12 @@ func (c *Config) validateProxy() error {
 	if p.Upstream.TimeoutSeconds <= 0 {
 		return fmt.Errorf("config: proxy.upstream.timeout_seconds must be positive, got %d", p.Upstream.TimeoutSeconds)
 	}
+	// When an api_key_env is configured, the variable must resolve at startup so
+	// that a missing or mis-spelled env var fails fast rather than producing
+	// silent 401/403 errors against a protected upstream at request time.
+	if p.Upstream.APIKeyEnv != "" && p.Upstream.APIKey == "" {
+		return fmt.Errorf("config: proxy.upstream.api_key_env %q is set but the environment variable is empty or unset", p.Upstream.APIKeyEnv)
+	}
 	return nil
 }
 

@@ -187,6 +187,44 @@ func TestToOpenAI_MultiTurnWithTools(t *testing.T) {
 	}
 }
 
+func TestToOpenAI_MixedUserTurnOrder(t *testing.T) {
+	t.Parallel()
+	// A user turn with [tool_result, text] must produce [role:tool, role:user],
+	// not [role:user, role:tool] as the old "prepend text" logic did.
+	req := MessagesRequest{
+		MaxTokens: 100,
+		Messages: []AnthropicMessage{
+			{
+				Role: "user",
+				Content: jsonBlocks([]ContentBlock{
+					{Type: "tool_result", ToolUseID: "tc_1", Content: json.RawMessage(`"result text"`)},
+					{Type: "text", Text: "Follow-up question."},
+				}),
+			},
+		},
+	}
+
+	got, err := ToOpenAI(req, "qwen")
+	if err != nil {
+		t.Fatalf("ToOpenAI: %v", err)
+	}
+	if len(got.Messages) != 2 {
+		t.Fatalf("message count: got %d, want 2: %+v", len(got.Messages), got.Messages)
+	}
+	if got.Messages[0].Role != "tool" {
+		t.Errorf("[0] role: got %q, want %q", got.Messages[0].Role, "tool")
+	}
+	if got.Messages[0].ToolCallID != "tc_1" {
+		t.Errorf("[0] tool_call_id: got %q, want %q", got.Messages[0].ToolCallID, "tc_1")
+	}
+	if got.Messages[1].Role != "user" {
+		t.Errorf("[1] role: got %q, want %q", got.Messages[1].Role, "user")
+	}
+	if got.Messages[1].Content != "Follow-up question." {
+		t.Errorf("[1] content: got %q", got.Messages[1].Content)
+	}
+}
+
 func TestToOpenAI_ToolDefinitions(t *testing.T) {
 	t.Parallel()
 	schema := json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`)

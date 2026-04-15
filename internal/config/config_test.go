@@ -739,6 +739,16 @@ func TestProxyValidationErrors(t *testing.T) {
       timeout_seconds: -1`,
 			wantErrMsg: "config: proxy.upstream.timeout_seconds must be positive, got -1",
 		},
+		{
+			name: "api_key_env set but variable unset",
+			block: `
+    enabled: true
+    upstream:
+      url: http://localhost:8001/v1
+      model: qwen
+      api_key_env: MISSING_LLM_KEY`,
+			wantErrMsg: `config: proxy.upstream.api_key_env "MISSING_LLM_KEY" is set but the environment variable is empty or unset`,
+		},
 	}
 
 	for _, tc := range tests {
