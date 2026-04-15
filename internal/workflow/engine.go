@@ -296,14 +296,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) 
 	// Build the roster of peer agents for this repo.
 	roster := e.buildRoster(ev.Repo.FullName, agent.Name)
 
-	// For dispatch events, use the event payload as the prompt payload but
-	// exclude internal dispatch fields from what the agent sees.
 	promptPayload := ev.Payload
-	if ev.Kind == "agent.dispatch" {
-		// The agent sees who invoked it and why via dedicated context fields,
-		// not via raw payload keys.
-		promptPayload = nil
-	}
 
 	prompt, err := ai.RenderAgentPrompt(agent, e.cfg.Skills, ai.PromptContext{
 		Repo:          ev.Repo.FullName,

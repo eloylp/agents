@@ -258,6 +258,75 @@ func TestHandleEventLabelBindingDoesNotMatchNonLabeledKind(t *testing.T) {
 	}
 }
 
+func TestEngineDispatchEventPayloadPropagatedToPrompt(t *testing.T) {
+	t.Parallel()
+	// The engine must pass the full dispatch event payload to the prompt renderer
+	// so that the target agent sees target_agent, reason, root_event_id, etc.
+	var capturedPrompt string
+	runner := &stubRunner{
+		runFn: func(req ai.Request) error {
+			capturedPrompt = req.Prompt
+			return nil
+		},
+	}
+	cfg := &config.Config{
+		Daemon: config.DaemonConfig{
+			Processor: config.ProcessorConfig{
+				MaxConcurrentAgents: 4,
+				Dispatch:            config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300},
+			},
+			AIBackends: map[string]config.AIBackendConfig{
+				"claude": {Command: "claude"},
+			},
+		},
+		Skills: map[string]config.SkillDef{},
+		Agents: []config.AgentDef{
+			{Name: "coder", Backend: "claude", Prompt: "Write code.", AllowDispatch: true},
+			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review code.", AllowDispatch: true},
+		},
+		Repos: []config.RepoDef{
+			{
+				Name:    "owner/repo",
+				Enabled: true,
+				Use: []config.Binding{
+					{Agent: "coder", Labels: []string{"ai:code"}},
+					{Agent: "pr-reviewer", Labels: []string{"ai:review"}},
+				},
+			},
+		},
+	}
+	q := &fakeQueue{}
+	e := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, q, zerolog.Nop())
+
+	ev := Event{
+		ID:     "root-abc",
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "agent.dispatch",
+		Number: 7,
+		Actor:  "coder",
+		Payload: map[string]any{
+			"target_agent":   "pr-reviewer",
+			"reason":         "please review",
+			"root_event_id":  "root-abc",
+			"dispatch_depth": 1,
+			"invoked_by":     "coder",
+		},
+	}
+
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if runner.callCount() != 1 {
+		t.Fatalf("expected 1 run, got %d", runner.callCount())
+	}
+	// The payload fields must appear in the rendered prompt.
+	for _, want := range []string{"target_agent", "please review", "root-abc"} {
+		if !strings.Contains(capturedPrompt, want) {
+			t.Errorf("prompt missing %q\nfull prompt:\n%s", want, capturedPrompt)
+		}
+	}
+}
+
 func TestHandleEventPRReviewEventBindingRuns(t *testing.T) {
 	t.Parallel()
 	e, runner := newTestEngine(func(c *config.Config) {

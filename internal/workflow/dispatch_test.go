@@ -462,3 +462,58 @@ func TestDispatcherHandlesQueueError(t *testing.T) {
 		t.Errorf("enqueued should be 0 on queue error, got %d", d.Stats().Enqueued)
 	}
 }
+
+func TestDispatcherOmittedNumberFallsBackToEventNumber(t *testing.T) {
+	t.Parallel()
+	q := &fakeQueue{}
+	d := testDispatcher(q)
+
+	// req.Number == 0 (agent omitted number field) — must fall back to ev.Number.
+	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 0, Reason: "review"}}
+	ev := testEvent("owner/repo", 42)
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), ev, "root-1", 0, reqs)
+
+	events := q.popped()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 enqueued event, got %d", len(events))
+	}
+	if events[0].Number != 42 {
+		t.Errorf("dispatch event number: got %d, want 42 (fallback from ev.Number)", events[0].Number)
+	}
+}
+
+func TestDispatcherDedupUsesEventNumberWhenRequestNumberOmitted(t *testing.T) {
+	t.Parallel()
+	q := &fakeQueue{}
+	d := testDispatcher(q)
+
+	// Two dispatch requests from different event numbers, both with omitted req.Number.
+	// They must NOT collapse into the same dedup key.
+	req := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 0, Reason: "review"}}
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 10), "root-1", 0, req)
+	d.dedup = NewDispatchDedupStore(300) // reset dedup to test second dispatch independently
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 20), "root-2", 0, req)
+
+	events := q.popped()
+	if len(events) != 2 {
+		t.Fatalf("expected 2 enqueued events (distinct numbers), got %d", len(events))
+	}
+	if events[0].Number != 10 {
+		t.Errorf("first event number: got %d, want 10", events[0].Number)
+	}
+	if events[1].Number != 20 {
+		t.Errorf("second event number: got %d, want 20", events[1].Number)
+	}
+}
+
+func TestDispatchDedupStoreStartSmallTTLDoesNotPanic(t *testing.T) {
+	t.Parallel()
+	// TTL values of 1, 2, 3 seconds previously could produce a very small
+	// ticker interval; ensure Start does not panic for these values.
+	for _, ttl := range []int{1, 2, 3} {
+		s := NewDispatchDedupStore(ttl)
+		ctx, cancel := context.WithCancel(context.Background())
+		s.Start(ctx) // must not panic
+		cancel()
+	}
+}

@@ -731,6 +731,103 @@ func TestDispatchValidConfigAccepted(t *testing.T) {
 	}
 }
 
+func TestDispatchConfigValidationRejectsNonPositiveValues(t *testing.T) {
+	cases := []struct {
+		name   string
+		yaml   string
+		errMsg string
+	}{
+		{
+			name: "negative max_depth",
+			yaml: `
+daemon:
+  http:
+    webhook_secret_env: TEST_SECRET
+  ai_backends:
+    claude:
+      command: claude
+  processor:
+    dispatch:
+      max_depth: -1
+agents:
+  - name: reviewer
+    backend: claude
+    prompt: "You review PRs."
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+      - agent: reviewer
+        labels: ["ai:review"]
+`,
+			errMsg: "max_depth",
+		},
+		{
+			name: "negative max_fanout",
+			yaml: `
+daemon:
+  http:
+    webhook_secret_env: TEST_SECRET
+  ai_backends:
+    claude:
+      command: claude
+  processor:
+    dispatch:
+      max_fanout: -2
+agents:
+  - name: reviewer
+    backend: claude
+    prompt: "You review PRs."
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+      - agent: reviewer
+        labels: ["ai:review"]
+`,
+			errMsg: "max_fanout",
+		},
+		{
+			name: "negative dedup_window_seconds",
+			yaml: `
+daemon:
+  http:
+    webhook_secret_env: TEST_SECRET
+  ai_backends:
+    claude:
+      command: claude
+  processor:
+    dispatch:
+      dedup_window_seconds: -5
+agents:
+  - name: reviewer
+    backend: claude
+    prompt: "You review PRs."
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+      - agent: reviewer
+        labels: ["ai:review"]
+`,
+			errMsg: "dedup_window_seconds",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TEST_SECRET", "s3cret")
+			path := writeConfig(t, tc.yaml)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.errMsg)
+			}
+			if !strings.Contains(err.Error(), tc.errMsg) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.errMsg)
+			}
+		})
+	}
+}
+
 func TestDispatchDefaultsApplied(t *testing.T) {
 	t.Setenv("TEST_SECRET", "s3cret")
 	path := writeConfig(t, minimalYAML(""))

@@ -541,6 +541,9 @@ func (c *Config) validate() error {
 	if err := c.validateProxy(); err != nil {
 		return err
 	}
+	if err := c.validateDispatchConfig(); err != nil {
+		return err
+	}
 	return c.validateRepos()
 }
 
@@ -566,6 +569,20 @@ func (c *Config) validateProxy() error {
 	// silent 401/403 errors against a protected upstream at request time.
 	if p.Upstream.APIKeyEnv != "" && p.Upstream.APIKey == "" {
 		return fmt.Errorf("config: proxy.upstream.api_key_env %q is set but the environment variable is empty or unset", p.Upstream.APIKeyEnv)
+	}
+	return nil
+}
+
+func (c *Config) validateDispatchConfig() error {
+	d := c.Daemon.Processor.Dispatch
+	if d.MaxDepth <= 0 {
+		return fmt.Errorf("config: dispatch max_depth must be positive, got %d", d.MaxDepth)
+	}
+	if d.MaxFanout <= 0 {
+		return fmt.Errorf("config: dispatch max_fanout must be positive, got %d", d.MaxFanout)
+	}
+	if d.DedupWindowSeconds <= 0 {
+		return fmt.Errorf("config: dispatch dedup_window_seconds must be positive, got %d", d.DedupWindowSeconds)
 	}
 	return nil
 }

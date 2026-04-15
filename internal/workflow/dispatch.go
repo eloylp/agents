@@ -82,7 +82,11 @@ func (s *DispatchDedupStore) Start(ctx context.Context) {
 		return
 	}
 	go func() {
-		ticker := time.NewTicker(s.ttl / 4)
+		tickInterval := s.ttl / 4
+		if tickInterval < time.Second {
+			tickInterval = time.Second
+		}
+		ticker := time.NewTicker(tickInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -158,11 +162,19 @@ func (d *Dispatcher) ProcessDispatches(
 		req.Agent = sanitizeName(req.Agent)
 		d.counters.requestedTotal.Add(1)
 
+		// When the agent omits number (zero value), fall back to the originating
+		// event's number so the target receives the correct item context and
+		// unrelated omitted-number dispatches don't collapse under the same dedup key.
+		number := req.Number
+		if number == 0 {
+			number = ev.Number
+		}
+
 		logBase := d.logger.With().
 			Str("originator", originator.Name).
 			Str("target", req.Agent).
 			Str("repo", ev.Repo.FullName).
-			Int("number", req.Number).
+			Int("number", number).
 			Logger()
 
 		// Self-dispatch check (belt-and-braces; config validation already forbids it).
@@ -203,24 +215,24 @@ func (d *Dispatcher) ProcessDispatches(
 		}
 
 		// Dedup check.
-		if d.dedup.SeenOrAdd(req.Agent, ev.Repo.FullName, req.Number, time.Now()) {
+		if d.dedup.SeenOrAdd(req.Agent, ev.Repo.FullName, number, time.Now()) {
 			logBase.Debug().Msg("dispatch deduped: already seen within window")
 			d.counters.deduped.Add(1)
 			continue
 		}
 
 		dispatchEv := Event{
-			ID:   rootEventID,
-			Repo: ev.Repo,
-			Kind: "agent.dispatch",
-			Number: req.Number,
-			Actor: originator.Name,
+			ID:     rootEventID,
+			Repo:   ev.Repo,
+			Kind:   "agent.dispatch",
+			Number: number,
+			Actor:  originator.Name,
 			Payload: map[string]any{
-				"target_agent":    req.Agent,
-				"reason":          req.Reason,
-				"root_event_id":   rootEventID,
-				"dispatch_depth":  newDepth,
-				"invoked_by":      originator.Name,
+				"target_agent":   req.Agent,
+				"reason":         req.Reason,
+				"root_event_id":  rootEventID,
+				"dispatch_depth": newDepth,
+				"invoked_by":     originator.Name,
 			},
 		}
 
