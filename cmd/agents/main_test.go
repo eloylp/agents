@@ -143,7 +143,7 @@ func TestDrainDispatchesPropagatesHandleEventError(t *testing.T) {
 
 // TestDrainDispatchesDrainsChainedEvents verifies that events enqueued during
 // a HandleEvent call (simulating chained dispatch) are also drained. The buffer
-// is sized to MaxFanout*MaxDepth so no events are dropped mid-chain.
+// is sized to MaxFanout^MaxDepth so no events are dropped mid-chain.
 func TestDrainDispatchesDrainsChainedEvents(t *testing.T) {
 	t.Parallel()
 

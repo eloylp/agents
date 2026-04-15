@@ -67,10 +67,16 @@ func run() error {
 			return fmt.Errorf("--repo is required when using --run-agent")
 		}
 		// Size the buffer to hold every dispatch that could ever be in flight at
-		// once: MaxFanout * MaxDepth.  This prevents PushEvent from dropping events
-		// between TriggerAgent's return and drainDispatches starting to consume.
+		// once.  drainDispatches processes events serially and each handled event
+		// can enqueue up to MaxFanout children; at the deepest level the queue can
+		// therefore hold MaxFanout^MaxDepth events simultaneously.  Using a linear
+		// MaxFanout*MaxDepth estimate is too small for chained/fanout chains and
+		// would cause PushEvent to silently drop later hops.
 		d := cfg.Daemon.Processor.Dispatch
-		runBuf := d.MaxFanout * d.MaxDepth
+		runBuf := 1
+		for i := 0; i < d.MaxDepth; i++ {
+			runBuf *= d.MaxFanout
+		}
 		if runBuf < cfg.Daemon.Processor.EventQueueBuffer {
 			runBuf = cfg.Daemon.Processor.EventQueueBuffer
 		}
