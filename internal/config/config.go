@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -537,12 +538,7 @@ func (c *Config) validateRepos() error {
 }
 
 func isValidBackendName(name string) bool {
-	for _, v := range validAIBackendNames {
-		if v == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(validAIBackendNames, name)
 }
 
 func setDefault(dst *string, def string) {
