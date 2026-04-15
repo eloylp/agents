@@ -738,3 +738,77 @@ func TestSchedulerAllowPRsPromptPrefixing(t *testing.T) {
 		})
 	}
 }
+
+// TestSchedulerCronMarkBlocksDispatchDuringInFlightRun verifies that when an
+// autonomous run is in progress, a dispatch arriving for the same (agent, repo,
+// 0) context is suppressed by the cron-namespace mark that is written before
+// runner.Run is called. Without a pre-run mark, the dispatch would slip through
+// before the mark is written (after runner.Run) and enqueue a concurrent run.
+func TestSchedulerCronMarkBlocksDispatchDuringInFlightRun(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseCfg(func(c *config.Config) {
+		c.Agents = []config.AgentDef{
+			{
+				Name:          "reviewer",
+				Backend:       "claude",
+				Prompt:        "review",
+				AllowDispatch: true,
+			},
+			{
+				Name:        "notifier",
+				Backend:     "claude",
+				Prompt:      "notify",
+				CanDispatch: []string{"reviewer"},
+			},
+		}
+		c.Repos[0].Use = []config.Binding{
+			{Agent: "reviewer", Cron: "* * * * *"},
+			{Agent: "notifier", Cron: "0 0 * * *"},
+		}
+	})
+
+	ready := make(chan struct{}, 1)
+	block := make(chan struct{})
+	runner := &blockingRunner{ready: ready, block: block}
+	q := &fakeQueue{}
+	agentMap := map[string]config.AgentDef{
+		"reviewer": cfg.Agents[0],
+		"notifier": cfg.Agents[1],
+	}
+	dedup := workflow.NewDispatchDedupStore(300)
+	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
+	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
+
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithDispatcher(dispatcher)
+
+	// Start the autonomous run in the background; wait until the runner is
+	// actually inside Run (i.e., the cron mark should already be written).
+	done := make(chan error, 1)
+	go func() {
+		done <- s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
+	}()
+	<-ready // blockingRunner signals here, so the cron mark is in place
+
+	// Simulate notifier dispatching to reviewer while the run is in progress.
+	originator := agentMap["notifier"]
+	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
+	_ = dispatcher.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, []ai.DispatchRequest{
+		{Agent: "reviewer", Reason: "arrived during in-flight run"},
+	})
+
+	// Unblock the runner and wait for TriggerAgent to return.
+	close(block)
+	if err := <-done; err != nil {
+		t.Fatalf("TriggerAgent: %v", err)
+	}
+
+	// The dispatch must have been suppressed (deduped), so no event was enqueued.
+	if len(q.popped()) != 0 {
+		t.Errorf("expected dispatch suppressed by in-flight cron mark, but %d event(s) were enqueued", len(q.popped()))
+	}
+}

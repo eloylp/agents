@@ -158,6 +158,16 @@ func (s *DispatchDedupStore) MarkCronRun(agent, repo string, number int, now tim
 	s.entries[key] = now.Add(s.ttl)
 }
 
+// RemoveCronMark deletes the cron-namespace entry for (agent, repo, number).
+// It is used to roll back a MarkCronRun call when the corresponding run fails,
+// so that a transient error does not suppress dispatches for the full TTL.
+func (s *DispatchDedupStore) RemoveCronMark(agent, repo string, number int) {
+	key := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.entries, key)
+}
+
 // SeenCronRun returns true if a cron or manual run has been recorded for
 // (agent, repo, number) within the TTL window. Used by ProcessDispatches
 // to suppress dispatches targeting an agent that already ran (or is
@@ -327,17 +337,25 @@ func (d *Dispatcher) DispatchAlreadyClaimed(agentName, repo string, now time.Tim
 }
 
 // MarkAutonomousRun writes a cron-namespace activity mark for (agentName,
-// repo, 0) that persists for the full dedup_window_seconds. It should be
-// called only once the autonomous run has been confirmed to proceed (i.e.,
-// after backend and runner resolution succeed), so that transient config
-// errors do not leave a stale mark that suppresses dispatches for the
-// entire dedup window.
+// repo, 0) that persists for the full dedup_window_seconds. It must be
+// called before the run starts (after backend and runner resolution succeed)
+// so that dispatches arriving during the in-flight run are suppressed. If the
+// run fails, call RollbackAutonomousRun to remove the mark so that future
+// dispatches are not spuriously suppressed for the full dedup window.
 //
 // The cron mark lives in a different key namespace from dispatch entries,
 // so repeated cron runs are never blocked by this mark — only dispatches
 // that share the same item context (number=0, the autonomous context) are.
 func (d *Dispatcher) MarkAutonomousRun(agentName, repo string, now time.Time) {
 	d.dedup.MarkCronRun(agentName, repo, 0, now)
+}
+
+// RollbackAutonomousRun removes the cron-namespace mark written by
+// MarkAutonomousRun. It must be called when a run fails so that the stale
+// mark does not suppress autonomous-context dispatches for the full
+// dedup_window_seconds.
+func (d *Dispatcher) RollbackAutonomousRun(agentName, repo string) {
+	d.dedup.RemoveCronMark(agentName, repo, 0)
 }
 
 // Stats returns a snapshot of the current dispatch counters.

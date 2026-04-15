@@ -266,9 +266,17 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		return fmt.Errorf("no runner for backend %q", backend)
 	}
 
+	// Write the cron mark before the run starts so that any dispatch arriving
+	// during the in-flight run sees it and is suppressed (dedup). If the run
+	// fails we roll the mark back so the stale entry does not suppress future
+	// dispatches for the full dedup_window_seconds.
+	if s.dispatcher != nil {
+		s.dispatcher.MarkAutonomousRun(agent.Name, repo, time.Now())
+	}
+
 	logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Str("backend", backend).Logger()
 	roster := s.buildRoster(repo, agent.Name)
-	return s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
+	err := s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
 		prompt, err := ai.RenderAgentPrompt(agent, s.cfg.Skills, ai.PromptContext{
 			Repo:       repo,
 			Backend:    backend,
@@ -292,14 +300,6 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 			return fmt.Errorf("agent run: %w", err)
 		}
 		logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Int("dispatch_requests", len(resp.Dispatch)).Msg("autonomous pass completed")
-		// Write the cron-namespace mark only after the run has definitely
-		// completed. Moving the mark here (post-runner.Run) prevents
-		// transient failures in memories.WithLock, prompt rendering, or the
-		// runner itself from leaving a stale mark that suppresses autonomous-
-		// context dispatches for the full dedup_window_seconds.
-		if s.dispatcher != nil {
-			s.dispatcher.MarkAutonomousRun(agent.Name, repo, time.Now())
-		}
 		if s.dispatcher != nil && len(resp.Dispatch) > 0 {
 			// Synthesize a minimal event to carry repo context into the dispatcher.
 			// Autonomous runs have no originating GitHub event, so Kind="autonomous"
@@ -320,6 +320,12 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		}
 		return nil
 	})
+	if err != nil && s.dispatcher != nil {
+		// Roll back the cron mark so the failed run does not suppress
+		// autonomous-context dispatches for the full dedup_window_seconds.
+		s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
+	}
+	return err
 }
 
 // buildRoster returns the roster of peer agents for the given repo, excluding
