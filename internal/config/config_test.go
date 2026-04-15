@@ -231,20 +231,47 @@ repos:
 	}
 }
 
-func TestLoadRejectsBindingWithMixedLabelsAndEvents(t *testing.T) {
+func TestLoadRejectsBindingWithMixedTriggers(t *testing.T) {
 	t.Setenv("TEST_SECRET", "s3cret")
-	repo := `
+	cases := []struct {
+		name string
+		use  string
+	}{
+		{
+			name: "labels and events",
+			use: `      - agent: reviewer
+        labels: ["ai:review"]
+        events: ["issues.opened"]`,
+		},
+		{
+			name: "cron and events",
+			use: `      - agent: reviewer
+        cron: "0 * * * *"
+        events: ["issues.opened"]`,
+		},
+		{
+			name: "cron and labels",
+			use: `      - agent: reviewer
+        cron: "0 * * * *"
+        labels: ["ai:review"]`,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			repo := fmt.Sprintf(`
 repos:
   - name: "owner/repo"
     enabled: true
     use:
-      - agent: reviewer
-        labels: ["ai:review"]
-        events: ["issues.opened"]
-`
-	_, err := Load(writeConfig(t, minimalYAML(repo)))
-	if err == nil || !strings.Contains(err.Error(), "mixes labels and events") {
-		t.Fatalf("expected mixed-trigger error, got %v", err)
+%s
+`, tc.use)
+			_, err := Load(writeConfig(t, minimalYAML(repo)))
+			if err == nil || !strings.Contains(err.Error(), "mixes multiple trigger types") {
+				t.Fatalf("expected mixed-trigger error, got %v", err)
+			}
+		})
 	}
 }
 

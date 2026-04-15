@@ -551,8 +551,18 @@ func (c *Config) validateRepos() error {
 			if !b.IsCron() && !b.IsLabel() && len(b.Events) == 0 {
 				return fmt.Errorf("config: repo %q: binding for agent %q has no trigger (set cron, labels, or events)", r.Name, b.Agent)
 			}
-			if b.IsLabel() && b.IsEvent() {
-				return fmt.Errorf("config: repo %q: binding for agent %q mixes labels and events triggers; use separate bindings", r.Name, b.Agent)
+			triggerCount := 0
+			if b.IsLabel() {
+				triggerCount++
+			}
+			if b.IsEvent() {
+				triggerCount++
+			}
+			if b.IsCron() {
+				triggerCount++
+			}
+			if triggerCount > 1 {
+				return fmt.Errorf("config: repo %q: binding for agent %q mixes multiple trigger types (labels, events, cron); each binding must use exactly one trigger", r.Name, b.Agent)
 			}
 			for _, kind := range b.Events {
 				if _, ok := validEventKinds[kind]; !ok {
