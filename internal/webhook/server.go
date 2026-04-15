@@ -203,6 +203,8 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		s.handleIssueCommentEvent(r.Context(), w, body, deliveryID)
 	case "pull_request_review":
 		s.handlePullRequestReviewEvent(r.Context(), w, body, deliveryID)
+	case "pull_request_review_comment":
+		s.handlePullRequestReviewCommentEvent(r.Context(), w, body, deliveryID)
 	case "push":
 		s.handlePushEvent(r.Context(), w, body, deliveryID)
 	default:
@@ -445,6 +447,43 @@ func (s *Server) handlePullRequestReviewEvent(ctx context.Context, w http.Respon
 		Payload: map[string]any{
 			"state": payload.Review.State,
 			"body":  payload.Review.Body,
+		},
+	}
+	s.enqueue(ctx, w, ev, deliveryID)
+}
+
+// handlePullRequestReviewCommentEvent handles X-GitHub-Event: pull_request_review_comment.
+// Only "created" actions are forwarded as "pull_request_review_comment.created".
+func (s *Server) handlePullRequestReviewCommentEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
+	var payload struct {
+		Action      string             `json:"action"`
+		Comment     webhookComment     `json:"comment"`
+		PullRequest webhookPullRequest `json:"pull_request"`
+		Repository  webhookRepository  `json:"repository"`
+		Sender      webhookSender      `json:"sender"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	if payload.Action != "created" {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
+	if !ok || !repo.Enabled {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	ev := workflow.Event{
+		Repo:   workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+		Kind:   "pull_request_review_comment.created",
+		Number: payload.PullRequest.Number,
+		Actor:  payload.Sender.Login,
+		Payload: map[string]any{
+			"body": payload.Comment.Body,
 		},
 	}
 	s.enqueue(ctx, w, ev, deliveryID)

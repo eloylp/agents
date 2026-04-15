@@ -41,8 +41,9 @@ var validEventKinds = map[string]struct{}{
 	"pull_request.ready_for_review": {},
 	"pull_request.closed":         {},
 	"issue_comment.created":       {},
-	"pull_request_review.submitted": {},
-	"push":                        {},
+	"pull_request_review.submitted":         {},
+	"pull_request_review_comment.created":   {},
+	"push":                                  {},
 }
 
 const (

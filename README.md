@@ -274,6 +274,7 @@ The `events:` field accepts any of the following GitHub event kinds. Each event 
 | `pull_request.closed` | PR closed or merged | `title`, `draft`, `merged` (`true` when PR was merged, `false` when closed without merge) |
 | `issue_comment.created` | Comment posted on an issue or PR | `body` |
 | `pull_request_review.submitted` | Formal GitHub review submitted | `state`, `body` |
+| `pull_request_review_comment.created` | Inline review comment posted on a PR diff | `body` |
 | `push` | Commit pushed to a branch | `ref` (e.g. `refs/heads/main`), `head_sha` |
 
 > **`push` scope:** only branch pushes fire the event. Tag pushes, branch deletions, and pushes to non-`refs/heads/` refs are silently dropped. The agent receives the branch ref and the resulting head SHA — there is no PR number in the context.
