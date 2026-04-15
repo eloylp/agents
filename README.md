@@ -94,7 +94,7 @@ Rules:
 
 - Labels are case-insensitive and trimmed. Only `labeled` actions fire (not `unlabeled`).
 - The trigger label comes from the webhook event payload, not the issue/PR's current label set.
-- Draft PRs skip label-triggered (`labels:`) agents; they may still receive other event types.
+- Draft PRs skip `pull_request.labeled` for both `labels:` and `events:` bindings; they may still receive other event kinds such as `pull_request.opened` and `pull_request.synchronize`.
 - `events:` bindings fire on the exact event kinds listed, with no additional filtering.
 - Multiple bindings matching the same event fan out in parallel (capped by `daemon.processor.max_concurrent_agents`).
 
@@ -262,12 +262,12 @@ The `events:` field accepts any of the following GitHub event kinds. Each event 
 
 | Kind | When | Payload fields |
 |------|------|----------------|
-| `issues.labeled` | Issue receives a label (also via `labels:` for AI-prefixed labels) | `label` |
+| `issues.labeled` | Issue receives any label | `label` |
 | `issues.opened` | Issue opened | `title`, `body` |
 | `issues.edited` | Issue body or title edited | `title`, `body` |
 | `issues.reopened` | Issue reopened | `title`, `body` |
 | `issues.closed` | Issue closed | `title`, `body` |
-| `pull_request.labeled` | PR receives a label (also via `labels:` for AI-prefixed labels) | `label` |
+| `pull_request.labeled` | PR receives any label (draft PRs are skipped) | `label` |
 | `pull_request.opened` | PR opened | `title`, `draft` |
 | `pull_request.synchronize` | New commit pushed to PR branch | `title`, `draft` |
 | `pull_request.ready_for_review` | Draft PR marked ready | `title`, `draft` |
@@ -281,7 +281,7 @@ The `events:` field accepts any of the following GitHub event kinds. Each event 
 Additional rules:
 
 - `issues.*` events that originate from a PR-backed GitHub issue are dropped; the corresponding `pull_request.*` event covers them instead.
-- Draft PRs fire `pull_request.opened` and `pull_request.synchronize` events but skip `labels:`-triggered agents. Use `events: ["pull_request.ready_for_review"]` to act when a draft is marked ready.
+- `pull_request.labeled` events on draft PRs are dropped at the webhook boundary. Use `events: ["pull_request.ready_for_review"]` to act when a draft is marked ready.
 - Unknown event kinds are rejected at config load time with a clear error listing the supported set.
 
 ### Environment variables

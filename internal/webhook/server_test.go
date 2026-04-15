@@ -163,17 +163,47 @@ func TestHandleIssuesOpenedEnqueuesEvent(t *testing.T) {
 	}
 }
 
-func TestHandleWebhookIgnoresNonAILabel(t *testing.T) {
+func TestHandleWebhookNonAILabelEnqueues(t *testing.T) {
 	t.Parallel()
 	server, dc := newTestServer(testCfg(nil))
 
-	body := `{"action":"labeled","label":{"name":"bug"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":2}}`
+	// Non-AI labels on pull_request.labeled must be enqueued so that
+	// event-based bindings (events: ["pull_request.labeled"]) can match them.
+	// Label-based bindings are still filtered by the engine via agentsForEvent.
+	body := `{"action":"labeled","label":{"name":"bug"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":2},"sender":{"login":"dev"}}`
 	rr := httptest.NewRecorder()
 	server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request", "delivery-non-ai", body))
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
 	}
-	assertNoEvent(t, dc)
+	ev := drainEvent(t, dc)
+	if ev.Kind != "pull_request.labeled" {
+		t.Errorf("kind: got %q, want %q", ev.Kind, "pull_request.labeled")
+	}
+	if ev.Payload["label"] != "bug" {
+		t.Errorf("payload label: got %v", ev.Payload["label"])
+	}
+}
+
+func TestHandleIssuesLabeledNonAILabelEnqueues(t *testing.T) {
+	t.Parallel()
+	server, dc := newTestServer(testCfg(nil))
+
+	// Non-AI labels on issues.labeled must be enqueued so that
+	// event-based bindings (events: ["issues.labeled"]) can match them.
+	body := `{"action":"labeled","label":{"name":"enhancement"},"repository":{"full_name":"owner/repo"},"issue":{"number":9},"sender":{"login":"dev"}}`
+	rr := httptest.NewRecorder()
+	server.handleGitHubWebhook(rr, webhookRequest(t, "issues", "delivery-issue-non-ai", body))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	}
+	ev := drainEvent(t, dc)
+	if ev.Kind != "issues.labeled" {
+		t.Errorf("kind: got %q, want %q", ev.Kind, "issues.labeled")
+	}
+	if ev.Payload["label"] != "enhancement" {
+		t.Errorf("payload label: got %v", ev.Payload["label"])
+	}
 }
 
 func TestHandleIssuesEventDropsPRLabeledAction(t *testing.T) {

@@ -285,10 +285,6 @@ func (s *Server) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, b
 
 	switch payload.Action {
 	case "labeled":
-		if !isAILabel(payload.Label.Name) {
-			w.WriteHeader(http.StatusAccepted)
-			return
-		}
 		ev := workflow.Event{
 			Repo:   repoRef,
 			Kind:   "issues.labeled",
@@ -342,10 +338,6 @@ func (s *Server) handlePullRequestEvent(ctx context.Context, w http.ResponseWrit
 
 	switch payload.Action {
 	case "labeled":
-		if !isAILabel(payload.Label.Name) {
-			w.WriteHeader(http.StatusAccepted)
-			return
-		}
 		if payload.PullRequest.Draft {
 			s.logger.Info().Str("repo", repo.Name).Int("number", payload.PullRequest.Number).Msg("pull request skipped, draft")
 			w.WriteHeader(http.StatusAccepted)
@@ -511,10 +503,6 @@ func (s *Server) enqueue(ctx context.Context, w http.ResponseWriter, ev workflow
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
-}
-
-func isAILabel(label string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(label)), "ai:")
 }
 
 // verifySignature checks the HMAC-SHA256 signature from X-Hub-Signature-256.
