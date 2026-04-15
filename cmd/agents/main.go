@@ -66,9 +66,24 @@ func run() error {
 		if *runRepo == "" {
 			return fmt.Errorf("--repo is required when using --run-agent")
 		}
+		// Size the buffer to hold every dispatch that could ever be in flight at
+		// once: MaxFanout * MaxDepth.  This prevents PushEvent from dropping events
+		// between TriggerAgent's return and drainDispatches starting to consume.
+		d := cfg.Daemon.Processor.Dispatch
+		runBuf := d.MaxFanout * d.MaxDepth
+		if runBuf < cfg.Daemon.Processor.EventQueueBuffer {
+			runBuf = cfg.Daemon.Processor.EventQueueBuffer
+		}
+		dataChannels := workflow.NewDataChannels(runBuf)
+		engine := workflow.NewEngine(cfg, runners, dataChannels, logger)
+		scheduler.WithDispatcher(engine.Dispatcher())
 		logger.Info().Str("agent", *runAgent).Str("repo", *runRepo).Msg("running autonomous agent on demand")
+		engine.StartDispatchDedup(ctx)
 		if err := scheduler.TriggerAgent(ctx, *runAgent, *runRepo); err != nil {
 			return fmt.Errorf("run agent: %w", err)
+		}
+		if err := drainDispatches(ctx, dataChannels, engine); err != nil {
+			return fmt.Errorf("drain dispatches: %w", err)
 		}
 		logger.Info().Str("agent", *runAgent).Str("repo", *runRepo).Msg("on-demand agent run completed")
 		return nil
@@ -96,6 +111,26 @@ func run() error {
 	}
 	logger.Info().Msg("agents daemon stopped")
 	return nil
+}
+
+// drainDispatches processes all agent.dispatch events that were enqueued during
+// a --run-agent pass. Each processed event may itself enqueue further dispatches
+// (chained dispatch), so the loop continues until the queue is empty. Any error
+// from HandleEvent is returned immediately so the caller can report a failed chain.
+func drainDispatches(ctx context.Context, dc *workflow.DataChannels, eng *workflow.Engine) error {
+	for {
+		select {
+		case ev, ok := <-dc.EventChan():
+			if !ok {
+				return nil
+			}
+			if err := eng.HandleEvent(ctx, ev); err != nil {
+				return fmt.Errorf("kind %s: %w", ev.Kind, err)
+			}
+		default:
+			return nil
+		}
+	}
 }
 
 func setupRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runner {

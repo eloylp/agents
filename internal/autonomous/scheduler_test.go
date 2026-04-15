@@ -351,6 +351,52 @@ func TestSchedulerDispatchesEnqueuedWhenDispatcherAttached(t *testing.T) {
 	}
 }
 
+func TestSchedulerAutonomousDispatchCarriesNonEmptyRootEventID(t *testing.T) {
+	t.Parallel()
+	cfg := dispatchCfgForTest()
+
+	runner := &dispatchingRunner{
+		dispatches: []ai.DispatchRequest{
+			{Agent: "notifier", Reason: "cron done"},
+		},
+	}
+	q := &fakeQueue{}
+	agentMap := map[string]config.AgentDef{
+		"reviewer": cfg.Agents[0],
+		"notifier": cfg.Agents[1],
+	}
+	dedup := workflow.NewDispatchDedupStore(300)
+	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
+	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
+
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithDispatcher(dispatcher)
+
+	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
+		t.Fatalf("TriggerAgent: %v", err)
+	}
+
+	events := q.popped()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 dispatched event, got %d", len(events))
+	}
+	ev := events[0]
+
+	// The dispatched event must carry a non-empty root_event_id so that
+	// autonomous dispatch chains preserve the correlation ID throughout.
+	rootEventID, ok := ev.Payload["root_event_id"].(string)
+	if !ok || rootEventID == "" {
+		t.Errorf("root_event_id: got %v, want non-empty string", ev.Payload["root_event_id"])
+	}
+	// ev.ID should match root_event_id (it is the root).
+	if ev.ID != rootEventID {
+		t.Errorf("ev.ID: got %q, want %q (root_event_id)", ev.ID, rootEventID)
+	}
+}
+
 func TestSchedulerDispatchesIgnoredWhenNoDispatcherAttached(t *testing.T) {
 	t.Parallel()
 	cfg := dispatchCfgForTest()

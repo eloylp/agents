@@ -284,12 +284,16 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 			// Autonomous runs have no originating GitHub event, so Kind="autonomous"
 			// and Number=0. If the agent omitted number in a dispatch request, the
 			// dispatcher will fall back to this 0.
+			// Generate a fresh root event ID so dispatch chains from autonomous runs
+			// carry a non-empty correlation ID throughout the chain.
+			rootEventID := workflow.GenEventID()
 			syntheticEv := workflow.Event{
+				ID:    rootEventID,
 				Repo:  workflow.RepoRef{FullName: repo, Enabled: true},
 				Kind:  "autonomous",
 				Actor: agent.Name,
 			}
-			s.dispatcher.ProcessDispatches(ctx, agent, syntheticEv, "", 0, resp.Dispatch)
+			s.dispatcher.ProcessDispatches(ctx, agent, syntheticEv, rootEventID, 0, resp.Dispatch)
 		}
 		return nil
 	})
