@@ -348,7 +348,9 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) 
 
 	// Process any dispatch requests from the agent's response.
 	if e.dispatcher != nil && len(resp.Dispatch) > 0 {
-		e.dispatcher.ProcessDispatches(ctx, agent, ev, rootEventID, dispatchDepth, resp.Dispatch)
+		if err := e.dispatcher.ProcessDispatches(ctx, agent, ev, rootEventID, dispatchDepth, resp.Dispatch); err != nil {
+			return fmt.Errorf("agent %q: dispatch: %w", agent.Name, err)
+		}
 	}
 
 	return nil

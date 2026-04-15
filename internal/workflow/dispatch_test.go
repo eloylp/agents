@@ -454,8 +454,11 @@ func TestDispatcherHandlesQueueError(t *testing.T) {
 	d := testDispatcher(q)
 
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 1, Reason: "review"}}
-	// Should not panic or propagate error — it logs and continues.
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, reqs)
+	err := d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, reqs)
+
+	if err == nil {
+		t.Fatal("expected error from enqueue failure, got nil")
+	}
 
 	// Enqueued should not have incremented since queue failed.
 	if d.Stats().Enqueued != 0 {

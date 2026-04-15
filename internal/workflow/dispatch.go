@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -196,6 +197,7 @@ func NewDispatcher(cfg config.DispatchConfig, agents map[string]config.AgentDef,
 // ProcessDispatches validates and enqueues each dispatch request from a single
 // agent run. originator is the agent that produced the requests; ev is the
 // originating event; rootEventID and currentDepth describe the chain.
+// All requests are attempted; an error is returned if any enqueue fails.
 func (d *Dispatcher) ProcessDispatches(
 	ctx context.Context,
 	originator config.AgentDef,
@@ -203,7 +205,8 @@ func (d *Dispatcher) ProcessDispatches(
 	rootEventID string,
 	currentDepth int,
 	requests []ai.DispatchRequest,
-) {
+) error {
+	var errs []error
 	fanout := 0
 	for _, req := range requests {
 		req.Agent = sanitizeName(req.Agent)
@@ -300,6 +303,7 @@ func (d *Dispatcher) ProcessDispatches(
 			// for the full TTL window due to this transient enqueue failure.
 			d.dedup.Remove(req.Agent, ev.Repo.FullName, number)
 			logBase.Error().Err(err).Msg("failed to enqueue dispatch event")
+			errs = append(errs, fmt.Errorf("dispatch %q: %w", req.Agent, err))
 			continue
 		}
 
@@ -307,6 +311,7 @@ func (d *Dispatcher) ProcessDispatches(
 		d.counters.enqueued.Add(1)
 		logBase.Info().Int("depth", newDepth).Str("reason", req.Reason).Msg("dispatch event enqueued")
 	}
+	return errors.Join(errs...)
 }
 
 // DispatchAlreadyClaimed returns true if a dispatch has already claimed the
