@@ -122,6 +122,16 @@ func (s *DispatchDedupStore) SeenOrAdd(target, repo string, number int, now time
 	return false
 }
 
+// Seen returns true if this (target, repo, number) combination has been seen
+// within the TTL window, without recording it.
+func (s *DispatchDedupStore) Seen(target, repo string, number int, now time.Time) bool {
+	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	expiresAt, ok := s.entries[key]
+	return ok && now.Before(expiresAt)
+}
+
 // Remove deletes a (target, repo, number) entry from the dedup store. It is
 // used to roll back a SeenOrAdd call when the corresponding enqueue fails, so
 // that a transient queue error does not suppress retries for the full TTL.
@@ -260,14 +270,14 @@ func (d *Dispatcher) ProcessDispatches(
 	}
 }
 
-// CheckAndMarkAutonomousRun checks the dedup store for the key
-// (agentName, repo, 0), which represents an autonomous (cron or manual)
-// execution. Returns true if this (agent, repo) pair was already seen within
-// the dedup window — meaning the caller should skip the run to avoid racing
-// with an in-flight dispatch to the same target. If not seen, records the key
-// so a near-simultaneous dispatch is collapsed against it.
+// CheckAndMarkAutonomousRun checks whether a dispatch has already claimed the
+// dedup slot (agentName, repo, 0). Returns true if a dispatch is already in
+// the dedup window for this target — meaning the cron/manual run should be
+// skipped to avoid duplicate execution. Cron and manual runs do not write to
+// the dedup store; only dispatches do. This asymmetry is intentional: a cron
+// run must not block subsequent cron runs for the same agent.
 func (d *Dispatcher) CheckAndMarkAutonomousRun(agentName, repo string, now time.Time) bool {
-	return d.dedup.SeenOrAdd(agentName, repo, 0, now)
+	return d.dedup.Seen(agentName, repo, 0, now)
 }
 
 // Stats returns a snapshot of the current dispatch counters.

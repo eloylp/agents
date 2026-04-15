@@ -441,10 +441,10 @@ func TestSchedulerCronRunSkippedWhenAlreadySeenInDedup(t *testing.T) {
 	s.WithDispatcher(dispatcher)
 
 	// Simulate a dispatch having arrived first for (reviewer, owner/repo, 0):
-	// calling CheckAndMarkAutonomousRun seeds the same dedup key that
-	// executeAgentRun checks before running. Use time.Now() so the entry is
-	// within the 300s TTL window.
-	_ = dispatcher.CheckAndMarkAutonomousRun("reviewer", "owner/repo", time.Now())
+	// write the dedup key directly on the store (same key format that
+	// ProcessDispatches would write). CheckAndMarkAutonomousRun is check-only
+	// and must not be used to seed the entry.
+	_ = dedup.SeenOrAdd("reviewer", "owner/repo", 0, time.Now())
 
 	// TriggerAgent must skip the run — the dedup entry is already present.
 	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
@@ -456,6 +456,46 @@ func TestSchedulerCronRunSkippedWhenAlreadySeenInDedup(t *testing.T) {
 	runner.mu.Unlock()
 	if calls != 0 {
 		t.Errorf("expected runner not to be called (run skipped by dedup), got %d call(s)", calls)
+	}
+}
+
+// TestSchedulerCronRunNotSuppressedByPriorCronRun is a regression test for the
+// case where CheckAndMarkAutonomousRun was incorrectly writing to the shared
+// dedup store, causing the second cron run for the same agent to be skipped.
+func TestSchedulerCronRunNotSuppressedByPriorCronRun(t *testing.T) {
+	t.Parallel()
+	cfg := dispatchCfgForTest()
+
+	runner := &stubRunner{}
+	q := &fakeQueue{}
+	agentMap := map[string]config.AgentDef{
+		"reviewer": cfg.Agents[0],
+		"notifier": cfg.Agents[1],
+	}
+	dedup := workflow.NewDispatchDedupStore(300)
+	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
+	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
+
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithDispatcher(dispatcher)
+
+	// First cron/manual run.
+	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
+		t.Fatalf("TriggerAgent (1st): %v", err)
+	}
+	// Second cron/manual run within the same dedup window must also execute.
+	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
+		t.Fatalf("TriggerAgent (2nd): %v", err)
+	}
+
+	runner.mu.Lock()
+	calls := runner.calls
+	runner.mu.Unlock()
+	if calls != 2 {
+		t.Errorf("expected runner to be called twice (both runs should execute), got %d call(s)", calls)
 	}
 }
 
