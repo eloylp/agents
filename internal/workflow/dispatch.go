@@ -122,6 +122,16 @@ func (s *DispatchDedupStore) SeenOrAdd(target, repo string, number int, now time
 	return false
 }
 
+// Remove deletes a (target, repo, number) entry from the dedup store. It is
+// used to roll back a SeenOrAdd call when the corresponding enqueue fails, so
+// that a transient queue error does not suppress retries for the full TTL.
+func (s *DispatchDedupStore) Remove(target, repo string, number int) {
+	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.entries, key)
+}
+
 // Dispatcher validates and enqueues inter-agent dispatch requests produced by
 // agent runs. It enforces whitelist, opt-in, self-dispatch, depth, fanout, and
 // dedup safety limits.
@@ -237,6 +247,9 @@ func (d *Dispatcher) ProcessDispatches(
 		}
 
 		if err := d.queue.PushEvent(ctx, dispatchEv); err != nil {
+			// Roll back the dedup entry so the next retry is not suppressed
+			// for the full TTL window due to this transient enqueue failure.
+			d.dedup.Remove(req.Agent, ev.Repo.FullName, number)
 			logBase.Error().Err(err).Msg("failed to enqueue dispatch event")
 			continue
 		}

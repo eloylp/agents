@@ -506,6 +506,27 @@ func TestDispatcherDedupUsesEventNumberWhenRequestNumberOmitted(t *testing.T) {
 	}
 }
 
+func TestDispatcherDedupeRolledBackOnEnqueueFailure(t *testing.T) {
+	t.Parallel()
+	// First call uses a failing queue — enqueue fails, so the dedup entry must
+	// be rolled back.
+	qFail := &fakeQueue{err: errors.New("queue full")}
+	d := testDispatcher(qFail)
+
+	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 1, Reason: "review"}}
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, reqs)
+
+	// Now swap in a healthy queue and retry the same dispatch.
+	qOK := &fakeQueue{}
+	d.queue = qOK
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-2", 0, reqs)
+
+	events := qOK.popped()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 enqueued event after retry, got %d (dedup was not rolled back)", len(events))
+	}
+}
+
 func TestDispatchDedupStoreStartSmallTTLDoesNotPanic(t *testing.T) {
 	t.Parallel()
 	// TTL values of 1, 2, 3 seconds previously could produce a very small
