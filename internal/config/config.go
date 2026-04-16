@@ -46,6 +46,17 @@ var validEventKinds = map[string]struct{}{
 	"push":                                  {},
 }
 
+// validEventKindsSorted is a precomputed, sorted list of validEventKinds keys
+// for use in human-readable error messages.
+var validEventKindsSorted = func() []string {
+	ks := make([]string, 0, len(validEventKinds))
+	for k := range validEventKinds {
+		ks = append(ks, k)
+	}
+	slices.Sort(ks)
+	return ks
+}()
+
 const (
 	defaultHTTPListenAddr          = ":8080"
 	defaultHTTPStatusPath          = "/status"
@@ -607,7 +618,7 @@ func (c *Config) validateRepos() error {
 			if _, ok := c.AgentByName(b.Agent); !ok {
 				return fmt.Errorf("config: repo %q: binding references unknown agent %q", r.Name, b.Agent)
 			}
-			if !b.IsCron() && !b.IsLabel() && len(b.Events) == 0 {
+			if !b.IsCron() && !b.IsLabel() && !b.IsEvent() {
 				return fmt.Errorf("config: repo %q: binding for agent %q has no trigger (set cron, labels, or events)", r.Name, b.Agent)
 			}
 			triggerCount := 0
@@ -625,13 +636,8 @@ func (c *Config) validateRepos() error {
 			}
 			for _, kind := range b.Events {
 				if _, ok := validEventKinds[kind]; !ok {
-					supported := make([]string, 0, len(validEventKinds))
-					for k := range validEventKinds {
-						supported = append(supported, k)
-					}
-					slices.Sort(supported)
 					return fmt.Errorf("config: repo %q: binding for agent %q has unknown event kind %q (supported: %s)",
-						r.Name, b.Agent, kind, strings.Join(supported, ", "))
+						r.Name, b.Agent, kind, strings.Join(validEventKindsSorted, ", "))
 				}
 			}
 		}
