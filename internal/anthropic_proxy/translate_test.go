@@ -349,7 +349,6 @@ func TestToAnthropic_StopReasonTable(t *testing.T) {
 		{"content_filter", "end_turn"}, // unknown → end_turn
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.finishReason, func(t *testing.T) {
 			t.Parallel()
 			resp := ChatResponse{
