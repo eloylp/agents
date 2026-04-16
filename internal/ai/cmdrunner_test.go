@@ -247,7 +247,7 @@ func TestResponseDispatchOmittedWhenEmpty(t *testing.T) {
 func TestCommandRunnerEmptyStdoutIsError(t *testing.T) {
 	t.Parallel()
 	// "true" exits 0 with no stdout — the canonical empty-output case.
-	r := NewCommandRunner("test", "command", "true", nil, 10, 4000, "", zerolog.Nop())
+	r := NewCommandRunner("test", "command", "true", nil, nil, 10, 4000, "", zerolog.Nop())
 	_, err := r.Run(context.Background(), Request{Workflow: "wf", Repo: "owner/repo"})
 	if err == nil {
 		t.Fatal("expected error for empty stdout, got nil")

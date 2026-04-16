@@ -136,7 +136,15 @@ func renderRuntimeContext(ctx PromptContext) string {
 		// Sort roster by name for deterministic output.
 		roster := make([]RosterEntry, len(ctx.Roster))
 		copy(roster, ctx.Roster)
-		sort.Slice(roster, func(i, j int) bool { return roster[i].Name < roster[j].Name })
+		slices.SortFunc(roster, func(a, b RosterEntry) int {
+				if a.Name < b.Name {
+					return -1
+				}
+				if a.Name > b.Name {
+					return 1
+				}
+				return 0
+			})
 		for _, r := range roster {
 			fmt.Fprintf(&b, "- **%s**", r.Name)
 			if r.Description != "" {
