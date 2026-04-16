@@ -34,6 +34,11 @@ type DispatchStats struct {
 	DroppedFanout      int64 `json:"dropped_fanout"`
 	Deduped            int64 `json:"deduped"`
 	Enqueued           int64 `json:"enqueued"`
+	// RunsDeduped counts engine-level run invocations suppressed because an
+	// identical (agent, repo, number) run was already in-flight or recently
+	// completed within the dedup window. This covers webhook-triggered runs;
+	// dispatch-enqueue dedup is counted separately in Deduped.
+	RunsDeduped int64 `json:"runs_deduped"`
 }
 
 // dispatchCounters tracks aggregate dispatch statistics using atomic operations.

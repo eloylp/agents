@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -55,6 +56,7 @@ type Engine struct {
 	traceRec      TraceRecorder
 	graphRec      GraphRecorder
 	runTracker    RunTracker
+	runsDeduped   atomic.Int64
 }
 
 // NewEngine builds an Engine. queue may be nil, in which case dispatch
@@ -111,12 +113,14 @@ func (e *Engine) StartDispatchDedup(ctx context.Context) {
 }
 
 // DispatchStats returns a snapshot of dispatch counters. Returns zero values
-// when dispatch is not configured.
+// (except RunsDeduped) when dispatch is not configured.
 func (e *Engine) DispatchStats() DispatchStats {
 	if e.dispatcher == nil {
-		return DispatchStats{}
+		return DispatchStats{RunsDeduped: e.runsDeduped.Load()}
 	}
-	return e.dispatcher.Stats()
+	stats := e.dispatcher.Stats()
+	stats.RunsDeduped = e.runsDeduped.Load()
+	return stats
 }
 
 // Dispatcher returns the configured Dispatcher, or nil if dispatch is not
@@ -189,6 +193,10 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 }
 
 // fanOut runs all agents matched for ev in parallel, capped by e.maxConcurrent.
+// When a dedup store is configured, each agent run is gated through a
+// TryClaim/CommitClaim/AbandonClaim sequence keyed on (agent, repo, number) so
+// that concurrent or near-simultaneous events for the same item do not produce
+// duplicate runs within the dedup window.
 // A failing agent does not abort the others; all errors are joined and returned.
 func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 	matched := e.agentsForEvent(ev)
@@ -215,10 +223,59 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 		go func(a config.AgentDef) {
 			defer wg.Done()
 			defer sem.Release(1)
+
+			// Gate through the dedup store when configured.
+			// TryClaimForDispatch atomically checks both namespaces:
+			//   - cron namespace: blocks if an autonomous run is active for
+			//     the same (agent, repo, number) — relevant for push events
+			//     (number=0) arriving while a cron tick is in flight.
+			//   - dispatch namespace: blocks if a dispatch or previous webhook
+			//     run already claimed the slot within the TTL window.
+			// If the slot is already held, skip this run silently.
+			if e.dispatcher != nil {
+				if !e.dispatcher.dedup.TryClaimForDispatch(a.Name, ev.Repo.FullName, ev.Number, time.Now()) {
+					e.logger.Debug().
+						Str("agent", a.Name).
+						Str("repo", ev.Repo.FullName).
+						Int("number", ev.Number).
+						Msg("run skipped: agent already claimed within dedup window")
+					e.runsDeduped.Add(1)
+					return
+				}
+			}
+
+			// Abandon the pending claim on panic so that future events can retry.
+			defer func() {
+				if r := recover(); r != nil {
+					if e.dispatcher != nil {
+						e.dispatcher.dedup.AbandonClaim(a.Name, ev.Repo.FullName, ev.Number)
+					}
+					e.logger.Error().
+						Interface("panic", r).
+						Str("agent", a.Name).
+						Str("repo", ev.Repo.FullName).
+						Int("number", ev.Number).
+						Msg("panic in agent run; claim abandoned")
+					panic(r)
+				}
+			}()
+
 			if err := e.runAgent(ctx, ev, a); err != nil {
+				// Abandon on failure so that a retry or a subsequent event can
+				// claim the slot and attempt the run again.
+				if e.dispatcher != nil {
+					e.dispatcher.dedup.AbandonClaim(a.Name, ev.Repo.FullName, ev.Number)
+				}
 				mu.Lock()
 				errs = append(errs, err)
 				mu.Unlock()
+			} else {
+				// Commit the claim so the TTL window stays active and duplicate
+				// runs (from concurrent events or cron overlaps) are suppressed
+				// until the window expires.
+				if e.dispatcher != nil {
+					e.dispatcher.dedup.CommitClaim(a.Name, ev.Repo.FullName, ev.Number)
+				}
 			}
 		}(agent)
 	}
