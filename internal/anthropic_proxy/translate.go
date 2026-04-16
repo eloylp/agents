@@ -22,11 +22,16 @@ func ToOpenAI(req MessagesRequest, upstreamModel string) (ChatRequest, error) {
 		MaxTokens: req.MaxTokens,
 	}
 
-	// System prompt becomes the first message.
-	if req.System != "" {
+	// System prompt becomes the first message. Accepts either a string (legacy
+	// form) or an array of content blocks (what claude CLI emits).
+	systemText, err := systemToString(req.System)
+	if err != nil {
+		return ChatRequest{}, err
+	}
+	if systemText != "" {
 		out.Messages = append(out.Messages, ChatMessage{
 			Role:    "system",
-			Content: req.System,
+			Content: systemText,
 		})
 	}
 
@@ -235,6 +240,54 @@ func ToAnthropic(resp ChatResponse, upstreamModel string) (MessagesResponse, err
 	}
 
 	return out, nil
+}
+
+// systemToString extracts the system prompt as a plain string from either the
+// legacy string form or the array-of-text-blocks form used by the claude CLI.
+// Multiple text blocks are joined with a blank line between them.
+// cache_control metadata on blocks is intentionally ignored — the upstream is
+// not Anthropic and does not honour it.
+func systemToString(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 {
+		return "", nil
+	}
+	switch firstNonSpace(raw) {
+	case '"':
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return "", fmt.Errorf("parse system string: %w", err)
+		}
+		return s, nil
+	case '[':
+		var blocks []ContentBlock
+		if err := json.Unmarshal(raw, &blocks); err != nil {
+			return "", fmt.Errorf("parse system blocks: %w", err)
+		}
+		var parts []string
+		for i, b := range blocks {
+			if b.Type != "text" {
+				return "", fmt.Errorf("system block[%d]: unsupported type %q (expected text)", i, b.Type)
+			}
+			parts = append(parts, b.Text)
+		}
+		return joinNonEmpty(parts, "\n\n"), nil
+	default:
+		return "", fmt.Errorf("system must be a string or an array of content blocks")
+	}
+}
+
+func joinNonEmpty(parts []string, sep string) string {
+	var out string
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		if out != "" {
+			out += sep
+		}
+		out += p
+	}
+	return out
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

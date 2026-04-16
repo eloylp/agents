@@ -12,12 +12,15 @@ import "encoding/json"
 // ── Anthropic Messages API ────────────────────────────────────────────────────
 
 // MessagesRequest is the body of POST /v1/messages (Anthropic format).
+// System accepts both the legacy string form and the array-of-content-blocks
+// form that the claude CLI emits when it wants prompt-caching control per block.
 type MessagesRequest struct {
-	Model     string              `json:"model"`
-	MaxTokens int                 `json:"max_tokens"`
-	System    string              `json:"system,omitempty"`
-	Messages  []AnthropicMessage  `json:"messages"`
-	Tools     []AnthropicTool     `json:"tools,omitempty"`
+	Model     string             `json:"model"`
+	MaxTokens int                `json:"max_tokens"`
+	System    json.RawMessage    `json:"system,omitempty"`
+	Messages  []AnthropicMessage `json:"messages"`
+	Tools     []AnthropicTool    `json:"tools,omitempty"`
+	Stream    bool               `json:"stream,omitempty"`
 }
 
 // AnthropicMessage is a single turn in the Anthropic message array.

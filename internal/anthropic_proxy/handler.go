@@ -48,6 +48,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var anthReq MessagesRequest
 	if err := json.Unmarshal(body, &anthReq); err != nil {
+		h.logger.Warn().Err(err).Int("body_bytes", len(body)).Str("body_head", truncate(string(body), 300)).Msg("proxy: malformed request")
 		h.writeError(w, http.StatusBadRequest, "invalid_request_error", "malformed Anthropic request: "+err.Error())
 		return
 	}
@@ -105,6 +106,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusBadGateway, "api_error", fmt.Sprintf("upstream returned status %d", resp.StatusCode))
 		return
 	}
+	h.logger.Info().Int("body_bytes", len(respBody)).Bool("client_stream", anthReq.Stream).Int("msgs", len(anthReq.Messages)).Int("tools", len(anthReq.Tools)).Msg("proxy upstream ok")
 
 	var oaiResp ChatResponse
 	if err := json.Unmarshal(respBody, &oaiResp); err != nil {
@@ -120,9 +122,125 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if anthReq.Stream {
+		h.writeStreamingResponse(w, anthResp)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(anthResp)
+}
+
+// writeStreamingResponse emits a fully-formed Anthropic SSE event sequence
+// derived from a single non-streaming upstream response. The client sees the
+// whole response arrive as one burst of events rather than token-by-token, but
+// the event shape and ordering match what clients (claude CLI) expect, so they
+// parse without error. Upstream streaming is not yet piped through — this is a
+// minimally viable implementation that unblocks real claude CLI usage.
+func (h *Handler) writeStreamingResponse(w http.ResponseWriter, resp MessagesResponse) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	flusher, _ := w.(http.Flusher)
+	emit := func(eventType string, payload any) {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			h.logger.Error().Err(err).Str("event", eventType).Msg("failed to marshal streaming event")
+			return
+		}
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, raw)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+
+	emit("message_start", map[string]any{
+		"type": "message_start",
+		"message": map[string]any{
+			"id":            resp.ID,
+			"type":          "message",
+			"role":          "assistant",
+			"model":         resp.Model,
+			"content":       []any{},
+			"stop_reason":   nil,
+			"stop_sequence": nil,
+			"usage": map[string]any{
+				"input_tokens":  resp.Usage.InputTokens,
+				"output_tokens": 0,
+			},
+		},
+	})
+
+	for i, block := range resp.Content {
+		switch block.Type {
+		case "text":
+			emit("content_block_start", map[string]any{
+				"type":          "content_block_start",
+				"index":         i,
+				"content_block": map[string]any{"type": "text", "text": ""},
+			})
+			emit("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": i,
+				"delta": map[string]any{"type": "text_delta", "text": block.Text},
+			})
+			emit("content_block_stop", map[string]any{
+				"type":  "content_block_stop",
+				"index": i,
+			})
+		case "tool_use":
+			emit("content_block_start", map[string]any{
+				"type":  "content_block_start",
+				"index": i,
+				"content_block": map[string]any{
+					"type":  "tool_use",
+					"id":    block.ID,
+					"name":  block.Name,
+					"input": map[string]any{},
+				},
+			})
+			partial := string(block.Input)
+			if partial == "" {
+				partial = "{}"
+			}
+			emit("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": i,
+				"delta": map[string]any{"type": "input_json_delta", "partial_json": partial},
+			})
+			emit("content_block_stop", map[string]any{
+				"type":  "content_block_stop",
+				"index": i,
+			})
+		}
+	}
+
+	emit("message_delta", map[string]any{
+		"type":  "message_delta",
+		"delta": map[string]any{"stop_reason": resp.StopReason, "stop_sequence": nil},
+		"usage": map[string]any{"output_tokens": resp.Usage.OutputTokens},
+	})
+
+	emit("message_stop", map[string]any{"type": "message_stop"})
+}
+
+// ModelsHandler returns a minimal OpenAI-style /v1/models listing so clients
+// that pre-validate their configuration before sending a real request (e.g.
+// the claude CLI in --bare mode) don't fail with "Invalid API key" on startup.
+// Only the single model the proxy is configured to forward to is listed.
+func (h *Handler) ModelsHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"object": "list",
+		"data": []map[string]any{
+			{"id": h.upstream.Model, "object": "model", "owned_by": "proxy"},
+		},
+	})
 }
 
 // marshalWithExtraBody marshals req to JSON and then merges any extra_body

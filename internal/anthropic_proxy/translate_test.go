@@ -40,7 +40,7 @@ func TestToOpenAI_SystemMessage(t *testing.T) {
 	req := MessagesRequest{
 		Model:     "claude",
 		MaxTokens: 50,
-		System:    "You are a helpful assistant.",
+		System:    json.RawMessage(`"You are a helpful assistant."`),
 		Messages: []AnthropicMessage{
 			{Role: "user", Content: jsonStr("Hi")},
 		},
@@ -55,6 +55,45 @@ func TestToOpenAI_SystemMessage(t *testing.T) {
 	}
 	assertMsg(t, got.Messages[0], "system", "You are a helpful assistant.", nil)
 	assertMsg(t, got.Messages[1], "user", "Hi", nil)
+}
+
+func TestToOpenAI_SystemAsContentBlocks(t *testing.T) {
+	t.Parallel()
+	// Claude CLI sends system as an array of content blocks (with optional cache_control).
+	// The proxy must accept it and flatten to a single OpenAI system message.
+	req := MessagesRequest{
+		Model:     "claude",
+		MaxTokens: 50,
+		System:    json.RawMessage(`[{"type":"text","text":"You are Claude."},{"type":"text","text":"Follow the agent contract.","cache_control":{"type":"ephemeral"}}]`),
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: jsonStr("Hi")},
+		},
+	}
+
+	got, err := ToOpenAI(req, "llama")
+	if err != nil {
+		t.Fatalf("ToOpenAI: %v", err)
+	}
+	if len(got.Messages) != 2 {
+		t.Fatalf("message count: got %d, want 2", len(got.Messages))
+	}
+	assertMsg(t, got.Messages[0], "system", "You are Claude.\n\nFollow the agent contract.", nil)
+}
+
+func TestToOpenAI_SystemArrayNonTextRejected(t *testing.T) {
+	t.Parallel()
+	req := MessagesRequest{
+		Model:     "claude",
+		MaxTokens: 10,
+		System:    json.RawMessage(`[{"type":"image","source":"unsupported"}]`),
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: jsonStr("Hi")},
+		},
+	}
+
+	if _, err := ToOpenAI(req, "llama"); err == nil {
+		t.Fatalf("expected error on non-text system block, got nil")
+	}
 }
 
 func TestToOpenAI_ToolUse(t *testing.T) {
@@ -141,7 +180,7 @@ func TestToOpenAI_MultiTurnWithTools(t *testing.T) {
 	toolInput := json.RawMessage(`{"q":"go channels"}`)
 	req := MessagesRequest{
 		MaxTokens: 500,
-		System:    "You are a coding assistant.",
+		System:    json.RawMessage(`"You are a coding assistant."`),
 		Messages: []AnthropicMessage{
 			{Role: "user", Content: jsonStr("Search for Go channels docs.")},
 			{

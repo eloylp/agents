@@ -88,6 +88,7 @@ func (s *Server) Run(ctx context.Context) error {
 	router.HandleFunc(s.cfg.Daemon.HTTP.AgentsRunPath, s.handleAgentsRun).Methods(http.MethodPost)
 	if s.proxy != nil {
 		router.Handle(s.cfg.Daemon.Proxy.Path, s.proxy).Methods(http.MethodPost)
+		router.HandleFunc("/v1/models", s.proxy.ModelsHandler).Methods(http.MethodGet)
 		s.logger.Info().Str("path", s.cfg.Daemon.Proxy.Path).Str("upstream", s.cfg.Daemon.Proxy.Upstream.URL).Msg("anthropic proxy enabled")
 	}
 

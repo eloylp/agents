@@ -202,3 +202,68 @@ func TestHandler_MissingMaxTokensReturns400(t *testing.T) {
 		t.Errorf("status: got %d, want 400", w.Code)
 	}
 }
+
+func TestHandler_StreamingResponse(t *testing.T) {
+	t.Parallel()
+	up := newFakeUpstream(http.StatusOK, oaiTextResp)
+	defer up.Close()
+
+	h := newHandler(up, nil)
+	body := `{"model":"claude","max_tokens":100,"stream":true,"messages":[{"role":"user","content":"Hello"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "text/event-stream" {
+		t.Errorf("Content-Type: got %q, want text/event-stream", ct)
+	}
+	out := w.Body.String()
+	for _, want := range []string{
+		"event: message_start",
+		"event: content_block_start",
+		"event: content_block_delta",
+		`"text":"Hello!"`,
+		"event: content_block_stop",
+		"event: message_delta",
+		"event: message_stop",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("streaming output missing %q\nfull output:\n%s", want, out)
+		}
+	}
+}
+
+func TestHandler_ModelsEndpoint(t *testing.T) {
+	t.Parallel()
+	up := newFakeUpstream(http.StatusOK, oaiTextResp)
+	defer up.Close()
+
+	h := newHandler(up, nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	w := httptest.NewRecorder()
+	h.ModelsHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	var resp struct {
+		Object string `json:"object"`
+		Data   []struct {
+			ID      string `json:"id"`
+			Object  string `json:"object"`
+			OwnedBy string `json:"owned_by"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Object != "list" {
+		t.Errorf("object: got %q, want list", resp.Object)
+	}
+	if len(resp.Data) != 1 || resp.Data[0].ID != "test-model" {
+		t.Errorf("data: got %+v, want single entry with id=test-model", resp.Data)
+	}
+}
