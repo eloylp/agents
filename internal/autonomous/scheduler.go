@@ -346,12 +346,20 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		}
 		return nil
 	})
-	if err != nil && !runCompleted && s.dispatcher != nil {
-		// Roll back the cron mark only when the autonomous pass itself failed
-		// (before or during runner.Run). If runner.Run succeeded but a
-		// downstream step (e.g. dispatch enqueue) failed, the run is already
-		// committed and the dedup window must stay in force.
-		s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
+	if s.dispatcher != nil {
+		if err != nil && !runCompleted {
+			// Roll back the cron mark only when the autonomous pass itself failed
+			// (before or during runner.Run). If runner.Run succeeded but a
+			// downstream step (e.g. dispatch enqueue) failed, the run is already
+			// committed and the dedup window must stay in force.
+			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
+		} else if err == nil {
+			// Decrement the refcount so the evict() loop can clean up the cron
+			// entry after its TTL expires. The entry itself is preserved so that
+			// TryClaimForDispatch continues to suppress autonomous-context
+			// dispatches for the full dedup_window_seconds window.
+			s.dispatcher.FinalizeAutonomousRun(agent.Name, repo)
+		}
 	}
 	return err
 }

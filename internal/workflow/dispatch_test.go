@@ -824,14 +824,91 @@ func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 		t.Error("expected dispatch suppressed: cron run still in flight even though TTL has elapsed")
 	}
 
-	// Once the run completes, the cron mark is released and dispatches may proceed.
-	d.RollbackAutonomousRun("coder", "owner/repo") // use Rollback to test cleanup; same semantics as success path for this check
+	// Once the run completes successfully, the refcount is decremented via
+	// FinalizeAutonomousRun. The entry itself is kept until the TTL expires —
+	// but since we advanced past the TTL in the simulation, the next eviction
+	// pass will remove it and dispatches may then proceed.
+	d.FinalizeAutonomousRun("coder", "owner/repo")
+	dedup.evict(pastTTL) // TTL already elapsed; now that refcount is 0, entry is evicted.
 	q2 := &fakeQueue{}
 	d2 := NewDispatcher(cfg, agents, dedup, q2, zerolog.Nop())
 	d2.ProcessDispatches(context.Background(), originator, ev, "root-after-run", 0, []ai.DispatchRequest{
-		{Agent: "coder", Reason: "dispatch after run completed"},
+		{Agent: "coder", Reason: "dispatch after run completed and TTL expired"},
 	})
 	if len(q2.popped()) != 1 {
-		t.Error("expected dispatch enqueued: cron mark removed after run completed")
+		t.Error("expected dispatch enqueued: cron entry evicted after finalize + TTL expiry")
+	}
+}
+
+// TestFinalizeAutonomousRunKeepsTTLBlocksDispatchWithinWindow verifies that
+// FinalizeAutonomousRun (success path) preserves the cron entry so that
+// dispatches targeting the same (agent, repo, 0) slot are still suppressed
+// within the dedup window, but a second cron run is never blocked.
+func TestFinalizeAutonomousRunKeepsTTLBlocksDispatchWithinWindow(t *testing.T) {
+	t.Parallel()
+
+	const ttlSeconds = 60
+	dedup := NewDispatchDedupStore(ttlSeconds)
+	agents := map[string]config.AgentDef{
+		"pr-reviewer": {Name: "pr-reviewer", AllowDispatch: true, CanDispatch: []string{"coder"}},
+		"coder":       {Name: "coder", AllowDispatch: true},
+	}
+	cfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: ttlSeconds}
+	originator := agents["pr-reviewer"]
+	ev := Event{Repo: RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
+
+	q1 := &fakeQueue{}
+	d1 := NewDispatcher(cfg, agents, dedup, q1, zerolog.Nop())
+
+	// Cron run starts and completes successfully.
+	now := time.Now()
+	d1.TryMarkAutonomousRun("coder", "owner/repo", now)
+	d1.FinalizeAutonomousRun("coder", "owner/repo")
+
+	// Within the TTL window, a dispatch to the same (agent, repo, 0) slot must
+	// still be suppressed — the entry is kept for the full dedup window.
+	q2 := &fakeQueue{}
+	d2 := NewDispatcher(cfg, agents, dedup, q2, zerolog.Nop())
+	d2.ProcessDispatches(context.Background(), originator, ev, "root-post-run", 0, []ai.DispatchRequest{
+		{Agent: "coder", Reason: "dispatch shortly after successful cron run"},
+	})
+	if len(q2.popped()) != 0 {
+		t.Error("expected dispatch suppressed: cron run entry still within TTL window")
+	}
+
+	// A second cron run within the window must NOT be suppressed: cron runs
+	// check the dispatch namespace (not the cron namespace), so the mark never
+	// blocks repeated autonomous runs.
+	q3 := &fakeQueue{}
+	agentDef := config.AgentDef{Name: "coder", AllowDispatch: true}
+	d3 := NewDispatcher(cfg, agents, dedup, q3, zerolog.Nop())
+	if !d3.TryMarkAutonomousRun("coder", "owner/repo", now) {
+		t.Error("expected second cron run to proceed: cron marks must not suppress other cron runs")
+	}
+	d3.FinalizeAutonomousRun("coder", "owner/repo")
+	_ = agentDef
+}
+
+// TestSuccessfulCronRunRefcountIsZeroAfterFinalize verifies that
+// FinalizeCronMark brings cronRefCounts to zero after a successful run,
+// allowing evict() to clean up the entry once its TTL has passed.
+func TestSuccessfulCronRunRefcountIsZeroAfterFinalize(t *testing.T) {
+	t.Parallel()
+
+	const ttlSeconds = 1
+	dedup := NewDispatchDedupStore(ttlSeconds)
+	now := time.Now()
+
+	// Mark a cron run and immediately finalize it (simulating a successful run).
+	dedup.TryClaimForCron("coder", "owner/repo", 0, now)
+	dedup.FinalizeCronMark("coder", "owner/repo", 0)
+
+	// Evict with a time past the TTL; the entry should now be gone since
+	// the refcount is 0.
+	dedup.evict(now.Add(2 * time.Duration(ttlSeconds) * time.Second))
+
+	// SeenCronRun must return false: the entry was evicted.
+	if dedup.SeenCronRun("coder", "owner/repo", 0, now.Add(2*time.Duration(ttlSeconds)*time.Second)) {
+		t.Error("expected SeenCronRun=false after finalize+evict: entry should be gone")
 	}
 }

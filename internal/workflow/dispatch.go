@@ -230,10 +230,11 @@ func (s *DispatchDedupStore) MarkCronRun(agent, repo string, number int, now tim
 }
 
 // RemoveCronMark decrements the in-flight reference count for the cron-namespace
-// entry (agent, repo, number). The entry is only deleted from the dedup store
-// when the count reaches zero, ensuring that a rollback from one failed run does
-// not remove a mark that a concurrently-running autonomous pass is still relying
-// on to suppress duplicates.
+// entry (agent, repo, number) and deletes the entry from the store so that
+// future dispatches are no longer suppressed. It is used by the rollback path
+// (run failed before completing). When the count reaches zero, the entry is
+// fully removed; otherwise only the count is decremented and the entry stays,
+// ensuring a concurrent overlapping run's reservation is not cleared prematurely.
 func (s *DispatchDedupStore) RemoveCronMark(agent, repo string, number int) {
 	key := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
 	s.mu.Lock()
@@ -241,6 +242,24 @@ func (s *DispatchDedupStore) RemoveCronMark(agent, repo string, number int) {
 	if s.cronRefCounts[key] <= 1 {
 		delete(s.entries, key)
 		delete(s.cronRefCounts, key)
+	} else {
+		s.cronRefCounts[key]--
+	}
+}
+
+// FinalizeCronMark decrements the in-flight reference count for the cron-namespace
+// entry (agent, repo, number) without deleting the entry. It is used by the
+// success path after a cron/manual run completes: the entry's expiresAt is kept
+// in place so that TryClaimForDispatch continues to suppress autonomous-context
+// dispatches until the full dedup_window_seconds elapses. Once the refcount
+// reaches zero the evict() loop is free to remove the entry when expiresAt passes.
+func (s *DispatchDedupStore) FinalizeCronMark(agent, repo string, number int) {
+	key := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cronRefCounts[key] <= 1 {
+		delete(s.cronRefCounts, key)
+		// Leave the entry in s.entries so the TTL window remains active.
 	} else {
 		s.cronRefCounts[key]--
 	}
@@ -519,6 +538,15 @@ func (d *Dispatcher) TryMarkAutonomousRun(agentName, repo string, now time.Time)
 // for the full dedup_window_seconds.
 func (d *Dispatcher) RollbackAutonomousRun(agentName, repo string) {
 	d.dedup.RemoveCronMark(agentName, repo, 0)
+}
+
+// FinalizeAutonomousRun decrements the cron-namespace refcount for
+// (agentName, repo, 0) after a run completes successfully. Unlike
+// RollbackAutonomousRun it preserves the cron entry so that
+// TryClaimForDispatch continues to suppress autonomous-context dispatches
+// until the full dedup_window_seconds window expires naturally.
+func (d *Dispatcher) FinalizeAutonomousRun(agentName, repo string) {
+	d.dedup.FinalizeCronMark(agentName, repo, 0)
 }
 
 // Stats returns a snapshot of the current dispatch counters.
