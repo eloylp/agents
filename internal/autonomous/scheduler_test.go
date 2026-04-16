@@ -908,6 +908,72 @@ func TestSchedulerCronRefcountDecrementedOnPostRunEnqueueFailure(t *testing.T) {
 	}
 }
 
+// TestSchedulerPostRunDispatchSuppressedWithinDedupWindow is an integration-level
+// regression test for the cron-first dedup ordering: after a cron/manual run
+// completes successfully, dispatches targeting the same (agent, repo, 0) context
+// must still be suppressed for the full dedup_window_seconds. FinalizeAutonomousRun
+// decrements the in-flight refcount but preserves the cron-namespace TTL entry so
+// TryClaimForDispatch continues to reject dispatches until the window expires.
+func TestSchedulerPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
+	t.Parallel()
+	cfg := baseCfg(func(c *config.Config) {
+		c.Agents = []config.AgentDef{
+			{
+				Name:          "notifier",
+				Backend:       "claude",
+				Prompt:        "Notify.",
+				AllowDispatch: true,
+			},
+			{
+				Name:        "reviewer",
+				Backend:     "claude",
+				Prompt:      "Review.",
+				CanDispatch: []string{"notifier"},
+			},
+		}
+		c.Repos[0].Use = []config.Binding{
+			{Agent: "notifier", Cron: "* * * * *"},
+			{Agent: "reviewer", Cron: "0 0 * * *"},
+		}
+	})
+
+	runner := &stubRunner{}
+	q := &fakeQueue{}
+	agentMap := map[string]config.AgentDef{
+		"notifier": cfg.Agents[0],
+		"reviewer": cfg.Agents[1],
+	}
+	dedup := workflow.NewDispatchDedupStore(300) // 5-minute window
+	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
+	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
+
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithDispatcher(dispatcher)
+
+	// Cron/manual run completes successfully.
+	if err := s.TriggerAgent(context.Background(), "notifier", "owner/repo"); err != nil {
+		t.Fatalf("TriggerAgent: %v", err)
+	}
+
+	// Within the dedup window, a dispatch to the same (notifier, owner/repo, 0)
+	// autonomous context must be suppressed. The cron-namespace TTL entry is
+	// preserved by FinalizeAutonomousRun, not cleared, so TryClaimForDispatch
+	// returns false and the dispatch is dropped.
+	q2 := &fakeQueue{}
+	dispatcher2 := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q2, zerolog.Nop())
+	originator := agentMap["reviewer"]
+	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
+	dispatcher2.ProcessDispatches(context.Background(), originator, ev, "root-post-run", 0, []ai.DispatchRequest{
+		{Agent: "notifier", Reason: "follow-up dispatch within dedup window"},
+	})
+	if len(q2.popped()) != 0 {
+		t.Error("expected dispatch suppressed: cron-namespace TTL entry must persist after successful run")
+	}
+}
+
 func TestSchedulerAllowPRsPromptPrefixing(t *testing.T) {
 	t.Parallel()
 	const noPRPrefix = "Do not open or create pull requests under any circumstances."
