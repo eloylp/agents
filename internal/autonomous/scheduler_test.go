@@ -454,9 +454,10 @@ func TestSchedulerCronRunSkippedWhenAlreadySeenInDedup(t *testing.T) {
 	// detect the prior dispatch and skip the cron run.
 	_ = dedup.SeenOrAdd("reviewer", "owner/repo", 0, time.Now())
 
-	// TriggerAgent must skip the run — the dedup entry is already present.
-	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
-		t.Fatalf("TriggerAgent: %v", err)
+	// TriggerAgent must skip the run and return ErrDispatchSkipped.
+	err = s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
+	if !errors.Is(err, ErrDispatchSkipped) {
+		t.Fatalf("TriggerAgent: got %v, want ErrDispatchSkipped", err)
 	}
 
 	runner.mu.Lock()
@@ -464,6 +465,87 @@ func TestSchedulerCronRunSkippedWhenAlreadySeenInDedup(t *testing.T) {
 	runner.mu.Unlock()
 	if calls != 0 {
 		t.Errorf("expected runner not to be called (run skipped by dedup), got %d call(s)", calls)
+	}
+}
+
+// blockingQueue is a workflow.EventEnqueuer whose PushEvent signals readyCh
+// then blocks until releaseCh is closed. It is used to freeze the dispatch
+// pipeline between TryClaim (before PushEvent) and CommitClaim (after PushEvent)
+// so that concurrent scheduler checks can be tested in that exact window.
+type blockingQueue struct {
+	readyCh   chan struct{} // closed by PushEvent to signal "I am blocking"
+	releaseCh chan struct{} // close to let PushEvent return
+}
+
+func (q *blockingQueue) PushEvent(_ context.Context, _ workflow.Event) error {
+	close(q.readyCh)   // signal that TryClaim has run and we're now blocking
+	<-q.releaseCh      // wait for the test to release us
+	return nil
+}
+
+// TestCronRunBlockedByPendingDispatchClaim is a regression test for the race
+// between a dispatch's TryClaim→CommitClaim window and a concurrent cron/manual
+// run. Before the fix, DispatchAlreadyClaimed only saw committed claims; a
+// cron run that checked during the pending window would see false, proceed, and
+// run concurrently with the in-flight dispatch. After the fix,
+// SeesPendingOrCommitted makes DispatchAlreadyClaimed return true for any
+// pending or committed claim, so exactly one path wins.
+func TestCronRunBlockedByPendingDispatchClaim(t *testing.T) {
+	t.Parallel()
+	cfg := dispatchCfgForTest()
+
+	notifierRunner := &stubRunner{}
+	agentMap := map[string]config.AgentDef{
+		"reviewer": cfg.Agents[0],
+		"notifier": cfg.Agents[1],
+	}
+
+	bq := &blockingQueue{
+		readyCh:   make(chan struct{}),
+		releaseCh: make(chan struct{}),
+	}
+	dedup := workflow.NewDispatchDedupStore(300)
+	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
+	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, bq, zerolog.Nop())
+
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": notifierRunner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithDispatcher(dispatcher)
+
+	// Start a dispatch to "notifier" in a goroutine. ProcessDispatches will
+	// TryClaim the (notifier, owner/repo, 0) slot, then block inside PushEvent
+	// (before CommitClaim). This is the race window being tested.
+	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}}
+	dispatchDone := make(chan struct{})
+	go func() {
+		defer close(dispatchDone)
+		_ = dispatcher.ProcessDispatches(context.Background(), cfg.Agents[0], ev, "root-id", 0,
+			[]ai.DispatchRequest{{Agent: "notifier", Reason: "test"}})
+	}()
+
+	// Wait until PushEvent is blocked — at this point TryClaim has run and the
+	// slot is pending (not yet committed). A cron check in this window should
+	// now detect the pending claim and skip.
+	<-bq.readyCh
+
+	// TriggerAgent for "notifier" must return ErrDispatchSkipped, not proceed
+	// to run the agent concurrently with the in-flight dispatch.
+	triggerErr := s.TriggerAgent(context.Background(), "notifier", "owner/repo")
+	if !errors.Is(triggerErr, ErrDispatchSkipped) {
+		t.Errorf("TriggerAgent: got %v, want ErrDispatchSkipped", triggerErr)
+	}
+
+	// Unblock the dispatch goroutine and wait for it to finish.
+	close(bq.releaseCh)
+	<-dispatchDone
+
+	notifierRunner.mu.Lock()
+	calls := notifierRunner.calls
+	notifierRunner.mu.Unlock()
+	if calls != 0 {
+		t.Errorf("expected notifier runner not to be called (blocked by pending claim), got %d call(s)", calls)
 	}
 }
 

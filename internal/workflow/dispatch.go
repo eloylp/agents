@@ -138,14 +138,28 @@ func (s *DispatchDedupStore) SeenOrAdd(target, repo string, number int, now time
 
 // Seen returns true if this (target, repo, number) combination has a committed
 // claim within the TTL window. Pending (not-yet-committed) claims are invisible
-// to Seen so that DispatchAlreadyClaimed never returns true for phantom claims
-// that are not yet backed by a successfully enqueued event.
+// to Seen so that duplicate dispatch dedup checks never block retries for
+// phantom entries that were never enqueued.
 func (s *DispatchDedupStore) Seen(target, repo string, number int, now time.Time) bool {
 	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.entries[key]
 	return ok && now.Before(e.expiresAt) && e.committed
+}
+
+// SeesPendingOrCommitted returns true if (target, repo, number) has any dispatch
+// claim — pending or committed — within the TTL window. Unlike Seen, this
+// includes pending (not-yet-committed) claims, so that a TryClaim that is still
+// in flight (PushEvent running) blocks concurrent cron/manual runs from also
+// starting. This closes the race between a dispatch's TryClaim→CommitClaim
+// window and an autonomous scheduler check.
+func (s *DispatchDedupStore) SeesPendingOrCommitted(target, repo string, number int, now time.Time) bool {
+	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.entries[key]
+	return ok && now.Before(e.expiresAt)
 }
 
 // TryClaim atomically reserves a dispatch dedup slot for (target, repo, number)
@@ -399,16 +413,17 @@ func (d *Dispatcher) ProcessDispatches(
 	return errors.Join(errs...)
 }
 
-// DispatchAlreadyClaimed returns true if a dispatch has already claimed the
-// (agentName, repo, 0) slot in the dispatch dedup namespace within the
-// current dedup window (dispatch-first ordering). A true result means a
-// dispatch is already targeting this agent in an autonomous context, and
-// the scheduled cron run should be skipped to avoid duplicate execution.
+// DispatchAlreadyClaimed returns true if a dispatch has claimed (pending or
+// committed) the (agentName, repo, 0) slot in the dispatch dedup namespace
+// within the current dedup window (dispatch-first ordering). Checking pending
+// claims too ensures that a dispatch which has successfully TryClaim'd but has
+// not yet called CommitClaim (PushEvent still in flight) still blocks a
+// concurrent cron/manual run from starting.
 //
 // This is a read-only check; it does not write to the store. Call
 // MarkAutonomousRun separately, only once the run is confirmed to proceed.
 func (d *Dispatcher) DispatchAlreadyClaimed(agentName, repo string, now time.Time) bool {
-	return d.dedup.Seen(agentName, repo, 0, now)
+	return d.dedup.SeesPendingOrCommitted(agentName, repo, 0, now)
 }
 
 // MarkAutonomousRun writes a cron-namespace activity mark for (agentName,

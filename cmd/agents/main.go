@@ -86,6 +86,10 @@ func run() error {
 		logger.Info().Str("agent", *runAgent).Str("repo", *runRepo).Msg("running autonomous agent on demand")
 		engine.StartDispatchDedup(ctx)
 		if err := scheduler.TriggerAgent(ctx, *runAgent, *runRepo); err != nil {
+			if errors.Is(err, autonomous.ErrDispatchSkipped) {
+				logger.Info().Str("agent", *runAgent).Str("repo", *runRepo).Msg("agent run skipped: dispatch already claimed within dedup window")
+				return nil
+			}
 			return fmt.Errorf("run agent: %w", err)
 		}
 		if err := drainDispatches(ctx, dataChannels, engine); err != nil {

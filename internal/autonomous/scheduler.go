@@ -2,6 +2,7 @@ package autonomous
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -15,6 +16,12 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/workflow"
 )
+
+// ErrDispatchSkipped is returned by executeAgentRun (and propagated through
+// TriggerAgent) when the run was skipped because a dispatch has already claimed
+// the dedup slot for the same (agent, repo) autonomous context. Callers can
+// distinguish this from a real run failure using errors.Is.
+var ErrDispatchSkipped = errors.New("autonomous run skipped: dispatch already claimed within dedup window")
 
 // zerologCronLogger adapts zerolog.Logger to the cron.Logger interface
 // required by chain wrappers such as SkipIfStillRunning.
@@ -164,8 +171,17 @@ func (s *Scheduler) makeCronJob(repo string, agent config.AgentDef) func() {
 		}
 		status := "success"
 		if err := s.executeAgentRun(ctx, repo, agent); err != nil {
-			s.logger.Error().Str("repo", repo).Str("agent", agent.Name).Err(err).Msg("autonomous agent run completed with errors")
-			status = "error"
+			switch {
+			case errors.Is(err, ErrDispatchSkipped):
+				// A dispatch already claimed this slot — the dedup skip is not
+				// a failure, but we record "skipped" rather than "success" so
+				// that /status does not mislead operators into thinking a real
+				// agent pass ran.
+				status = "skipped"
+			default:
+				s.logger.Error().Str("repo", repo).Str("agent", agent.Name).Err(err).Msg("autonomous agent run completed with errors")
+				status = "error"
+			}
 		}
 		s.recordLastRun(agent.Name, repo, time.Now(), status)
 	}
@@ -250,8 +266,8 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	// execution within the dedup window.
 	if s.dispatcher != nil && s.dispatcher.DispatchAlreadyClaimed(agent.Name, repo, time.Now()) {
 		s.logger.Info().Str("repo", repo).Str("agent", agent.Name).
-			Msg("autonomous run skipped: already seen within dispatch dedup window")
-		return nil
+			Msg("autonomous run skipped: dispatch already claimed within dedup window")
+		return ErrDispatchSkipped
 	}
 
 	// Resolve backend and runner before writing the cron mark. If either
