@@ -15,6 +15,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -675,6 +676,18 @@ func TestHandleAgentsRunReturnsInternalServerErrorOnTriggerFailure(t *testing.T)
 	server.handleAgentsRun(rr, req)
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestHandleAgentsRunReturnsOKOnDispatchSkipped(t *testing.T) {
+	t.Parallel()
+	trig := &stubTriggerer{err: autonomous.ErrDispatchSkipped}
+	server := newRunServer(trig)
+	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":"coder","repo":"owner/repo"}`)
+	rr := httptest.NewRecorder()
+	server.handleAgentsRun(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("ErrDispatchSkipped should yield 200, got %d", rr.Code)
 	}
 }
 

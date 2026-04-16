@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/anthropic_proxy"
+	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -198,6 +199,11 @@ func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.triggerer.TriggerAgent(r.Context(), req.Agent, req.Repo); err != nil {
+		if errors.Is(err, autonomous.ErrDispatchSkipped) {
+			s.logger.Info().Str("agent", req.Agent).Str("repo", req.Repo).Msg("on-demand agent run skipped: dispatch already in progress")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		s.logger.Error().Err(err).Str("agent", req.Agent).Str("repo", req.Repo).Msg("on-demand agent run failed")
 		http.Error(w, "agent run failed", http.StatusInternalServerError)
 		return
