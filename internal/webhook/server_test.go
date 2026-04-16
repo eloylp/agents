@@ -223,7 +223,6 @@ func TestHandleIssuesEventDropsPRLabeledAction(t *testing.T) {
 func TestHandleIssuesEventDropsPRLifecycleActions(t *testing.T) {
 	t.Parallel()
 	for _, action := range []string{"opened", "edited", "reopened", "closed"} {
-		action := action
 		t.Run(action, func(t *testing.T) {
 			t.Parallel()
 			server, dc := newTestServer(testCfg(nil))
