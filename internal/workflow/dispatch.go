@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -409,7 +410,7 @@ func (d *Dispatcher) ProcessDispatches(
 		}
 
 		// Whitelist check: originator's CanDispatch must include the target.
-		if !containsStr(originator.CanDispatch, req.Agent) {
+		if !slices.Contains(originator.CanDispatch, req.Agent) {
 			logBase.Warn().Msg("dispatch dropped: target not in originator's can_dispatch whitelist")
 			d.counters.droppedNoWhitelist.Add(1)
 			continue
@@ -552,16 +553,6 @@ func (d *Dispatcher) FinalizeAutonomousRun(agentName, repo string) {
 // Stats returns a snapshot of the current dispatch counters.
 func (d *Dispatcher) Stats() DispatchStats {
 	return d.counters.snapshot()
-}
-
-// containsStr reports whether slice contains s.
-func containsStr(slice []string, s string) bool {
-	for _, v := range slice {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
 
 // sanitizeName lowercases and trims a name for safe comparison.
