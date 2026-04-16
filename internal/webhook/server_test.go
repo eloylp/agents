@@ -305,7 +305,6 @@ func TestHandlePullRequestClosedPayloadIncludesMerged(t *testing.T) {
 		{name: "non-merged close", merged: false, deliveryID: "d-pr-closed-ordinary"},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			server, dc := newTestServer(testCfg(nil))
@@ -499,7 +498,6 @@ func TestHandlePushIgnoresNonBranchRefs(t *testing.T) {
 		{name: "notes ref", ref: "refs/notes/commits", sha: "abc123"},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			server, dc := newTestServer(testCfg(nil))

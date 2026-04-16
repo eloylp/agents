@@ -257,7 +257,6 @@ func TestLoadRejectsBindingWithMixedTriggers(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			repo := fmt.Sprintf(`
@@ -294,7 +293,6 @@ repos:
 func TestLoadAcceptsValidEventKinds(t *testing.T) {
 	t.Setenv("TEST_SECRET", "s3cret")
 	for kind := range validEventKinds {
-		kind := kind
 		t.Run(kind, func(t *testing.T) {
 			t.Parallel()
 			repo := fmt.Sprintf(`
