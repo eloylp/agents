@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 )
 
 // ToOpenAI translates an Anthropic MessagesRequest into an OpenAI ChatRequest
@@ -270,24 +272,10 @@ func systemToString(raw json.RawMessage) (string, error) {
 			}
 			parts = append(parts, b.Text)
 		}
-		return joinNonEmpty(parts, "\n\n"), nil
+		return strings.Join(slices.DeleteFunc(parts, func(s string) bool { return s == "" }), "\n\n"), nil
 	default:
 		return "", fmt.Errorf("system must be a string or an array of content blocks")
 	}
-}
-
-func joinNonEmpty(parts []string, sep string) string {
-	var out string
-	for _, p := range parts {
-		if p == "" {
-			continue
-		}
-		if out != "" {
-			out += sep
-		}
-		out += p
-	}
-	return out
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
