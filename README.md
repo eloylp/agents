@@ -383,10 +383,40 @@ GitHub sends a ping immediately; the daemon will log the delivery.
 | `GET` | `/status` | none | Health check: JSON with uptime, queue depths, agent schedules |
 | `POST` | `/webhooks/github` | `X-Hub-Signature-256` HMAC | GitHub webhook receiver |
 | `POST` | `/agents/run` | `Authorization: Bearer <key>` | On-demand agent trigger |
+| `POST` | `/v1/messages` | none | Anthropic↔OpenAI translation proxy (opt-in via `proxy.enabled`) |
 
 The `/agents/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It blocks until the agent finishes. If `api_key_env` is not configured the endpoint returns `403 Forbidden`.
 
 Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL cache.
+
+---
+
+## Local / OpenAI-compatible backends
+
+The daemon includes a built-in Anthropic Messages ↔ OpenAI Chat Completions translation proxy. Enable it to run the `claude` CLI against any OpenAI-compatible backend (Ollama, llama.cpp, vLLM, Qwen, etc.) without a separate sidecar.
+
+```yaml
+daemon:
+  proxy:
+    enabled: true
+    path: /v1/messages          # default; configurable
+    upstream:
+      url: http://localhost:8001/v1   # OpenAI-compat base URL
+      model: qwen3                    # model name sent upstream
+      api_key_env: LOCAL_LLM_API_KEY  # optional; omit if not required
+      timeout_seconds: 120
+      extra_body:                     # forwarded verbatim on every request
+        chat_template_kwargs:
+          enable_thinking: false
+```
+
+Then point the Claude CLI at the daemon:
+
+```bash
+ANTHROPIC_BASE_URL=http://localhost:8080 claude -p "Summarise the repo."
+```
+
+The proxy translates text turns, tool use / tool results, system messages, stop reasons, and usage counters. Streaming, vision, and prompt-caching control blocks are not supported in v1.
 
 ---
 

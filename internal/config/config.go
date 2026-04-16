@@ -65,6 +65,9 @@ const (
 	defaultMaxPromptChars   = 12000
 
 	defaultMemoryDir = "/var/lib/agents/memory"
+
+	defaultProxyPath           = "/v1/messages"
+	defaultProxyTimeoutSeconds = 120
 )
 
 // Config is the root configuration loaded from YAML.
@@ -87,6 +90,28 @@ type DaemonConfig struct {
 	Processor  ProcessorConfig            `yaml:"processor"`
 	MemoryDir  string                     `yaml:"memory_dir"`
 	AIBackends map[string]AIBackendConfig `yaml:"ai_backends"`
+	Proxy      ProxyConfig                `yaml:"proxy"`
+}
+
+// ProxyConfig controls the built-in Anthropic↔OpenAI translation proxy.
+// When Enabled is false (the default) no additional route is mounted.
+type ProxyConfig struct {
+	Enabled  bool              `yaml:"enabled"`
+	Path     string            `yaml:"path"`
+	Upstream ProxyUpstreamConfig `yaml:"upstream"`
+}
+
+// ProxyUpstreamConfig describes the OpenAI-compatible endpoint the proxy
+// forwards requests to.
+type ProxyUpstreamConfig struct {
+	URL            string         `yaml:"url"`
+	Model          string         `yaml:"model"`
+	APIKeyEnv      string         `yaml:"api_key_env"`
+	TimeoutSeconds int            `yaml:"timeout_seconds"`
+	ExtraBody      map[string]any `yaml:"extra_body"`
+
+	// APIKey is resolved from APIKeyEnv at load time and is not present in YAML.
+	APIKey string `yaml:"-"`
 }
 
 // LogConfig controls daemon logging output.
@@ -293,6 +318,10 @@ func (c *Config) applyDefaults() {
 	setDefaultInt(&c.Daemon.Processor.EventQueueBuffer, defaultEventQueueBufferSize)
 	setDefaultInt(&c.Daemon.Processor.MaxConcurrentAgents, defaultMaxConcurrentAgents)
 
+	// daemon.proxy defaults (only applied when proxy is enabled or path is set)
+	setDefault(&c.Daemon.Proxy.Path, defaultProxyPath)
+	setDefaultInt(&c.Daemon.Proxy.Upstream.TimeoutSeconds, defaultProxyTimeoutSeconds)
+
 	// daemon.ai_backends defaults
 	for name, backend := range c.Daemon.AIBackends {
 		if backend.TimeoutSeconds == 0 {
@@ -375,6 +404,9 @@ func (c *Config) resolveSecrets() {
 	if c.Daemon.HTTP.APIKey == "" && c.Daemon.HTTP.APIKeyEnv != "" {
 		c.Daemon.HTTP.APIKey = os.Getenv(c.Daemon.HTTP.APIKeyEnv)
 	}
+	if c.Daemon.Proxy.Upstream.APIKey == "" && c.Daemon.Proxy.Upstream.APIKeyEnv != "" {
+		c.Daemon.Proxy.Upstream.APIKey = os.Getenv(c.Daemon.Proxy.Upstream.APIKeyEnv)
+	}
 }
 
 // loadPromptFiles reads any prompt_file references in skills and agents,
@@ -443,7 +475,36 @@ func (c *Config) validate() error {
 	if err := c.validateAgents(); err != nil {
 		return err
 	}
+	if err := c.validateProxy(); err != nil {
+		return err
+	}
 	return c.validateRepos()
+}
+
+func (c *Config) validateProxy() error {
+	p := c.Daemon.Proxy
+	if !p.Enabled {
+		return nil
+	}
+	if p.Upstream.URL == "" {
+		return errors.New("config: proxy.upstream.url is required when proxy.enabled is true")
+	}
+	if p.Upstream.Model == "" {
+		return errors.New("config: proxy.upstream.model is required when proxy.enabled is true")
+	}
+	if !strings.HasPrefix(p.Path, "/") {
+		return fmt.Errorf("config: proxy.path must start with '/', got %q", p.Path)
+	}
+	if p.Upstream.TimeoutSeconds <= 0 {
+		return fmt.Errorf("config: proxy.upstream.timeout_seconds must be positive, got %d", p.Upstream.TimeoutSeconds)
+	}
+	// When an api_key_env is configured, the variable must resolve at startup so
+	// that a missing or mis-spelled env var fails fast rather than producing
+	// silent 401/403 errors against a protected upstream at request time.
+	if p.Upstream.APIKeyEnv != "" && p.Upstream.APIKey == "" {
+		return fmt.Errorf("config: proxy.upstream.api_key_env %q is set but the environment variable is empty or unset", p.Upstream.APIKeyEnv)
+	}
+	return nil
 }
 
 var validLogLevels = map[string]struct{}{
