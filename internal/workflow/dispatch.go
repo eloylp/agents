@@ -115,9 +115,12 @@ func (s *DispatchDedupStore) evict(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for key, entry := range s.entries {
-		if now.After(entry.expiresAt) {
+		// Do not evict cron entries whose run is still in flight: the refcount
+		// tracks active callers that called MarkCronRun but have not yet called
+		// RemoveCronMark. Evicting such an entry would allow TryClaimForDispatch
+		// to proceed even though the autonomous run is still executing.
+		if now.After(entry.expiresAt) && s.cronRefCounts[key] == 0 {
 			delete(s.entries, key)
-			delete(s.cronRefCounts, key)
 		}
 	}
 }
@@ -244,15 +247,16 @@ func (s *DispatchDedupStore) RemoveCronMark(agent, repo string, number int) {
 }
 
 // SeenCronRun returns true if a cron or manual run has been recorded for
-// (agent, repo, number) within the TTL window. Used by ProcessDispatches
-// to suppress dispatches targeting an agent that already ran (or is
-// running) in the same item context.
+// (agent, repo, number) within the TTL window, or if the run is still
+// in flight (cronRefCounts > 0). The refcount check ensures that a
+// long-running autonomous pass (outlasting dedup_window_seconds) still
+// blocks new dispatches even after its TTL entry would have expired.
 func (s *DispatchDedupStore) SeenCronRun(agent, repo string, number int, now time.Time) bool {
 	key := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.entries[key]
-	return ok && now.Before(e.expiresAt)
+	return (ok && now.Before(e.expiresAt)) || s.cronRefCounts[key] > 0
 }
 
 // TryClaimForCron atomically checks whether a dispatch has already claimed
@@ -304,8 +308,12 @@ func (s *DispatchDedupStore) TryClaimForDispatch(agent, repo string, number int,
 	dispatchKey := fmt.Sprintf("%s\x00%s\x00%d", agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Block if any cron/manual run is active (pending or committed).
-	if e, ok := s.entries[cronKey]; ok && now.Before(e.expiresAt) {
+	// Block if any cron/manual run is active — either within its original TTL
+	// window or still in flight after the window expired (refcount > 0). The
+	// second condition closes the race: a long-running job that outlasts
+	// dedup_window_seconds would have an expired expiresAt, but its refcount
+	// is still positive until RemoveCronMark is called.
+	if e, ok := s.entries[cronKey]; (ok && now.Before(e.expiresAt)) || s.cronRefCounts[cronKey] > 0 {
 		return false
 	}
 	// Block if dispatch has already claimed the slot (pending or committed).

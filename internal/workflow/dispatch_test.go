@@ -783,3 +783,55 @@ func TestRemoveCronMarkWithOverlappingRunsRefcount(t *testing.T) {
 		t.Error("expected dispatch enqueued: all cron marks cleared after both rollbacks")
 	}
 }
+
+// TestLongRunningCronMarkBlocksDispatchPastTTL is a regression test for the
+// case where an autonomous run outlasts its dedup_window_seconds TTL. Without
+// the refcount-based guard, the sweeper would evict the cron entry once its
+// expiresAt passed, and TryClaimForDispatch would no longer see the mark —
+// allowing a dispatch to race the still-in-flight cron run.
+func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
+	t.Parallel()
+
+	// 1-second TTL so we can simulate expiry without real sleeps.
+	const ttlSeconds = 1
+	dedup := NewDispatchDedupStore(ttlSeconds)
+	agents := map[string]config.AgentDef{
+		"pr-reviewer": {Name: "pr-reviewer", AllowDispatch: true, CanDispatch: []string{"coder"}},
+		"coder":        {Name: "coder", AllowDispatch: true},
+	}
+	cfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: ttlSeconds}
+	q := &fakeQueue{}
+	d := NewDispatcher(cfg, agents, dedup, q, zerolog.Nop())
+
+	// Autonomous run starts; writes cron mark.
+	start := time.Now()
+	d.MarkAutonomousRun("coder", "owner/repo", start)
+
+	// Simulate the sweeper running after the TTL has elapsed but before the
+	// run completes. The cron mark's refcount is still 1, so it must NOT be
+	// evicted.
+	pastTTL := start.Add(2 * time.Duration(ttlSeconds) * time.Second)
+	dedup.evict(pastTTL)
+
+	// A dispatch arriving after the TTL window must still be suppressed because
+	// the cron run is still in flight (refcount > 0).
+	originator := agents["pr-reviewer"]
+	ev := Event{Repo: RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
+	d.ProcessDispatches(context.Background(), originator, ev, "root-past-ttl", 0, []ai.DispatchRequest{
+		{Agent: "coder", Reason: "dispatch while long-running cron job is still in flight"},
+	})
+	if len(q.popped()) != 0 {
+		t.Error("expected dispatch suppressed: cron run still in flight even though TTL has elapsed")
+	}
+
+	// Once the run completes, the cron mark is released and dispatches may proceed.
+	d.RollbackAutonomousRun("coder", "owner/repo") // use Rollback to test cleanup; same semantics as success path for this check
+	q2 := &fakeQueue{}
+	d2 := NewDispatcher(cfg, agents, dedup, q2, zerolog.Nop())
+	d2.ProcessDispatches(context.Background(), originator, ev, "root-after-run", 0, []ai.DispatchRequest{
+		{Agent: "coder", Reason: "dispatch after run completed"},
+	})
+	if len(q2.popped()) != 1 {
+		t.Error("expected dispatch enqueued: cron mark removed after run completed")
+	}
+}
