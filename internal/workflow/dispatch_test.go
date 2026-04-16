@@ -542,10 +542,11 @@ func TestDispatcherDedupUsesEventNumberWhenRequestNumberOmitted(t *testing.T) {
 	}
 }
 
-func TestDispatcherDedupeRolledBackOnEnqueueFailure(t *testing.T) {
+func TestDispatcherRetrySucceedsAfterEnqueueFailure(t *testing.T) {
 	t.Parallel()
-	// First call uses a failing queue — enqueue fails, so the dedup entry must
-	// be rolled back.
+	// First call uses a failing queue — enqueue fails. Because the dedup slot is
+	// claimed only after a successful enqueue, no dedup entry is written and
+	// the retry is not suppressed.
 	qFail := &fakeQueue{err: errors.New("queue full")}
 	d := testDispatcher(qFail)
 
@@ -559,7 +560,27 @@ func TestDispatcherDedupeRolledBackOnEnqueueFailure(t *testing.T) {
 
 	events := qOK.popped()
 	if len(events) != 1 {
-		t.Fatalf("expected 1 enqueued event after retry, got %d (dedup was not rolled back)", len(events))
+		t.Fatalf("expected 1 enqueued event after retry, got %d", len(events))
+	}
+}
+
+// TestDispatchClaimOnlyVisibleAfterSuccessfulEnqueue is a regression test for
+// the lost-work race: if ProcessDispatches fails to enqueue a dispatch event,
+// DispatchAlreadyClaimed must return false so the autonomous scheduler can
+// still run the target. Previously, SeenOrAdd was called before PushEvent and
+// a failed enqueue followed by a dedup rollback still left a brief window where
+// DispatchAlreadyClaimed could return true, causing both paths to skip.
+func TestDispatchClaimOnlyVisibleAfterSuccessfulEnqueue(t *testing.T) {
+	t.Parallel()
+	q := &fakeQueue{err: errors.New("queue full")}
+	d := testDispatcher(q)
+
+	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 0, Reason: "check"}}
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 0), "root-1", 0, reqs)
+
+	// The enqueue failed, so the dispatch slot must NOT be claimed.
+	if d.DispatchAlreadyClaimed("pr-reviewer", "owner/repo", time.Now()) {
+		t.Error("DispatchAlreadyClaimed returned true after a failed enqueue: phantom claim left by failed dispatch")
 	}
 }
 

@@ -136,15 +136,6 @@ func (s *DispatchDedupStore) Seen(target, repo string, number int, now time.Time
 	return ok && now.Before(expiresAt)
 }
 
-// Remove deletes a (target, repo, number) entry from the dedup store. It is
-// used to roll back a SeenOrAdd call when the corresponding enqueue fails, so
-// that a transient queue error does not suppress retries for the full TTL.
-func (s *DispatchDedupStore) Remove(target, repo string, number int) {
-	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.entries, key)
-}
 
 // MarkCronRun records that a cron or manual (--run-agent) execution has started
 // for (agent, repo, number). The mark persists for the full TTL window and lives
@@ -300,8 +291,12 @@ func (d *Dispatcher) ProcessDispatches(
 			continue
 		}
 
-		// Dispatch-to-dispatch dedup check.
-		if d.dedup.SeenOrAdd(req.Agent, ev.Repo.FullName, number, time.Now()) {
+		// Dispatch-to-dispatch dedup check (read-only; we claim the slot only
+		// after a successful enqueue so that DispatchAlreadyClaimed never sees a
+		// phantom claim that was never backed by an enqueued event — a failed
+		// enqueue followed by a rollback would otherwise cause the scheduler to
+		// skip the cron run while the dispatch itself was also lost).
+		if d.dedup.Seen(req.Agent, ev.Repo.FullName, number, time.Now()) {
 			logBase.Debug().Msg("dispatch deduped: already seen within window")
 			d.counters.deduped.Add(1)
 			continue
@@ -323,13 +318,19 @@ func (d *Dispatcher) ProcessDispatches(
 		}
 
 		if err := d.queue.PushEvent(ctx, dispatchEv); err != nil {
-			// Roll back the dedup entry so the next retry is not suppressed
-			// for the full TTL window due to this transient enqueue failure.
-			d.dedup.Remove(req.Agent, ev.Repo.FullName, number)
+			// Do not write to the dedup store: the event was never enqueued, so
+			// there is no phantom claim to clean up. The next retry will pass the
+			// Seen check above and attempt enqueue again.
 			logBase.Error().Err(err).Msg("failed to enqueue dispatch event")
 			errs = append(errs, fmt.Errorf("dispatch %q: %w", req.Agent, err))
 			continue
 		}
+
+		// Claim the dedup slot only after the event is successfully enqueued.
+		// This guarantees that DispatchAlreadyClaimed (used by the autonomous
+		// scheduler) only returns true when a real dispatch event exists in the
+		// queue, preventing the lost-work race where both paths skip execution.
+		d.dedup.SeenOrAdd(req.Agent, ev.Repo.FullName, number, time.Now())
 
 		fanout++
 		d.counters.enqueued.Add(1)
