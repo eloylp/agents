@@ -712,6 +712,41 @@ func TestDispatchDedupStoreStartSmallTTLDoesNotPanic(t *testing.T) {
 // is still relying on. Without refcount semantics, the first rollback would delete
 // the shared key and allow dispatches to slip through while the second run is
 // still in flight.
+// TestConcurrentDispatchesDoNotDuplicateEnqueue is a regression test for the
+// non-atomic Seen+PushEvent+SeenOrAdd race: two concurrent ProcessDispatches
+// calls for the same (target, repo, number) must enqueue exactly one event, not
+// two. The two-phase TryClaim/CommitClaim scheme ensures that the first caller
+// wins the pending reservation and the second is blocked at TryClaim before it
+// even attempts to enqueue.
+func TestConcurrentDispatchesDoNotDuplicateEnqueue(t *testing.T) {
+	t.Parallel()
+
+	q := &fakeQueue{}
+	d := testDispatcher(q)
+
+	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 42, Reason: "review"}}
+	ev := testEvent("owner/repo", 42)
+
+	var wg sync.WaitGroup
+	const goroutines = 20
+	wg.Add(goroutines)
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			d.ProcessDispatches(context.Background(), originatorAgent("coder"), ev, "root-concurrent", 0, reqs)
+		}()
+	}
+	wg.Wait()
+
+	events := q.popped()
+	if len(events) != 1 {
+		t.Errorf("concurrent dispatches: expected exactly 1 enqueued event, got %d", len(events))
+	}
+	if d.Stats().Enqueued != 1 {
+		t.Errorf("enqueued counter: got %d, want 1", d.Stats().Enqueued)
+	}
+}
+
 func TestRemoveCronMarkWithOverlappingRunsRefcount(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}

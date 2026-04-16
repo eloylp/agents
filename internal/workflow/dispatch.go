@@ -60,13 +60,22 @@ func (c *dispatchCounters) snapshot() DispatchStats {
 	}
 }
 
+// dispatchEntry records a dedup slot in the store.
+// committed indicates whether the slot is backed by a real enqueued event.
+// Pending (committed==false) entries block concurrent duplicate TryClaim calls
+// but are invisible to Seen / DispatchAlreadyClaimed until committed.
+type dispatchEntry struct {
+	expiresAt time.Time
+	committed bool
+}
+
 // DispatchDedupStore suppresses duplicate (target_agent, repo, number) dispatch
 // requests within a configurable TTL window. It mirrors the shape of
 // webhook.DeliveryStore.
 type DispatchDedupStore struct {
 	ttl           time.Duration
 	mu            sync.Mutex
-	entries       map[string]time.Time
+	entries       map[string]dispatchEntry
 	cronRefCounts map[string]int // active in-flight run count per cron key
 }
 
@@ -74,7 +83,7 @@ type DispatchDedupStore struct {
 func NewDispatchDedupStore(ttlSeconds int) *DispatchDedupStore {
 	return &DispatchDedupStore{
 		ttl:           time.Duration(ttlSeconds) * time.Second,
-		entries:       make(map[string]time.Time),
+		entries:       make(map[string]dispatchEntry),
 		cronRefCounts: make(map[string]int),
 	}
 }
@@ -105,8 +114,8 @@ func (s *DispatchDedupStore) Start(ctx context.Context) {
 func (s *DispatchDedupStore) evict(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for key, expiresAt := range s.entries {
-		if now.After(expiresAt) {
+	for key, entry := range s.entries {
+		if now.After(entry.expiresAt) {
 			delete(s.entries, key)
 			delete(s.cronRefCounts, key)
 		}
@@ -114,26 +123,73 @@ func (s *DispatchDedupStore) evict(now time.Time) {
 }
 
 // SeenOrAdd returns true if this (target, repo, number) combination has been
-// seen within the TTL window, otherwise records it and returns false.
+// seen within the TTL window (whether pending or committed), otherwise records
+// it as a committed entry and returns false.
 func (s *DispatchDedupStore) SeenOrAdd(target, repo string, number int, now time.Time) bool {
 	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if expiresAt, ok := s.entries[key]; ok && now.Before(expiresAt) {
+	if e, ok := s.entries[key]; ok && now.Before(e.expiresAt) {
 		return true
 	}
-	s.entries[key] = now.Add(s.ttl)
+	s.entries[key] = dispatchEntry{expiresAt: now.Add(s.ttl), committed: true}
 	return false
 }
 
-// Seen returns true if this (target, repo, number) combination has been seen
-// within the TTL window, without recording it.
+// Seen returns true if this (target, repo, number) combination has a committed
+// claim within the TTL window. Pending (not-yet-committed) claims are invisible
+// to Seen so that DispatchAlreadyClaimed never returns true for phantom claims
+// that are not yet backed by a successfully enqueued event.
 func (s *DispatchDedupStore) Seen(target, repo string, number int, now time.Time) bool {
 	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	expiresAt, ok := s.entries[key]
-	return ok && now.Before(expiresAt)
+	e, ok := s.entries[key]
+	return ok && now.Before(e.expiresAt) && e.committed
+}
+
+// TryClaim atomically reserves a dispatch dedup slot for (target, repo, number)
+// if no pending or committed claim exists within the TTL window. Returns true if
+// the reservation was created (caller may proceed to enqueue). Returns false if
+// the slot is already held, preventing concurrent dispatchers from both
+// proceeding past the dedup gate.
+//
+// A successful TryClaim creates a pending entry that blocks future TryClaim
+// calls but is invisible to Seen / DispatchAlreadyClaimed until CommitClaim is
+// called. On enqueue failure call AbandonClaim to release the pending slot.
+func (s *DispatchDedupStore) TryClaim(target, repo string, number int, now time.Time) bool {
+	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e, ok := s.entries[key]; ok && now.Before(e.expiresAt) {
+		return false
+	}
+	s.entries[key] = dispatchEntry{expiresAt: now.Add(s.ttl), committed: false}
+	return true
+}
+
+// CommitClaim upgrades a pending claim to committed, making it visible to
+// Seen and DispatchAlreadyClaimed. Must be called after a successful PushEvent.
+func (s *DispatchDedupStore) CommitClaim(target, repo string, number int) {
+	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e, ok := s.entries[key]; ok {
+		e.committed = true
+		s.entries[key] = e
+	}
+}
+
+// AbandonClaim removes a pending (uncommitted) claim. Must be called when
+// PushEvent fails so that the slot is released and future retries can proceed.
+// It is a no-op if the entry has already been committed.
+func (s *DispatchDedupStore) AbandonClaim(target, repo string, number int) {
+	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e, ok := s.entries[key]; ok && !e.committed {
+		delete(s.entries, key)
+	}
 }
 
 
@@ -152,7 +208,7 @@ func (s *DispatchDedupStore) MarkCronRun(agent, repo string, number int, now tim
 	key := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entries[key] = now.Add(s.ttl)
+	s.entries[key] = dispatchEntry{expiresAt: now.Add(s.ttl), committed: true}
 	s.cronRefCounts[key]++
 }
 
@@ -181,8 +237,8 @@ func (s *DispatchDedupStore) SeenCronRun(agent, repo string, number int, now tim
 	key := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	expiresAt, ok := s.entries[key]
-	return ok && now.Before(expiresAt)
+	e, ok := s.entries[key]
+	return ok && now.Before(e.expiresAt)
 }
 
 // Dispatcher validates and enqueues inter-agent dispatch requests produced by
@@ -291,13 +347,19 @@ func (d *Dispatcher) ProcessDispatches(
 			continue
 		}
 
-		// Dispatch-to-dispatch dedup check (read-only; we claim the slot only
-		// after a successful enqueue so that DispatchAlreadyClaimed never sees a
-		// phantom claim that was never backed by an enqueued event — a failed
-		// enqueue followed by a rollback would otherwise cause the scheduler to
-		// skip the cron run while the dispatch itself was also lost).
-		if d.dedup.Seen(req.Agent, ev.Repo.FullName, number, time.Now()) {
-			logBase.Debug().Msg("dispatch deduped: already seen within window")
+		// Two-phase dispatch dedup claim:
+		//   1. TryClaim atomically reserves a pending slot — concurrent
+		//      dispatchers that race on the same (target, repo, number) are
+		//      blocked here; only one proceeds.
+		//   2. CommitClaim (after successful enqueue) upgrades the slot to
+		//      committed so DispatchAlreadyClaimed can see it.
+		//   3. AbandonClaim (on enqueue failure) removes the pending slot so
+		//      retries can attempt again — and DispatchAlreadyClaimed never
+		//      returns true for a phantom entry.
+		// Pending slots are invisible to Seen / DispatchAlreadyClaimed, so the
+		// autonomous scheduler is only blocked once a real event is enqueued.
+		if !d.dedup.TryClaim(req.Agent, ev.Repo.FullName, number, time.Now()) {
+			logBase.Debug().Msg("dispatch deduped: already claimed within window")
 			d.counters.deduped.Add(1)
 			continue
 		}
@@ -318,19 +380,17 @@ func (d *Dispatcher) ProcessDispatches(
 		}
 
 		if err := d.queue.PushEvent(ctx, dispatchEv); err != nil {
-			// Do not write to the dedup store: the event was never enqueued, so
-			// there is no phantom claim to clean up. The next retry will pass the
-			// Seen check above and attempt enqueue again.
+			// Release the pending claim so future retries are not blocked and
+			// DispatchAlreadyClaimed never sees a phantom committed slot.
+			d.dedup.AbandonClaim(req.Agent, ev.Repo.FullName, number)
 			logBase.Error().Err(err).Msg("failed to enqueue dispatch event")
 			errs = append(errs, fmt.Errorf("dispatch %q: %w", req.Agent, err))
 			continue
 		}
 
-		// Claim the dedup slot only after the event is successfully enqueued.
-		// This guarantees that DispatchAlreadyClaimed (used by the autonomous
-		// scheduler) only returns true when a real dispatch event exists in the
-		// queue, preventing the lost-work race where both paths skip execution.
-		d.dedup.SeenOrAdd(req.Agent, ev.Repo.FullName, number, time.Now())
+		// Enqueue succeeded — commit the claim so DispatchAlreadyClaimed returns
+		// true and the autonomous scheduler skips a duplicate run for this target.
+		d.dedup.CommitClaim(req.Agent, ev.Repo.FullName, number)
 
 		fanout++
 		d.counters.enqueued.Add(1)
