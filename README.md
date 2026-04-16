@@ -391,32 +391,44 @@ Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL c
 
 ---
 
-## Local / OpenAI-compatible backends
+## Local models — run your fleet on your own LLM
 
-The daemon includes a built-in Anthropic Messages ↔ OpenAI Chat Completions translation proxy. Enable it to run the `claude` CLI against any OpenAI-compatible backend (Ollama, llama.cpp, vLLM, Qwen, etc.) without a separate sidecar.
+Point the agents daemon at any OpenAI-compatible endpoint (`llama.cpp`, Ollama, vLLM, hosted Qwen on Together/Alibaba, anything else) and run the entire fleet without paying per token or sending code to a vendor. No sidecar processes, no Python dependencies — a built-in Go proxy inside the daemon translates Anthropic Messages format to OpenAI Chat Completions and keeps Claude Code's full tool stack working on top of whatever model you pick.
+
+Quick wire-up in `config.yaml`:
 
 ```yaml
 daemon:
   proxy:
     enabled: true
-    path: /v1/messages          # default; configurable
     upstream:
-      url: http://localhost:8001/v1   # OpenAI-compat base URL
-      model: qwen3                    # model name sent upstream
-      api_key_env: LOCAL_LLM_API_KEY  # optional; omit if not required
-      timeout_seconds: 120
-      extra_body:                     # forwarded verbatim on every request
+      url: http://localhost:18000/v1   # your llama.cpp / Ollama / vLLM / hosted endpoint
+      model: qwen                      # anything; most servers ignore this
+      timeout_seconds: 3600
+      extra_body:                      # merged into every upstream request
         chat_template_kwargs:
-          enable_thinking: false
+          enable_thinking: false       # Qwen 3.5: skip reasoning-token waste
+
+  ai_backends:
+    claude:                            # default: hosted Anthropic
+      command: claude
+      args: [-p, --dangerously-skip-permissions]
+    claude_local:                      # same binary, different env → proxy
+      command: claude
+      args: [-p, --dangerously-skip-permissions]
+      env:
+        ANTHROPIC_BASE_URL: http://localhost:8080
+        ANTHROPIC_API_KEY: sk-not-needed
+        ANTHROPIC_MODEL: qwen
+
+agents:
+  - { name: pr-reviewer, backend: claude_local }    # Qwen-backed
+  - { name: coder,        backend: claude }         # hosted Claude
 ```
 
-Then point the Claude CLI at the daemon:
+**Measured on our own infra** — Qwen3.5-35B-A3B at Q5 on a rented RTX 5090: **~75 tok/s decode, 5000+ tok/s prefill, 90+ tool-loop round-trips per run without a single translation error**. Same ballpark as hosted Claude Sonnet on a GPU that rents for `$0.60/hr`.
 
-```bash
-ANTHROPIC_BASE_URL=http://localhost:8080 claude -p "Summarise the repo."
-```
-
-The proxy translates text turns, tool use / tool results, system messages, stop reasons, and usage counters. Streaming, vision, and prompt-caching control blocks are not supported in v1.
+See **[docs/local-models.md](docs/local-models.md)** for the full setup recipe, model picks by VRAM tier, recommended `llama.cpp` tuning flags (prefix caching, KV quantization, batch sizing), cost math, and honest caveats about capability gaps on action-taking agents.
 
 ---
 

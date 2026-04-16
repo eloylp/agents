@@ -27,21 +27,21 @@ daemon:
   memory_dir: /var/lib/agents/memory            # persistent agent memory root
 
   # Built-in Anthropic↔OpenAI translation proxy (disabled by default).
-  # Enable to run `ANTHROPIC_BASE_URL=http://localhost:8080 claude -p "hi"`
-  # against any OpenAI-compatible backend (llama.cpp, Ollama, vLLM, etc.)
-  # without a separate sidecar like LiteLLM.
+  # Enable to route the claude CLI through any OpenAI-compatible backend
+  # (llama.cpp, Ollama, vLLM, hosted Qwen, etc.) without a Python sidecar.
+  # Full recipe: docs/local-models.md
   #
   # proxy:
-  #   enabled: false
-  #   path: /v1/messages          # path the claude CLI hits
+  #   enabled: true
+  #   path: /v1/messages                # path claude CLI hits (default shown)
   #   upstream:
-  #     url: http://ts-vortex:8001/v1   # OpenAI-compat base URL
-  #     model: qwen3                    # model name forwarded upstream
-  #     api_key_env: LOCAL_LLM_API_KEY  # optional; empty if not required
-  #     timeout_seconds: 120
+  #     url: http://localhost:18000/v1  # your OpenAI-compat server
+  #     model: qwen                     # name forwarded upstream; llama.cpp ignores
+  #     api_key_env: LOCAL_LLM_API_KEY  # optional; empty if server doesn't auth
+  #     timeout_seconds: 3600           # agent tool loops can take minutes
   #     extra_body:                     # merged into every upstream request
   #       chat_template_kwargs:
-  #         enable_thinking: false
+  #         enable_thinking: false      # Qwen 3.5: skip reasoning-mode token waste
 
   ai_backends:
     claude:
@@ -52,6 +52,25 @@ daemon:
       timeout_seconds: 1500
       max_prompt_chars: 12000
       redaction_salt_env: LOG_SALT
+
+    # Example: a SECOND claude backend that runs the SAME `claude` CLI but
+    # routes through the daemon's built-in proxy to a local / OpenAI-compat
+    # model. Bind specific agents to `backend: claude_local` to try them on
+    # local inference while the rest of the fleet stays on hosted Anthropic.
+    # See docs/local-models.md for the full setup.
+    #
+    # claude_local:
+    #   command: claude
+    #   args:
+    #     - "-p"
+    #     - "--dangerously-skip-permissions"
+    #   env:
+    #     ANTHROPIC_BASE_URL: http://localhost:8080
+    #     ANTHROPIC_API_KEY: sk-not-needed
+    #     ANTHROPIC_MODEL: qwen
+    #   timeout_seconds: 3600
+    #   max_prompt_chars: 12000
+    #   redaction_salt_env: LOG_SALT
 
     codex:
       command: codex

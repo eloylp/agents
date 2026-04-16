@@ -70,11 +70,13 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, 
   - `POST /webhooks/github` — HMAC-verified webhook receiver
   - `POST /agents/run` — on-demand agent trigger (requires Bearer token)
   - `POST /v1/messages` — Anthropic↔OpenAI translation proxy (disabled by default; enabled via `daemon.proxy.enabled: true`)
+  - `GET /v1/models` — companion stub for `/v1/messages`; returns the configured upstream model. Only mounted when the proxy is enabled.
 - Relevant webhook events: `issues.labeled`, `pull_request.labeled`. Trigger label comes from `payload.label.name`.
 - Duplicate webhook suppression via `X-GitHub-Delivery` TTL cache.
 - Workflow execution is stateless in-process. Only autonomous agents persist memory (per-agent, per-repo markdown file under `memory_dir`).
 - Agent memory is read before each scheduled run and is the agent's responsibility to update.
 - Backend resolution: agents declare `backend: claude | codex | auto`. `auto` picks the first configured backend in preference order (claude > codex).
+- Per-backend env overrides (`daemon.ai_backends.<name>.env`) let two backends run the same CLI with different endpoints — e.g. a default `claude` backend on hosted Anthropic plus a `claude_local` backend that routes the CLI via `ANTHROPIC_BASE_URL` through the built-in proxy to a local model. See [`docs/local-models.md`](docs/local-models.md).
 
 ## Security Notes
 
