@@ -507,14 +507,11 @@ func (c *Config) validateProxy() error {
 	return nil
 }
 
-var validLogLevels = map[string]struct{}{
-	"trace": {}, "debug": {}, "info": {}, "warn": {},
-	"error": {}, "fatal": {}, "panic": {}, "disabled": {},
-}
+var validLogLevels = []string{"trace", "debug", "info", "warn", "error", "fatal", "panic", "disabled"}
 
 func (c *Config) validateLogConfig() error {
 	if c.Daemon.Log.Level != "" {
-		if _, ok := validLogLevels[c.Daemon.Log.Level]; !ok {
+		if !slices.Contains(validLogLevels, c.Daemon.Log.Level) {
 			return fmt.Errorf("config: invalid log level %q (supported: trace, debug, info, warn, error, fatal, panic, disabled)", c.Daemon.Log.Level)
 		}
 	}
