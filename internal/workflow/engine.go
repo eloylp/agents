@@ -233,10 +233,11 @@ func (e *Engine) agentsForEvent(ev Event) []config.AgentDef {
 	return matched
 }
 
-// buildRoster constructs the roster of peer agents for the given repo and
-// agent name. The current agent is excluded.
-func (e *Engine) buildRoster(repoName, currentAgentName string) []ai.RosterEntry {
-	repo, ok := e.cfg.RepoByName(repoName)
+// BuildRoster constructs the roster of peer agents for the given repo and
+// agent name. The current agent is excluded. It is shared with the autonomous
+// scheduler to avoid duplicating the dedup+lookup logic.
+func BuildRoster(cfg *config.Config, repoName, currentAgentName string) []ai.RosterEntry {
+	repo, ok := cfg.RepoByName(repoName)
 	if !ok {
 		return nil
 	}
@@ -249,7 +250,7 @@ func (e *Engine) buildRoster(repoName, currentAgentName string) []ai.RosterEntry
 		if _, dup := seen[b.Agent]; dup {
 			continue
 		}
-		agent, ok := e.cfg.AgentByName(b.Agent)
+		agent, ok := cfg.AgentByName(b.Agent)
 		if !ok {
 			continue
 		}
@@ -302,7 +303,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) 
 	}
 
 	// Build the roster of peer agents for this repo.
-	roster := e.buildRoster(ev.Repo.FullName, agent.Name)
+	roster := BuildRoster(e.cfg, ev.Repo.FullName, agent.Name)
 
 	promptPayload := ev.Payload
 
