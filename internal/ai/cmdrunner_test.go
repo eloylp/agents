@@ -256,3 +256,111 @@ func TestCommandRunnerEmptyStdoutIsError(t *testing.T) {
 		t.Errorf("expected 'empty response' in error, got: %v", err)
 	}
 }
+
+// TestBuildDeliveryClaudeUsesAppendSystemPrompt verifies that the claude
+// backend routes system content through --append-system-prompt and leaves user
+// content for stdin, preserving Claude Code's default tool stack.
+func TestBuildDeliveryClaudeUsesAppendSystemPrompt(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		backendName string
+		staticArgs  []string
+		system      string
+		user        string
+		wantFlag    bool // whether --append-system-prompt flag is expected
+	}{
+		{
+			name:        "claude-routes-system-via-flag",
+			backendName: "claude",
+			staticArgs:  []string{"--dangerously-skip-permissions"},
+			system:      "You are a reviewer.",
+			user:        "Review PR #5.",
+			wantFlag:    true,
+		},
+		{
+			name:        "claude-local-also-uses-flag",
+			backendName: "claude_local",
+			staticArgs:  nil,
+			system:      "System guidance.",
+			user:        "Runtime context.",
+			wantFlag:    true,
+		},
+		{
+			name:        "codex-concatenates-on-stdin",
+			backendName: "codex",
+			staticArgs:  []string{"exec"},
+			system:      "System guidance.",
+			user:        "Runtime context.",
+			wantFlag:    false,
+		},
+		{
+			name:        "unknown-backend-concatenates",
+			backendName: "openai_compatible",
+			staticArgs:  nil,
+			system:      "System guidance.",
+			user:        "Runtime context.",
+			wantFlag:    false,
+		},
+		{
+			name:        "claude-empty-system-no-flag",
+			backendName: "claude",
+			staticArgs:  nil,
+			system:      "",
+			user:        "Only user content.",
+			wantFlag:    false, // no flag when system is empty
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := NewCommandRunner(tc.backendName, "command", "true", tc.staticArgs, nil, 10, 0, "", zerolog.Nop())
+			args, stdin := r.buildDelivery(Request{System: tc.system, User: tc.user})
+
+			hasFlag := slices.Contains(args, "--append-system-prompt")
+			if hasFlag != tc.wantFlag {
+				t.Errorf("--append-system-prompt present=%v, want=%v (args=%v)", hasFlag, tc.wantFlag, args)
+			}
+
+			if tc.wantFlag {
+				// System must be the value immediately after the flag.
+				for i, a := range args {
+					if a == "--append-system-prompt" {
+						if i+1 >= len(args) {
+							t.Fatalf("--append-system-prompt has no following value in args=%v", args)
+						}
+						if args[i+1] != tc.system {
+							t.Errorf("--append-system-prompt value = %q, want %q", args[i+1], tc.system)
+						}
+						break
+					}
+				}
+				// User content goes on stdin.
+				if stdin != tc.user {
+					t.Errorf("stdin = %q, want user content %q", stdin, tc.user)
+				}
+				// Static args must still be present.
+				for _, sa := range tc.staticArgs {
+					if !slices.Contains(args, sa) {
+						t.Errorf("static arg %q missing from args=%v", sa, args)
+					}
+				}
+			} else {
+				// Non-claude (or empty system): combined content on stdin.
+				if tc.system != "" {
+					if !strings.Contains(stdin, tc.system) {
+						t.Errorf("stdin missing system content; stdin=%q", stdin)
+					}
+					if !strings.Contains(stdin, tc.user) {
+						t.Errorf("stdin missing user content; stdin=%q", stdin)
+					}
+				} else {
+					if stdin != tc.user {
+						t.Errorf("stdin = %q, want user content %q", stdin, tc.user)
+					}
+				}
+			}
+		})
+	}
+}

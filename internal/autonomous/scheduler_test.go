@@ -238,7 +238,10 @@ func TestSchedulerSkipsJobWhenPreviousRunStillRunning(t *testing.T) {
 	}
 }
 
-// promptCapturingRunner records the prompt from each Run call for inspection.
+// promptCapturingRunner records the System part from each Run call for
+// inspection. Since skills, agent prompt, and the AllowPRs restriction all
+// live in the stable System part, tests that check for those tokens inspect
+// req.System.
 type promptCapturingRunner struct {
 	mu      sync.Mutex
 	prompts []string
@@ -247,7 +250,7 @@ type promptCapturingRunner struct {
 func (r *promptCapturingRunner) Run(_ context.Context, req ai.Request) (ai.Response, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.prompts = append(r.prompts, req.Prompt)
+	r.prompts = append(r.prompts, req.System)
 	return ai.Response{}, nil
 }
 

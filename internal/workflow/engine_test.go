@@ -262,10 +262,11 @@ func TestEngineDispatchEventPayloadPropagatedToPrompt(t *testing.T) {
 	t.Parallel()
 	// The engine must pass the full dispatch event payload to the prompt renderer
 	// so that the target agent sees target_agent, reason, root_event_id, etc.
-	var capturedPrompt string
+	// Dispatch context is per-run, so it must appear in the User part.
+	var capturedUser string
 	runner := &stubRunner{
 		runFn: func(req ai.Request) error {
-			capturedPrompt = req.Prompt
+			capturedUser = req.User
 			return nil
 		},
 	}
@@ -319,10 +320,10 @@ func TestEngineDispatchEventPayloadPropagatedToPrompt(t *testing.T) {
 	if runner.callCount() != 1 {
 		t.Fatalf("expected 1 run, got %d", runner.callCount())
 	}
-	// The payload fields must appear in the rendered prompt.
+	// Dispatch context is per-run content — it must appear in the User part.
 	for _, want := range []string{"target_agent", "please review", "root-abc"} {
-		if !strings.Contains(capturedPrompt, want) {
-			t.Errorf("prompt missing %q\nfull prompt:\n%s", want, capturedPrompt)
+		if !strings.Contains(capturedUser, want) {
+			t.Errorf("User missing %q\nfull User:\n%s", want, capturedUser)
 		}
 	}
 }

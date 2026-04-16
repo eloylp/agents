@@ -306,7 +306,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) 
 
 	promptPayload := ev.Payload
 
-	prompt, err := ai.RenderAgentPrompt(agent, e.cfg.Skills, ai.PromptContext{
+	rendered, err := ai.RenderAgentPrompt(agent, e.cfg.Skills, ai.PromptContext{
 		Repo:          ev.Repo.FullName,
 		Number:        ev.Number,
 		Backend:       backend,
@@ -339,7 +339,8 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) 
 		Workflow: workflow,
 		Repo:     ev.Repo.FullName,
 		Number:   ev.Number,
-		Prompt:   prompt,
+		System:   rendered.System,
+		User:     rendered.User,
 	})
 	if err != nil {
 		return fmt.Errorf("agent %q: %w", agent.Name, err)

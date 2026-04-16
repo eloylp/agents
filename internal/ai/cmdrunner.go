@@ -49,8 +49,10 @@ func NewCommandRunner(backendName string, mode string, command string, args []st
 }
 
 func (r *CommandRunner) Run(ctx context.Context, req Request) (Response, error) {
-	prompt := truncateString(req.Prompt, r.maxPromptChars)
-	promptMeta := r.promptMeta(prompt)
+	// Compute hash and length from the combined content for logging, regardless
+	// of how the content is actually delivered to the backend.
+	combined := req.System + "\n\n" + req.User
+	promptMeta := r.promptMeta(combined)
 	logger := r.logger.With().
 		Str("workflow", req.Workflow).
 		Str("repo", req.Repo).
@@ -68,13 +70,19 @@ func (r *CommandRunner) Run(ctx context.Context, req Request) (Response, error) 
 			return Response{}, fmt.Errorf("%s command is required when mode=command", r.backendName)
 		}
 		logger.Info().Str("command", r.command).Msgf("executing %s command", r.backendName)
-		return r.runCommand(ctx, logger, req, prompt)
+		return r.runCommand(ctx, logger, req)
 	default:
 		return Response{}, fmt.Errorf("unknown %s mode: %s", r.backendName, r.mode)
 	}
 }
 
-func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, req Request, prompt string) (Response, error) {
+// runCommand executes the backend CLI. For the claude backend the system
+// content is delivered via --append-system-prompt so Claude Code's built-in
+// tool definitions are preserved; the user content travels on stdin as before.
+// For all other backends (codex, openai_compatible, unknown) the two parts are
+// concatenated and sent on stdin — the semantics are identical to the previous
+// single-prompt behaviour.
+func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, req Request) (Response, error) {
 	var cmdCtx context.Context
 	var cancel context.CancelFunc
 	if r.timeout > 0 {
@@ -84,14 +92,17 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	}
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, r.command, r.args...)
+	// Build the final arg list and stdin content for this request.
+	args, stdin := r.buildDelivery(req)
+
+	cmd := exec.CommandContext(cmdCtx, r.command, args...)
 	cmd.Env = buildCommandEnv(req, r.env)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	cmd.Stdin = bytes.NewBufferString(prompt)
+	cmd.Stdin = bytes.NewBufferString(stdin)
 
 	cmdErr := cmd.Run()
 
@@ -134,6 +145,40 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 		Int("summary_len", len(response.Summary)).
 		Msgf("%s command completed", r.backendName)
 	return response, nil
+}
+
+// buildDelivery returns the final args slice and stdin string to use for the
+// given request. The delivery strategy depends on the backend:
+//
+//   - claude (and any backend whose name starts with "claude"): system content
+//     is appended to Claude Code's built-in system prompt via
+//     --append-system-prompt so tool definitions and permissions are preserved.
+//     User content is passed via stdin.
+//
+//   - all other backends (codex, openai_compatible, …): system and user
+//     content are concatenated with a blank-line separator and sent on stdin.
+//     This matches the previous single-prompt behaviour and documents the
+//     limitation that codex has no native system channel.
+func (r *CommandRunner) buildDelivery(req Request) (args []string, stdin string) {
+	if strings.HasPrefix(r.backendName, "claude") && req.System != "" {
+		// Deliver system content via --append-system-prompt; user via stdin.
+		// Build a new slice so concurrent calls do not share the underlying
+		// array from r.args.
+		args = make([]string, 0, len(r.args)+2)
+		args = append(args, r.args...)
+		args = append(args, "--append-system-prompt", req.System)
+		stdin = truncateString(req.User, r.maxPromptChars)
+		return args, stdin
+	}
+	// Fallback: concatenate system + user, send on stdin.
+	combined := req.System
+	if req.User != "" {
+		if combined != "" {
+			combined += "\n\n"
+		}
+		combined += req.User
+	}
+	return r.args, truncateString(combined, r.maxPromptChars)
 }
 
 type promptMeta struct {

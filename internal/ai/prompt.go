@@ -43,44 +43,52 @@ type PromptContext struct {
 	DispatchDepth int    // 0 for direct triggers; increments with each dispatch hop
 }
 
-// RenderAgentPrompt composes the final prompt text for an agent. The result
-// is the concatenation of:
+// RenderAgentPrompt composes the prompt for an agent and returns it as a
+// RenderedPrompt with two parts:
 //
-//  1. Each referenced skill's guidance (in the order listed on the agent)
-//  2. The agent's own prompt
-//  3. A short runtime-context block describing the repo, item number, and
-//     memory path (for autonomous runs)
+//   - System: stable content that is identical across every run of the same
+//     agent — concatenated skill guidance followed by the agent's own prompt
+//     body. Backends that support a native system channel (e.g. Claude's
+//     --append-system-prompt) can deliver this part separately to benefit from
+//     prompt caching.
+//
+//   - User: per-run content — the ## Runtime context block containing the
+//     repo, event, actor, payload, memory, and roster. This changes every run
+//     and must travel as the user turn.
 //
 // No Go templates, no {{.Field}} substitution — just text composition. The
 // agent's prompt is expected to be self-contained.
-func RenderAgentPrompt(agent config.AgentDef, skills map[string]config.SkillDef, ctx PromptContext) (string, error) {
-	var b strings.Builder
+func RenderAgentPrompt(agent config.AgentDef, skills map[string]config.SkillDef, ctx PromptContext) (RenderedPrompt, error) {
+	var sys strings.Builder
 
 	for _, skillName := range agent.Skills {
 		skill, ok := skills[skillName]
 		if !ok {
-			return "", fmt.Errorf("agent %q references unknown skill %q", agent.Name, skillName)
+			return RenderedPrompt{}, fmt.Errorf("agent %q references unknown skill %q", agent.Name, skillName)
 		}
 		guidance := strings.TrimSpace(skill.Prompt)
 		if guidance != "" {
-			b.WriteString(guidance)
-			b.WriteString("\n\n")
+			sys.WriteString(guidance)
+			sys.WriteString("\n\n")
 		}
 	}
 
 	agentPrompt := strings.TrimSpace(agent.Prompt)
 	if agentPrompt != "" {
-		b.WriteString(agentPrompt)
-		b.WriteString("\n\n")
+		sys.WriteString(agentPrompt)
 	}
 
+	var usr strings.Builder
 	runtime := renderRuntimeContext(ctx)
 	if runtime != "" {
-		b.WriteString("## Runtime context\n\n")
-		b.WriteString(runtime)
+		usr.WriteString("## Runtime context\n\n")
+		usr.WriteString(runtime)
 	}
 
-	return strings.TrimRight(b.String(), "\n") + "\n", nil
+	return RenderedPrompt{
+		System: strings.TrimRight(sys.String(), "\n"),
+		User:   strings.TrimRight(usr.String(), "\n"),
+	}, nil
 }
 
 func renderRuntimeContext(ctx PromptContext) string {
