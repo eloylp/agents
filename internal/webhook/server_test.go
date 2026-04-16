@@ -15,6 +15,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -53,7 +54,7 @@ func signatureForTests(body []byte, secret string) string {
 
 func newTestServer(cfg *config.Config) (*Server, *workflow.DataChannels) {
 	dc := workflow.NewDataChannels(1)
-	return NewServer(cfg, NewDeliveryStore(time.Hour), dc, nil, zerolog.Nop(), nil), dc
+	return NewServer(cfg, NewDeliveryStore(time.Hour), dc, nil, nil, zerolog.Nop(), nil), dc
 }
 
 // webhookRequest builds a signed POST request to /webhooks/github.
@@ -541,7 +542,7 @@ func TestHandleWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("preload event queue: %v", err)
 	}
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dc, nil, zerolog.Nop(), nil)
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dc, nil, nil, zerolog.Nop(), nil)
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":2}}`
 	rr := httptest.NewRecorder()
@@ -577,7 +578,7 @@ func (s *stubTriggerer) TriggerAgent(_ context.Context, agentName, repo string) 
 
 func newRunServer(triggerer AgentTriggerer) *Server {
 	cfg := testCfg(nil)
-	return NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1), nil, zerolog.Nop(), triggerer)
+	return NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1), nil, nil, zerolog.Nop(), triggerer)
 }
 
 func authedRequest(method, path, body string) *http.Request {
@@ -632,7 +633,7 @@ func TestHandleAgentsRunRejectsWrongToken(t *testing.T) {
 func TestHandleAgentsRunReturnsForbiddenWhenNoAPIKeyConfigured(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) { c.Daemon.HTTP.APIKey = "" })
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1), nil, zerolog.Nop(), &stubTriggerer{})
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1), nil, nil, zerolog.Nop(), &stubTriggerer{})
 	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
 	req.Header.Set("Authorization", "Bearer something")
 	rr := httptest.NewRecorder()
@@ -675,6 +676,18 @@ func TestHandleAgentsRunReturnsInternalServerErrorOnTriggerFailure(t *testing.T)
 	server.handleAgentsRun(rr, req)
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestHandleAgentsRunReturnsOKOnDispatchSkipped(t *testing.T) {
+	t.Parallel()
+	trig := &stubTriggerer{err: autonomous.ErrDispatchSkipped}
+	server := newRunServer(trig)
+	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":"coder","repo":"owner/repo"}`)
+	rr := httptest.NewRecorder()
+	server.handleAgentsRun(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("ErrDispatchSkipped should yield 200, got %d", rr.Code)
 	}
 }
 

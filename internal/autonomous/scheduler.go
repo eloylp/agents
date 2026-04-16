@@ -2,6 +2,7 @@ package autonomous
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -13,7 +14,14 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/workflow"
 )
+
+// ErrDispatchSkipped is returned by executeAgentRun (and propagated through
+// TriggerAgent) when the run was skipped because a dispatch has already claimed
+// the dedup slot for the same (agent, repo) autonomous context. Callers can
+// distinguish this from a real run failure using errors.Is.
+var ErrDispatchSkipped = errors.New("autonomous run skipped: dispatch already claimed within dedup window")
 
 // zerologCronLogger adapts zerolog.Logger to the cron.Logger interface
 // required by chain wrappers such as SkipIfStillRunning.
@@ -72,6 +80,16 @@ type Scheduler struct {
 	agentEntries []agentEntry
 	lastRunsMu   sync.RWMutex
 	lastRuns     map[string]lastRunRecord // key: "name\x00repo"
+	dispatcher   *workflow.Dispatcher    // nil when dispatch is not configured
+}
+
+// WithDispatcher attaches a Dispatcher to the Scheduler so that dispatch
+// requests returned by autonomous agent runs are enqueued and safety-checked
+// through the same limits and dedup store used by the event-driven path.
+// Call this after creating both the Scheduler and the Engine but before
+// starting the Scheduler.
+func (s *Scheduler) WithDispatcher(d *workflow.Dispatcher) {
+	s.dispatcher = d
 }
 
 // NewScheduler builds a scheduler and registers all cron-triggered bindings
@@ -153,8 +171,17 @@ func (s *Scheduler) makeCronJob(repo string, agent config.AgentDef) func() {
 		}
 		status := "success"
 		if err := s.executeAgentRun(ctx, repo, agent); err != nil {
-			s.logger.Error().Str("repo", repo).Str("agent", agent.Name).Err(err).Msg("autonomous agent run completed with errors")
-			status = "error"
+			switch {
+			case errors.Is(err, ErrDispatchSkipped):
+				// A dispatch already claimed this slot — the dedup skip is not
+				// a failure, but we record "skipped" rather than "success" so
+				// that /status does not mislead operators into thinking a real
+				// agent pass ran.
+				status = "skipped"
+			default:
+				s.logger.Error().Str("repo", repo).Str("agent", agent.Name).Err(err).Msg("autonomous agent run completed with errors")
+				status = "error"
+			}
 		}
 		s.recordLastRun(agent.Name, repo, time.Now(), status)
 	}
@@ -234,21 +261,53 @@ func (s *Scheduler) TriggerAgent(ctx context.Context, agentName, repo string) er
 }
 
 func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent config.AgentDef) error {
+	// Atomically check whether a dispatch has already claimed the
+	// (agent, repo, 0) slot and, if not, write the cron mark. This single
+	// lock-protected operation eliminates the TOCTOU race where the old split
+	// DispatchAlreadyClaimed (read) → MarkAutonomousRun (write) sequence
+	// allowed both the cron path and a concurrent dispatch path to observe
+	// no opposing claim before either wrote, causing both to proceed.
+	if s.dispatcher != nil {
+		if !s.dispatcher.TryMarkAutonomousRun(agent.Name, repo, time.Now()) {
+			s.logger.Info().Str("repo", repo).Str("agent", agent.Name).
+				Msg("autonomous run skipped: dispatch already claimed within dedup window")
+			return ErrDispatchSkipped
+		}
+	}
+
+	// Resolve backend and runner. If either fails, roll back the cron mark
+	// written above so that subsequent dispatches are not spuriously suppressed
+	// for the full dedup_window_seconds.
 	backend := s.cfg.ResolveBackend(agent.Backend)
 	if backend == "" {
+		if s.dispatcher != nil {
+			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
+		}
 		return fmt.Errorf("no configured backend for agent %q (configured: %q)", agent.Name, agent.Backend)
 	}
 	runner, ok := s.runners[backend]
 	if !ok {
+		if s.dispatcher != nil {
+			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
+		}
 		return fmt.Errorf("no runner for backend %q", backend)
 	}
+
 	logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Str("backend", backend).Logger()
-	return s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
+	roster := s.buildRoster(repo, agent.Name)
+	// runCompleted is set to true once runner.Run returns successfully. The cron
+	// mark should only be rolled back when the autonomous pass itself fails
+	// (prompt rendering, memory lock, or runner error). A post-run failure such
+	// as a dispatch enqueue error must NOT clear the mark — the autonomous pass
+	// already committed, so the dedup window must remain in force.
+	runCompleted := false
+	err := s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
 		prompt, err := ai.RenderAgentPrompt(agent, s.cfg.Skills, ai.PromptContext{
 			Repo:       repo,
 			Backend:    backend,
 			Memory:     memory,
 			MemoryPath: memoryPath,
+			Roster:     roster,
 		})
 		if err != nil {
 			return fmt.Errorf("render prompt: %w", err)
@@ -265,9 +324,77 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		if err != nil {
 			return fmt.Errorf("agent run: %w", err)
 		}
-		logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Msg("autonomous pass completed")
+		runCompleted = true
+		logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Int("dispatch_requests", len(resp.Dispatch)).Msg("autonomous pass completed")
+		if s.dispatcher != nil && len(resp.Dispatch) > 0 {
+			// Synthesize a minimal event to carry repo context into the dispatcher.
+			// Autonomous runs have no originating GitHub event, so Kind="autonomous"
+			// and Number=0. If the agent omitted number in a dispatch request, the
+			// dispatcher will fall back to this 0.
+			// Generate a fresh root event ID so dispatch chains from autonomous runs
+			// carry a non-empty correlation ID throughout the chain.
+			rootEventID := workflow.GenEventID()
+			syntheticEv := workflow.Event{
+				ID:    rootEventID,
+				Repo:  workflow.RepoRef{FullName: repo, Enabled: true},
+				Kind:  "autonomous",
+				Actor: agent.Name,
+			}
+			if err := s.dispatcher.ProcessDispatches(ctx, agent, syntheticEv, rootEventID, 0, resp.Dispatch); err != nil {
+				return fmt.Errorf("agent %q: dispatch: %w", agent.Name, err)
+			}
+		}
 		return nil
 	})
+	if s.dispatcher != nil {
+		if err != nil && !runCompleted {
+			// Roll back the cron mark only when the autonomous pass itself failed
+			// (before or during runner.Run). If runner.Run succeeded but a
+			// downstream step (e.g. dispatch enqueue) failed, the run is already
+			// committed and the dedup window must stay in force.
+			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
+		} else {
+			// runner.Run succeeded (runCompleted == true) regardless of whether
+			// a post-run step (e.g. dispatch enqueue) failed. Decrement the
+			// refcount so the evict() loop can clean up the cron entry after its
+			// TTL expires. The entry itself is preserved so that
+			// TryClaimForDispatch continues to suppress autonomous-context
+			// dispatches for the full dedup_window_seconds window.
+			s.dispatcher.FinalizeAutonomousRun(agent.Name, repo)
+		}
+	}
+	return err
+}
+
+// buildRoster returns the roster of peer agents for the given repo, excluding
+// the current agent.
+func (s *Scheduler) buildRoster(repoName, currentAgentName string) []ai.RosterEntry {
+	repoDef, ok := s.cfg.RepoByName(repoName)
+	if !ok {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var roster []ai.RosterEntry
+	for _, b := range repoDef.Use {
+		if !b.IsEnabled() || b.Agent == currentAgentName {
+			continue
+		}
+		if _, dup := seen[b.Agent]; dup {
+			continue
+		}
+		agent, ok := s.cfg.AgentByName(b.Agent)
+		if !ok {
+			continue
+		}
+		seen[b.Agent] = struct{}{}
+		roster = append(roster, ai.RosterEntry{
+			Name:          agent.Name,
+			Description:   agent.Description,
+			Skills:        agent.Skills,
+			AllowDispatch: agent.AllowDispatch,
+		})
+	}
+	return roster
 }
 
 func (s *Scheduler) setRunCtx(ctx context.Context) {

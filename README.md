@@ -149,6 +149,11 @@ daemon:
     event_queue_buffer: 256
     max_concurrent_agents: 4                # cap on per-event fan-out
 
+  dispatch:
+    max_depth: 3                            # max chain length before drop + WARN
+    max_fanout: 4                           # max dispatches per single agent run
+    dedup_window_seconds: 300               # suppress duplicate (target, repo, number) within window
+
   memory_dir: /var/lib/agents/memory        # persistent autonomous agent memory
 
   ai_backends:
@@ -200,6 +205,19 @@ agents:
     skills: [architect, testing]
     prompt_file: prompts/coder.md
     allow_prs: true            # required for agents that open PRs
+
+  # Dispatch target — can be invoked by pr-reviewer
+  - name: sec-reviewer
+    description: "Deep-dive security reviewer for risky changes"
+    backend: claude
+    allow_dispatch: true       # opt-in to being dispatched
+    prompt_file: prompts/sec-reviewer.md
+
+  # Agent that may dispatch to sec-reviewer
+  - name: pr-reviewer
+    backend: claude
+    can_dispatch: [sec-reviewer]   # whitelist of agents this agent may dispatch
+    prompt_file: prompts/pr-reviewer.md
 ```
 
 Each agent is a pure capability definition: backend + skills + prompt. Agents don't run until a repo binds them to a trigger.
@@ -211,6 +229,14 @@ Each agent is a pure capability definition: backend + skills + prompt. Agents do
   forbidding the agent from opening pull requests, regardless of what the prompt says. Set
   `allow_prs: true` only on agents that are explicitly meant to author PRs (e.g. coders,
   refactorers). Reviewer-only agents should leave this unset.
+- `allow_dispatch` (default `false`) — opt-in gate. An agent must have `allow_dispatch: true`
+  for any other agent to dispatch it. Agents without this flag silently drop any incoming
+  dispatch requests.
+- `can_dispatch` — whitelist of agent names this agent is allowed to dispatch. A dispatch
+  to an agent not on this list is silently dropped. Entries must reference real agents in
+  the same config and must not include the agent itself.
+- `description` — required when an agent appears in any `can_dispatch` list. Used by the
+  dispatcher to include context about the target in the originating agent's prompt roster.
 
 ### `repos` — wiring
 
@@ -276,6 +302,7 @@ The `events:` field accepts any of the following GitHub event kinds. Each event 
 | `pull_request_review.submitted` | Formal GitHub review submitted | `state`, `body` |
 | `pull_request_review_comment.created` | Inline review comment posted on a PR diff | `body` |
 | `push` | Commit pushed to a branch | `ref` (e.g. `refs/heads/main`), `head_sha` |
+| `agent.dispatch` | Another agent dispatched this agent | `target_agent`, `reason`, `root_event_id`, `dispatch_depth`, `invoked_by` |
 
 > **`push` scope:** only branch pushes fire the event. Tag pushes, branch deletions, and pushes to non-`refs/heads/` refs are silently dropped. The agent receives the branch ref and the resulting head SHA — there is no PR number in the context.
 
@@ -284,6 +311,70 @@ Additional rules:
 - `issues.*` events that originate from a PR-backed GitHub issue are dropped; the corresponding `pull_request.*` event covers them instead.
 - `pull_request.labeled` events on draft PRs are dropped at the webhook boundary. Use `events: ["pull_request.ready_for_review"]` to act when a draft is marked ready.
 - Unknown event kinds are rejected at config load time with a clear error listing the supported set.
+
+### Reactive inter-agent dispatch
+
+Agents can invoke each other at runtime. When an agent's AI run returns a `dispatch[]` field in its JSON response, the daemon validates and enqueues a synthetic `agent.dispatch` event for each entry. The target agent then runs with the full event payload as its runtime context.
+
+#### Agent response contract (extended)
+
+```json
+{
+  "summary": "Reviewed PR — escalating to sec-reviewer for crypto usage",
+  "artifacts": [],
+  "dispatch": [
+    {
+      "agent": "sec-reviewer",
+      "number": 42,
+      "reason": "PR introduces custom crypto primitives — needs security review"
+    }
+  ]
+}
+```
+
+- `agent` — name of the target agent (must be in the originator's `can_dispatch` list and have `allow_dispatch: true`).
+- `number` — issue/PR number to associate with the dispatched run. If omitted, the originating event's number is used.
+- `reason` — human-readable rationale, included in the target agent's prompt context.
+
+#### Runtime context for dispatched agents
+
+The dispatched agent receives an `agent.dispatch` event with these payload fields:
+
+| Field | Value |
+|-------|-------|
+| `target_agent` | Name of the agent being invoked (this agent) |
+| `reason` | Reason string supplied by the originator |
+| `root_event_id` | ID of the original triggering event (stable across the full chain) |
+| `dispatch_depth` | How many hops deep in the chain this invocation is |
+| `invoked_by` | Name of the agent that dispatched this run |
+
+#### Safety limits (`daemon.dispatch`)
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `max_depth` | 3 | Maximum dispatch chain length. Requests that would exceed this are dropped with a warning. |
+| `max_fanout` | 4 | Maximum number of dispatches a single agent run may enqueue. Additional requests are dropped. |
+| `dedup_window_seconds` | 300 | Suppress duplicate `(target, repo, number)` dispatch requests within this window (seconds). |
+
+All three fields must be positive integers; the daemon rejects non-positive values at startup.
+
+#### Dispatch flow
+
+```
+Agent A runs → returns dispatch[{agent:"B", number:42, reason:"..."}]
+    │
+    ▼
+Dispatcher checks:
+  1. B is in A's can_dispatch list
+  2. B has allow_dispatch: true
+  3. depth ≤ max_depth, fanout ≤ max_fanout
+  4. (B, repo, 42) not seen within dedup_window_seconds
+    │
+    ▼
+agent.dispatch event enqueued → Agent B runs with full payload
+```
+
+Dispatch chains work across both event-driven and cron/`--run-agent` paths, and the shared dedup store prevents a cron-triggered run and a near-simultaneous dispatch from running the same target twice within the window.
 
 ### Environment variables
 
@@ -446,11 +537,18 @@ The daemon spawns the configured CLI, sends the composed prompt on **stdin**, an
       "github_id": "123456",
       "url": "https://github.com/owner/repo/pull/1#pullrequestreview-123456"
     }
+  ],
+  "dispatch": [
+    {
+      "agent": "sec-reviewer",
+      "number": 42,
+      "reason": "Custom crypto primitives found — needs deeper security review"
+    }
   ]
 }
 ```
 
-The metadata is used for observability, logging, and run summaries. Agents that don't post anything still return an empty `artifacts: []`.
+The metadata is used for observability, logging, and run summaries. Agents that don't post anything still return an empty `artifacts: []`. The `dispatch` field is optional — omit it or leave it empty when the agent does not need to invoke another agent. See [Reactive inter-agent dispatch](#reactive-inter-agent-dispatch) for the full contract.
 
 ---
 
@@ -495,7 +593,7 @@ internal/
   config/                   # YAML parsing, prompt file resolution, validation
   ai/                       # Prompt composition + CLI runner
   autonomous/               # Cron scheduler + filesystem-backed agent memory
-  workflow/                 # Event routing engine, queues, processor
+  workflow/                 # Event routing engine, queues, processor, inter-agent dispatcher
   webhook/                  # HTTP server, signature verification, delivery dedupe
   setup/                    # Interactive first-time setup command
   logging/                  # zerolog setup

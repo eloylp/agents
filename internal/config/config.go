@@ -154,8 +154,22 @@ type HTTPConfig struct {
 
 // ProcessorConfig controls the internal event queue and agent concurrency.
 type ProcessorConfig struct {
-	EventQueueBuffer    int `yaml:"event_queue_buffer"`
-	MaxConcurrentAgents int `yaml:"max_concurrent_agents"`
+	EventQueueBuffer    int            `yaml:"event_queue_buffer"`
+	MaxConcurrentAgents int            `yaml:"max_concurrent_agents"`
+	Dispatch            DispatchConfig `yaml:"dispatch"`
+}
+
+// DispatchConfig controls inter-agent dispatch safety limits.
+type DispatchConfig struct {
+	// MaxDepth is the maximum dispatch chain length; a chain longer than this
+	// is dropped with a WARN log. Default: 3.
+	MaxDepth int `yaml:"max_depth"`
+	// MaxFanout caps how many dispatches a single agent run may enqueue.
+	// Excess requests are dropped with a WARN log. Default: 4.
+	MaxFanout int `yaml:"max_fanout"`
+	// DedupWindowSeconds suppresses duplicate (target_agent, repo, number)
+	// dispatch requests within the window. Default: 300.
+	DedupWindowSeconds int `yaml:"dedup_window_seconds"`
 }
 
 // AIBackendConfig describes how to invoke a CLI-based AI backend.
@@ -195,6 +209,19 @@ type AgentDef struct {
 	// Defaults to false; the scheduler prepends a hard no-PR instruction when
 	// false so the gate is code-level rather than relying on prompt wording.
 	AllowPRs bool `yaml:"allow_prs"`
+
+	// Description is a short human-readable summary of what this agent does.
+	// Required when the agent appears in any other agent's can_dispatch list.
+	Description string `yaml:"description"`
+
+	// AllowDispatch opts this agent in as a dispatch target. Default false.
+	// Other agents may only dispatch to this agent when this is true.
+	AllowDispatch bool `yaml:"allow_dispatch"`
+
+	// CanDispatch is the whitelist of agent names this agent is allowed to
+	// dispatch. Validated: entries must reference real agents in the same
+	// config and must not include the agent itself.
+	CanDispatch []string `yaml:"can_dispatch"`
 }
 
 // RepoDef describes a single GitHub repo the daemon operates on and the
@@ -335,6 +362,9 @@ func (c *Config) applyDefaults() {
 	// daemon.processor
 	setDefaultInt(&c.Daemon.Processor.EventQueueBuffer, defaultEventQueueBufferSize)
 	setDefaultInt(&c.Daemon.Processor.MaxConcurrentAgents, defaultMaxConcurrentAgents)
+	setDefaultInt(&c.Daemon.Processor.Dispatch.MaxDepth, 3)
+	setDefaultInt(&c.Daemon.Processor.Dispatch.MaxFanout, 4)
+	setDefaultInt(&c.Daemon.Processor.Dispatch.DedupWindowSeconds, 300)
 
 	// daemon.proxy defaults (only applied when proxy is enabled or path is set)
 	setDefault(&c.Daemon.Proxy.Path, defaultProxyPath)
@@ -404,8 +434,12 @@ func (c *Config) normalize() {
 		c.Agents[i].Backend = strings.ToLower(strings.TrimSpace(c.Agents[i].Backend))
 		c.Agents[i].Prompt = strings.TrimSpace(c.Agents[i].Prompt)
 		c.Agents[i].PromptFile = strings.TrimSpace(c.Agents[i].PromptFile)
+		c.Agents[i].Description = strings.TrimSpace(c.Agents[i].Description)
 		for j := range c.Agents[i].Skills {
 			c.Agents[i].Skills[j] = strings.ToLower(strings.TrimSpace(c.Agents[i].Skills[j]))
+		}
+		for j := range c.Agents[i].CanDispatch {
+			c.Agents[i].CanDispatch[j] = strings.ToLower(strings.TrimSpace(c.Agents[i].CanDispatch[j]))
 		}
 	}
 
@@ -507,6 +541,9 @@ func (c *Config) validate() error {
 	if err := c.validateProxy(); err != nil {
 		return err
 	}
+	if err := c.validateDispatchConfig(); err != nil {
+		return err
+	}
 	return c.validateRepos()
 }
 
@@ -532,6 +569,20 @@ func (c *Config) validateProxy() error {
 	// silent 401/403 errors against a protected upstream at request time.
 	if p.Upstream.APIKeyEnv != "" && p.Upstream.APIKey == "" {
 		return fmt.Errorf("config: proxy.upstream.api_key_env %q is set but the environment variable is empty or unset", p.Upstream.APIKeyEnv)
+	}
+	return nil
+}
+
+func (c *Config) validateDispatchConfig() error {
+	d := c.Daemon.Processor.Dispatch
+	if d.MaxDepth <= 0 {
+		return fmt.Errorf("config: dispatch max_depth must be positive, got %d", d.MaxDepth)
+	}
+	if d.MaxFanout <= 0 {
+		return fmt.Errorf("config: dispatch max_fanout must be positive, got %d", d.MaxFanout)
+	}
+	if d.DedupWindowSeconds <= 0 {
+		return fmt.Errorf("config: dispatch dedup_window_seconds must be positive, got %d", d.DedupWindowSeconds)
 	}
 	return nil
 }
@@ -606,6 +657,44 @@ func (c *Config) validateAgents() error {
 		}
 		if a.Prompt == "" {
 			return fmt.Errorf("config: agent %q: prompt is empty after resolution", a.Name)
+		}
+	}
+	// Validate can_dispatch references after all agents are seen.
+	return c.validateDispatchWiring()
+}
+
+// validateDispatchWiring checks cross-agent dispatch references:
+//  - can_dispatch entries must reference real agents in this config
+//  - can_dispatch must not include the agent itself
+//  - agents referenced in any can_dispatch list must have a description
+func (c *Config) validateDispatchWiring() error {
+	// Build set of all agent names for O(1) lookup.
+	agentNames := make(map[string]struct{}, len(c.Agents))
+	for _, a := range c.Agents {
+		agentNames[a.Name] = struct{}{}
+	}
+	// Build set of agents that appear in any can_dispatch list — these require
+	// a description so the roster is informative.
+	dispatchTargets := make(map[string]struct{})
+	for _, a := range c.Agents {
+		for _, t := range a.CanDispatch {
+			dispatchTargets[t] = struct{}{}
+		}
+	}
+	for _, a := range c.Agents {
+		for _, t := range a.CanDispatch {
+			if _, ok := agentNames[t]; !ok {
+				return fmt.Errorf("config: agent %q: can_dispatch references unknown agent %q", a.Name, t)
+			}
+			if t == a.Name {
+				return fmt.Errorf("config: agent %q: can_dispatch must not include itself", a.Name)
+			}
+		}
+	}
+	// Verify dispatch targets have descriptions.
+	for _, a := range c.Agents {
+		if _, isTarget := dispatchTargets[a.Name]; isTarget && a.Description == "" {
+			return fmt.Errorf("config: agent %q is in a can_dispatch list but has no description (description is required for dispatch targets)", a.Name)
 		}
 	}
 	return nil

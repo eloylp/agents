@@ -1,9 +1,13 @@
 package ai
 
 import (
+	"context"
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/rs/zerolog"
 )
 
 func TestBuildCommandEnvDaemonNumber(t *testing.T) {
@@ -194,5 +198,61 @@ func TestExtractJSON(t *testing.T) {
 				t.Fatalf("got %q, want %q", string(got), tt.want)
 			}
 		})
+	}
+}
+
+func TestResponseWithDispatchRoundTrips(t *testing.T) {
+	t.Parallel()
+	src := Response{
+		Summary: "ok",
+		Artifacts: []Artifact{
+			{Type: "comment", PartKey: "body", GitHubID: "123"},
+		},
+		Dispatch: []DispatchRequest{
+			{Agent: "pr-reviewer", Number: 42, Reason: "ready for review"},
+		},
+	}
+	data, err := json.Marshal(src)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got Response
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Dispatch) != 1 {
+		t.Fatalf("dispatch length: got %d, want 1", len(got.Dispatch))
+	}
+	d := got.Dispatch[0]
+	if d.Agent != "pr-reviewer" || d.Number != 42 || d.Reason != "ready for review" {
+		t.Errorf("dispatch mismatch: %+v", d)
+	}
+}
+
+func TestResponseDispatchOmittedWhenEmpty(t *testing.T) {
+	t.Parallel()
+	r := Response{Summary: "ok"}
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(data), "dispatch") {
+		t.Errorf("dispatch should be omitted when empty; got: %s", string(data))
+	}
+}
+
+// TestCommandRunnerEmptyStdoutIsError verifies that a backend command that
+// exits zero but produces no output is treated as a failed run rather than a
+// silent success with an empty Response.
+func TestCommandRunnerEmptyStdoutIsError(t *testing.T) {
+	t.Parallel()
+	// "true" exits 0 with no stdout — the canonical empty-output case.
+	r := NewCommandRunner("test", "command", "true", nil, nil, 10, 4000, "", zerolog.Nop())
+	_, err := r.Run(context.Background(), Request{Workflow: "wf", Repo: "owner/repo"})
+	if err == nil {
+		t.Fatal("expected error for empty stdout, got nil")
+	}
+	if !strings.Contains(err.Error(), "empty response") {
+		t.Errorf("expected 'empty response' in error, got: %v", err)
 	}
 }

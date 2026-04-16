@@ -109,8 +109,8 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 
 	var response Response
 	if stdout.Len() == 0 {
-		logger.Info().Msgf("%s command returned no output", r.backendName)
-		return Response{}, nil
+		logger.Error().Msgf("%s command returned no output", r.backendName)
+		return Response{}, fmt.Errorf("parse %s response: empty response (no output)", r.backendName)
 	}
 	jsonBytes, err := extractJSON(stdout.Bytes())
 	if err != nil {
@@ -121,10 +121,18 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 		logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s response", r.backendName)
 		return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
 	}
+	if response.Summary == "" && len(response.Artifacts) == 0 && len(response.Dispatch) == 0 {
+		logger.Error().Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("%s response is empty (no summary, artifacts, or dispatch)", r.backendName)
+		return Response{}, fmt.Errorf("parse %s response: empty response (no fields populated)", r.backendName)
+	}
 	if cmdErr != nil {
 		logger.Warn().Err(cmdErr).Str("stderr", truncateString(stderr.String(), 2000)).Msgf("%s command exited non-zero but produced valid output", r.backendName)
 	}
-	logger.Info().Int("artifacts", len(response.Artifacts)).Msgf("%s command completed", r.backendName)
+	logger.Info().
+		Int("artifacts", len(response.Artifacts)).
+		Int("dispatch", len(response.Dispatch)).
+		Int("summary_len", len(response.Summary)).
+		Msgf("%s command completed", r.backendName)
 	return response, nil
 }
 

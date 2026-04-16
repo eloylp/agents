@@ -66,9 +66,34 @@ func run() error {
 		if *runRepo == "" {
 			return fmt.Errorf("--repo is required when using --run-agent")
 		}
+		// Size the buffer to hold every dispatch that could ever be in flight at
+		// once.  drainDispatches processes events serially and each handled event
+		// can enqueue up to MaxFanout children; at the deepest level the queue can
+		// therefore hold MaxFanout^MaxDepth events simultaneously.  Using a linear
+		// MaxFanout*MaxDepth estimate is too small for chained/fanout chains and
+		// would cause PushEvent to silently drop later hops.
+		d := cfg.Daemon.Processor.Dispatch
+		runBuf := 1
+		for i := 0; i < d.MaxDepth; i++ {
+			runBuf *= d.MaxFanout
+		}
+		if runBuf < cfg.Daemon.Processor.EventQueueBuffer {
+			runBuf = cfg.Daemon.Processor.EventQueueBuffer
+		}
+		dataChannels := workflow.NewDataChannels(runBuf)
+		engine := workflow.NewEngine(cfg, runners, dataChannels, logger)
+		scheduler.WithDispatcher(engine.Dispatcher())
 		logger.Info().Str("agent", *runAgent).Str("repo", *runRepo).Msg("running autonomous agent on demand")
+		engine.StartDispatchDedup(ctx)
 		if err := scheduler.TriggerAgent(ctx, *runAgent, *runRepo); err != nil {
+			if errors.Is(err, autonomous.ErrDispatchSkipped) {
+				logger.Info().Str("agent", *runAgent).Str("repo", *runRepo).Msg("agent run skipped: dispatch already claimed within dedup window")
+				return nil
+			}
 			return fmt.Errorf("run agent: %w", err)
+		}
+		if err := drainDispatches(ctx, dataChannels, engine); err != nil {
+			return fmt.Errorf("drain dispatches: %w", err)
 		}
 		logger.Info().Str("agent", *runAgent).Str("repo", *runRepo).Msg("on-demand agent run completed")
 		return nil
@@ -76,16 +101,18 @@ func run() error {
 
 	logger.Info().Msg("starting agents daemon")
 
-	engine := workflow.NewEngine(cfg, runners, logger)
 	dataChannels := workflow.NewDataChannels(cfg.Daemon.Processor.EventQueueBuffer)
+	engine := workflow.NewEngine(cfg, runners, dataChannels, logger)
+	scheduler.WithDispatcher(engine.Dispatcher())
 	shutdown := time.Duration(cfg.Daemon.HTTP.ShutdownTimeoutSeconds) * time.Second
 	workers := cfg.Daemon.Processor.MaxConcurrentAgents
 	processor := workflow.NewProcessor(dataChannels, engine, workers, shutdown, logger)
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
-	server := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, logger, scheduler)
+	server := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, engine, logger, scheduler)
 
 	group, groupCtx := errgroup.WithContext(ctx)
 	deliveryStore.Start(groupCtx)
+	engine.StartDispatchDedup(groupCtx)
 	group.Go(func() error { return processor.Run(groupCtx) })
 	group.Go(func() error { return scheduler.Run(groupCtx) })
 	group.Go(func() error { return server.Run(groupCtx) })
@@ -94,6 +121,26 @@ func run() error {
 	}
 	logger.Info().Msg("agents daemon stopped")
 	return nil
+}
+
+// drainDispatches processes all agent.dispatch events that were enqueued during
+// a --run-agent pass. Each processed event may itself enqueue further dispatches
+// (chained dispatch), so the loop continues until the queue is empty. Any error
+// from HandleEvent is returned immediately so the caller can report a failed chain.
+func drainDispatches(ctx context.Context, dc *workflow.DataChannels, eng *workflow.Engine) error {
+	for {
+		select {
+		case ev, ok := <-dc.EventChan():
+			if !ok {
+				return nil
+			}
+			if err := eng.HandleEvent(ctx, ev); err != nil {
+				return fmt.Errorf("kind %s: %w", ev.Kind, err)
+			}
+		default:
+			return nil
+		}
+	}
 }
 
 func setupRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runner {
