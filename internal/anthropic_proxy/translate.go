@@ -1,6 +1,7 @@
 package anthropicproxy
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -319,40 +320,31 @@ func toolResultContent(raw json.RawMessage) (string, error) {
 	}
 }
 
-// rawJSONToString marshal a raw JSON value to its string representation.
+// rawJSONToString converts a raw JSON value to its compact string representation.
 // Used to convert Anthropic tool input (raw JSON object) to OpenAI function
 // arguments (JSON-encoded string).
 func rawJSONToString(raw json.RawMessage) (string, error) {
 	if len(raw) == 0 {
 		return "{}", nil
 	}
-	// Validate that the raw JSON is valid before round-tripping.
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
 		return "", fmt.Errorf("invalid tool input JSON: %w", err)
 	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "", fmt.Errorf("re-marshal tool input: %w", err)
-	}
-	return string(b), nil
+	return buf.String(), nil
 }
 
-// stringToRawJSON parses a JSON string (OpenAI function arguments) into a
-// raw JSON value (Anthropic tool input).
+// stringToRawJSON converts a JSON string (OpenAI function arguments) into a
+// compact raw JSON value (Anthropic tool input).
 func stringToRawJSON(s string) (json.RawMessage, error) {
 	if s == "" {
 		return json.RawMessage("{}"), nil
 	}
-	var v any
-	if err := json.Unmarshal([]byte(s), &v); err != nil {
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, []byte(s)); err != nil {
 		return nil, fmt.Errorf("parse function arguments: %w", err)
 	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return nil, fmt.Errorf("re-marshal function arguments: %w", err)
-	}
-	return json.RawMessage(b), nil
+	return buf.Bytes(), nil
 }
 
 // translateFinishReason maps an OpenAI finish_reason to an Anthropic stop_reason.
