@@ -685,6 +685,57 @@ func TestSchedulerDispatchEnqueueFailurePropagates(t *testing.T) {
 	}
 }
 
+// TestSchedulerCronMarkKeptAfterSuccessfulRunWithDispatchEnqueueFailure verifies
+// that when runner.Run succeeds but the post-run dispatch enqueue fails, the
+// cron-namespace mark is NOT rolled back. The autonomous pass already committed,
+// so the dedup window must stay in force to prevent a duplicate run.
+func TestSchedulerCronMarkKeptAfterSuccessfulRunWithDispatchEnqueueFailure(t *testing.T) {
+	t.Parallel()
+	cfg := dispatchCfgForTest()
+
+	runner := &dispatchingRunner{
+		dispatches: []ai.DispatchRequest{
+			{Agent: "notifier", Reason: "review done", Number: 42},
+		},
+	}
+	queueErr := errors.New("queue full")
+	q := &fakeQueue{err: queueErr}
+	agentMap := map[string]config.AgentDef{
+		"reviewer": cfg.Agents[0],
+		"notifier": cfg.Agents[1],
+	}
+	dedup := workflow.NewDispatchDedupStore(300)
+	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
+	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
+
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithDispatcher(dispatcher)
+
+	// TriggerAgent should return an error (dispatch enqueue failed).
+	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err == nil {
+		t.Fatal("expected error from dispatch enqueue failure, got nil")
+	}
+
+	// runner.Run succeeded, so the cron mark must still be in place. A
+	// subsequent autonomous-context dispatch targeting the same (agent, repo, 0)
+	// must be suppressed — if the mark were rolled back, it would slip through.
+	// Use a fresh queue (no error) and a new dispatcher sharing the same dedup
+	// store so enqueue would succeed if the mark were absent.
+	q2 := &fakeQueue{}
+	dispatcher2 := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q2, zerolog.Nop())
+	originator := agentMap["notifier"]
+	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
+	dispatcher2.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, []ai.DispatchRequest{
+		{Agent: "reviewer", Reason: "follow-up dispatch"},
+	})
+	if len(q2.popped()) != 0 {
+		t.Error("dispatch should be suppressed: cron mark must survive a post-run enqueue failure")
+	}
+}
+
 func TestSchedulerAllowPRsPromptPrefixing(t *testing.T) {
 	t.Parallel()
 	const noPRPrefix = "Do not open or create pull requests under any circumstances."

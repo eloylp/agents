@@ -276,6 +276,12 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 
 	logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Str("backend", backend).Logger()
 	roster := s.buildRoster(repo, agent.Name)
+	// runCompleted is set to true once runner.Run returns successfully. The cron
+	// mark should only be rolled back when the autonomous pass itself fails
+	// (prompt rendering, memory lock, or runner error). A post-run failure such
+	// as a dispatch enqueue error must NOT clear the mark — the autonomous pass
+	// already committed, so the dedup window must remain in force.
+	runCompleted := false
 	err := s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
 		prompt, err := ai.RenderAgentPrompt(agent, s.cfg.Skills, ai.PromptContext{
 			Repo:       repo,
@@ -299,6 +305,7 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		if err != nil {
 			return fmt.Errorf("agent run: %w", err)
 		}
+		runCompleted = true
 		logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Int("dispatch_requests", len(resp.Dispatch)).Msg("autonomous pass completed")
 		if s.dispatcher != nil && len(resp.Dispatch) > 0 {
 			// Synthesize a minimal event to carry repo context into the dispatcher.
@@ -320,9 +327,11 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		}
 		return nil
 	})
-	if err != nil && s.dispatcher != nil {
-		// Roll back the cron mark so the failed run does not suppress
-		// autonomous-context dispatches for the full dedup_window_seconds.
+	if err != nil && !runCompleted && s.dispatcher != nil {
+		// Roll back the cron mark only when the autonomous pass itself failed
+		// (before or during runner.Run). If runner.Run succeeded but a
+		// downstream step (e.g. dispatch enqueue) failed, the run is already
+		// committed and the dedup window must stay in force.
 		s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
 	}
 	return err
