@@ -104,6 +104,7 @@ func setupRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runne
 			"command",
 			backend.Command,
 			backend.Args,
+			backend.Env,
 			backend.TimeoutSeconds,
 			backend.MaxPromptChars,
 			backend.RedactionSaltEnv,

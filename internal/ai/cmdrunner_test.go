@@ -32,7 +32,7 @@ func TestBuildCommandEnvDaemonNumber(t *testing.T) {
 				Workflow: "test-workflow",
 				Repo:     "owner/repo",
 				Number:   tc.number,
-			})
+			}, nil)
 			hasNumber := slices.ContainsFunc(env, func(e string) bool {
 				return strings.HasPrefix(e, "AI_DAEMON_NUMBER=")
 			})
@@ -46,6 +46,52 @@ func TestBuildCommandEnvDaemonNumber(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBuildCommandEnvBackendOverride(t *testing.T) {
+	// No t.Parallel() — t.Setenv mutates the process env and can't coexist
+	// with parallel tests that read os.Environ.
+
+	// Per-backend env is appended after the allowlist + AI_DAEMON_* vars.
+	// When the same key appears in both the inherited env (via allowlist)
+	// and the backend override, exec.Command uses the last occurrence, so
+	// the backend override wins — as documented.
+	t.Setenv("ANTHROPIC_API_KEY", "hosted-key")
+
+	env := buildCommandEnv(
+		Request{Workflow: "w", Repo: "o/r", Number: 0},
+		map[string]string{
+			"ANTHROPIC_API_KEY":  "proxy-key",
+			"ANTHROPIC_BASE_URL": "http://localhost:8080",
+			"ANTHROPIC_MODEL":    "qwen",
+		},
+	)
+
+	// Every configured key must be present once as an override value.
+	for _, want := range []string{
+		"ANTHROPIC_API_KEY=proxy-key",
+		"ANTHROPIC_BASE_URL=http://localhost:8080",
+		"ANTHROPIC_MODEL=qwen",
+	} {
+		if !slices.Contains(env, want) {
+			t.Errorf("expected %q in env, got %v", want, env)
+		}
+	}
+
+	// The override for ANTHROPIC_API_KEY must appear AFTER the allowlist
+	// entry so exec picks the override.
+	keyIndices := []int{}
+	for i, entry := range env {
+		if strings.HasPrefix(entry, "ANTHROPIC_API_KEY=") {
+			keyIndices = append(keyIndices, i)
+		}
+	}
+	if len(keyIndices) != 2 {
+		t.Fatalf("expected 2 ANTHROPIC_API_KEY entries (allowlist + override), got %d: %v", len(keyIndices), env)
+	}
+	if env[keyIndices[1]] != "ANTHROPIC_API_KEY=proxy-key" {
+		t.Errorf("last ANTHROPIC_API_KEY entry must be the override; got %q", env[keyIndices[1]])
 	}
 }
 

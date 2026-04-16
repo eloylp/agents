@@ -20,13 +20,14 @@ type CommandRunner struct {
 	mode           string
 	command        string
 	args           []string
+	env            map[string]string
 	timeout        time.Duration
 	maxPromptChars int
 	redactionSalt  []byte
 	logger         zerolog.Logger
 }
 
-func NewCommandRunner(backendName string, mode string, command string, args []string, timeoutSeconds int, maxPromptChars int, redactionSaltEnv string, logger zerolog.Logger) *CommandRunner {
+func NewCommandRunner(backendName string, mode string, command string, args []string, env map[string]string, timeoutSeconds int, maxPromptChars int, redactionSaltEnv string, logger zerolog.Logger) *CommandRunner {
 	salt := []byte{}
 	if redactionSaltEnv != "" {
 		value := os.Getenv(redactionSaltEnv)
@@ -39,6 +40,7 @@ func NewCommandRunner(backendName string, mode string, command string, args []st
 		mode:           mode,
 		command:        command,
 		args:           args,
+		env:            env,
 		timeout:        time.Duration(timeoutSeconds) * time.Second,
 		maxPromptChars: maxPromptChars,
 		redactionSalt:  salt,
@@ -83,7 +85,7 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, r.command, r.args...)
-	cmd.Env = buildCommandEnv(req)
+	cmd.Env = buildCommandEnv(req, r.env)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -158,9 +160,12 @@ func truncateString(value string, maxChars int) string {
 }
 
 // buildCommandEnv constructs the subprocess environment from an allowlist of
-// the host environment plus workflow-specific AI_DAEMON_* variables. The
-// allowlist prevents leaking unintended host secrets to the AI backend process.
-func buildCommandEnv(req Request) []string {
+// the host environment plus workflow-specific AI_DAEMON_* variables, and
+// finally merges any per-backend overrides on top (last-write wins). The
+// allowlist prevents leaking unintended host secrets; the per-backend map
+// lets a single backend (e.g. claude) be routed via different endpoints
+// (hosted vs local) without touching the container env.
+func buildCommandEnv(req Request, backendEnv map[string]string) []string {
 	env := make([]string, 0, 32)
 	for _, entry := range os.Environ() {
 		key, _, found := strings.Cut(entry, "=")
@@ -177,6 +182,9 @@ func buildCommandEnv(req Request) []string {
 	)
 	if req.Number != 0 {
 		env = append(env, fmt.Sprintf("AI_DAEMON_NUMBER=%d", req.Number))
+	}
+	for k, v := range backendEnv {
+		env = append(env, k+"="+v)
 	}
 	return env
 }

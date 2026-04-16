@@ -159,12 +159,19 @@ type ProcessorConfig struct {
 }
 
 // AIBackendConfig describes how to invoke a CLI-based AI backend.
+//
+// Env is merged on top of the inherited subprocess environment (after the
+// daemon's allowlist is applied). Typical use: route the claude CLI through
+// a local OpenAI-compatible endpoint by setting
+// ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY / ANTHROPIC_MODEL here, without
+// touching the global container env.
 type AIBackendConfig struct {
-	Command          string   `yaml:"command"`
-	Args             []string `yaml:"args"`
-	TimeoutSeconds   int      `yaml:"timeout_seconds"`
-	MaxPromptChars   int      `yaml:"max_prompt_chars"`
-	RedactionSaltEnv string   `yaml:"redaction_salt_env"`
+	Command          string            `yaml:"command"`
+	Args             []string          `yaml:"args"`
+	Env              map[string]string `yaml:"env"`
+	TimeoutSeconds   int               `yaml:"timeout_seconds"`
+	MaxPromptChars   int               `yaml:"max_prompt_chars"`
+	RedactionSaltEnv string            `yaml:"redaction_salt_env"`
 }
 
 // SkillDef is a reusable block of guidance that agents can compose.
@@ -363,6 +370,17 @@ func (c *Config) normalize() {
 		for name, backend := range c.Daemon.AIBackends {
 			key := strings.ToLower(strings.TrimSpace(name))
 			backend.Command = strings.TrimSpace(backend.Command)
+			if len(backend.Env) > 0 {
+				cleaned := make(map[string]string, len(backend.Env))
+				for k, v := range backend.Env {
+					k = strings.TrimSpace(k)
+					if k == "" {
+						continue
+					}
+					cleaned[k] = v
+				}
+				backend.Env = cleaned
+			}
 			lower[key] = backend
 		}
 		c.Daemon.AIBackends = lower
