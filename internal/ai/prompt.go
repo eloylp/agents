@@ -2,8 +2,9 @@ package ai
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/eloylp/agents/internal/config"
@@ -82,12 +83,7 @@ func renderRuntimeContext(ctx PromptContext) string {
 	}
 	if len(ctx.Payload) > 0 {
 		// Sort keys for deterministic output.
-		keys := make([]string, 0, len(ctx.Payload))
-		for k := range ctx.Payload {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
+		for _, k := range slices.Sorted(maps.Keys(ctx.Payload)) {
 			v := ctx.Payload[k]
 			if s, ok := v.(string); ok && strings.Contains(s, "\n") {
 				fmt.Fprintf(&b, "%s:\n", k)
