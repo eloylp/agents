@@ -261,33 +261,36 @@ func (s *Scheduler) TriggerAgent(ctx context.Context, agentName, repo string) er
 }
 
 func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent config.AgentDef) error {
-	// Dispatch-first ordering: if a dispatch has already claimed the
-	// (agent, repo, 0) slot, skip this cron/manual run to avoid duplicate
-	// execution within the dedup window.
-	if s.dispatcher != nil && s.dispatcher.DispatchAlreadyClaimed(agent.Name, repo, time.Now()) {
-		s.logger.Info().Str("repo", repo).Str("agent", agent.Name).
-			Msg("autonomous run skipped: dispatch already claimed within dedup window")
-		return ErrDispatchSkipped
+	// Atomically check whether a dispatch has already claimed the
+	// (agent, repo, 0) slot and, if not, write the cron mark. This single
+	// lock-protected operation eliminates the TOCTOU race where the old split
+	// DispatchAlreadyClaimed (read) → MarkAutonomousRun (write) sequence
+	// allowed both the cron path and a concurrent dispatch path to observe
+	// no opposing claim before either wrote, causing both to proceed.
+	if s.dispatcher != nil {
+		if !s.dispatcher.TryMarkAutonomousRun(agent.Name, repo, time.Now()) {
+			s.logger.Info().Str("repo", repo).Str("agent", agent.Name).
+				Msg("autonomous run skipped: dispatch already claimed within dedup window")
+			return ErrDispatchSkipped
+		}
 	}
 
-	// Resolve backend and runner before writing the cron mark. If either
-	// fails (bad config, missing runner), the mark is never written and
-	// subsequent dispatches for this agent are not spuriously suppressed.
+	// Resolve backend and runner. If either fails, roll back the cron mark
+	// written above so that subsequent dispatches are not spuriously suppressed
+	// for the full dedup_window_seconds.
 	backend := s.cfg.ResolveBackend(agent.Backend)
 	if backend == "" {
+		if s.dispatcher != nil {
+			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
+		}
 		return fmt.Errorf("no configured backend for agent %q (configured: %q)", agent.Name, agent.Backend)
 	}
 	runner, ok := s.runners[backend]
 	if !ok {
+		if s.dispatcher != nil {
+			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
+		}
 		return fmt.Errorf("no runner for backend %q", backend)
-	}
-
-	// Write the cron mark before the run starts so that any dispatch arriving
-	// during the in-flight run sees it and is suppressed (dedup). If the run
-	// fails we roll the mark back so the stale entry does not suppress future
-	// dispatches for the full dedup_window_seconds.
-	if s.dispatcher != nil {
-		s.dispatcher.MarkAutonomousRun(agent.Name, repo, time.Now())
 	}
 
 	logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Str("backend", backend).Logger()

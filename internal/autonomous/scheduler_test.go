@@ -945,3 +945,74 @@ func TestSchedulerCronMarkBlocksDispatchDuringInFlightRun(t *testing.T) {
 		t.Errorf("expected dispatch suppressed by in-flight cron mark, but %d event(s) were enqueued", len(q.popped()))
 	}
 }
+
+// TestCronDispatchCrossNamespaceRaceOnlyOneWins is a regression test for the
+// TOCTOU race identified after the initial dispatch-dedup implementation. The
+// old code used two separate operations:
+//
+//	cron path:     DispatchAlreadyClaimed (read) → ... → MarkAutonomousRun (write)
+//	dispatch path: SeenCronRun (read)            → ... → TryClaim (write)
+//
+// If the reads on both sides completed before either write, both paths observed
+// "no opposing claim" and proceeded concurrently for the same (agent, repo, 0)
+// slot. The fix replaces each pair with a single mutex-held TryClaimForCron /
+// TryClaimForDispatch call that atomically checks the cross-namespace and writes
+// the reservation, so only one path can ever win per (agent, repo, 0) slot.
+//
+// This test races TriggerAgent (cron path) against ProcessDispatches (dispatch
+// path) for the same agent/repo over many iterations and asserts that the two
+// paths never both execute in the same round.
+func TestCronDispatchCrossNamespaceRaceOnlyOneWins(t *testing.T) {
+	t.Parallel()
+	const iterations = 500
+	ctx := context.Background()
+
+	cfg := dispatchCfgForTest()
+	agentMap := map[string]config.AgentDef{
+		"reviewer": cfg.Agents[0],
+		"notifier": cfg.Agents[1],
+	}
+
+	for i := range iterations {
+		// Fresh dedup store, queue, runner, and scheduler for each iteration so
+		// each round starts from an empty state.
+		dedup := workflow.NewDispatchDedupStore(300)
+		dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
+		q := &fakeQueue{}
+		dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
+
+		runner := &stubRunner{}
+		s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+		if err != nil {
+			t.Fatalf("iteration %d: NewScheduler: %v", i, err)
+		}
+		s.WithDispatcher(dispatcher)
+
+		// Race: cron run (TriggerAgent for notifier) vs dispatch to notifier.
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_ = s.TriggerAgent(ctx, "notifier", "owner/repo")
+		}()
+		go func() {
+			defer wg.Done()
+			ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}}
+			_ = dispatcher.ProcessDispatches(ctx, cfg.Agents[0], ev, "root", 0,
+				[]ai.DispatchRequest{{Agent: "notifier", Reason: "concurrent dispatch"}})
+		}()
+		wg.Wait()
+
+		runner.mu.Lock()
+		calls := runner.calls
+		runner.mu.Unlock()
+		enqueued := len(q.popped())
+
+		// Both executing concurrently is the race: runner called AND dispatch
+		// enqueued for the same (notifier, owner/repo, 0) slot in the same round.
+		if calls >= 1 && enqueued >= 1 {
+			t.Fatalf("iteration %d: TOCTOU race — cron ran (%d call(s)) AND dispatch enqueued (%d event(s)) concurrently for the same slot",
+				i, calls, enqueued)
+		}
+	}
+}

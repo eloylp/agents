@@ -255,6 +255,68 @@ func (s *DispatchDedupStore) SeenCronRun(agent, repo string, number int, now tim
 	return ok && now.Before(e.expiresAt)
 }
 
+// TryClaimForCron atomically checks whether a dispatch has already claimed
+// the (agent, repo, number) slot and, if not, writes a cron-namespace mark.
+// Returns true if the mark was written (caller may proceed with the run).
+// Returns false if a dispatch claim — pending or committed — exists within
+// the TTL window (caller should skip the run; dispatch-first ordering).
+//
+// Unlike the split DispatchAlreadyClaimed → MarkAutonomousRun sequence, this
+// single-lock operation eliminates the TOCTOU window where the cron path
+// could observe no dispatch claim and the dispatch path could observe no cron
+// mark before either had written, allowing both to proceed concurrently.
+//
+// If the run fails before completing, call RemoveCronMark to release the mark
+// so that future dispatches are not spuriously suppressed for the full TTL.
+func (s *DispatchDedupStore) TryClaimForCron(agent, repo string, number int, now time.Time) bool {
+	dispatchKey := fmt.Sprintf("%s\x00%s\x00%d", agent, repo, number)
+	cronKey := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Block if dispatch has any claim (pending or committed).
+	if e, ok := s.entries[dispatchKey]; ok && now.Before(e.expiresAt) {
+		return false
+	}
+	// Write the cron mark immediately so any dispatch arriving after this
+	// point (including during backend/runner resolution) sees it and backs
+	// off. The refcount allows concurrent autonomous passes to each hold a
+	// reservation independently — a rollback from one does not clear a mark
+	// that another is still holding.
+	s.entries[cronKey] = dispatchEntry{expiresAt: now.Add(s.ttl), committed: true}
+	s.cronRefCounts[cronKey]++
+	return true
+}
+
+// TryClaimForDispatch atomically checks whether a cron/manual run is active
+// for (agent, repo, number) and, if not, claims a pending dispatch slot.
+// Returns true if the dispatch slot was claimed (caller may proceed to enqueue).
+// Returns false if a cron mark exists or the dispatch slot is already taken.
+//
+// Unlike the split SeenCronRun → TryClaim sequence, this single-lock operation
+// eliminates the TOCTOU window where the dispatch path could read no cron mark
+// and the cron path could read no dispatch claim before either had written,
+// allowing both to proceed concurrently.
+//
+// On success, caller must follow with CommitClaim (after a successful PushEvent)
+// or AbandonClaim (on failure) to finalize the reservation.
+func (s *DispatchDedupStore) TryClaimForDispatch(agent, repo string, number int, now time.Time) bool {
+	cronKey := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
+	dispatchKey := fmt.Sprintf("%s\x00%s\x00%d", agent, repo, number)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Block if any cron/manual run is active (pending or committed).
+	if e, ok := s.entries[cronKey]; ok && now.Before(e.expiresAt) {
+		return false
+	}
+	// Block if dispatch has already claimed the slot (pending or committed).
+	if e, ok := s.entries[dispatchKey]; ok && now.Before(e.expiresAt) {
+		return false
+	}
+	// Reserve a pending dispatch slot. CommitClaim / AbandonClaim must follow.
+	s.entries[dispatchKey] = dispatchEntry{expiresAt: now.Add(s.ttl), committed: false}
+	return true
+}
+
 // Dispatcher validates and enqueues inter-agent dispatch requests produced by
 // agent runs. It enforces whitelist, opt-in, self-dispatch, depth, fanout, and
 // dedup safety limits.
@@ -349,31 +411,19 @@ func (d *Dispatcher) ProcessDispatches(
 			continue
 		}
 
-		// Cron-vs-dispatch collapse: if a cron/manual run of the target has
-		// been recorded within the dedup window for the same item context
-		// (same number), suppress the dispatch without writing to the dispatch
-		// key space (so retries after the window are not further blocked).
-		// Using number here ensures that a cron run (number=0) only suppresses
-		// autonomous-context dispatches, not dispatches for specific PRs/issues.
-		if d.dedup.SeenCronRun(req.Agent, ev.Repo.FullName, number, time.Now()) {
-			logBase.Debug().Msg("dispatch deduped: cron run already executed within window")
-			d.counters.deduped.Add(1)
-			continue
-		}
-
-		// Two-phase dispatch dedup claim:
-		//   1. TryClaim atomically reserves a pending slot — concurrent
-		//      dispatchers that race on the same (target, repo, number) are
-		//      blocked here; only one proceeds.
-		//   2. CommitClaim (after successful enqueue) upgrades the slot to
-		//      committed so DispatchAlreadyClaimed can see it.
-		//   3. AbandonClaim (on enqueue failure) removes the pending slot so
-		//      retries can attempt again — and DispatchAlreadyClaimed never
-		//      returns true for a phantom entry.
-		// Pending slots are invisible to Seen / DispatchAlreadyClaimed, so the
-		// autonomous scheduler is only blocked once a real event is enqueued.
-		if !d.dedup.TryClaim(req.Agent, ev.Repo.FullName, number, time.Now()) {
-			logBase.Debug().Msg("dispatch deduped: already claimed within window")
+		// Atomic cron-and-dispatch dedup: TryClaimForDispatch checks the cron
+		// namespace (any active cron/manual run for this item context) and the
+		// dispatch namespace (any existing dispatch claim) in a single mutex
+		// acquisition, then reserves a pending dispatch slot. This eliminates
+		// the TOCTOU race that existed when SeenCronRun and TryClaim were
+		// separate operations: the old sequence allowed a concurrent cron path
+		// to observe no dispatch claim and the dispatch path to observe no cron
+		// mark before either had written, so both could proceed concurrently.
+		//
+		// On success, CommitClaim (after PushEvent) or AbandonClaim (on failure)
+		// finalises the reservation.
+		if !d.dedup.TryClaimForDispatch(req.Agent, ev.Repo.FullName, number, time.Now()) {
+			logBase.Debug().Msg("dispatch deduped: active cron run or existing dispatch claim within window")
 			d.counters.deduped.Add(1)
 			continue
 		}
@@ -440,10 +490,25 @@ func (d *Dispatcher) MarkAutonomousRun(agentName, repo string, now time.Time) {
 	d.dedup.MarkCronRun(agentName, repo, 0, now)
 }
 
+// TryMarkAutonomousRun atomically checks whether a dispatch has already
+// claimed the (agentName, repo, 0) slot and, if not, writes a cron-namespace
+// mark. Returns true if the mark was written and the caller may proceed with
+// the run. Returns false if a dispatch claim exists (caller should return
+// ErrDispatchSkipped).
+//
+// This replaces the split DispatchAlreadyClaimed → MarkAutonomousRun sequence
+// with a single-lock operation, closing the TOCTOU race between the two paths.
+//
+// If the run fails before completing, call RollbackAutonomousRun to remove the
+// mark so that future dispatches are not spuriously suppressed.
+func (d *Dispatcher) TryMarkAutonomousRun(agentName, repo string, now time.Time) bool {
+	return d.dedup.TryClaimForCron(agentName, repo, 0, now)
+}
+
 // RollbackAutonomousRun removes the cron-namespace mark written by
-// MarkAutonomousRun. It must be called when a run fails so that the stale
-// mark does not suppress autonomous-context dispatches for the full
-// dedup_window_seconds.
+// MarkAutonomousRun or TryMarkAutonomousRun. It must be called when a run
+// fails so that the stale mark does not suppress autonomous-context dispatches
+// for the full dedup_window_seconds.
 func (d *Dispatcher) RollbackAutonomousRun(agentName, repo string) {
 	d.dedup.RemoveCronMark(agentName, repo, 0)
 }
