@@ -353,9 +353,11 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 			// downstream step (e.g. dispatch enqueue) failed, the run is already
 			// committed and the dedup window must stay in force.
 			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
-		} else if err == nil {
-			// Decrement the refcount so the evict() loop can clean up the cron
-			// entry after its TTL expires. The entry itself is preserved so that
+		} else {
+			// runner.Run succeeded (runCompleted == true) regardless of whether
+			// a post-run step (e.g. dispatch enqueue) failed. Decrement the
+			// refcount so the evict() loop can clean up the cron entry after its
+			// TTL expires. The entry itself is preserved so that
 			// TryClaimForDispatch continues to suppress autonomous-context
 			// dispatches for the full dedup_window_seconds window.
 			s.dispatcher.FinalizeAutonomousRun(agent.Name, repo)

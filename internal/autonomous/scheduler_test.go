@@ -818,6 +818,96 @@ func TestSchedulerCronMarkKeptAfterSuccessfulRunWithDispatchEnqueueFailure(t *te
 	}
 }
 
+// TestSchedulerCronRefcountDecrementedOnPostRunEnqueueFailure verifies that
+// when runner.Run succeeds but the subsequent dispatch enqueue fails,
+// FinalizeAutonomousRun is still called so the cron refcount drops to zero.
+// Without this fix, evict() refuses to remove the cron entry (refcount > 0)
+// and TryClaimForDispatch permanently blocks autonomous-context dispatches for
+// (agent, repo, 0) until process restart.
+func TestSchedulerCronRefcountDecrementedOnPostRunEnqueueFailure(t *testing.T) {
+	t.Parallel()
+	cfg := dispatchCfgForTest()
+
+	runner := &dispatchingRunner{
+		dispatches: []ai.DispatchRequest{
+			{Agent: "notifier", Reason: "review done", Number: 42},
+		},
+	}
+	queueErr := errors.New("queue full")
+	q := &fakeQueue{err: queueErr}
+	agentMap := map[string]config.AgentDef{
+		"reviewer": cfg.Agents[0],
+		"notifier": cfg.Agents[1],
+	}
+	// Use a 1-second TTL so we can simulate expiry with a past timestamp.
+	dedup := workflow.NewDispatchDedupStore(1)
+	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 1}
+	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
+
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithDispatcher(dispatcher)
+
+	// First run — runner.Run succeeds, dispatch enqueue fails.
+	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err == nil {
+		t.Fatal("expected error from dispatch enqueue failure, got nil")
+	}
+
+	// After the run, the cron TTL entry should have been finalized (refcount=0)
+	// so that the dedup store can evict the entry once its TTL elapses. Verify
+	// this indirectly: use TryClaimForDispatch with a timestamp 2 seconds past
+	// the start (well past the 1-second TTL). With the bug (refcount stuck at 1),
+	// TryClaimForDispatch returns false even past the TTL. With the fix (refcount=0),
+	// the TTL check and the refcount check both pass and the dispatch is allowed.
+	// After the run, FinalizeAutonomousRun must have been called (refcount=0).
+	// Verify indirectly: once the 1-second TTL elapses, TryClaimForDispatch
+	// should allow an autonomous-context dispatch to (notifier, owner/repo, 0).
+	// Without the fix (refcount stuck at 1), TryClaimForDispatch returns false
+	// even past the TTL because it checks cronRefCounts > 0 as a secondary guard.
+	//
+	// Note: "reviewer" can dispatch "notifier" (CanDispatch) and "notifier" has
+	// AllowDispatch: true — so we use reviewer as originator dispatching notifier,
+	// mirroring the original run that wrote the cron mark for "notifier".
+	// We need to trigger "notifier" (not "reviewer") to see the dedup effect
+	// for the cron mark written for notifier's slot.
+	//
+	// Actually, the first run was for "reviewer" (TriggerAgent("reviewer", ...)),
+	// so the cron mark is at ("reviewer", "owner/repo", 0). To test that this mark
+	// no longer blocks dispatches to "reviewer", we need reviewer to have
+	// AllowDispatch: true. Add a local config that grants this.
+	agentMapWithAllowDispatch := map[string]config.AgentDef{
+		"reviewer": {
+			Name:          "reviewer",
+			Backend:       "claude",
+			Prompt:        "Review PRs.",
+			AllowDispatch: true,
+		},
+		"notifier": {
+			Name:        "notifier",
+			Backend:     "claude",
+			Prompt:      "Notify team.",
+			CanDispatch: []string{"reviewer"},
+		},
+	}
+	q2 := &fakeQueue{}
+	dispatcher2 := workflow.NewDispatcher(dispatchCfg, agentMapWithAllowDispatch, dedup, q2, zerolog.Nop())
+	originator := agentMapWithAllowDispatch["notifier"]
+	ev := workflow.Event{
+		Repo:  workflow.RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:  "autonomous",
+		Actor: "notifier",
+	}
+	time.Sleep(2 * time.Second) // wait for the 1-second TTL to expire
+	dispatcher2.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, []ai.DispatchRequest{
+		{Agent: "reviewer", Reason: "follow-up dispatch"},
+	})
+	if len(q2.popped()) == 0 {
+		t.Error("dispatch should succeed after TTL elapsed and refcount finalized: permanent suppression bug detected")
+	}
+}
+
 func TestSchedulerAllowPRsPromptPrefixing(t *testing.T) {
 	t.Parallel()
 	const noPRPrefix = "Do not open or create pull requests under any circumstances."
