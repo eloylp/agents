@@ -49,12 +49,12 @@ The daemon is event-driven for label-based workflows and runs a cron scheduler f
 
 ## Configuration at a glance
 
-The config file is split into three conceptual domains:
+The config file is split into four conceptual domains:
 
 ```yaml
-daemon:    # how the service runs: log, http, queues, backends
+daemon:    # how the service runs: log, http, processor, backends, optional proxy
 skills:    # reusable guidance blocks, keyed by name
-agents:    # named capabilities: backend + skills + prompt
+agents:    # named capabilities: backend + skills + prompt + dispatch wiring
 repos:     # wiring: which agents run on which repo, and when
 ```
 
@@ -429,7 +429,8 @@ docker compose down
 
 The compose file expects:
 - `config.yaml` in the project root (mounted read-only at `/etc/agents/config.yaml`)
-- `prompts/` directory with any `prompt_file` targets (mounted read-only at `/etc/agents/prompts`)
+- `prompts/` directory with any agent `prompt_file` targets (mounted read-only at `/etc/agents/prompts`)
+- `skills/` directory with any skill `prompt_file` targets (mounted read-only at `/etc/agents/skills`)
 - `.env` in the project root with `GITHUB_WEBHOOK_SECRET` (and optionally `AGENTS_API_KEY`, `LOG_SALT`)
 
 #### Volume mounts
@@ -437,7 +438,8 @@ The compose file expects:
 | Host path | Container path | Purpose |
 |---|---|---|
 | `config.yaml` | `/etc/agents/config.yaml` (read-only) | Main daemon config |
-| `prompts/` | `/etc/agents/prompts` (read-only) | Prompt files referenced by `prompt_file:` |
+| `prompts/` | `/etc/agents/prompts` (read-only) | Prompt files referenced by agent `prompt_file:` |
+| `skills/` | `/etc/agents/skills` (read-only) | Skill files referenced by skill `prompt_file:` |
 | `~/.claude` | `/home/agents/.claude` | Claude Code session data |
 | `~/.claude.json` | `/home/agents/.claude.json` | Claude Code main config |
 | `~/.codex` | `/home/agents/.codex` | Codex configuration |
@@ -460,7 +462,7 @@ docker exec agents claude mcp list
 2. **Payload URL**: `https://<your-host>/webhooks/github`
 3. **Content type**: `application/json`
 4. **Secret**: same value as `GITHUB_WEBHOOK_SECRET`.
-5. **Events**: pick **Issues** and **Pull requests**.
+5. **Events**: the daemon accepts **Issues**, **Pull requests**, **Issue comments**, **Pull request reviews**, **Pull request review comments**, and **Pushes**. Enable whichever ones you want to trigger agents on. Unused events are silently dropped.
 6. **Active**: checked.
 
 GitHub sends a ping immediately; the daemon will log the delivery.
@@ -471,10 +473,11 @@ GitHub sends a ping immediately; the daemon will log the delivery.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/status` | none | Health check: JSON with uptime, queue depths, agent schedules |
+| `GET` | `/status` | none | Health check: JSON with uptime, event queue depth, agent schedules, dispatch counters |
 | `POST` | `/webhooks/github` | `X-Hub-Signature-256` HMAC | GitHub webhook receiver |
 | `POST` | `/agents/run` | `Authorization: Bearer <key>` | On-demand agent trigger |
 | `POST` | `/v1/messages` | none | Anthropic↔OpenAI translation proxy (opt-in via `proxy.enabled`) |
+| `GET` | `/v1/models` | none | Companion stub for `/v1/messages`; lists the configured upstream model |
 
 The `/agents/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It blocks until the agent finishes. If `api_key_env` is not configured the endpoint returns `403 Forbidden`.
 
@@ -590,12 +593,15 @@ go test ./... -race
 ```
 cmd/agents/main.go          # Daemon entry point + --run-agent mode
 internal/
-  config/                   # YAML parsing, prompt file resolution, validation
-  ai/                       # Prompt composition + CLI runner
+  config/                   # YAML parsing, prompt/skill file resolution, validation
+  ai/                       # Prompt composition + command-based CLI runner (per-backend env)
+  anthropic_proxy/          # Built-in Anthropic↔OpenAI translation proxy (opt-in)
   autonomous/               # Cron scheduler + filesystem-backed agent memory
-  workflow/                 # Event routing engine, queues, processor, inter-agent dispatcher
+  workflow/                 # Event routing engine, single event queue, processor, inter-agent dispatcher
   webhook/                  # HTTP server, signature verification, delivery dedupe
   setup/                    # Interactive first-time setup command
   logging/                  # zerolog setup
-prompts/                    # Optional: prompt files referenced by prompt_file
+prompts/                    # Optional: prompt files referenced by agent prompt_file
+skills/                     # Optional: skill files referenced by skill prompt_file
+docs/                       # Long-form docs (docs/local-models.md, etc.)
 ```
