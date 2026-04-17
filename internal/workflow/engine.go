@@ -182,6 +182,21 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		return fmt.Errorf("dispatch: target agent %q not found", targetName)
 	}
 
+	// Gate through the dedup store when configured (same lifecycle as fanOut).
+	// Dispatch events always carry a specific item number — we only skip
+	// dedup for number=0 repo-level events (push), which dispatch never produces.
+	if e.dispatcher != nil && ev.Number > 0 {
+		if !e.dispatcher.dedup.TryClaimForDispatch(agent.Name, ev.Repo.FullName, ev.Number, time.Now()) {
+			e.logger.Debug().
+				Str("agent", agent.Name).
+				Str("repo", ev.Repo.FullName).
+				Int("number", ev.Number).
+				Msg("dispatch run skipped: agent already claimed within dedup window")
+			e.runsDeduped.Add(1)
+			return nil
+		}
+	}
+
 	e.logger.Info().
 		Str("repo", ev.Repo.FullName).
 		Str("target", targetName).
@@ -189,7 +204,16 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		Str("invoked_by", ev.Actor).
 		Msg("running dispatched agent")
 
-	return e.runAgent(ctx, ev, agent)
+	if err := e.runAgent(ctx, ev, agent); err != nil {
+		if e.dispatcher != nil && ev.Number > 0 {
+			e.dispatcher.dedup.AbandonClaim(agent.Name, ev.Repo.FullName, ev.Number)
+		}
+		return err
+	}
+	if e.dispatcher != nil && ev.Number > 0 {
+		e.dispatcher.dedup.CommitClaim(agent.Name, ev.Repo.FullName, ev.Number)
+	}
+	return nil
 }
 
 // fanOut runs all agents matched for ev in parallel, capped by e.maxConcurrent.
@@ -224,15 +248,12 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 			defer wg.Done()
 			defer sem.Release(1)
 
-			// Gate through the dedup store when configured.
-			// TryClaimForDispatch atomically checks both namespaces:
-			//   - cron namespace: blocks if an autonomous run is active for
-			//     the same (agent, repo, number) — relevant for push events
-			//     (number=0) arriving while a cron tick is in flight.
-			//   - dispatch namespace: blocks if a dispatch or previous webhook
-			//     run already claimed the slot within the TTL window.
-			// If the slot is already held, skip this run silently.
-			if e.dispatcher != nil {
+			// Gate through the dedup store when configured, but only for
+			// item-scoped events (number > 0).  Repo-level events such as
+			// push have number=0 and must never be collapsed — each push is
+			// a distinct event with a different head_sha, so two quick pushes
+			// to the same repo should both trigger their bound agents.
+			if e.dispatcher != nil && ev.Number > 0 {
 				if !e.dispatcher.dedup.TryClaimForDispatch(a.Name, ev.Repo.FullName, ev.Number, time.Now()) {
 					e.logger.Debug().
 						Str("agent", a.Name).
@@ -245,9 +266,10 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 			}
 
 			// Abandon the pending claim on panic so that future events can retry.
+			// Only applies when a claim was actually taken (number > 0).
 			defer func() {
 				if r := recover(); r != nil {
-					if e.dispatcher != nil {
+					if e.dispatcher != nil && ev.Number > 0 {
 						e.dispatcher.dedup.AbandonClaim(a.Name, ev.Repo.FullName, ev.Number)
 					}
 					e.logger.Error().
@@ -263,7 +285,7 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 			if err := e.runAgent(ctx, ev, a); err != nil {
 				// Abandon on failure so that a retry or a subsequent event can
 				// claim the slot and attempt the run again.
-				if e.dispatcher != nil {
+				if e.dispatcher != nil && ev.Number > 0 {
 					e.dispatcher.dedup.AbandonClaim(a.Name, ev.Repo.FullName, ev.Number)
 				}
 				mu.Lock()
@@ -273,7 +295,7 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 				// Commit the claim so the TTL window stays active and duplicate
 				// runs (from concurrent events or cron overlaps) are suppressed
 				// until the window expires.
-				if e.dispatcher != nil {
+				if e.dispatcher != nil && ev.Number > 0 {
 					e.dispatcher.dedup.CommitClaim(a.Name, ev.Repo.FullName, ev.Number)
 				}
 			}

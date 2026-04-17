@@ -558,3 +558,83 @@ func TestFanOutClaimAbandonedOnRunFailure(t *testing.T) {
 		t.Errorf("expected RunsDeduped=0 (retry should not be counted as deduped), got %d", stats.RunsDeduped)
 	}
 }
+
+// TestFanOutDoesNotDedupZeroNumberEvents verifies that repo-level events with
+// number=0 (e.g. push) are never collapsed by the dedup gate.  Two distinct
+// pushes to the same repo must each trigger their bound agent.
+func TestFanOutDoesNotDedupZeroNumberEvents(t *testing.T) {
+	t.Parallel()
+	e, runner, _ := newTestEngineWithDedup(func(c *config.Config) {
+		c.Agents = append(c.Agents, config.AgentDef{Name: "pusher", Backend: "claude", Prompt: "React to pushes."})
+		c.Repos[0].Use = append(c.Repos[0].Use, config.Binding{Agent: "pusher", Events: []string{"push"}})
+	})
+
+	push1 := Event{
+		Repo:    RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:    "push",
+		Number:  0,
+		Payload: map[string]any{"head_sha": "abc123"},
+	}
+	push2 := Event{
+		Repo:    RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:    "push",
+		Number:  0,
+		Payload: map[string]any{"head_sha": "def456"},
+	}
+
+	if err := e.HandleEvent(context.Background(), push1); err != nil {
+		t.Fatalf("first push: %v", err)
+	}
+	if err := e.HandleEvent(context.Background(), push2); err != nil {
+		t.Fatalf("second push: %v", err)
+	}
+
+	if got := runner.callCount(); got != 2 {
+		t.Errorf("expected 2 runs for two distinct pushes, got %d (second push must not be deduplicated)", got)
+	}
+	if stats := e.DispatchStats(); stats.RunsDeduped != 0 {
+		t.Errorf("expected RunsDeduped=0 for push events, got %d", stats.RunsDeduped)
+	}
+}
+
+// TestHandleDispatchEventDedupWithinTTL verifies that a second agent.dispatch
+// event for the same (target_agent, repo, number) within the dedup window is
+// suppressed, just like duplicate webhook events on the fanOut path.
+func TestHandleDispatchEventDedupWithinTTL(t *testing.T) {
+	t.Parallel()
+	e, runner, _ := newTestEngineWithDedup(func(c *config.Config) {
+		// Give pr-reviewer allow_dispatch so it can be a dispatch target.
+		c.Agents[0].AllowDispatch = true
+	})
+
+	dispatchEv := Event{
+		ID:     "root-xyz",
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "agent.dispatch",
+		Number: 42,
+		Actor:  "coder",
+		Payload: map[string]any{
+			"target_agent":   "pr-reviewer",
+			"reason":         "ready for review",
+			"root_event_id":  "root-xyz",
+			"dispatch_depth": 1,
+			"invoked_by":     "coder",
+		},
+	}
+
+	// First dispatch: claim taken, run executes.
+	if err := e.HandleEvent(context.Background(), dispatchEv); err != nil {
+		t.Fatalf("first dispatch: %v", err)
+	}
+	// Second identical dispatch within TTL: claim is already committed.
+	if err := e.HandleEvent(context.Background(), dispatchEv); err != nil {
+		t.Fatalf("second dispatch: %v", err)
+	}
+
+	if got := runner.callCount(); got != 1 {
+		t.Errorf("expected exactly 1 dispatch run within TTL, got %d", got)
+	}
+	if stats := e.DispatchStats(); stats.RunsDeduped != 1 {
+		t.Errorf("expected RunsDeduped=1, got %d", stats.RunsDeduped)
+	}
+}
