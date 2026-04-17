@@ -810,11 +810,14 @@ func TestUISlashlessRedirect(t *testing.T) {
 	}
 }
 
-// TestBuildHandlerObservabilityRoutesRequireAPIKey verifies that every
-// observability endpoint and the UI paths return 401 when an API key is
-// configured and the request carries no Bearer token. It exercises
-// buildHandler() directly so router wiring cannot silently drift.
-func TestBuildHandlerObservabilityRoutesRequireAPIKey(t *testing.T) {
+// TestBuildHandlerObservabilityRoutesAreOpen verifies that the read-only
+// observability endpoints and the UI paths are accessible without a Bearer
+// token even when daemon.http.api_key is configured. The embedded dashboard
+// makes same-origin fetch/EventSource calls that cannot attach an Authorization
+// header (EventSource has no header API), so daemon-level auth must not be
+// applied here — access control is the reverse proxy's responsibility.
+// The mutation endpoint /agents/run must still require the Bearer token.
+func TestBuildHandlerObservabilityRoutesAreOpen(t *testing.T) {
 	t.Parallel()
 
 	uiFS := fstest.MapFS{
@@ -828,7 +831,8 @@ func TestBuildHandlerObservabilityRoutesRequireAPIKey(t *testing.T) {
 	ts := httptest.NewServer(srv.buildHandler())
 	defer ts.Close()
 
-	protectedRoutes := []struct {
+	// These read-only routes must NOT require a Bearer token.
+	openRoutes := []struct {
 		method string
 		path   string
 	}{
@@ -836,31 +840,39 @@ func TestBuildHandlerObservabilityRoutesRequireAPIKey(t *testing.T) {
 		{http.MethodGet, "/api/config"},
 		{http.MethodGet, "/api/dispatches"},
 		{http.MethodGet, "/api/events"},
-		{http.MethodGet, "/api/events/stream"},
 		{http.MethodGet, "/api/traces"},
-		{http.MethodGet, "/api/traces/stream"},
 		{http.MethodGet, "/api/graph"},
-		{http.MethodGet, "/api/memory/myagent/owner%2Frepo"},
-		{http.MethodGet, "/api/memory/stream"},
 		{http.MethodGet, "/ui/"},
-		{http.MethodGet, "/ui"},
 	}
 
-	for _, tc := range protectedRoutes {
+	for _, tc := range openRoutes {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			t.Parallel()
-			// No Authorization header — must be rejected.
 			req, _ := http.NewRequest(tc.method, ts.URL+tc.path, nil)
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				t.Fatalf("request failed: %v", err)
 			}
 			resp.Body.Close()
-			if resp.StatusCode != http.StatusUnauthorized {
-				t.Errorf("want 401, got %d", resp.StatusCode)
+			if resp.StatusCode == http.StatusUnauthorized {
+				t.Errorf("observability route %s %s must be open (no auth required), got 401", tc.method, tc.path)
 			}
 		})
 	}
+
+	// The mutation endpoint must still require the Bearer token.
+	t.Run("POST /agents/run requires auth", func(t *testing.T) {
+		t.Parallel()
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/agents/run", nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("want 401 for unauthenticated /agents/run, got %d", resp.StatusCode)
+		}
+	})
 }
 
 // ─── compile-time assertions ──────────────────────────────────────────────────

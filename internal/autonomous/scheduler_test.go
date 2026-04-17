@@ -671,7 +671,7 @@ func TestSchedulerCronMarkNotWrittenOnRunFailure(t *testing.T) {
 			// been written because the run never completed.
 			originator := agentMap["notifier"]
 			ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
-			dispatcher.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, []ai.DispatchRequest{
+			dispatcher.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
 				{Agent: "reviewer", Reason: "retry after failure"},
 			})
 			if len(q.popped()) != 1 {
