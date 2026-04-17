@@ -10,15 +10,6 @@ import (
 
 // ── /api/agents ────────────────────────────────────────────────────────────
 
-// agentBindingJSON is the wire shape for one agent-to-repo binding.
-type agentBindingJSON struct {
-	Repo    string   `json:"repo"`
-	Labels  []string `json:"labels,omitempty"`
-	Events  []string `json:"events,omitempty"`
-	Cron    string   `json:"cron,omitempty"`
-	Enabled bool     `json:"enabled"`
-}
-
 // agentScheduleJSON carries scheduling state for cron-backed agents.
 type agentScheduleJSON struct {
 	LastRun    *string `json:"last_run,omitempty"` // RFC3339 or omitted
@@ -26,17 +17,27 @@ type agentScheduleJSON struct {
 	LastStatus string  `json:"last_status,omitempty"`
 }
 
+// agentBindingJSON is the wire shape for one agent-to-repo binding.
+// Schedule is populated only for cron bindings that have scheduling state.
+type agentBindingJSON struct {
+	Repo     string             `json:"repo"`
+	Labels   []string           `json:"labels,omitempty"`
+	Events   []string           `json:"events,omitempty"`
+	Cron     string             `json:"cron,omitempty"`
+	Enabled  bool               `json:"enabled"`
+	Schedule *agentScheduleJSON `json:"schedule,omitempty"`
+}
+
 // apiAgentJSON is the wire shape for one agent in /api/agents.
 type apiAgentJSON struct {
-	Name          string              `json:"name"`
-	Backend       string              `json:"backend"`
-	Skills        []string            `json:"skills,omitempty"`
-	Description   string              `json:"description,omitempty"`
-	AllowDispatch bool                `json:"allow_dispatch"`
-	CanDispatch   []string            `json:"can_dispatch,omitempty"`
-	AllowPRs      bool                `json:"allow_prs"`
-	Bindings      []agentBindingJSON  `json:"bindings,omitempty"`
-	Schedule      *agentScheduleJSON  `json:"schedule,omitempty"`
+	Name          string             `json:"name"`
+	Backend       string             `json:"backend"`
+	Skills        []string           `json:"skills,omitempty"`
+	Description   string             `json:"description,omitempty"`
+	AllowDispatch bool               `json:"allow_dispatch"`
+	CanDispatch   []string           `json:"can_dispatch,omitempty"`
+	AllowPRs      bool               `json:"allow_prs"`
+	Bindings      []agentBindingJSON `json:"bindings,omitempty"`
 }
 
 // handleAPIAgents serves GET /api/agents — a fleet snapshot combining agent
@@ -69,15 +70,15 @@ func (s *Server) handleAPIAgents(w http.ResponseWriter, _ *http.Request) {
 				if b.Agent != a.Name {
 					continue
 				}
-				entry.Bindings = append(entry.Bindings, agentBindingJSON{
+				binding := agentBindingJSON{
 					Repo:    repo.Name,
 					Labels:  b.Labels,
 					Events:  b.Events,
 					Cron:    b.Cron,
 					Enabled: b.IsEnabled(),
-				})
-
-				// Attach scheduling state if this is a cron binding.
+				}
+				// Attach scheduling state onto the binding so agents with cron
+				// schedules in multiple repos each carry their own schedule data.
 				if b.IsCron() {
 					if st, ok := scheduleByKey[a.Name+"\x00"+repo.Name]; ok {
 						j := &agentScheduleJSON{
@@ -88,9 +89,10 @@ func (s *Server) handleAPIAgents(w http.ResponseWriter, _ *http.Request) {
 							lr := st.LastRun.UTC().Format("2006-01-02T15:04:05Z")
 							j.LastRun = &lr
 						}
-						entry.Schedule = j
+						binding.Schedule = j
 					}
 				}
+				entry.Bindings = append(entry.Bindings, binding)
 			}
 		}
 

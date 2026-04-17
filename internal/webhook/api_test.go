@@ -107,14 +107,99 @@ func TestHandleAPIAgentsAttachesScheduleForCronBindings(t *testing.T) {
 	if len(agents) != 1 {
 		t.Fatalf("want 1 agent")
 	}
-	if agents[0].Schedule == nil {
-		t.Fatal("want schedule attached for cron binding, got nil")
+	if len(agents[0].Bindings) != 1 {
+		t.Fatalf("want 1 binding, got %d", len(agents[0].Bindings))
 	}
-	if agents[0].Schedule.LastRun == nil {
+	sched := agents[0].Bindings[0].Schedule
+	if sched == nil {
+		t.Fatal("want schedule on cron binding, got nil")
+	}
+	if sched.LastRun == nil {
 		t.Error("want last_run set")
 	}
-	if agents[0].Schedule.LastStatus != "ok" {
-		t.Errorf("last_status: want %q, got %q", "ok", agents[0].Schedule.LastStatus)
+	if sched.LastStatus != "ok" {
+		t.Errorf("last_status: want %q, got %q", "ok", sched.LastStatus)
+	}
+}
+
+// TestHandleAPIAgentsMultiRepoSchedulePreserved verifies that an agent with
+// cron bindings in two different repos carries independent schedule state on
+// each binding — not just the last repo visited in the loop.
+func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC().Truncate(time.Second)
+	next1 := now.Add(time.Hour)
+	next2 := now.Add(2 * time.Hour)
+
+	cfg := testCfg(func(c *config.Config) {
+		c.Agents = []config.AgentDef{{Name: "worker", Backend: "codex"}}
+		c.Repos = []config.RepoDef{
+			{
+				Name:    "owner/repo-a",
+				Enabled: true,
+				Use:     []config.Binding{{Agent: "worker", Cron: "0 * * * *"}},
+			},
+			{
+				Name:    "owner/repo-b",
+				Enabled: true,
+				Use:     []config.Binding{{Agent: "worker", Cron: "30 * * * *"}},
+			},
+		}
+	})
+	dc := workflow.NewDataChannels(1)
+	provider := &stubStatusProvider{statuses: []AgentStatus{
+		{Name: "worker", Repo: "owner/repo-a", LastRun: &now, NextRun: next1, LastStatus: "ok"},
+		{Name: "worker", Repo: "owner/repo-b", NextRun: next2, LastStatus: "pending"},
+	}}
+	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, provider, nil, zerolog.Nop(), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAPIAgents(rec, req)
+
+	var agents []apiAgentJSON
+	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("want 1 agent, got %d", len(agents))
+	}
+	if len(agents[0].Bindings) != 2 {
+		t.Fatalf("want 2 bindings, got %d", len(agents[0].Bindings))
+	}
+
+	// Build a map by repo name for stable assertions regardless of loop order.
+	byRepo := make(map[string]agentBindingJSON, 2)
+	for _, b := range agents[0].Bindings {
+		byRepo[b.Repo] = b
+	}
+
+	repoA, ok := byRepo["owner/repo-a"]
+	if !ok {
+		t.Fatal("missing binding for owner/repo-a")
+	}
+	if repoA.Schedule == nil {
+		t.Fatal("want schedule on repo-a binding, got nil")
+	}
+	if repoA.Schedule.LastRun == nil {
+		t.Error("repo-a: want last_run set")
+	}
+	if repoA.Schedule.LastStatus != "ok" {
+		t.Errorf("repo-a last_status: want %q, got %q", "ok", repoA.Schedule.LastStatus)
+	}
+
+	repoB, ok := byRepo["owner/repo-b"]
+	if !ok {
+		t.Fatal("missing binding for owner/repo-b")
+	}
+	if repoB.Schedule == nil {
+		t.Fatal("want schedule on repo-b binding, got nil")
+	}
+	if repoB.Schedule.LastRun != nil {
+		t.Error("repo-b: want last_run nil (no run yet)")
+	}
+	if repoB.Schedule.LastStatus != "pending" {
+		t.Errorf("repo-b last_status: want %q, got %q", "pending", repoB.Schedule.LastStatus)
 	}
 }
 
