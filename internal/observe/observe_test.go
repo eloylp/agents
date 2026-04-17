@@ -289,6 +289,53 @@ func TestWatchMemoryDirNoPublishOnFirstScan(t *testing.T) {
 	}
 }
 
+// TestWatchMemoryDirPublishesOnNewFileAfterBaseline verifies that a markdown
+// file created after the watcher has completed its baseline scan triggers a
+// MemoryChangeEvent, even though the file did not exist at startup.
+func TestWatchMemoryDirPublishesOnNewFileAfterBaseline(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "coder")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	hub := observe.NewSSEHub(8)
+	ch := hub.Subscribe()
+	defer hub.Unsubscribe(ch)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go observe.WatchMemoryDir(ctx, dir, 25*time.Millisecond, hub)
+
+	// Wait for the baseline scan to complete before creating the new file.
+	time.Sleep(60 * time.Millisecond)
+
+	newFile := filepath.Join(agentDir, "new_repo.md")
+	if err := os.WriteFile(newFile, []byte("first write"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Expect a change notification for the newly created file.
+	select {
+	case raw := <-ch:
+		var ev observe.MemoryChangeEvent
+		if err := json.Unmarshal(extractSSEData(raw), &ev); err != nil {
+			t.Fatalf("could not unmarshal SSE payload: %v (raw: %s)", err, raw)
+		}
+		if ev.Agent != "coder" {
+			t.Errorf("agent: want %q, got %q", "coder", ev.Agent)
+		}
+		if ev.Repo != "new_repo" {
+			t.Errorf("repo: want %q, got %q", "new_repo", ev.Repo)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for new-file MemoryChangeEvent")
+	}
+}
+
 // extractSSEData strips the "data: " prefix and trailing "\n\n" added by
 // sseData so the payload can be unmarshalled as JSON.
 func extractSSEData(raw []byte) []byte {

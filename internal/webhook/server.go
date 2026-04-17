@@ -118,29 +118,28 @@ func (s *Server) buildHandler() http.Handler {
 	router.HandleFunc(s.cfg.Daemon.HTTP.WebhookPath, s.handleGitHubWebhook).Methods(http.MethodPost)
 	router.Handle(s.cfg.Daemon.HTTP.AgentsRunPath, s.requireAPIKey(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
 
-	// Observability API — gated by the same Bearer token as /agents/run when
-	// daemon.http.api_key is configured; open when no key is set.
-	router.Handle("/api/agents", s.requireAPIKey(http.HandlerFunc(s.handleAPIAgents))).Methods(http.MethodGet)
-	router.Handle("/api/config", s.requireAPIKey(http.HandlerFunc(s.handleAPIConfig))).Methods(http.MethodGet)
-	router.Handle("/api/dispatches", s.requireAPIKey(http.HandlerFunc(s.handleAPIDispatches))).Methods(http.MethodGet)
+	// Observability API — always open. Auth is the reverse proxy's responsibility
+	// per issue #151 non-goals. The mutation endpoint (/agents/run) remains
+	// protected by requireAPIKey; these read-only surfaces do not.
+	router.HandleFunc("/api/agents", s.handleAPIAgents).Methods(http.MethodGet)
+	router.HandleFunc("/api/config", s.handleAPIConfig).Methods(http.MethodGet)
+	router.HandleFunc("/api/dispatches", s.handleAPIDispatches).Methods(http.MethodGet)
 
 	// Extended observability endpoints — only registered when an observe.Store
 	// has been attached via WithObserve.
 	if s.observeStore != nil {
-		router.Handle("/api/events", s.requireAPIKey(http.HandlerFunc(s.handleAPIEvents))).Methods(http.MethodGet)
-		router.Handle("/api/events/stream", s.requireAPIKey(http.HandlerFunc(s.handleAPIEventsStream)))
-		router.Handle("/api/traces", s.requireAPIKey(http.HandlerFunc(s.handleAPITraces))).Methods(http.MethodGet)
-		router.Handle("/api/traces/stream", s.requireAPIKey(http.HandlerFunc(s.handleAPITracesStream)))
-		router.Handle("/api/traces/{root_event_id}", s.requireAPIKey(http.HandlerFunc(s.handleAPITrace))).Methods(http.MethodGet)
-		router.Handle("/api/graph", s.requireAPIKey(http.HandlerFunc(s.handleAPIGraph))).Methods(http.MethodGet)
-		router.Handle("/api/memory/{agent}/{repo}", s.requireAPIKey(http.HandlerFunc(s.handleAPIMemory))).Methods(http.MethodGet)
-		router.Handle("/api/memory/stream", s.requireAPIKey(http.HandlerFunc(s.handleAPIMemoryStream)))
+		router.HandleFunc("/api/events", s.handleAPIEvents).Methods(http.MethodGet)
+		router.HandleFunc("/api/events/stream", s.handleAPIEventsStream)
+		router.HandleFunc("/api/traces", s.handleAPITraces).Methods(http.MethodGet)
+		router.HandleFunc("/api/traces/stream", s.handleAPITracesStream)
+		router.Handle("/api/traces/{root_event_id}", http.HandlerFunc(s.handleAPITrace)).Methods(http.MethodGet)
+		router.HandleFunc("/api/graph", s.handleAPIGraph).Methods(http.MethodGet)
+		router.Handle("/api/memory/{agent}/{repo}", http.HandlerFunc(s.handleAPIMemory)).Methods(http.MethodGet)
+		router.HandleFunc("/api/memory/stream", s.handleAPIMemoryStream)
 	}
 
 	// Static UI: served from the embedded dist/ tree when a UI FS is provided.
-	// The UI is read-only and carries no secrets; auth is the reverse proxy's
-	// responsibility (per issue #151 non-goals). Only the /api/* endpoints
-	// enforce the Bearer token when daemon.http.api_key is set.
+	// Auth is the reverse proxy's responsibility (per issue #151 non-goals).
 	if s.uiFS != nil {
 		sub, err := fs.Sub(s.uiFS, "dist")
 		if err == nil {

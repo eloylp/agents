@@ -16,9 +16,10 @@ type MemoryChangeEvent struct {
 }
 
 // WatchMemoryDir polls dir every interval and publishes a MemoryChangeEvent to
-// hub whenever a markdown file's modification time changes. The first scan
-// seeds the baseline; only subsequent changes trigger publications. The goroutine
-// runs until ctx is cancelled.
+// hub whenever a markdown file's modification time changes or a new markdown
+// file appears after the initial baseline scan. The first scan seeds the
+// baseline without publishing; only subsequent changes or new arrivals trigger
+// publications. The goroutine runs until ctx is cancelled.
 //
 // If interval is <= 0, it defaults to 2 seconds.
 func WatchMemoryDir(ctx context.Context, dir string, interval time.Duration, hub *SSEHub) {
@@ -30,6 +31,7 @@ func WatchMemoryDir(ctx context.Context, dir string, interval time.Duration, hub
 
 	// known maps relative file path → last observed mtime.
 	known := make(map[string]time.Time)
+	baselineComplete := false
 
 	scan := func() {
 		_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
@@ -44,7 +46,18 @@ func WatchMemoryDir(ctx context.Context, dir string, interval time.Duration, hub
 			rel, _ := filepath.Rel(dir, path)
 			prev, seen := known[rel]
 			known[rel] = mtime
-			if seen && mtime.After(prev) {
+			if !seen {
+				// New file: publish only after baseline is complete so we do not
+				// fire events for files that already existed at startup.
+				if baselineComplete {
+					ev := buildMemoryChangeEvent(rel)
+					if b, err := sseData(ev); err == nil {
+						hub.Publish(b)
+					}
+				}
+				return nil
+			}
+			if mtime.After(prev) {
 				// File has been modified since last scan — publish.
 				ev := buildMemoryChangeEvent(rel)
 				if b, err := sseData(ev); err == nil {
@@ -55,8 +68,9 @@ func WatchMemoryDir(ctx context.Context, dir string, interval time.Duration, hub
 		})
 	}
 
-	// Seed the baseline on first tick so subsequent changes are detectable.
+	// Seed the baseline on first scan so subsequent changes are detectable.
 	scan()
+	baselineComplete = true
 	for {
 		select {
 		case <-ctx.Done():

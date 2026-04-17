@@ -538,8 +538,10 @@ func TestHandleAPIDispatchesZeroWhenNoProvider(t *testing.T) {
 
 // ── requireAPIKey middleware ────────────────────────────────────────────────
 
-// TestRequireAPIKeyBlocksWhenKeyConfigured verifies that /api/* returns 401
-// when daemon.http.api_key is set and no Authorization header is sent.
+// TestRequireAPIKeyBlocksWhenKeyConfigured verifies that the requireAPIKey
+// middleware returns 401 when daemon.http.api_key is set and no Authorization
+// header is sent. The middleware is applied to mutation endpoints (/agents/run);
+// the read-only /api/* observability routes are open per issue #151.
 func TestRequireAPIKeyBlocksWhenKeyConfigured(t *testing.T) {
 	t.Parallel()
 	for _, path := range []string{"/api/agents", "/api/config", "/api/dispatches"} {
