@@ -455,6 +455,35 @@ func TestRequireAPIKeyBlocksWrongToken(t *testing.T) {
 	}
 }
 
+// TestRequireAPIKeyBlocksNonBearerScheme verifies that the middleware rejects
+// Authorization headers that do not use the Bearer scheme, even when the value
+// happens to be the correct API key.
+func TestRequireAPIKeyBlocksNonBearerScheme(t *testing.T) {
+	t.Parallel()
+	for _, authHeader := range []string{
+		testAPIKey,                   // raw key, no scheme
+		"Basic " + testAPIKey,        // Basic scheme instead of Bearer
+		"Token " + testAPIKey,        // other non-Bearer scheme
+	} {
+		authHeader := authHeader
+		t.Run(authHeader, func(t *testing.T) {
+			t.Parallel()
+			srv, _ := newTestServer(testCfg(nil))
+
+			req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+			req.Header.Set("Authorization", authHeader)
+			rec := httptest.NewRecorder()
+			srv.requireAPIKey(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("want 401 for non-Bearer auth %q, got %d", authHeader, rec.Code)
+			}
+		})
+	}
+}
+
 // TestRequireAPIKeyAllowsCorrectToken verifies that the correct Bearer token
 // passes the middleware and reaches the inner handler.
 func TestRequireAPIKeyAllowsCorrectToken(t *testing.T) {
