@@ -330,6 +330,49 @@ func TestHandleAPIConfigRedactsSecrets(t *testing.T) {
 	}
 }
 
+// TestHandleAPIConfigOmitsProxyExtraBody verifies that proxy.upstream.extra_body
+// never appears in the /api/config response, regardless of what values the
+// operator has set there. The field is a free-form map that can hold bearer
+// tokens or other vendor-specific auth credentials.
+func TestHandleAPIConfigOmitsProxyExtraBody(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(func(c *config.Config) {
+		c.Daemon.Proxy = config.ProxyConfig{
+			Enabled: true,
+			Upstream: config.ProxyUpstreamConfig{
+				URL:   "https://upstream.example.com",
+				Model: "gpt-4o",
+				ExtraBody: map[string]any{
+					"authorization": "Bearer secret-token-xyz",
+					"x-api-key":    "vendor-secret",
+				},
+			},
+		}
+	})
+	srv, _ := newTestServer(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAPIConfig(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+
+	// The field name itself must not appear.
+	if strings.Contains(body, "extra_body") {
+		t.Error("extra_body key must be omitted from /api/config response")
+	}
+	// Neither value must leak.
+	for _, secret := range []string{"secret-token-xyz", "vendor-secret"} {
+		if strings.Contains(body, secret) {
+			t.Errorf("extra_body secret value %q must not appear in response", secret)
+		}
+	}
+}
+
 func TestHandleAPIConfigNoSecretsWhenNotSet(t *testing.T) {
 	t.Parallel()
 	// Minimal config: secrets are empty strings — [redacted] must NOT appear.

@@ -195,12 +195,14 @@ type apiProxyConfigJSON struct {
 }
 
 type apiProxyUpstreamJSON struct {
-	URL            string         `json:"url,omitempty"`
-	Model          string         `json:"model,omitempty"`
-	APIKeyEnv      string         `json:"api_key_env,omitempty"`
-	APIKey         string         `json:"api_key,omitempty"` // always "[redacted]" when set
-	TimeoutSeconds int            `json:"timeout_seconds,omitempty"`
-	ExtraBody      map[string]any `json:"extra_body,omitempty"`
+	URL            string `json:"url,omitempty"`
+	Model          string `json:"model,omitempty"`
+	APIKeyEnv      string `json:"api_key_env,omitempty"`
+	APIKey         string `json:"api_key,omitempty"` // always "[redacted]" when set
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	// ExtraBody is intentionally omitted: values can contain bearer tokens or
+	// other secrets and there is no way to safely distinguish them from safe
+	// tuning knobs without domain knowledge of every possible upstream vendor.
 }
 
 type apiSkillJSON struct {
@@ -272,7 +274,7 @@ func (s *Server) handleAPIConfig(w http.ResponseWriter, _ *http.Request) {
 			Model:          cfg.Daemon.Proxy.Upstream.Model,
 			APIKeyEnv:      cfg.Daemon.Proxy.Upstream.APIKeyEnv,
 			TimeoutSeconds: cfg.Daemon.Proxy.Upstream.TimeoutSeconds,
-			ExtraBody:      cfg.Daemon.Proxy.Upstream.ExtraBody,
+			// ExtraBody is not copied: see apiProxyUpstreamJSON comment.
 		},
 	}
 	if cfg.Daemon.Proxy.Upstream.APIKey != "" {
