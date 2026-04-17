@@ -362,6 +362,84 @@ func TestHandleAPIConfigContentType(t *testing.T) {
 	}
 }
 
+// TestHandleAPIConfigRepoBindingDefaultEnabled asserts the exact JSON shape for
+// a repo binding whose enabled field is omitted in config (nil *bool). The
+// effective value must be true — not null — and all keys must use snake_case
+// json tags rather than the Go struct's YAML-tag casing.
+func TestHandleAPIConfigRepoBindingDefaultEnabled(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(func(c *config.Config) {
+		c.Repos = []config.RepoDef{
+			{
+				Name:    "owner/repo",
+				Enabled: true,
+				Use: []config.Binding{
+					// enabled deliberately omitted — nil *bool means "default on"
+					{Agent: "worker", Labels: []string{"triage"}},
+				},
+			},
+		}
+	})
+	srv, _ := newTestServer(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAPIConfig(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+
+	// Capture raw body for key-shape checks before decoding consumes it.
+	raw := rec.Body.String()
+
+	var resp struct {
+		Repos []struct {
+			Name    string `json:"name"`
+			Enabled bool   `json:"enabled"`
+			Use     []struct {
+				Agent   string   `json:"agent"`
+				Labels  []string `json:"labels"`
+				Enabled bool     `json:"enabled"`
+			} `json:"use"`
+		} `json:"repos"`
+	}
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Repos) != 1 {
+		t.Fatalf("want 1 repo, got %d", len(resp.Repos))
+	}
+	repo := resp.Repos[0]
+	if repo.Name != "owner/repo" {
+		t.Errorf("repos[0].name: want %q, got %q", "owner/repo", repo.Name)
+	}
+	if !repo.Enabled {
+		t.Error("repos[0].enabled: want true, got false")
+	}
+	if len(repo.Use) != 1 {
+		t.Fatalf("repos[0].use: want 1 binding, got %d", len(repo.Use))
+	}
+	b := repo.Use[0]
+	if b.Agent != "worker" {
+		t.Errorf("binding.agent: want %q, got %q", "worker", b.Agent)
+	}
+	// nil *bool in config must normalize to true — not null.
+	if !b.Enabled {
+		t.Error("binding.enabled: want true for nil *bool (default-enabled), got false")
+	}
+	if len(b.Labels) != 1 || b.Labels[0] != "triage" {
+		t.Errorf("binding.labels: want [triage], got %v", b.Labels)
+	}
+
+	// Verify raw JSON uses snake_case keys, not PascalCase from YAML tags.
+	for _, badKey := range []string{`"Name"`, `"Enabled"`, `"Use"`, `"Agent"`, `"Labels"`} {
+		if strings.Contains(raw, badKey) {
+			t.Errorf("response must not contain PascalCase key %s; got body: %s", badKey, raw)
+		}
+	}
+}
+
 // ── /api/dispatches ────────────────────────────────────────────────────────
 
 func TestHandleAPIDispatchesDelegatesToProvider(t *testing.T) {

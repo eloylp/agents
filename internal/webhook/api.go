@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -116,16 +115,51 @@ type apiConfigJSON struct {
 	Daemon   apiDaemonJSON              `json:"daemon"`
 	Skills   map[string]apiSkillJSON    `json:"skills,omitempty"`
 	Agents   []apiAgentConfigJSON       `json:"agents,omitempty"`
-	Repos    []config.RepoDef           `json:"repos,omitempty"`
+	Repos    []apiRepoConfigJSON        `json:"repos,omitempty"`
 }
 
 type apiDaemonJSON struct {
-	Log        config.LogConfig                   `json:"log"`
+	Log        apiLogConfigJSON                   `json:"log"`
 	HTTP       apiHTTPConfigJSON                  `json:"http"`
-	Processor  config.ProcessorConfig             `json:"processor"`
+	Processor  apiProcessorConfigJSON             `json:"processor"`
 	MemoryDir  string                             `json:"memory_dir,omitempty"`
 	AIBackends map[string]apiAIBackendConfigJSON  `json:"ai_backends,omitempty"`
 	Proxy      apiProxyConfigJSON                 `json:"proxy"`
+}
+
+type apiLogConfigJSON struct {
+	Level  string `json:"level"`
+	Format string `json:"format"`
+}
+
+type apiDispatchConfigJSON struct {
+	MaxDepth           int `json:"max_depth"`
+	MaxFanout          int `json:"max_fanout"`
+	DedupWindowSeconds int `json:"dedup_window_seconds"`
+}
+
+type apiProcessorConfigJSON struct {
+	EventQueueBuffer    int                   `json:"event_queue_buffer"`
+	MaxConcurrentAgents int                   `json:"max_concurrent_agents"`
+	Dispatch            apiDispatchConfigJSON  `json:"dispatch"`
+}
+
+// apiBindingConfigJSON is the wire shape for a repo binding in /api/config.
+// Enabled is always an explicit bool: a nil *bool in config (meaning "default
+// enabled") is normalized to true so clients see the effective value.
+type apiBindingConfigJSON struct {
+	Agent   string   `json:"agent"`
+	Labels  []string `json:"labels,omitempty"`
+	Cron    string   `json:"cron,omitempty"`
+	Events  []string `json:"events,omitempty"`
+	Enabled bool     `json:"enabled"`
+}
+
+// apiRepoConfigJSON is the wire shape for one repo in /api/config.
+type apiRepoConfigJSON struct {
+	Name    string                 `json:"name"`
+	Enabled bool                   `json:"enabled"`
+	Use     []apiBindingConfigJSON `json:"use,omitempty"`
 }
 
 type apiHTTPConfigJSON struct {
@@ -264,18 +298,48 @@ func (s *Server) handleAPIConfig(w http.ResponseWriter, _ *http.Request) {
 		})
 	}
 
+	repos := make([]apiRepoConfigJSON, 0, len(cfg.Repos))
+	for _, r := range cfg.Repos {
+		bindings := make([]apiBindingConfigJSON, 0, len(r.Use))
+		for _, b := range r.Use {
+			bindings = append(bindings, apiBindingConfigJSON{
+				Agent:   b.Agent,
+				Labels:  b.Labels,
+				Cron:    b.Cron,
+				Events:  b.Events,
+				Enabled: b.IsEnabled(),
+			})
+		}
+		repos = append(repos, apiRepoConfigJSON{
+			Name:    r.Name,
+			Enabled: r.Enabled,
+			Use:     bindings,
+		})
+	}
+
 	resp := apiConfigJSON{
 		Daemon: apiDaemonJSON{
-			Log:        cfg.Daemon.Log,
-			HTTP:       httpCfg,
-			Processor:  cfg.Daemon.Processor,
+			Log: apiLogConfigJSON{
+				Level:  cfg.Daemon.Log.Level,
+				Format: cfg.Daemon.Log.Format,
+			},
+			HTTP: httpCfg,
+			Processor: apiProcessorConfigJSON{
+				EventQueueBuffer:    cfg.Daemon.Processor.EventQueueBuffer,
+				MaxConcurrentAgents: cfg.Daemon.Processor.MaxConcurrentAgents,
+				Dispatch: apiDispatchConfigJSON{
+					MaxDepth:           cfg.Daemon.Processor.Dispatch.MaxDepth,
+					MaxFanout:          cfg.Daemon.Processor.Dispatch.MaxFanout,
+					DedupWindowSeconds: cfg.Daemon.Processor.Dispatch.DedupWindowSeconds,
+				},
+			},
 			MemoryDir:  cfg.Daemon.MemoryDir,
 			AIBackends: backends,
 			Proxy:      proxy,
 		},
 		Skills: skills,
 		Agents: agents,
-		Repos:  cfg.Repos,
+		Repos:  repos,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
