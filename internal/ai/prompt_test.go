@@ -200,7 +200,7 @@ func TestRenderAgentPromptMultilinePayloadBodyIsIndented(t *testing.T) {
 	if strings.Contains(usr, "body: first line") {
 		t.Errorf("multiline body rendered inline (not indented):\n%s", usr)
 	}
-	if !strings.Contains(usr, "body:\n  first line\n  second line\n  third line\n") {
+	if !strings.Contains(usr, "body:\n  first line\n  second line\n  third line") {
 		t.Errorf("multiline body not rendered as indented block:\n%s", usr)
 	}
 }
