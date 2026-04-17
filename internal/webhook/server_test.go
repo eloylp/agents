@@ -367,17 +367,47 @@ func TestHandleIssueCommentCreatedEnqueuesEvent(t *testing.T) {
 	}
 }
 
-func TestHandleIssueCommentNonCreatedIgnored(t *testing.T) {
+// TestHandleNonTriggeringActionsIgnored verifies that non-triggering actions for
+// comment and review event types are accepted but produce no workflow event.
+func TestHandleNonTriggeringActionsIgnored(t *testing.T) {
 	t.Parallel()
-	server, dc := newTestServer(testCfg(nil))
-
-	body := `{"action":"edited","comment":{"body":"updated"},"issue":{"number":1},"repository":{"full_name":"owner/repo"},"sender":{"login":"u"}}`
-	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, webhookRequest(t, "issue_comment", "d-edit", body))
-	if rr.Code != http.StatusAccepted {
-		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	tests := []struct {
+		name      string
+		eventType string
+		deliveryID string
+		body      string
+	}{
+		{
+			name:       "issue_comment non-created action ignored",
+			eventType:  "issue_comment",
+			deliveryID: "d-edit",
+			body:       `{"action":"edited","comment":{"body":"updated"},"issue":{"number":1},"repository":{"full_name":"owner/repo"},"sender":{"login":"u"}}`,
+		},
+		{
+			name:       "pull_request_review non-submitted action ignored",
+			eventType:  "pull_request_review",
+			deliveryID: "d-dismissed",
+			body:       `{"action":"dismissed","review":{"state":"dismissed"},"pull_request":{"number":1},"repository":{"full_name":"owner/repo"},"sender":{"login":"u"}}`,
+		},
+		{
+			name:       "pull_request_review_comment non-created action ignored",
+			eventType:  "pull_request_review_comment",
+			deliveryID: "d-rc-2",
+			body:       `{"action":"edited","comment":{"body":"updated"},"pull_request":{"number":7},"repository":{"full_name":"owner/repo"},"sender":{"login":"u"}}`,
+		},
 	}
-	assertNoEvent(t, dc)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server, dc := newTestServer(testCfg(nil))
+			rr := httptest.NewRecorder()
+			server.handleGitHubWebhook(rr, webhookRequest(t, tc.eventType, tc.deliveryID, tc.body))
+			if rr.Code != http.StatusAccepted {
+				t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+			}
+			assertNoEvent(t, dc)
+		})
+	}
 }
 
 // ─── pull_request_review events ───────────────────────────────────────────────
@@ -403,19 +433,6 @@ func TestHandlePullRequestReviewSubmittedEnqueuesEvent(t *testing.T) {
 	if ev.Payload["state"] != "approved" {
 		t.Errorf("payload state: got %v", ev.Payload["state"])
 	}
-}
-
-func TestHandlePullRequestReviewNonSubmittedIgnored(t *testing.T) {
-	t.Parallel()
-	server, dc := newTestServer(testCfg(nil))
-
-	body := `{"action":"dismissed","review":{"state":"dismissed"},"pull_request":{"number":1},"repository":{"full_name":"owner/repo"},"sender":{"login":"u"}}`
-	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request_review", "d-dismissed", body))
-	if rr.Code != http.StatusAccepted {
-		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
-	}
-	assertNoEvent(t, dc)
 }
 
 // ─── pull_request_review_comment events ──────────────────────────────────────
@@ -444,19 +461,6 @@ func TestHandlePullRequestReviewCommentCreatedEnqueuesEvent(t *testing.T) {
 	if ev.Payload["body"] != "nit: rename this" {
 		t.Errorf("payload body: got %v", ev.Payload["body"])
 	}
-}
-
-func TestHandlePullRequestReviewCommentNonCreatedIgnored(t *testing.T) {
-	t.Parallel()
-	server, dc := newTestServer(testCfg(nil))
-
-	body := `{"action":"edited","comment":{"body":"updated"},"pull_request":{"number":7},"repository":{"full_name":"owner/repo"},"sender":{"login":"u"}}`
-	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request_review_comment", "d-rc-2", body))
-	if rr.Code != http.StatusAccepted {
-		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
-	}
-	assertNoEvent(t, dc)
 }
 
 // ─── push events ─────────────────────────────────────────────────────────────
