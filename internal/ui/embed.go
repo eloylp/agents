@@ -9,5 +9,5 @@ import "embed"
 // FS holds the embedded contents of the dist/ directory. Mount it at /ui/
 // via http.FileServer(http.FS(ui.FS)) to serve the dashboard.
 //
-//go:embed dist
+//go:embed all:dist
 var FS embed.FS

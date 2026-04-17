@@ -3,12 +3,12 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
 const links = [
-  { href: '/ui/', label: 'Fleet' },
-  { href: '/ui/traces/', label: 'Traces' },
-  { href: '/ui/graph/', label: 'Graph' },
-  { href: '/ui/events/', label: 'Events' },
-  { href: '/ui/memory/', label: 'Memory' },
-  { href: '/ui/config/', label: 'Config' },
+  { href: '/', label: 'Fleet' },
+  { href: '/traces/', label: 'Traces' },
+  { href: '/graph/', label: 'Graph' },
+  { href: '/events/', label: 'Events' },
+  { href: '/memory/', label: 'Memory' },
+  { href: '/config/', label: 'Config' },
 ]
 
 export default function NavBar() {
@@ -27,7 +27,7 @@ export default function NavBar() {
         agents
       </span>
       {links.map(({ href, label }) => {
-        const active = pathname === href || (href !== '/ui/' && pathname.startsWith(href))
+        const active = pathname === href || (href !== '/' && pathname.startsWith(href))
         return (
           <Link
             key={href}

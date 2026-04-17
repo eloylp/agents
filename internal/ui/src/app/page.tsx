@@ -124,7 +124,7 @@ export default function FleetPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          <Link href="/ui/traces/" style={{ fontSize: '0.875rem', color: '#60a5fa' }}>View traces →</Link>
+          <Link href="/traces/" style={{ fontSize: '0.875rem', color: '#60a5fa' }}>View traces →</Link>
           <button
             onClick={load}
             style={{ background: '#1e293b', border: '1px solid #334155', color: '#94a3b8', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem' }}

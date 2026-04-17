@@ -189,11 +189,11 @@ function TracesContent() {
   }, [])
 
   const handleSelect = (id: string) => {
-    router.push(`/ui/traces/?id=${encodeURIComponent(id)}`)
+    router.push(`/traces/?id=${encodeURIComponent(id)}`)
   }
 
   if (selectedId) {
-    return <TraceDetail rootId={selectedId} allSpans={spans} onBack={() => router.push('/ui/traces/')} />
+    return <TraceDetail rootId={selectedId} allSpans={spans} onBack={() => router.push('/traces/')} />
   }
 
   const grouped: Record<string, Span[]> = {}
