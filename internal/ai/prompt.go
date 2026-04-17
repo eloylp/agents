@@ -137,14 +137,8 @@ func renderRuntimeContext(ctx PromptContext) string {
 		roster := make([]RosterEntry, len(ctx.Roster))
 		copy(roster, ctx.Roster)
 		slices.SortFunc(roster, func(a, b RosterEntry) int {
-				if a.Name < b.Name {
-					return -1
-				}
-				if a.Name > b.Name {
-					return 1
-				}
-				return 0
-			})
+			return strings.Compare(a.Name, b.Name)
+		})
 		for _, r := range roster {
 			fmt.Fprintf(&b, "- **%s**", r.Name)
 			if r.Description != "" {
