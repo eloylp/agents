@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -767,6 +768,46 @@ func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
 		t.Fatalf("retry with good sig: got %d body=%s", rrGood.Code, rrGood.Body.String())
 	}
 	_ = dc
+}
+
+// TestUISlashlessRedirect verifies that GET /ui (no trailing slash) redirects
+// to /ui/ with a 301 when a UI FS is attached to the server. This is the
+// canonical entrypoint that operators and reverse proxies tend to use.
+func TestUISlashlessRedirect(t *testing.T) {
+	t.Parallel()
+
+	// Build a minimal in-memory FS that satisfies fs.Sub("dist").
+	uiFS := fstest.MapFS{
+		"dist/index.html": &fstest.MapFile{Data: []byte("<html></html>")},
+	}
+
+	srv, _ := newTestServer(testCfg(nil))
+	srv.WithUI(uiFS)
+
+	ts := httptest.NewServer(srv.buildHandler())
+	defer ts.Close()
+
+	client := &http.Client{
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse // do not follow redirects
+		},
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/ui", nil)
+	req.Header.Set("Authorization", "Bearer "+testAPIKey)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMovedPermanently {
+		t.Fatalf("want 301, got %d", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if loc != "/ui/" {
+		t.Fatalf("want Location /ui/, got %q", loc)
+	}
 }
 
 // ─── compile-time assertions ──────────────────────────────────────────────────

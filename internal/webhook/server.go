@@ -100,7 +100,10 @@ func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue,
 	return s
 }
 
-func (s *Server) Run(ctx context.Context) error {
+// buildHandler constructs the HTTP router for the server and returns it as
+// an http.Handler. It is separated from Run so tests can exercise routing
+// without starting a real TCP listener.
+func (s *Server) buildHandler() http.Handler {
 	router := mux.NewRouter()
 	router.HandleFunc(s.cfg.Daemon.HTTP.StatusPath, s.handleStatus).Methods(http.MethodGet)
 	router.HandleFunc(s.cfg.Daemon.HTTP.WebhookPath, s.handleGitHubWebhook).Methods(http.MethodPost)
@@ -118,6 +121,11 @@ func (s *Server) Run(ctx context.Context) error {
 		if err == nil {
 			fileServer := http.StripPrefix("/ui/", http.FileServer(http.FS(sub)))
 			router.PathPrefix("/ui/").Handler(s.requireAPIKey(fileServer))
+			// Redirect the slashless entrypoint /ui → /ui/ so operators and
+			// reverse proxies that normalise trailing slashes get the dashboard.
+			router.Handle("/ui", s.requireAPIKey(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
+			}))).Methods(http.MethodGet)
 		}
 	}
 
@@ -126,6 +134,11 @@ func (s *Server) Run(ctx context.Context) error {
 		router.HandleFunc("/v1/models", s.proxy.ModelsHandler).Methods(http.MethodGet)
 		s.logger.Info().Str("path", s.cfg.Daemon.Proxy.Path).Str("upstream", s.cfg.Daemon.Proxy.Upstream.URL).Msg("anthropic proxy enabled")
 	}
+	return router
+}
+
+func (s *Server) Run(ctx context.Context) error {
+	router := s.buildHandler()
 
 	srv := &http.Server{
 		Addr:         s.cfg.Daemon.HTTP.ListenAddr,
