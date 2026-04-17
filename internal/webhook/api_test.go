@@ -925,6 +925,52 @@ func TestHandleAPIGraphIncludesConfiguredAgentWithNoDispatches(t *testing.T) {
 	}
 }
 
+func TestHandleAPIGraphNodeStatusReflectsRuntimeState(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(func(c *config.Config) {
+		c.Agents = []config.AgentDef{
+			{Name: "runner", Backend: "claude"},
+			{Name: "idle-ok", Backend: "claude"},
+			{Name: "idle-err", Backend: "claude"},
+		}
+	})
+	// "idle-err" had a previous error run per the scheduler.
+	provider := &stubStatusProvider{statuses: []AgentStatus{
+		{Name: "idle-err", LastStatus: "error"},
+	}}
+	dc := workflow.NewDataChannels(1)
+	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, provider, nil, zerolog.Nop(), nil)
+	obs := newTestObserve()
+	srv.WithObserve(obs)
+	// "runner" is currently active.
+	srv.WithRuntimeState(&stubRuntimeState{running: map[string]bool{"runner": true}})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/graph", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAPIGraph(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var g apiGraphJSON
+	if err := json.NewDecoder(rec.Body).Decode(&g); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	statusByID := make(map[string]string, len(g.Nodes))
+	for _, n := range g.Nodes {
+		statusByID[n.ID] = n.Status
+	}
+	if statusByID["runner"] != "running" {
+		t.Errorf("running agent: want status=%q, got %q", "running", statusByID["runner"])
+	}
+	if statusByID["idle-err"] != "error" {
+		t.Errorf("error agent: want status=%q, got %q", "error", statusByID["idle-err"])
+	}
+	if statusByID["idle-ok"] != "" {
+		t.Errorf("idle-ok agent: want empty status, got %q", statusByID["idle-ok"])
+	}
+}
+
 // ── /api/memory ────────────────────────────────────────────────────────────
 
 func TestHandleAPIMemoryServesFile(t *testing.T) {

@@ -480,15 +480,27 @@ type apiDispatchRecord struct {
 func (s *Server) handleAPIGraph(w http.ResponseWriter, _ *http.Request) {
 	edges := s.observeStore.Graph.Edges()
 
-	// Collect the last-known run status for each agent from the scheduler so
-	// the UI can colour nodes by state.
-	statusByAgent := make(map[string]string)
+	// Build a map of the last cron error status for each agent so we can show
+	// "error" for idle agents that last exited with an error.
+	lastErrorByAgent := make(map[string]bool)
 	if s.provider != nil {
 		for _, as := range s.provider.AgentStatuses() {
-			if as.LastStatus != "" {
-				statusByAgent[as.Name] = as.LastStatus
+			if as.LastStatus == "error" {
+				lastErrorByAgent[as.Name] = true
 			}
 		}
+	}
+
+	// Derive the display status for a node: "running" if currently active,
+	// "error" if idle but last run failed, otherwise omit (UI treats it as idle).
+	nodeStatus := func(name string) string {
+		if s.runtimeState != nil && s.runtimeState.IsRunning(name) {
+			return "running"
+		}
+		if lastErrorByAgent[name] {
+			return "error"
+		}
+		return ""
 	}
 
 	// Seed the node set from the full configured fleet so that agents with no
@@ -505,7 +517,7 @@ func (s *Server) handleAPIGraph(w http.ResponseWriter, _ *http.Request) {
 	}
 	nodes := make([]apiGraphNode, 0, len(seen))
 	for id := range seen {
-		nodes = append(nodes, apiGraphNode{ID: id, Status: statusByAgent[id]})
+		nodes = append(nodes, apiGraphNode{ID: id, Status: nodeStatus(id)})
 	}
 
 	wireEdges := make([]apiGraphEdge, 0, len(edges))
