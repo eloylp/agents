@@ -175,32 +175,32 @@ func (r *CommandRunner) buildDelivery(req Request) (args []string, stdin string)
 		args = make([]string, 0, len(r.args)+2)
 		args = append(args, r.args...)
 
-		// Enforce the combined prompt budget against the same logical shape as
-		// the fallback path: System + "\n\n" + User (separator only when both
-		// are non-empty).  Budget the system part first; whatever headroom
-		// remains (minus the separator) is available for the user turn.
-		systemContent := req.System
-		userBudget := r.maxPromptChars
-		if userBudget > 0 {
-			systemRunes := utf8.RuneCountInString(req.System)
-			if systemRunes >= userBudget {
-				// System fills or exceeds the budget; truncate it and send no user content.
-				systemContent = truncateString(req.System, userBudget)
-				args = append(args, "--append-system-prompt", systemContent)
-				stdin = ""
-				return args, stdin
-			}
-			// Reserve headroom for system + separator, leaving the rest for user.
-			userBudget -= systemRunes + separatorRunes
-			if userBudget <= 0 {
-				// Separator sits at or past the budget boundary; no room for user.
-				args = append(args, "--append-system-prompt", systemContent)
-				stdin = ""
-				return args, stdin
-			}
+		// Enforce the budget on the same logical combined prompt as every
+		// other backend (System + "\n\n" + User), then re-split the
+		// truncated result for transport.  This guarantees both paths
+		// truncate at the identical logical boundary even when the cut
+		// falls inside System or within the separator.
+		combined := combineSystemUser(req.System, req.User)
+		truncated := truncateString(combined, r.maxPromptChars)
+		truncatedRunes := utf8.RuneCountInString(truncated)
+		systemRunes := utf8.RuneCountInString(req.System)
+
+		// userStartInCombined is where user content begins in the combined
+		// string (after System + the two-rune "\n\n" separator).
+		userStartInCombined := systemRunes + separatorRunes
+
+		if truncatedRunes <= userStartInCombined {
+			// Truncation cut within System or the separator; no user
+			// content survives.  Pass the truncated prefix as the system
+			// arg so both backends deliver the same logical content.
+			args = append(args, "--append-system-prompt", truncated)
+			stdin = ""
+			return args, stdin
 		}
-		args = append(args, "--append-system-prompt", systemContent)
-		stdin = truncateString(req.User, userBudget)
+
+		// System fits fully; extract user from after the separator.
+		args = append(args, "--append-system-prompt", req.System)
+		stdin = string([]rune(truncated)[userStartInCombined:])
 		return args, stdin
 	}
 	// Fallback: concatenate system + user with the same separator rule, send on stdin.

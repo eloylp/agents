@@ -409,6 +409,18 @@ func TestBuildDeliveryRespectsTotalBudget(t *testing.T) {
 			wantSystemArg: "abcdefgh",
 		},
 		{
+			// Truncation falls within the "\n\n" separator: system(5) + sep(2) > budget(6).
+			// Claude must pass the truncated combined prefix ("abcde\n") as the system
+			// arg and produce empty stdin — matching codex which sends "abcde\n".
+			name:          "claude-truncation-in-separator",
+			backendName:   "claude",
+			system:        "abcde",
+			user:          "x",
+			maxChars:      6,
+			wantStdin:     "",
+			wantSystemArg: "abcde\n",
+		},
+		{
 			// unlimited (maxChars=0): no truncation on either part
 			name:        "claude-unlimited-no-truncation",
 			backendName: "claude",
@@ -479,6 +491,16 @@ func TestBuildDeliveryClaudeAndCodexSameTruncationBoundary(t *testing.T) {
 			system:   "abcdefghi",
 			user:     "x",
 			maxChars: 8,
+		},
+		{
+			// Truncation falls inside the "\n\n" separator (budget=6, system=5,
+			// sep would start at 5 and end at 6 but budget cuts after 6th rune).
+			// Claude must deliver the same 6 runes as codex even though the cut
+			// falls in non-semantic separator whitespace.
+			name:     "truncation-in-separator",
+			system:   "abcde",
+			user:     "x",
+			maxChars: 6,
 		},
 		{
 			name:     "no-truncation-needed",
