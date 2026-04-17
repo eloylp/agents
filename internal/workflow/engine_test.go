@@ -37,6 +37,15 @@ func (s *stubRunner) callCount() int {
 	return len(s.calls)
 }
 
+func (s *stubRunner) lastSystem() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.calls) == 0 {
+		return ""
+	}
+	return s.calls[len(s.calls)-1].System
+}
+
 // newTestEngine builds an Engine with a canned agent set. The cfgMutator
 // hook lets tests override bindings, backends, etc.
 func newTestEngine(cfgMutator func(*config.Config)) (*Engine, *stubRunner) {
@@ -346,5 +355,44 @@ func TestHandleEventPRReviewEventBindingRuns(t *testing.T) {
 	}
 	if runner.callCount() != 1 {
 		t.Errorf("expected 1 run, got %d", runner.callCount())
+	}
+}
+
+func TestEngineAllowPRsFalseInjectsNoPRGuard(t *testing.T) {
+	t.Parallel()
+	// When allow_prs is false (default), the engine must prepend the no-PR
+	// instruction to the system prompt — matching the autonomous scheduler path.
+	e, runner := newTestEngine(func(c *config.Config) {
+		c.Agents[0].AllowPRs = false
+	})
+	ev := labelEvent("issues.labeled", "owner/repo", "ai:review:arch-reviewer", 1)
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if runner.callCount() != 1 {
+		t.Fatalf("expected 1 run, got %d", runner.callCount())
+	}
+	const want = "Do not open or create pull requests under any circumstances."
+	if !strings.HasPrefix(runner.lastSystem(), want) {
+		t.Errorf("system prompt must start with no-PR guard\ngot: %q", runner.lastSystem())
+	}
+}
+
+func TestEngineAllowPRsTrueOmitsNoPRGuard(t *testing.T) {
+	t.Parallel()
+	// When allow_prs is true the guard must NOT be prepended.
+	e, runner := newTestEngine(func(c *config.Config) {
+		c.Agents[0].AllowPRs = true
+	})
+	ev := labelEvent("issues.labeled", "owner/repo", "ai:review:arch-reviewer", 1)
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if runner.callCount() != 1 {
+		t.Fatalf("expected 1 run, got %d", runner.callCount())
+	}
+	const noPR = "Do not open or create pull requests under any circumstances."
+	if strings.HasPrefix(runner.lastSystem(), noPR) {
+		t.Errorf("system prompt must NOT contain no-PR guard when allow_prs=true\ngot: %q", runner.lastSystem())
 	}
 }
