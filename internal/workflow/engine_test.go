@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -690,5 +691,66 @@ func TestDispatchDedupPreventsDoubleEnqueue(t *testing.T) {
 	}
 	if stats := e.Dispatcher().Stats(); stats.Deduped != 1 {
 		t.Errorf("expected Deduped=1 from enqueue-side dedup, got %d", stats.Deduped)
+	}
+}
+
+// TestFanOutDedupSurvivesTTLExpiry is a regression test for the in-flight
+// refcount fix: a second identical event arriving after dedup_window_seconds
+// has elapsed — but while the first run is still executing — must be suppressed.
+// Before the fix, TryClaimForDispatch only checked the TTL entry; once the
+// entry expired the second event could claim the slot and start a concurrent
+// duplicate run.
+func TestFanOutDedupSurvivesTTLExpiry(t *testing.T) {
+	t.Parallel()
+
+	// Use an engine with a 1-second dedup window so the TTL expires quickly.
+	e, runner, _ := newTestEngineWithDedup(func(c *config.Config) {
+		c.Daemon.Processor.Dispatch.DedupWindowSeconds = 1
+	})
+
+	var (
+		runStarted = make(chan struct{})
+		unblock    = make(chan struct{})
+	)
+	// The first run blocks until we release it, simulating a long-running agent.
+	runner.runFn = func(_ ai.Request) error {
+		close(runStarted)
+		<-unblock
+		return nil
+	}
+
+	ev := Event{
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "pull_request.synchronize",
+		Number: 42,
+	}
+
+	// Start first run in background; it will block until unblock is closed.
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- e.HandleEvent(context.Background(), ev) }()
+
+	// Wait until the first run has started and is in-flight.
+	<-runStarted
+
+	// Wait for the TTL window to expire so the store entry expires.
+	time.Sleep(1500 * time.Millisecond)
+
+	// Fire a second identical event while the first run is still in-flight.
+	// The in-flight refcount must suppress it even though the TTL has expired.
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("second HandleEvent: %v", err)
+	}
+
+	// Release the first run.
+	close(unblock)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first HandleEvent: %v", err)
+	}
+
+	if got := runner.callCount(); got != 1 {
+		t.Errorf("expected exactly 1 run (second suppressed by in-flight refcount), got %d", got)
+	}
+	if stats := e.DispatchStats(); stats.RunsDeduped != 1 {
+		t.Errorf("expected RunsDeduped=1, got %d", stats.RunsDeduped)
 	}
 }

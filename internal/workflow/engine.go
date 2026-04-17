@@ -243,14 +243,20 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 					e.runsDeduped.Add(1)
 					return
 				}
+				// Increment the in-flight refcount so that the claim persists
+				// past the TTL window for the duration of the run. Without this
+				// a long-running agent (> dedup_window_seconds) would allow a
+				// second identical event to pass the TTL check and start a
+				// concurrent duplicate run.
+				e.dispatcher.dedup.MarkWebhookRunInFlight(a.Name, ev.Repo.FullName, ev.Number)
 			}
 
-			// Abandon the pending claim on panic so that future events can retry.
-			// Only applies when a claim was actually taken (number > 0).
+			// Abandon the in-flight marker and pending claim on panic so that
+			// future events can retry. Only applies when a claim was taken (number > 0).
 			defer func() {
 				if r := recover(); r != nil {
 					if e.dispatcher != nil && ev.Number > 0 {
-						e.dispatcher.dedup.AbandonClaim(a.Name, ev.Repo.FullName, ev.Number)
+						e.dispatcher.dedup.AbandonWebhookRun(a.Name, ev.Repo.FullName, ev.Number)
 					}
 					e.logger.Error().
 						Interface("panic", r).
@@ -266,17 +272,20 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 				// Abandon on failure so that a retry or a subsequent event can
 				// claim the slot and attempt the run again.
 				if e.dispatcher != nil && ev.Number > 0 {
-					e.dispatcher.dedup.AbandonClaim(a.Name, ev.Repo.FullName, ev.Number)
+					e.dispatcher.dedup.AbandonWebhookRun(a.Name, ev.Repo.FullName, ev.Number)
 				}
 				mu.Lock()
 				errs = append(errs, err)
 				mu.Unlock()
 			} else {
-				// Commit the claim so the TTL window stays active and duplicate
-				// runs (from concurrent events or cron overlaps) are suppressed
-				// until the window expires.
+				// Commit the claim and release the in-flight marker. CommitClaim
+				// marks the entry as committed so the TTL window stays active;
+				// FinalizeWebhookRun decrements the refcount while preserving
+				// the TTL entry — together they suppress duplicate runs until
+				// the window expires without blocking new events after it does.
 				if e.dispatcher != nil && ev.Number > 0 {
 					e.dispatcher.dedup.CommitClaim(a.Name, ev.Repo.FullName, ev.Number)
+					e.dispatcher.dedup.FinalizeWebhookRun(a.Name, ev.Repo.FullName, ev.Number)
 				}
 			}
 		}(agent)

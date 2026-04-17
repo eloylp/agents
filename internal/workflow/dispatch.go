@@ -79,18 +79,20 @@ type dispatchEntry struct {
 // requests within a configurable TTL window. It mirrors the shape of
 // webhook.DeliveryStore.
 type DispatchDedupStore struct {
-	ttl           time.Duration
-	mu            sync.Mutex
-	entries       map[string]dispatchEntry
-	cronRefCounts map[string]int // active in-flight run count per cron key
+	ttl              time.Duration
+	mu               sync.Mutex
+	entries          map[string]dispatchEntry
+	cronRefCounts    map[string]int // active in-flight run count per cron key
+	webhookRefCounts map[string]int // active in-flight run count per dispatch/webhook key
 }
 
 // NewDispatchDedupStore returns a store with the given TTL window in seconds.
 func NewDispatchDedupStore(ttlSeconds int) *DispatchDedupStore {
 	return &DispatchDedupStore{
-		ttl:           time.Duration(ttlSeconds) * time.Second,
-		entries:       make(map[string]dispatchEntry),
-		cronRefCounts: make(map[string]int),
+		ttl:              time.Duration(ttlSeconds) * time.Second,
+		entries:          make(map[string]dispatchEntry),
+		cronRefCounts:    make(map[string]int),
+		webhookRefCounts: make(map[string]int),
 	}
 }
 
@@ -121,11 +123,12 @@ func (s *DispatchDedupStore) evict(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for key, entry := range s.entries {
-		// Do not evict cron entries whose run is still in flight: the refcount
-		// tracks active callers that called MarkCronRun but have not yet called
-		// RemoveCronMark. Evicting such an entry would allow TryClaimForDispatch
-		// to proceed even though the autonomous run is still executing.
-		if now.After(entry.expiresAt) && s.cronRefCounts[key] == 0 {
+		// Do not evict entries whose run is still in flight: the refcount
+		// tracks active callers that called MarkCronRun/MarkWebhookRunInFlight
+		// but have not yet called the corresponding finalize/abandon method.
+		// Evicting such an entry would allow TryClaimForDispatch to proceed
+		// even though the run is still executing.
+		if now.After(entry.expiresAt) && s.cronRefCounts[key] == 0 && s.webhookRefCounts[key] == 0 {
 			delete(s.entries, key)
 		}
 	}
@@ -202,6 +205,51 @@ func (s *DispatchDedupStore) AbandonClaim(target, repo string, number int) {
 	}
 }
 
+// MarkWebhookRunInFlight increments the in-flight reference count for the
+// dispatch-namespace entry (agent, repo, number). It must be called immediately
+// after a successful TryClaimForDispatch in the webhook/fanOut path so that the
+// claim survives past the TTL window while the agent run is still executing.
+// Callers must follow with FinalizeWebhookRun (success) or AbandonWebhookRun
+// (failure) to release the marker.
+func (s *DispatchDedupStore) MarkWebhookRunInFlight(agent, repo string, number int) {
+	key := fmt.Sprintf("%s\x00%s\x00%d", agent, repo, number)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.webhookRefCounts[key]++
+}
+
+// FinalizeWebhookRun decrements the in-flight reference count for the
+// dispatch-namespace entry (agent, repo, number) after a successful run.
+// The TTL entry is preserved so TryClaimForDispatch continues to suppress
+// duplicates until the dedup_window_seconds elapses. Once the refcount reaches
+// zero, the evict() loop is free to remove the entry when expiresAt passes.
+func (s *DispatchDedupStore) FinalizeWebhookRun(agent, repo string, number int) {
+	key := fmt.Sprintf("%s\x00%s\x00%d", agent, repo, number)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.webhookRefCounts[key] <= 1 {
+		delete(s.webhookRefCounts, key)
+		// Leave the entry in s.entries so the TTL window remains active.
+	} else {
+		s.webhookRefCounts[key]--
+	}
+}
+
+// AbandonWebhookRun decrements the in-flight reference count and removes the
+// dispatch-namespace entry for (agent, repo, number) after a failed run. Used
+// by the error and panic paths in fanOut so that a retry or a subsequent event
+// for the same item can claim the slot and attempt the run again.
+func (s *DispatchDedupStore) AbandonWebhookRun(agent, repo string, number int) {
+	key := fmt.Sprintf("%s\x00%s\x00%d", agent, repo, number)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.webhookRefCounts[key] <= 1 {
+		delete(s.webhookRefCounts, key)
+		delete(s.entries, key)
+	} else {
+		s.webhookRefCounts[key]--
+	}
+}
 
 // MarkCronRun records that a cron or manual (--run-agent) execution has started
 // for (agent, repo, number). The mark persists for the full TTL window and lives
@@ -328,8 +376,12 @@ func (s *DispatchDedupStore) TryClaimForDispatch(agent, repo string, number int,
 	if e, ok := s.entries[cronKey]; (ok && now.Before(e.expiresAt)) || s.cronRefCounts[cronKey] > 0 {
 		return false
 	}
-	// Block if dispatch has already claimed the slot (pending or committed).
+	// Block if dispatch has already claimed the slot (pending or committed) or
+	// if a webhook/fanOut run is still in flight past the TTL window.
 	if e, ok := s.entries[dispatchKey]; ok && now.Before(e.expiresAt) {
+		return false
+	}
+	if s.webhookRefCounts[dispatchKey] > 0 {
 		return false
 	}
 	// Reserve a pending dispatch slot. CommitClaim / AbandonClaim must follow.
