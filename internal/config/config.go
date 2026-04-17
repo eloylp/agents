@@ -355,7 +355,7 @@ func (c *Config) applyDefaults() {
 	setDefaultInt(&c.Daemon.HTTP.ReadTimeoutSeconds, defaultHTTPReadTimeoutSeconds)
 	setDefaultInt(&c.Daemon.HTTP.WriteTimeoutSeconds, defaultHTTPWriteTimeoutSeconds)
 	setDefaultInt(&c.Daemon.HTTP.IdleTimeoutSeconds, defaultHTTPIdleTimeoutSeconds)
-	setDefaultInt64(&c.Daemon.HTTP.MaxBodyBytes, defaultHTTPMaxBodyBytes)
+	setDefaultInt(&c.Daemon.HTTP.MaxBodyBytes, defaultHTTPMaxBodyBytes)
 	setDefaultInt(&c.Daemon.HTTP.DeliveryTTLSeconds, defaultDeliveryTTLSeconds)
 	setDefaultInt(&c.Daemon.HTTP.ShutdownTimeoutSeconds, defaultHTTPShutdownSeconds)
 
@@ -765,13 +765,7 @@ func setDefault(dst *string, def string) {
 	}
 }
 
-func setDefaultInt(dst *int, def int) {
-	if *dst == 0 {
-		*dst = def
-	}
-}
-
-func setDefaultInt64(dst *int64, def int64) {
+func setDefaultInt[T int | int64](dst *T, def T) {
 	if *dst == 0 {
 		*dst = def
 	}
