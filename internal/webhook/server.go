@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"strings"
 	"time"
@@ -64,6 +65,14 @@ type Server struct {
 	startTime     time.Time
 	triggerer     AgentTriggerer
 	proxy         *anthropicproxy.Handler
+	uiFS          fs.FS // optional; when set, /ui/ serves these static files
+}
+
+// WithUI attaches an fs.FS containing the pre-built static UI assets to the
+// server. When set, the daemon serves the files at /ui/. Callers that do not
+// need the UI (tests, --run-agent mode) can skip this call.
+func (s *Server) WithUI(uiFS fs.FS) {
+	s.uiFS = uiFS
 }
 
 func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue, provider StatusProvider, dispatchStats DispatchStatsProvider, logger zerolog.Logger, triggerer AgentTriggerer) *Server {
@@ -95,6 +104,21 @@ func (s *Server) Run(ctx context.Context) error {
 	router.HandleFunc(s.cfg.Daemon.HTTP.StatusPath, s.handleStatus).Methods(http.MethodGet)
 	router.HandleFunc(s.cfg.Daemon.HTTP.WebhookPath, s.handleGitHubWebhook).Methods(http.MethodPost)
 	router.HandleFunc(s.cfg.Daemon.HTTP.AgentsRunPath, s.handleAgentsRun).Methods(http.MethodPost)
+
+	// Observability API (read-only, no auth required — operators are expected
+	// to put an authenticating reverse proxy in front of the daemon).
+	router.HandleFunc("/api/agents", s.handleAPIAgents).Methods(http.MethodGet)
+	router.HandleFunc("/api/config", s.handleAPIConfig).Methods(http.MethodGet)
+	router.HandleFunc("/api/dispatches", s.handleAPIDispatches).Methods(http.MethodGet)
+
+	// Static UI: served from the embedded dist/ tree when a UI FS is provided.
+	if s.uiFS != nil {
+		sub, err := fs.Sub(s.uiFS, "dist")
+		if err == nil {
+			router.PathPrefix("/ui/").Handler(http.StripPrefix("/ui/", http.FileServer(http.FS(sub))))
+		}
+	}
+
 	if s.proxy != nil {
 		router.Handle(s.cfg.Daemon.Proxy.Path, s.proxy).Methods(http.MethodPost)
 		router.HandleFunc("/v1/models", s.proxy.ModelsHandler).Methods(http.MethodGet)

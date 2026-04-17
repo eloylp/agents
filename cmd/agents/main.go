@@ -19,6 +19,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/logging"
 	"github.com/eloylp/agents/internal/setup"
+	"github.com/eloylp/agents/internal/ui"
 	"github.com/eloylp/agents/internal/webhook"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -109,6 +110,7 @@ func run() error {
 	processor := workflow.NewProcessor(dataChannels, engine, workers, shutdown, logger)
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
 	server := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, engine, logger, scheduler)
+	server.WithUI(ui.FS)
 
 	group, groupCtx := errgroup.WithContext(ctx)
 	deliveryStore.Start(groupCtx)

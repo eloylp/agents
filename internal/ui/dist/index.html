@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agents — Observability Dashboard</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; background: #f8f9fa; color: #212529; }
+    h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+    p { color: #6c757d; }
+    a { color: #0d6efd; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    ul { line-height: 2; }
+  </style>
+</head>
+<body>
+  <h1>Agents Observability Dashboard</h1>
+  <p>The full dashboard UI is under construction. Use the API endpoints below to inspect daemon state:</p>
+  <ul>
+    <li><a href="/api/agents">/api/agents</a> — fleet snapshot (agent configs + scheduling state)</li>
+    <li><a href="/api/config">/api/config</a> — effective config (secrets redacted)</li>
+    <li><a href="/api/dispatches">/api/dispatches</a> — dispatch counters and dedup state</li>
+    <li><a href="/status">/status</a> — legacy status endpoint</li>
+  </ul>
+</body>
+</html>
