@@ -810,6 +810,59 @@ func TestUISlashlessRedirect(t *testing.T) {
 	}
 }
 
+// TestBuildHandlerObservabilityRoutesRequireAPIKey verifies that every
+// observability endpoint and the UI paths return 401 when an API key is
+// configured and the request carries no Bearer token. It exercises
+// buildHandler() directly so router wiring cannot silently drift.
+func TestBuildHandlerObservabilityRoutesRequireAPIKey(t *testing.T) {
+	t.Parallel()
+
+	uiFS := fstest.MapFS{
+		"dist/index.html": &fstest.MapFile{Data: []byte("<html></html>")},
+	}
+
+	srv, _ := newTestServer(testCfg(nil)) // testCfg sets APIKey = testAPIKey
+	srv.WithUI(uiFS)
+	srv.WithObserve(newTestObserve())
+
+	ts := httptest.NewServer(srv.buildHandler())
+	defer ts.Close()
+
+	protectedRoutes := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/agents"},
+		{http.MethodGet, "/api/config"},
+		{http.MethodGet, "/api/dispatches"},
+		{http.MethodGet, "/api/events"},
+		{http.MethodGet, "/api/events/stream"},
+		{http.MethodGet, "/api/traces"},
+		{http.MethodGet, "/api/traces/stream"},
+		{http.MethodGet, "/api/graph"},
+		{http.MethodGet, "/api/memory/myagent/owner%2Frepo"},
+		{http.MethodGet, "/api/memory/stream"},
+		{http.MethodGet, "/ui/"},
+		{http.MethodGet, "/ui"},
+	}
+
+	for _, tc := range protectedRoutes {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			t.Parallel()
+			// No Authorization header — must be rejected.
+			req, _ := http.NewRequest(tc.method, ts.URL+tc.path, nil)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("request failed: %v", err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusUnauthorized {
+				t.Errorf("want 401, got %d", resp.StatusCode)
+			}
+		})
+	}
+}
+
 // ─── compile-time assertions ──────────────────────────────────────────────────
 
 var _ EventQueue = (*workflow.DataChannels)(nil)

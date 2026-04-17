@@ -131,38 +131,39 @@ func (s *Server) buildHandler() http.Handler {
 	router.HandleFunc(s.cfg.Daemon.HTTP.WebhookPath, s.handleGitHubWebhook).Methods(http.MethodPost)
 	router.Handle(s.cfg.Daemon.HTTP.AgentsRunPath, s.requireAPIKey(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
 
-	// Observability API — always open. Auth is the reverse proxy's responsibility
-	// per issue #151 non-goals. The mutation endpoint (/agents/run) remains
-	// protected by requireAPIKey; these read-only surfaces do not.
-	router.HandleFunc("/api/agents", s.handleAPIAgents).Methods(http.MethodGet)
-	router.HandleFunc("/api/config", s.handleAPIConfig).Methods(http.MethodGet)
-	router.HandleFunc("/api/dispatches", s.handleAPIDispatches).Methods(http.MethodGet)
+	// Observability API — protected by requireAPIKey when an API key is
+	// configured. When no key is set the middleware passes through, keeping
+	// the endpoints open for operators that rely solely on network-level
+	// access control. The mutation endpoint (/agents/run) is gated separately.
+	router.Handle("/api/agents", s.requireAPIKey(http.HandlerFunc(s.handleAPIAgents))).Methods(http.MethodGet)
+	router.Handle("/api/config", s.requireAPIKey(http.HandlerFunc(s.handleAPIConfig))).Methods(http.MethodGet)
+	router.Handle("/api/dispatches", s.requireAPIKey(http.HandlerFunc(s.handleAPIDispatches))).Methods(http.MethodGet)
 
 	// Extended observability endpoints — only registered when an observe.Store
 	// has been attached via WithObserve.
 	if s.observeStore != nil {
-		router.HandleFunc("/api/events", s.handleAPIEvents).Methods(http.MethodGet)
-		router.HandleFunc("/api/events/stream", s.handleAPIEventsStream)
-		router.HandleFunc("/api/traces", s.handleAPITraces).Methods(http.MethodGet)
-		router.HandleFunc("/api/traces/stream", s.handleAPITracesStream)
-		router.Handle("/api/traces/{root_event_id}", http.HandlerFunc(s.handleAPITrace)).Methods(http.MethodGet)
-		router.HandleFunc("/api/graph", s.handleAPIGraph).Methods(http.MethodGet)
-		router.Handle("/api/memory/{agent}/{repo}", http.HandlerFunc(s.handleAPIMemory)).Methods(http.MethodGet)
-		router.HandleFunc("/api/memory/stream", s.handleAPIMemoryStream)
+		router.Handle("/api/events", s.requireAPIKey(http.HandlerFunc(s.handleAPIEvents))).Methods(http.MethodGet)
+		router.Handle("/api/events/stream", s.requireAPIKey(http.HandlerFunc(s.handleAPIEventsStream)))
+		router.Handle("/api/traces", s.requireAPIKey(http.HandlerFunc(s.handleAPITraces))).Methods(http.MethodGet)
+		router.Handle("/api/traces/stream", s.requireAPIKey(http.HandlerFunc(s.handleAPITracesStream)))
+		router.Handle("/api/traces/{root_event_id}", s.requireAPIKey(http.HandlerFunc(s.handleAPITrace))).Methods(http.MethodGet)
+		router.Handle("/api/graph", s.requireAPIKey(http.HandlerFunc(s.handleAPIGraph))).Methods(http.MethodGet)
+		router.Handle("/api/memory/{agent}/{repo}", s.requireAPIKey(http.HandlerFunc(s.handleAPIMemory))).Methods(http.MethodGet)
+		router.Handle("/api/memory/stream", s.requireAPIKey(http.HandlerFunc(s.handleAPIMemoryStream)))
 	}
 
 	// Static UI: served from the embedded dist/ tree when a UI FS is provided.
-	// Auth is the reverse proxy's responsibility (per issue #151 non-goals).
+	// Protected by requireAPIKey when an API key is configured.
 	if s.uiFS != nil {
 		sub, err := fs.Sub(s.uiFS, "dist")
 		if err == nil {
 			fileServer := http.StripPrefix("/ui/", http.FileServer(http.FS(sub)))
-			router.PathPrefix("/ui/").Handler(fileServer)
+			router.PathPrefix("/ui/").Handler(s.requireAPIKey(fileServer))
 			// Redirect the slashless entrypoint /ui → /ui/ so operators and
 			// reverse proxies that normalise trailing slashes get the dashboard.
-			router.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) {
+			router.Handle("/ui", s.requireAPIKey(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
-			}).Methods(http.MethodGet)
+			}))).Methods(http.MethodGet)
 		}
 	}
 
