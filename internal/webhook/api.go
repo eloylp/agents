@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -547,7 +548,19 @@ func (s *Server) handleAPIMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := filepath.Join(memDir, agent, repo+".md")
+	// Build the candidate path as an absolute, cleaned path and verify it
+	// stays within memDir.  filepath.Join calls filepath.Clean internally so
+	// any remaining "../.." sequences are resolved before the prefix check.
+	root, err := filepath.Abs(memDir)
+	if err != nil {
+		http.Error(w, "invalid memory_dir", http.StatusInternalServerError)
+		return
+	}
+	path := filepath.Join(root, agent, repo+".md")
+	if !strings.HasPrefix(path, root+string(filepath.Separator)) {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
@@ -937,6 +938,60 @@ func TestHandleAPIMemoryRejectsPathTraversal(t *testing.T) {
 		// path cleaning) or 400 (handler rejected it).
 		if rec.Code == http.StatusOK {
 			t.Fatalf("path %q: want non-200, got 200", bad)
+		}
+	}
+}
+
+func TestHandleAPIMemoryRejectsMultiSegmentTraversal(t *testing.T) {
+	t.Parallel()
+	// Create a sentinel file OUTSIDE the memory root so we can verify it is
+	// never served even when an encoded traversal path reaches the handler.
+	outerDir := t.TempDir()
+	secret := filepath.Join(outerDir, "secret.md")
+	if err := os.WriteFile(secret, []byte("top-secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	memDir := filepath.Join(outerDir, "memory")
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := testCfg(func(c *config.Config) { c.Daemon.MemoryDir = memDir })
+	srv, _ := newTestServer(cfg)
+	obs := newTestObserve()
+	srv.WithObserve(obs)
+
+	// The {agent} segment contains encoded slashes that decode to a traversal
+	// path; after mux splits the URL, the handler receives the raw segment
+	// value, which after filepath.Clean becomes "../../../../<outerDir>/secret".
+	// The under-root check must reject this before any stat or read.
+	//
+	// We exercise the handler directly (bypassing mux routing) so we can inject
+	// arbitrary segment values that mux path-escaping would otherwise block.
+	handler := srv.requireAPIKey(http.HandlerFunc(srv.handleAPIMemory))
+
+	cases := []struct {
+		agent string
+		repo  string
+	}{
+		// repo segment tries to walk above memDir
+		{agent: "coder", repo: "../../../../secret"},
+		// agent segment tries to walk above memDir
+		{agent: "../../../..", repo: "secret"},
+		// both segments combined escape the root
+		{agent: "../..", repo: "../../secret"},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodGet, "/api/memory/"+tc.agent+"/"+tc.repo, nil)
+		req = mux.SetURLVars(req, map[string]string{"agent": tc.agent, "repo": tc.repo})
+		req.Header.Set("Authorization", "Bearer "+testAPIKey)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code == http.StatusOK {
+			t.Fatalf("agent=%q repo=%q: traversal not rejected (got 200)", tc.agent, tc.repo)
+		}
+		if rec.Body.String() == "top-secret" {
+			t.Fatalf("agent=%q repo=%q: secret file content was served", tc.agent, tc.repo)
 		}
 	}
 }
