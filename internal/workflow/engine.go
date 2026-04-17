@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/semaphore"
@@ -17,6 +18,18 @@ import (
 
 // labeledKinds are the event kinds that trigger label-based bindings.
 var labeledKinds = []string{"issues.labeled", "pull_request.labeled"}
+
+// TraceRecorder is an optional observer that the Engine calls when an agent
+// run completes. Implementations must be safe for concurrent use.
+type TraceRecorder interface {
+	RecordSpan(spanID, rootEventID, parentSpanID, agent, backend, repo, eventKind, invokedBy string, number, dispatchDepth int, startedAt, finishedAt time.Time, status, errMsg string)
+}
+
+// GraphRecorder is an optional observer that the Engine calls when a dispatch
+// is issued. Implementations must be safe for concurrent use.
+type GraphRecorder interface {
+	RecordDispatch(from, to, repo string, number int, reason string)
+}
 
 // Engine dispatches workflow events to the agents bound to the target repo.
 // It routes each event by matching against label bindings (labels:) for labeled
@@ -31,6 +44,8 @@ type Engine struct {
 	dispatcher    *Dispatcher
 	maxConcurrent int
 	logger        zerolog.Logger
+	traceRec      TraceRecorder
+	graphRec      GraphRecorder
 }
 
 // NewEngine builds an Engine. queue may be nil, in which case dispatch
@@ -55,6 +70,21 @@ func NewEngine(cfg *config.Config, runners map[string]ai.Runner, queue EventEnqu
 		eng.dispatcher = NewDispatcher(cfg.Daemon.Processor.Dispatch, agentMap, dedup, queue, logger)
 	}
 	return eng
+}
+
+// WithTraceRecorder attaches an optional recorder that is called on each
+// completed agent run. It is safe to call after NewEngine and before Run.
+func (e *Engine) WithTraceRecorder(r TraceRecorder) {
+	e.traceRec = r
+}
+
+// WithGraphRecorder attaches an optional recorder that is called on each
+// inter-agent dispatch. It is safe to call after NewEngine and before Run.
+func (e *Engine) WithGraphRecorder(r GraphRecorder) {
+	e.graphRec = r
+	if e.dispatcher != nil {
+		e.dispatcher.WithGraphRecorder(r)
+	}
 }
 
 // StartDispatchDedup starts the background eviction loop for the dispatch
@@ -335,14 +365,35 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) 
 		logger = logger.With().Str("invoked_by", invokedBy).Logger()
 	}
 	logger.Info().Str("workflow", workflow).Msg("invoking ai agent")
-	resp, err := runner.Run(ctx, ai.Request{
+	spanStart := time.Now()
+	spanID := GenEventID()
+	resp, runErr := runner.Run(ctx, ai.Request{
 		Workflow: workflow,
 		Repo:     ev.Repo.FullName,
 		Number:   ev.Number,
 		Prompt:   prompt,
 	})
-	if err != nil {
-		return fmt.Errorf("agent %q: %w", agent.Name, err)
+	spanEnd := time.Now()
+
+	// Record the trace span regardless of outcome.
+	if e.traceRec != nil {
+		status, errMsg := "success", ""
+		if runErr != nil {
+			status = "error"
+			errMsg = runErr.Error()
+		}
+		e.traceRec.RecordSpan(
+			spanID, rootEventID, "", // parentSpanID not used at this layer
+			agent.Name, backend,
+			ev.Repo.FullName, ev.Kind, invokedBy,
+			ev.Number, dispatchDepth,
+			spanStart, spanEnd,
+			status, errMsg,
+		)
+	}
+
+	if runErr != nil {
+		return fmt.Errorf("agent %q: %w", agent.Name, runErr)
 	}
 	logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Msg("agent run completed")
 

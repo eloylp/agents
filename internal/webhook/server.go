@@ -17,9 +17,10 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
 
-	"github.com/eloylp/agents/internal/anthropic_proxy"
+	anthropicproxy "github.com/eloylp/agents/internal/anthropic_proxy"
 	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -66,7 +67,8 @@ type Server struct {
 	startTime     time.Time
 	triggerer     AgentTriggerer
 	proxy         *anthropicproxy.Handler
-	uiFS          fs.FS // optional; when set, /ui/ serves these static files
+	uiFS          fs.FS          // optional; when set, /ui/ serves these static files
+	observeStore  *observe.Store // optional; when set, enables observability endpoints
 }
 
 // WithUI attaches an fs.FS containing the pre-built static UI assets to the
@@ -74,6 +76,13 @@ type Server struct {
 // need the UI (tests, --run-agent mode) can skip this call.
 func (s *Server) WithUI(uiFS fs.FS) {
 	s.uiFS = uiFS
+}
+
+// WithObserve attaches the observability store. When set, the server registers
+// the full suite of /api/events, /api/traces, /api/graph, and /api/memory
+// endpoints. Callers that do not need the UI can skip this call.
+func (s *Server) WithObserve(store *observe.Store) {
+	s.observeStore = store
 }
 
 func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue, provider StatusProvider, dispatchStats DispatchStatsProvider, logger zerolog.Logger, triggerer AgentTriggerer) *Server {
@@ -114,6 +123,19 @@ func (s *Server) buildHandler() http.Handler {
 	router.Handle("/api/agents", s.requireAPIKey(http.HandlerFunc(s.handleAPIAgents))).Methods(http.MethodGet)
 	router.Handle("/api/config", s.requireAPIKey(http.HandlerFunc(s.handleAPIConfig))).Methods(http.MethodGet)
 	router.Handle("/api/dispatches", s.requireAPIKey(http.HandlerFunc(s.handleAPIDispatches))).Methods(http.MethodGet)
+
+	// Extended observability endpoints — only registered when an observe.Store
+	// has been attached via WithObserve.
+	if s.observeStore != nil {
+		router.Handle("/api/events", s.requireAPIKey(http.HandlerFunc(s.handleAPIEvents))).Methods(http.MethodGet)
+		router.Handle("/api/events/stream", s.requireAPIKey(http.HandlerFunc(s.handleAPIEventsStream)))
+		router.Handle("/api/traces", s.requireAPIKey(http.HandlerFunc(s.handleAPITraces))).Methods(http.MethodGet)
+		router.Handle("/api/traces/stream", s.requireAPIKey(http.HandlerFunc(s.handleAPITracesStream)))
+		router.Handle("/api/traces/{root_event_id}", s.requireAPIKey(http.HandlerFunc(s.handleAPITrace))).Methods(http.MethodGet)
+		router.Handle("/api/graph", s.requireAPIKey(http.HandlerFunc(s.handleAPIGraph))).Methods(http.MethodGet)
+		router.Handle("/api/memory/{agent}/{repo}", s.requireAPIKey(http.HandlerFunc(s.handleAPIMemory))).Methods(http.MethodGet)
+		router.Handle("/api/memory/stream", s.requireAPIKey(http.HandlerFunc(s.handleAPIMemoryStream)))
+	}
 
 	// Static UI: served from the embedded dist/ tree when a UI FS is provided.
 	if s.uiFS != nil {

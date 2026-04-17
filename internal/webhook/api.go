@@ -2,7 +2,13 @@ package webhook
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/gorilla/mux"
 
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -360,4 +366,236 @@ func (s *Server) handleAPIDispatches(w http.ResponseWriter, _ *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(stats)
+}
+
+// ── /api/events ────────────────────────────────────────────────────────────
+
+// apiEventJSON is the wire shape for one event in /api/events.
+type apiEventJSON struct {
+	At      string         `json:"at"`
+	ID      string         `json:"id"`
+	Repo    string         `json:"repo"`
+	Kind    string         `json:"kind"`
+	Number  int            `json:"number"`
+	Actor   string         `json:"actor"`
+	Payload map[string]any `json:"payload,omitempty"`
+}
+
+// handleAPIEvents serves GET /api/events — recent event history.
+// An optional ?since=<RFC3339> query parameter filters to events after that time.
+func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
+	var since time.Time
+	if raw := r.URL.Query().Get("since"); raw != "" {
+		if t, err := time.Parse(time.RFC3339, raw); err == nil {
+			since = t
+		}
+	}
+
+	events := s.observeStore.Events.List(since)
+	out := make([]apiEventJSON, 0, len(events))
+	for _, e := range events {
+		out = append(out, apiEventJSON{
+			At:      e.At.UTC().Format(time.RFC3339Nano),
+			ID:      e.ID,
+			Repo:    e.Repo,
+			Kind:    e.Kind,
+			Number:  e.Number,
+			Actor:   e.Actor,
+			Payload: e.Payload,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// handleAPIEventsStream serves GET /api/events/stream as a Server-Sent Events
+// stream. Each new event is pushed as a "data: <json>\n\n" message.
+func (s *Server) handleAPIEventsStream(w http.ResponseWriter, r *http.Request) {
+	serveSSE(w, r, s.observeStore.EventsSSE)
+}
+
+// ── /api/traces ────────────────────────────────────────────────────────────
+
+// handleAPITraces serves GET /api/traces — the most recent agent run spans.
+func (s *Server) handleAPITraces(w http.ResponseWriter, _ *http.Request) {
+	spans := s.observeStore.Traces.List()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(spans)
+}
+
+// handleAPITrace serves GET /api/traces/{root_event_id} — all spans for one
+// root event.
+func (s *Server) handleAPITrace(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["root_event_id"]
+	spans := s.observeStore.Traces.ByRootEventID(id)
+	if len(spans) == 0 {
+		http.Error(w, "trace not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(spans)
+}
+
+// handleAPITracesStream serves GET /api/traces/stream as a Server-Sent Events
+// stream. Each completed span is pushed as a "data: <json>\n\n" message.
+func (s *Server) handleAPITracesStream(w http.ResponseWriter, r *http.Request) {
+	serveSSE(w, r, s.observeStore.TracesSSE)
+}
+
+// ── /api/graph ─────────────────────────────────────────────────────────────
+
+// apiGraphJSON is the wire shape for GET /api/graph.
+type apiGraphJSON struct {
+	Nodes []apiGraphNode `json:"nodes"`
+	Edges []apiGraphEdge `json:"edges"`
+}
+
+type apiGraphNode struct {
+	ID string `json:"id"`
+}
+
+type apiGraphEdge struct {
+	From       string              `json:"from"`
+	To         string              `json:"to"`
+	Count      int                 `json:"count"`
+	Dispatches []apiDispatchRecord `json:"dispatches"`
+}
+
+type apiDispatchRecord struct {
+	At     string `json:"at"`
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
+	Reason string `json:"reason"`
+}
+
+// handleAPIGraph serves GET /api/graph — the current agent interaction graph.
+func (s *Server) handleAPIGraph(w http.ResponseWriter, _ *http.Request) {
+	edges := s.observeStore.Graph.Edges()
+
+	// Build the unique node set from all edge endpoints.
+	seen := make(map[string]struct{})
+	for _, e := range edges {
+		seen[e.From] = struct{}{}
+		seen[e.To] = struct{}{}
+	}
+	nodes := make([]apiGraphNode, 0, len(seen))
+	for id := range seen {
+		nodes = append(nodes, apiGraphNode{ID: id})
+	}
+
+	wireEdges := make([]apiGraphEdge, 0, len(edges))
+	for _, e := range edges {
+		recs := make([]apiDispatchRecord, 0, len(e.Dispatches))
+		for _, d := range e.Dispatches {
+			recs = append(recs, apiDispatchRecord{
+				At:     d.At.UTC().Format(time.RFC3339),
+				Repo:   d.Repo,
+				Number: d.Number,
+				Reason: d.Reason,
+			})
+		}
+		wireEdges = append(wireEdges, apiGraphEdge{
+			From:       e.From,
+			To:         e.To,
+			Count:      e.Count,
+			Dispatches: recs,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(apiGraphJSON{Nodes: nodes, Edges: wireEdges})
+}
+
+// ── /api/memory ────────────────────────────────────────────────────────────
+
+// handleAPIMemory serves GET /api/memory/{agent}/{repo} — returns the raw
+// markdown content of the agent's memory file for the given repo, plus mtime.
+// The {repo} path segment is expected in the format "owner_repo" (underscore
+// separator, matching the filesystem layout under memory_dir).
+func (s *Server) handleAPIMemory(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	agent := filepath.Clean(vars["agent"])
+	repo := filepath.Clean(vars["repo"])
+
+	// Reject path traversal attempts.
+	if agent == "." || repo == "." || agent == ".." || repo == ".." {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+
+	memDir := s.cfg.Daemon.MemoryDir
+	if memDir == "" {
+		http.Error(w, "memory_dir not configured", http.StatusNotFound)
+		return
+	}
+
+	path := filepath.Join(memDir, agent, repo+".md")
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "memory file not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "could not stat memory file", http.StatusInternalServerError)
+		return
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		http.Error(w, "could not read memory file", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("X-Memory-Mtime", info.ModTime().UTC().Format(time.RFC3339))
+	_, _ = w.Write(data)
+}
+
+// handleAPIMemoryStream serves GET /api/memory/stream as a Server-Sent Events
+// stream that notifies subscribers when any memory file changes.
+func (s *Server) handleAPIMemoryStream(w http.ResponseWriter, r *http.Request) {
+	serveSSE(w, r, s.observeStore.MemorySSE)
+}
+
+// ── SSE helper ─────────────────────────────────────────────────────────────
+
+// serveSSE subscribes the current HTTP connection to hub, streams incoming
+// messages, and unsubscribes on client disconnect or context cancellation.
+func serveSSE(w http.ResponseWriter, r *http.Request, hub interface {
+	Subscribe() chan []byte
+	Unsubscribe(chan []byte)
+}) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // disable nginx buffering
+
+	ch := hub.Subscribe()
+	defer hub.Unsubscribe(ch)
+
+	// Send a comment heartbeat immediately so the client knows the stream is live.
+	_, _ = fmt.Fprint(w, ": connected\n\n")
+	flusher.Flush()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case msg, ok := <-ch:
+			if !ok {
+				return
+			}
+			_, err := w.Write(msg)
+			if err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
 }

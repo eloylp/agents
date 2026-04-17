@@ -12,6 +12,11 @@ type processorHandler interface {
 	HandleEvent(context.Context, Event) error
 }
 
+// EventRecorder is an optional observer the Processor calls on each dequeued event.
+type EventRecorder interface {
+	RecordEvent(at time.Time, ev Event)
+}
+
 type Processor struct {
 	handler    processorHandler
 	channels   *DataChannels
@@ -20,6 +25,7 @@ type Processor struct {
 	logger     zerolog.Logger
 	drainCtx   context.Context
 	drainReady chan struct{} // closed by setDrainCtx; processingCtx waits on it
+	eventRec   EventRecorder
 }
 
 func NewProcessor(channels *DataChannels, handler processorHandler, workers int, shutdownTimeout time.Duration, logger zerolog.Logger) *Processor {
@@ -34,6 +40,12 @@ func NewProcessor(channels *DataChannels, handler processorHandler, workers int,
 		logger:     logger.With().Str("component", "workflow_processor").Logger(),
 		drainReady: make(chan struct{}),
 	}
+}
+
+// WithEventRecorder attaches an optional observer that is called for each
+// event dequeued from the event channel, before HandleEvent is called.
+func (p *Processor) WithEventRecorder(r EventRecorder) {
+	p.eventRec = r
 }
 
 // Run starts workers and blocks until ctx is cancelled and the queue is drained
@@ -69,6 +81,9 @@ func (p *Processor) Run(ctx context.Context) error {
 func (p *Processor) runWorker(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for ev := range p.channels.EventChan() {
+		if p.eventRec != nil {
+			p.eventRec.RecordEvent(time.Now(), ev)
+		}
 		if err := p.handler.HandleEvent(p.processingCtx(ctx), ev); err != nil {
 			p.logger.Error().Err(err).Str("repo", ev.Repo.FullName).Str("kind", ev.Kind).Int("number", ev.Number).Msg("failed to process webhook event")
 		}

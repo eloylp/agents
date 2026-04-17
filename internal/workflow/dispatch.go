@@ -354,6 +354,7 @@ type Dispatcher struct {
 	dedup    *DispatchDedupStore
 	counters dispatchCounters
 	queue    EventEnqueuer
+	graphRec GraphRecorder // optional; set via WithGraphRecorder
 	logger   zerolog.Logger
 }
 
@@ -367,6 +368,12 @@ func NewDispatcher(cfg config.DispatchConfig, agents map[string]config.AgentDef,
 		queue:  queue,
 		logger: logger.With().Str("component", "dispatcher").Logger(),
 	}
+}
+
+// WithGraphRecorder attaches an optional recorder called on each successfully
+// enqueued dispatch. Safe to call after NewDispatcher.
+func (d *Dispatcher) WithGraphRecorder(r GraphRecorder) {
+	d.graphRec = r
 }
 
 // ProcessDispatches validates and enqueues each dispatch request from a single
@@ -483,6 +490,11 @@ func (d *Dispatcher) ProcessDispatches(
 		// Enqueue succeeded — commit the claim so DispatchAlreadyClaimed returns
 		// true and the autonomous scheduler skips a duplicate run for this target.
 		d.dedup.CommitClaim(req.Agent, ev.Repo.FullName, number)
+
+		// Record the dispatch edge in the interaction graph if an observer is set.
+		if d.graphRec != nil {
+			d.graphRec.RecordDispatch(originator.Name, req.Agent, ev.Repo.FullName, number, req.Reason)
+		}
 
 		fanout++
 		d.counters.enqueued.Add(1)

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -643,6 +646,266 @@ func TestRequireAPIKeyOpenWhenNoKeyConfigured(t *testing.T) {
 	}
 }
 
+// ── /api/events ────────────────────────────────────────────────────────────
+
+func TestHandleAPIEventsReturnsStoredEvents(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(nil)
+	srv, _ := newTestServer(cfg)
+	obs := newTestObserve()
+	srv.WithObserve(obs)
+
+	now := time.Now().UTC()
+	obs.RecordEvent(now, workflow.Event{ID: "evt-1", Kind: "issues.labeled", Repo: workflow.RepoRef{FullName: "owner/repo"}, Number: 42, Actor: "user"})
+	obs.RecordEvent(now.Add(time.Second), workflow.Event{ID: "evt-2", Kind: "push", Repo: workflow.RepoRef{FullName: "owner/repo"}, Actor: "bot"})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAPIEvents(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var events []apiEventJSON
+	if err := json.NewDecoder(rec.Body).Decode(&events); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("want 2 events, got %d", len(events))
+	}
+	if events[0].ID != "evt-1" || events[1].ID != "evt-2" {
+		t.Fatalf("unexpected event IDs: %v %v", events[0].ID, events[1].ID)
+	}
+}
+
+func TestHandleAPIEventsSinceFilter(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(nil)
+	srv, _ := newTestServer(cfg)
+	obs := newTestObserve()
+	srv.WithObserve(obs)
+
+	base := time.Now().UTC()
+	obs.RecordEvent(base, workflow.Event{ID: "old", Kind: "push"})
+	obs.RecordEvent(base.Add(2*time.Second), workflow.Event{ID: "new", Kind: "push"})
+
+	since := base.Add(time.Second).Format(time.RFC3339)
+	req := httptest.NewRequest(http.MethodGet, "/api/events?since="+since, nil)
+	rec := httptest.NewRecorder()
+	srv.handleAPIEvents(rec, req)
+
+	var events []apiEventJSON
+	_ = json.NewDecoder(rec.Body).Decode(&events)
+	if len(events) != 1 || events[0].ID != "new" {
+		t.Fatalf("want only 'new' event after filter, got %v", events)
+	}
+}
+
+// ── /api/traces ────────────────────────────────────────────────────────────
+
+func TestHandleAPITracesReturnsStoredSpans(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(nil)
+	srv, _ := newTestServer(cfg)
+	obs := newTestObserve()
+	srv.WithObserve(obs)
+
+	now := time.Now().UTC()
+	obs.RecordSpan("s1", "root-A", "", "coder", "claude", "owner/repo", "issues.labeled", "", 1, 0, now, now.Add(5*time.Second), "success", "")
+	obs.RecordSpan("s2", "root-A", "", "reviewer", "claude", "owner/repo", "agent.dispatch", "coder", 1, 1, now.Add(time.Second), now.Add(6*time.Second), "success", "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/traces", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAPITraces(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var spans []map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&spans); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(spans) != 2 {
+		t.Fatalf("want 2 spans, got %d", len(spans))
+	}
+}
+
+func TestHandleAPITraceByRootEventID(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(nil)
+	srv, _ := newTestServer(cfg)
+	obs := newTestObserve()
+	srv.WithObserve(obs)
+
+	now := time.Now().UTC()
+	obs.RecordSpan("s1", "root-A", "", "coder", "claude", "r", "issues.labeled", "", 1, 0, now, now.Add(time.Second), "success", "")
+	obs.RecordSpan("s2", "root-B", "", "reviewer", "claude", "r", "push", "", 0, 0, now, now.Add(time.Second), "success", "")
+
+	// Use the full router so mux populates the {root_event_id} variable.
+	router := srv.buildHandler()
+	req := httptest.NewRequest(http.MethodGet, "/api/traces/root-A", nil)
+	req.Header.Set("Authorization", "Bearer "+testAPIKey)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var spans []map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&spans)
+	if len(spans) != 1 {
+		t.Fatalf("want 1 span for root-A, got %d", len(spans))
+	}
+}
+
+func TestHandleAPITraceNotFound(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(nil)
+	srv, _ := newTestServer(cfg)
+	obs := newTestObserve()
+	srv.WithObserve(obs)
+
+	router := srv.buildHandler()
+	req := httptest.NewRequest(http.MethodGet, "/api/traces/nonexistent", nil)
+	req.Header.Set("Authorization", "Bearer "+testAPIKey)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", rec.Code)
+	}
+}
+
+// ── /api/graph ────────────────────────────────────────────────────────────
+
+func TestHandleAPIGraphReturnsEdges(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(nil)
+	srv, _ := newTestServer(cfg)
+	obs := newTestObserve()
+	srv.WithObserve(obs)
+
+	obs.RecordDispatch("coder", "reviewer", "owner/repo", 10, "needs review")
+	obs.RecordDispatch("coder", "reviewer", "owner/repo", 11, "follow-up")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/graph", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAPIGraph(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var g apiGraphJSON
+	if err := json.NewDecoder(rec.Body).Decode(&g); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(g.Nodes) != 2 {
+		t.Fatalf("want 2 nodes, got %d", len(g.Nodes))
+	}
+	if len(g.Edges) != 1 {
+		t.Fatalf("want 1 edge, got %d", len(g.Edges))
+	}
+	if g.Edges[0].Count != 2 {
+		t.Fatalf("want edge count=2, got %d", g.Edges[0].Count)
+	}
+}
+
+func TestHandleAPIGraphEmptyWhenNoDispatches(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(nil)
+	srv, _ := newTestServer(cfg)
+	obs := newTestObserve()
+	srv.WithObserve(obs)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/graph", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAPIGraph(rec, req)
+
+	var g apiGraphJSON
+	_ = json.NewDecoder(rec.Body).Decode(&g)
+	if len(g.Nodes) != 0 || len(g.Edges) != 0 {
+		t.Fatalf("want empty graph, got %+v", g)
+	}
+}
+
+// ── /api/memory ────────────────────────────────────────────────────────────
+
+func TestHandleAPIMemoryServesFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "coder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "# coder memory\n\nsome notes"
+	if err := os.WriteFile(filepath.Join(dir, "coder", "owner_repo.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := testCfg(func(c *config.Config) { c.Daemon.MemoryDir = dir })
+	srv, _ := newTestServer(cfg)
+	obs := newTestObserve()
+	srv.WithObserve(obs)
+
+	// Use the full router so mux populates {agent} and {repo}.
+	router := srv.buildHandler()
+	req := httptest.NewRequest(http.MethodGet, "/api/memory/coder/owner_repo", nil)
+	req.Header.Set("Authorization", "Bearer "+testAPIKey)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); got != content {
+		t.Fatalf("want %q, got %q", content, got)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/markdown") {
+		t.Fatalf("want text/markdown Content-Type, got %q", ct)
+	}
+}
+
+func TestHandleAPIMemoryNotFound(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(func(c *config.Config) { c.Daemon.MemoryDir = t.TempDir() })
+	srv, _ := newTestServer(cfg)
+	obs := newTestObserve()
+	srv.WithObserve(obs)
+
+	router := srv.buildHandler()
+	req := httptest.NewRequest(http.MethodGet, "/api/memory/coder/no_such_repo", nil)
+	req.Header.Set("Authorization", "Bearer "+testAPIKey)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleAPIMemoryRejectsPathTraversal(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(func(c *config.Config) { c.Daemon.MemoryDir = t.TempDir() })
+	srv, _ := newTestServer(cfg)
+	obs := newTestObserve()
+	srv.WithObserve(obs)
+
+	router := srv.buildHandler()
+	for _, bad := range []string{
+		"/api/memory/../owner_repo",
+		"/api/memory/./owner_repo",
+	} {
+		req := httptest.NewRequest(http.MethodGet, bad, nil)
+		req.Header.Set("Authorization", "Bearer "+testAPIKey)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		// Path traversal attempts should either be 404 (no route matched after
+		// path cleaning) or 400 (handler rejected it).
+		if rec.Code == http.StatusOK {
+			t.Fatalf("path %q: want non-200, got 200", bad)
+		}
+	}
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────
 
 type stubStatusProvider struct {
@@ -656,3 +919,8 @@ type stubDispatchProvider struct {
 }
 
 func (p *stubDispatchProvider) DispatchStats() workflow.DispatchStats { return p.stats }
+
+// newTestObserve creates an observe.Store for tests.
+func newTestObserve() *observe.Store {
+	return observe.NewStore()
+}

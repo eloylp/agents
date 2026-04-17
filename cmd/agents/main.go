@@ -18,6 +18,7 @@ import (
 	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/logging"
+	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/setup"
 	"github.com/eloylp/agents/internal/ui"
 	"github.com/eloylp/agents/internal/webhook"
@@ -108,9 +109,17 @@ func run() error {
 	shutdown := time.Duration(cfg.Daemon.HTTP.ShutdownTimeoutSeconds) * time.Second
 	workers := cfg.Daemon.Processor.MaxConcurrentAgents
 	processor := workflow.NewProcessor(dataChannels, engine, workers, shutdown, logger)
+
+	// Wire the observability store: records events, spans, and dispatch graph.
+	obs := observe.NewStore()
+	processor.WithEventRecorder(obs)
+	engine.WithTraceRecorder(obs)
+	engine.WithGraphRecorder(obs)
+
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
 	server := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, engine, logger, scheduler)
 	server.WithUI(ui.FS)
+	server.WithObserve(obs)
 
 	group, groupCtx := errgroup.WithContext(ctx)
 	deliveryStore.Start(groupCtx)
