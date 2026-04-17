@@ -155,44 +155,47 @@ func TestTriggerAgentRunsSynchronously(t *testing.T) {
 	}
 }
 
-func TestTriggerAgentRejectsUnboundAgent(t *testing.T) {
+func TestTriggerAgentRejections(t *testing.T) {
 	t.Parallel()
-	cfg := baseCfg(func(c *config.Config) {
-		c.Agents = append(c.Agents, config.AgentDef{Name: "orphan", Backend: "claude", Prompt: "x"})
-	})
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
+	cases := []struct {
+		name      string
+		mutateCfg func(*config.Config)
+		agent     string
+		wantErr   string
+	}{
+		{
+			name: "unbound agent",
+			mutateCfg: func(c *config.Config) {
+				c.Agents = append(c.Agents, config.AgentDef{Name: "orphan", Backend: "claude", Prompt: "x"})
+			},
+			agent:   "orphan",
+			wantErr: "not bound",
+		},
+		{
+			name:    "unknown agent",
+			agent:   "ghost",
+			wantErr: "not found",
+		},
+		{
+			name:      "disabled repo",
+			mutateCfg: func(c *config.Config) { c.Repos[0].Enabled = false },
+			agent:     "reviewer",
+			wantErr:   "disabled",
+		},
 	}
-	err = s.TriggerAgent(context.Background(), "orphan", "owner/repo")
-	if err == nil || !strings.Contains(err.Error(), "not bound") {
-		t.Errorf("expected not-bound error, got %v", err)
-	}
-}
-
-func TestTriggerAgentRejectsUnknownAgent(t *testing.T) {
-	t.Parallel()
-	cfg := baseCfg(nil)
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	err = s.TriggerAgent(context.Background(), "ghost", "owner/repo")
-	if err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Errorf("expected not-found error, got %v", err)
-	}
-}
-
-func TestTriggerAgentRejectsDisabledRepo(t *testing.T) {
-	t.Parallel()
-	cfg := baseCfg(func(c *config.Config) { c.Repos[0].Enabled = false })
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	err = s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
-	if err == nil || !strings.Contains(err.Error(), "disabled") {
-		t.Errorf("expected disabled error, got %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := baseCfg(tc.mutateCfg)
+			s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+			if err != nil {
+				t.Fatalf("NewScheduler: %v", err)
+			}
+			err = s.TriggerAgent(context.Background(), tc.agent, "owner/repo")
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
 	}
 }
 
