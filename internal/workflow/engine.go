@@ -22,7 +22,15 @@ var labeledKinds = []string{"issues.labeled", "pull_request.labeled"}
 // TraceRecorder is an optional observer that the Engine calls when an agent
 // run completes. Implementations must be safe for concurrent use.
 type TraceRecorder interface {
-	RecordSpan(spanID, rootEventID, parentSpanID, agent, backend, repo, eventKind, invokedBy string, number, dispatchDepth int, startedAt, finishedAt time.Time, status, errMsg string)
+	RecordSpan(spanID, rootEventID, parentSpanID, agent, backend, repo, eventKind, invokedBy string, number, dispatchDepth int, queueWaitMs int64, artifactsCount int, startedAt, finishedAt time.Time, status, errMsg string)
+}
+
+// RunTracker is an optional observer that the Engine calls when an agent run
+// starts and finishes. It is used to report which agents are currently active.
+// Implementations must be safe for concurrent use.
+type RunTracker interface {
+	StartRun(agentName string)
+	FinishRun(agentName string)
 }
 
 // GraphRecorder is an optional observer that the Engine calls when a dispatch
@@ -46,6 +54,7 @@ type Engine struct {
 	logger        zerolog.Logger
 	traceRec      TraceRecorder
 	graphRec      GraphRecorder
+	runTracker    RunTracker
 }
 
 // NewEngine builds an Engine. queue may be nil, in which case dispatch
@@ -76,6 +85,12 @@ func NewEngine(cfg *config.Config, runners map[string]ai.Runner, queue EventEnqu
 // completed agent run. It is safe to call after NewEngine and before Run.
 func (e *Engine) WithTraceRecorder(r TraceRecorder) {
 	e.traceRec = r
+}
+
+// WithRunTracker attaches an optional tracker that is called when an agent run
+// starts and finishes. It is safe to call after NewEngine and before Run.
+func (e *Engine) WithRunTracker(rt RunTracker) {
+	e.runTracker = rt
 }
 
 // WithGraphRecorder attaches an optional recorder that is called on each
@@ -325,10 +340,11 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) 
 	rootEventID, dispatchDepth := extractDispatchContext(ev)
 
 	// Build dispatch context fields for dispatched agents.
-	var invokedBy, reason string
+	var invokedBy, reason, parentSpanID string
 	if ev.Kind == "agent.dispatch" {
 		invokedBy, _ = ev.Payload["invoked_by"].(string)
 		reason, _ = ev.Payload["reason"].(string)
+		parentSpanID, _ = ev.Payload["parent_span_id"].(string)
 	}
 
 	// Build the roster of peer agents for this repo.
@@ -365,6 +381,12 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) 
 		logger = logger.With().Str("invoked_by", invokedBy).Logger()
 	}
 	logger.Info().Str("workflow", workflow).Msg("invoking ai agent")
+
+	if e.runTracker != nil {
+		e.runTracker.StartRun(agent.Name)
+		defer e.runTracker.FinishRun(agent.Name)
+	}
+
 	spanStart := time.Now()
 	spanID := GenEventID()
 	resp, runErr := runner.Run(ctx, ai.Request{
@@ -375,6 +397,14 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) 
 	})
 	spanEnd := time.Now()
 
+	// Compute queue-wait duration from when the event was enqueued to when
+	// the runner started. Zero when EnqueuedAt is unset (e.g. cron events
+	// created before this field existed).
+	var queueWaitMs int64
+	if !ev.EnqueuedAt.IsZero() {
+		queueWaitMs = spanStart.Sub(ev.EnqueuedAt).Milliseconds()
+	}
+
 	// Record the trace span regardless of outcome.
 	if e.traceRec != nil {
 		status, errMsg := "success", ""
@@ -383,10 +413,11 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) 
 			errMsg = runErr.Error()
 		}
 		e.traceRec.RecordSpan(
-			spanID, rootEventID, "", // parentSpanID not used at this layer
+			spanID, rootEventID, parentSpanID,
 			agent.Name, backend,
 			ev.Repo.FullName, ev.Kind, invokedBy,
 			ev.Number, dispatchDepth,
+			queueWaitMs, len(resp.Artifacts),
 			spanStart, spanEnd,
 			status, errMsg,
 		)
@@ -397,9 +428,10 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) 
 	}
 	logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Msg("agent run completed")
 
-	// Process any dispatch requests from the agent's response.
+	// Process any dispatch requests from the agent's response, threading the
+	// current spanID so child runs can link back to their parent span.
 	if e.dispatcher != nil && len(resp.Dispatch) > 0 {
-		if err := e.dispatcher.ProcessDispatches(ctx, agent, ev, rootEventID, dispatchDepth, resp.Dispatch); err != nil {
+		if err := e.dispatcher.ProcessDispatches(ctx, agent, ev, rootEventID, dispatchDepth, spanID, resp.Dispatch); err != nil {
 			return fmt.Errorf("agent %q: dispatch: %w", agent.Name, err)
 		}
 	}

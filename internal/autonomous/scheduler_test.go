@@ -530,7 +530,7 @@ func TestCronRunBlockedByPendingDispatchClaim(t *testing.T) {
 	dispatchDone := make(chan struct{})
 	go func() {
 		defer close(dispatchDone)
-		_ = dispatcher.ProcessDispatches(context.Background(), cfg.Agents[0], ev, "root-id", 0,
+		_ = dispatcher.ProcessDispatches(context.Background(), cfg.Agents[0], ev, "root-id", 0, "",
 			[]ai.DispatchRequest{{Agent: "notifier", Reason: "test"}})
 	}()
 
@@ -762,7 +762,7 @@ func TestSchedulerCronMarkKeptAfterSuccessfulRunWithDispatchEnqueueFailure(t *te
 	dispatcher2 := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q2, zerolog.Nop())
 	originator := agentMap["notifier"]
 	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
-	dispatcher2.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, []ai.DispatchRequest{
+	dispatcher2.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
 		{Agent: "reviewer", Reason: "follow-up dispatch"},
 	})
 	if len(q2.popped()) != 0 {
@@ -852,7 +852,7 @@ func TestSchedulerCronRefcountDecrementedOnPostRunEnqueueFailure(t *testing.T) {
 		Actor: "notifier",
 	}
 	time.Sleep(2 * time.Second) // wait for the 1-second TTL to expire
-	dispatcher2.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, []ai.DispatchRequest{
+	dispatcher2.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
 		{Agent: "reviewer", Reason: "follow-up dispatch"},
 	})
 	if len(q2.popped()) == 0 {
@@ -918,7 +918,7 @@ func TestSchedulerPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 	dispatcher2 := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q2, zerolog.Nop())
 	originator := agentMap["reviewer"]
 	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
-	dispatcher2.ProcessDispatches(context.Background(), originator, ev, "root-post-run", 0, []ai.DispatchRequest{
+	dispatcher2.ProcessDispatches(context.Background(), originator, ev, "root-post-run", 0, "", []ai.DispatchRequest{
 		{Agent: "notifier", Reason: "follow-up dispatch within dedup window"},
 	})
 	if len(q2.popped()) != 0 {
@@ -1038,7 +1038,7 @@ func TestSchedulerCronMarkBlocksDispatchDuringInFlightRun(t *testing.T) {
 	// Simulate notifier dispatching to reviewer while the run is in progress.
 	originator := agentMap["notifier"]
 	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
-	_ = dispatcher.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, []ai.DispatchRequest{
+	_ = dispatcher.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
 		{Agent: "reviewer", Reason: "arrived during in-flight run"},
 	})
 
@@ -1106,7 +1106,7 @@ func TestCronDispatchCrossNamespaceRaceOnlyOneWins(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}}
-			_ = dispatcher.ProcessDispatches(ctx, cfg.Agents[0], ev, "root", 0,
+			_ = dispatcher.ProcessDispatches(ctx, cfg.Agents[0], ev, "root", 0, "",
 				[]ai.DispatchRequest{{Agent: "notifier", Reason: "concurrent dispatch"}})
 		}()
 		wg.Wait()

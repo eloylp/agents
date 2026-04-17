@@ -82,18 +82,20 @@ type Span struct {
 	SpanID        string    `json:"span_id"`
 	RootEventID   string    `json:"root_event_id"`
 	ParentSpanID  string    `json:"parent_span_id,omitempty"`
-	Agent         string    `json:"agent"`
-	Backend       string    `json:"backend"`
-	Repo          string    `json:"repo"`
-	Number        int       `json:"number"`
-	EventKind     string    `json:"event_kind"`
-	InvokedBy     string    `json:"invoked_by,omitempty"`
-	DispatchDepth int       `json:"dispatch_depth"`
-	StartedAt     time.Time `json:"started_at"`
-	FinishedAt    time.Time `json:"finished_at"`
-	DurationMs    int64     `json:"duration_ms"`
-	Status        string    `json:"status"` // "success" | "error"
-	ErrorMsg      string    `json:"error,omitempty"`
+	Agent          string    `json:"agent"`
+	Backend        string    `json:"backend"`
+	Repo           string    `json:"repo"`
+	Number         int       `json:"number"`
+	EventKind      string    `json:"event_kind"`
+	InvokedBy      string    `json:"invoked_by,omitempty"`
+	DispatchDepth  int       `json:"dispatch_depth"`
+	QueueWaitMs    int64     `json:"queue_wait_ms"`   // time from enqueue to run start
+	ArtifactsCount int       `json:"artifacts_count"` // number of artifacts produced
+	StartedAt      time.Time `json:"started_at"`
+	FinishedAt     time.Time `json:"finished_at"`
+	DurationMs     int64     `json:"duration_ms"`
+	Status         string    `json:"status"` // "success" | "error"
+	ErrorMsg       string    `json:"error,omitempty"`
 }
 
 // TraceBuffer is a thread-safe bounded ring-buffer for Spans.
@@ -289,30 +291,74 @@ func (h *SSEHub) Publish(msg []byte) {
 	}
 }
 
+// ─── ActiveRuns ───────────────────────────────────────────────────────────────
+
+// ActiveRuns tracks the number of in-flight agent runs per agent name.
+// It implements workflow.RunTracker and the webhook.RuntimeStateProvider interface.
+type ActiveRuns struct {
+	mu   sync.RWMutex
+	runs map[string]int // agent name → count of active concurrent runs
+}
+
+func newActiveRuns() *ActiveRuns {
+	return &ActiveRuns{runs: make(map[string]int)}
+}
+
+// StartRun increments the in-flight run count for agentName.
+func (a *ActiveRuns) StartRun(agentName string) {
+	a.mu.Lock()
+	a.runs[agentName]++
+	a.mu.Unlock()
+}
+
+// FinishRun decrements the in-flight run count for agentName.
+func (a *ActiveRuns) FinishRun(agentName string) {
+	a.mu.Lock()
+	if a.runs[agentName] > 0 {
+		a.runs[agentName]--
+	}
+	a.mu.Unlock()
+}
+
+// IsRunning returns true when agentName has at least one in-flight run.
+func (a *ActiveRuns) IsRunning(agentName string) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.runs[agentName] > 0
+}
+
 // ─── Store ───────────────────────────────────────────────────────────────────
 
 // Store is the single observability container injected throughout the daemon.
-// It aggregates the ring buffers, graph, and SSE hubs so that callers need
-// only thread one dependency.
+// It aggregates the ring buffers, graph, SSE hubs, and active-run tracker so
+// that callers need only thread one dependency.
 type Store struct {
-	Events    *EventBuffer
-	Traces    *TraceBuffer
-	Graph     *InteractionGraph
-	EventsSSE *SSEHub
-	TracesSSE *SSEHub
-	MemorySSE *SSEHub
+	Events     *EventBuffer
+	Traces     *TraceBuffer
+	Graph      *InteractionGraph
+	EventsSSE  *SSEHub
+	TracesSSE  *SSEHub
+	MemorySSE  *SSEHub
+	ActiveRuns *ActiveRuns
 }
 
 // NewStore creates a Store with default-sized buffers.
 func NewStore() *Store {
 	return &Store{
-		Events:    NewEventBuffer(500),
-		Traces:    NewTraceBuffer(200),
-		Graph:     NewInteractionGraph(100),
-		EventsSSE: NewSSEHub(64),
-		TracesSSE: NewSSEHub(64),
-		MemorySSE: NewSSEHub(32),
+		Events:     NewEventBuffer(500),
+		Traces:     NewTraceBuffer(200),
+		Graph:      NewInteractionGraph(100),
+		EventsSSE:  NewSSEHub(64),
+		TracesSSE:  NewSSEHub(64),
+		MemorySSE:  NewSSEHub(32),
+		ActiveRuns: newActiveRuns(),
 	}
+}
+
+// IsRunning implements webhook.RuntimeStateProvider. It returns true when the
+// named agent has at least one in-flight run.
+func (s *Store) IsRunning(agentName string) bool {
+	return s.ActiveRuns.IsRunning(agentName)
 }
 
 // ─── workflow interface implementations ──────────────────────────────────────
@@ -343,25 +389,28 @@ func (s *Store) RecordSpan(
 	spanID, rootEventID, parentSpanID,
 	agent, backend, repo, eventKind, invokedBy string,
 	number, dispatchDepth int,
+	queueWaitMs int64, artifactsCount int,
 	startedAt, finishedAt time.Time,
 	status, errMsg string,
 ) {
 	sp := Span{
-		SpanID:        spanID,
-		RootEventID:   rootEventID,
-		ParentSpanID:  parentSpanID,
-		Agent:         agent,
-		Backend:       backend,
-		Repo:          repo,
-		EventKind:     eventKind,
-		InvokedBy:     invokedBy,
-		Number:        number,
-		DispatchDepth: dispatchDepth,
-		StartedAt:     startedAt,
-		FinishedAt:    finishedAt,
-		DurationMs:    finishedAt.Sub(startedAt).Milliseconds(),
-		Status:        status,
-		ErrorMsg:      errMsg,
+		SpanID:         spanID,
+		RootEventID:    rootEventID,
+		ParentSpanID:   parentSpanID,
+		Agent:          agent,
+		Backend:        backend,
+		Repo:           repo,
+		EventKind:      eventKind,
+		InvokedBy:      invokedBy,
+		Number:         number,
+		DispatchDepth:  dispatchDepth,
+		QueueWaitMs:    queueWaitMs,
+		ArtifactsCount: artifactsCount,
+		StartedAt:      startedAt,
+		FinishedAt:     finishedAt,
+		DurationMs:     finishedAt.Sub(startedAt).Milliseconds(),
+		Status:         status,
+		ErrorMsg:       errMsg,
 	}
 	s.Traces.Add(sp)
 	if b, err := sseData(sp); err == nil {

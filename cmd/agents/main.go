@@ -110,16 +110,19 @@ func run() error {
 	workers := cfg.Daemon.Processor.MaxConcurrentAgents
 	processor := workflow.NewProcessor(dataChannels, engine, workers, shutdown, logger)
 
-	// Wire the observability store: records events, spans, and dispatch graph.
+	// Wire the observability store: records events, spans, dispatch graph, and
+	// active-run state for the fleet dashboard.
 	obs := observe.NewStore()
 	processor.WithEventRecorder(obs)
 	engine.WithTraceRecorder(obs)
 	engine.WithGraphRecorder(obs)
+	engine.WithRunTracker(obs.ActiveRuns)
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
 	server := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, engine, logger, scheduler)
 	server.WithUI(ui.FS)
 	server.WithObserve(obs)
+	server.WithRuntimeState(obs)
 
 	group, groupCtx := errgroup.WithContext(ctx)
 	deliveryStore.Start(groupCtx)

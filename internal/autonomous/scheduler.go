@@ -340,7 +340,10 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 				Kind:  "autonomous",
 				Actor: agent.Name,
 			}
-			if err := s.dispatcher.ProcessDispatches(ctx, agent, syntheticEv, rootEventID, 0, resp.Dispatch); err != nil {
+			// Autonomous runs do not belong to an inbound trace span so
+			// parentSpanID is empty; dispatch children will still create their
+			// own spans with this run's rootEventID as correlation.
+			if err := s.dispatcher.ProcessDispatches(ctx, agent, syntheticEv, rootEventID, 0, "", resp.Dispatch); err != nil {
 				return fmt.Errorf("agent %q: dispatch: %w", agent.Name, err)
 			}
 		}

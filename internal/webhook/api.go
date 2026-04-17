@@ -43,6 +43,7 @@ type apiAgentJSON struct {
 	AllowDispatch bool               `json:"allow_dispatch"`
 	CanDispatch   []string           `json:"can_dispatch,omitempty"`
 	AllowPRs      bool               `json:"allow_prs"`
+	CurrentStatus string             `json:"current_status"` // "running" | "idle"
 	Bindings      []agentBindingJSON `json:"bindings,omitempty"`
 }
 
@@ -60,6 +61,10 @@ func (s *Server) handleAPIAgents(w http.ResponseWriter, _ *http.Request) {
 	// Build one entry per configured agent.
 	agents := make([]apiAgentJSON, 0, len(s.cfg.Agents))
 	for _, a := range s.cfg.Agents {
+		currentStatus := "idle"
+		if s.runtimeState != nil && s.runtimeState.IsRunning(a.Name) {
+			currentStatus = "running"
+		}
 		entry := apiAgentJSON{
 			Name:          a.Name,
 			Backend:       a.Backend,
@@ -68,6 +73,7 @@ func (s *Server) handleAPIAgents(w http.ResponseWriter, _ *http.Request) {
 			AllowDispatch: a.AllowDispatch,
 			CanDispatch:   a.CanDispatch,
 			AllowPRs:      a.AllowPRs,
+			CurrentStatus: currentStatus,
 		}
 
 		// Collect bindings from all repos that reference this agent.

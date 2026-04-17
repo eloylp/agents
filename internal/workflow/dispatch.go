@@ -379,6 +379,8 @@ func (d *Dispatcher) WithGraphRecorder(r GraphRecorder) {
 // ProcessDispatches validates and enqueues each dispatch request from a single
 // agent run. originator is the agent that produced the requests; ev is the
 // originating event; rootEventID and currentDepth describe the chain.
+// parentSpanID is the trace span ID of the dispatching run; it is embedded in
+// each dispatch event payload so child runs can link back to their parent span.
 // All requests are attempted; an error is returned if any enqueue fails.
 func (d *Dispatcher) ProcessDispatches(
 	ctx context.Context,
@@ -386,6 +388,7 @@ func (d *Dispatcher) ProcessDispatches(
 	ev Event,
 	rootEventID string,
 	currentDepth int,
+	parentSpanID string,
 	requests []ai.DispatchRequest,
 ) error {
 	var errs []error
@@ -475,6 +478,7 @@ func (d *Dispatcher) ProcessDispatches(
 				"root_event_id":  rootEventID,
 				"dispatch_depth": newDepth,
 				"invoked_by":     originator.Name,
+				"parent_span_id": parentSpanID,
 			},
 		}
 

@@ -50,6 +50,12 @@ type AgentTriggerer interface {
 	TriggerAgent(ctx context.Context, agentName, repo string) error
 }
 
+// RuntimeStateProvider reports whether a named agent currently has an in-flight run.
+// The implementation is optional; passing nil causes all agents to report "idle".
+type RuntimeStateProvider interface {
+	IsRunning(agentName string) bool
+}
+
 // EventQueue accepts events for async processing and reports queue depth.
 // *workflow.DataChannels satisfies this interface.
 type EventQueue interface {
@@ -63,6 +69,7 @@ type Server struct {
 	logger        zerolog.Logger
 	channels      EventQueue
 	provider      StatusProvider
+	runtimeState  RuntimeStateProvider // optional; used by /api/agents for live run status
 	dispatchStats DispatchStatsProvider
 	startTime     time.Time
 	triggerer     AgentTriggerer
@@ -83,6 +90,12 @@ func (s *Server) WithUI(uiFS fs.FS) {
 // endpoints. Callers that do not need the UI can skip this call.
 func (s *Server) WithObserve(store *observe.Store) {
 	s.observeStore = store
+}
+
+// WithRuntimeState attaches an optional runtime-state provider used by
+// /api/agents to report which agents are currently running.
+func (s *Server) WithRuntimeState(rsp RuntimeStateProvider) {
+	s.runtimeState = rsp
 }
 
 func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue, provider StatusProvider, dispatchStats DispatchStatsProvider, logger zerolog.Logger, triggerer AgentTriggerer) *Server {

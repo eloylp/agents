@@ -95,7 +95,7 @@ func TestDispatcherEnqueuesValidRequest(t *testing.T) {
 	d := testDispatcher(q)
 
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 42, Reason: "please review"}}
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 42), "root-123", 0, reqs)
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 42), "root-123", 0, "span-parent-42", reqs)
 
 	events := q.popped()
 	if len(events) != 1 {
@@ -113,6 +113,10 @@ func TestDispatcherEnqueuesValidRequest(t *testing.T) {
 	}
 	if ev.Payload["root_event_id"] != "root-123" {
 		t.Errorf("root_event_id: got %v", ev.Payload["root_event_id"])
+	}
+	// parent_span_id must be threaded through so child runs can link spans.
+	if ev.Payload["parent_span_id"] != "span-parent-42" {
+		t.Errorf("parent_span_id: got %v, want %q", ev.Payload["parent_span_id"], "span-parent-42")
 	}
 	// The synthetic event must carry its own unique ID, not the root correlation ID.
 	if ev.ID == "" {
@@ -143,7 +147,7 @@ func TestDispatcherEventIDIsUniquePerHop(t *testing.T) {
 		{Agent: "pr-reviewer", Number: 1, Reason: "review pr 1"},
 		{Agent: "pr-reviewer", Number: 2, Reason: "review pr 2"},
 	}
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-xyz", 0, reqs)
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-xyz", 0, "", reqs)
 
 	events := q.popped()
 	if len(events) != 2 {
@@ -164,7 +168,7 @@ func TestDispatcherDropsSelfDispatch(t *testing.T) {
 
 	// coder trying to dispatch itself
 	reqs := []ai.DispatchRequest{{Agent: "coder", Number: 1, Reason: "self"}}
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, reqs)
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, "", reqs)
 
 	if len(q.popped()) != 0 {
 		t.Errorf("self-dispatch should be dropped, got %d events", len(q.popped()))
@@ -181,7 +185,7 @@ func TestDispatcherDropsNotInWhitelist(t *testing.T) {
 
 	// coder is NOT in can_dispatch of sec-reviewer; coder cannot dispatch sec-reviewer
 	reqs := []ai.DispatchRequest{{Agent: "sec-reviewer", Number: 1, Reason: "check security"}}
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, reqs)
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, "", reqs)
 
 	if len(q.popped()) != 0 {
 		t.Errorf("not-in-whitelist should be dropped")
@@ -203,7 +207,7 @@ func TestDispatcherDropsNoOptin(t *testing.T) {
 	d := NewDispatcher(testDispatchCfg(), agents, NewDispatchDedupStore(300), q, zerolog.Nop())
 
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 1, Reason: "review"}}
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, reqs)
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, "", reqs)
 
 	if len(q.popped()) != 0 {
 		t.Errorf("no-optin should be dropped")
@@ -222,7 +226,7 @@ func TestDispatcherDropsExceedsMaxDepth(t *testing.T) {
 
 	// currentDepth=2, newDepth=3 > MaxDepth=2 → drop
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 1, Reason: "review"}}
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 2, reqs)
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 2, "", reqs)
 
 	if len(q.popped()) != 0 {
 		t.Errorf("exceeds-max-depth should be dropped")
@@ -257,7 +261,7 @@ func TestDispatcherDropsExceedsMaxFanout(t *testing.T) {
 		{Agent: "e", Number: 5, Reason: "r"}, // exceeds fanout
 	}
 	originator := config.AgentDef{Name: "coder", CanDispatch: []string{"a", "b", "c", "d", "e"}}
-	d.ProcessDispatches(context.Background(), originator, testEvent("owner/repo", 0), "root-1", 0, reqs)
+	d.ProcessDispatches(context.Background(), originator, testEvent("owner/repo", 0), "root-1", 0, "", reqs)
 
 	if got := len(q.popped()); got != 3 {
 		t.Errorf("expected 3 enqueued (fanout cap), got %d", got)
@@ -276,13 +280,13 @@ func TestDispatcherDeduplicatesWithinWindow(t *testing.T) {
 	ev := testEvent("owner/repo", 42)
 
 	// First dispatch: should be enqueued.
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), ev, "root-1", 0, reqs)
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), ev, "root-1", 0, "", reqs)
 	if len(q.popped()) != 1 {
 		t.Fatalf("first dispatch should be enqueued")
 	}
 
 	// Second dispatch with same (target, repo, number): should be deduped.
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), ev, "root-1", 0, reqs)
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), ev, "root-1", 0, "", reqs)
 	if len(q.popped()) != 1 {
 		t.Errorf("second dispatch should be deduped; got %d events total", len(q.popped()))
 	}
@@ -451,7 +455,7 @@ func TestDispatcherNormalizesAgentName(t *testing.T) {
 
 	// Mixed-case and whitespace in request — should be normalized.
 	reqs := []ai.DispatchRequest{{Agent: "  PR-Reviewer  ", Number: 1, Reason: "review"}}
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, reqs)
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, "", reqs)
 
 	events := q.popped()
 	if len(events) != 1 {
@@ -469,7 +473,7 @@ func TestDispatcherCountersAccumulateAcrossMultipleCalls(t *testing.T) {
 		reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 1, Reason: "r"}}
 		// Use a unique number each time to avoid dedup.
 		d.dedup = NewDispatchDedupStore(300) // reset dedup for clean test
-		d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-x", 0, reqs)
+		d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-x", 0, "", reqs)
 	}
 
 	stats := d.Stats()
@@ -487,7 +491,7 @@ func TestDispatcherHandlesQueueError(t *testing.T) {
 	d := testDispatcher(q)
 
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 1, Reason: "review"}}
-	err := d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, reqs)
+	err := d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, "", reqs)
 
 	if err == nil {
 		t.Fatal("expected error from enqueue failure, got nil")
@@ -507,7 +511,7 @@ func TestDispatcherOmittedNumberFallsBackToEventNumber(t *testing.T) {
 	// req.Number == 0 (agent omitted number field) — must fall back to ev.Number.
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 0, Reason: "review"}}
 	ev := testEvent("owner/repo", 42)
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), ev, "root-1", 0, reqs)
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), ev, "root-1", 0, "", reqs)
 
 	events := q.popped()
 	if len(events) != 1 {
@@ -526,9 +530,9 @@ func TestDispatcherDedupUsesEventNumberWhenRequestNumberOmitted(t *testing.T) {
 	// Two dispatch requests from different event numbers, both with omitted req.Number.
 	// They must NOT collapse into the same dedup key.
 	req := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 0, Reason: "review"}}
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 10), "root-1", 0, req)
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 10), "root-1", 0, "", req)
 	d.dedup = NewDispatchDedupStore(300) // reset dedup to test second dispatch independently
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 20), "root-2", 0, req)
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 20), "root-2", 0, "", req)
 
 	events := q.popped()
 	if len(events) != 2 {
@@ -551,12 +555,12 @@ func TestDispatcherRetrySucceedsAfterEnqueueFailure(t *testing.T) {
 	d := testDispatcher(qFail)
 
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 1, Reason: "review"}}
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, reqs)
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, "", reqs)
 
 	// Now swap in a healthy queue and retry the same dispatch.
 	qOK := &fakeQueue{}
 	d.queue = qOK
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-2", 0, reqs)
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-2", 0, "", reqs)
 
 	events := qOK.popped()
 	if len(events) != 1 {
@@ -576,7 +580,7 @@ func TestDispatchClaimOnlyVisibleAfterSuccessfulEnqueue(t *testing.T) {
 	d := testDispatcher(q)
 
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 0, Reason: "check"}}
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 0), "root-1", 0, reqs)
+	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 0), "root-1", 0, "", reqs)
 
 	// The enqueue failed, so the dispatch slot must NOT be claimed.
 	if d.DispatchAlreadyClaimed("pr-reviewer", "owner/repo", time.Now()) {
@@ -607,7 +611,7 @@ func TestMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.T) {
 	// pr-reviewer as the originator dispatching to coder).
 	originator := originatorAgent("pr-reviewer")
 	ev := testEvent("owner/repo", 0)
-	d.ProcessDispatches(context.Background(), originator, ev, "root-x", 0, []ai.DispatchRequest{
+	d.ProcessDispatches(context.Background(), originator, ev, "root-x", 0, "", []ai.DispatchRequest{
 		{Agent: "coder", Reason: "dispatch while cron mark is active"},
 	})
 	if len(q.popped()) != 0 {
@@ -615,7 +619,7 @@ func TestMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.T) {
 	}
 
 	// The mark persists — a second dispatch attempt within the same window is also suppressed.
-	d.ProcessDispatches(context.Background(), originator, ev, "root-y", 0, []ai.DispatchRequest{
+	d.ProcessDispatches(context.Background(), originator, ev, "root-y", 0, "", []ai.DispatchRequest{
 		{Agent: "coder", Reason: "second dispatch attempt within dedup window"},
 	})
 	if len(q.popped()) != 0 {
@@ -640,7 +644,7 @@ func TestMarkAutonomousRunDoesNotSuppressDispatchForDifferentNumber(t *testing.T
 	// — it is a different item context from the autonomous cron run (number=0).
 	originator := originatorAgent("pr-reviewer")
 	ev := testEvent("owner/repo", 42)
-	d.ProcessDispatches(context.Background(), originator, ev, "root-pr42", 0, []ai.DispatchRequest{
+	d.ProcessDispatches(context.Background(), originator, ev, "root-pr42", 0, "", []ai.DispatchRequest{
 		{Agent: "coder", Number: 42, Reason: "review this specific PR"},
 	})
 	if len(q.popped()) != 1 {
@@ -675,7 +679,7 @@ func TestPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 	// Dispatch arriving after the run — still within the TTL window — must be suppressed.
 	originator := agents["pr-reviewer"]
 	ev := Event{Repo: RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
-	d.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, []ai.DispatchRequest{
+	d.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
 		{Agent: "coder", Reason: "dispatch after run, within window"},
 	})
 	if len(q.popped()) != 0 {
@@ -686,7 +690,7 @@ func TestPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 	futureNow := now.Add(3 * time.Second)
 	d2 := NewDispatcher(cfg, agents, NewDispatchDedupStore(2), q, zerolog.Nop())
 	// No cron mark written — simulates the window having expired.
-	d2.ProcessDispatches(context.Background(), originator, ev, "root-2", 0, []ai.DispatchRequest{
+	d2.ProcessDispatches(context.Background(), originator, ev, "root-2", 0, "", []ai.DispatchRequest{
 		{Agent: "coder", Reason: "dispatch after window expired"},
 	})
 	_ = futureNow // anchor variable for clarity
@@ -733,7 +737,7 @@ func TestConcurrentDispatchesDoNotDuplicateEnqueue(t *testing.T) {
 	for range goroutines {
 		go func() {
 			defer wg.Done()
-			d.ProcessDispatches(context.Background(), originatorAgent("coder"), ev, "root-concurrent", 0, reqs)
+			d.ProcessDispatches(context.Background(), originatorAgent("coder"), ev, "root-concurrent", 0, "", reqs)
 		}()
 	}
 	wg.Wait()
@@ -763,7 +767,7 @@ func TestRemoveCronMarkWithOverlappingRunsRefcount(t *testing.T) {
 
 	originator := originatorAgent("pr-reviewer")
 	ev := testEvent("owner/repo", 0)
-	d.ProcessDispatches(context.Background(), originator, ev, "root-overlap", 0, []ai.DispatchRequest{
+	d.ProcessDispatches(context.Background(), originator, ev, "root-overlap", 0, "", []ai.DispatchRequest{
 		{Agent: "coder", Reason: "dispatch while second run is still in flight"},
 	})
 	if len(q.popped()) != 0 {
@@ -776,7 +780,7 @@ func TestRemoveCronMarkWithOverlappingRunsRefcount(t *testing.T) {
 	// A new dispatcher with a fresh store simulates the expired/cleared state.
 	q2 := &fakeQueue{}
 	d2 := testDispatcher(q2)
-	d2.ProcessDispatches(context.Background(), originator, ev, "root-after", 0, []ai.DispatchRequest{
+	d2.ProcessDispatches(context.Background(), originator, ev, "root-after", 0, "", []ai.DispatchRequest{
 		{Agent: "coder", Reason: "dispatch after both runs rolled back"},
 	})
 	if len(q2.popped()) != 1 {
@@ -817,7 +821,7 @@ func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 	// the cron run is still in flight (refcount > 0).
 	originator := agents["pr-reviewer"]
 	ev := Event{Repo: RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
-	d.ProcessDispatches(context.Background(), originator, ev, "root-past-ttl", 0, []ai.DispatchRequest{
+	d.ProcessDispatches(context.Background(), originator, ev, "root-past-ttl", 0, "", []ai.DispatchRequest{
 		{Agent: "coder", Reason: "dispatch while long-running cron job is still in flight"},
 	})
 	if len(q.popped()) != 0 {
@@ -832,7 +836,7 @@ func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 	dedup.evict(pastTTL) // TTL already elapsed; now that refcount is 0, entry is evicted.
 	q2 := &fakeQueue{}
 	d2 := NewDispatcher(cfg, agents, dedup, q2, zerolog.Nop())
-	d2.ProcessDispatches(context.Background(), originator, ev, "root-after-run", 0, []ai.DispatchRequest{
+	d2.ProcessDispatches(context.Background(), originator, ev, "root-after-run", 0, "", []ai.DispatchRequest{
 		{Agent: "coder", Reason: "dispatch after run completed and TTL expired"},
 	})
 	if len(q2.popped()) != 1 {
@@ -869,7 +873,7 @@ func TestFinalizeAutonomousRunKeepsTTLBlocksDispatchWithinWindow(t *testing.T) {
 	// still be suppressed — the entry is kept for the full dedup window.
 	q2 := &fakeQueue{}
 	d2 := NewDispatcher(cfg, agents, dedup, q2, zerolog.Nop())
-	d2.ProcessDispatches(context.Background(), originator, ev, "root-post-run", 0, []ai.DispatchRequest{
+	d2.ProcessDispatches(context.Background(), originator, ev, "root-post-run", 0, "", []ai.DispatchRequest{
 		{Agent: "coder", Reason: "dispatch shortly after successful cron run"},
 	})
 	if len(q2.popped()) != 0 {

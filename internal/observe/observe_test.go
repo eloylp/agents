@@ -371,3 +371,77 @@ func extractSSEData(raw []byte) []byte {
 	s = strings.TrimRight(s, "\n")
 	return []byte(s)
 }
+
+// ─── ActiveRuns ──────────────────────────────────────────────────────────────
+
+func TestActiveRunsStartFinishIsRunning(t *testing.T) {
+	t.Parallel()
+	s := observe.NewStore()
+	ar := s.ActiveRuns
+
+	if ar.IsRunning("coder") {
+		t.Fatal("want not running before Start")
+	}
+
+	ar.StartRun("coder")
+	if !ar.IsRunning("coder") {
+		t.Fatal("want running after StartRun")
+	}
+	if ar.IsRunning("reviewer") {
+		t.Fatal("want reviewer not running")
+	}
+
+	ar.FinishRun("coder")
+	if ar.IsRunning("coder") {
+		t.Fatal("want not running after FinishRun")
+	}
+}
+
+func TestActiveRunsConcurrentRuns(t *testing.T) {
+	t.Parallel()
+	s := observe.NewStore()
+	ar := s.ActiveRuns
+
+	// Two concurrent runs for the same agent.
+	ar.StartRun("coder")
+	ar.StartRun("coder")
+	if !ar.IsRunning("coder") {
+		t.Fatal("want running with two active runs")
+	}
+
+	ar.FinishRun("coder")
+	if !ar.IsRunning("coder") {
+		t.Fatal("want still running after first finish (second run still active)")
+	}
+
+	ar.FinishRun("coder")
+	if ar.IsRunning("coder") {
+		t.Fatal("want not running after both runs finish")
+	}
+}
+
+func TestActiveRunsFinishBelowZeroIsSafe(t *testing.T) {
+	t.Parallel()
+	s := observe.NewStore()
+	ar := s.ActiveRuns
+
+	// Calling FinishRun without a matching Start must not panic or go negative.
+	ar.FinishRun("ghost")
+	if ar.IsRunning("ghost") {
+		t.Fatal("want not running after spurious FinishRun")
+	}
+}
+
+func TestStoreIsRunningDelegates(t *testing.T) {
+	t.Parallel()
+	s := observe.NewStore()
+
+	s.ActiveRuns.StartRun("coder")
+	if !s.IsRunning("coder") {
+		t.Fatal("Store.IsRunning must delegate to ActiveRuns")
+	}
+	s.ActiveRuns.FinishRun("coder")
+	if s.IsRunning("coder") {
+		t.Fatal("Store.IsRunning must return false after run finishes")
+	}
+}

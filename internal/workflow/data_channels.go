@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 )
 
 var (
@@ -26,11 +27,15 @@ func NewDataChannels(buffer int) *DataChannels {
 // PushEvent enqueues an event without blocking. The select has three arms:
 // context cancellation (caller is shutting down), successful enqueue, and the
 // default case which fires immediately when the channel buffer is full.
+// EnqueuedAt is stamped here so queue-wait time can be computed by the engine.
 func (dc *DataChannels) PushEvent(ctx context.Context, ev Event) error {
 	dc.mu.RLock()
 	defer dc.mu.RUnlock()
 	if dc.closed {
 		return ErrQueueClosed
+	}
+	if ev.EnqueuedAt.IsZero() {
+		ev.EnqueuedAt = time.Now()
 	}
 	select {
 	case <-ctx.Done():

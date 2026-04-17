@@ -18,6 +18,7 @@ interface Edge {
 
 interface Node {
   id: string
+  status?: string // "idle" | "running" | "error" — last known runtime state
 }
 
 interface Graph {
@@ -167,13 +168,19 @@ export default function GraphPage() {
                 )
               })}
 
-              {/* Nodes */}
+              {/* Nodes — coloured by runtime state */}
               {graph.nodes.map(n => {
                 const p = positions[n.id]
                 if (!p) return null
+                const stroke = n.status === 'running' ? '#22c55e'
+                             : n.status === 'error'   ? '#ef4444'
+                             : '#60a5fa' // idle / unknown
+                const fill = n.status === 'running' ? '#14532d'
+                           : n.status === 'error'   ? '#450a0a'
+                           : '#1e293b'
                 return (
                   <g key={n.id} transform={`translate(${p.x},${p.y})`}>
-                    <circle r={18} fill="#1e293b" stroke="#60a5fa" strokeWidth={1.5} />
+                    <circle r={18} fill={fill} stroke={stroke} strokeWidth={1.5} />
                     <text textAnchor="middle" dy="0.35em" fontSize="11" fill="#e2e8f0"
                       style={{ overflow: 'hidden' }}>
                       {n.id.length > 8 ? n.id.slice(0, 7) + '…' : n.id}

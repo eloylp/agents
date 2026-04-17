@@ -25,6 +25,7 @@ interface Agent {
   allow_dispatch: boolean
   can_dispatch?: string[]
   allow_prs: boolean
+  current_status: string  // "running" | "idle" — live runtime state from /api/agents
   bindings?: Binding[]
 }
 
@@ -34,8 +35,10 @@ function fmt(iso?: string) {
 }
 
 function AgentCard({ agent }: { agent: Agent }) {
-  const statuses = agent.bindings?.flatMap(b => b.schedule?.last_status ? [b.schedule.last_status] : []) ?? []
-  const currentStatus = statuses.includes('error') ? 'error' : statuses.includes('success') ? 'success' : 'idle'
+  // Use live runtime status from the API; fall back to last cron outcome for error/success colouring.
+  const scheduleStatuses = agent.bindings?.flatMap(b => b.schedule?.last_status ? [b.schedule.last_status] : []) ?? []
+  const lastOutcome = scheduleStatuses.includes('error') ? 'error' : scheduleStatuses.includes('success') ? 'success' : 'idle'
+  const currentStatus = agent.current_status === 'running' ? 'running' : lastOutcome
 
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>

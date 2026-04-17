@@ -275,6 +275,67 @@ func TestHandleAPIAgentsEmptyWhenNoAgents(t *testing.T) {
 	}
 }
 
+func TestHandleAPIAgentsCurrentStatusIdleWhenNotRunning(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(nil)
+	srv, _ := newTestServer(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAPIAgents(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var agents []apiAgentJSON
+	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, a := range agents {
+		if a.CurrentStatus != "idle" {
+			t.Errorf("agent %q: want current_status=idle, got %q", a.Name, a.CurrentStatus)
+		}
+	}
+}
+
+// stubRuntimeState is a minimal RuntimeStateProvider for tests.
+type stubRuntimeState struct{ running map[string]bool }
+
+func (s *stubRuntimeState) IsRunning(name string) bool { return s.running[name] }
+
+func TestHandleAPIAgentsCurrentStatusRunningWhenActive(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(nil)
+	srv, _ := newTestServer(cfg)
+	srv.WithRuntimeState(&stubRuntimeState{running: map[string]bool{"coder": true}})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAPIAgents(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var agents []apiAgentJSON
+	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	found := false
+	for _, a := range agents {
+		if a.Name == "coder" {
+			if a.CurrentStatus != "running" {
+				t.Errorf("want current_status=running for active agent, got %q", a.CurrentStatus)
+			}
+			found = true
+		} else if a.CurrentStatus != "idle" {
+			t.Errorf("agent %q: want current_status=idle, got %q", a.Name, a.CurrentStatus)
+		}
+	}
+	if !found {
+		t.Error("agent 'coder' not found in response")
+	}
+}
+
 // ── /api/config ────────────────────────────────────────────────────────────
 
 func TestHandleAPIConfigRedactsSecrets(t *testing.T) {
@@ -714,8 +775,8 @@ func TestHandleAPITracesReturnsStoredSpans(t *testing.T) {
 	srv.WithObserve(obs)
 
 	now := time.Now().UTC()
-	obs.RecordSpan("s1", "root-A", "", "coder", "claude", "owner/repo", "issues.labeled", "", 1, 0, now, now.Add(5*time.Second), "success", "")
-	obs.RecordSpan("s2", "root-A", "", "reviewer", "claude", "owner/repo", "agent.dispatch", "coder", 1, 1, now.Add(time.Second), now.Add(6*time.Second), "success", "")
+	obs.RecordSpan("s1", "root-A", "", "coder", "claude", "owner/repo", "issues.labeled", "", 1, 0, 0, 0, now, now.Add(5*time.Second), "success", "")
+	obs.RecordSpan("s2", "root-A", "", "reviewer", "claude", "owner/repo", "agent.dispatch", "coder", 1, 1, 0, 0, now.Add(time.Second), now.Add(6*time.Second), "success", "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/traces", nil)
 	rec := httptest.NewRecorder()
@@ -741,8 +802,8 @@ func TestHandleAPITraceByRootEventID(t *testing.T) {
 	srv.WithObserve(obs)
 
 	now := time.Now().UTC()
-	obs.RecordSpan("s1", "root-A", "", "coder", "claude", "r", "issues.labeled", "", 1, 0, now, now.Add(time.Second), "success", "")
-	obs.RecordSpan("s2", "root-B", "", "reviewer", "claude", "r", "push", "", 0, 0, now, now.Add(time.Second), "success", "")
+	obs.RecordSpan("s1", "root-A", "", "coder", "claude", "r", "issues.labeled", "", 1, 0, 0, 0, now, now.Add(time.Second), "success", "")
+	obs.RecordSpan("s2", "root-B", "", "reviewer", "claude", "r", "push", "", 0, 0, 0, 0, now, now.Add(time.Second), "success", "")
 
 	// Use the full router so mux populates the {root_event_id} variable.
 	router := srv.buildHandler()
