@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog"
 )
@@ -49,9 +50,11 @@ func NewCommandRunner(backendName string, mode string, command string, args []st
 }
 
 func (r *CommandRunner) Run(ctx context.Context, req Request) (Response, error) {
-	// Compute hash and length from the combined content for logging, regardless
-	// of how the content is actually delivered to the backend.
-	combined := req.System + "\n\n" + req.User
+	// Compute hash and length from the same logical combined prompt that
+	// buildDelivery will deliver: join with "\n\n" only when both parts are
+	// non-empty, then truncate to the configured budget so the logged values
+	// always reflect the actually-delivered content.
+	combined := truncateString(combineSystemUser(req.System, req.User), r.maxPromptChars)
 	promptMeta := r.promptMeta(combined)
 	logger := r.logger.With().
 		Str("workflow", req.Workflow).
@@ -147,6 +150,11 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	return response, nil
 }
 
+// separatorRunes is the rune-count of the "\n\n" separator inserted between
+// System and User when both are non-empty. It is a named constant so the
+// budget arithmetic in buildDelivery and its tests stay in sync.
+const separatorRunes = 2
+
 // buildDelivery returns the final args slice and stdin string to use for the
 // given request. The delivery strategy depends on the backend:
 //
@@ -166,19 +174,51 @@ func (r *CommandRunner) buildDelivery(req Request) (args []string, stdin string)
 		// array from r.args.
 		args = make([]string, 0, len(r.args)+2)
 		args = append(args, r.args...)
-		args = append(args, "--append-system-prompt", req.System)
-		stdin = truncateString(req.User, r.maxPromptChars)
+
+		// Enforce the combined prompt budget against the same logical shape as
+		// the fallback path: System + "\n\n" + User (separator only when both
+		// are non-empty).  Budget the system part first; whatever headroom
+		// remains (minus the separator) is available for the user turn.
+		systemContent := req.System
+		userBudget := r.maxPromptChars
+		if userBudget > 0 {
+			systemRunes := utf8.RuneCountInString(req.System)
+			if systemRunes >= userBudget {
+				// System fills or exceeds the budget; truncate it and send no user content.
+				systemContent = truncateString(req.System, userBudget)
+				args = append(args, "--append-system-prompt", systemContent)
+				stdin = ""
+				return args, stdin
+			}
+			// Reserve headroom for system + separator, leaving the rest for user.
+			userBudget -= systemRunes + separatorRunes
+			if userBudget <= 0 {
+				// Separator sits at or past the budget boundary; no room for user.
+				args = append(args, "--append-system-prompt", systemContent)
+				stdin = ""
+				return args, stdin
+			}
+		}
+		args = append(args, "--append-system-prompt", systemContent)
+		stdin = truncateString(req.User, userBudget)
 		return args, stdin
 	}
-	// Fallback: concatenate system + user, send on stdin.
-	combined := req.System
-	if req.User != "" {
-		if combined != "" {
-			combined += "\n\n"
-		}
-		combined += req.User
+	// Fallback: concatenate system + user with the same separator rule, send on stdin.
+	return r.args, truncateString(combineSystemUser(req.System, req.User), r.maxPromptChars)
+}
+
+// combineSystemUser joins system and user content with a blank-line separator,
+// but only inserts the separator when both parts are non-empty. This ensures
+// the logical combined prompt shape is consistent with what every backend
+// actually delivers.
+func combineSystemUser(system, user string) string {
+	if system == "" {
+		return user
 	}
-	return r.args, truncateString(combined, r.maxPromptChars)
+	if user == "" {
+		return system
+	}
+	return system + "\n\n" + user
 }
 
 type promptMeta struct {
@@ -197,7 +237,7 @@ func (r *CommandRunner) promptMeta(prompt string) promptMeta {
 	_, _ = hasher.Write([]byte(prompt))
 	return promptMeta{
 		Hash:   hex.EncodeToString(hasher.Sum(nil)),
-		Length: len(prompt),
+		Length: utf8.RuneCountInString(prompt),
 	}
 }
 
