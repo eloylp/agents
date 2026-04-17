@@ -65,7 +65,12 @@ func (s *Server) handleAPIAgents(w http.ResponseWriter, _ *http.Request) {
 		}
 
 		// Collect bindings from all repos that reference this agent.
+		// Disabled repos are excluded entirely — they are not active in the
+		// runtime, so they should not appear in the fleet snapshot.
 		for _, repo := range s.cfg.Repos {
+			if !repo.Enabled {
+				continue
+			}
 			for _, b := range repo.Use {
 				if b.Agent != a.Name {
 					continue

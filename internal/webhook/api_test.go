@@ -203,6 +203,52 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 	}
 }
 
+// TestHandleAPIAgentsSkipsDisabledRepos verifies that repos with enabled:false
+// do not appear in the /api/agents fleet snapshot. A disabled repo is ignored
+// by the runtime, so its bindings must not mislead operators by appearing as
+// active bindings in the fleet view.
+func TestHandleAPIAgentsSkipsDisabledRepos(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(func(c *config.Config) {
+		c.Agents = []config.AgentDef{{Name: "worker", Backend: "claude"}}
+		c.Repos = []config.RepoDef{
+			{
+				Name:    "owner/active-repo",
+				Enabled: true,
+				Use:     []config.Binding{{Agent: "worker", Events: []string{"push"}}},
+			},
+			{
+				Name:    "owner/disabled-repo",
+				Enabled: false,
+				Use:     []config.Binding{{Agent: "worker", Events: []string{"push"}}},
+			},
+		}
+	})
+	srv, _ := newTestServer(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAPIAgents(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var agents []apiAgentJSON
+	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("want 1 agent, got %d", len(agents))
+	}
+	bindings := agents[0].Bindings
+	if len(bindings) != 1 {
+		t.Fatalf("want exactly 1 binding (active repo only), got %d: %+v", len(bindings), bindings)
+	}
+	if bindings[0].Repo != "owner/active-repo" {
+		t.Errorf("want binding for owner/active-repo, got %q", bindings[0].Repo)
+	}
+}
+
 func TestHandleAPIAgentsEmptyWhenNoAgents(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(nil)
