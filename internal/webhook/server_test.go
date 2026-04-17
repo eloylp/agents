@@ -829,7 +829,7 @@ func TestBuildHandlerObservabilityRoutesAreOpen(t *testing.T) {
 	srv.WithObserve(newTestObserve())
 
 	ts := httptest.NewServer(srv.buildHandler())
-	defer ts.Close()
+	t.Cleanup(ts.Close)
 
 	// These read-only routes must NOT require a Bearer token.
 	openRoutes := []struct {

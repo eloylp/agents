@@ -305,7 +305,9 @@ func (s *stubRuntimeState) IsRunning(name string) bool { return s.running[name] 
 
 func TestHandleAPIAgentsCurrentStatusRunningWhenActive(t *testing.T) {
 	t.Parallel()
-	cfg := testCfg(nil)
+	cfg := testCfg(func(c *config.Config) {
+		c.Agents = []config.AgentDef{{Name: "coder", Backend: "claude"}}
+	})
 	srv, _ := newTestServer(cfg)
 	srv.WithRuntimeState(&stubRuntimeState{running: map[string]bool{"coder": true}})
 
