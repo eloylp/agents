@@ -450,67 +450,74 @@ func jsonBlocks(blocks []ContentBlock) json.RawMessage {
 	return json.RawMessage(b)
 }
 
-// TestToOpenAI_UnsupportedUserBlock verifies that a user turn containing an
-// unsupported content block type (e.g. "image") returns a translation error
-// rather than silently dropping the block.
-func TestToOpenAI_UnsupportedUserBlock(t *testing.T) {
+// TestToOpenAI_InvalidInputsRejected verifies that ToOpenAI returns an error
+// for each class of unsupported or malformed content, rather than silently
+// dropping blocks or producing lossy output.
+func TestToOpenAI_InvalidInputsRejected(t *testing.T) {
 	t.Parallel()
-	req := MessagesRequest{
-		Messages: []AnthropicMessage{
-			{
-				Role:    "user",
-				Content: jsonBlocks([]ContentBlock{{Type: "image", Text: ""}}),
+	tests := []struct {
+		name string
+		req  MessagesRequest
+	}{
+		{
+			name: "unsupported user block type (image)",
+			req: MessagesRequest{
+				Messages: []AnthropicMessage{
+					{Role: "user", Content: jsonBlocks([]ContentBlock{{Type: "image", Text: ""}})},
+				},
+			},
+		},
+		{
+			name: "unsupported assistant block type (thinking)",
+			req: MessagesRequest{
+				Messages: []AnthropicMessage{
+					{Role: "assistant", Content: jsonBlocks([]ContentBlock{{Type: "thinking", Text: "some chain of thought"}})},
+				},
+			},
+		},
+		{
+			// text("before"), tool_use(A), text("after") — trailing text after tool_use
+			// cannot be represented in OpenAI's schema without data loss.
+			name: "interleaved text/tool_use in assistant turn",
+			req: MessagesRequest{
+				Messages: []AnthropicMessage{
+					{
+						Role: "assistant",
+						Content: jsonBlocks([]ContentBlock{
+							{Type: "text", Text: "before"},
+							{Type: "tool_use", ID: "tu_1", Name: "my_tool", Input: json.RawMessage(`{"key":"val"}`)},
+							{Type: "text", Text: "after"},
+						}),
+					},
+				},
+			},
+		},
+		{
+			name: "unsupported tool_result nested block type (image)",
+			req: MessagesRequest{
+				Messages: []AnthropicMessage{
+					{
+						Role: "user",
+						Content: jsonBlocks([]ContentBlock{
+							{
+								Type:      "tool_result",
+								ToolUseID: "tc_1",
+								Content:   json.RawMessage(`[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"abc"}}]`),
+							},
+						}),
+					},
+				},
 			},
 		},
 	}
-	_, err := ToOpenAI(req, "gpt-4")
-	if err == nil {
-		t.Fatal("expected error for unsupported user block type, got nil")
-	}
-}
-
-// TestToOpenAI_UnsupportedAssistantBlock verifies that an assistant turn
-// containing an unsupported content block type (e.g. "thinking") returns a
-// translation error rather than silently dropping the block.
-func TestToOpenAI_UnsupportedAssistantBlock(t *testing.T) {
-	t.Parallel()
-	req := MessagesRequest{
-		Messages: []AnthropicMessage{
-			{
-				Role:    "assistant",
-				Content: jsonBlocks([]ContentBlock{{Type: "thinking", Text: "some chain of thought"}}),
-			},
-		},
-	}
-	_, err := ToOpenAI(req, "gpt-4")
-	if err == nil {
-		t.Fatal("expected error for unsupported assistant block type, got nil")
-	}
-}
-
-// TestToOpenAI_InterleavedAssistantBlocks verifies that an assistant turn with
-// a text block following a tool_use block is rejected. OpenAI's message schema
-// cannot represent this ordering without data loss, so the proxy must fail fast
-// rather than silently reorder the content.
-func TestToOpenAI_InterleavedAssistantBlocks(t *testing.T) {
-	t.Parallel()
-	toolInput := json.RawMessage(`{"key":"val"}`)
-	// Pattern: text("before"), tool_use(A), text("after") — trailing text after tool_use.
-	req := MessagesRequest{
-		Messages: []AnthropicMessage{
-			{
-				Role: "assistant",
-				Content: jsonBlocks([]ContentBlock{
-					{Type: "text", Text: "before"},
-					{Type: "tool_use", ID: "tu_1", Name: "my_tool", Input: toolInput},
-					{Type: "text", Text: "after"},
-				}),
-			},
-		},
-	}
-	_, err := ToOpenAI(req, "gpt-4")
-	if err == nil {
-		t.Fatal("expected error for interleaved text/tool_use ordering, got nil")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ToOpenAI(tc.req, "gpt-4")
+			if err == nil {
+				t.Fatalf("expected translation error, got nil")
+			}
+		})
 	}
 }
 
@@ -543,30 +550,6 @@ func TestToOpenAI_LeadingTextThenToolUseIsValid(t *testing.T) {
 	}
 	if len(msg.ToolCalls) != 1 {
 		t.Errorf("tool_calls count: got %d, want 1", len(msg.ToolCalls))
-	}
-}
-
-// TestToOpenAI_UnsupportedToolResultBlock verifies that a tool_result whose
-// content array contains an unsupported nested block type (e.g. "image")
-// returns a translation error rather than silently dropping the block and
-// producing lossy/partial text content.
-func TestToOpenAI_UnsupportedToolResultBlock(t *testing.T) {
-	t.Parallel()
-	// tool_result with a content array that includes an image block.
-	toolResultContent := json.RawMessage(`[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"abc"}}]`)
-	req := MessagesRequest{
-		Messages: []AnthropicMessage{
-			{
-				Role: "user",
-				Content: jsonBlocks([]ContentBlock{
-					{Type: "tool_result", ToolUseID: "tc_1", Content: toolResultContent},
-				}),
-			},
-		},
-	}
-	_, err := ToOpenAI(req, "gpt-4")
-	if err == nil {
-		t.Fatal("expected error for unsupported tool_result nested block type, got nil")
 	}
 }
 
