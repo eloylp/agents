@@ -105,17 +105,18 @@ func (s *Server) Run(ctx context.Context) error {
 	router.HandleFunc(s.cfg.Daemon.HTTP.WebhookPath, s.handleGitHubWebhook).Methods(http.MethodPost)
 	router.HandleFunc(s.cfg.Daemon.HTTP.AgentsRunPath, s.handleAgentsRun).Methods(http.MethodPost)
 
-	// Observability API (read-only, no auth required — operators are expected
-	// to put an authenticating reverse proxy in front of the daemon).
-	router.HandleFunc("/api/agents", s.handleAPIAgents).Methods(http.MethodGet)
-	router.HandleFunc("/api/config", s.handleAPIConfig).Methods(http.MethodGet)
-	router.HandleFunc("/api/dispatches", s.handleAPIDispatches).Methods(http.MethodGet)
+	// Observability API — gated by the same Bearer token as /agents/run when
+	// daemon.http.api_key is configured; open when no key is set.
+	router.Handle("/api/agents", s.requireAPIKey(http.HandlerFunc(s.handleAPIAgents))).Methods(http.MethodGet)
+	router.Handle("/api/config", s.requireAPIKey(http.HandlerFunc(s.handleAPIConfig))).Methods(http.MethodGet)
+	router.Handle("/api/dispatches", s.requireAPIKey(http.HandlerFunc(s.handleAPIDispatches))).Methods(http.MethodGet)
 
 	// Static UI: served from the embedded dist/ tree when a UI FS is provided.
 	if s.uiFS != nil {
 		sub, err := fs.Sub(s.uiFS, "dist")
 		if err == nil {
-			router.PathPrefix("/ui/").Handler(http.StripPrefix("/ui/", http.FileServer(http.FS(sub))))
+			fileServer := http.StripPrefix("/ui/", http.FileServer(http.FS(sub)))
+			router.PathPrefix("/ui/").Handler(s.requireAPIKey(fileServer))
 		}
 	}
 
@@ -153,6 +154,23 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 	return <-errCh
+}
+
+// requireAPIKey is HTTP middleware that enforces Bearer-token authentication
+// when daemon.http.api_key is configured. When no API key is set the request
+// passes through unauthenticated, keeping the observability endpoints open for
+// operators that rely solely on network-level access control.
+func (s *Server) requireAPIKey(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.Daemon.HTTP.APIKey != "" {
+			token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if token == "" || token != s.cfg.Daemon.HTTP.APIKey {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
