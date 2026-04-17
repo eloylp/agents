@@ -451,7 +451,8 @@ type apiGraphJSON struct {
 }
 
 type apiGraphNode struct {
-	ID string `json:"id"`
+	ID     string `json:"id"`
+	Status string `json:"status,omitempty"` // last known run status; empty when not yet run
 }
 
 type apiGraphEdge struct {
@@ -472,15 +473,32 @@ type apiDispatchRecord struct {
 func (s *Server) handleAPIGraph(w http.ResponseWriter, _ *http.Request) {
 	edges := s.observeStore.Graph.Edges()
 
-	// Build the unique node set from all edge endpoints.
+	// Collect the last-known run status for each agent from the scheduler so
+	// the UI can colour nodes by state.
+	statusByAgent := make(map[string]string)
+	if s.provider != nil {
+		for _, as := range s.provider.AgentStatuses() {
+			if as.LastStatus != "" {
+				statusByAgent[as.Name] = as.LastStatus
+			}
+		}
+	}
+
+	// Seed the node set from the full configured fleet so that agents with no
+	// dispatch history still appear in the graph (issue #151: "Nodes = agents").
 	seen := make(map[string]struct{})
+	for _, a := range s.cfg.Agents {
+		seen[a.Name] = struct{}{}
+	}
+	// Include any edge endpoints not already covered by the current config
+	// (e.g. agents removed from config but with recorded dispatch history).
 	for _, e := range edges {
 		seen[e.From] = struct{}{}
 		seen[e.To] = struct{}{}
 	}
 	nodes := make([]apiGraphNode, 0, len(seen))
 	for id := range seen {
-		nodes = append(nodes, apiGraphNode{ID: id})
+		nodes = append(nodes, apiGraphNode{ID: id, Status: statusByAgent[id]})
 	}
 
 	wireEdges := make([]apiGraphEdge, 0, len(edges))

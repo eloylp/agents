@@ -830,6 +830,39 @@ func TestHandleAPIGraphEmptyWhenNoDispatches(t *testing.T) {
 	}
 }
 
+func TestHandleAPIGraphIncludesConfiguredAgentWithNoDispatches(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(func(c *config.Config) {
+		c.Agents = []config.AgentDef{
+			{Name: "solo-agent", Backend: "claude"},
+		}
+	})
+	srv, _ := newTestServer(cfg)
+	obs := newTestObserve()
+	srv.WithObserve(obs)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/graph", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAPIGraph(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var g apiGraphJSON
+	if err := json.NewDecoder(rec.Body).Decode(&g); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(g.Nodes) != 1 {
+		t.Fatalf("want 1 node for configured agent, got %d", len(g.Nodes))
+	}
+	if g.Nodes[0].ID != "solo-agent" {
+		t.Fatalf("want node ID %q, got %q", "solo-agent", g.Nodes[0].ID)
+	}
+	if len(g.Edges) != 0 {
+		t.Fatalf("want 0 edges, got %d", len(g.Edges))
+	}
+}
+
 // ── /api/memory ────────────────────────────────────────────────────────────
 
 func TestHandleAPIMemoryServesFile(t *testing.T) {

@@ -336,6 +336,30 @@ func TestWatchMemoryDirPublishesOnNewFileAfterBaseline(t *testing.T) {
 	}
 }
 
+// TestWatchMemoryDirNoOpOnEmptyDir verifies that WatchMemoryDir exits
+// immediately and publishes no events when dir is empty.
+func TestWatchMemoryDirNoOpOnEmptyDir(t *testing.T) {
+	t.Parallel()
+
+	hub := observe.NewSSEHub(8)
+	ch := hub.Subscribe()
+	defer hub.Unsubscribe(ch)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go observe.WatchMemoryDir(ctx, "", 25*time.Millisecond, hub)
+
+	// Allow several tick cycles to elapse; the watcher must not publish anything.
+	time.Sleep(80 * time.Millisecond)
+
+	select {
+	case msg := <-ch:
+		t.Fatalf("unexpected SSE event from empty-dir watcher: %s", msg)
+	default:
+	}
+}
+
 // extractSSEData strips the "data: " prefix and trailing "\n\n" added by
 // sseData so the payload can be unmarshalled as JSON.
 func extractSSEData(raw []byte) []byte {

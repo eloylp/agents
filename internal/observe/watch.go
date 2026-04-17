@@ -21,8 +21,12 @@ type MemoryChangeEvent struct {
 // baseline without publishing; only subsequent changes or new arrivals trigger
 // publications. The goroutine runs until ctx is cancelled.
 //
+// If dir is empty the function returns immediately without starting a watcher.
 // If interval is <= 0, it defaults to 2 seconds.
 func WatchMemoryDir(ctx context.Context, dir string, interval time.Duration, hub *SSEHub) {
+	if dir == "" {
+		return
+	}
 	if interval <= 0 {
 		interval = 2 * time.Second
 	}
