@@ -610,9 +610,10 @@ func TestHandleAgentsRunCallsTriggerer(t *testing.T) {
 func TestHandleAgentsRunRejectsNoAuth(t *testing.T) {
 	t.Parallel()
 	server := newRunServer(&stubTriggerer{})
+	handler := server.requireAPIKey(http.HandlerFunc(server.handleAgentsRun))
 	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
 	rr := httptest.NewRecorder()
-	server.handleAgentsRun(rr, req)
+	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusUnauthorized)
 	}
@@ -621,12 +622,39 @@ func TestHandleAgentsRunRejectsNoAuth(t *testing.T) {
 func TestHandleAgentsRunRejectsWrongToken(t *testing.T) {
 	t.Parallel()
 	server := newRunServer(&stubTriggerer{})
+	handler := server.requireAPIKey(http.HandlerFunc(server.handleAgentsRun))
 	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
 	req.Header.Set("Authorization", "Bearer wrong-key")
 	rr := httptest.NewRecorder()
-	server.handleAgentsRun(rr, req)
+	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestHandleAgentsRunBlocksNonBearerScheme(t *testing.T) {
+	t.Parallel()
+	server := newRunServer(&stubTriggerer{})
+	handler := server.requireAPIKey(http.HandlerFunc(server.handleAgentsRun))
+	tests := []struct {
+		name   string
+		header string
+	}{
+		{"raw key", testAPIKey},
+		{"Basic scheme", "Basic " + testAPIKey},
+		{"Token scheme", "Token " + testAPIKey},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
+			req.Header.Set("Authorization", tc.header)
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+			if rr.Code != http.StatusUnauthorized {
+				t.Fatalf("scheme %q: got %d, want %d", tc.header, rr.Code, http.StatusUnauthorized)
+			}
+		})
 	}
 }
 

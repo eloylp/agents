@@ -104,7 +104,7 @@ func (s *Server) Run(ctx context.Context) error {
 	router := mux.NewRouter()
 	router.HandleFunc(s.cfg.Daemon.HTTP.StatusPath, s.handleStatus).Methods(http.MethodGet)
 	router.HandleFunc(s.cfg.Daemon.HTTP.WebhookPath, s.handleGitHubWebhook).Methods(http.MethodPost)
-	router.HandleFunc(s.cfg.Daemon.HTTP.AgentsRunPath, s.handleAgentsRun).Methods(http.MethodPost)
+	router.Handle(s.cfg.Daemon.HTTP.AgentsRunPath, s.requireAPIKey(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
 
 	// Observability API — gated by the same Bearer token as /agents/run when
 	// daemon.http.api_key is configured; open when no key is set.
@@ -227,11 +227,6 @@ type agentsRunRequest struct {
 func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Daemon.HTTP.APIKey == "" {
 		http.Error(w, "endpoint disabled: no API key configured", http.StatusForbidden)
-		return
-	}
-	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if token == "" || token != s.cfg.Daemon.HTTP.APIKey {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	if s.triggerer == nil {
