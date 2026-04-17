@@ -252,12 +252,15 @@ func (h *SSEHub) Subscribe() chan []byte {
 	return ch
 }
 
-// Unsubscribe removes ch from the hub and closes it.
+// Unsubscribe removes ch from the hub. The channel is intentionally NOT closed
+// here: Publish snapshots the subscriber list under the mutex and then sends
+// after releasing it, so closing a channel that a concurrent Publish already
+// snapshotted would cause a send-on-closed-channel panic. Readers (serveSSE)
+// exit via context cancellation rather than channel closure.
 func (h *SSEHub) Unsubscribe(ch chan []byte) {
 	h.mu.Lock()
 	delete(h.subs, ch)
 	h.mu.Unlock()
-	close(ch)
 }
 
 // Publish sends msg to every subscriber. Slow subscribers that cannot receive

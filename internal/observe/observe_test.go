@@ -1,6 +1,12 @@
 package observe_test
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -169,4 +175,128 @@ func TestSSEHubSlowSubscriberDropsOldest(t *testing.T) {
 	if string(msg) != "second" {
 		t.Fatalf("want 'second' (oldest dropped), got %q", string(msg))
 	}
+}
+
+// TestSSEHubPublishUnsubscribeRace verifies that concurrent Publish and
+// Unsubscribe calls do not panic. Previously Unsubscribe closed the channel
+// while a concurrent Publish (which had already snapshotted the channel list)
+// could still send to it, causing a send-on-closed-channel panic.
+func TestSSEHubPublishUnsubscribeRace(t *testing.T) {
+	t.Parallel()
+	// Use a large buffer so Publish can write even after the reader is gone.
+	h := observe.NewSSEHub(64)
+
+	const goroutines = 50
+	var wg sync.WaitGroup
+	for range goroutines {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			ch := h.Subscribe()
+			// Race: publish (which snapshots the list) concurrently with unsubscribe.
+			h.Publish([]byte("msg"))
+			h.Unsubscribe(ch)
+		}()
+		go func() {
+			defer wg.Done()
+			h.Publish([]byte("concurrent"))
+		}()
+	}
+	wg.Wait()
+}
+
+// ─── WatchMemoryDir tests ──────────────────────────────────────────────────
+
+func TestWatchMemoryDirPublishesOnChange(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "coder")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	filePath := filepath.Join(agentDir, "owner_repo.md")
+	if err := os.WriteFile(filePath, []byte("initial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	hub := observe.NewSSEHub(8)
+	ch := hub.Subscribe()
+	defer hub.Unsubscribe(ch)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Use a very short interval so the test finishes quickly.
+	go observe.WatchMemoryDir(ctx, dir, 25*time.Millisecond, hub)
+
+	// Wait for the baseline scan to complete (one interval).
+	time.Sleep(60 * time.Millisecond)
+
+	// Advance mtime by writing again. On modern filesystems (tmpfs, ext4) the
+	// new mtime will differ from the initial write even within the same second.
+	time.Sleep(5 * time.Millisecond)
+	if err := os.WriteFile(filePath, []byte("updated"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Expect a change notification within a reasonable deadline.
+	select {
+	case raw := <-ch:
+		var ev observe.MemoryChangeEvent
+		if err := json.Unmarshal(extractSSEData(raw), &ev); err != nil {
+			t.Fatalf("could not unmarshal SSE payload: %v (raw: %s)", err, raw)
+		}
+		if ev.Agent != "coder" {
+			t.Errorf("agent: want %q, got %q", "coder", ev.Agent)
+		}
+		if ev.Repo != "owner_repo" {
+			t.Errorf("repo: want %q, got %q", "owner_repo", ev.Repo)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for memory change SSE event")
+	}
+}
+
+func TestWatchMemoryDirNoPublishOnFirstScan(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "coder")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "repo.md"), []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	hub := observe.NewSSEHub(8)
+	ch := hub.Subscribe()
+	defer hub.Unsubscribe(ch)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go observe.WatchMemoryDir(ctx, dir, 25*time.Millisecond, hub)
+
+	// After two full scan cycles the initial file must not have produced an event.
+	time.Sleep(80 * time.Millisecond)
+
+	select {
+	case msg := <-ch:
+		t.Fatalf("unexpected SSE event on first scan: %s", msg)
+	default:
+	}
+}
+
+// extractSSEData strips the "data: " prefix and trailing "\n\n" added by
+// sseData so the payload can be unmarshalled as JSON.
+func extractSSEData(raw []byte) []byte {
+	const prefix = "data: "
+	s := string(raw)
+	if len(s) > len(prefix) && s[:len(prefix)] == prefix {
+		s = s[len(prefix):]
+	}
+	s = strings.TrimRight(s, "\n")
+	return []byte(s)
 }

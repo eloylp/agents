@@ -138,16 +138,19 @@ func (s *Server) buildHandler() http.Handler {
 	}
 
 	// Static UI: served from the embedded dist/ tree when a UI FS is provided.
+	// The UI is read-only and carries no secrets; auth is the reverse proxy's
+	// responsibility (per issue #151 non-goals). Only the /api/* endpoints
+	// enforce the Bearer token when daemon.http.api_key is set.
 	if s.uiFS != nil {
 		sub, err := fs.Sub(s.uiFS, "dist")
 		if err == nil {
 			fileServer := http.StripPrefix("/ui/", http.FileServer(http.FS(sub)))
-			router.PathPrefix("/ui/").Handler(s.requireAPIKey(fileServer))
+			router.PathPrefix("/ui/").Handler(fileServer)
 			// Redirect the slashless entrypoint /ui → /ui/ so operators and
 			// reverse proxies that normalise trailing slashes get the dashboard.
-			router.Handle("/ui", s.requireAPIKey(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			router.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) {
 				http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
-			}))).Methods(http.MethodGet)
+			}).Methods(http.MethodGet)
 		}
 	}
 

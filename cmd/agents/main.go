@@ -124,6 +124,7 @@ func run() error {
 	group, groupCtx := errgroup.WithContext(ctx)
 	deliveryStore.Start(groupCtx)
 	engine.StartDispatchDedup(groupCtx)
+	go observe.WatchMemoryDir(groupCtx, cfg.Daemon.MemoryDir, 0, obs.MemorySSE)
 	group.Go(func() error { return processor.Run(groupCtx) })
 	group.Go(func() error { return scheduler.Run(groupCtx) })
 	group.Go(func() error { return server.Run(groupCtx) })
