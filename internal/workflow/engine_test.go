@@ -597,44 +597,98 @@ func TestFanOutDoesNotDedupZeroNumberEvents(t *testing.T) {
 	}
 }
 
-// TestHandleDispatchEventDedupWithinTTL verifies that a second agent.dispatch
-// event for the same (target_agent, repo, number) within the dedup window is
-// suppressed, just like duplicate webhook events on the fanOut path.
-func TestHandleDispatchEventDedupWithinTTL(t *testing.T) {
+// TestDispatchEventRunsAfterEnqueue is an end-to-end regression test for the
+// dispatch self-suppression bug: ProcessDispatches commits the dedup claim
+// before enqueuing, so handleDispatchEvent must NOT re-claim or the agent is
+// silently dropped. This test goes through the real enqueue→dequeue path.
+func TestDispatchEventRunsAfterEnqueue(t *testing.T) {
 	t.Parallel()
-	e, runner, _ := newTestEngineWithDedup(func(c *config.Config) {
-		// Give pr-reviewer allow_dispatch so it can be a dispatch target.
+	e, runner, q := newTestEngineWithDedup(func(c *config.Config) {
 		c.Agents[0].AllowDispatch = true
+		c.Agents = append(c.Agents, config.AgentDef{
+			Name:          "coder",
+			Backend:       "claude",
+			Prompt:        "Write code.",
+			AllowDispatch: true,
+			CanDispatch:   []string{"pr-reviewer"},
+		})
 	})
 
-	dispatchEv := Event{
-		ID:     "root-xyz",
+	originator := config.AgentDef{
+		Name:        "coder",
+		CanDispatch: []string{"pr-reviewer"},
+	}
+	triggerEv := Event{
+		ID:     "root-1",
 		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
-		Kind:   "agent.dispatch",
-		Number: 42,
-		Actor:  "coder",
-		Payload: map[string]any{
-			"target_agent":   "pr-reviewer",
-			"reason":         "ready for review",
-			"root_event_id":  "root-xyz",
-			"dispatch_depth": 1,
-			"invoked_by":     "coder",
-		},
+		Kind:   "issues.labeled",
+		Number: 7,
+		Payload: map[string]any{"label": "ai:code"},
+	}
+	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 7, Reason: "ready"}}
+
+	// ProcessDispatches enqueues the agent.dispatch event and commits its claim.
+	if err := e.Dispatcher().ProcessDispatches(context.Background(), originator, triggerEv, "root-1", 0, reqs); err != nil {
+		t.Fatalf("ProcessDispatches: %v", err)
+	}
+	enqueued := q.popped()
+	if len(enqueued) != 1 {
+		t.Fatalf("expected 1 enqueued event, got %d", len(enqueued))
 	}
 
-	// First dispatch: claim taken, run executes.
-	if err := e.HandleEvent(context.Background(), dispatchEv); err != nil {
-		t.Fatalf("first dispatch: %v", err)
+	// HandleEvent processes the dequeued agent.dispatch event.
+	// Before the fix this returned nil but suppressed the run (self-suppression).
+	if err := e.HandleEvent(context.Background(), enqueued[0]); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
 	}
-	// Second identical dispatch within TTL: claim is already committed.
-	if err := e.HandleEvent(context.Background(), dispatchEv); err != nil {
-		t.Fatalf("second dispatch: %v", err)
-	}
-
 	if got := runner.callCount(); got != 1 {
-		t.Errorf("expected exactly 1 dispatch run within TTL, got %d", got)
+		t.Errorf("expected 1 agent run after dequeue, got %d (dispatch self-suppression regression)", got)
 	}
-	if stats := e.DispatchStats(); stats.RunsDeduped != 1 {
-		t.Errorf("expected RunsDeduped=1, got %d", stats.RunsDeduped)
+}
+
+// TestDispatchDedupPreventsDoubleEnqueue verifies that the enqueue-side dedup
+// in ProcessDispatches prevents a second identical dispatch from being enqueued
+// within the TTL window. The dedup gate belongs at enqueue, not at execution.
+func TestDispatchDedupPreventsDoubleEnqueue(t *testing.T) {
+	t.Parallel()
+	e, _, q := newTestEngineWithDedup(func(c *config.Config) {
+		c.Agents[0].AllowDispatch = true
+		c.Agents = append(c.Agents, config.AgentDef{
+			Name:          "coder",
+			Backend:       "claude",
+			Prompt:        "Write code.",
+			AllowDispatch: true,
+			CanDispatch:   []string{"pr-reviewer"},
+		})
+	})
+
+	originator := config.AgentDef{
+		Name:        "coder",
+		CanDispatch: []string{"pr-reviewer"},
+	}
+	triggerEv := Event{
+		ID:     "root-2",
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "issues.labeled",
+		Number: 9,
+		Payload: map[string]any{"label": "ai:code"},
+	}
+	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 9, Reason: "first"}}
+
+	// First call enqueues the event.
+	if err := e.Dispatcher().ProcessDispatches(context.Background(), originator, triggerEv, "root-2", 0, reqs); err != nil {
+		t.Fatalf("first ProcessDispatches: %v", err)
+	}
+	// Second identical call within TTL must be suppressed at enqueue time.
+	reqs2 := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 9, Reason: "duplicate"}}
+	if err := e.Dispatcher().ProcessDispatches(context.Background(), originator, triggerEv, "root-2", 0, reqs2); err != nil {
+		t.Fatalf("second ProcessDispatches: %v", err)
+	}
+
+	if got := len(q.popped()); got != 1 {
+		t.Errorf("expected exactly 1 enqueued event (dedup suppressed second), got %d", got)
+	}
+	if stats := e.Dispatcher().Stats(); stats.Deduped != 1 {
+		t.Errorf("expected Deduped=1 from enqueue-side dedup, got %d", stats.Deduped)
 	}
 }

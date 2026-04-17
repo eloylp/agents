@@ -182,21 +182,10 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		return fmt.Errorf("dispatch: target agent %q not found", targetName)
 	}
 
-	// Gate through the dedup store when configured (same lifecycle as fanOut).
-	// Dispatch events always carry a specific item number — we only skip
-	// dedup for number=0 repo-level events (push), which dispatch never produces.
-	if e.dispatcher != nil && ev.Number > 0 {
-		if !e.dispatcher.dedup.TryClaimForDispatch(agent.Name, ev.Repo.FullName, ev.Number, time.Now()) {
-			e.logger.Debug().
-				Str("agent", agent.Name).
-				Str("repo", ev.Repo.FullName).
-				Int("number", ev.Number).
-				Msg("dispatch run skipped: agent already claimed within dedup window")
-			e.runsDeduped.Add(1)
-			return nil
-		}
-	}
-
+	// No dedup check here: ProcessDispatches already claimed and committed the
+	// dedup slot before enqueuing this event. Re-claiming would see the committed
+	// entry and self-suppress every dispatched run. The enqueue-side claim is the
+	// authoritative gate; handleDispatchEvent only executes an already-approved run.
 	e.logger.Info().
 		Str("repo", ev.Repo.FullName).
 		Str("target", targetName).
@@ -204,16 +193,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		Str("invoked_by", ev.Actor).
 		Msg("running dispatched agent")
 
-	if err := e.runAgent(ctx, ev, agent); err != nil {
-		if e.dispatcher != nil && ev.Number > 0 {
-			e.dispatcher.dedup.AbandonClaim(agent.Name, ev.Repo.FullName, ev.Number)
-		}
-		return err
-	}
-	if e.dispatcher != nil && ev.Number > 0 {
-		e.dispatcher.dedup.CommitClaim(agent.Name, ev.Repo.FullName, ev.Number)
-	}
-	return nil
+	return e.runAgent(ctx, ev, agent)
 }
 
 // fanOut runs all agents matched for ev in parallel, capped by e.maxConcurrent.
