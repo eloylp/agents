@@ -134,9 +134,10 @@ func TestLoadRejectsMissingSecret(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsUnknownSkillRef(t *testing.T) {
-	t.Setenv("TEST_SECRET", "s3cret")
-	content := `
+// agentConfigYAML builds a full config YAML with a custom agents block,
+// mirroring minimalYAML but allowing the agents section to be overridden.
+func agentConfigYAML(agentsBlock string) string {
+	return `
 daemon:
   http:
     webhook_secret_env: TEST_SECRET
@@ -149,10 +150,7 @@ skills:
   architect: {prompt: "Focus on architecture."}
 
 agents:
-  - name: reviewer
-    backend: claude
-    skills: [nosuch]
-    prompt: "You review PRs."
+` + agentsBlock + `
 
 repos:
   - name: "owner/repo"
@@ -161,42 +159,52 @@ repos:
       - agent: reviewer
         labels: ["ai:review:reviewer"]
 `
-	_, err := Load(writeConfig(t, content))
-	if err == nil || !strings.Contains(err.Error(), "unknown skill") {
-		t.Fatalf("expected unknown skill error, got %v", err)
-	}
 }
 
-func TestLoadRejectsUnknownBackendRef(t *testing.T) {
+func TestLoadRejectsInvalidAgentConfig(t *testing.T) {
 	t.Setenv("TEST_SECRET", "s3cret")
-	content := `
-daemon:
-  http:
-    webhook_secret_env: TEST_SECRET
-  ai_backends:
-    claude:
-      command: claude
-      args: ["-p"]
-
-skills:
-  architect: {prompt: "Focus on architecture."}
-
-agents:
-  - name: reviewer
+	tests := []struct {
+		name       string
+		agents     string
+		wantErrMsg string
+	}{
+		{
+			name: "unknown skill reference",
+			agents: `  - name: reviewer
+    backend: claude
+    skills: [nosuch]
+    prompt: "You review PRs."`,
+			wantErrMsg: "unknown skill",
+		},
+		{
+			name: "unknown backend reference",
+			agents: `  - name: reviewer
     backend: codex
     skills: [architect]
-    prompt: "You review PRs."
-
-repos:
-  - name: "owner/repo"
-    enabled: true
-    use:
-      - agent: reviewer
-        labels: ["ai:review:reviewer"]
-`
-	_, err := Load(writeConfig(t, content))
-	if err == nil || !strings.Contains(err.Error(), "unknown backend") {
-		t.Fatalf("expected unknown backend error, got %v", err)
+    prompt: "You review PRs."`,
+			wantErrMsg: "unknown backend",
+		},
+		{
+			name: `duplicate agent name`,
+			agents: `  - name: reviewer
+    backend: claude
+    skills: [architect]
+    prompt: "A"
+  - name: reviewer
+    backend: claude
+    skills: [architect]
+    prompt: "B"`,
+			wantErrMsg: "duplicate agent",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Load(writeConfig(t, agentConfigYAML(tc.agents)))
+			if err == nil || !strings.Contains(err.Error(), tc.wantErrMsg) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErrMsg, err)
+			}
+		})
 	}
 }
 
@@ -324,41 +332,6 @@ repos:
 	_, err := Load(writeConfig(t, minimalYAML(repo)))
 	if err == nil || !strings.Contains(err.Error(), "must be enabled") {
 		t.Fatalf("expected must-be-enabled error, got %v", err)
-	}
-}
-
-func TestLoadRejectsDuplicateAgent(t *testing.T) {
-	t.Setenv("TEST_SECRET", "s3cret")
-	content := `
-daemon:
-  http: {webhook_secret_env: TEST_SECRET}
-  ai_backends:
-    claude:
-      command: claude
-
-skills:
-  architect: {prompt: "Focus on architecture."}
-
-agents:
-  - name: reviewer
-    backend: claude
-    skills: [architect]
-    prompt: "A"
-  - name: reviewer
-    backend: claude
-    skills: [architect]
-    prompt: "B"
-
-repos:
-  - name: "owner/repo"
-    enabled: true
-    use:
-      - agent: reviewer
-        labels: ["ai:review:reviewer"]
-`
-	_, err := Load(writeConfig(t, content))
-	if err == nil || !strings.Contains(err.Error(), "duplicate agent") {
-		t.Fatalf("expected duplicate agent error, got %v", err)
 	}
 }
 
