@@ -161,78 +161,71 @@ func TestDispatcherEventIDIsUniquePerHop(t *testing.T) {
 	}
 }
 
-func TestDispatcherDropsSelfDispatch(t *testing.T) {
+func TestDispatcherDropsRequest(t *testing.T) {
 	t.Parallel()
-	q := &fakeQueue{}
-	d := testDispatcher(q)
-
-	// coder trying to dispatch itself
-	reqs := []ai.DispatchRequest{{Agent: "coder", Number: 1, Reason: "self"}}
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, "", reqs)
-
-	if len(q.popped()) != 0 {
-		t.Errorf("self-dispatch should be dropped, got %d events", len(q.popped()))
+	tests := []struct {
+		name         string
+		targetAgent  string
+		currentDepth int
+		modifyCfg    func(*config.DispatchConfig)
+		modifyAgents func(map[string]config.AgentDef)
+		wantStat     func(DispatchStats) int64
+		wantStatName string
+	}{
+		{
+			name:         "self-dispatch",
+			targetAgent:  "coder",
+			wantStat:     func(s DispatchStats) int64 { return s.DroppedSelf },
+			wantStatName: "dropped_self",
+		},
+		{
+			name:         "target not in can_dispatch whitelist",
+			targetAgent:  "sec-reviewer",
+			wantStat:     func(s DispatchStats) int64 { return s.DroppedNoWhitelist },
+			wantStatName: "dropped_no_whitelist",
+		},
+		{
+			name:        "target has allow_dispatch false",
+			targetAgent: "pr-reviewer",
+			modifyAgents: func(agents map[string]config.AgentDef) {
+				a := agents["pr-reviewer"]
+				a.AllowDispatch = false
+				agents["pr-reviewer"] = a
+			},
+			wantStat:     func(s DispatchStats) int64 { return s.DroppedNoOptin },
+			wantStatName: "dropped_no_optin",
+		},
+		{
+			name:         "exceeds max depth",
+			targetAgent:  "pr-reviewer",
+			currentDepth: 2,
+			modifyCfg:    func(cfg *config.DispatchConfig) { cfg.MaxDepth = 2 },
+			wantStat:     func(s DispatchStats) int64 { return s.DroppedDepth },
+			wantStatName: "dropped_depth",
+		},
 	}
-	if d.Stats().DroppedSelf != 1 {
-		t.Errorf("dropped_self: got %d, want 1", d.Stats().DroppedSelf)
-	}
-}
-
-func TestDispatcherDropsNotInWhitelist(t *testing.T) {
-	t.Parallel()
-	q := &fakeQueue{}
-	d := testDispatcher(q)
-
-	// coder is NOT in can_dispatch of sec-reviewer; coder cannot dispatch sec-reviewer
-	reqs := []ai.DispatchRequest{{Agent: "sec-reviewer", Number: 1, Reason: "check security"}}
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, "", reqs)
-
-	if len(q.popped()) != 0 {
-		t.Errorf("not-in-whitelist should be dropped")
-	}
-	if d.Stats().DroppedNoWhitelist != 1 {
-		t.Errorf("dropped_no_whitelist: got %d, want 1", d.Stats().DroppedNoWhitelist)
-	}
-}
-
-func TestDispatcherDropsNoOptin(t *testing.T) {
-	t.Parallel()
-	// Make a custom agent map where pr-reviewer has allow_dispatch: false
-	agents := testAgentMap()
-	prReviewer := agents["pr-reviewer"]
-	prReviewer.AllowDispatch = false
-	agents["pr-reviewer"] = prReviewer
-
-	q := &fakeQueue{}
-	d := NewDispatcher(testDispatchCfg(), agents, NewDispatchDedupStore(300), q, zerolog.Nop())
-
-	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 1, Reason: "review"}}
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, "", reqs)
-
-	if len(q.popped()) != 0 {
-		t.Errorf("no-optin should be dropped")
-	}
-	if d.Stats().DroppedNoOptin != 1 {
-		t.Errorf("dropped_no_optin: got %d, want 1", d.Stats().DroppedNoOptin)
-	}
-}
-
-func TestDispatcherDropsExceedsMaxDepth(t *testing.T) {
-	t.Parallel()
-	q := &fakeQueue{}
-	cfg := testDispatchCfg()
-	cfg.MaxDepth = 2
-	d := NewDispatcher(cfg, testAgentMap(), NewDispatchDedupStore(300), q, zerolog.Nop())
-
-	// currentDepth=2, newDepth=3 > MaxDepth=2 → drop
-	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 1, Reason: "review"}}
-	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 2, "", reqs)
-
-	if len(q.popped()) != 0 {
-		t.Errorf("exceeds-max-depth should be dropped")
-	}
-	if d.Stats().DroppedDepth != 1 {
-		t.Errorf("dropped_depth: got %d, want 1", d.Stats().DroppedDepth)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			q := &fakeQueue{}
+			cfg := testDispatchCfg()
+			if tc.modifyCfg != nil {
+				tc.modifyCfg(&cfg)
+			}
+			agents := testAgentMap()
+			if tc.modifyAgents != nil {
+				tc.modifyAgents(agents)
+			}
+			d := NewDispatcher(cfg, agents, NewDispatchDedupStore(300), q, zerolog.Nop())
+			reqs := []ai.DispatchRequest{{Agent: tc.targetAgent, Number: 1, Reason: "test"}}
+			d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", tc.currentDepth, "", reqs)
+			if len(q.popped()) != 0 {
+				t.Errorf("expected dispatch to be dropped, got %d events", len(q.popped()))
+			}
+			if got := tc.wantStat(d.Stats()); got != 1 {
+				t.Errorf("%s: got %d, want 1", tc.wantStatName, got)
+			}
+		})
 	}
 }
 
