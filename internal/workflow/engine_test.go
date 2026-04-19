@@ -629,7 +629,7 @@ func TestDispatchEventRunsAfterEnqueue(t *testing.T) {
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 7, Reason: "ready"}}
 
 	// ProcessDispatches enqueues the agent.dispatch event and commits its claim.
-	if err := e.Dispatcher().ProcessDispatches(context.Background(), originator, triggerEv, "root-1", 0, reqs); err != nil {
+	if err := e.Dispatcher().ProcessDispatches(context.Background(), originator, triggerEv, "root-1", 0, "", reqs); err != nil {
 		t.Fatalf("ProcessDispatches: %v", err)
 	}
 	enqueued := q.popped()
@@ -677,12 +677,12 @@ func TestDispatchDedupPreventsDoubleEnqueue(t *testing.T) {
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 9, Reason: "first"}}
 
 	// First call enqueues the event.
-	if err := e.Dispatcher().ProcessDispatches(context.Background(), originator, triggerEv, "root-2", 0, reqs); err != nil {
+	if err := e.Dispatcher().ProcessDispatches(context.Background(), originator, triggerEv, "root-2", 0, "", reqs); err != nil {
 		t.Fatalf("first ProcessDispatches: %v", err)
 	}
 	// Second identical call within TTL must be suppressed at enqueue time.
 	reqs2 := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 9, Reason: "duplicate"}}
-	if err := e.Dispatcher().ProcessDispatches(context.Background(), originator, triggerEv, "root-2", 0, reqs2); err != nil {
+	if err := e.Dispatcher().ProcessDispatches(context.Background(), originator, triggerEv, "root-2", 0, "", reqs2); err != nil {
 		t.Fatalf("second ProcessDispatches: %v", err)
 	}
 
