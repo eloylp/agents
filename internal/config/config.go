@@ -588,6 +588,7 @@ func (c *Config) validateDispatchConfig() error {
 }
 
 var validLogLevels = []string{"trace", "debug", "info", "warn", "error", "fatal", "panic", "disabled"}
+var validLogFormats = []string{"json", "text"}
 
 func (c *Config) validateLogConfig() error {
 	if c.Daemon.Log.Level != "" {
@@ -595,11 +596,8 @@ func (c *Config) validateLogConfig() error {
 			return fmt.Errorf("config: invalid log level %q (supported: trace, debug, info, warn, error, fatal, panic, disabled)", c.Daemon.Log.Level)
 		}
 	}
-	switch c.Daemon.Log.Format {
-	case "json", "text", "":
-		// valid
-	default:
-		return fmt.Errorf("config: unknown log format %q (supported: json, text)", c.Daemon.Log.Format)
+	if c.Daemon.Log.Format != "" && !slices.Contains(validLogFormats, c.Daemon.Log.Format) {
+		return fmt.Errorf("config: unknown log format %q (supported: %s)", c.Daemon.Log.Format, strings.Join(validLogFormats, ", "))
 	}
 	return nil
 }
