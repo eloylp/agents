@@ -25,14 +25,13 @@ func NewLogger(cfg config.LogConfig) zerolog.Logger {
 	zerolog.SetGlobalLevel(level)
 
 	var formatErr error
-	var writer io.Writer
+	var writer io.Writer = zerolog.ConsoleWriter{Out: os.Stdout}
 	switch strings.ToLower(strings.TrimSpace(cfg.Format)) {
 	case "json":
 		writer = os.Stdout
 	case "text", "":
-		writer = zerolog.ConsoleWriter{Out: os.Stdout}
+		// default writer already set
 	default:
-		writer = zerolog.ConsoleWriter{Out: os.Stdout}
 		formatErr = fmt.Errorf("unknown log format %q", cfg.Format)
 	}
 
