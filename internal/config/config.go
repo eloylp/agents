@@ -13,6 +13,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -48,14 +49,7 @@ var validEventKinds = map[string]struct{}{
 
 // validEventKindsSorted is a precomputed, sorted list of validEventKinds keys
 // for use in human-readable error messages.
-var validEventKindsSorted = func() []string {
-	ks := make([]string, 0, len(validEventKinds))
-	for k := range validEventKinds {
-		ks = append(ks, k)
-	}
-	slices.Sort(ks)
-	return ks
-}()
+var validEventKindsSorted = slices.Sorted(maps.Keys(validEventKinds))
 
 const (
 	defaultHTTPListenAddr          = ":8080"
