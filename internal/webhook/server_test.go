@@ -680,6 +680,7 @@ func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
 		{"missing agent", `{"repo":"owner/repo"}`},
 		{"missing repo", `{"agent":"coder"}`},
 		{"empty body", `{}`},
+		{"empty agent", `{"agent":""}`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -703,17 +704,6 @@ func TestHandleAgentsRunReturnsNotFoundForUnknownRepo(t *testing.T) {
 	server.handleAgentsRun(rr, req)
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusNotFound)
-	}
-}
-
-func TestHandleAgentsRunReturnsBadRequestForMissingFields(t *testing.T) {
-	t.Parallel()
-	server := newRunServer()
-	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":""}`)
-	rr := httptest.NewRecorder()
-	server.handleAgentsRun(rr, req)
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("got %d, want %d: %s", rr.Code, http.StatusBadRequest, rr.Body.String())
 	}
 }
 
