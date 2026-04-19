@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -765,6 +766,99 @@ func TestHandleAPIEventsSinceFilter(t *testing.T) {
 	}
 }
 
+// ── SSE stream handlers ─────────────────────────────────────────────────────
+
+// TestHandleSSEStreams verifies the three SSE stream handlers
+// (events/stream, traces/stream, memory/stream) using a table-driven approach.
+//
+// Each sub-test:
+//  1. Connects a subscriber (sseCapture) via the handler goroutine.
+//  2. Reads the immediate ": connected\n\n" heartbeat and checks headers.
+//  3. Publishes one message to the hub and verifies it arrives at the client.
+//  4. Cancels the request context to stop the handler cleanly.
+func TestHandleSSEStreams(t *testing.T) {
+	t.Parallel()
+
+	cfg := testCfg(nil)
+	srv, _ := newTestServer(cfg)
+	obs := newTestObserve()
+	srv.WithObserve(obs)
+
+	tests := []struct {
+		name    string
+		handler func(http.ResponseWriter, *http.Request)
+		publish func(msg []byte)
+		msg     string
+	}{
+		{
+			name:    "events/stream",
+			handler: srv.handleAPIEventsStream,
+			publish: obs.EventsSSE.Publish,
+			msg:     `data: {"id":"ev1"}` + "\n\n",
+		},
+		{
+			name:    "traces/stream",
+			handler: srv.handleAPITracesStream,
+			publish: obs.TracesSSE.Publish,
+			msg:     `data: {"span_id":"sp1"}` + "\n\n",
+		},
+		{
+			name:    "memory/stream",
+			handler: srv.handleAPIMemoryStream,
+			publish: obs.MemorySSE.Publish,
+			msg:     `data: {"agent":"coder","repo":"owner_repo"}` + "\n\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			cap := newSSECapture()
+			req := httptest.NewRequest(http.MethodGet, "/api/"+tc.name, nil).WithContext(ctx)
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				tc.handler(cap, req)
+			}()
+
+			// The handler sends ": connected\n\n" before entering the select
+			// loop, so it must arrive before any published message.
+			heartbeat := mustReadSSEMsg(t, cap.writes, 2*time.Second)
+			if heartbeat != ": connected\n\n" {
+				t.Fatalf("want heartbeat %q, got %q", ": connected\n\n", heartbeat)
+			}
+
+			// Verify SSE-required headers were set before the first write.
+			if got := cap.Header().Get("Content-Type"); got != "text/event-stream" {
+				t.Errorf("Content-Type: want %q, got %q", "text/event-stream", got)
+			}
+			if got := cap.Header().Get("Cache-Control"); got != "no-cache" {
+				t.Errorf("Cache-Control: want %q, got %q", "no-cache", got)
+			}
+
+			// Publish a message and confirm the handler fans it out.
+			tc.publish([]byte(tc.msg))
+			got := mustReadSSEMsg(t, cap.writes, 2*time.Second)
+			if got != tc.msg {
+				t.Errorf("published %q but received %q", tc.msg, got)
+			}
+
+			// Cancel the context; the handler must exit promptly.
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Error("handler did not exit after context cancellation")
+			}
+		})
+	}
+}
+
 // ── /api/traces ────────────────────────────────────────────────────────────
 
 func TestHandleAPITracesReturnsStoredSpans(t *testing.T) {
@@ -1120,4 +1214,42 @@ func (p *stubDispatchProvider) DispatchStats() workflow.DispatchStats { return p
 // newTestObserve creates an observe.Store for tests.
 func newTestObserve() *observe.Store {
 	return observe.NewStore()
+}
+
+// sseCapture is a minimal http.ResponseWriter + http.Flusher that forwards
+// each Write call to a buffered channel. This lets test goroutines receive SSE
+// frames without races on a shared bytes.Buffer: the handler goroutine sends,
+// the test goroutine receives.
+type sseCapture struct {
+	header http.Header
+	writes chan []byte
+}
+
+func newSSECapture() *sseCapture {
+	return &sseCapture{
+		header: make(http.Header),
+		writes: make(chan []byte, 32),
+	}
+}
+
+func (c *sseCapture) Header() http.Header { return c.header }
+func (c *sseCapture) WriteHeader(_ int)   {}
+func (c *sseCapture) Write(b []byte) (int, error) {
+	cp := make([]byte, len(b))
+	copy(cp, b)
+	c.writes <- cp
+	return len(b), nil
+}
+func (c *sseCapture) Flush() {} // satisfies http.Flusher
+
+// mustReadSSEMsg drains one message from ch within timeout or fails the test.
+func mustReadSSEMsg(t *testing.T, ch <-chan []byte, timeout time.Duration) string {
+	t.Helper()
+	select {
+	case msg := <-ch:
+		return string(msg)
+	case <-time.After(timeout):
+		t.Fatal("timed out waiting for SSE message")
+		return ""
+	}
 }
