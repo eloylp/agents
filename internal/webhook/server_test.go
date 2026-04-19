@@ -613,6 +613,21 @@ func TestHandleAgentsRunAuthRejections(t *testing.T) {
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
+			name:       "raw key no scheme",
+			authHeader: testAPIKey,
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "Basic scheme",
+			authHeader: "Basic " + testAPIKey,
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "Token scheme",
+			authHeader: "Token " + testAPIKey,
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
 			name:       "no api key configured",
 			mutateCfg:  func(c *config.Config) { c.Daemon.HTTP.APIKey = "" },
 			authHeader: "Bearer something",
