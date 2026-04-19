@@ -659,7 +659,9 @@ func serveSSEWithInterval(w http.ResponseWriter, r *http.Request, hub interface 
 			// SSE spec §9.2: lines beginning with ':' are comments and are
 			// ignored by EventSource. Writing them periodically prevents
 			// intermediate proxies from closing idle connections.
-			_, _ = fmt.Fprint(w, ": heartbeat\n\n")
+			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
+				return
+			}
 			flusher.Flush()
 		case msg, ok := <-ch:
 			if !ok {

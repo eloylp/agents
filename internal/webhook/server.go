@@ -167,12 +167,12 @@ func (s *Server) buildHandler() http.Handler {
 		sub, err := fs.Sub(s.uiFS, "dist")
 		if err == nil {
 			fileServer := http.StripPrefix("/ui/", http.FileServer(http.FS(sub)))
-			router.PathPrefix("/ui/").Handler(fileServer)
+			router.PathPrefix("/ui/").Handler(withTimeout(fileServer))
 			// Redirect the slashless entrypoint /ui → /ui/ so operators and
 			// reverse proxies that normalise trailing slashes get the dashboard.
-			router.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) {
+			router.Handle("/ui", withTimeout(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
-			}).Methods(http.MethodGet)
+			}))).Methods(http.MethodGet)
 		}
 	}
 
@@ -182,7 +182,8 @@ func (s *Server) buildHandler() http.Handler {
 		// cap shorter than the configured LLM inference timeout and break long
 		// completions.
 		router.Handle(s.cfg.Daemon.Proxy.Path, s.proxy).Methods(http.MethodPost)
-		router.HandleFunc("/v1/models", s.proxy.ModelsHandler).Methods(http.MethodGet)
+		// /v1/models is a lightweight stub — wrap it with the standard timeout.
+		router.Handle("/v1/models", withTimeout(http.HandlerFunc(s.proxy.ModelsHandler))).Methods(http.MethodGet)
 		s.logger.Info().Str("path", s.cfg.Daemon.Proxy.Path).Str("upstream", s.cfg.Daemon.Proxy.Upstream.URL).Msg("anthropic proxy enabled")
 	}
 	return router
