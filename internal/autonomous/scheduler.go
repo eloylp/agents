@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -204,10 +205,7 @@ func (s *Scheduler) recordLastRun(name, repo string, at time.Time, status string
 // AgentStatuses returns the current scheduling state for all registered bindings.
 func (s *Scheduler) AgentStatuses() []AgentStatus {
 	s.lastRunsMu.RLock()
-	runs := make(map[string]lastRunRecord, len(s.lastRuns))
-	for k, v := range s.lastRuns {
-		runs[k] = v
-	}
+	runs := maps.Clone(s.lastRuns)
 	s.lastRunsMu.RUnlock()
 
 	entries := s.cron.Entries()
