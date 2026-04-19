@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -739,7 +740,7 @@ func TestVerifySignature(t *testing.T) {
 
 func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
 	t.Parallel()
-	server, dc := newTestServer(testCfg(nil))
+	server, _ := newTestServer(testCfg(nil))
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":7}}`
 
@@ -764,7 +765,6 @@ func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
 	if rrGood.Code != http.StatusAccepted {
 		t.Fatalf("retry with good sig: got %d body=%s", rrGood.Code, rrGood.Body.String())
 	}
-	_ = dc
 }
 
 // TestUISlashlessRedirect verifies that GET /ui (no trailing slash) redirects
