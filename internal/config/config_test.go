@@ -200,34 +200,69 @@ repos:
 	}
 }
 
-func TestLoadRejectsUnknownAgentBinding(t *testing.T) {
+func TestLoadRejectsInvalidRepoConfig(t *testing.T) {
 	t.Setenv("TEST_SECRET", "s3cret")
-	repo := `
+	cases := []struct {
+		name   string
+		repo   string
+		errMsg string
+	}{
+		{
+			name: "unknown agent binding",
+			repo: `
 repos:
   - name: "owner/repo"
     enabled: true
     use:
       - agent: ghost
         labels: ["ai:review:ghost"]
-`
-	_, err := Load(writeConfig(t, minimalYAML(repo)))
-	if err == nil || !strings.Contains(err.Error(), "unknown agent") {
-		t.Fatalf("expected unknown agent error, got %v", err)
-	}
-}
-
-func TestLoadRejectsBindingWithoutTrigger(t *testing.T) {
-	t.Setenv("TEST_SECRET", "s3cret")
-	repo := `
+`,
+			errMsg: "unknown agent",
+		},
+		{
+			name: "binding without trigger",
+			repo: `
 repos:
   - name: "owner/repo"
     enabled: true
     use:
       - agent: reviewer
-`
-	_, err := Load(writeConfig(t, minimalYAML(repo)))
-	if err == nil || !strings.Contains(err.Error(), "no trigger") {
-		t.Fatalf("expected no-trigger error, got %v", err)
+`,
+			errMsg: "no trigger",
+		},
+		{
+			name: "unknown event kind",
+			repo: `
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+      - agent: reviewer
+        events: ["issue_comments.created"]
+`,
+			errMsg: "unknown event kind",
+		},
+		{
+			name: "all repos disabled",
+			repo: `
+repos:
+  - name: "owner/repo"
+    enabled: false
+    use:
+      - agent: reviewer
+        labels: ["ai:review:reviewer"]
+`,
+			errMsg: "must be enabled",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Load(writeConfig(t, minimalYAML(tc.repo)))
+			if err == nil || !strings.Contains(err.Error(), tc.errMsg) {
+				t.Fatalf("expected error containing %q, got %v", tc.errMsg, err)
+			}
+		})
 	}
 }
 
@@ -274,22 +309,6 @@ repos:
 	}
 }
 
-func TestLoadRejectsUnknownEventKind(t *testing.T) {
-	t.Setenv("TEST_SECRET", "s3cret")
-	repo := `
-repos:
-  - name: "owner/repo"
-    enabled: true
-    use:
-      - agent: reviewer
-        events: ["issue_comments.created"]
-`
-	_, err := Load(writeConfig(t, minimalYAML(repo)))
-	if err == nil || !strings.Contains(err.Error(), "unknown event kind") {
-		t.Fatalf("expected unknown-event-kind error, got %v", err)
-	}
-}
-
 func TestLoadAcceptsValidEventKinds(t *testing.T) {
 	t.Setenv("TEST_SECRET", "s3cret")
 	for kind := range validEventKinds {
@@ -311,21 +330,6 @@ repos:
 	}
 }
 
-func TestLoadRejectsAllReposDisabled(t *testing.T) {
-	t.Setenv("TEST_SECRET", "s3cret")
-	repo := `
-repos:
-  - name: "owner/repo"
-    enabled: false
-    use:
-      - agent: reviewer
-        labels: ["ai:review:reviewer"]
-`
-	_, err := Load(writeConfig(t, minimalYAML(repo)))
-	if err == nil || !strings.Contains(err.Error(), "must be enabled") {
-		t.Fatalf("expected must-be-enabled error, got %v", err)
-	}
-}
 
 func TestLoadRejectsDuplicateAgent(t *testing.T) {
 	t.Setenv("TEST_SECRET", "s3cret")
