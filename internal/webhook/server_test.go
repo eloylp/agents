@@ -615,67 +615,61 @@ func TestHandleAgentsRunEnqueuesEvent(t *testing.T) {
 	}
 }
 
-func TestHandleAgentsRunRejectsNoAuth(t *testing.T) {
+func TestHandleAgentsRunAuthRejections(t *testing.T) {
 	t.Parallel()
-	server := newRunServer()
-	handler := server.requireAPIKey(http.HandlerFunc(server.handleAgentsRun))
-	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("got %d, want %d", rr.Code, http.StatusUnauthorized)
-	}
-}
-
-func TestHandleAgentsRunRejectsWrongToken(t *testing.T) {
-	t.Parallel()
-	server := newRunServer()
-	handler := server.requireAPIKey(http.HandlerFunc(server.handleAgentsRun))
-	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
-	req.Header.Set("Authorization", "Bearer wrong-key")
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("got %d, want %d", rr.Code, http.StatusUnauthorized)
-	}
-}
-
-func TestHandleAgentsRunBlocksNonBearerScheme(t *testing.T) {
-	t.Parallel()
-	server := newRunServer()
-	handler := server.requireAPIKey(http.HandlerFunc(server.handleAgentsRun))
-	tests := []struct {
-		name   string
-		header string
+	cases := []struct {
+		name       string
+		mutateCfg  func(*config.Config)
+		authHeader string
+		wantStatus int
 	}{
-		{"raw key", testAPIKey},
-		{"Basic scheme", "Basic " + testAPIKey},
-		{"Token scheme", "Token " + testAPIKey},
+		{
+			name:       "no auth header",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "wrong token",
+			authHeader: "Bearer wrong-key",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "raw key no scheme",
+			authHeader: testAPIKey,
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "Basic scheme",
+			authHeader: "Basic " + testAPIKey,
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "Token scheme",
+			authHeader: "Token " + testAPIKey,
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "no api key configured",
+			mutateCfg:  func(c *config.Config) { c.Daemon.HTTP.APIKey = "" },
+			authHeader: "Bearer something",
+			wantStatus: http.StatusForbidden,
+		},
 	}
-	for _, tc := range tests {
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			cfg := testCfg(tc.mutateCfg)
+			server := NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1), nil, nil, zerolog.Nop())
+			handler := server.requireAPIKey(http.HandlerFunc(server.handleAgentsRun))
 			req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
-			req.Header.Set("Authorization", tc.header)
+			if tc.authHeader != "" {
+				req.Header.Set("Authorization", tc.authHeader)
+			}
 			rr := httptest.NewRecorder()
 			handler.ServeHTTP(rr, req)
-			if rr.Code != http.StatusUnauthorized {
-				t.Fatalf("scheme %q: got %d, want %d", tc.header, rr.Code, http.StatusUnauthorized)
+			if rr.Code != tc.wantStatus {
+				t.Fatalf("got %d, want %d", rr.Code, tc.wantStatus)
 			}
 		})
-	}
-}
-
-func TestHandleAgentsRunReturnsForbiddenWhenNoAPIKeyConfigured(t *testing.T) {
-	t.Parallel()
-	cfg := testCfg(func(c *config.Config) { c.Daemon.HTTP.APIKey = "" })
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1), nil, nil, zerolog.Nop())
-	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
-	req.Header.Set("Authorization", "Bearer something")
-	rr := httptest.NewRecorder()
-	server.handleAgentsRun(rr, req)
-	if rr.Code != http.StatusForbidden {
-		t.Fatalf("got %d, want %d", rr.Code, http.StatusForbidden)
 	}
 }
 
