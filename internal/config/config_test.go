@@ -643,6 +643,7 @@ repos:
 }
 
 func TestDispatchWiringValidationErrors(t *testing.T) {
+	t.Setenv("TEST_SECRET", "s3cret")
 	cases := []struct {
 		name   string
 		agents string
@@ -689,7 +690,7 @@ func TestDispatchWiringValidationErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("TEST_SECRET", "s3cret")
+			t.Parallel()
 			path := writeConfig(t, dispatchYAML(tc.agents))
 			_, err := Load(path)
 			if err == nil {
