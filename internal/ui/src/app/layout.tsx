@@ -13,17 +13,21 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <style>{`
           * { box-sizing: border-box; margin: 0; padding: 0; }
           body {
-            font-family: system-ui, -apple-system, sans-serif;
-            background: #0f172a;
-            color: #e2e8f0;
+            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+            background: #f0f4f8;
+            background-image:
+              linear-gradient(rgba(59,130,246,0.06) 1px, transparent 1px),
+              linear-gradient(90deg, rgba(59,130,246,0.06) 1px, transparent 1px);
+            background-size: 24px 24px;
+            color: #1e293b;
             min-height: 100vh;
           }
-          a { color: #60a5fa; text-decoration: none; }
+          a { color: #2563eb; text-decoration: none; }
           a:hover { text-decoration: underline; }
-          pre { font-family: 'Courier New', monospace; }
+          pre { font-family: inherit; }
           ::-webkit-scrollbar { width: 6px; height: 6px; }
-          ::-webkit-scrollbar-track { background: #1e293b; }
-          ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+          ::-webkit-scrollbar-track { background: #e2e8f0; }
+          ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 3px; }
         `}</style>
       </head>
       <body>

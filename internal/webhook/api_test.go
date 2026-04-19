@@ -98,7 +98,7 @@ func TestHandleAPIAgentsAttachesScheduleForCronBindings(t *testing.T) {
 	provider := &stubStatusProvider{statuses: []AgentStatus{
 		{Name: "worker", Repo: "owner/repo", LastRun: &now, NextRun: next, LastStatus: "ok"},
 	}}
-	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, provider, nil, zerolog.Nop(), nil)
+	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, provider, nil, zerolog.Nop())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
 	rec := httptest.NewRecorder()
@@ -155,7 +155,7 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 		{Name: "worker", Repo: "owner/repo-a", LastRun: &now, NextRun: next1, LastStatus: "ok"},
 		{Name: "worker", Repo: "owner/repo-b", NextRun: next2, LastStatus: "pending"},
 	}}
-	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, provider, nil, zerolog.Nop(), nil)
+	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, provider, nil, zerolog.Nop())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
 	rec := httptest.NewRecorder()
@@ -562,7 +562,7 @@ func TestHandleAPIDispatchesDelegatesToProvider(t *testing.T) {
 		Deduped:        2,
 	}
 	provider := &stubDispatchProvider{stats: want}
-	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, nil, provider, zerolog.Nop(), nil)
+	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, nil, provider, zerolog.Nop())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/dispatches", nil)
 	rec := httptest.NewRecorder()
@@ -777,8 +777,8 @@ func TestHandleAPITracesReturnsStoredSpans(t *testing.T) {
 	srv.WithObserve(obs)
 
 	now := time.Now().UTC()
-	obs.RecordSpan("s1", "root-A", "", "coder", "claude", "owner/repo", "issues.labeled", "", 1, 0, 0, 0, now, now.Add(5*time.Second), "success", "")
-	obs.RecordSpan("s2", "root-A", "", "reviewer", "claude", "owner/repo", "agent.dispatch", "coder", 1, 1, 0, 0, now.Add(time.Second), now.Add(6*time.Second), "success", "")
+	obs.RecordSpan("s1", "root-A", "", "coder", "claude", "owner/repo", "issues.labeled", "", 1, 0, 0, 0, "", now, now.Add(5*time.Second), "success", "")
+	obs.RecordSpan("s2", "root-A", "", "reviewer", "claude", "owner/repo", "agent.dispatch", "coder", 1, 1, 0, 0, "", now.Add(time.Second), now.Add(6*time.Second), "success", "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/traces", nil)
 	rec := httptest.NewRecorder()
@@ -804,8 +804,8 @@ func TestHandleAPITraceByRootEventID(t *testing.T) {
 	srv.WithObserve(obs)
 
 	now := time.Now().UTC()
-	obs.RecordSpan("s1", "root-A", "", "coder", "claude", "r", "issues.labeled", "", 1, 0, 0, 0, now, now.Add(time.Second), "success", "")
-	obs.RecordSpan("s2", "root-B", "", "reviewer", "claude", "r", "push", "", 0, 0, 0, 0, now, now.Add(time.Second), "success", "")
+	obs.RecordSpan("s1", "root-A", "", "coder", "claude", "r", "issues.labeled", "", 1, 0, 0, 0, "", now, now.Add(time.Second), "success", "")
+	obs.RecordSpan("s2", "root-B", "", "reviewer", "claude", "r", "push", "", 0, 0, 0, 0, "", now, now.Add(time.Second), "success", "")
 
 	// Use the full router so mux populates the {root_event_id} variable.
 	router := srv.buildHandler()
@@ -941,7 +941,7 @@ func TestHandleAPIGraphNodeStatusReflectsRuntimeState(t *testing.T) {
 		{Name: "idle-err", LastStatus: "error"},
 	}}
 	dc := workflow.NewDataChannels(1)
-	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, provider, nil, zerolog.Nop(), nil)
+	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, provider, nil, zerolog.Nop())
 	obs := newTestObserve()
 	srv.WithObserve(obs)
 	// "runner" is currently active.
@@ -978,11 +978,11 @@ func TestHandleAPIGraphNodeStatusReflectsRuntimeState(t *testing.T) {
 func TestHandleAPIMemoryServesFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "coder"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "coder", "owner_repo"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	content := "# coder memory\n\nsome notes"
-	if err := os.WriteFile(filepath.Join(dir, "coder", "owner_repo.md"), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "coder", "owner_repo", "MEMORY.md"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

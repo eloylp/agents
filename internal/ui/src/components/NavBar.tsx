@@ -15,16 +15,17 @@ export default function NavBar() {
   const pathname = usePathname()
   return (
     <nav style={{
-      background: '#1e293b',
-      borderBottom: '1px solid #334155',
+      background: '#ffffff',
+      borderBottom: '2px solid #2563eb',
       padding: '0 1.5rem',
       display: 'flex',
       alignItems: 'center',
       gap: '0',
       height: '48px',
+      boxShadow: '0 1px 3px rgba(37,99,235,0.08)',
     }}>
-      <span style={{ fontWeight: 700, fontSize: '0.95rem', color: '#f1f5f9', marginRight: '2rem' }}>
-        agents
+      <span style={{ fontWeight: 700, fontSize: '0.95rem', color: '#1e3a5f', marginRight: '2rem', letterSpacing: '0.05em' }}>
+        Agents
       </span>
       {links.map(({ href, label }) => {
         const active = pathname === href || (href !== '/' && pathname.startsWith(href))
@@ -38,8 +39,8 @@ export default function NavBar() {
               display: 'flex',
               alignItems: 'center',
               fontSize: '0.875rem',
-              color: active ? '#60a5fa' : '#94a3b8',
-              borderBottom: active ? '2px solid #60a5fa' : '2px solid transparent',
+              color: active ? '#2563eb' : '#64748b',
+              borderBottom: active ? '2px solid #2563eb' : '2px solid transparent',
               fontWeight: active ? 600 : 400,
             }}
           >

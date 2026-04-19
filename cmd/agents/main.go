@@ -117,9 +117,10 @@ func run() error {
 	engine.WithTraceRecorder(obs)
 	engine.WithGraphRecorder(obs)
 	engine.WithRunTracker(obs.ActiveRuns)
+	scheduler.WithTraceRecorder(obs)
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
-	server := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, engine, logger, scheduler)
+	server := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, engine, logger)
 	server.WithUI(ui.FS)
 	server.WithObserve(obs)
 	server.WithRuntimeState(obs)

@@ -22,7 +22,7 @@ var labeledKinds = []string{"issues.labeled", "pull_request.labeled"}
 // TraceRecorder is an optional observer that the Engine calls when an agent
 // run completes. Implementations must be safe for concurrent use.
 type TraceRecorder interface {
-	RecordSpan(spanID, rootEventID, parentSpanID, agent, backend, repo, eventKind, invokedBy string, number, dispatchDepth int, queueWaitMs int64, artifactsCount int, startedAt, finishedAt time.Time, status, errMsg string)
+	RecordSpan(spanID, rootEventID, parentSpanID, agent, backend, repo, eventKind, invokedBy string, number, dispatchDepth int, queueWaitMs int64, artifactsCount int, summary string, startedAt, finishedAt time.Time, status, errMsg string)
 }
 
 // RunTracker is an optional observer that the Engine calls when an agent run
@@ -146,7 +146,7 @@ func (e *Engine) HandleEvent(ctx context.Context, ev Event) error {
 	}
 	logBase.Msg("processing event")
 
-	if ev.Kind == "agent.dispatch" {
+	if ev.Kind == "agent.dispatch" || ev.Kind == "agents.run" {
 		return e.handleDispatchEvent(ctx, ev)
 	}
 	return e.fanOut(ctx, ev)
@@ -417,7 +417,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) 
 			agent.Name, backend,
 			ev.Repo.FullName, ev.Kind, invokedBy,
 			ev.Number, dispatchDepth,
-			queueWaitMs, len(resp.Artifacts),
+			queueWaitMs, len(resp.Artifacts), resp.Summary,
 			spanStart, spanEnd,
 			status, errMsg,
 		)

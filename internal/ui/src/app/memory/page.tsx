@@ -65,7 +65,7 @@ export default function MemoryPage() {
   // Build the tree: agent → [repoKey, ...]
   const tree: Record<string, string[]> = {}
   for (const a of agents) {
-    const repos = (a.bindings ?? []).filter(b => b.enabled).map(b => b.repo.replace('/', '_'))
+    const repos = Array.from(new Set((a.bindings ?? []).filter(b => b.enabled).map(b => b.repo.replace('/', '_'))))
     if (repos.length > 0) tree[a.name] = repos
   }
 
@@ -73,7 +73,7 @@ export default function MemoryPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#f1f5f9' }}>Agent Memory</h1>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#1e3a5f' }}>Agent Memory</h1>
           <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: '4px' }}>
             Read-only view of memory_dir · {streaming ? '🟢 watching for changes' : '🔴 disconnected'}
           </p>
@@ -84,11 +84,11 @@ export default function MemoryPage() {
         {/* Tree sidebar */}
         <Card>
           {Object.keys(tree).length === 0 && (
-            <p style={{ color: '#475569', fontSize: '0.8rem' }}>No agents with bindings found.</p>
+            <p style={{ color: '#94a3b8', fontSize: '0.8rem' }}>No agents with bindings found.</p>
           )}
           {Object.entries(tree).map(([agent, repos]) => (
             <div key={agent} style={{ marginBottom: '0.5rem' }}>
-              <div style={{ fontWeight: 600, fontSize: '0.8rem', color: '#94a3b8', padding: '4px 0' }}>{agent}</div>
+              <div style={{ fontWeight: 600, fontSize: '0.8rem', color: '#64748b', padding: '4px 0' }}>{agent}</div>
               {repos.map(r => {
                 const isSelected = selected?.agent === agent && selected?.repoKey === r
                 return (
@@ -118,30 +118,30 @@ export default function MemoryPage() {
 
         {/* File viewer */}
         <Card>
-          {!selected && <p style={{ color: '#475569' }}>Select a memory file to view its contents.</p>}
+          {!selected && <p style={{ color: '#94a3b8' }}>Select a memory file to view its contents.</p>}
           {selected && loading && <p style={{ color: '#64748b' }}>Loading…</p>}
           {selected && !loading && !file && (
-            <p style={{ color: '#94a3b8' }}>Memory file not found. The agent may not have written any memory yet.</p>
+            <p style={{ color: '#64748b' }}>Memory file not found. The agent may not have written any memory yet.</p>
           )}
           {file && (
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                <span style={{ fontFamily: 'monospace', fontSize: '0.8rem', color: '#60a5fa' }}>
-                  {file.agent}/{file.repoKey}.md
+                <span style={{ fontFamily: 'monospace', fontSize: '0.8rem', color: '#2563eb' }}>
+                  {file.agent}/{file.repoKey}/MEMORY.md
                 </span>
                 {file.mtime && (
-                  <span style={{ fontSize: '0.75rem', color: '#475569' }}>
+                  <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
                     last modified: {new Date(file.mtime).toLocaleString()}
                   </span>
                 )}
               </div>
               <pre style={{
-                background: '#0f172a',
+                background: '#f8fafc',
                 borderRadius: '6px',
                 padding: '1rem',
                 fontSize: '0.8rem',
                 lineHeight: '1.6',
-                color: '#cbd5e1',
+                color: '#1e293b',
                 overflowX: 'auto',
                 whiteSpace: 'pre-wrap',
                 wordBreak: 'break-word',

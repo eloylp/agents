@@ -13,7 +13,7 @@ function JsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
     return <span style={{ color: isRedacted ? '#f87171' : '#86efac' }}>{JSON.stringify(value)}</span>
   }
   if (Array.isArray(value)) {
-    if (value.length === 0) return <span style={{ color: '#94a3b8' }}>[]</span>
+    if (value.length === 0) return <span style={{ color: '#64748b' }}>[]</span>
     return (
       <span>
         {'['}
@@ -28,7 +28,7 @@ function JsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
   }
   if (typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>)
-    if (entries.length === 0) return <span style={{ color: '#94a3b8' }}>{'{}'}</span>
+    if (entries.length === 0) return <span style={{ color: '#64748b' }}>{'{}'}</span>
     return (
       <span>
         {'{'}
@@ -46,7 +46,7 @@ function JsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
       </span>
     )
   }
-  return <span style={{ color: '#94a3b8' }}>{JSON.stringify(value)}</span>
+  return <span style={{ color: '#64748b' }}>{JSON.stringify(value)}</span>
 }
 
 export default function ConfigPage() {
@@ -66,13 +66,13 @@ export default function ConfigPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#f1f5f9' }}>Config Inspector</h1>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#1e3a5f' }}>Config Inspector</h1>
           <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: '4px' }}>Effective parsed config · secrets redacted</p>
         </div>
         {config && (
           <button
             onClick={() => setRaw(r => !r)}
-            style={{ background: '#1e293b', border: '1px solid #334155', color: '#94a3b8', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem' }}
+            style={{ background: '#ffffff', border: '1px solid #bfdbfe', color: '#64748b', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem' }}
           >
             {raw ? 'Tree view' : 'Raw JSON'}
           </button>
@@ -85,7 +85,7 @@ export default function ConfigPage() {
       {config && (
         <Card>
           <pre style={{
-            background: '#0f172a',
+            background: '#f8fafc',
             borderRadius: '6px',
             padding: '1rem',
             fontSize: '0.8rem',
@@ -95,7 +95,7 @@ export default function ConfigPage() {
             overflowY: 'auto',
           }}>
             {raw ? (
-              <code style={{ color: '#e2e8f0' }}>{JSON.stringify(config, null, 2)}</code>
+              <code style={{ color: '#1e293b' }}>{JSON.stringify(config, null, 2)}</code>
             ) : (
               <JsonTree value={config} />
             )}

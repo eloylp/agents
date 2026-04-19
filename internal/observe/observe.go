@@ -91,6 +91,7 @@ type Span struct {
 	DispatchDepth  int       `json:"dispatch_depth"`
 	QueueWaitMs    int64     `json:"queue_wait_ms"`   // time from enqueue to run start
 	ArtifactsCount int       `json:"artifacts_count"` // number of artifacts produced
+	Summary        string    `json:"summary,omitempty"` // agent's one-line response summary
 	StartedAt      time.Time `json:"started_at"`
 	FinishedAt     time.Time `json:"finished_at"`
 	DurationMs     int64     `json:"duration_ms"`
@@ -389,7 +390,7 @@ func (s *Store) RecordSpan(
 	spanID, rootEventID, parentSpanID,
 	agent, backend, repo, eventKind, invokedBy string,
 	number, dispatchDepth int,
-	queueWaitMs int64, artifactsCount int,
+	queueWaitMs int64, artifactsCount int, summary string,
 	startedAt, finishedAt time.Time,
 	status, errMsg string,
 ) {
@@ -406,6 +407,7 @@ func (s *Store) RecordSpan(
 		DispatchDepth:  dispatchDepth,
 		QueueWaitMs:    queueWaitMs,
 		ArtifactsCount: artifactsCount,
+		Summary:        summary,
 		StartedAt:      startedAt,
 		FinishedAt:     finishedAt,
 		DurationMs:     finishedAt.Sub(startedAt).Milliseconds(),

@@ -574,7 +574,7 @@ func (s *Server) handleAPIMemory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid memory_dir", http.StatusInternalServerError)
 		return
 	}
-	path := filepath.Join(root, agent, repo+".md")
+	path := filepath.Join(root, agent, repo, "MEMORY.md")
 	if !strings.HasPrefix(path, root+string(filepath.Separator)) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return

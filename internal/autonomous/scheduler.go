@@ -81,6 +81,7 @@ type Scheduler struct {
 	lastRunsMu   sync.RWMutex
 	lastRuns     map[string]lastRunRecord // key: "name\x00repo"
 	dispatcher   *workflow.Dispatcher    // nil when dispatch is not configured
+	traceRec     workflow.TraceRecorder  // nil when tracing is not configured
 }
 
 // WithDispatcher attaches a Dispatcher to the Scheduler so that dispatch
@@ -90,6 +91,12 @@ type Scheduler struct {
 // starting the Scheduler.
 func (s *Scheduler) WithDispatcher(d *workflow.Dispatcher) {
 	s.dispatcher = d
+}
+
+// WithTraceRecorder attaches an optional observer that records a trace span
+// for each autonomous agent run (timing, status, artifact count).
+func (s *Scheduler) WithTraceRecorder(r workflow.TraceRecorder) {
+	s.traceRec = r
 }
 
 // NewScheduler builds a scheduler and registers all cron-triggered bindings
@@ -316,11 +323,32 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 			prompt = "Do not open or create pull requests under any circumstances.\n" + prompt
 		}
 		logger.Info().Msg("running autonomous pass")
+		spanStart := time.Now()
 		resp, err := runner.Run(ctx, ai.Request{
 			Workflow: fmt.Sprintf("autonomous:%s:%s", backend, agent.Name),
 			Repo:     repo,
 			Prompt:   prompt,
 		})
+		spanEnd := time.Now()
+		if s.traceRec != nil {
+			status, errMsg := "success", ""
+			if err != nil {
+				status = "error"
+				errMsg = err.Error()
+			}
+			spanID := workflow.GenEventID()
+			rootEventID := spanID
+			logger.Info().Str("span_id", spanID).Str("status", status).Int64("duration_ms", spanEnd.Sub(spanStart).Milliseconds()).Msg("recording trace span")
+			s.traceRec.RecordSpan(
+				spanID, rootEventID, "",
+				agent.Name, backend,
+				repo, "autonomous", "",
+				0, 0,
+				0, len(resp.Artifacts), resp.Summary,
+				spanStart, spanEnd,
+				status, errMsg,
+			)
+		}
 		if err != nil {
 			return fmt.Errorf("agent run: %w", err)
 		}

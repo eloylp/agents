@@ -18,7 +18,6 @@ import (
 	"github.com/rs/zerolog"
 
 	anthropicproxy "github.com/eloylp/agents/internal/anthropic_proxy"
-	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/workflow"
@@ -45,10 +44,6 @@ type DispatchStatsProvider interface {
 	DispatchStats() workflow.DispatchStats
 }
 
-// AgentTriggerer can run a named autonomous agent on demand.
-type AgentTriggerer interface {
-	TriggerAgent(ctx context.Context, agentName, repo string) error
-}
 
 // RuntimeStateProvider reports whether a named agent currently has an in-flight run.
 // The implementation is optional; passing nil causes all agents to report "idle".
@@ -72,7 +67,6 @@ type Server struct {
 	runtimeState  RuntimeStateProvider // optional; used by /api/agents for live run status
 	dispatchStats DispatchStatsProvider
 	startTime     time.Time
-	triggerer     AgentTriggerer
 	proxy         *anthropicproxy.Handler
 	uiFS          fs.FS          // optional; when set, /ui/ serves these static files
 	observeStore  *observe.Store // optional; when set, enables observability endpoints
@@ -98,7 +92,7 @@ func (s *Server) WithRuntimeState(rsp RuntimeStateProvider) {
 	s.runtimeState = rsp
 }
 
-func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue, provider StatusProvider, dispatchStats DispatchStatsProvider, logger zerolog.Logger, triggerer AgentTriggerer) *Server {
+func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue, provider StatusProvider, dispatchStats DispatchStatsProvider, logger zerolog.Logger) *Server {
 	s := &Server{
 		cfg:           cfg,
 		delivery:      delivery,
@@ -107,7 +101,6 @@ func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue,
 		provider:      provider,
 		dispatchStats: dispatchStats,
 		startTime:     time.Now(),
-		triggerer:     triggerer,
 	}
 	if cfg.Daemon.Proxy.Enabled {
 		up := cfg.Daemon.Proxy.Upstream
@@ -130,6 +123,7 @@ func (s *Server) buildHandler() http.Handler {
 	router.HandleFunc(s.cfg.Daemon.HTTP.StatusPath, s.handleStatus).Methods(http.MethodGet)
 	router.HandleFunc(s.cfg.Daemon.HTTP.WebhookPath, s.handleGitHubWebhook).Methods(http.MethodPost)
 	router.Handle(s.cfg.Daemon.HTTP.AgentsRunPath, s.requireAPIKey(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
+	router.HandleFunc("/api/run", s.handleAgentsRun).Methods(http.MethodPost)
 
 	// Observability API — read-only endpoints served unauthenticated at the
 	// daemon level. The embedded UI makes same-origin fetch/EventSource calls
@@ -283,10 +277,6 @@ func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "endpoint disabled: no API key configured", http.StatusForbidden)
 		return
 	}
-	if s.triggerer == nil {
-		http.Error(w, "no autonomous agents configured", http.StatusNotImplemented)
-		return
-	}
 	var req agentsRunRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, s.cfg.Daemon.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -296,17 +286,38 @@ func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent and repo fields are required", http.StatusBadRequest)
 		return
 	}
-	if err := s.triggerer.TriggerAgent(r.Context(), req.Agent, req.Repo); err != nil {
-		if errors.Is(err, autonomous.ErrDispatchSkipped) {
-			s.logger.Info().Str("agent", req.Agent).Str("repo", req.Repo).Msg("on-demand agent run skipped: dispatch already in progress")
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		s.logger.Error().Err(err).Str("agent", req.Agent).Str("repo", req.Repo).Msg("on-demand agent run failed")
-		http.Error(w, "agent run failed", http.StatusInternalServerError)
+
+	repo, ok := s.cfg.RepoByName(req.Repo)
+	if !ok || !repo.Enabled {
+		http.Error(w, "repo not found or disabled", http.StatusNotFound)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
+
+	ev := workflow.Event{
+		ID:    workflow.GenEventID(),
+		Repo:  workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+		Kind:  "agents.run",
+		Actor: "human",
+		Payload: map[string]any{
+			"target_agent": req.Agent,
+		},
+	}
+
+	if err := s.channels.PushEvent(r.Context(), ev); err != nil {
+		s.logger.Error().Err(err).Str("agent", req.Agent).Str("repo", req.Repo).Msg("failed to enqueue on-demand agent run")
+		http.Error(w, "event queue full", http.StatusServiceUnavailable)
+		return
+	}
+
+	s.logger.Info().Str("agent", req.Agent).Str("repo", req.Repo).Str("event_id", ev.ID).Msg("on-demand agent run queued")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"status":   "queued",
+		"agent":    req.Agent,
+		"repo":     req.Repo,
+		"event_id": ev.ID,
+	})
 }
 
 func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {

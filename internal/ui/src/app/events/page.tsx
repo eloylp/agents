@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import Card from '@/components/Card'
 
 interface Event {
@@ -12,49 +12,74 @@ interface Event {
   payload?: Record<string, unknown>
 }
 
-const kindColor: Record<string, string> = {
-  'issues.labeled': '#1d4ed8',
-  'issues.opened': '#1d4ed8',
-  'pull_request.labeled': '#7c3aed',
-  'pull_request.opened': '#7c3aed',
-  'pull_request.synchronize': '#7c3aed',
-  'issue_comment.created': '#0f766e',
-  'pull_request_review.submitted': '#0f766e',
-  'agent.dispatch': '#92400e',
-  'push': '#166534',
+const kindStyle: Record<string, { bg: string; text: string; border: string }> = {
+  'issues.labeled':     { bg: '#dbeafe', text: '#1e40af', border: '#93c5fd' },
+  'issues.opened':      { bg: '#dbeafe', text: '#1e40af', border: '#93c5fd' },
+  'issues.closed':      { bg: '#e0e7ff', text: '#3730a3', border: '#a5b4fc' },
+  'pull_request.labeled':       { bg: '#ede9fe', text: '#5b21b6', border: '#c4b5fd' },
+  'pull_request.opened':        { bg: '#ede9fe', text: '#5b21b6', border: '#c4b5fd' },
+  'pull_request.synchronize':   { bg: '#ede9fe', text: '#5b21b6', border: '#c4b5fd' },
+  'pull_request.closed':        { bg: '#fae8ff', text: '#86198f', border: '#e9d5ff' },
+  'issue_comment.created':      { bg: '#ccfbf1', text: '#115e59', border: '#99f6e4' },
+  'pull_request_review.submitted': { bg: '#ccfbf1', text: '#115e59', border: '#99f6e4' },
+  'agent.dispatch':     { bg: '#fef3c7', text: '#92400e', border: '#fde68a' },
+  'push':               { bg: '#dcfce7', text: '#166534', border: '#bbf7d0' },
 }
 
+const defaultKind = { bg: '#f1f5f9', text: '#475569', border: '#e2e8f0' }
+
 function EventRow({ event, isNew }: { event: Event; isNew: boolean }) {
-  const color = kindColor[event.kind] ?? '#1e293b'
+  const [expanded, setExpanded] = useState(false)
+  const style = kindStyle[event.kind] ?? defaultKind
+  const payloadStr = JSON.stringify(event.payload ?? {}, null, expanded ? 2 : undefined)
+
   return (
     <div style={{
-      display: 'grid',
-      gridTemplateColumns: '150px 180px 120px 60px 100px 1fr',
-      gap: '0.5rem',
-      padding: '8px 0',
-      borderBottom: '1px solid #1e293b',
-      fontSize: '0.8rem',
-      background: isNew ? 'rgba(96,165,250,0.05)' : 'transparent',
+      borderBottom: '1px solid #e2e8f0',
+      background: isNew ? 'rgba(37,99,235,0.04)' : 'transparent',
       transition: 'background 0.5s',
-      alignItems: 'center',
     }}>
-      <span style={{ color: '#64748b' }}>{new Date(event.at).toLocaleTimeString()}</span>
-      <span style={{
-        background: color,
-        color: '#e2e8f0',
-        padding: '2px 6px',
-        borderRadius: '4px',
-        fontSize: '0.72rem',
-        display: 'inline-block',
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: '140px 200px 140px 60px 100px 1fr',
+        gap: '0.5rem',
+        padding: '8px 0',
+        fontSize: '0.8rem',
+        alignItems: 'center',
       }}>
-        {event.kind}
-      </span>
-      <span style={{ color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.repo}</span>
-      <span style={{ color: '#64748b' }}>{event.number > 0 ? `#${event.number}` : '—'}</span>
-      <span style={{ color: '#475569' }}>{event.actor}</span>
-      <span style={{ color: '#334155', fontFamily: 'monospace', fontSize: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {JSON.stringify(event.payload ?? {})}
-      </span>
+        <span style={{ color: '#475569' }}>{new Date(event.at).toLocaleTimeString()}</span>
+        <span style={{
+          background: style.bg,
+          color: style.text,
+          border: `1px solid ${style.border}`,
+          padding: '2px 8px',
+          borderRadius: '4px',
+          fontSize: '0.72rem',
+          fontWeight: 600,
+          display: 'inline-block',
+          width: 'fit-content',
+        }}>
+          {event.kind}
+        </span>
+        <span style={{ color: '#475569', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.repo}</span>
+        <span style={{ color: '#475569' }}>{event.number > 0 ? `#${event.number}` : '—'}</span>
+        <span style={{ color: '#64748b' }}>{event.actor}</span>
+        <span
+          onClick={() => setExpanded(!expanded)}
+          style={{
+            color: '#475569',
+            fontFamily: 'monospace',
+            fontSize: '0.72rem',
+            cursor: 'pointer',
+            overflow: expanded ? 'visible' : 'hidden',
+            textOverflow: expanded ? 'unset' : 'ellipsis',
+            whiteSpace: expanded ? 'pre-wrap' : 'nowrap',
+          }}
+          title="Click to expand/collapse"
+        >
+          {payloadStr}
+        </span>
+      </div>
     </div>
   )
 }
@@ -100,7 +125,6 @@ export default function EventsPage() {
     !filter || e.kind.includes(filter) || e.repo.includes(filter) || e.actor.includes(filter)
   )
 
-  // Timeline: bucket events into 5-minute windows for the bar chart
   const buckets: Record<string, number> = {}
   const now = Date.now()
   for (const e of events) {
@@ -115,7 +139,7 @@ export default function EventsPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#f1f5f9' }}>Events</h1>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#1e3a5f' }}>Events</h1>
           <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: '4px' }}>
             {filtered.length} event{filtered.length !== 1 ? 's' : ''} · {streaming ? '🟢 live' : '🔴 disconnected'}
           </p>
@@ -123,22 +147,21 @@ export default function EventsPage() {
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           {Object.keys(timeRanges).map(r => (
             <button key={r} onClick={() => setTimeRange(r)} style={{
-              background: timeRange === r ? '#1d4ed8' : '#1e293b',
-              border: '1px solid #334155',
-              color: timeRange === r ? '#bfdbfe' : '#64748b',
+              background: timeRange === r ? '#2563eb' : '#ffffff',
+              border: '1px solid #bfdbfe',
+              color: timeRange === r ? '#ffffff' : '#64748b',
               padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem',
             }}>{r}</button>
           ))}
           <input
-            placeholder="Filter…"
+            placeholder="Filter..."
             value={filter}
             onChange={e => setFilter(e.target.value)}
-            style={{ background: '#1e293b', border: '1px solid #334155', color: '#e2e8f0', padding: '6px 10px', borderRadius: '6px', fontSize: '0.875rem', width: '180px' }}
+            style={{ background: '#ffffff', border: '1px solid #bfdbfe', color: '#1e293b', padding: '6px 10px', borderRadius: '6px', fontSize: '0.875rem', width: '180px' }}
           />
         </div>
       </div>
 
-      {/* Timeline bar chart */}
       <Card title="Event Timeline (5-minute buckets)" style={{ marginBottom: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: '3px', height: '60px' }}>
           {bucketKeys.map(k => (
@@ -148,30 +171,29 @@ export default function EventsPage() {
               minHeight: '2px', borderRadius: '2px 2px 0 0',
             }} />
           ))}
-          {bucketKeys.length === 0 && <p style={{ color: '#475569', fontSize: '0.8rem' }}>No events in window.</p>}
+          {bucketKeys.length === 0 && <p style={{ color: '#94a3b8', fontSize: '0.8rem' }}>No events in window.</p>}
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: '#475569', marginTop: '4px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: '#94a3b8', marginTop: '4px' }}>
           <span>← {timeRange} ago</span>
           <span>now →</span>
         </div>
       </Card>
 
-      {/* Live stream table */}
       <Card title="Event Stream">
         <div style={{
           display: 'grid',
-          gridTemplateColumns: '150px 180px 120px 60px 100px 1fr',
+          gridTemplateColumns: '140px 200px 140px 60px 100px 1fr',
           gap: '0.5rem',
           padding: '4px 0',
-          borderBottom: '1px solid #334155',
+          borderBottom: '2px solid #bfdbfe',
           fontSize: '0.75rem',
-          color: '#64748b',
+          color: '#2563eb',
           fontWeight: 600,
         }}>
-          <span>Time</span><span>Kind</span><span>Repo</span><span>Num</span><span>Actor</span><span>Payload</span>
+          <span>Time</span><span>Kind</span><span>Repo</span><span>#</span><span>Actor</span><span>Payload (click to expand)</span>
         </div>
 
-        {loading && <p style={{ color: '#64748b', padding: '0.5rem 0' }}>Loading…</p>}
+        {loading && <p style={{ color: '#64748b', padding: '0.5rem 0' }}>Loading...</p>}
         {!loading && filtered.length === 0 && <p style={{ color: '#64748b', padding: '0.5rem 0' }}>No events.</p>}
 
         <div style={{ maxHeight: '500px', overflowY: 'auto' }}>
