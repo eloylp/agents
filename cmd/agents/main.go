@@ -76,7 +76,7 @@ func run() error {
 		// would cause PushEvent to silently drop later hops.
 		d := cfg.Daemon.Processor.Dispatch
 		runBuf := 1
-		for i := 0; i < d.MaxDepth; i++ {
+		for range d.MaxDepth {
 			runBuf *= d.MaxFanout
 		}
 		if runBuf < cfg.Daemon.Processor.EventQueueBuffer {
