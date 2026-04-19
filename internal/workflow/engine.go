@@ -182,10 +182,26 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		return fmt.Errorf("dispatch: target agent %q not found", targetName)
 	}
 
-	// No dedup check here: ProcessDispatches already claimed and committed the
-	// dedup slot before enqueuing this event. Re-claiming would see the committed
-	// entry and self-suppress every dispatched run. The enqueue-side claim is the
-	// authoritative gate; handleDispatchEvent only executes an already-approved run.
+	// agents.run events arrive from the HTTP /agents/run endpoint with no prior
+	// dedup claim. Gate them here so two near-simultaneous on-demand requests for
+	// the same (agent, repo) do not launch duplicate runs within the dedup window.
+	//
+	// agent.dispatch events skip this block: ProcessDispatches already claimed and
+	// committed the dedup slot before enqueuing the event. Re-claiming would see
+	// the committed entry and self-suppress every dispatched run. The enqueue-side
+	// claim is the authoritative gate; handleDispatchEvent only executes it.
+	if ev.Kind == "agents.run" && e.dispatcher != nil {
+		if !e.dispatcher.dedup.TryClaimForDispatch(targetName, repo.Name, ev.Number, time.Now()) {
+			e.logger.Info().
+				Str("repo", ev.Repo.FullName).
+				Str("target", targetName).
+				Msg("on-demand run skipped: agent already claimed within dedup window")
+			e.runsDeduped.Add(1)
+			return nil
+		}
+		e.dispatcher.dedup.MarkWebhookRunInFlight(targetName, repo.Name, ev.Number)
+	}
+
 	e.logger.Info().
 		Str("repo", ev.Repo.FullName).
 		Str("target", targetName).
@@ -193,7 +209,17 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		Str("invoked_by", ev.Actor).
 		Msg("running dispatched agent")
 
-	return e.runAgent(ctx, ev, agent)
+	runErr := e.runAgent(ctx, ev, agent)
+
+	// Release the on-demand claim taken above for agents.run.
+	if ev.Kind == "agents.run" && e.dispatcher != nil {
+		if runErr != nil {
+			e.dispatcher.dedup.AbandonWebhookRun(targetName, repo.Name, ev.Number)
+		} else {
+			e.dispatcher.dedup.FinalizeWebhookRun(targetName, repo.Name, ev.Number)
+		}
+	}
+	return runErr
 }
 
 // fanOut runs all agents matched for ev in parallel, capped by e.maxConcurrent.

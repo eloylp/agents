@@ -754,3 +754,44 @@ func TestFanOutDedupSurvivesTTLExpiry(t *testing.T) {
 		t.Errorf("expected RunsDeduped=1, got %d", stats.RunsDeduped)
 	}
 }
+
+// TestAgentsRunDeduplicatesDuplicateRequests is a regression test for the
+// fleet-wide dedup gap on the HTTP /agents/run path. Before the fix, two
+// near-simultaneous agents.run events for the same (agent, repo) both passed
+// handleDispatchEvent and launched duplicate runs because the function skipped
+// dedup unconditionally (valid only for pre-claimed agent.dispatch events).
+func TestAgentsRunDeduplicatesDuplicateRequests(t *testing.T) {
+	t.Parallel()
+	e, runner, _ := newTestEngineWithDedup(nil)
+
+	onDemandEvent := func() Event {
+		return Event{
+			ID:    GenEventID(),
+			Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
+			Kind:  "agents.run",
+			Actor: "human",
+			Payload: map[string]any{
+				"target_agent": "pr-reviewer",
+			},
+		}
+	}
+
+	// First on-demand request — must run the agent.
+	if err := e.HandleEvent(context.Background(), onDemandEvent()); err != nil {
+		t.Fatalf("first HandleEvent: %v", err)
+	}
+	if got := runner.callCount(); got != 1 {
+		t.Fatalf("expected 1 run after first request, got %d", got)
+	}
+
+	// Second identical on-demand request within the dedup window — must be suppressed.
+	if err := e.HandleEvent(context.Background(), onDemandEvent()); err != nil {
+		t.Fatalf("second HandleEvent: %v", err)
+	}
+	if got := runner.callCount(); got != 1 {
+		t.Errorf("expected still 1 run (second suppressed by dedup), got %d", got)
+	}
+	if stats := e.DispatchStats(); stats.RunsDeduped != 1 {
+		t.Errorf("expected RunsDeduped=1, got %d", stats.RunsDeduped)
+	}
+}
