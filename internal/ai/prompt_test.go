@@ -262,16 +262,19 @@ func TestRenderAgentPromptDispatchContextOmittedWhenNotDispatched(t *testing.T) 
 func TestNormalizeTokenSanitizesForFilesystemUse(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		in, want string
+		name, in, want string
 	}{
-		{"Architect", "architect"},
-		{"  Foo Bar  ", "foo bar"},
-		{"../evil", "evil"},
-		{"a/b/c", "a_b_c"},
+		{"lowercase", "Architect", "architect"},
+		{"trim_spaces", "  Foo Bar  ", "foo bar"},
+		{"strip_dotdot", "../evil", "evil"},
+		{"slash_to_underscore", "a/b/c", "a_b_c"},
 	}
 	for _, tt := range tests {
-		if got := ai.NormalizeToken(tt.in); got != tt.want {
-			t.Errorf("NormalizeToken(%q) = %q, want %q", tt.in, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ai.NormalizeToken(tt.in); got != tt.want {
+				t.Errorf("NormalizeToken(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }
