@@ -1312,6 +1312,99 @@ func TestServeSSEDeliversDataMessages(t *testing.T) {
 	}
 }
 
+// TestBuildHandlerSSETimeoutSplit verifies the router-level write-timeout split:
+// SSE stream routes (/api/*/stream) must NOT be wrapped with http.TimeoutHandler,
+// while non-SSE routes ARE wrapped. This is the regression test for issue #173:
+// if a future route registration change accidentally re-wraps an SSE endpoint,
+// the stream will be killed after WriteTimeoutSeconds and this test will fail.
+//
+// Approach: configure WriteTimeoutSeconds=1, connect to /api/events/stream through
+// buildHandler(), sleep past the 1-second timeout boundary, then publish an event
+// and verify the stream is still alive. A TimeoutHandler-wrapped SSE endpoint would
+// have its connection closed at the 1-second mark, causing the final receive to fail.
+func TestBuildHandlerSSETimeoutSplit(t *testing.T) {
+	// Not parallel: this test intentionally sleeps 1.2 s to cross the timeout boundary.
+
+	cfg := testCfg(func(c *config.Config) {
+		c.Daemon.HTTP.WriteTimeoutSeconds = 1 // enable per-handler write timeout
+	})
+	obs := newTestObserve()
+	srv, _ := newTestServer(cfg)
+	srv.WithObserve(obs)
+
+	ts := httptest.NewServer(srv.buildHandler())
+	t.Cleanup(ts.Close)
+
+	// ── SSE route: must survive past the write-timeout boundary ──────────────
+
+	resp, err := http.Get(ts.URL + "/api/events/stream") //nolint:noctx
+	if err != nil {
+		t.Fatalf("connect to /api/events/stream: %v", err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("SSE route Content-Type: want text/event-stream, got %q (TimeoutHandler sends text/plain on timeout)", ct)
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	lineCh := make(chan string, 16)
+	go func() {
+		for scanner.Scan() {
+			lineCh <- scanner.Text()
+		}
+		close(lineCh)
+	}()
+
+	// Wait for the initial ": connected" comment so we know the subscriber is ready.
+	select {
+	case line := <-lineCh:
+		if line != ": connected" {
+			t.Fatalf("SSE: expected ': connected', got %q", line)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for SSE connected comment")
+	}
+
+	// Sleep past the 1-second write timeout. If the SSE route were wrapped with
+	// http.TimeoutHandler, the server would close the connection here.
+	time.Sleep(1200 * time.Millisecond)
+
+	// Publish an event and verify it arrives — proving the stream is still alive.
+	obs.EventsSSE.Publish([]byte("data: post-timeout\n\n"))
+
+	deadline := time.After(500 * time.Millisecond)
+	var lines []string
+receiveLoop:
+	for {
+		select {
+		case line, ok := <-lineCh:
+			if !ok {
+				t.Fatalf("SSE stream was closed after write-timeout boundary; received lines: %v", lines)
+			}
+			lines = append(lines, line)
+			if strings.Contains(strings.Join(lines, "\n"), "post-timeout") {
+				break receiveLoop // stream survived past the write timeout
+			}
+		case <-deadline:
+			t.Fatalf("SSE stream did not deliver event after write-timeout boundary (stream killed by TimeoutHandler?); lines: %v", lines)
+		}
+	}
+
+	// ── Non-SSE route: must respond normally with JSON ────────────────────────
+	r, err := http.Get(ts.URL + "/api/events") //nolint:noctx
+	if err != nil {
+		t.Fatalf("GET /api/events: %v", err)
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("/api/events: want 200, got %d", r.StatusCode)
+	}
+	if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("/api/events Content-Type: want application/json, got %q", ct)
+	}
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────
 
 type stubStatusProvider struct {
