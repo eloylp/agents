@@ -13,19 +13,17 @@ import (
 )
 
 // fakeUpstream returns an httptest.Server that responds with the given status
-// and body. It also captures the last request body and headers for assertions.
+// and body. It also captures the last request body for assertions.
 type fakeUpstream struct {
 	*httptest.Server
-	status  int
-	body    string
-	lastReq *http.Request
+	status   int
+	body     string
 	lastBody []byte
 }
 
 func newFakeUpstream(status int, body string) *fakeUpstream {
 	f := &fakeUpstream{status: status, body: body}
 	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		f.lastReq = r
 		f.lastBody, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
