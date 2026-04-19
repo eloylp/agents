@@ -624,12 +624,13 @@ func TestHandleAgentsRunAuthRejections(t *testing.T) {
 			t.Parallel()
 			cfg := testCfg(tc.mutateCfg)
 			server := NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1), nil, nil, zerolog.Nop())
+			handler := server.requireAPIKey(http.HandlerFunc(server.handleAgentsRun))
 			req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
 			if tc.authHeader != "" {
 				req.Header.Set("Authorization", tc.authHeader)
 			}
 			rr := httptest.NewRecorder()
-			server.handleAgentsRun(rr, req)
+			handler.ServeHTTP(rr, req)
 			if rr.Code != tc.wantStatus {
 				t.Fatalf("got %d, want %d", rr.Code, tc.wantStatus)
 			}
