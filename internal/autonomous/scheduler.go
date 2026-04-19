@@ -301,7 +301,7 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	}
 
 	logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Str("backend", backend).Logger()
-	roster := s.buildRoster(repo, agent.Name)
+	roster := workflow.BuildRoster(s.cfg, repo, agent.Name)
 	// runCompleted is set to true once runner.Run returns successfully. The cron
 	// mark should only be rolled back when the autonomous pass itself fails
 	// (prompt rendering, memory lock, or runner error). A post-run failure such
@@ -395,37 +395,6 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		}
 	}
 	return err
-}
-
-// buildRoster returns the roster of peer agents for the given repo, excluding
-// the current agent.
-func (s *Scheduler) buildRoster(repoName, currentAgentName string) []ai.RosterEntry {
-	repoDef, ok := s.cfg.RepoByName(repoName)
-	if !ok {
-		return nil
-	}
-	seen := make(map[string]struct{})
-	var roster []ai.RosterEntry
-	for _, b := range repoDef.Use {
-		if !b.IsEnabled() || b.Agent == currentAgentName {
-			continue
-		}
-		if _, dup := seen[b.Agent]; dup {
-			continue
-		}
-		agent, ok := s.cfg.AgentByName(b.Agent)
-		if !ok {
-			continue
-		}
-		seen[b.Agent] = struct{}{}
-		roster = append(roster, ai.RosterEntry{
-			Name:          agent.Name,
-			Description:   agent.Description,
-			Skills:        agent.Skills,
-			AllowDispatch: agent.AllowDispatch,
-		})
-	}
-	return roster
 }
 
 func (s *Scheduler) setRunCtx(ctx context.Context) {
