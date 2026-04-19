@@ -608,12 +608,28 @@ func (s *Server) handleAPIMemoryStream(w http.ResponseWriter, r *http.Request) {
 
 // ── SSE helper ─────────────────────────────────────────────────────────────
 
+// defaultSSEHeartbeatInterval is how often serveSSE writes a comment to keep
+// the TCP connection alive through intermediate proxies.
+const defaultSSEHeartbeatInterval = 30 * time.Second
+
 // serveSSE subscribes the current HTTP connection to hub, streams incoming
 // messages, and unsubscribes on client disconnect or context cancellation.
+// A periodic comment heartbeat (": heartbeat\n\n") is written every 30 s to
+// keep the connection alive through proxies that close idle TCP connections
+// (e.g. nginx's proxy_read_timeout).
 func serveSSE(w http.ResponseWriter, r *http.Request, hub interface {
 	Subscribe() chan []byte
 	Unsubscribe(chan []byte)
 }) {
+	serveSSEWithInterval(w, r, hub, defaultSSEHeartbeatInterval)
+}
+
+// serveSSEWithInterval is the testable core of serveSSE; callers that need a
+// different heartbeat period (e.g. tests) use this directly.
+func serveSSEWithInterval(w http.ResponseWriter, r *http.Request, hub interface {
+	Subscribe() chan []byte
+	Unsubscribe(chan []byte)
+}, heartbeatInterval time.Duration) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
@@ -628,14 +644,23 @@ func serveSSE(w http.ResponseWriter, r *http.Request, hub interface {
 	ch := hub.Subscribe()
 	defer hub.Unsubscribe(ch)
 
-	// Send a comment heartbeat immediately so the client knows the stream is live.
+	// Send a comment immediately so the client knows the stream is live.
 	_, _ = fmt.Fprint(w, ": connected\n\n")
 	flusher.Flush()
+
+	heartbeat := time.NewTicker(heartbeatInterval)
+	defer heartbeat.Stop()
 
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-heartbeat.C:
+			// SSE spec §9.2: lines beginning with ':' are comments and are
+			// ignored by EventSource. Writing them periodically prevents
+			// intermediate proxies from closing idle connections.
+			_, _ = fmt.Fprint(w, ": heartbeat\n\n")
+			flusher.Flush()
 		case msg, ok := <-ch:
 			if !ok {
 				return

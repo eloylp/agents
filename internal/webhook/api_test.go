@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -1193,6 +1194,120 @@ func TestHandleAPIMemoryRejectsMultiSegmentTraversal(t *testing.T) {
 		}
 		if rec.Body.String() == "top-secret" {
 			t.Fatalf("agent=%q repo=%q: secret file content was served", tc.agent, tc.repo)
+		}
+	}
+}
+
+// ── SSE ────────────────────────────────────────────────────────────────────
+
+// TestServeSSEHeartbeatSentPeriodically verifies that serveSSE writes periodic
+// ": heartbeat\n\n" SSE comments when no data arrives from the hub. These keep
+// the TCP connection alive through intermediate proxies.
+func TestServeSSEHeartbeatSentPeriodically(t *testing.T) {
+	t.Parallel()
+
+	hub := observe.NewSSEHub(4)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serveSSEWithInterval(w, r, hub, 20*time.Millisecond)
+	}))
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL) //nolint:noctx
+	if err != nil {
+		t.Fatalf("GET SSE stream: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Errorf("Content-Type: want text/event-stream, got %q", ct)
+	}
+
+	// Read lines until we see both the initial connected comment and at least
+	// one periodic heartbeat comment, or give up after a generous deadline.
+	deadline := time.After(500 * time.Millisecond)
+	scanner := bufio.NewScanner(resp.Body)
+	var seenConnected, seenHeartbeat bool
+	lineCh := make(chan string)
+	go func() {
+		for scanner.Scan() {
+			lineCh <- scanner.Text()
+		}
+		close(lineCh)
+	}()
+	for !seenConnected || !seenHeartbeat {
+		select {
+		case line, ok := <-lineCh:
+			if !ok {
+				t.Fatal("SSE stream closed before heartbeat was received")
+			}
+			switch line {
+			case ": connected":
+				seenConnected = true
+			case ": heartbeat":
+				seenHeartbeat = true
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for SSE heartbeat (connected=%v heartbeat=%v)", seenConnected, seenHeartbeat)
+		}
+	}
+}
+
+// TestServeSSEDeliversDataMessages verifies that messages published to the hub
+// are forwarded to SSE subscribers as "data: ...\n\n" frames.
+func TestServeSSEDeliversDataMessages(t *testing.T) {
+	t.Parallel()
+
+	hub := observe.NewSSEHub(4)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serveSSEWithInterval(w, r, hub, time.Hour) // suppress heartbeat during this test
+	}))
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL) //nolint:noctx
+	if err != nil {
+		t.Fatalf("GET SSE stream: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Wait for the initial ": connected\n\n" before publishing so the
+	// subscriber channel is ready.
+	scanner := bufio.NewScanner(resp.Body)
+	lineCh := make(chan string)
+	go func() {
+		for scanner.Scan() {
+			lineCh <- scanner.Text()
+		}
+		close(lineCh)
+	}()
+	select {
+	case line := <-lineCh:
+		if line != ": connected" {
+			t.Fatalf("expected ': connected', got %q", line)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for initial connected comment")
+	}
+
+	// Publish a message and expect to receive it.
+	payload := []byte("data: hello\n\n")
+	hub.Publish(payload)
+
+	deadline := time.After(500 * time.Millisecond)
+	var received []string
+	for {
+		select {
+		case line, ok := <-lineCh:
+			if !ok {
+				t.Fatalf("stream closed before message was received; lines so far: %v", received)
+			}
+			received = append(received, line)
+			if strings.Contains(strings.Join(received, "\n"), "data: hello") {
+				return // success
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for data message; lines so far: %v", received)
 		}
 	}
 }
