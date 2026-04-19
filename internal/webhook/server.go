@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"strings"
 	"time"
@@ -15,9 +17,9 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
 
-	"github.com/eloylp/agents/internal/anthropic_proxy"
-	"github.com/eloylp/agents/internal/autonomous"
+	anthropicproxy "github.com/eloylp/agents/internal/anthropic_proxy"
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -42,9 +44,11 @@ type DispatchStatsProvider interface {
 	DispatchStats() workflow.DispatchStats
 }
 
-// AgentTriggerer can run a named autonomous agent on demand.
-type AgentTriggerer interface {
-	TriggerAgent(ctx context.Context, agentName, repo string) error
+
+// RuntimeStateProvider reports whether a named agent currently has an in-flight run.
+// The implementation is optional; passing nil causes all agents to report "idle".
+type RuntimeStateProvider interface {
+	IsRunning(agentName string) bool
 }
 
 // EventQueue accepts events for async processing and reports queue depth.
@@ -60,13 +64,35 @@ type Server struct {
 	logger        zerolog.Logger
 	channels      EventQueue
 	provider      StatusProvider
+	runtimeState  RuntimeStateProvider // optional; used by /api/agents for live run status
 	dispatchStats DispatchStatsProvider
 	startTime     time.Time
-	triggerer     AgentTriggerer
 	proxy         *anthropicproxy.Handler
+	uiFS          fs.FS          // optional; when set, /ui/ serves these static files
+	observeStore  *observe.Store // optional; when set, enables observability endpoints
 }
 
-func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue, provider StatusProvider, dispatchStats DispatchStatsProvider, logger zerolog.Logger, triggerer AgentTriggerer) *Server {
+// WithUI attaches an fs.FS containing the pre-built static UI assets to the
+// server. When set, the daemon serves the files at /ui/. Callers that do not
+// need the UI (tests, --run-agent mode) can skip this call.
+func (s *Server) WithUI(uiFS fs.FS) {
+	s.uiFS = uiFS
+}
+
+// WithObserve attaches the observability store. When set, the server registers
+// the full suite of /api/events, /api/traces, /api/graph, and /api/memory
+// endpoints. Callers that do not need the UI can skip this call.
+func (s *Server) WithObserve(store *observe.Store) {
+	s.observeStore = store
+}
+
+// WithRuntimeState attaches an optional runtime-state provider used by
+// /api/agents to report which agents are currently running.
+func (s *Server) WithRuntimeState(rsp RuntimeStateProvider) {
+	s.runtimeState = rsp
+}
+
+func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue, provider StatusProvider, dispatchStats DispatchStatsProvider, logger zerolog.Logger) *Server {
 	s := &Server{
 		cfg:           cfg,
 		delivery:      delivery,
@@ -75,7 +101,6 @@ func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue,
 		provider:      provider,
 		dispatchStats: dispatchStats,
 		startTime:     time.Now(),
-		triggerer:     triggerer,
 	}
 	if cfg.Daemon.Proxy.Enabled {
 		up := cfg.Daemon.Proxy.Upstream
@@ -90,16 +115,65 @@ func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue,
 	return s
 }
 
-func (s *Server) Run(ctx context.Context) error {
+// buildHandler constructs the HTTP router for the server and returns it as
+// an http.Handler. It is separated from Run so tests can exercise routing
+// without starting a real TCP listener.
+func (s *Server) buildHandler() http.Handler {
 	router := mux.NewRouter()
 	router.HandleFunc(s.cfg.Daemon.HTTP.StatusPath, s.handleStatus).Methods(http.MethodGet)
 	router.HandleFunc(s.cfg.Daemon.HTTP.WebhookPath, s.handleGitHubWebhook).Methods(http.MethodPost)
-	router.HandleFunc(s.cfg.Daemon.HTTP.AgentsRunPath, s.handleAgentsRun).Methods(http.MethodPost)
+	router.Handle(s.cfg.Daemon.HTTP.AgentsRunPath, s.requireAPIKey(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
+	router.HandleFunc("/api/run", s.handleAgentsRun).Methods(http.MethodPost)
+
+	// Observability API — read-only endpoints served unauthenticated at the
+	// daemon level. The embedded UI makes same-origin fetch/EventSource calls
+	// that cannot attach a Bearer token (EventSource in particular has no
+	// header API), so daemon-level auth would break the dashboard whenever
+	// api_key is set. Access control for these endpoints is the reverse
+	// proxy's responsibility, consistent with the original issue design.
+	// The mutation endpoint (/agents/run) retains its Bearer-token gate.
+	router.HandleFunc("/api/agents", s.handleAPIAgents).Methods(http.MethodGet)
+	router.HandleFunc("/api/config", s.handleAPIConfig).Methods(http.MethodGet)
+	router.HandleFunc("/api/dispatches", s.handleAPIDispatches).Methods(http.MethodGet)
+
+	// Extended observability endpoints — only registered when an observe.Store
+	// has been attached via WithObserve.
+	if s.observeStore != nil {
+		router.HandleFunc("/api/events", s.handleAPIEvents).Methods(http.MethodGet)
+		router.HandleFunc("/api/events/stream", s.handleAPIEventsStream)
+		router.HandleFunc("/api/traces", s.handleAPITraces).Methods(http.MethodGet)
+		router.HandleFunc("/api/traces/stream", s.handleAPITracesStream)
+		router.HandleFunc("/api/traces/{root_event_id}", s.handleAPITrace).Methods(http.MethodGet)
+		router.HandleFunc("/api/graph", s.handleAPIGraph).Methods(http.MethodGet)
+		router.HandleFunc("/api/memory/{agent}/{repo}", s.handleAPIMemory).Methods(http.MethodGet)
+		router.HandleFunc("/api/memory/stream", s.handleAPIMemoryStream)
+	}
+
+	// Static UI: served from the embedded dist/ tree when a UI FS is provided.
+	// Unauthenticated — same reasoning as the /api/* routes above.
+	if s.uiFS != nil {
+		sub, err := fs.Sub(s.uiFS, "dist")
+		if err == nil {
+			fileServer := http.StripPrefix("/ui/", http.FileServer(http.FS(sub)))
+			router.PathPrefix("/ui/").Handler(fileServer)
+			// Redirect the slashless entrypoint /ui → /ui/ so operators and
+			// reverse proxies that normalise trailing slashes get the dashboard.
+			router.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
+			}).Methods(http.MethodGet)
+		}
+	}
+
 	if s.proxy != nil {
 		router.Handle(s.cfg.Daemon.Proxy.Path, s.proxy).Methods(http.MethodPost)
 		router.HandleFunc("/v1/models", s.proxy.ModelsHandler).Methods(http.MethodGet)
 		s.logger.Info().Str("path", s.cfg.Daemon.Proxy.Path).Str("upstream", s.cfg.Daemon.Proxy.Upstream.URL).Msg("anthropic proxy enabled")
 	}
+	return router
+}
+
+func (s *Server) Run(ctx context.Context) error {
+	router := s.buildHandler()
 
 	srv := &http.Server{
 		Addr:         s.cfg.Daemon.HTTP.ListenAddr,
@@ -129,6 +203,29 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 	return <-errCh
+}
+
+// requireAPIKey is HTTP middleware that enforces Bearer-token authentication
+// when daemon.http.api_key is configured. When no API key is set the request
+// passes through unauthenticated, keeping the observability endpoints open for
+// operators that rely solely on network-level access control.
+func (s *Server) requireAPIKey(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.Daemon.HTTP.APIKey != "" {
+			authHeader := r.Header.Get("Authorization")
+			const prefix = "Bearer "
+			if !strings.HasPrefix(authHeader, prefix) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			token := authHeader[len(prefix):]
+			if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Daemon.HTTP.APIKey)) != 1 {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
@@ -180,15 +277,6 @@ func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "endpoint disabled: no API key configured", http.StatusForbidden)
 		return
 	}
-	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if token == "" || token != s.cfg.Daemon.HTTP.APIKey {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	if s.triggerer == nil {
-		http.Error(w, "no autonomous agents configured", http.StatusNotImplemented)
-		return
-	}
 	var req agentsRunRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, s.cfg.Daemon.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -198,17 +286,38 @@ func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent and repo fields are required", http.StatusBadRequest)
 		return
 	}
-	if err := s.triggerer.TriggerAgent(r.Context(), req.Agent, req.Repo); err != nil {
-		if errors.Is(err, autonomous.ErrDispatchSkipped) {
-			s.logger.Info().Str("agent", req.Agent).Str("repo", req.Repo).Msg("on-demand agent run skipped: dispatch already in progress")
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		s.logger.Error().Err(err).Str("agent", req.Agent).Str("repo", req.Repo).Msg("on-demand agent run failed")
-		http.Error(w, "agent run failed", http.StatusInternalServerError)
+
+	repo, ok := s.cfg.RepoByName(req.Repo)
+	if !ok || !repo.Enabled {
+		http.Error(w, "repo not found or disabled", http.StatusNotFound)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
+
+	ev := workflow.Event{
+		ID:    workflow.GenEventID(),
+		Repo:  workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+		Kind:  "agents.run",
+		Actor: "human",
+		Payload: map[string]any{
+			"target_agent": req.Agent,
+		},
+	}
+
+	if err := s.channels.PushEvent(r.Context(), ev); err != nil {
+		s.logger.Error().Err(err).Str("agent", req.Agent).Str("repo", req.Repo).Msg("failed to enqueue on-demand agent run")
+		http.Error(w, "event queue full", http.StatusServiceUnavailable)
+		return
+	}
+
+	s.logger.Info().Str("agent", req.Agent).Str("repo", req.Repo).Str("event_id", ev.ID).Msg("on-demand agent run queued")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"status":   "queued",
+		"agent":    req.Agent,
+		"repo":     req.Repo,
+		"event_id": ev.ID,
+	})
 }
 
 func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {

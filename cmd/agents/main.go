@@ -18,7 +18,9 @@ import (
 	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/logging"
+	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/setup"
+	"github.com/eloylp/agents/internal/ui"
 	"github.com/eloylp/agents/internal/webhook"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -107,12 +109,26 @@ func run() error {
 	shutdown := time.Duration(cfg.Daemon.HTTP.ShutdownTimeoutSeconds) * time.Second
 	workers := cfg.Daemon.Processor.MaxConcurrentAgents
 	processor := workflow.NewProcessor(dataChannels, engine, workers, shutdown, logger)
+
+	// Wire the observability store: records events, spans, dispatch graph, and
+	// active-run state for the fleet dashboard.
+	obs := observe.NewStore()
+	processor.WithEventRecorder(obs)
+	engine.WithTraceRecorder(obs)
+	engine.WithGraphRecorder(obs)
+	engine.WithRunTracker(obs.ActiveRuns)
+	scheduler.WithTraceRecorder(obs)
+
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
-	server := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, engine, logger, scheduler)
+	server := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, engine, logger)
+	server.WithUI(ui.FS)
+	server.WithObserve(obs)
+	server.WithRuntimeState(obs)
 
 	group, groupCtx := errgroup.WithContext(ctx)
 	deliveryStore.Start(groupCtx)
 	engine.StartDispatchDedup(groupCtx)
+	go observe.WatchMemoryDir(groupCtx, cfg.Daemon.MemoryDir, 0, obs.MemorySSE)
 	group.Go(func() error { return processor.Run(groupCtx) })
 	group.Go(func() error { return scheduler.Run(groupCtx) })
 	group.Go(func() error { return server.Run(groupCtx) })

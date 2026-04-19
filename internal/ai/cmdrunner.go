@@ -112,14 +112,27 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 		logger.Error().Msgf("%s command returned no output", r.backendName)
 		return Response{}, fmt.Errorf("parse %s response: empty response (no output)", r.backendName)
 	}
-	jsonBytes, err := extractJSON(stdout.Bytes())
-	if err != nil {
-		logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s response", r.backendName)
-		return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
-	}
-	if err := json.Unmarshal(jsonBytes, &response); err != nil {
-		logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s response", r.backendName)
-		return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
+
+	// When the CLI uses --output-format json, stdout is a single JSON
+	// envelope with a structured_output field containing the schema-
+	// constrained response. Try that path first.
+	if parsed, ok := extractStructuredOutput(stdout.Bytes()); ok {
+		if err := json.Unmarshal(parsed, &response); err != nil {
+			logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s structured_output", r.backendName)
+			return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
+		}
+	} else {
+		// Fallback: find the last top-level JSON object in raw stdout
+		// (legacy path for CLIs without structured output).
+		jsonBytes, err := extractJSON(stdout.Bytes())
+		if err != nil {
+			logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s response", r.backendName)
+			return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
+		}
+		if err := json.Unmarshal(jsonBytes, &response); err != nil {
+			logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s response", r.backendName)
+			return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
+		}
 	}
 	if response.Summary == "" && len(response.Artifacts) == 0 && len(response.Dispatch) == 0 {
 		logger.Error().Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("%s response is empty (no summary, artifacts, or dispatch)", r.backendName)
@@ -195,6 +208,28 @@ func buildCommandEnv(req Request, backendEnv map[string]string) []string {
 		env = append(env, k+"="+v)
 	}
 	return env
+}
+
+// extractStructuredOutput checks whether data is a CLI envelope
+// ({"type":"result",...,"structured_output":{...}}) and returns the
+// structured_output value as raw JSON bytes. Returns (nil, false) if the
+// envelope is absent or structured_output is missing/null.
+func extractStructuredOutput(data []byte) (json.RawMessage, bool) {
+	var envelope struct {
+		Type             string          `json:"type"`
+		StructuredOutput json.RawMessage `json:"structured_output"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return nil, false
+	}
+	if envelope.Type != "result" || len(envelope.StructuredOutput) == 0 {
+		return nil, false
+	}
+	// Reject JSON null.
+	if string(envelope.StructuredOutput) == "null" {
+		return nil, false
+	}
+	return envelope.StructuredOutput, true
 }
 
 // extractJSON finds the last top-level JSON object in data.

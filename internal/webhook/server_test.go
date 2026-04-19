@@ -5,17 +5,16 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
-	"fmt"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/rs/zerolog"
 
-	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -54,7 +53,7 @@ func signatureForTests(body []byte, secret string) string {
 
 func newTestServer(cfg *config.Config) (*Server, *workflow.DataChannels) {
 	dc := workflow.NewDataChannels(1)
-	return NewServer(cfg, NewDeliveryStore(time.Hour), dc, nil, nil, zerolog.Nop(), nil), dc
+	return NewServer(cfg, NewDeliveryStore(time.Hour), dc, nil, nil, zerolog.Nop()), dc
 }
 
 // webhookRequest builds a signed POST request to /webhooks/github.
@@ -542,7 +541,7 @@ func TestHandleWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("preload event queue: %v", err)
 	}
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dc, nil, nil, zerolog.Nop(), nil)
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), dc, nil, nil, zerolog.Nop())
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":2}}`
 	rr := httptest.NewRecorder()
@@ -562,23 +561,9 @@ func TestHandleWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) {
 
 // ─── /agents/run endpoint tests ───────────────────────────────────────────────
 
-type stubTriggerer struct {
-	called    bool
-	agentName string
-	repo      string
-	err       error
-}
-
-func (s *stubTriggerer) TriggerAgent(_ context.Context, agentName, repo string) error {
-	s.called = true
-	s.agentName = agentName
-	s.repo = repo
-	return s.err
-}
-
-func newRunServer(triggerer AgentTriggerer) *Server {
+func newRunServer() *Server {
 	cfg := testCfg(nil)
-	return NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1), nil, nil, zerolog.Nop(), triggerer)
+	return NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(10), nil, nil, zerolog.Nop())
 }
 
 func authedRequest(method, path, body string) *http.Request {
@@ -587,32 +572,36 @@ func authedRequest(method, path, body string) *http.Request {
 	return req
 }
 
-func TestHandleAgentsRunCallsTriggerer(t *testing.T) {
+func TestHandleAgentsRunEnqueuesEvent(t *testing.T) {
 	t.Parallel()
-	trig := &stubTriggerer{}
-	server := newRunServer(trig)
+	server := newRunServer()
 
 	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":"coder","repo":"owner/repo"}`)
 	rr := httptest.NewRecorder()
 	server.handleAgentsRun(rr, req)
 
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected %d, got %d: %s", http.StatusOK, rr.Code, rr.Body.String())
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected %d, got %d: %s", http.StatusAccepted, rr.Code, rr.Body.String())
 	}
-	if !trig.called {
-		t.Fatal("expected TriggerAgent to be called")
+	var resp map[string]string
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
 	}
-	if trig.agentName != "coder" || trig.repo != "owner/repo" {
-		t.Fatalf("unexpected args: agent=%q repo=%q", trig.agentName, trig.repo)
+	if resp["status"] != "queued" || resp["agent"] != "coder" || resp["repo"] != "owner/repo" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	if resp["event_id"] == "" {
+		t.Fatal("expected non-empty event_id")
 	}
 }
 
 func TestHandleAgentsRunRejectsNoAuth(t *testing.T) {
 	t.Parallel()
-	server := newRunServer(&stubTriggerer{})
+	server := newRunServer()
+	handler := server.requireAPIKey(http.HandlerFunc(server.handleAgentsRun))
 	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
 	rr := httptest.NewRecorder()
-	server.handleAgentsRun(rr, req)
+	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusUnauthorized)
 	}
@@ -620,20 +609,47 @@ func TestHandleAgentsRunRejectsNoAuth(t *testing.T) {
 
 func TestHandleAgentsRunRejectsWrongToken(t *testing.T) {
 	t.Parallel()
-	server := newRunServer(&stubTriggerer{})
+	server := newRunServer()
+	handler := server.requireAPIKey(http.HandlerFunc(server.handleAgentsRun))
 	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
 	req.Header.Set("Authorization", "Bearer wrong-key")
 	rr := httptest.NewRecorder()
-	server.handleAgentsRun(rr, req)
+	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestHandleAgentsRunBlocksNonBearerScheme(t *testing.T) {
+	t.Parallel()
+	server := newRunServer()
+	handler := server.requireAPIKey(http.HandlerFunc(server.handleAgentsRun))
+	tests := []struct {
+		name   string
+		header string
+	}{
+		{"raw key", testAPIKey},
+		{"Basic scheme", "Basic " + testAPIKey},
+		{"Token scheme", "Token " + testAPIKey},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
+			req.Header.Set("Authorization", tc.header)
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+			if rr.Code != http.StatusUnauthorized {
+				t.Fatalf("scheme %q: got %d, want %d", tc.header, rr.Code, http.StatusUnauthorized)
+			}
+		})
 	}
 }
 
 func TestHandleAgentsRunReturnsForbiddenWhenNoAPIKeyConfigured(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) { c.Daemon.HTTP.APIKey = "" })
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1), nil, nil, zerolog.Nop(), &stubTriggerer{})
+	server := NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1), nil, nil, zerolog.Nop())
 	req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
 	req.Header.Set("Authorization", "Bearer something")
 	rr := httptest.NewRecorder()
@@ -656,7 +672,7 @@ func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			server := newRunServer(&stubTriggerer{})
+			server := newRunServer()
 			req := authedRequest(http.MethodPost, "/agents/run", tc.body)
 			rr := httptest.NewRecorder()
 			server.handleAgentsRun(rr, req)
@@ -667,27 +683,25 @@ func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
 	}
 }
 
-func TestHandleAgentsRunReturnsInternalServerErrorOnTriggerFailure(t *testing.T) {
+func TestHandleAgentsRunReturnsNotFoundForUnknownRepo(t *testing.T) {
 	t.Parallel()
-	trig := &stubTriggerer{err: fmt.Errorf("agent not found")}
-	server := newRunServer(trig)
-	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":"nope","repo":"owner/repo"}`)
+	server := newRunServer()
+	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":"coder","repo":"unknown/repo"}`)
 	rr := httptest.NewRecorder()
 	server.handleAgentsRun(rr, req)
-	if rr.Code != http.StatusInternalServerError {
-		t.Fatalf("got %d, want %d", rr.Code, http.StatusInternalServerError)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("got %d, want %d", rr.Code, http.StatusNotFound)
 	}
 }
 
-func TestHandleAgentsRunReturnsOKOnDispatchSkipped(t *testing.T) {
+func TestHandleAgentsRunReturnsBadRequestForMissingFields(t *testing.T) {
 	t.Parallel()
-	trig := &stubTriggerer{err: autonomous.ErrDispatchSkipped}
-	server := newRunServer(trig)
-	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":"coder","repo":"owner/repo"}`)
+	server := newRunServer()
+	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":""}`)
 	rr := httptest.NewRecorder()
 	server.handleAgentsRun(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("ErrDispatchSkipped should yield 200, got %d", rr.Code)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want %d: %s", rr.Code, http.StatusBadRequest, rr.Body.String())
 	}
 }
 
@@ -741,7 +755,111 @@ func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
 	_ = dc
 }
 
+// TestUISlashlessRedirect verifies that GET /ui (no trailing slash) redirects
+// to /ui/ with a 301 when a UI FS is attached to the server. This is the
+// canonical entrypoint that operators and reverse proxies tend to use.
+func TestUISlashlessRedirect(t *testing.T) {
+	t.Parallel()
+
+	// Build a minimal in-memory FS that satisfies fs.Sub("dist").
+	uiFS := fstest.MapFS{
+		"dist/index.html": &fstest.MapFile{Data: []byte("<html></html>")},
+	}
+
+	srv, _ := newTestServer(testCfg(nil))
+	srv.WithUI(uiFS)
+
+	ts := httptest.NewServer(srv.buildHandler())
+	defer ts.Close()
+
+	client := &http.Client{
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse // do not follow redirects
+		},
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/ui", nil)
+	req.Header.Set("Authorization", "Bearer "+testAPIKey)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMovedPermanently {
+		t.Fatalf("want 301, got %d", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if loc != "/ui/" {
+		t.Fatalf("want Location /ui/, got %q", loc)
+	}
+}
+
+// TestBuildHandlerObservabilityRoutesAreOpen verifies that the read-only
+// observability endpoints and the UI paths are accessible without a Bearer
+// token even when daemon.http.api_key is configured. The embedded dashboard
+// makes same-origin fetch/EventSource calls that cannot attach an Authorization
+// header (EventSource has no header API), so daemon-level auth must not be
+// applied here — access control is the reverse proxy's responsibility.
+// The mutation endpoint /agents/run must still require the Bearer token.
+func TestBuildHandlerObservabilityRoutesAreOpen(t *testing.T) {
+	t.Parallel()
+
+	uiFS := fstest.MapFS{
+		"dist/index.html": &fstest.MapFile{Data: []byte("<html></html>")},
+	}
+
+	srv, _ := newTestServer(testCfg(nil)) // testCfg sets APIKey = testAPIKey
+	srv.WithUI(uiFS)
+	srv.WithObserve(newTestObserve())
+
+	ts := httptest.NewServer(srv.buildHandler())
+	t.Cleanup(ts.Close)
+
+	// These read-only routes must NOT require a Bearer token.
+	openRoutes := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/agents"},
+		{http.MethodGet, "/api/config"},
+		{http.MethodGet, "/api/dispatches"},
+		{http.MethodGet, "/api/events"},
+		{http.MethodGet, "/api/traces"},
+		{http.MethodGet, "/api/graph"},
+		{http.MethodGet, "/ui/"},
+	}
+
+	for _, tc := range openRoutes {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			t.Parallel()
+			req, _ := http.NewRequest(tc.method, ts.URL+tc.path, nil)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("request failed: %v", err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusUnauthorized {
+				t.Errorf("observability route %s %s must be open (no auth required), got 401", tc.method, tc.path)
+			}
+		})
+	}
+
+	// The mutation endpoint must still require the Bearer token.
+	t.Run("POST /agents/run requires auth", func(t *testing.T) {
+		t.Parallel()
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/agents/run", nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("want 401 for unauthenticated /agents/run, got %d", resp.StatusCode)
+		}
+	})
+}
+
 // ─── compile-time assertions ──────────────────────────────────────────────────
 
 var _ EventQueue = (*workflow.DataChannels)(nil)
-var _ = errors.Is // keep errors import until we add an error-path test

@@ -1,0 +1,40 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "One-line description of the overall outcome of this run"
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string" },
+          "part_key": { "type": "string" },
+          "github_id": { "type": "string" },
+          "url": { "type": "string" }
+        },
+        "required": ["type", "part_key", "github_id", "url"],
+        "additionalProperties": false
+      },
+      "description": "GitHub objects created or updated during this run"
+    },
+    "dispatch": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "agent": { "type": "string" },
+          "number": { "type": "integer" },
+          "reason": { "type": "string" }
+        },
+        "required": ["agent", "number", "reason"],
+        "additionalProperties": false
+      },
+      "description": "Agents to invoke next via the reactive dispatch system"
+    }
+  },
+  "required": ["summary", "artifacts", "dispatch"],
+  "additionalProperties": false
+}

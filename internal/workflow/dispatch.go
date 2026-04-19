@@ -354,6 +354,7 @@ type Dispatcher struct {
 	dedup    *DispatchDedupStore
 	counters dispatchCounters
 	queue    EventEnqueuer
+	graphRec GraphRecorder // optional; set via WithGraphRecorder
 	logger   zerolog.Logger
 }
 
@@ -369,9 +370,17 @@ func NewDispatcher(cfg config.DispatchConfig, agents map[string]config.AgentDef,
 	}
 }
 
+// WithGraphRecorder attaches an optional recorder called on each successfully
+// enqueued dispatch. Safe to call after NewDispatcher.
+func (d *Dispatcher) WithGraphRecorder(r GraphRecorder) {
+	d.graphRec = r
+}
+
 // ProcessDispatches validates and enqueues each dispatch request from a single
 // agent run. originator is the agent that produced the requests; ev is the
 // originating event; rootEventID and currentDepth describe the chain.
+// parentSpanID is the trace span ID of the dispatching run; it is embedded in
+// each dispatch event payload so child runs can link back to their parent span.
 // All requests are attempted; an error is returned if any enqueue fails.
 func (d *Dispatcher) ProcessDispatches(
 	ctx context.Context,
@@ -379,6 +388,7 @@ func (d *Dispatcher) ProcessDispatches(
 	ev Event,
 	rootEventID string,
 	currentDepth int,
+	parentSpanID string,
 	requests []ai.DispatchRequest,
 ) error {
 	var errs []error
@@ -468,6 +478,7 @@ func (d *Dispatcher) ProcessDispatches(
 				"root_event_id":  rootEventID,
 				"dispatch_depth": newDepth,
 				"invoked_by":     originator.Name,
+				"parent_span_id": parentSpanID,
 			},
 		}
 
@@ -483,6 +494,11 @@ func (d *Dispatcher) ProcessDispatches(
 		// Enqueue succeeded — commit the claim so DispatchAlreadyClaimed returns
 		// true and the autonomous scheduler skips a duplicate run for this target.
 		d.dedup.CommitClaim(req.Agent, ev.Repo.FullName, number)
+
+		// Record the dispatch edge in the interaction graph if an observer is set.
+		if d.graphRec != nil {
+			d.graphRec.RecordDispatch(originator.Name, req.Agent, ev.Repo.FullName, number, req.Reason)
+		}
 
 		fanout++
 		d.counters.enqueued.Add(1)
