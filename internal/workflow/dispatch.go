@@ -64,7 +64,7 @@ func (c *dispatchCounters) snapshot() DispatchStats {
 // dispatchEntry records a dedup slot in the store.
 // committed indicates whether the slot is backed by a real enqueued event.
 // Pending (committed==false) entries block concurrent duplicate TryClaim calls
-// but are invisible to Seen / DispatchAlreadyClaimed until committed.
+// but are invisible to DispatchAlreadyClaimed until committed.
 type dispatchEntry struct {
 	expiresAt time.Time
 	committed bool
@@ -140,24 +140,11 @@ func (s *DispatchDedupStore) SeenOrAdd(target, repo string, number int, now time
 	return false
 }
 
-// Seen returns true if this (target, repo, number) combination has a committed
-// claim within the TTL window. Pending (not-yet-committed) claims are invisible
-// to Seen so that duplicate dispatch dedup checks never block retries for
-// phantom entries that were never enqueued.
-func (s *DispatchDedupStore) Seen(target, repo string, number int, now time.Time) bool {
-	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.entries[key]
-	return ok && now.Before(e.expiresAt) && e.committed
-}
-
 // SeesPendingOrCommitted returns true if (target, repo, number) has any dispatch
-// claim — pending or committed — within the TTL window. Unlike Seen, this
-// includes pending (not-yet-committed) claims, so that a TryClaim that is still
-// in flight (PushEvent running) blocks concurrent cron/manual runs from also
-// starting. This closes the race between a dispatch's TryClaim→CommitClaim
-// window and an autonomous scheduler check.
+// claim — pending or committed — within the TTL window. Pending (not-yet-committed)
+// claims are included so that a TryClaim still in flight (PushEvent running) blocks
+// concurrent cron/manual runs from also starting. This closes the race between a
+// dispatch's TryClaim→CommitClaim window and an autonomous scheduler check.
 func (s *DispatchDedupStore) SeesPendingOrCommitted(target, repo string, number int, now time.Time) bool {
 	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
 	s.mu.Lock()
@@ -173,7 +160,7 @@ func (s *DispatchDedupStore) SeesPendingOrCommitted(target, repo string, number 
 // proceeding past the dedup gate.
 //
 // A successful TryClaim creates a pending entry that blocks future TryClaim
-// calls but is invisible to Seen / DispatchAlreadyClaimed until CommitClaim is
+// calls but is invisible to DispatchAlreadyClaimed until CommitClaim is
 // called. On enqueue failure call AbandonClaim to release the pending slot.
 func (s *DispatchDedupStore) TryClaim(target, repo string, number int, now time.Time) bool {
 	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
@@ -187,7 +174,7 @@ func (s *DispatchDedupStore) TryClaim(target, repo string, number int, now time.
 }
 
 // CommitClaim upgrades a pending claim to committed, making it visible to
-// Seen and DispatchAlreadyClaimed. Must be called after a successful PushEvent.
+// DispatchAlreadyClaimed. Must be called after a successful PushEvent.
 func (s *DispatchDedupStore) CommitClaim(target, repo string, number int) {
 	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
 	s.mu.Lock()
