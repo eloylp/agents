@@ -630,6 +630,12 @@ func serveSSEWithInterval(w http.ResponseWriter, r *http.Request, hub interface 
 	Subscribe() chan []byte
 	Unsubscribe(chan []byte)
 }, heartbeatInterval time.Duration) {
+	// Clear the per-connection write deadline that http.Server.WriteTimeout
+	// installs. Non-SSE routes are protected by that deadline (and additionally
+	// by http.TimeoutHandler); SSE streams must be allowed to write indefinitely,
+	// so we remove the deadline here without affecting other connections.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)

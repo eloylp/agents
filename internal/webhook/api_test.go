@@ -1405,6 +1405,78 @@ receiveLoop:
 	}
 }
 
+// TestServeSSEClearsServerWriteDeadline verifies that serveSSEWithInterval
+// calls http.ResponseController.SetWriteDeadline to clear the server-level
+// write deadline, so SSE streams are not killed by http.Server.WriteTimeout.
+// This is the underlying mechanism tested by TestBuildHandlerSSETimeoutSplit at
+// the handler-execution layer; here we test it at the TCP write-deadline layer
+// using httptest.NewUnstartedServer with an explicit WriteTimeout.
+func TestServeSSEClearsServerWriteDeadline(t *testing.T) {
+	// Not parallel: test intentionally sleeps to cross a write-deadline boundary.
+
+	obs := newTestObserve()
+	srv, _ := newTestServer(testCfg(nil))
+	srv.WithObserve(obs)
+
+	ts := httptest.NewUnstartedServer(srv.buildHandler())
+	ts.Config.WriteTimeout = 200 * time.Millisecond // very short deadline
+	ts.Start()
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Get(ts.URL + "/api/events/stream") //nolint:noctx
+	if err != nil {
+		t.Fatalf("connect to /api/events/stream: %v", err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("Content-Type: want text/event-stream, got %q", ct)
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	lineCh := make(chan string, 16)
+	go func() {
+		for scanner.Scan() {
+			lineCh <- scanner.Text()
+		}
+		close(lineCh)
+	}()
+
+	select {
+	case line := <-lineCh:
+		if line != ": connected" {
+			t.Fatalf("first SSE comment: want ': connected', got %q", line)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for SSE connected comment")
+	}
+
+	// Sleep past the 200 ms write deadline. If SetWriteDeadline(time.Time{}) did
+	// not clear the server deadline, the connection is closed here and lineCh is
+	// closed by the scanner goroutine.
+	time.Sleep(400 * time.Millisecond)
+
+	// Publish an event and verify it arrives — stream must still be alive.
+	obs.EventsSSE.Publish([]byte("data: after-deadline\n\n"))
+
+	deadline := time.After(500 * time.Millisecond)
+	var lines []string
+	for {
+		select {
+		case line, ok := <-lineCh:
+			if !ok {
+				t.Fatalf("SSE stream was closed after write-deadline boundary (SetWriteDeadline not clearing server timeout?); lines so far: %v", lines)
+			}
+			lines = append(lines, line)
+			if strings.Contains(strings.Join(lines, "\n"), "after-deadline") {
+				return // stream is alive — test passes
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for post-deadline event; lines so far: %v", lines)
+		}
+	}
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────
 
 type stubStatusProvider struct {

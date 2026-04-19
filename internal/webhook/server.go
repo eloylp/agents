@@ -119,10 +119,12 @@ func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue,
 // an http.Handler. It is separated from Run so tests can exercise routing
 // without starting a real TCP listener.
 func (s *Server) buildHandler() http.Handler {
-	// WriteTimeout is disabled on the http.Server so SSE streams are not
-	// killed after 15 s. Instead, apply a per-handler write deadline to every
-	// non-SSE route using http.TimeoutHandler so regular requests are still
-	// bounded.
+	// http.TimeoutHandler bounds handler execution time (i.e. how long the
+	// handler function runs before it must start writing). It is NOT a
+	// replacement for http.Server.WriteTimeout, which enforces a socket write
+	// deadline and is still set in Run(). SSE handlers clear that write
+	// deadline for themselves via http.ResponseController.SetWriteDeadline so
+	// they can stream indefinitely; see serveSSEWithInterval in api.go.
 	writeTimeout := time.Duration(s.cfg.Daemon.HTTP.WriteTimeoutSeconds) * time.Second
 	withTimeout := func(h http.Handler) http.Handler {
 		if writeTimeout <= 0 {
@@ -193,14 +195,10 @@ func (s *Server) Run(ctx context.Context) error {
 	router := s.buildHandler()
 
 	srv := &http.Server{
-		Addr:        s.cfg.Daemon.HTTP.ListenAddr,
-		Handler:     router,
-		ReadTimeout: time.Duration(s.cfg.Daemon.HTTP.ReadTimeoutSeconds) * time.Second,
-		// WriteTimeout is intentionally zero: a non-zero value kills SSE streams
-		// (text/event-stream responses) after the deadline regardless of activity.
-		// Per-handler write deadlines are applied via http.TimeoutHandler in
-		// buildHandler for all non-SSE routes.
-		WriteTimeout: 0,
+		Addr:         s.cfg.Daemon.HTTP.ListenAddr,
+		Handler:      router,
+		ReadTimeout:  time.Duration(s.cfg.Daemon.HTTP.ReadTimeoutSeconds) * time.Second,
+		WriteTimeout: time.Duration(s.cfg.Daemon.HTTP.WriteTimeoutSeconds) * time.Second,
 		IdleTimeout:  time.Duration(s.cfg.Daemon.HTTP.IdleTimeoutSeconds) * time.Second,
 	}
 
