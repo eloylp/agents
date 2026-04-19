@@ -167,14 +167,9 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 	}
 
 	// Target must be bound to this repo (any trigger kind is sufficient).
-	bound := false
-	for _, b := range repo.Use {
-		if b.Agent == targetName && b.IsEnabled() {
-			bound = true
-			break
-		}
-	}
-	if !bound {
+	if !slices.ContainsFunc(repo.Use, func(b config.Binding) bool {
+		return b.Agent == targetName && b.IsEnabled()
+	}) {
 		return fmt.Errorf("dispatch: target agent %q is not bound to repo %q", targetName, ev.Repo.FullName)
 	}
 
