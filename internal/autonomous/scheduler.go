@@ -309,7 +309,7 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	// already committed, so the dedup window must remain in force.
 	runCompleted := false
 	err := s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
-		prompt, err := ai.RenderAgentPrompt(agent, s.cfg.Skills, ai.PromptContext{
+		rendered, err := ai.RenderAgentPrompt(agent, s.cfg.Skills, ai.PromptContext{
 			Repo:       repo,
 			Backend:    backend,
 			Memory:     memory,
@@ -320,14 +320,15 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 			return fmt.Errorf("render prompt: %w", err)
 		}
 		if !agent.AllowPRs {
-			prompt = "Do not open or create pull requests under any circumstances.\n" + prompt
+			rendered.System = "Do not open or create pull requests under any circumstances.\n" + rendered.System
 		}
 		logger.Info().Msg("running autonomous pass")
 		spanStart := time.Now()
 		resp, err := runner.Run(ctx, ai.Request{
 			Workflow: fmt.Sprintf("autonomous:%s:%s", backend, agent.Name),
 			Repo:     repo,
-			Prompt:   prompt,
+			System:   rendered.System,
+			User:     rendered.User,
 		})
 		spanEnd := time.Now()
 		if s.traceRec != nil {

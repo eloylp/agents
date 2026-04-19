@@ -353,7 +353,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) 
 
 	promptPayload := ev.Payload
 
-	prompt, err := ai.RenderAgentPrompt(agent, e.cfg.Skills, ai.PromptContext{
+	rendered, err := ai.RenderAgentPrompt(agent, e.cfg.Skills, ai.PromptContext{
 		Repo:          ev.Repo.FullName,
 		Number:        ev.Number,
 		Backend:       backend,
@@ -381,6 +381,9 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) 
 	if invokedBy != "" {
 		logger = logger.With().Str("invoked_by", invokedBy).Logger()
 	}
+	if !agent.AllowPRs {
+		rendered.System = "Do not open or create pull requests under any circumstances.\n" + rendered.System
+	}
 	logger.Info().Str("workflow", workflow).Msg("invoking ai agent")
 
 	if e.runTracker != nil {
@@ -394,7 +397,8 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) 
 		Workflow: workflow,
 		Repo:     ev.Repo.FullName,
 		Number:   ev.Number,
-		Prompt:   prompt,
+		System:   rendered.System,
+		User:     rendered.User,
 	})
 	spanEnd := time.Now()
 

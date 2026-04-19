@@ -6,11 +6,22 @@ type Runner interface {
 	Run(ctx context.Context, req Request) (Response, error)
 }
 
+// RenderedPrompt is the result of RenderAgentPrompt: stable system-level
+// content (skills + agent body) separated from per-run user content (runtime
+// context). Keeping them split lets backends that support a native system
+// channel (e.g. Claude's --append-system-prompt) benefit from prompt caching
+// without any behavioural change on backends that do not (codex: concatenated).
+type RenderedPrompt struct {
+	System string // stable across runs: skills + agent prompt body
+	User   string // per-run: runtime context, memory, event payload
+}
+
 type Request struct {
 	Workflow string
 	Repo     string
 	Number   int
-	Prompt   string
+	System   string // stable system-level content (from RenderedPrompt.System)
+	User     string // per-run user content (from RenderedPrompt.User)
 }
 
 type Artifact struct {
