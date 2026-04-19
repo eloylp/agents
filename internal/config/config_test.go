@@ -642,41 +642,37 @@ repos:
 `, agentBlock)
 }
 
-func TestDispatchCanDispatchUnknownAgentRejected(t *testing.T) {
-	t.Setenv("TEST_SECRET", "s3cret")
-	yaml := dispatchYAML(`
+func TestDispatchWiringValidationErrors(t *testing.T) {
+	cases := []struct {
+		name   string
+		agents string
+		errMsg string
+	}{
+		{
+			name: "unknown agent in can_dispatch",
+			agents: `
   - name: coder
     backend: claude
     skills: [architect]
     prompt: "Write code."
     can_dispatch: [nonexistent-agent]
-`)
-	path := writeConfig(t, yaml)
-	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "unknown agent") {
-		t.Fatalf("expected unknown-agent error, got %v", err)
-	}
-}
-
-func TestDispatchCanDispatchSelfRejected(t *testing.T) {
-	t.Setenv("TEST_SECRET", "s3cret")
-	yaml := dispatchYAML(`
+`,
+			errMsg: "unknown agent",
+		},
+		{
+			name: "can_dispatch includes self",
+			agents: `
   - name: coder
     backend: claude
     skills: [architect]
     prompt: "Write code."
     can_dispatch: [coder]
-`)
-	path := writeConfig(t, yaml)
-	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "itself") {
-		t.Fatalf("expected self-reference error, got %v", err)
-	}
-}
-
-func TestDispatchTargetRequiresDescription(t *testing.T) {
-	t.Setenv("TEST_SECRET", "s3cret")
-	yaml := dispatchYAML(`
+`,
+			errMsg: "itself",
+		},
+		{
+			name: "dispatch target missing description",
+			agents: `
   - name: coder
     backend: claude
     skills: [architect]
@@ -687,12 +683,22 @@ func TestDispatchTargetRequiresDescription(t *testing.T) {
     skills: [architect]
     prompt: "Review PRs."
     allow_dispatch: true
-    # description intentionally omitted
-`)
-	path := writeConfig(t, yaml)
-	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "description") {
-		t.Fatalf("expected description-required error, got %v", err)
+`,
+			errMsg: "description",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TEST_SECRET", "s3cret")
+			path := writeConfig(t, dispatchYAML(tc.agents))
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.errMsg)
+			}
+			if !strings.Contains(err.Error(), tc.errMsg) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.errMsg)
+			}
+		})
 	}
 }
 
