@@ -18,14 +18,17 @@ import (
 // ─── EventBuffer ─────────────────────────────────────────────────────────────
 
 // TimestampedEvent is a workflow event with an ingestion timestamp attached.
+// JSON field names are lowercase so both the SSE stream and the REST snapshot
+// at /api/events produce an identical wire shape that the dashboard can parse
+// with the same client-side interface.
 type TimestampedEvent struct {
-	At      time.Time
-	ID      string
-	Repo    string
-	Kind    string
-	Number  int
-	Actor   string
-	Payload map[string]any
+	At      time.Time      `json:"at"`
+	ID      string         `json:"id"`
+	Repo    string         `json:"repo"`
+	Kind    string         `json:"kind"`
+	Number  int            `json:"number"`
+	Actor   string         `json:"actor"`
+	Payload map[string]any `json:"payload,omitempty"`
 }
 
 // EventBuffer is a thread-safe bounded ring-buffer for TimestampedEvents.
