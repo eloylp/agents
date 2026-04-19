@@ -686,14 +686,13 @@ func TestPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 		t.Error("expected dispatch suppressed: cron mark still active within dedup window")
 	}
 
-	// After the TTL expires the dispatch must succeed.
-	futureNow := now.Add(3 * time.Second)
+	// After the TTL expires the dispatch must succeed. The expiry is simulated
+	// by creating a fresh dedup store (no cron mark) rather than advancing a
+	// real clock.
 	d2 := NewDispatcher(cfg, agents, NewDispatchDedupStore(2), q, zerolog.Nop())
-	// No cron mark written — simulates the window having expired.
 	d2.ProcessDispatches(context.Background(), originator, ev, "root-2", 0, "", []ai.DispatchRequest{
 		{Agent: "coder", Reason: "dispatch after window expired"},
 	})
-	_ = futureNow // anchor variable for clarity
 	if len(q.popped()) != 1 {
 		t.Error("expected dispatch enqueued: dedup window has expired")
 	}
@@ -884,13 +883,11 @@ func TestFinalizeAutonomousRunKeepsTTLBlocksDispatchWithinWindow(t *testing.T) {
 	// check the dispatch namespace (not the cron namespace), so the mark never
 	// blocks repeated autonomous runs.
 	q3 := &fakeQueue{}
-	agentDef := config.AgentDef{Name: "coder", AllowDispatch: true}
 	d3 := NewDispatcher(cfg, agents, dedup, q3, zerolog.Nop())
 	if !d3.TryMarkAutonomousRun("coder", "owner/repo", now) {
 		t.Error("expected second cron run to proceed: cron marks must not suppress other cron runs")
 	}
 	d3.FinalizeAutonomousRun("coder", "owner/repo")
-	_ = agentDef
 }
 
 // TestSuccessfulCronRunRefcountIsZeroAfterFinalize verifies that
