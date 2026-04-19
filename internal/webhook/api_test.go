@@ -609,7 +609,6 @@ func TestHandleAPIDispatchesZeroWhenNoProvider(t *testing.T) {
 func TestRequireAPIKeyBlocksWhenKeyConfigured(t *testing.T) {
 	t.Parallel()
 	for _, path := range []string{"/api/agents", "/api/config", "/api/dispatches"} {
-		path := path
 		t.Run(path, func(t *testing.T) {
 			t.Parallel()
 			srv, _ := newTestServer(testCfg(nil)) // testCfg sets APIKey = testAPIKey
@@ -651,11 +650,10 @@ func TestRequireAPIKeyBlocksWrongToken(t *testing.T) {
 func TestRequireAPIKeyBlocksNonBearerScheme(t *testing.T) {
 	t.Parallel()
 	for _, authHeader := range []string{
-		testAPIKey,                   // raw key, no scheme
-		"Basic " + testAPIKey,        // Basic scheme instead of Bearer
-		"Token " + testAPIKey,        // other non-Bearer scheme
+		testAPIKey,            // raw key, no scheme
+		"Basic " + testAPIKey, // Basic scheme instead of Bearer
+		"Token " + testAPIKey, // other non-Bearer scheme
 	} {
-		authHeader := authHeader
 		t.Run(authHeader, func(t *testing.T) {
 			t.Parallel()
 			srv, _ := newTestServer(testCfg(nil))
