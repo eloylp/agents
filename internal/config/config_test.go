@@ -732,6 +732,7 @@ func TestDispatchValidConfigAccepted(t *testing.T) {
 }
 
 func TestDispatchConfigValidationRejectsNonPositiveValues(t *testing.T) {
+	t.Setenv("TEST_SECRET", "s3cret")
 	cases := []struct {
 		name   string
 		yaml   string
@@ -815,7 +816,7 @@ repos:
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("TEST_SECRET", "s3cret")
+			t.Parallel()
 			path := writeConfig(t, tc.yaml)
 			_, err := Load(path)
 			if err == nil {
