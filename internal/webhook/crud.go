@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
 
@@ -223,7 +224,7 @@ func (s *Server) handleStoreAgent(w http.ResponseWriter, r *http.Request) {
 		storeNotConfigured(w)
 		return
 	}
-	name := mux.Vars(r)["name"]
+	name := config.NormalizeAgentName(mux.Vars(r)["name"])
 	switch r.Method {
 	case http.MethodGet:
 		agents, err := store.ReadAgents(s.db)
@@ -307,7 +308,7 @@ func (s *Server) handleStoreSkill(w http.ResponseWriter, r *http.Request) {
 		storeNotConfigured(w)
 		return
 	}
-	name := mux.Vars(r)["name"]
+	name := config.NormalizeSkillName(mux.Vars(r)["name"])
 	switch r.Method {
 	case http.MethodGet:
 		skills, err := store.ReadSkills(s.db)
@@ -393,7 +394,7 @@ func (s *Server) handleStoreBackend(w http.ResponseWriter, r *http.Request) {
 		storeNotConfigured(w)
 		return
 	}
-	name := mux.Vars(r)["name"]
+	name := config.NormalizeBackendName(mux.Vars(r)["name"])
 	switch r.Method {
 	case http.MethodGet:
 		backends, err := store.ReadBackends(s.db)
@@ -477,7 +478,7 @@ func (s *Server) handleStoreRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	vars := mux.Vars(r)
-	repoName := vars["owner"] + "/" + vars["repo"]
+	repoName := strings.TrimSpace(vars["owner"]) + "/" + strings.TrimSpace(vars["repo"])
 	switch r.Method {
 	case http.MethodGet:
 		repos, err := store.ReadRepos(s.db)

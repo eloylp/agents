@@ -149,9 +149,13 @@ func ReadSkills(db *sql.DB) (map[string]config.SkillDef, error) {
 }
 
 // UpsertSkill inserts or replaces a single skill.
-// The skill name is normalized (lowercase, trimmed) before writing.
+// The skill name is normalized (lowercase, trimmed) and SkillDef fields
+// (Prompt, PromptFile) are trimmed before writing, matching the normalization
+// startup applies in normalize() so that the stored values are already in
+// canonical form and validation sees the same shape as after a restart.
 func UpsertSkill(db *sql.DB, name string, s config.SkillDef) error {
 	name = config.NormalizeSkillName(name)
+	config.NormalizeSkillDef(&s)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert skill %s: begin: %w", name, err)
@@ -198,12 +202,15 @@ func ReadBackends(db *sql.DB) (map[string]config.AIBackendConfig, error) {
 }
 
 // UpsertBackend inserts or replaces a single AI backend configuration.
-// Zero-value numeric fields are normalised to startup defaults before
-// persistence so that the stored config matches what FinishLoad would
-// produce on restart (e.g. timeout_seconds 0 → 600, max_prompt_chars 0 → 12000).
-// The backend name is also normalized (lowercase, trimmed).
+// Before writing, the backend is fully normalized to match what startup
+// produces: the name is lowercased and trimmed, Command is trimmed, blank env
+// keys are removed, and zero-value numeric fields are filled with startup
+// defaults (timeout_seconds 0 → 600, max_prompt_chars 0 → 12000). This
+// ensures the stored values are already in canonical form so that live
+// behavior never diverges from a post-restart load.
 func UpsertBackend(db *sql.DB, name string, b config.AIBackendConfig) error {
 	name = config.NormalizeBackendName(name)
+	config.NormalizeBackendConfig(&b)
 	config.ApplyBackendDefaults(&b)
 	tx, err := db.Begin()
 	if err != nil {

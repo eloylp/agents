@@ -950,6 +950,35 @@ func ApplyBackendDefaults(b *AIBackendConfig) {
 	setDefaultInt(&b.MaxPromptChars, defaultMaxPromptChars)
 }
 
+// NormalizeBackendConfig applies the same per-entry field normalization that
+// normalize() performs at startup: it trims Command and scrubs env keys that
+// are empty after trimming. CRUD callers must invoke this before persisting a
+// backend so that the stored values match the canonical form the daemon derives
+// at boot, preventing live behavior from diverging until a restart.
+func NormalizeBackendConfig(b *AIBackendConfig) {
+	b.Command = strings.TrimSpace(b.Command)
+	if len(b.Env) > 0 {
+		cleaned := make(map[string]string, len(b.Env))
+		for k, v := range b.Env {
+			k = strings.TrimSpace(k)
+			if k == "" {
+				continue
+			}
+			cleaned[k] = v
+		}
+		b.Env = cleaned
+	}
+}
+
+// NormalizeSkillDef applies the same field normalization that normalize()
+// performs on skill values at startup: it trims Prompt and PromptFile.
+// CRUD callers must invoke this before persisting a skill so that the stored
+// values match the canonical form the daemon derives at boot.
+func NormalizeSkillDef(s *SkillDef) {
+	s.Prompt = strings.TrimSpace(s.Prompt)
+	s.PromptFile = strings.TrimSpace(s.PromptFile)
+}
+
 // NormalizeAgentDef applies the same name/field normalization that FinishLoad
 // performs at startup (lowercase + trim on names, backend, skills, can_dispatch).
 // CRUD callers must invoke this before writing an agent to SQLite so the stored
@@ -967,6 +996,14 @@ func NormalizeAgentDef(a *AgentDef) {
 	for i := range a.CanDispatch {
 		a.CanDispatch[i] = strings.ToLower(strings.TrimSpace(a.CanDispatch[i]))
 	}
+}
+
+// NormalizeAgentName returns the canonical form of an agent name (lowercase,
+// trimmed). CRUD callers should normalise path-parameter names before lookups
+// or deletes so that GET/DELETE /api/store/agents/{name} follows the same
+// case-insensitive semantics as AgentByName.
+func NormalizeAgentName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
 // NormalizeSkillName returns the canonical form of a skill map key (lowercase,

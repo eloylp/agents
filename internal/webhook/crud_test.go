@@ -867,6 +867,55 @@ func TestStoreCRUDDeleteAgentRejectedAsLast(t *testing.T) {
 	}
 }
 
+// TestStoreCRUDSingleEntityPathCanonicalization verifies that GET and DELETE
+// /api/store/{type}/{name} canonicalize the path parameter before lookup so
+// that mixed-case names resolve correctly after POST stores them in lowercase.
+func TestStoreCRUDSingleEntityPathCanonicalization(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	// Seed backend + skill with canonical (lowercase) names.
+	seedStoreBackend(t, s, "claude")
+	seedStoreSkill(t, s, "architect")
+
+	// POST agent with lowercase name — stored as "coder".
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "p",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("create agent: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// GET with mixed-case path — should return 200, not 404.
+	rr := doCRUDRequest(t, s, http.MethodGet, "/api/store/agents/Coder", nil)
+	if rr.Code != http.StatusOK {
+		t.Errorf("GET /api/store/agents/Coder: got %d, want 200", rr.Code)
+	}
+
+	// GET skill with mixed-case path.
+	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/skills/Architect", nil)
+	if rr.Code != http.StatusOK {
+		t.Errorf("GET /api/store/skills/Architect: got %d, want 200", rr.Code)
+	}
+
+	// GET backend with mixed-case path.
+	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/backends/Claude", nil)
+	if rr.Code != http.StatusOK {
+		t.Errorf("GET /api/store/backends/Claude: got %d, want 200", rr.Code)
+	}
+
+	// DELETE with mixed-case path — should actually remove the entity.
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/api/store/skills/Architect", nil)
+	if rr.Code != http.StatusNoContent {
+		t.Errorf("DELETE /api/store/skills/Architect: got %d, want 204", rr.Code)
+	}
+	// Confirm it's gone.
+	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/skills/architect", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("GET after delete: got %d, want 404", rr.Code)
+	}
+}
+
 func TestStoreCRUDDeleteRepoRejectedAsLastEnabled(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)

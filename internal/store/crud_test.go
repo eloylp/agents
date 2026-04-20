@@ -1009,6 +1009,86 @@ func TestUpsertNormalizesNames(t *testing.T) {
 	}
 }
 
+// TestUpsertSkillNormalizesPrompt verifies that UpsertSkill trims Prompt and
+// PromptFile before persisting, matching the normalization startup applies.
+// A whitespace-only prompt must be trimmed to "" and then rejected by
+// validation — otherwise the write API would persist state that the daemon
+// refuses to load on restart.
+func TestUpsertSkillNormalizesPrompt(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	// Whitespace-only prompt should be trimmed to "" and rejected.
+	err := store.UpsertSkill(db, "testing", config.SkillDef{Prompt: "   "})
+	if err == nil {
+		t.Fatal("UpsertSkill with whitespace-only prompt: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "prompt is empty") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+
+	// A prompt with surrounding whitespace should be trimmed and stored cleanly.
+	if err := store.UpsertSkill(db, "testing", config.SkillDef{Prompt: "  skill guidance  "}); err != nil {
+		t.Fatalf("UpsertSkill with padded prompt: %v", err)
+	}
+	skills, err := store.ReadSkills(db)
+	if err != nil {
+		t.Fatalf("ReadSkills: %v", err)
+	}
+	if got := skills["testing"].Prompt; got != "skill guidance" {
+		t.Errorf("Prompt not trimmed: got %q, want %q", got, "skill guidance")
+	}
+}
+
+// TestUpsertBackendNormalizesCommandAndEnv verifies that UpsertBackend trims
+// Command and removes blank env keys before persisting, matching the
+// normalization startup applies in normalize(). This prevents a write that
+// passes validation from creating a backend that the daemon refuses to load
+// on restart after startup normalization changes its shape.
+func TestUpsertBackendNormalizesCommandAndEnv(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	// Whitespace-only command must be trimmed to "" and rejected.
+	err := store.UpsertBackend(db, "claude", config.AIBackendConfig{
+		Command: "   ",
+		Env:     map[string]string{},
+	})
+	if err == nil {
+		t.Fatal("UpsertBackend with whitespace-only command: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "command is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Padded command should be stored trimmed; blank env key should be dropped.
+	if err := store.UpsertBackend(db, "claude", config.AIBackendConfig{
+		Command: "  claude  ",
+		Env:     map[string]string{"VALID_KEY": "val", "  ": "blank-key"},
+	}); err != nil {
+		t.Fatalf("UpsertBackend with padded command: %v", err)
+	}
+	backends, err := store.ReadBackends(db)
+	if err != nil {
+		t.Fatalf("ReadBackends: %v", err)
+	}
+	got := backends["claude"]
+	if got.Command != "claude" {
+		t.Errorf("Command not trimmed: got %q, want %q", got.Command, "claude")
+	}
+	if _, ok := got.Env[""]; ok {
+		t.Error("blank env key should have been removed")
+	}
+	if _, ok := got.Env["  "]; ok {
+		t.Error("whitespace env key should have been removed")
+	}
+	if got.Env["VALID_KEY"] != "val" {
+		t.Errorf("valid env key lost: got %v", got.Env)
+	}
+}
+
 // mapKeys returns the keys from any map[string]T.
 func mapKeys[V any](m map[string]V) []string {
 	out := make([]string, 0, len(m))
