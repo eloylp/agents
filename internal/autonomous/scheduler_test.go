@@ -1295,11 +1295,11 @@ func TestSchedulerReloadRebuildsRunners(t *testing.T) {
 		t.Fatalf("NewScheduler: %v", err)
 	}
 
-	// Capture runners delivered to the HotReloadSink.
+	// Capture config+runners delivered to the HotReloadSink via the combined method.
 	var sinkMu sync.Mutex
 	var sinkRunners map[string]ai.Runner
 	sink := &testHotReloadSink{
-		updateRunners: func(r map[string]ai.Runner) {
+		updateConfigAndRunner: func(_ *config.Config, r map[string]ai.Runner) {
 			sinkMu.Lock()
 			sinkRunners = r
 			sinkMu.Unlock()
@@ -1350,12 +1350,13 @@ func TestSchedulerReloadRebuildsRunners(t *testing.T) {
 		t.Error("original runners map was mutated in place; expected copy-on-write")
 	}
 
-	// The HotReloadSink must have received a copy of the new runners.
+	// The HotReloadSink must have received a copy of the new runners via
+	// UpdateConfigAndRunners (not the separate UpdateRunners path).
 	sinkMu.Lock()
 	got := sinkRunners
 	sinkMu.Unlock()
 	if got == nil {
-		t.Fatal("HotReloadSink.UpdateRunners was not called")
+		t.Fatal("HotReloadSink.UpdateConfigAndRunners was not called")
 	}
 	if _, ok := got["claude"]; !ok {
 		t.Error("sink runners missing 'claude'")
@@ -1367,8 +1368,9 @@ func TestSchedulerReloadRebuildsRunners(t *testing.T) {
 
 // testHotReloadSink is a minimal HotReloadSink for tests.
 type testHotReloadSink struct {
-	updateConfig  func(*config.Config)
-	updateRunners func(map[string]ai.Runner)
+	updateConfig          func(*config.Config)
+	updateRunners         func(map[string]ai.Runner)
+	updateConfigAndRunner func(*config.Config, map[string]ai.Runner)
 }
 
 func (s *testHotReloadSink) UpdateConfig(cfg *config.Config) {
@@ -1379,6 +1381,11 @@ func (s *testHotReloadSink) UpdateConfig(cfg *config.Config) {
 func (s *testHotReloadSink) UpdateRunners(r map[string]ai.Runner) {
 	if s.updateRunners != nil {
 		s.updateRunners(r)
+	}
+}
+func (s *testHotReloadSink) UpdateConfigAndRunners(cfg *config.Config, r map[string]ai.Runner) {
+	if s.updateConfigAndRunner != nil {
+		s.updateConfigAndRunner(cfg, r)
 	}
 }
 
@@ -1482,19 +1489,20 @@ func TestSchedulerReloadReleasesMuBeforeSinkCall(t *testing.T) {
 	}
 	s.WithRunnerBuilder(func(_ string, _ config.AIBackendConfig) ai.Runner { return runner })
 
-	// Sink that signals when UpdateConfig is entered, then blocks until released.
-	// This lets us assert that bindMu is NOT held during the UpdateConfig call.
+	// Sink that signals when UpdateConfigAndRunners is entered, then blocks
+	// until released. This lets us assert that bindMu is NOT held during the
+	// combined sink call.
 	sinkEntered := make(chan struct{})
 	sinkRelease := make(chan struct{})
 	sink := &testHotReloadSink{
-		updateConfig: func(*config.Config) {
+		updateConfigAndRunner: func(*config.Config, map[string]ai.Runner) {
 			close(sinkEntered)
 			<-sinkRelease
 		},
 	}
 	s.WithHotReloadSink(sink)
 
-	// Run Reload in the background; it will block inside UpdateConfig.
+	// Run Reload in the background; it will block inside UpdateConfigAndRunners.
 	reloadDone := make(chan error, 1)
 	go func() {
 		reloadDone <- s.Reload(cfg.Repos, cfg.Agents, cfg.Skills, cfg.Daemon.AIBackends)
@@ -1516,7 +1524,7 @@ func TestSchedulerReloadReleasesMuBeforeSinkCall(t *testing.T) {
 	case <-triggerDone:
 		// Good: bindMu was released before the sink call.
 	case <-time.After(2 * time.Second):
-		t.Error("TriggerAgent blocked while Reload was in the sink call — bindMu must be released before UpdateConfig")
+		t.Error("TriggerAgent blocked while Reload was in the sink call — bindMu must be released before UpdateConfigAndRunners")
 	}
 
 	// Release the sink and wait for Reload to finish cleanly.

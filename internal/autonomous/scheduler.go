@@ -85,6 +85,11 @@ type HotReloadSink interface {
 	// UpdateRunners atomically replaces the runner map. It must be safe to call
 	// concurrently with ongoing agent runs.
 	UpdateRunners(runners map[string]ai.Runner)
+	// UpdateConfigAndRunners atomically replaces both the config snapshot and
+	// the runner map in a single critical section. Use this instead of calling
+	// UpdateConfig and UpdateRunners separately when both values are changing
+	// together so that concurrent readers never observe a mismatched pair.
+	UpdateConfigAndRunners(cfg *config.Config, runners map[string]ai.Runner)
 }
 
 // Scheduler wires cron-triggered agent bindings from the config into the
@@ -557,12 +562,14 @@ func (s *Scheduler) Reload(repos []config.RepoDef, agents []config.AgentDef, ski
 	s.bindMu.Unlock()
 
 	// Notify the external sink (Engine) so that event-driven runs also see the
-	// new config and runners without a restart.
+	// new config and runners without a restart. When both are changing, use the
+	// combined method so readers never observe a mismatched config/runner pair.
 	if s.hotReloadSink != nil {
 		if sinkRunners != nil {
-			s.hotReloadSink.UpdateRunners(sinkRunners)
+			s.hotReloadSink.UpdateConfigAndRunners(sinkCfg, sinkRunners)
+		} else {
+			s.hotReloadSink.UpdateConfig(sinkCfg)
 		}
-		s.hotReloadSink.UpdateConfig(sinkCfg)
 	}
 
 	return nil

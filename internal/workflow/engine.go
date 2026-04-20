@@ -124,6 +124,20 @@ func (e *Engine) UpdateRunners(runners map[string]ai.Runner) {
 	e.runnersMu.Unlock()
 }
 
+// UpdateConfigAndRunners atomically replaces both the config snapshot and the
+// runner map in a single critical section (cfgMu then runnersMu, consistent
+// with the read order in runAgent). Use this instead of calling UpdateConfig
+// and UpdateRunners separately when both values are changing together so that
+// concurrent readers never observe a mismatched config/runner pair.
+func (e *Engine) UpdateConfigAndRunners(cfg *config.Config, runners map[string]ai.Runner) {
+	e.cfgMu.Lock()
+	e.runnersMu.Lock()
+	e.cfg = cfg
+	e.runners = runners
+	e.runnersMu.Unlock()
+	e.cfgMu.Unlock()
+}
+
 // StartDispatchDedup starts the background eviction loop for the dispatch
 // dedup store. It is a no-op when dispatch is not configured.
 func (e *Engine) StartDispatchDedup(ctx context.Context) {
@@ -450,16 +464,17 @@ func extractDispatchContext(ev Event) (rootEventID string, depth int) {
 }
 
 func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) error {
-	// Snapshot config and runners under brief read locks so that a concurrent
-	// hot-reload cannot race with our reads. The locks are released before the
-	// slow runner.Run call below, minimising contention with Reload.
+	// Snapshot config and runners under both read locks held simultaneously so
+	// that a concurrent UpdateConfigAndRunners cannot swap one value between
+	// our two reads. Lock order (cfgMu then runnersMu) is consistent with
+	// UpdateConfigAndRunners to prevent deadlock. Both locks are released
+	// before the slow runner.Run call below, minimising contention.
 	e.cfgMu.RLock()
-	cfg := e.cfg
-	e.cfgMu.RUnlock()
-
 	e.runnersMu.RLock()
+	cfg := e.cfg
 	runners := e.runners
 	e.runnersMu.RUnlock()
+	e.cfgMu.RUnlock()
 
 	backend := cfg.ResolveBackend(agent.Backend)
 	if backend == "" {
