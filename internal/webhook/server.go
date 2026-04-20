@@ -119,11 +119,25 @@ func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue,
 // an http.Handler. It is separated from Run so tests can exercise routing
 // without starting a real TCP listener.
 func (s *Server) buildHandler() http.Handler {
+	// http.TimeoutHandler bounds handler execution time (i.e. how long the
+	// handler function runs before it must start writing). It is NOT a
+	// replacement for http.Server.WriteTimeout, which enforces a socket write
+	// deadline and is still set in Run(). SSE handlers clear that write
+	// deadline for themselves via http.ResponseController.SetWriteDeadline so
+	// they can stream indefinitely; see serveSSEWithInterval in api.go.
+	writeTimeout := time.Duration(s.cfg.Daemon.HTTP.WriteTimeoutSeconds) * time.Second
+	withTimeout := func(h http.Handler) http.Handler {
+		if writeTimeout <= 0 {
+			return h
+		}
+		return http.TimeoutHandler(h, writeTimeout, "handler timed out")
+	}
+
 	router := mux.NewRouter()
-	router.HandleFunc(s.cfg.Daemon.HTTP.StatusPath, s.handleStatus).Methods(http.MethodGet)
-	router.HandleFunc(s.cfg.Daemon.HTTP.WebhookPath, s.handleGitHubWebhook).Methods(http.MethodPost)
-	router.Handle(s.cfg.Daemon.HTTP.AgentsRunPath, s.requireAPIKey(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
-	router.HandleFunc("/api/run", s.handleAgentsRun).Methods(http.MethodPost)
+	router.Handle(s.cfg.Daemon.HTTP.StatusPath, withTimeout(http.HandlerFunc(s.handleStatus))).Methods(http.MethodGet)
+	router.Handle(s.cfg.Daemon.HTTP.WebhookPath, withTimeout(http.HandlerFunc(s.handleGitHubWebhook))).Methods(http.MethodPost)
+	router.Handle(s.cfg.Daemon.HTTP.AgentsRunPath, withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleAgentsRun)))).Methods(http.MethodPost)
+	router.Handle("/api/run", withTimeout(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
 
 	// Observability API — read-only endpoints served unauthenticated at the
 	// daemon level. The embedded UI makes same-origin fetch/EventSource calls
@@ -132,21 +146,21 @@ func (s *Server) buildHandler() http.Handler {
 	// api_key is set. Access control for these endpoints is the reverse
 	// proxy's responsibility, consistent with the original issue design.
 	// The mutation endpoint (/agents/run) retains its Bearer-token gate.
-	router.HandleFunc("/api/agents", s.handleAPIAgents).Methods(http.MethodGet)
-	router.HandleFunc("/api/config", s.handleAPIConfig).Methods(http.MethodGet)
-	router.HandleFunc("/api/dispatches", s.handleAPIDispatches).Methods(http.MethodGet)
+	router.Handle("/api/agents", withTimeout(http.HandlerFunc(s.handleAPIAgents))).Methods(http.MethodGet)
+	router.Handle("/api/config", withTimeout(http.HandlerFunc(s.handleAPIConfig))).Methods(http.MethodGet)
+	router.Handle("/api/dispatches", withTimeout(http.HandlerFunc(s.handleAPIDispatches))).Methods(http.MethodGet)
 
 	// Extended observability endpoints — only registered when an observe.Store
 	// has been attached via WithObserve.
 	if s.observeStore != nil {
-		router.HandleFunc("/api/events", s.handleAPIEvents).Methods(http.MethodGet)
-		router.HandleFunc("/api/events/stream", s.handleAPIEventsStream)
-		router.HandleFunc("/api/traces", s.handleAPITraces).Methods(http.MethodGet)
-		router.HandleFunc("/api/traces/stream", s.handleAPITracesStream)
-		router.HandleFunc("/api/traces/{root_event_id}", s.handleAPITrace).Methods(http.MethodGet)
-		router.HandleFunc("/api/graph", s.handleAPIGraph).Methods(http.MethodGet)
-		router.HandleFunc("/api/memory/{agent}/{repo}", s.handleAPIMemory).Methods(http.MethodGet)
-		router.HandleFunc("/api/memory/stream", s.handleAPIMemoryStream)
+		router.Handle("/api/events", withTimeout(http.HandlerFunc(s.handleAPIEvents))).Methods(http.MethodGet)
+		router.HandleFunc("/api/events/stream", s.handleAPIEventsStream)           // SSE — no timeout
+		router.Handle("/api/traces", withTimeout(http.HandlerFunc(s.handleAPITraces))).Methods(http.MethodGet)
+		router.HandleFunc("/api/traces/stream", s.handleAPITracesStream)           // SSE — no timeout
+		router.Handle("/api/traces/{root_event_id}", withTimeout(http.HandlerFunc(s.handleAPITrace))).Methods(http.MethodGet)
+		router.Handle("/api/graph", withTimeout(http.HandlerFunc(s.handleAPIGraph))).Methods(http.MethodGet)
+		router.Handle("/api/memory/{agent}/{repo}", withTimeout(http.HandlerFunc(s.handleAPIMemory))).Methods(http.MethodGet)
+		router.HandleFunc("/api/memory/stream", s.handleAPIMemoryStream)           // SSE — no timeout
 	}
 
 	// Static UI: served from the embedded dist/ tree when a UI FS is provided.
@@ -155,18 +169,23 @@ func (s *Server) buildHandler() http.Handler {
 		sub, err := fs.Sub(s.uiFS, "dist")
 		if err == nil {
 			fileServer := http.StripPrefix("/ui/", http.FileServer(http.FS(sub)))
-			router.PathPrefix("/ui/").Handler(fileServer)
+			router.PathPrefix("/ui/").Handler(withTimeout(fileServer))
 			// Redirect the slashless entrypoint /ui → /ui/ so operators and
 			// reverse proxies that normalise trailing slashes get the dashboard.
-			router.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) {
+			router.Handle("/ui", withTimeout(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
-			}).Methods(http.MethodGet)
+			}))).Methods(http.MethodGet)
 		}
 	}
 
 	if s.proxy != nil {
+		// The proxy enforces its own upstream timeout via an http.Client
+		// deadline; wrapping it with http.TimeoutHandler would impose a hard
+		// cap shorter than the configured LLM inference timeout and break long
+		// completions.
 		router.Handle(s.cfg.Daemon.Proxy.Path, s.proxy).Methods(http.MethodPost)
-		router.HandleFunc("/v1/models", s.proxy.ModelsHandler).Methods(http.MethodGet)
+		// /v1/models is a lightweight stub — wrap it with the standard timeout.
+		router.Handle("/v1/models", withTimeout(http.HandlerFunc(s.proxy.ModelsHandler))).Methods(http.MethodGet)
 		s.logger.Info().Str("path", s.cfg.Daemon.Proxy.Path).Str("upstream", s.cfg.Daemon.Proxy.Upstream.URL).Msg("anthropic proxy enabled")
 	}
 	return router
