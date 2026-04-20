@@ -445,6 +445,13 @@ func (s *Scheduler) Reload(repos []config.RepoDef, agents []config.AgentDef) err
 	for _, e := range oldEntries {
 		s.cron.Remove(e.cronID)
 	}
+
+	// Keep the dispatcher's agent map in sync so that dispatch allowlist and
+	// opt-in checks reflect the new agent definitions immediately.
+	if s.dispatcher != nil {
+		s.dispatcher.UpdateAgents(agents)
+	}
+
 	s.logger.Info().Int("cron_jobs", len(s.agentEntries)).Msg("scheduler reloaded")
 	return nil
 }

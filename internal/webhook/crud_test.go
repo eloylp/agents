@@ -394,3 +394,98 @@ func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
 		})
 	}
 }
+
+// ── /api/store write-endpoint authentication ──────────────────────────────────
+
+// openCRUDTestServerWithAPIKey creates a test server with an API key configured.
+func openCRUDTestServerWithAPIKey(t *testing.T, apiKey string) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	db, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	cfg := crudMinimalConfig()
+	cfg.Daemon.HTTP.APIKey = apiKey
+	dc := workflow.NewDataChannels(1)
+	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, zerolog.Nop())
+	s.WithStore(db, nil)
+	return s
+}
+
+// doCRUDRequestWithToken sends a request with a Bearer token.
+func doCRUDRequestWithToken(t *testing.T, s *Server, method, path string, body any, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	var buf bytes.Buffer
+	if body != nil {
+		if err := json.NewEncoder(&buf).Encode(body); err != nil {
+			t.Fatalf("encode body: %v", err)
+		}
+	}
+	req := httptest.NewRequest(method, path, &buf)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rr := httptest.NewRecorder()
+	s.buildHandler().ServeHTTP(rr, req)
+	return rr
+}
+
+// TestStoreCRUDWriteEndpointsRequireAPIKey verifies that POST and DELETE
+// endpoints return 401 when an API key is configured but not supplied, and
+// that GET endpoints remain open without a token.
+func TestStoreCRUDWriteEndpointsRequireAPIKey(t *testing.T) {
+	t.Parallel()
+	const key = "secret-token"
+	s := openCRUDTestServerWithAPIKey(t, key)
+
+	writeMethods := []struct {
+		method string
+		path   string
+		body   any
+	}{
+		{http.MethodPost, "/api/store/agents", map[string]any{"name": "x", "backend": "claude", "prompt": "p"}},
+		{http.MethodDelete, "/api/store/agents/x", nil},
+		{http.MethodPost, "/api/store/skills", map[string]any{"name": "s", "prompt": "p"}},
+		{http.MethodDelete, "/api/store/skills/s", nil},
+		{http.MethodPost, "/api/store/backends", map[string]any{"name": "b", "command": "c"}},
+		{http.MethodDelete, "/api/store/backends/b", nil},
+		{http.MethodPost, "/api/store/repos", map[string]any{"name": "owner/repo"}},
+		{http.MethodDelete, "/api/store/repos/owner/repo", nil},
+	}
+
+	for _, tc := range writeMethods {
+		t.Run(tc.method+" "+tc.path+" no token", func(t *testing.T) {
+			t.Parallel()
+			rr := doCRUDRequestWithToken(t, s, tc.method, tc.path, tc.body, "")
+			if rr.Code != http.StatusUnauthorized {
+				t.Errorf("%s %s: want 401 without token, got %d", tc.method, tc.path, rr.Code)
+			}
+		})
+		t.Run(tc.method+" "+tc.path+" wrong token", func(t *testing.T) {
+			t.Parallel()
+			rr := doCRUDRequestWithToken(t, s, tc.method, tc.path, tc.body, "wrong")
+			if rr.Code != http.StatusUnauthorized {
+				t.Errorf("%s %s: want 401 with wrong token, got %d", tc.method, tc.path, rr.Code)
+			}
+		})
+	}
+
+	// GET endpoints must remain open (no token required).
+	for _, path := range []string{
+		"/api/store/agents",
+		"/api/store/skills",
+		"/api/store/backends",
+		"/api/store/repos",
+	} {
+		t.Run("GET "+path+" no token", func(t *testing.T) {
+			t.Parallel()
+			rr := doCRUDRequestWithToken(t, s, http.MethodGet, path, nil, "")
+			if rr.Code != http.StatusOK {
+				t.Errorf("GET %s: want 200 without token, got %d", path, rr.Code)
+			}
+		})
+	}
+}

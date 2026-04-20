@@ -411,6 +411,7 @@ func (s *DispatchDedupStore) TryClaimForDispatch(agent, repo string, number int,
 type Dispatcher struct {
 	cfg      config.DispatchConfig
 	agents   map[string]config.AgentDef // all agents by name (lower-cased)
+	agentsMu sync.RWMutex               // protects agents map
 	dedup    *DispatchDedupStore
 	counters dispatchCounters
 	queue    EventEnqueuer
@@ -434,6 +435,19 @@ func NewDispatcher(cfg config.DispatchConfig, agents map[string]config.AgentDef,
 // enqueued dispatch. Safe to call after NewDispatcher.
 func (d *Dispatcher) WithGraphRecorder(r GraphRecorder) {
 	d.graphRec = r
+}
+
+// UpdateAgents replaces the agent map used for dispatch allowlist and opt-in
+// checks. It is safe to call concurrently with ProcessDispatches and is
+// intended for hot-reload paths (e.g. CRUD API followed by cron reload).
+func (d *Dispatcher) UpdateAgents(agents []config.AgentDef) {
+	m := make(map[string]config.AgentDef, len(agents))
+	for _, a := range agents {
+		m[a.Name] = a
+	}
+	d.agentsMu.Lock()
+	d.agents = m
+	d.agentsMu.Unlock()
 }
 
 // ProcessDispatches validates and enqueues each dispatch request from a single
@@ -487,7 +501,9 @@ func (d *Dispatcher) ProcessDispatches(
 		}
 
 		// Opt-in check: target must have allow_dispatch: true.
+		d.agentsMu.RLock()
 		target, ok := d.agents[req.Agent]
+		d.agentsMu.RUnlock()
 		if !ok || !target.AllowDispatch {
 			logBase.Warn().Msg("dispatch dropped: target has allow_dispatch: false")
 			d.counters.droppedNoOptin.Add(1)

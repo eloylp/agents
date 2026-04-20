@@ -172,16 +172,27 @@ func (s *Server) buildHandler() http.Handler {
 
 	// Store CRUD endpoints — only registered when a SQLite store has been
 	// attached via WithStore (i.e. when the daemon was started with --db).
+	// Read (GET) endpoints are served unauthenticated, consistent with the
+	// other observability API endpoints. Write (POST / DELETE) endpoints are
+	// gated by requireAPIKey because they mutate live fleet configuration.
 	if s.db != nil {
-		router.Handle("/api/store/agents", withTimeout(http.HandlerFunc(s.handleStoreAgents))).Methods(http.MethodGet, http.MethodPost)
-		router.Handle("/api/store/agents/{name}", withTimeout(http.HandlerFunc(s.handleStoreAgent))).Methods(http.MethodGet, http.MethodDelete)
-		router.Handle("/api/store/skills", withTimeout(http.HandlerFunc(s.handleStoreSkills))).Methods(http.MethodGet, http.MethodPost)
-		router.Handle("/api/store/skills/{name}", withTimeout(http.HandlerFunc(s.handleStoreSkill))).Methods(http.MethodGet, http.MethodDelete)
-		router.Handle("/api/store/backends", withTimeout(http.HandlerFunc(s.handleStoreBackends))).Methods(http.MethodGet, http.MethodPost)
-		router.Handle("/api/store/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackend))).Methods(http.MethodGet, http.MethodDelete)
-		router.Handle("/api/store/repos", withTimeout(http.HandlerFunc(s.handleStoreRepos))).Methods(http.MethodGet, http.MethodPost)
+		router.Handle("/api/store/agents", withTimeout(http.HandlerFunc(s.handleStoreAgents))).Methods(http.MethodGet)
+		router.Handle("/api/store/agents", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreAgents)))).Methods(http.MethodPost)
+		router.Handle("/api/store/agents/{name}", withTimeout(http.HandlerFunc(s.handleStoreAgent))).Methods(http.MethodGet)
+		router.Handle("/api/store/agents/{name}", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreAgent)))).Methods(http.MethodDelete)
+		router.Handle("/api/store/skills", withTimeout(http.HandlerFunc(s.handleStoreSkills))).Methods(http.MethodGet)
+		router.Handle("/api/store/skills", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreSkills)))).Methods(http.MethodPost)
+		router.Handle("/api/store/skills/{name}", withTimeout(http.HandlerFunc(s.handleStoreSkill))).Methods(http.MethodGet)
+		router.Handle("/api/store/skills/{name}", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreSkill)))).Methods(http.MethodDelete)
+		router.Handle("/api/store/backends", withTimeout(http.HandlerFunc(s.handleStoreBackends))).Methods(http.MethodGet)
+		router.Handle("/api/store/backends", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreBackends)))).Methods(http.MethodPost)
+		router.Handle("/api/store/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackend))).Methods(http.MethodGet)
+		router.Handle("/api/store/backends/{name}", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreBackend)))).Methods(http.MethodDelete)
+		router.Handle("/api/store/repos", withTimeout(http.HandlerFunc(s.handleStoreRepos))).Methods(http.MethodGet)
+		router.Handle("/api/store/repos", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreRepos)))).Methods(http.MethodPost)
 		// {owner}/{repo} captures "owner/repo" across two path segments.
-		router.Handle("/api/store/repos/{owner}/{repo}", withTimeout(http.HandlerFunc(s.handleStoreRepo))).Methods(http.MethodGet, http.MethodDelete)
+		router.Handle("/api/store/repos/{owner}/{repo}", withTimeout(http.HandlerFunc(s.handleStoreRepo))).Methods(http.MethodGet)
+		router.Handle("/api/store/repos/{owner}/{repo}", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreRepo)))).Methods(http.MethodDelete)
 	}
 
 	// Extended observability endpoints — only registered when an observe.Store
