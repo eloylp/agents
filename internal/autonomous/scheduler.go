@@ -200,7 +200,7 @@ func (s *Scheduler) registerJobs() error {
 				// Validation at config load should have caught this; defensive.
 				return fmt.Errorf("binding references unknown agent %q on repo %q", binding.Agent, repo.Name)
 			}
-			job := s.makeCronJob(repo.Name, agent)
+			job := s.makeCronJob(repo.Name, agent.Name)
 			id, err := s.cron.AddFunc(binding.Cron, job)
 			if err != nil {
 				return fmt.Errorf("schedule agent %q for repo %q: %w", agent.Name, repo.Name, err)
@@ -218,20 +218,29 @@ func (s *Scheduler) registerJobs() error {
 	return nil
 }
 
-func (s *Scheduler) makeCronJob(repo string, agent config.AgentDef) func() {
+func (s *Scheduler) makeCronJob(repo string, agentName string) func() {
 	return func() {
 		ctx := s.currentRunCtx()
 		if ctx.Err() != nil {
 			return
 		}
-		// Snapshot cfg+runners at execution time so that the agent definition
-		// captured at cron-registration time is paired with the matching
-		// backend/runner set from the same epoch. Both are read under the same
-		// lock to prevent a partial hot-reload from splitting the snapshot.
+		// Snapshot cfg+runners at execution time under the same lock so that
+		// the agent definition, backends, and runner set all come from the same
+		// config epoch. Resolving the agent by name here (rather than capturing
+		// a config.AgentDef by value at registration time) ensures that a cron
+		// closure that was dequeued just before a Reload completes will still
+		// execute with the post-reload definition once it acquires the read lock.
 		s.bindMu.RLock()
 		cfg := s.cfg
 		runners := s.runners
 		s.bindMu.RUnlock()
+
+		agent, ok := cfg.AgentByName(agentName)
+		if !ok {
+			s.logger.Error().Str("repo", repo).Str("agent", agentName).
+				Msg("cron job: agent not found in current config snapshot; skipping run")
+			return
+		}
 
 		status := "success"
 		if err := s.executeAgentRun(ctx, repo, agent, cfg, runners); err != nil {

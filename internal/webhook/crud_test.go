@@ -1173,6 +1173,129 @@ func TestStoreCRUDRepoPathCanonicalization(t *testing.T) {
 	}
 }
 
+// TestStoreCRUDPostReturnsCanonicalForm verifies that POST endpoints return the
+// canonical persisted entity rather than the raw request body. Values that
+// storage normalises (lowercase names, trimmed whitespace, applied backend
+// defaults) must be reflected in the POST response so that clients doing
+// optimistic updates from the response never cache a shape that disagrees with
+// the very next GET.
+func TestStoreCRUDPostReturnsCanonicalForm(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	// ── backend ──────────────────────────────────────────────────────────────
+	// POST with mixed-case name and zero timeout/max_prompt_chars; response must
+	// have lowercase name, defaults applied, and env values redacted.
+	rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
+		"name":    "Claude",
+		"command": " claude ",
+		"env":     map[string]string{"ANTHROPIC_API_KEY": "secret-value"},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST backend: got %d — %s", rr.Code, rr.Body.String())
+	}
+	var backend map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&backend); err != nil {
+		t.Fatalf("decode backend response: %v", err)
+	}
+	if backend["name"] != "claude" {
+		t.Errorf("backend name: got %q, want %q", backend["name"], "claude")
+	}
+	if backend["command"] != "claude" {
+		t.Errorf("backend command not trimmed: got %q, want %q", backend["command"], "claude")
+	}
+	// Defaults must be applied (0 → non-zero).
+	if to, ok := backend["timeout_seconds"].(float64); !ok || to == 0 {
+		t.Errorf("backend timeout_seconds: got %v, want non-zero default", backend["timeout_seconds"])
+	}
+	if mp, ok := backend["max_prompt_chars"].(float64); !ok || mp == 0 {
+		t.Errorf("backend max_prompt_chars: got %v, want non-zero default", backend["max_prompt_chars"])
+	}
+	// Env values must be redacted.
+	if env, ok := backend["env"].(map[string]any); ok {
+		if env["ANTHROPIC_API_KEY"] != "[redacted]" {
+			t.Errorf("backend env value not redacted: got %q", env["ANTHROPIC_API_KEY"])
+		}
+	} else {
+		t.Errorf("backend env missing or wrong type: %v", backend["env"])
+	}
+
+	// ── agent ────────────────────────────────────────────────────────────────
+	// POST with mixed-case name and extra whitespace; response must have
+	// lowercase name and trimmed prompt.
+	rr = doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name":    "  Coder  ",
+		"backend": "claude",
+		"prompt":  "  You write code.  ",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST agent: got %d — %s", rr.Code, rr.Body.String())
+	}
+	var agent map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&agent); err != nil {
+		t.Fatalf("decode agent response: %v", err)
+	}
+	if agent["name"] != "coder" {
+		t.Errorf("agent name: got %q, want %q", agent["name"], "coder")
+	}
+	if agent["prompt"] != "You write code." {
+		t.Errorf("agent prompt not trimmed: got %q", agent["prompt"])
+	}
+
+	// ── skill ────────────────────────────────────────────────────────────────
+	// POST with mixed-case name and whitespace-padded prompt; response must
+	// have lowercase name and trimmed prompt.
+	rr = doCRUDRequest(t, s, http.MethodPost, "/api/store/skills", map[string]any{
+		"name":   "Architect",
+		"prompt": "  Focus on design.  ",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST skill: got %d — %s", rr.Code, rr.Body.String())
+	}
+	var skill map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&skill); err != nil {
+		t.Fatalf("decode skill response: %v", err)
+	}
+	if skill["name"] != "architect" {
+		t.Errorf("skill name: got %q, want %q", skill["name"], "architect")
+	}
+	if skill["prompt"] != "Focus on design." {
+		t.Errorf("skill prompt not trimmed: got %q", skill["prompt"])
+	}
+
+	// ── repo ─────────────────────────────────────────────────────────────────
+	// POST with mixed-case name; response must have lowercase name and
+	// normalized binding agent name.
+	rr = doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+		"name":    "Owner/Repo",
+		"enabled": true,
+		"bindings": []map[string]any{
+			{"agent": "  Coder  ", "labels": []string{"ai:fix"}},
+		},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST repo: got %d — %s", rr.Code, rr.Body.String())
+	}
+	var repo map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&repo); err != nil {
+		t.Fatalf("decode repo response: %v", err)
+	}
+	if repo["name"] != "owner/repo" {
+		t.Errorf("repo name: got %q, want %q", repo["name"], "owner/repo")
+	}
+	bindings, _ := repo["bindings"].([]any)
+	if len(bindings) == 0 {
+		t.Fatal("repo bindings missing in response")
+	}
+	if b0, ok := bindings[0].(map[string]any); ok {
+		if b0["agent"] != "coder" {
+			t.Errorf("binding agent name: got %q, want %q", b0["agent"], "coder")
+		}
+	} else {
+		t.Errorf("binding[0] wrong type: %T", bindings[0])
+	}
+}
+
 func TestStoreCRUDDeleteRepoRejectedAsLastEnabled(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)

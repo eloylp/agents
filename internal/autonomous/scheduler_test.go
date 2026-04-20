@@ -1533,3 +1533,49 @@ func TestSchedulerReloadReleasesMuBeforeSinkCall(t *testing.T) {
 		t.Errorf("Reload: %v", err)
 	}
 }
+
+// TestSchedulerCronJobUsesPostReloadAgentDef verifies that a cron closure
+// resolves the agent definition from the config snapshot at execution time
+// rather than capturing it by value at registration time. A cron tick that
+// fires after a Reload (i.e., the closure was enqueued before the old entry
+// was removed but runs after bindMu is released) must use the post-reload
+// agent definition, not the stale pre-reload one.
+func TestSchedulerCronJobUsesPostReloadAgentDef(t *testing.T) {
+	t.Parallel()
+
+	runner := &promptCapturingRunner{}
+	cfg := baseCfg(nil) // agent "reviewer" with prompt "Review PRs."
+
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	// Capture the pre-reload cron closure. This simulates a cron tick that was
+	// dequeued by the cron library before the old entry was removed by Reload.
+	preReloadJob := s.cron.Entry(s.agentEntries[0].cronID).WrappedJob
+
+	// Reload with an updated prompt for the same agent.
+	updatedAgents := []config.AgentDef{
+		{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Updated review prompt."},
+	}
+	if err := s.Reload(cfg.Repos, updatedAgents, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	// Invoke the pre-reload closure — it should see the post-reload agent
+	// definition because it resolves the agent from the cfg snapshot at
+	// execution time (after bindMu.RLock is acquired and the new cfg is visible).
+	preReloadJob.Run()
+
+	runner.mu.Lock()
+	prompts := runner.prompts
+	runner.mu.Unlock()
+
+	if len(prompts) != 1 {
+		t.Fatalf("expected 1 prompt captured, got %d", len(prompts))
+	}
+	if !strings.Contains(prompts[0], "Updated review prompt.") {
+		t.Errorf("pre-reload cron closure used stale agent definition; prompt = %q", prompts[0])
+	}
+}

@@ -260,7 +260,11 @@ func (s *Server) handleStoreAgents(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("agent upsert or cron reload: %v", err), status)
 			return
 		}
-		writeJSON(w, http.StatusOK, req)
+		// Return the canonical persisted form so clients see normalized values
+		// (lowercase name, trimmed prompt, etc.) rather than the raw request.
+		a := req.toConfig()
+		config.NormalizeAgentDef(&a)
+		writeJSON(w, http.StatusOK, agentToStoreJSON(a))
 	}
 }
 
@@ -345,7 +349,10 @@ func (s *Server) handleStoreSkills(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("skill upsert or cron reload: %v", err), status)
 			return
 		}
-		writeJSON(w, http.StatusOK, req)
+		// Return the canonical persisted form so clients see normalized values.
+		sk := config.SkillDef{Prompt: req.Prompt}
+		config.NormalizeSkillDef(&sk)
+		writeJSON(w, http.StatusOK, storeSkillJSON{Name: config.NormalizeSkillName(req.Name), Prompt: sk.Prompt})
 	}
 }
 
@@ -432,7 +439,12 @@ func (s *Server) handleStoreBackends(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("backend upsert or cron reload: %v", err), status)
 			return
 		}
-		writeJSON(w, http.StatusOK, req)
+		// Return the canonical persisted form: normalized name, defaults applied,
+		// and env values redacted — consistent with what GET returns.
+		b := req.toConfig()
+		config.NormalizeBackendConfig(&b)
+		config.ApplyBackendDefaults(&b)
+		writeJSON(w, http.StatusOK, backendToStoreJSON(config.NormalizeBackendName(req.Name), b))
 	}
 }
 
@@ -516,7 +528,11 @@ func (s *Server) handleStoreRepos(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("repo upsert or cron reload: %v", err), status)
 			return
 		}
-		writeJSON(w, http.StatusOK, req)
+		// Return the canonical persisted form so clients see normalized values
+		// (lowercase repo name, trimmed binding fields, etc.).
+		r := req.toConfig()
+		config.NormalizeRepoDef(&r)
+		writeJSON(w, http.StatusOK, repoToStoreJSON(r))
 	}
 }
 
