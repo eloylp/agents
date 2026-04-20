@@ -470,7 +470,6 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 // stays in a consistent state and the caller receives an error.
 func (s *Scheduler) Reload(repos []config.RepoDef, agents []config.AgentDef, skills map[string]config.SkillDef, backends map[string]config.AIBackendConfig) error {
 	s.bindMu.Lock()
-	defer s.bindMu.Unlock()
 
 	// Save old state for rollback.
 	oldCfg := s.cfg
@@ -484,6 +483,12 @@ func (s *Scheduler) Reload(repos []config.RepoDef, agents []config.AgentDef, ski
 	// readers in event-driven agent runs. Copy-on-write gives every goroutine
 	// that already snapshotted the old pointer a consistent view until it
 	// finishes, while future snapshots see the new config.
+	//
+	// Note: this is a shallow copy. Sub-fields that are value types (structs,
+	// scalars) are copied; the four mutable fields (Repos, Agents, Skills,
+	// Daemon.AIBackends) are replaced with the caller-supplied slices/maps.
+	// Immutable fields such as Daemon.HTTP and Daemon.Log are shared by value
+	// and are never written after startup, so sharing is safe.
 	newCfg := *s.cfg
 	newCfg.Repos = repos
 	newCfg.Agents = agents
@@ -503,6 +508,7 @@ func (s *Scheduler) Reload(repos []config.RepoDef, agents []config.AgentDef, ski
 		s.cfg = oldCfg
 		s.runners = oldRunners
 		s.agentEntries = oldEntries
+		s.bindMu.Unlock()
 		return err
 	}
 
@@ -521,6 +527,7 @@ func (s *Scheduler) Reload(repos []config.RepoDef, agents []config.AgentDef, ski
 	// We build a fresh map (copy-on-write) rather than mutating the existing
 	// one to avoid racing with concurrent executeAgentRun or engine.runAgent
 	// calls that may already hold a reference to the old map.
+	var sinkRunners map[string]ai.Runner
 	if s.runnerBuilder != nil {
 		newRunners := make(map[string]ai.Runner, len(backends))
 		for name, backend := range backends {
@@ -528,17 +535,36 @@ func (s *Scheduler) Reload(repos []config.RepoDef, agents []config.AgentDef, ski
 		}
 		s.runners = newRunners
 		if s.hotReloadSink != nil {
-			s.hotReloadSink.UpdateRunners(maps.Clone(newRunners))
+			sinkRunners = maps.Clone(newRunners)
 		}
 	}
 
-	// Notify the external sink (Engine) so that event-driven runs also see the
-	// new config without a restart.
+	// Capture the new config pointer for the sink notification (s.cfg == &newCfg).
+	var sinkCfg *config.Config
 	if s.hotReloadSink != nil {
-		s.hotReloadSink.UpdateConfig(&newCfg)
+		sinkCfg = s.cfg
 	}
 
 	s.logger.Info().Int("cron_jobs", len(s.agentEntries)).Msg("scheduler reloaded")
+
+	// Release bindMu BEFORE notifying the engine sink. Engine readers such as
+	// runAgent hold cfgMu.RLock() and can call back into TriggerAgent which
+	// needs bindMu.RLock(). Calling UpdateConfig/UpdateRunners while still
+	// holding bindMu.Lock() creates a cyclic wait (A→cfgMu→bindMu, B→bindMu
+	// waiting for A to release). The new config is already committed to s.cfg,
+	// so releasing here is safe — a concurrent caller cannot start another
+	// Reload because storeMu in the HTTP layer serialises all write+reload paths.
+	s.bindMu.Unlock()
+
+	// Notify the external sink (Engine) so that event-driven runs also see the
+	// new config and runners without a restart.
+	if s.hotReloadSink != nil {
+		if sinkRunners != nil {
+			s.hotReloadSink.UpdateRunners(sinkRunners)
+		}
+		s.hotReloadSink.UpdateConfig(sinkCfg)
+	}
+
 	return nil
 }
 

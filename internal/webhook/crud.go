@@ -286,8 +286,15 @@ func (s *Server) handleStoreSkills(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "name is required", http.StatusBadRequest)
 			return
 		}
-		if err := store.UpsertSkill(s.db, req.Name, config.SkillDef{Prompt: req.Prompt}); err != nil {
-			http.Error(w, fmt.Sprintf("upsert skill: %v", err), http.StatusInternalServerError)
+		s.storeMu.Lock()
+		err := store.UpsertSkill(s.db, req.Name, config.SkillDef{Prompt: req.Prompt})
+		if err == nil {
+			err = s.reloadCron()
+		}
+		s.storeMu.Unlock()
+		if err != nil {
+			s.logger.Error().Err(err).Msg("store crud: skill upsert or cron reload failed")
+			http.Error(w, fmt.Sprintf("skill upsert or cron reload: %v", err), http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, http.StatusOK, req)
@@ -316,8 +323,15 @@ func (s *Server) handleStoreSkill(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, storeSkillJSON{Name: name, Prompt: sk.Prompt})
 
 	case http.MethodDelete:
-		if err := store.DeleteSkill(s.db, name); err != nil {
-			http.Error(w, fmt.Sprintf("delete skill: %v", err), http.StatusInternalServerError)
+		s.storeMu.Lock()
+		err := store.DeleteSkill(s.db, name)
+		if err == nil {
+			err = s.reloadCron()
+		}
+		s.storeMu.Unlock()
+		if err != nil {
+			s.logger.Error().Err(err).Msg("store crud: skill delete or cron reload failed")
+			http.Error(w, fmt.Sprintf("skill delete or cron reload: %v", err), http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -358,8 +372,15 @@ func (s *Server) handleStoreBackends(w http.ResponseWriter, r *http.Request) {
 		if req.Env == nil {
 			req.Env = map[string]string{}
 		}
-		if err := store.UpsertBackend(s.db, req.Name, req.toConfig()); err != nil {
-			http.Error(w, fmt.Sprintf("upsert backend: %v", err), http.StatusInternalServerError)
+		s.storeMu.Lock()
+		err := store.UpsertBackend(s.db, req.Name, req.toConfig())
+		if err == nil {
+			err = s.reloadCron()
+		}
+		s.storeMu.Unlock()
+		if err != nil {
+			s.logger.Error().Err(err).Msg("store crud: backend upsert or cron reload failed")
+			http.Error(w, fmt.Sprintf("backend upsert or cron reload: %v", err), http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, http.StatusOK, req)
@@ -388,8 +409,15 @@ func (s *Server) handleStoreBackend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, backendToStoreJSON(name, b))
 
 	case http.MethodDelete:
-		if err := store.DeleteBackend(s.db, name); err != nil {
-			http.Error(w, fmt.Sprintf("delete backend: %v", err), http.StatusInternalServerError)
+		s.storeMu.Lock()
+		err := store.DeleteBackend(s.db, name)
+		if err == nil {
+			err = s.reloadCron()
+		}
+		s.storeMu.Unlock()
+		if err != nil {
+			s.logger.Error().Err(err).Msg("store crud: backend delete or cron reload failed")
+			http.Error(w, fmt.Sprintf("backend delete or cron reload: %v", err), http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

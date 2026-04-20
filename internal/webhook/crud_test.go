@@ -417,6 +417,39 @@ func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
 			body:   nil,
 		},
 		{
+			name:   "POST skill",
+			method: http.MethodPost,
+			path:   "/api/store/skills",
+			body:   map[string]any{"name": "arch", "prompt": "Focus on architecture."},
+		},
+		{
+			name:   "DELETE skill",
+			method: http.MethodDelete,
+			path:   "/api/store/skills/arch",
+			body:   nil,
+		},
+		{
+			name:   "POST backend",
+			method: http.MethodPost,
+			path:   "/api/store/backends",
+			body:   map[string]any{"name": "claude2", "command": "claude2", "args": []string{}, "env": map[string]string{}},
+			// Seed claude so there is already one backend, making the new backend
+			// a valid addition (fleet validation requires at least one).
+			setup: func(t *testing.T, s *Server) { seedStoreBackend(t, s, "claude") },
+		},
+		{
+			name:   "DELETE backend",
+			method: http.MethodDelete,
+			path:   "/api/store/backends/claude",
+			body:   nil,
+			// Seed two backends so deleting one still leaves the fleet valid;
+			// the reload failure is the only reason the handler should return 500.
+			setup: func(t *testing.T, s *Server) {
+				seedStoreBackend(t, s, "claude")
+				seedStoreBackend(t, s, "codex")
+			},
+		},
+		{
 			name:   "POST repo",
 			method: http.MethodPost,
 			path:   "/api/store/repos",

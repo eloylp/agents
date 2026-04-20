@@ -1461,3 +1461,67 @@ func TestSchedulerReloadRaceWithConcurrentRun(t *testing.T) {
 
 	wg.Wait()
 }
+
+// TestSchedulerReloadReleasesMuBeforeSinkCall verifies that Reload releases
+// bindMu before calling into the HotReloadSink, so that a concurrent
+// TriggerAgent call (which needs bindMu.RLock) is not blocked for the full
+// duration of the sink call.
+//
+// This guards against a lock-ordering inversion that would arise if the Engine
+// sink ever held cfgMu.RLock while indirectly calling back into TriggerAgent
+// (which needs bindMu.RLock): Reload holding bindMu.Lock while waiting for
+// cfgMu.Lock would form a cycle.
+func TestSchedulerReloadReleasesMuBeforeSinkCall(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseCfg(nil)
+	runner := &stubRunner{}
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithRunnerBuilder(func(_ string, _ config.AIBackendConfig) ai.Runner { return runner })
+
+	// Sink that signals when UpdateConfig is entered, then blocks until released.
+	// This lets us assert that bindMu is NOT held during the UpdateConfig call.
+	sinkEntered := make(chan struct{})
+	sinkRelease := make(chan struct{})
+	sink := &testHotReloadSink{
+		updateConfig: func(*config.Config) {
+			close(sinkEntered)
+			<-sinkRelease
+		},
+	}
+	s.WithHotReloadSink(sink)
+
+	// Run Reload in the background; it will block inside UpdateConfig.
+	reloadDone := make(chan error, 1)
+	go func() {
+		reloadDone <- s.Reload(cfg.Repos, cfg.Agents, cfg.Skills, cfg.Daemon.AIBackends)
+	}()
+
+	// Wait until Reload is inside the sink call.
+	<-sinkEntered
+
+	// TriggerAgent must complete without blocking. If Reload still held
+	// bindMu.Lock() at this point, the RLock acquisition inside TriggerAgent
+	// would stall for the remainder of the sink call.
+	triggerDone := make(chan struct{})
+	go func() {
+		_ = s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
+		close(triggerDone)
+	}()
+
+	select {
+	case <-triggerDone:
+		// Good: bindMu was released before the sink call.
+	case <-time.After(2 * time.Second):
+		t.Error("TriggerAgent blocked while Reload was in the sink call — bindMu must be released before UpdateConfig")
+	}
+
+	// Release the sink and wait for Reload to finish cleanly.
+	close(sinkRelease)
+	if err := <-reloadDone; err != nil {
+		t.Errorf("Reload: %v", err)
+	}
+}
