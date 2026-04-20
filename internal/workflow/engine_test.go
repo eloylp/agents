@@ -189,65 +189,58 @@ func TestEngineJoinsErrorsAcrossAgents(t *testing.T) {
 	}
 }
 
-func TestHandleEventEventBindingMatchesKind(t *testing.T) {
+func TestHandleEventEventBindings(t *testing.T) {
 	t.Parallel()
-	e, runner := newTestEngine(func(c *config.Config) {
-		c.Agents = append(c.Agents, config.AgentDef{Name: "commenter", Backend: "claude", Prompt: "React to comments."})
-		c.Repos[0].Use = append(c.Repos[0].Use, config.Binding{Agent: "commenter", Events: []string{"issue_comment.created"}})
-	})
-	ev := Event{
-		Repo:    RepoRef{FullName: "owner/repo", Enabled: true},
-		Kind:    "issue_comment.created",
-		Number:  3,
-		Actor:   "octocat",
-		Payload: map[string]any{"body": "LGTM"},
+	tests := []struct {
+		name         string
+		bindEvent    string
+		triggerEvent string
+		wantRuns     int
+	}{
+		{
+			name:         "matching kind fires agent",
+			bindEvent:    "issue_comment.created",
+			triggerEvent: "issue_comment.created",
+			wantRuns:     1,
+		},
+		{
+			name:         "mismatched kind skips agent",
+			bindEvent:    "push",
+			triggerEvent: "issue_comment.created",
+			wantRuns:     0,
+		},
+		{
+			name:         "push binding fires on push",
+			bindEvent:    "push",
+			triggerEvent: "push",
+			wantRuns:     1,
+		},
+		{
+			name:         "pr_review_submitted binding fires on pr_review_submitted",
+			bindEvent:    "pull_request_review.submitted",
+			triggerEvent: "pull_request_review.submitted",
+			wantRuns:     1,
+		},
 	}
-	if err := e.HandleEvent(context.Background(), ev); err != nil {
-		t.Fatalf("HandleEvent: %v", err)
-	}
-	if runner.callCount() != 1 {
-		t.Errorf("expected 1 run, got %d", runner.callCount())
-	}
-}
-
-func TestHandleEventEventBindingDoesNotMatchWrongKind(t *testing.T) {
-	t.Parallel()
-	e, runner := newTestEngine(func(c *config.Config) {
-		c.Agents = append(c.Agents, config.AgentDef{Name: "pusher", Backend: "claude", Prompt: "React to pushes."})
-		c.Repos[0].Use = append(c.Repos[0].Use, config.Binding{Agent: "pusher", Events: []string{"push"}})
-	})
-	// issue_comment.created should NOT match a push binding.
-	ev := Event{
-		Repo:    RepoRef{FullName: "owner/repo", Enabled: true},
-		Kind:    "issue_comment.created",
-		Number:  3,
-		Payload: map[string]any{"body": "hello"},
-	}
-	if err := e.HandleEvent(context.Background(), ev); err != nil {
-		t.Fatalf("HandleEvent: %v", err)
-	}
-	if runner.callCount() != 0 {
-		t.Errorf("expected 0 runs, got %d", runner.callCount())
-	}
-}
-
-func TestHandleEventPushEventBindingRuns(t *testing.T) {
-	t.Parallel()
-	e, runner := newTestEngine(func(c *config.Config) {
-		c.Agents = append(c.Agents, config.AgentDef{Name: "pusher", Backend: "claude", Prompt: "React to pushes."})
-		c.Repos[0].Use = append(c.Repos[0].Use, config.Binding{Agent: "pusher", Events: []string{"push"}})
-	})
-	ev := Event{
-		Repo:    RepoRef{FullName: "owner/repo", Enabled: true},
-		Kind:    "push",
-		Actor:   "dev",
-		Payload: map[string]any{"ref": "refs/heads/main", "head_sha": "abc123"},
-	}
-	if err := e.HandleEvent(context.Background(), ev); err != nil {
-		t.Fatalf("HandleEvent: %v", err)
-	}
-	if runner.callCount() != 1 {
-		t.Errorf("expected 1 run, got %d", runner.callCount())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e, runner := newTestEngine(func(c *config.Config) {
+				c.Agents = append(c.Agents, config.AgentDef{Name: "watcher", Backend: "claude", Prompt: "React to events."})
+				c.Repos[0].Use = append(c.Repos[0].Use, config.Binding{Agent: "watcher", Events: []string{tc.bindEvent}})
+			})
+			ev := Event{
+				Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+				Kind:   tc.triggerEvent,
+				Number: 3,
+			}
+			if err := e.HandleEvent(context.Background(), ev); err != nil {
+				t.Fatalf("HandleEvent: %v", err)
+			}
+			if runner.callCount() != tc.wantRuns {
+				t.Errorf("callCount = %d, want %d", runner.callCount(), tc.wantRuns)
+			}
+		})
 	}
 }
 
@@ -338,28 +331,7 @@ func TestEngineDispatchEventPayloadPropagatedToPrompt(t *testing.T) {
 	}
 }
 
-func TestHandleEventPRReviewEventBindingRuns(t *testing.T) {
-	t.Parallel()
-	e, runner := newTestEngine(func(c *config.Config) {
-		c.Agents = append(c.Agents, config.AgentDef{Name: "reviewer", Backend: "claude", Prompt: "React to reviews."})
-		c.Repos[0].Use = append(c.Repos[0].Use, config.Binding{Agent: "reviewer", Events: []string{"pull_request_review.submitted"}})
-	})
-	ev := Event{
-		Repo:    RepoRef{FullName: "owner/repo", Enabled: true},
-		Kind:    "pull_request_review.submitted",
-		Number:  5,
-		Actor:   "reviewer-bot",
-		Payload: map[string]any{"state": "changes_requested", "body": "Please fix X"},
-	}
-	if err := e.HandleEvent(context.Background(), ev); err != nil {
-		t.Fatalf("HandleEvent: %v", err)
-	}
-	if runner.callCount() != 1 {
-		t.Errorf("expected 1 run, got %d", runner.callCount())
-	}
-}
-
-func TestEngineAllowPRsNoPRGuard(t *testing.T) {
+func TestEngineAllowPRsFalseInjectsNoPRGuard(t *testing.T) {
 	t.Parallel()
 	const noPRGuard = "Do not open or create pull requests under any circumstances."
 	tests := []struct {
