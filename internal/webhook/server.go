@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,13 @@ import (
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/workflow"
 )
+
+// CronReloader is implemented by *autonomous.Scheduler. It is called after a
+// repo or agent write to update the scheduler's cron registrations in-process
+// without restarting the daemon.
+type CronReloader interface {
+	Reload(repos []config.RepoDef, agents []config.AgentDef) error
+}
 
 // AgentStatus is the runtime state of one autonomous agent as reported by /status.
 type AgentStatus struct {
@@ -70,6 +78,8 @@ type Server struct {
 	proxy         *anthropicproxy.Handler
 	uiFS          fs.FS          // optional; when set, /ui/ serves these static files
 	observeStore  *observe.Store // optional; when set, enables observability endpoints
+	db            *sql.DB        // optional; when set, enables /api/store/* CRUD endpoints
+	cronReloader  CronReloader   // optional; called after repo/agent writes to reload cron
 }
 
 // WithUI attaches an fs.FS containing the pre-built static UI assets to the
@@ -90,6 +100,16 @@ func (s *Server) WithObserve(store *observe.Store) {
 // /api/agents to report which agents are currently running.
 func (s *Server) WithRuntimeState(rsp RuntimeStateProvider) {
 	s.runtimeState = rsp
+}
+
+// WithStore attaches a SQLite database and an optional CronReloader.
+// When set, the server registers /api/store/* CRUD endpoints for agents,
+// skills, backends, and repos. Writes to repos or agents also call
+// r.Reload so that cron schedules take effect immediately. r may be nil
+// if hot-reload is not needed.
+func (s *Server) WithStore(db *sql.DB, r CronReloader) {
+	s.db = db
+	s.cronReloader = r
 }
 
 func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue, provider StatusProvider, dispatchStats DispatchStatsProvider, logger zerolog.Logger) *Server {
@@ -149,6 +169,20 @@ func (s *Server) buildHandler() http.Handler {
 	router.Handle("/api/agents", withTimeout(http.HandlerFunc(s.handleAPIAgents))).Methods(http.MethodGet)
 	router.Handle("/api/config", withTimeout(http.HandlerFunc(s.handleAPIConfig))).Methods(http.MethodGet)
 	router.Handle("/api/dispatches", withTimeout(http.HandlerFunc(s.handleAPIDispatches))).Methods(http.MethodGet)
+
+	// Store CRUD endpoints — only registered when a SQLite store has been
+	// attached via WithStore (i.e. when the daemon was started with --db).
+	if s.db != nil {
+		router.Handle("/api/store/agents", withTimeout(http.HandlerFunc(s.handleStoreAgents))).Methods(http.MethodGet, http.MethodPost)
+		router.Handle("/api/store/agents/{name}", withTimeout(http.HandlerFunc(s.handleStoreAgent))).Methods(http.MethodGet, http.MethodDelete)
+		router.Handle("/api/store/skills", withTimeout(http.HandlerFunc(s.handleStoreSkills))).Methods(http.MethodGet, http.MethodPost)
+		router.Handle("/api/store/skills/{name}", withTimeout(http.HandlerFunc(s.handleStoreSkill))).Methods(http.MethodGet, http.MethodDelete)
+		router.Handle("/api/store/backends", withTimeout(http.HandlerFunc(s.handleStoreBackends))).Methods(http.MethodGet, http.MethodPost)
+		router.Handle("/api/store/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackend))).Methods(http.MethodGet, http.MethodDelete)
+		router.Handle("/api/store/repos", withTimeout(http.HandlerFunc(s.handleStoreRepos))).Methods(http.MethodGet, http.MethodPost)
+		// {owner}/{repo} captures "owner/repo" across two path segments.
+		router.Handle("/api/store/repos/{owner}/{repo}", withTimeout(http.HandlerFunc(s.handleStoreRepo))).Methods(http.MethodGet, http.MethodDelete)
+	}
 
 	// Extended observability endpoints — only registered when an observe.Store
 	// has been attached via WithObserve.

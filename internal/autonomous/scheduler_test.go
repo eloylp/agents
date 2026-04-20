@@ -1130,3 +1130,73 @@ func TestCronDispatchCrossNamespaceRaceOnlyOneWins(t *testing.T) {
 		}
 	}
 }
+
+// TestSchedulerReload verifies that Reload replaces cron registrations with
+// those from the updated config slices, and that AgentStatuses reflects the
+// new registrations.
+func TestSchedulerReload(t *testing.T) {
+	t.Parallel()
+
+	// Start with a config that has one cron binding.
+	cfg := baseCfg(nil)
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	statuses := s.AgentStatuses()
+	if len(statuses) != 1 {
+		t.Fatalf("before reload: got %d statuses, want 1", len(statuses))
+	}
+
+	// Reload with a completely different agent and repo.
+	newAgents := []config.AgentDef{
+		{Name: "scanner", Backend: "claude", Skills: []string{}, Prompt: "scan"},
+	}
+	newRepos := []config.RepoDef{
+		{
+			Name:    "owner/other",
+			Enabled: true,
+			Use:     []config.Binding{{Agent: "scanner", Cron: "* * * * *"}},
+		},
+	}
+	cfg.Daemon.AIBackends["claude"] = config.AIBackendConfig{Command: "claude"}
+	if err := s.Reload(newRepos, newAgents); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	statuses = s.AgentStatuses()
+	if len(statuses) != 1 {
+		t.Fatalf("after reload: got %d statuses, want 1", len(statuses))
+	}
+	if statuses[0].Name != "scanner" {
+		t.Errorf("after reload: agent name %q, want %q", statuses[0].Name, "scanner")
+	}
+	if statuses[0].Repo != "owner/other" {
+		t.Errorf("after reload: repo %q, want %q", statuses[0].Repo, "owner/other")
+	}
+}
+
+// TestSchedulerReloadClearsAllBindings verifies that a Reload with no cron
+// bindings removes all previously registered entries.
+func TestSchedulerReloadClearsAllBindings(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseCfg(nil)
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	// Reload with repos that have no cron bindings.
+	if err := s.Reload([]config.RepoDef{{Name: "owner/repo", Enabled: true, Use: []config.Binding{
+		{Agent: "reviewer", Labels: []string{"ai:fix"}},
+	}}}, cfg.Agents); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	statuses := s.AgentStatuses()
+	if len(statuses) != 0 {
+		t.Errorf("after reload with no cron: got %d statuses, want 0", len(statuses))
+	}
+}

@@ -78,6 +78,7 @@ type Scheduler struct {
 	logger       zerolog.Logger
 	ctxMu        sync.RWMutex
 	runCtx       context.Context
+	bindMu       sync.RWMutex  // protects agentEntries and cfg.Repos/Agents during Reload
 	agentEntries []agentEntry
 	lastRunsMu   sync.RWMutex
 	lastRuns     map[string]lastRunRecord // key: "name\x00repo"
@@ -214,8 +215,13 @@ func (s *Scheduler) AgentStatuses() []AgentStatus {
 		entryByID[e.ID] = e
 	}
 
-	statuses := make([]AgentStatus, 0, len(s.agentEntries))
-	for _, ae := range s.agentEntries {
+	s.bindMu.RLock()
+	agentEntries := make([]agentEntry, len(s.agentEntries))
+	copy(agentEntries, s.agentEntries)
+	s.bindMu.RUnlock()
+
+	statuses := make([]AgentStatus, 0, len(agentEntries))
+	for _, ae := range agentEntries {
 		entry, ok := entryByID[ae.cronID]
 		if !ok {
 			continue
@@ -394,6 +400,36 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		}
 	}
 	return err
+}
+
+// Reload replaces the set of registered cron bindings with those derived from
+// repos and agents. All previously registered cron entries are removed before
+// the new ones are added. It is safe to call while the scheduler is running.
+//
+// Reload also updates the shared *config.Config slice fields so that
+// event-driven and on-demand runs using the same config pointer will see the
+// new agent and repo definitions on their next invocation.
+func (s *Scheduler) Reload(repos []config.RepoDef, agents []config.AgentDef) error {
+	s.bindMu.Lock()
+	defer s.bindMu.Unlock()
+
+	// Remove all existing cron entries.
+	for _, e := range s.agentEntries {
+		s.cron.Remove(e.cronID)
+	}
+	s.agentEntries = s.agentEntries[:0]
+
+	// Update the shared config slices so that the scheduler and the engine
+	// (which hold the same *config.Config pointer) pick up the new definitions
+	// on subsequent runs.
+	s.cfg.Repos = repos
+	s.cfg.Agents = agents
+
+	if err := s.registerJobs(); err != nil {
+		return err
+	}
+	s.logger.Info().Int("cron_jobs", len(s.agentEntries)).Msg("scheduler reloaded")
+	return nil
 }
 
 func (s *Scheduler) setRunCtx(ctx context.Context) {
