@@ -950,6 +950,51 @@ func ApplyBackendDefaults(b *AIBackendConfig) {
 	setDefaultInt(&b.MaxPromptChars, defaultMaxPromptChars)
 }
 
+// NormalizeAgentDef applies the same name/field normalization that FinishLoad
+// performs at startup (lowercase + trim on names, backend, skills, can_dispatch).
+// CRUD callers must invoke this before writing an agent to SQLite so the stored
+// values are already in the canonical form that AgentByName and registerJobs
+// expect, preventing live behavior from diverging until the next restart.
+func NormalizeAgentDef(a *AgentDef) {
+	a.Name = strings.ToLower(strings.TrimSpace(a.Name))
+	a.Backend = strings.ToLower(strings.TrimSpace(a.Backend))
+	a.Prompt = strings.TrimSpace(a.Prompt)
+	a.PromptFile = strings.TrimSpace(a.PromptFile)
+	a.Description = strings.TrimSpace(a.Description)
+	for i := range a.Skills {
+		a.Skills[i] = strings.ToLower(strings.TrimSpace(a.Skills[i]))
+	}
+	for i := range a.CanDispatch {
+		a.CanDispatch[i] = strings.ToLower(strings.TrimSpace(a.CanDispatch[i]))
+	}
+}
+
+// NormalizeSkillName returns the canonical form of a skill map key (lowercase,
+// trimmed). CRUD callers should normalise the key before writing to SQLite.
+func NormalizeSkillName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+// NormalizeBackendName returns the canonical form of a backend map key
+// (lowercase, trimmed). CRUD callers should normalise the key before writing.
+func NormalizeBackendName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+// NormalizeRepoDef applies the same normalization that FinishLoad performs on
+// repo entries: trim the repo name, and lowercase+trim each binding agent name,
+// cron, and event strings. CRUD callers must invoke this before writing a repo.
+func NormalizeRepoDef(r *RepoDef) {
+	r.Name = strings.TrimSpace(r.Name)
+	for i := range r.Use {
+		r.Use[i].Agent = strings.ToLower(strings.TrimSpace(r.Use[i].Agent))
+		r.Use[i].Cron = strings.TrimSpace(r.Use[i].Cron)
+		for k := range r.Use[i].Events {
+			r.Use[i].Events[k] = strings.ToLower(strings.TrimSpace(r.Use[i].Events[k]))
+		}
+	}
+}
+
 func setDefault(dst *string, def string) {
 	if strings.TrimSpace(*dst) == "" {
 		*dst = def

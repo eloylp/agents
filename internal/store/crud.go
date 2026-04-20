@@ -91,7 +91,11 @@ func ReadAgents(db *sql.DB) ([]config.AgentDef, error) {
 }
 
 // UpsertAgent inserts or replaces a single agent definition.
+// The agent name and related fields are normalized (lowercase, trimmed) before
+// writing so the stored values match the canonical form that AgentByName and
+// registerJobs expect, keeping live behavior consistent with startup.
 func UpsertAgent(db *sql.DB, a config.AgentDef) error {
+	config.NormalizeAgentDef(&a)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert agent %s: begin: %w", a.Name, err)
@@ -145,7 +149,9 @@ func ReadSkills(db *sql.DB) (map[string]config.SkillDef, error) {
 }
 
 // UpsertSkill inserts or replaces a single skill.
+// The skill name is normalized (lowercase, trimmed) before writing.
 func UpsertSkill(db *sql.DB, name string, s config.SkillDef) error {
+	name = config.NormalizeSkillName(name)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert skill %s: begin: %w", name, err)
@@ -195,7 +201,9 @@ func ReadBackends(db *sql.DB) (map[string]config.AIBackendConfig, error) {
 // Zero-value numeric fields are normalised to startup defaults before
 // persistence so that the stored config matches what FinishLoad would
 // produce on restart (e.g. timeout_seconds 0 → 600, max_prompt_chars 0 → 12000).
+// The backend name is also normalized (lowercase, trimmed).
 func UpsertBackend(db *sql.DB, name string, b config.AIBackendConfig) error {
+	name = config.NormalizeBackendName(name)
 	config.ApplyBackendDefaults(&b)
 	tx, err := db.Begin()
 	if err != nil {
@@ -281,8 +289,10 @@ func ReadRepos(db *sql.DB) ([]config.RepoDef, error) {
 
 // UpsertRepo inserts or replaces a repo and its bindings. Bindings are
 // replaced wholesale: any existing bindings for the repo are removed before
-// the new list is written.
+// the new list is written. The repo name and binding agents/events are
+// normalized (trimmed / lowercased) before writing.
 func UpsertRepo(db *sql.DB, r config.RepoDef) error {
+	config.NormalizeRepoDef(&r)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert repo %s: begin: %w", r.Name, err)

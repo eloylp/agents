@@ -919,3 +919,101 @@ func TestDeleteRepoRejectedAsLastEnabled(t *testing.T) {
 		t.Errorf("repo count after rejected delete: got %d, want 1", len(repos))
 	}
 }
+
+// ──── Normalization ───────────────────────────────────────────────────────────
+
+// TestUpsertNormalizesNames verifies that UpsertAgent, UpsertSkill,
+// UpsertBackend, and UpsertRepo all lowercase+trim entity keys before writing
+// to SQLite. This ensures the stored form matches what FinishLoad would
+// produce at startup, so AgentByName lookups and registerJobs cron bindings
+// never silently diverge from the persisted rows after a live CRUD write.
+func TestUpsertNormalizesNames(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	// Backend — mixed-case name should be stored lowercase.
+	if err := store.UpsertBackend(db, "Claude", config.AIBackendConfig{
+		Command: "claude", Args: []string{}, Env: map[string]string{},
+	}); err != nil {
+		t.Fatalf("UpsertBackend: %v", err)
+	}
+	backends, err := store.ReadBackends(db)
+	if err != nil {
+		t.Fatalf("ReadBackends: %v", err)
+	}
+	if _, ok := backends["claude"]; !ok {
+		t.Errorf("backend name not normalised: got keys %v, want 'claude'", mapKeys(backends))
+	}
+	if _, bad := backends["Claude"]; bad {
+		t.Error("original mixed-case key 'Claude' should not be present after normalisation")
+	}
+
+	// Skill — mixed-case key should be stored lowercase.
+	if err := store.UpsertSkill(db, "Architect", config.SkillDef{Prompt: "p"}); err != nil {
+		t.Fatalf("UpsertSkill: %v", err)
+	}
+	skills, err := store.ReadSkills(db)
+	if err != nil {
+		t.Fatalf("ReadSkills: %v", err)
+	}
+	if _, ok := skills["architect"]; !ok {
+		t.Errorf("skill name not normalised: got keys %v, want 'architect'", mapKeys(skills))
+	}
+
+	// Agent — mixed-case name, backend, and skill reference should be stored lowercase.
+	if err := store.UpsertAgent(db, config.AgentDef{
+		Name:        "Coder",
+		Backend:     "Claude",
+		Prompt:      "p",
+		Skills:      []string{"Architect"},
+		CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
+	}
+	agents, err := store.ReadAgents(db)
+	if err != nil {
+		t.Fatalf("ReadAgents: %v", err)
+	}
+	if len(agents) == 0 {
+		t.Fatal("ReadAgents: expected at least one agent")
+	}
+	got := agents[0]
+	if got.Name != "coder" {
+		t.Errorf("agent name not normalised: got %q, want 'coder'", got.Name)
+	}
+	if got.Backend != "claude" {
+		t.Errorf("agent backend not normalised: got %q, want 'claude'", got.Backend)
+	}
+	if len(got.Skills) != 1 || got.Skills[0] != "architect" {
+		t.Errorf("agent skills not normalised: got %v, want ['architect']", got.Skills)
+	}
+
+	// Repo — binding agent name should be stored lowercase.
+	if err := store.UpsertRepo(db, config.RepoDef{
+		Name:    "owner/repo",
+		Enabled: true,
+		Use:     []config.Binding{{Agent: "Coder", Labels: []string{"ai:fix"}}},
+	}); err != nil {
+		t.Fatalf("UpsertRepo: %v", err)
+	}
+	repos, err := store.ReadRepos(db)
+	if err != nil {
+		t.Fatalf("ReadRepos: %v", err)
+	}
+	if len(repos) == 0 || len(repos[0].Use) == 0 {
+		t.Fatal("ReadRepos: expected repo with at least one binding")
+	}
+	if repos[0].Use[0].Agent != "coder" {
+		t.Errorf("binding agent not normalised: got %q, want 'coder'", repos[0].Use[0].Agent)
+	}
+}
+
+// mapKeys returns the keys from any map[string]T.
+func mapKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
