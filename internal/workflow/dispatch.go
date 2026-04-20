@@ -102,10 +102,7 @@ func (s *DispatchDedupStore) Start(ctx context.Context) {
 		return
 	}
 	go func() {
-		tickInterval := s.ttl / 4
-		if tickInterval < time.Second {
-			tickInterval = time.Second
-		}
+		tickInterval := max(s.ttl/4, time.Second)
 		ticker := time.NewTicker(tickInterval)
 		defer ticker.Stop()
 		for {

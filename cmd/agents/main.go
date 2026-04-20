@@ -79,9 +79,7 @@ func run() error {
 		for range d.MaxDepth {
 			runBuf *= d.MaxFanout
 		}
-		if runBuf < cfg.Daemon.Processor.EventQueueBuffer {
-			runBuf = cfg.Daemon.Processor.EventQueueBuffer
-		}
+		runBuf = max(runBuf, cfg.Daemon.Processor.EventQueueBuffer)
 		dataChannels := workflow.NewDataChannels(runBuf)
 		engine := workflow.NewEngine(cfg, runners, dataChannels, logger)
 		scheduler.WithDispatcher(engine.Dispatcher())
