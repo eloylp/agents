@@ -361,16 +361,11 @@ func TestWatchMemoryDirNoOpOnEmptyDir(t *testing.T) {
 	}
 }
 
-// extractSSEData strips the "data: " prefix and trailing "\n\n" added by
+// extractSSEData strips the "data: " prefix and trailing newlines added by
 // sseData so the payload can be unmarshalled as JSON.
 func extractSSEData(raw []byte) []byte {
-	const prefix = "data: "
-	s := string(raw)
-	if len(s) > len(prefix) && s[:len(prefix)] == prefix {
-		s = s[len(prefix):]
-	}
-	s = strings.TrimRight(s, "\n")
-	return []byte(s)
+	s, _ := strings.CutPrefix(string(raw), "data: ")
+	return []byte(strings.TrimRight(s, "\n"))
 }
 
 // ─── ActiveRuns ──────────────────────────────────────────────────────────────
@@ -528,12 +523,9 @@ func TestStoreRecordEventSSEUsesLowercaseJSON(t *testing.T) {
 		t.Fatal("want SSE message, got nothing")
 	}
 
-	// Strip the "data: " prefix and trailing "\n\n", then unmarshal into a raw
-	// map so we can inspect the actual JSON key names.
-	raw := strings.TrimPrefix(string(msg), "data: ")
-	raw = strings.TrimSuffix(raw, "\n\n")
+	// Strip the SSE framing and unmarshal into a raw map to inspect key names.
 	var fields map[string]any
-	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+	if err := json.Unmarshal(extractSSEData(msg), &fields); err != nil {
 		t.Fatalf("unmarshal SSE payload: %v", err)
 	}
 
