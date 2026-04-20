@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -80,6 +81,10 @@ type Server struct {
 	observeStore  *observe.Store // optional; when set, enables observability endpoints
 	db            *sql.DB        // optional; when set, enables /api/store/* CRUD endpoints
 	cronReloader  CronReloader   // optional; called after repo/agent writes to reload cron
+	// storeMu serializes the "DB write → snapshot read → in-memory Reload"
+	// sequence so that concurrent write requests cannot interleave their
+	// snapshots and leave the scheduler in a stale or inconsistent state.
+	storeMu sync.Mutex
 }
 
 // WithUI attaches an fs.FS containing the pre-built static UI assets to the

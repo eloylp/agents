@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -549,5 +551,74 @@ func TestStoreCRUDWriteEndpointsRequireAPIKey(t *testing.T) {
 				t.Errorf("GET %s: want 200 without token, got %d", path, rr.Code)
 			}
 		})
+	}
+}
+
+// ── Concurrent write+reload serialization ────────────────────────────────────
+
+// countingCronReloader records how many times Reload was called and captures
+// the last snapshot it received. Safe for concurrent use.
+type countingCronReloader struct {
+	mu    sync.Mutex
+	calls int32
+	last  []config.AgentDef
+}
+
+func (r *countingCronReloader) Reload(_ []config.RepoDef, agents []config.AgentDef, _ map[string]config.SkillDef, _ map[string]config.AIBackendConfig) error {
+	atomic.AddInt32(&r.calls, 1)
+	r.mu.Lock()
+	r.last = agents
+	r.mu.Unlock()
+	return nil
+}
+
+// TestConcurrentWriteReloadSerialisation verifies that concurrent POST
+// /api/store/agents requests do not interleave their DB-write and in-memory
+// Reload calls. Specifically, the last Reload that runs must see all agents
+// that were successfully committed to SQLite — it must never reflect a stale
+// snapshot from a request that finished earlier but whose Reload won the race.
+//
+// Running with -race also detects any data race on the reloader or storeMu.
+func TestConcurrentWriteReloadSerialisation(t *testing.T) {
+	t.Parallel()
+
+	reloader := &countingCronReloader{}
+	s := openCRUDTestServerWithReloader(t, reloader)
+
+	const n = 20
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		name := "agent-concurrent-" + string(rune('a'+i))
+		go func(agentName string) {
+			defer wg.Done()
+			rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents",
+				map[string]any{"name": agentName, "backend": "claude", "prompt": "p"})
+			if rr.Code != http.StatusOK {
+				t.Errorf("POST agent %s: want 200, got %d: %s", agentName, rr.Code, rr.Body.String())
+			}
+		}(name)
+	}
+	wg.Wait()
+
+	// Every request must have triggered exactly one reload.
+	if got := atomic.LoadInt32(&reloader.calls); got != n {
+		t.Errorf("expected %d Reload calls, got %d", n, got)
+	}
+
+	// The last recorded snapshot must include all n agents (monotonic guarantee:
+	// the final Reload saw the DB state that includes every committed write).
+	agents, err := store.ReadAgents(s.db)
+	if err != nil {
+		t.Fatalf("read agents: %v", err)
+	}
+	if len(agents) != n {
+		t.Fatalf("expected %d agents in DB, got %d", n, len(agents))
+	}
+	reloader.mu.Lock()
+	lastCount := len(reloader.last)
+	reloader.mu.Unlock()
+	if lastCount != n {
+		t.Errorf("last Reload snapshot had %d agents, expected %d (stale snapshot overwrote a newer one)", lastCount, n)
 	}
 }
