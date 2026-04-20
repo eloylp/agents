@@ -530,6 +530,37 @@ func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
 	}
 }
 
+// TestStoreCRUDReloadFailureDoesNotUpdateServerCfg verifies that when
+// cronReloader.Reload returns an error, the server's in-memory routing config
+// (s.cfg) is NOT updated to the new DB snapshot. Keeping s.cfg on the old
+// state ensures the server, scheduler, and engine remain on the same config
+// epoch; a split-brain (server serving new repos while the scheduler/engine
+// still run on old config) is avoided.
+func TestStoreCRUDReloadFailureDoesNotUpdateServerCfg(t *testing.T) {
+	t.Parallel()
+
+	reloader := &errCronReloader{err: errors.New("reload broken")}
+	s := openCRUDTestServerWithReloader(t, reloader)
+
+	// Pre-condition: server starts with no repos.
+	if got := len(s.loadCfg().Repos); got != 0 {
+		t.Fatalf("precondition: want 0 repos, got %d", got)
+	}
+
+	// Attempt to add a repo via the CRUD API. The write succeeds in the DB but
+	// Reload fails, so the handler must return 500 and must NOT swap s.cfg.
+	body := map[string]any{"name": "owner/testrepo", "enabled": true}
+	rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", body)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500 on reload failure, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// s.cfg must still reflect the pre-write state (no repos).
+	if got := len(s.loadCfg().Repos); got != 0 {
+		t.Errorf("server cfg must not be updated on reload failure: want 0 repos, got %d", got)
+	}
+}
+
 // ── /api/store POST body-size limiting ───────────────────────────────────────
 
 // TestStoreCRUDPostBodySizeLimit verifies that POST write endpoints return

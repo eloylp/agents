@@ -213,12 +213,23 @@ func (s *Server) reloadCron() error {
 		return fmt.Errorf("read config snapshot for cron reload: %w", err)
 	}
 
-	// Update the server's in-memory routing config so that webhook event
-	// handlers (/webhooks/github, /agents/run) and read APIs (/api/agents,
-	// /api/config) reflect the post-write state immediately without a restart.
-	// Copy-on-write: build a new config value from the current snapshot,
-	// replacing only the four CRUD-mutable fields. Daemon-level config (HTTP,
-	// proxy, log) is never changed by CRUD writes and is preserved unchanged.
+	// Reload the scheduler/engine first. If Reload fails we must not update
+	// the server's routing config — doing so would leave the daemon split across
+	// two config epochs (server on the new snapshot, scheduler/engine on the
+	// old one) until the next successful reload or restart.
+	if s.cronReloader != nil {
+		if err := s.cronReloader.Reload(repos, agents, skills, backends); err != nil {
+			return err
+		}
+	}
+
+	// Reload succeeded: update the server's in-memory routing config so that
+	// webhook event handlers (/webhooks/github, /agents/run) and read APIs
+	// (/api/agents, /api/config) reflect the post-write state immediately
+	// without a restart. Copy-on-write: build a new config value from the
+	// current snapshot, replacing only the four CRUD-mutable fields.
+	// Daemon-level config (HTTP, proxy, log) is never changed by CRUD writes
+	// and is preserved unchanged.
 	s.cfgMu.Lock()
 	newCfg := *s.cfg
 	newCfg.Repos = repos
@@ -228,10 +239,7 @@ func (s *Server) reloadCron() error {
 	s.cfg = &newCfg
 	s.cfgMu.Unlock()
 
-	if s.cronReloader == nil {
-		return nil
-	}
-	return s.cronReloader.Reload(repos, agents, skills, backends)
+	return nil
 }
 
 // ── /api/store/agents ────────────────────────────────────────────────────────
