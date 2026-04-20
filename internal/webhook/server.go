@@ -161,13 +161,18 @@ func (s *Server) loadCfg() *config.Config {
 // an http.Handler. It is separated from Run so tests can exercise routing
 // without starting a real TCP listener.
 func (s *Server) buildHandler() http.Handler {
+	// Snapshot the config once under the read lock so that concurrent
+	// reloadCron calls (which swap s.cfg under cfgMu.Lock) cannot race with
+	// the reads below.
+	cfg := s.loadCfg()
+
 	// http.TimeoutHandler bounds handler execution time (i.e. how long the
 	// handler function runs before it must start writing). It is NOT a
 	// replacement for http.Server.WriteTimeout, which enforces a socket write
 	// deadline and is still set in Run(). SSE handlers clear that write
 	// deadline for themselves via http.ResponseController.SetWriteDeadline so
 	// they can stream indefinitely; see serveSSEWithInterval in api.go.
-	writeTimeout := time.Duration(s.cfg.Daemon.HTTP.WriteTimeoutSeconds) * time.Second
+	writeTimeout := time.Duration(cfg.Daemon.HTTP.WriteTimeoutSeconds) * time.Second
 	withTimeout := func(h http.Handler) http.Handler {
 		if writeTimeout <= 0 {
 			return h
@@ -176,9 +181,9 @@ func (s *Server) buildHandler() http.Handler {
 	}
 
 	router := mux.NewRouter()
-	router.Handle(s.cfg.Daemon.HTTP.StatusPath, withTimeout(http.HandlerFunc(s.handleStatus))).Methods(http.MethodGet)
-	router.Handle(s.cfg.Daemon.HTTP.WebhookPath, withTimeout(http.HandlerFunc(s.handleGitHubWebhook))).Methods(http.MethodPost)
-	router.Handle(s.cfg.Daemon.HTTP.AgentsRunPath, withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleAgentsRun)))).Methods(http.MethodPost)
+	router.Handle(cfg.Daemon.HTTP.StatusPath, withTimeout(http.HandlerFunc(s.handleStatus))).Methods(http.MethodGet)
+	router.Handle(cfg.Daemon.HTTP.WebhookPath, withTimeout(http.HandlerFunc(s.handleGitHubWebhook))).Methods(http.MethodPost)
+	router.Handle(cfg.Daemon.HTTP.AgentsRunPath, withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleAgentsRun)))).Methods(http.MethodPost)
 	router.Handle("/api/run", withTimeout(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
 
 	// Observability API — read-only endpoints served unauthenticated at the
@@ -250,10 +255,10 @@ func (s *Server) buildHandler() http.Handler {
 		// deadline; wrapping it with http.TimeoutHandler would impose a hard
 		// cap shorter than the configured LLM inference timeout and break long
 		// completions.
-		router.Handle(s.cfg.Daemon.Proxy.Path, s.proxy).Methods(http.MethodPost)
+		router.Handle(cfg.Daemon.Proxy.Path, s.proxy).Methods(http.MethodPost)
 		// /v1/models is a lightweight stub — wrap it with the standard timeout.
 		router.Handle("/v1/models", withTimeout(http.HandlerFunc(s.proxy.ModelsHandler))).Methods(http.MethodGet)
-		s.logger.Info().Str("path", s.cfg.Daemon.Proxy.Path).Str("upstream", s.cfg.Daemon.Proxy.Upstream.URL).Msg("anthropic proxy enabled")
+		s.logger.Info().Str("path", cfg.Daemon.Proxy.Path).Str("upstream", cfg.Daemon.Proxy.Upstream.URL).Msg("anthropic proxy enabled")
 	}
 	return router
 }
