@@ -1280,20 +1280,32 @@ func TestSchedulerReloadRollsBackOnFailure(t *testing.T) {
 }
 
 // TestSchedulerReloadRebuildsRunners verifies that when a RunnerBuilder is
-// registered, Reload rebuilds the runner map to reflect new or changed backend
-// definitions. This ensures that backends added via the CRUD API produce live
-// runners without a daemon restart.
+// registered, Reload builds a fresh runner map to reflect new or changed
+// backend definitions without mutating the original map in place. This ensures
+// that backends added via the CRUD API produce live runners without a restart.
 func TestSchedulerReloadRebuildsRunners(t *testing.T) {
 	t.Parallel()
 
 	cfg := baseCfg(nil) // starts with "claude" backend
 	oldRunner := &stubRunner{}
-	runners := map[string]ai.Runner{"claude": oldRunner}
+	initialRunners := map[string]ai.Runner{"claude": oldRunner}
 
-	s, err := NewScheduler(cfg, runners, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, initialRunners, NewMemoryStore(t.TempDir()), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
+
+	// Capture runners delivered to the HotReloadSink.
+	var sinkMu sync.Mutex
+	var sinkRunners map[string]ai.Runner
+	sink := &testHotReloadSink{
+		updateRunners: func(r map[string]ai.Runner) {
+			sinkMu.Lock()
+			sinkRunners = r
+			sinkMu.Unlock()
+		},
+	}
+	s.WithHotReloadSink(sink)
 
 	// Register a builder that returns a new distinct stub for each backend.
 	buildCalls := map[string]*stubRunner{}
@@ -1320,16 +1332,132 @@ func TestSchedulerReloadRebuildsRunners(t *testing.T) {
 		t.Error("RunnerBuilder was not called for 'codex'")
 	}
 
-	// The shared runners map (which the engine also holds) must contain both.
-	if _, ok := runners["claude"]; !ok {
-		t.Error("runners map missing 'claude' after Reload")
+	// The scheduler's internal runners map must contain the rebuilt entries.
+	if _, ok := s.runners["claude"]; !ok {
+		t.Error("scheduler runners missing 'claude' after Reload")
 	}
-	if _, ok := runners["codex"]; !ok {
-		t.Error("runners map missing 'codex' after Reload")
+	if _, ok := s.runners["codex"]; !ok {
+		t.Error("scheduler runners missing 'codex' after Reload")
 	}
 
 	// The rebuilt runner for "claude" must be the new one, not the original stub.
-	if runners["claude"] == oldRunner {
-		t.Error("runners['claude'] was not rebuilt by RunnerBuilder")
+	if s.runners["claude"] == oldRunner {
+		t.Error("scheduler runners['claude'] was not rebuilt by RunnerBuilder")
 	}
+
+	// The original map must NOT have been mutated — copy-on-write semantics.
+	if _, ok := initialRunners["codex"]; ok {
+		t.Error("original runners map was mutated in place; expected copy-on-write")
+	}
+
+	// The HotReloadSink must have received a copy of the new runners.
+	sinkMu.Lock()
+	got := sinkRunners
+	sinkMu.Unlock()
+	if got == nil {
+		t.Fatal("HotReloadSink.UpdateRunners was not called")
+	}
+	if _, ok := got["claude"]; !ok {
+		t.Error("sink runners missing 'claude'")
+	}
+	if _, ok := got["codex"]; !ok {
+		t.Error("sink runners missing 'codex'")
+	}
+}
+
+// testHotReloadSink is a minimal HotReloadSink for tests.
+type testHotReloadSink struct {
+	updateConfig  func(*config.Config)
+	updateRunners func(map[string]ai.Runner)
+}
+
+func (s *testHotReloadSink) UpdateConfig(cfg *config.Config) {
+	if s.updateConfig != nil {
+		s.updateConfig(cfg)
+	}
+}
+func (s *testHotReloadSink) UpdateRunners(r map[string]ai.Runner) {
+	if s.updateRunners != nil {
+		s.updateRunners(r)
+	}
+}
+
+// TestSchedulerReloadConfigCopyOnWrite verifies that Reload does not mutate the
+// original *config.Config pointer. Goroutines that hold a snapshot of the old
+// pointer must continue to see the pre-reload values; only future snapshots
+// should see the new values.
+func TestSchedulerReloadConfigCopyOnWrite(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseCfg(nil)
+	originalPtr := cfg // remember the address
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	newRepos := []config.RepoDef{{Name: "owner/new-repo", Enabled: true, Use: []config.Binding{{Agent: "reviewer", Cron: "* * * * *"}}}}
+	if err := s.Reload(newRepos, cfg.Agents, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	// The original cfg struct must be unchanged.
+	if len(originalPtr.Repos) != 1 || originalPtr.Repos[0].Name != "owner/repo" {
+		t.Errorf("original config.Repos was mutated: got %v", originalPtr.Repos)
+	}
+
+	// The scheduler's internal cfg pointer must point to a different struct.
+	if s.cfg == cfg {
+		t.Error("scheduler still holds the original config pointer; expected copy-on-write swap")
+	}
+	if len(s.cfg.Repos) != 1 || s.cfg.Repos[0].Name != "owner/new-repo" {
+		t.Errorf("scheduler config.Repos not updated: got %v", s.cfg.Repos)
+	}
+}
+
+// TestSchedulerReloadRaceWithConcurrentRun is a race-detector test. It
+// exercises concurrent Reload + TriggerAgent to verify that the copy-on-write
+// config swap and the brief-lock runner snapshot do not produce data races.
+// Run with -race to catch concurrent map/struct accesses.
+func TestSchedulerReloadRaceWithConcurrentRun(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseCfg(nil)
+	runner := &stubRunner{}
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithRunnerBuilder(func(name string, _ config.AIBackendConfig) ai.Runner { return runner })
+	s.WithHotReloadSink(&testHotReloadSink{})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	const goroutines = 8
+	var wg sync.WaitGroup
+
+	// Half the goroutines call TriggerAgent concurrently.
+	for range goroutines / 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				_ = s.TriggerAgent(ctx, "reviewer", "owner/repo")
+			}
+		}()
+	}
+
+	// The other half call Reload concurrently.
+	for range goroutines / 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				_ = s.Reload(cfg.Repos, cfg.Agents, cfg.Skills, cfg.Daemon.AIBackends)
+			}
+		}()
+	}
+
+	wg.Wait()
 }

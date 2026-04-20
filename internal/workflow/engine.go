@@ -49,7 +49,9 @@ type GraphRecorder interface {
 // the runners just execute the resulting prompt.
 type Engine struct {
 	cfg           *config.Config
+	cfgMu         sync.RWMutex         // protects cfg during hot-reload
 	runners       map[string]ai.Runner
+	runnersMu     sync.RWMutex         // protects runners during hot-reload
 	dispatcher    *Dispatcher
 	maxConcurrent int
 	logger        zerolog.Logger
@@ -102,6 +104,24 @@ func (e *Engine) WithGraphRecorder(r GraphRecorder) {
 	if e.dispatcher != nil {
 		e.dispatcher.WithGraphRecorder(r)
 	}
+}
+
+// UpdateConfig atomically replaces the config snapshot used for event routing
+// and prompt rendering. It is safe to call concurrently with ongoing agent
+// runs. Each handler method takes a snapshot at entry and releases the lock
+// before the slow runner.Run call, so hot-reload latency is minimal.
+func (e *Engine) UpdateConfig(cfg *config.Config) {
+	e.cfgMu.Lock()
+	e.cfg = cfg
+	e.cfgMu.Unlock()
+}
+
+// UpdateRunners atomically replaces the runner map. It is safe to call
+// concurrently with ongoing agent runs.
+func (e *Engine) UpdateRunners(runners map[string]ai.Runner) {
+	e.runnersMu.Lock()
+	e.runners = runners
+	e.runnersMu.Unlock()
 }
 
 // StartDispatchDedup starts the background eviction loop for the dispatch
@@ -164,7 +184,13 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		return fmt.Errorf("agent.dispatch event missing target_agent in payload")
 	}
 
-	repo, ok := e.cfg.RepoByName(ev.Repo.FullName)
+	// Snapshot the config pointer under a brief read lock so that a concurrent
+	// hot-reload cannot modify the struct while we read routing data from it.
+	e.cfgMu.RLock()
+	cfg := e.cfg
+	e.cfgMu.RUnlock()
+
+	repo, ok := cfg.RepoByName(ev.Repo.FullName)
 	if !ok || !repo.Enabled {
 		e.logger.Warn().Str("repo", ev.Repo.FullName).Msg("dispatch event for disabled or unknown repo, skipping")
 		return nil
@@ -177,7 +203,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		return fmt.Errorf("dispatch: target agent %q is not bound to repo %q", targetName, ev.Repo.FullName)
 	}
 
-	agent, ok := e.cfg.AgentByName(targetName)
+	agent, ok := cfg.AgentByName(targetName)
 	if !ok {
 		return fmt.Errorf("dispatch: target agent %q not found", targetName)
 	}
@@ -325,7 +351,13 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 // payload label is in the binding's Labels slice. An event binding matches
 // when ev.Kind appears in the binding's Events slice.
 func (e *Engine) agentsForEvent(ev Event) []config.AgentDef {
-	repo, ok := e.cfg.RepoByName(ev.Repo.FullName)
+	// Snapshot the config pointer so a concurrent hot-reload does not race
+	// with our reads of repo/agent definitions.
+	e.cfgMu.RLock()
+	cfg := e.cfg
+	e.cfgMu.RUnlock()
+
+	repo, ok := cfg.RepoByName(ev.Repo.FullName)
 	if !ok || !repo.Enabled {
 		return nil
 	}
@@ -357,7 +389,7 @@ func (e *Engine) agentsForEvent(ev Event) []config.AgentDef {
 		if _, dup := seen[b.Agent]; dup {
 			continue
 		}
-		agent, ok := e.cfg.AgentByName(b.Agent)
+		agent, ok := cfg.AgentByName(b.Agent)
 		if !ok {
 			continue
 		}
@@ -418,11 +450,22 @@ func extractDispatchContext(ev Event) (rootEventID string, depth int) {
 }
 
 func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) error {
-	backend := e.cfg.ResolveBackend(agent.Backend)
+	// Snapshot config and runners under brief read locks so that a concurrent
+	// hot-reload cannot race with our reads. The locks are released before the
+	// slow runner.Run call below, minimising contention with Reload.
+	e.cfgMu.RLock()
+	cfg := e.cfg
+	e.cfgMu.RUnlock()
+
+	e.runnersMu.RLock()
+	runners := e.runners
+	e.runnersMu.RUnlock()
+
+	backend := cfg.ResolveBackend(agent.Backend)
 	if backend == "" {
 		return fmt.Errorf("agent %q: no runner available for backend %q", agent.Name, agent.Backend)
 	}
-	runner, ok := e.runners[backend]
+	runner, ok := runners[backend]
 	if !ok {
 		return fmt.Errorf("agent %q: no runner for backend %q", agent.Name, backend)
 	}
@@ -438,11 +481,11 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) 
 	}
 
 	// Build the roster of peer agents for this repo.
-	roster := BuildRoster(e.cfg, ev.Repo.FullName, agent.Name)
+	roster := BuildRoster(cfg, ev.Repo.FullName, agent.Name)
 
 	promptPayload := ev.Payload
 
-	rendered, err := ai.RenderAgentPrompt(agent, e.cfg.Skills, ai.PromptContext{
+	rendered, err := ai.RenderAgentPrompt(agent, cfg.Skills, ai.PromptContext{
 		Repo:          ev.Repo.FullName,
 		Number:        ev.Number,
 		Backend:       backend,

@@ -73,18 +73,33 @@ type lastRunRecord struct {
 // with SQLite when ai_backend definitions change via the CRUD API.
 type RunnerBuilder func(name string, cfg config.AIBackendConfig) ai.Runner
 
+// HotReloadSink is implemented by components that share config and runner
+// state with the Scheduler and must be notified when a CRUD-triggered Reload
+// replaces those values. Engine implements this interface so that both the
+// autonomous and event-driven execution paths stay in sync after a hot-reload.
+type HotReloadSink interface {
+	// UpdateConfig atomically replaces the config snapshot used for event
+	// routing and prompt rendering. It must be safe to call concurrently with
+	// ongoing agent runs.
+	UpdateConfig(cfg *config.Config)
+	// UpdateRunners atomically replaces the runner map. It must be safe to call
+	// concurrently with ongoing agent runs.
+	UpdateRunners(runners map[string]ai.Runner)
+}
+
 // Scheduler wires cron-triggered agent bindings from the config into the
 // robfig/cron engine.
 type Scheduler struct {
 	cfg           *config.Config
 	runners       map[string]ai.Runner
-	runnerBuilder RunnerBuilder // optional; nil means Reload does not update runners
+	runnerBuilder RunnerBuilder  // optional; nil means Reload does not update runners
+	hotReloadSink HotReloadSink  // optional; nil means no external component to notify
 	memories      *MemoryStore
 	cron          *cron.Cron
 	logger        zerolog.Logger
 	ctxMu         sync.RWMutex
 	runCtx        context.Context
-	bindMu        sync.RWMutex // protects agentEntries and cfg.Repos/Agents during Reload
+	bindMu        sync.RWMutex // protects cfg, runners, and agentEntries during Reload
 	agentEntries  []agentEntry
 	lastRunsMu    sync.RWMutex
 	lastRuns      map[string]lastRunRecord // key: "name\x00repo"
@@ -108,15 +123,23 @@ func (s *Scheduler) WithTraceRecorder(r workflow.TraceRecorder) {
 }
 
 // WithRunnerBuilder registers the factory used to construct ai.Runner instances
-// during hot-reload. When set, Reload rebuilds the runner map in-place after a
-// successful cron re-registration so that new or updated backend definitions
-// take effect without a daemon restart. The scheduler and workflow engine share
-// the same map reference, so the rebuild is visible to both execution paths.
+// during hot-reload. When set, Reload builds a fresh runners map after a
+// successful cron re-registration and updates both the scheduler and any
+// registered HotReloadSink so that new or updated backend definitions take
+// effect without a daemon restart.
 //
 // If not called, Reload leaves the runner map untouched; new backends added via
 // the CRUD API will return "no runner for backend" until the daemon restarts.
 func (s *Scheduler) WithRunnerBuilder(fn RunnerBuilder) {
 	s.runnerBuilder = fn
+}
+
+// WithHotReloadSink registers a component that shares config and runner state
+// with this Scheduler. At the end of each successful Reload, the sink's
+// UpdateConfig and UpdateRunners methods are called so that the external
+// component stays consistent with the new definitions.
+func (s *Scheduler) WithHotReloadSink(sink HotReloadSink) {
+	s.hotReloadSink = sink
 }
 
 // NewScheduler builds a scheduler and registers all cron-triggered bindings
@@ -271,11 +294,18 @@ func (s *Scheduler) AgentStatuses() []AgentStatus {
 // the run itself fails.
 func (s *Scheduler) TriggerAgent(ctx context.Context, agentName, repo string) error {
 	agentName = strings.ToLower(strings.TrimSpace(agentName))
-	repoDef, ok := s.cfg.RepoByName(repo)
+
+	// Snapshot the config pointer under the read lock so that a concurrent
+	// Reload cannot partially update the struct while we read from it.
+	s.bindMu.RLock()
+	cfg := s.cfg
+	s.bindMu.RUnlock()
+
+	repoDef, ok := cfg.RepoByName(repo)
 	if !ok || !repoDef.Enabled {
 		return fmt.Errorf("repo %q is disabled or not found", repo)
 	}
-	agent, ok := s.cfg.AgentByName(agentName)
+	agent, ok := cfg.AgentByName(agentName)
 	if !ok {
 		return fmt.Errorf("agent %q not found", agentName)
 	}
@@ -304,17 +334,26 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		}
 	}
 
+	// Snapshot the config pointer and runners map under a brief read lock so
+	// that a concurrent Reload cannot replace them while we are reading.
+	// The lock is released immediately after the snapshot; the slow runner.Run
+	// call and all memory operations below are intentionally outside the lock.
+	s.bindMu.RLock()
+	cfg := s.cfg
+	runners := s.runners
+	s.bindMu.RUnlock()
+
 	// Resolve backend and runner. If either fails, roll back the cron mark
 	// written above so that subsequent dispatches are not spuriously suppressed
 	// for the full dedup_window_seconds.
-	backend := s.cfg.ResolveBackend(agent.Backend)
+	backend := cfg.ResolveBackend(agent.Backend)
 	if backend == "" {
 		if s.dispatcher != nil {
 			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
 		}
 		return fmt.Errorf("no configured backend for agent %q (configured: %q)", agent.Name, agent.Backend)
 	}
-	runner, ok := s.runners[backend]
+	runner, ok := runners[backend]
 	if !ok {
 		if s.dispatcher != nil {
 			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
@@ -323,7 +362,7 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	}
 
 	logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Str("backend", backend).Logger()
-	roster := workflow.BuildRoster(s.cfg, repo, agent.Name)
+	roster := workflow.BuildRoster(cfg, repo, agent.Name)
 	// runCompleted is set to true once runner.Run returns successfully. The cron
 	// mark should only be rolled back when the autonomous pass itself fails
 	// (prompt rendering, memory lock, or runner error). A post-run failure such
@@ -331,7 +370,7 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	// already committed, so the dedup window must remain in force.
 	runCompleted := false
 	err := s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
-		rendered, err := ai.RenderAgentPrompt(agent, s.cfg.Skills, ai.PromptContext{
+		rendered, err := ai.RenderAgentPrompt(agent, cfg.Skills, ai.PromptContext{
 			Repo:       repo,
 			Backend:    backend,
 			Memory:     memory,
@@ -434,18 +473,25 @@ func (s *Scheduler) Reload(repos []config.RepoDef, agents []config.AgentDef, ski
 	defer s.bindMu.Unlock()
 
 	// Save old state for rollback.
-	oldRepos := s.cfg.Repos
-	oldAgents := s.cfg.Agents
-	oldSkills := s.cfg.Skills
-	oldBackends := s.cfg.Daemon.AIBackends
+	oldCfg := s.cfg
+	oldRunners := s.runners
 	oldEntries := make([]agentEntry, len(s.agentEntries))
 	copy(oldEntries, s.agentEntries)
 
+	// Build a new config value so we do not mutate the existing *config.Config
+	// in place. Both this scheduler and the workflow engine may hold references
+	// to the current pointer; mutating through it would race with concurrent
+	// readers in event-driven agent runs. Copy-on-write gives every goroutine
+	// that already snapshotted the old pointer a consistent view until it
+	// finishes, while future snapshots see the new config.
+	newCfg := *s.cfg
+	newCfg.Repos = repos
+	newCfg.Agents = agents
+	newCfg.Skills = skills
+	newCfg.Daemon.AIBackends = backends
+
 	// Apply new config and attempt to register new cron jobs.
-	s.cfg.Repos = repos
-	s.cfg.Agents = agents
-	s.cfg.Skills = skills
-	s.cfg.Daemon.AIBackends = backends
+	s.cfg = &newCfg
 	s.agentEntries = s.agentEntries[:0]
 
 	if err := s.registerJobs(); err != nil {
@@ -454,10 +500,8 @@ func (s *Scheduler) Reload(repos []config.RepoDef, agents []config.AgentDef, ski
 			s.cron.Remove(e.cronID)
 		}
 		// Restore old state so the scheduler stays healthy.
-		s.cfg.Repos = oldRepos
-		s.cfg.Agents = oldAgents
-		s.cfg.Skills = oldSkills
-		s.cfg.Daemon.AIBackends = oldBackends
+		s.cfg = oldCfg
+		s.runners = oldRunners
 		s.agentEntries = oldEntries
 		return err
 	}
@@ -474,17 +518,24 @@ func (s *Scheduler) Reload(repos []config.RepoDef, agents []config.AgentDef, ski
 	}
 
 	// Rebuild the runner map to reflect any new or changed backend definitions.
-	// The scheduler and workflow engine share the same map reference, so
-	// mutating it in-place makes the updated runners visible to both paths.
+	// We build a fresh map (copy-on-write) rather than mutating the existing
+	// one to avoid racing with concurrent executeAgentRun or engine.runAgent
+	// calls that may already hold a reference to the old map.
 	if s.runnerBuilder != nil {
+		newRunners := make(map[string]ai.Runner, len(backends))
 		for name, backend := range backends {
-			s.runners[name] = s.runnerBuilder(name, backend)
+			newRunners[name] = s.runnerBuilder(name, backend)
 		}
-		for name := range s.runners {
-			if _, exists := backends[name]; !exists {
-				delete(s.runners, name)
-			}
+		s.runners = newRunners
+		if s.hotReloadSink != nil {
+			s.hotReloadSink.UpdateRunners(maps.Clone(newRunners))
 		}
+	}
+
+	// Notify the external sink (Engine) so that event-driven runs also see the
+	// new config without a restart.
+	if s.hotReloadSink != nil {
+		s.hotReloadSink.UpdateConfig(&newCfg)
 	}
 
 	s.logger.Info().Int("cron_jobs", len(s.agentEntries)).Msg("scheduler reloaded")

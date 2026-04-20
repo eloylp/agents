@@ -121,6 +121,10 @@ func run() error {
 	dataChannels := workflow.NewDataChannels(cfg.Daemon.Processor.EventQueueBuffer)
 	engine := workflow.NewEngine(cfg, runners, dataChannels, logger)
 	scheduler.WithDispatcher(engine.Dispatcher())
+	// Wire the engine as the hot-reload sink so that CRUD-triggered Reload
+	// calls propagate new config and runner maps to the event-driven path
+	// without a daemon restart.
+	scheduler.WithHotReloadSink(engine)
 	shutdown := time.Duration(cfg.Daemon.HTTP.ShutdownTimeoutSeconds) * time.Second
 	workers := cfg.Daemon.Processor.MaxConcurrentAgents
 	processor := workflow.NewProcessor(dataChannels, engine, workers, shutdown, logger)

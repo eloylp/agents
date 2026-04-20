@@ -768,3 +768,81 @@ func TestAgentsRunDeduplicatesDuplicateRequests(t *testing.T) {
 		t.Errorf("expected RunsDeduped=1, got %d", stats.RunsDeduped)
 	}
 }
+
+// TestEngineUpdateConfigRunnersRaceWithHandleEvent is a race-detector test. It
+// exercises concurrent UpdateConfig + UpdateRunners (the hot-reload path) and
+// HandleEvent (the event-driven path) to verify that the cfgMu / runnersMu
+// snapshot pattern does not produce data races.
+// Run with -race to catch concurrent map/struct accesses.
+func TestEngineUpdateConfigRunnersRaceWithHandleEvent(t *testing.T) {
+	t.Parallel()
+
+	e, runner := newTestEngine(func(c *config.Config) {
+		// Add an event binding so HandleEvent actually dispatches the agent.
+		c.Repos[0].Use = append(c.Repos[0].Use, config.Binding{
+			Agent:  "arch-reviewer",
+			Events: []string{"push"},
+		})
+	})
+
+	pushEvent := func() Event {
+		return Event{
+			Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
+			Kind:  "push",
+			Actor: "bot",
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Build an alternate config (same shape, different pointer).
+	altCfg := &config.Config{
+		Daemon: config.DaemonConfig{
+			Processor:  config.ProcessorConfig{MaxConcurrentAgents: 4},
+			AIBackends: map[string]config.AIBackendConfig{"claude": {Command: "claude"}},
+		},
+		Skills: map[string]config.SkillDef{
+			"architect": {Prompt: "Focus on architecture."},
+		},
+		Agents: []config.AgentDef{
+			{Name: "arch-reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Review architecture."},
+		},
+		Repos: []config.RepoDef{
+			{
+				Name:    "owner/repo",
+				Enabled: true,
+				Use:     []config.Binding{{Agent: "arch-reviewer", Events: []string{"push"}}},
+			},
+		},
+	}
+	altRunners := map[string]ai.Runner{"claude": runner}
+
+	const goroutines = 8
+	var wg sync.WaitGroup
+
+	// Half the goroutines call HandleEvent concurrently.
+	for range goroutines / 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				_ = e.HandleEvent(ctx, pushEvent())
+			}
+		}()
+	}
+
+	// The other half call UpdateConfig + UpdateRunners concurrently.
+	for range goroutines / 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				e.UpdateConfig(altCfg)
+				e.UpdateRunners(altRunners)
+			}
+		}()
+	}
+
+	wg.Wait()
+}
