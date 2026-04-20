@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -394,5 +395,403 @@ func TestEngineAllowPRsTrueOmitsNoPRGuard(t *testing.T) {
 	const noPR = "Do not open or create pull requests under any circumstances."
 	if strings.HasPrefix(runner.lastSystem(), noPR) {
 		t.Errorf("system prompt must NOT contain no-PR guard when allow_prs=true\ngot: %q", runner.lastSystem())
+	}
+}
+
+// newTestEngineWithDedup builds an Engine with the dispatch dedup store enabled.
+// A non-nil queue is required to activate the Dispatcher; the dedup window is
+// set to 60 s so tests stay well within the window.
+func newTestEngineWithDedup(cfgMutator func(*config.Config)) (*Engine, *stubRunner, *fakeQueue) {
+	runner := &stubRunner{}
+	cfg := &config.Config{
+		Daemon: config.DaemonConfig{
+			Processor: config.ProcessorConfig{
+				MaxConcurrentAgents: 4,
+				Dispatch: config.DispatchConfig{
+					MaxDepth:           2,
+					MaxFanout:          4,
+					DedupWindowSeconds: 60,
+				},
+			},
+			AIBackends: map[string]config.AIBackendConfig{
+				"claude": {Command: "claude"},
+			},
+		},
+		Skills: map[string]config.SkillDef{},
+		Agents: []config.AgentDef{
+			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review PR."},
+		},
+		Repos: []config.RepoDef{
+			{
+				Name:    "owner/repo",
+				Enabled: true,
+				Use: []config.Binding{
+					{Agent: "pr-reviewer", Events: []string{"pull_request.synchronize"}},
+				},
+			},
+		},
+	}
+	if cfgMutator != nil {
+		cfgMutator(cfg)
+	}
+	q := &fakeQueue{}
+	e := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, q, zerolog.Nop())
+	return e, runner, q
+}
+
+// TestFanOutDeduplicatesSequentialEventsWithinTTL verifies that a second event
+// for the same (agent, repo, number) arriving within the dedup window is
+// suppressed — the claim committed by the first run blocks the second.
+func TestFanOutDeduplicatesSequentialEventsWithinTTL(t *testing.T) {
+	t.Parallel()
+	e, runner, _ := newTestEngineWithDedup(nil)
+	ev := Event{
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "pull_request.synchronize",
+		Number: 42,
+	}
+
+	// First event: claim succeeds, run executes.
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("first HandleEvent: %v", err)
+	}
+	// Second identical event within the TTL window: claim is already committed.
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("second HandleEvent: %v", err)
+	}
+
+	if got := runner.callCount(); got != 1 {
+		t.Errorf("expected exactly 1 run, got %d", got)
+	}
+	if stats := e.DispatchStats(); stats.RunsDeduped != 1 {
+		t.Errorf("expected RunsDeduped=1, got %d", stats.RunsDeduped)
+	}
+}
+
+// TestFanOutDeduplicatesConcurrentEvents verifies that when two goroutines fire
+// the same event concurrently for the same (agent, repo, number), exactly one
+// agent run completes and the other is suppressed. The TryClaim inside the
+// goroutine is mutex-protected, so exactly one caller wins regardless of
+// goroutine scheduling order.
+func TestFanOutDeduplicatesConcurrentEvents(t *testing.T) {
+	t.Parallel()
+	e, runner, _ := newTestEngineWithDedup(nil)
+	ev := Event{
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "pull_request.synchronize",
+		Number: 42,
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for range 2 {
+		go func() {
+			defer wg.Done()
+			_ = e.HandleEvent(context.Background(), ev)
+		}()
+	}
+	wg.Wait()
+
+	if got := runner.callCount(); got != 1 {
+		t.Errorf("expected exactly 1 run from concurrent events, got %d", got)
+	}
+	if stats := e.DispatchStats(); stats.RunsDeduped != 1 {
+		t.Errorf("expected RunsDeduped=1, got %d", stats.RunsDeduped)
+	}
+}
+
+// TestFanOutDifferentNumbersAreNotDeduped verifies that events for different
+// (agent, repo, number) keys each get their own run — dedup must not
+// collapse distinct items under the same agent/repo umbrella.
+func TestFanOutDifferentNumbersAreNotDeduped(t *testing.T) {
+	t.Parallel()
+	e, runner, _ := newTestEngineWithDedup(nil)
+
+	for _, number := range []int{1, 2, 3} {
+		ev := Event{
+			Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+			Kind:   "pull_request.synchronize",
+			Number: number,
+		}
+		if err := e.HandleEvent(context.Background(), ev); err != nil {
+			t.Fatalf("HandleEvent(number=%d): %v", number, err)
+		}
+	}
+
+	if got := runner.callCount(); got != 3 {
+		t.Errorf("expected 3 runs for 3 distinct numbers, got %d", got)
+	}
+	if stats := e.DispatchStats(); stats.RunsDeduped != 0 {
+		t.Errorf("expected RunsDeduped=0, got %d", stats.RunsDeduped)
+	}
+}
+
+// TestFanOutClaimAbandonedOnRunFailure verifies that a failed agent run
+// releases the pending dedup claim so that a subsequent event for the same
+// (agent, repo, number) is allowed to proceed.
+func TestFanOutClaimAbandonedOnRunFailure(t *testing.T) {
+	t.Parallel()
+	e, runner, _ := newTestEngineWithDedup(nil)
+	ev := Event{
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "pull_request.synchronize",
+		Number: 42,
+	}
+
+	// First run fails.
+	runErr := errors.New("backend error")
+	runner.runFn = func(_ ai.Request) error { return runErr }
+	if err := e.HandleEvent(context.Background(), ev); err == nil {
+		t.Fatal("expected error from first run, got nil")
+	}
+
+	// Second run succeeds: the abandoned claim must have been released.
+	runner.runFn = nil
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("second HandleEvent after failure: %v", err)
+	}
+
+	// Both attempts ran; dedup did not suppress the retry.
+	if got := runner.callCount(); got != 2 {
+		t.Errorf("expected 2 runs (failure + retry), got %d", got)
+	}
+	if stats := e.DispatchStats(); stats.RunsDeduped != 0 {
+		t.Errorf("expected RunsDeduped=0 (retry should not be counted as deduped), got %d", stats.RunsDeduped)
+	}
+}
+
+// TestFanOutDoesNotDedupZeroNumberEvents verifies that repo-level events with
+// number=0 (e.g. push) are never collapsed by the dedup gate.  Two distinct
+// pushes to the same repo must each trigger their bound agent.
+func TestFanOutDoesNotDedupZeroNumberEvents(t *testing.T) {
+	t.Parallel()
+	e, runner, _ := newTestEngineWithDedup(func(c *config.Config) {
+		c.Agents = append(c.Agents, config.AgentDef{Name: "pusher", Backend: "claude", Prompt: "React to pushes."})
+		c.Repos[0].Use = append(c.Repos[0].Use, config.Binding{Agent: "pusher", Events: []string{"push"}})
+	})
+
+	push1 := Event{
+		Repo:    RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:    "push",
+		Number:  0,
+		Payload: map[string]any{"head_sha": "abc123"},
+	}
+	push2 := Event{
+		Repo:    RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:    "push",
+		Number:  0,
+		Payload: map[string]any{"head_sha": "def456"},
+	}
+
+	if err := e.HandleEvent(context.Background(), push1); err != nil {
+		t.Fatalf("first push: %v", err)
+	}
+	if err := e.HandleEvent(context.Background(), push2); err != nil {
+		t.Fatalf("second push: %v", err)
+	}
+
+	if got := runner.callCount(); got != 2 {
+		t.Errorf("expected 2 runs for two distinct pushes, got %d (second push must not be deduplicated)", got)
+	}
+	if stats := e.DispatchStats(); stats.RunsDeduped != 0 {
+		t.Errorf("expected RunsDeduped=0 for push events, got %d", stats.RunsDeduped)
+	}
+}
+
+// TestDispatchEventRunsAfterEnqueue is an end-to-end regression test for the
+// dispatch self-suppression bug: ProcessDispatches commits the dedup claim
+// before enqueuing, so handleDispatchEvent must NOT re-claim or the agent is
+// silently dropped. This test goes through the real enqueue→dequeue path.
+func TestDispatchEventRunsAfterEnqueue(t *testing.T) {
+	t.Parallel()
+	e, runner, q := newTestEngineWithDedup(func(c *config.Config) {
+		c.Agents[0].AllowDispatch = true
+		c.Agents = append(c.Agents, config.AgentDef{
+			Name:          "coder",
+			Backend:       "claude",
+			Prompt:        "Write code.",
+			AllowDispatch: true,
+			CanDispatch:   []string{"pr-reviewer"},
+		})
+	})
+
+	originator := config.AgentDef{
+		Name:        "coder",
+		CanDispatch: []string{"pr-reviewer"},
+	}
+	triggerEv := Event{
+		ID:     "root-1",
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "issues.labeled",
+		Number: 7,
+		Payload: map[string]any{"label": "ai:code"},
+	}
+	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 7, Reason: "ready"}}
+
+	// ProcessDispatches enqueues the agent.dispatch event and commits its claim.
+	if err := e.Dispatcher().ProcessDispatches(context.Background(), originator, triggerEv, "root-1", 0, "", reqs); err != nil {
+		t.Fatalf("ProcessDispatches: %v", err)
+	}
+	enqueued := q.popped()
+	if len(enqueued) != 1 {
+		t.Fatalf("expected 1 enqueued event, got %d", len(enqueued))
+	}
+
+	// HandleEvent processes the dequeued agent.dispatch event.
+	// Before the fix this returned nil but suppressed the run (self-suppression).
+	if err := e.HandleEvent(context.Background(), enqueued[0]); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if got := runner.callCount(); got != 1 {
+		t.Errorf("expected 1 agent run after dequeue, got %d (dispatch self-suppression regression)", got)
+	}
+}
+
+// TestDispatchDedupPreventsDoubleEnqueue verifies that the enqueue-side dedup
+// in ProcessDispatches prevents a second identical dispatch from being enqueued
+// within the TTL window. The dedup gate belongs at enqueue, not at execution.
+func TestDispatchDedupPreventsDoubleEnqueue(t *testing.T) {
+	t.Parallel()
+	e, _, q := newTestEngineWithDedup(func(c *config.Config) {
+		c.Agents[0].AllowDispatch = true
+		c.Agents = append(c.Agents, config.AgentDef{
+			Name:          "coder",
+			Backend:       "claude",
+			Prompt:        "Write code.",
+			AllowDispatch: true,
+			CanDispatch:   []string{"pr-reviewer"},
+		})
+	})
+
+	originator := config.AgentDef{
+		Name:        "coder",
+		CanDispatch: []string{"pr-reviewer"},
+	}
+	triggerEv := Event{
+		ID:     "root-2",
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "issues.labeled",
+		Number: 9,
+		Payload: map[string]any{"label": "ai:code"},
+	}
+	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 9, Reason: "first"}}
+
+	// First call enqueues the event.
+	if err := e.Dispatcher().ProcessDispatches(context.Background(), originator, triggerEv, "root-2", 0, "", reqs); err != nil {
+		t.Fatalf("first ProcessDispatches: %v", err)
+	}
+	// Second identical call within TTL must be suppressed at enqueue time.
+	reqs2 := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 9, Reason: "duplicate"}}
+	if err := e.Dispatcher().ProcessDispatches(context.Background(), originator, triggerEv, "root-2", 0, "", reqs2); err != nil {
+		t.Fatalf("second ProcessDispatches: %v", err)
+	}
+
+	if got := len(q.popped()); got != 1 {
+		t.Errorf("expected exactly 1 enqueued event (dedup suppressed second), got %d", got)
+	}
+	if stats := e.Dispatcher().Stats(); stats.Deduped != 1 {
+		t.Errorf("expected Deduped=1 from enqueue-side dedup, got %d", stats.Deduped)
+	}
+}
+
+// TestFanOutDedupSurvivesTTLExpiry is a regression test for the in-flight
+// refcount fix: a second identical event arriving after dedup_window_seconds
+// has elapsed — but while the first run is still executing — must be suppressed.
+// Before the fix, TryClaimForDispatch only checked the TTL entry; once the
+// entry expired the second event could claim the slot and start a concurrent
+// duplicate run.
+func TestFanOutDedupSurvivesTTLExpiry(t *testing.T) {
+	t.Parallel()
+
+	// Use an engine with a 1-second dedup window so the TTL expires quickly.
+	e, runner, _ := newTestEngineWithDedup(func(c *config.Config) {
+		c.Daemon.Processor.Dispatch.DedupWindowSeconds = 1
+	})
+
+	var (
+		runStarted = make(chan struct{})
+		unblock    = make(chan struct{})
+	)
+	// The first run blocks until we release it, simulating a long-running agent.
+	runner.runFn = func(_ ai.Request) error {
+		close(runStarted)
+		<-unblock
+		return nil
+	}
+
+	ev := Event{
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "pull_request.synchronize",
+		Number: 42,
+	}
+
+	// Start first run in background; it will block until unblock is closed.
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- e.HandleEvent(context.Background(), ev) }()
+
+	// Wait until the first run has started and is in-flight.
+	<-runStarted
+
+	// Wait for the TTL window to expire so the store entry expires.
+	time.Sleep(1500 * time.Millisecond)
+
+	// Fire a second identical event while the first run is still in-flight.
+	// The in-flight refcount must suppress it even though the TTL has expired.
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("second HandleEvent: %v", err)
+	}
+
+	// Release the first run.
+	close(unblock)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first HandleEvent: %v", err)
+	}
+
+	if got := runner.callCount(); got != 1 {
+		t.Errorf("expected exactly 1 run (second suppressed by in-flight refcount), got %d", got)
+	}
+	if stats := e.DispatchStats(); stats.RunsDeduped != 1 {
+		t.Errorf("expected RunsDeduped=1, got %d", stats.RunsDeduped)
+	}
+}
+
+// TestAgentsRunDeduplicatesDuplicateRequests is a regression test for the
+// fleet-wide dedup gap on the HTTP /agents/run path. Before the fix, two
+// near-simultaneous agents.run events for the same (agent, repo) both passed
+// handleDispatchEvent and launched duplicate runs because the function skipped
+// dedup unconditionally (valid only for pre-claimed agent.dispatch events).
+func TestAgentsRunDeduplicatesDuplicateRequests(t *testing.T) {
+	t.Parallel()
+	e, runner, _ := newTestEngineWithDedup(nil)
+
+	onDemandEvent := func() Event {
+		return Event{
+			ID:    GenEventID(),
+			Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
+			Kind:  "agents.run",
+			Actor: "human",
+			Payload: map[string]any{
+				"target_agent": "pr-reviewer",
+			},
+		}
+	}
+
+	// First on-demand request — must run the agent.
+	if err := e.HandleEvent(context.Background(), onDemandEvent()); err != nil {
+		t.Fatalf("first HandleEvent: %v", err)
+	}
+	if got := runner.callCount(); got != 1 {
+		t.Fatalf("expected 1 run after first request, got %d", got)
+	}
+
+	// Second identical on-demand request within the dedup window — must be suppressed.
+	if err := e.HandleEvent(context.Background(), onDemandEvent()); err != nil {
+		t.Fatalf("second HandleEvent: %v", err)
+	}
+	if got := runner.callCount(); got != 1 {
+		t.Errorf("expected still 1 run (second suppressed by dedup), got %d", got)
+	}
+	if stats := e.DispatchStats(); stats.RunsDeduped != 1 {
+		t.Errorf("expected RunsDeduped=1, got %d", stats.RunsDeduped)
 	}
 }

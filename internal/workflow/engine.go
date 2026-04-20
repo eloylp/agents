@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -55,6 +56,7 @@ type Engine struct {
 	traceRec      TraceRecorder
 	graphRec      GraphRecorder
 	runTracker    RunTracker
+	runsDeduped   atomic.Int64
 }
 
 // NewEngine builds an Engine. queue may be nil, in which case dispatch
@@ -111,12 +113,14 @@ func (e *Engine) StartDispatchDedup(ctx context.Context) {
 }
 
 // DispatchStats returns a snapshot of dispatch counters. Returns zero values
-// when dispatch is not configured.
+// (except RunsDeduped) when dispatch is not configured.
 func (e *Engine) DispatchStats() DispatchStats {
 	if e.dispatcher == nil {
-		return DispatchStats{}
+		return DispatchStats{RunsDeduped: e.runsDeduped.Load()}
 	}
-	return e.dispatcher.Stats()
+	stats := e.dispatcher.Stats()
+	stats.RunsDeduped = e.runsDeduped.Load()
+	return stats
 }
 
 // Dispatcher returns the configured Dispatcher, or nil if dispatch is not
@@ -178,6 +182,26 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		return fmt.Errorf("dispatch: target agent %q not found", targetName)
 	}
 
+	// agents.run events arrive from the HTTP /agents/run endpoint with no prior
+	// dedup claim. Gate them here so two near-simultaneous on-demand requests for
+	// the same (agent, repo) do not launch duplicate runs within the dedup window.
+	//
+	// agent.dispatch events skip this block: ProcessDispatches already claimed and
+	// committed the dedup slot before enqueuing the event. Re-claiming would see
+	// the committed entry and self-suppress every dispatched run. The enqueue-side
+	// claim is the authoritative gate; handleDispatchEvent only executes it.
+	if ev.Kind == "agents.run" && e.dispatcher != nil {
+		if !e.dispatcher.dedup.TryClaimForDispatch(targetName, repo.Name, ev.Number, time.Now()) {
+			e.logger.Info().
+				Str("repo", ev.Repo.FullName).
+				Str("target", targetName).
+				Msg("on-demand run skipped: agent already claimed within dedup window")
+			e.runsDeduped.Add(1)
+			return nil
+		}
+		e.dispatcher.dedup.MarkWebhookRunInFlight(targetName, repo.Name, ev.Number)
+	}
+
 	e.logger.Info().
 		Str("repo", ev.Repo.FullName).
 		Str("target", targetName).
@@ -185,10 +209,24 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		Str("invoked_by", ev.Actor).
 		Msg("running dispatched agent")
 
-	return e.runAgent(ctx, ev, agent)
+	runErr := e.runAgent(ctx, ev, agent)
+
+	// Release the on-demand claim taken above for agents.run.
+	if ev.Kind == "agents.run" && e.dispatcher != nil {
+		if runErr != nil {
+			e.dispatcher.dedup.AbandonWebhookRun(targetName, repo.Name, ev.Number)
+		} else {
+			e.dispatcher.dedup.FinalizeWebhookRun(targetName, repo.Name, ev.Number)
+		}
+	}
+	return runErr
 }
 
 // fanOut runs all agents matched for ev in parallel, capped by e.maxConcurrent.
+// When a dedup store is configured, each agent run is gated through a
+// TryClaim/CommitClaim/AbandonClaim sequence keyed on (agent, repo, number) so
+// that concurrent or near-simultaneous events for the same item do not produce
+// duplicate runs within the dedup window.
 // A failing agent does not abort the others; all errors are joined and returned.
 func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 	matched := e.agentsForEvent(ev)
@@ -215,10 +253,66 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 		go func(a config.AgentDef) {
 			defer wg.Done()
 			defer sem.Release(1)
+
+			// Gate through the dedup store when configured, but only for
+			// item-scoped events (number > 0).  Repo-level events such as
+			// push have number=0 and must never be collapsed — each push is
+			// a distinct event with a different head_sha, so two quick pushes
+			// to the same repo should both trigger their bound agents.
+			if e.dispatcher != nil && ev.Number > 0 {
+				if !e.dispatcher.dedup.TryClaimForDispatch(a.Name, ev.Repo.FullName, ev.Number, time.Now()) {
+					e.logger.Debug().
+						Str("agent", a.Name).
+						Str("repo", ev.Repo.FullName).
+						Int("number", ev.Number).
+						Msg("run skipped: agent already claimed within dedup window")
+					e.runsDeduped.Add(1)
+					return
+				}
+				// Increment the in-flight refcount so that the claim persists
+				// past the TTL window for the duration of the run. Without this
+				// a long-running agent (> dedup_window_seconds) would allow a
+				// second identical event to pass the TTL check and start a
+				// concurrent duplicate run.
+				e.dispatcher.dedup.MarkWebhookRunInFlight(a.Name, ev.Repo.FullName, ev.Number)
+			}
+
+			// Abandon the in-flight marker and pending claim on panic so that
+			// future events can retry. Only applies when a claim was taken (number > 0).
+			defer func() {
+				if r := recover(); r != nil {
+					if e.dispatcher != nil && ev.Number > 0 {
+						e.dispatcher.dedup.AbandonWebhookRun(a.Name, ev.Repo.FullName, ev.Number)
+					}
+					e.logger.Error().
+						Interface("panic", r).
+						Str("agent", a.Name).
+						Str("repo", ev.Repo.FullName).
+						Int("number", ev.Number).
+						Msg("panic in agent run; claim abandoned")
+					panic(r)
+				}
+			}()
+
 			if err := e.runAgent(ctx, ev, a); err != nil {
+				// Abandon on failure so that a retry or a subsequent event can
+				// claim the slot and attempt the run again.
+				if e.dispatcher != nil && ev.Number > 0 {
+					e.dispatcher.dedup.AbandonWebhookRun(a.Name, ev.Repo.FullName, ev.Number)
+				}
 				mu.Lock()
 				errs = append(errs, err)
 				mu.Unlock()
+			} else {
+				// Commit the claim and release the in-flight marker. CommitClaim
+				// marks the entry as committed so the TTL window stays active;
+				// FinalizeWebhookRun decrements the refcount while preserving
+				// the TTL entry — together they suppress duplicate runs until
+				// the window expires without blocking new events after it does.
+				if e.dispatcher != nil && ev.Number > 0 {
+					e.dispatcher.dedup.CommitClaim(a.Name, ev.Repo.FullName, ev.Number)
+					e.dispatcher.dedup.FinalizeWebhookRun(a.Name, ev.Repo.FullName, ev.Number)
+				}
 			}
 		}(agent)
 	}

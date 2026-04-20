@@ -913,3 +913,46 @@ func TestSuccessfulCronRunRefcountIsZeroAfterFinalize(t *testing.T) {
 		t.Error("expected SeenCronRun=false after finalize+evict: entry should be gone")
 	}
 }
+
+// TestLongRunningWebhookRunBlocksCronPastTTL is a regression test for the
+// case where a webhook or agents.run execution outlasts its dedup_window_seconds
+// TTL. Without the webhookRefCounts guard in TryClaimForCron, the cron path
+// would see an expired expiresAt, consider the slot free, and proceed concurrently
+// with the still-in-flight webhook run, breaking the fleet-wide dedup contract.
+func TestLongRunningWebhookRunBlocksCronPastTTL(t *testing.T) {
+	t.Parallel()
+
+	// Short TTL so we can simulate expiry without real sleeps.
+	const ttlSeconds = 1
+	dedup := NewDispatchDedupStore(ttlSeconds)
+
+	start := time.Now()
+
+	// Webhook run claims the slot and immediately marks itself in-flight, as the
+	// fanOut path does after a successful TryClaimForDispatch.
+	if !dedup.TryClaimForDispatch("coder", "owner/repo", 42, start) {
+		t.Fatal("TryClaimForDispatch: expected claim to succeed on fresh store")
+	}
+	dedup.CommitClaim("coder", "owner/repo", 42)
+	dedup.MarkWebhookRunInFlight("coder", "owner/repo", 42)
+
+	// Advance past the TTL and run the sweeper. The entry must survive because
+	// webhookRefCounts["coder\x00owner/repo\x0042"] is still 1.
+	pastTTL := start.Add(2 * time.Duration(ttlSeconds) * time.Second)
+	dedup.evict(pastTTL)
+
+	// A cron tick arriving after the TTL window must still be suppressed because
+	// the webhook run is still in flight (refcount > 0). Before the fix,
+	// TryClaimForCron would return true here, racing the in-flight run.
+	if dedup.TryClaimForCron("coder", "owner/repo", 42, pastTTL) {
+		t.Error("TryClaimForCron must return false: webhook run still in flight past TTL")
+	}
+
+	// Once the run completes and the entry is evicted, the cron tick must proceed.
+	dedup.FinalizeWebhookRun("coder", "owner/repo", 42)
+	dedup.evict(pastTTL) // refcount is now 0; expiresAt already elapsed → evicted.
+
+	if !dedup.TryClaimForCron("coder", "owner/repo", 42, pastTTL) {
+		t.Error("TryClaimForCron must return true: webhook run completed and entry evicted")
+	}
+}
