@@ -9,7 +9,9 @@ package webhook
 // All write endpoints require the same bearer-token auth as POST /agents/run.
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -278,15 +280,22 @@ func (s *Server) handlePutBinding(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDeleteBinding handles DELETE /api/repos/{name}/bindings/{id}.
+// The binding must belong to the named repo; a mismatch returns 404.
 func (s *Server) handleDeleteBinding(w http.ResponseWriter, r *http.Request) {
-	idStr := mux.Vars(r)["id"]
+	vars := mux.Vars(r)
+	repo := vars["name"]
+	idStr := vars["id"]
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		http.Error(w, "invalid binding id", http.StatusBadRequest)
 		return
 	}
-	if err := store.DeleteBinding(s.db, id); err != nil {
-		s.logger.Error().Err(err).Int64("id", id).Msg("delete binding")
+	if err := store.DeleteBinding(s.db, repo, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "binding not found", http.StatusNotFound)
+			return
+		}
+		s.logger.Error().Err(err).Str("repo", repo).Int64("id", id).Msg("delete binding")
 		http.Error(w, "failed to delete binding", http.StatusInternalServerError)
 		return
 	}

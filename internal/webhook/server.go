@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -61,12 +62,20 @@ type EventQueue interface {
 	QueueStats() workflow.QueueStat
 }
 
+// ConfigObserver is notified after every successful reloadConfig call so that
+// execution components can pick up the new config without a daemon restart.
+// Implementations must be safe for concurrent use.
+type ConfigObserver interface {
+	UpdateConfig(*config.Config)
+}
+
 type Server struct {
 	// cfgPtr holds the current effective config as an atomic pointer so that
 	// write-API handlers can swap it after persisting a change without holding
 	// a coarse lock across all request handlers.
 	cfgPtr        atomic.Pointer[config.Config]
-	db            *sql.DB        // non-nil only when --db is used; enables write API
+	db            *sql.DB          // non-nil only when --db is used; enables write API
+	observers     []ConfigObserver // notified after every successful reloadConfig
 	delivery      *DeliveryStore
 	logger        zerolog.Logger
 	channels      EventQueue
@@ -112,23 +121,42 @@ func (s *Server) WithStore(db *sql.DB) {
 	s.db = db
 }
 
-// reloadConfig reloads the structural config from the SQLite database and
+// WithConfigObserver registers a component that should receive config updates
+// after every successful write-API mutation. Multiple observers are supported;
+// each is called synchronously in the order registered.
+func (s *Server) WithConfigObserver(o ConfigObserver) {
+	s.observers = append(s.observers, o)
+}
+
+// reloadConfig reloads the structural config from the SQLite database, applies
+// defaults, normalisation, and validation via config.FinishLoad, then
 // atomically replaces the server's config pointer. Resolved runtime secrets
 // (webhook secret, API key, proxy API key) are not stored in the database —
 // they are carried forward from the current live config so they remain valid
 // without requiring a re-read of environment variables.
+// After the server's pointer is updated every registered ConfigObserver is
+// notified so that execution components (Engine, Scheduler) pick up the new
+// routing and agent definitions on their next operation.
 func (s *Server) reloadConfig() error {
-	cfg, err := store.Load(s.db)
+	raw, err := store.Load(s.db)
 	if err != nil {
 		return err
 	}
-	// Preserve secrets that were resolved from env vars at startup; they cannot
-	// change at runtime and are not stored in SQLite.
+	// Copy runtime secrets into the freshly-loaded config BEFORE FinishLoad so
+	// that resolveSecrets (which only sets a field when it is empty) leaves them
+	// intact and validate does not fail on a missing webhook secret.
 	live := s.cfgPtr.Load()
-	cfg.Daemon.HTTP.WebhookSecret = live.Daemon.HTTP.WebhookSecret
-	cfg.Daemon.HTTP.APIKey = live.Daemon.HTTP.APIKey
-	cfg.Daemon.Proxy.Upstream.APIKey = live.Daemon.Proxy.Upstream.APIKey
+	raw.Daemon.HTTP.WebhookSecret = live.Daemon.HTTP.WebhookSecret
+	raw.Daemon.HTTP.APIKey = live.Daemon.HTTP.APIKey
+	raw.Daemon.Proxy.Upstream.APIKey = live.Daemon.Proxy.Upstream.APIKey
+	cfg, err := config.FinishLoad(raw)
+	if err != nil {
+		return fmt.Errorf("reload config: %w", err)
+	}
 	s.cfgPtr.Store(cfg)
+	for _, o := range s.observers {
+		o.UpdateConfig(cfg)
+	}
 	return nil
 }
 

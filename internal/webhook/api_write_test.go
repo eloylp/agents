@@ -442,6 +442,60 @@ func TestHandleDeleteBindingInvalidID(t *testing.T) {
 	}
 }
 
+// TestHandleDeleteBindingCrossRepo verifies that a binding can only be deleted
+// through its own repo's endpoint — trying to delete via a different repo's
+// path must return 404, not silently succeed.
+func TestHandleDeleteBindingCrossRepo(t *testing.T) {
+	t.Parallel()
+	srv, cleanup := openWriteTestServer(t)
+	defer cleanup()
+
+	// First add a second repo so we have two repos in the DB.
+	putRepoReq := postJSON(t, http.MethodPut, "/api/repos",
+		putRepoRequest{Name: "owner/other-repo", Enabled: true})
+	srv.handlePutRepo(httptest.NewRecorder(), putRepoReq)
+
+	// Add a binding to owner/repo.
+	addReq := postJSON(t, http.MethodPost, "/api/repos/owner~repo/bindings",
+		putBindingRequest{Agent: "coder", Cron: "0 * * * *"})
+	addReq = muxVars(addReq, map[string]string{"name": "owner/repo"})
+	addRec := httptest.NewRecorder()
+	srv.handlePutBinding(addRec, addReq)
+	if addRec.Code != http.StatusCreated {
+		t.Fatalf("add binding: want 201, got %d", addRec.Code)
+	}
+	var addResp putBindingResponse
+	if err := json.NewDecoder(addRec.Body).Decode(&addResp); err != nil {
+		t.Fatalf("decode add response: %v", err)
+	}
+
+	// Try to delete that binding via owner/other-repo — must return 404.
+	delPath := "/api/repos/owner~other-repo/bindings/" + intStr(addResp.ID)
+	req := httptest.NewRequest(http.MethodDelete, delPath, nil)
+	req.Header.Set("Authorization", authHeader())
+	req = muxVars(req, map[string]string{
+		"name": "owner/other-repo",
+		"id":   intStr(addResp.ID),
+	})
+	rec := httptest.NewRecorder()
+	srv.handleDeleteBinding(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-repo delete: want 404, got %d", rec.Code)
+	}
+
+	// Verify the binding still exists under the correct repo.
+	found := false
+	for _, r := range srv.cfg().Repos {
+		if r.Name == "owner/repo" {
+			found = len(r.Use) > 0
+		}
+	}
+	if !found {
+		t.Error("binding was deleted despite cross-repo attempt")
+	}
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 // muxVars injects gorilla/mux route variables into a request for unit testing

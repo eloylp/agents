@@ -48,7 +48,7 @@ type GraphRecorder interface {
 // Agent resolution, backend selection, and prompt composition all happen here;
 // the runners just execute the resulting prompt.
 type Engine struct {
-	cfg           *config.Config
+	cfgPtr        atomic.Pointer[config.Config]
 	runners       map[string]ai.Runner
 	dispatcher    *Dispatcher
 	maxConcurrent int
@@ -59,6 +59,26 @@ type Engine struct {
 	runsDeduped   atomic.Int64
 }
 
+// cfg returns the current effective configuration. All engine methods must
+// call this instead of reading the field directly so live reloads are visible.
+func (e *Engine) cfg() *config.Config {
+	return e.cfgPtr.Load()
+}
+
+// UpdateConfig atomically replaces the engine's config and updates the
+// dispatcher's agent map so that the next event uses new routing definitions.
+// It is safe to call concurrently with HandleEvent.
+func (e *Engine) UpdateConfig(cfg *config.Config) {
+	e.cfgPtr.Store(cfg)
+	if e.dispatcher != nil {
+		agentMap := make(map[string]config.AgentDef, len(cfg.Agents))
+		for _, a := range cfg.Agents {
+			agentMap[a.Name] = a
+		}
+		e.dispatcher.UpdateAgents(agentMap)
+	}
+}
+
 // NewEngine builds an Engine. queue may be nil, in which case dispatch
 // requests from agent responses are validated and logged but not enqueued.
 func NewEngine(cfg *config.Config, runners map[string]ai.Runner, queue EventEnqueuer, logger zerolog.Logger) *Engine {
@@ -67,11 +87,11 @@ func NewEngine(cfg *config.Config, runners map[string]ai.Runner, queue EventEnqu
 		max = 4
 	}
 	eng := &Engine{
-		cfg:           cfg,
 		runners:       runners,
 		maxConcurrent: max,
 		logger:        logger.With().Str("component", "workflow_engine").Logger(),
 	}
+	eng.cfgPtr.Store(cfg)
 	if queue != nil {
 		agentMap := make(map[string]config.AgentDef, len(cfg.Agents))
 		for _, a := range cfg.Agents {
@@ -164,7 +184,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		return fmt.Errorf("agent.dispatch event missing target_agent in payload")
 	}
 
-	repo, ok := e.cfg.RepoByName(ev.Repo.FullName)
+	repo, ok := e.cfg().RepoByName(ev.Repo.FullName)
 	if !ok || !repo.Enabled {
 		e.logger.Warn().Str("repo", ev.Repo.FullName).Msg("dispatch event for disabled or unknown repo, skipping")
 		return nil
@@ -177,7 +197,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		return fmt.Errorf("dispatch: target agent %q is not bound to repo %q", targetName, ev.Repo.FullName)
 	}
 
-	agent, ok := e.cfg.AgentByName(targetName)
+	agent, ok := e.cfg().AgentByName(targetName)
 	if !ok {
 		return fmt.Errorf("dispatch: target agent %q not found", targetName)
 	}
@@ -325,7 +345,7 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 // payload label is in the binding's Labels slice. An event binding matches
 // when ev.Kind appears in the binding's Events slice.
 func (e *Engine) agentsForEvent(ev Event) []config.AgentDef {
-	repo, ok := e.cfg.RepoByName(ev.Repo.FullName)
+	repo, ok := e.cfg().RepoByName(ev.Repo.FullName)
 	if !ok || !repo.Enabled {
 		return nil
 	}
@@ -357,7 +377,7 @@ func (e *Engine) agentsForEvent(ev Event) []config.AgentDef {
 		if _, dup := seen[b.Agent]; dup {
 			continue
 		}
-		agent, ok := e.cfg.AgentByName(b.Agent)
+		agent, ok := e.cfg().AgentByName(b.Agent)
 		if !ok {
 			continue
 		}
@@ -418,7 +438,7 @@ func extractDispatchContext(ev Event) (rootEventID string, depth int) {
 }
 
 func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) error {
-	backend := e.cfg.ResolveBackend(agent.Backend)
+	backend := e.cfg().ResolveBackend(agent.Backend)
 	if backend == "" {
 		return fmt.Errorf("agent %q: no runner available for backend %q", agent.Name, agent.Backend)
 	}
@@ -438,11 +458,11 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) 
 	}
 
 	// Build the roster of peer agents for this repo.
-	roster := BuildRoster(e.cfg, ev.Repo.FullName, agent.Name)
+	roster := BuildRoster(e.cfg(), ev.Repo.FullName, agent.Name)
 
 	promptPayload := ev.Payload
 
-	rendered, err := ai.RenderAgentPrompt(agent, e.cfg.Skills, ai.PromptContext{
+	rendered, err := ai.RenderAgentPrompt(agent, e.cfg().Skills, ai.PromptContext{
 		Repo:          ev.Repo.FullName,
 		Number:        ev.Number,
 		Backend:       backend,

@@ -131,6 +131,11 @@ func run() error {
 	server.WithRuntimeState(obs)
 	if db != nil {
 		server.WithStore(db)
+		// Propagate write-API config reloads to the engine and scheduler so that
+		// new repos, agents, and bindings take effect without a restart.
+		// Note: new cron bindings and backend changes require a restart.
+		server.WithConfigObserver(engine)
+		server.WithConfigObserver(scheduler)
 	}
 
 	group, groupCtx := errgroup.WithContext(ctx)

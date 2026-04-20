@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -71,7 +72,7 @@ type lastRunRecord struct {
 // Scheduler wires cron-triggered agent bindings from the config into the
 // robfig/cron engine.
 type Scheduler struct {
-	cfg          *config.Config
+	cfgPtr       atomic.Pointer[config.Config]
 	runners      map[string]ai.Runner
 	memories     *MemoryStore
 	cron         *cron.Cron
@@ -83,6 +84,21 @@ type Scheduler struct {
 	lastRuns     map[string]lastRunRecord // key: "name\x00repo"
 	dispatcher   *workflow.Dispatcher    // nil when dispatch is not configured
 	traceRec     workflow.TraceRecorder  // nil when tracing is not configured
+}
+
+// cfg returns the current effective configuration. All scheduler methods must
+// call this instead of reading the field directly so live reloads are visible.
+func (s *Scheduler) cfg() *config.Config {
+	return s.cfgPtr.Load()
+}
+
+// UpdateConfig atomically replaces the scheduler's config so that the next
+// agent execution uses updated agent definitions, backends, and skills.
+// Cron bindings that were registered at startup will use the new config on
+// their next firing. New cron bindings added after startup are not
+// automatically scheduled; a daemon restart is required for those.
+func (s *Scheduler) UpdateConfig(cfg *config.Config) {
+	s.cfgPtr.Store(cfg)
 }
 
 // WithDispatcher attaches a Dispatcher to the Scheduler so that dispatch
@@ -110,13 +126,13 @@ func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, memories *Me
 		cron.WithChain(cron.SkipIfStillRunning(cronLogger)),
 	)
 	s := &Scheduler{
-		cfg:      cfg,
 		runners:  runners,
 		memories: memories,
 		cron:     c,
 		logger:   logger.With().Str("component", "autonomous_scheduler").Logger(),
 		lastRuns: make(map[string]lastRunRecord),
 	}
+	s.cfgPtr.Store(cfg)
 	if err := s.registerJobs(); err != nil {
 		return nil, err
 	}
@@ -140,7 +156,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 }
 
 func (s *Scheduler) registerJobs() error {
-	for _, repo := range s.cfg.Repos {
+	for _, repo := range s.cfg().Repos {
 		if !repo.Enabled {
 			continue
 		}
@@ -148,7 +164,7 @@ func (s *Scheduler) registerJobs() error {
 			if !binding.IsEnabled() || !binding.IsCron() {
 				continue
 			}
-			agent, ok := s.cfg.AgentByName(binding.Agent)
+			agent, ok := s.cfg().AgentByName(binding.Agent)
 			if !ok {
 				// Validation at config load should have caught this; defensive.
 				return fmt.Errorf("binding references unknown agent %q on repo %q", binding.Agent, repo.Name)
@@ -247,11 +263,11 @@ func (s *Scheduler) AgentStatuses() []AgentStatus {
 // the run itself fails.
 func (s *Scheduler) TriggerAgent(ctx context.Context, agentName, repo string) error {
 	agentName = strings.ToLower(strings.TrimSpace(agentName))
-	repoDef, ok := s.cfg.RepoByName(repo)
+	repoDef, ok := s.cfg().RepoByName(repo)
 	if !ok || !repoDef.Enabled {
 		return fmt.Errorf("repo %q is disabled or not found", repo)
 	}
-	agent, ok := s.cfg.AgentByName(agentName)
+	agent, ok := s.cfg().AgentByName(agentName)
 	if !ok {
 		return fmt.Errorf("agent %q not found", agentName)
 	}
@@ -283,7 +299,7 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	// Resolve backend and runner. If either fails, roll back the cron mark
 	// written above so that subsequent dispatches are not spuriously suppressed
 	// for the full dedup_window_seconds.
-	backend := s.cfg.ResolveBackend(agent.Backend)
+	backend := s.cfg().ResolveBackend(agent.Backend)
 	if backend == "" {
 		if s.dispatcher != nil {
 			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
@@ -299,7 +315,7 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	}
 
 	logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Str("backend", backend).Logger()
-	roster := workflow.BuildRoster(s.cfg, repo, agent.Name)
+	roster := workflow.BuildRoster(s.cfg(), repo, agent.Name)
 	// runCompleted is set to true once runner.Run returns successfully. The cron
 	// mark should only be rolled back when the autonomous pass itself fails
 	// (prompt rendering, memory lock, or runner error). A post-run failure such
@@ -307,7 +323,7 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	// already committed, so the dedup window must remain in force.
 	runCompleted := false
 	err := s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
-		rendered, err := ai.RenderAgentPrompt(agent, s.cfg.Skills, ai.PromptContext{
+		rendered, err := ai.RenderAgentPrompt(agent, s.cfg().Skills, ai.PromptContext{
 			Repo:       repo,
 			Backend:    backend,
 			Memory:     memory,

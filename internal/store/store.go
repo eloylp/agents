@@ -815,11 +815,20 @@ func PutBinding(db *sql.DB, repo string, b config.Binding) (int64, error) {
 	return id, nil
 }
 
-// DeleteBinding removes a single binding row by its primary-key ID.
-func DeleteBinding(db *sql.DB, id int64) error {
-	_, err := db.Exec("DELETE FROM bindings WHERE id=?", id)
+// DeleteBinding removes a single binding row by its primary-key ID, scoped to
+// the given repo. Returns sql.ErrNoRows if no binding with that id belongs to
+// that repo, preventing cross-repo deletion.
+func DeleteBinding(db *sql.DB, repo string, id int64) error {
+	res, err := db.Exec("DELETE FROM bindings WHERE id=? AND repo=?", id, repo)
 	if err != nil {
 		return fmt.Errorf("store delete binding %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store delete binding %d: rows affected: %w", id, err)
+	}
+	if n == 0 {
+		return sql.ErrNoRows
 	}
 	return nil
 }

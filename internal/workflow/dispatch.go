@@ -410,6 +410,7 @@ func (s *DispatchDedupStore) TryClaimForDispatch(agent, repo string, number int,
 // dedup safety limits.
 type Dispatcher struct {
 	cfg      config.DispatchConfig
+	agentsMu sync.RWMutex
 	agents   map[string]config.AgentDef // all agents by name (lower-cased)
 	dedup    *DispatchDedupStore
 	counters dispatchCounters
@@ -428,6 +429,14 @@ func NewDispatcher(cfg config.DispatchConfig, agents map[string]config.AgentDef,
 		queue:  queue,
 		logger: logger.With().Str("component", "dispatcher").Logger(),
 	}
+}
+
+// UpdateAgents atomically replaces the agent map used for opt-in checks.
+// Safe to call concurrently with ProcessDispatches.
+func (d *Dispatcher) UpdateAgents(agents map[string]config.AgentDef) {
+	d.agentsMu.Lock()
+	d.agents = agents
+	d.agentsMu.Unlock()
 }
 
 // WithGraphRecorder attaches an optional recorder called on each successfully
@@ -487,7 +496,9 @@ func (d *Dispatcher) ProcessDispatches(
 		}
 
 		// Opt-in check: target must have allow_dispatch: true.
+		d.agentsMu.RLock()
 		target, ok := d.agents[req.Agent]
+		d.agentsMu.RUnlock()
 		if !ok || !target.AllowDispatch {
 			logBase.Warn().Msg("dispatch dropped: target has allow_dispatch: false")
 			d.counters.droppedNoOptin.Add(1)

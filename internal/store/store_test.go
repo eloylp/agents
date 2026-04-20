@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -573,7 +574,7 @@ func TestPutDeleteBinding(t *testing.T) {
 		t.Errorf("bindings after add: got %d, want 4", len(out.Repos[0].Use))
 	}
 
-	if err := store.DeleteBinding(db, id); err != nil {
+	if err := store.DeleteBinding(db, "owner/repo", id); err != nil {
 		t.Fatalf("DeleteBinding: %v", err)
 	}
 	out2, err := store.Load(db)
@@ -582,5 +583,51 @@ func TestPutDeleteBinding(t *testing.T) {
 	}
 	if len(out2.Repos[0].Use) != 3 {
 		t.Errorf("bindings after delete: got %d, want 3", len(out2.Repos[0].Use))
+	}
+}
+
+// TestDeleteBindingCrossRepo verifies that DeleteBinding scopes the delete to
+// the given repo and returns sql.ErrNoRows when the binding belongs to a
+// different repo.
+func TestDeleteBindingCrossRepo(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	if err := store.Import(db, minimalCfg()); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	// Add a second repo and a binding under it.
+	if err := store.PutRepo(db, config.RepoDef{Name: "owner/other", Enabled: true}); err != nil {
+		t.Fatalf("PutRepo: %v", err)
+	}
+	id, err := store.PutBinding(db, "owner/other", config.Binding{
+		Agent:  "pr-reviewer",
+		Events: []string{"push"},
+	})
+	if err != nil {
+		t.Fatalf("PutBinding: %v", err)
+	}
+
+	// Attempt to delete via the wrong repo — must fail with sql.ErrNoRows.
+	err = store.DeleteBinding(db, "owner/repo", id)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("cross-repo delete: want sql.ErrNoRows, got %v", err)
+	}
+
+	// The binding in owner/other must still be present.
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("load after failed delete: %v", err)
+	}
+	found := false
+	for _, r := range out.Repos {
+		if r.Name == "owner/other" && len(r.Use) == 1 {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("binding was deleted despite wrong-repo attempt")
 	}
 }
