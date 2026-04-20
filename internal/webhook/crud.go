@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -146,6 +147,44 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// decodeBody reads the full request body (enforcing the byte limit via
+// http.MaxBytesReader so that trailing garbage beyond a valid JSON value is
+// also accounted for), then JSON-unmarshals it into out. It returns false and
+// writes an appropriate HTTP error on any failure.
+func decodeBody[T any](w http.ResponseWriter, r *http.Request, limit int64, out *T) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return false
+		}
+		http.Error(w, fmt.Sprintf("read request: %v", err), http.StatusBadRequest)
+		return false
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// storeErrStatus maps store mutation errors to the appropriate HTTP status
+// code. ErrValidation (bad field values) → 400, ErrConflict (invariant
+// violations, referenced-by failures) → 409, anything else → 500.
+func storeErrStatus(err error) int {
+	var valErr *store.ErrValidation
+	if errors.As(err, &valErr) {
+		return http.StatusBadRequest
+	}
+	var conflictErr *store.ErrConflict
+	if errors.As(err, &conflictErr) {
+		return http.StatusConflict
+	}
+	return http.StatusInternalServerError
+}
+
 func storeNotConfigured(w http.ResponseWriter) {
 	http.Error(w, "store not configured (start daemon with --db)", http.StatusNotImplemented)
 }
@@ -194,8 +233,7 @@ func (s *Server) handleStoreAgents(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeAgentJSON
-		if err := json.NewDecoder(io.LimitReader(r.Body, s.cfg.Daemon.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
-			http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
+		if !decodeBody(w, r, s.cfg.Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		if req.Name == "" {
@@ -209,8 +247,9 @@ func (s *Server) handleStoreAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		s.storeMu.Unlock()
 		if err != nil {
+			status := storeErrStatus(err)
 			s.logger.Error().Err(err).Msg("store crud: agent upsert or cron reload failed")
-			http.Error(w, fmt.Sprintf("agent upsert or cron reload: %v", err), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("agent upsert or cron reload: %v", err), status)
 			return
 		}
 		writeJSON(w, http.StatusOK, req)
@@ -247,8 +286,9 @@ func (s *Server) handleStoreAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		s.storeMu.Unlock()
 		if err != nil {
+			status := storeErrStatus(err)
 			s.logger.Error().Err(err).Msg("store crud: agent delete or cron reload failed")
-			http.Error(w, fmt.Sprintf("agent delete or cron reload: %v", err), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("agent delete or cron reload: %v", err), status)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -278,8 +318,7 @@ func (s *Server) handleStoreSkills(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeSkillJSON
-		if err := json.NewDecoder(io.LimitReader(r.Body, s.cfg.Daemon.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
-			http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
+		if !decodeBody(w, r, s.cfg.Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		if req.Name == "" {
@@ -293,8 +332,9 @@ func (s *Server) handleStoreSkills(w http.ResponseWriter, r *http.Request) {
 		}
 		s.storeMu.Unlock()
 		if err != nil {
+			status := storeErrStatus(err)
 			s.logger.Error().Err(err).Msg("store crud: skill upsert or cron reload failed")
-			http.Error(w, fmt.Sprintf("skill upsert or cron reload: %v", err), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("skill upsert or cron reload: %v", err), status)
 			return
 		}
 		writeJSON(w, http.StatusOK, req)
@@ -330,8 +370,9 @@ func (s *Server) handleStoreSkill(w http.ResponseWriter, r *http.Request) {
 		}
 		s.storeMu.Unlock()
 		if err != nil {
+			status := storeErrStatus(err)
 			s.logger.Error().Err(err).Msg("store crud: skill delete or cron reload failed")
-			http.Error(w, fmt.Sprintf("skill delete or cron reload: %v", err), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("skill delete or cron reload: %v", err), status)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -361,8 +402,7 @@ func (s *Server) handleStoreBackends(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeBackendJSON
-		if err := json.NewDecoder(io.LimitReader(r.Body, s.cfg.Daemon.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
-			http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
+		if !decodeBody(w, r, s.cfg.Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		if req.Name == "" {
@@ -379,8 +419,9 @@ func (s *Server) handleStoreBackends(w http.ResponseWriter, r *http.Request) {
 		}
 		s.storeMu.Unlock()
 		if err != nil {
+			status := storeErrStatus(err)
 			s.logger.Error().Err(err).Msg("store crud: backend upsert or cron reload failed")
-			http.Error(w, fmt.Sprintf("backend upsert or cron reload: %v", err), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("backend upsert or cron reload: %v", err), status)
 			return
 		}
 		writeJSON(w, http.StatusOK, req)
@@ -416,8 +457,9 @@ func (s *Server) handleStoreBackend(w http.ResponseWriter, r *http.Request) {
 		}
 		s.storeMu.Unlock()
 		if err != nil {
+			status := storeErrStatus(err)
 			s.logger.Error().Err(err).Msg("store crud: backend delete or cron reload failed")
-			http.Error(w, fmt.Sprintf("backend delete or cron reload: %v", err), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("backend delete or cron reload: %v", err), status)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -447,8 +489,7 @@ func (s *Server) handleStoreRepos(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeRepoJSON
-		if err := json.NewDecoder(io.LimitReader(r.Body, s.cfg.Daemon.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
-			http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
+		if !decodeBody(w, r, s.cfg.Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		if req.Name == "" {
@@ -462,8 +503,9 @@ func (s *Server) handleStoreRepos(w http.ResponseWriter, r *http.Request) {
 		}
 		s.storeMu.Unlock()
 		if err != nil {
+			status := storeErrStatus(err)
 			s.logger.Error().Err(err).Msg("store crud: repo upsert or cron reload failed")
-			http.Error(w, fmt.Sprintf("repo upsert or cron reload: %v", err), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("repo upsert or cron reload: %v", err), status)
 			return
 		}
 		writeJSON(w, http.StatusOK, req)
@@ -501,8 +543,9 @@ func (s *Server) handleStoreRepo(w http.ResponseWriter, r *http.Request) {
 		}
 		s.storeMu.Unlock()
 		if err != nil {
+			status := storeErrStatus(err)
 			s.logger.Error().Err(err).Msg("store crud: repo delete or cron reload failed")
-			http.Error(w, fmt.Sprintf("repo delete or cron reload: %v", err), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("repo delete or cron reload: %v", err), status)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

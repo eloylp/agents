@@ -8,6 +8,21 @@ import (
 	"github.com/eloylp/agents/internal/config"
 )
 
+// ErrValidation is returned by Upsert* operations when the mutation is
+// rejected due to invalid field values or cross-entity reference failures.
+// HTTP handlers should map this to 400 Bad Request.
+type ErrValidation struct{ Msg string }
+
+func (e *ErrValidation) Error() string { return e.Msg }
+
+// ErrConflict is returned by Delete* operations when the deletion would
+// violate a cardinality invariant ("at least one" minimum) or a
+// referenced-by constraint (entity still in use by another entity).
+// HTTP handlers should map this to 409 Conflict.
+type ErrConflict struct{ Msg string }
+
+func (e *ErrConflict) Error() string { return e.Msg }
+
 // validateFleet reads all four mutable entity tables through q (a *sql.Tx in
 // practice, so reads see the pending transaction state) and verifies that the
 // post-mutation snapshot satisfies both field-level constraints and cross-entity
@@ -105,7 +120,7 @@ func UpsertAgent(db *sql.DB, a config.AgentDef) error {
 		return err
 	}
 	if err := validateFleet(tx); err != nil {
-		return fmt.Errorf("store: upsert agent %s: %w", a.Name, err)
+		return &ErrValidation{Msg: fmt.Sprintf("store: upsert agent %s: %v", a.Name, err)}
 	}
 	return tx.Commit()
 }
@@ -125,10 +140,10 @@ func DeleteAgent(db *sql.DB, name string) error {
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
 		if err := requireAtLeastOneAgent(tx); err != nil {
-			return fmt.Errorf("store: delete agent %s: %w", name, err)
+			return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: %v", name, err)}
 		}
 		if err := validateFleet(tx); err != nil {
-			return fmt.Errorf("store: delete agent %s: %w", name, err)
+			return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: %v", name, err)}
 		}
 	}
 	return tx.Commit()
@@ -165,7 +180,7 @@ func UpsertSkill(db *sql.DB, name string, s config.SkillDef) error {
 		return err
 	}
 	if err := validateFleet(tx); err != nil {
-		return fmt.Errorf("store: upsert skill %s: %w", name, err)
+		return &ErrValidation{Msg: fmt.Sprintf("store: upsert skill %s: %v", name, err)}
 	}
 	return tx.Commit()
 }
@@ -182,7 +197,7 @@ func DeleteSkill(db *sql.DB, name string) error {
 		return fmt.Errorf("store: delete skill %s: %w", name, err)
 	}
 	if err := validateFleet(tx); err != nil {
-		return fmt.Errorf("store: delete skill %s: %w", name, err)
+		return &ErrConflict{Msg: fmt.Sprintf("store: delete skill %s: %v", name, err)}
 	}
 	return tx.Commit()
 }
@@ -221,7 +236,7 @@ func UpsertBackend(db *sql.DB, name string, b config.AIBackendConfig) error {
 		return err
 	}
 	if err := validateFleet(tx); err != nil {
-		return fmt.Errorf("store: upsert backend %s: %w", name, err)
+		return &ErrValidation{Msg: fmt.Sprintf("store: upsert backend %s: %v", name, err)}
 	}
 	return tx.Commit()
 }
@@ -240,10 +255,10 @@ func DeleteBackend(db *sql.DB, name string) error {
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
 		if err := requireAtLeastOneBackend(tx); err != nil {
-			return fmt.Errorf("store: delete backend %s: %w", name, err)
+			return &ErrConflict{Msg: fmt.Sprintf("store: delete backend %s: %v", name, err)}
 		}
 		if err := validateFleet(tx); err != nil {
-			return fmt.Errorf("store: delete backend %s: %w", name, err)
+			return &ErrConflict{Msg: fmt.Sprintf("store: delete backend %s: %v", name, err)}
 		}
 	}
 	return tx.Commit()
@@ -309,10 +324,10 @@ func UpsertRepo(db *sql.DB, r config.RepoDef) error {
 		return err
 	}
 	if err := requireAtLeastOneEnabledRepo(tx); err != nil {
-		return fmt.Errorf("store: upsert repo %s: %w", r.Name, err)
+		return &ErrValidation{Msg: fmt.Sprintf("store: upsert repo %s: %v", r.Name, err)}
 	}
 	if err := validateFleet(tx); err != nil {
-		return fmt.Errorf("store: upsert repo %s: %w", r.Name, err)
+		return &ErrValidation{Msg: fmt.Sprintf("store: upsert repo %s: %v", r.Name, err)}
 	}
 	return tx.Commit()
 }
@@ -334,7 +349,7 @@ func DeleteRepo(db *sql.DB, name string) error {
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
 		if err := requireAtLeastOneEnabledRepo(tx); err != nil {
-			return fmt.Errorf("store: delete repo %s: %w", name, err)
+			return &ErrConflict{Msg: fmt.Sprintf("store: delete repo %s: %v", name, err)}
 		}
 	}
 	return tx.Commit()

@@ -432,7 +432,9 @@ func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
 			name:   "POST backend",
 			method: http.MethodPost,
 			path:   "/api/store/backends",
-			body:   map[string]any{"name": "claude2", "command": "claude2", "args": []string{}, "env": map[string]string{}},
+			// Use "codex" (a valid backend name) so that validateFleet passes
+			// and the only failure is the cron reload.
+			body: map[string]any{"name": "codex", "command": "codex", "args": []string{}, "env": map[string]string{}},
 			// Seed claude so there is already one backend, making the new backend
 			// a valid addition (fleet validation requires at least one).
 			setup: func(t *testing.T, s *Server) { seedStoreBackend(t, s, "claude") },
@@ -481,8 +483,10 @@ func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
 
 // ── /api/store POST body-size limiting ───────────────────────────────────────
 
-// TestStoreCRUDPostBodySizeLimit verifies that POST write endpoints reject
-// request bodies that exceed daemon.http.max_body_bytes.
+// TestStoreCRUDPostBodySizeLimit verifies that POST write endpoints return
+// 413 when the request body exceeds daemon.http.max_body_bytes, including
+// the case where the body starts with a valid JSON object followed by
+// extra bytes that push the total over the limit.
 func TestStoreCRUDPostBodySizeLimit(t *testing.T) {
 	t.Parallel()
 
@@ -531,8 +535,164 @@ func TestStoreCRUDPostBodySizeLimit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rr := doCRUDRequest(t, s, http.MethodPost, tc.path, tc.body)
-			if rr.Code == http.StatusOK {
-				t.Errorf("POST %s: expected non-200 for oversized body, got 200", tc.path)
+			if rr.Code != http.StatusRequestEntityTooLarge {
+				t.Errorf("POST %s: want 413 for oversized body, got %d: %s", tc.path, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
+// TestStoreCRUDPostBodyTrailingGarbageRejected verifies that POST endpoints
+// reject a body that contains a valid JSON object followed by extra bytes that
+// push the total past max_body_bytes. The old io.LimitReader approach allowed
+// these through because the JSON decoder stopped reading after the first value.
+func TestStoreCRUDPostBodyTrailingGarbageRejected(t *testing.T) {
+	t.Parallel()
+
+	cfg := crudMinimalConfig()
+	cfg.Daemon.HTTP.MaxBodyBytes = 15 // {"name":"x"} is 12 bytes; +5 garbage exceeds limit
+
+	dir := t.TempDir()
+	db, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	dc := workflow.NewDataChannels(1)
+	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, zerolog.Nop())
+	s.WithStore(db, nil)
+
+	endpoints := []string{
+		"/api/store/agents",
+		"/api/store/skills",
+		"/api/store/backends",
+		"/api/store/repos",
+	}
+
+	for _, path := range endpoints {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			// Craft a body: valid minimal JSON (12 bytes) + 5 bytes of garbage
+			// that push the total to 17 bytes, over the 15-byte limit.
+			rawBody := []byte(`{"name":"x"}XXXXX`)
+			req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(rawBody))
+			rr := httptest.NewRecorder()
+			s.buildHandler().ServeHTTP(rr, req)
+			if rr.Code != http.StatusRequestEntityTooLarge {
+				t.Errorf("POST %s with valid JSON + trailing garbage: want 413, got %d: %s",
+					path, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
+// ── /api/store mutation error classification ──────────────────────────────────
+
+// TestStoreCRUDValidationErrorReturns400 verifies that POST endpoints return
+// 400 when the store rejects the input due to invalid field values.
+func TestStoreCRUDValidationErrorReturns400(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		path  string
+		body  any
+		setup func(t *testing.T, s *Server)
+	}{
+		{
+			name: "backend with empty command",
+			path: "/api/store/backends",
+			body: map[string]any{"name": "claude", "command": "   ", "args": []string{}, "env": map[string]string{}},
+		},
+		{
+			name: "agent with empty prompt",
+			path: "/api/store/agents",
+			body: map[string]any{"name": "coder", "backend": "claude", "prompt": "",
+				"skills": []string{}, "can_dispatch": []string{}},
+			setup: func(t *testing.T, s *Server) { seedStoreBackend(t, s, "claude") },
+		},
+		{
+			name: "agent with unknown backend",
+			path: "/api/store/agents",
+			body: map[string]any{"name": "coder", "backend": "unknown", "prompt": "p",
+				"skills": []string{}, "can_dispatch": []string{}},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := openCRUDTestServer(t)
+			if tc.setup != nil {
+				tc.setup(t, s)
+			}
+			rr := doCRUDRequest(t, s, http.MethodPost, tc.path, tc.body)
+			if rr.Code != http.StatusBadRequest {
+				t.Errorf("%s: want 400 for invalid input, got %d: %s", tc.name, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
+// TestStoreCRUDConflictErrorReturns409 verifies that DELETE endpoints return
+// 409 when the deletion would violate a cardinality or reference constraint.
+func TestStoreCRUDConflictErrorReturns409(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		path  string
+		setup func(t *testing.T, s *Server)
+	}{
+		{
+			name: "delete last backend",
+			path: "/api/store/backends/claude",
+			setup: func(t *testing.T, s *Server) {
+				if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
+					"name": "claude", "command": "claude", "args": []string{}, "env": map[string]string{},
+				}); rr.Code != http.StatusOK {
+					t.Fatalf("create backend: got %d — %s", rr.Code, rr.Body.String())
+				}
+			},
+		},
+		{
+			name: "delete last agent",
+			path: "/api/store/agents/coder",
+			setup: func(t *testing.T, s *Server) {
+				seedStoreBackend(t, s, "claude")
+				if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+					"name": "coder", "backend": "claude", "prompt": "p",
+					"skills": []string{}, "can_dispatch": []string{},
+				}); rr.Code != http.StatusOK {
+					t.Fatalf("create agent: got %d — %s", rr.Code, rr.Body.String())
+				}
+			},
+		},
+		{
+			name: "delete backend referenced by agent",
+			path: "/api/store/backends/claude",
+			setup: func(t *testing.T, s *Server) {
+				seedStoreBackend(t, s, "claude")
+				seedStoreBackend(t, s, "codex")
+				if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+					"name": "coder", "backend": "claude", "prompt": "p",
+					"skills": []string{}, "can_dispatch": []string{},
+				}); rr.Code != http.StatusOK {
+					t.Fatalf("create agent: got %d — %s", rr.Code, rr.Body.String())
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := openCRUDTestServer(t)
+			tc.setup(t, s)
+			rr := doCRUDRequest(t, s, http.MethodDelete, tc.path, nil)
+			if rr.Code != http.StatusConflict {
+				t.Errorf("%s: want 409 for constraint violation, got %d: %s", tc.name, rr.Code, rr.Body.String())
 			}
 		})
 	}
