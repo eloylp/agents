@@ -368,6 +368,29 @@ func extractSSEData(raw []byte) []byte {
 	return []byte(strings.TrimRight(s, "\n"))
 }
 
+func TestExtractSSEData(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   []byte
+		want []byte
+	}{
+		{"normal SSE frame", []byte("data: {\"k\":\"v\"}\n\n"), []byte("{\"k\":\"v\"}")},
+		{"prefix-only returns empty", []byte("data: "), []byte("")},
+		{"no prefix unchanged", []byte("something else"), []byte("something else")},
+		{"trailing newlines stripped", []byte("data: payload\n\n"), []byte("payload")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := extractSSEData(tc.in)
+			if string(got) != string(tc.want) {
+				t.Errorf("extractSSEData(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 // ─── ActiveRuns ──────────────────────────────────────────────────────────────
 
 func TestActiveRunsStartFinishIsRunning(t *testing.T) {
