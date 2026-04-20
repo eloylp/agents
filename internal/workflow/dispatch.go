@@ -219,7 +219,7 @@ func (s *DispatchDedupStore) AbandonClaim(target, repo string, number int) {
 // Callers must follow with FinalizeWebhookRun (success) or AbandonWebhookRun
 // (failure) to release the marker.
 func (s *DispatchDedupStore) MarkWebhookRunInFlight(agent, repo string, number int) {
-	key := fmt.Sprintf("%s\x00%s\x00%d", agent, repo, number)
+	key := dispatchStoreKey(agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.webhookRefCounts[key]++
@@ -231,7 +231,7 @@ func (s *DispatchDedupStore) MarkWebhookRunInFlight(agent, repo string, number i
 // duplicates until the dedup_window_seconds elapses. Once the refcount reaches
 // zero, the evict() loop is free to remove the entry when expiresAt passes.
 func (s *DispatchDedupStore) FinalizeWebhookRun(agent, repo string, number int) {
-	key := fmt.Sprintf("%s\x00%s\x00%d", agent, repo, number)
+	key := dispatchStoreKey(agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.webhookRefCounts[key] <= 1 {
@@ -247,7 +247,7 @@ func (s *DispatchDedupStore) FinalizeWebhookRun(agent, repo string, number int) 
 // by the error and panic paths in fanOut so that a retry or a subsequent event
 // for the same item can claim the slot and attempt the run again.
 func (s *DispatchDedupStore) AbandonWebhookRun(agent, repo string, number int) {
-	key := fmt.Sprintf("%s\x00%s\x00%d", agent, repo, number)
+	key := dispatchStoreKey(agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.webhookRefCounts[key] <= 1 {
