@@ -142,8 +142,7 @@ func renderRuntimeContext(ctx PromptContext) string {
 	if len(ctx.Roster) > 0 {
 		b.WriteString("\n## Available experts\n\n")
 		// Sort roster by name for deterministic output.
-		roster := make([]RosterEntry, len(ctx.Roster))
-		copy(roster, ctx.Roster)
+		roster := slices.Clone(ctx.Roster)
 		slices.SortFunc(roster, func(a, b RosterEntry) int {
 			return strings.Compare(a.Name, b.Name)
 		})

@@ -9,6 +9,7 @@ package observe
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -219,8 +220,7 @@ func (g *InteractionGraph) Edges() []Edge {
 	out := make([]Edge, 0, len(g.edges))
 	for _, e := range g.edges {
 		cp := *e
-		cp.Dispatches = make([]DispatchRecord, len(e.Dispatches))
-		copy(cp.Dispatches, e.Dispatches)
+		cp.Dispatches = slices.Clone(e.Dispatches)
 		out = append(out, cp)
 	}
 	return out
