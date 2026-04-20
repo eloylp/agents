@@ -1597,19 +1597,32 @@ func (m *errMemory) WriteMemory(_, _, _ string) error {
 
 // TestSchedulerWriteMemoryFailureFailsRun verifies that a WriteMemory error
 // after a successful agent run is surfaced as a run error, and that the dedup
-// mark is finalised (not rolled back) because the run itself completed.
+// mark is rolled back so the agent can be re-dispatched immediately for retry.
 func TestSchedulerWriteMemoryFailureFailsRun(t *testing.T) {
 	t.Parallel()
 
 	writeErr := errors.New("disk full")
+	// Use two agents: "reviewer" is the agent whose run fails on memory write;
+	// "notifier" is the originator that later tries to dispatch "reviewer".
+	// This reflects the real retry scenario: an operator or another agent
+	// notices the error and re-dispatches "reviewer" to recover lost memory.
 	cfg := baseCfg(func(c *config.Config) {
-		c.Agents[0].AllowDispatch = true
+		c.Agents[0].AllowDispatch = true // reviewer can receive dispatches
+		c.Agents = append(c.Agents, config.AgentDef{
+			Name:        "notifier",
+			Backend:     "claude",
+			Prompt:      "Notify.",
+			CanDispatch: []string{"reviewer"}, // notifier may dispatch reviewer
+		})
 	})
 	runner := &stubRunner{}
 	mem := &errMemory{dir: t.TempDir(), err: writeErr}
 
 	q := &fakeQueue{}
-	agentMap := map[string]config.AgentDef{"reviewer": cfg.Agents[0]}
+	agentMap := map[string]config.AgentDef{
+		"reviewer": cfg.Agents[0],
+		"notifier": cfg.Agents[1],
+	}
 	dedup := workflow.NewDispatchDedupStore(300)
 	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
 	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
@@ -1636,15 +1649,16 @@ func TestSchedulerWriteMemoryFailureFailsRun(t *testing.T) {
 		t.Errorf("expected 1 runner call, got %d", calls)
 	}
 
-	// The dedup mark must be finalised (not rolled back), so a subsequent
-	// autonomous-context dispatch for the same (agent, repo, 0) slot is
-	// suppressed within the dedup window.
-	originator := agentMap["reviewer"]
+	// The dedup mark must be rolled back (not finalised), so a subsequent
+	// autonomous-context dispatch for the same (agent, repo, 0) slot is NOT
+	// suppressed — the caller can immediately retry to recover the lost memory.
+	// "notifier" originates the retry dispatch to "reviewer".
+	originator := agentMap["notifier"]
 	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
 	_ = dispatcher.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
-		{Agent: "reviewer", Reason: "retry"},
+		{Agent: "reviewer", Reason: "retry after memory write failure"},
 	})
-	if len(q.popped()) != 0 {
-		t.Error("expected dispatch suppressed by finalised dedup mark after write-memory failure")
+	if len(q.popped()) == 0 {
+		t.Error("expected dispatch to succeed after write-memory failure (dedup mark should be rolled back)")
 	}
 }

@@ -446,12 +446,14 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	}
 
 	// Persist the agent's updated memory. An empty resp.Memory clears the entry.
-	// Memory write failure is surfaced as a run error so operators know the agent
-	// will replay stale context on the next scheduled pass. The dedup mark is
-	// finalised regardless because the agent run itself completed work.
+	// Memory write failure is treated as a full run failure: roll back the dedup
+	// mark so the agent can be re-dispatched or run again on the next cron tick
+	// to recover the lost state. Finalising the mark here would silently suppress
+	// retry dispatches for the full dedup window while the in-memory state stays
+	// stale.
 	if memErr := s.memory.WriteMemory(agent.Name, repo, resp.Memory); memErr != nil {
 		if s.dispatcher != nil {
-			s.dispatcher.FinalizeAutonomousRun(agent.Name, repo)
+			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
 		}
 		return fmt.Errorf("write memory: %w", memErr)
 	}
