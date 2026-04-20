@@ -110,6 +110,27 @@ func DeleteBackend(db *sql.DB, name string) error {
 	return nil
 }
 
+// ReadSnapshot returns agents and repos as a consistent point-in-time snapshot
+// by reading both within a single SQLite transaction. This prevents the race
+// where a concurrent /api/store write commits between the two reads, producing
+// a mixed snapshot that can cause spurious Reload failures.
+func ReadSnapshot(db *sql.DB) ([]config.AgentDef, []config.RepoDef, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, nil, fmt.Errorf("store: begin snapshot: %w", err)
+	}
+	defer tx.Rollback()
+
+	var cfg config.Config
+	if err := loadAgents(tx, &cfg); err != nil {
+		return nil, nil, err
+	}
+	if err := loadRepos(tx, &cfg); err != nil {
+		return nil, nil, err
+	}
+	return cfg.Agents, cfg.Repos, nil
+}
+
 // ──── Repos ──────────────────────────────────────────────────────────────────
 
 // ReadRepos returns all repos (with bindings) from the database.

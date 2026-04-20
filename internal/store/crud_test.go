@@ -333,3 +333,45 @@ func TestDeleteRepo(t *testing.T) {
 		t.Errorf("orphan bindings after DeleteRepo: got %d, want 0", count)
 	}
 }
+
+// TestReadSnapshot verifies that ReadSnapshot returns both agents and repos
+// as a consistent point-in-time view.
+func TestReadSnapshot(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	// Seed one agent and one repo.
+	a := config.AgentDef{
+		Name:    "coder",
+		Backend: "claude",
+		Skills:  []string{},
+		Prompt:  "You write code.",
+	}
+	if err := store.UpsertAgent(db, a); err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
+	}
+	enabled := true
+	r := config.RepoDef{
+		Name:    "owner/repo",
+		Enabled: true,
+		Use:     []config.Binding{{Agent: "coder", Events: []string{"issues.labeled"}, Enabled: &enabled}},
+	}
+	if err := store.UpsertRepo(db, r); err != nil {
+		t.Fatalf("UpsertRepo: %v", err)
+	}
+
+	agents, repos, err := store.ReadSnapshot(db)
+	if err != nil {
+		t.Fatalf("ReadSnapshot: %v", err)
+	}
+	if len(agents) != 1 || agents[0].Name != "coder" {
+		t.Errorf("agents: want [{coder}], got %v", agents)
+	}
+	if len(repos) != 1 || repos[0].Name != "owner/repo" {
+		t.Errorf("repos: want [{owner/repo}], got %v", repos)
+	}
+	if len(repos[0].Use) != 1 || repos[0].Use[0].Agent != "coder" {
+		t.Errorf("bindings: want 1 binding for coder, got %v", repos[0].Use)
+	}
+}

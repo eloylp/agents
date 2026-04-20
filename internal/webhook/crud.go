@@ -149,21 +149,20 @@ func storeNotConfigured(w http.ResponseWriter) {
 	http.Error(w, "store not configured (start daemon with --db)", http.StatusNotImplemented)
 }
 
-// reloadCron re-reads repos and agents from the DB and calls Reload on the
-// attached CronReloader (if any). An error is returned so callers can surface
-// scheduler failures as HTTP 500 responses — the DB write already succeeded
-// but the in-memory cron state would be stale or broken if we ignored the error.
+// reloadCron re-reads repos and agents from the DB as a consistent snapshot
+// and calls Reload on the attached CronReloader (if any). Both datasets are
+// read within a single transaction so a concurrent /api/store write cannot
+// produce a mixed snapshot that combines repos from one commit point with
+// agents from another. An error is returned so callers can surface scheduler
+// failures as HTTP 500 responses — the DB write already succeeded but the
+// in-memory cron state would be stale or broken if we ignored the error.
 func (s *Server) reloadCron() error {
 	if s.cronReloader == nil {
 		return nil
 	}
-	repos, err := store.ReadRepos(s.db)
+	agents, repos, err := store.ReadSnapshot(s.db)
 	if err != nil {
-		return fmt.Errorf("read repos for cron reload: %w", err)
-	}
-	agents, err := store.ReadAgents(s.db)
-	if err != nil {
-		return fmt.Errorf("read agents for cron reload: %w", err)
+		return fmt.Errorf("read config snapshot for cron reload: %w", err)
 	}
 	return s.cronReloader.Reload(repos, agents)
 }
