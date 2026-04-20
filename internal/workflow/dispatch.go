@@ -131,11 +131,21 @@ func (s *DispatchDedupStore) evict(now time.Time) {
 	}
 }
 
+// dispatchStoreKey builds the map key for a dispatch-namespace entry.
+func dispatchStoreKey(agent, repo string, number int) string {
+	return fmt.Sprintf("%s\x00%s\x00%d", agent, repo, number)
+}
+
+// cronStoreKey builds the map key for a cron-namespace entry.
+func cronStoreKey(agent, repo string, number int) string {
+	return fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
+}
+
 // SeenOrAdd returns true if this (target, repo, number) combination has been
 // seen within the TTL window (whether pending or committed), otherwise records
 // it as a committed entry and returns false.
 func (s *DispatchDedupStore) SeenOrAdd(target, repo string, number int, now time.Time) bool {
-	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
+	key := dispatchStoreKey(target, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if e, ok := s.entries[key]; ok && now.Before(e.expiresAt) {
@@ -151,7 +161,7 @@ func (s *DispatchDedupStore) SeenOrAdd(target, repo string, number int, now time
 // concurrent cron/manual runs from also starting. This closes the race between a
 // dispatch's TryClaim→CommitClaim window and an autonomous scheduler check.
 func (s *DispatchDedupStore) SeesPendingOrCommitted(target, repo string, number int, now time.Time) bool {
-	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
+	key := dispatchStoreKey(target, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.entries[key]
@@ -168,7 +178,7 @@ func (s *DispatchDedupStore) SeesPendingOrCommitted(target, repo string, number 
 // calls but is invisible to DispatchAlreadyClaimed until CommitClaim is
 // called. On enqueue failure call AbandonClaim to release the pending slot.
 func (s *DispatchDedupStore) TryClaim(target, repo string, number int, now time.Time) bool {
-	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
+	key := dispatchStoreKey(target, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if e, ok := s.entries[key]; ok && now.Before(e.expiresAt) {
@@ -181,7 +191,7 @@ func (s *DispatchDedupStore) TryClaim(target, repo string, number int, now time.
 // CommitClaim upgrades a pending claim to committed, making it visible to
 // DispatchAlreadyClaimed. Must be called after a successful PushEvent.
 func (s *DispatchDedupStore) CommitClaim(target, repo string, number int) {
-	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
+	key := dispatchStoreKey(target, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if e, ok := s.entries[key]; ok {
@@ -194,7 +204,7 @@ func (s *DispatchDedupStore) CommitClaim(target, repo string, number int) {
 // PushEvent fails so that the slot is released and future retries can proceed.
 // It is a no-op if the entry has already been committed.
 func (s *DispatchDedupStore) AbandonClaim(target, repo string, number int) {
-	key := fmt.Sprintf("%s\x00%s\x00%d", target, repo, number)
+	key := dispatchStoreKey(target, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if e, ok := s.entries[key]; ok && !e.committed {
@@ -260,7 +270,7 @@ func (s *DispatchDedupStore) AbandonWebhookRun(agent, repo string, number int) {
 // from one failed overlapping run does not clear a mark that a concurrently
 // running autonomous pass is still holding.
 func (s *DispatchDedupStore) MarkCronRun(agent, repo string, number int, now time.Time) {
-	key := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
+	key := cronStoreKey(agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries[key] = dispatchEntry{expiresAt: now.Add(s.ttl), committed: true}
@@ -274,7 +284,7 @@ func (s *DispatchDedupStore) MarkCronRun(agent, repo string, number int, now tim
 // fully removed; otherwise only the count is decremented and the entry stays,
 // ensuring a concurrent overlapping run's reservation is not cleared prematurely.
 func (s *DispatchDedupStore) RemoveCronMark(agent, repo string, number int) {
-	key := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
+	key := cronStoreKey(agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.cronRefCounts[key] <= 1 {
@@ -292,7 +302,7 @@ func (s *DispatchDedupStore) RemoveCronMark(agent, repo string, number int) {
 // dispatches until the full dedup_window_seconds elapses. Once the refcount
 // reaches zero the evict() loop is free to remove the entry when expiresAt passes.
 func (s *DispatchDedupStore) FinalizeCronMark(agent, repo string, number int) {
-	key := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
+	key := cronStoreKey(agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.cronRefCounts[key] <= 1 {
@@ -309,7 +319,7 @@ func (s *DispatchDedupStore) FinalizeCronMark(agent, repo string, number int) {
 // long-running autonomous pass (outlasting dedup_window_seconds) still
 // blocks new dispatches even after its TTL entry would have expired.
 func (s *DispatchDedupStore) SeenCronRun(agent, repo string, number int, now time.Time) bool {
-	key := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
+	key := cronStoreKey(agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.entries[key]
@@ -330,8 +340,8 @@ func (s *DispatchDedupStore) SeenCronRun(agent, repo string, number int, now tim
 // If the run fails before completing, call RemoveCronMark to release the mark
 // so that future dispatches are not spuriously suppressed for the full TTL.
 func (s *DispatchDedupStore) TryClaimForCron(agent, repo string, number int, now time.Time) bool {
-	dispatchKey := fmt.Sprintf("%s\x00%s\x00%d", agent, repo, number)
-	cronKey := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
+	dispatchKey := dispatchStoreKey(agent, repo, number)
+	cronKey := cronStoreKey(agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Block if dispatch has any claim (pending or committed) within the TTL.
@@ -370,8 +380,8 @@ func (s *DispatchDedupStore) TryClaimForCron(agent, repo string, number int, now
 // On success, caller must follow with CommitClaim (after a successful PushEvent)
 // or AbandonClaim (on failure) to finalize the reservation.
 func (s *DispatchDedupStore) TryClaimForDispatch(agent, repo string, number int, now time.Time) bool {
-	cronKey := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
-	dispatchKey := fmt.Sprintf("%s\x00%s\x00%d", agent, repo, number)
+	cronKey := cronStoreKey(agent, repo, number)
+	dispatchKey := dispatchStoreKey(agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Block if any cron/manual run is active — either within its original TTL
