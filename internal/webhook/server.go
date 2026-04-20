@@ -85,6 +85,12 @@ type Server struct {
 	// sequence so that concurrent write requests cannot interleave their
 	// snapshots and leave the scheduler in a stale or inconsistent state.
 	storeMu sync.Mutex
+	// cfgMu protects s.cfg from data races between the hot-reload write path
+	// (reloadCron, called under storeMu) and concurrent handler reads. Use
+	// loadCfg() to read and reloadCron() to update. Static daemon config
+	// (HTTP, proxy, log) is never replaced after startup, but since the entire
+	// pointer is swapped on reload the lock is required for all accesses.
+	cfgMu sync.RWMutex
 }
 
 // WithUI attaches an fs.FS containing the pre-built static UI assets to the
@@ -138,6 +144,17 @@ func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue,
 		}, logger)
 	}
 	return s
+}
+
+// loadCfg returns the current config snapshot. It is safe to call
+// concurrently with reloadCron, which may swap s.cfg under cfgMu.Lock().
+// Callers should snapshot once per handler invocation and use the returned
+// pointer throughout so they observe a single consistent config epoch.
+func (s *Server) loadCfg() *config.Config {
+	s.cfgMu.RLock()
+	cfg := s.cfg
+	s.cfgMu.RUnlock()
+	return cfg
 }
 
 // buildHandler constructs the HTTP router for the server and returns it as
@@ -280,7 +297,8 @@ func (s *Server) Run(ctx context.Context) error {
 // operators that rely solely on network-level access control.
 func (s *Server) requireAPIKey(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.Daemon.HTTP.APIKey != "" {
+		cfg := s.loadCfg()
+		if cfg.Daemon.HTTP.APIKey != "" {
 			authHeader := r.Header.Get("Authorization")
 			const prefix = "Bearer "
 			if !strings.HasPrefix(authHeader, prefix) {
@@ -288,7 +306,7 @@ func (s *Server) requireAPIKey(next http.Handler) http.Handler {
 				return
 			}
 			token := authHeader[len(prefix):]
-			if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Daemon.HTTP.APIKey)) != 1 {
+			if subtle.ConstantTimeCompare([]byte(token), []byte(cfg.Daemon.HTTP.APIKey)) != 1 {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -342,12 +360,13 @@ type agentsRunRequest struct {
 }
 
 func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Daemon.HTTP.APIKey == "" {
+	cfg := s.loadCfg()
+	if cfg.Daemon.HTTP.APIKey == "" {
 		http.Error(w, "endpoint disabled: no API key configured", http.StatusForbidden)
 		return
 	}
 	var req agentsRunRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, s.cfg.Daemon.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, cfg.Daemon.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -356,7 +375,7 @@ func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repo, ok := s.cfg.RepoByName(req.Repo)
+	repo, ok := cfg.RepoByName(req.Repo)
 	if !ok || !repo.Enabled {
 		http.Error(w, "repo not found or disabled", http.StatusNotFound)
 		return
@@ -390,18 +409,19 @@ func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
+	cfg := s.loadCfg()
 	deliveryID := strings.TrimSpace(r.Header.Get("X-GitHub-Delivery"))
 	if deliveryID == "" {
 		http.Error(w, "missing delivery id", http.StatusBadRequest)
 		return
 	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.cfg.Daemon.HTTP.MaxBodyBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, cfg.Daemon.HTTP.MaxBodyBytes))
 	if err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if !verifySignature(body, s.cfg.Daemon.HTTP.WebhookSecret, r.Header.Get("X-Hub-Signature-256")) {
+	if !verifySignature(body, cfg.Daemon.HTTP.WebhookSecret, r.Header.Get("X-Hub-Signature-256")) {
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
 	}
@@ -478,6 +498,7 @@ type webhookReview struct {
 // Events from issues that are pull requests (GitHub sends both) are dropped
 // for the "labeled" action; the pull_request event handles those.
 func (s *Server) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
+	cfg := s.loadCfg()
 	var payload struct {
 		Action     string             `json:"action"`
 		Label      webhookLabel       `json:"label"`
@@ -490,7 +511,7 @@ func (s *Server) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, b
 		return
 	}
 
-	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
+	repo, ok := cfg.RepoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -540,6 +561,7 @@ func (s *Server) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, b
 // For "labeled" actions it filters to AI labels (and skips drafts) and emits
 // "pull_request.labeled". For lifecycle actions it emits "pull_request.{action}".
 func (s *Server) handlePullRequestEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
+	cfg := s.loadCfg()
 	var payload struct {
 		Action      string             `json:"action"`
 		Label       webhookLabel       `json:"label"`
@@ -552,7 +574,7 @@ func (s *Server) handlePullRequestEvent(ctx context.Context, w http.ResponseWrit
 		return
 	}
 
-	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
+	repo, ok := cfg.RepoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -603,6 +625,7 @@ func (s *Server) handlePullRequestEvent(ctx context.Context, w http.ResponseWrit
 // handleIssueCommentEvent handles X-GitHub-Event: issue_comment.
 // Only "created" actions are forwarded as "issue_comment.created".
 func (s *Server) handleIssueCommentEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
+	cfg := s.loadCfg()
 	var payload struct {
 		Action     string            `json:"action"`
 		Comment    webhookComment    `json:"comment"`
@@ -619,7 +642,7 @@ func (s *Server) handleIssueCommentEvent(ctx context.Context, w http.ResponseWri
 		return
 	}
 
-	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
+	repo, ok := cfg.RepoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -641,6 +664,7 @@ func (s *Server) handleIssueCommentEvent(ctx context.Context, w http.ResponseWri
 // handlePullRequestReviewEvent handles X-GitHub-Event: pull_request_review.
 // Only "submitted" actions are forwarded as "pull_request_review.submitted".
 func (s *Server) handlePullRequestReviewEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
+	cfg := s.loadCfg()
 	var payload struct {
 		Action      string             `json:"action"`
 		Review      webhookReview      `json:"review"`
@@ -657,7 +681,7 @@ func (s *Server) handlePullRequestReviewEvent(ctx context.Context, w http.Respon
 		return
 	}
 
-	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
+	repo, ok := cfg.RepoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -680,6 +704,7 @@ func (s *Server) handlePullRequestReviewEvent(ctx context.Context, w http.Respon
 // handlePullRequestReviewCommentEvent handles X-GitHub-Event: pull_request_review_comment.
 // Only "created" actions are forwarded as "pull_request_review_comment.created".
 func (s *Server) handlePullRequestReviewCommentEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
+	cfg := s.loadCfg()
 	var payload struct {
 		Action      string             `json:"action"`
 		Comment     webhookComment     `json:"comment"`
@@ -696,7 +721,7 @@ func (s *Server) handlePullRequestReviewCommentEvent(ctx context.Context, w http
 		return
 	}
 
-	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
+	repo, ok := cfg.RepoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -717,6 +742,7 @@ func (s *Server) handlePullRequestReviewCommentEvent(ctx context.Context, w http
 
 // handlePushEvent handles X-GitHub-Event: push.
 func (s *Server) handlePushEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
+	cfg := s.loadCfg()
 	var payload struct {
 		Ref        string            `json:"ref"`
 		After      string            `json:"after"`
@@ -728,7 +754,7 @@ func (s *Server) handlePushEvent(ctx context.Context, w http.ResponseWriter, bod
 		return
 	}
 
-	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
+	repo, ok := cfg.RepoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return

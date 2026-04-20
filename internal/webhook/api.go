@@ -58,9 +58,11 @@ func (s *Server) handleAPIAgents(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 
+	cfg := s.loadCfg()
+
 	// Build one entry per configured agent.
-	agents := make([]apiAgentJSON, 0, len(s.cfg.Agents))
-	for _, a := range s.cfg.Agents {
+	agents := make([]apiAgentJSON, 0, len(cfg.Agents))
+	for _, a := range cfg.Agents {
 		currentStatus := "idle"
 		if s.runtimeState != nil && s.runtimeState.IsRunning(a.Name) {
 			currentStatus = "running"
@@ -79,7 +81,7 @@ func (s *Server) handleAPIAgents(w http.ResponseWriter, _ *http.Request) {
 		// Collect bindings from all repos that reference this agent.
 		// Disabled repos are excluded entirely — they are not active in the
 		// runtime, so they should not appear in the fleet snapshot.
-		for _, repo := range s.cfg.Repos {
+		for _, repo := range cfg.Repos {
 			if !repo.Enabled {
 				continue
 			}
@@ -240,7 +242,7 @@ const redacted = "[redacted]"
 // secret values replaced by "[redacted]". Env-var names are preserved so
 // operators can identify which environment variable holds a given secret.
 func (s *Server) handleAPIConfig(w http.ResponseWriter, _ *http.Request) {
-	cfg := s.cfg
+	cfg := s.loadCfg()
 
 	httpCfg := apiHTTPConfigJSON{
 		ListenAddr:             cfg.Daemon.HTTP.ListenAddr,
@@ -506,7 +508,7 @@ func (s *Server) handleAPIGraph(w http.ResponseWriter, _ *http.Request) {
 	// Seed the node set from the full configured fleet so that agents with no
 	// dispatch history still appear in the graph (issue #151: "Nodes = agents").
 	seen := make(map[string]struct{})
-	for _, a := range s.cfg.Agents {
+	for _, a := range s.loadCfg().Agents {
 		seen[a.Name] = struct{}{}
 	}
 	// Include any edge endpoints not already covered by the current config
@@ -560,7 +562,7 @@ func (s *Server) handleAPIMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	memDir := s.cfg.Daemon.MemoryDir
+	memDir := s.loadCfg().Daemon.MemoryDir
 	if memDir == "" {
 		http.Error(w, "memory_dir not configured", http.StatusNotFound)
 		return

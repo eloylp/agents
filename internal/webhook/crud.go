@@ -208,12 +208,28 @@ func storeNotConfigured(w http.ResponseWriter) {
 // Reload" sequence is not monotonic: a slow caller can overwrite a newer
 // in-memory state that a concurrent faster caller already applied.
 func (s *Server) reloadCron() error {
-	if s.cronReloader == nil {
-		return nil
-	}
 	agents, repos, skills, backends, err := store.ReadSnapshot(s.db)
 	if err != nil {
 		return fmt.Errorf("read config snapshot for cron reload: %w", err)
+	}
+
+	// Update the server's in-memory routing config so that webhook event
+	// handlers (/webhooks/github, /agents/run) and read APIs (/api/agents,
+	// /api/config) reflect the post-write state immediately without a restart.
+	// Copy-on-write: build a new config value from the current snapshot,
+	// replacing only the four CRUD-mutable fields. Daemon-level config (HTTP,
+	// proxy, log) is never changed by CRUD writes and is preserved unchanged.
+	s.cfgMu.Lock()
+	newCfg := *s.cfg
+	newCfg.Repos = repos
+	newCfg.Agents = agents
+	newCfg.Skills = skills
+	newCfg.Daemon.AIBackends = backends
+	s.cfg = &newCfg
+	s.cfgMu.Unlock()
+
+	if s.cronReloader == nil {
+		return nil
 	}
 	return s.cronReloader.Reload(repos, agents, skills, backends)
 }
@@ -241,7 +257,7 @@ func (s *Server) handleStoreAgents(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeAgentJSON
-		if !decodeBody(w, r, s.cfg.Daemon.HTTP.MaxBodyBytes, &req) {
+		if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		if req.Name == "" {
@@ -330,7 +346,7 @@ func (s *Server) handleStoreSkills(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeSkillJSON
-		if !decodeBody(w, r, s.cfg.Daemon.HTTP.MaxBodyBytes, &req) {
+		if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		if req.Name == "" {
@@ -417,7 +433,7 @@ func (s *Server) handleStoreBackends(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeBackendJSON
-		if !decodeBody(w, r, s.cfg.Daemon.HTTP.MaxBodyBytes, &req) {
+		if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		if req.Name == "" {
@@ -509,7 +525,7 @@ func (s *Server) handleStoreRepos(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeRepoJSON
-		if !decodeBody(w, r, s.cfg.Daemon.HTTP.MaxBodyBytes, &req) {
+		if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		if req.Name == "" {

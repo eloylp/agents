@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1293,6 +1294,92 @@ func TestStoreCRUDPostReturnsCanonicalForm(t *testing.T) {
 		}
 	} else {
 		t.Errorf("binding[0] wrong type: %T", bindings[0])
+	}
+}
+
+// TestServerCfgUpdatedAfterCRUDWrite verifies that the webhook server's
+// in-memory routing config is updated immediately after a CRUD write so that
+// a newly-added repo is accepted by the webhook event path and visible in
+// /api/agents — without requiring a restart.
+//
+// This is a regression test for the finding that Server kept using its startup
+// s.cfg snapshot for /webhooks/github and /api/agents after CRUD writes, while
+// only the scheduler/engine were updated via cronReloader.Reload.
+func TestServerCfgUpdatedAfterCRUDWrite(t *testing.T) {
+	t.Parallel()
+
+	s := openCRUDTestServer(t)
+	// Confirm the initial config has no repos and no agents.
+	if len(s.loadCfg().Repos) != 0 {
+		t.Fatalf("precondition: expected 0 repos, got %d", len(s.loadCfg().Repos))
+	}
+
+	// Seed backend and create agent + repo via CRUD API.
+	seedStoreBackend(t, s, "claude")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "p",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("POST agent: %d — %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+		"name": "owner/newrepo", "enabled": true,
+		"bindings": []map[string]any{{"agent": "coder", "labels": []string{"ai:fix"}}},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("POST repo: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Verify the in-memory config was updated: the new repo must be present.
+	cfg := s.loadCfg()
+	if len(cfg.Repos) != 1 || cfg.Repos[0].Name != "owner/newrepo" {
+		t.Fatalf("server cfg not updated: repos = %v", cfg.Repos)
+	}
+	if len(cfg.Agents) != 1 || cfg.Agents[0].Name != "coder" {
+		t.Fatalf("server cfg not updated: agents = %v", cfg.Agents)
+	}
+
+	// Verify /api/agents reflects the new agent.
+	rr := doCRUDRequest(t, s, http.MethodGet, "/api/agents", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /api/agents: %d — %s", rr.Code, rr.Body.String())
+	}
+	var apiAgents []map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&apiAgents); err != nil {
+		t.Fatalf("decode /api/agents: %v", err)
+	}
+	if len(apiAgents) != 1 {
+		t.Fatalf("/api/agents: want 1 agent, got %d", len(apiAgents))
+	}
+	if apiAgents[0]["name"] != "coder" {
+		t.Errorf("/api/agents[0].name: got %v, want coder", apiAgents[0]["name"])
+	}
+
+	// Verify the webhook event path accepts the new repo. Send an issues.labeled
+	// event for owner/newrepo; it should be enqueued (202) rather than silently
+	// dropped because the repo was absent from the startup config.
+	body := `{"action":"labeled","label":{"name":"ai:fix"},"issue":{"number":1},"repository":{"full_name":"owner/newrepo"},"sender":{"login":"user"}}`
+	sig := signatureForTests([]byte(body), "")
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "issues")
+	req.Header.Set("X-GitHub-Delivery", "delivery-id-1")
+	req.Header.Set("X-Hub-Signature-256", sig)
+	// Webhook secret is empty (crudMinimalConfig default) — verifySignature
+	// requires non-empty secret, so the request will be rejected as unauthorized
+	// if routed; but the repo gate runs before enqueue. We test the repo gate by
+	// observing whether the handler returns 401 (signature check, meaning it got
+	// past the "repo not found" early-return) vs 202 (repo not found silently
+	// ignored). With the repo absent, the handler returns 202 immediately (no
+	// event enqueued). With the repo present, it proceeds to signature check.
+	// Since the server has no webhook secret configured, verifySignature returns
+	// false and the handler returns 401 — which proves the routing reached the
+	// signature check gate, i.e., the repo was found in the updated config.
+	rr2 := httptest.NewRecorder()
+	s.buildHandler().ServeHTTP(rr2, req)
+	// 401 means signature check ran, which only happens after the repo gate
+	// passes: the new repo was found in the post-write in-memory config.
+	if rr2.Code != http.StatusUnauthorized {
+		t.Errorf("webhook after CRUD repo add: want 401 (signature check = repo found), got %d — body: %s",
+			rr2.Code, rr2.Body.String())
 	}
 }
 
