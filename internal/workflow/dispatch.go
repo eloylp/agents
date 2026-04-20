@@ -337,8 +337,17 @@ func (s *DispatchDedupStore) TryClaimForCron(agent, repo string, number int, now
 	cronKey := fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Block if dispatch has any claim (pending or committed).
+	// Block if dispatch has any claim (pending or committed) within the TTL.
 	if e, ok := s.entries[dispatchKey]; ok && now.Before(e.expiresAt) {
+		return false
+	}
+	// Block if a webhook/agents.run execution is still in flight past the TTL
+	// window. Without this guard, a long-running run that outlasts
+	// dedup_window_seconds would have an expired expiresAt while its refcount
+	// is still positive, and TryClaimForCron would proceed concurrently,
+	// breaking the fleet-wide dedup contract. TryClaimForDispatch has the same
+	// guard for the symmetric case.
+	if s.webhookRefCounts[dispatchKey] > 0 {
 		return false
 	}
 	// Write the cron mark immediately so any dispatch arriving after this
