@@ -590,6 +590,35 @@ func loadBindingsForRepo(db querier, repo string) ([]config.Binding, error) {
 	return bindings, nil
 }
 
+// ReadMemory returns the stored memory string for (agent, repo). If no row
+// exists, it returns ("", nil).
+func ReadMemory(db *sql.DB, agent, repo string) (string, error) {
+	var content string
+	err := db.QueryRow(
+		"SELECT content FROM memory WHERE agent=? AND repo=?", agent, repo,
+	).Scan(&content)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("store: read memory %s/%s: %w", agent, repo, err)
+	}
+	return content, nil
+}
+
+// WriteMemory upserts the memory string for (agent, repo), setting updated_at
+// to the current UTC timestamp.
+func WriteMemory(db *sql.DB, agent, repo, content string) error {
+	_, err := db.Exec(
+		`INSERT OR REPLACE INTO memory(agent,repo,content,updated_at) VALUES(?,?,?,datetime('now'))`,
+		agent, repo, content,
+	)
+	if err != nil {
+		return fmt.Errorf("store: write memory %s/%s: %w", agent, repo, err)
+	}
+	return nil
+}
+
 // boolToInt converts a bool to 0/1 for SQLite storage.
 func boolToInt(b bool) int {
 	if b {

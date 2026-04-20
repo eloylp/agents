@@ -65,7 +65,7 @@ func run() error {
 	logger := logging.NewLogger(cfg.Daemon.Log)
 
 	runners := setupRunners(cfg, logger)
-	scheduler, err := setupScheduler(cfg, runners, logger)
+	scheduler, err := setupScheduler(cfg, runners, db, logger)
 	if err != nil {
 		return err
 	}
@@ -150,7 +150,11 @@ func run() error {
 	group, groupCtx := errgroup.WithContext(ctx)
 	deliveryStore.Start(groupCtx)
 	engine.StartDispatchDedup(groupCtx)
-	go observe.WatchMemoryDir(groupCtx, cfg.Daemon.MemoryDir, 0, obs.MemorySSE)
+	// Watch the memory dir only when using the file-based memory backend (YAML
+	// config path). When --db is used, memory is stored in SQLite.
+	if db == nil {
+		go observe.WatchMemoryDir(groupCtx, cfg.Daemon.MemoryDir, 0, obs.MemorySSE)
+	}
 	group.Go(func() error { return processor.Run(groupCtx) })
 	group.Go(func() error { return scheduler.Run(groupCtx) })
 	group.Go(func() error { return server.Run(groupCtx) })
@@ -199,9 +203,27 @@ func setupRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runne
 	return runners
 }
 
-func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, logger zerolog.Logger) (*autonomous.Scheduler, error) {
-	memoryStore := autonomous.NewMemoryStore(cfg.Daemon.MemoryDir)
-	return autonomous.NewScheduler(cfg, runners, memoryStore, logger)
+func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, db *sql.DB, logger zerolog.Logger) (*autonomous.Scheduler, error) {
+	var memBackend autonomous.MemoryBackend
+	if db != nil {
+		memBackend = &sqliteMemory{db: db}
+	} else {
+		memBackend = autonomous.NewMemoryStore(cfg.Daemon.MemoryDir)
+	}
+	return autonomous.NewScheduler(cfg, runners, memBackend, logger)
+}
+
+// sqliteMemory implements autonomous.MemoryBackend using the SQLite store.
+type sqliteMemory struct {
+	db *sql.DB
+}
+
+func (m *sqliteMemory) ReadMemory(agent, repo string) (string, error) {
+	return store.ReadMemory(m.db, agent, repo)
+}
+
+func (m *sqliteMemory) WriteMemory(agent, repo, content string) error {
+	return store.WriteMemory(m.db, agent, repo, content)
 }
 
 // loadConfig loads the daemon configuration either from a YAML file (legacy

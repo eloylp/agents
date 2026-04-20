@@ -80,7 +80,8 @@ Read, comment, and manage the "human review ready" label only.
 
 ## Memory hygiene
 
-After posting a review, IMMEDIATELY write to memory:
+Return your full updated memory in the `memory` field of your JSON response.
+Record each reviewed PR as:
   `PR #<N> @ <head-sha> <VERDICT>`
 Example: `PR #77 @ ad279d68 APPROVE`
 
@@ -105,7 +106,8 @@ the end of your response:
   ],
   "dispatch": [
     { "agent": "<name>", "number": <issue-or-pr-number>, "reason": "<why>" }
-  ]
+  ],
+  "memory": "PR #77 @ ad279d68 APPROVE\nPR #81 @ bc34ef12 REQUEST_CHANGES\n..."
 }
 ```
 
@@ -113,4 +115,5 @@ Rules:
 - `summary` is required; keep it to one sentence.
 - `artifacts` lists every GitHub object you created or updated. Omit or use `[]` if none.
 - `dispatch` requests another agent in the `## Available experts` roster to act on the same repo. Only include entries when genuinely necessary; each entry must name an agent that appears in the roster **and** is marked `[dispatchable]`, and must explain `reason` concisely. Omit or use `[]` if no dispatch is needed.
+- `memory` is your full updated memory state. Return `""` to clear memory. This replaces your previous memory entirely.
 - Do **not** dispatch to yourself.

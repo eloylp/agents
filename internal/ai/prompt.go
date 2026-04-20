@@ -23,14 +23,14 @@ type RosterEntry struct {
 // Fields are optional — zero values are simply omitted from the rendered
 // output.
 type PromptContext struct {
-	Repo       string // "owner/repo"
-	Number     int    // issue or PR number, 0 for runs with no GitHub item
-	Backend    string // resolved backend name (claude, codex, ...)
-	Memory     string // existing memory snapshot for autonomous runs
-	MemoryPath string // path the agent should update after the run
-	EventKind  string         // e.g. "issues.labeled", "push" — empty for autonomous runs
-	Actor      string         // GitHub login that triggered the event; empty for autonomous runs
-	Payload    map[string]any // kind-specific event fields; nil for autonomous runs
+	Repo        string // "owner/repo"
+	Number      int    // issue or PR number, 0 for runs with no GitHub item
+	Backend     string // resolved backend name (claude, codex, ...)
+	Memory      string // existing memory snapshot injected before each autonomous run
+	IsAutonomous bool  // true for cron-triggered runs; enables the memory section
+	EventKind   string         // e.g. "issues.labeled", "push" — empty for autonomous runs
+	Actor       string         // GitHub login that triggered the event; empty for autonomous runs
+	Payload     map[string]any // kind-specific event fields; nil for autonomous runs
 
 	// Roster is the list of peer agents available for dispatch on the same repo.
 	// The current agent is excluded. Only populated when dispatch is configured.
@@ -130,8 +130,7 @@ func renderRuntimeContext(ctx PromptContext) string {
 			}
 		}
 	}
-	if ctx.MemoryPath != "" {
-		fmt.Fprintf(&b, "Memory file: %s\n", ctx.MemoryPath)
+	if ctx.IsAutonomous {
 		mem := strings.TrimSpace(ctx.Memory)
 		if mem == "" {
 			b.WriteString("Existing memory: (empty)\n")

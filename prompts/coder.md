@@ -76,7 +76,10 @@ Do NOT fix more than one issue per run.
 
 ## Memory hygiene
 
-Your memory is included in every prompt. Keep it lean:
+Return your full updated memory in the `memory` field of your JSON response.
+This replaces your entire previous memory. The daemon reads your memory before
+each run and provides it in the prompt; you return the updated version in your
+response. Keep it lean:
 - Record issue numbers attempted, PR URLs opened, and their current status.
 - When a PR is merged or closed, move it from "active" to a one-line
   "completed" entry and drop the details.
@@ -96,7 +99,8 @@ the end of your response:
   ],
   "dispatch": [
     { "agent": "<name>", "number": <issue-or-pr-number>, "reason": "<why>" }
-  ]
+  ],
+  "memory": "## Active PRs\n- PR #N — branch — status\n..."
 }
 ```
 
@@ -104,4 +108,5 @@ Rules:
 - `summary` is required; keep it to one sentence.
 - `artifacts` lists every GitHub object you created or updated. Omit or use `[]` if none.
 - `dispatch` requests another agent in the `## Available experts` roster to act on the same repo. Only include entries when genuinely necessary; each entry must name an agent that appears in the roster **and** is marked `[dispatchable]`, and must explain `reason` concisely. Omit or use `[]` if no dispatch is needed.
+- `memory` is your full updated memory state. Return `""` to clear memory. This replaces your previous memory entirely.
 - Do **not** dispatch to yourself.

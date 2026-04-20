@@ -33,8 +33,12 @@
         "additionalProperties": false
       },
       "description": "Agents to invoke next via the reactive dispatch system"
+    },
+    "memory": {
+      "type": "string",
+      "description": "Full updated memory state to persist after this run. Empty string clears the memory."
     }
   },
-  "required": ["summary", "artifacts", "dispatch"],
+  "required": ["summary", "artifacts", "dispatch", "memory"],
   "additionalProperties": false
 }

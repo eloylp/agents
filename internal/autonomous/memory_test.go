@@ -1,68 +1,102 @@
 package autonomous
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestMemoryStoreCreatesPerRepoMemory(t *testing.T) {
+func TestFileMemoryReadEmpty(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	store := NewMemoryStore(dir)
-	var capturedPath string
-	err := store.WithLock("architect", "owner/repo", func(memoryPath string, memory string) error {
-		capturedPath = memoryPath
-		if memory != "" {
-			t.Fatalf("expected empty initial memory, got %q", memory)
-		}
-		return os.WriteFile(memoryPath, []byte("noted"), 0o644)
-	})
-	if err != nil {
-		t.Fatalf("with lock: %v", err)
-	}
-	if capturedPath == "" {
-		t.Fatalf("expected memory path")
-	}
-	if !strings.Contains(capturedPath, "owner_repo") {
-		t.Fatalf("expected repo segment sanitized in memory path, got %s", capturedPath)
-	}
-	content, err := os.ReadFile(capturedPath)
-	if err != nil {
-		t.Fatalf("read memory: %v", err)
-	}
-	if string(content) != "noted" {
-		t.Fatalf("expected memory write to persist, got %q", string(content))
-	}
+	mem := NewMemoryStore(dir)
 
-	// Second call should read existing content without recreating.
-	err = store.WithLock("architect", "owner/repo", func(memoryPath string, memory string) error {
-		if memory != "noted" {
-			t.Fatalf("expected existing memory content, got %q", memory)
-		}
-		return nil
-	})
+	content, err := mem.ReadMemory("architect", "owner/repo")
 	if err != nil {
-		t.Fatalf("with lock second call: %v", err)
+		t.Fatalf("ReadMemory: %v", err)
+	}
+	if content != "" {
+		t.Fatalf("expected empty initial memory, got %q", content)
 	}
 }
 
-func TestMemoryStoreRejectsPathEscapes(t *testing.T) {
+func TestFileMemoryWriteAndRead(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	store := NewMemoryStore(dir)
-	var path string
-	err := store.WithLock("../etc/passwd", "/tmp/../../evil", func(memoryPath string, memory string) error {
-		path = memoryPath
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	mem := NewMemoryStore(dir)
+
+	if err := mem.WriteMemory("architect", "owner/repo", "noted"); err != nil {
+		t.Fatalf("WriteMemory: %v", err)
 	}
+
+	content, err := mem.ReadMemory("architect", "owner/repo")
+	if err != nil {
+		t.Fatalf("ReadMemory: %v", err)
+	}
+	if content != "noted" {
+		t.Fatalf("expected %q, got %q", "noted", content)
+	}
+}
+
+func TestFileMemoryWriteOverwrite(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	mem := NewMemoryStore(dir)
+
+	if err := mem.WriteMemory("coder", "eloylp/agents", "first"); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	if err := mem.WriteMemory("coder", "eloylp/agents", "second"); err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+
+	content, err := mem.ReadMemory("coder", "eloylp/agents")
+	if err != nil {
+		t.Fatalf("ReadMemory: %v", err)
+	}
+	if content != "second" {
+		t.Fatalf("expected %q after overwrite, got %q", "second", content)
+	}
+}
+
+func TestFileMemoryPathSanitization(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	mem := NewMemoryStore(dir)
+
+	// NormalizeToken sanitizes separators; the file must be created within dir.
+	if err := mem.WriteMemory("../etc/passwd", "/tmp/../../evil", "malicious"); err != nil {
+		t.Fatalf("unexpected write error: %v", err)
+	}
+
+	// Verify the written file lives within the base directory.
 	cleanBase := filepath.Clean(dir)
+	fb := mem.(*fileMemory)
+	path, err := fb.ensureDir("../etc/passwd", "/tmp/../../evil")
+	if err != nil {
+		t.Fatalf("ensureDir: %v", err)
+	}
 	cleanPath := filepath.Clean(path)
 	if !strings.HasPrefix(cleanPath+string(filepath.Separator), cleanBase+string(filepath.Separator)) {
 		t.Fatalf("memory path escaped base dir: %s", path)
+	}
+}
+
+func TestFileMemoryIsolation(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	mem := NewMemoryStore(dir)
+
+	if err := mem.WriteMemory("agentA", "repo", "memory-A"); err != nil {
+		t.Fatalf("WriteMemory A: %v", err)
+	}
+
+	// agentB should see empty memory even though agentA has content.
+	content, err := mem.ReadMemory("agentB", "repo")
+	if err != nil {
+		t.Fatalf("ReadMemory B: %v", err)
+	}
+	if content != "" {
+		t.Fatalf("agentB should have no memory, got %q", content)
 	}
 }
