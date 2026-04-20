@@ -123,9 +123,13 @@ func TestDeleteAgent(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 
-	a := config.AgentDef{Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{}}
-	if err := store.UpsertAgent(db, a); err != nil {
-		t.Fatalf("UpsertAgent: %v", err)
+	// Seed two agents so that deleting one still leaves the system valid.
+	for _, name := range []string{"coder", "reviewer"} {
+		if err := store.UpsertAgent(db, config.AgentDef{
+			Name: name, Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+		}); err != nil {
+			t.Fatalf("UpsertAgent %s: %v", name, err)
+		}
 	}
 	if err := store.DeleteAgent(db, "coder"); err != nil {
 		t.Fatalf("DeleteAgent: %v", err)
@@ -134,8 +138,11 @@ func TestDeleteAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadAgents: %v", err)
 	}
-	if len(agents) != 0 {
-		t.Errorf("got %d agents after delete, want 0", len(agents))
+	if len(agents) != 1 {
+		t.Errorf("got %d agents after delete, want 1", len(agents))
+	}
+	if agents[0].Name != "reviewer" {
+		t.Errorf("remaining agent: got %q, want %q", agents[0].Name, "reviewer")
 	}
 }
 
@@ -233,9 +240,13 @@ func TestDeleteBackend(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 
-	b := config.AIBackendConfig{Command: "claude", Args: []string{}, Env: map[string]string{}}
-	if err := store.UpsertBackend(db, "claude", b); err != nil {
-		t.Fatalf("UpsertBackend: %v", err)
+	// Seed two backends so that deleting one still leaves the system valid.
+	for _, name := range []string{"claude", "codex"} {
+		if err := store.UpsertBackend(db, name, config.AIBackendConfig{
+			Command: name, Args: []string{}, Env: map[string]string{},
+		}); err != nil {
+			t.Fatalf("UpsertBackend %s: %v", name, err)
+		}
 	}
 	if err := store.DeleteBackend(db, "claude"); err != nil {
 		t.Fatalf("DeleteBackend: %v", err)
@@ -244,8 +255,11 @@ func TestDeleteBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadBackends: %v", err)
 	}
-	if len(backends) != 0 {
-		t.Errorf("got %d backends after delete, want 0", len(backends))
+	if len(backends) != 1 {
+		t.Errorf("got %d backends after delete, want 1", len(backends))
+	}
+	if _, ok := backends["codex"]; !ok {
+		t.Error("codex backend should remain after deleting claude")
 	}
 }
 
@@ -355,13 +369,15 @@ func TestDeleteRepo(t *testing.T) {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
 
-	r := config.RepoDef{
-		Name:    "owner/repo",
-		Enabled: true,
-		Use:     []config.Binding{{Agent: "coder", Labels: []string{"ai:fix"}}},
-	}
-	if err := store.UpsertRepo(db, r); err != nil {
-		t.Fatalf("UpsertRepo: %v", err)
+	// Seed two repos so that deleting one still leaves at least one enabled.
+	for _, name := range []string{"owner/repo", "owner/other"} {
+		if err := store.UpsertRepo(db, config.RepoDef{
+			Name:    name,
+			Enabled: true,
+			Use:     []config.Binding{{Agent: "coder", Labels: []string{"ai:fix"}}},
+		}); err != nil {
+			t.Fatalf("UpsertRepo %s: %v", name, err)
+		}
 	}
 	if err := store.DeleteRepo(db, "owner/repo"); err != nil {
 		t.Fatalf("DeleteRepo: %v", err)
@@ -371,8 +387,11 @@ func TestDeleteRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadRepos: %v", err)
 	}
-	if len(repos) != 0 {
-		t.Errorf("got %d repos after delete, want 0", len(repos))
+	if len(repos) != 1 {
+		t.Errorf("got %d repos after delete, want 1", len(repos))
+	}
+	if repos[0].Name != "owner/other" {
+		t.Errorf("remaining repo: got %q, want %q", repos[0].Name, "owner/other")
 	}
 
 	// Verify that bindings were also deleted (no orphan rows).
@@ -510,7 +529,10 @@ func TestDeleteBackendRejectedWhenAgentReferences(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 
+	// Seed two backends so that the "at least one backend" constraint is not the
+	// reason the delete fails — only the agent reference should block it.
 	seedBackend(t, db, "claude")
+	seedBackend(t, db, "codex")
 	if err := store.UpsertAgent(db, config.AgentDef{
 		Name:    "coder",
 		Backend: "claude",
@@ -520,7 +542,7 @@ func TestDeleteBackendRejectedWhenAgentReferences(t *testing.T) {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
 
-	// Deleting "claude" while "coder" references it must fail.
+	// Deleting "claude" while "coder" references it must fail (codex remains).
 	err := store.DeleteBackend(db, "claude")
 	if err == nil {
 		t.Fatal("DeleteBackend still referenced by agent: want error, got nil")
@@ -609,5 +631,219 @@ func TestDeleteAgentRejectedWhenDispatchListReferences(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "can_dispatch") {
 		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+// ──── Field-level validation tests ───────────────────────────────────────────
+
+func TestUpsertBackendRejectedWithEmptyCommand(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	err := store.UpsertBackend(db, "claude", config.AIBackendConfig{Command: "", Args: []string{}, Env: map[string]string{}})
+	if err == nil {
+		t.Fatal("UpsertBackend with empty command: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "command is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestUpsertBackendRejectedWithInvalidName(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	err := store.UpsertBackend(db, "unknown-ai", config.AIBackendConfig{Command: "ai", Args: []string{}, Env: map[string]string{}})
+	if err == nil {
+		t.Fatal("UpsertBackend with invalid name: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "unsupported ai backend") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestUpsertSkillRejectedWithEmptyPrompt(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	err := store.UpsertSkill(db, "testing", config.SkillDef{Prompt: ""})
+	if err == nil {
+		t.Fatal("UpsertSkill with empty prompt: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "prompt is empty") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestUpsertAgentRejectedWithEmptyPrompt(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	seedBackend(t, db, "claude")
+	err := store.UpsertAgent(db, config.AgentDef{
+		Name:    "coder",
+		Backend: "claude",
+		Prompt:  "",
+		Skills:  []string{},
+	})
+	if err == nil {
+		t.Fatal("UpsertAgent with empty prompt: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "prompt is empty") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestUpsertRepoRejectedWithNoTrigger(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	seedBackend(t, db, "claude")
+	if err := store.UpsertAgent(db, config.AgentDef{
+		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
+	}
+	// Binding has no labels, events, or cron — invalid.
+	err := store.UpsertRepo(db, config.RepoDef{
+		Name:    "owner/repo",
+		Enabled: true,
+		Use:     []config.Binding{{Agent: "coder"}},
+	})
+	if err == nil {
+		t.Fatal("UpsertRepo with no-trigger binding: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "no trigger") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestUpsertRepoRejectedWithMixedTriggers(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	seedBackend(t, db, "claude")
+	if err := store.UpsertAgent(db, config.AgentDef{
+		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
+	}
+	// Binding mixes labels and events — invalid.
+	err := store.UpsertRepo(db, config.RepoDef{
+		Name:    "owner/repo",
+		Enabled: true,
+		Use: []config.Binding{{
+			Agent:  "coder",
+			Labels: []string{"ai:fix"},
+			Events: []string{"push"},
+		}},
+	})
+	if err == nil {
+		t.Fatal("UpsertRepo with mixed-trigger binding: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "mixes multiple trigger types") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestDeleteAgentRejectedAsLast(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	seedBackend(t, db, "claude")
+	if err := store.UpsertAgent(db, config.AgentDef{
+		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
+	}
+
+	err := store.DeleteAgent(db, "coder")
+	if err == nil {
+		t.Fatal("DeleteAgent last agent: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "at least one agent") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Agent must still be present.
+	agents, readErr := store.ReadAgents(db)
+	if readErr != nil {
+		t.Fatalf("ReadAgents: %v", readErr)
+	}
+	if len(agents) != 1 {
+		t.Errorf("agent count after rejected delete: got %d, want 1", len(agents))
+	}
+}
+
+func TestDeleteBackendRejectedAsLast(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	if err := store.UpsertBackend(db, "claude", config.AIBackendConfig{
+		Command: "claude", Args: []string{}, Env: map[string]string{},
+	}); err != nil {
+		t.Fatalf("UpsertBackend: %v", err)
+	}
+
+	err := store.DeleteBackend(db, "claude")
+	if err == nil {
+		t.Fatal("DeleteBackend last backend: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "at least one ai_backends") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Backend must still be present.
+	backends, readErr := store.ReadBackends(db)
+	if readErr != nil {
+		t.Fatalf("ReadBackends: %v", readErr)
+	}
+	if _, ok := backends["claude"]; !ok {
+		t.Error("backend was deleted despite being the last one")
+	}
+}
+
+func TestDeleteRepoRejectedAsLastEnabled(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	seedBackend(t, db, "claude")
+	if err := store.UpsertAgent(db, config.AgentDef{
+		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
+	}
+	if err := store.UpsertRepo(db, config.RepoDef{
+		Name:    "owner/repo",
+		Enabled: true,
+		Use:     []config.Binding{{Agent: "coder", Labels: []string{"ai:fix"}}},
+	}); err != nil {
+		t.Fatalf("UpsertRepo: %v", err)
+	}
+
+	err := store.DeleteRepo(db, "owner/repo")
+	if err == nil {
+		t.Fatal("DeleteRepo last enabled repo: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "at least one repo must be enabled") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Repo must still be present.
+	repos, readErr := store.ReadRepos(db)
+	if readErr != nil {
+		t.Fatalf("ReadRepos: %v", readErr)
+	}
+	if len(repos) != 1 {
+		t.Errorf("repo count after rejected delete: got %d, want 1", len(repos))
 	}
 }

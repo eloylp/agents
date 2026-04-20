@@ -69,6 +69,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// Wire the runner factory so that hot-reloaded backend definitions produce
+	// live runners without a restart. The same factory is used for the initial
+	// setup, so the two paths stay in sync automatically.
+	scheduler.WithRunnerBuilder(func(name string, b config.AIBackendConfig) ai.Runner {
+		return ai.NewCommandRunner(
+			name, "command", b.Command, b.Args, b.Env,
+			b.TimeoutSeconds, b.MaxPromptChars, b.RedactionSaltEnv,
+			logger,
+		)
+	})
 
 	// --run-agent mode: execute one agent pass synchronously and exit.
 	if *runAgent != "" {

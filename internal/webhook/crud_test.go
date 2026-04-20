@@ -175,11 +175,15 @@ func TestStoreCRUDAgentDelete(t *testing.T) {
 	s := openCRUDTestServer(t)
 
 	seedStoreBackend(t, s, "claude")
-	payload := map[string]any{
-		"name": "coder", "backend": "claude", "prompt": "p",
-		"skills": []string{}, "can_dispatch": []string{},
+	// Seed two agents so that deleting one still leaves the system valid.
+	for _, name := range []string{"coder", "reviewer"} {
+		if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+			"name": name, "backend": "claude", "prompt": "p",
+			"skills": []string{}, "can_dispatch": []string{},
+		}); rr.Code != http.StatusOK {
+			t.Fatalf("seed agent %s: got %d — %s", name, rr.Code, rr.Body.String())
+		}
 	}
-	doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", payload)
 
 	rr := doCRUDRequest(t, s, http.MethodDelete, "/api/store/agents/coder", nil)
 	if rr.Code != http.StatusNoContent {
@@ -244,19 +248,16 @@ func TestStoreCRUDBackendCreateAndDelete(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
-	rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
-		"name":            "claude",
-		"command":         "claude",
-		"args":            []string{"-p"},
-		"env":             map[string]string{},
-		"timeout_seconds": 300,
-		"max_prompt_chars": 8000,
-	})
-	if rr.Code != http.StatusOK {
-		t.Fatalf("POST backend: got %d — %s", rr.Code, rr.Body.String())
+	// Create two backends so that deleting one still leaves the system valid.
+	for _, name := range []string{"claude", "codex"} {
+		if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
+			"name": name, "command": name, "args": []string{}, "env": map[string]string{},
+		}); rr.Code != http.StatusOK {
+			t.Fatalf("POST backend %s: got %d — %s", name, rr.Code, rr.Body.String())
+		}
 	}
 
-	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/backends/claude", nil)
+	rr := doCRUDRequest(t, s, http.MethodGet, "/api/store/backends/claude", nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET backend: got %d", rr.Code)
 	}
@@ -282,20 +283,22 @@ func TestStoreCRUDRepoCreateAndDelete(t *testing.T) {
 		t.Fatalf("seed coder agent: got %d — %s", rr.Code, rr.Body.String())
 	}
 
+	// Create two repos so that deleting one still leaves the system valid.
 	enabled := true
-	rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
-		"name":    "owner/repo",
-		"enabled": true,
-		"bindings": []map[string]any{
-			{"agent": "coder", "labels": []string{"ai:fix"}, "enabled": enabled},
-		},
-	})
-	if rr.Code != http.StatusOK {
-		t.Fatalf("POST repo: got %d — %s", rr.Code, rr.Body.String())
+	for _, name := range []string{"owner/repo", "owner/other"} {
+		if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+			"name":    name,
+			"enabled": true,
+			"bindings": []map[string]any{
+				{"agent": "coder", "labels": []string{"ai:fix"}, "enabled": enabled},
+			},
+		}); rr.Code != http.StatusOK {
+			t.Fatalf("POST repo %s: got %d — %s", name, rr.Code, rr.Body.String())
+		}
 	}
 
 	// GET list
-	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/repos", nil)
+	rr := doCRUDRequest(t, s, http.MethodGet, "/api/store/repos", nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET repos: got %d", rr.Code)
 	}
@@ -303,8 +306,8 @@ func TestStoreCRUDRepoCreateAndDelete(t *testing.T) {
 	if err := json.NewDecoder(rr.Body).Decode(&repos); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(repos) != 1 {
-		t.Fatalf("got %d repos, want 1", len(repos))
+	if len(repos) != 2 {
+		t.Fatalf("got %d repos, want 2", len(repos))
 	}
 
 	// GET single — repo name is owner/repo → /api/store/repos/owner/repo
@@ -692,7 +695,10 @@ func TestStoreCRUDDeleteBackendRejectedWhenReferenced(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
+	// Seed two backends so that the "at least one backend" check does not mask
+	// the "agent still references it" validation.
 	seedStoreBackend(t, s, "claude")
+	seedStoreBackend(t, s, "codex")
 	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
 		"name": "coder", "backend": "claude", "prompt": "p",
 		"skills": []string{}, "can_dispatch": []string{},
@@ -736,5 +742,118 @@ func TestStoreCRUDDeleteSkillRejectedWhenReferenced(t *testing.T) {
 	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/skills/architect", nil)
 	if rr.Code != http.StatusOK {
 		t.Errorf("GET skill after rejected delete: got %d, want 200", rr.Code)
+	}
+}
+
+// ──── Field-level validation tests (webhook layer) ────────────────────────────
+
+func TestStoreCRUDBackendRejectedWithEmptyCommand(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
+		"name": "claude", "command": "", "args": []string{}, "env": map[string]string{},
+	})
+	if rr.Code == http.StatusOK {
+		t.Errorf("POST backend with empty command: want non-200, got 200")
+	}
+}
+
+func TestStoreCRUDAgentRejectedWithEmptyPrompt(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	seedStoreBackend(t, s, "claude")
+	rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "",
+		"skills": []string{}, "can_dispatch": []string{},
+	})
+	if rr.Code == http.StatusOK {
+		t.Errorf("POST agent with empty prompt: want non-200, got 200")
+	}
+}
+
+func TestStoreCRUDRepoRejectedWithNoTrigger(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	seedStoreBackend(t, s, "claude")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "p",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("create agent: got %d — %s", rr.Code, rr.Body.String())
+	}
+	// Binding has no labels, events, or cron — invalid.
+	rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+		"name": "owner/repo", "enabled": true,
+		"bindings": []map[string]any{{"agent": "coder"}},
+	})
+	if rr.Code == http.StatusOK {
+		t.Errorf("POST repo with no-trigger binding: want non-200, got 200")
+	}
+}
+
+func TestStoreCRUDDeleteBackendRejectedAsLast(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
+		"name": "claude", "command": "claude", "args": []string{}, "env": map[string]string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("create backend: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodDelete, "/api/store/backends/claude", nil)
+	if rr.Code == http.StatusNoContent {
+		t.Error("DELETE last backend: want non-204, got 204")
+	}
+
+	// Backend must still be present.
+	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/backends/claude", nil)
+	if rr.Code != http.StatusOK {
+		t.Errorf("GET backend after rejected delete: got %d, want 200", rr.Code)
+	}
+}
+
+func TestStoreCRUDDeleteAgentRejectedAsLast(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	seedStoreBackend(t, s, "claude")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "p",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("create agent: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodDelete, "/api/store/agents/coder", nil)
+	if rr.Code == http.StatusNoContent {
+		t.Error("DELETE last agent: want non-204, got 204")
+	}
+}
+
+func TestStoreCRUDDeleteRepoRejectedAsLastEnabled(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	seedStoreBackend(t, s, "claude")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "p",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("create agent: got %d — %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+		"name": "owner/repo", "enabled": true,
+		"bindings": []map[string]any{{"agent": "coder", "labels": []string{"ai:fix"}}},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("create repo: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodDelete, "/api/store/repos/owner/repo", nil)
+	if rr.Code == http.StatusNoContent {
+		t.Error("DELETE last enabled repo: want non-204, got 204")
 	}
 }

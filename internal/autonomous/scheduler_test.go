@@ -1278,3 +1278,58 @@ func TestSchedulerReloadRollsBackOnFailure(t *testing.T) {
 			len(s.cfg.Agents), len(cfg.Agents))
 	}
 }
+
+// TestSchedulerReloadRebuildsRunners verifies that when a RunnerBuilder is
+// registered, Reload rebuilds the runner map to reflect new or changed backend
+// definitions. This ensures that backends added via the CRUD API produce live
+// runners without a daemon restart.
+func TestSchedulerReloadRebuildsRunners(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseCfg(nil) // starts with "claude" backend
+	oldRunner := &stubRunner{}
+	runners := map[string]ai.Runner{"claude": oldRunner}
+
+	s, err := NewScheduler(cfg, runners, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	// Register a builder that returns a new distinct stub for each backend.
+	buildCalls := map[string]*stubRunner{}
+	s.WithRunnerBuilder(func(name string, _ config.AIBackendConfig) ai.Runner {
+		r := &stubRunner{}
+		buildCalls[name] = r
+		return r
+	})
+
+	// Reload with a new "codex" backend added and "claude" retained.
+	newBackends := map[string]config.AIBackendConfig{
+		"claude": {Command: "claude"},
+		"codex":  {Command: "codex"},
+	}
+	if err := s.Reload(cfg.Repos, cfg.Agents, cfg.Skills, newBackends); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	// Builder must have been called for both backends.
+	if _, ok := buildCalls["claude"]; !ok {
+		t.Error("RunnerBuilder was not called for 'claude'")
+	}
+	if _, ok := buildCalls["codex"]; !ok {
+		t.Error("RunnerBuilder was not called for 'codex'")
+	}
+
+	// The shared runners map (which the engine also holds) must contain both.
+	if _, ok := runners["claude"]; !ok {
+		t.Error("runners map missing 'claude' after Reload")
+	}
+	if _, ok := runners["codex"]; !ok {
+		t.Error("runners map missing 'codex' after Reload")
+	}
+
+	// The rebuilt runner for "claude" must be the new one, not the original stub.
+	if runners["claude"] == oldRunner {
+		t.Error("runners['claude'] was not rebuilt by RunnerBuilder")
+	}
+}

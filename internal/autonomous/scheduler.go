@@ -68,22 +68,28 @@ type lastRunRecord struct {
 	status string
 }
 
+// RunnerBuilder constructs a new ai.Runner for a given backend name and its
+// config. It is used by Reload to keep the in-process runner map consistent
+// with SQLite when ai_backend definitions change via the CRUD API.
+type RunnerBuilder func(name string, cfg config.AIBackendConfig) ai.Runner
+
 // Scheduler wires cron-triggered agent bindings from the config into the
 // robfig/cron engine.
 type Scheduler struct {
-	cfg          *config.Config
-	runners      map[string]ai.Runner
-	memories     *MemoryStore
-	cron         *cron.Cron
-	logger       zerolog.Logger
-	ctxMu        sync.RWMutex
-	runCtx       context.Context
-	bindMu       sync.RWMutex  // protects agentEntries and cfg.Repos/Agents during Reload
-	agentEntries []agentEntry
-	lastRunsMu   sync.RWMutex
-	lastRuns     map[string]lastRunRecord // key: "name\x00repo"
-	dispatcher   *workflow.Dispatcher    // nil when dispatch is not configured
-	traceRec     workflow.TraceRecorder  // nil when tracing is not configured
+	cfg           *config.Config
+	runners       map[string]ai.Runner
+	runnerBuilder RunnerBuilder // optional; nil means Reload does not update runners
+	memories      *MemoryStore
+	cron          *cron.Cron
+	logger        zerolog.Logger
+	ctxMu         sync.RWMutex
+	runCtx        context.Context
+	bindMu        sync.RWMutex // protects agentEntries and cfg.Repos/Agents during Reload
+	agentEntries  []agentEntry
+	lastRunsMu    sync.RWMutex
+	lastRuns      map[string]lastRunRecord // key: "name\x00repo"
+	dispatcher    *workflow.Dispatcher    // nil when dispatch is not configured
+	traceRec      workflow.TraceRecorder  // nil when tracing is not configured
 }
 
 // WithDispatcher attaches a Dispatcher to the Scheduler so that dispatch
@@ -99,6 +105,18 @@ func (s *Scheduler) WithDispatcher(d *workflow.Dispatcher) {
 // for each autonomous agent run (timing, status, artifact count).
 func (s *Scheduler) WithTraceRecorder(r workflow.TraceRecorder) {
 	s.traceRec = r
+}
+
+// WithRunnerBuilder registers the factory used to construct ai.Runner instances
+// during hot-reload. When set, Reload rebuilds the runner map in-place after a
+// successful cron re-registration so that new or updated backend definitions
+// take effect without a daemon restart. The scheduler and workflow engine share
+// the same map reference, so the rebuild is visible to both execution paths.
+//
+// If not called, Reload leaves the runner map untouched; new backends added via
+// the CRUD API will return "no runner for backend" until the daemon restarts.
+func (s *Scheduler) WithRunnerBuilder(fn RunnerBuilder) {
+	s.runnerBuilder = fn
 }
 
 // NewScheduler builds a scheduler and registers all cron-triggered bindings
@@ -453,6 +471,20 @@ func (s *Scheduler) Reload(repos []config.RepoDef, agents []config.AgentDef, ski
 	// opt-in checks reflect the new agent definitions immediately.
 	if s.dispatcher != nil {
 		s.dispatcher.UpdateAgents(agents)
+	}
+
+	// Rebuild the runner map to reflect any new or changed backend definitions.
+	// The scheduler and workflow engine share the same map reference, so
+	// mutating it in-place makes the updated runners visible to both paths.
+	if s.runnerBuilder != nil {
+		for name, backend := range backends {
+			s.runners[name] = s.runnerBuilder(name, backend)
+		}
+		for name := range s.runners {
+			if _, exists := backends[name]; !exists {
+				delete(s.runners, name)
+			}
+		}
 	}
 
 	s.logger.Info().Int("cron_jobs", len(s.agentEntries)).Msg("scheduler reloaded")

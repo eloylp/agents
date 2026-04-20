@@ -2,17 +2,19 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/eloylp/agents/internal/config"
 )
 
-// validateCrossRefs reads all mutable entity tables through q (a *sql.Tx in
+// validateFleet reads all four mutable entity tables through q (a *sql.Tx in
 // practice, so reads see the pending transaction state) and verifies that the
-// post-mutation snapshot is free of dangling cross-entity references. If q is
-// a *sql.Tx and validation fails, the caller must roll back the transaction to
-// prevent the invalid state from reaching SQLite.
-func validateCrossRefs(q querier) error {
+// post-mutation snapshot satisfies both field-level constraints and cross-entity
+// reference consistency via config.ValidateEntities. Aggregate minimums ("at
+// least one agent/repo/backend required") are NOT checked here; DELETE paths
+// enforce those separately with requireAtLeastOne* helpers below.
+func validateFleet(q querier) error {
 	var cfg config.Config
 	if err := loadBackends(q, &cfg); err != nil {
 		return err
@@ -34,7 +36,47 @@ func validateCrossRefs(q querier) error {
 	if skills == nil {
 		skills = map[string]config.SkillDef{}
 	}
-	return config.ValidateCrossRefs(cfg.Agents, cfg.Repos, skills, backends)
+	return config.ValidateEntities(cfg.Agents, cfg.Repos, skills, backends)
+}
+
+// requireAtLeastOneAgent returns an error if the transaction would leave the
+// agents table empty — used by DeleteAgent to enforce the "at least one agent"
+// invariant without running a full validateFleet.
+func requireAtLeastOneAgent(q querier) error {
+	var n int
+	if err := q.QueryRow("SELECT COUNT(*) FROM agents").Scan(&n); err != nil {
+		return fmt.Errorf("store: count agents: %w", err)
+	}
+	if n == 0 {
+		return errors.New("config: at least one agent is required")
+	}
+	return nil
+}
+
+// requireAtLeastOneBackend returns an error if the transaction would leave the
+// backends table empty.
+func requireAtLeastOneBackend(q querier) error {
+	var n int
+	if err := q.QueryRow("SELECT COUNT(*) FROM backends").Scan(&n); err != nil {
+		return fmt.Errorf("store: count backends: %w", err)
+	}
+	if n == 0 {
+		return errors.New("config: at least one ai_backends entry is required")
+	}
+	return nil
+}
+
+// requireAtLeastOneEnabledRepo returns an error if the transaction would leave
+// no enabled repos — used by DeleteRepo.
+func requireAtLeastOneEnabledRepo(q querier) error {
+	var n int
+	if err := q.QueryRow("SELECT COUNT(*) FROM repos WHERE enabled=1").Scan(&n); err != nil {
+		return fmt.Errorf("store: count enabled repos: %w", err)
+	}
+	if n == 0 {
+		return errors.New("config: at least one repo must be enabled")
+	}
+	return nil
 }
 
 // ──── Agents ─────────────────────────────────────────────────────────────────
@@ -58,7 +100,7 @@ func UpsertAgent(db *sql.DB, a config.AgentDef) error {
 	if err := importAgents(tx, []config.AgentDef{a}); err != nil {
 		return err
 	}
-	if err := validateCrossRefs(tx); err != nil {
+	if err := validateFleet(tx); err != nil {
 		return fmt.Errorf("store: upsert agent %s: %w", a.Name, err)
 	}
 	return tx.Commit()
@@ -66,18 +108,24 @@ func UpsertAgent(db *sql.DB, a config.AgentDef) error {
 
 // DeleteAgent removes the agent with the given name. It is not an error to
 // delete a name that does not exist. Returns an error if the agent is still
-// referenced by any repo binding or can_dispatch list.
+// referenced by any repo binding or can_dispatch list, or if it is the last agent.
 func DeleteAgent(db *sql.DB, name string) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: delete agent %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec("DELETE FROM agents WHERE name=?", name); err != nil {
+	res, err := tx.Exec("DELETE FROM agents WHERE name=?", name)
+	if err != nil {
 		return fmt.Errorf("store: delete agent %s: %w", name, err)
 	}
-	if err := validateCrossRefs(tx); err != nil {
-		return fmt.Errorf("store: delete agent %s: %w", name, err)
+	if n, _ := res.RowsAffected(); n > 0 {
+		if err := requireAtLeastOneAgent(tx); err != nil {
+			return fmt.Errorf("store: delete agent %s: %w", name, err)
+		}
+		if err := validateFleet(tx); err != nil {
+			return fmt.Errorf("store: delete agent %s: %w", name, err)
+		}
 	}
 	return tx.Commit()
 }
@@ -106,6 +154,9 @@ func UpsertSkill(db *sql.DB, name string, s config.SkillDef) error {
 	if err := importSkills(tx, map[string]config.SkillDef{name: s}); err != nil {
 		return err
 	}
+	if err := validateFleet(tx); err != nil {
+		return fmt.Errorf("store: upsert skill %s: %w", name, err)
+	}
 	return tx.Commit()
 }
 
@@ -120,7 +171,7 @@ func DeleteSkill(db *sql.DB, name string) error {
 	if _, err := tx.Exec("DELETE FROM skills WHERE name=?", name); err != nil {
 		return fmt.Errorf("store: delete skill %s: %w", name, err)
 	}
-	if err := validateCrossRefs(tx); err != nil {
+	if err := validateFleet(tx); err != nil {
 		return fmt.Errorf("store: delete skill %s: %w", name, err)
 	}
 	return tx.Commit()
@@ -150,22 +201,31 @@ func UpsertBackend(db *sql.DB, name string, b config.AIBackendConfig) error {
 	if err := importBackends(tx, map[string]config.AIBackendConfig{name: b}); err != nil {
 		return err
 	}
+	if err := validateFleet(tx); err != nil {
+		return fmt.Errorf("store: upsert backend %s: %w", name, err)
+	}
 	return tx.Commit()
 }
 
 // DeleteBackend removes the backend with the given name. Returns an error if
-// any agent still references the backend.
+// any agent still references the backend, or if it is the last backend.
 func DeleteBackend(db *sql.DB, name string) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: delete backend %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec("DELETE FROM backends WHERE name=?", name); err != nil {
+	res, err := tx.Exec("DELETE FROM backends WHERE name=?", name)
+	if err != nil {
 		return fmt.Errorf("store: delete backend %s: %w", name, err)
 	}
-	if err := validateCrossRefs(tx); err != nil {
-		return fmt.Errorf("store: delete backend %s: %w", name, err)
+	if n, _ := res.RowsAffected(); n > 0 {
+		if err := requireAtLeastOneBackend(tx); err != nil {
+			return fmt.Errorf("store: delete backend %s: %w", name, err)
+		}
+		if err := validateFleet(tx); err != nil {
+			return fmt.Errorf("store: delete backend %s: %w", name, err)
+		}
 	}
 	return tx.Commit()
 }
@@ -227,13 +287,14 @@ func UpsertRepo(db *sql.DB, r config.RepoDef) error {
 	if err := importRepos(tx, []config.RepoDef{r}); err != nil {
 		return err
 	}
-	if err := validateCrossRefs(tx); err != nil {
+	if err := validateFleet(tx); err != nil {
 		return fmt.Errorf("store: upsert repo %s: %w", r.Name, err)
 	}
 	return tx.Commit()
 }
 
-// DeleteRepo removes a repo and all of its bindings.
+// DeleteRepo removes a repo and all of its bindings. Returns an error if the
+// deletion would leave no enabled repos.
 func DeleteRepo(db *sql.DB, name string) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -243,8 +304,14 @@ func DeleteRepo(db *sql.DB, name string) error {
 	if _, err := tx.Exec("DELETE FROM bindings WHERE repo=?", name); err != nil {
 		return fmt.Errorf("store: delete bindings for repo %s: %w", name, err)
 	}
-	if _, err := tx.Exec("DELETE FROM repos WHERE name=?", name); err != nil {
+	res, err := tx.Exec("DELETE FROM repos WHERE name=?", name)
+	if err != nil {
 		return fmt.Errorf("store: delete repo %s: %w", name, err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		if err := requireAtLeastOneEnabledRepo(tx); err != nil {
+			return fmt.Errorf("store: delete repo %s: %w", name, err)
+		}
 	}
 	return tx.Commit()
 }
