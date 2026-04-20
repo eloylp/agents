@@ -3,6 +3,7 @@ package webhook
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -288,25 +289,53 @@ func TestHandleDeleteBackend(t *testing.T) {
 
 func TestHandlePutRepo(t *testing.T) {
 	t.Parallel()
-	srv, cleanup := openWriteTestServer(t)
-	defer cleanup()
-
-	req := postJSON(t, http.MethodPut, "/api/repos",
-		putRepoRequest{Name: "owner/new-repo", Enabled: true})
-	rec := httptest.NewRecorder()
-	srv.handlePutRepo(rec, req)
-
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("want 204, got %d: %s", rec.Code, rec.Body.String())
+	tests := []struct {
+		name      string
+		req       putRepoRequest
+		wantEnabled bool
+	}{
+		{
+			name:        "explicit enabled=true",
+			req:         putRepoRequest{Name: "owner/new-repo", Enabled: boolPtr(true)},
+			wantEnabled: true,
+		},
+		{
+			name:        "explicit enabled=false",
+			req:         putRepoRequest{Name: "owner/disabled-repo", Enabled: boolPtr(false)},
+			wantEnabled: false,
+		},
+		{
+			name:        "omitted enabled defaults to true",
+			req:         putRepoRequest{Name: "owner/default-repo"},
+			wantEnabled: true,
+		},
 	}
-	found := false
-	for _, r := range srv.cfg().Repos {
-		if r.Name == "owner/new-repo" && r.Enabled {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("new repo not visible in live config")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			srv, cleanup := openWriteTestServer(t)
+			defer cleanup()
+
+			req := postJSON(t, http.MethodPut, "/api/repos", tc.req)
+			rec := httptest.NewRecorder()
+			srv.handlePutRepo(rec, req)
+
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("want 204, got %d: %s", rec.Code, rec.Body.String())
+			}
+			found := false
+			for _, r := range srv.cfg().Repos {
+				if r.Name == tc.req.Name {
+					if r.Enabled != tc.wantEnabled {
+						t.Errorf("repo %q: enabled=%v, want %v", tc.req.Name, r.Enabled, tc.wantEnabled)
+					}
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("repo %q not visible in live config", tc.req.Name)
+			}
+		})
 	}
 }
 
@@ -317,7 +346,7 @@ func TestHandleDeleteRepo(t *testing.T) {
 
 	// Add then delete.
 	addReq := postJSON(t, http.MethodPut, "/api/repos",
-		putRepoRequest{Name: "owner/tmp", Enabled: true})
+		putRepoRequest{Name: "owner/tmp", Enabled: boolPtr(true)})
 	srv.handlePutRepo(httptest.NewRecorder(), addReq)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/repos/owner/tmp", nil)
@@ -452,7 +481,7 @@ func TestHandleDeleteBindingCrossRepo(t *testing.T) {
 
 	// First add a second repo so we have two repos in the DB.
 	putRepoReq := postJSON(t, http.MethodPut, "/api/repos",
-		putRepoRequest{Name: "owner/other-repo", Enabled: true})
+		putRepoRequest{Name: "owner/other-repo", Enabled: boolPtr(true)})
 	srv.handlePutRepo(httptest.NewRecorder(), putRepoReq)
 
 	// Add a binding to owner/repo.
@@ -507,4 +536,80 @@ func muxVars(r *http.Request, vars map[string]string) *http.Request {
 // intStr converts an int64 to a decimal string.
 func intStr(n int64) string {
 	return strconv.FormatInt(n, 10)
+}
+
+// boolPtr returns a pointer to the given bool value.
+func boolPtr(b bool) *bool { return &b }
+
+// TestHandleMutationReloadFailureReturns500 verifies that when reloadConfig
+// fails after a successful DB write, the handler returns 500 rather than
+// the success status code. The DB write is preserved (idempotent on retry).
+func TestHandleMutationReloadFailureReturns500(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		handler func(srv *Server, rec *httptest.ResponseRecorder)
+		wantCode int
+	}{
+		{
+			name:     "put agent",
+			wantCode: http.StatusNoContent,
+			handler: func(srv *Server, rec *httptest.ResponseRecorder) {
+				req := postJSON(t, http.MethodPut, "/api/agents",
+					putAgentRequest{Name: "reloader", Backend: "claude", Prompt: "x"})
+				srv.handlePutAgent(rec, req)
+			},
+		},
+		{
+			name:     "put skill",
+			wantCode: http.StatusNoContent,
+			handler: func(srv *Server, rec *httptest.ResponseRecorder) {
+				req := postJSON(t, http.MethodPut, "/api/skills",
+					putSkillRequest{Name: "s", Prompt: "x"})
+				srv.handlePutSkill(rec, req)
+			},
+		},
+		{
+			name:     "put repo",
+			wantCode: http.StatusNoContent,
+			handler: func(srv *Server, rec *httptest.ResponseRecorder) {
+				req := postJSON(t, http.MethodPut, "/api/repos",
+					putRepoRequest{Name: "owner/r"})
+				srv.handlePutRepo(rec, req)
+			},
+		},
+		{
+			name:     "put binding",
+			wantCode: http.StatusCreated,
+			handler: func(srv *Server, rec *httptest.ResponseRecorder) {
+				req := postJSON(t, http.MethodPost, "/api/repos/owner~repo/bindings",
+					putBindingRequest{Agent: "coder", Events: []string{"push"}})
+				req = muxVars(req, map[string]string{"name": "owner/repo"})
+				srv.handlePutBinding(rec, req)
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name+" succeeds normally", func(t *testing.T) {
+			t.Parallel()
+			srv, cleanup := openWriteTestServer(t)
+			defer cleanup()
+			rec := httptest.NewRecorder()
+			tc.handler(srv, rec)
+			if rec.Code != tc.wantCode {
+				t.Fatalf("want %d, got %d: %s", tc.wantCode, rec.Code, rec.Body.String())
+			}
+		})
+		t.Run(tc.name+" reload failure returns 500", func(t *testing.T) {
+			t.Parallel()
+			srv, cleanup := openWriteTestServer(t)
+			defer cleanup()
+			srv.testReloadHook = func() error { return errors.New("simulated reload failure") }
+			rec := httptest.NewRecorder()
+			tc.handler(srv, rec)
+			if rec.Code != http.StatusInternalServerError {
+				t.Fatalf("want 500, got %d: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
 }

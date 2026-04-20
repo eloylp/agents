@@ -86,6 +86,10 @@ type Server struct {
 	proxy         *anthropicproxy.Handler
 	uiFS          fs.FS          // optional; when set, /ui/ serves these static files
 	observeStore  *observe.Store // optional; when set, enables observability endpoints
+
+	// testReloadHook is an optional override injected by tests to simulate
+	// reloadConfig failures. When non-nil it replaces the real reload logic.
+	testReloadHook func() error
 }
 
 // cfg returns the current effective configuration. All request handlers must
@@ -138,6 +142,9 @@ func (s *Server) WithConfigObserver(o ConfigObserver) {
 // notified so that execution components (Engine, Scheduler) pick up the new
 // routing and agent definitions on their next operation.
 func (s *Server) reloadConfig() error {
+	if s.testReloadHook != nil {
+		return s.testReloadHook()
+	}
 	raw, err := store.Load(s.db)
 	if err != nil {
 		return err

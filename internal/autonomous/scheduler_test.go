@@ -1060,6 +1060,116 @@ func TestSchedulerCronMarkBlocksDispatchDuringInFlightRun(t *testing.T) {
 	}
 }
 
+// TestSchedulerCronJobPicksUpLiveConfigOnEachFiring verifies that when the
+// scheduler's config is updated via UpdateConfig, the next cron firing uses the
+// new agent definition (prompt, AllowPRs, etc.) rather than the startup snapshot.
+func TestSchedulerCronJobPicksUpLiveConfigOnEachFiring(t *testing.T) {
+	t.Parallel()
+	runner := &promptCapturingRunner{}
+	cfg := baseCfg(nil)
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	wrappedJob := s.cron.Entry(s.agentEntries[0].cronID).WrappedJob
+	s.setRunCtx(context.Background())
+
+	// First firing uses the initial prompt.
+	wrappedJob.Run()
+
+	// Update the live config with a different agent prompt.
+	updated := *cfg
+	updated.Agents = []config.AgentDef{
+		{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Updated live-reload prompt."},
+	}
+	s.UpdateConfig(&updated)
+
+	// Second firing must use the updated prompt.
+	wrappedJob.Run()
+
+	runner.mu.Lock()
+	prompts := runner.prompts
+	runner.mu.Unlock()
+
+	if len(prompts) != 2 {
+		t.Fatalf("expected 2 prompts, got %d", len(prompts))
+	}
+	if !strings.Contains(prompts[0], "Review PRs.") {
+		t.Errorf("first firing: expected initial prompt, got: %q", prompts[0])
+	}
+	if !strings.Contains(prompts[1], "Updated live-reload prompt.") {
+		t.Errorf("second firing: expected updated prompt, got: %q", prompts[1])
+	}
+}
+
+// TestSchedulerCronJobSkipsDisabledBindingAfterLiveReload verifies that when a
+// binding is disabled via UpdateConfig, the next cron firing is a no-op.
+func TestSchedulerCronJobSkipsDisabledBindingAfterLiveReload(t *testing.T) {
+	t.Parallel()
+	runner := &stubRunner{}
+	cfg := baseCfg(nil)
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	wrappedJob := s.cron.Entry(s.agentEntries[0].cronID).WrappedJob
+	s.setRunCtx(context.Background())
+
+	// First firing runs normally.
+	wrappedJob.Run()
+
+	// Disable the binding in the live config.
+	f := false
+	updated := *cfg
+	updated.Repos = []config.RepoDef{{
+		Name:    "owner/repo",
+		Enabled: true,
+		Use:     []config.Binding{{Agent: "reviewer", Cron: "* * * * *", Enabled: &f}},
+	}}
+	s.UpdateConfig(&updated)
+
+	// Second firing must be skipped.
+	wrappedJob.Run()
+
+	runner.mu.Lock()
+	calls := runner.calls
+	runner.mu.Unlock()
+	if calls != 1 {
+		t.Errorf("expected 1 runner call (second skipped after disable), got %d", calls)
+	}
+}
+
+// TestSchedulerCronJobSkipsDisabledRepoAfterLiveReload verifies that when a
+// repo is disabled via UpdateConfig, the next cron firing is a no-op.
+func TestSchedulerCronJobSkipsDisabledRepoAfterLiveReload(t *testing.T) {
+	t.Parallel()
+	runner := &stubRunner{}
+	cfg := baseCfg(nil)
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	wrappedJob := s.cron.Entry(s.agentEntries[0].cronID).WrappedJob
+	s.setRunCtx(context.Background())
+
+	// Disable the repo in the live config.
+	updated := *cfg
+	updated.Repos = []config.RepoDef{{Name: "owner/repo", Enabled: false}}
+	s.UpdateConfig(&updated)
+
+	wrappedJob.Run()
+
+	runner.mu.Lock()
+	calls := runner.calls
+	runner.mu.Unlock()
+	if calls != 0 {
+		t.Errorf("expected 0 runner calls for disabled repo, got %d", calls)
+	}
+}
+
 // TestCronDispatchCrossNamespaceRaceOnlyOneWins is a regression test for the
 // TOCTOU race identified after the initial dispatch-dedup implementation. The
 // old code used two separate operations:

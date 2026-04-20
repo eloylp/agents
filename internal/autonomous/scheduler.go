@@ -169,7 +169,7 @@ func (s *Scheduler) registerJobs() error {
 				// Validation at config load should have caught this; defensive.
 				return fmt.Errorf("binding references unknown agent %q on repo %q", binding.Agent, repo.Name)
 			}
-			job := s.makeCronJob(repo.Name, agent)
+			job := s.makeCronJob(repo.Name, agent.Name, binding.Cron)
 			id, err := s.cron.AddFunc(binding.Cron, job)
 			if err != nil {
 				return fmt.Errorf("schedule agent %q for repo %q: %w", agent.Name, repo.Name, err)
@@ -187,10 +187,39 @@ func (s *Scheduler) registerJobs() error {
 	return nil
 }
 
-func (s *Scheduler) makeCronJob(repo string, agent config.AgentDef) func() {
+// makeCronJob returns a closure registered with the cron engine for the given
+// (repo, agentName, cronExpr) triple. On every firing the closure re-resolves
+// the repo definition, the binding, and the agent definition from the live
+// config (via s.cfg()) so that write-API updates to agent prompts, backends,
+// AllowPRs, and binding enabled state are picked up without a daemon restart.
+// If the repo is disabled, the binding has been removed/disabled, or the agent
+// no longer exists in the live config the firing is silently skipped.
+func (s *Scheduler) makeCronJob(repo, agentName, cronExpr string) func() {
 	return func() {
 		ctx := s.currentRunCtx()
 		if ctx.Err() != nil {
+			return
+		}
+		// Re-resolve from the live config so that write-API mutations are
+		// visible on the next cron tick without requiring a restart.
+		repoDef, ok := s.cfg().RepoByName(repo)
+		if !ok || !repoDef.Enabled {
+			s.logger.Info().Str("repo", repo).Str("agent", agentName).
+				Msg("autonomous run skipped: repo disabled or removed from config")
+			return
+		}
+		bound := slices.ContainsFunc(repoDef.Use, func(b config.Binding) bool {
+			return b.Agent == agentName && b.IsEnabled() && b.IsCron() && b.Cron == cronExpr
+		})
+		if !bound {
+			s.logger.Info().Str("repo", repo).Str("agent", agentName).
+				Msg("autonomous run skipped: binding disabled or removed from config")
+			return
+		}
+		agent, ok := s.cfg().AgentByName(agentName)
+		if !ok {
+			s.logger.Error().Str("repo", repo).Str("agent", agentName).
+				Msg("autonomous run skipped: agent not found in live config")
 			return
 		}
 		status := "success"
@@ -203,11 +232,11 @@ func (s *Scheduler) makeCronJob(repo string, agent config.AgentDef) func() {
 				// agent pass ran.
 				status = "skipped"
 			default:
-				s.logger.Error().Str("repo", repo).Str("agent", agent.Name).Err(err).Msg("autonomous agent run completed with errors")
+				s.logger.Error().Str("repo", repo).Str("agent", agentName).Err(err).Msg("autonomous agent run completed with errors")
 				status = "error"
 			}
 		}
-		s.recordLastRun(agent.Name, repo, time.Now(), status)
+		s.recordLastRun(agentName, repo, time.Now(), status)
 	}
 }
 

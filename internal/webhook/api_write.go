@@ -67,8 +67,8 @@ func (s *Server) handlePutAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.reloadConfig(); err != nil {
 		s.logger.Error().Err(err).Msg("reload config after put agent")
-		// Non-fatal: the DB write succeeded; the in-memory view may be stale
-		// until next restart, but the data is persisted.
+		http.Error(w, "failed to reload config", http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -83,6 +83,8 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.reloadConfig(); err != nil {
 		s.logger.Error().Err(err).Msg("reload config after delete agent")
+		http.Error(w, "failed to reload config", http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -112,6 +114,8 @@ func (s *Server) handlePutSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.reloadConfig(); err != nil {
 		s.logger.Error().Err(err).Msg("reload config after put skill")
+		http.Error(w, "failed to reload config", http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -126,6 +130,8 @@ func (s *Server) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.reloadConfig(); err != nil {
 		s.logger.Error().Err(err).Msg("reload config after delete skill")
+		http.Error(w, "failed to reload config", http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -168,6 +174,8 @@ func (s *Server) handlePutBackend(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.reloadConfig(); err != nil {
 		s.logger.Error().Err(err).Msg("reload config after put backend")
+		http.Error(w, "failed to reload config", http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -182,6 +190,8 @@ func (s *Server) handleDeleteBackend(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.reloadConfig(); err != nil {
 		s.logger.Error().Err(err).Msg("reload config after delete backend")
+		http.Error(w, "failed to reload config", http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -190,7 +200,10 @@ func (s *Server) handleDeleteBackend(w http.ResponseWriter, r *http.Request) {
 
 type putRepoRequest struct {
 	Name    string `json:"name"`
-	Enabled bool   `json:"enabled"`
+	// Enabled defaults to true when omitted, matching the config model where
+	// repos are enabled by default. Use a pointer so an explicit false is
+	// distinguishable from an absent field.
+	Enabled *bool `json:"enabled"`
 }
 
 // handlePutRepo handles PUT /api/repos — creates or updates a repo.
@@ -205,7 +218,11 @@ func (s *Server) handlePutRepo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
-	repo := config.RepoDef{Name: req.Name, Enabled: req.Enabled}
+	enabled := true // repos are enabled by default; explicit false overrides
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	repo := config.RepoDef{Name: req.Name, Enabled: enabled}
 	if err := store.PutRepo(s.db, repo); err != nil {
 		s.logger.Error().Err(err).Str("repo", req.Name).Msg("put repo")
 		http.Error(w, "failed to save repo", http.StatusInternalServerError)
@@ -213,6 +230,8 @@ func (s *Server) handlePutRepo(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.reloadConfig(); err != nil {
 		s.logger.Error().Err(err).Msg("reload config after put repo")
+		http.Error(w, "failed to reload config", http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -228,6 +247,8 @@ func (s *Server) handleDeleteRepo(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.reloadConfig(); err != nil {
 		s.logger.Error().Err(err).Msg("reload config after delete repo")
+		http.Error(w, "failed to reload config", http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -273,6 +294,8 @@ func (s *Server) handlePutBinding(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.reloadConfig(); err != nil {
 		s.logger.Error().Err(err).Msg("reload config after put binding")
+		http.Error(w, "failed to reload config", http.StatusInternalServerError)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -301,6 +324,8 @@ func (s *Server) handleDeleteBinding(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.reloadConfig(); err != nil {
 		s.logger.Error().Err(err).Msg("reload config after delete binding")
+		http.Error(w, "failed to reload config", http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
