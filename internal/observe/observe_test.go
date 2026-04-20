@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/workflow"
 )
 
 // ─── EventBuffer tests ────────────────────────────────────────────────────────
@@ -444,4 +445,199 @@ func TestStoreIsRunningDelegates(t *testing.T) {
 	if s.IsRunning("coder") {
 		t.Fatal("Store.IsRunning must return false after run finishes")
 	}
+}
+
+// ─── Store.RecordEvent ────────────────────────────────────────────────────────
+
+// TestStoreRecordEventAddsToBufferAndPublishesToSSE verifies that RecordEvent
+// both persists the event in the ring buffer and fans it out to EventsSSE.
+func TestStoreRecordEventAddsToBufferAndPublishesToSSE(t *testing.T) {
+	t.Parallel()
+	s := observe.NewStore()
+
+	ch := s.EventsSSE.Subscribe()
+	defer s.EventsSSE.Unsubscribe(ch)
+
+	at := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	ev := workflow.Event{
+		ID:     "delivery-1",
+		Repo:   workflow.RepoRef{FullName: "owner/repo"},
+		Kind:   "issues.labeled",
+		Number: 42,
+		Actor:  "alice",
+	}
+	s.RecordEvent(at, ev)
+
+	// Verify ring buffer received the event.
+	stored := s.Events.List(time.Time{})
+	if len(stored) != 1 {
+		t.Fatalf("want 1 event in buffer, got %d", len(stored))
+	}
+	got := stored[0]
+	if got.ID != "delivery-1" {
+		t.Errorf("ID = %q, want %q", got.ID, "delivery-1")
+	}
+	if got.Repo != "owner/repo" {
+		t.Errorf("Repo = %q, want %q", got.Repo, "owner/repo")
+	}
+	if got.Kind != "issues.labeled" {
+		t.Errorf("Kind = %q, want %q", got.Kind, "issues.labeled")
+	}
+	if got.Number != 42 {
+		t.Errorf("Number = %d, want 42", got.Number)
+	}
+	if !got.At.Equal(at) {
+		t.Errorf("At = %v, want %v", got.At, at)
+	}
+
+	// Verify SSE fan-out: message should be available immediately because
+	// SSEHub.Publish sends synchronously to the buffered subscriber channels.
+	select {
+	case msg := <-ch:
+		if !strings.HasPrefix(string(msg), "data: ") {
+			t.Fatalf("SSE message should start with \"data: \", got %q", msg)
+		}
+	default:
+		t.Fatal("want SSE message, got nothing")
+	}
+}
+
+// TestStoreRecordEventSSEUsesLowercaseJSON is a regression guard for the
+// SSE/REST field-name mismatch: TimestampedEvent must serialize with the same
+// lowercase JSON keys that apiEventJSON uses, so the dashboard EventSource
+// handler can parse both streams with the same client-side Event interface.
+func TestStoreRecordEventSSEUsesLowercaseJSON(t *testing.T) {
+	t.Parallel()
+	s := observe.NewStore()
+
+	ch := s.EventsSSE.Subscribe()
+	defer s.EventsSSE.Unsubscribe(ch)
+
+	s.RecordEvent(time.Now(), workflow.Event{
+		ID:     "evt-lc",
+		Repo:   workflow.RepoRef{FullName: "owner/repo"},
+		Kind:   "push",
+		Number: 0,
+		Actor:  "bot",
+	})
+
+	var msg []byte
+	select {
+	case msg = <-ch:
+	default:
+		t.Fatal("want SSE message, got nothing")
+	}
+
+	// Strip the "data: " prefix and trailing "\n\n", then unmarshal into a raw
+	// map so we can inspect the actual JSON key names.
+	raw := strings.TrimPrefix(string(msg), "data: ")
+	raw = strings.TrimSuffix(raw, "\n\n")
+	var fields map[string]any
+	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+		t.Fatalf("unmarshal SSE payload: %v", err)
+	}
+
+	for _, key := range []string{"at", "id", "repo", "kind", "number", "actor"} {
+		if _, ok := fields[key]; !ok {
+			t.Errorf("SSE payload missing lowercase key %q; got keys: %v", key, mapKeys(fields))
+		}
+	}
+	// Ensure no uppercase duplicates leaked through.
+	for _, key := range []string{"At", "ID", "Repo", "Kind", "Number", "Actor"} {
+		if _, ok := fields[key]; ok {
+			t.Errorf("SSE payload contains unexpected uppercase key %q", key)
+		}
+	}
+}
+
+// ─── Store.RecordSpan ─────────────────────────────────────────────────────────
+
+// TestStoreRecordSpanAddsToBufferAndPublishesToSSE verifies that RecordSpan
+// both stores the span in the trace ring buffer and fans it out to TracesSSE.
+func TestStoreRecordSpanAddsToBufferAndPublishesToSSE(t *testing.T) {
+	t.Parallel()
+	s := observe.NewStore()
+
+	ch := s.TracesSSE.Subscribe()
+	defer s.TracesSSE.Unsubscribe(ch)
+
+	start := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Second)
+	s.RecordSpan(
+		"span-1", "root-1", "",
+		"coder", "claude",
+		"owner/repo", "issues.labeled", "",
+		7, 0,
+		50, 3, "all done",
+		start, end,
+		"success", "",
+	)
+
+	// Verify ring buffer.
+	spans := s.Traces.List()
+	if len(spans) != 1 {
+		t.Fatalf("want 1 span, got %d", len(spans))
+	}
+	sp := spans[0]
+	if sp.SpanID != "span-1" {
+		t.Errorf("SpanID = %q, want %q", sp.SpanID, "span-1")
+	}
+	if sp.Agent != "coder" {
+		t.Errorf("Agent = %q, want %q", sp.Agent, "coder")
+	}
+	if sp.DurationMs != 5000 {
+		t.Errorf("DurationMs = %d, want 5000", sp.DurationMs)
+	}
+	if sp.Status != "success" {
+		t.Errorf("Status = %q, want %q", sp.Status, "success")
+	}
+
+	// Verify SSE fan-out.
+	select {
+	case msg := <-ch:
+		if !strings.HasPrefix(string(msg), "data: ") {
+			t.Fatalf("SSE message should start with \"data: \", got %q", msg)
+		}
+	default:
+		t.Fatal("want SSE message on TracesSSE, got nothing")
+	}
+}
+
+// ─── Store.RecordDispatch ─────────────────────────────────────────────────────
+
+// TestStoreRecordDispatchRecordsInGraph verifies that RecordDispatch delegates
+// to the InteractionGraph and the edge is visible via Graph.Edges().
+func TestStoreRecordDispatchRecordsInGraph(t *testing.T) {
+	t.Parallel()
+	s := observe.NewStore()
+
+	s.RecordDispatch("coder", "reviewer", "owner/repo", 42, "needs review")
+
+	edges := s.Graph.Edges()
+	if len(edges) != 1 {
+		t.Fatalf("want 1 edge, got %d", len(edges))
+	}
+	e := edges[0]
+	if e.From != "coder" || e.To != "reviewer" {
+		t.Errorf("edge = %q → %q, want %q → %q", e.From, e.To, "coder", "reviewer")
+	}
+	if e.Count != 1 {
+		t.Errorf("Count = %d, want 1", e.Count)
+	}
+	if len(e.Dispatches) != 1 {
+		t.Fatalf("want 1 dispatch record, got %d", len(e.Dispatches))
+	}
+	d := e.Dispatches[0]
+	if d.Repo != "owner/repo" || d.Number != 42 || d.Reason != "needs review" {
+		t.Errorf("dispatch record = %+v, unexpected", d)
+	}
+}
+
+// mapKeys returns the sorted keys of a map for use in error messages.
+func mapKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
