@@ -36,6 +36,24 @@ func openCRUDTestServer(t *testing.T) *Server {
 	return s
 }
 
+// seedStoreBackend inserts a minimal backend into the server's store directly
+// so that subsequent agent upserts that reference it pass cross-ref validation.
+func seedStoreBackend(t *testing.T, s *Server, name string) {
+	t.Helper()
+	b := config.AIBackendConfig{Command: name, Args: []string{}, Env: map[string]string{}}
+	if err := store.UpsertBackend(s.db, name, b); err != nil {
+		t.Fatalf("seedStoreBackend %s: %v", name, err)
+	}
+}
+
+// seedStoreSkill inserts a minimal skill into the server's store directly.
+func seedStoreSkill(t *testing.T, s *Server, name string) {
+	t.Helper()
+	if err := store.UpsertSkill(s.db, name, config.SkillDef{Prompt: "skill prompt"}); err != nil {
+		t.Fatalf("seedStoreSkill %s: %v", name, err)
+	}
+}
+
 func doCRUDRequest(t *testing.T, s *Server, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var buf bytes.Buffer
@@ -88,6 +106,16 @@ func TestStoreCRUDAgentCreateAndGet(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
+	seedStoreBackend(t, s, "claude")
+	seedStoreSkill(t, s, "architect")
+	// "pr-reviewer" must exist for can_dispatch validation.
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "pr-reviewer", "backend": "claude", "prompt": "review code",
+		"description": "a reviewer agent", "skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed pr-reviewer agent: got %d — %s", rr.Code, rr.Body.String())
+	}
+
 	payload := map[string]any{
 		"name":           "coder",
 		"backend":        "claude",
@@ -105,7 +133,7 @@ func TestStoreCRUDAgentCreateAndGet(t *testing.T) {
 		t.Fatalf("POST /api/store/agents: got %d, want 200 — %s", rr.Code, rr.Body.String())
 	}
 
-	// GET list — should have one entry
+	// GET list — should have two entries: pr-reviewer (seeded) + coder.
 	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/agents", nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET /api/store/agents: got %d", rr.Code)
@@ -114,11 +142,15 @@ func TestStoreCRUDAgentCreateAndGet(t *testing.T) {
 	if err := json.NewDecoder(rr.Body).Decode(&agents); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
-	if len(agents) != 1 {
-		t.Fatalf("list: got %d, want 1", len(agents))
+	var found bool
+	for _, a := range agents {
+		if a["name"] == "coder" {
+			found = true
+			break
+		}
 	}
-	if agents[0]["name"] != "coder" {
-		t.Errorf("name: got %v", agents[0]["name"])
+	if !found {
+		t.Errorf("coder not found in agent list: %v", agents)
 	}
 
 	// GET single
@@ -142,6 +174,7 @@ func TestStoreCRUDAgentDelete(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
+	seedStoreBackend(t, s, "claude")
 	payload := map[string]any{
 		"name": "coder", "backend": "claude", "prompt": "p",
 		"skills": []string{}, "can_dispatch": []string{},
@@ -240,11 +273,14 @@ func TestStoreCRUDRepoCreateAndDelete(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
+	seedStoreBackend(t, s, "claude")
 	// First create the agent that the binding references.
-	doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
 		"name": "coder", "backend": "claude", "prompt": "p",
 		"skills": []string{}, "can_dispatch": []string{},
-	})
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed coder agent: got %d — %s", rr.Code, rr.Body.String())
+	}
 
 	enabled := true
 	rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
@@ -360,12 +396,16 @@ func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
 		method string
 		path   string
 		body   any
+		setup  func(t *testing.T, s *Server)
 	}{
 		{
 			name:   "POST agent",
 			method: http.MethodPost,
 			path:   "/api/store/agents",
 			body:   map[string]any{"name": "agent-x", "backend": "claude", "prompt": "x"},
+			// Seed the backend so cross-ref validation passes and the test
+			// genuinely exercises reload failure, not validation failure.
+			setup: func(t *testing.T, s *Server) { seedStoreBackend(t, s, "claude") },
 		},
 		{
 			name:   "DELETE agent",
@@ -391,6 +431,9 @@ func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			s := openCRUDTestServerWithReloader(t, reloader)
+			if tc.setup != nil {
+				tc.setup(t, s)
+			}
 			rr := doCRUDRequest(t, s, tc.method, tc.path, tc.body)
 			if rr.Code != http.StatusInternalServerError {
 				t.Errorf("%s %s: want 500 on reload failure, got %d: %s",
@@ -585,6 +628,8 @@ func TestConcurrentWriteReloadSerialisation(t *testing.T) {
 	reloader := &countingCronReloader{}
 	s := openCRUDTestServerWithReloader(t, reloader)
 
+	seedStoreBackend(t, s, "claude")
+
 	const n = 20
 	var wg sync.WaitGroup
 	wg.Add(n)
@@ -620,5 +665,76 @@ func TestConcurrentWriteReloadSerialisation(t *testing.T) {
 	reloader.mu.Unlock()
 	if lastCount != n {
 		t.Errorf("last Reload snapshot had %d agents, expected %d (stale snapshot overwrote a newer one)", lastCount, n)
+	}
+}
+
+// ── Cross-ref validation ──────────────────────────────────────────────────────
+
+// TestStoreCRUDAgentRejectedWithUnknownBackend verifies that creating an agent
+// that references a backend not present in the store is rejected.
+func TestStoreCRUDAgentRejectedWithUnknownBackend(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	// No backend seeded — "claude" is unknown.
+	rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "p",
+		"skills": []string{}, "can_dispatch": []string{},
+	})
+	if rr.Code == http.StatusOK {
+		t.Errorf("POST agent with unknown backend: want non-200, got 200")
+	}
+}
+
+// TestStoreCRUDDeleteBackendRejectedWhenReferenced verifies that deleting a
+// backend still referenced by an agent is rejected and leaves the backend intact.
+func TestStoreCRUDDeleteBackendRejectedWhenReferenced(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	seedStoreBackend(t, s, "claude")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "p",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("create agent: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodDelete, "/api/store/backends/claude", nil)
+	if rr.Code == http.StatusNoContent {
+		t.Error("DELETE backend still referenced by agent: want non-204, got 204")
+	}
+
+	// Backend must still be present.
+	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/backends/claude", nil)
+	if rr.Code != http.StatusOK {
+		t.Errorf("GET backend after rejected delete: got %d, want 200", rr.Code)
+	}
+}
+
+// TestStoreCRUDDeleteSkillRejectedWhenReferenced verifies that deleting a skill
+// still referenced by an agent is rejected and leaves the skill intact.
+func TestStoreCRUDDeleteSkillRejectedWhenReferenced(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	seedStoreBackend(t, s, "claude")
+	seedStoreSkill(t, s, "architect")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "p",
+		"skills": []string{"architect"}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("create agent: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodDelete, "/api/store/skills/architect", nil)
+	if rr.Code == http.StatusNoContent {
+		t.Error("DELETE skill still referenced by agent: want non-204, got 204")
+	}
+
+	// Skill must still be present.
+	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/skills/architect", nil)
+	if rr.Code != http.StatusOK {
+		t.Errorf("GET skill after rejected delete: got %d, want 200", rr.Code)
 	}
 }

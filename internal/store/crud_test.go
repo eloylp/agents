@@ -1,11 +1,32 @@
 package store_test
 
 import (
+	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/store"
 )
+
+// seedBackend inserts a minimal backend into db so that agent upserts that
+// reference it pass cross-ref validation.
+func seedBackend(t *testing.T, db *sql.DB, name string) {
+	t.Helper()
+	b := config.AIBackendConfig{Command: name, Args: []string{}, Env: map[string]string{}}
+	if err := store.UpsertBackend(db, name, b); err != nil {
+		t.Fatalf("seedBackend %s: %v", name, err)
+	}
+}
+
+// seedSkill inserts a minimal skill into db so that agent upserts that
+// reference it pass cross-ref validation.
+func seedSkill(t *testing.T, db *sql.DB, name string) {
+	t.Helper()
+	if err := store.UpsertSkill(db, name, config.SkillDef{Prompt: "skill prompt"}); err != nil {
+		t.Fatalf("seedSkill %s: %v", name, err)
+	}
+}
 
 // ──── Agents ─────────────────────────────────────────────────────────────────
 
@@ -13,6 +34,22 @@ func TestUpsertAndReadAgents(t *testing.T) {
 	t.Parallel()
 	db, cleanup := openTestDB(t)
 	defer cleanup()
+
+	seedBackend(t, db, "claude")
+	seedSkill(t, db, "architect")
+
+	// "pr-reviewer" must exist (with a description) before "coder" can list it
+	// in can_dispatch.
+	if err := store.UpsertAgent(db, config.AgentDef{
+		Name:        "pr-reviewer",
+		Backend:     "claude",
+		Prompt:      "review code",
+		Description: "A code review agent",
+		Skills:      []string{},
+		CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("UpsertAgent pr-reviewer: %v", err)
+	}
 
 	a := config.AgentDef{
 		Name:          "coder",
@@ -32,12 +69,16 @@ func TestUpsertAndReadAgents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadAgents: %v", err)
 	}
-	if len(agents) != 1 {
-		t.Fatalf("ReadAgents: got %d agents, want 1", len(agents))
+	// 2 agents: pr-reviewer (seeded for can_dispatch) + coder.
+	var got *config.AgentDef
+	for i := range agents {
+		if agents[i].Name == "coder" {
+			got = &agents[i]
+			break
+		}
 	}
-	got := agents[0]
-	if got.Name != "coder" {
-		t.Errorf("Name: got %q, want %q", got.Name, "coder")
+	if got == nil {
+		t.Fatalf("ReadAgents: coder not found in %v", agents)
 	}
 	if !got.AllowPRs {
 		t.Error("AllowPRs: want true")
@@ -51,6 +92,8 @@ func TestUpsertAgentIsIdempotent(t *testing.T) {
 	t.Parallel()
 	db, cleanup := openTestDB(t)
 	defer cleanup()
+
+	seedBackend(t, db, "claude")
 
 	a := config.AgentDef{Name: "coder", Backend: "claude", Prompt: "v1", Skills: []string{}, CanDispatch: []string{}}
 	if err := store.UpsertAgent(db, a); err != nil {
@@ -77,6 +120,8 @@ func TestDeleteAgent(t *testing.T) {
 	t.Parallel()
 	db, cleanup := openTestDB(t)
 	defer cleanup()
+
+	seedBackend(t, db, "claude")
 
 	a := config.AgentDef{Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{}}
 	if err := store.UpsertAgent(db, a); err != nil {
@@ -211,6 +256,8 @@ func TestUpsertAndReadRepos(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 
+	seedBackend(t, db, "claude")
+
 	// UpsertRepo requires the agents referenced by bindings to exist.
 	if err := store.UpsertAgent(db, config.AgentDef{
 		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
@@ -260,6 +307,8 @@ func TestUpsertRepoReplacesBindings(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 
+	seedBackend(t, db, "claude")
+
 	if err := store.UpsertAgent(db, config.AgentDef{
 		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
@@ -297,6 +346,8 @@ func TestDeleteRepo(t *testing.T) {
 	t.Parallel()
 	db, cleanup := openTestDB(t)
 	defer cleanup()
+
+	seedBackend(t, db, "claude")
 
 	if err := store.UpsertAgent(db, config.AgentDef{
 		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
@@ -341,6 +392,8 @@ func TestReadSnapshot(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 
+	seedBackend(t, db, "claude")
+
 	// Seed one agent and one repo.
 	a := config.AgentDef{
 		Name:    "coder",
@@ -379,5 +432,182 @@ func TestReadSnapshot(t *testing.T) {
 	}
 	if backends == nil {
 		t.Error("backends: want non-nil map, got nil")
+	}
+}
+
+// ──── Cross-ref validation ────────────────────────────────────────────────────
+
+func TestUpsertAgentRejectedWithUnknownBackend(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	// No backend seeded — "claude" is unknown.
+	err := store.UpsertAgent(db, config.AgentDef{
+		Name:    "coder",
+		Backend: "claude",
+		Prompt:  "p",
+		Skills:  []string{},
+	})
+	if err == nil {
+		t.Fatal("UpsertAgent with unknown backend: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown backend") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestUpsertAgentRejectedWithUnknownSkill(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	seedBackend(t, db, "claude")
+	// "architect" skill not seeded.
+	err := store.UpsertAgent(db, config.AgentDef{
+		Name:    "coder",
+		Backend: "claude",
+		Prompt:  "p",
+		Skills:  []string{"architect"},
+	})
+	if err == nil {
+		t.Fatal("UpsertAgent with unknown skill: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown skill") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestUpsertRepoRejectedWithUnknownAgent(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	// No agent seeded — binding references "ghost". The FK constraint on
+	// bindings.agent may fire first, or validateCrossRefs catches it; either
+	// way an error must be returned and nothing must be committed.
+	err := store.UpsertRepo(db, config.RepoDef{
+		Name:    "owner/repo",
+		Enabled: true,
+		Use:     []config.Binding{{Agent: "ghost", Labels: []string{"ai:fix"}}},
+	})
+	if err == nil {
+		t.Fatal("UpsertRepo with unknown agent binding: want error, got nil")
+	}
+
+	// Verify the repo was not committed.
+	repos, readErr := store.ReadRepos(db)
+	if readErr != nil {
+		t.Fatalf("ReadRepos: %v", readErr)
+	}
+	if len(repos) != 0 {
+		t.Errorf("repo was committed despite invalid binding: %v", repos)
+	}
+}
+
+func TestDeleteBackendRejectedWhenAgentReferences(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	seedBackend(t, db, "claude")
+	if err := store.UpsertAgent(db, config.AgentDef{
+		Name:    "coder",
+		Backend: "claude",
+		Prompt:  "p",
+		Skills:  []string{},
+	}); err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
+	}
+
+	// Deleting "claude" while "coder" references it must fail.
+	err := store.DeleteBackend(db, "claude")
+	if err == nil {
+		t.Fatal("DeleteBackend still referenced by agent: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown backend") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+
+	// Backend must still be present.
+	backends, readErr := store.ReadBackends(db)
+	if readErr != nil {
+		t.Fatalf("ReadBackends: %v", readErr)
+	}
+	if _, ok := backends["claude"]; !ok {
+		t.Error("backend was deleted despite being still referenced")
+	}
+}
+
+func TestDeleteSkillRejectedWhenAgentReferences(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	seedBackend(t, db, "claude")
+	seedSkill(t, db, "architect")
+	if err := store.UpsertAgent(db, config.AgentDef{
+		Name:    "coder",
+		Backend: "claude",
+		Prompt:  "p",
+		Skills:  []string{"architect"},
+	}); err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
+	}
+
+	// Deleting "architect" while "coder" references it must fail.
+	err := store.DeleteSkill(db, "architect")
+	if err == nil {
+		t.Fatal("DeleteSkill still referenced by agent: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown skill") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+
+	// Skill must still be present.
+	skills, readErr := store.ReadSkills(db)
+	if readErr != nil {
+		t.Fatalf("ReadSkills: %v", readErr)
+	}
+	if _, ok := skills["architect"]; !ok {
+		t.Error("skill was deleted despite being still referenced")
+	}
+}
+
+func TestDeleteAgentRejectedWhenDispatchListReferences(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	seedBackend(t, db, "claude")
+
+	// Seed two agents: "dispatcher" can_dispatch to "target".
+	if err := store.UpsertAgent(db, config.AgentDef{
+		Name:        "target",
+		Backend:     "claude",
+		Prompt:      "p",
+		Description: "a dispatchable target",
+		Skills:      []string{},
+		CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("UpsertAgent target: %v", err)
+	}
+	if err := store.UpsertAgent(db, config.AgentDef{
+		Name:        "dispatcher",
+		Backend:     "claude",
+		Prompt:      "p",
+		Skills:      []string{},
+		CanDispatch: []string{"target"},
+	}); err != nil {
+		t.Fatalf("UpsertAgent dispatcher: %v", err)
+	}
+
+	// Deleting "target" while "dispatcher" lists it in can_dispatch must fail.
+	err := store.DeleteAgent(db, "target")
+	if err == nil {
+		t.Fatal("DeleteAgent still in can_dispatch list: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "can_dispatch") {
+		t.Errorf("unexpected error message: %v", err)
 	}
 }

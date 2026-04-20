@@ -252,6 +252,63 @@ func (b Binding) IsLabel() bool { return len(b.Labels) > 0 }
 // IsEvent reports whether this binding is event-triggered (via the events: field).
 func (b Binding) IsEvent() bool { return len(b.Events) > 0 }
 
+// ValidateCrossRefs checks cross-entity reference consistency across the four
+// mutable entity sets. It is called by the SQLite CRUD layer after each write
+// (within the same transaction) so that invalid fleet configurations cannot be
+// committed to the database.
+//
+// Specifically it verifies:
+//   - every agent references a known backend (unless "auto") and known skills
+//   - dispatch wiring (can_dispatch) references existing agents with descriptions
+//   - every repo binding references a known agent
+func ValidateCrossRefs(agents []AgentDef, repos []RepoDef, skills map[string]SkillDef, backends map[string]AIBackendConfig) error {
+	agentByName := make(map[string]AgentDef, len(agents))
+	for _, a := range agents {
+		agentByName[a.Name] = a
+	}
+
+	// Validate agent → backend and skill references.
+	for _, a := range agents {
+		if a.Backend != "auto" {
+			if _, ok := backends[a.Backend]; !ok {
+				return fmt.Errorf("config: agent %q: unknown backend %q", a.Name, a.Backend)
+			}
+		}
+		for _, s := range a.Skills {
+			if _, ok := skills[s]; !ok {
+				return fmt.Errorf("config: agent %q: unknown skill %q", a.Name, s)
+			}
+		}
+	}
+
+	// Validate can_dispatch wiring.
+	for _, a := range agents {
+		for _, t := range a.CanDispatch {
+			target, ok := agentByName[t]
+			if !ok {
+				return fmt.Errorf("config: agent %q: can_dispatch references unknown agent %q", a.Name, t)
+			}
+			if t == a.Name {
+				return fmt.Errorf("config: agent %q: can_dispatch must not include itself", a.Name)
+			}
+			if target.Description == "" {
+				return fmt.Errorf("config: agent %q is in a can_dispatch list but has no description (description is required for dispatch targets)", t)
+			}
+		}
+	}
+
+	// Validate repo binding → agent references.
+	for _, r := range repos {
+		for i, b := range r.Use {
+			if _, ok := agentByName[b.Agent]; !ok {
+				return fmt.Errorf("config: repo %q: binding #%d references unknown agent %q", r.Name, i, b.Agent)
+			}
+		}
+	}
+
+	return nil
+}
+
 // FinishLoad applies defaults, normalization, secret resolution, and
 // validation to a Config that was populated by means other than Load (e.g.
 // read from the SQLite store). It does NOT attempt to resolve prompt_file

@@ -7,6 +7,36 @@ import (
 	"github.com/eloylp/agents/internal/config"
 )
 
+// validateCrossRefs reads all mutable entity tables through q (a *sql.Tx in
+// practice, so reads see the pending transaction state) and verifies that the
+// post-mutation snapshot is free of dangling cross-entity references. If q is
+// a *sql.Tx and validation fails, the caller must roll back the transaction to
+// prevent the invalid state from reaching SQLite.
+func validateCrossRefs(q querier) error {
+	var cfg config.Config
+	if err := loadBackends(q, &cfg); err != nil {
+		return err
+	}
+	if err := loadSkills(q, &cfg); err != nil {
+		return err
+	}
+	if err := loadAgents(q, &cfg); err != nil {
+		return err
+	}
+	if err := loadRepos(q, &cfg); err != nil {
+		return err
+	}
+	backends := cfg.Daemon.AIBackends
+	if backends == nil {
+		backends = map[string]config.AIBackendConfig{}
+	}
+	skills := cfg.Skills
+	if skills == nil {
+		skills = map[string]config.SkillDef{}
+	}
+	return config.ValidateCrossRefs(cfg.Agents, cfg.Repos, skills, backends)
+}
+
 // ──── Agents ─────────────────────────────────────────────────────────────────
 
 // ReadAgents returns all agents from the database, ordered by name.
@@ -28,16 +58,28 @@ func UpsertAgent(db *sql.DB, a config.AgentDef) error {
 	if err := importAgents(tx, []config.AgentDef{a}); err != nil {
 		return err
 	}
+	if err := validateCrossRefs(tx); err != nil {
+		return fmt.Errorf("store: upsert agent %s: %w", a.Name, err)
+	}
 	return tx.Commit()
 }
 
 // DeleteAgent removes the agent with the given name. It is not an error to
-// delete a name that does not exist.
+// delete a name that does not exist. Returns an error if the agent is still
+// referenced by any repo binding or can_dispatch list.
 func DeleteAgent(db *sql.DB, name string) error {
-	if _, err := db.Exec("DELETE FROM agents WHERE name=?", name); err != nil {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: delete agent %s: begin: %w", name, err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("DELETE FROM agents WHERE name=?", name); err != nil {
 		return fmt.Errorf("store: delete agent %s: %w", name, err)
 	}
-	return nil
+	if err := validateCrossRefs(tx); err != nil {
+		return fmt.Errorf("store: delete agent %s: %w", name, err)
+	}
+	return tx.Commit()
 }
 
 // ──── Skills ─────────────────────────────────────────────────────────────────
@@ -67,12 +109,21 @@ func UpsertSkill(db *sql.DB, name string, s config.SkillDef) error {
 	return tx.Commit()
 }
 
-// DeleteSkill removes the skill with the given name.
+// DeleteSkill removes the skill with the given name. Returns an error if any
+// agent still references the skill.
 func DeleteSkill(db *sql.DB, name string) error {
-	if _, err := db.Exec("DELETE FROM skills WHERE name=?", name); err != nil {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: delete skill %s: begin: %w", name, err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("DELETE FROM skills WHERE name=?", name); err != nil {
 		return fmt.Errorf("store: delete skill %s: %w", name, err)
 	}
-	return nil
+	if err := validateCrossRefs(tx); err != nil {
+		return fmt.Errorf("store: delete skill %s: %w", name, err)
+	}
+	return tx.Commit()
 }
 
 // ──── Backends ───────────────────────────────────────────────────────────────
@@ -102,12 +153,21 @@ func UpsertBackend(db *sql.DB, name string, b config.AIBackendConfig) error {
 	return tx.Commit()
 }
 
-// DeleteBackend removes the backend with the given name.
+// DeleteBackend removes the backend with the given name. Returns an error if
+// any agent still references the backend.
 func DeleteBackend(db *sql.DB, name string) error {
-	if _, err := db.Exec("DELETE FROM backends WHERE name=?", name); err != nil {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: delete backend %s: begin: %w", name, err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("DELETE FROM backends WHERE name=?", name); err != nil {
 		return fmt.Errorf("store: delete backend %s: %w", name, err)
 	}
-	return nil
+	if err := validateCrossRefs(tx); err != nil {
+		return fmt.Errorf("store: delete backend %s: %w", name, err)
+	}
+	return tx.Commit()
 }
 
 // ReadSnapshot returns agents, repos, skills, and backends as a consistent
@@ -166,6 +226,9 @@ func UpsertRepo(db *sql.DB, r config.RepoDef) error {
 	defer tx.Rollback()
 	if err := importRepos(tx, []config.RepoDef{r}); err != nil {
 		return err
+	}
+	if err := validateCrossRefs(tx); err != nil {
+		return fmt.Errorf("store: upsert repo %s: %w", r.Name, err)
 	}
 	return tx.Commit()
 }
