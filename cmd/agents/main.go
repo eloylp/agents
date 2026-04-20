@@ -20,6 +20,7 @@ import (
 	"github.com/eloylp/agents/internal/logging"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/setup"
+	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/ui"
 	"github.com/eloylp/agents/internal/webhook"
 	"github.com/eloylp/agents/internal/workflow"
@@ -46,11 +47,13 @@ func run() error {
 	_ = godotenv.Load()
 
 	configPath := flag.String("config", "config.yaml", "path to config file")
+	dbPath := flag.String("db", "", "path to SQLite database file (alternative to --config)")
+	importPath := flag.String("import", "", "YAML config file to import into the database (requires --db)")
 	runAgent := flag.String("run-agent", "", "run a single autonomous agent pass and exit (requires --repo)")
 	runRepo := flag.String("repo", "", "repo to target when using --run-agent (e.g. owner/repo)")
 	flag.Parse()
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := loadConfig(*configPath, *dbPath, *importPath)
 	if err != nil {
 		return err
 	}
@@ -178,6 +181,48 @@ func setupRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runne
 func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, logger zerolog.Logger) (*autonomous.Scheduler, error) {
 	memoryStore := autonomous.NewMemoryStore(cfg.Daemon.MemoryDir)
 	return autonomous.NewScheduler(cfg, runners, memoryStore, logger)
+}
+
+// loadConfig loads the daemon configuration either from a YAML file (legacy
+// path) or from a SQLite database. When dbPath is set:
+//   - If importPath is also set, the YAML at importPath is parsed and written
+//     into the database before loading.
+//   - The config is then read from the database.
+//
+// When dbPath is empty, configPath is used (default behaviour).
+func loadConfig(configPath, dbPath, importPath string) (*config.Config, error) {
+	if importPath != "" && dbPath == "" {
+		return nil, fmt.Errorf("--import requires --db")
+	}
+	if dbPath == "" {
+		return config.Load(configPath)
+	}
+	db, err := store.Open(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	if importPath != "" {
+		yamlCfg, err := config.Load(importPath)
+		if err != nil {
+			return nil, fmt.Errorf("import: load YAML: %w", err)
+		}
+		if err := store.Import(db, yamlCfg); err != nil {
+			return nil, fmt.Errorf("import: write to database: %w", err)
+		}
+		// Count from the source config so the message reflects exactly what
+		// was written, not a potentially stale whole-table count.
+		nBindings := 0
+		for _, r := range yamlCfg.Repos {
+			nBindings += len(r.Use)
+		}
+		fmt.Fprintf(os.Stderr, "import: imported %d backends, %d skills, %d agents, %d repos, %d bindings\n",
+			len(yamlCfg.Daemon.AIBackends), len(yamlCfg.Skills),
+			len(yamlCfg.Agents), len(yamlCfg.Repos), nBindings)
+	}
+
+	return store.LoadAndValidate(db)
 }
 
 // schedulerStatusAdapter adapts *autonomous.Scheduler to webhook.StatusProvider,

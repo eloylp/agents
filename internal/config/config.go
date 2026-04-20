@@ -252,6 +252,21 @@ func (b Binding) IsLabel() bool { return len(b.Labels) > 0 }
 // IsEvent reports whether this binding is event-triggered (via the events: field).
 func (b Binding) IsEvent() bool { return len(b.Events) > 0 }
 
+// FinishLoad applies defaults, normalization, secret resolution, and
+// validation to a Config that was populated by means other than Load (e.g.
+// read from the SQLite store). It does NOT attempt to resolve prompt_file
+// references — callers are expected to have already populated cfg.Agents and
+// cfg.Skills with inline prompt text.
+func FinishLoad(cfg *Config) (*Config, error) {
+	cfg.applyDefaults()
+	cfg.normalize()
+	cfg.resolveSecrets()
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
 // Load reads, parses, validates, and resolves a config file at the given
 // path. Prompt files referenced by PromptFile fields are read eagerly;
 // any I/O or validation error is reported here.
