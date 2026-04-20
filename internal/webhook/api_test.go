@@ -1159,28 +1159,32 @@ func TestHandleAPIMemoryRejectsMultiSegmentTraversal(t *testing.T) {
 	handler := srv.requireAPIKey(http.HandlerFunc(srv.handleAPIMemory))
 
 	cases := []struct {
+		name  string
 		agent string
 		repo  string
 	}{
 		// repo segment tries to walk above memDir
-		{agent: "coder", repo: "../../../../secret"},
+		{name: "repo segment walks above memDir", agent: "coder", repo: "../../../../secret"},
 		// agent segment tries to walk above memDir
-		{agent: "../../../..", repo: "secret"},
+		{name: "agent segment walks above memDir", agent: "../../../..", repo: "secret"},
 		// both segments combined escape the root
-		{agent: "../..", repo: "../../secret"},
+		{name: "combined segments escape the root", agent: "../..", repo: "../../secret"},
 	}
 	for _, tc := range cases {
-		req := httptest.NewRequest(http.MethodGet, "/api/memory/"+tc.agent+"/"+tc.repo, nil)
-		req = mux.SetURLVars(req, map[string]string{"agent": tc.agent, "repo": tc.repo})
-		req.Header.Set("Authorization", "Bearer "+testAPIKey)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		if rec.Code == http.StatusOK {
-			t.Fatalf("agent=%q repo=%q: traversal not rejected (got 200)", tc.agent, tc.repo)
-		}
-		if rec.Body.String() == "top-secret" {
-			t.Fatalf("agent=%q repo=%q: secret file content was served", tc.agent, tc.repo)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := httptest.NewRequest(http.MethodGet, "/api/memory/"+tc.agent+"/"+tc.repo, nil)
+			req = mux.SetURLVars(req, map[string]string{"agent": tc.agent, "repo": tc.repo})
+			req.Header.Set("Authorization", "Bearer "+testAPIKey)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code == http.StatusOK {
+				t.Fatalf("agent=%q repo=%q: traversal not rejected (got 200)", tc.agent, tc.repo)
+			}
+			if rec.Body.String() == "top-secret" {
+				t.Fatalf("agent=%q repo=%q: secret file content was served", tc.agent, tc.repo)
+			}
+		})
 	}
 }
 
