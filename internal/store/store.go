@@ -40,6 +40,10 @@ func Open(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
+	// SQLite is single-writer; a pool size of 1 ensures that the
+	// PRAGMA foreign_keys=ON issued below applies to the one connection
+	// that the pool will ever use.
+	db.SetMaxOpenConns(1)
 	// Use WAL mode for better concurrent read performance.
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		db.Close()
@@ -639,5 +643,184 @@ func LoadAndValidate(db *sql.DB) (*config.Config, error) {
 		return nil, err
 	}
 	return config.FinishLoad(cfg)
+}
+
+// ── Write API ───────────────────────────────────────────────────────────────
+//
+// Each Put* function performs an FK-safe upsert using INSERT … ON CONFLICT DO
+// UPDATE rather than INSERT OR REPLACE (which deletes + re-inserts the row and
+// would violate FK constraints on child tables such as bindings).
+//
+// Each Delete* function removes the named row. Callers must remove FK-dependent
+// children (e.g. bindings) before deleting a repo or agent.
+
+// PutAgent creates or updates an agent definition in the database. The agent
+// record is upserted in-place, so any bindings that reference it are preserved.
+func PutAgent(db *sql.DB, a config.AgentDef) error {
+	skills, err := json.Marshal(a.Skills)
+	if err != nil {
+		return fmt.Errorf("store put agent %s: marshal skills: %w", a.Name, err)
+	}
+	canDispatch, err := json.Marshal(a.CanDispatch)
+	if err != nil {
+		return fmt.Errorf("store put agent %s: marshal can_dispatch: %w", a.Name, err)
+	}
+	_, err = db.Exec(`
+		INSERT INTO agents(name,backend,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description)
+		VALUES (?,?,?,?,?,?,?,?)
+		ON CONFLICT(name) DO UPDATE SET
+		  backend=excluded.backend,
+		  skills=excluded.skills,
+		  prompt=excluded.prompt,
+		  allow_prs=excluded.allow_prs,
+		  allow_dispatch=excluded.allow_dispatch,
+		  can_dispatch=excluded.can_dispatch,
+		  description=excluded.description`,
+		a.Name, a.Backend, string(skills), a.Prompt,
+		boolToInt(a.AllowPRs), boolToInt(a.AllowDispatch),
+		string(canDispatch), a.Description,
+	)
+	if err != nil {
+		return fmt.Errorf("store put agent %s: %w", a.Name, err)
+	}
+	return nil
+}
+
+// DeleteAgent removes an agent by name. All bindings that reference this agent
+// must be deleted first; otherwise a FK violation is returned.
+func DeleteAgent(db *sql.DB, name string) error {
+	_, err := db.Exec("DELETE FROM agents WHERE name=?", name)
+	if err != nil {
+		return fmt.Errorf("store delete agent %s: %w", name, err)
+	}
+	return nil
+}
+
+// PutSkill creates or updates a skill definition.
+func PutSkill(db *sql.DB, name string, s config.SkillDef) error {
+	_, err := db.Exec(`
+		INSERT INTO skills(name,prompt) VALUES (?,?)
+		ON CONFLICT(name) DO UPDATE SET prompt=excluded.prompt`,
+		name, s.Prompt,
+	)
+	if err != nil {
+		return fmt.Errorf("store put skill %s: %w", name, err)
+	}
+	return nil
+}
+
+// DeleteSkill removes a skill by name.
+func DeleteSkill(db *sql.DB, name string) error {
+	_, err := db.Exec("DELETE FROM skills WHERE name=?", name)
+	if err != nil {
+		return fmt.Errorf("store delete skill %s: %w", name, err)
+	}
+	return nil
+}
+
+// PutBackend creates or updates an AI backend definition.
+func PutBackend(db *sql.DB, name string, b config.AIBackendConfig) error {
+	args, err := json.Marshal(b.Args)
+	if err != nil {
+		return fmt.Errorf("store put backend %s: marshal args: %w", name, err)
+	}
+	env, err := json.Marshal(b.Env)
+	if err != nil {
+		return fmt.Errorf("store put backend %s: marshal env: %w", name, err)
+	}
+	_, err = db.Exec(`
+		INSERT INTO backends(name,command,args,env,timeout_seconds,max_prompt_chars,redaction_salt_env)
+		VALUES (?,?,?,?,?,?,?)
+		ON CONFLICT(name) DO UPDATE SET
+		  command=excluded.command,
+		  args=excluded.args,
+		  env=excluded.env,
+		  timeout_seconds=excluded.timeout_seconds,
+		  max_prompt_chars=excluded.max_prompt_chars,
+		  redaction_salt_env=excluded.redaction_salt_env`,
+		name, b.Command, string(args), string(env),
+		b.TimeoutSeconds, b.MaxPromptChars, b.RedactionSaltEnv,
+	)
+	if err != nil {
+		return fmt.Errorf("store put backend %s: %w", name, err)
+	}
+	return nil
+}
+
+// DeleteBackend removes a backend by name.
+func DeleteBackend(db *sql.DB, name string) error {
+	_, err := db.Exec("DELETE FROM backends WHERE name=?", name)
+	if err != nil {
+		return fmt.Errorf("store delete backend %s: %w", name, err)
+	}
+	return nil
+}
+
+// PutRepo creates or updates a repo definition. Bindings are not touched by
+// this call; use PutBinding / DeleteBinding to manage them.
+func PutRepo(db *sql.DB, r config.RepoDef) error {
+	_, err := db.Exec(`
+		INSERT INTO repos(name,enabled) VALUES (?,?)
+		ON CONFLICT(name) DO UPDATE SET enabled=excluded.enabled`,
+		r.Name, boolToInt(r.Enabled),
+	)
+	if err != nil {
+		return fmt.Errorf("store put repo %s: %w", r.Name, err)
+	}
+	return nil
+}
+
+// DeleteRepo removes a repo and all of its bindings.
+func DeleteRepo(db *sql.DB, name string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store delete repo %s: begin: %w", name, err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("DELETE FROM bindings WHERE repo=?", name); err != nil {
+		return fmt.Errorf("store delete repo %s: delete bindings: %w", name, err)
+	}
+	if _, err := tx.Exec("DELETE FROM repos WHERE name=?", name); err != nil {
+		return fmt.Errorf("store delete repo %s: %w", name, err)
+	}
+	return tx.Commit()
+}
+
+// PutBinding appends a new binding to a repo. It returns the auto-assigned row
+// ID so callers can reference the new binding in subsequent delete calls.
+func PutBinding(db *sql.DB, repo string, b config.Binding) (int64, error) {
+	labels, err := json.Marshal(b.Labels)
+	if err != nil {
+		return 0, fmt.Errorf("store put binding: marshal labels: %w", err)
+	}
+	events, err := json.Marshal(b.Events)
+	if err != nil {
+		return 0, fmt.Errorf("store put binding: marshal events: %w", err)
+	}
+	enabled := 1
+	if b.Enabled != nil && !*b.Enabled {
+		enabled = 0
+	}
+	res, err := db.Exec(`
+		INSERT INTO bindings(repo,agent,labels,events,cron,enabled) VALUES (?,?,?,?,?,?)`,
+		repo, b.Agent, string(labels), string(events), b.Cron, enabled,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("store put binding repo=%s agent=%s: %w", repo, b.Agent, err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("store put binding: last insert id: %w", err)
+	}
+	return id, nil
+}
+
+// DeleteBinding removes a single binding row by its primary-key ID.
+func DeleteBinding(db *sql.DB, id int64) error {
+	_, err := db.Exec("DELETE FROM bindings WHERE id=?", id)
+	if err != nil {
+		return fmt.Errorf("store delete binding %d: %w", id, err)
+	}
+	return nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -20,6 +22,7 @@ import (
 	anthropicproxy "github.com/eloylp/agents/internal/anthropic_proxy"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -59,7 +62,11 @@ type EventQueue interface {
 }
 
 type Server struct {
-	cfg           *config.Config
+	// cfgPtr holds the current effective config as an atomic pointer so that
+	// write-API handlers can swap it after persisting a change without holding
+	// a coarse lock across all request handlers.
+	cfgPtr        atomic.Pointer[config.Config]
+	db            *sql.DB        // non-nil only when --db is used; enables write API
 	delivery      *DeliveryStore
 	logger        zerolog.Logger
 	channels      EventQueue
@@ -70,6 +77,12 @@ type Server struct {
 	proxy         *anthropicproxy.Handler
 	uiFS          fs.FS          // optional; when set, /ui/ serves these static files
 	observeStore  *observe.Store // optional; when set, enables observability endpoints
+}
+
+// cfg returns the current effective configuration. All request handlers must
+// call this instead of accessing the underlying pointer directly.
+func (s *Server) cfg() *config.Config {
+	return s.cfgPtr.Load()
 }
 
 // WithUI attaches an fs.FS containing the pre-built static UI assets to the
@@ -92,9 +105,35 @@ func (s *Server) WithRuntimeState(rsp RuntimeStateProvider) {
 	s.runtimeState = rsp
 }
 
-func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue, provider StatusProvider, dispatchStats DispatchStatsProvider, logger zerolog.Logger) *Server {
+// WithStore attaches a SQLite database to the server. When set, the server
+// registers CRUD write endpoints under /api/ so the fleet can be managed
+// without restarting the daemon.
+func (s *Server) WithStore(db *sql.DB) {
+	s.db = db
+}
+
+// reloadConfig reloads the structural config from the SQLite database and
+// atomically replaces the server's config pointer. Resolved runtime secrets
+// (webhook secret, API key, proxy API key) are not stored in the database —
+// they are carried forward from the current live config so they remain valid
+// without requiring a re-read of environment variables.
+func (s *Server) reloadConfig() error {
+	cfg, err := store.Load(s.db)
+	if err != nil {
+		return err
+	}
+	// Preserve secrets that were resolved from env vars at startup; they cannot
+	// change at runtime and are not stored in SQLite.
+	live := s.cfgPtr.Load()
+	cfg.Daemon.HTTP.WebhookSecret = live.Daemon.HTTP.WebhookSecret
+	cfg.Daemon.HTTP.APIKey = live.Daemon.HTTP.APIKey
+	cfg.Daemon.Proxy.Upstream.APIKey = live.Daemon.Proxy.Upstream.APIKey
+	s.cfgPtr.Store(cfg)
+	return nil
+}
+
+func NewServer(initialCfg *config.Config, delivery *DeliveryStore, channels EventQueue, provider StatusProvider, dispatchStats DispatchStatsProvider, logger zerolog.Logger) *Server {
 	s := &Server{
-		cfg:           cfg,
 		delivery:      delivery,
 		logger:        logger.With().Str("component", "webhook_server").Logger(),
 		channels:      channels,
@@ -102,8 +141,9 @@ func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue,
 		dispatchStats: dispatchStats,
 		startTime:     time.Now(),
 	}
-	if cfg.Daemon.Proxy.Enabled {
-		up := cfg.Daemon.Proxy.Upstream
+	s.cfgPtr.Store(initialCfg)
+	if initialCfg.Daemon.Proxy.Enabled {
+		up := initialCfg.Daemon.Proxy.Upstream
 		s.proxy = anthropicproxy.NewHandler(anthropicproxy.UpstreamConfig{
 			URL:       up.URL,
 			Model:     up.Model,
@@ -125,7 +165,7 @@ func (s *Server) buildHandler() http.Handler {
 	// deadline and is still set in Run(). SSE handlers clear that write
 	// deadline for themselves via http.ResponseController.SetWriteDeadline so
 	// they can stream indefinitely; see serveSSEWithInterval in api.go.
-	writeTimeout := time.Duration(s.cfg.Daemon.HTTP.WriteTimeoutSeconds) * time.Second
+	writeTimeout := time.Duration(s.cfg().Daemon.HTTP.WriteTimeoutSeconds) * time.Second
 	withTimeout := func(h http.Handler) http.Handler {
 		if writeTimeout <= 0 {
 			return h
@@ -134,9 +174,9 @@ func (s *Server) buildHandler() http.Handler {
 	}
 
 	router := mux.NewRouter()
-	router.Handle(s.cfg.Daemon.HTTP.StatusPath, withTimeout(http.HandlerFunc(s.handleStatus))).Methods(http.MethodGet)
-	router.Handle(s.cfg.Daemon.HTTP.WebhookPath, withTimeout(http.HandlerFunc(s.handleGitHubWebhook))).Methods(http.MethodPost)
-	router.Handle(s.cfg.Daemon.HTTP.AgentsRunPath, withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleAgentsRun)))).Methods(http.MethodPost)
+	router.Handle(s.cfg().Daemon.HTTP.StatusPath, withTimeout(http.HandlerFunc(s.handleStatus))).Methods(http.MethodGet)
+	router.Handle(s.cfg().Daemon.HTTP.WebhookPath, withTimeout(http.HandlerFunc(s.handleGitHubWebhook))).Methods(http.MethodPost)
+	router.Handle(s.cfg().Daemon.HTTP.AgentsRunPath, withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleAgentsRun)))).Methods(http.MethodPost)
 	router.Handle("/api/run", withTimeout(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
 
 	// Observability API — read-only endpoints served unauthenticated at the
@@ -163,6 +203,25 @@ func (s *Server) buildHandler() http.Handler {
 		router.HandleFunc("/api/memory/stream", s.handleAPIMemoryStream)           // SSE — no timeout
 	}
 
+	// Write API — only registered when a SQLite database is attached via
+	// WithStore. These endpoints mutate the DB and refresh the server's live
+	// config view; they require the same bearer-token as /agents/run.
+	if s.db != nil {
+		mustWrite := func(h http.Handler) http.Handler {
+			return withTimeout(s.requireAPIKey(h))
+		}
+		router.Handle("/api/agents", mustWrite(http.HandlerFunc(s.handlePutAgent))).Methods(http.MethodPut)
+		router.Handle("/api/agents/{name}", mustWrite(http.HandlerFunc(s.handleDeleteAgent))).Methods(http.MethodDelete)
+		router.Handle("/api/skills", mustWrite(http.HandlerFunc(s.handlePutSkill))).Methods(http.MethodPut)
+		router.Handle("/api/skills/{name}", mustWrite(http.HandlerFunc(s.handleDeleteSkill))).Methods(http.MethodDelete)
+		router.Handle("/api/backends", mustWrite(http.HandlerFunc(s.handlePutBackend))).Methods(http.MethodPut)
+		router.Handle("/api/backends/{name}", mustWrite(http.HandlerFunc(s.handleDeleteBackend))).Methods(http.MethodDelete)
+		router.Handle("/api/repos", mustWrite(http.HandlerFunc(s.handlePutRepo))).Methods(http.MethodPut)
+		router.Handle("/api/repos/{name}", mustWrite(http.HandlerFunc(s.handleDeleteRepo))).Methods(http.MethodDelete)
+		router.Handle("/api/repos/{name}/bindings", mustWrite(http.HandlerFunc(s.handlePutBinding))).Methods(http.MethodPost)
+		router.Handle("/api/repos/{name}/bindings/{id}", mustWrite(http.HandlerFunc(s.handleDeleteBinding))).Methods(http.MethodDelete)
+	}
+
 	// Static UI: served from the embedded dist/ tree when a UI FS is provided.
 	// Unauthenticated — same reasoning as the /api/* routes above.
 	if s.uiFS != nil {
@@ -183,10 +242,10 @@ func (s *Server) buildHandler() http.Handler {
 		// deadline; wrapping it with http.TimeoutHandler would impose a hard
 		// cap shorter than the configured LLM inference timeout and break long
 		// completions.
-		router.Handle(s.cfg.Daemon.Proxy.Path, s.proxy).Methods(http.MethodPost)
+		router.Handle(s.cfg().Daemon.Proxy.Path, s.proxy).Methods(http.MethodPost)
 		// /v1/models is a lightweight stub — wrap it with the standard timeout.
 		router.Handle("/v1/models", withTimeout(http.HandlerFunc(s.proxy.ModelsHandler))).Methods(http.MethodGet)
-		s.logger.Info().Str("path", s.cfg.Daemon.Proxy.Path).Str("upstream", s.cfg.Daemon.Proxy.Upstream.URL).Msg("anthropic proxy enabled")
+		s.logger.Info().Str("path", s.cfg().Daemon.Proxy.Path).Str("upstream", s.cfg().Daemon.Proxy.Upstream.URL).Msg("anthropic proxy enabled")
 	}
 	return router
 }
@@ -195,11 +254,11 @@ func (s *Server) Run(ctx context.Context) error {
 	router := s.buildHandler()
 
 	srv := &http.Server{
-		Addr:         s.cfg.Daemon.HTTP.ListenAddr,
+		Addr:         s.cfg().Daemon.HTTP.ListenAddr,
 		Handler:      router,
-		ReadTimeout:  time.Duration(s.cfg.Daemon.HTTP.ReadTimeoutSeconds) * time.Second,
-		WriteTimeout: time.Duration(s.cfg.Daemon.HTTP.WriteTimeoutSeconds) * time.Second,
-		IdleTimeout:  time.Duration(s.cfg.Daemon.HTTP.IdleTimeoutSeconds) * time.Second,
+		ReadTimeout:  time.Duration(s.cfg().Daemon.HTTP.ReadTimeoutSeconds) * time.Second,
+		WriteTimeout: time.Duration(s.cfg().Daemon.HTTP.WriteTimeoutSeconds) * time.Second,
+		IdleTimeout:  time.Duration(s.cfg().Daemon.HTTP.IdleTimeoutSeconds) * time.Second,
 	}
 
 	// A background goroutine watches for ctx cancellation and triggers HTTP
@@ -208,14 +267,14 @@ func (s *Server) Run(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.Daemon.HTTP.ShutdownTimeoutSeconds)*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg().Daemon.HTTP.ShutdownTimeoutSeconds)*time.Second)
 		defer cancel()
 		errCh <- srv.Shutdown(shutdownCtx)
 	}()
 
-	logEvent := s.logger.Info().Str("addr", s.cfg.Daemon.HTTP.ListenAddr).Str("status_path", s.cfg.Daemon.HTTP.StatusPath).Str("webhook_path", s.cfg.Daemon.HTTP.WebhookPath).Str("agents_run_path", s.cfg.Daemon.HTTP.AgentsRunPath)
+	logEvent := s.logger.Info().Str("addr", s.cfg().Daemon.HTTP.ListenAddr).Str("status_path", s.cfg().Daemon.HTTP.StatusPath).Str("webhook_path", s.cfg().Daemon.HTTP.WebhookPath).Str("agents_run_path", s.cfg().Daemon.HTTP.AgentsRunPath)
 	if s.proxy != nil {
-		logEvent = logEvent.Str("proxy_path", s.cfg.Daemon.Proxy.Path)
+		logEvent = logEvent.Str("proxy_path", s.cfg().Daemon.Proxy.Path)
 	}
 	logEvent.Msg("starting webhook server")
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -230,7 +289,7 @@ func (s *Server) Run(ctx context.Context) error {
 // operators that rely solely on network-level access control.
 func (s *Server) requireAPIKey(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.Daemon.HTTP.APIKey != "" {
+		if s.cfg().Daemon.HTTP.APIKey != "" {
 			authHeader := r.Header.Get("Authorization")
 			const prefix = "Bearer "
 			if !strings.HasPrefix(authHeader, prefix) {
@@ -238,7 +297,7 @@ func (s *Server) requireAPIKey(next http.Handler) http.Handler {
 				return
 			}
 			token := authHeader[len(prefix):]
-			if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Daemon.HTTP.APIKey)) != 1 {
+			if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg().Daemon.HTTP.APIKey)) != 1 {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -292,12 +351,12 @@ type agentsRunRequest struct {
 }
 
 func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Daemon.HTTP.APIKey == "" {
+	if s.cfg().Daemon.HTTP.APIKey == "" {
 		http.Error(w, "endpoint disabled: no API key configured", http.StatusForbidden)
 		return
 	}
 	var req agentsRunRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, s.cfg.Daemon.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, s.cfg().Daemon.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -306,7 +365,7 @@ func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repo, ok := s.cfg.RepoByName(req.Repo)
+	repo, ok := s.cfg().RepoByName(req.Repo)
 	if !ok || !repo.Enabled {
 		http.Error(w, "repo not found or disabled", http.StatusNotFound)
 		return
@@ -346,12 +405,12 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.cfg.Daemon.HTTP.MaxBodyBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.cfg().Daemon.HTTP.MaxBodyBytes))
 	if err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if !verifySignature(body, s.cfg.Daemon.HTTP.WebhookSecret, r.Header.Get("X-Hub-Signature-256")) {
+	if !verifySignature(body, s.cfg().Daemon.HTTP.WebhookSecret, r.Header.Get("X-Hub-Signature-256")) {
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
 	}
@@ -440,7 +499,7 @@ func (s *Server) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, b
 		return
 	}
 
-	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
+	repo, ok := s.cfg().RepoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -502,7 +561,7 @@ func (s *Server) handlePullRequestEvent(ctx context.Context, w http.ResponseWrit
 		return
 	}
 
-	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
+	repo, ok := s.cfg().RepoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -569,7 +628,7 @@ func (s *Server) handleIssueCommentEvent(ctx context.Context, w http.ResponseWri
 		return
 	}
 
-	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
+	repo, ok := s.cfg().RepoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -607,7 +666,7 @@ func (s *Server) handlePullRequestReviewEvent(ctx context.Context, w http.Respon
 		return
 	}
 
-	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
+	repo, ok := s.cfg().RepoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -646,7 +705,7 @@ func (s *Server) handlePullRequestReviewCommentEvent(ctx context.Context, w http
 		return
 	}
 
-	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
+	repo, ok := s.cfg().RepoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -678,7 +737,7 @@ func (s *Server) handlePushEvent(ctx context.Context, w http.ResponseWriter, bod
 		return
 	}
 
-	repo, ok := s.cfg.RepoByName(payload.Repository.FullName)
+	repo, ok := s.cfg().RepoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return

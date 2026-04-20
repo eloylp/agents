@@ -337,3 +337,250 @@ func TestLoadEmptyDatabase(t *testing.T) {
 		t.Fatal("expected error loading from empty database, got nil")
 	}
 }
+
+// ── Write API ──────────────────────────────────────────────────────────────
+
+// TestPutDeleteAgent exercises the PutAgent / DeleteAgent round-trip. An agent
+// written by PutAgent appears in Load results and is gone after DeleteAgent.
+func TestPutDeleteAgent(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	// Prime the database so daemon config is present (Load requires it).
+	if err := store.Import(db, minimalCfg()); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	// Update an existing agent in-place (no FK violation even with bindings).
+	updated := config.AgentDef{
+		Name:    "coder",
+		Backend: "claude",
+		Skills:  []string{"testing"},
+		Prompt:  "Updated prompt.",
+	}
+	if err := store.PutAgent(db, updated); err != nil {
+		t.Fatalf("PutAgent: %v", err)
+	}
+
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("load after put: %v", err)
+	}
+	var found config.AgentDef
+	for _, a := range out.Agents {
+		if a.Name == "coder" {
+			found = a
+		}
+	}
+	if found.Prompt != "Updated prompt." {
+		t.Errorf("updated prompt: got %q, want %q", found.Prompt, "Updated prompt.")
+	}
+	// Bindings must survive the in-place update.
+	if len(out.Repos[0].Use) != 3 {
+		t.Errorf("bindings after update: got %d, want 3", len(out.Repos[0].Use))
+	}
+
+	// Add a new agent with no bindings so it is safe to delete.
+	fresh := config.AgentDef{Name: "temp", Backend: "claude", Prompt: "Temporary."}
+	if err := store.PutAgent(db, fresh); err != nil {
+		t.Fatalf("PutAgent new: %v", err)
+	}
+	if err := store.DeleteAgent(db, "temp"); err != nil {
+		t.Fatalf("DeleteAgent: %v", err)
+	}
+	out2, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("load after delete: %v", err)
+	}
+	for _, a := range out2.Agents {
+		if a.Name == "temp" {
+			t.Error("deleted agent still present in load result")
+		}
+	}
+}
+
+// TestPutDeleteSkill exercises the skill write path.
+func TestPutDeleteSkill(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	if err := store.Import(db, minimalCfg()); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	// Update existing skill.
+	if err := store.PutSkill(db, "architect", config.SkillDef{Prompt: "New architect prompt."}); err != nil {
+		t.Fatalf("PutSkill update: %v", err)
+	}
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if out.Skills["architect"].Prompt != "New architect prompt." {
+		t.Errorf("skill prompt: got %q", out.Skills["architect"].Prompt)
+	}
+
+	// Add then delete a new skill.
+	if err := store.PutSkill(db, "temp-skill", config.SkillDef{Prompt: "Temp."}); err != nil {
+		t.Fatalf("PutSkill new: %v", err)
+	}
+	if err := store.DeleteSkill(db, "temp-skill"); err != nil {
+		t.Fatalf("DeleteSkill: %v", err)
+	}
+	out2, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("load after delete: %v", err)
+	}
+	if _, ok := out2.Skills["temp-skill"]; ok {
+		t.Error("deleted skill still present")
+	}
+}
+
+// TestPutDeleteBackend exercises the backend write path.
+func TestPutDeleteBackend(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	if err := store.Import(db, minimalCfg()); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	newBackend := config.AIBackendConfig{
+		Command:        "codex",
+		Args:           []string{"--model", "gpt-4"},
+		Env:            map[string]string{"OPENAI_API_KEY": "x"},
+		TimeoutSeconds: 300,
+		MaxPromptChars: 8000,
+	}
+	if err := store.PutBackend(db, "codex", newBackend); err != nil {
+		t.Fatalf("PutBackend: %v", err)
+	}
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if b, ok := out.Daemon.AIBackends["codex"]; !ok {
+		t.Error("codex backend not found after put")
+	} else if b.Command != "codex" {
+		t.Errorf("backend command: got %q", b.Command)
+	}
+
+	if err := store.DeleteBackend(db, "codex"); err != nil {
+		t.Fatalf("DeleteBackend: %v", err)
+	}
+	out2, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("load after delete: %v", err)
+	}
+	if _, ok := out2.Daemon.AIBackends["codex"]; ok {
+		t.Error("deleted backend still present")
+	}
+}
+
+// TestPutDeleteRepo exercises repo creation and deletion. DeleteRepo must
+// cascade-delete its bindings.
+func TestPutDeleteRepo(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	if err := store.Import(db, minimalCfg()); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	// Add a new repo.
+	newRepo := config.RepoDef{Name: "owner/other", Enabled: true}
+	if err := store.PutRepo(db, newRepo); err != nil {
+		t.Fatalf("PutRepo: %v", err)
+	}
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("load after put: %v", err)
+	}
+	var foundRepo bool
+	for _, r := range out.Repos {
+		if r.Name == "owner/other" {
+			foundRepo = true
+		}
+	}
+	if !foundRepo {
+		t.Error("new repo not found after put")
+	}
+
+	// Toggle the original repo disabled.
+	if err := store.PutRepo(db, config.RepoDef{Name: "owner/repo", Enabled: false}); err != nil {
+		t.Fatalf("PutRepo update: %v", err)
+	}
+	out2, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("load after update: %v", err)
+	}
+	for _, r := range out2.Repos {
+		if r.Name == "owner/repo" && r.Enabled {
+			t.Error("repo should be disabled after update")
+		}
+	}
+
+	// DeleteRepo must also remove its bindings.
+	if err := store.DeleteRepo(db, "owner/repo"); err != nil {
+		t.Fatalf("DeleteRepo: %v", err)
+	}
+	out3, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("load after delete: %v", err)
+	}
+	for _, r := range out3.Repos {
+		if r.Name == "owner/repo" {
+			t.Error("deleted repo still present")
+		}
+	}
+	counts, _ := store.CountFrom(db)
+	if counts.Bindings != 0 {
+		t.Errorf("bindings not cascade-deleted: got %d", counts.Bindings)
+	}
+}
+
+// TestPutDeleteBinding exercises adding and removing individual bindings.
+func TestPutDeleteBinding(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	if err := store.Import(db, minimalCfg()); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	b := config.Binding{
+		Agent:  "pr-reviewer",
+		Events: []string{"pull_request.opened"},
+	}
+	id, err := store.PutBinding(db, "owner/repo", b)
+	if err != nil {
+		t.Fatalf("PutBinding: %v", err)
+	}
+	if id == 0 {
+		t.Error("PutBinding returned zero ID")
+	}
+
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("load after put: %v", err)
+	}
+	if len(out.Repos[0].Use) != 4 {
+		t.Errorf("bindings after add: got %d, want 4", len(out.Repos[0].Use))
+	}
+
+	if err := store.DeleteBinding(db, id); err != nil {
+		t.Fatalf("DeleteBinding: %v", err)
+	}
+	out2, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("load after delete: %v", err)
+	}
+	if len(out2.Repos[0].Use) != 3 {
+		t.Errorf("bindings after delete: got %d, want 3", len(out2.Repos[0].Use))
+	}
+}

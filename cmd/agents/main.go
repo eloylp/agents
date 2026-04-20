@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -53,9 +54,12 @@ func run() error {
 	runRepo := flag.String("repo", "", "repo to target when using --run-agent (e.g. owner/repo)")
 	flag.Parse()
 
-	cfg, err := loadConfig(*configPath, *dbPath, *importPath)
+	cfg, db, err := loadConfig(*configPath, *dbPath, *importPath)
 	if err != nil {
 		return err
+	}
+	if db != nil {
+		defer db.Close()
 	}
 
 	logger := logging.NewLogger(cfg.Daemon.Log)
@@ -125,6 +129,9 @@ func run() error {
 	server.WithUI(ui.FS)
 	server.WithObserve(obs)
 	server.WithRuntimeState(obs)
+	if db != nil {
+		server.WithStore(db)
+	}
 
 	group, groupCtx := errgroup.WithContext(ctx)
 	deliveryStore.Start(groupCtx)
@@ -188,28 +195,33 @@ func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, logger zer
 //   - If importPath is also set, the YAML at importPath is parsed and written
 //     into the database before loading.
 //   - The config is then read from the database.
+//   - The returned *sql.DB is kept open for the lifetime of the daemon so that
+//     write API endpoints can use it. The caller is responsible for Close.
 //
-// When dbPath is empty, configPath is used (default behaviour).
-func loadConfig(configPath, dbPath, importPath string) (*config.Config, error) {
+// When dbPath is empty, configPath is used (default behaviour) and nil is
+// returned for the DB.
+func loadConfig(configPath, dbPath, importPath string) (*config.Config, *sql.DB, error) {
 	if importPath != "" && dbPath == "" {
-		return nil, fmt.Errorf("--import requires --db")
+		return nil, nil, fmt.Errorf("--import requires --db")
 	}
 	if dbPath == "" {
-		return config.Load(configPath)
+		cfg, err := config.Load(configPath)
+		return cfg, nil, err
 	}
 	db, err := store.Open(dbPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	defer db.Close()
 
 	if importPath != "" {
 		yamlCfg, err := config.Load(importPath)
 		if err != nil {
-			return nil, fmt.Errorf("import: load YAML: %w", err)
+			db.Close()
+			return nil, nil, fmt.Errorf("import: load YAML: %w", err)
 		}
 		if err := store.Import(db, yamlCfg); err != nil {
-			return nil, fmt.Errorf("import: write to database: %w", err)
+			db.Close()
+			return nil, nil, fmt.Errorf("import: write to database: %w", err)
 		}
 		// Count from the source config so the message reflects exactly what
 		// was written, not a potentially stale whole-table count.
@@ -222,7 +234,12 @@ func loadConfig(configPath, dbPath, importPath string) (*config.Config, error) {
 			len(yamlCfg.Agents), len(yamlCfg.Repos), nBindings)
 	}
 
-	return store.LoadAndValidate(db)
+	cfg, err := store.LoadAndValidate(db)
+	if err != nil {
+		db.Close()
+		return nil, nil, err
+	}
+	return cfg, db, nil
 }
 
 // schedulerStatusAdapter adapts *autonomous.Scheduler to webhook.StatusProvider,
