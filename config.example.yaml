@@ -74,6 +74,10 @@ daemon:
     #   args:
     #     - "-p"
     #     - "--dangerously-skip-permissions"
+    #     - "--output-format"
+    #     - "json"
+    #     - "--json-schema"
+    #     - '{"type":"object","properties":{"summary":{"type":"string"},"artifacts":{"type":"array","items":{"type":"object","properties":{"type":{"type":"string"},"part_key":{"type":"string"},"github_id":{"type":"string"},"url":{"type":"string"}},"required":["type"],"additionalProperties":false}},"dispatch":{"type":"array","items":{"type":"object","properties":{"agent":{"type":"string"},"number":{"type":"integer"},"reason":{"type":"string"}},"required":["agent"],"additionalProperties":false}}},"required":["summary"],"additionalProperties":false}'
     #   env:
     #     ANTHROPIC_BASE_URL: http://localhost:8080
     #     ANTHROPIC_API_KEY: sk-not-needed
@@ -93,6 +97,8 @@ daemon:
       timeout_seconds: 600
       max_prompt_chars: 12000
       redaction_salt_env: LOG_SALT
+      # response-schema.json must be mounted at /etc/agents/response-schema.json
+      # in Docker. See the volume mounts section in README.md.
 
 # ──────────────────────────────────────────────
 # skills — reusable guidance blocks

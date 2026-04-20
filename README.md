@@ -302,6 +302,7 @@ The `events:` field accepts any of the following GitHub event kinds. Each event 
 | `pull_request_review.submitted` | Formal GitHub review submitted | `state`, `body` |
 | `pull_request_review_comment.created` | Inline review comment posted on a PR diff | `body` |
 | `push` | Commit pushed to a branch | `ref` (e.g. `refs/heads/main`), `head_sha` |
+| `agents.run` | On-demand trigger via `/agents/run`, `/api/run`, or `--run-agent` CLI | `target_agent` |
 | `agent.dispatch` | Another agent dispatched this agent | `target_agent`, `reason`, `root_event_id`, `dispatch_depth`, `invoked_by` |
 
 > **`push` scope:** only branch pushes fire the event. Tag pushes, branch deletions, and pushes to non-`refs/heads/` refs are silently dropped. The agent receives the branch ref and the resulting head SHA — there is no PR number in the context.
@@ -440,6 +441,7 @@ The compose file expects:
 | `config.yaml` | `/etc/agents/config.yaml` (read-only) | Main daemon config |
 | `prompts/` | `/etc/agents/prompts` (read-only) | Prompt files referenced by agent `prompt_file:` |
 | `skills/` | `/etc/agents/skills` (read-only) | Skill files referenced by skill `prompt_file:` |
+| `response-schema.json` | `/etc/agents/response-schema.json` (read-only) | Codex structured output schema |
 | `~/.claude` | `/home/agents/.claude` | Claude Code session data |
 | `~/.claude.json` | `/home/agents/.claude.json` | Claude Code main config |
 | `~/.codex` | `/home/agents/.codex` | Codex configuration |
@@ -478,8 +480,19 @@ GitHub sends a ping immediately; the daemon will log the delivery.
 | `POST` | `/agents/run` | `Authorization: Bearer <key>` | On-demand agent trigger |
 | `POST` | `/v1/messages` | none | Anthropic↔OpenAI translation proxy (opt-in via `proxy.enabled`) |
 | `GET` | `/v1/models` | none | Companion stub for `/v1/messages`; lists the configured upstream model |
+| `POST` | `/api/run` | Traefik basic auth | On-demand agent trigger (async, same as `/agents/run` but no Bearer token) |
+| `GET` | `/api/agents` | Traefik basic auth | Fleet snapshot: per-agent status, bindings, dispatch wiring |
+| `GET` | `/api/events` | Traefik basic auth | Recent webhook events (time-windowed) |
+| `GET` | `/api/events/stream` | Traefik basic auth | Live event firehose (SSE) |
+| `GET` | `/api/traces` | Traefik basic auth | Recent agent run traces with timing |
+| `GET` | `/api/traces/stream` | Traefik basic auth | Live trace updates (SSE) |
+| `GET` | `/api/graph` | Traefik basic auth | Agent interaction graph (dispatch edges) |
+| `GET` | `/api/dispatches` | Traefik basic auth | Dispatch dedup store contents + counters |
+| `GET` | `/api/memory/{agent}/{repo}` | Traefik basic auth | Raw agent memory markdown |
+| `GET` | `/api/memory/stream` | Traefik basic auth | Memory file change notifications (SSE) |
+| `GET` | `/api/config` | Traefik basic auth | Effective parsed config (secrets redacted) |
 
-The `/agents/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It blocks until the agent finishes. If `api_key_env` is not configured the endpoint returns `403 Forbidden`.
+The `/agents/run` and `/api/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. Both return `202 Accepted` immediately with an `event_id`; the agent runs asynchronously. `/agents/run` requires a Bearer token; `/api/run` relies on Traefik basic auth. If `api_key_env` is not configured, `/agents/run` returns `403 Forbidden`.
 
 Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL cache.
 
@@ -596,6 +609,7 @@ internal/
   config/                   # YAML parsing, prompt/skill file resolution, validation
   ai/                       # Prompt composition + command-based CLI runner (per-backend env)
   anthropic_proxy/          # Built-in Anthropic↔OpenAI translation proxy (opt-in)
+  observe/                  # Observability store (events, traces, dispatch graph, SSE hubs)
   autonomous/               # Cron scheduler + filesystem-backed agent memory
   workflow/                 # Event routing engine, single event queue, processor, inter-agent dispatcher
   webhook/                  # HTTP server, signature verification, delivery dedupe

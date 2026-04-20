@@ -32,6 +32,7 @@ internal/
   config/                       # YAML parsing, defaults, validation, prompt/skill file resolution
   ai/                           # prompt composition + CLI runner (supports per-backend env overrides)
   anthropic_proxy/              # built-in Anthropic Messages ↔ OpenAI Chat Completions translation
+  observe/                        # observability store: events, traces, dispatch graph, SSE hubs
   autonomous/                   # cron scheduler + per-agent/per-repo markdown memory
   workflow/                     # event routing engine (single event queue), processor, dispatcher
   webhook/                      # HTTP server, HMAC signature verification, delivery dedupe
@@ -41,6 +42,7 @@ prompts/                        # prompt files referenced by agent prompt_file:
 skills/                         # skill files referenced by skill prompt_file:
 docs/local-models.md            # full recipe for running the fleet on a local LLM
 config.example.yaml             # shipping example, kept in sync with config schema
+response-schema.json                # JSON schema for structured output (codex --output-schema)
 ```
 
 ## Conceptual model
@@ -67,6 +69,7 @@ These constraints are load-bearing. Read them before changing the listed areas.
 
 - **The daemon never writes to GitHub directly.** All writes go through the AI backend's MCP tools. If you introduce a new feature that seems to need a direct GitHub API call, raise it in an issue first — there's almost always a way to keep the daemon read-only.
 - **Prompts are never logged in plaintext.** Only their salted hash and length are recorded. If you add new log lines near prompt handling, preserve this property.
+- **Structured output is enforced at the CLI level.** Claude uses `--output-format json --json-schema <schema>` which wraps stdout in a CLI envelope; `extractStructuredOutput` in cmdrunner.go unwraps the `structured_output` field. Codex uses `--output-schema <file>` which constrains model output directly. Both paths feed the same `Response` struct. When changing the response contract, update `response-schema.json` alongside `internal/ai/types.go`.
 - **The runner contract is stdin-in, single-JSON-object-out.**
   - `internal/ai/cmdrunner.go` sends the composed prompt on stdin and parses the last top-level JSON object from stdout.
   - Agents emit `{"summary": "...", "artifacts": [...], "dispatch": [...]}`. `dispatch` is optional. A missing JSON object, an empty response, or a response with all three fields empty fails the run with a clear error.

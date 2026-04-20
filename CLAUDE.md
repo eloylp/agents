@@ -12,6 +12,7 @@ internal/
   config/                   # YAML parsing, prompt/skill file resolution, validation
   ai/                       # Prompt composition + command-based CLI runner (per-backend env)
   anthropic_proxy/          # Built-in Anthropic↔OpenAI Chat Completions translation proxy
+  observe/                  # Observability store: events, traces, dispatch graph, SSE hubs
   autonomous/               # Cron scheduler + filesystem-backed agent memory
   workflow/                 # Event routing engine, single event queue, processor, dispatcher
   webhook/                  # HTTP server, HMAC verification, delivery dedupe
@@ -75,7 +76,16 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, 
   - `POST /agents/run` — on-demand agent trigger (requires Bearer token).
   - `POST /v1/messages` — Anthropic↔OpenAI translation proxy (disabled by default; enabled via `daemon.proxy.enabled: true`).
   - `GET /v1/models` — companion stub for `/v1/messages`; returns the configured upstream model. Only mounted when the proxy is enabled.
+  - `POST /api/run` — unauthenticated on-demand trigger (same handler as `/agents/run`; relies on Traefik basic auth for the `/api/*` prefix). Enqueues a synthetic `agents.run` event.
+  - `GET /api/agents` — fleet snapshot with per-agent status, skills, dispatch wiring, bindings.
+  - `GET /api/events[/stream]` — recent events + SSE firehose.
+  - `GET /api/traces[/stream]` — recent agent run traces with timing, summary, status + SSE.
+  - `GET /api/graph` — agent interaction graph (dispatch edges + counts).
+  - `GET /api/dispatches` — dispatch dedup store snapshot + counters.
+  - `GET /api/memory/{agent}/{repo}` — raw agent memory markdown.
+  - `GET /api/config` — effective parsed config (secrets redacted).
 - Supported webhook events: `issues.*` (labeled, opened, edited, reopened, closed), `pull_request.*` (labeled, opened, synchronize, ready_for_review, closed), `issue_comment.created`, `pull_request_review.submitted`, `pull_request_review_comment.created`, `push` (branches only). Label-triggered routing uses `payload.label.name`. Non-label `events:` subscriptions match the event kind exactly. Draft PRs skip `pull_request.labeled`.
+- Internal event kinds (not from webhooks): `agents.run` (on-demand trigger from `/api/run` or `--run-agent`), `agent.dispatch` (inter-agent dispatch), `autonomous` (cron scheduler).
 - Duplicate webhook suppression via `X-GitHub-Delivery` TTL cache.
 - Workflow execution is stateless in-process. Only autonomous agents persist memory (per-agent, per-repo markdown file under `memory_dir`).
 - Agent memory is read before each scheduled run and is the agent's responsibility to update.
