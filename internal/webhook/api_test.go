@@ -1515,13 +1515,19 @@ func (c *sseCapture) Flush() {} // satisfies http.Flusher
 // ── handleAPIMemory SQLite mode ────────────────────────────────────────────
 
 // stubMemoryReader is a MemoryReader that returns a fixed mapping of
-// (agent, repo) → content for use in unit tests.
+// (agent, repo) → content for use in unit tests. Keys present in the map
+// but mapping to "" represent existing empty-memory records; absent keys
+// represent missing records and cause ErrMemoryNotFound.
 type stubMemoryReader struct {
-	content map[string]string // key: "agent\x00repo"
+	content map[string]string // key: "agent\x00repo"; present=exists, absent=not found
 }
 
 func (r *stubMemoryReader) ReadMemory(agent, repo string) (string, error) {
-	return r.content[agent+"\x00"+repo], nil
+	content, ok := r.content[agent+"\x00"+repo]
+	if !ok {
+		return "", ErrMemoryNotFound
+	}
+	return content, nil
 }
 
 func TestHandleAPIMemorySQLiteMode(t *testing.T) {
@@ -1544,11 +1550,19 @@ func TestHandleAPIMemorySQLiteMode(t *testing.T) {
 			wantBody: "# memory",
 		},
 		{
-			name:     "empty memory returns 404",
+			name:     "missing record returns 404",
 			agent:    "coder",
 			repo:     "owner_repo",
 			stored:   map[string]string{},
 			wantCode: http.StatusNotFound,
+		},
+		{
+			name:     "existing empty memory returns 200",
+			agent:    "coder",
+			repo:     "owner_repo",
+			stored:   map[string]string{"coder\x00owner_repo": ""},
+			wantCode: http.StatusOK,
+			wantBody: "",
 		},
 	}
 

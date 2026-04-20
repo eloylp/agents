@@ -590,20 +590,22 @@ func loadBindingsForRepo(db querier, repo string) ([]config.Binding, error) {
 	return bindings, nil
 }
 
-// ReadMemory returns the stored memory string for (agent, repo). If no row
-// exists, it returns ("", nil).
-func ReadMemory(db *sql.DB, agent, repo string) (string, error) {
+// ReadMemory returns the stored memory string for (agent, repo) along with a
+// boolean indicating whether the row exists. If no row exists, it returns
+// ("", false, nil). An empty content string with found=true means the agent
+// intentionally cleared its memory.
+func ReadMemory(db *sql.DB, agent, repo string) (string, bool, error) {
 	var content string
 	err := db.QueryRow(
 		"SELECT content FROM memory WHERE agent=? AND repo=?", agent, repo,
 	).Scan(&content)
 	if err == sql.ErrNoRows {
-		return "", nil
+		return "", false, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("store: read memory %s/%s: %w", agent, repo, err)
+		return "", false, fmt.Errorf("store: read memory %s/%s: %w", agent, repo, err)
 	}
-	return content, nil
+	return content, true, nil
 }
 
 // WriteMemory upserts the memory string for (agent, repo), setting updated_at

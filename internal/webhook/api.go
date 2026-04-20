@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -566,12 +567,12 @@ func (s *Server) handleAPIMemory(w http.ResponseWriter, r *http.Request) {
 	// SQLite mode: read memory via the injected MemoryReader.
 	if s.memReader != nil {
 		content, err := s.memReader.ReadMemory(agent, repo)
-		if err != nil {
-			http.Error(w, "could not read memory", http.StatusInternalServerError)
+		if errors.Is(err, ErrMemoryNotFound) {
+			http.Error(w, "memory not found", http.StatusNotFound)
 			return
 		}
-		if content == "" {
-			http.Error(w, "memory not found", http.StatusNotFound)
+		if err != nil {
+			http.Error(w, "could not read memory", http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")

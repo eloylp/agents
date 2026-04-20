@@ -340,43 +340,52 @@ func TestLoadEmptyDatabase(t *testing.T) {
 
 // TestReadWriteMemory verifies the SQLite memory round-trip: writing a string
 // and reading it back returns the same content, and reading a non-existent
-// entry returns "" without error.
+// entry returns ("", false, nil).
 func TestReadWriteMemory(t *testing.T) {
 	t.Parallel()
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 
-	// Non-existent agent/repo returns empty string.
-	content, err := store.ReadMemory(db, "coder", "owner/repo")
+	// Non-existent agent/repo returns not-found (found=false).
+	content, found, err := store.ReadMemory(db, "coder", "owner/repo")
 	if err != nil {
 		t.Fatalf("ReadMemory missing row: %v", err)
 	}
+	if found {
+		t.Fatal("expected found=false for missing row")
+	}
 	if content != "" {
-		t.Fatalf("expected empty, got %q", content)
+		t.Fatalf("expected empty content, got %q", content)
 	}
 
 	// Write and read back.
 	if err := store.WriteMemory(db, "coder", "owner/repo", "## Active PRs\n- PR #1"); err != nil {
 		t.Fatalf("WriteMemory: %v", err)
 	}
-	content, err = store.ReadMemory(db, "coder", "owner/repo")
+	content, found, err = store.ReadMemory(db, "coder", "owner/repo")
 	if err != nil {
 		t.Fatalf("ReadMemory after write: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true after write")
 	}
 	if content != "## Active PRs\n- PR #1" {
 		t.Fatalf("content mismatch: got %q", content)
 	}
 
-	// Overwrite with empty string to clear.
+	// Overwrite with empty string to clear: row still exists (found=true) but content is "".
 	if err := store.WriteMemory(db, "coder", "owner/repo", ""); err != nil {
 		t.Fatalf("WriteMemory clear: %v", err)
 	}
-	content, err = store.ReadMemory(db, "coder", "owner/repo")
+	content, found, err = store.ReadMemory(db, "coder", "owner/repo")
 	if err != nil {
 		t.Fatalf("ReadMemory after clear: %v", err)
 	}
+	if !found {
+		t.Fatal("expected found=true even after clearing content")
+	}
 	if content != "" {
-		t.Fatalf("expected empty after clear, got %q", content)
+		t.Fatalf("expected empty content after clear, got %q", content)
 	}
 }
 
@@ -394,7 +403,7 @@ func TestReadWriteMemoryIsolation(t *testing.T) {
 		t.Fatalf("WriteMemory B: %v", err)
 	}
 
-	a, err := store.ReadMemory(db, "agentA", "repo")
+	a, _, err := store.ReadMemory(db, "agentA", "repo")
 	if err != nil {
 		t.Fatalf("ReadMemory A: %v", err)
 	}
@@ -402,7 +411,7 @@ func TestReadWriteMemoryIsolation(t *testing.T) {
 		t.Errorf("agentA: got %q, want %q", a, "mem-A")
 	}
 
-	b, err := store.ReadMemory(db, "agentB", "repo")
+	b, _, err := store.ReadMemory(db, "agentB", "repo")
 	if err != nil {
 		t.Fatalf("ReadMemory B: %v", err)
 	}

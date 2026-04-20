@@ -67,9 +67,16 @@ type EventQueue interface {
 	QueueStats() workflow.QueueStat
 }
 
+// ErrMemoryNotFound is returned by MemoryReader.ReadMemory when no memory
+// record exists for the requested (agent, repo) pair. Callers should use
+// errors.Is to distinguish a missing record (404) from a genuine I/O error.
+var ErrMemoryNotFound = errors.New("webhook: memory not found")
+
 // MemoryReader retrieves the stored memory for an (agent, repo) pair.
 // The webhook server uses this interface to serve /api/memory/{agent}/{repo}
 // without knowing whether the backing store is the filesystem or SQLite.
+// ReadMemory returns ErrMemoryNotFound when the record does not exist; it
+// returns ("", nil) when the record exists but the content is empty.
 type MemoryReader interface {
 	ReadMemory(agent, repo string) (string, error)
 }
