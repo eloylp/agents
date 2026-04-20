@@ -3,6 +3,7 @@ package webhook
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/gorilla/mux"
@@ -160,11 +161,11 @@ func (s *Server) reloadCron() error {
 	if s.cronReloader == nil {
 		return nil
 	}
-	agents, repos, err := store.ReadSnapshot(s.db)
+	agents, repos, skills, backends, err := store.ReadSnapshot(s.db)
 	if err != nil {
 		return fmt.Errorf("read config snapshot for cron reload: %w", err)
 	}
-	return s.cronReloader.Reload(repos, agents)
+	return s.cronReloader.Reload(repos, agents, skills, backends)
 }
 
 // ── /api/store/agents ────────────────────────────────────────────────────────
@@ -190,7 +191,7 @@ func (s *Server) handleStoreAgents(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeAgentJSON
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(io.LimitReader(r.Body, s.cfg.Daemon.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
 			http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
 			return
 		}
@@ -270,7 +271,7 @@ func (s *Server) handleStoreSkills(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeSkillJSON
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(io.LimitReader(r.Body, s.cfg.Daemon.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
 			http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
 			return
 		}
@@ -339,7 +340,7 @@ func (s *Server) handleStoreBackends(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeBackendJSON
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(io.LimitReader(r.Body, s.cfg.Daemon.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
 			http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
 			return
 		}
@@ -411,7 +412,7 @@ func (s *Server) handleStoreRepos(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeRepoJSON
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(io.LimitReader(r.Body, s.cfg.Daemon.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
 			http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
 			return
 		}

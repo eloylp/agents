@@ -57,6 +57,7 @@ func crudMinimalConfig() *config.Config {
 				StatusPath:          "/status",
 				WebhookPath:         "/webhooks/github",
 				WriteTimeoutSeconds: 15,
+				MaxBodyBytes:        1 << 20, // 1 MiB
 			},
 		},
 	}
@@ -321,7 +322,9 @@ func TestStoreCRUDNotAvailableWithoutStore(t *testing.T) {
 // errCronReloader satisfies CronReloader and always returns an error from Reload.
 type errCronReloader struct{ err error }
 
-func (r *errCronReloader) Reload([]config.RepoDef, []config.AgentDef) error { return r.err }
+func (r *errCronReloader) Reload([]config.RepoDef, []config.AgentDef, map[string]config.SkillDef, map[string]config.AIBackendConfig) error {
+	return r.err
+}
 
 // openCRUDTestServerWithReloader creates a test server wired with a SQLite
 // store and the given CronReloader.
@@ -390,6 +393,65 @@ func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
 			if rr.Code != http.StatusInternalServerError {
 				t.Errorf("%s %s: want 500 on reload failure, got %d: %s",
 					tc.method, tc.path, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
+// ── /api/store POST body-size limiting ───────────────────────────────────────
+
+// TestStoreCRUDPostBodySizeLimit verifies that POST write endpoints reject
+// request bodies that exceed daemon.http.max_body_bytes.
+func TestStoreCRUDPostBodySizeLimit(t *testing.T) {
+	t.Parallel()
+
+	cfg := crudMinimalConfig()
+	cfg.Daemon.HTTP.MaxBodyBytes = 10 // very small limit for the test
+
+	dir := t.TempDir()
+	db, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	dc := workflow.NewDataChannels(1)
+	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, zerolog.Nop())
+	s.WithStore(db, nil)
+
+	tests := []struct {
+		name string
+		path string
+		body any
+	}{
+		{
+			name: "agent",
+			path: "/api/store/agents",
+			body: map[string]any{"name": "coder", "backend": "claude", "prompt": "You write code — a much longer prompt than 10 bytes."},
+		},
+		{
+			name: "skill",
+			path: "/api/store/skills",
+			body: map[string]any{"name": "arch", "prompt": "You are an architect — longer than 10 bytes."},
+		},
+		{
+			name: "backend",
+			path: "/api/store/backends",
+			body: map[string]any{"name": "claude", "command": "claude", "args": []string{}, "env": map[string]string{}},
+		},
+		{
+			name: "repo",
+			path: "/api/store/repos",
+			body: map[string]any{"name": "owner/repo", "enabled": true, "bindings": []any{}},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rr := doCRUDRequest(t, s, http.MethodPost, tc.path, tc.body)
+			if rr.Code == http.StatusOK {
+				t.Errorf("POST %s: expected non-200 for oversized body, got 200", tc.path)
 			}
 		})
 	}

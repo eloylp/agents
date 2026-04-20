@@ -411,7 +411,7 @@ func loadDaemon(db *sql.DB, cfg *config.Config) error {
 	return nil
 }
 
-func loadBackends(db *sql.DB, cfg *config.Config) error {
+func loadBackends(db querier, cfg *config.Config) error {
 	rows, err := db.Query("SELECT name,command,args,env,timeout_seconds,max_prompt_chars,redaction_salt_env FROM backends")
 	if err != nil {
 		return fmt.Errorf("store load: query backends: %w", err)
@@ -449,7 +449,7 @@ func loadBackends(db *sql.DB, cfg *config.Config) error {
 	return nil
 }
 
-func loadSkills(db *sql.DB, cfg *config.Config) error {
+func loadSkills(db querier, cfg *config.Config) error {
 	rows, err := db.Query("SELECT name,prompt FROM skills")
 	if err != nil {
 		return fmt.Errorf("store load: query skills: %w", err)

@@ -1160,8 +1160,7 @@ func TestSchedulerReload(t *testing.T) {
 			Use:     []config.Binding{{Agent: "scanner", Cron: "* * * * *"}},
 		},
 	}
-	cfg.Daemon.AIBackends["claude"] = config.AIBackendConfig{Command: "claude"}
-	if err := s.Reload(newRepos, newAgents); err != nil {
+	if err := s.Reload(newRepos, newAgents, cfg.Skills, map[string]config.AIBackendConfig{"claude": {Command: "claude"}}); err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
 
@@ -1174,6 +1173,38 @@ func TestSchedulerReload(t *testing.T) {
 	}
 	if statuses[0].Repo != "owner/other" {
 		t.Errorf("after reload: repo %q, want %q", statuses[0].Repo, "owner/other")
+	}
+}
+
+// TestSchedulerReloadUpdatesSkillsAndBackends verifies that Reload replaces
+// cfg.Skills and cfg.Daemon.AIBackends so that future agent runs pick up the
+// new definitions without requiring a daemon restart.
+func TestSchedulerReloadUpdatesSkillsAndBackends(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseCfg(nil)
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	newSkills := map[string]config.SkillDef{
+		"security": {Prompt: "Think about security."},
+	}
+	newBackends := map[string]config.AIBackendConfig{
+		"claude": {Command: "claude", TimeoutSeconds: 120},
+	}
+
+	if err := s.Reload(cfg.Repos, cfg.Agents, newSkills, newBackends); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	if len(s.cfg.Skills) != 1 || s.cfg.Skills["security"].Prompt != "Think about security." {
+		t.Errorf("after reload: cfg.Skills = %v, want {security: ...}", s.cfg.Skills)
+	}
+	if s.cfg.Daemon.AIBackends["claude"].TimeoutSeconds != 120 {
+		t.Errorf("after reload: claude backend timeout = %d, want 120",
+			s.cfg.Daemon.AIBackends["claude"].TimeoutSeconds)
 	}
 }
 
@@ -1191,7 +1222,7 @@ func TestSchedulerReloadClearsAllBindings(t *testing.T) {
 	// Reload with repos that have no cron bindings.
 	if err := s.Reload([]config.RepoDef{{Name: "owner/repo", Enabled: true, Use: []config.Binding{
 		{Agent: "reviewer", Labels: []string{"ai:fix"}},
-	}}}, cfg.Agents); err != nil {
+	}}}, cfg.Agents, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
 
@@ -1227,7 +1258,7 @@ func TestSchedulerReloadRollsBackOnFailure(t *testing.T) {
 	}}
 	badAgents := []config.AgentDef{} // "ghost" not in this list → registerJobs will fail
 
-	if err := s.Reload(badRepos, badAgents); err == nil {
+	if err := s.Reload(badRepos, badAgents, cfg.Skills, cfg.Daemon.AIBackends); err == nil {
 		t.Fatal("Reload: expected error for unknown agent binding, got nil")
 	}
 

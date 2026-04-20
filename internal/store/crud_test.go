@@ -361,7 +361,7 @@ func TestReadSnapshot(t *testing.T) {
 		t.Fatalf("UpsertRepo: %v", err)
 	}
 
-	agents, repos, err := store.ReadSnapshot(db)
+	agents, repos, skills, backends, err := store.ReadSnapshot(db)
 	if err != nil {
 		t.Fatalf("ReadSnapshot: %v", err)
 	}
@@ -373,5 +373,11 @@ func TestReadSnapshot(t *testing.T) {
 	}
 	if len(repos[0].Use) != 1 || repos[0].Use[0].Agent != "coder" {
 		t.Errorf("bindings: want 1 binding for coder, got %v", repos[0].Use)
+	}
+	if skills == nil {
+		t.Error("skills: want non-nil map, got nil")
+	}
+	if backends == nil {
+		t.Error("backends: want non-nil map, got nil")
 	}
 }

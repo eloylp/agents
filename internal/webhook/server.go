@@ -25,10 +25,10 @@ import (
 )
 
 // CronReloader is implemented by *autonomous.Scheduler. It is called after a
-// repo or agent write to update the scheduler's cron registrations in-process
-// without restarting the daemon.
+// repo, agent, skill, or backend write to update the scheduler's in-process
+// state without restarting the daemon.
 type CronReloader interface {
-	Reload(repos []config.RepoDef, agents []config.AgentDef) error
+	Reload(repos []config.RepoDef, agents []config.AgentDef, skills map[string]config.SkillDef, backends map[string]config.AIBackendConfig) error
 }
 
 // AgentStatus is the runtime state of one autonomous agent as reported by /status.

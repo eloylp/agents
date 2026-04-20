@@ -402,31 +402,32 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	return err
 }
 
-// Reload replaces the set of registered cron bindings with those derived from
-// repos and agents. It is safe to call while the scheduler is running.
+// Reload replaces the set of registered cron bindings and updates the
+// in-memory config so that future runs see consistent agent, repo, skill, and
+// backend definitions. It is safe to call while the scheduler is running.
 //
 // The swap is atomic from the scheduler's perspective: new cron entries are
 // registered first; only if all registrations succeed are the old entries
 // removed and the config pointer updated. If registration fails, the old
 // entries remain active and the old config is preserved, so the scheduler
 // stays in a consistent state and the caller receives an error.
-//
-// Reload also updates the shared *config.Config slice fields so that
-// event-driven and on-demand runs using the same config pointer will see the
-// new agent and repo definitions on their next invocation.
-func (s *Scheduler) Reload(repos []config.RepoDef, agents []config.AgentDef) error {
+func (s *Scheduler) Reload(repos []config.RepoDef, agents []config.AgentDef, skills map[string]config.SkillDef, backends map[string]config.AIBackendConfig) error {
 	s.bindMu.Lock()
 	defer s.bindMu.Unlock()
 
 	// Save old state for rollback.
 	oldRepos := s.cfg.Repos
 	oldAgents := s.cfg.Agents
+	oldSkills := s.cfg.Skills
+	oldBackends := s.cfg.Daemon.AIBackends
 	oldEntries := make([]agentEntry, len(s.agentEntries))
 	copy(oldEntries, s.agentEntries)
 
 	// Apply new config and attempt to register new cron jobs.
 	s.cfg.Repos = repos
 	s.cfg.Agents = agents
+	s.cfg.Skills = skills
+	s.cfg.Daemon.AIBackends = backends
 	s.agentEntries = s.agentEntries[:0]
 
 	if err := s.registerJobs(); err != nil {
@@ -437,6 +438,8 @@ func (s *Scheduler) Reload(repos []config.RepoDef, agents []config.AgentDef) err
 		// Restore old state so the scheduler stays healthy.
 		s.cfg.Repos = oldRepos
 		s.cfg.Agents = oldAgents
+		s.cfg.Skills = oldSkills
+		s.cfg.Daemon.AIBackends = oldBackends
 		s.agentEntries = oldEntries
 		return err
 	}
