@@ -403,8 +403,13 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 }
 
 // Reload replaces the set of registered cron bindings with those derived from
-// repos and agents. All previously registered cron entries are removed before
-// the new ones are added. It is safe to call while the scheduler is running.
+// repos and agents. It is safe to call while the scheduler is running.
+//
+// The swap is atomic from the scheduler's perspective: new cron entries are
+// registered first; only if all registrations succeed are the old entries
+// removed and the config pointer updated. If registration fails, the old
+// entries remain active and the old config is preserved, so the scheduler
+// stays in a consistent state and the caller receives an error.
 //
 // Reload also updates the shared *config.Config slice fields so that
 // event-driven and on-demand runs using the same config pointer will see the
@@ -413,20 +418,32 @@ func (s *Scheduler) Reload(repos []config.RepoDef, agents []config.AgentDef) err
 	s.bindMu.Lock()
 	defer s.bindMu.Unlock()
 
-	// Remove all existing cron entries.
-	for _, e := range s.agentEntries {
-		s.cron.Remove(e.cronID)
-	}
-	s.agentEntries = s.agentEntries[:0]
+	// Save old state for rollback.
+	oldRepos := s.cfg.Repos
+	oldAgents := s.cfg.Agents
+	oldEntries := make([]agentEntry, len(s.agentEntries))
+	copy(oldEntries, s.agentEntries)
 
-	// Update the shared config slices so that the scheduler and the engine
-	// (which hold the same *config.Config pointer) pick up the new definitions
-	// on subsequent runs.
+	// Apply new config and attempt to register new cron jobs.
 	s.cfg.Repos = repos
 	s.cfg.Agents = agents
+	s.agentEntries = s.agentEntries[:0]
 
 	if err := s.registerJobs(); err != nil {
+		// Remove any partially-registered new entries.
+		for _, e := range s.agentEntries {
+			s.cron.Remove(e.cronID)
+		}
+		// Restore old state so the scheduler stays healthy.
+		s.cfg.Repos = oldRepos
+		s.cfg.Agents = oldAgents
+		s.agentEntries = oldEntries
 		return err
+	}
+
+	// New registrations succeeded — remove the old cron entries.
+	for _, e := range oldEntries {
+		s.cron.Remove(e.cronID)
 	}
 	s.logger.Info().Int("cron_jobs", len(s.agentEntries)).Msg("scheduler reloaded")
 	return nil

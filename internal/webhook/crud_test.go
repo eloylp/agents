@@ -3,6 +3,7 @@ package webhook
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -312,5 +313,84 @@ func TestStoreCRUDNotAvailableWithoutStore(t *testing.T) {
 			// Routes are not registered at all when db is nil.
 			t.Errorf("GET %s without store: got %d, want 404", path, rr.Code)
 		}
+	}
+}
+
+// ── reloadCron failure ────────────────────────────────────────────────────────
+
+// errCronReloader satisfies CronReloader and always returns an error from Reload.
+type errCronReloader struct{ err error }
+
+func (r *errCronReloader) Reload([]config.RepoDef, []config.AgentDef) error { return r.err }
+
+// openCRUDTestServerWithReloader creates a test server wired with a SQLite
+// store and the given CronReloader.
+func openCRUDTestServerWithReloader(t *testing.T, reloader CronReloader) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	db, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	cfg := crudMinimalConfig()
+	dc := workflow.NewDataChannels(1)
+	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, zerolog.Nop())
+	s.WithStore(db, reloader)
+	return s
+}
+
+// TestStoreCRUDReloadFailureReturns500 verifies that when reloadCron fails
+// (e.g. the scheduler can't re-register a cron binding), write endpoints
+// return 500 instead of silently acknowledging a partially-applied change.
+func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
+	t.Parallel()
+
+	reloadErr := errors.New("scheduler broken")
+	reloader := &errCronReloader{err: reloadErr}
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   any
+	}{
+		{
+			name:   "POST agent",
+			method: http.MethodPost,
+			path:   "/api/store/agents",
+			body:   map[string]any{"name": "agent-x", "backend": "claude", "prompt": "x"},
+		},
+		{
+			name:   "DELETE agent",
+			method: http.MethodDelete,
+			path:   "/api/store/agents/agent-x",
+			body:   nil,
+		},
+		{
+			name:   "POST repo",
+			method: http.MethodPost,
+			path:   "/api/store/repos",
+			body:   map[string]any{"name": "owner/repo", "enabled": true},
+		},
+		{
+			name:   "DELETE repo",
+			method: http.MethodDelete,
+			path:   "/api/store/repos/owner/repo",
+			body:   nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := openCRUDTestServerWithReloader(t, reloader)
+			rr := doCRUDRequest(t, s, tc.method, tc.path, tc.body)
+			if rr.Code != http.StatusInternalServerError {
+				t.Errorf("%s %s: want 500 on reload failure, got %d: %s",
+					tc.method, tc.path, rr.Code, rr.Body.String())
+			}
+		})
 	}
 }

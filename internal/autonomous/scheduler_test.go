@@ -1200,3 +1200,50 @@ func TestSchedulerReloadClearsAllBindings(t *testing.T) {
 		t.Errorf("after reload with no cron: got %d statuses, want 0", len(statuses))
 	}
 }
+
+// TestSchedulerReloadRollsBackOnFailure verifies that a Reload that cannot
+// register new cron entries (e.g. because a binding references an unknown
+// agent) preserves the previous scheduler state instead of leaving it empty.
+func TestSchedulerReloadRollsBackOnFailure(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseCfg(nil)
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	// Capture the pre-reload statuses.
+	before := s.AgentStatuses()
+	if len(before) != 1 {
+		t.Fatalf("before reload: got %d statuses, want 1", len(before))
+	}
+
+	// Attempt a reload where the binding references an agent not in the agents slice.
+	badRepos := []config.RepoDef{{
+		Name:    "owner/repo",
+		Enabled: true,
+		Use:     []config.Binding{{Agent: "ghost", Cron: "* * * * *"}},
+	}}
+	badAgents := []config.AgentDef{} // "ghost" not in this list → registerJobs will fail
+
+	if err := s.Reload(badRepos, badAgents); err == nil {
+		t.Fatal("Reload: expected error for unknown agent binding, got nil")
+	}
+
+	// The scheduler must still have the original entries, not be empty.
+	after := s.AgentStatuses()
+	if len(after) != len(before) {
+		t.Errorf("after failed reload: got %d statuses, want %d (original preserved)",
+			len(after), len(before))
+	}
+	if len(after) > 0 && after[0].Name != before[0].Name {
+		t.Errorf("after failed reload: agent %q, want %q (original preserved)",
+			after[0].Name, before[0].Name)
+	}
+	// Config must also be rolled back.
+	if len(s.cfg.Agents) != len(cfg.Agents) {
+		t.Errorf("after failed reload: cfg.Agents len=%d, want %d (original preserved)",
+			len(s.cfg.Agents), len(cfg.Agents))
+	}
+}

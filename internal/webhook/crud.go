@@ -150,25 +150,22 @@ func storeNotConfigured(w http.ResponseWriter) {
 }
 
 // reloadCron re-reads repos and agents from the DB and calls Reload on the
-// attached CronReloader (if any). Errors are logged but do not fail the
-// request — the DB write already succeeded.
-func (s *Server) reloadCron() {
+// attached CronReloader (if any). An error is returned so callers can surface
+// scheduler failures as HTTP 500 responses — the DB write already succeeded
+// but the in-memory cron state would be stale or broken if we ignored the error.
+func (s *Server) reloadCron() error {
 	if s.cronReloader == nil {
-		return
+		return nil
 	}
 	repos, err := store.ReadRepos(s.db)
 	if err != nil {
-		s.logger.Error().Err(err).Msg("store crud: read repos for cron reload")
-		return
+		return fmt.Errorf("read repos for cron reload: %w", err)
 	}
 	agents, err := store.ReadAgents(s.db)
 	if err != nil {
-		s.logger.Error().Err(err).Msg("store crud: read agents for cron reload")
-		return
+		return fmt.Errorf("read agents for cron reload: %w", err)
 	}
-	if err := s.cronReloader.Reload(repos, agents); err != nil {
-		s.logger.Error().Err(err).Msg("store crud: cron reload failed")
-	}
+	return s.cronReloader.Reload(repos, agents)
 }
 
 // ── /api/store/agents ────────────────────────────────────────────────────────
@@ -206,7 +203,11 @@ func (s *Server) handleStoreAgents(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("upsert agent: %v", err), http.StatusInternalServerError)
 			return
 		}
-		s.reloadCron()
+		if err := s.reloadCron(); err != nil {
+			s.logger.Error().Err(err).Msg("store crud: cron reload failed after agent upsert")
+			http.Error(w, fmt.Sprintf("cron reload: %v", err), http.StatusInternalServerError)
+			return
+		}
 		writeJSON(w, http.StatusOK, req)
 	}
 }
@@ -238,7 +239,11 @@ func (s *Server) handleStoreAgent(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("delete agent: %v", err), http.StatusInternalServerError)
 			return
 		}
-		s.reloadCron()
+		if err := s.reloadCron(); err != nil {
+			s.logger.Error().Err(err).Msg("store crud: cron reload failed after agent delete")
+			http.Error(w, fmt.Sprintf("cron reload: %v", err), http.StatusInternalServerError)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -419,7 +424,11 @@ func (s *Server) handleStoreRepos(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("upsert repo: %v", err), http.StatusInternalServerError)
 			return
 		}
-		s.reloadCron()
+		if err := s.reloadCron(); err != nil {
+			s.logger.Error().Err(err).Msg("store crud: cron reload failed after repo upsert")
+			http.Error(w, fmt.Sprintf("cron reload: %v", err), http.StatusInternalServerError)
+			return
+		}
 		writeJSON(w, http.StatusOK, req)
 	}
 }
@@ -452,7 +461,11 @@ func (s *Server) handleStoreRepo(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("delete repo: %v", err), http.StatusInternalServerError)
 			return
 		}
-		s.reloadCron()
+		if err := s.reloadCron(); err != nil {
+			s.logger.Error().Err(err).Msg("store crud: cron reload failed after repo delete")
+			http.Error(w, fmt.Sprintf("cron reload: %v", err), http.StatusInternalServerError)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
