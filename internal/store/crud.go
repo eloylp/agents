@@ -287,6 +287,9 @@ func UpsertRepo(db *sql.DB, r config.RepoDef) error {
 	if err := importRepos(tx, []config.RepoDef{r}); err != nil {
 		return err
 	}
+	if err := requireAtLeastOneEnabledRepo(tx); err != nil {
+		return fmt.Errorf("store: upsert repo %s: %w", r.Name, err)
+	}
 	if err := validateFleet(tx); err != nil {
 		return fmt.Errorf("store: upsert repo %s: %w", r.Name, err)
 	}
