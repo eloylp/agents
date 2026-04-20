@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/gorilla/mux"
 
@@ -478,7 +477,7 @@ func (s *Server) handleStoreRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	vars := mux.Vars(r)
-	repoName := strings.TrimSpace(vars["owner"]) + "/" + strings.TrimSpace(vars["repo"])
+	repoName := config.NormalizeRepoName(vars["owner"]) + "/" + config.NormalizeRepoName(vars["repo"])
 	switch r.Method {
 	case http.MethodGet:
 		repos, err := store.ReadRepos(s.db)

@@ -916,6 +916,55 @@ func TestStoreCRUDSingleEntityPathCanonicalization(t *testing.T) {
 	}
 }
 
+// TestStoreCRUDRepoPathCanonicalization verifies that GET and DELETE
+// /api/store/repos/{owner}/{repo} canonicalize the path parameter
+// case-insensitively, matching the config layer's RepoByName semantics.
+func TestStoreCRUDRepoPathCanonicalization(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	seedStoreBackend(t, s, "claude")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "p",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed agent: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Create two repos so that deleting one still leaves the fleet valid.
+	for _, name := range []string{"owner/repo", "owner/other"} {
+		if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+			"name": name, "enabled": true,
+			"bindings": []map[string]any{{"agent": "coder", "labels": []string{"ai"}, "enabled": true}},
+		}); rr.Code != http.StatusOK {
+			t.Fatalf("POST repo %s: got %d — %s", name, rr.Code, rr.Body.String())
+		}
+	}
+
+	// GET with mixed-case owner — should return 200, not 404.
+	rr := doCRUDRequest(t, s, http.MethodGet, "/api/store/repos/Owner/repo", nil)
+	if rr.Code != http.StatusOK {
+		t.Errorf("GET /api/store/repos/Owner/repo: got %d, want 200", rr.Code)
+	}
+
+	// GET with mixed-case repo segment — should return 200.
+	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/repos/owner/Repo", nil)
+	if rr.Code != http.StatusOK {
+		t.Errorf("GET /api/store/repos/owner/Repo: got %d, want 200", rr.Code)
+	}
+
+	// DELETE with mixed-case path — should actually remove the repo.
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/api/store/repos/Owner/Repo", nil)
+	if rr.Code != http.StatusNoContent {
+		t.Errorf("DELETE /api/store/repos/Owner/Repo: got %d, want 204", rr.Code)
+	}
+	// Confirm it's gone.
+	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/repos/owner/repo", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("GET after delete: got %d, want 404", rr.Code)
+	}
+}
+
 func TestStoreCRUDDeleteRepoRejectedAsLastEnabled(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)

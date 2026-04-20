@@ -1018,11 +1018,20 @@ func NormalizeBackendName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
+// NormalizeRepoName returns the canonical form of a repo full name
+// (lowercase, trimmed). CRUD callers should normalise path-parameter names
+// before lookups or deletes so that GET/DELETE /api/store/repos/{owner}/{repo}
+// follows the same case-insensitive semantics as RepoByName.
+func NormalizeRepoName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
 // NormalizeRepoDef applies the same normalization that FinishLoad performs on
-// repo entries: trim the repo name, and lowercase+trim each binding agent name,
-// cron, and event strings. CRUD callers must invoke this before writing a repo.
+// repo entries: lowercase+trim the repo name, and lowercase+trim each binding
+// agent name, cron, and event strings. CRUD callers must invoke this before
+// writing a repo.
 func NormalizeRepoDef(r *RepoDef) {
-	r.Name = strings.TrimSpace(r.Name)
+	r.Name = NormalizeRepoName(r.Name)
 	for i := range r.Use {
 		r.Use[i].Agent = strings.ToLower(strings.TrimSpace(r.Use[i].Agent))
 		r.Use[i].Cron = strings.TrimSpace(r.Use[i].Cron)
