@@ -115,8 +115,8 @@ type ProxyUpstreamConfig struct {
 	TimeoutSeconds int            `yaml:"timeout_seconds"`
 	ExtraBody      map[string]any `yaml:"extra_body"`
 
-	// APIKey is resolved from APIKeyEnv at load time and is not present in YAML.
-	APIKey string `yaml:"-"`
+	// APIKey is resolved from APIKeyEnv at load time and is not present in YAML or JSON.
+	APIKey string `yaml:"-" json:"-"`
 }
 
 // LogConfig controls daemon logging output.
@@ -141,9 +141,9 @@ type HTTPConfig struct {
 	ShutdownTimeoutSeconds int    `yaml:"shutdown_timeout_seconds"`
 
 	// WebhookSecret and APIKey are resolved from the *Env fields at load time
-	// and not present in the YAML source.
-	WebhookSecret string `yaml:"-"`
-	APIKey        string `yaml:"-"`
+	// and not present in the YAML or JSON source.
+	WebhookSecret string `yaml:"-" json:"-"`
+	APIKey        string `yaml:"-" json:"-"`
 }
 
 // ProcessorConfig controls the internal event queue and agent concurrency.
@@ -281,6 +281,17 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// Finalize applies defaults, normalizes values, resolves secrets from the
+// environment, and validates the configuration. It is intended for configs
+// assembled from sources other than a YAML file (e.g., a database), where
+// prompts are already inline and prompt_file resolution is not needed.
+func (c *Config) Finalize() error {
+	c.applyDefaults()
+	c.normalize()
+	c.resolveSecrets()
+	return c.validate()
 }
 
 // RepoByName returns the repo definition with the given full name

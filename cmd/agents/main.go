@@ -20,6 +20,7 @@ import (
 	"github.com/eloylp/agents/internal/logging"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/setup"
+	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/ui"
 	"github.com/eloylp/agents/internal/webhook"
 	"github.com/eloylp/agents/internal/workflow"
@@ -45,12 +46,14 @@ func run() error {
 
 	_ = godotenv.Load()
 
-	configPath := flag.String("config", "config.yaml", "path to config file")
+	configPath := flag.String("config", "config.yaml", "path to YAML config file")
+	dbPath := flag.String("db", "", "path to SQLite database (alternative to --config)")
+	importPath := flag.String("import", "", "YAML config file to import into the database (requires --db)")
 	runAgent := flag.String("run-agent", "", "run a single autonomous agent pass and exit (requires --repo)")
 	runRepo := flag.String("repo", "", "repo to target when using --run-agent (e.g. owner/repo)")
 	flag.Parse()
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := loadConfig(*configPath, *dbPath, *importPath)
 	if err != nil {
 		return err
 	}
@@ -135,6 +138,35 @@ func run() error {
 	}
 	logger.Info().Msg("agents daemon stopped")
 	return nil
+}
+
+// loadConfig loads daemon configuration from the given sources. When dbPath is
+// non-empty the database is used as the config source; if importPath is also
+// set the YAML file is imported into the database first. When dbPath is empty
+// the traditional YAML path is used.
+func loadConfig(configPath, dbPath, importPath string) (*config.Config, error) {
+	if dbPath == "" {
+		return config.Load(configPath)
+	}
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer s.Close()
+
+	if importPath != "" {
+		yamlCfg, err := config.Load(importPath)
+		if err != nil {
+			return nil, fmt.Errorf("load import file: %w", err)
+		}
+		if err := s.Import(yamlCfg); err != nil {
+			return nil, fmt.Errorf("import config into database: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "imported config from %s into %s\n", importPath, dbPath)
+	}
+
+	return s.LoadConfig()
 }
 
 // drainDispatches processes all agent.dispatch events that were enqueued during
