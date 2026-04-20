@@ -1,0 +1,636 @@
+// Package store manages the SQLite-backed runtime configuration store.
+//
+// Phase 1 covers the read/write path for all entities that previously lived in
+// config.yaml: daemon settings, AI backends, skills, agents, repos, and
+// repo-agent bindings. The config.Config type is used as the exchange format
+// so that all downstream code (scheduler, engine, webhook server) requires no
+// changes.
+//
+// Usage:
+//
+//	db, err := store.Open("/var/lib/agents/agents.db")
+//	// First-time import from YAML:
+//	cfg, _ := config.Load("config.yaml")
+//	store.Import(db, cfg)
+//	// Subsequent starts — read from DB:
+//	cfg, err = store.Load(db)
+package store
+
+import (
+	"database/sql"
+	"encoding/json"
+	"embed"
+	"fmt"
+	"io/fs"
+	"sort"
+	"strings"
+
+	_ "modernc.org/sqlite" // register the sqlite3 driver
+
+	"github.com/eloylp/agents/internal/config"
+)
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
+
+// Open opens (or creates) a SQLite database at path and runs all pending
+// schema migrations. It returns a ready-to-use *sql.DB.
+func Open(path string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, fmt.Errorf("store: open %s: %w", path, err)
+	}
+	// Use WAL mode for better concurrent read performance.
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: set WAL mode: %w", err)
+	}
+	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: enable foreign keys: %w", err)
+	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+// migrate applies all embedded SQL migration files in lexicographic order.
+// Each file is applied as a single transaction; already-applied files are
+// tracked via a schema_migrations table.
+func migrate(db *sql.DB) error {
+	// Ensure the migrations tracking table exists.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+		name TEXT PRIMARY KEY,
+		applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+	)`); err != nil {
+		return fmt.Errorf("store: create schema_migrations: %w", err)
+	}
+
+	entries, err := fs.ReadDir(migrationsFS, "migrations")
+	if err != nil {
+		return fmt.Errorf("store: read migrations dir: %w", err)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".sql") {
+			continue
+		}
+
+		var applied bool
+		row := db.QueryRow("SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE name=?)", name)
+		if err := row.Scan(&applied); err != nil {
+			return fmt.Errorf("store: check migration %s: %w", name, err)
+		}
+		if applied {
+			continue
+		}
+
+		data, err := migrationsFS.ReadFile("migrations/" + name)
+		if err != nil {
+			return fmt.Errorf("store: read migration %s: %w", name, err)
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("store: begin migration %s: %w", name, err)
+		}
+		if _, err := tx.Exec(string(data)); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("store: apply migration %s: %w", name, err)
+		}
+		if _, err := tx.Exec("INSERT INTO schema_migrations(name) VALUES(?)", name); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("store: record migration %s: %w", name, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("store: commit migration %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// Import writes cfg into the database, upserting every entity. Existing rows
+// are replaced (INSERT OR REPLACE). Prompts are stored inline — any
+// prompt_file references must be resolved in cfg before calling Import (i.e.
+// pass the output of config.Load which resolves them eagerly).
+//
+// Secrets (WebhookSecret, APIKey) are NOT written — only the env-var names
+// (WebhookSecretEnv, APIKeyEnv) are stored. The secrets are re-resolved from
+// the environment at Load time.
+func Import(db *sql.DB, cfg *config.Config) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store import: begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := importDaemon(tx, cfg.Daemon); err != nil {
+		return err
+	}
+	if err := importBackends(tx, cfg.Daemon.AIBackends); err != nil {
+		return err
+	}
+	if err := importSkills(tx, cfg.Skills); err != nil {
+		return err
+	}
+	if err := importAgents(tx, cfg.Agents); err != nil {
+		return err
+	}
+	if err := importRepos(tx, cfg.Repos); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// daemonRecord is a JSON-serializable view of DaemonConfig that excludes
+// resolved secret values (only the env-var name fields are kept).
+type daemonRecord struct {
+	Log       config.LogConfig       `json:"log"`
+	HTTP      httpRecord             `json:"http"`
+	Processor config.ProcessorConfig `json:"processor"`
+	MemoryDir string                 `json:"memory_dir"`
+	Proxy     proxyRecord            `json:"proxy"`
+}
+
+// httpRecord mirrors HTTPConfig but omits resolved secret fields.
+type httpRecord struct {
+	ListenAddr             string `json:"listen_addr"`
+	StatusPath             string `json:"status_path"`
+	WebhookPath            string `json:"webhook_path"`
+	AgentsRunPath          string `json:"agents_run_path"`
+	WebhookSecretEnv       string `json:"webhook_secret_env"`
+	APIKeyEnv              string `json:"api_key_env"`
+	ReadTimeoutSeconds     int    `json:"read_timeout_seconds"`
+	WriteTimeoutSeconds    int    `json:"write_timeout_seconds"`
+	IdleTimeoutSeconds     int    `json:"idle_timeout_seconds"`
+	MaxBodyBytes           int64  `json:"max_body_bytes"`
+	DeliveryTTLSeconds     int    `json:"delivery_ttl_seconds"`
+	ShutdownTimeoutSeconds int    `json:"shutdown_timeout_seconds"`
+}
+
+// proxyRecord mirrors ProxyConfig but omits the resolved APIKey.
+type proxyRecord struct {
+	Enabled  bool               `json:"enabled"`
+	Path     string             `json:"path"`
+	Upstream proxyUpstreamRecord `json:"upstream"`
+}
+
+type proxyUpstreamRecord struct {
+	URL            string         `json:"url"`
+	Model          string         `json:"model"`
+	APIKeyEnv      string         `json:"api_key_env"`
+	TimeoutSeconds int            `json:"timeout_seconds"`
+	ExtraBody      map[string]any `json:"extra_body,omitempty"`
+}
+
+func importDaemon(tx *sql.Tx, d config.DaemonConfig) error {
+	rec := daemonRecord{
+		Log: d.Log,
+		HTTP: httpRecord{
+			ListenAddr:             d.HTTP.ListenAddr,
+			StatusPath:             d.HTTP.StatusPath,
+			WebhookPath:            d.HTTP.WebhookPath,
+			AgentsRunPath:          d.HTTP.AgentsRunPath,
+			WebhookSecretEnv:       d.HTTP.WebhookSecretEnv,
+			APIKeyEnv:              d.HTTP.APIKeyEnv,
+			ReadTimeoutSeconds:     d.HTTP.ReadTimeoutSeconds,
+			WriteTimeoutSeconds:    d.HTTP.WriteTimeoutSeconds,
+			IdleTimeoutSeconds:     d.HTTP.IdleTimeoutSeconds,
+			MaxBodyBytes:           d.HTTP.MaxBodyBytes,
+			DeliveryTTLSeconds:     d.HTTP.DeliveryTTLSeconds,
+			ShutdownTimeoutSeconds: d.HTTP.ShutdownTimeoutSeconds,
+		},
+		Processor: d.Processor,
+		MemoryDir: d.MemoryDir,
+		Proxy: proxyRecord{
+			Enabled: d.Proxy.Enabled,
+			Path:    d.Proxy.Path,
+			Upstream: proxyUpstreamRecord{
+				URL:            d.Proxy.Upstream.URL,
+				Model:          d.Proxy.Upstream.Model,
+				APIKeyEnv:      d.Proxy.Upstream.APIKeyEnv,
+				TimeoutSeconds: d.Proxy.Upstream.TimeoutSeconds,
+				ExtraBody:      d.Proxy.Upstream.ExtraBody,
+			},
+		},
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return fmt.Errorf("store import: marshal daemon config: %w", err)
+	}
+	if _, err := tx.Exec(
+		"INSERT OR REPLACE INTO config(key,value) VALUES('daemon',?)", string(data),
+	); err != nil {
+		return fmt.Errorf("store import: upsert daemon config: %w", err)
+	}
+	return nil
+}
+
+func importBackends(tx *sql.Tx, backends map[string]config.AIBackendConfig) error {
+	for name, b := range backends {
+		args, err := json.Marshal(b.Args)
+		if err != nil {
+			return fmt.Errorf("store import: marshal backend %s args: %w", name, err)
+		}
+		env, err := json.Marshal(b.Env)
+		if err != nil {
+			return fmt.Errorf("store import: marshal backend %s env: %w", name, err)
+		}
+		if _, err := tx.Exec(`
+			INSERT OR REPLACE INTO backends
+			  (name,command,args,env,timeout_seconds,max_prompt_chars,redaction_salt_env)
+			VALUES (?,?,?,?,?,?,?)`,
+			name, b.Command, string(args), string(env),
+			b.TimeoutSeconds, b.MaxPromptChars, b.RedactionSaltEnv,
+		); err != nil {
+			return fmt.Errorf("store import: upsert backend %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func importSkills(tx *sql.Tx, skills map[string]config.SkillDef) error {
+	for name, s := range skills {
+		if _, err := tx.Exec(
+			"INSERT OR REPLACE INTO skills(name,prompt) VALUES(?,?)",
+			name, s.Prompt,
+		); err != nil {
+			return fmt.Errorf("store import: upsert skill %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func importAgents(tx *sql.Tx, agents []config.AgentDef) error {
+	for _, a := range agents {
+		skills, err := json.Marshal(a.Skills)
+		if err != nil {
+			return fmt.Errorf("store import: marshal agent %s skills: %w", a.Name, err)
+		}
+		canDispatch, err := json.Marshal(a.CanDispatch)
+		if err != nil {
+			return fmt.Errorf("store import: marshal agent %s can_dispatch: %w", a.Name, err)
+		}
+		allowPRs := boolToInt(a.AllowPRs)
+		allowDispatch := boolToInt(a.AllowDispatch)
+		if _, err := tx.Exec(`
+			INSERT OR REPLACE INTO agents
+			  (name,backend,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description)
+			VALUES (?,?,?,?,?,?,?,?)`,
+			a.Name, a.Backend, string(skills), a.Prompt,
+			allowPRs, allowDispatch, string(canDispatch), a.Description,
+		); err != nil {
+			return fmt.Errorf("store import: upsert agent %s: %w", a.Name, err)
+		}
+	}
+	return nil
+}
+
+func importRepos(tx *sql.Tx, repos []config.RepoDef) error {
+	for _, r := range repos {
+		enabled := boolToInt(r.Enabled)
+		if _, err := tx.Exec(
+			"INSERT OR REPLACE INTO repos(name,enabled) VALUES(?,?)",
+			r.Name, enabled,
+		); err != nil {
+			return fmt.Errorf("store import: upsert repo %s: %w", r.Name, err)
+		}
+		for _, b := range r.Use {
+			labels, err := json.Marshal(b.Labels)
+			if err != nil {
+				return fmt.Errorf("store import: marshal binding labels for repo %s agent %s: %w", r.Name, b.Agent, err)
+			}
+			events, err := json.Marshal(b.Events)
+			if err != nil {
+				return fmt.Errorf("store import: marshal binding events for repo %s agent %s: %w", r.Name, b.Agent, err)
+			}
+			bindingEnabled := 1
+			if b.Enabled != nil && !*b.Enabled {
+				bindingEnabled = 0
+			}
+			if _, err := tx.Exec(`
+				INSERT INTO bindings(repo,agent,labels,events,cron,enabled)
+				VALUES (?,?,?,?,?,?)`,
+				r.Name, b.Agent, string(labels), string(events), b.Cron, bindingEnabled,
+			); err != nil {
+				return fmt.Errorf("store import: insert binding repo %s agent %s: %w", r.Name, b.Agent, err)
+			}
+		}
+	}
+	return nil
+}
+
+// Load reads all configuration from the database and returns a *config.Config
+// ready for use. It applies the same defaults, normalization, secret resolution
+// and validation as config.Load does for YAML.
+func Load(db *sql.DB) (*config.Config, error) {
+	cfg := &config.Config{}
+
+	if err := loadDaemon(db, cfg); err != nil {
+		return nil, err
+	}
+	if err := loadBackends(db, cfg); err != nil {
+		return nil, err
+	}
+	if err := loadSkills(db, cfg); err != nil {
+		return nil, err
+	}
+	if err := loadAgents(db, cfg); err != nil {
+		return nil, err
+	}
+	if err := loadRepos(db, cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func loadDaemon(db *sql.DB, cfg *config.Config) error {
+	var value string
+	err := db.QueryRow("SELECT value FROM config WHERE key='daemon'").Scan(&value)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("store load: daemon config not found in database (did you run --import?)")
+	}
+	if err != nil {
+		return fmt.Errorf("store load: query daemon config: %w", err)
+	}
+
+	var rec daemonRecord
+	if err := json.Unmarshal([]byte(value), &rec); err != nil {
+		return fmt.Errorf("store load: parse daemon config: %w", err)
+	}
+
+	cfg.Daemon.Log = rec.Log
+	cfg.Daemon.HTTP = config.HTTPConfig{
+		ListenAddr:             rec.HTTP.ListenAddr,
+		StatusPath:             rec.HTTP.StatusPath,
+		WebhookPath:            rec.HTTP.WebhookPath,
+		AgentsRunPath:          rec.HTTP.AgentsRunPath,
+		WebhookSecretEnv:       rec.HTTP.WebhookSecretEnv,
+		APIKeyEnv:              rec.HTTP.APIKeyEnv,
+		ReadTimeoutSeconds:     rec.HTTP.ReadTimeoutSeconds,
+		WriteTimeoutSeconds:    rec.HTTP.WriteTimeoutSeconds,
+		IdleTimeoutSeconds:     rec.HTTP.IdleTimeoutSeconds,
+		MaxBodyBytes:           rec.HTTP.MaxBodyBytes,
+		DeliveryTTLSeconds:     rec.HTTP.DeliveryTTLSeconds,
+		ShutdownTimeoutSeconds: rec.HTTP.ShutdownTimeoutSeconds,
+	}
+	cfg.Daemon.Processor = rec.Processor
+	cfg.Daemon.MemoryDir = rec.MemoryDir
+	cfg.Daemon.Proxy = config.ProxyConfig{
+		Enabled: rec.Proxy.Enabled,
+		Path:    rec.Proxy.Path,
+		Upstream: config.ProxyUpstreamConfig{
+			URL:            rec.Proxy.Upstream.URL,
+			Model:          rec.Proxy.Upstream.Model,
+			APIKeyEnv:      rec.Proxy.Upstream.APIKeyEnv,
+			TimeoutSeconds: rec.Proxy.Upstream.TimeoutSeconds,
+			ExtraBody:      rec.Proxy.Upstream.ExtraBody,
+		},
+	}
+	return nil
+}
+
+func loadBackends(db *sql.DB, cfg *config.Config) error {
+	rows, err := db.Query("SELECT name,command,args,env,timeout_seconds,max_prompt_chars,redaction_salt_env FROM backends")
+	if err != nil {
+		return fmt.Errorf("store load: query backends: %w", err)
+	}
+	defer rows.Close()
+
+	backends := make(map[string]config.AIBackendConfig)
+	for rows.Next() {
+		var name, command, argsJSON, envJSON, saltEnv string
+		var timeout, maxChars int
+		if err := rows.Scan(&name, &command, &argsJSON, &envJSON, &timeout, &maxChars, &saltEnv); err != nil {
+			return fmt.Errorf("store load: scan backend: %w", err)
+		}
+		var args []string
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			return fmt.Errorf("store load: parse backend %s args: %w", name, err)
+		}
+		var env map[string]string
+		if err := json.Unmarshal([]byte(envJSON), &env); err != nil {
+			return fmt.Errorf("store load: parse backend %s env: %w", name, err)
+		}
+		backends[name] = config.AIBackendConfig{
+			Command:          command,
+			Args:             args,
+			Env:              env,
+			TimeoutSeconds:   timeout,
+			MaxPromptChars:   maxChars,
+			RedactionSaltEnv: saltEnv,
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store load: iterate backends: %w", err)
+	}
+	cfg.Daemon.AIBackends = backends
+	return nil
+}
+
+func loadSkills(db *sql.DB, cfg *config.Config) error {
+	rows, err := db.Query("SELECT name,prompt FROM skills")
+	if err != nil {
+		return fmt.Errorf("store load: query skills: %w", err)
+	}
+	defer rows.Close()
+
+	skills := make(map[string]config.SkillDef)
+	for rows.Next() {
+		var name, prompt string
+		if err := rows.Scan(&name, &prompt); err != nil {
+			return fmt.Errorf("store load: scan skill: %w", err)
+		}
+		skills[name] = config.SkillDef{Prompt: prompt}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store load: iterate skills: %w", err)
+	}
+	cfg.Skills = skills
+	return nil
+}
+
+func loadAgents(db *sql.DB, cfg *config.Config) error {
+	rows, err := db.Query(`
+		SELECT name,backend,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description
+		FROM agents`)
+	if err != nil {
+		return fmt.Errorf("store load: query agents: %w", err)
+	}
+	defer rows.Close()
+
+	var agents []config.AgentDef
+	for rows.Next() {
+		var name, backend, skillsJSON, prompt, canDispatchJSON, description string
+		var allowPRs, allowDispatch int
+		if err := rows.Scan(
+			&name, &backend, &skillsJSON, &prompt,
+			&allowPRs, &allowDispatch, &canDispatchJSON, &description,
+		); err != nil {
+			return fmt.Errorf("store load: scan agent: %w", err)
+		}
+		var skills []string
+		if err := json.Unmarshal([]byte(skillsJSON), &skills); err != nil {
+			return fmt.Errorf("store load: parse agent %s skills: %w", name, err)
+		}
+		var canDispatch []string
+		if err := json.Unmarshal([]byte(canDispatchJSON), &canDispatch); err != nil {
+			return fmt.Errorf("store load: parse agent %s can_dispatch: %w", name, err)
+		}
+		agents = append(agents, config.AgentDef{
+			Name:          name,
+			Backend:       backend,
+			Skills:        skills,
+			Prompt:        prompt,
+			AllowPRs:      intToBool(allowPRs),
+			AllowDispatch: intToBool(allowDispatch),
+			CanDispatch:   canDispatch,
+			Description:   description,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store load: iterate agents: %w", err)
+	}
+	cfg.Agents = agents
+	return nil
+}
+
+func loadRepos(db *sql.DB, cfg *config.Config) error {
+	rows, err := db.Query("SELECT name,enabled FROM repos")
+	if err != nil {
+		return fmt.Errorf("store load: query repos: %w", err)
+	}
+	defer rows.Close()
+
+	var repos []config.RepoDef
+	for rows.Next() {
+		var name string
+		var enabled int
+		if err := rows.Scan(&name, &enabled); err != nil {
+			return fmt.Errorf("store load: scan repo: %w", err)
+		}
+		repos = append(repos, config.RepoDef{Name: name, Enabled: intToBool(enabled)})
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store load: iterate repos: %w", err)
+	}
+
+	// Load bindings for each repo.
+	for i := range repos {
+		bindings, err := loadBindingsForRepo(db, repos[i].Name)
+		if err != nil {
+			return err
+		}
+		repos[i].Use = bindings
+	}
+	cfg.Repos = repos
+	return nil
+}
+
+func loadBindingsForRepo(db *sql.DB, repo string) ([]config.Binding, error) {
+	rows, err := db.Query(
+		"SELECT agent,labels,events,cron,enabled FROM bindings WHERE repo=?", repo,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store load: query bindings for %s: %w", repo, err)
+	}
+	defer rows.Close()
+
+	var bindings []config.Binding
+	for rows.Next() {
+		var agent, labelsJSON, eventsJSON, cron string
+		var enabled int
+		if err := rows.Scan(&agent, &labelsJSON, &eventsJSON, &cron, &enabled); err != nil {
+			return nil, fmt.Errorf("store load: scan binding for %s: %w", repo, err)
+		}
+		var labels []string
+		if err := json.Unmarshal([]byte(labelsJSON), &labels); err != nil {
+			return nil, fmt.Errorf("store load: parse binding labels for %s: %w", repo, err)
+		}
+		var events []string
+		if err := json.Unmarshal([]byte(eventsJSON), &events); err != nil {
+			return nil, fmt.Errorf("store load: parse binding events for %s: %w", repo, err)
+		}
+		b := config.Binding{
+			Agent:  agent,
+			Labels: labels,
+			Events: events,
+			Cron:   cron,
+		}
+		if enabled == 0 {
+			f := false
+			b.Enabled = &f
+		}
+		bindings = append(bindings, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store load: iterate bindings for %s: %w", repo, err)
+	}
+	return bindings, nil
+}
+
+// boolToInt converts a bool to 0/1 for SQLite storage.
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// intToBool converts a SQLite 0/1 to bool.
+func intToBool(i int) bool { return i != 0 }
+
+// ImportCount holds row counts written during an Import call, for progress
+// logging.
+type ImportCount struct {
+	Backends int
+	Skills   int
+	Agents   int
+	Repos    int
+	Bindings int
+}
+
+// String returns a human-readable summary of imported row counts.
+func (c ImportCount) String() string {
+	return fmt.Sprintf("imported %d backends, %d skills, %d agents, %d repos, %d bindings",
+		c.Backends, c.Skills, c.Agents, c.Repos, c.Bindings)
+}
+
+// CountFrom returns an ImportCount reflecting the current row counts in db.
+func CountFrom(db *sql.DB) (ImportCount, error) {
+	var c ImportCount
+	tables := []struct {
+		table string
+		dest  *int
+	}{
+		{"backends", &c.Backends},
+		{"skills", &c.Skills},
+		{"agents", &c.Agents},
+		{"repos", &c.Repos},
+		{"bindings", &c.Bindings},
+	}
+	for _, t := range tables {
+		if err := db.QueryRow("SELECT COUNT(*) FROM " + t.table).Scan(t.dest); err != nil {
+			return c, fmt.Errorf("store: count %s: %w", t.table, err)
+		}
+	}
+	return c, nil
+}
+
+// LoadAndValidate is the full startup path when --db is used. It reads the
+// config from the database, resolves secrets from env vars, and runs the same
+// validation as config.Load. The returned *config.Config is ready to use.
+func LoadAndValidate(db *sql.DB) (*config.Config, error) {
+	cfg, err := Load(db)
+	if err != nil {
+		return nil, err
+	}
+	return config.FinishLoad(cfg)
+}
+
