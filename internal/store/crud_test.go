@@ -235,6 +235,32 @@ func TestUpsertAndReadBackends(t *testing.T) {
 	}
 }
 
+func TestUpsertBackendAppliesDefaults(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	// Persist a backend with zero numeric fields — the same payload that
+	// POST /api/store/backends would send when omitting timeout_seconds and
+	// max_prompt_chars from the request body.
+	b := config.AIBackendConfig{Command: "claude", Args: []string{}, Env: map[string]string{}}
+	if err := store.UpsertBackend(db, "claude", b); err != nil {
+		t.Fatalf("UpsertBackend: %v", err)
+	}
+	backends, err := store.ReadBackends(db)
+	if err != nil {
+		t.Fatalf("ReadBackends: %v", err)
+	}
+	got := backends["claude"]
+	// startup-equivalent defaults must have been applied before storage.
+	if got.TimeoutSeconds != 600 {
+		t.Errorf("TimeoutSeconds: got %d, want 600 (startup default)", got.TimeoutSeconds)
+	}
+	if got.MaxPromptChars != 12000 {
+		t.Errorf("MaxPromptChars: got %d, want 12000 (startup default)", got.MaxPromptChars)
+	}
+}
+
 func TestDeleteBackend(t *testing.T) {
 	t.Parallel()
 	db, cleanup := openTestDB(t)

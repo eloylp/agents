@@ -192,7 +192,11 @@ func ReadBackends(db *sql.DB) (map[string]config.AIBackendConfig, error) {
 }
 
 // UpsertBackend inserts or replaces a single AI backend configuration.
+// Zero-value numeric fields are normalised to startup defaults before
+// persistence so that the stored config matches what FinishLoad would
+// produce on restart (e.g. timeout_seconds 0 → 600, max_prompt_chars 0 → 12000).
 func UpsertBackend(db *sql.DB, name string, b config.AIBackendConfig) error {
+	config.ApplyBackendDefaults(&b)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert backend %s: begin: %w", name, err)

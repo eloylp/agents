@@ -941,6 +941,15 @@ func isValidBackendName(name string) bool {
 	return slices.Contains(validAIBackendNames, name)
 }
 
+// ApplyBackendDefaults fills in zero-value fields of b with the same defaults
+// that Load / FinishLoad apply at startup. Callers that persist a backend via
+// the CRUD API should call this before writing so that the stored values match
+// what the daemon would derive from those zeros on the next restart.
+func ApplyBackendDefaults(b *AIBackendConfig) {
+	setDefaultInt(&b.TimeoutSeconds, defaultAITimeoutSeconds)
+	setDefaultInt(&b.MaxPromptChars, defaultMaxPromptChars)
+}
+
 func setDefault(dst *string, def string) {
 	if strings.TrimSpace(*dst) == "" {
 		*dst = def
