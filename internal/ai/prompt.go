@@ -27,7 +27,13 @@ type PromptContext struct {
 	Number     int    // issue or PR number, 0 for runs with no GitHub item
 	Backend    string // resolved backend name (claude, codex, ...)
 	Memory     string // existing memory snapshot for autonomous runs
-	MemoryPath string // path the agent should update after the run
+	MemoryPath string // path the agent should update after the run (file-based memory only)
+	// ShowMemory controls whether existing memory is injected into the prompt.
+	// Set to true by the scheduler for autonomous runs. For SQLite-backed memory
+	// (MemoryPath == "") the agent is expected to return updated memory in the
+	// `memory` response field. For file-backed memory (MemoryPath != "") the
+	// agent writes to the file directly.
+	ShowMemory bool
 	EventKind  string         // e.g. "issues.labeled", "push" — empty for autonomous runs
 	Actor      string         // GitHub login that triggered the event; empty for autonomous runs
 	Payload    map[string]any // kind-specific event fields; nil for autonomous runs
@@ -131,7 +137,17 @@ func renderRuntimeContext(ctx PromptContext) string {
 		}
 	}
 	if ctx.MemoryPath != "" {
+		// File-based memory (YAML-only mode): tell the agent where to write.
 		fmt.Fprintf(&b, "Memory file: %s\n", ctx.MemoryPath)
+		mem := strings.TrimSpace(ctx.Memory)
+		if mem == "" {
+			b.WriteString("Existing memory: (empty)\n")
+		} else {
+			fmt.Fprintf(&b, "Existing memory:\n%s\n", mem)
+		}
+	} else if ctx.ShowMemory {
+		// SQLite-based memory (--db mode): inject existing content only — the
+		// agent returns updated memory in the `memory` response field.
 		mem := strings.TrimSpace(ctx.Memory)
 		if mem == "" {
 			b.WriteString("Existing memory: (empty)\n")

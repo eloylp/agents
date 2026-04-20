@@ -337,3 +337,95 @@ func TestLoadEmptyDatabase(t *testing.T) {
 		t.Fatal("expected error loading from empty database, got nil")
 	}
 }
+
+// TestGetMemoryEmpty verifies that GetMemory returns an empty string (not an
+// error) when no memory has been written yet for the given (agent, repo) pair.
+func TestGetMemoryEmpty(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	got, err := store.GetMemory(db, "coder", "owner/repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("expected empty string, got %q", got)
+	}
+}
+
+// TestSetAndGetMemory verifies the full write→read round-trip.
+func TestSetAndGetMemory(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	const (
+		agent   = "coder"
+		repo    = "owner/repo"
+		content = "## Notes\n- remember foo\n"
+	)
+
+	if err := store.SetMemory(db, agent, repo, content); err != nil {
+		t.Fatalf("SetMemory: %v", err)
+	}
+
+	got, err := store.GetMemory(db, agent, repo)
+	if err != nil {
+		t.Fatalf("GetMemory: %v", err)
+	}
+	if got != content {
+		t.Errorf("GetMemory = %q, want %q", got, content)
+	}
+}
+
+// TestSetMemoryUpsert verifies that a second SetMemory call overwrites the
+// previous content rather than appending or failing.
+func TestSetMemoryUpsert(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	const agent, repo = "coder", "owner/repo"
+	if err := store.SetMemory(db, agent, repo, "first"); err != nil {
+		t.Fatalf("first SetMemory: %v", err)
+	}
+	if err := store.SetMemory(db, agent, repo, "second"); err != nil {
+		t.Fatalf("second SetMemory: %v", err)
+	}
+	got, err := store.GetMemory(db, agent, repo)
+	if err != nil {
+		t.Fatalf("GetMemory: %v", err)
+	}
+	if got != "second" {
+		t.Errorf("GetMemory after upsert = %q, want %q", got, "second")
+	}
+}
+
+// TestMemoryIsolatedByAgentAndRepo verifies that memory entries are scoped to
+// the (agent, repo) pair: writing for one pair must not affect another.
+func TestMemoryIsolatedByAgentAndRepo(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	cases := []struct{ agent, repo, content string }{
+		{"coder", "owner/repo-a", "mem-a"},
+		{"coder", "owner/repo-b", "mem-b"},
+		{"reviewer", "owner/repo-a", "mem-c"},
+	}
+	for _, c := range cases {
+		if err := store.SetMemory(db, c.agent, c.repo, c.content); err != nil {
+			t.Fatalf("SetMemory(%s,%s): %v", c.agent, c.repo, err)
+		}
+	}
+	for _, c := range cases {
+		got, err := store.GetMemory(db, c.agent, c.repo)
+		if err != nil {
+			t.Fatalf("GetMemory(%s,%s): %v", c.agent, c.repo, err)
+		}
+		if got != c.content {
+			t.Errorf("GetMemory(%s,%s) = %q, want %q", c.agent, c.repo, got, c.content)
+		}
+	}
+}

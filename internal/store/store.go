@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"sort"
@@ -639,5 +640,41 @@ func LoadAndValidate(db *sql.DB) (*config.Config, error) {
 		return nil, err
 	}
 	return config.FinishLoad(cfg)
+}
+
+// ── Memory API ──────────────────────────────────────────────────────────────
+
+// GetMemory returns the stored memory blob for the given (agent, repo) pair.
+// Returns an empty string (not an error) when no memory has been written yet.
+func GetMemory(db *sql.DB, agent, repo string) (string, error) {
+	var content string
+	err := db.QueryRow(
+		"SELECT content FROM memory WHERE agent=? AND repo=?", agent, repo,
+	).Scan(&content)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("store get memory agent=%s repo=%s: %w", agent, repo, err)
+	}
+	return content, nil
+}
+
+// SetMemory writes (upserts) the memory blob for the given (agent, repo) pair.
+// Passing an empty string clears the memory but keeps the row; callers that
+// want a full delete should call DeleteMemory instead.
+func SetMemory(db *sql.DB, agent, repo, content string) error {
+	_, err := db.Exec(`
+		INSERT INTO memory(agent,repo,content,updated_at)
+		VALUES (?,?,?,datetime('now'))
+		ON CONFLICT(agent,repo) DO UPDATE SET
+		  content=excluded.content,
+		  updated_at=excluded.updated_at`,
+		agent, repo, content,
+	)
+	if err != nil {
+		return fmt.Errorf("store set memory agent=%s repo=%s: %w", agent, repo, err)
+	}
+	return nil
 }
 

@@ -348,3 +348,57 @@ func TestRenderAgentPromptTotalContentPreserved(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderAgentPromptSQLiteMemory verifies that setting ShowMemory=true
+// (SQLite path) injects the memory content without a "Memory file:" line.
+func TestRenderAgentPromptSQLiteMemory(t *testing.T) {
+	t.Parallel()
+	agent := config.AgentDef{
+		Name:   "coder",
+		Prompt: "Do your job.",
+	}
+	usr := renderUser(t, agent, nil, ai.PromptContext{
+		Repo:       "owner/repo",
+		ShowMemory: true,
+		Memory:     "## Prior work\n- fixed #42\n",
+	})
+	if strings.Contains(usr, "Memory file:") {
+		t.Errorf("SQLite path must not include 'Memory file:' line; User:\n%s", usr)
+	}
+	if !strings.Contains(usr, "fixed #42") {
+		t.Errorf("missing memory content in User:\n%s", usr)
+	}
+}
+
+// TestRenderAgentPromptSQLiteMemoryEmpty verifies that ShowMemory=true with
+// no prior memory renders "(empty)" rather than omitting the section.
+func TestRenderAgentPromptSQLiteMemoryEmpty(t *testing.T) {
+	t.Parallel()
+	agent := config.AgentDef{Prompt: "Go."}
+	usr := renderUser(t, agent, nil, ai.PromptContext{
+		Repo:       "owner/repo",
+		ShowMemory: true,
+	})
+	if !strings.Contains(usr, "Existing memory: (empty)") {
+		t.Errorf("expected explicit empty signal in User:\n%s", usr)
+	}
+}
+
+// TestRenderAgentPromptNoMemoryWithoutShowMemory verifies that event-driven
+// runs (ShowMemory=false, MemoryPath="") do not expose memory in the prompt.
+func TestRenderAgentPromptNoMemoryWithoutShowMemory(t *testing.T) {
+	t.Parallel()
+	agent := config.AgentDef{Prompt: "Go."}
+	// Simulate an event-driven run: Repo is set but ShowMemory is false and
+	// MemoryPath is empty. The Memory field should be ignored entirely.
+	usr := renderUser(t, agent, nil, ai.PromptContext{
+		Repo:   "owner/repo",
+		Memory: "should not appear",
+	})
+	if strings.Contains(usr, "should not appear") {
+		t.Errorf("memory must not be injected for event-driven runs; User:\n%s", usr)
+	}
+	if strings.Contains(usr, "Existing memory") {
+		t.Errorf("memory section must not appear for event-driven runs; User:\n%s", usr)
+	}
+}

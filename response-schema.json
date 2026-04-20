@@ -33,6 +33,10 @@
         "additionalProperties": false
       },
       "description": "Agents to invoke next via the reactive dispatch system"
+    },
+    "memory": {
+      "type": "string",
+      "description": "Full updated memory state for autonomous runs (full overwrite). Empty string leaves stored memory unchanged."
     }
   },
   "required": ["summary", "artifacts", "dispatch"],

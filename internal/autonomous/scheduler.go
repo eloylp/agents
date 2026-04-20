@@ -2,6 +2,7 @@ package autonomous
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"maps"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -74,6 +76,7 @@ type Scheduler struct {
 	cfg          *config.Config
 	runners      map[string]ai.Runner
 	memories     *MemoryStore
+	db           *sql.DB                // nil when SQLite memory is not in use
 	cron         *cron.Cron
 	logger       zerolog.Logger
 	ctxMu        sync.RWMutex
@@ -83,6 +86,15 @@ type Scheduler struct {
 	lastRuns     map[string]lastRunRecord // key: "name\x00repo"
 	dispatcher   *workflow.Dispatcher    // nil when dispatch is not configured
 	traceRec     workflow.TraceRecorder  // nil when tracing is not configured
+}
+
+// WithDB attaches a SQLite database to the Scheduler. When set, autonomous
+// agent runs read and write memory via the store package (GetMemory/SetMemory)
+// instead of the file-based MemoryStore. The scheduler sets ShowMemory=true
+// and MemoryPath="" in every PromptContext so the agent knows to return
+// updated memory in the `memory` response field.
+func (s *Scheduler) WithDB(db *sql.DB) {
+	s.db = db
 }
 
 // WithDispatcher attaches a Dispatcher to the Scheduler so that dispatch
@@ -306,12 +318,17 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	// as a dispatch enqueue error must NOT clear the mark — the autonomous pass
 	// already committed, so the dedup window must remain in force.
 	runCompleted := false
-	err := s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
+
+	// doRun performs the prompt render, agent execution, and post-run memory
+	// update. It is called either inside memories.WithLock (file-based path) or
+	// directly with the SQLite-fetched memory (--db path).
+	doRun := func(memoryPath string, memory string) error {
 		rendered, err := ai.RenderAgentPrompt(agent, s.cfg.Skills, ai.PromptContext{
 			Repo:       repo,
 			Backend:    backend,
 			Memory:     memory,
 			MemoryPath: memoryPath,
+			ShowMemory: memoryPath == "",
 			Roster:     roster,
 		})
 		if err != nil {
@@ -352,6 +369,12 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 			return fmt.Errorf("agent run: %w", err)
 		}
 		runCompleted = true
+		// Persist updated memory when using the SQLite path.
+		if s.db != nil && resp.Memory != "" {
+			if merr := store.SetMemory(s.db, agent.Name, repo, resp.Memory); merr != nil {
+				logger.Error().Err(merr).Msg("failed to persist agent memory")
+			}
+		}
 		logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Int("dispatch_requests", len(resp.Dispatch)).Msg("autonomous pass completed")
 		if s.dispatcher != nil && len(resp.Dispatch) > 0 {
 			// Synthesize a minimal event to carry repo context into the dispatcher.
@@ -375,7 +398,23 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 			}
 		}
 		return nil
-	})
+	}
+
+	var err error
+	if s.db != nil {
+		// SQLite-backed memory path: fetch memory outside the file lock, run,
+		// then write back in doRun if the agent returned non-empty memory.
+		mem, merr := store.GetMemory(s.db, agent.Name, repo)
+		if merr != nil {
+			if s.dispatcher != nil {
+				s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
+			}
+			return fmt.Errorf("get memory: %w", merr)
+		}
+		err = doRun("", mem)
+	} else {
+		err = s.memories.WithLock(agent.Name, repo, doRun)
+	}
 	if s.dispatcher != nil {
 		if err != nil && !runCompleted {
 			// Roll back the cron mark only when the autonomous pass itself failed

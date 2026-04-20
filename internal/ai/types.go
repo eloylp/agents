@@ -44,4 +44,9 @@ type Response struct {
 	Artifacts []Artifact        `json:"artifacts"`
 	Summary   string            `json:"summary"`
 	Dispatch  []DispatchRequest `json:"dispatch,omitempty"`
+	// Memory is the agent's full updated memory state for autonomous runs.
+	// When non-empty the daemon writes it back to the memory store, replacing
+	// the previous content entirely. An empty string leaves the stored memory
+	// unchanged. Only meaningful for autonomous runs; event-driven runs ignore it.
+	Memory string `json:"memory,omitempty"`
 }
