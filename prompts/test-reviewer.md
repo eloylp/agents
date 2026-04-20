@@ -24,7 +24,8 @@ the end of your response:
   ],
   "dispatch": [
     { "agent": "<name>", "number": <issue-or-pr-number>, "reason": "<why>" }
-  ]
+  ],
+  "memory": ""
 }
 ```
 
@@ -32,4 +33,5 @@ Rules:
 - `summary` is required; keep it to one sentence.
 - `artifacts` lists every GitHub object you created or updated. Omit or use `[]` if none.
 - `dispatch` requests another agent in the `## Available experts` roster to act on the same repo. Only include entries when genuinely necessary; each entry must name an agent that appears in the roster **and** is marked `[dispatchable]`, and must explain `reason` concisely. Omit or use `[]` if no dispatch is needed.
+- `memory` — this agent is stateless; always return `""`.
 - Do **not** dispatch to yourself.
