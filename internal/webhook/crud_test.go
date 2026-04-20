@@ -268,6 +268,54 @@ func TestStoreCRUDBackendCreateAndDelete(t *testing.T) {
 	}
 }
 
+func TestStoreCRUDBackendGetRedactsEnv(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	// Create a backend that has env entries with secret values.
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
+		"name":    "claude",
+		"command": "claude",
+		"args":    []string{},
+		"env":     map[string]string{"ANTHROPIC_API_KEY": "sk-secret", "OTHER_VAR": "also-secret"},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("POST backend: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// GET list — env values must be redacted.
+	rr := doCRUDRequest(t, s, http.MethodGet, "/api/store/backends", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET backends: got %d", rr.Code)
+	}
+	var list []storeBackendJSON
+	if err := json.NewDecoder(rr.Body).Decode(&list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("want 1 backend, got %d", len(list))
+	}
+	for k, v := range list[0].Env {
+		if v != "[redacted]" {
+			t.Errorf("GET /api/store/backends: env[%q] = %q, want \"[redacted]\"", k, v)
+		}
+	}
+
+	// GET single — same redaction requirement.
+	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/backends/claude", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET backend/claude: got %d", rr.Code)
+	}
+	var single storeBackendJSON
+	if err := json.NewDecoder(rr.Body).Decode(&single); err != nil {
+		t.Fatalf("decode single: %v", err)
+	}
+	for k, v := range single.Env {
+		if v != "[redacted]" {
+			t.Errorf("GET /api/store/backends/claude: env[%q] = %q, want \"[redacted]\"", k, v)
+		}
+	}
+}
+
 // ── /api/store/repos ──────────────────────────────────────────────────────────
 
 func TestStoreCRUDRepoCreateAndDelete(t *testing.T) {

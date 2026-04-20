@@ -68,11 +68,19 @@ type storeBackendJSON struct {
 }
 
 func backendToStoreJSON(name string, b config.AIBackendConfig) storeBackendJSON {
+	// Redact env values: backend env entries are expected to hold secrets
+	// (API keys, base URLs, etc.). Preserve the key names so operators can
+	// identify which environment variables are configured, but never expose
+	// the resolved values — consistent with how /api/config handles backends.
+	redactedEnv := make(map[string]string, len(b.Env))
+	for k := range b.Env {
+		redactedEnv[k] = "[redacted]"
+	}
 	return storeBackendJSON{
 		Name:             name,
 		Command:          b.Command,
 		Args:             nilSafeStrings(b.Args),
-		Env:              b.Env,
+		Env:              redactedEnv,
 		TimeoutSeconds:   b.TimeoutSeconds,
 		MaxPromptChars:   b.MaxPromptChars,
 		RedactionSaltEnv: b.RedactionSaltEnv,

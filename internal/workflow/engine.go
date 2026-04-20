@@ -198,10 +198,15 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		return fmt.Errorf("agent.dispatch event missing target_agent in payload")
 	}
 
-	// Snapshot the config pointer under a brief read lock so that a concurrent
-	// hot-reload cannot modify the struct while we read routing data from it.
+	// Snapshot both cfg and runners atomically (same lock order as
+	// UpdateConfigAndRunners) so that the routing lookup and the subsequent
+	// runAgent call operate on a single consistent epoch. Releasing both locks
+	// before the slow runAgent call keeps contention minimal.
 	e.cfgMu.RLock()
+	e.runnersMu.RLock()
 	cfg := e.cfg
+	runners := e.runners
+	e.runnersMu.RUnlock()
 	e.cfgMu.RUnlock()
 
 	repo, ok := cfg.RepoByName(ev.Repo.FullName)
@@ -249,7 +254,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		Str("invoked_by", ev.Actor).
 		Msg("running dispatched agent")
 
-	runErr := e.runAgent(ctx, ev, agent)
+	runErr := e.runAgent(ctx, ev, agent, cfg, runners)
 
 	// Release the on-demand claim taken above for agents.run.
 	if ev.Kind == "agents.run" && e.dispatcher != nil {
@@ -269,7 +274,16 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 // duplicate runs within the dedup window.
 // A failing agent does not abort the others; all errors are joined and returned.
 func (e *Engine) fanOut(ctx context.Context, ev Event) error {
-	matched := e.agentsForEvent(ev)
+	// Snapshot both cfg and runners in one critical section so that the
+	// agent lookup and the subsequent runAgent calls share a single epoch.
+	e.cfgMu.RLock()
+	e.runnersMu.RLock()
+	cfg := e.cfg
+	runners := e.runners
+	e.runnersMu.RUnlock()
+	e.cfgMu.RUnlock()
+
+	matched := e.agentsForEvent(cfg, ev)
 	if len(matched) == 0 {
 		e.logger.Info().
 			Str("repo", ev.Repo.FullName).
@@ -334,7 +348,7 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 				}
 			}()
 
-			if err := e.runAgent(ctx, ev, a); err != nil {
+			if err := e.runAgent(ctx, ev, a, cfg, runners); err != nil {
 				// Abandon on failure so that a retry or a subsequent event can
 				// claim the slot and attempt the run again.
 				if e.dispatcher != nil && ev.Number > 0 {
@@ -364,13 +378,9 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 // matches ev. A label binding matches when ev is a labeled event and the
 // payload label is in the binding's Labels slice. An event binding matches
 // when ev.Kind appears in the binding's Events slice.
-func (e *Engine) agentsForEvent(ev Event) []config.AgentDef {
-	// Snapshot the config pointer so a concurrent hot-reload does not race
-	// with our reads of repo/agent definitions.
-	e.cfgMu.RLock()
-	cfg := e.cfg
-	e.cfgMu.RUnlock()
-
+// cfg must be a snapshot already held by the caller to ensure a single
+// consistent epoch across the lookup and the subsequent runAgent calls.
+func (e *Engine) agentsForEvent(cfg *config.Config, ev Event) []config.AgentDef {
 	repo, ok := cfg.RepoByName(ev.Repo.FullName)
 	if !ok || !repo.Enabled {
 		return nil
@@ -463,19 +473,11 @@ func extractDispatchContext(ev Event) (rootEventID string, depth int) {
 	return GenEventID(), 0
 }
 
-func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef) error {
-	// Snapshot config and runners under both read locks held simultaneously so
-	// that a concurrent UpdateConfigAndRunners cannot swap one value between
-	// our two reads. Lock order (cfgMu then runnersMu) is consistent with
-	// UpdateConfigAndRunners to prevent deadlock. Both locks are released
-	// before the slow runner.Run call below, minimising contention.
-	e.cfgMu.RLock()
-	e.runnersMu.RLock()
-	cfg := e.cfg
-	runners := e.runners
-	e.runnersMu.RUnlock()
-	e.cfgMu.RUnlock()
-
+// runAgent executes agent using the cfg and runners snapshot provided by the
+// caller. Both must come from the same atomic snapshot so that agent lookup
+// and backend resolution operate on a single consistent epoch. The caller is
+// responsible for snapshotting under cfgMu+runnersMu before calling here.
+func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef, cfg *config.Config, runners map[string]ai.Runner) error {
 	backend := cfg.ResolveBackend(agent.Backend)
 	if backend == "" {
 		return fmt.Errorf("agent %q: no runner available for backend %q", agent.Name, agent.Backend)

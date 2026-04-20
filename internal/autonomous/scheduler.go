@@ -224,8 +224,17 @@ func (s *Scheduler) makeCronJob(repo string, agent config.AgentDef) func() {
 		if ctx.Err() != nil {
 			return
 		}
+		// Snapshot cfg+runners at execution time so that the agent definition
+		// captured at cron-registration time is paired with the matching
+		// backend/runner set from the same epoch. Both are read under the same
+		// lock to prevent a partial hot-reload from splitting the snapshot.
+		s.bindMu.RLock()
+		cfg := s.cfg
+		runners := s.runners
+		s.bindMu.RUnlock()
+
 		status := "success"
-		if err := s.executeAgentRun(ctx, repo, agent); err != nil {
+		if err := s.executeAgentRun(ctx, repo, agent, cfg, runners); err != nil {
 			switch {
 			case errors.Is(err, ErrDispatchSkipped):
 				// A dispatch already claimed this slot — the dedup skip is not
@@ -300,10 +309,12 @@ func (s *Scheduler) AgentStatuses() []AgentStatus {
 func (s *Scheduler) TriggerAgent(ctx context.Context, agentName, repo string) error {
 	agentName = strings.ToLower(strings.TrimSpace(agentName))
 
-	// Snapshot the config pointer under the read lock so that a concurrent
-	// Reload cannot partially update the struct while we read from it.
+	// Snapshot both cfg and runners under the same read lock so that agent
+	// lookup and the subsequent executeAgentRun call share a single consistent
+	// epoch and cannot observe a partial hot-reload between the two.
 	s.bindMu.RLock()
 	cfg := s.cfg
+	runners := s.runners
 	s.bindMu.RUnlock()
 
 	repoDef, ok := cfg.RepoByName(repo)
@@ -321,10 +332,14 @@ func (s *Scheduler) TriggerAgent(ctx context.Context, agentName, repo string) er
 	}) {
 		return fmt.Errorf("agent %q is not bound to repo %q", agentName, repo)
 	}
-	return s.executeAgentRun(ctx, repoDef.Name, agent)
+	return s.executeAgentRun(ctx, repoDef.Name, agent, cfg, runners)
 }
 
-func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent config.AgentDef) error {
+// executeAgentRun runs agent against repo using the cfg and runners snapshot
+// provided by the caller. Both must come from the same atomic snapshot (taken
+// under bindMu.RLock) so that backend resolution and roster building operate
+// on a single consistent epoch without racing against a concurrent Reload.
+func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent config.AgentDef, cfg *config.Config, runners map[string]ai.Runner) error {
 	// Atomically check whether a dispatch has already claimed the
 	// (agent, repo, 0) slot and, if not, write the cron mark. This single
 	// lock-protected operation eliminates the TOCTOU race where the old split
@@ -338,15 +353,6 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 			return ErrDispatchSkipped
 		}
 	}
-
-	// Snapshot the config pointer and runners map under a brief read lock so
-	// that a concurrent Reload cannot replace them while we are reading.
-	// The lock is released immediately after the snapshot; the slow runner.Run
-	// call and all memory operations below are intentionally outside the lock.
-	s.bindMu.RLock()
-	cfg := s.cfg
-	runners := s.runners
-	s.bindMu.RUnlock()
 
 	// Resolve backend and runner. If either fails, roll back the cron mark
 	// written above so that subsequent dispatches are not spuriously suppressed
