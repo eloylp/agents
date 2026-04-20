@@ -65,7 +65,7 @@ func run() error {
 	logger := logging.NewLogger(cfg.Daemon.Log)
 
 	runners := setupRunners(cfg, logger)
-	scheduler, err := setupScheduler(cfg, runners, db, logger)
+	scheduler, memBackend, err := setupScheduler(cfg, runners, db, logger)
 	if err != nil {
 		return err
 	}
@@ -147,6 +147,15 @@ func run() error {
 		server.WithStore(db, scheduler)
 	}
 
+	// In SQLite mode, wire the memory backend into the server for the
+	// /api/memory endpoint and attach an SSE notifier so the UI stream stays
+	// live. In file mode, WatchMemoryDir drives the stream instead.
+	if db != nil {
+		mem := memBackend.(*sqliteMemory)
+		mem.notifyFn = obs.PublishMemoryChange
+		server.WithMemoryReader(mem)
+	}
+
 	group, groupCtx := errgroup.WithContext(ctx)
 	deliveryStore.Start(groupCtx)
 	engine.StartDispatchDedup(groupCtx)
@@ -203,27 +212,38 @@ func setupRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runne
 	return runners
 }
 
-func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, db *sql.DB, logger zerolog.Logger) (*autonomous.Scheduler, error) {
+func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, db *sql.DB, logger zerolog.Logger) (*autonomous.Scheduler, autonomous.MemoryBackend, error) {
 	var memBackend autonomous.MemoryBackend
 	if db != nil {
 		memBackend = &sqliteMemory{db: db}
 	} else {
 		memBackend = autonomous.NewMemoryStore(cfg.Daemon.MemoryDir)
 	}
-	return autonomous.NewScheduler(cfg, runners, memBackend, logger)
+	sched, err := autonomous.NewScheduler(cfg, runners, memBackend, logger)
+	return sched, memBackend, err
 }
 
 // sqliteMemory implements autonomous.MemoryBackend using the SQLite store.
+// Agent and repo names are normalised with ai.NormalizeToken before storage so
+// that the keys are identical to those used by the file-based backend and can
+// be looked up by the /api/memory endpoint without conversion.
 type sqliteMemory struct {
-	db *sql.DB
+	db       *sql.DB
+	notifyFn func(agent, repo string) // optional; called after each successful write
 }
 
 func (m *sqliteMemory) ReadMemory(agent, repo string) (string, error) {
-	return store.ReadMemory(m.db, agent, repo)
+	return store.ReadMemory(m.db, ai.NormalizeToken(agent), ai.NormalizeToken(repo))
 }
 
 func (m *sqliteMemory) WriteMemory(agent, repo, content string) error {
-	return store.WriteMemory(m.db, agent, repo, content)
+	if err := store.WriteMemory(m.db, ai.NormalizeToken(agent), ai.NormalizeToken(repo), content); err != nil {
+		return err
+	}
+	if m.notifyFn != nil {
+		m.notifyFn(ai.NormalizeToken(agent), ai.NormalizeToken(repo))
+	}
+	return nil
 }
 
 // loadConfig loads the daemon configuration either from a YAML file (legacy

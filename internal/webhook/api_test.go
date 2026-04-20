@@ -1512,6 +1512,76 @@ func (c *sseCapture) Write(b []byte) (int, error) {
 }
 func (c *sseCapture) Flush() {} // satisfies http.Flusher
 
+// ── handleAPIMemory SQLite mode ────────────────────────────────────────────
+
+// stubMemoryReader is a MemoryReader that returns a fixed mapping of
+// (agent, repo) → content for use in unit tests.
+type stubMemoryReader struct {
+	content map[string]string // key: "agent\x00repo"
+}
+
+func (r *stubMemoryReader) ReadMemory(agent, repo string) (string, error) {
+	return r.content[agent+"\x00"+repo], nil
+}
+
+func TestHandleAPIMemorySQLiteMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		agent    string
+		repo     string
+		stored   map[string]string
+		wantCode int
+		wantBody string
+	}{
+		{
+			name:     "returns stored memory",
+			agent:    "coder",
+			repo:     "owner_repo",
+			stored:   map[string]string{"coder\x00owner_repo": "# memory"},
+			wantCode: http.StatusOK,
+			wantBody: "# memory",
+		},
+		{
+			name:     "empty memory returns 404",
+			agent:    "coder",
+			repo:     "owner_repo",
+			stored:   map[string]string{},
+			wantCode: http.StatusNotFound,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// memory_dir is empty — if the handler falls back to filesystem it
+			// would return 404 "memory_dir not configured"; the SQLite path must
+			// respond correctly without any filesystem involvement.
+			cfg := testCfg(func(c *config.Config) { c.Daemon.MemoryDir = "" })
+			srv, _ := newTestServer(cfg)
+			obs := newTestObserve()
+			srv.WithObserve(obs)
+			srv.WithMemoryReader(&stubMemoryReader{content: tc.stored})
+
+			router := srv.buildHandler()
+			req := httptest.NewRequest(http.MethodGet, "/api/memory/"+tc.agent+"/"+tc.repo, nil)
+			req.Header.Set("Authorization", "Bearer "+testAPIKey)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantCode {
+				t.Fatalf("want %d, got %d: %s", tc.wantCode, rec.Code, rec.Body.String())
+			}
+			if tc.wantBody != "" {
+				if got := rec.Body.String(); got != tc.wantBody {
+					t.Fatalf("want body %q, got %q", tc.wantBody, got)
+				}
+			}
+		})
+	}
+}
+
 // mustReadSSEMsg drains one message from ch within timeout or fails the test.
 func mustReadSSEMsg(t *testing.T, ch <-chan []byte, timeout time.Duration) string {
 	t.Helper()

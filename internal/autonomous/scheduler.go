@@ -446,9 +446,14 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	}
 
 	// Persist the agent's updated memory. An empty resp.Memory clears the entry.
+	// Memory write failure is surfaced as a run error so operators know the agent
+	// will replay stale context on the next scheduled pass. The dedup mark is
+	// finalised regardless because the agent run itself completed work.
 	if memErr := s.memory.WriteMemory(agent.Name, repo, resp.Memory); memErr != nil {
-		// Non-fatal: log and continue so that dispatch still proceeds.
-		logger.Error().Err(memErr).Msg("failed to write memory after autonomous pass")
+		if s.dispatcher != nil {
+			s.dispatcher.FinalizeAutonomousRun(agent.Name, repo)
+		}
+		return fmt.Errorf("write memory: %w", memErr)
 	}
 
 	logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Int("dispatch_requests", len(resp.Dispatch)).Msg("autonomous pass completed")

@@ -1579,3 +1579,72 @@ func TestSchedulerCronJobUsesPostReloadAgentDef(t *testing.T) {
 		t.Errorf("pre-reload cron closure used stale agent definition; prompt = %q", prompts[0])
 	}
 }
+
+// errMemory is a MemoryBackend whose WriteMemory always returns an error, used
+// to test that a write failure causes executeAgentRun to surface the error.
+type errMemory struct {
+	dir string // underlying file store for successful reads
+	err error
+}
+
+func (m *errMemory) ReadMemory(agent, repo string) (string, error) {
+	return NewMemoryStore(m.dir).ReadMemory(agent, repo)
+}
+
+func (m *errMemory) WriteMemory(_, _, _ string) error {
+	return m.err
+}
+
+// TestSchedulerWriteMemoryFailureFailsRun verifies that a WriteMemory error
+// after a successful agent run is surfaced as a run error, and that the dedup
+// mark is finalised (not rolled back) because the run itself completed.
+func TestSchedulerWriteMemoryFailureFailsRun(t *testing.T) {
+	t.Parallel()
+
+	writeErr := errors.New("disk full")
+	cfg := baseCfg(func(c *config.Config) {
+		c.Agents[0].AllowDispatch = true
+	})
+	runner := &stubRunner{}
+	mem := &errMemory{dir: t.TempDir(), err: writeErr}
+
+	q := &fakeQueue{}
+	agentMap := map[string]config.AgentDef{"reviewer": cfg.Agents[0]}
+	dedup := workflow.NewDispatchDedupStore(300)
+	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
+	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
+
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, mem, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithDispatcher(dispatcher)
+
+	runErr := s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
+	if runErr == nil {
+		t.Fatal("TriggerAgent: expected error from WriteMemory, got nil")
+	}
+	if !errors.Is(runErr, writeErr) {
+		t.Errorf("expected writeErr in error chain, got: %v", runErr)
+	}
+
+	// The runner was invoked (the run itself completed).
+	runner.mu.Lock()
+	calls := runner.calls
+	runner.mu.Unlock()
+	if calls != 1 {
+		t.Errorf("expected 1 runner call, got %d", calls)
+	}
+
+	// The dedup mark must be finalised (not rolled back), so a subsequent
+	// autonomous-context dispatch for the same (agent, repo, 0) slot is
+	// suppressed within the dedup window.
+	originator := agentMap["reviewer"]
+	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
+	_ = dispatcher.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
+		{Agent: "reviewer", Reason: "retry"},
+	})
+	if len(q.popped()) != 0 {
+		t.Error("expected dispatch suppressed by finalised dedup mark after write-memory failure")
+	}
+}

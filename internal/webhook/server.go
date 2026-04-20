@@ -67,6 +67,13 @@ type EventQueue interface {
 	QueueStats() workflow.QueueStat
 }
 
+// MemoryReader retrieves the stored memory for an (agent, repo) pair.
+// The webhook server uses this interface to serve /api/memory/{agent}/{repo}
+// without knowing whether the backing store is the filesystem or SQLite.
+type MemoryReader interface {
+	ReadMemory(agent, repo string) (string, error)
+}
+
 type Server struct {
 	cfg           *config.Config
 	delivery      *DeliveryStore
@@ -81,6 +88,7 @@ type Server struct {
 	observeStore  *observe.Store // optional; when set, enables observability endpoints
 	db            *sql.DB        // optional; when set, enables /api/store/* CRUD endpoints
 	cronReloader  CronReloader   // optional; called after repo/agent writes to reload cron
+	memReader     MemoryReader   // optional; when set, /api/memory reads from this (SQLite mode)
 	// storeMu serializes the "DB write → snapshot read → in-memory Reload"
 	// sequence so that concurrent write requests cannot interleave their
 	// snapshots and leave the scheduler in a stale or inconsistent state.
@@ -121,6 +129,13 @@ func (s *Server) WithRuntimeState(rsp RuntimeStateProvider) {
 func (s *Server) WithStore(db *sql.DB, r CronReloader) {
 	s.db = db
 	s.cronReloader = r
+}
+
+// WithMemoryReader attaches a MemoryReader used by /api/memory/{agent}/{repo}
+// when the daemon is running in --db mode. When not set, the endpoint falls
+// back to reading from the filesystem memory_dir.
+func (s *Server) WithMemoryReader(r MemoryReader) {
+	s.memReader = r
 }
 
 func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue, provider StatusProvider, dispatchStats DispatchStatsProvider, logger zerolog.Logger) *Server {
