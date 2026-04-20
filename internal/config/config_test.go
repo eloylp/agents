@@ -523,16 +523,37 @@ func TestLoadRejectsInvalidLogLevel(t *testing.T) {
 	}
 }
 
-func TestLoadAcceptsValidLogLevels(t *testing.T) {
+func TestLoadAcceptsValidLogConfig(t *testing.T) {
 	t.Setenv("TEST_SECRET", "secret")
-
-	levels := []string{"trace", "debug", "info", "warn", "error", "fatal", "panic", "disabled", "DEBUG", "INFO", "", "\"  debug  \""}
-	for _, level := range levels {
-		t.Run("level="+level, func(t *testing.T) {
+	tests := []struct {
+		field string
+		value string
+	}{
+		{field: "level", value: "trace"},
+		{field: "level", value: "debug"},
+		{field: "level", value: "info"},
+		{field: "level", value: "warn"},
+		{field: "level", value: "error"},
+		{field: "level", value: "fatal"},
+		{field: "level", value: "panic"},
+		{field: "level", value: "disabled"},
+		{field: "level", value: "DEBUG"},
+		{field: "level", value: "INFO"},
+		{field: "level", value: ""},
+		{field: "level", value: `"  debug  "`},
+		{field: "format", value: "json"},
+		{field: "format", value: "text"},
+		{field: "format", value: "JSON"},
+		{field: "format", value: "TEXT"},
+		{field: "format", value: ""},
+		{field: "format", value: `"  json  "`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.field+"="+tc.value, func(t *testing.T) {
 			t.Parallel()
-			path := writeConfig(t, logConfigYAML("level", level))
+			path := writeConfig(t, logConfigYAML(tc.field, tc.value))
 			if _, err := Load(path); err != nil {
-				t.Fatalf("unexpected error for log level %q: %v", level, err)
+				t.Fatalf("unexpected error for log %s %q: %v", tc.field, tc.value, err)
 			}
 		})
 	}
@@ -567,21 +588,6 @@ func TestLoadRejectsInvalidLogFormat(t *testing.T) {
 			}
 			if err.Error() != tc.wantErrMsg {
 				t.Errorf("error message = %q, want %q", err.Error(), tc.wantErrMsg)
-			}
-		})
-	}
-}
-
-func TestLoadAcceptsValidLogFormats(t *testing.T) {
-	t.Setenv("TEST_SECRET", "secret")
-
-	formats := []string{"json", "text", "JSON", "TEXT", "", "\"  json  \""}
-	for _, format := range formats {
-		t.Run("format="+format, func(t *testing.T) {
-			t.Parallel()
-			path := writeConfig(t, logConfigYAML("format", format))
-			if _, err := Load(path); err != nil {
-				t.Fatalf("unexpected error for log format %q: %v", format, err)
 			}
 		})
 	}
