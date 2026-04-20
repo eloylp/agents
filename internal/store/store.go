@@ -301,6 +301,13 @@ func importRepos(tx *sql.Tx, repos []config.RepoDef) error {
 		); err != nil {
 			return fmt.Errorf("store import: upsert repo %s: %w", r.Name, err)
 		}
+		// Delete and re-insert bindings so that re-importing the same YAML
+		// does not accumulate duplicate rows. A repo's binding list is treated
+		// as a whole (replace-all semantics): remove what was there, write
+		// what the new config says.
+		if _, err := tx.Exec("DELETE FROM bindings WHERE repo=?", r.Name); err != nil {
+			return fmt.Errorf("store import: clear bindings for repo %s: %w", r.Name, err)
+		}
 		for _, b := range r.Use {
 			labels, err := json.Marshal(b.Labels)
 			if err != nil {
@@ -459,7 +466,7 @@ func loadSkills(db *sql.DB, cfg *config.Config) error {
 func loadAgents(db *sql.DB, cfg *config.Config) error {
 	rows, err := db.Query(`
 		SELECT name,backend,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description
-		FROM agents`)
+		FROM agents ORDER BY name`)
 	if err != nil {
 		return fmt.Errorf("store load: query agents: %w", err)
 	}
@@ -502,7 +509,7 @@ func loadAgents(db *sql.DB, cfg *config.Config) error {
 }
 
 func loadRepos(db *sql.DB, cfg *config.Config) error {
-	rows, err := db.Query("SELECT name,enabled FROM repos")
+	rows, err := db.Query("SELECT name,enabled FROM repos ORDER BY name")
 	if err != nil {
 		return fmt.Errorf("store load: query repos: %w", err)
 	}
@@ -535,7 +542,7 @@ func loadRepos(db *sql.DB, cfg *config.Config) error {
 
 func loadBindingsForRepo(db *sql.DB, repo string) ([]config.Binding, error) {
 	rows, err := db.Query(
-		"SELECT agent,labels,events,cron,enabled FROM bindings WHERE repo=?", repo,
+		"SELECT agent,labels,events,cron,enabled FROM bindings WHERE repo=? ORDER BY id", repo,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store load: query bindings for %s: %w", repo, err)

@@ -191,6 +191,9 @@ func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, logger zer
 //
 // When dbPath is empty, configPath is used (default behaviour).
 func loadConfig(configPath, dbPath, importPath string) (*config.Config, error) {
+	if importPath != "" && dbPath == "" {
+		return nil, fmt.Errorf("--import requires --db")
+	}
 	if dbPath == "" {
 		return config.Load(configPath)
 	}
@@ -208,11 +211,15 @@ func loadConfig(configPath, dbPath, importPath string) (*config.Config, error) {
 		if err := store.Import(db, yamlCfg); err != nil {
 			return nil, fmt.Errorf("import: write to database: %w", err)
 		}
-		counts, err := store.CountFrom(db)
-		if err != nil {
-			return nil, fmt.Errorf("import: count rows: %w", err)
+		// Count from the source config so the message reflects exactly what
+		// was written, not a potentially stale whole-table count.
+		nBindings := 0
+		for _, r := range yamlCfg.Repos {
+			nBindings += len(r.Use)
 		}
-		fmt.Fprintf(os.Stderr, "import: %s\n", counts)
+		fmt.Fprintf(os.Stderr, "import: imported %d backends, %d skills, %d agents, %d repos, %d bindings\n",
+			len(yamlCfg.Daemon.AIBackends), len(yamlCfg.Skills),
+			len(yamlCfg.Agents), len(yamlCfg.Repos), nBindings)
 	}
 
 	return store.LoadAndValidate(db)

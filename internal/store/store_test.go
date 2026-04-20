@@ -284,8 +284,9 @@ func TestImportIsIdempotent(t *testing.T) {
 	if counts.Agents != 2 {
 		t.Errorf("agents: got %d, want 2 after idempotent import", counts.Agents)
 	}
-	// Bindings are inserted with AUTOINCREMENT — a second import adds more rows.
-	// The test just checks the first-import counts via a Load round-trip instead.
+	if counts.Bindings != 3 {
+		t.Errorf("bindings: got %d, want 3 after idempotent import (duplicate rows indicate non-idempotent import)", counts.Bindings)
+	}
 }
 
 // TestCountFrom verifies that CountFrom returns sensible row counts after an
