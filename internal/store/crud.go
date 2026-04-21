@@ -383,6 +383,15 @@ func ImportAll(
 	if err := validateFleet(tx); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
 	}
+	if err := requireAtLeastOneAgent(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
+	}
+	if err := requireAtLeastOneBackend(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
+	}
+	if err := requireAtLeastOneEnabledRepo(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
+	}
 	return tx.Commit()
 }
 
@@ -444,6 +453,15 @@ func ReplaceAll(
 		return err
 	}
 	if err := validateFleet(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
+	}
+	if err := requireAtLeastOneAgent(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
+	}
+	if err := requireAtLeastOneBackend(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
+	}
+	if err := requireAtLeastOneEnabledRepo(tx); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
 	}
 	return tx.Commit()

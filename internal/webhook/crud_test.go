@@ -1650,6 +1650,68 @@ repos:
 	}
 }
 
+func TestStoreImportRejectsEmptyFleetOnBlankStore(t *testing.T) {
+	t.Parallel()
+	// Blank store: no agents, no repos, no backends.
+	s := openCRUDTestServer(t)
+
+	// Import with only skills — should fail because the resulting store would
+	// have no agents, no enabled repos, and no backends.
+	yamlBody := `skills:
+  my-skill:
+    prompt: just a skill
+`
+	req := httptest.NewRequest(http.MethodPost, "/api/store/import", strings.NewReader(yamlBody))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rr := httptest.NewRecorder()
+	s.buildHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("import skills-only on blank store: want 400, got %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestStoreReplaceRejectsEmptyAgentList(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+
+	// Seed an agent and repo so the store is in a valid state.
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "existing-agent", "backend": "claude", "prompt": "p",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed agent: %d — %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+		"name": "owner/r", "enabled": true,
+		"bindings": []map[string]any{{"agent": "existing-agent", "labels": []string{"ai:run"}}},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed repo: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Replace with a YAML that contains a backend but no agents — should fail.
+	yamlBody := `daemon:
+  ai_backends:
+    claude:
+      command: claude
+      args: []
+`
+	req := httptest.NewRequest(http.MethodPost, "/api/store/import?mode=replace", strings.NewReader(yamlBody))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rr := httptest.NewRecorder()
+	s.buildHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("replace with no agents: want 400, got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// The original agent must still be present — the failed replace must not
+	// have modified the store.
+	agents := doCRUDRequest(t, s, http.MethodGet, "/api/store/agents", nil)
+	if !strings.Contains(agents.Body.String(), "existing-agent") {
+		t.Errorf("existing-agent missing after failed replace: %s", agents.Body.String())
+	}
+}
+
 func TestStoreExportNotRegisteredWithoutStore(t *testing.T) {
 	t.Parallel()
 	cfg := crudMinimalConfig()

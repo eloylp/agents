@@ -492,15 +492,15 @@ func (s *Server) handleStoreBackends(w http.ResponseWriter, r *http.Request) {
 		if req.Env == nil {
 			req.Env = map[string]string{}
 		}
-		// If the client echoed back "[redacted]" env values (the sentinel the
-		// list API emits), replace them with the currently stored secret so that
-		// editing a backend without changing a secret field does not overwrite
-		// the real value with the literal string "[redacted]".
+		// restoreRedactedEnv must run inside the lock so that the read of the
+		// stored backend and the subsequent UpsertBackend write are atomic with
+		// respect to other concurrent backend edits.
+		s.storeMu.Lock()
 		if err := restoreRedactedEnv(s.db, req.Name, req.Env); err != nil {
+			s.storeMu.Unlock()
 			http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
 			return
 		}
-		s.storeMu.Lock()
 		err := store.UpsertBackend(s.db, req.Name, req.toConfig())
 		if err == nil {
 			err = s.reloadCron()
