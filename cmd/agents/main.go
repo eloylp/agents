@@ -302,13 +302,7 @@ func (a schedulerStatusAdapter) AgentStatuses() []webhook.AgentStatus {
 	raw := a.s.AgentStatuses()
 	out := make([]webhook.AgentStatus, len(raw))
 	for i, s := range raw {
-		out[i] = webhook.AgentStatus{
-			Name:       s.Name,
-			Repo:       s.Repo,
-			LastRun:    s.LastRun,
-			NextRun:    s.NextRun,
-			LastStatus: s.LastStatus,
-		}
+		out[i] = webhook.AgentStatus(s)
 	}
 	return out
 }
