@@ -395,7 +395,7 @@ func TestExtractSSEData(t *testing.T) {
 
 func TestActiveRunsStartFinishIsRunning(t *testing.T) {
 	t.Parallel()
-	s := observe.NewStore()
+	s := observe.NewStore(nil)
 	ar := s.ActiveRuns
 
 	if ar.IsRunning("coder") {
@@ -418,7 +418,7 @@ func TestActiveRunsStartFinishIsRunning(t *testing.T) {
 
 func TestActiveRunsConcurrentRuns(t *testing.T) {
 	t.Parallel()
-	s := observe.NewStore()
+	s := observe.NewStore(nil)
 	ar := s.ActiveRuns
 
 	// Two concurrent runs for the same agent.
@@ -441,7 +441,7 @@ func TestActiveRunsConcurrentRuns(t *testing.T) {
 
 func TestActiveRunsFinishBelowZeroIsSafe(t *testing.T) {
 	t.Parallel()
-	s := observe.NewStore()
+	s := observe.NewStore(nil)
 	ar := s.ActiveRuns
 
 	// Calling FinishRun without a matching Start must not panic or go negative.
@@ -453,7 +453,7 @@ func TestActiveRunsFinishBelowZeroIsSafe(t *testing.T) {
 
 func TestStoreIsRunningDelegates(t *testing.T) {
 	t.Parallel()
-	s := observe.NewStore()
+	s := observe.NewStore(nil)
 
 	s.ActiveRuns.StartRun("coder")
 	if !s.IsRunning("coder") {
@@ -471,7 +471,7 @@ func TestStoreIsRunningDelegates(t *testing.T) {
 // both persists the event in the ring buffer and fans it out to EventsSSE.
 func TestStoreRecordEventAddsToBufferAndPublishesToSSE(t *testing.T) {
 	t.Parallel()
-	s := observe.NewStore()
+	s := observe.NewStore(nil)
 
 	ch := s.EventsSSE.Subscribe()
 	defer s.EventsSSE.Unsubscribe(ch)
@@ -526,7 +526,7 @@ func TestStoreRecordEventAddsToBufferAndPublishesToSSE(t *testing.T) {
 // handler can parse both streams with the same client-side Event interface.
 func TestStoreRecordEventSSEUsesLowercaseJSON(t *testing.T) {
 	t.Parallel()
-	s := observe.NewStore()
+	s := observe.NewStore(nil)
 
 	ch := s.EventsSSE.Subscribe()
 	defer s.EventsSSE.Unsubscribe(ch)
@@ -571,7 +571,7 @@ func TestStoreRecordEventSSEUsesLowercaseJSON(t *testing.T) {
 // both stores the span in the trace ring buffer and fans it out to TracesSSE.
 func TestStoreRecordSpanAddsToBufferAndPublishesToSSE(t *testing.T) {
 	t.Parallel()
-	s := observe.NewStore()
+	s := observe.NewStore(nil)
 
 	ch := s.TracesSSE.Subscribe()
 	defer s.TracesSSE.Unsubscribe(ch)
@@ -624,7 +624,7 @@ func TestStoreRecordSpanAddsToBufferAndPublishesToSSE(t *testing.T) {
 // to the InteractionGraph and the edge is visible via Graph.Edges().
 func TestStoreRecordDispatchRecordsInGraph(t *testing.T) {
 	t.Parallel()
-	s := observe.NewStore()
+	s := observe.NewStore(nil)
 
 	s.RecordDispatch("coder", "reviewer", "owner/repo", 42, "needs review")
 

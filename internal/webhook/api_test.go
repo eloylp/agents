@@ -1242,7 +1242,7 @@ func (p *stubDispatchProvider) DispatchStats() workflow.DispatchStats { return p
 
 // newTestObserve creates an observe.Store for tests.
 func newTestObserve() *observe.Store {
-	return observe.NewStore()
+	return observe.NewStore(nil)
 }
 
 // sseCapture is a minimal http.ResponseWriter + http.Flusher that forwards

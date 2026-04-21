@@ -128,7 +128,7 @@ func run() error {
 
 	// Wire the observability store: records events, spans, dispatch graph, and
 	// active-run state for the fleet dashboard.
-	obs := observe.NewStore()
+	obs := observe.NewStore(db)
 	processor.WithEventRecorder(obs)
 	engine.WithTraceRecorder(obs)
 	engine.WithGraphRecorder(obs)

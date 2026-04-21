@@ -7,8 +7,10 @@
 package observe
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"slices"
 	"sync"
 	"time"
@@ -337,6 +339,7 @@ func (a *ActiveRuns) IsRunning(agentName string) bool {
 // It aggregates the ring buffers, graph, SSE hubs, and active-run tracker so
 // that callers need only thread one dependency.
 type Store struct {
+	db         *sql.DB
 	Events     *EventBuffer
 	Traces     *TraceBuffer
 	Graph      *InteractionGraph
@@ -346,9 +349,12 @@ type Store struct {
 	ActiveRuns *ActiveRuns
 }
 
-// NewStore creates a Store with default-sized buffers.
-func NewStore() *Store {
-	return &Store{
+// NewStore creates a Store with default-sized buffers. When db is non-nil,
+// write-through persistence to SQLite is enabled and the in-memory buffers
+// are pre-filled from the database on startup.
+func NewStore(db *sql.DB) *Store {
+	s := &Store{
+		db:         db,
 		Events:     NewEventBuffer(500),
 		Traces:     NewTraceBuffer(200),
 		Graph:      NewInteractionGraph(100),
@@ -356,6 +362,93 @@ func NewStore() *Store {
 		TracesSSE:  NewSSEHub(64),
 		MemorySSE:  NewSSEHub(32),
 		ActiveRuns: newActiveRuns(),
+	}
+	s.LoadHistory()
+	return s
+}
+
+// LoadHistory pre-fills the in-memory ring buffers from SQLite so that the
+// daemon starts with recent observability data available immediately. It is
+// called automatically at the end of NewStore when a database is provided.
+func (s *Store) LoadHistory() {
+	if s.db == nil {
+		return
+	}
+
+	// Load most recent events (matching ring buffer capacity of 500).
+	rows, err := s.db.Query(
+		`SELECT id, at, repo, kind, number, actor, payload FROM events ORDER BY at DESC LIMIT 500`,
+	)
+	if err != nil {
+		log.Printf("observe: load event history: %v", err)
+	} else {
+		var events []TimestampedEvent
+		for rows.Next() {
+			var te TimestampedEvent
+			var payloadStr string
+			if err := rows.Scan(&te.ID, &te.At, &te.Repo, &te.Kind, &te.Number, &te.Actor, &payloadStr); err != nil {
+				log.Printf("observe: scan event row: %v", err)
+				continue
+			}
+			if payloadStr != "" {
+				_ = json.Unmarshal([]byte(payloadStr), &te.Payload)
+			}
+			events = append(events, te)
+		}
+		rows.Close()
+		// Insert in chronological order (oldest first) so the ring buffer
+		// ends up with the most recent entries at the head.
+		for i := len(events) - 1; i >= 0; i-- {
+			s.Events.Add(events[i])
+		}
+	}
+
+	// Load most recent traces (matching ring buffer capacity of 200).
+	rows, err = s.db.Query(
+		`SELECT span_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error FROM traces ORDER BY started_at DESC LIMIT 200`,
+	)
+	if err != nil {
+		log.Printf("observe: load trace history: %v", err)
+	} else {
+		var spans []Span
+		for rows.Next() {
+			var sp Span
+			if err := rows.Scan(
+				&sp.SpanID, &sp.RootEventID, &sp.ParentSpanID,
+				&sp.Agent, &sp.Backend, &sp.Repo, &sp.Number,
+				&sp.EventKind, &sp.InvokedBy, &sp.DispatchDepth,
+				&sp.QueueWaitMs, &sp.ArtifactsCount, &sp.Summary,
+				&sp.StartedAt, &sp.FinishedAt, &sp.DurationMs,
+				&sp.Status, &sp.ErrorMsg,
+			); err != nil {
+				log.Printf("observe: scan trace row: %v", err)
+				continue
+			}
+			spans = append(spans, sp)
+		}
+		rows.Close()
+		for i := len(spans) - 1; i >= 0; i-- {
+			s.Traces.Add(spans[i])
+		}
+	}
+
+	// Load all dispatch history to rebuild the interaction graph.
+	rows, err = s.db.Query(
+		`SELECT from_agent, to_agent, repo, number, reason FROM dispatch_history ORDER BY at ASC`,
+	)
+	if err != nil {
+		log.Printf("observe: load dispatch history: %v", err)
+	} else {
+		for rows.Next() {
+			var from, to, repo, reason string
+			var number int
+			if err := rows.Scan(&from, &to, &repo, &number, &reason); err != nil {
+				log.Printf("observe: scan dispatch row: %v", err)
+				continue
+			}
+			s.Graph.Record(from, to, repo, number, reason)
+		}
+		rows.Close()
 	}
 }
 
@@ -382,6 +475,18 @@ func (s *Store) RecordEvent(at time.Time, ev workflow.Event) {
 		Payload: ev.Payload,
 	}
 	s.Events.Add(te)
+	if s.db != nil {
+		go func() {
+			payload, _ := json.Marshal(te.Payload)
+			_, err := s.db.Exec(
+				`INSERT OR IGNORE INTO events (id, at, repo, kind, number, actor, payload) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				te.ID, te.At, te.Repo, te.Kind, te.Number, te.Actor, string(payload),
+			)
+			if err != nil {
+				log.Printf("observe: persist event %s: %v", te.ID, err)
+			}
+		}()
+	}
 	if b, err := sseData(te); err == nil {
 		s.EventsSSE.Publish(b)
 	}
@@ -418,6 +523,22 @@ func (s *Store) RecordSpan(
 		ErrorMsg:       errMsg,
 	}
 	s.Traces.Add(sp)
+	if s.db != nil {
+		go func() {
+			_, err := s.db.Exec(
+				`INSERT OR IGNORE INTO traces (span_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				sp.SpanID, sp.RootEventID, sp.ParentSpanID,
+				sp.Agent, sp.Backend, sp.Repo, sp.Number,
+				sp.EventKind, sp.InvokedBy, sp.DispatchDepth,
+				sp.QueueWaitMs, sp.ArtifactsCount, sp.Summary,
+				sp.StartedAt, sp.FinishedAt, sp.DurationMs,
+				sp.Status, sp.ErrorMsg,
+			)
+			if err != nil {
+				log.Printf("observe: persist trace %s: %v", sp.SpanID, err)
+			}
+		}()
+	}
 	if b, err := sseData(sp); err == nil {
 		s.TracesSSE.Publish(b)
 	}
@@ -426,6 +547,17 @@ func (s *Store) RecordSpan(
 // RecordDispatch implements workflow.GraphRecorder.
 func (s *Store) RecordDispatch(from, to, repo string, number int, reason string) {
 	s.Graph.Record(from, to, repo, number, reason)
+	if s.db != nil {
+		go func() {
+			_, err := s.db.Exec(
+				`INSERT INTO dispatch_history (from_agent, to_agent, repo, number, reason) VALUES (?,?,?,?,?)`,
+				from, to, repo, number, reason,
+			)
+			if err != nil {
+				log.Printf("observe: persist dispatch %s->%s: %v", from, to, err)
+			}
+		}()
+	}
 }
 
 // PublishMemoryChange emits a MemoryChangeEvent to the MemorySSE hub for the
