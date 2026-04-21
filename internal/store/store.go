@@ -23,7 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -82,8 +82,8 @@ func migrate(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("store: read migrations dir: %w", err)
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Name() < entries[j].Name()
+	slices.SortFunc(entries, func(a, b fs.DirEntry) int {
+		return strings.Compare(a.Name(), b.Name())
 	})
 
 	for _, entry := range entries {
