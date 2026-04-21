@@ -63,8 +63,20 @@ If the project has grown a feature area that deserves its own doc (like docs/loc
 
 New docs should be linked from README.md and mentioned in CLAUDE.md/AGENTS.md.
 
-### 5. What NOT to do
+### 5. Git workflow
 
+**Never push directly to main.** Always:
+1. Create a branch: `docs/<short-description>` (e.g. `docs/sync-readme-with-sqlite`)
+2. Make your changes on the branch
+3. Commit with a clear message: `docs: <what changed and why>`
+4. Push the branch and open a PR
+5. The PR will be reviewed before merge — just like every other agent's work
+
+If you already have an open docs PR from a previous run, update that branch instead of opening a new one. Check your memory for open PR numbers.
+
+### 6. What NOT to do
+
+- Do NOT push directly to main. Always open a PR from a branch.
 - Do NOT invent features. Only document what exists in the code.
 - Do NOT add emoji to docs unless the existing style uses them.
 - Do NOT make the README longer than it needs to be. If a section can be a link to a deeper doc, make it a link.

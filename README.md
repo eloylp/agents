@@ -591,6 +591,14 @@ The `memory` field is how autonomous agents persist state across scheduled runs.
 
 ---
 
+## Contributing
+
+This project is built by its own agent fleet. **You bring the ideas, the agents bring the implementation.** Open an issue with the `discussing` label, a maintainer triages it, and the autonomous coder agent implements accepted issues — reviewed by the pr-reviewer agent before merge.
+
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the full process, what makes a great issue, and the exceptions (doc typo PRs and security patches are accepted directly).
+
+---
+
 ## Security
 
 - **Webhook verification** — HMAC SHA-256 on every payload (`X-Hub-Signature-256`).

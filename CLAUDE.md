@@ -103,6 +103,10 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, 
 - Per-backend env overrides (`daemon.ai_backends.<name>.env`) let two backends run the same CLI with different endpoints — e.g. a default `claude` backend on hosted Anthropic plus a `claude_local` backend that routes the CLI via `ANTHROPIC_BASE_URL` through the built-in proxy to a local model. See [`docs/local-models.md`](docs/local-models.md).
 - **Reactive inter-agent dispatch**: agents can return a `dispatch: [{agent, number, reason}]` array in their JSON response to invoke other agents. Enqueued as synthetic `agent.dispatch` events. Target must opt in via `allow_dispatch: true`; originator must whitelist targets in `can_dispatch: [...]`. Safety limits (`daemon.processor.dispatch.{max_depth, max_fanout, dedup_window_seconds}`) prevent cascade storms and duplicate invocations. The originating agent's prompt receives an `## Available experts` roster listing dispatchable targets.
 
+## Contribution Model
+
+This project is built by its own agent fleet. External contributions come as issues, not code PRs — the coder agent implements accepted issues, the pr-reviewer validates, and a maintainer merges. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full flow and exceptions (doc typo fixes and security patches are accepted as direct PRs).
+
 ## Security Notes
 
 - Webhook authenticity is enforced with HMAC SHA-256 signature verification.

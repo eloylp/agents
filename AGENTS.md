@@ -141,3 +141,12 @@ When contributing in this area:
 - Proxy changes live in `internal/anthropic_proxy/`. Keep translation rules pure (no I/O in the `translate*` functions) and test them directly.
 - Per-backend env overrides live on `AIBackendConfig.Env` and are merged after the host-env allowlist in `buildCommandEnv`.
 - Don't assume local models behave like Claude. They are more cautious with write tools and more prone to hallucinating facts inside templated outputs. Design agent prompts and guardrails for the least capable backend you want to support.
+
+## Contribution model
+
+This project is built by its own agent fleet. External contributions flow as issues, not code PRs. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full process. Key points for agents working in this repo:
+
+- All code changes go through the coder agent → pr-reviewer → maintainer merge pipeline.
+- Do NOT push directly to main. Always create a branch and open a PR.
+- Accepted issues have the `discussing` label removed; high-priority issues are labelled `high priority`.
+- Agent-authored PRs are reviewed by the pr-reviewer agent before human merge.
