@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
+import { authHeaders } from '@/lib/apiKey'
 
 interface Binding {
   agent: string
@@ -229,7 +230,7 @@ export default function ReposPage() {
     try {
       const res = await fetch('/api/store/repos', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(form),
       })
       if (!res.ok) {
@@ -249,7 +250,7 @@ export default function ReposPage() {
     setSaving(true)
     const [owner, repo] = deleteTarget.split('/')
     try {
-      const res = await fetch(`/api/store/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, { method: 'DELETE' })
+      const res = await fetch(`/api/store/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, { method: 'DELETE', headers: authHeaders() })
       if (!res.ok && res.status !== 204) {
         setSaveError((await res.text()) || 'Delete failed')
         setSaving(false)

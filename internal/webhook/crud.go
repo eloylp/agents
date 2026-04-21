@@ -675,34 +675,17 @@ func (s *Server) handleStoreImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	backends := map[string]config.AIBackendConfig{}
+	if payload.Daemon != nil {
+		backends = payload.Daemon.AIBackends
+	}
+
 	s.storeMu.Lock()
 	defer s.storeMu.Unlock()
 
-	for _, a := range payload.Agents {
-		if err := store.UpsertAgent(s.db, a); err != nil {
-			http.Error(w, fmt.Sprintf("import agent %s: %v", a.Name, err), storeErrStatus(err))
-			return
-		}
-	}
-	for name, sk := range payload.Skills {
-		if err := store.UpsertSkill(s.db, name, sk); err != nil {
-			http.Error(w, fmt.Sprintf("import skill %s: %v", name, err), storeErrStatus(err))
-			return
-		}
-	}
-	for _, repo := range payload.Repos {
-		if err := store.UpsertRepo(s.db, repo); err != nil {
-			http.Error(w, fmt.Sprintf("import repo %s: %v", repo.Name, err), storeErrStatus(err))
-			return
-		}
-	}
-	if payload.Daemon != nil {
-		for name, b := range payload.Daemon.AIBackends {
-			if err := store.UpsertBackend(s.db, name, b); err != nil {
-				http.Error(w, fmt.Sprintf("import backend %s: %v", name, err), storeErrStatus(err))
-				return
-			}
-		}
+	if err := store.ImportAll(s.db, payload.Agents, payload.Repos, payload.Skills, backends); err != nil {
+		http.Error(w, fmt.Sprintf("import: %v", err), storeErrStatus(err))
+		return
 	}
 	if err := s.reloadCron(); err != nil {
 		s.logger.Error().Err(err).Msg("store import: cron reload failed")

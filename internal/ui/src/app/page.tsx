@@ -4,6 +4,7 @@ import Card from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 import Modal from '@/components/Modal'
 import Link from 'next/link'
+import { authHeaders } from '@/lib/apiKey'
 
 interface Binding {
   repo: string
@@ -102,9 +103,10 @@ const emptyForm: StoreAgent = {
 }
 
 function AgentForm({
-  initial, onSave, onCancel, saving, error,
+  initial, backends, onSave, onCancel, saving, error,
 }: {
   initial: StoreAgent
+  backends: string[]
   onSave: (a: StoreAgent) => void
   onCancel: () => void
   saving: boolean
@@ -120,6 +122,9 @@ function AgentForm({
     fontSize: '0.85rem', fontFamily: 'inherit', background: '#f8fafc', color: '#1e293b',
   }
 
+  // Derive options: always include "auto", then any store-configured backends.
+  const backendOptions = ['auto', ...backends.filter(b => b !== 'auto')]
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
       <div>
@@ -129,9 +134,7 @@ function AgentForm({
       <div>
         <label style={labelStyle}>Backend</label>
         <select style={inputStyle} value={form.backend} onChange={e => set('backend', e.target.value)}>
-          <option value="auto">auto</option>
-          <option value="claude">claude</option>
-          <option value="codex">codex</option>
+          {backendOptions.map(b => <option key={b} value={b}>{b}</option>)}
         </select>
       </div>
       <div>
@@ -267,6 +270,7 @@ export default function FleetPage() {
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [backendNames, setBackendNames] = useState<string[]>([])
 
   const [modal, setModal] = useState<'create' | 'edit' | 'delete' | null>(null)
   const [selected, setSelected] = useState<StoreAgent>(emptyForm)
@@ -282,7 +286,16 @@ export default function FleetPage() {
       .catch(e => { setError(String(e)); setLoading(false) })
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    // Load store backend names for the agent editor dropdown.
+    // Falls back to an empty list when the store endpoint is not available
+    // (daemon started without --db), so AgentForm still shows "auto".
+    fetch('/api/store/backends')
+      .then(r => r.ok ? r.json() : [])
+      .then((data: { name: string }[]) => setBackendNames(data.map(b => b.name)))
+      .catch(() => { /* store not configured — no-op */ })
+  }, [])
 
   const openEdit = async (agentName: string) => {
     setSaveError('')
@@ -322,7 +335,7 @@ export default function FleetPage() {
     try {
       const res = await fetch('/api/store/agents', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(form),
       })
       if (!res.ok) {
@@ -347,7 +360,7 @@ export default function FleetPage() {
   const deleteAgent = async () => {
     setSaving(true)
     try {
-      const res = await fetch(`/api/store/agents/${encodeURIComponent(deleteTarget)}`, { method: 'DELETE' })
+      const res = await fetch(`/api/store/agents/${encodeURIComponent(deleteTarget)}`, { method: 'DELETE', headers: authHeaders() })
       if (!res.ok && res.status !== 204) {
         const msg = await res.text()
         setSaveError(msg || 'Delete failed')
@@ -409,6 +422,7 @@ export default function FleetPage() {
         <Modal title={modal === 'create' ? 'Create agent' : `Edit — ${selected.name}`} onClose={() => setModal(null)}>
           <AgentForm
             initial={selected}
+            backends={backendNames}
             onSave={saveAgent}
             onCancel={() => setModal(null)}
             saving={saving}

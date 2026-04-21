@@ -332,6 +332,60 @@ func UpsertRepo(db *sql.DB, r config.RepoDef) error {
 	return tx.Commit()
 }
 
+// ImportAll upserts agents, repos, skills, and backends in a single atomic
+// transaction. If any entity fails validation the entire import is rolled back
+// and no writes are persisted. Each entity is normalized before writing,
+// consistent with the normalization the individual Upsert* helpers apply.
+func ImportAll(
+	db *sql.DB,
+	agents []config.AgentDef,
+	repos []config.RepoDef,
+	skills map[string]config.SkillDef,
+	backends map[string]config.AIBackendConfig,
+) error {
+	for i := range agents {
+		config.NormalizeAgentDef(&agents[i])
+	}
+	for i := range repos {
+		config.NormalizeRepoDef(&repos[i])
+	}
+	normalizedSkills := make(map[string]config.SkillDef, len(skills))
+	for name, s := range skills {
+		name = config.NormalizeSkillName(name)
+		config.NormalizeSkillDef(&s)
+		normalizedSkills[name] = s
+	}
+	normalizedBackends := make(map[string]config.AIBackendConfig, len(backends))
+	for name, b := range backends {
+		name = config.NormalizeBackendName(name)
+		config.NormalizeBackendConfig(&b)
+		config.ApplyBackendDefaults(&b)
+		normalizedBackends[name] = b
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: import: begin: %w", err)
+	}
+	defer tx.Rollback()
+	if err := importAgents(tx, agents); err != nil {
+		return err
+	}
+	if err := importSkills(tx, normalizedSkills); err != nil {
+		return err
+	}
+	if err := importRepos(tx, repos); err != nil {
+		return err
+	}
+	if err := importBackends(tx, normalizedBackends); err != nil {
+		return err
+	}
+	if err := validateFleet(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
+	}
+	return tx.Commit()
+}
+
 // DeleteRepo removes a repo and all of its bindings. Returns an error if the
 // deletion would leave no enabled repos.
 func DeleteRepo(db *sql.DB, name string) error {
