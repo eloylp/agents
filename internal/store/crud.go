@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/robfig/cron/v3"
 )
 
 // ErrValidation is returned by Upsert* operations when the mutation is
@@ -22,6 +23,26 @@ func (e *ErrValidation) Error() string { return e.Msg }
 type ErrConflict struct{ Msg string }
 
 func (e *ErrConflict) Error() string { return e.Msg }
+
+// cronParser is the same 5-field parser used by the autonomous scheduler.
+var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+
+// validateCronExpressions checks that every cron binding in repos can be
+// parsed by the same parser the autonomous scheduler uses. Returns an
+// ErrValidation if any expression is malformed.
+func validateCronExpressions(repos []config.RepoDef) error {
+	for _, r := range repos {
+		for _, b := range r.Use {
+			if !b.IsCron() {
+				continue
+			}
+			if _, err := cronParser.Parse(b.Cron); err != nil {
+				return &ErrValidation{Msg: fmt.Sprintf("store: invalid cron expression %q for repo %q: %v", b.Cron, r.Name, err)}
+			}
+		}
+	}
+	return nil
+}
 
 // validateFleet reads all four mutable entity tables through q (a *sql.Tx in
 // practice, so reads see the pending transaction state) and verifies that the
@@ -392,6 +413,9 @@ func ImportAll(
 	if err := requireAtLeastOneEnabledRepo(tx); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
 	}
+	if err := validateCronExpressions(repos); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -463,6 +487,9 @@ func ReplaceAll(
 	}
 	if err := requireAtLeastOneEnabledRepo(tx); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
+	}
+	if err := validateCronExpressions(repos); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
