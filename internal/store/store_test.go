@@ -99,7 +99,7 @@ func minimalCfg() *config.Config {
 	}
 }
 
-func openTestDB(t *testing.T) (*sql.DB, func()) {
+func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
@@ -107,7 +107,8 @@ func openTestDB(t *testing.T) (*sql.DB, func()) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	return db, func() { db.Close() }
+	t.Cleanup(func() { db.Close() })
+	return db
 }
 
 // TestOpenAndMigrate verifies that Open creates a new database and applies all
@@ -137,8 +138,7 @@ func TestOpenAndMigrate(t *testing.T) {
 // original on all fields that are persisted.
 func TestImportLoad(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	in := minimalCfg()
 	if err := store.Import(db, in); err != nil {
@@ -261,8 +261,7 @@ func TestImportLoad(t *testing.T) {
 // does not fail and does not duplicate rows.
 func TestImportIsIdempotent(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	in := minimalCfg()
 	if err := store.Import(db, in); err != nil {
@@ -288,8 +287,7 @@ func TestImportIsIdempotent(t *testing.T) {
 // import.
 func TestCountFrom(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	if err := store.Import(db, minimalCfg()); err != nil {
 		t.Fatalf("import: %v", err)
@@ -324,8 +322,7 @@ func TestCountFrom(t *testing.T) {
 // a descriptive error rather than a zero-value Config.
 func TestLoadEmptyDatabase(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	_, err := store.Load(db)
 	if err == nil {
