@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/store"
@@ -335,5 +336,100 @@ func TestLoadEmptyDatabase(t *testing.T) {
 	_, err := store.Load(db)
 	if err == nil {
 		t.Fatal("expected error loading from empty database, got nil")
+	}
+}
+
+// TestReadWriteMemory verifies the SQLite memory round-trip: writing a string
+// and reading it back returns the same content, and reading a non-existent
+// entry returns ("", false, time.Time{}, nil).
+func TestReadWriteMemory(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	// Non-existent agent/repo returns not-found (found=false).
+	content, found, mtime, err := store.ReadMemory(db, "coder", "owner/repo")
+	if err != nil {
+		t.Fatalf("ReadMemory missing row: %v", err)
+	}
+	if found {
+		t.Fatal("expected found=false for missing row")
+	}
+	if content != "" {
+		t.Fatalf("expected empty content, got %q", content)
+	}
+	if !mtime.IsZero() {
+		t.Fatalf("expected zero mtime for missing row, got %v", mtime)
+	}
+
+	// Write and read back; updated_at should be a recent non-zero time.
+	before := time.Now().UTC().Add(-time.Second)
+	if err := store.WriteMemory(db, "coder", "owner/repo", "## Active PRs\n- PR #1"); err != nil {
+		t.Fatalf("WriteMemory: %v", err)
+	}
+	content, found, mtime, err = store.ReadMemory(db, "coder", "owner/repo")
+	if err != nil {
+		t.Fatalf("ReadMemory after write: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true after write")
+	}
+	if content != "## Active PRs\n- PR #1" {
+		t.Fatalf("content mismatch: got %q", content)
+	}
+	if mtime.IsZero() {
+		t.Fatal("expected non-zero mtime after write")
+	}
+	if mtime.Before(before) {
+		t.Fatalf("mtime %v is before write start %v", mtime, before)
+	}
+
+	// Overwrite with empty string to clear: row still exists (found=true) but content is "".
+	if err := store.WriteMemory(db, "coder", "owner/repo", ""); err != nil {
+		t.Fatalf("WriteMemory clear: %v", err)
+	}
+	content, found, mtime, err = store.ReadMemory(db, "coder", "owner/repo")
+	if err != nil {
+		t.Fatalf("ReadMemory after clear: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true even after clearing content")
+	}
+	if content != "" {
+		t.Fatalf("expected empty content after clear, got %q", content)
+	}
+	if mtime.IsZero() {
+		t.Fatal("expected non-zero mtime even after clearing content")
+	}
+}
+
+// TestReadWriteMemoryIsolation verifies that different agent/repo combinations
+// are stored independently.
+func TestReadWriteMemoryIsolation(t *testing.T) {
+	t.Parallel()
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	if err := store.WriteMemory(db, "agentA", "repo", "mem-A"); err != nil {
+		t.Fatalf("WriteMemory A: %v", err)
+	}
+	if err := store.WriteMemory(db, "agentB", "repo", "mem-B"); err != nil {
+		t.Fatalf("WriteMemory B: %v", err)
+	}
+
+	a, _, _, err := store.ReadMemory(db, "agentA", "repo")
+	if err != nil {
+		t.Fatalf("ReadMemory A: %v", err)
+	}
+	if a != "mem-A" {
+		t.Errorf("agentA: got %q, want %q", a, "mem-A")
+	}
+
+	b, _, _, err := store.ReadMemory(db, "agentB", "repo")
+	if err != nil {
+		t.Fatalf("ReadMemory B: %v", err)
+	}
+	if b != "mem-B" {
+		t.Errorf("agentB: got %q, want %q", b, "mem-B")
 	}
 }

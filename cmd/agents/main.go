@@ -65,7 +65,7 @@ func run() error {
 	logger := logging.NewLogger(cfg.Daemon.Log)
 
 	runners := setupRunners(cfg, logger)
-	scheduler, err := setupScheduler(cfg, runners, logger)
+	scheduler, memBackend, err := setupScheduler(cfg, runners, db, logger)
 	if err != nil {
 		return err
 	}
@@ -147,10 +147,23 @@ func run() error {
 		server.WithStore(db, scheduler)
 	}
 
+	// In SQLite mode, wire the memory backend into the server for the
+	// /api/memory endpoint and attach an SSE notifier so the UI stream stays
+	// live. In file mode, WatchMemoryDir drives the stream instead.
+	if db != nil {
+		mem := memBackend.(*sqliteMemory)
+		mem.notifyFn = obs.PublishMemoryChange
+		server.WithMemoryReader(&sqliteWebhookReader{db: db})
+	}
+
 	group, groupCtx := errgroup.WithContext(ctx)
 	deliveryStore.Start(groupCtx)
 	engine.StartDispatchDedup(groupCtx)
-	go observe.WatchMemoryDir(groupCtx, cfg.Daemon.MemoryDir, 0, obs.MemorySSE)
+	// Watch the memory dir only when using the file-based memory backend (YAML
+	// config path). When --db is used, memory is stored in SQLite.
+	if db == nil {
+		go observe.WatchMemoryDir(groupCtx, cfg.Daemon.MemoryDir, 0, obs.MemorySSE)
+	}
 	group.Go(func() error { return processor.Run(groupCtx) })
 	group.Go(func() error { return scheduler.Run(groupCtx) })
 	group.Go(func() error { return server.Run(groupCtx) })
@@ -199,9 +212,62 @@ func setupRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runne
 	return runners
 }
 
-func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, logger zerolog.Logger) (*autonomous.Scheduler, error) {
-	memoryStore := autonomous.NewMemoryStore(cfg.Daemon.MemoryDir)
-	return autonomous.NewScheduler(cfg, runners, memoryStore, logger)
+func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, db *sql.DB, logger zerolog.Logger) (*autonomous.Scheduler, autonomous.MemoryBackend, error) {
+	var memBackend autonomous.MemoryBackend
+	if db != nil {
+		memBackend = &sqliteMemory{db: db}
+	} else {
+		memBackend = autonomous.NewMemoryStore(cfg.Daemon.MemoryDir)
+	}
+	sched, err := autonomous.NewScheduler(cfg, runners, memBackend, logger)
+	return sched, memBackend, err
+}
+
+// sqliteMemory implements autonomous.MemoryBackend using the SQLite store.
+// Agent and repo names are normalised with ai.NormalizeToken before storage so
+// that the keys are identical to those used by the file-based backend and can
+// be looked up by the /api/memory endpoint without conversion.
+type sqliteMemory struct {
+	db       *sql.DB
+	notifyFn func(agent, repo string) // optional; called after each successful write
+}
+
+func (m *sqliteMemory) ReadMemory(agent, repo string) (string, error) {
+	content, _, _, err := store.ReadMemory(m.db, ai.NormalizeToken(agent), ai.NormalizeToken(repo))
+	return content, err
+}
+
+// sqliteWebhookReader implements webhook.MemoryReader using the SQLite store.
+// Unlike sqliteMemory (which serves the scheduler and treats a missing row as
+// empty memory), this reader returns webhook.ErrMemoryNotFound when no row
+// exists so that GET /api/memory returns 404 for absent entries while still
+// returning 200 with an empty body for intentionally-cleared memory.
+// The updated_at timestamp is returned so that handleAPIMemory can set the
+// X-Memory-Mtime response header, keeping file and SQLite mode semantically
+// aligned.
+type sqliteWebhookReader struct {
+	db *sql.DB
+}
+
+func (r *sqliteWebhookReader) ReadMemory(agent, repo string) (string, time.Time, error) {
+	content, found, mtime, err := store.ReadMemory(r.db, ai.NormalizeToken(agent), ai.NormalizeToken(repo))
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	if !found {
+		return "", time.Time{}, webhook.ErrMemoryNotFound
+	}
+	return content, mtime, nil
+}
+
+func (m *sqliteMemory) WriteMemory(agent, repo, content string) error {
+	if err := store.WriteMemory(m.db, ai.NormalizeToken(agent), ai.NormalizeToken(repo), content); err != nil {
+		return err
+	}
+	if m.notifyFn != nil {
+		m.notifyFn(ai.NormalizeToken(agent), ai.NormalizeToken(repo))
+	}
+	return nil
 }
 
 // loadConfig loads the daemon configuration either from a YAML file (legacy

@@ -75,6 +75,7 @@ technical debt issues.
 
 ## Memory hygiene
 
+Return your full updated memory in the `memory` field of your JSON response.
 Record issue numbers you have filed and the themes you have
 covered so you do not repeat yourself. Keep under 30 lines.
 
@@ -92,7 +93,8 @@ the end of your response:
   ],
   "dispatch": [
     { "agent": "<name>", "number": <issue-or-pr-number>, "reason": "<why>" }
-  ]
+  ],
+  "memory": "## Filed issues\n- #N theme\n..."
 }
 ```
 
@@ -100,4 +102,5 @@ Rules:
 - `summary` is required; keep it to one sentence.
 - `artifacts` lists every GitHub object you created or updated. Omit or use `[]` if none.
 - `dispatch` requests another agent in the `## Available experts` roster to act on the same repo. Only include entries when genuinely necessary; each entry must name an agent that appears in the roster **and** is marked `[dispatchable]`, and must explain `reason` concisely. Omit or use `[]` if no dispatch is needed.
+- `memory` is your full updated memory state. Return `""` to clear memory. This replaces your previous memory entirely.
 - Do **not** dispatch to yourself.

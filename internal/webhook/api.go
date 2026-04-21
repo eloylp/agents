@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -548,9 +549,10 @@ func (s *Server) handleAPIGraph(w http.ResponseWriter, _ *http.Request) {
 // ── /api/memory ────────────────────────────────────────────────────────────
 
 // handleAPIMemory serves GET /api/memory/{agent}/{repo} — returns the raw
-// markdown content of the agent's memory file for the given repo, plus mtime.
+// markdown content of the agent's memory for the given repo.
 // The {repo} path segment is expected in the format "owner_repo" (underscore
-// separator, matching the filesystem layout under memory_dir).
+// separator, matching both the filesystem layout under memory_dir and the
+// normalised key used in the SQLite memory store).
 func (s *Server) handleAPIMemory(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	agent := filepath.Clean(vars["agent"])
@@ -562,6 +564,26 @@ func (s *Server) handleAPIMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// SQLite mode: read memory via the injected MemoryReader.
+	if s.memReader != nil {
+		content, mtime, err := s.memReader.ReadMemory(agent, repo)
+		if errors.Is(err, ErrMemoryNotFound) {
+			http.Error(w, "memory not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, "could not read memory", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		if !mtime.IsZero() {
+			w.Header().Set("X-Memory-Mtime", mtime.UTC().Format(time.RFC3339))
+		}
+		_, _ = w.Write([]byte(content))
+		return
+	}
+
+	// File mode: read from the filesystem memory_dir.
 	memDir := s.loadCfg().Daemon.MemoryDir
 	if memDir == "" {
 		http.Error(w, "memory_dir not configured", http.StatusNotFound)

@@ -92,6 +92,26 @@ type HotReloadSink interface {
 	UpdateConfigAndRunners(cfg *config.Config, runners map[string]ai.Runner)
 }
 
+// runLocks serializes concurrent executeAgentRun calls for the same
+// (agent, repo) pair, preventing the lost-update race where two overlapping
+// runs both read the same old memory and whichever finishes last silently
+// clobbers the other run's state.
+type runLocks struct {
+	m sync.Map // key: string -> *sync.Mutex
+}
+
+func (r *runLocks) acquire(key string) {
+	v, _ := r.m.LoadOrStore(key, &sync.Mutex{})
+	v.(*sync.Mutex).Lock()
+}
+
+func (r *runLocks) release(key string) {
+	v, ok := r.m.Load(key)
+	if ok {
+		v.(*sync.Mutex).Unlock()
+	}
+}
+
 // Scheduler wires cron-triggered agent bindings from the config into the
 // robfig/cron engine.
 type Scheduler struct {
@@ -99,7 +119,7 @@ type Scheduler struct {
 	runners       map[string]ai.Runner
 	runnerBuilder RunnerBuilder  // optional; nil means Reload does not update runners
 	hotReloadSink HotReloadSink  // optional; nil means no external component to notify
-	memories      *MemoryStore
+	memory        MemoryBackend
 	cron          *cron.Cron
 	logger        zerolog.Logger
 	ctxMu         sync.RWMutex
@@ -110,6 +130,7 @@ type Scheduler struct {
 	lastRuns      map[string]lastRunRecord // key: "name\x00repo"
 	dispatcher    *workflow.Dispatcher    // nil when dispatch is not configured
 	traceRec      workflow.TraceRecorder  // nil when tracing is not configured
+	runLock        runLocks               // per-(agent,repo) mutex serializing the read/run/write sequence
 }
 
 // WithDispatcher attaches a Dispatcher to the Scheduler so that dispatch
@@ -149,7 +170,7 @@ func (s *Scheduler) WithHotReloadSink(sink HotReloadSink) {
 
 // NewScheduler builds a scheduler and registers all cron-triggered bindings
 // found in cfg.Repos[].Use.
-func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, memories *MemoryStore, logger zerolog.Logger) (*Scheduler, error) {
+func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, memory MemoryBackend, logger zerolog.Logger) (*Scheduler, error) {
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	cronLogger := zerologCronLogger{logger: logger.With().Str("component", "autonomous_scheduler").Logger()}
 	c := cron.New(
@@ -159,7 +180,7 @@ func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, memories *Me
 	s := &Scheduler{
 		cfg:      cfg,
 		runners:  runners,
-		memories: memories,
+		memory:   memory,
 		cron:     c,
 		logger:   logger.With().Str("component", "autonomous_scheduler").Logger(),
 		lastRuns: make(map[string]lastRunRecord),
@@ -383,100 +404,129 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 
 	logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Str("backend", backend).Logger()
 	roster := workflow.BuildRoster(cfg, repo, agent.Name)
-	// runCompleted is set to true once runner.Run returns successfully. The cron
-	// mark should only be rolled back when the autonomous pass itself fails
-	// (prompt rendering, memory lock, or runner error). A post-run failure such
-	// as a dispatch enqueue error must NOT clear the mark — the autonomous pass
-	// already committed, so the dedup window must remain in force.
-	runCompleted := false
-	err := s.memories.WithLock(agent.Name, repo, func(memoryPath string, memory string) error {
-		rendered, err := ai.RenderAgentPrompt(agent, cfg.Skills, ai.PromptContext{
-			Repo:       repo,
-			Backend:    backend,
-			Memory:     memory,
-			MemoryPath: memoryPath,
-			Roster:     roster,
-		})
-		if err != nil {
-			return fmt.Errorf("render prompt: %w", err)
-		}
-		if !agent.AllowPRs {
-			rendered.System = "Do not open or create pull requests under any circumstances.\n" + rendered.System
-		}
-		logger.Info().Msg("running autonomous pass")
-		spanStart := time.Now()
-		resp, err := runner.Run(ctx, ai.Request{
-			Workflow: fmt.Sprintf("autonomous:%s:%s", backend, agent.Name),
-			Repo:     repo,
-			System:   rendered.System,
-			User:     rendered.User,
-		})
-		spanEnd := time.Now()
-		if s.traceRec != nil {
-			status, errMsg := "success", ""
-			if err != nil {
-				status = "error"
-				errMsg = err.Error()
-			}
-			spanID := workflow.GenEventID()
-			rootEventID := spanID
-			logger.Info().Str("span_id", spanID).Str("status", status).Int64("duration_ms", spanEnd.Sub(spanStart).Milliseconds()).Msg("recording trace span")
-			s.traceRec.RecordSpan(
-				spanID, rootEventID, "",
-				agent.Name, backend,
-				repo, "autonomous", "",
-				0, 0,
-				0, len(resp.Artifacts), resp.Summary,
-				spanStart, spanEnd,
-				status, errMsg,
-			)
-		}
-		if err != nil {
-			return fmt.Errorf("agent run: %w", err)
-		}
-		runCompleted = true
-		logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Int("dispatch_requests", len(resp.Dispatch)).Msg("autonomous pass completed")
-		if s.dispatcher != nil && len(resp.Dispatch) > 0 {
-			// Synthesize a minimal event to carry repo context into the dispatcher.
-			// Autonomous runs have no originating GitHub event, so Kind="autonomous"
-			// and Number=0. If the agent omitted number in a dispatch request, the
-			// dispatcher will fall back to this 0.
-			// Generate a fresh root event ID so dispatch chains from autonomous runs
-			// carry a non-empty correlation ID throughout the chain.
-			rootEventID := workflow.GenEventID()
-			syntheticEv := workflow.Event{
-				ID:    rootEventID,
-				Repo:  workflow.RepoRef{FullName: repo, Enabled: true},
-				Kind:  "autonomous",
-				Actor: agent.Name,
-			}
-			// Autonomous runs do not belong to an inbound trace span so
-			// parentSpanID is empty; dispatch children will still create their
-			// own spans with this run's rootEventID as correlation.
-			if err := s.dispatcher.ProcessDispatches(ctx, agent, syntheticEv, rootEventID, 0, "", resp.Dispatch); err != nil {
-				return fmt.Errorf("agent %q: dispatch: %w", agent.Name, err)
-			}
-		}
-		return nil
-	})
-	if s.dispatcher != nil {
-		if err != nil && !runCompleted {
-			// Roll back the cron mark only when the autonomous pass itself failed
-			// (before or during runner.Run). If runner.Run succeeded but a
-			// downstream step (e.g. dispatch enqueue) failed, the run is already
-			// committed and the dedup window must stay in force.
+
+	// Serialise the read/run/write sequence for this (agent, repo) pair to
+	// prevent a lost-update race. Without this lock two overlapping runs
+	// (cron + manual trigger, two manual triggers, or runs without a
+	// dispatcher dedup mark) would both read the same old memory, run
+	// independently, and whichever finishes last would silently clobber the
+	// other run's persisted state.
+	runKey := agent.Name + "\x00" + repo
+	s.runLock.acquire(runKey)
+	defer s.runLock.release(runKey)
+
+	// Read existing memory before the run so it can be injected into the prompt.
+	existingMemory, err := s.memory.ReadMemory(agent.Name, repo)
+	if err != nil {
+		if s.dispatcher != nil {
 			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
-		} else {
-			// runner.Run succeeded (runCompleted == true) regardless of whether
-			// a post-run step (e.g. dispatch enqueue) failed. Decrement the
-			// refcount so the evict() loop can clean up the cron entry after its
-			// TTL expires. The entry itself is preserved so that
-			// TryClaimForDispatch continues to suppress autonomous-context
-			// dispatches for the full dedup_window_seconds window.
-			s.dispatcher.FinalizeAutonomousRun(agent.Name, repo)
+		}
+		return fmt.Errorf("read memory: %w", err)
+	}
+
+	rendered, err := ai.RenderAgentPrompt(agent, cfg.Skills, ai.PromptContext{
+		Repo:         repo,
+		Backend:      backend,
+		Memory:       existingMemory,
+		IsAutonomous: true,
+		Roster:       roster,
+	})
+	if err != nil {
+		if s.dispatcher != nil {
+			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
+		}
+		return fmt.Errorf("render prompt: %w", err)
+	}
+	if !agent.AllowPRs {
+		rendered.System = "Do not open or create pull requests under any circumstances.\n" + rendered.System
+	}
+
+	logger.Info().Msg("running autonomous pass")
+	spanStart := time.Now()
+	resp, runErr := runner.Run(ctx, ai.Request{
+		Workflow: fmt.Sprintf("autonomous:%s:%s", backend, agent.Name),
+		Repo:     repo,
+		System:   rendered.System,
+		User:     rendered.User,
+	})
+
+	// recordTrace is called exactly once per run, after all post-run steps, so
+	// both the span status and duration accurately reflect the final outcome
+	// (including time spent in memory writes and dispatch, not just runner.Run).
+	recordTrace := func(status, errMsg string) {
+		if s.traceRec == nil {
+			return
+		}
+		spanEnd := time.Now()
+		spanID := workflow.GenEventID()
+		rootEventID := spanID
+		logger.Info().Str("span_id", spanID).Str("status", status).Int64("duration_ms", spanEnd.Sub(spanStart).Milliseconds()).Msg("recording trace span")
+		s.traceRec.RecordSpan(
+			spanID, rootEventID, "",
+			agent.Name, backend,
+			repo, "autonomous", "",
+			0, 0,
+			0, len(resp.Artifacts), resp.Summary,
+			spanStart, spanEnd,
+			status, errMsg,
+		)
+	}
+
+	if runErr != nil {
+		recordTrace("error", runErr.Error())
+		if s.dispatcher != nil {
+			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
+		}
+		return fmt.Errorf("agent run: %w", runErr)
+	}
+
+	// Persist the agent's updated memory. An empty resp.Memory clears the entry.
+	// Memory write failure is treated as a full run failure: roll back the dedup
+	// mark so the agent can be re-dispatched or run again on the next cron tick
+	// to recover the lost state. Finalising the mark here would silently suppress
+	// retry dispatches for the full dedup window while the in-memory state stays
+	// stale.
+	if memErr := s.memory.WriteMemory(agent.Name, repo, resp.Memory); memErr != nil {
+		recordTrace("error", memErr.Error())
+		if s.dispatcher != nil {
+			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
+		}
+		return fmt.Errorf("write memory: %w", memErr)
+	}
+
+	logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Int("dispatch_requests", len(resp.Dispatch)).Msg("autonomous pass completed")
+
+	// The autonomous pass succeeded. Finalize the dedup mark regardless of
+	// whether the optional dispatch step below succeeds — the run is already
+	// committed and the dedup window must remain in force.
+	if s.dispatcher != nil {
+		s.dispatcher.FinalizeAutonomousRun(agent.Name, repo)
+	}
+
+	if s.dispatcher != nil && len(resp.Dispatch) > 0 {
+		// Synthesize a minimal event to carry repo context into the dispatcher.
+		// Autonomous runs have no originating GitHub event, so Kind="autonomous"
+		// and Number=0. If the agent omitted number in a dispatch request, the
+		// dispatcher will fall back to this 0.
+		// Generate a fresh root event ID so dispatch chains from autonomous runs
+		// carry a non-empty correlation ID throughout the chain.
+		rootEventID := workflow.GenEventID()
+		syntheticEv := workflow.Event{
+			ID:    rootEventID,
+			Repo:  workflow.RepoRef{FullName: repo, Enabled: true},
+			Kind:  "autonomous",
+			Actor: agent.Name,
+		}
+		// Autonomous runs do not belong to an inbound trace span so
+		// parentSpanID is empty; dispatch children will still create their
+		// own spans with this run's rootEventID as correlation.
+		if dispErr := s.dispatcher.ProcessDispatches(ctx, agent, syntheticEv, rootEventID, 0, "", resp.Dispatch); dispErr != nil {
+			recordTrace("error", dispErr.Error())
+			return fmt.Errorf("agent %q: dispatch: %w", agent.Name, dispErr)
 		}
 	}
-	return err
+	recordTrace("success", "")
+	return nil
 }
 
 // Reload replaces the set of registered cron bindings and updates the

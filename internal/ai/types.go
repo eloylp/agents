@@ -44,4 +44,8 @@ type Response struct {
 	Artifacts []Artifact        `json:"artifacts"`
 	Summary   string            `json:"summary"`
 	Dispatch  []DispatchRequest `json:"dispatch,omitempty"`
+	// Memory is the agent's full updated memory state returned at the end of
+	// each run. The daemon writes this value back to the memory store (SQLite or
+	// filesystem) after the run completes. An empty string clears the memory.
+	Memory string `json:"memory"`
 }

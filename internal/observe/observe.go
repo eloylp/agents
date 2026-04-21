@@ -428,6 +428,16 @@ func (s *Store) RecordDispatch(from, to, repo string, number int, reason string)
 	s.Graph.Record(from, to, repo, number, reason)
 }
 
+// PublishMemoryChange emits a MemoryChangeEvent to the MemorySSE hub for the
+// given agent and repo. Called by the SQLite memory backend after each write so
+// the UI SSE stream stays live when the daemon runs in --db mode.
+func (s *Store) PublishMemoryChange(agent, repo string) {
+	ev := MemoryChangeEvent{Agent: agent, Repo: repo, Path: agent + "/" + repo}
+	if b, err := sseData(ev); err == nil {
+		s.MemorySSE.Publish(b)
+	}
+}
+
 // sseData encodes v as a Server-Sent Event data line.
 func sseData(v any) ([]byte, error) {
 	b, err := json.Marshal(v)

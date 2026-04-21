@@ -6,43 +6,69 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/eloylp/agents/internal/ai"
 )
 
-type MemoryStore struct {
+// MemoryBackend is the interface satisfied by both the file-based and
+// SQLite-backed memory implementations. The scheduler calls ReadMemory before
+// each run to inject existing memory into the prompt, and WriteMemory after
+// each run to persist the agent's returned memory.
+type MemoryBackend interface {
+	ReadMemory(agent, repo string) (string, error)
+	WriteMemory(agent, repo, content string) error
+}
+
+// fileMemory is a MemoryBackend that stores per-agent, per-repo memory as a
+// plain text file under a base directory. It is used when the daemon is
+// started with --config (YAML path). The daemon — not the agent — owns all
+// read and write operations; agents never touch the filesystem for memory.
+type fileMemory struct {
 	baseDir string
-	locks   map[string]*sync.Mutex
-	mu      sync.Mutex
 }
 
-func NewMemoryStore(baseDir string) *MemoryStore {
-	return &MemoryStore{
-		baseDir: baseDir,
-		locks:   make(map[string]*sync.Mutex),
+// NewMemoryStore returns a file-based MemoryBackend rooted at baseDir.
+// The name is preserved for backward compatibility with existing call sites.
+func NewMemoryStore(baseDir string) MemoryBackend {
+	return &fileMemory{baseDir: baseDir}
+}
+
+func (m *fileMemory) ReadMemory(agent, repo string) (string, error) {
+	path, err := m.memoryPath(agent, repo)
+	if err != nil {
+		return "", err
 	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read memory %s: %w", path, err)
+	}
+	return string(data), nil
 }
 
-func (s *MemoryStore) WithLock(agent string, repo string, fn func(memoryPath string, memory string) error) error {
-	lock := s.lockFor(agent, repo)
-	lock.Lock()
-	defer lock.Unlock()
-
-	path, err := s.ensureMemoryFile(agent, repo)
+func (m *fileMemory) WriteMemory(agent, repo, content string) error {
+	path, err := m.ensureDir(agent, repo)
 	if err != nil {
 		return err
 	}
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("read memory %s: %w", path, err)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		return fmt.Errorf("write memory %s: %w", path, err)
 	}
-	return fn(path, string(content))
+	return nil
 }
 
-func (s *MemoryStore) ensureMemoryFile(agent string, repo string) (string, error) {
-	dir := filepath.Join(s.baseDir, ai.NormalizeToken(agent), ai.NormalizeToken(repo))
-	cleanBase := filepath.Clean(s.baseDir)
+// memoryPath returns the file path for agent+repo, creating intermediate
+// directories but NOT the file itself. Returns an error if the resolved path
+// would escape the base directory.
+func (m *fileMemory) memoryPath(agent, repo string) (string, error) {
+	return m.ensureDir(agent, repo)
+}
+
+func (m *fileMemory) ensureDir(agent, repo string) (string, error) {
+	dir := filepath.Join(m.baseDir, ai.NormalizeToken(agent), ai.NormalizeToken(repo))
+	cleanBase := filepath.Clean(m.baseDir)
 	cleanDir := filepath.Clean(dir)
 	if !strings.HasPrefix(cleanDir+string(filepath.Separator), cleanBase+string(filepath.Separator)) {
 		return "", fmt.Errorf("memory path escapes base dir: %s", dir)
@@ -50,28 +76,5 @@ func (s *MemoryStore) ensureMemoryFile(agent string, repo string) (string, error
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create memory dir %s: %w", dir, err)
 	}
-	path := filepath.Join(dir, "MEMORY.md")
-	_, err := os.Stat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		if writeErr := os.WriteFile(path, []byte{}, 0o600); writeErr != nil {
-			return "", fmt.Errorf("create memory file %s: %w", path, writeErr)
-		}
-		return path, nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("stat memory file %s: %w", path, err)
-	}
-	return path, nil
-}
-
-func (s *MemoryStore) lockFor(agent string, repo string) *sync.Mutex {
-	key := fmt.Sprintf("%s|%s", ai.NormalizeToken(agent), ai.NormalizeToken(repo))
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if lock, ok := s.locks[key]; ok {
-		return lock
-	}
-	lock := &sync.Mutex{}
-	s.locks[key] = lock
-	return lock
+	return filepath.Join(dir, "MEMORY.md"), nil
 }

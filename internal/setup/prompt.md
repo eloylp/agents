@@ -157,11 +157,10 @@ prompts:
       Autonomous run for {{.Repo}} as {{.AgentName}}.
       Focus: {{.Description}}
       Task: {{.Task}}
-      Memory file: {{.MemoryPath}}
-      Existing memory:
-      {{.Memory}}
+      The daemon injects your existing memory in the ## Runtime context section below.
       {{template "agent_guidance" .}}
-      Return one JSON object on stdout.
+      Return one JSON object on stdout. Include a "memory" field with your full updated
+      memory state — the daemon persists this after each run. An empty string clears it.
 
 skills:
   - name: architect

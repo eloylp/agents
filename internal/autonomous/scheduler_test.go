@@ -725,6 +725,54 @@ func TestSchedulerDispatchEnqueueFailurePropagates(t *testing.T) {
 	}
 }
 
+// TestSchedulerDispatchEnqueueFailureRecordsErrorSpan verifies that when
+// ProcessDispatches fails after a successful runner.Run and memory write, the
+// trace span is recorded as "error" (not "success"), so /api/traces accurately
+// reflects the run outcome.
+func TestSchedulerDispatchEnqueueFailureRecordsErrorSpan(t *testing.T) {
+	t.Parallel()
+	cfg := dispatchCfgForTest()
+
+	runner := &dispatchingRunner{
+		dispatches: []ai.DispatchRequest{
+			{Agent: "notifier", Reason: "review done", Number: 42},
+		},
+	}
+	queueErr := errors.New("queue full")
+	q := &fakeQueue{err: queueErr}
+	agentMap := map[string]config.AgentDef{
+		"reviewer": cfg.Agents[0],
+		"notifier": cfg.Agents[1],
+	}
+	dedup := workflow.NewDispatchDedupStore(300)
+	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
+	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
+
+	traceRec := &stubTraceRecorder{}
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithDispatcher(dispatcher)
+	s.WithTraceRecorder(traceRec)
+
+	runErr := s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
+	if runErr == nil {
+		t.Fatal("expected error when dispatch enqueue fails, got nil")
+	}
+
+	spans := traceRec.recorded()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 recorded trace span, got %d", len(spans))
+	}
+	if spans[0].status != "error" {
+		t.Errorf("expected span status %q, got %q", "error", spans[0].status)
+	}
+	if !strings.Contains(spans[0].errMsg, "dispatch") {
+		t.Errorf("expected span errMsg to contain %q, got %q", "dispatch", spans[0].errMsg)
+	}
+}
+
 // TestSchedulerCronMarkKeptAfterSuccessfulRunWithDispatchEnqueueFailure verifies
 // that when runner.Run succeeds but the post-run dispatch enqueue fails, the
 // cron-namespace mark is NOT rolled back. The autonomous pass already committed,
@@ -1577,5 +1625,312 @@ func TestSchedulerCronJobUsesPostReloadAgentDef(t *testing.T) {
 	}
 	if !strings.Contains(prompts[0], "Updated review prompt.") {
 		t.Errorf("pre-reload cron closure used stale agent definition; prompt = %q", prompts[0])
+	}
+}
+
+// stubTraceRecorder records calls to RecordSpan for assertion in tests.
+type stubTraceRecorder struct {
+	mu      sync.Mutex
+	spans   []stubSpan
+}
+
+type stubSpan struct {
+	status  string
+	errMsg  string
+	spanEnd time.Time
+}
+
+func (r *stubTraceRecorder) RecordSpan(_, _, _, _, _, _, _, _ string, _, _ int, _ int64, _ int, _ string, _ time.Time, spanEnd time.Time, status, errMsg string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.spans = append(r.spans, stubSpan{status: status, errMsg: errMsg, spanEnd: spanEnd})
+}
+
+func (r *stubTraceRecorder) recorded() []stubSpan {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]stubSpan, len(r.spans))
+	copy(out, r.spans)
+	return out
+}
+
+// errMemory is a MemoryBackend whose WriteMemory always returns an error, used
+// to test that a write failure causes executeAgentRun to surface the error.
+type errMemory struct {
+	dir string // underlying file store for successful reads
+	err error
+}
+
+func (m *errMemory) ReadMemory(agent, repo string) (string, error) {
+	return NewMemoryStore(m.dir).ReadMemory(agent, repo)
+}
+
+func (m *errMemory) WriteMemory(_, _, _ string) error {
+	return m.err
+}
+
+// slowMemory wraps a MemoryStore and introduces a fixed delay on WriteMemory
+// so regression tests can verify that span durations include post-run steps.
+type slowMemory struct {
+	inner MemoryBackend
+	delay time.Duration
+}
+
+func (m *slowMemory) ReadMemory(agent, repo string) (string, error) {
+	return m.inner.ReadMemory(agent, repo)
+}
+
+func (m *slowMemory) WriteMemory(agent, repo, content string) error {
+	time.Sleep(m.delay)
+	return m.inner.WriteMemory(agent, repo, content)
+}
+
+// TestSchedulerWriteMemoryFailureFailsRun verifies that a WriteMemory error
+// after a successful agent run is surfaced as a run error, and that the dedup
+// mark is rolled back so the agent can be re-dispatched immediately for retry.
+func TestSchedulerWriteMemoryFailureFailsRun(t *testing.T) {
+	t.Parallel()
+
+	writeErr := errors.New("disk full")
+	// Use two agents: "reviewer" is the agent whose run fails on memory write;
+	// "notifier" is the originator that later tries to dispatch "reviewer".
+	// This reflects the real retry scenario: an operator or another agent
+	// notices the error and re-dispatches "reviewer" to recover lost memory.
+	cfg := baseCfg(func(c *config.Config) {
+		c.Agents[0].AllowDispatch = true // reviewer can receive dispatches
+		c.Agents = append(c.Agents, config.AgentDef{
+			Name:        "notifier",
+			Backend:     "claude",
+			Prompt:      "Notify.",
+			CanDispatch: []string{"reviewer"}, // notifier may dispatch reviewer
+		})
+	})
+	runner := &stubRunner{}
+	mem := &errMemory{dir: t.TempDir(), err: writeErr}
+
+	q := &fakeQueue{}
+	agentMap := map[string]config.AgentDef{
+		"reviewer": cfg.Agents[0],
+		"notifier": cfg.Agents[1],
+	}
+	dedup := workflow.NewDispatchDedupStore(300)
+	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
+	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
+
+	traceRec := &stubTraceRecorder{}
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, mem, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithDispatcher(dispatcher)
+	s.WithTraceRecorder(traceRec)
+
+	runErr := s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
+	if runErr == nil {
+		t.Fatal("TriggerAgent: expected error from WriteMemory, got nil")
+	}
+	if !errors.Is(runErr, writeErr) {
+		t.Errorf("expected writeErr in error chain, got: %v", runErr)
+	}
+
+	// The runner was invoked (the run itself completed).
+	runner.mu.Lock()
+	calls := runner.calls
+	runner.mu.Unlock()
+	if calls != 1 {
+		t.Errorf("expected 1 runner call, got %d", calls)
+	}
+
+	// The trace span must reflect the memory write failure, not a false "success".
+	spans := traceRec.recorded()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 recorded trace span, got %d", len(spans))
+	}
+	if spans[0].status != "error" {
+		t.Errorf("expected span status %q, got %q", "error", spans[0].status)
+	}
+	if !strings.Contains(spans[0].errMsg, writeErr.Error()) {
+		t.Errorf("expected span errMsg to contain %q, got %q", writeErr.Error(), spans[0].errMsg)
+	}
+
+	// The dedup mark must be rolled back (not finalised), so a subsequent
+	// autonomous-context dispatch for the same (agent, repo, 0) slot is NOT
+	// suppressed — the caller can immediately retry to recover the lost memory.
+	// "notifier" originates the retry dispatch to "reviewer".
+	originator := agentMap["notifier"]
+	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
+	_ = dispatcher.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
+		{Agent: "reviewer", Reason: "retry after memory write failure"},
+	})
+	if len(q.popped()) == 0 {
+		t.Error("expected dispatch to succeed after write-memory failure (dedup mark should be rolled back)")
+	}
+}
+
+// TestSchedulerSpanEndCapturedAfterPostRunSteps is a regression test verifying
+// that the autonomous trace span end time is captured inside recordTrace (after
+// WriteMemory and ProcessDispatches complete), not immediately after runner.Run.
+// Before the fix, spanEnd := time.Now() was captured right after runner.Run, so
+// a slow memory write or dispatch enqueue would emit a span whose recorded
+// duration excluded those post-run steps, leaving /api/traces internally
+// inconsistent.
+func TestSchedulerSpanEndCapturedAfterPostRunSteps(t *testing.T) {
+	t.Parallel()
+
+	const delay = 50 * time.Millisecond
+
+	cfg := baseCfg(nil)
+	runner := &stubRunner{}
+	mem := &slowMemory{inner: NewMemoryStore(t.TempDir()), delay: delay}
+
+	traceRec := &stubTraceRecorder{}
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, mem, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithTraceRecorder(traceRec)
+
+	before := time.Now()
+	if runErr := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); runErr != nil {
+		t.Fatalf("TriggerAgent: %v", runErr)
+	}
+
+	spans := traceRec.recorded()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 recorded trace span, got %d", len(spans))
+	}
+	if spans[0].status != "success" {
+		t.Errorf("expected span status %q, got %q", "success", spans[0].status)
+	}
+	// The span end time must be recorded after the slow WriteMemory completes,
+	// so it must be at least `delay` after the start of the run.
+	if spans[0].spanEnd.Sub(before) < delay {
+		t.Errorf("span end time recorded too early: elapsed %v < delay %v — spanEnd was captured before WriteMemory completed",
+			spans[0].spanEnd.Sub(before), delay)
+	}
+}
+
+// readTrackingMemory wraps a MemoryBackend and records the content seen on
+// each ReadMemory call. Used to assert serialization ordering in tests.
+type readTrackingMemory struct {
+	inner    MemoryBackend
+	mu       sync.Mutex
+	readSeen []string // content returned by each ReadMemory call, in call order
+}
+
+func (m *readTrackingMemory) ReadMemory(agent, repo string) (string, error) {
+	content, err := m.inner.ReadMemory(agent, repo)
+	if err == nil {
+		m.mu.Lock()
+		m.readSeen = append(m.readSeen, content)
+		m.mu.Unlock()
+	}
+	return content, err
+}
+
+func (m *readTrackingMemory) WriteMemory(agent, repo, content string) error {
+	return m.inner.WriteMemory(agent, repo, content)
+}
+
+// firstCallBlockingRunner blocks only the first Run call until block is closed,
+// returning pre-configured responses in order. Subsequent calls return without
+// blocking.
+type firstCallBlockingRunner struct {
+	mu        sync.Mutex
+	calls     int
+	ready     chan struct{} // receives when first Run is entered
+	block     chan struct{} // closed to unblock first Run
+	responses []ai.Response
+}
+
+func (r *firstCallBlockingRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
+	r.mu.Lock()
+	callIdx := r.calls
+	resp := r.responses[callIdx%len(r.responses)]
+	r.calls++
+	r.mu.Unlock()
+
+	if callIdx == 0 {
+		r.ready <- struct{}{}
+		<-r.block
+	}
+	return resp, nil
+}
+
+// TestSchedulerMemoryRunsSerializedPerAgentRepo is a regression test verifying
+// that concurrent executeAgentRun calls for the same (agent, repo) pair are
+// serialized by runLocks so that the second run's ReadMemory always sees the
+// first run's WriteMemory result — preventing the lost-update race where both
+// runs read the same old memory and the last writer silently clobbers the other.
+func TestSchedulerMemoryRunsSerializedPerAgentRepo(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	mem := &readTrackingMemory{inner: NewMemoryStore(dir)}
+
+	ready := make(chan struct{}, 1) // first run signals when inside runner.Run
+	block := make(chan struct{})     // closed to unblock first run
+	runner := &firstCallBlockingRunner{
+		ready: ready,
+		block: block,
+		responses: []ai.Response{
+			{Memory: "first-run"},
+			{Memory: "second-run"},
+		},
+	}
+
+	cfg := baseCfg(nil)
+	// No dispatcher: both TriggerAgent calls proceed without dispatch-dedup
+	// suppression, exposing the concurrent memory read/write race.
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, mem, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	errc1 := make(chan error, 1)
+	go func() {
+		errc1 <- s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
+	}()
+
+	// Wait until the first run is inside runner.Run — it now holds runLock.
+	<-ready
+
+	// Start second run. It will block on runLock until the first run releases it.
+	errc2 := make(chan error, 1)
+	go func() {
+		errc2 <- s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
+	}()
+
+	// Give the second goroutine time to reach runLock.acquire and park.
+	time.Sleep(20 * time.Millisecond)
+
+	// Unblock the first run: it exits runner.Run, writes "first-run", then
+	// releases runLock. The second run then acquires the lock and reads memory.
+	close(block)
+
+	if err := <-errc1; err != nil {
+		t.Fatalf("first TriggerAgent: %v", err)
+	}
+	if err := <-errc2; err != nil {
+		t.Fatalf("second TriggerAgent: %v", err)
+	}
+
+	// With serialization the reads are ordered: first run saw "" (initial state),
+	// second run saw "first-run" (what the first run wrote). Without the lock,
+	// both reads could see "" and the second writer would silently drop the first
+	// run's memory update.
+	mem.mu.Lock()
+	reads := append([]string(nil), mem.readSeen...)
+	mem.mu.Unlock()
+
+	if len(reads) != 2 {
+		t.Fatalf("expected 2 ReadMemory calls, got %d: %v", len(reads), reads)
+	}
+	if reads[0] != "" {
+		t.Errorf("first run: expected empty initial memory, got %q", reads[0])
+	}
+	if reads[1] != "first-run" {
+		t.Errorf("second run: expected %q (serialised read after first write), got %q — lost-update race may be present",
+			"first-run", reads[1])
 	}
 }
