@@ -339,6 +339,20 @@ func TestLoadEmptyDatabase(t *testing.T) {
 	}
 }
 
+func seedAgent(t *testing.T, db *sql.DB, name string) {
+	t.Helper()
+	if err := store.UpsertBackend(db, "claude", config.AIBackendConfig{
+		Command: "claude", Args: []string{}, Env: map[string]string{},
+	}); err != nil {
+		t.Fatalf("seedAgent backend: %v", err)
+	}
+	if err := store.UpsertAgent(db, config.AgentDef{
+		Name: name, Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("seedAgent %s: %v", name, err)
+	}
+}
+
 // TestReadWriteMemory verifies the SQLite memory round-trip: writing a string
 // and reading it back returns the same content, and reading a non-existent
 // entry returns ("", false, time.Time{}, nil).
@@ -346,6 +360,7 @@ func TestReadWriteMemory(t *testing.T) {
 	t.Parallel()
 	db, cleanup := openTestDB(t)
 	defer cleanup()
+	seedAgent(t, db, "coder")
 
 	// Non-existent agent/repo returns not-found (found=false).
 	content, found, mtime, err := store.ReadMemory(db, "coder", "owner/repo")
@@ -409,27 +424,29 @@ func TestReadWriteMemoryIsolation(t *testing.T) {
 	t.Parallel()
 	db, cleanup := openTestDB(t)
 	defer cleanup()
+	seedAgent(t, db, "agent-a")
+	seedAgent(t, db, "agent-b")
 
-	if err := store.WriteMemory(db, "agentA", "repo", "mem-A"); err != nil {
+	if err := store.WriteMemory(db, "agent-a", "repo", "mem-A"); err != nil {
 		t.Fatalf("WriteMemory A: %v", err)
 	}
-	if err := store.WriteMemory(db, "agentB", "repo", "mem-B"); err != nil {
+	if err := store.WriteMemory(db, "agent-b", "repo", "mem-B"); err != nil {
 		t.Fatalf("WriteMemory B: %v", err)
 	}
 
-	a, _, _, err := store.ReadMemory(db, "agentA", "repo")
+	a, _, _, err := store.ReadMemory(db, "agent-a", "repo")
 	if err != nil {
 		t.Fatalf("ReadMemory A: %v", err)
 	}
 	if a != "mem-A" {
-		t.Errorf("agentA: got %q, want %q", a, "mem-A")
+		t.Errorf("agent-a: got %q, want %q", a, "mem-A")
 	}
 
-	b, _, _, err := store.ReadMemory(db, "agentB", "repo")
+	b, _, _, err := store.ReadMemory(db, "agent-b", "repo")
 	if err != nil {
 		t.Fatalf("ReadMemory B: %v", err)
 	}
 	if b != "mem-B" {
-		t.Errorf("agentB: got %q, want %q", b, "mem-B")
+		t.Errorf("agent-b: got %q, want %q", b, "mem-B")
 	}
 }

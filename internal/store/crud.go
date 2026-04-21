@@ -166,9 +166,6 @@ func DeleteAgent(db *sql.DB, name string) error {
 		if err := validateFleet(tx); err != nil {
 			return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: %v", name, err)}
 		}
-		if _, err := tx.Exec("DELETE FROM memory WHERE agent=?", name); err != nil {
-			return fmt.Errorf("store: delete agent %s memory: %w", name, err)
-		}
 	}
 	return tx.Commit()
 }
