@@ -378,13 +378,13 @@ func ImportAll(
 	if err := validateFleet(tx); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
 	}
-	if err := requireAtLeastOneAgent(tx); err != nil {
+	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM agents", "agents", "config: at least one agent is required"); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
 	}
-	if err := requireAtLeastOneBackend(tx); err != nil {
+	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM backends", "backends", "config: at least one ai_backends entry is required"); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
 	}
-	if err := requireAtLeastOneEnabledRepo(tx); err != nil {
+	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM repos WHERE enabled=1", "enabled repos", "config: at least one repo must be enabled"); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
 	}
 	if err := validateCronExpressions(repos); err != nil {
@@ -453,13 +453,13 @@ func ReplaceAll(
 	if err := validateFleet(tx); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
 	}
-	if err := requireAtLeastOneAgent(tx); err != nil {
+	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM agents", "agents", "config: at least one agent is required"); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
 	}
-	if err := requireAtLeastOneBackend(tx); err != nil {
+	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM backends", "backends", "config: at least one ai_backends entry is required"); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
 	}
-	if err := requireAtLeastOneEnabledRepo(tx); err != nil {
+	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM repos WHERE enabled=1", "enabled repos", "config: at least one repo must be enabled"); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
 	}
 	if err := validateCronExpressions(repos); err != nil {
