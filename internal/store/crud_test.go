@@ -3,6 +3,7 @@ package store_test
 import (
 	"database/sql"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -944,7 +945,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 		t.Fatalf("ReadBackends: %v", err)
 	}
 	if _, ok := backends["claude"]; !ok {
-		t.Errorf("backend name not normalised: got keys %v, want 'claude'", maps.Keys(backends))
+		t.Errorf("backend name not normalised: got keys %v, want 'claude'", slices.Collect(maps.Keys(backends)))
 	}
 	if _, bad := backends["Claude"]; bad {
 		t.Error("original mixed-case key 'Claude' should not be present after normalisation")
@@ -959,7 +960,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 		t.Fatalf("ReadSkills: %v", err)
 	}
 	if _, ok := skills["architect"]; !ok {
-		t.Errorf("skill name not normalised: got keys %v, want 'architect'", maps.Keys(skills))
+		t.Errorf("skill name not normalised: got keys %v, want 'architect'", slices.Collect(maps.Keys(skills)))
 	}
 
 	// Agent — mixed-case name, backend, and skill reference should be stored lowercase.
