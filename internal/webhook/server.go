@@ -244,6 +244,9 @@ func (s *Server) buildHandler() http.Handler {
 		// {owner}/{repo} captures "owner/repo" across two path segments.
 		router.Handle("/api/store/repos/{owner}/{repo}", withTimeout(http.HandlerFunc(s.handleStoreRepo))).Methods(http.MethodGet)
 		router.Handle("/api/store/repos/{owner}/{repo}", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreRepo)))).Methods(http.MethodDelete)
+		// Export (GET) requires the API key because backends may hold env secrets.
+		router.Handle("/api/store/export", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreExport)))).Methods(http.MethodGet)
+		router.Handle("/api/store/import", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreImport)))).Methods(http.MethodPost)
 	}
 
 	// Extended observability endpoints — only registered when an observe.Store

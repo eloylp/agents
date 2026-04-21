@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/robfig/cron/v3"
 )
 
 // ErrValidation is returned by Upsert* operations when the mutation is
@@ -22,6 +23,26 @@ func (e *ErrValidation) Error() string { return e.Msg }
 type ErrConflict struct{ Msg string }
 
 func (e *ErrConflict) Error() string { return e.Msg }
+
+// cronParser is the same 5-field parser used by the autonomous scheduler.
+var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+
+// validateCronExpressions checks that every cron binding in repos can be
+// parsed by the same parser the autonomous scheduler uses. Returns an
+// ErrValidation if any expression is malformed.
+func validateCronExpressions(repos []config.RepoDef) error {
+	for _, r := range repos {
+		for _, b := range r.Use {
+			if !b.IsCron() {
+				continue
+			}
+			if _, err := cronParser.Parse(b.Cron); err != nil {
+				return &ErrValidation{Msg: fmt.Sprintf("store: invalid cron expression %q for repo %q: %v", b.Cron, r.Name, err)}
+			}
+		}
+	}
+	return nil
+}
 
 // validateFleet reads all four mutable entity tables through q (a *sql.Tx in
 // practice, so reads see the pending transaction state) and verifies that the
@@ -328,6 +349,147 @@ func UpsertRepo(db *sql.DB, r config.RepoDef) error {
 	}
 	if err := validateFleet(tx); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: upsert repo %s: %v", r.Name, err)}
+	}
+	return tx.Commit()
+}
+
+// ImportAll upserts agents, repos, skills, and backends in a single atomic
+// transaction. If any entity fails validation the entire import is rolled back
+// and no writes are persisted. Each entity is normalized before writing,
+// consistent with the normalization the individual Upsert* helpers apply.
+func ImportAll(
+	db *sql.DB,
+	agents []config.AgentDef,
+	repos []config.RepoDef,
+	skills map[string]config.SkillDef,
+	backends map[string]config.AIBackendConfig,
+) error {
+	for i := range agents {
+		config.NormalizeAgentDef(&agents[i])
+	}
+	for i := range repos {
+		config.NormalizeRepoDef(&repos[i])
+	}
+	normalizedSkills := make(map[string]config.SkillDef, len(skills))
+	for name, s := range skills {
+		name = config.NormalizeSkillName(name)
+		config.NormalizeSkillDef(&s)
+		normalizedSkills[name] = s
+	}
+	normalizedBackends := make(map[string]config.AIBackendConfig, len(backends))
+	for name, b := range backends {
+		name = config.NormalizeBackendName(name)
+		config.NormalizeBackendConfig(&b)
+		config.ApplyBackendDefaults(&b)
+		normalizedBackends[name] = b
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: import: begin: %w", err)
+	}
+	defer tx.Rollback()
+	if err := importAgents(tx, agents); err != nil {
+		return err
+	}
+	if err := importSkills(tx, normalizedSkills); err != nil {
+		return err
+	}
+	if err := importRepos(tx, repos); err != nil {
+		return err
+	}
+	if err := importBackends(tx, normalizedBackends); err != nil {
+		return err
+	}
+	if err := validateFleet(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
+	}
+	if err := requireAtLeastOneAgent(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
+	}
+	if err := requireAtLeastOneBackend(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
+	}
+	if err := requireAtLeastOneEnabledRepo(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
+	}
+	if err := validateCronExpressions(repos); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ReplaceAll replaces the entire fleet configuration atomically. All existing
+// agents, repos, skills, backends, and bindings are deleted and replaced with
+// the provided entities. Identical normalization and validation to ImportAll
+// applies. If validation fails the transaction is rolled back and the store is
+// left unchanged.
+func ReplaceAll(
+	db *sql.DB,
+	agents []config.AgentDef,
+	repos []config.RepoDef,
+	skills map[string]config.SkillDef,
+	backends map[string]config.AIBackendConfig,
+) error {
+	for i := range agents {
+		config.NormalizeAgentDef(&agents[i])
+	}
+	for i := range repos {
+		config.NormalizeRepoDef(&repos[i])
+	}
+	normalizedSkills := make(map[string]config.SkillDef, len(skills))
+	for name, s := range skills {
+		name = config.NormalizeSkillName(name)
+		config.NormalizeSkillDef(&s)
+		normalizedSkills[name] = s
+	}
+	normalizedBackends := make(map[string]config.AIBackendConfig, len(backends))
+	for name, b := range backends {
+		name = config.NormalizeBackendName(name)
+		config.NormalizeBackendConfig(&b)
+		config.ApplyBackendDefaults(&b)
+		normalizedBackends[name] = b
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: replace: begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Delete in dependency order: bindings reference repos and agents.
+	for _, tbl := range []string{"bindings", "repos", "agents", "skills", "backends"} {
+		if _, err := tx.Exec("DELETE FROM " + tbl); err != nil {
+			return fmt.Errorf("store: replace: truncate %s: %w", tbl, err)
+		}
+	}
+
+	if err := importAgents(tx, agents); err != nil {
+		return err
+	}
+	if err := importSkills(tx, normalizedSkills); err != nil {
+		return err
+	}
+	if err := importRepos(tx, repos); err != nil {
+		return err
+	}
+	if err := importBackends(tx, normalizedBackends); err != nil {
+		return err
+	}
+	if err := validateFleet(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
+	}
+	if err := requireAtLeastOneAgent(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
+	}
+	if err := requireAtLeastOneBackend(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
+	}
+	if err := requireAtLeastOneEnabledRepo(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
+	}
+	if err := validateCronExpressions(repos); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

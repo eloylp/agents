@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"gopkg.in/yaml.v3"
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/store"
@@ -141,6 +143,45 @@ func (j storeRepoJSON) toConfig() config.RepoDef {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// restoreRedactedEnv resolves any "[redacted]" sentinel values in env that were
+// echoed back from the list API. For each such key the real stored value is
+// substituted; if the key does not exist in the stored backend the entry is
+// removed so that a phantom "[redacted]" is never written to the database.
+// env is mutated in place. Calling this before UpsertBackend prevents a no-op
+// edit from overwriting real secrets with the literal string "[redacted]".
+func restoreRedactedEnv(db *sql.DB, name string, env map[string]string) error {
+	// Fast path: nothing to do when no sentinel values are present.
+	needRestore := false
+	for _, v := range env {
+		if v == "[redacted]" {
+			needRestore = true
+			break
+		}
+	}
+	if !needRestore {
+		return nil
+	}
+	existing, err := store.ReadBackends(db)
+	if err != nil {
+		return err
+	}
+	stored, ok := existing[config.NormalizeBackendName(name)]
+	for k, v := range env {
+		if v != "[redacted]" {
+			continue
+		}
+		if ok {
+			if sv, found := stored.Env[k]; found {
+				env[k] = sv
+				continue
+			}
+		}
+		// Key not present in the stored backend — drop the sentinel.
+		delete(env, k)
+	}
+	return nil
+}
 
 func nilSafeStrings(s []string) []string {
 	if s == nil {
@@ -451,7 +492,15 @@ func (s *Server) handleStoreBackends(w http.ResponseWriter, r *http.Request) {
 		if req.Env == nil {
 			req.Env = map[string]string{}
 		}
+		// restoreRedactedEnv must run inside the lock so that the read of the
+		// stored backend and the subsequent UpsertBackend write are atomic with
+		// respect to other concurrent backend edits.
 		s.storeMu.Lock()
+		if err := restoreRedactedEnv(s.db, req.Name, req.Env); err != nil {
+			s.storeMu.Unlock()
+			http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
+			return
+		}
 		err := store.UpsertBackend(s.db, req.Name, req.toConfig())
 		if err == nil {
 			err = s.reloadCron()
@@ -598,4 +647,120 @@ func (s *Server) handleStoreRepo(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// ── /api/store/export and /api/store/import ───────────────────────────────────
+
+// exportYAML is the wire shape for YAML export/import. It captures only the
+// four CRUD-mutable sections; daemon-level config (HTTP, log, proxy) is
+// intentionally excluded — it is not managed by the write API.
+type exportYAML struct {
+	Skills map[string]config.SkillDef        `yaml:"skills,omitempty"`
+	Agents []config.AgentDef                 `yaml:"agents,omitempty"`
+	Repos  []config.RepoDef                  `yaml:"repos,omitempty"`
+	Daemon *exportDaemonYAML                 `yaml:"daemon,omitempty"`
+}
+
+type exportDaemonYAML struct {
+	AIBackends map[string]config.AIBackendConfig `yaml:"ai_backends,omitempty"`
+}
+
+// handleStoreExport serves GET /api/store/export — returns a config.yaml
+// fragment covering the four CRUD-mutable sections (skills, agents, repos,
+// daemon.ai_backends). The API key is required because backends may contain
+// secret env values.
+func (s *Server) handleStoreExport(w http.ResponseWriter, _ *http.Request) {
+	if s.db == nil {
+		storeNotConfigured(w)
+		return
+	}
+	agents, repos, skills, backends, err := store.ReadSnapshot(s.db)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read snapshot: %v", err), http.StatusInternalServerError)
+		return
+	}
+	out := exportYAML{
+		Skills: skills,
+		Agents: agents,
+		Repos:  repos,
+	}
+	if len(backends) > 0 {
+		out.Daemon = &exportDaemonYAML{AIBackends: backends}
+	}
+	b, err := yaml.Marshal(out)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("marshal yaml: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-yaml")
+	w.Header().Set("Content-Disposition", `attachment; filename="config-export.yaml"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(b)
+}
+
+// handleStoreImport serves POST /api/store/import — accepts a YAML body in
+// the same format as handleStoreExport and upserts all entities into the DB.
+// On success it returns 200 with a JSON summary of imported counts.
+func (s *Server) handleStoreImport(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		storeNotConfigured(w)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, s.loadCfg().Daemon.HTTP.MaxBodyBytes*10)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, fmt.Sprintf("read request: %v", err), http.StatusBadRequest)
+		return
+	}
+	var payload exportYAML
+	if err := yaml.Unmarshal(body, &payload); err != nil {
+		http.Error(w, fmt.Sprintf("parse yaml: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	backends := map[string]config.AIBackendConfig{}
+	if payload.Daemon != nil {
+		backends = payload.Daemon.AIBackends
+	}
+
+	mode := r.URL.Query().Get("mode")
+	if mode != "" && mode != "merge" && mode != "replace" {
+		http.Error(w, fmt.Sprintf("invalid mode %q: must be empty, \"merge\", or \"replace\"", mode), http.StatusBadRequest)
+		return
+	}
+
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+
+	var importErr error
+	if mode == "replace" {
+		importErr = store.ReplaceAll(s.db, payload.Agents, payload.Repos, payload.Skills, backends)
+	} else {
+		importErr = store.ImportAll(s.db, payload.Agents, payload.Repos, payload.Skills, backends)
+	}
+	if importErr != nil {
+		http.Error(w, fmt.Sprintf("import: %v", importErr), storeErrStatus(importErr))
+		return
+	}
+	if err := s.reloadCron(); err != nil {
+		s.logger.Error().Err(err).Msg("store import: cron reload failed")
+		http.Error(w, fmt.Sprintf("cron reload: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	backendsCount := 0
+	if payload.Daemon != nil {
+		backendsCount = len(payload.Daemon.AIBackends)
+	}
+	writeJSON(w, http.StatusOK, map[string]int{
+		"agents":   len(payload.Agents),
+		"skills":   len(payload.Skills),
+		"repos":    len(payload.Repos),
+		"backends": backendsCount,
+	})
 }

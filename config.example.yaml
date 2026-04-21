@@ -119,6 +119,8 @@ skills:
     prompt_file: skills/devops.md
   dx:
     prompt_file: skills/dx.md
+  documentation:
+    prompt_file: skills/documentation.md
   product:
     prompt_file: skills/product.md
 

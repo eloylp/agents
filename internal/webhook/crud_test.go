@@ -317,6 +317,55 @@ func TestStoreCRUDBackendGetRedactsEnv(t *testing.T) {
 	}
 }
 
+// TestStoreCRUDBackendPostPreservesRedactedEnv verifies that POSTing a backend
+// with "[redacted]" env values (the sentinel echoed by the list API) does not
+// overwrite the real stored secret with the literal string "[redacted]".
+// This models the UI edit flow: GET list → seed form → POST back unchanged.
+func TestStoreCRUDBackendPostPreservesRedactedEnv(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	// Create backend with a real secret.
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
+		"name":    "claude",
+		"command": "claude",
+		"args":    []string{},
+		"env":     map[string]string{"ANTHROPIC_API_KEY": "sk-real-secret"},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("POST backend (create): got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Simulate the UI edit flow: POST back with the "[redacted]" sentinel that
+	// the list API returns, changing only a non-secret field.
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
+		"name":            "claude",
+		"command":         "claude",
+		"args":            []string{"--dangerously-skip-permissions"},
+		"env":             map[string]string{"ANTHROPIC_API_KEY": "[redacted]"},
+		"timeout_seconds": 900,
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("POST backend (edit with redacted sentinel): got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Read back via the store directly (unredacted) and confirm the real secret
+	// was preserved, not overwritten with the literal string "[redacted]".
+	backends, err := store.ReadBackends(s.db)
+	if err != nil {
+		t.Fatalf("ReadBackends: %v", err)
+	}
+	b, ok := backends["claude"]
+	if !ok {
+		t.Fatal("backend 'claude' not found in store after edit")
+	}
+	if got, want := b.Env["ANTHROPIC_API_KEY"], "sk-real-secret"; got != want {
+		t.Errorf("stored env[ANTHROPIC_API_KEY] = %q, want %q (secret must not be overwritten by [redacted] sentinel)", got, want)
+	}
+	// The non-secret field change must have been applied.
+	if b.TimeoutSeconds != 900 {
+		t.Errorf("timeout_seconds = %d, want 900", b.TimeoutSeconds)
+	}
+}
+
 // ── /api/store/repos ──────────────────────────────────────────────────────────
 
 func TestStoreCRUDRepoCreateAndDelete(t *testing.T) {
@@ -1435,5 +1484,366 @@ func TestStoreCRUDDeleteRepoRejectedAsLastEnabled(t *testing.T) {
 	rr := doCRUDRequest(t, s, http.MethodDelete, "/api/store/repos/owner/repo", nil)
 	if rr.Code == http.StatusNoContent {
 		t.Error("DELETE last enabled repo: want non-204, got 204")
+	}
+}
+
+// ── /api/store/export and /api/store/import ───────────────────────────────────
+
+func TestStoreExportReturnsYAML(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+
+	// Create an agent and repo so the export is non-trivial.
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "help",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("create agent: %d — %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+		"name": "owner/repo", "enabled": true,
+		"bindings": []map[string]any{{"agent": "coder", "labels": []string{"ai:fix"}}},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("create repo: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodGet, "/api/store/export", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("export: got %d — %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "coder") {
+		t.Errorf("export YAML missing agent name: %s", body)
+	}
+	if !strings.Contains(body, "owner/repo") {
+		t.Errorf("export YAML missing repo name: %s", body)
+	}
+	ct := rr.Header().Get("Content-Type")
+	if !strings.Contains(ct, "yaml") {
+		t.Errorf("export Content-Type want yaml, got %q", ct)
+	}
+}
+
+func TestStoreImportRoundTrip(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+
+	// Seed a repo so the initial state isn't empty (import validation requires
+	// at least one enabled repo). We import a repo in the YAML payload so this
+	// is satisfied by the import itself. Seed one first so the import can be
+	// verified as an upsert.
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "scout", "backend": "claude", "prompt": "x",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed agent: %d", rr.Code)
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+		"name": "owner/seed-repo", "enabled": true,
+		"bindings": []map[string]any{{"agent": "scout", "labels": []string{"ai:scan"}}},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed repo: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	yaml := `agents:
+  - name: imported-agent
+    backend: claude
+    prompt: imported prompt
+    skills: []
+    can_dispatch: []
+skills:
+  imported-skill:
+    prompt: imported skill prompt
+`
+	req := httptest.NewRequest(http.MethodPost, "/api/store/import", strings.NewReader(yaml))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rr := httptest.NewRecorder()
+	s.buildHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("import: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	var summary map[string]int
+	if err := json.NewDecoder(rr.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if summary["agents"] != 1 {
+		t.Errorf("import agents count: want 1, got %d", summary["agents"])
+	}
+	if summary["skills"] != 1 {
+		t.Errorf("import skills count: want 1, got %d", summary["skills"])
+	}
+
+	// Verify the imported agent appears in the list.
+	rr2 := doCRUDRequest(t, s, http.MethodGet, "/api/store/agents", nil)
+	if !strings.Contains(rr2.Body.String(), "imported-agent") {
+		t.Errorf("imported agent not in agent list: %s", rr2.Body.String())
+	}
+}
+
+func TestStoreImportReplacePrunesExistingRecords(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+
+	// Seed an agent and a repo that should be absent after the replace import.
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "old-agent", "backend": "claude", "prompt": "old",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed old-agent: %d — %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+		"name": "owner/old-repo", "enabled": true,
+		"bindings": []map[string]any{{"agent": "old-agent", "labels": []string{"ai:scan"}}},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed old-repo: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Replace with a YAML that contains only a new agent + repo (no old-agent).
+	yamlBody := `
+daemon:
+  ai_backends:
+    claude:
+      command: claude
+      args: []
+agents:
+  - name: new-agent
+    backend: claude
+    prompt: fresh
+    skills: []
+    can_dispatch: []
+repos:
+  - name: owner/new-repo
+    enabled: true
+    bindings:
+      - agent: new-agent
+        labels:
+          - ai:run
+`
+	req := httptest.NewRequest(http.MethodPost, "/api/store/import?mode=replace", strings.NewReader(yamlBody))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rr := httptest.NewRecorder()
+	s.buildHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("replace import: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// old-agent must be gone.
+	agents := doCRUDRequest(t, s, http.MethodGet, "/api/store/agents", nil)
+	if strings.Contains(agents.Body.String(), "old-agent") {
+		t.Errorf("old-agent still present after replace import: %s", agents.Body.String())
+	}
+	if !strings.Contains(agents.Body.String(), "new-agent") {
+		t.Errorf("new-agent missing after replace import: %s", agents.Body.String())
+	}
+
+	// old-repo must be gone.
+	repos := doCRUDRequest(t, s, http.MethodGet, "/api/store/repos", nil)
+	if strings.Contains(repos.Body.String(), "old-repo") {
+		t.Errorf("old-repo still present after replace import: %s", repos.Body.String())
+	}
+	if !strings.Contains(repos.Body.String(), "new-repo") {
+		t.Errorf("new-repo missing after replace import: %s", repos.Body.String())
+	}
+}
+
+func TestStoreImportRejectsEmptyFleetOnBlankStore(t *testing.T) {
+	t.Parallel()
+	// Blank store: no agents, no repos, no backends.
+	s := openCRUDTestServer(t)
+
+	// Import with only skills — should fail because the resulting store would
+	// have no agents, no enabled repos, and no backends.
+	yamlBody := `skills:
+  my-skill:
+    prompt: just a skill
+`
+	req := httptest.NewRequest(http.MethodPost, "/api/store/import", strings.NewReader(yamlBody))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rr := httptest.NewRecorder()
+	s.buildHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("import skills-only on blank store: want 400, got %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestStoreReplaceRejectsEmptyAgentList(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+
+	// Seed an agent and repo so the store is in a valid state.
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "existing-agent", "backend": "claude", "prompt": "p",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed agent: %d — %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+		"name": "owner/r", "enabled": true,
+		"bindings": []map[string]any{{"agent": "existing-agent", "labels": []string{"ai:run"}}},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed repo: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Replace with a YAML that contains a backend but no agents — should fail.
+	yamlBody := `daemon:
+  ai_backends:
+    claude:
+      command: claude
+      args: []
+`
+	req := httptest.NewRequest(http.MethodPost, "/api/store/import?mode=replace", strings.NewReader(yamlBody))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rr := httptest.NewRecorder()
+	s.buildHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("replace with no agents: want 400, got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// The original agent must still be present — the failed replace must not
+	// have modified the store.
+	agents := doCRUDRequest(t, s, http.MethodGet, "/api/store/agents", nil)
+	if !strings.Contains(agents.Body.String(), "existing-agent") {
+		t.Errorf("existing-agent missing after failed replace: %s", agents.Body.String())
+	}
+}
+
+func TestStoreImportRejectsInvalidMode(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/store/import?mode=replce", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rr := httptest.NewRecorder()
+	s.buildHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("invalid mode: want 400, got %d — %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "invalid mode") {
+		t.Errorf("error body should mention invalid mode, got: %s", rr.Body.String())
+	}
+}
+
+func TestStoreImportMergeRejectsInvalidCron(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "scout", "backend": "claude", "prompt": "p",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed agent: %d — %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+		"name": "owner/existing-repo", "enabled": true,
+		"bindings": []map[string]any{{"agent": "scout", "labels": []string{"ai:run"}}},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed repo: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	yamlBody := `
+daemon:
+  ai_backends:
+    claude:
+      command: claude
+      args: []
+agents:
+  - name: scout
+    backend: claude
+    prompt: p
+    skills: []
+    can_dispatch: []
+repos:
+  - name: owner/existing-repo
+    enabled: true
+    use:
+      - agent: scout
+        cron: "99 99 * * *"
+`
+	req := httptest.NewRequest(http.MethodPost, "/api/store/import", strings.NewReader(yamlBody))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rr := httptest.NewRecorder()
+	s.buildHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("merge import with invalid cron: want 400, got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// The original repo must still be intact after the failed import.
+	repos := doCRUDRequest(t, s, http.MethodGet, "/api/store/repos", nil)
+	if !strings.Contains(repos.Body.String(), "existing-repo") {
+		t.Errorf("existing-repo missing after failed merge import: %s", repos.Body.String())
+	}
+}
+
+func TestStoreImportReplaceRejectsInvalidCron(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "scout", "backend": "claude", "prompt": "p",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed agent: %d — %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+		"name": "owner/existing-repo", "enabled": true,
+		"bindings": []map[string]any{{"agent": "scout", "labels": []string{"ai:run"}}},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed repo: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	yamlBody := `
+daemon:
+  ai_backends:
+    claude:
+      command: claude
+      args: []
+agents:
+  - name: scout
+    backend: claude
+    prompt: p
+    skills: []
+    can_dispatch: []
+repos:
+  - name: owner/new-repo
+    enabled: true
+    use:
+      - agent: scout
+        cron: "1-2-3 * * * *"
+`
+	req := httptest.NewRequest(http.MethodPost, "/api/store/import?mode=replace", strings.NewReader(yamlBody))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rr := httptest.NewRecorder()
+	s.buildHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("replace import with invalid cron: want 400, got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// The original state must be preserved after the failed replace.
+	agents := doCRUDRequest(t, s, http.MethodGet, "/api/store/agents", nil)
+	if !strings.Contains(agents.Body.String(), "scout") {
+		t.Errorf("scout missing after failed replace import: %s", agents.Body.String())
+	}
+	repos := doCRUDRequest(t, s, http.MethodGet, "/api/store/repos", nil)
+	if !strings.Contains(repos.Body.String(), "existing-repo") {
+		t.Errorf("existing-repo missing after failed replace import: %s", repos.Body.String())
+	}
+}
+
+func TestStoreExportNotRegisteredWithoutStore(t *testing.T) {
+	t.Parallel()
+	cfg := crudMinimalConfig()
+	dc := workflow.NewDataChannels(1)
+	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, zerolog.Nop())
+	// No store attached — routes are not registered, so the router returns 404.
+	rr := doCRUDRequest(t, s, http.MethodGet, "/api/store/export", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("export without store: want 404 (not registered), got %d", rr.Code)
 	}
 }
