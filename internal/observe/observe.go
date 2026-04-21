@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -438,6 +439,65 @@ func (s *Store) RecordDispatch(from, to, repo string, number int, reason string)
 			}
 		}()
 	}
+}
+
+// RecordSteps implements workflow.StepRecorder. It persists the tool-loop
+// transcript steps for a completed span to SQLite. Steps are stored
+// sequentially (step_index 0, 1, …) and capped at 100 per span.
+func (s *Store) RecordSteps(spanID string, steps []ai.TraceStep) {
+	if s.db == nil || len(steps) == 0 {
+		return
+	}
+	go func() {
+		tx, err := s.db.Begin()
+		if err != nil {
+			log.Printf("observe: begin trace steps tx for %s: %v", spanID, err)
+			return
+		}
+		for i, step := range steps {
+			if i >= 100 {
+				break
+			}
+			if _, err := tx.Exec(
+				`INSERT INTO trace_steps (span_id, step_index, tool_name, input_summary, output_summary, duration_ms) VALUES (?,?,?,?,?,?)`,
+				spanID, i, step.ToolName, step.InputSummary, step.OutputSummary, step.DurationMs,
+			); err != nil {
+				log.Printf("observe: insert trace step %d for %s: %v", i, spanID, err)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			log.Printf("observe: commit trace steps for %s: %v", spanID, err)
+			tx.Rollback()
+		}
+	}()
+}
+
+// ListSteps returns the tool-loop transcript steps for a span, ordered by
+// step_index ascending. Returns nil when no steps exist or the database is
+// not configured.
+func (s *Store) ListSteps(spanID string) []ai.TraceStep {
+	if s.db == nil {
+		return nil
+	}
+	rows, err := s.db.Query(
+		`SELECT tool_name, input_summary, output_summary, duration_ms FROM trace_steps WHERE span_id=? ORDER BY step_index ASC`,
+		spanID,
+	)
+	if err != nil {
+		log.Printf("observe: list steps for %s: %v", spanID, err)
+		return nil
+	}
+	defer rows.Close()
+	var out []ai.TraceStep
+	for rows.Next() {
+		var step ai.TraceStep
+		if err := rows.Scan(&step.ToolName, &step.InputSummary, &step.OutputSummary, &step.DurationMs); err != nil {
+			log.Printf("observe: scan step for %s: %v", spanID, err)
+			continue
+		}
+		out = append(out, step)
+	}
+	return out
 }
 
 // PublishMemoryChange emits a MemoryChangeEvent to the MemorySSE hub for the

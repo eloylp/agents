@@ -258,6 +258,49 @@ func TestCommandRunnerEmptyStdoutIsError(t *testing.T) {
 	}
 }
 
+// TestExtractStructuredOutputFallbackHandlesStreamJSON verifies that when the
+// full stdout cannot be parsed as a single JSON envelope (as happens with
+// --output-format stream-json output), the fallback path locates the final
+// result event line and correctly extracts the structured_output from it.
+func TestExtractStructuredOutputFallbackHandlesStreamJSON(t *testing.T) {
+	t.Parallel()
+
+	structuredPayload := `{"summary":"all done","artifacts":[],"memory":"","dispatch":[]}`
+	streamOut := `{"type":"system","subtype":"init"}` + "\n" +
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"ls"}}]}}` + "\n" +
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"file.txt"}]}}` + "\n" +
+		`{"type":"result","subtype":"success","structured_output":` + structuredPayload + `}` + "\n"
+
+	// Full stdout is JSONL — extractStructuredOutput on the whole thing fails,
+	// falls through to extractJSON → last object → extractStructuredOutput succeeds.
+	full := []byte(streamOut)
+
+	// Step 1: full stdout is NOT a single-JSON envelope.
+	if _, ok := extractStructuredOutput(full); ok {
+		t.Fatal("expected extractStructuredOutput to fail on JSONL stdout, but it succeeded")
+	}
+
+	// Step 2: extractJSON returns the last JSON object (result event).
+	lastJSON, err := extractJSON(full)
+	if err != nil {
+		t.Fatalf("extractJSON failed: %v", err)
+	}
+
+	// Step 3: extractStructuredOutput on the result event succeeds.
+	parsed, ok := extractStructuredOutput(lastJSON)
+	if !ok {
+		t.Fatalf("extractStructuredOutput failed on result event: %s", string(lastJSON))
+	}
+
+	var resp Response
+	if err := json.Unmarshal(parsed, &resp); err != nil {
+		t.Fatalf("unmarshal structured_output: %v", err)
+	}
+	if resp.Summary != "all done" {
+		t.Errorf("summary = %q, want %q", resp.Summary, "all done")
+	}
+}
+
 // TestBuildDeliveryClaudeUsesAppendSystemPrompt verifies that the claude
 // backend routes system content through --append-system-prompt and leaves user
 // content for stdin, preserving Claude Code's default tool stack.
@@ -655,6 +698,109 @@ func TestPromptMetaReflectsDeliveredPrompt(t *testing.T) {
 			// Verify Length matches actual rune count of the delivered prompt.
 			if meta.Length != utf8.RuneCountInString(combined) {
 				t.Errorf("Length %d != utf8.RuneCountInString(%q)=%d", meta.Length, combined, utf8.RuneCountInString(combined))
+			}
+		})
+	}
+}
+
+func TestParseClaudeSteps(t *testing.T) {
+	t.Parallel()
+
+	// streamJSON builds a minimal stream-json JSONL output with the given
+	// assistant→user event pairs. The final line is a result event.
+	streamJSON := func(pairs [][2]string, finalOutput string) []byte {
+		// pairs[i][0] = tool_name, pairs[i][1] = tool_use_id
+		var lines []string
+		for i, p := range pairs {
+			name, id := p[0], p[1]
+			lines = append(lines,
+				`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"`+id+`","name":"`+name+`","input":{"arg":"val`+string(rune('0'+i))+`"}}]}}`,
+				`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"`+id+`","content":"result`+string(rune('0'+i))+`"}]}}`,
+			)
+		}
+		lines = append(lines, `{"type":"result","subtype":"success","structured_output":`+finalOutput+`}`)
+		out := ""
+		for _, l := range lines {
+			out += l + "\n"
+		}
+		return []byte(out)
+	}
+
+	tests := []struct {
+		name      string
+		input     []byte
+		wantNames []string
+	}{
+		{
+			name:      "empty input returns nil",
+			input:     []byte(""),
+			wantNames: nil,
+		},
+		{
+			name:      "single tool call",
+			input:     streamJSON([][2]string{{"Bash", "toolu_01"}}, `{"summary":"ok","artifacts":[]}`),
+			wantNames: []string{"Bash"},
+		},
+		{
+			name: "multiple tool calls",
+			input: streamJSON([][2]string{
+				{"Bash", "toolu_01"},
+				{"Read", "toolu_02"},
+				{"Write", "toolu_03"},
+			}, `{"summary":"done","artifacts":[]}`),
+			wantNames: []string{"Bash", "Read", "Write"},
+		},
+		{
+			name:      "result-only output — no tool events",
+			input:     []byte(`{"type":"result","subtype":"success","structured_output":{"summary":"ok","artifacts":[]}}` + "\n"),
+			wantNames: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			steps := parseClaudeSteps(tc.input)
+			if len(steps) != len(tc.wantNames) {
+				t.Fatalf("got %d steps, want %d: %+v", len(steps), len(tc.wantNames), steps)
+			}
+			for i, s := range steps {
+				if s.ToolName != tc.wantNames[i] {
+					t.Errorf("step %d: tool_name = %q, want %q", i, s.ToolName, tc.wantNames[i])
+				}
+				if s.InputSummary == "" {
+					t.Errorf("step %d: input_summary should not be empty", i)
+				}
+				if s.OutputSummary == "" {
+					t.Errorf("step %d: output_summary should not be empty", i)
+				}
+			}
+		})
+	}
+}
+
+func TestExtractToolResultText(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "plain string", input: `"hello world"`, want: "hello world"},
+		{name: "empty string", input: `""`, want: ""},
+		{name: "text block array", input: `[{"type":"text","text":"foo"},{"type":"text","text":"bar"}]`, want: "foo\nbar"},
+		{name: "mixed block array", input: `[{"type":"image"},{"type":"text","text":"only this"}]`, want: "only this"},
+		{name: "empty raw", input: ``, want: ""},
+		{name: "null", input: `null`, want: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := extractToolResultText(json.RawMessage(tc.input))
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
 			}
 		})
 	}

@@ -5,6 +5,13 @@ import Card from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 import Link from 'next/link'
 
+interface TraceStep {
+  tool_name: string
+  input_summary: string
+  output_summary: string
+  duration_ms: number
+}
+
 interface Span {
   span_id: string
   root_event_id: string
@@ -51,6 +58,65 @@ function GanttRow({ span, minMs, totalMs }: { span: Span; minMs: number; totalMs
       </div>
       <div style={{ width: '70px', flexShrink: 0, textAlign: 'right', color: 'var(--text-muted)' }}>{span.duration_ms}ms</div>
       <div style={{ width: '70px', flexShrink: 0 }}><StatusBadge status={span.status} /></div>
+    </div>
+  )
+}
+
+// SpanTranscript renders the expandable tool-loop transcript for a single span.
+// Steps are loaded lazily when the accordion is first opened.
+function SpanTranscript({ spanId, stepCount }: { spanId: string; stepCount?: number }) {
+  const [open, setOpen] = useState(false)
+  const [steps, setSteps] = useState<TraceStep[] | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const toggle = () => {
+    if (!open && steps === null) {
+      setLoading(true)
+      fetch(`/traces/${encodeURIComponent(spanId)}/steps`)
+        .then(r => r.json())
+        .then((data: TraceStep[]) => { setSteps(data ?? []); setLoading(false) })
+        .catch(() => { setSteps([]); setLoading(false) })
+    }
+    setOpen(o => !o)
+  }
+
+  const label = stepCount != null && stepCount > 0
+    ? `${stepCount} steps`
+    : 'transcript'
+
+  return (
+    <div style={{ marginTop: '4px' }}>
+      <button
+        onClick={toggle}
+        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.75rem', padding: 0, display: 'flex', alignItems: 'center', gap: '4px' }}
+      >
+        <span style={{ fontFamily: 'monospace' }}>{open ? '▼' : '▶'}</span>
+        <span>{label}</span>
+      </button>
+      {open && (
+        <div style={{ marginTop: '6px', paddingLeft: '12px', borderLeft: '2px solid var(--border-subtle)' }}>
+          {loading && <p style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>Loading…</p>}
+          {!loading && steps !== null && steps.length === 0 && (
+            <p style={{ color: 'var(--text-faint)', fontSize: '0.75rem', fontStyle: 'italic' }}>No transcript recorded for this span.</p>
+          )}
+          {!loading && steps !== null && steps.map((step, i) => (
+            <div key={i} style={{ display: 'flex', gap: '0.5rem', padding: '3px 0', fontSize: '0.73rem', borderTop: i > 0 ? '1px solid var(--border-subtle)' : undefined, alignItems: 'flex-start' }}>
+              <span style={{ color: 'var(--text-faint)', flexShrink: 0, width: '28px', textAlign: 'right' }}>{i + 1}.</span>
+              <span style={{ color: 'var(--accent)', flexShrink: 0, fontFamily: 'monospace', fontWeight: 600 }}>{step.tool_name}</span>
+              <span style={{ color: 'var(--text-muted)', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }} title={step.input_summary}>
+                ({step.input_summary})
+              </span>
+              <span style={{ color: 'var(--text-faint)', margin: '0 4px' }}>→</span>
+              <span style={{ color: 'var(--text)', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 2 }} title={step.output_summary}>
+                {step.output_summary || '—'}
+              </span>
+              {step.duration_ms > 0 && (
+                <span style={{ color: 'var(--text-faint)', flexShrink: 0, marginLeft: '4px' }}>({step.duration_ms}ms)</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -109,14 +175,13 @@ function TraceDetail({ rootId, allSpans, onBack }: { rootId: string; allSpans: S
                     <td style={{ padding: '6px 0', color: 'var(--text-muted)' }}>{s.duration_ms}ms</td>
                     <td style={{ padding: '6px 0' }}><StatusBadge status={s.status} /></td>
                   </tr>
-                  {detail && (
-                    <tr>
-                      <td colSpan={7} style={{ padding: '4px 0 8px', paddingLeft: `${s.dispatch_depth * 12 + 12}px` }}>
-                        {s.summary && <div style={{ fontSize: '0.78rem', color: 'var(--text-faint)', fontStyle: 'italic' }}>{s.summary}</div>}
-                        {s.error && <div style={{ fontSize: '0.78rem', color: 'var(--text-danger)', marginTop: '2px' }}>{s.error}</div>}
-                      </td>
-                    </tr>
-                  )}
+                  <tr>
+                    <td colSpan={7} style={{ padding: '2px 0 8px', paddingLeft: `${s.dispatch_depth * 12 + 12}px` }}>
+                      {s.summary && <div style={{ fontSize: '0.78rem', color: 'var(--text-faint)', fontStyle: 'italic' }}>{s.summary}</div>}
+                      {s.error && <div style={{ fontSize: '0.78rem', color: 'var(--text-danger)', marginTop: '2px' }}>{s.error}</div>}
+                      <SpanTranscript spanId={s.span_id} />
+                    </td>
+                  </tr>
                 </React.Fragment>
               )
             })}

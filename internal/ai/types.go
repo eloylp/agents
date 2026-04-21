@@ -40,6 +40,16 @@ type DispatchRequest struct {
 	Reason string `json:"reason"`
 }
 
+// TraceStep records one tool call in the agent's tool loop.
+// It is populated by the runner from stream-json output and is never part of
+// the agent's JSON schema — agents do not return steps themselves.
+type TraceStep struct {
+	ToolName      string `json:"tool_name"`
+	InputSummary  string `json:"input_summary"`
+	OutputSummary string `json:"output_summary"`
+	DurationMs    int64  `json:"duration_ms"`
+}
+
 type Response struct {
 	Artifacts []Artifact        `json:"artifacts"`
 	Summary   string            `json:"summary"`
@@ -48,4 +58,7 @@ type Response struct {
 	// each run. The daemon writes this value back to the memory store (SQLite or
 	// filesystem) after the run completes. An empty string clears the memory.
 	Memory string `json:"memory"`
+	// Steps holds the tool-loop transcript extracted from stream-json CLI
+	// output. It is populated by the runner and not part of the agent schema.
+	Steps []TraceStep `json:"-"`
 }

@@ -128,26 +128,45 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 		return Response{}, fmt.Errorf("parse %s response: empty response (no output)", r.backendName)
 	}
 
-	// When the CLI uses --output-format json, stdout is a single JSON
-	// envelope with a structured_output field containing the schema-
-	// constrained response. Try that path first.
+	// When the CLI uses --output-format json (single-object envelope) or
+	// --output-format stream-json (JSONL), the structured_output field holds
+	// the schema-constrained response. Try parsing the full stdout as a single
+	// JSON envelope first (handles --output-format json and any backend that
+	// emits a single result object).
 	if parsed, ok := extractStructuredOutput(stdout.Bytes()); ok {
 		if err := json.Unmarshal(parsed, &response); err != nil {
 			logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s structured_output", r.backendName)
 			return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
 		}
 	} else {
-		// Fallback: find the last top-level JSON object in raw stdout
-		// (legacy path for CLIs without structured output).
+		// Fallback: find the last top-level JSON object in raw stdout. For
+		// --output-format stream-json this is the result event, which also
+		// has a structured_output wrapper. For legacy CLIs it may be a bare
+		// response object.
 		jsonBytes, err := extractJSON(stdout.Bytes())
 		if err != nil {
 			logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s response", r.backendName)
 			return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
 		}
-		if err := json.Unmarshal(jsonBytes, &response); err != nil {
-			logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s response", r.backendName)
-			return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
+		// Try structured_output on the last JSON (handles stream-json result event).
+		if parsed2, ok2 := extractStructuredOutput(jsonBytes); ok2 {
+			if err := json.Unmarshal(parsed2, &response); err != nil {
+				logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s structured_output", r.backendName)
+				return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
+			}
+		} else {
+			// Legacy path: bare JSON response object with no envelope.
+			if err := json.Unmarshal(jsonBytes, &response); err != nil {
+				logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s response", r.backendName)
+				return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
+			}
 		}
+	}
+
+	// Extract the tool-loop transcript from stream-json output (claude backends).
+	// This is a best-effort parse — errors are logged but do not fail the run.
+	if strings.HasPrefix(r.backendName, "claude") {
+		response.Steps = parseClaudeSteps(stdout.Bytes())
 	}
 	if response.Summary == "" && len(response.Artifacts) == 0 && len(response.Dispatch) == 0 {
 		logger.Error().Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("%s response is empty (no summary, artifacts, or dispatch)", r.backendName)
@@ -192,13 +211,15 @@ func (r *CommandRunner) buildDelivery(req Request) (args []string, stdin string)
 }
 
 // buildClaudeDelivery delivers system content via --append-system-prompt and
-// user content via stdin. It also appends --output-format json --json-schema
-// using the embedded response schema so config files don't carry inline JSON.
+// user content via stdin. It also appends --output-format stream-json
+// --json-schema using the embedded response schema so config files don't carry
+// inline JSON. stream-json emits one JSON event per line, letting the runner
+// capture the tool-loop transcript before the final result event.
 func (r *CommandRunner) buildClaudeDelivery(req Request) (args []string, stdin string) {
 	args = make([]string, 0, len(r.args)+6)
 	args = append(args, r.args...)
 	if !slices.Contains(args, "--json-schema") {
-		args = append(args, "--output-format", "json", "--json-schema", ResponseSchemaString())
+		args = append(args, "--output-format", "stream-json", "--json-schema", ResponseSchemaString())
 	}
 
 	if req.System == "" {
@@ -369,6 +390,115 @@ func extractJSON(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("no JSON object found in output")
 	}
 	return last, nil
+}
+
+// parseClaudeSteps scans --output-format stream-json stdout and reconstructs
+// the tool-loop transcript as a slice of TraceStep values. Each step pairs one
+// tool_use block (from an assistant event) with its corresponding tool_result
+// block (from the following user event), matched by tool_use_id.
+//
+// Steps are capped at 100 and input/output are truncated to 200 runes.
+// Any event that cannot be parsed is silently skipped — this is best-effort.
+func parseClaudeSteps(data []byte) []TraceStep {
+	// streamEvent is the minimal shape of a single JSONL line.
+	type contentBlock struct {
+		Type      string          `json:"type"`
+		ID        string          `json:"id"`
+		Name      string          `json:"name"`
+		Input     json.RawMessage `json:"input"`
+		ToolUseID string          `json:"tool_use_id"`
+		Content   json.RawMessage `json:"content"` // string or array
+	}
+	type streamEvent struct {
+		Type    string `json:"type"`
+		Message struct {
+			Content []contentBlock `json:"content"`
+		} `json:"message"`
+	}
+
+	type pending struct {
+		name  string
+		input string
+		order int
+	}
+	pendingTools := make(map[string]pending) // tool_use_id → pending
+	var steps []TraceStep
+	order := 0
+
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 || line[0] != '{' {
+			continue
+		}
+		var ev streamEvent
+		if err := json.Unmarshal(line, &ev); err != nil {
+			continue
+		}
+
+		switch ev.Type {
+		case "assistant":
+			for _, b := range ev.Message.Content {
+				if b.Type != "tool_use" || b.ID == "" {
+					continue
+				}
+				pendingTools[b.ID] = pending{
+					name:  b.Name,
+					input: truncateString(string(b.Input), 200),
+					order: order,
+				}
+				order++
+			}
+		case "user":
+			for _, b := range ev.Message.Content {
+				if b.Type != "tool_result" || b.ToolUseID == "" {
+					continue
+				}
+				p, ok := pendingTools[b.ToolUseID]
+				if !ok {
+					continue
+				}
+				delete(pendingTools, b.ToolUseID)
+				output := extractToolResultText(b.Content)
+				steps = append(steps, TraceStep{
+					ToolName:      p.name,
+					InputSummary:  p.input,
+					OutputSummary: truncateString(output, 200),
+				})
+				if len(steps) >= 100 {
+					return steps
+				}
+			}
+		}
+	}
+	return steps
+}
+
+// extractToolResultText returns a plain-text summary from a tool_result
+// content field, which may be a JSON string or an array of content blocks.
+func extractToolResultText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	// Try string first.
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	// Try array of content blocks — concatenate all text blocks.
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err == nil {
+		var parts []string
+		for _, b := range blocks {
+			if b.Type == "text" && b.Text != "" {
+				parts = append(parts, b.Text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	return ""
 }
 
 // allowCommandEnvKey reports whether key is safe to forward to the AI backend

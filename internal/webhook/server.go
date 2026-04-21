@@ -224,8 +224,9 @@ func (s *Server) buildHandler() http.Handler {
 	router.Handle("/events", withTimeout(http.HandlerFunc(s.handleAPIEvents))).Methods(http.MethodGet)
 	router.HandleFunc("/events/stream", s.handleAPIEventsStream)           // SSE — no timeout
 	router.Handle("/traces", withTimeout(http.HandlerFunc(s.handleAPITraces))).Methods(http.MethodGet)
-	router.HandleFunc("/traces/stream", s.handleAPITracesStream)           // SSE — no timeout
+	router.HandleFunc("/traces/stream", s.handleAPITracesStream)                                                        // SSE — no timeout
 	router.Handle("/traces/{root_event_id}", withTimeout(http.HandlerFunc(s.handleAPITrace))).Methods(http.MethodGet)
+	router.Handle("/traces/{span_id}/steps", withTimeout(http.HandlerFunc(s.handleAPITraceSteps))).Methods(http.MethodGet)
 	router.Handle("/graph", withTimeout(http.HandlerFunc(s.handleAPIGraph))).Methods(http.MethodGet)
 	router.Handle("/dispatches", withTimeout(http.HandlerFunc(s.handleAPIDispatches))).Methods(http.MethodGet)
 	router.Handle("/memory/{agent}/{repo}", withTimeout(http.HandlerFunc(s.handleAPIMemory))).Methods(http.MethodGet)
