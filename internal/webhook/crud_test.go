@@ -317,6 +317,55 @@ func TestStoreCRUDBackendGetRedactsEnv(t *testing.T) {
 	}
 }
 
+// TestStoreCRUDBackendPostPreservesRedactedEnv verifies that POSTing a backend
+// with "[redacted]" env values (the sentinel echoed by the list API) does not
+// overwrite the real stored secret with the literal string "[redacted]".
+// This models the UI edit flow: GET list → seed form → POST back unchanged.
+func TestStoreCRUDBackendPostPreservesRedactedEnv(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	// Create backend with a real secret.
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
+		"name":    "claude",
+		"command": "claude",
+		"args":    []string{},
+		"env":     map[string]string{"ANTHROPIC_API_KEY": "sk-real-secret"},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("POST backend (create): got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Simulate the UI edit flow: POST back with the "[redacted]" sentinel that
+	// the list API returns, changing only a non-secret field.
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
+		"name":            "claude",
+		"command":         "claude",
+		"args":            []string{"--dangerously-skip-permissions"},
+		"env":             map[string]string{"ANTHROPIC_API_KEY": "[redacted]"},
+		"timeout_seconds": 900,
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("POST backend (edit with redacted sentinel): got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Read back via the store directly (unredacted) and confirm the real secret
+	// was preserved, not overwritten with the literal string "[redacted]".
+	backends, err := store.ReadBackends(s.db)
+	if err != nil {
+		t.Fatalf("ReadBackends: %v", err)
+	}
+	b, ok := backends["claude"]
+	if !ok {
+		t.Fatal("backend 'claude' not found in store after edit")
+	}
+	if got, want := b.Env["ANTHROPIC_API_KEY"], "sk-real-secret"; got != want {
+		t.Errorf("stored env[ANTHROPIC_API_KEY] = %q, want %q (secret must not be overwritten by [redacted] sentinel)", got, want)
+	}
+	// The non-secret field change must have been applied.
+	if b.TimeoutSeconds != 900 {
+		t.Errorf("timeout_seconds = %d, want 900", b.TimeoutSeconds)
+	}
+}
+
 // ── /api/store/repos ──────────────────────────────────────────────────────────
 
 func TestStoreCRUDRepoCreateAndDelete(t *testing.T) {

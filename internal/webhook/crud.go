@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -142,6 +143,45 @@ func (j storeRepoJSON) toConfig() config.RepoDef {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// restoreRedactedEnv resolves any "[redacted]" sentinel values in env that were
+// echoed back from the list API. For each such key the real stored value is
+// substituted; if the key does not exist in the stored backend the entry is
+// removed so that a phantom "[redacted]" is never written to the database.
+// env is mutated in place. Calling this before UpsertBackend prevents a no-op
+// edit from overwriting real secrets with the literal string "[redacted]".
+func restoreRedactedEnv(db *sql.DB, name string, env map[string]string) error {
+	// Fast path: nothing to do when no sentinel values are present.
+	needRestore := false
+	for _, v := range env {
+		if v == "[redacted]" {
+			needRestore = true
+			break
+		}
+	}
+	if !needRestore {
+		return nil
+	}
+	existing, err := store.ReadBackends(db)
+	if err != nil {
+		return err
+	}
+	stored, ok := existing[config.NormalizeBackendName(name)]
+	for k, v := range env {
+		if v != "[redacted]" {
+			continue
+		}
+		if ok {
+			if sv, found := stored.Env[k]; found {
+				env[k] = sv
+				continue
+			}
+		}
+		// Key not present in the stored backend — drop the sentinel.
+		delete(env, k)
+	}
+	return nil
+}
 
 func nilSafeStrings(s []string) []string {
 	if s == nil {
@@ -451,6 +491,14 @@ func (s *Server) handleStoreBackends(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Env == nil {
 			req.Env = map[string]string{}
+		}
+		// If the client echoed back "[redacted]" env values (the sentinel the
+		// list API emits), replace them with the currently stored secret so that
+		// editing a backend without changing a secret field does not overwrite
+		// the real value with the literal string "[redacted]".
+		if err := restoreRedactedEnv(s.db, req.Name, req.Env); err != nil {
+			http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
+			return
 		}
 		s.storeMu.Lock()
 		err := store.UpsertBackend(s.db, req.Name, req.toConfig())
