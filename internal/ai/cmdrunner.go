@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -102,13 +103,29 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	cmd := exec.CommandContext(cmdCtx, r.command, args...)
 	cmd.Env = buildCommandEnv(req, r.env)
 
-	var stdoutCap lineCapture
 	var stderr bytes.Buffer
-	cmd.Stdout = &stdoutCap
 	cmd.Stderr = &stderr
 	cmd.Stdin = bytes.NewBufferString(stdin)
 
-	cmdErr := cmd.Run()
+	stdoutPipe, pipeErr := cmd.StdoutPipe()
+	if pipeErr != nil {
+		return Response{}, fmt.Errorf("stdout pipe: %w", pipeErr)
+	}
+	if err := cmd.Start(); err != nil {
+		return Response{}, fmt.Errorf("start %s: %w", r.backendName, err)
+	}
+
+	// Read stdout line by line. Each Scan blocks until a complete line arrives,
+	// so time.Now() reflects when that specific line was received from the
+	// subprocess — not when a larger pipe-read chunk happened to land.
+	var stdoutCap lineCapture
+	scanner := bufio.NewScanner(stdoutPipe)
+	scanner.Buffer(make([]byte, 1<<20), 1<<20) // 1 MB per line
+	for scanner.Scan() {
+		stdoutCap.addLine(scanner.Bytes())
+	}
+
+	cmdErr := cmd.Wait()
 
 	rawOut := stdoutCap.all.String()
 	logger.Debug().Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("%s raw output", r.backendName)
@@ -399,30 +416,22 @@ type timedLine struct {
 	at   time.Time
 }
 
-// lineCapture is an io.Writer that records each complete line together with
-// its arrival timestamp. Partial lines (no trailing newline) are buffered and
-// flushed on the next Write that completes them.
+// lineCapture records each stdout line together with the wall-clock time it
+// was read from the subprocess pipe. addLine is called once per Scanner.Scan
+// iteration, so each line gets its own time.Now() — lines that arrive in
+// different pipe reads will have meaningfully different timestamps.
 type lineCapture struct {
 	lines []timedLine
-	buf   []byte
-	all   bytes.Buffer // full unmodified bytes for the rest of the pipeline
+	all   bytes.Buffer
 }
 
-func (c *lineCapture) Write(p []byte) (int, error) {
-	now := time.Now()
-	c.all.Write(p)
-	c.buf = append(c.buf, p...)
-	for {
-		idx := bytes.IndexByte(c.buf, '\n')
-		if idx < 0 {
-			break
-		}
-		line := make([]byte, idx+1)
-		copy(line, c.buf[:idx+1])
-		c.lines = append(c.lines, timedLine{data: line, at: now})
-		c.buf = c.buf[idx+1:]
-	}
-	return len(p), nil
+// addLine records a single line (without trailing newline) and its arrival time.
+func (c *lineCapture) addLine(data []byte) {
+	line := make([]byte, len(data)+1)
+	copy(line, data)
+	line[len(data)] = '\n'
+	c.lines = append(c.lines, timedLine{data: line, at: time.Now()})
+	c.all.Write(line)
 }
 
 // parseClaudeSteps scans --output-format stream-json stdout and reconstructs

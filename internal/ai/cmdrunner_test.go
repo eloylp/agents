@@ -1,11 +1,13 @@
 package ai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/rs/zerolog"
@@ -706,13 +708,21 @@ func TestPromptMetaReflectsDeliveredPrompt(t *testing.T) {
 func TestParseClaudeSteps(t *testing.T) {
 	t.Parallel()
 
-	// toTimedLines converts raw JSONL bytes to []timedLine, simulating the
-	// lineCapture writer that assigns arrival times during real execution.
-	// In tests all lines share the same base time; DurationMs will be 0.
-	toTimedLines := func(data []byte) []timedLine {
-		var cap lineCapture
-		cap.Write(data)
-		return cap.lines
+	// toTimedLines converts raw JSONL bytes to []timedLine with a fixed base
+	// time, simulating lineCapture.addLine but with a controllable clock.
+	toTimedLines := func(data []byte, base time.Time, step time.Duration) []timedLine {
+		var tls []timedLine
+		for _, raw := range bytes.Split(bytes.TrimRight(data, "\n"), []byte("\n")) {
+			if len(raw) == 0 {
+				continue
+			}
+			line := make([]byte, len(raw)+1)
+			copy(line, raw)
+			line[len(raw)] = '\n'
+			tls = append(tls, timedLine{data: line, at: base})
+			base = base.Add(step)
+		}
+		return tls
 	}
 
 	// streamJSON builds a minimal stream-json JSONL output with the given
@@ -735,10 +745,14 @@ func TestParseClaudeSteps(t *testing.T) {
 		return []byte(out)
 	}
 
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
 	tests := []struct {
-		name      string
-		input     []byte
-		wantNames []string
+		name        string
+		input       []byte
+		lineStep    time.Duration
+		wantNames   []string
+		wantMinDurMs int64 // minimum DurationMs for the first step (0 = don't check)
 	}{
 		{
 			name:      "empty input returns nil",
@@ -764,12 +778,26 @@ func TestParseClaudeSteps(t *testing.T) {
 			input:     []byte(`{"type":"result","subtype":"success","structured_output":{"summary":"ok","artifacts":[]}}` + "\n"),
 			wantNames: nil,
 		},
+		{
+			// Each line arrives 500 ms apart. tool_use is line 0, tool_result is
+			// line 1 → DurationMs must be ≥ 500.
+			name:         "duration reflects per-line timestamps",
+			input:        streamJSON([][2]string{{"Bash", "toolu_01"}}, `{"summary":"ok","artifacts":[]}`),
+			lineStep:     500 * time.Millisecond,
+			wantNames:    []string{"Bash"},
+			wantMinDurMs: 500,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			steps := parseClaudeSteps(toTimedLines(tc.input))
+			step := tc.lineStep
+			if step == 0 {
+				step = 0 // zero means all lines share the same timestamp
+			}
+			lines := toTimedLines(tc.input, base, step)
+			steps := parseClaudeSteps(lines)
 			if len(steps) != len(tc.wantNames) {
 				t.Fatalf("got %d steps, want %d: %+v", len(steps), len(tc.wantNames), steps)
 			}
@@ -782,6 +810,11 @@ func TestParseClaudeSteps(t *testing.T) {
 				}
 				if s.OutputSummary == "" {
 					t.Errorf("step %d: output_summary should not be empty", i)
+				}
+			}
+			if tc.wantMinDurMs > 0 && len(steps) > 0 {
+				if steps[0].DurationMs < tc.wantMinDurMs {
+					t.Errorf("step 0: DurationMs = %d, want >= %d", steps[0].DurationMs, tc.wantMinDurMs)
 				}
 			}
 		})
