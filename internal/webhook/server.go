@@ -334,11 +334,13 @@ func (s *Server) requireAPIKey(next http.Handler) http.Handler {
 			authHeader := r.Header.Get("Authorization")
 			const prefix = "Bearer "
 			if !strings.HasPrefix(authHeader, prefix) {
+				w.Header().Set("WWW-Authenticate", "Bearer")
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
 			token := authHeader[len(prefix):]
 			if subtle.ConstantTimeCompare([]byte(token), []byte(cfg.Daemon.HTTP.APIKey)) != 1 {
+				w.Header().Set("WWW-Authenticate", "Bearer")
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
