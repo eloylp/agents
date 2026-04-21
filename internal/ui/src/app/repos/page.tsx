@@ -238,11 +238,12 @@ function AgentBindingGroup({ group, agentNames, knownLabels, onChange, onAddTrig
   )
 }
 
-function RepoForm({ initial, isNew, agentNames, knownLabels, onSave, onCancel, saving, error }: {
+function RepoForm({ initial, isNew, agentNames, knownLabels, existingRepos, onSave, onCancel, saving, error }: {
   initial: Repo
   isNew: boolean
   agentNames: string[]
   knownLabels: string[]
+  existingRepos: Repo[]
   onSave: (r: Repo) => void
   onCancel: () => void
   saving: boolean
@@ -250,6 +251,12 @@ function RepoForm({ initial, isNew, agentNames, knownLabels, onSave, onCancel, s
 }) {
   const [form, setForm] = useState<{ name: string; enabled: boolean }>({ name: initial.name, enabled: initial.enabled })
   const [groups, setGroups] = useState<AgentGroup[]>(() => bindingsToGroups(initial.bindings))
+  const [cloneSource, setCloneSource] = useState('')
+
+  const applyClone = () => {
+    const src = existingRepos.find(r => r.name === cloneSource)
+    if (src) setGroups(bindingsToGroups(src.bindings))
+  }
 
   const addGroup = () => setGroups(gs => [...gs, { agent: '', triggers: [{ ...emptyTrigger }] }])
 
@@ -298,6 +305,29 @@ function RepoForm({ initial, isNew, agentNames, knownLabels, onSave, onCancel, s
         <input type="checkbox" checked={form.enabled} onChange={e => setForm(f => ({ ...f, enabled: e.target.checked }))} />
         Enabled
       </label>
+
+      {existingRepos.length > 0 && (
+        <div>
+          <label style={labelStyle}>Clone bindings from</label>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <select
+              style={{ ...inputStyle, flex: 1 }}
+              value={cloneSource}
+              onChange={e => setCloneSource(e.target.value)}
+            >
+              <option value="">— none —</option>
+              {existingRepos.map(r => <option key={r.name} value={r.name}>{r.name}</option>)}
+            </select>
+            <button
+              onClick={applyClone}
+              disabled={!cloneSource}
+              style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #1e3a5f', background: cloneSource ? '#0f1d32' : '#080f1a', cursor: cloneSource ? 'pointer' : 'not-allowed', fontSize: '0.8rem', color: cloneSource ? '#38bdf8' : '#334155', flexShrink: 0 }}
+            >
+              Apply
+            </button>
+          </div>
+        </div>
+      )}
 
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
@@ -519,6 +549,7 @@ export default function ReposPage() {
             isNew={modal === 'create'}
             agentNames={agentNames}
             knownLabels={knownLabels}
+            existingRepos={repos.filter(r => r.name !== selected.name)}
             onSave={saveRepo}
             onCancel={() => setModal(null)}
             saving={saving}
