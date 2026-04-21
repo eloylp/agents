@@ -21,6 +21,15 @@ interface Repo {
 const emptyBinding: Binding = { agent: '', labels: [], events: [], cron: '', enabled: true }
 const emptyRepo: Repo = { name: '', enabled: true, bindings: [] }
 
+// isValidCron returns true for standard 5-field cron expressions.
+// Each field may be: * | number | range (a-b) | step (*/n or a-b/n) | list (a,b,c).
+function isValidCron(expr: string): boolean {
+  const parts = expr.trim().split(/\s+/)
+  if (parts.length !== 5) return false
+  const fieldRe = /^(\*|\d+|\d+-\d+)(\/\d+)?(,(\*|\d+|\d+-\d+)(\/\d+)?)*$/
+  return parts.every(f => fieldRe.test(f))
+}
+
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '6px 8px', border: '1px solid #bfdbfe', borderRadius: '6px',
   fontSize: '0.85rem', fontFamily: 'inherit', background: '#f8fafc', color: '#1e293b',
@@ -100,11 +109,16 @@ function BindingEditor({ binding, onChange, onRemove }: {
         <div>
           <label style={labelStyle}>Cron expression</label>
           <input
-            style={inputStyle}
+            style={{ ...inputStyle, borderColor: (binding.cron && !isValidCron(binding.cron)) ? '#f87171' : '#bfdbfe' }}
             value={binding.cron ?? ''}
             onChange={e => onChange({ ...binding, cron: e.target.value })}
             placeholder="0 9 * * *"
           />
+          {binding.cron && !isValidCron(binding.cron) && (
+            <p style={{ color: '#f87171', fontSize: '0.75rem', marginTop: '3px' }}>
+              Invalid cron expression — expected 5 fields: minute hour day month weekday (e.g. 0 9 * * 1-5)
+            </p>
+          )}
         </div>
       )}
       <div style={{ marginTop: '0.5rem' }}>
@@ -134,6 +148,8 @@ function RepoForm({ initial, isNew, onSave, onCancel, saving, error }: {
     return { ...f, bindings }
   })
   const removeBinding = (i: number) => setForm(f => ({ ...f, bindings: f.bindings.filter((_, idx) => idx !== i) }))
+
+  const hasCronError = form.bindings.some(b => !!b.cron && !isValidCron(b.cron))
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
@@ -175,8 +191,8 @@ function RepoForm({ initial, isNew, onSave, onCancel, saving, error }: {
         </button>
         <button
           onClick={() => onSave(form)}
-          disabled={saving || !form.name.trim()}
-          style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #93c5fd', background: '#2563eb', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+          disabled={saving || !form.name.trim() || hasCronError}
+          style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #93c5fd', background: '#2563eb', color: '#fff', cursor: (saving || hasCronError) ? 'not-allowed' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
           {saving ? 'Saving…' : 'Save'}
         </button>
