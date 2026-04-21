@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import Card from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 import Modal from '@/components/Modal'
+import BadgePicker from '@/components/BadgePicker'
 import Link from 'next/link'
 import { authHeaders } from '@/lib/apiKey'
 
@@ -103,11 +104,13 @@ const emptyForm: StoreAgent = {
 }
 
 function AgentForm({
-  initial, isNew, backends, onSave, onCancel, saving, error,
+  initial, isNew, backends, skillNames, agentNames, onSave, onCancel, saving, error,
 }: {
   initial: StoreAgent
   isNew: boolean
   backends: string[]
+  skillNames: string[]
+  agentNames: string[]
   onSave: (a: StoreAgent) => void
   onCancel: () => void
   saving: boolean
@@ -139,12 +142,12 @@ function AgentForm({
         </select>
       </div>
       <div>
-        <label style={labelStyle}>Skills (comma-separated)</label>
-        <input
-          style={inputStyle}
-          value={form.skills.join(', ')}
-          onChange={e => set('skills', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
-          placeholder="architect, testing, security"
+        <label style={labelStyle}>Skills</label>
+        <BadgePicker
+          options={skillNames}
+          selected={form.skills}
+          onChange={v => set('skills', v)}
+          placeholder="Add skill…"
         />
       </div>
       <div>
@@ -161,12 +164,12 @@ function AgentForm({
         />
       </div>
       <div>
-        <label style={labelStyle}>Can dispatch (comma-separated agent names)</label>
-        <input
-          style={inputStyle}
-          value={form.can_dispatch.join(', ')}
-          onChange={e => set('can_dispatch', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
-          placeholder="pr-reviewer, sec-reviewer"
+        <label style={labelStyle}>Can dispatch</label>
+        <BadgePicker
+          options={agentNames.filter(n => n !== form.name)}
+          selected={form.can_dispatch}
+          onChange={v => set('can_dispatch', v)}
+          placeholder="Add agent…"
         />
       </div>
       <div style={{ display: 'flex', gap: '1.5rem' }}>
@@ -272,6 +275,8 @@ export default function FleetPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [backendNames, setBackendNames] = useState<string[]>([])
+  const [skillNames, setSkillNames] = useState<string[]>([])
+  const [agentNames, setAgentNames] = useState<string[]>([])
 
   const [modal, setModal] = useState<'create' | 'edit' | 'delete' | null>(null)
   const [selected, setSelected] = useState<StoreAgent>(emptyForm)
@@ -295,6 +300,14 @@ export default function FleetPage() {
     fetch('/api/store/backends')
       .then(r => r.ok ? r.json() : [])
       .then((data: { name: string }[]) => setBackendNames(data.map(b => b.name)))
+      .catch(() => { /* store not configured — no-op */ })
+    fetch('/api/store/skills')
+      .then(r => r.ok ? r.json() : [])
+      .then((data: { name: string }[]) => setSkillNames(data.map(s => s.name).sort()))
+      .catch(() => { /* store not configured — no-op */ })
+    fetch('/api/store/agents')
+      .then(r => r.ok ? r.json() : [])
+      .then((data: { name: string }[]) => setAgentNames(data.map(a => a.name).sort()))
       .catch(() => { /* store not configured — no-op */ })
   }, [])
 
@@ -425,6 +438,8 @@ export default function FleetPage() {
             initial={selected}
             isNew={modal === 'create'}
             backends={backendNames}
+            skillNames={skillNames}
+            agentNames={agentNames}
             onSave={saveAgent}
             onCancel={() => setModal(null)}
             saving={saving}

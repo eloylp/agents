@@ -2,7 +2,26 @@
 import { useState, useEffect } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
+import BadgePicker from '@/components/BadgePicker'
 import { authHeaders } from '@/lib/apiKey'
+
+// Supported webhook event kinds emitted by the daemon.
+const SUPPORTED_EVENTS = [
+  'issues.labeled',
+  'issues.opened',
+  'issues.edited',
+  'issues.reopened',
+  'issues.closed',
+  'pull_request.labeled',
+  'pull_request.opened',
+  'pull_request.synchronize',
+  'pull_request.ready_for_review',
+  'pull_request.closed',
+  'issue_comment.created',
+  'pull_request_review.submitted',
+  'pull_request_review_comment.created',
+  'push',
+]
 
 interface Binding {
   agent: string
@@ -73,10 +92,11 @@ function bindingTrigger(b: Binding): string {
   return '—'
 }
 
-function BindingEditor({ binding, onChange, onRemove }: {
+function BindingEditor({ binding, onChange, onRemove, agentNames }: {
   binding: Binding
   onChange: (b: Binding) => void
   onRemove: () => void
+  agentNames: string[]
 }) {
   const [triggerType, setTriggerType] = useState<'labels' | 'events' | 'cron'>(
     binding.cron ? 'cron' : binding.events && binding.events.length > 0 ? 'events' : 'labels'
@@ -92,12 +112,23 @@ function BindingEditor({ binding, onChange, onRemove }: {
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
         <div style={{ flex: 1 }}>
           <label style={labelStyle}>Agent</label>
-          <input
-            style={inputStyle}
-            value={binding.agent}
-            onChange={e => onChange({ ...binding, agent: e.target.value })}
-            placeholder="agent-name"
-          />
+          {agentNames.length > 0 ? (
+            <select
+              style={inputStyle}
+              value={binding.agent}
+              onChange={e => onChange({ ...binding, agent: e.target.value })}
+            >
+              <option value="">Select agent…</option>
+              {agentNames.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+          ) : (
+            <input
+              style={inputStyle}
+              value={binding.agent}
+              onChange={e => onChange({ ...binding, agent: e.target.value })}
+              placeholder="agent-name"
+            />
+          )}
         </div>
         <div style={{ flex: 1 }}>
           <label style={labelStyle}>Trigger type</label>
@@ -126,12 +157,12 @@ function BindingEditor({ binding, onChange, onRemove }: {
       )}
       {triggerType === 'events' && (
         <div>
-          <label style={labelStyle}>Events (comma-separated)</label>
-          <input
-            style={inputStyle}
-            value={(binding.events ?? []).join(', ')}
-            onChange={e => onChange({ ...binding, events: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
-            placeholder="pull_request.opened, push"
+          <label style={labelStyle}>Events</label>
+          <BadgePicker
+            options={SUPPORTED_EVENTS}
+            selected={binding.events ?? []}
+            onChange={v => onChange({ ...binding, events: v })}
+            placeholder="Add event…"
           />
         </div>
       )}
@@ -161,9 +192,10 @@ function BindingEditor({ binding, onChange, onRemove }: {
   )
 }
 
-function RepoForm({ initial, isNew, onSave, onCancel, saving, error }: {
+function RepoForm({ initial, isNew, agentNames, onSave, onCancel, saving, error }: {
   initial: Repo
   isNew: boolean
+  agentNames: string[]
   onSave: (r: Repo) => void
   onCancel: () => void
   saving: boolean
@@ -210,7 +242,7 @@ function RepoForm({ initial, isNew, onSave, onCancel, saving, error }: {
         </div>
         {form.bindings.length === 0 && <p style={{ color: '#94a3b8', fontSize: '0.8rem' }}>No bindings yet.</p>}
         {form.bindings.map((b, i) => (
-          <BindingEditor key={i} binding={b} onChange={nb => updateBinding(i, nb)} onRemove={() => removeBinding(i)} />
+          <BindingEditor key={i} binding={b} onChange={nb => updateBinding(i, nb)} onRemove={() => removeBinding(i)} agentNames={agentNames} />
         ))}
       </div>
 
@@ -235,6 +267,7 @@ export default function ReposPage() {
   const [repos, setRepos] = useState<Repo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [agentNames, setAgentNames] = useState<string[]>([])
 
   const [modal, setModal] = useState<'create' | 'edit' | 'delete' | null>(null)
   const [selected, setSelected] = useState<Repo>(emptyRepo)
@@ -250,7 +283,13 @@ export default function ReposPage() {
       .catch(e => { setError(String(e)); setLoading(false) })
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    fetch('/api/store/agents')
+      .then(r => r.ok ? r.json() : [])
+      .then((data: { name: string }[]) => setAgentNames(data.map(a => a.name).sort()))
+      .catch(() => { /* store not configured — no-op */ })
+  }, [])
 
   const openCreate = () => {
     setSaveError('')
@@ -395,6 +434,7 @@ export default function ReposPage() {
           <RepoForm
             initial={selected}
             isNew={modal === 'create'}
+            agentNames={agentNames}
             onSave={saveRepo}
             onCancel={() => setModal(null)}
             saving={saving}
