@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"database/sql"
+	"maps"
 	"strings"
 	"testing"
 
@@ -943,7 +944,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 		t.Fatalf("ReadBackends: %v", err)
 	}
 	if _, ok := backends["claude"]; !ok {
-		t.Errorf("backend name not normalised: got keys %v, want 'claude'", mapKeys(backends))
+		t.Errorf("backend name not normalised: got keys %v, want 'claude'", maps.Keys(backends))
 	}
 	if _, bad := backends["Claude"]; bad {
 		t.Error("original mixed-case key 'Claude' should not be present after normalisation")
@@ -958,7 +959,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 		t.Fatalf("ReadSkills: %v", err)
 	}
 	if _, ok := skills["architect"]; !ok {
-		t.Errorf("skill name not normalised: got keys %v, want 'architect'", mapKeys(skills))
+		t.Errorf("skill name not normalised: got keys %v, want 'architect'", maps.Keys(skills))
 	}
 
 	// Agent — mixed-case name, backend, and skill reference should be stored lowercase.
@@ -1087,13 +1088,4 @@ func TestUpsertBackendNormalizesCommandAndEnv(t *testing.T) {
 	if got.Env["VALID_KEY"] != "val" {
 		t.Errorf("valid env key lost: got %v", got.Env)
 	}
-}
-
-// mapKeys returns the keys from any map[string]T.
-func mapKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
 }
