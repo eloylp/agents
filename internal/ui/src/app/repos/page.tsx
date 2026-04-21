@@ -98,8 +98,8 @@ function isValidCron(expr: string): boolean {
 }
 
 const inputStyle: React.CSSProperties = {
-  width: '100%', padding: '6px 8px', border: '1px solid #bfdbfe', borderRadius: '6px',
-  fontSize: '0.85rem', fontFamily: 'inherit', background: '#f8fafc', color: '#1e293b',
+  width: '100%', padding: '6px 8px', border: '1px solid #1e3a5f', borderRadius: '6px',
+  fontSize: '0.85rem', fontFamily: 'inherit', background: '#0f1d32', color: '#cbd5e1',
 }
 const labelStyle: React.CSSProperties = { fontSize: '0.8rem', color: '#64748b', display: 'block', marginBottom: '3px' }
 
@@ -161,7 +161,7 @@ function TriggerEditor({ trigger, onChange, onRemove, knownLabels }: {
         {triggerType === 'cron' && (
           <div>
             <input
-              style={{ ...inputStyle, borderColor: (trigger.cron && !isValidCron(trigger.cron)) ? '#f87171' : '#bfdbfe' }}
+              style={{ ...inputStyle, borderColor: (trigger.cron && !isValidCron(trigger.cron)) ? '#f87171' : '#1e3a5f' }}
               value={trigger.cron ?? ''}
               onChange={e => onChange({ ...trigger, cron: e.target.value })}
               placeholder="0 9 * * *"
@@ -180,7 +180,7 @@ function TriggerEditor({ trigger, onChange, onRemove, knownLabels }: {
       </label>
       <button
         onClick={onRemove}
-        style={{ padding: '4px 7px', border: '1px solid #fecaca', background: '#fff5f5', borderRadius: '5px', cursor: 'pointer', fontSize: '0.72rem', color: '#dc2626', flexShrink: 0 }}
+        style={{ padding: '4px 7px', border: '1px solid #7f1d1d', background: '#1c1017', borderRadius: '5px', cursor: 'pointer', fontSize: '0.72rem', color: '#dc2626', flexShrink: 0 }}
       >
         ✕
       </button>
@@ -204,7 +204,7 @@ function AgentBindingGroup({ group, agentNames, knownLabels, onChange, onAddTrig
   }
 
   return (
-    <div style={{ border: '1px solid #bfdbfe', borderRadius: '8px', padding: '0.75rem', marginBottom: '0.65rem', background: '#fafcff' }}>
+    <div style={{ border: '1px solid #1e3a5f', borderRadius: '8px', padding: '0.75rem', marginBottom: '0.65rem', background: '#0f1d32' }}>
       <div style={{ marginBottom: '0.5rem' }}>
         <label style={labelStyle}>Agent</label>
         {agentNames.length > 0 ? (
@@ -230,7 +230,7 @@ function AgentBindingGroup({ group, agentNames, knownLabels, onChange, onAddTrig
       ))}
       <button
         onClick={onAddTrigger}
-        style={{ padding: '2px 9px', borderRadius: '5px', border: '1px solid #bfdbfe', background: '#eff6ff', cursor: 'pointer', fontSize: '0.73rem', color: '#2563eb', marginTop: '0.15rem' }}
+        style={{ padding: '2px 9px', borderRadius: '5px', border: '1px solid #1e3a5f', background: '#0f1d32', cursor: 'pointer', fontSize: '0.73rem', color: '#38bdf8', marginTop: '0.15rem' }}
       >
         + Add trigger
       </button>
@@ -294,7 +294,7 @@ function RepoForm({ initial, isNew, agentNames, knownLabels, onSave, onCancel, s
           disabled={!isNew}
         />
       </div>
-      <label style={{ fontSize: '0.85rem', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
+      <label style={{ fontSize: '0.85rem', color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
         <input type="checkbox" checked={form.enabled} onChange={e => setForm(f => ({ ...f, enabled: e.target.checked }))} />
         Enabled
       </label>
@@ -304,7 +304,7 @@ function RepoForm({ initial, isNew, agentNames, knownLabels, onSave, onCancel, s
           <label style={{ ...labelStyle, marginBottom: 0 }}>Agent bindings</label>
           <button
             onClick={addGroup}
-            style={{ padding: '2px 10px', borderRadius: '5px', border: '1px solid #bfdbfe', background: '#eff6ff', cursor: 'pointer', fontSize: '0.75rem', color: '#2563eb' }}
+            style={{ padding: '2px 10px', borderRadius: '5px', border: '1px solid #1e3a5f', background: '#0f1d32', cursor: 'pointer', fontSize: '0.75rem', color: '#38bdf8' }}
           >
             + Add agent binding
           </button>
@@ -325,13 +325,13 @@ function RepoForm({ initial, isNew, agentNames, knownLabels, onSave, onCancel, s
 
       {error && <p style={{ color: '#f87171', fontSize: '0.8rem' }}>{error}</p>}
       <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-        <button onClick={onCancel} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #bfdbfe', background: '#fff', cursor: 'pointer', fontSize: '0.875rem', color: '#64748b' }}>
+        <button onClick={onCancel} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #1e3a5f', background: '#111d2e', cursor: 'pointer', fontSize: '0.875rem', color: '#64748b' }}>
           Cancel
         </button>
         <button
           onClick={handleSave}
           disabled={saving || !form.name.trim() || hasCronError}
-          style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #93c5fd', background: '#2563eb', color: '#fff', cursor: (saving || hasCronError) ? 'not-allowed' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+          style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #0e7490', background: '#0e7490', color: '#fff', cursor: (saving || hasCronError) ? 'not-allowed' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
           {saving ? 'Saving…' : 'Save'}
         </button>
@@ -440,7 +440,7 @@ export default function ReposPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#1e3a5f' }}>Repos</h1>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e2e8f0' }}>Repos</h1>
           <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: '4px' }}>
             {repos.length} repo{repos.length !== 1 ? 's' : ''} configured
           </p>
@@ -448,11 +448,11 @@ export default function ReposPage() {
         <div style={{ display: 'flex', gap: '0.75rem' }}>
           <button
             onClick={openCreate}
-            style={{ background: '#2563eb', border: '1px solid #1d4ed8', color: '#fff', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+            style={{ background: '#0e7490', border: '1px solid #0e7490', color: '#fff', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
           >
             + Add repo
           </button>
-          <button onClick={load} style={{ background: '#ffffff', border: '1px solid #bfdbfe', color: '#64748b', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem' }}>
+          <button onClick={load} style={{ background: '#111d2e', border: '1px solid #1e3a5f', color: '#64748b', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem' }}>
             Refresh
           </button>
         </div>
@@ -469,48 +469,44 @@ export default function ReposPage() {
           <Card key={repo.name}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
               <div>
-                <div style={{ fontWeight: 700, color: '#1e3a5f', fontSize: '1rem' }}>{repo.name}</div>
+                <div style={{ fontWeight: 700, color: '#e2e8f0', fontSize: '1rem' }}>{repo.name}</div>
                 <span style={{
                   display: 'inline-block', marginTop: '3px', fontSize: '0.72rem', fontWeight: 600,
                   padding: '1px 7px', borderRadius: '10px',
-                  background: repo.enabled ? '#dcfce7' : '#f1f5f9',
-                  color: repo.enabled ? '#15803d' : '#94a3b8',
-                  border: `1px solid ${repo.enabled ? '#bbf7d0' : '#e2e8f0'}`,
+                  background: repo.enabled ? 'rgba(52,211,153,0.15)' : 'rgba(100,116,139,0.15)',
+                  color: repo.enabled ? '#34d399' : '#64748b',
+                  border: `1px solid ${repo.enabled ? '#065f46' : '#334155'}`,
                 }}>
                   {repo.enabled ? 'enabled' : 'disabled'}
                 </span>
               </div>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <button onClick={() => openEdit(repo)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid #bfdbfe', background: '#f8fafc', cursor: 'pointer', fontSize: '0.75rem', color: '#2563eb' }}>Edit</button>
-                <button onClick={() => confirmDelete(repo.name)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid #fecaca', background: '#fff5f5', cursor: 'pointer', fontSize: '0.75rem', color: '#dc2626' }}>Delete</button>
+                <button onClick={() => openEdit(repo)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid #1e3a5f', background: '#0f1d32', cursor: 'pointer', fontSize: '0.75rem', color: '#38bdf8' }}>Edit</button>
+                <button onClick={() => confirmDelete(repo.name)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid #7f1d1d', background: '#1c1017', cursor: 'pointer', fontSize: '0.75rem', color: '#f87171' }}>Delete</button>
               </div>
             </div>
 
-            {repo.bindings.length > 0 ? (
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
-                <thead>
-                  <tr style={{ color: '#64748b' }}>
-                    <th style={{ textAlign: 'left', padding: '3px 0', fontWeight: 400 }}>Agent</th>
-                    <th style={{ textAlign: 'left', padding: '3px 0', fontWeight: 400 }}>Trigger</th>
-                    <th style={{ textAlign: 'left', padding: '3px 0', fontWeight: 400 }}>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {repo.bindings.map((b, i) => (
-                    <tr key={i} style={{ borderTop: '1px solid #f8fafc' }}>
-                      <td style={{ padding: '3px 0', color: '#1e3a5f', fontWeight: 500 }}>{b.agent}</td>
-                      <td style={{ padding: '3px 0', color: '#64748b' }}>{bindingTrigger(b)}</td>
-                      <td style={{ padding: '3px 0' }}>
-                        <span style={{ fontSize: '0.72rem', color: b.enabled !== false ? '#15803d' : '#94a3b8' }}>
-                          {b.enabled !== false ? 'on' : 'off'}
-                        </span>
-                      </td>
-                    </tr>
+            {repo.bindings.length > 0 ? (() => {
+              const grouped: Record<string, Binding[]> = {}
+              for (const b of repo.bindings) {
+                if (!grouped[b.agent]) grouped[b.agent] = []
+                grouped[b.agent].push(b)
+              }
+              return Object.entries(grouped).map(([agent, bindings]) => (
+                <div key={agent} style={{ marginBottom: '0.5rem' }}>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#38bdf8', marginBottom: '0.25rem' }}>{agent}</div>
+                  {bindings.map((b, i) => (
+                    <div key={i} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', fontSize: '0.78rem', padding: '2px 0 2px 0.75rem', borderLeft: '2px solid #1e3a5f' }}>
+                      <span style={{ color: '#94a3b8' }}>{bindingTrigger(b)}</span>
+                      <span style={{ fontSize: '0.7rem', color: b.enabled !== false ? '#34d399' : '#64748b' }}>
+                        {b.enabled !== false ? 'on' : 'off'}
+                      </span>
+                    </div>
                   ))}
-                </tbody>
-              </table>
-            ) : (
-              <p style={{ color: '#94a3b8', fontSize: '0.8rem' }}>No bindings.</p>
+                </div>
+              ))
+            })() : (
+              <p style={{ color: '#64748b', fontSize: '0.8rem' }}>No bindings.</p>
             )}
           </Card>
         ))}
@@ -533,12 +529,12 @@ export default function ReposPage() {
 
       {modal === 'delete' && (
         <Modal title="Delete repo" onClose={() => setModal(null)}>
-          <p style={{ color: '#1e293b', fontSize: '0.9rem', marginBottom: '1.25rem' }}>
+          <p style={{ color: '#cbd5e1', fontSize: '0.9rem', marginBottom: '1.25rem' }}>
             Delete <strong>{deleteTarget}</strong>? This cannot be undone.
           </p>
           {saveError && <p style={{ color: '#f87171', fontSize: '0.8rem', marginBottom: '0.75rem' }}>{saveError}</p>}
           <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-            <button onClick={() => setModal(null)} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #bfdbfe', background: '#fff', cursor: 'pointer', fontSize: '0.875rem', color: '#64748b' }}>
+            <button onClick={() => setModal(null)} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #1e3a5f', background: '#111d2e', cursor: 'pointer', fontSize: '0.875rem', color: '#64748b' }}>
               Cancel
             </button>
             <button onClick={deleteRepo} disabled={saving} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #fca5a5', background: '#dc2626', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>

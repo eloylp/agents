@@ -3,10 +3,10 @@ interface StatusBadgeProps {
 }
 
 const colors: Record<string, { bg: string; color: string; border: string }> = {
-  running: { bg: '#f0fdf4', color: '#15803d', border: '#bbf7d0' },
-  idle:    { bg: '#f0f9ff', color: '#0369a1', border: '#bae6fd' },
-  error:   { bg: '#fef2f2', color: '#b91c1c', border: '#fecaca' },
-  success: { bg: '#f0fdf4', color: '#15803d', border: '#bbf7d0' },
+  running: { bg: 'rgba(52,211,153,0.15)', color: '#34d399', border: '#065f46' },
+  idle:    { bg: 'rgba(56,189,248,0.12)', color: '#38bdf8', border: '#0e7490' },
+  error:   { bg: 'rgba(248,113,113,0.15)', color: '#f87171', border: '#7f1d1d' },
+  success: { bg: 'rgba(52,211,153,0.15)', color: '#34d399', border: '#065f46' },
 }
 
 export default function StatusBadge({ status }: StatusBadgeProps) {

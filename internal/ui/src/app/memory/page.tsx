@@ -91,7 +91,7 @@ export default function MemoryPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#1e3a5f' }}>Agent Memory</h1>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e2e8f0' }}>Agent Memory</h1>
           <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: '4px' }}>
             Read-only view of agent memory · {streaming ? '🟢 watching for changes' : '🔴 disconnected'}
           </p>
@@ -118,10 +118,10 @@ export default function MemoryPage() {
                       width: '100%',
                       textAlign: 'left',
                       padding: '4px 8px',
-                      background: isSelected ? '#1d4ed8' : 'transparent',
+                      background: isSelected ? '#0e7490' : 'transparent',
                       border: 'none',
                       borderRadius: '4px',
-                      color: isSelected ? '#bfdbfe' : '#64748b',
+                      color: isSelected ? '#e2e8f0' : '#64748b',
                       cursor: 'pointer',
                       fontSize: '0.78rem',
                     }}
@@ -144,7 +144,7 @@ export default function MemoryPage() {
           {file && (
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                <span style={{ fontFamily: 'monospace', fontSize: '0.8rem', color: '#2563eb' }}>
+                <span style={{ fontFamily: 'monospace', fontSize: '0.8rem', color: '#38bdf8' }}>
                   {file.agent}/{file.repoKey}
                 </span>
                 {file.mtime && (
@@ -154,12 +154,12 @@ export default function MemoryPage() {
                 )}
               </div>
               <pre style={{
-                background: '#f8fafc',
+                background: '#0a1628',
                 borderRadius: '6px',
                 padding: '1rem',
                 fontSize: '0.8rem',
                 lineHeight: '1.6',
-                color: '#1e293b',
+                color: '#cbd5e1',
                 overflowX: 'auto',
                 whiteSpace: 'pre-wrap',
                 wordBreak: 'break-word',

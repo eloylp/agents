@@ -11,8 +11,8 @@ interface Skill {
 const emptyForm: Skill = { name: '', prompt: '' }
 
 const inputStyle: React.CSSProperties = {
-  width: '100%', padding: '6px 8px', border: '1px solid #bfdbfe', borderRadius: '6px',
-  fontSize: '0.85rem', fontFamily: 'inherit', background: '#f8fafc', color: '#1e293b',
+  width: '100%', padding: '6px 8px', border: '1px solid #1e3a5f', borderRadius: '6px',
+  fontSize: '0.85rem', fontFamily: 'inherit', background: '#0f1d32', color: '#cbd5e1',
 }
 const labelStyle: React.CSSProperties = { fontSize: '0.8rem', color: '#64748b', display: 'block', marginBottom: '3px' }
 
@@ -51,13 +51,13 @@ function SkillForm({
       </div>
       {error && <p style={{ color: '#f87171', fontSize: '0.8rem' }}>{error}</p>}
       <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-        <button onClick={onCancel} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #bfdbfe', background: '#fff', cursor: 'pointer', fontSize: '0.875rem', color: '#64748b' }}>
+        <button onClick={onCancel} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #1e3a5f', background: '#111d2e', cursor: 'pointer', fontSize: '0.875rem', color: '#64748b' }}>
           Cancel
         </button>
         <button
           onClick={() => onSave(form)}
           disabled={saving || !form.name.trim()}
-          style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #93c5fd', background: '#2563eb', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+          style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #0e7490', background: '#0e7490', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
           {saving ? 'Saving…' : 'Save'}
         </button>
@@ -151,7 +151,7 @@ export default function SkillsPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#1e3a5f' }}>Skills</h1>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e2e8f0' }}>Skills</h1>
           <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: '4px' }}>
             {skills.length} skill{skills.length !== 1 ? 's' : ''} configured
           </p>
@@ -159,11 +159,11 @@ export default function SkillsPage() {
         <div style={{ display: 'flex', gap: '0.75rem' }}>
           <button
             onClick={openCreate}
-            style={{ background: '#2563eb', border: '1px solid #1d4ed8', color: '#fff', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+            style={{ background: '#0e7490', border: '1px solid #0e7490', color: '#fff', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
           >
             + Create skill
           </button>
-          <button onClick={load} style={{ background: '#ffffff', border: '1px solid #bfdbfe', color: '#64748b', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem' }}>
+          <button onClick={load} style={{ background: '#111d2e', border: '1px solid #1e3a5f', color: '#64748b', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem' }}>
             Refresh
           </button>
         </div>
@@ -180,10 +180,10 @@ export default function SkillsPage() {
           <Card key={sk.name}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, color: '#1e3a5f', marginBottom: '0.35rem' }}>{sk.name}</div>
+                <div style={{ fontWeight: 700, color: '#e2e8f0', marginBottom: '0.35rem' }}>{sk.name}</div>
                 <pre style={{
-                  fontSize: '0.78rem', color: '#475569', background: '#f8fafc',
-                  border: '1px solid #e2e8f0', borderRadius: '4px', padding: '0.5rem',
+                  fontSize: '0.78rem', color: '#94a3b8', background: '#0a1628',
+                  border: '1px solid #334155', borderRadius: '4px', padding: '0.5rem',
                   maxHeight: '80px', overflow: 'hidden', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                   fontFamily: 'inherit',
                 }}>
@@ -191,8 +191,8 @@ export default function SkillsPage() {
                 </pre>
               </div>
               <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
-                <button onClick={() => openEdit(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid #bfdbfe', background: '#f8fafc', cursor: 'pointer', fontSize: '0.75rem', color: '#2563eb' }}>Edit</button>
-                <button onClick={() => confirmDelete(sk.name)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid #fecaca', background: '#fff5f5', cursor: 'pointer', fontSize: '0.75rem', color: '#dc2626' }}>Delete</button>
+                <button onClick={() => openEdit(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid #1e3a5f', background: '#0a1628', cursor: 'pointer', fontSize: '0.75rem', color: '#38bdf8' }}>Edit</button>
+                <button onClick={() => confirmDelete(sk.name)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid #7f1d1d', background: '#1c1017', cursor: 'pointer', fontSize: '0.75rem', color: '#dc2626' }}>Delete</button>
               </div>
             </div>
           </Card>
@@ -214,12 +214,12 @@ export default function SkillsPage() {
 
       {modal === 'delete' && (
         <Modal title="Delete skill" onClose={() => setModal(null)}>
-          <p style={{ color: '#1e293b', fontSize: '0.9rem', marginBottom: '1.25rem' }}>
+          <p style={{ color: '#cbd5e1', fontSize: '0.9rem', marginBottom: '1.25rem' }}>
             Delete skill <strong>{deleteTarget}</strong>? This cannot be undone.
           </p>
           {saveError && <p style={{ color: '#f87171', fontSize: '0.8rem', marginBottom: '0.75rem' }}>{saveError}</p>}
           <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-            <button onClick={() => setModal(null)} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #bfdbfe', background: '#fff', cursor: 'pointer', fontSize: '0.875rem', color: '#64748b' }}>
+            <button onClick={() => setModal(null)} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #1e3a5f', background: '#111d2e', cursor: 'pointer', fontSize: '0.875rem', color: '#64748b' }}>
               Cancel
             </button>
             <button onClick={deleteSkill} disabled={saving} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #fca5a5', background: '#dc2626', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>

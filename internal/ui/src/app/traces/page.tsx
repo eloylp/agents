@@ -38,15 +38,15 @@ function GanttRow({ span, minMs, totalMs }: { span: Span; minMs: number; totalMs
   const color = span.status === 'error' ? '#ef4444' : colors[span.dispatch_depth % colors.length]
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', padding: '4px 0', gap: '0.75rem', fontSize: '0.8rem', borderTop: '1px solid #f8fafc' }}>
-      <div style={{ width: '180px', flexShrink: 0, paddingLeft: `${span.dispatch_depth * 12}px`, color: '#1e293b' }}>
+    <div style={{ display: 'flex', alignItems: 'center', padding: '4px 0', gap: '0.75rem', fontSize: '0.8rem', borderTop: '1px solid #1e293b' }}>
+      <div style={{ width: '180px', flexShrink: 0, paddingLeft: `${span.dispatch_depth * 12}px`, color: '#cbd5e1' }}>
         <div style={{ fontWeight: 600 }}>{span.agent}</div>
         <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
           {span.repo}{span.number > 0 ? ` #${span.number}` : ''} · {span.event_kind}
         </div>
         {span.invoked_by && <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>← {span.invoked_by}</div>}
       </div>
-      <div style={{ flex: 1, height: '18px', background: '#f8fafc', borderRadius: '3px', position: 'relative' }}>
+      <div style={{ flex: 1, height: '18px', background: '#0a1628', borderRadius: '3px', position: 'relative' }}>
         <div style={{ position: 'absolute', left: `${leftPct}%`, width: `${widthPct}%`, height: '100%', background: color, borderRadius: '3px', opacity: 0.8 }} />
       </div>
       <div style={{ width: '70px', flexShrink: 0, textAlign: 'right', color: '#64748b' }}>{span.duration_ms}ms</div>
@@ -68,7 +68,7 @@ function TraceDetail({ rootId, allSpans, onBack }: { rootId: string; allSpans: S
     <div>
       <div style={{ marginBottom: '1.5rem' }}>
         <button onClick={onBack} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: '0.875rem', padding: 0 }}>← All traces</button>
-        <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#1e3a5f', marginTop: '0.5rem' }}>Trace detail</h1>
+        <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e2e8f0', marginTop: '0.5rem' }}>Trace detail</h1>
         <p style={{ fontFamily: 'monospace', color: '#64748b', fontSize: '0.8rem', marginTop: '4px' }}>{rootId} · {sorted.length} span{sorted.length !== 1 ? 's' : ''} · {wallMs}ms total</p>
       </div>
 
@@ -85,7 +85,7 @@ function TraceDetail({ rootId, allSpans, onBack }: { rootId: string; allSpans: S
       <Card title="Span Details">
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
           <thead>
-            <tr style={{ color: '#64748b', borderBottom: '1px solid #bfdbfe' }}>
+            <tr style={{ color: '#64748b', borderBottom: '1px solid #1e3a5f' }}>
               <th style={{ textAlign: 'left', padding: '6px 0' }}>Agent</th>
               <th style={{ textAlign: 'left', padding: '6px 0' }}>Backend</th>
               <th style={{ textAlign: 'left', padding: '6px 0' }}>Repo / #</th>
@@ -100,8 +100,8 @@ function TraceDetail({ rootId, allSpans, onBack }: { rootId: string; allSpans: S
               const detail = s.summary || s.error
               return (
                 <React.Fragment key={s.span_id}>
-                  <tr style={{ borderTop: '1px solid #e2e8f0' }}>
-                    <td style={{ padding: '6px 0', color: '#1e293b', paddingLeft: `${s.dispatch_depth * 12}px`, fontWeight: 600 }}>{s.agent}</td>
+                  <tr style={{ borderTop: '1px solid #334155' }}>
+                    <td style={{ padding: '6px 0', color: '#cbd5e1', paddingLeft: `${s.dispatch_depth * 12}px`, fontWeight: 600 }}>{s.agent}</td>
                     <td style={{ padding: '6px 0', color: '#64748b' }}>{s.backend}</td>
                     <td style={{ padding: '6px 0', color: '#64748b' }}>{s.repo}{s.number > 0 ? ` #${s.number}` : ''}</td>
                     <td style={{ padding: '6px 0', color: '#64748b' }}>{s.event_kind}</td>
@@ -112,8 +112,8 @@ function TraceDetail({ rootId, allSpans, onBack }: { rootId: string; allSpans: S
                   {detail && (
                     <tr>
                       <td colSpan={7} style={{ padding: '4px 0 8px', paddingLeft: `${s.dispatch_depth * 12 + 12}px` }}>
-                        {s.summary && <div style={{ fontSize: '0.78rem', color: '#475569', fontStyle: 'italic' }}>{s.summary}</div>}
-                        {s.error && <div style={{ fontSize: '0.78rem', color: '#b91c1c', marginTop: '2px' }}>{s.error}</div>}
+                        {s.summary && <div style={{ fontSize: '0.78rem', color: '#94a3b8', fontStyle: 'italic' }}>{s.summary}</div>}
+                        {s.error && <div style={{ fontSize: '0.78rem', color: '#f87171', marginTop: '2px' }}>{s.error}</div>}
                       </td>
                     </tr>
                   )}
@@ -142,7 +142,7 @@ function TraceListItem({ rootId, spans, onSelect }: { rootId: string; spans: Spa
         <div>
           <button
             onClick={() => onSelect(rootId)}
-            style={{ background: 'none', border: 'none', fontFamily: 'monospace', fontSize: '0.8rem', color: '#2563eb', cursor: 'pointer', padding: 0 }}
+            style={{ background: 'none', border: 'none', fontFamily: 'monospace', fontSize: '0.8rem', color: '#38bdf8', cursor: 'pointer', padding: 0 }}
           >
             {rootId}
           </button>
@@ -164,7 +164,7 @@ function TraceListItem({ rootId, spans, onSelect }: { rootId: string; spans: Spa
         return (
           <div key={s.span_id} style={{ display: 'flex', alignItems: 'center', padding: '2px 0', gap: '0.75rem', fontSize: '0.75rem' }}>
             <div style={{ width: '120px', flexShrink: 0, paddingLeft: `${s.dispatch_depth * 10}px`, color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.agent}</div>
-            <div style={{ flex: 1, height: '12px', background: '#f8fafc', borderRadius: '2px', position: 'relative' }}>
+            <div style={{ flex: 1, height: '12px', background: '#0a1628', borderRadius: '2px', position: 'relative' }}>
               <div style={{ position: 'absolute', left: `${leftPct}%`, width: `${widthPct}%`, height: '100%', background: color, borderRadius: '2px', opacity: 0.7 }} />
             </div>
             <div style={{ width: '60px', textAlign: 'right', color: '#94a3b8' }}>{s.duration_ms}ms</div>
@@ -231,7 +231,7 @@ function TracesContent() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#1e3a5f' }}>Traces</h1>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e2e8f0' }}>Traces</h1>
           <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: '4px' }}>
             {rootIds.length} trace{rootIds.length !== 1 ? 's' : ''} · {streaming ? '🟢 live' : '🔴 disconnected'}
           </p>
@@ -241,9 +241,9 @@ function TracesContent() {
             placeholder="Filter by agent, repo, or ID…"
             value={filter}
             onChange={e => setFilter(e.target.value)}
-            style={{ background: '#ffffff', border: '1px solid #bfdbfe', color: '#1e293b', padding: '6px 10px', borderRadius: '6px', fontSize: '0.875rem', width: '240px' }}
+            style={{ background: '#0f1d32', border: '1px solid #1e3a5f', color: '#cbd5e1', padding: '6px 10px', borderRadius: '6px', fontSize: '0.875rem', width: '240px' }}
           />
-          <button onClick={load} style={{ background: '#ffffff', border: '1px solid #bfdbfe', color: '#64748b', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem' }}>
+          <button onClick={load} style={{ background: '#111d2e', border: '1px solid #1e3a5f', color: '#64748b', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem' }}>
             Refresh
           </button>
         </div>

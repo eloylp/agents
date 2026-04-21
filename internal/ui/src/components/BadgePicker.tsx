@@ -25,12 +25,12 @@ const removeStyle: React.CSSProperties = {
 const selectStyle: React.CSSProperties = {
   width: '100%',
   padding: '6px 8px',
-  border: '1px solid #bfdbfe',
+  border: '1px solid #1e3a5f',
   borderRadius: '6px',
   fontSize: '0.85rem',
   fontFamily: 'inherit',
-  background: '#f8fafc',
-  color: '#1e293b',
+  background: '#0f1d32',
+  color: '#cbd5e1',
 }
 
 /**
@@ -99,7 +99,7 @@ export default function BadgePicker({
           />
           <button
             onClick={commitText}
-            style={{ padding: '6px 10px', border: '1px solid #bfdbfe', borderRadius: '6px', background: '#eff6ff', cursor: 'pointer', fontSize: '0.8rem', color: '#2563eb' }}
+            style={{ padding: '6px 10px', border: '1px solid #1e3a5f', borderRadius: '6px', background: '#0f1d32', cursor: 'pointer', fontSize: '0.8rem', color: '#38bdf8' }}
           >
             Add
           </button>

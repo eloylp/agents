@@ -78,9 +78,9 @@ function RunButton({ agent, repo }: { agent: string; repo: string }) {
   if (!repo) return null
 
   const label = state === 'running' ? 'Queuing...' : state === 'done' ? `Queued ${eventId.slice(0, 8)}` : state === 'error' ? 'Failed' : 'Run'
-  const bg = state === 'done' ? '#dcfce7' : state === 'error' ? '#fee2e2' : '#dbeafe'
-  const color = state === 'done' ? '#15803d' : state === 'error' ? '#b91c1c' : '#2563eb'
-  const border = state === 'done' ? '#bbf7d0' : state === 'error' ? '#fecaca' : '#93c5fd'
+  const bg = state === 'done' ? 'rgba(52,211,153,0.15)' : state === 'error' ? 'rgba(248,113,113,0.15)' : 'rgba(56,189,248,0.12)'
+  const color = state === 'done' ? '#34d399' : state === 'error' ? '#f87171' : '#38bdf8'
+  const border = state === 'done' ? '#065f46' : state === 'error' ? '#7f1d1d' : '#0e7490'
 
   return (
     <button
@@ -121,8 +121,8 @@ function AgentForm({
 
   const labelStyle: React.CSSProperties = { fontSize: '0.8rem', color: '#64748b', display: 'block', marginBottom: '3px' }
   const inputStyle: React.CSSProperties = {
-    width: '100%', padding: '6px 8px', border: '1px solid #bfdbfe', borderRadius: '6px',
-    fontSize: '0.85rem', fontFamily: 'inherit', background: '#f8fafc', color: '#1e293b',
+    width: '100%', padding: '6px 8px', border: '1px solid #1e3a5f', borderRadius: '6px',
+    fontSize: '0.85rem', fontFamily: 'inherit', background: '#0f1d32', color: '#cbd5e1',
   }
 
   // Derive options: always include "auto", then any store-configured backends.
@@ -162,24 +162,24 @@ function AgentForm({
         <BadgePicker options={agentNames.filter(n => n !== form.name)} selected={form.can_dispatch} onChange={v => set('can_dispatch', v)} placeholder="Add agent…" />
       </div>
       <div style={{ display: 'flex', gap: '1.5rem' }}>
-        <label style={{ fontSize: '0.85rem', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
+        <label style={{ fontSize: '0.85rem', color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
           <input type="checkbox" checked={form.allow_prs} onChange={e => set('allow_prs', e.target.checked)} />
           Allow PRs
         </label>
-        <label style={{ fontSize: '0.85rem', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
+        <label style={{ fontSize: '0.85rem', color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
           <input type="checkbox" checked={form.allow_dispatch} onChange={e => set('allow_dispatch', e.target.checked)} />
           Allow dispatch
         </label>
       </div>
       {error && <p style={{ color: '#f87171', fontSize: '0.8rem' }}>{error}</p>}
       <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '0.25rem' }}>
-        <button onClick={onCancel} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #bfdbfe', background: '#fff', cursor: 'pointer', fontSize: '0.875rem', color: '#64748b' }}>
+        <button onClick={onCancel} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #1e3a5f', background: '#111d2e', cursor: 'pointer', fontSize: '0.875rem', color: '#64748b' }}>
           Cancel
         </button>
         <button
           onClick={() => onSave(form)}
           disabled={saving || !form.name.trim()}
-          style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #93c5fd', background: '#2563eb', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+          style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #0e7490', background: '#0e7490', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
           {saving ? 'Saving…' : 'Save'}
         </button>
@@ -197,18 +197,18 @@ function AgentCard({ agent, onEdit, onDelete }: { agent: Agent; onEdit: () => vo
     <Card style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div>
-          <div style={{ fontWeight: 700, fontSize: '1rem', color: '#1e3a5f' }}>{agent.name}</div>
+          <div style={{ fontWeight: 700, fontSize: '1rem', color: '#e2e8f0' }}>{agent.name}</div>
           {agent.description && <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '2px' }}>{agent.description}</div>}
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <StatusBadge status={currentStatus} />
-          <button onClick={onEdit} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid #bfdbfe', background: '#f8fafc', cursor: 'pointer', fontSize: '0.75rem', color: '#2563eb' }}>Edit</button>
-          <button onClick={onDelete} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid #fecaca', background: '#fff5f5', cursor: 'pointer', fontSize: '0.75rem', color: '#dc2626' }}>Delete</button>
+          <button onClick={onEdit} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid #1e3a5f', background: '#0a1628', cursor: 'pointer', fontSize: '0.75rem', color: '#38bdf8' }}>Edit</button>
+          <button onClick={onDelete} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid #7f1d1d', background: '#1c1017', cursor: 'pointer', fontSize: '0.75rem', color: '#dc2626' }}>Delete</button>
         </div>
       </div>
 
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-        <span style={{ background: '#f8fafc', border: '1px solid #bfdbfe', borderRadius: '4px', padding: '2px 6px', fontSize: '0.75rem', color: '#64748b' }}>
+        <span style={{ background: '#0a1628', border: '1px solid #1e3a5f', borderRadius: '4px', padding: '2px 6px', fontSize: '0.75rem', color: '#64748b' }}>
           {agent.backend}
         </span>
         {agent.skills?.map(s => (
@@ -231,7 +231,7 @@ function AgentCard({ agent, onEdit, onDelete }: { agent: Agent; onEdit: () => vo
           </thead>
           <tbody>
             {(agent.bindings ?? []).map((b, i) => (
-              <tr key={i} style={{ borderTop: '1px solid #f8fafc' }}>
+              <tr key={i} style={{ borderTop: '1px solid #1e293b' }}>
                 <td style={{ padding: '4px 0', color: '#64748b' }}>{b.repo}</td>
                 <td style={{ padding: '4px 0', color: '#64748b' }}>
                   {b.cron ? `cron: ${b.cron}` : b.labels?.join(', ') ?? b.events?.join(', ') ?? '—'}
@@ -247,7 +247,7 @@ function AgentCard({ agent, onEdit, onDelete }: { agent: Agent; onEdit: () => vo
         </table>
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #bfdbfe', paddingTop: '0.5rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #1e3a5f', paddingTop: '0.5rem' }}>
         <div style={{ display: 'flex', gap: '1rem', fontSize: '0.75rem', color: '#94a3b8' }}>
           {agent.allow_prs && <span>✓ PRs</span>}
           {agent.allow_dispatch && <span>✓ dispatch</span>}
@@ -383,22 +383,22 @@ export default function FleetPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#1e3a5f' }}>Fleet Dashboard</h1>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e2e8f0' }}>Fleet Dashboard</h1>
           <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: '4px' }}>
             {agents.length} agent{agents.length !== 1 ? 's' : ''} configured
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          <Link href="/traces/" style={{ fontSize: '0.875rem', color: '#2563eb' }}>View traces →</Link>
+          <Link href="/traces/" style={{ fontSize: '0.875rem', color: '#38bdf8' }}>View traces →</Link>
           <button
             onClick={openCreate}
-            style={{ background: '#2563eb', border: '1px solid #1d4ed8', color: '#fff', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+            style={{ background: '#0e7490', border: '1px solid #0e7490', color: '#fff', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
           >
             + Create agent
           </button>
           <button
             onClick={load}
-            style={{ background: '#ffffff', border: '1px solid #bfdbfe', color: '#64748b', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem' }}
+            style={{ background: '#111d2e', border: '1px solid #1e3a5f', color: '#64748b', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem' }}
           >
             Refresh
           </button>
@@ -440,12 +440,12 @@ export default function FleetPage() {
 
       {modal === 'delete' && (
         <Modal title="Delete agent" onClose={() => setModal(null)}>
-          <p style={{ color: '#1e293b', fontSize: '0.9rem', marginBottom: '1.25rem' }}>
+          <p style={{ color: '#cbd5e1', fontSize: '0.9rem', marginBottom: '1.25rem' }}>
             Delete <strong>{deleteTarget}</strong>? This cannot be undone.
           </p>
           {saveError && <p style={{ color: '#f87171', fontSize: '0.8rem', marginBottom: '0.75rem' }}>{saveError}</p>}
           <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-            <button onClick={() => setModal(null)} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #bfdbfe', background: '#fff', cursor: 'pointer', fontSize: '0.875rem', color: '#64748b' }}>
+            <button onClick={() => setModal(null)} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #1e3a5f', background: '#111d2e', cursor: 'pointer', fontSize: '0.875rem', color: '#64748b' }}>
               Cancel
             </button>
             <button onClick={deleteAgent} disabled={saving} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #fca5a5', background: '#dc2626', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>

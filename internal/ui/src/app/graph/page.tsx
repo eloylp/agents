@@ -47,9 +47,9 @@ interface AgentInfo {
 function AgentNode({ data }: NodeProps) {
   const d = data as { label: string; status: string; description: string; dispatchable: boolean; skills: string[] }
   const statusColors: Record<string, { bg: string; border: string; icon: string }> = {
-    running: { bg: '#dcfce7', border: '#16a34a', icon: '⚡' },
-    error:   { bg: '#fee2e2', border: '#dc2626', icon: '⚠' },
-    idle:    { bg: '#dbeafe', border: '#2563eb', icon: '●' },
+    running: { bg: 'rgba(52,211,153,0.15)', border: '#34d399', icon: '⚡' },
+    error:   { bg: 'rgba(248,113,113,0.15)', border: '#f87171', icon: '⚠' },
+    idle:    { bg: 'rgba(56,189,248,0.12)', border: '#38bdf8', icon: '●' },
   }
   const c = statusColors[d.status] ?? statusColors.idle
 
@@ -57,27 +57,27 @@ function AgentNode({ data }: NodeProps) {
     <>
       <Handle type="target" position={Position.Top} style={{ background: '#94a3b8', border: 'none', width: 6, height: 6 }} />
       <div style={{
-        background: '#ffffff',
+        background: '#111d2e',
         border: `2px solid ${c.border}`,
         borderRadius: '12px',
         padding: '10px 20px',
         minWidth: '180px',
         textAlign: 'center',
-        boxShadow: '0 2px 8px rgba(37,99,235,0.08)',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
         position: 'relative',
       }}>
         {d.dispatchable && (
           <div style={{
             position: 'absolute', top: -8, right: -8,
             width: 18, height: 18, borderRadius: '50%',
-            background: '#2563eb', color: '#fff',
+            background: '#0e7490', color: '#fff',
             fontSize: '10px', lineHeight: '18px', textAlign: 'center',
             fontWeight: 700,
           }}>D</div>
         )}
         <div style={{ fontSize: '11px', marginBottom: '2px' }}>{c.icon}</div>
         <div style={{
-          fontWeight: 700, fontSize: '13px', color: '#1e293b',
+          fontWeight: 700, fontSize: '13px', color: '#cbd5e1',
           whiteSpace: 'nowrap',
         }}>
           {d.label}
@@ -190,20 +190,20 @@ export default function GraphPage() {
       animated: e.isActive && e.count > 0,
       interactionWidth: 40,
       style: {
-        stroke: e.isActive ? '#2563eb' : '#93c5fd',
+        stroke: e.isActive ? '#38bdf8' : '#1e3a5f',
         strokeWidth: e.isActive ? 2.5 : 1.5,
         strokeDasharray: e.isActive ? undefined : '6 4',
         cursor: 'pointer',
       },
       markerEnd: {
         type: MarkerType.ArrowClosed,
-        color: e.isActive ? '#2563eb' : '#93c5fd',
+        color: e.isActive ? '#38bdf8' : '#1e3a5f',
         width: 16,
         height: 12,
       },
       label: e.count > 0 ? `${e.count}` : undefined,
-      labelStyle: { fill: '#2563eb', fontWeight: 700, fontSize: 11 },
-      labelBgStyle: { fill: '#ffffff', fillOpacity: 0.9 },
+      labelStyle: { fill: '#38bdf8', fontWeight: 700, fontSize: 11 },
+      labelBgStyle: { fill: '#111d2e', fillOpacity: 0.9 },
       labelBgPadding: [4, 4] as [number, number],
       labelBgBorderRadius: 4,
       data: e,
@@ -236,12 +236,12 @@ export default function GraphPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#1e3a5f' }}>Agent Interaction Graph</h1>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e2e8f0' }}>Agent Interaction Graph</h1>
           <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: '4px' }}>
             {agents.length} agents · {wiringInfo.active} active / {wiringInfo.total} wired edges
           </p>
         </div>
-        <button onClick={load} style={{ background: '#ffffff', border: '1px solid #bfdbfe', color: '#2563eb', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500 }}>
+        <button onClick={load} style={{ background: '#111d2e', border: '1px solid #1e3a5f', color: '#38bdf8', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500 }}>
           Refresh
         </button>
       </div>
@@ -254,26 +254,26 @@ export default function GraphPage() {
           onClick={() => setSelectedEdge(null)}
           style={{
             position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-            background: 'rgba(15,23,42,0.5)', zIndex: 1000,
+            background: 'rgba(10,22,40,0.65)', zIndex: 1000,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}
         >
           <div onClick={e => e.stopPropagation()} style={{
-            background: '#ffffff', borderRadius: '12px', padding: '1.5rem',
+            background: '#111d2e', borderRadius: '12px', padding: '1.5rem',
             maxWidth: '480px', width: '90%', maxHeight: '80vh', overflowY: 'auto',
-            boxShadow: '0 8px 32px rgba(37,99,235,0.15)', border: '1px solid #bfdbfe',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.4)', border: '1px solid #1e3a5f',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#1e3a5f' }}>{selectedEdge.from} → {selectedEdge.to}</h2>
+              <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#e2e8f0' }}>{selectedEdge.from} → {selectedEdge.to}</h2>
               <button onClick={() => setSelectedEdge(null)} style={{
                 background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#94a3b8',
               }}>x</button>
             </div>
             <div style={{
               display: 'inline-block', padding: '2px 8px', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 500,
-              background: selectedEdge.isActive ? '#dbeafe' : '#f1f5f9',
-              color: selectedEdge.isActive ? '#1d4ed8' : '#64748b',
-              border: `1px solid ${selectedEdge.isActive ? '#93c5fd' : '#e2e8f0'}`,
+              background: selectedEdge.isActive ? 'rgba(56,189,248,0.12)' : 'rgba(100,116,139,0.15)',
+              color: selectedEdge.isActive ? '#38bdf8' : '#64748b',
+              border: `1px solid ${selectedEdge.isActive ? '#0e7490' : '#334155'}`,
               marginBottom: '1rem',
             }}>
               {selectedEdge.isActive ? `${selectedEdge.count} dispatch${selectedEdge.count !== 1 ? 'es' : ''}` : 'wired — no dispatches yet'}
@@ -281,8 +281,8 @@ export default function GraphPage() {
             {selectedEdge.dispatches.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 {selectedEdge.dispatches.slice().reverse().map((d, i) => (
-                  <div key={i} style={{ background: '#f8fafc', borderRadius: '6px', padding: '10px', fontSize: '0.8rem', border: '1px solid #e2e8f0' }}>
-                    <div style={{ color: '#1e293b', fontWeight: 500 }}>{new Date(d.at).toLocaleString()}</div>
+                  <div key={i} style={{ background: '#0a1628', borderRadius: '6px', padding: '10px', fontSize: '0.8rem', border: '1px solid #334155' }}>
+                    <div style={{ color: '#cbd5e1', fontWeight: 500 }}>{new Date(d.at).toLocaleString()}</div>
                     <div style={{ color: '#64748b' }}>{d.repo} #{d.number}</div>
                     {d.reason && <div style={{ color: '#94a3b8', fontStyle: 'italic', marginTop: '4px' }}>{d.reason}</div>}
                   </div>
@@ -299,46 +299,46 @@ export default function GraphPage() {
           onClick={() => setSelectedNode(null)}
           style={{
             position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-            background: 'rgba(15,23,42,0.5)', zIndex: 1000,
+            background: 'rgba(10,22,40,0.65)', zIndex: 1000,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}
         >
           <div onClick={e => e.stopPropagation()} style={{
-            background: '#ffffff', borderRadius: '12px', padding: '1.5rem',
+            background: '#111d2e', borderRadius: '12px', padding: '1.5rem',
             maxWidth: '480px', width: '90%', maxHeight: '80vh', overflowY: 'auto',
-            boxShadow: '0 8px 32px rgba(37,99,235,0.15)', border: '1px solid #bfdbfe',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.4)', border: '1px solid #1e3a5f',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#1e3a5f' }}>{selectedNode.name}</h2>
+              <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#e2e8f0' }}>{selectedNode.name}</h2>
               <button onClick={() => setSelectedNode(null)} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#94a3b8' }}>x</button>
             </div>
             {selectedNode.description && (
-              <p style={{ color: '#475569', fontSize: '0.875rem', marginBottom: '1rem' }}>{selectedNode.description}</p>
+              <p style={{ color: '#94a3b8', fontSize: '0.875rem', marginBottom: '1rem' }}>{selectedNode.description}</p>
             )}
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-              <span style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: '#0369a1' }}>
+              <span style={{ background: 'rgba(56,189,248,0.12)', border: '1px solid #0e7490', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: '#38bdf8' }}>
                 {selectedNode.current_status}
               </span>
               {selectedNode.allow_dispatch && (
-                <span style={{ background: '#dbeafe', border: '1px solid #93c5fd', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: '#1d4ed8' }}>dispatchable</span>
+                <span style={{ background: 'rgba(56,189,248,0.12)', border: '1px solid #0e7490', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: '#38bdf8' }}>dispatchable</span>
               )}
             </div>
             {(selectedNode.skills ?? []).length > 0 && (
               <div style={{ marginBottom: '1rem' }}>
-                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#2563eb', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Skills</div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#38bdf8', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Skills</div>
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                   {selectedNode.skills!.map(s => (
-                    <span key={s} style={{ background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: '#475569' }}>{s}</span>
+                    <span key={s} style={{ background: 'rgba(100,116,139,0.15)', border: '1px solid #334155', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: '#94a3b8' }}>{s}</span>
                   ))}
                 </div>
               </div>
             )}
             {(selectedNode.can_dispatch ?? []).length > 0 && (
               <div>
-                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#2563eb', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Can dispatch</div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#38bdf8', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Can dispatch</div>
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                   {selectedNode.can_dispatch!.map(a => (
-                    <span key={a} style={{ background: '#fef3c7', border: '1px solid #fde68a', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: '#92400e' }}>{a}</span>
+                    <span key={a} style={{ background: 'rgba(245,158,11,0.15)', border: '1px solid #78350f', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: '#fcd34d' }}>{a}</span>
                   ))}
                 </div>
               </div>
@@ -365,15 +365,15 @@ export default function GraphPage() {
                 minZoom={0.3}
                 maxZoom={2}
               >
-                <Background color="#cbd5e1" gap={20} size={0.5} />
-                <Controls showInteractive={false} style={{ background: '#ffffff', border: '1px solid #bfdbfe', borderRadius: '6px' }} />
+                <Background color="#334155" gap={20} size={0.5} />
+                <Controls showInteractive={false} style={{ background: '#111d2e', border: '1px solid #1e3a5f', borderRadius: '6px' }} />
               </ReactFlow>
             </div>
-            <div style={{ padding: '8px 12px', borderTop: '1px solid #e2e8f0', display: 'flex', gap: '1.5rem', fontSize: '0.75rem', color: '#64748b' }}>
+            <div style={{ padding: '8px 12px', borderTop: '1px solid #334155', display: 'flex', gap: '1.5rem', fontSize: '0.75rem', color: '#64748b' }}>
               <span>━ active dispatch</span>
               <span>╌ wired (can_dispatch)</span>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: '#2563eb', color: '#fff', fontSize: '8px', lineHeight: '12px', textAlign: 'center', fontWeight: 700 }}>D</span>
+                <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: '#0e7490', color: '#fff', fontSize: '8px', lineHeight: '12px', textAlign: 'center', fontWeight: 700 }}>D</span>
                 dispatchable
               </span>
             </div>
