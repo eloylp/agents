@@ -480,13 +480,14 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		return fmt.Errorf("agent run: %w", runErr)
 	}
 
-	// Persist the agent's updated memory. An empty resp.Memory clears the entry.
-	// Memory write failure is treated as a full run failure: roll back the dedup
-	// mark so the agent can be re-dispatched or run again on the next cron tick
-	// to recover the lost state. Finalising the mark here would silently suppress
-	// retry dispatches for the full dedup window while the in-memory state stays
-	// stale.
-	if memErr := s.memory.WriteMemory(agent.Name, repo, resp.Memory); memErr != nil {
+	// Persist the agent's updated memory only if the response contains a
+	// non-empty memory field. An empty memory field means the agent did not
+	// return updated memory — preserve the existing content rather than
+	// silently wiping it. This prevents accidental data loss when an agent's
+	// structured output omits or empties the memory field.
+	if resp.Memory == "" {
+		logger.Debug().Msg("agent returned empty memory, preserving existing")
+	} else if memErr := s.memory.WriteMemory(agent.Name, repo, resp.Memory); memErr != nil {
 		recordTrace("error", memErr.Error())
 		if s.dispatcher != nil {
 			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
