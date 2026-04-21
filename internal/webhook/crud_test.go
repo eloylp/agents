@@ -1712,6 +1712,22 @@ func TestStoreReplaceRejectsEmptyAgentList(t *testing.T) {
 	}
 }
 
+func TestStoreImportRejectsInvalidMode(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/store/import?mode=replce", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rr := httptest.NewRecorder()
+	s.buildHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("invalid mode: want 400, got %d — %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "invalid mode") {
+		t.Errorf("error body should mention invalid mode, got: %s", rr.Body.String())
+	}
+}
+
 func TestStoreExportNotRegisteredWithoutStore(t *testing.T) {
 	t.Parallel()
 	cfg := crudMinimalConfig()

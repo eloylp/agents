@@ -728,10 +728,15 @@ func (s *Server) handleStoreImport(w http.ResponseWriter, r *http.Request) {
 		backends = payload.Daemon.AIBackends
 	}
 
+	mode := r.URL.Query().Get("mode")
+	if mode != "" && mode != "merge" && mode != "replace" {
+		http.Error(w, fmt.Sprintf("invalid mode %q: must be empty, \"merge\", or \"replace\"", mode), http.StatusBadRequest)
+		return
+	}
+
 	s.storeMu.Lock()
 	defer s.storeMu.Unlock()
 
-	mode := r.URL.Query().Get("mode")
 	var importErr error
 	if mode == "replace" {
 		importErr = store.ReplaceAll(s.db, payload.Agents, payload.Repos, payload.Skills, backends)
