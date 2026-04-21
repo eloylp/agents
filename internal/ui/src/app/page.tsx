@@ -290,11 +290,7 @@ export default function FleetPage() {
       .then(r => r.json())
       .then(data => { setAgents(data); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
-  }
-
-  useEffect(() => {
-    load()
-    // Load store backend names for the agent editor dropdown.
+    // Refresh store option lists so dropdowns stay current after create/delete.
     // Falls back to an empty list when the store endpoint is not available
     // (daemon started without --db), so AgentForm still shows "auto".
     fetch('/api/store/backends')
@@ -309,6 +305,10 @@ export default function FleetPage() {
       .then(r => r.ok ? r.json() : [])
       .then((data: { name: string }[]) => setAgentNames(data.map(a => a.name).sort()))
       .catch(() => { /* store not configured — no-op */ })
+  }
+
+  useEffect(() => {
+    load()
   }, [])
 
   const openEdit = async (agentName: string) => {

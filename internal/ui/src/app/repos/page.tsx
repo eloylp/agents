@@ -119,6 +119,10 @@ function BindingEditor({ binding, onChange, onRemove, agentNames }: {
               onChange={e => onChange({ ...binding, agent: e.target.value })}
             >
               <option value="">Select agent…</option>
+              {/* Include current value as a fallback option when it is not in the cached list */}
+              {binding.agent && !agentNames.includes(binding.agent) && (
+                <option key={binding.agent} value={binding.agent}>{binding.agent}</option>
+              )}
               {agentNames.map(n => <option key={n} value={n}>{n}</option>)}
             </select>
           ) : (
@@ -281,14 +285,15 @@ export default function ReposPage() {
       .then(r => r.json())
       .then((data: Repo[]) => { setRepos(data); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
-  }
-
-  useEffect(() => {
-    load()
+    // Refresh agent list so the binding dropdown stays current after agents are created/deleted.
     fetch('/api/store/agents')
       .then(r => r.ok ? r.json() : [])
       .then((data: { name: string }[]) => setAgentNames(data.map(a => a.name).sort()))
       .catch(() => { /* store not configured — no-op */ })
+  }
+
+  useEffect(() => {
+    load()
   }, [])
 
   const openCreate = () => {
