@@ -75,7 +75,7 @@ export default function MemoryPage() {
         <div>
           <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#1e3a5f' }}>Agent Memory</h1>
           <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: '4px' }}>
-            Read-only view of memory_dir · {streaming ? '🟢 watching for changes' : '🔴 disconnected'}
+            Read-only view of agent memory · {streaming ? '🟢 watching for changes' : '🔴 disconnected'}
           </p>
         </div>
       </div>
@@ -118,16 +118,16 @@ export default function MemoryPage() {
 
         {/* File viewer */}
         <Card>
-          {!selected && <p style={{ color: '#94a3b8' }}>Select a memory file to view its contents.</p>}
+          {!selected && <p style={{ color: '#94a3b8' }}>Select a memory entry to view its contents.</p>}
           {selected && loading && <p style={{ color: '#64748b' }}>Loading…</p>}
           {selected && !loading && !file && (
-            <p style={{ color: '#64748b' }}>Memory file not found. The agent may not have written any memory yet.</p>
+            <p style={{ color: '#64748b' }}>Memory not found. The agent may not have written any memory yet.</p>
           )}
           {file && (
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
                 <span style={{ fontFamily: 'monospace', fontSize: '0.8rem', color: '#2563eb' }}>
-                  {file.agent}/{file.repoKey}/MEMORY.md
+                  {file.agent}/{file.repoKey}
                 </span>
                 {file.mtime && (
                   <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
