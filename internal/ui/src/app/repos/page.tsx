@@ -24,28 +24,33 @@ const emptyRepo: Repo = { name: '', enabled: true, bindings: [] }
 // isValidCron returns true for standard 5-field cron expressions with range validation.
 // Fields: minute(0-59) hour(0-23) day-of-month(1-31) month(1-12) weekday(0-7)
 // Each field may be: * | number | range (a-b) | step (*/n or a-b/n) | list (a,b,c).
+// strictInt rejects strings that contain non-digit characters (e.g. "2-3", "2/3")
+// so that malformed tokens with extra separators are not silently accepted.
+function strictInt(s: string): number {
+  return /^\d+$/.test(s) ? parseInt(s, 10) : NaN
+}
 function cronInRange(n: number, min: number, max: number): boolean {
   return Number.isInteger(n) && n >= min && n <= max
 }
 function cronValidItem(item: string, min: number, max: number): boolean {
   if (item === '*') return true
   if (item.startsWith('*/')) {
-    const step = parseInt(item.slice(2), 10)
+    const step = strictInt(item.slice(2))
     return !isNaN(step) && step >= 1
   }
   const slashIdx = item.indexOf('/')
   if (slashIdx !== -1) {
-    const step = parseInt(item.slice(slashIdx + 1), 10)
+    const step = strictInt(item.slice(slashIdx + 1))
     if (isNaN(step) || step < 1) return false
     return cronValidItem(item.slice(0, slashIdx), min, max)
   }
   const dashIdx = item.indexOf('-')
   if (dashIdx !== -1) {
-    const lo = parseInt(item.slice(0, dashIdx), 10)
-    const hi = parseInt(item.slice(dashIdx + 1), 10)
+    const lo = strictInt(item.slice(0, dashIdx))
+    const hi = strictInt(item.slice(dashIdx + 1))
     return cronInRange(lo, min, max) && cronInRange(hi, min, max) && lo <= hi
   }
-  const n = parseInt(item, 10)
+  const n = strictInt(item)
   return cronInRange(n, min, max)
 }
 function isValidCron(expr: string): boolean {
