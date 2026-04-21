@@ -354,31 +354,75 @@ func TestHandlePullRequestClosedPayloadIncludesMerged(t *testing.T) {
 	}
 }
 
-// ─── issue_comment events ─────────────────────────────────────────────────────
+// ─── comment and review enqueue events ───────────────────────────────────────
 
-func TestHandleIssueCommentCreatedEnqueuesEvent(t *testing.T) {
+func TestHandleCommentAndReviewEventsEnqueue(t *testing.T) {
 	t.Parallel()
-	server, dc := newTestServer(testCfg(nil))
-
-	body := `{"action":"created","comment":{"body":"LGTM"},"issue":{"number":11},"repository":{"full_name":"owner/repo"},"sender":{"login":"reviewer"}}`
-	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, webhookRequest(t, "issue_comment", "d-comment", body))
-	if rr.Code != http.StatusAccepted {
-		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+	tests := []struct {
+		name        string
+		eventType   string
+		deliveryID  string
+		body        string
+		wantKind    string
+		wantNumber  int
+		wantActor   string
+		wantPayload map[string]any
+	}{
+		{
+			name:        "issue_comment.created",
+			eventType:   "issue_comment",
+			deliveryID:  "d-comment",
+			body:        `{"action":"created","comment":{"body":"LGTM"},"issue":{"number":11},"repository":{"full_name":"owner/repo"},"sender":{"login":"reviewer"}}`,
+			wantKind:    "issue_comment.created",
+			wantNumber:  11,
+			wantActor:   "reviewer",
+			wantPayload: map[string]any{"body": "LGTM"},
+		},
+		{
+			name:        "pull_request_review.submitted",
+			eventType:   "pull_request_review",
+			deliveryID:  "d-review",
+			body:        `{"action":"submitted","review":{"state":"approved","body":"LGTM"},"pull_request":{"number":9},"repository":{"full_name":"owner/repo"},"sender":{"login":"approver"}}`,
+			wantKind:    "pull_request_review.submitted",
+			wantNumber:  9,
+			wantPayload: map[string]any{"state": "approved"},
+		},
+		{
+			name:        "pull_request_review_comment.created",
+			eventType:   "pull_request_review_comment",
+			deliveryID:  "d-rc-1",
+			body:        `{"action":"created","comment":{"body":"nit: rename this"},"pull_request":{"number":7},"repository":{"full_name":"owner/repo"},"sender":{"login":"reviewer"}}`,
+			wantKind:    "pull_request_review_comment.created",
+			wantNumber:  7,
+			wantActor:   "reviewer",
+			wantPayload: map[string]any{"body": "nit: rename this"},
+		},
 	}
-
-	ev := drainEvent(t, dc)
-	if ev.Kind != "issue_comment.created" {
-		t.Errorf("kind: got %q, want %q", ev.Kind, "issue_comment.created")
-	}
-	if ev.Number != 11 {
-		t.Errorf("number: got %d, want 11", ev.Number)
-	}
-	if ev.Actor != "reviewer" {
-		t.Errorf("actor: got %q, want %q", ev.Actor, "reviewer")
-	}
-	if ev.Payload["body"] != "LGTM" {
-		t.Errorf("payload body: got %v", ev.Payload["body"])
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server, dc := newTestServer(testCfg(nil))
+			rr := httptest.NewRecorder()
+			server.handleGitHubWebhook(rr, webhookRequest(t, tc.eventType, tc.deliveryID, tc.body))
+			if rr.Code != http.StatusAccepted {
+				t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
+			}
+			ev := drainEvent(t, dc)
+			if ev.Kind != tc.wantKind {
+				t.Errorf("kind: got %q, want %q", ev.Kind, tc.wantKind)
+			}
+			if ev.Number != tc.wantNumber {
+				t.Errorf("number: got %d, want %d", ev.Number, tc.wantNumber)
+			}
+			if tc.wantActor != "" && ev.Actor != tc.wantActor {
+				t.Errorf("actor: got %q, want %q", ev.Actor, tc.wantActor)
+			}
+			for k, want := range tc.wantPayload {
+				if got := ev.Payload[k]; got != want {
+					t.Errorf("payload[%q]: got %v, want %v", k, got, want)
+				}
+			}
+		})
 	}
 }
 
@@ -422,59 +466,6 @@ func TestHandleNonTriggeringActionsIgnored(t *testing.T) {
 			}
 			assertNoEvent(t, dc)
 		})
-	}
-}
-
-// ─── pull_request_review events ───────────────────────────────────────────────
-
-func TestHandlePullRequestReviewSubmittedEnqueuesEvent(t *testing.T) {
-	t.Parallel()
-	server, dc := newTestServer(testCfg(nil))
-
-	body := `{"action":"submitted","review":{"state":"approved","body":"LGTM"},"pull_request":{"number":9},"repository":{"full_name":"owner/repo"},"sender":{"login":"approver"}}`
-	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request_review", "d-review", body))
-	if rr.Code != http.StatusAccepted {
-		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
-	}
-
-	ev := drainEvent(t, dc)
-	if ev.Kind != "pull_request_review.submitted" {
-		t.Errorf("kind: got %q, want %q", ev.Kind, "pull_request_review.submitted")
-	}
-	if ev.Number != 9 {
-		t.Errorf("number: got %d, want 9", ev.Number)
-	}
-	if ev.Payload["state"] != "approved" {
-		t.Errorf("payload state: got %v", ev.Payload["state"])
-	}
-}
-
-// ─── pull_request_review_comment events ──────────────────────────────────────
-
-func TestHandlePullRequestReviewCommentCreatedEnqueuesEvent(t *testing.T) {
-	t.Parallel()
-	server, dc := newTestServer(testCfg(nil))
-
-	body := `{"action":"created","comment":{"body":"nit: rename this"},"pull_request":{"number":7},"repository":{"full_name":"owner/repo"},"sender":{"login":"reviewer"}}`
-	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request_review_comment", "d-rc-1", body))
-	if rr.Code != http.StatusAccepted {
-		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
-	}
-
-	ev := drainEvent(t, dc)
-	if ev.Kind != "pull_request_review_comment.created" {
-		t.Errorf("kind: got %q, want %q", ev.Kind, "pull_request_review_comment.created")
-	}
-	if ev.Number != 7 {
-		t.Errorf("number: got %d, want 7", ev.Number)
-	}
-	if ev.Actor != "reviewer" {
-		t.Errorf("actor: got %q, want %q", ev.Actor, "reviewer")
-	}
-	if ev.Payload["body"] != "nit: rename this" {
-		t.Errorf("payload body: got %v", ev.Payload["body"])
 	}
 }
 
