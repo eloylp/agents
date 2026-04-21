@@ -103,9 +103,10 @@ const emptyForm: StoreAgent = {
 }
 
 function AgentForm({
-  initial, backends, onSave, onCancel, saving, error,
+  initial, isNew, backends, onSave, onCancel, saving, error,
 }: {
   initial: StoreAgent
+  isNew: boolean
   backends: string[]
   onSave: (a: StoreAgent) => void
   onCancel: () => void
@@ -129,7 +130,7 @@ function AgentForm({
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
       <div>
         <label style={labelStyle}>Name *</label>
-        <input style={inputStyle} value={form.name} onChange={e => set('name', e.target.value)} placeholder="agent-name" />
+        <input style={inputStyle} value={form.name} onChange={e => set('name', e.target.value)} placeholder="agent-name" disabled={!isNew} />
       </div>
       <div>
         <label style={labelStyle}>Backend</label>
@@ -422,6 +423,7 @@ export default function FleetPage() {
         <Modal title={modal === 'create' ? 'Create agent' : `Edit — ${selected.name}`} onClose={() => setModal(null)}>
           <AgentForm
             initial={selected}
+            isNew={modal === 'create'}
             backends={backendNames}
             onSave={saveAgent}
             onCancel={() => setModal(null)}
