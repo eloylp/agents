@@ -158,6 +158,7 @@ prompts:
       Focus: {{.Description}}
       Task: {{.Task}}
       The daemon injects your existing memory in the ## Runtime context section below.
+      {{template "agent_guidance" .}}
       Return one JSON object on stdout. Include a "memory" field with your full updated
       memory state — the daemon persists this after each run. An empty string clears it.
 
