@@ -34,7 +34,7 @@ func NewMemoryStore(baseDir string) MemoryBackend {
 }
 
 func (m *fileMemory) ReadMemory(agent, repo string) (string, error) {
-	path, err := m.memoryPath(agent, repo)
+	path, err := m.ensureDir(agent, repo)
 	if err != nil {
 		return "", err
 	}
@@ -57,13 +57,6 @@ func (m *fileMemory) WriteMemory(agent, repo, content string) error {
 		return fmt.Errorf("write memory %s: %w", path, err)
 	}
 	return nil
-}
-
-// memoryPath returns the file path for agent+repo, creating intermediate
-// directories but NOT the file itself. Returns an error if the resolved path
-// would escape the base directory.
-func (m *fileMemory) memoryPath(agent, repo string) (string, error) {
-	return m.ensureDir(agent, repo)
 }
 
 func (m *fileMemory) ensureDir(agent, repo string) (string, error) {
