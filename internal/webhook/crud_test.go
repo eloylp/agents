@@ -1437,3 +1437,111 @@ func TestStoreCRUDDeleteRepoRejectedAsLastEnabled(t *testing.T) {
 		t.Error("DELETE last enabled repo: want non-204, got 204")
 	}
 }
+
+// ── /api/store/export and /api/store/import ───────────────────────────────────
+
+func TestStoreExportReturnsYAML(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+
+	// Create an agent and repo so the export is non-trivial.
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "help",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("create agent: %d — %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+		"name": "owner/repo", "enabled": true,
+		"bindings": []map[string]any{{"agent": "coder", "labels": []string{"ai:fix"}}},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("create repo: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodGet, "/api/store/export", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("export: got %d — %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "coder") {
+		t.Errorf("export YAML missing agent name: %s", body)
+	}
+	if !strings.Contains(body, "owner/repo") {
+		t.Errorf("export YAML missing repo name: %s", body)
+	}
+	ct := rr.Header().Get("Content-Type")
+	if !strings.Contains(ct, "yaml") {
+		t.Errorf("export Content-Type want yaml, got %q", ct)
+	}
+}
+
+func TestStoreImportRoundTrip(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+
+	// Seed a repo so the initial state isn't empty (import validation requires
+	// at least one enabled repo). We import a repo in the YAML payload so this
+	// is satisfied by the import itself. Seed one first so the import can be
+	// verified as an upsert.
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "scout", "backend": "claude", "prompt": "x",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed agent: %d", rr.Code)
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+		"name": "owner/seed-repo", "enabled": true,
+		"bindings": []map[string]any{{"agent": "scout", "labels": []string{"ai:scan"}}},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed repo: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	yaml := `agents:
+  - name: imported-agent
+    backend: claude
+    prompt: imported prompt
+    skills: []
+    can_dispatch: []
+skills:
+  imported-skill:
+    prompt: imported skill prompt
+`
+	req := httptest.NewRequest(http.MethodPost, "/api/store/import", strings.NewReader(yaml))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rr := httptest.NewRecorder()
+	s.buildHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("import: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	var summary map[string]int
+	if err := json.NewDecoder(rr.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if summary["agents"] != 1 {
+		t.Errorf("import agents count: want 1, got %d", summary["agents"])
+	}
+	if summary["skills"] != 1 {
+		t.Errorf("import skills count: want 1, got %d", summary["skills"])
+	}
+
+	// Verify the imported agent appears in the list.
+	rr2 := doCRUDRequest(t, s, http.MethodGet, "/api/store/agents", nil)
+	if !strings.Contains(rr2.Body.String(), "imported-agent") {
+		t.Errorf("imported agent not in agent list: %s", rr2.Body.String())
+	}
+}
+
+func TestStoreExportNotRegisteredWithoutStore(t *testing.T) {
+	t.Parallel()
+	cfg := crudMinimalConfig()
+	dc := workflow.NewDataChannels(1)
+	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, zerolog.Nop())
+	// No store attached — routes are not registered, so the router returns 404.
+	rr := doCRUDRequest(t, s, http.MethodGet, "/api/store/export", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("export without store: want 404 (not registered), got %d", rr.Code)
+	}
+}

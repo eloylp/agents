@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"gopkg.in/yaml.v3"
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/store"
@@ -598,4 +599,125 @@ func (s *Server) handleStoreRepo(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// ── /api/store/export and /api/store/import ───────────────────────────────────
+
+// exportYAML is the wire shape for YAML export/import. It captures only the
+// four CRUD-mutable sections; daemon-level config (HTTP, log, proxy) is
+// intentionally excluded — it is not managed by the write API.
+type exportYAML struct {
+	Skills map[string]config.SkillDef        `yaml:"skills,omitempty"`
+	Agents []config.AgentDef                 `yaml:"agents,omitempty"`
+	Repos  []config.RepoDef                  `yaml:"repos,omitempty"`
+	Daemon *exportDaemonYAML                 `yaml:"daemon,omitempty"`
+}
+
+type exportDaemonYAML struct {
+	AIBackends map[string]config.AIBackendConfig `yaml:"ai_backends,omitempty"`
+}
+
+// handleStoreExport serves GET /api/store/export — returns a config.yaml
+// fragment covering the four CRUD-mutable sections (skills, agents, repos,
+// daemon.ai_backends). The API key is required because backends may contain
+// secret env values.
+func (s *Server) handleStoreExport(w http.ResponseWriter, _ *http.Request) {
+	if s.db == nil {
+		storeNotConfigured(w)
+		return
+	}
+	agents, repos, skills, backends, err := store.ReadSnapshot(s.db)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read snapshot: %v", err), http.StatusInternalServerError)
+		return
+	}
+	out := exportYAML{
+		Skills: skills,
+		Agents: agents,
+		Repos:  repos,
+	}
+	if len(backends) > 0 {
+		out.Daemon = &exportDaemonYAML{AIBackends: backends}
+	}
+	b, err := yaml.Marshal(out)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("marshal yaml: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-yaml")
+	w.Header().Set("Content-Disposition", `attachment; filename="config-export.yaml"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(b)
+}
+
+// handleStoreImport serves POST /api/store/import — accepts a YAML body in
+// the same format as handleStoreExport and upserts all entities into the DB.
+// On success it returns 200 with a JSON summary of imported counts.
+func (s *Server) handleStoreImport(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		storeNotConfigured(w)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, s.loadCfg().Daemon.HTTP.MaxBodyBytes*10)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, fmt.Sprintf("read request: %v", err), http.StatusBadRequest)
+		return
+	}
+	var payload exportYAML
+	if err := yaml.Unmarshal(body, &payload); err != nil {
+		http.Error(w, fmt.Sprintf("parse yaml: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+
+	for _, a := range payload.Agents {
+		if err := store.UpsertAgent(s.db, a); err != nil {
+			http.Error(w, fmt.Sprintf("import agent %s: %v", a.Name, err), storeErrStatus(err))
+			return
+		}
+	}
+	for name, sk := range payload.Skills {
+		if err := store.UpsertSkill(s.db, name, sk); err != nil {
+			http.Error(w, fmt.Sprintf("import skill %s: %v", name, err), storeErrStatus(err))
+			return
+		}
+	}
+	for _, repo := range payload.Repos {
+		if err := store.UpsertRepo(s.db, repo); err != nil {
+			http.Error(w, fmt.Sprintf("import repo %s: %v", repo.Name, err), storeErrStatus(err))
+			return
+		}
+	}
+	if payload.Daemon != nil {
+		for name, b := range payload.Daemon.AIBackends {
+			if err := store.UpsertBackend(s.db, name, b); err != nil {
+				http.Error(w, fmt.Sprintf("import backend %s: %v", name, err), storeErrStatus(err))
+				return
+			}
+		}
+	}
+	if err := s.reloadCron(); err != nil {
+		s.logger.Error().Err(err).Msg("store import: cron reload failed")
+		http.Error(w, fmt.Sprintf("cron reload: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	backendsCount := 0
+	if payload.Daemon != nil {
+		backendsCount = len(payload.Daemon.AIBackends)
+	}
+	writeJSON(w, http.StatusOK, map[string]int{
+		"agents":   len(payload.Agents),
+		"skills":   len(payload.Skills),
+		"repos":    len(payload.Repos),
+		"backends": backendsCount,
+	})
 }
