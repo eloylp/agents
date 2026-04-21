@@ -17,8 +17,36 @@ interface Repo {
   bindings: Binding[]
 }
 
-const emptyBinding: Binding = { agent: '', labels: [], events: [], cron: '', enabled: true }
+// TriggerBinding is a binding with the agent field omitted (agent is tracked by the group).
+type TriggerBinding = Omit<Binding, 'agent'>
+
+// AgentGroup groups one agent's trigger bindings together.
+type AgentGroup = {
+  agent: string
+  triggers: TriggerBinding[]
+}
+
+const emptyTrigger: TriggerBinding = { labels: [], events: [], cron: '', enabled: true }
 const emptyRepo: Repo = { name: '', enabled: true, bindings: [] }
+
+function bindingsToGroups(bindings: Binding[]): AgentGroup[] {
+  const groups: AgentGroup[] = []
+  const idx = new Map<string, number>()
+  for (const b of bindings) {
+    const { agent, ...trigger } = b
+    if (!idx.has(agent)) {
+      idx.set(agent, groups.length)
+      groups.push({ agent, triggers: [trigger] })
+    } else {
+      groups[idx.get(agent)!].triggers.push(trigger)
+    }
+  }
+  return groups
+}
+
+function groupsToBindings(groups: AgentGroup[]): Binding[] {
+  return groups.flatMap(g => g.triggers.map(t => ({ ...t, agent: g.agent })))
+}
 
 // isValidCron returns true for standard 5-field cron expressions with range validation.
 // Fields: minute(0-59) hour(0-23) day-of-month(1-31) month(1-12) weekday(0-7)
@@ -72,90 +100,115 @@ function bindingTrigger(b: Binding): string {
   return '—'
 }
 
-function BindingEditor({ binding, onChange, onRemove }: {
-  binding: Binding
-  onChange: (b: Binding) => void
+// TriggerEditor edits one trigger row (type + value + enabled + delete).
+// The agent name is managed by the parent AgentBindingGroup.
+function TriggerEditor({ trigger, onChange, onRemove }: {
+  trigger: TriggerBinding
+  onChange: (t: TriggerBinding) => void
   onRemove: () => void
 }) {
   const [triggerType, setTriggerType] = useState<'labels' | 'events' | 'cron'>(
-    binding.cron ? 'cron' : binding.events && binding.events.length > 0 ? 'events' : 'labels'
+    trigger.cron ? 'cron' : trigger.events && trigger.events.length > 0 ? 'events' : 'labels'
   )
 
   const setType = (t: 'labels' | 'events' | 'cron') => {
     setTriggerType(t)
-    onChange({ ...binding, labels: [], events: [], cron: '' })
+    onChange({ labels: [], events: [], cron: '', enabled: trigger.enabled })
   }
 
   return (
-    <div style={{ border: '1px solid #e2e8f0', borderRadius: '6px', padding: '0.75rem', background: '#f8fafc', marginBottom: '0.5rem' }}>
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
-        <div style={{ flex: 1 }}>
-          <label style={labelStyle}>Agent</label>
-          <input
-            style={inputStyle}
-            value={binding.agent}
-            onChange={e => onChange({ ...binding, agent: e.target.value })}
-            placeholder="agent-name"
-          />
-        </div>
-        <div style={{ flex: 1 }}>
-          <label style={labelStyle}>Trigger type</label>
-          <select style={inputStyle} value={triggerType} onChange={e => setType(e.target.value as 'labels' | 'events' | 'cron')}>
-            <option value="labels">labels</option>
-            <option value="events">events</option>
-            <option value="cron">cron</option>
-          </select>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'flex-end' }}>
-          <button onClick={onRemove} style={{ padding: '4px 8px', border: '1px solid #fecaca', background: '#fff5f5', borderRadius: '5px', cursor: 'pointer', fontSize: '0.75rem', color: '#dc2626' }}>
-            ✕
-          </button>
-        </div>
+    <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'flex-start', marginBottom: '0.4rem' }}>
+      <div style={{ width: '80px', flexShrink: 0 }}>
+        <select
+          style={{ ...inputStyle, fontSize: '0.78rem', padding: '6px 4px' }}
+          value={triggerType}
+          onChange={e => setType(e.target.value as 'labels' | 'events' | 'cron')}
+        >
+          <option value="labels">labels</option>
+          <option value="events">events</option>
+          <option value="cron">cron</option>
+        </select>
       </div>
-      {triggerType === 'labels' && (
-        <div>
-          <label style={labelStyle}>Labels (comma-separated)</label>
+      <div style={{ flex: 1 }}>
+        {triggerType === 'labels' && (
           <input
             style={inputStyle}
-            value={(binding.labels ?? []).join(', ')}
-            onChange={e => onChange({ ...binding, labels: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
-            placeholder="ai:review:arch-reviewer"
+            value={(trigger.labels ?? []).join(', ')}
+            onChange={e => onChange({ ...trigger, labels: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+            placeholder="ai:review:pr-reviewer"
           />
-        </div>
-      )}
-      {triggerType === 'events' && (
-        <div>
-          <label style={labelStyle}>Events (comma-separated)</label>
+        )}
+        {triggerType === 'events' && (
           <input
             style={inputStyle}
-            value={(binding.events ?? []).join(', ')}
-            onChange={e => onChange({ ...binding, events: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+            value={(trigger.events ?? []).join(', ')}
+            onChange={e => onChange({ ...trigger, events: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
             placeholder="pull_request.opened, push"
           />
-        </div>
-      )}
-      {triggerType === 'cron' && (
-        <div>
-          <label style={labelStyle}>Cron expression</label>
-          <input
-            style={{ ...inputStyle, borderColor: (binding.cron && !isValidCron(binding.cron)) ? '#f87171' : '#bfdbfe' }}
-            value={binding.cron ?? ''}
-            onChange={e => onChange({ ...binding, cron: e.target.value })}
-            placeholder="0 9 * * *"
-          />
-          {binding.cron && !isValidCron(binding.cron) && (
-            <p style={{ color: '#f87171', fontSize: '0.75rem', marginTop: '3px' }}>
-              Invalid cron expression — expected 5 fields: minute hour day month weekday (e.g. 0 9 * * 1-5)
-            </p>
-          )}
-        </div>
-      )}
-      <div style={{ marginTop: '0.5rem' }}>
-        <label style={{ fontSize: '0.82rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
-          <input type="checkbox" checked={binding.enabled !== false} onChange={e => onChange({ ...binding, enabled: e.target.checked })} />
-          Enabled
-        </label>
+        )}
+        {triggerType === 'cron' && (
+          <div>
+            <input
+              style={{ ...inputStyle, borderColor: (trigger.cron && !isValidCron(trigger.cron)) ? '#f87171' : '#bfdbfe' }}
+              value={trigger.cron ?? ''}
+              onChange={e => onChange({ ...trigger, cron: e.target.value })}
+              placeholder="0 9 * * *"
+            />
+            {trigger.cron && !isValidCron(trigger.cron) && (
+              <p style={{ color: '#f87171', fontSize: '0.75rem', marginTop: '3px' }}>
+                Invalid cron — expected 5 fields: minute hour day month weekday (e.g. 0 9 * * 1-5)
+              </p>
+            )}
+          </div>
+        )}
       </div>
+      <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.78rem', color: '#64748b', cursor: 'pointer', flexShrink: 0, paddingTop: '7px' }}>
+        <input type="checkbox" checked={trigger.enabled !== false} onChange={e => onChange({ ...trigger, enabled: e.target.checked })} />
+        on
+      </label>
+      <button
+        onClick={onRemove}
+        style={{ padding: '4px 7px', border: '1px solid #fecaca', background: '#fff5f5', borderRadius: '5px', cursor: 'pointer', fontSize: '0.72rem', color: '#dc2626', flexShrink: 0 }}
+      >
+        ✕
+      </button>
+    </div>
+  )
+}
+
+// AgentBindingGroup shows all trigger bindings for one agent.
+function AgentBindingGroup({ group, onChange, onAddTrigger, onRemoveTrigger }: {
+  group: AgentGroup
+  onChange: (g: AgentGroup) => void
+  onAddTrigger: () => void
+  onRemoveTrigger: (i: number) => void
+}) {
+  const updateTrigger = (i: number, t: TriggerBinding) => {
+    const triggers = [...group.triggers]
+    triggers[i] = t
+    onChange({ ...group, triggers })
+  }
+
+  return (
+    <div style={{ border: '1px solid #bfdbfe', borderRadius: '8px', padding: '0.75rem', marginBottom: '0.65rem', background: '#fafcff' }}>
+      <div style={{ marginBottom: '0.5rem' }}>
+        <label style={labelStyle}>Agent</label>
+        <input
+          style={{ ...inputStyle, fontWeight: 600 }}
+          value={group.agent}
+          onChange={e => onChange({ ...group, agent: e.target.value })}
+          placeholder="agent-name"
+        />
+      </div>
+      {group.triggers.map((t, i) => (
+        <TriggerEditor key={i} trigger={t} onChange={t2 => updateTrigger(i, t2)} onRemove={() => onRemoveTrigger(i)} />
+      ))}
+      <button
+        onClick={onAddTrigger}
+        style={{ padding: '2px 9px', borderRadius: '5px', border: '1px solid #bfdbfe', background: '#eff6ff', cursor: 'pointer', fontSize: '0.73rem', color: '#2563eb', marginTop: '0.15rem' }}
+      >
+        + Add trigger
+      </button>
     </div>
   )
 }
@@ -168,17 +221,39 @@ function RepoForm({ initial, isNew, onSave, onCancel, saving, error }: {
   saving: boolean
   error: string
 }) {
-  const [form, setForm] = useState<Repo>(initial)
+  const [form, setForm] = useState<{ name: string; enabled: boolean }>({ name: initial.name, enabled: initial.enabled })
+  const [groups, setGroups] = useState<AgentGroup[]>(() => bindingsToGroups(initial.bindings))
 
-  const addBinding = () => setForm(f => ({ ...f, bindings: [...f.bindings, { ...emptyBinding }] }))
-  const updateBinding = (i: number, b: Binding) => setForm(f => {
-    const bindings = [...f.bindings]
-    bindings[i] = b
-    return { ...f, bindings }
+  const addGroup = () => setGroups(gs => [...gs, { agent: '', triggers: [{ ...emptyTrigger }] }])
+
+  const updateGroup = (i: number, g: AgentGroup) => setGroups(gs => {
+    const ng = [...gs]
+    ng[i] = g
+    return ng
   })
-  const removeBinding = (i: number) => setForm(f => ({ ...f, bindings: f.bindings.filter((_, idx) => idx !== i) }))
 
-  const hasCronError = form.bindings.some(b => !!b.cron && !isValidCron(b.cron))
+  const addTrigger = (gi: number) => setGroups(gs => {
+    const ng = [...gs]
+    ng[gi] = { ...ng[gi], triggers: [...ng[gi].triggers, { ...emptyTrigger }] }
+    return ng
+  })
+
+  const removeTrigger = (gi: number, ti: number) => setGroups(gs => {
+    const ng = [...gs]
+    const triggers = ng[gi].triggers.filter((_, idx) => idx !== ti)
+    if (triggers.length === 0) {
+      // Auto-remove the group when its last trigger is deleted.
+      return gs.filter((_, idx) => idx !== gi)
+    }
+    ng[gi] = { ...ng[gi], triggers }
+    return ng
+  })
+
+  const hasCronError = groups.some(g => g.triggers.some(t => !!t.cron && !isValidCron(t.cron)))
+
+  const handleSave = () => {
+    onSave({ name: form.name, enabled: form.enabled, bindings: groupsToBindings(groups) })
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
@@ -199,17 +274,23 @@ function RepoForm({ initial, isNew, onSave, onCancel, saving, error }: {
 
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
-          <label style={{ ...labelStyle, marginBottom: 0 }}>Bindings</label>
+          <label style={{ ...labelStyle, marginBottom: 0 }}>Agent bindings</label>
           <button
-            onClick={addBinding}
+            onClick={addGroup}
             style={{ padding: '2px 10px', borderRadius: '5px', border: '1px solid #bfdbfe', background: '#eff6ff', cursor: 'pointer', fontSize: '0.75rem', color: '#2563eb' }}
           >
-            + Add binding
+            + Add agent binding
           </button>
         </div>
-        {form.bindings.length === 0 && <p style={{ color: '#94a3b8', fontSize: '0.8rem' }}>No bindings yet.</p>}
-        {form.bindings.map((b, i) => (
-          <BindingEditor key={i} binding={b} onChange={nb => updateBinding(i, nb)} onRemove={() => removeBinding(i)} />
+        {groups.length === 0 && <p style={{ color: '#94a3b8', fontSize: '0.8rem' }}>No bindings yet.</p>}
+        {groups.map((g, gi) => (
+          <AgentBindingGroup
+            key={gi}
+            group={g}
+            onChange={ng => updateGroup(gi, ng)}
+            onAddTrigger={() => addTrigger(gi)}
+            onRemoveTrigger={ti => removeTrigger(gi, ti)}
+          />
         ))}
       </div>
 
@@ -219,7 +300,7 @@ function RepoForm({ initial, isNew, onSave, onCancel, saving, error }: {
           Cancel
         </button>
         <button
-          onClick={() => onSave(form)}
+          onClick={handleSave}
           disabled={saving || !form.name.trim() || hasCronError}
           style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #93c5fd', background: '#2563eb', color: '#fff', cursor: (saving || hasCronError) ? 'not-allowed' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
