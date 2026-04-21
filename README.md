@@ -456,7 +456,6 @@ The compose file expects:
 | `config.yaml` | `/etc/agents/config.yaml` (read-only) | Main daemon config |
 | `prompts/` | `/etc/agents/prompts` (read-only) | Prompt files referenced by agent `prompt_file:` |
 | `skills/` | `/etc/agents/skills` (read-only) | Skill files referenced by skill `prompt_file:` |
-| `response-schema.json` | `/etc/agents/response-schema.json` (read-only) | Codex structured output schema |
 | `~/.claude` | `/home/agents/.claude` | Claude Code session data |
 | `~/.claude.json` | `/home/agents/.claude.json` | Claude Code main config |
 | `~/.codex` | `/home/agents/.codex` | Codex configuration |

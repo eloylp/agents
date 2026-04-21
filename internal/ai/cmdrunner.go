@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -181,43 +182,69 @@ const separatorRunes = 2
 //     This matches the previous single-prompt behaviour and documents the
 //     limitation that codex has no native system channel.
 func (r *CommandRunner) buildDelivery(req Request) (args []string, stdin string) {
-	if strings.HasPrefix(r.backendName, "claude") && req.System != "" {
-		// Deliver system content via --append-system-prompt; user via stdin.
-		// Build a new slice so concurrent calls do not share the underlying
-		// array from r.args.
-		args = make([]string, 0, len(r.args)+2)
-		args = append(args, r.args...)
-
-		// Enforce the budget on the same logical combined prompt as every
-		// other backend (System + "\n\n" + User), then re-split the
-		// truncated result for transport.  This guarantees both paths
-		// truncate at the identical logical boundary even when the cut
-		// falls inside System or within the separator.
-		combined := combineSystemUser(req.System, req.User)
-		truncated := truncateString(combined, r.maxPromptChars)
-		truncatedRunes := utf8.RuneCountInString(truncated)
-		systemRunes := utf8.RuneCountInString(req.System)
-
-		// userStartInCombined is where user content begins in the combined
-		// string (after System + the two-rune "\n\n" separator).
-		userStartInCombined := systemRunes + separatorRunes
-
-		if truncatedRunes <= userStartInCombined {
-			// Truncation cut within System or the separator; no user
-			// content survives.  Pass the truncated prefix as the system
-			// arg so both backends deliver the same logical content.
-			args = append(args, "--append-system-prompt", truncated)
-			stdin = ""
-			return args, stdin
-		}
-
-		// System fits fully; extract user from after the separator.
-		args = append(args, "--append-system-prompt", req.System)
-		stdin = string([]rune(truncated)[userStartInCombined:])
-		return args, stdin
+	if strings.HasPrefix(r.backendName, "claude") {
+		return r.buildClaudeDelivery(req)
 	}
-	// Fallback: concatenate system + user with the same separator rule, send on stdin.
+	if r.command == "codex" {
+		return r.buildCodexDelivery(req)
+	}
 	return r.args, truncateString(combineSystemUser(req.System, req.User), r.maxPromptChars)
+}
+
+// buildClaudeDelivery delivers system content via --append-system-prompt and
+// user content via stdin. It also appends --output-format json --json-schema
+// using the embedded response schema so config files don't carry inline JSON.
+func (r *CommandRunner) buildClaudeDelivery(req Request) (args []string, stdin string) {
+	args = make([]string, 0, len(r.args)+6)
+	args = append(args, r.args...)
+	if !slices.Contains(args, "--json-schema") {
+		args = append(args, "--output-format", "json", "--json-schema", ResponseSchemaString())
+	}
+
+	if req.System == "" {
+		return args, truncateString(req.User, r.maxPromptChars)
+	}
+
+	// Enforce the budget on the same logical combined prompt as every
+	// other backend (System + "\n\n" + User), then re-split the
+	// truncated result for transport.  This guarantees both paths
+	// truncate at the identical logical boundary even when the cut
+	// falls inside System or within the separator.
+	combined := combineSystemUser(req.System, req.User)
+	truncated := truncateString(combined, r.maxPromptChars)
+	truncatedRunes := utf8.RuneCountInString(truncated)
+	systemRunes := utf8.RuneCountInString(req.System)
+
+	// userStartInCombined is where user content begins in the combined
+	// string (after System + the two-rune "\n\n" separator).
+	userStartInCombined := systemRunes + separatorRunes
+
+	if truncatedRunes <= userStartInCombined {
+		args = append(args, "--append-system-prompt", truncated)
+		return args, ""
+	}
+
+	args = append(args, "--append-system-prompt", req.System)
+	stdin = string([]rune(truncated)[userStartInCombined:])
+	return args, stdin
+}
+
+// buildCodexDelivery concatenates system + user on stdin and appends
+// --output-schema pointing to the embedded response schema temp file.
+func (r *CommandRunner) buildCodexDelivery(req Request) (args []string, stdin string) {
+	combinedStdin := truncateString(combineSystemUser(req.System, req.User), r.maxPromptChars)
+	if slices.Contains(r.args, "--output-schema") {
+		return r.args, combinedStdin
+	}
+	schemaPath, err := ResponseSchemaPath()
+	if err != nil {
+		r.logger.Error().Err(err).Msg("failed to materialize embedded response schema")
+		return r.args, combinedStdin
+	}
+	args = make([]string, 0, len(r.args)+2)
+	args = append(args, r.args...)
+	args = append(args, "--output-schema", schemaPath)
+	return args, combinedStdin
 }
 
 // combineSystemUser joins system and user content with a blank-line separator,

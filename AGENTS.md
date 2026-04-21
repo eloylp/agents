@@ -44,7 +44,7 @@ prompts/                        # prompt files referenced by agent prompt_file:
 skills/                         # skill files referenced by skill prompt_file:
 docs/local-models.md            # full recipe for running the fleet on a local LLM
 config.example.yaml             # shipping example, kept in sync with config schema
-response-schema.json            # JSON schema for structured output (codex --output-schema)
+internal/ai/response-schema.json # embedded JSON schema for structured output (codex --output-schema)
 ```
 
 ## Conceptual model
@@ -72,7 +72,7 @@ These constraints are load-bearing. Read them before changing the listed areas.
 - **The daemon never writes to GitHub directly.** All writes go through the AI backend's MCP tools. If you introduce a new feature that seems to need a direct GitHub API call, raise it in an issue first — there's almost always a way to keep the daemon read-only.
 - **Agents must not mention external GitHub users.** Do NOT request reviews from, assign to, or @mention any GitHub user in PRs, comments, or issue descriptions. All review routing is handled by the daemon's dispatch system. Unsolicited pings to external contributors from an automated agent are a trust and reputation risk — the GitHub account could be flagged. This rule applies to every agent prompt.
 - **Prompts are never logged in plaintext.** Only their salted hash and length are recorded. If you add new log lines near prompt handling, preserve this property.
-- **Structured output is enforced at the CLI level.** Claude uses `--output-format json --json-schema <schema>` which wraps stdout in a CLI envelope; `extractStructuredOutput` in cmdrunner.go unwraps the `structured_output` field. Codex uses `--output-schema <file>` which constrains model output directly. Both paths feed the same `Response` struct. When changing the response contract, update `response-schema.json` alongside `internal/ai/types.go`.
+- **Structured output is enforced at the CLI level.** Claude uses `--output-format json --json-schema <schema>` which wraps stdout in a CLI envelope; `extractStructuredOutput` in cmdrunner.go unwraps the `structured_output` field. Codex uses `--output-schema <file>` — the daemon embeds `internal/ai/response-schema.json` in the binary and appends the flag automatically when the command is `codex`. Both paths feed the same `Response` struct. When changing the response contract, update `internal/ai/response-schema.json` alongside `internal/ai/types.go`.
 - **The runner contract is stdin-in, single-JSON-object-out.**
   - `internal/ai/cmdrunner.go` sends the composed prompt on stdin and parses the last top-level JSON object from stdout.
   - Agents emit `{"summary": "...", "artifacts": [...], "dispatch": [...], "memory": "..."}`. `dispatch` and `memory` are optional fields but all four keys are present in the schema. A missing JSON object, an empty response, or a response where `summary`, `artifacts`, and `dispatch` are all empty fails the run with a clear error.
@@ -92,7 +92,7 @@ When making common classes of changes, update all of these at once:
 | Config schema (types in `internal/config/config.go`) | Validation, `normalize()`, defaults, `config.example.yaml`, README, tests in `internal/config/config_test.go` |
 | New webhook event kind | Decoder in `internal/webhook/server.go`, acceptance in `internal/workflow/engine.go`, README event table, validation in `internal/config/config.go` |
 | New AI backend behavior | `internal/ai/cmdrunner.go`, allowlist if new env vars, backend registration in `cmd/agents/main.go`, config example |
-| Agent prompt contract | Prompt templates in `prompts/`, runner parser in `internal/ai/cmdrunner.go`, `internal/ai/types.go`, `response-schema.json`, AGENTS.md runner-contract section, tests |
+| Agent prompt contract | Prompt templates in `prompts/`, runner parser in `internal/ai/cmdrunner.go`, `internal/ai/types.go`, `internal/ai/response-schema.json`, AGENTS.md runner-contract section, tests |
 | Memory contract | `internal/autonomous/memory.go` (MemoryBackend interface), `internal/store/store.go` (SQLite path), `cmd/agents/main.go` (wiring), agent prompts "Memory hygiene" sections, `internal/ai/types.go` |
 | Dispatch semantics | `internal/workflow/dispatch.go` (runtime), `internal/config/config.go` (load-time validation), agent response schema in `internal/ai/types.go`, README dispatch section, all prompt "Response format" sections, tests on both paths |
 | SQLite store schema | `internal/store/migrations/`, `internal/store/store.go`, `internal/store/crud.go`, `internal/webhook/crud.go`, tests |

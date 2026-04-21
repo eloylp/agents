@@ -204,13 +204,11 @@ Not everything is sunshine. Things we learned the hard way:
 
 ### Structured output enforcement
 
-Both backends enforce a JSON response schema at the CLI level:
+Both backends enforce a JSON response schema at the CLI level. The daemon embeds the schema (`internal/ai/response-schema.json`) in the binary and appends the appropriate flags automatically — no config or file mounts needed:
 
-- **Claude**: `--output-format json --json-schema '<schema>'` — the CLI wraps stdout in an envelope; the daemon extracts `structured_output` from it.
-- **Codex**: `--output-schema /etc/agents/response-schema.json` — model output is schema-constrained directly.
-- **Local models via proxy**: structured output is NOT enforced at the CLI level (the proxy passes through whatever the upstream returns). The daemon falls back to `extractJSON` (find last `{...}` in stdout).
-
-When setting up a `claude_local` backend, include the same `--output-format json --json-schema` flags as the hosted `claude` backend to get structured output enforcement.
+- **Claude** (including `claude_local`): `--output-format json --json-schema '<schema>'` appended automatically. The CLI wraps stdout in an envelope; the daemon extracts `structured_output` from it.
+- **Codex**: `--output-schema <temp-file>` appended automatically. Model output is schema-constrained directly.
+- **Local models via proxy**: structured output enforcement works the same as hosted Claude (the `claude_local` backend gets the flags automatically). The proxy passes the response through; what matters is whether the local model respects the schema.
 
 ### Capability gap on action-taking agents
 
