@@ -19,6 +19,7 @@ type stubRunner struct {
 	mu        sync.Mutex
 	calls     int
 	workflows []string
+	memory    string
 }
 
 func (s *stubRunner) Run(_ context.Context, req ai.Request) (ai.Response, error) {
@@ -26,7 +27,7 @@ func (s *stubRunner) Run(_ context.Context, req ai.Request) (ai.Response, error)
 	defer s.mu.Unlock()
 	s.calls++
 	s.workflows = append(s.workflows, req.Workflow)
-	return ai.Response{}, nil
+	return ai.Response{Memory: s.memory}, nil
 }
 
 // blockingRunner signals on ready when a run starts, then blocks until block is closed.
@@ -1705,7 +1706,7 @@ func TestSchedulerWriteMemoryFailureFailsRun(t *testing.T) {
 			CanDispatch: []string{"reviewer"}, // notifier may dispatch reviewer
 		})
 	})
-	runner := &stubRunner{}
+	runner := &stubRunner{memory: "updated memory"}
 	mem := &errMemory{dir: t.TempDir(), err: writeErr}
 
 	q := &fakeQueue{}
@@ -1780,7 +1781,7 @@ func TestSchedulerSpanEndCapturedAfterPostRunSteps(t *testing.T) {
 	const delay = 50 * time.Millisecond
 
 	cfg := baseCfg(nil)
-	runner := &stubRunner{}
+	runner := &stubRunner{memory: "updated memory"}
 	mem := &slowMemory{inner: NewMemoryStore(t.TempDir()), delay: delay}
 
 	traceRec := &stubTraceRecorder{}
