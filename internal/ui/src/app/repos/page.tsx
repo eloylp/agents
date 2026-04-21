@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
+import BadgePicker from '@/components/BadgePicker'
 
 interface Binding {
   agent: string
@@ -28,6 +29,15 @@ type AgentGroup = {
 
 const emptyTrigger: TriggerBinding = { labels: [], events: [], cron: '', enabled: true }
 const emptyRepo: Repo = { name: '', enabled: true, bindings: [] }
+
+const SUPPORTED_EVENTS = [
+  'issues.labeled', 'issues.opened', 'issues.edited', 'issues.reopened', 'issues.closed',
+  'pull_request.labeled', 'pull_request.opened', 'pull_request.synchronize',
+  'pull_request.ready_for_review', 'pull_request.closed',
+  'issue_comment.created',
+  'pull_request_review.submitted', 'pull_request_review_comment.created',
+  'push',
+]
 
 function bindingsToGroups(bindings: Binding[]): AgentGroup[] {
   const groups: AgentGroup[] = []
@@ -139,11 +149,11 @@ function TriggerEditor({ trigger, onChange, onRemove }: {
           />
         )}
         {triggerType === 'events' && (
-          <input
-            style={inputStyle}
-            value={(trigger.events ?? []).join(', ')}
-            onChange={e => onChange({ ...trigger, events: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
-            placeholder="pull_request.opened, push"
+          <BadgePicker
+            options={SUPPORTED_EVENTS}
+            selected={trigger.events ?? []}
+            onChange={v => onChange({ ...trigger, events: v })}
+            placeholder="Add event…"
           />
         )}
         {triggerType === 'cron' && (
@@ -177,8 +187,9 @@ function TriggerEditor({ trigger, onChange, onRemove }: {
 }
 
 // AgentBindingGroup shows all trigger bindings for one agent.
-function AgentBindingGroup({ group, onChange, onAddTrigger, onRemoveTrigger }: {
+function AgentBindingGroup({ group, agentNames, onChange, onAddTrigger, onRemoveTrigger }: {
   group: AgentGroup
+  agentNames: string[]
   onChange: (g: AgentGroup) => void
   onAddTrigger: () => void
   onRemoveTrigger: (i: number) => void
@@ -193,12 +204,23 @@ function AgentBindingGroup({ group, onChange, onAddTrigger, onRemoveTrigger }: {
     <div style={{ border: '1px solid #bfdbfe', borderRadius: '8px', padding: '0.75rem', marginBottom: '0.65rem', background: '#fafcff' }}>
       <div style={{ marginBottom: '0.5rem' }}>
         <label style={labelStyle}>Agent</label>
-        <input
-          style={{ ...inputStyle, fontWeight: 600 }}
-          value={group.agent}
-          onChange={e => onChange({ ...group, agent: e.target.value })}
-          placeholder="agent-name"
-        />
+        {agentNames.length > 0 ? (
+          <select
+            style={{ ...inputStyle, fontWeight: 600 }}
+            value={group.agent}
+            onChange={e => onChange({ ...group, agent: e.target.value })}
+          >
+            <option value="">Select agent…</option>
+            {agentNames.map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+        ) : (
+          <input
+            style={{ ...inputStyle, fontWeight: 600 }}
+            value={group.agent}
+            onChange={e => onChange({ ...group, agent: e.target.value })}
+            placeholder="agent-name"
+          />
+        )}
       </div>
       {group.triggers.map((t, i) => (
         <TriggerEditor key={i} trigger={t} onChange={t2 => updateTrigger(i, t2)} onRemove={() => onRemoveTrigger(i)} />
@@ -213,9 +235,10 @@ function AgentBindingGroup({ group, onChange, onAddTrigger, onRemoveTrigger }: {
   )
 }
 
-function RepoForm({ initial, isNew, onSave, onCancel, saving, error }: {
+function RepoForm({ initial, isNew, agentNames, onSave, onCancel, saving, error }: {
   initial: Repo
   isNew: boolean
+  agentNames: string[]
   onSave: (r: Repo) => void
   onCancel: () => void
   saving: boolean
@@ -287,6 +310,7 @@ function RepoForm({ initial, isNew, onSave, onCancel, saving, error }: {
           <AgentBindingGroup
             key={gi}
             group={g}
+            agentNames={agentNames}
             onChange={ng => updateGroup(gi, ng)}
             onAddTrigger={() => addTrigger(gi)}
             onRemoveTrigger={ti => removeTrigger(gi, ti)}
@@ -321,6 +345,7 @@ export default function ReposPage() {
   const [deleteTarget, setDeleteTarget] = useState('')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [agentNames, setAgentNames] = useState<string[]>([])
 
   const load = () => {
     setLoading(true)
@@ -330,7 +355,13 @@ export default function ReposPage() {
       .catch(e => { setError(String(e)); setLoading(false) })
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    fetch('/api/store/agents')
+      .then(r => r.ok ? r.json() : [])
+      .then((data: { name: string }[]) => setAgentNames(data.map(a => a.name)))
+      .catch(() => { /* store not configured — no-op */ })
+  }, [])
 
   const openCreate = () => {
     setSaveError('')
@@ -475,6 +506,7 @@ export default function ReposPage() {
           <RepoForm
             initial={selected}
             isNew={modal === 'create'}
+            agentNames={agentNames}
             onSave={saveRepo}
             onCancel={() => setModal(null)}
             saving={saving}
