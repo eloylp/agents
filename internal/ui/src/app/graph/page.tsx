@@ -47,17 +47,17 @@ interface AgentInfo {
 function AgentNode({ data }: NodeProps) {
   const d = data as { label: string; status: string; description: string; dispatchable: boolean; skills: string[] }
   const statusColors: Record<string, { bg: string; border: string; icon: string }> = {
-    running: { bg: 'rgba(52,211,153,0.15)', border: '#34d399', icon: '⚡' },
-    error:   { bg: 'rgba(248,113,113,0.15)', border: '#f87171', icon: '⚠' },
-    idle:    { bg: 'rgba(56,189,248,0.12)', border: '#38bdf8', icon: '●' },
+    running: { bg: 'var(--success-bg)', border: 'var(--success)', icon: '⚡' },
+    error:   { bg: 'var(--error-bg)', border: 'var(--text-danger)', icon: '⚠' },
+    idle:    { bg: 'var(--accent-bg)', border: 'var(--accent)', icon: '●' },
   }
   const c = statusColors[d.status] ?? statusColors.idle
 
   return (
     <>
-      <Handle type="target" position={Position.Top} style={{ background: '#94a3b8', border: 'none', width: 6, height: 6 }} />
+      <Handle type="target" position={Position.Top} style={{ background: 'var(--text-faint)', border: 'none', width: 6, height: 6 }} />
       <div style={{
-        background: '#111d2e',
+        background: 'var(--bg-card)',
         border: `2px solid ${c.border}`,
         borderRadius: '12px',
         padding: '10px 20px',
@@ -70,26 +70,26 @@ function AgentNode({ data }: NodeProps) {
           <div style={{
             position: 'absolute', top: -8, right: -8,
             width: 18, height: 18, borderRadius: '50%',
-            background: '#0e7490', color: '#fff',
+            background: 'var(--btn-primary-bg)', color: '#fff',
             fontSize: '10px', lineHeight: '18px', textAlign: 'center',
             fontWeight: 700,
           }}>D</div>
         )}
         <div style={{ fontSize: '11px', marginBottom: '2px' }}>{c.icon}</div>
         <div style={{
-          fontWeight: 700, fontSize: '13px', color: '#cbd5e1',
+          fontWeight: 700, fontSize: '13px', color: 'var(--text)',
           whiteSpace: 'nowrap',
         }}>
           {d.label}
         </div>
-        <div style={{ fontSize: '10px', color: '#64748b', marginTop: '2px' }}>{d.status}</div>
+        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{d.status}</div>
         {d.skills.length > 0 && (
-          <div style={{ fontSize: '9px', color: '#94a3b8', marginTop: '4px' }}>
+          <div style={{ fontSize: '9px', color: 'var(--text-faint)', marginTop: '4px' }}>
             {d.skills.join(' · ')}
           </div>
         )}
       </div>
-      <Handle type="source" position={Position.Bottom} style={{ background: '#94a3b8', border: 'none', width: 6, height: 6 }} />
+      <Handle type="source" position={Position.Bottom} style={{ background: 'var(--text-faint)', border: 'none', width: 6, height: 6 }} />
     </>
   )
 }
@@ -190,7 +190,7 @@ export default function GraphPage() {
       animated: e.isActive && e.count > 0,
       interactionWidth: 40,
       style: {
-        stroke: e.isActive ? '#38bdf8' : '#1e3a5f',
+        stroke: e.isActive ? 'var(--accent)' : 'var(--border)',
         strokeWidth: e.isActive ? 2.5 : 1.5,
         strokeDasharray: e.isActive ? undefined : '6 4',
         cursor: 'pointer',
@@ -236,17 +236,17 @@ export default function GraphPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e2e8f0' }}>Agent Interaction Graph</h1>
-          <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: '4px' }}>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-heading)' }}>Agent Interaction Graph</h1>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '4px' }}>
             {agents.length} agents · {wiringInfo.active} active / {wiringInfo.total} wired edges
           </p>
         </div>
-        <button onClick={load} style={{ background: '#111d2e', border: '1px solid #1e3a5f', color: '#38bdf8', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500 }}>
+        <button onClick={load} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--accent)', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500 }}>
           Refresh
         </button>
       </div>
 
-      {loading && <p style={{ color: '#64748b' }}>Loading...</p>}
+      {loading && <p style={{ color: 'var(--text-muted)' }}>Loading...</p>}
 
       {/* Modal for edge details */}
       {selectedEdge && (
@@ -254,26 +254,26 @@ export default function GraphPage() {
           onClick={() => setSelectedEdge(null)}
           style={{
             position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-            background: 'rgba(10,22,40,0.65)', zIndex: 1000,
+            background: 'var(--bg-modal-overlay)', zIndex: 1000,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}
         >
           <div onClick={e => e.stopPropagation()} style={{
-            background: '#111d2e', borderRadius: '12px', padding: '1.5rem',
+            background: 'var(--bg-card)', borderRadius: '12px', padding: '1.5rem',
             maxWidth: '480px', width: '90%', maxHeight: '80vh', overflowY: 'auto',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.4)', border: '1px solid #1e3a5f',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.4)', border: '1px solid var(--border)',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#e2e8f0' }}>{selectedEdge.from} → {selectedEdge.to}</h2>
+              <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-heading)' }}>{selectedEdge.from} → {selectedEdge.to}</h2>
               <button onClick={() => setSelectedEdge(null)} style={{
-                background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#94a3b8',
+                background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--text-faint)',
               }}>x</button>
             </div>
             <div style={{
               display: 'inline-block', padding: '2px 8px', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 500,
-              background: selectedEdge.isActive ? 'rgba(56,189,248,0.12)' : 'rgba(100,116,139,0.15)',
-              color: selectedEdge.isActive ? '#38bdf8' : '#64748b',
-              border: `1px solid ${selectedEdge.isActive ? '#0e7490' : '#334155'}`,
+              background: selectedEdge.isActive ? 'var(--accent-bg)' : 'rgba(100,116,139,0.15)',
+              color: selectedEdge.isActive ? 'var(--accent)' : 'var(--text-muted)',
+              border: `1px solid ${selectedEdge.isActive ? 'var(--btn-primary-border)' : 'var(--border-subtle)'}`,
               marginBottom: '1rem',
             }}>
               {selectedEdge.isActive ? `${selectedEdge.count} dispatch${selectedEdge.count !== 1 ? 'es' : ''}` : 'wired — no dispatches yet'}
@@ -281,10 +281,10 @@ export default function GraphPage() {
             {selectedEdge.dispatches.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 {selectedEdge.dispatches.slice().reverse().map((d, i) => (
-                  <div key={i} style={{ background: '#0a1628', borderRadius: '6px', padding: '10px', fontSize: '0.8rem', border: '1px solid #334155' }}>
-                    <div style={{ color: '#cbd5e1', fontWeight: 500 }}>{new Date(d.at).toLocaleString()}</div>
-                    <div style={{ color: '#64748b' }}>{d.repo} #{d.number}</div>
-                    {d.reason && <div style={{ color: '#94a3b8', fontStyle: 'italic', marginTop: '4px' }}>{d.reason}</div>}
+                  <div key={i} style={{ background: 'var(--bg)', borderRadius: '6px', padding: '10px', fontSize: '0.8rem', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ color: 'var(--text)', fontWeight: 500 }}>{new Date(d.at).toLocaleString()}</div>
+                    <div style={{ color: 'var(--text-muted)' }}>{d.repo} #{d.number}</div>
+                    {d.reason && <div style={{ color: 'var(--text-faint)', fontStyle: 'italic', marginTop: '4px' }}>{d.reason}</div>}
                   </div>
                 ))}
               </div>
@@ -299,43 +299,43 @@ export default function GraphPage() {
           onClick={() => setSelectedNode(null)}
           style={{
             position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-            background: 'rgba(10,22,40,0.65)', zIndex: 1000,
+            background: 'var(--bg-modal-overlay)', zIndex: 1000,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}
         >
           <div onClick={e => e.stopPropagation()} style={{
-            background: '#111d2e', borderRadius: '12px', padding: '1.5rem',
+            background: 'var(--bg-card)', borderRadius: '12px', padding: '1.5rem',
             maxWidth: '480px', width: '90%', maxHeight: '80vh', overflowY: 'auto',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.4)', border: '1px solid #1e3a5f',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.4)', border: '1px solid var(--border)',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#e2e8f0' }}>{selectedNode.name}</h2>
-              <button onClick={() => setSelectedNode(null)} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#94a3b8' }}>x</button>
+              <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-heading)' }}>{selectedNode.name}</h2>
+              <button onClick={() => setSelectedNode(null)} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--text-faint)' }}>x</button>
             </div>
             {selectedNode.description && (
-              <p style={{ color: '#94a3b8', fontSize: '0.875rem', marginBottom: '1rem' }}>{selectedNode.description}</p>
+              <p style={{ color: 'var(--text-faint)', fontSize: '0.875rem', marginBottom: '1rem' }}>{selectedNode.description}</p>
             )}
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-              <span style={{ background: 'rgba(56,189,248,0.12)', border: '1px solid #0e7490', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: '#38bdf8' }}>
+              <span style={{ background: 'var(--accent-bg)', border: '1px solid var(--btn-primary-border)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: 'var(--accent)' }}>
                 {selectedNode.current_status}
               </span>
               {selectedNode.allow_dispatch && (
-                <span style={{ background: 'rgba(56,189,248,0.12)', border: '1px solid #0e7490', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: '#38bdf8' }}>dispatchable</span>
+                <span style={{ background: 'var(--accent-bg)', border: '1px solid var(--btn-primary-border)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: 'var(--accent)' }}>dispatchable</span>
               )}
             </div>
             {(selectedNode.skills ?? []).length > 0 && (
               <div style={{ marginBottom: '1rem' }}>
-                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#38bdf8', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Skills</div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Skills</div>
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                   {selectedNode.skills!.map(s => (
-                    <span key={s} style={{ background: 'rgba(100,116,139,0.15)', border: '1px solid #334155', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: '#94a3b8' }}>{s}</span>
+                    <span key={s} style={{ background: 'rgba(100,116,139,0.15)', border: '1px solid var(--border-subtle)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: 'var(--text-faint)' }}>{s}</span>
                   ))}
                 </div>
               </div>
             )}
             {(selectedNode.can_dispatch ?? []).length > 0 && (
               <div>
-                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#38bdf8', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Can dispatch</div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Can dispatch</div>
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                   {selectedNode.can_dispatch!.map(a => (
                     <span key={a} style={{ background: 'rgba(245,158,11,0.15)', border: '1px solid #78350f', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: '#fcd34d' }}>{a}</span>
@@ -366,14 +366,14 @@ export default function GraphPage() {
                 maxZoom={2}
               >
                 <Background color="#334155" gap={20} size={0.5} />
-                <Controls showInteractive={false} style={{ background: '#111d2e', border: '1px solid #1e3a5f', borderRadius: '6px' }} />
+                <Controls showInteractive={false} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '6px' }} />
               </ReactFlow>
             </div>
-            <div style={{ padding: '8px 12px', borderTop: '1px solid #334155', display: 'flex', gap: '1.5rem', fontSize: '0.75rem', color: '#64748b' }}>
+            <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border-subtle)', display: 'flex', gap: '1.5rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
               <span>━ active dispatch</span>
               <span>╌ wired (can_dispatch)</span>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: '#0e7490', color: '#fff', fontSize: '8px', lineHeight: '12px', textAlign: 'center', fontWeight: 700 }}>D</span>
+                <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: 'var(--btn-primary-bg)', color: '#fff', fontSize: '8px', lineHeight: '12px', textAlign: 'center', fontWeight: 700 }}>D</span>
                 dispatchable
               </span>
             </div>

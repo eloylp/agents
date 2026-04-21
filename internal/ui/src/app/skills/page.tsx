@@ -11,10 +11,10 @@ interface Skill {
 const emptyForm: Skill = { name: '', prompt: '' }
 
 const inputStyle: React.CSSProperties = {
-  width: '100%', padding: '6px 8px', border: '1px solid #1e3a5f', borderRadius: '6px',
-  fontSize: '0.85rem', fontFamily: 'inherit', background: '#0f1d32', color: '#cbd5e1',
+  width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: '6px',
+  fontSize: '0.85rem', fontFamily: 'inherit', background: 'var(--bg-input)', color: 'var(--text)',
 }
-const labelStyle: React.CSSProperties = { fontSize: '0.8rem', color: '#64748b', display: 'block', marginBottom: '3px' }
+const labelStyle: React.CSSProperties = { fontSize: '0.8rem', color: 'var(--text-muted)', display: 'block', marginBottom: '3px' }
 
 function SkillForm({
   initial, isNew, onSave, onCancel, saving, error,
@@ -49,15 +49,15 @@ function SkillForm({
           placeholder="Skill guidance text…"
         />
       </div>
-      {error && <p style={{ color: '#f87171', fontSize: '0.8rem' }}>{error}</p>}
+      {error && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem' }}>{error}</p>}
       <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-        <button onClick={onCancel} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #1e3a5f', background: '#111d2e', cursor: 'pointer', fontSize: '0.875rem', color: '#64748b' }}>
+        <button onClick={onCancel} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', cursor: 'pointer', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
           Cancel
         </button>
         <button
           onClick={() => onSave(form)}
           disabled={saving || !form.name.trim()}
-          style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #0e7490', background: '#0e7490', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+          style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
           {saving ? 'Saving…' : 'Save'}
         </button>
@@ -151,28 +151,28 @@ export default function SkillsPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e2e8f0' }}>Skills</h1>
-          <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: '4px' }}>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-heading)' }}>Skills</h1>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '4px' }}>
             {skills.length} skill{skills.length !== 1 ? 's' : ''} configured
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem' }}>
           <button
             onClick={openCreate}
-            style={{ background: '#0e7490', border: '1px solid #0e7490', color: '#fff', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+            style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
           >
             + Create skill
           </button>
-          <button onClick={load} style={{ background: '#111d2e', border: '1px solid #1e3a5f', color: '#64748b', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem' }}>
+          <button onClick={load} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-muted)', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem' }}>
             Refresh
           </button>
         </div>
       </div>
 
-      {loading && <p style={{ color: '#64748b' }}>Loading…</p>}
-      {error && <p style={{ color: '#f87171' }}>Error: {error}</p>}
+      {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
+      {error && <p style={{ color: 'var(--text-danger)' }}>Error: {error}</p>}
       {!loading && !error && skills.length === 0 && (
-        <p style={{ color: '#64748b' }}>No skills configured.</p>
+        <p style={{ color: 'var(--text-muted)' }}>No skills configured.</p>
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -180,10 +180,10 @@ export default function SkillsPage() {
           <Card key={sk.name}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, color: '#e2e8f0', marginBottom: '0.35rem' }}>{sk.name}</div>
+                <div style={{ fontWeight: 700, color: 'var(--text-heading)', marginBottom: '0.35rem' }}>{sk.name}</div>
                 <pre style={{
-                  fontSize: '0.78rem', color: '#94a3b8', background: '#0a1628',
-                  border: '1px solid #334155', borderRadius: '4px', padding: '0.5rem',
+                  fontSize: '0.78rem', color: 'var(--text-faint)', background: 'var(--bg)',
+                  border: '1px solid var(--border-subtle)', borderRadius: '4px', padding: '0.5rem',
                   maxHeight: '80px', overflow: 'hidden', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                   fontFamily: 'inherit',
                 }}>
@@ -191,8 +191,8 @@ export default function SkillsPage() {
                 </pre>
               </div>
               <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
-                <button onClick={() => openEdit(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid #1e3a5f', background: '#0a1628', cursor: 'pointer', fontSize: '0.75rem', color: '#38bdf8' }}>Edit</button>
-                <button onClick={() => confirmDelete(sk.name)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid #7f1d1d', background: '#1c1017', cursor: 'pointer', fontSize: '0.75rem', color: '#dc2626' }}>Delete</button>
+                <button onClick={() => openEdit(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--accent)' }}>Edit</button>
+                <button onClick={() => confirmDelete(sk.name)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--text-danger)' }}>Delete</button>
               </div>
             </div>
           </Card>
@@ -214,15 +214,15 @@ export default function SkillsPage() {
 
       {modal === 'delete' && (
         <Modal title="Delete skill" onClose={() => setModal(null)}>
-          <p style={{ color: '#cbd5e1', fontSize: '0.9rem', marginBottom: '1.25rem' }}>
+          <p style={{ color: 'var(--text)', fontSize: '0.9rem', marginBottom: '1.25rem' }}>
             Delete skill <strong>{deleteTarget}</strong>? This cannot be undone.
           </p>
-          {saveError && <p style={{ color: '#f87171', fontSize: '0.8rem', marginBottom: '0.75rem' }}>{saveError}</p>}
+          {saveError && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>{saveError}</p>}
           <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-            <button onClick={() => setModal(null)} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #1e3a5f', background: '#111d2e', cursor: 'pointer', fontSize: '0.875rem', color: '#64748b' }}>
+            <button onClick={() => setModal(null)} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', cursor: 'pointer', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
               Cancel
             </button>
-            <button onClick={deleteSkill} disabled={saving} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #fca5a5', background: '#dc2626', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>
+            <button onClick={deleteSkill} disabled={saving} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border-danger)', background: '#dc2626', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>
               {saving ? 'Deleting…' : 'Delete'}
             </button>
           </div>

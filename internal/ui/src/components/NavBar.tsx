@@ -1,6 +1,7 @@
 'use client'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useTheme } from '@/lib/theme'
 
 const links = [
   { href: '/', label: 'Fleet' },
@@ -15,18 +16,19 @@ const links = [
 
 export default function NavBar() {
   const pathname = usePathname()
+  const { theme, toggle } = useTheme()
   return (
     <nav style={{
-      background: '#0f1d32',
-      borderBottom: '1px solid #1e3a5f',
+      background: 'var(--bg-nav)',
+      borderBottom: '2px solid var(--border-nav)',
       padding: '0 1.5rem',
       display: 'flex',
       alignItems: 'center',
       gap: '0',
       height: '48px',
     }}>
-      <span style={{ fontWeight: 700, fontSize: '0.95rem', color: '#38bdf8', marginRight: '2rem', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-        Agents
+      <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--accent)', marginRight: '2rem', letterSpacing: '0.05em' }}>
+        AGENTS
       </span>
       {links.map(({ href, label }) => {
         const active = pathname === href || (href !== '/' && pathname.startsWith(href))
@@ -40,8 +42,8 @@ export default function NavBar() {
               display: 'flex',
               alignItems: 'center',
               fontSize: '0.875rem',
-              color: active ? '#38bdf8' : '#64748b',
-              borderBottom: active ? '2px solid #38bdf8' : '2px solid transparent',
+              color: active ? 'var(--accent)' : 'var(--text-muted)',
+              borderBottom: active ? '2px solid var(--accent)' : '2px solid transparent',
               fontWeight: active ? 600 : 400,
             }}
           >
@@ -49,6 +51,21 @@ export default function NavBar() {
           </Link>
         )
       })}
+      <button
+        onClick={toggle}
+        style={{
+          marginLeft: 'auto',
+          background: 'none',
+          border: '1px solid var(--border)',
+          borderRadius: '6px',
+          padding: '4px 10px',
+          cursor: 'pointer',
+          fontSize: '0.78rem',
+          color: 'var(--text-muted)',
+        }}
+      >
+        {theme === 'light' ? 'Dark' : 'Light'}
+      </button>
     </nav>
   )
 }

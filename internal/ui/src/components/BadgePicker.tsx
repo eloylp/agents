@@ -1,21 +1,21 @@
 import React from 'react'
 
 const chipStyle: React.CSSProperties = {
-  background: '#1e3a5f',
+  background: 'var(--badge-skill-bg)',
   borderRadius: '4px',
   padding: '2px 6px',
   fontSize: '0.75rem',
-  color: '#93c5fd',
+  color: 'var(--badge-skill-text)',
   display: 'inline-flex',
   alignItems: 'center',
   gap: '4px',
-  border: '1px solid #1d4ed8',
+  border: '1px solid var(--badge-skill-border)',
 }
 
 const removeStyle: React.CSSProperties = {
   background: 'none',
   border: 'none',
-  color: '#93c5fd',
+  color: 'var(--badge-skill-text)',
   cursor: 'pointer',
   fontSize: '0.7rem',
   padding: '0',
@@ -25,12 +25,12 @@ const removeStyle: React.CSSProperties = {
 const selectStyle: React.CSSProperties = {
   width: '100%',
   padding: '6px 8px',
-  border: '1px solid #1e3a5f',
+  border: '1px solid var(--border)',
   borderRadius: '6px',
   fontSize: '0.85rem',
   fontFamily: 'inherit',
-  background: '#0f1d32',
-  color: '#cbd5e1',
+  background: 'var(--bg-input)',
+  color: 'var(--text)',
 }
 
 /**
@@ -99,14 +99,14 @@ export default function BadgePicker({
           />
           <button
             onClick={commitText}
-            style={{ padding: '6px 10px', border: '1px solid #1e3a5f', borderRadius: '6px', background: '#0f1d32', cursor: 'pointer', fontSize: '0.8rem', color: '#38bdf8' }}
+            style={{ padding: '6px 10px', border: '1px solid var(--border)', borderRadius: '6px', background: 'var(--bg-input)', cursor: 'pointer', fontSize: '0.8rem', color: 'var(--accent)' }}
           >
             Add
           </button>
         </div>
       )}
       {options.length === 0 && !freeText && (
-        <p style={{ color: '#94a3b8', fontSize: '0.78rem', margin: '4px 0 0' }}>No options available (store not configured).</p>
+        <p style={{ color: 'var(--text-faint)', fontSize: '0.78rem', margin: '4px 0 0' }}>No options available (store not configured).</p>
       )}
     </div>
   )

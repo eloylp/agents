@@ -20,21 +20,21 @@ const emptyBackend: Backend = {
 }
 
 const inputStyle: React.CSSProperties = {
-  width: '100%', padding: '6px 8px', border: '1px solid #1e3a5f', borderRadius: '6px',
-  fontSize: '0.85rem', fontFamily: 'inherit', background: '#0f1d32', color: '#cbd5e1',
+  width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: '6px',
+  fontSize: '0.85rem', fontFamily: 'inherit', background: 'var(--bg-input)', color: 'var(--text)',
 }
-const labelStyle: React.CSSProperties = { fontSize: '0.8rem', color: '#64748b', display: 'block', marginBottom: '3px' }
+const labelStyle: React.CSSProperties = { fontSize: '0.8rem', color: 'var(--text-muted)', display: 'block', marginBottom: '3px' }
 
 function JsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
-  if (value === null) return <span style={{ color: '#64748b' }}>null</span>
+  if (value === null) return <span style={{ color: 'var(--text-muted)' }}>null</span>
   if (typeof value === 'boolean') return <span style={{ color: '#f59e0b' }}>{String(value)}</span>
-  if (typeof value === 'number') return <span style={{ color: '#34d399' }}>{value}</span>
+  if (typeof value === 'number') return <span style={{ color: 'var(--success)' }}>{value}</span>
   if (typeof value === 'string') {
     const isRedacted = value === '[redacted]'
-    return <span style={{ color: isRedacted ? '#f87171' : '#86efac' }}>{JSON.stringify(value)}</span>
+    return <span style={{ color: isRedacted ? 'var(--text-danger)' : '#86efac' }}>{JSON.stringify(value)}</span>
   }
   if (Array.isArray(value)) {
-    if (value.length === 0) return <span style={{ color: '#64748b' }}>[]</span>
+    if (value.length === 0) return <span style={{ color: 'var(--text-muted)' }}>[]</span>
     return (
       <span>
         {'['}
@@ -49,7 +49,7 @@ function JsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
   }
   if (typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>)
-    if (entries.length === 0) return <span style={{ color: '#64748b' }}>{'{}'}</span>
+    if (entries.length === 0) return <span style={{ color: 'var(--text-muted)' }}>{'{}'}</span>
     return (
       <span>
         {'{'}
@@ -57,7 +57,7 @@ function JsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
           {entries.map(([k, v], i) => (
             <div key={k}>
               <span style={{ color: '#93c5fd' }}>{JSON.stringify(k)}</span>
-              <span style={{ color: '#64748b' }}>: </span>
+              <span style={{ color: 'var(--text-muted)' }}>: </span>
               <JsonTree value={v} depth={depth + 1} />
               {i < entries.length - 1 ? ',' : ''}
             </div>
@@ -67,7 +67,7 @@ function JsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
       </span>
     )
   }
-  return <span style={{ color: '#64748b' }}>{JSON.stringify(value)}</span>
+  return <span style={{ color: 'var(--text-muted)' }}>{JSON.stringify(value)}</span>
 }
 
 function EnvEditor({ env, onChange }: { env: Record<string, string>; onChange: (e: Record<string, string>) => void }) {
@@ -96,13 +96,13 @@ function EnvEditor({ env, onChange }: { env: Record<string, string>; onChange: (
           />
           <button
             onClick={() => update(pairs.filter((_, idx) => idx !== i))}
-            style={{ padding: '3px 8px', border: '1px solid #7f1d1d', background: '#1c1017', borderRadius: '5px', cursor: 'pointer', fontSize: '0.75rem', color: '#dc2626' }}
+            style={{ padding: '3px 8px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', borderRadius: '5px', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--text-danger)' }}
           >✕</button>
         </div>
       ))}
       <button
         onClick={() => update([...pairs, ['', '']])}
-        style={{ fontSize: '0.75rem', color: '#38bdf8', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+        style={{ fontSize: '0.75rem', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
       >
         + Add env var
       </button>
@@ -158,15 +158,15 @@ function BackendForm({ initial, isNew, onSave, onCancel, saving, error }: {
         <label style={{ ...labelStyle, marginBottom: '0.4rem' }}>Environment variables</label>
         <EnvEditor env={form.env} onChange={env => set('env', env)} />
       </div>
-      {error && <p style={{ color: '#f87171', fontSize: '0.8rem' }}>{error}</p>}
+      {error && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem' }}>{error}</p>}
       <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-        <button onClick={onCancel} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #1e3a5f', background: '#111d2e', cursor: 'pointer', fontSize: '0.875rem', color: '#64748b' }}>
+        <button onClick={onCancel} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', cursor: 'pointer', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
           Cancel
         </button>
         <button
           onClick={() => onSave(form)}
           disabled={saving || !form.name.trim()}
-          style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #0e7490', background: '#0e7490', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+          style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
           {saving ? 'Saving…' : 'Save'}
         </button>
@@ -286,10 +286,10 @@ export default function ConfigPage() {
 
   const tabStyle = (t: string): React.CSSProperties => ({
     padding: '6px 16px', borderRadius: '6px 6px 0 0', cursor: 'pointer', fontSize: '0.875rem',
-    background: tab === t ? '#111d2e' : 'transparent',
-    border: tab === t ? '1px solid #1e3a5f' : '1px solid transparent',
-    borderBottom: tab === t ? '1px solid #111d2e' : '1px solid #1e3a5f',
-    color: tab === t ? '#e2e8f0' : '#64748b', fontWeight: tab === t ? 600 : 400,
+    background: tab === t ? 'var(--bg-card)' : 'transparent',
+    border: tab === t ? '1px solid var(--border)' : '1px solid transparent',
+    borderBottom: tab === t ? '1px solid var(--bg-card)' : '1px solid var(--border)',
+    color: tab === t ? 'var(--text-heading)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 400,
     marginBottom: '-1px',
   })
 
@@ -297,19 +297,19 @@ export default function ConfigPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e2e8f0' }}>Config</h1>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-heading)' }}>Config</h1>
         </div>
         {tab === 'inspector' && config && (
           <button
             onClick={() => setRaw(r => !r)}
-            style={{ background: '#111d2e', border: '1px solid #1e3a5f', color: '#64748b', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem' }}
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-muted)', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem' }}
           >
             {raw ? 'Tree view' : 'Raw JSON'}
           </button>
         )}
       </div>
 
-      <div style={{ display: 'flex', gap: '0', marginBottom: '0', borderBottom: '1px solid #1e3a5f' }}>
+      <div style={{ display: 'flex', gap: '0', marginBottom: '0', borderBottom: '1px solid var(--border)' }}>
         <button style={tabStyle('inspector')} onClick={() => setTab('inspector')}>Inspector</button>
         <button style={tabStyle('backends')} onClick={() => setTab('backends')}>Backends</button>
         <button style={tabStyle('import-export')} onClick={() => setTab('import-export')}>Import / Export</button>
@@ -317,16 +317,16 @@ export default function ConfigPage() {
 
       {tab === 'inspector' && (
         <Card style={{ borderTopLeftRadius: 0 }}>
-          {loading && <p style={{ color: '#64748b' }}>Loading…</p>}
-          {error && <p style={{ color: '#f87171' }}>Error: {error}. (Is the API key set? Check Authorization header.)</p>}
+          {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
+          {error && <p style={{ color: 'var(--text-danger)' }}>Error: {error}. (Is the API key set? Check Authorization header.)</p>}
           {config && (
             <pre style={{
-              background: '#0a1628', borderRadius: '6px', padding: '1rem',
+              background: 'var(--bg)', borderRadius: '6px', padding: '1rem',
               fontSize: '0.8rem', lineHeight: '1.6', overflowX: 'auto',
               maxHeight: '700px', overflowY: 'auto',
             }}>
               {raw ? (
-                <code style={{ color: '#cbd5e1' }}>{JSON.stringify(config, null, 2)}</code>
+                <code style={{ color: 'var(--text)' }}>{JSON.stringify(config, null, 2)}</code>
               ) : (
                 <JsonTree value={config} />
               )}
@@ -338,36 +338,36 @@ export default function ConfigPage() {
       {tab === 'backends' && (
         <Card style={{ borderTopLeftRadius: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <span style={{ color: '#64748b', fontSize: '0.875rem' }}>
+            <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
               {backends.length} backend{backends.length !== 1 ? 's' : ''} configured
             </span>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
               <button
                 onClick={() => { setSaveError(''); setSelected({ ...emptyBackend }); setModal('create') }}
-                style={{ background: '#0e7490', border: '1px solid #0e7490', color: '#fff', padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+                style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
               >
                 + Add backend
               </button>
-              <button onClick={loadBackends} style={{ background: '#111d2e', border: '1px solid #1e3a5f', color: '#64748b', padding: '5px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem' }}>
+              <button onClick={loadBackends} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-muted)', padding: '5px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem' }}>
                 Refresh
               </button>
             </div>
           </div>
-          {backendsLoading && <p style={{ color: '#64748b', fontSize: '0.85rem' }}>Loading…</p>}
+          {backendsLoading && <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading…</p>}
           {!backendsLoading && backends.length === 0 && (
-            <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>No backends configured.</p>
+            <p style={{ color: 'var(--text-faint)', fontSize: '0.85rem' }}>No backends configured.</p>
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
             {backends.map(b => (
-              <div key={b.name} style={{ border: '1px solid #334155', borderRadius: '6px', padding: '0.75rem', background: '#0a1628' }}>
+              <div key={b.name} style={{ border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '0.75rem', background: 'var(--bg)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div>
-                    <div style={{ fontWeight: 700, color: '#e2e8f0' }}>{b.name}</div>
-                    <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: '2px' }}>
+                    <div style={{ fontWeight: 700, color: 'var(--text-heading)' }}>{b.name}</div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '2px' }}>
                       {b.command} {b.args.slice(0, 3).join(' ')}{b.args.length > 3 ? ' …' : ''} · {b.timeout_seconds}s · {b.max_prompt_chars} chars
                     </div>
                     {Object.keys(b.env).length > 0 && (
-                      <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '2px' }}>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-faint)', marginTop: '2px' }}>
                         env: {Object.keys(b.env).join(', ')}
                       </div>
                     )}
@@ -375,11 +375,11 @@ export default function ConfigPage() {
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
                     <button
                       onClick={() => { setSaveError(''); setSelected(b); setModal('edit') }}
-                      style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid #1e3a5f', background: '#111d2e', cursor: 'pointer', fontSize: '0.75rem', color: '#38bdf8' }}
+                      style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--bg-card)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--accent)' }}
                     >Edit</button>
                     <button
                       onClick={() => { setDeleteTarget(b.name); setSaveError(''); setModal('delete') }}
-                      style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid #7f1d1d', background: '#1c1017', cursor: 'pointer', fontSize: '0.75rem', color: '#dc2626' }}
+                      style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--text-danger)' }}
                     >Delete</button>
                   </div>
                 </div>
@@ -393,29 +393,29 @@ export default function ConfigPage() {
         <Card style={{ borderTopLeftRadius: 0 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             <div>
-              <h3 style={{ fontSize: '0.95rem', fontWeight: 600, color: '#e2e8f0', marginBottom: '0.5rem' }}>Export YAML</h3>
-              <p style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+              <h3 style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-heading)', marginBottom: '0.5rem' }}>Export YAML</h3>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
                 Download the current fleet configuration (agents, skills, repos, backends) as a YAML file.
               </p>
               <button
                 onClick={handleExport}
-                style={{ padding: '7px 18px', borderRadius: '6px', border: '1px solid #0e7490', background: '#0f1d32', color: '#38bdf8', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+                style={{ padding: '7px 18px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--bg-input)', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
               >
                 Export config.yaml
               </button>
             </div>
 
-            <div style={{ borderTop: '1px solid #334155', paddingTop: '1.25rem' }}>
-              <h3 style={{ fontSize: '0.95rem', fontWeight: 600, color: '#e2e8f0', marginBottom: '0.5rem' }}>Import YAML</h3>
-              <p style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+            <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '1.25rem' }}>
+              <h3 style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-heading)', marginBottom: '0.5rem' }}>Import YAML</h3>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
                 Upload a YAML file to import agents, skills, repos, and backends into the store.
               </p>
               <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '0.75rem' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer', color: '#cbd5e1' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer', color: 'var(--text)' }}>
                   <input type="radio" name="importMode" value="merge" checked={importMode === 'merge'} onChange={() => setImportMode('merge')} />
                   Merge — upsert records; existing records not in the file are kept
                 </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer', color: '#dc2626' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer', color: 'var(--text-danger)' }}>
                   <input type="radio" name="importMode" value="replace" checked={importMode === 'replace'} onChange={() => setImportMode('replace')} />
                   Replace — delete all existing records and replace with file contents
                 </label>
@@ -433,12 +433,12 @@ export default function ConfigPage() {
               />
               <button
                 onClick={() => fileInputRef.current?.click()}
-                style={{ padding: '7px 18px', borderRadius: '6px', border: '1px solid #1e3a5f', background: '#111d2e', color: '#cbd5e1', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+                style={{ padding: '7px 18px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
               >
                 Choose YAML file…
               </button>
-              {importStatus && <p style={{ color: '#34d399', fontSize: '0.85rem', marginTop: '0.75rem' }}>{importStatus}</p>}
-              {importError && <p style={{ color: '#f87171', fontSize: '0.85rem', marginTop: '0.75rem' }}>{importError}</p>}
+              {importStatus && <p style={{ color: 'var(--success)', fontSize: '0.85rem', marginTop: '0.75rem' }}>{importStatus}</p>}
+              {importError && <p style={{ color: 'var(--text-danger)', fontSize: '0.85rem', marginTop: '0.75rem' }}>{importError}</p>}
             </div>
           </div>
         </Card>
@@ -459,15 +459,15 @@ export default function ConfigPage() {
 
       {modal === 'delete' && (
         <Modal title="Delete backend" onClose={() => setModal(null)}>
-          <p style={{ color: '#cbd5e1', fontSize: '0.9rem', marginBottom: '1.25rem' }}>
+          <p style={{ color: 'var(--text)', fontSize: '0.9rem', marginBottom: '1.25rem' }}>
             Delete backend <strong>{deleteTarget}</strong>? This cannot be undone.
           </p>
-          {saveError && <p style={{ color: '#f87171', fontSize: '0.8rem', marginBottom: '0.75rem' }}>{saveError}</p>}
+          {saveError && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>{saveError}</p>}
           <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-            <button onClick={() => setModal(null)} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #1e3a5f', background: '#111d2e', cursor: 'pointer', fontSize: '0.875rem', color: '#64748b' }}>
+            <button onClick={() => setModal(null)} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', cursor: 'pointer', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
               Cancel
             </button>
-            <button onClick={deleteBackend} disabled={saving} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid #fca5a5', background: '#dc2626', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>
+            <button onClick={deleteBackend} disabled={saving} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border-danger)', background: '#dc2626', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>
               {saving ? 'Deleting…' : 'Delete'}
             </button>
           </div>

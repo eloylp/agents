@@ -23,10 +23,10 @@ const kindStyle: Record<string, { bg: string; text: string; border: string }> = 
   'issue_comment.created':      { bg: 'rgba(20,184,166,0.15)', text: '#5eead4', border: '#115e59' },
   'pull_request_review.submitted': { bg: 'rgba(20,184,166,0.15)', text: '#5eead4', border: '#115e59' },
   'agent.dispatch':     { bg: 'rgba(245,158,11,0.15)', text: '#fcd34d', border: '#78350f' },
-  'push':               { bg: 'rgba(52,211,153,0.15)', text: '#34d399', border: '#065f46' },
+  'push':               { bg: 'var(--success-bg)', text: 'var(--success)', border: 'var(--success-border)' },
 }
 
-const defaultKind = { bg: 'rgba(100,116,139,0.15)', text: '#94a3b8', border: '#334155' }
+const defaultKind = { bg: 'rgba(100,116,139,0.15)', text: 'var(--text-faint)', border: 'var(--border-subtle)' }
 
 function EventRow({ event, isNew }: { event: Event; isNew: boolean }) {
   const [expanded, setExpanded] = useState(false)
@@ -35,7 +35,7 @@ function EventRow({ event, isNew }: { event: Event; isNew: boolean }) {
 
   return (
     <div style={{
-      borderBottom: '1px solid #334155',
+      borderBottom: '1px solid var(--border-subtle)',
       background: isNew ? 'rgba(56,189,248,0.04)' : 'transparent',
       transition: 'background 0.5s',
     }}>
@@ -47,7 +47,7 @@ function EventRow({ event, isNew }: { event: Event; isNew: boolean }) {
         fontSize: '0.8rem',
         alignItems: 'center',
       }}>
-        <span style={{ color: '#94a3b8' }}>{new Date(event.at).toLocaleTimeString()}</span>
+        <span style={{ color: 'var(--text-faint)' }}>{new Date(event.at).toLocaleTimeString()}</span>
         <span style={{
           background: style.bg,
           color: style.text,
@@ -61,13 +61,13 @@ function EventRow({ event, isNew }: { event: Event; isNew: boolean }) {
         }}>
           {event.kind}
         </span>
-        <span style={{ color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.repo}</span>
-        <span style={{ color: '#94a3b8' }}>{event.number > 0 ? `#${event.number}` : '—'}</span>
-        <span style={{ color: '#64748b' }}>{event.actor}</span>
+        <span style={{ color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.repo}</span>
+        <span style={{ color: 'var(--text-faint)' }}>{event.number > 0 ? `#${event.number}` : '—'}</span>
+        <span style={{ color: 'var(--text-muted)' }}>{event.actor}</span>
         <span
           onClick={() => setExpanded(!expanded)}
           style={{
-            color: '#94a3b8',
+            color: 'var(--text-faint)',
             fontFamily: 'monospace',
             fontSize: '0.72rem',
             cursor: 'pointer',
@@ -139,17 +139,17 @@ export default function EventsPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e2e8f0' }}>Events</h1>
-          <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: '4px' }}>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-heading)' }}>Events</h1>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '4px' }}>
             {filtered.length} event{filtered.length !== 1 ? 's' : ''} · {streaming ? '🟢 live' : '🔴 disconnected'}
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           {Object.keys(timeRanges).map(r => (
             <button key={r} onClick={() => setTimeRange(r)} style={{
-              background: timeRange === r ? '#0e7490' : '#111d2e',
-              border: '1px solid #1e3a5f',
-              color: timeRange === r ? '#ffffff' : '#64748b',
+              background: timeRange === r ? 'var(--btn-primary-bg)' : 'var(--bg-card)',
+              border: '1px solid var(--border)',
+              color: timeRange === r ? '#ffffff' : 'var(--text-muted)',
               padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem',
             }}>{r}</button>
           ))}
@@ -157,7 +157,7 @@ export default function EventsPage() {
             placeholder="Filter..."
             value={filter}
             onChange={e => setFilter(e.target.value)}
-            style={{ background: '#0f1d32', border: '1px solid #1e3a5f', color: '#cbd5e1', padding: '6px 10px', borderRadius: '6px', fontSize: '0.875rem', width: '180px' }}
+            style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '6px 10px', borderRadius: '6px', fontSize: '0.875rem', width: '180px' }}
           />
         </div>
       </div>
@@ -166,14 +166,14 @@ export default function EventsPage() {
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: '3px', height: '60px' }}>
           {bucketKeys.map(k => (
             <div key={k} title={`${k} ago: ${buckets[k]} events`} style={{
-              flex: 1, background: '#38bdf8', opacity: 0.7,
+              flex: 1, background: 'var(--accent)', opacity: 0.7,
               height: `${(buckets[k] / bucketMax) * 100}%`,
               minHeight: '2px', borderRadius: '2px 2px 0 0',
             }} />
           ))}
-          {bucketKeys.length === 0 && <p style={{ color: '#94a3b8', fontSize: '0.8rem' }}>No events in window.</p>}
+          {bucketKeys.length === 0 && <p style={{ color: 'var(--text-faint)', fontSize: '0.8rem' }}>No events in window.</p>}
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: '#94a3b8', marginTop: '4px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--text-faint)', marginTop: '4px' }}>
           <span>← {timeRange} ago</span>
           <span>now →</span>
         </div>
@@ -185,16 +185,16 @@ export default function EventsPage() {
           gridTemplateColumns: '140px 200px 140px 60px 100px 1fr',
           gap: '0.5rem',
           padding: '4px 0',
-          borderBottom: '2px solid #1e3a5f',
+          borderBottom: '2px solid var(--border)',
           fontSize: '0.75rem',
-          color: '#38bdf8',
+          color: 'var(--accent)',
           fontWeight: 600,
         }}>
           <span>Time</span><span>Kind</span><span>Repo</span><span>#</span><span>Actor</span><span>Payload (click to expand)</span>
         </div>
 
-        {loading && <p style={{ color: '#64748b', padding: '0.5rem 0' }}>Loading...</p>}
-        {!loading && filtered.length === 0 && <p style={{ color: '#64748b', padding: '0.5rem 0' }}>No events.</p>}
+        {loading && <p style={{ color: 'var(--text-muted)', padding: '0.5rem 0' }}>Loading...</p>}
+        {!loading && filtered.length === 0 && <p style={{ color: 'var(--text-muted)', padding: '0.5rem 0' }}>No events.</p>}
 
         <div style={{ maxHeight: '500px', overflowY: 'auto' }}>
           {filtered.map(e => <EventRow key={e.id + e.at} event={e} isNew={newIds.has(e.id)} />)}
