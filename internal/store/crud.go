@@ -49,7 +49,7 @@ func validateCronExpressions(repos []config.RepoDef) error {
 // post-mutation snapshot satisfies both field-level constraints and cross-entity
 // reference consistency via config.ValidateEntities. Aggregate minimums ("at
 // least one agent/repo/backend required") are NOT checked here; DELETE paths
-// enforce those separately with requireAtLeastOne* helpers below.
+// enforce those separately with requireAtLeastOne below.
 func validateFleet(q querier) error {
 	var cfg config.Config
 	if err := loadBackends(q, &cfg); err != nil {
@@ -75,42 +75,16 @@ func validateFleet(q querier) error {
 	return config.ValidateEntities(cfg.Agents, cfg.Repos, skills, backends)
 }
 
-// requireAtLeastOneAgent returns an error if the transaction would leave the
-// agents table empty — used by DeleteAgent to enforce the "at least one agent"
-// invariant without running a full validateFleet.
-func requireAtLeastOneAgent(q querier) error {
+// requireAtLeastOne fails if the COUNT query returns 0. entity names the table
+// or set being counted (used in the scan-error message); zeroMsg is returned
+// verbatim when the count is zero.
+func requireAtLeastOne(q querier, countQuery, entity, zeroMsg string) error {
 	var n int
-	if err := q.QueryRow("SELECT COUNT(*) FROM agents").Scan(&n); err != nil {
-		return fmt.Errorf("store: count agents: %w", err)
+	if err := q.QueryRow(countQuery).Scan(&n); err != nil {
+		return fmt.Errorf("store: count %s: %w", entity, err)
 	}
 	if n == 0 {
-		return errors.New("config: at least one agent is required")
-	}
-	return nil
-}
-
-// requireAtLeastOneBackend returns an error if the transaction would leave the
-// backends table empty.
-func requireAtLeastOneBackend(q querier) error {
-	var n int
-	if err := q.QueryRow("SELECT COUNT(*) FROM backends").Scan(&n); err != nil {
-		return fmt.Errorf("store: count backends: %w", err)
-	}
-	if n == 0 {
-		return errors.New("config: at least one ai_backends entry is required")
-	}
-	return nil
-}
-
-// requireAtLeastOneEnabledRepo returns an error if the transaction would leave
-// no enabled repos — used by DeleteRepo.
-func requireAtLeastOneEnabledRepo(q querier) error {
-	var n int
-	if err := q.QueryRow("SELECT COUNT(*) FROM repos WHERE enabled=1").Scan(&n); err != nil {
-		return fmt.Errorf("store: count enabled repos: %w", err)
-	}
-	if n == 0 {
-		return errors.New("config: at least one repo must be enabled")
+		return errors.New(zeroMsg)
 	}
 	return nil
 }
@@ -160,7 +134,7 @@ func DeleteAgent(db *sql.DB, name string) error {
 		return fmt.Errorf("store: delete agent %s: %w", name, err)
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
-		if err := requireAtLeastOneAgent(tx); err != nil {
+		if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM agents", "agents", "config: at least one agent is required"); err != nil {
 			return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: %v", name, err)}
 		}
 		if err := validateFleet(tx); err != nil {
@@ -275,7 +249,7 @@ func DeleteBackend(db *sql.DB, name string) error {
 		return fmt.Errorf("store: delete backend %s: %w", name, err)
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
-		if err := requireAtLeastOneBackend(tx); err != nil {
+		if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM backends", "backends", "config: at least one ai_backends entry is required"); err != nil {
 			return &ErrConflict{Msg: fmt.Sprintf("store: delete backend %s: %v", name, err)}
 		}
 		if err := validateFleet(tx); err != nil {
@@ -344,7 +318,7 @@ func UpsertRepo(db *sql.DB, r config.RepoDef) error {
 	if err := importRepos(tx, []config.RepoDef{r}); err != nil {
 		return err
 	}
-	if err := requireAtLeastOneEnabledRepo(tx); err != nil {
+	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM repos WHERE enabled=1", "enabled repos", "config: at least one repo must be enabled"); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: upsert repo %s: %v", r.Name, err)}
 	}
 	if err := validateFleet(tx); err != nil {
@@ -404,13 +378,13 @@ func ImportAll(
 	if err := validateFleet(tx); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
 	}
-	if err := requireAtLeastOneAgent(tx); err != nil {
+	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM agents", "agents", "config: at least one agent is required"); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
 	}
-	if err := requireAtLeastOneBackend(tx); err != nil {
+	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM backends", "backends", "config: at least one ai_backends entry is required"); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
 	}
-	if err := requireAtLeastOneEnabledRepo(tx); err != nil {
+	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM repos WHERE enabled=1", "enabled repos", "config: at least one repo must be enabled"); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
 	}
 	if err := validateCronExpressions(repos); err != nil {
@@ -479,13 +453,13 @@ func ReplaceAll(
 	if err := validateFleet(tx); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
 	}
-	if err := requireAtLeastOneAgent(tx); err != nil {
+	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM agents", "agents", "config: at least one agent is required"); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
 	}
-	if err := requireAtLeastOneBackend(tx); err != nil {
+	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM backends", "backends", "config: at least one ai_backends entry is required"); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
 	}
-	if err := requireAtLeastOneEnabledRepo(tx); err != nil {
+	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM repos WHERE enabled=1", "enabled repos", "config: at least one repo must be enabled"); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
 	}
 	if err := validateCronExpressions(repos); err != nil {
@@ -510,7 +484,7 @@ func DeleteRepo(db *sql.DB, name string) error {
 		return fmt.Errorf("store: delete repo %s: %w", name, err)
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
-		if err := requireAtLeastOneEnabledRepo(tx); err != nil {
+		if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM repos WHERE enabled=1", "enabled repos", "config: at least one repo must be enabled"); err != nil {
 			return &ErrConflict{Msg: fmt.Sprintf("store: delete repo %s: %v", name, err)}
 		}
 	}
