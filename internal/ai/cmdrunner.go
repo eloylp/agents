@@ -102,28 +102,28 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	cmd := exec.CommandContext(cmdCtx, r.command, args...)
 	cmd.Env = buildCommandEnv(req, r.env)
 
-	var stdout bytes.Buffer
+	var stdoutCap lineCapture
 	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
+	cmd.Stdout = &stdoutCap
 	cmd.Stderr = &stderr
 	cmd.Stdin = bytes.NewBufferString(stdin)
 
 	cmdErr := cmd.Run()
 
-	rawOut := stdout.String()
+	rawOut := stdoutCap.all.String()
 	logger.Debug().Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("%s raw output", r.backendName)
 
 	// If the command exited non-zero but produced no stdout, treat it as a
 	// hard failure. If stdout has data we still attempt JSON parsing because
 	// some AI CLIs emit non-zero exit codes even on a successful run (e.g.
 	// after posting a GitHub comment via MCP tools).
-	if cmdErr != nil && stdout.Len() == 0 {
+	if cmdErr != nil && stdoutCap.all.Len() == 0 {
 		logger.Error().Err(cmdErr).Str("stderr", truncateString(stderr.String(), 2000)).Msgf("%s command failed", r.backendName)
 		return Response{}, fmt.Errorf("%s command failed: %w", r.backendName, cmdErr)
 	}
 
 	var response Response
-	if stdout.Len() == 0 {
+	if stdoutCap.all.Len() == 0 {
 		logger.Error().Msgf("%s command returned no output", r.backendName)
 		return Response{}, fmt.Errorf("parse %s response: empty response (no output)", r.backendName)
 	}
@@ -133,7 +133,7 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	// the schema-constrained response. Try parsing the full stdout as a single
 	// JSON envelope first (handles --output-format json and any backend that
 	// emits a single result object).
-	if parsed, ok := extractStructuredOutput(stdout.Bytes()); ok {
+	if parsed, ok := extractStructuredOutput(stdoutCap.all.Bytes()); ok {
 		if err := json.Unmarshal(parsed, &response); err != nil {
 			logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s structured_output", r.backendName)
 			return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
@@ -143,7 +143,7 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 		// --output-format stream-json this is the result event, which also
 		// has a structured_output wrapper. For legacy CLIs it may be a bare
 		// response object.
-		jsonBytes, err := extractJSON(stdout.Bytes())
+		jsonBytes, err := extractJSON(stdoutCap.all.Bytes())
 		if err != nil {
 			logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s response", r.backendName)
 			return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
@@ -166,7 +166,7 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	// Extract the tool-loop transcript from stream-json output (claude backends).
 	// This is a best-effort parse — errors are logged but do not fail the run.
 	if strings.HasPrefix(r.backendName, "claude") {
-		response.Steps = parseClaudeSteps(stdout.Bytes())
+		response.Steps = parseClaudeSteps(stdoutCap.lines)
 	}
 	if response.Summary == "" && len(response.Artifacts) == 0 && len(response.Dispatch) == 0 {
 		logger.Error().Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("%s response is empty (no summary, artifacts, or dispatch)", r.backendName)
@@ -392,14 +392,51 @@ func extractJSON(data []byte) ([]byte, error) {
 	return last, nil
 }
 
+// timedLine pairs a JSONL line with the wall-clock time it arrived from the
+// subprocess. Used by parseClaudeSteps to compute per-tool DurationMs.
+type timedLine struct {
+	data []byte
+	at   time.Time
+}
+
+// lineCapture is an io.Writer that records each complete line together with
+// its arrival timestamp. Partial lines (no trailing newline) are buffered and
+// flushed on the next Write that completes them.
+type lineCapture struct {
+	lines []timedLine
+	buf   []byte
+	all   bytes.Buffer // full unmodified bytes for the rest of the pipeline
+}
+
+func (c *lineCapture) Write(p []byte) (int, error) {
+	now := time.Now()
+	c.all.Write(p)
+	c.buf = append(c.buf, p...)
+	for {
+		idx := bytes.IndexByte(c.buf, '\n')
+		if idx < 0 {
+			break
+		}
+		line := make([]byte, idx+1)
+		copy(line, c.buf[:idx+1])
+		c.lines = append(c.lines, timedLine{data: line, at: now})
+		c.buf = c.buf[idx+1:]
+	}
+	return len(p), nil
+}
+
 // parseClaudeSteps scans --output-format stream-json stdout and reconstructs
 // the tool-loop transcript as a slice of TraceStep values. Each step pairs one
 // tool_use block (from an assistant event) with its corresponding tool_result
 // block (from the following user event), matched by tool_use_id.
 //
+// DurationMs is computed as the wall-clock interval between the line that
+// carried the tool_use block and the line that carried the matching
+// tool_result block, giving a coarse-grained measure of how long the tool ran.
+//
 // Steps are capped at 100 and input/output are truncated to 200 runes.
 // Any event that cannot be parsed is silently skipped — this is best-effort.
-func parseClaudeSteps(data []byte) []TraceStep {
+func parseClaudeSteps(lines []timedLine) []TraceStep {
 	// streamEvent is the minimal shape of a single JSONL line.
 	type contentBlock struct {
 		Type      string          `json:"type"`
@@ -417,16 +454,17 @@ func parseClaudeSteps(data []byte) []TraceStep {
 	}
 
 	type pending struct {
-		name  string
-		input string
-		order int
+		name   string
+		input  string
+		order  int
+		seenAt time.Time
 	}
 	pendingTools := make(map[string]pending) // tool_use_id → pending
 	var steps []TraceStep
 	order := 0
 
-	for _, line := range bytes.Split(data, []byte("\n")) {
-		line = bytes.TrimSpace(line)
+	for _, tl := range lines {
+		line := bytes.TrimSpace(tl.data)
 		if len(line) == 0 || line[0] != '{' {
 			continue
 		}
@@ -442,9 +480,10 @@ func parseClaudeSteps(data []byte) []TraceStep {
 					continue
 				}
 				pendingTools[b.ID] = pending{
-					name:  b.Name,
-					input: truncateString(string(b.Input), 200),
-					order: order,
+					name:   b.Name,
+					input:  truncateString(string(b.Input), 200),
+					order:  order,
+					seenAt: tl.at,
 				}
 				order++
 			}
@@ -463,6 +502,7 @@ func parseClaudeSteps(data []byte) []TraceStep {
 					ToolName:      p.name,
 					InputSummary:  p.input,
 					OutputSummary: truncateString(output, 200),
+					DurationMs:    tl.at.Sub(p.seenAt).Milliseconds(),
 				})
 				if len(steps) >= 100 {
 					return steps

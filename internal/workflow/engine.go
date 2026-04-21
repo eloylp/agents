@@ -44,7 +44,7 @@ type GraphRecorder interface {
 // produces a tool-loop transcript. Implementations must be safe for concurrent
 // use.
 type StepRecorder interface {
-	RecordSteps(spanID string, steps []ai.TraceStep)
+	RecordSteps(spanID string, steps []TraceStep)
 }
 
 // Engine dispatches workflow events to the agents bound to the target repo.
@@ -593,9 +593,19 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef, 
 		)
 	}
 
-	// Record transcript steps when available.
+	// Record transcript steps when available. Translate from the runner-internal
+	// ai.TraceStep to the domain-level workflow.TraceStep at this boundary.
 	if e.stepRec != nil && len(resp.Steps) > 0 {
-		e.stepRec.RecordSteps(spanID, resp.Steps)
+		wsteps := make([]TraceStep, len(resp.Steps))
+		for i, s := range resp.Steps {
+			wsteps[i] = TraceStep{
+				ToolName:      s.ToolName,
+				InputSummary:  s.InputSummary,
+				OutputSummary: s.OutputSummary,
+				DurationMs:    s.DurationMs,
+			}
+		}
+		e.stepRec.RecordSteps(spanID, wsteps)
 	}
 
 	if runErr != nil {

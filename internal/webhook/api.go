@@ -10,7 +10,6 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -447,7 +446,7 @@ func (s *Server) handleAPITraceSteps(w http.ResponseWriter, r *http.Request) {
 	spanID := mux.Vars(r)["span_id"]
 	steps := s.observeStore.ListSteps(spanID)
 	if steps == nil {
-		steps = []ai.TraceStep{} // always return a JSON array, never null
+		steps = []workflow.TraceStep{} // always return a JSON array, never null
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(steps)

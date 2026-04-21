@@ -706,6 +706,15 @@ func TestPromptMetaReflectsDeliveredPrompt(t *testing.T) {
 func TestParseClaudeSteps(t *testing.T) {
 	t.Parallel()
 
+	// toTimedLines converts raw JSONL bytes to []timedLine, simulating the
+	// lineCapture writer that assigns arrival times during real execution.
+	// In tests all lines share the same base time; DurationMs will be 0.
+	toTimedLines := func(data []byte) []timedLine {
+		var cap lineCapture
+		cap.Write(data)
+		return cap.lines
+	}
+
 	// streamJSON builds a minimal stream-json JSONL output with the given
 	// assistant→user event pairs. The final line is a result event.
 	streamJSON := func(pairs [][2]string, finalOutput string) []byte {
@@ -760,7 +769,7 @@ func TestParseClaudeSteps(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			steps := parseClaudeSteps(tc.input)
+			steps := parseClaudeSteps(toTimedLines(tc.input))
 			if len(steps) != len(tc.wantNames) {
 				t.Fatalf("got %d steps, want %d: %+v", len(steps), len(tc.wantNames), steps)
 			}
