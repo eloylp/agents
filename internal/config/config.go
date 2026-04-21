@@ -55,7 +55,6 @@ const (
 	defaultHTTPListenAddr          = ":8080"
 	defaultHTTPStatusPath          = "/status"
 	defaultHTTPWebhookPath         = "/webhooks/github"
-	defaultHTTPAgentsRunPath       = "/agents/run"
 	defaultHTTPReadTimeoutSeconds  = 15
 	defaultHTTPWriteTimeoutSeconds = 15
 	defaultHTTPIdleTimeoutSeconds  = 60
@@ -68,8 +67,6 @@ const (
 
 	defaultAITimeoutSeconds = 600
 	defaultMaxPromptChars   = 12000
-
-	defaultMemoryDir = "/var/lib/agents/memory"
 
 	defaultProxyPath           = "/v1/messages"
 	defaultProxyTimeoutSeconds = 120
@@ -93,7 +90,6 @@ type DaemonConfig struct {
 	Log        LogConfig                  `yaml:"log"`
 	HTTP       HTTPConfig                 `yaml:"http"`
 	Processor  ProcessorConfig            `yaml:"processor"`
-	MemoryDir  string                     `yaml:"memory_dir"`
 	AIBackends map[string]AIBackendConfig `yaml:"ai_backends"`
 	Proxy      ProxyConfig                `yaml:"proxy"`
 }
@@ -130,7 +126,6 @@ type HTTPConfig struct {
 	ListenAddr             string `yaml:"listen_addr"`
 	StatusPath             string `yaml:"status_path"`
 	WebhookPath            string `yaml:"webhook_path"`
-	AgentsRunPath          string `yaml:"agents_run_path"`
 	WebhookSecretEnv       string `yaml:"webhook_secret_env"`
 	ReadTimeoutSeconds     int    `yaml:"read_timeout_seconds"`
 	WriteTimeoutSeconds    int    `yaml:"write_timeout_seconds"`
@@ -524,16 +519,10 @@ func (c *Config) ResolveBackend(configured string) string {
 // ─── internal: defaults, normalization, secrets, prompt loading, validation ──
 
 func (c *Config) applyDefaults() {
-	// daemon.memory_dir
-	if strings.TrimSpace(c.Daemon.MemoryDir) == "" {
-		c.Daemon.MemoryDir = defaultMemoryDir
-	}
-
 	// daemon.http
 	setDefault(&c.Daemon.HTTP.ListenAddr, defaultHTTPListenAddr)
 	setDefault(&c.Daemon.HTTP.StatusPath, defaultHTTPStatusPath)
 	setDefault(&c.Daemon.HTTP.WebhookPath, defaultHTTPWebhookPath)
-	setDefault(&c.Daemon.HTTP.AgentsRunPath, defaultHTTPAgentsRunPath)
 	setDefaultInt(&c.Daemon.HTTP.ReadTimeoutSeconds, defaultHTTPReadTimeoutSeconds)
 	setDefaultInt(&c.Daemon.HTTP.WriteTimeoutSeconds, defaultHTTPWriteTimeoutSeconds)
 	setDefaultInt(&c.Daemon.HTTP.IdleTimeoutSeconds, defaultHTTPIdleTimeoutSeconds)

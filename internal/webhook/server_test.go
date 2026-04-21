@@ -28,7 +28,6 @@ func testCfg(mutator func(*config.Config)) *config.Config {
 				ListenAddr:         ":0",
 				WebhookPath:        "/webhooks/github",
 				StatusPath:         "/status",
-				AgentsRunPath:      "/agents/run",
 				MaxBodyBytes:       1024,
 				WebhookSecret:      "secret",
 				DeliveryTTLSeconds: 3600,
@@ -595,7 +594,7 @@ func TestHandleAgentsRunEnqueuesEvent(t *testing.T) {
 	t.Parallel()
 	server := newRunServer()
 
-	req := newRequest(http.MethodPost, "/agents/run", `{"agent":"coder","repo":"owner/repo"}`)
+	req := newRequest(http.MethodPost, "/run", `{"agent":"coder","repo":"owner/repo"}`)
 	rr := httptest.NewRecorder()
 	server.handleAgentsRun(rr, req)
 
@@ -630,7 +629,7 @@ func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			server := newRunServer()
-			req := newRequest(http.MethodPost, "/agents/run", tc.body)
+			req := newRequest(http.MethodPost, "/run", tc.body)
 			rr := httptest.NewRecorder()
 			server.handleAgentsRun(rr, req)
 			if rr.Code != http.StatusBadRequest {
@@ -643,7 +642,7 @@ func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
 func TestHandleAgentsRunReturnsNotFoundForUnknownRepo(t *testing.T) {
 	t.Parallel()
 	server := newRunServer()
-	req := newRequest(http.MethodPost, "/agents/run", `{"agent":"coder","repo":"unknown/repo"}`)
+	req := newRequest(http.MethodPost, "/run", `{"agent":"coder","repo":"unknown/repo"}`)
 	rr := httptest.NewRecorder()
 	server.handleAgentsRun(rr, req)
 	if rr.Code != http.StatusNotFound {
@@ -761,12 +760,12 @@ func TestBuildHandlerObservabilityRoutesAreOpen(t *testing.T) {
 		method string
 		path   string
 	}{
-		{http.MethodGet, "/api/agents"},
-		{http.MethodGet, "/api/config"},
-		{http.MethodGet, "/api/dispatches"},
-		{http.MethodGet, "/api/events"},
-		{http.MethodGet, "/api/traces"},
-		{http.MethodGet, "/api/graph"},
+		{http.MethodGet, "/agents"},
+		{http.MethodGet, "/config"},
+		{http.MethodGet, "/dispatches"},
+		{http.MethodGet, "/events"},
+		{http.MethodGet, "/traces"},
+		{http.MethodGet, "/graph"},
 		{http.MethodGet, "/ui/"},
 	}
 

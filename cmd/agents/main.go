@@ -47,20 +47,17 @@ func run() error {
 
 	_ = godotenv.Load()
 
-	configPath := flag.String("config", "config.yaml", "path to config file")
-	dbPath := flag.String("db", "", "path to SQLite database file (alternative to --config)")
-	importPath := flag.String("import", "", "YAML config file to import into the database (requires --db)")
+	dbPath := flag.String("db", "agents.db", "path to SQLite database file")
+	importPath := flag.String("import", "", "YAML config file to import into the database")
 	runAgent := flag.String("run-agent", "", "run a single autonomous agent pass and exit (requires --repo)")
 	runRepo := flag.String("repo", "", "repo to target when using --run-agent (e.g. owner/repo)")
 	flag.Parse()
 
-	cfg, db, err := loadConfig(*configPath, *dbPath, *importPath)
+	cfg, db, err := loadConfig(*dbPath, *importPath)
 	if err != nil {
 		return err
 	}
-	if db != nil {
-		defer db.Close()
-	}
+	defer db.Close()
 
 	logger := logging.NewLogger(cfg.Daemon.Log)
 
@@ -143,27 +140,17 @@ func run() error {
 	server.WithUI(ui.FS)
 	server.WithObserve(obs)
 	server.WithRuntimeState(obs)
-	if db != nil {
-		server.WithStore(db, scheduler)
-	}
+	server.WithStore(db, scheduler)
 
-	// In SQLite mode, wire the memory backend into the server for the
-	// /api/memory endpoint and attach an SSE notifier so the UI stream stays
-	// live. In file mode, WatchMemoryDir drives the stream instead.
-	if db != nil {
-		mem := memBackend.(*sqliteMemory)
-		mem.notifyFn = obs.PublishMemoryChange
-		server.WithMemoryReader(&sqliteWebhookReader{db: db})
-	}
+	// Wire the memory backend into the server for the /memory endpoint and
+	// attach an SSE notifier so the UI stream stays live.
+	mem := memBackend.(*sqliteMemory)
+	mem.notifyFn = obs.PublishMemoryChange
+	server.WithMemoryReader(&sqliteWebhookReader{db: db})
 
 	group, groupCtx := errgroup.WithContext(ctx)
 	deliveryStore.Start(groupCtx)
 	engine.StartDispatchDedup(groupCtx)
-	// Watch the memory dir only when using the file-based memory backend (YAML
-	// config path). When --db is used, memory is stored in SQLite.
-	if db == nil {
-		go observe.WatchMemoryDir(groupCtx, cfg.Daemon.MemoryDir, 0, obs.MemorySSE)
-	}
 	group.Go(func() error { return processor.Run(groupCtx) })
 	group.Go(func() error { return scheduler.Run(groupCtx) })
 	group.Go(func() error { return server.Run(groupCtx) })
@@ -213,12 +200,7 @@ func setupRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runne
 }
 
 func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, db *sql.DB, logger zerolog.Logger) (*autonomous.Scheduler, autonomous.MemoryBackend, error) {
-	var memBackend autonomous.MemoryBackend
-	if db != nil {
-		memBackend = &sqliteMemory{db: db}
-	} else {
-		memBackend = autonomous.NewMemoryStore(cfg.Daemon.MemoryDir)
-	}
+	memBackend := &sqliteMemory{db: db}
 	sched, err := autonomous.NewScheduler(cfg, runners, memBackend, logger)
 	return sched, memBackend, err
 }
@@ -270,24 +252,11 @@ func (m *sqliteMemory) WriteMemory(agent, repo, content string) error {
 	return nil
 }
 
-// loadConfig loads the daemon configuration either from a YAML file (legacy
-// path) or from a SQLite database. When dbPath is set:
-//   - If importPath is also set, the YAML at importPath is parsed and written
-//     into the database before loading.
-//   - The config is then read from the database.
-//   - The returned *sql.DB is kept open for the daemon lifetime so that the
-//     CRUD API (/api/store/*) can write to it. The caller must close it.
-//
-// When dbPath is empty, configPath is used and db is nil.
-func loadConfig(configPath, dbPath, importPath string) (*config.Config, *sql.DB, error) {
-	if importPath != "" && dbPath == "" {
-		return nil, nil, fmt.Errorf("--import requires --db")
-	}
-	if dbPath == "" {
-		cfg, err := config.Load(configPath)
-		return cfg, nil, err
-	}
-
+// loadConfig loads the daemon configuration from a SQLite database. When
+// importPath is set, the YAML at importPath is parsed and written into the
+// database before loading. The returned *sql.DB is kept open for the daemon
+// lifetime so that the CRUD API can write to it. The caller must close it.
+func loadConfig(dbPath, importPath string) (*config.Config, *sql.DB, error) {
 	db, err := store.Open(dbPath)
 	if err != nil {
 		return nil, nil, err

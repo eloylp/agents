@@ -67,9 +67,6 @@ func TestLoadMinimalConfig(t *testing.T) {
 	if got := cfg.Daemon.HTTP.WebhookSecret; got != "s3cret" {
 		t.Errorf("webhook secret not resolved from env: got %q", got)
 	}
-	if got := cfg.Daemon.MemoryDir; got != defaultMemoryDir {
-		t.Errorf("memory_dir default: got %q", got)
-	}
 	if len(cfg.Agents) != 1 || cfg.Agents[0].Name != "reviewer" {
 		t.Errorf("agents: got %+v", cfg.Agents)
 	}

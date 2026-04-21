@@ -122,8 +122,8 @@ export default function GraphPage() {
   const load = useCallback(() => {
     setLoading(true)
     Promise.all([
-      fetch('/api/graph').then(r => r.json()),
-      fetch('/api/agents').then(r => r.json()),
+      fetch('/graph').then(r => r.json()),
+      fetch('/agents').then(r => r.json()),
     ]).then(([gd, ad]) => {
       setGraphData(gd)
       setAgents(ad)

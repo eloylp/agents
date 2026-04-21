@@ -10,7 +10,6 @@ daemon:
     listen_addr: ":8080"
     status_path: /status
     webhook_path: /webhooks/github
-    agents_run_path: /agents/run
     webhook_secret_env: GITHUB_WEBHOOK_SECRET   # HMAC shared secret env var
     read_timeout_seconds: 15
     write_timeout_seconds: 15   # applies to non-SSE routes only; SSE streams are unbounded
@@ -28,8 +27,6 @@ daemon:
       max_depth: 3             # max dispatch chain length before drop + WARN
       max_fanout: 4            # max dispatches per single agent run
       dedup_window_seconds: 300  # suppress duplicate (target, repo, number) within window
-
-  memory_dir: /var/lib/agents/memory            # persistent agent memory root
 
   # Built-in Anthropic↔OpenAI translation proxy (disabled by default).
   # Enable to route the claude CLI through any OpenAI-compatible backend

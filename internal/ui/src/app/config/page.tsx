@@ -197,7 +197,7 @@ export default function ConfigPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    fetch('/api/config')
+    fetch('/config')
       .then(r => r.json())
       .then(data => { setConfig(data); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
@@ -205,7 +205,7 @@ export default function ConfigPage() {
 
   const loadBackends = () => {
     setBackendsLoading(true)
-    fetch('/api/store/backends')
+    fetch('/backends')
       .then(r => r.json())
       .then((data: Backend[]) => { setBackends(data); setBackendsLoading(false) })
       .catch(() => setBackendsLoading(false))
@@ -219,7 +219,7 @@ export default function ConfigPage() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch('/api/store/backends', {
+      const res = await fetch('/backends', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
@@ -240,7 +240,7 @@ export default function ConfigPage() {
   const deleteBackend = async () => {
     setSaving(true)
     try {
-      const res = await fetch(`/api/store/backends/${encodeURIComponent(deleteTarget)}`, { method: 'DELETE' })
+      const res = await fetch(`/backends/${encodeURIComponent(deleteTarget)}`, { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         setSaveError((await res.text()) || 'Delete failed')
         setSaving(false)
@@ -255,7 +255,7 @@ export default function ConfigPage() {
   }
 
   const handleExport = async () => {
-    const res = await fetch('/api/store/export')
+    const res = await fetch('/export')
     if (!res.ok) { alert('Export failed: ' + await res.text()); return }
     const blob = await res.blob()
     const url = URL.createObjectURL(blob)
@@ -270,7 +270,7 @@ export default function ConfigPage() {
     setImportStatus('')
     setImportError('')
     const text = await file.text()
-    const url = importMode === 'replace' ? '/api/store/import?mode=replace' : '/api/store/import'
+    const url = importMode === 'replace' ? '/import?mode=replace' : '/import'
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-yaml' },

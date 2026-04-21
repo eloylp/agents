@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -138,7 +136,6 @@ type apiDaemonJSON struct {
 	Log        apiLogConfigJSON                   `json:"log"`
 	HTTP       apiHTTPConfigJSON                  `json:"http"`
 	Processor  apiProcessorConfigJSON             `json:"processor"`
-	MemoryDir  string                             `json:"memory_dir,omitempty"`
 	AIBackends map[string]apiAIBackendConfigJSON  `json:"ai_backends,omitempty"`
 	Proxy      apiProxyConfigJSON                 `json:"proxy"`
 }
@@ -182,7 +179,6 @@ type apiHTTPConfigJSON struct {
 	ListenAddr             string `json:"listen_addr"`
 	StatusPath             string `json:"status_path"`
 	WebhookPath            string `json:"webhook_path"`
-	AgentsRunPath          string `json:"agents_run_path"`
 	WebhookSecretEnv       string `json:"webhook_secret_env,omitempty"`
 	WebhookSecret          string `json:"webhook_secret,omitempty"` // always "[redacted]" when set
 	ReadTimeoutSeconds     int    `json:"read_timeout_seconds"`
@@ -247,7 +243,6 @@ func (s *Server) handleAPIConfig(w http.ResponseWriter, _ *http.Request) {
 		ListenAddr:             cfg.Daemon.HTTP.ListenAddr,
 		StatusPath:             cfg.Daemon.HTTP.StatusPath,
 		WebhookPath:            cfg.Daemon.HTTP.WebhookPath,
-		AgentsRunPath:          cfg.Daemon.HTTP.AgentsRunPath,
 		WebhookSecretEnv:       cfg.Daemon.HTTP.WebhookSecretEnv,
 		ReadTimeoutSeconds:     cfg.Daemon.HTTP.ReadTimeoutSeconds,
 		WriteTimeoutSeconds:    cfg.Daemon.HTTP.WriteTimeoutSeconds,
@@ -344,7 +339,6 @@ func (s *Server) handleAPIConfig(w http.ResponseWriter, _ *http.Request) {
 					DedupWindowSeconds: cfg.Daemon.Processor.Dispatch.DedupWindowSeconds,
 				},
 			},
-			MemoryDir:  cfg.Daemon.MemoryDir,
 			AIBackends: backends,
 			Proxy:      proxy,
 		},
@@ -557,64 +551,20 @@ func (s *Server) handleAPIMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SQLite mode: read memory via the injected MemoryReader.
-	if s.memReader != nil {
-		content, mtime, err := s.memReader.ReadMemory(agent, repo)
-		if errors.Is(err, ErrMemoryNotFound) {
-			http.Error(w, "memory not found", http.StatusNotFound)
-			return
-		}
-		if err != nil {
-			http.Error(w, "could not read memory", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-		if !mtime.IsZero() {
-			w.Header().Set("X-Memory-Mtime", mtime.UTC().Format(time.RFC3339))
-		}
-		_, _ = w.Write([]byte(content))
+	content, mtime, err := s.memReader.ReadMemory(agent, repo)
+	if errors.Is(err, ErrMemoryNotFound) {
+		http.Error(w, "memory not found", http.StatusNotFound)
 		return
 	}
-
-	// File mode: read from the filesystem memory_dir.
-	memDir := s.loadCfg().Daemon.MemoryDir
-	if memDir == "" {
-		http.Error(w, "memory_dir not configured", http.StatusNotFound)
-		return
-	}
-
-	// Build the candidate path as an absolute, cleaned path and verify it
-	// stays within memDir.  filepath.Join calls filepath.Clean internally so
-	// any remaining "../.." sequences are resolved before the prefix check.
-	root, err := filepath.Abs(memDir)
 	if err != nil {
-		http.Error(w, "invalid memory_dir", http.StatusInternalServerError)
+		http.Error(w, "could not read memory", http.StatusInternalServerError)
 		return
 	}
-	path := filepath.Join(root, agent, repo, "MEMORY.md")
-	if !strings.HasPrefix(path, root+string(filepath.Separator)) {
-		http.Error(w, "invalid path", http.StatusBadRequest)
-		return
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			http.Error(w, "memory file not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, "could not stat memory file", http.StatusInternalServerError)
-		return
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		http.Error(w, "could not read memory file", http.StatusInternalServerError)
-		return
-	}
-
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-	w.Header().Set("X-Memory-Mtime", info.ModTime().UTC().Format(time.RFC3339))
-	_, _ = w.Write(data)
+	if !mtime.IsZero() {
+		w.Header().Set("X-Memory-Mtime", mtime.UTC().Format(time.RFC3339))
+	}
+	_, _ = w.Write([]byte(content))
 }
 
 // handleAPIMemoryStream serves GET /api/memory/stream as a Server-Sent Events

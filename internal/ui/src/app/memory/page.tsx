@@ -22,7 +22,7 @@ export default function MemoryPage() {
   const [streaming, setStreaming] = useState(false)
 
   useEffect(() => {
-    fetch('/api/agents')
+    fetch('/agents')
       .then(r => r.json())
       .then(data => setAgents(data ?? []))
       .catch(() => {})
@@ -30,7 +30,7 @@ export default function MemoryPage() {
 
   // Watch memory stream for change notifications
   useEffect(() => {
-    const es = new EventSource('/api/memory/stream')
+    const es = new EventSource('/memory/stream')
     setStreaming(true)
     es.onmessage = (e) => {
       try {
@@ -46,7 +46,7 @@ export default function MemoryPage() {
 
   const loadFile = (agent: string, repoKey: string) => {
     setLoading(true)
-    fetch(`/api/memory/${encodeURIComponent(agent)}/${encodeURIComponent(repoKey)}`)
+    fetch(`/memory/${encodeURIComponent(agent)}/${encodeURIComponent(repoKey)}`)
       .then(async r => {
         if (!r.ok) throw new Error(`${r.status}`)
         const text = await r.text()

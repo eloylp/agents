@@ -55,7 +55,7 @@ function RunButton({ agent, repo }: { agent: string; repo: string }) {
     if (!repo) return
     setState('running')
     try {
-      const res = await fetch('/api/run', {
+      const res = await fetch('/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agent, repo }),
@@ -275,7 +275,7 @@ export default function FleetPage() {
 
   const load = () => {
     setLoading(true)
-    fetch('/api/agents')
+    fetch('/agents')
       .then(r => r.json())
       .then(data => { setAgents(data); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
@@ -286,15 +286,15 @@ export default function FleetPage() {
     // Load store backend names for the agent editor dropdown.
     // Falls back to an empty list when the store endpoint is not available
     // (daemon started without --db), so AgentForm still shows "auto".
-    fetch('/api/store/backends')
+    fetch('/backends')
       .then(r => r.ok ? r.json() : [])
       .then((data: { name: string }[]) => setBackendNames(data.map(b => b.name)))
       .catch(() => { /* store not configured — no-op */ })
-    fetch('/api/store/skills')
+    fetch('/skills')
       .then(r => r.ok ? r.json() : [])
       .then((data: { name: string }[]) => setSkillNames(data.map(s => s.name)))
       .catch(() => { /* store not configured — no-op */ })
-    fetch('/api/store/agents')
+    fetch('/agents')
       .then(r => r.ok ? r.json() : [])
       .then((data: { name: string }[]) => setAgentNames(data.map(a => a.name)))
       .catch(() => { /* store not configured — no-op */ })
@@ -303,7 +303,7 @@ export default function FleetPage() {
   const openEdit = async (agentName: string) => {
     setSaveError('')
     try {
-      const res = await fetch(`/api/store/agents/${encodeURIComponent(agentName)}`)
+      const res = await fetch(`/agents/${encodeURIComponent(agentName)}`)
       if (res.ok) {
         const data = await res.json()
         setSelected(data)
@@ -336,7 +336,7 @@ export default function FleetPage() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch('/api/store/agents', {
+      const res = await fetch('/agents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
@@ -363,7 +363,7 @@ export default function FleetPage() {
   const deleteAgent = async () => {
     setSaving(true)
     try {
-      const res = await fetch(`/api/store/agents/${encodeURIComponent(deleteTarget)}`, { method: 'DELETE' })
+      const res = await fetch(`/agents/${encodeURIComponent(deleteTarget)}`, { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         const msg = await res.text()
         setSaveError(msg || 'Delete failed')

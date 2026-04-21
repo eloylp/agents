@@ -163,7 +163,6 @@ type daemonRecord struct {
 	Log       config.LogConfig       `json:"log"`
 	HTTP      httpRecord             `json:"http"`
 	Processor config.ProcessorConfig `json:"processor"`
-	MemoryDir string                 `json:"memory_dir"`
 	Proxy     proxyRecord            `json:"proxy"`
 }
 
@@ -172,7 +171,6 @@ type httpRecord struct {
 	ListenAddr             string `json:"listen_addr"`
 	StatusPath             string `json:"status_path"`
 	WebhookPath            string `json:"webhook_path"`
-	AgentsRunPath          string `json:"agents_run_path"`
 	WebhookSecretEnv       string `json:"webhook_secret_env"`
 	ReadTimeoutSeconds     int    `json:"read_timeout_seconds"`
 	WriteTimeoutSeconds    int    `json:"write_timeout_seconds"`
@@ -204,7 +202,6 @@ func importDaemon(tx *sql.Tx, d config.DaemonConfig) error {
 			ListenAddr:             d.HTTP.ListenAddr,
 			StatusPath:             d.HTTP.StatusPath,
 			WebhookPath:            d.HTTP.WebhookPath,
-			AgentsRunPath:          d.HTTP.AgentsRunPath,
 			WebhookSecretEnv:       d.HTTP.WebhookSecretEnv,
 
 			ReadTimeoutSeconds:     d.HTTP.ReadTimeoutSeconds,
@@ -215,7 +212,6 @@ func importDaemon(tx *sql.Tx, d config.DaemonConfig) error {
 			ShutdownTimeoutSeconds: d.HTTP.ShutdownTimeoutSeconds,
 		},
 		Processor: d.Processor,
-		MemoryDir: d.MemoryDir,
 		Proxy: proxyRecord{
 			Enabled: d.Proxy.Enabled,
 			Path:    d.Proxy.Path,
@@ -385,7 +381,6 @@ func loadDaemon(db *sql.DB, cfg *config.Config) error {
 		ListenAddr:             rec.HTTP.ListenAddr,
 		StatusPath:             rec.HTTP.StatusPath,
 		WebhookPath:            rec.HTTP.WebhookPath,
-		AgentsRunPath:          rec.HTTP.AgentsRunPath,
 		WebhookSecretEnv:       rec.HTTP.WebhookSecretEnv,
 
 		ReadTimeoutSeconds:     rec.HTTP.ReadTimeoutSeconds,
@@ -396,7 +391,6 @@ func loadDaemon(db *sql.DB, cfg *config.Config) error {
 		ShutdownTimeoutSeconds: rec.HTTP.ShutdownTimeoutSeconds,
 	}
 	cfg.Daemon.Processor = rec.Processor
-	cfg.Daemon.MemoryDir = rec.MemoryDir
 	cfg.Daemon.Proxy = config.ProxyConfig{
 		Enabled: rec.Proxy.Enabled,
 		Path:    rec.Proxy.Path,

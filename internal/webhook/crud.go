@@ -234,10 +234,6 @@ func storeErrStatus(err error) int {
 	return http.StatusInternalServerError
 }
 
-func storeNotConfigured(w http.ResponseWriter) {
-	http.Error(w, "store not configured (start daemon with --db)", http.StatusNotImplemented)
-}
-
 // reloadCron re-reads the full config from the DB as a consistent snapshot
 // and calls Reload on the attached CronReloader (if any). All four entity
 // types are read within a single transaction so a concurrent /api/store write
@@ -287,10 +283,6 @@ func (s *Server) reloadCron() error {
 
 // handleStoreAgents serves GET and POST /api/store/agents.
 func (s *Server) handleStoreAgents(w http.ResponseWriter, r *http.Request) {
-	if s.db == nil {
-		storeNotConfigured(w)
-		return
-	}
 	switch r.Method {
 	case http.MethodGet:
 		agents, err := store.ReadAgents(s.db)
@@ -335,10 +327,6 @@ func (s *Server) handleStoreAgents(w http.ResponseWriter, r *http.Request) {
 
 // handleStoreAgent serves GET and DELETE /api/store/agents/{name}.
 func (s *Server) handleStoreAgent(w http.ResponseWriter, r *http.Request) {
-	if s.db == nil {
-		storeNotConfigured(w)
-		return
-	}
 	name := config.NormalizeAgentName(mux.Vars(r)["name"])
 	switch r.Method {
 	case http.MethodGet:
@@ -376,10 +364,6 @@ func (s *Server) handleStoreAgent(w http.ResponseWriter, r *http.Request) {
 
 // handleStoreSkills serves GET and POST /api/store/skills.
 func (s *Server) handleStoreSkills(w http.ResponseWriter, r *http.Request) {
-	if s.db == nil {
-		storeNotConfigured(w)
-		return
-	}
 	switch r.Method {
 	case http.MethodGet:
 		skills, err := store.ReadSkills(s.db)
@@ -423,10 +407,6 @@ func (s *Server) handleStoreSkills(w http.ResponseWriter, r *http.Request) {
 
 // handleStoreSkill serves GET and DELETE /api/store/skills/{name}.
 func (s *Server) handleStoreSkill(w http.ResponseWriter, r *http.Request) {
-	if s.db == nil {
-		storeNotConfigured(w)
-		return
-	}
 	name := config.NormalizeSkillName(mux.Vars(r)["name"])
 	switch r.Method {
 	case http.MethodGet:
@@ -463,10 +443,6 @@ func (s *Server) handleStoreSkill(w http.ResponseWriter, r *http.Request) {
 
 // handleStoreBackends serves GET and POST /api/store/backends.
 func (s *Server) handleStoreBackends(w http.ResponseWriter, r *http.Request) {
-	if s.db == nil {
-		storeNotConfigured(w)
-		return
-	}
 	switch r.Method {
 	case http.MethodGet:
 		backends, err := store.ReadBackends(s.db)
@@ -523,10 +499,6 @@ func (s *Server) handleStoreBackends(w http.ResponseWriter, r *http.Request) {
 
 // handleStoreBackend serves GET and DELETE /api/store/backends/{name}.
 func (s *Server) handleStoreBackend(w http.ResponseWriter, r *http.Request) {
-	if s.db == nil {
-		storeNotConfigured(w)
-		return
-	}
 	name := config.NormalizeBackendName(mux.Vars(r)["name"])
 	switch r.Method {
 	case http.MethodGet:
@@ -563,10 +535,6 @@ func (s *Server) handleStoreBackend(w http.ResponseWriter, r *http.Request) {
 
 // handleStoreRepos serves GET and POST /api/store/repos.
 func (s *Server) handleStoreRepos(w http.ResponseWriter, r *http.Request) {
-	if s.db == nil {
-		storeNotConfigured(w)
-		return
-	}
 	switch r.Method {
 	case http.MethodGet:
 		repos, err := store.ReadRepos(s.db)
@@ -611,10 +579,6 @@ func (s *Server) handleStoreRepos(w http.ResponseWriter, r *http.Request) {
 
 // handleStoreRepo serves GET and DELETE /api/store/repos/{owner}/{repo}.
 func (s *Server) handleStoreRepo(w http.ResponseWriter, r *http.Request) {
-	if s.db == nil {
-		storeNotConfigured(w)
-		return
-	}
 	vars := mux.Vars(r)
 	repoName := config.NormalizeRepoName(vars["owner"]) + "/" + config.NormalizeRepoName(vars["repo"])
 	switch r.Method {
@@ -670,10 +634,6 @@ type exportDaemonYAML struct {
 // daemon.ai_backends). The API key is required because backends may contain
 // secret env values.
 func (s *Server) handleStoreExport(w http.ResponseWriter, _ *http.Request) {
-	if s.db == nil {
-		storeNotConfigured(w)
-		return
-	}
 	agents, repos, skills, backends, err := store.ReadSnapshot(s.db)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read snapshot: %v", err), http.StatusInternalServerError)
@@ -702,10 +662,6 @@ func (s *Server) handleStoreExport(w http.ResponseWriter, _ *http.Request) {
 // the same format as handleStoreExport and upserts all entities into the DB.
 // On success it returns 200 with a JSON summary of imported counts.
 func (s *Server) handleStoreImport(w http.ResponseWriter, r *http.Request) {
-	if s.db == nil {
-		storeNotConfigured(w)
-		return
-	}
 	r.Body = http.MaxBytesReader(w, r.Body, s.loadCfg().Daemon.HTTP.MaxBodyBytes*10)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {

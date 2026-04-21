@@ -79,7 +79,7 @@ export default function SkillsPage() {
 
   const load = () => {
     setLoading(true)
-    fetch('/api/store/skills')
+    fetch('/skills')
       .then(r => r.json())
       .then((data: { name: string; prompt: string }[]) => {
         setSkills(data.map(s => ({ name: s.name, prompt: s.prompt })))
@@ -106,7 +106,7 @@ export default function SkillsPage() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch('/api/store/skills', {
+      const res = await fetch('/skills', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: form.name, prompt: form.prompt }),
@@ -133,7 +133,7 @@ export default function SkillsPage() {
   const deleteSkill = async () => {
     setSaving(true)
     try {
-      const res = await fetch(`/api/store/skills/${encodeURIComponent(deleteTarget)}`, { method: 'DELETE' })
+      const res = await fetch(`/skills/${encodeURIComponent(deleteTarget)}`, { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         setSaveError((await res.text()) || 'Delete failed')
         setSaving(false)

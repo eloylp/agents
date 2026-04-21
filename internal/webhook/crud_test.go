@@ -84,15 +84,15 @@ func crudMinimalConfig() *config.Config {
 	}
 }
 
-// ── /api/store/agents ────────────────────────────────────────────────────────
+// ── /agents ────────────────────────────────────────────────────────
 
 func TestStoreCRUDAgentListEmpty(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
-	rr := doCRUDRequest(t, s, http.MethodGet, "/api/store/agents", nil)
+	rr := doCRUDRequest(t, s, http.MethodGet, "/agents", nil)
 	if rr.Code != http.StatusOK {
-		t.Fatalf("GET /api/store/agents: got %d, want 200", rr.Code)
+		t.Fatalf("GET /agents: got %d, want 200", rr.Code)
 	}
 	var agents []any
 	if err := json.NewDecoder(rr.Body).Decode(&agents); err != nil {
@@ -110,7 +110,7 @@ func TestStoreCRUDAgentCreateAndGet(t *testing.T) {
 	seedStoreBackend(t, s, "claude")
 	seedStoreSkill(t, s, "architect")
 	// "pr-reviewer" must exist for can_dispatch validation.
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "pr-reviewer", "backend": "claude", "prompt": "review code",
 		"description": "a reviewer agent", "skills": []string{}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
@@ -129,15 +129,15 @@ func TestStoreCRUDAgentCreateAndGet(t *testing.T) {
 	}
 
 	// POST — create
-	rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", payload)
+	rr := doCRUDRequest(t, s, http.MethodPost, "/agents", payload)
 	if rr.Code != http.StatusOK {
-		t.Fatalf("POST /api/store/agents: got %d, want 200 — %s", rr.Code, rr.Body.String())
+		t.Fatalf("POST /agents: got %d, want 200 — %s", rr.Code, rr.Body.String())
 	}
 
 	// GET list — should have two entries: pr-reviewer (seeded) + coder.
-	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/agents", nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/agents", nil)
 	if rr.Code != http.StatusOK {
-		t.Fatalf("GET /api/store/agents: got %d", rr.Code)
+		t.Fatalf("GET /agents: got %d", rr.Code)
 	}
 	var agents []map[string]any
 	if err := json.NewDecoder(rr.Body).Decode(&agents); err != nil {
@@ -155,9 +155,9 @@ func TestStoreCRUDAgentCreateAndGet(t *testing.T) {
 	}
 
 	// GET single
-	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/agents/coder", nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/agents/coder", nil)
 	if rr.Code != http.StatusOK {
-		t.Fatalf("GET /api/store/agents/coder: got %d", rr.Code)
+		t.Fatalf("GET /agents/coder: got %d", rr.Code)
 	}
 }
 
@@ -165,7 +165,7 @@ func TestStoreCRUDAgentDeleteNotFound(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
-	rr := doCRUDRequest(t, s, http.MethodGet, "/api/store/agents/ghost", nil)
+	rr := doCRUDRequest(t, s, http.MethodGet, "/agents/ghost", nil)
 	if rr.Code != http.StatusNotFound {
 		t.Errorf("GET non-existent agent: got %d, want 404", rr.Code)
 	}
@@ -178,7 +178,7 @@ func TestStoreCRUDAgentDelete(t *testing.T) {
 	seedStoreBackend(t, s, "claude")
 	// Seed two agents so that deleting one still leaves the system valid.
 	for _, name := range []string{"coder", "reviewer"} {
-		if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 			"name": name, "backend": "claude", "prompt": "p",
 			"skills": []string{}, "can_dispatch": []string{},
 		}); rr.Code != http.StatusOK {
@@ -186,12 +186,12 @@ func TestStoreCRUDAgentDelete(t *testing.T) {
 		}
 	}
 
-	rr := doCRUDRequest(t, s, http.MethodDelete, "/api/store/agents/coder", nil)
+	rr := doCRUDRequest(t, s, http.MethodDelete, "/agents/coder", nil)
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("DELETE: got %d, want 204", rr.Code)
 	}
 
-	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/agents/coder", nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/agents/coder", nil)
 	if rr.Code != http.StatusNotFound {
 		t.Errorf("GET after delete: got %d, want 404", rr.Code)
 	}
@@ -201,26 +201,26 @@ func TestStoreCRUDAgentMissingName(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
-	rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{"backend": "claude"})
+	rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{"backend": "claude"})
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("POST without name: got %d, want 400", rr.Code)
 	}
 }
 
-// ── /api/store/skills ─────────────────────────────────────────────────────────
+// ── /skills ─────────────────────────────────────────────────────────
 
 func TestStoreCRUDSkillCreateAndDelete(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
-	rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/skills", map[string]any{
+	rr := doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
 		"name": "architect", "prompt": "Focus on architecture.",
 	})
 	if rr.Code != http.StatusOK {
 		t.Fatalf("POST skill: got %d — %s", rr.Code, rr.Body.String())
 	}
 
-	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/skills/architect", nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/skills/architect", nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET skill: got %d", rr.Code)
 	}
@@ -232,18 +232,18 @@ func TestStoreCRUDSkillCreateAndDelete(t *testing.T) {
 		t.Errorf("prompt: got %v", skill["prompt"])
 	}
 
-	rr = doCRUDRequest(t, s, http.MethodDelete, "/api/store/skills/architect", nil)
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/skills/architect", nil)
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("DELETE skill: got %d", rr.Code)
 	}
 
-	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/skills/architect", nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/skills/architect", nil)
 	if rr.Code != http.StatusNotFound {
 		t.Errorf("GET after delete: got %d, want 404", rr.Code)
 	}
 }
 
-// ── /api/store/backends ───────────────────────────────────────────────────────
+// ── /backends ───────────────────────────────────────────────────────
 
 func TestStoreCRUDBackendCreateAndDelete(t *testing.T) {
 	t.Parallel()
@@ -251,19 +251,19 @@ func TestStoreCRUDBackendCreateAndDelete(t *testing.T) {
 
 	// Create two backends so that deleting one still leaves the system valid.
 	for _, name := range []string{"claude", "codex"} {
-		if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
+		if rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
 			"name": name, "command": name, "args": []string{}, "env": map[string]string{},
 		}); rr.Code != http.StatusOK {
 			t.Fatalf("POST backend %s: got %d — %s", name, rr.Code, rr.Body.String())
 		}
 	}
 
-	rr := doCRUDRequest(t, s, http.MethodGet, "/api/store/backends/claude", nil)
+	rr := doCRUDRequest(t, s, http.MethodGet, "/backends/claude", nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET backend: got %d", rr.Code)
 	}
 
-	rr = doCRUDRequest(t, s, http.MethodDelete, "/api/store/backends/claude", nil)
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/backends/claude", nil)
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("DELETE backend: got %d", rr.Code)
 	}
@@ -274,7 +274,7 @@ func TestStoreCRUDBackendGetRedactsEnv(t *testing.T) {
 	s := openCRUDTestServer(t)
 
 	// Create a backend that has env entries with secret values.
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
 		"name":    "claude",
 		"command": "claude",
 		"args":    []string{},
@@ -284,7 +284,7 @@ func TestStoreCRUDBackendGetRedactsEnv(t *testing.T) {
 	}
 
 	// GET list — env values must be redacted.
-	rr := doCRUDRequest(t, s, http.MethodGet, "/api/store/backends", nil)
+	rr := doCRUDRequest(t, s, http.MethodGet, "/backends", nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET backends: got %d", rr.Code)
 	}
@@ -297,12 +297,12 @@ func TestStoreCRUDBackendGetRedactsEnv(t *testing.T) {
 	}
 	for k, v := range list[0].Env {
 		if v != "[redacted]" {
-			t.Errorf("GET /api/store/backends: env[%q] = %q, want \"[redacted]\"", k, v)
+			t.Errorf("GET /backends: env[%q] = %q, want \"[redacted]\"", k, v)
 		}
 	}
 
 	// GET single — same redaction requirement.
-	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/backends/claude", nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/backends/claude", nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET backend/claude: got %d", rr.Code)
 	}
@@ -312,7 +312,7 @@ func TestStoreCRUDBackendGetRedactsEnv(t *testing.T) {
 	}
 	for k, v := range single.Env {
 		if v != "[redacted]" {
-			t.Errorf("GET /api/store/backends/claude: env[%q] = %q, want \"[redacted]\"", k, v)
+			t.Errorf("GET /backends/claude: env[%q] = %q, want \"[redacted]\"", k, v)
 		}
 	}
 }
@@ -326,7 +326,7 @@ func TestStoreCRUDBackendPostPreservesRedactedEnv(t *testing.T) {
 	s := openCRUDTestServer(t)
 
 	// Create backend with a real secret.
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
 		"name":    "claude",
 		"command": "claude",
 		"args":    []string{},
@@ -337,7 +337,7 @@ func TestStoreCRUDBackendPostPreservesRedactedEnv(t *testing.T) {
 
 	// Simulate the UI edit flow: POST back with the "[redacted]" sentinel that
 	// the list API returns, changing only a non-secret field.
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
 		"name":            "claude",
 		"command":         "claude",
 		"args":            []string{"--dangerously-skip-permissions"},
@@ -366,7 +366,7 @@ func TestStoreCRUDBackendPostPreservesRedactedEnv(t *testing.T) {
 	}
 }
 
-// ── /api/store/repos ──────────────────────────────────────────────────────────
+// ── /repos ──────────────────────────────────────────────────────────
 
 func TestStoreCRUDRepoCreateAndDelete(t *testing.T) {
 	t.Parallel()
@@ -374,7 +374,7 @@ func TestStoreCRUDRepoCreateAndDelete(t *testing.T) {
 
 	seedStoreBackend(t, s, "claude")
 	// First create the agent that the binding references.
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "coder", "backend": "claude", "prompt": "p",
 		"skills": []string{}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
@@ -384,7 +384,7 @@ func TestStoreCRUDRepoCreateAndDelete(t *testing.T) {
 	// Create two repos so that deleting one still leaves the system valid.
 	enabled := true
 	for _, name := range []string{"owner/repo", "owner/other"} {
-		if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+		if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
 			"name":    name,
 			"enabled": true,
 			"bindings": []map[string]any{
@@ -396,7 +396,7 @@ func TestStoreCRUDRepoCreateAndDelete(t *testing.T) {
 	}
 
 	// GET list
-	rr := doCRUDRequest(t, s, http.MethodGet, "/api/store/repos", nil)
+	rr := doCRUDRequest(t, s, http.MethodGet, "/repos", nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET repos: got %d", rr.Code)
 	}
@@ -408,8 +408,8 @@ func TestStoreCRUDRepoCreateAndDelete(t *testing.T) {
 		t.Fatalf("got %d repos, want 2", len(repos))
 	}
 
-	// GET single — repo name is owner/repo → /api/store/repos/owner/repo
-	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/repos/owner/repo", nil)
+	// GET single — repo name is owner/repo → /repos/owner/repo
+	rr = doCRUDRequest(t, s, http.MethodGet, "/repos/owner/repo", nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET repo: got %d", rr.Code)
 	}
@@ -422,37 +422,14 @@ func TestStoreCRUDRepoCreateAndDelete(t *testing.T) {
 	}
 
 	// DELETE
-	rr = doCRUDRequest(t, s, http.MethodDelete, "/api/store/repos/owner/repo", nil)
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/repos/owner/repo", nil)
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("DELETE repo: got %d — %s", rr.Code, rr.Body.String())
 	}
 
-	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/repos/owner/repo", nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/repos/owner/repo", nil)
 	if rr.Code != http.StatusNotFound {
 		t.Errorf("GET after delete: got %d, want 404", rr.Code)
-	}
-}
-
-// TestStoreCRUDNotAvailableWithoutStore verifies that /api/store/* routes are
-// not registered when no SQLite store has been attached (YAML-only config).
-func TestStoreCRUDNotAvailableWithoutStore(t *testing.T) {
-	t.Parallel()
-	cfg := crudMinimalConfig()
-	dc := workflow.NewDataChannels(1)
-	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, zerolog.Nop())
-	// No WithStore call — db is nil, routes not registered.
-
-	for _, path := range []string{
-		"/api/store/agents",
-		"/api/store/skills",
-		"/api/store/backends",
-		"/api/store/repos",
-	} {
-		rr := doCRUDRequest(t, s, http.MethodGet, path, nil)
-		if rr.Code != http.StatusNotFound {
-			// Routes are not registered at all when db is nil.
-			t.Errorf("GET %s without store: got %d, want 404", path, rr.Code)
-		}
 	}
 }
 
@@ -502,7 +479,7 @@ func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
 		{
 			name:   "POST agent",
 			method: http.MethodPost,
-			path:   "/api/store/agents",
+			path:   "/agents",
 			body:   map[string]any{"name": "agent-x", "backend": "claude", "prompt": "x"},
 			// Seed the backend so cross-ref validation passes and the test
 			// genuinely exercises reload failure, not validation failure.
@@ -511,25 +488,25 @@ func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
 		{
 			name:   "DELETE agent",
 			method: http.MethodDelete,
-			path:   "/api/store/agents/agent-x",
+			path:   "/agents/agent-x",
 			body:   nil,
 		},
 		{
 			name:   "POST skill",
 			method: http.MethodPost,
-			path:   "/api/store/skills",
+			path:   "/skills",
 			body:   map[string]any{"name": "arch", "prompt": "Focus on architecture."},
 		},
 		{
 			name:   "DELETE skill",
 			method: http.MethodDelete,
-			path:   "/api/store/skills/arch",
+			path:   "/skills/arch",
 			body:   nil,
 		},
 		{
 			name:   "POST backend",
 			method: http.MethodPost,
-			path:   "/api/store/backends",
+			path:   "/backends",
 			// Use "codex" (a valid backend name) so that validateFleet passes
 			// and the only failure is the cron reload.
 			body: map[string]any{"name": "codex", "command": "codex", "args": []string{}, "env": map[string]string{}},
@@ -540,7 +517,7 @@ func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
 		{
 			name:   "DELETE backend",
 			method: http.MethodDelete,
-			path:   "/api/store/backends/claude",
+			path:   "/backends/claude",
 			body:   nil,
 			// Seed two backends so deleting one still leaves the fleet valid;
 			// the reload failure is the only reason the handler should return 500.
@@ -552,13 +529,13 @@ func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
 		{
 			name:   "POST repo",
 			method: http.MethodPost,
-			path:   "/api/store/repos",
+			path:   "/repos",
 			body:   map[string]any{"name": "owner/repo", "enabled": true},
 		},
 		{
 			name:   "DELETE repo",
 			method: http.MethodDelete,
-			path:   "/api/store/repos/owner/repo",
+			path:   "/repos/owner/repo",
 			body:   nil,
 		},
 	}
@@ -599,7 +576,7 @@ func TestStoreCRUDReloadFailureDoesNotUpdateServerCfg(t *testing.T) {
 	// Attempt to add a repo via the CRUD API. The write succeeds in the DB but
 	// Reload fails, so the handler must return 500 and must NOT swap s.cfg.
 	body := map[string]any{"name": "owner/testrepo", "enabled": true}
-	rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", body)
+	rr := doCRUDRequest(t, s, http.MethodPost, "/repos", body)
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("want 500 on reload failure, got %d: %s", rr.Code, rr.Body.String())
 	}
@@ -640,22 +617,22 @@ func TestStoreCRUDPostBodySizeLimit(t *testing.T) {
 	}{
 		{
 			name: "agent",
-			path: "/api/store/agents",
+			path: "/agents",
 			body: map[string]any{"name": "coder", "backend": "claude", "prompt": "You write code — a much longer prompt than 10 bytes."},
 		},
 		{
 			name: "skill",
-			path: "/api/store/skills",
+			path: "/skills",
 			body: map[string]any{"name": "arch", "prompt": "You are an architect — longer than 10 bytes."},
 		},
 		{
 			name: "backend",
-			path: "/api/store/backends",
+			path: "/backends",
 			body: map[string]any{"name": "claude", "command": "claude", "args": []string{}, "env": map[string]string{}},
 		},
 		{
 			name: "repo",
-			path: "/api/store/repos",
+			path: "/repos",
 			body: map[string]any{"name": "owner/repo", "enabled": true, "bindings": []any{}},
 		},
 	}
@@ -693,10 +670,10 @@ func TestStoreCRUDPostBodyTrailingGarbageRejected(t *testing.T) {
 	s.WithStore(db, nil)
 
 	endpoints := []string{
-		"/api/store/agents",
-		"/api/store/skills",
-		"/api/store/backends",
-		"/api/store/repos",
+		"/agents",
+		"/skills",
+		"/backends",
+		"/repos",
 	}
 
 	for _, path := range endpoints {
@@ -731,19 +708,19 @@ func TestStoreCRUDValidationErrorReturns400(t *testing.T) {
 	}{
 		{
 			name: "backend with empty command",
-			path: "/api/store/backends",
+			path: "/backends",
 			body: map[string]any{"name": "claude", "command": "   ", "args": []string{}, "env": map[string]string{}},
 		},
 		{
 			name: "agent with empty prompt",
-			path: "/api/store/agents",
+			path: "/agents",
 			body: map[string]any{"name": "coder", "backend": "claude", "prompt": "",
 				"skills": []string{}, "can_dispatch": []string{}},
 			setup: func(t *testing.T, s *Server) { seedStoreBackend(t, s, "claude") },
 		},
 		{
 			name: "agent with unknown backend",
-			path: "/api/store/agents",
+			path: "/agents",
 			body: map[string]any{"name": "coder", "backend": "unknown", "prompt": "p",
 				"skills": []string{}, "can_dispatch": []string{}},
 		},
@@ -776,9 +753,9 @@ func TestStoreCRUDConflictErrorReturns409(t *testing.T) {
 	}{
 		{
 			name: "delete last backend",
-			path: "/api/store/backends/claude",
+			path: "/backends/claude",
 			setup: func(t *testing.T, s *Server) {
-				if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
+				if rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
 					"name": "claude", "command": "claude", "args": []string{}, "env": map[string]string{},
 				}); rr.Code != http.StatusOK {
 					t.Fatalf("create backend: got %d — %s", rr.Code, rr.Body.String())
@@ -787,10 +764,10 @@ func TestStoreCRUDConflictErrorReturns409(t *testing.T) {
 		},
 		{
 			name: "delete last agent",
-			path: "/api/store/agents/coder",
+			path: "/agents/coder",
 			setup: func(t *testing.T, s *Server) {
 				seedStoreBackend(t, s, "claude")
-				if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+				if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 					"name": "coder", "backend": "claude", "prompt": "p",
 					"skills": []string{}, "can_dispatch": []string{},
 				}); rr.Code != http.StatusOK {
@@ -800,11 +777,11 @@ func TestStoreCRUDConflictErrorReturns409(t *testing.T) {
 		},
 		{
 			name: "delete backend referenced by agent",
-			path: "/api/store/backends/claude",
+			path: "/backends/claude",
 			setup: func(t *testing.T, s *Server) {
 				seedStoreBackend(t, s, "claude")
 				seedStoreBackend(t, s, "codex")
-				if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+				if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 					"name": "coder", "backend": "claude", "prompt": "p",
 					"skills": []string{}, "can_dispatch": []string{},
 				}); rr.Code != http.StatusOK {
@@ -846,7 +823,7 @@ func (r *countingCronReloader) Reload(_ []config.RepoDef, agents []config.AgentD
 }
 
 // TestConcurrentWriteReloadSerialisation verifies that concurrent POST
-// /api/store/agents requests do not interleave their DB-write and in-memory
+// /agents requests do not interleave their DB-write and in-memory
 // Reload calls. Specifically, the last Reload that runs must see all agents
 // that were successfully committed to SQLite — it must never reflect a stale
 // snapshot from a request that finished earlier but whose Reload won the race.
@@ -867,7 +844,7 @@ func TestConcurrentWriteReloadSerialisation(t *testing.T) {
 		name := "agent-concurrent-" + string(rune('a'+i))
 		go func(agentName string) {
 			defer wg.Done()
-			rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents",
+			rr := doCRUDRequest(t, s, http.MethodPost, "/agents",
 				map[string]any{"name": agentName, "backend": "claude", "prompt": "p"})
 			if rr.Code != http.StatusOK {
 				t.Errorf("POST agent %s: want 200, got %d: %s", agentName, rr.Code, rr.Body.String())
@@ -907,7 +884,7 @@ func TestStoreCRUDAgentRejectedWithUnknownBackend(t *testing.T) {
 	s := openCRUDTestServer(t)
 
 	// No backend seeded — "claude" is unknown.
-	rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "coder", "backend": "claude", "prompt": "p",
 		"skills": []string{}, "can_dispatch": []string{},
 	})
@@ -926,20 +903,20 @@ func TestStoreCRUDDeleteBackendRejectedWhenReferenced(t *testing.T) {
 	// the "agent still references it" validation.
 	seedStoreBackend(t, s, "claude")
 	seedStoreBackend(t, s, "codex")
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "coder", "backend": "claude", "prompt": "p",
 		"skills": []string{}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("create agent: got %d — %s", rr.Code, rr.Body.String())
 	}
 
-	rr := doCRUDRequest(t, s, http.MethodDelete, "/api/store/backends/claude", nil)
+	rr := doCRUDRequest(t, s, http.MethodDelete, "/backends/claude", nil)
 	if rr.Code == http.StatusNoContent {
 		t.Error("DELETE backend still referenced by agent: want non-204, got 204")
 	}
 
 	// Backend must still be present.
-	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/backends/claude", nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/backends/claude", nil)
 	if rr.Code != http.StatusOK {
 		t.Errorf("GET backend after rejected delete: got %d, want 200", rr.Code)
 	}
@@ -953,20 +930,20 @@ func TestStoreCRUDDeleteSkillRejectedWhenReferenced(t *testing.T) {
 
 	seedStoreBackend(t, s, "claude")
 	seedStoreSkill(t, s, "architect")
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "coder", "backend": "claude", "prompt": "p",
 		"skills": []string{"architect"}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("create agent: got %d — %s", rr.Code, rr.Body.String())
 	}
 
-	rr := doCRUDRequest(t, s, http.MethodDelete, "/api/store/skills/architect", nil)
+	rr := doCRUDRequest(t, s, http.MethodDelete, "/skills/architect", nil)
 	if rr.Code == http.StatusNoContent {
 		t.Error("DELETE skill still referenced by agent: want non-204, got 204")
 	}
 
 	// Skill must still be present.
-	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/skills/architect", nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/skills/architect", nil)
 	if rr.Code != http.StatusOK {
 		t.Errorf("GET skill after rejected delete: got %d, want 200", rr.Code)
 	}
@@ -978,7 +955,7 @@ func TestStoreCRUDBackendRejectedWithEmptyCommand(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
-	rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
+	rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
 		"name": "claude", "command": "", "args": []string{}, "env": map[string]string{},
 	})
 	if rr.Code == http.StatusOK {
@@ -991,7 +968,7 @@ func TestStoreCRUDAgentRejectedWithEmptyPrompt(t *testing.T) {
 	s := openCRUDTestServer(t)
 
 	seedStoreBackend(t, s, "claude")
-	rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "coder", "backend": "claude", "prompt": "",
 		"skills": []string{}, "can_dispatch": []string{},
 	})
@@ -1005,14 +982,14 @@ func TestStoreCRUDRepoRejectedWithNoTrigger(t *testing.T) {
 	s := openCRUDTestServer(t)
 
 	seedStoreBackend(t, s, "claude")
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "coder", "backend": "claude", "prompt": "p",
 		"skills": []string{}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("create agent: got %d — %s", rr.Code, rr.Body.String())
 	}
 	// Binding has no labels, events, or cron — invalid.
-	rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+	rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
 		"name": "owner/repo", "enabled": true,
 		"bindings": []map[string]any{{"agent": "coder"}},
 	})
@@ -1025,19 +1002,19 @@ func TestStoreCRUDDeleteBackendRejectedAsLast(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
 		"name": "claude", "command": "claude", "args": []string{}, "env": map[string]string{},
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("create backend: got %d — %s", rr.Code, rr.Body.String())
 	}
 
-	rr := doCRUDRequest(t, s, http.MethodDelete, "/api/store/backends/claude", nil)
+	rr := doCRUDRequest(t, s, http.MethodDelete, "/backends/claude", nil)
 	if rr.Code == http.StatusNoContent {
 		t.Error("DELETE last backend: want non-204, got 204")
 	}
 
 	// Backend must still be present.
-	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/backends/claude", nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/backends/claude", nil)
 	if rr.Code != http.StatusOK {
 		t.Errorf("GET backend after rejected delete: got %d, want 200", rr.Code)
 	}
@@ -1048,21 +1025,21 @@ func TestStoreCRUDDeleteAgentRejectedAsLast(t *testing.T) {
 	s := openCRUDTestServer(t)
 
 	seedStoreBackend(t, s, "claude")
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "coder", "backend": "claude", "prompt": "p",
 		"skills": []string{}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("create agent: got %d — %s", rr.Code, rr.Body.String())
 	}
 
-	rr := doCRUDRequest(t, s, http.MethodDelete, "/api/store/agents/coder", nil)
+	rr := doCRUDRequest(t, s, http.MethodDelete, "/agents/coder", nil)
 	if rr.Code == http.StatusNoContent {
 		t.Error("DELETE last agent: want non-204, got 204")
 	}
 }
 
 // TestStoreCRUDSingleEntityPathCanonicalization verifies that GET and DELETE
-// /api/store/{type}/{name} canonicalize the path parameter before lookup so
+// /{type}/{name} canonicalize the path parameter before lookup so
 // that mixed-case names resolve correctly after POST stores them in lowercase.
 func TestStoreCRUDSingleEntityPathCanonicalization(t *testing.T) {
 	t.Parallel()
@@ -1073,7 +1050,7 @@ func TestStoreCRUDSingleEntityPathCanonicalization(t *testing.T) {
 	seedStoreSkill(t, s, "architect")
 
 	// POST agent with lowercase name — stored as "coder".
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "coder", "backend": "claude", "prompt": "p",
 		"skills": []string{}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
@@ -1081,44 +1058,44 @@ func TestStoreCRUDSingleEntityPathCanonicalization(t *testing.T) {
 	}
 
 	// GET with mixed-case path — should return 200, not 404.
-	rr := doCRUDRequest(t, s, http.MethodGet, "/api/store/agents/Coder", nil)
+	rr := doCRUDRequest(t, s, http.MethodGet, "/agents/Coder", nil)
 	if rr.Code != http.StatusOK {
-		t.Errorf("GET /api/store/agents/Coder: got %d, want 200", rr.Code)
+		t.Errorf("GET /agents/Coder: got %d, want 200", rr.Code)
 	}
 
 	// GET skill with mixed-case path.
-	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/skills/Architect", nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/skills/Architect", nil)
 	if rr.Code != http.StatusOK {
-		t.Errorf("GET /api/store/skills/Architect: got %d, want 200", rr.Code)
+		t.Errorf("GET /skills/Architect: got %d, want 200", rr.Code)
 	}
 
 	// GET backend with mixed-case path.
-	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/backends/Claude", nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/backends/Claude", nil)
 	if rr.Code != http.StatusOK {
-		t.Errorf("GET /api/store/backends/Claude: got %d, want 200", rr.Code)
+		t.Errorf("GET /backends/Claude: got %d, want 200", rr.Code)
 	}
 
 	// DELETE with mixed-case path — should actually remove the entity.
-	rr = doCRUDRequest(t, s, http.MethodDelete, "/api/store/skills/Architect", nil)
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/skills/Architect", nil)
 	if rr.Code != http.StatusNoContent {
-		t.Errorf("DELETE /api/store/skills/Architect: got %d, want 204", rr.Code)
+		t.Errorf("DELETE /skills/Architect: got %d, want 204", rr.Code)
 	}
 	// Confirm it's gone.
-	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/skills/architect", nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/skills/architect", nil)
 	if rr.Code != http.StatusNotFound {
 		t.Errorf("GET after delete: got %d, want 404", rr.Code)
 	}
 }
 
 // TestStoreCRUDRepoPathCanonicalization verifies that GET and DELETE
-// /api/store/repos/{owner}/{repo} canonicalize the path parameter
+// /repos/{owner}/{repo} canonicalize the path parameter
 // case-insensitively, matching the config layer's RepoByName semantics.
 func TestStoreCRUDRepoPathCanonicalization(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
 	seedStoreBackend(t, s, "claude")
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "coder", "backend": "claude", "prompt": "p",
 		"skills": []string{}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
@@ -1127,7 +1104,7 @@ func TestStoreCRUDRepoPathCanonicalization(t *testing.T) {
 
 	// Create two repos so that deleting one still leaves the fleet valid.
 	for _, name := range []string{"owner/repo", "owner/other"} {
-		if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+		if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
 			"name": name, "enabled": true,
 			"bindings": []map[string]any{{"agent": "coder", "labels": []string{"ai"}, "enabled": true}},
 		}); rr.Code != http.StatusOK {
@@ -1136,24 +1113,24 @@ func TestStoreCRUDRepoPathCanonicalization(t *testing.T) {
 	}
 
 	// GET with mixed-case owner — should return 200, not 404.
-	rr := doCRUDRequest(t, s, http.MethodGet, "/api/store/repos/Owner/repo", nil)
+	rr := doCRUDRequest(t, s, http.MethodGet, "/repos/Owner/repo", nil)
 	if rr.Code != http.StatusOK {
-		t.Errorf("GET /api/store/repos/Owner/repo: got %d, want 200", rr.Code)
+		t.Errorf("GET /repos/Owner/repo: got %d, want 200", rr.Code)
 	}
 
 	// GET with mixed-case repo segment — should return 200.
-	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/repos/owner/Repo", nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/repos/owner/Repo", nil)
 	if rr.Code != http.StatusOK {
-		t.Errorf("GET /api/store/repos/owner/Repo: got %d, want 200", rr.Code)
+		t.Errorf("GET /repos/owner/Repo: got %d, want 200", rr.Code)
 	}
 
 	// DELETE with mixed-case path — should actually remove the repo.
-	rr = doCRUDRequest(t, s, http.MethodDelete, "/api/store/repos/Owner/Repo", nil)
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/repos/Owner/Repo", nil)
 	if rr.Code != http.StatusNoContent {
-		t.Errorf("DELETE /api/store/repos/Owner/Repo: got %d, want 204", rr.Code)
+		t.Errorf("DELETE /repos/Owner/Repo: got %d, want 204", rr.Code)
 	}
 	// Confirm it's gone.
-	rr = doCRUDRequest(t, s, http.MethodGet, "/api/store/repos/owner/repo", nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/repos/owner/repo", nil)
 	if rr.Code != http.StatusNotFound {
 		t.Errorf("GET after delete: got %d, want 404", rr.Code)
 	}
@@ -1172,7 +1149,7 @@ func TestStoreCRUDPostReturnsCanonicalForm(t *testing.T) {
 	// ── backend ──────────────────────────────────────────────────────────────
 	// POST with mixed-case name and zero timeout/max_prompt_chars; response must
 	// have lowercase name, defaults applied, and env values redacted.
-	rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/backends", map[string]any{
+	rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
 		"name":    "Claude",
 		"command": " claude ",
 		"env":     map[string]string{"ANTHROPIC_API_KEY": "secret-value"},
@@ -1209,7 +1186,7 @@ func TestStoreCRUDPostReturnsCanonicalForm(t *testing.T) {
 	// ── agent ────────────────────────────────────────────────────────────────
 	// POST with mixed-case name and extra whitespace; response must have
 	// lowercase name and trimmed prompt.
-	rr = doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	rr = doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name":    "  Coder  ",
 		"backend": "claude",
 		"prompt":  "  You write code.  ",
@@ -1231,7 +1208,7 @@ func TestStoreCRUDPostReturnsCanonicalForm(t *testing.T) {
 	// ── skill ────────────────────────────────────────────────────────────────
 	// POST with mixed-case name and whitespace-padded prompt; response must
 	// have lowercase name and trimmed prompt.
-	rr = doCRUDRequest(t, s, http.MethodPost, "/api/store/skills", map[string]any{
+	rr = doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
 		"name":   "Architect",
 		"prompt": "  Focus on design.  ",
 	})
@@ -1252,7 +1229,7 @@ func TestStoreCRUDPostReturnsCanonicalForm(t *testing.T) {
 	// ── repo ─────────────────────────────────────────────────────────────────
 	// POST with mixed-case name; response must have lowercase name and
 	// normalized binding agent name.
-	rr = doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+	rr = doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
 		"name":    "Owner/Repo",
 		"enabled": true,
 		"bindings": []map[string]any{
@@ -1301,13 +1278,13 @@ func TestServerCfgUpdatedAfterCRUDWrite(t *testing.T) {
 
 	// Seed backend and create agent + repo via CRUD API.
 	seedStoreBackend(t, s, "claude")
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "coder", "backend": "claude", "prompt": "p",
 		"skills": []string{}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("POST agent: %d — %s", rr.Code, rr.Body.String())
 	}
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
 		"name": "owner/newrepo", "enabled": true,
 		"bindings": []map[string]any{{"agent": "coder", "labels": []string{"ai:fix"}}},
 	}); rr.Code != http.StatusOK {
@@ -1324,7 +1301,7 @@ func TestServerCfgUpdatedAfterCRUDWrite(t *testing.T) {
 	}
 
 	// Verify /api/agents reflects the new agent.
-	rr := doCRUDRequest(t, s, http.MethodGet, "/api/agents", nil)
+	rr := doCRUDRequest(t, s, http.MethodGet, "/agents", nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET /api/agents: %d — %s", rr.Code, rr.Body.String())
 	}
@@ -1373,26 +1350,26 @@ func TestStoreCRUDDeleteRepoRejectedAsLastEnabled(t *testing.T) {
 	s := openCRUDTestServer(t)
 
 	seedStoreBackend(t, s, "claude")
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "coder", "backend": "claude", "prompt": "p",
 		"skills": []string{}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("create agent: got %d — %s", rr.Code, rr.Body.String())
 	}
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
 		"name": "owner/repo", "enabled": true,
 		"bindings": []map[string]any{{"agent": "coder", "labels": []string{"ai:fix"}}},
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("create repo: got %d — %s", rr.Code, rr.Body.String())
 	}
 
-	rr := doCRUDRequest(t, s, http.MethodDelete, "/api/store/repos/owner/repo", nil)
+	rr := doCRUDRequest(t, s, http.MethodDelete, "/repos/owner/repo", nil)
 	if rr.Code == http.StatusNoContent {
 		t.Error("DELETE last enabled repo: want non-204, got 204")
 	}
 }
 
-// ── /api/store/export and /api/store/import ───────────────────────────────────
+// ── /export and /import ───────────────────────────────────
 
 func TestStoreExportReturnsYAML(t *testing.T) {
 	t.Parallel()
@@ -1400,20 +1377,20 @@ func TestStoreExportReturnsYAML(t *testing.T) {
 	seedStoreBackend(t, s, "claude")
 
 	// Create an agent and repo so the export is non-trivial.
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "coder", "backend": "claude", "prompt": "help",
 		"skills": []string{}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("create agent: %d — %s", rr.Code, rr.Body.String())
 	}
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
 		"name": "owner/repo", "enabled": true,
 		"bindings": []map[string]any{{"agent": "coder", "labels": []string{"ai:fix"}}},
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("create repo: %d — %s", rr.Code, rr.Body.String())
 	}
 
-	rr := doCRUDRequest(t, s, http.MethodGet, "/api/store/export", nil)
+	rr := doCRUDRequest(t, s, http.MethodGet, "/export", nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("export: got %d — %s", rr.Code, rr.Body.String())
 	}
@@ -1439,13 +1416,13 @@ func TestStoreImportRoundTrip(t *testing.T) {
 	// at least one enabled repo). We import a repo in the YAML payload so this
 	// is satisfied by the import itself. Seed one first so the import can be
 	// verified as an upsert.
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "scout", "backend": "claude", "prompt": "x",
 		"skills": []string{}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("seed agent: %d", rr.Code)
 	}
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
 		"name": "owner/seed-repo", "enabled": true,
 		"bindings": []map[string]any{{"agent": "scout", "labels": []string{"ai:scan"}}},
 	}); rr.Code != http.StatusOK {
@@ -1462,7 +1439,7 @@ skills:
   imported-skill:
     prompt: imported skill prompt
 `
-	req := httptest.NewRequest(http.MethodPost, "/api/store/import", strings.NewReader(yaml))
+	req := httptest.NewRequest(http.MethodPost, "/import", strings.NewReader(yaml))
 	req.Header.Set("Content-Type", "application/x-yaml")
 	rr := httptest.NewRecorder()
 	s.buildHandler().ServeHTTP(rr, req)
@@ -1482,7 +1459,7 @@ skills:
 	}
 
 	// Verify the imported agent appears in the list.
-	rr2 := doCRUDRequest(t, s, http.MethodGet, "/api/store/agents", nil)
+	rr2 := doCRUDRequest(t, s, http.MethodGet, "/agents", nil)
 	if !strings.Contains(rr2.Body.String(), "imported-agent") {
 		t.Errorf("imported agent not in agent list: %s", rr2.Body.String())
 	}
@@ -1494,13 +1471,13 @@ func TestStoreImportReplacePrunesExistingRecords(t *testing.T) {
 	seedStoreBackend(t, s, "claude")
 
 	// Seed an agent and a repo that should be absent after the replace import.
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "old-agent", "backend": "claude", "prompt": "old",
 		"skills": []string{}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("seed old-agent: %d — %s", rr.Code, rr.Body.String())
 	}
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
 		"name": "owner/old-repo", "enabled": true,
 		"bindings": []map[string]any{{"agent": "old-agent", "labels": []string{"ai:scan"}}},
 	}); rr.Code != http.StatusOK {
@@ -1528,7 +1505,7 @@ repos:
         labels:
           - ai:run
 `
-	req := httptest.NewRequest(http.MethodPost, "/api/store/import?mode=replace", strings.NewReader(yamlBody))
+	req := httptest.NewRequest(http.MethodPost, "/import?mode=replace", strings.NewReader(yamlBody))
 	req.Header.Set("Content-Type", "application/x-yaml")
 	rr := httptest.NewRecorder()
 	s.buildHandler().ServeHTTP(rr, req)
@@ -1537,7 +1514,7 @@ repos:
 	}
 
 	// old-agent must be gone.
-	agents := doCRUDRequest(t, s, http.MethodGet, "/api/store/agents", nil)
+	agents := doCRUDRequest(t, s, http.MethodGet, "/agents", nil)
 	if strings.Contains(agents.Body.String(), "old-agent") {
 		t.Errorf("old-agent still present after replace import: %s", agents.Body.String())
 	}
@@ -1546,7 +1523,7 @@ repos:
 	}
 
 	// old-repo must be gone.
-	repos := doCRUDRequest(t, s, http.MethodGet, "/api/store/repos", nil)
+	repos := doCRUDRequest(t, s, http.MethodGet, "/repos", nil)
 	if strings.Contains(repos.Body.String(), "old-repo") {
 		t.Errorf("old-repo still present after replace import: %s", repos.Body.String())
 	}
@@ -1566,7 +1543,7 @@ func TestStoreImportRejectsEmptyFleetOnBlankStore(t *testing.T) {
   my-skill:
     prompt: just a skill
 `
-	req := httptest.NewRequest(http.MethodPost, "/api/store/import", strings.NewReader(yamlBody))
+	req := httptest.NewRequest(http.MethodPost, "/import", strings.NewReader(yamlBody))
 	req.Header.Set("Content-Type", "application/x-yaml")
 	rr := httptest.NewRecorder()
 	s.buildHandler().ServeHTTP(rr, req)
@@ -1581,13 +1558,13 @@ func TestStoreReplaceRejectsEmptyAgentList(t *testing.T) {
 	seedStoreBackend(t, s, "claude")
 
 	// Seed an agent and repo so the store is in a valid state.
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "existing-agent", "backend": "claude", "prompt": "p",
 		"skills": []string{}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("seed agent: %d — %s", rr.Code, rr.Body.String())
 	}
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
 		"name": "owner/r", "enabled": true,
 		"bindings": []map[string]any{{"agent": "existing-agent", "labels": []string{"ai:run"}}},
 	}); rr.Code != http.StatusOK {
@@ -1601,7 +1578,7 @@ func TestStoreReplaceRejectsEmptyAgentList(t *testing.T) {
       command: claude
       args: []
 `
-	req := httptest.NewRequest(http.MethodPost, "/api/store/import?mode=replace", strings.NewReader(yamlBody))
+	req := httptest.NewRequest(http.MethodPost, "/import?mode=replace", strings.NewReader(yamlBody))
 	req.Header.Set("Content-Type", "application/x-yaml")
 	rr := httptest.NewRecorder()
 	s.buildHandler().ServeHTTP(rr, req)
@@ -1611,7 +1588,7 @@ func TestStoreReplaceRejectsEmptyAgentList(t *testing.T) {
 
 	// The original agent must still be present — the failed replace must not
 	// have modified the store.
-	agents := doCRUDRequest(t, s, http.MethodGet, "/api/store/agents", nil)
+	agents := doCRUDRequest(t, s, http.MethodGet, "/agents", nil)
 	if !strings.Contains(agents.Body.String(), "existing-agent") {
 		t.Errorf("existing-agent missing after failed replace: %s", agents.Body.String())
 	}
@@ -1621,7 +1598,7 @@ func TestStoreImportRejectsInvalidMode(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/store/import?mode=replce", strings.NewReader("{}"))
+	req := httptest.NewRequest(http.MethodPost, "/import?mode=replce", strings.NewReader("{}"))
 	req.Header.Set("Content-Type", "application/x-yaml")
 	rr := httptest.NewRecorder()
 	s.buildHandler().ServeHTTP(rr, req)
@@ -1638,13 +1615,13 @@ func TestStoreImportMergeRejectsInvalidCron(t *testing.T) {
 	s := openCRUDTestServer(t)
 	seedStoreBackend(t, s, "claude")
 
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "scout", "backend": "claude", "prompt": "p",
 		"skills": []string{}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("seed agent: %d — %s", rr.Code, rr.Body.String())
 	}
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
 		"name": "owner/existing-repo", "enabled": true,
 		"bindings": []map[string]any{{"agent": "scout", "labels": []string{"ai:run"}}},
 	}); rr.Code != http.StatusOK {
@@ -1670,7 +1647,7 @@ repos:
       - agent: scout
         cron: "99 99 * * *"
 `
-	req := httptest.NewRequest(http.MethodPost, "/api/store/import", strings.NewReader(yamlBody))
+	req := httptest.NewRequest(http.MethodPost, "/import", strings.NewReader(yamlBody))
 	req.Header.Set("Content-Type", "application/x-yaml")
 	rr := httptest.NewRecorder()
 	s.buildHandler().ServeHTTP(rr, req)
@@ -1679,7 +1656,7 @@ repos:
 	}
 
 	// The original repo must still be intact after the failed import.
-	repos := doCRUDRequest(t, s, http.MethodGet, "/api/store/repos", nil)
+	repos := doCRUDRequest(t, s, http.MethodGet, "/repos", nil)
 	if !strings.Contains(repos.Body.String(), "existing-repo") {
 		t.Errorf("existing-repo missing after failed merge import: %s", repos.Body.String())
 	}
@@ -1690,13 +1667,13 @@ func TestStoreImportReplaceRejectsInvalidCron(t *testing.T) {
 	s := openCRUDTestServer(t)
 	seedStoreBackend(t, s, "claude")
 
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "scout", "backend": "claude", "prompt": "p",
 		"skills": []string{}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("seed agent: %d — %s", rr.Code, rr.Body.String())
 	}
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
 		"name": "owner/existing-repo", "enabled": true,
 		"bindings": []map[string]any{{"agent": "scout", "labels": []string{"ai:run"}}},
 	}); rr.Code != http.StatusOK {
@@ -1722,7 +1699,7 @@ repos:
       - agent: scout
         cron: "1-2-3 * * * *"
 `
-	req := httptest.NewRequest(http.MethodPost, "/api/store/import?mode=replace", strings.NewReader(yamlBody))
+	req := httptest.NewRequest(http.MethodPost, "/import?mode=replace", strings.NewReader(yamlBody))
 	req.Header.Set("Content-Type", "application/x-yaml")
 	rr := httptest.NewRecorder()
 	s.buildHandler().ServeHTTP(rr, req)
@@ -1731,24 +1708,13 @@ repos:
 	}
 
 	// The original state must be preserved after the failed replace.
-	agents := doCRUDRequest(t, s, http.MethodGet, "/api/store/agents", nil)
+	agents := doCRUDRequest(t, s, http.MethodGet, "/agents", nil)
 	if !strings.Contains(agents.Body.String(), "scout") {
 		t.Errorf("scout missing after failed replace import: %s", agents.Body.String())
 	}
-	repos := doCRUDRequest(t, s, http.MethodGet, "/api/store/repos", nil)
+	repos := doCRUDRequest(t, s, http.MethodGet, "/repos", nil)
 	if !strings.Contains(repos.Body.String(), "existing-repo") {
 		t.Errorf("existing-repo missing after failed replace import: %s", repos.Body.String())
 	}
 }
 
-func TestStoreExportNotRegisteredWithoutStore(t *testing.T) {
-	t.Parallel()
-	cfg := crudMinimalConfig()
-	dc := workflow.NewDataChannels(1)
-	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, zerolog.Nop())
-	// No store attached — routes are not registered, so the router returns 404.
-	rr := doCRUDRequest(t, s, http.MethodGet, "/api/store/export", nil)
-	if rr.Code != http.StatusNotFound {
-		t.Errorf("export without store: want 404 (not registered), got %d", rr.Code)
-	}
-}

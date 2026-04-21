@@ -187,7 +187,7 @@ function TracesContent() {
 
   const load = () => {
     setLoading(true)
-    fetch('/api/traces')
+    fetch('/traces')
       .then(r => r.json())
       .then(data => { setSpans(data ?? []); setLoading(false) })
       .catch(() => setLoading(false))
@@ -195,7 +195,7 @@ function TracesContent() {
 
   useEffect(() => {
     load()
-    const es = new EventSource('/api/traces/stream')
+    const es = new EventSource('/traces/stream')
     setStreaming(true)
     es.onmessage = (e) => {
       try {

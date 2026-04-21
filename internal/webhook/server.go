@@ -206,44 +206,33 @@ func (s *Server) buildHandler() http.Handler {
 	router := mux.NewRouter()
 	router.Handle(cfg.Daemon.HTTP.StatusPath, withTimeout(http.HandlerFunc(s.handleStatus))).Methods(http.MethodGet)
 	router.Handle(cfg.Daemon.HTTP.WebhookPath, withTimeout(http.HandlerFunc(s.handleGitHubWebhook))).Methods(http.MethodPost)
-	router.Handle(cfg.Daemon.HTTP.AgentsRunPath, withTimeout(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
-	router.Handle("/api/run", withTimeout(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
+	router.Handle("/run", withTimeout(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
 
-	// Observability API — all endpoints are unauthenticated at the daemon
-	// level. Access control is the reverse proxy's responsibility.
-	router.Handle("/api/agents", withTimeout(http.HandlerFunc(s.handleAPIAgents))).Methods(http.MethodGet)
-	router.Handle("/api/config", withTimeout(http.HandlerFunc(s.handleAPIConfig))).Methods(http.MethodGet)
-	router.Handle("/api/dispatches", withTimeout(http.HandlerFunc(s.handleAPIDispatches))).Methods(http.MethodGet)
+	// Fleet view (GET) + CRUD (POST) merged on a single path.
+	router.Handle("/agents", withTimeout(http.HandlerFunc(s.handleAgents))).Methods(http.MethodGet, http.MethodPost)
+	router.Handle("/agents/{name}", withTimeout(http.HandlerFunc(s.handleStoreAgent))).Methods(http.MethodGet, http.MethodDelete)
 
-	// Store CRUD endpoints — only registered when a SQLite store has been
-	// attached via WithStore (i.e. when the daemon was started with --db).
-	// All endpoints are unauthenticated at the daemon level; access control
-	// is the reverse proxy's responsibility (e.g. Traefik basic auth).
-	if s.db != nil {
-		router.Handle("/api/store/agents", withTimeout(http.HandlerFunc(s.handleStoreAgents))).Methods(http.MethodGet, http.MethodPost)
-		router.Handle("/api/store/agents/{name}", withTimeout(http.HandlerFunc(s.handleStoreAgent))).Methods(http.MethodGet, http.MethodDelete)
-		router.Handle("/api/store/skills", withTimeout(http.HandlerFunc(s.handleStoreSkills))).Methods(http.MethodGet, http.MethodPost)
-		router.Handle("/api/store/skills/{name}", withTimeout(http.HandlerFunc(s.handleStoreSkill))).Methods(http.MethodGet, http.MethodDelete)
-		router.Handle("/api/store/backends", withTimeout(http.HandlerFunc(s.handleStoreBackends))).Methods(http.MethodGet, http.MethodPost)
-		router.Handle("/api/store/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackend))).Methods(http.MethodGet, http.MethodDelete)
-		router.Handle("/api/store/repos", withTimeout(http.HandlerFunc(s.handleStoreRepos))).Methods(http.MethodGet, http.MethodPost)
-		router.Handle("/api/store/repos/{owner}/{repo}", withTimeout(http.HandlerFunc(s.handleStoreRepo))).Methods(http.MethodGet, http.MethodDelete)
-		router.Handle("/api/store/export", withTimeout(http.HandlerFunc(s.handleStoreExport))).Methods(http.MethodGet)
-		router.Handle("/api/store/import", withTimeout(http.HandlerFunc(s.handleStoreImport))).Methods(http.MethodPost)
-	}
+	router.Handle("/skills", withTimeout(http.HandlerFunc(s.handleStoreSkills))).Methods(http.MethodGet, http.MethodPost)
+	router.Handle("/skills/{name}", withTimeout(http.HandlerFunc(s.handleStoreSkill))).Methods(http.MethodGet, http.MethodDelete)
 
-	// Extended observability endpoints — only registered when an observe.Store
-	// has been attached via WithObserve.
-	if s.observeStore != nil {
-		router.Handle("/api/events", withTimeout(http.HandlerFunc(s.handleAPIEvents))).Methods(http.MethodGet)
-		router.HandleFunc("/api/events/stream", s.handleAPIEventsStream)           // SSE — no timeout
-		router.Handle("/api/traces", withTimeout(http.HandlerFunc(s.handleAPITraces))).Methods(http.MethodGet)
-		router.HandleFunc("/api/traces/stream", s.handleAPITracesStream)           // SSE — no timeout
-		router.Handle("/api/traces/{root_event_id}", withTimeout(http.HandlerFunc(s.handleAPITrace))).Methods(http.MethodGet)
-		router.Handle("/api/graph", withTimeout(http.HandlerFunc(s.handleAPIGraph))).Methods(http.MethodGet)
-		router.Handle("/api/memory/{agent}/{repo}", withTimeout(http.HandlerFunc(s.handleAPIMemory))).Methods(http.MethodGet)
-		router.HandleFunc("/api/memory/stream", s.handleAPIMemoryStream)           // SSE — no timeout
-	}
+	router.Handle("/backends", withTimeout(http.HandlerFunc(s.handleStoreBackends))).Methods(http.MethodGet, http.MethodPost)
+	router.Handle("/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackend))).Methods(http.MethodGet, http.MethodDelete)
+
+	router.Handle("/repos", withTimeout(http.HandlerFunc(s.handleStoreRepos))).Methods(http.MethodGet, http.MethodPost)
+	router.Handle("/repos/{owner}/{repo}", withTimeout(http.HandlerFunc(s.handleStoreRepo))).Methods(http.MethodGet, http.MethodDelete)
+
+	router.Handle("/events", withTimeout(http.HandlerFunc(s.handleAPIEvents))).Methods(http.MethodGet)
+	router.HandleFunc("/events/stream", s.handleAPIEventsStream)           // SSE — no timeout
+	router.Handle("/traces", withTimeout(http.HandlerFunc(s.handleAPITraces))).Methods(http.MethodGet)
+	router.HandleFunc("/traces/stream", s.handleAPITracesStream)           // SSE — no timeout
+	router.Handle("/traces/{root_event_id}", withTimeout(http.HandlerFunc(s.handleAPITrace))).Methods(http.MethodGet)
+	router.Handle("/graph", withTimeout(http.HandlerFunc(s.handleAPIGraph))).Methods(http.MethodGet)
+	router.Handle("/dispatches", withTimeout(http.HandlerFunc(s.handleAPIDispatches))).Methods(http.MethodGet)
+	router.Handle("/memory/{agent}/{repo}", withTimeout(http.HandlerFunc(s.handleAPIMemory))).Methods(http.MethodGet)
+	router.HandleFunc("/memory/stream", s.handleAPIMemoryStream)           // SSE — no timeout
+	router.Handle("/config", withTimeout(http.HandlerFunc(s.handleAPIConfig))).Methods(http.MethodGet)
+	router.Handle("/export", withTimeout(http.HandlerFunc(s.handleStoreExport))).Methods(http.MethodGet)
+	router.Handle("/import", withTimeout(http.HandlerFunc(s.handleStoreImport))).Methods(http.MethodPost)
 
 	// Static UI: served from the embedded dist/ tree when a UI FS is provided.
 	// Unauthenticated — same reasoning as the /api/* routes above.
@@ -273,6 +262,16 @@ func (s *Server) buildHandler() http.Handler {
 	return router
 }
 
+// handleAgents dispatches GET to the fleet view and POST to the CRUD handler.
+func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleAPIAgents(w, r)
+	case http.MethodPost:
+		s.handleStoreAgents(w, r)
+	}
+}
+
 func (s *Server) Run(ctx context.Context) error {
 	router := s.buildHandler()
 
@@ -295,7 +294,7 @@ func (s *Server) Run(ctx context.Context) error {
 		errCh <- srv.Shutdown(shutdownCtx)
 	}()
 
-	logEvent := s.logger.Info().Str("addr", s.cfg.Daemon.HTTP.ListenAddr).Str("status_path", s.cfg.Daemon.HTTP.StatusPath).Str("webhook_path", s.cfg.Daemon.HTTP.WebhookPath).Str("agents_run_path", s.cfg.Daemon.HTTP.AgentsRunPath)
+	logEvent := s.logger.Info().Str("addr", s.cfg.Daemon.HTTP.ListenAddr).Str("status_path", s.cfg.Daemon.HTTP.StatusPath).Str("webhook_path", s.cfg.Daemon.HTTP.WebhookPath)
 	if s.proxy != nil {
 		logEvent = logEvent.Str("proxy_path", s.cfg.Daemon.Proxy.Path)
 	}

@@ -349,7 +349,7 @@ export default function ReposPage() {
 
   const load = () => {
     setLoading(true)
-    fetch('/api/store/repos')
+    fetch('/repos')
       .then(r => r.json())
       .then((data: Repo[]) => { setRepos(data); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
@@ -357,7 +357,7 @@ export default function ReposPage() {
 
   useEffect(() => {
     load()
-    fetch('/api/store/agents')
+    fetch('/agents')
       .then(r => r.ok ? r.json() : [])
       .then((data: { name: string }[]) => setAgentNames(data.map(a => a.name)))
       .catch(() => { /* store not configured — no-op */ })
@@ -385,7 +385,7 @@ export default function ReposPage() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch('/api/store/repos', {
+      const res = await fetch('/repos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
@@ -407,7 +407,7 @@ export default function ReposPage() {
     setSaving(true)
     const [owner, repo] = deleteTarget.split('/')
     try {
-      const res = await fetch(`/api/store/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, { method: 'DELETE' })
+      const res = await fetch(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         setSaveError((await res.text()) || 'Delete failed')
         setSaving(false)

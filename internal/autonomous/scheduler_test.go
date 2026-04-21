@@ -15,6 +15,30 @@ import (
 	"github.com/eloylp/agents/internal/workflow"
 )
 
+// mapMemory is a simple in-memory MemoryBackend for tests, replacing the
+// removed file-based NewMemoryStore.
+type mapMemory struct {
+	mu   sync.Mutex
+	data map[string]string
+}
+
+func newMapMemory() *mapMemory {
+	return &mapMemory{data: make(map[string]string)}
+}
+
+func (m *mapMemory) ReadMemory(agent, repo string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data[agent+"\x00"+repo], nil
+}
+
+func (m *mapMemory) WriteMemory(agent, repo, content string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data[agent+"\x00"+repo] = content
+	return nil
+}
+
 type stubRunner struct {
 	mu        sync.Mutex
 	calls     int
@@ -64,7 +88,6 @@ func baseCfg(modify func(*config.Config)) *config.Config {
 			AIBackends: map[string]config.AIBackendConfig{
 				"claude": {Command: "claude"},
 			},
-			MemoryDir: "/tmp/agent-memory",
 		},
 		Skills: map[string]config.SkillDef{
 			"architect": {Prompt: "Focus on architecture."},
@@ -123,7 +146,7 @@ func TestNewSchedulerEntryRegistration(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s, err := NewScheduler(baseCfg(tc.mutate), map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+			s, err := NewScheduler(baseCfg(tc.mutate), map[string]ai.Runner{"claude": &stubRunner{}}, newMapMemory(), zerolog.Nop())
 			if err != nil {
 				t.Fatalf("NewScheduler: %v", err)
 			}
@@ -138,7 +161,7 @@ func TestTriggerAgentRunsSynchronously(t *testing.T) {
 	t.Parallel()
 	cfg := baseCfg(nil)
 	runner := &stubRunner{}
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -188,7 +211,7 @@ func TestTriggerAgentRejections(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := baseCfg(tc.mutateCfg)
-			s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+			s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, newMapMemory(), zerolog.Nop())
 			if err != nil {
 				t.Fatalf("NewScheduler: %v", err)
 			}
@@ -204,7 +227,7 @@ func TestResolveBackendAutoFallsBackToDefault(t *testing.T) {
 	t.Parallel()
 	cfg := baseCfg(func(c *config.Config) { c.Agents[0].Backend = "auto" })
 	runner := &stubRunner{}
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -225,7 +248,7 @@ func TestSchedulerSkipsJobWhenPreviousRunStillRunning(t *testing.T) {
 	runner := &blockingRunner{ready: ready, block: block}
 	cfg := baseCfg(nil)
 
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -344,7 +367,7 @@ func TestSchedulerDispatchesEnqueuedWhenDispatcherAttached(t *testing.T) {
 	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
 	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
 
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -391,7 +414,7 @@ func TestSchedulerAutonomousDispatchCarriesNonEmptyRootEventID(t *testing.T) {
 	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
 	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
 
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -433,7 +456,7 @@ func TestSchedulerDispatchesIgnoredWhenNoDispatcherAttached(t *testing.T) {
 	}
 
 	// No dispatcher attached — TriggerAgent should still succeed and just log.
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -458,7 +481,7 @@ func TestSchedulerCronRunSkippedWhenAlreadySeenInDedup(t *testing.T) {
 	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
 	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
 
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -524,7 +547,7 @@ func TestCronRunBlockedByPendingDispatchClaim(t *testing.T) {
 	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
 	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, bq, zerolog.Nop())
 
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": notifierRunner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": notifierRunner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -584,7 +607,7 @@ func TestSchedulerCronRunNotSuppressedByPriorCronRun(t *testing.T) {
 	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
 	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
 
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -663,7 +686,7 @@ func TestSchedulerCronMarkNotWrittenOnRunFailure(t *testing.T) {
 			dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
 			dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
 
-			s, err := NewScheduler(cfg, tc.runners, NewMemoryStore(t.TempDir()), zerolog.Nop())
+			s, err := NewScheduler(cfg, tc.runners, newMapMemory(), zerolog.Nop())
 			if err != nil {
 				t.Fatalf("NewScheduler: %v", err)
 			}
@@ -711,7 +734,7 @@ func TestSchedulerDispatchEnqueueFailurePropagates(t *testing.T) {
 	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
 	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
 
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -750,7 +773,7 @@ func TestSchedulerDispatchEnqueueFailureRecordsErrorSpan(t *testing.T) {
 	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
 
 	traceRec := &stubTraceRecorder{}
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -797,7 +820,7 @@ func TestSchedulerCronMarkKeptAfterSuccessfulRunWithDispatchEnqueueFailure(t *te
 	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
 	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
 
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -851,7 +874,7 @@ func TestSchedulerCronRefcountDecrementedOnPostRunEnqueueFailure(t *testing.T) {
 	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 1}
 	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
 
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -954,7 +977,7 @@ func TestSchedulerPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
 	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
 
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -1012,7 +1035,7 @@ func TestSchedulerAllowPRsPromptPrefixing(t *testing.T) {
 					{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: tc.prompt, AllowPRs: tc.allowPRs},
 				}
 			})
-			s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+			s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 			if err != nil {
 				t.Fatalf("NewScheduler: %v", err)
 			}
@@ -1076,7 +1099,7 @@ func TestSchedulerCronMarkBlocksDispatchDuringInFlightRun(t *testing.T) {
 	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
 	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
 
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -1145,7 +1168,7 @@ func TestCronDispatchCrossNamespaceRaceOnlyOneWins(t *testing.T) {
 		dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
 
 		runner := &stubRunner{}
-		s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+		s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 		if err != nil {
 			t.Fatalf("iteration %d: NewScheduler: %v", i, err)
 		}
@@ -1188,7 +1211,7 @@ func TestSchedulerReload(t *testing.T) {
 
 	// Start with a config that has one cron binding.
 	cfg := baseCfg(nil)
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -1232,7 +1255,7 @@ func TestSchedulerReloadUpdatesSkillsAndBackends(t *testing.T) {
 	t.Parallel()
 
 	cfg := baseCfg(nil)
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -1263,7 +1286,7 @@ func TestSchedulerReloadClearsAllBindings(t *testing.T) {
 	t.Parallel()
 
 	cfg := baseCfg(nil)
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -1288,7 +1311,7 @@ func TestSchedulerReloadRollsBackOnFailure(t *testing.T) {
 	t.Parallel()
 
 	cfg := baseCfg(nil)
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -1339,7 +1362,7 @@ func TestSchedulerReloadRebuildsRunners(t *testing.T) {
 	oldRunner := &stubRunner{}
 	initialRunners := map[string]ai.Runner{"claude": oldRunner}
 
-	s, err := NewScheduler(cfg, initialRunners, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, initialRunners, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -1447,7 +1470,7 @@ func TestSchedulerReloadConfigCopyOnWrite(t *testing.T) {
 
 	cfg := baseCfg(nil)
 	originalPtr := cfg // remember the address
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -1480,7 +1503,7 @@ func TestSchedulerReloadRaceWithConcurrentRun(t *testing.T) {
 
 	cfg := baseCfg(nil)
 	runner := &stubRunner{}
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -1532,7 +1555,7 @@ func TestSchedulerReloadReleasesMuBeforeSinkCall(t *testing.T) {
 
 	cfg := baseCfg(nil)
 	runner := &stubRunner{}
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -1595,7 +1618,7 @@ func TestSchedulerCronJobUsesPostReloadAgentDef(t *testing.T) {
 	runner := &promptCapturingRunner{}
 	cfg := baseCfg(nil) // agent "reviewer" with prompt "Review PRs."
 
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -1658,12 +1681,12 @@ func (r *stubTraceRecorder) recorded() []stubSpan {
 // errMemory is a MemoryBackend whose WriteMemory always returns an error, used
 // to test that a write failure causes executeAgentRun to surface the error.
 type errMemory struct {
-	dir string // underlying file store for successful reads
-	err error
+	inner MemoryBackend
+	err   error
 }
 
 func (m *errMemory) ReadMemory(agent, repo string) (string, error) {
-	return NewMemoryStore(m.dir).ReadMemory(agent, repo)
+	return m.inner.ReadMemory(agent, repo)
 }
 
 func (m *errMemory) WriteMemory(_, _, _ string) error {
@@ -1707,7 +1730,7 @@ func TestSchedulerWriteMemoryFailureFailsRun(t *testing.T) {
 		})
 	})
 	runner := &stubRunner{memory: "updated memory"}
-	mem := &errMemory{dir: t.TempDir(), err: writeErr}
+	mem := &errMemory{inner: newMapMemory(), err: writeErr}
 
 	q := &fakeQueue{}
 	agentMap := map[string]config.AgentDef{
@@ -1782,7 +1805,7 @@ func TestSchedulerSpanEndCapturedAfterPostRunSteps(t *testing.T) {
 
 	cfg := baseCfg(nil)
 	runner := &stubRunner{memory: "updated memory"}
-	mem := &slowMemory{inner: NewMemoryStore(t.TempDir()), delay: delay}
+	mem := &slowMemory{inner: newMapMemory(), delay: delay}
 
 	traceRec := &stubTraceRecorder{}
 	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, mem, zerolog.Nop())
@@ -1866,8 +1889,7 @@ func (r *firstCallBlockingRunner) Run(_ context.Context, _ ai.Request) (ai.Respo
 func TestSchedulerMemoryRunsSerializedPerAgentRepo(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	mem := &readTrackingMemory{inner: NewMemoryStore(dir)}
+	mem := &readTrackingMemory{inner: newMapMemory()}
 
 	ready := make(chan struct{}, 1) // first run signals when inside runner.Run
 	block := make(chan struct{})     // closed to unblock first run

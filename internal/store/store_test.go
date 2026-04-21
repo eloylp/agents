@@ -24,7 +24,6 @@ func minimalCfg() *config.Config {
 				ListenAddr:             ":8080",
 				StatusPath:             "/status",
 				WebhookPath:            "/webhooks/github",
-				AgentsRunPath:          "/agents/run",
 				WebhookSecretEnv:       "GITHUB_WEBHOOK_SECRET",
 				WebhookSecret:          "secret-value", // resolved; must NOT be stored
 				ReadTimeoutSeconds:     15,
@@ -43,7 +42,6 @@ func minimalCfg() *config.Config {
 					DedupWindowSeconds: 300,
 				},
 			},
-			MemoryDir: "/var/lib/agents/memory",
 			AIBackends: map[string]config.AIBackendConfig{
 				"claude": {
 					Command:          "claude",
@@ -170,10 +168,6 @@ func TestImportLoad(t *testing.T) {
 	if out.Daemon.Processor.Dispatch.MaxDepth != 3 {
 		t.Errorf("dispatch.max_depth: got %d, want 3", out.Daemon.Processor.Dispatch.MaxDepth)
 	}
-	if out.Daemon.MemoryDir != "/var/lib/agents/memory" {
-		t.Errorf("memory_dir: got %q, want %q", out.Daemon.MemoryDir, "/var/lib/agents/memory")
-	}
-
 	// Backends.
 	if len(out.Daemon.AIBackends) != 1 {
 		t.Fatalf("backends: got %d, want 1", len(out.Daemon.AIBackends))

@@ -98,7 +98,7 @@ export default function EventsPage() {
     setLoading(true)
     const sinceMs = Date.now() - (timeRanges[timeRange] ?? 3600) * 1000
     const since = new Date(sinceMs).toISOString()
-    fetch(`/api/events?since=${encodeURIComponent(since)}`)
+    fetch(`/events?since=${encodeURIComponent(since)}`)
       .then(r => r.json())
       .then(data => { setEvents((data ?? []).reverse()); setLoading(false) })
       .catch(() => setLoading(false))
@@ -107,7 +107,7 @@ export default function EventsPage() {
   useEffect(() => { load() }, [timeRange]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const es = new EventSource('/api/events/stream')
+    const es = new EventSource('/events/stream')
     setStreaming(true)
     es.onmessage = (e) => {
       try {

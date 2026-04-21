@@ -6,13 +6,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
@@ -47,7 +44,7 @@ func TestHandleAPIAgentsReturnsConfiguredAgents(t *testing.T) {
 	})
 	srv, _ := newTestServer(cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIAgents(rec, req)
 
@@ -102,7 +99,7 @@ func TestHandleAPIAgentsAttachesScheduleForCronBindings(t *testing.T) {
 	}}
 	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, provider, nil, zerolog.Nop())
 
-	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIAgents(rec, req)
 
@@ -159,7 +156,7 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 	}}
 	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, provider, nil, zerolog.Nop())
 
-	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIAgents(rec, req)
 
@@ -232,7 +229,7 @@ func TestHandleAPIAgentsSkipsDisabledRepos(t *testing.T) {
 	})
 	srv, _ := newTestServer(cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIAgents(rec, req)
 
@@ -261,7 +258,7 @@ func TestHandleAPIAgentsEmptyWhenNoAgents(t *testing.T) {
 	cfg.Agents = nil
 	srv, _ := newTestServer(cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIAgents(rec, req)
 
@@ -282,7 +279,7 @@ func TestHandleAPIAgentsCurrentStatusIdleWhenNotRunning(t *testing.T) {
 	cfg := testCfg(nil)
 	srv, _ := newTestServer(cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIAgents(rec, req)
 
@@ -313,7 +310,7 @@ func TestHandleAPIAgentsCurrentStatusRunningWhenActive(t *testing.T) {
 	srv, _ := newTestServer(cfg)
 	srv.WithRuntimeState(&stubRuntimeState{running: map[string]bool{"coder": true}})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIAgents(rec, req)
 
@@ -363,7 +360,7 @@ func TestHandleAPIConfigRedactsSecrets(t *testing.T) {
 	})
 	srv, _ := newTestServer(cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIConfig(rec, req)
 
@@ -415,7 +412,7 @@ func TestHandleAPIConfigOmitsProxyExtraBody(t *testing.T) {
 	})
 	srv, _ := newTestServer(cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIConfig(rec, req)
 
@@ -445,7 +442,7 @@ func TestHandleAPIConfigNoSecretsWhenNotSet(t *testing.T) {
 	})
 	srv, _ := newTestServer(cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIConfig(rec, req)
 
@@ -458,7 +455,7 @@ func TestHandleAPIConfigNoSecretsWhenNotSet(t *testing.T) {
 func TestHandleAPIConfigContentType(t *testing.T) {
 	t.Parallel()
 	srv, _ := newTestServer(testCfg(nil))
-	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIConfig(rec, req)
 
@@ -488,7 +485,7 @@ func TestHandleAPIConfigRepoBindingDefaultEnabled(t *testing.T) {
 	})
 	srv, _ := newTestServer(cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIConfig(rec, req)
 
@@ -560,7 +557,7 @@ func TestHandleAPIDispatchesDelegatesToProvider(t *testing.T) {
 	provider := &stubDispatchProvider{stats: want}
 	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, nil, provider, zerolog.Nop())
 
-	req := httptest.NewRequest(http.MethodGet, "/api/dispatches", nil)
+	req := httptest.NewRequest(http.MethodGet, "/dispatches", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIDispatches(rec, req)
 
@@ -580,7 +577,7 @@ func TestHandleAPIDispatchesZeroWhenNoProvider(t *testing.T) {
 	t.Parallel()
 	srv, _ := newTestServer(testCfg(nil)) // dispatchStats is nil
 
-	req := httptest.NewRequest(http.MethodGet, "/api/dispatches", nil)
+	req := httptest.NewRequest(http.MethodGet, "/dispatches", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIDispatches(rec, req)
 
@@ -609,7 +606,7 @@ func TestHandleAPIEventsReturnsStoredEvents(t *testing.T) {
 	obs.RecordEvent(now, workflow.Event{ID: "evt-1", Kind: "issues.labeled", Repo: workflow.RepoRef{FullName: "owner/repo"}, Number: 42, Actor: "user"})
 	obs.RecordEvent(now.Add(time.Second), workflow.Event{ID: "evt-2", Kind: "push", Repo: workflow.RepoRef{FullName: "owner/repo"}, Actor: "bot"})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+	req := httptest.NewRequest(http.MethodGet, "/events", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIEvents(rec, req)
 
@@ -640,7 +637,7 @@ func TestHandleAPIEventsSinceFilter(t *testing.T) {
 	obs.RecordEvent(base.Add(2*time.Second), workflow.Event{ID: "new", Kind: "push"})
 
 	since := base.Add(time.Second).Format(time.RFC3339)
-	req := httptest.NewRequest(http.MethodGet, "/api/events?since="+since, nil)
+	req := httptest.NewRequest(http.MethodGet, "/events?since="+since, nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIEvents(rec, req)
 
@@ -703,7 +700,7 @@ func TestHandleSSEStreams(t *testing.T) {
 			defer cancel()
 
 			cap := newSSECapture()
-			req := httptest.NewRequest(http.MethodGet, "/api/"+tc.name, nil).WithContext(ctx)
+			req := httptest.NewRequest(http.MethodGet, "/"+tc.name, nil).WithContext(ctx)
 
 			done := make(chan struct{})
 			go func() {
@@ -757,7 +754,7 @@ func TestHandleAPITracesReturnsStoredSpans(t *testing.T) {
 	obs.RecordSpan("s1", "root-A", "", "coder", "claude", "owner/repo", "issues.labeled", "", 1, 0, 0, 0, "", now, now.Add(5*time.Second), "success", "")
 	obs.RecordSpan("s2", "root-A", "", "reviewer", "claude", "owner/repo", "agent.dispatch", "coder", 1, 1, 0, 0, "", now.Add(time.Second), now.Add(6*time.Second), "success", "")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/traces", nil)
+	req := httptest.NewRequest(http.MethodGet, "/traces", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPITraces(rec, req)
 
@@ -786,7 +783,7 @@ func TestHandleAPITraceByRootEventID(t *testing.T) {
 
 	// Use the full router so mux populates the {root_event_id} variable.
 	router := srv.buildHandler()
-	req := httptest.NewRequest(http.MethodGet, "/api/traces/root-A", nil)
+	req := httptest.NewRequest(http.MethodGet, "/traces/root-A", nil)
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -809,7 +806,7 @@ func TestHandleAPITraceNotFound(t *testing.T) {
 	srv.WithObserve(obs)
 
 	router := srv.buildHandler()
-	req := httptest.NewRequest(http.MethodGet, "/api/traces/nonexistent", nil)
+	req := httptest.NewRequest(http.MethodGet, "/traces/nonexistent", nil)
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -831,7 +828,7 @@ func TestHandleAPIGraphReturnsEdges(t *testing.T) {
 	obs.RecordDispatch("coder", "reviewer", "owner/repo", 10, "needs review")
 	obs.RecordDispatch("coder", "reviewer", "owner/repo", 11, "follow-up")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/graph", nil)
+	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIGraph(rec, req)
 
@@ -860,7 +857,7 @@ func TestHandleAPIGraphEmptyWhenNoDispatches(t *testing.T) {
 	obs := newTestObserve()
 	srv.WithObserve(obs)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/graph", nil)
+	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIGraph(rec, req)
 
@@ -882,7 +879,7 @@ func TestHandleAPIGraphIncludesConfiguredAgentWithNoDispatches(t *testing.T) {
 	obs := newTestObserve()
 	srv.WithObserve(obs)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/graph", nil)
+	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIGraph(rec, req)
 
@@ -924,7 +921,7 @@ func TestHandleAPIGraphNodeStatusReflectsRuntimeState(t *testing.T) {
 	// "runner" is currently active.
 	srv.WithRuntimeState(&stubRuntimeState{running: map[string]bool{"runner": true}})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/graph", nil)
+	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAPIGraph(rec, req)
 
@@ -947,142 +944,6 @@ func TestHandleAPIGraphNodeStatusReflectsRuntimeState(t *testing.T) {
 	}
 	if statusByID["idle-ok"] != "" {
 		t.Errorf("idle-ok agent: want empty status, got %q", statusByID["idle-ok"])
-	}
-}
-
-// ── /api/memory ────────────────────────────────────────────────────────────
-
-func TestHandleAPIMemoryServesFile(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "coder", "owner_repo"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	content := "# coder memory\n\nsome notes"
-	if err := os.WriteFile(filepath.Join(dir, "coder", "owner_repo", "MEMORY.md"), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg := testCfg(func(c *config.Config) { c.Daemon.MemoryDir = dir })
-	srv, _ := newTestServer(cfg)
-	obs := newTestObserve()
-	srv.WithObserve(obs)
-
-	// Use the full router so mux populates {agent} and {repo}.
-	router := srv.buildHandler()
-	req := httptest.NewRequest(http.MethodGet, "/api/memory/coder/owner_repo", nil)
-
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if got := rec.Body.String(); got != content {
-		t.Fatalf("want %q, got %q", content, got)
-	}
-	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/markdown") {
-		t.Fatalf("want text/markdown Content-Type, got %q", ct)
-	}
-}
-
-func TestHandleAPIMemoryNotFound(t *testing.T) {
-	t.Parallel()
-	cfg := testCfg(func(c *config.Config) { c.Daemon.MemoryDir = t.TempDir() })
-	srv, _ := newTestServer(cfg)
-	obs := newTestObserve()
-	srv.WithObserve(obs)
-
-	router := srv.buildHandler()
-	req := httptest.NewRequest(http.MethodGet, "/api/memory/coder/no_such_repo", nil)
-
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("want 404, got %d", rec.Code)
-	}
-}
-
-func TestHandleAPIMemoryRejectsPathTraversal(t *testing.T) {
-	t.Parallel()
-	cfg := testCfg(func(c *config.Config) { c.Daemon.MemoryDir = t.TempDir() })
-	srv, _ := newTestServer(cfg)
-	obs := newTestObserve()
-	srv.WithObserve(obs)
-
-	router := srv.buildHandler()
-	for _, bad := range []string{
-		"/api/memory/../owner_repo",
-		"/api/memory/./owner_repo",
-	} {
-		req := httptest.NewRequest(http.MethodGet, bad, nil)
-	
-		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, req)
-		// Path traversal attempts should either be 404 (no route matched after
-		// path cleaning) or 400 (handler rejected it).
-		if rec.Code == http.StatusOK {
-			t.Fatalf("path %q: want non-200, got 200", bad)
-		}
-	}
-}
-
-func TestHandleAPIMemoryRejectsMultiSegmentTraversal(t *testing.T) {
-	t.Parallel()
-	// Create a sentinel file OUTSIDE the memory root so we can verify it is
-	// never served even when an encoded traversal path reaches the handler.
-	outerDir := t.TempDir()
-	secret := filepath.Join(outerDir, "secret.md")
-	if err := os.WriteFile(secret, []byte("top-secret"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	memDir := filepath.Join(outerDir, "memory")
-	if err := os.MkdirAll(memDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg := testCfg(func(c *config.Config) { c.Daemon.MemoryDir = memDir })
-	srv, _ := newTestServer(cfg)
-	obs := newTestObserve()
-	srv.WithObserve(obs)
-
-	// The {agent} segment contains encoded slashes that decode to a traversal
-	// path; after mux splits the URL, the handler receives the raw segment
-	// value, which after filepath.Clean becomes "../../../../<outerDir>/secret".
-	// The under-root check must reject this before any stat or read.
-	//
-	// We exercise the handler directly (bypassing mux routing) so we can inject
-	// arbitrary segment values that mux path-escaping would otherwise block.
-	handler := http.HandlerFunc(srv.handleAPIMemory)
-
-	cases := []struct {
-		name  string
-		agent string
-		repo  string
-	}{
-		// repo segment tries to walk above memDir
-		{name: "repo segment walks above memDir", agent: "coder", repo: "../../../../secret"},
-		// agent segment tries to walk above memDir
-		{name: "agent segment walks above memDir", agent: "../../../..", repo: "secret"},
-		// both segments combined escape the root
-		{name: "combined segments escape the root", agent: "../..", repo: "../../secret"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			req := httptest.NewRequest(http.MethodGet, "/api/memory/"+tc.agent+"/"+tc.repo, nil)
-			req = mux.SetURLVars(req, map[string]string{"agent": tc.agent, "repo": tc.repo})
-		
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
-			if rec.Code == http.StatusOK {
-				t.Fatalf("agent=%q repo=%q: traversal not rejected (got 200)", tc.agent, tc.repo)
-			}
-			if rec.Body.String() == "top-secret" {
-				t.Fatalf("agent=%q repo=%q: secret file content was served", tc.agent, tc.repo)
-			}
-		})
 	}
 }
 
@@ -1225,7 +1086,7 @@ func TestBuildHandlerSSETimeoutSplit(t *testing.T) {
 
 	// ── SSE route: must survive past the write-timeout boundary ──────────────
 
-	resp, err := http.Get(ts.URL + "/api/events/stream") //nolint:noctx
+	resp, err := http.Get(ts.URL + "/events/stream") //nolint:noctx
 	if err != nil {
 		t.Fatalf("connect to /api/events/stream: %v", err)
 	}
@@ -1280,7 +1141,7 @@ receiveLoop:
 	}
 
 	// ── Non-SSE route: must respond normally with JSON ────────────────────────
-	r, err := http.Get(ts.URL + "/api/events") //nolint:noctx
+	r, err := http.Get(ts.URL + "/events") //nolint:noctx
 	if err != nil {
 		t.Fatalf("GET /api/events: %v", err)
 	}
@@ -1311,7 +1172,7 @@ func TestServeSSEClearsServerWriteDeadline(t *testing.T) {
 	ts.Start()
 	t.Cleanup(ts.Close)
 
-	resp, err := http.Get(ts.URL + "/api/events/stream") //nolint:noctx
+	resp, err := http.Get(ts.URL + "/events/stream") //nolint:noctx
 	if err != nil {
 		t.Fatalf("connect to /api/events/stream: %v", err)
 	}
@@ -1499,17 +1360,14 @@ func TestHandleAPIMemorySQLiteMode(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			// memory_dir is empty — if the handler falls back to filesystem it
-			// would return 404 "memory_dir not configured"; the SQLite path must
-			// respond correctly without any filesystem involvement.
-			cfg := testCfg(func(c *config.Config) { c.Daemon.MemoryDir = "" })
+			cfg := testCfg(nil)
 			srv, _ := newTestServer(cfg)
 			obs := newTestObserve()
 			srv.WithObserve(obs)
 			srv.WithMemoryReader(&stubMemoryReader{content: tc.stored, mtimes: tc.mtimes})
 
 			router := srv.buildHandler()
-			req := httptest.NewRequest(http.MethodGet, "/api/memory/"+tc.agent+"/"+tc.repo, nil)
+			req := httptest.NewRequest(http.MethodGet, "/memory/"+tc.agent+"/"+tc.repo, nil)
 		
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, req)
