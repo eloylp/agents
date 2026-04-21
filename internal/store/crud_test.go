@@ -34,8 +34,7 @@ func seedSkill(t *testing.T, db *sql.DB, name string) {
 
 func TestUpsertAndReadAgents(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
 	seedSkill(t, db, "architect")
@@ -92,8 +91,7 @@ func TestUpsertAndReadAgents(t *testing.T) {
 
 func TestUpsertAgentIsIdempotent(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
 
@@ -120,8 +118,7 @@ func TestUpsertAgentIsIdempotent(t *testing.T) {
 
 func TestDeleteAgent(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
 
@@ -150,8 +147,7 @@ func TestDeleteAgent(t *testing.T) {
 
 func TestDeleteAgentNonExistentIsNoError(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	if err := store.DeleteAgent(db, "ghost"); err != nil {
 		t.Errorf("DeleteAgent non-existent: %v", err)
@@ -162,8 +158,7 @@ func TestDeleteAgentNonExistentIsNoError(t *testing.T) {
 
 func TestUpsertAndReadSkills(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	s := config.SkillDef{Prompt: "Focus on architecture."}
 	if err := store.UpsertSkill(db, "architect", s); err != nil {
@@ -183,8 +178,7 @@ func TestUpsertAndReadSkills(t *testing.T) {
 
 func TestDeleteSkill(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	if err := store.UpsertSkill(db, "architect", config.SkillDef{Prompt: "p"}); err != nil {
 		t.Fatalf("UpsertSkill: %v", err)
@@ -205,8 +199,7 @@ func TestDeleteSkill(t *testing.T) {
 
 func TestUpsertAndReadBackends(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	b := config.AIBackendConfig{
 		Command:        "claude",
@@ -239,8 +232,7 @@ func TestUpsertAndReadBackends(t *testing.T) {
 
 func TestUpsertBackendAppliesDefaults(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	// Persist a backend with zero numeric fields — the same payload that
 	// POST /api/store/backends would send when omitting timeout_seconds and
@@ -265,8 +257,7 @@ func TestUpsertBackendAppliesDefaults(t *testing.T) {
 
 func TestDeleteBackend(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	// Seed two backends so that deleting one still leaves the system valid.
 	for _, name := range []string{"claude", "codex"} {
@@ -295,8 +286,7 @@ func TestDeleteBackend(t *testing.T) {
 
 func TestUpsertAndReadRepos(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
 
@@ -346,8 +336,7 @@ func TestUpsertAndReadRepos(t *testing.T) {
 
 func TestUpsertRepoReplacesBindings(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
 
@@ -386,8 +375,7 @@ func TestUpsertRepoReplacesBindings(t *testing.T) {
 
 func TestDeleteRepo(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
 
@@ -436,8 +424,7 @@ func TestDeleteRepo(t *testing.T) {
 // as a consistent point-in-time view.
 func TestReadSnapshot(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
 
@@ -508,8 +495,7 @@ func TestUpsertAgentCrossRefErrors(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			db, cleanup := openTestDB(t)
-			defer cleanup()
+	db := openTestDB(t)
 			tc.setup(t, db)
 			err := store.UpsertAgent(db, tc.agent)
 			if err == nil {
@@ -524,8 +510,7 @@ func TestUpsertAgentCrossRefErrors(t *testing.T) {
 
 func TestUpsertRepoRejectedWithUnknownAgent(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	// No agent seeded — binding references "ghost". The FK constraint on
 	// bindings.agent may fire first, or validateCrossRefs catches it; either
@@ -551,8 +536,7 @@ func TestUpsertRepoRejectedWithUnknownAgent(t *testing.T) {
 
 func TestDeleteBackendRejectedWhenAgentReferences(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	// Seed two backends so that the "at least one backend" constraint is not the
 	// reason the delete fails — only the agent reference should block it.
@@ -588,8 +572,7 @@ func TestDeleteBackendRejectedWhenAgentReferences(t *testing.T) {
 
 func TestDeleteSkillRejectedWhenAgentReferences(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
 	seedSkill(t, db, "architect")
@@ -623,8 +606,7 @@ func TestDeleteSkillRejectedWhenAgentReferences(t *testing.T) {
 
 func TestDeleteAgentRejectedWhenDispatchListReferences(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
 
@@ -685,8 +667,7 @@ func TestUpsertBackendValidationErrors(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			db, cleanup := openTestDB(t)
-			defer cleanup()
+	db := openTestDB(t)
 			err := store.UpsertBackend(db, tc.bName, tc.cfg)
 			if err == nil {
 				t.Fatalf("UpsertBackend with %s: want error, got nil", tc.name)
@@ -700,8 +681,7 @@ func TestUpsertBackendValidationErrors(t *testing.T) {
 
 func TestUpsertSkillRejectedWithEmptyPrompt(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	err := store.UpsertSkill(db, "testing", config.SkillDef{Prompt: ""})
 	if err == nil {
@@ -714,8 +694,7 @@ func TestUpsertSkillRejectedWithEmptyPrompt(t *testing.T) {
 
 func TestUpsertAgentRejectedWithEmptyPrompt(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
 	err := store.UpsertAgent(db, config.AgentDef{
@@ -734,8 +713,7 @@ func TestUpsertAgentRejectedWithEmptyPrompt(t *testing.T) {
 
 func TestUpsertRepoRejectedWithNoTrigger(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, config.AgentDef{
@@ -759,8 +737,7 @@ func TestUpsertRepoRejectedWithNoTrigger(t *testing.T) {
 
 func TestUpsertRepoRejectedWithMixedTriggers(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, config.AgentDef{
@@ -788,8 +765,7 @@ func TestUpsertRepoRejectedWithMixedTriggers(t *testing.T) {
 
 func TestDeleteAgentRejectedAsLast(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, config.AgentDef{
@@ -818,8 +794,7 @@ func TestDeleteAgentRejectedAsLast(t *testing.T) {
 
 func TestDeleteBackendRejectedAsLast(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	if err := store.UpsertBackend(db, "claude", config.AIBackendConfig{
 		Command: "claude", Args: []string{}, Env: map[string]string{},
@@ -847,8 +822,7 @@ func TestDeleteBackendRejectedAsLast(t *testing.T) {
 
 func TestUpsertRepoRejectedWhenDisablingLastEnabled(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, config.AgentDef{
@@ -893,8 +867,7 @@ func TestUpsertRepoRejectedWhenDisablingLastEnabled(t *testing.T) {
 
 func TestDeleteRepoRejectedAsLastEnabled(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, config.AgentDef{
@@ -937,8 +910,7 @@ func TestDeleteRepoRejectedAsLastEnabled(t *testing.T) {
 // never silently diverge from the persisted rows after a live CRUD write.
 func TestUpsertNormalizesNames(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	// Backend — mixed-case name should be stored lowercase.
 	if err := store.UpsertBackend(db, "Claude", config.AIBackendConfig{
@@ -1024,8 +996,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 // refuses to load on restart.
 func TestUpsertSkillNormalizesPrompt(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	// Whitespace-only prompt should be trimmed to "" and rejected.
 	err := store.UpsertSkill(db, "testing", config.SkillDef{Prompt: "   "})
@@ -1056,8 +1027,7 @@ func TestUpsertSkillNormalizesPrompt(t *testing.T) {
 // on restart after startup normalization changes its shape.
 func TestUpsertBackendNormalizesCommandAndEnv(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 
 	// Whitespace-only command must be trimmed to "" and rejected.
 	err := store.UpsertBackend(db, "claude", config.AIBackendConfig{
