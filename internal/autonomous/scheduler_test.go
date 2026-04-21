@@ -1809,3 +1809,128 @@ func TestSchedulerSpanEndCapturedAfterPostRunSteps(t *testing.T) {
 			spans[0].spanEnd.Sub(before), delay)
 	}
 }
+
+// readTrackingMemory wraps a MemoryBackend and records the content seen on
+// each ReadMemory call. Used to assert serialization ordering in tests.
+type readTrackingMemory struct {
+	inner    MemoryBackend
+	mu       sync.Mutex
+	readSeen []string // content returned by each ReadMemory call, in call order
+}
+
+func (m *readTrackingMemory) ReadMemory(agent, repo string) (string, error) {
+	content, err := m.inner.ReadMemory(agent, repo)
+	if err == nil {
+		m.mu.Lock()
+		m.readSeen = append(m.readSeen, content)
+		m.mu.Unlock()
+	}
+	return content, err
+}
+
+func (m *readTrackingMemory) WriteMemory(agent, repo, content string) error {
+	return m.inner.WriteMemory(agent, repo, content)
+}
+
+// firstCallBlockingRunner blocks only the first Run call until block is closed,
+// returning pre-configured responses in order. Subsequent calls return without
+// blocking.
+type firstCallBlockingRunner struct {
+	mu        sync.Mutex
+	calls     int
+	ready     chan struct{} // receives when first Run is entered
+	block     chan struct{} // closed to unblock first Run
+	responses []ai.Response
+}
+
+func (r *firstCallBlockingRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
+	r.mu.Lock()
+	callIdx := r.calls
+	resp := r.responses[callIdx%len(r.responses)]
+	r.calls++
+	r.mu.Unlock()
+
+	if callIdx == 0 {
+		r.ready <- struct{}{}
+		<-r.block
+	}
+	return resp, nil
+}
+
+// TestSchedulerMemoryRunsSerializedPerAgentRepo is a regression test verifying
+// that concurrent executeAgentRun calls for the same (agent, repo) pair are
+// serialized by runLocks so that the second run's ReadMemory always sees the
+// first run's WriteMemory result — preventing the lost-update race where both
+// runs read the same old memory and the last writer silently clobbers the other.
+func TestSchedulerMemoryRunsSerializedPerAgentRepo(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	mem := &readTrackingMemory{inner: NewMemoryStore(dir)}
+
+	ready := make(chan struct{}, 1) // first run signals when inside runner.Run
+	block := make(chan struct{})     // closed to unblock first run
+	runner := &firstCallBlockingRunner{
+		ready: ready,
+		block: block,
+		responses: []ai.Response{
+			{Memory: "first-run"},
+			{Memory: "second-run"},
+		},
+	}
+
+	cfg := baseCfg(nil)
+	// No dispatcher: both TriggerAgent calls proceed without dispatch-dedup
+	// suppression, exposing the concurrent memory read/write race.
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, mem, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	errc1 := make(chan error, 1)
+	go func() {
+		errc1 <- s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
+	}()
+
+	// Wait until the first run is inside runner.Run — it now holds runLock.
+	<-ready
+
+	// Start second run. It will block on runLock until the first run releases it.
+	errc2 := make(chan error, 1)
+	go func() {
+		errc2 <- s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
+	}()
+
+	// Give the second goroutine time to reach runLock.acquire and park.
+	time.Sleep(20 * time.Millisecond)
+
+	// Unblock the first run: it exits runner.Run, writes "first-run", then
+	// releases runLock. The second run then acquires the lock and reads memory.
+	close(block)
+
+	if err := <-errc1; err != nil {
+		t.Fatalf("first TriggerAgent: %v", err)
+	}
+	if err := <-errc2; err != nil {
+		t.Fatalf("second TriggerAgent: %v", err)
+	}
+
+	// With serialization the reads are ordered: first run saw "" (initial state),
+	// second run saw "first-run" (what the first run wrote). Without the lock,
+	// both reads could see "" and the second writer would silently drop the first
+	// run's memory update.
+	mem.mu.Lock()
+	reads := append([]string(nil), mem.readSeen...)
+	mem.mu.Unlock()
+
+	if len(reads) != 2 {
+		t.Fatalf("expected 2 ReadMemory calls, got %d: %v", len(reads), reads)
+	}
+	if reads[0] != "" {
+		t.Errorf("first run: expected empty initial memory, got %q", reads[0])
+	}
+	if reads[1] != "first-run" {
+		t.Errorf("second run: expected %q (serialised read after first write), got %q — lost-update race may be present",
+			"first-run", reads[1])
+	}
+}

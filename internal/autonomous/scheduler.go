@@ -92,6 +92,26 @@ type HotReloadSink interface {
 	UpdateConfigAndRunners(cfg *config.Config, runners map[string]ai.Runner)
 }
 
+// runLocks serializes concurrent executeAgentRun calls for the same
+// (agent, repo) pair, preventing the lost-update race where two overlapping
+// runs both read the same old memory and whichever finishes last silently
+// clobbers the other run's state.
+type runLocks struct {
+	m sync.Map // key: string -> *sync.Mutex
+}
+
+func (r *runLocks) acquire(key string) {
+	v, _ := r.m.LoadOrStore(key, &sync.Mutex{})
+	v.(*sync.Mutex).Lock()
+}
+
+func (r *runLocks) release(key string) {
+	v, ok := r.m.Load(key)
+	if ok {
+		v.(*sync.Mutex).Unlock()
+	}
+}
+
 // Scheduler wires cron-triggered agent bindings from the config into the
 // robfig/cron engine.
 type Scheduler struct {
@@ -110,6 +130,7 @@ type Scheduler struct {
 	lastRuns      map[string]lastRunRecord // key: "name\x00repo"
 	dispatcher    *workflow.Dispatcher    // nil when dispatch is not configured
 	traceRec      workflow.TraceRecorder  // nil when tracing is not configured
+	runLock        runLocks               // per-(agent,repo) mutex serializing the read/run/write sequence
 }
 
 // WithDispatcher attaches a Dispatcher to the Scheduler so that dispatch
@@ -383,6 +404,16 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 
 	logger := s.logger.With().Str("repo", repo).Str("agent", agent.Name).Str("backend", backend).Logger()
 	roster := workflow.BuildRoster(cfg, repo, agent.Name)
+
+	// Serialise the read/run/write sequence for this (agent, repo) pair to
+	// prevent a lost-update race. Without this lock two overlapping runs
+	// (cron + manual trigger, two manual triggers, or runs without a
+	// dispatcher dedup mark) would both read the same old memory, run
+	// independently, and whichever finishes last would silently clobber the
+	// other run's persisted state.
+	runKey := agent.Name + "\x00" + repo
+	s.runLock.acquire(runKey)
+	defer s.runLock.release(runKey)
 
 	// Read existing memory before the run so it can be injected into the prompt.
 	existingMemory, err := s.memory.ReadMemory(agent.Name, repo)
