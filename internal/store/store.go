@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"sort"
@@ -364,7 +365,7 @@ func Load(db *sql.DB) (*config.Config, error) {
 func loadDaemon(db *sql.DB, cfg *config.Config) error {
 	var value string
 	err := db.QueryRow("SELECT value FROM config WHERE key='daemon'").Scan(&value)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("store load: daemon config not found in database (did you run --import?)")
 	}
 	if err != nil {
