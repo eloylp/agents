@@ -59,6 +59,14 @@ func Open(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: enable foreign keys: %w", err)
 	}
+	// Retry for up to 5 s when another goroutine holds a write lock instead of
+	// returning SQLITE_BUSY immediately. The observe store records spans,
+	// events, and dispatches on concurrent goroutines, so without a timeout
+	// those writes race and one of them can fail with "database is locked".
+	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: set busy timeout: %w", err)
+	}
 	if err := migrate(db); err != nil {
 		db.Close()
 		return nil, err
