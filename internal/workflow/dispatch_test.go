@@ -949,3 +949,39 @@ func TestLongRunningWebhookRunBlocksCronPastTTL(t *testing.T) {
 		t.Error("TryClaimForCron must return true: webhook run completed and entry evicted")
 	}
 }
+
+// TestDispatcherUpdateAgentsReflectsNewAllowlists verifies that UpdateAgents
+// replaces the opt-in map used by ProcessDispatches so that subsequent dispatch
+// calls see the new agent definitions without a restart.
+func TestDispatcherUpdateAgentsReflectsNewAllowlists(t *testing.T) {
+	t.Parallel()
+	q := &fakeQueue{}
+	d := testDispatcher(q)
+
+	// Initially "sec-reviewer" has AllowDispatch: false — dispatch is dropped.
+	originator := originatorAgent("coder")
+	originator.CanDispatch = append(originator.CanDispatch, "sec-reviewer")
+	ev := testEvent("owner/repo", 1)
+
+	d.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
+		{Agent: "sec-reviewer", Reason: "initial — should be dropped"},
+	})
+	if len(q.popped()) != 0 {
+		t.Error("expected dispatch dropped: sec-reviewer has allow_dispatch: false")
+	}
+
+	// Hot-reload: update sec-reviewer to allow dispatch.
+	updated := []config.AgentDef{
+		{Name: "coder", AllowDispatch: true, CanDispatch: []string{"pr-reviewer", "sec-reviewer"}},
+		{Name: "pr-reviewer", AllowDispatch: true, CanDispatch: []string{"coder"}},
+		{Name: "sec-reviewer", AllowDispatch: true},
+	}
+	d.UpdateAgents(updated)
+
+	d.ProcessDispatches(context.Background(), originator, ev, "root-2", 0, "", []ai.DispatchRequest{
+		{Agent: "sec-reviewer", Reason: "after update — should be enqueued"},
+	})
+	if len(q.popped()) != 1 {
+		t.Error("expected dispatch enqueued: sec-reviewer now has allow_dispatch: true after UpdateAgents")
+	}
+}

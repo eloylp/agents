@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -766,5 +767,177 @@ func TestAgentsRunDeduplicatesDuplicateRequests(t *testing.T) {
 	}
 	if stats := e.DispatchStats(); stats.RunsDeduped != 1 {
 		t.Errorf("expected RunsDeduped=1, got %d", stats.RunsDeduped)
+	}
+}
+
+// TestEngineUpdateConfigRunnersRaceWithHandleEvent is a race-detector test. It
+// exercises concurrent UpdateConfig + UpdateRunners (the hot-reload path) and
+// HandleEvent (the event-driven path) to verify that the cfgMu / runnersMu
+// snapshot pattern does not produce data races.
+// Run with -race to catch concurrent map/struct accesses.
+func TestEngineUpdateConfigRunnersRaceWithHandleEvent(t *testing.T) {
+	t.Parallel()
+
+	e, runner := newTestEngine(func(c *config.Config) {
+		// Add an event binding so HandleEvent actually dispatches the agent.
+		c.Repos[0].Use = append(c.Repos[0].Use, config.Binding{
+			Agent:  "arch-reviewer",
+			Events: []string{"push"},
+		})
+	})
+
+	pushEvent := func() Event {
+		return Event{
+			Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
+			Kind:  "push",
+			Actor: "bot",
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Build an alternate config (same shape, different pointer).
+	altCfg := &config.Config{
+		Daemon: config.DaemonConfig{
+			Processor:  config.ProcessorConfig{MaxConcurrentAgents: 4},
+			AIBackends: map[string]config.AIBackendConfig{"claude": {Command: "claude"}},
+		},
+		Skills: map[string]config.SkillDef{
+			"architect": {Prompt: "Focus on architecture."},
+		},
+		Agents: []config.AgentDef{
+			{Name: "arch-reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Review architecture."},
+		},
+		Repos: []config.RepoDef{
+			{
+				Name:    "owner/repo",
+				Enabled: true,
+				Use:     []config.Binding{{Agent: "arch-reviewer", Events: []string{"push"}}},
+			},
+		},
+	}
+	altRunners := map[string]ai.Runner{"claude": runner}
+
+	const goroutines = 8
+	var wg sync.WaitGroup
+
+	// Half the goroutines call HandleEvent concurrently.
+	for range goroutines / 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				_ = e.HandleEvent(ctx, pushEvent())
+			}
+		}()
+	}
+
+	// The other half call UpdateConfigAndRunners concurrently.
+	for range goroutines / 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				e.UpdateConfigAndRunners(altCfg, altRunners)
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
+// TestEngineUpdateConfigAndRunnersAtomic verifies that runAgent never observes
+// a cfg/runner pair from different reload epochs. It sets up two epochs:
+//   - epoch A: backend "claude_a", runner stubA
+//   - epoch B: backend "claude_b", runner stubB
+//
+// A goroutine continuously calls UpdateConfigAndRunners to cycle between them.
+// Meanwhile, a goroutine continuously fires events. If runAgent ever resolves
+// a backend from epoch A but looks up a runner from epoch B (or vice-versa), it
+// would fail with "no runner for backend" — any such error is counted and
+// reported as a test failure.
+func TestEngineUpdateConfigAndRunnersAtomic(t *testing.T) {
+	t.Parallel()
+
+	makeEpochCfg := func(backendName string) *config.Config {
+		return &config.Config{
+			Daemon: config.DaemonConfig{
+				Processor:  config.ProcessorConfig{MaxConcurrentAgents: 8},
+				AIBackends: map[string]config.AIBackendConfig{backendName: {Command: backendName}},
+			},
+			Agents: []config.AgentDef{
+				{Name: "worker", Backend: backendName, Prompt: "do work"},
+			},
+			Repos: []config.RepoDef{
+				{
+					Name:    "owner/repo",
+					Enabled: true,
+					Use:     []config.Binding{{Agent: "worker", Events: []string{"push"}}},
+				},
+			},
+		}
+	}
+
+	stubA := &stubRunner{}
+	stubB := &stubRunner{}
+	cfgA := makeEpochCfg("claude_a")
+	cfgB := makeEpochCfg("claude_b")
+
+	e := NewEngine(cfgA, map[string]ai.Runner{"claude_a": stubA}, nil, zerolog.Nop())
+
+	pushEvent := func() Event {
+		return Event{
+			Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
+			Kind:  "push",
+			Actor: "bot",
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var mismatchErrors atomic.Int64
+
+	var wg sync.WaitGroup
+
+	// Fire events continuously, counting any "no runner for backend" errors.
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				if err := e.HandleEvent(ctx, pushEvent()); err != nil {
+					// The only valid errors here would be "no runner for backend X"
+					// caused by observing a mismatched config/runner pair.
+					if strings.Contains(err.Error(), "no runner for backend") {
+						mismatchErrors.Add(1)
+					}
+				}
+			}
+		}()
+	}
+
+	// Cycle between epoch A and epoch B continuously.
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			flip := true
+			for ctx.Err() == nil {
+				if flip {
+					e.UpdateConfigAndRunners(cfgA, map[string]ai.Runner{"claude_a": stubA})
+				} else {
+					e.UpdateConfigAndRunners(cfgB, map[string]ai.Runner{"claude_b": stubB})
+				}
+				flip = !flip
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	if n := mismatchErrors.Load(); n > 0 {
+		t.Errorf("runAgent observed %d mismatched cfg/runner pairs across reload epochs", n)
 	}
 }

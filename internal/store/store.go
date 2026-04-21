@@ -30,6 +30,14 @@ import (
 	"github.com/eloylp/agents/internal/config"
 )
 
+// querier is a minimal interface satisfied by both *sql.DB and *sql.Tx,
+// allowing load helpers to run inside or outside a transaction without
+// duplicating query logic.
+type querier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
@@ -403,7 +411,7 @@ func loadDaemon(db *sql.DB, cfg *config.Config) error {
 	return nil
 }
 
-func loadBackends(db *sql.DB, cfg *config.Config) error {
+func loadBackends(db querier, cfg *config.Config) error {
 	rows, err := db.Query("SELECT name,command,args,env,timeout_seconds,max_prompt_chars,redaction_salt_env FROM backends")
 	if err != nil {
 		return fmt.Errorf("store load: query backends: %w", err)
@@ -441,7 +449,7 @@ func loadBackends(db *sql.DB, cfg *config.Config) error {
 	return nil
 }
 
-func loadSkills(db *sql.DB, cfg *config.Config) error {
+func loadSkills(db querier, cfg *config.Config) error {
 	rows, err := db.Query("SELECT name,prompt FROM skills")
 	if err != nil {
 		return fmt.Errorf("store load: query skills: %w", err)
@@ -463,7 +471,7 @@ func loadSkills(db *sql.DB, cfg *config.Config) error {
 	return nil
 }
 
-func loadAgents(db *sql.DB, cfg *config.Config) error {
+func loadAgents(db querier, cfg *config.Config) error {
 	rows, err := db.Query(`
 		SELECT name,backend,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description
 		FROM agents ORDER BY name`)
@@ -508,7 +516,7 @@ func loadAgents(db *sql.DB, cfg *config.Config) error {
 	return nil
 }
 
-func loadRepos(db *sql.DB, cfg *config.Config) error {
+func loadRepos(db querier, cfg *config.Config) error {
 	rows, err := db.Query("SELECT name,enabled FROM repos ORDER BY name")
 	if err != nil {
 		return fmt.Errorf("store load: query repos: %w", err)
@@ -540,7 +548,7 @@ func loadRepos(db *sql.DB, cfg *config.Config) error {
 	return nil
 }
 
-func loadBindingsForRepo(db *sql.DB, repo string) ([]config.Binding, error) {
+func loadBindingsForRepo(db querier, repo string) ([]config.Binding, error) {
 	rows, err := db.Query(
 		"SELECT agent,labels,events,cron,enabled FROM bindings WHERE repo=? ORDER BY id", repo,
 	)

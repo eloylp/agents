@@ -1130,3 +1130,452 @@ func TestCronDispatchCrossNamespaceRaceOnlyOneWins(t *testing.T) {
 		}
 	}
 }
+
+// TestSchedulerReload verifies that Reload replaces cron registrations with
+// those from the updated config slices, and that AgentStatuses reflects the
+// new registrations.
+func TestSchedulerReload(t *testing.T) {
+	t.Parallel()
+
+	// Start with a config that has one cron binding.
+	cfg := baseCfg(nil)
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	statuses := s.AgentStatuses()
+	if len(statuses) != 1 {
+		t.Fatalf("before reload: got %d statuses, want 1", len(statuses))
+	}
+
+	// Reload with a completely different agent and repo.
+	newAgents := []config.AgentDef{
+		{Name: "scanner", Backend: "claude", Skills: []string{}, Prompt: "scan"},
+	}
+	newRepos := []config.RepoDef{
+		{
+			Name:    "owner/other",
+			Enabled: true,
+			Use:     []config.Binding{{Agent: "scanner", Cron: "* * * * *"}},
+		},
+	}
+	if err := s.Reload(newRepos, newAgents, cfg.Skills, map[string]config.AIBackendConfig{"claude": {Command: "claude"}}); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	statuses = s.AgentStatuses()
+	if len(statuses) != 1 {
+		t.Fatalf("after reload: got %d statuses, want 1", len(statuses))
+	}
+	if statuses[0].Name != "scanner" {
+		t.Errorf("after reload: agent name %q, want %q", statuses[0].Name, "scanner")
+	}
+	if statuses[0].Repo != "owner/other" {
+		t.Errorf("after reload: repo %q, want %q", statuses[0].Repo, "owner/other")
+	}
+}
+
+// TestSchedulerReloadUpdatesSkillsAndBackends verifies that Reload replaces
+// cfg.Skills and cfg.Daemon.AIBackends so that future agent runs pick up the
+// new definitions without requiring a daemon restart.
+func TestSchedulerReloadUpdatesSkillsAndBackends(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseCfg(nil)
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	newSkills := map[string]config.SkillDef{
+		"security": {Prompt: "Think about security."},
+	}
+	newBackends := map[string]config.AIBackendConfig{
+		"claude": {Command: "claude", TimeoutSeconds: 120},
+	}
+
+	if err := s.Reload(cfg.Repos, cfg.Agents, newSkills, newBackends); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	if len(s.cfg.Skills) != 1 || s.cfg.Skills["security"].Prompt != "Think about security." {
+		t.Errorf("after reload: cfg.Skills = %v, want {security: ...}", s.cfg.Skills)
+	}
+	if s.cfg.Daemon.AIBackends["claude"].TimeoutSeconds != 120 {
+		t.Errorf("after reload: claude backend timeout = %d, want 120",
+			s.cfg.Daemon.AIBackends["claude"].TimeoutSeconds)
+	}
+}
+
+// TestSchedulerReloadClearsAllBindings verifies that a Reload with no cron
+// bindings removes all previously registered entries.
+func TestSchedulerReloadClearsAllBindings(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseCfg(nil)
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	// Reload with repos that have no cron bindings.
+	if err := s.Reload([]config.RepoDef{{Name: "owner/repo", Enabled: true, Use: []config.Binding{
+		{Agent: "reviewer", Labels: []string{"ai:fix"}},
+	}}}, cfg.Agents, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	statuses := s.AgentStatuses()
+	if len(statuses) != 0 {
+		t.Errorf("after reload with no cron: got %d statuses, want 0", len(statuses))
+	}
+}
+
+// TestSchedulerReloadRollsBackOnFailure verifies that a Reload that cannot
+// register new cron entries (e.g. because a binding references an unknown
+// agent) preserves the previous scheduler state instead of leaving it empty.
+func TestSchedulerReloadRollsBackOnFailure(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseCfg(nil)
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	// Capture the pre-reload statuses.
+	before := s.AgentStatuses()
+	if len(before) != 1 {
+		t.Fatalf("before reload: got %d statuses, want 1", len(before))
+	}
+
+	// Attempt a reload where the binding references an agent not in the agents slice.
+	badRepos := []config.RepoDef{{
+		Name:    "owner/repo",
+		Enabled: true,
+		Use:     []config.Binding{{Agent: "ghost", Cron: "* * * * *"}},
+	}}
+	badAgents := []config.AgentDef{} // "ghost" not in this list → registerJobs will fail
+
+	if err := s.Reload(badRepos, badAgents, cfg.Skills, cfg.Daemon.AIBackends); err == nil {
+		t.Fatal("Reload: expected error for unknown agent binding, got nil")
+	}
+
+	// The scheduler must still have the original entries, not be empty.
+	after := s.AgentStatuses()
+	if len(after) != len(before) {
+		t.Errorf("after failed reload: got %d statuses, want %d (original preserved)",
+			len(after), len(before))
+	}
+	if len(after) > 0 && after[0].Name != before[0].Name {
+		t.Errorf("after failed reload: agent %q, want %q (original preserved)",
+			after[0].Name, before[0].Name)
+	}
+	// Config must also be rolled back.
+	if len(s.cfg.Agents) != len(cfg.Agents) {
+		t.Errorf("after failed reload: cfg.Agents len=%d, want %d (original preserved)",
+			len(s.cfg.Agents), len(cfg.Agents))
+	}
+}
+
+// TestSchedulerReloadRebuildsRunners verifies that when a RunnerBuilder is
+// registered, Reload builds a fresh runner map to reflect new or changed
+// backend definitions without mutating the original map in place. This ensures
+// that backends added via the CRUD API produce live runners without a restart.
+func TestSchedulerReloadRebuildsRunners(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseCfg(nil) // starts with "claude" backend
+	oldRunner := &stubRunner{}
+	initialRunners := map[string]ai.Runner{"claude": oldRunner}
+
+	s, err := NewScheduler(cfg, initialRunners, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	// Capture config+runners delivered to the HotReloadSink via the combined method.
+	var sinkMu sync.Mutex
+	var sinkRunners map[string]ai.Runner
+	sink := &testHotReloadSink{
+		updateConfigAndRunner: func(_ *config.Config, r map[string]ai.Runner) {
+			sinkMu.Lock()
+			sinkRunners = r
+			sinkMu.Unlock()
+		},
+	}
+	s.WithHotReloadSink(sink)
+
+	// Register a builder that returns a new distinct stub for each backend.
+	buildCalls := map[string]*stubRunner{}
+	s.WithRunnerBuilder(func(name string, _ config.AIBackendConfig) ai.Runner {
+		r := &stubRunner{}
+		buildCalls[name] = r
+		return r
+	})
+
+	// Reload with a new "codex" backend added and "claude" retained.
+	newBackends := map[string]config.AIBackendConfig{
+		"claude": {Command: "claude"},
+		"codex":  {Command: "codex"},
+	}
+	if err := s.Reload(cfg.Repos, cfg.Agents, cfg.Skills, newBackends); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	// Builder must have been called for both backends.
+	if _, ok := buildCalls["claude"]; !ok {
+		t.Error("RunnerBuilder was not called for 'claude'")
+	}
+	if _, ok := buildCalls["codex"]; !ok {
+		t.Error("RunnerBuilder was not called for 'codex'")
+	}
+
+	// The scheduler's internal runners map must contain the rebuilt entries.
+	if _, ok := s.runners["claude"]; !ok {
+		t.Error("scheduler runners missing 'claude' after Reload")
+	}
+	if _, ok := s.runners["codex"]; !ok {
+		t.Error("scheduler runners missing 'codex' after Reload")
+	}
+
+	// The rebuilt runner for "claude" must be the new one, not the original stub.
+	if s.runners["claude"] == oldRunner {
+		t.Error("scheduler runners['claude'] was not rebuilt by RunnerBuilder")
+	}
+
+	// The original map must NOT have been mutated — copy-on-write semantics.
+	if _, ok := initialRunners["codex"]; ok {
+		t.Error("original runners map was mutated in place; expected copy-on-write")
+	}
+
+	// The HotReloadSink must have received a copy of the new runners via
+	// UpdateConfigAndRunners (not the separate UpdateRunners path).
+	sinkMu.Lock()
+	got := sinkRunners
+	sinkMu.Unlock()
+	if got == nil {
+		t.Fatal("HotReloadSink.UpdateConfigAndRunners was not called")
+	}
+	if _, ok := got["claude"]; !ok {
+		t.Error("sink runners missing 'claude'")
+	}
+	if _, ok := got["codex"]; !ok {
+		t.Error("sink runners missing 'codex'")
+	}
+}
+
+// testHotReloadSink is a minimal HotReloadSink for tests.
+type testHotReloadSink struct {
+	updateConfig          func(*config.Config)
+	updateRunners         func(map[string]ai.Runner)
+	updateConfigAndRunner func(*config.Config, map[string]ai.Runner)
+}
+
+func (s *testHotReloadSink) UpdateConfig(cfg *config.Config) {
+	if s.updateConfig != nil {
+		s.updateConfig(cfg)
+	}
+}
+func (s *testHotReloadSink) UpdateRunners(r map[string]ai.Runner) {
+	if s.updateRunners != nil {
+		s.updateRunners(r)
+	}
+}
+func (s *testHotReloadSink) UpdateConfigAndRunners(cfg *config.Config, r map[string]ai.Runner) {
+	if s.updateConfigAndRunner != nil {
+		s.updateConfigAndRunner(cfg, r)
+	}
+}
+
+// TestSchedulerReloadConfigCopyOnWrite verifies that Reload does not mutate the
+// original *config.Config pointer. Goroutines that hold a snapshot of the old
+// pointer must continue to see the pre-reload values; only future snapshots
+// should see the new values.
+func TestSchedulerReloadConfigCopyOnWrite(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseCfg(nil)
+	originalPtr := cfg // remember the address
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	newRepos := []config.RepoDef{{Name: "owner/new-repo", Enabled: true, Use: []config.Binding{{Agent: "reviewer", Cron: "* * * * *"}}}}
+	if err := s.Reload(newRepos, cfg.Agents, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	// The original cfg struct must be unchanged.
+	if len(originalPtr.Repos) != 1 || originalPtr.Repos[0].Name != "owner/repo" {
+		t.Errorf("original config.Repos was mutated: got %v", originalPtr.Repos)
+	}
+
+	// The scheduler's internal cfg pointer must point to a different struct.
+	if s.cfg == cfg {
+		t.Error("scheduler still holds the original config pointer; expected copy-on-write swap")
+	}
+	if len(s.cfg.Repos) != 1 || s.cfg.Repos[0].Name != "owner/new-repo" {
+		t.Errorf("scheduler config.Repos not updated: got %v", s.cfg.Repos)
+	}
+}
+
+// TestSchedulerReloadRaceWithConcurrentRun is a race-detector test. It
+// exercises concurrent Reload + TriggerAgent to verify that the copy-on-write
+// config swap and the brief-lock runner snapshot do not produce data races.
+// Run with -race to catch concurrent map/struct accesses.
+func TestSchedulerReloadRaceWithConcurrentRun(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseCfg(nil)
+	runner := &stubRunner{}
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithRunnerBuilder(func(name string, _ config.AIBackendConfig) ai.Runner { return runner })
+	s.WithHotReloadSink(&testHotReloadSink{})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	const goroutines = 8
+	var wg sync.WaitGroup
+
+	// Half the goroutines call TriggerAgent concurrently.
+	for range goroutines / 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				_ = s.TriggerAgent(ctx, "reviewer", "owner/repo")
+			}
+		}()
+	}
+
+	// The other half call Reload concurrently.
+	for range goroutines / 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				_ = s.Reload(cfg.Repos, cfg.Agents, cfg.Skills, cfg.Daemon.AIBackends)
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
+// TestSchedulerReloadReleasesMuBeforeSinkCall verifies that Reload releases
+// bindMu before calling into the HotReloadSink, so that a concurrent
+// TriggerAgent call (which needs bindMu.RLock) is not blocked for the full
+// duration of the sink call.
+//
+// This guards against a lock-ordering inversion that would arise if the Engine
+// sink ever held cfgMu.RLock while indirectly calling back into TriggerAgent
+// (which needs bindMu.RLock): Reload holding bindMu.Lock while waiting for
+// cfgMu.Lock would form a cycle.
+func TestSchedulerReloadReleasesMuBeforeSinkCall(t *testing.T) {
+	t.Parallel()
+
+	cfg := baseCfg(nil)
+	runner := &stubRunner{}
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithRunnerBuilder(func(_ string, _ config.AIBackendConfig) ai.Runner { return runner })
+
+	// Sink that signals when UpdateConfigAndRunners is entered, then blocks
+	// until released. This lets us assert that bindMu is NOT held during the
+	// combined sink call.
+	sinkEntered := make(chan struct{})
+	sinkRelease := make(chan struct{})
+	sink := &testHotReloadSink{
+		updateConfigAndRunner: func(*config.Config, map[string]ai.Runner) {
+			close(sinkEntered)
+			<-sinkRelease
+		},
+	}
+	s.WithHotReloadSink(sink)
+
+	// Run Reload in the background; it will block inside UpdateConfigAndRunners.
+	reloadDone := make(chan error, 1)
+	go func() {
+		reloadDone <- s.Reload(cfg.Repos, cfg.Agents, cfg.Skills, cfg.Daemon.AIBackends)
+	}()
+
+	// Wait until Reload is inside the sink call.
+	<-sinkEntered
+
+	// TriggerAgent must complete without blocking. If Reload still held
+	// bindMu.Lock() at this point, the RLock acquisition inside TriggerAgent
+	// would stall for the remainder of the sink call.
+	triggerDone := make(chan struct{})
+	go func() {
+		_ = s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
+		close(triggerDone)
+	}()
+
+	select {
+	case <-triggerDone:
+		// Good: bindMu was released before the sink call.
+	case <-time.After(2 * time.Second):
+		t.Error("TriggerAgent blocked while Reload was in the sink call — bindMu must be released before UpdateConfigAndRunners")
+	}
+
+	// Release the sink and wait for Reload to finish cleanly.
+	close(sinkRelease)
+	if err := <-reloadDone; err != nil {
+		t.Errorf("Reload: %v", err)
+	}
+}
+
+// TestSchedulerCronJobUsesPostReloadAgentDef verifies that a cron closure
+// resolves the agent definition from the config snapshot at execution time
+// rather than capturing it by value at registration time. A cron tick that
+// fires after a Reload (i.e., the closure was enqueued before the old entry
+// was removed but runs after bindMu is released) must use the post-reload
+// agent definition, not the stale pre-reload one.
+func TestSchedulerCronJobUsesPostReloadAgentDef(t *testing.T) {
+	t.Parallel()
+
+	runner := &promptCapturingRunner{}
+	cfg := baseCfg(nil) // agent "reviewer" with prompt "Review PRs."
+
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+
+	// Capture the pre-reload cron closure. This simulates a cron tick that was
+	// dequeued by the cron library before the old entry was removed by Reload.
+	preReloadJob := s.cron.Entry(s.agentEntries[0].cronID).WrappedJob
+
+	// Reload with an updated prompt for the same agent.
+	updatedAgents := []config.AgentDef{
+		{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Updated review prompt."},
+	}
+	if err := s.Reload(cfg.Repos, updatedAgents, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	// Invoke the pre-reload closure — it should see the post-reload agent
+	// definition because it resolves the agent from the cfg snapshot at
+	// execution time (after bindMu.RLock is acquired and the new cfg is visible).
+	preReloadJob.Run()
+
+	runner.mu.Lock()
+	prompts := runner.prompts
+	runner.mu.Unlock()
+
+	if len(prompts) != 1 {
+		t.Fatalf("expected 1 prompt captured, got %d", len(prompts))
+	}
+	if !strings.Contains(prompts[0], "Updated review prompt.") {
+		t.Errorf("pre-reload cron closure used stale agent definition; prompt = %q", prompts[0])
+	}
+}
