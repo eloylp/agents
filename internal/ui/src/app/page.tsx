@@ -4,7 +4,6 @@ import Card from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 import Modal from '@/components/Modal'
 import Link from 'next/link'
-import { authHeaders } from '@/lib/apiKey'
 
 interface Binding {
   repo: string
@@ -336,7 +335,7 @@ export default function FleetPage() {
     try {
       const res = await fetch('/api/store/agents', {
         method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
       })
       if (!res.ok) {
@@ -361,7 +360,7 @@ export default function FleetPage() {
   const deleteAgent = async () => {
     setSaving(true)
     try {
-      const res = await fetch(`/api/store/agents/${encodeURIComponent(deleteTarget)}`, { method: 'DELETE', headers: authHeaders() })
+      const res = await fetch(`/api/store/agents/${encodeURIComponent(deleteTarget)}`, { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         const msg = await res.text()
         setSaveError(msg || 'Delete failed')

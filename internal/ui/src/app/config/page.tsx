@@ -2,7 +2,6 @@
 import { useState, useEffect, useRef } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
-import { getApiKey, setApiKey, authHeaders } from '@/lib/apiKey'
 
 type Config = Record<string, unknown>
 
@@ -182,9 +181,6 @@ export default function ConfigPage() {
   const [error, setError] = useState('')
   const [raw, setRaw] = useState(false)
   const [tab, setTab] = useState<'inspector' | 'backends' | 'import-export'>('inspector')
-  const [apiKey, setApiKeyState] = useState('')
-
-  useEffect(() => { setApiKeyState(getApiKey()) }, [])
 
   const [backends, setBackends] = useState<Backend[]>([])
   const [backendsLoading, setBackendsLoading] = useState(false)
@@ -225,7 +221,7 @@ export default function ConfigPage() {
     try {
       const res = await fetch('/api/store/backends', {
         method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
       })
       if (!res.ok) {
@@ -244,7 +240,7 @@ export default function ConfigPage() {
   const deleteBackend = async () => {
     setSaving(true)
     try {
-      const res = await fetch(`/api/store/backends/${encodeURIComponent(deleteTarget)}`, { method: 'DELETE', headers: authHeaders() })
+      const res = await fetch(`/api/store/backends/${encodeURIComponent(deleteTarget)}`, { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         setSaveError((await res.text()) || 'Delete failed')
         setSaving(false)
@@ -259,7 +255,7 @@ export default function ConfigPage() {
   }
 
   const handleExport = async () => {
-    const res = await fetch('/api/store/export', { headers: authHeaders() })
+    const res = await fetch('/api/store/export')
     if (!res.ok) { alert('Export failed: ' + await res.text()); return }
     const blob = await res.blob()
     const url = URL.createObjectURL(blob)
@@ -277,7 +273,7 @@ export default function ConfigPage() {
     const url = importMode === 'replace' ? '/api/store/import?mode=replace' : '/api/store/import'
     const res = await fetch(url, {
       method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/x-yaml' }),
+      headers: { 'Content-Type': 'application/x-yaml' },
       body: text,
     })
     if (!res.ok) {
@@ -311,20 +307,6 @@ export default function ConfigPage() {
             {raw ? 'Tree view' : 'Raw JSON'}
           </button>
         )}
-      </div>
-
-      <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        <label style={{ fontSize: '0.8rem', color: '#64748b', whiteSpace: 'nowrap' }}>API Key</label>
-        <input
-          type="password"
-          value={apiKey}
-          onChange={e => { setApiKeyState(e.target.value); setApiKey(e.target.value) }}
-          placeholder="Bearer token — leave blank if no api_key is configured"
-          style={{
-            flex: 1, padding: '5px 8px', border: '1px solid #bfdbfe', borderRadius: '6px',
-            fontSize: '0.8rem', fontFamily: 'inherit', background: '#f8fafc', color: '#1e293b',
-          }}
-        />
       </div>
 
       <div style={{ display: 'flex', gap: '0', marginBottom: '0', borderBottom: '1px solid #bfdbfe' }}>

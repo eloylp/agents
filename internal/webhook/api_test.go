@@ -602,102 +602,6 @@ func TestHandleAPIDispatchesZeroWhenNoProvider(t *testing.T) {
 	}
 }
 
-// ── requireAPIKey middleware ────────────────────────────────────────────────
-
-// TestRequireAPIKeyBlocksWhenKeyConfigured verifies that the requireAPIKey
-// middleware returns 401 when daemon.http.api_key is set and no Authorization
-// header is sent. The middleware is applied to mutation endpoints (/agents/run);
-// the read-only /api/* observability routes are open per issue #151.
-func TestRequireAPIKeyBlocksWhenKeyConfigured(t *testing.T) {
-	t.Parallel()
-	for _, path := range []string{"/api/agents", "/api/config", "/api/dispatches"} {
-		t.Run(path, func(t *testing.T) {
-			t.Parallel()
-			srv, _ := newTestServer(testCfg(nil)) // testCfg sets APIKey = testAPIKey
-
-			req := httptest.NewRequest(http.MethodGet, path, nil)
-			rec := httptest.NewRecorder()
-			srv.requireAPIKey(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-			})).ServeHTTP(rec, req)
-
-			if rec.Code != http.StatusUnauthorized {
-				t.Fatalf("%s: want 401 without token, got %d", path, rec.Code)
-			}
-		})
-	}
-}
-
-// TestRequireAPIKeyRejectsInvalidAuth verifies that the middleware rejects
-// requests with a wrong token or an unsupported auth scheme.
-func TestRequireAPIKeyRejectsInvalidAuth(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name       string
-		authHeader string
-	}{
-		{name: "wrong Bearer token", authHeader: "Bearer wrong-token"},
-		{name: "raw key no scheme", authHeader: testAPIKey},
-		{name: "Basic scheme", authHeader: "Basic " + testAPIKey},
-		{name: "Token scheme", authHeader: "Token " + testAPIKey},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			srv, _ := newTestServer(testCfg(nil))
-
-			req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
-			req.Header.Set("Authorization", tc.authHeader)
-			rec := httptest.NewRecorder()
-			srv.requireAPIKey(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-			})).ServeHTTP(rec, req)
-
-			if rec.Code != http.StatusUnauthorized {
-				t.Fatalf("want 401 for auth %q, got %d", tc.authHeader, rec.Code)
-			}
-		})
-	}
-}
-
-// TestRequireAPIKeyAllowsCorrectToken verifies that the correct Bearer token
-// passes the middleware and reaches the inner handler.
-func TestRequireAPIKeyAllowsCorrectToken(t *testing.T) {
-	t.Parallel()
-	srv, _ := newTestServer(testCfg(nil))
-
-	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
-	req.Header.Set("Authorization", "Bearer "+testAPIKey)
-	rec := httptest.NewRecorder()
-	srv.requireAPIKey(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200 with correct token, got %d", rec.Code)
-	}
-}
-
-// TestRequireAPIKeyOpenWhenNoKeyConfigured verifies that when no API key is
-// configured the middleware allows unauthenticated requests through.
-func TestRequireAPIKeyOpenWhenNoKeyConfigured(t *testing.T) {
-	t.Parallel()
-	cfg := testCfg(func(c *config.Config) {
-		c.Daemon.HTTP.APIKey = "" // no key → open access
-	})
-	srv, _ := newTestServer(cfg)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
-	rec := httptest.NewRecorder()
-	srv.requireAPIKey(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200 when no key configured, got %d", rec.Code)
-	}
-}
-
 // ── /api/events ────────────────────────────────────────────────────────────
 
 func TestHandleAPIEventsReturnsStoredEvents(t *testing.T) {
@@ -1156,7 +1060,7 @@ func TestHandleAPIMemoryRejectsMultiSegmentTraversal(t *testing.T) {
 	//
 	// We exercise the handler directly (bypassing mux routing) so we can inject
 	// arbitrary segment values that mux path-escaping would otherwise block.
-	handler := srv.requireAPIKey(http.HandlerFunc(srv.handleAPIMemory))
+	handler := http.HandlerFunc(srv.handleAPIMemory)
 
 	cases := []struct {
 		name  string

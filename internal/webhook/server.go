@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -207,7 +206,7 @@ func (s *Server) buildHandler() http.Handler {
 	router := mux.NewRouter()
 	router.Handle(cfg.Daemon.HTTP.StatusPath, withTimeout(http.HandlerFunc(s.handleStatus))).Methods(http.MethodGet)
 	router.Handle(cfg.Daemon.HTTP.WebhookPath, withTimeout(http.HandlerFunc(s.handleGitHubWebhook))).Methods(http.MethodPost)
-	router.Handle(cfg.Daemon.HTTP.AgentsRunPath, withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleAgentsRun)))).Methods(http.MethodPost)
+	router.Handle(cfg.Daemon.HTTP.AgentsRunPath, withTimeout(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
 	router.Handle("/api/run", withTimeout(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
 
 	// Observability API — read-only endpoints served unauthenticated at the
@@ -223,30 +222,19 @@ func (s *Server) buildHandler() http.Handler {
 
 	// Store CRUD endpoints — only registered when a SQLite store has been
 	// attached via WithStore (i.e. when the daemon was started with --db).
-	// Read (GET) endpoints are served unauthenticated, consistent with the
-	// other observability API endpoints. Write (POST / DELETE) endpoints are
-	// gated by requireAPIKey because they mutate live fleet configuration.
+	// All endpoints are unauthenticated at the daemon level; access control
+	// is the reverse proxy's responsibility (e.g. Traefik basic auth).
 	if s.db != nil {
-		router.Handle("/api/store/agents", withTimeout(http.HandlerFunc(s.handleStoreAgents))).Methods(http.MethodGet)
-		router.Handle("/api/store/agents", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreAgents)))).Methods(http.MethodPost)
-		router.Handle("/api/store/agents/{name}", withTimeout(http.HandlerFunc(s.handleStoreAgent))).Methods(http.MethodGet)
-		router.Handle("/api/store/agents/{name}", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreAgent)))).Methods(http.MethodDelete)
-		router.Handle("/api/store/skills", withTimeout(http.HandlerFunc(s.handleStoreSkills))).Methods(http.MethodGet)
-		router.Handle("/api/store/skills", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreSkills)))).Methods(http.MethodPost)
-		router.Handle("/api/store/skills/{name}", withTimeout(http.HandlerFunc(s.handleStoreSkill))).Methods(http.MethodGet)
-		router.Handle("/api/store/skills/{name}", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreSkill)))).Methods(http.MethodDelete)
-		router.Handle("/api/store/backends", withTimeout(http.HandlerFunc(s.handleStoreBackends))).Methods(http.MethodGet)
-		router.Handle("/api/store/backends", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreBackends)))).Methods(http.MethodPost)
-		router.Handle("/api/store/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackend))).Methods(http.MethodGet)
-		router.Handle("/api/store/backends/{name}", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreBackend)))).Methods(http.MethodDelete)
-		router.Handle("/api/store/repos", withTimeout(http.HandlerFunc(s.handleStoreRepos))).Methods(http.MethodGet)
-		router.Handle("/api/store/repos", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreRepos)))).Methods(http.MethodPost)
-		// {owner}/{repo} captures "owner/repo" across two path segments.
-		router.Handle("/api/store/repos/{owner}/{repo}", withTimeout(http.HandlerFunc(s.handleStoreRepo))).Methods(http.MethodGet)
-		router.Handle("/api/store/repos/{owner}/{repo}", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreRepo)))).Methods(http.MethodDelete)
-		// Export (GET) requires the API key because backends may hold env secrets.
-		router.Handle("/api/store/export", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreExport)))).Methods(http.MethodGet)
-		router.Handle("/api/store/import", withTimeout(s.requireAPIKey(http.HandlerFunc(s.handleStoreImport)))).Methods(http.MethodPost)
+		router.Handle("/api/store/agents", withTimeout(http.HandlerFunc(s.handleStoreAgents))).Methods(http.MethodGet, http.MethodPost)
+		router.Handle("/api/store/agents/{name}", withTimeout(http.HandlerFunc(s.handleStoreAgent))).Methods(http.MethodGet, http.MethodDelete)
+		router.Handle("/api/store/skills", withTimeout(http.HandlerFunc(s.handleStoreSkills))).Methods(http.MethodGet, http.MethodPost)
+		router.Handle("/api/store/skills/{name}", withTimeout(http.HandlerFunc(s.handleStoreSkill))).Methods(http.MethodGet, http.MethodDelete)
+		router.Handle("/api/store/backends", withTimeout(http.HandlerFunc(s.handleStoreBackends))).Methods(http.MethodGet, http.MethodPost)
+		router.Handle("/api/store/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackend))).Methods(http.MethodGet, http.MethodDelete)
+		router.Handle("/api/store/repos", withTimeout(http.HandlerFunc(s.handleStoreRepos))).Methods(http.MethodGet, http.MethodPost)
+		router.Handle("/api/store/repos/{owner}/{repo}", withTimeout(http.HandlerFunc(s.handleStoreRepo))).Methods(http.MethodGet, http.MethodDelete)
+		router.Handle("/api/store/export", withTimeout(http.HandlerFunc(s.handleStoreExport))).Methods(http.MethodGet)
+		router.Handle("/api/store/import", withTimeout(http.HandlerFunc(s.handleStoreImport))).Methods(http.MethodPost)
 	}
 
 	// Extended observability endpoints — only registered when an observe.Store
@@ -323,32 +311,6 @@ func (s *Server) Run(ctx context.Context) error {
 	return <-errCh
 }
 
-// requireAPIKey is HTTP middleware that enforces Bearer-token authentication
-// when daemon.http.api_key is configured. When no API key is set the request
-// passes through unauthenticated, keeping the observability endpoints open for
-// operators that rely solely on network-level access control.
-func (s *Server) requireAPIKey(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cfg := s.loadCfg()
-		if cfg.Daemon.HTTP.APIKey != "" {
-			authHeader := r.Header.Get("Authorization")
-			const prefix = "Bearer "
-			if !strings.HasPrefix(authHeader, prefix) {
-				w.Header().Set("WWW-Authenticate", "Bearer")
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
-			token := authHeader[len(prefix):]
-			if subtle.ConstantTimeCompare([]byte(token), []byte(cfg.Daemon.HTTP.APIKey)) != 1 {
-				w.Header().Set("WWW-Authenticate", "Bearer")
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	q := s.channels.QueueStats()
 
@@ -395,10 +357,6 @@ type agentsRunRequest struct {
 
 func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 	cfg := s.loadCfg()
-	if cfg.Daemon.HTTP.APIKey == "" {
-		http.Error(w, "endpoint disabled: no API key configured", http.StatusForbidden)
-		return
-	}
 	var req agentsRunRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, cfg.Daemon.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)

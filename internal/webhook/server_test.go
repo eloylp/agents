@@ -619,63 +619,6 @@ func TestHandleAgentsRunEnqueuesEvent(t *testing.T) {
 	}
 }
 
-func TestHandleAgentsRunAuthRejections(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name       string
-		mutateCfg  func(*config.Config)
-		authHeader string
-		wantStatus int
-	}{
-		{
-			name:       "no auth header",
-			wantStatus: http.StatusUnauthorized,
-		},
-		{
-			name:       "wrong token",
-			authHeader: "Bearer wrong-key",
-			wantStatus: http.StatusUnauthorized,
-		},
-		{
-			name:       "raw key no scheme",
-			authHeader: testAPIKey,
-			wantStatus: http.StatusUnauthorized,
-		},
-		{
-			name:       "Basic scheme",
-			authHeader: "Basic " + testAPIKey,
-			wantStatus: http.StatusUnauthorized,
-		},
-		{
-			name:       "Token scheme",
-			authHeader: "Token " + testAPIKey,
-			wantStatus: http.StatusUnauthorized,
-		},
-		{
-			name:       "no api key configured",
-			mutateCfg:  func(c *config.Config) { c.Daemon.HTTP.APIKey = "" },
-			authHeader: "Bearer something",
-			wantStatus: http.StatusForbidden,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			cfg := testCfg(tc.mutateCfg)
-			server := NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(1), nil, nil, zerolog.Nop())
-			handler := server.requireAPIKey(http.HandlerFunc(server.handleAgentsRun))
-			req := httptest.NewRequest(http.MethodPost, "/agents/run", strings.NewReader(`{"agent":"a","repo":"r"}`))
-			if tc.authHeader != "" {
-				req.Header.Set("Authorization", tc.authHeader)
-			}
-			rr := httptest.NewRecorder()
-			handler.ServeHTTP(rr, req)
-			if rr.Code != tc.wantStatus {
-				t.Fatalf("got %d, want %d", rr.Code, tc.wantStatus)
-			}
-		})
-	}
-}
 
 func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
 	t.Parallel()
@@ -852,19 +795,6 @@ func TestBuildHandlerObservabilityRoutesAreOpen(t *testing.T) {
 		})
 	}
 
-	// The mutation endpoint must still require the Bearer token.
-	t.Run("POST /agents/run requires auth", func(t *testing.T) {
-		t.Parallel()
-		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/agents/run", nil)
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("request failed: %v", err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusUnauthorized {
-			t.Errorf("want 401 for unauthenticated /agents/run, got %d", resp.StatusCode)
-		}
-	})
 }
 
 // ─── compile-time assertions ──────────────────────────────────────────────────

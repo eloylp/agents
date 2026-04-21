@@ -2,7 +2,6 @@
 import { useState, useEffect } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
-import { authHeaders } from '@/lib/apiKey'
 
 interface Skill {
   name: string
@@ -109,7 +108,7 @@ export default function SkillsPage() {
     try {
       const res = await fetch('/api/store/skills', {
         method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: form.name, prompt: form.prompt }),
       })
       if (!res.ok) {
@@ -134,7 +133,7 @@ export default function SkillsPage() {
   const deleteSkill = async () => {
     setSaving(true)
     try {
-      const res = await fetch(`/api/store/skills/${encodeURIComponent(deleteTarget)}`, { method: 'DELETE', headers: authHeaders() })
+      const res = await fetch(`/api/store/skills/${encodeURIComponent(deleteTarget)}`, { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         setSaveError((await res.text()) || 'Delete failed')
         setSaving(false)
