@@ -1635,14 +1635,15 @@ type stubTraceRecorder struct {
 }
 
 type stubSpan struct {
-	status string
-	errMsg string
+	status  string
+	errMsg  string
+	spanEnd time.Time
 }
 
-func (r *stubTraceRecorder) RecordSpan(_, _, _, _, _, _, _, _ string, _, _ int, _ int64, _ int, _ string, _, _ time.Time, status, errMsg string) {
+func (r *stubTraceRecorder) RecordSpan(_, _, _, _, _, _, _, _ string, _, _ int, _ int64, _ int, _ string, _ time.Time, spanEnd time.Time, status, errMsg string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.spans = append(r.spans, stubSpan{status: status, errMsg: errMsg})
+	r.spans = append(r.spans, stubSpan{status: status, errMsg: errMsg, spanEnd: spanEnd})
 }
 
 func (r *stubTraceRecorder) recorded() []stubSpan {
@@ -1666,6 +1667,22 @@ func (m *errMemory) ReadMemory(agent, repo string) (string, error) {
 
 func (m *errMemory) WriteMemory(_, _, _ string) error {
 	return m.err
+}
+
+// slowMemory wraps a MemoryStore and introduces a fixed delay on WriteMemory
+// so regression tests can verify that span durations include post-run steps.
+type slowMemory struct {
+	inner MemoryBackend
+	delay time.Duration
+}
+
+func (m *slowMemory) ReadMemory(agent, repo string) (string, error) {
+	return m.inner.ReadMemory(agent, repo)
+}
+
+func (m *slowMemory) WriteMemory(agent, repo, content string) error {
+	time.Sleep(m.delay)
+	return m.inner.WriteMemory(agent, repo, content)
 }
 
 // TestSchedulerWriteMemoryFailureFailsRun verifies that a WriteMemory error
@@ -1747,5 +1764,48 @@ func TestSchedulerWriteMemoryFailureFailsRun(t *testing.T) {
 	})
 	if len(q.popped()) == 0 {
 		t.Error("expected dispatch to succeed after write-memory failure (dedup mark should be rolled back)")
+	}
+}
+
+// TestSchedulerSpanEndCapturedAfterPostRunSteps is a regression test verifying
+// that the autonomous trace span end time is captured inside recordTrace (after
+// WriteMemory and ProcessDispatches complete), not immediately after runner.Run.
+// Before the fix, spanEnd := time.Now() was captured right after runner.Run, so
+// a slow memory write or dispatch enqueue would emit a span whose recorded
+// duration excluded those post-run steps, leaving /api/traces internally
+// inconsistent.
+func TestSchedulerSpanEndCapturedAfterPostRunSteps(t *testing.T) {
+	t.Parallel()
+
+	const delay = 50 * time.Millisecond
+
+	cfg := baseCfg(nil)
+	runner := &stubRunner{}
+	mem := &slowMemory{inner: NewMemoryStore(t.TempDir()), delay: delay}
+
+	traceRec := &stubTraceRecorder{}
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, mem, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithTraceRecorder(traceRec)
+
+	before := time.Now()
+	if runErr := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); runErr != nil {
+		t.Fatalf("TriggerAgent: %v", runErr)
+	}
+
+	spans := traceRec.recorded()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 recorded trace span, got %d", len(spans))
+	}
+	if spans[0].status != "success" {
+		t.Errorf("expected span status %q, got %q", "success", spans[0].status)
+	}
+	// The span end time must be recorded after the slow WriteMemory completes,
+	// so it must be at least `delay` after the start of the run.
+	if spans[0].spanEnd.Sub(before) < delay {
+		t.Errorf("span end time recorded too early: elapsed %v < delay %v — spanEnd was captured before WriteMemory completed",
+			spans[0].spanEnd.Sub(before), delay)
 	}
 }

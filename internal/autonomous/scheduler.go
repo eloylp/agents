@@ -418,15 +418,15 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		System:   rendered.System,
 		User:     rendered.User,
 	})
-	spanEnd := time.Now()
 
 	// recordTrace is called exactly once per run, after all post-run steps, so
-	// the span status accurately reflects the final outcome (including memory
-	// write failures, not just the runner result).
+	// both the span status and duration accurately reflect the final outcome
+	// (including time spent in memory writes and dispatch, not just runner.Run).
 	recordTrace := func(status, errMsg string) {
 		if s.traceRec == nil {
 			return
 		}
+		spanEnd := time.Now()
 		spanID := workflow.GenEventID()
 		rootEventID := spanID
 		logger.Info().Str("span_id", spanID).Str("status", status).Int64("duration_ms", spanEnd.Sub(spanStart).Milliseconds()).Msg("recording trace span")
