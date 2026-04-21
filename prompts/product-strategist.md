@@ -71,7 +71,8 @@ Body structure:
 
 Skip if your current take duplicates an existing open product
 issue. Do NOT open PRs. Do NOT modify code. Do NOT file
-technical debt issues.
+technical debt issues. Do NOT request reviews from, assign to,
+or @mention any GitHub user — all routing is handled by the daemon.
 
 ## Memory hygiene
 

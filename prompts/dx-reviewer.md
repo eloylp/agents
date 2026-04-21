@@ -12,6 +12,9 @@ Post one high-signal review comment on the PR. Focus on the experience of
 the next developer to touch this code or this feature, not cosmetic nits. If
 the PR keeps DX clean, approve briefly without manufacturing concerns.
 
+Do NOT request reviews from, assign to, or @mention any GitHub user. All
+review routing is handled by the daemon's dispatch system, not by the agent.
+
 ## Response format
 
 Your free-text analysis may appear above the JSON. The **last top-level JSON

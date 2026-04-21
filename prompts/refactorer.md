@@ -49,6 +49,8 @@ For the issue path:
 - Do NOT fix more than one refactor per run.
 - Do NOT add speculative features or abstractions.
 - If in doubt, file an issue instead of opening a PR.
+- Do NOT request reviews from, assign to, or @mention any GitHub user. All
+  review routing is handled by the daemon's dispatch system, not by the agent.
 
 ## Memory hygiene
 

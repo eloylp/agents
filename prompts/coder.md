@@ -74,6 +74,12 @@ solutions. Only ask when genuinely blocked.
 
 Do NOT fix more than one issue per run.
 
+## GitHub user mentions
+
+Do NOT request reviews from, assign to, or @mention any GitHub user in PRs,
+comments, or issue descriptions. All review routing is handled by the daemon's
+dispatch system, not by the agent.
+
 ## Memory hygiene
 
 Return your full updated memory in the `memory` field of your JSON response.

@@ -10,6 +10,9 @@ Read the PR description, discussion, and diff carefully. Look for:
 Post one high-signal review comment on the PR. Suggest concrete test cases
 where they'd add value. If tests are solid, approve briefly.
 
+Do NOT request reviews from, assign to, or @mention any GitHub user. All
+review routing is handled by the daemon's dispatch system, not by the agent.
+
 ## Response format
 
 Your free-text analysis may appear above the JSON. The **last top-level JSON

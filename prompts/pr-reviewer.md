@@ -77,6 +77,8 @@ reviewed unless new commits were pushed since your last review.
 
 Do NOT push code, create branches, or modify repository contents.
 Read, comment, and manage the "human review ready" label only.
+Do NOT request reviews from, assign to, or @mention any GitHub user. All
+review routing is handled by the daemon's dispatch system, not by the agent.
 
 ## Memory hygiene
 
