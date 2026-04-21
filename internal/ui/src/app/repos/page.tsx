@@ -21,13 +21,38 @@ interface Repo {
 const emptyBinding: Binding = { agent: '', labels: [], events: [], cron: '', enabled: true }
 const emptyRepo: Repo = { name: '', enabled: true, bindings: [] }
 
-// isValidCron returns true for standard 5-field cron expressions.
+// isValidCron returns true for standard 5-field cron expressions with range validation.
+// Fields: minute(0-59) hour(0-23) day-of-month(1-31) month(1-12) weekday(0-7)
 // Each field may be: * | number | range (a-b) | step (*/n or a-b/n) | list (a,b,c).
+function cronInRange(n: number, min: number, max: number): boolean {
+  return Number.isInteger(n) && n >= min && n <= max
+}
+function cronValidItem(item: string, min: number, max: number): boolean {
+  if (item === '*') return true
+  if (item.startsWith('*/')) {
+    const step = parseInt(item.slice(2), 10)
+    return !isNaN(step) && step >= 1
+  }
+  const slashIdx = item.indexOf('/')
+  if (slashIdx !== -1) {
+    const step = parseInt(item.slice(slashIdx + 1), 10)
+    if (isNaN(step) || step < 1) return false
+    return cronValidItem(item.slice(0, slashIdx), min, max)
+  }
+  const dashIdx = item.indexOf('-')
+  if (dashIdx !== -1) {
+    const lo = parseInt(item.slice(0, dashIdx), 10)
+    const hi = parseInt(item.slice(dashIdx + 1), 10)
+    return cronInRange(lo, min, max) && cronInRange(hi, min, max) && lo <= hi
+  }
+  const n = parseInt(item, 10)
+  return cronInRange(n, min, max)
+}
 function isValidCron(expr: string): boolean {
   const parts = expr.trim().split(/\s+/)
   if (parts.length !== 5) return false
-  const fieldRe = /^(\*|\d+|\d+-\d+)(\/\d+)?(,(\*|\d+|\d+-\d+)(\/\d+)?)*$/
-  return parts.every(f => fieldRe.test(f))
+  const bounds: [number, number][] = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]]
+  return parts.every((f, i) => f.split(',').every(item => cronValidItem(item, bounds[i][0], bounds[i][1])))
 }
 
 const inputStyle: React.CSSProperties = {
