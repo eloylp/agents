@@ -4,3 +4,5 @@ main
 agents/**/MEMORY.md
 internal/ui/node_modules/
 internal/ui/.next/
+internal/ui/dist/*
+!internal/ui/dist/.gitkeep
