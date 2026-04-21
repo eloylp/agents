@@ -386,6 +386,69 @@ func ImportAll(
 	return tx.Commit()
 }
 
+// ReplaceAll replaces the entire fleet configuration atomically. All existing
+// agents, repos, skills, backends, and bindings are deleted and replaced with
+// the provided entities. Identical normalization and validation to ImportAll
+// applies. If validation fails the transaction is rolled back and the store is
+// left unchanged.
+func ReplaceAll(
+	db *sql.DB,
+	agents []config.AgentDef,
+	repos []config.RepoDef,
+	skills map[string]config.SkillDef,
+	backends map[string]config.AIBackendConfig,
+) error {
+	for i := range agents {
+		config.NormalizeAgentDef(&agents[i])
+	}
+	for i := range repos {
+		config.NormalizeRepoDef(&repos[i])
+	}
+	normalizedSkills := make(map[string]config.SkillDef, len(skills))
+	for name, s := range skills {
+		name = config.NormalizeSkillName(name)
+		config.NormalizeSkillDef(&s)
+		normalizedSkills[name] = s
+	}
+	normalizedBackends := make(map[string]config.AIBackendConfig, len(backends))
+	for name, b := range backends {
+		name = config.NormalizeBackendName(name)
+		config.NormalizeBackendConfig(&b)
+		config.ApplyBackendDefaults(&b)
+		normalizedBackends[name] = b
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: replace: begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Delete in dependency order: bindings reference repos and agents.
+	for _, tbl := range []string{"bindings", "repos", "agents", "skills", "backends"} {
+		if _, err := tx.Exec("DELETE FROM " + tbl); err != nil {
+			return fmt.Errorf("store: replace: truncate %s: %w", tbl, err)
+		}
+	}
+
+	if err := importAgents(tx, agents); err != nil {
+		return err
+	}
+	if err := importSkills(tx, normalizedSkills); err != nil {
+		return err
+	}
+	if err := importRepos(tx, repos); err != nil {
+		return err
+	}
+	if err := importBackends(tx, normalizedBackends); err != nil {
+		return err
+	}
+	if err := validateFleet(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
+	}
+	return tx.Commit()
+}
+
 // DeleteRepo removes a repo and all of its bindings. Returns an error if the
 // deletion would leave no enabled repos.
 func DeleteRepo(db *sql.DB, name string) error {

@@ -731,8 +731,15 @@ func (s *Server) handleStoreImport(w http.ResponseWriter, r *http.Request) {
 	s.storeMu.Lock()
 	defer s.storeMu.Unlock()
 
-	if err := store.ImportAll(s.db, payload.Agents, payload.Repos, payload.Skills, backends); err != nil {
-		http.Error(w, fmt.Sprintf("import: %v", err), storeErrStatus(err))
+	mode := r.URL.Query().Get("mode")
+	var importErr error
+	if mode == "replace" {
+		importErr = store.ReplaceAll(s.db, payload.Agents, payload.Repos, payload.Skills, backends)
+	} else {
+		importErr = store.ImportAll(s.db, payload.Agents, payload.Repos, payload.Skills, backends)
+	}
+	if importErr != nil {
+		http.Error(w, fmt.Sprintf("import: %v", importErr), storeErrStatus(importErr))
 		return
 	}
 	if err := s.reloadCron(); err != nil {

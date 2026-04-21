@@ -197,6 +197,7 @@ export default function ConfigPage() {
 
   const [importStatus, setImportStatus] = useState('')
   const [importError, setImportError] = useState('')
+  const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -273,7 +274,8 @@ export default function ConfigPage() {
     setImportStatus('')
     setImportError('')
     const text = await file.text()
-    const res = await fetch('/api/store/import', {
+    const url = importMode === 'replace' ? '/api/store/import?mode=replace' : '/api/store/import'
+    const res = await fetch(url, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/x-yaml' }),
       body: text,
@@ -424,9 +426,18 @@ export default function ConfigPage() {
             <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '1.25rem' }}>
               <h3 style={{ fontSize: '0.95rem', fontWeight: 600, color: '#1e3a5f', marginBottom: '0.5rem' }}>Import YAML</h3>
               <p style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-                Upload a YAML file to merge agents, skills, repos, and backends into the store.
-                Existing records with the same name will be overwritten.
+                Upload a YAML file to import agents, skills, repos, and backends into the store.
               </p>
+              <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '0.75rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer', color: '#1e293b' }}>
+                  <input type="radio" name="importMode" value="merge" checked={importMode === 'merge'} onChange={() => setImportMode('merge')} />
+                  Merge — upsert records; existing records not in the file are kept
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer', color: '#dc2626' }}>
+                  <input type="radio" name="importMode" value="replace" checked={importMode === 'replace'} onChange={() => setImportMode('replace')} />
+                  Replace — delete all existing records and replace with file contents
+                </label>
+              </div>
               <input
                 ref={fileInputRef}
                 type="file"

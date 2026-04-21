@@ -98,7 +98,7 @@ function RunButton({ agent, repo }: { agent: string; repo: string }) {
 }
 
 const emptyForm: StoreAgent = {
-  name: '', backend: 'claude', skills: [], prompt: '',
+  name: '', backend: 'auto', skills: [], prompt: '',
   allow_prs: false, allow_dispatch: false, can_dispatch: [], description: '',
 }
 

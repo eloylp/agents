@@ -1583,6 +1583,73 @@ skills:
 	}
 }
 
+func TestStoreImportReplacePrunesExistingRecords(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+
+	// Seed an agent and a repo that should be absent after the replace import.
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/agents", map[string]any{
+		"name": "old-agent", "backend": "claude", "prompt": "old",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed old-agent: %d — %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/api/store/repos", map[string]any{
+		"name": "owner/old-repo", "enabled": true,
+		"bindings": []map[string]any{{"agent": "old-agent", "labels": []string{"ai:scan"}}},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed old-repo: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Replace with a YAML that contains only a new agent + repo (no old-agent).
+	yamlBody := `
+daemon:
+  ai_backends:
+    claude:
+      command: claude
+      args: []
+agents:
+  - name: new-agent
+    backend: claude
+    prompt: fresh
+    skills: []
+    can_dispatch: []
+repos:
+  - name: owner/new-repo
+    enabled: true
+    bindings:
+      - agent: new-agent
+        labels:
+          - ai:run
+`
+	req := httptest.NewRequest(http.MethodPost, "/api/store/import?mode=replace", strings.NewReader(yamlBody))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rr := httptest.NewRecorder()
+	s.buildHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("replace import: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// old-agent must be gone.
+	agents := doCRUDRequest(t, s, http.MethodGet, "/api/store/agents", nil)
+	if strings.Contains(agents.Body.String(), "old-agent") {
+		t.Errorf("old-agent still present after replace import: %s", agents.Body.String())
+	}
+	if !strings.Contains(agents.Body.String(), "new-agent") {
+		t.Errorf("new-agent missing after replace import: %s", agents.Body.String())
+	}
+
+	// old-repo must be gone.
+	repos := doCRUDRequest(t, s, http.MethodGet, "/api/store/repos", nil)
+	if strings.Contains(repos.Body.String(), "old-repo") {
+		t.Errorf("old-repo still present after replace import: %s", repos.Body.String())
+	}
+	if !strings.Contains(repos.Body.String(), "new-repo") {
+		t.Errorf("new-repo missing after replace import: %s", repos.Body.String())
+	}
+}
+
 func TestStoreExportNotRegisteredWithoutStore(t *testing.T) {
 	t.Parallel()
 	cfg := crudMinimalConfig()
