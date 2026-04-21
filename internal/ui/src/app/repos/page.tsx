@@ -141,11 +141,12 @@ function TriggerEditor({ trigger, onChange, onRemove }: {
       </div>
       <div style={{ flex: 1 }}>
         {triggerType === 'labels' && (
-          <input
-            style={inputStyle}
-            value={(trigger.labels ?? []).join(', ')}
-            onChange={e => onChange({ ...trigger, labels: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
-            placeholder="ai:review:pr-reviewer"
+          <BadgePicker
+            options={[]}
+            selected={trigger.labels ?? []}
+            onChange={v => onChange({ ...trigger, labels: v })}
+            placeholder="Add label…"
+            freeText
           />
         )}
         {triggerType === 'events' && (
