@@ -215,8 +215,9 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		return nil
 	}
 
-	// Target must be bound to this repo (any trigger kind is sufficient).
-	if !slices.ContainsFunc(repo.Use, func(b config.Binding) bool {
+	// agent.dispatch requires an enabled binding; agents.run (manual trigger)
+	// skips the check — explicit operator intent always runs.
+	if ev.Kind != "agents.run" && !slices.ContainsFunc(repo.Use, func(b config.Binding) bool {
 		return b.Agent == targetName && b.IsEnabled()
 	}) {
 		return fmt.Errorf("dispatch: target agent %q is not bound to repo %q", targetName, ev.Repo.FullName)
