@@ -1,9 +1,8 @@
-// Package observe provides in-memory observability data structures for the
-// agents daemon: a bounded event ring-buffer, a trace ring-buffer for agent
-// run spans, an agent-interaction graph, and an SSE fan-out hub.
+// Package observe provides observability primitives for the agents daemon:
+// SQLite-backed event, trace, and dispatch-history queries, SSE fan-out hubs,
+// and an in-process active-run tracker.
 //
-// All types are safe for concurrent use. Ring buffers drop the oldest entry
-// on overflow so that new writes never block.
+// All types are safe for concurrent use.
 package observe
 
 import (
@@ -11,14 +10,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"slices"
 	"sync"
 	"time"
 
 	"github.com/eloylp/agents/internal/workflow"
 )
 
-// ─── EventBuffer ─────────────────────────────────────────────────────────────
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 // TimestampedEvent is a workflow event with an ingestion timestamp attached.
 // JSON field names are lowercase so both the SSE stream and the REST snapshot
@@ -33,55 +31,6 @@ type TimestampedEvent struct {
 	Actor   string         `json:"actor"`
 	Payload map[string]any `json:"payload,omitempty"`
 }
-
-// EventBuffer is a thread-safe bounded ring-buffer for TimestampedEvents.
-// When full it overwrites the oldest entry rather than blocking.
-type EventBuffer struct {
-	mu   sync.RWMutex
-	buf  []TimestampedEvent
-	cap  int
-	head int // next write index
-	size int // current number of valid entries
-}
-
-// NewEventBuffer creates an EventBuffer that holds at most cap entries.
-func NewEventBuffer(cap int) *EventBuffer {
-	if cap <= 0 {
-		cap = 500
-	}
-	return &EventBuffer{buf: make([]TimestampedEvent, cap), cap: cap}
-}
-
-// Add records ev.
-func (b *EventBuffer) Add(ev TimestampedEvent) {
-	b.mu.Lock()
-	b.buf[b.head] = ev
-	b.head = (b.head + 1) % b.cap
-	if b.size < b.cap {
-		b.size++
-	}
-	b.mu.Unlock()
-}
-
-// List returns all stored events in insertion order (oldest first).
-// When since is non-zero, only events strictly after that time are returned.
-func (b *EventBuffer) List(since time.Time) []TimestampedEvent {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	out := make([]TimestampedEvent, 0, b.size)
-	start := (b.head - b.size + b.cap) % b.cap
-	for i := range b.size {
-		idx := (start + i) % b.cap
-		e := b.buf[idx]
-		if !since.IsZero() && !e.At.After(since) {
-			continue
-		}
-		out = append(out, e)
-	}
-	return out
-}
-
-// ─── TraceBuffer ─────────────────────────────────────────────────────────────
 
 // Span records the timing and outcome of a single agent run.
 type Span struct {
@@ -105,66 +54,6 @@ type Span struct {
 	ErrorMsg       string    `json:"error,omitempty"`
 }
 
-// TraceBuffer is a thread-safe bounded ring-buffer for Spans.
-type TraceBuffer struct {
-	mu   sync.RWMutex
-	buf  []Span
-	cap  int
-	head int
-	size int
-}
-
-// NewTraceBuffer creates a TraceBuffer that holds at most cap spans.
-func NewTraceBuffer(cap int) *TraceBuffer {
-	if cap <= 0 {
-		cap = 200
-	}
-	return &TraceBuffer{buf: make([]Span, cap), cap: cap}
-}
-
-// Add records a finished span.
-func (b *TraceBuffer) Add(s Span) {
-	b.mu.Lock()
-	b.buf[b.head] = s
-	b.head = (b.head + 1) % b.cap
-	if b.size < b.cap {
-		b.size++
-	}
-	b.mu.Unlock()
-}
-
-// List returns all stored spans in insertion order (oldest first).
-func (b *TraceBuffer) List() []Span {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.listLocked()
-}
-
-func (b *TraceBuffer) listLocked() []Span {
-	out := make([]Span, 0, b.size)
-	start := (b.head - b.size + b.cap) % b.cap
-	for i := range b.size {
-		out = append(out, b.buf[(start+i)%b.cap])
-	}
-	return out
-}
-
-// ByRootEventID returns all spans whose RootEventID matches id.
-func (b *TraceBuffer) ByRootEventID(id string) []Span {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	all := b.listLocked()
-	var out []Span
-	for _, s := range all {
-		if s.RootEventID == id {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-// ─── InteractionGraph ────────────────────────────────────────────────────────
-
 // DispatchRecord is one observed inter-agent dispatch.
 type DispatchRecord struct {
 	At     time.Time `json:"at"`
@@ -179,56 +68,6 @@ type Edge struct {
 	To         string           `json:"to"`
 	Count      int              `json:"count"`
 	Dispatches []DispatchRecord `json:"dispatches"`
-}
-
-// InteractionGraph tracks agent-to-agent dispatches as a directed weighted graph.
-type InteractionGraph struct {
-	mu    sync.RWMutex
-	edges map[string]*Edge // key: "from\x00to"
-	limit int              // max dispatches kept per edge
-}
-
-// NewInteractionGraph creates an InteractionGraph. dispatchLimit is the maximum
-// number of DispatchRecords retained per edge (oldest are dropped on overflow).
-func NewInteractionGraph(dispatchLimit int) *InteractionGraph {
-	if dispatchLimit <= 0 {
-		dispatchLimit = 100
-	}
-	return &InteractionGraph{
-		edges: make(map[string]*Edge),
-		limit: dispatchLimit,
-	}
-}
-
-// Record adds one observed dispatch from → to.
-func (g *InteractionGraph) Record(from, to, repo string, number int, reason string) {
-	key := from + "\x00" + to
-	rec := DispatchRecord{At: time.Now().UTC(), Repo: repo, Number: number, Reason: reason}
-	g.mu.Lock()
-	e, ok := g.edges[key]
-	if !ok {
-		e = &Edge{From: from, To: to}
-		g.edges[key] = e
-	}
-	e.Count++
-	e.Dispatches = append(e.Dispatches, rec)
-	if len(e.Dispatches) > g.limit {
-		e.Dispatches = e.Dispatches[len(e.Dispatches)-g.limit:]
-	}
-	g.mu.Unlock()
-}
-
-// Edges returns a snapshot of all edges.
-func (g *InteractionGraph) Edges() []Edge {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	out := make([]Edge, 0, len(g.edges))
-	for _, e := range g.edges {
-		cp := *e
-		cp.Dispatches = slices.Clone(e.Dispatches)
-		out = append(out, cp)
-	}
-	return out
 }
 
 // ─── SSEHub ──────────────────────────────────────────────────────────────────
@@ -336,120 +175,164 @@ func (a *ActiveRuns) IsRunning(agentName string) bool {
 // ─── Store ───────────────────────────────────────────────────────────────────
 
 // Store is the single observability container injected throughout the daemon.
-// It aggregates the ring buffers, graph, SSE hubs, and active-run tracker so
-// that callers need only thread one dependency.
+// It holds the SQLite database for persistent queries, SSE hubs for live
+// streaming, and the active-run tracker for ephemeral per-process state.
 type Store struct {
 	db         *sql.DB
-	Events     *EventBuffer
-	Traces     *TraceBuffer
-	Graph      *InteractionGraph
 	EventsSSE  *SSEHub
 	TracesSSE  *SSEHub
 	MemorySSE  *SSEHub
 	ActiveRuns *ActiveRuns
 }
 
-// NewStore creates a Store with default-sized buffers. When db is non-nil,
-// write-through persistence to SQLite is enabled and the in-memory buffers
-// are pre-filled from the database on startup.
+// NewStore creates a Store. The db handle is used for all read/write
+// operations against the events, traces, and dispatch_history tables.
 func NewStore(db *sql.DB) *Store {
-	s := &Store{
+	return &Store{
 		db:         db,
-		Events:     NewEventBuffer(500),
-		Traces:     NewTraceBuffer(200),
-		Graph:      NewInteractionGraph(100),
 		EventsSSE:  NewSSEHub(64),
 		TracesSSE:  NewSSEHub(64),
 		MemorySSE:  NewSSEHub(32),
 		ActiveRuns: newActiveRuns(),
 	}
-	s.LoadHistory()
-	return s
 }
 
-// LoadHistory pre-fills the in-memory ring buffers from SQLite so that the
-// daemon starts with recent observability data available immediately. It is
-// called automatically at the end of NewStore when a database is provided.
-func (s *Store) LoadHistory() {
+// ─── Query methods (read from SQLite) ────────────────────────────────────────
+
+// ListEvents returns stored events ordered by time ascending (oldest first).
+// When since is non-zero, only events strictly after that time are returned.
+// Results are capped at 500 rows.
+func (s *Store) ListEvents(since time.Time) []TimestampedEvent {
 	if s.db == nil {
-		return
+		return nil
 	}
-
-	// Load most recent events (matching ring buffer capacity of 500).
-	rows, err := s.db.Query(
-		`SELECT id, at, repo, kind, number, actor, payload FROM events ORDER BY at DESC LIMIT 500`,
-	)
-	if err != nil {
-		log.Printf("observe: load event history: %v", err)
+	var rows *sql.Rows
+	var err error
+	if since.IsZero() {
+		rows, err = s.db.Query(
+			`SELECT id, at, repo, kind, number, actor, payload FROM events ORDER BY at ASC LIMIT 500`,
+		)
 	} else {
-		var events []TimestampedEvent
-		for rows.Next() {
-			var te TimestampedEvent
-			var payloadStr string
-			if err := rows.Scan(&te.ID, &te.At, &te.Repo, &te.Kind, &te.Number, &te.Actor, &payloadStr); err != nil {
-				log.Printf("observe: scan event row: %v", err)
-				continue
-			}
-			if payloadStr != "" {
-				_ = json.Unmarshal([]byte(payloadStr), &te.Payload)
-			}
-			events = append(events, te)
-		}
-		rows.Close()
-		// Insert in chronological order (oldest first) so the ring buffer
-		// ends up with the most recent entries at the head.
-		for i := len(events) - 1; i >= 0; i-- {
-			s.Events.Add(events[i])
-		}
+		rows, err = s.db.Query(
+			`SELECT id, at, repo, kind, number, actor, payload FROM events WHERE at > ? ORDER BY at ASC LIMIT 500`,
+			since,
+		)
 	}
+	if err != nil {
+		log.Printf("observe: list events: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	var out []TimestampedEvent
+	for rows.Next() {
+		var te TimestampedEvent
+		var payloadStr string
+		if err := rows.Scan(&te.ID, &te.At, &te.Repo, &te.Kind, &te.Number, &te.Actor, &payloadStr); err != nil {
+			log.Printf("observe: scan event row: %v", err)
+			continue
+		}
+		if payloadStr != "" {
+			_ = json.Unmarshal([]byte(payloadStr), &te.Payload)
+		}
+		out = append(out, te)
+	}
+	return out
+}
 
-	// Load most recent traces (matching ring buffer capacity of 200).
-	rows, err = s.db.Query(
+// ListTraces returns stored spans ordered by started_at descending (newest
+// first). Results are capped at 200 rows.
+func (s *Store) ListTraces() []Span {
+	if s.db == nil {
+		return nil
+	}
+	rows, err := s.db.Query(
 		`SELECT span_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error FROM traces ORDER BY started_at DESC LIMIT 200`,
 	)
 	if err != nil {
-		log.Printf("observe: load trace history: %v", err)
-	} else {
-		var spans []Span
-		for rows.Next() {
-			var sp Span
-			if err := rows.Scan(
-				&sp.SpanID, &sp.RootEventID, &sp.ParentSpanID,
-				&sp.Agent, &sp.Backend, &sp.Repo, &sp.Number,
-				&sp.EventKind, &sp.InvokedBy, &sp.DispatchDepth,
-				&sp.QueueWaitMs, &sp.ArtifactsCount, &sp.Summary,
-				&sp.StartedAt, &sp.FinishedAt, &sp.DurationMs,
-				&sp.Status, &sp.ErrorMsg,
-			); err != nil {
-				log.Printf("observe: scan trace row: %v", err)
-				continue
-			}
-			spans = append(spans, sp)
-		}
-		rows.Close()
-		for i := len(spans) - 1; i >= 0; i-- {
-			s.Traces.Add(spans[i])
-		}
+		log.Printf("observe: list traces: %v", err)
+		return nil
 	}
+	defer rows.Close()
+	return scanSpans(rows)
+}
 
-	// Load all dispatch history to rebuild the interaction graph.
-	rows, err = s.db.Query(
-		`SELECT from_agent, to_agent, repo, number, reason FROM dispatch_history ORDER BY at ASC`,
+// TracesByRootEventID returns all spans whose root_event_id matches id.
+func (s *Store) TracesByRootEventID(id string) []Span {
+	if s.db == nil {
+		return nil
+	}
+	rows, err := s.db.Query(
+		`SELECT span_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error FROM traces WHERE root_event_id = ?`,
+		id,
 	)
 	if err != nil {
-		log.Printf("observe: load dispatch history: %v", err)
-	} else {
-		for rows.Next() {
-			var from, to, repo, reason string
-			var number int
-			if err := rows.Scan(&from, &to, &repo, &number, &reason); err != nil {
-				log.Printf("observe: scan dispatch row: %v", err)
-				continue
-			}
-			s.Graph.Record(from, to, repo, number, reason)
-		}
-		rows.Close()
+		log.Printf("observe: traces by root event %s: %v", id, err)
+		return nil
 	}
+	defer rows.Close()
+	return scanSpans(rows)
+}
+
+// scanSpans is a shared helper that scans Span rows from a query result.
+func scanSpans(rows *sql.Rows) []Span {
+	var out []Span
+	for rows.Next() {
+		var sp Span
+		if err := rows.Scan(
+			&sp.SpanID, &sp.RootEventID, &sp.ParentSpanID,
+			&sp.Agent, &sp.Backend, &sp.Repo, &sp.Number,
+			&sp.EventKind, &sp.InvokedBy, &sp.DispatchDepth,
+			&sp.QueueWaitMs, &sp.ArtifactsCount, &sp.Summary,
+			&sp.StartedAt, &sp.FinishedAt, &sp.DurationMs,
+			&sp.Status, &sp.ErrorMsg,
+		); err != nil {
+			log.Printf("observe: scan trace row: %v", err)
+			continue
+		}
+		out = append(out, sp)
+	}
+	return out
+}
+
+// ListEdges returns the dispatch interaction graph by grouping rows from
+// dispatch_history by (from_agent, to_agent) into Edge structs.
+func (s *Store) ListEdges() []Edge {
+	if s.db == nil {
+		return nil
+	}
+	rows, err := s.db.Query(
+		`SELECT from_agent, to_agent, repo, number, reason, at FROM dispatch_history ORDER BY at ASC`,
+	)
+	if err != nil {
+		log.Printf("observe: list edges: %v", err)
+		return nil
+	}
+	defer rows.Close()
+
+	edges := make(map[string]*Edge) // key: "from\x00to"
+	for rows.Next() {
+		var from, to, repo, reason string
+		var number int
+		var at time.Time
+		if err := rows.Scan(&from, &to, &repo, &number, &reason, &at); err != nil {
+			log.Printf("observe: scan dispatch row: %v", err)
+			continue
+		}
+		key := from + "\x00" + to
+		e, ok := edges[key]
+		if !ok {
+			e = &Edge{From: from, To: to}
+			edges[key] = e
+		}
+		e.Count++
+		e.Dispatches = append(e.Dispatches, DispatchRecord{At: at, Repo: repo, Number: number, Reason: reason})
+	}
+
+	out := make([]Edge, 0, len(edges))
+	for _, e := range edges {
+		out = append(out, *e)
+	}
+	return out
 }
 
 // IsRunning implements webhook.RuntimeStateProvider. It returns true when the
@@ -462,8 +345,8 @@ func (s *Store) IsRunning(agentName string) bool {
 // Store satisfies workflow.EventRecorder, workflow.TraceRecorder, and
 // workflow.GraphRecorder through the methods below.
 
-// RecordEvent implements workflow.EventRecorder. It records the event in the
-// ring buffer and fans it out to SSE subscribers.
+// RecordEvent implements workflow.EventRecorder. It persists the event to
+// SQLite and fans it out to SSE subscribers.
 func (s *Store) RecordEvent(at time.Time, ev workflow.Event) {
 	te := TimestampedEvent{
 		At:      at,
@@ -474,7 +357,6 @@ func (s *Store) RecordEvent(at time.Time, ev workflow.Event) {
 		Actor:   ev.Actor,
 		Payload: ev.Payload,
 	}
-	s.Events.Add(te)
 	if s.db != nil {
 		go func() {
 			payload, _ := json.Marshal(te.Payload)
@@ -492,8 +374,8 @@ func (s *Store) RecordEvent(at time.Time, ev workflow.Event) {
 	}
 }
 
-// RecordSpan implements workflow.TraceRecorder. It stores the completed span
-// in the trace ring buffer and fans it out to SSE subscribers.
+// RecordSpan implements workflow.TraceRecorder. It persists the completed span
+// to SQLite and fans it out to SSE subscribers.
 func (s *Store) RecordSpan(
 	spanID, rootEventID, parentSpanID,
 	agent, backend, repo, eventKind, invokedBy string,
@@ -522,7 +404,6 @@ func (s *Store) RecordSpan(
 		Status:         status,
 		ErrorMsg:       errMsg,
 	}
-	s.Traces.Add(sp)
 	if s.db != nil {
 		go func() {
 			_, err := s.db.Exec(
@@ -546,7 +427,6 @@ func (s *Store) RecordSpan(
 
 // RecordDispatch implements workflow.GraphRecorder.
 func (s *Store) RecordDispatch(from, to, repo string, number int, reason string) {
-	s.Graph.Record(from, to, repo, number, reason)
 	if s.db != nil {
 		go func() {
 			_, err := s.db.Exec(

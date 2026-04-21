@@ -388,7 +388,7 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	events := s.observeStore.Events.List(since)
+	events := s.observeStore.ListEvents(since)
 	out := make([]apiEventJSON, 0, len(events))
 	for _, e := range events {
 		out = append(out, apiEventJSON{
@@ -415,7 +415,7 @@ func (s *Server) handleAPIEventsStream(w http.ResponseWriter, r *http.Request) {
 
 // handleAPITraces serves GET /api/traces — the most recent agent run spans.
 func (s *Server) handleAPITraces(w http.ResponseWriter, _ *http.Request) {
-	spans := s.observeStore.Traces.List()
+	spans := s.observeStore.ListTraces()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(spans)
 }
@@ -424,7 +424,7 @@ func (s *Server) handleAPITraces(w http.ResponseWriter, _ *http.Request) {
 // root event.
 func (s *Server) handleAPITrace(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["root_event_id"]
-	spans := s.observeStore.Traces.ByRootEventID(id)
+	spans := s.observeStore.TracesByRootEventID(id)
 	if len(spans) == 0 {
 		http.Error(w, "trace not found", http.StatusNotFound)
 		return
@@ -468,7 +468,7 @@ type apiDispatchRecord struct {
 
 // handleAPIGraph serves GET /api/graph — the current agent interaction graph.
 func (s *Server) handleAPIGraph(w http.ResponseWriter, _ *http.Request) {
-	edges := s.observeStore.Graph.Edges()
+	edges := s.observeStore.ListEdges()
 
 	// Build a map of the last cron error status for each agent so we can show
 	// "error" for idle agents that last exited with an error.

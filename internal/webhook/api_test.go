@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -599,12 +601,13 @@ func TestHandleAPIEventsReturnsStoredEvents(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(nil)
 	srv, _ := newTestServer(cfg)
-	obs := newTestObserve()
+	obs := newTestObserve(t)
 	srv.WithObserve(obs)
 
 	now := time.Now().UTC()
 	obs.RecordEvent(now, workflow.Event{ID: "evt-1", Kind: "issues.labeled", Repo: workflow.RepoRef{FullName: "owner/repo"}, Number: 42, Actor: "user"})
 	obs.RecordEvent(now.Add(time.Second), workflow.Event{ID: "evt-2", Kind: "push", Repo: workflow.RepoRef{FullName: "owner/repo"}, Actor: "bot"})
+	time.Sleep(50 * time.Millisecond) // wait for async DB writes
 
 	req := httptest.NewRequest(http.MethodGet, "/events", nil)
 	rec := httptest.NewRecorder()
@@ -629,12 +632,13 @@ func TestHandleAPIEventsSinceFilter(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(nil)
 	srv, _ := newTestServer(cfg)
-	obs := newTestObserve()
+	obs := newTestObserve(t)
 	srv.WithObserve(obs)
 
 	base := time.Now().UTC()
 	obs.RecordEvent(base, workflow.Event{ID: "old", Kind: "push"})
 	obs.RecordEvent(base.Add(2*time.Second), workflow.Event{ID: "new", Kind: "push"})
+	time.Sleep(50 * time.Millisecond) // wait for async DB writes
 
 	since := base.Add(time.Second).Format(time.RFC3339)
 	req := httptest.NewRequest(http.MethodGet, "/events?since="+since, nil)
@@ -663,7 +667,7 @@ func TestHandleSSEStreams(t *testing.T) {
 
 	cfg := testCfg(nil)
 	srv, _ := newTestServer(cfg)
-	obs := newTestObserve()
+	obs := newTestObserve(t)
 	srv.WithObserve(obs)
 
 	tests := []struct {
@@ -747,12 +751,13 @@ func TestHandleAPITracesReturnsStoredSpans(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(nil)
 	srv, _ := newTestServer(cfg)
-	obs := newTestObserve()
+	obs := newTestObserve(t)
 	srv.WithObserve(obs)
 
 	now := time.Now().UTC()
 	obs.RecordSpan("s1", "root-A", "", "coder", "claude", "owner/repo", "issues.labeled", "", 1, 0, 0, 0, "", now, now.Add(5*time.Second), "success", "")
 	obs.RecordSpan("s2", "root-A", "", "reviewer", "claude", "owner/repo", "agent.dispatch", "coder", 1, 1, 0, 0, "", now.Add(time.Second), now.Add(6*time.Second), "success", "")
+	time.Sleep(50 * time.Millisecond) // wait for async DB writes
 
 	req := httptest.NewRequest(http.MethodGet, "/traces", nil)
 	rec := httptest.NewRecorder()
@@ -774,12 +779,13 @@ func TestHandleAPITraceByRootEventID(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(nil)
 	srv, _ := newTestServer(cfg)
-	obs := newTestObserve()
+	obs := newTestObserve(t)
 	srv.WithObserve(obs)
 
 	now := time.Now().UTC()
 	obs.RecordSpan("s1", "root-A", "", "coder", "claude", "r", "issues.labeled", "", 1, 0, 0, 0, "", now, now.Add(time.Second), "success", "")
 	obs.RecordSpan("s2", "root-B", "", "reviewer", "claude", "r", "push", "", 0, 0, 0, 0, "", now, now.Add(time.Second), "success", "")
+	time.Sleep(50 * time.Millisecond) // wait for async DB writes
 
 	// Use the full router so mux populates the {root_event_id} variable.
 	router := srv.buildHandler()
@@ -802,7 +808,7 @@ func TestHandleAPITraceNotFound(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(nil)
 	srv, _ := newTestServer(cfg)
-	obs := newTestObserve()
+	obs := newTestObserve(t)
 	srv.WithObserve(obs)
 
 	router := srv.buildHandler()
@@ -822,11 +828,12 @@ func TestHandleAPIGraphReturnsEdges(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(nil)
 	srv, _ := newTestServer(cfg)
-	obs := newTestObserve()
+	obs := newTestObserve(t)
 	srv.WithObserve(obs)
 
 	obs.RecordDispatch("coder", "reviewer", "owner/repo", 10, "needs review")
 	obs.RecordDispatch("coder", "reviewer", "owner/repo", 11, "follow-up")
+	time.Sleep(50 * time.Millisecond) // wait for async DB writes
 
 	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
 	rec := httptest.NewRecorder()
@@ -854,7 +861,7 @@ func TestHandleAPIGraphEmptyWhenNoDispatches(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(nil)
 	srv, _ := newTestServer(cfg)
-	obs := newTestObserve()
+	obs := newTestObserve(t)
 	srv.WithObserve(obs)
 
 	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
@@ -876,7 +883,7 @@ func TestHandleAPIGraphIncludesConfiguredAgentWithNoDispatches(t *testing.T) {
 		}
 	})
 	srv, _ := newTestServer(cfg)
-	obs := newTestObserve()
+	obs := newTestObserve(t)
 	srv.WithObserve(obs)
 
 	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
@@ -916,7 +923,7 @@ func TestHandleAPIGraphNodeStatusReflectsRuntimeState(t *testing.T) {
 	}}
 	dc := workflow.NewDataChannels(1)
 	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, provider, nil, zerolog.Nop())
-	obs := newTestObserve()
+	obs := newTestObserve(t)
 	srv.WithObserve(obs)
 	// "runner" is currently active.
 	srv.WithRuntimeState(&stubRuntimeState{running: map[string]bool{"runner": true}})
@@ -1077,7 +1084,7 @@ func TestBuildHandlerSSETimeoutSplit(t *testing.T) {
 	cfg := testCfg(func(c *config.Config) {
 		c.Daemon.HTTP.WriteTimeoutSeconds = 1 // enable per-handler write timeout
 	})
-	obs := newTestObserve()
+	obs := newTestObserve(t)
 	srv, _ := newTestServer(cfg)
 	srv.WithObserve(obs)
 
@@ -1163,7 +1170,7 @@ receiveLoop:
 func TestServeSSEClearsServerWriteDeadline(t *testing.T) {
 	// Not parallel: test intentionally sleeps to cross a write-deadline boundary.
 
-	obs := newTestObserve()
+	obs := newTestObserve(t)
 	srv, _ := newTestServer(testCfg(nil))
 	srv.WithObserve(obs)
 
@@ -1240,9 +1247,16 @@ type stubDispatchProvider struct {
 
 func (p *stubDispatchProvider) DispatchStats() workflow.DispatchStats { return p.stats }
 
-// newTestObserve creates an observe.Store for tests.
-func newTestObserve() *observe.Store {
-	return observe.NewStore(nil)
+// newTestObserve creates an observe.Store backed by a temporary SQLite DB.
+// It requires a testing.T to manage the temp directory lifetime.
+func newTestObserve(t *testing.T) *observe.Store {
+	t.Helper()
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return observe.NewStore(db)
 }
 
 // sseCapture is a minimal http.ResponseWriter + http.Flusher that forwards
@@ -1362,7 +1376,7 @@ func TestHandleAPIMemorySQLiteMode(t *testing.T) {
 			t.Parallel()
 			cfg := testCfg(nil)
 			srv, _ := newTestServer(cfg)
-			obs := newTestObserve()
+			obs := newTestObserve(t)
 			srv.WithObserve(obs)
 			srv.WithMemoryReader(&stubMemoryReader{content: tc.stored, mtimes: tc.mtimes})
 

@@ -11,136 +11,19 @@ import (
 	"time"
 
 	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
-// ─── EventBuffer tests ────────────────────────────────────────────────────────
-
-func TestEventBufferListOrdering(t *testing.T) {
-	t.Parallel()
-	b := observe.NewEventBuffer(5)
-	now := time.Now()
-	for i := range 3 {
-		b.Add(observe.TimestampedEvent{At: now.Add(time.Duration(i) * time.Second), ID: string(rune('A' + i))})
+// testDB opens a temporary SQLite database for testing.
+func testDB(t *testing.T) *observe.Store {
+	t.Helper()
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
 	}
-	events := b.List(time.Time{})
-	if len(events) != 3 {
-		t.Fatalf("want 3 events, got %d", len(events))
-	}
-	if events[0].ID != "A" || events[1].ID != "B" || events[2].ID != "C" {
-		t.Fatalf("unexpected order: %v", events)
-	}
-}
-
-func TestEventBufferRingOverwrite(t *testing.T) {
-	t.Parallel()
-	b := observe.NewEventBuffer(3)
-	now := time.Now()
-	for i := range 5 {
-		b.Add(observe.TimestampedEvent{At: now.Add(time.Duration(i) * time.Second), ID: string(rune('A' + i))})
-	}
-	events := b.List(time.Time{})
-	if len(events) != 3 {
-		t.Fatalf("want 3 events (ring full), got %d", len(events))
-	}
-	// The oldest 2 (A, B) must have been overwritten; C, D, E remain.
-	if events[0].ID != "C" || events[1].ID != "D" || events[2].ID != "E" {
-		t.Fatalf("unexpected ring content: %v", events)
-	}
-}
-
-func TestEventBufferSinceFilter(t *testing.T) {
-	t.Parallel()
-	b := observe.NewEventBuffer(10)
-	base := time.Now()
-	for i := range 5 {
-		b.Add(observe.TimestampedEvent{At: base.Add(time.Duration(i) * time.Second), ID: string(rune('A' + i))})
-	}
-	// events[2] is at base+2s; since=base+2s should exclude it (not strictly after)
-	events := b.List(base.Add(2 * time.Second))
-	if len(events) != 2 {
-		t.Fatalf("want 2 events after filter, got %d", len(events))
-	}
-	if events[0].ID != "D" || events[1].ID != "E" {
-		t.Fatalf("unexpected filtered content: %v", events)
-	}
-}
-
-// ─── TraceBuffer tests ────────────────────────────────────────────────────────
-
-func TestTraceBufferListAndByRootEventID(t *testing.T) {
-	t.Parallel()
-	b := observe.NewTraceBuffer(10)
-	b.Add(observe.Span{SpanID: "s1", RootEventID: "root-A", Agent: "coder"})
-	b.Add(observe.Span{SpanID: "s2", RootEventID: "root-B", Agent: "reviewer"})
-	b.Add(observe.Span{SpanID: "s3", RootEventID: "root-A", Agent: "coder"})
-
-	all := b.List()
-	if len(all) != 3 {
-		t.Fatalf("want 3 spans, got %d", len(all))
-	}
-
-	rootA := b.ByRootEventID("root-A")
-	if len(rootA) != 2 {
-		t.Fatalf("want 2 spans for root-A, got %d", len(rootA))
-	}
-
-	rootB := b.ByRootEventID("root-B")
-	if len(rootB) != 1 {
-		t.Fatalf("want 1 span for root-B, got %d", len(rootB))
-	}
-}
-
-func TestTraceBufferRingOverwrite(t *testing.T) {
-	t.Parallel()
-	b := observe.NewTraceBuffer(2)
-	b.Add(observe.Span{SpanID: "s1"})
-	b.Add(observe.Span{SpanID: "s2"})
-	b.Add(observe.Span{SpanID: "s3"})
-
-	all := b.List()
-	if len(all) != 2 {
-		t.Fatalf("want 2 (ring capacity), got %d", len(all))
-	}
-	if all[0].SpanID != "s2" || all[1].SpanID != "s3" {
-		t.Fatalf("unexpected spans: %v", all)
-	}
-}
-
-// ─── InteractionGraph tests ────────────────────────────────────────────────────
-
-func TestInteractionGraphRecord(t *testing.T) {
-	t.Parallel()
-	g := observe.NewInteractionGraph(5)
-	g.Record("coder", "reviewer", "owner/repo", 1, "review needed")
-	g.Record("coder", "reviewer", "owner/repo", 2, "follow-up")
-
-	edges := g.Edges()
-	if len(edges) != 1 {
-		t.Fatalf("want 1 edge, got %d", len(edges))
-	}
-	e := edges[0]
-	if e.From != "coder" || e.To != "reviewer" {
-		t.Fatalf("unexpected edge: %+v", e)
-	}
-	if e.Count != 2 {
-		t.Fatalf("want count 2, got %d", e.Count)
-	}
-	if len(e.Dispatches) != 2 {
-		t.Fatalf("want 2 dispatch records, got %d", len(e.Dispatches))
-	}
-}
-
-func TestInteractionGraphDispatchLimit(t *testing.T) {
-	t.Parallel()
-	g := observe.NewInteractionGraph(3)
-	for i := range 5 {
-		g.Record("A", "B", "r", i, "r")
-	}
-	edges := g.Edges()
-	if len(edges[0].Dispatches) != 3 {
-		t.Fatalf("want 3 dispatches (limit), got %d", len(edges[0].Dispatches))
-	}
+	t.Cleanup(func() { db.Close() })
+	return observe.NewStore(db)
 }
 
 // ─── SSEHub tests ──────────────────────────────────────────────────────────────
@@ -395,7 +278,7 @@ func TestExtractSSEData(t *testing.T) {
 
 func TestActiveRunsStartFinishIsRunning(t *testing.T) {
 	t.Parallel()
-	s := observe.NewStore(nil)
+	s := testDB(t)
 	ar := s.ActiveRuns
 
 	if ar.IsRunning("coder") {
@@ -418,7 +301,7 @@ func TestActiveRunsStartFinishIsRunning(t *testing.T) {
 
 func TestActiveRunsConcurrentRuns(t *testing.T) {
 	t.Parallel()
-	s := observe.NewStore(nil)
+	s := testDB(t)
 	ar := s.ActiveRuns
 
 	// Two concurrent runs for the same agent.
@@ -441,7 +324,7 @@ func TestActiveRunsConcurrentRuns(t *testing.T) {
 
 func TestActiveRunsFinishBelowZeroIsSafe(t *testing.T) {
 	t.Parallel()
-	s := observe.NewStore(nil)
+	s := testDB(t)
 	ar := s.ActiveRuns
 
 	// Calling FinishRun without a matching Start must not panic or go negative.
@@ -453,7 +336,7 @@ func TestActiveRunsFinishBelowZeroIsSafe(t *testing.T) {
 
 func TestStoreIsRunningDelegates(t *testing.T) {
 	t.Parallel()
-	s := observe.NewStore(nil)
+	s := testDB(t)
 
 	s.ActiveRuns.StartRun("coder")
 	if !s.IsRunning("coder") {
@@ -467,11 +350,11 @@ func TestStoreIsRunningDelegates(t *testing.T) {
 
 // ─── Store.RecordEvent ────────────────────────────────────────────────────────
 
-// TestStoreRecordEventAddsToBufferAndPublishesToSSE verifies that RecordEvent
-// both persists the event in the ring buffer and fans it out to EventsSSE.
-func TestStoreRecordEventAddsToBufferAndPublishesToSSE(t *testing.T) {
+// TestStoreRecordEventPersistsAndPublishesToSSE verifies that RecordEvent
+// both persists the event to SQLite and fans it out to EventsSSE.
+func TestStoreRecordEventPersistsAndPublishesToSSE(t *testing.T) {
 	t.Parallel()
-	s := observe.NewStore(nil)
+	s := testDB(t)
 
 	ch := s.EventsSSE.Subscribe()
 	defer s.EventsSSE.Unsubscribe(ch)
@@ -486,10 +369,13 @@ func TestStoreRecordEventAddsToBufferAndPublishesToSSE(t *testing.T) {
 	}
 	s.RecordEvent(at, ev)
 
-	// Verify ring buffer received the event.
-	stored := s.Events.List(time.Time{})
+	// Wait briefly for the async goroutine to persist.
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify SQLite received the event via ListEvents.
+	stored := s.ListEvents(time.Time{})
 	if len(stored) != 1 {
-		t.Fatalf("want 1 event in buffer, got %d", len(stored))
+		t.Fatalf("want 1 event in DB, got %d", len(stored))
 	}
 	got := stored[0]
 	if got.ID != "delivery-1" {
@@ -503,9 +389,6 @@ func TestStoreRecordEventAddsToBufferAndPublishesToSSE(t *testing.T) {
 	}
 	if got.Number != 42 {
 		t.Errorf("Number = %d, want 42", got.Number)
-	}
-	if !got.At.Equal(at) {
-		t.Errorf("At = %v, want %v", got.At, at)
 	}
 
 	// Verify SSE fan-out: message should be available immediately because
@@ -526,7 +409,7 @@ func TestStoreRecordEventAddsToBufferAndPublishesToSSE(t *testing.T) {
 // handler can parse both streams with the same client-side Event interface.
 func TestStoreRecordEventSSEUsesLowercaseJSON(t *testing.T) {
 	t.Parallel()
-	s := observe.NewStore(nil)
+	s := testDB(t)
 
 	ch := s.EventsSSE.Subscribe()
 	defer s.EventsSSE.Unsubscribe(ch)
@@ -567,11 +450,11 @@ func TestStoreRecordEventSSEUsesLowercaseJSON(t *testing.T) {
 
 // ─── Store.RecordSpan ─────────────────────────────────────────────────────────
 
-// TestStoreRecordSpanAddsToBufferAndPublishesToSSE verifies that RecordSpan
-// both stores the span in the trace ring buffer and fans it out to TracesSSE.
-func TestStoreRecordSpanAddsToBufferAndPublishesToSSE(t *testing.T) {
+// TestStoreRecordSpanPersistsAndPublishesToSSE verifies that RecordSpan
+// both stores the span in SQLite and fans it out to TracesSSE.
+func TestStoreRecordSpanPersistsAndPublishesToSSE(t *testing.T) {
 	t.Parallel()
-	s := observe.NewStore(nil)
+	s := testDB(t)
 
 	ch := s.TracesSSE.Subscribe()
 	defer s.TracesSSE.Unsubscribe(ch)
@@ -588,8 +471,11 @@ func TestStoreRecordSpanAddsToBufferAndPublishesToSSE(t *testing.T) {
 		"success", "",
 	)
 
-	// Verify ring buffer.
-	spans := s.Traces.List()
+	// Wait for async persistence.
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify SQLite via ListTraces.
+	spans := s.ListTraces()
 	if len(spans) != 1 {
 		t.Fatalf("want 1 span, got %d", len(spans))
 	}
@@ -620,21 +506,24 @@ func TestStoreRecordSpanAddsToBufferAndPublishesToSSE(t *testing.T) {
 
 // ─── Store.RecordDispatch ─────────────────────────────────────────────────────
 
-// TestStoreRecordDispatchRecordsInGraph verifies that RecordDispatch delegates
-// to the InteractionGraph and the edge is visible via Graph.Edges().
-func TestStoreRecordDispatchRecordsInGraph(t *testing.T) {
+// TestStoreRecordDispatchPersistsToDB verifies that RecordDispatch persists
+// to SQLite and the edge is visible via ListEdges().
+func TestStoreRecordDispatchPersistsToDB(t *testing.T) {
 	t.Parallel()
-	s := observe.NewStore(nil)
+	s := testDB(t)
 
 	s.RecordDispatch("coder", "reviewer", "owner/repo", 42, "needs review")
 
-	edges := s.Graph.Edges()
+	// Wait for async persistence.
+	time.Sleep(50 * time.Millisecond)
+
+	edges := s.ListEdges()
 	if len(edges) != 1 {
 		t.Fatalf("want 1 edge, got %d", len(edges))
 	}
 	e := edges[0]
 	if e.From != "coder" || e.To != "reviewer" {
-		t.Errorf("edge = %q → %q, want %q → %q", e.From, e.To, "coder", "reviewer")
+		t.Errorf("edge = %q -> %q, want %q -> %q", e.From, e.To, "coder", "reviewer")
 	}
 	if e.Count != 1 {
 		t.Errorf("Count = %d, want 1", e.Count)
@@ -645,6 +534,52 @@ func TestStoreRecordDispatchRecordsInGraph(t *testing.T) {
 	d := e.Dispatches[0]
 	if d.Repo != "owner/repo" || d.Number != 42 || d.Reason != "needs review" {
 		t.Errorf("dispatch record = %+v, unexpected", d)
+	}
+}
+
+// ─── Store.ListEvents since filter ───────────────────────────────────────────
+
+func TestStoreListEventsSinceFilter(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+
+	base := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	s.RecordEvent(base, workflow.Event{ID: "old", Kind: "push"})
+	s.RecordEvent(base.Add(2*time.Second), workflow.Event{ID: "new", Kind: "push"})
+
+	// Wait for async persistence.
+	time.Sleep(50 * time.Millisecond)
+
+	events := s.ListEvents(base.Add(time.Second))
+	if len(events) != 1 {
+		t.Fatalf("want 1 event after filter, got %d", len(events))
+	}
+	if events[0].ID != "new" {
+		t.Fatalf("want 'new' event, got %q", events[0].ID)
+	}
+}
+
+// ─── Store.TracesByRootEventID ───────────────────────────────────────────────
+
+func TestStoreTracesByRootEventID(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+
+	now := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	s.RecordSpan("s1", "root-A", "", "coder", "claude", "r", "issues.labeled", "", 1, 0, 0, 0, "", now, now.Add(time.Second), "success", "")
+	s.RecordSpan("s2", "root-B", "", "reviewer", "claude", "r", "push", "", 0, 0, 0, 0, "", now, now.Add(time.Second), "success", "")
+	s.RecordSpan("s3", "root-A", "", "coder", "claude", "r", "agent.dispatch", "", 1, 1, 0, 0, "", now.Add(time.Second), now.Add(2*time.Second), "success", "")
+
+	// Wait for async persistence.
+	time.Sleep(50 * time.Millisecond)
+
+	rootA := s.TracesByRootEventID("root-A")
+	if len(rootA) != 2 {
+		t.Fatalf("want 2 spans for root-A, got %d", len(rootA))
+	}
+	rootB := s.TracesByRootEventID("root-B")
+	if len(rootB) != 1 {
+		t.Fatalf("want 1 span for root-B, got %d", len(rootB))
 	}
 }
 
