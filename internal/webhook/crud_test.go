@@ -1761,7 +1761,7 @@ agents:
 repos:
   - name: owner/existing-repo
     enabled: true
-    bindings:
+    use:
       - agent: scout
         cron: "99 99 * * *"
 `
@@ -1813,7 +1813,7 @@ agents:
 repos:
   - name: owner/new-repo
     enabled: true
-    bindings:
+    use:
       - agent: scout
         cron: "1-2-3 * * * *"
 `
