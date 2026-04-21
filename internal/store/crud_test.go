@@ -484,44 +484,41 @@ func TestReadSnapshot(t *testing.T) {
 
 // ──── Cross-ref validation ────────────────────────────────────────────────────
 
-func TestUpsertAgentRejectedWithUnknownBackend(t *testing.T) {
+func TestUpsertAgentCrossRefErrors(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
-
-	// No backend seeded — "claude" is unknown.
-	err := store.UpsertAgent(db, config.AgentDef{
-		Name:    "coder",
-		Backend: "claude",
-		Prompt:  "p",
-		Skills:  []string{},
-	})
-	if err == nil {
-		t.Fatal("UpsertAgent with unknown backend: want error, got nil")
+	tests := []struct {
+		name    string
+		setup   func(t *testing.T, db *sql.DB)
+		agent   config.AgentDef
+		wantErr string
+	}{
+		{
+			name:    "unknown backend",
+			setup:   func(t *testing.T, db *sql.DB) { t.Helper() }, // no backend seeded
+			agent:   config.AgentDef{Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}},
+			wantErr: "unknown backend",
+		},
+		{
+			name:    "unknown skill",
+			setup:   func(t *testing.T, db *sql.DB) { seedBackend(t, db, "claude") },
+			agent:   config.AgentDef{Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{"architect"}},
+			wantErr: "unknown skill",
+		},
 	}
-	if !strings.Contains(err.Error(), "unknown backend") {
-		t.Errorf("unexpected error message: %v", err)
-	}
-}
-
-func TestUpsertAgentRejectedWithUnknownSkill(t *testing.T) {
-	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
-
-	seedBackend(t, db, "claude")
-	// "architect" skill not seeded.
-	err := store.UpsertAgent(db, config.AgentDef{
-		Name:    "coder",
-		Backend: "claude",
-		Prompt:  "p",
-		Skills:  []string{"architect"},
-	})
-	if err == nil {
-		t.Fatal("UpsertAgent with unknown skill: want error, got nil")
-	}
-	if !strings.Contains(err.Error(), "unknown skill") {
-		t.Errorf("unexpected error message: %v", err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			db, cleanup := openTestDB(t)
+			defer cleanup()
+			tc.setup(t, db)
+			err := store.UpsertAgent(db, tc.agent)
+			if err == nil {
+				t.Fatalf("UpsertAgent with %s: want error, got nil", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("unexpected error message: %v", err)
+			}
+		})
 	}
 }
 
@@ -664,31 +661,40 @@ func TestDeleteAgentRejectedWhenDispatchListReferences(t *testing.T) {
 
 // ──── Field-level validation tests ───────────────────────────────────────────
 
-func TestUpsertBackendRejectedWithEmptyCommand(t *testing.T) {
+func TestUpsertBackendValidationErrors(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
-
-	err := store.UpsertBackend(db, "claude", config.AIBackendConfig{Command: "", Args: []string{}, Env: map[string]string{}})
-	if err == nil {
-		t.Fatal("UpsertBackend with empty command: want error, got nil")
+	tests := []struct {
+		name    string
+		bName   string
+		cfg     config.AIBackendConfig
+		wantErr string
+	}{
+		{
+			name:    "empty command",
+			bName:   "claude",
+			cfg:     config.AIBackendConfig{Command: "", Args: []string{}, Env: map[string]string{}},
+			wantErr: "command is required",
+		},
+		{
+			name:    "invalid name",
+			bName:   "unknown-ai",
+			cfg:     config.AIBackendConfig{Command: "ai", Args: []string{}, Env: map[string]string{}},
+			wantErr: "unsupported ai backend",
+		},
 	}
-	if !strings.Contains(err.Error(), "command is required") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestUpsertBackendRejectedWithInvalidName(t *testing.T) {
-	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
-
-	err := store.UpsertBackend(db, "unknown-ai", config.AIBackendConfig{Command: "ai", Args: []string{}, Env: map[string]string{}})
-	if err == nil {
-		t.Fatal("UpsertBackend with invalid name: want error, got nil")
-	}
-	if !strings.Contains(err.Error(), "unsupported ai backend") {
-		t.Errorf("unexpected error: %v", err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			db, cleanup := openTestDB(t)
+			defer cleanup()
+			err := store.UpsertBackend(db, tc.bName, tc.cfg)
+			if err == nil {
+				t.Fatalf("UpsertBackend with %s: want error, got nil", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 
