@@ -7,15 +7,17 @@
 ## Directory Structure
 
 ```
-cmd/agents/main.go          # Daemon entry point + --run-agent mode
+cmd/agents/main.go          # Daemon entry point + --run-agent / --db / --import modes
 internal/
   config/                   # YAML parsing, prompt/skill file resolution, validation
   ai/                       # Prompt composition + command-based CLI runner (per-backend env)
   anthropic_proxy/          # Built-in Anthropic↔OpenAI Chat Completions translation proxy
   observe/                  # Observability store: events, traces, dispatch graph, SSE hubs
-  autonomous/               # Cron scheduler + filesystem-backed agent memory
+  autonomous/               # Cron scheduler + agent memory (filesystem or SQLite)
+  store/                    # SQLite-backed config store (--db mode): Open, Import, Load, CRUD
   workflow/                 # Event routing engine, single event queue, processor, dispatcher
-  webhook/                  # HTTP server, HMAC verification, delivery dedupe
+  webhook/                  # HTTP server, HMAC verification, delivery dedupe, /api/store/* CRUD
+  ui/                       # Embedded Next.js web dashboard (served at /ui/)
   setup/                    # Interactive first-time setup command
   logging/                  # zerolog setup
 prompts/                    # Optional prompt files referenced by agent prompt_file:
@@ -45,6 +47,10 @@ go run ./cmd/agents -config config.yaml
 
 # On-demand single agent pass (synchronous, drains any dispatch chain, exits)
 ./agents -config config.yaml --run-agent <agent-name> --repo owner/repo
+
+# SQLite mode: import from YAML once, then run without --config
+./agents --db agents.db --import config.yaml   # one-time import
+./agents --db agents.db                         # subsequent starts
 ```
 
 ## Docker
@@ -83,12 +89,16 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, 
   - `GET /api/graph` — agent interaction graph (dispatch edges + counts).
   - `GET /api/dispatches` — dispatch dedup store snapshot + counters.
   - `GET /api/memory/{agent}/{repo}` — raw agent memory markdown.
+  - `GET /api/memory/stream` — memory file change notifications (SSE).
   - `GET /api/config` — effective parsed config (secrets redacted).
+  - `GET /ui/` — embedded web dashboard (Next.js static assets).
+  - `/api/store/{resource}[/{name}]` — SQLite CRUD endpoints (only registered when `--db` is set). GET: Traefik basic auth. POST/DELETE: Bearer token. Resources: `agents`, `skills`, `backends`, `repos` (repos use two-segment path: `{owner}/{repo}`).
 - Supported webhook events: `issues.*` (labeled, opened, edited, reopened, closed), `pull_request.*` (labeled, opened, synchronize, ready_for_review, closed), `issue_comment.created`, `pull_request_review.submitted`, `pull_request_review_comment.created`, `push` (branches only). Label-triggered routing uses `payload.label.name`. Non-label `events:` subscriptions match the event kind exactly. Draft PRs skip `pull_request.labeled`.
 - Internal event kinds (not from webhooks): `agents.run` (on-demand trigger from `/api/run` or `--run-agent`), `agent.dispatch` (inter-agent dispatch), `autonomous` (cron scheduler).
 - Duplicate webhook suppression via `X-GitHub-Delivery` TTL cache.
-- Workflow execution is stateless in-process. Only autonomous agents persist memory (per-agent, per-repo markdown file under `memory_dir`).
-- Agent memory is read before each scheduled run and is the agent's responsibility to update.
+- Workflow execution is stateless in-process. Only autonomous agents persist memory (per-agent, per-repo).
+- Memory is delivered to the agent as part of its prompt context, and the agent returns its full updated memory in the `memory` field of the JSON response. The daemon writes the value back to the store after the run. An empty string clears the memory. Event-driven runs (webhook events, label triggers) do not receive or persist memory.
+- Memory backend: filesystem by default (one Markdown file per `(agent, repo)` pair under `daemon.memory_dir`), or SQLite when `--db` is set (stored in the `memory` table of the SQLite database).
 - Backend resolution: agents declare `backend: claude | codex | auto`. `auto` picks the first configured backend in preference order (claude > codex).
 - Per-backend env overrides (`daemon.ai_backends.<name>.env`) let two backends run the same CLI with different endpoints — e.g. a default `claude` backend on hosted Anthropic plus a `claude_local` backend that routes the CLI via `ANTHROPIC_BASE_URL` through the built-in proxy to a local model. See [`docs/local-models.md`](docs/local-models.md).
 - **Reactive inter-agent dispatch**: agents can return a `dispatch: [{agent, number, reason}]` array in their JSON response to invoke other agents. Enqueued as synthetic `agent.dispatch` events. Target must opt in via `allow_dispatch: true`; originator must whitelist targets in `can_dispatch: [...]`. Safety limits (`daemon.processor.dispatch.{max_depth, max_fanout, dedup_window_seconds}`) prevent cascade storms and duplicate invocations. The originating agent's prompt receives an `## Available experts` roster listing dispatchable targets.

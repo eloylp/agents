@@ -32,17 +32,19 @@ internal/
   config/                       # YAML parsing, defaults, validation, prompt/skill file resolution
   ai/                           # prompt composition + CLI runner (supports per-backend env overrides)
   anthropic_proxy/              # built-in Anthropic Messages ↔ OpenAI Chat Completions translation
-  observe/                        # observability store: events, traces, dispatch graph, SSE hubs
-  autonomous/                   # cron scheduler + per-agent/per-repo markdown memory
+  observe/                      # observability store: events, traces, dispatch graph, SSE hubs
+  autonomous/                   # cron scheduler + agent memory (filesystem or SQLite)
+  store/                        # SQLite-backed config store (--db mode): Open, Import, Load, CRUD
   workflow/                     # event routing engine (single event queue), processor, dispatcher
-  webhook/                      # HTTP server, HMAC signature verification, delivery dedupe
+  webhook/                      # HTTP server, HMAC signature verification, delivery dedupe, /api/store/* CRUD
+  ui/                           # embedded Next.js web dashboard (static assets served at /ui/)
   setup/                        # interactive first-time setup command
   logging/                      # zerolog configuration
 prompts/                        # prompt files referenced by agent prompt_file:
 skills/                         # skill files referenced by skill prompt_file:
 docs/local-models.md            # full recipe for running the fleet on a local LLM
 config.example.yaml             # shipping example, kept in sync with config schema
-response-schema.json                # JSON schema for structured output (codex --output-schema)
+response-schema.json            # JSON schema for structured output (codex --output-schema)
 ```
 
 ## Conceptual model
@@ -73,7 +75,8 @@ These constraints are load-bearing. Read them before changing the listed areas.
 - **Structured output is enforced at the CLI level.** Claude uses `--output-format json --json-schema <schema>` which wraps stdout in a CLI envelope; `extractStructuredOutput` in cmdrunner.go unwraps the `structured_output` field. Codex uses `--output-schema <file>` which constrains model output directly. Both paths feed the same `Response` struct. When changing the response contract, update `response-schema.json` alongside `internal/ai/types.go`.
 - **The runner contract is stdin-in, single-JSON-object-out.**
   - `internal/ai/cmdrunner.go` sends the composed prompt on stdin and parses the last top-level JSON object from stdout.
-  - Agents emit `{"summary": "...", "artifacts": [...], "dispatch": [...]}`. `dispatch` is optional. A missing JSON object, an empty response, or a response with all three fields empty fails the run with a clear error.
+  - Agents emit `{"summary": "...", "artifacts": [...], "dispatch": [...], "memory": "..."}`. `dispatch` and `memory` are optional fields but all four keys are present in the schema. A missing JSON object, an empty response, or a response where `summary`, `artifacts`, and `dispatch` are all empty fails the run with a clear error.
+  - `memory` is the agent's full updated memory state. The daemon writes it back to the store (filesystem or SQLite) after each autonomous run. An empty string clears the memory. Event-driven runs do not receive or persist memory.
   - Small prose outputs with no JSON are an agent-prompt issue, not a runner bug — don't relax the parser to cover them; fix the prompt.
 - **Subprocess env is filtered.** `internal/ai/cmdrunner.go::allowCommandEnvKey` is an explicit allowlist. When adding a new env-var-driven integration, add the variable to the allowlist **and** document why (see `ANTHROPIC_BASE_URL` / `OPENAI_*` for precedent).
 - **Backend config supports per-backend `env` overrides.** When introducing a feature that requires environment variables for a specific backend, use the `AIBackendConfig.Env` map instead of the global container env — it keeps the container config clean and lets users define multiple backends pointing at different endpoints with the same CLI.
@@ -89,8 +92,10 @@ When making common classes of changes, update all of these at once:
 | Config schema (types in `internal/config/config.go`) | Validation, `normalize()`, defaults, `config.example.yaml`, README, tests in `internal/config/config_test.go` |
 | New webhook event kind | Decoder in `internal/webhook/server.go`, acceptance in `internal/workflow/engine.go`, README event table, validation in `internal/config/config.go` |
 | New AI backend behavior | `internal/ai/cmdrunner.go`, allowlist if new env vars, backend registration in `cmd/agents/main.go`, config example |
-| Agent prompt contract | Prompt templates in `prompts/`, runner parser in `internal/ai/cmdrunner.go`, AGENTS.md runner-contract section, tests |
+| Agent prompt contract | Prompt templates in `prompts/`, runner parser in `internal/ai/cmdrunner.go`, `internal/ai/types.go`, `response-schema.json`, AGENTS.md runner-contract section, tests |
+| Memory contract | `internal/autonomous/memory.go` (MemoryBackend interface), `internal/store/store.go` (SQLite path), `cmd/agents/main.go` (wiring), agent prompts "Memory hygiene" sections, `internal/ai/types.go` |
 | Dispatch semantics | `internal/workflow/dispatch.go` (runtime), `internal/config/config.go` (load-time validation), agent response schema in `internal/ai/types.go`, README dispatch section, all prompt "Response format" sections, tests on both paths |
+| SQLite store schema | `internal/store/migrations/`, `internal/store/store.go`, `internal/store/crud.go`, `internal/webhook/crud.go`, tests |
 | Proxy translation behavior | `internal/anthropic_proxy/{types,translate,handler}.go`, unit tests for the affected shape, `docs/local-models.md` if user-visible |
 | Anything in the README | Also check `CLAUDE.md`, `AGENTS.md`, `config.example.yaml` — these four should stay in sync |
 

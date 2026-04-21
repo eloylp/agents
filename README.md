@@ -400,6 +400,21 @@ go build -o agents ./cmd/agents
 ./agents -config config.yaml
 ```
 
+### SQLite mode (`--db`)
+
+An optional SQLite-backed config store lets you manage the fleet over the API instead of editing YAML files. Import once, then drop the `--config` flag entirely:
+
+```bash
+# Import from existing YAML (one-time)
+./agents --db agents.db --import config.yaml
+# → "import: imported 2 backends, 6 skills, 11 agents, 1 repos, 14 bindings"
+
+# All subsequent starts — no config.yaml needed
+./agents --db agents.db
+```
+
+When started with `--db`, the daemon registers `/api/store/*` CRUD endpoints and auto-reloads cron schedules after any repo or agent write. Agent memory is also stored in SQLite instead of the filesystem. The YAML path remains fully supported — both modes are first-class.
+
 ### On-demand agent pass
 
 Run one autonomous agent synchronously and exit (useful for testing):
@@ -491,6 +506,11 @@ GitHub sends a ping immediately; the daemon will log the delivery.
 | `GET` | `/api/memory/{agent}/{repo}` | Traefik basic auth | Raw agent memory markdown |
 | `GET` | `/api/memory/stream` | Traefik basic auth | Memory file change notifications (SSE) |
 | `GET` | `/api/config` | Traefik basic auth | Effective parsed config (secrets redacted) |
+| `GET` | `/ui/` | none | Built-in web dashboard (static assets; embedded in binary) |
+| `GET` | `/api/store/{resource}` | Traefik basic auth | List all entries for a resource type (`agents`, `skills`, `backends`, `repos`). Only registered when `--db` is set. |
+| `GET` | `/api/store/{resource}/{name}` | Traefik basic auth | Fetch one entry. Repos use two path segments: `/api/store/repos/{owner}/{repo}`. |
+| `POST` | `/api/store/{resource}` | Bearer token | Create or replace an entry (write API; requires `--db`). |
+| `DELETE` | `/api/store/{resource}/{name}` | Bearer token | Remove an entry (requires `--db`). |
 
 The `/agents/run` and `/api/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. Both return `202 Accepted` immediately with an `event_id`; the agent runs asynchronously. `/agents/run` requires a Bearer token; `/api/run` relies on Traefik basic auth. If `api_key_env` is not configured, `/agents/run` returns `403 Forbidden`.
 
@@ -560,11 +580,14 @@ The daemon spawns the configured CLI, sends the composed prompt on **stdin**, an
       "number": 42,
       "reason": "Custom crypto primitives found — needs deeper security review"
     }
-  ]
+  ],
+  "memory": "## 2026-04-21\n- Reviewed PR #42 — escalated crypto concerns to sec-reviewer."
 }
 ```
 
 The metadata is used for observability, logging, and run summaries. Agents that don't post anything still return an empty `artifacts: []`. The `dispatch` field is optional — omit it or leave it empty when the agent does not need to invoke another agent. See [Reactive inter-agent dispatch](#reactive-inter-agent-dispatch) for the full contract.
+
+The `memory` field is how autonomous agents persist state across scheduled runs. The daemon reads the stored memory before each autonomous run and writes the `memory` value from the response back to the store (filesystem or SQLite depending on how the daemon was started). An empty string clears the memory. Event-driven runs (webhooks, label triggers) do not receive or persist memory.
 
 ---
 
@@ -604,15 +627,17 @@ go test ./... -race
 ## Project structure
 
 ```
-cmd/agents/main.go          # Daemon entry point + --run-agent mode
+cmd/agents/main.go          # Daemon entry point + --run-agent / --db / --import modes
 internal/
   config/                   # YAML parsing, prompt/skill file resolution, validation
   ai/                       # Prompt composition + command-based CLI runner (per-backend env)
   anthropic_proxy/          # Built-in Anthropic↔OpenAI translation proxy (opt-in)
   observe/                  # Observability store (events, traces, dispatch graph, SSE hubs)
-  autonomous/               # Cron scheduler + filesystem-backed agent memory
+  autonomous/               # Cron scheduler + agent memory (filesystem or SQLite)
+  store/                    # SQLite-backed config store (--db mode): schema migrations, CRUD helpers
   workflow/                 # Event routing engine, single event queue, processor, inter-agent dispatcher
-  webhook/                  # HTTP server, signature verification, delivery dedupe
+  webhook/                  # HTTP server, signature verification, delivery dedupe, /api/store/* CRUD
+  ui/                       # Embedded Next.js web dashboard (served at /ui/)
   setup/                    # Interactive first-time setup command
   logging/                  # zerolog setup
 prompts/                    # Optional: prompt files referenced by agent prompt_file
