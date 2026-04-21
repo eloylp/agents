@@ -209,13 +209,8 @@ func (s *Server) buildHandler() http.Handler {
 	router.Handle(cfg.Daemon.HTTP.AgentsRunPath, withTimeout(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
 	router.Handle("/api/run", withTimeout(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
 
-	// Observability API — read-only endpoints served unauthenticated at the
-	// daemon level. The embedded UI makes same-origin fetch/EventSource calls
-	// that cannot attach a Bearer token (EventSource in particular has no
-	// header API), so daemon-level auth would break the dashboard whenever
-	// api_key is set. Access control for these endpoints is the reverse
-	// proxy's responsibility, consistent with the original issue design.
-	// The mutation endpoint (/agents/run) retains its Bearer-token gate.
+	// Observability API — all endpoints are unauthenticated at the daemon
+	// level. Access control is the reverse proxy's responsibility.
 	router.Handle("/api/agents", withTimeout(http.HandlerFunc(s.handleAPIAgents))).Methods(http.MethodGet)
 	router.Handle("/api/config", withTimeout(http.HandlerFunc(s.handleAPIConfig))).Methods(http.MethodGet)
 	router.Handle("/api/dispatches", withTimeout(http.HandlerFunc(s.handleAPIDispatches))).Methods(http.MethodGet)

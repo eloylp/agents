@@ -66,7 +66,6 @@ API_KEY=$(openssl rand -hex 32)
 Write `.env` with:
 ```
 GITHUB_WEBHOOK_SECRET=<generated secret>
-AGENTS_API_KEY=<generated key or leave empty>
 LOG_SALT=<openssl rand -hex 16>
 ```
 
@@ -130,7 +129,6 @@ http:
   idle_timeout_seconds: 60
   max_body_bytes: 1048576
   webhook_secret_env: GITHUB_WEBHOOK_SECRET
-  api_key_env: AGENTS_API_KEY
   delivery_ttl_seconds: 3600
   shutdown_timeout_seconds: 15
 

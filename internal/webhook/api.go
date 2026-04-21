@@ -185,8 +185,6 @@ type apiHTTPConfigJSON struct {
 	AgentsRunPath          string `json:"agents_run_path"`
 	WebhookSecretEnv       string `json:"webhook_secret_env,omitempty"`
 	WebhookSecret          string `json:"webhook_secret,omitempty"` // always "[redacted]" when set
-	APIKeyEnv              string `json:"api_key_env,omitempty"`
-	APIKey                 string `json:"api_key,omitempty"` // always "[redacted]" when set
 	ReadTimeoutSeconds     int    `json:"read_timeout_seconds"`
 	WriteTimeoutSeconds    int    `json:"write_timeout_seconds"`
 	IdleTimeoutSeconds     int    `json:"idle_timeout_seconds"`
@@ -251,7 +249,6 @@ func (s *Server) handleAPIConfig(w http.ResponseWriter, _ *http.Request) {
 		WebhookPath:            cfg.Daemon.HTTP.WebhookPath,
 		AgentsRunPath:          cfg.Daemon.HTTP.AgentsRunPath,
 		WebhookSecretEnv:       cfg.Daemon.HTTP.WebhookSecretEnv,
-		APIKeyEnv:              cfg.Daemon.HTTP.APIKeyEnv,
 		ReadTimeoutSeconds:     cfg.Daemon.HTTP.ReadTimeoutSeconds,
 		WriteTimeoutSeconds:    cfg.Daemon.HTTP.WriteTimeoutSeconds,
 		IdleTimeoutSeconds:     cfg.Daemon.HTTP.IdleTimeoutSeconds,
@@ -262,10 +259,6 @@ func (s *Server) handleAPIConfig(w http.ResponseWriter, _ *http.Request) {
 	if cfg.Daemon.HTTP.WebhookSecret != "" {
 		httpCfg.WebhookSecret = redacted
 	}
-	if cfg.Daemon.HTTP.APIKey != "" {
-		httpCfg.APIKey = redacted
-	}
-
 	backends := make(map[string]apiAIBackendConfigJSON, len(cfg.Daemon.AIBackends))
 	for name, b := range cfg.Daemon.AIBackends {
 		redactedEnv := make(map[string]string, len(b.Env))

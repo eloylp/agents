@@ -132,7 +132,6 @@ type HTTPConfig struct {
 	WebhookPath            string `yaml:"webhook_path"`
 	AgentsRunPath          string `yaml:"agents_run_path"`
 	WebhookSecretEnv       string `yaml:"webhook_secret_env"`
-	APIKeyEnv              string `yaml:"api_key_env"`
 	ReadTimeoutSeconds     int    `yaml:"read_timeout_seconds"`
 	WriteTimeoutSeconds    int    `yaml:"write_timeout_seconds"`
 	IdleTimeoutSeconds     int    `yaml:"idle_timeout_seconds"`
@@ -140,10 +139,9 @@ type HTTPConfig struct {
 	DeliveryTTLSeconds     int    `yaml:"delivery_ttl_seconds"`
 	ShutdownTimeoutSeconds int    `yaml:"shutdown_timeout_seconds"`
 
-	// WebhookSecret and APIKey are resolved from the *Env fields at load time
+	// WebhookSecret is resolved from WebhookSecretEnv at load time
 	// and not present in the YAML source.
 	WebhookSecret string `yaml:"-"`
-	APIKey        string `yaml:"-"`
 }
 
 // ProcessorConfig controls the internal event queue and agent concurrency.
@@ -647,9 +645,6 @@ func (c *Config) normalize() {
 func (c *Config) resolveSecrets() {
 	if c.Daemon.HTTP.WebhookSecret == "" && c.Daemon.HTTP.WebhookSecretEnv != "" {
 		c.Daemon.HTTP.WebhookSecret = os.Getenv(c.Daemon.HTTP.WebhookSecretEnv)
-	}
-	if c.Daemon.HTTP.APIKey == "" && c.Daemon.HTTP.APIKeyEnv != "" {
-		c.Daemon.HTTP.APIKey = os.Getenv(c.Daemon.HTTP.APIKeyEnv)
 	}
 	if c.Daemon.Proxy.Upstream.APIKey == "" && c.Daemon.Proxy.Upstream.APIKeyEnv != "" {
 		c.Daemon.Proxy.Upstream.APIKey = os.Getenv(c.Daemon.Proxy.Upstream.APIKeyEnv)

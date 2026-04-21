@@ -129,9 +129,9 @@ func migrate(db *sql.DB) error {
 // prompt_file references must be resolved in cfg before calling Import (i.e.
 // pass the output of config.Load which resolves them eagerly).
 //
-// Secrets (WebhookSecret, APIKey) are NOT written — only the env-var names
-// (WebhookSecretEnv, APIKeyEnv) are stored. The secrets are re-resolved from
-// the environment at Load time.
+// Secrets (WebhookSecret) are NOT written — only the env-var name
+// (WebhookSecretEnv) is stored. The secret is re-resolved from the
+// environment at Load time.
 func Import(db *sql.DB, cfg *config.Config) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -174,7 +174,6 @@ type httpRecord struct {
 	WebhookPath            string `json:"webhook_path"`
 	AgentsRunPath          string `json:"agents_run_path"`
 	WebhookSecretEnv       string `json:"webhook_secret_env"`
-	APIKeyEnv              string `json:"api_key_env"`
 	ReadTimeoutSeconds     int    `json:"read_timeout_seconds"`
 	WriteTimeoutSeconds    int    `json:"write_timeout_seconds"`
 	IdleTimeoutSeconds     int    `json:"idle_timeout_seconds"`
@@ -207,7 +206,7 @@ func importDaemon(tx *sql.Tx, d config.DaemonConfig) error {
 			WebhookPath:            d.HTTP.WebhookPath,
 			AgentsRunPath:          d.HTTP.AgentsRunPath,
 			WebhookSecretEnv:       d.HTTP.WebhookSecretEnv,
-			APIKeyEnv:              d.HTTP.APIKeyEnv,
+
 			ReadTimeoutSeconds:     d.HTTP.ReadTimeoutSeconds,
 			WriteTimeoutSeconds:    d.HTTP.WriteTimeoutSeconds,
 			IdleTimeoutSeconds:     d.HTTP.IdleTimeoutSeconds,
@@ -388,7 +387,7 @@ func loadDaemon(db *sql.DB, cfg *config.Config) error {
 		WebhookPath:            rec.HTTP.WebhookPath,
 		AgentsRunPath:          rec.HTTP.AgentsRunPath,
 		WebhookSecretEnv:       rec.HTTP.WebhookSecretEnv,
-		APIKeyEnv:              rec.HTTP.APIKeyEnv,
+
 		ReadTimeoutSeconds:     rec.HTTP.ReadTimeoutSeconds,
 		WriteTimeoutSeconds:    rec.HTTP.WriteTimeoutSeconds,
 		IdleTimeoutSeconds:     rec.HTTP.IdleTimeoutSeconds,

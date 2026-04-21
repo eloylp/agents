@@ -111,7 +111,7 @@ When making common classes of changes, update all of these at once:
 
 ## Operational notes
 
-- **`.env` is auto-loaded on startup** (`godotenv.Load()`). Required runtime secret: `GITHUB_WEBHOOK_SECRET`. Optional: `AGENTS_API_KEY`, `LOG_SALT`.
+- **`.env` is auto-loaded on startup** (`godotenv.Load()`). Required runtime secret: `GITHUB_WEBHOOK_SECRET`. Optional: `LOG_SALT`.
 - **Config is read once at daemon startup.** Changing `config.yaml` or any `prompt_file` / skill file requires a daemon restart. If you're testing prompt changes interactively, expect to `docker compose restart agents`.
 - **Autonomous agent memory** lives under `daemon.memory_dir` (default `/var/lib/agents/memory`), as one markdown file per `(agent, repo)` pair. It's the agent's job to update it in its response; the daemon just reads/writes the file unchanged.
 - **Dispatch dedup is process-local and in-memory.** It's shared across cron-fired runs, event-fired runs, and `--run-agent` invocations within one process. Restarting the daemon clears the dedup state.

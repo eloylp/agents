@@ -12,7 +12,6 @@ daemon:
     webhook_path: /webhooks/github
     agents_run_path: /agents/run
     webhook_secret_env: GITHUB_WEBHOOK_SECRET   # HMAC shared secret env var
-    api_key_env: AGENTS_API_KEY                 # Bearer token for /agents/run
     read_timeout_seconds: 15
     write_timeout_seconds: 15   # applies to non-SSE routes only; SSE streams are unbounded
     idle_timeout_seconds: 60

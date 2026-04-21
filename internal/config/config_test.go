@@ -395,7 +395,6 @@ func TestResolveBackend(t *testing.T) {
 
 func TestConfigExampleYAMLLoads(t *testing.T) {
 	t.Setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
-	t.Setenv("AGENTS_API_KEY", "apikey")
 
 	root, err := filepath.Abs("../..")
 	if err != nil {

@@ -347,8 +347,6 @@ func TestHandleAPIConfigRedactsSecrets(t *testing.T) {
 	cfg := testCfg(func(c *config.Config) {
 		c.Daemon.HTTP.WebhookSecret = "super-secret-webhook"
 		c.Daemon.HTTP.WebhookSecretEnv = "GITHUB_WEBHOOK_SECRET"
-		c.Daemon.HTTP.APIKey = "super-secret-api-key"
-		c.Daemon.HTTP.APIKeyEnv = "AGENTS_API_KEY"
 		c.Daemon.Proxy = config.ProxyConfig{
 			Enabled: true,
 			Upstream: config.ProxyUpstreamConfig{
@@ -376,7 +374,7 @@ func TestHandleAPIConfigRedactsSecrets(t *testing.T) {
 	body := rec.Body.String()
 
 	// Actual secret values must not appear anywhere in the response.
-	secrets := []string{"super-secret-webhook", "super-secret-api-key", "proxy-secret", "sk-ant-secret"}
+	secrets := []string{"super-secret-webhook", "proxy-secret", "sk-ant-secret"}
 	for _, s := range secrets {
 		if strings.Contains(body,s) {
 			t.Errorf("secret %q must be redacted but appears in response", s)
@@ -389,9 +387,6 @@ func TestHandleAPIConfigRedactsSecrets(t *testing.T) {
 	}
 	if !strings.Contains(body,"GITHUB_WEBHOOK_SECRET") {
 		t.Error("env var name GITHUB_WEBHOOK_SECRET must be preserved")
-	}
-	if !strings.Contains(body,"AGENTS_API_KEY") {
-		t.Error("env var name AGENTS_API_KEY must be preserved")
 	}
 	// Backend env key must appear, but value must be redacted.
 	if !strings.Contains(body,"ANTHROPIC_API_KEY") {
@@ -447,7 +442,6 @@ func TestHandleAPIConfigNoSecretsWhenNotSet(t *testing.T) {
 	// Minimal config: secrets are empty strings — [redacted] must NOT appear.
 	cfg := testCfg(func(c *config.Config) {
 		c.Daemon.HTTP.WebhookSecret = ""
-		c.Daemon.HTTP.APIKey = ""
 	})
 	srv, _ := newTestServer(cfg)
 
@@ -793,7 +787,7 @@ func TestHandleAPITraceByRootEventID(t *testing.T) {
 	// Use the full router so mux populates the {root_event_id} variable.
 	router := srv.buildHandler()
 	req := httptest.NewRequest(http.MethodGet, "/api/traces/root-A", nil)
-	req.Header.Set("Authorization", "Bearer "+testAPIKey)
+
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -816,7 +810,7 @@ func TestHandleAPITraceNotFound(t *testing.T) {
 
 	router := srv.buildHandler()
 	req := httptest.NewRequest(http.MethodGet, "/api/traces/nonexistent", nil)
-	req.Header.Set("Authorization", "Bearer "+testAPIKey)
+
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -977,7 +971,7 @@ func TestHandleAPIMemoryServesFile(t *testing.T) {
 	// Use the full router so mux populates {agent} and {repo}.
 	router := srv.buildHandler()
 	req := httptest.NewRequest(http.MethodGet, "/api/memory/coder/owner_repo", nil)
-	req.Header.Set("Authorization", "Bearer "+testAPIKey)
+
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -1001,7 +995,7 @@ func TestHandleAPIMemoryNotFound(t *testing.T) {
 
 	router := srv.buildHandler()
 	req := httptest.NewRequest(http.MethodGet, "/api/memory/coder/no_such_repo", nil)
-	req.Header.Set("Authorization", "Bearer "+testAPIKey)
+
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -1023,7 +1017,7 @@ func TestHandleAPIMemoryRejectsPathTraversal(t *testing.T) {
 		"/api/memory/./owner_repo",
 	} {
 		req := httptest.NewRequest(http.MethodGet, bad, nil)
-		req.Header.Set("Authorization", "Bearer "+testAPIKey)
+	
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 		// Path traversal attempts should either be 404 (no route matched after
@@ -1079,7 +1073,7 @@ func TestHandleAPIMemoryRejectsMultiSegmentTraversal(t *testing.T) {
 			t.Parallel()
 			req := httptest.NewRequest(http.MethodGet, "/api/memory/"+tc.agent+"/"+tc.repo, nil)
 			req = mux.SetURLVars(req, map[string]string{"agent": tc.agent, "repo": tc.repo})
-			req.Header.Set("Authorization", "Bearer "+testAPIKey)
+		
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 			if rec.Code == http.StatusOK {
@@ -1516,7 +1510,7 @@ func TestHandleAPIMemorySQLiteMode(t *testing.T) {
 
 			router := srv.buildHandler()
 			req := httptest.NewRequest(http.MethodGet, "/api/memory/"+tc.agent+"/"+tc.repo, nil)
-			req.Header.Set("Authorization", "Bearer "+testAPIKey)
+		
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, req)
 

@@ -142,7 +142,6 @@ daemon:
     webhook_path: /webhooks/github
     agents_run_path: /agents/run            # POST for on-demand triggers
     webhook_secret_env: GITHUB_WEBHOOK_SECRET
-    api_key_env: AGENTS_API_KEY             # Bearer token for /agents/run
     shutdown_timeout_seconds: 15
 
   processor:
@@ -383,7 +382,6 @@ Create a `.env` file in the project root (loaded automatically):
 
 ```bash
 GITHUB_WEBHOOK_SECRET=your-webhook-secret
-AGENTS_API_KEY=optional-bearer-token-for-on-demand-triggers
 LOG_SALT=optional-prompt-hash-salt
 ```
 
@@ -427,7 +425,6 @@ Or via HTTP on the running daemon:
 
 ```bash
 curl -X POST https://<your-host>/agents/run \
-  -H "Authorization: Bearer $AGENTS_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"agent":"coder","repo":"owner/repo"}'
 ```
@@ -447,7 +444,7 @@ The compose file expects:
 - `config.yaml` in the project root (mounted read-only at `/etc/agents/config.yaml`)
 - `prompts/` directory with any agent `prompt_file` targets (mounted read-only at `/etc/agents/prompts`)
 - `skills/` directory with any skill `prompt_file` targets (mounted read-only at `/etc/agents/skills`)
-- `.env` in the project root with `GITHUB_WEBHOOK_SECRET` (and optionally `AGENTS_API_KEY`, `LOG_SALT`)
+- `.env` in the project root with `GITHUB_WEBHOOK_SECRET` (and optionally `LOG_SALT`)
 
 #### Volume mounts
 
@@ -491,10 +488,10 @@ GitHub sends a ping immediately; the daemon will log the delivery.
 |---|---|---|---|
 | `GET` | `/status` | none | Health check: JSON with uptime, event queue depth, agent schedules, dispatch counters |
 | `POST` | `/webhooks/github` | `X-Hub-Signature-256` HMAC | GitHub webhook receiver |
-| `POST` | `/agents/run` | `Authorization: Bearer <key>` | On-demand agent trigger |
+| `POST` | `/agents/run` | none | On-demand agent trigger |
 | `POST` | `/v1/messages` | none | Anthropic↔OpenAI translation proxy (opt-in via `proxy.enabled`) |
 | `GET` | `/v1/models` | none | Companion stub for `/v1/messages`; lists the configured upstream model |
-| `POST` | `/api/run` | Traefik basic auth | On-demand agent trigger (async, same as `/agents/run` but no Bearer token) |
+| `POST` | `/api/run` | none | On-demand agent trigger (async, same as `/agents/run`) |
 | `GET` | `/api/agents` | Traefik basic auth | Fleet snapshot: per-agent status, bindings, dispatch wiring |
 | `GET` | `/api/events` | Traefik basic auth | Recent webhook events (time-windowed) |
 | `GET` | `/api/events/stream` | Traefik basic auth | Live event firehose (SSE) |
@@ -508,10 +505,10 @@ GitHub sends a ping immediately; the daemon will log the delivery.
 | `GET` | `/ui/` | none | Built-in web dashboard (static assets; embedded in binary) |
 | `GET` | `/api/store/{resource}` | Traefik basic auth | List all entries for a resource type (`agents`, `skills`, `backends`, `repos`). Only registered when `--db` is set. |
 | `GET` | `/api/store/{resource}/{name}` | Traefik basic auth | Fetch one entry. Repos use two path segments: `/api/store/repos/{owner}/{repo}`. |
-| `POST` | `/api/store/{resource}` | Bearer token | Create or replace an entry (write API; requires `--db`). |
-| `DELETE` | `/api/store/{resource}/{name}` | Bearer token | Remove an entry (requires `--db`). |
+| `POST` | `/api/store/{resource}` | none | Create or replace an entry (write API; requires `--db`). |
+| `DELETE` | `/api/store/{resource}/{name}` | none | Remove an entry (requires `--db`). |
 
-The `/agents/run` and `/api/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. Both return `202 Accepted` immediately with an `event_id`; the agent runs asynchronously. `/agents/run` requires a Bearer token; `/api/run` relies on Traefik basic auth. If `api_key_env` is not configured, `/agents/run` returns `403 Forbidden`.
+The `/agents/run` and `/api/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. Both return `202 Accepted` immediately with an `event_id`; the agent runs asynchronously. All endpoints are unauthenticated at the daemon level; access control is the reverse proxy's responsibility.
 
 Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL cache.
 
@@ -601,7 +598,7 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the full process, what makes a gr
 ## Security
 
 - **Webhook verification** — HMAC SHA-256 on every payload (`X-Hub-Signature-256`).
-- **API key gating** — `/agents/run` requires a Bearer token from `api_key_env`.
+- **Reverse-proxy auth** — the daemon delegates access control to the reverse proxy (e.g. Traefik basic auth).
 - **Read-only daemon** — all GitHub writes go through the AI backend's MCP tools.
 - **Prompt redaction** — prompts are never logged in plaintext; only their hash and length.
 - **`--dangerously-skip-permissions`** — required for headless Claude operation. Ensure the host is trusted.

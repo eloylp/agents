@@ -19,8 +19,6 @@ import (
 	"github.com/eloylp/agents/internal/workflow"
 )
 
-const testAPIKey = "test-secret-key"
-
 // testCfg builds a minimal *config.Config suitable for webhook tests.
 // Callers can override fields via the mutator.
 func testCfg(mutator func(*config.Config)) *config.Config {
@@ -34,7 +32,6 @@ func testCfg(mutator func(*config.Config)) *config.Config {
 				MaxBodyBytes:       1024,
 				WebhookSecret:      "secret",
 				DeliveryTTLSeconds: 3600,
-				APIKey:             testAPIKey,
 			},
 		},
 		Repos: []config.RepoDef{{Name: "owner/repo", Enabled: true}},
@@ -590,17 +587,15 @@ func newRunServer() *Server {
 	return NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(10), nil, nil, zerolog.Nop())
 }
 
-func authedRequest(method, path, body string) *http.Request {
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+testAPIKey)
-	return req
+func newRequest(method, path, body string) *http.Request {
+	return httptest.NewRequest(method, path, strings.NewReader(body))
 }
 
 func TestHandleAgentsRunEnqueuesEvent(t *testing.T) {
 	t.Parallel()
 	server := newRunServer()
 
-	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":"coder","repo":"owner/repo"}`)
+	req := newRequest(http.MethodPost, "/agents/run", `{"agent":"coder","repo":"owner/repo"}`)
 	rr := httptest.NewRecorder()
 	server.handleAgentsRun(rr, req)
 
@@ -635,7 +630,7 @@ func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			server := newRunServer()
-			req := authedRequest(http.MethodPost, "/agents/run", tc.body)
+			req := newRequest(http.MethodPost, "/agents/run", tc.body)
 			rr := httptest.NewRecorder()
 			server.handleAgentsRun(rr, req)
 			if rr.Code != http.StatusBadRequest {
@@ -648,7 +643,7 @@ func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
 func TestHandleAgentsRunReturnsNotFoundForUnknownRepo(t *testing.T) {
 	t.Parallel()
 	server := newRunServer()
-	req := authedRequest(http.MethodPost, "/agents/run", `{"agent":"coder","repo":"unknown/repo"}`)
+	req := newRequest(http.MethodPost, "/agents/run", `{"agent":"coder","repo":"unknown/repo"}`)
 	rr := httptest.NewRecorder()
 	server.handleAgentsRun(rr, req)
 	if rr.Code != http.StatusNotFound {
@@ -729,7 +724,6 @@ func TestUISlashlessRedirect(t *testing.T) {
 	}
 
 	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/ui", nil)
-	req.Header.Set("Authorization", "Bearer "+testAPIKey)
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
@@ -746,12 +740,8 @@ func TestUISlashlessRedirect(t *testing.T) {
 }
 
 // TestBuildHandlerObservabilityRoutesAreOpen verifies that the read-only
-// observability endpoints and the UI paths are accessible without a Bearer
-// token even when daemon.http.api_key is configured. The embedded dashboard
-// makes same-origin fetch/EventSource calls that cannot attach an Authorization
-// header (EventSource has no header API), so daemon-level auth must not be
-// applied here — access control is the reverse proxy's responsibility.
-// The mutation endpoint /agents/run must still require the Bearer token.
+// observability endpoints and the UI paths are accessible without any
+// daemon-level auth. Access control is the reverse proxy's responsibility.
 func TestBuildHandlerObservabilityRoutesAreOpen(t *testing.T) {
 	t.Parallel()
 
@@ -759,7 +749,7 @@ func TestBuildHandlerObservabilityRoutesAreOpen(t *testing.T) {
 		"dist/index.html": &fstest.MapFile{Data: []byte("<html></html>")},
 	}
 
-	srv, _ := newTestServer(testCfg(nil)) // testCfg sets APIKey = testAPIKey
+	srv, _ := newTestServer(testCfg(nil))
 	srv.WithUI(uiFS)
 	srv.WithObserve(newTestObserve())
 

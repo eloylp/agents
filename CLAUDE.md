@@ -70,7 +70,6 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, 
 ## Environment Variables
 
 - `GITHUB_WEBHOOK_SECRET` — HMAC shared secret (`daemon.http.webhook_secret_env`)
-- `AGENTS_API_KEY` — Bearer token for `POST /agents/run` (`daemon.http.api_key_env`)
 - `LOG_SALT` — optional prompt-log redaction salt (`daemon.ai_backends.<name>.redaction_salt_env`)
 
 ## Architecture Notes
@@ -79,7 +78,7 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, 
 - HTTP endpoints:
   - `GET /status` — JSON with uptime, event queue depth, agent schedules, dispatch counters.
   - `POST /webhooks/github` — HMAC-verified webhook receiver.
-  - `POST /agents/run` — on-demand agent trigger (requires Bearer token).
+  - `POST /agents/run` — on-demand agent trigger.
   - `POST /v1/messages` — Anthropic↔OpenAI translation proxy (disabled by default; enabled via `daemon.proxy.enabled: true`).
   - `GET /v1/models` — companion stub for `/v1/messages`; returns the configured upstream model. Only mounted when the proxy is enabled.
   - `POST /api/run` — unauthenticated on-demand trigger (same handler as `/agents/run`; relies on Traefik basic auth for the `/api/*` prefix). Enqueues a synthetic `agents.run` event.
@@ -92,7 +91,7 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, 
   - `GET /api/memory/stream` — memory file change notifications (SSE).
   - `GET /api/config` — effective parsed config (secrets redacted).
   - `GET /ui/` — embedded web dashboard (Next.js static assets).
-  - `/api/store/{resource}[/{name}]` — SQLite CRUD endpoints (only registered when `--db` is set). GET: Traefik basic auth. POST/DELETE: Bearer token. Resources: `agents`, `skills`, `backends`, `repos` (repos use two-segment path: `{owner}/{repo}`).
+  - `/api/store/{resource}[/{name}]` — SQLite CRUD endpoints (only registered when `--db` is set). Resources: `agents`, `skills`, `backends`, `repos` (repos use two-segment path: `{owner}/{repo}`).
 - Supported webhook events: `issues.*` (labeled, opened, edited, reopened, closed), `pull_request.*` (labeled, opened, synchronize, ready_for_review, closed), `issue_comment.created`, `pull_request_review.submitted`, `pull_request_review_comment.created`, `push` (branches only). Label-triggered routing uses `payload.label.name`. Non-label `events:` subscriptions match the event kind exactly. Draft PRs skip `pull_request.labeled`.
 - Internal event kinds (not from webhooks): `agents.run` (on-demand trigger from `/api/run` or `--run-agent`), `agent.dispatch` (inter-agent dispatch), `autonomous` (cron scheduler).
 - Duplicate webhook suppression via `X-GitHub-Delivery` TTL cache.
@@ -110,6 +109,6 @@ This project is built by its own agent fleet. External contributions come as iss
 ## Security Notes
 
 - Webhook authenticity is enforced with HMAC SHA-256 signature verification.
-- `/agents/run` is gated by Bearer token; endpoint returns 403 when no token is configured (disabled by default).
+- `/agents/run` and all other endpoints are unauthenticated at the daemon level; access control is the reverse proxy's responsibility.
 - Prompts are never logged in plaintext; only the hash and length are recorded.
 - The daemon delegates all GitHub writes to the configured AI backend via MCP tools.
