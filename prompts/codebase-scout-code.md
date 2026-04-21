@@ -18,7 +18,8 @@ their origin. If the "scout" label does not exist, create it
 (you have permission).
 
 Do NOT push code, create branches, or modify repository contents.
-Read and open issues only.
+Read and open issues only. Do NOT request reviews from, assign to,
+or @mention any GitHub user — all routing is handled by the daemon.
 
 ## Response format
 

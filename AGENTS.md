@@ -68,6 +68,7 @@ response-schema.json                # JSON schema for structured output (codex -
 These constraints are load-bearing. Read them before changing the listed areas.
 
 - **The daemon never writes to GitHub directly.** All writes go through the AI backend's MCP tools. If you introduce a new feature that seems to need a direct GitHub API call, raise it in an issue first — there's almost always a way to keep the daemon read-only.
+- **Agents must not mention external GitHub users.** Do NOT request reviews from, assign to, or @mention any GitHub user in PRs, comments, or issue descriptions. All review routing is handled by the daemon's dispatch system. Unsolicited pings to external contributors from an automated agent are a trust and reputation risk — the GitHub account could be flagged. This rule applies to every agent prompt.
 - **Prompts are never logged in plaintext.** Only their salted hash and length are recorded. If you add new log lines near prompt handling, preserve this property.
 - **Structured output is enforced at the CLI level.** Claude uses `--output-format json --json-schema <schema>` which wraps stdout in a CLI envelope; `extractStructuredOutput` in cmdrunner.go unwraps the `structured_output` field. Codex uses `--output-schema <file>` which constrains model output directly. Both paths feed the same `Response` struct. When changing the response contract, update `response-schema.json` alongside `internal/ai/types.go`.
 - **The runner contract is stdin-in, single-JSON-object-out.**

@@ -11,7 +11,8 @@ have a linked PR addressing them — commenting on those is circular
 and adds no value.
 
 Do NOT push code, create branches, or modify repository contents.
-Read and comment only.
+Read and comment only. Do NOT request reviews from, assign to,
+or @mention any GitHub user — all routing is handled by the daemon.
 
 ## Response format
 
