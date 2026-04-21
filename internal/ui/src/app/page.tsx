@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Card from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 import Modal from '@/components/Modal'
@@ -273,8 +273,10 @@ export default function FleetPage() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
 
+  const loadRef = useRef(false)
   const load = () => {
-    setLoading(true)
+    if (!loadRef.current) setLoading(true)
+    loadRef.current = true
     fetch('/agents')
       .then(r => r.json())
       .then(data => { setAgents(data); setLoading(false) })
@@ -283,21 +285,20 @@ export default function FleetPage() {
 
   useEffect(() => {
     load()
-    // Load store backend names for the agent editor dropdown.
-    // Falls back to an empty list when the store endpoint is not available
-    // (daemon started without --db), so AgentForm still shows "auto".
     fetch('/backends')
       .then(r => r.ok ? r.json() : [])
       .then((data: { name: string }[]) => setBackendNames(data.map(b => b.name)))
-      .catch(() => { /* store not configured — no-op */ })
+      .catch(() => {})
     fetch('/skills')
       .then(r => r.ok ? r.json() : [])
       .then((data: { name: string }[]) => setSkillNames(data.map(s => s.name)))
-      .catch(() => { /* store not configured — no-op */ })
+      .catch(() => {})
     fetch('/agents')
       .then(r => r.ok ? r.json() : [])
       .then((data: { name: string }[]) => setAgentNames(data.map(a => a.name)))
-      .catch(() => { /* store not configured — no-op */ })
+      .catch(() => {})
+    const interval = setInterval(load, 5000)
+    return () => clearInterval(interval)
   }, [])
 
   const openEdit = async (agentName: string) => {

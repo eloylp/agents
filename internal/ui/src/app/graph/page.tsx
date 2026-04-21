@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   ReactFlow,
   Background,
@@ -119,8 +119,10 @@ export default function GraphPage() {
   const [selectedNode, setSelectedNode] = useState<AgentInfo | null>(null)
   const [loading, setLoading] = useState(true)
 
+  const loadedOnce = useRef(false)
   const load = useCallback(() => {
-    setLoading(true)
+    if (!loadedOnce.current) setLoading(true)
+    loadedOnce.current = true
     Promise.all([
       fetch('/graph').then(r => r.json()),
       fetch('/agents').then(r => r.json()),
@@ -131,7 +133,11 @@ export default function GraphPage() {
     }).catch(() => setLoading(false))
   }, [])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    load()
+    const interval = setInterval(load, 5000)
+    return () => clearInterval(interval)
+  }, [load])
 
   const activeEdgeMap = useMemo(() => {
     const m = new Map<string, GraphEdge>()
