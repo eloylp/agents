@@ -233,7 +233,7 @@ type sqliteMemory struct {
 }
 
 func (m *sqliteMemory) ReadMemory(agent, repo string) (string, error) {
-	content, _, err := store.ReadMemory(m.db, ai.NormalizeToken(agent), ai.NormalizeToken(repo))
+	content, _, _, err := store.ReadMemory(m.db, ai.NormalizeToken(agent), ai.NormalizeToken(repo))
 	return content, err
 }
 
@@ -242,19 +242,22 @@ func (m *sqliteMemory) ReadMemory(agent, repo string) (string, error) {
 // empty memory), this reader returns webhook.ErrMemoryNotFound when no row
 // exists so that GET /api/memory returns 404 for absent entries while still
 // returning 200 with an empty body for intentionally-cleared memory.
+// The updated_at timestamp is returned so that handleAPIMemory can set the
+// X-Memory-Mtime response header, keeping file and SQLite mode semantically
+// aligned.
 type sqliteWebhookReader struct {
 	db *sql.DB
 }
 
-func (r *sqliteWebhookReader) ReadMemory(agent, repo string) (string, error) {
-	content, found, err := store.ReadMemory(r.db, ai.NormalizeToken(agent), ai.NormalizeToken(repo))
+func (r *sqliteWebhookReader) ReadMemory(agent, repo string) (string, time.Time, error) {
+	content, found, mtime, err := store.ReadMemory(r.db, ai.NormalizeToken(agent), ai.NormalizeToken(repo))
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	if !found {
-		return "", webhook.ErrMemoryNotFound
+		return "", time.Time{}, webhook.ErrMemoryNotFound
 	}
-	return content, nil
+	return content, mtime, nil
 }
 
 func (m *sqliteMemory) WriteMemory(agent, repo, content string) error {

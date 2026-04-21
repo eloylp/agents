@@ -76,9 +76,11 @@ var ErrMemoryNotFound = errors.New("webhook: memory not found")
 // The webhook server uses this interface to serve /api/memory/{agent}/{repo}
 // without knowing whether the backing store is the filesystem or SQLite.
 // ReadMemory returns ErrMemoryNotFound when the record does not exist; it
-// returns ("", nil) when the record exists but the content is empty.
+// returns ("", time.Time{}, nil) when the record exists but the content is
+// empty. The returned time.Time is the last-updated timestamp used to set the
+// X-Memory-Mtime response header; a zero value means the timestamp is unknown.
 type MemoryReader interface {
-	ReadMemory(agent, repo string) (string, error)
+	ReadMemory(agent, repo string) (string, time.Time, error)
 }
 
 type Server struct {

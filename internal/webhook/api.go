@@ -566,7 +566,7 @@ func (s *Server) handleAPIMemory(w http.ResponseWriter, r *http.Request) {
 
 	// SQLite mode: read memory via the injected MemoryReader.
 	if s.memReader != nil {
-		content, err := s.memReader.ReadMemory(agent, repo)
+		content, mtime, err := s.memReader.ReadMemory(agent, repo)
 		if errors.Is(err, ErrMemoryNotFound) {
 			http.Error(w, "memory not found", http.StatusNotFound)
 			return
@@ -576,6 +576,9 @@ func (s *Server) handleAPIMemory(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		if !mtime.IsZero() {
+			w.Header().Set("X-Memory-Mtime", mtime.UTC().Format(time.RFC3339))
+		}
 		_, _ = w.Write([]byte(content))
 		return
 	}

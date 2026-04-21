@@ -1518,28 +1518,41 @@ func (c *sseCapture) Flush() {} // satisfies http.Flusher
 // (agent, repo) → content for use in unit tests. Keys present in the map
 // but mapping to "" represent existing empty-memory records; absent keys
 // represent missing records and cause ErrMemoryNotFound.
+// mtimes optionally maps the same key to a last-updated timestamp; a missing
+// entry returns time.Time{} (zero), meaning the X-Memory-Mtime header is
+// omitted.
 type stubMemoryReader struct {
-	content map[string]string // key: "agent\x00repo"; present=exists, absent=not found
+	content map[string]string    // key: "agent\x00repo"; present=exists, absent=not found
+	mtimes  map[string]time.Time // optional per-record timestamps
 }
 
-func (r *stubMemoryReader) ReadMemory(agent, repo string) (string, error) {
-	content, ok := r.content[agent+"\x00"+repo]
+func (r *stubMemoryReader) ReadMemory(agent, repo string) (string, time.Time, error) {
+	key := agent + "\x00" + repo
+	content, ok := r.content[key]
 	if !ok {
-		return "", ErrMemoryNotFound
+		return "", time.Time{}, ErrMemoryNotFound
 	}
-	return content, nil
+	var mtime time.Time
+	if r.mtimes != nil {
+		mtime = r.mtimes[key]
+	}
+	return content, mtime, nil
 }
 
 func TestHandleAPIMemorySQLiteMode(t *testing.T) {
 	t.Parallel()
 
+	fixedTime := time.Date(2026, 4, 21, 10, 30, 0, 0, time.UTC)
+
 	tests := []struct {
-		name     string
-		agent    string
-		repo     string
-		stored   map[string]string
-		wantCode int
-		wantBody string
+		name      string
+		agent     string
+		repo      string
+		stored    map[string]string
+		mtimes    map[string]time.Time
+		wantCode  int
+		wantBody  string
+		wantMtime string // expected X-Memory-Mtime header value; "" means header absent
 	}{
 		{
 			name:     "returns stored memory",
@@ -1564,6 +1577,25 @@ func TestHandleAPIMemorySQLiteMode(t *testing.T) {
 			wantCode: http.StatusOK,
 			wantBody: "",
 		},
+		{
+			name:      "X-Memory-Mtime set from SQLite updated_at",
+			agent:     "coder",
+			repo:      "owner_repo",
+			stored:    map[string]string{"coder\x00owner_repo": "# memory"},
+			mtimes:    map[string]time.Time{"coder\x00owner_repo": fixedTime},
+			wantCode:  http.StatusOK,
+			wantBody:  "# memory",
+			wantMtime: fixedTime.UTC().Format(time.RFC3339),
+		},
+		{
+			name:      "zero timestamp omits X-Memory-Mtime header",
+			agent:     "coder",
+			repo:      "owner_repo",
+			stored:    map[string]string{"coder\x00owner_repo": "# memory"},
+			wantCode:  http.StatusOK,
+			wantBody:  "# memory",
+			wantMtime: "",
+		},
 	}
 
 	for _, tc := range tests {
@@ -1576,7 +1608,7 @@ func TestHandleAPIMemorySQLiteMode(t *testing.T) {
 			srv, _ := newTestServer(cfg)
 			obs := newTestObserve()
 			srv.WithObserve(obs)
-			srv.WithMemoryReader(&stubMemoryReader{content: tc.stored})
+			srv.WithMemoryReader(&stubMemoryReader{content: tc.stored, mtimes: tc.mtimes})
 
 			router := srv.buildHandler()
 			req := httptest.NewRequest(http.MethodGet, "/api/memory/"+tc.agent+"/"+tc.repo, nil)
@@ -1591,6 +1623,9 @@ func TestHandleAPIMemorySQLiteMode(t *testing.T) {
 				if got := rec.Body.String(); got != tc.wantBody {
 					t.Fatalf("want body %q, got %q", tc.wantBody, got)
 				}
+			}
+			if got := rec.Header().Get("X-Memory-Mtime"); got != tc.wantMtime {
+				t.Fatalf("X-Memory-Mtime: want %q, got %q", tc.wantMtime, got)
 			}
 		})
 	}

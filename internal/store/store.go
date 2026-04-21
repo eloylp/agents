@@ -24,6 +24,7 @@ import (
 	"io/fs"
 	"sort"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite" // register the sqlite3 driver
 
@@ -590,22 +591,29 @@ func loadBindingsForRepo(db querier, repo string) ([]config.Binding, error) {
 	return bindings, nil
 }
 
-// ReadMemory returns the stored memory string for (agent, repo) along with a
-// boolean indicating whether the row exists. If no row exists, it returns
-// ("", false, nil). An empty content string with found=true means the agent
-// intentionally cleared its memory.
-func ReadMemory(db *sql.DB, agent, repo string) (string, bool, error) {
-	var content string
+// ReadMemory returns the stored memory string, a found flag, and the
+// last-updated timestamp for (agent, repo). If no row exists, it returns
+// ("", false, time.Time{}, nil). An empty content string with found=true
+// means the agent intentionally cleared its memory.
+func ReadMemory(db *sql.DB, agent, repo string) (string, bool, time.Time, error) {
+	var content, updatedAt string
 	err := db.QueryRow(
-		"SELECT content FROM memory WHERE agent=? AND repo=?", agent, repo,
-	).Scan(&content)
+		"SELECT content, updated_at FROM memory WHERE agent=? AND repo=?", agent, repo,
+	).Scan(&content, &updatedAt)
 	if err == sql.ErrNoRows {
-		return "", false, nil
+		return "", false, time.Time{}, nil
 	}
 	if err != nil {
-		return "", false, fmt.Errorf("store: read memory %s/%s: %w", agent, repo, err)
+		return "", false, time.Time{}, fmt.Errorf("store: read memory %s/%s: %w", agent, repo, err)
 	}
-	return content, true, nil
+	// The modernc.org/sqlite driver returns TIMESTAMP columns as RFC3339 strings
+	// (e.g. "2026-04-21T10:30:00Z"). Parse with time.RFC3339 and fall back to
+	// the bare "YYYY-MM-DD HH:MM:SS" SQLite text format as a safety net.
+	t, parseErr := time.Parse(time.RFC3339, updatedAt)
+	if parseErr != nil {
+		t, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
+	}
+	return content, true, t.UTC(), nil
 }
 
 // WriteMemory upserts the memory string for (agent, repo), setting updated_at
