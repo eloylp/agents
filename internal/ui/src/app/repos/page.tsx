@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import BadgePicker from '@/components/BadgePicker'
@@ -112,10 +112,11 @@ function bindingTrigger(b: Binding): string {
 
 // TriggerEditor edits one trigger row (type + value + enabled + delete).
 // The agent name is managed by the parent AgentBindingGroup.
-function TriggerEditor({ trigger, onChange, onRemove }: {
+function TriggerEditor({ trigger, onChange, onRemove, knownLabels }: {
   trigger: TriggerBinding
   onChange: (t: TriggerBinding) => void
   onRemove: () => void
+  knownLabels: string[]
 }) {
   const [triggerType, setTriggerType] = useState<'labels' | 'events' | 'cron'>(
     trigger.cron ? 'cron' : trigger.events && trigger.events.length > 0 ? 'events' : 'labels'
@@ -142,7 +143,7 @@ function TriggerEditor({ trigger, onChange, onRemove }: {
       <div style={{ flex: 1 }}>
         {triggerType === 'labels' && (
           <BadgePicker
-            options={[]}
+            options={knownLabels}
             selected={trigger.labels ?? []}
             onChange={v => onChange({ ...trigger, labels: v })}
             placeholder="Add label…"
@@ -188,9 +189,10 @@ function TriggerEditor({ trigger, onChange, onRemove }: {
 }
 
 // AgentBindingGroup shows all trigger bindings for one agent.
-function AgentBindingGroup({ group, agentNames, onChange, onAddTrigger, onRemoveTrigger }: {
+function AgentBindingGroup({ group, agentNames, knownLabels, onChange, onAddTrigger, onRemoveTrigger }: {
   group: AgentGroup
   agentNames: string[]
+  knownLabels: string[]
   onChange: (g: AgentGroup) => void
   onAddTrigger: () => void
   onRemoveTrigger: (i: number) => void
@@ -224,7 +226,7 @@ function AgentBindingGroup({ group, agentNames, onChange, onAddTrigger, onRemove
         )}
       </div>
       {group.triggers.map((t, i) => (
-        <TriggerEditor key={i} trigger={t} onChange={t2 => updateTrigger(i, t2)} onRemove={() => onRemoveTrigger(i)} />
+        <TriggerEditor key={i} trigger={t} knownLabels={knownLabels} onChange={t2 => updateTrigger(i, t2)} onRemove={() => onRemoveTrigger(i)} />
       ))}
       <button
         onClick={onAddTrigger}
@@ -236,10 +238,11 @@ function AgentBindingGroup({ group, agentNames, onChange, onAddTrigger, onRemove
   )
 }
 
-function RepoForm({ initial, isNew, agentNames, onSave, onCancel, saving, error }: {
+function RepoForm({ initial, isNew, agentNames, knownLabels, onSave, onCancel, saving, error }: {
   initial: Repo
   isNew: boolean
   agentNames: string[]
+  knownLabels: string[]
   onSave: (r: Repo) => void
   onCancel: () => void
   saving: boolean
@@ -312,6 +315,7 @@ function RepoForm({ initial, isNew, agentNames, onSave, onCancel, saving, error 
             key={gi}
             group={g}
             agentNames={agentNames}
+            knownLabels={knownLabels}
             onChange={ng => updateGroup(gi, ng)}
             onAddTrigger={() => addTrigger(gi)}
             onRemoveTrigger={ti => removeTrigger(gi, ti)}
@@ -347,6 +351,16 @@ export default function ReposPage() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [agentNames, setAgentNames] = useState<string[]>([])
+
+  const knownLabels = useMemo(() => {
+    const set = new Set<string>()
+    for (const r of repos) {
+      for (const b of r.bindings) {
+        for (const l of (b.labels ?? [])) set.add(l)
+      }
+    }
+    return Array.from(set).sort()
+  }, [repos])
 
   const load = () => {
     setLoading(true)
@@ -508,6 +522,7 @@ export default function ReposPage() {
             initial={selected}
             isNew={modal === 'create'}
             agentNames={agentNames}
+            knownLabels={knownLabels}
             onSave={saveRepo}
             onCancel={() => setModal(null)}
             saving={saving}
