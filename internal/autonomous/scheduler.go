@@ -419,11 +419,13 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		User:     rendered.User,
 	})
 	spanEnd := time.Now()
-	if s.traceRec != nil {
-		status, errMsg := "success", ""
-		if runErr != nil {
-			status = "error"
-			errMsg = runErr.Error()
+
+	// recordTrace is called exactly once per run, after all post-run steps, so
+	// the span status accurately reflects the final outcome (including memory
+	// write failures, not just the runner result).
+	recordTrace := func(status, errMsg string) {
+		if s.traceRec == nil {
+			return
 		}
 		spanID := workflow.GenEventID()
 		rootEventID := spanID
@@ -438,7 +440,9 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 			status, errMsg,
 		)
 	}
+
 	if runErr != nil {
+		recordTrace("error", runErr.Error())
 		if s.dispatcher != nil {
 			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
 		}
@@ -452,11 +456,14 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	// retry dispatches for the full dedup window while the in-memory state stays
 	// stale.
 	if memErr := s.memory.WriteMemory(agent.Name, repo, resp.Memory); memErr != nil {
+		recordTrace("error", memErr.Error())
 		if s.dispatcher != nil {
 			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
 		}
 		return fmt.Errorf("write memory: %w", memErr)
 	}
+
+	recordTrace("success", "")
 
 	logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Int("dispatch_requests", len(resp.Dispatch)).Msg("autonomous pass completed")
 

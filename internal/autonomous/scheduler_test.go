@@ -1580,6 +1580,31 @@ func TestSchedulerCronJobUsesPostReloadAgentDef(t *testing.T) {
 	}
 }
 
+// stubTraceRecorder records calls to RecordSpan for assertion in tests.
+type stubTraceRecorder struct {
+	mu      sync.Mutex
+	spans   []stubSpan
+}
+
+type stubSpan struct {
+	status string
+	errMsg string
+}
+
+func (r *stubTraceRecorder) RecordSpan(_, _, _, _, _, _, _, _ string, _, _ int, _ int64, _ int, _ string, _, _ time.Time, status, errMsg string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.spans = append(r.spans, stubSpan{status: status, errMsg: errMsg})
+}
+
+func (r *stubTraceRecorder) recorded() []stubSpan {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]stubSpan, len(r.spans))
+	copy(out, r.spans)
+	return out
+}
+
 // errMemory is a MemoryBackend whose WriteMemory always returns an error, used
 // to test that a write failure causes executeAgentRun to surface the error.
 type errMemory struct {
@@ -1627,11 +1652,13 @@ func TestSchedulerWriteMemoryFailureFailsRun(t *testing.T) {
 	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
 	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
 
+	traceRec := &stubTraceRecorder{}
 	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, mem, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
 	s.WithDispatcher(dispatcher)
+	s.WithTraceRecorder(traceRec)
 
 	runErr := s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
 	if runErr == nil {
@@ -1647,6 +1674,18 @@ func TestSchedulerWriteMemoryFailureFailsRun(t *testing.T) {
 	runner.mu.Unlock()
 	if calls != 1 {
 		t.Errorf("expected 1 runner call, got %d", calls)
+	}
+
+	// The trace span must reflect the memory write failure, not a false "success".
+	spans := traceRec.recorded()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 recorded trace span, got %d", len(spans))
+	}
+	if spans[0].status != "error" {
+		t.Errorf("expected span status %q, got %q", "error", spans[0].status)
+	}
+	if !strings.Contains(spans[0].errMsg, writeErr.Error()) {
+		t.Errorf("expected span errMsg to contain %q, got %q", writeErr.Error(), spans[0].errMsg)
 	}
 
 	// The dedup mark must be rolled back (not finalised), so a subsequent
