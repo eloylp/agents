@@ -724,6 +724,23 @@ func TestStoreCRUDValidationErrorReturns400(t *testing.T) {
 			body: map[string]any{"name": "coder", "backend": "unknown", "prompt": "p",
 				"skills": []string{}, "can_dispatch": []string{}},
 		},
+		{
+			name: "repo with no-trigger binding",
+			path: "/repos",
+			body: map[string]any{
+				"name": "owner/repo", "enabled": true,
+				"bindings": []map[string]any{{"agent": "coder"}},
+			},
+			setup: func(t *testing.T, s *Server) {
+				seedStoreBackend(t, s, "claude")
+				if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+					"name": "coder", "backend": "claude", "prompt": "p",
+					"skills": []string{}, "can_dispatch": []string{},
+				}); rr.Code != http.StatusOK {
+					t.Fatalf("create agent: got %d — %s", rr.Code, rr.Body.String())
+				}
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -877,22 +894,6 @@ func TestConcurrentWriteReloadSerialisation(t *testing.T) {
 
 // ── Cross-ref validation ──────────────────────────────────────────────────────
 
-// TestStoreCRUDAgentRejectedWithUnknownBackend verifies that creating an agent
-// that references a backend not present in the store is rejected.
-func TestStoreCRUDAgentRejectedWithUnknownBackend(t *testing.T) {
-	t.Parallel()
-	s := openCRUDTestServer(t)
-
-	// No backend seeded — "claude" is unknown.
-	rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
-		"name": "coder", "backend": "claude", "prompt": "p",
-		"skills": []string{}, "can_dispatch": []string{},
-	})
-	if rr.Code == http.StatusOK {
-		t.Errorf("POST agent with unknown backend: want non-200, got 200")
-	}
-}
-
 // TestStoreCRUDDeleteBackendRejectedWhenReferenced verifies that deleting a
 // backend still referenced by an agent is rejected and leaves the backend intact.
 func TestStoreCRUDDeleteBackendRejectedWhenReferenced(t *testing.T) {
@@ -946,55 +947,6 @@ func TestStoreCRUDDeleteSkillRejectedWhenReferenced(t *testing.T) {
 	rr = doCRUDRequest(t, s, http.MethodGet, "/skills/architect", nil)
 	if rr.Code != http.StatusOK {
 		t.Errorf("GET skill after rejected delete: got %d, want 200", rr.Code)
-	}
-}
-
-// ──── Field-level validation tests (webhook layer) ────────────────────────────
-
-func TestStoreCRUDBackendRejectedWithEmptyCommand(t *testing.T) {
-	t.Parallel()
-	s := openCRUDTestServer(t)
-
-	rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
-		"name": "claude", "command": "", "args": []string{}, "env": map[string]string{},
-	})
-	if rr.Code == http.StatusOK {
-		t.Errorf("POST backend with empty command: want non-200, got 200")
-	}
-}
-
-func TestStoreCRUDAgentRejectedWithEmptyPrompt(t *testing.T) {
-	t.Parallel()
-	s := openCRUDTestServer(t)
-
-	seedStoreBackend(t, s, "claude")
-	rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
-		"name": "coder", "backend": "claude", "prompt": "",
-		"skills": []string{}, "can_dispatch": []string{},
-	})
-	if rr.Code == http.StatusOK {
-		t.Errorf("POST agent with empty prompt: want non-200, got 200")
-	}
-}
-
-func TestStoreCRUDRepoRejectedWithNoTrigger(t *testing.T) {
-	t.Parallel()
-	s := openCRUDTestServer(t)
-
-	seedStoreBackend(t, s, "claude")
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
-		"name": "coder", "backend": "claude", "prompt": "p",
-		"skills": []string{}, "can_dispatch": []string{},
-	}); rr.Code != http.StatusOK {
-		t.Fatalf("create agent: got %d — %s", rr.Code, rr.Body.String())
-	}
-	// Binding has no labels, events, or cron — invalid.
-	rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
-		"name": "owner/repo", "enabled": true,
-		"bindings": []map[string]any{{"agent": "coder"}},
-	})
-	if rr.Code == http.StatusOK {
-		t.Errorf("POST repo with no-trigger binding: want non-200, got 200")
 	}
 }
 
