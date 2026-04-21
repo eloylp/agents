@@ -725,6 +725,54 @@ func TestSchedulerDispatchEnqueueFailurePropagates(t *testing.T) {
 	}
 }
 
+// TestSchedulerDispatchEnqueueFailureRecordsErrorSpan verifies that when
+// ProcessDispatches fails after a successful runner.Run and memory write, the
+// trace span is recorded as "error" (not "success"), so /api/traces accurately
+// reflects the run outcome.
+func TestSchedulerDispatchEnqueueFailureRecordsErrorSpan(t *testing.T) {
+	t.Parallel()
+	cfg := dispatchCfgForTest()
+
+	runner := &dispatchingRunner{
+		dispatches: []ai.DispatchRequest{
+			{Agent: "notifier", Reason: "review done", Number: 42},
+		},
+	}
+	queueErr := errors.New("queue full")
+	q := &fakeQueue{err: queueErr}
+	agentMap := map[string]config.AgentDef{
+		"reviewer": cfg.Agents[0],
+		"notifier": cfg.Agents[1],
+	}
+	dedup := workflow.NewDispatchDedupStore(300)
+	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
+	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
+
+	traceRec := &stubTraceRecorder{}
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, NewMemoryStore(t.TempDir()), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	s.WithDispatcher(dispatcher)
+	s.WithTraceRecorder(traceRec)
+
+	runErr := s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
+	if runErr == nil {
+		t.Fatal("expected error when dispatch enqueue fails, got nil")
+	}
+
+	spans := traceRec.recorded()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 recorded trace span, got %d", len(spans))
+	}
+	if spans[0].status != "error" {
+		t.Errorf("expected span status %q, got %q", "error", spans[0].status)
+	}
+	if !strings.Contains(spans[0].errMsg, "dispatch") {
+		t.Errorf("expected span errMsg to contain %q, got %q", "dispatch", spans[0].errMsg)
+	}
+}
+
 // TestSchedulerCronMarkKeptAfterSuccessfulRunWithDispatchEnqueueFailure verifies
 // that when runner.Run succeeds but the post-run dispatch enqueue fails, the
 // cron-namespace mark is NOT rolled back. The autonomous pass already committed,

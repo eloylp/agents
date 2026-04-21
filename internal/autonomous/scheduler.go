@@ -463,8 +463,6 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		return fmt.Errorf("write memory: %w", memErr)
 	}
 
-	recordTrace("success", "")
-
 	logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Int("dispatch_requests", len(resp.Dispatch)).Msg("autonomous pass completed")
 
 	// The autonomous pass succeeded. Finalize the dedup mark regardless of
@@ -492,9 +490,11 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		// parentSpanID is empty; dispatch children will still create their
 		// own spans with this run's rootEventID as correlation.
 		if dispErr := s.dispatcher.ProcessDispatches(ctx, agent, syntheticEv, rootEventID, 0, "", resp.Dispatch); dispErr != nil {
+			recordTrace("error", dispErr.Error())
 			return fmt.Errorf("agent %q: dispatch: %w", agent.Name, dispErr)
 		}
 	}
+	recordTrace("success", "")
 	return nil
 }
 
