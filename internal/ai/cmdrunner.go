@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"slices"
@@ -115,14 +116,24 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 		return Response{}, fmt.Errorf("start %s: %w", r.backendName, err)
 	}
 
-	// Read stdout line by line. Each Scan blocks until a complete line arrives,
-	// so time.Now() reflects when that specific line was received from the
-	// subprocess — not when a larger pipe-read chunk happened to land.
+	// Read stdout line by line using ReadBytes so there is no per-line size cap
+	// (unlike bufio.Scanner which silently truncates at its buffer limit).
+	// ReadBytes blocks until a complete newline-delimited line arrives from the
+	// pipe, so time.Now() inside addLine reflects when that specific line was
+	// received — not when a larger pipe-read chunk happened to land.
 	var stdoutCap lineCapture
-	scanner := bufio.NewScanner(stdoutPipe)
-	scanner.Buffer(make([]byte, 1<<20), 1<<20) // 1 MB per line
-	for scanner.Scan() {
-		stdoutCap.addLine(scanner.Bytes())
+	reader := bufio.NewReader(stdoutPipe)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			stdoutCap.addLine(bytes.TrimRight(line, "\n"))
+		}
+		if err != nil {
+			if err != io.EOF {
+				logger.Warn().Err(err).Msgf("read %s stdout", r.backendName)
+			}
+			break
+		}
 	}
 
 	cmdErr := cmd.Wait()

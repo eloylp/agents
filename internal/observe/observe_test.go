@@ -570,10 +570,16 @@ func TestStoreTracesByRootEventID(t *testing.T) {
 	s.RecordSpan("s2", "root-B", "", "reviewer", "claude", "r", "push", "", 0, 0, 0, 0, "", now, now.Add(time.Second), "success", "")
 	s.RecordSpan("s3", "root-A", "", "coder", "claude", "r", "agent.dispatch", "", 1, 1, 0, 0, "", now.Add(time.Second), now.Add(2*time.Second), "success", "")
 
-	// Wait for async persistence.
-	time.Sleep(50 * time.Millisecond)
-
-	rootA := s.TracesByRootEventID("root-A")
+	// Poll until both spans for root-A are persisted (RecordSpan is async).
+	deadline := time.Now().Add(500 * time.Millisecond)
+	var rootA []observe.Span
+	for time.Now().Before(deadline) {
+		rootA = s.TracesByRootEventID("root-A")
+		if len(rootA) == 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if len(rootA) != 2 {
 		t.Fatalf("want 2 spans for root-A, got %d", len(rootA))
 	}
