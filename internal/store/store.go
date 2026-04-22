@@ -67,6 +67,11 @@ func Open(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: set busy timeout: %w", err)
 	}
+	// Pin to a single connection so PRAGMAs set above (busy_timeout, WAL mode,
+	// foreign_keys) apply to every subsequent operation. Without this,
+	// database/sql may open additional connections that bypass those settings,
+	// causing spurious SQLITE_BUSY under concurrent goroutine writes.
+	db.SetMaxOpenConns(1)
 	if err := migrate(db); err != nil {
 		db.Close()
 		return nil, err
