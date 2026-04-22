@@ -140,7 +140,6 @@ daemon:
     listen_addr: ":8080"
     status_path: /status
     webhook_path: /webhooks/github
-    agents_run_path: /agents/run            # POST for on-demand triggers
     webhook_secret_env: GITHUB_WEBHOOK_SECRET
     shutdown_timeout_seconds: 15
 
@@ -301,7 +300,7 @@ The `events:` field accepts any of the following GitHub event kinds. Each event 
 | `pull_request_review.submitted` | Formal GitHub review submitted | `state`, `body` |
 | `pull_request_review_comment.created` | Inline review comment posted on a PR diff | `body` |
 | `push` | Commit pushed to a branch | `ref` (e.g. `refs/heads/main`), `head_sha` |
-| `agents.run` | On-demand trigger via `/agents/run`, `/api/run`, or `--run-agent` CLI | `target_agent` |
+| `agents.run` | On-demand trigger via `POST /run` or `--run-agent` CLI | `target_agent` |
 | `agent.dispatch` | Another agent dispatched this agent | `target_agent`, `reason`, `root_event_id`, `dispatch_depth`, `invoked_by` |
 
 > **`push` scope:** only branch pushes fire the event. Tag pushes, branch deletions, and pushes to non-`refs/heads/` refs are silently dropped. The agent receives the branch ref and the resulting head SHA — there is no PR number in the context.
@@ -411,7 +410,7 @@ An optional SQLite-backed config store lets you manage the fleet over the API in
 ./agents --db agents.db
 ```
 
-When started with `--db`, the daemon registers `/api/store/*` CRUD endpoints and auto-reloads cron schedules after any repo or agent write. Agent memory is also stored in SQLite instead of the filesystem. The YAML path remains fully supported — both modes are first-class.
+When started with `--db`, the daemon registers CRUD endpoints for each resource type (`/agents`, `/skills`, `/backends`, `/repos`) and auto-reloads cron schedules after any repo or agent write. Agent memory is also stored in SQLite instead of the filesystem. The YAML path remains fully supported — both modes are first-class.
 
 ### On-demand agent pass
 
@@ -424,7 +423,7 @@ Run one autonomous agent synchronously and exit (useful for testing):
 Or via HTTP on the running daemon:
 
 ```bash
-curl -X POST https://<your-host>/agents/run \
+curl -X POST https://<your-host>/run \
   -H "Content-Type: application/json" \
   -d '{"agent":"coder","repo":"owner/repo"}'
 ```
@@ -442,17 +441,14 @@ docker compose down
 
 The compose file expects:
 - `config.yaml` in the project root (mounted read-only at `/etc/agents/config.yaml`)
-- `prompts/` directory with any agent `prompt_file` targets (mounted read-only at `/etc/agents/prompts`)
-- `skills/` directory with any skill `prompt_file` targets (mounted read-only at `/etc/agents/skills`)
-- `.env` in the project root with `GITHUB_WEBHOOK_SECRET` (and optionally `LOG_SALT`)
+- `.env` in the project root with `GITHUB_WEBHOOK_SECRET` (and optionally `LOG_SALT` and `GITHUB_PAT_TOKEN`)
 
 #### Volume mounts
 
 | Host path | Container path | Purpose |
 |---|---|---|
-| `config.yaml` | `/etc/agents/config.yaml` (read-only) | Main daemon config |
-| `prompts/` | `/etc/agents/prompts` (read-only) | Prompt files referenced by agent `prompt_file:` |
-| `skills/` | `/etc/agents/skills` (read-only) | Skill files referenced by skill `prompt_file:` |
+| `config.yaml` | `/etc/agents/config.yaml` (read-only) | Main daemon config (used for `--import`; optional once DB is seeded) |
+| `./agents` | `/etc/agents/agents` (read-only) | Optional: prompt/skill files when agent `prompt_file:` paths point here |
 | `~/.claude` | `/home/agents/.claude` | Claude Code session data |
 | `~/.claude.json` | `/home/agents/.claude.json` | Claude Code main config |
 | `~/.codex` | `/home/agents/.codex` | Codex configuration |
@@ -484,31 +480,34 @@ GitHub sends a ping immediately; the daemon will log the delivery.
 
 ## HTTP endpoints
 
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| `GET` | `/status` | none | Health check: JSON with uptime, event queue depth, agent schedules, dispatch counters |
-| `POST` | `/webhooks/github` | `X-Hub-Signature-256` HMAC | GitHub webhook receiver |
-| `POST` | `/agents/run` | none | On-demand agent trigger |
-| `POST` | `/v1/messages` | none | Anthropic↔OpenAI translation proxy (opt-in via `proxy.enabled`) |
-| `GET` | `/v1/models` | none | Companion stub for `/v1/messages`; lists the configured upstream model |
-| `POST` | `/api/run` | none | On-demand agent trigger (async, same as `/agents/run`) |
-| `GET` | `/api/agents` | Traefik basic auth | Fleet snapshot: per-agent status, bindings, dispatch wiring |
-| `GET` | `/api/events` | Traefik basic auth | Recent webhook events (time-windowed) |
-| `GET` | `/api/events/stream` | Traefik basic auth | Live event firehose (SSE) |
-| `GET` | `/api/traces` | Traefik basic auth | Recent agent run traces with timing |
-| `GET` | `/api/traces/stream` | Traefik basic auth | Live trace updates (SSE) |
-| `GET` | `/api/graph` | Traefik basic auth | Agent interaction graph (dispatch edges) |
-| `GET` | `/api/dispatches` | Traefik basic auth | Dispatch dedup store contents + counters |
-| `GET` | `/api/memory/{agent}/{repo}` | Traefik basic auth | Raw agent memory markdown |
-| `GET` | `/api/memory/stream` | Traefik basic auth | Memory file change notifications (SSE) |
-| `GET` | `/api/config` | Traefik basic auth | Effective parsed config (secrets redacted) |
-| `GET` | `/ui/` | none | Built-in web dashboard (static assets; embedded in binary) |
-| `GET` | `/api/store/{resource}` | Traefik basic auth | List all entries for a resource type (`agents`, `skills`, `backends`, `repos`). Only registered when `--db` is set. |
-| `GET` | `/api/store/{resource}/{name}` | Traefik basic auth | Fetch one entry. Repos use two path segments: `/api/store/repos/{owner}/{repo}`. |
-| `POST` | `/api/store/{resource}` | none | Create or replace an entry (write API; requires `--db`). |
-| `DELETE` | `/api/store/{resource}/{name}` | none | Remove an entry (requires `--db`). |
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/status` | Health check: JSON with uptime, event queue depth, agent schedules, dispatch counters |
+| `POST` | `/webhooks/github` | GitHub webhook receiver (`X-Hub-Signature-256` HMAC verified) |
+| `POST` | `/run` | On-demand agent trigger |
+| `POST` | `/v1/messages` | Anthropic↔OpenAI translation proxy (opt-in via `proxy.enabled`) |
+| `GET` | `/v1/models` | Companion stub for `/v1/messages`; lists the configured upstream model |
+| `GET` | `/agents` | Fleet snapshot: per-agent status, bindings, dispatch wiring |
+| `GET` | `/events` | Recent webhook events (time-windowed) |
+| `GET` | `/events/stream` | Live event firehose (SSE) |
+| `GET` | `/traces` | Recent agent run traces with timing |
+| `GET` | `/traces/stream` | Live trace updates (SSE) |
+| `GET` | `/traces/{root_event_id}` | All spans for a single root event |
+| `GET` | `/traces/{span_id}/steps` | Tool-loop transcript for a completed agent span |
+| `GET` | `/graph` | Agent interaction graph (dispatch edges) |
+| `GET` | `/dispatches` | Dispatch dedup store contents + counters |
+| `GET` | `/memory/{agent}/{repo}` | Raw agent memory markdown |
+| `GET` | `/memory/stream` | Memory file change notifications (SSE) |
+| `GET` | `/config` | Effective parsed config (secrets redacted) |
+| `GET` | `/ui/` | Built-in web dashboard (static assets; embedded in binary) |
+| `GET` | `/{resource}` | List all entries for a resource type (`agents`, `skills`, `backends`, `repos`). Only registered when `--db` is set. |
+| `GET` | `/{resource}/{name}` | Fetch one entry. Repos use two path segments: `/repos/{owner}/{repo}`. Only with `--db`. |
+| `POST` | `/{resource}` | Create or replace an entry (write API; requires `--db`). |
+| `DELETE` | `/{resource}/{name}` | Remove an entry (requires `--db`). |
+| `GET` | `/export` | Export full fleet config as YAML (requires `--db`). |
+| `POST` | `/import` | Import a YAML config into the SQLite store (requires `--db`). |
 
-The `/agents/run` and `/api/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. Both return `202 Accepted` immediately with an `event_id`; the agent runs asynchronously. All endpoints are unauthenticated at the daemon level; access control is the reverse proxy's responsibility.
+The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 Accepted` immediately with an `event_id`; the agent runs asynchronously. All endpoints are unauthenticated at the daemon level — access control is the reverse proxy's responsibility.
 
 Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL cache.
 
@@ -640,7 +639,7 @@ internal/
   autonomous/               # Cron scheduler + agent memory (filesystem or SQLite)
   store/                    # SQLite-backed config store (--db mode): schema migrations, CRUD helpers
   workflow/                 # Event routing engine, single event queue, processor, inter-agent dispatcher
-  webhook/                  # HTTP server, signature verification, delivery dedupe, /api/store/* CRUD
+  webhook/                  # HTTP server, signature verification, delivery dedupe, CRUD API handlers
   ui/                       # Embedded Next.js web dashboard (served at /ui/)
   setup/                    # Interactive first-time setup command
   logging/                  # zerolog setup

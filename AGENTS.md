@@ -36,7 +36,7 @@ internal/
   autonomous/                   # cron scheduler + agent memory (filesystem or SQLite)
   store/                        # SQLite-backed config store (--db mode): Open, Import, Load, CRUD
   workflow/                     # event routing engine (single event queue), processor, dispatcher
-  webhook/                      # HTTP server, HMAC signature verification, delivery dedupe, /api/store/* CRUD
+  webhook/                      # HTTP server, HMAC signature verification, delivery dedupe, CRUD API handlers
   ui/                           # embedded Next.js web dashboard (static assets served at /ui/)
   setup/                        # interactive first-time setup command
   logging/                      # zerolog configuration

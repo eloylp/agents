@@ -16,7 +16,7 @@ internal/
   autonomous/               # Cron scheduler + agent memory (filesystem or SQLite)
   store/                    # SQLite-backed config store (--db mode): Open, Import, Load, CRUD
   workflow/                 # Event routing engine, single event queue, processor, dispatcher
-  webhook/                  # HTTP server, HMAC verification, delivery dedupe, /api/store/* CRUD
+  webhook/                  # HTTP server, HMAC verification, delivery dedupe, CRUD API handlers
   ui/                       # Embedded Next.js web dashboard (served at /ui/)
   setup/                    # Interactive first-time setup command
   logging/                  # zerolog setup
@@ -60,10 +60,9 @@ docker compose build
 docker compose up -d
 ```
 
-Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, and `gh` CLIs alongside the daemon. Runs as non-root `agents` user. Compose mounts:
-- `./config.yaml` → `/etc/agents/config.yaml` (read-only)
-- `./prompts` → `/etc/agents/prompts` (read-only)
-- `./skills` → `/etc/agents/skills` (read-only; referenced by `skills.<name>.prompt_file`)
+Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, and `gh` CLIs alongside the daemon. Runs as non-root `agents` user. Default CMD is `--db /var/lib/agents/agents.db` (SQLite mode; no `--config` flag needed after the initial `--import`). Compose mounts:
+- `./config.yaml` → `/etc/agents/config.yaml` (read-only; used for `--import` seeding)
+- `./agents` → `/etc/agents/agents` (optional; prompt/skill files when `prompt_file:` paths point here)
 - Claude/Codex/gh config dirs from host
 - `agents-memory` named volume → `/var/lib/agents/memory`
 
@@ -78,22 +77,24 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, 
 - HTTP endpoints:
   - `GET /status` — JSON with uptime, event queue depth, agent schedules, dispatch counters.
   - `POST /webhooks/github` — HMAC-verified webhook receiver.
-  - `POST /agents/run` — on-demand agent trigger.
+  - `POST /run` — on-demand agent trigger (body: `{"agent":"<name>","repo":"owner/repo"}`).
   - `POST /v1/messages` — Anthropic↔OpenAI translation proxy (disabled by default; enabled via `daemon.proxy.enabled: true`).
   - `GET /v1/models` — companion stub for `/v1/messages`; returns the configured upstream model. Only mounted when the proxy is enabled.
-  - `POST /api/run` — unauthenticated on-demand trigger (same handler as `/agents/run`; relies on Traefik basic auth for the `/api/*` prefix). Enqueues a synthetic `agents.run` event.
-  - `GET /api/agents` — fleet snapshot with per-agent status, skills, dispatch wiring, bindings.
-  - `GET /api/events[/stream]` — recent events + SSE firehose.
-  - `GET /api/traces[/stream]` — recent agent run traces with timing, summary, status + SSE.
-  - `GET /api/graph` — agent interaction graph (dispatch edges + counts).
-  - `GET /api/dispatches` — dispatch dedup store snapshot + counters.
-  - `GET /api/memory/{agent}/{repo}` — raw agent memory markdown.
-  - `GET /api/memory/stream` — memory file change notifications (SSE).
-  - `GET /api/config` — effective parsed config (secrets redacted).
+  - `GET /agents` — fleet snapshot with per-agent status, skills, dispatch wiring, bindings.
+  - `GET /events[/stream]` — recent events + SSE firehose.
+  - `GET /traces[/stream]` — recent agent run traces with timing, summary, status + SSE.
+  - `GET /traces/{root_event_id}` — all spans for a single root event.
+  - `GET /traces/{span_id}/steps` — tool-loop transcript (ordered tool calls + durations) for a completed agent span.
+  - `GET /graph` — agent interaction graph (dispatch edges + counts).
+  - `GET /dispatches` — dispatch dedup store snapshot + counters.
+  - `GET /memory/{agent}/{repo}` — raw agent memory markdown.
+  - `GET /memory/stream` — memory file change notifications (SSE).
+  - `GET /config` — effective parsed config (secrets redacted).
   - `GET /ui/` — embedded web dashboard (Next.js static assets).
-  - `/api/store/{resource}[/{name}]` — SQLite CRUD endpoints (only registered when `--db` is set). Resources: `agents`, `skills`, `backends`, `repos` (repos use two-segment path: `{owner}/{repo}`).
+  - `GET|POST /{resource}` and `GET|DELETE /{resource}/{name}` — SQLite CRUD endpoints (only registered when `--db` is set). Resources: `agents`, `skills`, `backends`, `repos` (repos use two-segment path: `repos/{owner}/{repo}`).
+  - `GET /export`, `POST /import` — export/import fleet config as YAML (only with `--db`).
 - Supported webhook events: `issues.*` (labeled, opened, edited, reopened, closed), `pull_request.*` (labeled, opened, synchronize, ready_for_review, closed), `issue_comment.created`, `pull_request_review.submitted`, `pull_request_review_comment.created`, `push` (branches only). Label-triggered routing uses `payload.label.name`. Non-label `events:` subscriptions match the event kind exactly. Draft PRs skip `pull_request.labeled`.
-- Internal event kinds (not from webhooks): `agents.run` (on-demand trigger from `/api/run` or `--run-agent`), `agent.dispatch` (inter-agent dispatch), `autonomous` (cron scheduler).
+- Internal event kinds (not from webhooks): `agents.run` (on-demand trigger from `POST /run` or `--run-agent`), `agent.dispatch` (inter-agent dispatch), `autonomous` (cron scheduler).
 - Duplicate webhook suppression via `X-GitHub-Delivery` TTL cache.
 - Workflow execution is stateless in-process. Only autonomous agents persist memory (per-agent, per-repo).
 - Memory is delivered to the agent as part of its prompt context, and the agent returns its full updated memory in the `memory` field of the JSON response. The daemon writes the value back to the store after the run. An empty string clears the memory. Event-driven runs (webhook events, label triggers) do not receive or persist memory.
@@ -109,6 +110,6 @@ This project is built by its own agent fleet. External contributions come as iss
 ## Security Notes
 
 - Webhook authenticity is enforced with HMAC SHA-256 signature verification.
-- `/agents/run` and all other endpoints are unauthenticated at the daemon level; access control is the reverse proxy's responsibility.
+- All endpoints are unauthenticated at the daemon level; access control is the reverse proxy's responsibility.
 - Prompts are never logged in plaintext; only the hash and length are recorded.
 - The daemon delegates all GitHub writes to the configured AI backend via MCP tools.
