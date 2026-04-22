@@ -247,7 +247,7 @@ func (r *CommandRunner) buildClaudeDelivery(req Request) (args []string, stdin s
 	args = make([]string, 0, len(r.args)+6)
 	args = append(args, r.args...)
 	if !slices.Contains(args, "--json-schema") {
-		args = append(args, "--output-format", "stream-json", "--json-schema", ResponseSchemaString())
+		args = append(args, "--verbose", "--output-format", "stream-json", "--json-schema", ResponseSchemaString())
 	}
 
 	if req.System == "" {
