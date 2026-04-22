@@ -589,6 +589,53 @@ func TestStoreTracesByRootEventID(t *testing.T) {
 	}
 }
 
+// ─── Store.RecordSteps / ListSteps ───────────────────────────────────────────
+
+func TestStoreRecordAndListSteps(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+
+	steps := []workflow.TraceStep{
+		{ToolName: "Bash", InputSummary: "go test ./...", OutputSummary: "ok", DurationMs: 200},
+		{ToolName: "Read", InputSummary: "/foo.go", OutputSummary: "package foo", DurationMs: 50},
+	}
+	s.RecordSteps("span-1", steps)
+
+	got := s.ListSteps("span-1")
+	if len(got) != 2 {
+		t.Fatalf("want 2 steps, got %d", len(got))
+	}
+	if got[0].ToolName != "Bash" || got[1].ToolName != "Read" {
+		t.Fatalf("unexpected order: %v %v", got[0].ToolName, got[1].ToolName)
+	}
+	if got[0].DurationMs != 200 || got[1].DurationMs != 50 {
+		t.Fatalf("unexpected DurationMs: %d %d", got[0].DurationMs, got[1].DurationMs)
+	}
+}
+
+func TestStoreListStepsEmptyWhenNoneRecorded(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+
+	got := s.ListSteps("no-such-span")
+	if got != nil {
+		t.Fatalf("want nil for unknown span, got %v", got)
+	}
+}
+
+func TestStoreRecordStepsNoOpOnEmpty(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+
+	s.RecordSteps("span-x", nil)
+	s.RecordSteps("span-x", []workflow.TraceStep{})
+
+	got := s.ListSteps("span-x")
+	if got != nil {
+		t.Fatalf("want nil after no-op records, got %v", got)
+	}
+}
+
 // mapKeys returns the sorted keys of a map for use in error messages.
 func mapKeys(m map[string]any) []string {
 	keys := make([]string, 0, len(m))
