@@ -486,7 +486,7 @@ GitHub sends a ping immediately; the daemon will log the delivery.
 | `POST` | `/webhooks/github` | GitHub webhook receiver (`X-Hub-Signature-256` HMAC verified) |
 | `POST` | `/run` | On-demand agent trigger |
 | `POST` | `/v1/messages` | Anthropic↔OpenAI translation proxy (opt-in via `proxy.enabled`) |
-| `GET` | `/v1/models` | Companion stub for `/v1/messages`; lists the configured upstream model |
+| `GET` | `/v1/models` | Companion stub for `/v1/messages`; lists the configured upstream model (opt-in via `proxy.enabled`) |
 | `GET` | `/agents` | Fleet snapshot: per-agent status, bindings, dispatch wiring |
 | `GET` | `/events` | Recent webhook events (time-windowed) |
 | `GET` | `/events/stream` | Live event firehose (SSE) |
