@@ -91,7 +91,7 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, 
   - `GET /memory/stream` — memory file change notifications (SSE).
   - `GET /config` — effective parsed config (secrets redacted).
   - `GET /ui/` — embedded web dashboard (Next.js static assets).
-  - `GET|POST /{resource}` and `GET|DELETE /{resource}/{name}` — SQLite CRUD endpoints (only registered when `--db` is set). Resources: `agents`, `skills`, `backends`, `repos` (repos use two-segment path: `repos/{owner}/{repo}`).
+  - `GET|POST /{resource}` and `GET|DELETE /{resource}/{name}` — SQLite CRUD endpoints (only registered when `--db` is set). Resources for `GET` list: `skills`, `backends`, `repos` (repos use two-segment path: `repos/{owner}/{repo}`). Note: `GET /agents` always returns the live fleet snapshot — not the CRUD list. `POST /agents` and `GET|DELETE /agents/{name}` are CRUD endpoints for agents.
   - `GET /export`, `POST /import` — export/import fleet config as YAML (only with `--db`).
 - Supported webhook events: `issues.*` (labeled, opened, edited, reopened, closed), `pull_request.*` (labeled, opened, synchronize, ready_for_review, closed), `issue_comment.created`, `pull_request_review.submitted`, `pull_request_review_comment.created`, `push` (branches only). Label-triggered routing uses `payload.label.name`. Non-label `events:` subscriptions match the event kind exactly. Draft PRs skip `pull_request.labeled`.
 - Internal event kinds (not from webhooks): `agents.run` (on-demand trigger from `POST /run` or `--run-agent`), `agent.dispatch` (inter-agent dispatch), `autonomous` (cron scheduler).

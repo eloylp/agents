@@ -410,7 +410,7 @@ An optional SQLite-backed config store lets you manage the fleet over the API in
 ./agents --db agents.db
 ```
 
-When started with `--db`, the daemon registers CRUD endpoints for each resource type (`/agents`, `/skills`, `/backends`, `/repos`) and auto-reloads cron schedules after any repo or agent write. Agent memory is also stored in SQLite instead of the filesystem. The YAML path remains fully supported — both modes are first-class.
+When started with `--db`, the daemon registers CRUD endpoints for `/skills`, `/backends`, and `/repos`. For `/agents`, `POST /agents` and `GET|DELETE /agents/{name}` are CRUD write endpoints, but `GET /agents` always returns the live fleet snapshot (not the stored agent list). The daemon auto-reloads cron schedules after any repo or agent write. Agent memory is also stored in SQLite instead of the filesystem. The YAML path remains fully supported — both modes are first-class.
 
 ### On-demand agent pass
 
@@ -500,9 +500,9 @@ GitHub sends a ping immediately; the daemon will log the delivery.
 | `GET` | `/memory/stream` | Memory file change notifications (SSE) |
 | `GET` | `/config` | Effective parsed config (secrets redacted) |
 | `GET` | `/ui/` | Built-in web dashboard (static assets; embedded in binary) |
-| `GET` | `/{resource}` | List all entries for a resource type (`agents`, `skills`, `backends`, `repos`). Only registered when `--db` is set. |
+| `GET` | `/{resource}` | List all entries for a resource type (`skills`, `backends`, `repos`). Only registered when `--db` is set. (`GET /agents` is the fleet snapshot above, not the CRUD list.) |
 | `GET` | `/{resource}/{name}` | Fetch one entry. Repos use two path segments: `/repos/{owner}/{repo}`. Only with `--db`. |
-| `POST` | `/{resource}` | Create or replace an entry (write API; requires `--db`). |
+| `POST` | `/{resource}` | Create or replace an entry (write API; requires `--db`). Resources: `agents`, `skills`, `backends`, `repos`. |
 | `DELETE` | `/{resource}/{name}` | Remove an entry (requires `--db`). |
 | `GET` | `/export` | Export full fleet config as YAML (requires `--db`). |
 | `POST` | `/import` | Import a YAML config into the SQLite store (requires `--db`). |
