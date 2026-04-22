@@ -136,7 +136,6 @@ processor:
   event_queue_buffer: 256
 
 agents_dir: "./agents"
-memory_dir: "/var/lib/agents/memory"
 
 prompts:
   issue_refinement:
@@ -225,7 +224,7 @@ Skip if the label already exists (exit code 1 with "already exists" message is f
 
 Start the daemon in the background for a quick health check:
 ```
-go build -o ./agents-bin ./cmd/agents && ./agents-bin --config config.yaml &
+go build -o ./agents-bin ./cmd/agents && ./agents-bin --db agents.db --import config.yaml &
 sleep 2
 curl -s http://localhost:8080/status
 ```
@@ -243,6 +242,6 @@ Once all phases succeed, print a summary:
 - Which agents were created and what labels trigger them
 - Any scheduled autonomous agents and their cron schedules
 - The public webhook URL
-- How to start the daemon: `agents --config config.yaml` or via Docker
+- How to start the daemon: `agents --db agents.db` or via Docker
 
 Congratulate the user and let them know they can trigger agents by applying labels to issues and PRs.
