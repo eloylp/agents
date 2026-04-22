@@ -34,7 +34,7 @@ The dispatched agent receives an `agent.dispatch` event with these payload field
 | `dispatch_depth` | How many hops deep in the chain this invocation is |
 | `invoked_by` | Name of the agent that dispatched this run |
 
-## Safety limits (`daemon.dispatch`)
+## Safety limits (`daemon.processor.dispatch`)
 
 | Field | Default | Meaning |
 |-------|---------|---------|

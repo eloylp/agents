@@ -31,13 +31,10 @@ daemon:
   processor:
     event_queue_buffer: 256
     max_concurrent_agents: 4                # cap on per-event fan-out
-
-  dispatch:
-    max_depth: 3                            # max chain length before drop + WARN
-    max_fanout: 4                           # max dispatches per single agent run
-    dedup_window_seconds: 300               # suppress duplicate (target, repo, number) within window
-
-  memory_dir: /var/lib/agents/memory        # persistent autonomous agent memory
+    dispatch:
+      max_depth: 3                          # max chain length before drop + WARN
+      max_fanout: 4                         # max dispatches per single agent run
+      dedup_window_seconds: 300             # suppress duplicate (target, repo, number) within window
 
   ai_backends:
     claude:
@@ -190,4 +187,4 @@ An optional SQLite-backed config store lets you manage the fleet over the API in
 ./agents --db agents.db
 ```
 
-The CRUD endpoints for `/skills`, `/backends`, and `/repos` are always mounted but require `--db` to function -- without it they return errors. For `/agents`, `POST /agents` and `GET|DELETE /agents/{name}` are CRUD write endpoints, but `GET /agents` always returns the live fleet snapshot (not the stored agent list). The daemon auto-reloads cron schedules after any repo or agent write. Agent memory is also stored in SQLite instead of the filesystem. The YAML path remains fully supported -- both modes are first-class.
+The CRUD endpoints for `/skills`, `/backends`, and `/repos` are always mounted but require `--db` to function -- without it they return errors. For `/agents`, `POST /agents` and `GET|DELETE /agents/{name}` are CRUD write endpoints, but `GET /agents` always returns the live fleet snapshot (not the stored agent list). The daemon auto-reloads cron schedules after any repo or agent write. Agent memory is stored in the same SQLite database. The YAML path remains fully supported -- both modes are first-class.

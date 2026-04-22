@@ -74,7 +74,7 @@ The daemon is event-driven for label-based workflows and runs a cron scheduler f
 
 | Dependency | Purpose |
 |---|---|
-| **Go 1.22+** | Build the daemon |
+| **Go 1.25+** | Build the daemon |
 | **GitHub CLI** (`gh`) | Authenticated access used by the AI CLIs' GitHub MCP tools |
 | **AI CLI** (Claude Code and/or Codex) | The actual AI backend, with GitHub MCP server configured |
 
@@ -155,7 +155,7 @@ internal/
   ai/                       # Prompt composition + command-based CLI runner (per-backend env)
   anthropic_proxy/          # Built-in Anthropic-to-OpenAI translation proxy (opt-in)
   observe/                  # Observability store (events, traces, dispatch graph, SSE hubs)
-  autonomous/               # Cron scheduler + agent memory (filesystem or SQLite)
+  autonomous/               # Cron scheduler + agent memory (SQLite-backed)
   store/                    # SQLite-backed config store (--db mode): schema migrations, CRUD helpers
   workflow/                 # Event routing engine, single event queue, processor, inter-agent dispatcher
   webhook/                  # HTTP server, signature verification, delivery dedupe, CRUD API handlers

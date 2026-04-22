@@ -9,7 +9,7 @@ Repo-specific guidance for any coding agent (Claude Code, Codex, Cursor, Aider, 
 Agents can also invoke each other at runtime via the **reactive inter-agent dispatcher**: an agent returns `dispatch: [{agent, number, reason}]` in its response JSON, the daemon validates against per-agent whitelists and safety limits, then enqueues a synthetic `agent.dispatch` event that runs the target agent.
 
 Key numbers:
-- Language: **Go 1.24** (check `go.mod`).
+- Language: **Go 1.25** (check `go.mod`).
 - Binary entrypoint: `cmd/agents/main.go`.
 - Single-binary deployment; no required runtime dependencies beyond the AI CLI and `gh`.
 
@@ -33,7 +33,7 @@ internal/
   ai/                           # prompt composition + CLI runner (supports per-backend env overrides)
   anthropic_proxy/              # built-in Anthropic Messages ↔ OpenAI Chat Completions translation
   observe/                      # observability store: events, traces, dispatch graph, SSE hubs
-  autonomous/                   # cron scheduler + agent memory (filesystem or SQLite)
+  autonomous/                   # cron scheduler + agent memory (SQLite-backed)
   store/                        # SQLite-backed config store (--db mode): Open, Import, Load, CRUD
   workflow/                     # event routing engine (single event queue), processor, dispatcher
   webhook/                      # HTTP server, HMAC signature verification, delivery dedupe, CRUD API handlers
@@ -76,7 +76,7 @@ These constraints are load-bearing. Read them before changing the listed areas.
 - **The runner contract is stdin-in, single-JSON-object-out.**
   - `internal/ai/cmdrunner.go` sends the composed prompt on stdin and parses the last top-level JSON object from stdout.
   - Agents emit `{"summary": "...", "artifacts": [...], "dispatch": [...], "memory": "..."}`. `dispatch` and `memory` are optional fields but all four keys are present in the schema. A missing JSON object, an empty response, or a response where `summary`, `artifacts`, and `dispatch` are all empty fails the run with a clear error.
-  - `memory` is the agent's full updated memory state. The daemon writes it back to the store (filesystem or SQLite) after each autonomous run. An empty string clears the memory. Event-driven runs do not receive or persist memory.
+  - `memory` is the agent's full updated memory state. The daemon writes it back to the SQLite store after each autonomous run. An empty string clears the memory. Event-driven runs do not receive or persist memory.
   - Small prose outputs with no JSON are an agent-prompt issue, not a runner bug — don't relax the parser to cover them; fix the prompt.
 - **Subprocess env is filtered.** `internal/ai/cmdrunner.go::allowCommandEnvKey` is an explicit allowlist. When adding a new env-var-driven integration, add the variable to the allowlist **and** document why (see `ANTHROPIC_BASE_URL` / `OPENAI_*` for precedent).
 - **Backend config supports per-backend `env` overrides.** When introducing a feature that requires environment variables for a specific backend, use the `AIBackendConfig.Env` map instead of the global container env — it keeps the container config clean and lets users define multiple backends pointing at different endpoints with the same CLI.
@@ -113,11 +113,11 @@ When making common classes of changes, update all of these at once:
 
 - **`.env` is auto-loaded on startup** (`godotenv.Load()`). Required runtime secret: `GITHUB_WEBHOOK_SECRET`. Optional: `LOG_SALT`.
 - **Config is read once at daemon startup.** Changing `config.yaml` or any `prompt_file` / skill file requires a daemon restart. If you're testing prompt changes interactively, expect to `docker compose restart agents`.
-- **Autonomous agent memory** lives under `daemon.memory_dir` (default `/var/lib/agents/memory`), as one markdown file per `(agent, repo)` pair. It's the agent's job to update it in its response; the daemon just reads/writes the file unchanged.
+- **Autonomous agent memory** is stored in SQLite when `--db` is set (in the `memory` table), keyed by `(agent, repo)`. It's the agent's job to return updated memory in its response; the daemon writes it back to the store unchanged.
 - **Dispatch dedup is process-local and in-memory.** It's shared across cron-fired runs, event-fired runs, and `--run-agent` invocations within one process. Restarting the daemon clears the dedup state.
 - **`--run-agent` drains dispatch chains synchronously.** When invoking an agent on demand via the CLI flag, the process waits for the originating agent and all dispatched children to finish before exiting. The in-memory event queue is sized to hold `MaxFanout^MaxDepth` events so deep chains don't silently drop.
 - **Avoid `--no-verify` on commits.** Pre-commit hooks exist for a reason. If a hook fails, fix the underlying issue.
-- **The `expose: 8080` in `docker-compose.yml` is deliberate** — the daemon port is only reachable inside the docker network (via `traefik` at the labelled host). Don't publish it publicly by default.
+- **The `ports: "8080:8080"` in `docker-compose.yaml`** publishes the daemon port on the host. In production, consider restricting access via a reverse proxy (e.g. Traefik with basic auth) or binding to `127.0.0.1:8080:8080`.
 
 ## Common anti-patterns to avoid
 

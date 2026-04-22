@@ -13,7 +13,7 @@ internal/
   ai/                       # Prompt composition + command-based CLI runner (per-backend env)
   anthropic_proxy/          # Built-in Anthropic↔OpenAI Chat Completions translation proxy
   observe/                  # Observability store: events, traces, dispatch graph, SSE hubs
-  autonomous/               # Cron scheduler + agent memory (filesystem or SQLite)
+  autonomous/               # Cron scheduler + agent memory (SQLite-backed)
   store/                    # SQLite-backed config store (--db mode): Open, Import, Load, CRUD
   workflow/                 # Event routing engine, single event queue, processor, dispatcher
   webhook/                  # HTTP server, HMAC verification, delivery dedupe, CRUD API handlers
@@ -29,7 +29,7 @@ docs/                       # Long-form docs: configuration, events, dispatch, A
 
 The config file has four top-level domains:
 
-- `daemon` — log, http, processor (incl. `dispatch` safety limits), memory_dir, ai_backends, optional `proxy` block
+- `daemon` — log, http, processor (incl. `dispatch` safety limits), ai_backends, optional `proxy` block
 - `skills` — map of reusable guidance blocks, keyed by name (inline or `prompt_file:`)
 - `agents` — list of named capabilities (backend + skills + prompt, optional `allow_prs` / `allow_dispatch` / `can_dispatch` / `description`)
 - `repos` — list of repos and their `use[]` bindings (which agents run, and with what triggers)
@@ -98,7 +98,7 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, 
 - Duplicate webhook suppression via `X-GitHub-Delivery` TTL cache.
 - Workflow execution is stateless in-process. Only autonomous agents persist memory (per-agent, per-repo).
 - Memory is delivered to the agent as part of its prompt context, and the agent returns its full updated memory in the `memory` field of the JSON response. The daemon writes the value back to the store after the run. An empty string clears the memory. Event-driven runs (webhook events, label triggers) do not receive or persist memory.
-- Memory backend: filesystem by default (one Markdown file per `(agent, repo)` pair under `daemon.memory_dir`), or SQLite when `--db` is set (stored in the `memory` table of the SQLite database).
+- Memory backend: SQLite (stored in the `memory` table alongside config data).
 - Backend resolution: agents declare `backend: claude | codex | auto`. `auto` picks the first configured backend in preference order (claude > codex).
 - Per-backend env overrides (`daemon.ai_backends.<name>.env`) let two backends run the same CLI with different endpoints — e.g. a default `claude` backend on hosted Anthropic plus a `claude_local` backend that routes the CLI via `ANTHROPIC_BASE_URL` through the built-in proxy to a local model. See [`docs/local-models.md`](docs/local-models.md).
 - **Reactive inter-agent dispatch**: agents can return a `dispatch: [{agent, number, reason}]` array in their JSON response to invoke other agents. Enqueued as synthetic `agent.dispatch` events. Target must opt in via `allow_dispatch: true`; originator must whitelist targets in `can_dispatch: [...]`. Safety limits (`daemon.processor.dispatch.{max_depth, max_fanout, dedup_window_seconds}`) prevent cascade storms and duplicate invocations. The originating agent's prompt receives an `## Available experts` roster listing dispatchable targets.

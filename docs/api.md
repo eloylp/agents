@@ -87,4 +87,4 @@ The daemon spawns the configured CLI, sends the composed prompt on **stdin**, an
 
 The metadata is used for observability, logging, and run summaries. Agents that don't post anything still return an empty `artifacts: []`. The `dispatch` field is optional -- omit it or leave it empty when the agent does not need to invoke another agent. See [dispatch.md](dispatch.md) for the full contract.
 
-The `memory` field is how autonomous agents persist state across scheduled runs. The daemon reads the stored memory before each autonomous run and writes the `memory` value from the response back to the store (filesystem or SQLite depending on how the daemon was started). An empty string clears the memory. Event-driven runs (webhooks, label triggers) do not receive or persist memory.
+The `memory` field is how autonomous agents persist state across scheduled runs. The daemon reads the stored memory before each autonomous run and writes the `memory` value from the response back to the SQLite store. An empty string clears the memory. Event-driven runs (webhooks, label triggers) do not receive or persist memory.
