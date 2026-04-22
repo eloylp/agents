@@ -2,10 +2,10 @@
 //
 // The config file is structured in three top-level sections:
 //
-//   daemon — how the service runs (logging, HTTP, queues, AI backends)
-//   skills — reusable guidance blocks referenced by agents
-//   agents — named capabilities (backend + skills + prompt)
-//   repos  — wiring: which agents run on which repo, and when
+//	daemon — how the service runs (logging, HTTP, queues, AI backends)
+//	skills — reusable guidance blocks referenced by agents
+//	agents — named capabilities (backend + skills + prompt)
+//	repos  — wiring: which agents run on which repo, and when
 //
 // See config.example.yaml for a complete annotated example.
 package config
@@ -22,29 +22,28 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// validAIBackendNames is the canonical ordered list of supported AI backend
-// names. Preference order for the "auto" backend resolution follows slice
-// order. Adding a new backend only requires updating this slice.
-var validAIBackendNames = []string{"claude", "codex"}
+// validAIBackendNames is the canonical list of supported AI backend names.
+// Adding a new backend only requires updating this slice.
+var validAIBackendNames = []string{"claude", "codex", "claude_local"}
 
 // validEventKinds is the set of event kind strings accepted in the events:
 // binding field. It must be kept in sync with the kinds emitted by the webhook
 // server handlers.
 var validEventKinds = map[string]struct{}{
-	"issues.labeled":              {},
-	"issues.opened":               {},
-	"issues.edited":               {},
-	"issues.reopened":             {},
-	"issues.closed":               {},
-	"pull_request.labeled":        {},
-	"pull_request.opened":         {},
-	"pull_request.synchronize":    {},
-	"pull_request.ready_for_review": {},
-	"pull_request.closed":         {},
-	"issue_comment.created":       {},
-	"pull_request_review.submitted":         {},
-	"pull_request_review_comment.created":   {},
-	"push":                                  {},
+	"issues.labeled":                      {},
+	"issues.opened":                       {},
+	"issues.edited":                       {},
+	"issues.reopened":                     {},
+	"issues.closed":                       {},
+	"pull_request.labeled":                {},
+	"pull_request.opened":                 {},
+	"pull_request.synchronize":            {},
+	"pull_request.ready_for_review":       {},
+	"pull_request.closed":                 {},
+	"issue_comment.created":               {},
+	"pull_request_review.submitted":       {},
+	"pull_request_review_comment.created": {},
+	"push":                                {},
 }
 
 // validEventKindsSorted is a precomputed, sorted list of validEventKinds keys
@@ -97,8 +96,8 @@ type DaemonConfig struct {
 // ProxyConfig controls the built-in Anthropic↔OpenAI translation proxy.
 // When Enabled is false (the default) no additional route is mounted.
 type ProxyConfig struct {
-	Enabled  bool              `yaml:"enabled"`
-	Path     string            `yaml:"path"`
+	Enabled  bool                `yaml:"enabled"`
+	Path     string              `yaml:"path"`
 	Upstream ProxyUpstreamConfig `yaml:"upstream"`
 }
 
@@ -161,18 +160,23 @@ type DispatchConfig struct {
 
 // AIBackendConfig describes how to invoke a CLI-based AI backend.
 //
-// Env is merged on top of the inherited subprocess environment (after the
-// daemon's allowlist is applied). Typical use: route the claude CLI through
-// a local OpenAI-compatible endpoint by setting
-// ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY / ANTHROPIC_MODEL here, without
-// touching the global container env.
+// LocalModelURL, when set, routes the CLI through the built-in translation
+// proxy by injecting ANTHROPIC_BASE_URL into the subprocess environment.
 type AIBackendConfig struct {
-	Command          string            `yaml:"command"`
-	Args             []string          `yaml:"args"`
-	Env              map[string]string `yaml:"env"`
-	TimeoutSeconds   int               `yaml:"timeout_seconds"`
-	MaxPromptChars   int               `yaml:"max_prompt_chars"`
-	RedactionSaltEnv string            `yaml:"redaction_salt_env"`
+	Command          string   `yaml:"command"`
+	Version          string   `yaml:"version"`
+	Models           []string `yaml:"models"`
+	Healthy          bool     `yaml:"healthy"`
+	HealthDetail     string   `yaml:"health_detail"`
+	LocalModelURL    string   `yaml:"local_model_url"`
+	TimeoutSeconds   int      `yaml:"timeout_seconds"`
+	MaxPromptChars   int      `yaml:"max_prompt_chars"`
+	RedactionSaltEnv string   `yaml:"redaction_salt_env"`
+
+	// Args and Env are retained for backward-compatible YAML import only.
+	// They are ignored at runtime.
+	Args []string          `yaml:"args,omitempty"`
+	Env  map[string]string `yaml:"env,omitempty"`
 }
 
 // SkillDef is a reusable block of guidance that agents can compose.
@@ -189,6 +193,7 @@ type SkillDef struct {
 type AgentDef struct {
 	Name       string   `yaml:"name"`
 	Backend    string   `yaml:"backend"`
+	Model      string   `yaml:"model"`
 	Skills     []string `yaml:"skills"`
 	Prompt     string   `yaml:"prompt"`
 	PromptFile string   `yaml:"prompt_file"`
@@ -251,7 +256,7 @@ func (b Binding) IsEvent() bool { return len(b.Events) > 0 }
 // committed to the database.
 //
 // Specifically it verifies:
-//   - every agent references a known backend (unless "auto") and known skills
+//   - every agent references a known backend and known skills
 //   - dispatch wiring (can_dispatch) references existing agents with descriptions
 //   - every repo binding references a known agent
 func ValidateCrossRefs(agents []AgentDef, repos []RepoDef, skills map[string]SkillDef, backends map[string]AIBackendConfig) error {
@@ -262,10 +267,14 @@ func ValidateCrossRefs(agents []AgentDef, repos []RepoDef, skills map[string]Ski
 
 	// Validate agent → backend and skill references.
 	for _, a := range agents {
-		if a.Backend != "auto" {
-			if _, ok := backends[a.Backend]; !ok {
-				return fmt.Errorf("config: agent %q: unknown backend %q", a.Name, a.Backend)
-			}
+		if a.Backend == "" {
+			return fmt.Errorf("config: agent %q: backend is required", a.Name)
+		}
+		if _, ok := backends[a.Backend]; !ok {
+			return fmt.Errorf("config: agent %q: unknown backend %q", a.Name, a.Backend)
+		}
+		if err := validateAgentModel(a.Name, a.Model, backends[a.Backend]); err != nil {
+			return err
 		}
 		for _, s := range a.Skills {
 			if _, ok := skills[s]; !ok {
@@ -351,10 +360,14 @@ func ValidateEntities(agents []AgentDef, repos []RepoDef, skills map[string]Skil
 			return fmt.Errorf("config: duplicate agent name %q", a.Name)
 		}
 		seen[a.Name] = struct{}{}
-		if a.Backend != "auto" {
-			if _, ok := backends[a.Backend]; !ok {
-				return fmt.Errorf("config: agent %q: unknown backend %q", a.Name, a.Backend)
-			}
+		if a.Backend == "" {
+			return fmt.Errorf("config: agent %q: backend is required", a.Name)
+		}
+		if _, ok := backends[a.Backend]; !ok {
+			return fmt.Errorf("config: agent %q: unknown backend %q", a.Name, a.Backend)
+		}
+		if err := validateAgentModel(a.Name, a.Model, backends[a.Backend]); err != nil {
+			return err
 		}
 		for _, s := range a.Skills {
 			if _, ok := skills[s]; !ok {
@@ -490,25 +503,13 @@ func (c *Config) AgentByName(name string) (AgentDef, bool) {
 	return AgentDef{}, false
 }
 
-// DefaultBackend returns the first configured backend from validAIBackendNames.
-// Used when an agent specifies backend: "auto" or leaves it empty.
-func (c *Config) DefaultBackend() string {
-	for _, name := range validAIBackendNames {
-		if _, ok := c.Daemon.AIBackends[name]; ok {
-			return name
-		}
-	}
-	return ""
-}
-
 // ResolveBackend returns the concrete backend name for the given agent
-// configuration value. "auto" or empty resolves to the default configured
-// backend; an explicit name is returned as-is if it is present in
-// ai_backends. Returns "" if the name is explicit but not configured.
+// configuration value. The backend must be explicitly configured; empty
+// or unknown names return "".
 func (c *Config) ResolveBackend(configured string) string {
 	configured = strings.ToLower(strings.TrimSpace(configured))
-	if configured == "" || configured == "auto" {
-		return c.DefaultBackend()
+	if configured == "" {
+		return ""
 	}
 	if _, ok := c.Daemon.AIBackends[configured]; !ok {
 		return ""
@@ -552,13 +553,6 @@ func (c *Config) applyDefaults() {
 		c.Daemon.AIBackends[name] = backend
 	}
 
-	// agents: default backend to "auto" when empty
-	for i := range c.Agents {
-		if strings.TrimSpace(c.Agents[i].Backend) == "" {
-			c.Agents[i].Backend = "auto"
-		}
-	}
-
 	// repos: default enabled to true when field absent is ambiguous; YAML
 	// zero-value is false. We leave it as-is — absent means false here,
 	// because repos are an explicit allow-list.
@@ -571,6 +565,9 @@ func (c *Config) normalize() {
 		for name, backend := range c.Daemon.AIBackends {
 			key := strings.ToLower(strings.TrimSpace(name))
 			backend.Command = strings.TrimSpace(backend.Command)
+			backend.Version = strings.TrimSpace(backend.Version)
+			backend.HealthDetail = strings.TrimSpace(backend.HealthDetail)
+			backend.LocalModelURL = strings.TrimSpace(backend.LocalModelURL)
 			if len(backend.Env) > 0 {
 				cleaned := make(map[string]string, len(backend.Env))
 				for k, v := range backend.Env {
@@ -581,6 +578,9 @@ func (c *Config) normalize() {
 					cleaned[k] = v
 				}
 				backend.Env = cleaned
+			}
+			for i := range backend.Models {
+				backend.Models[i] = strings.TrimSpace(backend.Models[i])
 			}
 			lower[key] = backend
 		}
@@ -603,6 +603,7 @@ func (c *Config) normalize() {
 	for i := range c.Agents {
 		c.Agents[i].Name = strings.ToLower(strings.TrimSpace(c.Agents[i].Name))
 		c.Agents[i].Backend = strings.ToLower(strings.TrimSpace(c.Agents[i].Backend))
+		c.Agents[i].Model = strings.TrimSpace(c.Agents[i].Model)
 		c.Agents[i].Prompt = strings.TrimSpace(c.Agents[i].Prompt)
 		c.Agents[i].PromptFile = strings.TrimSpace(c.Agents[i].PromptFile)
 		c.Agents[i].Description = strings.TrimSpace(c.Agents[i].Description)
@@ -802,10 +803,14 @@ func (c *Config) validateAgents() error {
 		}
 		seen[a.Name] = struct{}{}
 
-		if a.Backend != "auto" {
-			if _, ok := c.Daemon.AIBackends[a.Backend]; !ok {
-				return fmt.Errorf("config: agent %q: unknown backend %q", a.Name, a.Backend)
-			}
+		if a.Backend == "" {
+			return fmt.Errorf("config: agent %q: backend is required", a.Name)
+		}
+		if _, ok := c.Daemon.AIBackends[a.Backend]; !ok {
+			return fmt.Errorf("config: agent %q: unknown backend %q", a.Name, a.Backend)
+		}
+		if err := validateAgentModel(a.Name, a.Model, c.Daemon.AIBackends[a.Backend]); err != nil {
+			return err
 		}
 		for _, s := range a.Skills {
 			if _, ok := c.Skills[s]; !ok {
@@ -821,9 +826,9 @@ func (c *Config) validateAgents() error {
 }
 
 // validateDispatchWiring checks cross-agent dispatch references:
-//  - can_dispatch entries must reference real agents in this config
-//  - can_dispatch must not include the agent itself
-//  - agents referenced in any can_dispatch list must have a description
+//   - can_dispatch entries must reference real agents in this config
+//   - can_dispatch must not include the agent itself
+//   - agents referenced in any can_dispatch list must have a description
 func (c *Config) validateDispatchWiring() error {
 	// Build set of all agent names for O(1) lookup.
 	agentNames := make(map[string]struct{}, len(c.Agents))
@@ -913,6 +918,20 @@ func isValidBackendName(name string) bool {
 	return slices.Contains(validAIBackendNames, name)
 }
 
+func validateAgentModel(agentName, model string, backend AIBackendConfig) error {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return nil
+	}
+	if len(backend.Models) == 0 {
+		return nil
+	}
+	if slices.Contains(backend.Models, model) {
+		return nil
+	}
+	return fmt.Errorf("config: agent %q: model %q is not available for backend (available: %s)", agentName, model, strings.Join(backend.Models, ", "))
+}
+
 // ApplyBackendDefaults fills in zero-value fields of b with the same defaults
 // that Load / FinishLoad apply at startup. Callers that persist a backend via
 // the CRUD API should call this before writing so that the stored values match
@@ -929,6 +948,9 @@ func ApplyBackendDefaults(b *AIBackendConfig) {
 // at boot, preventing live behavior from diverging until a restart.
 func NormalizeBackendConfig(b *AIBackendConfig) {
 	b.Command = strings.TrimSpace(b.Command)
+	b.Version = strings.TrimSpace(b.Version)
+	b.HealthDetail = strings.TrimSpace(b.HealthDetail)
+	b.LocalModelURL = strings.TrimSpace(b.LocalModelURL)
 	if len(b.Env) > 0 {
 		cleaned := make(map[string]string, len(b.Env))
 		for k, v := range b.Env {
@@ -939,6 +961,9 @@ func NormalizeBackendConfig(b *AIBackendConfig) {
 			cleaned[k] = v
 		}
 		b.Env = cleaned
+	}
+	for i := range b.Models {
+		b.Models[i] = strings.TrimSpace(b.Models[i])
 	}
 }
 
@@ -959,6 +984,7 @@ func NormalizeSkillDef(s *SkillDef) {
 func NormalizeAgentDef(a *AgentDef) {
 	a.Name = strings.ToLower(strings.TrimSpace(a.Name))
 	a.Backend = strings.ToLower(strings.TrimSpace(a.Backend))
+	a.Model = strings.TrimSpace(a.Model)
 	a.Prompt = strings.TrimSpace(a.Prompt)
 	a.PromptFile = strings.TrimSpace(a.PromptFile)
 	a.Description = strings.TrimSpace(a.Description)

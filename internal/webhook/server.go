@@ -52,7 +52,6 @@ type DispatchStatsProvider interface {
 	DispatchStats() workflow.DispatchStats
 }
 
-
 // RuntimeStateProvider reports whether a named agent currently has an in-flight run.
 // The implementation is optional; passing nil causes all agents to report "idle".
 type RuntimeStateProvider interface {
@@ -216,21 +215,24 @@ func (s *Server) buildHandler() http.Handler {
 	router.Handle("/skills/{name}", withTimeout(http.HandlerFunc(s.handleStoreSkill))).Methods(http.MethodGet, http.MethodDelete)
 
 	router.Handle("/backends", withTimeout(http.HandlerFunc(s.handleStoreBackends))).Methods(http.MethodGet, http.MethodPost)
+	router.Handle("/backends/status", withTimeout(http.HandlerFunc(s.handleBackendsStatus))).Methods(http.MethodGet)
+	router.Handle("/backends/discover", withTimeout(http.HandlerFunc(s.handleBackendsDiscover))).Methods(http.MethodPost)
+	router.Handle("/backends/local", withTimeout(http.HandlerFunc(s.handleBackendsLocal))).Methods(http.MethodPost)
 	router.Handle("/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackend))).Methods(http.MethodGet, http.MethodDelete)
 
 	router.Handle("/repos", withTimeout(http.HandlerFunc(s.handleStoreRepos))).Methods(http.MethodGet, http.MethodPost)
 	router.Handle("/repos/{owner}/{repo}", withTimeout(http.HandlerFunc(s.handleStoreRepo))).Methods(http.MethodGet, http.MethodDelete)
 
 	router.Handle("/events", withTimeout(http.HandlerFunc(s.handleAPIEvents))).Methods(http.MethodGet)
-	router.HandleFunc("/events/stream", s.handleAPIEventsStream)           // SSE — no timeout
+	router.HandleFunc("/events/stream", s.handleAPIEventsStream) // SSE — no timeout
 	router.Handle("/traces", withTimeout(http.HandlerFunc(s.handleAPITraces))).Methods(http.MethodGet)
-	router.HandleFunc("/traces/stream", s.handleAPITracesStream)                                                        // SSE — no timeout
+	router.HandleFunc("/traces/stream", s.handleAPITracesStream) // SSE — no timeout
 	router.Handle("/traces/{root_event_id}", withTimeout(http.HandlerFunc(s.handleAPITrace))).Methods(http.MethodGet)
 	router.Handle("/traces/{span_id}/steps", withTimeout(http.HandlerFunc(s.handleAPITraceSteps))).Methods(http.MethodGet)
 	router.Handle("/graph", withTimeout(http.HandlerFunc(s.handleAPIGraph))).Methods(http.MethodGet)
 	router.Handle("/dispatches", withTimeout(http.HandlerFunc(s.handleAPIDispatches))).Methods(http.MethodGet)
 	router.Handle("/memory/{agent}/{repo}", withTimeout(http.HandlerFunc(s.handleAPIMemory))).Methods(http.MethodGet)
-	router.HandleFunc("/memory/stream", s.handleAPIMemoryStream)           // SSE — no timeout
+	router.HandleFunc("/memory/stream", s.handleAPIMemoryStream) // SSE — no timeout
 	router.Handle("/config", withTimeout(http.HandlerFunc(s.handleAPIConfig))).Methods(http.MethodGet)
 	router.Handle("/export", withTimeout(http.HandlerFunc(s.handleStoreExport))).Methods(http.MethodGet)
 	router.Handle("/import", withTimeout(http.HandlerFunc(s.handleStoreImport))).Methods(http.MethodPost)
@@ -487,11 +489,11 @@ type webhookReview struct {
 func (s *Server) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
 	cfg := s.loadCfg()
 	var payload struct {
-		Action     string             `json:"action"`
-		Label      webhookLabel       `json:"label"`
-		Issue      webhookIssue       `json:"issue"`
-		Repository webhookRepository  `json:"repository"`
-		Sender     webhookSender      `json:"sender"`
+		Action     string            `json:"action"`
+		Label      webhookLabel      `json:"label"`
+		Issue      webhookIssue      `json:"issue"`
+		Repository webhookRepository `json:"repository"`
+		Sender     webhookSender     `json:"sender"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)

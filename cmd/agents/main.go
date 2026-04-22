@@ -17,6 +17,7 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/autonomous"
+	"github.com/eloylp/agents/internal/backends"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/logging"
 	"github.com/eloylp/agents/internal/observe"
@@ -71,7 +72,7 @@ func run() error {
 	// setup, so the two paths stay in sync automatically.
 	scheduler.WithRunnerBuilder(func(name string, b config.AIBackendConfig) ai.Runner {
 		return ai.NewCommandRunner(
-			name, "command", b.Command, b.Args, b.Env,
+			name, "command", b.Command, backendEnvOverrides(b),
 			b.TimeoutSeconds, b.MaxPromptChars, b.RedactionSaltEnv,
 			logger,
 		)
@@ -189,8 +190,7 @@ func setupRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runne
 			name,
 			"command",
 			backend.Command,
-			backend.Args,
-			backend.Env,
+			backendEnvOverrides(backend),
 			backend.TimeoutSeconds,
 			backend.MaxPromptChars,
 			backend.RedactionSaltEnv,
@@ -198,6 +198,15 @@ func setupRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runne
 		)
 	}
 	return runners
+}
+
+func backendEnvOverrides(b config.AIBackendConfig) map[string]string {
+	if b.LocalModelURL == "" {
+		return nil
+	}
+	return map[string]string{
+		"ANTHROPIC_BASE_URL": b.LocalModelURL,
+	}
 }
 
 func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, db *sql.DB, logger zerolog.Logger) (*autonomous.Scheduler, autonomous.MemoryBackend, error) {
@@ -282,6 +291,15 @@ func loadConfig(dbPath, importPath string) (*config.Config, *sql.DB, error) {
 		fmt.Fprintf(os.Stderr, "import: imported %d backends, %d skills, %d agents, %d repos, %d bindings\n",
 			len(yamlCfg.Daemon.AIBackends), len(yamlCfg.Skills),
 			len(yamlCfg.Agents), len(yamlCfg.Repos), nBindings)
+	}
+
+	autoDiscovered, _, err := backends.AutoDiscoverIfBackendsMissing(context.Background(), db)
+	if err != nil {
+		db.Close()
+		return nil, nil, fmt.Errorf("auto-discover backends: %w", err)
+	}
+	if autoDiscovered {
+		fmt.Fprintln(os.Stderr, "startup: discovered AI backends from local CLI tools")
 	}
 
 	cfg, err := store.LoadAndValidate(db)

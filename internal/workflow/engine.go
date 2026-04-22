@@ -56,9 +56,9 @@ type StepRecorder interface {
 // the runners just execute the resulting prompt.
 type Engine struct {
 	cfg           *config.Config
-	cfgMu         sync.RWMutex         // protects cfg during hot-reload
+	cfgMu         sync.RWMutex // protects cfg during hot-reload
 	runners       map[string]ai.Runner
-	runnersMu     sync.RWMutex         // protects runners during hot-reload
+	runnersMu     sync.RWMutex // protects runners during hot-reload
 	dispatcher    *Dispatcher
 	maxConcurrent int
 	logger        zerolog.Logger
@@ -562,6 +562,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef, 
 		Workflow: workflow,
 		Repo:     ev.Repo.FullName,
 		Number:   ev.Number,
+		Model:    agent.Model,
 		System:   rendered.System,
 		User:     rendered.User,
 	})

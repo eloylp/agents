@@ -8,6 +8,12 @@ type Config = Record<string, unknown>
 interface Backend {
   name: string
   command: string
+  version?: string
+  models?: string[]
+  healthy?: boolean
+  health_detail?: string
+  local_model_url?: string
+  detected?: boolean
   args: string[]
   env: Record<string, string>
   timeout_seconds: number
@@ -205,9 +211,9 @@ export default function ConfigPage() {
 
   const loadBackends = () => {
     setBackendsLoading(true)
-    fetch('/backends')
+    fetch('/backends/status')
       .then(r => r.json())
-      .then((data: Backend[]) => { setBackends(data); setBackendsLoading(false) })
+      .then((data: { backends?: Backend[] }) => { setBackends(data.backends ?? []); setBackendsLoading(false) })
       .catch(() => setBackendsLoading(false))
   }
 
@@ -247,6 +253,46 @@ export default function ConfigPage() {
         return
       }
       setModal(null)
+      loadBackends()
+    } catch (e) {
+      setSaveError(String(e))
+    }
+    setSaving(false)
+  }
+
+  const runDiscovery = async () => {
+    setSaving(true)
+    setSaveError('')
+    try {
+      const res = await fetch('/backends/discover', { method: 'POST' })
+      if (!res.ok) {
+        setSaveError((await res.text()) || 'Discovery failed')
+        setSaving(false)
+        return
+      }
+      loadBackends()
+    } catch (e) {
+      setSaveError(String(e))
+    }
+    setSaving(false)
+  }
+
+  const addLocalBackend = async () => {
+    const url = window.prompt('Local model URL (OpenAI-compatible endpoint):', 'http://localhost:8080/v1/messages')
+    if (!url) return
+    setSaving(true)
+    setSaveError('')
+    try {
+      const res = await fetch('/backends/local', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      })
+      if (!res.ok) {
+        setSaveError((await res.text()) || 'Local backend save failed')
+        setSaving(false)
+        return
+      }
       loadBackends()
     } catch (e) {
       setSaveError(String(e))
@@ -343,10 +389,16 @@ export default function ConfigPage() {
             </span>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
               <button
-                onClick={() => { setSaveError(''); setSelected({ ...emptyBackend }); setModal('create') }}
+                onClick={runDiscovery}
                 style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
               >
-                + Add backend
+                {saving ? 'Running…' : 'Run discovery'}
+              </button>
+              <button
+                onClick={addLocalBackend}
+                style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)', padding: '5px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem' }}
+              >
+                + Local backend
               </button>
               <button onClick={loadBackends} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-muted)', padding: '5px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem' }}>
                 Refresh
@@ -364,28 +416,16 @@ export default function ConfigPage() {
                   <div>
                     <div style={{ fontWeight: 700, color: 'var(--text-heading)' }}>{b.name}</div>
                     <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                      {b.command} {b.args.slice(0, 3).join(' ')}{b.args.length > 3 ? ' …' : ''} · {b.timeout_seconds}s · {b.max_prompt_chars} chars
+                      {b.command || 'not detected'}{b.version ? ` · ${b.version}` : ''}{b.local_model_url ? ' · local URL configured' : ''} · {b.healthy ? 'healthy' : 'unhealthy'}
                     </div>
-                    {Object.keys(b.env).length > 0 && (
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-faint)', marginTop: '2px' }}>
-                        env: {Object.keys(b.env).join(', ')}
-                      </div>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <button
-                      onClick={() => { setSaveError(''); setSelected(b); setModal('edit') }}
-                      style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--bg-card)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--accent)' }}
-                    >Edit</button>
-                    <button
-                      onClick={() => { setDeleteTarget(b.name); setSaveError(''); setModal('delete') }}
-                      style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--text-danger)' }}
-                    >Delete</button>
+                    {!!(b.models && b.models.length > 0) && <div style={{ fontSize: '0.75rem', color: 'var(--text-faint)', marginTop: '2px' }}>models: {b.models.join(', ')}</div>}
+                    {b.health_detail && <div style={{ fontSize: '0.75rem', color: 'var(--text-faint)', marginTop: '2px' }}>{b.health_detail}</div>}
                   </div>
                 </div>
               </div>
             ))}
           </div>
+          {saveError && <p style={{ color: 'var(--text-danger)', fontSize: '0.85rem', marginTop: '0.75rem' }}>{saveError}</p>}
         </Card>
       )}
 

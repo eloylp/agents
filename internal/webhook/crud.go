@@ -1,16 +1,20 @@
 package webhook
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"gopkg.in/yaml.v3"
 
+	"github.com/eloylp/agents/internal/backends"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/store"
 )
@@ -20,6 +24,7 @@ import (
 type storeAgentJSON struct {
 	Name          string   `json:"name"`
 	Backend       string   `json:"backend"`
+	Model         string   `json:"model,omitempty"`
 	Skills        []string `json:"skills"`
 	Prompt        string   `json:"prompt"`
 	AllowPRs      bool     `json:"allow_prs"`
@@ -32,6 +37,7 @@ func agentToStoreJSON(a config.AgentDef) storeAgentJSON {
 	return storeAgentJSON{
 		Name:          a.Name,
 		Backend:       a.Backend,
+		Model:         a.Model,
 		Skills:        nilSafeStrings(a.Skills),
 		Prompt:        a.Prompt,
 		AllowPRs:      a.AllowPRs,
@@ -45,6 +51,7 @@ func (j storeAgentJSON) toConfig() config.AgentDef {
 	return config.AgentDef{
 		Name:          j.Name,
 		Backend:       j.Backend,
+		Model:         j.Model,
 		Skills:        nilSafeStrings(j.Skills),
 		Prompt:        j.Prompt,
 		AllowPRs:      j.AllowPRs,
@@ -62,11 +69,20 @@ type storeSkillJSON struct {
 type storeBackendJSON struct {
 	Name             string            `json:"name"`
 	Command          string            `json:"command"`
+	Version          string            `json:"version,omitempty"`
+	Models           []string          `json:"models,omitempty"`
+	Healthy          bool              `json:"healthy"`
+	HealthDetail     string            `json:"health_detail,omitempty"`
+	LocalModelURL    string            `json:"local_model_url,omitempty"`
 	Args             []string          `json:"args"`
 	Env              map[string]string `json:"env"`
 	TimeoutSeconds   int               `json:"timeout_seconds"`
 	MaxPromptChars   int               `json:"max_prompt_chars"`
 	RedactionSaltEnv string            `json:"redaction_salt_env"`
+}
+
+type localBackendRequest struct {
+	URL string `json:"url"`
 }
 
 func backendToStoreJSON(name string, b config.AIBackendConfig) storeBackendJSON {
@@ -81,6 +97,11 @@ func backendToStoreJSON(name string, b config.AIBackendConfig) storeBackendJSON 
 	return storeBackendJSON{
 		Name:             name,
 		Command:          b.Command,
+		Version:          b.Version,
+		Models:           nilSafeStrings(b.Models),
+		Healthy:          b.Healthy,
+		HealthDetail:     b.HealthDetail,
+		LocalModelURL:    b.LocalModelURL,
 		Args:             nilSafeStrings(b.Args),
 		Env:              redactedEnv,
 		TimeoutSeconds:   b.TimeoutSeconds,
@@ -92,6 +113,11 @@ func backendToStoreJSON(name string, b config.AIBackendConfig) storeBackendJSON 
 func (j storeBackendJSON) toConfig() config.AIBackendConfig {
 	return config.AIBackendConfig{
 		Command:          j.Command,
+		Version:          j.Version,
+		Models:           nilSafeStrings(j.Models),
+		Healthy:          j.Healthy,
+		HealthDetail:     j.HealthDetail,
+		LocalModelURL:    j.LocalModelURL,
 		Args:             nilSafeStrings(j.Args),
 		Env:              j.Env,
 		TimeoutSeconds:   j.TimeoutSeconds,
@@ -497,6 +523,103 @@ func (s *Server) handleStoreBackends(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleBackendsStatus serves GET /backends/status with live diagnostics.
+func (s *Server) handleBackendsStatus(w http.ResponseWriter, r *http.Request) {
+	existing, err := store.ReadBackends(s.db)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
+		return
+	}
+	diag := backends.RunDiagnostics(r.Context(), existing)
+	writeJSON(w, http.StatusOK, diag)
+}
+
+// handleBackendsDiscover serves POST /backends/discover. It reruns discovery,
+// persists backend metadata, and hot-reloads the in-memory config.
+func (s *Server) handleBackendsDiscover(w http.ResponseWriter, r *http.Request) {
+	s.storeMu.Lock()
+	diag, err := backends.DiscoverAndPersist(r.Context(), s.db)
+	if err == nil {
+		err = s.reloadCron()
+	}
+	s.storeMu.Unlock()
+	if err != nil {
+		status := storeErrStatus(err)
+		s.logger.Error().Err(err).Msg("backend discovery failed")
+		http.Error(w, fmt.Sprintf("backend discovery: %v", err), status)
+		return
+	}
+	writeJSON(w, http.StatusOK, diag)
+}
+
+// handleBackendsLocal serves POST /backends/local. It creates or updates the
+// special claude_local backend by wiring the discovered Claude CLI to a local
+// OpenAI-compatible URL via ANTHROPIC_BASE_URL.
+func (s *Server) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
+	var req localBackendRequest
+	if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
+		return
+	}
+	req.URL = strings.TrimSpace(req.URL)
+	if req.URL == "" {
+		http.Error(w, "url is required", http.StatusBadRequest)
+		return
+	}
+	if _, err := url.ParseRequestURI(req.URL); err != nil {
+		http.Error(w, fmt.Sprintf("invalid url: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	s.storeMu.Lock()
+	existing, err := store.ReadBackends(s.db)
+	if err != nil {
+		s.storeMu.Unlock()
+		http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
+		return
+	}
+	base, ok := existing[backends.ClaudeName]
+	if !ok || strings.TrimSpace(base.Command) == "" {
+		s.storeMu.Unlock()
+		http.Error(w, "claude backend must be discovered first", http.StatusBadRequest)
+		return
+	}
+
+	local := existing[backends.ClaudeLocalName]
+	local.Command = base.Command
+	local.LocalModelURL = req.URL
+
+	diagMap := map[string]config.AIBackendConfig{
+		backends.ClaudeName:      base,
+		backends.ClaudeLocalName: local,
+	}
+	diag := backends.RunDiagnostics(context.Background(), diagMap)
+	for _, b := range diag.Backends {
+		if b.Name != backends.ClaudeLocalName {
+			continue
+		}
+		local.Version = b.Version
+		local.Models = b.Models
+		local.Healthy = b.Healthy
+		local.HealthDetail = b.HealthDetail
+		local.Command = b.Command
+		local.LocalModelURL = b.LocalModelURL
+		break
+	}
+
+	err = store.UpsertBackend(s.db, backends.ClaudeLocalName, local)
+	if err == nil {
+		err = s.reloadCron()
+	}
+	s.storeMu.Unlock()
+	if err != nil {
+		status := storeErrStatus(err)
+		s.logger.Error().Err(err).Msg("local backend upsert failed")
+		http.Error(w, fmt.Sprintf("local backend upsert or cron reload: %v", err), status)
+		return
+	}
+	writeJSON(w, http.StatusOK, backendToStoreJSON(backends.ClaudeLocalName, local))
+}
+
 // handleStoreBackend serves GET and DELETE /api/store/backends/{name}.
 func (s *Server) handleStoreBackend(w http.ResponseWriter, r *http.Request) {
 	name := config.NormalizeBackendName(mux.Vars(r)["name"])
@@ -619,10 +742,10 @@ func (s *Server) handleStoreRepo(w http.ResponseWriter, r *http.Request) {
 // four CRUD-mutable sections; daemon-level config (HTTP, log, proxy) is
 // intentionally excluded — it is not managed by the write API.
 type exportYAML struct {
-	Skills map[string]config.SkillDef        `yaml:"skills,omitempty"`
-	Agents []config.AgentDef                 `yaml:"agents,omitempty"`
-	Repos  []config.RepoDef                  `yaml:"repos,omitempty"`
-	Daemon *exportDaemonYAML                 `yaml:"daemon,omitempty"`
+	Skills map[string]config.SkillDef `yaml:"skills,omitempty"`
+	Agents []config.AgentDef          `yaml:"agents,omitempty"`
+	Repos  []config.RepoDef           `yaml:"repos,omitempty"`
+	Daemon *exportDaemonYAML          `yaml:"daemon,omitempty"`
 }
 
 type exportDaemonYAML struct {

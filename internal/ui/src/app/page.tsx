@@ -22,6 +22,7 @@ interface Binding {
 interface Agent {
   name: string
   backend: string
+  model?: string
   skills?: string[]
   description?: string
   allow_dispatch: boolean
@@ -34,6 +35,7 @@ interface Agent {
 interface StoreAgent {
   name: string
   backend: string
+  model: string
   skills: string[]
   prompt: string
   allow_prs: boolean
@@ -98,8 +100,14 @@ function RunButton({ agent, repo }: { agent: string; repo: string }) {
 }
 
 const emptyForm: StoreAgent = {
-  name: '', backend: 'auto', skills: [], prompt: '',
+  name: '', backend: '', model: '', skills: [], prompt: '',
   allow_prs: false, allow_dispatch: false, can_dispatch: [], description: '',
+}
+
+interface BackendOption {
+  name: string
+  models?: string[]
+  detected?: boolean
 }
 
 function AgentForm({
@@ -107,7 +115,7 @@ function AgentForm({
 }: {
   initial: StoreAgent
   isNew: boolean
-  backends: string[]
+  backends: BackendOption[]
   skillNames: string[]
   agentNames: string[]
   onSave: (a: StoreAgent) => void
@@ -125,8 +133,16 @@ function AgentForm({
     fontSize: '0.85rem', fontFamily: 'inherit', background: 'var(--bg-input)', color: 'var(--text)',
   }
 
-  // Derive options: always include "auto", then any store-configured backends.
-  const backendOptions = ['auto', ...backends.filter(b => b !== 'auto')]
+  const backendOptions = backends.filter(b => b.detected !== false)
+  const modelsForBackend = backendOptions.find(b => b.name === form.backend)?.models ?? []
+
+  useEffect(() => {
+    if (!form.model) return
+    if (modelsForBackend.length === 0) return
+    if (!modelsForBackend.includes(form.model)) {
+      set('model', '')
+    }
+  }, [form.backend, form.model, modelsForBackend.join('|')])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
@@ -137,7 +153,15 @@ function AgentForm({
       <div>
         <label style={labelStyle}>Backend</label>
         <select style={inputStyle} value={form.backend} onChange={e => set('backend', e.target.value)}>
-          {backendOptions.map(b => <option key={b} value={b}>{b}</option>)}
+          <option value="">Select backend…</option>
+          {backendOptions.map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
+        </select>
+      </div>
+      <div>
+        <label style={labelStyle}>Model</label>
+        <select style={inputStyle} value={form.model} onChange={e => set('model', e.target.value)} disabled={!form.backend || modelsForBackend.length === 0}>
+          <option value="">Default (backend decides)</option>
+          {modelsForBackend.map(m => <option key={m} value={m}>{m}</option>)}
         </select>
       </div>
       <div>
@@ -178,7 +202,7 @@ function AgentForm({
         </button>
         <button
           onClick={() => onSave(form)}
-          disabled={saving || !form.name.trim()}
+          disabled={saving || !form.name.trim() || !form.backend.trim()}
           style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
           {saving ? 'Saving…' : 'Save'}
@@ -209,7 +233,7 @@ function AgentCard({ agent, onEdit, onDelete }: { agent: Agent; onEdit: () => vo
 
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
         <span style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '4px', padding: '2px 6px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-          {agent.backend}
+          {agent.backend}{agent.model ? ` · ${agent.model}` : ''}
         </span>
         {agent.skills?.map(s => (
           <span key={s} style={{ background: 'var(--badge-skill-bg)', border: '1px solid var(--badge-skill-border)', borderRadius: '4px', padding: '2px 6px', fontSize: '0.75rem', color: 'var(--badge-skill-text)' }}>
@@ -263,7 +287,7 @@ export default function FleetPage() {
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [backendNames, setBackendNames] = useState<string[]>([])
+  const [backendOptions, setBackendOptions] = useState<BackendOption[]>([])
   const [skillNames, setSkillNames] = useState<string[]>([])
   const [agentNames, setAgentNames] = useState<string[]>([])
 
@@ -285,9 +309,9 @@ export default function FleetPage() {
 
   useEffect(() => {
     load()
-    fetch('/backends')
-      .then(r => r.ok ? r.json() : [])
-      .then((data: { name: string }[]) => setBackendNames(data.map(b => b.name)))
+    fetch('/backends/status')
+      .then(r => r.ok ? r.json() : { backends: [] })
+      .then((data: { backends?: BackendOption[] }) => setBackendOptions((data.backends ?? []).filter(b => b.detected !== false)))
       .catch(() => {})
     fetch('/skills')
       .then(r => r.ok ? r.json() : [])
@@ -306,13 +330,22 @@ export default function FleetPage() {
     try {
       const res = await fetch(`/agents/${encodeURIComponent(agentName)}`)
       if (res.ok) {
-        const data = await res.json()
-        setSelected(data)
+        const data = await res.json() as Partial<StoreAgent>
+        setSelected({
+          ...emptyForm,
+          ...data,
+          name: data.name ?? agentName,
+          backend: data.backend ?? '',
+          model: data.model ?? '',
+          skills: data.skills ?? [],
+          can_dispatch: data.can_dispatch ?? [],
+        })
       } else {
         const a = agents.find(a => a.name === agentName)
         setSelected({
           name: agentName,
-          backend: a?.backend ?? 'claude',
+          backend: a?.backend ?? '',
+          model: a?.model ?? '',
           skills: a?.skills ?? [],
           prompt: '',
           allow_prs: a?.allow_prs ?? false,
@@ -427,7 +460,7 @@ export default function FleetPage() {
           <AgentForm
             initial={selected}
             isNew={modal === 'create'}
-            backends={backendNames}
+            backends={backendOptions}
             skillNames={skillNames}
             agentNames={agentNames}
             onSave={saveAgent}

@@ -11,7 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"slices"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -23,7 +23,6 @@ type CommandRunner struct {
 	backendName    string
 	mode           string
 	command        string
-	args           []string
 	env            map[string]string
 	timeout        time.Duration
 	maxPromptChars int
@@ -31,7 +30,7 @@ type CommandRunner struct {
 	logger         zerolog.Logger
 }
 
-func NewCommandRunner(backendName string, mode string, command string, args []string, env map[string]string, timeoutSeconds int, maxPromptChars int, redactionSaltEnv string, logger zerolog.Logger) *CommandRunner {
+func NewCommandRunner(backendName string, mode string, command string, env map[string]string, timeoutSeconds int, maxPromptChars int, redactionSaltEnv string, logger zerolog.Logger) *CommandRunner {
 	salt := []byte{}
 	if redactionSaltEnv != "" {
 		value := os.Getenv(redactionSaltEnv)
@@ -43,7 +42,6 @@ func NewCommandRunner(backendName string, mode string, command string, args []st
 		backendName:    backendName,
 		mode:           mode,
 		command:        command,
-		args:           args,
 		env:            env,
 		timeout:        time.Duration(timeoutSeconds) * time.Second,
 		maxPromptChars: maxPromptChars,
@@ -229,25 +227,39 @@ const separatorRunes = 2
 //     This matches the previous single-prompt behaviour and documents the
 //     limitation that codex has no native system channel.
 func (r *CommandRunner) buildDelivery(req Request) (args []string, stdin string) {
-	if strings.HasPrefix(r.backendName, "claude") {
+	if r.isClaudeBackend() {
 		return r.buildClaudeDelivery(req)
 	}
-	if r.command == "codex" {
+	if r.isCodexBackend() {
 		return r.buildCodexDelivery(req)
 	}
-	return r.args, truncateString(combineSystemUser(req.System, req.User), r.maxPromptChars)
+	return nil, truncateString(combineSystemUser(req.System, req.User), r.maxPromptChars)
 }
 
-// buildClaudeDelivery delivers system content via --append-system-prompt and
-// user content via stdin. It also appends --output-format stream-json
-// --json-schema using the embedded response schema so config files don't carry
-// inline JSON. stream-json emits one JSON event per line, letting the runner
-// capture the tool-loop transcript before the final result event.
+func (r *CommandRunner) isClaudeBackend() bool {
+	name := strings.ToLower(strings.TrimSpace(r.backendName))
+	cmd := strings.ToLower(filepath.Base(strings.TrimSpace(r.command)))
+	return strings.HasPrefix(name, "claude") || strings.HasPrefix(cmd, "claude")
+}
+
+func (r *CommandRunner) isCodexBackend() bool {
+	name := strings.ToLower(strings.TrimSpace(r.backendName))
+	cmd := strings.ToLower(filepath.Base(strings.TrimSpace(r.command)))
+	return strings.HasPrefix(name, "codex") || strings.HasPrefix(cmd, "codex")
+}
+
+// buildClaudeDelivery builds hardcoded Claude CLI args and delivers system
+// content via --append-system-prompt and user content via stdin.
 func (r *CommandRunner) buildClaudeDelivery(req Request) (args []string, stdin string) {
-	args = make([]string, 0, len(r.args)+6)
-	args = append(args, r.args...)
-	if !slices.Contains(args, "--json-schema") {
-		args = append(args, "--verbose", "--output-format", "stream-json", "--json-schema", ResponseSchemaString())
+	args = []string{
+		"-p",
+		"--dangerously-skip-permissions",
+		"--verbose",
+		"--output-format", "stream-json",
+		"--json-schema", ResponseSchemaString(),
+	}
+	if req.Model != "" {
+		args = append(args, "--model", req.Model)
 	}
 
 	if req.System == "" {
@@ -282,16 +294,19 @@ func (r *CommandRunner) buildClaudeDelivery(req Request) (args []string, stdin s
 // --output-schema pointing to the embedded response schema temp file.
 func (r *CommandRunner) buildCodexDelivery(req Request) (args []string, stdin string) {
 	combinedStdin := truncateString(combineSystemUser(req.System, req.User), r.maxPromptChars)
-	if slices.Contains(r.args, "--output-schema") {
-		return r.args, combinedStdin
+	args = []string{
+		"exec",
+		"--skip-git-repo-check",
+		"--dangerously-bypass-approvals-and-sandbox",
+	}
+	if req.Model != "" {
+		args = append(args, "--model", req.Model)
 	}
 	schemaPath, err := ResponseSchemaPath()
 	if err != nil {
 		r.logger.Error().Err(err).Msg("failed to materialize embedded response schema")
-		return r.args, combinedStdin
+		return args, combinedStdin
 	}
-	args = make([]string, 0, len(r.args)+2)
-	args = append(args, r.args...)
 	args = append(args, "--output-schema", schemaPath)
 	return args, combinedStdin
 }

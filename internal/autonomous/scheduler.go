@@ -119,8 +119,8 @@ func (r *runLocks) release(key string) {
 type Scheduler struct {
 	cfg           *config.Config
 	runners       map[string]ai.Runner
-	runnerBuilder RunnerBuilder  // optional; nil means Reload does not update runners
-	hotReloadSink HotReloadSink  // optional; nil means no external component to notify
+	runnerBuilder RunnerBuilder // optional; nil means Reload does not update runners
+	hotReloadSink HotReloadSink // optional; nil means no external component to notify
 	memory        MemoryBackend
 	cron          *cron.Cron
 	logger        zerolog.Logger
@@ -130,9 +130,9 @@ type Scheduler struct {
 	agentEntries  []agentEntry
 	lastRunsMu    sync.RWMutex
 	lastRuns      map[string]lastRunRecord // key: "name\x00repo"
-	dispatcher    *workflow.Dispatcher    // nil when dispatch is not configured
-	traceRec      workflow.TraceRecorder  // nil when tracing is not configured
-	runLock        runLocks               // per-(agent,repo) mutex serializing the read/run/write sequence
+	dispatcher    *workflow.Dispatcher     // nil when dispatch is not configured
+	traceRec      workflow.TraceRecorder   // nil when tracing is not configured
+	runLock       runLocks                 // per-(agent,repo) mutex serializing the read/run/write sequence
 }
 
 // WithDispatcher attaches a Dispatcher to the Scheduler so that dispatch
@@ -448,6 +448,7 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	resp, runErr := runner.Run(ctx, ai.Request{
 		Workflow: fmt.Sprintf("autonomous:%s:%s", backend, agent.Name),
 		Repo:     repo,
+		Model:    agent.Model,
 		System:   rendered.System,
 		User:     rendered.User,
 	})

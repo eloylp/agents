@@ -20,6 +20,7 @@ type Request struct {
 	Workflow string
 	Repo     string
 	Number   int
+	Model    string // optional per-agent model override
 	System   string // stable system-level content (from RenderedPrompt.System)
 	User     string // per-run user content (from RenderedPrompt.User)
 }
