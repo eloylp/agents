@@ -688,9 +688,6 @@ func (c *Config) resolvePrompt(ownerLabel, prompt, promptFile string) (string, e
 }
 
 func (c *Config) validate() error {
-	if c.Daemon.HTTP.WebhookSecret == "" {
-		return errors.New("config: http webhook secret is required (set webhook_secret_env)")
-	}
 	if c.Daemon.HTTP.DeliveryTTLSeconds < 0 {
 		return fmt.Errorf("config: http delivery_ttl_seconds must be positive, got %d", c.Daemon.HTTP.DeliveryTTLSeconds)
 	}
@@ -771,9 +768,6 @@ func (c *Config) validateLogConfig() error {
 }
 
 func (c *Config) validateBackends() error {
-	if len(c.Daemon.AIBackends) == 0 {
-		return errors.New("config: at least one ai_backends entry is required")
-	}
 	for name, backend := range c.Daemon.AIBackends {
 		if !isValidBackendName(name) {
 			return fmt.Errorf("config: unsupported ai backend %q (supported: %s)", name, strings.Join(validAIBackendNames, ", "))
@@ -798,9 +792,6 @@ func (c *Config) validateSkills() error {
 }
 
 func (c *Config) validateAgents() error {
-	if len(c.Agents) == 0 {
-		return errors.New("config: at least one agent is required")
-	}
 	seen := make(map[string]struct{}, len(c.Agents))
 	for _, a := range c.Agents {
 		if a.Name == "" {
@@ -867,9 +858,6 @@ func (c *Config) validateDispatchWiring() error {
 }
 
 func (c *Config) validateRepos() error {
-	if len(c.Repos) == 0 {
-		return errors.New("config: at least one repo is required")
-	}
 	enabledCount := 0
 	seen := make(map[string]struct{}, len(c.Repos))
 	for _, r := range c.Repos {
@@ -915,7 +903,7 @@ func (c *Config) validateRepos() error {
 			}
 		}
 	}
-	if enabledCount == 0 {
+	if len(c.Repos) > 0 && enabledCount == 0 {
 		return errors.New("config: at least one repo must be enabled")
 	}
 	return nil

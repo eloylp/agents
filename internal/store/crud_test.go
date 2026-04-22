@@ -820,51 +820,6 @@ func TestDeleteBackendRejectedAsLast(t *testing.T) {
 	}
 }
 
-func TestUpsertRepoRejectedWhenDisablingLastEnabled(t *testing.T) {
-	t.Parallel()
-	db := openTestDB(t)
-
-	seedBackend(t, db, "claude")
-	if err := store.UpsertAgent(db, config.AgentDef{
-		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
-	}); err != nil {
-		t.Fatalf("UpsertAgent: %v", err)
-	}
-	if err := store.UpsertRepo(db, config.RepoDef{
-		Name:    "owner/repo",
-		Enabled: true,
-		Use:     []config.Binding{{Agent: "coder", Labels: []string{"ai:fix"}}},
-	}); err != nil {
-		t.Fatalf("UpsertRepo (setup): %v", err)
-	}
-
-	// Upserting the same repo with enabled=false should be rejected because it
-	// would leave no enabled repos — matching the invariant enforced by DeleteRepo.
-	err := store.UpsertRepo(db, config.RepoDef{
-		Name:    "owner/repo",
-		Enabled: false,
-		Use:     []config.Binding{{Agent: "coder", Labels: []string{"ai:fix"}}},
-	})
-	if err == nil {
-		t.Fatal("UpsertRepo disabling last enabled repo: want error, got nil")
-	}
-	if !strings.Contains(err.Error(), "at least one repo must be enabled") {
-		t.Errorf("unexpected error: %v", err)
-	}
-
-	// The original enabled repo must still be present and enabled.
-	repos, readErr := store.ReadRepos(db)
-	if readErr != nil {
-		t.Fatalf("ReadRepos: %v", readErr)
-	}
-	if len(repos) != 1 {
-		t.Errorf("repo count after rejected upsert: got %d, want 1", len(repos))
-	}
-	if !repos[0].Enabled {
-		t.Error("repo was disabled despite rejected upsert")
-	}
-}
-
 func TestDeleteRepoRejectedAsLastEnabled(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)

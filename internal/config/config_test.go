@@ -121,16 +121,6 @@ repos:
 	}
 }
 
-func TestLoadRejectsMissingSecret(t *testing.T) {
-	os.Unsetenv("TEST_SECRET")
-	path := writeConfig(t, minimalYAML(""))
-
-	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "webhook secret") {
-		t.Fatalf("expected webhook secret error, got %v", err)
-	}
-}
-
 // agentConfigYAML builds a full config YAML with a custom agents block,
 // mirroring minimalYAML but allowing the agents section to be overridden.
 func agentConfigYAML(agentsBlock string) string {
