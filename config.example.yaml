@@ -1,4 +1,19 @@
 # ──────────────────────────────────────────────
+# Import-format reference
+# ──────────────────────────────────────────────
+# This file is a YAML import template. Use it with:
+#
+#   ./agents --db agents.db --import config.yaml
+#
+# prompt_file: paths (in skills and agents sections) reference local files
+# that must exist at import time. Their content is read and stored in the
+# SQLite database — the files are not needed afterward.
+#
+# For new setups, you can skip the YAML entirely and use the web dashboard
+# (GET /ui/) to create agents, skills, backends, and repo bindings directly.
+# ──────────────────────────────────────────────
+
+# ──────────────────────────────────────────────
 # daemon — how the service runs
 # ──────────────────────────────────────────────
 daemon:

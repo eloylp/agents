@@ -183,8 +183,6 @@ internal/
   ui/                       # Embedded Next.js web dashboard (served at /ui/)
   setup/                    # Interactive first-time setup command
   logging/                  # zerolog setup
-prompts/                    # Optional: prompt files referenced by agent prompt_file
-skills/                     # Optional: skill files referenced by skill prompt_file
 docs/                       # Long-form docs (configuration, events, dispatch, API, docker, etc.)
 ```
 

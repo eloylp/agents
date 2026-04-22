@@ -41,8 +41,6 @@ internal/
   ui/                           # embedded Next.js web dashboard (static assets served at /ui/)
   setup/                        # interactive first-time setup command
   logging/                      # zerolog configuration
-prompts/                        # prompt files referenced by agent prompt_file:
-skills/                         # skill files referenced by skill prompt_file:
 docs/local-models.md            # full recipe for running the fleet on a local LLM
 config.example.yaml             # shipping example, kept in sync with config schema
 internal/ai/response-schema.json # embedded JSON schema for structured output (codex --output-schema)
@@ -50,7 +48,7 @@ internal/ai/response-schema.json # embedded JSON schema for structured output (c
 
 ## Conceptual model
 
-- **Agent** — a named capability: `backend` + `skills: []` + `prompt` (or `prompt_file`). An agent is a pure definition. It does not run by itself.
+- **Agent** — a named capability: `backend` + `skills: []` + `prompt`. An agent is a pure definition. It does not run by itself. Prompts are stored in SQLite (seeded via `--import` from YAML, or created directly in the UI).
 - **Skill** — a reusable chunk of guidance referenced by name in multiple agents. Skill text is concatenated before the agent's own prompt at render time.
 - **Binding** — `repos[*].use[*]`: pairs one agent with exactly one trigger (`labels:`, `events:`, or `cron:`). The same agent can have multiple bindings on the same repo with different triggers.
 - **Backend** — one of `claude`, `codex`, or `auto` (picks the first configured in preference order). Two separate backend entries can point at the **same CLI binary** with different `env:` — this is the mechanism for routing the `claude` CLI through the built-in proxy to a local LLM.
@@ -93,7 +91,7 @@ When making common classes of changes, update all of these at once:
 | Config schema (types in `internal/config/config.go`) | Validation, `normalize()`, defaults, `config.example.yaml`, README, tests in `internal/config/config_test.go` |
 | New webhook event kind | Decoder in `internal/webhook/server.go`, acceptance in `internal/workflow/engine.go`, README event table, validation in `internal/config/config.go` |
 | New AI backend behavior | `internal/ai/cmdrunner.go`, allowlist if new env vars, backend registration in `cmd/agents/main.go`, config example |
-| Agent prompt contract | Prompt templates in `prompts/`, runner parser in `internal/ai/cmdrunner.go`, `internal/ai/types.go`, `internal/ai/response-schema.json`, AGENTS.md runner-contract section, tests |
+| Agent prompt contract | Prompts in SQLite (edit via UI or CRUD API), runner parser in `internal/ai/cmdrunner.go`, `internal/ai/types.go`, `internal/ai/response-schema.json`, AGENTS.md runner-contract section, tests |
 | Memory contract | `internal/autonomous/memory.go` (MemoryBackend interface), `internal/store/store.go` (SQLite path), `cmd/agents/main.go` (wiring), agent prompts "Memory hygiene" sections, `internal/ai/types.go` |
 | Dispatch semantics | `internal/workflow/dispatch.go` (runtime), `internal/config/config.go` (load-time validation), agent response schema in `internal/ai/types.go`, README dispatch section, all prompt "Response format" sections, tests on both paths |
 | SQLite store schema | `internal/store/migrations/`, `internal/store/store.go`, `internal/store/crud.go`, `internal/webhook/crud.go`, tests |
@@ -113,7 +111,7 @@ When making common classes of changes, update all of these at once:
 ## Operational notes
 
 - **`.env` is auto-loaded on startup** (`godotenv.Load()`). Required runtime secret: `GITHUB_WEBHOOK_SECRET`. Optional: `LOG_SALT`.
-- **Config is loaded from SQLite at startup.** Use `--import config.yaml` to seed the database, then manage changes via the CRUD API. Prompt and skill file changes require re-import or an API update followed by a daemon restart.
+- **Config is loaded from SQLite at startup.** Use `--import config.yaml` to seed the database, then manage changes via the CRUD API or the web dashboard. Prompt and skill content is stored in the database; changes via the API or UI take effect on the next agent run without a restart.
 - **Autonomous agent memory** is stored in SQLite (in the `memory` table), keyed by `(agent, repo)`. It's the agent's job to return updated memory in its response; the daemon writes it back to the store unchanged.
 - **Dispatch dedup is process-local and in-memory.** It's shared across cron-fired runs, event-fired runs, and `--run-agent` invocations within one process. Restarting the daemon clears the dedup state.
 - **`--run-agent` drains dispatch chains synchronously.** When invoking an agent on demand via the CLI flag, the process waits for the originating agent and all dispatched children to finish before exiting. The in-memory event queue is sized to hold `MaxFanout^MaxDepth` events so deep chains don't silently drop.

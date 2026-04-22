@@ -20,8 +20,6 @@ internal/
   ui/                       # Embedded Next.js web dashboard (served at /ui/)
   setup/                    # Interactive first-time setup command
   logging/                  # zerolog setup
-prompts/                    # Optional prompt files referenced by agent prompt_file:
-skills/                     # Optional skill files referenced by skill prompt_file:
 docs/                       # Long-form docs: configuration, events, dispatch, API, docker, local-models, security
 ```
 
@@ -30,7 +28,7 @@ docs/                       # Long-form docs: configuration, events, dispatch, A
 The config file has four top-level domains:
 
 - `daemon` — log, http, processor (incl. `dispatch` safety limits), ai_backends, optional `proxy` block
-- `skills` — map of reusable guidance blocks, keyed by name (inline or `prompt_file:`)
+- `skills` — map of reusable guidance blocks, keyed by name (inline or file-based at import time; stored in SQLite)
 - `agents` — list of named capabilities (backend + skills + prompt, optional `allow_prs` / `allow_dispatch` / `can_dispatch` / `description`)
 - `repos` — list of repos and their `use[]` bindings (which agents run, and with what triggers)
 
@@ -61,7 +59,6 @@ docker compose up -d
 
 Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, and `gh` CLIs alongside the daemon. Runs as non-root `agents` user. Default CMD is `--db /var/lib/agents/agents.db`. Compose mounts:
 - `./config.yaml` → `/etc/agents/config.yaml` (read-only; used for `--import` seeding)
-- `./agents` → `/etc/agents/agents` (optional; prompt/skill files when `prompt_file:` paths point here)
 - Claude/Codex/gh config dirs from host
 - `agents-data` named volume → `/var/lib/agents` (SQLite database persistence)
 

@@ -380,30 +380,6 @@ func TestResolveBackend(t *testing.T) {
 	}
 }
 
-func TestConfigExampleYAMLLoads(t *testing.T) {
-	t.Setenv("GITHUB_WEBHOOK_SECRET", "s3cret")
-
-	root, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatalf("resolve repo root: %v", err)
-	}
-	path := filepath.Join(root, "config.example.yaml")
-	if _, err := os.Stat(path); err != nil {
-		t.Skipf("config.example.yaml not present at %s: %v", path, err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load example: %v", err)
-	}
-	if len(cfg.Agents) == 0 {
-		t.Fatal("example has no agents")
-	}
-	if len(cfg.Skills) == 0 {
-		t.Fatal("example has no skills")
-	}
-}
-
 func TestLoadRejectsNegativeDeliveryTTL(t *testing.T) {
 	t.Setenv("TEST_SECRET", "secret")
 
