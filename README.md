@@ -448,7 +448,7 @@ The compose file expects:
 | Host path | Container path | Purpose |
 |---|---|---|
 | `config.yaml` | `/etc/agents/config.yaml` (read-only) | Main daemon config (used for `--import`; optional once DB is seeded) |
-| `./agents` | `/etc/agents/agents` (read-only) | Optional: prompt/skill files when agent `prompt_file:` paths point here |
+| `./agents` | `/etc/agents/agents` (read-only) | Optional: source tree for agent and skill `prompt_file:` paths that reference this directory |
 | `~/.claude` | `/home/agents/.claude` | Claude Code session data |
 | `~/.claude.json` | `/home/agents/.claude.json` | Claude Code main config |
 | `~/.codex` | `/home/agents/.codex` | Codex configuration |
