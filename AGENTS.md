@@ -35,7 +35,7 @@ internal/
   anthropic_proxy/              # built-in Anthropic Messages ↔ OpenAI Chat Completions translation
   observe/                      # observability store: events, traces, dispatch graph, SSE hubs
   autonomous/                   # cron scheduler + agent memory (SQLite-backed)
-  store/                        # SQLite-backed config store (--db mode): Open, Import, Load, CRUD
+  store/                        # SQLite-backed config store: Open, Import, Load, CRUD
   workflow/                     # event routing engine (single event queue), processor, dispatcher
   webhook/                      # HTTP server, HMAC signature verification, delivery dedupe, CRUD API handlers
   ui/                           # embedded Next.js web dashboard (static assets served at /ui/)
@@ -114,7 +114,7 @@ When making common classes of changes, update all of these at once:
 
 - **`.env` is auto-loaded on startup** (`godotenv.Load()`). Required runtime secret: `GITHUB_WEBHOOK_SECRET`. Optional: `LOG_SALT`.
 - **Config is loaded from SQLite at startup.** Use `--import config.yaml` to seed the database, then manage changes via the CRUD API. Prompt and skill file changes require re-import or an API update followed by a daemon restart.
-- **Autonomous agent memory** is stored in SQLite when `--db` is set (in the `memory` table), keyed by `(agent, repo)`. It's the agent's job to return updated memory in its response; the daemon writes it back to the store unchanged.
+- **Autonomous agent memory** is stored in SQLite (in the `memory` table), keyed by `(agent, repo)`. It's the agent's job to return updated memory in its response; the daemon writes it back to the store unchanged.
 - **Dispatch dedup is process-local and in-memory.** It's shared across cron-fired runs, event-fired runs, and `--run-agent` invocations within one process. Restarting the daemon clears the dedup state.
 - **`--run-agent` drains dispatch chains synchronously.** When invoking an agent on demand via the CLI flag, the process waits for the originating agent and all dispatched children to finish before exiting. The in-memory event queue is sized to hold `MaxFanout^MaxDepth` events so deep chains don't silently drop.
 - **Avoid `--no-verify` on commits.** Pre-commit hooks exist for a reason. If a hook fails, fix the underlying issue.

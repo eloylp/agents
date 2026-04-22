@@ -177,7 +177,7 @@ internal/
   anthropic_proxy/          # Built-in Anthropic-to-OpenAI translation proxy (opt-in)
   observe/                  # Observability store (events, traces, dispatch graph, SSE hubs)
   autonomous/               # Cron scheduler + agent memory (SQLite-backed)
-  store/                    # SQLite-backed config store (--db mode): schema migrations, CRUD helpers
+  store/                    # SQLite-backed config store: schema migrations, CRUD helpers
   workflow/                 # Event routing engine, single event queue, processor, inter-agent dispatcher
   webhook/                  # HTTP server, signature verification, delivery dedupe, CRUD API handlers
   ui/                       # Embedded Next.js web dashboard (served at /ui/)

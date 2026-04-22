@@ -25,7 +25,7 @@ The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 
 | `GET` | `/traces/{span_id}/steps` | Tool-loop transcript for a completed agent span |
 | `GET` | `/graph` | Agent interaction graph (dispatch edges) |
 | `GET` | `/dispatches` | Dispatch dedup store contents + counters |
-| `GET` | `/memory/{agent}/{repo}` | Raw agent memory markdown |
+| `GET` | `/memory/{agent}/{repo}` | Raw agent memory markdown. `{repo}` uses `owner_repo` format (underscore-separated) |
 | `GET` | `/memory/stream` | Memory file change notifications (SSE) |
 | `GET` | `/config` | Effective parsed config (secrets redacted) |
 
@@ -44,9 +44,9 @@ These are only mounted when `daemon.proxy.enabled: true` is set in the config.
 | `POST` | `/v1/messages` | Anthropic-to-OpenAI translation proxy |
 | `GET` | `/v1/models` | Companion stub; lists the configured upstream model |
 
-## CRUD endpoints (SQLite mode)
+## CRUD endpoints
 
-These routes are always mounted but require `--db` to function -- without it they return errors.
+These routes are always mounted and backed by the SQLite database.
 
 | Method | Path | Description |
 |---|---|---|

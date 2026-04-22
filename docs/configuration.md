@@ -187,4 +187,4 @@ SQLite is the config store. Import your YAML once, then manage the fleet over th
 ./agents --db agents.db
 ```
 
-The CRUD endpoints for `/skills`, `/backends`, and `/repos` are always mounted but require `--db` to function -- without it they return errors. For `/agents`, `POST /agents` and `GET|DELETE /agents/{name}` are CRUD write endpoints, but `GET /agents` always returns the live fleet snapshot (not the stored agent list). The daemon auto-reloads cron schedules after any repo or agent write. Agent memory is stored in the same SQLite database. The YAML path remains fully supported -- both modes are first-class.
+The CRUD endpoints for `/skills`, `/backends`, and `/repos` are always mounted and backed by the SQLite database. For `/agents`, `POST /agents` and `GET|DELETE /agents/{name}` are CRUD write endpoints, but `GET /agents` always returns the live fleet snapshot (not the stored agent list). The daemon auto-reloads cron schedules after any repo or agent write. Agent memory is stored in the same SQLite database. YAML is an import source (`--import`), not a second runtime mode -- the daemon always boots from SQLite.

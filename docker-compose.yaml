@@ -10,8 +10,8 @@ services:
       - ./config.yaml:/etc/agents/config.yaml:ro
       # Optional: required only when config uses prompt_file paths under agents_dir.
       - ./agents:/etc/agents/agents:ro
-      # Recommended: persists autonomous MEMORY.md files across restarts.
-      - agents-memory:/var/lib/agents/memory
+      # Persists the SQLite database (config + agent memory) across restarts.
+      - agents-data:/var/lib/agents
       - ~/.claude:/home/agents/.claude
       - ~/.claude.json:/home/agents/.claude.json
       - ~/.codex:/home/agents/.codex
@@ -21,4 +21,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  agents-memory:
+  agents-data:

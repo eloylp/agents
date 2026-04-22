@@ -136,7 +136,6 @@ processor:
   event_queue_buffer: 256
 
 agents_dir: "./agents"
-memory_dir: "/var/lib/agents/memory"
 
 prompts:
   issue_refinement:

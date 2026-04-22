@@ -14,7 +14,7 @@ internal/
   anthropic_proxy/          # Built-in Anthropic↔OpenAI Chat Completions translation proxy
   observe/                  # Observability store: events, traces, dispatch graph, SSE hubs
   autonomous/               # Cron scheduler + agent memory (SQLite-backed)
-  store/                    # SQLite-backed config store (--db mode): Open, Import, Load, CRUD
+  store/                    # SQLite-backed config store: Open, Import, Load, CRUD
   workflow/                 # Event routing engine, single event queue, processor, dispatcher
   webhook/                  # HTTP server, HMAC verification, delivery dedupe, CRUD API handlers
   ui/                       # Embedded Next.js web dashboard (served at /ui/)
@@ -63,7 +63,7 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, 
 - `./config.yaml` → `/etc/agents/config.yaml` (read-only; used for `--import` seeding)
 - `./agents` → `/etc/agents/agents` (optional; prompt/skill files when `prompt_file:` paths point here)
 - Claude/Codex/gh config dirs from host
-- `agents-memory` named volume → `/var/lib/agents/memory`
+- `agents-data` named volume → `/var/lib/agents` (SQLite database persistence)
 
 ## Environment Variables
 
@@ -90,8 +90,8 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, 
   - `GET /memory/stream` — memory file change notifications (SSE).
   - `GET /config` — effective parsed config (secrets redacted).
   - `GET /ui/` — embedded web dashboard (Next.js static assets).
-  - `GET|POST /{resource}` and `GET|DELETE /{resource}/{name}` — SQLite CRUD endpoints (always mounted; require `--db` to function — return errors without it). Resources for `GET` list: `skills`, `backends`, `repos` (repos use two-segment path: `repos/{owner}/{repo}`). Note: `GET /agents` always returns the live fleet snapshot — not the CRUD list. `POST /agents` and `GET|DELETE /agents/{name}` are CRUD endpoints for agents.
-  - `GET /export`, `POST /import` — export/import fleet config as YAML (require `--db` to function).
+  - `GET|POST /{resource}` and `GET|DELETE /{resource}/{name}` — SQLite CRUD endpoints (always mounted). Resources for `GET` list: `skills`, `backends`, `repos` (repos use two-segment path: `repos/{owner}/{repo}`). Note: `GET /agents` always returns the live fleet snapshot — not the CRUD list. `POST /agents` and `GET|DELETE /agents/{name}` are CRUD endpoints for agents.
+  - `GET /export`, `POST /import` — export/import fleet config as YAML.
 - Supported webhook events: `issues.*` (labeled, opened, edited, reopened, closed), `pull_request.*` (labeled, opened, synchronize, ready_for_review, closed), `issue_comment.created`, `pull_request_review.submitted`, `pull_request_review_comment.created`, `push` (branches only). Label-triggered routing uses `payload.label.name`. Non-label `events:` subscriptions match the event kind exactly. Draft PRs skip `pull_request.labeled`.
 - Internal event kinds (not from webhooks): `agents.run` (on-demand trigger from `POST /run` or `--run-agent`), `agent.dispatch` (inter-agent dispatch), `autonomous` (cron scheduler).
 - Duplicate webhook suppression via `X-GitHub-Delivery` TTL cache.
