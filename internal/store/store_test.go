@@ -349,8 +349,7 @@ func seedAgent(t *testing.T, db *sql.DB, name string) {
 // entry returns ("", false, time.Time{}, nil).
 func TestReadWriteMemory(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 	seedAgent(t, db, "coder")
 
 	// Non-existent agent/repo returns not-found (found=false).
@@ -413,8 +412,7 @@ func TestReadWriteMemory(t *testing.T) {
 // are stored independently.
 func TestReadWriteMemoryIsolation(t *testing.T) {
 	t.Parallel()
-	db, cleanup := openTestDB(t)
-	defer cleanup()
+	db := openTestDB(t)
 	seedAgent(t, db, "agent-a")
 	seedAgent(t, db, "agent-b")
 

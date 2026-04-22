@@ -40,6 +40,13 @@ type GraphRecorder interface {
 	RecordDispatch(from, to, repo string, number int, reason string)
 }
 
+// StepRecorder is an optional observer that the Engine calls when an agent run
+// produces a tool-loop transcript. Implementations must be safe for concurrent
+// use.
+type StepRecorder interface {
+	RecordSteps(spanID string, steps []TraceStep)
+}
+
 // Engine dispatches workflow events to the agents bound to the target repo.
 // It routes each event by matching against label bindings (labels:) for labeled
 // events and against event bindings (events:) for all event kinds.
@@ -58,6 +65,7 @@ type Engine struct {
 	traceRec      TraceRecorder
 	graphRec      GraphRecorder
 	runTracker    RunTracker
+	stepRec       StepRecorder
 	runsDeduped   atomic.Int64
 }
 
@@ -95,6 +103,13 @@ func (e *Engine) WithTraceRecorder(r TraceRecorder) {
 // starts and finishes. It is safe to call after NewEngine and before Run.
 func (e *Engine) WithRunTracker(rt RunTracker) {
 	e.runTracker = rt
+}
+
+// WithStepRecorder attaches an optional recorder that is called when an agent
+// run produces a tool-loop transcript. It is safe to call after NewEngine and
+// before Run.
+func (e *Engine) WithStepRecorder(r StepRecorder) {
+	e.stepRec = r
 }
 
 // WithGraphRecorder attaches an optional recorder that is called on each
@@ -576,6 +591,21 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef, 
 			spanStart, spanEnd,
 			status, errMsg,
 		)
+	}
+
+	// Record transcript steps when available. Translate from the runner-internal
+	// ai.TraceStep to the domain-level workflow.TraceStep at this boundary.
+	if e.stepRec != nil && len(resp.Steps) > 0 {
+		wsteps := make([]TraceStep, len(resp.Steps))
+		for i, s := range resp.Steps {
+			wsteps[i] = TraceStep{
+				ToolName:      s.ToolName,
+				InputSummary:  s.InputSummary,
+				OutputSummary: s.OutputSummary,
+				DurationMs:    s.DurationMs,
+			}
+		}
+		e.stepRec.RecordSteps(spanID, wsteps)
 	}
 
 	if runErr != nil {

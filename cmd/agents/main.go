@@ -133,6 +133,7 @@ func run() error {
 	engine.WithTraceRecorder(obs)
 	engine.WithGraphRecorder(obs)
 	engine.WithRunTracker(obs.ActiveRuns)
+	engine.WithStepRecorder(obs)
 	scheduler.WithTraceRecorder(obs)
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)

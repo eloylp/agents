@@ -11,7 +11,7 @@ import (
 // It is embedded in the binary so the daemon is fully self-contained — no
 // external file mounts or inline JSON in config needed.
 //
-// - Claude backends receive it via --output-format json --json-schema <string>
+// - Claude backends receive it via --output-format stream-json --json-schema <string>
 // - Codex backends receive it via --output-schema <temp-file-path>
 //
 // Both are injected automatically by buildDelivery in cmdrunner.go.

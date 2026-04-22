@@ -439,6 +439,19 @@ func (s *Server) handleAPITracesStream(w http.ResponseWriter, r *http.Request) {
 	serveSSE(w, r, s.observeStore.TracesSSE)
 }
 
+// handleAPITraceSteps serves GET /api/traces/{span_id}/steps — the tool-loop
+// transcript for a single span. Returns an empty JSON array when no steps have
+// been recorded (e.g. the span used a non-claude backend).
+func (s *Server) handleAPITraceSteps(w http.ResponseWriter, r *http.Request) {
+	spanID := mux.Vars(r)["span_id"]
+	steps := s.observeStore.ListSteps(spanID)
+	if steps == nil {
+		steps = []workflow.TraceStep{} // always return a JSON array, never null
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(steps)
+}
+
 // ── /api/graph ─────────────────────────────────────────────────────────────
 
 // apiGraphJSON is the wire shape for GET /api/graph.

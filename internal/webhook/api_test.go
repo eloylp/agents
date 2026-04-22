@@ -1401,6 +1401,72 @@ func TestHandleAPIMemorySQLiteMode(t *testing.T) {
 	}
 }
 
+// ── /api/traces/{span_id}/steps ───────────────────────────────────────────
+
+func TestHandleAPITraceStepsReturnsOrderedSteps(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(nil)
+	srv, _ := newTestServer(cfg)
+	obs := newTestObserve(t)
+	srv.WithObserve(obs)
+
+	steps := []workflow.TraceStep{
+		{ToolName: "Bash", InputSummary: "go test", OutputSummary: "ok", DurationMs: 300},
+		{ToolName: "Read", InputSummary: "/main.go", OutputSummary: "package main", DurationMs: 10},
+	}
+	obs.RecordSteps("span-abc", steps)
+
+	router := srv.buildHandler()
+	req := httptest.NewRequest(http.MethodGet, "/traces/span-abc/steps", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var got []workflow.TraceStep
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 steps, got %d", len(got))
+	}
+	if got[0].ToolName != "Bash" || got[1].ToolName != "Read" {
+		t.Fatalf("unexpected order: %v %v", got[0].ToolName, got[1].ToolName)
+	}
+	if got[0].DurationMs != 300 {
+		t.Fatalf("want DurationMs=300 for first step, got %d", got[0].DurationMs)
+	}
+}
+
+func TestHandleAPITraceStepsEmptyArray(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(nil)
+	srv, _ := newTestServer(cfg)
+	obs := newTestObserve(t)
+	srv.WithObserve(obs)
+
+	router := srv.buildHandler()
+	req := httptest.NewRequest(http.MethodGet, "/traces/no-such-span/steps", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	// Must decode as a JSON array (never null) even when no steps exist.
+	var got []workflow.TraceStep
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got == nil {
+		t.Fatal("want empty JSON array, got null")
+	}
+	if len(got) != 0 {
+		t.Fatalf("want 0 steps, got %d", len(got))
+	}
+}
+
 // mustReadSSEMsg drains one message from ch within timeout or fails the test.
 func mustReadSSEMsg(t *testing.T, ch <-chan []byte, timeout time.Duration) string {
 	t.Helper()
