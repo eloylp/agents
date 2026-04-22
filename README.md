@@ -19,13 +19,12 @@ Define your agents once. Wire them to repos with labels, cron schedules, or even
 - **SQLite config store** -- manage the fleet over a CRUD API instead of editing YAML. Import/export between the two.
 - **Built-in web dashboard** -- live event firehose, agent traces with tool-loop transcripts, dispatch graph, memory viewer.
 - **Transparent** -- every agent action is a GitHub comment, issue, or PR. Reviewable. Revertable.
-- **Secure by default** -- HMAC-verified webhooks, hashed prompt logs, read-only daemon (all GitHub writes go through the AI backend's MCP tools).
 
 ---
 
 ## Web dashboard
 
-The daemon ships an embedded web dashboard at `/ui/` with real-time views of your fleet:
+The daemon ships an embedded web dashboard at `/ui/` with real-time views of your fleet. The dashboard is the primary interface for managing agents -- all fleet operations (create, edit, delete agents, skills, backends, repos) are available through the CRUD editors, alongside live monitoring and observability.
 
 <!-- TODO: add screenshots of the dashboard pages (events, traces, graph, agents, memory) -->
 
@@ -34,37 +33,57 @@ The daemon ships an embedded web dashboard at `/ui/` with real-time views of you
 | **Events** | Live webhook event firehose with SSE streaming |
 | **Traces** | Agent run traces with timing, status, and drill-down to tool-loop transcripts |
 | **Graph** | Visual dispatch graph -- which agents invoke which, with edge counts |
-| **Agents** | Fleet snapshot -- per-agent status, skills, bindings, dispatch wiring |
+| **Agents** | Fleet snapshot -- per-agent status, skills, bindings, dispatch wiring. Create, edit, and delete agents |
+| **Skills** | Manage reusable guidance blocks -- create, edit, delete |
+| **Backends** | AI backend configuration -- add, edit, remove backends with model discovery |
+| **Repos** | Repository bindings -- wire agents to repos with labels, events, or cron triggers |
 | **Memory** | Raw agent memory markdown per (agent, repo) pair |
-| **Config** | Effective parsed config (secrets redacted) |
+| **Config** | Effective parsed config (secrets redacted). YAML import/export |
 
 ---
 
 ## How it works
 
-```mermaid
-sequenceDiagram
-    actor Dev as Developer
-    participant GH as GitHub
-    participant D as agents
-    participant AI as AI Backend<br/>(Claude / Codex)
+Agents are triggered in three ways. Every path ends with the same execution model: the daemon composes a prompt (skills + agent prompt + context), hands it to the AI CLI, and the CLI reads/writes GitHub through its MCP tools.
 
-    Note over D: Two trigger kinds
-    Dev->>GH: Add label  ai:review:arch-reviewer
-    GH->>D: Webhook (pull_request:labeled)
-    Note over D: Verify signature,<br/>deduplicate delivery,<br/>match repo binding,<br/>queue event
+### Label-triggered (event-driven)
 
-    Note over D: ... or scheduled ...
-    D-->>D: Cron fires (e.g. hourly)
-
-    D->>AI: Compose prompt = skills + agent prompt + context
-    AI->>GH: Read context via MCP tools
-    AI->>GH: Post comment / review / open PR via MCP tools
-    AI-->>D: Return artifacts JSON
-    Note over D: Persist agent memory<br/>for next scheduled run
+```
+Developer adds label "ai:review:arch-reviewer" to a PR
+  → GitHub sends a webhook to the daemon
+  → Daemon verifies, deduplicates, matches the repo binding
+  → Dispatches the bound agent via the AI CLI
+  → AI reads the PR, posts a review comment
 ```
 
-The daemon is event-driven for label-based workflows and runs a cron scheduler for autonomous agents. Both paths resolve to the same agent definitions -- only the trigger differs.
+### Cron-scheduled (autonomous)
+
+```
+Cron fires (e.g. every 30 minutes)
+  → Daemon injects the agent's persisted memory into the prompt
+  → AI CLI picks up where it left off — checks open issues, continues work
+  → Returns updated memory + artifacts for the next cycle
+```
+
+### Event-subscribed
+
+```
+Developer opens an issue / pushes to a branch / submits a review
+  → GitHub sends the matching webhook event
+  → Daemon routes it to every agent subscribed to that event kind
+  → Each agent runs independently with the event payload as context
+```
+
+### Reactive dispatch (agent-to-agent)
+
+Any agent can invoke another at runtime by returning a `dispatch` array. The daemon enqueues the target agent as a new event with depth, fanout, and dedup safety limits.
+
+```
+Agent A finishes a code fix, returns dispatch: [{agent: "pr-reviewer", ...}]
+  → Daemon validates wiring (allow_dispatch + can_dispatch)
+  → Enqueues a synthetic event for Agent B
+  → Agent B reviews the PR opened by Agent A
+```
 
 ---
 
