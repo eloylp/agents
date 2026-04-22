@@ -1,0 +1,90 @@
+# HTTP API reference
+
+All endpoints are unauthenticated at the daemon level -- access control is the reverse proxy's responsibility.
+
+## Core endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/status` | Health check: JSON with uptime, event queue depth, agent schedules, dispatch counters |
+| `POST` | `/webhooks/github` | GitHub webhook receiver (`X-Hub-Signature-256` HMAC verified) |
+| `POST` | `/run` | On-demand agent trigger |
+
+The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 Accepted` immediately with an `event_id`; the agent runs asynchronously.
+
+## Observability endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/agents` | Fleet snapshot: per-agent status, bindings, dispatch wiring |
+| `GET` | `/events` | Recent webhook events (time-windowed) |
+| `GET` | `/events/stream` | Live event firehose (SSE) |
+| `GET` | `/traces` | Recent agent run traces with timing |
+| `GET` | `/traces/stream` | Live trace updates (SSE) |
+| `GET` | `/traces/{root_event_id}` | All spans for a single root event |
+| `GET` | `/traces/{span_id}/steps` | Tool-loop transcript for a completed agent span |
+| `GET` | `/graph` | Agent interaction graph (dispatch edges) |
+| `GET` | `/dispatches` | Dispatch dedup store contents + counters |
+| `GET` | `/memory/{agent}/{repo}` | Raw agent memory markdown |
+| `GET` | `/memory/stream` | Memory file change notifications (SSE) |
+| `GET` | `/config` | Effective parsed config (secrets redacted) |
+
+## Web dashboard
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/ui/` | Built-in web dashboard (static assets; embedded in binary) |
+
+## Proxy endpoints (opt-in)
+
+These are only mounted when `daemon.proxy.enabled: true` is set in the config.
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/v1/messages` | Anthropic-to-OpenAI translation proxy |
+| `GET` | `/v1/models` | Companion stub; lists the configured upstream model |
+
+## CRUD endpoints (SQLite mode)
+
+These routes are always mounted but require `--db` to function -- without it they return errors.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/{resource}` | List all entries for a resource type (`skills`, `backends`, `repos`). Note: `GET /agents` is the fleet snapshot above, not the CRUD list. |
+| `GET` | `/{resource}/{name}` | Fetch one entry. Repos use two path segments: `/repos/{owner}/{repo}`. |
+| `POST` | `/{resource}` | Create or replace an entry. Resources: `agents`, `skills`, `backends`, `repos`. |
+| `DELETE` | `/{resource}/{name}` | Remove an entry. |
+| `GET` | `/export` | Export full fleet config as YAML. |
+| `POST` | `/import` | Import a YAML config into the SQLite store. |
+
+Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL cache.
+
+## AI runner contract
+
+The daemon spawns the configured CLI, sends the composed prompt on **stdin**, and expects a **single JSON object on stdout**:
+
+```json
+{
+  "summary": "Reviewed PR for security vulnerabilities",
+  "artifacts": [
+    {
+      "type": "pr_review",
+      "part_key": "review/claude/security",
+      "github_id": "123456",
+      "url": "https://github.com/owner/repo/pull/1#pullrequestreview-123456"
+    }
+  ],
+  "dispatch": [
+    {
+      "agent": "sec-reviewer",
+      "number": 42,
+      "reason": "Custom crypto primitives found -- needs deeper security review"
+    }
+  ],
+  "memory": "## 2026-04-21\n- Reviewed PR #42 -- escalated crypto concerns to sec-reviewer."
+}
+```
+
+The metadata is used for observability, logging, and run summaries. Agents that don't post anything still return an empty `artifacts: []`. The `dispatch` field is optional -- omit it or leave it empty when the agent does not need to invoke another agent. See [dispatch.md](dispatch.md) for the full contract.
+
+The `memory` field is how autonomous agents persist state across scheduled runs. The daemon reads the stored memory before each autonomous run and writes the `memory` value from the response back to the store (filesystem or SQLite depending on how the daemon was started). An empty string clears the memory. Event-driven runs (webhooks, label triggers) do not receive or persist memory.

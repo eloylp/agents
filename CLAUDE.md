@@ -22,7 +22,7 @@ internal/
   logging/                  # zerolog setup
 prompts/                    # Optional prompt files referenced by agent prompt_file:
 skills/                     # Optional skill files referenced by skill prompt_file:
-docs/                       # Long-form docs (docs/local-models.md, etc.)
+docs/                       # Long-form docs: configuration, events, dispatch, API, docker, local-models, security
 ```
 
 ## Config Model
