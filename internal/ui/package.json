@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@types/dagre": "^0.7.54",
+    "@uiw/react-md-editor": "^4.1.0",
     "@xyflow/react": "^12.10.2",
     "dagre": "^0.8.5",
     "next": "14.2.29",

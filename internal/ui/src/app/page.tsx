@@ -5,6 +5,7 @@ import StatusBadge from '@/components/StatusBadge'
 import Modal from '@/components/Modal'
 import Link from 'next/link'
 import BadgePicker from '@/components/BadgePicker'
+import MarkdownEditor from '@/components/MarkdownEditor'
 
 interface Binding {
   repo: string
@@ -150,11 +151,11 @@ function AgentForm({
       </div>
       <div>
         <label style={labelStyle}>Prompt</label>
-        <textarea
-          style={{ ...inputStyle, minHeight: '120px', resize: 'vertical' }}
+        <MarkdownEditor
           value={form.prompt}
-          onChange={e => set('prompt', e.target.value)}
+          onChange={v => set('prompt', v)}
           placeholder="Agent system prompt…"
+          minHeight={200}
         />
       </div>
       <div>

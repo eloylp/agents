@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
+import MarkdownEditor from '@/components/MarkdownEditor'
 
 interface Skill {
   name: string
@@ -42,11 +43,11 @@ function SkillForm({
       </div>
       <div>
         <label style={labelStyle}>Prompt</label>
-        <textarea
-          style={{ ...inputStyle, minHeight: '200px', resize: 'vertical' }}
+        <MarkdownEditor
           value={form.prompt}
-          onChange={e => setForm(f => ({ ...f, prompt: e.target.value }))}
+          onChange={v => setForm(f => ({ ...f, prompt: v }))}
           placeholder="Skill guidance text…"
+          minHeight={200}
         />
       </div>
       {error && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem' }}>{error}</p>}
