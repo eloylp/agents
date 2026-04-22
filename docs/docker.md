@@ -35,4 +35,4 @@ docker exec agents claude mcp list
 
 ## Image details
 
-Multi-stage build on `node:22-alpine`. The image includes Claude Code, Codex, and `gh` CLIs alongside the daemon. Runs as non-root `agents` user. Default CMD is `--db /var/lib/agents/agents.db` (SQLite mode; no `--config` flag needed after the initial `--import`).
+Multi-stage build on `node:22-alpine`. The image includes Claude Code, Codex, and `gh` CLIs alongside the daemon. Runs as non-root `agents` user. Default CMD is `--db /var/lib/agents/agents.db`.

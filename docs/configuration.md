@@ -177,7 +177,7 @@ LOG_SALT=optional-prompt-hash-salt
 
 ## SQLite mode (`--db`)
 
-An optional SQLite-backed config store lets you manage the fleet over the API instead of editing YAML files. Import once, then drop the `--config` flag entirely:
+SQLite is the config store. Import your YAML once, then manage the fleet over the CRUD API:
 
 ```bash
 # Import from existing YAML (one-time)

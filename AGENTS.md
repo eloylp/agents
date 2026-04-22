@@ -18,8 +18,9 @@ Key numbers:
 ```bash
 go test ./... -race                             # run all tests
 go build -o agents ./cmd/agents                 # build the daemon
-go run ./cmd/agents -config config.yaml         # start the daemon
-./agents -config config.yaml \                  # one-shot synchronous pass
+./agents --db agents.db --import config.yaml    # import config + start
+./agents --db agents.db                         # start (after import)
+./agents --db agents.db \                       # one-shot synchronous pass
   --run-agent <agent-name> --repo owner/repo   # (drains any dispatch chain)
 docker compose up -d                            # containerised run
 ```
@@ -112,7 +113,7 @@ When making common classes of changes, update all of these at once:
 ## Operational notes
 
 - **`.env` is auto-loaded on startup** (`godotenv.Load()`). Required runtime secret: `GITHUB_WEBHOOK_SECRET`. Optional: `LOG_SALT`.
-- **Config is read once at daemon startup.** Changing `config.yaml` or any `prompt_file` / skill file requires a daemon restart. If you're testing prompt changes interactively, expect to `docker compose restart agents`.
+- **Config is loaded from SQLite at startup.** Use `--import config.yaml` to seed the database, then manage changes via the CRUD API. Prompt and skill file changes require re-import or an API update followed by a daemon restart.
 - **Autonomous agent memory** is stored in SQLite when `--db` is set (in the `memory` table), keyed by `(agent, repo)`. It's the agent's job to return updated memory in its response; the daemon writes it back to the store unchanged.
 - **Dispatch dedup is process-local and in-memory.** It's shared across cron-fired runs, event-fired runs, and `--run-agent` invocations within one process. Restarting the daemon clears the dedup state.
 - **`--run-agent` drains dispatch chains synchronously.** When invoking an agent on demand via the CLI flag, the process waits for the originating agent and all dispatched children to finish before exiting. The in-memory event queue is sized to hold `MaxFanout^MaxDepth` events so deep chains don't silently drop.

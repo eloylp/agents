@@ -96,12 +96,14 @@ Then follow the official setup guides:
 # Copy and edit the example config
 cp config.example.yaml config.yaml
 
-# Run directly
-go run ./cmd/agents -config config.yaml
-
-# Or build first
+# Build
 go build -o agents ./cmd/agents
-./agents -config config.yaml
+
+# Import config into SQLite and start
+./agents --db agents.db --import config.yaml
+
+# Subsequent starts (no --import needed)
+./agents --db agents.db
 ```
 
 ### On-demand agent pass
@@ -109,7 +111,7 @@ go build -o agents ./cmd/agents
 Run one autonomous agent synchronously and exit (useful for testing):
 
 ```bash
-./agents -config config.yaml --run-agent coder --repo owner/repo
+./agents --db agents.db --run-agent coder --repo owner/repo
 ```
 
 Or via HTTP on the running daemon:

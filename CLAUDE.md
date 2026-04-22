@@ -43,14 +43,13 @@ No framework prompt templates. Each agent owns its full prompt; skill guidance i
 ```bash
 go test ./... -race
 go build -o agents ./cmd/agents
-go run ./cmd/agents -config config.yaml
 
-# On-demand single agent pass (synchronous, drains any dispatch chain, exits)
-./agents -config config.yaml --run-agent <agent-name> --repo owner/repo
-
-# SQLite mode: import from YAML once, then run without --config
+# Import config into SQLite and start
 ./agents --db agents.db --import config.yaml   # one-time import
 ./agents --db agents.db                         # subsequent starts
+
+# On-demand single agent pass (synchronous, drains any dispatch chain, exits)
+./agents --db agents.db --run-agent <agent-name> --repo owner/repo
 ```
 
 ## Docker
@@ -60,7 +59,7 @@ docker compose build
 docker compose up -d
 ```
 
-Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, and `gh` CLIs alongside the daemon. Runs as non-root `agents` user. Default CMD is `--db /var/lib/agents/agents.db` (SQLite mode; no `--config` flag needed after the initial `--import`). Compose mounts:
+Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, and `gh` CLIs alongside the daemon. Runs as non-root `agents` user. Default CMD is `--db /var/lib/agents/agents.db`. Compose mounts:
 - `./config.yaml` → `/etc/agents/config.yaml` (read-only; used for `--import` seeding)
 - `./agents` → `/etc/agents/agents` (optional; prompt/skill files when `prompt_file:` paths point here)
 - Claude/Codex/gh config dirs from host
