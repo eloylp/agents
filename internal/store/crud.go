@@ -146,6 +146,13 @@ func deleteAgent(db *sql.DB, name string, cascade bool) error {
 		if _, err := tx.Exec("DELETE FROM bindings WHERE agent=?", name); err != nil {
 			return fmt.Errorf("store: delete agent %s: cascade bindings: %w", name, err)
 		}
+	} else if refs, err := bindingsReferencing(tx, name); err != nil {
+		return fmt.Errorf("store: delete agent %s: check bindings: %w", name, err)
+	} else if len(refs) > 0 {
+		// Surface this as an ErrConflict rather than letting the raw FK
+		// constraint fire. Callers can show the referenced repos and
+		// offer a cascade without parsing SQLite error strings.
+		return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: still referenced by %d binding(s) across %d repo(s); use cascade to remove them", name, len(refs), countDistinctRepos(refs))}
 	}
 	res, err := tx.Exec("DELETE FROM agents WHERE name=?", name)
 	if err != nil {
@@ -160,6 +167,34 @@ func deleteAgent(db *sql.DB, name string, cascade bool) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// bindingsReferencing returns the repo names of every binding that points at
+// the given agent. Used by the non-cascade delete path to produce a typed
+// conflict error instead of a raw FK failure.
+func bindingsReferencing(q querier, agentName string) ([]string, error) {
+	rows, err := q.Query("SELECT repo FROM bindings WHERE agent=?", agentName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func countDistinctRepos(repos []string) int {
+	seen := make(map[string]struct{}, len(repos))
+	for _, r := range repos {
+		seen[r] = struct{}{}
+	}
+	return len(seen)
 }
 
 // ──── Skills ─────────────────────────────────────────────────────────────────

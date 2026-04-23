@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"database/sql"
+	"errors"
 	"maps"
 	"slices"
 	"strings"
@@ -620,9 +621,19 @@ func TestDeleteAgentRejectedWhenBindingReferences(t *testing.T) {
 		t.Fatalf("UpsertRepo: %v", err)
 	}
 
-	// Non-cascade delete must fail while a binding references the agent.
-	if err := store.DeleteAgent(db, "coder"); err == nil {
+	// Non-cascade delete must fail while a binding references the agent. The
+	// error must be ErrConflict so the HTTP layer can return 409 rather than
+	// leaking a raw FK constraint as 500.
+	err := store.DeleteAgent(db, "coder")
+	if err == nil {
 		t.Fatal("DeleteAgent with live bindings: want error, got nil")
+	}
+	var conflict *store.ErrConflict
+	if !errors.As(err, &conflict) {
+		t.Errorf("DeleteAgent with live bindings: want *store.ErrConflict, got %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), "still referenced") {
+		t.Errorf("error message should explain the blocker: %v", err)
 	}
 
 	// Agent must still be present.
