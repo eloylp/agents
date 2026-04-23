@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"database/sql"
+	"errors"
 	"maps"
 	"slices"
 	"strings"
@@ -596,6 +597,152 @@ func TestDeleteSkillRejectedWhenAgentReferences(t *testing.T) {
 	}
 	if _, ok := skills["architect"]; !ok {
 		t.Error("skill was deleted despite being still referenced")
+	}
+}
+
+func TestDeleteAgentRejectedWhenBindingReferences(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	seedBackend(t, db, "claude")
+	for _, name := range []string{"coder", "reviewer"} {
+		if err := store.UpsertAgent(db, config.AgentDef{
+			Name: name, Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+		}); err != nil {
+			t.Fatalf("UpsertAgent %s: %v", name, err)
+		}
+	}
+	enabled := true
+	if err := store.UpsertRepo(db, config.RepoDef{
+		Name:    "owner/repo",
+		Enabled: true,
+		Use:     []config.Binding{{Agent: "coder", Labels: []string{"ai:fix"}, Enabled: &enabled}},
+	}); err != nil {
+		t.Fatalf("UpsertRepo: %v", err)
+	}
+
+	// Non-cascade delete must fail while a binding references the agent. The
+	// error must be ErrConflict so the HTTP layer can return 409 rather than
+	// leaking a raw FK constraint as 500.
+	err := store.DeleteAgent(db, "coder")
+	if err == nil {
+		t.Fatal("DeleteAgent with live bindings: want error, got nil")
+	}
+	var conflict *store.ErrConflict
+	if !errors.As(err, &conflict) {
+		t.Errorf("DeleteAgent with live bindings: want *store.ErrConflict, got %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), "still referenced") {
+		t.Errorf("error message should explain the blocker: %v", err)
+	}
+
+	// Agent must still be present.
+	agents, err := store.ReadAgents(db)
+	if err != nil {
+		t.Fatalf("ReadAgents: %v", err)
+	}
+	if len(agents) != 2 {
+		t.Errorf("agent count after rejected delete: got %d, want 2", len(agents))
+	}
+}
+
+func TestDeleteAgentCascadeRemovesBindings(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	seedBackend(t, db, "claude")
+	for _, name := range []string{"coder", "reviewer"} {
+		if err := store.UpsertAgent(db, config.AgentDef{
+			Name: name, Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+		}); err != nil {
+			t.Fatalf("UpsertAgent %s: %v", name, err)
+		}
+	}
+	enabled := true
+	// Repo keeps a binding for "reviewer" so the cascade path does not wipe
+	// the repo entirely; only bindings referencing "coder" should disappear.
+	if err := store.UpsertRepo(db, config.RepoDef{
+		Name:    "owner/repo",
+		Enabled: true,
+		Use: []config.Binding{
+			{Agent: "coder", Labels: []string{"ai:fix"}, Enabled: &enabled},
+			{Agent: "coder", Events: []string{"issues.opened"}, Enabled: &enabled},
+			{Agent: "reviewer", Labels: []string{"ai:review"}, Enabled: &enabled},
+		},
+	}); err != nil {
+		t.Fatalf("UpsertRepo: %v", err)
+	}
+
+	if err := store.DeleteAgentCascade(db, "coder"); err != nil {
+		t.Fatalf("DeleteAgentCascade: %v", err)
+	}
+
+	agents, err := store.ReadAgents(db)
+	if err != nil {
+		t.Fatalf("ReadAgents: %v", err)
+	}
+	if len(agents) != 1 || agents[0].Name != "reviewer" {
+		t.Errorf("agents after cascade: got %v, want [reviewer]", agents)
+	}
+
+	repos, err := store.ReadRepos(db)
+	if err != nil {
+		t.Fatalf("ReadRepos: %v", err)
+	}
+	if len(repos) != 1 {
+		t.Fatalf("repos after cascade: got %d, want 1", len(repos))
+	}
+	if len(repos[0].Use) != 1 {
+		t.Fatalf("bindings after cascade: got %d, want 1", len(repos[0].Use))
+	}
+	if repos[0].Use[0].Agent != "reviewer" {
+		t.Errorf("surviving binding agent: got %q, want %q", repos[0].Use[0].Agent, "reviewer")
+	}
+}
+
+func TestDeleteAgentCascadeStillRejectsLastAgent(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	seedBackend(t, db, "claude")
+	if err := store.UpsertAgent(db, config.AgentDef{
+		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
+	}
+
+	err := store.DeleteAgentCascade(db, "coder")
+	if err == nil {
+		t.Fatal("DeleteAgentCascade last agent: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "at least one agent") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestDeleteAgentCascadeStillRejectsWhenInCanDispatch(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	seedBackend(t, db, "claude")
+	if err := store.UpsertAgent(db, config.AgentDef{
+		Name: "target", Backend: "claude", Prompt: "p", Description: "a dispatchable target",
+		Skills: []string{}, CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("UpsertAgent target: %v", err)
+	}
+	if err := store.UpsertAgent(db, config.AgentDef{
+		Name: "dispatcher", Backend: "claude", Prompt: "p",
+		Skills: []string{}, CanDispatch: []string{"target"},
+	}); err != nil {
+		t.Fatalf("UpsertAgent dispatcher: %v", err)
+	}
+
+	// Cascade is scoped to bindings; dangling can_dispatch references must
+	// still block the delete so callers cannot silently reshape the dispatch
+	// graph by deleting a referenced target.
+	if err := store.DeleteAgentCascade(db, "target"); err == nil {
+		t.Fatal("DeleteAgentCascade referenced by can_dispatch: want error, got nil")
 	}
 }
 

@@ -298,7 +298,7 @@ export default function FleetPage() {
 
   const [modal, setModal] = useState<'create' | 'edit' | 'delete' | null>(null)
   const [selected, setSelected] = useState<StoreAgent>(emptyForm)
-  const [deleteTarget, setDeleteTarget] = useState('')
+  const [deleteTarget, setDeleteTarget] = useState<{ name: string; bindings: Binding[] }>({ name: '', bindings: [] })
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
 
@@ -399,14 +399,18 @@ export default function FleetPage() {
   }
 
   const confirmDelete = (name: string) => {
-    setDeleteTarget(name)
+    const a = agents.find(agent => agent.name === name)
+    setDeleteTarget({ name, bindings: a?.bindings ?? [] })
+    setSaveError('')
     setModal('delete')
   }
 
   const deleteAgent = async () => {
     setSaving(true)
     try {
-      const res = await fetch(`/agents/${encodeURIComponent(deleteTarget)}`, { method: 'DELETE' })
+      const cascade = deleteTarget.bindings.length > 0
+      const url = `/agents/${encodeURIComponent(deleteTarget.name)}${cascade ? '?cascade=true' : ''}`
+      const res = await fetch(url, { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         const msg = await res.text()
         setSaveError(msg || 'Delete failed')
@@ -420,6 +424,13 @@ export default function FleetPage() {
       setSaveError(String(e))
     }
     setSaving(false)
+  }
+
+  const bindingTriggerLabel = (b: Binding): string => {
+    if (b.cron) return `cron: ${b.cron}`
+    if (b.labels && b.labels.length > 0) return `labels: ${b.labels.join(', ')}`
+    if (b.events && b.events.length > 0) return `events: ${b.events.join(', ')}`
+    return '—'
   }
 
   return (
@@ -482,22 +493,43 @@ export default function FleetPage() {
         </Modal>
       )}
 
-      {modal === 'delete' && (
-        <Modal title="Delete agent" onClose={() => setModal(null)}>
-          <p style={{ color: 'var(--text)', fontSize: '0.9rem', marginBottom: '1.25rem' }}>
-            Delete <strong>{deleteTarget}</strong>? This cannot be undone.
-          </p>
-          {saveError && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>{saveError}</p>}
-          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-            <button onClick={() => setModal(null)} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', cursor: 'pointer', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-              Cancel
-            </button>
-            <button onClick={deleteAgent} disabled={saving} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border-danger)', background: '#dc2626', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>
-              {saving ? 'Deleting…' : 'Delete'}
-            </button>
-          </div>
-        </Modal>
-      )}
+      {modal === 'delete' && (() => {
+        const bindings = deleteTarget.bindings
+        const repoCount = new Set(bindings.map(b => b.repo)).size
+        const hasBindings = bindings.length > 0
+        return (
+          <Modal title="Delete agent" onClose={() => setModal(null)}>
+            <p style={{ color: 'var(--text)', fontSize: '0.9rem', marginBottom: hasBindings ? '0.75rem' : '1.25rem' }}>
+              Delete <strong>{deleteTarget.name}</strong>? This cannot be undone.
+            </p>
+            {hasBindings && (
+              <div style={{ marginBottom: '1.25rem' }}>
+                <p style={{ color: 'var(--text-danger)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+                  ⚠ This will also remove {bindings.length} binding{bindings.length !== 1 ? 's' : ''} from {repoCount} repo{repoCount !== 1 ? 's' : ''}:
+                </p>
+                <div style={{ border: '1px solid var(--border)', borderRadius: '6px', background: 'var(--bg-input)', padding: '0.5rem 0.75rem', maxHeight: '12rem', overflowY: 'auto' }}>
+                  {bindings.map((b, i) => (
+                    <div key={i} style={{ fontSize: '0.8rem', color: 'var(--text-muted)', padding: '2px 0', display: 'flex', gap: '0.6rem' }}>
+                      <span style={{ color: 'var(--text)', fontWeight: 500 }}>{b.repo}</span>
+                      <span style={{ color: 'var(--text-faint)' }}>{bindingTriggerLabel(b)}</span>
+                      {b.enabled === false && <span style={{ color: 'var(--text-faint)', fontSize: '0.7rem' }}>(off)</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {saveError && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>{saveError}</p>}
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+              <button onClick={() => setModal(null)} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', cursor: 'pointer', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                Cancel
+              </button>
+              <button onClick={deleteAgent} disabled={saving} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border-danger)', background: '#dc2626', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>
+                {saving ? 'Deleting…' : hasBindings ? `Delete agent + ${bindings.length} binding${bindings.length !== 1 ? 's' : ''}` : 'Delete'}
+              </button>
+            </div>
+          </Modal>
+        )
+      })()}
     </div>
   )
 }

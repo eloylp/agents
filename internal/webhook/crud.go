@@ -322,8 +322,14 @@ func (s *Server) handleStoreAgent(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 
 	case http.MethodDelete:
+		cascade := r.URL.Query().Get("cascade") == "true"
 		s.storeMu.Lock()
-		err := store.DeleteAgent(s.db, name)
+		var err error
+		if cascade {
+			err = store.DeleteAgentCascade(s.db, name)
+		} else {
+			err = store.DeleteAgent(s.db, name)
+		}
 		if err == nil {
 			err = s.reloadCron()
 		}

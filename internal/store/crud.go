@@ -124,11 +124,36 @@ func UpsertAgent(db *sql.DB, a config.AgentDef) error {
 // delete a name that does not exist. Returns an error if the agent is still
 // referenced by any repo binding or can_dispatch list, or if it is the last agent.
 func DeleteAgent(db *sql.DB, name string) error {
+	return deleteAgent(db, name, false)
+}
+
+// DeleteAgentCascade removes the agent and all repo bindings that reference it
+// in a single transaction. It still fails if removing the agent would leave
+// zero agents, or if any other agent's can_dispatch list still references it
+// (cascading across agent relationships would silently reshape the dispatch
+// graph; the user should opt in explicitly).
+func DeleteAgentCascade(db *sql.DB, name string) error {
+	return deleteAgent(db, name, true)
+}
+
+func deleteAgent(db *sql.DB, name string, cascade bool) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: delete agent %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
+	if cascade {
+		if _, err := tx.Exec("DELETE FROM bindings WHERE agent=?", name); err != nil {
+			return fmt.Errorf("store: delete agent %s: cascade bindings: %w", name, err)
+		}
+	} else if refs, err := bindingsReferencing(tx, name); err != nil {
+		return fmt.Errorf("store: delete agent %s: check bindings: %w", name, err)
+	} else if len(refs) > 0 {
+		// Surface this as an ErrConflict rather than letting the raw FK
+		// constraint fire. Callers can show the referenced repos and
+		// offer a cascade without parsing SQLite error strings.
+		return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: still referenced by %d binding(s) across %d repo(s); use cascade to remove them", name, len(refs), countDistinctRepos(refs))}
+	}
 	res, err := tx.Exec("DELETE FROM agents WHERE name=?", name)
 	if err != nil {
 		return fmt.Errorf("store: delete agent %s: %w", name, err)
@@ -142,6 +167,34 @@ func DeleteAgent(db *sql.DB, name string) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// bindingsReferencing returns the repo names of every binding that points at
+// the given agent. Used by the non-cascade delete path to produce a typed
+// conflict error instead of a raw FK failure.
+func bindingsReferencing(q querier, agentName string) ([]string, error) {
+	rows, err := q.Query("SELECT repo FROM bindings WHERE agent=?", agentName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func countDistinctRepos(repos []string) int {
+	seen := make(map[string]struct{}, len(repos))
+	for _, r := range repos {
+		seen[r] = struct{}{}
+	}
+	return len(seen)
 }
 
 // ──── Skills ─────────────────────────────────────────────────────────────────
