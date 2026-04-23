@@ -135,7 +135,7 @@ skills:
 # it uses, and a prompt file. Agents don't run on their own — repos
 # below decide when and where they run.
 #
-# backend: auto | claude | codex   ("auto" picks the default)
+# backend: claude | codex | claude_local
 # allow_prs: false (default) | true
 #   When false the scheduler prepends a hard "do not open PRs" instruction
 #   before the agent's prompt. Set to true only for agents explicitly
@@ -178,14 +178,14 @@ skills:
 agents:
   # Autonomous scouts — survey the codebase and open issues for follow-up.
   - name: scout-issues
-    backend: auto
+    backend: claude
     description: "Surveys the codebase for issues worth tracking in the issue tracker"
     skills: &scout-skills [architect, dx]
     prompt_file: prompts/codebase-scout-issues.md
     can_dispatch: [product-strategist]
 
   - name: scout-code
-    backend: auto
+    backend: claude
     description: "Surveys the codebase for code-quality and architectural concerns"
     skills: *scout-skills
     prompt_file: prompts/codebase-scout-code.md
@@ -234,32 +234,32 @@ agents:
 
   # Single-axis review agents, one per skill.
   - name: arch-reviewer
-    backend: auto
+    backend: claude
     description: "Reviews architecture and design decisions"
     skills: [architect]
     prompt_file: prompts/arch-reviewer.md
 
   - name: sec-reviewer
-    backend: auto
+    backend: claude
     description: "Reviews security concerns and potential vulnerabilities"
     skills: [security]
     prompt_file: prompts/sec-reviewer.md
     allow_dispatch: true    # pr-reviewer escalates security smells here
 
   - name: test-reviewer
-    backend: auto
+    backend: claude
     description: "Reviews test coverage and testing strategy"
     skills: [testing]
     prompt_file: prompts/test-reviewer.md
 
   - name: ops-reviewer
-    backend: auto
+    backend: claude
     description: "Reviews operational concerns: CI, deployment, observability"
     skills: [devops]
     prompt_file: prompts/ops-reviewer.md
 
   - name: dx-reviewer
-    backend: auto
+    backend: claude
     description: "Reviews developer experience: docs, tooling, onboarding"
     skills: [dx]
     prompt_file: prompts/dx-reviewer.md

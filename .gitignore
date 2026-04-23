@@ -1,6 +1,12 @@
 .env
 config.yaml
 main
+agents
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.test.yaml
 agents/**/MEMORY.md
 internal/ui/node_modules/
 internal/ui/.next/

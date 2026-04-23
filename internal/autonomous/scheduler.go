@@ -119,8 +119,8 @@ func (r *runLocks) release(key string) {
 type Scheduler struct {
 	cfg           *config.Config
 	runners       map[string]ai.Runner
-	runnerBuilder RunnerBuilder  // optional; nil means Reload does not update runners
-	hotReloadSink HotReloadSink  // optional; nil means no external component to notify
+	runnerBuilder RunnerBuilder // optional; nil means Reload does not update runners
+	hotReloadSink HotReloadSink // optional; nil means no external component to notify
 	memory        MemoryBackend
 	cron          *cron.Cron
 	logger        zerolog.Logger
@@ -130,9 +130,9 @@ type Scheduler struct {
 	agentEntries  []agentEntry
 	lastRunsMu    sync.RWMutex
 	lastRuns      map[string]lastRunRecord // key: "name\x00repo"
-	dispatcher    *workflow.Dispatcher    // nil when dispatch is not configured
-	traceRec      workflow.TraceRecorder  // nil when tracing is not configured
-	runLock        runLocks               // per-(agent,repo) mutex serializing the read/run/write sequence
+	dispatcher    *workflow.Dispatcher     // nil when dispatch is not configured
+	traceRec      workflow.TraceRecorder   // nil when tracing is not configured
+	runLock       runLocks                 // per-(agent,repo) mutex serializing the read/run/write sequence
 }
 
 // WithDispatcher attaches a Dispatcher to the Scheduler so that dispatch
@@ -396,6 +396,17 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		}
 		return fmt.Errorf("no configured backend for agent %q (configured: %q)", agent.Name, agent.Backend)
 	}
+	if backendCfg, ok := cfg.Daemon.AIBackends[backend]; ok && config.IsPinnedModelUnavailable(agent.Model, backendCfg) {
+		if s.dispatcher != nil {
+			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
+		}
+		return fmt.Errorf(
+			"agent %q: configured model %q is not available for backend %q; run backend discovery and update the agent model",
+			agent.Name,
+			agent.Model,
+			backend,
+		)
+	}
 	runner, ok := runners[backend]
 	if !ok {
 		if s.dispatcher != nil {
@@ -448,6 +459,7 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	resp, runErr := runner.Run(ctx, ai.Request{
 		Workflow: fmt.Sprintf("autonomous:%s:%s", backend, agent.Name),
 		Repo:     repo,
+		Model:    agent.Model,
 		System:   rendered.System,
 		User:     rendered.User,
 	})

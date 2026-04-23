@@ -45,8 +45,6 @@ func minimalCfg() *config.Config {
 			AIBackends: map[string]config.AIBackendConfig{
 				"claude": {
 					Command:          "claude",
-					Args:             []string{"-p", "--output-format", "json"},
-					Env:              map[string]string{"MY_VAR": "my_val"},
 					TimeoutSeconds:   600,
 					MaxPromptChars:   12000,
 					RedactionSaltEnv: "LOG_SALT",
@@ -176,13 +174,6 @@ func TestImportLoad(t *testing.T) {
 	if claude.Command != "claude" {
 		t.Errorf("backend command: got %q, want %q", claude.Command, "claude")
 	}
-	if len(claude.Args) != 3 {
-		t.Errorf("backend args: got %v, want 3 items", claude.Args)
-	}
-	if claude.Env["MY_VAR"] != "my_val" {
-		t.Errorf("backend env MY_VAR: got %q, want %q", claude.Env["MY_VAR"], "my_val")
-	}
-
 	// Skills.
 	if len(out.Skills) != 2 {
 		t.Fatalf("skills: got %d, want 2", len(out.Skills))
@@ -333,7 +324,7 @@ func TestLoadEmptyDatabase(t *testing.T) {
 func seedAgent(t *testing.T, db *sql.DB, name string) {
 	t.Helper()
 	if err := store.UpsertBackend(db, "claude", config.AIBackendConfig{
-		Command: "claude", Args: []string{}, Env: map[string]string{},
+		Command: "claude",
 	}); err != nil {
 		t.Fatalf("seedAgent backend: %v", err)
 	}

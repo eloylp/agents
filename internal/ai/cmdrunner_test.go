@@ -250,7 +250,7 @@ func TestResponseDispatchOmittedWhenEmpty(t *testing.T) {
 func TestCommandRunnerEmptyStdoutIsError(t *testing.T) {
 	t.Parallel()
 	// "true" exits 0 with no stdout — the canonical empty-output case.
-	r := NewCommandRunner("test", "command", "true", nil, nil, 10, 4000, "", zerolog.Nop())
+	r := NewCommandRunner("test", "command", "true", nil, 10, 4000, "", zerolog.Nop())
 	_, err := r.Run(context.Background(), Request{Workflow: "wf", Repo: "owner/repo"})
 	if err == nil {
 		t.Fatal("expected error for empty stdout, got nil")
@@ -311,7 +311,6 @@ func TestBuildDeliveryClaudeUsesAppendSystemPrompt(t *testing.T) {
 	tests := []struct {
 		name        string
 		backendName string
-		staticArgs  []string
 		system      string
 		user        string
 		wantFlag    bool // whether --append-system-prompt flag is expected
@@ -319,7 +318,6 @@ func TestBuildDeliveryClaudeUsesAppendSystemPrompt(t *testing.T) {
 		{
 			name:        "claude-routes-system-via-flag",
 			backendName: "claude",
-			staticArgs:  []string{"--dangerously-skip-permissions"},
 			system:      "You are a reviewer.",
 			user:        "Review PR #5.",
 			wantFlag:    true,
@@ -327,7 +325,6 @@ func TestBuildDeliveryClaudeUsesAppendSystemPrompt(t *testing.T) {
 		{
 			name:        "claude-local-also-uses-flag",
 			backendName: "claude_local",
-			staticArgs:  nil,
 			system:      "System guidance.",
 			user:        "Runtime context.",
 			wantFlag:    true,
@@ -335,7 +332,6 @@ func TestBuildDeliveryClaudeUsesAppendSystemPrompt(t *testing.T) {
 		{
 			name:        "codex-concatenates-on-stdin",
 			backendName: "codex",
-			staticArgs:  []string{"exec"},
 			system:      "System guidance.",
 			user:        "Runtime context.",
 			wantFlag:    false,
@@ -343,7 +339,6 @@ func TestBuildDeliveryClaudeUsesAppendSystemPrompt(t *testing.T) {
 		{
 			name:        "unknown-backend-concatenates",
 			backendName: "openai_compatible",
-			staticArgs:  nil,
 			system:      "System guidance.",
 			user:        "Runtime context.",
 			wantFlag:    false,
@@ -351,7 +346,6 @@ func TestBuildDeliveryClaudeUsesAppendSystemPrompt(t *testing.T) {
 		{
 			name:        "claude-empty-system-no-flag",
 			backendName: "claude",
-			staticArgs:  nil,
 			system:      "",
 			user:        "Only user content.",
 			wantFlag:    false, // no flag when system is empty
@@ -361,7 +355,7 @@ func TestBuildDeliveryClaudeUsesAppendSystemPrompt(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			r := NewCommandRunner(tc.backendName, "command", "true", tc.staticArgs, nil, 10, 0, "", zerolog.Nop())
+			r := NewCommandRunner(tc.backendName, "command", "true", nil, 10, 0, "", zerolog.Nop())
 			args, stdin := r.buildDelivery(Request{System: tc.system, User: tc.user})
 
 			hasFlag := slices.Contains(args, "--append-system-prompt")
@@ -385,12 +379,6 @@ func TestBuildDeliveryClaudeUsesAppendSystemPrompt(t *testing.T) {
 				// User content goes on stdin (maxPromptChars=0 means no truncation).
 				if stdin != tc.user {
 					t.Errorf("stdin = %q, want user content %q", stdin, tc.user)
-				}
-				// Static args must still be present.
-				for _, sa := range tc.staticArgs {
-					if !slices.Contains(args, sa) {
-						t.Errorf("static arg %q missing from args=%v", sa, args)
-					}
 				}
 			} else {
 				// Non-claude (or empty system): combined content on stdin.
@@ -485,10 +473,10 @@ func TestBuildDeliveryRespectsTotalBudget(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			r := NewCommandRunner(tc.backendName, "command", "true", nil, nil, 10, tc.maxChars, "", zerolog.Nop())
-			args, stdin := r.buildDelivery(Request{System: tc.system, User: tc.user})
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				r := NewCommandRunner(tc.backendName, "command", "true", nil, 10, tc.maxChars, "", zerolog.Nop())
+				args, stdin := r.buildDelivery(Request{System: tc.system, User: tc.user})
 			if stdin != tc.wantStdin {
 				t.Errorf("stdin = %q, want %q", stdin, tc.wantStdin)
 			}
@@ -555,10 +543,10 @@ func TestBuildDeliveryClaudeAndCodexSameTruncationBoundary(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			claude := NewCommandRunner("claude", "command", "true", nil, nil, 10, tc.maxChars, "", zerolog.Nop())
-			codex := NewCommandRunner("codex", "command", "true", nil, nil, 10, tc.maxChars, "", zerolog.Nop())
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				claude := NewCommandRunner("claude", "command", "true", nil, 10, tc.maxChars, "", zerolog.Nop())
+				codex := NewCommandRunner("codex", "command", "true", nil, 10, tc.maxChars, "", zerolog.Nop())
 
 			claudeArgs, claudeStdin := claude.buildDelivery(Request{System: tc.system, User: tc.user})
 			_, codexStdin := codex.buildDelivery(Request{System: tc.system, User: tc.user})
@@ -685,9 +673,9 @@ func TestPromptMetaReflectsDeliveredPrompt(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			r := NewCommandRunner("codex", "noop", "", nil, nil, 10, tc.maxChars, "", zerolog.Nop())
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				r := NewCommandRunner("codex", "noop", "", nil, 10, tc.maxChars, "", zerolog.Nop())
 			combined := truncateString(combineSystemUser(tc.system, tc.user), tc.maxChars)
 			meta := r.promptMeta(combined)
 

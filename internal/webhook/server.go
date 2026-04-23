@@ -52,7 +52,6 @@ type DispatchStatsProvider interface {
 	DispatchStats() workflow.DispatchStats
 }
 
-
 // RuntimeStateProvider reports whether a named agent currently has an in-flight run.
 // The implementation is optional; passing nil causes all agents to report "idle".
 type RuntimeStateProvider interface {
@@ -107,6 +106,11 @@ type Server struct {
 	// (HTTP, proxy, log) is never replaced after startup, but since the entire
 	// pointer is swapped on reload the lock is required for all accesses.
 	cfgMu sync.RWMutex
+	// orphanMu protects orphanCache, which is updated on config reloads and
+	// read by /status and /agents/orphans/status endpoints.
+	orphanMu sync.RWMutex
+	// orphanCache stores the latest DB-only orphaned-agent snapshot.
+	orphanCache OrphanedAgentsSnapshot
 }
 
 // WithUI attaches an fs.FS containing the pre-built static UI assets to the
@@ -156,6 +160,7 @@ func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue,
 		dispatchStats: dispatchStats,
 		startTime:     time.Now(),
 	}
+	s.refreshOrphanedAgents(cfg)
 	if cfg.Daemon.Proxy.Enabled {
 		up := cfg.Daemon.Proxy.Upstream
 		s.proxy = anthropicproxy.NewHandler(anthropicproxy.UpstreamConfig{
@@ -210,27 +215,33 @@ func (s *Server) buildHandler() http.Handler {
 
 	// Fleet view (GET) + CRUD (POST) merged on a single path.
 	router.Handle("/agents", withTimeout(http.HandlerFunc(s.handleAgents))).Methods(http.MethodGet, http.MethodPost)
+	router.Handle("/agents/orphans/status", withTimeout(http.HandlerFunc(s.handleAgentsOrphans))).Methods(http.MethodGet)
 	router.Handle("/agents/{name}", withTimeout(http.HandlerFunc(s.handleStoreAgent))).Methods(http.MethodGet, http.MethodDelete)
 
 	router.Handle("/skills", withTimeout(http.HandlerFunc(s.handleStoreSkills))).Methods(http.MethodGet, http.MethodPost)
 	router.Handle("/skills/{name}", withTimeout(http.HandlerFunc(s.handleStoreSkill))).Methods(http.MethodGet, http.MethodDelete)
 
 	router.Handle("/backends", withTimeout(http.HandlerFunc(s.handleStoreBackends))).Methods(http.MethodGet, http.MethodPost)
-	router.Handle("/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackend))).Methods(http.MethodGet, http.MethodDelete)
+	router.Handle("/backends/status", withTimeout(http.HandlerFunc(s.handleBackendsStatus))).Methods(http.MethodGet)
+	router.Handle("/backends/discover", withTimeout(http.HandlerFunc(s.handleBackendsDiscover))).Methods(http.MethodPost)
+	router.Handle("/backends/local", withTimeout(http.HandlerFunc(s.handleBackendsLocal))).Methods(http.MethodPost)
+	router.Handle("/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackendGet))).Methods(http.MethodGet)
+	router.Handle("/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackendPatch))).Methods(http.MethodPatch)
+	router.Handle("/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackendDelete))).Methods(http.MethodDelete)
 
 	router.Handle("/repos", withTimeout(http.HandlerFunc(s.handleStoreRepos))).Methods(http.MethodGet, http.MethodPost)
 	router.Handle("/repos/{owner}/{repo}", withTimeout(http.HandlerFunc(s.handleStoreRepo))).Methods(http.MethodGet, http.MethodDelete)
 
 	router.Handle("/events", withTimeout(http.HandlerFunc(s.handleAPIEvents))).Methods(http.MethodGet)
-	router.HandleFunc("/events/stream", s.handleAPIEventsStream)           // SSE — no timeout
+	router.HandleFunc("/events/stream", s.handleAPIEventsStream) // SSE — no timeout
 	router.Handle("/traces", withTimeout(http.HandlerFunc(s.handleAPITraces))).Methods(http.MethodGet)
-	router.HandleFunc("/traces/stream", s.handleAPITracesStream)                                                        // SSE — no timeout
+	router.HandleFunc("/traces/stream", s.handleAPITracesStream) // SSE — no timeout
 	router.Handle("/traces/{root_event_id}", withTimeout(http.HandlerFunc(s.handleAPITrace))).Methods(http.MethodGet)
 	router.Handle("/traces/{span_id}/steps", withTimeout(http.HandlerFunc(s.handleAPITraceSteps))).Methods(http.MethodGet)
 	router.Handle("/graph", withTimeout(http.HandlerFunc(s.handleAPIGraph))).Methods(http.MethodGet)
 	router.Handle("/dispatches", withTimeout(http.HandlerFunc(s.handleAPIDispatches))).Methods(http.MethodGet)
 	router.Handle("/memory/{agent}/{repo}", withTimeout(http.HandlerFunc(s.handleAPIMemory))).Methods(http.MethodGet)
-	router.HandleFunc("/memory/stream", s.handleAPIMemoryStream)           // SSE — no timeout
+	router.HandleFunc("/memory/stream", s.handleAPIMemoryStream) // SSE — no timeout
 	router.Handle("/config", withTimeout(http.HandlerFunc(s.handleAPIConfig))).Methods(http.MethodGet)
 	router.Handle("/export", withTimeout(http.HandlerFunc(s.handleStoreExport))).Methods(http.MethodGet)
 	router.Handle("/import", withTimeout(http.HandlerFunc(s.handleStoreImport))).Methods(http.MethodPost)
@@ -313,12 +324,17 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		Buffered int `json:"buffered"`
 		Capacity int `json:"capacity"`
 	}
+	type orphanedAgentsSummaryJSON struct {
+		Count     int        `json:"count"`
+		UpdatedAt *time.Time `json:"updated_at,omitempty"`
+	}
 	type statusJSON struct {
-		Status        string                  `json:"status"`
-		UptimeSeconds int64                   `json:"uptime_seconds"`
-		Queues        map[string]queueJSON    `json:"queues"`
-		Agents        []AgentStatus           `json:"agents"`
-		Dispatch      *workflow.DispatchStats `json:"dispatch,omitempty"`
+		Status         string                    `json:"status"`
+		UptimeSeconds  int64                     `json:"uptime_seconds"`
+		Queues         map[string]queueJSON      `json:"queues"`
+		Agents         []AgentStatus             `json:"agents"`
+		Dispatch       *workflow.DispatchStats   `json:"dispatch,omitempty"`
+		OrphanedAgents orphanedAgentsSummaryJSON `json:"orphaned_agents"`
 	}
 
 	agents := []AgentStatus{}
@@ -336,11 +352,25 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		},
 		Agents: agents,
 	}
+	orphaned := s.orphanedAgentsSnapshot()
+	if fresh, err := s.refreshOrphanedAgentsFromDB(); err == nil {
+		orphaned = fresh
+	} else {
+		s.logger.Warn().Err(err).Msg("status: orphan snapshot refresh failed")
+	}
+	resp.OrphanedAgents = orphanedAgentsSummaryJSON{
+		Count: orphaned.Count,
+	}
+	if !orphaned.GeneratedAt.IsZero() {
+		at := orphaned.GeneratedAt
+		resp.OrphanedAgents.UpdatedAt = &at
+	}
 	if s.dispatchStats != nil {
 		stats := s.dispatchStats.DispatchStats()
 		resp.Dispatch = &stats
 	}
 
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }
@@ -487,11 +517,11 @@ type webhookReview struct {
 func (s *Server) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
 	cfg := s.loadCfg()
 	var payload struct {
-		Action     string             `json:"action"`
-		Label      webhookLabel       `json:"label"`
-		Issue      webhookIssue       `json:"issue"`
-		Repository webhookRepository  `json:"repository"`
-		Sender     webhookSender      `json:"sender"`
+		Action     string            `json:"action"`
+		Label      webhookLabel      `json:"label"`
+		Issue      webhookIssue      `json:"issue"`
+		Repository webhookRepository `json:"repository"`
+		Sender     webhookSender     `json:"sender"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)

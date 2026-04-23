@@ -223,21 +223,22 @@ func TestTriggerAgentRejections(t *testing.T) {
 	}
 }
 
-func TestResolveBackendAutoFallsBackToDefault(t *testing.T) {
+func TestResolveBackendRequiresExplicitBackend(t *testing.T) {
 	t.Parallel()
-	cfg := baseCfg(func(c *config.Config) { c.Agents[0].Backend = "auto" })
+	cfg := baseCfg(func(c *config.Config) { c.Agents[0].Backend = "" })
 	runner := &stubRunner{}
 	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
-	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
-		t.Fatalf("TriggerAgent: %v", err)
+	err = s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
+	if err == nil || !strings.Contains(err.Error(), "no configured backend") {
+		t.Fatalf("TriggerAgent: got %v, want explicit backend error", err)
 	}
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
-	if runner.calls != 1 {
-		t.Errorf("expected auto to resolve to claude and run once, got %d calls", runner.calls)
+	if runner.calls != 0 {
+		t.Errorf("expected no runner invocation when backend is missing, got %d calls", runner.calls)
 	}
 }
 
@@ -517,8 +518,8 @@ type blockingQueue struct {
 }
 
 func (q *blockingQueue) PushEvent(_ context.Context, _ workflow.Event) error {
-	close(q.readyCh)   // signal that TryClaim has run and we're now blocking
-	<-q.releaseCh      // wait for the test to release us
+	close(q.readyCh) // signal that TryClaim has run and we're now blocking
+	<-q.releaseCh    // wait for the test to release us
 	return nil
 }
 
@@ -1654,8 +1655,8 @@ func TestSchedulerCronJobUsesPostReloadAgentDef(t *testing.T) {
 
 // stubTraceRecorder records calls to RecordSpan for assertion in tests.
 type stubTraceRecorder struct {
-	mu      sync.Mutex
-	spans   []stubSpan
+	mu    sync.Mutex
+	spans []stubSpan
 }
 
 type stubSpan struct {
@@ -1892,7 +1893,7 @@ func TestSchedulerMemoryRunsSerializedPerAgentRepo(t *testing.T) {
 	mem := &readTrackingMemory{inner: newMapMemory()}
 
 	ready := make(chan struct{}, 1) // first run signals when inside runner.Run
-	block := make(chan struct{})     // closed to unblock first run
+	block := make(chan struct{})    // closed to unblock first run
 	runner := &firstCallBlockingRunner{
 		ready: ready,
 		block: block,

@@ -74,6 +74,25 @@ func TestRunPassesPromptAsArg(t *testing.T) {
 	}
 }
 
+func TestRunPromptMentionsDiagnosticsEndpoints(t *testing.T) {
+	t.Parallel()
+	runner := &captureRunner{}
+
+	_ = setup.Run(runner, false, &bytes.Buffer{}, &bytes.Buffer{}, &bytes.Buffer{})
+
+	prompt := runner.args[len(runner.args)-1]
+	for _, want := range []string{
+		"/status",
+		"/backends/status",
+		"/backends/discover",
+		"/agents/orphans/status",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("embedded setup prompt missing %q", want)
+		}
+	}
+}
+
 func TestRunForwardsStdin(t *testing.T) {
 	t.Parallel()
 	var capturedStdin io.Reader

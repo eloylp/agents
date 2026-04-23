@@ -37,6 +37,7 @@ type agentBindingJSON struct {
 type apiAgentJSON struct {
 	Name          string             `json:"name"`
 	Backend       string             `json:"backend"`
+	Model         string             `json:"model,omitempty"`
 	Skills        []string           `json:"skills,omitempty"`
 	Description   string             `json:"description,omitempty"`
 	AllowDispatch bool               `json:"allow_dispatch"`
@@ -69,6 +70,7 @@ func (s *Server) handleAPIAgents(w http.ResponseWriter, _ *http.Request) {
 		entry := apiAgentJSON{
 			Name:          a.Name,
 			Backend:       a.Backend,
+			Model:         a.Model,
 			Skills:        a.Skills,
 			Description:   a.Description,
 			AllowDispatch: a.AllowDispatch,
@@ -126,18 +128,18 @@ func (s *Server) handleAPIAgents(w http.ResponseWriter, _ *http.Request) {
 // apiConfigJSON is the wire shape for /api/config with secrets redacted.
 // Secrets (resolved values of *_env fields) are replaced with "[redacted]".
 type apiConfigJSON struct {
-	Daemon   apiDaemonJSON              `json:"daemon"`
-	Skills   map[string]apiSkillJSON    `json:"skills,omitempty"`
-	Agents   []apiAgentConfigJSON       `json:"agents,omitempty"`
-	Repos    []apiRepoConfigJSON        `json:"repos,omitempty"`
+	Daemon apiDaemonJSON           `json:"daemon"`
+	Skills map[string]apiSkillJSON `json:"skills,omitempty"`
+	Agents []apiAgentConfigJSON    `json:"agents,omitempty"`
+	Repos  []apiRepoConfigJSON     `json:"repos,omitempty"`
 }
 
 type apiDaemonJSON struct {
-	Log        apiLogConfigJSON                   `json:"log"`
-	HTTP       apiHTTPConfigJSON                  `json:"http"`
-	Processor  apiProcessorConfigJSON             `json:"processor"`
-	AIBackends map[string]apiAIBackendConfigJSON  `json:"ai_backends,omitempty"`
-	Proxy      apiProxyConfigJSON                 `json:"proxy"`
+	Log        apiLogConfigJSON                  `json:"log"`
+	HTTP       apiHTTPConfigJSON                 `json:"http"`
+	Processor  apiProcessorConfigJSON            `json:"processor"`
+	AIBackends map[string]apiAIBackendConfigJSON `json:"ai_backends,omitempty"`
+	Proxy      apiProxyConfigJSON                `json:"proxy"`
 }
 
 type apiLogConfigJSON struct {
@@ -154,7 +156,7 @@ type apiDispatchConfigJSON struct {
 type apiProcessorConfigJSON struct {
 	EventQueueBuffer    int                   `json:"event_queue_buffer"`
 	MaxConcurrentAgents int                   `json:"max_concurrent_agents"`
-	Dispatch            apiDispatchConfigJSON  `json:"dispatch"`
+	Dispatch            apiDispatchConfigJSON `json:"dispatch"`
 }
 
 // apiBindingConfigJSON is the wire shape for a repo binding in /api/config.
@@ -191,17 +193,20 @@ type apiHTTPConfigJSON struct {
 
 type apiAIBackendConfigJSON struct {
 	Command          string            `json:"command"`
-	Args             []string          `json:"args,omitempty"`
-	Env              map[string]string `json:"env,omitempty"` // values are "[redacted]"
+	Version          string            `json:"version,omitempty"`
+	Models           []string          `json:"models,omitempty"`
+	Healthy          bool              `json:"healthy"`
+	HealthDetail     string            `json:"health_detail,omitempty"`
+	LocalModelURL    string            `json:"local_model_url,omitempty"`
 	TimeoutSeconds   int               `json:"timeout_seconds"`
 	MaxPromptChars   int               `json:"max_prompt_chars"`
 	RedactionSaltEnv string            `json:"redaction_salt_env,omitempty"`
 }
 
 type apiProxyConfigJSON struct {
-	Enabled  bool                   `json:"enabled"`
-	Path     string                 `json:"path,omitempty"`
-	Upstream apiProxyUpstreamJSON   `json:"upstream,omitempty"`
+	Enabled  bool                 `json:"enabled"`
+	Path     string               `json:"path,omitempty"`
+	Upstream apiProxyUpstreamJSON `json:"upstream,omitempty"`
 }
 
 type apiProxyUpstreamJSON struct {
@@ -223,6 +228,7 @@ type apiSkillJSON struct {
 type apiAgentConfigJSON struct {
 	Name          string   `json:"name"`
 	Backend       string   `json:"backend,omitempty"`
+	Model         string   `json:"model,omitempty"`
 	Skills        []string `json:"skills,omitempty"`
 	PromptFile    string   `json:"prompt_file,omitempty"`
 	Description   string   `json:"description,omitempty"`
@@ -256,14 +262,13 @@ func (s *Server) handleAPIConfig(w http.ResponseWriter, _ *http.Request) {
 	}
 	backends := make(map[string]apiAIBackendConfigJSON, len(cfg.Daemon.AIBackends))
 	for name, b := range cfg.Daemon.AIBackends {
-		redactedEnv := make(map[string]string, len(b.Env))
-		for k := range b.Env {
-			redactedEnv[k] = redacted
-		}
 		backends[name] = apiAIBackendConfigJSON{
 			Command:          b.Command,
-			Args:             b.Args,
-			Env:              redactedEnv,
+			Version:          b.Version,
+			Models:           b.Models,
+			Healthy:          b.Healthy,
+			HealthDetail:     b.HealthDetail,
+			LocalModelURL:    b.LocalModelURL,
 			TimeoutSeconds:   b.TimeoutSeconds,
 			MaxPromptChars:   b.MaxPromptChars,
 			RedactionSaltEnv: b.RedactionSaltEnv,
@@ -295,6 +300,7 @@ func (s *Server) handleAPIConfig(w http.ResponseWriter, _ *http.Request) {
 		agents = append(agents, apiAgentConfigJSON{
 			Name:          a.Name,
 			Backend:       a.Backend,
+			Model:         a.Model,
 			Skills:        a.Skills,
 			PromptFile:    a.PromptFile,
 			Description:   a.Description,

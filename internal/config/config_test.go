@@ -325,7 +325,6 @@ repos:
 	}
 }
 
-
 func TestBindingIsEnabledDefaultsTrue(t *testing.T) {
 	t.Parallel()
 	var b Binding
@@ -336,21 +335,6 @@ func TestBindingIsEnabledDefaultsTrue(t *testing.T) {
 	b.Enabled = &f
 	if b.IsEnabled() {
 		t.Errorf("expected disabled when Enabled=false")
-	}
-}
-
-func TestDefaultBackendPrefersFirstConfigured(t *testing.T) {
-	t.Parallel()
-	cfg := &Config{
-		Daemon: DaemonConfig{
-			AIBackends: map[string]AIBackendConfig{
-				"claude": {Command: "claude"},
-				"codex":  {Command: "codex"},
-			},
-		},
-	}
-	if got := cfg.DefaultBackend(); got != "claude" {
-		t.Errorf("DefaultBackend: got %q, want claude", got)
 	}
 }
 
@@ -367,10 +351,10 @@ func TestResolveBackend(t *testing.T) {
 		configured string
 		want       string
 	}{
-		{"", "claude"},
-		{"auto", "claude"},
+		{"", ""},
+		{"auto", ""},
 		{"claude", "claude"},
-		{"codex", ""},  // not in ai_backends
+		{"codex", ""},        // not in ai_backends
 		{"CLAUDE", "claude"}, // case-folded
 	}
 	for _, tc := range cases {

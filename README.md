@@ -11,7 +11,8 @@ Define your agents once. Wire them to repos with labels, cron schedules, or even
 ## Features
 
 - **Self-hosted, no SaaS** -- your code and prompts stay on your infrastructure.
-- **Multi-backend** -- Claude, Codex, or any CLI that speaks MCP. Mix backends per agent.
+- **Multi-backend** -- Claude, Codex, and named local backends. Mix backends per agent.
+- **Discovery + diagnostics** -- daemon detects backend/tools, validates CLI health (`gh`, MCP connectivity, models), and persists discovery snapshots.
 - **Local model support** -- built-in Anthropic-to-OpenAI translation proxy routes the fleet through `llama.cpp`, Ollama, vLLM, or any OpenAI-compatible endpoint. Zero vendor lock-in.
 - **One agent model, many triggers** -- label events, cron schedules, GitHub event subscriptions, on-demand API calls. Same agent, wired however you want.
 - **Composable skills** -- reusable guidance blocks (architecture, security, testing, DX, ...) merged into any agent.
@@ -35,7 +36,7 @@ The daemon ships an embedded web dashboard at `/ui/` with real-time views of you
 | **Graph** | Visual dispatch graph -- which agents invoke which, with edge counts |
 | **Agents** | Fleet snapshot -- per-agent status, skills, bindings, dispatch wiring. Create, edit, and delete agents |
 | **Skills** | Manage reusable guidance blocks -- create, edit, delete |
-| **Backends** | AI backend configuration -- add, edit, remove backends with model discovery |
+| **Backends and tools** | Backend discovery status, GitHub CLI diagnostics, runtime limits, local backend URL management, and orphaned-model remediation |
 | **Repos** | Repository bindings -- wire agents to repos with labels, events, or cron triggers |
 | **Memory** | Raw agent memory markdown per (agent, repo) pair |
 | **Config** | Effective parsed config (secrets redacted). YAML import/export |
@@ -125,6 +126,14 @@ go build -o agents ./cmd/agents
 ./agents --db agents.db
 ```
 
+Or run the interactive assistant:
+
+```bash
+./agents setup
+```
+
+The setup assistant now validates daemon APIs during setup (`/status`, `/backends/status`, `/backends/discover`, `/agents/orphans/status`) so backend/tool readiness is verified before completion.
+
 ### On-demand agent pass
 
 Run one autonomous agent synchronously and exit (useful for testing):
@@ -140,6 +149,14 @@ curl -X POST https://<your-host>/run \
   -H "Content-Type: application/json" \
   -d '{"agent":"coder","repo":"owner/repo"}'
 ```
+
+### Backend discovery and diagnostics
+
+- On startup, backend auto-discovery runs only when the backends table is empty.
+- `POST /backends/discover` reruns discovery and persists results to DB.
+- `GET /backends/status` runs live diagnostics without mutating DB.
+- `GET /agents/orphans/status` reports agents that pin unavailable models.
+- `GET /status` includes `orphaned_agents.count` for global warning/banner UX.
 
 ### GitHub webhook setup
 

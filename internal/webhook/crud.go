@@ -1,16 +1,18 @@
 package webhook
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"gopkg.in/yaml.v3"
 
+	"github.com/eloylp/agents/internal/backends"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/store"
 )
@@ -20,6 +22,7 @@ import (
 type storeAgentJSON struct {
 	Name          string   `json:"name"`
 	Backend       string   `json:"backend"`
+	Model         string   `json:"model,omitempty"`
 	Skills        []string `json:"skills"`
 	Prompt        string   `json:"prompt"`
 	AllowPRs      bool     `json:"allow_prs"`
@@ -32,6 +35,7 @@ func agentToStoreJSON(a config.AgentDef) storeAgentJSON {
 	return storeAgentJSON{
 		Name:          a.Name,
 		Backend:       a.Backend,
+		Model:         a.Model,
 		Skills:        nilSafeStrings(a.Skills),
 		Prompt:        a.Prompt,
 		AllowPRs:      a.AllowPRs,
@@ -45,6 +49,7 @@ func (j storeAgentJSON) toConfig() config.AgentDef {
 	return config.AgentDef{
 		Name:          j.Name,
 		Backend:       j.Backend,
+		Model:         j.Model,
 		Skills:        nilSafeStrings(j.Skills),
 		Prompt:        j.Prompt,
 		AllowPRs:      j.AllowPRs,
@@ -62,27 +67,35 @@ type storeSkillJSON struct {
 type storeBackendJSON struct {
 	Name             string            `json:"name"`
 	Command          string            `json:"command"`
-	Args             []string          `json:"args"`
-	Env              map[string]string `json:"env"`
+	Version          string            `json:"version,omitempty"`
+	Models           []string          `json:"models,omitempty"`
+	Healthy          bool              `json:"healthy"`
+	HealthDetail     string            `json:"health_detail,omitempty"`
+	LocalModelURL    string            `json:"local_model_url,omitempty"`
 	TimeoutSeconds   int               `json:"timeout_seconds"`
 	MaxPromptChars   int               `json:"max_prompt_chars"`
 	RedactionSaltEnv string            `json:"redaction_salt_env"`
 }
 
+type localBackendRequest struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+type backendRuntimeSettingsJSON struct {
+	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+	MaxPromptChars *int `json:"max_prompt_chars,omitempty"`
+}
+
 func backendToStoreJSON(name string, b config.AIBackendConfig) storeBackendJSON {
-	// Redact env values: backend env entries are expected to hold secrets
-	// (API keys, base URLs, etc.). Preserve the key names so operators can
-	// identify which environment variables are configured, but never expose
-	// the resolved values — consistent with how /api/config handles backends.
-	redactedEnv := make(map[string]string, len(b.Env))
-	for k := range b.Env {
-		redactedEnv[k] = "[redacted]"
-	}
 	return storeBackendJSON{
 		Name:             name,
 		Command:          b.Command,
-		Args:             nilSafeStrings(b.Args),
-		Env:              redactedEnv,
+		Version:          b.Version,
+		Models:           nilSafeStrings(b.Models),
+		Healthy:          b.Healthy,
+		HealthDetail:     b.HealthDetail,
+		LocalModelURL:    b.LocalModelURL,
 		TimeoutSeconds:   b.TimeoutSeconds,
 		MaxPromptChars:   b.MaxPromptChars,
 		RedactionSaltEnv: b.RedactionSaltEnv,
@@ -92,8 +105,11 @@ func backendToStoreJSON(name string, b config.AIBackendConfig) storeBackendJSON 
 func (j storeBackendJSON) toConfig() config.AIBackendConfig {
 	return config.AIBackendConfig{
 		Command:          j.Command,
-		Args:             nilSafeStrings(j.Args),
-		Env:              j.Env,
+		Version:          j.Version,
+		Models:           nilSafeStrings(j.Models),
+		Healthy:          j.Healthy,
+		HealthDetail:     j.HealthDetail,
+		LocalModelURL:    j.LocalModelURL,
 		TimeoutSeconds:   j.TimeoutSeconds,
 		MaxPromptChars:   j.MaxPromptChars,
 		RedactionSaltEnv: j.RedactionSaltEnv,
@@ -143,45 +159,6 @@ func (j storeRepoJSON) toConfig() config.RepoDef {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-// restoreRedactedEnv resolves any "[redacted]" sentinel values in env that were
-// echoed back from the list API. For each such key the real stored value is
-// substituted; if the key does not exist in the stored backend the entry is
-// removed so that a phantom "[redacted]" is never written to the database.
-// env is mutated in place. Calling this before UpsertBackend prevents a no-op
-// edit from overwriting real secrets with the literal string "[redacted]".
-func restoreRedactedEnv(db *sql.DB, name string, env map[string]string) error {
-	// Fast path: nothing to do when no sentinel values are present.
-	needRestore := false
-	for _, v := range env {
-		if v == "[redacted]" {
-			needRestore = true
-			break
-		}
-	}
-	if !needRestore {
-		return nil
-	}
-	existing, err := store.ReadBackends(db)
-	if err != nil {
-		return err
-	}
-	stored, ok := existing[config.NormalizeBackendName(name)]
-	for k, v := range env {
-		if v != "[redacted]" {
-			continue
-		}
-		if ok {
-			if sv, found := stored.Env[k]; found {
-				env[k] = sv
-				continue
-			}
-		}
-		// Key not present in the stored backend — drop the sentinel.
-		delete(env, k)
-	}
-	return nil
-}
 
 func nilSafeStrings(s []string) []string {
 	if s == nil {
@@ -275,6 +252,7 @@ func (s *Server) reloadCron() error {
 	newCfg.Daemon.AIBackends = backends
 	s.cfg = &newCfg
 	s.cfgMu.Unlock()
+	s.refreshOrphanedAgents(&newCfg)
 
 	return nil
 }
@@ -465,18 +443,7 @@ func (s *Server) handleStoreBackends(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "name is required", http.StatusBadRequest)
 			return
 		}
-		if req.Env == nil {
-			req.Env = map[string]string{}
-		}
-		// restoreRedactedEnv must run inside the lock so that the read of the
-		// stored backend and the subsequent UpsertBackend write are atomic with
-		// respect to other concurrent backend edits.
 		s.storeMu.Lock()
-		if err := restoreRedactedEnv(s.db, req.Name, req.Env); err != nil {
-			s.storeMu.Unlock()
-			http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
-			return
-		}
 		err := store.UpsertBackend(s.db, req.Name, req.toConfig())
 		if err == nil {
 			err = s.reloadCron()
@@ -497,38 +464,210 @@ func (s *Server) handleStoreBackends(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleStoreBackend serves GET and DELETE /api/store/backends/{name}.
-func (s *Server) handleStoreBackend(w http.ResponseWriter, r *http.Request) {
-	name := config.NormalizeBackendName(mux.Vars(r)["name"])
-	switch r.Method {
-	case http.MethodGet:
-		backends, err := store.ReadBackends(s.db)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
-			return
-		}
-		b, ok := backends[name]
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		writeJSON(w, http.StatusOK, backendToStoreJSON(name, b))
-
-	case http.MethodDelete:
-		s.storeMu.Lock()
-		err := store.DeleteBackend(s.db, name)
-		if err == nil {
-			err = s.reloadCron()
-		}
-		s.storeMu.Unlock()
-		if err != nil {
-			status := storeErrStatus(err)
-			s.logger.Error().Err(err).Msg("store crud: backend delete or cron reload failed")
-			http.Error(w, fmt.Sprintf("backend delete or cron reload: %v", err), status)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
+// handleBackendsStatus serves GET /backends/status with live diagnostics.
+func (s *Server) handleBackendsStatus(w http.ResponseWriter, r *http.Request) {
+	existing, err := store.ReadBackends(s.db)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
+		return
 	}
+	diag := backends.RunDiagnostics(r.Context(), existing)
+	writeJSON(w, http.StatusOK, diag)
+}
+
+// handleBackendsDiscover serves POST /backends/discover. It reruns discovery,
+// persists backend metadata, and hot-reloads the in-memory config.
+func (s *Server) handleBackendsDiscover(w http.ResponseWriter, r *http.Request) {
+	s.storeMu.Lock()
+	diag, err := backends.DiscoverAndPersist(r.Context(), s.db)
+	if err == nil {
+		err = s.reloadCron()
+	}
+	s.storeMu.Unlock()
+	if err != nil {
+		status := storeErrStatus(err)
+		s.logger.Error().Err(err).Msg("backend discovery failed")
+		http.Error(w, fmt.Sprintf("backend discovery: %v", err), status)
+		return
+	}
+	writeJSON(w, http.StatusOK, diag)
+}
+
+// handleBackendsLocal serves POST /backends/local. It creates or updates a
+// named local backend by wiring the discovered Claude CLI to a local
+// OpenAI-compatible URL via ANTHROPIC_BASE_URL.
+func (s *Server) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
+	var req localBackendRequest
+	if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
+		return
+	}
+	name := config.NormalizeBackendName(req.Name)
+	if name == "" {
+		name = backends.ClaudeLocalName
+	}
+	if name == backends.ClaudeName || name == backends.CodexName {
+		http.Error(w, "name is reserved for built-in backends", http.StatusBadRequest)
+		return
+	}
+	req.URL = strings.TrimSpace(req.URL)
+	if req.URL == "" {
+		http.Error(w, "url is required", http.StatusBadRequest)
+		return
+	}
+	if _, err := url.ParseRequestURI(req.URL); err != nil {
+		http.Error(w, fmt.Sprintf("invalid url: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	s.storeMu.Lock()
+	existing, err := store.ReadBackends(s.db)
+	if err != nil {
+		s.storeMu.Unlock()
+		http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
+		return
+	}
+	base, ok := existing[backends.ClaudeName]
+	if !ok || strings.TrimSpace(base.Command) == "" {
+		s.storeMu.Unlock()
+		http.Error(w, "claude backend must be discovered first", http.StatusBadRequest)
+		return
+	}
+
+	if current, ok := existing[name]; ok && strings.TrimSpace(current.LocalModelURL) == "" {
+		s.storeMu.Unlock()
+		http.Error(w, "name already exists and is not a local backend", http.StatusConflict)
+		return
+	}
+
+	local := existing[name]
+	local.Command = base.Command
+	local.LocalModelURL = req.URL
+
+	diagMap := map[string]config.AIBackendConfig{
+		backends.ClaudeName: base,
+		name:                local,
+	}
+	diag := backends.RunDiagnostics(r.Context(), diagMap)
+	for _, b := range diag.Backends {
+		if b.Name != name {
+			continue
+		}
+		local.Version = b.Version
+		local.Models = b.Models
+		local.Healthy = b.Healthy
+		local.HealthDetail = b.HealthDetail
+		local.Command = b.Command
+		local.LocalModelURL = b.LocalModelURL
+		break
+	}
+
+	err = store.UpsertBackend(s.db, name, local)
+	if err == nil {
+		err = s.reloadCron()
+	}
+	s.storeMu.Unlock()
+	if err != nil {
+		status := storeErrStatus(err)
+		s.logger.Error().Err(err).Msg("local backend upsert failed")
+		http.Error(w, fmt.Sprintf("local backend upsert or cron reload: %v", err), status)
+		return
+	}
+	writeJSON(w, http.StatusOK, backendToStoreJSON(name, local))
+}
+
+func backendPathName(r *http.Request) string {
+	name := config.NormalizeBackendName(mux.Vars(r)["name"])
+	return name
+}
+
+// handleStoreBackendGet serves GET /api/store/backends/{name}.
+func (s *Server) handleStoreBackendGet(w http.ResponseWriter, r *http.Request) {
+	name := backendPathName(r)
+	backends, err := store.ReadBackends(s.db)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
+		return
+	}
+	b, ok := backends[name]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, backendToStoreJSON(name, b))
+}
+
+// handleStoreBackendPatch serves PATCH /api/store/backends/{name}.
+func (s *Server) handleStoreBackendPatch(w http.ResponseWriter, r *http.Request) {
+	name := backendPathName(r)
+
+	var req backendRuntimeSettingsJSON
+	if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
+		return
+	}
+	if req.TimeoutSeconds == nil && req.MaxPromptChars == nil {
+		http.Error(w, "at least one field is required", http.StatusBadRequest)
+		return
+	}
+	if req.TimeoutSeconds != nil && *req.TimeoutSeconds <= 0 {
+		http.Error(w, "timeout_seconds must be positive", http.StatusBadRequest)
+		return
+	}
+	if req.MaxPromptChars != nil && *req.MaxPromptChars <= 0 {
+		http.Error(w, "max_prompt_chars must be positive", http.StatusBadRequest)
+		return
+	}
+
+	s.storeMu.Lock()
+	backendsByName, err := store.ReadBackends(s.db)
+	if err != nil {
+		s.storeMu.Unlock()
+		http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
+		return
+	}
+	b, ok := backendsByName[name]
+	if !ok {
+		s.storeMu.Unlock()
+		http.NotFound(w, r)
+		return
+	}
+	if req.TimeoutSeconds != nil {
+		b.TimeoutSeconds = *req.TimeoutSeconds
+	}
+	if req.MaxPromptChars != nil {
+		b.MaxPromptChars = *req.MaxPromptChars
+	}
+
+	err = store.UpsertBackend(s.db, name, b)
+	if err == nil {
+		err = s.reloadCron()
+	}
+	s.storeMu.Unlock()
+	if err != nil {
+		status := storeErrStatus(err)
+		s.logger.Error().Err(err).Msg("store crud: backend runtime settings update or cron reload failed")
+		http.Error(w, fmt.Sprintf("backend runtime settings update or cron reload: %v", err), status)
+		return
+	}
+	writeJSON(w, http.StatusOK, backendToStoreJSON(name, b))
+}
+
+// handleStoreBackendDelete serves DELETE /api/store/backends/{name}.
+func (s *Server) handleStoreBackendDelete(w http.ResponseWriter, r *http.Request) {
+	name := backendPathName(r)
+
+	s.storeMu.Lock()
+	err := store.DeleteBackend(s.db, name)
+	if err == nil {
+		err = s.reloadCron()
+	}
+	s.storeMu.Unlock()
+	if err != nil {
+		status := storeErrStatus(err)
+		s.logger.Error().Err(err).Msg("store crud: backend delete or cron reload failed")
+		http.Error(w, fmt.Sprintf("backend delete or cron reload: %v", err), status)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ── /api/store/repos ──────────────────────────────────────────────────────────
@@ -619,10 +758,10 @@ func (s *Server) handleStoreRepo(w http.ResponseWriter, r *http.Request) {
 // four CRUD-mutable sections; daemon-level config (HTTP, log, proxy) is
 // intentionally excluded — it is not managed by the write API.
 type exportYAML struct {
-	Skills map[string]config.SkillDef        `yaml:"skills,omitempty"`
-	Agents []config.AgentDef                 `yaml:"agents,omitempty"`
-	Repos  []config.RepoDef                  `yaml:"repos,omitempty"`
-	Daemon *exportDaemonYAML                 `yaml:"daemon,omitempty"`
+	Skills map[string]config.SkillDef `yaml:"skills,omitempty"`
+	Agents []config.AgentDef          `yaml:"agents,omitempty"`
+	Repos  []config.RepoDef           `yaml:"repos,omitempty"`
+	Daemon *exportDaemonYAML          `yaml:"daemon,omitempty"`
 }
 
 type exportDaemonYAML struct {

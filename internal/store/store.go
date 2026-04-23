@@ -18,8 +18,8 @@ package store
 
 import (
 	"database/sql"
-	"encoding/json"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -196,8 +196,8 @@ type httpRecord struct {
 
 // proxyRecord mirrors ProxyConfig but omits the resolved APIKey.
 type proxyRecord struct {
-	Enabled  bool               `json:"enabled"`
-	Path     string             `json:"path"`
+	Enabled  bool                `json:"enabled"`
+	Path     string              `json:"path"`
 	Upstream proxyUpstreamRecord `json:"upstream"`
 }
 
@@ -213,10 +213,10 @@ func importDaemon(tx *sql.Tx, d config.DaemonConfig) error {
 	rec := daemonRecord{
 		Log: d.Log,
 		HTTP: httpRecord{
-			ListenAddr:             d.HTTP.ListenAddr,
-			StatusPath:             d.HTTP.StatusPath,
-			WebhookPath:            d.HTTP.WebhookPath,
-			WebhookSecretEnv:       d.HTTP.WebhookSecretEnv,
+			ListenAddr:       d.HTTP.ListenAddr,
+			StatusPath:       d.HTTP.StatusPath,
+			WebhookPath:      d.HTTP.WebhookPath,
+			WebhookSecretEnv: d.HTTP.WebhookSecretEnv,
 
 			ReadTimeoutSeconds:     d.HTTP.ReadTimeoutSeconds,
 			WriteTimeoutSeconds:    d.HTTP.WriteTimeoutSeconds,
@@ -252,19 +252,17 @@ func importDaemon(tx *sql.Tx, d config.DaemonConfig) error {
 
 func importBackends(tx *sql.Tx, backends map[string]config.AIBackendConfig) error {
 	for name, b := range backends {
-		args, err := json.Marshal(b.Args)
+		models, err := json.Marshal(b.Models)
 		if err != nil {
-			return fmt.Errorf("store import: marshal backend %s args: %w", name, err)
+			return fmt.Errorf("store import: marshal backend %s models: %w", name, err)
 		}
-		env, err := json.Marshal(b.Env)
-		if err != nil {
-			return fmt.Errorf("store import: marshal backend %s env: %w", name, err)
-		}
+		healthy := boolToInt(b.Healthy)
 		if _, err := tx.Exec(`
 			INSERT OR REPLACE INTO backends
-			  (name,command,args,env,timeout_seconds,max_prompt_chars,redaction_salt_env)
-			VALUES (?,?,?,?,?,?,?)`,
-			name, b.Command, string(args), string(env),
+			  (name,command,version,models,healthy,health_detail,local_model_url,timeout_seconds,max_prompt_chars,redaction_salt_env)
+			VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			name, b.Command,
+			b.Version, string(models), healthy, b.HealthDetail, b.LocalModelURL,
 			b.TimeoutSeconds, b.MaxPromptChars, b.RedactionSaltEnv,
 		); err != nil {
 			return fmt.Errorf("store import: upsert backend %s: %w", name, err)
@@ -299,9 +297,9 @@ func importAgents(tx *sql.Tx, agents []config.AgentDef) error {
 		allowDispatch := boolToInt(a.AllowDispatch)
 		if _, err := tx.Exec(`
 			INSERT OR REPLACE INTO agents
-			  (name,backend,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description)
-			VALUES (?,?,?,?,?,?,?,?)`,
-			a.Name, a.Backend, string(skills), a.Prompt,
+			  (name,backend,model,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description)
+			VALUES (?,?,?,?,?,?,?,?,?)`,
+			a.Name, a.Backend, a.Model, string(skills), a.Prompt,
 			allowPRs, allowDispatch, string(canDispatch), a.Description,
 		); err != nil {
 			return fmt.Errorf("store import: upsert agent %s: %w", a.Name, err)
@@ -392,10 +390,10 @@ func loadDaemon(db *sql.DB, cfg *config.Config) error {
 
 	cfg.Daemon.Log = rec.Log
 	cfg.Daemon.HTTP = config.HTTPConfig{
-		ListenAddr:             rec.HTTP.ListenAddr,
-		StatusPath:             rec.HTTP.StatusPath,
-		WebhookPath:            rec.HTTP.WebhookPath,
-		WebhookSecretEnv:       rec.HTTP.WebhookSecretEnv,
+		ListenAddr:       rec.HTTP.ListenAddr,
+		StatusPath:       rec.HTTP.StatusPath,
+		WebhookPath:      rec.HTTP.WebhookPath,
+		WebhookSecretEnv: rec.HTTP.WebhookSecretEnv,
 
 		ReadTimeoutSeconds:     rec.HTTP.ReadTimeoutSeconds,
 		WriteTimeoutSeconds:    rec.HTTP.WriteTimeoutSeconds,
@@ -420,7 +418,7 @@ func loadDaemon(db *sql.DB, cfg *config.Config) error {
 }
 
 func loadBackends(db querier, cfg *config.Config) error {
-	rows, err := db.Query("SELECT name,command,args,env,timeout_seconds,max_prompt_chars,redaction_salt_env FROM backends")
+	rows, err := db.Query("SELECT name,command,version,models,healthy,health_detail,local_model_url,timeout_seconds,max_prompt_chars,redaction_salt_env FROM backends")
 	if err != nil {
 		return fmt.Errorf("store load: query backends: %w", err)
 	}
@@ -428,23 +426,22 @@ func loadBackends(db querier, cfg *config.Config) error {
 
 	backends := make(map[string]config.AIBackendConfig)
 	for rows.Next() {
-		var name, command, argsJSON, envJSON, saltEnv string
-		var timeout, maxChars int
-		if err := rows.Scan(&name, &command, &argsJSON, &envJSON, &timeout, &maxChars, &saltEnv); err != nil {
+		var name, command, version, modelsJSON, healthDetail, localModelURL, saltEnv string
+		var timeout, maxChars, healthy int
+		if err := rows.Scan(&name, &command, &version, &modelsJSON, &healthy, &healthDetail, &localModelURL, &timeout, &maxChars, &saltEnv); err != nil {
 			return fmt.Errorf("store load: scan backend: %w", err)
 		}
-		var args []string
-		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-			return fmt.Errorf("store load: parse backend %s args: %w", name, err)
-		}
-		var env map[string]string
-		if err := json.Unmarshal([]byte(envJSON), &env); err != nil {
-			return fmt.Errorf("store load: parse backend %s env: %w", name, err)
+		var models []string
+		if err := json.Unmarshal([]byte(modelsJSON), &models); err != nil {
+			return fmt.Errorf("store load: parse backend %s models: %w", name, err)
 		}
 		backends[name] = config.AIBackendConfig{
 			Command:          command,
-			Args:             args,
-			Env:              env,
+			Version:          version,
+			Models:           models,
+			Healthy:          intToBool(healthy),
+			HealthDetail:     healthDetail,
+			LocalModelURL:    localModelURL,
 			TimeoutSeconds:   timeout,
 			MaxPromptChars:   maxChars,
 			RedactionSaltEnv: saltEnv,
@@ -481,7 +478,7 @@ func loadSkills(db querier, cfg *config.Config) error {
 
 func loadAgents(db querier, cfg *config.Config) error {
 	rows, err := db.Query(`
-		SELECT name,backend,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description
+		SELECT name,backend,model,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description
 		FROM agents ORDER BY name`)
 	if err != nil {
 		return fmt.Errorf("store load: query agents: %w", err)
@@ -490,10 +487,10 @@ func loadAgents(db querier, cfg *config.Config) error {
 
 	var agents []config.AgentDef
 	for rows.Next() {
-		var name, backend, skillsJSON, prompt, canDispatchJSON, description string
+		var name, backend, model, skillsJSON, prompt, canDispatchJSON, description string
 		var allowPRs, allowDispatch int
 		if err := rows.Scan(
-			&name, &backend, &skillsJSON, &prompt,
+			&name, &backend, &model, &skillsJSON, &prompt,
 			&allowPRs, &allowDispatch, &canDispatchJSON, &description,
 		); err != nil {
 			return fmt.Errorf("store load: scan agent: %w", err)
@@ -509,6 +506,7 @@ func loadAgents(db querier, cfg *config.Config) error {
 		agents = append(agents, config.AgentDef{
 			Name:          name,
 			Backend:       backend,
+			Model:         model,
 			Skills:        skills,
 			Prompt:        prompt,
 			AllowPRs:      intToBool(allowPRs),
@@ -694,4 +692,3 @@ func LoadAndValidate(db *sql.DB) (*config.Config, error) {
 	}
 	return config.FinishLoad(cfg)
 }
-
