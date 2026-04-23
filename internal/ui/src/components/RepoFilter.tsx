@@ -30,6 +30,13 @@ export default function RepoFilter({ selected, onChange }: { selected: string; o
       .catch(() => {})
   }, [])
 
+  // Evict stale localStorage value when the stored repo no longer exists
+  useEffect(() => {
+    if (repos.length > 0 && selected && !repos.includes(selected)) {
+      onChange('')
+    }
+  }, [repos, selected, onChange])
+
   if (repos.length === 0) return null
 
   return (
