@@ -321,6 +321,49 @@ func TestRenderAgentPromptNoPRGuardInSystem(t *testing.T) {
 	}
 }
 
+// TestRenderAgentPromptSystemSectionOrdering pins the full ordering of blocks
+// in System when every optional section is present at once. Without this test,
+// a bug that interleaved the no-PR guard with the roster (or placed the roster
+// before skills / prompt body) could pass the entire suite, since the
+// per-section tests exercise each block in isolation. Caching depends on this
+// ordering being stable across runs.
+func TestRenderAgentPromptSystemSectionOrdering(t *testing.T) {
+	t.Parallel()
+	skills := map[string]config.SkillDef{
+		"testing": {Prompt: "Focus on tests."},
+	}
+	agent := config.AgentDef{
+		Name:     "reviewer",
+		Skills:   []string{"testing"},
+		Prompt:   "You review PRs.",
+		AllowPRs: false,
+	}
+	ctx := ai.PromptContext{
+		Repo: "owner/repo",
+		Roster: []ai.RosterEntry{
+			{Name: "pr-reviewer", Description: "Reviews PRs", AllowDispatch: true},
+		},
+	}
+	sys := renderSystem(t, agent, skills, ctx)
+
+	guardIdx := strings.Index(sys, "Do not open or create pull requests")
+	skillsIdx := strings.Index(sys, "Focus on tests.")
+	promptIdx := strings.Index(sys, "You review PRs.")
+	rosterIdx := strings.Index(sys, "## Available experts")
+
+	for name, idx := range map[string]int{
+		"guard": guardIdx, "skills": skillsIdx, "prompt": promptIdx, "roster": rosterIdx,
+	} {
+		if idx < 0 {
+			t.Fatalf("missing %s block in System:\n%s", name, sys)
+		}
+	}
+	if !(guardIdx < skillsIdx && skillsIdx < promptIdx && promptIdx < rosterIdx) {
+		t.Errorf("wrong section ordering; guard=%d skills=%d prompt=%d roster=%d\nSystem:\n%s",
+			guardIdx, skillsIdx, promptIdx, rosterIdx, sys)
+	}
+}
+
 func TestRenderAgentPromptDispatchContextInUser(t *testing.T) {
 	t.Parallel()
 	agent := config.AgentDef{Prompt: "React to dispatch."}
