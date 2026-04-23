@@ -450,9 +450,6 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		}
 		return fmt.Errorf("render prompt: %w", err)
 	}
-	if !agent.AllowPRs {
-		rendered.System = "Do not open or create pull requests under any circumstances.\n" + rendered.System
-	}
 
 	logger.Info().Msg("running autonomous pass")
 	spanStart := time.Now()

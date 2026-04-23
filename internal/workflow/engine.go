@@ -554,9 +554,6 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef, 
 	if invokedBy != "" {
 		logger = logger.With().Str("invoked_by", invokedBy).Logger()
 	}
-	if !agent.AllowPRs {
-		rendered.System = "Do not open or create pull requests under any circumstances.\n" + rendered.System
-	}
 	logger.Info().Str("workflow", workflow).Msg("invoking ai agent")
 
 	if e.runTracker != nil {

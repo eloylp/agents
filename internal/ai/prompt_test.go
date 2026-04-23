@@ -219,9 +219,9 @@ func TestRenderAgentPromptMultilinePayloadBodyIsIndented(t *testing.T) {
 	}
 }
 
-func TestRenderAgentPromptRosterInUser(t *testing.T) {
+func TestRenderAgentPromptRosterInSystem(t *testing.T) {
 	t.Parallel()
-	agent := config.AgentDef{Prompt: "Do work."}
+	agent := config.AgentDef{Prompt: "Do work.", AllowPRs: true}
 	ctx := ai.PromptContext{
 		Repo: "owner/repo",
 		Roster: []ai.RosterEntry{
@@ -234,49 +234,90 @@ func TestRenderAgentPromptRosterInUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderAgentPrompt: %v", err)
 	}
-	usr := got.User
-	if !strings.Contains(usr, "## Available experts") {
-		t.Errorf("missing experts section in User:\n%s", usr)
+	sys := got.System
+	if !strings.Contains(sys, "## Available experts") {
+		t.Errorf("missing experts section in System:\n%s", sys)
 	}
-	// Roster must not bleed into System.
-	if strings.Contains(got.System, "Available experts") {
-		t.Errorf("roster section must not appear in System:\n%s", got.System)
+	// Roster must not bleed into User.
+	if strings.Contains(got.User, "Available experts") {
+		t.Errorf("roster section must not appear in User:\n%s", got.User)
 	}
-	archIdx := strings.Index(usr, "arch-reviewer")
-	prIdx := strings.Index(usr, "pr-reviewer")
-	secIdx := strings.Index(usr, "sec-reviewer")
+	archIdx := strings.Index(sys, "arch-reviewer")
+	prIdx := strings.Index(sys, "pr-reviewer")
+	secIdx := strings.Index(sys, "sec-reviewer")
 	if !(archIdx < prIdx && prIdx < secIdx) {
 		t.Errorf("roster not alphabetical: arch=%d pr=%d sec=%d", archIdx, prIdx, secIdx)
 	}
-	if !strings.Contains(usr, "pr-reviewer") || !strings.Contains(usr, "[dispatchable]") {
-		t.Errorf("dispatchable marker missing:\n%s", usr)
+	if !strings.Contains(sys, "pr-reviewer") || !strings.Contains(sys, "[dispatchable]") {
+		t.Errorf("dispatchable marker missing:\n%s", sys)
 	}
-	if strings.Contains(usr, "arch-reviewer: Reviews arch (skills: architect) [dispatchable]") {
+	if strings.Contains(sys, "arch-reviewer: Reviews arch (skills: architect) [dispatchable]") {
 		t.Errorf("non-dispatchable agent should not have [dispatchable] marker")
 	}
 }
 
-func TestRenderAgentPromptRosterExcludesSelfFromRoster(t *testing.T) {
+func TestRenderAgentPromptRosterAppendsAfterAgentPrompt(t *testing.T) {
 	t.Parallel()
-	agent := config.AgentDef{Name: "coder", Prompt: "Code."}
+	agent := config.AgentDef{Name: "coder", Prompt: "Write code.", AllowPRs: true}
 	ctx := ai.PromptContext{
 		Repo: "owner/repo",
 		Roster: []ai.RosterEntry{
 			{Name: "pr-reviewer", Description: "Reviews PRs"},
 		},
 	}
-	usr := renderUser(t, agent, nil, ctx)
-	if strings.Contains(usr, "**coder**") {
-		t.Errorf("current agent should not appear in roster:\n%s", usr)
+	sys := renderSystem(t, agent, nil, ctx)
+	promptIdx := strings.Index(sys, "Write code.")
+	rosterIdx := strings.Index(sys, "## Available experts")
+	if promptIdx < 0 || rosterIdx < 0 {
+		t.Fatalf("prompt body and roster must both appear in System:\n%s", sys)
+	}
+	if promptIdx >= rosterIdx {
+		t.Errorf("roster must come after the agent prompt; prompt=%d roster=%d", promptIdx, rosterIdx)
 	}
 }
 
 func TestRenderAgentPromptRosterOmittedWhenEmpty(t *testing.T) {
 	t.Parallel()
-	agent := config.AgentDef{Prompt: "Do X."}
-	usr := renderUser(t, agent, nil, ai.PromptContext{Repo: "owner/repo"})
-	if strings.Contains(usr, "## Available experts") {
-		t.Errorf("empty roster should not produce the experts section:\n%s", usr)
+	agent := config.AgentDef{Prompt: "Do X.", AllowPRs: true}
+	got, err := ai.RenderAgentPrompt(agent, nil, ai.PromptContext{Repo: "owner/repo"})
+	if err != nil {
+		t.Fatalf("RenderAgentPrompt: %v", err)
+	}
+	if strings.Contains(got.System, "## Available experts") {
+		t.Errorf("empty roster should not produce the experts section in System:\n%s", got.System)
+	}
+	if strings.Contains(got.User, "## Available experts") {
+		t.Errorf("empty roster should not produce the experts section in User:\n%s", got.User)
+	}
+}
+
+func TestRenderAgentPromptNoPRGuardInSystem(t *testing.T) {
+	t.Parallel()
+	const guard = "Do not open or create pull requests under any circumstances."
+	tests := []struct {
+		name      string
+		allowPRs  bool
+		wantGuard bool
+	}{
+		{name: "guard present when allow_prs=false", allowPRs: false, wantGuard: true},
+		{name: "guard absent when allow_prs=true", allowPRs: true, wantGuard: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			agent := config.AgentDef{Name: "reviewer", Prompt: "Review.", AllowPRs: tc.allowPRs}
+			got, err := ai.RenderAgentPrompt(agent, nil, ai.PromptContext{Repo: "owner/repo"})
+			if err != nil {
+				t.Fatalf("RenderAgentPrompt: %v", err)
+			}
+			hasGuard := strings.HasPrefix(got.System, guard)
+			if hasGuard != tc.wantGuard {
+				t.Errorf("guard present=%v, want %v; System:\n%s", hasGuard, tc.wantGuard, got.System)
+			}
+			if strings.Contains(got.User, guard) {
+				t.Errorf("no-PR guard must not appear in User:\n%s", got.User)
+			}
+		})
 	}
 }
 
