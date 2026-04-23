@@ -201,9 +201,12 @@ function TraceListItem({ rootId, spans, onSelect }: { rootId: string; spans: Spa
   const wallMs = maxMs - minMs
   const hasError = spans.some(s => s.status === 'error')
 
+  const startedAt = sorted[0]?.started_at
+  const finishedAt = sorted.length > 0 ? new Date(maxMs).toISOString() : undefined
+
   return (
     <Card style={{ marginBottom: '1rem', cursor: 'pointer' }} >
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
         <div>
           <button
             onClick={() => onSelect(rootId)}
@@ -220,6 +223,12 @@ function TraceListItem({ rootId, spans, onSelect }: { rootId: string; spans: Spa
           <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{wallMs}ms</span>
         </div>
       </div>
+      {startedAt && finishedAt && (
+        <div style={{ color: 'var(--text-faint)', fontSize: '0.75rem', marginBottom: '0.75rem', display: 'flex', gap: '1rem' }}>
+          <span>Started: {fmt(startedAt)}</span>
+          <span>Finished: {fmt(finishedAt)}</span>
+        </div>
+      )}
       {sorted.map(s => {
         const start = new Date(s.started_at).getTime()
         const leftPct = ((start - minMs) / totalMs) * 100
