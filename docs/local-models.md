@@ -249,12 +249,12 @@ The `claude` CLI's Task tool can spawn sub-agents whose conversations build up t
 
 ### "Invalid API key" on every run
 
-You're missing `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` in the backend's `env` block, OR the daemon's env allowlist hasn't been updated to forward them. As of commit `af43f6d` both are on the allowlist.
+You're missing `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` in the backend's `env` block, or your build does not include the current allowlist in `internal/ai/cmdrunner.go`.
 
 Verify with:
 
 ```bash
-docker exec agents env | grep ANTHROPIC_
+docker compose exec agents env | grep ANTHROPIC_
 ```
 
 ### Model responds in `<think>...</think>` blocks and burns all tokens before producing output
