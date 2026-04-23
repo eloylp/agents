@@ -112,7 +112,6 @@ skills:
 # ──────────────────────────────────────────────
 # agents — named capabilities
 #
-<<<<<<< HEAD
 # Each agent is a capability definition: a name, a backend, the skills
 # it uses, and a prompt. Agents don't run on their own — repos
 # below decide when and where they run.
