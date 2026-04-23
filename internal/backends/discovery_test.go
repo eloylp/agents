@@ -76,3 +76,29 @@ func TestParseModelsCodexDebugCatalog(t *testing.T) {
 		t.Fatalf("parseModels() = %v, want [gpt-5.3-codex gpt-5.4]", got)
 	}
 }
+
+func TestParseModelsClaudeMarkdownTable(t *testing.T) {
+	t.Parallel()
+	raw := `Current Claude models (as of my knowledge cutoff, August 2025):
+
+| Model | ID |
+|---|---|
+| Claude Opus 4.7 | ` + "`claude-opus-4-7`" + ` |
+| Claude Sonnet 4.6 | ` + "`claude-sonnet-4-6`" + ` |
+| Claude Haiku 4.5 | ` + "`claude-haiku-4-5-20251001`" + ` |
+
+You're currently talking to **Claude Sonnet 4.6**.
+
+For building AI applications, default to the latest capable model.`
+
+	got := parseModels(raw)
+	want := []string{"claude-haiku-4-5-20251001", "claude-opus-4-7", "claude-sonnet-4-6"}
+	if len(got) != len(want) {
+		t.Fatalf("parseModels() length = %d, want %d (got=%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("parseModels()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -221,8 +222,8 @@ func diagnoseBackend(ctx context.Context, backendName, commandName, preferredCom
 	models, modelsDetail := discoverModels(ctx, commandName, path, env)
 	status.Models = models
 
-	mcpOK, mcpDetail := checkGitHubMCP(ctx, path, env)
-	status.Healthy = versionOK && mcpOK
+	_, mcpDetail := checkGitHubMCP(ctx, path, env)
+	status.Healthy = versionOK
 
 	details := make([]string, 0, 3)
 	if versionOK {
@@ -405,15 +406,25 @@ func parseModels(raw string) []string {
 		return dedupeSorted(names)
 	}
 
+	// Extract backtick-enclosed model IDs (e.g. `claude-opus-4-7` from markdown tables).
+	var backtickModels []string
+	for _, match := range regexp.MustCompile("`([a-zA-Z][a-zA-Z0-9._-]+)`").FindAllStringSubmatch(raw, -1) {
+		backtickModels = append(backtickModels, match[1])
+	}
+	if len(backtickModels) > 0 {
+		return dedupeSorted(backtickModels)
+	}
+
+	// Plain-text fallback: one model per line, skip headers and decorators.
 	lines := strings.Split(raw, "\n")
 	names := make([]string, 0, len(lines))
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if line == "" || strings.HasPrefix(line, "|") || strings.HasPrefix(line, "*") || strings.HasPrefix(line, "#") {
 			continue
 		}
 		lower := strings.ToLower(line)
-		if strings.HasPrefix(lower, "model") || strings.HasPrefix(lower, "available models") {
+		if strings.HasPrefix(lower, "model") || strings.HasPrefix(lower, "available") || strings.HasPrefix(lower, "current") || strings.HasPrefix(lower, "you") || strings.HasPrefix(lower, "for ") {
 			continue
 		}
 		fields := strings.Fields(line)
