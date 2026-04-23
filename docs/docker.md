@@ -21,12 +21,13 @@ The compose file expects:
 | Host path | Container path | Purpose |
 |---|---|---|
 | `config.yaml` | `/etc/agents/config.yaml` (read-only) | Daemon config (used for `--import` seeding; optional once DB is seeded) |
-| `./agents` | `/etc/agents/agents` (read-only) | Optional: source tree for agent and skill `prompt_file:` paths that reference this directory |
 | `~/.claude` | `/home/agents/.claude` | Claude Code session data |
 | `~/.claude.json` | `/home/agents/.claude.json` | Claude Code main config |
 | `~/.codex` | `/home/agents/.codex` | Codex configuration |
 | `~/.config/gh` | `/home/agents/.config/gh` (read-only) | GitHub CLI auth tokens |
 | `agents-data` (volume) | `/var/lib/agents` | SQLite database (config + agent memory) across restarts |
+
+If your own `config.yaml` uses `prompt_file:` paths, mount the directory that contains those files yourself. The shipping example config is inline-only, so no extra prompt mount is required.
 
 ## MCP server configuration
 

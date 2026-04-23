@@ -5,9 +5,10 @@
 #
 #   ./agents --db agents.db --import config.yaml
 #
-# prompt_file: paths (in skills and agents sections) reference local files
-# that must exist at import time. Their content is read and stored in the
-# SQLite database — the files are not needed afterward.
+# This example is self-contained: every skill and agent prompt is inline, so
+# `cp config.example.yaml config.yaml` works without creating extra files.
+# You can still use `prompt_file:` for longer prompts; those paths must exist
+# at import time, and their content is copied into SQLite.
 #
 # For new setups, you can skip the YAML entirely and use the web dashboard
 # (GET /ui/) to create agents, skills, backends, and repo bindings directly.
@@ -110,29 +111,37 @@ daemon:
 # Each skill is a named chunk of guidance. Agents reference skills by
 # name; at runtime the guidance is concatenated into the agent's prompt.
 # Use `prompt:` for short inline guidance or `prompt_file:` to load from
-# a file (path relative to this config).
+# a file (path relative to this config). The shipping example keeps them
+# inline so it imports cleanly out of the box.
 # ──────────────────────────────────────────────
 skills:
   architect:
-    prompt_file: skills/architect.md
+    prompt: |
+      Focus on architecture boundaries, coupling, and maintainability risks.
   security:
-    prompt_file: skills/security.md
+    prompt: |
+      Focus on auth, secrets handling, trust boundaries, and unsafe defaults.
   testing:
-    prompt_file: skills/testing.md
+    prompt: |
+      Focus on behavioral regressions, missing tests, and weak assertions.
   devops:
-    prompt_file: skills/devops.md
+    prompt: |
+      Focus on deployment safety, observability, and operational failure modes.
   dx:
-    prompt_file: skills/dx.md
+    prompt: |
+      Focus on onboarding friction, naming, docs drift, and actionable errors.
   documentation:
-    prompt_file: skills/documentation.md
+    prompt: |
+      Keep docs accurate, easy to scan, and honest about caveats.
   product:
-    prompt_file: skills/product.md
+    prompt: |
+      Translate technical findings into user-facing impact, priorities, and tradeoffs.
 
 # ──────────────────────────────────────────────
 # agents — named capabilities
 #
 # Each agent is a capability definition: a name, a backend, the skills
-# it uses, and a prompt file. Agents don't run on their own — repos
+# it uses, and a prompt. Agents don't run on their own — repos
 # below decide when and where they run.
 #
 # backend: claude | codex | claude_local
@@ -148,6 +157,8 @@ skills:
 #   Whitelist of agents this agent is allowed to dispatch. Entries must
 #   reference real agents in this config; self-reference is rejected.
 # prompt_file: path relative to the config file's directory.
+#   Use it when you want prompts in separate files; this example keeps
+#   prompts inline so it is importable as-is.
 #
 # Runtime "Available experts" roster
 # ──────────────────────────────────
@@ -181,14 +192,18 @@ agents:
     backend: claude
     description: "Surveys the codebase for issues worth tracking in the issue tracker"
     skills: &scout-skills [architect, dx]
-    prompt_file: prompts/codebase-scout-issues.md
+    prompt: |
+      Inspect the repository for user-visible bugs, stale docs, or maintenance gaps.
+      Open or update GitHub issues with concrete evidence and next steps.
     can_dispatch: [product-strategist]
 
   - name: scout-code
     backend: claude
     description: "Surveys the codebase for code-quality and architectural concerns"
     skills: *scout-skills
-    prompt_file: prompts/codebase-scout-code.md
+    prompt: |
+      Inspect the codebase for architectural debt, risky complexity, and weak invariants.
+      Capture findings as concrete GitHub issues with reproduction details when possible.
     can_dispatch: [product-strategist]
 
   # PR-authoring agents — require allow_prs: true.
@@ -196,7 +211,9 @@ agents:
     backend: claude
     description: "Implements fixes and features; opens pull requests"
     skills: [architect, testing]
-    prompt_file: prompts/coder.md
+    prompt: |
+      Implement the requested change end-to-end.
+      Run the narrowest meaningful tests and open a pull request when the work is ready.
     allow_prs: true
     allow_dispatch: true    # can be dispatched by pr-reviewer on REQUEST_CHANGES
     can_dispatch: [pr-reviewer]
@@ -205,7 +222,9 @@ agents:
     backend: claude
     description: "Refactors existing code for readability and maintainability"
     skills: [architect, testing, dx]
-    prompt_file: prompts/refactorer.md
+    prompt: |
+      Refactor code for clarity and maintainability without changing behavior.
+      Leave the repo in a state where tests still pass.
     allow_prs: true
 
   # Documentation agent — reviews code + git history, keeps docs accurate and readable.
@@ -213,7 +232,9 @@ agents:
     backend: claude
     description: "Keeps README, CLAUDE.md, AGENTS.md, and docs/*.md accurate and readable"
     skills: [documentation, dx]
-    prompt_file: prompts/docs-writer.md
+    prompt: |
+      Read the code before editing docs.
+      Keep README, CLAUDE.md, AGENTS.md, and docs/*.md aligned with shipped behavior.
     allow_prs: true
 
   # PR-reviewing agent — comments only, no PRs (default allow_prs: false).
@@ -221,7 +242,9 @@ agents:
     backend: codex
     description: "Reviews pull requests for quality, test coverage, and correctness"
     skills: [architect, testing, security]
-    prompt_file: prompts/pr-reviewer.md
+    prompt: |
+      Review pull requests for correctness, regressions, and missing tests.
+      Prefer concrete findings over broad summaries.
     allow_dispatch: true    # can be dispatched by coder when PR is ready
     can_dispatch: [coder, sec-reviewer]
 
@@ -229,7 +252,8 @@ agents:
     backend: claude
     description: "Translates technical findings into product-level insights and priorities"
     skills: [product, dx]
-    prompt_file: prompts/product-strategist.md
+    prompt: |
+      Convert technical findings into product priorities, tradeoffs, and sequencing advice.
     allow_dispatch: true    # scouts dispatch here with product-facing findings
 
   # Single-axis review agents, one per skill.
@@ -237,32 +261,37 @@ agents:
     backend: claude
     description: "Reviews architecture and design decisions"
     skills: [architect]
-    prompt_file: prompts/arch-reviewer.md
+    prompt: |
+      Review the change for architecture boundaries, coupling, and long-term maintainability.
 
   - name: sec-reviewer
     backend: claude
     description: "Reviews security concerns and potential vulnerabilities"
     skills: [security]
-    prompt_file: prompts/sec-reviewer.md
+    prompt: |
+      Review the change for security risks, trust-boundary violations, and unsafe defaults.
     allow_dispatch: true    # pr-reviewer escalates security smells here
 
   - name: test-reviewer
     backend: claude
     description: "Reviews test coverage and testing strategy"
     skills: [testing]
-    prompt_file: prompts/test-reviewer.md
+    prompt: |
+      Review the change for missing tests, brittle assertions, and blind spots in coverage.
 
   - name: ops-reviewer
     backend: claude
     description: "Reviews operational concerns: CI, deployment, observability"
     skills: [devops]
-    prompt_file: prompts/ops-reviewer.md
+    prompt: |
+      Review the change for CI reliability, deploy safety, and observability gaps.
 
   - name: dx-reviewer
     backend: claude
     description: "Reviews developer experience: docs, tooling, onboarding"
     skills: [dx]
-    prompt_file: prompts/dx-reviewer.md
+    prompt: |
+      Review the change for onboarding friction, confusing naming, and stale documentation.
 
 # ──────────────────────────────────────────────
 # repos — wiring: where and when agents run
