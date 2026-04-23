@@ -356,7 +356,6 @@ func TestHandleAPIConfigRedactsSecrets(t *testing.T) {
 		c.Daemon.AIBackends = map[string]config.AIBackendConfig{
 			"claude": {
 				Command: "claude",
-				Env:     map[string]string{"ANTHROPIC_API_KEY": "sk-ant-secret"},
 			},
 		}
 	})
@@ -386,10 +385,6 @@ func TestHandleAPIConfigRedactsSecrets(t *testing.T) {
 	}
 	if !strings.Contains(body,"GITHUB_WEBHOOK_SECRET") {
 		t.Error("env var name GITHUB_WEBHOOK_SECRET must be preserved")
-	}
-	// Backend env key must appear, but value must be redacted.
-	if !strings.Contains(body,"ANTHROPIC_API_KEY") {
-		t.Error("backend env key ANTHROPIC_API_KEY must be preserved")
 	}
 }
 

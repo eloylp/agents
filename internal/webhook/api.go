@@ -198,8 +198,6 @@ type apiAIBackendConfigJSON struct {
 	Healthy          bool              `json:"healthy"`
 	HealthDetail     string            `json:"health_detail,omitempty"`
 	LocalModelURL    string            `json:"local_model_url,omitempty"`
-	Args             []string          `json:"args,omitempty"`
-	Env              map[string]string `json:"env,omitempty"` // values are "[redacted]"
 	TimeoutSeconds   int               `json:"timeout_seconds"`
 	MaxPromptChars   int               `json:"max_prompt_chars"`
 	RedactionSaltEnv string            `json:"redaction_salt_env,omitempty"`
@@ -264,10 +262,6 @@ func (s *Server) handleAPIConfig(w http.ResponseWriter, _ *http.Request) {
 	}
 	backends := make(map[string]apiAIBackendConfigJSON, len(cfg.Daemon.AIBackends))
 	for name, b := range cfg.Daemon.AIBackends {
-		redactedEnv := make(map[string]string, len(b.Env))
-		for k := range b.Env {
-			redactedEnv[k] = redacted
-		}
 		backends[name] = apiAIBackendConfigJSON{
 			Command:          b.Command,
 			Version:          b.Version,
@@ -275,8 +269,6 @@ func (s *Server) handleAPIConfig(w http.ResponseWriter, _ *http.Request) {
 			Healthy:          b.Healthy,
 			HealthDetail:     b.HealthDetail,
 			LocalModelURL:    b.LocalModelURL,
-			Args:             b.Args,
-			Env:              redactedEnv,
 			TimeoutSeconds:   b.TimeoutSeconds,
 			MaxPromptChars:   b.MaxPromptChars,
 			RedactionSaltEnv: b.RedactionSaltEnv,

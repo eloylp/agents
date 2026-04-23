@@ -41,7 +41,7 @@ func openCRUDTestServer(t *testing.T) *Server {
 // so that subsequent agent upserts that reference it pass cross-ref validation.
 func seedStoreBackend(t *testing.T, s *Server, name string) {
 	t.Helper()
-	b := config.AIBackendConfig{Command: name, Args: []string{}, Env: map[string]string{}}
+	b := config.AIBackendConfig{Command: name}
 	if err := store.UpsertBackend(s.db, name, b); err != nil {
 		t.Fatalf("seedStoreBackend %s: %v", name, err)
 	}
@@ -295,13 +295,8 @@ func TestStoreCRUDBackendGetRedactsEnv(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("want 1 backend, got %d", len(list))
 	}
-	for k, v := range list[0].Env {
-		if v != "[redacted]" {
-			t.Errorf("GET /backends: env[%q] = %q, want \"[redacted]\"", k, v)
-		}
-	}
 
-	// GET single — same redaction requirement.
+	// GET single.
 	rr = doCRUDRequest(t, s, http.MethodGet, "/backends/claude", nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET backend/claude: got %d", rr.Code)
@@ -310,61 +305,8 @@ func TestStoreCRUDBackendGetRedactsEnv(t *testing.T) {
 	if err := json.NewDecoder(rr.Body).Decode(&single); err != nil {
 		t.Fatalf("decode single: %v", err)
 	}
-	for k, v := range single.Env {
-		if v != "[redacted]" {
-			t.Errorf("GET /backends/claude: env[%q] = %q, want \"[redacted]\"", k, v)
-		}
-	}
 }
 
-// TestStoreCRUDBackendPostPreservesRedactedEnv verifies that POSTing a backend
-// with "[redacted]" env values (the sentinel echoed by the list API) does not
-// overwrite the real stored secret with the literal string "[redacted]".
-// This models the UI edit flow: GET list → seed form → POST back unchanged.
-func TestStoreCRUDBackendPostPreservesRedactedEnv(t *testing.T) {
-	t.Parallel()
-	s := openCRUDTestServer(t)
-
-	// Create backend with a real secret.
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
-		"name":    "claude",
-		"command": "claude",
-		"args":    []string{},
-		"env":     map[string]string{"ANTHROPIC_API_KEY": "sk-real-secret"},
-	}); rr.Code != http.StatusOK {
-		t.Fatalf("POST backend (create): got %d — %s", rr.Code, rr.Body.String())
-	}
-
-	// Simulate the UI edit flow: POST back with the "[redacted]" sentinel that
-	// the list API returns, changing only a non-secret field.
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
-		"name":            "claude",
-		"command":         "claude",
-		"args":            []string{"--dangerously-skip-permissions"},
-		"env":             map[string]string{"ANTHROPIC_API_KEY": "[redacted]"},
-		"timeout_seconds": 900,
-	}); rr.Code != http.StatusOK {
-		t.Fatalf("POST backend (edit with redacted sentinel): got %d — %s", rr.Code, rr.Body.String())
-	}
-
-	// Read back via the store directly (unredacted) and confirm the real secret
-	// was preserved, not overwritten with the literal string "[redacted]".
-	backends, err := store.ReadBackends(s.db)
-	if err != nil {
-		t.Fatalf("ReadBackends: %v", err)
-	}
-	b, ok := backends["claude"]
-	if !ok {
-		t.Fatal("backend 'claude' not found in store after edit")
-	}
-	if got, want := b.Env["ANTHROPIC_API_KEY"], "sk-real-secret"; got != want {
-		t.Errorf("stored env[ANTHROPIC_API_KEY] = %q, want %q (secret must not be overwritten by [redacted] sentinel)", got, want)
-	}
-	// The non-secret field change must have been applied.
-	if b.TimeoutSeconds != 900 {
-		t.Errorf("timeout_seconds = %d, want 900", b.TimeoutSeconds)
-	}
-}
 
 func TestStoreCRUDBackendPatchRuntimeSettings(t *testing.T) {
 	t.Parallel()
@@ -373,8 +315,6 @@ func TestStoreCRUDBackendPatchRuntimeSettings(t *testing.T) {
 	if rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
 		"name":             "claude",
 		"command":          "claude",
-		"args":             []string{"--legacy-arg"},
-		"env":              map[string]string{"ANTHROPIC_API_KEY": "sk-secret"},
 		"timeout_seconds":  600,
 		"max_prompt_chars": 12000,
 	}); rr.Code != http.StatusOK {
@@ -414,12 +354,6 @@ func TestStoreCRUDBackendPatchRuntimeSettings(t *testing.T) {
 	if b.Command != "claude" {
 		t.Fatalf("command changed unexpectedly: got %q", b.Command)
 	}
-	if len(b.Args) != 1 || b.Args[0] != "--legacy-arg" {
-		t.Fatalf("args changed unexpectedly: got %v", b.Args)
-	}
-	if got := b.Env["ANTHROPIC_API_KEY"]; got != "sk-secret" {
-		t.Fatalf("env changed unexpectedly: got %q", got)
-	}
 }
 
 func TestStoreCRUDBackendPatchRuntimeSettingsValidation(t *testing.T) {
@@ -439,8 +373,6 @@ func TestStoreCRUDBackendPatchRuntimeSettingsValidation(t *testing.T) {
 	if rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
 		"name":    "claude",
 		"command": "claude",
-		"args":    []string{},
-		"env":     map[string]string{},
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("POST backend: got %d — %s", rr.Code, rr.Body.String())
 	}
@@ -464,8 +396,6 @@ func TestBackendsLocalCreateNamedAndDelete(t *testing.T) {
 	// Local backend creation requires a discovered claude backend.
 	if err := store.UpsertBackend(s.db, "claude", config.AIBackendConfig{
 		Command: "/bin/sh",
-		Args:    []string{},
-		Env:     map[string]string{},
 	}); err != nil {
 		t.Fatalf("seed claude backend: %v", err)
 	}
@@ -505,8 +435,6 @@ func TestBackendsLocalRejectReservedName(t *testing.T) {
 
 	if err := store.UpsertBackend(s.db, "claude", config.AIBackendConfig{
 		Command: "/bin/sh",
-		Args:    []string{},
-		Env:     map[string]string{},
 	}); err != nil {
 		t.Fatalf("seed claude backend: %v", err)
 	}
@@ -1280,15 +1208,6 @@ func TestStoreCRUDPostReturnsCanonicalForm(t *testing.T) {
 	if mp, ok := backend["max_prompt_chars"].(float64); !ok || mp == 0 {
 		t.Errorf("backend max_prompt_chars: got %v, want non-zero default", backend["max_prompt_chars"])
 	}
-	// Env values must be redacted.
-	if env, ok := backend["env"].(map[string]any); ok {
-		if env["ANTHROPIC_API_KEY"] != "[redacted]" {
-			t.Errorf("backend env value not redacted: got %q", env["ANTHROPIC_API_KEY"])
-		}
-	} else {
-		t.Errorf("backend env missing or wrong type: %v", backend["env"])
-	}
-
 	// ── agent ────────────────────────────────────────────────────────────────
 	// POST with mixed-case name and extra whitespace; response must have
 	// lowercase name and trimmed prompt.

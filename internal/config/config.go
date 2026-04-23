@@ -172,11 +172,6 @@ type AIBackendConfig struct {
 	TimeoutSeconds   int      `yaml:"timeout_seconds"`
 	MaxPromptChars   int      `yaml:"max_prompt_chars"`
 	RedactionSaltEnv string   `yaml:"redaction_salt_env"`
-
-	// Args and Env are retained for backward-compatible YAML import only.
-	// They are ignored at runtime.
-	Args []string          `yaml:"args,omitempty"`
-	Env  map[string]string `yaml:"env,omitempty"`
 }
 
 // SkillDef is a reusable block of guidance that agents can compose.
@@ -568,17 +563,6 @@ func (c *Config) normalize() {
 			backend.Version = strings.TrimSpace(backend.Version)
 			backend.HealthDetail = strings.TrimSpace(backend.HealthDetail)
 			backend.LocalModelURL = strings.TrimSpace(backend.LocalModelURL)
-			if len(backend.Env) > 0 {
-				cleaned := make(map[string]string, len(backend.Env))
-				for k, v := range backend.Env {
-					k = strings.TrimSpace(k)
-					if k == "" {
-						continue
-					}
-					cleaned[k] = v
-				}
-				backend.Env = cleaned
-			}
 			for i := range backend.Models {
 				backend.Models[i] = strings.TrimSpace(backend.Models[i])
 			}
@@ -971,17 +955,6 @@ func NormalizeBackendConfig(b *AIBackendConfig) {
 	b.Version = strings.TrimSpace(b.Version)
 	b.HealthDetail = strings.TrimSpace(b.HealthDetail)
 	b.LocalModelURL = strings.TrimSpace(b.LocalModelURL)
-	if len(b.Env) > 0 {
-		cleaned := make(map[string]string, len(b.Env))
-		for k, v := range b.Env {
-			k = strings.TrimSpace(k)
-			if k == "" {
-				continue
-			}
-			cleaned[k] = v
-		}
-		b.Env = cleaned
-	}
 	for i := range b.Models {
 		b.Models[i] = strings.TrimSpace(b.Models[i])
 	}

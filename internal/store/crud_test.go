@@ -15,7 +15,7 @@ import (
 // reference it pass cross-ref validation.
 func seedBackend(t *testing.T, db *sql.DB, name string) {
 	t.Helper()
-	b := config.AIBackendConfig{Command: name, Args: []string{}, Env: map[string]string{}}
+	b := config.AIBackendConfig{Command: name}
 	if err := store.UpsertBackend(db, name, b); err != nil {
 		t.Fatalf("seedBackend %s: %v", name, err)
 	}
@@ -203,8 +203,6 @@ func TestUpsertAndReadBackends(t *testing.T) {
 
 	b := config.AIBackendConfig{
 		Command:        "claude",
-		Args:           []string{"-p", "--output-format", "json"},
-		Env:            map[string]string{"K": "V"},
 		TimeoutSeconds: 300,
 		MaxPromptChars: 8000,
 	}
@@ -222,11 +220,8 @@ func TestUpsertAndReadBackends(t *testing.T) {
 	if got.Command != "claude" {
 		t.Errorf("Command: got %q, want %q", got.Command, "claude")
 	}
-	if len(got.Args) != 3 {
-		t.Errorf("Args: got %v", got.Args)
-	}
-	if got.Env["K"] != "V" {
-		t.Errorf("Env[K]: got %q, want %q", got.Env["K"], "V")
+	if got.TimeoutSeconds != 300 {
+		t.Errorf("TimeoutSeconds: got %d, want 300", got.TimeoutSeconds)
 	}
 }
 
@@ -237,7 +232,7 @@ func TestUpsertBackendAppliesDefaults(t *testing.T) {
 	// Persist a backend with zero numeric fields — the same payload that
 	// POST /api/store/backends would send when omitting timeout_seconds and
 	// max_prompt_chars from the request body.
-	b := config.AIBackendConfig{Command: "claude", Args: []string{}, Env: map[string]string{}}
+	b := config.AIBackendConfig{Command: "claude"}
 	if err := store.UpsertBackend(db, "claude", b); err != nil {
 		t.Fatalf("UpsertBackend: %v", err)
 	}
@@ -262,7 +257,7 @@ func TestDeleteBackend(t *testing.T) {
 	// Seed two backends so that deleting one still leaves the system valid.
 	for _, name := range []string{"claude", "codex"} {
 		if err := store.UpsertBackend(db, name, config.AIBackendConfig{
-			Command: name, Args: []string{}, Env: map[string]string{},
+			Command: name,
 		}); err != nil {
 			t.Fatalf("UpsertBackend %s: %v", name, err)
 		}
@@ -654,13 +649,13 @@ func TestUpsertBackendValidationErrors(t *testing.T) {
 		{
 			name:    "empty command",
 			bName:   "claude",
-			cfg:     config.AIBackendConfig{Command: "", Args: []string{}, Env: map[string]string{}},
+			cfg:     config.AIBackendConfig{Command: "", },
 			wantErr: "command is required",
 		},
 		{
 			name:    "invalid name",
 			bName:   "unknown-ai",
-			cfg:     config.AIBackendConfig{Command: "ai", Args: []string{}, Env: map[string]string{}},
+			cfg:     config.AIBackendConfig{Command: "ai", },
 			wantErr: "unsupported ai backend",
 		},
 	}
@@ -797,7 +792,7 @@ func TestDeleteBackendRejectedAsLast(t *testing.T) {
 	db := openTestDB(t)
 
 	if err := store.UpsertBackend(db, "claude", config.AIBackendConfig{
-		Command: "claude", Args: []string{}, Env: map[string]string{},
+		Command: "claude",
 	}); err != nil {
 		t.Fatalf("UpsertBackend: %v", err)
 	}
@@ -869,7 +864,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 
 	// Backend — mixed-case name should be stored lowercase.
 	if err := store.UpsertBackend(db, "Claude", config.AIBackendConfig{
-		Command: "claude", Args: []string{}, Env: map[string]string{},
+		Command: "claude",
 	}); err != nil {
 		t.Fatalf("UpsertBackend: %v", err)
 	}
@@ -980,14 +975,13 @@ func TestUpsertSkillNormalizesPrompt(t *testing.T) {
 // normalization startup applies in normalize(). This prevents a write that
 // passes validation from creating a backend that the daemon refuses to load
 // on restart after startup normalization changes its shape.
-func TestUpsertBackendNormalizesCommandAndEnv(t *testing.T) {
+func TestUpsertBackendNormalizesCommand(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
 	// Whitespace-only command must be trimmed to "" and rejected.
 	err := store.UpsertBackend(db, "claude", config.AIBackendConfig{
 		Command: "   ",
-		Env:     map[string]string{},
 	})
 	if err == nil {
 		t.Fatal("UpsertBackend with whitespace-only command: want error, got nil")
@@ -996,10 +990,9 @@ func TestUpsertBackendNormalizesCommandAndEnv(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	// Padded command should be stored trimmed; blank env key should be dropped.
+	// Padded command should be stored trimmed.
 	if err := store.UpsertBackend(db, "claude", config.AIBackendConfig{
 		Command: "  claude  ",
-		Env:     map[string]string{"VALID_KEY": "val", "  ": "blank-key"},
 	}); err != nil {
 		t.Fatalf("UpsertBackend with padded command: %v", err)
 	}
@@ -1010,14 +1003,5 @@ func TestUpsertBackendNormalizesCommandAndEnv(t *testing.T) {
 	got := backends["claude"]
 	if got.Command != "claude" {
 		t.Errorf("Command not trimmed: got %q, want %q", got.Command, "claude")
-	}
-	if _, ok := got.Env[""]; ok {
-		t.Error("blank env key should have been removed")
-	}
-	if _, ok := got.Env["  "]; ok {
-		t.Error("whitespace env key should have been removed")
-	}
-	if got.Env["VALID_KEY"] != "val" {
-		t.Errorf("valid env key lost: got %v", got.Env)
 	}
 }

@@ -252,14 +252,6 @@ func importDaemon(tx *sql.Tx, d config.DaemonConfig) error {
 
 func importBackends(tx *sql.Tx, backends map[string]config.AIBackendConfig) error {
 	for name, b := range backends {
-		args, err := json.Marshal(b.Args)
-		if err != nil {
-			return fmt.Errorf("store import: marshal backend %s args: %w", name, err)
-		}
-		env, err := json.Marshal(b.Env)
-		if err != nil {
-			return fmt.Errorf("store import: marshal backend %s env: %w", name, err)
-		}
 		models, err := json.Marshal(b.Models)
 		if err != nil {
 			return fmt.Errorf("store import: marshal backend %s models: %w", name, err)
@@ -267,9 +259,9 @@ func importBackends(tx *sql.Tx, backends map[string]config.AIBackendConfig) erro
 		healthy := boolToInt(b.Healthy)
 		if _, err := tx.Exec(`
 			INSERT OR REPLACE INTO backends
-			  (name,command,args,env,version,models,healthy,health_detail,local_model_url,timeout_seconds,max_prompt_chars,redaction_salt_env)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-			name, b.Command, string(args), string(env),
+			  (name,command,version,models,healthy,health_detail,local_model_url,timeout_seconds,max_prompt_chars,redaction_salt_env)
+			VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			name, b.Command,
 			b.Version, string(models), healthy, b.HealthDetail, b.LocalModelURL,
 			b.TimeoutSeconds, b.MaxPromptChars, b.RedactionSaltEnv,
 		); err != nil {
@@ -426,7 +418,7 @@ func loadDaemon(db *sql.DB, cfg *config.Config) error {
 }
 
 func loadBackends(db querier, cfg *config.Config) error {
-	rows, err := db.Query("SELECT name,command,args,env,version,models,healthy,health_detail,local_model_url,timeout_seconds,max_prompt_chars,redaction_salt_env FROM backends")
+	rows, err := db.Query("SELECT name,command,version,models,healthy,health_detail,local_model_url,timeout_seconds,max_prompt_chars,redaction_salt_env FROM backends")
 	if err != nil {
 		return fmt.Errorf("store load: query backends: %w", err)
 	}
@@ -434,18 +426,10 @@ func loadBackends(db querier, cfg *config.Config) error {
 
 	backends := make(map[string]config.AIBackendConfig)
 	for rows.Next() {
-		var name, command, argsJSON, envJSON, version, modelsJSON, healthDetail, localModelURL, saltEnv string
+		var name, command, version, modelsJSON, healthDetail, localModelURL, saltEnv string
 		var timeout, maxChars, healthy int
-		if err := rows.Scan(&name, &command, &argsJSON, &envJSON, &version, &modelsJSON, &healthy, &healthDetail, &localModelURL, &timeout, &maxChars, &saltEnv); err != nil {
+		if err := rows.Scan(&name, &command, &version, &modelsJSON, &healthy, &healthDetail, &localModelURL, &timeout, &maxChars, &saltEnv); err != nil {
 			return fmt.Errorf("store load: scan backend: %w", err)
-		}
-		var args []string
-		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-			return fmt.Errorf("store load: parse backend %s args: %w", name, err)
-		}
-		var env map[string]string
-		if err := json.Unmarshal([]byte(envJSON), &env); err != nil {
-			return fmt.Errorf("store load: parse backend %s env: %w", name, err)
 		}
 		var models []string
 		if err := json.Unmarshal([]byte(modelsJSON), &models); err != nil {
@@ -458,8 +442,6 @@ func loadBackends(db querier, cfg *config.Config) error {
 			Healthy:          intToBool(healthy),
 			HealthDetail:     healthDetail,
 			LocalModelURL:    localModelURL,
-			Args:             args,
-			Env:              env,
 			TimeoutSeconds:   timeout,
 			MaxPromptChars:   maxChars,
 			RedactionSaltEnv: saltEnv,

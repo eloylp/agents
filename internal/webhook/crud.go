@@ -1,7 +1,6 @@
 package webhook
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,8 +72,6 @@ type storeBackendJSON struct {
 	Healthy          bool              `json:"healthy"`
 	HealthDetail     string            `json:"health_detail,omitempty"`
 	LocalModelURL    string            `json:"local_model_url,omitempty"`
-	Args             []string          `json:"args"`
-	Env              map[string]string `json:"env"`
 	TimeoutSeconds   int               `json:"timeout_seconds"`
 	MaxPromptChars   int               `json:"max_prompt_chars"`
 	RedactionSaltEnv string            `json:"redaction_salt_env"`
@@ -91,14 +88,6 @@ type backendRuntimeSettingsJSON struct {
 }
 
 func backendToStoreJSON(name string, b config.AIBackendConfig) storeBackendJSON {
-	// Redact env values: backend env entries are expected to hold secrets
-	// (API keys, base URLs, etc.). Preserve the key names so operators can
-	// identify which environment variables are configured, but never expose
-	// the resolved values — consistent with how /api/config handles backends.
-	redactedEnv := make(map[string]string, len(b.Env))
-	for k := range b.Env {
-		redactedEnv[k] = "[redacted]"
-	}
 	return storeBackendJSON{
 		Name:             name,
 		Command:          b.Command,
@@ -107,8 +96,6 @@ func backendToStoreJSON(name string, b config.AIBackendConfig) storeBackendJSON 
 		Healthy:          b.Healthy,
 		HealthDetail:     b.HealthDetail,
 		LocalModelURL:    b.LocalModelURL,
-		Args:             nilSafeStrings(b.Args),
-		Env:              redactedEnv,
 		TimeoutSeconds:   b.TimeoutSeconds,
 		MaxPromptChars:   b.MaxPromptChars,
 		RedactionSaltEnv: b.RedactionSaltEnv,
@@ -123,8 +110,6 @@ func (j storeBackendJSON) toConfig() config.AIBackendConfig {
 		Healthy:          j.Healthy,
 		HealthDetail:     j.HealthDetail,
 		LocalModelURL:    j.LocalModelURL,
-		Args:             nilSafeStrings(j.Args),
-		Env:              j.Env,
 		TimeoutSeconds:   j.TimeoutSeconds,
 		MaxPromptChars:   j.MaxPromptChars,
 		RedactionSaltEnv: j.RedactionSaltEnv,
@@ -174,45 +159,6 @@ func (j storeRepoJSON) toConfig() config.RepoDef {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-// restoreRedactedEnv resolves any "[redacted]" sentinel values in env that were
-// echoed back from the list API. For each such key the real stored value is
-// substituted; if the key does not exist in the stored backend the entry is
-// removed so that a phantom "[redacted]" is never written to the database.
-// env is mutated in place. Calling this before UpsertBackend prevents a no-op
-// edit from overwriting real secrets with the literal string "[redacted]".
-func restoreRedactedEnv(db *sql.DB, name string, env map[string]string) error {
-	// Fast path: nothing to do when no sentinel values are present.
-	needRestore := false
-	for _, v := range env {
-		if v == "[redacted]" {
-			needRestore = true
-			break
-		}
-	}
-	if !needRestore {
-		return nil
-	}
-	existing, err := store.ReadBackends(db)
-	if err != nil {
-		return err
-	}
-	stored, ok := existing[config.NormalizeBackendName(name)]
-	for k, v := range env {
-		if v != "[redacted]" {
-			continue
-		}
-		if ok {
-			if sv, found := stored.Env[k]; found {
-				env[k] = sv
-				continue
-			}
-		}
-		// Key not present in the stored backend — drop the sentinel.
-		delete(env, k)
-	}
-	return nil
-}
 
 func nilSafeStrings(s []string) []string {
 	if s == nil {
@@ -497,18 +443,7 @@ func (s *Server) handleStoreBackends(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "name is required", http.StatusBadRequest)
 			return
 		}
-		if req.Env == nil {
-			req.Env = map[string]string{}
-		}
-		// restoreRedactedEnv must run inside the lock so that the read of the
-		// stored backend and the subsequent UpsertBackend write are atomic with
-		// respect to other concurrent backend edits.
 		s.storeMu.Lock()
-		if err := restoreRedactedEnv(s.db, req.Name, req.Env); err != nil {
-			s.storeMu.Unlock()
-			http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
-			return
-		}
 		err := store.UpsertBackend(s.db, req.Name, req.toConfig())
 		if err == nil {
 			err = s.reloadCron()
