@@ -53,7 +53,6 @@ github  https://api.githubcopilot.com/mcp/  GITHUB_PAT_TOKEN      enabled  Beare
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			found, online := parseGitHubMCPStatus(tc.output)

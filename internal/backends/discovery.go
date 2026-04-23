@@ -128,7 +128,6 @@ func RunDiagnostics(ctx context.Context, existing map[string]config.AIBackendCon
 	}()
 
 	for _, target := range targets {
-		target := target
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
