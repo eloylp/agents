@@ -258,6 +258,9 @@ func (s *Server) buildHandler() http.Handler {
 			router.Handle("/ui", withTimeout(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
 			}))).Methods(http.MethodGet)
+			router.Handle("/", withTimeout(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
+			}))).Methods(http.MethodGet)
 		}
 	}
 
