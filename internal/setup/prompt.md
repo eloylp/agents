@@ -7,8 +7,8 @@ Core rule: backend runner arguments are daemon-managed. Do **not** ask users to 
 ## Your tools
 
 You can use shell tools directly:
-- `gh` for GitHub auth/repo/webhook/label operations
 - `which`, `<tool> --version`, `curl`, `jq`
+- the GitHub MCP server (configured on Claude Code) for repo/webhook/label operations — no `gh` CLI required
 - file editing tools for `.env` and `config.yaml`
 
 Work phase by phase. Confirm each phase outcome before moving on.
@@ -18,30 +18,30 @@ Work phase by phase. Confirm each phase outcome before moving on.
 ## Phase 1 — Verify prerequisites
 
 Check these commands and report exact results:
-1. `gh --version` (required)
-2. `claude --version` (required)
-3. `codex --version` (optional but recommended)
-4. `go version` (required to run local build)
+1. `claude --version` (required)
+2. `codex --version` (optional but recommended)
+3. `go version` (required to run local build)
 
 If a required tool is missing, provide install steps for the current OS and pause until user confirms.
 
 ---
 
-## Phase 2 — Verify auth + MCP readiness
+## Phase 2 — Verify GitHub MCP readiness
 
-1. GitHub auth:
-   - Run `gh auth status`.
-   - If not authenticated, run `gh auth login` and re-check.
-2. Claude MCP:
+The daemon and its agents reach GitHub exclusively through the AI CLI's GitHub MCP server. Verify that the MCP server is configured and connected for each installed AI CLI.
+
+1. Claude MCP:
    - If `claude` exists, run `claude mcp list`.
    - Check whether GitHub MCP appears and whether it is connected.
-3. Codex MCP:
+   - If missing or disconnected, guide the user through installing/authenticating the GitHub MCP server on Claude Code: https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-claude.md
+2. Codex MCP:
    - If `codex` exists, run `codex mcp list`.
    - Check whether GitHub MCP appears and whether it is connected.
+   - If missing or disconnected, guide the user through installing/authenticating the GitHub MCP server on Codex: https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-codex.md
 
 Important:
-- Missing/disconnected MCP should be reported clearly, but setup can continue (user may run non-GitHub workflows).
-- Summarize readiness as: `gh auth`, `claude mcp github`, `codex mcp github`.
+- Missing/disconnected GitHub MCP should be reported clearly, but setup can continue (user may run non-GitHub workflows).
+- Summarize readiness as: `claude mcp github`, `codex mcp github`.
 
 ---
 
@@ -52,9 +52,9 @@ Ask for:
 2. Public webhook base URL (e.g. `https://agents.example.com`)
 3. Whether to include codex-based agents now (yes/no)
 
-Validate each repo with:
-- `gh repo view <owner/repo>`
-- `gh api repos/<owner/repo> --jq .permissions.admin` (must be `true` for webhook creation)
+Validate each repo via the GitHub MCP server (e.g. its `get_repository` / `list_repositories` / equivalent tools). Confirm:
+- the repo exists and is accessible to the authenticated GitHub MCP identity
+- the identity has admin permission on the repo (required for webhook creation)
 
 ---
 
@@ -104,8 +104,7 @@ Now validate using the daemon APIs:
    - Review:
      - detected backends
      - backend health and model lists
-     - GitHub CLI status/auth
-     - MCP connectivity notes
+     - GitHub MCP connectivity notes (per-backend, surfaced in `health_detail`)
 
 3. Persist fresh discovery snapshot:
    - `curl -s -X POST http://127.0.0.1:8080/backends/discover | jq`
@@ -121,25 +120,15 @@ If diagnostics show issues, help the user fix them and re-run checks.
 
 ## Phase 7 — GitHub webhook setup
 
-For each selected repo, create webhook:
+For each selected repo, create the webhook through the GitHub MCP server's webhook-management tool (e.g. `create_repository_webhook` or equivalent). Configure it with:
 
-```bash
-gh api repos/<owner/repo>/hooks \
-  --method POST \
-  --field name=web \
-  --field active=true \
-  --field "events[]=issues" \
-  --field "events[]=pull_request" \
-  --field "events[]=issue_comment" \
-  --field "events[]=pull_request_review" \
-  --field "events[]=pull_request_review_comment" \
-  --field "events[]=push" \
-  --field "config[url]=<public_base_url>/webhooks/github" \
-  --field "config[content_type]=json" \
-  --field "config[secret]=<GITHUB_WEBHOOK_SECRET>"
-```
+- `events`: `issues`, `pull_request`, `issue_comment`, `pull_request_review`, `pull_request_review_comment`, `push`
+- `config.url`: `<public_base_url>/webhooks/github`
+- `config.content_type`: `json`
+- `config.secret`: value of `GITHUB_WEBHOOK_SECRET` from `.env`
+- `active`: true
 
-If a webhook already exists, detect and avoid duplicates.
+If a webhook for the same URL already exists on the repo, detect it and skip creation rather than duplicating.
 
 ---
 
@@ -166,7 +155,7 @@ Explain that local backend URL and runtime limits can be edited later from **Con
 ## Completion checklist
 
 Before finishing, verify and summarize:
-1. `gh` authenticated
+1. GitHub MCP server connected on at least one AI CLI
 2. claude/codex availability
 3. daemon running and `/status` healthy
 4. discovery executed and persisted

@@ -26,15 +26,6 @@ const (
 
 var builtinBackendNames = []string{ClaudeName, CodexName}
 
-// GitHubStatus captures diagnostics for the GitHub CLI dependency.
-type GitHubStatus struct {
-	Detected      bool   `json:"detected"`
-	Command       string `json:"command,omitempty"`
-	Authenticated bool   `json:"authenticated"`
-	Healthy       bool   `json:"healthy"`
-	Detail        string `json:"detail,omitempty"`
-}
-
 // BackendStatus captures diagnostics for one backend.
 type BackendStatus struct {
 	Name          string   `json:"name"`
@@ -47,10 +38,12 @@ type BackendStatus struct {
 	LocalModelURL string   `json:"local_model_url,omitempty"`
 }
 
-// Diagnostics is the full tool-discovery and health snapshot.
+// Diagnostics is the full tool-discovery and health snapshot. GitHub access is
+// verified per-backend through the AI CLI's GitHub MCP server (see the
+// `github MCP:` line in BackendStatus.HealthDetail) rather than through a
+// standalone CLI check.
 type Diagnostics struct {
 	GeneratedAt time.Time       `json:"generated_at"`
-	GitHub      GitHubStatus    `json:"github_cli"`
 	Backends    []BackendStatus `json:"backends"`
 }
 
@@ -118,17 +111,9 @@ func RunDiagnostics(ctx context.Context, existing map[string]config.AIBackendCon
 
 	backendsOut := make([]BackendStatus, 0, len(targets))
 	var outMu sync.Mutex
-	var githubOut GitHubStatus
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		githubOut = diagnoseGitHubCLI(ctx)
-	}()
-
 	for _, target := range targets {
-		target := target
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -140,7 +125,6 @@ func RunDiagnostics(ctx context.Context, existing map[string]config.AIBackendCon
 	}
 	wg.Wait()
 
-	diag.GitHub = githubOut
 	diag.Backends = backendsOut
 	sort.Slice(diag.Backends, func(i, j int) bool { return diag.Backends[i].Name < diag.Backends[j].Name })
 	return diag
@@ -171,29 +155,6 @@ func persistDiagnostics(db *sql.DB, existing map[string]config.AIBackendConfig, 
 		}
 	}
 	return nil
-}
-
-func diagnoseGitHubCLI(ctx context.Context) GitHubStatus {
-	path, err := exec.LookPath("gh")
-	if err != nil {
-		return GitHubStatus{
-			Detected: false,
-			Healthy:  false,
-			Detail:   "gh binary not found on PATH",
-		}
-	}
-	stdout, stderr, runErr := runToolCommand(ctx, path, []string{"auth", "status"}, nil)
-	detail := firstNonEmptyLine(stdout, stderr)
-	if detail == "" {
-		detail = "authentication check completed"
-	}
-	return GitHubStatus{
-		Detected:      true,
-		Command:       path,
-		Authenticated: runErr == nil,
-		Healthy:       runErr == nil,
-		Detail:        detail,
-	}
 }
 
 func diagnoseBackend(ctx context.Context, backendName, commandName, preferredCommand, localURL string) BackendStatus {

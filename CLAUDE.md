@@ -57,9 +57,9 @@ docker compose build
 docker compose up -d
 ```
 
-Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, and `gh` CLIs alongside the daemon. Runs as non-root `agents` user. Default CMD is `--db /var/lib/agents/agents.db`. Compose mounts:
+Multi-stage build on `node:22-alpine` so the image includes Claude Code and Codex alongside the daemon. Runs as non-root `agents` user. Default CMD is `--db /var/lib/agents/agents.db`. Compose mounts:
 - `./config.yaml` → `/etc/agents/config.yaml` (read-only; used for `--import` seeding)
-- Claude/Codex/gh config dirs from host
+- Claude/Codex config dirs from host (GitHub access flows through the GitHub MCP server configured on those CLIs)
 - `agents-data` named volume → `/var/lib/agents` (SQLite database persistence)
 
 ## Environment Variables

@@ -13,7 +13,6 @@ services:
       - ~/.claude:/home/agents/.claude
       - ~/.claude.json:/home/agents/.claude.json
       - ~/.codex:/home/agents/.codex
-      - ~/.config/gh:/home/agents/.config/gh:ro
     env_file:
       - .env
     restart: unless-stopped
