@@ -3,14 +3,7 @@ import { useState, useEffect, useMemo } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import BadgePicker from '@/components/BadgePicker'
-
-interface Binding {
-  agent: string
-  labels?: string[]
-  events?: string[]
-  cron?: string
-  enabled?: boolean
-}
+import { Binding, groupByAgent } from '@/lib/bindings'
 
 interface Repo {
   name: string
@@ -498,17 +491,8 @@ export default function ReposPage() {
         {repos.map(repo => {
           const activeBindings = repo.bindings.filter(b => b.enabled !== false)
           const disabledBindings = repo.bindings.filter(b => b.enabled === false)
-          const groupBy = (bs: Binding[]): Array<[string, Binding[]]> => {
-            const g: Record<string, Binding[]> = {}
-            const order: string[] = []
-            for (const b of bs) {
-              if (!g[b.agent]) { g[b.agent] = []; order.push(b.agent) }
-              g[b.agent].push(b)
-            }
-            return order.map(a => [a, g[a]])
-          }
-          const activeGroups = groupBy(activeBindings)
-          const disabledGroups = groupBy(disabledBindings)
+          const activeGroups = groupByAgent(activeBindings)
+          const disabledGroups = groupByAgent(disabledBindings)
           const cardMuted = !repo.enabled
           return (
             <Card key={repo.name} style={{ opacity: cardMuted ? 0.65 : 1 }}>
