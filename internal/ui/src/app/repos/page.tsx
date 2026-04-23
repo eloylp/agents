@@ -495,51 +495,91 @@ export default function ReposPage() {
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        {repos.map(repo => (
-          <Card key={repo.name}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
-              <div>
-                <div style={{ fontWeight: 700, color: 'var(--text-heading)', fontSize: '1rem' }}>{repo.name}</div>
-                <span style={{
-                  display: 'inline-block', marginTop: '3px', fontSize: '0.72rem', fontWeight: 600,
-                  padding: '1px 7px', borderRadius: '10px',
-                  background: repo.enabled ? 'var(--success-bg)' : 'rgba(100,116,139,0.15)',
-                  color: repo.enabled ? 'var(--success)' : 'var(--text-muted)',
-                  border: `1px solid ${repo.enabled ? 'var(--success-border)' : 'var(--border-subtle)'}`,
-                }}>
-                  {repo.enabled ? 'enabled' : 'disabled'}
-                </span>
+        {repos.map(repo => {
+          const activeBindings = repo.bindings.filter(b => b.enabled !== false)
+          const disabledBindings = repo.bindings.filter(b => b.enabled === false)
+          const groupBy = (bs: Binding[]): Array<[string, Binding[]]> => {
+            const g: Record<string, Binding[]> = {}
+            const order: string[] = []
+            for (const b of bs) {
+              if (!g[b.agent]) { g[b.agent] = []; order.push(b.agent) }
+              g[b.agent].push(b)
+            }
+            return order.map(a => [a, g[a]])
+          }
+          const activeGroups = groupBy(activeBindings)
+          const disabledGroups = groupBy(disabledBindings)
+          const cardMuted = !repo.enabled
+          return (
+            <Card key={repo.name} style={{ opacity: cardMuted ? 0.65 : 1 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
+                <div>
+                  <div style={{ fontWeight: 700, color: 'var(--text-heading)', fontSize: '1rem' }}>{repo.name}</div>
+                  <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', marginTop: '3px', flexWrap: 'wrap' }}>
+                    <span style={{
+                      display: 'inline-block', fontSize: '0.75rem', fontWeight: 700,
+                      padding: '2px 9px', borderRadius: '10px',
+                      background: repo.enabled ? 'var(--success-bg)' : 'rgba(100,116,139,0.2)',
+                      color: repo.enabled ? 'var(--success)' : 'var(--text-muted)',
+                      border: `1px solid ${repo.enabled ? 'var(--success-border)' : 'var(--border-subtle)'}`,
+                      textTransform: 'uppercase', letterSpacing: '0.03em',
+                    }}>
+                      {repo.enabled ? 'enabled' : 'disabled'}
+                    </span>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      {activeBindings.length} active{disabledBindings.length > 0 ? `, ${disabledBindings.length} disabled` : ''}
+                    </span>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button onClick={() => openEdit(repo)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--bg-input)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--accent)' }}>Edit</button>
+                  <button onClick={() => confirmDelete(repo.name)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--text-danger)' }}>Delete</button>
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <button onClick={() => openEdit(repo)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--bg-input)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--accent)' }}>Edit</button>
-                <button onClick={() => confirmDelete(repo.name)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--text-danger)' }}>Delete</button>
-              </div>
-            </div>
 
-            {repo.bindings.length > 0 ? (() => {
-              const grouped: Record<string, Binding[]> = {}
-              for (const b of repo.bindings) {
-                if (!grouped[b.agent]) grouped[b.agent] = []
-                grouped[b.agent].push(b)
-              }
-              return Object.entries(grouped).map(([agent, bindings]) => (
-                <div key={agent} style={{ marginBottom: '0.5rem' }}>
+              {repo.bindings.length === 0 && (
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No bindings.</p>
+              )}
+
+              {activeGroups.map(([agent, bindings]) => (
+                <div key={`active-${agent}`} style={{ marginBottom: '0.5rem' }}>
                   <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--accent)', marginBottom: '0.25rem' }}>{agent}</div>
                   {bindings.map((b, i) => (
                     <div key={i} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', fontSize: '0.78rem', padding: '2px 0 2px 0.75rem', borderLeft: '2px solid var(--border)' }}>
                       <span style={{ color: 'var(--text-faint)' }}>{bindingTrigger(b)}</span>
-                      <span style={{ fontSize: '0.7rem', color: b.enabled !== false ? 'var(--success)' : 'var(--text-muted)' }}>
-                        {b.enabled !== false ? 'on' : 'off'}
-                      </span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--success)' }}>on</span>
                     </div>
                   ))}
                 </div>
-              ))
-            })() : (
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No bindings.</p>
-            )}
-          </Card>
-        ))}
+              ))}
+
+              {disabledGroups.length > 0 && (
+                <>
+                  <div style={{
+                    fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)',
+                    textTransform: 'uppercase', letterSpacing: '0.05em',
+                    marginTop: activeGroups.length > 0 ? '0.75rem' : 0, marginBottom: '0.4rem',
+                    paddingTop: activeGroups.length > 0 ? '0.5rem' : 0,
+                    borderTop: activeGroups.length > 0 ? '1px solid var(--border-subtle)' : 'none',
+                  }}>
+                    Disabled
+                  </div>
+                  {disabledGroups.map(([agent, bindings]) => (
+                    <div key={`disabled-${agent}`} style={{ marginBottom: '0.5rem', opacity: 0.6 }}>
+                      <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem' }}>{agent}</div>
+                      {bindings.map((b, i) => (
+                        <div key={i} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', fontSize: '0.78rem', padding: '2px 0 2px 0.75rem', borderLeft: '2px solid var(--border-subtle)' }}>
+                          <span style={{ color: 'var(--text-faint)' }}>{bindingTrigger(b)}</span>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>off</span>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </>
+              )}
+            </Card>
+          )
+        })}
       </div>
 
       {(modal === 'create' || modal === 'edit') && (
