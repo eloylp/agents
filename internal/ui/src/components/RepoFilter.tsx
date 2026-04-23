@@ -37,7 +37,9 @@ export default function RepoFilter({ selected, onChange }: { selected: string; o
     }
   }, [repos, selected, onChange])
 
-  if (repos.length === 0) return null
+  // Hide the filter when there's nothing to choose between (0 or 1 repos).
+  // Single-repo installs shouldn't carry extra chrome for a filter that has no effect.
+  if (repos.length <= 1) return null
 
   return (
     <select

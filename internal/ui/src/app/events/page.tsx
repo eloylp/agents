@@ -130,7 +130,7 @@ export default function EventsPage() {
 
   const buckets: Record<string, number> = {}
   const now = Date.now()
-  for (const e of events) {
+  for (const e of filtered) {
     const bucket = Math.floor((now - new Date(e.at).getTime()) / (5 * 60 * 1000))
     const label = `${bucket * 5}m`
     buckets[label] = (buckets[label] ?? 0) + 1

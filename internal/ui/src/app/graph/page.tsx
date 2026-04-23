@@ -144,9 +144,16 @@ export default function GraphPage() {
 
   const activeEdgeMap = useMemo(() => {
     const m = new Map<string, GraphEdge>()
-    graphData.edges.forEach(e => m.set(`${e.from}->${e.to}`, e))
+    graphData.edges.forEach(e => {
+      // When a repo filter is active, only count dispatches whose record.repo matches.
+      // An edge with zero matching dispatches drops out of the active map so it renders
+      // as a wired-but-inactive edge (or not at all if the agents aren't visible).
+      const dispatches = repoFilter ? e.dispatches.filter(d => d.repo === repoFilter) : e.dispatches
+      if (repoFilter && dispatches.length === 0) return
+      m.set(`${e.from}->${e.to}`, { ...e, count: dispatches.length, dispatches })
+    })
     return m
-  }, [graphData.edges])
+  }, [graphData.edges, repoFilter])
 
   const { flowNodes, flowEdges, wiringInfo } = useMemo(() => {
     const visibleAgents = repoFilter
@@ -170,8 +177,9 @@ export default function GraphPage() {
 
     graphData.edges.forEach(e => {
       const key = `${e.from}->${e.to}`
-      if (!seen.has(key) && visibleNames.has(e.from) && visibleNames.has(e.to)) {
-        allEdges.push({ from: e.from, to: e.to, isActive: true, count: e.count, dispatches: e.dispatches })
+      const active = activeEdgeMap.get(key)
+      if (!seen.has(key) && active && visibleNames.has(e.from) && visibleNames.has(e.to)) {
+        allEdges.push({ from: e.from, to: e.to, isActive: true, count: active.count, dispatches: active.dispatches })
       }
     })
 
