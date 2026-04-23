@@ -225,10 +225,10 @@ function TraceListItem({ rootId, spans, onSelect }: { rootId: string; spans: Spa
           <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{wallMs}ms</span>
         </div>
       </div>
-      {startedAt && finishedAt && (
+      {startedAt && (
         <div style={{ color: 'var(--text-faint)', fontSize: '0.75rem', marginBottom: '0.75rem', display: 'flex', gap: '1rem' }}>
           <span>Started: {fmt(startedAt)}</span>
-          <span>Finished: {fmt(finishedAt)}</span>
+          {finishedAt && <span>Finished: {fmt(finishedAt)}</span>}
         </div>
       )}
       {sorted.map(s => {
