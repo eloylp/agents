@@ -6,6 +6,7 @@ import Modal from '@/components/Modal'
 import Link from 'next/link'
 import BadgePicker from '@/components/BadgePicker'
 import MarkdownEditor from '@/components/MarkdownEditor'
+import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 
 interface Binding {
   repo: string
@@ -295,6 +296,7 @@ export default function FleetPage() {
   const [backendOptions, setBackendOptions] = useState<BackendOption[]>([])
   const [skillNames, setSkillNames] = useState<string[]>([])
   const [agentNames, setAgentNames] = useState<string[]>([])
+  const [repoFilter, setRepoFilter] = useRepoFilter()
 
   const [modal, setModal] = useState<'create' | 'edit' | 'delete' | null>(null)
   const [selected, setSelected] = useState<StoreAgent>(emptyForm)
@@ -433,16 +435,21 @@ export default function FleetPage() {
     return '—'
   }
 
+  const visibleAgents = repoFilter
+    ? agents.filter(a => (a.bindings ?? []).some(b => b.repo === repoFilter))
+    : agents
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
           <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-heading)' }}>Fleet Dashboard</h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '4px' }}>
-            {agents.length} agent{agents.length !== 1 ? 's' : ''} configured
+            {visibleAgents.length} agent{visibleAgents.length !== 1 ? 's' : ''} configured
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          <RepoFilter selected={repoFilter} onChange={setRepoFilter} />
           <Link href="/traces/" style={{ fontSize: '0.875rem', color: 'var(--accent)' }}>View traces →</Link>
           <button
             onClick={openCreate}
@@ -461,12 +468,12 @@ export default function FleetPage() {
 
       {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
       {error && <p style={{ color: 'var(--text-danger)' }}>Error: {error}</p>}
-      {!loading && !error && agents.length === 0 && (
+      {!loading && !error && visibleAgents.length === 0 && (
         <p style={{ color: 'var(--text-muted)' }}>No agents configured.</p>
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-        {agents.map(a => (
+        {visibleAgents.map(a => (
           <AgentCard
             key={a.name}
             agent={a}

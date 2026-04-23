@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import Card from '@/components/Card'
+import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 
 interface Event {
   at: string
@@ -91,6 +92,7 @@ export default function EventsPage() {
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('')
   const [timeRange, setTimeRange] = useState('1h')
+  const [repoFilter, setRepoFilter] = useRepoFilter()
 
   const timeRanges: Record<string, number> = { '15m': 15 * 60, '1h': 3600, '6h': 6 * 3600, '24h': 24 * 3600 }
 
@@ -122,12 +124,13 @@ export default function EventsPage() {
   }, [])
 
   const filtered = events.filter(e =>
-    !filter || e.kind.includes(filter) || e.repo.includes(filter) || e.actor.includes(filter)
+    (!repoFilter || e.repo === repoFilter) &&
+    (!filter || e.kind.includes(filter) || e.repo.includes(filter) || e.actor.includes(filter))
   )
 
   const buckets: Record<string, number> = {}
   const now = Date.now()
-  for (const e of events) {
+  for (const e of filtered) {
     const bucket = Math.floor((now - new Date(e.at).getTime()) / (5 * 60 * 1000))
     const label = `${bucket * 5}m`
     buckets[label] = (buckets[label] ?? 0) + 1
@@ -153,6 +156,7 @@ export default function EventsPage() {
               padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem',
             }}>{r}</button>
           ))}
+          <RepoFilter selected={repoFilter} onChange={setRepoFilter} />
           <input
             placeholder="Filter..."
             value={filter}

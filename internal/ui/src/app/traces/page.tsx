@@ -4,6 +4,7 @@ import { useSearchParams, useRouter } from 'next/navigation'
 import Card from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 import Link from 'next/link'
+import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 
 interface TraceStep {
   tool_name: string
@@ -260,6 +261,7 @@ function TracesContent() {
   const [filter, setFilter] = useState('')
   const [loading, setLoading] = useState(true)
   const [streaming, setStreaming] = useState(false)
+  const [repoFilter, setRepoFilter] = useRepoFilter()
 
   const load = () => {
     setLoading(true)
@@ -293,6 +295,7 @@ function TracesContent() {
 
   const grouped: Record<string, Span[]> = {}
   for (const s of spans) {
+    if (repoFilter && s.repo !== repoFilter) continue
     if (filter && !s.agent.includes(filter) && !s.repo.includes(filter) && !s.root_event_id.includes(filter)) continue
     if (!grouped[s.root_event_id]) grouped[s.root_event_id] = []
     grouped[s.root_event_id].push(s)
@@ -313,6 +316,7 @@ function TracesContent() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <RepoFilter selected={repoFilter} onChange={setRepoFilter} />
           <input
             placeholder="Filter by agent, repo, or ID…"
             value={filter}
