@@ -84,7 +84,7 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, 
   - `GET /graph` — agent interaction graph (dispatch edges + counts).
   - `GET /dispatches` — dispatch dedup store snapshot + counters.
   - `GET /memory/{agent}/{repo}` — raw agent memory markdown.
-  - `GET /memory/stream` — memory file change notifications (SSE).
+  - `GET /memory/stream` — memory change notifications (SSE).
   - `GET /config` — effective parsed config (secrets redacted).
   - `GET /ui/` — embedded web dashboard (Next.js static assets).
   - `GET|POST /{resource}` and `GET|DELETE /{resource}/{name}` — SQLite CRUD endpoints (always mounted). Resources for `GET` list: `skills`, `backends`, `repos` (repos use two-segment path: `repos/{owner}/{repo}`). Note: `GET /agents` always returns the live fleet snapshot — not the CRUD list. `POST /agents` and `GET|DELETE /agents/{name}` are CRUD endpoints for agents.

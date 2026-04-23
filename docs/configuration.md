@@ -65,7 +65,7 @@ skills:
       Focus on authn/authz, secrets exposure, injection vectors, and unsafe defaults.
 ```
 
-Skills are referenced by name from agents. You can also use `prompt_file: path/to/file.md` instead of inline `prompt`.
+Skills are referenced by name from agents. You can also use `prompt_file: path/to/file.md` instead of inline `prompt`. The shipping [`config.example.yaml`](../config.example.yaml) keeps prompts inline so a fresh clone imports without extra files.
 
 ## `agents` -- named capabilities
 
@@ -78,12 +78,13 @@ agents:
     prompt: |
       You are an architecture-focused PR reviewer. Post one high-signal review comment.
 
-  # Prompt loaded from a file (recommended for longer prompts)
-  # allow_prs: true lets this agent open pull requests
+  # PR-authoring agent
   - name: coder
     backend: claude
     skills: [architect, testing]
-    prompt_file: prompts/coder.md
+    prompt: |
+      Implement the requested change end-to-end.
+      Run focused tests and open a pull request when the work is ready.
     allow_prs: true            # required for agents that open PRs
 
   # Dispatch target -- can be invoked by pr-reviewer
@@ -91,19 +92,22 @@ agents:
     description: "Deep-dive security reviewer for risky changes"
     backend: claude
     allow_dispatch: true       # opt-in to being dispatched
-    prompt_file: prompts/sec-reviewer.md
+    prompt: |
+      Review the change for security risks and trust-boundary violations.
 
   # Agent that may dispatch to sec-reviewer
   - name: pr-reviewer
     backend: claude
     can_dispatch: [sec-reviewer]   # whitelist of agents this agent may dispatch
-    prompt_file: prompts/pr-reviewer.md
+    prompt: |
+      Review the pull request for correctness, regressions, and missing tests.
 ```
 
 Each agent is a pure capability definition: backend + skills + prompt. Agents don't run until a repo binds them to a trigger.
 
 - `backend: auto` picks the first configured backend in `daemon.ai_backends` (claude before codex).
 - `prompt_file` paths are resolved relative to the config file's directory.
+  Use them for your own longer prompts; the repo no longer ships a `prompts/` tree.
 - Agent names must be unique.
 - `allow_prs` (default `false`) -- when `false`, the scheduler prepends a hard instruction forbidding the agent from opening pull requests, regardless of what the prompt says. Set `allow_prs: true` only on agents that are explicitly meant to author PRs (e.g. coders, refactorers). Reviewer-only agents should leave this unset.
 - `allow_dispatch` (default `false`) -- opt-in gate. An agent must have `allow_dispatch: true` for any other agent to dispatch it. Agents without this flag silently drop any incoming dispatch requests.

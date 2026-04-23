@@ -127,12 +127,14 @@ agents:
   - name: pr-reviewer
     backend: claude_local                 # Qwen-backed
     skills: [architect, testing, security]
-    prompt_file: prompts/pr-reviewer.md
+    prompt: |
+      Review the pull request for correctness, regressions, and risky behavior.
 
   - name: coder
     backend: claude                       # hosted Anthropic (see caveats below)
     skills: [architect, testing]
-    prompt_file: prompts/coder.md
+    prompt: |
+      Implement the requested change end-to-end and open a pull request when ready.
     allow_prs: true
 ```
 

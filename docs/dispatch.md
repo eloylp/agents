@@ -69,11 +69,13 @@ agents:
   - name: pr-reviewer
     backend: claude
     can_dispatch: [sec-reviewer]       # whitelist of targets
-    prompt_file: prompts/pr-reviewer.md
+    prompt: |
+      Review the pull request for correctness and escalate specialist concerns when needed.
 
   - name: sec-reviewer
     description: "Deep-dive security reviewer"
     backend: claude
     allow_dispatch: true               # opt-in to being dispatched
-    prompt_file: prompts/sec-reviewer.md
+    prompt: |
+      Review the change for security risks and unsafe assumptions.
 ```
