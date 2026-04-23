@@ -777,6 +777,49 @@ func TestBuildHandlerObservabilityRoutesAreOpen(t *testing.T) {
 
 }
 
+// TestBuildHandlerMCPMountsWhenSet verifies that WithMCP mounts the handler
+// at /mcp and is not mounted when WithMCP was never called.
+func TestBuildHandlerMCPMountsWhenSet(t *testing.T) {
+	t.Parallel()
+
+	t.Run("not mounted by default", func(t *testing.T) {
+		t.Parallel()
+		srv, _ := newTestServer(testCfg(nil))
+		ts := httptest.NewServer(srv.buildHandler())
+		t.Cleanup(ts.Close)
+
+		resp, err := http.Post(ts.URL+"/mcp", "application/json", strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("without WithMCP /mcp should 404, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("mounted after WithMCP", func(t *testing.T) {
+		t.Parallel()
+		srv, _ := newTestServer(testCfg(nil))
+		marker := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusTeapot)
+		})
+		srv.WithMCP(marker)
+
+		ts := httptest.NewServer(srv.buildHandler())
+		t.Cleanup(ts.Close)
+
+		resp, err := http.Post(ts.URL+"/mcp", "application/json", strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusTeapot {
+			t.Errorf("WithMCP handler should receive /mcp requests, got status %d", resp.StatusCode)
+		}
+	})
+}
+
 // ─── compile-time assertions ──────────────────────────────────────────────────
 
 var _ EventQueue = (*workflow.DataChannels)(nil)

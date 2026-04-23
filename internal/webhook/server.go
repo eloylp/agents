@@ -96,6 +96,7 @@ type Server struct {
 	db            *sql.DB        // optional; when set, enables /api/store/* CRUD endpoints
 	cronReloader  CronReloader   // optional; called after repo/agent writes to reload cron
 	memReader     MemoryReader   // optional; when set, /api/memory reads from this (SQLite mode)
+	mcp           http.Handler   // optional; when set, /mcp serves this MCP handler
 	// storeMu serializes the "DB write → snapshot read → in-memory Reload"
 	// sequence so that concurrent write requests cannot interleave their
 	// snapshots and leave the scheduler in a stale or inconsistent state.
@@ -148,6 +149,20 @@ func (s *Server) WithStore(db *sql.DB, r CronReloader) {
 // back to reading from the filesystem memory_dir.
 func (s *Server) WithMemoryReader(r MemoryReader) {
 	s.memReader = r
+}
+
+// WithMCP attaches an MCP (Model Context Protocol) handler served at /mcp.
+// When set, the daemon exposes fleet-management tools to MCP clients over
+// Streamable HTTP. When nil (the default), no /mcp route is mounted.
+func (s *Server) WithMCP(h http.Handler) {
+	s.mcp = h
+}
+
+// Config returns the current effective config snapshot under the server's
+// lock. Satisfies the mcp.ConfigProvider interface so the MCP handler reads
+// the same hot-reloaded config the REST API does.
+func (s *Server) Config() *config.Config {
+	return s.loadCfg()
 }
 
 func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue, provider StatusProvider, dispatchStats DispatchStatsProvider, logger zerolog.Logger) *Server {
@@ -274,6 +289,13 @@ func (s *Server) buildHandler() http.Handler {
 		router.Handle("/v1/models", withTimeout(http.HandlerFunc(s.proxy.ModelsHandler))).Methods(http.MethodGet)
 		s.logger.Info().Str("path", cfg.Daemon.Proxy.Path).Str("upstream", cfg.Daemon.Proxy.Upstream.URL).Msg("anthropic proxy enabled")
 	}
+	if s.mcp != nil {
+		// The MCP streamable HTTP handler can legitimately hold SSE streams
+		// open, so we do not wrap it in http.TimeoutHandler. Short-lived tool
+		// calls are bounded by the individual tool handlers in internal/mcp.
+		router.PathPrefix("/mcp").Handler(s.mcp)
+		s.logger.Info().Str("path", "/mcp").Msg("mcp server enabled")
+	}
 	return router
 }
 
@@ -320,25 +342,33 @@ func (s *Server) Run(ctx context.Context) error {
 	return <-errCh
 }
 
-func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
-	q := s.channels.QueueStats()
+// statusQueueJSON, statusOrphanSummaryJSON, and statusJSON are the wire
+// shapes used by both /status and the get_status MCP tool. Keeping them at
+// package level means the two surfaces can never drift.
+type statusQueueJSON struct {
+	Buffered int `json:"buffered"`
+	Capacity int `json:"capacity"`
+}
 
-	type queueJSON struct {
-		Buffered int `json:"buffered"`
-		Capacity int `json:"capacity"`
-	}
-	type orphanedAgentsSummaryJSON struct {
-		Count     int        `json:"count"`
-		UpdatedAt *time.Time `json:"updated_at,omitempty"`
-	}
-	type statusJSON struct {
-		Status         string                    `json:"status"`
-		UptimeSeconds  int64                     `json:"uptime_seconds"`
-		Queues         map[string]queueJSON      `json:"queues"`
-		Agents         []AgentStatus             `json:"agents"`
-		Dispatch       *workflow.DispatchStats   `json:"dispatch,omitempty"`
-		OrphanedAgents orphanedAgentsSummaryJSON `json:"orphaned_agents"`
-	}
+type statusOrphanSummaryJSON struct {
+	Count     int        `json:"count"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+type statusJSON struct {
+	Status         string                     `json:"status"`
+	UptimeSeconds  int64                      `json:"uptime_seconds"`
+	Queues         map[string]statusQueueJSON `json:"queues"`
+	Agents         []AgentStatus              `json:"agents"`
+	Dispatch       *workflow.DispatchStats    `json:"dispatch,omitempty"`
+	OrphanedAgents statusOrphanSummaryJSON    `json:"orphaned_agents"`
+}
+
+// buildStatus assembles the status payload under a snapshot of the server
+// state. Kept separate from handleStatus so the MCP get_status tool can
+// serialise the same struct without duplicating the aggregation logic.
+func (s *Server) buildStatus() statusJSON {
+	q := s.channels.QueueStats()
 
 	agents := []AgentStatus{}
 	if s.provider != nil {
@@ -350,7 +380,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	resp := statusJSON{
 		Status:        "ok",
 		UptimeSeconds: int64(time.Since(s.startTime).Seconds()),
-		Queues: map[string]queueJSON{
+		Queues: map[string]statusQueueJSON{
 			"events": {Buffered: q.Buffered, Capacity: q.Capacity},
 		},
 		Agents: agents,
@@ -361,7 +391,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	} else {
 		s.logger.Warn().Err(err).Msg("status: orphan snapshot refresh failed")
 	}
-	resp.OrphanedAgents = orphanedAgentsSummaryJSON{
+	resp.OrphanedAgents = statusOrphanSummaryJSON{
 		Count: orphaned.Count,
 	}
 	if !orphaned.GeneratedAt.IsZero() {
@@ -372,10 +402,19 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		stats := s.dispatchStats.DispatchStats()
 		resp.Dispatch = &stats
 	}
+	return resp
+}
 
+// StatusJSON returns the status payload marshalled as JSON bytes. Used by
+// the MCP get_status tool so the two surfaces share a single source of truth.
+func (s *Server) StatusJSON() ([]byte, error) {
+	return json.Marshal(s.buildStatus())
+}
+
+func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(s.buildStatus())
 }
 
 type agentsRunRequest struct {

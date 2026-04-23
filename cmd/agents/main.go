@@ -20,6 +20,7 @@ import (
 	"github.com/eloylp/agents/internal/backends"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/logging"
+	mcpserver "github.com/eloylp/agents/internal/mcp"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/setup"
 	"github.com/eloylp/agents/internal/store"
@@ -149,6 +150,17 @@ func run() error {
 	mem := memBackend.(*sqliteMemory)
 	mem.notifyFn = obs.PublishMemoryChange
 	server.WithMemoryReader(&sqliteWebhookReader{db: db})
+
+	// Mount the MCP server on /mcp so MCP-capable clients (Claude Code,
+	// Cursor, Cline) can drive the fleet through the tool surface defined
+	// in internal/mcp. The handler shares the daemon's config snapshot and
+	// event queue so tools stay consistent with the REST API.
+	server.WithMCP(mcpserver.New(mcpserver.Deps{
+		Config: server,
+		Queue:  dataChannels,
+		Status: server,
+		Logger: logger,
+	}))
 
 	group, groupCtx := errgroup.WithContext(ctx)
 	deliveryStore.Start(groupCtx)
