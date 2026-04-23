@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 import {
   ReactFlow,
   Background,
@@ -41,6 +42,7 @@ interface AgentInfo {
   can_dispatch?: string[]
   allow_dispatch?: boolean
   skills?: string[]
+  bindings?: Array<{ repo: string }>
 }
 
 // Custom agent node
@@ -118,6 +120,7 @@ export default function GraphPage() {
   const [selectedEdge, setSelectedEdge] = useState<{ from: string; to: string; count: number; dispatches: DispatchRecord[]; isActive: boolean } | null>(null)
   const [selectedNode, setSelectedNode] = useState<AgentInfo | null>(null)
   const [loading, setLoading] = useState(true)
+  const [repoFilter, setRepoFilter] = useRepoFilter()
 
   const loadedOnce = useRef(false)
   const load = useCallback(() => {
@@ -146,12 +149,18 @@ export default function GraphPage() {
   }, [graphData.edges])
 
   const { flowNodes, flowEdges, wiringInfo } = useMemo(() => {
+    const visibleAgents = repoFilter
+      ? agents.filter(a => (a.bindings ?? []).some(b => b.repo === repoFilter))
+      : agents
+    const visibleNames = new Set(visibleAgents.map(a => a.name))
+
     // Build combined edge set
     const allEdges: Array<{ from: string; to: string; isActive: boolean; count: number; dispatches: DispatchRecord[] }> = []
     const seen = new Set<string>()
 
-    agents.forEach(a => {
+    visibleAgents.forEach(a => {
       (a.can_dispatch ?? []).forEach(target => {
+        if (!visibleNames.has(target)) return
         const key = `${a.name}->${target}`
         seen.add(key)
         const active = activeEdgeMap.get(key)
@@ -161,13 +170,13 @@ export default function GraphPage() {
 
     graphData.edges.forEach(e => {
       const key = `${e.from}->${e.to}`
-      if (!seen.has(key)) {
+      if (!seen.has(key) && visibleNames.has(e.from) && visibleNames.has(e.to)) {
         allEdges.push({ from: e.from, to: e.to, isActive: true, count: e.count, dispatches: e.dispatches })
       }
     })
 
-    // Build nodes from all agents
-    const nodes: Node[] = agents.map(a => ({
+    // Build nodes from visible agents
+    const nodes: Node[] = visibleAgents.map(a => ({
       id: a.name,
       type: 'agent',
       position: { x: 0, y: 0 },
@@ -216,7 +225,7 @@ export default function GraphPage() {
       flowEdges: edges,
       wiringInfo: { active: allEdges.filter(e => e.isActive).length, total: allEdges.length },
     }
-  }, [agents, graphData.edges, activeEdgeMap])
+  }, [agents, graphData.edges, activeEdgeMap, repoFilter])
 
   const onEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
     const d = edge.data as { from: string; to: string; isActive: boolean; count: number; dispatches: DispatchRecord[] }
@@ -238,12 +247,15 @@ export default function GraphPage() {
         <div>
           <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-heading)' }}>Agent Interaction Graph</h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '4px' }}>
-            {agents.length} agents · {wiringInfo.active} active / {wiringInfo.total} wired edges
+            {flowNodes.length} agent{flowNodes.length !== 1 ? 's' : ''} · {wiringInfo.active} active / {wiringInfo.total} wired edges
           </p>
         </div>
-        <button onClick={load} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--accent)', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500 }}>
-          Refresh
-        </button>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <RepoFilter selected={repoFilter} onChange={setRepoFilter} />
+          <button onClick={load} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--accent)', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500 }}>
+            Refresh
+          </button>
+        </div>
       </div>
 
       {loading && <p style={{ color: 'var(--text-muted)' }}>Loading...</p>}
