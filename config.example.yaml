@@ -5,10 +5,9 @@
 #
 #   ./agents --db agents.db --import config.yaml
 #
-# This example is self-contained: every skill and agent prompt is inline, so
-# `cp config.example.yaml config.yaml` works without creating extra files.
-# You can still use `prompt_file:` for longer prompts; those paths must exist
-# at import time, and their content is copied into SQLite.
+# You can start the daemon directly from a YAML config with `--config`, or use
+# this file as an import template with `--db ... --import`. SQLite import is one
+# option, not the only runtime mode.
 #
 # This example is intentionally small enough to read in one pass. Start here,
 # then grow the fleet in the dashboard at /ui/ or over the CRUD API.
@@ -80,20 +79,16 @@ daemon:
 
 # ──────────────────────────────────────────────
 # skills — reusable guidance blocks
-<<<<<<< HEAD
 #
 # Each skill is a named chunk of guidance. Agents reference skills by
 # name; at runtime the guidance is concatenated into the agent's prompt.
 # Use `prompt:` for short inline guidance or `prompt_file:` to load from
 # a file (path relative to this config). The shipping example keeps them
 # inline so it imports cleanly out of the box.
-=======
->>>>>>> c9af124 (docs: replace stale prompt-file examples with working starter config)
 # ──────────────────────────────────────────────
 skills:
   architect:
     prompt: |
-<<<<<<< HEAD
       Focus on architecture boundaries, coupling, and maintainability risks.
   security:
     prompt: |
@@ -113,21 +108,6 @@ skills:
   product:
     prompt: |
       Translate technical findings into user-facing impact, priorities, and tradeoffs.
-=======
-      Focus on architecture boundaries, naming, coupling, and maintainability.
-
-  testing:
-    prompt: |
-      Validate behavior changes, regression risks, and missing automated tests.
-
-  security:
-    prompt: |
-      Look for auth, secrets handling, unsafe defaults, and trust boundaries.
-
-  documentation:
-    prompt: |
-      Keep docs aligned with the current code. Read before you describe.
->>>>>>> c9af124 (docs: replace stale prompt-file examples with working starter config)
 
 # ──────────────────────────────────────────────
 # agents — named capabilities
@@ -250,29 +230,17 @@ agents:
     allow_dispatch: true    # scouts dispatch here with product-facing findings
 
   # Single-axis review agents, one per skill.
-=======
-# Each agent is a capability definition: backend + skills + prompt.
-# It only runs once a repo binding below wires it to labels, events, or cron.
-# ──────────────────────────────────────────────
-agents:
->>>>>>> c9af124 (docs: replace stale prompt-file examples with working starter config)
   - name: arch-reviewer
     backend: claude
     description: "Reviews architecture and design decisions"
     skills: [architect]
     prompt: |
-<<<<<<< HEAD
       Review the change for architecture boundaries, coupling, and long-term maintainability.
-=======
-      Review the change for architecture and design risks.
-      Report only concrete findings with file references when possible.
->>>>>>> c9af124 (docs: replace stale prompt-file examples with working starter config)
 
   - name: sec-reviewer
     backend: claude
     description: "Reviews security concerns and potential vulnerabilities"
     skills: [security]
-<<<<<<< HEAD
     prompt: |
       Review the change for security risks, trust-boundary violations, and unsafe defaults.
     allow_dispatch: true    # pr-reviewer escalates security smells here
@@ -297,45 +265,6 @@ agents:
     skills: [dx]
     prompt: |
       Review the change for onboarding friction, confusing naming, and stale documentation.
-=======
-    allow_dispatch: true
-    prompt: |
-      Review the change for security issues.
-      Call out real exploit paths, unsafe assumptions, and missing checks.
-
-  - name: coder
-    backend: claude
-    description: "Implements fixes and features; opens pull requests"
-    skills: [architect, testing]
-    allow_prs: true
-    allow_dispatch: true
-    can_dispatch: [pr-reviewer]
-    prompt: |
-      Implement the requested change end-to-end.
-      Run the relevant checks when tools are available.
-      Open or update a pull request when the task is ready for review.
-
-  - name: pr-reviewer
-    backend: codex
-    description: "Reviews pull requests for quality, test coverage, and correctness"
-    skills: [architect, testing, security]
-    allow_dispatch: true
-    can_dispatch: [coder, sec-reviewer]
-    prompt: |
-      Review pull requests with a code-review mindset.
-      Prioritize correctness, regressions, and missing tests.
-      Dispatch sec-reviewer when a deeper security pass is warranted.
-
-  - name: docs-writer
-    backend: claude
-    description: "Keeps README, CLAUDE.md, AGENTS.md, and docs/*.md accurate and readable"
-    skills: [documentation, testing]
-    allow_prs: true
-    prompt: |
-      Read the current code and docs before editing.
-      Fix stale paths, stale config fields, and broken examples.
-      Keep the read flow short, concrete, and honest about caveats.
->>>>>>> c9af124 (docs: replace stale prompt-file examples with working starter config)
 
 # ──────────────────────────────────────────────
 # repos — wiring: where and when agents run
