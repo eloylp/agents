@@ -124,11 +124,29 @@ func UpsertAgent(db *sql.DB, a config.AgentDef) error {
 // delete a name that does not exist. Returns an error if the agent is still
 // referenced by any repo binding or can_dispatch list, or if it is the last agent.
 func DeleteAgent(db *sql.DB, name string) error {
+	return deleteAgent(db, name, false)
+}
+
+// DeleteAgentCascade removes the agent and all repo bindings that reference it
+// in a single transaction. It still fails if removing the agent would leave
+// zero agents, or if any other agent's can_dispatch list still references it
+// (cascading across agent relationships would silently reshape the dispatch
+// graph; the user should opt in explicitly).
+func DeleteAgentCascade(db *sql.DB, name string) error {
+	return deleteAgent(db, name, true)
+}
+
+func deleteAgent(db *sql.DB, name string, cascade bool) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: delete agent %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
+	if cascade {
+		if _, err := tx.Exec("DELETE FROM bindings WHERE agent=?", name); err != nil {
+			return fmt.Errorf("store: delete agent %s: cascade bindings: %w", name, err)
+		}
+	}
 	res, err := tx.Exec("DELETE FROM agents WHERE name=?", name)
 	if err != nil {
 		return fmt.Errorf("store: delete agent %s: %w", name, err)

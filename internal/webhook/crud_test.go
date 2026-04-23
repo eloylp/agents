@@ -197,6 +197,94 @@ func TestStoreCRUDAgentDelete(t *testing.T) {
 	}
 }
 
+func TestStoreCRUDAgentDeleteBlockedByBindings(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	seedStoreBackend(t, s, "claude")
+	for _, name := range []string{"coder", "reviewer"} {
+		if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+			"name": name, "backend": "claude", "prompt": "p",
+			"skills": []string{}, "can_dispatch": []string{},
+		}); rr.Code != http.StatusOK {
+			t.Fatalf("seed agent %s: got %d — %s", name, rr.Code, rr.Body.String())
+		}
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
+		"name": "owner/repo", "enabled": true,
+		"bindings": []map[string]any{
+			{"agent": "coder", "labels": []string{"ai:fix"}, "enabled": true},
+		},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed repo: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Plain DELETE must be blocked while the binding references "coder".
+	rr := doCRUDRequest(t, s, http.MethodDelete, "/agents/coder", nil)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("DELETE without cascade: got %d, want 409", rr.Code)
+	}
+
+	// Agent must still be present.
+	rr = doCRUDRequest(t, s, http.MethodGet, "/agents/coder", nil)
+	if rr.Code != http.StatusOK {
+		t.Errorf("GET after blocked delete: got %d, want 200", rr.Code)
+	}
+}
+
+func TestStoreCRUDAgentDeleteCascadeRemovesBindings(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	seedStoreBackend(t, s, "claude")
+	for _, name := range []string{"coder", "reviewer"} {
+		if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+			"name": name, "backend": "claude", "prompt": "p",
+			"skills": []string{}, "can_dispatch": []string{},
+		}); rr.Code != http.StatusOK {
+			t.Fatalf("seed agent %s: got %d — %s", name, rr.Code, rr.Body.String())
+		}
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
+		"name": "owner/repo", "enabled": true,
+		"bindings": []map[string]any{
+			{"agent": "coder", "labels": []string{"ai:fix"}, "enabled": true},
+			{"agent": "reviewer", "labels": []string{"ai:review"}, "enabled": true},
+		},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed repo: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodDelete, "/agents/coder?cascade=true", nil)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("DELETE ?cascade=true: got %d, want 204 — %s", rr.Code, rr.Body.String())
+	}
+
+	// Agent is gone.
+	rr = doCRUDRequest(t, s, http.MethodGet, "/agents/coder", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("GET after cascade: got %d, want 404", rr.Code)
+	}
+
+	// Repo survives with only the reviewer binding.
+	rr = doCRUDRequest(t, s, http.MethodGet, "/repos/owner/repo", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET repo after cascade: got %d, want 200", rr.Code)
+	}
+	var repo struct {
+		Name     string `json:"name"`
+		Bindings []struct {
+			Agent string `json:"agent"`
+		} `json:"bindings"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&repo); err != nil {
+		t.Fatalf("decode repo: %v", err)
+	}
+	if len(repo.Bindings) != 1 || repo.Bindings[0].Agent != "reviewer" {
+		t.Errorf("surviving bindings after cascade: got %+v, want [{reviewer}]", repo.Bindings)
+	}
+}
+
 func TestStoreCRUDAgentMissingName(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
