@@ -194,16 +194,21 @@ function TraceDetail({ rootId, allSpans, onBack }: { rootId: string; allSpans: S
 
 function TraceListItem({ rootId, spans, onSelect }: { rootId: string; spans: Span[]; onSelect: (id: string) => void }) {
   const sorted = [...spans].sort((a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime())
-  const times = sorted.flatMap(s => [new Date(s.started_at).getTime(), new Date(s.finished_at).getTime()])
-  const minMs = times.length ? Math.min(...times) : 0
-  const maxMs = times.length ? Math.max(...times) : 0
+  const startMsList = sorted.map(s => new Date(s.started_at).getTime()).filter(n => Number.isFinite(n) && n > 0)
+  const finishMsList = sorted.map(s => new Date(s.finished_at).getTime()).filter(n => Number.isFinite(n) && n > 0)
+  const minMs = startMsList.length ? Math.min(...startMsList) : 0
+  const maxFinishMs = finishMsList.length ? Math.max(...finishMsList) : 0
+  const maxMs = Math.max(maxFinishMs, ...startMsList)
   const totalMs = maxMs - minMs || 1
   const wallMs = maxMs - minMs
   const hasError = spans.some(s => s.status === 'error')
 
+  const startedAt = sorted[0]?.started_at
+  const finishedAt = maxFinishMs > 0 ? new Date(maxFinishMs).toISOString() : undefined
+
   return (
     <Card style={{ marginBottom: '1rem', cursor: 'pointer' }} >
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
         <div>
           <button
             onClick={() => onSelect(rootId)}
@@ -220,6 +225,12 @@ function TraceListItem({ rootId, spans, onSelect }: { rootId: string; spans: Spa
           <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{wallMs}ms</span>
         </div>
       </div>
+      {startedAt && (
+        <div style={{ color: 'var(--text-faint)', fontSize: '0.75rem', marginBottom: '0.75rem', display: 'flex', gap: '1rem' }}>
+          <span>Started: {fmt(startedAt)}</span>
+          {finishedAt && <span>Finished: {fmt(finishedAt)}</span>}
+        </div>
+      )}
       {sorted.map(s => {
         const start = new Date(s.started_at).getTime()
         const leftPct = ((start - minMs) / totalMs) * 100
