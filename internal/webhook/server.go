@@ -106,6 +106,11 @@ type Server struct {
 	// (HTTP, proxy, log) is never replaced after startup, but since the entire
 	// pointer is swapped on reload the lock is required for all accesses.
 	cfgMu sync.RWMutex
+	// orphanMu protects orphanCache, which is updated on config reloads and
+	// read by /status and /agents/orphans/status endpoints.
+	orphanMu sync.RWMutex
+	// orphanCache stores the latest DB-only orphaned-agent snapshot.
+	orphanCache OrphanedAgentsSnapshot
 }
 
 // WithUI attaches an fs.FS containing the pre-built static UI assets to the
@@ -155,6 +160,7 @@ func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue,
 		dispatchStats: dispatchStats,
 		startTime:     time.Now(),
 	}
+	s.refreshOrphanedAgents(cfg)
 	if cfg.Daemon.Proxy.Enabled {
 		up := cfg.Daemon.Proxy.Upstream
 		s.proxy = anthropicproxy.NewHandler(anthropicproxy.UpstreamConfig{
@@ -209,6 +215,7 @@ func (s *Server) buildHandler() http.Handler {
 
 	// Fleet view (GET) + CRUD (POST) merged on a single path.
 	router.Handle("/agents", withTimeout(http.HandlerFunc(s.handleAgents))).Methods(http.MethodGet, http.MethodPost)
+	router.Handle("/agents/orphans/status", withTimeout(http.HandlerFunc(s.handleAgentsOrphans))).Methods(http.MethodGet)
 	router.Handle("/agents/{name}", withTimeout(http.HandlerFunc(s.handleStoreAgent))).Methods(http.MethodGet, http.MethodDelete)
 
 	router.Handle("/skills", withTimeout(http.HandlerFunc(s.handleStoreSkills))).Methods(http.MethodGet, http.MethodPost)
@@ -218,7 +225,9 @@ func (s *Server) buildHandler() http.Handler {
 	router.Handle("/backends/status", withTimeout(http.HandlerFunc(s.handleBackendsStatus))).Methods(http.MethodGet)
 	router.Handle("/backends/discover", withTimeout(http.HandlerFunc(s.handleBackendsDiscover))).Methods(http.MethodPost)
 	router.Handle("/backends/local", withTimeout(http.HandlerFunc(s.handleBackendsLocal))).Methods(http.MethodPost)
-	router.Handle("/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackend))).Methods(http.MethodGet, http.MethodDelete)
+	router.Handle("/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackendGet))).Methods(http.MethodGet)
+	router.Handle("/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackendPatch))).Methods(http.MethodPatch)
+	router.Handle("/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackendDelete))).Methods(http.MethodDelete)
 
 	router.Handle("/repos", withTimeout(http.HandlerFunc(s.handleStoreRepos))).Methods(http.MethodGet, http.MethodPost)
 	router.Handle("/repos/{owner}/{repo}", withTimeout(http.HandlerFunc(s.handleStoreRepo))).Methods(http.MethodGet, http.MethodDelete)
@@ -315,12 +324,17 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		Buffered int `json:"buffered"`
 		Capacity int `json:"capacity"`
 	}
+	type orphanedAgentsSummaryJSON struct {
+		Count     int        `json:"count"`
+		UpdatedAt *time.Time `json:"updated_at,omitempty"`
+	}
 	type statusJSON struct {
-		Status        string                  `json:"status"`
-		UptimeSeconds int64                   `json:"uptime_seconds"`
-		Queues        map[string]queueJSON    `json:"queues"`
-		Agents        []AgentStatus           `json:"agents"`
-		Dispatch      *workflow.DispatchStats `json:"dispatch,omitempty"`
+		Status         string                    `json:"status"`
+		UptimeSeconds  int64                     `json:"uptime_seconds"`
+		Queues         map[string]queueJSON      `json:"queues"`
+		Agents         []AgentStatus             `json:"agents"`
+		Dispatch       *workflow.DispatchStats   `json:"dispatch,omitempty"`
+		OrphanedAgents orphanedAgentsSummaryJSON `json:"orphaned_agents"`
 	}
 
 	agents := []AgentStatus{}
@@ -338,11 +352,25 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		},
 		Agents: agents,
 	}
+	orphaned := s.orphanedAgentsSnapshot()
+	if fresh, err := s.refreshOrphanedAgentsFromDB(); err == nil {
+		orphaned = fresh
+	} else {
+		s.logger.Warn().Err(err).Msg("status: orphan snapshot refresh failed")
+	}
+	resp.OrphanedAgents = orphanedAgentsSummaryJSON{
+		Count: orphaned.Count,
+	}
+	if !orphaned.GeneratedAt.IsZero() {
+		at := orphaned.GeneratedAt
+		resp.OrphanedAgents.UpdatedAt = &at
+	}
 	if s.dispatchStats != nil {
 		stats := s.dispatchStats.DispatchStats()
 		resp.Dispatch = &stats
 	}
 
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }

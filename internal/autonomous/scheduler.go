@@ -396,6 +396,17 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		}
 		return fmt.Errorf("no configured backend for agent %q (configured: %q)", agent.Name, agent.Backend)
 	}
+	if backendCfg, ok := cfg.Daemon.AIBackends[backend]; ok && config.IsPinnedModelUnavailable(agent.Model, backendCfg) {
+		if s.dispatcher != nil {
+			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
+		}
+		return fmt.Errorf(
+			"agent %q: configured model %q is not available for backend %q; run backend discovery and update the agent model",
+			agent.Name,
+			agent.Model,
+			backend,
+		)
+	}
 	runner, ok := runners[backend]
 	if !ok {
 		if s.dispatcher != nil {

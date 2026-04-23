@@ -366,6 +366,160 @@ func TestStoreCRUDBackendPostPreservesRedactedEnv(t *testing.T) {
 	}
 }
 
+func TestStoreCRUDBackendPatchRuntimeSettings(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
+		"name":             "claude",
+		"command":          "claude",
+		"args":             []string{"--legacy-arg"},
+		"env":              map[string]string{"ANTHROPIC_API_KEY": "sk-secret"},
+		"timeout_seconds":  600,
+		"max_prompt_chars": 12000,
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("POST backend: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodPatch, "/backends/claude", map[string]any{
+		"timeout_seconds":  900,
+		"max_prompt_chars": 45000,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH /backends/claude: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	var out storeBackendJSON
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("decode patch response: %v", err)
+	}
+	if out.TimeoutSeconds != 900 {
+		t.Fatalf("response timeout_seconds = %d, want 900", out.TimeoutSeconds)
+	}
+	if out.MaxPromptChars != 45000 {
+		t.Fatalf("response max_prompt_chars = %d, want 45000", out.MaxPromptChars)
+	}
+
+	backends, err := store.ReadBackends(s.db)
+	if err != nil {
+		t.Fatalf("ReadBackends: %v", err)
+	}
+	b, ok := backends["claude"]
+	if !ok {
+		t.Fatal("backend 'claude' not found after patch")
+	}
+	if b.TimeoutSeconds != 900 || b.MaxPromptChars != 45000 {
+		t.Fatalf("runtime settings = (%d, %d), want (900, 45000)", b.TimeoutSeconds, b.MaxPromptChars)
+	}
+	if b.Command != "claude" {
+		t.Fatalf("command changed unexpectedly: got %q", b.Command)
+	}
+	if len(b.Args) != 1 || b.Args[0] != "--legacy-arg" {
+		t.Fatalf("args changed unexpectedly: got %v", b.Args)
+	}
+	if got := b.Env["ANTHROPIC_API_KEY"]; got != "sk-secret" {
+		t.Fatalf("env changed unexpectedly: got %q", got)
+	}
+}
+
+func TestStoreCRUDBackendPatchRuntimeSettingsValidation(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	if rr := doCRUDRequest(t, s, http.MethodPatch, "/backends/missing", map[string]any{
+		"timeout_seconds": 10,
+	}); rr.Code != http.StatusNotFound {
+		t.Fatalf("PATCH missing backend: got %d, want 404", rr.Code)
+	}
+
+	if rr := doCRUDRequest(t, s, http.MethodPatch, "/backends/claude", map[string]any{}); rr.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH empty payload: got %d, want 400", rr.Code)
+	}
+
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
+		"name":    "claude",
+		"command": "claude",
+		"args":    []string{},
+		"env":     map[string]string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("POST backend: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	if rr := doCRUDRequest(t, s, http.MethodPatch, "/backends/claude", map[string]any{
+		"timeout_seconds": 0,
+	}); rr.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH timeout_seconds=0: got %d, want 400", rr.Code)
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPatch, "/backends/claude", map[string]any{
+		"max_prompt_chars": -1,
+	}); rr.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH max_prompt_chars=-1: got %d, want 400", rr.Code)
+	}
+}
+
+func TestBackendsLocalCreateNamedAndDelete(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	// Local backend creation requires a discovered claude backend.
+	if err := store.UpsertBackend(s.db, "claude", config.AIBackendConfig{
+		Command: "/bin/sh",
+		Args:    []string{},
+		Env:     map[string]string{},
+	}); err != nil {
+		t.Fatalf("seed claude backend: %v", err)
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodPost, "/backends/local", map[string]any{
+		"name": "qwen_local",
+		"url":  "http://localhost:18000/v1/messages",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST /backends/local: got %d — %s", rr.Code, rr.Body.String())
+	}
+	var created storeBackendJSON
+	if err := json.NewDecoder(rr.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.Name != "qwen_local" {
+		t.Fatalf("created backend name: got %q, want %q", created.Name, "qwen_local")
+	}
+	if created.LocalModelURL != "http://localhost:18000/v1/messages" {
+		t.Fatalf("local_model_url: got %q", created.LocalModelURL)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodGet, "/backends/qwen_local", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /backends/qwen_local: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/backends/qwen_local", nil)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("DELETE /backends/qwen_local: got %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestBackendsLocalRejectReservedName(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	if err := store.UpsertBackend(s.db, "claude", config.AIBackendConfig{
+		Command: "/bin/sh",
+		Args:    []string{},
+		Env:     map[string]string{},
+	}); err != nil {
+		t.Fatalf("seed claude backend: %v", err)
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodPost, "/backends/local", map[string]any{
+		"name": "claude",
+		"url":  "http://localhost:18000/v1/messages",
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("POST /backends/local with reserved name: got %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
 // ── /repos ──────────────────────────────────────────────────────────
 
 func TestStoreCRUDRepoCreateAndDelete(t *testing.T) {
@@ -1669,4 +1823,3 @@ repos:
 		t.Errorf("existing-repo missing after failed replace import: %s", repos.Body.String())
 	}
 }
-

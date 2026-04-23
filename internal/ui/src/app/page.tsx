@@ -127,6 +127,10 @@ function AgentForm({
 
   const set = (k: keyof StoreAgent, v: unknown) => setForm(f => ({ ...f, [k]: v }))
 
+  useEffect(() => {
+    setForm(initial)
+  }, [initial])
+
   const labelStyle: React.CSSProperties = { fontSize: '0.8rem', color: 'var(--text-muted)', display: 'block', marginBottom: '3px' }
   const inputStyle: React.CSSProperties = {
     width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: '6px',
@@ -298,6 +302,21 @@ export default function FleetPage() {
   const [saveError, setSaveError] = useState('')
 
   const loadRef = useRef(false)
+  const loadLookups = () => {
+    fetch('/backends')
+      .then(r => r.ok ? r.json() : [])
+      .then((data: BackendOption[]) => setBackendOptions((data ?? []).filter(b => b.detected !== false)))
+      .catch(() => {})
+    fetch('/skills')
+      .then(r => r.ok ? r.json() : [])
+      .then((data: { name: string }[]) => setSkillNames(data.map(s => s.name)))
+      .catch(() => {})
+    fetch('/agents')
+      .then(r => r.ok ? r.json() : [])
+      .then((data: { name: string }[]) => setAgentNames(data.map(a => a.name)))
+      .catch(() => {})
+  }
+
   const load = () => {
     if (!loadRef.current) setLoading(true)
     loadRef.current = true
@@ -309,24 +328,26 @@ export default function FleetPage() {
 
   useEffect(() => {
     load()
-    fetch('/backends/status')
-      .then(r => r.ok ? r.json() : { backends: [] })
-      .then((data: { backends?: BackendOption[] }) => setBackendOptions((data.backends ?? []).filter(b => b.detected !== false)))
-      .catch(() => {})
-    fetch('/skills')
-      .then(r => r.ok ? r.json() : [])
-      .then((data: { name: string }[]) => setSkillNames(data.map(s => s.name)))
-      .catch(() => {})
-    fetch('/agents')
-      .then(r => r.ok ? r.json() : [])
-      .then((data: { name: string }[]) => setAgentNames(data.map(a => a.name)))
-      .catch(() => {})
+    loadLookups()
     const interval = setInterval(load, 5000)
     return () => clearInterval(interval)
   }, [])
 
   const openEdit = async (agentName: string) => {
     setSaveError('')
+    const a = agents.find(agent => agent.name === agentName)
+    setSelected({
+      name: agentName,
+      backend: a?.backend ?? '',
+      model: a?.model ?? '',
+      skills: a?.skills ?? [],
+      prompt: '',
+      allow_prs: a?.allow_prs ?? false,
+      allow_dispatch: a?.allow_dispatch ?? false,
+      can_dispatch: a?.can_dispatch ?? [],
+      description: a?.description ?? '',
+    })
+    setModal('edit')
     try {
       const res = await fetch(`/agents/${encodeURIComponent(agentName)}`)
       if (res.ok) {
@@ -340,24 +361,10 @@ export default function FleetPage() {
           skills: data.skills ?? [],
           can_dispatch: data.can_dispatch ?? [],
         })
-      } else {
-        const a = agents.find(a => a.name === agentName)
-        setSelected({
-          name: agentName,
-          backend: a?.backend ?? '',
-          model: a?.model ?? '',
-          skills: a?.skills ?? [],
-          prompt: '',
-          allow_prs: a?.allow_prs ?? false,
-          allow_dispatch: a?.allow_dispatch ?? false,
-          can_dispatch: a?.can_dispatch ?? [],
-          description: a?.description ?? '',
-        })
       }
     } catch {
-      setSelected(emptyForm)
+      // Keep optimistic modal data on fetch failures.
     }
-    setModal('edit')
   }
 
   const openCreate = () => {
@@ -383,6 +390,7 @@ export default function FleetPage() {
       }
       setModal(null)
       load()
+      loadLookups()
     } catch (e) {
       setSaveError(String(e))
     }
@@ -406,6 +414,7 @@ export default function FleetPage() {
       }
       setModal(null)
       load()
+      loadLookups()
     } catch (e) {
       setSaveError(String(e))
     }
@@ -458,6 +467,7 @@ export default function FleetPage() {
       {(modal === 'create' || modal === 'edit') && (
         <Modal title={modal === 'create' ? 'Create agent' : `Edit — ${selected.name}`} onClose={() => setModal(null)}>
           <AgentForm
+            key={`${modal}:${selected.name}`}
             initial={selected}
             isNew={modal === 'create'}
             backends={backendOptions}

@@ -331,8 +331,8 @@ func ValidateEntities(agents []AgentDef, repos []RepoDef, skills map[string]Skil
 
 	// Backend field checks (without "at least one" aggregate check).
 	for name, b := range backends {
-		if !isValidBackendName(name) {
-			return fmt.Errorf("config: unsupported ai backend %q (supported: %s)", name, strings.Join(validAIBackendNames, ", "))
+		if !isSupportedBackend(name, b) {
+			return fmt.Errorf("config: unsupported ai backend %q (supported: %s, or any custom name with local_model_url set)", name, strings.Join(validAIBackendNames, ", "))
 		}
 		if b.Command == "" {
 			return fmt.Errorf("config: ai backend %q: command is required", name)
@@ -770,8 +770,8 @@ func (c *Config) validateLogConfig() error {
 
 func (c *Config) validateBackends() error {
 	for name, backend := range c.Daemon.AIBackends {
-		if !isValidBackendName(name) {
-			return fmt.Errorf("config: unsupported ai backend %q (supported: %s)", name, strings.Join(validAIBackendNames, ", "))
+		if !isSupportedBackend(name, backend) {
+			return fmt.Errorf("config: unsupported ai backend %q (supported: %s, or any custom name with local_model_url set)", name, strings.Join(validAIBackendNames, ", "))
 		}
 		if backend.Command == "" {
 			return fmt.Errorf("config: ai backend %q: command is required", name)
@@ -918,18 +918,38 @@ func isValidBackendName(name string) bool {
 	return slices.Contains(validAIBackendNames, name)
 }
 
-func validateAgentModel(agentName, model string, backend AIBackendConfig) error {
+func isSupportedBackend(name string, backend AIBackendConfig) bool {
+	if isValidBackendName(name) {
+		return true
+	}
+	return strings.TrimSpace(backend.LocalModelURL) != ""
+}
+
+// IsPinnedModelUnavailable reports whether a non-empty model is explicitly
+// known to be unavailable for the given backend snapshot.
+//
+// If backend.Models is empty, availability is treated as unknown (returns
+// false) so callers can avoid blocking on missing catalog metadata.
+func IsPinnedModelUnavailable(model string, backend AIBackendConfig) bool {
 	model = strings.TrimSpace(model)
 	if model == "" {
-		return nil
+		return false
 	}
 	if len(backend.Models) == 0 {
+		return false
+	}
+	return !slices.Contains(backend.Models, model)
+}
+
+func validateAgentModel(_ string, model string, backend AIBackendConfig) error {
+	// Model/backend mismatches are intentionally allowed at config validation
+	// time so discovery can persist backend model changes even if agents become
+	// temporarily orphaned. Runtime paths enforce this strictly before invoking
+	// a backend, and UI surfaces orphan remediation flows.
+	if IsPinnedModelUnavailable(model, backend) {
 		return nil
 	}
-	if slices.Contains(backend.Models, model) {
-		return nil
-	}
-	return fmt.Errorf("config: agent %q: model %q is not available for backend (available: %s)", agentName, model, strings.Join(backend.Models, ", "))
+	return nil
 }
 
 // ApplyBackendDefaults fills in zero-value fields of b with the same defaults

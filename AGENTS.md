@@ -31,7 +31,7 @@ docker compose up -d                            # containerised run
 cmd/agents/main.go              # wires config, logger, runners, scheduler, webhook server, proxy
 internal/
   config/                       # YAML parsing, defaults, validation, prompt/skill file resolution
-  ai/                           # prompt composition + CLI runner (supports per-backend env overrides)
+  ai/                           # prompt composition + CLI runner (hardcoded backend args + schema enforcement)
   anthropic_proxy/              # built-in Anthropic Messages ↔ OpenAI Chat Completions translation
   observe/                      # observability store: events, traces, dispatch graph, SSE hubs
   autonomous/                   # cron scheduler + agent memory (SQLite-backed)
@@ -51,7 +51,7 @@ internal/ai/response-schema.json # embedded JSON schema for structured output (c
 - **Agent** — a named capability: `backend` + `skills: []` + `prompt`. An agent is a pure definition. It does not run by itself. Prompts are stored in SQLite (seeded via `--import` from YAML, or created directly in the UI).
 - **Skill** — a reusable chunk of guidance referenced by name in multiple agents. Skill text is concatenated before the agent's own prompt at render time.
 - **Binding** — `repos[*].use[*]`: pairs one agent with exactly one trigger (`labels:`, `events:`, or `cron:`). The same agent can have multiple bindings on the same repo with different triggers.
-- **Backend** — one of `claude`, `codex`, or `auto` (picks the first configured in preference order). Two separate backend entries can point at the **same CLI binary** with different `env:` — this is the mechanism for routing the `claude` CLI through the built-in proxy to a local LLM.
+- **Backend** — explicit backend selection per agent (no `auto`). Built-ins are `claude` and `codex`; additional named local backends are supported via `local_model_url`.
 - **Proxy** — optional in-daemon Anthropic↔OpenAI translator mounted at `/v1/messages` and `/v1/models`. Disabled by default. When enabled, the `claude` CLI can be pointed at it via `ANTHROPIC_BASE_URL` in the backend's `env:` map.
 - **Dispatcher** — the runtime mechanism by which agents invoke each other. See "Reactive dispatch" below.
 
@@ -71,14 +71,15 @@ These constraints are load-bearing. Read them before changing the listed areas.
 - **The daemon never writes to GitHub directly.** All writes go through the AI backend's MCP tools. If you introduce a new feature that seems to need a direct GitHub API call, raise it in an issue first — there's almost always a way to keep the daemon read-only.
 - **Agents must not mention external GitHub users.** Do NOT request reviews from, assign to, or @mention any GitHub user in PRs, comments, or issue descriptions. All review routing is handled by the daemon's dispatch system. Unsolicited pings to external contributors from an automated agent are a trust and reputation risk — the GitHub account could be flagged. This rule applies to every agent prompt.
 - **Prompts are never logged in plaintext.** Only their salted hash and length are recorded. If you add new log lines near prompt handling, preserve this property.
-- **Structured output is enforced at the CLI level.** Claude uses `--output-format json --json-schema <schema>` which wraps stdout in a CLI envelope; `extractStructuredOutput` in cmdrunner.go unwraps the `structured_output` field. Codex uses `--output-schema <file>` — the daemon embeds `internal/ai/response-schema.json` in the binary and appends the flag automatically when the command is `codex`. Both paths feed the same `Response` struct. When changing the response contract, update `internal/ai/response-schema.json` alongside `internal/ai/types.go`.
+- **Structured output is enforced at the CLI level.** Claude uses hardcoded `--output-format stream-json --json-schema <embedded-schema>` args; codex uses hardcoded `--output-schema <temp-file>`. The daemon embeds `internal/ai/response-schema.json` and appends the correct flags automatically. When changing the response contract, update `internal/ai/response-schema.json` alongside `internal/ai/types.go`.
 - **The runner contract is stdin-in, single-JSON-object-out.**
   - `internal/ai/cmdrunner.go` sends the composed prompt on stdin and parses the last top-level JSON object from stdout.
   - Agents emit `{"summary": "...", "artifacts": [...], "dispatch": [...], "memory": "..."}`. `dispatch` and `memory` are optional fields but all four keys are present in the schema. A missing JSON object, an empty response, or a response where `summary`, `artifacts`, and `dispatch` are all empty fails the run with a clear error.
   - `memory` is the agent's full updated memory state. The daemon writes it back to the SQLite store after each autonomous run. An empty string clears the memory. Event-driven runs do not receive or persist memory.
   - Small prose outputs with no JSON are an agent-prompt issue, not a runner bug — don't relax the parser to cover them; fix the prompt.
 - **Subprocess env is filtered.** `internal/ai/cmdrunner.go::allowCommandEnvKey` is an explicit allowlist. When adding a new env-var-driven integration, add the variable to the allowlist **and** document why (see `ANTHROPIC_BASE_URL` / `OPENAI_*` for precedent).
-- **Backend config supports per-backend `env` overrides.** When introducing a feature that requires environment variables for a specific backend, use the `AIBackendConfig.Env` map instead of the global container env — it keeps the container config clean and lets users define multiple backends pointing at different endpoints with the same CLI.
+- **Backend args are daemon-managed.** User/runtime edits are limited to `timeout_seconds`, `max_prompt_chars`, and (for local backends) `local_model_url`. Do not reintroduce user-configurable runner args.
+- **Model pinning safety.** Config may contain pinned models that become unavailable after discovery. These agents are treated as orphaned in diagnostics/UI and fail fast at runtime until remapped or cleared.
 - **Dispatch validation is belt-and-braces.** `can_dispatch` is validated at config load time (targets must exist, no self-reference, targets require `description`). Runtime validation in `internal/workflow/dispatch.go` enforces the same invariants again so config-only checks can't be bypassed by agent-generated dispatch requests.
 - **Webhook HMAC verification runs before any parsing.** Don't read the body before verifying the signature.
 
@@ -112,6 +113,8 @@ When making common classes of changes, update all of these at once:
 
 - **`.env` is auto-loaded on startup** (`godotenv.Load()`). Required runtime secret: `GITHUB_WEBHOOK_SECRET`. Optional: `LOG_SALT`.
 - **Config is loaded from SQLite at startup.** Use `--import config.yaml` to seed the database, then manage changes via the CRUD API or the web dashboard. Prompt and skill content is stored in the database; changes via the API or UI take effect on the next agent run without a restart.
+- **Backend discovery lifecycle.** Startup auto-discovery runs only when the backends table is empty. Manual refresh is explicit via `POST /backends/discover`; `GET /backends/status` is diagnostics-only.
+- **Orphan visibility.** `GET /agents/orphans/status` and `/status` (`orphaned_agents.count`) expose model/backend drift requiring user remediation.
 - **Autonomous agent memory** is stored in SQLite (in the `memory` table), keyed by `(agent, repo)`. It's the agent's job to return updated memory in its response; the daemon writes it back to the store unchanged.
 - **Dispatch dedup is process-local and in-memory.** It's shared across cron-fired runs, event-fired runs, and `--run-agent` invocations within one process. Restarting the daemon clears the dedup state.
 - **`--run-agent` drains dispatch chains synchronously.** When invoking an agent on demand via the CLI flag, the process waits for the originating agent and all dispatched children to finish before exiting. The in-memory event queue is sized to hold `MaxFanout^MaxDepth` events so deep chains don't silently drop.
@@ -138,7 +141,7 @@ Pattern: two backend entries using the same `claude` binary, different `env:` ma
 
 When contributing in this area:
 - Proxy changes live in `internal/anthropic_proxy/`. Keep translation rules pure (no I/O in the `translate*` functions) and test them directly.
-- Per-backend env overrides live on `AIBackendConfig.Env` and are merged after the host-env allowlist in `buildCommandEnv`.
+- Local-model routing uses `local_model_url` and is translated into `ANTHROPIC_BASE_URL` at runner construction time (`cmd/agents/main.go::backendEnvOverrides`).
 - Don't assume local models behave like Claude. They are more cautious with write tools and more prone to hallucinating facts inside templated outputs. Design agent prompts and guardrails for the least capable backend you want to support.
 
 ## Contribution model

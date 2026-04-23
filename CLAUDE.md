@@ -71,12 +71,13 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, 
 
 - Event-driven for label-based workflows; cron scheduler for autonomous agents. Both paths resolve to the same agent definitions.
 - HTTP endpoints:
-  - `GET /status` — JSON with uptime, event queue depth, agent schedules, dispatch counters.
+  - `GET /status` — JSON with uptime, event queue depth, agent schedules, dispatch counters, and orphaned-agent summary.
   - `POST /webhooks/github` — HMAC-verified webhook receiver.
   - `POST /run` — on-demand agent trigger (body: `{"agent":"<name>","repo":"owner/repo"}`).
   - `POST /v1/messages` — Anthropic↔OpenAI translation proxy (disabled by default; enabled via `daemon.proxy.enabled: true`).
   - `GET /v1/models` — companion stub for `/v1/messages`; returns the configured upstream model. Only mounted when the proxy is enabled.
   - `GET /agents` — fleet snapshot with per-agent status, skills, dispatch wiring, bindings.
+  - `GET /agents/orphans/status` — DB-only orphan report (agents pinning models unavailable in backend model catalogs).
   - `GET /events[/stream]` — recent events + SSE firehose.
   - `GET /traces[/stream]` — recent agent run traces with timing, summary, status + SSE.
   - `GET /traces/{root_event_id}` — all spans for a single root event.
@@ -87,7 +88,8 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, 
   - `GET /memory/stream` — memory file change notifications (SSE).
   - `GET /config` — effective parsed config (secrets redacted).
   - `GET /ui/` — embedded web dashboard (Next.js static assets).
-  - `GET|POST /{resource}` and `GET|DELETE /{resource}/{name}` — SQLite CRUD endpoints (always mounted). Resources for `GET` list: `skills`, `backends`, `repos` (repos use two-segment path: `repos/{owner}/{repo}`). Note: `GET /agents` always returns the live fleet snapshot — not the CRUD list. `POST /agents` and `GET|DELETE /agents/{name}` are CRUD endpoints for agents.
+  - CRUD endpoints (always mounted): `GET|POST /skills`, `GET|POST /backends`, `GET|POST /repos`, `POST /agents`, plus item routes (`GET|DELETE /agents/{name}`, `GET|DELETE /skills/{name}`, `GET|PATCH|DELETE /backends/{name}`, `GET|DELETE /repos/{owner}/{repo}`).
+  - Backend diagnostics endpoints: `GET /backends/status`, `POST /backends/discover`, `POST /backends/local`.
   - `GET /export`, `POST /import` — export/import fleet config as YAML.
 - Supported webhook events: `issues.*` (labeled, opened, edited, reopened, closed), `pull_request.*` (labeled, opened, synchronize, ready_for_review, closed), `issue_comment.created`, `pull_request_review.submitted`, `pull_request_review_comment.created`, `push` (branches only). Label-triggered routing uses `payload.label.name`. Non-label `events:` subscriptions match the event kind exactly. Draft PRs skip `pull_request.labeled`.
 - Internal event kinds (not from webhooks): `agents.run` (on-demand trigger from `POST /run` or `--run-agent`), `agent.dispatch` (inter-agent dispatch), `autonomous` (cron scheduler).
@@ -95,8 +97,10 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, 
 - Workflow execution is stateless in-process. Only autonomous agents persist memory (per-agent, per-repo).
 - Memory is delivered to the agent as part of its prompt context, and the agent returns its full updated memory in the `memory` field of the JSON response. The daemon writes the value back to the store after the run. An empty string clears the memory. Event-driven runs (webhook events, label triggers) do not receive or persist memory.
 - Memory backend: SQLite (stored in the `memory` table alongside config data).
-- Backend resolution: agents declare `backend: claude | codex | auto`. `auto` picks the first configured backend in preference order (claude > codex).
-- Per-backend env overrides (`daemon.ai_backends.<name>.env`) let two backends run the same CLI with different endpoints — e.g. a default `claude` backend on hosted Anthropic plus a `claude_local` backend that routes the CLI via `ANTHROPIC_BASE_URL` through the built-in proxy to a local model. See [`docs/local-models.md`](docs/local-models.md).
+- Backend resolution: agents must explicitly name a backend (no `auto` behavior). Built-ins are `claude` and `codex`; additional local backends are named entries with `local_model_url`.
+- Startup auto-discovery runs only when the backends table is empty. Manual refresh is explicit via `POST /backends/discover`.
+- Runtime guardrail: if an agent pins a model not present in its backend's DB model catalog, the run fails fast with an actionable error (and the agent appears in orphan reports).
+- Local-model routing is configured via `local_model_url`; the daemon injects `ANTHROPIC_BASE_URL` for that backend at runtime. See [`docs/local-models.md`](docs/local-models.md).
 - **Reactive inter-agent dispatch**: agents can return a `dispatch: [{agent, number, reason}]` array in their JSON response to invoke other agents. Enqueued as synthetic `agent.dispatch` events. Target must opt in via `allow_dispatch: true`; originator must whitelist targets in `can_dispatch: [...]`. Safety limits (`daemon.processor.dispatch.{max_depth, max_fanout, dedup_window_seconds}`) prevent cascade storms and duplicate invocations. The originating agent's prompt receives an `## Available experts` roster listing dispatchable targets.
 
 ## Contribution Model

@@ -1,7 +1,6 @@
 package webhook
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -82,7 +81,13 @@ type storeBackendJSON struct {
 }
 
 type localBackendRequest struct {
-	URL string `json:"url"`
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+type backendRuntimeSettingsJSON struct {
+	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+	MaxPromptChars *int `json:"max_prompt_chars,omitempty"`
 }
 
 func backendToStoreJSON(name string, b config.AIBackendConfig) storeBackendJSON {
@@ -301,6 +306,7 @@ func (s *Server) reloadCron() error {
 	newCfg.Daemon.AIBackends = backends
 	s.cfg = &newCfg
 	s.cfgMu.Unlock()
+	s.refreshOrphanedAgents(&newCfg)
 
 	return nil
 }
@@ -552,12 +558,20 @@ func (s *Server) handleBackendsDiscover(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, diag)
 }
 
-// handleBackendsLocal serves POST /backends/local. It creates or updates the
-// special claude_local backend by wiring the discovered Claude CLI to a local
+// handleBackendsLocal serves POST /backends/local. It creates or updates a
+// named local backend by wiring the discovered Claude CLI to a local
 // OpenAI-compatible URL via ANTHROPIC_BASE_URL.
 func (s *Server) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
 	var req localBackendRequest
 	if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
+		return
+	}
+	name := config.NormalizeBackendName(req.Name)
+	if name == "" {
+		name = backends.ClaudeLocalName
+	}
+	if name == backends.ClaudeName || name == backends.CodexName {
+		http.Error(w, "name is reserved for built-in backends", http.StatusBadRequest)
 		return
 	}
 	req.URL = strings.TrimSpace(req.URL)
@@ -584,17 +598,23 @@ func (s *Server) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	local := existing[backends.ClaudeLocalName]
+	if current, ok := existing[name]; ok && strings.TrimSpace(current.LocalModelURL) == "" {
+		s.storeMu.Unlock()
+		http.Error(w, "name already exists and is not a local backend", http.StatusConflict)
+		return
+	}
+
+	local := existing[name]
 	local.Command = base.Command
 	local.LocalModelURL = req.URL
 
 	diagMap := map[string]config.AIBackendConfig{
-		backends.ClaudeName:      base,
-		backends.ClaudeLocalName: local,
+		backends.ClaudeName: base,
+		name:                local,
 	}
-	diag := backends.RunDiagnostics(context.Background(), diagMap)
+	diag := backends.RunDiagnostics(r.Context(), diagMap)
 	for _, b := range diag.Backends {
-		if b.Name != backends.ClaudeLocalName {
+		if b.Name != name {
 			continue
 		}
 		local.Version = b.Version
@@ -606,7 +626,7 @@ func (s *Server) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
 		break
 	}
 
-	err = store.UpsertBackend(s.db, backends.ClaudeLocalName, local)
+	err = store.UpsertBackend(s.db, name, local)
 	if err == nil {
 		err = s.reloadCron()
 	}
@@ -617,41 +637,102 @@ func (s *Server) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("local backend upsert or cron reload: %v", err), status)
 		return
 	}
-	writeJSON(w, http.StatusOK, backendToStoreJSON(backends.ClaudeLocalName, local))
+	writeJSON(w, http.StatusOK, backendToStoreJSON(name, local))
 }
 
-// handleStoreBackend serves GET and DELETE /api/store/backends/{name}.
-func (s *Server) handleStoreBackend(w http.ResponseWriter, r *http.Request) {
+func backendPathName(r *http.Request) string {
 	name := config.NormalizeBackendName(mux.Vars(r)["name"])
-	switch r.Method {
-	case http.MethodGet:
-		backends, err := store.ReadBackends(s.db)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
-			return
-		}
-		b, ok := backends[name]
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		writeJSON(w, http.StatusOK, backendToStoreJSON(name, b))
+	return name
+}
 
-	case http.MethodDelete:
-		s.storeMu.Lock()
-		err := store.DeleteBackend(s.db, name)
-		if err == nil {
-			err = s.reloadCron()
-		}
-		s.storeMu.Unlock()
-		if err != nil {
-			status := storeErrStatus(err)
-			s.logger.Error().Err(err).Msg("store crud: backend delete or cron reload failed")
-			http.Error(w, fmt.Sprintf("backend delete or cron reload: %v", err), status)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
+// handleStoreBackendGet serves GET /api/store/backends/{name}.
+func (s *Server) handleStoreBackendGet(w http.ResponseWriter, r *http.Request) {
+	name := backendPathName(r)
+	backends, err := store.ReadBackends(s.db)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
+		return
 	}
+	b, ok := backends[name]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, backendToStoreJSON(name, b))
+}
+
+// handleStoreBackendPatch serves PATCH /api/store/backends/{name}.
+func (s *Server) handleStoreBackendPatch(w http.ResponseWriter, r *http.Request) {
+	name := backendPathName(r)
+
+	var req backendRuntimeSettingsJSON
+	if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
+		return
+	}
+	if req.TimeoutSeconds == nil && req.MaxPromptChars == nil {
+		http.Error(w, "at least one field is required", http.StatusBadRequest)
+		return
+	}
+	if req.TimeoutSeconds != nil && *req.TimeoutSeconds <= 0 {
+		http.Error(w, "timeout_seconds must be positive", http.StatusBadRequest)
+		return
+	}
+	if req.MaxPromptChars != nil && *req.MaxPromptChars <= 0 {
+		http.Error(w, "max_prompt_chars must be positive", http.StatusBadRequest)
+		return
+	}
+
+	s.storeMu.Lock()
+	backendsByName, err := store.ReadBackends(s.db)
+	if err != nil {
+		s.storeMu.Unlock()
+		http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
+		return
+	}
+	b, ok := backendsByName[name]
+	if !ok {
+		s.storeMu.Unlock()
+		http.NotFound(w, r)
+		return
+	}
+	if req.TimeoutSeconds != nil {
+		b.TimeoutSeconds = *req.TimeoutSeconds
+	}
+	if req.MaxPromptChars != nil {
+		b.MaxPromptChars = *req.MaxPromptChars
+	}
+
+	err = store.UpsertBackend(s.db, name, b)
+	if err == nil {
+		err = s.reloadCron()
+	}
+	s.storeMu.Unlock()
+	if err != nil {
+		status := storeErrStatus(err)
+		s.logger.Error().Err(err).Msg("store crud: backend runtime settings update or cron reload failed")
+		http.Error(w, fmt.Sprintf("backend runtime settings update or cron reload: %v", err), status)
+		return
+	}
+	writeJSON(w, http.StatusOK, backendToStoreJSON(name, b))
+}
+
+// handleStoreBackendDelete serves DELETE /api/store/backends/{name}.
+func (s *Server) handleStoreBackendDelete(w http.ResponseWriter, r *http.Request) {
+	name := backendPathName(r)
+
+	s.storeMu.Lock()
+	err := store.DeleteBackend(s.db, name)
+	if err == nil {
+		err = s.reloadCron()
+	}
+	s.storeMu.Unlock()
+	if err != nil {
+		status := storeErrStatus(err)
+		s.logger.Error().Err(err).Msg("store crud: backend delete or cron reload failed")
+		http.Error(w, fmt.Sprintf("backend delete or cron reload: %v", err), status)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ── /api/store/repos ──────────────────────────────────────────────────────────

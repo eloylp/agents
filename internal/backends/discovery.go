@@ -1,6 +1,7 @@
 package backends
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/eloylp/agents/internal/config"
@@ -59,7 +61,7 @@ func AutoDiscoverIfBackendsMissing(ctx context.Context, db *sql.DB) (bool, Diagn
 		return false, Diagnostics{}, err
 	}
 	if len(existing) > 0 {
-		return false, RunDiagnostics(ctx, existing), nil
+		return false, Diagnostics{}, nil
 	}
 	diag, err := DiscoverAndPersist(ctx, db)
 	if err != nil {
@@ -84,20 +86,62 @@ func DiscoverAndPersist(ctx context.Context, db *sql.DB) (Diagnostics, error) {
 
 // RunDiagnostics executes live discovery checks without mutating the store.
 func RunDiagnostics(ctx context.Context, existing map[string]config.AIBackendConfig) Diagnostics {
-	diag := Diagnostics{
-		GeneratedAt: time.Now().UTC(),
-		GitHub:      diagnoseGitHubCLI(ctx),
+	diag := Diagnostics{GeneratedAt: time.Now().UTC()}
+	type backendTarget struct {
+		name             string
+		commandName      string
+		preferredCommand string
+		localURL         string
 	}
+	targets := make([]backendTarget, 0, len(existing)+len(builtinBackendNames))
 	for _, name := range builtinBackendNames {
 		cfg := existing[name]
-		diag.Backends = append(diag.Backends, diagnoseBackend(ctx, name, name, cfg.Command, ""))
+		targets = append(targets, backendTarget{
+			name:             name,
+			commandName:      name,
+			preferredCommand: cfg.Command,
+			localURL:         "",
+		})
 	}
-	if local, ok := existing[ClaudeLocalName]; ok && strings.TrimSpace(local.LocalModelURL) != "" {
-		diag.Backends = append(diag.Backends, diagnoseBackend(ctx, ClaudeLocalName, ClaudeName, local.Command, local.LocalModelURL))
+	for name, cfg := range existing {
+		if isBuiltinBackendName(name) || strings.TrimSpace(cfg.LocalModelURL) == "" {
+			continue
+		}
+		targets = append(targets, backendTarget{
+			name:             name,
+			commandName:      ClaudeName,
+			preferredCommand: cfg.Command,
+			localURL:         cfg.LocalModelURL,
+		})
 	}
-	sort.Slice(diag.Backends, func(i, j int) bool {
-		return diag.Backends[i].Name < diag.Backends[j].Name
-	})
+
+	backendsOut := make([]BackendStatus, 0, len(targets))
+	var outMu sync.Mutex
+	var githubOut GitHubStatus
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		githubOut = diagnoseGitHubCLI(ctx)
+	}()
+
+	for _, target := range targets {
+		target := target
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			status := diagnoseBackend(ctx, target.name, target.commandName, target.preferredCommand, target.localURL)
+			outMu.Lock()
+			backendsOut = append(backendsOut, status)
+			outMu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	diag.GitHub = githubOut
+	diag.Backends = backendsOut
+	sort.Slice(diag.Backends, func(i, j int) bool { return diag.Backends[i].Name < diag.Backends[j].Name })
 	return diag
 }
 
@@ -174,7 +218,7 @@ func diagnoseBackend(ctx context.Context, backendName, commandName, preferredCom
 	versionOK := versionRunErr == nil
 	status.Version = firstNonEmptyLine(versionOut, versionErr)
 
-	models, modelsDetail := discoverModels(ctx, backendName, path, env)
+	models, modelsDetail := discoverModels(ctx, commandName, path, env)
 	status.Models = models
 
 	mcpOK, mcpDetail := checkGitHubMCP(ctx, path, env)
@@ -202,29 +246,42 @@ func diagnoseBackend(ctx context.Context, backendName, commandName, preferredCom
 
 func discoverModels(ctx context.Context, backendName, command string, env map[string]string) ([]string, string) {
 	commands := modelCommands(backendName)
+	if len(commands) == 0 {
+		return nil, "models discovery not supported"
+	}
+	failures := make([]string, 0, len(commands))
 	for _, args := range commands {
-		stdout, _, err := runToolCommand(ctx, command, args, env)
+		stdout, stderr, err := runToolCommand(ctx, command, args, env)
 		if err != nil {
+			detail := firstNonEmptyLine(stderr, stdout, err.Error())
+			if detail == "" {
+				detail = "command failed"
+			}
+			failures = append(failures, fmt.Sprintf("%s: %s", strings.Join(args, " "), detail))
 			continue
 		}
 		models := parseModels(stdout)
 		if len(models) == 0 {
-			return nil, "models: none reported"
+			failures = append(failures, fmt.Sprintf("%s: no models in output", strings.Join(args, " ")))
+			continue
 		}
 		return models, fmt.Sprintf("models: %d discovered", len(models))
 	}
-	return nil, "models discovery failed"
+	if len(failures) == 0 {
+		return nil, "models discovery failed"
+	}
+	return nil, "models discovery failed: " + failures[0]
 }
 
 func modelCommands(name string) [][]string {
 	switch {
 	case strings.HasPrefix(name, "claude"):
 		return [][]string{
-			{"models", "list", "--output", "json"},
 			{"models", "list"},
 		}
 	case strings.HasPrefix(name, "codex"):
 		return [][]string{
+			{"debug", "models"},
 			{"models", "list", "--json"},
 			{"models", "list"},
 			{"models"},
@@ -245,16 +302,40 @@ func checkGitHubMCP(ctx context.Context, command string, env map[string]string) 
 		}
 		return false, "mcp check failed: " + detail
 	}
-	out := strings.ToLower(stdout + "\n" + stderr)
-	hasGitHub := strings.Contains(out, "github")
-	disconnected := strings.Contains(out, "disconnected") || strings.Contains(out, "not connected")
-	if hasGitHub && !disconnected {
+	hasGitHub, connected := parseGitHubMCPStatus(stdout + "\n" + stderr)
+	if connected {
 		return true, "github MCP: connected"
 	}
 	if hasGitHub {
 		return false, "github MCP: found but disconnected"
 	}
 	return false, "github MCP: not configured"
+}
+
+func parseGitHubMCPStatus(output string) (hasGitHub bool, connected bool) {
+	for _, line := range strings.Split(strings.ToLower(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.Contains(line, "github") {
+			continue
+		}
+		hasGitHub = true
+
+		disconnected := strings.Contains(line, "not connected") ||
+			strings.Contains(line, "disconnected") ||
+			strings.Contains(line, "needs authentication")
+		if disconnected {
+			continue
+		}
+		if strings.Contains(line, "connected") {
+			return true, true
+		}
+		// codex mcp list (table output) marks healthy entries as:
+		// "... github ... status enabled ... auth bearer token"
+		if strings.Contains(line, "enabled") && strings.Contains(line, "bearer token") {
+			return true, true
+		}
+	}
+	return hasGitHub, false
 }
 
 func parseModels(raw string) []string {
@@ -297,6 +378,28 @@ func parseModels(raw string) []string {
 			}
 			if strings.TrimSpace(it.Name) != "" {
 				names = append(names, strings.TrimSpace(it.Name))
+			}
+		}
+		return dedupeSorted(names)
+	}
+
+	var codexCatalog struct {
+		Models []struct {
+			Slug  string `json:"slug"`
+			ID    string `json:"id"`
+			Name  string `json:"name"`
+			Model string `json:"model"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal([]byte(raw), &codexCatalog); err == nil && len(codexCatalog.Models) > 0 {
+		names := make([]string, 0, len(codexCatalog.Models))
+		for _, it := range codexCatalog.Models {
+			for _, v := range []string{it.Slug, it.ID, it.Name, it.Model} {
+				if strings.TrimSpace(v) == "" {
+					continue
+				}
+				names = append(names, strings.TrimSpace(v))
+				break
 			}
 		}
 		return dedupeSorted(names)
@@ -375,16 +478,15 @@ func runToolCommand(ctx context.Context, command string, args []string, env map[
 
 	cmd := exec.CommandContext(runCtx, command, args...)
 	cmd.Env = mergeEnv(os.Environ(), env)
-	out, err := cmd.Output()
-	if err == nil {
-		return strings.TrimSpace(string(out)), "", nil
+	if home, err := os.UserHomeDir(); err == nil {
+		cmd.Dir = home
 	}
-
-	var stderr string
-	if ee, ok := err.(*exec.ExitError); ok {
-		stderr = strings.TrimSpace(string(ee.Stderr))
-	}
-	return strings.TrimSpace(string(out)), stderr, err
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), err
 }
 
 func mergeEnv(base []string, override map[string]string) []string {
@@ -397,4 +499,13 @@ func mergeEnv(base []string, override map[string]string) []string {
 		out = append(out, k+"="+v)
 	}
 	return out
+}
+
+func isBuiltinBackendName(name string) bool {
+	for _, builtin := range builtinBackendNames {
+		if name == builtin {
+			return true
+		}
+	}
+	return false
 }
