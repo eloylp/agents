@@ -953,7 +953,99 @@ func TestRegisterTools_ObservabilityOptional(t *testing.T) {
 		Status: stubStatus{},
 		Logger: zerolog.Nop(),
 	}
-	if core.Observe != nil || core.DispatchStats != nil || core.Memory != nil {
+	if core.Observe != nil || core.DispatchStats != nil || core.Memory != nil || core.ConfigBytes != nil {
 		t.Fatalf("default Deps should have nil optional providers")
+	}
+}
+
+// stubConfigBytes implements ConfigReader with canned byte payloads so the
+// config tool tests stay independent of the real webhook.Server.
+type stubConfigBytes struct {
+	jsonBody []byte
+	yamlBody []byte
+	jsonErr  error
+	yamlErr  error
+}
+
+func (s stubConfigBytes) ConfigJSON() ([]byte, error) {
+	return s.jsonBody, s.jsonErr
+}
+
+func (s stubConfigBytes) ExportYAML() ([]byte, error) {
+	return s.yamlBody, s.yamlErr
+}
+
+func TestToolGetConfigReturnsBytesVerbatim(t *testing.T) {
+	t.Parallel()
+	want := []byte(`{"daemon":{"http":{"webhook_secret":"[redacted]"}}}`)
+	deps := Deps{
+		Config:      stubConfig{cfg: fixtureConfig()},
+		Queue:       &stubQueue{},
+		Status:      stubStatus{},
+		ConfigBytes: stubConfigBytes{jsonBody: want},
+		Logger:      zerolog.Nop(),
+	}
+
+	res, err := toolGetConfig(deps)(context.Background(), mcpgo.CallToolRequest{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if textOf(t, res) != string(want) {
+		t.Fatalf("body want %q got %q", string(want), textOf(t, res))
+	}
+}
+
+func TestToolGetConfigPropagatesError(t *testing.T) {
+	t.Parallel()
+	deps := Deps{
+		Config:      stubConfig{cfg: fixtureConfig()},
+		Queue:       &stubQueue{},
+		Status:      stubStatus{},
+		ConfigBytes: stubConfigBytes{jsonErr: errors.New("snapshot failure")},
+		Logger:      zerolog.Nop(),
+	}
+	res, err := toolGetConfig(deps)(context.Background(), mcpgo.CallToolRequest{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError on reader failure, got %+v", res)
+	}
+}
+
+func TestToolExportConfigReturnsBytesVerbatim(t *testing.T) {
+	t.Parallel()
+	want := []byte("agents:\n  - name: coder\n    backend: claude\n")
+	deps := Deps{
+		Config:      stubConfig{cfg: fixtureConfig()},
+		Queue:       &stubQueue{},
+		Status:      stubStatus{},
+		ConfigBytes: stubConfigBytes{yamlBody: want},
+		Logger:      zerolog.Nop(),
+	}
+	res, err := toolExportConfig(deps)(context.Background(), mcpgo.CallToolRequest{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if textOf(t, res) != string(want) {
+		t.Fatalf("body want %q got %q", string(want), textOf(t, res))
+	}
+}
+
+func TestToolExportConfigPropagatesError(t *testing.T) {
+	t.Parallel()
+	deps := Deps{
+		Config:      stubConfig{cfg: fixtureConfig()},
+		Queue:       &stubQueue{},
+		Status:      stubStatus{},
+		ConfigBytes: stubConfigBytes{yamlErr: errors.New("db closed")},
+		Logger:      zerolog.Nop(),
+	}
+	res, err := toolExportConfig(deps)(context.Background(), mcpgo.CallToolRequest{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError on reader failure, got %+v", res)
 	}
 }

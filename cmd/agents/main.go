@@ -163,6 +163,7 @@ func run() error {
 		Observe:       obs,
 		DispatchStats: engine,
 		Memory:        &sqliteMcpReader{db: db},
+		ConfigBytes:   server,
 		Logger:        logger,
 	}))
 

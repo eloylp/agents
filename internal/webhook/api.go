@@ -243,6 +243,19 @@ const redacted = "[redacted]"
 // secret values replaced by "[redacted]". Env-var names are preserved so
 // operators can identify which environment variable holds a given secret.
 func (s *Server) handleAPIConfig(w http.ResponseWriter, _ *http.Request) {
+	body, err := s.ConfigJSON()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("marshal config: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(body)
+}
+
+// ConfigJSON returns the effective parsed config as JSON bytes with secrets
+// redacted. Exposed so surfaces beyond HTTP (e.g. the MCP get_config tool) can
+// reuse the exact same wire shape without going through the router.
+func (s *Server) ConfigJSON() ([]byte, error) {
 	cfg := s.loadCfg()
 
 	httpCfg := apiHTTPConfigJSON{
@@ -353,8 +366,7 @@ func (s *Server) handleAPIConfig(w http.ResponseWriter, _ *http.Request) {
 		Repos:  repos,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	return json.Marshal(resp)
 }
 
 // ── /api/dispatches ────────────────────────────────────────────────────────

@@ -171,6 +171,20 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolGetMemory(deps),
 		)
 	}
+	if deps.ConfigBytes != nil {
+		srv.AddTool(
+			mcpgo.NewTool("get_config",
+				mcpgo.WithDescription("Return the effective parsed daemon config as JSON with secrets redacted. Same wire shape as GET /config."),
+			),
+			toolGetConfig(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("export_config",
+				mcpgo.WithDescription("Return the CRUD-mutable fleet config (agents, skills, repos, ai_backends) as a YAML fragment. Same body as GET /export — suitable for piping back into POST /import."),
+			),
+			toolExportConfig(deps),
+		)
+	}
 }
 
 // toolListAgents serialises every agent definition as JSON. Uses the same
@@ -678,4 +692,32 @@ func trimmedStringOptional(req mcpgo.CallToolRequest, key string) (string, bool)
 		return "", false
 	}
 	return strings.TrimSpace(raw), true
+}
+
+// toolGetConfig returns the redacted effective config JSON. The bytes are
+// pass-through from ConfigReader.ConfigJSON so REST and MCP callers see the
+// exact same payload — including secret redaction and omitted fields like
+// proxy.extra_body.
+func toolGetConfig(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		body, err := deps.ConfigBytes.ConfigJSON()
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("config snapshot", err), nil
+		}
+		return mcpgo.NewToolResultText(string(body)), nil
+	}
+}
+
+// toolExportConfig returns the CRUD-mutable sections of the fleet config as a
+// YAML fragment matching GET /export. The body is round-trippable through
+// POST /import so operators can export, edit, and re-import from a single
+// MCP session.
+func toolExportConfig(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		body, err := deps.ConfigBytes.ExportYAML()
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("export config", err), nil
+		}
+		return mcpgo.NewToolResultText(string(body)), nil
+	}
 }
