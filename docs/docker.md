@@ -22,9 +22,8 @@ The compose file expects:
 |---|---|---|
 | `config.yaml` | `/etc/agents/config.yaml` (read-only) | Daemon config (used for `--import` seeding; optional once DB is seeded) |
 | `~/.claude` | `/home/agents/.claude` | Claude Code session data |
-| `~/.claude.json` | `/home/agents/.claude.json` | Claude Code main config |
+| `~/.claude.json` | `/home/agents/.claude.json` | Claude Code main config (GitHub MCP server auth lives here) |
 | `~/.codex` | `/home/agents/.codex` | Codex configuration |
-| `~/.config/gh` | `/home/agents/.config/gh` (read-only) | GitHub CLI auth tokens |
 | `agents-data` (volume) | `/var/lib/agents` | SQLite database (config + agent memory) across restarts |
 
 If your own `config.yaml` uses `prompt_file:` paths, mount the directory that contains those files yourself. The shipping example config is inline-only, so no extra prompt mount is required.
@@ -39,4 +38,4 @@ docker compose exec agents claude mcp list
 
 ## Image details
 
-Multi-stage build on `node:22-alpine`. The image includes Claude Code, Codex, and `gh` CLIs alongside the daemon. Runs as non-root `agents` user. Default CMD is `--db /var/lib/agents/agents.db`.
+Multi-stage build on `node:22-alpine`. The image includes Claude Code and Codex alongside the daemon. GitHub access flows through the GitHub MCP server configured on each AI CLI — no `gh` binary is baked in. Runs as non-root `agents` user. Default CMD is `--db /var/lib/agents/agents.db`.

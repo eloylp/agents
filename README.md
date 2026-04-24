@@ -36,7 +36,7 @@ The daemon ships an embedded web dashboard at `/ui/` with real-time views of you
 | **Graph** | Visual dispatch graph -- which agents invoke which, with edge counts |
 | **Agents** | Fleet snapshot -- per-agent status, skills, bindings, dispatch wiring. Create, edit, and delete agents |
 | **Skills** | Manage reusable guidance blocks -- create, edit, delete |
-| **Backends and tools** | Backend discovery status, GitHub CLI diagnostics, runtime limits, local backend URL management, and orphaned-model remediation |
+| **Backends and tools** | Backend discovery status (including per-backend GitHub MCP connectivity), runtime limits, local backend URL management, and orphaned-model remediation |
 | **Repos** | Repository bindings -- wire agents to repos with labels, events, or cron triggers |
 | **Memory** | Raw agent memory markdown per (agent, repo) pair |
 | **Config** | Effective parsed config (secrets redacted). YAML import/export |
@@ -95,18 +95,12 @@ Agent A finishes a code fix, returns dispatch: [{agent: "pr-reviewer", ...}]
 | Dependency | Purpose |
 |---|---|
 | **Go 1.25+** | Build the daemon |
-| **GitHub CLI** (`gh`) | Authenticated access used by the AI CLIs' GitHub MCP tools |
-| **AI CLI** (Claude Code and/or Codex) | The actual AI backend, with GitHub MCP server configured |
+| **AI CLI** (Claude Code and/or Codex) | The actual AI backend |
+| **[GitHub MCP server](https://github.com/github/github-mcp-server)** | Authenticated GitHub access for the AI CLIs — the only path the daemon and its agents use to reach GitHub |
 
 ### Setup
 
-```bash
-# GitHub CLI
-brew install gh
-gh auth login
-```
-
-Then follow the official setup guides:
+Follow the official setup guides:
 - [Claude Code](https://code.claude.com/docs/en/setup) + [GitHub MCP](https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-claude.md)
 - [Codex](https://github.com/openai/codex) + [GitHub MCP](https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-codex.md)
 

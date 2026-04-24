@@ -18,17 +18,8 @@ interface Backend {
   max_prompt_chars: number
 }
 
-interface GitHubCLIStatus {
-  detected?: boolean
-  command?: string
-  authenticated?: boolean
-  healthy?: boolean
-  detail?: string
-}
-
 interface BackendsDiscoveryResponse {
   backends?: Backend[]
-  github_cli?: GitHubCLIStatus
 }
 
 interface OrphanedAgent {
@@ -176,7 +167,6 @@ export default function ConfigPage() {
   const [tab, setTab] = useState<'inspector' | 'backends' | 'import-export'>('inspector')
 
   const [backends, setBackends] = useState<Backend[]>([])
-  const [githubCLI, setGitHubCLI] = useState<GitHubCLIStatus | null>(null)
   const [backendsLoading, setBackendsLoading] = useState(false)
   const [backendDriftWarnings, setBackendDriftWarnings] = useState<string[]>([])
   const [orphanedAgents, setOrphanedAgents] = useState<OrphanedAgent[]>([])
@@ -242,7 +232,6 @@ export default function ConfigPage() {
         const orphanAgents = orphanData.agents ?? []
 
         setBackends(dbData)
-        setGitHubCLI(diagData.github_cli ?? null)
         setBackendDriftWarnings(buildBackendDriftWarnings(dbData, diagBackends))
         setOrphanedAgents(orphanAgents)
         setOrphanModelSelection(prev => {
@@ -258,7 +247,6 @@ export default function ConfigPage() {
       .catch((e: unknown) => {
         setSaveError(String(e))
         setBackendDriftWarnings([])
-        setGitHubCLI(null)
         setOrphanedAgents([])
         setOrphanModelSelection({})
         setBackends([])
@@ -280,8 +268,6 @@ export default function ConfigPage() {
         setSaving(false)
         return
       }
-      const data = await res.json() as BackendsDiscoveryResponse
-      setGitHubCLI(data.github_cli ?? null)
       loadBackends()
     } catch (e) {
       setSaveError(String(e))
@@ -723,29 +709,6 @@ export default function ConfigPage() {
               </div>
             </div>
 
-            <div style={{ flex: '1 1 300px', minWidth: '280px' }}>
-              <div style={{ border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '0.75rem', background: 'var(--bg)' }}>
-                <div style={{ fontWeight: 700, color: 'var(--text-heading)', marginBottom: '0.4rem' }}>Tools</div>
-                <div style={{ border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '0.65rem', background: 'var(--bg-card)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                    <div style={{ fontWeight: 700, color: 'var(--text-heading)' }}>GitHub CLI</div>
-                    {githubCLI && <span style={healthBadgeStyle(githubCLI.healthy)}>{githubCLI.healthy ? 'healthy' : 'failed'}</span>}
-                  </div>
-                  {githubCLI ? (
-                    <>
-                      <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        {githubCLI.command || 'not detected'} · auth {githubCLI.authenticated ? 'ok' : 'missing'}
-                      </div>
-                      {githubCLI.detail && <div style={{ fontSize: '0.75rem', color: githubCLI.healthy ? 'var(--text-faint)' : 'var(--text-danger)', marginTop: '2px' }}>{githubCLI.detail}</div>}
-                    </>
-                  ) : (
-                    <div style={{ color: 'var(--text-faint)', fontSize: '0.78rem', marginTop: '2px' }}>
-                      Run discovery to refresh tool diagnostics.
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
           </div>
           {saveError && <p style={{ color: 'var(--text-danger)', fontSize: '0.85rem', marginTop: '0.75rem' }}>{saveError}</p>}
         </Card>
