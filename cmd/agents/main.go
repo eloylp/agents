@@ -166,6 +166,7 @@ func run() error {
 		ConfigBytes:   server,
 		ConfigImport:  server,
 		AgentWrite:    server,
+		SkillWrite:    server,
 		Logger:        logger,
 	}))
 

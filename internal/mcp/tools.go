@@ -200,6 +200,31 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolImportConfig(deps),
 		)
 	}
+	if deps.SkillWrite != nil {
+		srv.AddTool(
+			mcpgo.NewTool("create_skill",
+				mcpgo.WithDescription("Create or update a skill. Upsert semantics: a write to an existing name overwrites it. Returns the canonical (normalized) skill persisted by the store. Same path as POST /skills."),
+				mcpgo.WithString("name",
+					mcpgo.Required(),
+					mcpgo.Description("Skill name. Lowercased and trimmed by the store."),
+				),
+				mcpgo.WithString("prompt",
+					mcpgo.Description("Skill prompt body (reusable guidance injected into composing agents' system prompt)."),
+				),
+			),
+			toolCreateSkill(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("delete_skill",
+				mcpgo.WithDescription("Delete a skill by name. Fails with a conflict error if any agent still references the skill. Same path as DELETE /skills/{name}."),
+				mcpgo.WithString("name",
+					mcpgo.Required(),
+					mcpgo.Description("Skill name (case-insensitive; matched after lowercasing)."),
+				),
+			),
+			toolDeleteSkill(deps),
+		)
+	}
 	if deps.AgentWrite != nil {
 		srv.AddTool(
 			mcpgo.NewTool("create_agent",
@@ -856,6 +881,48 @@ func toolDeleteAgent(deps Deps) server.ToolHandlerFunc {
 			"status":  "deleted",
 			"name":    config.NormalizeAgentName(name),
 			"cascade": cascade,
+		})
+	}
+}
+
+// toolCreateSkill upserts a skill through the same path as POST /skills.
+// Returns the canonical (normalized) form so callers see the skill the way the
+// store actually persisted it. Empty names surface as *store.ErrValidation via
+// Server.UpsertSkill, which storeErrStatus maps to a user-actionable error.
+func toolCreateSkill(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, err := req.RequireString("name")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		sk := config.SkillDef{Prompt: req.GetString("prompt", "")}
+		canonicalName, canonical, err := deps.SkillWrite.UpsertSkill(name, sk)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("create skill", err), nil
+		}
+		return jsonResult(map[string]any{
+			"name":   canonicalName,
+			"prompt": canonical.Prompt,
+		})
+	}
+}
+
+// toolDeleteSkill removes a skill through the same path as DELETE
+// /skills/{name}. If any agent still references the skill the store surfaces a
+// *store.ErrConflict, which the caller sees as a user-actionable error.
+func toolDeleteSkill(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, ok := trimmedString(req, "name")
+		if !ok {
+			return mcpgo.NewToolResultError("name is required"), nil
+		}
+		canonical := config.NormalizeSkillName(name)
+		if err := deps.SkillWrite.DeleteSkill(canonical); err != nil {
+			return mcpgo.NewToolResultErrorFromErr("delete skill", err), nil
+		}
+		return jsonResult(map[string]any{
+			"status": "deleted",
+			"name":   canonical,
 		})
 	}
 }

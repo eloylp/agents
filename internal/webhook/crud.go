@@ -392,27 +392,43 @@ func (s *Server) handleStoreSkills(w http.ResponseWriter, r *http.Request) {
 		if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
-		if req.Name == "" {
-			http.Error(w, "name is required", http.StatusBadRequest)
-			return
-		}
-		s.storeMu.Lock()
-		err := store.UpsertSkill(s.db, req.Name, config.SkillDef{Prompt: req.Prompt})
-		if err == nil {
-			err = s.reloadCron()
-		}
-		s.storeMu.Unlock()
+		name, sk, err := s.UpsertSkill(req.Name, config.SkillDef{Prompt: req.Prompt})
 		if err != nil {
 			status := storeErrStatus(err)
 			s.logger.Error().Err(err).Msg("store crud: skill upsert or cron reload failed")
 			http.Error(w, fmt.Sprintf("skill upsert or cron reload: %v", err), status)
 			return
 		}
-		// Return the canonical persisted form so clients see normalized values.
-		sk := config.SkillDef{Prompt: req.Prompt}
-		config.NormalizeSkillDef(&sk)
-		writeJSON(w, http.StatusOK, storeSkillJSON{Name: config.NormalizeSkillName(req.Name), Prompt: sk.Prompt})
+		writeJSON(w, http.StatusOK, storeSkillJSON{Name: name, Prompt: sk.Prompt})
 	}
+}
+
+// UpsertSkill writes a single skill into the store and reloads the cron
+// scheduler. Returns the canonical (normalized) name and SkillDef that were
+// persisted so callers can surface the same shape REST clients see in the
+// POST response — lowercase/trimmed name, trimmed prompt.
+//
+// Empty/whitespace names are rejected as *store.ErrValidation so callers can
+// map them to HTTP 400 / MCP user errors via storeErrStatus, mirroring the
+// behaviour of UpsertAgent and POST /skills.
+//
+// Exposed so non-HTTP surfaces (e.g. the MCP create_skill tool) can run the
+// same upsert path as POST /skills without going through the router.
+func (s *Server) UpsertSkill(name string, sk config.SkillDef) (string, config.SkillDef, error) {
+	if strings.TrimSpace(name) == "" {
+		return "", config.SkillDef{}, &store.ErrValidation{Msg: "name is required"}
+	}
+	s.storeMu.Lock()
+	err := store.UpsertSkill(s.db, name, sk)
+	if err == nil {
+		err = s.reloadCron()
+	}
+	s.storeMu.Unlock()
+	if err != nil {
+		return "", config.SkillDef{}, err
+	}
+	config.NormalizeSkillDef(&sk)
+	return config.NormalizeSkillName(name), sk, nil
 }
 
 // handleStoreSkill serves GET and DELETE /api/store/skills/{name}.
@@ -433,13 +449,7 @@ func (s *Server) handleStoreSkill(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, storeSkillJSON{Name: name, Prompt: sk.Prompt})
 
 	case http.MethodDelete:
-		s.storeMu.Lock()
-		err := store.DeleteSkill(s.db, name)
-		if err == nil {
-			err = s.reloadCron()
-		}
-		s.storeMu.Unlock()
-		if err != nil {
+		if err := s.DeleteSkill(name); err != nil {
 			status := storeErrStatus(err)
 			s.logger.Error().Err(err).Msg("store crud: skill delete or cron reload failed")
 			http.Error(w, fmt.Sprintf("skill delete or cron reload: %v", err), status)
@@ -447,6 +457,21 @@ func (s *Server) handleStoreSkill(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// DeleteSkill removes the named skill from the store and reloads the cron
+// scheduler. Returns *store.ErrConflict if any agent still references the
+// skill (HTTP 409 / MCP user error via storeErrStatus).
+//
+// Exposed so non-HTTP surfaces (e.g. the MCP delete_skill tool) can run the
+// same delete path as DELETE /skills/{name} without going through the router.
+func (s *Server) DeleteSkill(name string) error {
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+	if err := store.DeleteSkill(s.db, name); err != nil {
+		return err
+	}
+	return s.reloadCron()
 }
 
 // ── /api/store/backends ───────────────────────────────────────────────────────
