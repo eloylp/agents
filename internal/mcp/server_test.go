@@ -70,9 +70,13 @@ func TestHandlerInitializeAndListTools(t *testing.T) {
 	}
 	want := []string{
 		"list_agents",
+		"get_agent",
 		"list_skills",
+		"get_skill",
 		"list_backends",
+		"get_backend",
 		"list_repos",
+		"get_repo",
 		"get_status",
 		"trigger_agent",
 	}

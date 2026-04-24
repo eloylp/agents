@@ -8,7 +8,8 @@
 // This first cut ships a core subset of tools sufficient to demonstrate the
 // architecture and make the endpoint useful:
 //
-//   - list_agents, list_skills, list_backends, list_repos — fleet reads
+//   - list_agents, list_skills, list_backends, list_repos — fleet lists
+//   - get_agent, get_skill, get_backend, get_repo         — per-item reads
 //   - get_status                                          — health snapshot
 //   - trigger_agent                                       — on-demand run
 //
@@ -107,6 +108,8 @@ Domain model:
   - repo    — a GitHub repo with bindings that wire agents to triggers
               (labels, events, or cron).
 
-Use list_* tools to inspect the fleet, get_status for health, and
-trigger_agent to fire an on-demand run. This server is the v3 foundation;
-additional CRUD and observability tools will land in follow-up releases.`
+Use list_* tools to enumerate the fleet and get_* tools to drill into a
+single agent, skill, backend, or repo. get_status returns daemon health
+and trigger_agent fires an on-demand run. This server is the v3
+foundation; additional CRUD writes and observability tools will land in
+follow-up releases.`
