@@ -1056,3 +1056,131 @@ func TestToolExportConfigPropagatesError(t *testing.T) {
 		t.Fatalf("error body want substring %q, got %q", "db closed", got)
 	}
 }
+
+// stubConfigImporter records the YAML body and mode it received and returns a
+// canned counts map / error. Used by the import_config tool tests so they stay
+// independent of the real webhook.Server.
+type stubConfigImporter struct {
+	gotBody []byte
+	gotMode string
+	counts  map[string]int
+	err     error
+}
+
+func (s *stubConfigImporter) ImportYAML(body []byte, mode string) (map[string]int, error) {
+	s.gotBody = body
+	s.gotMode = mode
+	return s.counts, s.err
+}
+
+func TestToolImportConfigPassesYAMLAndMode(t *testing.T) {
+	t.Parallel()
+	imp := &stubConfigImporter{counts: map[string]int{
+		"agents": 2, "skills": 1, "repos": 3, "backends": 1,
+	}}
+	deps := Deps{
+		Config:       stubConfig{cfg: fixtureConfig()},
+		Queue:        &stubQueue{},
+		Status:       stubStatus{},
+		ConfigImport: imp,
+		Logger:       zerolog.Nop(),
+	}
+
+	body := "agents:\n  - name: coder\n    backend: claude\n    prompt: x\n"
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"yaml": body, "mode": "replace"}
+
+	res, err := toolImportConfig(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error result: %+v", res)
+	}
+	if string(imp.gotBody) != body {
+		t.Errorf("body forwarded: want %q, got %q", body, string(imp.gotBody))
+	}
+	if imp.gotMode != "replace" {
+		t.Errorf("mode forwarded: want replace, got %q", imp.gotMode)
+	}
+	var got map[string]int
+	decodeText(t, res, &got)
+	if got["agents"] != 2 || got["skills"] != 1 || got["repos"] != 3 || got["backends"] != 1 {
+		t.Errorf("counts wire shape: got %+v", got)
+	}
+}
+
+func TestToolImportConfigDefaultsMode(t *testing.T) {
+	t.Parallel()
+	imp := &stubConfigImporter{counts: map[string]int{}}
+	deps := Deps{
+		Config:       stubConfig{cfg: fixtureConfig()},
+		Queue:        &stubQueue{},
+		Status:       stubStatus{},
+		ConfigImport: imp,
+		Logger:       zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"yaml": "skills: {}\n"}
+
+	res, err := toolImportConfig(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error result: %+v", res)
+	}
+	if imp.gotMode != "" {
+		t.Errorf("missing mode should default to empty, got %q", imp.gotMode)
+	}
+}
+
+func TestToolImportConfigRequiresYAML(t *testing.T) {
+	t.Parallel()
+	imp := &stubConfigImporter{counts: map[string]int{}}
+	deps := Deps{
+		Config:       stubConfig{cfg: fixtureConfig()},
+		Queue:        &stubQueue{},
+		Status:       stubStatus{},
+		ConfigImport: imp,
+		Logger:       zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{}
+
+	res, err := toolImportConfig(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError when yaml argument missing, got %+v", res)
+	}
+	if imp.gotBody != nil {
+		t.Errorf("importer should not be called when yaml is missing, got body=%q", string(imp.gotBody))
+	}
+}
+
+func TestToolImportConfigPropagatesError(t *testing.T) {
+	t.Parallel()
+	imp := &stubConfigImporter{err: errors.New("invalid mode")}
+	deps := Deps{
+		Config:       stubConfig{cfg: fixtureConfig()},
+		Queue:        &stubQueue{},
+		Status:       stubStatus{},
+		ConfigImport: imp,
+		Logger:       zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"yaml": "x", "mode": "replce"}
+
+	res, err := toolImportConfig(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError when importer fails, got %+v", res)
+	}
+}

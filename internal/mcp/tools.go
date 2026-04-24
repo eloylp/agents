@@ -185,6 +185,21 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolExportConfig(deps),
 		)
 	}
+	if deps.ConfigImport != nil {
+		srv.AddTool(
+			mcpgo.NewTool("import_config",
+				mcpgo.WithDescription("Write a YAML config fragment (agents, skills, repos, ai_backends) into the store. mode=\"\" or \"merge\" upserts; mode=\"replace\" prunes entries not in the payload. Returns per-section counts. Same path as POST /import."),
+				mcpgo.WithString("yaml",
+					mcpgo.Required(),
+					mcpgo.Description("YAML body matching the export_config / GET /export shape."),
+				),
+				mcpgo.WithString("mode",
+					mcpgo.Description("\"\" or \"merge\" to upsert, \"replace\" to prune entries not in the payload."),
+				),
+			),
+			toolImportConfig(deps),
+		)
+	}
 }
 
 // toolListAgents serialises every agent definition as JSON. Uses the same
@@ -719,5 +734,24 @@ func toolExportConfig(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultErrorFromErr("export config", err), nil
 		}
 		return mcpgo.NewToolResultText(string(body)), nil
+	}
+}
+
+// toolImportConfig writes a YAML payload into the store using the same code
+// path as POST /import. Validation, store, and cron-reload errors are
+// surfaced to the caller as tool errors; on success the per-section counts
+// are returned as JSON.
+func toolImportConfig(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		body, err := req.RequireString("yaml")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		mode, _ := trimmedStringOptional(req, "mode")
+		counts, err := deps.ConfigImport.ImportYAML([]byte(body), mode)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("import config", err), nil
+		}
+		return jsonResult(counts)
 	}
 }

@@ -164,6 +164,7 @@ func run() error {
 		DispatchStats: engine,
 		Memory:        &sqliteMcpReader{db: db},
 		ConfigBytes:   server,
+		ConfigImport:  server,
 		Logger:        logger,
 	}))
 
