@@ -1108,9 +1108,14 @@ func repoJSON(r config.RepoDef) map[string]any {
 // parseBindings decodes the create_repo "bindings" argument into a slice of
 // config.Binding. The MCP-go request helpers expose string/bool/number
 // primitives directly but not nested objects, so we read the raw argument and
-// destructure it here. A nil/missing value yields an empty binding list. Any
-// non-array or non-object element is reported to the caller as a validation
-// error rather than silently dropped, matching REST's JSON-decode behaviour.
+// destructure it here. A nil/missing value yields an empty binding list.
+//
+// Type mismatches are rejected with explicit user errors instead of being
+// silently dropped — REST decodes this payload through json.Unmarshal into
+// storeBindingJSON, which refuses wrong JSON types. Matching that strictness
+// here is what keeps a payload like `{"enabled":"false"}` from being treated
+// as omitted (and therefore default-enabled), which would silently flip the
+// caller's intended disablement.
 //
 // Binding.Enabled stays nil when the caller omits the key (the "default
 // enabled" case config.Binding.IsEnabled relies on). A literal false/true sets
@@ -1129,39 +1134,65 @@ func parseBindings(v any) ([]config.Binding, string) {
 		if !ok {
 			return nil, fmt.Sprintf("bindings[%d]: must be an object", i)
 		}
-		agent, _ := m["agent"].(string)
-		cron, _ := m["cron"].(string)
-		b := config.Binding{
-			Agent:  agent,
-			Labels: stringSliceFromAny(m["labels"]),
-			Events: stringSliceFromAny(m["events"]),
-			Cron:   cron,
-		}
-		if v, ok := m["enabled"]; ok {
-			if enabled, ok := v.(bool); ok {
-				b.Enabled = &enabled
+		var b config.Binding
+		if v, ok := m["agent"]; ok && v != nil {
+			s, ok := v.(string)
+			if !ok {
+				return nil, fmt.Sprintf("bindings[%d].agent must be a string", i)
 			}
+			b.Agent = s
+		}
+		if v, ok := m["cron"]; ok && v != nil {
+			s, ok := v.(string)
+			if !ok {
+				return nil, fmt.Sprintf("bindings[%d].cron must be a string", i)
+			}
+			b.Cron = s
+		}
+		labels, lErr := stringSliceFromAny(m["labels"], fmt.Sprintf("bindings[%d].labels", i))
+		if lErr != "" {
+			return nil, lErr
+		}
+		b.Labels = labels
+		events, eErr := stringSliceFromAny(m["events"], fmt.Sprintf("bindings[%d].events", i))
+		if eErr != "" {
+			return nil, eErr
+		}
+		b.Events = events
+		if v, ok := m["enabled"]; ok && v != nil {
+			enabled, ok := v.(bool)
+			if !ok {
+				return nil, fmt.Sprintf("bindings[%d].enabled must be a boolean", i)
+			}
+			b.Enabled = &enabled
 		}
 		out = append(out, b)
 	}
 	return out, ""
 }
 
-// stringSliceFromAny best-effort decodes a JSON array of strings. Non-string
-// elements are skipped so the store validator surfaces the bad binding rather
-// than the tool layer guessing at the user's intent.
-func stringSliceFromAny(v any) []string {
+// stringSliceFromAny decodes a JSON array of strings for the given field
+// path. A nil/missing value yields nil. A non-array argument or a non-string
+// element is reported via the returned error string using the supplied path
+// prefix so callers get `bindings[i].labels[j] must be a string` rather than
+// a silent drop.
+func stringSliceFromAny(v any, path string) ([]string, string) {
+	if v == nil {
+		return nil, ""
+	}
 	raw, ok := v.([]any)
 	if !ok {
-		return nil
+		return nil, fmt.Sprintf("%s must be an array", path)
 	}
 	out := make([]string, 0, len(raw))
-	for _, item := range raw {
-		if s, ok := item.(string); ok {
-			out = append(out, s)
+	for i, item := range raw {
+		s, ok := item.(string)
+		if !ok {
+			return nil, fmt.Sprintf("%s[%d] must be a string", path, i)
 		}
+		out = append(out, s)
 	}
-	return out
+	return out, ""
 }
 
 // toolDeleteSkill removes a skill through the same path as DELETE

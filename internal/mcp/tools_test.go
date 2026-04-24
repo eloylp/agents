@@ -2157,6 +2157,96 @@ func TestToolCreateRepoRejectsBadBindingsShape(t *testing.T) {
 	}
 }
 
+// TestToolCreateRepoRejectsBadBindingFieldTypes pins the strict type contract
+// for nested binding fields. REST decodes POST /repos through json.Unmarshal
+// into storeBindingJSON, which rejects wrong JSON types; parseBindings must
+// refuse the same payloads rather than silently coercing them. In particular,
+// `{"enabled":"false"}` must NOT be treated as omitted — that would leave
+// Binding.Enabled=nil (default enabled) and silently flip the caller's intent.
+func TestToolCreateRepoRejectsBadBindingFieldTypes(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		binding map[string]any
+		want    string
+	}{
+		{
+			"enabled not boolean (string)",
+			map[string]any{"agent": "coder", "enabled": "false"},
+			"bindings[0].enabled must be a boolean",
+		},
+		{
+			"enabled not boolean (number)",
+			map[string]any{"agent": "coder", "enabled": 0},
+			"bindings[0].enabled must be a boolean",
+		},
+		{
+			"agent not string",
+			map[string]any{"agent": 42},
+			"bindings[0].agent must be a string",
+		},
+		{
+			"cron not string",
+			map[string]any{"agent": "coder", "cron": 15},
+			"bindings[0].cron must be a string",
+		},
+		{
+			"labels not array",
+			map[string]any{"agent": "coder", "labels": "ready"},
+			"bindings[0].labels must be an array",
+		},
+		{
+			"labels element not string",
+			map[string]any{"agent": "coder", "labels": []any{"ready", 2}},
+			"bindings[0].labels[1] must be a string",
+		},
+		{
+			"events not array",
+			map[string]any{"agent": "coder", "events": "push"},
+			"bindings[0].events must be an array",
+		},
+		{
+			"events element not string",
+			map[string]any{"agent": "coder", "events": []any{true}},
+			"bindings[0].events[0] must be a string",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := &stubRepoWriter{}
+			deps := Deps{
+				Config:    stubConfig{cfg: fixtureConfig()},
+				Queue:     &stubQueue{},
+				Status:    stubStatus{},
+				RepoWrite: w,
+				Logger:    zerolog.Nop(),
+			}
+
+			req := mcpgo.CallToolRequest{}
+			req.Params.Arguments = map[string]any{
+				"name":     "owner/repo",
+				"bindings": []any{tc.binding},
+			}
+
+			res, err := toolCreateRepo(deps)(context.Background(), req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !res.IsError {
+				t.Fatalf("expected IsError for bad binding field, got %+v", res)
+			}
+			if got := textOf(t, res); !strings.Contains(got, tc.want) {
+				t.Fatalf("error body want substring %q, got %q", tc.want, got)
+			}
+			if w.gotUpsert.Name != "" {
+				t.Errorf("writer must not be invoked when binding field types are invalid, got %+v", w.gotUpsert)
+			}
+		})
+	}
+}
+
 // TestToolCreateRepoDefaultsBindingEnabledNil pins the default-enabled
 // contract: when a binding omits "enabled", the *bool must stay nil so
 // config.Binding.IsEnabled returns true. Setting it to a pointer-to-false
