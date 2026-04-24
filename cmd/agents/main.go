@@ -165,6 +165,7 @@ func run() error {
 		Memory:        &sqliteMcpReader{db: db},
 		ConfigBytes:   server,
 		ConfigImport:  server,
+		AgentWrite:    server,
 		Logger:        logger,
 	}))
 

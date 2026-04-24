@@ -279,28 +279,43 @@ func (s *Server) handleStoreAgents(w http.ResponseWriter, r *http.Request) {
 		if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
-		if req.Name == "" {
-			http.Error(w, "name is required", http.StatusBadRequest)
-			return
-		}
-		s.storeMu.Lock()
-		err := store.UpsertAgent(s.db, req.toConfig())
-		if err == nil {
-			err = s.reloadCron()
-		}
-		s.storeMu.Unlock()
+		canonical, err := s.UpsertAgent(req.toConfig())
 		if err != nil {
 			status := storeErrStatus(err)
 			s.logger.Error().Err(err).Msg("store crud: agent upsert or cron reload failed")
 			http.Error(w, fmt.Sprintf("agent upsert or cron reload: %v", err), status)
 			return
 		}
-		// Return the canonical persisted form so clients see normalized values
-		// (lowercase name, trimmed prompt, etc.) rather than the raw request.
-		a := req.toConfig()
-		config.NormalizeAgentDef(&a)
-		writeJSON(w, http.StatusOK, agentToStoreJSON(a))
+		writeJSON(w, http.StatusOK, agentToStoreJSON(canonical))
 	}
+}
+
+// UpsertAgent writes a single agent definition into the store and reloads the
+// cron scheduler. Returns the canonical (normalized) form that was persisted
+// so callers can surface the same shape REST clients see in the POST response
+// — lowercase name, trimmed prompt, etc.
+//
+// Empty/whitespace names are rejected as *store.ErrValidation so callers can
+// map them to HTTP 400 / MCP user errors via storeErrStatus, mirroring the
+// behaviour of POST /agents.
+//
+// Exposed so non-HTTP surfaces (e.g. the MCP create_agent tool) can run the
+// same upsert path as POST /agents without going through the router.
+func (s *Server) UpsertAgent(a config.AgentDef) (config.AgentDef, error) {
+	if strings.TrimSpace(a.Name) == "" {
+		return config.AgentDef{}, &store.ErrValidation{Msg: "name is required"}
+	}
+	s.storeMu.Lock()
+	err := store.UpsertAgent(s.db, a)
+	if err == nil {
+		err = s.reloadCron()
+	}
+	s.storeMu.Unlock()
+	if err != nil {
+		return config.AgentDef{}, err
+	}
+	config.NormalizeAgentDef(&a)
+	return a, nil
 }
 
 // handleStoreAgent serves GET and DELETE /api/store/agents/{name}.
@@ -323,18 +338,7 @@ func (s *Server) handleStoreAgent(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodDelete:
 		cascade := r.URL.Query().Get("cascade") == "true"
-		s.storeMu.Lock()
-		var err error
-		if cascade {
-			err = store.DeleteAgentCascade(s.db, name)
-		} else {
-			err = store.DeleteAgent(s.db, name)
-		}
-		if err == nil {
-			err = s.reloadCron()
-		}
-		s.storeMu.Unlock()
-		if err != nil {
+		if err := s.DeleteAgent(name, cascade); err != nil {
 			status := storeErrStatus(err)
 			s.logger.Error().Err(err).Msg("store crud: agent delete or cron reload failed")
 			http.Error(w, fmt.Sprintf("agent delete or cron reload: %v", err), status)
@@ -342,6 +346,28 @@ func (s *Server) handleStoreAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// DeleteAgent removes an agent from the store and reloads the cron scheduler.
+// When cascade is true, repo bindings referencing the agent are also removed;
+// otherwise a *store.ErrConflict is returned if any binding still references
+// the agent (HTTP 409 / MCP user error via storeErrStatus).
+//
+// Exposed so non-HTTP surfaces (e.g. the MCP delete_agent tool) can run the
+// same delete path as DELETE /agents/{name} without going through the router.
+func (s *Server) DeleteAgent(name string, cascade bool) error {
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+	var err error
+	if cascade {
+		err = store.DeleteAgentCascade(s.db, name)
+	} else {
+		err = store.DeleteAgent(s.db, name)
+	}
+	if err != nil {
+		return err
+	}
+	return s.reloadCron()
 }
 
 // ── /api/store/skills ─────────────────────────────────────────────────────────
