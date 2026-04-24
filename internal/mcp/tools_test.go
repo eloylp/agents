@@ -1409,3 +1409,211 @@ func TestToolDeleteAgentPropagatesConflict(t *testing.T) {
 		t.Fatalf("error body want substring %q, got %q", "agent referenced by binding", got)
 	}
 }
+
+// stubSkillWriter records the skill arguments it received and returns canned
+// values. Tests pin both the inputs the writer observed (e.g. raw name, prompt)
+// and the canonical values the tool surfaces back to the caller.
+type stubSkillWriter struct {
+	gotUpsertName  string
+	gotUpsertSkill config.SkillDef
+	gotDeleteName  string
+	canonicalName  string
+	canonical      config.SkillDef
+	upsertErr      error
+	deleteErr      error
+}
+
+func (s *stubSkillWriter) UpsertSkill(name string, sk config.SkillDef) (string, config.SkillDef, error) {
+	s.gotUpsertName = name
+	s.gotUpsertSkill = sk
+	if s.upsertErr != nil {
+		return "", config.SkillDef{}, s.upsertErr
+	}
+	return s.canonicalName, s.canonical, nil
+}
+
+func (s *stubSkillWriter) DeleteSkill(name string) error {
+	s.gotDeleteName = name
+	return s.deleteErr
+}
+
+func TestToolCreateSkillForwardsAndReturnsCanonical(t *testing.T) {
+	t.Parallel()
+	w := &stubSkillWriter{
+		canonicalName: "security",
+		canonical:     config.SkillDef{Prompt: "audit inputs carefully"},
+	}
+	deps := Deps{
+		Config:     stubConfig{cfg: fixtureConfig()},
+		Queue:      &stubQueue{},
+		Status:     stubStatus{},
+		SkillWrite: w,
+		Logger:     zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":   "  Security  ",
+		"prompt": "  audit inputs carefully  ",
+	}
+
+	res, err := toolCreateSkill(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", textOf(t, res))
+	}
+
+	if w.gotUpsertName != "  Security  " {
+		t.Errorf("raw name should pass through to writer (writer owns normalization): got %q", w.gotUpsertName)
+	}
+	if w.gotUpsertSkill.Prompt != "  audit inputs carefully  " {
+		t.Errorf("raw prompt should pass through to writer: got %q", w.gotUpsertSkill.Prompt)
+	}
+
+	var got map[string]any
+	decodeText(t, res, &got)
+	if got["name"] != "security" {
+		t.Errorf("response should reflect canonical name: %+v", got)
+	}
+	if got["prompt"] != "audit inputs carefully" {
+		t.Errorf("response should reflect canonical prompt: %+v", got)
+	}
+}
+
+func TestToolCreateSkillRequiresName(t *testing.T) {
+	t.Parallel()
+	w := &stubSkillWriter{}
+	deps := Deps{
+		Config:     stubConfig{cfg: fixtureConfig()},
+		Queue:      &stubQueue{},
+		Status:     stubStatus{},
+		SkillWrite: w,
+		Logger:     zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"prompt": "body"}
+
+	res, err := toolCreateSkill(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError when name missing, got %+v", res)
+	}
+	if w.gotUpsertName != "" {
+		t.Errorf("writer should not be invoked when name missing, got %q", w.gotUpsertName)
+	}
+}
+
+func TestToolCreateSkillPropagatesError(t *testing.T) {
+	t.Parallel()
+	w := &stubSkillWriter{upsertErr: errors.New("validation: prompt empty")}
+	deps := Deps{
+		Config:     stubConfig{cfg: fixtureConfig()},
+		Queue:      &stubQueue{},
+		Status:     stubStatus{},
+		SkillWrite: w,
+		Logger:     zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "security"}
+
+	res, err := toolCreateSkill(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError on writer failure, got %+v", res)
+	}
+	if got := textOf(t, res); !strings.Contains(got, "validation: prompt empty") {
+		t.Fatalf("error body want substring %q, got %q", "validation: prompt empty", got)
+	}
+}
+
+func TestToolDeleteSkillNormalizesAndForwards(t *testing.T) {
+	t.Parallel()
+	w := &stubSkillWriter{}
+	deps := Deps{
+		Config:     stubConfig{cfg: fixtureConfig()},
+		Queue:      &stubQueue{},
+		Status:     stubStatus{},
+		SkillWrite: w,
+		Logger:     zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "  Security  "}
+
+	res, err := toolDeleteSkill(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", textOf(t, res))
+	}
+	if w.gotDeleteName != "security" {
+		t.Errorf("name should be normalized before forwarding: got %q", w.gotDeleteName)
+	}
+
+	var got map[string]any
+	decodeText(t, res, &got)
+	if got["status"] != "deleted" || got["name"] != "security" {
+		t.Errorf("response shape: %+v", got)
+	}
+}
+
+func TestToolDeleteSkillRequiresName(t *testing.T) {
+	t.Parallel()
+	w := &stubSkillWriter{}
+	deps := Deps{
+		Config:     stubConfig{cfg: fixtureConfig()},
+		Queue:      &stubQueue{},
+		Status:     stubStatus{},
+		SkillWrite: w,
+		Logger:     zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "   "}
+
+	res, err := toolDeleteSkill(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError for blank name, got %+v", res)
+	}
+	if w.gotDeleteName != "" {
+		t.Errorf("writer should not be invoked for blank name, got %q", w.gotDeleteName)
+	}
+}
+
+func TestToolDeleteSkillPropagatesConflict(t *testing.T) {
+	t.Parallel()
+	w := &stubSkillWriter{deleteErr: errors.New("skill referenced by agent")}
+	deps := Deps{
+		Config:     stubConfig{cfg: fixtureConfig()},
+		Queue:      &stubQueue{},
+		Status:     stubStatus{},
+		SkillWrite: w,
+		Logger:     zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "security"}
+
+	res, err := toolDeleteSkill(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError on writer failure, got %+v", res)
+	}
+	if got := textOf(t, res); !strings.Contains(got, "skill referenced by agent") {
+		t.Fatalf("error body want substring %q, got %q", "skill referenced by agent", got)
+	}
+}

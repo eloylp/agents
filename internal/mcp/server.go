@@ -16,9 +16,10 @@
 //   - get_graph, get_dispatches, get_memory               — dispatch + memory
 //   - get_config, export_config, import_config            — config snapshots / write
 //   - create_agent, delete_agent                          — agent CRUD writes
+//   - create_skill, delete_skill                          — skill CRUD writes
 //
-// Remaining CRUD writes (skill/backend/repo create/delete) are tracked as
-// follow-up work on #227.
+// Remaining CRUD writes (backend/repo create/delete) are tracked as follow-up
+// work on #227.
 package mcp
 
 import (
@@ -119,13 +120,25 @@ type AgentWriter interface {
 	DeleteAgent(name string, cascade bool) error
 }
 
+// SkillWriter writes a single skill into the store and removes existing ones.
+// Upsert returns the canonical (normalized) name and SkillDef that were
+// persisted so callers can surface the same shape REST clients see in the
+// POST /skills response — lowercase name, trimmed prompt.
+//
+// Implementations must hold the store mutex while writing and reload cron
+// schedules afterwards so MCP writes stay consistent with the REST path.
+type SkillWriter interface {
+	UpsertSkill(name string, sk config.SkillDef) (string, config.SkillDef, error)
+	DeleteSkill(name string) error
+}
+
 // Deps bundles the dependencies the MCP server needs. Each tool handler
 // depends on a small subset of this struct; bundling them keeps the
 // registration site in tools.go short.
 //
 // Config, Queue, Status, and Logger are always required. Observe,
-// DispatchStats, Memory, ConfigBytes, ConfigImport, and AgentWrite are
-// optional: the observability, config-read/write, and CRUD-write tools are
+// DispatchStats, Memory, ConfigBytes, ConfigImport, AgentWrite, and SkillWrite
+// are optional: the observability, config-read/write, and CRUD-write tools are
 // only registered when the corresponding dependency is supplied, so tests can
 // exercise the core fleet surface without wiring the full stack.
 type Deps struct {
@@ -138,6 +151,7 @@ type Deps struct {
 	ConfigBytes   ConfigReader
 	ConfigImport  ConfigImporter
 	AgentWrite    AgentWriter
+	SkillWrite    SkillWriter
 	Logger        zerolog.Logger
 }
 
@@ -191,5 +205,7 @@ get_trace_steps, get_graph, get_dispatches, get_memory) expose the same
 data the web dashboard shows. Config tools (get_config, export_config,
 import_config) return the redacted effective config, export the
 CRUD-mutable YAML fragment, and write a YAML payload back into the
-store. This server is the v3 foundation; additional CRUD writes will
+store. CRUD write tools (create_agent, delete_agent, create_skill,
+delete_skill) mutate the fleet through the same code path as the REST
+API. This server is the v3 foundation; additional CRUD writes will
 land in follow-ups.`
