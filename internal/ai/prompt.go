@@ -47,19 +47,24 @@ type PromptContext struct {
 // RenderedPrompt with two parts:
 //
 //   - System: stable content that is identical across every run of the same
-//     agent — concatenated skill guidance followed by the agent's own prompt
-//     body. Backends that support a native system channel (e.g. Claude's
+//     agent on the same repo — no-PR guard (when allow_prs=false), concatenated
+//     skill guidance, the agent's own prompt body, and the available-experts
+//     roster. Backends that support a native system channel (e.g. Claude's
 //     --append-system-prompt) can deliver this part separately to benefit from
 //     prompt caching.
 //
 //   - User: per-run content — the ## Runtime context block containing the
-//     repo, event, actor, payload, memory, and roster. This changes every run
-//     and must travel as the user turn.
+//     repo, event, actor, payload, and memory. This changes every run and must
+//     travel as the user turn.
 //
 // No Go templates, no {{.Field}} substitution — just text composition. The
 // agent's prompt is expected to be self-contained.
 func RenderAgentPrompt(agent config.AgentDef, skills map[string]config.SkillDef, ctx PromptContext) (RenderedPrompt, error) {
 	var sys strings.Builder
+
+	if !agent.AllowPRs {
+		sys.WriteString("Do not open or create pull requests under any circumstances.\n")
+	}
 
 	for _, skillName := range agent.Skills {
 		skill, ok := skills[skillName]
@@ -78,6 +83,13 @@ func RenderAgentPrompt(agent config.AgentDef, skills map[string]config.SkillDef,
 		sys.WriteString(agentPrompt)
 	}
 
+	if roster := renderRoster(ctx.Roster); roster != "" {
+		if sys.Len() > 0 {
+			sys.WriteString("\n\n")
+		}
+		sys.WriteString(roster)
+	}
+
 	var usr strings.Builder
 	runtime := renderRuntimeContext(ctx)
 	if runtime != "" {
@@ -89,6 +101,32 @@ func RenderAgentPrompt(agent config.AgentDef, skills map[string]config.SkillDef,
 		System: strings.TrimRight(sys.String(), "\n"),
 		User:   strings.TrimRight(usr.String(), "\n"),
 	}, nil
+}
+
+func renderRoster(roster []RosterEntry) string {
+	if len(roster) == 0 {
+		return ""
+	}
+	sorted := slices.Clone(roster)
+	slices.SortFunc(sorted, func(a, b RosterEntry) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	var b strings.Builder
+	b.WriteString("## Available experts\n\n")
+	for _, r := range sorted {
+		fmt.Fprintf(&b, "- **%s**", r.Name)
+		if r.Description != "" {
+			fmt.Fprintf(&b, ": %s", r.Description)
+		}
+		if len(r.Skills) > 0 {
+			fmt.Fprintf(&b, " (skills: %s)", strings.Join(r.Skills, ", "))
+		}
+		if r.AllowDispatch {
+			b.WriteString(" [dispatchable]")
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 func renderRuntimeContext(ctx PromptContext) string {
@@ -136,27 +174,6 @@ func renderRuntimeContext(ctx PromptContext) string {
 			b.WriteString("Existing memory: (empty)\n")
 		} else {
 			fmt.Fprintf(&b, "Existing memory:\n%s\n", mem)
-		}
-	}
-	if len(ctx.Roster) > 0 {
-		b.WriteString("\n## Available experts\n\n")
-		// Sort roster by name for deterministic output.
-		roster := slices.Clone(ctx.Roster)
-		slices.SortFunc(roster, func(a, b RosterEntry) int {
-			return strings.Compare(a.Name, b.Name)
-		})
-		for _, r := range roster {
-			fmt.Fprintf(&b, "- **%s**", r.Name)
-			if r.Description != "" {
-				fmt.Fprintf(&b, ": %s", r.Description)
-			}
-			if len(r.Skills) > 0 {
-				fmt.Fprintf(&b, " (skills: %s)", strings.Join(r.Skills, ", "))
-			}
-			if r.AllowDispatch {
-				b.WriteString(" [dispatchable]")
-			}
-			b.WriteString("\n")
 		}
 	}
 	return b.String()
