@@ -3,7 +3,6 @@ package mcp
 import (
 	"encoding/json"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -420,8 +419,6 @@ func nilSafe(xs []string) []string {
 	}
 	return xs
 }
-
-func sortStrings(xs []string) { sort.Strings(xs) }
 
 // trimmedString reads a required string argument, trims whitespace, and
 // returns (value, true) only if the caller supplied a non-empty value.

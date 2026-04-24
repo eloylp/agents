@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"strings"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -58,12 +60,8 @@ func toolListSkills(deps Deps) server.ToolHandlerFunc {
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list skills", err), nil
 		}
-		names := make([]string, 0, len(skills))
-		for n := range skills {
-			names = append(names, n)
-		}
-		sortStrings(names)
-		out := make([]map[string]any, 0, len(skills))
+		names := slices.Sorted(maps.Keys(skills))
+		out := make([]map[string]any, 0, len(names))
 		for _, n := range names {
 			s := skills[n]
 			out = append(out, map[string]any{
@@ -106,11 +104,7 @@ func toolListBackends(deps Deps) server.ToolHandlerFunc {
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list backends", err), nil
 		}
-		names := make([]string, 0, len(backends))
-		for n := range backends {
-			names = append(names, n)
-		}
-		sortStrings(names)
+		names := slices.Sorted(maps.Keys(backends))
 		out := make([]map[string]any, 0, len(names))
 		for _, n := range names {
 			out = append(out, backendJSON(n, backends[n]))

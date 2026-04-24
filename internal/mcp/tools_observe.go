@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -124,11 +126,7 @@ func toolGetGraph(deps Deps) server.ToolHandlerFunc {
 			seen[e.From] = struct{}{}
 			seen[e.To] = struct{}{}
 		}
-		names := make([]string, 0, len(seen))
-		for name := range seen {
-			names = append(names, name)
-		}
-		sortStrings(names)
+		names := slices.Sorted(maps.Keys(seen))
 		nodes := make([]mcpGraphNode, 0, len(names))
 		for _, name := range names {
 			nodes = append(nodes, mcpGraphNode{ID: name})
