@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/eloylp/agents/internal/config"
@@ -27,13 +28,8 @@ func TestCanonicalModels(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := canonicalModels(tc.input)
-			if len(got) != len(tc.want) {
-				t.Fatalf("canonicalModels(%v) = %v, want %v", tc.input, got, tc.want)
-			}
-			for i := range got {
-				if got[i] != tc.want[i] {
-					t.Errorf("canonicalModels[%d] = %q, want %q", i, got[i], tc.want[i])
-				}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("canonicalModels(%v) = %#v, want %#v", tc.input, got, tc.want)
 			}
 		})
 	}
