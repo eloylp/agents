@@ -60,9 +60,76 @@ func (j storeAgentJSON) toConfig() config.AgentDef {
 	}
 }
 
+// storeAgentPatchJSON is the wire shape for PATCH /agents/{name}. Every field
+// is a pointer so clients can distinguish "don't touch" (nil / omitted) from
+// "set to zero value" (explicit). Handler merges non-nil fields over the
+// existing record, then runs the merged entity through UpsertAgent so the
+// same validation and cron-reload paths apply.
+type storeAgentPatchJSON struct {
+	Backend       *string   `json:"backend,omitempty"`
+	Model         *string   `json:"model,omitempty"`
+	Skills        *[]string `json:"skills,omitempty"`
+	Prompt        *string   `json:"prompt,omitempty"`
+	AllowPRs      *bool     `json:"allow_prs,omitempty"`
+	AllowDispatch *bool     `json:"allow_dispatch,omitempty"`
+	CanDispatch   *[]string `json:"can_dispatch,omitempty"`
+	Description   *string   `json:"description,omitempty"`
+}
+
+// anyFieldSet reports whether the patch carries any field to apply. An empty
+// PATCH body is rejected so callers don't accidentally no-op a write.
+func (p storeAgentPatchJSON) anyFieldSet() bool {
+	return p.Backend != nil || p.Model != nil || p.Skills != nil || p.Prompt != nil ||
+		p.AllowPRs != nil || p.AllowDispatch != nil || p.CanDispatch != nil || p.Description != nil
+}
+
+// apply mutates a in place with any non-nil field on p. Name is preserved
+// because it is addressed via the URL path and is not patchable.
+func (p storeAgentPatchJSON) apply(a *config.AgentDef) {
+	if p.Backend != nil {
+		a.Backend = *p.Backend
+	}
+	if p.Model != nil {
+		a.Model = *p.Model
+	}
+	if p.Skills != nil {
+		a.Skills = *p.Skills
+	}
+	if p.Prompt != nil {
+		a.Prompt = *p.Prompt
+	}
+	if p.AllowPRs != nil {
+		a.AllowPRs = *p.AllowPRs
+	}
+	if p.AllowDispatch != nil {
+		a.AllowDispatch = *p.AllowDispatch
+	}
+	if p.CanDispatch != nil {
+		a.CanDispatch = *p.CanDispatch
+	}
+	if p.Description != nil {
+		a.Description = *p.Description
+	}
+}
+
 type storeSkillJSON struct {
 	Name   string `json:"name"`
 	Prompt string `json:"prompt"`
+}
+
+// storeSkillPatchJSON is the wire shape for PATCH /skills/{name}. Skills only
+// have Prompt as a mutable field today but the shape leaves room for future
+// additions without a breaking client rewrite.
+type storeSkillPatchJSON struct {
+	Prompt *string `json:"prompt,omitempty"`
+}
+
+func (p storeSkillPatchJSON) anyFieldSet() bool { return p.Prompt != nil }
+
+func (p storeSkillPatchJSON) apply(s *config.SkillDef) {
+	if p.Prompt != nil {
+		s.Prompt = *p.Prompt
+	}
 }
 
 type storeBackendJSON struct {
@@ -83,6 +150,63 @@ type localBackendRequest struct {
 	URL  string `json:"url"`
 }
 
+// storeBackendPatchJSON is the wire shape for PATCH /backends/{name}. Every
+// field is a pointer so clients can update a single setting (e.g. bump
+// timeout_seconds) without resubmitting the rest. Supersedes the legacy
+// backendRuntimeSettingsJSON shape, which covered only the two runtime
+// knobs — the handler accepts both shapes for backwards compatibility.
+type storeBackendPatchJSON struct {
+	Command          *string   `json:"command,omitempty"`
+	Version          *string   `json:"version,omitempty"`
+	Models           *[]string `json:"models,omitempty"`
+	Healthy          *bool     `json:"healthy,omitempty"`
+	HealthDetail     *string   `json:"health_detail,omitempty"`
+	LocalModelURL    *string   `json:"local_model_url,omitempty"`
+	TimeoutSeconds   *int      `json:"timeout_seconds,omitempty"`
+	MaxPromptChars   *int      `json:"max_prompt_chars,omitempty"`
+	RedactionSaltEnv *string   `json:"redaction_salt_env,omitempty"`
+}
+
+func (p storeBackendPatchJSON) anyFieldSet() bool {
+	return p.Command != nil || p.Version != nil || p.Models != nil || p.Healthy != nil ||
+		p.HealthDetail != nil || p.LocalModelURL != nil || p.TimeoutSeconds != nil ||
+		p.MaxPromptChars != nil || p.RedactionSaltEnv != nil
+}
+
+func (p storeBackendPatchJSON) apply(b *config.AIBackendConfig) {
+	if p.Command != nil {
+		b.Command = *p.Command
+	}
+	if p.Version != nil {
+		b.Version = *p.Version
+	}
+	if p.Models != nil {
+		b.Models = *p.Models
+	}
+	if p.Healthy != nil {
+		b.Healthy = *p.Healthy
+	}
+	if p.HealthDetail != nil {
+		b.HealthDetail = *p.HealthDetail
+	}
+	if p.LocalModelURL != nil {
+		b.LocalModelURL = *p.LocalModelURL
+	}
+	if p.TimeoutSeconds != nil {
+		b.TimeoutSeconds = *p.TimeoutSeconds
+	}
+	if p.MaxPromptChars != nil {
+		b.MaxPromptChars = *p.MaxPromptChars
+	}
+	if p.RedactionSaltEnv != nil {
+		b.RedactionSaltEnv = *p.RedactionSaltEnv
+	}
+}
+
+// backendRuntimeSettingsJSON is the legacy wire shape for PATCH
+// /backends/{name}, restricted to the two runtime-tunable fields. The handler
+// still accepts this shape; new clients should prefer storeBackendPatchJSON,
+// which covers every backend field.
 type backendRuntimeSettingsJSON struct {
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
 	MaxPromptChars *int `json:"max_prompt_chars,omitempty"`
@@ -336,7 +460,7 @@ func (s *Server) UpsertAgent(a config.AgentDef) (config.AgentDef, error) {
 	return a, nil
 }
 
-// handleStoreAgent serves GET and DELETE /api/store/agents/{name}.
+// handleStoreAgent serves GET, PATCH, and DELETE /api/store/agents/{name}.
 func (s *Server) handleStoreAgent(w http.ResponseWriter, r *http.Request) {
 	name := config.NormalizeAgentName(mux.Vars(r)["name"])
 	switch r.Method {
@@ -354,6 +478,9 @@ func (s *Server) handleStoreAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		http.NotFound(w, r)
 
+	case http.MethodPatch:
+		s.handleUpdateAgent(w, r, name)
+
 	case http.MethodDelete:
 		cascade := r.URL.Query().Get("cascade") == "true"
 		if err := s.DeleteAgent(name, cascade); err != nil {
@@ -364,6 +491,67 @@ func (s *Server) handleStoreAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// handleUpdateAgent serves PATCH /agents/{name}. It decodes a
+// storeAgentPatchJSON, merges non-nil fields over the existing agent, and runs
+// the result through UpdateAgent so the same validation and cron-reload
+// path as POST /agents applies.
+func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request, name string) {
+	var req storeAgentPatchJSON
+	if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
+		return
+	}
+	if !req.anyFieldSet() {
+		http.Error(w, "at least one field is required", http.StatusBadRequest)
+		return
+	}
+	canonical, err := s.UpdateAgent(name, req)
+	if err != nil {
+		status := storeErrStatus(err)
+		s.logger.Error().Err(err).Msg("store crud: agent patch or cron reload failed")
+		http.Error(w, fmt.Sprintf("agent patch or cron reload: %v", err), status)
+		return
+	}
+	writeJSON(w, http.StatusOK, agentToStoreJSON(canonical))
+}
+
+// UpdateAgent applies a partial patch to the named agent and writes the merged
+// record back through UpsertAgent. Returns *store.ErrNotFound when the agent
+// does not exist so the REST handler can map to 404 / MCP can surface a user
+// error. The merge+upsert runs under storeMu to stay consistent with the
+// rest of the CRUD surface.
+//
+// Exposed so non-HTTP surfaces (e.g. the MCP update_agent tool) can drive the
+// same path as PATCH /agents/{name} without going through the router.
+func (s *Server) UpdateAgent(name string, patch storeAgentPatchJSON) (config.AgentDef, error) {
+	normalized := config.NormalizeAgentName(name)
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+	agents, err := store.ReadAgents(s.db)
+	if err != nil {
+		return config.AgentDef{}, err
+	}
+	var existing *config.AgentDef
+	for i := range agents {
+		if agents[i].Name == normalized {
+			existing = &agents[i]
+			break
+		}
+	}
+	if existing == nil {
+		return config.AgentDef{}, &store.ErrNotFound{Msg: fmt.Sprintf("agent %q not found", normalized)}
+	}
+	merged := *existing
+	patch.apply(&merged)
+	if err := store.UpsertAgent(s.db, merged); err != nil {
+		return config.AgentDef{}, err
+	}
+	if err := s.reloadCron(); err != nil {
+		return config.AgentDef{}, err
+	}
+	config.NormalizeAgentDef(&merged)
+	return merged, nil
 }
 
 // DeleteAgent removes an agent from the store and reloads the cron scheduler.
@@ -449,7 +637,7 @@ func (s *Server) UpsertSkill(name string, sk config.SkillDef) (string, config.Sk
 	return config.NormalizeSkillName(name), sk, nil
 }
 
-// handleStoreSkill serves GET and DELETE /api/store/skills/{name}.
+// handleStoreSkill serves GET, PATCH, and DELETE /api/store/skills/{name}.
 func (s *Server) handleStoreSkill(w http.ResponseWriter, r *http.Request) {
 	name := config.NormalizeSkillName(mux.Vars(r)["name"])
 	switch r.Method {
@@ -466,6 +654,9 @@ func (s *Server) handleStoreSkill(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, storeSkillJSON{Name: name, Prompt: sk.Prompt})
 
+	case http.MethodPatch:
+		s.handleUpdateSkill(w, r, name)
+
 	case http.MethodDelete:
 		if err := s.DeleteSkill(name); err != nil {
 			status := storeErrStatus(err)
@@ -475,6 +666,59 @@ func (s *Server) handleStoreSkill(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// handleUpdateSkill serves PATCH /skills/{name}. Decodes a storeSkillPatchJSON,
+// merges non-nil fields over the existing skill, and runs the result through
+// UpdateSkill so the same validation and cron-reload path as POST /skills
+// applies.
+func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request, name string) {
+	var req storeSkillPatchJSON
+	if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
+		return
+	}
+	if !req.anyFieldSet() {
+		http.Error(w, "at least one field is required", http.StatusBadRequest)
+		return
+	}
+	canonicalName, canonical, err := s.UpdateSkill(name, req)
+	if err != nil {
+		status := storeErrStatus(err)
+		s.logger.Error().Err(err).Msg("store crud: skill patch or cron reload failed")
+		http.Error(w, fmt.Sprintf("skill patch or cron reload: %v", err), status)
+		return
+	}
+	writeJSON(w, http.StatusOK, storeSkillJSON{Name: canonicalName, Prompt: canonical.Prompt})
+}
+
+// UpdateSkill applies a partial patch to the named skill and writes the merged
+// record back through UpsertSkill. Returns *store.ErrNotFound when the skill
+// does not exist. The merge+upsert runs under storeMu to stay consistent
+// with the rest of the CRUD surface.
+//
+// Exposed so non-HTTP surfaces (e.g. the MCP update_skill tool) can drive the
+// same path as PATCH /skills/{name} without going through the router.
+func (s *Server) UpdateSkill(name string, patch storeSkillPatchJSON) (string, config.SkillDef, error) {
+	normalized := config.NormalizeSkillName(name)
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+	skills, err := store.ReadSkills(s.db)
+	if err != nil {
+		return "", config.SkillDef{}, err
+	}
+	existing, ok := skills[normalized]
+	if !ok {
+		return "", config.SkillDef{}, &store.ErrNotFound{Msg: fmt.Sprintf("skill %q not found", normalized)}
+	}
+	patch.apply(&existing)
+	if err := store.UpsertSkill(s.db, normalized, existing); err != nil {
+		return "", config.SkillDef{}, err
+	}
+	if err := s.reloadCron(); err != nil {
+		return "", config.SkillDef{}, err
+	}
+	config.NormalizeSkillDef(&existing)
+	return normalized, existing, nil
 }
 
 // DeleteSkill removes the named skill from the store and reloads the cron
@@ -686,15 +930,16 @@ func (s *Server) handleStoreBackendGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, backendToStoreJSON(name, b))
 }
 
-// handleStoreBackendPatch serves PATCH /api/store/backends/{name}.
+// handleStoreBackendPatch serves PATCH /api/store/backends/{name}. Accepts the
+// full storeBackendPatchJSON field set; the legacy backendRuntimeSettingsJSON
+// shape remains wire-compatible because it is a proper subset.
 func (s *Server) handleStoreBackendPatch(w http.ResponseWriter, r *http.Request) {
 	name := backendPathName(r)
-
-	var req backendRuntimeSettingsJSON
+	var req storeBackendPatchJSON
 	if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
-	if req.TimeoutSeconds == nil && req.MaxPromptChars == nil {
+	if !req.anyFieldSet() {
 		http.Error(w, "at least one field is required", http.StatusBadRequest)
 		return
 	}
@@ -706,39 +951,45 @@ func (s *Server) handleStoreBackendPatch(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "max_prompt_chars must be positive", http.StatusBadRequest)
 		return
 	}
-
-	s.storeMu.Lock()
-	backendsByName, err := store.ReadBackends(s.db)
-	if err != nil {
-		s.storeMu.Unlock()
-		http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
-		return
-	}
-	b, ok := backendsByName[name]
-	if !ok {
-		s.storeMu.Unlock()
-		http.NotFound(w, r)
-		return
-	}
-	if req.TimeoutSeconds != nil {
-		b.TimeoutSeconds = *req.TimeoutSeconds
-	}
-	if req.MaxPromptChars != nil {
-		b.MaxPromptChars = *req.MaxPromptChars
-	}
-
-	err = store.UpsertBackend(s.db, name, b)
-	if err == nil {
-		err = s.reloadCron()
-	}
-	s.storeMu.Unlock()
+	canonicalName, canonical, err := s.UpdateBackend(name, req)
 	if err != nil {
 		status := storeErrStatus(err)
-		s.logger.Error().Err(err).Msg("store crud: backend runtime settings update or cron reload failed")
-		http.Error(w, fmt.Sprintf("backend runtime settings update or cron reload: %v", err), status)
+		s.logger.Error().Err(err).Msg("store crud: backend patch or cron reload failed")
+		http.Error(w, fmt.Sprintf("backend patch or cron reload: %v", err), status)
 		return
 	}
-	writeJSON(w, http.StatusOK, backendToStoreJSON(name, b))
+	writeJSON(w, http.StatusOK, backendToStoreJSON(canonicalName, canonical))
+}
+
+// UpdateBackend applies a partial patch to the named backend and writes the
+// merged record back through store.UpsertBackend. Returns *store.ErrNotFound
+// when the backend does not exist. Runs under storeMu so it stays consistent
+// with the rest of the CRUD surface.
+//
+// Exposed so non-HTTP surfaces (e.g. the MCP update_backend tool) can drive
+// the same path as PATCH /backends/{name} without going through the router.
+func (s *Server) UpdateBackend(name string, patch storeBackendPatchJSON) (string, config.AIBackendConfig, error) {
+	normalized := config.NormalizeBackendName(name)
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+	backendsByName, err := store.ReadBackends(s.db)
+	if err != nil {
+		return "", config.AIBackendConfig{}, err
+	}
+	existing, ok := backendsByName[normalized]
+	if !ok {
+		return "", config.AIBackendConfig{}, &store.ErrNotFound{Msg: fmt.Sprintf("backend %q not found", normalized)}
+	}
+	patch.apply(&existing)
+	if err := store.UpsertBackend(s.db, normalized, existing); err != nil {
+		return "", config.AIBackendConfig{}, err
+	}
+	if err := s.reloadCron(); err != nil {
+		return "", config.AIBackendConfig{}, err
+	}
+	config.NormalizeBackendConfig(&existing)
+	config.ApplyBackendDefaults(&existing)
+	return normalized, existing, nil
 }
 
 // handleStoreBackendDelete serves DELETE /api/store/backends/{name}.

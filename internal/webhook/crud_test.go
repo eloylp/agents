@@ -2073,3 +2073,156 @@ repos:
 		t.Errorf("existing-repo missing after failed replace import: %s", repos.Body.String())
 	}
 }
+
+// ── PATCH /agents/{name} ────────────────────────────────────────────
+
+func TestStoreCRUDAgentPatchSingleField(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+	seedStoreBackend(t, s, "codex")
+
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"name": "coder", "backend": "claude", "model": "opus",
+		"prompt": "p", "description": "d",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed coder: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodPatch, "/agents/coder", map[string]any{
+		"backend": "codex",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH /agents/coder: got %d — %s", rr.Code, rr.Body.String())
+	}
+	var out storeAgentJSON
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Backend != "codex" {
+		t.Fatalf("backend: got %q, want %q", out.Backend, "codex")
+	}
+	if out.Model != "opus" || out.Prompt != "p" || out.Description != "d" {
+		t.Fatalf("non-patched fields drifted: %+v", out)
+	}
+}
+
+func TestStoreCRUDAgentPatchEmptyBodyRejected(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "p",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed: %s", rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPatch, "/agents/coder", map[string]any{}); rr.Code != http.StatusBadRequest {
+		t.Fatalf("empty PATCH: got %d, want 400", rr.Code)
+	}
+}
+
+func TestStoreCRUDAgentPatchNotFound(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	if rr := doCRUDRequest(t, s, http.MethodPatch, "/agents/missing", map[string]any{
+		"prompt": "new",
+	}); rr.Code != http.StatusNotFound {
+		t.Fatalf("PATCH missing: got %d, want 404", rr.Code)
+	}
+}
+
+func TestStoreCRUDAgentPatchValidationFailsFast(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "p",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed: %s", rr.Body.String())
+	}
+	// Unknown backend must surface as a store validation error (400 via storeErrStatus).
+	rr := doCRUDRequest(t, s, http.MethodPatch, "/agents/coder", map[string]any{
+		"backend": "nope",
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("unknown backend: got %d, want 400 — %s", rr.Code, rr.Body.String())
+	}
+}
+
+// ── PATCH /skills/{name} ────────────────────────────────────────────
+
+func TestStoreCRUDSkillPatchPrompt(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreSkill(t, s, "architect")
+	rr := doCRUDRequest(t, s, http.MethodPatch, "/skills/architect", map[string]any{
+		"prompt": "new architecture guidance",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH /skills/architect: got %d — %s", rr.Code, rr.Body.String())
+	}
+	var out storeSkillJSON
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Prompt != "new architecture guidance" {
+		t.Fatalf("prompt: got %q", out.Prompt)
+	}
+}
+
+func TestStoreCRUDSkillPatchEmptyBodyRejected(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreSkill(t, s, "architect")
+	if rr := doCRUDRequest(t, s, http.MethodPatch, "/skills/architect", map[string]any{}); rr.Code != http.StatusBadRequest {
+		t.Fatalf("empty PATCH skill: got %d, want 400", rr.Code)
+	}
+}
+
+func TestStoreCRUDSkillPatchNotFound(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	if rr := doCRUDRequest(t, s, http.MethodPatch, "/skills/missing", map[string]any{
+		"prompt": "x",
+	}); rr.Code != http.StatusNotFound {
+		t.Fatalf("PATCH missing skill: got %d, want 404", rr.Code)
+	}
+}
+
+// ── PATCH /backends/{name} — superset shape ─────────────────────────
+
+func TestStoreCRUDBackendPatchFullShape(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
+		"name": "claude", "command": "/usr/bin/claude",
+		"timeout_seconds": 600, "max_prompt_chars": 12000,
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed: %s", rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodPatch, "/backends/claude", map[string]any{
+		"command": "/opt/claude/bin/claude",
+		"models":  []string{"opus", "sonnet"},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH backend: got %d — %s", rr.Code, rr.Body.String())
+	}
+	var out storeBackendJSON
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Command != "/opt/claude/bin/claude" {
+		t.Fatalf("command: got %q", out.Command)
+	}
+	if len(out.Models) != 2 {
+		t.Fatalf("models: got %v", out.Models)
+	}
+	if out.TimeoutSeconds != 600 {
+		t.Fatalf("timeout_seconds drifted: got %d, want 600", out.TimeoutSeconds)
+	}
+}

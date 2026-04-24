@@ -1255,12 +1255,16 @@ func TestToolImportConfigPropagatesError(t *testing.T) {
 // what the create_agent tool serialises back to the caller, so tests pin both
 // the inputs the writer received and the outputs the tool surfaces.
 type stubAgentWriter struct {
-	gotUpsert     config.AgentDef
-	gotDeleteName string
-	gotCascade    bool
-	canonical     config.AgentDef
-	upsertErr     error
-	deleteErr     error
+	gotUpsert      config.AgentDef
+	gotDeleteName  string
+	gotCascade     bool
+	gotPatchName   string
+	gotPatch       AgentPatch
+	canonical      config.AgentDef
+	patchCanonical config.AgentDef
+	upsertErr      error
+	deleteErr      error
+	patchErr       error
 }
 
 func (s *stubAgentWriter) UpsertAgent(a config.AgentDef) (config.AgentDef, error) {
@@ -1269,6 +1273,15 @@ func (s *stubAgentWriter) UpsertAgent(a config.AgentDef) (config.AgentDef, error
 		return config.AgentDef{}, s.upsertErr
 	}
 	return s.canonical, nil
+}
+
+func (s *stubAgentWriter) UpdateAgentPatch(name string, patch AgentPatch) (config.AgentDef, error) {
+	s.gotPatchName = name
+	s.gotPatch = patch
+	if s.patchErr != nil {
+		return config.AgentDef{}, s.patchErr
+	}
+	return s.patchCanonical, nil
 }
 
 func (s *stubAgentWriter) DeleteAgent(name string, cascade bool) error {
@@ -1485,6 +1498,11 @@ func TestToolDeleteAgentPropagatesConflict(t *testing.T) {
 // values. Tests pin both the inputs the writer observed (e.g. raw name, prompt)
 // and the canonical values the tool surfaces back to the caller.
 type stubSkillWriter struct {
+	gotPatchName        string
+	gotPatch            SkillPatch
+	patchCanonicalName  string
+	patchCanonicalSkill config.SkillDef
+	patchErr            error
 	gotUpsertName  string
 	gotUpsertSkill config.SkillDef
 	gotDeleteName  string
@@ -1501,6 +1519,15 @@ func (s *stubSkillWriter) UpsertSkill(name string, sk config.SkillDef) (string, 
 		return "", config.SkillDef{}, s.upsertErr
 	}
 	return s.canonicalName, s.canonical, nil
+}
+
+func (s *stubSkillWriter) UpdateSkillPatch(name string, patch SkillPatch) (string, config.SkillDef, error) {
+	s.gotPatchName = name
+	s.gotPatch = patch
+	if s.patchErr != nil {
+		return "", config.SkillDef{}, s.patchErr
+	}
+	return s.patchCanonicalName, s.patchCanonicalSkill, nil
 }
 
 func (s *stubSkillWriter) DeleteSkill(name string) error {
@@ -1735,13 +1762,18 @@ func TestToolDeleteSkillPropagatesConflict(t *testing.T) {
 // canned values. Tests pin both the raw inputs the writer observed and the
 // canonical values the tool surfaces back to the caller.
 type stubBackendWriter struct {
-	gotUpsertName    string
-	gotUpsertBackend config.AIBackendConfig
-	gotDeleteName    string
-	canonicalName    string
-	canonical        config.AIBackendConfig
-	upsertErr        error
-	deleteErr        error
+	gotUpsertName        string
+	gotUpsertBackend     config.AIBackendConfig
+	gotDeleteName        string
+	gotPatchName         string
+	gotPatch             BackendPatch
+	canonicalName        string
+	canonical            config.AIBackendConfig
+	patchCanonicalName   string
+	patchCanonicalConfig config.AIBackendConfig
+	upsertErr            error
+	deleteErr            error
+	patchErr             error
 }
 
 func (s *stubBackendWriter) UpsertBackend(name string, b config.AIBackendConfig) (string, config.AIBackendConfig, error) {
@@ -1751,6 +1783,15 @@ func (s *stubBackendWriter) UpsertBackend(name string, b config.AIBackendConfig)
 		return "", config.AIBackendConfig{}, s.upsertErr
 	}
 	return s.canonicalName, s.canonical, nil
+}
+
+func (s *stubBackendWriter) UpdateBackendPatch(name string, patch BackendPatch) (string, config.AIBackendConfig, error) {
+	s.gotPatchName = name
+	s.gotPatch = patch
+	if s.patchErr != nil {
+		return "", config.AIBackendConfig{}, s.patchErr
+	}
+	return s.patchCanonicalName, s.patchCanonicalConfig, nil
 }
 
 func (s *stubBackendWriter) DeleteBackend(name string) error {
@@ -2652,5 +2693,194 @@ func TestToolDeleteBindingForwardsID(t *testing.T) {
 	}
 	if w.gotDeleteID != 9 || w.gotDeleteRepo != "owner/repo" {
 		t.Errorf("unexpected forwarded values: id=%d repo=%q", w.gotDeleteID, w.gotDeleteRepo)
+	}
+}
+
+// ── update_agent / update_skill / update_backend ────────────────────
+
+func TestToolUpdateAgentForwardsPatch(t *testing.T) {
+	t.Parallel()
+	canonical := config.AgentDef{
+		Name: "coder", Backend: "codex", Prompt: "p",
+	}
+	w := &stubAgentWriter{patchCanonical: canonical}
+	deps := Deps{
+		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
+		Queue: &stubQueue{}, Status: stubStatus{},
+		AgentWrite: w, Logger: zerolog.Nop(),
+	}
+	req := mcpgo.CallToolRequest{}
+	allowPRs := true
+	_ = allowPRs
+	req.Params.Arguments = map[string]any{
+		"name":      "coder",
+		"backend":   "codex",
+		"allow_prs": true,
+		"skills":    []any{"architect"},
+	}
+	res, err := toolUpdateAgent(deps)(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("update_agent failed: err=%v body=%s", err, textOf(t, res))
+	}
+	if w.gotPatchName != "coder" {
+		t.Fatalf("name not forwarded: %q", w.gotPatchName)
+	}
+	if w.gotPatch.Backend == nil || *w.gotPatch.Backend != "codex" {
+		t.Fatalf("backend patch not forwarded: %+v", w.gotPatch.Backend)
+	}
+	if w.gotPatch.AllowPRs == nil || *w.gotPatch.AllowPRs != true {
+		t.Fatalf("allow_prs patch not forwarded")
+	}
+	if w.gotPatch.Skills == nil || len(*w.gotPatch.Skills) != 1 || (*w.gotPatch.Skills)[0] != "architect" {
+		t.Fatalf("skills patch not forwarded: %+v", w.gotPatch.Skills)
+	}
+	// Fields not in payload must remain nil (preserve-semantics).
+	if w.gotPatch.Prompt != nil || w.gotPatch.Model != nil {
+		t.Fatalf("unset fields should be nil, got prompt=%v model=%v", w.gotPatch.Prompt, w.gotPatch.Model)
+	}
+}
+
+func TestToolUpdateAgentEmptyPatchRejected(t *testing.T) {
+	t.Parallel()
+	w := &stubAgentWriter{}
+	deps := Deps{
+		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
+		Queue: &stubQueue{}, Status: stubStatus{},
+		AgentWrite: w, Logger: zerolog.Nop(),
+	}
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "coder"}
+	res, err := toolUpdateAgent(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected tool error for empty patch")
+	}
+}
+
+func TestToolUpdateSkillForwardsPatch(t *testing.T) {
+	t.Parallel()
+	w := &stubSkillWriter{
+		patchCanonicalName:  "security",
+		patchCanonicalSkill: config.SkillDef{Prompt: "audit"},
+	}
+	deps := Deps{
+		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
+		Queue: &stubQueue{}, Status: stubStatus{},
+		SkillWrite: w, Logger: zerolog.Nop(),
+	}
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":   "Security",
+		"prompt": "audit",
+	}
+	res, err := toolUpdateSkill(deps)(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("update_skill failed: err=%v body=%s", err, textOf(t, res))
+	}
+	if w.gotPatchName != "Security" {
+		t.Fatalf("name not forwarded: %q", w.gotPatchName)
+	}
+	if w.gotPatch.Prompt == nil || *w.gotPatch.Prompt != "audit" {
+		t.Fatalf("prompt patch not forwarded: %+v", w.gotPatch.Prompt)
+	}
+}
+
+func TestToolUpdateSkillEmptyPatchRejected(t *testing.T) {
+	t.Parallel()
+	w := &stubSkillWriter{}
+	deps := Deps{
+		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
+		Queue: &stubQueue{}, Status: stubStatus{},
+		SkillWrite: w, Logger: zerolog.Nop(),
+	}
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "security"}
+	res, err := toolUpdateSkill(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected tool error for empty patch")
+	}
+}
+
+func TestToolUpdateBackendForwardsPatch(t *testing.T) {
+	t.Parallel()
+	w := &stubBackendWriter{
+		patchCanonicalName:   "claude",
+		patchCanonicalConfig: config.AIBackendConfig{Command: "/bin/claude", TimeoutSeconds: 900},
+	}
+	deps := Deps{
+		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
+		Queue: &stubQueue{}, Status: stubStatus{},
+		BackendWrite: w, Logger: zerolog.Nop(),
+	}
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":            "Claude",
+		"timeout_seconds": float64(900),
+		"models":          []any{"opus", "sonnet"},
+	}
+	res, err := toolUpdateBackend(deps)(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("update_backend failed: err=%v body=%s", err, textOf(t, res))
+	}
+	if w.gotPatchName != "Claude" {
+		t.Fatalf("name not forwarded: %q", w.gotPatchName)
+	}
+	if w.gotPatch.TimeoutSeconds == nil || *w.gotPatch.TimeoutSeconds != 900 {
+		t.Fatalf("timeout_seconds patch not forwarded: %+v", w.gotPatch.TimeoutSeconds)
+	}
+	if w.gotPatch.Models == nil || len(*w.gotPatch.Models) != 2 {
+		t.Fatalf("models patch not forwarded: %+v", w.gotPatch.Models)
+	}
+	if w.gotPatch.Command != nil {
+		t.Fatalf("unset command should be nil")
+	}
+}
+
+func TestToolUpdateBackendNonPositiveRejected(t *testing.T) {
+	t.Parallel()
+	w := &stubBackendWriter{}
+	deps := Deps{
+		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
+		Queue: &stubQueue{}, Status: stubStatus{},
+		BackendWrite: w, Logger: zerolog.Nop(),
+	}
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":            "claude",
+		"timeout_seconds": float64(0),
+	}
+	res, err := toolUpdateBackend(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected tool error for timeout_seconds=0")
+	}
+	if w.gotPatchName != "" {
+		t.Fatalf("writer should not be called on validation failure, got name=%q", w.gotPatchName)
+	}
+}
+
+func TestToolUpdateBackendEmptyPatchRejected(t *testing.T) {
+	t.Parallel()
+	w := &stubBackendWriter{}
+	deps := Deps{
+		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
+		Queue: &stubQueue{}, Status: stubStatus{},
+		BackendWrite: w, Logger: zerolog.Nop(),
+	}
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "claude"}
+	res, err := toolUpdateBackend(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected tool error for empty patch")
 	}
 }

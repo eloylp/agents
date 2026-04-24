@@ -53,7 +53,12 @@ These routes are always mounted and backed by the SQLite database.
 | `GET` | `/{resource}` | List all entries for a resource type (`skills`, `backends`, `repos`). Note: `GET /agents` is the fleet snapshot above, not the CRUD list. |
 | `GET` | `/{resource}/{name}` | Fetch one entry. Repos use two path segments: `/repos/{owner}/{repo}`. |
 | `POST` | `/{resource}` | Create or replace an entry. Resources: `agents`, `skills`, `backends`, `repos`. |
+| `PATCH` | `/{resource}/{name}` | Partial update of an entry. Only fields present in the JSON body are applied; unset fields are preserved. At least one field required. Resources: `agents`, `skills`, `backends`, `repos`. |
 | `DELETE` | `/{resource}/{name}` | Remove an entry. |
+| `POST` | `/repos/{owner}/{repo}/bindings` | Create one binding on a repo. Returns the persisted binding with its generated ID. |
+| `GET` | `/repos/{owner}/{repo}/bindings/{id}` | Fetch one binding by ID. |
+| `PATCH` | `/repos/{owner}/{repo}/bindings/{id}` | Replace all fields of a binding by ID. |
+| `DELETE` | `/repos/{owner}/{repo}/bindings/{id}` | Remove a binding by ID. |
 | `GET` | `/export` | Export full fleet config as YAML. |
 | `POST` | `/import` | Import a YAML config into the SQLite store. |
 
@@ -80,20 +85,27 @@ When the daemon runs behind a reverse proxy with basic auth (e.g. Traefik), the 
 |---|---|
 | `list_agents` | List all agents with backend, model, skills, dispatch wiring. |
 | `get_agent` | Fetch one agent by name. |
-| `create_agent` | Create or update an agent (upsert). |
+| `create_agent` | Create or update an agent (upsert, full replace). |
+| `update_agent` | Partially update an agent by name (only supplied fields are changed). |
 | `delete_agent` | Delete an agent. `cascade=true` also removes repo bindings. |
 | `list_skills` | List all skills with prompt content. |
 | `get_skill` | Fetch one skill by name. |
-| `create_skill` | Create or update a skill. |
+| `create_skill` | Create or update a skill (full replace). |
+| `update_skill` | Partially update a skill by name. |
 | `delete_skill` | Delete a skill. |
 | `list_backends` | List all AI backends with models and health. |
 | `get_backend` | Fetch one backend by name. |
-| `create_backend` | Create or update a backend. |
+| `create_backend` | Create or update a backend (full replace). |
+| `update_backend` | Partially update a backend by name. |
 | `delete_backend` | Delete a backend. |
 | `list_repos` | List all repos with bindings. |
 | `get_repo` | Fetch one repo by name. |
-| `create_repo` | Create or update a repo with bindings. |
+| `create_repo` | Create or update a repo with bindings (full replace of the bindings list). |
 | `delete_repo` | Delete a repo and its bindings. |
+| `create_binding` | Create one binding on a repo; returns the persisted binding with its generated ID. |
+| `get_binding` | Fetch one binding by ID, scoped to a repo. |
+| `update_binding` | Replace all fields of a binding by ID. |
+| `delete_binding` | Delete a binding by ID. |
 
 **Operations:**
 

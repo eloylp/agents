@@ -175,10 +175,10 @@ func (s *Server) buildHandler() http.Handler {
 	// Fleet view (GET) + CRUD (POST) merged on a single path.
 	router.Handle("/agents", withTimeout(http.HandlerFunc(s.handleAgents))).Methods(http.MethodGet, http.MethodPost)
 	router.Handle("/agents/orphans/status", withTimeout(http.HandlerFunc(s.handleAgentsOrphans))).Methods(http.MethodGet)
-	router.Handle("/agents/{name}", withTimeout(http.HandlerFunc(s.handleStoreAgent))).Methods(http.MethodGet, http.MethodDelete)
+	router.Handle("/agents/{name}", withTimeout(http.HandlerFunc(s.handleStoreAgent))).Methods(http.MethodGet, http.MethodPatch, http.MethodDelete)
 
 	router.Handle("/skills", withTimeout(http.HandlerFunc(s.handleStoreSkills))).Methods(http.MethodGet, http.MethodPost)
-	router.Handle("/skills/{name}", withTimeout(http.HandlerFunc(s.handleStoreSkill))).Methods(http.MethodGet, http.MethodDelete)
+	router.Handle("/skills/{name}", withTimeout(http.HandlerFunc(s.handleStoreSkill))).Methods(http.MethodGet, http.MethodPatch, http.MethodDelete)
 
 	router.Handle("/backends", withTimeout(http.HandlerFunc(s.handleStoreBackends))).Methods(http.MethodGet, http.MethodPost)
 	router.Handle("/backends/status", withTimeout(http.HandlerFunc(s.handleBackendsStatus))).Methods(http.MethodGet)

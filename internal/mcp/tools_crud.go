@@ -40,6 +40,66 @@ func toolCreateAgent(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
+// toolUpdateAgent partially updates an agent through the same path as PATCH
+// /agents/{name}. Only fields the caller passes are modified; everything else
+// is preserved. Returns the canonical merged agent. At least one patch field
+// is required (matches the REST handler).
+func toolUpdateAgent(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, err := req.RequireString("name")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		args := req.GetArguments()
+		var patch AgentPatch
+		if v, ok := stringPtrArg(args, "backend"); ok {
+			patch.Backend = v
+		}
+		if v, ok := stringPtrArg(args, "model"); ok {
+			patch.Model = v
+		}
+		if v, ok := stringPtrArg(args, "prompt"); ok {
+			patch.Prompt = v
+		}
+		if v, ok := stringPtrArg(args, "description"); ok {
+			patch.Description = v
+		}
+		if v, ok, errMsg := boolPtrArg(args, "allow_prs"); ok {
+			patch.AllowPRs = v
+		} else if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
+		if v, ok, errMsg := boolPtrArg(args, "allow_dispatch"); ok {
+			patch.AllowDispatch = v
+		} else if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
+		if v, ok, errMsg := stringSlicePtrArg(args, "skills"); ok {
+			patch.Skills = v
+		} else if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
+		if v, ok, errMsg := stringSlicePtrArg(args, "can_dispatch"); ok {
+			patch.CanDispatch = v
+		} else if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
+		if !agentPatchHasField(patch) {
+			return mcpgo.NewToolResultError("at least one field is required"), nil
+		}
+		canonical, uerr := deps.AgentWrite.UpdateAgentPatch(name, patch)
+		if uerr != nil {
+			return mcpgo.NewToolResultErrorFromErr("update agent", uerr), nil
+		}
+		return jsonResult(agentJSON(canonical))
+	}
+}
+
+func agentPatchHasField(p AgentPatch) bool {
+	return p.Backend != nil || p.Model != nil || p.Skills != nil || p.Prompt != nil ||
+		p.AllowPRs != nil || p.AllowDispatch != nil || p.CanDispatch != nil || p.Description != nil
+}
+
 // toolDeleteAgent removes an agent through the same path as DELETE
 // /agents/{name}. cascade=true also drops repo bindings that reference the
 // agent; without it, a referenced agent surfaces a *store.ErrConflict so
@@ -77,6 +137,33 @@ func toolCreateSkill(deps Deps) server.ToolHandlerFunc {
 		canonicalName, canonical, err := deps.SkillWrite.UpsertSkill(name, sk)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("create skill", err), nil
+		}
+		return jsonResult(map[string]any{
+			"name":   canonicalName,
+			"prompt": canonical.Prompt,
+		})
+	}
+}
+
+// toolUpdateSkill partially updates a skill through the same path as PATCH
+// /skills/{name}. Only fields the caller passes are modified.
+func toolUpdateSkill(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, err := req.RequireString("name")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		args := req.GetArguments()
+		var patch SkillPatch
+		if v, ok := stringPtrArg(args, "prompt"); ok {
+			patch.Prompt = v
+		}
+		if patch.Prompt == nil {
+			return mcpgo.NewToolResultError("at least one field is required"), nil
+		}
+		canonicalName, canonical, uerr := deps.SkillWrite.UpdateSkillPatch(name, patch)
+		if uerr != nil {
+			return mcpgo.NewToolResultErrorFromErr("update skill", uerr), nil
 		}
 		return jsonResult(map[string]any{
 			"name":   canonicalName,
@@ -131,6 +218,75 @@ func toolCreateBackend(deps Deps) server.ToolHandlerFunc {
 		}
 		return jsonResult(backendJSON(canonicalName, canonical))
 	}
+}
+
+// toolUpdateBackend partially updates a backend through the same path as
+// PATCH /backends/{name}. Only fields the caller passes are modified. Rejects
+// timeout_seconds/max_prompt_chars <= 0 to match REST handler semantics.
+func toolUpdateBackend(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, err := req.RequireString("name")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		args := req.GetArguments()
+		var patch BackendPatch
+		if v, ok := stringPtrArg(args, "command"); ok {
+			patch.Command = v
+		}
+		if v, ok := stringPtrArg(args, "version"); ok {
+			patch.Version = v
+		}
+		if v, ok := stringPtrArg(args, "health_detail"); ok {
+			patch.HealthDetail = v
+		}
+		if v, ok := stringPtrArg(args, "local_model_url"); ok {
+			patch.LocalModelURL = v
+		}
+		if v, ok := stringPtrArg(args, "redaction_salt_env"); ok {
+			patch.RedactionSaltEnv = v
+		}
+		if v, ok, errMsg := boolPtrArg(args, "healthy"); ok {
+			patch.Healthy = v
+		} else if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
+		if v, ok, errMsg := stringSlicePtrArg(args, "models"); ok {
+			patch.Models = v
+		} else if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
+		if v, ok, errMsg := intPtrArg(args, "timeout_seconds"); ok {
+			if *v <= 0 {
+				return mcpgo.NewToolResultError("timeout_seconds must be positive"), nil
+			}
+			patch.TimeoutSeconds = v
+		} else if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
+		if v, ok, errMsg := intPtrArg(args, "max_prompt_chars"); ok {
+			if *v <= 0 {
+				return mcpgo.NewToolResultError("max_prompt_chars must be positive"), nil
+			}
+			patch.MaxPromptChars = v
+		} else if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
+		if !backendPatchHasField(patch) {
+			return mcpgo.NewToolResultError("at least one field is required"), nil
+		}
+		canonicalName, canonical, uerr := deps.BackendWrite.UpdateBackendPatch(name, patch)
+		if uerr != nil {
+			return mcpgo.NewToolResultErrorFromErr("update backend", uerr), nil
+		}
+		return jsonResult(backendJSON(canonicalName, canonical))
+	}
+}
+
+func backendPatchHasField(p BackendPatch) bool {
+	return p.Command != nil || p.Version != nil || p.Models != nil || p.Healthy != nil ||
+		p.HealthDetail != nil || p.LocalModelURL != nil || p.TimeoutSeconds != nil ||
+		p.MaxPromptChars != nil || p.RedactionSaltEnv != nil
 }
 
 // toolDeleteBackend removes a backend through the same path as DELETE
@@ -411,6 +567,85 @@ func parseBindings(v any) ([]config.Binding, string) {
 		out = append(out, b)
 	}
 	return out, ""
+}
+
+// stringPtrArg reads an optional string field. Returns (value, true) when the
+// key is present, (nil, false) when it is absent or null. Non-string values
+// are accepted as their string form via mcpgo.GetString semantics; we only
+// want the "present vs missing" distinction here.
+func stringPtrArg(args map[string]any, key string) (*string, bool) {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return nil, false
+	}
+	s, ok := v.(string)
+	if !ok {
+		return nil, false
+	}
+	return &s, true
+}
+
+// boolPtrArg reads an optional boolean field. Returns (value, true, "") when
+// the key is present and well-typed, (nil, false, "") when absent, and
+// (nil, false, errMsg) when present but the wrong type so the caller can
+// reject the payload instead of silently treating it as absent.
+func boolPtrArg(args map[string]any, key string) (*bool, bool, string) {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return nil, false, ""
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return nil, false, fmt.Sprintf("%s must be a boolean", key)
+	}
+	return &b, true, ""
+}
+
+// intPtrArg reads an optional integer field. JSON numbers land as float64 on
+// the any interface, so we accept any numeric that is integer-valued.
+func intPtrArg(args map[string]any, key string) (*int, bool, string) {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return nil, false, ""
+	}
+	switch n := v.(type) {
+	case float64:
+		if n != float64(int(n)) {
+			return nil, false, fmt.Sprintf("%s must be an integer", key)
+		}
+		i := int(n)
+		return &i, true, ""
+	case int:
+		return &n, true, ""
+	case int64:
+		i := int(n)
+		return &i, true, ""
+	default:
+		return nil, false, fmt.Sprintf("%s must be a number", key)
+	}
+}
+
+// stringSlicePtrArg reads an optional []string field. Returns (&slice, true,
+// "") when the key is present and well-typed, including an explicit empty
+// array (so callers can clear the list). Missing keys return (nil, false, "").
+func stringSlicePtrArg(args map[string]any, key string) (*[]string, bool, string) {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return nil, false, ""
+	}
+	raw, ok := v.([]any)
+	if !ok {
+		return nil, false, fmt.Sprintf("%s must be an array of strings", key)
+	}
+	out := make([]string, 0, len(raw))
+	for i, item := range raw {
+		s, ok := item.(string)
+		if !ok {
+			return nil, false, fmt.Sprintf("%s[%d] must be a string", key, i)
+		}
+		out = append(out, s)
+	}
+	return &out, true, ""
 }
 
 // stringSliceFromAny decodes a JSON array of strings for the given field

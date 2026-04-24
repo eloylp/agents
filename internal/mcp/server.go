@@ -112,40 +112,84 @@ type ConfigImporter interface {
 	ImportYAML(body []byte, mode string) (map[string]int, error)
 }
 
+// AgentPatch is the partial-update shape consumed by AgentWriter.UpdateAgent.
+// Every field is a pointer so MCP tools (and REST clients) can distinguish
+// "don't touch" (nil) from "set to zero value" (non-nil pointing to the zero
+// value). Mirrors the JSON shape accepted at PATCH /agents/{name}.
+type AgentPatch struct {
+	Backend       *string
+	Model         *string
+	Skills        *[]string
+	Prompt        *string
+	AllowPRs      *bool
+	AllowDispatch *bool
+	CanDispatch   *[]string
+	Description   *string
+}
+
 // AgentWriter writes a single agent definition into the store and removes
 // existing ones. Returns the canonical (normalized) form the store persisted
 // so callers can show the same shape REST clients see in the POST /agents
-// response.
+// response. UpdateAgent applies a partial patch (nil fields untouched) and
+// returns *store.ErrNotFound when the agent does not exist.
 //
 // Implementations must hold the store mutex while writing and reload cron
 // schedules afterwards so MCP writes stay consistent with the REST path.
 type AgentWriter interface {
 	UpsertAgent(a config.AgentDef) (config.AgentDef, error)
+	UpdateAgentPatch(name string, patch AgentPatch) (config.AgentDef, error)
 	DeleteAgent(name string, cascade bool) error
+}
+
+// SkillPatch is the partial-update shape consumed by SkillWriter.UpdateSkill.
+// Mirrors the JSON shape accepted at PATCH /skills/{name}. A nil Prompt means
+// "don't touch".
+type SkillPatch struct {
+	Prompt *string
 }
 
 // SkillWriter writes a single skill into the store and removes existing ones.
 // Upsert returns the canonical (normalized) name and SkillDef that were
 // persisted so callers can surface the same shape REST clients see in the
-// POST /skills response — lowercase name, trimmed prompt.
+// POST /skills response — lowercase name, trimmed prompt. UpdateSkill applies
+// a partial patch and returns *store.ErrNotFound if the skill is missing.
 //
 // Implementations must hold the store mutex while writing and reload cron
 // schedules afterwards so MCP writes stay consistent with the REST path.
 type SkillWriter interface {
 	UpsertSkill(name string, sk config.SkillDef) (string, config.SkillDef, error)
+	UpdateSkillPatch(name string, patch SkillPatch) (string, config.SkillDef, error)
 	DeleteSkill(name string) error
+}
+
+// BackendPatch is the partial-update shape consumed by
+// BackendWriter.UpdateBackend. Mirrors the JSON shape accepted at PATCH
+// /backends/{name}. Every field is a pointer so clients can bump a single
+// setting (e.g. timeout_seconds) without resubmitting the rest.
+type BackendPatch struct {
+	Command          *string
+	Version          *string
+	Models           *[]string
+	Healthy          *bool
+	HealthDetail     *string
+	LocalModelURL    *string
+	TimeoutSeconds   *int
+	MaxPromptChars   *int
+	RedactionSaltEnv *string
 }
 
 // BackendWriter writes a single AI backend definition into the store and
 // removes existing ones. Upsert returns the canonical (normalized) name and
 // AIBackendConfig that were persisted so callers can surface the same shape
 // REST clients see in the POST /backends response — lowercase name, trimmed
-// command, defaults applied.
+// command, defaults applied. UpdateBackend applies a partial patch and
+// returns *store.ErrNotFound if the backend is missing.
 //
 // Implementations must hold the store mutex while writing and reload cron
 // schedules afterwards so MCP writes stay consistent with the REST path.
 type BackendWriter interface {
 	UpsertBackend(name string, b config.AIBackendConfig) (string, config.AIBackendConfig, error)
+	UpdateBackendPatch(name string, patch BackendPatch) (string, config.AIBackendConfig, error)
 	DeleteBackend(name string) error
 }
 
