@@ -814,33 +814,22 @@ func (c *Config) validateAgents() error {
 //   - can_dispatch must not include the agent itself
 //   - agents referenced in any can_dispatch list must have a description
 func (c *Config) validateDispatchWiring() error {
-	// Build set of all agent names for O(1) lookup.
-	agentNames := make(map[string]struct{}, len(c.Agents))
+	agentByName := make(map[string]AgentDef, len(c.Agents))
 	for _, a := range c.Agents {
-		agentNames[a.Name] = struct{}{}
-	}
-	// Build set of agents that appear in any can_dispatch list — these require
-	// a description so the roster is informative.
-	dispatchTargets := make(map[string]struct{})
-	for _, a := range c.Agents {
-		for _, t := range a.CanDispatch {
-			dispatchTargets[t] = struct{}{}
-		}
+		agentByName[a.Name] = a
 	}
 	for _, a := range c.Agents {
 		for _, t := range a.CanDispatch {
-			if _, ok := agentNames[t]; !ok {
+			target, ok := agentByName[t]
+			if !ok {
 				return fmt.Errorf("config: agent %q: can_dispatch references unknown agent %q", a.Name, t)
 			}
 			if t == a.Name {
 				return fmt.Errorf("config: agent %q: can_dispatch must not include itself", a.Name)
 			}
-		}
-	}
-	// Verify dispatch targets have descriptions.
-	for _, a := range c.Agents {
-		if _, isTarget := dispatchTargets[a.Name]; isTarget && a.Description == "" {
-			return fmt.Errorf("config: agent %q is in a can_dispatch list but has no description (description is required for dispatch targets)", a.Name)
+			if target.Description == "" {
+				return fmt.Errorf("config: agent %q is in a can_dispatch list but has no description (description is required for dispatch targets)", t)
+			}
 		}
 	}
 	return nil
