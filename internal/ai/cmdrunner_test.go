@@ -835,3 +835,38 @@ func TestExtractToolResultText(t *testing.T) {
 		})
 	}
 }
+
+func TestHasBackendPrefix(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		beName  string
+		command string
+		prefix  string
+		want    bool
+	}{
+		{name: "exact name match", beName: "claude", command: "", prefix: "claude", want: true},
+		{name: "name with spaces", beName: "  claude-prod  ", command: "", prefix: "claude", want: true},
+		{name: "name uppercase", beName: "Claude", command: "", prefix: "claude", want: true},
+		{name: "command basename match", beName: "", command: "/usr/local/bin/claude", prefix: "claude", want: true},
+		{name: "command basename uppercase", beName: "", command: "/usr/bin/Claude", prefix: "claude", want: true},
+		{name: "command with spaces", beName: "", command: "  /usr/bin/claude  ", prefix: "claude", want: true},
+		{name: "no match", beName: "openai", command: "/usr/bin/gpt", prefix: "claude", want: false},
+		{name: "codex via name", beName: "codex-fast", command: "", prefix: "codex", want: true},
+		{name: "codex via command", beName: "", command: "/opt/bin/codex", prefix: "codex", want: true},
+		{name: "empty name and command", beName: "", command: "", prefix: "claude", want: false},
+		{name: "substring only — not a prefix", beName: "anthropic-claude", command: "/usr/bin/gpt", prefix: "claude", want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := &CommandRunner{backendName: tc.beName, command: tc.command}
+			if got := r.hasBackendPrefix(tc.prefix); got != tc.want {
+				t.Errorf("hasBackendPrefix(%q) with name=%q command=%q = %v, want %v",
+					tc.prefix, tc.beName, tc.command, got, tc.want)
+			}
+		})
+	}
+}
