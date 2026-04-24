@@ -5,8 +5,8 @@
 // and then discover the available tools automatically. This is the v3
 // foundation for conversational fleet management — tracked in issue #227.
 //
-// The current tool inventory covers fleet reads, on-demand runs, and the
-// read-only observability surface:
+// The current tool inventory covers fleet reads, on-demand runs, the
+// read-only observability surface, and read-only config export:
 //
 //   - list_agents, list_skills, list_backends, list_repos — fleet lists
 //   - get_agent, get_skill, get_backend, get_repo         — per-item reads
@@ -14,9 +14,10 @@
 //   - trigger_agent                                       — on-demand run
 //   - list_events, list_traces, get_trace, get_trace_steps — agent activity
 //   - get_graph, get_dispatches, get_memory               — dispatch + memory
+//   - get_config, export_config                           — config snapshots
 //
-// CRUD writes (create/delete) and config import/export tools are tracked as
-// follow-up work on #227.
+// CRUD writes (create/delete) and config import are tracked as follow-up work
+// on #227.
 package mcp
 
 import (
@@ -85,14 +86,24 @@ type MemoryReader interface {
 	ReadMemory(agent, repo string) (content string, mtime time.Time, found bool, err error)
 }
 
+// ConfigReader returns the two read-only config snapshots the MCP tools
+// expose: the redacted JSON used by get_config and the YAML fragment served by
+// export_config. Both surfaces produce bytes matching the REST /config and
+// /export responses so clients can rely on a single wire contract.
+type ConfigReader interface {
+	ConfigJSON() ([]byte, error)
+	ExportYAML() ([]byte, error)
+}
+
 // Deps bundles the dependencies the MCP server needs. Each tool handler
 // depends on a small subset of this struct; bundling them keeps the
 // registration site in tools.go short.
 //
 // Config, Queue, Status, and Logger are always required. Observe,
-// DispatchStats, and Memory are optional: the observability tools are only
-// registered when the corresponding dependency is supplied, so tests can
-// exercise the core fleet surface without wiring the full stack.
+// DispatchStats, Memory, and ConfigBytes are optional: the observability and
+// config tools are only registered when the corresponding dependency is
+// supplied, so tests can exercise the core fleet surface without wiring the
+// full stack.
 type Deps struct {
 	Config        ConfigProvider
 	Queue         EventQueue
@@ -100,6 +111,7 @@ type Deps struct {
 	Observe       ObserveStore
 	DispatchStats DispatchStatsSource
 	Memory        MemoryReader
+	ConfigBytes   ConfigReader
 	Logger        zerolog.Logger
 }
 
@@ -150,5 +162,7 @@ single agent, skill, backend, repo, trace, or memory record.
 get_status returns daemon health. trigger_agent fires an on-demand run.
 Observability tools (list_events, list_traces, get_trace,
 get_trace_steps, get_graph, get_dispatches, get_memory) expose the same
-data the web dashboard shows. This server is the v3 foundation;
-additional CRUD writes and config import/export will land in follow-ups.`
+data the web dashboard shows. Config tools (get_config, export_config)
+return the redacted effective config and a YAML fragment of the
+CRUD-mutable sections. This server is the v3 foundation;
+additional CRUD writes and config import will land in follow-ups.`

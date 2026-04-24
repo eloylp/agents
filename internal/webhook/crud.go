@@ -779,10 +779,25 @@ type exportDaemonYAML struct {
 // daemon.ai_backends). The API key is required because backends may contain
 // secret env values.
 func (s *Server) handleStoreExport(w http.ResponseWriter, _ *http.Request) {
+	b, err := s.ExportYAML()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-yaml")
+	w.Header().Set("Content-Disposition", `attachment; filename="config-export.yaml"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(b)
+}
+
+// ExportYAML returns the CRUD-mutable sections of the store as a YAML fragment
+// matching the GET /export response body. Exposed so non-HTTP surfaces (e.g.
+// the MCP export_config tool) can serve the same payload the REST endpoint
+// returns without going through the router.
+func (s *Server) ExportYAML() ([]byte, error) {
 	agents, repos, skills, backends, err := store.ReadSnapshot(s.db)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("read snapshot: %v", err), http.StatusInternalServerError)
-		return
+		return nil, fmt.Errorf("read snapshot: %w", err)
 	}
 	out := exportYAML{
 		Skills: skills,
@@ -794,13 +809,9 @@ func (s *Server) handleStoreExport(w http.ResponseWriter, _ *http.Request) {
 	}
 	b, err := yaml.Marshal(out)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("marshal yaml: %v", err), http.StatusInternalServerError)
-		return
+		return nil, fmt.Errorf("marshal yaml: %w", err)
 	}
-	w.Header().Set("Content-Type", "application/x-yaml")
-	w.Header().Set("Content-Disposition", `attachment; filename="config-export.yaml"`)
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(b)
+	return b, nil
 }
 
 // handleStoreImport serves POST /api/store/import — accepts a YAML body in
