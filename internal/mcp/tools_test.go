@@ -367,14 +367,21 @@ func TestToolListRepos(t *testing.T) {
 	if !ok || len(bindings) != 2 {
 		t.Fatalf("owner/one should have 2 bindings, got %+v", one["bindings"])
 	}
-	// Label binding carries labels, not cron; cron binding carries cron, not labels.
+	// All trigger fields are always included (non-sparse shape) — empty ones
+	// just carry empty values. Consumers rely on a stable field set.
 	labelBinding := bindings[0].(map[string]any)
 	cronBinding := bindings[1].(map[string]any)
-	if _, hasCron := labelBinding["cron"]; hasCron {
-		t.Errorf("label binding should not include cron field: %+v", labelBinding)
+	if got, _ := labelBinding["labels"].([]any); len(got) == 0 {
+		t.Errorf("label binding should carry labels: %+v", labelBinding)
 	}
-	if _, hasLabels := cronBinding["labels"]; hasLabels {
-		t.Errorf("cron binding should not include labels field: %+v", cronBinding)
+	if labelBinding["cron"] != "" {
+		t.Errorf("label binding cron should be empty string: %+v", labelBinding)
+	}
+	if cronBinding["cron"] != "0 * * * *" {
+		t.Errorf("cron binding should carry cron: %+v", cronBinding)
+	}
+	if got, _ := cronBinding["labels"].([]any); len(got) != 0 {
+		t.Errorf("cron binding labels should be empty: %+v", cronBinding)
 	}
 }
 

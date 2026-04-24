@@ -133,12 +133,15 @@ type storeRepoJSON struct {
 func repoToStoreJSON(r config.RepoDef) storeRepoJSON {
 	bindings := make([]storeBindingJSON, len(r.Use))
 	for i, b := range r.Use {
+		// Always emit the effective enabled state (default true when nil)
+		// so consumers see a stable bool shape.
+		enabled := b.IsEnabled()
 		bindings[i] = storeBindingJSON{
 			Agent:   b.Agent,
 			Labels:  b.Labels,
 			Events:  b.Events,
 			Cron:    b.Cron,
-			Enabled: b.Enabled,
+			Enabled: &enabled,
 		}
 	}
 	return storeRepoJSON{Name: r.Name, Enabled: r.Enabled, Bindings: bindings}

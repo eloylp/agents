@@ -495,13 +495,13 @@ func TestHandleAPIConfigRepoBindingDefaultEnabled(t *testing.T) {
 
 	var resp struct {
 		Repos []struct {
-			Name    string `json:"name"`
-			Enabled bool   `json:"enabled"`
-			Use     []struct {
+			Name     string `json:"name"`
+			Enabled  bool   `json:"enabled"`
+			Bindings []struct {
 				Agent   string   `json:"agent"`
 				Labels  []string `json:"labels"`
 				Enabled bool     `json:"enabled"`
-			} `json:"use"`
+			} `json:"bindings"`
 		} `json:"repos"`
 	}
 	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
@@ -517,10 +517,10 @@ func TestHandleAPIConfigRepoBindingDefaultEnabled(t *testing.T) {
 	if !repo.Enabled {
 		t.Error("repos[0].enabled: want true, got false")
 	}
-	if len(repo.Use) != 1 {
-		t.Fatalf("repos[0].use: want 1 binding, got %d", len(repo.Use))
+	if len(repo.Bindings) != 1 {
+		t.Fatalf("repos[0].bindings: want 1 binding, got %d", len(repo.Bindings))
 	}
-	b := repo.Use[0]
+	b := repo.Bindings[0]
 	if b.Agent != "worker" {
 		t.Errorf("binding.agent: want %q, got %q", "worker", b.Agent)
 	}
@@ -533,7 +533,7 @@ func TestHandleAPIConfigRepoBindingDefaultEnabled(t *testing.T) {
 	}
 
 	// Verify raw JSON uses snake_case keys, not PascalCase from YAML tags.
-	for _, badKey := range []string{`"Name"`, `"Enabled"`, `"Use"`, `"Agent"`, `"Labels"`} {
+	for _, badKey := range []string{`"Name"`, `"Enabled"`, `"Bindings"`, `"Use"`, `"Agent"`, `"Labels"`} {
 		if strings.Contains(raw, badKey) {
 			t.Errorf("response must not contain PascalCase key %s; got body: %s", badKey, raw)
 		}

@@ -388,21 +388,16 @@ func backendJSON(name string, b config.AIBackendConfig) map[string]any {
 }
 
 // bindingJSON renders one repo->agent binding in the JSON shape used by
-// GET /repos. Only the trigger field relevant to the binding is included.
+// GET /repos. All trigger fields are included so the shape stays stable
+// for consumers; unused triggers appear as empty values.
 func bindingJSON(b config.Binding) map[string]any {
-	out := map[string]any{
+	return map[string]any{
 		"agent":   b.Agent,
+		"labels":  nilSafe(b.Labels),
+		"events":  nilSafe(b.Events),
+		"cron":    b.Cron,
 		"enabled": b.IsEnabled(),
 	}
-	switch {
-	case b.IsCron():
-		out["cron"] = b.Cron
-	case b.IsLabel():
-		out["labels"] = nilSafe(b.Labels)
-	case len(b.Events) > 0:
-		out["events"] = nilSafe(b.Events)
-	}
-	return out
 }
 
 // jsonResult encodes v as indented JSON and wraps it in a text CallToolResult.

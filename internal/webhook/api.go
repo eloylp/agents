@@ -172,9 +172,9 @@ type apiBindingConfigJSON struct {
 
 // apiRepoConfigJSON is the wire shape for one repo in /api/config.
 type apiRepoConfigJSON struct {
-	Name    string                 `json:"name"`
-	Enabled bool                   `json:"enabled"`
-	Use     []apiBindingConfigJSON `json:"use,omitempty"`
+	Name     string                 `json:"name"`
+	Enabled  bool                   `json:"enabled"`
+	Bindings []apiBindingConfigJSON `json:"bindings,omitempty"`
 }
 
 type apiHTTPConfigJSON struct {
@@ -221,8 +221,7 @@ type apiProxyUpstreamJSON struct {
 }
 
 type apiSkillJSON struct {
-	Prompt     string `json:"prompt,omitempty"`
-	PromptFile string `json:"prompt_file,omitempty"`
+	Prompt string `json:"prompt,omitempty"`
 }
 
 type apiAgentConfigJSON struct {
@@ -231,7 +230,6 @@ type apiAgentConfigJSON struct {
 	Model         string   `json:"model,omitempty"`
 	Skills        []string `json:"skills,omitempty"`
 	Prompt        string   `json:"prompt,omitempty"`
-	PromptFile    string   `json:"prompt_file,omitempty"`
 	Description   string   `json:"description,omitempty"`
 	AllowPRs      bool     `json:"allow_prs"`
 	AllowDispatch bool     `json:"allow_dispatch"`
@@ -306,10 +304,7 @@ func (s *Server) ConfigJSON() ([]byte, error) {
 
 	skills := make(map[string]apiSkillJSON, len(cfg.Skills))
 	for name, skill := range cfg.Skills {
-		skills[name] = apiSkillJSON{
-			Prompt:     skill.Prompt,
-			PromptFile: skill.PromptFile,
-		}
+		skills[name] = apiSkillJSON{Prompt: skill.Prompt}
 	}
 
 	agents := make([]apiAgentConfigJSON, 0, len(cfg.Agents))
@@ -320,7 +315,6 @@ func (s *Server) ConfigJSON() ([]byte, error) {
 			Model:         a.Model,
 			Skills:        a.Skills,
 			Prompt:        a.Prompt,
-			PromptFile:    a.PromptFile,
 			Description:   a.Description,
 			AllowPRs:      a.AllowPRs,
 			AllowDispatch: a.AllowDispatch,
@@ -341,9 +335,9 @@ func (s *Server) ConfigJSON() ([]byte, error) {
 			})
 		}
 		repos = append(repos, apiRepoConfigJSON{
-			Name:    r.Name,
-			Enabled: r.Enabled,
-			Use:     bindings,
+			Name:     r.Name,
+			Enabled:  r.Enabled,
+			Bindings: bindings,
 		})
 	}
 
