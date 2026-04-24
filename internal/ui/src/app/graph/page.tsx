@@ -10,11 +10,19 @@ import {
   type Node,
   type Edge,
   type NodeProps,
+  type Connection,
   Handle,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import dagre from 'dagre'
 import Card from '@/components/Card'
+import {
+  addCanDispatch,
+  enableAllowDispatch,
+  removeCanDispatch,
+  validateConnection,
+  type StoreAgent,
+} from '@/lib/dispatch-wiring'
 
 interface DispatchRecord {
   at: string
@@ -121,6 +129,10 @@ export default function GraphPage() {
   const [selectedNode, setSelectedNode] = useState<AgentInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [repoFilter, setRepoFilter] = useRepoFilter()
+  const [editMode, setEditMode] = useState(false)
+  const [pendingEdgeDelete, setPendingEdgeDelete] = useState<{ from: string; to: string } | null>(null)
+  const [wiringError, setWiringError] = useState('')
+  const [wiringBusy, setWiringBusy] = useState(false)
 
   const loadedOnce = useRef(false)
   const load = useCallback(() => {
@@ -237,17 +249,104 @@ export default function GraphPage() {
 
   const onEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
     const d = edge.data as { from: string; to: string; isActive: boolean; count: number; dispatches: DispatchRecord[] }
+    if (editMode) {
+      setPendingEdgeDelete({ from: d.from, to: d.to })
+      setSelectedEdge(null)
+      setSelectedNode(null)
+      return
+    }
     setSelectedEdge(d)
     setSelectedNode(null)
-  }, [])
+  }, [editMode])
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
+    // In edit mode, clicks on nodes initiate drag-connect via React Flow handles;
+    // suppress the details modal so the focus stays on wiring.
+    if (editMode) return
     const agent = agents.find(a => a.name === node.id)
     if (agent) {
       setSelectedNode(agent)
       setSelectedEdge(null)
     }
+  }, [agents, editMode])
+
+  const fetchStoreAgent = useCallback(async (name: string): Promise<StoreAgent> => {
+    const res = await fetch(`/agents/${encodeURIComponent(name)}`)
+    if (!res.ok) throw new Error(`fetch ${name}: ${res.status}`)
+    const data = await res.json() as Partial<StoreAgent>
+    return {
+      name: data.name ?? name,
+      backend: data.backend ?? '',
+      model: data.model ?? '',
+      skills: data.skills ?? [],
+      prompt: data.prompt ?? '',
+      allow_prs: data.allow_prs ?? false,
+      allow_dispatch: data.allow_dispatch ?? false,
+      can_dispatch: data.can_dispatch ?? [],
+      description: data.description ?? '',
+    }
+  }, [])
+
+  const postStoreAgent = useCallback(async (a: StoreAgent): Promise<void> => {
+    const res = await fetch('/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(a),
+    })
+    if (!res.ok) {
+      const msg = await res.text()
+      throw new Error(msg || `save ${a.name} failed (${res.status})`)
+    }
+  }, [])
+
+  const isValidConnection = useCallback((c: Connection | Edge) => {
+    if (!c.source || !c.target) return false
+    const src = agents.find(a => a.name === c.source)
+    const existing = src?.can_dispatch ?? []
+    return validateConnection(c.source, c.target, existing).ok
   }, [agents])
+
+  const onConnect = useCallback(async (c: Connection) => {
+    if (!c.source || !c.target || wiringBusy) return
+    const src = agents.find(a => a.name === c.source)
+    const existing = src?.can_dispatch ?? []
+    const check = validateConnection(c.source, c.target, existing)
+    if (!check.ok) {
+      setWiringError(check.reason ?? 'invalid connection')
+      return
+    }
+    setWiringError('')
+    setWiringBusy(true)
+    try {
+      const source = await fetchStoreAgent(c.source)
+      await postStoreAgent(addCanDispatch(source, c.target))
+      const target = await fetchStoreAgent(c.target)
+      if (!target.allow_dispatch) {
+        await postStoreAgent(enableAllowDispatch(target))
+      }
+      load()
+    } catch (e) {
+      setWiringError(String(e))
+    } finally {
+      setWiringBusy(false)
+    }
+  }, [agents, fetchStoreAgent, postStoreAgent, load, wiringBusy])
+
+  const removeEdge = useCallback(async (from: string, to: string) => {
+    if (wiringBusy) return
+    setWiringError('')
+    setWiringBusy(true)
+    try {
+      const source = await fetchStoreAgent(from)
+      await postStoreAgent(removeCanDispatch(source, to))
+      setPendingEdgeDelete(null)
+      load()
+    } catch (e) {
+      setWiringError(String(e))
+    } finally {
+      setWiringBusy(false)
+    }
+  }, [fetchStoreAgent, postStoreAgent, load, wiringBusy])
 
   return (
     <div>
@@ -260,11 +359,31 @@ export default function GraphPage() {
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <RepoFilter selected={repoFilter} onChange={setRepoFilter} />
+          <button
+            onClick={() => { setEditMode(m => !m); setWiringError(''); setSelectedEdge(null); setSelectedNode(null); }}
+            style={{
+              background: editMode ? 'var(--btn-primary-bg)' : 'var(--bg-card)',
+              border: `1px solid ${editMode ? 'var(--btn-primary-border)' : 'var(--border)'}`,
+              color: editMode ? '#fff' : 'var(--accent)',
+              padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500,
+            }}
+            aria-pressed={editMode}
+          >
+            {editMode ? 'Editing wiring' : 'Edit wiring'}
+          </button>
           <button onClick={load} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--accent)', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500 }}>
             Refresh
           </button>
         </div>
       </div>
+
+      {editMode && (
+        <div style={{ marginBottom: '1rem', padding: '8px 12px', background: 'var(--accent-bg)', border: '1px solid var(--btn-primary-border)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--text)' }}>
+          Drag from one agent to another to wire a dispatch edge. Click an edge to remove it.
+          {wiringBusy && <span style={{ marginLeft: '0.5rem', color: 'var(--text-muted)' }}>Saving…</span>}
+          {wiringError && <span style={{ marginLeft: '0.5rem', color: 'var(--text-danger)' }}>{wiringError}</span>}
+        </div>
+      )}
 
       {loading && <p style={{ color: 'var(--text-muted)' }}>Loading...</p>}
 
@@ -309,6 +428,54 @@ export default function GraphPage() {
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal for edge removal (edit mode) */}
+      {pendingEdgeDelete && (
+        <div
+          onClick={() => !wiringBusy && setPendingEdgeDelete(null)}
+          style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            background: 'var(--bg-modal-overlay)', zIndex: 1000,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <div onClick={e => e.stopPropagation()} style={{
+            background: 'var(--bg-card)', borderRadius: '12px', padding: '1.5rem',
+            maxWidth: '420px', width: '90%',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.4)', border: '1px solid var(--border)',
+          }}>
+            <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-heading)', marginBottom: '0.75rem' }}>
+              Remove dispatch wiring
+            </h2>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1rem' }}>
+              Remove <strong style={{ color: 'var(--text)' }}>{pendingEdgeDelete.to}</strong> from{' '}
+              <strong style={{ color: 'var(--text)' }}>{pendingEdgeDelete.from}</strong>&rsquo;s{' '}
+              <code>can_dispatch</code>? Other agents may still dispatch to{' '}
+              <strong style={{ color: 'var(--text)' }}>{pendingEdgeDelete.to}</strong>; its{' '}
+              <code>allow_dispatch</code> setting is not changed.
+            </p>
+            {wiringError && (
+              <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>{wiringError}</p>
+            )}
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setPendingEdgeDelete(null)}
+                disabled={wiringBusy}
+                style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', cursor: wiringBusy ? 'wait' : 'pointer', fontSize: '0.875rem', color: 'var(--text-muted)' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => removeEdge(pendingEdgeDelete.from, pendingEdgeDelete.to)}
+                disabled={wiringBusy}
+                style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', color: 'var(--text-danger)', cursor: wiringBusy ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+              >
+                {wiringBusy ? 'Removing…' : 'Remove dispatch wiring'}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -376,10 +543,12 @@ export default function GraphPage() {
                 nodeTypes={nodeTypes}
                 onEdgeClick={onEdgeClick}
                 onNodeClick={onNodeClick}
+                onConnect={onConnect}
+                isValidConnection={isValidConnection}
                 fitView
                 proOptions={{ hideAttribution: true }}
                 nodesDraggable={true}
-                nodesConnectable={false}
+                nodesConnectable={editMode}
                 elementsSelectable={true}
                 edgesFocusable={true}
                 minZoom={0.3}
