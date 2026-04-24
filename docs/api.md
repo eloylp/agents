@@ -63,22 +63,14 @@ Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL c
 
 The daemon exposes a [Model Context Protocol](https://modelcontextprotocol.io) server at `/mcp` using the Streamable HTTP transport. MCP-capable clients (Claude Code, Cursor, Cline) register the endpoint and discover the available tools automatically.
 
-Register from Claude Code (add to `~/.claude.json` or via `claude mcp add`):
+Register from Claude Code:
 
-```json
-{
-  "mcpServers": {
-    "agents": {
-      "url": "https://agents.example.com/mcp",
-      "headers": {
-        "Authorization": "Basic <base64 of user:password>"
-      }
-    }
-  }
-}
+```bash
+claude mcp add -t http -s user agents-fleet https://agents.example.com/mcp \
+  -H "Authorization: Basic $(echo -n 'user:password' | base64)"
 ```
 
-When the daemon runs behind a reverse proxy with basic auth (e.g. Traefik), include the `Authorization` header so MCP requests pass through. Generate the base64 value with: `echo -n 'user:password' | base64`.
+When the daemon runs behind a reverse proxy with basic auth (e.g. Traefik), the `-H` flag passes the credentials so MCP requests authenticate automatically.
 
 ### Available tools
 
