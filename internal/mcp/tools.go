@@ -362,6 +362,7 @@ func agentJSON(a config.AgentDef) map[string]any {
 		"backend":        a.Backend,
 		"model":          a.Model,
 		"skills":         nilSafe(a.Skills),
+		"prompt":         a.Prompt,
 		"description":    a.Description,
 		"allow_prs":      a.AllowPRs,
 		"allow_dispatch": a.AllowDispatch,

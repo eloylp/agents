@@ -221,8 +221,8 @@ type apiProxyUpstreamJSON struct {
 }
 
 type apiSkillJSON struct {
+	Prompt     string `json:"prompt,omitempty"`
 	PromptFile string `json:"prompt_file,omitempty"`
-	// Prompt body is intentionally omitted: it can be very long.
 }
 
 type apiAgentConfigJSON struct {
@@ -230,6 +230,7 @@ type apiAgentConfigJSON struct {
 	Backend       string   `json:"backend,omitempty"`
 	Model         string   `json:"model,omitempty"`
 	Skills        []string `json:"skills,omitempty"`
+	Prompt        string   `json:"prompt,omitempty"`
 	PromptFile    string   `json:"prompt_file,omitempty"`
 	Description   string   `json:"description,omitempty"`
 	AllowPRs      bool     `json:"allow_prs"`
@@ -305,7 +306,10 @@ func (s *Server) ConfigJSON() ([]byte, error) {
 
 	skills := make(map[string]apiSkillJSON, len(cfg.Skills))
 	for name, skill := range cfg.Skills {
-		skills[name] = apiSkillJSON{PromptFile: skill.PromptFile}
+		skills[name] = apiSkillJSON{
+			Prompt:     skill.Prompt,
+			PromptFile: skill.PromptFile,
+		}
 	}
 
 	agents := make([]apiAgentConfigJSON, 0, len(cfg.Agents))
@@ -315,6 +319,7 @@ func (s *Server) ConfigJSON() ([]byte, error) {
 			Backend:       a.Backend,
 			Model:         a.Model,
 			Skills:        a.Skills,
+			Prompt:        a.Prompt,
 			PromptFile:    a.PromptFile,
 			Description:   a.Description,
 			AllowPRs:      a.AllowPRs,
