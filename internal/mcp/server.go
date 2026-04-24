@@ -26,6 +26,7 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"time"
 
@@ -171,6 +172,7 @@ type RepoWriter interface {
 // corresponding dependency is supplied, so tests can exercise the core fleet
 // surface without wiring the full stack.
 type Deps struct {
+	DB            *sql.DB
 	Config        ConfigProvider
 	Queue         EventQueue
 	Status        StatusSource

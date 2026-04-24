@@ -157,6 +157,7 @@ func run() error {
 	// event queue, observability store, dispatch stats, and memory reader
 	// so MCP tools stay consistent with the REST API.
 	server.WithMCP(mcpserver.New(mcpserver.Deps{
+		DB:            db,
 		Config:        server,
 		Queue:         dataChannels,
 		Status:        server,

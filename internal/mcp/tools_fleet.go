@@ -1,0 +1,254 @@
+package mcp
+
+import (
+	"context"
+	"strings"
+
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
+
+	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/store"
+	"github.com/eloylp/agents/internal/workflow"
+)
+
+// toolListAgents serialises every agent definition as JSON. Uses the same
+// snake_case wire shape as GET /agents so MCP consumers and REST consumers
+// see identical data.
+func toolListAgents(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		agents, err := store.ReadAgents(deps.DB)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("list agents", err), nil
+		}
+		out := make([]map[string]any, 0, len(agents))
+		for _, a := range agents {
+			out = append(out, agentJSON(a))
+		}
+		return jsonResult(out)
+	}
+}
+
+// toolGetAgent fetches a single agent by name. Matches case-insensitively
+// via config.NormalizeAgentName, so "Coder" and "coder" both resolve to the
+// same entry.
+func toolGetAgent(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, ok := trimmedString(req, "name")
+		if !ok {
+			return mcpgo.NewToolResultError("name is required"), nil
+		}
+		agents, err := store.ReadAgents(deps.DB)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("get agent", err), nil
+		}
+		key := config.NormalizeAgentName(name)
+		for _, a := range agents {
+			if a.Name == key {
+				return jsonResult(agentJSON(a))
+			}
+		}
+		return mcpgo.NewToolResultErrorf("agent %q not found", name), nil
+	}
+}
+
+func toolListSkills(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		skills, err := store.ReadSkills(deps.DB)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("list skills", err), nil
+		}
+		names := make([]string, 0, len(skills))
+		for n := range skills {
+			names = append(names, n)
+		}
+		sortStrings(names)
+		out := make([]map[string]any, 0, len(skills))
+		for _, n := range names {
+			s := skills[n]
+			out = append(out, map[string]any{
+				"name":   n,
+				"prompt": s.Prompt,
+			})
+		}
+		return jsonResult(out)
+	}
+}
+
+// toolGetSkill fetches one skill by its map key. Map lookup is
+// case-insensitive via config.NormalizeSkillName so agents can reference
+// skills without worrying about casing.
+func toolGetSkill(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, ok := trimmedString(req, "name")
+		if !ok {
+			return mcpgo.NewToolResultError("name is required"), nil
+		}
+		skills, err := store.ReadSkills(deps.DB)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("get skill", err), nil
+		}
+		key := config.NormalizeSkillName(name)
+		s, found := skills[key]
+		if !found {
+			return mcpgo.NewToolResultErrorf("skill %q not found", name), nil
+		}
+		return jsonResult(map[string]any{
+			"name":   key,
+			"prompt": s.Prompt,
+		})
+	}
+}
+
+func toolListBackends(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		backends, err := store.ReadBackends(deps.DB)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("list backends", err), nil
+		}
+		names := make([]string, 0, len(backends))
+		for n := range backends {
+			names = append(names, n)
+		}
+		sortStrings(names)
+		out := make([]map[string]any, 0, len(names))
+		for _, n := range names {
+			out = append(out, backendJSON(n, backends[n]))
+		}
+		return jsonResult(out)
+	}
+}
+
+// toolGetBackend fetches one backend by its map key. Returns the same
+// snake_case fields as list_backends entries.
+func toolGetBackend(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, ok := trimmedString(req, "name")
+		if !ok {
+			return mcpgo.NewToolResultError("name is required"), nil
+		}
+		backends, err := store.ReadBackends(deps.DB)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("get backend", err), nil
+		}
+		key := config.NormalizeBackendName(name)
+		b, found := backends[key]
+		if !found {
+			return mcpgo.NewToolResultErrorf("backend %q not found", name), nil
+		}
+		return jsonResult(backendJSON(key, b))
+	}
+}
+
+func toolListRepos(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		repos, err := store.ReadRepos(deps.DB)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("list repos", err), nil
+		}
+		out := make([]map[string]any, 0, len(repos))
+		for _, r := range repos {
+			bindings := make([]map[string]any, 0, len(r.Use))
+			for _, b := range r.Use {
+				bindings = append(bindings, bindingJSON(b))
+			}
+			out = append(out, map[string]any{
+				"name":     r.Name,
+				"enabled":  r.Enabled,
+				"bindings": bindings,
+			})
+		}
+		return jsonResult(out)
+	}
+}
+
+// toolGetRepo fetches one repo by full owner/name, case-insensitive. Lookup
+// normalizes the name before searching, matching how the store normalizes.
+func toolGetRepo(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, ok := trimmedString(req, "name")
+		if !ok {
+			return mcpgo.NewToolResultError("name is required"), nil
+		}
+		repos, err := store.ReadRepos(deps.DB)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("get repo", err), nil
+		}
+		key := config.NormalizeRepoName(name)
+		for _, r := range repos {
+			if r.Name == key {
+				bindings := make([]map[string]any, 0, len(r.Use))
+				for _, b := range r.Use {
+					bindings = append(bindings, bindingJSON(b))
+				}
+				return jsonResult(map[string]any{
+					"name":     r.Name,
+					"enabled":  r.Enabled,
+					"bindings": bindings,
+				})
+			}
+		}
+		return mcpgo.NewToolResultErrorf("repo %q not found", name), nil
+	}
+}
+
+// toolGetStatus returns the /status snapshot bytes as text. Keeping the wire
+// shape identical to the REST endpoint means MCP and HTTP clients can share
+// documentation and tooling.
+func toolGetStatus(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		body, err := deps.Status.StatusJSON()
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("status snapshot", err), nil
+		}
+		return mcpgo.NewToolResultText(string(body)), nil
+	}
+}
+
+// toolTriggerAgent mirrors POST /run: validate the repo is known and enabled,
+// enqueue an agents.run event, and return the event ID so the caller can
+// correlate with trace data later.
+func toolTriggerAgent(deps Deps) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		agent, err := req.RequireString("agent")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		repoName, err := req.RequireString("repo")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		agent = strings.TrimSpace(agent)
+		repoName = strings.TrimSpace(repoName)
+		if agent == "" || repoName == "" {
+			return mcpgo.NewToolResultError("agent and repo are required"), nil
+		}
+
+		cfg := deps.Config.Config()
+		repo, ok := cfg.RepoByName(repoName)
+		if !ok || !repo.Enabled {
+			return mcpgo.NewToolResultErrorf("repo %q not found or disabled", repoName), nil
+		}
+
+		ev := workflow.Event{
+			ID:    workflow.GenEventID(),
+			Repo:  workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+			Kind:  "agents.run",
+			Actor: "mcp",
+			Payload: map[string]any{
+				"target_agent": agent,
+			},
+		}
+		if err := deps.Queue.PushEvent(ctx, ev); err != nil {
+			deps.Logger.Error().Err(err).Str("agent", agent).Str("repo", repoName).Msg("mcp: failed to enqueue on-demand agent run")
+			return mcpgo.NewToolResultErrorf("event queue full: %v", err), nil
+		}
+		deps.Logger.Info().Str("agent", agent).Str("repo", repoName).Str("event_id", ev.ID).Msg("mcp: on-demand agent run queued")
+		return jsonResult(map[string]string{
+			"status":   "queued",
+			"agent":    agent,
+			"repo":     repoName,
+			"event_id": ev.ID,
+		})
+	}
+}

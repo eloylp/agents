@@ -63,30 +63,72 @@ Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL c
 
 The daemon exposes a [Model Context Protocol](https://modelcontextprotocol.io) server at `/mcp` using the Streamable HTTP transport. MCP-capable clients (Claude Code, Cursor, Cline) register the endpoint and discover the available tools automatically.
 
-Register from Claude Code:
+Register from Claude Code (add to `~/.claude.json` or via `claude mcp add`):
 
 ```json
 {
   "mcpServers": {
     "agents": {
-      "url": "https://agents.example.com/mcp"
+      "url": "https://agents.example.com/mcp",
+      "headers": {
+        "Authorization": "Basic <base64 of user:password>"
+      }
     }
   }
 }
 ```
 
-First-cut tools (tracked in [#227](https://github.com/eloylp/agents/issues/227)):
+When the daemon runs behind a reverse proxy with basic auth (e.g. Traefik), include the `Authorization` header so MCP requests pass through. Generate the base64 value with: `echo -n 'user:password' | base64`.
+
+### Available tools
+
+**Fleet management:**
 
 | Tool | Description |
 |---|---|
-| `list_agents` | List every configured agent. |
-| `list_skills` | List every configured skill with its prompt. |
-| `list_backends` | List every configured AI backend. |
-| `list_repos` | List every repo with its agent bindings. |
-| `get_status` | Daemon health snapshot (same payload as `GET /status`). |
-| `trigger_agent` | Enqueue an on-demand agent run (same payload as `POST /run`). |
+| `list_agents` | List all agents with backend, model, skills, dispatch wiring. |
+| `get_agent` | Fetch one agent by name. |
+| `create_agent` | Create or update an agent (upsert). |
+| `delete_agent` | Delete an agent. `cascade=true` also removes repo bindings. |
+| `list_skills` | List all skills with prompt content. |
+| `get_skill` | Fetch one skill by name. |
+| `create_skill` | Create or update a skill. |
+| `delete_skill` | Delete a skill. |
+| `list_backends` | List all AI backends with models and health. |
+| `get_backend` | Fetch one backend by name. |
+| `create_backend` | Create or update a backend. |
+| `delete_backend` | Delete a backend. |
+| `list_repos` | List all repos with bindings. |
+| `get_repo` | Fetch one repo by name. |
+| `create_repo` | Create or update a repo with bindings. |
+| `delete_repo` | Delete a repo and its bindings. |
 
-CRUD write tools, observability queries, and config import/export tools are being added in follow-up PRs.
+**Operations:**
+
+| Tool | Description |
+|---|---|
+| `get_status` | Daemon health: uptime, queue depth, schedules, dispatch counters. |
+| `trigger_agent` | Fire an on-demand agent run (async, returns event ID). |
+
+**Observability:**
+
+| Tool | Description |
+|---|---|
+| `list_events` | Recent events with optional `since` filter. |
+| `list_traces` | Recent agent run spans with timing and summary. |
+| `get_trace` | Full dispatch chain by root event ID. |
+| `get_trace_steps` | Tool-loop transcript for one span. |
+| `get_graph` | Agent interaction graph (dispatch edges). |
+| `get_dispatches` | Dispatch counters and drop reasons. |
+| `get_memory` | Agent memory for an agent/repo pair. |
+
+**Config:**
+
+| Tool | Description |
+|---|---|
+| `get_config` | Effective config snapshot (secrets redacted). |
+| `export_config` | Fleet config as YAML (round-trippable via `import_config`). |
+| `import_config` | Import YAML config. `mode=replace` prunes missing entries. |
 
 ## AI runner contract
 

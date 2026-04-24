@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -87,8 +89,46 @@ func fixtureConfig() *config.Config {
 	}
 }
 
-func newTestDeps(cfg *config.Config, queue EventQueue, status StatusSource) Deps {
+// testDB creates a temporary SQLite database seeded with the same entities as
+// fixtureConfig so that tools reading from deps.DB see consistent data.
+func testDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := store.ImportAll(
+		db,
+		[]config.AgentDef{
+			{Name: "coder", Backend: "claude", Skills: []string{"testing"}, Prompt: "code", Description: "writes code", CanDispatch: []string{}},
+			{Name: "reviewer", Backend: "claude", Prompt: "review", AllowDispatch: true, Skills: []string{}, CanDispatch: []string{}},
+		},
+		[]config.RepoDef{
+			{Name: "owner/one", Enabled: true, Use: []config.Binding{
+				{Agent: "coder", Labels: []string{"bug"}},
+				{Agent: "reviewer", Cron: "0 * * * *"},
+			}},
+			{Name: "owner/two", Enabled: false, Use: []config.Binding{}},
+		},
+		map[string]config.SkillDef{
+			"testing":  {Prompt: "write good tests"},
+			"security": {Prompt: "audit inputs"},
+		},
+		map[string]config.AIBackendConfig{
+			"claude": {Command: "claude", Models: []string{"opus", "sonnet"}, Healthy: true, TimeoutSeconds: 60},
+			"codex":  {Command: "codex"},
+		},
+	); err != nil {
+		t.Fatalf("seed test db: %v", err)
+	}
+	return db
+}
+
+func newTestDeps(t *testing.T, cfg *config.Config, queue EventQueue, status StatusSource) Deps {
+	t.Helper()
 	return Deps{
+		DB:     testDB(t),
 		Config: stubConfig{cfg: cfg},
 		Queue:  queue,
 		Status: status,
@@ -131,7 +171,7 @@ func textOf(t *testing.T, res *mcpgo.CallToolResult) string {
 
 func TestToolListAgents(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(fixtureConfig(), &stubQueue{}, stubStatus{})
+	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{})
 
 	res, err := toolListAgents(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -156,7 +196,7 @@ func TestToolListAgents(t *testing.T) {
 
 func TestToolGetAgent(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(fixtureConfig(), &stubQueue{}, stubStatus{})
+	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{})
 
 	cases := []struct {
 		name    string
@@ -194,7 +234,7 @@ func TestToolGetAgent(t *testing.T) {
 
 func TestToolGetAgentMissingName(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(fixtureConfig(), &stubQueue{}, stubStatus{})
+	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{})
 
 	cases := []map[string]any{
 		{},
@@ -216,7 +256,7 @@ func TestToolGetAgentMissingName(t *testing.T) {
 
 func TestToolListSkillsSorted(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(fixtureConfig(), &stubQueue{}, stubStatus{})
+	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{})
 
 	res, err := toolListSkills(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -234,7 +274,7 @@ func TestToolListSkillsSorted(t *testing.T) {
 
 func TestToolGetSkill(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(fixtureConfig(), &stubQueue{}, stubStatus{})
+	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{})
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "Testing"}
@@ -260,7 +300,7 @@ func TestToolGetSkill(t *testing.T) {
 
 func TestToolListBackendsSorted(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(fixtureConfig(), &stubQueue{}, stubStatus{})
+	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{})
 
 	res, err := toolListBackends(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -279,7 +319,7 @@ func TestToolListBackendsSorted(t *testing.T) {
 
 func TestToolGetBackend(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(fixtureConfig(), &stubQueue{}, stubStatus{})
+	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{})
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "Claude"}
@@ -308,7 +348,7 @@ func TestToolGetBackend(t *testing.T) {
 
 func TestToolListRepos(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(fixtureConfig(), &stubQueue{}, stubStatus{})
+	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{})
 
 	res, err := toolListRepos(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -340,7 +380,7 @@ func TestToolListRepos(t *testing.T) {
 
 func TestToolGetRepo(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(fixtureConfig(), &stubQueue{}, stubStatus{})
+	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{})
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "OWNER/one"}
@@ -382,7 +422,7 @@ func TestToolGetRepo(t *testing.T) {
 func TestToolGetStatusPassesThrough(t *testing.T) {
 	t.Parallel()
 	want := `{"status":"ok","uptime_seconds":42}`
-	deps := newTestDeps(fixtureConfig(), &stubQueue{}, stubStatus{body: []byte(want)})
+	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{body: []byte(want)})
 
 	res, err := toolGetStatus(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -395,7 +435,7 @@ func TestToolGetStatusPassesThrough(t *testing.T) {
 
 func TestToolGetStatusSurfacesError(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(fixtureConfig(), &stubQueue{}, stubStatus{err: errors.New("boom")})
+	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{err: errors.New("boom")})
 
 	res, err := toolGetStatus(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -409,7 +449,7 @@ func TestToolGetStatusSurfacesError(t *testing.T) {
 func TestToolTriggerAgentSuccess(t *testing.T) {
 	t.Parallel()
 	queue := &stubQueue{}
-	deps := newTestDeps(fixtureConfig(), queue, stubStatus{})
+	deps := newTestDeps(t, fixtureConfig(), queue, stubStatus{})
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"agent": "coder", "repo": "owner/one"}
@@ -445,7 +485,7 @@ func TestToolTriggerAgentSuccess(t *testing.T) {
 func TestToolTriggerAgentRejectsUnknownRepo(t *testing.T) {
 	t.Parallel()
 	queue := &stubQueue{}
-	deps := newTestDeps(fixtureConfig(), queue, stubStatus{})
+	deps := newTestDeps(t, fixtureConfig(), queue, stubStatus{})
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"agent": "coder", "repo": "owner/unknown"}
@@ -465,7 +505,7 @@ func TestToolTriggerAgentRejectsUnknownRepo(t *testing.T) {
 func TestToolTriggerAgentRejectsDisabledRepo(t *testing.T) {
 	t.Parallel()
 	queue := &stubQueue{}
-	deps := newTestDeps(fixtureConfig(), queue, stubStatus{})
+	deps := newTestDeps(t, fixtureConfig(), queue, stubStatus{})
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"agent": "coder", "repo": "owner/two"}
@@ -482,7 +522,7 @@ func TestToolTriggerAgentRejectsDisabledRepo(t *testing.T) {
 func TestToolTriggerAgentMissingArgs(t *testing.T) {
 	t.Parallel()
 	queue := &stubQueue{}
-	deps := newTestDeps(fixtureConfig(), queue, stubStatus{})
+	deps := newTestDeps(t, fixtureConfig(), queue, stubStatus{})
 
 	cases := []struct {
 		name string
@@ -512,7 +552,7 @@ func TestToolTriggerAgentMissingArgs(t *testing.T) {
 func TestToolTriggerAgentQueueFailure(t *testing.T) {
 	t.Parallel()
 	queue := &stubQueue{err: errors.New("queue full")}
-	deps := newTestDeps(fixtureConfig(), queue, stubStatus{})
+	deps := newTestDeps(t, fixtureConfig(), queue, stubStatus{})
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"agent": "coder", "repo": "owner/one"}
@@ -563,8 +603,10 @@ func (s *stubMemory) ReadMemory(agent, repo string) (string, time.Time, bool, er
 	return s.content, s.mtime, s.found, s.err
 }
 
-func depsWithObserve(obs ObserveStore) Deps {
+func depsWithObserve(t *testing.T, obs ObserveStore) Deps {
+	t.Helper()
 	return Deps{
+		DB:      testDB(t),
 		Config:  stubConfig{cfg: fixtureConfig()},
 		Queue:   &stubQueue{},
 		Status:  stubStatus{},
@@ -579,7 +621,7 @@ func TestToolListEvents(t *testing.T) {
 		{ID: "e1", Kind: "issues.labeled", Repo: "owner/one", At: time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)},
 		{ID: "e2", Kind: "agents.run", Repo: "owner/one", At: time.Date(2026, 4, 20, 10, 5, 0, 0, time.UTC)},
 	}}
-	deps := depsWithObserve(obs)
+	deps := depsWithObserve(t, obs)
 
 	res, err := toolListEvents(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -598,7 +640,7 @@ func TestToolListEvents(t *testing.T) {
 func TestToolListEventsSinceFilter(t *testing.T) {
 	t.Parallel()
 	obs := &stubObserve{events: []observe.TimestampedEvent{}}
-	deps := depsWithObserve(obs)
+	deps := depsWithObserve(t, obs)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"since": "2026-04-20T10:00:00Z"}
@@ -624,7 +666,7 @@ func TestToolListEventsSinceFilter(t *testing.T) {
 func TestToolListEventsNilSlice(t *testing.T) {
 	t.Parallel()
 	obs := &stubObserve{events: nil}
-	deps := depsWithObserve(obs)
+	deps := depsWithObserve(t, obs)
 
 	res, err := toolListEvents(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -644,7 +686,7 @@ func TestToolListTraces(t *testing.T) {
 		{SpanID: "s1", Agent: "coder", Status: "success"},
 		{SpanID: "s2", Agent: "reviewer", Status: "error"},
 	}}
-	deps := depsWithObserve(obs)
+	deps := depsWithObserve(t, obs)
 
 	res, err := toolListTraces(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -662,7 +704,7 @@ func TestToolGetTrace(t *testing.T) {
 	obs := &stubObserve{byRoot: map[string][]observe.Span{
 		"root-1": {{SpanID: "s1", RootEventID: "root-1", Agent: "coder"}},
 	}}
-	deps := depsWithObserve(obs)
+	deps := depsWithObserve(t, obs)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"root_event_id": "root-1"}
@@ -688,7 +730,7 @@ func TestToolGetTrace(t *testing.T) {
 
 func TestToolGetTraceRequiresID(t *testing.T) {
 	t.Parallel()
-	deps := depsWithObserve(&stubObserve{})
+	deps := depsWithObserve(t, &stubObserve{})
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"root_event_id": "   "}
@@ -706,7 +748,7 @@ func TestToolGetTraceSteps(t *testing.T) {
 	obs := &stubObserve{steps: map[string][]workflow.TraceStep{
 		"s1": {{ToolName: "read_file", DurationMs: 42}},
 	}}
-	deps := depsWithObserve(obs)
+	deps := depsWithObserve(t, obs)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"span_id": "s1"}
@@ -741,7 +783,7 @@ func TestToolGetGraphSeedsNodesFromFleetAndEdges(t *testing.T) {
 			{At: time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC), Repo: "owner/one", Number: 7, Reason: "followup"},
 		}},
 	}}
-	deps := depsWithObserve(obs)
+	deps := depsWithObserve(t, obs)
 
 	res, err := toolGetGraph(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -781,6 +823,7 @@ func TestToolGetGraphSeedsNodesFromFleetAndEdges(t *testing.T) {
 func TestToolGetDispatches(t *testing.T) {
 	t.Parallel()
 	deps := Deps{
+		DB:            testDB(t),
 		Config:        stubConfig{cfg: fixtureConfig()},
 		Queue:         &stubQueue{},
 		Status:        stubStatus{},
@@ -803,6 +846,7 @@ func TestToolGetMemorySuccess(t *testing.T) {
 	t.Parallel()
 	mem := &stubMemory{content: "# hello\n", mtime: time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC), found: true}
 	deps := Deps{
+		DB:            testDB(t),
 		Config: stubConfig{cfg: fixtureConfig()},
 		Queue:  &stubQueue{},
 		Status: stubStatus{},
@@ -833,6 +877,7 @@ func TestToolGetMemoryMissing(t *testing.T) {
 	t.Parallel()
 	mem := &stubMemory{found: false}
 	deps := Deps{
+		DB:            testDB(t),
 		Config: stubConfig{cfg: fixtureConfig()},
 		Queue:  &stubQueue{},
 		Status: stubStatus{},
@@ -855,6 +900,7 @@ func TestToolGetMemoryRejectsTraversal(t *testing.T) {
 	t.Parallel()
 	mem := &stubMemory{found: true, content: "leak"}
 	deps := Deps{
+		DB:            testDB(t),
 		Config: stubConfig{cfg: fixtureConfig()},
 		Queue:  &stubQueue{},
 		Status: stubStatus{},
@@ -889,6 +935,7 @@ func TestToolGetMemoryRejectsTraversal(t *testing.T) {
 func TestToolGetMemoryRequiresBothArgs(t *testing.T) {
 	t.Parallel()
 	deps := Deps{
+		DB:            testDB(t),
 		Config: stubConfig{cfg: fixtureConfig()},
 		Queue:  &stubQueue{},
 		Status: stubStatus{},
@@ -918,6 +965,7 @@ func TestToolGetMemoryPropagatesReaderError(t *testing.T) {
 	t.Parallel()
 	mem := &stubMemory{err: errors.New("disk on fire")}
 	deps := Deps{
+		DB:            testDB(t),
 		Config: stubConfig{cfg: fixtureConfig()},
 		Queue:  &stubQueue{},
 		Status: stubStatus{},
@@ -950,6 +998,7 @@ func TestRegisterTools_ObservabilityOptional(t *testing.T) {
 	// exists to document the invariant that tools.go's gating is the source
 	// of truth for optional registration.
 	core := Deps{
+		DB:            testDB(t),
 		Config: stubConfig{cfg: fixtureConfig()},
 		Queue:  &stubQueue{},
 		Status: stubStatus{},
@@ -981,6 +1030,7 @@ func TestToolGetConfigReturnsBytesVerbatim(t *testing.T) {
 	t.Parallel()
 	want := []byte(`{"daemon":{"http":{"webhook_secret":"[redacted]"}}}`)
 	deps := Deps{
+		DB:            testDB(t),
 		Config:      stubConfig{cfg: fixtureConfig()},
 		Queue:       &stubQueue{},
 		Status:      stubStatus{},
@@ -1000,6 +1050,7 @@ func TestToolGetConfigReturnsBytesVerbatim(t *testing.T) {
 func TestToolGetConfigPropagatesError(t *testing.T) {
 	t.Parallel()
 	deps := Deps{
+		DB:            testDB(t),
 		Config:      stubConfig{cfg: fixtureConfig()},
 		Queue:       &stubQueue{},
 		Status:      stubStatus{},
@@ -1022,6 +1073,7 @@ func TestToolExportConfigReturnsBytesVerbatim(t *testing.T) {
 	t.Parallel()
 	want := []byte("agents:\n  - name: coder\n    backend: claude\n")
 	deps := Deps{
+		DB:            testDB(t),
 		Config:      stubConfig{cfg: fixtureConfig()},
 		Queue:       &stubQueue{},
 		Status:      stubStatus{},
@@ -1040,6 +1092,7 @@ func TestToolExportConfigReturnsBytesVerbatim(t *testing.T) {
 func TestToolExportConfigPropagatesError(t *testing.T) {
 	t.Parallel()
 	deps := Deps{
+		DB:            testDB(t),
 		Config:      stubConfig{cfg: fixtureConfig()},
 		Queue:       &stubQueue{},
 		Status:      stubStatus{},
@@ -1080,6 +1133,7 @@ func TestToolImportConfigPassesYAMLAndMode(t *testing.T) {
 		"agents": 2, "skills": 1, "repos": 3, "backends": 1,
 	}}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:       stubConfig{cfg: fixtureConfig()},
 		Queue:        &stubQueue{},
 		Status:       stubStatus{},
@@ -1115,6 +1169,7 @@ func TestToolImportConfigDefaultsMode(t *testing.T) {
 	t.Parallel()
 	imp := &stubConfigImporter{counts: map[string]int{}}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:       stubConfig{cfg: fixtureConfig()},
 		Queue:        &stubQueue{},
 		Status:       stubStatus{},
@@ -1141,6 +1196,7 @@ func TestToolImportConfigRequiresYAML(t *testing.T) {
 	t.Parallel()
 	imp := &stubConfigImporter{counts: map[string]int{}}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:       stubConfig{cfg: fixtureConfig()},
 		Queue:        &stubQueue{},
 		Status:       stubStatus{},
@@ -1167,6 +1223,7 @@ func TestToolImportConfigPropagatesError(t *testing.T) {
 	t.Parallel()
 	imp := &stubConfigImporter{err: errors.New("invalid mode")}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:       stubConfig{cfg: fixtureConfig()},
 		Queue:        &stubQueue{},
 		Status:       stubStatus{},
@@ -1226,6 +1283,7 @@ func TestToolCreateAgentForwardsAndReturnsCanonical(t *testing.T) {
 	}
 	w := &stubAgentWriter{canonical: canonical}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:     stubConfig{cfg: fixtureConfig()},
 		Queue:      &stubQueue{},
 		Status:     stubStatus{},
@@ -1276,6 +1334,7 @@ func TestToolCreateAgentRequiresName(t *testing.T) {
 	t.Parallel()
 	w := &stubAgentWriter{}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:     stubConfig{cfg: fixtureConfig()},
 		Queue:      &stubQueue{},
 		Status:     stubStatus{},
@@ -1302,6 +1361,7 @@ func TestToolCreateAgentPropagatesError(t *testing.T) {
 	t.Parallel()
 	w := &stubAgentWriter{upsertErr: errors.New("backend unknown")}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:     stubConfig{cfg: fixtureConfig()},
 		Queue:      &stubQueue{},
 		Status:     stubStatus{},
@@ -1328,6 +1388,7 @@ func TestToolDeleteAgentNormalizesAndForwardsCascade(t *testing.T) {
 	t.Parallel()
 	w := &stubAgentWriter{}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:     stubConfig{cfg: fixtureConfig()},
 		Queue:      &stubQueue{},
 		Status:     stubStatus{},
@@ -1363,6 +1424,7 @@ func TestToolDeleteAgentRequiresName(t *testing.T) {
 	t.Parallel()
 	w := &stubAgentWriter{}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:     stubConfig{cfg: fixtureConfig()},
 		Queue:      &stubQueue{},
 		Status:     stubStatus{},
@@ -1389,6 +1451,7 @@ func TestToolDeleteAgentPropagatesConflict(t *testing.T) {
 	t.Parallel()
 	w := &stubAgentWriter{deleteErr: errors.New("agent referenced by binding")}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:     stubConfig{cfg: fixtureConfig()},
 		Queue:      &stubQueue{},
 		Status:     stubStatus{},
@@ -1445,6 +1508,7 @@ func TestToolCreateSkillForwardsAndReturnsCanonical(t *testing.T) {
 		canonical:     config.SkillDef{Prompt: "audit inputs carefully"},
 	}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:     stubConfig{cfg: fixtureConfig()},
 		Queue:      &stubQueue{},
 		Status:     stubStatus{},
@@ -1487,6 +1551,7 @@ func TestToolCreateSkillRequiresName(t *testing.T) {
 	t.Parallel()
 	w := &stubSkillWriter{}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:     stubConfig{cfg: fixtureConfig()},
 		Queue:      &stubQueue{},
 		Status:     stubStatus{},
@@ -1519,6 +1584,7 @@ func TestToolCreateSkillRejectsBlankName(t *testing.T) {
 	t.Parallel()
 	w := &stubSkillWriter{upsertErr: &store.ErrValidation{Msg: "name is required"}}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:     stubConfig{cfg: fixtureConfig()},
 		Queue:      &stubQueue{},
 		Status:     stubStatus{},
@@ -1548,6 +1614,7 @@ func TestToolCreateSkillPropagatesError(t *testing.T) {
 	t.Parallel()
 	w := &stubSkillWriter{upsertErr: errors.New("validation: prompt empty")}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:     stubConfig{cfg: fixtureConfig()},
 		Queue:      &stubQueue{},
 		Status:     stubStatus{},
@@ -1574,6 +1641,7 @@ func TestToolDeleteSkillNormalizesAndForwards(t *testing.T) {
 	t.Parallel()
 	w := &stubSkillWriter{}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:     stubConfig{cfg: fixtureConfig()},
 		Queue:      &stubQueue{},
 		Status:     stubStatus{},
@@ -1606,6 +1674,7 @@ func TestToolDeleteSkillRequiresName(t *testing.T) {
 	t.Parallel()
 	w := &stubSkillWriter{}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:     stubConfig{cfg: fixtureConfig()},
 		Queue:      &stubQueue{},
 		Status:     stubStatus{},
@@ -1632,6 +1701,7 @@ func TestToolDeleteSkillPropagatesConflict(t *testing.T) {
 	t.Parallel()
 	w := &stubSkillWriter{deleteErr: errors.New("skill referenced by agent")}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:     stubConfig{cfg: fixtureConfig()},
 		Queue:      &stubQueue{},
 		Status:     stubStatus{},
@@ -1694,6 +1764,7 @@ func TestToolCreateBackendForwardsAndReturnsCanonical(t *testing.T) {
 		canonical:     canonical,
 	}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:       stubConfig{cfg: fixtureConfig()},
 		Queue:        &stubQueue{},
 		Status:       stubStatus{},
@@ -1745,6 +1816,7 @@ func TestToolCreateBackendRequiresName(t *testing.T) {
 	t.Parallel()
 	w := &stubBackendWriter{}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:       stubConfig{cfg: fixtureConfig()},
 		Queue:        &stubQueue{},
 		Status:       stubStatus{},
@@ -1777,6 +1849,7 @@ func TestToolCreateBackendRejectsBlankName(t *testing.T) {
 	t.Parallel()
 	w := &stubBackendWriter{upsertErr: &store.ErrValidation{Msg: "name is required"}}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:       stubConfig{cfg: fixtureConfig()},
 		Queue:        &stubQueue{},
 		Status:       stubStatus{},
@@ -1806,6 +1879,7 @@ func TestToolCreateBackendPropagatesError(t *testing.T) {
 	t.Parallel()
 	w := &stubBackendWriter{upsertErr: errors.New("db closed")}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:       stubConfig{cfg: fixtureConfig()},
 		Queue:        &stubQueue{},
 		Status:       stubStatus{},
@@ -1832,6 +1906,7 @@ func TestToolDeleteBackendNormalizesAndForwards(t *testing.T) {
 	t.Parallel()
 	w := &stubBackendWriter{}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:       stubConfig{cfg: fixtureConfig()},
 		Queue:        &stubQueue{},
 		Status:       stubStatus{},
@@ -1864,6 +1939,7 @@ func TestToolDeleteBackendRequiresName(t *testing.T) {
 	t.Parallel()
 	w := &stubBackendWriter{}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:       stubConfig{cfg: fixtureConfig()},
 		Queue:        &stubQueue{},
 		Status:       stubStatus{},
@@ -1890,6 +1966,7 @@ func TestToolDeleteBackendPropagatesConflict(t *testing.T) {
 	t.Parallel()
 	w := &stubBackendWriter{deleteErr: errors.New("backend referenced by agent")}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:       stubConfig{cfg: fixtureConfig()},
 		Queue:        &stubQueue{},
 		Status:       stubStatus{},
@@ -1949,6 +2026,7 @@ func TestToolCreateRepoForwardsAndReturnsCanonical(t *testing.T) {
 	}
 	w := &stubRepoWriter{canonical: canonical}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:    stubConfig{cfg: fixtureConfig()},
 		Queue:     &stubQueue{},
 		Status:    stubStatus{},
@@ -2018,6 +2096,7 @@ func TestToolCreateRepoRequiresName(t *testing.T) {
 	t.Parallel()
 	w := &stubRepoWriter{}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:    stubConfig{cfg: fixtureConfig()},
 		Queue:     &stubQueue{},
 		Status:    stubStatus{},
@@ -2050,6 +2129,7 @@ func TestToolCreateRepoRejectsBlankName(t *testing.T) {
 	t.Parallel()
 	w := &stubRepoWriter{upsertErr: &store.ErrValidation{Msg: "name is required"}}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:    stubConfig{cfg: fixtureConfig()},
 		Queue:     &stubQueue{},
 		Status:    stubStatus{},
@@ -2079,6 +2159,7 @@ func TestToolCreateRepoPropagatesError(t *testing.T) {
 	t.Parallel()
 	w := &stubRepoWriter{upsertErr: errors.New("unknown agent \"ghost\"")}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:    stubConfig{cfg: fixtureConfig()},
 		Queue:     &stubQueue{},
 		Status:    stubStatus{},
@@ -2127,6 +2208,7 @@ func TestToolCreateRepoRejectsBadBindingsShape(t *testing.T) {
 			t.Parallel()
 			w := &stubRepoWriter{}
 			deps := Deps{
+				DB:            testDB(t),
 				Config:    stubConfig{cfg: fixtureConfig()},
 				Queue:     &stubQueue{},
 				Status:    stubStatus{},
@@ -2217,6 +2299,7 @@ func TestToolCreateRepoRejectsBadBindingFieldTypes(t *testing.T) {
 			t.Parallel()
 			w := &stubRepoWriter{}
 			deps := Deps{
+				DB:            testDB(t),
 				Config:    stubConfig{cfg: fixtureConfig()},
 				Queue:     &stubQueue{},
 				Status:    stubStatus{},
@@ -2255,6 +2338,7 @@ func TestToolCreateRepoDefaultsBindingEnabledNil(t *testing.T) {
 	t.Parallel()
 	w := &stubRepoWriter{canonical: config.RepoDef{Name: "owner/repo", Enabled: true}}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:    stubConfig{cfg: fixtureConfig()},
 		Queue:     &stubQueue{},
 		Status:    stubStatus{},
@@ -2290,6 +2374,7 @@ func TestToolDeleteRepoNormalizesAndForwards(t *testing.T) {
 	t.Parallel()
 	w := &stubRepoWriter{}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:    stubConfig{cfg: fixtureConfig()},
 		Queue:     &stubQueue{},
 		Status:    stubStatus{},
@@ -2322,6 +2407,7 @@ func TestToolDeleteRepoRequiresName(t *testing.T) {
 	t.Parallel()
 	w := &stubRepoWriter{}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:    stubConfig{cfg: fixtureConfig()},
 		Queue:     &stubQueue{},
 		Status:    stubStatus{},
@@ -2348,6 +2434,7 @@ func TestToolDeleteRepoPropagatesNotFound(t *testing.T) {
 	t.Parallel()
 	w := &stubRepoWriter{deleteErr: errors.New("repo \"owner/repo\" not found")}
 	deps := Deps{
+		DB:            testDB(t),
 		Config:    stubConfig{cfg: fixtureConfig()},
 		Queue:     &stubQueue{},
 		Status:    stubStatus{},
