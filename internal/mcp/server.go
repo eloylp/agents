@@ -5,27 +5,30 @@
 // and then discover the available tools automatically. This is the v3
 // foundation for conversational fleet management — tracked in issue #227.
 //
-// This first cut ships a core subset of tools sufficient to demonstrate the
-// architecture and make the endpoint useful:
+// The current tool inventory covers fleet reads, on-demand runs, and the
+// read-only observability surface:
 //
 //   - list_agents, list_skills, list_backends, list_repos — fleet lists
 //   - get_agent, get_skill, get_backend, get_repo         — per-item reads
 //   - get_status                                          — health snapshot
 //   - trigger_agent                                       — on-demand run
+//   - list_events, list_traces, get_trace, get_trace_steps — agent activity
+//   - get_graph, get_dispatches, get_memory               — dispatch + memory
 //
-// The remaining CRUD writes, observability queries, and config import/export
-// tools are intentionally left for follow-up PRs so each batch stays
-// reviewable.
+// CRUD writes (create/delete) and config import/export tools are tracked as
+// follow-up work on #227.
 package mcp
 
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -56,14 +59,48 @@ type StatusSource interface {
 	StatusJSON() ([]byte, error)
 }
 
+// ObserveStore is the read subset of observe.Store consumed by the
+// observability tools (list_events, list_traces, get_trace, get_trace_steps,
+// get_graph). It is satisfied by *observe.Store in production and by test
+// stubs that return fixed data.
+type ObserveStore interface {
+	ListEvents(since time.Time) []observe.TimestampedEvent
+	ListTraces() []observe.Span
+	TracesByRootEventID(id string) []observe.Span
+	ListSteps(spanID string) []workflow.TraceStep
+	ListEdges() []observe.Edge
+}
+
+// DispatchStatsSource returns a snapshot of the dispatch counters.
+// *workflow.Engine (and the same provider the REST /dispatches handler uses)
+// satisfies this interface.
+type DispatchStatsSource interface {
+	DispatchStats() workflow.DispatchStats
+}
+
+// MemoryReader retrieves the stored memory for an (agent, repo) pair for the
+// get_memory tool. The found flag lets the tool return a specific "memory not
+// found" error without leaking webhook package sentinels into this package.
+type MemoryReader interface {
+	ReadMemory(agent, repo string) (content string, mtime time.Time, found bool, err error)
+}
+
 // Deps bundles the dependencies the MCP server needs. Each tool handler
 // depends on a small subset of this struct; bundling them keeps the
 // registration site in tools.go short.
+//
+// Config, Queue, Status, and Logger are always required. Observe,
+// DispatchStats, and Memory are optional: the observability tools are only
+// registered when the corresponding dependency is supplied, so tests can
+// exercise the core fleet surface without wiring the full stack.
 type Deps struct {
-	Config ConfigProvider
-	Queue  EventQueue
-	Status StatusSource
-	Logger zerolog.Logger
+	Config        ConfigProvider
+	Queue         EventQueue
+	Status        StatusSource
+	Observe       ObserveStore
+	DispatchStats DispatchStatsSource
+	Memory        MemoryReader
+	Logger        zerolog.Logger
 }
 
 // Handler is an http.Handler that speaks MCP over Streamable HTTP. Mount it
@@ -109,7 +146,9 @@ Domain model:
               (labels, events, or cron).
 
 Use list_* tools to enumerate the fleet and get_* tools to drill into a
-single agent, skill, backend, or repo. get_status returns daemon health
-and trigger_agent fires an on-demand run. This server is the v3
-foundation; additional CRUD writes and observability tools will land in
-follow-up releases.`
+single agent, skill, backend, repo, trace, or memory record.
+get_status returns daemon health. trigger_agent fires an on-demand run.
+Observability tools (list_events, list_traces, get_trace,
+get_trace_steps, get_graph, get_dispatches, get_memory) expose the same
+data the web dashboard shows. This server is the v3 foundation;
+additional CRUD writes and config import/export will land in follow-ups.`
