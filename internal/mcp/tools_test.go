@@ -150,6 +150,66 @@ func TestToolListAgents(t *testing.T) {
 	}
 }
 
+func TestToolGetAgent(t *testing.T) {
+	t.Parallel()
+	deps := newTestDeps(fixtureConfig(), &stubQueue{}, stubStatus{})
+
+	cases := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"exact match", "coder", false},
+		{"case insensitive", "Coder", false},
+		{"whitespace trimmed", "  reviewer  ", false},
+		{"unknown agent", "ghost", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := mcpgo.CallToolRequest{}
+			req.Params.Arguments = map[string]any{"name": tc.input}
+			res, err := toolGetAgent(deps)(context.Background(), req)
+			if err != nil {
+				t.Fatalf("unexpected transport error: %v", err)
+			}
+			if tc.wantErr {
+				if !res.IsError {
+					t.Fatalf("expected IsError for %q, got %+v", tc.input, res)
+				}
+				return
+			}
+			var got map[string]any
+			decodeText(t, res, &got)
+			if got["name"] == nil {
+				t.Fatalf("expected name field, got %+v", got)
+			}
+		})
+	}
+}
+
+func TestToolGetAgentMissingName(t *testing.T) {
+	t.Parallel()
+	deps := newTestDeps(fixtureConfig(), &stubQueue{}, stubStatus{})
+
+	cases := []map[string]any{
+		{},
+		{"name": ""},
+		{"name": "   "},
+	}
+	for _, args := range cases {
+		req := mcpgo.CallToolRequest{}
+		req.Params.Arguments = args
+		res, err := toolGetAgent(deps)(context.Background(), req)
+		if err != nil {
+			t.Fatalf("unexpected transport error: %v", err)
+		}
+		if !res.IsError {
+			t.Fatalf("expected IsError for args %+v, got %+v", args, res)
+		}
+	}
+}
+
 func TestToolListSkillsSorted(t *testing.T) {
 	t.Parallel()
 	deps := newTestDeps(fixtureConfig(), &stubQueue{}, stubStatus{})
@@ -165,6 +225,32 @@ func TestToolListSkillsSorted(t *testing.T) {
 	}
 	if got[0]["name"] != "security" || got[1]["name"] != "testing" {
 		t.Fatalf("skills should be sorted alphabetically, got %+v", got)
+	}
+}
+
+func TestToolGetSkill(t *testing.T) {
+	t.Parallel()
+	deps := newTestDeps(fixtureConfig(), &stubQueue{}, stubStatus{})
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "Testing"}
+	res, err := toolGetSkill(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got map[string]any
+	decodeText(t, res, &got)
+	if got["name"] != "testing" || got["prompt"] != "write good tests" {
+		t.Fatalf("unexpected skill payload: %+v", got)
+	}
+
+	req.Params.Arguments = map[string]any{"name": "missing"}
+	res, err = toolGetSkill(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError for missing skill, got %+v", res)
 	}
 }
 
@@ -184,6 +270,35 @@ func TestToolListBackendsSorted(t *testing.T) {
 	models, ok := got[0]["models"].([]any)
 	if !ok || len(models) != 2 {
 		t.Fatalf("claude models should be [opus sonnet], got %+v", got[0]["models"])
+	}
+}
+
+func TestToolGetBackend(t *testing.T) {
+	t.Parallel()
+	deps := newTestDeps(fixtureConfig(), &stubQueue{}, stubStatus{})
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "Claude"}
+	res, err := toolGetBackend(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got map[string]any
+	decodeText(t, res, &got)
+	if got["name"] != "claude" || got["command"] != "claude" {
+		t.Fatalf("unexpected backend payload: %+v", got)
+	}
+	if got["healthy"] != true {
+		t.Fatalf("expected healthy=true, got %+v", got["healthy"])
+	}
+
+	req.Params.Arguments = map[string]any{"name": "ghost"}
+	res, err = toolGetBackend(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError for missing backend, got %+v", res)
 	}
 }
 
@@ -216,6 +331,47 @@ func TestToolListRepos(t *testing.T) {
 	}
 	if _, hasLabels := cronBinding["labels"]; hasLabels {
 		t.Errorf("cron binding should not include labels field: %+v", cronBinding)
+	}
+}
+
+func TestToolGetRepo(t *testing.T) {
+	t.Parallel()
+	deps := newTestDeps(fixtureConfig(), &stubQueue{}, stubStatus{})
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "OWNER/one"}
+	res, err := toolGetRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got map[string]any
+	decodeText(t, res, &got)
+	if got["name"] != "owner/one" || got["enabled"] != true {
+		t.Fatalf("unexpected repo payload: %+v", got)
+	}
+	bindings, ok := got["bindings"].([]any)
+	if !ok || len(bindings) != 2 {
+		t.Fatalf("expected 2 bindings, got %+v", got["bindings"])
+	}
+
+	// Disabled repos still resolve — callers decide what to do with enabled=false.
+	req.Params.Arguments = map[string]any{"name": "owner/two"}
+	res, err = toolGetRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	decodeText(t, res, &got)
+	if got["enabled"] != false {
+		t.Fatalf("expected enabled=false for owner/two, got %+v", got)
+	}
+
+	req.Params.Arguments = map[string]any{"name": "owner/unknown"}
+	res, err = toolGetRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError for unknown repo, got %+v", res)
 	}
 }
 
