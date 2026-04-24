@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -315,6 +316,45 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				),
 			),
 			toolDeleteAgent(deps),
+		)
+	}
+	if deps.RepoWrite != nil {
+		srv.AddTool(
+			mcpgo.NewTool("create_repo",
+				mcpgo.WithDescription("Create or update a repo and its bindings. Upsert semantics: a write to an existing name overwrites it, replacing the bindings list. Returns the canonical (normalized) repo persisted by the store. Same path as POST /repos."),
+				mcpgo.WithString("name",
+					mcpgo.Required(),
+					mcpgo.Description("Repo full name \"owner/repo\". Lowercased and trimmed by the store."),
+				),
+				mcpgo.WithBoolean("enabled",
+					mcpgo.Description("Whether the repo is active. Defaults to false — callers must opt in explicitly, matching POST /repos."),
+				),
+				mcpgo.WithArray("bindings",
+					mcpgo.Description("Optional list of agent bindings on this repo. Each binding wires one agent to exactly one trigger: labels (array), events (array), or cron (string). An agent may appear multiple times with different triggers. Replacing a repo replaces the whole bindings list."),
+					mcpgo.Items(map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"agent":   map[string]any{"type": "string", "description": "Agent name to bind."},
+							"labels":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Label-triggered binding: fire when one of these labels is applied."},
+							"events":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Event-triggered binding: fire on these GitHub event kinds (e.g. issues.opened)."},
+							"cron":    map[string]any{"type": "string", "description": "Cron-triggered binding: schedule expression for autonomous runs."},
+							"enabled": map[string]any{"type": "boolean", "description": "Whether this binding is active. Absent = enabled; only explicit false disables."},
+						},
+						"required": []any{"agent"},
+					}),
+				),
+			),
+			toolCreateRepo(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("delete_repo",
+				mcpgo.WithDescription("Delete a repo (and its bindings) by full name. Same path as DELETE /repos/{owner}/{repo}."),
+				mcpgo.WithString("name",
+					mcpgo.Required(),
+					mcpgo.Description("Repo full name \"owner/repo\" (case-insensitive; matched after lowercasing)."),
+				),
+			),
+			toolDeleteRepo(deps),
 		)
 	}
 }
@@ -995,6 +1035,133 @@ func toolDeleteBackend(deps Deps) server.ToolHandlerFunc {
 			"name":   canonical,
 		})
 	}
+}
+
+// toolCreateRepo upserts a repo definition (and its bindings) through the
+// same path as POST /repos. Returns the canonical (normalized) form so
+// callers see the repo the way the store actually persisted it — lowercased
+// owner/name, lowercased binding agents, trimmed cron, lowercased events.
+// Empty names surface as *store.ErrValidation via Server.UpsertRepo, which
+// storeErrStatus maps to a user-actionable error. Binding validation errors
+// from the store (unknown agent, bad cron, trigger ambiguity) propagate as
+// tool errors.
+func toolCreateRepo(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, err := req.RequireString("name")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		bindings, bErr := parseBindings(req.GetArguments()["bindings"])
+		if bErr != "" {
+			return mcpgo.NewToolResultError(bErr), nil
+		}
+		r := config.RepoDef{
+			Name:    name,
+			Enabled: req.GetBool("enabled", false),
+			Use:     bindings,
+		}
+		canonical, err := deps.RepoWrite.UpsertRepo(r)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("create repo", err), nil
+		}
+		return jsonResult(repoJSON(canonical))
+	}
+}
+
+// toolDeleteRepo removes a repo (and cascades its bindings) through the same
+// path as DELETE /repos/{owner}/{repo}. The underlying store delete is
+// idempotent for unknown names; a *store.ErrConflict surfaces if deleting
+// would leave the fleet with zero enabled repos, which the caller sees as a
+// user-actionable error.
+func toolDeleteRepo(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, ok := trimmedString(req, "name")
+		if !ok {
+			return mcpgo.NewToolResultError("name is required"), nil
+		}
+		canonical := config.NormalizeRepoName(name)
+		if err := deps.RepoWrite.DeleteRepo(canonical); err != nil {
+			return mcpgo.NewToolResultErrorFromErr("delete repo", err), nil
+		}
+		return jsonResult(map[string]any{
+			"status": "deleted",
+			"name":   canonical,
+		})
+	}
+}
+
+// repoJSON renders a RepoDef in the same wire shape as an element of the
+// list_repos / get_repo responses, so create_repo/delete_repo callers consume
+// one schema regardless of whether they are reading or writing.
+func repoJSON(r config.RepoDef) map[string]any {
+	bindings := make([]map[string]any, 0, len(r.Use))
+	for _, b := range r.Use {
+		bindings = append(bindings, bindingJSON(b))
+	}
+	return map[string]any{
+		"name":     r.Name,
+		"enabled":  r.Enabled,
+		"bindings": bindings,
+	}
+}
+
+// parseBindings decodes the create_repo "bindings" argument into a slice of
+// config.Binding. The MCP-go request helpers expose string/bool/number
+// primitives directly but not nested objects, so we read the raw argument and
+// destructure it here. A nil/missing value yields an empty binding list. Any
+// non-array or non-object element is reported to the caller as a validation
+// error rather than silently dropped, matching REST's JSON-decode behaviour.
+//
+// Binding.Enabled stays nil when the caller omits the key (the "default
+// enabled" case config.Binding.IsEnabled relies on). A literal false/true sets
+// the pointer so downstream validation sees the user's intent preserved.
+func parseBindings(v any) ([]config.Binding, string) {
+	if v == nil {
+		return nil, ""
+	}
+	raw, ok := v.([]any)
+	if !ok {
+		return nil, "bindings must be an array"
+	}
+	out := make([]config.Binding, 0, len(raw))
+	for i, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Sprintf("bindings[%d]: must be an object", i)
+		}
+		agent, _ := m["agent"].(string)
+		cron, _ := m["cron"].(string)
+		b := config.Binding{
+			Agent:  agent,
+			Labels: stringSliceFromAny(m["labels"]),
+			Events: stringSliceFromAny(m["events"]),
+			Cron:   cron,
+		}
+		if v, ok := m["enabled"]; ok {
+			if enabled, ok := v.(bool); ok {
+				b.Enabled = &enabled
+			}
+		}
+		out = append(out, b)
+	}
+	return out, ""
+}
+
+// stringSliceFromAny best-effort decodes a JSON array of strings. Non-string
+// elements are skipped so the store validator surfaces the bad binding rather
+// than the tool layer guessing at the user's intent.
+func stringSliceFromAny(v any) []string {
+	raw, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // toolDeleteSkill removes a skill through the same path as DELETE

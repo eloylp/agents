@@ -1911,3 +1911,371 @@ func TestToolDeleteBackendPropagatesConflict(t *testing.T) {
 		t.Fatalf("error body want substring %q, got %q", "backend referenced by agent", got)
 	}
 }
+
+// stubRepoWriter records the RepoDef arguments it received and returns
+// canned values. Tests pin both the raw inputs the writer observed and the
+// canonical repo the tool surfaces back to the caller.
+type stubRepoWriter struct {
+	gotUpsert     config.RepoDef
+	gotDeleteName string
+	canonical     config.RepoDef
+	upsertErr     error
+	deleteErr     error
+}
+
+func (s *stubRepoWriter) UpsertRepo(r config.RepoDef) (config.RepoDef, error) {
+	s.gotUpsert = r
+	if s.upsertErr != nil {
+		return config.RepoDef{}, s.upsertErr
+	}
+	return s.canonical, nil
+}
+
+func (s *stubRepoWriter) DeleteRepo(name string) error {
+	s.gotDeleteName = name
+	return s.deleteErr
+}
+
+func TestToolCreateRepoForwardsAndReturnsCanonical(t *testing.T) {
+	t.Parallel()
+	disabled := false
+	canonical := config.RepoDef{
+		Name:    "owner/repo",
+		Enabled: true,
+		Use: []config.Binding{
+			{Agent: "coder", Labels: []string{"ready"}},
+			{Agent: "planner", Cron: "0 * * * *", Enabled: &disabled},
+		},
+	}
+	w := &stubRepoWriter{canonical: canonical}
+	deps := Deps{
+		Config:    stubConfig{cfg: fixtureConfig()},
+		Queue:     &stubQueue{},
+		Status:    stubStatus{},
+		RepoWrite: w,
+		Logger:    zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":    "  OWNER/Repo  ",
+		"enabled": true,
+		"bindings": []any{
+			map[string]any{
+				"agent":  "Coder",
+				"labels": []any{"ready"},
+			},
+			map[string]any{
+				"agent":   "Planner",
+				"cron":    "0 * * * *",
+				"enabled": false,
+			},
+		},
+	}
+
+	res, err := toolCreateRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", textOf(t, res))
+	}
+
+	if w.gotUpsert.Name != "  OWNER/Repo  " {
+		t.Errorf("raw name should pass through to writer (writer owns normalization): got %q", w.gotUpsert.Name)
+	}
+	if !w.gotUpsert.Enabled {
+		t.Errorf("enabled flag not forwarded: %+v", w.gotUpsert)
+	}
+	if got := len(w.gotUpsert.Use); got != 2 {
+		t.Fatalf("bindings slice: want 2, got %d: %+v", got, w.gotUpsert.Use)
+	}
+	if b := w.gotUpsert.Use[0]; b.Agent != "Coder" || len(b.Labels) != 1 || b.Labels[0] != "ready" {
+		t.Errorf("first binding not forwarded: %+v", b)
+	}
+	// The MCP tool must preserve the *bool distinction so the store validator
+	// sees "explicitly disabled" rather than "default enabled" — otherwise a
+	// disabled binding would flip back on after a round-trip.
+	if b := w.gotUpsert.Use[1]; b.Agent != "Planner" || b.Cron != "0 * * * *" || b.Enabled == nil || *b.Enabled {
+		t.Errorf("second binding not forwarded with explicit enabled=false: %+v", b)
+	}
+
+	var got map[string]any
+	decodeText(t, res, &got)
+	if got["name"] != "owner/repo" {
+		t.Errorf("response should reflect canonical name: %+v", got)
+	}
+	if got["enabled"] != true {
+		t.Errorf("response should reflect canonical enabled: %+v", got)
+	}
+	bindings, _ := got["bindings"].([]any)
+	if len(bindings) != 2 {
+		t.Fatalf("response bindings: want 2, got %d: %+v", len(bindings), got)
+	}
+}
+
+func TestToolCreateRepoRequiresName(t *testing.T) {
+	t.Parallel()
+	w := &stubRepoWriter{}
+	deps := Deps{
+		Config:    stubConfig{cfg: fixtureConfig()},
+		Queue:     &stubQueue{},
+		Status:    stubStatus{},
+		RepoWrite: w,
+		Logger:    zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"enabled": true}
+
+	res, err := toolCreateRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError when name missing, got %+v", res)
+	}
+	if w.gotUpsert.Name != "" {
+		t.Errorf("writer should not be invoked when name missing, got %+v", w.gotUpsert)
+	}
+}
+
+// TestToolCreateRepoRejectsBlankName pins the whitespace-name contract for
+// create_repo: like create_skill, the handler uses req.RequireString("name")
+// which only rejects the missing-key path, so a whitespace-only name must
+// reach UpsertRepo and surface the writer's *store.ErrValidation as a user
+// error. If the blank-name guard is ever hoisted into the tool layer, this
+// test fails and forces an update to the stub-invocation expectations.
+func TestToolCreateRepoRejectsBlankName(t *testing.T) {
+	t.Parallel()
+	w := &stubRepoWriter{upsertErr: &store.ErrValidation{Msg: "name is required"}}
+	deps := Deps{
+		Config:    stubConfig{cfg: fixtureConfig()},
+		Queue:     &stubQueue{},
+		Status:    stubStatus{},
+		RepoWrite: w,
+		Logger:    zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "   ", "enabled": true}
+
+	res, err := toolCreateRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError for blank name, got %+v", res)
+	}
+	if got := textOf(t, res); !strings.Contains(got, "name is required") {
+		t.Fatalf("error body want substring %q, got %q", "name is required", got)
+	}
+	if w.gotUpsert.Name != "   " {
+		t.Errorf("writer should receive raw blank name (owns normalization), got %q", w.gotUpsert.Name)
+	}
+}
+
+func TestToolCreateRepoPropagatesError(t *testing.T) {
+	t.Parallel()
+	w := &stubRepoWriter{upsertErr: errors.New("unknown agent \"ghost\"")}
+	deps := Deps{
+		Config:    stubConfig{cfg: fixtureConfig()},
+		Queue:     &stubQueue{},
+		Status:    stubStatus{},
+		RepoWrite: w,
+		Logger:    zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":    "owner/repo",
+		"enabled": true,
+		"bindings": []any{
+			map[string]any{"agent": "ghost"},
+		},
+	}
+
+	res, err := toolCreateRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError on writer failure, got %+v", res)
+	}
+	if got := textOf(t, res); !strings.Contains(got, "unknown agent") {
+		t.Fatalf("error body want substring %q, got %q", "unknown agent", got)
+	}
+}
+
+// TestToolCreateRepoRejectsBadBindingsShape pins the parseBindings validation
+// path: non-array "bindings" must surface a user error without ever reaching
+// the writer, otherwise a malformed payload would corrupt the bindings list
+// silently via a zero-value upsert.
+func TestToolCreateRepoRejectsBadBindingsShape(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		arg  any
+		want string
+	}{
+		{"not array", "coder", "bindings must be an array"},
+		{"element not object", []any{"coder"}, "bindings[0]: must be an object"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := &stubRepoWriter{}
+			deps := Deps{
+				Config:    stubConfig{cfg: fixtureConfig()},
+				Queue:     &stubQueue{},
+				Status:    stubStatus{},
+				RepoWrite: w,
+				Logger:    zerolog.Nop(),
+			}
+
+			req := mcpgo.CallToolRequest{}
+			req.Params.Arguments = map[string]any{
+				"name":     "owner/repo",
+				"bindings": tc.arg,
+			}
+
+			res, err := toolCreateRepo(deps)(context.Background(), req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !res.IsError {
+				t.Fatalf("expected IsError for bad bindings shape, got %+v", res)
+			}
+			if got := textOf(t, res); !strings.Contains(got, tc.want) {
+				t.Fatalf("error body want substring %q, got %q", tc.want, got)
+			}
+			if w.gotUpsert.Name != "" {
+				t.Errorf("writer should not be invoked when bindings shape invalid, got %+v", w.gotUpsert)
+			}
+		})
+	}
+}
+
+// TestToolCreateRepoDefaultsBindingEnabledNil pins the default-enabled
+// contract: when a binding omits "enabled", the *bool must stay nil so
+// config.Binding.IsEnabled returns true. Setting it to a pointer-to-false
+// here would silently disable bindings on every round-trip through MCP.
+func TestToolCreateRepoDefaultsBindingEnabledNil(t *testing.T) {
+	t.Parallel()
+	w := &stubRepoWriter{canonical: config.RepoDef{Name: "owner/repo", Enabled: true}}
+	deps := Deps{
+		Config:    stubConfig{cfg: fixtureConfig()},
+		Queue:     &stubQueue{},
+		Status:    stubStatus{},
+		RepoWrite: w,
+		Logger:    zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":    "owner/repo",
+		"enabled": true,
+		"bindings": []any{
+			map[string]any{"agent": "coder", "labels": []any{"ready"}},
+		},
+	}
+
+	res, err := toolCreateRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", textOf(t, res))
+	}
+	if len(w.gotUpsert.Use) != 1 {
+		t.Fatalf("bindings: want 1, got %d", len(w.gotUpsert.Use))
+	}
+	if b := w.gotUpsert.Use[0]; b.Enabled != nil {
+		t.Errorf("omitted enabled must stay nil (default enabled), got *bool(%v)", *b.Enabled)
+	}
+}
+
+func TestToolDeleteRepoNormalizesAndForwards(t *testing.T) {
+	t.Parallel()
+	w := &stubRepoWriter{}
+	deps := Deps{
+		Config:    stubConfig{cfg: fixtureConfig()},
+		Queue:     &stubQueue{},
+		Status:    stubStatus{},
+		RepoWrite: w,
+		Logger:    zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "  OWNER/Repo  "}
+
+	res, err := toolDeleteRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", textOf(t, res))
+	}
+	if w.gotDeleteName != "owner/repo" {
+		t.Errorf("name should be normalized before forwarding: got %q", w.gotDeleteName)
+	}
+
+	var got map[string]any
+	decodeText(t, res, &got)
+	if got["status"] != "deleted" || got["name"] != "owner/repo" {
+		t.Errorf("response shape: %+v", got)
+	}
+}
+
+func TestToolDeleteRepoRequiresName(t *testing.T) {
+	t.Parallel()
+	w := &stubRepoWriter{}
+	deps := Deps{
+		Config:    stubConfig{cfg: fixtureConfig()},
+		Queue:     &stubQueue{},
+		Status:    stubStatus{},
+		RepoWrite: w,
+		Logger:    zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "   "}
+
+	res, err := toolDeleteRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError for blank name, got %+v", res)
+	}
+	if w.gotDeleteName != "" {
+		t.Errorf("writer should not be invoked for blank name, got %q", w.gotDeleteName)
+	}
+}
+
+func TestToolDeleteRepoPropagatesNotFound(t *testing.T) {
+	t.Parallel()
+	w := &stubRepoWriter{deleteErr: errors.New("repo \"owner/repo\" not found")}
+	deps := Deps{
+		Config:    stubConfig{cfg: fixtureConfig()},
+		Queue:     &stubQueue{},
+		Status:    stubStatus{},
+		RepoWrite: w,
+		Logger:    zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "owner/repo"}
+
+	res, err := toolDeleteRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError on writer failure, got %+v", res)
+	}
+	if got := textOf(t, res); !strings.Contains(got, "not found") {
+		t.Fatalf("error body want substring %q, got %q", "not found", got)
+	}
+}

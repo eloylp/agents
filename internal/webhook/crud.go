@@ -772,28 +772,44 @@ func (s *Server) handleStoreRepos(w http.ResponseWriter, r *http.Request) {
 		if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
-		if req.Name == "" {
-			http.Error(w, "name is required", http.StatusBadRequest)
-			return
-		}
-		s.storeMu.Lock()
-		err := store.UpsertRepo(s.db, req.toConfig())
-		if err == nil {
-			err = s.reloadCron()
-		}
-		s.storeMu.Unlock()
+		canonical, err := s.UpsertRepo(req.toConfig())
 		if err != nil {
 			status := storeErrStatus(err)
 			s.logger.Error().Err(err).Msg("store crud: repo upsert or cron reload failed")
 			http.Error(w, fmt.Sprintf("repo upsert or cron reload: %v", err), status)
 			return
 		}
-		// Return the canonical persisted form so clients see normalized values
-		// (lowercase repo name, trimmed binding fields, etc.).
-		r := req.toConfig()
-		config.NormalizeRepoDef(&r)
-		writeJSON(w, http.StatusOK, repoToStoreJSON(r))
+		writeJSON(w, http.StatusOK, repoToStoreJSON(canonical))
 	}
+}
+
+// UpsertRepo writes a single repo definition (and its bindings) into the store
+// and reloads the cron scheduler. Returns the canonical (normalized) form so
+// callers can surface the exact shape REST clients see in the POST /repos
+// response — lowercase repo name, lowercased binding agents, trimmed cron, and
+// lowercased events.
+//
+// Empty/whitespace names are rejected as *store.ErrValidation so callers can
+// map them to HTTP 400 / MCP user errors via storeErrStatus, mirroring the
+// behaviour of UpsertAgent / UpsertSkill / UpsertBackend.
+//
+// Exposed so non-HTTP surfaces (e.g. the MCP create_repo tool) can run the
+// same upsert path as POST /repos without going through the router.
+func (s *Server) UpsertRepo(r config.RepoDef) (config.RepoDef, error) {
+	if strings.TrimSpace(r.Name) == "" {
+		return config.RepoDef{}, &store.ErrValidation{Msg: "name is required"}
+	}
+	s.storeMu.Lock()
+	err := store.UpsertRepo(s.db, r)
+	if err == nil {
+		err = s.reloadCron()
+	}
+	s.storeMu.Unlock()
+	if err != nil {
+		return config.RepoDef{}, err
+	}
+	config.NormalizeRepoDef(&r)
+	return r, nil
 }
 
 // handleStoreRepo serves GET and DELETE /api/store/repos/{owner}/{repo}.
@@ -816,13 +832,7 @@ func (s *Server) handleStoreRepo(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 
 	case http.MethodDelete:
-		s.storeMu.Lock()
-		err := store.DeleteRepo(s.db, repoName)
-		if err == nil {
-			err = s.reloadCron()
-		}
-		s.storeMu.Unlock()
-		if err != nil {
+		if err := s.DeleteRepo(repoName); err != nil {
 			status := storeErrStatus(err)
 			s.logger.Error().Err(err).Msg("store crud: repo delete or cron reload failed")
 			http.Error(w, fmt.Sprintf("repo delete or cron reload: %v", err), status)
@@ -830,6 +840,23 @@ func (s *Server) handleStoreRepo(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// DeleteRepo removes the named repo (and cascades its bindings) from the
+// store and reloads the cron scheduler. Missing names are idempotent no-ops,
+// matching DELETE /repos/{owner}/{repo}. Returns *store.ErrConflict if the
+// deletion would leave the fleet with no enabled repos.
+//
+// Exposed so non-HTTP surfaces (e.g. the MCP delete_repo tool) can run the
+// same delete path as DELETE /repos/{owner}/{repo} without going through the
+// router.
+func (s *Server) DeleteRepo(name string) error {
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+	if err := store.DeleteRepo(s.db, name); err != nil {
+		return err
+	}
+	return s.reloadCron()
 }
 
 // ── /api/store/export and /api/store/import ───────────────────────────────────
