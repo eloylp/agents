@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -847,7 +848,7 @@ func itoa(i int) string { return strconv.Itoa(i) }
 
 // ── reloadCron failure ────────────────────────────────────────────────────────
 
-// errCronReloader satisfies CronReloader and always returns an error from Reload.
+// errCronReloader satisfies server.CronReloader and always returns an error from Reload.
 type errCronReloader struct{ err error }
 
 func (r *errCronReloader) Reload([]config.RepoDef, []config.AgentDef, map[string]config.SkillDef, map[string]config.AIBackendConfig) error {
@@ -855,8 +856,8 @@ func (r *errCronReloader) Reload([]config.RepoDef, []config.AgentDef, map[string
 }
 
 // openCRUDTestServerWithReloader creates a test server wired with a SQLite
-// store and the given CronReloader.
-func openCRUDTestServerWithReloader(t *testing.T, reloader CronReloader) *Server {
+// store and the given server.CronReloader.
+func openCRUDTestServerWithReloader(t *testing.T, reloader server.CronReloader) *Server {
 	t.Helper()
 	dir := t.TempDir()
 	db, err := store.Open(filepath.Join(dir, "test.db"))

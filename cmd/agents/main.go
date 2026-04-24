@@ -22,6 +22,7 @@ import (
 	"github.com/eloylp/agents/internal/logging"
 	mcpserver "github.com/eloylp/agents/internal/mcp"
 	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/setup"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/ui"
@@ -139,38 +140,38 @@ func run() error {
 	scheduler.WithTraceRecorder(obs)
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
-	server := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, engine, logger)
-	server.WithUI(ui.FS)
-	server.WithObserve(obs)
-	server.WithRuntimeState(obs)
-	server.WithStore(db, scheduler)
+	srv := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, engine, logger)
+	srv.WithUI(ui.FS)
+	srv.WithObserve(obs)
+	srv.WithRuntimeState(obs)
+	srv.WithStore(db, scheduler)
 
 	// Wire the memory backend into the server for the /memory endpoint and
 	// attach an SSE notifier so the UI stream stays live.
 	mem := memBackend.(*sqliteMemory)
 	mem.notifyFn = obs.PublishMemoryChange
-	server.WithMemoryReader(&sqliteWebhookReader{db: db})
+	srv.WithMemoryReader(&sqliteWebhookReader{db: db})
 
 	// Mount the MCP server on /mcp so MCP-capable clients (Claude Code,
 	// Cursor, Cline) can drive the fleet through the tool surface defined
 	// in internal/mcp. The handler shares the daemon's config snapshot,
 	// event queue, observability store, dispatch stats, and memory reader
 	// so MCP tools stay consistent with the REST API.
-	server.WithMCP(mcpserver.New(mcpserver.Deps{
+	srv.WithMCP(mcpserver.New(mcpserver.Deps{
 		DB:            db,
-		Config:        server,
+		Config:        srv,
 		Queue:         dataChannels,
-		Status:        server,
+		Status:        srv,
 		Observe:       obs,
 		DispatchStats: engine,
 		Memory:        &sqliteMcpReader{db: db},
-		ConfigBytes:   server,
-		ConfigImport:  server,
-		AgentWrite:    server,
-		SkillWrite:    server,
-		BackendWrite:  server,
-		RepoWrite:     server,
-		BindingWrite:  server,
+		ConfigBytes:   srv,
+		ConfigImport:  srv,
+		AgentWrite:    srv,
+		SkillWrite:    srv,
+		BackendWrite:  srv,
+		RepoWrite:     srv,
+		BindingWrite:  srv,
 		Logger:        logger,
 	}))
 
@@ -179,7 +180,7 @@ func run() error {
 	engine.StartDispatchDedup(groupCtx)
 	group.Go(func() error { return processor.Run(groupCtx) })
 	group.Go(func() error { return scheduler.Run(groupCtx) })
-	group.Go(func() error { return server.Run(groupCtx) })
+	group.Go(func() error { return srv.Run(groupCtx) })
 	if err := group.Wait(); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
@@ -253,9 +254,9 @@ func (m *sqliteMemory) ReadMemory(agent, repo string) (string, error) {
 	return content, err
 }
 
-// sqliteWebhookReader implements webhook.MemoryReader using the SQLite store.
+// sqliteWebhookReader implements server.MemoryReader using the SQLite store.
 // Unlike sqliteMemory (which serves the scheduler and treats a missing row as
-// empty memory), this reader returns webhook.ErrMemoryNotFound when no row
+// empty memory), this reader returns server.ErrMemoryNotFound when no row
 // exists so that GET /api/memory returns 404 for absent entries while still
 // returning 200 with an empty body for intentionally-cleared memory.
 // The updated_at timestamp is returned so that handleAPIMemory can set the
@@ -271,7 +272,7 @@ func (r *sqliteWebhookReader) ReadMemory(agent, repo string) (string, time.Time,
 		return "", time.Time{}, err
 	}
 	if !found {
-		return "", time.Time{}, webhook.ErrMemoryNotFound
+		return "", time.Time{}, server.ErrMemoryNotFound
 	}
 	return content, mtime, nil
 }
@@ -349,18 +350,18 @@ func loadConfig(dbPath, importPath string) (*config.Config, *sql.DB, error) {
 	return cfg, db, nil
 }
 
-// schedulerStatusAdapter adapts *autonomous.Scheduler to webhook.StatusProvider,
-// converting autonomous.AgentStatus to webhook.AgentStatus without coupling
+// schedulerStatusAdapter adapts *autonomous.Scheduler to server.StatusProvider,
+// converting autonomous.AgentStatus to server.AgentStatus without coupling
 // those packages to each other.
 type schedulerStatusAdapter struct {
 	s *autonomous.Scheduler
 }
 
-func (a schedulerStatusAdapter) AgentStatuses() []webhook.AgentStatus {
+func (a schedulerStatusAdapter) AgentStatuses() []server.AgentStatus {
 	raw := a.s.AgentStatuses()
-	out := make([]webhook.AgentStatus, len(raw))
+	out := make([]server.AgentStatus, len(raw))
 	for i, s := range raw {
-		out[i] = webhook.AgentStatus(s)
+		out[i] = server.AgentStatus(s)
 	}
 	return out
 }
