@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -147,22 +148,15 @@ func sortedSetKeys(in map[string]struct{}) []string {
 }
 
 func canonicalModels(models []string) []string {
-	if len(models) == 0 {
+	out := make([]string, 0, len(models))
+	for _, m := range models {
+		if m = strings.TrimSpace(m); m != "" {
+			out = append(out, m)
+		}
+	}
+	if len(out) == 0 {
 		return nil
 	}
-	set := make(map[string]struct{}, len(models))
-	out := make([]string, 0, len(models))
-	for _, model := range models {
-		model = strings.TrimSpace(model)
-		if model == "" {
-			continue
-		}
-		if _, exists := set[model]; exists {
-			continue
-		}
-		set[model] = struct{}{}
-		out = append(out, model)
-	}
 	sort.Strings(out)
-	return out
+	return slices.Compact(out)
 }
