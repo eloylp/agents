@@ -19,6 +19,7 @@ internal/
   webhook/                  # HTTP server, HMAC verification, delivery dedupe, CRUD API handlers
   ui/                       # Embedded Next.js web dashboard (served at /ui/)
   setup/                    # Interactive first-time setup command
+  mcp/                      # MCP (Model Context Protocol) server exposing fleet tools at /mcp
   logging/                  # zerolog setup
 docs/                       # Long-form docs: configuration, events, dispatch, API, docker, local-models, security
 ```
@@ -91,6 +92,7 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, 
   - CRUD endpoints (always mounted): `GET|POST /skills`, `GET|POST /backends`, `GET|POST /repos`, `POST /agents`, plus item routes (`GET|DELETE /agents/{name}`, `GET|DELETE /skills/{name}`, `GET|PATCH|DELETE /backends/{name}`, `GET|DELETE /repos/{owner}/{repo}`).
   - Backend diagnostics endpoints: `GET /backends/status`, `POST /backends/discover`, `POST /backends/local`.
   - `GET /export`, `POST /import` — export/import fleet config as YAML.
+  - `POST /mcp` — MCP (Model Context Protocol) Streamable HTTP endpoint. Registered MCP clients (Claude Code, Cursor, Cline) discover fleet-management tools automatically. First-cut tools: `list_agents`, `list_skills`, `list_backends`, `list_repos`, `get_status`, `trigger_agent`. Additional CRUD write, observability, and config import/export tools are tracked in follow-ups to #227.
 - Supported webhook events: `issues.*` (labeled, opened, edited, reopened, closed), `pull_request.*` (labeled, opened, synchronize, ready_for_review, closed), `issue_comment.created`, `pull_request_review.submitted`, `pull_request_review_comment.created`, `push` (branches only). Label-triggered routing uses `payload.label.name`. Non-label `events:` subscriptions match the event kind exactly. Draft PRs skip `pull_request.labeled`.
 - Internal event kinds (not from webhooks): `agents.run` (on-demand trigger from `POST /run` or `--run-agent`), `agent.dispatch` (inter-agent dispatch), `autonomous` (cron scheduler).
 - Duplicate webhook suppression via `X-GitHub-Delivery` TTL cache.
