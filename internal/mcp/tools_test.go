@@ -2479,6 +2479,11 @@ type stubBindingWriter struct {
 	gotUpdateBinding config.Binding
 	updateResult     config.Binding
 	updateErr        error
+	// Read
+	gotReadRepo string
+	gotReadID   int64
+	readResult  config.Binding
+	readErr     error
 	// Delete
 	gotDeleteRepo string
 	gotDeleteID   int64
@@ -2502,6 +2507,15 @@ func (s *stubBindingWriter) UpdateBinding(repoName string, id int64, b config.Bi
 		return config.Binding{}, s.updateErr
 	}
 	return s.updateResult, nil
+}
+
+func (s *stubBindingWriter) ReadBinding(repoName string, id int64) (config.Binding, error) {
+	s.gotReadRepo = repoName
+	s.gotReadID = id
+	if s.readErr != nil {
+		return config.Binding{}, s.readErr
+	}
+	return s.readResult, nil
 }
 
 func (s *stubBindingWriter) DeleteBinding(repoName string, id int64) error {

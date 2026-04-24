@@ -1090,6 +1090,19 @@ func (s *Server) handleDeleteBinding(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ReadBinding fetches one binding by ID, verifying it belongs to repoName.
+// Exposed for non-HTTP callers (MCP get_binding tool).
+func (s *Server) ReadBinding(repoName string, id int64) (config.Binding, error) {
+	existingRepo, b, found, err := store.ReadBinding(s.db, id)
+	if err != nil {
+		return config.Binding{}, err
+	}
+	if !found || existingRepo != repoName {
+		return config.Binding{}, &store.ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found for repo %q", id, repoName)}
+	}
+	return b, nil
+}
+
 // DeleteBinding verifies the id belongs to repoName, deletes it, and reloads
 // cron. Exposed for non-HTTP callers (MCP delete_binding tool).
 func (s *Server) DeleteBinding(repoName string, id int64) error {

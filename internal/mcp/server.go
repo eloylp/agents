@@ -172,6 +172,7 @@ type RepoWriter interface {
 // schedules afterwards so MCP writes stay consistent with the REST path.
 type BindingWriter interface {
 	CreateBinding(repoName string, b config.Binding) (config.Binding, error)
+	ReadBinding(repoName string, id int64) (config.Binding, error)
 	UpdateBinding(repoName string, id int64, b config.Binding) (config.Binding, error)
 	DeleteBinding(repoName string, id int64) error
 }

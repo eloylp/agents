@@ -353,6 +353,20 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 	}
 	if deps.BindingWrite != nil {
 		srv.AddTool(
+			mcpgo.NewTool("get_binding",
+				mcpgo.WithDescription("Fetch one binding by ID, verifying it belongs to the given repo. Same path as GET /repos/{owner}/{repo}/bindings/{id}."),
+				mcpgo.WithNumber("id",
+					mcpgo.Required(),
+					mcpgo.Description("Binding ID (from list_repos or get_repo)."),
+				),
+				mcpgo.WithString("repo",
+					mcpgo.Required(),
+					mcpgo.Description("Repo full name \"owner/repo\" the binding belongs to."),
+				),
+			),
+			toolGetBinding(deps),
+		)
+		srv.AddTool(
 			mcpgo.NewTool("create_binding",
 				mcpgo.WithDescription("Create a new binding on a repo. The binding wires one agent to exactly one trigger (labels, events, or cron). Returns the persisted binding including its generated ID. Same path as POST /repos/{owner}/{repo}/bindings."),
 				mcpgo.WithString("repo",

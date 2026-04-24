@@ -287,6 +287,27 @@ func toolUpdateBinding(deps Deps) server.ToolHandlerFunc {
 
 // toolDeleteBinding removes a binding by ID through the same path as DELETE
 // /repos/{owner}/{repo}/bindings/{id}.
+func toolGetBinding(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id, err := req.RequireInt("id")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		if id <= 0 {
+			return mcpgo.NewToolResultError("id must be a positive integer"), nil
+		}
+		repo, ok := trimmedString(req, "repo")
+		if !ok {
+			return mcpgo.NewToolResultError("repo is required"), nil
+		}
+		b, err := deps.BindingWrite.ReadBinding(repo, int64(id))
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("get binding", err), nil
+		}
+		return jsonResult(bindingJSON(b))
+	}
+}
+
 func toolDeleteBinding(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		id, err := req.RequireInt("id")
