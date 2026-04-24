@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1011,6 +1012,9 @@ func TestToolGetConfigPropagatesError(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected IsError on reader failure, got %+v", res)
 	}
+	if got := textOf(t, res); !strings.Contains(got, "snapshot failure") {
+		t.Fatalf("error body want substring %q, got %q", "snapshot failure", got)
+	}
 }
 
 func TestToolExportConfigReturnsBytesVerbatim(t *testing.T) {
@@ -1047,5 +1051,8 @@ func TestToolExportConfigPropagatesError(t *testing.T) {
 	}
 	if !res.IsError {
 		t.Fatalf("expected IsError on reader failure, got %+v", res)
+	}
+	if got := textOf(t, res); !strings.Contains(got, "db closed") {
+		t.Fatalf("error body want substring %q, got %q", "db closed", got)
 	}
 }
