@@ -14,6 +14,7 @@ import (
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -1505,6 +1506,41 @@ func TestToolCreateSkillRequiresName(t *testing.T) {
 	}
 	if w.gotUpsertName != "" {
 		t.Errorf("writer should not be invoked when name missing, got %q", w.gotUpsertName)
+	}
+}
+
+// TestToolCreateSkillRejectsBlankName pins the whitespace-name contract for
+// create_skill: the tool does not short-circuit at the handler (unlike
+// delete_skill, which uses trimmedString), so a blank name must reach
+// UpsertSkill and surface the writer's *store.ErrValidation as a user error.
+// If the blank-name guard is ever hoisted into the handler, this test will
+// fail and force an update to the stub-invocation expectations.
+func TestToolCreateSkillRejectsBlankName(t *testing.T) {
+	t.Parallel()
+	w := &stubSkillWriter{upsertErr: &store.ErrValidation{Msg: "name is required"}}
+	deps := Deps{
+		Config:     stubConfig{cfg: fixtureConfig()},
+		Queue:      &stubQueue{},
+		Status:     stubStatus{},
+		SkillWrite: w,
+		Logger:     zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "   "}
+
+	res, err := toolCreateSkill(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError for blank name, got %+v", res)
+	}
+	if got := textOf(t, res); !strings.Contains(got, "name is required") {
+		t.Fatalf("error body want substring %q, got %q", "name is required", got)
+	}
+	if w.gotUpsertName != "   " {
+		t.Errorf("writer should receive raw blank name (owns normalization), got %q", w.gotUpsertName)
 	}
 }
 
