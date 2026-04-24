@@ -1653,3 +1653,261 @@ func TestToolDeleteSkillPropagatesConflict(t *testing.T) {
 		t.Fatalf("error body want substring %q, got %q", "skill referenced by agent", got)
 	}
 }
+
+// stubBackendWriter records the backend arguments it received and returns
+// canned values. Tests pin both the raw inputs the writer observed and the
+// canonical values the tool surfaces back to the caller.
+type stubBackendWriter struct {
+	gotUpsertName    string
+	gotUpsertBackend config.AIBackendConfig
+	gotDeleteName    string
+	canonicalName    string
+	canonical        config.AIBackendConfig
+	upsertErr        error
+	deleteErr        error
+}
+
+func (s *stubBackendWriter) UpsertBackend(name string, b config.AIBackendConfig) (string, config.AIBackendConfig, error) {
+	s.gotUpsertName = name
+	s.gotUpsertBackend = b
+	if s.upsertErr != nil {
+		return "", config.AIBackendConfig{}, s.upsertErr
+	}
+	return s.canonicalName, s.canonical, nil
+}
+
+func (s *stubBackendWriter) DeleteBackend(name string) error {
+	s.gotDeleteName = name
+	return s.deleteErr
+}
+
+func TestToolCreateBackendForwardsAndReturnsCanonical(t *testing.T) {
+	t.Parallel()
+	canonical := config.AIBackendConfig{
+		Command:        "claude",
+		Models:         []string{"claude-opus-4-7"},
+		TimeoutSeconds: 600,
+		MaxPromptChars: 12000,
+	}
+	w := &stubBackendWriter{
+		canonicalName: "claude",
+		canonical:     canonical,
+	}
+	deps := Deps{
+		Config:       stubConfig{cfg: fixtureConfig()},
+		Queue:        &stubQueue{},
+		Status:       stubStatus{},
+		BackendWrite: w,
+		Logger:       zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":             "  Claude  ",
+		"command":          "claude",
+		"models":           []any{"claude-opus-4-7"},
+		"timeout_seconds":  600,
+		"max_prompt_chars": 12000,
+	}
+
+	res, err := toolCreateBackend(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", textOf(t, res))
+	}
+
+	if w.gotUpsertName != "  Claude  " {
+		t.Errorf("raw name should pass through to writer (writer owns normalization): got %q", w.gotUpsertName)
+	}
+	if w.gotUpsertBackend.Command != "claude" {
+		t.Errorf("command not forwarded: %+v", w.gotUpsertBackend)
+	}
+	if w.gotUpsertBackend.TimeoutSeconds != 600 || w.gotUpsertBackend.MaxPromptChars != 12000 {
+		t.Errorf("runtime settings not forwarded: (%d, %d)", w.gotUpsertBackend.TimeoutSeconds, w.gotUpsertBackend.MaxPromptChars)
+	}
+	if len(w.gotUpsertBackend.Models) != 1 || w.gotUpsertBackend.Models[0] != "claude-opus-4-7" {
+		t.Errorf("models slice not forwarded: %+v", w.gotUpsertBackend.Models)
+	}
+
+	var got map[string]any
+	decodeText(t, res, &got)
+	if got["name"] != "claude" {
+		t.Errorf("response should reflect canonical name: %+v", got)
+	}
+	if got["command"] != "claude" {
+		t.Errorf("response should reflect canonical command: %+v", got)
+	}
+}
+
+func TestToolCreateBackendRequiresName(t *testing.T) {
+	t.Parallel()
+	w := &stubBackendWriter{}
+	deps := Deps{
+		Config:       stubConfig{cfg: fixtureConfig()},
+		Queue:        &stubQueue{},
+		Status:       stubStatus{},
+		BackendWrite: w,
+		Logger:       zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"command": "claude"}
+
+	res, err := toolCreateBackend(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError when name missing, got %+v", res)
+	}
+	if w.gotUpsertName != "" {
+		t.Errorf("writer should not be invoked when name missing, got %q", w.gotUpsertName)
+	}
+}
+
+// TestToolCreateBackendRejectsBlankName pins the whitespace-name contract for
+// create_backend: like create_skill, the handler uses req.RequireString("name")
+// which only rejects the missing-key path, so a whitespace-only name must
+// reach UpsertBackend and surface the writer's *store.ErrValidation as a user
+// error. If the blank-name guard is ever hoisted into the tool layer, this
+// test fails and forces an update to the stub-invocation expectations.
+func TestToolCreateBackendRejectsBlankName(t *testing.T) {
+	t.Parallel()
+	w := &stubBackendWriter{upsertErr: &store.ErrValidation{Msg: "name is required"}}
+	deps := Deps{
+		Config:       stubConfig{cfg: fixtureConfig()},
+		Queue:        &stubQueue{},
+		Status:       stubStatus{},
+		BackendWrite: w,
+		Logger:       zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "   ", "command": "claude"}
+
+	res, err := toolCreateBackend(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError for blank name, got %+v", res)
+	}
+	if got := textOf(t, res); !strings.Contains(got, "name is required") {
+		t.Fatalf("error body want substring %q, got %q", "name is required", got)
+	}
+	if w.gotUpsertName != "   " {
+		t.Errorf("writer should receive raw blank name (owns normalization), got %q", w.gotUpsertName)
+	}
+}
+
+func TestToolCreateBackendPropagatesError(t *testing.T) {
+	t.Parallel()
+	w := &stubBackendWriter{upsertErr: errors.New("db closed")}
+	deps := Deps{
+		Config:       stubConfig{cfg: fixtureConfig()},
+		Queue:        &stubQueue{},
+		Status:       stubStatus{},
+		BackendWrite: w,
+		Logger:       zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "claude", "command": "claude"}
+
+	res, err := toolCreateBackend(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError on writer failure, got %+v", res)
+	}
+	if got := textOf(t, res); !strings.Contains(got, "db closed") {
+		t.Fatalf("error body want substring %q, got %q", "db closed", got)
+	}
+}
+
+func TestToolDeleteBackendNormalizesAndForwards(t *testing.T) {
+	t.Parallel()
+	w := &stubBackendWriter{}
+	deps := Deps{
+		Config:       stubConfig{cfg: fixtureConfig()},
+		Queue:        &stubQueue{},
+		Status:       stubStatus{},
+		BackendWrite: w,
+		Logger:       zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "  Claude  "}
+
+	res, err := toolDeleteBackend(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", textOf(t, res))
+	}
+	if w.gotDeleteName != "claude" {
+		t.Errorf("name should be normalized before forwarding: got %q", w.gotDeleteName)
+	}
+
+	var got map[string]any
+	decodeText(t, res, &got)
+	if got["status"] != "deleted" || got["name"] != "claude" {
+		t.Errorf("response shape: %+v", got)
+	}
+}
+
+func TestToolDeleteBackendRequiresName(t *testing.T) {
+	t.Parallel()
+	w := &stubBackendWriter{}
+	deps := Deps{
+		Config:       stubConfig{cfg: fixtureConfig()},
+		Queue:        &stubQueue{},
+		Status:       stubStatus{},
+		BackendWrite: w,
+		Logger:       zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "   "}
+
+	res, err := toolDeleteBackend(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError for blank name, got %+v", res)
+	}
+	if w.gotDeleteName != "" {
+		t.Errorf("writer should not be invoked for blank name, got %q", w.gotDeleteName)
+	}
+}
+
+func TestToolDeleteBackendPropagatesConflict(t *testing.T) {
+	t.Parallel()
+	w := &stubBackendWriter{deleteErr: errors.New("backend referenced by agent")}
+	deps := Deps{
+		Config:       stubConfig{cfg: fixtureConfig()},
+		Queue:        &stubQueue{},
+		Status:       stubStatus{},
+		BackendWrite: w,
+		Logger:       zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "claude"}
+
+	res, err := toolDeleteBackend(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError on writer failure, got %+v", res)
+	}
+	if got := textOf(t, res); !strings.Contains(got, "backend referenced by agent") {
+		t.Fatalf("error body want substring %q, got %q", "backend referenced by agent", got)
+	}
+}
