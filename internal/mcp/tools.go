@@ -225,6 +225,47 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolDeleteSkill(deps),
 		)
 	}
+	if deps.BackendWrite != nil {
+		srv.AddTool(
+			mcpgo.NewTool("create_backend",
+				mcpgo.WithDescription("Create or update an AI backend. Upsert semantics: a write to an existing name overwrites it. Returns the canonical (normalized) backend persisted by the store. Same path as POST /backends."),
+				mcpgo.WithString("name",
+					mcpgo.Required(),
+					mcpgo.Description("Backend name. Lowercased and trimmed by the store. Built-in names: \"claude\", \"codex\". Any other name creates a named backend."),
+				),
+				mcpgo.WithString("command",
+					mcpgo.Description("Path to the CLI binary the daemon invokes for this backend (e.g. \"claude\" or \"/usr/local/bin/codex\")."),
+				),
+				mcpgo.WithArray("models",
+					mcpgo.Description("Optional model catalog for this backend. Agents pinning a model must name one that appears here."),
+					mcpgo.Items(map[string]any{"type": "string"}),
+				),
+				mcpgo.WithString("local_model_url",
+					mcpgo.Description("Optional OpenAI-compatible base URL for local backends. Triggers ANTHROPIC_BASE_URL injection at runtime. Leave empty for upstream CLIs."),
+				),
+				mcpgo.WithNumber("timeout_seconds",
+					mcpgo.Description("Per-run CLI timeout in seconds. Defaults are applied when zero."),
+				),
+				mcpgo.WithNumber("max_prompt_chars",
+					mcpgo.Description("Maximum composed prompt length in characters. Defaults are applied when zero."),
+				),
+				mcpgo.WithString("redaction_salt_env",
+					mcpgo.Description("Name of the environment variable carrying the prompt-log redaction salt for this backend."),
+				),
+			),
+			toolCreateBackend(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("delete_backend",
+				mcpgo.WithDescription("Delete a backend by name. Fails with a conflict error if any agent still references the backend. Same path as DELETE /backends/{name}."),
+				mcpgo.WithString("name",
+					mcpgo.Required(),
+					mcpgo.Description("Backend name (case-insensitive; matched after lowercasing)."),
+				),
+			),
+			toolDeleteBackend(deps),
+		)
+	}
 	if deps.AgentWrite != nil {
 		srv.AddTool(
 			mcpgo.NewTool("create_agent",
@@ -903,6 +944,55 @@ func toolCreateSkill(deps Deps) server.ToolHandlerFunc {
 		return jsonResult(map[string]any{
 			"name":   canonicalName,
 			"prompt": canonical.Prompt,
+		})
+	}
+}
+
+// toolCreateBackend upserts a backend definition through the same path as
+// POST /backends. Returns the canonical (normalized) form so callers see the
+// backend the way the store actually persisted it — lowercased name, trimmed
+// command, defaults applied for zero-value timeout/max-prompt fields. Empty
+// names surface as *store.ErrValidation via Server.UpsertBackend, which
+// storeErrStatus maps to a user-actionable error.
+func toolCreateBackend(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, err := req.RequireString("name")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		b := config.AIBackendConfig{
+			Command:          req.GetString("command", ""),
+			Models:           req.GetStringSlice("models", nil),
+			LocalModelURL:    req.GetString("local_model_url", ""),
+			TimeoutSeconds:   req.GetInt("timeout_seconds", 0),
+			MaxPromptChars:   req.GetInt("max_prompt_chars", 0),
+			RedactionSaltEnv: req.GetString("redaction_salt_env", ""),
+		}
+		canonicalName, canonical, err := deps.BackendWrite.UpsertBackend(name, b)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("create backend", err), nil
+		}
+		return jsonResult(backendJSON(canonicalName, canonical))
+	}
+}
+
+// toolDeleteBackend removes a backend through the same path as DELETE
+// /backends/{name}. If any agent still references the backend the store
+// surfaces a *store.ErrConflict, which the caller sees as a user-actionable
+// error.
+func toolDeleteBackend(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, ok := trimmedString(req, "name")
+		if !ok {
+			return mcpgo.NewToolResultError("name is required"), nil
+		}
+		canonical := config.NormalizeBackendName(name)
+		if err := deps.BackendWrite.DeleteBackend(canonical); err != nil {
+			return mcpgo.NewToolResultErrorFromErr("delete backend", err), nil
+		}
+		return jsonResult(map[string]any{
+			"status": "deleted",
+			"name":   canonical,
 		})
 	}
 }

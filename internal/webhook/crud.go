@@ -496,29 +496,44 @@ func (s *Server) handleStoreBackends(w http.ResponseWriter, r *http.Request) {
 		if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
-		if req.Name == "" {
-			http.Error(w, "name is required", http.StatusBadRequest)
-			return
-		}
-		s.storeMu.Lock()
-		err := store.UpsertBackend(s.db, req.Name, req.toConfig())
-		if err == nil {
-			err = s.reloadCron()
-		}
-		s.storeMu.Unlock()
+		name, b, err := s.UpsertBackend(req.Name, req.toConfig())
 		if err != nil {
 			status := storeErrStatus(err)
 			s.logger.Error().Err(err).Msg("store crud: backend upsert or cron reload failed")
 			http.Error(w, fmt.Sprintf("backend upsert or cron reload: %v", err), status)
 			return
 		}
-		// Return the canonical persisted form: normalized name, defaults applied,
-		// and env values redacted — consistent with what GET returns.
-		b := req.toConfig()
-		config.NormalizeBackendConfig(&b)
-		config.ApplyBackendDefaults(&b)
-		writeJSON(w, http.StatusOK, backendToStoreJSON(config.NormalizeBackendName(req.Name), b))
+		writeJSON(w, http.StatusOK, backendToStoreJSON(name, b))
 	}
+}
+
+// UpsertBackend writes a single backend definition into the store and reloads
+// the cron scheduler. Returns the canonical (normalized) name and config that
+// were persisted so callers can surface the same shape REST clients see in the
+// POST /backends response — lowercase name, trimmed command, defaults applied.
+//
+// Empty/whitespace names are rejected as *store.ErrValidation so callers can
+// map them to HTTP 400 / MCP user errors via storeErrStatus, mirroring the
+// behaviour of UpsertAgent / UpsertSkill.
+//
+// Exposed so non-HTTP surfaces (e.g. the MCP create_backend tool) can run the
+// same upsert path as POST /backends without going through the router.
+func (s *Server) UpsertBackend(name string, b config.AIBackendConfig) (string, config.AIBackendConfig, error) {
+	if strings.TrimSpace(name) == "" {
+		return "", config.AIBackendConfig{}, &store.ErrValidation{Msg: "name is required"}
+	}
+	s.storeMu.Lock()
+	err := store.UpsertBackend(s.db, name, b)
+	if err == nil {
+		err = s.reloadCron()
+	}
+	s.storeMu.Unlock()
+	if err != nil {
+		return "", config.AIBackendConfig{}, err
+	}
+	config.NormalizeBackendConfig(&b)
+	config.ApplyBackendDefaults(&b)
+	return config.NormalizeBackendName(name), b, nil
 }
 
 // handleBackendsStatus serves GET /backends/status with live diagnostics.
@@ -711,20 +726,28 @@ func (s *Server) handleStoreBackendPatch(w http.ResponseWriter, r *http.Request)
 // handleStoreBackendDelete serves DELETE /api/store/backends/{name}.
 func (s *Server) handleStoreBackendDelete(w http.ResponseWriter, r *http.Request) {
 	name := backendPathName(r)
-
-	s.storeMu.Lock()
-	err := store.DeleteBackend(s.db, name)
-	if err == nil {
-		err = s.reloadCron()
-	}
-	s.storeMu.Unlock()
-	if err != nil {
+	if err := s.DeleteBackend(name); err != nil {
 		status := storeErrStatus(err)
 		s.logger.Error().Err(err).Msg("store crud: backend delete or cron reload failed")
 		http.Error(w, fmt.Sprintf("backend delete or cron reload: %v", err), status)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// DeleteBackend removes the named backend from the store and reloads the cron
+// scheduler. Returns *store.ErrConflict if any agent still references the
+// backend (HTTP 409 / MCP user error via storeErrStatus).
+//
+// Exposed so non-HTTP surfaces (e.g. the MCP delete_backend tool) can run the
+// same delete path as DELETE /backends/{name} without going through the router.
+func (s *Server) DeleteBackend(name string) error {
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+	if err := store.DeleteBackend(s.db, name); err != nil {
+		return err
+	}
+	return s.reloadCron()
 }
 
 // ── /api/store/repos ──────────────────────────────────────────────────────────

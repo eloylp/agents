@@ -167,6 +167,7 @@ func run() error {
 		ConfigImport:  server,
 		AgentWrite:    server,
 		SkillWrite:    server,
+		BackendWrite:  server,
 		Logger:        logger,
 	}))
 
