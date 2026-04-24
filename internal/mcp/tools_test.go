@@ -1184,3 +1184,228 @@ func TestToolImportConfigPropagatesError(t *testing.T) {
 		t.Fatalf("expected IsError when importer fails, got %+v", res)
 	}
 }
+
+// stubAgentWriter records the agent definition / delete arguments it received
+// and returns canned values. The canonical agent returned from UpsertAgent is
+// what the create_agent tool serialises back to the caller, so tests pin both
+// the inputs the writer received and the outputs the tool surfaces.
+type stubAgentWriter struct {
+	gotUpsert     config.AgentDef
+	gotDeleteName string
+	gotCascade    bool
+	canonical     config.AgentDef
+	upsertErr     error
+	deleteErr     error
+}
+
+func (s *stubAgentWriter) UpsertAgent(a config.AgentDef) (config.AgentDef, error) {
+	s.gotUpsert = a
+	if s.upsertErr != nil {
+		return config.AgentDef{}, s.upsertErr
+	}
+	return s.canonical, nil
+}
+
+func (s *stubAgentWriter) DeleteAgent(name string, cascade bool) error {
+	s.gotDeleteName = name
+	s.gotCascade = cascade
+	return s.deleteErr
+}
+
+func TestToolCreateAgentForwardsAndReturnsCanonical(t *testing.T) {
+	t.Parallel()
+	canonical := config.AgentDef{
+		Name:          "linter",
+		Backend:       "claude",
+		Skills:        []string{"security"},
+		Prompt:        "audit",
+		AllowDispatch: true,
+		CanDispatch:   []string{"coder"},
+		Description:   "audits code",
+	}
+	w := &stubAgentWriter{canonical: canonical}
+	deps := Deps{
+		Config:     stubConfig{cfg: fixtureConfig()},
+		Queue:      &stubQueue{},
+		Status:     stubStatus{},
+		AgentWrite: w,
+		Logger:     zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":           "Linter",
+		"backend":        "claude",
+		"prompt":         "audit",
+		"description":    "audits code",
+		"skills":         []any{"security"},
+		"can_dispatch":   []any{"coder"},
+		"allow_dispatch": true,
+	}
+
+	res, err := toolCreateAgent(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", textOf(t, res))
+	}
+
+	if w.gotUpsert.Name != "Linter" || w.gotUpsert.Backend != "claude" || w.gotUpsert.Prompt != "audit" {
+		t.Errorf("forwarded agent missing fields: %+v", w.gotUpsert)
+	}
+	if !w.gotUpsert.AllowDispatch || len(w.gotUpsert.CanDispatch) != 1 || w.gotUpsert.CanDispatch[0] != "coder" {
+		t.Errorf("dispatch fields not forwarded: %+v", w.gotUpsert)
+	}
+	if len(w.gotUpsert.Skills) != 1 || w.gotUpsert.Skills[0] != "security" {
+		t.Errorf("skills slice not forwarded: %+v", w.gotUpsert.Skills)
+	}
+
+	var got map[string]any
+	decodeText(t, res, &got)
+	if got["name"] != "linter" {
+		t.Errorf("response should reflect canonical name, got %+v", got["name"])
+	}
+	if got["allow_dispatch"] != true {
+		t.Errorf("canonical allow_dispatch lost in response: %+v", got)
+	}
+}
+
+func TestToolCreateAgentRequiresName(t *testing.T) {
+	t.Parallel()
+	w := &stubAgentWriter{}
+	deps := Deps{
+		Config:     stubConfig{cfg: fixtureConfig()},
+		Queue:      &stubQueue{},
+		Status:     stubStatus{},
+		AgentWrite: w,
+		Logger:     zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"backend": "claude"}
+
+	res, err := toolCreateAgent(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError when name missing, got %+v", res)
+	}
+	if w.gotUpsert.Name != "" {
+		t.Errorf("writer should not be invoked when name missing, got %+v", w.gotUpsert)
+	}
+}
+
+func TestToolCreateAgentPropagatesError(t *testing.T) {
+	t.Parallel()
+	w := &stubAgentWriter{upsertErr: errors.New("backend unknown")}
+	deps := Deps{
+		Config:     stubConfig{cfg: fixtureConfig()},
+		Queue:      &stubQueue{},
+		Status:     stubStatus{},
+		AgentWrite: w,
+		Logger:     zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "linter", "backend": "ghost"}
+
+	res, err := toolCreateAgent(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError on writer failure, got %+v", res)
+	}
+	if got := textOf(t, res); !strings.Contains(got, "backend unknown") {
+		t.Fatalf("error body want substring %q, got %q", "backend unknown", got)
+	}
+}
+
+func TestToolDeleteAgentNormalizesAndForwardsCascade(t *testing.T) {
+	t.Parallel()
+	w := &stubAgentWriter{}
+	deps := Deps{
+		Config:     stubConfig{cfg: fixtureConfig()},
+		Queue:      &stubQueue{},
+		Status:     stubStatus{},
+		AgentWrite: w,
+		Logger:     zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "  Coder  ", "cascade": true}
+
+	res, err := toolDeleteAgent(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", textOf(t, res))
+	}
+	if w.gotDeleteName != "coder" {
+		t.Errorf("name should be normalized: got %q", w.gotDeleteName)
+	}
+	if !w.gotCascade {
+		t.Errorf("cascade should be forwarded as true")
+	}
+
+	var got map[string]any
+	decodeText(t, res, &got)
+	if got["status"] != "deleted" || got["name"] != "coder" || got["cascade"] != true {
+		t.Errorf("response shape: %+v", got)
+	}
+}
+
+func TestToolDeleteAgentRequiresName(t *testing.T) {
+	t.Parallel()
+	w := &stubAgentWriter{}
+	deps := Deps{
+		Config:     stubConfig{cfg: fixtureConfig()},
+		Queue:      &stubQueue{},
+		Status:     stubStatus{},
+		AgentWrite: w,
+		Logger:     zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "   "}
+
+	res, err := toolDeleteAgent(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError for blank name, got %+v", res)
+	}
+	if w.gotDeleteName != "" {
+		t.Errorf("writer should not be invoked for blank name, got %q", w.gotDeleteName)
+	}
+}
+
+func TestToolDeleteAgentPropagatesConflict(t *testing.T) {
+	t.Parallel()
+	w := &stubAgentWriter{deleteErr: errors.New("agent referenced by binding")}
+	deps := Deps{
+		Config:     stubConfig{cfg: fixtureConfig()},
+		Queue:      &stubQueue{},
+		Status:     stubStatus{},
+		AgentWrite: w,
+		Logger:     zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "coder"}
+
+	res, err := toolDeleteAgent(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError on writer failure, got %+v", res)
+	}
+	if got := textOf(t, res); !strings.Contains(got, "agent referenced by binding") {
+		t.Fatalf("error body want substring %q, got %q", "agent referenced by binding", got)
+	}
+}

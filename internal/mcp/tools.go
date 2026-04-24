@@ -200,6 +200,57 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolImportConfig(deps),
 		)
 	}
+	if deps.AgentWrite != nil {
+		srv.AddTool(
+			mcpgo.NewTool("create_agent",
+				mcpgo.WithDescription("Create or update an agent. Upsert semantics: a write to an existing name overwrites it. Returns the canonical (normalized) agent persisted by the store. Same path as POST /agents."),
+				mcpgo.WithString("name",
+					mcpgo.Required(),
+					mcpgo.Description("Agent name. Lowercased and trimmed by the store."),
+				),
+				mcpgo.WithString("backend",
+					mcpgo.Description("AI backend name (must exist in the fleet). Required for runnable agents."),
+				),
+				mcpgo.WithString("model",
+					mcpgo.Description("Optional model identifier; must be present in the backend's model catalog."),
+				),
+				mcpgo.WithString("prompt",
+					mcpgo.Description("Agent prompt body."),
+				),
+				mcpgo.WithString("description",
+					mcpgo.Description("Short human-readable description shown in the dispatch roster."),
+				),
+				mcpgo.WithArray("skills",
+					mcpgo.Description("Optional list of skill names to compose into the agent's system prompt."),
+					mcpgo.Items(map[string]any{"type": "string"}),
+				),
+				mcpgo.WithArray("can_dispatch",
+					mcpgo.Description("Optional whitelist of agent names this agent may dispatch to."),
+					mcpgo.Items(map[string]any{"type": "string"}),
+				),
+				mcpgo.WithBoolean("allow_prs",
+					mcpgo.Description("Allow this agent to open or edit pull requests. Defaults to false."),
+				),
+				mcpgo.WithBoolean("allow_dispatch",
+					mcpgo.Description("Allow other agents to dispatch this agent. Defaults to false."),
+				),
+			),
+			toolCreateAgent(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("delete_agent",
+				mcpgo.WithDescription("Delete an agent by name. Without cascade=true the call fails with a conflict error if any repo binding still references the agent. Same path as DELETE /agents/{name}."),
+				mcpgo.WithString("name",
+					mcpgo.Required(),
+					mcpgo.Description("Agent name (case-insensitive; matched after lowercasing)."),
+				),
+				mcpgo.WithBoolean("cascade",
+					mcpgo.Description("When true, also remove repo bindings that reference the agent. Defaults to false."),
+				),
+			),
+			toolDeleteAgent(deps),
+		)
+	}
 }
 
 // toolListAgents serialises every agent definition as JSON. Uses the same
@@ -753,5 +804,58 @@ func toolImportConfig(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultErrorFromErr("import config", err), nil
 		}
 		return jsonResult(counts)
+	}
+}
+
+// toolCreateAgent upserts an agent definition through the same path as POST
+// /agents. Returns the canonical (normalized) form so callers see the agent
+// the way the store actually persisted it. Empty names, unknown backends, and
+// model/skill validation failures surface as tool errors via the store's
+// *ErrValidation / *ErrConflict types.
+func toolCreateAgent(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, err := req.RequireString("name")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		a := config.AgentDef{
+			Name:          name,
+			Backend:       req.GetString("backend", ""),
+			Model:         req.GetString("model", ""),
+			Prompt:        req.GetString("prompt", ""),
+			Description:   req.GetString("description", ""),
+			Skills:        req.GetStringSlice("skills", nil),
+			CanDispatch:   req.GetStringSlice("can_dispatch", nil),
+			AllowPRs:      req.GetBool("allow_prs", false),
+			AllowDispatch: req.GetBool("allow_dispatch", false),
+		}
+		canonical, err := deps.AgentWrite.UpsertAgent(a)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("create agent", err), nil
+		}
+		return jsonResult(agentJSON(canonical))
+	}
+}
+
+// toolDeleteAgent removes an agent through the same path as DELETE
+// /agents/{name}. cascade=true also drops repo bindings that reference the
+// agent; without it, a referenced agent surfaces a *store.ErrConflict so
+// callers can prompt for cascade explicitly rather than silently mutating
+// repo bindings.
+func toolDeleteAgent(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, ok := trimmedString(req, "name")
+		if !ok {
+			return mcpgo.NewToolResultError("name is required"), nil
+		}
+		cascade := req.GetBool("cascade", false)
+		if err := deps.AgentWrite.DeleteAgent(config.NormalizeAgentName(name), cascade); err != nil {
+			return mcpgo.NewToolResultErrorFromErr("delete agent", err), nil
+		}
+		return jsonResult(map[string]any{
+			"status":  "deleted",
+			"name":    config.NormalizeAgentName(name),
+			"cascade": cascade,
+		})
 	}
 }

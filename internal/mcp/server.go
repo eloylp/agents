@@ -15,8 +15,10 @@
 //   - list_events, list_traces, get_trace, get_trace_steps — agent activity
 //   - get_graph, get_dispatches, get_memory               — dispatch + memory
 //   - get_config, export_config, import_config            — config snapshots / write
+//   - create_agent, delete_agent                          — agent CRUD writes
 //
-// CRUD writes (create/delete) are tracked as follow-up work on #227.
+// Remaining CRUD writes (skill/backend/repo create/delete) are tracked as
+// follow-up work on #227.
 package mcp
 
 import (
@@ -105,15 +107,27 @@ type ConfigImporter interface {
 	ImportYAML(body []byte, mode string) (map[string]int, error)
 }
 
+// AgentWriter writes a single agent definition into the store and removes
+// existing ones. Returns the canonical (normalized) form the store persisted
+// so callers can show the same shape REST clients see in the POST /agents
+// response.
+//
+// Implementations must hold the store mutex while writing and reload cron
+// schedules afterwards so MCP writes stay consistent with the REST path.
+type AgentWriter interface {
+	UpsertAgent(a config.AgentDef) (config.AgentDef, error)
+	DeleteAgent(name string, cascade bool) error
+}
+
 // Deps bundles the dependencies the MCP server needs. Each tool handler
 // depends on a small subset of this struct; bundling them keeps the
 // registration site in tools.go short.
 //
 // Config, Queue, Status, and Logger are always required. Observe,
-// DispatchStats, Memory, ConfigBytes, and ConfigImport are optional: the
-// observability, config-read, and config-write tools are only registered when
-// the corresponding dependency is supplied, so tests can exercise the core
-// fleet surface without wiring the full stack.
+// DispatchStats, Memory, ConfigBytes, ConfigImport, and AgentWrite are
+// optional: the observability, config-read/write, and CRUD-write tools are
+// only registered when the corresponding dependency is supplied, so tests can
+// exercise the core fleet surface without wiring the full stack.
 type Deps struct {
 	Config        ConfigProvider
 	Queue         EventQueue
@@ -123,6 +137,7 @@ type Deps struct {
 	Memory        MemoryReader
 	ConfigBytes   ConfigReader
 	ConfigImport  ConfigImporter
+	AgentWrite    AgentWriter
 	Logger        zerolog.Logger
 }
 
