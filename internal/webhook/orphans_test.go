@@ -9,6 +9,36 @@ import (
 	"github.com/eloylp/agents/internal/config"
 )
 
+func TestCanonicalModels(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		input []string
+		want  []string
+	}{
+		{"nil input", nil, nil},
+		{"empty slice", []string{}, nil},
+		{"all empty after trim", []string{"", "  ", "\t"}, nil},
+		{"dedup and sort", []string{"b", "a", "b", "c", "a"}, []string{"a", "b", "c"}},
+		{"trims whitespace", []string{"  beta  ", "alpha", "beta"}, []string{"alpha", "beta"}},
+		{"single", []string{"only"}, []string{"only"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := canonicalModels(tc.input)
+			if len(got) != len(tc.want) {
+				t.Fatalf("canonicalModels(%v) = %v, want %v", tc.input, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("canonicalModels[%d] = %q, want %q", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestComputeOrphanedAgents(t *testing.T) {
 	t.Parallel()
 
