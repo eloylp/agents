@@ -829,21 +829,37 @@ func (s *Server) handleStoreImport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("read request: %v", err), http.StatusBadRequest)
 		return
 	}
+	counts, err := s.ImportYAML(body, r.URL.Query().Get("mode"))
+	if err != nil {
+		http.Error(w, err.Error(), storeErrStatus(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, counts)
+}
+
+// ImportYAML parses a YAML payload in handleStoreExport's format and writes it
+// to the store. mode controls upsert semantics: empty or "merge" preserves
+// existing records, "replace" prunes anything not present in the payload.
+//
+// On success it returns the per-section counts that handleStoreImport ships in
+// its JSON response. Validation failures (bad mode, malformed YAML, store-level
+// invariants) are returned as *store.ErrValidation so callers can map them to
+// HTTP 400 / MCP user errors via storeErrStatus.
+//
+// Exposed so non-HTTP surfaces (e.g. the MCP import_config tool) can run the
+// same import path as POST /import without going through the router.
+func (s *Server) ImportYAML(body []byte, mode string) (map[string]int, error) {
+	if mode != "" && mode != "merge" && mode != "replace" {
+		return nil, &store.ErrValidation{Msg: fmt.Sprintf("invalid mode %q: must be empty, \"merge\", or \"replace\"", mode)}
+	}
 	var payload exportYAML
 	if err := yaml.Unmarshal(body, &payload); err != nil {
-		http.Error(w, fmt.Sprintf("parse yaml: %v", err), http.StatusBadRequest)
-		return
+		return nil, &store.ErrValidation{Msg: fmt.Sprintf("parse yaml: %v", err)}
 	}
 
 	backends := map[string]config.AIBackendConfig{}
 	if payload.Daemon != nil {
 		backends = payload.Daemon.AIBackends
-	}
-
-	mode := r.URL.Query().Get("mode")
-	if mode != "" && mode != "merge" && mode != "replace" {
-		http.Error(w, fmt.Sprintf("invalid mode %q: must be empty, \"merge\", or \"replace\"", mode), http.StatusBadRequest)
-		return
 	}
 
 	s.storeMu.Lock()
@@ -856,23 +872,17 @@ func (s *Server) handleStoreImport(w http.ResponseWriter, r *http.Request) {
 		importErr = store.ImportAll(s.db, payload.Agents, payload.Repos, payload.Skills, backends)
 	}
 	if importErr != nil {
-		http.Error(w, fmt.Sprintf("import: %v", importErr), storeErrStatus(importErr))
-		return
+		return nil, fmt.Errorf("import: %w", importErr)
 	}
 	if err := s.reloadCron(); err != nil {
 		s.logger.Error().Err(err).Msg("store import: cron reload failed")
-		http.Error(w, fmt.Sprintf("cron reload: %v", err), http.StatusInternalServerError)
-		return
+		return nil, fmt.Errorf("cron reload: %w", err)
 	}
 
-	backendsCount := 0
-	if payload.Daemon != nil {
-		backendsCount = len(payload.Daemon.AIBackends)
-	}
-	writeJSON(w, http.StatusOK, map[string]int{
+	return map[string]int{
 		"agents":   len(payload.Agents),
 		"skills":   len(payload.Skills),
 		"repos":    len(payload.Repos),
-		"backends": backendsCount,
-	})
+		"backends": len(backends),
+	}, nil
 }
