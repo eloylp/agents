@@ -236,16 +236,16 @@ func (r *CommandRunner) buildDelivery(req Request) (args []string, stdin string)
 	return nil, truncateString(combineSystemUser(req.System, req.User), r.maxPromptChars)
 }
 
-func (r *CommandRunner) isClaudeBackend() bool {
-	name := strings.ToLower(strings.TrimSpace(r.backendName))
-	cmd := strings.ToLower(filepath.Base(strings.TrimSpace(r.command)))
-	return strings.HasPrefix(name, "claude") || strings.HasPrefix(cmd, "claude")
-}
+func (r *CommandRunner) isClaudeBackend() bool { return r.hasBackendPrefix("claude") }
+func (r *CommandRunner) isCodexBackend() bool  { return r.hasBackendPrefix("codex") }
 
-func (r *CommandRunner) isCodexBackend() bool {
+// hasBackendPrefix reports whether the backend name or command basename starts
+// with prefix (case-insensitive). Centralises the name/command normalisation
+// so each new backend type only needs a one-liner predicate.
+func (r *CommandRunner) hasBackendPrefix(prefix string) bool {
 	name := strings.ToLower(strings.TrimSpace(r.backendName))
 	cmd := strings.ToLower(filepath.Base(strings.TrimSpace(r.command)))
-	return strings.HasPrefix(name, "codex") || strings.HasPrefix(cmd, "codex")
+	return strings.HasPrefix(name, prefix) || strings.HasPrefix(cmd, prefix)
 }
 
 // buildClaudeDelivery builds hardcoded Claude CLI args and delivers system
