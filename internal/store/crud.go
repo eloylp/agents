@@ -377,17 +377,14 @@ func UpsertRepo(db *sql.DB, r config.RepoDef) error {
 	return tx.Commit()
 }
 
-// ImportAll upserts agents, repos, skills, and backends in a single atomic
-// transaction. If any entity fails validation the entire import is rolled back
-// and no writes are persisted. Each entity is normalized before writing,
-// consistent with the normalization the individual Upsert* helpers apply.
-func ImportAll(
-	db *sql.DB,
+// normalizeFleet normalizes agents and repos in-place and returns new maps
+// with normalized skills and backends. Called by ImportAll and ReplaceAll.
+func normalizeFleet(
 	agents []config.AgentDef,
 	repos []config.RepoDef,
 	skills map[string]config.SkillDef,
 	backends map[string]config.AIBackendConfig,
-) error {
+) (map[string]config.SkillDef, map[string]config.AIBackendConfig) {
 	for i := range agents {
 		config.NormalizeAgentDef(&agents[i])
 	}
@@ -407,6 +404,21 @@ func ImportAll(
 		config.ApplyBackendDefaults(&b)
 		normalizedBackends[name] = b
 	}
+	return normalizedSkills, normalizedBackends
+}
+
+// ImportAll upserts agents, repos, skills, and backends in a single atomic
+// transaction. If any entity fails validation the entire import is rolled back
+// and no writes are persisted. Each entity is normalized before writing,
+// consistent with the normalization the individual Upsert* helpers apply.
+func ImportAll(
+	db *sql.DB,
+	agents []config.AgentDef,
+	repos []config.RepoDef,
+	skills map[string]config.SkillDef,
+	backends map[string]config.AIBackendConfig,
+) error {
+	normalizedSkills, normalizedBackends := normalizeFleet(agents, repos, skills, backends)
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -455,25 +467,7 @@ func ReplaceAll(
 	skills map[string]config.SkillDef,
 	backends map[string]config.AIBackendConfig,
 ) error {
-	for i := range agents {
-		config.NormalizeAgentDef(&agents[i])
-	}
-	for i := range repos {
-		config.NormalizeRepoDef(&repos[i])
-	}
-	normalizedSkills := make(map[string]config.SkillDef, len(skills))
-	for name, s := range skills {
-		name = config.NormalizeSkillName(name)
-		config.NormalizeSkillDef(&s)
-		normalizedSkills[name] = s
-	}
-	normalizedBackends := make(map[string]config.AIBackendConfig, len(backends))
-	for name, b := range backends {
-		name = config.NormalizeBackendName(name)
-		config.NormalizeBackendConfig(&b)
-		config.ApplyBackendDefaults(&b)
-		normalizedBackends[name] = b
-	}
+	normalizedSkills, normalizedBackends := normalizeFleet(agents, repos, skills, backends)
 
 	tx, err := db.Begin()
 	if err != nil {
