@@ -168,6 +168,7 @@ func run() error {
 		AgentWrite:    server,
 		SkillWrite:    server,
 		BackendWrite:  server,
+		RepoWrite:     server,
 		Logger:        logger,
 	}))
 
