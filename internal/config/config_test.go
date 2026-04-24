@@ -610,7 +610,7 @@ func TestDispatchWiringValidationErrors(t *testing.T) {
     prompt: "Review PRs."
     allow_dispatch: true
 `,
-			errMsg: "description",
+			errMsg: `agent "pr-reviewer" is in a can_dispatch list but has no description`,
 		},
 	}
 	for _, tc := range cases {
