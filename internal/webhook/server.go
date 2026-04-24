@@ -21,82 +21,26 @@ import (
 	anthropicproxy "github.com/eloylp/agents/internal/anthropic_proxy"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/workflow"
 )
-
-// CronReloader is implemented by *autonomous.Scheduler. It is called after a
-// repo, agent, skill, or backend write to update the scheduler's in-process
-// state without restarting the daemon.
-type CronReloader interface {
-	Reload(repos []config.RepoDef, agents []config.AgentDef, skills map[string]config.SkillDef, backends map[string]config.AIBackendConfig) error
-}
-
-// AgentStatus is the runtime state of one autonomous agent as reported by /status.
-type AgentStatus struct {
-	Name       string     `json:"name"`
-	Repo       string     `json:"repo"`
-	LastRun    *time.Time `json:"last_run,omitempty"`
-	NextRun    time.Time  `json:"next_run"`
-	LastStatus string     `json:"last_status,omitempty"`
-}
-
-// StatusProvider reports the current scheduling state of autonomous agents.
-// The implementation is optional; passing nil results in an empty agents list.
-type StatusProvider interface {
-	AgentStatuses() []AgentStatus
-}
-
-// DispatchStatsProvider reports aggregate dispatch statistics.
-// The implementation is optional; passing nil omits the dispatch section.
-type DispatchStatsProvider interface {
-	DispatchStats() workflow.DispatchStats
-}
-
-// RuntimeStateProvider reports whether a named agent currently has an in-flight run.
-// The implementation is optional; passing nil causes all agents to report "idle".
-type RuntimeStateProvider interface {
-	IsRunning(agentName string) bool
-}
-
-// EventQueue accepts events for async processing and reports queue depth.
-// *workflow.DataChannels satisfies this interface.
-type EventQueue interface {
-	PushEvent(ctx context.Context, ev workflow.Event) error
-	QueueStats() workflow.QueueStat
-}
-
-// ErrMemoryNotFound is returned by MemoryReader.ReadMemory when no memory
-// record exists for the requested (agent, repo) pair. Callers should use
-// errors.Is to distinguish a missing record (404) from a genuine I/O error.
-var ErrMemoryNotFound = errors.New("webhook: memory not found")
-
-// MemoryReader retrieves the stored memory for an (agent, repo) pair.
-// The webhook server uses this interface to serve /api/memory/{agent}/{repo}
-// without knowing whether the backing store is the filesystem or SQLite.
-// ReadMemory returns ErrMemoryNotFound when the record does not exist; it
-// returns ("", time.Time{}, nil) when the record exists but the content is
-// empty. The returned time.Time is the last-updated timestamp used to set the
-// X-Memory-Mtime response header; a zero value means the timestamp is unknown.
-type MemoryReader interface {
-	ReadMemory(agent, repo string) (string, time.Time, error)
-}
 
 type Server struct {
 	cfg           *config.Config
 	delivery      *DeliveryStore
 	logger        zerolog.Logger
-	channels      EventQueue
-	provider      StatusProvider
-	runtimeState  RuntimeStateProvider // optional; used by /api/agents for live run status
-	dispatchStats DispatchStatsProvider
+	channels      server.EventQueue
+	provider      server.StatusProvider
+	runtimeState  server.RuntimeStateProvider // optional; used by /api/agents for live run status
+	dispatchStats server.DispatchStatsProvider
 	startTime     time.Time
 	proxy         *anthropicproxy.Handler
-	uiFS          fs.FS          // optional; when set, /ui/ serves these static files
-	observeStore  *observe.Store // optional; when set, enables observability endpoints
-	db            *sql.DB        // optional; when set, enables /api/store/* CRUD endpoints
-	cronReloader  CronReloader   // optional; called after repo/agent writes to reload cron
-	memReader     MemoryReader   // optional; when set, /api/memory reads from this (SQLite mode)
-	mcp           http.Handler   // optional; when set, /mcp serves this MCP handler
+	uiFS          fs.FS               // optional; when set, /ui/ serves these static files
+	observeStore  *observe.Store      // optional; when set, enables observability endpoints
+	db            *sql.DB             // optional; when set, enables /api/store/* CRUD endpoints
+	cronReloader  server.CronReloader // optional; called after repo/agent writes to reload cron
+	memReader     server.MemoryReader // optional; when set, /api/memory reads from this (SQLite mode)
+	mcp           http.Handler        // optional; when set, /mcp serves this MCP handler
 	// storeMu serializes the "DB write → snapshot read → in-memory Reload"
 	// sequence so that concurrent write requests cannot interleave their
 	// snapshots and leave the scheduler in a stale or inconsistent state.
@@ -130,7 +74,7 @@ func (s *Server) WithObserve(store *observe.Store) {
 
 // WithRuntimeState attaches an optional runtime-state provider used by
 // /api/agents to report which agents are currently running.
-func (s *Server) WithRuntimeState(rsp RuntimeStateProvider) {
+func (s *Server) WithRuntimeState(rsp server.RuntimeStateProvider) {
 	s.runtimeState = rsp
 }
 
@@ -139,7 +83,7 @@ func (s *Server) WithRuntimeState(rsp RuntimeStateProvider) {
 // skills, backends, and repos. Writes to repos or agents also call
 // r.Reload so that cron schedules take effect immediately. r may be nil
 // if hot-reload is not needed.
-func (s *Server) WithStore(db *sql.DB, r CronReloader) {
+func (s *Server) WithStore(db *sql.DB, r server.CronReloader) {
 	s.db = db
 	s.cronReloader = r
 }
@@ -147,7 +91,7 @@ func (s *Server) WithStore(db *sql.DB, r CronReloader) {
 // WithMemoryReader attaches a MemoryReader used by /api/memory/{agent}/{repo}
 // when the daemon is running in --db mode. When not set, the endpoint falls
 // back to reading from the filesystem memory_dir.
-func (s *Server) WithMemoryReader(r MemoryReader) {
+func (s *Server) WithMemoryReader(r server.MemoryReader) {
 	s.memReader = r
 }
 
@@ -165,7 +109,7 @@ func (s *Server) Config() *config.Config {
 	return s.loadCfg()
 }
 
-func NewServer(cfg *config.Config, delivery *DeliveryStore, channels EventQueue, provider StatusProvider, dispatchStats DispatchStatsProvider, logger zerolog.Logger) *Server {
+func NewServer(cfg *config.Config, delivery *DeliveryStore, channels server.EventQueue, provider server.StatusProvider, dispatchStats server.DispatchStatsProvider, logger zerolog.Logger) *Server {
 	s := &Server{
 		cfg:           cfg,
 		delivery:      delivery,
@@ -363,7 +307,7 @@ type statusJSON struct {
 	Status         string                     `json:"status"`
 	UptimeSeconds  int64                      `json:"uptime_seconds"`
 	Queues         map[string]statusQueueJSON `json:"queues"`
-	Agents         []AgentStatus              `json:"agents"`
+	Agents         []server.AgentStatus       `json:"agents"`
 	Dispatch       *workflow.DispatchStats    `json:"dispatch,omitempty"`
 	OrphanedAgents statusOrphanSummaryJSON    `json:"orphaned_agents"`
 }
@@ -374,7 +318,7 @@ type statusJSON struct {
 func (s *Server) buildStatus() statusJSON {
 	q := s.channels.QueueStats()
 
-	agents := []AgentStatus{}
+	agents := []server.AgentStatus{}
 	if s.provider != nil {
 		if got := s.provider.AgentStatuses(); len(got) > 0 {
 			agents = got

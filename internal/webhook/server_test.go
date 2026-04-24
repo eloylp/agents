@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -822,4 +823,4 @@ func TestBuildHandlerMCPMountsWhenSet(t *testing.T) {
 
 // ─── compile-time assertions ──────────────────────────────────────────────────
 
-var _ EventQueue = (*workflow.DataChannels)(nil)
+var _ server.EventQueue = (*workflow.DataChannels)(nil)

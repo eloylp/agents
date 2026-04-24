@@ -15,6 +15,7 @@ import (
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -96,7 +97,7 @@ func TestHandleAPIAgentsAttachesScheduleForCronBindings(t *testing.T) {
 		}
 	})
 	dc := workflow.NewDataChannels(1)
-	provider := &stubStatusProvider{statuses: []AgentStatus{
+	provider := &stubStatusProvider{statuses: []server.AgentStatus{
 		{Name: "worker", Repo: "owner/repo", LastRun: &now, NextRun: next, LastStatus: "ok"},
 	}}
 	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, provider, nil, zerolog.Nop())
@@ -152,7 +153,7 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 		}
 	})
 	dc := workflow.NewDataChannels(1)
-	provider := &stubStatusProvider{statuses: []AgentStatus{
+	provider := &stubStatusProvider{statuses: []server.AgentStatus{
 		{Name: "worker", Repo: "owner/repo-a", LastRun: &now, NextRun: next1, LastStatus: "ok"},
 		{Name: "worker", Repo: "owner/repo-b", NextRun: next2, LastStatus: "pending"},
 	}}
@@ -913,7 +914,7 @@ func TestHandleAPIGraphNodeStatusReflectsRuntimeState(t *testing.T) {
 		}
 	})
 	// "idle-err" had a previous error run per the scheduler.
-	provider := &stubStatusProvider{statuses: []AgentStatus{
+	provider := &stubStatusProvider{statuses: []server.AgentStatus{
 		{Name: "idle-err", LastStatus: "error"},
 	}}
 	dc := workflow.NewDataChannels(1)
@@ -1231,10 +1232,10 @@ func TestServeSSEClearsServerWriteDeadline(t *testing.T) {
 // ── helpers ────────────────────────────────────────────────────────────────
 
 type stubStatusProvider struct {
-	statuses []AgentStatus
+	statuses []server.AgentStatus
 }
 
-func (p *stubStatusProvider) AgentStatuses() []AgentStatus { return p.statuses }
+func (p *stubStatusProvider) AgentStatuses() []server.AgentStatus { return p.statuses }
 
 type stubDispatchProvider struct {
 	stats workflow.DispatchStats
@@ -1298,7 +1299,7 @@ func (r *stubMemoryReader) ReadMemory(agent, repo string) (string, time.Time, er
 	key := agent + "\x00" + repo
 	content, ok := r.content[key]
 	if !ok {
-		return "", time.Time{}, ErrMemoryNotFound
+		return "", time.Time{}, server.ErrMemoryNotFound
 	}
 	var mtime time.Time
 	if r.mtimes != nil {

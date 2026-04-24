@@ -10,6 +10,7 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -51,7 +52,7 @@ type apiAgentJSON struct {
 // definitions from config with scheduling state from the StatusProvider.
 func (s *Server) handleAPIAgents(w http.ResponseWriter, _ *http.Request) {
 	// Index scheduling state by (agent, repo) for O(1) lookup below.
-	scheduleByKey := map[string]AgentStatus{}
+	scheduleByKey := map[string]server.AgentStatus{}
 	if s.provider != nil {
 		for _, st := range s.provider.AgentStatuses() {
 			scheduleByKey[st.Name+"\x00"+st.Repo] = st
@@ -582,7 +583,7 @@ func (s *Server) handleAPIMemory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	content, mtime, err := s.memReader.ReadMemory(agent, repo)
-	if errors.Is(err, ErrMemoryNotFound) {
+	if errors.Is(err, server.ErrMemoryNotFound) {
 		http.Error(w, "memory not found", http.StatusNotFound)
 		return
 	}
