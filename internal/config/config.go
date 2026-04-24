@@ -222,7 +222,14 @@ type RepoDef struct {
 // Binding wires an agent to one or more triggers on a specific repo.
 // An agent can appear multiple times in a repo's Use list with different
 // triggers.
+//
+// ID is the SQLite AUTOINCREMENT primary key of the binding row. It is not
+// present in YAML (zero for entries loaded from a YAML file) and is populated
+// by the store when loaded. Atomic per-binding CRUD endpoints address a row
+// by its ID so UI edits can target one binding without replacing the whole
+// repo.
 type Binding struct {
+	ID      int64    `yaml:"-" json:"id,omitempty"`
 	Agent   string   `yaml:"agent"`
 	Labels  []string `yaml:"labels"`
 	Cron    string   `yaml:"cron"`

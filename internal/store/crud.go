@@ -2,8 +2,10 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/robfig/cron/v3"
@@ -23,6 +25,12 @@ func (e *ErrValidation) Error() string { return e.Msg }
 type ErrConflict struct{ Msg string }
 
 func (e *ErrConflict) Error() string { return e.Msg }
+
+// ErrNotFound is returned by per-item operations when the addressed row does
+// not exist. HTTP handlers should map this to 404 Not Found.
+type ErrNotFound struct{ Msg string }
+
+func (e *ErrNotFound) Error() string { return e.Msg }
 
 // cronParser is the same 5-field parser used by the autonomous scheduler.
 var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
@@ -510,6 +518,260 @@ func ReplaceAll(
 		return err
 	}
 	return tx.Commit()
+}
+
+// ──── Bindings (atomic per-item CRUD) ────────────────────────────────────────
+
+// validateBindingShape checks the trigger-exclusivity and event-kind invariants
+// for a single binding, without requiring a full repo context. Returns an
+// *ErrValidation on failure so HTTP handlers can map it to 400 Bad Request.
+func validateBindingShape(b config.Binding) error {
+	if strings.TrimSpace(b.Agent) == "" {
+		return &ErrValidation{Msg: "agent is required"}
+	}
+	if !b.IsCron() && !b.IsLabel() && !b.IsEvent() {
+		return &ErrValidation{Msg: "binding has no trigger (set cron, labels, or events)"}
+	}
+	triggerCount := 0
+	if b.IsLabel() {
+		triggerCount++
+	}
+	if b.IsEvent() {
+		triggerCount++
+	}
+	if b.IsCron() {
+		triggerCount++
+	}
+	if triggerCount > 1 {
+		return &ErrValidation{Msg: "binding mixes multiple trigger types (labels, events, cron); each binding must use exactly one trigger"}
+	}
+	if b.IsCron() {
+		if _, err := cronParser.Parse(b.Cron); err != nil {
+			return &ErrValidation{Msg: fmt.Sprintf("invalid cron expression %q: %v", b.Cron, err)}
+		}
+	}
+	return nil
+}
+
+// normalizeBinding lowercases/trims agent and event names so writes match the
+// canonical form the daemon derives at boot (see normalize() in config.go).
+func normalizeBinding(b *config.Binding) {
+	b.Agent = strings.ToLower(strings.TrimSpace(b.Agent))
+	b.Cron = strings.TrimSpace(b.Cron)
+	for i := range b.Events {
+		b.Events[i] = strings.ToLower(strings.TrimSpace(b.Events[i]))
+	}
+}
+
+// CreateBinding inserts a new binding row for the given repo and returns the
+// generated ID along with the canonical (normalized) Binding the store
+// persisted. The binding must satisfy trigger-exclusivity, cron parseability,
+// and repo/agent reference checks; the repo and agent must both exist.
+//
+// Validation failures surface as *ErrValidation (HTTP 400). Missing repo/agent
+// references surface as *ErrNotFound (HTTP 404). The caller is responsible for
+// holding the store mutex and reloading cron schedules after success.
+func CreateBinding(db *sql.DB, repoName string, b config.Binding) (int64, config.Binding, error) {
+	repoName = config.NormalizeRepoName(repoName)
+	normalizeBinding(&b)
+	if err := validateBindingShape(b); err != nil {
+		return 0, config.Binding{}, err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, config.Binding{}, fmt.Errorf("store: create binding: begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Verify the repo exists so the FK violation surfaces as a typed error.
+	var repoExists bool
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM repos WHERE name=?)", repoName).Scan(&repoExists); err != nil {
+		return 0, config.Binding{}, fmt.Errorf("store: create binding: lookup repo: %w", err)
+	}
+	if !repoExists {
+		return 0, config.Binding{}, &ErrNotFound{Msg: fmt.Sprintf("repo %q not found", repoName)}
+	}
+	var agentExists bool
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM agents WHERE name=?)", b.Agent).Scan(&agentExists); err != nil {
+		return 0, config.Binding{}, fmt.Errorf("store: create binding: lookup agent: %w", err)
+	}
+	if !agentExists {
+		return 0, config.Binding{}, &ErrValidation{Msg: fmt.Sprintf("unknown agent %q", b.Agent)}
+	}
+
+	labels, err := json.Marshal(nilSafeStrings(b.Labels))
+	if err != nil {
+		return 0, config.Binding{}, fmt.Errorf("store: create binding: marshal labels: %w", err)
+	}
+	events, err := json.Marshal(nilSafeStrings(b.Events))
+	if err != nil {
+		return 0, config.Binding{}, fmt.Errorf("store: create binding: marshal events: %w", err)
+	}
+	enabled := 1
+	if b.Enabled != nil && !*b.Enabled {
+		enabled = 0
+	}
+	res, err := tx.Exec(
+		`INSERT INTO bindings(repo,agent,labels,events,cron,enabled) VALUES (?,?,?,?,?,?)`,
+		repoName, b.Agent, string(labels), string(events), b.Cron, enabled,
+	)
+	if err != nil {
+		return 0, config.Binding{}, fmt.Errorf("store: create binding: insert: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, config.Binding{}, fmt.Errorf("store: create binding: last insert id: %w", err)
+	}
+	if err := validateFleet(tx); err != nil {
+		return 0, config.Binding{}, &ErrValidation{Msg: fmt.Sprintf("store: create binding: %v", err)}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, config.Binding{}, fmt.Errorf("store: create binding: commit: %w", err)
+	}
+	b.ID = id
+	return id, b, nil
+}
+
+// UpdateBinding replaces the row identified by id with the new values. All
+// binding fields (agent, labels, events, cron, enabled) are overwritten.
+// Returns *ErrNotFound when no row matches, *ErrValidation for bad shapes or
+// unknown agent refs.
+//
+// Callers hold the store mutex and reload cron afterwards.
+func UpdateBinding(db *sql.DB, id int64, b config.Binding) (config.Binding, error) {
+	normalizeBinding(&b)
+	if err := validateBindingShape(b); err != nil {
+		return config.Binding{}, err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return config.Binding{}, fmt.Errorf("store: update binding: begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	var agentExists bool
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM agents WHERE name=?)", b.Agent).Scan(&agentExists); err != nil {
+		return config.Binding{}, fmt.Errorf("store: update binding: lookup agent: %w", err)
+	}
+	if !agentExists {
+		return config.Binding{}, &ErrValidation{Msg: fmt.Sprintf("unknown agent %q", b.Agent)}
+	}
+
+	labels, err := json.Marshal(nilSafeStrings(b.Labels))
+	if err != nil {
+		return config.Binding{}, fmt.Errorf("store: update binding: marshal labels: %w", err)
+	}
+	events, err := json.Marshal(nilSafeStrings(b.Events))
+	if err != nil {
+		return config.Binding{}, fmt.Errorf("store: update binding: marshal events: %w", err)
+	}
+	enabled := 1
+	if b.Enabled != nil && !*b.Enabled {
+		enabled = 0
+	}
+	res, err := tx.Exec(
+		`UPDATE bindings SET agent=?, labels=?, events=?, cron=?, enabled=? WHERE id=?`,
+		b.Agent, string(labels), string(events), b.Cron, enabled, id,
+	)
+	if err != nil {
+		return config.Binding{}, fmt.Errorf("store: update binding: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return config.Binding{}, fmt.Errorf("store: update binding: rows affected: %w", err)
+	}
+	if n == 0 {
+		return config.Binding{}, &ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found", id)}
+	}
+
+	var repoName string
+	if err := tx.QueryRow("SELECT repo FROM bindings WHERE id=?", id).Scan(&repoName); err != nil {
+		return config.Binding{}, fmt.Errorf("store: update binding: lookup repo: %w", err)
+	}
+
+	if err := validateFleet(tx); err != nil {
+		return config.Binding{}, &ErrValidation{Msg: fmt.Sprintf("store: update binding: %v", err)}
+	}
+	if err := tx.Commit(); err != nil {
+		return config.Binding{}, fmt.Errorf("store: update binding: commit: %w", err)
+	}
+	b.ID = id
+	return b, nil
+}
+
+// DeleteBinding removes the row with the given id. Returns *ErrNotFound if
+// no row matches. Post-delete validateFleet runs to catch any cross-entity
+// invariant violations.
+//
+// Callers hold the store mutex and reload cron afterwards.
+func DeleteBinding(db *sql.DB, id int64) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: delete binding: begin: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec("DELETE FROM bindings WHERE id=?", id)
+	if err != nil {
+		return fmt.Errorf("store: delete binding: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: delete binding: rows affected: %w", err)
+	}
+	if n == 0 {
+		return &ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found", id)}
+	}
+	if err := validateFleet(tx); err != nil {
+		return &ErrConflict{Msg: fmt.Sprintf("store: delete binding: %v", err)}
+	}
+	return tx.Commit()
+}
+
+// ReadBinding fetches a single binding by ID along with its parent repo name.
+// Returns found=false when the row does not exist; errors only reflect
+// unexpected I/O failures.
+func ReadBinding(db *sql.DB, id int64) (repoName string, b config.Binding, found bool, err error) {
+	var labelsJSON, eventsJSON, cron, agent string
+	var enabled int
+	err = db.QueryRow(
+		"SELECT repo,agent,labels,events,cron,enabled FROM bindings WHERE id=?", id,
+	).Scan(&repoName, &agent, &labelsJSON, &eventsJSON, &cron, &enabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", config.Binding{}, false, nil
+	}
+	if err != nil {
+		return "", config.Binding{}, false, fmt.Errorf("store: read binding %d: %w", id, err)
+	}
+	var labels []string
+	if err := json.Unmarshal([]byte(labelsJSON), &labels); err != nil {
+		return "", config.Binding{}, false, fmt.Errorf("store: read binding %d: parse labels: %w", id, err)
+	}
+	var events []string
+	if err := json.Unmarshal([]byte(eventsJSON), &events); err != nil {
+		return "", config.Binding{}, false, fmt.Errorf("store: read binding %d: parse events: %w", id, err)
+	}
+	b = config.Binding{
+		ID:     id,
+		Agent:  agent,
+		Labels: labels,
+		Events: events,
+		Cron:   cron,
+	}
+	if enabled == 0 {
+		f := false
+		b.Enabled = &f
+	}
+	return repoName, b, true, nil
+}
+
+// nilSafeStrings normalises nil to empty slices so JSON marshalling stays
+// stable ([] rather than null). The webhook layer has the same helper; duped
+// here so the store package does not import it.
+func nilSafeStrings(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // DeleteRepo removes a repo and all of its bindings. Returns an error if the

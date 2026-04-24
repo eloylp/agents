@@ -351,6 +351,82 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolDeleteRepo(deps),
 		)
 	}
+	if deps.BindingWrite != nil {
+		srv.AddTool(
+			mcpgo.NewTool("create_binding",
+				mcpgo.WithDescription("Create a new binding on a repo. The binding wires one agent to exactly one trigger (labels, events, or cron). Returns the persisted binding including its generated ID. Same path as POST /repos/{owner}/{repo}/bindings."),
+				mcpgo.WithString("repo",
+					mcpgo.Required(),
+					mcpgo.Description("Repo full name \"owner/repo\" the binding attaches to."),
+				),
+				mcpgo.WithString("agent",
+					mcpgo.Required(),
+					mcpgo.Description("Agent name to bind (must exist in the fleet)."),
+				),
+				mcpgo.WithArray("labels",
+					mcpgo.Description("Label-triggered binding: fire when one of these labels is applied. Mutually exclusive with events/cron."),
+					mcpgo.Items(map[string]any{"type": "string"}),
+				),
+				mcpgo.WithArray("events",
+					mcpgo.Description("Event-triggered binding: fire on these GitHub event kinds (e.g. issues.opened). Mutually exclusive with labels/cron."),
+					mcpgo.Items(map[string]any{"type": "string"}),
+				),
+				mcpgo.WithString("cron",
+					mcpgo.Description("Cron-triggered binding: 5-field schedule expression for autonomous runs. Mutually exclusive with labels/events."),
+				),
+				mcpgo.WithBoolean("enabled",
+					mcpgo.Description("Whether this binding is active. Absent = enabled; only explicit false disables."),
+				),
+			),
+			toolCreateBinding(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("update_binding",
+				mcpgo.WithDescription("Replace all fields of an existing binding by ID. The agent, labels, events, cron, and enabled flag are all overwritten. Same path as PATCH /repos/{owner}/{repo}/bindings/{id}."),
+				mcpgo.WithNumber("id",
+					mcpgo.Required(),
+					mcpgo.Description("Binding ID (from list_repos or get_repo)."),
+				),
+				mcpgo.WithString("repo",
+					mcpgo.Required(),
+					mcpgo.Description("Repo full name \"owner/repo\" the binding belongs to."),
+				),
+				mcpgo.WithString("agent",
+					mcpgo.Required(),
+					mcpgo.Description("Agent name to bind (must exist in the fleet)."),
+				),
+				mcpgo.WithArray("labels",
+					mcpgo.Description("Label-triggered binding. Mutually exclusive with events/cron."),
+					mcpgo.Items(map[string]any{"type": "string"}),
+				),
+				mcpgo.WithArray("events",
+					mcpgo.Description("Event-triggered binding. Mutually exclusive with labels/cron."),
+					mcpgo.Items(map[string]any{"type": "string"}),
+				),
+				mcpgo.WithString("cron",
+					mcpgo.Description("Cron expression. Mutually exclusive with labels/events."),
+				),
+				mcpgo.WithBoolean("enabled",
+					mcpgo.Description("Whether this binding is active. Absent = enabled; only explicit false disables."),
+				),
+			),
+			toolUpdateBinding(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("delete_binding",
+				mcpgo.WithDescription("Delete a binding by ID. Same path as DELETE /repos/{owner}/{repo}/bindings/{id}."),
+				mcpgo.WithNumber("id",
+					mcpgo.Required(),
+					mcpgo.Description("Binding ID."),
+				),
+				mcpgo.WithString("repo",
+					mcpgo.Required(),
+					mcpgo.Description("Repo full name \"owner/repo\" the binding belongs to."),
+				),
+			),
+			toolDeleteBinding(deps),
+		)
+	}
 }
 
 // agentJSON converts a config.AgentDef to the snake_case map shape used by
@@ -388,15 +464,21 @@ func backendJSON(name string, b config.AIBackendConfig) map[string]any {
 
 // bindingJSON renders one repo->agent binding in the JSON shape used by
 // GET /repos. All trigger fields are included so the shape stays stable
-// for consumers; unused triggers appear as empty values.
+// for consumers; unused triggers appear as empty values. The id field is
+// included only when > 0 (unset for bindings that haven't yet been persisted
+// to the store, matching the omitempty behaviour on the REST side).
 func bindingJSON(b config.Binding) map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"agent":   b.Agent,
 		"labels":  nilSafe(b.Labels),
 		"events":  nilSafe(b.Events),
 		"cron":    b.Cron,
 		"enabled": b.IsEnabled(),
 	}
+	if b.ID > 0 {
+		out["id"] = b.ID
+	}
+	return out
 }
 
 // jsonResult encodes v as indented JSON and wraps it in a text CallToolResult.

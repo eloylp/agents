@@ -1152,3 +1152,244 @@ func TestUpsertBackendNormalizesCommand(t *testing.T) {
 		t.Errorf("Command not trimmed: got %q, want %q", got.Command, "claude")
 	}
 }
+
+// ──── Bindings (atomic per-item CRUD) ────────────────────────────────────────
+
+// seedRepoWithAgent bootstraps a repo + agent pair with no bindings so the
+// binding tests can exercise CRUD directly.
+func seedRepoWithAgent(t *testing.T, db *sql.DB) {
+	t.Helper()
+	seedBackend(t, db, "claude")
+	if err := store.UpsertAgent(db, config.AgentDef{
+		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("UpsertAgent coder: %v", err)
+	}
+	if err := store.UpsertRepo(db, config.RepoDef{
+		Name:    "owner/repo",
+		Enabled: true,
+		Use:     []config.Binding{{Agent: "coder", Labels: []string{"ai:seed"}}},
+	}); err != nil {
+		t.Fatalf("UpsertRepo owner/repo: %v", err)
+	}
+}
+
+func TestCreateBinding(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	seedRepoWithAgent(t, db)
+
+	id, persisted, err := store.CreateBinding(db, "owner/repo", config.Binding{
+		Agent:  "coder",
+		Labels: []string{"ai:fix"},
+	})
+	if err != nil {
+		t.Fatalf("CreateBinding: %v", err)
+	}
+	if id <= 0 {
+		t.Fatalf("expected non-zero id, got %d", id)
+	}
+	if persisted.ID != id {
+		t.Errorf("persisted.ID=%d, want %d", persisted.ID, id)
+	}
+
+	repoName, got, found, err := store.ReadBinding(db, id)
+	if err != nil || !found {
+		t.Fatalf("ReadBinding: found=%v err=%v", found, err)
+	}
+	if repoName != "owner/repo" || got.Agent != "coder" {
+		t.Errorf("got repo=%q agent=%q", repoName, got.Agent)
+	}
+	if len(got.Labels) != 1 || got.Labels[0] != "ai:fix" {
+		t.Errorf("labels: %v", got.Labels)
+	}
+}
+
+func TestCreateBindingInvalidTrigger(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	seedRepoWithAgent(t, db)
+
+	// No trigger at all.
+	_, _, err := store.CreateBinding(db, "owner/repo", config.Binding{Agent: "coder"})
+	var valErr *store.ErrValidation
+	if !errors.As(err, &valErr) {
+		t.Fatalf("expected ErrValidation for missing trigger, got %v", err)
+	}
+
+	// Mixed triggers.
+	_, _, err = store.CreateBinding(db, "owner/repo", config.Binding{
+		Agent: "coder", Labels: []string{"a"}, Cron: "* * * * *",
+	})
+	if !errors.As(err, &valErr) {
+		t.Fatalf("expected ErrValidation for mixed triggers, got %v", err)
+	}
+
+	// Bad cron.
+	_, _, err = store.CreateBinding(db, "owner/repo", config.Binding{
+		Agent: "coder", Cron: "bogus",
+	})
+	if !errors.As(err, &valErr) {
+		t.Fatalf("expected ErrValidation for bad cron, got %v", err)
+	}
+}
+
+func TestCreateBindingUnknownRepo(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	seedRepoWithAgent(t, db)
+
+	_, _, err := store.CreateBinding(db, "owner/missing", config.Binding{
+		Agent: "coder", Labels: []string{"a"},
+	})
+	var nf *store.ErrNotFound
+	if !errors.As(err, &nf) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestCreateBindingUnknownAgent(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	seedRepoWithAgent(t, db)
+
+	_, _, err := store.CreateBinding(db, "owner/repo", config.Binding{
+		Agent: "ghost", Labels: []string{"a"},
+	})
+	var valErr *store.ErrValidation
+	if !errors.As(err, &valErr) {
+		t.Fatalf("expected ErrValidation for unknown agent, got %v", err)
+	}
+}
+
+func TestUpdateBinding(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	seedRepoWithAgent(t, db)
+
+	id, _, err := store.CreateBinding(db, "owner/repo", config.Binding{
+		Agent: "coder", Labels: []string{"ai:old"},
+	})
+	if err != nil {
+		t.Fatalf("CreateBinding: %v", err)
+	}
+
+	disabled := false
+	updated, err := store.UpdateBinding(db, id, config.Binding{
+		Agent:   "coder",
+		Cron:    "0 9 * * *",
+		Enabled: &disabled,
+	})
+	if err != nil {
+		t.Fatalf("UpdateBinding: %v", err)
+	}
+	if updated.ID != id {
+		t.Errorf("id: got %d, want %d", updated.ID, id)
+	}
+	if updated.Cron != "0 9 * * *" || len(updated.Labels) != 0 {
+		t.Errorf("not replaced: %+v", updated)
+	}
+
+	_, got, found, err := store.ReadBinding(db, id)
+	if err != nil || !found {
+		t.Fatalf("ReadBinding: found=%v err=%v", found, err)
+	}
+	if got.IsEnabled() {
+		t.Errorf("expected disabled, got enabled")
+	}
+}
+
+func TestUpdateBindingNotFound(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	seedRepoWithAgent(t, db)
+
+	_, err := store.UpdateBinding(db, 99999, config.Binding{
+		Agent: "coder", Labels: []string{"x"},
+	})
+	var nf *store.ErrNotFound
+	if !errors.As(err, &nf) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestDeleteBinding(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	seedRepoWithAgent(t, db)
+
+	id, _, err := store.CreateBinding(db, "owner/repo", config.Binding{
+		Agent: "coder", Labels: []string{"ai:gone"},
+	})
+	if err != nil {
+		t.Fatalf("CreateBinding: %v", err)
+	}
+	if err := store.DeleteBinding(db, id); err != nil {
+		t.Fatalf("DeleteBinding: %v", err)
+	}
+	_, _, found, err := store.ReadBinding(db, id)
+	if err != nil {
+		t.Fatalf("ReadBinding: %v", err)
+	}
+	if found {
+		t.Fatalf("expected binding to be gone")
+	}
+}
+
+func TestDeleteBindingNotFound(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	seedRepoWithAgent(t, db)
+
+	err := store.DeleteBinding(db, 99999)
+	var nf *store.ErrNotFound
+	if !errors.As(err, &nf) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestReadBindingExposesIDViaLoadRepos(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	seedRepoWithAgent(t, db)
+
+	id1, _, err := store.CreateBinding(db, "owner/repo", config.Binding{
+		Agent: "coder", Labels: []string{"ai:a"},
+	})
+	if err != nil {
+		t.Fatalf("CreateBinding 1: %v", err)
+	}
+	id2, _, err := store.CreateBinding(db, "owner/repo", config.Binding{
+		Agent: "coder", Cron: "0 * * * *",
+	})
+	if err != nil {
+		t.Fatalf("CreateBinding 2: %v", err)
+	}
+
+	repos, err := store.ReadRepos(db)
+	if err != nil {
+		t.Fatalf("ReadRepos: %v", err)
+	}
+	var r *config.RepoDef
+	for i := range repos {
+		if repos[i].Name == "owner/repo" {
+			r = &repos[i]
+			break
+		}
+	}
+	if r == nil {
+		t.Fatalf("repo not found")
+	}
+	// First binding was seeded by seedRepoWithAgent; the two additions we
+	// expect as id1/id2 below it.
+	seen := map[int64]bool{}
+	for _, b := range r.Use {
+		if b.ID == 0 {
+			t.Errorf("binding has zero id: %+v", b)
+		}
+		seen[b.ID] = true
+	}
+	if !seen[id1] || !seen[id2] {
+		t.Errorf("created ids not surfaced: got %v, want ids %d + %d", seen, id1, id2)
+	}
+}

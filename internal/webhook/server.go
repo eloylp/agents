@@ -245,7 +245,11 @@ func (s *Server) buildHandler() http.Handler {
 	router.Handle("/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackendDelete))).Methods(http.MethodDelete)
 
 	router.Handle("/repos", withTimeout(http.HandlerFunc(s.handleStoreRepos))).Methods(http.MethodGet, http.MethodPost)
-	router.Handle("/repos/{owner}/{repo}", withTimeout(http.HandlerFunc(s.handleStoreRepo))).Methods(http.MethodGet, http.MethodDelete)
+	router.Handle("/repos/{owner}/{repo}", withTimeout(http.HandlerFunc(s.handleStoreRepo))).Methods(http.MethodGet, http.MethodPatch, http.MethodDelete)
+	router.Handle("/repos/{owner}/{repo}/bindings", withTimeout(http.HandlerFunc(s.handleCreateBinding))).Methods(http.MethodPost)
+	router.Handle("/repos/{owner}/{repo}/bindings/{id}", withTimeout(http.HandlerFunc(s.handleGetBinding))).Methods(http.MethodGet)
+	router.Handle("/repos/{owner}/{repo}/bindings/{id}", withTimeout(http.HandlerFunc(s.handleUpdateBinding))).Methods(http.MethodPatch)
+	router.Handle("/repos/{owner}/{repo}/bindings/{id}", withTimeout(http.HandlerFunc(s.handleDeleteBinding))).Methods(http.MethodDelete)
 
 	router.Handle("/events", withTimeout(http.HandlerFunc(s.handleAPIEvents))).Methods(http.MethodGet)
 	router.HandleFunc("/events/stream", s.handleAPIEventsStream) // SSE — no timeout

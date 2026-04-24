@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -117,11 +118,35 @@ func (j storeBackendJSON) toConfig() config.AIBackendConfig {
 }
 
 type storeBindingJSON struct {
+	ID      int64    `json:"id,omitempty"`
 	Agent   string   `json:"agent"`
 	Labels  []string `json:"labels,omitempty"`
 	Events  []string `json:"events,omitempty"`
 	Cron    string   `json:"cron,omitempty"`
 	Enabled *bool    `json:"enabled,omitempty"`
+}
+
+func bindingToStoreJSON(b config.Binding) storeBindingJSON {
+	enabled := b.IsEnabled()
+	return storeBindingJSON{
+		ID:      b.ID,
+		Agent:   b.Agent,
+		Labels:  b.Labels,
+		Events:  b.Events,
+		Cron:    b.Cron,
+		Enabled: &enabled,
+	}
+}
+
+func (j storeBindingJSON) toConfig() config.Binding {
+	return config.Binding{
+		ID:      j.ID,
+		Agent:   j.Agent,
+		Labels:  j.Labels,
+		Events:  j.Events,
+		Cron:    j.Cron,
+		Enabled: j.Enabled,
+	}
 }
 
 type storeRepoJSON struct {
@@ -133,16 +158,7 @@ type storeRepoJSON struct {
 func repoToStoreJSON(r config.RepoDef) storeRepoJSON {
 	bindings := make([]storeBindingJSON, len(r.Use))
 	for i, b := range r.Use {
-		// Always emit the effective enabled state (default true when nil)
-		// so consumers see a stable bool shape.
-		enabled := b.IsEnabled()
-		bindings[i] = storeBindingJSON{
-			Agent:   b.Agent,
-			Labels:  b.Labels,
-			Events:  b.Events,
-			Cron:    b.Cron,
-			Enabled: &enabled,
-		}
+		bindings[i] = bindingToStoreJSON(b)
 	}
 	return storeRepoJSON{Name: r.Name, Enabled: r.Enabled, Bindings: bindings}
 }
@@ -150,13 +166,7 @@ func repoToStoreJSON(r config.RepoDef) storeRepoJSON {
 func (j storeRepoJSON) toConfig() config.RepoDef {
 	use := make([]config.Binding, len(j.Bindings))
 	for i, b := range j.Bindings {
-		use[i] = config.Binding{
-			Agent:   b.Agent,
-			Labels:  b.Labels,
-			Events:  b.Events,
-			Cron:    b.Cron,
-			Enabled: b.Enabled,
-		}
+		use[i] = b.toConfig()
 	}
 	return config.RepoDef{Name: j.Name, Enabled: j.Enabled, Use: use}
 }
@@ -201,7 +211,8 @@ func decodeBody[T any](w http.ResponseWriter, r *http.Request, limit int64, out 
 
 // storeErrStatus maps store mutation errors to the appropriate HTTP status
 // code. ErrValidation (bad field values) → 400, ErrConflict (invariant
-// violations, referenced-by failures) → 409, anything else → 500.
+// violations, referenced-by failures) → 409, ErrNotFound → 404,
+// anything else → 500.
 func storeErrStatus(err error) int {
 	var valErr *store.ErrValidation
 	if errors.As(err, &valErr) {
@@ -210,6 +221,10 @@ func storeErrStatus(err error) int {
 	var conflictErr *store.ErrConflict
 	if errors.As(err, &conflictErr) {
 		return http.StatusConflict
+	}
+	var notFoundErr *store.ErrNotFound
+	if errors.As(err, &notFoundErr) {
+		return http.StatusNotFound
 	}
 	return http.StatusInternalServerError
 }
@@ -815,7 +830,14 @@ func (s *Server) UpsertRepo(r config.RepoDef) (config.RepoDef, error) {
 	return r, nil
 }
 
-// handleStoreRepo serves GET and DELETE /api/store/repos/{owner}/{repo}.
+// repoRuntimeSettingsJSON is the wire shape for PATCH /repos/{owner}/{repo}.
+// Only the enabled flag is currently mutable via PATCH; name changes require
+// a delete+create since the name is the primary key.
+type repoRuntimeSettingsJSON struct {
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// handleStoreRepo serves GET, PATCH, and DELETE /api/store/repos/{owner}/{repo}.
 func (s *Server) handleStoreRepo(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	repoName := config.NormalizeRepoName(vars["owner"]) + "/" + config.NormalizeRepoName(vars["repo"])
@@ -834,6 +856,24 @@ func (s *Server) handleStoreRepo(w http.ResponseWriter, r *http.Request) {
 		}
 		http.NotFound(w, r)
 
+	case http.MethodPatch:
+		var req repoRuntimeSettingsJSON
+		if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
+			return
+		}
+		if req.Enabled == nil {
+			http.Error(w, "at least one field is required", http.StatusBadRequest)
+			return
+		}
+		repo, err := s.PatchRepo(repoName, *req.Enabled)
+		if err != nil {
+			status := storeErrStatus(err)
+			s.logger.Error().Err(err).Msg("store crud: repo patch or cron reload failed")
+			http.Error(w, fmt.Sprintf("repo patch or cron reload: %v", err), status)
+			return
+		}
+		writeJSON(w, http.StatusOK, repoToStoreJSON(repo))
+
 	case http.MethodDelete:
 		if err := s.DeleteRepo(repoName); err != nil {
 			status := storeErrStatus(err)
@@ -843,6 +883,52 @@ func (s *Server) handleStoreRepo(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// PatchRepo updates the enabled flag on an existing repo without touching its
+// bindings. Returns the canonical RepoDef (with current bindings) so callers
+// can refresh their view. *ErrNotFound when the repo does not exist.
+func (s *Server) PatchRepo(repoName string, enabled bool) (config.RepoDef, error) {
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+	// Load the repo (and its bindings) so we can rewrite it intact without
+	// having to pipe every field through the wire struct.
+	repos, err := store.ReadRepos(s.db)
+	if err != nil {
+		return config.RepoDef{}, err
+	}
+	var existing *config.RepoDef
+	for i := range repos {
+		if repos[i].Name == repoName {
+			existing = &repos[i]
+			break
+		}
+	}
+	if existing == nil {
+		return config.RepoDef{}, &store.ErrNotFound{Msg: fmt.Sprintf("repo %q not found", repoName)}
+	}
+	if existing.Enabled == enabled {
+		return *existing, nil
+	}
+	// Flip the enabled flag via a direct UPDATE so we don't re-run the
+	// delete+insert cycle that UpsertRepo performs on bindings.
+	if _, err := s.db.Exec("UPDATE repos SET enabled=? WHERE name=?", boolToInt(enabled), repoName); err != nil {
+		return config.RepoDef{}, fmt.Errorf("patch repo %s: %w", repoName, err)
+	}
+	if err := s.reloadCron(); err != nil {
+		return config.RepoDef{}, err
+	}
+	existing.Enabled = enabled
+	return *existing, nil
+}
+
+// boolToInt matches store.boolToInt (unexported there) for the tiny PATCH
+// path above. Duplicating a 6-line helper keeps the store package closed.
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // DeleteRepo removes the named repo (and cascades its bindings) from the
@@ -857,6 +943,166 @@ func (s *Server) DeleteRepo(name string) error {
 	s.storeMu.Lock()
 	defer s.storeMu.Unlock()
 	if err := store.DeleteRepo(s.db, name); err != nil {
+		return err
+	}
+	return s.reloadCron()
+}
+
+// ── /repos/{owner}/{repo}/bindings[/{id}] — atomic binding CRUD ──────────────
+
+// repoNameFromVars reconstructs the normalized owner/repo path parameter.
+func repoNameFromVars(r *http.Request) string {
+	vars := mux.Vars(r)
+	return config.NormalizeRepoName(vars["owner"]) + "/" + config.NormalizeRepoName(vars["repo"])
+}
+
+// bindingIDFromVars parses the {id} path parameter. On error it writes a 400
+// response and returns (0, false).
+func bindingIDFromVars(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	raw := strings.TrimSpace(mux.Vars(r)["id"])
+	if raw == "" {
+		http.Error(w, "binding id is required", http.StatusBadRequest)
+		return 0, false
+	}
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, fmt.Sprintf("invalid binding id %q", raw), http.StatusBadRequest)
+		return 0, false
+	}
+	return id, true
+}
+
+// handleCreateBinding serves POST /repos/{owner}/{repo}/bindings. The body
+// is a storeBindingJSON (ID ignored). Returns 201 with the persisted binding
+// including its generated ID.
+func (s *Server) handleCreateBinding(w http.ResponseWriter, r *http.Request) {
+	repoName := repoNameFromVars(r)
+	var req storeBindingJSON
+	if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
+		return
+	}
+	// Ignore any ID the client sends — the store picks it.
+	req.ID = 0
+	b, err := s.CreateBinding(repoName, req.toConfig())
+	if err != nil {
+		status := storeErrStatus(err)
+		s.logger.Error().Err(err).Msg("store crud: binding create or cron reload failed")
+		http.Error(w, fmt.Sprintf("binding create or cron reload: %v", err), status)
+		return
+	}
+	writeJSON(w, http.StatusCreated, bindingToStoreJSON(b))
+}
+
+// CreateBinding persists a new binding on repoName and reloads cron. Exposed
+// for non-HTTP callers (MCP create_binding tool).
+func (s *Server) CreateBinding(repoName string, b config.Binding) (config.Binding, error) {
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+	_, persisted, err := store.CreateBinding(s.db, repoName, b)
+	if err != nil {
+		return config.Binding{}, err
+	}
+	if err := s.reloadCron(); err != nil {
+		return config.Binding{}, err
+	}
+	return persisted, nil
+}
+
+// handleGetBinding serves GET /repos/{owner}/{repo}/bindings/{id}. Returns
+// 404 when the id does not exist or belongs to a different repo.
+func (s *Server) handleGetBinding(w http.ResponseWriter, r *http.Request) {
+	repoName := repoNameFromVars(r)
+	id, ok := bindingIDFromVars(w, r)
+	if !ok {
+		return
+	}
+	owner, b, found, err := store.ReadBinding(s.db, id)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read binding: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if !found || owner != repoName {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, bindingToStoreJSON(b))
+}
+
+// handleUpdateBinding serves PATCH /repos/{owner}/{repo}/bindings/{id}. The
+// body is a storeBindingJSON; all fields are replaced. Returns 404 if the id
+// does not belong to the repo in the path.
+func (s *Server) handleUpdateBinding(w http.ResponseWriter, r *http.Request) {
+	repoName := repoNameFromVars(r)
+	id, ok := bindingIDFromVars(w, r)
+	if !ok {
+		return
+	}
+	var req storeBindingJSON
+	if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
+		return
+	}
+	b, err := s.UpdateBinding(repoName, id, req.toConfig())
+	if err != nil {
+		status := storeErrStatus(err)
+		s.logger.Error().Err(err).Msg("store crud: binding update or cron reload failed")
+		http.Error(w, fmt.Sprintf("binding update or cron reload: %v", err), status)
+		return
+	}
+	writeJSON(w, http.StatusOK, bindingToStoreJSON(b))
+}
+
+// UpdateBinding verifies the id belongs to repoName, replaces the row, and
+// reloads cron. Exposed for non-HTTP callers (MCP update_binding tool).
+func (s *Server) UpdateBinding(repoName string, id int64, b config.Binding) (config.Binding, error) {
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+	existingRepo, _, found, err := store.ReadBinding(s.db, id)
+	if err != nil {
+		return config.Binding{}, err
+	}
+	if !found || existingRepo != repoName {
+		return config.Binding{}, &store.ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found for repo %q", id, repoName)}
+	}
+	updated, err := store.UpdateBinding(s.db, id, b)
+	if err != nil {
+		return config.Binding{}, err
+	}
+	if err := s.reloadCron(); err != nil {
+		return config.Binding{}, err
+	}
+	return updated, nil
+}
+
+// handleDeleteBinding serves DELETE /repos/{owner}/{repo}/bindings/{id}.
+// Returns 404 if the id does not belong to the repo in the path.
+func (s *Server) handleDeleteBinding(w http.ResponseWriter, r *http.Request) {
+	repoName := repoNameFromVars(r)
+	id, ok := bindingIDFromVars(w, r)
+	if !ok {
+		return
+	}
+	if err := s.DeleteBinding(repoName, id); err != nil {
+		status := storeErrStatus(err)
+		s.logger.Error().Err(err).Msg("store crud: binding delete or cron reload failed")
+		http.Error(w, fmt.Sprintf("binding delete or cron reload: %v", err), status)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// DeleteBinding verifies the id belongs to repoName, deletes it, and reloads
+// cron. Exposed for non-HTTP callers (MCP delete_binding tool).
+func (s *Server) DeleteBinding(repoName string, id int64) error {
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+	existingRepo, _, found, err := store.ReadBinding(s.db, id)
+	if err != nil {
+		return err
+	}
+	if !found || existingRepo != repoName {
+		return &store.ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found for repo %q", id, repoName)}
+	}
+	if err := store.DeleteBinding(s.db, id); err != nil {
 		return err
 	}
 	return s.reloadCron()

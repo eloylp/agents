@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -602,6 +603,247 @@ func TestStoreCRUDRepoCreateAndDelete(t *testing.T) {
 		t.Errorf("GET after delete: got %d, want 404", rr.Code)
 	}
 }
+
+// ── atomic binding CRUD ──────────────────────────────────────────────────────
+
+// seedBindingTestRepo creates a repo + agent pair so the binding test can
+// target the /repos/{owner}/{repo}/bindings routes directly.
+func seedBindingTestRepo(t *testing.T, s *Server) {
+	t.Helper()
+	seedStoreBackend(t, s, "claude")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "p",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed agent: got %d — %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
+		"name":    "owner/repo",
+		"enabled": true,
+		"bindings": []map[string]any{
+			{"agent": "coder", "labels": []string{"ai:seed"}, "enabled": true},
+		},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed repo: got %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestCreateBindingEndpoint(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedBindingTestRepo(t, s)
+
+	rr := doCRUDRequest(t, s, http.MethodPost, "/repos/owner/repo/bindings", map[string]any{
+		"agent":  "coder",
+		"labels": []string{"ai:fix"},
+	})
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create binding: got %d — %s", rr.Code, rr.Body.String())
+	}
+	var got map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	id, ok := got["id"].(float64)
+	if !ok || id <= 0 {
+		t.Fatalf("expected positive id, got %v", got["id"])
+	}
+	if got["agent"] != "coder" {
+		t.Errorf("agent: got %v", got["agent"])
+	}
+
+	// GET the created binding.
+	rr = doCRUDRequest(t, s, http.MethodGet, "/repos/owner/repo/bindings/"+itoa(int(id)), nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET binding: got %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestCreateBindingInvalidTriggerReturns400(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedBindingTestRepo(t, s)
+
+	rr := doCRUDRequest(t, s, http.MethodPost, "/repos/owner/repo/bindings", map[string]any{
+		"agent": "coder",
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestCreateBindingUnknownRepoReturns404(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedBindingTestRepo(t, s)
+
+	rr := doCRUDRequest(t, s, http.MethodPost, "/repos/owner/ghost/bindings", map[string]any{
+		"agent": "coder", "labels": []string{"x"},
+	})
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestUpdateBindingEndpoint(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedBindingTestRepo(t, s)
+
+	rr := doCRUDRequest(t, s, http.MethodPost, "/repos/owner/repo/bindings", map[string]any{
+		"agent": "coder", "labels": []string{"ai:old"},
+	})
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create: got %d — %s", rr.Code, rr.Body.String())
+	}
+	var created map[string]any
+	_ = json.NewDecoder(rr.Body).Decode(&created)
+	id := int(created["id"].(float64))
+
+	enabled := false
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/repos/owner/repo/bindings/"+itoa(id), map[string]any{
+		"agent":   "coder",
+		"cron":    "0 9 * * *",
+		"enabled": enabled,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("patch: got %d — %s", rr.Code, rr.Body.String())
+	}
+	var patched map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&patched); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if patched["cron"] != "0 9 * * *" {
+		t.Errorf("cron not updated: %v", patched["cron"])
+	}
+	if patched["enabled"] != false {
+		t.Errorf("enabled flag not persisted: %v", patched["enabled"])
+	}
+}
+
+func TestUpdateBindingMismatchedRepoReturns404(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedBindingTestRepo(t, s)
+
+	// Create a second repo with its own binding.
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
+		"name": "owner/other", "enabled": true,
+		"bindings": []map[string]any{
+			{"agent": "coder", "labels": []string{"ai:x"}},
+		},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed other: %d %s", rr.Code, rr.Body.String())
+	}
+	rr := doCRUDRequest(t, s, http.MethodPost, "/repos/owner/other/bindings", map[string]any{
+		"agent": "coder", "labels": []string{"ai:one"},
+	})
+	var created map[string]any
+	_ = json.NewDecoder(rr.Body).Decode(&created)
+	id := int(created["id"].(float64))
+
+	// PATCH it through the wrong repo's URL.
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/repos/owner/repo/bindings/"+itoa(id), map[string]any{
+		"agent": "coder", "labels": []string{"ai:changed"},
+	})
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestDeleteBindingEndpoint(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedBindingTestRepo(t, s)
+
+	rr := doCRUDRequest(t, s, http.MethodPost, "/repos/owner/repo/bindings", map[string]any{
+		"agent": "coder", "labels": []string{"ai:gone"},
+	})
+	var created map[string]any
+	_ = json.NewDecoder(rr.Body).Decode(&created)
+	id := int(created["id"].(float64))
+
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/repos/owner/repo/bindings/"+itoa(id), nil)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("delete: got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodGet, "/repos/owner/repo/bindings/"+itoa(id), nil)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("GET after delete: got %d, want 404", rr.Code)
+	}
+}
+
+func TestPatchRepoTogglesEnabled(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedBindingTestRepo(t, s)
+
+	// Disable via PATCH without sending bindings.
+	rr := doCRUDRequest(t, s, http.MethodPatch, "/repos/owner/repo", map[string]any{
+		"enabled": false,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH repo: got %d — %s", rr.Code, rr.Body.String())
+	}
+	var got map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Re-fetch to make sure bindings survived.
+	rr = doCRUDRequest(t, s, http.MethodGet, "/repos/owner/repo", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET repo after patch: got %d", rr.Code)
+	}
+	var repo map[string]any
+	_ = json.NewDecoder(rr.Body).Decode(&repo)
+	if repo["enabled"] != false {
+		t.Errorf("enabled not persisted: %v", repo["enabled"])
+	}
+	bindings, _ := repo["bindings"].([]any)
+	if len(bindings) == 0 {
+		t.Errorf("PATCH must not touch bindings; got %v", repo["bindings"])
+	}
+}
+
+func TestPatchRepoRejectsEmptyBody(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedBindingTestRepo(t, s)
+
+	rr := doCRUDRequest(t, s, http.MethodPatch, "/repos/owner/repo", map[string]any{})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty patch, got %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestGetRepoExposesBindingIDs(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedBindingTestRepo(t, s)
+
+	rr := doCRUDRequest(t, s, http.MethodGet, "/repos/owner/repo", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET repo: got %d — %s", rr.Code, rr.Body.String())
+	}
+	var repo map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&repo); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	bindings, ok := repo["bindings"].([]any)
+	if !ok || len(bindings) == 0 {
+		t.Fatalf("expected bindings in response, got %v", repo["bindings"])
+	}
+	first := bindings[0].(map[string]any)
+	id, ok := first["id"].(float64)
+	if !ok || id <= 0 {
+		t.Errorf("binding missing id: %v", first)
+	}
+}
+
+// itoa wraps strconv.Itoa locally so the binding tests can construct URLs
+// without touching the rest of the file's imports.
+func itoa(i int) string { return strconv.Itoa(i) }
 
 // ── reloadCron failure ────────────────────────────────────────────────────────
 

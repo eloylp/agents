@@ -1,4 +1,5 @@
 export interface Binding {
+  id?: number
   agent: string
   labels?: string[]
   events?: string[]
@@ -17,4 +18,28 @@ export function groupByAgent(bs: Binding[]): Array<[string, Binding[]]> {
     g[b.agent].push(b)
   }
   return order.map(a => [a, g[a]])
+}
+
+function arrEq(a?: string[], b?: string[]): boolean {
+  const aa = a ?? []
+  const bb = b ?? []
+  if (aa.length !== bb.length) return false
+  for (let i = 0; i < aa.length; i++) if (aa[i] !== bb[i]) return false
+  return true
+}
+
+// bindingsEqual compares two bindings by their user-editable fields. The id
+// field is intentionally excluded since equality drives the diff that decides
+// whether to emit a PATCH — a PATCH with identical fields is a no-op so
+// skipping them keeps the save flow lean. Enabled normalises undefined/true
+// into a single state so a new binding isn't flagged as "changed" on every
+// save.
+export function bindingsEqual(a: Binding, b: Binding): boolean {
+  if (a.agent !== b.agent) return false
+  if (!arrEq(a.labels, b.labels)) return false
+  if (!arrEq(a.events, b.events)) return false
+  if ((a.cron ?? '') !== (b.cron ?? '')) return false
+  const ea = a.enabled !== false
+  const eb = b.enabled !== false
+  return ea === eb
 }

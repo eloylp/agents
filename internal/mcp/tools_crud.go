@@ -207,6 +207,110 @@ func toolDeleteRepo(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
+// toolCreateBinding inserts a new binding row for the named repo through the
+// same path as POST /repos/{owner}/{repo}/bindings. Returns the persisted
+// binding with its generated ID. Trigger validation and agent-reference
+// checks happen in the store layer, surfacing as *ErrValidation (user error)
+// or *ErrNotFound (user error).
+func toolCreateBinding(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		repo, ok := trimmedString(req, "repo")
+		if !ok {
+			return mcpgo.NewToolResultError("repo is required"), nil
+		}
+		agent, ok := trimmedString(req, "agent")
+		if !ok {
+			return mcpgo.NewToolResultError("agent is required"), nil
+		}
+		b := config.Binding{
+			Agent:  agent,
+			Labels: req.GetStringSlice("labels", nil),
+			Events: req.GetStringSlice("events", nil),
+			Cron:   req.GetString("cron", ""),
+		}
+		if v, ok := req.GetArguments()["enabled"]; ok && v != nil {
+			enabled, ok := v.(bool)
+			if !ok {
+				return mcpgo.NewToolResultError("enabled must be a boolean"), nil
+			}
+			b.Enabled = &enabled
+		}
+		persisted, err := deps.BindingWrite.CreateBinding(repo, b)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("create binding", err), nil
+		}
+		return jsonResult(bindingJSON(persisted))
+	}
+}
+
+// toolUpdateBinding replaces all fields of an existing binding by ID through
+// the same path as PATCH /repos/{owner}/{repo}/bindings/{id}. The repo path
+// parameter is cross-checked against the stored binding's repo — mismatches
+// surface as not-found.
+func toolUpdateBinding(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id, err := req.RequireInt("id")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		if id <= 0 {
+			return mcpgo.NewToolResultError("id must be a positive integer"), nil
+		}
+		repo, ok := trimmedString(req, "repo")
+		if !ok {
+			return mcpgo.NewToolResultError("repo is required"), nil
+		}
+		agent, ok := trimmedString(req, "agent")
+		if !ok {
+			return mcpgo.NewToolResultError("agent is required"), nil
+		}
+		b := config.Binding{
+			Agent:  agent,
+			Labels: req.GetStringSlice("labels", nil),
+			Events: req.GetStringSlice("events", nil),
+			Cron:   req.GetString("cron", ""),
+		}
+		if v, ok := req.GetArguments()["enabled"]; ok && v != nil {
+			enabled, ok := v.(bool)
+			if !ok {
+				return mcpgo.NewToolResultError("enabled must be a boolean"), nil
+			}
+			b.Enabled = &enabled
+		}
+		updated, uerr := deps.BindingWrite.UpdateBinding(repo, int64(id), b)
+		if uerr != nil {
+			return mcpgo.NewToolResultErrorFromErr("update binding", uerr), nil
+		}
+		return jsonResult(bindingJSON(updated))
+	}
+}
+
+// toolDeleteBinding removes a binding by ID through the same path as DELETE
+// /repos/{owner}/{repo}/bindings/{id}.
+func toolDeleteBinding(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id, err := req.RequireInt("id")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		if id <= 0 {
+			return mcpgo.NewToolResultError("id must be a positive integer"), nil
+		}
+		repo, ok := trimmedString(req, "repo")
+		if !ok {
+			return mcpgo.NewToolResultError("repo is required"), nil
+		}
+		if err := deps.BindingWrite.DeleteBinding(repo, int64(id)); err != nil {
+			return mcpgo.NewToolResultErrorFromErr("delete binding", err), nil
+		}
+		return jsonResult(map[string]any{
+			"status": "deleted",
+			"id":     id,
+			"repo":   config.NormalizeRepoName(repo),
+		})
+	}
+}
+
 // repoJSON renders a RepoDef in the same wire shape as an element of the
 // list_repos / get_repo responses, so create_repo/delete_repo callers consume
 // one schema regardless of whether they are reading or writing.

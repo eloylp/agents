@@ -170,6 +170,7 @@ func run() error {
 		SkillWrite:    server,
 		BackendWrite:  server,
 		RepoWrite:     server,
+		BindingWrite:  server,
 		Logger:        logger,
 	}))
 

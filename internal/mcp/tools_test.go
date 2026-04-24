@@ -2463,3 +2463,180 @@ func TestToolDeleteRepoPropagatesNotFound(t *testing.T) {
 		t.Fatalf("error body want substring %q, got %q", "not found", got)
 	}
 }
+
+// stubBindingWriter records the arguments received by BindingWriter method
+// calls so tests can assert both the forwarded values and the canonical shape
+// returned to the caller.
+type stubBindingWriter struct {
+	// Create
+	gotCreateRepo    string
+	gotCreateBinding config.Binding
+	createResult     config.Binding
+	createErr        error
+	// Update
+	gotUpdateRepo    string
+	gotUpdateID      int64
+	gotUpdateBinding config.Binding
+	updateResult     config.Binding
+	updateErr        error
+	// Delete
+	gotDeleteRepo string
+	gotDeleteID   int64
+	deleteErr     error
+}
+
+func (s *stubBindingWriter) CreateBinding(repoName string, b config.Binding) (config.Binding, error) {
+	s.gotCreateRepo = repoName
+	s.gotCreateBinding = b
+	if s.createErr != nil {
+		return config.Binding{}, s.createErr
+	}
+	return s.createResult, nil
+}
+
+func (s *stubBindingWriter) UpdateBinding(repoName string, id int64, b config.Binding) (config.Binding, error) {
+	s.gotUpdateRepo = repoName
+	s.gotUpdateID = id
+	s.gotUpdateBinding = b
+	if s.updateErr != nil {
+		return config.Binding{}, s.updateErr
+	}
+	return s.updateResult, nil
+}
+
+func (s *stubBindingWriter) DeleteBinding(repoName string, id int64) error {
+	s.gotDeleteRepo = repoName
+	s.gotDeleteID = id
+	return s.deleteErr
+}
+
+func TestToolCreateBindingForwardsAndReturnsID(t *testing.T) {
+	t.Parallel()
+	w := &stubBindingWriter{
+		createResult: config.Binding{ID: 42, Agent: "coder", Labels: []string{"ai:fix"}},
+	}
+	deps := Deps{
+		DB:           testDB(t),
+		Config:       stubConfig{cfg: fixtureConfig()},
+		Queue:        &stubQueue{},
+		Status:       stubStatus{},
+		BindingWrite: w,
+		Logger:       zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"repo":   "owner/repo",
+		"agent":  "coder",
+		"labels": []any{"ai:fix"},
+	}
+	res, err := toolCreateBinding(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", textOf(t, res))
+	}
+	if w.gotCreateRepo != "owner/repo" {
+		t.Errorf("repo: got %q", w.gotCreateRepo)
+	}
+	if w.gotCreateBinding.Agent != "coder" || len(w.gotCreateBinding.Labels) != 1 {
+		t.Errorf("binding forwarded wrong: %+v", w.gotCreateBinding)
+	}
+	var out map[string]any
+	decodeText(t, res, &out)
+	if id, _ := out["id"].(float64); id != 42 {
+		t.Errorf("id: want 42, got %v", out["id"])
+	}
+}
+
+func TestToolCreateBindingRequiresRepoAndAgent(t *testing.T) {
+	t.Parallel()
+	w := &stubBindingWriter{}
+	deps := Deps{
+		DB:           testDB(t),
+		Config:       stubConfig{cfg: fixtureConfig()},
+		Queue:        &stubQueue{},
+		Status:       stubStatus{},
+		BindingWrite: w,
+		Logger:       zerolog.Nop(),
+	}
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"agent": "coder"}
+	res, err := toolCreateBinding(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError for missing repo, got %+v", res)
+	}
+}
+
+func TestToolUpdateBindingForwardsID(t *testing.T) {
+	t.Parallel()
+	disabled := false
+	w := &stubBindingWriter{
+		updateResult: config.Binding{ID: 7, Agent: "coder", Cron: "0 9 * * *", Enabled: &disabled},
+	}
+	deps := Deps{
+		DB:           testDB(t),
+		Config:       stubConfig{cfg: fixtureConfig()},
+		Queue:        &stubQueue{},
+		Status:       stubStatus{},
+		BindingWrite: w,
+		Logger:       zerolog.Nop(),
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"id":      float64(7),
+		"repo":    "owner/repo",
+		"agent":   "coder",
+		"cron":    "0 9 * * *",
+		"enabled": false,
+	}
+	res, err := toolUpdateBinding(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", textOf(t, res))
+	}
+	if w.gotUpdateID != 7 {
+		t.Errorf("id: got %d, want 7", w.gotUpdateID)
+	}
+	if w.gotUpdateBinding.Cron != "0 9 * * *" {
+		t.Errorf("cron not forwarded: %+v", w.gotUpdateBinding)
+	}
+	if w.gotUpdateBinding.Enabled == nil || *w.gotUpdateBinding.Enabled {
+		t.Errorf("enabled=false should be forwarded as explicit false: %+v", w.gotUpdateBinding)
+	}
+}
+
+func TestToolDeleteBindingForwardsID(t *testing.T) {
+	t.Parallel()
+	w := &stubBindingWriter{}
+	deps := Deps{
+		DB:           testDB(t),
+		Config:       stubConfig{cfg: fixtureConfig()},
+		Queue:        &stubQueue{},
+		Status:       stubStatus{},
+		BindingWrite: w,
+		Logger:       zerolog.Nop(),
+	}
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"id":   float64(9),
+		"repo": "owner/repo",
+	}
+	res, err := toolDeleteBinding(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", textOf(t, res))
+	}
+	if w.gotDeleteID != 9 || w.gotDeleteRepo != "owner/repo" {
+		t.Errorf("unexpected forwarded values: id=%d repo=%q", w.gotDeleteID, w.gotDeleteRepo)
+	}
+}

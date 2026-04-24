@@ -556,7 +556,7 @@ func loadRepos(db querier, cfg *config.Config) error {
 
 func loadBindingsForRepo(db querier, repo string) ([]config.Binding, error) {
 	rows, err := db.Query(
-		"SELECT agent,labels,events,cron,enabled FROM bindings WHERE repo=? ORDER BY id", repo,
+		"SELECT id,agent,labels,events,cron,enabled FROM bindings WHERE repo=? ORDER BY id", repo,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store load: query bindings for %s: %w", repo, err)
@@ -565,9 +565,10 @@ func loadBindingsForRepo(db querier, repo string) ([]config.Binding, error) {
 
 	var bindings []config.Binding
 	for rows.Next() {
+		var id int64
 		var agent, labelsJSON, eventsJSON, cron string
 		var enabled int
-		if err := rows.Scan(&agent, &labelsJSON, &eventsJSON, &cron, &enabled); err != nil {
+		if err := rows.Scan(&id, &agent, &labelsJSON, &eventsJSON, &cron, &enabled); err != nil {
 			return nil, fmt.Errorf("store load: scan binding for %s: %w", repo, err)
 		}
 		var labels []string
@@ -579,6 +580,7 @@ func loadBindingsForRepo(db querier, repo string) ([]config.Binding, error) {
 			return nil, fmt.Errorf("store load: parse binding events for %s: %w", repo, err)
 		}
 		b := config.Binding{
+			ID:     id,
 			Agent:  agent,
 			Labels: labels,
 			Events: events,

@@ -19,6 +19,7 @@
 //   - create_skill, delete_skill                          — skill CRUD writes
 //   - create_backend, delete_backend                      — backend CRUD writes
 //   - create_repo, delete_repo                            — repo CRUD writes
+//   - create_binding, update_binding, delete_binding      — atomic binding CRUD
 //
 // With repo CRUD in place this surface now covers the full fleet inventory
 // declared in #227.
@@ -161,6 +162,20 @@ type RepoWriter interface {
 	DeleteRepo(name string) error
 }
 
+// BindingWriter mutates individual bindings on a repo without replacing the
+// whole repo. Used by the atomic create_binding / update_binding /
+// delete_binding MCP tools and the corresponding REST endpoints under
+// /repos/{owner}/{repo}/bindings. Each method returns the canonical persisted
+// Binding (populated ID) so callers can display the store's view.
+//
+// Implementations must hold the store mutex while writing and reload cron
+// schedules afterwards so MCP writes stay consistent with the REST path.
+type BindingWriter interface {
+	CreateBinding(repoName string, b config.Binding) (config.Binding, error)
+	UpdateBinding(repoName string, id int64, b config.Binding) (config.Binding, error)
+	DeleteBinding(repoName string, id int64) error
+}
+
 // Deps bundles the dependencies the MCP server needs. Each tool handler
 // depends on a small subset of this struct; bundling them keeps the
 // registration site in tools.go short.
@@ -185,6 +200,7 @@ type Deps struct {
 	SkillWrite    SkillWriter
 	BackendWrite  BackendWriter
 	RepoWrite     RepoWriter
+	BindingWrite  BindingWriter
 	Logger        zerolog.Logger
 }
 
@@ -239,6 +255,7 @@ data the web dashboard shows. Config tools (get_config, export_config,
 import_config) return the redacted effective config, export the
 CRUD-mutable YAML fragment, and write a YAML payload back into the
 store. CRUD write tools (create_agent, delete_agent, create_skill,
-delete_skill, create_backend, delete_backend, create_repo, delete_repo)
-mutate the fleet through the same code path as the REST API. This
-server is the v3 foundation for conversational fleet management.`
+delete_skill, create_backend, delete_backend, create_repo, delete_repo,
+create_binding, update_binding, delete_binding) mutate the fleet through
+the same code path as the REST API. This server is the v3 foundation
+for conversational fleet management.`

@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import BadgePicker from '@/components/BadgePicker'
-import { Binding, groupByAgent } from '@/lib/bindings'
+import { Binding, groupByAgent, bindingsEqual } from '@/lib/bindings'
 
 interface Repo {
   name: string
@@ -419,19 +419,81 @@ export default function ReposPage() {
     setModal('delete')
   }
 
+  // saveRepo persists changes to a repo. For new repos it POSTs the whole
+  // payload (repo + bindings) in one shot — the existing full-replace path.
+  // For existing repos it diffs the bindings against the original load and
+  // issues atomic CREATE/PATCH/DELETE calls so a single edit doesn't clobber
+  // unrelated bindings (e.g. between two tabs). The enabled flag, when it
+  // changed, is updated via PATCH so bindings are preserved.
   const saveRepo = async (form: Repo) => {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch('/repos', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      })
-      if (!res.ok) {
-        setSaveError((await res.text()) || 'Save failed')
-        setSaving(false)
-        return
+      const isNew = !repos.some(r => r.name === form.name)
+      if (isNew) {
+        const res = await fetch('/repos', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(form),
+        })
+        if (!res.ok) {
+          setSaveError((await res.text()) || 'Save failed')
+          setSaving(false)
+          return
+        }
+      } else {
+        const original = repos.find(r => r.name === form.name)!
+        // Map originals by id for fast diff lookups. Bindings without ids
+        // should not exist on an already-persisted repo, but the guard makes
+        // the diff safe against stale local state.
+        const originalById = new Map<number, Binding>()
+        for (const b of original.bindings) {
+          if (typeof b.id === 'number') originalById.set(b.id, b)
+        }
+        const seenIDs = new Set<number>()
+        const ops: Promise<Response>[] = []
+        const encRepo = (n: string) => {
+          const [o, r] = n.split('/')
+          return `/repos/${encodeURIComponent(o)}/${encodeURIComponent(r)}`
+        }
+        for (const b of form.bindings) {
+          if (typeof b.id === 'number' && originalById.has(b.id)) {
+            seenIDs.add(b.id)
+            if (!bindingsEqual(originalById.get(b.id)!, b)) {
+              ops.push(fetch(`${encRepo(form.name)}/bindings/${b.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(b),
+              }))
+            }
+          } else {
+            ops.push(fetch(`${encRepo(form.name)}/bindings`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(b),
+            }))
+          }
+        }
+        for (const b of original.bindings) {
+          if (typeof b.id === 'number' && !seenIDs.has(b.id)) {
+            ops.push(fetch(`${encRepo(form.name)}/bindings/${b.id}`, { method: 'DELETE' }))
+          }
+        }
+        if (form.enabled !== original.enabled) {
+          ops.push(fetch(encRepo(form.name), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: form.enabled }),
+          }))
+        }
+        const results = await Promise.all(ops)
+        for (const r of results) {
+          if (!r.ok && r.status !== 204) {
+            setSaveError((await r.text()) || 'Save failed')
+            setSaving(false)
+            return
+          }
+        }
       }
       setModal(null)
       load()
