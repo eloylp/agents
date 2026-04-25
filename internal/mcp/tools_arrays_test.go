@@ -30,6 +30,7 @@ func TestStringSliceArgAcceptsShapes(t *testing.T) {
 		{"native []string", []string{"x"}, []string{"x"}, ""},
 		{"JSON-encoded array string", `["a","b"]`, []string{"a", "b"}, ""},
 		{"JSON-encoded empty array", `[]`, []string{}, ""},
+		{"JSON-encoded null decodes as nil slice", `null`, nil, ""},
 		{"JSON-encoded array with spaces", `[ "a" , "b" ]`, []string{"a", "b"}, ""},
 		{"non-array string is rejected", "ready", nil, "skills must be an array of strings"},
 		{"empty string is rejected", "", nil, "skills must be an array of strings"},
@@ -81,6 +82,7 @@ func TestStringSlicePtrArgAcceptsJSONString(t *testing.T) {
 		{"native array → ptr to slice", map[string]any{"skills": []any{"a"}}, true, 1, ""},
 		{"JSON-string array → ptr to slice", map[string]any{"skills": `["a","b"]`}, true, 2, ""},
 		{"JSON-string empty array → ptr to empty", map[string]any{"skills": `[]`}, true, 0, ""},
+		{"JSON-string null → ptr to nil slice (explicit clear)", map[string]any{"skills": `null`}, true, 0, ""},
 		{"bad shape → error", map[string]any{"skills": "ready"}, false, 0, "skills must be an array of strings"},
 	}
 
@@ -109,6 +111,53 @@ func TestStringSlicePtrArgAcceptsJSONString(t *testing.T) {
 			}
 			if got := len(*ptr); got != tc.wantLen {
 				t.Fatalf("len = %d, want %d", got, tc.wantLen)
+			}
+		})
+	}
+}
+
+// TestArrayOfAnyAcceptsShapes pins the shape contract for the helper that
+// decodes nested-object tool arguments (e.g. create_repo's "bindings"
+// payload). Mirrors TestStringSliceArgAcceptsShapes: native []any, JSON-
+// encoded array strings, and JSON-encoded null all succeed; non-array
+// inputs surface a clear "must be an array" error that names the field.
+func TestArrayOfAnyAcceptsShapes(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		in      any
+		wantLen int
+		wantNil bool
+		wantErr string
+	}{
+		{"native []any passthrough", []any{map[string]any{"agent": "coder"}}, 1, false, ""},
+		{"native empty []any", []any{}, 0, false, ""},
+		{"JSON-encoded array of objects", `[{"agent":"coder"}]`, 1, false, ""},
+		{"JSON-encoded empty array", `[]`, 0, false, ""},
+		{"JSON-encoded null decodes as nil slice", `null`, 0, true, ""},
+		{"nil falls through to error", nil, 0, true, "bindings must be an array"},
+		{"non-array string rejected", "not-an-array", 0, true, "bindings must be an array"},
+		{"JSON-encoded number rejected", `123`, 0, true, "bindings must be an array"},
+		{"wrong scalar type rejected", 42, 0, true, "bindings must be an array"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, errMsg := arrayOfAny(tc.in, "bindings")
+			if errMsg != tc.wantErr {
+				t.Fatalf("err = %q, want %q", errMsg, tc.wantErr)
+			}
+			if tc.wantErr != "" {
+				return
+			}
+			if tc.wantNil && got != nil {
+				t.Fatalf("got = %v, want nil", got)
+			}
+			if len(got) != tc.wantLen {
+				t.Fatalf("len = %d, want %d", len(got), tc.wantLen)
 			}
 		})
 	}
