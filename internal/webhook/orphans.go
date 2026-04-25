@@ -108,7 +108,7 @@ func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
 		}
 	}
 
-	orphans := make([]OrphanedAgent, 0)
+	orphan := make([]OrphanedAgent, 0)
 	for _, agent := range cfg.Agents {
 		backendName := cfg.ResolveBackend(agent.Backend)
 		if backendName == "" {
@@ -118,7 +118,7 @@ func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
 		if !ok || !config.IsPinnedModelUnavailable(agent.Model, backend) {
 			continue
 		}
-		orphans = append(orphans, OrphanedAgent{
+		orphan = append(orphan, OrphanedAgent{
 			Name:            agent.Name,
 			Backend:         backendName,
 			Model:           strings.TrimSpace(agent.Model),
@@ -127,13 +127,13 @@ func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
 		})
 	}
 
-	sort.Slice(orphans, func(i, j int) bool {
-		if orphans[i].Backend != orphans[j].Backend {
-			return orphans[i].Backend < orphans[j].Backend
+	sort.Slice(orphan, func(i, j int) bool {
+		if orphan[i].Backend != orphan[j].Backend {
+			return orphan[i].Backend < orphan[j].Backend
 		}
-		return orphans[i].Name < orphans[j].Name
+		return orphan[i].Name < orphan[j].Name
 	})
-	return orphans
+	return orphan
 }
 
 func canonicalModels(models []string) []string {
