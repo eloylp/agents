@@ -3,6 +3,7 @@ package webhook
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"sort"
@@ -107,7 +108,7 @@ func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
 		}
 	}
 
-	orphans := make([]OrphanedAgent, 0)
+	orpans := make([]OrphanedAgent, 0)
 	for _, agent := range cfg.Agents {
 		backendName := cfg.ResolveBackend(agent.Backend)
 		if backendName == "" {
@@ -117,11 +118,11 @@ func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
 		if !ok || !config.IsPinnedModelUnavailable(agent.Model, backend) {
 			continue
 		}
-		orphans = append(orphans, OrphanedAgent{
+		orpans = append(orphans, OrphanedAgent{
 			Name:            agent.Name,
 			Backend:         backendName,
 			Model:           strings.TrimSpace(agent.Model),
-			Repos:           sortedSetKeys(reposByAgent[agent.Name]),
+			Repos:           slices.Sorted(maps.Keys(reposByAgent[agent.Name])),
 			AvailableModels: canonicalModels(backend.Models),
 		})
 	}
@@ -133,18 +134,6 @@ func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
 		return orphans[i].Name < orphans[j].Name
 	})
 	return orphans
-}
-
-func sortedSetKeys(in map[string]struct{}) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(in))
-	for k := range in {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }
 
 func canonicalModels(models []string) []string {
