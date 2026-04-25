@@ -19,9 +19,9 @@ internal/
   workflow/                 # Event routing engine, single event queue, processor, dispatcher
   server/                   # Shared HTTP server types (cross-cutting interfaces, error sentinels)
   webhook/                  # HTTP server, HMAC verification, delivery dedupe, CRUD API handlers
+  mcp/                      # MCP server exposing fleet-management tools at /mcp
   ui/                       # Embedded Next.js web dashboard (served at /ui/)
   setup/                    # Interactive first-time setup command
-  mcp/                      # MCP (Model Context Protocol) server exposing fleet tools at /mcp
   logging/                  # zerolog setup
 docs/                       # Long-form docs: configuration, events, dispatch, API, docker, local-models, security
 ```
