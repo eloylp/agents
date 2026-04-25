@@ -607,10 +607,7 @@ func CreateBinding(db *sql.DB, repoName string, b config.Binding) (int64, config
 	if err != nil {
 		return 0, config.Binding{}, fmt.Errorf("store: create binding: marshal events: %w", err)
 	}
-	enabled := 1
-	if b.Enabled != nil && !*b.Enabled {
-		enabled = 0
-	}
+	enabled := bindingEnabledInt(b.Enabled)
 	res, err := tx.Exec(
 		`INSERT INTO bindings(repo,agent,labels,events,cron,enabled) VALUES (?,?,?,?,?,?)`,
 		repoName, b.Agent, string(labels), string(events), b.Cron, enabled,
@@ -665,10 +662,7 @@ func UpdateBinding(db *sql.DB, id int64, b config.Binding) (config.Binding, erro
 	if err != nil {
 		return config.Binding{}, fmt.Errorf("store: update binding: marshal events: %w", err)
 	}
-	enabled := 1
-	if b.Enabled != nil && !*b.Enabled {
-		enabled = 0
-	}
+	enabled := bindingEnabledInt(b.Enabled)
 	res, err := tx.Exec(
 		`UPDATE bindings SET agent=?, labels=?, events=?, cron=?, enabled=? WHERE id=?`,
 		b.Agent, string(labels), string(events), b.Cron, enabled, id,
