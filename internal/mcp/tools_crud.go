@@ -384,12 +384,10 @@ func toolCreateBinding(deps Deps) server.ToolHandlerFunc {
 			Events: req.GetStringSlice("events", nil),
 			Cron:   req.GetString("cron", ""),
 		}
-		if v, ok := req.GetArguments()["enabled"]; ok && v != nil {
-			enabled, ok := v.(bool)
-			if !ok {
-				return mcpgo.NewToolResultError("enabled must be a boolean"), nil
-			}
-			b.Enabled = &enabled
+		if v, ok, errMsg := boolPtrArg(req.GetArguments(), "enabled"); ok {
+			b.Enabled = v
+		} else if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
 		}
 		persisted, err := deps.BindingWrite.CreateBinding(repo, b)
 		if err != nil {
@@ -426,12 +424,10 @@ func toolUpdateBinding(deps Deps) server.ToolHandlerFunc {
 			Events: req.GetStringSlice("events", nil),
 			Cron:   req.GetString("cron", ""),
 		}
-		if v, ok := req.GetArguments()["enabled"]; ok && v != nil {
-			enabled, ok := v.(bool)
-			if !ok {
-				return mcpgo.NewToolResultError("enabled must be a boolean"), nil
-			}
-			b.Enabled = &enabled
+		if v, ok, errMsg := boolPtrArg(req.GetArguments(), "enabled"); ok {
+			b.Enabled = v
+		} else if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
 		}
 		updated, uerr := deps.BindingWrite.UpdateBinding(repo, int64(id), b)
 		if uerr != nil {
