@@ -145,6 +145,16 @@ All endpoints are unauthenticated at the daemon level -- **access control is the
 
 `/webhooks/github` is safe to expose publicly because every request is HMAC-verified against `GITHUB_WEBHOOK_SECRET` before it is accepted. `/run` does not currently authenticate callers -- if you enable it, restrict it at the proxy with an allowlist or a shared secret header.
 
+### Adapting the compose for production
+
+The shipped `docker-compose.yaml` publishes `8080:8080` for local use. For a production deploy behind a proxy:
+
+- Drop the `ports:` block; let the proxy reach the container on the internal Docker network instead.
+- Replace `build: .` with `image:` pointing at a pre-built image you ship from CI.
+- Add proxy-specific routing on top — labels for Traefik, server blocks for nginx, a Caddyfile for Caddy. The compose file stays proxy-agnostic; the auth layer lives at your proxy.
+
+The two-router split below is one concrete pattern using Traefik. The principle (auth on UI/API, no auth on webhooks/status/run/v1) carries over to any proxy.
+
 ### Traefik example
 
 ```yaml

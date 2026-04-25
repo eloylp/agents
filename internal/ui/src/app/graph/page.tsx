@@ -72,6 +72,7 @@ function AgentNode({ data }: NodeProps) {
         borderRadius: '12px',
         padding: '10px 20px',
         minWidth: '180px',
+        maxWidth: '220px',
         textAlign: 'center',
         boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
         position: 'relative',
@@ -94,8 +95,16 @@ function AgentNode({ data }: NodeProps) {
         </div>
         <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{d.status}</div>
         {d.skills.length > 0 && (
-          <div style={{ fontSize: '9px', color: 'var(--text-faint)', marginTop: '4px' }}>
-            {d.skills.join(' · ')}
+          <div
+            title={d.skills.join(', ')}
+            style={{
+              fontSize: '9px',
+              color: 'var(--text-faint)',
+              marginTop: '4px',
+              cursor: 'help',
+            }}
+          >
+            {d.skills.length} skill{d.skills.length === 1 ? '' : 's'}
           </div>
         )}
       </div>
@@ -109,7 +118,7 @@ const nodeTypes = { agent: AgentNode }
 function layoutGraph(nodes: Node[], edges: Edge[]): Node[] {
   const g = new dagre.graphlib.Graph()
   g.setDefaultEdgeLabel(() => ({}))
-  g.setGraph({ rankdir: 'TB', ranksep: 90, nodesep: 40 })
+  g.setGraph({ rankdir: 'TB', ranksep: 90, nodesep: 60 })
 
   nodes.forEach(n => g.setNode(n.id, { width: 200, height: 90 }))
   edges.forEach(e => g.setEdge(e.source, e.target))
