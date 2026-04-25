@@ -97,7 +97,23 @@ func requireAtLeastOne(q querier, countQuery, entity, zeroMsg string) error {
 	return nil
 }
 
-// ──── Agents ─────────────────────────────────────────────────────────────────
+// validateFleetMinimums verifies that the pending transaction state has at
+// least one agent, one backend, and one enabled repo. op ("import" or
+// "replace") is embedded in the returned ErrValidation message.
+func validateFleetMinimums(q querier, op string) error {
+	if err := requireAtLeastOne(q, "SELECT COUNT(*) FROM agents", "agents", "config: at least one agent is required"); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: %s: %v", op, err)}
+	}
+	if err := requireAtLeastOne(q, "SELECT COUNT(*) FROM backends", "backends", "config: at least one ai_backends entry is required"); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: %s: %v", op, err)}
+	}
+	if err := requireAtLeastOne(q, "SELECT COUNT(*) FROM repos WHERE enabled=1", "enabled repos", "config: at least one repo must be enabled"); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: %s: %v", op, err)}
+	}
+	return nil
+}
+
+// ──── Agents ─────────────────────────────────────────────────────────────────────────────
 
 // ReadAgents returns all agents from the database, ordered by name.
 func ReadAgents(db *sql.DB) ([]config.AgentDef, error) {
@@ -205,7 +221,7 @@ func countDistinctRepos(repos []string) int {
 	return len(seen)
 }
 
-// ──── Skills ─────────────────────────────────────────────────────────────────
+// ──── Skills ─────────────────────────────────────────────────────────────────────────────
 
 // ReadSkills returns all skills from the database.
 func ReadSkills(db *sql.DB) (map[string]config.SkillDef, error) {
@@ -258,7 +274,7 @@ func DeleteSkill(db *sql.DB, name string) error {
 	return tx.Commit()
 }
 
-// ──── Backends ───────────────────────────────────────────────────────────────
+// ──── Backends ────────────────────────────────────────────────────────────────────────────
 
 // ReadBackends returns all AI backend configurations from the database.
 func ReadBackends(db *sql.DB) (map[string]config.AIBackendConfig, error) {
@@ -354,7 +370,7 @@ func ReadSnapshot(db *sql.DB) ([]config.AgentDef, []config.RepoDef, map[string]c
 	return cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil
 }
 
-// ──── Repos ──────────────────────────────────────────────────────────────────
+// ──── Repos ──────────────────────────────────────────────────────────────────────────────
 
 // ReadRepos returns all repos (with bindings) from the database.
 func ReadRepos(db *sql.DB) ([]config.RepoDef, error) {
@@ -448,14 +464,8 @@ func ImportAll(
 	if err := validateFleet(tx); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
 	}
-	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM agents", "agents", "config: at least one agent is required"); err != nil {
-		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
-	}
-	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM backends", "backends", "config: at least one ai_backends entry is required"); err != nil {
-		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
-	}
-	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM repos WHERE enabled=1", "enabled repos", "config: at least one repo must be enabled"); err != nil {
-		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
+	if err := validateFleetMinimums(tx, "import"); err != nil {
+		return err
 	}
 	if err := validateCronExpressions(repos); err != nil {
 		return err
@@ -505,14 +515,8 @@ func ReplaceAll(
 	if err := validateFleet(tx); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
 	}
-	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM agents", "agents", "config: at least one agent is required"); err != nil {
-		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
-	}
-	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM backends", "backends", "config: at least one ai_backends entry is required"); err != nil {
-		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
-	}
-	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM repos WHERE enabled=1", "enabled repos", "config: at least one repo must be enabled"); err != nil {
-		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
+	if err := validateFleetMinimums(tx, "replace"); err != nil {
+		return err
 	}
 	if err := validateCronExpressions(repos); err != nil {
 		return err
@@ -520,7 +524,7 @@ func ReplaceAll(
 	return tx.Commit()
 }
 
-// ──── Bindings (atomic per-item CRUD) ────────────────────────────────────────
+// ──── Bindings (atomic per-item CRUD) ────────────────────────────────────────────
 
 // validateBindingShape checks the trigger-exclusivity and event-kind invariants
 // for a single binding, without requiring a full repo context. Returns an
