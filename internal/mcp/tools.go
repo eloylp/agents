@@ -596,9 +596,9 @@ func jsonResult(v any) (*mcpgo.CallToolResult, error) {
 // nilSafe normalises a nil slice to an empty slice so JSON output is a
 // predictable [] rather than null. Consumers — especially LLMs — parse the
 // two differently, and we already follow the same convention in REST handlers.
-func nilSafe(xs []string) []string {
+func nilSafe[T any](xs []T) []T {
 	if xs == nil {
-		return []string{}
+		return []T{}
 	}
 	return xs
 }
