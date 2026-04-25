@@ -43,7 +43,7 @@ Two moving pieces inside the daemon:
 
 1. **The proxy** (`internal/anthropic_proxy/`) — an HTTP handler mounted on the daemon's existing server at `/v1/messages` and `/v1/models`. Accepts Anthropic Messages format, translates to OpenAI Chat Completions, forwards to your configured upstream, translates the response back. Text, system messages, tool-use / tool-result round-trips, streaming (fake-streaming via SSE, token-by-token streaming coming). Covered by unit tests.
 
-2. **Per-backend env override** (`AIBackendConfig.env`) — lets you have *two* backends that both run the `claude` CLI but route to different endpoints. One hits hosted Anthropic (default), one hits the local proxy. You pick per-agent.
+2. **Per-backend `local_model_url`** (`AIBackendConfig.local_model_url`) — set this on a backend entry and the daemon injects `ANTHROPIC_BASE_URL=<url>` into the subprocess environment, routing that backend's `claude` CLI through the local proxy. You can have two backends that both run `claude` — one hitting hosted Anthropic (no `local_model_url`), one hitting the proxy. You pick per-agent.
 
 Nothing else changes. Same agents, same prompts, same config.
 
@@ -105,17 +105,12 @@ daemon:
   ai_backends:
     claude:                               # default: hosted Anthropic
       command: claude
-      args: [-p, --dangerously-skip-permissions]
       timeout_seconds: 3600
       max_prompt_chars: 12000
 
-    claude_local:                         # second entry, same binary, different env
+    claude_local:                         # same binary, routed through the daemon proxy
       command: claude
-      args: [-p, --dangerously-skip-permissions]
-      env:
-        ANTHROPIC_BASE_URL: http://localhost:8080    # the daemon proxies itself
-        ANTHROPIC_API_KEY: sk-not-needed             # dummy; proxy ignores
-        ANTHROPIC_MODEL: qwen
+      local_model_url: http://localhost:8080    # daemon injects ANTHROPIC_BASE_URL
       timeout_seconds: 3600
       max_prompt_chars: 12000
 ```
@@ -249,7 +244,7 @@ The `claude` CLI's Task tool can spawn sub-agents whose conversations build up t
 
 ### "Invalid API key" on every run
 
-You're missing `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` in the backend's `env` block, or your build does not include the current allowlist in `internal/ai/cmdrunner.go`.
+`ANTHROPIC_BASE_URL` is not reaching the subprocess. Check that `local_model_url` is set on the `claude_local` backend in your daemon config — the daemon injects `ANTHROPIC_BASE_URL` from that field. `ANTHROPIC_API_KEY` must still be present in the container environment (any non-empty value works; the local endpoint ignores it). Set it in your `.env` file or compose `environment:` block.
 
 Verify with:
 
