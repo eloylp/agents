@@ -142,15 +142,7 @@ func toolListRepos(deps Deps) server.ToolHandlerFunc {
 		}
 		out := make([]map[string]any, 0, len(repos))
 		for _, r := range repos {
-			bindings := make([]map[string]any, 0, len(r.Use))
-			for _, b := range r.Use {
-				bindings = append(bindings, bindingJSON(b))
-			}
-			out = append(out, map[string]any{
-				"name":     r.Name,
-				"enabled":  r.Enabled,
-				"bindings": bindings,
-			})
+			out = append(out, repoJSON(r))
 		}
 		return jsonResult(out)
 	}
@@ -171,15 +163,7 @@ func toolGetRepo(deps Deps) server.ToolHandlerFunc {
 		key := config.NormalizeRepoName(name)
 		for _, r := range repos {
 			if r.Name == key {
-				bindings := make([]map[string]any, 0, len(r.Use))
-				for _, b := range r.Use {
-					bindings = append(bindings, bindingJSON(b))
-				}
-				return jsonResult(map[string]any{
-					"name":     r.Name,
-					"enabled":  r.Enabled,
-					"bindings": bindings,
-				})
+				return jsonResult(repoJSON(r))
 			}
 		}
 		return mcpgo.NewToolResultErrorf("repo %q not found", name), nil
