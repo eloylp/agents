@@ -37,7 +37,7 @@ The dispatched agent receives an `agent.dispatch` event with these payload field
 ## Safety limits (`daemon.processor.dispatch`)
 
 | Field | Default | Meaning |
-|-------|---------|---------|
+|-------|---------|----------|
 | `max_depth` | 3 | Maximum dispatch chain length. Requests that would exceed this are dropped with a warning. |
 | `max_fanout` | 4 | Maximum number of dispatches a single agent run may enqueue. Additional requests are dropped. |
 | `dedup_window_seconds` | 300 | Suppress duplicate `(target, repo, number)` dispatch requests within this window (seconds). |
@@ -79,3 +79,12 @@ agents:
     prompt: |
       Review the change for security risks and unsafe assumptions.
 ```
+
+## UI wiring editor
+
+The **Graph** page in the web dashboard (`/ui/`) has an "Edit wiring" toggle. When active:
+
+- **Add a connection**: drag from any agent node to another. The daemon writes the source agent's `can_dispatch` list and enables `allow_dispatch` on the target via `PATCH /agents`.
+- **Remove a connection**: click an existing edge to open a confirmation modal. The daemon removes the target from the source agent's `can_dispatch` list; the target's `allow_dispatch` flag is left alone, since other agents may still dispatch to it.
+
+Self-dispatch and duplicate edges are rejected before any network call. Config-level constraints (`description` required on dispatch targets, no self-reference) still apply — the UI enforces them before writing.
