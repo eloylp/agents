@@ -14,8 +14,10 @@ internal/
   anthropic_proxy/          # Built-in Anthropic↔OpenAI Chat Completions translation proxy
   observe/                  # Observability store: events, traces, dispatch graph, SSE hubs
   autonomous/               # Cron scheduler + agent memory (SQLite-backed)
+  backends/                 # Backend discovery: CLI probing, GitHub MCP health checks, orphan detection
   store/                    # SQLite-backed config store: Open, Import, Load, CRUD
   workflow/                 # Event routing engine, single event queue, processor, dispatcher
+  server/                   # Shared HTTP server types (cross-cutting interfaces, error sentinels)
   webhook/                  # HTTP server, HMAC verification, delivery dedupe, CRUD API handlers
   ui/                       # Embedded Next.js web dashboard (served at /ui/)
   setup/                    # Interactive first-time setup command

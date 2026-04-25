@@ -11,7 +11,7 @@ Agents can also invoke each other at runtime via the **reactive inter-agent disp
 Key numbers:
 - Language: **Go 1.25** (check `go.mod`).
 - Binary entrypoint: `cmd/agents/main.go`.
-- Single-binary deployment; no required runtime dependencies beyond the AI CLI and `gh`.
+- Single-binary deployment; no required runtime dependencies beyond the AI CLIs (GitHub access flows through the GitHub MCP server configured on each AI CLI).
 
 ## Quick commands
 
@@ -35,9 +35,12 @@ internal/
   anthropic_proxy/              # built-in Anthropic Messages ↔ OpenAI Chat Completions translation
   observe/                      # observability store: events, traces, dispatch graph, SSE hubs
   autonomous/                   # cron scheduler + agent memory (SQLite-backed)
+  backends/                     # backend discovery: CLI probing, GitHub MCP health checks, orphan detection
   store/                        # SQLite-backed config store: Open, Import, Load, CRUD
   workflow/                     # event routing engine (single event queue), processor, dispatcher
+  server/                       # shared HTTP server types (cross-cutting interfaces, error sentinels)
   webhook/                      # HTTP server, HMAC signature verification, delivery dedupe, CRUD API handlers
+  mcp/                          # MCP server exposing fleet-management tools at /mcp
   ui/                           # embedded Next.js web dashboard (static assets served at /ui/)
   setup/                        # interactive first-time setup command
   logging/                      # zerolog configuration
