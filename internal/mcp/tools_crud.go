@@ -378,15 +378,8 @@ func toolCreateBinding(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("agent is required"), nil
 		}
-		b := config.Binding{
-			Agent:  agent,
-			Labels: req.GetStringSlice("labels", nil),
-			Events: req.GetStringSlice("events", nil),
-			Cron:   req.GetString("cron", ""),
-		}
-		if v, ok, errMsg := boolPtrArg(req.GetArguments(), "enabled"); ok {
-			b.Enabled = v
-		} else if errMsg != "" {
+		b, errMsg := bindingFromReq(req, agent)
+		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
 		persisted, err := deps.BindingWrite.CreateBinding(repo, b)
@@ -418,15 +411,8 @@ func toolUpdateBinding(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("agent is required"), nil
 		}
-		b := config.Binding{
-			Agent:  agent,
-			Labels: req.GetStringSlice("labels", nil),
-			Events: req.GetStringSlice("events", nil),
-			Cron:   req.GetString("cron", ""),
-		}
-		if v, ok, errMsg := boolPtrArg(req.GetArguments(), "enabled"); ok {
-			b.Enabled = v
-		} else if errMsg != "" {
+		b, errMsg := bindingFromReq(req, agent)
+		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
 		updated, uerr := deps.BindingWrite.UpdateBinding(repo, int64(id), b)
@@ -484,6 +470,24 @@ func toolDeleteBinding(deps Deps) server.ToolHandlerFunc {
 			"repo":   config.NormalizeRepoName(repo),
 		})
 	}
+}
+
+// bindingFromReq builds a config.Binding from the MCP request fields shared
+// by create_binding and update_binding. Returns a non-empty error string when
+// a field is present but the wrong type.
+func bindingFromReq(req mcpgo.CallToolRequest, agent string) (config.Binding, string) {
+	b := config.Binding{
+		Agent:  agent,
+		Labels: req.GetStringSlice("labels", nil),
+		Events: req.GetStringSlice("events", nil),
+		Cron:   req.GetString("cron", ""),
+	}
+	if v, ok, errMsg := boolPtrArg(req.GetArguments(), "enabled"); ok {
+		b.Enabled = v
+	} else if errMsg != "" {
+		return config.Binding{}, errMsg
+	}
+	return b, ""
 }
 
 // repoJSON renders a RepoDef in the same wire shape as an element of the
