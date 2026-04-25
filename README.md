@@ -33,7 +33,7 @@ The daemon ships an embedded web dashboard at `/ui/` with real-time views of you
 |------|---------------|
 | **Events** | Live webhook event firehose with SSE streaming |
 | **Traces** | Agent run traces with timing, status, and drill-down to tool-loop transcripts |
-| **Graph** | Visual dispatch graph -- which agents invoke which, with edge counts |
+| **Graph** | Visual dispatch graph -- which agents invoke which, with edge counts. Toggle "Edit wiring" to add or remove dispatch connections by drag-and-drop |
 | **Agents** | Fleet snapshot -- per-agent status, skills, bindings, dispatch wiring. Create, edit, and delete agents |
 | **Skills** | Manage reusable guidance blocks -- create, edit, delete |
 | **Backends and tools** | Backend discovery status (including per-backend GitHub MCP connectivity), runtime limits, local backend URL management, and orphaned-model remediation |
