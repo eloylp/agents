@@ -441,8 +441,8 @@ func toolUpdateBinding(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
-// toolDeleteBinding removes a binding by ID through the same path as DELETE
-// /repos/{owner}/{repo}/bindings/{id}.
+// toolGetBinding fetches one binding by ID, verifying it belongs to the given
+// repo. Same path as GET /repos/{owner}/{repo}/bindings/{id}.
 func toolGetBinding(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		id, err := req.RequireInt("id")
@@ -464,6 +464,8 @@ func toolGetBinding(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
+// toolDeleteBinding removes a binding by ID through the same path as DELETE
+// /repos/{owner}/{repo}/bindings/{id}.
 func toolDeleteBinding(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		id, err := req.RequireInt("id")
