@@ -108,7 +108,7 @@ func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
 		}
 	}
 
-	orpans := make([]OrphanedAgent, 0)
+	orphans := make([]OrphanedAgent, 0)
 	for _, agent := range cfg.Agents {
 		backendName := cfg.ResolveBackend(agent.Backend)
 		if backendName == "" {
@@ -118,7 +118,7 @@ func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
 		if !ok || !config.IsPinnedModelUnavailable(agent.Model, backend) {
 			continue
 		}
-		orpans = append(orphans, OrphanedAgent{
+		orphans = append(orphans, OrphanedAgent{
 			Name:            agent.Name,
 			Backend:         backendName,
 			Model:           strings.TrimSpace(agent.Model),
