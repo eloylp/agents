@@ -18,7 +18,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
 
-	anthropicproxy "github.com/eloylp/agents/internal/anthropic_proxy"
+	anthropic_proxy "github.com/eloylp/agents/internal/anthropic_proxy"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/server"
@@ -333,17 +333,17 @@ func (s *Server) buildStatus() statusJSON {
 		},
 		Agents: agents,
 	}
-	orphaned := s.orphanedAgentsSnapshot()
-	if fresh, err := s.refreshOrphanedAgentsFromDB(); err == nil {
-		orphaned = fresh
-	} else {
+	orphanedAgentsSnapshot := s.orphanedAgentsSnapshot()
+	if fresh, err := s.refreshOrphanedAgentsFromDB(); err != nil {
 		s.logger.Warn().Err(err).Msg("status: orphan snapshot refresh failed")
+	} else {
+		orphanedAgentsSnapshot = fresh
 	}
 	resp.OrphanedAgents = statusOrphanSummaryJSON{
-		Count: orphaned.Count,
+		Count: orphanedAgentsSnapshot.Count,
 	}
-	if !orphaned.GeneratedAt.IsZero() {
-		at := orphaned.GeneratedAt
+	if !orphanedAgentsSnapshot.GeneratedAt.IsZero() {
+		at := orphanedAgentsSnapshot.GeneratedAt
 		resp.OrphanedAgents.UpdatedAt = &at
 	}
 	if s.dispatchStats != nil {
