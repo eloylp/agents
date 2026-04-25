@@ -12,7 +12,7 @@ Define your agents once. Wire them to repos with labels, cron schedules, or even
 
 - **Self-hosted, no SaaS** -- your code and prompts stay on your infrastructure.
 - **Multi-backend** -- Claude, Codex, and named local backends. Mix backends per agent.
-- **Discovery + diagnostics** -- daemon detects backend/tools, validates CLI health (`gh`, MCP connectivity, models), and persists discovery snapshots.
+- **Discovery + diagnostics** -- daemon detects backend/tools, validates CLI health (MCP connectivity, models), and persists discovery snapshots.
 - **Local model support** -- built-in Anthropic-to-OpenAI translation proxy routes the fleet through `llama.cpp`, Ollama, vLLM, or any OpenAI-compatible endpoint. Zero vendor lock-in.
 - **One agent model, many triggers** -- label events, cron schedules, GitHub event subscriptions, on-demand API calls. Same agent, wired however you want.
 - **Composable skills** -- reusable guidance blocks (architecture, security, testing, DX, ...) merged into any agent.
@@ -188,9 +188,12 @@ internal/
   anthropic_proxy/          # Built-in Anthropic-to-OpenAI translation proxy (opt-in)
   observe/                  # Observability store (events, traces, dispatch graph, SSE hubs)
   autonomous/               # Cron scheduler + agent memory (SQLite-backed)
+  backends/                 # Backend discovery: CLI probing, GitHub MCP health checks, orphan detection
   store/                    # SQLite-backed config store: schema migrations, CRUD helpers
   workflow/                 # Event routing engine, single event queue, processor, inter-agent dispatcher
+  server/                   # Shared HTTP server types (cross-cutting interfaces, error sentinels)
   webhook/                  # HTTP server, signature verification, delivery dedupe, CRUD API handlers
+  mcp/                      # MCP server exposing fleet-management tools at /mcp
   ui/                       # Embedded Next.js web dashboard (served at /ui/)
   setup/                    # Interactive first-time setup command
   logging/                  # zerolog setup
