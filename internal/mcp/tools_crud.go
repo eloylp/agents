@@ -403,16 +403,9 @@ func toolCreateBinding(deps Deps) server.ToolHandlerFunc {
 // surface as not-found.
 func toolUpdateBinding(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id, err := req.RequireInt("id")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		if id <= 0 {
-			return mcpgo.NewToolResultError("id must be a positive integer"), nil
-		}
-		repo, ok := trimmedString(req, "repo")
-		if !ok {
-			return mcpgo.NewToolResultError("repo is required"), nil
+		id, repo, errMsg := bindingIDAndRepo(req)
+		if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
 		}
 		agent, ok := trimmedString(req, "agent")
 		if !ok {
@@ -441,16 +434,9 @@ func toolUpdateBinding(deps Deps) server.ToolHandlerFunc {
 // repo. Same path as GET /repos/{owner}/{repo}/bindings/{id}.
 func toolGetBinding(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id, err := req.RequireInt("id")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		if id <= 0 {
-			return mcpgo.NewToolResultError("id must be a positive integer"), nil
-		}
-		repo, ok := trimmedString(req, "repo")
-		if !ok {
-			return mcpgo.NewToolResultError("repo is required"), nil
+		id, repo, errMsg := bindingIDAndRepo(req)
+		if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
 		}
 		b, err := deps.BindingWrite.ReadBinding(repo, int64(id))
 		if err != nil {
@@ -464,16 +450,9 @@ func toolGetBinding(deps Deps) server.ToolHandlerFunc {
 // /repos/{owner}/{repo}/bindings/{id}.
 func toolDeleteBinding(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id, err := req.RequireInt("id")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		if id <= 0 {
-			return mcpgo.NewToolResultError("id must be a positive integer"), nil
-		}
-		repo, ok := trimmedString(req, "repo")
-		if !ok {
-			return mcpgo.NewToolResultError("repo is required"), nil
+		id, repo, errMsg := bindingIDAndRepo(req)
+		if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
 		}
 		if err := deps.BindingWrite.DeleteBinding(repo, int64(id)); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete binding", err), nil
@@ -668,4 +647,22 @@ func stringSliceFromAny(v any, path string) ([]string, string) {
 		out = append(out, s)
 	}
 	return out, ""
+}
+
+// bindingIDAndRepo reads the "id" and "repo" parameters shared by
+// get_binding, update_binding, and delete_binding. Returns a non-empty
+// errMsg on any validation failure.
+func bindingIDAndRepo(req mcpgo.CallToolRequest) (int, string, string) {
+	id, err := req.RequireInt("id")
+	if err != nil {
+		return 0, "", err.Error()
+	}
+	if id <= 0 {
+		return 0, "", "id must be a positive integer"
+	}
+	repo, ok := trimmedString(req, "repo")
+	if !ok {
+		return 0, "", "repo is required"
+	}
+	return id, repo, ""
 }
