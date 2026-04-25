@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -98,7 +99,7 @@ func RunDiagnostics(ctx context.Context, existing map[string]config.AIBackendCon
 		})
 	}
 	for name, cfg := range existing {
-		if isBuiltinBackendName(name) || strings.TrimSpace(cfg.LocalModelURL) == "" {
+		if slices.Contains(builtinBackendNames, name) || strings.TrimSpace(cfg.LocalModelURL) == "" {
 			continue
 		}
 		targets = append(targets, backendTarget{
@@ -414,7 +415,7 @@ func dedupeSorted(in []string) []string {
 		seen[s] = struct{}{}
 		out = append(out, s)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -471,13 +472,4 @@ func mergeEnv(base []string, override map[string]string) []string {
 		out = append(out, k+"="+v)
 	}
 	return out
-}
-
-func isBuiltinBackendName(name string) bool {
-	for _, builtin := range builtinBackendNames {
-		if name == builtin {
-			return true
-		}
-	}
-	return false
 }
