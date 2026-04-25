@@ -30,18 +30,18 @@ type zerologCronLogger struct {
 	logger zerolog.Logger
 }
 
-func (z zerologCronLogger) Info(msg string, keysAndValues ...interface{}) {
+func (z zerologCronLogger) Info(msg string, keysAndValues ...any) {
 	appendLogKV(z.logger.Info(), keysAndValues).Msg(msg)
 }
 
-func (z zerologCronLogger) Error(err error, msg string, keysAndValues ...interface{}) {
+func (z zerologCronLogger) Error(err error, msg string, keysAndValues ...any) {
 	appendLogKV(z.logger.Error().Err(err), keysAndValues).Msg(msg)
 }
 
 // appendLogKV attaches key-value pairs to a zerolog event. keysAndValues is a
 // flat alternating slice of [key, value, key, value, …]; odd-length tails are
 // silently ignored, matching cron.Logger convention.
-func appendLogKV(e *zerolog.Event, keysAndValues []interface{}) *zerolog.Event {
+func appendLogKV(e *zerolog.Event, keysAndValues []any) *zerolog.Event {
 	for i := 0; i+1 < len(keysAndValues); i += 2 {
 		e = e.Interface(fmt.Sprintf("%v", keysAndValues[i]), keysAndValues[i+1])
 	}
