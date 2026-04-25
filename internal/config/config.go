@@ -411,17 +411,7 @@ func ValidateEntities(agents []AgentDef, repos []RepoDef, skills map[string]Skil
 			if !b.IsCron() && !b.IsLabel() && !b.IsEvent() {
 				return fmt.Errorf("config: repo %q: binding for agent %q has no trigger (set cron, labels, or events)", r.Name, b.Agent)
 			}
-			triggerCount := 0
-			if b.IsLabel() {
-				triggerCount++
-			}
-			if b.IsEvent() {
-				triggerCount++
-			}
-			if b.IsCron() {
-				triggerCount++
-			}
-			if triggerCount > 1 {
+			if countBindingTriggers(b) > 1 {
 				return fmt.Errorf("config: repo %q: binding for agent %q mixes multiple trigger types (labels, events, cron); each binding must use exactly one trigger", r.Name, b.Agent)
 			}
 			for _, kind := range b.Events {
@@ -842,6 +832,21 @@ func (c *Config) validateDispatchWiring() error {
 	return nil
 }
 
+// countBindingTriggers returns the number of trigger types (labels, events, cron) set on b.
+func countBindingTriggers(b Binding) int {
+	n := 0
+	if b.IsLabel() {
+		n++
+	}
+	if b.IsEvent() {
+		n++
+	}
+	if b.IsCron() {
+		n++
+	}
+	return n
+}
+
 func (c *Config) validateRepos() error {
 	enabledCount := 0
 	seen := make(map[string]struct{}, len(c.Repos))
@@ -867,17 +872,7 @@ func (c *Config) validateRepos() error {
 			if !b.IsCron() && !b.IsLabel() && !b.IsEvent() {
 				return fmt.Errorf("config: repo %q: binding for agent %q has no trigger (set cron, labels, or events)", r.Name, b.Agent)
 			}
-			triggerCount := 0
-			if b.IsLabel() {
-				triggerCount++
-			}
-			if b.IsEvent() {
-				triggerCount++
-			}
-			if b.IsCron() {
-				triggerCount++
-			}
-			if triggerCount > 1 {
+			if countBindingTriggers(b) > 1 {
 				return fmt.Errorf("config: repo %q: binding for agent %q mixes multiple trigger types (labels, events, cron); each binding must use exactly one trigger", r.Name, b.Agent)
 			}
 			for _, kind := range b.Events {
