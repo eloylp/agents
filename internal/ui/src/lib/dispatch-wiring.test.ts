@@ -16,6 +16,7 @@ function makeAgent(overrides: Partial<StoreAgent> = {}): StoreAgent {
     prompt: 'do the thing',
     allow_prs: false,
     allow_dispatch: false,
+    allow_memory: true,
     can_dispatch: [],
     description: '',
     ...overrides,
