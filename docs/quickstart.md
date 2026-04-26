@@ -19,14 +19,27 @@ Follow the official setup guides:
 
 You only need one of these to get started. The GitHub MCP server is required by both.
 
-## Build and run
-
-The daemon always boots from a SQLite database. `config.yaml` is an optional way to seed it; you can also start with an empty database and create the fleet through the dashboard at `/ui/`.
+## Build
 
 ```bash
-# Build
 go build -o agents ./cmd/agents
+```
 
+## First-time setup (recommended)
+
+Run the interactive setup assistant:
+
+```bash
+./agents setup
+```
+
+It walks you through wiring up the daemon and validates readiness end-to-end (`/status`, `/backends/status`, `/backends/discover`, `/agents/orphans/status`) before finishing, so you know your CLIs and tokens are correct before the first scheduled run.
+
+## Manual setup
+
+If you'd rather do it by hand, the daemon always boots from a SQLite database. `config.yaml` is an optional way to seed it; you can also start with an empty database and create the fleet through the dashboard at `/ui/`.
+
+```bash
 # Start with an empty database; create the fleet through /ui/ or the CRUD API
 ./agents --db agents.db
 
@@ -35,14 +48,6 @@ go build -o agents ./cmd/agents
 ```
 
 After the first start, `config.yaml` is no longer read; the daemon boots from the persisted database. You can export the current fleet back to YAML at any time via `GET /export`.
-
-Or run the interactive setup assistant:
-
-```bash
-./agents setup
-```
-
-The setup assistant validates daemon readiness (`/status`, `/backends/status`, `/backends/discover`, `/agents/orphans/status`) before completion, so you know your CLIs and tokens are wired correctly before the first scheduled run.
 
 ## On-demand single agent run
 
@@ -75,6 +80,7 @@ See [events.md](events.md) for the full list of supported event kinds and their 
 
 ## Next steps
 
+- [Mental model](mental-model.md) for how the daemon composes prompts and what an agent must return. Read this before writing your first prompt.
 - [Configuration](configuration.md) for the full config schema (skills, agents, repos, backends).
 - [Docker deployment](docker.md) for production setup behind a reverse proxy.
 - [Web dashboard](ui.md) for the management UI you will spend most of your time in.

@@ -10,7 +10,7 @@ Define your agents once. Wire them to repos with labels, cron schedules, or even
 
 - **[Quick start](docs/quickstart.md)**: get the daemon running on a repo in under five minutes.
 - **Three ways to interact with your fleet**:
-  - **[Web dashboard](docs/ui.md)**: graphical. Live event firehose, traces with tool-loop transcripts, dispatch graph, memory viewer, full CRUD.
+  - **[Web dashboard](docs/ui.md)**: graphical. Manage agents, skills, repos, and bindings; watch the live event firehose, agent traces with tool-loop transcripts, dispatch graph, and memory viewer.
   - **[MCP server](docs/mcp.md)**: conversational. Control agents and trigger runs straight from Claude Code in your terminal (or Cursor, Cline, or any MCP client).
   - **[REST API](docs/api.md)**: programmatic. Scriptable from any HTTP client; the dashboard itself runs on top of it.
 - **[Self-hosted](docs/docker.md)**: your code and prompts stay on your infrastructure. No SaaS dependency.

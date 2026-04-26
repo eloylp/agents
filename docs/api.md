@@ -68,30 +68,4 @@ Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL c
 
 ## AI runner contract
 
-The daemon spawns the configured CLI, sends the composed prompt on **stdin**, and expects a **single JSON object on stdout**:
-
-```json
-{
-  "summary": "Reviewed PR for security vulnerabilities",
-  "artifacts": [
-    {
-      "type": "pr_review",
-      "part_key": "review/claude/security",
-      "github_id": "123456",
-      "url": "https://github.com/owner/repo/pull/1#pullrequestreview-123456"
-    }
-  ],
-  "dispatch": [
-    {
-      "agent": "sec-reviewer",
-      "number": 42,
-      "reason": "Custom crypto primitives found; needs deeper security review"
-    }
-  ],
-  "memory": "## 2026-04-21\n- Reviewed PR #42; escalated crypto concerns to sec-reviewer."
-}
-```
-
-The metadata is used for observability, logging, and run summaries. Agents that don't post anything still return an empty `artifacts: []`. The `dispatch` field is optional. Omit it or leave it empty when the agent does not need to invoke another agent. See [dispatch.md](dispatch.md) for the full contract.
-
-The `memory` field is how autonomous agents persist state across scheduled runs. The daemon reads the stored memory before each autonomous run and writes the `memory` value from the response back to the SQLite store. An empty string clears the memory. Event-driven runs (webhooks, label triggers) do not receive or persist memory.
+The contract between the daemon and the AI CLI subprocess (prompt composition, structured JSON output, schema enforcement) is documented in [mental-model.md](mental-model.md).
