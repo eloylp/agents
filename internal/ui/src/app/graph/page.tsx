@@ -291,6 +291,7 @@ export default function GraphPage() {
       prompt: data.prompt ?? '',
       allow_prs: data.allow_prs ?? false,
       allow_dispatch: data.allow_dispatch ?? false,
+      allow_memory: data.allow_memory ?? true,
       can_dispatch: data.can_dispatch ?? [],
       description: data.description ?? '',
     }
