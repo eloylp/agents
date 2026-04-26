@@ -847,8 +847,14 @@ func countBindingTriggers(b Binding) int {
 	return n
 }
 
+// validateRepos checks per-repo invariants: name presence, name uniqueness,
+// binding agent references, trigger exclusivity, and event-kind allow-list.
+// It does NOT enforce an "at least one enabled repo" minimum — disabling all
+// repos is a legitimate user action (fleet maintenance, evaluating prompts on
+// a different repo) and the daemon runs cleanly with zero enabled repos:
+// webhook events for disabled repos route through workflow_engine which logs
+// "no bindings matched event, skipping". See issue #302.
 func (c *Config) validateRepos() error {
-	enabledCount := 0
 	seen := make(map[string]struct{}, len(c.Repos))
 	for _, r := range c.Repos {
 		if r.Name == "" {
@@ -859,9 +865,6 @@ func (c *Config) validateRepos() error {
 			return fmt.Errorf("config: duplicate repo %q", r.Name)
 		}
 		seen[key] = struct{}{}
-		if r.Enabled {
-			enabledCount++
-		}
 		for i, b := range r.Use {
 			if b.Agent == "" {
 				return fmt.Errorf("config: repo %q: binding #%d has no agent", r.Name, i)
@@ -882,9 +885,6 @@ func (c *Config) validateRepos() error {
 				}
 			}
 		}
-	}
-	if len(c.Repos) > 0 && enabledCount == 0 {
-		return errors.New("config: at least one repo must be enabled")
 	}
 	return nil
 }

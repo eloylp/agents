@@ -1701,7 +1701,12 @@ func TestServerCfgUpdatedAfterCRUDWrite(t *testing.T) {
 	}
 }
 
-func TestStoreCRUDDeleteRepoRejectedAsLastEnabled(t *testing.T) {
+// TestStoreCRUDDeleteRepoAllowsLastEnabled verifies that the HTTP DELETE
+// /repos/{owner}/{repo} endpoint succeeds with 204 even when the target is the
+// last (or only) enabled repo. Disabling/removing all repos is a legitimate
+// user action; the daemon runs cleanly with zero enabled repos. Regression for
+// issue #302.
+func TestStoreCRUDDeleteRepoAllowsLastEnabled(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
@@ -1720,8 +1725,13 @@ func TestStoreCRUDDeleteRepoRejectedAsLastEnabled(t *testing.T) {
 	}
 
 	rr := doCRUDRequest(t, s, http.MethodDelete, "/repos/owner/repo", nil)
-	if rr.Code == http.StatusNoContent {
-		t.Error("DELETE last enabled repo: want non-204, got 204")
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("DELETE last enabled repo: want 204, got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// The repo must be gone from subsequent reads.
+	if rr := doCRUDRequest(t, s, http.MethodGet, "/repos/owner/repo", nil); rr.Code != http.StatusNotFound {
+		t.Errorf("GET deleted repo: want 404, got %d — %s", rr.Code, rr.Body.String())
 	}
 }
 

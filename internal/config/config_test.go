@@ -237,18 +237,6 @@ repos:
 `,
 			errMsg: "unknown event kind",
 		},
-		{
-			name: "all repos disabled",
-			repo: `
-repos:
-  - name: "owner/repo"
-    enabled: false
-    use:
-      - agent: reviewer
-        labels: ["ai:review:reviewer"]
-`,
-			errMsg: "must be enabled",
-		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -258,6 +246,32 @@ repos:
 				t.Fatalf("expected error containing %q, got %v", tc.errMsg, err)
 			}
 		})
+	}
+}
+
+// TestLoadAcceptsAllReposDisabled verifies that a config with every repo
+// disabled loads successfully. Disabling all repos is a legitimate user action
+// (fleet maintenance, prompt evaluation on a different repo) and the daemon
+// must not crash-loop on the next restart. Regression for issue #302.
+func TestLoadAcceptsAllReposDisabled(t *testing.T) {
+	t.Setenv("TEST_SECRET", "s3cret")
+	repo := `
+repos:
+  - name: "owner/repo"
+    enabled: false
+    use:
+      - agent: reviewer
+        labels: ["ai:review:reviewer"]
+`
+	cfg, err := Load(writeConfig(t, minimalYAML(repo)))
+	if err != nil {
+		t.Fatalf("Load with all repos disabled: want success, got %v", err)
+	}
+	if len(cfg.Repos) != 1 {
+		t.Fatalf("repos: got %d, want 1", len(cfg.Repos))
+	}
+	if cfg.Repos[0].Enabled {
+		t.Errorf("repo enabled: got true, want false")
 	}
 }
 
