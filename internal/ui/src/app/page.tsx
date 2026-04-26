@@ -30,6 +30,7 @@ interface Agent {
   allow_dispatch: boolean
   can_dispatch?: string[]
   allow_prs: boolean
+  allow_memory?: boolean
   current_status: string
   bindings?: Binding[]
 }
@@ -42,6 +43,7 @@ interface StoreAgent {
   prompt: string
   allow_prs: boolean
   allow_dispatch: boolean
+  allow_memory: boolean
   can_dispatch: string[]
   description: string
 }
@@ -101,9 +103,13 @@ function RunButton({ agent, repo }: { agent: string; repo: string }) {
   )
 }
 
+// allow_memory defaults to true so newly created agents preserve the
+// historical behaviour where autonomous runs persist memory by default;
+// editors can flip it off to opt out per-agent.
 const emptyForm: StoreAgent = {
   name: '', backend: '', model: '', skills: [], prompt: '',
-  allow_prs: false, allow_dispatch: false, can_dispatch: [], description: '',
+  allow_prs: false, allow_dispatch: false, allow_memory: true,
+  can_dispatch: [], description: '',
 }
 
 interface BackendOption {
@@ -191,7 +197,7 @@ function AgentForm({
         <label style={labelStyle}>Can dispatch</label>
         <BadgePicker options={agentNames.filter(n => n !== form.name)} selected={form.can_dispatch} onChange={v => set('can_dispatch', v)} placeholder="Add agent…" />
       </div>
-      <div style={{ display: 'flex', gap: '1.5rem' }}>
+      <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
         <label style={{ fontSize: '0.85rem', color: 'var(--text)', display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
           <input type="checkbox" checked={form.allow_prs} onChange={e => set('allow_prs', e.target.checked)} />
           Allow PRs
@@ -199,6 +205,10 @@ function AgentForm({
         <label style={{ fontSize: '0.85rem', color: 'var(--text)', display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
           <input type="checkbox" checked={form.allow_dispatch} onChange={e => set('allow_dispatch', e.target.checked)} />
           Allow dispatch
+        </label>
+        <label style={{ fontSize: '0.85rem', color: 'var(--text)', display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
+          <input type="checkbox" checked={form.allow_memory} onChange={e => set('allow_memory', e.target.checked)} />
+          Allow memory
         </label>
       </div>
       {error && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem' }}>{error}</p>}
@@ -281,6 +291,7 @@ function AgentCard({ agent, onEdit, onDelete }: { agent: Agent; onEdit: () => vo
         <div style={{ display: 'flex', gap: '1rem', fontSize: '0.75rem', color: 'var(--text-faint)' }}>
           {agent.allow_prs && <span>✓ PRs</span>}
           {agent.allow_dispatch && <span>✓ dispatch</span>}
+          {agent.allow_memory === false && <span>✗ memory</span>}
           {(agent.can_dispatch ?? []).length > 0 && <span>→ {agent.can_dispatch!.join(', ')}</span>}
         </div>
         <RunButton agent={agent.name} repo={(agent.bindings ?? [])[0]?.repo ?? ''} />
@@ -347,6 +358,7 @@ export default function FleetPage() {
       prompt: '',
       allow_prs: a?.allow_prs ?? false,
       allow_dispatch: a?.allow_dispatch ?? false,
+      allow_memory: a?.allow_memory ?? true,
       can_dispatch: a?.can_dispatch ?? [],
       description: a?.description ?? '',
     })
@@ -363,6 +375,9 @@ export default function FleetPage() {
           model: data.model ?? '',
           skills: data.skills ?? [],
           can_dispatch: data.can_dispatch ?? [],
+          // Treat absent/null as the documented default-true rather than
+          // letting the spread above flip the toggle off in the form.
+          allow_memory: data.allow_memory ?? true,
         })
       }
     } catch {
