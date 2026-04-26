@@ -30,9 +30,15 @@ type storeAgentJSON struct {
 	AllowDispatch bool     `json:"allow_dispatch"`
 	CanDispatch   []string `json:"can_dispatch"`
 	Description   string   `json:"description"`
+	// AllowMemory is a *bool so POST clients that omit the field get the
+	// default-true semantics (`AgentDef.AllowMemory == nil` → IsAllowMemory()
+	// returns true). Responses always populate it (see agentToStoreJSON) so
+	// every read sees a concrete value.
+	AllowMemory *bool `json:"allow_memory,omitempty"`
 }
 
 func agentToStoreJSON(a config.AgentDef) storeAgentJSON {
+	allowMem := a.IsAllowMemory()
 	return storeAgentJSON{
 		Name:          a.Name,
 		Backend:       a.Backend,
@@ -43,6 +49,7 @@ func agentToStoreJSON(a config.AgentDef) storeAgentJSON {
 		AllowDispatch: a.AllowDispatch,
 		CanDispatch:   nilSafeStrings(a.CanDispatch),
 		Description:   a.Description,
+		AllowMemory:   &allowMem,
 	}
 }
 
@@ -57,6 +64,7 @@ func (j storeAgentJSON) toConfig() config.AgentDef {
 		AllowDispatch: j.AllowDispatch,
 		CanDispatch:   nilSafeStrings(j.CanDispatch),
 		Description:   j.Description,
+		AllowMemory:   j.AllowMemory,
 	}
 }
 
@@ -74,13 +82,15 @@ type storeAgentPatchJSON struct {
 	AllowDispatch *bool     `json:"allow_dispatch,omitempty"`
 	CanDispatch   *[]string `json:"can_dispatch,omitempty"`
 	Description   *string   `json:"description,omitempty"`
+	AllowMemory   *bool     `json:"allow_memory,omitempty"`
 }
 
 // anyFieldSet reports whether the patch carries any field to apply. An empty
 // PATCH body is rejected so callers don't accidentally no-op a write.
 func (p storeAgentPatchJSON) anyFieldSet() bool {
 	return p.Backend != nil || p.Model != nil || p.Skills != nil || p.Prompt != nil ||
-		p.AllowPRs != nil || p.AllowDispatch != nil || p.CanDispatch != nil || p.Description != nil
+		p.AllowPRs != nil || p.AllowDispatch != nil || p.CanDispatch != nil ||
+		p.Description != nil || p.AllowMemory != nil
 }
 
 // apply mutates a in place with any non-nil field on p. Name is preserved
@@ -109,6 +119,10 @@ func (p storeAgentPatchJSON) apply(a *config.AgentDef) {
 	}
 	if p.Description != nil {
 		a.Description = *p.Description
+	}
+	if p.AllowMemory != nil {
+		v := *p.AllowMemory
+		a.AllowMemory = &v
 	}
 }
 
