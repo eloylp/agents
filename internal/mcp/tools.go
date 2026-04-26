@@ -346,6 +346,9 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				mcpgo.WithBoolean("allow_dispatch",
 					mcpgo.Description("Allow other agents to dispatch this agent. Defaults to false."),
 				),
+				mcpgo.WithBoolean("allow_memory",
+					mcpgo.Description("Load and persist this agent's memory across autonomous runs. Defaults to true; set to false to skip memory load and persist regardless of run kind."),
+				),
 			),
 			toolCreateAgent(deps),
 		)
@@ -381,6 +384,9 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				),
 				mcpgo.WithBoolean("allow_dispatch",
 					mcpgo.Description("Allow other agents to dispatch this agent. Omit to leave unchanged."),
+				),
+				mcpgo.WithBoolean("allow_memory",
+					mcpgo.Description("Load and persist this agent's memory across autonomous runs. Omit to leave unchanged."),
 				),
 			),
 			toolUpdateAgent(deps),
@@ -542,6 +548,7 @@ func agentJSON(a config.AgentDef) map[string]any {
 		"description":    a.Description,
 		"allow_prs":      a.AllowPRs,
 		"allow_dispatch": a.AllowDispatch,
+		"allow_memory":   a.IsAllowMemory(),
 		"can_dispatch":   nilSafe(a.CanDispatch),
 	}
 }
