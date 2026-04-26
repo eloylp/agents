@@ -125,6 +125,14 @@ skills:
 #   Required when the agent appears in any other agent's can_dispatch list.
 # allow_dispatch: false (default) | true
 #   Opt-in gate: only agents with allow_dispatch: true can be dispatched.
+# allow_memory: true (default) | false
+#   Controls whether the autonomous (cron) scheduler loads existing memory
+#   into the prompt and persists the agent's returned `memory` field after
+#   the run. Set to false for inherently stateless autonomous agents whose
+#   work is recomputed each run, so they don't waste prompt budget on
+#   memory they will never use. Event-driven runs already neither load nor
+#   persist memory; this toggle is a hard runtime gate that does not depend
+#   on the agent's prompt cooperating.
 # can_dispatch: [agent-name, ...]
 #   Whitelist of agents this agent is allowed to dispatch. Entries must
 #   reference real agents in this config; self-reference is rejected.
@@ -224,6 +232,10 @@ agents:
     backend: claude
     description: "Translates technical findings into product-level insights and priorities"
     skills: [product, dx]
+    # product-strategist is research-driven each run — there's no useful state to
+    # carry between invocations, so disable memory load + persist to keep the
+    # prompt budget focused on the current findings.
+    allow_memory: false
     prompt: |
       Convert technical findings into product priorities, tradeoffs, and sequencing advice.
     allow_dispatch: true    # scouts dispatch here with product-facing findings
