@@ -105,6 +105,14 @@ agents:
     can_dispatch: [sec-reviewer]   # whitelist of agents this agent may dispatch
     prompt: |
       Review the pull request for correctness, regressions, and missing tests.
+
+  # Stateless researcher whose memory is recomputed on every run
+  - name: product-strategist
+    backend: claude
+    skills: [architect]
+    allow_memory: false         # disable memory load+persist for this agent
+    prompt: |
+      Research current product priorities from scratch each run.
 ```
 
 Each agent is a pure capability definition: backend + skills + prompt. Agents don't run until a repo binds them to a trigger.
@@ -115,6 +123,7 @@ Each agent is a pure capability definition: backend + skills + prompt. Agents do
 - Agent names must be unique.
 - `allow_prs` (default `false`): when `false`, the scheduler prepends a hard instruction forbidding the agent from opening pull requests, regardless of what the prompt says. Set `allow_prs: true` only on agents that are explicitly meant to author PRs (e.g. coders, refactorers). Reviewer-only agents should leave this unset.
 - `allow_dispatch` (default `false`): opt-in gate. An agent must have `allow_dispatch: true` for any other agent to dispatch it. Agents without this flag silently drop any incoming dispatch requests.
+- `allow_memory` (default `true`): controls whether the autonomous (cron) scheduler loads existing memory into the prompt and persists the agent's returned `memory` field after the run. Set `allow_memory: false` to skip both the load and the persist for an agent — useful for inherently stateless autonomous agents (e.g. research / strategy agents whose work is recomputed each run) so they don't waste prompt budget on memory they will never use. Event-driven runs already neither load nor persist memory; the toggle is a hard runtime gate that does not depend on the agent's prompt cooperating. Existing agents authored before this field existed continue to behave exactly as they did, since the default is `true`.
 - `can_dispatch`: whitelist of agent names this agent is allowed to dispatch. A dispatch to an agent not on this list is silently dropped. Entries must reference real agents in the same config and must not include the agent itself.
 - `description`: required when an agent appears in any `can_dispatch` list. Used by the dispatcher to include context about the target in the originating agent's prompt roster.
 
