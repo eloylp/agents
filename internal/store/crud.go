@@ -101,6 +101,11 @@ func requireAtLeastOne(q querier, countQuery, entity, zeroMsg string) error {
 // ImportAll and ReplaceAll: entity cross-references, minimum cardinality, and
 // cron-expression parseability. op ("import" or "replace") is used verbatim in
 // error messages.
+//
+// "At least one enabled repo" is intentionally NOT enforced here — disabling
+// all repos is a legitimate user action (fleet maintenance, evaluating prompts
+// on a different repo) and the daemon runs cleanly with zero enabled repos.
+// See issue #302.
 func validateFleetConstraints(q querier, op string, repos []config.RepoDef) error {
 	if err := validateFleet(q); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: %s: %v", op, err)}
@@ -109,9 +114,6 @@ func validateFleetConstraints(q querier, op string, repos []config.RepoDef) erro
 		return &ErrValidation{Msg: fmt.Sprintf("store: %s: %v", op, err)}
 	}
 	if err := requireAtLeastOne(q, "SELECT COUNT(*) FROM backends", "backends", "config: at least one ai_backends entry is required"); err != nil {
-		return &ErrValidation{Msg: fmt.Sprintf("store: %s: %v", op, err)}
-	}
-	if err := requireAtLeastOne(q, "SELECT COUNT(*) FROM repos WHERE enabled=1", "enabled repos", "config: at least one repo must be enabled"); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: %s: %v", op, err)}
 	}
 	return validateCronExpressions(repos)
@@ -764,8 +766,9 @@ func nilSafeStrings(s []string) []string {
 	return s
 }
 
-// DeleteRepo removes a repo and all of its bindings. Returns an error if the
-// deletion would leave no enabled repos.
+// DeleteRepo removes a repo and all of its bindings. Deleting the last enabled
+// (or only) repo is allowed — see issue #302; the daemon runs cleanly with zero
+// enabled repos.
 func DeleteRepo(db *sql.DB, name string) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -775,14 +778,8 @@ func DeleteRepo(db *sql.DB, name string) error {
 	if _, err := tx.Exec("DELETE FROM bindings WHERE repo=?", name); err != nil {
 		return fmt.Errorf("store: delete bindings for repo %s: %w", name, err)
 	}
-	res, err := tx.Exec("DELETE FROM repos WHERE name=?", name)
-	if err != nil {
+	if _, err := tx.Exec("DELETE FROM repos WHERE name=?", name); err != nil {
 		return fmt.Errorf("store: delete repo %s: %w", name, err)
-	}
-	if n, _ := res.RowsAffected(); n > 0 {
-		if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM repos WHERE enabled=1", "enabled repos", "config: at least one repo must be enabled"); err != nil {
-			return &ErrConflict{Msg: fmt.Sprintf("store: delete repo %s: %v", name, err)}
-		}
 	}
 	return tx.Commit()
 }
