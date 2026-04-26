@@ -33,7 +33,7 @@ The config file has four top-level domains:
 
 - `daemon` — log, http, processor (incl. `dispatch` safety limits), ai_backends, optional `proxy` block
 - `skills` — map of reusable guidance blocks, keyed by name (inline or file-based at import time; stored in SQLite)
-- `agents` — list of named capabilities (backend + skills + prompt, optional `allow_prs` / `allow_dispatch` / `can_dispatch` / `description`)
+- `agents` — list of named capabilities (backend + skills + prompt, optional `allow_prs` / `allow_dispatch` / `allow_memory` / `can_dispatch` / `description`)
 - `repos` — list of repos and their `use[]` bindings (which agents run, and with what triggers)
 
 An agent is a pure capability definition — it doesn't run until a repo binds it. A binding sets exactly one trigger: `labels: [...]`, `events: [...]`, or `cron: "..."`. The same agent can have multiple bindings on the same repo with different triggers.
@@ -99,8 +99,8 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code and Code
 - Supported webhook events: `issues.*` (labeled, opened, edited, reopened, closed), `pull_request.*` (labeled, opened, synchronize, ready_for_review, closed), `issue_comment.created`, `pull_request_review.submitted`, `pull_request_review_comment.created`, `push` (branches only). Label-triggered routing uses `payload.label.name`. Non-label `events:` subscriptions match the event kind exactly. Draft PRs skip `pull_request.labeled`.
 - Internal event kinds (not from webhooks): `agents.run` (on-demand trigger from `POST /run` or `--run-agent`), `agent.dispatch` (inter-agent dispatch), `autonomous` (cron scheduler).
 - Duplicate webhook suppression via `X-GitHub-Delivery` TTL cache.
-- Workflow execution is stateless in-process. Only autonomous agents persist memory (per-agent, per-repo).
-- Memory is delivered to the agent as part of its prompt context, and the agent returns its full updated memory in the `memory` field of the JSON response. The daemon writes the value back to the store after the run. An empty string clears the memory. Event-driven runs (webhook events, label triggers) do not receive or persist memory.
+- Workflow execution is stateless in-process. Only autonomous agents persist memory (per-agent, per-repo) — and only when the agent's `allow_memory` toggle is left at its default of `true`. Setting `allow_memory: false` on an agent disables memory load AND persist for every run kind, useful for inherently stateless autonomous agents that recompute their context each run.
+- Memory is delivered to the agent as part of its prompt context, and the agent returns its full updated memory in the `memory` field of the JSON response. The daemon writes the value back to the store after the run. An empty string clears the memory. Event-driven runs (webhook events, label triggers) do not receive or persist memory; agents with `allow_memory: false` skip both load and persist on every run regardless of run kind.
 - Memory backend: SQLite (stored in the `memory` table alongside config data).
 - Backend resolution: agents must explicitly name a backend (no `auto` behavior). Built-ins are `claude` and `codex`; additional local backends are named entries with `local_model_url`.
 - Startup auto-discovery runs only when the backends table is empty. Manual refresh is explicit via `POST /backends/discover`.
