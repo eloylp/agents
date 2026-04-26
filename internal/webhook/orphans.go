@@ -6,7 +6,6 @@ import (
 	"maps"
 	"net/http"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -34,10 +33,10 @@ type OrphanedAgentsSnapshot struct {
 
 func (s *Server) handleAgentsOrphans(w http.ResponseWriter, _ *http.Request) {
 	snapshot := s.orphanedAgentsSnapshot()
-	if fresh, err := s.refreshOrphanedAgentsFromDB(); err == nil {
-		snapshot = fresh
-	} else {
+	if fresh, err := s.refreshOrphanedAgentsFromDB(); err != nil {
 		s.logger.Warn().Err(err).Msg("orphan status: falling back to cached snapshot")
+	} else {
+		snapshot = fresh
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
@@ -127,11 +126,11 @@ func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
 		})
 	}
 
-	sort.Slice(orphan, func(i, j int) bool {
-		if orphan[i].Backend != orphan[j].Backend {
-			return orphan[i].Backend < orphan[j].Backend
+	slices.SortFunc(orphan, func(a, b OrphanedAgent) int {
+		if c := strings.Compare(a.Backend, b.Backend); c != 0 {
+			return c
 		}
-		return orphan[i].Name < orphan[j].Name
+		return strings.Compare(a.Name, b.Name)
 	})
 	return orphan
 }
@@ -146,6 +145,6 @@ func canonicalModels(models []string) []string {
 	if len(out) == 0 {
 		return nil
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return slices.Compact(out)
 }
