@@ -99,6 +99,7 @@ func run() error {
 		runBuf = max(runBuf, cfg.Daemon.Processor.EventQueueBuffer)
 		dataChannels := workflow.NewDataChannels(runBuf)
 		engine := workflow.NewEngine(cfg, runners, dataChannels, logger)
+		engine.WithMemory(memBackend)
 		scheduler.WithDispatcher(engine.Dispatcher())
 		logger.Info().Str("agent", *runAgent).Str("repo", *runRepo).Msg("running autonomous agent on demand")
 		engine.StartDispatchDedup(ctx)
@@ -120,6 +121,7 @@ func run() error {
 
 	dataChannels := workflow.NewDataChannels(cfg.Daemon.Processor.EventQueueBuffer)
 	engine := workflow.NewEngine(cfg, runners, dataChannels, logger)
+	engine.WithMemory(memBackend)
 	scheduler.WithDispatcher(engine.Dispatcher())
 	// Wire the engine as the hot-reload sink so that CRUD-triggered Reload
 	// calls propagate new config and runner maps to the event-driven path

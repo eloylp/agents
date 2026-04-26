@@ -100,14 +100,16 @@ func TestLoadAllowMemoryTrueExplicitlyHonoured(t *testing.T) {
 }
 
 // TestLoadAllowMemoryRejectsNonBoolean confirms that a non-boolean YAML value
-// fails the parse cleanly rather than silently coercing.
+// fails the parse cleanly rather than silently coercing. Note: yaml.v3 still
+// honours YAML 1.1 boolean aliases (`yes`/`no`/`on`/`off`) and decodes them as
+// true/false, so we use an unambiguously non-boolean string here.
 func TestLoadAllowMemoryRejectsNonBoolean(t *testing.T) {
 	t.Setenv("TEST_SECRET", "s3cret")
 	yaml := agentConfigYAML(`  - name: reviewer
     backend: claude
     skills: [architect]
     prompt: "You review PRs."
-    allow_memory: "yes"`)
+    allow_memory: maybe`)
 	path := writeConfig(t, yaml)
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected YAML parse error for non-boolean allow_memory, got nil")

@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/store"
 )
 
 // TestToolCreateAgentForwardsAllowMemoryFalse verifies that the create_agent
@@ -153,6 +154,13 @@ func TestToolGetAgentSurfacesAllowMemory(t *testing.T) {
 		{Name: "stateless", Backend: "claude", Prompt: "p", AllowMemory: &ff},
 	}
 	deps := newTestDeps(t, cfg, &stubQueue{}, stubStatus{})
+	// toolGetAgent reads from the DB, not from deps.Config; seed the agents
+	// the test cares about.
+	for _, a := range cfg.Agents {
+		if err := store.UpsertAgent(deps.DB, a); err != nil {
+			t.Fatalf("seed agent %q: %v", a.Name, err)
+		}
+	}
 
 	// Default-true agent.
 	req := mcpgo.CallToolRequest{}

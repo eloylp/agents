@@ -449,11 +449,11 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	}
 
 	rendered, err := ai.RenderAgentPrompt(agent, cfg.Skills, ai.PromptContext{
-		Repo:         repo,
-		Backend:      backend,
-		Memory:       existingMemory,
-		IsAutonomous: true,
-		Roster:       roster,
+		Repo:      repo,
+		Backend:   backend,
+		Memory:    existingMemory,
+		HasMemory: memoryEnabled,
+		Roster:    roster,
 	})
 	if err != nil {
 		if s.dispatcher != nil {

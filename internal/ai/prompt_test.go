@@ -113,7 +113,7 @@ func TestRenderAgentPromptWithMemory(t *testing.T) {
 	}
 	usr := renderUser(t, agent, nil, ai.PromptContext{
 		Repo:         "owner/repo",
-		IsAutonomous: true,
+		HasMemory: true,
 		Memory:       "Last run: fixed #42",
 	})
 	if strings.Contains(usr, "Memory file:") {
@@ -129,7 +129,7 @@ func TestRenderAgentPromptEmptyMemoryFormattedExplicitly(t *testing.T) {
 	agent := config.AgentDef{Prompt: "Go."}
 	usr := renderUser(t, agent, nil, ai.PromptContext{
 		Repo:         "owner/repo",
-		IsAutonomous: true,
+		HasMemory: true,
 	})
 	if !strings.Contains(usr, "Existing memory: (empty)") {
 		t.Errorf("empty memory not signalled explicitly in User:\n%s", usr)
@@ -142,7 +142,7 @@ func TestRenderAgentPromptMemoryOmittedForEventDrivenRuns(t *testing.T) {
 	usr := renderUser(t, agent, nil, ai.PromptContext{
 		Repo:   "owner/repo",
 		Number: 42,
-		// IsAutonomous is false — event-driven run, no memory section expected.
+		// HasMemory is false — event-driven run, no memory section expected.
 		Memory: "some content that should not appear",
 	})
 	if strings.Contains(usr, "Existing memory") {
