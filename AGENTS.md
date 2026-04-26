@@ -150,9 +150,9 @@ When contributing in this area:
 
 ## Contribution model
 
-This project is built by its own agent fleet. External contributions flow as issues, not code PRs. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full process. Key points for agents working in this repo:
+The project accepts both issues and pull requests from external contributors. The agent fleet runs alongside human contributors, but only acts on items the maintainer has explicitly authorised. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full flow. Key points for agents working in this repo:
 
-- All code changes go through the coder agent → pr-reviewer → maintainer merge pipeline.
+- The `ai ready` label is the maintainer's authorisation. Agents only pick up issues and PRs that carry this label. No `ai ready`, no agent action.
 - Do NOT push directly to main. Always create a branch and open a PR.
-- Accepted issues have the `discussing` label removed; high-priority issues are labelled `high priority`.
-- Agent-authored PRs are reviewed by the pr-reviewer agent before human merge.
+- High-priority `ai ready` issues are additionally labelled `high priority` and must be processed first.
+- Agent-authored PRs are reviewed by the pr-reviewer agent. On approval, pr-reviewer applies the `human review ready` label, signalling a human can merge.

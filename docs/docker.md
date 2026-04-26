@@ -29,7 +29,7 @@ The compose file shipped in the repo expects:
 - `config.yaml` in the project root (mounted read-only at `/etc/agents/config.yaml` for `--import` seeding).
 - `.env` in the project root, holding at least `GITHUB_WEBHOOK_SECRET` (and optionally `LOG_SALT` and `GITHUB_PAT_TOKEN`).
 
-After the DB is seeded, `config.yaml` is no longer read at boot -- the fleet lives in the SQLite volume and is managed through the `/ui/` dashboard or the CRUD API.
+After the DB is seeded, `config.yaml` is no longer read at boot. The fleet lives in the SQLite volume and is managed through the `/ui/` dashboard or the CRUD API.
 
 ---
 
@@ -79,7 +79,7 @@ volumes:
 | `~/.claude.json` | `/home/agents/.claude.json` | Claude Code main config. **MCP server entries with auth headers live here**, not in `~/.claude/settings.json`. |
 | `~/.codex` | `/home/agents/.codex` | Codex configuration. |
 
-If your `config.yaml` uses `prompt_file:` paths that point outside the project root, mount the containing directory yourself -- the shipped example config is inline-only, so no extra prompt mount is needed.
+If your `config.yaml` uses `prompt_file:` paths that point outside the project root, mount the containing directory yourself. The shipped example config is inline-only, so no extra prompt mount is needed.
 
 ### Ports
 
@@ -100,7 +100,7 @@ Install Claude Code and/or Codex on the host (the container has them too, but th
 
 ### 2. GitHub MCP server
 
-GitHub access flows exclusively through the GitHub MCP server configured on each AI CLI -- the daemon does not call GitHub directly and no `gh` binary is installed in the image. Register the GitHub MCP server against Claude Code:
+GitHub access flows exclusively through the GitHub MCP server configured on each AI CLI. The daemon does not call GitHub directly, and no `gh` binary is installed in the image. Register the GitHub MCP server against Claude Code:
 
 ```bash
 claude mcp add -t http -s user github https://api.githubcopilot.com/mcp
@@ -112,7 +112,7 @@ Important: entries that carry auth headers must end up in `~/.claude.json` (the 
 docker compose exec agents claude mcp list
 ```
 
-Claude Code stores MCP config per-project keyed by the working directory. Since the container's working directory is `/`, the project entry in `~/.claude.json` must be keyed under `/` -- if you configured MCP from a different CWD on the host, copy the entry under the `/` key before starting the container.
+Claude Code stores MCP config per-project keyed by the working directory. Since the container's working directory is `/`, the project entry in `~/.claude.json` must be keyed under `/`. If you configured MCP from a different CWD on the host, copy the entry under the `/` key before starting the container.
 
 See the companion install guides:
 
@@ -136,14 +136,14 @@ Use the same `GITHUB_WEBHOOK_SECRET` when you configure the GitHub webhook (see 
 
 ## Reverse-proxy routing
 
-All endpoints are unauthenticated at the daemon level -- **access control is the reverse proxy's responsibility** (see [security.md](security.md)). A working production pattern is a two-router split: authenticated UI/API, public webhook endpoints.
+All endpoints are unauthenticated at the daemon level. **Access control is the reverse proxy's responsibility** (see [security.md](security.md)). A working production pattern is a two-router split: authenticated UI/API, public webhook endpoints.
 
 | Router | Paths | Auth | Purpose |
 |---|---|---|---|
 | **UI / API** (authenticated) | everything except the public paths below | basic auth, OAuth2 proxy, or mTLS | `/ui/`, `/agents`, `/skills`, `/repos`, `/traces`, `/events`, `/graph`, `/memory`, `/config`, `/export`, `/import`, `/backends` |
 | **Public** (no auth) | `/status`, `/webhooks/github`, `/run`, `/v1/*` | none | GitHub can't send a basic-auth header on webhooks; `/status` must stay reachable for liveness probes; `/run` and `/v1/*` (proxy) are meant to be called by trusted external systems that authenticate with their own mechanism. |
 
-`/webhooks/github` is safe to expose publicly because every request is HMAC-verified against `GITHUB_WEBHOOK_SECRET` before it is accepted. `/run` does not currently authenticate callers -- if you enable it, restrict it at the proxy with an allowlist or a shared secret header.
+`/webhooks/github` is safe to expose publicly because every request is HMAC-verified against `GITHUB_WEBHOOK_SECRET` before it is accepted. `/run` does not currently authenticate callers. If you enable it, restrict it at the proxy with an allowlist or a shared secret header.
 
 ### Adapting the compose for production
 
@@ -189,7 +189,7 @@ networks:
 
 Traefik picks the more specific router first (public matches specific path prefixes; the UI router is the host-wide catch-all), so webhook traffic bypasses the auth middleware.
 
-Adapt the pattern to Caddy, nginx, or whichever proxy you already run -- the key constraint is: the auth layer must not be applied to `/webhooks/github`, `/status`, `/run`, or `/v1/*`.
+Adapt the pattern to Caddy, nginx, or whichever proxy you already run. The key constraint is that the auth layer must not be applied to `/webhooks/github`, `/status`, `/run`, or `/v1/*`.
 
 ---
 
@@ -205,7 +205,7 @@ Adapt the pattern to Caddy, nginx, or whichever proxy you already run -- the key
 
    Expect uptime, event queue depth, and an `orphaned_agents.count` field. If you proxy through the auth router, hit `/status` via the public router instead.
 
-3. **Open the dashboard** at `/ui/` and create agents, skills, repos through the CRUD editors. This is the intended fleet-management path -- the YAML file is only a seeding convenience.
+3. **Open the dashboard** at `/ui/` and create agents, skills, repos through the CRUD editors. This is the intended fleet-management path; the YAML file is only a seeding convenience.
 
 4. **Or import from YAML** into the already-running instance:
 
@@ -240,7 +240,7 @@ docker compose logs --since 1h agents | jq  # when daemon.log.format: json
 docker compose restart agents
 ```
 
-The daemon serves SIGTERM gracefully (up to `daemon.http.shutdown_timeout_seconds`) -- in-flight agent runs are allowed to finish.
+The daemon serves SIGTERM gracefully (up to `daemon.http.shutdown_timeout_seconds`). In-flight agent runs are allowed to finish.
 
 ### Rerun backend discovery
 
@@ -290,7 +290,7 @@ docker compose build
 docker compose up -d
 ```
 
-The schema migrates on start -- no manual step. The DB is forward-compatible within a major version; roll back by restoring the backup if needed.
+The schema migrates on start; no manual step. The DB is forward-compatible within a major version; roll back by restoring the backup if needed.
 
 ---
 
@@ -300,6 +300,6 @@ Multi-stage build on `node:22-alpine`:
 
 1. **UI builder** compiles the embedded Next.js dashboard.
 2. **Go builder** (`golang:1.25-alpine`) produces a static daemon binary with the UI assets embedded.
-3. **Runtime** installs Claude Code and Codex via npm, creates a non-root `agents` user, and runs `/agents --db /var/lib/agents/agents.db` as the default CMD. GitHub access flows through the GitHub MCP server configured on each AI CLI -- no `gh` binary is baked in.
+3. **Runtime** installs Claude Code and Codex via npm, creates a non-root `agents` user, and runs `/agents --db /var/lib/agents/agents.db` as the default CMD. GitHub access flows through the GitHub MCP server configured on each AI CLI; no `gh` binary is baked in.
 
-The container runs as UID:GID of the `agents` user. Bind-mounted host paths (`~/.claude`, `~/.claude.json`, `~/.codex`) must be readable by that user -- if you're mounting from a host account with a different UID, either `chown` the host paths or add a `user:` override in compose.
+The container runs as UID:GID of the `agents` user. Bind-mounted host paths (`~/.claude`, `~/.claude.json`, `~/.codex`) must be readable by that user. If you're mounting from a host account with a different UID, either `chown` the host paths or add a `user:` override in compose.

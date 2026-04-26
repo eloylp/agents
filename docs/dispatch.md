@@ -6,21 +6,21 @@ Agents can invoke each other at runtime. When an agent's AI run returns a `dispa
 
 ```json
 {
-  "summary": "Reviewed PR -- escalating to sec-reviewer for crypto usage",
+  "summary": "Reviewed PR; escalating to sec-reviewer for crypto usage",
   "artifacts": [],
   "dispatch": [
     {
       "agent": "sec-reviewer",
       "number": 42,
-      "reason": "PR introduces custom crypto primitives -- needs security review"
+      "reason": "PR introduces custom crypto primitives; needs a security review"
     }
   ]
 }
 ```
 
-- `agent` -- name of the target agent (must be in the originator's `can_dispatch` list and have `allow_dispatch: true`).
-- `number` -- issue/PR number to associate with the dispatched run. If omitted, the originating event's number is used.
-- `reason` -- human-readable rationale, included in the target agent's prompt context.
+- `agent`: name of the target agent (must be in the originator's `can_dispatch` list and have `allow_dispatch: true`).
+- `number`: issue/PR number to associate with the dispatched run. If omitted, the originating event's number is used.
+- `reason`: human-readable rationale, included in the target agent's prompt context.
 
 ## Runtime context for dispatched agents
 

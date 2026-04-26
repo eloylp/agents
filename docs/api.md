@@ -1,6 +1,6 @@
 # HTTP API reference
 
-All endpoints are unauthenticated at the daemon level -- access control is the reverse proxy's responsibility.
+All endpoints are unauthenticated at the daemon level. Access control is the reverse proxy's responsibility.
 
 ## Core endpoints
 
@@ -153,13 +153,13 @@ The daemon spawns the configured CLI, sends the composed prompt on **stdin**, an
     {
       "agent": "sec-reviewer",
       "number": 42,
-      "reason": "Custom crypto primitives found -- needs deeper security review"
+      "reason": "Custom crypto primitives found; needs deeper security review"
     }
   ],
-  "memory": "## 2026-04-21\n- Reviewed PR #42 -- escalated crypto concerns to sec-reviewer."
+  "memory": "## 2026-04-21\n- Reviewed PR #42; escalated crypto concerns to sec-reviewer."
 }
 ```
 
-The metadata is used for observability, logging, and run summaries. Agents that don't post anything still return an empty `artifacts: []`. The `dispatch` field is optional -- omit it or leave it empty when the agent does not need to invoke another agent. See [dispatch.md](dispatch.md) for the full contract.
+The metadata is used for observability, logging, and run summaries. Agents that don't post anything still return an empty `artifacts: []`. The `dispatch` field is optional. Omit it or leave it empty when the agent does not need to invoke another agent. See [dispatch.md](dispatch.md) for the full contract.
 
 The `memory` field is how autonomous agents persist state across scheduled runs. The daemon reads the stored memory before each autonomous run and writes the `memory` value from the response back to the SQLite store. An empty string clears the memory. Event-driven runs (webhooks, label triggers) do not receive or persist memory.

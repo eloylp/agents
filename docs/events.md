@@ -25,7 +25,7 @@ The `events:` field in repo bindings accepts any of the following GitHub event k
 
 ## Event rules
 
-- **`push` scope:** only branch pushes fire the event. Tag pushes, branch deletions, and pushes to non-`refs/heads/` refs are silently dropped. The agent receives the branch ref and the resulting head SHA -- there is no PR number in the context.
+- **`push` scope:** only branch pushes fire the event. Tag pushes, branch deletions, and pushes to non-`refs/heads/` refs are silently dropped. The agent receives the branch ref and the resulting head SHA. There is no PR number in the context.
 - `issues.*` events that originate from a PR-backed GitHub issue are dropped; the corresponding `pull_request.*` event covers them instead.
 - `pull_request.labeled` events on draft PRs are dropped at the webhook boundary. Use `events: ["pull_request.ready_for_review"]` to act when a draft is marked ready.
 - Unknown event kinds are rejected at config load time with a clear error listing the supported set.

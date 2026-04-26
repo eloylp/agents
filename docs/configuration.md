@@ -13,7 +13,7 @@ The shortest useful config is ~30 lines.
 
 ---
 
-## `daemon` -- how the service runs
+## `daemon`
 
 ```yaml
 daemon:
@@ -52,7 +52,7 @@ daemon:
       redaction_salt_env: LOG_SALT
 ```
 
-## `skills` -- reusable guidance blocks
+## `skills`
 
 ```yaml
 skills:
@@ -67,11 +67,11 @@ skills:
 
 Skills are referenced by name from agents. You can also use `prompt_file: path/to/file.md` instead of inline `prompt`. The shipping [`config.example.yaml`](../config.example.yaml) keeps prompts inline so a fresh clone imports without extra files.
 
-## `agents` -- named capabilities
+## `agents`
 
 ```yaml
 agents:
-  # Short inline prompt -- reviewer that never opens PRs (default)
+  # Short inline prompt for a reviewer that never opens PRs (default)
   - name: arch-reviewer
     backend: claude        # must match a key under daemon.ai_backends
     skills: [architect]
@@ -87,7 +87,7 @@ agents:
       Run focused tests and open a pull request when the work is ready.
     allow_prs: true            # required for agents that open PRs
 
-  # Dispatch target -- can be invoked by pr-reviewer
+  # Dispatch target that can be invoked by pr-reviewer
   - name: sec-reviewer
     description: "Deep-dive security reviewer for risky changes"
     backend: claude
@@ -109,12 +109,12 @@ Each agent is a pure capability definition: backend + skills + prompt. Agents do
 - `prompt_file` paths are resolved relative to the config file's directory.
   Use them for your own longer prompts; the repo no longer ships a `prompts/` tree.
 - Agent names must be unique.
-- `allow_prs` (default `false`) -- when `false`, the scheduler prepends a hard instruction forbidding the agent from opening pull requests, regardless of what the prompt says. Set `allow_prs: true` only on agents that are explicitly meant to author PRs (e.g. coders, refactorers). Reviewer-only agents should leave this unset.
-- `allow_dispatch` (default `false`) -- opt-in gate. An agent must have `allow_dispatch: true` for any other agent to dispatch it. Agents without this flag silently drop any incoming dispatch requests.
-- `can_dispatch` -- whitelist of agent names this agent is allowed to dispatch. A dispatch to an agent not on this list is silently dropped. Entries must reference real agents in the same config and must not include the agent itself.
-- `description` -- required when an agent appears in any `can_dispatch` list. Used by the dispatcher to include context about the target in the originating agent's prompt roster.
+- `allow_prs` (default `false`): when `false`, the scheduler prepends a hard instruction forbidding the agent from opening pull requests, regardless of what the prompt says. Set `allow_prs: true` only on agents that are explicitly meant to author PRs (e.g. coders, refactorers). Reviewer-only agents should leave this unset.
+- `allow_dispatch` (default `false`): opt-in gate. An agent must have `allow_dispatch: true` for any other agent to dispatch it. Agents without this flag silently drop any incoming dispatch requests.
+- `can_dispatch`: whitelist of agent names this agent is allowed to dispatch. A dispatch to an agent not on this list is silently dropped. Entries must reference real agents in the same config and must not include the agent itself.
+- `description`: required when an agent appears in any `can_dispatch` list. Used by the dispatcher to include context about the target in the originating agent's prompt roster.
 
-## `repos` -- wiring
+## `repos`
 
 ```yaml
 repos:
@@ -132,11 +132,11 @@ repos:
         enabled: false                       # temporarily off without deletion
 ```
 
-Each `use` entry binds one agent to one trigger. An agent can appear multiple times with different triggers. A binding must set exactly one of `labels:`, `events:`, or `cron:` -- mixing trigger types in a single binding is rejected at startup.
+Each `use` entry binds one agent to one trigger. An agent can appear multiple times with different triggers. A binding must set exactly one of `labels:`, `events:`, or `cron:`; mixing trigger types in a single binding is rejected at startup.
 
 ### Label architecture
 
-Labels are plain strings matched against each binding's `labels` list. There is **no magic format** -- you choose the labels. Convention across the example config is `ai:review:<agent-name>`, but any string works.
+Labels are plain strings matched against each binding's `labels` list. There is **no magic format**; you choose the labels. Convention across the example config is `ai:review:<agent-name>`, but any string works.
 
 ```yaml
 repos:
@@ -187,8 +187,8 @@ SQLite is the config store. Import your YAML once, then manage the fleet over th
 # Import from existing YAML (one-time)
 ./agents --db agents.db --import config.yaml
 
-# All subsequent starts -- no config.yaml needed
+# Subsequent starts run from the persisted DB; no config.yaml needed
 ./agents --db agents.db
 ```
 
-The CRUD endpoints for `/agents`, `/skills`, `/backends`, and `/repos` are always mounted and backed by the SQLite database. All four resource types support `PATCH /{resource}/{name}` for partial updates -- only fields present in the request body are applied, the rest are preserved. For `/agents`, `POST /agents`, `PATCH /agents/{name}`, and `DELETE /agents/{name}` are CRUD write endpoints, but `GET /agents` always returns the live fleet snapshot (not the stored agent list). The daemon auto-reloads cron schedules after any write to agents, skills, backends, or repos. Agent memory is stored in the same SQLite database. YAML is an import source (`--import`), not a second runtime mode -- the daemon always boots from SQLite.
+The CRUD endpoints for `/agents`, `/skills`, `/backends`, and `/repos` are always mounted and backed by the SQLite database. All four resource types support `PATCH /{resource}/{name}` for partial updates: only fields present in the request body are applied, the rest are preserved. For `/agents`, `POST /agents`, `PATCH /agents/{name}`, and `DELETE /agents/{name}` are CRUD write endpoints, but `GET /agents` always returns the live fleet snapshot (not the stored agent list). The daemon auto-reloads cron schedules after any write to agents, skills, backends, or repos. Agent memory is stored in the same SQLite database. YAML is an import source (`--import`), not a second runtime mode; the daemon always boots from SQLite.
