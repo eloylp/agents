@@ -42,6 +42,15 @@ func toolCreateAgent(deps Deps) server.ToolHandlerFunc {
 			AllowPRs:      req.GetBool("allow_prs", false),
 			AllowDispatch: req.GetBool("allow_dispatch", false),
 		}
+		// allow_memory: keep AllowMemory nil when the caller omits the field so
+		// AgentDef.IsAllowMemory() returns the documented default of true.
+		// Only an explicit true/false in the payload materialises a non-nil
+		// pointer, mirroring the binding-enabled convention.
+		if v, ok, errMsg := boolPtrArg(args, "allow_memory"); ok {
+			a.AllowMemory = v
+		} else if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
 		canonical, err := deps.AgentWrite.UpsertAgent(a)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("create agent", err), nil
@@ -84,6 +93,11 @@ func toolUpdateAgent(deps Deps) server.ToolHandlerFunc {
 		} else if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
+		if v, ok, errMsg := boolPtrArg(args, "allow_memory"); ok {
+			patch.AllowMemory = v
+		} else if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
 		if v, ok, errMsg := stringSlicePtrArg(args, "skills"); ok {
 			patch.Skills = v
 		} else if errMsg != "" {
@@ -107,7 +121,8 @@ func toolUpdateAgent(deps Deps) server.ToolHandlerFunc {
 
 func agentPatchHasField(p AgentPatch) bool {
 	return p.Backend != nil || p.Model != nil || p.Skills != nil || p.Prompt != nil ||
-		p.AllowPRs != nil || p.AllowDispatch != nil || p.CanDispatch != nil || p.Description != nil
+		p.AllowPRs != nil || p.AllowDispatch != nil || p.CanDispatch != nil ||
+		p.Description != nil || p.AllowMemory != nil
 }
 
 // toolDeleteAgent removes an agent through the same path as DELETE
