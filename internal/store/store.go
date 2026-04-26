@@ -295,12 +295,13 @@ func importAgents(tx *sql.Tx, agents []config.AgentDef) error {
 		}
 		allowPRs := boolToInt(a.AllowPRs)
 		allowDispatch := boolToInt(a.AllowDispatch)
+		allowMemory := allowMemoryInt(a.AllowMemory)
 		if _, err := tx.Exec(`
 			INSERT OR REPLACE INTO agents
-			  (name,backend,model,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description)
-			VALUES (?,?,?,?,?,?,?,?,?)`,
+			  (name,backend,model,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description,allow_memory)
+			VALUES (?,?,?,?,?,?,?,?,?,?)`,
 			a.Name, a.Backend, a.Model, string(skills), a.Prompt,
-			allowPRs, allowDispatch, string(canDispatch), a.Description,
+			allowPRs, allowDispatch, string(canDispatch), a.Description, allowMemory,
 		); err != nil {
 			return fmt.Errorf("store import: upsert agent %s: %w", a.Name, err)
 		}
@@ -475,7 +476,7 @@ func loadSkills(db querier, cfg *config.Config) error {
 
 func loadAgents(db querier, cfg *config.Config) error {
 	rows, err := db.Query(`
-		SELECT name,backend,model,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description
+		SELECT name,backend,model,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description,allow_memory
 		FROM agents ORDER BY name`)
 	if err != nil {
 		return fmt.Errorf("store load: query agents: %w", err)
@@ -485,10 +486,10 @@ func loadAgents(db querier, cfg *config.Config) error {
 	var agents []config.AgentDef
 	for rows.Next() {
 		var name, backend, model, skillsJSON, prompt, canDispatchJSON, description string
-		var allowPRs, allowDispatch int
+		var allowPRs, allowDispatch, allowMemory int
 		if err := rows.Scan(
 			&name, &backend, &model, &skillsJSON, &prompt,
-			&allowPRs, &allowDispatch, &canDispatchJSON, &description,
+			&allowPRs, &allowDispatch, &canDispatchJSON, &description, &allowMemory,
 		); err != nil {
 			return fmt.Errorf("store load: scan agent: %w", err)
 		}
@@ -500,6 +501,10 @@ func loadAgents(db querier, cfg *config.Config) error {
 		if err := json.Unmarshal([]byte(canDispatchJSON), &canDispatch); err != nil {
 			return fmt.Errorf("store load: parse agent %s can_dispatch: %w", name, err)
 		}
+		// Always materialise AllowMemory as a non-nil pointer so downstream
+		// readers see a concrete bool reflecting the stored row, not the
+		// "absent" sentinel that nil represents on inbound YAML/JSON paths.
+		allowMem := intToBool(allowMemory)
 		agents = append(agents, config.AgentDef{
 			Name:          name,
 			Backend:       backend,
@@ -510,6 +515,7 @@ func loadAgents(db querier, cfg *config.Config) error {
 			AllowDispatch: intToBool(allowDispatch),
 			CanDispatch:   canDispatch,
 			Description:   description,
+			AllowMemory:   &allowMem,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -648,6 +654,16 @@ func intToBool(i int) bool { return i != 0 }
 // SQLite storage. Nil means the default (enabled), matching IsEnabled().
 func bindingEnabledInt(enabled *bool) int {
 	if enabled != nil && !*enabled {
+		return 0
+	}
+	return 1
+}
+
+// allowMemoryInt converts an agent's nullable allow_memory flag to 0/1 for
+// SQLite storage. Nil means the default (enabled), matching
+// AgentDef.IsAllowMemory(); only an explicit non-nil false maps to 0.
+func allowMemoryInt(allow *bool) int {
+	if allow != nil && !*allow {
 		return 0
 	}
 	return 1

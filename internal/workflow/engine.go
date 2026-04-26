@@ -54,12 +54,21 @@ type StepRecorder interface {
 // target agent named in the payload directly.
 // Agent resolution, backend selection, and prompt composition all happen here;
 // the runners just execute the resulting prompt.
+// MemoryBackend matches autonomous.MemoryBackend so the same SQLite-backed
+// implementation can satisfy both surfaces. Defined here as a small local
+// interface so the workflow package does not depend on autonomous.
+type MemoryBackend interface {
+	ReadMemory(agent, repo string) (string, error)
+	WriteMemory(agent, repo, content string) error
+}
+
 type Engine struct {
 	cfg           *config.Config
 	cfgMu         sync.RWMutex // protects cfg during hot-reload
 	runners       map[string]ai.Runner
 	runnersMu     sync.RWMutex // protects runners during hot-reload
 	dispatcher    *Dispatcher
+	memory        MemoryBackend
 	maxConcurrent int
 	logger        zerolog.Logger
 	traceRec      TraceRecorder
@@ -67,6 +76,14 @@ type Engine struct {
 	runTracker    RunTracker
 	stepRec       StepRecorder
 	runsDeduped   atomic.Int64
+}
+
+// WithMemory attaches a memory backend so the engine can load and persist
+// per-(agent, repo) memory across event-driven, dispatched, and on-demand
+// runs. When unset, runs proceed without memory regardless of the agent's
+// AllowMemory flag.
+func (e *Engine) WithMemory(m MemoryBackend) {
+	e.memory = m
 }
 
 // NewEngine builds an Engine. queue may be nil, in which case dispatch
@@ -526,6 +543,20 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef, 
 
 	promptPayload := ev.Payload
 
+	// Memory load is gated on the agent's AllowMemory flag and on a configured
+	// backend. The same gate applies to the persist path below, so an agent
+	// with AllowMemory=false neither reads nor writes memory regardless of the
+	// trigger surface (event-driven, dispatched, or on-demand /run).
+	memoryEnabled := agent.IsAllowMemory() && e.memory != nil
+	var existingMemory string
+	if memoryEnabled {
+		mem, err := e.memory.ReadMemory(agent.Name, ev.Repo.FullName)
+		if err != nil {
+			return fmt.Errorf("agent %q: read memory: %w", agent.Name, err)
+		}
+		existingMemory = mem
+	}
+
 	rendered, err := ai.RenderAgentPrompt(agent, cfg.Skills, ai.PromptContext{
 		Repo:          ev.Repo.FullName,
 		Number:        ev.Number,
@@ -538,6 +569,8 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef, 
 		Reason:        reason,
 		RootEventID:   rootEventID,
 		DispatchDepth: dispatchDepth,
+		Memory:        existingMemory,
+		HasMemory:     memoryEnabled,
 	})
 	if err != nil {
 		return fmt.Errorf("agent %q: render prompt: %w", agent.Name, err)
@@ -618,6 +651,19 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef, 
 		return fmt.Errorf("agent %q: %w", agent.Name, runErr)
 	}
 	logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Msg("agent run completed")
+
+	// Persist memory after a successful run, gated on the same flag that
+	// controlled the load above. A failure here is logged but does not fail
+	// the whole run: the agent's GitHub-side artifacts are already in place,
+	// and surfacing a memory-write error as a run failure would mask the
+	// successful work that just landed. The next run reads from disk so the
+	// stale state is naturally observable; if persistence is consistently
+	// failing the operator will see it in logs.
+	if memoryEnabled {
+		if err := e.memory.WriteMemory(agent.Name, ev.Repo.FullName, resp.Memory); err != nil {
+			logger.Error().Err(err).Msg("agent run completed but memory write failed")
+		}
+	}
 
 	// Process any dispatch requests from the agent's response, threading the
 	// current spanID so child runs can link back to their parent span.

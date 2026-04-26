@@ -9,6 +9,7 @@ export interface StoreAgent {
   prompt: string
   allow_prs: boolean
   allow_dispatch: boolean
+  allow_memory: boolean
   can_dispatch: string[]
   description: string
 }

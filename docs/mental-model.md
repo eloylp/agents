@@ -51,7 +51,7 @@ Every run, the daemon assembles the prompt from these pieces, in this order:
 3. **The agent's own prompt.** The agent-specific instructions you wrote in `prompt:` or `prompt_file:`.
 4. **Available experts roster.** When the agent has a non-empty `can_dispatch:` list, the daemon injects an `## Available experts` section listing each dispatchable target with its `description`.
 5. **Runtime context.** A `## Runtime context` block carrying event details: `Event` kind, `Actor` (the GitHub login that triggered it), an issue or PR number where applicable, and the payload fields documented per event kind in [events.md](events.md).
-6. **Memory.** For autonomous (cron) runs, the agent's persisted memory markdown is appended. Event-driven runs do not receive memory.
+6. **Memory.** When the agent has `allow_memory: true` (the default), the daemon reads its persisted memory before the run and appends it to the prompt; the response's `memory` field is persisted back after a successful run. This applies uniformly across every trigger surface: cron, `--run-agent`, webhook events, dispatch, `POST /run`, and the `trigger_agent` MCP tool. Setting `allow_memory: false` skips both the load and the persist regardless of how the run was triggered.
 
 The order matters: guardrails before skills, skills before the agent's own prompt, runtime context last. The agent's prompt can reference its skills, and runtime details come pre-loaded so the prompt does not need to ask "what triggered this?"
 

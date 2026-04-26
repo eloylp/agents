@@ -19,6 +19,7 @@ func (s *Server) UpdateAgentPatch(name string, patch mcp.AgentPatch) (config.Age
 		AllowDispatch: patch.AllowDispatch,
 		CanDispatch:   patch.CanDispatch,
 		Description:   patch.Description,
+		AllowMemory:   patch.AllowMemory,
 	})
 }
 

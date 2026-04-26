@@ -16,19 +16,24 @@ import (
 )
 
 type stubRunner struct {
-	mu    sync.Mutex
-	calls []ai.Request
-	runFn func(ai.Request) error
+	mu     sync.Mutex
+	calls  []ai.Request
+	runFn  func(ai.Request) error
+	respFn func(ai.Request) ai.Response
 }
 
 func (s *stubRunner) Run(_ context.Context, req ai.Request) (ai.Response, error) {
 	s.mu.Lock()
 	s.calls = append(s.calls, req)
+	respFn := s.respFn
 	s.mu.Unlock()
 	if s.runFn != nil {
 		if err := s.runFn(req); err != nil {
 			return ai.Response{}, err
 		}
+	}
+	if respFn != nil {
+		return respFn(req), nil
 	}
 	return ai.Response{}, nil
 }
