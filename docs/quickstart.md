@@ -21,21 +21,22 @@ You only need one of these to get started. The GitHub MCP server is required by 
 
 ## Build and run
 
-```bash
-# Copy and edit the example config
-cp config.example.yaml config.yaml
+The daemon always boots from a SQLite database. `config.yaml` is an optional way to seed it; you can also start with an empty database and create the fleet through the dashboard at `/ui/`.
 
+```bash
 # Build
 go build -o agents ./cmd/agents
 
-# Import config into SQLite and start
-./agents --db agents.db --import config.yaml
-
-# Subsequent starts (no --import needed)
+# Start with an empty database; create the fleet through /ui/ or the CRUD API
 ./agents --db agents.db
+
+# Or seed the database from YAML at first start
+./agents --db agents.db --import config.yaml
 ```
 
-Or run the interactive assistant:
+After the first start, `config.yaml` is no longer read; the daemon boots from the persisted database. You can export the current fleet back to YAML at any time via `GET /export`.
+
+Or run the interactive setup assistant:
 
 ```bash
 ./agents setup

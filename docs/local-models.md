@@ -4,10 +4,10 @@ Run your agent fleet against a self-hosted or OpenAI-compatible LLM backend — 
 
 **What this unlocks:**
 
-- **Zero vendor lock-in** — swap models by changing one config line. Ollama today, vLLM tomorrow, hosted Qwen on Together next week, nothing in your agents changes.
-- **Predictable cost** — a rented RTX 5090 runs at roughly `$0.40–0.80/hr`. For a fleet doing tens of runs per hour that's break-even at low traffic and a big win at high traffic vs paying per token to a hosted API.
-- **Data sovereignty** — regulated, air-gapped, or privacy-conscious setups can run the whole pipeline on infrastructure you control.
-- **Keep the Claude Code tool surface** — the agents daemon routes the existing `claude` CLI through its built-in Anthropic↔OpenAI translation proxy. You inherit Claude Code's full tool stack (bash, file ops, MCP, `gh`) on top of whatever model you point it at.
+- **Swap models by changing one config line.** Ollama today, vLLM tomorrow, hosted Qwen on Together next week. Nothing in your agents changes.
+- **Predictable cost.** A rented RTX 5090 runs at roughly `$0.40–0.80/hr`. For a fleet doing tens of runs per hour that's break-even at low traffic and considerably cheaper than per-token pricing once you're at meaningful volume.
+- **Run on infrastructure you control.** Regulated, air-gapped, or privacy-conscious setups can keep the whole pipeline on hardware you own.
+- **Keep the Claude Code tool surface.** The daemon routes the existing `claude` CLI through its built-in Anthropic-to-OpenAI translation proxy, so you inherit Claude Code's full tool stack (bash, file ops, MCP) on top of whatever model you point it at.
 
 This doc walks through the complete setup: the architecture, a working recipe against `llama.cpp`, model choice by VRAM budget, recommended llama.cpp tuning, cost math, and honest caveats from our own Phase 0.5 validation.
 

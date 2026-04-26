@@ -1,6 +1,10 @@
 # Configuration
 
-Copy `config.example.yaml` to `config.yaml` and adapt it. The config file is split into four conceptual domains:
+The fleet lives in a SQLite database that the daemon boots from. You manage it through the web dashboard at `/ui/` and the CRUD API. **`config.yaml` is optional**: it is a portable serialization of the same data the database holds, useful for one-time seeding, version-controlled fleet definitions, or moving a fleet between environments. The example file [`config.example.yaml`](../config.example.yaml) shows the shape.
+
+This page documents the schema, using YAML examples for clarity. Every field shown here also exists as a column in the SQLite store and as a JSON field on the CRUD endpoints; the three surfaces are interchangeable.
+
+The schema is split into four conceptual domains:
 
 ```yaml
 daemon:    # how the service runs: log, http, processor, backends, optional proxy
@@ -9,7 +13,7 @@ agents:    # named capabilities: backend + skills + prompt + dispatch wiring
 repos:     # wiring: which agents run on which repo, and when
 ```
 
-The shortest useful config is ~30 lines.
+The shortest useful YAML representation is roughly 30 lines.
 
 ---
 
@@ -179,16 +183,22 @@ GITHUB_WEBHOOK_SECRET=your-webhook-secret
 LOG_SALT=optional-prompt-hash-salt
 ```
 
-## SQLite mode (`--db`)
+## Importing and exporting
 
-SQLite is the config store. Import your YAML once, then manage the fleet over the CRUD API:
+The daemon always boots from the SQLite database (`--db agents.db`). YAML is an optional import / export format, not a second runtime mode.
 
 ```bash
-# Import from existing YAML (one-time)
+# Start with an empty database; create your fleet through /ui/ or the CRUD API
+./agents --db agents.db
+
+# Or seed the database from YAML at first start
 ./agents --db agents.db --import config.yaml
 
-# Subsequent starts run from the persisted DB; no config.yaml needed
-./agents --db agents.db
+# Export the current fleet back to YAML at any time
+curl -s http://localhost:8080/export > fleet.yaml
+
+# Import a YAML payload into a running daemon
+curl -X POST http://localhost:8080/import --data-binary @fleet.yaml
 ```
 
-The CRUD endpoints for `/agents`, `/skills`, `/backends`, and `/repos` are always mounted and backed by the SQLite database. All four resource types support `PATCH /{resource}/{name}` for partial updates: only fields present in the request body are applied, the rest are preserved. For `/agents`, `POST /agents`, `PATCH /agents/{name}`, and `DELETE /agents/{name}` are CRUD write endpoints, but `GET /agents` always returns the live fleet snapshot (not the stored agent list). The daemon auto-reloads cron schedules after any write to agents, skills, backends, or repos. Agent memory is stored in the same SQLite database. YAML is an import source (`--import`), not a second runtime mode; the daemon always boots from SQLite.
+The CRUD endpoints for `/agents`, `/skills`, `/backends`, and `/repos` are always mounted and backed by the SQLite database. All four resource types support `PATCH /{resource}/{name}` for partial updates: only fields present in the request body are applied, the rest are preserved. For `/agents`, `POST /agents`, `PATCH /agents/{name}`, and `DELETE /agents/{name}` are CRUD write endpoints, but `GET /agents` always returns the live fleet snapshot (not the stored agent list). The daemon auto-reloads cron schedules after any write to agents, skills, backends, or repos. Agent memory is stored in the same SQLite database.

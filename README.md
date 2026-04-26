@@ -9,15 +9,18 @@ Define your agents once. Wire them to repos with labels, cron schedules, or even
 ## Features
 
 - **[Quick start](docs/quickstart.md)**: get the daemon running on a repo in under five minutes.
+- **Three ways to interact with your fleet**:
+  - **[Web dashboard](docs/ui.md)**: graphical. Live event firehose, traces with tool-loop transcripts, dispatch graph, memory viewer, full CRUD.
+  - **[MCP server](docs/mcp.md)**: conversational. Control agents and trigger runs straight from Claude Code in your terminal (or Cursor, Cline, or any MCP client).
+  - **[REST API](docs/api.md)**: programmatic. Scriptable from any HTTP client; the dashboard itself runs on top of it.
 - **[Self-hosted](docs/docker.md)**: your code and prompts stay on your infrastructure. No SaaS dependency.
 - **[Multi-backend](docs/configuration.md)**: Claude, Codex, and named local backends. Mix backends per agent.
 - **[Discovery and diagnostics](docs/configuration.md)**: the daemon detects backends and tools, validates CLI health, and persists discovery snapshots.
-- **[Local-model support](docs/local-models.md)**: a built-in Anthropic-to-OpenAI translation proxy routes the fleet through `llama.cpp`, Ollama, vLLM, or any OpenAI-compatible endpoint. Zero vendor lock-in.
+- **[Local-model support](docs/local-models.md)**: a built-in Anthropic-to-OpenAI translation proxy routes the fleet through `llama.cpp`, Ollama, vLLM, or any OpenAI-compatible endpoint.
 - **[One agent model, many triggers](docs/events.md)**: label events, cron schedules, GitHub event subscriptions, on-demand API calls. Same agent, wired however you want.
 - **[Composable skills](docs/configuration.md)**: reusable guidance blocks (architecture, security, testing, DX, ...) composed into any agent.
 - **[Reactive inter-agent dispatch](docs/dispatch.md)**: agents invoke each other at runtime with depth, fanout, and dedup safety limits.
-- **[SQLite config store](docs/api.md)**: manage the fleet over a CRUD API and a built-in dashboard instead of editing YAML. Import / export between the two.
-- **[Built-in web dashboard](docs/ui.md)**: live event firehose, agent traces with tool-loop transcripts, dispatch graph, memory viewer, fleet management.
+- **[SQLite-backed fleet](docs/configuration.md)**: state lives in a SQLite database, managed through the three interfaces above. `config.yaml` is an optional export/import format, not a runtime dependency.
 - **Transparent**: every agent action is a GitHub comment, issue, or PR. Reviewable. Revertable.
 
 ## Contributing
