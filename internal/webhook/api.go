@@ -8,7 +8,7 @@ import (
 	"github.com/eloylp/agents/internal/server"
 )
 
-// ── /api/agents ────────────────────────────────────────────────────────────
+// ── /api/agents ───────────────────────────────────────────────────────────────
 
 // agentScheduleJSON carries scheduling state for cron-backed agents.
 type agentScheduleJSON struct {
@@ -38,6 +38,7 @@ type apiAgentJSON struct {
 	AllowDispatch bool               `json:"allow_dispatch"`
 	CanDispatch   []string           `json:"can_dispatch,omitempty"`
 	AllowPRs      bool               `json:"allow_prs"`
+	AllowMemory   bool               `json:"allow_memory"`
 	CurrentStatus string             `json:"current_status"` // "running" | "idle"
 	Bindings      []agentBindingJSON `json:"bindings,omitempty"`
 }
@@ -71,6 +72,7 @@ func (s *Server) handleAPIAgents(w http.ResponseWriter, _ *http.Request) {
 			AllowDispatch: a.AllowDispatch,
 			CanDispatch:   a.CanDispatch,
 			AllowPRs:      a.AllowPRs,
+			AllowMemory:   a.IsAllowMemory(),
 			CurrentStatus: currentStatus,
 		}
 
@@ -118,7 +120,7 @@ func (s *Server) handleAPIAgents(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(agents)
 }
 
-// ── /api/config ────────────────────────────────────────────────────────────
+// ── /api/config ───────────────────────────────────────────────────────────────
 
 // apiConfigJSON is the wire shape for /api/config with secrets redacted.
 // Secrets (resolved values of *_env fields) are replaced with "[redacted]".
@@ -228,6 +230,7 @@ type apiAgentConfigJSON struct {
 	Description   string   `json:"description,omitempty"`
 	AllowPRs      bool     `json:"allow_prs"`
 	AllowDispatch bool     `json:"allow_dispatch"`
+	AllowMemory   bool     `json:"allow_memory"`
 	CanDispatch   []string `json:"can_dispatch,omitempty"`
 }
 
@@ -313,6 +316,7 @@ func (s *Server) ConfigJSON() ([]byte, error) {
 			Description:   a.Description,
 			AllowPRs:      a.AllowPRs,
 			AllowDispatch: a.AllowDispatch,
+			AllowMemory:   a.IsAllowMemory(),
 			CanDispatch:   a.CanDispatch,
 		})
 	}

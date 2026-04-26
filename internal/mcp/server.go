@@ -125,6 +125,7 @@ type AgentPatch struct {
 	AllowDispatch *bool
 	CanDispatch   *[]string
 	Description   *string
+	AllowMemory   *bool
 }
 
 // AgentWriter writes a single agent definition into the store and removes
