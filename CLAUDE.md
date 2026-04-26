@@ -18,6 +18,7 @@ internal/
   store/                    # SQLite-backed config store: Open, Import, Load, CRUD
   workflow/                 # Event routing engine, single event queue, processor, dispatcher
   server/                   # Shared HTTP server types (cross-cutting interfaces, error sentinels)
+  server/observe/           # Observability HTTP handlers (events, traces, graph, dispatches, memory, SSE)
   webhook/                  # HTTP server, HMAC verification, delivery dedupe, CRUD API handlers
   mcp/                      # MCP server exposing fleet-management tools at /mcp
   ui/                       # Embedded Next.js web dashboard (served at /ui/)

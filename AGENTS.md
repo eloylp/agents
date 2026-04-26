@@ -39,6 +39,7 @@ internal/
   store/                        # SQLite-backed config store: Open, Import, Load, CRUD
   workflow/                     # event routing engine (single event queue), processor, dispatcher
   server/                       # shared HTTP server types (cross-cutting interfaces, error sentinels)
+  server/observe/               # observability HTTP handlers (events, traces, graph, dispatches, memory, SSE)
   webhook/                      # HTTP server, HMAC signature verification, delivery dedupe, CRUD API handlers
   mcp/                          # MCP server exposing fleet-management tools at /mcp
   ui/                           # embedded Next.js web dashboard (static assets served at /ui/)
@@ -55,7 +56,7 @@ internal/ai/response-schema.json # embedded JSON schema for structured output (c
 - **Skill** — a reusable chunk of guidance referenced by name in multiple agents. Skill text is concatenated before the agent's own prompt at render time.
 - **Binding** — `repos[*].use[*]`: pairs one agent with exactly one trigger (`labels:`, `events:`, or `cron:`). The same agent can have multiple bindings on the same repo with different triggers.
 - **Backend** — explicit backend selection per agent (no `auto`). Built-ins are `claude` and `codex`; additional named local backends are supported via `local_model_url`.
-- **Proxy** — optional in-daemon Anthropic↔OpenAI translator mounted at `/v1/messages` and `/v1/models`. Disabled by default. When enabled, the `claude` CLI can be pointed at it via `ANTHROPIC_BASE_URL` in the backend's `env:` map.
+- **Proxy** — optional in-daemon Anthropic↔OpenAI translator mounted at `/v1/messages` and `/v1/models`. Disabled by default. When enabled, set `local_model_url` on the backend entry to the proxy's URL; the daemon injects `ANTHROPIC_BASE_URL` for that backend automatically.
 - **Dispatcher** — the runtime mechanism by which agents invoke each other. See "Reactive dispatch" below.
 
 ## Reactive dispatch — the model you must keep in mind
@@ -106,7 +107,7 @@ When making common classes of changes, update all of these at once:
 
 - **Run `go test ./... -race` before every commit.** Race detection is cheap and catches real bugs in the concurrent event processing and dispatch paths.
 - **Table-driven tests** for anything with more than two interesting input shapes (config validation, label parsing, event decoding, translation, dispatch rejection reasons). `t.Parallel()` where independent; **not** when using `t.Setenv`.
-- **Use `httptest.Server` for HTTP integration tests.** See `internal/webhook/server_test.go` and `internal/anthropic_proxy/handler_test.go` for the patterns.
+- **Use `httptest.Server` for HTTP integration tests.** See `internal/webhook/server_test.go` and `internal/server/observe/observe_test.go` for the patterns.
 - **No `-short` or skipped tests on main.** If a test needs external services, gate it behind a build tag or an explicit env var check.
 - **Do not mock what you do not own.** Wrap third-party clients behind an interface you control, then mock that interface. `internal/ai.Runner` is the canonical example.
 - **Test error paths, not just the happy path.** Dispatch rejection modes each deserve a dedicated test.
@@ -140,7 +141,7 @@ The daemon can route the `claude` CLI through its built-in proxy to any OpenAI-c
 - A user wants to run part of their fleet on a local LLM for privacy or cost reasons.
 - A test needs to exercise a specific model's behaviour against the full Claude Code tool stack.
 
-Pattern: two backend entries using the same `claude` binary, different `env:` maps. See [`docs/local-models.md`](docs/local-models.md) for the full recipe, measured performance numbers, VRAM-tier model recommendations, and honest caveats about the disposition gap between Claude and local models on action-taking agents.
+Pattern: two backend entries using the same `claude` binary, different `local_model_url` values. See [`docs/local-models.md`](docs/local-models.md) for the full recipe, measured performance numbers, VRAM-tier model recommendations, and honest caveats about the disposition gap between Claude and local models on action-taking agents.
 
 When contributing in this area:
 - Proxy changes live in `internal/anthropic_proxy/`. Keep translation rules pure (no I/O in the `translate*` functions) and test them directly.
