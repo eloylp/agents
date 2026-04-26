@@ -209,6 +209,21 @@ type AgentDef struct {
 	// dispatch. Validated: entries must reference real agents in the same
 	// config and must not include the agent itself.
 	CanDispatch []string `yaml:"can_dispatch"`
+
+	// AllowMemory controls whether the autonomous (cron) scheduler loads and
+	// persists this agent's memory across runs. Stored as a pointer so absence
+	// can be distinguished from explicit false: when nil (the YAML/JSON
+	// "absent" case), IsAllowMemory reports true so existing autonomous agents
+	// keep their behaviour without an explicit opt-in. Set to a non-nil false
+	// to disable memory load+persist for this agent across all run kinds.
+	AllowMemory *bool `yaml:"allow_memory,omitempty"`
+}
+
+// IsAllowMemory reports whether this agent's memory should be loaded into the
+// prompt and persisted from the response. Default (nil pointer) is true, so
+// agents authored before this field existed retain their previous behaviour.
+func (a AgentDef) IsAllowMemory() bool {
+	return a.AllowMemory == nil || *a.AllowMemory
 }
 
 // RepoDef describes a single GitHub repo the daemon operates on and the
