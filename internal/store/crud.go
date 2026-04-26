@@ -117,7 +117,7 @@ func validateFleetConstraints(q querier, op string, repos []config.RepoDef) erro
 	return validateCronExpressions(repos)
 }
 
-// ──── Agents ────────────────────────────────────────────────────────────────────────────────
+// ──── Agents ────────────────────────────────────────────────────────────────────────────────────
 
 // ReadAgents returns all agents from the database, ordered by name.
 func ReadAgents(db *sql.DB) ([]config.AgentDef, error) {
@@ -225,7 +225,7 @@ func countDistinctRepos(repos []string) int {
 	return len(seen)
 }
 
-// ──── Skills ─────────────────────────────────────────────────────────────────────────────
+// ──── Skills ─────────────────────────────────────────────────────────────────────────────────────
 
 // ReadSkills returns all skills from the database.
 func ReadSkills(db *sql.DB) (map[string]config.SkillDef, error) {
@@ -278,7 +278,7 @@ func DeleteSkill(db *sql.DB, name string) error {
 	return tx.Commit()
 }
 
-// ──── Backends ───────────────────────────────────────────────────────────────────────────
+// ──── Backends ───────────────────────────────────────────────────────────────────────────────────────
 
 // ReadBackends returns all AI backend configurations from the database.
 func ReadBackends(db *sql.DB) (map[string]config.AIBackendConfig, error) {
@@ -374,7 +374,7 @@ func ReadSnapshot(db *sql.DB) ([]config.AgentDef, []config.RepoDef, map[string]c
 	return cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil
 }
 
-// ──── Repos ──────────────────────────────────────────────────────────────────────────────
+// ──── Repos ────────────────────────────────────────────────────────────────────────────────────────
 
 // ReadRepos returns all repos (with bindings) from the database.
 func ReadRepos(db *sql.DB) ([]config.RepoDef, error) {
@@ -516,7 +516,7 @@ func ReplaceAll(
 	return tx.Commit()
 }
 
-// ──── Bindings (atomic per-item CRUD) ────────────────────────────────────────────
+// ──── Bindings (atomic per-item CRUD) ────────────────────────────────────────────────
 
 // validateBindingShape checks the trigger-exclusivity and event-kind invariants
 // for a single binding, without requiring a full repo context. Returns an
@@ -524,9 +524,6 @@ func ReplaceAll(
 func validateBindingShape(b config.Binding) error {
 	if strings.TrimSpace(b.Agent) == "" {
 		return &ErrValidation{Msg: "agent is required"}
-	}
-	if !b.IsCron() && !b.IsLabel() && !b.IsEvent() {
-		return &ErrValidation{Msg: "binding has no trigger (set cron, labels, or events)"}
 	}
 	triggerCount := 0
 	if b.IsLabel() {
@@ -537,6 +534,9 @@ func validateBindingShape(b config.Binding) error {
 	}
 	if b.IsCron() {
 		triggerCount++
+	}
+	if triggerCount == 0 {
+		return &ErrValidation{Msg: "binding has no trigger (set cron, labels, or events)"}
 	}
 	if triggerCount > 1 {
 		return &ErrValidation{Msg: "binding mixes multiple trigger types (labels, events, cron); each binding must use exactly one trigger"}
