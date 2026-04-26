@@ -392,24 +392,8 @@ func toolCreateBinding(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("agent is required"), nil
 		}
-		args := req.GetArguments()
-		labels, errMsg := stringSliceArg(args["labels"], "labels")
+		b, errMsg := bindingFromReq(req, agent)
 		if errMsg != "" {
-			return mcpgo.NewToolResultError(errMsg), nil
-		}
-		events, errMsg := stringSliceArg(args["events"], "events")
-		if errMsg != "" {
-			return mcpgo.NewToolResultError(errMsg), nil
-		}
-		b := config.Binding{
-			Agent:  agent,
-			Labels: labels,
-			Events: events,
-			Cron:   req.GetString("cron", ""),
-		}
-		if v, ok, errMsg := boolPtrArg(args, "enabled"); ok {
-			b.Enabled = v
-		} else if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
 		persisted, err := deps.BindingWrite.CreateBinding(repo, b)
@@ -434,24 +418,8 @@ func toolUpdateBinding(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("agent is required"), nil
 		}
-		args := req.GetArguments()
-		labels, errMsg := stringSliceArg(args["labels"], "labels")
+		b, errMsg := bindingFromReq(req, agent)
 		if errMsg != "" {
-			return mcpgo.NewToolResultError(errMsg), nil
-		}
-		events, errMsg := stringSliceArg(args["events"], "events")
-		if errMsg != "" {
-			return mcpgo.NewToolResultError(errMsg), nil
-		}
-		b := config.Binding{
-			Agent:  agent,
-			Labels: labels,
-			Events: events,
-			Cron:   req.GetString("cron", ""),
-		}
-		if v, ok, errMsg := boolPtrArg(args, "enabled"); ok {
-			b.Enabled = v
-		} else if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
 		updated, uerr := deps.BindingWrite.UpdateBinding(repo, int64(id), b)
@@ -495,6 +463,33 @@ func toolDeleteBinding(deps Deps) server.ToolHandlerFunc {
 			"repo":   config.NormalizeRepoName(repo),
 		})
 	}
+}
+
+// bindingFromReq builds a config.Binding from the MCP request fields shared
+// by create_binding and update_binding. Returns a non-empty error string when
+// a field is present but the wrong type.
+func bindingFromReq(req mcpgo.CallToolRequest, agent string) (config.Binding, string) {
+	args := req.GetArguments()
+	labels, errMsg := stringSliceArg(args["labels"], "labels")
+	if errMsg != "" {
+		return config.Binding{}, errMsg
+	}
+	events, errMsg := stringSliceArg(args["events"], "events")
+	if errMsg != "" {
+		return config.Binding{}, errMsg
+	}
+	b := config.Binding{
+		Agent:  agent,
+		Labels: labels,
+		Events: events,
+		Cron:   req.GetString("cron", ""),
+	}
+	if v, ok, errMsg := boolPtrArg(args, "enabled"); ok {
+		b.Enabled = v
+	} else if errMsg != "" {
+		return config.Binding{}, errMsg
+	}
+	return b, ""
 }
 
 // repoJSON renders a RepoDef in the same wire shape as an element of the
