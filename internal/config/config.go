@@ -916,14 +916,11 @@ func IsPinnedModelUnavailable(model string, backend AIBackendConfig) bool {
 	return !slices.Contains(backend.Models, model)
 }
 
-func validateAgentModel(_ string, model string, backend AIBackendConfig) error {
+func validateAgentModel(_ string, _ string, _ AIBackendConfig) error {
 	// Model/backend mismatches are intentionally allowed at config validation
 	// time so discovery can persist backend model changes even if agents become
 	// temporarily orphaned. Runtime paths enforce this strictly before invoking
 	// a backend, and UI surfaces orphan remediation flows.
-	if IsPinnedModelUnavailable(model, backend) {
-		return nil
-	}
 	return nil
 }
 
