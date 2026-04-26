@@ -73,7 +73,7 @@ Skills are referenced by name from agents. You can also use `prompt_file: path/t
 agents:
   # Short inline prompt -- reviewer that never opens PRs (default)
   - name: arch-reviewer
-    backend: auto              # auto | claude | codex
+    backend: claude        # must match a key under daemon.ai_backends
     skills: [architect]
     prompt: |
       You are an architecture-focused PR reviewer. Post one high-signal review comment.
@@ -105,7 +105,7 @@ agents:
 
 Each agent is a pure capability definition: backend + skills + prompt. Agents don't run until a repo binds them to a trigger.
 
-- `backend: auto` picks the first configured backend in `daemon.ai_backends` (claude before codex).
+- `backend` must match an entry in `daemon.ai_backends` (e.g. `claude`, `codex`, or any custom local-backend name). There is no `auto` selection; every agent must name a backend explicitly.
 - `prompt_file` paths are resolved relative to the config file's directory.
   Use them for your own longer prompts; the repo no longer ships a `prompts/` tree.
 - Agent names must be unique.

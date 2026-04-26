@@ -5,9 +5,9 @@
 #
 #   ./agents --db agents.db --import config.yaml
 #
-# You can start the daemon directly from a YAML config with `--config`, or use
-# this file as an import template with `--db ... --import`. SQLite import is one
-# option, not the only runtime mode.
+# After the one-time import, manage the fleet through the /ui/ dashboard or
+# the CRUD API. The daemon always runs from SQLite; this YAML file is a
+# seeding convenience, not a separate runtime mode.
 #
 # This example is intentionally small enough to read in one pass. Start here,
 # then grow the fleet in the dashboard at /ui/ or over the CRUD API.
