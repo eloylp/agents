@@ -2,9 +2,9 @@
 
 ![agents](docs/agents.jpg)
 
-**Your personal, provider-agnostic tool for building reusable, event-driven agentic workflows.**
+**A thin orchestration layer for AI agents. Compose them from reusable skills, run them across your repos on events or cron schedules, and let them dispatch work to each other.**
 
-Define your agents once. Wire them to repos with labels, cron schedules, or event subscriptions. The daemon dispatches them via AI CLIs ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex)) and lets them work through native GitHub primitives: issues, PRs, reviews, comments.
+The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), or your own local LLM) and lets it work through native GitHub primitives: issues, PRs, reviews, comments.
 
 ## Features
 
