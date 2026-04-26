@@ -962,7 +962,11 @@ func TestDeleteBackendRejectedAsLast(t *testing.T) {
 	}
 }
 
-func TestDeleteRepoRejectedAsLastEnabled(t *testing.T) {
+// TestDeleteRepoAllowsLastEnabled verifies that DeleteRepo succeeds even when
+// it removes the last (or only) enabled repo. Disabling/removing all repos is
+// a legitimate user action; the daemon runs cleanly with zero enabled repos.
+// Regression for issue #302.
+func TestDeleteRepoAllowsLastEnabled(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
@@ -980,21 +984,25 @@ func TestDeleteRepoRejectedAsLastEnabled(t *testing.T) {
 		t.Fatalf("UpsertRepo: %v", err)
 	}
 
-	err := store.DeleteRepo(db, "owner/repo")
-	if err == nil {
-		t.Fatal("DeleteRepo last enabled repo: want error, got nil")
-	}
-	if !strings.Contains(err.Error(), "at least one repo must be enabled") {
-		t.Errorf("unexpected error: %v", err)
+	if err := store.DeleteRepo(db, "owner/repo"); err != nil {
+		t.Fatalf("DeleteRepo last enabled repo: want nil, got %v", err)
 	}
 
-	// Repo must still be present.
-	repos, readErr := store.ReadRepos(db)
-	if readErr != nil {
-		t.Fatalf("ReadRepos: %v", readErr)
+	repos, err := store.ReadRepos(db)
+	if err != nil {
+		t.Fatalf("ReadRepos: %v", err)
 	}
-	if len(repos) != 1 {
-		t.Errorf("repo count after rejected delete: got %d, want 1", len(repos))
+	if len(repos) != 0 {
+		t.Errorf("repo count after delete: got %d, want 0", len(repos))
+	}
+
+	// Bindings for the deleted repo must also be gone.
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM bindings WHERE repo='owner/repo'").Scan(&count); err != nil {
+		t.Fatalf("count bindings: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("orphan bindings after DeleteRepo: got %d, want 0", count)
 	}
 }
 
