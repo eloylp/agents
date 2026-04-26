@@ -423,18 +423,29 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 	// (cron + manual trigger, two manual triggers, or runs without a
 	// dispatcher dedup mark) would both read the same old memory, run
 	// independently, and whichever finishes last would silently clobber the
-	// other run's persisted state.
+	// other run's persisted state. Held across the entire read/run/write
+	// sequence even when memory is disabled so that concurrent runs of the
+	// same (agent, repo) still serialise on dispatch and trace recording.
 	runKey := agent.Name + "\x00" + repo
 	s.runLock.acquire(runKey)
 	defer s.runLock.release(runKey)
 
-	// Read existing memory before the run so it can be injected into the prompt.
-	existingMemory, err := s.memory.ReadMemory(agent.Name, repo)
-	if err != nil {
-		if s.dispatcher != nil {
-			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
+	// Memory load is gated on the agent's allow_memory toggle. When disabled,
+	// the prompt's Memory field is left empty so RenderAgentPrompt emits the
+	// "(empty)" placeholder, and we skip the write below regardless of what
+	// the agent returns. This makes allow_memory=false a hard runtime gate
+	// that does not depend on the agent's prompt cooperating.
+	memoryEnabled := agent.IsAllowMemory()
+	var existingMemory string
+	if memoryEnabled {
+		mem, err := s.memory.ReadMemory(agent.Name, repo)
+		if err != nil {
+			if s.dispatcher != nil {
+				s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
+			}
+			return fmt.Errorf("read memory: %w", err)
 		}
-		return fmt.Errorf("read memory: %w", err)
+		existingMemory = mem
 	}
 
 	rendered, err := ai.RenderAgentPrompt(agent, cfg.Skills, ai.PromptContext{
@@ -491,19 +502,25 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 		return fmt.Errorf("agent run: %w", runErr)
 	}
 
-	// Persist the agent's updated memory only if the response contains a
-	// non-empty memory field. An empty memory field means the agent did not
-	// return updated memory — preserve the existing content rather than
-	// silently wiping it. This prevents accidental data loss when an agent's
-	// structured output omits or empties the memory field.
-	if resp.Memory == "" {
+	// Persist the agent's updated memory only when memory is enabled AND the
+	// response carries a non-empty memory field. An empty memory field on an
+	// allow_memory=true agent means the agent did not return updated memory —
+	// preserve the existing content rather than silently wiping it. This
+	// prevents accidental data loss when an agent's structured output omits
+	// or empties the memory field.
+	switch {
+	case !memoryEnabled:
+		logger.Debug().Msg("memory persist skipped: allow_memory disabled for this agent")
+	case resp.Memory == "":
 		logger.Debug().Msg("agent returned empty memory, preserving existing")
-	} else if memErr := s.memory.WriteMemory(agent.Name, repo, resp.Memory); memErr != nil {
-		recordTrace("error", memErr.Error())
-		if s.dispatcher != nil {
-			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
+	default:
+		if memErr := s.memory.WriteMemory(agent.Name, repo, resp.Memory); memErr != nil {
+			recordTrace("error", memErr.Error())
+			if s.dispatcher != nil {
+				s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
+			}
+			return fmt.Errorf("write memory: %w", memErr)
 		}
-		return fmt.Errorf("write memory: %w", memErr)
 	}
 
 	logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Int("dispatch_requests", len(resp.Dispatch)).Msg("autonomous pass completed")
