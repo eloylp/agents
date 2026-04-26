@@ -97,7 +97,27 @@ func requireAtLeastOne(q querier, countQuery, entity, zeroMsg string) error {
 	return nil
 }
 
-// ──── Agents ─────────────────────────────────────────────────────────────────
+// validateFleetConstraints runs all post-write invariant checks shared by
+// ImportAll and ReplaceAll: entity cross-references, minimum cardinality, and
+// cron-expression parseability. op ("import" or "replace") is used verbatim in
+// error messages.
+func validateFleetConstraints(q querier, op string, repos []config.RepoDef) error {
+	if err := validateFleet(q); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: %s: %v", op, err)}
+	}
+	if err := requireAtLeastOne(q, "SELECT COUNT(*) FROM agents", "agents", "config: at least one agent is required"); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: %s: %v", op, err)}
+	}
+	if err := requireAtLeastOne(q, "SELECT COUNT(*) FROM backends", "backends", "config: at least one ai_backends entry is required"); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: %s: %v", op, err)}
+	}
+	if err := requireAtLeastOne(q, "SELECT COUNT(*) FROM repos WHERE enabled=1", "enabled repos", "config: at least one repo must be enabled"); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: %s: %v", op, err)}
+	}
+	return validateCronExpressions(repos)
+}
+
+// ──── Agents ────────────────────────────────────────────────────────────────────────────────
 
 // ReadAgents returns all agents from the database, ordered by name.
 func ReadAgents(db *sql.DB) ([]config.AgentDef, error) {
@@ -205,7 +225,7 @@ func countDistinctRepos(repos []string) int {
 	return len(seen)
 }
 
-// ──── Skills ─────────────────────────────────────────────────────────────────
+// ──── Skills ─────────────────────────────────────────────────────────────────────────────
 
 // ReadSkills returns all skills from the database.
 func ReadSkills(db *sql.DB) (map[string]config.SkillDef, error) {
@@ -258,7 +278,7 @@ func DeleteSkill(db *sql.DB, name string) error {
 	return tx.Commit()
 }
 
-// ──── Backends ───────────────────────────────────────────────────────────────
+// ──── Backends ───────────────────────────────────────────────────────────────────────────
 
 // ReadBackends returns all AI backend configurations from the database.
 func ReadBackends(db *sql.DB) (map[string]config.AIBackendConfig, error) {
@@ -354,7 +374,7 @@ func ReadSnapshot(db *sql.DB) ([]config.AgentDef, []config.RepoDef, map[string]c
 	return cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil
 }
 
-// ──── Repos ──────────────────────────────────────────────────────────────────
+// ──── Repos ──────────────────────────────────────────────────────────────────────────────
 
 // ReadRepos returns all repos (with bindings) from the database.
 func ReadRepos(db *sql.DB) ([]config.RepoDef, error) {
@@ -445,19 +465,7 @@ func ImportAll(
 	if err := importBackends(tx, normalizedBackends); err != nil {
 		return err
 	}
-	if err := validateFleet(tx); err != nil {
-		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
-	}
-	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM agents", "agents", "config: at least one agent is required"); err != nil {
-		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
-	}
-	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM backends", "backends", "config: at least one ai_backends entry is required"); err != nil {
-		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
-	}
-	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM repos WHERE enabled=1", "enabled repos", "config: at least one repo must be enabled"); err != nil {
-		return &ErrValidation{Msg: fmt.Sprintf("store: import: %v", err)}
-	}
-	if err := validateCronExpressions(repos); err != nil {
+	if err := validateFleetConstraints(tx, "import", repos); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -502,25 +510,13 @@ func ReplaceAll(
 	if err := importBackends(tx, normalizedBackends); err != nil {
 		return err
 	}
-	if err := validateFleet(tx); err != nil {
-		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
-	}
-	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM agents", "agents", "config: at least one agent is required"); err != nil {
-		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
-	}
-	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM backends", "backends", "config: at least one ai_backends entry is required"); err != nil {
-		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
-	}
-	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM repos WHERE enabled=1", "enabled repos", "config: at least one repo must be enabled"); err != nil {
-		return &ErrValidation{Msg: fmt.Sprintf("store: replace: %v", err)}
-	}
-	if err := validateCronExpressions(repos); err != nil {
+	if err := validateFleetConstraints(tx, "replace", repos); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-// ──── Bindings (atomic per-item CRUD) ────────────────────────────────────────
+// ──── Bindings (atomic per-item CRUD) ────────────────────────────────────────────
 
 // validateBindingShape checks the trigger-exclusivity and event-kind invariants
 // for a single binding, without requiring a full repo context. Returns an
@@ -607,10 +603,7 @@ func CreateBinding(db *sql.DB, repoName string, b config.Binding) (int64, config
 	if err != nil {
 		return 0, config.Binding{}, fmt.Errorf("store: create binding: marshal events: %w", err)
 	}
-	enabled := 1
-	if b.Enabled != nil && !*b.Enabled {
-		enabled = 0
-	}
+	enabled := bindingEnabledInt(b.Enabled)
 	res, err := tx.Exec(
 		`INSERT INTO bindings(repo,agent,labels,events,cron,enabled) VALUES (?,?,?,?,?,?)`,
 		repoName, b.Agent, string(labels), string(events), b.Cron, enabled,
@@ -665,10 +658,7 @@ func UpdateBinding(db *sql.DB, id int64, b config.Binding) (config.Binding, erro
 	if err != nil {
 		return config.Binding{}, fmt.Errorf("store: update binding: marshal events: %w", err)
 	}
-	enabled := 1
-	if b.Enabled != nil && !*b.Enabled {
-		enabled = 0
-	}
+	enabled := bindingEnabledInt(b.Enabled)
 	res, err := tx.Exec(
 		`UPDATE bindings SET agent=?, labels=?, events=?, cron=?, enabled=? WHERE id=?`,
 		b.Agent, string(labels), string(events), b.Cron, enabled, id,

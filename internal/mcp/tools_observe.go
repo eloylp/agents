@@ -9,9 +9,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/store"
-	"github.com/eloylp/agents/internal/workflow"
 )
 
 // mcpGraphNode mirrors the node payload used by GET /graph so consumers
@@ -49,11 +47,7 @@ func toolListEvents(deps Deps) server.ToolHandlerFunc {
 				since = t
 			}
 		}
-		events := deps.Observe.ListEvents(since)
-		if events == nil {
-			events = []observe.TimestampedEvent{}
-		}
-		return jsonResult(events)
+		return jsonResult(nilSafe(deps.Observe.ListEvents(since)))
 	}
 }
 
@@ -62,11 +56,7 @@ func toolListEvents(deps Deps) server.ToolHandlerFunc {
 // the same decoder.
 func toolListTraces(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		spans := deps.Observe.ListTraces()
-		if spans == nil {
-			spans = []observe.Span{}
-		}
-		return jsonResult(spans)
+		return jsonResult(nilSafe(deps.Observe.ListTraces()))
 	}
 }
 
@@ -97,11 +87,7 @@ func toolGetTraceSteps(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("span_id is required"), nil
 		}
-		steps := deps.Observe.ListSteps(id)
-		if steps == nil {
-			steps = []workflow.TraceStep{}
-		}
-		return jsonResult(steps)
+		return jsonResult(nilSafe(deps.Observe.ListSteps(id)))
 	}
 }
 
@@ -200,4 +186,3 @@ func toolGetMemory(deps Deps) server.ToolHandlerFunc {
 		return jsonResult(out)
 	}
 }
-

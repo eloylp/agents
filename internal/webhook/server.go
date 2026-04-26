@@ -22,6 +22,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/server"
+	serverobserve "github.com/eloylp/agents/internal/server/observe"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -67,7 +68,9 @@ func (s *Server) WithUI(uiFS fs.FS) {
 
 // WithObserve attaches the observability store. When set, the server registers
 // the full suite of /api/events, /api/traces, /api/graph, and /api/memory
-// endpoints. Callers that do not need the UI can skip this call.
+// endpoints. The handlers themselves live in internal/server/observe; this
+// server constructs the package's Handler at buildHandler time and delegates
+// route registration to it.
 func (s *Server) WithObserve(store *observe.Store) {
 	s.observeStore = store
 }
@@ -89,8 +92,7 @@ func (s *Server) WithStore(db *sql.DB, r server.CronReloader) {
 }
 
 // WithMemoryReader attaches a MemoryReader used by /api/memory/{agent}/{repo}
-// when the daemon is running in --db mode. When not set, the endpoint falls
-// back to reading from the filesystem memory_dir.
+// when the daemon is running in --db mode.
 func (s *Server) WithMemoryReader(r server.MemoryReader) {
 	s.memReader = r
 }
@@ -103,8 +105,8 @@ func (s *Server) WithMCP(h http.Handler) {
 }
 
 // Config returns the current effective config snapshot under the server's
-// lock. Satisfies the mcp.ConfigProvider interface so the MCP handler reads
-// the same hot-reloaded config the REST API does.
+// lock. Satisfies mcp.ConfigProvider and serverobserve.ConfigGetter so both
+// surfaces read the same hot-reloaded config the REST API does.
 func (s *Server) Config() *config.Config {
 	return s.loadCfg()
 }
@@ -158,7 +160,8 @@ func (s *Server) buildHandler() http.Handler {
 	// replacement for http.Server.WriteTimeout, which enforces a socket write
 	// deadline and is still set in Run(). SSE handlers clear that write
 	// deadline for themselves via http.ResponseController.SetWriteDeadline so
-	// they can stream indefinitely; see serveSSEWithInterval in api.go.
+	// they can stream indefinitely; see ServeSSEWithInterval in the
+	// internal/server/observe package.
 	writeTimeout := time.Duration(cfg.Daemon.HTTP.WriteTimeoutSeconds) * time.Second
 	withTimeout := func(h http.Handler) http.Handler {
 		if writeTimeout <= 0 {
@@ -195,16 +198,13 @@ func (s *Server) buildHandler() http.Handler {
 	router.Handle("/repos/{owner}/{repo}/bindings/{id}", withTimeout(http.HandlerFunc(s.handleUpdateBinding))).Methods(http.MethodPatch)
 	router.Handle("/repos/{owner}/{repo}/bindings/{id}", withTimeout(http.HandlerFunc(s.handleDeleteBinding))).Methods(http.MethodDelete)
 
-	router.Handle("/events", withTimeout(http.HandlerFunc(s.handleAPIEvents))).Methods(http.MethodGet)
-	router.HandleFunc("/events/stream", s.handleAPIEventsStream) // SSE — no timeout
-	router.Handle("/traces", withTimeout(http.HandlerFunc(s.handleAPITraces))).Methods(http.MethodGet)
-	router.HandleFunc("/traces/stream", s.handleAPITracesStream) // SSE — no timeout
-	router.Handle("/traces/{root_event_id}", withTimeout(http.HandlerFunc(s.handleAPITrace))).Methods(http.MethodGet)
-	router.Handle("/traces/{span_id}/steps", withTimeout(http.HandlerFunc(s.handleAPITraceSteps))).Methods(http.MethodGet)
-	router.Handle("/graph", withTimeout(http.HandlerFunc(s.handleAPIGraph))).Methods(http.MethodGet)
-	router.Handle("/dispatches", withTimeout(http.HandlerFunc(s.handleAPIDispatches))).Methods(http.MethodGet)
-	router.Handle("/memory/{agent}/{repo}", withTimeout(http.HandlerFunc(s.handleAPIMemory))).Methods(http.MethodGet)
-	router.HandleFunc("/memory/stream", s.handleAPIMemoryStream) // SSE — no timeout
+	// Observability surface lives in its own package; routes are registered
+	// only when the observability store has been attached.
+	if s.observeStore != nil {
+		obh := serverobserve.New(s.observeStore, s, s.provider, s.runtimeState, s.dispatchStats, s.memReader)
+		obh.RegisterRoutes(router, withTimeout)
+	}
+
 	router.Handle("/config", withTimeout(http.HandlerFunc(s.handleAPIConfig))).Methods(http.MethodGet)
 	router.Handle("/export", withTimeout(http.HandlerFunc(s.handleStoreExport))).Methods(http.MethodGet)
 	router.Handle("/import", withTimeout(http.HandlerFunc(s.handleStoreImport))).Methods(http.MethodPost)

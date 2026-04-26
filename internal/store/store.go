@@ -333,10 +333,7 @@ func importRepos(tx *sql.Tx, repos []config.RepoDef) error {
 			if err != nil {
 				return fmt.Errorf("store import: marshal binding events for repo %s agent %s: %w", r.Name, b.Agent, err)
 			}
-			bindingEnabled := 1
-			if b.Enabled != nil && !*b.Enabled {
-				bindingEnabled = 0
-			}
+			bindingEnabled := bindingEnabledInt(b.Enabled)
 			if _, err := tx.Exec(`
 				INSERT INTO bindings(repo,agent,labels,events,cron,enabled)
 				VALUES (?,?,?,?,?,?)`,
@@ -646,6 +643,15 @@ func boolToInt(b bool) int {
 
 // intToBool converts a SQLite 0/1 to bool.
 func intToBool(i int) bool { return i != 0 }
+
+// bindingEnabledInt converts a binding's nullable enabled flag to 0/1 for
+// SQLite storage. Nil means the default (enabled), matching IsEnabled().
+func bindingEnabledInt(enabled *bool) int {
+	if enabled != nil && !*enabled {
+		return 0
+	}
+	return 1
+}
 
 // ImportCount holds row counts written during an Import call, for progress
 // logging.

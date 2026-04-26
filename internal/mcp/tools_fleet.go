@@ -45,10 +45,8 @@ func toolGetAgent(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultErrorFromErr("get agent", err), nil
 		}
 		key := config.NormalizeAgentName(name)
-		for _, a := range agents {
-			if a.Name == key {
-				return jsonResult(agentJSON(a))
-			}
+		if idx := slices.IndexFunc(agents, func(a config.AgentDef) bool { return a.Name == key }); idx != -1 {
+			return jsonResult(agentJSON(agents[idx]))
 		}
 		return mcpgo.NewToolResultErrorf("agent %q not found", name), nil
 	}
@@ -161,10 +159,8 @@ func toolGetRepo(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultErrorFromErr("get repo", err), nil
 		}
 		key := config.NormalizeRepoName(name)
-		for _, r := range repos {
-			if r.Name == key {
-				return jsonResult(repoJSON(r))
-			}
+		if idx := slices.IndexFunc(repos, func(r config.RepoDef) bool { return r.Name == key }); idx != -1 {
+			return jsonResult(repoJSON(repos[idx]))
 		}
 		return mcpgo.NewToolResultErrorf("repo %q not found", name), nil
 	}

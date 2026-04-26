@@ -353,6 +353,15 @@ func storeErrStatus(err error) int {
 	return http.StatusInternalServerError
 }
 
+// storeWriteErr maps an error from a store write operation to an HTTP response
+// and a structured log entry. op identifies the failing operation (e.g.
+// "agent upsert or cron reload") and appears in both the log line and the
+// HTTP error body so callers and operators see the same context.
+func (s *Server) storeWriteErr(w http.ResponseWriter, err error, op string) {
+	s.logger.Error().Err(err).Msgf("store crud: %s failed", op)
+	http.Error(w, fmt.Sprintf("%s: %v", op, err), storeErrStatus(err))
+}
+
 // reloadCron re-reads the full config from the DB as a consistent snapshot
 // and calls Reload on the attached CronReloader (if any). All four entity
 // types are read within a single transaction so a concurrent /api/store write
@@ -423,9 +432,7 @@ func (s *Server) handleStoreAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		canonical, err := s.UpsertAgent(req.toConfig())
 		if err != nil {
-			status := storeErrStatus(err)
-			s.logger.Error().Err(err).Msg("store crud: agent upsert or cron reload failed")
-			http.Error(w, fmt.Sprintf("agent upsert or cron reload: %v", err), status)
+			s.storeWriteErr(w, err, "agent upsert or cron reload")
 			return
 		}
 		writeJSON(w, http.StatusOK, agentToStoreJSON(canonical))
@@ -484,9 +491,7 @@ func (s *Server) handleStoreAgent(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		cascade := r.URL.Query().Get("cascade") == "true"
 		if err := s.DeleteAgent(name, cascade); err != nil {
-			status := storeErrStatus(err)
-			s.logger.Error().Err(err).Msg("store crud: agent delete or cron reload failed")
-			http.Error(w, fmt.Sprintf("agent delete or cron reload: %v", err), status)
+			s.storeWriteErr(w, err, "agent delete or cron reload")
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -508,9 +513,7 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request, name 
 	}
 	canonical, err := s.UpdateAgent(name, req)
 	if err != nil {
-		status := storeErrStatus(err)
-		s.logger.Error().Err(err).Msg("store crud: agent patch or cron reload failed")
-		http.Error(w, fmt.Sprintf("agent patch or cron reload: %v", err), status)
+		s.storeWriteErr(w, err, "agent patch or cron reload")
 		return
 	}
 	writeJSON(w, http.StatusOK, agentToStoreJSON(canonical))
@@ -600,9 +603,7 @@ func (s *Server) handleStoreSkills(w http.ResponseWriter, r *http.Request) {
 		}
 		name, sk, err := s.UpsertSkill(req.Name, config.SkillDef{Prompt: req.Prompt})
 		if err != nil {
-			status := storeErrStatus(err)
-			s.logger.Error().Err(err).Msg("store crud: skill upsert or cron reload failed")
-			http.Error(w, fmt.Sprintf("skill upsert or cron reload: %v", err), status)
+			s.storeWriteErr(w, err, "skill upsert or cron reload")
 			return
 		}
 		writeJSON(w, http.StatusOK, storeSkillJSON{Name: name, Prompt: sk.Prompt})
@@ -659,9 +660,7 @@ func (s *Server) handleStoreSkill(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodDelete:
 		if err := s.DeleteSkill(name); err != nil {
-			status := storeErrStatus(err)
-			s.logger.Error().Err(err).Msg("store crud: skill delete or cron reload failed")
-			http.Error(w, fmt.Sprintf("skill delete or cron reload: %v", err), status)
+			s.storeWriteErr(w, err, "skill delete or cron reload")
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -683,9 +682,7 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request, name 
 	}
 	canonicalName, canonical, err := s.UpdateSkill(name, req)
 	if err != nil {
-		status := storeErrStatus(err)
-		s.logger.Error().Err(err).Msg("store crud: skill patch or cron reload failed")
-		http.Error(w, fmt.Sprintf("skill patch or cron reload: %v", err), status)
+		s.storeWriteErr(w, err, "skill patch or cron reload")
 		return
 	}
 	writeJSON(w, http.StatusOK, storeSkillJSON{Name: canonicalName, Prompt: canonical.Prompt})
@@ -760,9 +757,7 @@ func (s *Server) handleStoreBackends(w http.ResponseWriter, r *http.Request) {
 		}
 		name, b, err := s.UpsertBackend(req.Name, req.toConfig())
 		if err != nil {
-			status := storeErrStatus(err)
-			s.logger.Error().Err(err).Msg("store crud: backend upsert or cron reload failed")
-			http.Error(w, fmt.Sprintf("backend upsert or cron reload: %v", err), status)
+			s.storeWriteErr(w, err, "backend upsert or cron reload")
 			return
 		}
 		writeJSON(w, http.StatusOK, backendToStoreJSON(name, b))
@@ -953,9 +948,7 @@ func (s *Server) handleStoreBackendPatch(w http.ResponseWriter, r *http.Request)
 	}
 	canonicalName, canonical, err := s.UpdateBackend(name, req)
 	if err != nil {
-		status := storeErrStatus(err)
-		s.logger.Error().Err(err).Msg("store crud: backend patch or cron reload failed")
-		http.Error(w, fmt.Sprintf("backend patch or cron reload: %v", err), status)
+		s.storeWriteErr(w, err, "backend patch or cron reload")
 		return
 	}
 	writeJSON(w, http.StatusOK, backendToStoreJSON(canonicalName, canonical))
@@ -996,9 +989,7 @@ func (s *Server) UpdateBackend(name string, patch storeBackendPatchJSON) (string
 func (s *Server) handleStoreBackendDelete(w http.ResponseWriter, r *http.Request) {
 	name := backendPathName(r)
 	if err := s.DeleteBackend(name); err != nil {
-		status := storeErrStatus(err)
-		s.logger.Error().Err(err).Msg("store crud: backend delete or cron reload failed")
-		http.Error(w, fmt.Sprintf("backend delete or cron reload: %v", err), status)
+		s.storeWriteErr(w, err, "backend delete or cron reload")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1043,9 +1034,7 @@ func (s *Server) handleStoreRepos(w http.ResponseWriter, r *http.Request) {
 		}
 		canonical, err := s.UpsertRepo(req.toConfig())
 		if err != nil {
-			status := storeErrStatus(err)
-			s.logger.Error().Err(err).Msg("store crud: repo upsert or cron reload failed")
-			http.Error(w, fmt.Sprintf("repo upsert or cron reload: %v", err), status)
+			s.storeWriteErr(w, err, "repo upsert or cron reload")
 			return
 		}
 		writeJSON(w, http.StatusOK, repoToStoreJSON(canonical))
@@ -1118,18 +1107,14 @@ func (s *Server) handleStoreRepo(w http.ResponseWriter, r *http.Request) {
 		}
 		repo, err := s.PatchRepo(repoName, *req.Enabled)
 		if err != nil {
-			status := storeErrStatus(err)
-			s.logger.Error().Err(err).Msg("store crud: repo patch or cron reload failed")
-			http.Error(w, fmt.Sprintf("repo patch or cron reload: %v", err), status)
+			s.storeWriteErr(w, err, "repo patch or cron reload")
 			return
 		}
 		writeJSON(w, http.StatusOK, repoToStoreJSON(repo))
 
 	case http.MethodDelete:
 		if err := s.DeleteRepo(repoName); err != nil {
-			status := storeErrStatus(err)
-			s.logger.Error().Err(err).Msg("store crud: repo delete or cron reload failed")
-			http.Error(w, fmt.Sprintf("repo delete or cron reload: %v", err), status)
+			s.storeWriteErr(w, err, "repo delete or cron reload")
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -1236,9 +1221,7 @@ func (s *Server) handleCreateBinding(w http.ResponseWriter, r *http.Request) {
 	req.ID = 0
 	b, err := s.CreateBinding(repoName, req.toConfig())
 	if err != nil {
-		status := storeErrStatus(err)
-		s.logger.Error().Err(err).Msg("store crud: binding create or cron reload failed")
-		http.Error(w, fmt.Sprintf("binding create or cron reload: %v", err), status)
+		s.storeWriteErr(w, err, "binding create or cron reload")
 		return
 	}
 	writeJSON(w, http.StatusCreated, bindingToStoreJSON(b))
@@ -1294,9 +1277,7 @@ func (s *Server) handleUpdateBinding(w http.ResponseWriter, r *http.Request) {
 	}
 	b, err := s.UpdateBinding(repoName, id, req.toConfig())
 	if err != nil {
-		status := storeErrStatus(err)
-		s.logger.Error().Err(err).Msg("store crud: binding update or cron reload failed")
-		http.Error(w, fmt.Sprintf("binding update or cron reload: %v", err), status)
+		s.storeWriteErr(w, err, "binding update or cron reload")
 		return
 	}
 	writeJSON(w, http.StatusOK, bindingToStoreJSON(b))
@@ -1333,9 +1314,7 @@ func (s *Server) handleDeleteBinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.DeleteBinding(repoName, id); err != nil {
-		status := storeErrStatus(err)
-		s.logger.Error().Err(err).Msg("store crud: binding delete or cron reload failed")
-		http.Error(w, fmt.Sprintf("binding delete or cron reload: %v", err), status)
+		s.storeWriteErr(w, err, "binding delete or cron reload")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

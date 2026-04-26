@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -21,14 +22,23 @@ func toolCreateAgent(deps Deps) server.ToolHandlerFunc {
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
+		args := req.GetArguments()
+		skills, errMsg := stringSliceArg(args["skills"], "skills")
+		if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
+		canDispatch, errMsg := stringSliceArg(args["can_dispatch"], "can_dispatch")
+		if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
 		a := config.AgentDef{
 			Name:          name,
 			Backend:       req.GetString("backend", ""),
 			Model:         req.GetString("model", ""),
 			Prompt:        req.GetString("prompt", ""),
 			Description:   req.GetString("description", ""),
-			Skills:        req.GetStringSlice("skills", nil),
-			CanDispatch:   req.GetStringSlice("can_dispatch", nil),
+			Skills:        skills,
+			CanDispatch:   canDispatch,
 			AllowPRs:      req.GetBool("allow_prs", false),
 			AllowDispatch: req.GetBool("allow_dispatch", false),
 		}
@@ -204,9 +214,13 @@ func toolCreateBackend(deps Deps) server.ToolHandlerFunc {
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
+		models, errMsg := stringSliceArg(req.GetArguments()["models"], "models")
+		if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
 		b := config.AIBackendConfig{
 			Command:          req.GetString("command", ""),
-			Models:           req.GetStringSlice("models", nil),
+			Models:           models,
 			LocalModelURL:    req.GetString("local_model_url", ""),
 			TimeoutSeconds:   req.GetInt("timeout_seconds", 0),
 			MaxPromptChars:   req.GetInt("max_prompt_chars", 0),
@@ -378,13 +392,22 @@ func toolCreateBinding(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("agent is required"), nil
 		}
+		args := req.GetArguments()
+		labels, errMsg := stringSliceArg(args["labels"], "labels")
+		if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
+		events, errMsg := stringSliceArg(args["events"], "events")
+		if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
 		b := config.Binding{
 			Agent:  agent,
-			Labels: req.GetStringSlice("labels", nil),
-			Events: req.GetStringSlice("events", nil),
+			Labels: labels,
+			Events: events,
 			Cron:   req.GetString("cron", ""),
 		}
-		if v, ok, errMsg := boolPtrArg(req.GetArguments(), "enabled"); ok {
+		if v, ok, errMsg := boolPtrArg(args, "enabled"); ok {
 			b.Enabled = v
 		} else if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
@@ -403,28 +426,30 @@ func toolCreateBinding(deps Deps) server.ToolHandlerFunc {
 // surface as not-found.
 func toolUpdateBinding(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id, err := req.RequireInt("id")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		if id <= 0 {
-			return mcpgo.NewToolResultError("id must be a positive integer"), nil
-		}
-		repo, ok := trimmedString(req, "repo")
-		if !ok {
-			return mcpgo.NewToolResultError("repo is required"), nil
+		id, repo, errMsg := bindingIDAndRepo(req)
+		if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
 		}
 		agent, ok := trimmedString(req, "agent")
 		if !ok {
 			return mcpgo.NewToolResultError("agent is required"), nil
 		}
+		args := req.GetArguments()
+		labels, errMsg := stringSliceArg(args["labels"], "labels")
+		if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
+		events, errMsg := stringSliceArg(args["events"], "events")
+		if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
 		b := config.Binding{
 			Agent:  agent,
-			Labels: req.GetStringSlice("labels", nil),
-			Events: req.GetStringSlice("events", nil),
+			Labels: labels,
+			Events: events,
 			Cron:   req.GetString("cron", ""),
 		}
-		if v, ok, errMsg := boolPtrArg(req.GetArguments(), "enabled"); ok {
+		if v, ok, errMsg := boolPtrArg(args, "enabled"); ok {
 			b.Enabled = v
 		} else if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
@@ -441,16 +466,9 @@ func toolUpdateBinding(deps Deps) server.ToolHandlerFunc {
 // repo. Same path as GET /repos/{owner}/{repo}/bindings/{id}.
 func toolGetBinding(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id, err := req.RequireInt("id")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		if id <= 0 {
-			return mcpgo.NewToolResultError("id must be a positive integer"), nil
-		}
-		repo, ok := trimmedString(req, "repo")
-		if !ok {
-			return mcpgo.NewToolResultError("repo is required"), nil
+		id, repo, errMsg := bindingIDAndRepo(req)
+		if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
 		}
 		b, err := deps.BindingWrite.ReadBinding(repo, int64(id))
 		if err != nil {
@@ -464,16 +482,9 @@ func toolGetBinding(deps Deps) server.ToolHandlerFunc {
 // /repos/{owner}/{repo}/bindings/{id}.
 func toolDeleteBinding(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id, err := req.RequireInt("id")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		if id <= 0 {
-			return mcpgo.NewToolResultError("id must be a positive integer"), nil
-		}
-		repo, ok := trimmedString(req, "repo")
-		if !ok {
-			return mcpgo.NewToolResultError("repo is required"), nil
+		id, repo, errMsg := bindingIDAndRepo(req)
+		if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
 		}
 		if err := deps.BindingWrite.DeleteBinding(repo, int64(id)); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete binding", err), nil
@@ -516,13 +527,17 @@ func repoJSON(r config.RepoDef) map[string]any {
 // Binding.Enabled stays nil when the caller omits the key (the "default
 // enabled" case config.Binding.IsEnabled relies on). A literal false/true sets
 // the pointer so downstream validation sees the user's intent preserved.
+//
+// The top-level value is also accepted as a JSON-encoded array string — see
+// stringSliceArg for the same MCP-transport rationale (some clients
+// stringify array params at the JSON-RPC boundary).
 func parseBindings(v any) ([]config.Binding, string) {
 	if v == nil {
 		return nil, ""
 	}
-	raw, ok := v.([]any)
-	if !ok {
-		return nil, "bindings must be an array"
+	raw, errMsg := arrayOfAny(v, "bindings")
+	if errMsg != "" {
+		return nil, errMsg
 	}
 	out := make([]config.Binding, 0, len(raw))
 	for i, item := range raw {
@@ -545,12 +560,12 @@ func parseBindings(v any) ([]config.Binding, string) {
 			}
 			b.Cron = s
 		}
-		labels, lErr := stringSliceFromAny(m["labels"], fmt.Sprintf("bindings[%d].labels", i))
+		labels, lErr := stringSliceArg(m["labels"], fmt.Sprintf("bindings[%d].labels", i))
 		if lErr != "" {
 			return nil, lErr
 		}
 		b.Labels = labels
-		events, eErr := stringSliceFromAny(m["events"], fmt.Sprintf("bindings[%d].events", i))
+		events, eErr := stringSliceArg(m["events"], fmt.Sprintf("bindings[%d].events", i))
 		if eErr != "" {
 			return nil, eErr
 		}
@@ -626,46 +641,104 @@ func intPtrArg(args map[string]any, key string) (*int, bool, string) {
 // stringSlicePtrArg reads an optional []string field. Returns (&slice, true,
 // "") when the key is present and well-typed, including an explicit empty
 // array (so callers can clear the list). Missing keys return (nil, false, "").
+// Wrong-shape values surface (nil, false, errMsg) so PATCH callers can reject
+// rather than silently treat a typo as "preserve".
+//
+// Accepts the same input shapes as stringSliceArg, including JSON-encoded
+// array strings (see that helper for the rationale).
 func stringSlicePtrArg(args map[string]any, key string) (*[]string, bool, string) {
 	v, ok := args[key]
 	if !ok || v == nil {
 		return nil, false, ""
 	}
-	raw, ok := v.([]any)
-	if !ok {
-		return nil, false, fmt.Sprintf("%s must be an array of strings", key)
-	}
-	out := make([]string, 0, len(raw))
-	for i, item := range raw {
-		s, ok := item.(string)
-		if !ok {
-			return nil, false, fmt.Sprintf("%s[%d] must be a string", key, i)
-		}
-		out = append(out, s)
+	out, errMsg := stringSliceArg(v, key)
+	if errMsg != "" {
+		return nil, false, errMsg
 	}
 	return &out, true, ""
 }
 
-// stringSliceFromAny decodes a JSON array of strings for the given field
-// path. A nil/missing value yields nil. A non-array argument or a non-string
-// element is reported via the returned error string using the supplied path
-// prefix so callers get `bindings[i].labels[j] must be a string` rather than
-// a silent drop.
-func stringSliceFromAny(v any, path string) ([]string, string) {
+// stringSliceArg coerces v into []string for a tool argument.
+//
+// Returns (nil, "") when v is nil/missing — callers that need to distinguish
+// absence from an explicit empty array should use stringSlicePtrArg instead.
+// Returns ([]string, "") on success and (nil, errMsg) when v is the wrong
+// shape (e.g. a number, a non-string element, or a non-array string that
+// doesn't decode as a JSON array).
+//
+// Accepts:
+//   - native []any with string elements (the standard JSON-decoded shape)
+//   - native []string (defensive, for callers that pre-decoded)
+//   - a JSON-encoded array string (e.g. `["a","b"]`)
+//
+// The JSON-string path exists because some MCP clients — observed with
+// mark3labs/mcp-go when batching tool calls into a single JSON-RPC message —
+// stringify array parameters at the transport boundary. Decoding here keeps
+// the server permissive without requiring clients to know about the quirk.
+//
+// keyForErr is used in error messages, e.g. "skills" produces
+// "skills must be an array of strings" or "skills[1] must be a string".
+func stringSliceArg(v any, keyForErr string) ([]string, string) {
 	if v == nil {
 		return nil, ""
 	}
-	raw, ok := v.([]any)
-	if !ok {
-		return nil, fmt.Sprintf("%s must be an array", path)
-	}
-	out := make([]string, 0, len(raw))
-	for i, item := range raw {
-		s, ok := item.(string)
-		if !ok {
-			return nil, fmt.Sprintf("%s[%d] must be a string", path, i)
+	switch raw := v.(type) {
+	case []any:
+		out := make([]string, 0, len(raw))
+		for i, item := range raw {
+			s, ok := item.(string)
+			if !ok {
+				return nil, fmt.Sprintf("%s[%d] must be a string", keyForErr, i)
+			}
+			out = append(out, s)
 		}
-		out = append(out, s)
+		return out, ""
+	case []string:
+		cp := make([]string, len(raw))
+		copy(cp, raw)
+		return cp, ""
+	case string:
+		var decoded []string
+		if err := json.Unmarshal([]byte(raw), &decoded); err == nil {
+			return decoded, ""
+		}
+		return nil, fmt.Sprintf("%s must be an array of strings", keyForErr)
+	default:
+		return nil, fmt.Sprintf("%s must be an array of strings", keyForErr)
 	}
-	return out, ""
+}
+
+// arrayOfAny coerces v into []any for nested-object tool arguments such as
+// the create_repo "bindings" payload. Accepts a native []any and a
+// JSON-encoded array string for the same MCP-transport reason as
+// stringSliceArg. Returns (nil, errMsg) for any other shape.
+func arrayOfAny(v any, keyForErr string) ([]any, string) {
+	switch raw := v.(type) {
+	case []any:
+		return raw, ""
+	case string:
+		var decoded []any
+		if err := json.Unmarshal([]byte(raw), &decoded); err == nil {
+			return decoded, ""
+		}
+	}
+	return nil, fmt.Sprintf("%s must be an array", keyForErr)
+}
+
+// bindingIDAndRepo reads the "id" and "repo" parameters shared by
+// get_binding, update_binding, and delete_binding. Returns a non-empty
+// errMsg on any validation failure.
+func bindingIDAndRepo(req mcpgo.CallToolRequest) (int, string, string) {
+	id, err := req.RequireInt("id")
+	if err != nil {
+		return 0, "", err.Error()
+	}
+	if id <= 0 {
+		return 0, "", "id must be a positive integer"
+	}
+	repo, ok := trimmedString(req, "repo")
+	if !ok {
+		return 0, "", "repo is required"
+	}
+	return id, repo, ""
 }
