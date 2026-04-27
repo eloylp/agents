@@ -22,6 +22,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/server"
+	serverconfig "github.com/eloylp/agents/internal/server/config"
 	serverfleet "github.com/eloylp/agents/internal/server/fleet"
 	serverobserve "github.com/eloylp/agents/internal/server/observe"
 	serverrepos "github.com/eloylp/agents/internal/server/repos"
@@ -44,8 +45,9 @@ type Server struct {
 	cronReloader  server.CronReloader // optional; called after repo/agent writes to reload cron
 	memReader     server.MemoryReader // optional; when set, /api/memory reads from this (SQLite mode)
 	mcp           http.Handler        // optional; when set, /mcp serves this MCP handler
-	repos         *serverrepos.Handler // constructed in WithStore; nil until then
-	fleet         *serverfleet.Handler // constructed in WithStore; nil until then
+	repos         *serverrepos.Handler  // constructed in WithStore; nil until then
+	fleet         *serverfleet.Handler  // constructed in NewServer (cfg-only mode); db wired by WithStore
+	config        *serverconfig.Handler // constructed in NewServer (cfg-only mode); db wired by WithStore
 	// storeMu serializes the "DB write → snapshot read → in-memory Reload"
 	// sequence so that concurrent write requests cannot interleave their
 	// snapshots and leave the scheduler in a stale or inconsistent state.
@@ -99,6 +101,9 @@ func (s *Server) WithStore(db *sql.DB, r server.CronReloader) {
 	if s.fleet != nil {
 		s.fleet.SetDB(db)
 	}
+	if s.config != nil {
+		s.config.SetDB(db)
+	}
 }
 
 // Repos returns the repos handler so the daemon's MCP wiring can satisfy the
@@ -111,6 +116,11 @@ func (s *Server) Repos() *serverrepos.Handler { return s.repos }
 // mcp.BackendWriter interfaces with the same instance the HTTP router uses.
 // Nil when WithStore has not been called.
 func (s *Server) Fleet() *serverfleet.Handler { return s.fleet }
+
+// Cfg returns the config handler so the daemon's MCP wiring can satisfy the
+// mcp.ConfigBytes / mcp.ConfigImporter interfaces with the same instance the
+// HTTP router uses.
+func (s *Server) Cfg() *serverconfig.Handler { return s.config }
 
 // Do runs fn under the server's CRUD write lock and, on success, triggers a
 // scheduler reload + in-memory config swap. Implements server.WriteCoordinator
@@ -161,6 +171,10 @@ func NewServer(cfg *config.Config, delivery *DeliveryStore, channels server.Even
 	// CRUD routes are skipped at registration time.
 	s.fleet = serverfleet.New(s, s, provider, nil, s.logger)
 	s.fleet.RefreshOrphansFromCfg(cfg)
+	// Config handler also boots in cfg-only mode so /config serves the
+	// effective YAML-loaded snapshot before WithStore wires /export +
+	// /import.
+	s.config = serverconfig.New(s, s, s.logger)
 	if cfg.Daemon.Proxy.Enabled {
 		up := cfg.Daemon.Proxy.Upstream
 		s.proxy = anthropicproxy.NewHandler(anthropicproxy.UpstreamConfig{
@@ -235,9 +249,7 @@ func (s *Server) buildHandler() http.Handler {
 		obh.RegisterRoutes(router, withTimeout)
 	}
 
-	router.Handle("/config", withTimeout(http.HandlerFunc(s.handleAPIConfig))).Methods(http.MethodGet)
-	router.Handle("/export", withTimeout(http.HandlerFunc(s.handleStoreExport))).Methods(http.MethodGet)
-	router.Handle("/import", withTimeout(http.HandlerFunc(s.handleStoreImport))).Methods(http.MethodPost)
+	s.config.RegisterRoutes(router, withTimeout)
 
 	// Static UI: served from the embedded dist/ tree when a UI FS is provided.
 	// Unauthenticated — same reasoning as the /api/* routes above.
