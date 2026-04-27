@@ -28,6 +28,7 @@ import (
 	"github.com/eloylp/agents/internal/server"
 	serverfleet "github.com/eloylp/agents/internal/server/fleet"
 	serverobserve "github.com/eloylp/agents/internal/server/observe"
+	serverrepos "github.com/eloylp/agents/internal/server/repos"
 	"github.com/eloylp/agents/internal/setup"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/ui"
@@ -171,6 +172,10 @@ func run() error {
 		fleetHandler.RefreshOrphansFromCfg,
 	)
 
+	// Same pattern for repos: construct externally, wire via WithRepos.
+	reposHandler := serverrepos.New(db, srv, srv, logger)
+	srv.WithRepos(reposHandler)
+
 	// Wire the memory backend into the server for the /memory endpoint and
 	// attach an SSE notifier so the UI stream stays live.
 	mem := memBackend.(*sqliteMemory)
@@ -203,8 +208,8 @@ func run() error {
 		AgentWrite:    fleetHandler,
 		SkillWrite:    fleetHandler,
 		BackendWrite:  fleetHandler,
-		RepoWrite:     srv.Repos(),
-		BindingWrite:  srv.Repos(),
+		RepoWrite:     reposHandler,
+		BindingWrite:  reposHandler,
 		Logger:        logger,
 	}))
 

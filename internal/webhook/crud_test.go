@@ -18,14 +18,14 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/server"
+	serverrepos "github.com/eloylp/agents/internal/server/repos"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
 // openCRUDTestServer creates a test server wired with an in-memory SQLite
 // store. Mirrors the wiring cmd/agents performs: NewServer + WithStore +
-// fleet handler attached via WithFleet (with SetDB invoked after the
-// store is open).
+// the fleet/repos handlers attached externally via WithFleet / WithRepos.
 func openCRUDTestServer(t *testing.T) *Server {
 	t.Helper()
 	dir := t.TempDir()
@@ -42,6 +42,7 @@ func openCRUDTestServer(t *testing.T) *Server {
 	s.WithStore(db, nil) // nil reloader — cron hot-reload not exercised here
 	fleetHandler := wireFleetForTest(s, cfg, nil, logger)
 	fleetHandler.SetDB(db)
+	s.WithRepos(serverrepos.New(db, s, s, logger))
 	return s
 }
 
@@ -878,6 +879,7 @@ func openCRUDTestServerWithReloader(t *testing.T, reloader server.CronReloader) 
 	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, logger)
 	s.WithStore(db, reloader)
 	fleetHandler := wireFleetForTest(s, cfg, nil, logger)
+	s.WithRepos(serverrepos.New(db, s, s, logger))
 	fleetHandler.SetDB(db)
 	return s
 }
@@ -1033,6 +1035,7 @@ func TestStoreCRUDPostBodySizeLimit(t *testing.T) {
 	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, logger)
 	s.WithStore(db, nil)
 	fleetHandler := wireFleetForTest(s, cfg, nil, logger)
+	s.WithRepos(serverrepos.New(db, s, s, logger))
 	fleetHandler.SetDB(db)
 
 	tests := []struct {
@@ -1095,6 +1098,7 @@ func TestStoreCRUDPostBodyTrailingGarbageRejected(t *testing.T) {
 	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, logger)
 	s.WithStore(db, nil)
 	fleetHandler := wireFleetForTest(s, cfg, nil, logger)
+	s.WithRepos(serverrepos.New(db, s, s, logger))
 	fleetHandler.SetDB(db)
 
 	endpoints := []string{

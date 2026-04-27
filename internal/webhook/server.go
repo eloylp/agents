@@ -19,7 +19,6 @@ import (
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/server"
 	serverconfig "github.com/eloylp/agents/internal/server/config"
-	serverrepos "github.com/eloylp/agents/internal/server/repos"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -52,7 +51,7 @@ type Server struct {
 	agentsDispatcher http.HandlerFunc                                 // GET vs POST /agents — supplied by WithFleet
 	orphansSource    server.OrphansSource                             // /status orphan summary — supplied by WithFleet
 	onConfigReload   func(*config.Config)                             // reloadCron post-hook — supplied by WithFleet
-	repos            *serverrepos.Handler                             // constructed in WithStore; nil until then
+	repos            server.HandlerRegister                           // wired via WithRepos by the composing caller
 	config           *serverconfig.Handler                            // constructed in NewServer (cfg-only mode); db wired by WithStore
 	// storeMu serializes the "DB write → snapshot read → in-memory Reload"
 	// sequence so that concurrent write requests cannot interleave their
@@ -100,14 +99,13 @@ func (s *Server) WithRuntimeState(rsp server.RuntimeStateProvider) {
 }
 
 // WithStore attaches a SQLite database and an optional CronReloader. The
-// database backs reloadCron and is forwarded to the still-locally-owned
-// repos and config handlers. The fleet handler is wired externally by
-// cmd/agents (which calls SetDB on it directly before WithFleet), so this
-// method no longer touches it.
+// database backs reloadCron and gets forwarded to the still-locally-owned
+// config handler. The fleet and repos handlers are wired externally by
+// cmd/agents (which calls SetDB / supplies the concrete handler directly),
+// so this method no longer touches them.
 func (s *Server) WithStore(db *sql.DB, r server.CronReloader) {
 	s.db = db
 	s.cronReloader = r
-	s.repos = serverrepos.New(db, s, s, s.logger)
 	if s.config != nil {
 		s.config.SetDB(db)
 	}
@@ -128,10 +126,12 @@ func (s *Server) WithFleet(h server.HandlerRegister, dispatcher http.HandlerFunc
 	s.onConfigReload = onReload
 }
 
-// Repos returns the repos handler so the daemon's MCP wiring can satisfy the
-// mcp.RepoWriter and mcp.BindingWriter interfaces with the same instance the
-// HTTP router uses. Nil when WithStore has not been called.
-func (s *Server) Repos() *serverrepos.Handler { return s.repos }
+// WithRepos registers the repos handler. cmd/agents constructs the
+// concrete internal/server/repos.Handler externally so this package stays
+// free of any internal/server/repos import.
+func (s *Server) WithRepos(h server.HandlerRegister) {
+	s.repos = h
+}
 
 // Cfg returns the config handler so the daemon's MCP wiring can satisfy the
 // mcp.ConfigBytes / mcp.ConfigImporter interfaces with the same instance the
