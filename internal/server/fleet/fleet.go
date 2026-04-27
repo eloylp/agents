@@ -60,11 +60,12 @@ type Handler struct {
 
 // New constructs a Handler. coord and cfg are required; db, statusProv, and
 // runtimeState are optional — the handler degrades gracefully when they are
-// absent. db is wired later (via SetDB) when the daemon transitions from the
-// initial cfg-only mode (used by tests and the YAML-loader bootstrap) into
-// db-backed CRUD mode.
-func New(coord server.WriteCoordinator, cfg ConfigGetter, statusProv server.StatusProvider, runtimeState server.RuntimeStateProvider, logger zerolog.Logger) *Handler {
+// absent. Pass a nil db for cfg-only mode (orphan detection and the fleet
+// snapshot view work without a database; CRUD routes self-skip at
+// RegisterRoutes time).
+func New(db *sql.DB, coord server.WriteCoordinator, cfg ConfigGetter, statusProv server.StatusProvider, runtimeState server.RuntimeStateProvider, logger zerolog.Logger) *Handler {
 	return &Handler{
+		db:           db,
 		coord:        coord,
 		cfg:          cfg,
 		statusProv:   statusProv,
@@ -72,11 +73,6 @@ func New(coord server.WriteCoordinator, cfg ConfigGetter, statusProv server.Stat
 		logger:       logger.With().Str("component", "server_fleet").Logger(),
 	}
 }
-
-// SetDB attaches a SQLite database after construction so CRUD handlers can
-// serve writes. Until SetDB is called the CRUD routes are not registered;
-// orphan detection and the fleet snapshot view work from cfg alone.
-func (h *Handler) SetDB(db *sql.DB) { h.db = db }
 
 // SetRuntimeState attaches a runtime-state provider after construction. The
 // fleet view degrades to "all agents idle" when none is provided.
@@ -88,8 +84,8 @@ func (h *Handler) SetRuntimeState(rsp server.RuntimeStateProvider) { h.runtimeSt
 //
 // The orphans status endpoint is mounted unconditionally — it works from the
 // in-memory config alone. The agent / skill / backend CRUD routes are
-// mounted only when a database is attached (via SetDB before route
-// registration); without one those routes do not exist on the router.
+// mounted only when a database was supplied to New; without one those routes
+// do not exist on the router.
 //
 // GET /agents is mounted by the composing server's dispatcher (which also
 // handles POST /agents) so both share one mux entry; the dispatcher delegates

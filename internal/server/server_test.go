@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -72,17 +73,17 @@ func newTestServerExposingFleet(cfg *config.Config, provider server.StatusProvid
 	logger := zerolog.Nop()
 	srv := server.NewServer(cfg, dc, provider, nil, logger)
 	srv.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, srv, logger))
-	fleetHandler := wireFleetForTest(srv, cfg, provider, logger)
-	srv.WithConfig(serverconfig.New(srv, srv, logger))
+	fleetHandler := wireFleetForTest(srv, nil, cfg, provider, logger)
+	srv.WithConfig(serverconfig.New(nil, srv, srv, logger))
 	return srv, dc, fleetHandler
 }
 
-// wireFleetForTest constructs a fleet handler in cfg-only mode and attaches
-// it to srv via WithFleet, mirroring the wiring cmd/agents performs. Used
-// by every test helper that exercises the full router. Returns the handler
-// so CRUD-mode helpers can SetDB on it after WithStore.
-func wireFleetForTest(srv *server.Server, cfg *config.Config, provider server.StatusProvider, logger zerolog.Logger) *serverfleet.Handler {
-	fleetHandler := serverfleet.New(srv, srv, provider, nil, logger)
+// wireFleetForTest constructs a fleet handler and attaches it to srv via
+// WithFleet, mirroring cmd/agents. Pass a nil db for cfg-only mode (the
+// orphan cache + snapshot view still work; CRUD routes self-skip);
+// CRUD-mode helpers pass the live db.
+func wireFleetForTest(srv *server.Server, db *sql.DB, cfg *config.Config, provider server.StatusProvider, logger zerolog.Logger) *serverfleet.Handler {
+	fleetHandler := serverfleet.New(db, srv, srv, provider, nil, logger)
 	fleetHandler.RefreshOrphansFromCfg(cfg)
 	srv.WithFleet(
 		fleetHandler,

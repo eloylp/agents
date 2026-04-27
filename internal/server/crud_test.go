@@ -44,12 +44,9 @@ func openCRUDTestServer(t *testing.T) *server.Server {
 	s := server.NewServer(cfg, dc, nil, nil, logger)
 	s.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, s, logger))
 	s.WithStore(db, nil) // nil reloader — cron hot-reload not exercised here
-	fleetHandler := wireFleetForTest(s, cfg, nil, logger)
-	fleetHandler.SetDB(db)
+	wireFleetForTest(s, db, cfg, nil, logger)
 	s.WithRepos(serverrepos.New(db, s, s, logger))
-	configHandler := serverconfig.New(s, s, logger)
-	configHandler.SetDB(db)
-	s.WithConfig(configHandler)
+	s.WithConfig(serverconfig.New(db, s, s, logger))
 	return s
 }
 
@@ -886,12 +883,9 @@ func openCRUDTestServerWithReloader(t *testing.T, reloader server.CronReloader) 
 	s := server.NewServer(cfg, dc, nil, nil, logger)
 	s.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, s, logger))
 	s.WithStore(db, reloader)
-	fleetHandler := wireFleetForTest(s, cfg, nil, logger)
+	wireFleetForTest(s, db, cfg, nil, logger)
 	s.WithRepos(serverrepos.New(db, s, s, logger))
-	configHandler := serverconfig.New(s, s, logger)
-	configHandler.SetDB(db)
-	s.WithConfig(configHandler)
-	fleetHandler.SetDB(db)
+	s.WithConfig(serverconfig.New(db, s, s, logger))
 	return s
 }
 
@@ -1046,12 +1040,10 @@ func TestStoreCRUDPostBodySizeLimit(t *testing.T) {
 	s := server.NewServer(cfg, dc, nil, nil, logger)
 	s.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, s, logger))
 	s.WithStore(db, nil)
-	fleetHandler := wireFleetForTest(s, cfg, nil, logger)
+	wireFleetForTest(s, db, cfg, nil, logger)
 	s.WithRepos(serverrepos.New(db, s, s, logger))
-	configHandler := serverconfig.New(s, s, logger)
-	configHandler.SetDB(db)
+	configHandler := serverconfig.New(db, s, s, logger)
 	s.WithConfig(configHandler)
-	fleetHandler.SetDB(db)
 
 	tests := []struct {
 		name string
@@ -1113,12 +1105,10 @@ func TestStoreCRUDPostBodyTrailingGarbageRejected(t *testing.T) {
 	s := server.NewServer(cfg, dc, nil, nil, logger)
 	s.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, s, logger))
 	s.WithStore(db, nil)
-	fleetHandler := wireFleetForTest(s, cfg, nil, logger)
+	wireFleetForTest(s, db, cfg, nil, logger)
 	s.WithRepos(serverrepos.New(db, s, s, logger))
-	configHandler := serverconfig.New(s, s, logger)
-	configHandler.SetDB(db)
+	configHandler := serverconfig.New(db, s, s, logger)
 	s.WithConfig(configHandler)
-	fleetHandler.SetDB(db)
 
 	endpoints := []string{
 		"/agents",

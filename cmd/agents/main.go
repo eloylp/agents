@@ -146,8 +146,7 @@ func run() error {
 
 	// Construct the fleet handler externally and wire it via WithFleet so
 	// the webhook package stays free of any internal/server/fleet import.
-	fleetHandler := serverfleet.New(srv, srv, schedulerStatusAdapter{scheduler}, obs, logger)
-	fleetHandler.SetDB(db)
+	fleetHandler := serverfleet.New(db, srv, srv, schedulerStatusAdapter{scheduler}, obs, logger)
 	fleetHandler.RefreshOrphansFromCfg(cfg)
 	srv.WithFleet(
 		fleetHandler,
@@ -168,8 +167,7 @@ func run() error {
 
 	// Same pattern for config: construct externally with db, wire via
 	// WithConfig.
-	configHandler := serverconfig.New(srv, srv, logger)
-	configHandler.SetDB(db)
+	configHandler := serverconfig.New(db, srv, srv, logger)
 	srv.WithConfig(configHandler)
 
 	// Wire the memory backend into the server for the /memory endpoint and

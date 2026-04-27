@@ -50,17 +50,14 @@ type Handler struct {
 // db is nil the /export and /import routes are skipped at registration time —
 // /config still works in cfg-only mode (e.g. tests, --run-agent without
 // --db).
-func New(coord server.WriteCoordinator, cfg ConfigGetter, logger zerolog.Logger) *Handler {
+func New(db *sql.DB, coord server.WriteCoordinator, cfg ConfigGetter, logger zerolog.Logger) *Handler {
 	return &Handler{
+		db:     db,
 		coord:  coord,
 		cfg:    cfg,
 		logger: logger.With().Str("component", "server_config").Logger(),
 	}
 }
-
-// SetDB attaches a SQLite database after construction so /export and /import
-// can serve. Until SetDB is called those routes are not registered.
-func (h *Handler) SetDB(db *sql.DB) { h.db = db }
 
 // RegisterRoutes mounts the config endpoints on r. /config is mounted
 // unconditionally (it serves the in-memory snapshot); /export and /import

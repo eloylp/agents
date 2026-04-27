@@ -98,8 +98,8 @@ func (s *Server) WithRuntimeState(rsp RuntimeStateProvider) {
 // WithStore attaches a SQLite database and an optional CronReloader. The
 // database backs reloadCron and the in-memory config swap on every write.
 // All three domain handlers (fleet, repos, config) are wired externally by
-// cmd/agents — which calls SetDB / supplies the concrete handler directly —
-// so this method no longer touches any of them.
+// cmd/agents — which constructs each handler with its own db reference —
+// so this method does not touch them.
 func (s *Server) WithStore(db *sql.DB, r CronReloader) {
 	s.db = db
 	s.cronReloader = r
