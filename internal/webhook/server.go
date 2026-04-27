@@ -18,7 +18,6 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/server"
-	serverconfig "github.com/eloylp/agents/internal/server/config"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -52,7 +51,7 @@ type Server struct {
 	orphansSource    server.OrphansSource                             // /status orphan summary — supplied by WithFleet
 	onConfigReload   func(*config.Config)                             // reloadCron post-hook — supplied by WithFleet
 	repos            server.HandlerRegister                           // wired via WithRepos by the composing caller
-	config           *serverconfig.Handler                            // constructed in NewServer (cfg-only mode); db wired by WithStore
+	config           server.HandlerRegister                           // wired via WithConfig by the composing caller
 	// storeMu serializes the "DB write → snapshot read → in-memory Reload"
 	// sequence so that concurrent write requests cannot interleave their
 	// snapshots and leave the scheduler in a stale or inconsistent state.
@@ -99,16 +98,13 @@ func (s *Server) WithRuntimeState(rsp server.RuntimeStateProvider) {
 }
 
 // WithStore attaches a SQLite database and an optional CronReloader. The
-// database backs reloadCron and gets forwarded to the still-locally-owned
-// config handler. The fleet and repos handlers are wired externally by
-// cmd/agents (which calls SetDB / supplies the concrete handler directly),
-// so this method no longer touches them.
+// database backs reloadCron and the in-memory config swap on every write.
+// All three domain handlers (fleet, repos, config) are wired externally by
+// cmd/agents — which calls SetDB / supplies the concrete handler directly —
+// so this method no longer touches any of them.
 func (s *Server) WithStore(db *sql.DB, r server.CronReloader) {
 	s.db = db
 	s.cronReloader = r
-	if s.config != nil {
-		s.config.SetDB(db)
-	}
 }
 
 // WithFleet registers the fleet handler and the three hooks the composing
@@ -133,10 +129,12 @@ func (s *Server) WithRepos(h server.HandlerRegister) {
 	s.repos = h
 }
 
-// Cfg returns the config handler so the daemon's MCP wiring can satisfy the
-// mcp.ConfigBytes / mcp.ConfigImporter interfaces with the same instance the
-// HTTP router uses.
-func (s *Server) Cfg() *serverconfig.Handler { return s.config }
+// WithConfig registers the config handler. cmd/agents constructs the
+// concrete internal/server/config.Handler externally so this package stays
+// free of any internal/server/config import.
+func (s *Server) WithConfig(h server.HandlerRegister) {
+	s.config = h
+}
 
 // Do runs fn under the server's CRUD write lock and, on success, triggers a
 // scheduler reload + in-memory config swap. Implements server.WriteCoordinator
@@ -181,11 +179,6 @@ func NewServer(cfg *config.Config, delivery *DeliveryStore, channels server.Even
 		dispatchStats: dispatchStats,
 		startTime:     time.Now(),
 	}
-	// Config handler boots in cfg-only mode so /config serves the
-	// effective YAML-loaded snapshot before WithStore wires /export +
-	// /import. Fleet is wired externally (see WithFleet) by cmd/agents
-	// so this package no longer imports internal/server/fleet.
-	s.config = serverconfig.New(s, s, s.logger)
 	// GitHub webhook receiver — pure event-parsing + HMAC + delivery dedupe.
 	// The server delegates handleGitHubWebhook to it so existing tests that
 	// call s.handleGitHubWebhook keep working unchanged; future PRs will
@@ -265,7 +258,9 @@ func (s *Server) buildHandler() http.Handler {
 		s.observeRegister(router, withTimeout)
 	}
 
-	s.config.RegisterRoutes(router, withTimeout)
+	if s.config != nil {
+		s.config.RegisterRoutes(router, withTimeout)
+	}
 
 	// Static UI: served from the embedded dist/ tree when a UI FS is provided.
 	// Unauthenticated — same reasoning as the /api/* routes above.

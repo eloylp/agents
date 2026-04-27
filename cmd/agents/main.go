@@ -26,6 +26,7 @@ import (
 	mcpserver "github.com/eloylp/agents/internal/mcp"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/server"
+	serverconfig "github.com/eloylp/agents/internal/server/config"
 	serverfleet "github.com/eloylp/agents/internal/server/fleet"
 	serverobserve "github.com/eloylp/agents/internal/server/observe"
 	serverrepos "github.com/eloylp/agents/internal/server/repos"
@@ -176,6 +177,12 @@ func run() error {
 	reposHandler := serverrepos.New(db, srv, srv, logger)
 	srv.WithRepos(reposHandler)
 
+	// Same pattern for config: construct externally with db, wire via
+	// WithConfig.
+	configHandler := serverconfig.New(srv, srv, logger)
+	configHandler.SetDB(db)
+	srv.WithConfig(configHandler)
+
 	// Wire the memory backend into the server for the /memory endpoint and
 	// attach an SSE notifier so the UI stream stays live.
 	mem := memBackend.(*sqliteMemory)
@@ -203,8 +210,8 @@ func run() error {
 		Observe:       obs,
 		DispatchStats: engine,
 		Memory:        &sqliteMcpReader{db: db},
-		ConfigBytes:   srv.Cfg(),
-		ConfigImport:  srv.Cfg(),
+		ConfigBytes:   configHandler,
+		ConfigImport:  configHandler,
 		AgentWrite:    fleetHandler,
 		SkillWrite:    fleetHandler,
 		BackendWrite:  fleetHandler,
