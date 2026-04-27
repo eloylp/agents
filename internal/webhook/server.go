@@ -20,7 +20,6 @@ import (
 	"github.com/eloylp/agents/internal/server"
 	serverconfig "github.com/eloylp/agents/internal/server/config"
 	serverfleet "github.com/eloylp/agents/internal/server/fleet"
-	serverobserve "github.com/eloylp/agents/internal/server/observe"
 	serverrepos "github.com/eloylp/agents/internal/server/repos"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -42,6 +41,10 @@ type Server struct {
 	cronReloader  server.CronReloader // optional; called after repo/agent writes to reload cron
 	memReader     server.MemoryReader // optional; when set, /api/memory reads from this (SQLite mode)
 	mcp           http.Handler        // optional; when set, /mcp serves this MCP handler
+	// observeRegister mounts the observability routes when set via
+	// WithObserveRegister. cmd/agents constructs the observe handler
+	// externally so this server doesn't import internal/server/observe.
+	observeRegister func(*mux.Router, func(http.Handler) http.Handler)
 	repos         *serverrepos.Handler  // constructed in WithStore; nil until then
 	fleet         *serverfleet.Handler  // constructed in NewServer (cfg-only mode); db wired by WithStore
 	config        *serverconfig.Handler // constructed in NewServer (cfg-only mode); db wired by WithStore
@@ -64,13 +67,22 @@ func (s *Server) WithUI(uiFS fs.FS) {
 	s.uiFS = uiFS
 }
 
-// WithObserve attaches the observability store. When set, the server registers
-// the full suite of /api/events, /api/traces, /api/graph, and /api/memory
-// endpoints. The handlers themselves live in internal/server/observe; this
-// server constructs the package's Handler at buildHandler time and delegates
-// route registration to it.
+// WithObserve stores the observability store reference. Kept for backward
+// compatibility — the observability routes themselves are now mounted via
+// WithObserveRegister, which cmd/agents calls with a closure that
+// constructs the internal/server/observe.Handler. This setter remains a
+// useful place to record the store for surfaces beyond HTTP that need
+// access to it.
 func (s *Server) WithObserve(store *observe.Store) {
 	s.observeStore = store
+}
+
+// WithObserveRegister installs a closure that mounts the observability
+// surface on the router. The composing caller (cmd/agents) constructs the
+// internal/server/observe.Handler externally so this package stays free of
+// any dependency on it.
+func (s *Server) WithObserveRegister(register func(*mux.Router, func(http.Handler) http.Handler)) {
+	s.observeRegister = register
 }
 
 // WithRuntimeState attaches an optional runtime-state provider used by
@@ -244,11 +256,11 @@ func (s *Server) buildHandler() http.Handler {
 		s.repos.RegisterRoutes(router, withTimeout)
 	}
 
-	// Observability surface lives in its own package; routes are registered
-	// only when the observability store has been attached.
-	if s.observeStore != nil {
-		obh := serverobserve.New(s.observeStore, s, s.provider, s.runtimeState, s.dispatchStats, s.memReader)
-		obh.RegisterRoutes(router, withTimeout)
+	// Observability surface lives in its own package; the composing caller
+	// (cmd/agents, or a test helper) constructs the handler and supplies a
+	// closure via WithObserveRegister.
+	if s.observeRegister != nil {
+		s.observeRegister(router, withTimeout)
 	}
 
 	s.config.RegisterRoutes(router, withTimeout)
