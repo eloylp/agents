@@ -104,10 +104,7 @@ func run() error {
 			runBuf *= d.MaxFanout
 		}
 		runBuf = max(runBuf, cfg.Daemon.Processor.EventQueueBuffer)
-		dataChannels := workflow.NewDataChannels(runBuf)
-		engine := workflow.NewEngine(cfg, runners, dataChannels, logger)
-		engine.WithMemory(memBackend)
-		scheduler.WithDispatcher(engine.Dispatcher())
+		dataChannels, engine, _ := buildEngine(cfg, runners, scheduler, memBackend, db, runBuf, logger)
 		logger.Info().Str("agent", *runAgent).Str("repo", *runRepo).Msg("running autonomous agent on demand")
 		engine.StartDispatchDedup(ctx)
 		if err := scheduler.TriggerAgent(ctx, *runAgent, *runRepo); err != nil {
@@ -126,10 +123,7 @@ func run() error {
 
 	logger.Info().Msg("starting agents daemon")
 
-	dataChannels := workflow.NewDataChannels(cfg.Daemon.Processor.EventQueueBuffer)
-	engine := workflow.NewEngine(cfg, runners, dataChannels, logger)
-	engine.WithMemory(memBackend)
-	scheduler.WithDispatcher(engine.Dispatcher())
+	dataChannels, engine, obs := buildEngine(cfg, runners, scheduler, memBackend, db, cfg.Daemon.Processor.EventQueueBuffer, logger)
 	// Wire the engine as the hot-reload sink so that CRUD-triggered Reload
 	// calls propagate new config and runner maps to the event-driven path
 	// without a daemon restart.
@@ -137,16 +131,10 @@ func run() error {
 	shutdown := time.Duration(cfg.Daemon.HTTP.ShutdownTimeoutSeconds) * time.Second
 	workers := cfg.Daemon.Processor.MaxConcurrentAgents
 	processor := workflow.NewProcessor(dataChannels, engine, workers, shutdown, logger)
-
-	// Wire the observability store: records events, spans, dispatch graph, and
-	// active-run state for the fleet dashboard.
-	obs := observe.NewStore(db)
+	// Daemon-only event recorder — populates the dashboard's event firehose.
+	// --run-agent mode bypasses the processor (drainDispatches calls
+	// engine.HandleEvent directly), so no event-level records there.
 	processor.WithEventRecorder(obs)
-	engine.WithTraceRecorder(obs)
-	engine.WithGraphRecorder(obs)
-	engine.WithRunTracker(obs.ActiveRuns)
-	engine.WithStepRecorder(obs)
-	scheduler.WithTraceRecorder(obs)
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
 	srv := server.NewServer(cfg, dataChannels, schedulerStatusAdapter{scheduler}, engine, logger)
@@ -232,6 +220,32 @@ func run() error {
 	}
 	logger.Info().Msg("agents daemon stopped")
 	return nil
+}
+
+// buildEngine constructs the runtime engine and the surrounding wiring that
+// every mode of the daemon needs: event channels, the engine itself with
+// memory and dispatcher hooks, and the observability store with all of its
+// engine + scheduler recorders attached.
+//
+// Both daemon and --run-agent mode call this so an on-demand run leaves the
+// same agent traces, run-state, and step-recorder rows that an autonomous
+// run does — they show up in the dashboard alongside cron-fired runs. The
+// processor-level event recorder is intentionally NOT wired here; the
+// daemon attaches it on top because --run-agent bypasses the processor.
+func buildEngine(cfg *config.Config, runners map[string]ai.Runner, scheduler *autonomous.Scheduler, memBackend autonomous.MemoryBackend, db *sql.DB, bufSize int, logger zerolog.Logger) (*workflow.DataChannels, *workflow.Engine, *observe.Store) {
+	dataChannels := workflow.NewDataChannels(bufSize)
+	engine := workflow.NewEngine(cfg, runners, dataChannels, logger)
+	engine.WithMemory(memBackend)
+	scheduler.WithDispatcher(engine.Dispatcher())
+
+	obs := observe.NewStore(db)
+	engine.WithTraceRecorder(obs)
+	engine.WithGraphRecorder(obs)
+	engine.WithRunTracker(obs.ActiveRuns)
+	engine.WithStepRecorder(obs)
+	scheduler.WithTraceRecorder(obs)
+
+	return dataChannels, engine, obs
 }
 
 // drainDispatches processes all agent.dispatch events that were enqueued during
