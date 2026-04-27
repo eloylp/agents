@@ -9,7 +9,6 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
@@ -33,7 +32,7 @@ func toolListAgents(deps Deps) server.ToolHandlerFunc {
 }
 
 // toolGetAgent fetches a single agent by name. Matches case-insensitively
-// via config.NormalizeAgentName, so "Coder" and "coder" both resolve to the
+// via fleet.NormalizeAgentName, so "Coder" and "coder" both resolve to the
 // same entry.
 func toolGetAgent(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -45,7 +44,7 @@ func toolGetAgent(deps Deps) server.ToolHandlerFunc {
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get agent", err), nil
 		}
-		key := config.NormalizeAgentName(name)
+		key := fleet.NormalizeAgentName(name)
 		if idx := slices.IndexFunc(agents, func(a fleet.Agent) bool { return a.Name == key }); idx != -1 {
 			return jsonResult(agentJSON(agents[idx]))
 		}
@@ -73,7 +72,7 @@ func toolListSkills(deps Deps) server.ToolHandlerFunc {
 }
 
 // toolGetSkill fetches one skill by its map key. Map lookup is
-// case-insensitive via config.NormalizeSkillName so agents can reference
+// case-insensitive via fleet.NormalizeSkillName so agents can reference
 // skills without worrying about casing.
 func toolGetSkill(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -85,7 +84,7 @@ func toolGetSkill(deps Deps) server.ToolHandlerFunc {
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get skill", err), nil
 		}
-		key := config.NormalizeSkillName(name)
+		key := fleet.NormalizeSkillName(name)
 		s, found := skills[key]
 		if !found {
 			return mcpgo.NewToolResultErrorf("skill %q not found", name), nil
@@ -124,7 +123,7 @@ func toolGetBackend(deps Deps) server.ToolHandlerFunc {
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get backend", err), nil
 		}
-		key := config.NormalizeBackendName(name)
+		key := fleet.NormalizeBackendName(name)
 		b, found := backends[key]
 		if !found {
 			return mcpgo.NewToolResultErrorf("backend %q not found", name), nil
@@ -159,7 +158,7 @@ func toolGetRepo(deps Deps) server.ToolHandlerFunc {
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get repo", err), nil
 		}
-		key := config.NormalizeRepoName(name)
+		key := fleet.NormalizeRepoName(name)
 		if idx := slices.IndexFunc(repos, func(r fleet.Repo) bool { return r.Name == key }); idx != -1 {
 			return jsonResult(repoJSON(repos[idx]))
 		}

@@ -1608,13 +1608,13 @@ func TestSchedulerReloadReleasesMuBeforeSinkCall(t *testing.T) {
 	}
 }
 
-// TestSchedulerCronJobUsesPostReloadAgentDef verifies that a cron closure
+// TestSchedulerCronJobUsesPostReloadAgent verifies that a cron closure
 // resolves the agent definition from the config snapshot at execution time
 // rather than capturing it by value at registration time. A cron tick that
 // fires after a Reload (i.e., the closure was enqueued before the old entry
 // was removed but runs after bindMu is released) must use the post-reload
 // agent definition, not the stale pre-reload one.
-func TestSchedulerCronJobUsesPostReloadAgentDef(t *testing.T) {
+func TestSchedulerCronJobUsesPostReloadAgent(t *testing.T) {
 	t.Parallel()
 
 	runner := &promptCapturingRunner{}

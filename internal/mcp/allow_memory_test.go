@@ -49,7 +49,7 @@ func TestToolCreateAgentForwardsAllowMemoryFalse(t *testing.T) {
 }
 
 // TestToolCreateAgentLeavesAllowMemoryNilWhenAbsent verifies that omitting
-// allow_memory leaves the AgentDef pointer nil, so AgentDef.IsAllowMemory()
+// allow_memory leaves the Agent pointer nil, so Agent.IsAllowMemory()
 // returns the documented default of true downstream.
 func TestToolCreateAgentLeavesAllowMemoryNilWhenAbsent(t *testing.T) {
 	t.Parallel()
@@ -82,7 +82,7 @@ func TestToolCreateAgentLeavesAllowMemoryNilWhenAbsent(t *testing.T) {
 
 // TestToolUpdateAgentForwardsAllowMemoryPatch verifies that update_agent
 // surfaces allow_memory in the partial-update payload as a *bool — exactly
-// what the webhook adapter expects to merge over an existing AgentDef.
+// what the webhook adapter expects to merge over an existing Agent.
 func TestToolUpdateAgentForwardsAllowMemoryPatch(t *testing.T) {
 	t.Parallel()
 	canonical := fleet.Agent{Name: "coder", Backend: "claude", Prompt: "p"}

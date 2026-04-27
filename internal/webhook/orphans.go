@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -114,7 +115,7 @@ func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
 			continue
 		}
 		backend, ok := cfg.Daemon.AIBackends[backendName]
-		if !ok || !config.IsPinnedModelUnavailable(agent.Model, backend) {
+		if !ok || !fleet.IsPinnedModelUnavailable(agent.Model, backend) {
 			continue
 		}
 		orphan = append(orphan, OrphanedAgent{

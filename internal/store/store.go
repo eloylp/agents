@@ -662,7 +662,7 @@ func bindingEnabledInt(enabled *bool) int {
 
 // allowMemoryInt converts an agent's nullable allow_memory flag to 0/1 for
 // SQLite storage. Nil means the default (enabled), matching
-// AgentDef.IsAllowMemory(); only an explicit non-nil false maps to 0.
+// Agent.IsAllowMemory(); only an explicit non-nil false maps to 0.
 func allowMemoryInt(allow *bool) int {
 	if allow != nil && !*allow {
 		return 0

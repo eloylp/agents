@@ -66,9 +66,6 @@ const (
 	defaultEventQueueBufferSize = 256
 	defaultMaxConcurrentAgents  = 4
 
-	defaultAITimeoutSeconds = 600
-	defaultMaxPromptChars   = 12000
-
 	defaultProxyPath           = "/v1/messages"
 	defaultProxyTimeoutSeconds = 120
 )
@@ -444,12 +441,7 @@ func (c *Config) applyDefaults() {
 
 	// daemon.ai_backends defaults
 	for name, backend := range c.Daemon.AIBackends {
-		if backend.TimeoutSeconds == 0 {
-			backend.TimeoutSeconds = defaultAITimeoutSeconds
-		}
-		if backend.MaxPromptChars == 0 {
-			backend.MaxPromptChars = defaultMaxPromptChars
-		}
+		fleet.ApplyBackendDefaults(&backend)
 		c.Daemon.AIBackends[name] = backend
 	}
 
@@ -463,14 +455,8 @@ func (c *Config) normalize() {
 	if len(c.Daemon.AIBackends) > 0 {
 		lower := make(map[string]fleet.Backend, len(c.Daemon.AIBackends))
 		for name, backend := range c.Daemon.AIBackends {
-			key := strings.ToLower(strings.TrimSpace(name))
-			backend.Command = strings.TrimSpace(backend.Command)
-			backend.Version = strings.TrimSpace(backend.Version)
-			backend.HealthDetail = strings.TrimSpace(backend.HealthDetail)
-			backend.LocalModelURL = strings.TrimSpace(backend.LocalModelURL)
-			for i := range backend.Models {
-				backend.Models[i] = strings.TrimSpace(backend.Models[i])
-			}
+			key := fleet.NormalizeBackendName(name)
+			fleet.NormalizeBackend(&backend)
 			lower[key] = backend
 		}
 		c.Daemon.AIBackends = lower
@@ -480,9 +466,8 @@ func (c *Config) normalize() {
 	if len(c.Skills) > 0 {
 		lower := make(map[string]fleet.Skill, len(c.Skills))
 		for name, skill := range c.Skills {
-			key := strings.ToLower(strings.TrimSpace(name))
-			skill.Prompt = strings.TrimSpace(skill.Prompt)
-			skill.PromptFile = strings.TrimSpace(skill.PromptFile)
+			key := fleet.NormalizeSkillName(name)
+			fleet.NormalizeSkill(&skill)
 			lower[key] = skill
 		}
 		c.Skills = lower
@@ -490,30 +475,12 @@ func (c *Config) normalize() {
 
 	// Agents.
 	for i := range c.Agents {
-		c.Agents[i].Name = strings.ToLower(strings.TrimSpace(c.Agents[i].Name))
-		c.Agents[i].Backend = strings.ToLower(strings.TrimSpace(c.Agents[i].Backend))
-		c.Agents[i].Model = strings.TrimSpace(c.Agents[i].Model)
-		c.Agents[i].Prompt = strings.TrimSpace(c.Agents[i].Prompt)
-		c.Agents[i].PromptFile = strings.TrimSpace(c.Agents[i].PromptFile)
-		c.Agents[i].Description = strings.TrimSpace(c.Agents[i].Description)
-		for j := range c.Agents[i].Skills {
-			c.Agents[i].Skills[j] = strings.ToLower(strings.TrimSpace(c.Agents[i].Skills[j]))
-		}
-		for j := range c.Agents[i].CanDispatch {
-			c.Agents[i].CanDispatch[j] = strings.ToLower(strings.TrimSpace(c.Agents[i].CanDispatch[j]))
-		}
+		fleet.NormalizeAgent(&c.Agents[i])
 	}
 
 	// Repos.
 	for i := range c.Repos {
-		c.Repos[i].Name = strings.TrimSpace(c.Repos[i].Name)
-		for j := range c.Repos[i].Use {
-			c.Repos[i].Use[j].Agent = strings.ToLower(strings.TrimSpace(c.Repos[i].Use[j].Agent))
-			c.Repos[i].Use[j].Cron = strings.TrimSpace(c.Repos[i].Use[j].Cron)
-			for k := range c.Repos[i].Use[j].Events {
-				c.Repos[i].Use[j].Events[k] = strings.ToLower(strings.TrimSpace(c.Repos[i].Use[j].Events[k]))
-			}
-		}
+		fleet.NormalizeRepo(&c.Repos[i])
 	}
 
 	// Log.
@@ -808,124 +775,12 @@ func isSupportedBackend(name string, backend fleet.Backend) bool {
 	return strings.TrimSpace(backend.LocalModelURL) != ""
 }
 
-// IsPinnedModelUnavailable reports whether a non-empty model is explicitly
-// known to be unavailable for the given backend snapshot.
-//
-// If backend.Models is empty, availability is treated as unknown (returns
-// false) so callers can avoid blocking on missing catalog metadata.
-func IsPinnedModelUnavailable(model string, backend fleet.Backend) bool {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return false
-	}
-	if len(backend.Models) == 0 {
-		return false
-	}
-	return !slices.Contains(backend.Models, model)
-}
-
 func validateAgentModel(_ string, _ string, _ fleet.Backend) error {
 	// Model/backend mismatches are intentionally allowed at config validation
 	// time so discovery can persist backend model changes even if agents become
 	// temporarily orphaned. Runtime paths enforce this strictly before invoking
 	// a backend, and UI surfaces orphan remediation flows.
 	return nil
-}
-
-// ApplyBackendDefaults fills in zero-value fields of b with the same defaults
-// that Load / FinishLoad apply at startup. Callers that persist a backend via
-// the CRUD API should call this before writing so that the stored values match
-// what the daemon would derive from those zeros on the next restart.
-func ApplyBackendDefaults(b *fleet.Backend) {
-	setDefaultInt(&b.TimeoutSeconds, defaultAITimeoutSeconds)
-	setDefaultInt(&b.MaxPromptChars, defaultMaxPromptChars)
-}
-
-// NormalizeBackendConfig applies the same per-entry field normalization that
-// normalize() performs at startup: it trims Command and scrubs env keys that
-// are empty after trimming. CRUD callers must invoke this before persisting a
-// backend so that the stored values match the canonical form the daemon derives
-// at boot, preventing live behavior from diverging until a restart.
-func NormalizeBackendConfig(b *fleet.Backend) {
-	b.Command = strings.TrimSpace(b.Command)
-	b.Version = strings.TrimSpace(b.Version)
-	b.HealthDetail = strings.TrimSpace(b.HealthDetail)
-	b.LocalModelURL = strings.TrimSpace(b.LocalModelURL)
-	for i := range b.Models {
-		b.Models[i] = strings.TrimSpace(b.Models[i])
-	}
-}
-
-// NormalizeSkillDef applies the same field normalization that normalize()
-// performs on skill values at startup: it trims Prompt and PromptFile.
-// CRUD callers must invoke this before persisting a skill so that the stored
-// values match the canonical form the daemon derives at boot.
-func NormalizeSkillDef(s *fleet.Skill) {
-	s.Prompt = strings.TrimSpace(s.Prompt)
-	s.PromptFile = strings.TrimSpace(s.PromptFile)
-}
-
-// NormalizeAgentDef applies the same name/field normalization that FinishLoad
-// performs at startup (lowercase + trim on names, backend, skills, can_dispatch).
-// CRUD callers must invoke this before writing an agent to SQLite so the stored
-// values are already in the canonical form that AgentByName and registerJobs
-// expect, preventing live behavior from diverging until the next restart.
-func NormalizeAgentDef(a *fleet.Agent) {
-	a.Name = strings.ToLower(strings.TrimSpace(a.Name))
-	a.Backend = strings.ToLower(strings.TrimSpace(a.Backend))
-	a.Model = strings.TrimSpace(a.Model)
-	a.Prompt = strings.TrimSpace(a.Prompt)
-	a.PromptFile = strings.TrimSpace(a.PromptFile)
-	a.Description = strings.TrimSpace(a.Description)
-	for i := range a.Skills {
-		a.Skills[i] = strings.ToLower(strings.TrimSpace(a.Skills[i]))
-	}
-	for i := range a.CanDispatch {
-		a.CanDispatch[i] = strings.ToLower(strings.TrimSpace(a.CanDispatch[i]))
-	}
-}
-
-// NormalizeAgentName returns the canonical form of an agent name (lowercase,
-// trimmed). CRUD callers should normalise path-parameter names before lookups
-// or deletes so that GET/DELETE /api/store/agents/{name} follows the same
-// case-insensitive semantics as AgentByName.
-func NormalizeAgentName(name string) string {
-	return strings.ToLower(strings.TrimSpace(name))
-}
-
-// NormalizeSkillName returns the canonical form of a skill map key (lowercase,
-// trimmed). CRUD callers should normalise the key before writing to SQLite.
-func NormalizeSkillName(name string) string {
-	return strings.ToLower(strings.TrimSpace(name))
-}
-
-// NormalizeBackendName returns the canonical form of a backend map key
-// (lowercase, trimmed). CRUD callers should normalise the key before writing.
-func NormalizeBackendName(name string) string {
-	return strings.ToLower(strings.TrimSpace(name))
-}
-
-// NormalizeRepoName returns the canonical form of a repo full name
-// (lowercase, trimmed). CRUD callers should normalise path-parameter names
-// before lookups or deletes so that GET/DELETE /api/store/repos/{owner}/{repo}
-// follows the same case-insensitive semantics as RepoByName.
-func NormalizeRepoName(name string) string {
-	return strings.ToLower(strings.TrimSpace(name))
-}
-
-// NormalizeRepoDef applies the same normalization that FinishLoad performs on
-// repo entries: lowercase+trim the repo name, and lowercase+trim each binding
-// agent name, cron, and event strings. CRUD callers must invoke this before
-// writing a repo.
-func NormalizeRepoDef(r *fleet.Repo) {
-	r.Name = NormalizeRepoName(r.Name)
-	for i := range r.Use {
-		r.Use[i].Agent = strings.ToLower(strings.TrimSpace(r.Use[i].Agent))
-		r.Use[i].Cron = strings.TrimSpace(r.Use[i].Cron)
-		for k := range r.Use[i].Events {
-			r.Use[i].Events[k] = strings.ToLower(strings.TrimSpace(r.Use[i].Events[k]))
-		}
-	}
 }
 
 func setDefault(dst *string, def string) {

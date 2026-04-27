@@ -2038,7 +2038,7 @@ func TestToolDeleteBackendPropagatesConflict(t *testing.T) {
 	}
 }
 
-// stubRepoWriter records the RepoDef arguments it received and returns
+// stubRepoWriter records the Repo arguments it received and returns
 // canned values. Tests pin both the raw inputs the writer observed and the
 // canonical repo the tool surfaces back to the caller.
 type stubRepoWriter struct {
