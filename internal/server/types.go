@@ -73,3 +73,17 @@ var ErrMemoryNotFound = errors.New("server: memory not found")
 type MemoryReader interface {
 	ReadMemory(agent, repo string) (string, time.Time, error)
 }
+
+// WriteCoordinator runs a CRUD write under the same lock that protects the
+// server's "DB write → snapshot read → in-memory reload" sequence and, on
+// success, triggers the reload step. Domain handler packages (fleet, repos,
+// config) call Do for every mutation so all writes share the lock the
+// composing server owns — cross-domain writes never observe a torn snapshot.
+//
+// fn is the storage write. If it returns an error, the reload step is
+// skipped and that error is propagated. If fn succeeds, the implementation
+// invokes its registered reload hook; any reload error replaces the (nil)
+// fn error so callers see the failure that actually prevented hot-reload.
+type WriteCoordinator interface {
+	Do(fn func() error) error
+}

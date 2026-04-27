@@ -23,6 +23,7 @@ import (
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/server"
 	serverobserve "github.com/eloylp/agents/internal/server/observe"
+	serverrepos "github.com/eloylp/agents/internal/server/repos"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -42,6 +43,7 @@ type Server struct {
 	cronReloader  server.CronReloader // optional; called after repo/agent writes to reload cron
 	memReader     server.MemoryReader // optional; when set, /api/memory reads from this (SQLite mode)
 	mcp           http.Handler        // optional; when set, /mcp serves this MCP handler
+	repos         *serverrepos.Handler // constructed in WithStore; nil until then
 	// storeMu serializes the "DB write → snapshot read → in-memory Reload"
 	// sequence so that concurrent write requests cannot interleave their
 	// snapshots and leave the scheduler in a stale or inconsistent state.
@@ -86,9 +88,32 @@ func (s *Server) WithRuntimeState(rsp server.RuntimeStateProvider) {
 // skills, backends, and repos. Writes to repos or agents also call
 // r.Reload so that cron schedules take effect immediately. r may be nil
 // if hot-reload is not needed.
+//
+// WithStore also constructs the per-domain Handler types that own the
+// /repos and /repos/{owner}/{repo}/bindings surface, sharing the server's
+// CRUD-write coordinator so cross-domain writes serialise on one lock.
 func (s *Server) WithStore(db *sql.DB, r server.CronReloader) {
 	s.db = db
 	s.cronReloader = r
+	s.repos = serverrepos.New(db, s, s, s.logger)
+}
+
+// Repos returns the repos handler so the daemon's MCP wiring can satisfy the
+// mcp.RepoWriter and mcp.BindingWriter interfaces with the same instance the
+// HTTP router uses. Nil when WithStore has not been called.
+func (s *Server) Repos() *serverrepos.Handler { return s.repos }
+
+// Do runs fn under the server's CRUD write lock and, on success, triggers a
+// scheduler reload + in-memory config swap. Implements server.WriteCoordinator
+// for the domain-scoped handler packages so every CRUD mutation across fleet,
+// repos, and config domains shares one lock and one reload epoch.
+func (s *Server) Do(fn func() error) error {
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+	if err := fn(); err != nil {
+		return err
+	}
+	return s.reloadCron()
 }
 
 // WithMemoryReader attaches a MemoryReader used by /api/memory/{agent}/{repo}
@@ -191,12 +216,12 @@ func (s *Server) buildHandler() http.Handler {
 	router.Handle("/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackendPatch))).Methods(http.MethodPatch)
 	router.Handle("/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackendDelete))).Methods(http.MethodDelete)
 
-	router.Handle("/repos", withTimeout(http.HandlerFunc(s.handleStoreRepos))).Methods(http.MethodGet, http.MethodPost)
-	router.Handle("/repos/{owner}/{repo}", withTimeout(http.HandlerFunc(s.handleStoreRepo))).Methods(http.MethodGet, http.MethodPatch, http.MethodDelete)
-	router.Handle("/repos/{owner}/{repo}/bindings", withTimeout(http.HandlerFunc(s.handleCreateBinding))).Methods(http.MethodPost)
-	router.Handle("/repos/{owner}/{repo}/bindings/{id}", withTimeout(http.HandlerFunc(s.handleGetBinding))).Methods(http.MethodGet)
-	router.Handle("/repos/{owner}/{repo}/bindings/{id}", withTimeout(http.HandlerFunc(s.handleUpdateBinding))).Methods(http.MethodPatch)
-	router.Handle("/repos/{owner}/{repo}/bindings/{id}", withTimeout(http.HandlerFunc(s.handleDeleteBinding))).Methods(http.MethodDelete)
+	// Repos and per-binding routes live in their own package; routes are
+	// registered only when WithStore has wired the database (and therefore
+	// the handler).
+	if s.repos != nil {
+		s.repos.RegisterRoutes(router, withTimeout)
+	}
 
 	// Observability surface lives in its own package; routes are registered
 	// only when the observability store has been attached.
