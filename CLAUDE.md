@@ -9,7 +9,8 @@
 ```
 cmd/agents/main.go          # Daemon entry point + --run-agent / --db / --import modes
 internal/
-  config/                   # YAML parsing, prompt/skill file resolution, validation
+  fleet/                    # Domain entities: Agent, Repo, Skill, Backend, Binding (zero deps)
+  config/                   # YAML parsing, prompt/skill file resolution, validation (uses fleet)
   ai/                       # Prompt composition + command-based CLI runner (per-backend env)
   anthropic_proxy/          # Built-in Anthropic↔OpenAI Chat Completions translation proxy
   observe/                  # Observability store: events, traces, dispatch graph, SSE hubs

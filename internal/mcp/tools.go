@@ -8,7 +8,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // registerTools wires the core tool set onto the MCP server. Handlers read
@@ -536,9 +536,9 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 	}
 }
 
-// agentJSON converts a config.AgentDef to the snake_case map shape used by
+// agentJSON converts a fleet.Agent to the snake_case map shape used by
 // the REST API, so the MCP and HTTP surfaces stay aligned.
-func agentJSON(a config.AgentDef) map[string]any {
+func agentJSON(a fleet.Agent) map[string]any {
 	return map[string]any{
 		"name":           a.Name,
 		"backend":        a.Backend,
@@ -555,7 +555,7 @@ func agentJSON(a config.AgentDef) map[string]any {
 
 // backendJSON renders one AI backend entry in the snake_case shape shared
 // between list_backends and get_backend.
-func backendJSON(name string, b config.AIBackendConfig) map[string]any {
+func backendJSON(name string, b fleet.Backend) map[string]any {
 	return map[string]any{
 		"name":               name,
 		"command":            b.Command,
@@ -575,7 +575,7 @@ func backendJSON(name string, b config.AIBackendConfig) map[string]any {
 // for consumers; unused triggers appear as empty values. The id field is
 // included only when > 0 (unset for bindings that haven't yet been persisted
 // to the store, matching the omitempty behaviour on the REST side).
-func bindingJSON(b config.Binding) map[string]any {
+func bindingJSON(b fleet.Binding) map[string]any {
 	out := map[string]any{
 		"agent":   b.Agent,
 		"labels":  nilSafe(b.Labels),

@@ -7,7 +7,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog"
 
-	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -17,7 +17,7 @@ import (
 // memory disabled" from the documented default.
 func TestToolCreateAgentForwardsAllowMemoryFalse(t *testing.T) {
 	t.Parallel()
-	canonical := config.AgentDef{Name: "linter", Backend: "claude", Prompt: "audit"}
+	canonical := fleet.Agent{Name: "linter", Backend: "claude", Prompt: "audit"}
 	w := &stubAgentWriter{canonical: canonical}
 	deps := Deps{
 		DB:         testDB(t),
@@ -53,7 +53,7 @@ func TestToolCreateAgentForwardsAllowMemoryFalse(t *testing.T) {
 // returns the documented default of true downstream.
 func TestToolCreateAgentLeavesAllowMemoryNilWhenAbsent(t *testing.T) {
 	t.Parallel()
-	canonical := config.AgentDef{Name: "linter", Backend: "claude", Prompt: "audit"}
+	canonical := fleet.Agent{Name: "linter", Backend: "claude", Prompt: "audit"}
 	w := &stubAgentWriter{canonical: canonical}
 	deps := Deps{
 		DB:         testDB(t),
@@ -85,7 +85,7 @@ func TestToolCreateAgentLeavesAllowMemoryNilWhenAbsent(t *testing.T) {
 // what the webhook adapter expects to merge over an existing AgentDef.
 func TestToolUpdateAgentForwardsAllowMemoryPatch(t *testing.T) {
 	t.Parallel()
-	canonical := config.AgentDef{Name: "coder", Backend: "claude", Prompt: "p"}
+	canonical := fleet.Agent{Name: "coder", Backend: "claude", Prompt: "p"}
 	w := &stubAgentWriter{patchCanonical: canonical}
 	deps := Deps{
 		DB:         testDB(t),
@@ -149,7 +149,7 @@ func TestToolGetAgentSurfacesAllowMemory(t *testing.T) {
 	t.Parallel()
 	cfg := fixtureConfig()
 	ff := false
-	cfg.Agents = []config.AgentDef{
+	cfg.Agents = []fleet.Agent{
 		{Name: "coder", Backend: "claude", Prompt: "p"},
 		{Name: "stateless", Backend: "claude", Prompt: "p", AllowMemory: &ff},
 	}

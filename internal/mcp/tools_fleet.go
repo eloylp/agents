@@ -10,6 +10,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -45,7 +46,7 @@ func toolGetAgent(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultErrorFromErr("get agent", err), nil
 		}
 		key := config.NormalizeAgentName(name)
-		if idx := slices.IndexFunc(agents, func(a config.AgentDef) bool { return a.Name == key }); idx != -1 {
+		if idx := slices.IndexFunc(agents, func(a fleet.Agent) bool { return a.Name == key }); idx != -1 {
 			return jsonResult(agentJSON(agents[idx]))
 		}
 		return mcpgo.NewToolResultErrorf("agent %q not found", name), nil
@@ -159,7 +160,7 @@ func toolGetRepo(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultErrorFromErr("get repo", err), nil
 		}
 		key := config.NormalizeRepoName(name)
-		if idx := slices.IndexFunc(repos, func(r config.RepoDef) bool { return r.Name == key }); idx != -1 {
+		if idx := slices.IndexFunc(repos, func(r fleet.Repo) bool { return r.Name == key }); idx != -1 {
 			return jsonResult(repoJSON(repos[idx]))
 		}
 		return mcpgo.NewToolResultErrorf("repo %q not found", name), nil

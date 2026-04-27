@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -42,7 +43,7 @@ func minimalCfg() *config.Config {
 					DedupWindowSeconds: 300,
 				},
 			},
-			AIBackends: map[string]config.AIBackendConfig{
+			AIBackends: map[string]fleet.Backend{
 				"claude": {
 					Command:          "claude",
 					TimeoutSeconds:   600,
@@ -58,11 +59,11 @@ func minimalCfg() *config.Config {
 				},
 			},
 		},
-		Skills: map[string]config.SkillDef{
+		Skills: map[string]fleet.Skill{
 			"architect": {Prompt: "Focus on architecture."},
 			"testing":   {Prompt: "Focus on testing."},
 		},
-		Agents: []config.AgentDef{
+		Agents: []fleet.Agent{
 			{
 				Name:          "coder",
 				Backend:       "claude",
@@ -83,11 +84,11 @@ func minimalCfg() *config.Config {
 				Description:   "Reviews pull requests",
 			},
 		},
-		Repos: []config.RepoDef{
+		Repos: []fleet.Repo{
 			{
 				Name:    "owner/repo",
 				Enabled: true,
-				Use: []config.Binding{
+				Use: []fleet.Binding{
 					{Agent: "coder", Events: []string{"issues.labeled"}, Enabled: &enabled},
 					{Agent: "pr-reviewer", Cron: "0 9 * * *", Enabled: &disabled},
 					{Agent: "coder", Labels: []string{"ai:review"}},
@@ -186,7 +187,7 @@ func TestImportLoad(t *testing.T) {
 	if len(out.Agents) != 2 {
 		t.Fatalf("agents: got %d, want 2", len(out.Agents))
 	}
-	var coder config.AgentDef
+	var coder fleet.Agent
 	for _, a := range out.Agents {
 		if a.Name == "coder" {
 			coder = a
@@ -323,12 +324,12 @@ func TestLoadEmptyDatabase(t *testing.T) {
 
 func seedAgent(t *testing.T, db *sql.DB, name string) {
 	t.Helper()
-	if err := store.UpsertBackend(db, "claude", config.AIBackendConfig{
+	if err := store.UpsertBackend(db, "claude", fleet.Backend{
 		Command: "claude",
 	}); err != nil {
 		t.Fatalf("seedAgent backend: %v", err)
 	}
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name: name, Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("seedAgent %s: %v", name, err)

@@ -15,6 +15,7 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -73,7 +74,7 @@ type lastRunRecord struct {
 // RunnerBuilder constructs a new ai.Runner for a given backend name and its
 // config. It is used by Reload to keep the in-process runner map consistent
 // with SQLite when ai_backend definitions change via the CRUD API.
-type RunnerBuilder func(name string, cfg config.AIBackendConfig) ai.Runner
+type RunnerBuilder func(name string, cfg fleet.Backend) ai.Runner
 
 // HotReloadSink is implemented by components that share config and runner
 // state with the Scheduler and must be notified when a CRUD-triggered Reload
@@ -250,7 +251,7 @@ func (s *Scheduler) makeCronJob(repo string, agentName string) func() {
 		// Snapshot cfg+runners at execution time under the same lock so that
 		// the agent definition, backends, and runner set all come from the same
 		// config epoch. Resolving the agent by name here (rather than capturing
-		// a config.AgentDef by value at registration time) ensures that a cron
+		// a fleet.Agent by value at registration time) ensures that a cron
 		// closure that was dequeued just before a Reload completes will still
 		// execute with the post-reload definition once it acquires the read lock.
 		s.bindMu.RLock()
@@ -359,7 +360,7 @@ func (s *Scheduler) TriggerAgent(ctx context.Context, agentName, repo string) er
 	}
 	// The agent must actually be bound to this repo (any trigger kind is
 	// sufficient for on-demand execution).
-	if !slices.ContainsFunc(repoDef.Use, func(b config.Binding) bool {
+	if !slices.ContainsFunc(repoDef.Use, func(b fleet.Binding) bool {
 		return b.Agent == agentName && b.IsEnabled()
 	}) {
 		return fmt.Errorf("agent %q is not bound to repo %q", agentName, repo)
@@ -371,7 +372,7 @@ func (s *Scheduler) TriggerAgent(ctx context.Context, agentName, repo string) er
 // provided by the caller. Both must come from the same atomic snapshot (taken
 // under bindMu.RLock) so that backend resolution and roster building operate
 // on a single consistent epoch without racing against a concurrent Reload.
-func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent config.AgentDef, cfg *config.Config, runners map[string]ai.Runner) error {
+func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent fleet.Agent, cfg *config.Config, runners map[string]ai.Runner) error {
 	// Atomically check whether a dispatch has already claimed the
 	// (agent, repo, 0) slot and, if not, write the cron mark. This single
 	// lock-protected operation eliminates the TOCTOU race where the old split
@@ -567,7 +568,7 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent conf
 // removed and the config pointer updated. If registration fails, the old
 // entries remain active and the old config is preserved, so the scheduler
 // stays in a consistent state and the caller receives an error.
-func (s *Scheduler) Reload(repos []config.RepoDef, agents []config.AgentDef, skills map[string]config.SkillDef, backends map[string]config.AIBackendConfig) error {
+func (s *Scheduler) Reload(repos []fleet.Repo, agents []fleet.Agent, skills map[string]fleet.Skill, backends map[string]fleet.Backend) error {
 	s.bindMu.Lock()
 
 	// Save old state for rollback.

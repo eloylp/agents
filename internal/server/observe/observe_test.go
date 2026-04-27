@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	obstore "github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/store"
@@ -425,7 +426,7 @@ func TestHandleGraphIncludesConfiguredAgentWithNoDispatches(t *testing.T) {
 	t.Parallel()
 	obs := newTestStore(t)
 	cfg := &stubConfig{cfg: &config.Config{
-		Agents: []config.AgentDef{{Name: "solo-agent", Backend: "claude"}},
+		Agents: []fleet.Agent{{Name: "solo-agent", Backend: "claude"}},
 	}}
 	h := New(obs, cfg, nil, nil, nil, nil)
 
@@ -455,7 +456,7 @@ func TestHandleGraphNodeStatusReflectsRuntimeState(t *testing.T) {
 	t.Parallel()
 	obs := newTestStore(t)
 	cfg := &stubConfig{cfg: &config.Config{
-		Agents: []config.AgentDef{
+		Agents: []fleet.Agent{
 			{Name: "runner", Backend: "claude"},
 			{Name: "idle-ok", Backend: "claude"},
 			{Name: "idle-err", Backend: "claude"},

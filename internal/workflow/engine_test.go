@@ -13,6 +13,7 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 type stubRunner struct {
@@ -60,23 +61,23 @@ func newTestEngine(cfgMutator func(*config.Config)) (*Engine, *stubRunner) {
 	cfg := &config.Config{
 		Daemon: config.DaemonConfig{
 			Processor: config.ProcessorConfig{MaxConcurrentAgents: 4},
-			AIBackends: map[string]config.AIBackendConfig{
+			AIBackends: map[string]fleet.Backend{
 				"claude": {Command: "claude"},
 			},
 		},
-		Skills: map[string]config.SkillDef{
+		Skills: map[string]fleet.Skill{
 			"architect": {Prompt: "Focus on architecture."},
 			"security":  {Prompt: "Focus on security."},
 		},
-		Agents: []config.AgentDef{
+		Agents: []fleet.Agent{
 			{Name: "arch-reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Review architecture."},
 			{Name: "sec-reviewer", Backend: "claude", Skills: []string{"security"}, Prompt: "Review security."},
 		},
-		Repos: []config.RepoDef{
+		Repos: []fleet.Repo{
 			{
 				Name:    "owner/repo",
 				Enabled: true,
-				Use: []config.Binding{
+				Use: []fleet.Binding{
 					{Agent: "arch-reviewer", Labels: []string{"ai:review:arch-reviewer"}},
 					{Agent: "sec-reviewer", Labels: []string{"ai:review:sec-reviewer"}},
 				},
@@ -102,8 +103,8 @@ func labelEvent(kind, repo, label string, number int) Event {
 func TestHandleEventIssueRunsMatchingLabelBinding(t *testing.T) {
 	t.Parallel()
 	e, runner := newTestEngine(func(c *config.Config) {
-		c.Agents = append(c.Agents, config.AgentDef{Name: "refiner", Backend: "claude", Prompt: "Refine the issue."})
-		c.Repos[0].Use = append(c.Repos[0].Use, config.Binding{Agent: "refiner", Labels: []string{"ai:refine"}})
+		c.Agents = append(c.Agents, fleet.Agent{Name: "refiner", Backend: "claude", Prompt: "Refine the issue."})
+		c.Repos[0].Use = append(c.Repos[0].Use, fleet.Binding{Agent: "refiner", Labels: []string{"ai:refine"}})
 	})
 	err := e.HandleEvent(context.Background(), labelEvent("issues.labeled", "owner/repo", "ai:refine", 7))
 	if err != nil {
@@ -129,7 +130,7 @@ func TestHandleEventPRRunsSingleLabelBinding(t *testing.T) {
 func TestHandleEventFansOutToMultipleLabelBindings(t *testing.T) {
 	t.Parallel()
 	e, runner := newTestEngine(func(c *config.Config) {
-		c.Repos[0].Use = []config.Binding{
+		c.Repos[0].Use = []fleet.Binding{
 			{Agent: "arch-reviewer", Labels: []string{"ai:review:all"}},
 			{Agent: "sec-reviewer", Labels: []string{"ai:review:all"}},
 		}
@@ -174,7 +175,7 @@ func TestEngineJoinsErrorsAcrossAgents(t *testing.T) {
 	t.Parallel()
 	boom := errors.New("boom")
 	e, runner := newTestEngine(func(c *config.Config) {
-		c.Repos[0].Use = []config.Binding{
+		c.Repos[0].Use = []fleet.Binding{
 			{Agent: "arch-reviewer", Labels: []string{"ai:review:all"}},
 			{Agent: "sec-reviewer", Labels: []string{"ai:review:all"}},
 		}
@@ -232,8 +233,8 @@ func TestHandleEventEventBindings(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			e, runner := newTestEngine(func(c *config.Config) {
-				c.Agents = append(c.Agents, config.AgentDef{Name: "watcher", Backend: "claude", Prompt: "React to events."})
-				c.Repos[0].Use = append(c.Repos[0].Use, config.Binding{Agent: "watcher", Events: []string{tc.bindEvent}})
+				c.Agents = append(c.Agents, fleet.Agent{Name: "watcher", Backend: "claude", Prompt: "React to events."})
+				c.Repos[0].Use = append(c.Repos[0].Use, fleet.Binding{Agent: "watcher", Events: []string{tc.bindEvent}})
 			})
 			ev := Event{
 				Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
@@ -285,20 +286,20 @@ func TestEngineDispatchEventPayloadPropagatedToPrompt(t *testing.T) {
 				MaxConcurrentAgents: 4,
 				Dispatch:            config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300},
 			},
-			AIBackends: map[string]config.AIBackendConfig{
+			AIBackends: map[string]fleet.Backend{
 				"claude": {Command: "claude"},
 			},
 		},
-		Skills: map[string]config.SkillDef{},
-		Agents: []config.AgentDef{
+		Skills: map[string]fleet.Skill{},
+		Agents: []fleet.Agent{
 			{Name: "coder", Backend: "claude", Prompt: "Write code.", AllowDispatch: true},
 			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review code.", AllowDispatch: true},
 		},
-		Repos: []config.RepoDef{
+		Repos: []fleet.Repo{
 			{
 				Name:    "owner/repo",
 				Enabled: true,
-				Use: []config.Binding{
+				Use: []fleet.Binding{
 					{Agent: "coder", Labels: []string{"ai:code"}},
 					{Agent: "pr-reviewer", Labels: []string{"ai:review"}},
 				},
@@ -392,19 +393,19 @@ func newTestEngineWithDedup(cfgMutator func(*config.Config)) (*Engine, *stubRunn
 					DedupWindowSeconds: 60,
 				},
 			},
-			AIBackends: map[string]config.AIBackendConfig{
+			AIBackends: map[string]fleet.Backend{
 				"claude": {Command: "claude"},
 			},
 		},
-		Skills: map[string]config.SkillDef{},
-		Agents: []config.AgentDef{
+		Skills: map[string]fleet.Skill{},
+		Agents: []fleet.Agent{
 			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review PR."},
 		},
-		Repos: []config.RepoDef{
+		Repos: []fleet.Repo{
 			{
 				Name:    "owner/repo",
 				Enabled: true,
-				Use: []config.Binding{
+				Use: []fleet.Binding{
 					{Agent: "pr-reviewer", Events: []string{"pull_request.synchronize"}},
 				},
 			},
@@ -545,8 +546,8 @@ func TestFanOutClaimAbandonedOnRunFailure(t *testing.T) {
 func TestFanOutDoesNotDedupZeroNumberEvents(t *testing.T) {
 	t.Parallel()
 	e, runner, _ := newTestEngineWithDedup(func(c *config.Config) {
-		c.Agents = append(c.Agents, config.AgentDef{Name: "pusher", Backend: "claude", Prompt: "React to pushes."})
-		c.Repos[0].Use = append(c.Repos[0].Use, config.Binding{Agent: "pusher", Events: []string{"push"}})
+		c.Agents = append(c.Agents, fleet.Agent{Name: "pusher", Backend: "claude", Prompt: "React to pushes."})
+		c.Repos[0].Use = append(c.Repos[0].Use, fleet.Binding{Agent: "pusher", Events: []string{"push"}})
 	})
 
 	push1 := Event{
@@ -585,7 +586,7 @@ func TestDispatchEventRunsAfterEnqueue(t *testing.T) {
 	t.Parallel()
 	e, runner, q := newTestEngineWithDedup(func(c *config.Config) {
 		c.Agents[0].AllowDispatch = true
-		c.Agents = append(c.Agents, config.AgentDef{
+		c.Agents = append(c.Agents, fleet.Agent{
 			Name:          "coder",
 			Backend:       "claude",
 			Prompt:        "Write code.",
@@ -594,7 +595,7 @@ func TestDispatchEventRunsAfterEnqueue(t *testing.T) {
 		})
 	})
 
-	originator := config.AgentDef{
+	originator := fleet.Agent{
 		Name:        "coder",
 		CanDispatch: []string{"pr-reviewer"},
 	}
@@ -633,7 +634,7 @@ func TestDispatchDedupPreventsDoubleEnqueue(t *testing.T) {
 	t.Parallel()
 	e, _, q := newTestEngineWithDedup(func(c *config.Config) {
 		c.Agents[0].AllowDispatch = true
-		c.Agents = append(c.Agents, config.AgentDef{
+		c.Agents = append(c.Agents, fleet.Agent{
 			Name:          "coder",
 			Backend:       "claude",
 			Prompt:        "Write code.",
@@ -642,7 +643,7 @@ func TestDispatchDedupPreventsDoubleEnqueue(t *testing.T) {
 		})
 	})
 
-	originator := config.AgentDef{
+	originator := fleet.Agent{
 		Name:        "coder",
 		CanDispatch: []string{"pr-reviewer"},
 	}
@@ -785,7 +786,7 @@ func TestEngineUpdateConfigRunnersRaceWithHandleEvent(t *testing.T) {
 
 	e, runner := newTestEngine(func(c *config.Config) {
 		// Add an event binding so HandleEvent actually dispatches the agent.
-		c.Repos[0].Use = append(c.Repos[0].Use, config.Binding{
+		c.Repos[0].Use = append(c.Repos[0].Use, fleet.Binding{
 			Agent:  "arch-reviewer",
 			Events: []string{"push"},
 		})
@@ -806,19 +807,19 @@ func TestEngineUpdateConfigRunnersRaceWithHandleEvent(t *testing.T) {
 	altCfg := &config.Config{
 		Daemon: config.DaemonConfig{
 			Processor:  config.ProcessorConfig{MaxConcurrentAgents: 4},
-			AIBackends: map[string]config.AIBackendConfig{"claude": {Command: "claude"}},
+			AIBackends: map[string]fleet.Backend{"claude": {Command: "claude"}},
 		},
-		Skills: map[string]config.SkillDef{
+		Skills: map[string]fleet.Skill{
 			"architect": {Prompt: "Focus on architecture."},
 		},
-		Agents: []config.AgentDef{
+		Agents: []fleet.Agent{
 			{Name: "arch-reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Review architecture."},
 		},
-		Repos: []config.RepoDef{
+		Repos: []fleet.Repo{
 			{
 				Name:    "owner/repo",
 				Enabled: true,
-				Use:     []config.Binding{{Agent: "arch-reviewer", Events: []string{"push"}}},
+				Use:     []fleet.Binding{{Agent: "arch-reviewer", Events: []string{"push"}}},
 			},
 		},
 	}
@@ -869,16 +870,16 @@ func TestEngineUpdateConfigAndRunnersAtomic(t *testing.T) {
 		return &config.Config{
 			Daemon: config.DaemonConfig{
 				Processor:  config.ProcessorConfig{MaxConcurrentAgents: 8},
-				AIBackends: map[string]config.AIBackendConfig{backendName: {Command: backendName}},
+				AIBackends: map[string]fleet.Backend{backendName: {Command: backendName}},
 			},
-			Agents: []config.AgentDef{
+			Agents: []fleet.Agent{
 				{Name: "worker", Backend: backendName, Prompt: "do work"},
 			},
-			Repos: []config.RepoDef{
+			Repos: []fleet.Repo{
 				{
 					Name:    "owner/repo",
 					Enabled: true,
-					Use:     []config.Binding{{Agent: "worker", Events: []string{"push"}}},
+					Use:     []fleet.Binding{{Agent: "worker", Events: []string{"push"}}},
 				},
 			},
 		}

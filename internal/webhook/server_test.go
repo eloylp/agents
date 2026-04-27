@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -34,7 +35,7 @@ func testCfg(mutator func(*config.Config)) *config.Config {
 				DeliveryTTLSeconds: 3600,
 			},
 		},
-		Repos: []config.RepoDef{{Name: "owner/repo", Enabled: true}},
+		Repos: []fleet.Repo{{Name: "owner/repo", Enabled: true}},
 	}
 	if mutator != nil {
 		mutator(cfg)

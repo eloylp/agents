@@ -20,6 +20,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // validAIBackendNames is the canonical list of supported AI backend names.
@@ -74,9 +76,9 @@ const (
 // Config is the root configuration loaded from YAML.
 type Config struct {
 	Daemon DaemonConfig        `yaml:"daemon"`
-	Skills map[string]SkillDef `yaml:"skills"`
-	Agents []AgentDef          `yaml:"agents"`
-	Repos  []RepoDef           `yaml:"repos"`
+	Skills map[string]fleet.Skill `yaml:"skills"`
+	Agents []fleet.Agent          `yaml:"agents"`
+	Repos  []fleet.Repo           `yaml:"repos"`
 
 	// configDir is the directory containing the config file, used to resolve
 	// prompt_file paths.
@@ -89,7 +91,7 @@ type DaemonConfig struct {
 	Log        LogConfig                  `yaml:"log"`
 	HTTP       HTTPConfig                 `yaml:"http"`
 	Processor  ProcessorConfig            `yaml:"processor"`
-	AIBackends map[string]AIBackendConfig `yaml:"ai_backends"`
+	AIBackends map[string]fleet.Backend `yaml:"ai_backends"`
 	Proxy      ProxyConfig                `yaml:"proxy"`
 }
 
@@ -158,115 +160,6 @@ type DispatchConfig struct {
 	DedupWindowSeconds int `yaml:"dedup_window_seconds"`
 }
 
-// AIBackendConfig describes how to invoke a CLI-based AI backend.
-//
-// LocalModelURL, when set, routes the CLI through the built-in translation
-// proxy by injecting ANTHROPIC_BASE_URL into the subprocess environment.
-type AIBackendConfig struct {
-	Command          string   `yaml:"command"`
-	Version          string   `yaml:"version"`
-	Models           []string `yaml:"models"`
-	Healthy          bool     `yaml:"healthy"`
-	HealthDetail     string   `yaml:"health_detail"`
-	LocalModelURL    string   `yaml:"local_model_url"`
-	TimeoutSeconds   int      `yaml:"timeout_seconds"`
-	MaxPromptChars   int      `yaml:"max_prompt_chars"`
-	RedactionSaltEnv string   `yaml:"redaction_salt_env"`
-}
-
-// SkillDef is a reusable block of guidance that agents can compose.
-// After loading, Prompt always contains the resolved guidance text; PromptFile
-// is retained only for debugging/logging.
-type SkillDef struct {
-	Prompt     string `yaml:"prompt"`
-	PromptFile string `yaml:"prompt_file"`
-}
-
-// AgentDef is a named capability: a backend, a set of skills, and a prompt.
-// Agents are pure definitions — they don't run on their own. Repos bind them
-// to triggers.
-type AgentDef struct {
-	Name       string   `yaml:"name"`
-	Backend    string   `yaml:"backend"`
-	Model      string   `yaml:"model"`
-	Skills     []string `yaml:"skills"`
-	Prompt     string   `yaml:"prompt"`
-	PromptFile string   `yaml:"prompt_file"`
-	// AllowPRs controls whether the agent is permitted to open pull requests.
-	// Defaults to false; the scheduler prepends a hard no-PR instruction when
-	// false so the gate is code-level rather than relying on prompt wording.
-	AllowPRs bool `yaml:"allow_prs"`
-
-	// Description is a short human-readable summary of what this agent does.
-	// Required when the agent appears in any other agent's can_dispatch list.
-	Description string `yaml:"description"`
-
-	// AllowDispatch opts this agent in as a dispatch target. Default false.
-	// Other agents may only dispatch to this agent when this is true.
-	AllowDispatch bool `yaml:"allow_dispatch"`
-
-	// CanDispatch is the whitelist of agent names this agent is allowed to
-	// dispatch. Validated: entries must reference real agents in the same
-	// config and must not include the agent itself.
-	CanDispatch []string `yaml:"can_dispatch"`
-
-	// AllowMemory controls whether the autonomous (cron) scheduler loads and
-	// persists this agent's memory across runs. Stored as a pointer so absence
-	// can be distinguished from explicit false: when nil (the YAML/JSON
-	// "absent" case), IsAllowMemory reports true so existing autonomous agents
-	// keep their behaviour without an explicit opt-in. Set to a non-nil false
-	// to disable memory load+persist for this agent across all run kinds.
-	AllowMemory *bool `yaml:"allow_memory,omitempty"`
-}
-
-// IsAllowMemory reports whether this agent's memory should be loaded into the
-// prompt and persisted from the response. Default (nil pointer) is true, so
-// agents authored before this field existed retain their previous behaviour.
-func (a AgentDef) IsAllowMemory() bool {
-	return a.AllowMemory == nil || *a.AllowMemory
-}
-
-// RepoDef describes a single GitHub repo the daemon operates on and the
-// agents bound to it.
-type RepoDef struct {
-	Name    string    `yaml:"name"`
-	Enabled bool      `yaml:"enabled"`
-	Use     []Binding `yaml:"use"`
-}
-
-// Binding wires an agent to one or more triggers on a specific repo.
-// An agent can appear multiple times in a repo's Use list with different
-// triggers.
-//
-// ID is the SQLite AUTOINCREMENT primary key of the binding row. It is not
-// present in YAML (zero for entries loaded from a YAML file) and is populated
-// by the store when loaded. Atomic per-binding CRUD endpoints address a row
-// by its ID so UI edits can target one binding without replacing the whole
-// repo.
-type Binding struct {
-	ID      int64    `yaml:"-" json:"id,omitempty"`
-	Agent   string   `yaml:"agent"`
-	Labels  []string `yaml:"labels"`
-	Cron    string   `yaml:"cron"`
-	Events  []string `yaml:"events"`
-	Enabled *bool    `yaml:"enabled"`
-}
-
-// IsEnabled reports whether this binding should be active. Absent =
-// enabled; only explicit `enabled: false` disables.
-func (b Binding) IsEnabled() bool {
-	return b.Enabled == nil || *b.Enabled
-}
-
-// IsCron reports whether this binding is cron-triggered.
-func (b Binding) IsCron() bool { return strings.TrimSpace(b.Cron) != "" }
-
-// IsLabel reports whether this binding is label-triggered.
-func (b Binding) IsLabel() bool { return len(b.Labels) > 0 }
-
-// IsEvent reports whether this binding is event-triggered (via the events: field).
-func (b Binding) IsEvent() bool { return len(b.Events) > 0 }
-
 // ValidateCrossRefs checks cross-entity reference consistency across the four
 // mutable entity sets. It is called by the SQLite CRUD layer after each write
 // (within the same transaction) so that invalid fleet configurations cannot be
@@ -276,8 +169,8 @@ func (b Binding) IsEvent() bool { return len(b.Events) > 0 }
 //   - every agent references a known backend and known skills
 //   - dispatch wiring (can_dispatch) references existing agents with descriptions
 //   - every repo binding references a known agent
-func ValidateCrossRefs(agents []AgentDef, repos []RepoDef, skills map[string]SkillDef, backends map[string]AIBackendConfig) error {
-	agentByName := make(map[string]AgentDef, len(agents))
+func ValidateCrossRefs(agents []fleet.Agent, repos []fleet.Repo, skills map[string]fleet.Skill, backends map[string]fleet.Backend) error {
+	agentByName := make(map[string]fleet.Agent, len(agents))
 	for _, a := range agents {
 		agentByName[a.Name] = a
 	}
@@ -338,12 +231,12 @@ func ValidateCrossRefs(agents []AgentDef, repos []RepoDef, skills map[string]Ski
 // The intent is that every CRUD write on the SQLite store passes ValidateEntities
 // so that SQLite is never left in a state that would fail LoadAndValidate on
 // restart due to locally invalid entity fields.
-func ValidateEntities(agents []AgentDef, repos []RepoDef, skills map[string]SkillDef, backends map[string]AIBackendConfig) error {
+func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[string]fleet.Skill, backends map[string]fleet.Backend) error {
 	if backends == nil {
-		backends = map[string]AIBackendConfig{}
+		backends = map[string]fleet.Backend{}
 	}
 	if skills == nil {
-		skills = map[string]SkillDef{}
+		skills = map[string]fleet.Skill{}
 	}
 
 	// Backend field checks (without "at least one" aggregate check).
@@ -488,26 +381,26 @@ func Load(path string) (*Config, error) {
 
 // RepoByName returns the repo definition with the given full name
 // (case-insensitive).
-func (c *Config) RepoByName(name string) (RepoDef, bool) {
+func (c *Config) RepoByName(name string) (fleet.Repo, bool) {
 	name = strings.ToLower(strings.TrimSpace(name))
 	for _, r := range c.Repos {
 		if strings.ToLower(r.Name) == name {
 			return r, true
 		}
 	}
-	return RepoDef{}, false
+	return fleet.Repo{}, false
 }
 
 // AgentByName returns the agent definition with the given name
 // (case-insensitive).
-func (c *Config) AgentByName(name string) (AgentDef, bool) {
+func (c *Config) AgentByName(name string) (fleet.Agent, bool) {
 	name = strings.ToLower(strings.TrimSpace(name))
 	for _, a := range c.Agents {
 		if a.Name == name {
 			return a, true
 		}
 	}
-	return AgentDef{}, false
+	return fleet.Agent{}, false
 }
 
 // ResolveBackend returns the concrete backend name for the given agent
@@ -568,7 +461,7 @@ func (c *Config) applyDefaults() {
 func (c *Config) normalize() {
 	// Lowercase backend keys for case-insensitive matching.
 	if len(c.Daemon.AIBackends) > 0 {
-		lower := make(map[string]AIBackendConfig, len(c.Daemon.AIBackends))
+		lower := make(map[string]fleet.Backend, len(c.Daemon.AIBackends))
 		for name, backend := range c.Daemon.AIBackends {
 			key := strings.ToLower(strings.TrimSpace(name))
 			backend.Command = strings.TrimSpace(backend.Command)
@@ -585,7 +478,7 @@ func (c *Config) normalize() {
 
 	// Lowercase skill keys.
 	if len(c.Skills) > 0 {
-		lower := make(map[string]SkillDef, len(c.Skills))
+		lower := make(map[string]fleet.Skill, len(c.Skills))
 		for name, skill := range c.Skills {
 			key := strings.ToLower(strings.TrimSpace(name))
 			skill.Prompt = strings.TrimSpace(skill.Prompt)
@@ -826,7 +719,7 @@ func (c *Config) validateAgents() error {
 //   - can_dispatch must not include the agent itself
 //   - agents referenced in any can_dispatch list must have a description
 func (c *Config) validateDispatchWiring() error {
-	agentByName := make(map[string]AgentDef, len(c.Agents))
+	agentByName := make(map[string]fleet.Agent, len(c.Agents))
 	for _, a := range c.Agents {
 		agentByName[a.Name] = a
 	}
@@ -848,7 +741,7 @@ func (c *Config) validateDispatchWiring() error {
 }
 
 // countBindingTriggers returns the number of trigger types (labels, events, cron) set on b.
-func countBindingTriggers(b Binding) int {
+func countBindingTriggers(b fleet.Binding) int {
 	n := 0
 	if b.IsLabel() {
 		n++
@@ -908,7 +801,7 @@ func isValidBackendName(name string) bool {
 	return slices.Contains(validAIBackendNames, name)
 }
 
-func isSupportedBackend(name string, backend AIBackendConfig) bool {
+func isSupportedBackend(name string, backend fleet.Backend) bool {
 	if isValidBackendName(name) {
 		return true
 	}
@@ -920,7 +813,7 @@ func isSupportedBackend(name string, backend AIBackendConfig) bool {
 //
 // If backend.Models is empty, availability is treated as unknown (returns
 // false) so callers can avoid blocking on missing catalog metadata.
-func IsPinnedModelUnavailable(model string, backend AIBackendConfig) bool {
+func IsPinnedModelUnavailable(model string, backend fleet.Backend) bool {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return false
@@ -931,7 +824,7 @@ func IsPinnedModelUnavailable(model string, backend AIBackendConfig) bool {
 	return !slices.Contains(backend.Models, model)
 }
 
-func validateAgentModel(_ string, _ string, _ AIBackendConfig) error {
+func validateAgentModel(_ string, _ string, _ fleet.Backend) error {
 	// Model/backend mismatches are intentionally allowed at config validation
 	// time so discovery can persist backend model changes even if agents become
 	// temporarily orphaned. Runtime paths enforce this strictly before invoking
@@ -943,7 +836,7 @@ func validateAgentModel(_ string, _ string, _ AIBackendConfig) error {
 // that Load / FinishLoad apply at startup. Callers that persist a backend via
 // the CRUD API should call this before writing so that the stored values match
 // what the daemon would derive from those zeros on the next restart.
-func ApplyBackendDefaults(b *AIBackendConfig) {
+func ApplyBackendDefaults(b *fleet.Backend) {
 	setDefaultInt(&b.TimeoutSeconds, defaultAITimeoutSeconds)
 	setDefaultInt(&b.MaxPromptChars, defaultMaxPromptChars)
 }
@@ -953,7 +846,7 @@ func ApplyBackendDefaults(b *AIBackendConfig) {
 // are empty after trimming. CRUD callers must invoke this before persisting a
 // backend so that the stored values match the canonical form the daemon derives
 // at boot, preventing live behavior from diverging until a restart.
-func NormalizeBackendConfig(b *AIBackendConfig) {
+func NormalizeBackendConfig(b *fleet.Backend) {
 	b.Command = strings.TrimSpace(b.Command)
 	b.Version = strings.TrimSpace(b.Version)
 	b.HealthDetail = strings.TrimSpace(b.HealthDetail)
@@ -967,7 +860,7 @@ func NormalizeBackendConfig(b *AIBackendConfig) {
 // performs on skill values at startup: it trims Prompt and PromptFile.
 // CRUD callers must invoke this before persisting a skill so that the stored
 // values match the canonical form the daemon derives at boot.
-func NormalizeSkillDef(s *SkillDef) {
+func NormalizeSkillDef(s *fleet.Skill) {
 	s.Prompt = strings.TrimSpace(s.Prompt)
 	s.PromptFile = strings.TrimSpace(s.PromptFile)
 }
@@ -977,7 +870,7 @@ func NormalizeSkillDef(s *SkillDef) {
 // CRUD callers must invoke this before writing an agent to SQLite so the stored
 // values are already in the canonical form that AgentByName and registerJobs
 // expect, preventing live behavior from diverging until the next restart.
-func NormalizeAgentDef(a *AgentDef) {
+func NormalizeAgentDef(a *fleet.Agent) {
 	a.Name = strings.ToLower(strings.TrimSpace(a.Name))
 	a.Backend = strings.ToLower(strings.TrimSpace(a.Backend))
 	a.Model = strings.TrimSpace(a.Model)
@@ -1024,7 +917,7 @@ func NormalizeRepoName(name string) string {
 // repo entries: lowercase+trim the repo name, and lowercase+trim each binding
 // agent name, cron, and event strings. CRUD callers must invoke this before
 // writing a repo.
-func NormalizeRepoDef(r *RepoDef) {
+func NormalizeRepoDef(r *fleet.Repo) {
 	r.Name = NormalizeRepoName(r.Name)
 	for i := range r.Use {
 		r.Use[i].Agent = strings.ToLower(strings.TrimSpace(r.Use[i].Agent))

@@ -9,6 +9,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // toolCreateAgent upserts an agent definition through the same path as POST
@@ -31,7 +32,7 @@ func toolCreateAgent(deps Deps) server.ToolHandlerFunc {
 		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
-		a := config.AgentDef{
+		a := fleet.Agent{
 			Name:          name,
 			Backend:       req.GetString("backend", ""),
 			Model:         req.GetString("model", ""),
@@ -158,7 +159,7 @@ func toolCreateSkill(deps Deps) server.ToolHandlerFunc {
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
-		sk := config.SkillDef{Prompt: req.GetString("prompt", "")}
+		sk := fleet.Skill{Prompt: req.GetString("prompt", "")}
 		canonicalName, canonical, err := deps.SkillWrite.UpsertSkill(name, sk)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("create skill", err), nil
@@ -233,7 +234,7 @@ func toolCreateBackend(deps Deps) server.ToolHandlerFunc {
 		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
-		b := config.AIBackendConfig{
+		b := fleet.Backend{
 			Command:          req.GetString("command", ""),
 			Models:           models,
 			LocalModelURL:    req.GetString("local_model_url", ""),
@@ -357,7 +358,7 @@ func toolCreateRepo(deps Deps) server.ToolHandlerFunc {
 		if bErr != "" {
 			return mcpgo.NewToolResultError(bErr), nil
 		}
-		r := config.RepoDef{
+		r := fleet.Repo{
 			Name:    name,
 			Enabled: req.GetBool("enabled", false),
 			Use:     bindings,
@@ -480,20 +481,20 @@ func toolDeleteBinding(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
-// bindingFromReq builds a config.Binding from the MCP request fields shared
+// bindingFromReq builds a fleet.Binding from the MCP request fields shared
 // by create_binding and update_binding. Returns a non-empty error string when
 // a field is present but the wrong type.
-func bindingFromReq(req mcpgo.CallToolRequest, agent string) (config.Binding, string) {
+func bindingFromReq(req mcpgo.CallToolRequest, agent string) (fleet.Binding, string) {
 	args := req.GetArguments()
 	labels, errMsg := stringSliceArg(args["labels"], "labels")
 	if errMsg != "" {
-		return config.Binding{}, errMsg
+		return fleet.Binding{}, errMsg
 	}
 	events, errMsg := stringSliceArg(args["events"], "events")
 	if errMsg != "" {
-		return config.Binding{}, errMsg
+		return fleet.Binding{}, errMsg
 	}
-	b := config.Binding{
+	b := fleet.Binding{
 		Agent:  agent,
 		Labels: labels,
 		Events: events,
@@ -502,7 +503,7 @@ func bindingFromReq(req mcpgo.CallToolRequest, agent string) (config.Binding, st
 	if v, ok, errMsg := boolPtrArg(args, "enabled"); ok {
 		b.Enabled = v
 	} else if errMsg != "" {
-		return config.Binding{}, errMsg
+		return fleet.Binding{}, errMsg
 	}
 	return b, ""
 }
@@ -510,7 +511,7 @@ func bindingFromReq(req mcpgo.CallToolRequest, agent string) (config.Binding, st
 // repoJSON renders a RepoDef in the same wire shape as an element of the
 // list_repos / get_repo responses, so create_repo/delete_repo callers consume
 // one schema regardless of whether they are reading or writing.
-func repoJSON(r config.RepoDef) map[string]any {
+func repoJSON(r fleet.Repo) map[string]any {
 	bindings := make([]map[string]any, 0, len(r.Use))
 	for _, b := range r.Use {
 		bindings = append(bindings, bindingJSON(b))
@@ -523,7 +524,7 @@ func repoJSON(r config.RepoDef) map[string]any {
 }
 
 // parseBindings decodes the create_repo "bindings" argument into a slice of
-// config.Binding. The MCP-go request helpers expose string/bool/number
+// fleet.Binding. The MCP-go request helpers expose string/bool/number
 // primitives directly but not nested objects, so we read the raw argument and
 // destructure it here. A nil/missing value yields an empty binding list.
 //
@@ -535,13 +536,13 @@ func repoJSON(r config.RepoDef) map[string]any {
 // caller's intended disablement.
 //
 // Binding.Enabled stays nil when the caller omits the key (the "default
-// enabled" case config.Binding.IsEnabled relies on). A literal false/true sets
+// enabled" case fleet.Binding.IsEnabled relies on). A literal false/true sets
 // the pointer so downstream validation sees the user's intent preserved.
 //
 // The top-level value is also accepted as a JSON-encoded array string — see
 // stringSliceArg for the same MCP-transport rationale (some clients
 // stringify array params at the JSON-RPC boundary).
-func parseBindings(v any) ([]config.Binding, string) {
+func parseBindings(v any) ([]fleet.Binding, string) {
 	if v == nil {
 		return nil, ""
 	}
@@ -549,13 +550,13 @@ func parseBindings(v any) ([]config.Binding, string) {
 	if errMsg != "" {
 		return nil, errMsg
 	}
-	out := make([]config.Binding, 0, len(raw))
+	out := make([]fleet.Binding, 0, len(raw))
 	for i, item := range raw {
 		m, ok := item.(map[string]any)
 		if !ok {
 			return nil, fmt.Sprintf("bindings[%d]: must be an object", i)
 		}
-		var b config.Binding
+		var b fleet.Binding
 		if v, ok := m["agent"]; ok && v != nil {
 			s, ok := v.(string)
 			if !ok {

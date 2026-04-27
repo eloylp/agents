@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // RosterEntry describes a peer agent visible to the current agent via the
@@ -59,7 +59,7 @@ type PromptContext struct {
 //
 // No Go templates, no {{.Field}} substitution — just text composition. The
 // agent's prompt is expected to be self-contained.
-func RenderAgentPrompt(agent config.AgentDef, skills map[string]config.SkillDef, ctx PromptContext) (RenderedPrompt, error) {
+func RenderAgentPrompt(agent fleet.Agent, skills map[string]fleet.Skill, ctx PromptContext) (RenderedPrompt, error) {
 	var sys strings.Builder
 
 	if !agent.AllowPRs {

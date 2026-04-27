@@ -16,6 +16,7 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // EventEnqueuer can accept events for async processing.
@@ -410,7 +411,7 @@ func (s *DispatchDedupStore) TryClaimForDispatch(agent, repo string, number int,
 // dedup safety limits.
 type Dispatcher struct {
 	cfg      config.DispatchConfig
-	agents   map[string]config.AgentDef // all agents by name (lower-cased)
+	agents   map[string]fleet.Agent // all agents by name (lower-cased)
 	agentsMu sync.RWMutex               // protects agents map
 	dedup    *DispatchDedupStore
 	counters dispatchCounters
@@ -421,7 +422,7 @@ type Dispatcher struct {
 
 // NewDispatcher builds a Dispatcher. agents must be the full agent map (by
 // lower-cased name) from the loaded config.
-func NewDispatcher(cfg config.DispatchConfig, agents map[string]config.AgentDef, dedup *DispatchDedupStore, queue EventEnqueuer, logger zerolog.Logger) *Dispatcher {
+func NewDispatcher(cfg config.DispatchConfig, agents map[string]fleet.Agent, dedup *DispatchDedupStore, queue EventEnqueuer, logger zerolog.Logger) *Dispatcher {
 	return &Dispatcher{
 		cfg:    cfg,
 		agents: agents,
@@ -440,8 +441,8 @@ func (d *Dispatcher) WithGraphRecorder(r GraphRecorder) {
 // UpdateAgents replaces the agent map used for dispatch allowlist and opt-in
 // checks. It is safe to call concurrently with ProcessDispatches and is
 // intended for hot-reload paths (e.g. CRUD API followed by cron reload).
-func (d *Dispatcher) UpdateAgents(agents []config.AgentDef) {
-	m := make(map[string]config.AgentDef, len(agents))
+func (d *Dispatcher) UpdateAgents(agents []fleet.Agent) {
+	m := make(map[string]fleet.Agent, len(agents))
 	for _, a := range agents {
 		m[a.Name] = a
 	}
@@ -458,7 +459,7 @@ func (d *Dispatcher) UpdateAgents(agents []config.AgentDef) {
 // All requests are attempted; an error is returned if any enqueue fails.
 func (d *Dispatcher) ProcessDispatches(
 	ctx context.Context,
-	originator config.AgentDef,
+	originator fleet.Agent,
 	ev Event,
 	rootEventID string,
 	currentDepth int,

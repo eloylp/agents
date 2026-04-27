@@ -1,7 +1,7 @@
 package webhook
 
 import (
-	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/mcp"
 )
 
@@ -9,7 +9,7 @@ import (
 // storeAgentPatchJSON and delegates to UpdateAgent. Implements the
 // mcp.AgentWriter contract so the MCP server and REST PATCH /agents/{name}
 // share the same store-mutation path.
-func (s *Server) UpdateAgentPatch(name string, patch mcp.AgentPatch) (config.AgentDef, error) {
+func (s *Server) UpdateAgentPatch(name string, patch mcp.AgentPatch) (fleet.Agent, error) {
 	return s.UpdateAgent(name, storeAgentPatchJSON{
 		Backend:       patch.Backend,
 		Model:         patch.Model,
@@ -25,13 +25,13 @@ func (s *Server) UpdateAgentPatch(name string, patch mcp.AgentPatch) (config.Age
 
 // UpdateSkillPatch adapts an mcp.SkillPatch to storeSkillPatchJSON and
 // delegates to UpdateSkill. Implements mcp.SkillWriter.
-func (s *Server) UpdateSkillPatch(name string, patch mcp.SkillPatch) (string, config.SkillDef, error) {
+func (s *Server) UpdateSkillPatch(name string, patch mcp.SkillPatch) (string, fleet.Skill, error) {
 	return s.UpdateSkill(name, storeSkillPatchJSON{Prompt: patch.Prompt})
 }
 
 // UpdateBackendPatch adapts an mcp.BackendPatch to storeBackendPatchJSON and
 // delegates to UpdateBackend. Implements mcp.BackendWriter.
-func (s *Server) UpdateBackendPatch(name string, patch mcp.BackendPatch) (string, config.AIBackendConfig, error) {
+func (s *Server) UpdateBackendPatch(name string, patch mcp.BackendPatch) (string, fleet.Backend, error) {
 	return s.UpdateBackend(name, storeBackendPatchJSON{
 		Command:          patch.Command,
 		Version:          patch.Version,

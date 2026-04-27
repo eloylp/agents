@@ -1,16 +1,17 @@
 package config
 
 import (
+	"github.com/eloylp/agents/internal/fleet"
 	"strings"
 	"testing"
 )
 
-// TestAgentIsAllowMemoryDefaultsTrue confirms that an AgentDef with no
+// TestAgentIsAllowMemoryDefaultsTrue confirms that an fleet.Agent with no
 // AllowMemory field set (the YAML "absent" case) reports true so existing
 // agents authored before the field existed keep their previous behaviour.
 func TestAgentIsAllowMemoryDefaultsTrue(t *testing.T) {
 	t.Parallel()
-	a := AgentDef{Name: "reviewer"}
+	a := fleet.Agent{Name: "reviewer"}
 	if !a.IsAllowMemory() {
 		t.Errorf("AllowMemory nil should report true, got false")
 	}

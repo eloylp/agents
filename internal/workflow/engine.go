@@ -15,6 +15,7 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // labeledKinds are the event kinds that trigger label-based bindings.
@@ -100,7 +101,7 @@ func NewEngine(cfg *config.Config, runners map[string]ai.Runner, queue EventEnqu
 		logger:        logger.With().Str("component", "workflow_engine").Logger(),
 	}
 	if queue != nil {
-		agentMap := make(map[string]config.AgentDef, len(cfg.Agents))
+		agentMap := make(map[string]fleet.Agent, len(cfg.Agents))
 		for _, a := range cfg.Agents {
 			agentMap[a.Name] = a
 		}
@@ -249,7 +250,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 
 	// agent.dispatch requires an enabled binding; agents.run (manual trigger)
 	// skips the check — explicit operator intent always runs.
-	if ev.Kind != "agents.run" && !slices.ContainsFunc(repo.Use, func(b config.Binding) bool {
+	if ev.Kind != "agents.run" && !slices.ContainsFunc(repo.Use, func(b fleet.Binding) bool {
 		return b.Agent == targetName && b.IsEnabled()
 	}) {
 		return fmt.Errorf("dispatch: target agent %q is not bound to repo %q", targetName, ev.Repo.FullName)
@@ -337,7 +338,7 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 			break
 		}
 		wg.Add(1)
-		go func(a config.AgentDef) {
+		go func(a fleet.Agent) {
 			defer wg.Done()
 			defer sem.Release(1)
 
@@ -413,7 +414,7 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 // when ev.Kind appears in the binding's Events slice.
 // cfg must be a snapshot already held by the caller to ensure a single
 // consistent epoch across the lookup and the subsequent runAgent calls.
-func (e *Engine) agentsForEvent(cfg *config.Config, ev Event) []config.AgentDef {
+func (e *Engine) agentsForEvent(cfg *config.Config, ev Event) []fleet.Agent {
 	repo, ok := cfg.RepoByName(ev.Repo.FullName)
 	if !ok || !repo.Enabled {
 		return nil
@@ -428,7 +429,7 @@ func (e *Engine) agentsForEvent(cfg *config.Config, ev Event) []config.AgentDef 
 	}
 
 	seen := make(map[string]struct{})
-	var matched []config.AgentDef
+	var matched []fleet.Agent
 	for _, b := range repo.Use {
 		if !b.IsEnabled() {
 			continue
@@ -510,7 +511,7 @@ func extractDispatchContext(ev Event) (rootEventID string, depth int) {
 // caller. Both must come from the same atomic snapshot so that agent lookup
 // and backend resolution operate on a single consistent epoch. The caller is
 // responsible for snapshotting under cfgMu+runnersMu before calling here.
-func (e *Engine) runAgent(ctx context.Context, ev Event, agent config.AgentDef, cfg *config.Config, runners map[string]ai.Runner) error {
+func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg *config.Config, runners map[string]ai.Runner) error {
 	backend := cfg.ResolveBackend(agent.Backend)
 	if backend == "" {
 		return fmt.Errorf("agent %q: no runner available for backend %q", agent.Name, agent.Backend)

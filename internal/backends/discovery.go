@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -80,7 +81,7 @@ func DiscoverAndPersist(ctx context.Context, db *sql.DB) (Diagnostics, error) {
 }
 
 // RunDiagnostics executes live discovery checks without mutating the store.
-func RunDiagnostics(ctx context.Context, existing map[string]config.AIBackendConfig) Diagnostics {
+func RunDiagnostics(ctx context.Context, existing map[string]fleet.Backend) Diagnostics {
 	diag := Diagnostics{GeneratedAt: time.Now().UTC()}
 	type backendTarget struct {
 		name             string
@@ -131,7 +132,7 @@ func RunDiagnostics(ctx context.Context, existing map[string]config.AIBackendCon
 	return diag
 }
 
-func persistDiagnostics(db *sql.DB, existing map[string]config.AIBackendConfig, diag Diagnostics) error {
+func persistDiagnostics(db *sql.DB, existing map[string]fleet.Backend, diag Diagnostics) error {
 	for _, b := range diag.Backends {
 		prev, hadPrev := existing[b.Name]
 		if !b.Detected && !hadPrev {

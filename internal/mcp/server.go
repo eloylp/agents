@@ -35,6 +35,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -137,8 +138,8 @@ type AgentPatch struct {
 // Implementations must hold the store mutex while writing and reload cron
 // schedules afterwards so MCP writes stay consistent with the REST path.
 type AgentWriter interface {
-	UpsertAgent(a config.AgentDef) (config.AgentDef, error)
-	UpdateAgentPatch(name string, patch AgentPatch) (config.AgentDef, error)
+	UpsertAgent(a fleet.Agent) (fleet.Agent, error)
+	UpdateAgentPatch(name string, patch AgentPatch) (fleet.Agent, error)
 	DeleteAgent(name string, cascade bool) error
 }
 
@@ -158,8 +159,8 @@ type SkillPatch struct {
 // Implementations must hold the store mutex while writing and reload cron
 // schedules afterwards so MCP writes stay consistent with the REST path.
 type SkillWriter interface {
-	UpsertSkill(name string, sk config.SkillDef) (string, config.SkillDef, error)
-	UpdateSkillPatch(name string, patch SkillPatch) (string, config.SkillDef, error)
+	UpsertSkill(name string, sk fleet.Skill) (string, fleet.Skill, error)
+	UpdateSkillPatch(name string, patch SkillPatch) (string, fleet.Skill, error)
 	DeleteSkill(name string) error
 }
 
@@ -189,8 +190,8 @@ type BackendPatch struct {
 // Implementations must hold the store mutex while writing and reload cron
 // schedules afterwards so MCP writes stay consistent with the REST path.
 type BackendWriter interface {
-	UpsertBackend(name string, b config.AIBackendConfig) (string, config.AIBackendConfig, error)
-	UpdateBackendPatch(name string, patch BackendPatch) (string, config.AIBackendConfig, error)
+	UpsertBackend(name string, b fleet.Backend) (string, fleet.Backend, error)
+	UpdateBackendPatch(name string, patch BackendPatch) (string, fleet.Backend, error)
 	DeleteBackend(name string) error
 }
 
@@ -203,7 +204,7 @@ type BackendWriter interface {
 // Implementations must hold the store mutex while writing and reload cron
 // schedules afterwards so MCP writes stay consistent with the REST path.
 type RepoWriter interface {
-	UpsertRepo(r config.RepoDef) (config.RepoDef, error)
+	UpsertRepo(r fleet.Repo) (fleet.Repo, error)
 	DeleteRepo(name string) error
 }
 
@@ -216,9 +217,9 @@ type RepoWriter interface {
 // Implementations must hold the store mutex while writing and reload cron
 // schedules afterwards so MCP writes stay consistent with the REST path.
 type BindingWriter interface {
-	CreateBinding(repoName string, b config.Binding) (config.Binding, error)
-	ReadBinding(repoName string, id int64) (config.Binding, error)
-	UpdateBinding(repoName string, id int64, b config.Binding) (config.Binding, error)
+	CreateBinding(repoName string, b fleet.Binding) (fleet.Binding, error)
+	ReadBinding(repoName string, id int64) (fleet.Binding, error)
+	UpdateBinding(repoName string, id int64, b fleet.Binding) (fleet.Binding, error)
 	DeleteBinding(repoName string, id int64) error
 }
 

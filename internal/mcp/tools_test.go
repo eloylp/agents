@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
@@ -66,21 +67,21 @@ func (s stubStatus) StatusJSON() ([]byte, error) {
 func fixtureConfig() *config.Config {
 	return &config.Config{
 		Daemon: config.DaemonConfig{
-			AIBackends: map[string]config.AIBackendConfig{
+			AIBackends: map[string]fleet.Backend{
 				"claude": {Command: "claude", Models: []string{"opus", "sonnet"}, Healthy: true, TimeoutSeconds: 60},
 				"codex":  {Command: "codex", Healthy: false},
 			},
 		},
-		Skills: map[string]config.SkillDef{
+		Skills: map[string]fleet.Skill{
 			"testing":  {Prompt: "write good tests"},
 			"security": {Prompt: "audit inputs"},
 		},
-		Agents: []config.AgentDef{
+		Agents: []fleet.Agent{
 			{Name: "coder", Backend: "claude", Skills: []string{"testing"}, Description: "writes code"},
 			{Name: "reviewer", Backend: "claude", AllowDispatch: true},
 		},
-		Repos: []config.RepoDef{
-			{Name: "owner/one", Enabled: true, Use: []config.Binding{
+		Repos: []fleet.Repo{
+			{Name: "owner/one", Enabled: true, Use: []fleet.Binding{
 				{Agent: "coder", Labels: []string{"bug"}},
 				{Agent: "reviewer", Cron: "@hourly"},
 			}},
@@ -100,22 +101,22 @@ func testDB(t *testing.T) *sql.DB {
 	t.Cleanup(func() { db.Close() })
 	if err := store.ImportAll(
 		db,
-		[]config.AgentDef{
+		[]fleet.Agent{
 			{Name: "coder", Backend: "claude", Skills: []string{"testing"}, Prompt: "code", Description: "writes code", CanDispatch: []string{}},
 			{Name: "reviewer", Backend: "claude", Prompt: "review", AllowDispatch: true, Skills: []string{}, CanDispatch: []string{}},
 		},
-		[]config.RepoDef{
-			{Name: "owner/one", Enabled: true, Use: []config.Binding{
+		[]fleet.Repo{
+			{Name: "owner/one", Enabled: true, Use: []fleet.Binding{
 				{Agent: "coder", Labels: []string{"bug"}},
 				{Agent: "reviewer", Cron: "0 * * * *"},
 			}},
-			{Name: "owner/two", Enabled: false, Use: []config.Binding{}},
+			{Name: "owner/two", Enabled: false, Use: []fleet.Binding{}},
 		},
-		map[string]config.SkillDef{
+		map[string]fleet.Skill{
 			"testing":  {Prompt: "write good tests"},
 			"security": {Prompt: "audit inputs"},
 		},
-		map[string]config.AIBackendConfig{
+		map[string]fleet.Backend{
 			"claude": {Command: "claude", Models: []string{"opus", "sonnet"}, Healthy: true, TimeoutSeconds: 60},
 			"codex":  {Command: "codex"},
 		},
@@ -1255,31 +1256,31 @@ func TestToolImportConfigPropagatesError(t *testing.T) {
 // what the create_agent tool serialises back to the caller, so tests pin both
 // the inputs the writer received and the outputs the tool surfaces.
 type stubAgentWriter struct {
-	gotUpsert      config.AgentDef
+	gotUpsert      fleet.Agent
 	gotDeleteName  string
 	gotCascade     bool
 	gotPatchName   string
 	gotPatch       AgentPatch
-	canonical      config.AgentDef
-	patchCanonical config.AgentDef
+	canonical      fleet.Agent
+	patchCanonical fleet.Agent
 	upsertErr      error
 	deleteErr      error
 	patchErr       error
 }
 
-func (s *stubAgentWriter) UpsertAgent(a config.AgentDef) (config.AgentDef, error) {
+func (s *stubAgentWriter) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 	s.gotUpsert = a
 	if s.upsertErr != nil {
-		return config.AgentDef{}, s.upsertErr
+		return fleet.Agent{}, s.upsertErr
 	}
 	return s.canonical, nil
 }
 
-func (s *stubAgentWriter) UpdateAgentPatch(name string, patch AgentPatch) (config.AgentDef, error) {
+func (s *stubAgentWriter) UpdateAgentPatch(name string, patch AgentPatch) (fleet.Agent, error) {
 	s.gotPatchName = name
 	s.gotPatch = patch
 	if s.patchErr != nil {
-		return config.AgentDef{}, s.patchErr
+		return fleet.Agent{}, s.patchErr
 	}
 	return s.patchCanonical, nil
 }
@@ -1292,7 +1293,7 @@ func (s *stubAgentWriter) DeleteAgent(name string, cascade bool) error {
 
 func TestToolCreateAgentForwardsAndReturnsCanonical(t *testing.T) {
 	t.Parallel()
-	canonical := config.AgentDef{
+	canonical := fleet.Agent{
 		Name:          "linter",
 		Backend:       "claude",
 		Skills:        []string{"security"},
@@ -1501,31 +1502,31 @@ type stubSkillWriter struct {
 	gotPatchName        string
 	gotPatch            SkillPatch
 	patchCanonicalName  string
-	patchCanonicalSkill config.SkillDef
+	patchCanonicalSkill fleet.Skill
 	patchErr            error
 	gotUpsertName  string
-	gotUpsertSkill config.SkillDef
+	gotUpsertSkill fleet.Skill
 	gotDeleteName  string
 	canonicalName  string
-	canonical      config.SkillDef
+	canonical      fleet.Skill
 	upsertErr      error
 	deleteErr      error
 }
 
-func (s *stubSkillWriter) UpsertSkill(name string, sk config.SkillDef) (string, config.SkillDef, error) {
+func (s *stubSkillWriter) UpsertSkill(name string, sk fleet.Skill) (string, fleet.Skill, error) {
 	s.gotUpsertName = name
 	s.gotUpsertSkill = sk
 	if s.upsertErr != nil {
-		return "", config.SkillDef{}, s.upsertErr
+		return "", fleet.Skill{}, s.upsertErr
 	}
 	return s.canonicalName, s.canonical, nil
 }
 
-func (s *stubSkillWriter) UpdateSkillPatch(name string, patch SkillPatch) (string, config.SkillDef, error) {
+func (s *stubSkillWriter) UpdateSkillPatch(name string, patch SkillPatch) (string, fleet.Skill, error) {
 	s.gotPatchName = name
 	s.gotPatch = patch
 	if s.patchErr != nil {
-		return "", config.SkillDef{}, s.patchErr
+		return "", fleet.Skill{}, s.patchErr
 	}
 	return s.patchCanonicalName, s.patchCanonicalSkill, nil
 }
@@ -1539,7 +1540,7 @@ func TestToolCreateSkillForwardsAndReturnsCanonical(t *testing.T) {
 	t.Parallel()
 	w := &stubSkillWriter{
 		canonicalName: "security",
-		canonical:     config.SkillDef{Prompt: "audit inputs carefully"},
+		canonical:     fleet.Skill{Prompt: "audit inputs carefully"},
 	}
 	deps := Deps{
 		DB:            testDB(t),
@@ -1763,33 +1764,33 @@ func TestToolDeleteSkillPropagatesConflict(t *testing.T) {
 // canonical values the tool surfaces back to the caller.
 type stubBackendWriter struct {
 	gotUpsertName        string
-	gotUpsertBackend     config.AIBackendConfig
+	gotUpsertBackend     fleet.Backend
 	gotDeleteName        string
 	gotPatchName         string
 	gotPatch             BackendPatch
 	canonicalName        string
-	canonical            config.AIBackendConfig
+	canonical            fleet.Backend
 	patchCanonicalName   string
-	patchCanonicalConfig config.AIBackendConfig
+	patchCanonicalConfig fleet.Backend
 	upsertErr            error
 	deleteErr            error
 	patchErr             error
 }
 
-func (s *stubBackendWriter) UpsertBackend(name string, b config.AIBackendConfig) (string, config.AIBackendConfig, error) {
+func (s *stubBackendWriter) UpsertBackend(name string, b fleet.Backend) (string, fleet.Backend, error) {
 	s.gotUpsertName = name
 	s.gotUpsertBackend = b
 	if s.upsertErr != nil {
-		return "", config.AIBackendConfig{}, s.upsertErr
+		return "", fleet.Backend{}, s.upsertErr
 	}
 	return s.canonicalName, s.canonical, nil
 }
 
-func (s *stubBackendWriter) UpdateBackendPatch(name string, patch BackendPatch) (string, config.AIBackendConfig, error) {
+func (s *stubBackendWriter) UpdateBackendPatch(name string, patch BackendPatch) (string, fleet.Backend, error) {
 	s.gotPatchName = name
 	s.gotPatch = patch
 	if s.patchErr != nil {
-		return "", config.AIBackendConfig{}, s.patchErr
+		return "", fleet.Backend{}, s.patchErr
 	}
 	return s.patchCanonicalName, s.patchCanonicalConfig, nil
 }
@@ -1801,7 +1802,7 @@ func (s *stubBackendWriter) DeleteBackend(name string) error {
 
 func TestToolCreateBackendForwardsAndReturnsCanonical(t *testing.T) {
 	t.Parallel()
-	canonical := config.AIBackendConfig{
+	canonical := fleet.Backend{
 		Command:        "claude",
 		Models:         []string{"claude-opus-4-7"},
 		TimeoutSeconds: 600,
@@ -2041,17 +2042,17 @@ func TestToolDeleteBackendPropagatesConflict(t *testing.T) {
 // canned values. Tests pin both the raw inputs the writer observed and the
 // canonical repo the tool surfaces back to the caller.
 type stubRepoWriter struct {
-	gotUpsert     config.RepoDef
+	gotUpsert     fleet.Repo
 	gotDeleteName string
-	canonical     config.RepoDef
+	canonical     fleet.Repo
 	upsertErr     error
 	deleteErr     error
 }
 
-func (s *stubRepoWriter) UpsertRepo(r config.RepoDef) (config.RepoDef, error) {
+func (s *stubRepoWriter) UpsertRepo(r fleet.Repo) (fleet.Repo, error) {
 	s.gotUpsert = r
 	if s.upsertErr != nil {
-		return config.RepoDef{}, s.upsertErr
+		return fleet.Repo{}, s.upsertErr
 	}
 	return s.canonical, nil
 }
@@ -2064,10 +2065,10 @@ func (s *stubRepoWriter) DeleteRepo(name string) error {
 func TestToolCreateRepoForwardsAndReturnsCanonical(t *testing.T) {
 	t.Parallel()
 	disabled := false
-	canonical := config.RepoDef{
+	canonical := fleet.Repo{
 		Name:    "owner/repo",
 		Enabled: true,
-		Use: []config.Binding{
+		Use: []fleet.Binding{
 			{Agent: "coder", Labels: []string{"ready"}},
 			{Agent: "planner", Cron: "0 * * * *", Enabled: &disabled},
 		},
@@ -2380,11 +2381,11 @@ func TestToolCreateRepoRejectsBadBindingFieldTypes(t *testing.T) {
 
 // TestToolCreateRepoDefaultsBindingEnabledNil pins the default-enabled
 // contract: when a binding omits "enabled", the *bool must stay nil so
-// config.Binding.IsEnabled returns true. Setting it to a pointer-to-false
+// fleet.Binding.IsEnabled returns true. Setting it to a pointer-to-false
 // here would silently disable bindings on every round-trip through MCP.
 func TestToolCreateRepoDefaultsBindingEnabledNil(t *testing.T) {
 	t.Parallel()
-	w := &stubRepoWriter{canonical: config.RepoDef{Name: "owner/repo", Enabled: true}}
+	w := &stubRepoWriter{canonical: fleet.Repo{Name: "owner/repo", Enabled: true}}
 	deps := Deps{
 		DB:            testDB(t),
 		Config:    stubConfig{cfg: fixtureConfig()},
@@ -2511,19 +2512,19 @@ func TestToolDeleteRepoPropagatesNotFound(t *testing.T) {
 type stubBindingWriter struct {
 	// Create
 	gotCreateRepo    string
-	gotCreateBinding config.Binding
-	createResult     config.Binding
+	gotCreateBinding fleet.Binding
+	createResult     fleet.Binding
 	createErr        error
 	// Update
 	gotUpdateRepo    string
 	gotUpdateID      int64
-	gotUpdateBinding config.Binding
-	updateResult     config.Binding
+	gotUpdateBinding fleet.Binding
+	updateResult     fleet.Binding
 	updateErr        error
 	// Read
 	gotReadRepo string
 	gotReadID   int64
-	readResult  config.Binding
+	readResult  fleet.Binding
 	readErr     error
 	// Delete
 	gotDeleteRepo string
@@ -2531,30 +2532,30 @@ type stubBindingWriter struct {
 	deleteErr     error
 }
 
-func (s *stubBindingWriter) CreateBinding(repoName string, b config.Binding) (config.Binding, error) {
+func (s *stubBindingWriter) CreateBinding(repoName string, b fleet.Binding) (fleet.Binding, error) {
 	s.gotCreateRepo = repoName
 	s.gotCreateBinding = b
 	if s.createErr != nil {
-		return config.Binding{}, s.createErr
+		return fleet.Binding{}, s.createErr
 	}
 	return s.createResult, nil
 }
 
-func (s *stubBindingWriter) UpdateBinding(repoName string, id int64, b config.Binding) (config.Binding, error) {
+func (s *stubBindingWriter) UpdateBinding(repoName string, id int64, b fleet.Binding) (fleet.Binding, error) {
 	s.gotUpdateRepo = repoName
 	s.gotUpdateID = id
 	s.gotUpdateBinding = b
 	if s.updateErr != nil {
-		return config.Binding{}, s.updateErr
+		return fleet.Binding{}, s.updateErr
 	}
 	return s.updateResult, nil
 }
 
-func (s *stubBindingWriter) ReadBinding(repoName string, id int64) (config.Binding, error) {
+func (s *stubBindingWriter) ReadBinding(repoName string, id int64) (fleet.Binding, error) {
 	s.gotReadRepo = repoName
 	s.gotReadID = id
 	if s.readErr != nil {
-		return config.Binding{}, s.readErr
+		return fleet.Binding{}, s.readErr
 	}
 	return s.readResult, nil
 }
@@ -2568,7 +2569,7 @@ func (s *stubBindingWriter) DeleteBinding(repoName string, id int64) error {
 func TestToolCreateBindingForwardsAndReturnsID(t *testing.T) {
 	t.Parallel()
 	w := &stubBindingWriter{
-		createResult: config.Binding{ID: 42, Agent: "coder", Labels: []string{"ai:fix"}},
+		createResult: fleet.Binding{ID: 42, Agent: "coder", Labels: []string{"ai:fix"}},
 	}
 	deps := Deps{
 		DB:           testDB(t),
@@ -2631,7 +2632,7 @@ func TestToolUpdateBindingForwardsID(t *testing.T) {
 	t.Parallel()
 	disabled := false
 	w := &stubBindingWriter{
-		updateResult: config.Binding{ID: 7, Agent: "coder", Cron: "0 9 * * *", Enabled: &disabled},
+		updateResult: fleet.Binding{ID: 7, Agent: "coder", Cron: "0 9 * * *", Enabled: &disabled},
 	}
 	deps := Deps{
 		DB:           testDB(t),
@@ -2700,7 +2701,7 @@ func TestToolDeleteBindingForwardsID(t *testing.T) {
 
 func TestToolUpdateAgentForwardsPatch(t *testing.T) {
 	t.Parallel()
-	canonical := config.AgentDef{
+	canonical := fleet.Agent{
 		Name: "coder", Backend: "codex", Prompt: "p",
 	}
 	w := &stubAgentWriter{patchCanonical: canonical}
@@ -2763,7 +2764,7 @@ func TestToolUpdateSkillForwardsPatch(t *testing.T) {
 	t.Parallel()
 	w := &stubSkillWriter{
 		patchCanonicalName:  "security",
-		patchCanonicalSkill: config.SkillDef{Prompt: "audit"},
+		patchCanonicalSkill: fleet.Skill{Prompt: "audit"},
 	}
 	deps := Deps{
 		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
@@ -2810,7 +2811,7 @@ func TestToolUpdateBackendForwardsPatch(t *testing.T) {
 	t.Parallel()
 	w := &stubBackendWriter{
 		patchCanonicalName:   "claude",
-		patchCanonicalConfig: config.AIBackendConfig{Command: "/bin/claude", TimeoutSeconds: 900},
+		patchCanonicalConfig: fleet.Backend{Command: "/bin/claude", TimeoutSeconds: 900},
 	}
 	deps := Deps{
 		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},

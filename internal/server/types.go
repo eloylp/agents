@@ -13,7 +13,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -21,7 +21,7 @@ import (
 // repo, agent, skill, or backend write to update the scheduler's in-process
 // state without restarting the daemon.
 type CronReloader interface {
-	Reload(repos []config.RepoDef, agents []config.AgentDef, skills map[string]config.SkillDef, backends map[string]config.AIBackendConfig) error
+	Reload(repos []fleet.Repo, agents []fleet.Agent, skills map[string]fleet.Skill, backends map[string]fleet.Backend) error
 }
 
 // AgentStatus is the runtime state of one autonomous agent as reported by /status.
