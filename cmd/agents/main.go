@@ -137,16 +137,13 @@ func run() error {
 	processor.WithEventRecorder(obs)
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
-	srv := server.NewServer(cfg, dataChannels, schedulerStatusAdapter{scheduler}, engine, logger)
+	srv := server.NewServer(cfg, dataChannels, scheduler, engine, logger)
 	srv.WithUI(ui.FS)
-	srv.WithObserve(obs)
-	srv.WithRuntimeState(obs)
 	srv.WithStore(db, scheduler)
 	srv.WithWebhook(webhook.NewHandler(deliveryStore, dataChannels, srv, logger))
 
-	// Construct the fleet handler externally and wire it via WithFleet so
-	// the webhook package stays free of any internal/server/fleet import.
-	fleetHandler := serverfleet.New(db, srv, srv, schedulerStatusAdapter{scheduler}, obs, logger)
+	// Construct each domain handler externally and wire it in.
+	fleetHandler := serverfleet.New(db, srv, srv, scheduler, obs, logger)
 	fleetHandler.RefreshOrphansFromCfg(cfg)
 	srv.WithFleet(
 		fleetHandler,
@@ -161,12 +158,9 @@ func run() error {
 		fleetHandler.RefreshOrphansFromCfg,
 	)
 
-	// Same pattern for repos: construct externally, wire via WithRepos.
 	reposHandler := serverrepos.New(db, srv, srv, logger)
 	srv.WithRepos(reposHandler)
 
-	// Same pattern for config: construct externally with db, wire via
-	// WithConfig.
 	configHandler := serverconfig.New(db, srv, srv, logger)
 	srv.WithConfig(configHandler)
 
@@ -177,10 +171,10 @@ func run() error {
 	memReader := &sqliteWebhookReader{db: db}
 	srv.WithMemoryReader(memReader)
 
-	// Mount the observability routes via a closure so the webhook package
-	// stays free of any internal/server/observe import.
+	// Mount the observability routes via a closure so the central server
+	// doesn't import internal/server/observe.
 	srv.WithObserveRegister(func(r *mux.Router, withTimeout func(http.Handler) http.Handler) {
-		obh := serverobserve.New(obs, srv, schedulerStatusAdapter{scheduler}, obs, engine, memReader)
+		obh := serverobserve.New(obs, srv, scheduler, obs, engine, memReader)
 		obh.RegisterRoutes(r, withTimeout)
 	})
 
@@ -406,22 +400,6 @@ func loadConfig(dbPath, importPath string) (*config.Config, *sql.DB, error) {
 		return nil, nil, err
 	}
 	return cfg, db, nil
-}
-
-// schedulerStatusAdapter adapts *autonomous.Scheduler to server.StatusProvider,
-// converting autonomous.AgentStatus to server.AgentStatus without coupling
-// those packages to each other.
-type schedulerStatusAdapter struct {
-	s *autonomous.Scheduler
-}
-
-func (a schedulerStatusAdapter) AgentStatuses() []server.AgentStatus {
-	raw := a.s.AgentStatuses()
-	out := make([]server.AgentStatus, len(raw))
-	for i, s := range raw {
-		out[i] = server.AgentStatus(s)
-	}
-	return out
 }
 
 // fleetOrphansAdapter bridges serverfleet.Handler's concrete orphan snapshot

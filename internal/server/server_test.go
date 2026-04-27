@@ -66,24 +66,37 @@ func newTestServerWithProvider(cfg *config.Config, provider server.StatusProvide
 }
 
 // newTestServerExposingFleet is the variant for tests that need to call
-// methods on the fleet handler directly (e.g. SetRuntimeState after the
-// fact, or assertions on the orphan cache).
+// methods on the fleet handler directly.
 func newTestServerExposingFleet(cfg *config.Config, provider server.StatusProvider) (*server.Server, *workflow.DataChannels, *serverfleet.Handler) {
 	dc := workflow.NewDataChannels(1)
 	logger := zerolog.Nop()
 	srv := server.NewServer(cfg, dc, provider, nil, logger)
 	srv.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, srv, logger))
-	fleetHandler := wireFleetForTest(srv, nil, cfg, provider, logger)
+	fleetHandler := wireFleetForTest(srv, nil, cfg, provider, nil, logger)
 	srv.WithConfig(serverconfig.New(nil, srv, srv, logger))
 	return srv, dc, fleetHandler
+}
+
+// newTestServerWithRuntimeState wires a fleet handler that knows about a
+// stub RuntimeStateProvider, used by tests asserting on the running/idle
+// status the /agents view reports.
+func newTestServerWithRuntimeState(cfg *config.Config, provider server.StatusProvider, rs server.RuntimeStateProvider) (*server.Server, *workflow.DataChannels) {
+	dc := workflow.NewDataChannels(1)
+	logger := zerolog.Nop()
+	srv := server.NewServer(cfg, dc, provider, nil, logger)
+	srv.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, srv, logger))
+	wireFleetForTest(srv, nil, cfg, provider, rs, logger)
+	srv.WithConfig(serverconfig.New(nil, srv, srv, logger))
+	return srv, dc
 }
 
 // wireFleetForTest constructs a fleet handler and attaches it to srv via
 // WithFleet, mirroring cmd/agents. Pass a nil db for cfg-only mode (the
 // orphan cache + snapshot view still work; CRUD routes self-skip);
-// CRUD-mode helpers pass the live db.
-func wireFleetForTest(srv *server.Server, db *sql.DB, cfg *config.Config, provider server.StatusProvider, logger zerolog.Logger) *serverfleet.Handler {
-	fleetHandler := serverfleet.New(db, srv, srv, provider, nil, logger)
+// CRUD-mode helpers pass the live db. rs may be nil — pass a stub when the
+// test asserts on running/idle status from the /agents view.
+func wireFleetForTest(srv *server.Server, db *sql.DB, cfg *config.Config, provider server.StatusProvider, rs server.RuntimeStateProvider, logger zerolog.Logger) *serverfleet.Handler {
+	fleetHandler := serverfleet.New(db, srv, srv, provider, rs, logger)
 	fleetHandler.RefreshOrphansFromCfg(cfg)
 	srv.WithFleet(
 		fleetHandler,
@@ -871,6 +884,3 @@ func TestBuildHandlerMCPMountsWhenSet(t *testing.T) {
 	})
 }
 
-// ─── compile-time assertions ──────────────────────────────────────────────────
-
-var _ server.EventQueue = (*workflow.DataChannels)(nil)

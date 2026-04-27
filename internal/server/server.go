@@ -23,19 +23,18 @@ import (
 type Server struct {
 	cfg           *config.Config
 	logger        zerolog.Logger
-	channels      EventQueue
-	webhook       HandlerRegister // GitHub webhook receiver — wired via WithWebhook
-	provider      StatusProvider
-	runtimeState  RuntimeStateProvider // optional; used by /api/agents for live run status
-	dispatchStats DispatchStatsProvider
+	channels      *workflow.DataChannels
+	webhook       HandlerRegister       // GitHub webhook receiver — wired via WithWebhook
+	provider      StatusProvider        // /status agent state — interface for test-stubability
+	dispatchStats DispatchStatsProvider // /status dispatch counters — interface for test-stubability
+	cronReloader  CronReloader          // called from reloadCron — interface for test-stubability
 	startTime     time.Time
 	proxy         *anthropicproxy.Handler
-	uiFS          fs.FS               // optional; when set, /ui/ serves these static files
-	observeStore  *observe.Store      // optional; when set, enables observability endpoints
-	db            *sql.DB             // optional; when set, enables /api/store/* CRUD endpoints
-	cronReloader  CronReloader // optional; called after repo/agent writes to reload cron
-	memReader     MemoryReader // optional; when set, /api/memory reads from this (SQLite mode)
-	mcp           http.Handler        // optional; when set, /mcp serves this MCP handler
+	uiFS          fs.FS          // optional; when set, /ui/ serves these static files
+	observeStore  *observe.Store // optional; when set, enables observability endpoints
+	db            *sql.DB        // optional; when set, enables /api/store/* CRUD endpoints
+	memReader     MemoryReader   // optional; when set, /api/memory reads from this (SQLite mode)
+	mcp           http.Handler   // optional; when set, /mcp serves this MCP handler
 	// observeRegister mounts the observability routes when set via
 	// WithObserveRegister. cmd/agents constructs the observe handler
 	// externally so this server doesn't import internal/server/observe.
@@ -87,19 +86,10 @@ func (s *Server) WithObserveRegister(register func(*mux.Router, func(http.Handle
 	s.observeRegister = register
 }
 
-// WithRuntimeState records an optional runtime-state provider on the server.
-// It is no longer forwarded to the fleet handler — cmd/agents calls
-// fleetHandler.SetRuntimeState directly before WithFleet so the wiring stays
-// in one place.
-func (s *Server) WithRuntimeState(rsp RuntimeStateProvider) {
-	s.runtimeState = rsp
-}
-
-// WithStore attaches a SQLite database and an optional CronReloader. The
-// database backs reloadCron and the in-memory config swap on every write.
-// All three domain handlers (fleet, repos, config) are wired externally by
-// cmd/agents — which constructs each handler with its own db reference —
-// so this method does not touch them.
+// WithStore attaches a SQLite database and the CronReloader that
+// reloadCron will call after every CRUD write. In production the reloader
+// is the same *autonomous.Scheduler that was passed to NewServer; tests
+// can pass an errCronReloader stub to exercise reload-failure paths.
 func (s *Server) WithStore(db *sql.DB, r CronReloader) {
 	s.db = db
 	s.cronReloader = r
@@ -180,7 +170,7 @@ func (s *Server) Config() *config.Config {
 // CRUD HTTP surface; production callers use the domain handlers.
 func (s *Server) DB() *sql.DB { return s.db }
 
-func NewServer(cfg *config.Config, channels EventQueue, provider StatusProvider, dispatchStats DispatchStatsProvider, logger zerolog.Logger) *Server {
+func NewServer(cfg *config.Config, channels *workflow.DataChannels, provider StatusProvider, dispatchStats DispatchStatsProvider, logger zerolog.Logger) *Server {
 	s := &Server{
 		cfg:           cfg,
 		logger:        logger.With().Str("component", "http_server").Logger(),
@@ -373,7 +363,7 @@ type statusJSON struct {
 	Status         string                     `json:"status"`
 	UptimeSeconds  int64                      `json:"uptime_seconds"`
 	Queues         map[string]statusQueueJSON `json:"queues"`
-	Agents         []AgentStatus       `json:"agents"`
+	Agents         []AgentStatus `json:"agents"`
 	Dispatch       *workflow.DispatchStats    `json:"dispatch,omitempty"`
 	OrphanedAgents statusOrphanSummaryJSON    `json:"orphaned_agents"`
 }

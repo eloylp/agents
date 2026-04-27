@@ -76,22 +76,16 @@ type lastRunRecord struct {
 // with SQLite when ai_backend definitions change via the CRUD API.
 type RunnerBuilder func(name string, cfg fleet.Backend) ai.Runner
 
+
 // HotReloadSink is implemented by components that share config and runner
-// state with the Scheduler and must be notified when a CRUD-triggered Reload
-// replaces those values. Engine implements this interface so that both the
-// autonomous and event-driven execution paths stay in sync after a hot-reload.
+// state with the Scheduler and must be notified when a CRUD-triggered
+// Reload replaces those values. Workflow.Engine implements it so that both
+// the autonomous and event-driven execution paths stay in sync after a
+// hot-reload. Kept as an interface so scheduler_test.go can stub it with
+// testHotReloadSink.
 type HotReloadSink interface {
-	// UpdateConfig atomically replaces the config snapshot used for event
-	// routing and prompt rendering. It must be safe to call concurrently with
-	// ongoing agent runs.
 	UpdateConfig(cfg *config.Config)
-	// UpdateRunners atomically replaces the runner map. It must be safe to call
-	// concurrently with ongoing agent runs.
 	UpdateRunners(runners map[string]ai.Runner)
-	// UpdateConfigAndRunners atomically replaces both the config snapshot and
-	// the runner map in a single critical section. Use this instead of calling
-	// UpdateConfig and UpdateRunners separately when both values are changing
-	// together so that concurrent readers never observe a mismatched pair.
 	UpdateConfigAndRunners(cfg *config.Config, runners map[string]ai.Runner)
 }
 
@@ -163,10 +157,10 @@ func (s *Scheduler) WithRunnerBuilder(fn RunnerBuilder) {
 	s.runnerBuilder = fn
 }
 
-// WithHotReloadSink registers a component that shares config and runner state
-// with this Scheduler. At the end of each successful Reload, the sink's
-// UpdateConfig and UpdateRunners methods are called so that the external
-// component stays consistent with the new definitions.
+// WithHotReloadSink registers a sink (typically *workflow.Engine) that
+// shares config and runner state with this scheduler. Updates from
+// CRUD-triggered Reloads propagate to the sink so the event-driven path
+// stays in sync.
 func (s *Scheduler) WithHotReloadSink(sink HotReloadSink) {
 	s.hotReloadSink = sink
 }

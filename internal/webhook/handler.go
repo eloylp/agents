@@ -15,56 +15,45 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
 
-	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
-// ConfigGetter returns the current effective config. The handler reads it
-// per request so hot-reloaded webhook secrets and routing tables apply
-// without a daemon restart.
-type ConfigGetter interface {
-	Config() *config.Config
-}
-
 // Handler implements the GitHub webhook receiver: HMAC verification,
 // delivery dedupe, and per-event-type parsing into workflow events. It is
-// the single piece of webhook-domain logic in this package after the
-// server lifecycle and routing surface move out.
+// the single piece of webhook-domain logic in this package.
 //
-// Construct via NewHandler; mount with RegisterRoutes (the path comes from
-// cfg.Daemon.HTTP.WebhookPath). The current Server keeps its own
-// handleGitHubWebhook method as a thin delegate to this type so existing
-// tests that call it directly continue to work.
+// Construct via NewHandler; mount with RegisterRoutes (the path is read from
+// the server's current config snapshot at registration time).
 type Handler struct {
 	delivery *DeliveryStore
-	channels server.EventQueue
-	cfg      ConfigGetter
+	channels *workflow.DataChannels
+	srv      *server.Server // provides Config() snapshot
 	logger   zerolog.Logger
 }
 
-// NewHandler constructs a Handler. delivery, channels, and cfg are required;
+// NewHandler constructs a Handler. delivery, channels, and srv are required;
 // logger may be the daemon's root logger (the handler scopes a sub-logger
 // via the standard component label).
-func NewHandler(delivery *DeliveryStore, channels server.EventQueue, cfg ConfigGetter, logger zerolog.Logger) *Handler {
+func NewHandler(delivery *DeliveryStore, channels *workflow.DataChannels, srv *server.Server, logger zerolog.Logger) *Handler {
 	return &Handler{
 		delivery: delivery,
 		channels: channels,
-		cfg:      cfg,
+		srv:      srv,
 		logger:   logger.With().Str("component", "webhook").Logger(),
 	}
 }
 
 // RegisterRoutes mounts POST {cfg.Daemon.HTTP.WebhookPath} on r. The path
-// is read from cfg at registration time so operators can change it via
-// config without code edits.
+// is read from the server's Config() snapshot at registration time so
+// operators can change it via config without code edits.
 func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) http.Handler) {
-	path := h.cfg.Config().Daemon.HTTP.WebhookPath
+	path := h.srv.Config().Daemon.HTTP.WebhookPath
 	r.Handle(path, withTimeout(http.HandlerFunc(h.handleGitHubWebhook))).Methods(http.MethodPost)
 }
 
 func (h *Handler) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
-	cfg := h.cfg.Config()
+	cfg := h.srv.Config()
 	deliveryID := strings.TrimSpace(r.Header.Get("X-GitHub-Delivery"))
 	if deliveryID == "" {
 		http.Error(w, "missing delivery id", http.StatusBadRequest)
@@ -153,7 +142,7 @@ type webhookReview struct {
 // Events from issues that are pull requests (GitHub sends both) are dropped
 // for the "labeled" action; the pull_request event handles those.
 func (h *Handler) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	cfg := h.cfg.Config()
+	cfg := h.srv.Config()
 	var payload struct {
 		Action     string            `json:"action"`
 		Label      webhookLabel      `json:"label"`
@@ -214,7 +203,7 @@ func (h *Handler) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, 
 // For "labeled" actions it filters to AI labels (and skips drafts) and emits
 // "pull_request.labeled". For lifecycle actions it emits "pull_request.{action}".
 func (h *Handler) handlePullRequestEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	cfg := h.cfg.Config()
+	cfg := h.srv.Config()
 	var payload struct {
 		Action      string             `json:"action"`
 		Label       webhookLabel       `json:"label"`
@@ -278,7 +267,7 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, w http.ResponseWri
 // handleIssueCommentEvent handles X-GitHub-Event: issue_comment.
 // Only "created" actions are forwarded as "issue_comment.created".
 func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	cfg := h.cfg.Config()
+	cfg := h.srv.Config()
 	var payload struct {
 		Action     string            `json:"action"`
 		Comment    webhookComment    `json:"comment"`
@@ -317,7 +306,7 @@ func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWr
 // handlePullRequestReviewEvent handles X-GitHub-Event: pull_request_review.
 // Only "submitted" actions are forwarded as "pull_request_review.submitted".
 func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	cfg := h.cfg.Config()
+	cfg := h.srv.Config()
 	var payload struct {
 		Action      string             `json:"action"`
 		Review      webhookReview      `json:"review"`
@@ -358,7 +347,7 @@ func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, w http.Respo
 // pull_request_review_comment. Only "created" actions are forwarded as
 // "pull_request_review_comment.created".
 func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	cfg := h.cfg.Config()
+	cfg := h.srv.Config()
 	var payload struct {
 		Action      string             `json:"action"`
 		Comment     webhookComment     `json:"comment"`
@@ -396,7 +385,7 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 
 // handlePushEvent handles X-GitHub-Event: push.
 func (h *Handler) handlePushEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	cfg := h.cfg.Config()
+	cfg := h.srv.Config()
 	var payload struct {
 		Ref        string            `json:"ref"`
 		After      string            `json:"after"`

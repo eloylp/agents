@@ -16,6 +16,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	obstore "github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
@@ -29,10 +30,10 @@ type stubConfig struct{ cfg *config.Config }
 func (s *stubConfig) Config() *config.Config { return s.cfg }
 
 type stubStatusProvider struct {
-	statuses []server.AgentStatus
+	statuses []autonomous.AgentStatus
 }
 
-func (p *stubStatusProvider) AgentStatuses() []server.AgentStatus { return p.statuses }
+func (p *stubStatusProvider) AgentStatuses() []autonomous.AgentStatus { return p.statuses }
 
 type stubDispatchProvider struct {
 	stats workflow.DispatchStats
@@ -462,7 +463,7 @@ func TestHandleGraphNodeStatusReflectsRuntimeState(t *testing.T) {
 			{Name: "idle-err", Backend: "claude"},
 		},
 	}}
-	provider := &stubStatusProvider{statuses: []server.AgentStatus{
+	provider := &stubStatusProvider{statuses: []autonomous.AgentStatus{
 		{Name: "idle-err", LastStatus: "error"},
 	}}
 	rt := &stubRuntimeState{running: map[string]bool{"runner": true}}

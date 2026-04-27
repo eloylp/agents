@@ -32,7 +32,7 @@ import (
 func openCRUDTestServer(t *testing.T) *server.Server {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := store.Open(filepath.Join(dir, "test.DB()"))
+	db, err := store.Open(filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -44,7 +44,7 @@ func openCRUDTestServer(t *testing.T) *server.Server {
 	s := server.NewServer(cfg, dc, nil, nil, logger)
 	s.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, s, logger))
 	s.WithStore(db, nil) // nil reloader — cron hot-reload not exercised here
-	wireFleetForTest(s, db, cfg, nil, logger)
+	wireFleetForTest(s, db, cfg, nil, nil, logger)
 	s.WithRepos(serverrepos.New(db, s, s, logger))
 	s.WithConfig(serverconfig.New(db, s, s, logger))
 	return s
@@ -871,7 +871,7 @@ func (r *errCronReloader) Reload([]fleet.Repo, []fleet.Agent, map[string]fleet.S
 func openCRUDTestServerWithReloader(t *testing.T, reloader server.CronReloader) *server.Server {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := store.Open(filepath.Join(dir, "test.DB()"))
+	db, err := store.Open(filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -883,7 +883,7 @@ func openCRUDTestServerWithReloader(t *testing.T, reloader server.CronReloader) 
 	s := server.NewServer(cfg, dc, nil, nil, logger)
 	s.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, s, logger))
 	s.WithStore(db, reloader)
-	wireFleetForTest(s, db, cfg, nil, logger)
+	wireFleetForTest(s, db, cfg, nil, nil, logger)
 	s.WithRepos(serverrepos.New(db, s, s, logger))
 	s.WithConfig(serverconfig.New(db, s, s, logger))
 	return s
@@ -1029,7 +1029,7 @@ func TestStoreCRUDPostBodySizeLimit(t *testing.T) {
 	cfg.Daemon.HTTP.MaxBodyBytes = 10 // very small limit for the test
 
 	dir := t.TempDir()
-	db, err := store.Open(filepath.Join(dir, "test.DB()"))
+	db, err := store.Open(filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -1040,7 +1040,7 @@ func TestStoreCRUDPostBodySizeLimit(t *testing.T) {
 	s := server.NewServer(cfg, dc, nil, nil, logger)
 	s.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, s, logger))
 	s.WithStore(db, nil)
-	wireFleetForTest(s, db, cfg, nil, logger)
+	wireFleetForTest(s, db, cfg, nil, nil, logger)
 	s.WithRepos(serverrepos.New(db, s, s, logger))
 	configHandler := serverconfig.New(db, s, s, logger)
 	s.WithConfig(configHandler)
@@ -1094,7 +1094,7 @@ func TestStoreCRUDPostBodyTrailingGarbageRejected(t *testing.T) {
 	cfg.Daemon.HTTP.MaxBodyBytes = 15 // {"name":"x"} is 12 bytes; +5 garbage exceeds limit
 
 	dir := t.TempDir()
-	db, err := store.Open(filepath.Join(dir, "test.DB()"))
+	db, err := store.Open(filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -1105,7 +1105,7 @@ func TestStoreCRUDPostBodyTrailingGarbageRejected(t *testing.T) {
 	s := server.NewServer(cfg, dc, nil, nil, logger)
 	s.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, s, logger))
 	s.WithStore(db, nil)
-	wireFleetForTest(s, db, cfg, nil, logger)
+	wireFleetForTest(s, db, cfg, nil, nil, logger)
 	s.WithRepos(serverrepos.New(db, s, s, logger))
 	configHandler := serverconfig.New(db, s, s, logger)
 	s.WithConfig(configHandler)

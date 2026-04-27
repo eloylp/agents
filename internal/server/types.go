@@ -1,80 +1,61 @@
-// Package server holds the cross-cutting types that any HTTP-serving
-// sub-package needs: runtime status for autonomous agents, dispatch
-// counters, event-queue access, memory reads, and the cron-reload hook
-// invoked after CRUD writes.
+// Package server holds the central HTTP server and the cross-cutting types
+// that domain handler packages (fleet, repos, observe, config) depend on.
 //
-// Keeping these definitions in one place lets the domain-scoped server
-// packages (fleet, repos, observe, config) depend on a neutral location
-// rather than importing each other or the webhook package.
+// The interfaces here exist for one of two reasons: either they enable
+// dependency inversion the import graph requires (HandlerRegister,
+// WriteCoordinator, OrphansSource), or they let tests substitute stubs for
+// runtime collaborators (StatusProvider, RuntimeStateProvider,
+// DispatchStatsProvider, CronReloader, MemoryReader). Production callers
+// supply the concrete *autonomous.Scheduler / *observe.Store /
+// *workflow.Engine that satisfy the runtime-collaborator interfaces.
 package server
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"time"
 
 	"github.com/gorilla/mux"
 
+	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
 // CronReloader is implemented by *autonomous.Scheduler. It is called after a
-// repo, agent, skill, or backend write to update the scheduler's in-process
-// state without restarting the daemon.
+// CRUD write to update the scheduler's in-process state without restarting
+// the daemon. Kept as an interface so crud_test.go can inject an
+// errCronReloader stub to exercise reload-failure paths.
 type CronReloader interface {
 	Reload(repos []fleet.Repo, agents []fleet.Agent, skills map[string]fleet.Skill, backends map[string]fleet.Backend) error
 }
 
-// AgentStatus is the runtime state of one autonomous agent as reported by /status.
-type AgentStatus struct {
-	Name       string     `json:"name"`
-	Repo       string     `json:"repo"`
-	LastRun    *time.Time `json:"last_run,omitempty"`
-	NextRun    time.Time  `json:"next_run"`
-	LastStatus string     `json:"last_status,omitempty"`
-}
+// AgentStatus is the runtime state of one autonomous agent as reported by
+// /status. Aliased to autonomous.AgentStatus so production code can pass
+// *autonomous.Scheduler directly as a StatusProvider without an adapter.
+type AgentStatus = autonomous.AgentStatus
 
 // StatusProvider reports the current scheduling state of autonomous agents.
-// The implementation is optional; passing nil results in an empty agents list.
+// /status, /agents (fleet view), and the observability handlers consume it.
+// Kept as an interface so tests can stub controlled scheduling state without
+// constructing a real *autonomous.Scheduler.
 type StatusProvider interface {
 	AgentStatuses() []AgentStatus
 }
 
-// DispatchStatsProvider reports aggregate dispatch statistics.
-// The implementation is optional; passing nil omits the dispatch section.
+// DispatchStatsProvider reports aggregate dispatch statistics for /status
+// and /dispatches. Kept as an interface so tests can stub controlled
+// counters without constructing a real *workflow.Engine.
 type DispatchStatsProvider interface {
 	DispatchStats() workflow.DispatchStats
 }
 
-// RuntimeStateProvider reports whether a named agent currently has an in-flight run.
-// The implementation is optional; passing nil causes all agents to report "idle".
+// RuntimeStateProvider reports whether a named agent currently has an
+// in-flight run. Used by the /agents fleet view and the observability graph.
+// Kept as an interface so tests can stub controlled running state without
+// constructing a real *observe.Store.
 type RuntimeStateProvider interface {
 	IsRunning(agentName string) bool
-}
-
-// EventQueue accepts events for async processing and reports queue depth.
-// *workflow.DataChannels satisfies this interface.
-type EventQueue interface {
-	PushEvent(ctx context.Context, ev workflow.Event) error
-	QueueStats() workflow.QueueStat
-}
-
-// ErrMemoryNotFound is returned by MemoryReader.ReadMemory when no memory
-// record exists for the requested (agent, repo) pair. Callers should use
-// errors.Is to distinguish a missing record (404) from a genuine I/O error.
-var ErrMemoryNotFound = errors.New("server: memory not found")
-
-// MemoryReader retrieves the stored memory for an (agent, repo) pair.
-// The HTTP server uses this interface to serve /api/memory/{agent}/{repo}
-// without knowing whether the backing store is the filesystem or SQLite.
-// ReadMemory returns ErrMemoryNotFound when the record does not exist; it
-// returns ("", time.Time{}, nil) when the record exists but the content is
-// empty. The returned time.Time is the last-updated timestamp used to set the
-// X-Memory-Mtime response header; a zero value means the timestamp is unknown.
-type MemoryReader interface {
-	ReadMemory(agent, repo string) (string, time.Time, error)
 }
 
 // HandlerRegister is the shape every domain handler package satisfies so
@@ -96,8 +77,7 @@ type OrphansSnapshot struct {
 }
 
 // OrphansSource is implemented by the fleet handler. The composing server
-// queries it during /status assembly and via the route at
-// /agents/orphans/status (handled directly by the fleet package).
+// queries it during /status assembly.
 type OrphansSource interface {
 	OrphansSnapshot() OrphansSnapshot
 	RefreshOrphansFromDB() (OrphansSnapshot, error)
@@ -115,4 +95,22 @@ type OrphansSource interface {
 // fn error so callers see the failure that actually prevented hot-reload.
 type WriteCoordinator interface {
 	Do(fn func() error) error
+}
+
+// ErrMemoryNotFound is returned by MemoryReader.ReadMemory when no memory
+// record exists for the requested (agent, repo) pair. Callers should use
+// errors.Is to distinguish a missing record (404) from a genuine I/O error.
+var ErrMemoryNotFound = errors.New("server: memory not found")
+
+// MemoryReader retrieves the stored memory for an (agent, repo) pair. Kept
+// as an interface so tests can stub controlled (agent, repo) → content
+// mappings instead of constructing a SQLite-backed reader.
+//
+// ReadMemory returns ErrMemoryNotFound when the record does not exist; it
+// returns ("", time.Time{}, nil) when the record exists but the content is
+// empty. The returned time.Time is the last-updated timestamp used to set
+// the X-Memory-Mtime response header; a zero value means the timestamp is
+// unknown.
+type MemoryReader interface {
+	ReadMemory(agent, repo string) (string, time.Time, error)
 }

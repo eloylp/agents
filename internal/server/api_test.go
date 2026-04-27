@@ -15,6 +15,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/server"
 	serverobserve "github.com/eloylp/agents/internal/server/observe"
 	"github.com/eloylp/agents/internal/store"
@@ -96,7 +97,7 @@ func TestHandleAPIAgentsAttachesScheduleForCronBindings(t *testing.T) {
 			},
 		}
 	})
-	provider := &stubStatusProvider{statuses: []server.AgentStatus{
+	provider := &stubStatusProvider{statuses: []autonomous.AgentStatus{
 		{Name: "worker", Repo: "owner/repo", LastRun: &now, NextRun: next, LastStatus: "ok"},
 	}}
 	srv, _ := newTestServerWithProvider(cfg, provider)
@@ -151,7 +152,7 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 			},
 		}
 	})
-	provider := &stubStatusProvider{statuses: []server.AgentStatus{
+	provider := &stubStatusProvider{statuses: []autonomous.AgentStatus{
 		{Name: "worker", Repo: "owner/repo-a", LastRun: &now, NextRun: next1, LastStatus: "ok"},
 		{Name: "worker", Repo: "owner/repo-b", NextRun: next2, LastStatus: "pending"},
 	}}
@@ -306,10 +307,8 @@ func TestHandleAPIAgentsCurrentStatusRunningWhenActive(t *testing.T) {
 	cfg := testCfg(func(c *config.Config) {
 		c.Agents = []fleet.Agent{{Name: "coder", Backend: "claude"}}
 	})
-	srv, _, fleetHandler := newTestServerExposingFleet(cfg, nil)
 	rs := &stubRuntimeState{running: map[string]bool{"coder": true}}
-	srv.WithRuntimeState(rs)
-	fleetHandler.SetRuntimeState(rs)
+	srv, _ := newTestServerWithRuntimeState(cfg, nil, rs)
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
@@ -678,10 +677,10 @@ func TestServeSSEClearsServerWriteDeadline(t *testing.T) {
 // ── helpers ────────────────────────────────────────────────────────────────
 
 type stubStatusProvider struct {
-	statuses []server.AgentStatus
+	statuses []autonomous.AgentStatus
 }
 
-func (p *stubStatusProvider) AgentStatuses() []server.AgentStatus { return p.statuses }
+func (p *stubStatusProvider) AgentStatuses() []autonomous.AgentStatus { return p.statuses }
 
 // newTestObserve creates an observe.Store backed by a temporary SQLite DB.
 // Used by the integration tests for buildHandler routing through the SSE

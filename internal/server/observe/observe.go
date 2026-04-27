@@ -19,18 +19,34 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/config"
 	obstore "github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
-// ConfigGetter returns the current effective config. The HTTP server
-// snapshots its config under a lock and exposes it through this method so
-// handlers observe a consistent view per request without depending on the
-// server type.
+// ConfigGetter returns the current effective config. Kept as an interface
+// here (rather than a *server.Server reference) so observe_test.go can
+// supply a stubConfig with test-controlled cfg values.
 type ConfigGetter interface {
 	Config() *config.Config
+}
+
+// StatusProvider, RuntimeStateProvider, and DispatchStatsProvider are all
+// kept as interfaces in this package (rather than the concrete
+// *autonomous.Scheduler / *observe.Store / *workflow.Engine) because
+// observe_test.go stubs each one with test-controlled values.
+type StatusProvider interface {
+	AgentStatuses() []autonomous.AgentStatus
+}
+
+type RuntimeStateProvider interface {
+	IsRunning(name string) bool
+}
+
+type DispatchStatsProvider interface {
+	DispatchStats() workflow.DispatchStats
 }
 
 // Handler implements the observability HTTP endpoints. Construct via New and
@@ -39,21 +55,22 @@ type ConfigGetter interface {
 type Handler struct {
 	store         *obstore.Store
 	cfg           ConfigGetter
-	provider      server.StatusProvider
-	runtimeState  server.RuntimeStateProvider
-	dispatchStats server.DispatchStatsProvider
+	provider      StatusProvider
+	runtimeState  RuntimeStateProvider
+	dispatchStats DispatchStatsProvider
 	memReader     server.MemoryReader
 }
 
-// New constructs a Handler. store is required; the rest may be nil — handlers
-// degrade gracefully when their dependencies are absent (no schedule data,
-// all-idle node status, empty dispatch stats, /memory disabled).
+// New constructs a Handler. store is required; the rest may be nil —
+// handlers degrade gracefully when their dependencies are absent (no
+// schedule data, all-idle node status, empty dispatch stats, /memory
+// disabled).
 func New(
 	store *obstore.Store,
 	cfg ConfigGetter,
-	provider server.StatusProvider,
-	runtimeState server.RuntimeStateProvider,
-	dispatchStats server.DispatchStatsProvider,
+	provider StatusProvider,
+	runtimeState RuntimeStateProvider,
+	dispatchStats DispatchStatsProvider,
 	memReader server.MemoryReader,
 ) *Handler {
 	return &Handler{

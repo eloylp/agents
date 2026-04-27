@@ -87,7 +87,7 @@ func (h *Handler) RefreshOrphansFromDB() (OrphanedAgentsSnapshot, error) {
 		return OrphanedAgentsSnapshot{}, fmt.Errorf("read config snapshot: %w", err)
 	}
 
-	baseCfg := h.cfg.Config()
+	baseCfg := h.srv.Config()
 	cfg := *baseCfg
 	cfg.Agents = agents
 	cfg.Repos = repos

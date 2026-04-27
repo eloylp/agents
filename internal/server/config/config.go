@@ -23,18 +23,10 @@ import (
 	"github.com/rs/zerolog"
 	"gopkg.in/yaml.v3"
 
-	internalconfig "github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/store"
 )
-
-// ConfigGetter returns the current effective config under the composing
-// server's lock. Used for the read-only /config view and per-request
-// body-size limits.
-type ConfigGetter interface {
-	Config() *internalconfig.Config
-}
 
 // Handler implements the /config, /export, and /import HTTP surface plus the
 // methods exposed for the MCP config tools. Construct via New and mount with
@@ -42,19 +34,19 @@ type ConfigGetter interface {
 type Handler struct {
 	db     *sql.DB                 // optional; export/import are skipped when nil
 	coord  server.WriteCoordinator // required for import
-	cfg    ConfigGetter            // required
+	srv    *server.Server          // required — provides Config() snapshot
 	logger zerolog.Logger
 }
 
-// New constructs a Handler. coord and cfg are required; db is optional. When
+// New constructs a Handler. coord and srv are required; db is optional. When
 // db is nil the /export and /import routes are skipped at registration time —
 // /config still works in cfg-only mode (e.g. tests, --run-agent without
 // --db).
-func New(db *sql.DB, coord server.WriteCoordinator, cfg ConfigGetter, logger zerolog.Logger) *Handler {
+func New(db *sql.DB, coord server.WriteCoordinator, srv *server.Server, logger zerolog.Logger) *Handler {
 	return &Handler{
 		db:     db,
 		coord:  coord,
-		cfg:    cfg,
+		srv:    srv,
 		logger: logger.With().Str("component", "server_config").Logger(),
 	}
 }
@@ -205,7 +197,7 @@ func (h *Handler) HandleConfig(w http.ResponseWriter, _ *http.Request) {
 // redacted. Exposed so surfaces beyond HTTP (e.g. the MCP get_config tool)
 // can reuse the exact same wire shape without going through the router.
 func (h *Handler) ConfigJSON() ([]byte, error) {
-	cfg := h.cfg.Config()
+	cfg := h.srv.Config()
 
 	httpCfg := apiHTTPConfigJSON{
 		ListenAddr:             cfg.Daemon.HTTP.ListenAddr,
@@ -375,7 +367,7 @@ func (h *Handler) ExportYAML() ([]byte, error) {
 // as HandleExport and upserts all entities into the DB. On success it
 // returns 200 with a JSON summary of imported counts.
 func (h *Handler) HandleImport(w http.ResponseWriter, r *http.Request) {
-	limit := h.cfg.Config().Daemon.HTTP.MaxBodyBytes * 10
+	limit := h.srv.Config().Daemon.HTTP.MaxBodyBytes * 10
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {

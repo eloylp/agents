@@ -23,19 +23,10 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
 
-	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/store"
 )
-
-// ConfigGetter returns the current effective config. The HTTP server
-// snapshots its config under a lock and exposes it through this method so
-// handlers observe a consistent view per request without depending on the
-// composing server type.
-type ConfigGetter interface {
-	Config() *config.Config
-}
 
 // Handler implements the /repos and /repos/{owner}/{repo}/bindings HTTP
 // surface plus the methods exposed for the MCP repo and binding tools.
@@ -43,19 +34,19 @@ type ConfigGetter interface {
 type Handler struct {
 	db     *sql.DB
 	coord  server.WriteCoordinator
-	cfg    ConfigGetter
+	srv    *server.Server // provides Config() snapshot for per-request body limits
 	logger zerolog.Logger
 }
 
 // New constructs a Handler. db must be open; coord must be non-nil — every
 // mutation runs through coord.Do so the lock and reload hook stay coherent
-// across domains. cfg supplies the per-request body-size limit; logger
-// receives storage write errors.
-func New(db *sql.DB, coord server.WriteCoordinator, cfg ConfigGetter, logger zerolog.Logger) *Handler {
+// across domains. srv supplies the per-request body-size limit via
+// Config(); logger receives storage write errors.
+func New(db *sql.DB, coord server.WriteCoordinator, srv *server.Server, logger zerolog.Logger) *Handler {
 	return &Handler{
 		db:     db,
 		coord:  coord,
-		cfg:    cfg,
+		srv:    srv,
 		logger: logger.With().Str("component", "server_repos").Logger(),
 	}
 }
@@ -157,7 +148,7 @@ func (h *Handler) handleRepos(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeRepoJSON
-		if !decodeBody(w, r, h.cfg.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+		if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		canonical, err := h.UpsertRepo(req.toConfig())
@@ -189,7 +180,7 @@ func (h *Handler) handleRepo(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPatch:
 		var req repoRuntimeSettingsJSON
-		if !decodeBody(w, r, h.cfg.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+		if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		if req.Enabled == nil {
@@ -215,7 +206,7 @@ func (h *Handler) handleRepo(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleCreateBinding(w http.ResponseWriter, r *http.Request) {
 	repoName := repoNameFromVars(r)
 	var req storeBindingJSON
-	if !decodeBody(w, r, h.cfg.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	// Ignore any ID the client sends — the store picks it.
@@ -253,7 +244,7 @@ func (h *Handler) handleUpdateBinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req storeBindingJSON
-	if !decodeBody(w, r, h.cfg.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	b, err := h.UpdateBinding(repoName, id, req.toConfig())

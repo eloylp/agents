@@ -25,18 +25,11 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/backends"
-	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/mcp"
 	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/store"
 )
-
-// ConfigGetter returns the current effective config under the composing
-// server's lock. Used for per-request body-size limits.
-type ConfigGetter interface {
-	Config() *config.Config
-}
 
 // Handler implements the /agents, /skills, and /backends HTTP surface plus
 // the methods exposed for the MCP agent / skill / backend writers. It also
@@ -44,39 +37,36 @@ type ConfigGetter interface {
 // view served at GET /agents.
 //
 // Construct via New and mount with RegisterRoutes. The handler is usable
-// without a database — CRUD routes return 503 in that mode while the orphan
-// cache and fleet view continue to serve from the in-memory config.
+// without a database — CRUD routes self-skip at registration time in that
+// mode while the orphan cache and fleet view continue to serve from the
+// in-memory config.
 type Handler struct {
-	db           *sql.DB                     // optional; CRUD routes 503 when nil
+	db           *sql.DB                     // optional; CRUD routes self-skip when nil
 	coord        server.WriteCoordinator     // required for CRUD writes
-	cfg          ConfigGetter                // required
-	statusProv   server.StatusProvider       // optional; used by the fleet view
-	runtimeState server.RuntimeStateProvider // optional; used by the fleet view
+	srv          *server.Server              // required — provides Config() snapshot
+	provider     server.StatusProvider       // optional; supplies cron schedules to the fleet view
+	runtimeState server.RuntimeStateProvider // optional; runtime running/idle status
 	logger       zerolog.Logger
 
 	orphanMu    sync.RWMutex
 	orphanCache OrphanedAgentsSnapshot
 }
 
-// New constructs a Handler. coord and cfg are required; db, statusProv, and
-// runtimeState are optional — the handler degrades gracefully when they are
-// absent. Pass a nil db for cfg-only mode (orphan detection and the fleet
-// snapshot view work without a database; CRUD routes self-skip at
-// RegisterRoutes time).
-func New(db *sql.DB, coord server.WriteCoordinator, cfg ConfigGetter, statusProv server.StatusProvider, runtimeState server.RuntimeStateProvider, logger zerolog.Logger) *Handler {
+// New constructs a Handler. coord and srv are required; db, provider, and
+// runtimeState are optional — the handler degrades gracefully when they
+// are absent. provider and runtimeState are interfaces so tests can stub
+// them without constructing real *autonomous.Scheduler / *observe.Store
+// instances; production passes those concrete types directly.
+func New(db *sql.DB, coord server.WriteCoordinator, srv *server.Server, provider server.StatusProvider, runtimeState server.RuntimeStateProvider, logger zerolog.Logger) *Handler {
 	return &Handler{
 		db:           db,
 		coord:        coord,
-		cfg:          cfg,
-		statusProv:   statusProv,
+		srv:          srv,
+		provider:     provider,
 		runtimeState: runtimeState,
 		logger:       logger.With().Str("component", "server_fleet").Logger(),
 	}
 }
-
-// SetRuntimeState attaches a runtime-state provider after construction. The
-// fleet view degrades to "all agents idle" when none is provided.
-func (h *Handler) SetRuntimeState(rsp server.RuntimeStateProvider) { h.runtimeState = rsp }
 
 // RegisterRoutes mounts the agent, skill, backend, and orphans endpoints on
 // r. withTimeout wraps each handler in an http.TimeoutHandler matching the
@@ -120,7 +110,7 @@ func (h *Handler) HandleAgentsCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req storeAgentJSON
-	if !decodeBody(w, r, h.cfg.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	canonical, err := h.UpsertAgent(req.toConfig())
@@ -285,7 +275,7 @@ func (h *Handler) handleAgent(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleAgentPatch(w http.ResponseWriter, r *http.Request, name string) {
 	var req agentPatch
-	if !decodeBody(w, r, h.cfg.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	if !req.anyFieldSet() {
@@ -409,7 +399,7 @@ func (h *Handler) handleSkills(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeSkillJSON
-		if !decodeBody(w, r, h.cfg.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+		if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		name, sk, err := h.UpsertSkill(req.Name, fleet.Skill{Prompt: req.Prompt})
@@ -451,7 +441,7 @@ func (h *Handler) handleSkill(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleSkillPatch(w http.ResponseWriter, r *http.Request, name string) {
 	var req skillPatch
-	if !decodeBody(w, r, h.cfg.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	if !req.anyFieldSet() {
@@ -653,7 +643,7 @@ func (h *Handler) handleBackends(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeBackendJSON
-		if !decodeBody(w, r, h.cfg.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+		if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		name, b, err := h.UpsertBackend(req.Name, req.toConfig())
@@ -696,7 +686,7 @@ func (h *Handler) handleBackendsDiscover(w http.ResponseWriter, r *http.Request)
 
 func (h *Handler) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
 	var req localBackendRequest
-	if !decodeBody(w, r, h.cfg.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	name := fleet.NormalizeBackendName(req.Name)
@@ -790,7 +780,7 @@ func (h *Handler) handleBackendGet(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleBackendPatch(w http.ResponseWriter, r *http.Request) {
 	name := backendPathName(r)
 	var req backendPatchJSON
-	if !decodeBody(w, r, h.cfg.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	if !req.anyFieldSet() {
