@@ -18,6 +18,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/server"
+	serverconfig "github.com/eloylp/agents/internal/server/config"
 	serverrepos "github.com/eloylp/agents/internal/server/repos"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
@@ -43,6 +44,9 @@ func openCRUDTestServer(t *testing.T) *Server {
 	fleetHandler := wireFleetForTest(s, cfg, nil, logger)
 	fleetHandler.SetDB(db)
 	s.WithRepos(serverrepos.New(db, s, s, logger))
+	configHandler := serverconfig.New(s, s, logger)
+	configHandler.SetDB(db)
+	s.WithConfig(configHandler)
 	return s
 }
 
@@ -880,6 +884,9 @@ func openCRUDTestServerWithReloader(t *testing.T, reloader server.CronReloader) 
 	s.WithStore(db, reloader)
 	fleetHandler := wireFleetForTest(s, cfg, nil, logger)
 	s.WithRepos(serverrepos.New(db, s, s, logger))
+	configHandler := serverconfig.New(s, s, logger)
+	configHandler.SetDB(db)
+	s.WithConfig(configHandler)
 	fleetHandler.SetDB(db)
 	return s
 }
@@ -1036,6 +1043,9 @@ func TestStoreCRUDPostBodySizeLimit(t *testing.T) {
 	s.WithStore(db, nil)
 	fleetHandler := wireFleetForTest(s, cfg, nil, logger)
 	s.WithRepos(serverrepos.New(db, s, s, logger))
+	configHandler := serverconfig.New(s, s, logger)
+	configHandler.SetDB(db)
+	s.WithConfig(configHandler)
 	fleetHandler.SetDB(db)
 
 	tests := []struct {
@@ -1099,6 +1109,9 @@ func TestStoreCRUDPostBodyTrailingGarbageRejected(t *testing.T) {
 	s.WithStore(db, nil)
 	fleetHandler := wireFleetForTest(s, cfg, nil, logger)
 	s.WithRepos(serverrepos.New(db, s, s, logger))
+	configHandler := serverconfig.New(s, s, logger)
+	configHandler.SetDB(db)
+	s.WithConfig(configHandler)
 	fleetHandler.SetDB(db)
 
 	endpoints := []string{

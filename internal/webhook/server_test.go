@@ -18,6 +18,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/server"
+	serverconfig "github.com/eloylp/agents/internal/server/config"
 	serverfleet "github.com/eloylp/agents/internal/server/fleet"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -70,6 +71,7 @@ func newTestServerExposingFleet(cfg *config.Config, provider server.StatusProvid
 	logger := zerolog.Nop()
 	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, provider, nil, logger)
 	fleetHandler := wireFleetForTest(srv, cfg, provider, logger)
+	srv.WithConfig(serverconfig.New(srv, srv, logger))
 	return srv, dc, fleetHandler
 }
 
