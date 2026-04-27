@@ -55,6 +55,58 @@ Every run, the daemon assembles the prompt from these pieces, in this order:
 
 The order matters: guardrails before skills, skills before the agent's own prompt, runtime context last. The agent's prompt can reference its skills, and runtime details come pre-loaded so the prompt does not need to ask "what triggered this?"
 
+### What it looks like assembled
+
+The composed prompt has two parts. Backends that support a system channel (Claude's `--append-system-prompt`) get the stable part as system and the per-run part as user; other backends get the two concatenated. The split keeps the long, repeated content in the cacheable side and the volatile per-run content in the user turn.
+
+For a `pr-reviewer` agent with `skills: [discretion, pr_lifecycle]`, `allow_prs: false`, `can_dispatch: [sec-reviewer]`, fired by `pull_request.labeled` on PR #42:
+
+**System part** (identical across runs of this agent):
+
+```
+Do not open or create pull requests under any circumstances.
+
+You operate inside an autonomous fleet. Do NOT @-mention external GitHub
+users. Do NOT make cross-repo writes. ...
+
+When reviewing a pull request, fetch the diff and the linked issue,
+check the contribution guidelines in the repo, and post one consolidated
+review. ...
+
+You are the pr-reviewer agent. Your job is to read the PR end-to-end,
+identify correctness and clarity issues, and post a single review with
+your findings. Use the GitHub MCP tools available to you. ...
+
+## Available experts
+
+- **sec-reviewer**: Deep security review for crypto, auth, supply chain. [dispatchable]
+```
+
+**User part** (changes every run):
+
+```
+## Runtime context
+
+Repository: owner/repo
+Issue/PR number: 42
+Backend: claude
+Event: pull_request.labeled
+Actor: alice
+label: ai:review:pr-reviewer
+title: Refactor token refresh
+draft: false
+Existing memory:
+## 2026-04-21
+- Reviewed PR #38; flagged retry storm. Followed up with author.
+```
+
+Notes on the layout:
+- The two skill bodies (`discretion`, `pr_lifecycle`) are concatenated verbatim, separated by a blank line. The daemon does not edit them.
+- The agent's own prompt comes immediately after the last skill, with no separator headline.
+- The roster only appears when `can_dispatch` is non-empty.
+- Payload keys are sorted alphabetically; multi-line string values are indented.
+- Memory is appended last, with a literal `Existing memory:` label. An empty memory still shows the label so the agent knows to start fresh.
+
 ## What the agent must return
 
 Every agent run produces a single top-level JSON object on stdout:
