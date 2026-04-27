@@ -35,3 +35,36 @@ type storeBackendJSON struct {
 	MaxPromptChars   int      `json:"max_prompt_chars"`
 	RedactionSaltEnv string   `json:"redaction_salt_env"`
 }
+
+// view*JSON types mirror the fleet snapshot wire shape produced by GET
+// /agents (HandleAgentsView in internal/server/fleet) so the webhook tests
+// that already exercised the router can decode the response without
+// importing the fleet package's unexported types.
+type viewScheduleJSON struct {
+	LastRun    *string `json:"last_run,omitempty"`
+	NextRun    string  `json:"next_run"`
+	LastStatus string  `json:"last_status,omitempty"`
+}
+
+type viewBindingJSON struct {
+	Repo     string            `json:"repo"`
+	Labels   []string          `json:"labels,omitempty"`
+	Events   []string          `json:"events,omitempty"`
+	Cron     string            `json:"cron,omitempty"`
+	Enabled  bool              `json:"enabled"`
+	Schedule *viewScheduleJSON `json:"schedule,omitempty"`
+}
+
+type viewAgentJSON struct {
+	Name          string            `json:"name"`
+	Backend       string            `json:"backend"`
+	Model         string            `json:"model,omitempty"`
+	Skills        []string          `json:"skills,omitempty"`
+	Description   string            `json:"description,omitempty"`
+	AllowDispatch bool              `json:"allow_dispatch"`
+	CanDispatch   []string          `json:"can_dispatch,omitempty"`
+	AllowPRs      bool              `json:"allow_prs"`
+	AllowMemory   bool              `json:"allow_memory"`
+	CurrentStatus string            `json:"current_status"`
+	Bindings      []viewBindingJSON `json:"bindings,omitempty"`
+}

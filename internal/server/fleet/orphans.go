@@ -1,4 +1,4 @@
-package webhook
+package fleet
 
 import (
 	"encoding/json"
@@ -24,18 +24,22 @@ type OrphanedAgent struct {
 	AvailableModels []string `json:"available_models,omitempty"`
 }
 
-// OrphanedAgentsSnapshot is the cached orphan-check result used by /status and
-// /agents/orphans/status.
+// OrphanedAgentsSnapshot is the cached orphan-check result used by /status
+// and /agents/orphans/status.
 type OrphanedAgentsSnapshot struct {
 	GeneratedAt time.Time       `json:"generated_at"`
 	Count       int             `json:"count"`
 	Agents      []OrphanedAgent `json:"agents"`
 }
 
-func (s *Server) handleAgentsOrphans(w http.ResponseWriter, _ *http.Request) {
-	snapshot := s.orphanedAgentsSnapshot()
-	if fresh, err := s.refreshOrphanedAgentsFromDB(); err != nil {
-		s.logger.Warn().Err(err).Msg("orphan status: falling back to cached snapshot")
+// HandleOrphansStatus serves GET /agents/orphans/status. It refreshes from
+// the database snapshot when one is attached so callers see post-write
+// state immediately, falling back to the cached cfg-derived snapshot if the
+// DB read fails or no database is wired.
+func (h *Handler) HandleOrphansStatus(w http.ResponseWriter, _ *http.Request) {
+	snapshot := h.OrphansSnapshot()
+	if fresh, err := h.RefreshOrphansFromDB(); err != nil {
+		h.logger.Warn().Err(err).Msg("orphan status: falling back to cached snapshot")
 	} else {
 		snapshot = fresh
 	}
@@ -44,45 +48,54 @@ func (s *Server) handleAgentsOrphans(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(snapshot)
 }
 
-func (s *Server) refreshOrphanedAgents(cfg *config.Config) {
-	snapshot := OrphanedAgentsSnapshot{
+// RefreshOrphansFromCfg recomputes the orphan cache from cfg without touching
+// the database. The composing server calls this once at startup with the
+// YAML-loaded config and again on every reloadCron after the in-memory
+// config has been swapped to a fresh DB-derived snapshot.
+func (h *Handler) RefreshOrphansFromCfg(cfg *config.Config) {
+	snap := OrphanedAgentsSnapshot{
 		GeneratedAt: time.Now().UTC(),
 		Agents:      computeOrphanedAgents(cfg),
 	}
-	snapshot.Count = len(snapshot.Agents)
+	snap.Count = len(snap.Agents)
 
-	s.orphanMu.Lock()
-	s.orphanCache = snapshot
-	s.orphanMu.Unlock()
+	h.orphanMu.Lock()
+	h.orphanCache = snap
+	h.orphanMu.Unlock()
 }
 
-func (s *Server) orphanedAgentsSnapshot() OrphanedAgentsSnapshot {
-	s.orphanMu.RLock()
-	defer s.orphanMu.RUnlock()
-
-	out := s.orphanCache
-	out.Agents = append([]OrphanedAgent(nil), s.orphanCache.Agents...)
+// OrphansSnapshot returns a defensive copy of the cached orphan snapshot so
+// callers can safely mutate the slice without affecting the cache.
+func (h *Handler) OrphansSnapshot() OrphanedAgentsSnapshot {
+	h.orphanMu.RLock()
+	defer h.orphanMu.RUnlock()
+	out := h.orphanCache
+	out.Agents = append([]OrphanedAgent(nil), h.orphanCache.Agents...)
 	return out
 }
 
-func (s *Server) refreshOrphanedAgentsFromDB() (OrphanedAgentsSnapshot, error) {
-	if s.db == nil {
-		return s.orphanedAgentsSnapshot(), nil
+// RefreshOrphansFromDB re-reads the four entity sets from SQLite, splices
+// them onto the daemon-level config, recomputes orphans, and returns the
+// fresh snapshot. When no database is attached it returns the cached
+// snapshot unchanged so callers don't need to special-case cfg-only mode.
+func (h *Handler) RefreshOrphansFromDB() (OrphanedAgentsSnapshot, error) {
+	if h.db == nil {
+		return h.OrphansSnapshot(), nil
 	}
-	agents, repos, skills, backends, err := store.ReadSnapshot(s.db)
+	agents, repos, skills, backends, err := store.ReadSnapshot(h.db)
 	if err != nil {
 		return OrphanedAgentsSnapshot{}, fmt.Errorf("read config snapshot: %w", err)
 	}
 
-	baseCfg := s.loadCfg()
+	baseCfg := h.cfg.Config()
 	cfg := *baseCfg
 	cfg.Agents = agents
 	cfg.Repos = repos
 	cfg.Skills = skills
 	cfg.Daemon.AIBackends = backends
 
-	s.refreshOrphanedAgents(&cfg)
-	return s.orphanedAgentsSnapshot(), nil
+	h.RefreshOrphansFromCfg(&cfg)
+	return h.OrphansSnapshot(), nil
 }
 
 func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {

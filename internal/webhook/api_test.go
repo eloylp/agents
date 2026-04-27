@@ -49,13 +49,13 @@ func TestHandleAPIAgentsReturnsConfiguredAgents(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
-	srv.handleAPIAgents(rec, req)
+	srv.buildHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 
-	var agents []apiAgentJSON
+	var agents []viewAgentJSON
 	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -104,9 +104,9 @@ func TestHandleAPIAgentsAttachesScheduleForCronBindings(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
-	srv.handleAPIAgents(rec, req)
+	srv.buildHandler().ServeHTTP(rec, req)
 
-	var agents []apiAgentJSON
+	var agents []viewAgentJSON
 	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -161,9 +161,9 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
-	srv.handleAPIAgents(rec, req)
+	srv.buildHandler().ServeHTTP(rec, req)
 
-	var agents []apiAgentJSON
+	var agents []viewAgentJSON
 	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 	}
 
 	// Build a map by repo name for stable assertions regardless of loop order.
-	byRepo := make(map[string]agentBindingJSON, 2)
+	byRepo := make(map[string]viewBindingJSON, 2)
 	for _, b := range agents[0].Bindings {
 		byRepo[b.Repo] = b
 	}
@@ -232,12 +232,12 @@ func TestHandleAPIAgentsSkipsDisabledRepos(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
-	srv.handleAPIAgents(rec, req)
+	srv.buildHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	var agents []apiAgentJSON
+	var agents []viewAgentJSON
 	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -261,12 +261,12 @@ func TestHandleAPIAgentsEmptyWhenNoAgents(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
-	srv.handleAPIAgents(rec, req)
+	srv.buildHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	var agents []apiAgentJSON
+	var agents []viewAgentJSON
 	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -282,12 +282,12 @@ func TestHandleAPIAgentsCurrentStatusIdleWhenNotRunning(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
-	srv.handleAPIAgents(rec, req)
+	srv.buildHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	var agents []apiAgentJSON
+	var agents []viewAgentJSON
 	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -313,12 +313,12 @@ func TestHandleAPIAgentsCurrentStatusRunningWhenActive(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
-	srv.handleAPIAgents(rec, req)
+	srv.buildHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	var agents []apiAgentJSON
+	var agents []viewAgentJSON
 	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
