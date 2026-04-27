@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
@@ -38,38 +39,68 @@ type ConfigGetter interface {
 }
 
 // Handler implements the /agents, /skills, and /backends HTTP surface plus
-// the methods exposed for the MCP agent / skill / backend writers. Construct
-// via New and mount with RegisterRoutes.
+// the methods exposed for the MCP agent / skill / backend writers. It also
+// owns the /agents/orphans/status endpoint and the read-only fleet snapshot
+// view served at GET /agents.
+//
+// Construct via New and mount with RegisterRoutes. The handler is usable
+// without a database — CRUD routes return 503 in that mode while the orphan
+// cache and fleet view continue to serve from the in-memory config.
 type Handler struct {
-	db     *sql.DB
-	coord  server.WriteCoordinator
-	cfg    ConfigGetter
-	logger zerolog.Logger
+	db           *sql.DB                     // optional; CRUD routes 503 when nil
+	coord        server.WriteCoordinator     // required for CRUD writes
+	cfg          ConfigGetter                // required
+	statusProv   server.StatusProvider       // optional; used by the fleet view
+	runtimeState server.RuntimeStateProvider // optional; used by the fleet view
+	logger       zerolog.Logger
+
+	orphanMu    sync.RWMutex
+	orphanCache OrphanedAgentsSnapshot
 }
 
-// New constructs a Handler. db must be open; coord must be non-nil — every
-// mutation runs through coord.Do so the lock and reload hook stay coherent
-// across domains.
-func New(db *sql.DB, coord server.WriteCoordinator, cfg ConfigGetter, logger zerolog.Logger) *Handler {
+// New constructs a Handler. coord and cfg are required; db, statusProv, and
+// runtimeState are optional — the handler degrades gracefully when they are
+// absent. db is wired later (via SetDB) when the daemon transitions from the
+// initial cfg-only mode (used by tests and the YAML-loader bootstrap) into
+// db-backed CRUD mode.
+func New(coord server.WriteCoordinator, cfg ConfigGetter, statusProv server.StatusProvider, runtimeState server.RuntimeStateProvider, logger zerolog.Logger) *Handler {
 	return &Handler{
-		db:     db,
-		coord:  coord,
-		cfg:    cfg,
-		logger: logger.With().Str("component", "server_fleet").Logger(),
+		coord:        coord,
+		cfg:          cfg,
+		statusProv:   statusProv,
+		runtimeState: runtimeState,
+		logger:       logger.With().Str("component", "server_fleet").Logger(),
 	}
 }
 
-// RegisterRoutes mounts the agent, skill, and backend endpoints on r.
-// withTimeout wraps each handler in an http.TimeoutHandler matching the
+// SetDB attaches a SQLite database after construction so CRUD handlers can
+// serve writes. Until SetDB is called the CRUD routes are not registered;
+// orphan detection and the fleet snapshot view work from cfg alone.
+func (h *Handler) SetDB(db *sql.DB) { h.db = db }
+
+// SetRuntimeState attaches a runtime-state provider after construction. The
+// fleet view degrades to "all agents idle" when none is provided.
+func (h *Handler) SetRuntimeState(rsp server.RuntimeStateProvider) { h.runtimeState = rsp }
+
+// RegisterRoutes mounts the agent, skill, backend, and orphans endpoints on
+// r. withTimeout wraps each handler in an http.TimeoutHandler matching the
 // daemon's HTTP write-timeout setting.
 //
-// /agents (GET) is *not* mounted here — that path is the read-only fleet
-// snapshot view, which still lives in the composing server until its own
-// extraction. Only the CRUD-mutating endpoints under /agents are owned by
-// this handler.
+// The orphans status endpoint is mounted unconditionally — it works from the
+// in-memory config alone. The agent / skill / backend CRUD routes are
+// mounted only when a database is attached (via SetDB before route
+// registration); without one those routes do not exist on the router.
+//
+// GET /agents is mounted by the composing server's dispatcher (which also
+// handles POST /agents) so both share one mux entry; the dispatcher delegates
+// to HandleAgentsView for the read-only fleet snapshot and to
+// HandleAgentsCreate for POST.
 func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) http.Handler) {
-	// /agents POST is registered alongside GET on the composing server's
-	// dispatcher — see Server.handleAgents — so both share one mux entry.
+	r.Handle("/agents/orphans/status", withTimeout(http.HandlerFunc(h.HandleOrphansStatus))).Methods(http.MethodGet)
+
+	if h.db == nil {
+		return
+	}
 	r.Handle("/agents/{name}", withTimeout(http.HandlerFunc(h.handleAgent))).Methods(http.MethodGet, http.MethodPatch, http.MethodDelete)
 
 	r.Handle("/skills", withTimeout(http.HandlerFunc(h.handleSkills))).Methods(http.MethodGet, http.MethodPost)
@@ -84,25 +115,14 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/backends/{name}", withTimeout(http.HandlerFunc(h.handleBackendDelete))).Methods(http.MethodDelete)
 }
 
-// HandleAgentsList serves GET /agents (the CRUD list — distinct from the
-// read-only fleet snapshot at the same path, which is still composed at the
-// server level). Exposed so the composing server can dispatch GET /agents to
-// either this handler or the fleet snapshot depending on context.
-func (h *Handler) HandleAgentsList(w http.ResponseWriter, _ *http.Request) {
-	agents, err := store.ReadAgents(h.db)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("read agents: %v", err), http.StatusInternalServerError)
+// HandleAgentsCreate serves POST /agents. The composing server's /agents
+// dispatcher routes POST here and GET to HandleAgentsView so a single mux
+// entry serves both the read-only fleet snapshot and CRUD create.
+func (h *Handler) HandleAgentsCreate(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		http.Error(w, "store not attached", http.StatusServiceUnavailable)
 		return
 	}
-	out := make([]storeAgentJSON, len(agents))
-	for i, a := range agents {
-		out[i] = agentToStoreJSON(a)
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-// HandleAgentsCreate serves POST /agents.
-func (h *Handler) HandleAgentsCreate(w http.ResponseWriter, r *http.Request) {
 	var req storeAgentJSON
 	if !decodeBody(w, r, h.cfg.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return

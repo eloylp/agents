@@ -56,11 +56,6 @@ type Server struct {
 	// (HTTP, proxy, log) is never replaced after startup, but since the entire
 	// pointer is swapped on reload the lock is required for all accesses.
 	cfgMu sync.RWMutex
-	// orphanMu protects orphanCache, which is updated on config reloads and
-	// read by /status and /agents/orphans/status endpoints.
-	orphanMu sync.RWMutex
-	// orphanCache stores the latest DB-only orphaned-agent snapshot.
-	orphanCache OrphanedAgentsSnapshot
 }
 
 // WithUI attaches an fs.FS containing the pre-built static UI assets to the
@@ -83,6 +78,9 @@ func (s *Server) WithObserve(store *observe.Store) {
 // /api/agents to report which agents are currently running.
 func (s *Server) WithRuntimeState(rsp server.RuntimeStateProvider) {
 	s.runtimeState = rsp
+	if s.fleet != nil {
+		s.fleet.SetRuntimeState(rsp)
+	}
 }
 
 // WithStore attaches a SQLite database and an optional CronReloader.
@@ -91,14 +89,16 @@ func (s *Server) WithRuntimeState(rsp server.RuntimeStateProvider) {
 // r.Reload so that cron schedules take effect immediately. r may be nil
 // if hot-reload is not needed.
 //
-// WithStore also constructs the per-domain Handler types that own the
-// /repos and /repos/{owner}/{repo}/bindings surface, sharing the server's
-// CRUD-write coordinator so cross-domain writes serialise on one lock.
+// WithStore also wires the database into the per-domain handlers so their
+// CRUD routes (which were skipped at construction time when no database was
+// attached) become available, and constructs the repos handler.
 func (s *Server) WithStore(db *sql.DB, r server.CronReloader) {
 	s.db = db
 	s.cronReloader = r
 	s.repos = serverrepos.New(db, s, s, s.logger)
-	s.fleet = serverfleet.New(db, s, s, s.logger)
+	if s.fleet != nil {
+		s.fleet.SetDB(db)
+	}
 }
 
 // Repos returns the repos handler so the daemon's MCP wiring can satisfy the
@@ -155,7 +155,12 @@ func NewServer(cfg *config.Config, delivery *DeliveryStore, channels server.Even
 		dispatchStats: dispatchStats,
 		startTime:     time.Now(),
 	}
-	s.refreshOrphanedAgents(cfg)
+	// Construct the fleet handler upfront so the orphan cache and fleet
+	// snapshot view work in cfg-only mode (e.g. tests that never call
+	// WithStore). The database is wired later by WithStore; until then the
+	// CRUD routes are skipped at registration time.
+	s.fleet = serverfleet.New(s, s, provider, nil, s.logger)
+	s.fleet.RefreshOrphansFromCfg(cfg)
 	if cfg.Daemon.Proxy.Enabled {
 		up := cfg.Daemon.Proxy.Upstream
 		s.proxy = anthropicproxy.NewHandler(anthropicproxy.UpstreamConfig{
@@ -209,17 +214,16 @@ func (s *Server) buildHandler() http.Handler {
 	router.Handle(cfg.Daemon.HTTP.WebhookPath, withTimeout(http.HandlerFunc(s.handleGitHubWebhook))).Methods(http.MethodPost)
 	router.Handle("/run", withTimeout(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
 
-	// /agents merges the read-only fleet snapshot view (GET, still composed
-	// at the server level) with the CRUD list (POST, owned by the fleet
-	// handler). The dispatcher selects the right path by method.
+	// /agents merges the read-only fleet snapshot view (GET) with the CRUD
+	// create (POST) on a single mux entry; the dispatcher delegates to the
+	// fleet handler for both.
 	router.Handle("/agents", withTimeout(http.HandlerFunc(s.handleAgents))).Methods(http.MethodGet, http.MethodPost)
-	router.Handle("/agents/orphans/status", withTimeout(http.HandlerFunc(s.handleAgentsOrphans))).Methods(http.MethodGet)
 
-	// Domain handler packages own their CRUD routes; mounted only when
-	// WithStore has wired the database.
-	if s.fleet != nil {
-		s.fleet.RegisterRoutes(router, withTimeout)
-	}
+	// Domain handler packages own their routes. Fleet always exists (the
+	// orphan cache and snapshot view work in cfg-only mode); its CRUD
+	// routes self-skip when no database is attached. Repos is only present
+	// once WithStore has wired the database.
+	s.fleet.RegisterRoutes(router, withTimeout)
 	if s.repos != nil {
 		s.repos.RegisterRoutes(router, withTimeout)
 	}
@@ -273,17 +277,14 @@ func (s *Server) buildHandler() http.Handler {
 	return router
 }
 
-// handleAgents dispatches GET to the (still-composed-here) read-only fleet
-// snapshot view and POST to the fleet handler's CRUD list.
+// handleAgents dispatches GET to the fleet snapshot view and POST to the
+// fleet handler's CRUD create. Both delegate to the same handler so the
+// composing server keeps a single mux entry for /agents.
 func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		s.handleAPIAgents(w, r)
+		s.fleet.HandleAgentsView(w, r)
 	case http.MethodPost:
-		if s.fleet == nil {
-			http.NotFound(w, r)
-			return
-		}
 		s.fleet.HandleAgentsCreate(w, r)
 	}
 }
@@ -364,17 +365,17 @@ func (s *Server) buildStatus() statusJSON {
 		},
 		Agents: agents,
 	}
-	orphanedAgentsSnapshot := s.orphanedAgentsSnapshot()
-	if fresh, err := s.refreshOrphanedAgentsFromDB(); err != nil {
+	orphans := s.fleet.OrphansSnapshot()
+	if fresh, err := s.fleet.RefreshOrphansFromDB(); err != nil {
 		s.logger.Warn().Err(err).Msg("status: orphan snapshot refresh failed")
 	} else {
-		orphanedAgentsSnapshot = fresh
+		orphans = fresh
 	}
 	resp.OrphanedAgents = statusOrphanSummaryJSON{
-		Count: orphanedAgentsSnapshot.Count,
+		Count: orphans.Count,
 	}
-	if !orphanedAgentsSnapshot.GeneratedAt.IsZero() {
-		at := orphanedAgentsSnapshot.GeneratedAt
+	if !orphans.GeneratedAt.IsZero() {
+		at := orphans.GeneratedAt
 		resp.OrphanedAgents.UpdatedAt = &at
 	}
 	if s.dispatchStats != nil {

@@ -20,9 +20,9 @@ internal/
   workflow/                 # Event routing engine, single event queue, processor, dispatcher
   server/                   # Shared HTTP server types (cross-cutting interfaces, error sentinels, WriteCoordinator)
   server/observe/           # Observability HTTP handlers (events, traces, graph, dispatches, memory, SSE)
-  server/fleet/             # Agents/skills/backends HTTP CRUD handlers and methods (incl. backend discover/local)
+  server/fleet/             # Agents/skills/backends CRUD + GET /agents fleet view + orphans cache (incl. /agents/orphans/status)
   server/repos/             # Repos + per-binding HTTP CRUD handlers and methods
-  webhook/                  # HTTP server, HMAC verification, delivery dedupe, GET /agents view, orphans, /config + /export + /import (split in progress)
+  webhook/                  # HTTP server, HMAC verification, delivery dedupe, /config + /export + /import (split in progress)
   mcp/                      # MCP server exposing fleet-management tools at /mcp
   ui/                       # Embedded Next.js web dashboard (served at /ui/)
   setup/                    # Interactive first-time setup command
