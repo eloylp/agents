@@ -22,6 +22,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/server"
+	serverfleet "github.com/eloylp/agents/internal/server/fleet"
 	serverobserve "github.com/eloylp/agents/internal/server/observe"
 	serverrepos "github.com/eloylp/agents/internal/server/repos"
 	"github.com/eloylp/agents/internal/workflow"
@@ -44,6 +45,7 @@ type Server struct {
 	memReader     server.MemoryReader // optional; when set, /api/memory reads from this (SQLite mode)
 	mcp           http.Handler        // optional; when set, /mcp serves this MCP handler
 	repos         *serverrepos.Handler // constructed in WithStore; nil until then
+	fleet         *serverfleet.Handler // constructed in WithStore; nil until then
 	// storeMu serializes the "DB write → snapshot read → in-memory Reload"
 	// sequence so that concurrent write requests cannot interleave their
 	// snapshots and leave the scheduler in a stale or inconsistent state.
@@ -96,12 +98,19 @@ func (s *Server) WithStore(db *sql.DB, r server.CronReloader) {
 	s.db = db
 	s.cronReloader = r
 	s.repos = serverrepos.New(db, s, s, s.logger)
+	s.fleet = serverfleet.New(db, s, s, s.logger)
 }
 
 // Repos returns the repos handler so the daemon's MCP wiring can satisfy the
 // mcp.RepoWriter and mcp.BindingWriter interfaces with the same instance the
 // HTTP router uses. Nil when WithStore has not been called.
 func (s *Server) Repos() *serverrepos.Handler { return s.repos }
+
+// Fleet returns the fleet (agents/skills/backends) handler so the daemon's
+// MCP wiring can satisfy the mcp.AgentWriter, mcp.SkillWriter, and
+// mcp.BackendWriter interfaces with the same instance the HTTP router uses.
+// Nil when WithStore has not been called.
+func (s *Server) Fleet() *serverfleet.Handler { return s.fleet }
 
 // Do runs fn under the server's CRUD write lock and, on success, triggers a
 // scheduler reload + in-memory config swap. Implements server.WriteCoordinator
@@ -200,25 +209,17 @@ func (s *Server) buildHandler() http.Handler {
 	router.Handle(cfg.Daemon.HTTP.WebhookPath, withTimeout(http.HandlerFunc(s.handleGitHubWebhook))).Methods(http.MethodPost)
 	router.Handle("/run", withTimeout(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
 
-	// Fleet view (GET) + CRUD (POST) merged on a single path.
+	// /agents merges the read-only fleet snapshot view (GET, still composed
+	// at the server level) with the CRUD list (POST, owned by the fleet
+	// handler). The dispatcher selects the right path by method.
 	router.Handle("/agents", withTimeout(http.HandlerFunc(s.handleAgents))).Methods(http.MethodGet, http.MethodPost)
 	router.Handle("/agents/orphans/status", withTimeout(http.HandlerFunc(s.handleAgentsOrphans))).Methods(http.MethodGet)
-	router.Handle("/agents/{name}", withTimeout(http.HandlerFunc(s.handleStoreAgent))).Methods(http.MethodGet, http.MethodPatch, http.MethodDelete)
 
-	router.Handle("/skills", withTimeout(http.HandlerFunc(s.handleStoreSkills))).Methods(http.MethodGet, http.MethodPost)
-	router.Handle("/skills/{name}", withTimeout(http.HandlerFunc(s.handleStoreSkill))).Methods(http.MethodGet, http.MethodPatch, http.MethodDelete)
-
-	router.Handle("/backends", withTimeout(http.HandlerFunc(s.handleStoreBackends))).Methods(http.MethodGet, http.MethodPost)
-	router.Handle("/backends/status", withTimeout(http.HandlerFunc(s.handleBackendsStatus))).Methods(http.MethodGet)
-	router.Handle("/backends/discover", withTimeout(http.HandlerFunc(s.handleBackendsDiscover))).Methods(http.MethodPost)
-	router.Handle("/backends/local", withTimeout(http.HandlerFunc(s.handleBackendsLocal))).Methods(http.MethodPost)
-	router.Handle("/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackendGet))).Methods(http.MethodGet)
-	router.Handle("/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackendPatch))).Methods(http.MethodPatch)
-	router.Handle("/backends/{name}", withTimeout(http.HandlerFunc(s.handleStoreBackendDelete))).Methods(http.MethodDelete)
-
-	// Repos and per-binding routes live in their own package; routes are
-	// registered only when WithStore has wired the database (and therefore
-	// the handler).
+	// Domain handler packages own their CRUD routes; mounted only when
+	// WithStore has wired the database.
+	if s.fleet != nil {
+		s.fleet.RegisterRoutes(router, withTimeout)
+	}
 	if s.repos != nil {
 		s.repos.RegisterRoutes(router, withTimeout)
 	}
@@ -272,13 +273,18 @@ func (s *Server) buildHandler() http.Handler {
 	return router
 }
 
-// handleAgents dispatches GET to the fleet view and POST to the CRUD handler.
+// handleAgents dispatches GET to the (still-composed-here) read-only fleet
+// snapshot view and POST to the fleet handler's CRUD list.
 func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		s.handleAPIAgents(w, r)
 	case http.MethodPost:
-		s.handleStoreAgents(w, r)
+		if s.fleet == nil {
+			http.NotFound(w, r)
+			return
+		}
+		s.fleet.HandleAgentsCreate(w, r)
 	}
 }
 
