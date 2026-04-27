@@ -18,9 +18,10 @@ internal/
   backends/                 # Backend discovery: CLI probing, GitHub MCP health checks, orphan detection
   store/                    # SQLite-backed config store: Open, Import, Load, CRUD
   workflow/                 # Event routing engine, single event queue, processor, dispatcher
-  server/                   # Shared HTTP server types (cross-cutting interfaces, error sentinels)
+  server/                   # Shared HTTP server types (cross-cutting interfaces, error sentinels, WriteCoordinator)
   server/observe/           # Observability HTTP handlers (events, traces, graph, dispatches, memory, SSE)
-  webhook/                  # HTTP server, HMAC verification, delivery dedupe, CRUD API handlers
+  server/repos/             # Repos + per-binding HTTP CRUD handlers and methods
+  webhook/                  # HTTP server, HMAC verification, delivery dedupe, fleet/config CRUD (split in progress)
   mcp/                      # MCP server exposing fleet-management tools at /mcp
   ui/                       # Embedded Next.js web dashboard (served at /ui/)
   setup/                    # Interactive first-time setup command

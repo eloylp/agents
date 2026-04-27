@@ -173,8 +173,8 @@ func run() error {
 		AgentWrite:    srv,
 		SkillWrite:    srv,
 		BackendWrite:  srv,
-		RepoWrite:     srv,
-		BindingWrite:  srv,
+		RepoWrite:     srv.Repos(),
+		BindingWrite:  srv.Repos(),
 		Logger:        logger,
 	}))
 
