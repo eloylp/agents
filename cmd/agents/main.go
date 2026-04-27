@@ -149,11 +149,12 @@ func run() error {
 	scheduler.WithTraceRecorder(obs)
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
-	srv := webhook.NewServer(cfg, deliveryStore, dataChannels, schedulerStatusAdapter{scheduler}, engine, logger)
+	srv := server.NewServer(cfg, dataChannels, schedulerStatusAdapter{scheduler}, engine, logger)
 	srv.WithUI(ui.FS)
 	srv.WithObserve(obs)
 	srv.WithRuntimeState(obs)
 	srv.WithStore(db, scheduler)
+	srv.WithWebhook(webhook.NewHandler(deliveryStore, dataChannels, srv, logger))
 
 	// Construct the fleet handler externally and wire it via WithFleet so
 	// the webhook package stays free of any internal/server/fleet import.

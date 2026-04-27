@@ -1,4 +1,4 @@
-package webhook
+package server_test
 
 // Test-side mirrors of the wire shapes produced by the CRUD endpoints. The
 // concrete types live in internal/server/fleet, but importing them would
