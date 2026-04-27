@@ -1,4 +1,4 @@
-package webhook
+package server_test
 
 import (
 	"bufio"
@@ -49,7 +49,7 @@ func TestHandleAPIAgentsReturnsConfiguredAgents(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
-	srv.buildHandler().ServeHTTP(rec, req)
+	srv.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
@@ -103,7 +103,7 @@ func TestHandleAPIAgentsAttachesScheduleForCronBindings(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
-	srv.buildHandler().ServeHTTP(rec, req)
+	srv.Handler().ServeHTTP(rec, req)
 
 	var agents []viewAgentJSON
 	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
@@ -159,7 +159,7 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
-	srv.buildHandler().ServeHTTP(rec, req)
+	srv.Handler().ServeHTTP(rec, req)
 
 	var agents []viewAgentJSON
 	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
@@ -230,7 +230,7 @@ func TestHandleAPIAgentsSkipsDisabledRepos(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
-	srv.buildHandler().ServeHTTP(rec, req)
+	srv.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
@@ -259,7 +259,7 @@ func TestHandleAPIAgentsEmptyWhenNoAgents(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
-	srv.buildHandler().ServeHTTP(rec, req)
+	srv.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
@@ -280,7 +280,7 @@ func TestHandleAPIAgentsCurrentStatusIdleWhenNotRunning(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
-	srv.buildHandler().ServeHTTP(rec, req)
+	srv.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
@@ -313,7 +313,7 @@ func TestHandleAPIAgentsCurrentStatusRunningWhenActive(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
-	srv.buildHandler().ServeHTTP(rec, req)
+	srv.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
@@ -362,7 +362,7 @@ func TestHandleAPIConfigRedactsSecrets(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
-	srv.buildHandler().ServeHTTP(rec, req)
+	srv.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
@@ -408,7 +408,7 @@ func TestHandleAPIConfigOmitsProxyExtraBody(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
-	srv.buildHandler().ServeHTTP(rec, req)
+	srv.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
@@ -435,7 +435,7 @@ func TestHandleAPIConfigNoSecretsWhenNotSet(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
-	srv.buildHandler().ServeHTTP(rec, req)
+	srv.Handler().ServeHTTP(rec, req)
 
 	body := rec.Body.String()
 	if strings.Contains(body, "[redacted]") {
@@ -448,7 +448,7 @@ func TestHandleAPIConfigContentType(t *testing.T) {
 	srv, _ := newTestServer(testCfg(nil))
 	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
-	srv.buildHandler().ServeHTTP(rec, req)
+	srv.Handler().ServeHTTP(rec, req)
 
 	ct := rec.Header().Get("Content-Type")
 	if ct != "application/json" {
@@ -475,7 +475,7 @@ func TestHandleAPIConfigRepoBindingDefaultEnabled(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
-	srv.buildHandler().ServeHTTP(rec, req)
+	srv.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
@@ -543,7 +543,7 @@ func TestBuildHandlerSSETimeoutSplit(t *testing.T) {
 	srv, _ := newTestServer(cfg)
 	wireObserveForTest(srv, obs)
 
-	ts := httptest.NewServer(srv.buildHandler())
+	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
 	resp, err := http.Get(ts.URL + "/events/stream") //nolint:noctx
@@ -620,7 +620,7 @@ func TestServeSSEClearsServerWriteDeadline(t *testing.T) {
 	srv, _ := newTestServer(testCfg(nil))
 	wireObserveForTest(srv, obs)
 
-	ts := httptest.NewUnstartedServer(srv.buildHandler())
+	ts := httptest.NewUnstartedServer(srv.Handler())
 	ts.Config.WriteTimeout = 200 * time.Millisecond
 	ts.Start()
 	t.Cleanup(ts.Close)
@@ -700,7 +700,7 @@ func newTestObserve(t *testing.T) *observe.Store {
 // handler construction lives outside this package now (cmd/agents wires it
 // via WithObserveRegister); tests do the same so the routes are reachable
 // when integration tests exercise the full router.
-func wireObserveForTest(srv *Server, obs *observe.Store) {
+func wireObserveForTest(srv *server.Server, obs *observe.Store) {
 	srv.WithObserve(obs)
 	srv.WithObserveRegister(func(r *mux.Router, withTimeout func(http.Handler) http.Handler) {
 		obh := serverobserve.New(obs, srv, nil, nil, nil, nil)

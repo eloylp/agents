@@ -1,4 +1,4 @@
-package webhook
+package server
 
 import (
 	"context"
@@ -17,26 +17,24 @@ import (
 	anthropicproxy "github.com/eloylp/agents/internal/anthropic_proxy"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/observe"
-	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
 type Server struct {
 	cfg           *config.Config
-	delivery      *DeliveryStore
 	logger        zerolog.Logger
-	channels      server.EventQueue
-	h             *Handler // GitHub webhook receiver — owns event parsing, HMAC, dedupe
-	provider      server.StatusProvider
-	runtimeState  server.RuntimeStateProvider // optional; used by /api/agents for live run status
-	dispatchStats server.DispatchStatsProvider
+	channels      EventQueue
+	webhook       HandlerRegister // GitHub webhook receiver — wired via WithWebhook
+	provider      StatusProvider
+	runtimeState  RuntimeStateProvider // optional; used by /api/agents for live run status
+	dispatchStats DispatchStatsProvider
 	startTime     time.Time
 	proxy         *anthropicproxy.Handler
 	uiFS          fs.FS               // optional; when set, /ui/ serves these static files
 	observeStore  *observe.Store      // optional; when set, enables observability endpoints
 	db            *sql.DB             // optional; when set, enables /api/store/* CRUD endpoints
-	cronReloader  server.CronReloader // optional; called after repo/agent writes to reload cron
-	memReader     server.MemoryReader // optional; when set, /api/memory reads from this (SQLite mode)
+	cronReloader  CronReloader // optional; called after repo/agent writes to reload cron
+	memReader     MemoryReader // optional; when set, /api/memory reads from this (SQLite mode)
 	mcp           http.Handler        // optional; when set, /mcp serves this MCP handler
 	// observeRegister mounts the observability routes when set via
 	// WithObserveRegister. cmd/agents constructs the observe handler
@@ -46,12 +44,12 @@ type Server struct {
 	// concrete *internal/server/fleet.Handler externally and supplies it
 	// (along with cross-domain hooks below) via WithFleet so this package
 	// stays free of any dependency on internal/server/fleet.
-	fleet            server.HandlerRegister
+	fleet            HandlerRegister
 	agentsDispatcher http.HandlerFunc                                 // GET vs POST /agents — supplied by WithFleet
-	orphansSource    server.OrphansSource                             // /status orphan summary — supplied by WithFleet
+	orphansSource    OrphansSource                             // /status orphan summary — supplied by WithFleet
 	onConfigReload   func(*config.Config)                             // reloadCron post-hook — supplied by WithFleet
-	repos            server.HandlerRegister                           // wired via WithRepos by the composing caller
-	config           server.HandlerRegister                           // wired via WithConfig by the composing caller
+	repos            HandlerRegister                           // wired via WithRepos by the composing caller
+	config           HandlerRegister                           // wired via WithConfig by the composing caller
 	// storeMu serializes the "DB write → snapshot read → in-memory Reload"
 	// sequence so that concurrent write requests cannot interleave their
 	// snapshots and leave the scheduler in a stale or inconsistent state.
@@ -93,7 +91,7 @@ func (s *Server) WithObserveRegister(register func(*mux.Router, func(http.Handle
 // It is no longer forwarded to the fleet handler — cmd/agents calls
 // fleetHandler.SetRuntimeState directly before WithFleet so the wiring stays
 // in one place.
-func (s *Server) WithRuntimeState(rsp server.RuntimeStateProvider) {
+func (s *Server) WithRuntimeState(rsp RuntimeStateProvider) {
 	s.runtimeState = rsp
 }
 
@@ -102,7 +100,7 @@ func (s *Server) WithRuntimeState(rsp server.RuntimeStateProvider) {
 // All three domain handlers (fleet, repos, config) are wired externally by
 // cmd/agents — which calls SetDB / supplies the concrete handler directly —
 // so this method no longer touches any of them.
-func (s *Server) WithStore(db *sql.DB, r server.CronReloader) {
+func (s *Server) WithStore(db *sql.DB, r CronReloader) {
 	s.db = db
 	s.cronReloader = r
 }
@@ -115,7 +113,7 @@ func (s *Server) WithStore(db *sql.DB, r server.CronReloader) {
 // cmd/agents constructs the concrete internal/server/fleet.Handler and
 // supplies thin adapters here so this package stays free of any
 // internal/server/fleet import.
-func (s *Server) WithFleet(h server.HandlerRegister, dispatcher http.HandlerFunc, orphans server.OrphansSource, onReload func(*config.Config)) {
+func (s *Server) WithFleet(h HandlerRegister, dispatcher http.HandlerFunc, orphans OrphansSource, onReload func(*config.Config)) {
 	s.fleet = h
 	s.agentsDispatcher = dispatcher
 	s.orphansSource = orphans
@@ -125,15 +123,23 @@ func (s *Server) WithFleet(h server.HandlerRegister, dispatcher http.HandlerFunc
 // WithRepos registers the repos handler. cmd/agents constructs the
 // concrete internal/server/repos.Handler externally so this package stays
 // free of any internal/server/repos import.
-func (s *Server) WithRepos(h server.HandlerRegister) {
+func (s *Server) WithRepos(h HandlerRegister) {
 	s.repos = h
 }
 
 // WithConfig registers the config handler. cmd/agents constructs the
 // concrete internal/server/config.Handler externally so this package stays
 // free of any internal/server/config import.
-func (s *Server) WithConfig(h server.HandlerRegister) {
+func (s *Server) WithConfig(h HandlerRegister) {
 	s.config = h
+}
+
+// WithWebhook registers the GitHub webhook handler. cmd/agents constructs
+// the concrete internal/webhook.Handler externally and supplies it via this
+// method so the central server type stays free of any internal/webhook
+// import.
+func (s *Server) WithWebhook(h HandlerRegister) {
+	s.webhook = h
 }
 
 // Do runs fn under the server's CRUD write lock and, on success, triggers a
@@ -151,7 +157,7 @@ func (s *Server) Do(fn func() error) error {
 
 // WithMemoryReader attaches a MemoryReader used by /api/memory/{agent}/{repo}
 // when the daemon is running in --db mode.
-func (s *Server) WithMemoryReader(r server.MemoryReader) {
+func (s *Server) WithMemoryReader(r MemoryReader) {
 	s.memReader = r
 }
 
@@ -169,21 +175,20 @@ func (s *Server) Config() *config.Config {
 	return s.loadCfg()
 }
 
-func NewServer(cfg *config.Config, delivery *DeliveryStore, channels server.EventQueue, provider server.StatusProvider, dispatchStats server.DispatchStatsProvider, logger zerolog.Logger) *Server {
+// DB returns the SQLite database attached via WithStore (or nil). Exported
+// for tests that need to seed the store directly without going through the
+// CRUD HTTP surface; production callers use the domain handlers.
+func (s *Server) DB() *sql.DB { return s.db }
+
+func NewServer(cfg *config.Config, channels EventQueue, provider StatusProvider, dispatchStats DispatchStatsProvider, logger zerolog.Logger) *Server {
 	s := &Server{
 		cfg:           cfg,
-		delivery:      delivery,
-		logger:        logger.With().Str("component", "webhook_server").Logger(),
+		logger:        logger.With().Str("component", "http_server").Logger(),
 		channels:      channels,
 		provider:      provider,
 		dispatchStats: dispatchStats,
 		startTime:     time.Now(),
 	}
-	// GitHub webhook receiver — pure event-parsing + HMAC + delivery dedupe.
-	// The server delegates handleGitHubWebhook to it so existing tests that
-	// call s.handleGitHubWebhook keep working unchanged; future PRs will
-	// drop that delegate and mount h.RegisterRoutes directly.
-	s.h = NewHandler(delivery, channels, s, logger)
 	if cfg.Daemon.Proxy.Enabled {
 		up := cfg.Daemon.Proxy.Upstream
 		s.proxy = anthropicproxy.NewHandler(anthropicproxy.UpstreamConfig{
@@ -207,6 +212,11 @@ func (s *Server) loadCfg() *config.Config {
 	s.cfgMu.RUnlock()
 	return cfg
 }
+
+// Handler builds and returns the HTTP router as an http.Handler. Exported
+// so tests (and any external composing caller) can exercise the routing
+// surface without starting a real TCP listener via Run.
+func (s *Server) Handler() http.Handler { return s.buildHandler() }
 
 // buildHandler constructs the HTTP router for the server and returns it as
 // an http.Handler. It is separated from Run so tests can exercise routing
@@ -234,8 +244,10 @@ func (s *Server) buildHandler() http.Handler {
 
 	router := mux.NewRouter()
 	router.Handle(cfg.Daemon.HTTP.StatusPath, withTimeout(http.HandlerFunc(s.handleStatus))).Methods(http.MethodGet)
-	router.Handle(cfg.Daemon.HTTP.WebhookPath, withTimeout(http.HandlerFunc(s.handleGitHubWebhook))).Methods(http.MethodPost)
 	router.Handle("/run", withTimeout(http.HandlerFunc(s.handleAgentsRun))).Methods(http.MethodPost)
+	if s.webhook != nil {
+		s.webhook.RegisterRoutes(router, withTimeout)
+	}
 
 	// /agents merges the read-only fleet snapshot view (GET) with the CRUD
 	// create (POST) on a single mux entry; the dispatcher delegates to the
@@ -361,7 +373,7 @@ type statusJSON struct {
 	Status         string                     `json:"status"`
 	UptimeSeconds  int64                      `json:"uptime_seconds"`
 	Queues         map[string]statusQueueJSON `json:"queues"`
-	Agents         []server.AgentStatus       `json:"agents"`
+	Agents         []AgentStatus       `json:"agents"`
 	Dispatch       *workflow.DispatchStats    `json:"dispatch,omitempty"`
 	OrphanedAgents statusOrphanSummaryJSON    `json:"orphaned_agents"`
 }
@@ -372,7 +384,7 @@ type statusJSON struct {
 func (s *Server) buildStatus() statusJSON {
 	q := s.channels.QueueStats()
 
-	agents := []server.AgentStatus{}
+	agents := []AgentStatus{}
 	if s.provider != nil {
 		if got := s.provider.AgentStatuses(); len(got) > 0 {
 			agents = got
@@ -469,13 +481,4 @@ func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleGitHubWebhook delegates to the package-internal Handler, which
-// owns HMAC verification, delivery dedupe, and per-event-type parsing.
-// Kept on the Server type so existing tests that call s.handleGitHubWebhook
-// directly continue to work; the route in buildHandler still goes through
-// here for the same reason. A follow-up PR will mount h.RegisterRoutes
-// directly and drop this method.
-func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
-	s.h.handleGitHubWebhook(w, r)
-}
 

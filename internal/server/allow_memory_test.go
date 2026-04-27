@@ -1,4 +1,4 @@
-package webhook
+package server_test
 
 import (
 	"encoding/json"

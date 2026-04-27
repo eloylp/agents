@@ -39,12 +39,12 @@ internal/
   backends/                     # backend discovery: CLI probing, GitHub MCP health checks, orphan detection
   store/                        # SQLite-backed config store: Open, Import, Load, CRUD
   workflow/                     # event routing engine (single event queue), processor, dispatcher
-  server/                       # shared HTTP server types (cross-cutting interfaces, error sentinels, WriteCoordinator)
+  server/                       # central HTTP server: lifecycle, router, /status, /run, proxy + UI + MCP mounts; cross-cutting types
   server/observe/               # observability HTTP handlers (events, traces, graph, dispatches, memory, SSE)
   server/config/                # /config snapshot, /export, /import HTTP handlers and methods
   server/fleet/                 # agents/skills/backends CRUD + GET /agents fleet view + orphans cache (incl. /agents/orphans/status)
   server/repos/                 # repos + per-binding HTTP CRUD handlers and methods
-  webhook/                      # HTTP server, HMAC signature verification, delivery dedupe, /status, /run, proxy + UI mounts (final slim still in progress)
+  webhook/                      # GitHub webhook receiver only: HMAC signature verification, delivery dedupe, /webhooks/github event parsing
   mcp/                          # MCP server exposing fleet-management tools at /mcp
   ui/                           # embedded Next.js web dashboard (static assets served at /ui/)
   setup/                        # interactive first-time setup command
@@ -99,12 +99,12 @@ When making common classes of changes, update all of these at once:
 |---|---|
 | Domain entities (`internal/fleet/`: Agent, Repo, Skill, Backend, Binding) | The struct itself, the SQLite store columns, the YAML tags, all CRUD wire shapes, tests |
 | Config schema (top-level `Config`, `Daemon*` in `internal/config/config.go`) | Validation, `normalize()`, defaults, `config.example.yaml`, README, tests in `internal/config/config_test.go` |
-| New webhook event kind | Decoder in `internal/webhook/server.go`, acceptance in `internal/workflow/engine.go`, README event table, validation in `internal/config/config.go` |
+| New webhook event kind | Decoder in `internal/webhook/handler.go`, acceptance in `internal/workflow/engine.go`, README event table, validation in `internal/config/config.go` |
 | New AI backend behavior | `internal/ai/cmdrunner.go`, allowlist if new env vars, backend registration in `cmd/agents/main.go`, config example |
 | Agent prompt contract | Prompts in SQLite (edit via UI or CRUD API), runner parser in `internal/ai/cmdrunner.go`, `internal/ai/types.go`, `internal/ai/response-schema.json`, AGENTS.md runner-contract section, tests |
 | Memory contract | `internal/autonomous/memory.go` (MemoryBackend interface), `internal/store/store.go` (SQLite path), `cmd/agents/main.go` (wiring), agent prompts "Memory hygiene" sections, `internal/ai/types.go` |
 | Dispatch semantics | `internal/workflow/dispatch.go` (runtime), `internal/config/config.go` (load-time validation), agent response schema in `internal/ai/types.go`, README dispatch section, all prompt "Response format" sections, tests on both paths |
-| SQLite store schema | `internal/store/migrations/`, `internal/store/store.go`, `internal/store/crud.go`, `internal/webhook/crud.go`, tests |
+| SQLite store schema | `internal/store/migrations/`, `internal/store/store.go`, `internal/store/crud.go`, the per-domain handlers under `internal/server/{fleet,repos,config}`, tests |
 | Proxy translation behavior | `internal/anthropic_proxy/{types,translate,handler}.go`, unit tests for the affected shape, `docs/local-models.md` if user-visible |
 | Anything in the README | Also check `CLAUDE.md`, `AGENTS.md`, `config.example.yaml` — these four should stay in sync |
 
@@ -112,7 +112,7 @@ When making common classes of changes, update all of these at once:
 
 - **Run `go test ./... -race` before every commit.** Race detection is cheap and catches real bugs in the concurrent event processing and dispatch paths.
 - **Table-driven tests** for anything with more than two interesting input shapes (config validation, label parsing, event decoding, translation, dispatch rejection reasons). `t.Parallel()` where independent; **not** when using `t.Setenv`.
-- **Use `httptest.Server` for HTTP integration tests.** See `internal/webhook/server_test.go` and `internal/server/observe/observe_test.go` for the patterns.
+- **Use `httptest.Server` for HTTP integration tests.** See `internal/server/server_test.go` and `internal/server/observe/observe_test.go` for the patterns.
 - **No `-short` or skipped tests on main.** If a test needs external services, gate it behind a build tag or an explicit env var check.
 - **Do not mock what you do not own.** Wrap third-party clients behind an interface you control, then mock that interface. `internal/ai.Runner` is the canonical example.
 - **Test error paths, not just the happy path.** Dispatch rejection modes each deserve a dedicated test.

@@ -1,4 +1,4 @@
-package webhook
+package server_test
 
 import (
 	"encoding/json"
@@ -26,7 +26,7 @@ func TestAgentsOrphansEndpointAndStatusSummary(t *testing.T) {
 		}
 	})
 	srv, _ := newTestServer(cfg)
-	h := srv.buildHandler()
+	h := srv.Handler()
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/agents/orphans/status", nil)

@@ -1,4 +1,4 @@
-package webhook
+package server_test
 
 import (
 	"context"
@@ -20,6 +20,7 @@ import (
 	"github.com/eloylp/agents/internal/server"
 	serverconfig "github.com/eloylp/agents/internal/server/config"
 	serverfleet "github.com/eloylp/agents/internal/server/fleet"
+	"github.com/eloylp/agents/internal/webhook"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -51,14 +52,14 @@ func signatureForTests(body []byte, secret string) string {
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
-func newTestServer(cfg *config.Config) (*Server, *workflow.DataChannels) {
+func newTestServer(cfg *config.Config) (*server.Server, *workflow.DataChannels) {
 	return newTestServerWithProvider(cfg, nil)
 }
 
 // newTestServerWithProvider mirrors what cmd/agents wires: a Server plus a
-// fleet handler attached via WithFleet. Tests that need a custom status
-// provider use this directly; tests that don't go through newTestServer.
-func newTestServerWithProvider(cfg *config.Config, provider server.StatusProvider) (*Server, *workflow.DataChannels) {
+// fleet handler attached via WithFleet, the GitHub webhook handler attached
+// via WithWebhook, and a config handler attached via WithConfig.
+func newTestServerWithProvider(cfg *config.Config, provider server.StatusProvider) (*server.Server, *workflow.DataChannels) {
 	srv, dc, _ := newTestServerExposingFleet(cfg, provider)
 	return srv, dc
 }
@@ -66,10 +67,11 @@ func newTestServerWithProvider(cfg *config.Config, provider server.StatusProvide
 // newTestServerExposingFleet is the variant for tests that need to call
 // methods on the fleet handler directly (e.g. SetRuntimeState after the
 // fact, or assertions on the orphan cache).
-func newTestServerExposingFleet(cfg *config.Config, provider server.StatusProvider) (*Server, *workflow.DataChannels, *serverfleet.Handler) {
+func newTestServerExposingFleet(cfg *config.Config, provider server.StatusProvider) (*server.Server, *workflow.DataChannels, *serverfleet.Handler) {
 	dc := workflow.NewDataChannels(1)
 	logger := zerolog.Nop()
-	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, provider, nil, logger)
+	srv := server.NewServer(cfg, dc, provider, nil, logger)
+	srv.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, srv, logger))
 	fleetHandler := wireFleetForTest(srv, cfg, provider, logger)
 	srv.WithConfig(serverconfig.New(srv, srv, logger))
 	return srv, dc, fleetHandler
@@ -79,7 +81,7 @@ func newTestServerExposingFleet(cfg *config.Config, provider server.StatusProvid
 // it to srv via WithFleet, mirroring the wiring cmd/agents performs. Used
 // by every test helper that exercises the full router. Returns the handler
 // so CRUD-mode helpers can SetDB on it after WithStore.
-func wireFleetForTest(srv *Server, cfg *config.Config, provider server.StatusProvider, logger zerolog.Logger) *serverfleet.Handler {
+func wireFleetForTest(srv *server.Server, cfg *config.Config, provider server.StatusProvider, logger zerolog.Logger) *serverfleet.Handler {
 	fleetHandler := serverfleet.New(srv, srv, provider, nil, logger)
 	fleetHandler.RefreshOrphansFromCfg(cfg)
 	srv.WithFleet(
@@ -159,13 +161,13 @@ func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":1},"sender":{"login":"octocat"}}`
 
 	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, webhookRequest(t, "issues", "delivery-1", body))
+	server.Handler().ServeHTTP(rr, webhookRequest(t, "issues", "delivery-1", body))
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("first delivery: got %d, want %d", rr.Code, http.StatusAccepted)
 	}
 
 	rr2 := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr2, webhookRequest(t, "issues", "delivery-1", body))
+	server.Handler().ServeHTTP(rr2, webhookRequest(t, "issues", "delivery-1", body))
 	if rr2.Code != http.StatusAccepted {
 		t.Fatalf("dedup delivery: got %d, want %d", rr2.Code, http.StatusAccepted)
 	}
@@ -181,7 +183,7 @@ func TestHandleIssuesLabeledEnqueuesEventWithLabel(t *testing.T) {
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":7},"sender":{"login":"octocat"}}`
 	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, webhookRequest(t, "issues", "d-1", body))
+	server.Handler().ServeHTTP(rr, webhookRequest(t, "issues", "d-1", body))
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
 	}
@@ -207,7 +209,7 @@ func TestHandleIssuesOpenedEnqueuesEvent(t *testing.T) {
 
 	body := `{"action":"opened","repository":{"full_name":"owner/repo"},"issue":{"number":10,"title":"Bug","body":"desc"},"sender":{"login":"dev"}}`
 	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, webhookRequest(t, "issues", "d-opened", body))
+	server.Handler().ServeHTTP(rr, webhookRequest(t, "issues", "d-opened", body))
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
 	}
@@ -260,7 +262,7 @@ func TestHandleNonAILabelEnqueues(t *testing.T) {
 			t.Parallel()
 			server, dc := newTestServer(testCfg(nil))
 			rr := httptest.NewRecorder()
-			server.handleGitHubWebhook(rr, webhookRequest(t, tc.event, tc.delivery, tc.body))
+			server.Handler().ServeHTTP(rr, webhookRequest(t, tc.event, tc.delivery, tc.body))
 			if rr.Code != http.StatusAccepted {
 				t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
 			}
@@ -311,7 +313,7 @@ func TestHandleIssuesEventDropsPRBackedIssueActions(t *testing.T) {
 			t.Parallel()
 			server, dc := newTestServer(testCfg(nil))
 			rr := httptest.NewRecorder()
-			server.handleGitHubWebhook(rr, webhookRequest(t, "issues", "d-pr-"+tc.name, tc.body))
+			server.Handler().ServeHTTP(rr, webhookRequest(t, "issues", "d-pr-"+tc.name, tc.body))
 			if rr.Code != http.StatusAccepted {
 				t.Fatalf("action %q: got %d, want %d", tc.name, rr.Code, http.StatusAccepted)
 			}
@@ -328,7 +330,7 @@ func TestHandlePullRequestLabeledEnqueuesEvent(t *testing.T) {
 
 	body := `{"action":"labeled","label":{"name":"ai:review"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":5},"sender":{"login":"bot"}}`
 	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request", "d-pr-labeled", body))
+	server.Handler().ServeHTTP(rr, webhookRequest(t, "pull_request", "d-pr-labeled", body))
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
 	}
@@ -348,7 +350,7 @@ func TestHandleDraftPRWebhookDoesNotEnqueue(t *testing.T) {
 
 	body := `{"action":"labeled","label":{"name":"ai:review"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":5,"draft":true}}`
 	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request", "delivery-draft", body))
+	server.Handler().ServeHTTP(rr, webhookRequest(t, "pull_request", "delivery-draft", body))
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
 	}
@@ -361,7 +363,7 @@ func TestHandlePullRequestOpenedEnqueuesEvent(t *testing.T) {
 
 	body := `{"action":"opened","repository":{"full_name":"owner/repo"},"pull_request":{"number":8,"title":"feat","draft":false},"sender":{"login":"dev"}}`
 	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request", "d-pr-opened", body))
+	server.Handler().ServeHTTP(rr, webhookRequest(t, "pull_request", "d-pr-opened", body))
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
 	}
@@ -396,7 +398,7 @@ func TestHandlePullRequestClosedPayloadIncludesMerged(t *testing.T) {
 			}
 			body := `{"action":"closed","repository":{"full_name":"owner/repo"},"pull_request":{"number":12,"title":"feat","draft":false,"merged":` + mergedVal + `},"sender":{"login":"dev"}}`
 			rr := httptest.NewRecorder()
-			server.handleGitHubWebhook(rr, webhookRequest(t, "pull_request", tc.deliveryID, body))
+			server.Handler().ServeHTTP(rr, webhookRequest(t, "pull_request", tc.deliveryID, body))
 			if rr.Code != http.StatusAccepted {
 				t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
 			}
@@ -468,7 +470,7 @@ func TestHandleCommentAndReviewEventsEnqueue(t *testing.T) {
 			t.Parallel()
 			server, dc := newTestServer(testCfg(nil))
 			rr := httptest.NewRecorder()
-			server.handleGitHubWebhook(rr, webhookRequest(t, tc.eventType, tc.deliveryID, tc.body))
+			server.Handler().ServeHTTP(rr, webhookRequest(t, tc.eventType, tc.deliveryID, tc.body))
 			if rr.Code != http.StatusAccepted {
 				t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
 			}
@@ -525,7 +527,7 @@ func TestHandleNonTriggeringActionsIgnored(t *testing.T) {
 			t.Parallel()
 			server, dc := newTestServer(testCfg(nil))
 			rr := httptest.NewRecorder()
-			server.handleGitHubWebhook(rr, webhookRequest(t, tc.eventType, tc.deliveryID, tc.body))
+			server.Handler().ServeHTTP(rr, webhookRequest(t, tc.eventType, tc.deliveryID, tc.body))
 			if rr.Code != http.StatusAccepted {
 				t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
 			}
@@ -542,7 +544,7 @@ func TestHandlePushEnqueuesEvent(t *testing.T) {
 
 	body := `{"ref":"refs/heads/main","after":"abc123","repository":{"full_name":"owner/repo"},"sender":{"login":"pusher"}}`
 	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, webhookRequest(t, "push", "d-push", body))
+	server.Handler().ServeHTTP(rr, webhookRequest(t, "push", "d-push", body))
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
 	}
@@ -579,7 +581,7 @@ func TestHandlePushIgnoresNonBranchRefs(t *testing.T) {
 			server, dc := newTestServer(testCfg(nil))
 			body := `{"ref":"` + tc.ref + `","after":"` + tc.sha + `","repository":{"full_name":"owner/repo"},"sender":{"login":"pusher"}}`
 			rr := httptest.NewRecorder()
-			server.handleGitHubWebhook(rr, webhookRequest(t, "push", "d-push-"+tc.name, body))
+			server.Handler().ServeHTTP(rr, webhookRequest(t, "push", "d-push-"+tc.name, body))
 			if rr.Code != http.StatusAccepted {
 				t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
 			}
@@ -596,7 +598,7 @@ func TestHandleUnknownEventReturnsAccepted(t *testing.T) {
 
 	body := `{"action":"something"}`
 	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, webhookRequest(t, "unknown_event", "d-unknown", body))
+	server.Handler().ServeHTTP(rr, webhookRequest(t, "unknown_event", "d-unknown", body))
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusAccepted)
 	}
@@ -617,11 +619,13 @@ func TestHandleWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("preload event queue: %v", err)
 	}
-	server := NewServer(cfg, NewDeliveryStore(time.Hour), dc, nil, nil, zerolog.Nop())
+	logger := zerolog.Nop()
+	srv := server.NewServer(cfg, dc, nil, nil, logger)
+	srv.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, srv, logger))
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":2}}`
 	rr := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr, webhookRequest(t, "issues", "delivery-queue-full", body))
+	srv.Handler().ServeHTTP(rr, webhookRequest(t, "issues", "delivery-queue-full", body))
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("queue full: got %d, want %d body=%s", rr.Code, http.StatusServiceUnavailable, rr.Body.String())
 	}
@@ -629,7 +633,7 @@ func TestHandleWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) {
 	// Delivery ID must be released so a retry can succeed.
 	<-dc.EventChan()
 	rr2 := httptest.NewRecorder()
-	server.handleGitHubWebhook(rr2, webhookRequest(t, "issues", "delivery-queue-full", body))
+	srv.Handler().ServeHTTP(rr2, webhookRequest(t, "issues", "delivery-queue-full", body))
 	if rr2.Code != http.StatusAccepted {
 		t.Fatalf("retry: got %d, want %d", rr2.Code, http.StatusAccepted)
 	}
@@ -637,9 +641,10 @@ func TestHandleWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) {
 
 // ─── /agents/run endpoint tests ───────────────────────────────────────────────
 
-func newRunServer() *Server {
+func newRunServer() *server.Server {
 	cfg := testCfg(nil)
-	return NewServer(cfg, NewDeliveryStore(time.Hour), workflow.NewDataChannels(10), nil, nil, zerolog.Nop())
+	srv, _ := newTestServer(cfg)
+	return srv
 }
 
 func newRequest(method, path, body string) *http.Request {
@@ -652,7 +657,7 @@ func TestHandleAgentsRunEnqueuesEvent(t *testing.T) {
 
 	req := newRequest(http.MethodPost, "/run", `{"agent":"coder","repo":"owner/repo"}`)
 	rr := httptest.NewRecorder()
-	server.handleAgentsRun(rr, req)
+	server.Handler().ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("expected %d, got %d: %s", http.StatusAccepted, rr.Code, rr.Body.String())
@@ -687,7 +692,7 @@ func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
 			server := newRunServer()
 			req := newRequest(http.MethodPost, "/run", tc.body)
 			rr := httptest.NewRecorder()
-			server.handleAgentsRun(rr, req)
+			server.Handler().ServeHTTP(rr, req)
 			if rr.Code != http.StatusBadRequest {
 				t.Fatalf("got %d, want %d", rr.Code, http.StatusBadRequest)
 			}
@@ -700,29 +705,9 @@ func TestHandleAgentsRunReturnsNotFoundForUnknownRepo(t *testing.T) {
 	server := newRunServer()
 	req := newRequest(http.MethodPost, "/run", `{"agent":"coder","repo":"unknown/repo"}`)
 	rr := httptest.NewRecorder()
-	server.handleAgentsRun(rr, req)
+	server.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusNotFound)
-	}
-}
-
-// ─── signature verification ───────────────────────────────────────────────────
-
-func TestVerifySignature(t *testing.T) {
-	t.Parallel()
-	body := []byte(`{"hello":"world"}`)
-	secret := "secret"
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(body)
-	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-	if !verifySignature(body, secret, sig) {
-		t.Fatalf("expected signature to verify")
-	}
-	if verifySignature(body, secret, "sha256=deadbeef") {
-		t.Fatalf("bad signature should not verify")
-	}
-	if verifySignature(body, "", sig) {
-		t.Fatalf("empty secret must not verify")
 	}
 }
 
@@ -737,7 +722,7 @@ func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
 	reqBad.Header.Set("X-GitHub-Delivery", "delivery-poison")
 	reqBad.Header.Set("X-Hub-Signature-256", "sha256=deadbeef")
 	rrBad := httptest.NewRecorder()
-	server.handleGitHubWebhook(rrBad, reqBad)
+	server.Handler().ServeHTTP(rrBad, reqBad)
 	if rrBad.Code != http.StatusUnauthorized {
 		t.Fatalf("bad signature: got %d, want %d", rrBad.Code, http.StatusUnauthorized)
 	}
@@ -749,7 +734,7 @@ func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
 	reqGood.Header.Set("X-GitHub-Delivery", "delivery-poison")
 	reqGood.Header.Set("X-Hub-Signature-256", sig)
 	rrGood := httptest.NewRecorder()
-	server.handleGitHubWebhook(rrGood, reqGood)
+	server.Handler().ServeHTTP(rrGood, reqGood)
 	if rrGood.Code != http.StatusAccepted {
 		t.Fatalf("retry with good sig: got %d body=%s", rrGood.Code, rrGood.Body.String())
 	}
@@ -769,7 +754,7 @@ func TestUISlashlessRedirect(t *testing.T) {
 	srv, _ := newTestServer(testCfg(nil))
 	srv.WithUI(uiFS)
 
-	ts := httptest.NewServer(srv.buildHandler())
+	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
 	client := &http.Client{
@@ -808,7 +793,7 @@ func TestBuildHandlerObservabilityRoutesAreOpen(t *testing.T) {
 	srv.WithUI(uiFS)
 	wireObserveForTest(srv, newTestObserve(t))
 
-	ts := httptest.NewServer(srv.buildHandler())
+	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
 	// These read-only routes must NOT require a Bearer token.
@@ -850,7 +835,7 @@ func TestBuildHandlerMCPMountsWhenSet(t *testing.T) {
 	t.Run("not mounted by default", func(t *testing.T) {
 		t.Parallel()
 		srv, _ := newTestServer(testCfg(nil))
-		ts := httptest.NewServer(srv.buildHandler())
+		ts := httptest.NewServer(srv.Handler())
 		t.Cleanup(ts.Close)
 
 		resp, err := http.Post(ts.URL+"/mcp", "application/json", strings.NewReader(`{}`))
@@ -871,7 +856,7 @@ func TestBuildHandlerMCPMountsWhenSet(t *testing.T) {
 		})
 		srv.WithMCP(marker)
 
-		ts := httptest.NewServer(srv.buildHandler())
+		ts := httptest.NewServer(srv.Handler())
 		t.Cleanup(ts.Close)
 
 		resp, err := http.Post(ts.URL+"/mcp", "application/json", strings.NewReader(`{}`))
