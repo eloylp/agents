@@ -362,7 +362,7 @@ func TestHandleAPIConfigRedactsSecrets(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
-	srv.handleAPIConfig(rec, req)
+	srv.buildHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
@@ -379,7 +379,7 @@ func TestHandleAPIConfigRedactsSecrets(t *testing.T) {
 	}
 
 	// The "[redacted]" sentinel and env var names must be present.
-	if !strings.Contains(body, redacted) {
+	if !strings.Contains(body, "[redacted]") {
 		t.Error("want at least one [redacted] marker in response")
 	}
 	if !strings.Contains(body, "GITHUB_WEBHOOK_SECRET") {
@@ -408,7 +408,7 @@ func TestHandleAPIConfigOmitsProxyExtraBody(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
-	srv.handleAPIConfig(rec, req)
+	srv.buildHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
@@ -435,10 +435,10 @@ func TestHandleAPIConfigNoSecretsWhenNotSet(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
-	srv.handleAPIConfig(rec, req)
+	srv.buildHandler().ServeHTTP(rec, req)
 
 	body := rec.Body.String()
-	if strings.Contains(body, redacted) {
+	if strings.Contains(body, "[redacted]") {
 		t.Errorf("[redacted] must not appear when no secrets are set: %s", body)
 	}
 }
@@ -448,7 +448,7 @@ func TestHandleAPIConfigContentType(t *testing.T) {
 	srv, _ := newTestServer(testCfg(nil))
 	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
-	srv.handleAPIConfig(rec, req)
+	srv.buildHandler().ServeHTTP(rec, req)
 
 	ct := rec.Header().Get("Content-Type")
 	if ct != "application/json" {
@@ -475,7 +475,7 @@ func TestHandleAPIConfigRepoBindingDefaultEnabled(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
-	srv.handleAPIConfig(rec, req)
+	srv.buildHandler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
