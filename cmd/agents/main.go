@@ -26,6 +26,7 @@ import (
 	mcpserver "github.com/eloylp/agents/internal/mcp"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/server"
+	serverfleet "github.com/eloylp/agents/internal/server/fleet"
 	serverobserve "github.com/eloylp/agents/internal/server/observe"
 	"github.com/eloylp/agents/internal/setup"
 	"github.com/eloylp/agents/internal/store"
@@ -152,6 +153,24 @@ func run() error {
 	srv.WithRuntimeState(obs)
 	srv.WithStore(db, scheduler)
 
+	// Construct the fleet handler externally and wire it via WithFleet so
+	// the webhook package stays free of any internal/server/fleet import.
+	fleetHandler := serverfleet.New(srv, srv, schedulerStatusAdapter{scheduler}, obs, logger)
+	fleetHandler.SetDB(db)
+	fleetHandler.RefreshOrphansFromCfg(cfg)
+	srv.WithFleet(
+		fleetHandler,
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				fleetHandler.HandleAgentsView(w, r)
+				return
+			}
+			fleetHandler.HandleAgentsCreate(w, r)
+		},
+		fleetOrphansAdapter{fleetHandler},
+		fleetHandler.RefreshOrphansFromCfg,
+	)
+
 	// Wire the memory backend into the server for the /memory endpoint and
 	// attach an SSE notifier so the UI stream stays live.
 	mem := memBackend.(*sqliteMemory)
@@ -181,9 +200,9 @@ func run() error {
 		Memory:        &sqliteMcpReader{db: db},
 		ConfigBytes:   srv.Cfg(),
 		ConfigImport:  srv.Cfg(),
-		AgentWrite:    srv.Fleet(),
-		SkillWrite:    srv.Fleet(),
-		BackendWrite:  srv.Fleet(),
+		AgentWrite:    fleetHandler,
+		SkillWrite:    fleetHandler,
+		BackendWrite:  fleetHandler,
 		RepoWrite:     srv.Repos(),
 		BindingWrite:  srv.Repos(),
 		Logger:        logger,
@@ -378,4 +397,24 @@ func (a schedulerStatusAdapter) AgentStatuses() []server.AgentStatus {
 		out[i] = server.AgentStatus(s)
 	}
 	return out
+}
+
+// fleetOrphansAdapter bridges serverfleet.Handler's concrete orphan snapshot
+// type to the cross-package server.OrphansSnapshot shape /status uses, so
+// the webhook server doesn't need to import internal/server/fleet.
+type fleetOrphansAdapter struct {
+	h *serverfleet.Handler
+}
+
+func (a fleetOrphansAdapter) OrphansSnapshot() server.OrphansSnapshot {
+	snap := a.h.OrphansSnapshot()
+	return server.OrphansSnapshot{GeneratedAt: snap.GeneratedAt, Count: snap.Count}
+}
+
+func (a fleetOrphansAdapter) RefreshOrphansFromDB() (server.OrphansSnapshot, error) {
+	snap, err := a.h.RefreshOrphansFromDB()
+	if err != nil {
+		return server.OrphansSnapshot{}, err
+	}
+	return server.OrphansSnapshot{GeneratedAt: snap.GeneratedAt, Count: snap.Count}, nil
 }

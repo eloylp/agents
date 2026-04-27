@@ -23,7 +23,9 @@ import (
 )
 
 // openCRUDTestServer creates a test server wired with an in-memory SQLite
-// store.
+// store. Mirrors the wiring cmd/agents performs: NewServer + WithStore +
+// fleet handler attached via WithFleet (with SetDB invoked after the
+// store is open).
 func openCRUDTestServer(t *testing.T) *Server {
 	t.Helper()
 	dir := t.TempDir()
@@ -35,8 +37,11 @@ func openCRUDTestServer(t *testing.T) *Server {
 
 	cfg := crudMinimalConfig()
 	dc := workflow.NewDataChannels(1)
-	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, zerolog.Nop())
+	logger := zerolog.Nop()
+	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, logger)
 	s.WithStore(db, nil) // nil reloader — cron hot-reload not exercised here
+	fleetHandler := wireFleetForTest(s, cfg, nil, logger)
+	fleetHandler.SetDB(db)
 	return s
 }
 
@@ -869,8 +874,11 @@ func openCRUDTestServerWithReloader(t *testing.T, reloader server.CronReloader) 
 
 	cfg := crudMinimalConfig()
 	dc := workflow.NewDataChannels(1)
-	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, zerolog.Nop())
+	logger := zerolog.Nop()
+	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, logger)
 	s.WithStore(db, reloader)
+	fleetHandler := wireFleetForTest(s, cfg, nil, logger)
+	fleetHandler.SetDB(db)
 	return s
 }
 
@@ -1021,8 +1029,11 @@ func TestStoreCRUDPostBodySizeLimit(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 
 	dc := workflow.NewDataChannels(1)
-	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, zerolog.Nop())
+	logger := zerolog.Nop()
+	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, logger)
 	s.WithStore(db, nil)
+	fleetHandler := wireFleetForTest(s, cfg, nil, logger)
+	fleetHandler.SetDB(db)
 
 	tests := []struct {
 		name string
@@ -1080,8 +1091,11 @@ func TestStoreCRUDPostBodyTrailingGarbageRejected(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 
 	dc := workflow.NewDataChannels(1)
-	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, zerolog.Nop())
+	logger := zerolog.Nop()
+	s := NewServer(cfg, NewDeliveryStore(0), dc, nil, nil, logger)
 	s.WithStore(db, nil)
+	fleetHandler := wireFleetForTest(s, cfg, nil, logger)
+	fleetHandler.SetDB(db)
 
 	endpoints := []string{
 		"/agents",

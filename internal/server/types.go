@@ -11,7 +11,10 @@ package server
 import (
 	"context"
 	"errors"
+	"net/http"
 	"time"
+
+	"github.com/gorilla/mux"
 
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/workflow"
@@ -72,6 +75,32 @@ var ErrMemoryNotFound = errors.New("server: memory not found")
 // X-Memory-Mtime response header; a zero value means the timestamp is unknown.
 type MemoryReader interface {
 	ReadMemory(agent, repo string) (string, time.Time, error)
+}
+
+// HandlerRegister is the shape every domain handler package satisfies so
+// the composing server can mount its routes uniformly. fleet, repos,
+// config, observe, and the GitHub webhook handler each provide a concrete
+// *Handler that implements RegisterRoutes with this signature.
+type HandlerRegister interface {
+	RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) http.Handler)
+}
+
+// OrphansSnapshot is the cross-package summary the /status endpoint surfaces
+// for the orphan cache. It mirrors the shape of fleet.OrphanedAgentsSnapshot
+// without dragging the fleet package into the composing server's import
+// graph; the fleet handler adapts its concrete type to this one via a small
+// bridge constructed by cmd/agents.
+type OrphansSnapshot struct {
+	GeneratedAt time.Time
+	Count       int
+}
+
+// OrphansSource is implemented by the fleet handler. The composing server
+// queries it during /status assembly and via the route at
+// /agents/orphans/status (handled directly by the fleet package).
+type OrphansSource interface {
+	OrphansSnapshot() OrphansSnapshot
+	RefreshOrphansFromDB() (OrphansSnapshot, error)
 }
 
 // WriteCoordinator runs a CRUD write under the same lock that protects the
