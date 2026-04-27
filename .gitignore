@@ -12,3 +12,4 @@ internal/ui/node_modules/
 internal/ui/.next/
 internal/ui/dist/*
 !internal/ui/dist/.gitkeep
+internal/ui/tsconfig.tsbuildinfo

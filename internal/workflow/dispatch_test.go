@@ -12,6 +12,7 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -48,8 +49,8 @@ func testDispatchCfg() config.DispatchConfig {
 	}
 }
 
-func testAgentMap() map[string]config.AgentDef {
-	return map[string]config.AgentDef{
+func testAgentMap() map[string]fleet.Agent {
+	return map[string]fleet.Agent{
 		"coder": {
 			Name:          "coder",
 			Description:   "Writes code",
@@ -74,7 +75,7 @@ func testDispatcher(q *fakeQueue) *Dispatcher {
 	return NewDispatcher(testDispatchCfg(), testAgentMap(), NewDispatchDedupStore(300), q, zerolog.Nop())
 }
 
-func originatorAgent(name string) config.AgentDef {
+func originatorAgent(name string) fleet.Agent {
 	return testAgentMap()[name]
 }
 
@@ -168,7 +169,7 @@ func TestDispatcherDropsRequest(t *testing.T) {
 		targetAgent  string
 		currentDepth int
 		modifyCfg    func(*config.DispatchConfig)
-		modifyAgents func(map[string]config.AgentDef)
+		modifyAgents func(map[string]fleet.Agent)
 		wantStat     func(DispatchStats) int64
 		wantStatName string
 	}{
@@ -187,7 +188,7 @@ func TestDispatcherDropsRequest(t *testing.T) {
 		{
 			name:        "target has allow_dispatch false",
 			targetAgent: "pr-reviewer",
-			modifyAgents: func(agents map[string]config.AgentDef) {
+			modifyAgents: func(agents map[string]fleet.Agent) {
 				a := agents["pr-reviewer"]
 				a.AllowDispatch = false
 				agents["pr-reviewer"] = a
@@ -233,7 +234,7 @@ func TestDispatcherDropsExceedsMaxFanout(t *testing.T) {
 	t.Parallel()
 
 	// Build an agent map with many valid targets.
-	agents := map[string]config.AgentDef{
+	agents := map[string]fleet.Agent{
 		"coder": {Name: "coder", Description: "Codes", CanDispatch: []string{"a", "b", "c", "d", "e"}},
 		"a":     {Name: "a", Description: "Agent A", AllowDispatch: true},
 		"b":     {Name: "b", Description: "Agent B", AllowDispatch: true},
@@ -253,7 +254,7 @@ func TestDispatcherDropsExceedsMaxFanout(t *testing.T) {
 		{Agent: "d", Number: 4, Reason: "r"}, // exceeds fanout
 		{Agent: "e", Number: 5, Reason: "r"}, // exceeds fanout
 	}
-	originator := config.AgentDef{Name: "coder", CanDispatch: []string{"a", "b", "c", "d", "e"}}
+	originator := fleet.Agent{Name: "coder", CanDispatch: []string{"a", "b", "c", "d", "e"}}
 	d.ProcessDispatches(context.Background(), originator, testEvent("owner/repo", 0), "root-1", 0, "", reqs)
 
 	if got := len(q.popped()); got != 3 {
@@ -352,20 +353,20 @@ func TestEngineHandlesAgentDispatchEvent(t *testing.T) {
 				MaxConcurrentAgents: 4,
 				Dispatch:            config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300},
 			},
-			AIBackends: map[string]config.AIBackendConfig{
+			AIBackends: map[string]fleet.Backend{
 				"claude": {Command: "claude"},
 			},
 		},
-		Skills: map[string]config.SkillDef{},
-		Agents: []config.AgentDef{
+		Skills: map[string]fleet.Skill{},
+		Agents: []fleet.Agent{
 			{Name: "coder", Backend: "claude", Prompt: "Write code.", AllowDispatch: true},
 			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review code.", AllowDispatch: true},
 		},
-		Repos: []config.RepoDef{
+		Repos: []fleet.Repo{
 			{
 				Name:    "owner/repo",
 				Enabled: true,
-				Use: []config.Binding{
+				Use: []fleet.Binding{
 					{Agent: "coder", Labels: []string{"ai:code"}},
 					{Agent: "pr-reviewer", Labels: []string{"ai:review"}},
 				},
@@ -408,18 +409,18 @@ func TestEngineDispatchEventUnboundTargetReturnsError(t *testing.T) {
 				MaxConcurrentAgents: 4,
 				Dispatch:            config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300},
 			},
-			AIBackends: map[string]config.AIBackendConfig{"claude": {Command: "claude"}},
+			AIBackends: map[string]fleet.Backend{"claude": {Command: "claude"}},
 		},
-		Skills: map[string]config.SkillDef{},
-		Agents: []config.AgentDef{
+		Skills: map[string]fleet.Skill{},
+		Agents: []fleet.Agent{
 			{Name: "coder", Backend: "claude", Prompt: "Code."},
 			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review."},
 		},
-		Repos: []config.RepoDef{
+		Repos: []fleet.Repo{
 			{
 				Name:    "owner/repo",
 				Enabled: true,
-				Use:     []config.Binding{{Agent: "coder", Labels: []string{"ai:code"}}},
+				Use:     []fleet.Binding{{Agent: "coder", Labels: []string{"ai:code"}}},
 				// pr-reviewer NOT bound to this repo
 			},
 		},
@@ -654,7 +655,7 @@ func TestPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 
 	// Use a short TTL (2 seconds) so we can verify expiry without long sleeps.
 	dedup := NewDispatchDedupStore(2)
-	agents := map[string]config.AgentDef{
+	agents := map[string]fleet.Agent{
 		"pr-reviewer": {Name: "pr-reviewer", AllowDispatch: true, CanDispatch: []string{"coder"}},
 		"coder":        {Name: "coder", AllowDispatch: true},
 	}
@@ -791,7 +792,7 @@ func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 	// 1-second TTL so we can simulate expiry without real sleeps.
 	const ttlSeconds = 1
 	dedup := NewDispatchDedupStore(ttlSeconds)
-	agents := map[string]config.AgentDef{
+	agents := map[string]fleet.Agent{
 		"pr-reviewer": {Name: "pr-reviewer", AllowDispatch: true, CanDispatch: []string{"coder"}},
 		"coder":        {Name: "coder", AllowDispatch: true},
 	}
@@ -845,7 +846,7 @@ func TestFinalizeAutonomousRunKeepsTTLBlocksDispatchWithinWindow(t *testing.T) {
 
 	const ttlSeconds = 60
 	dedup := NewDispatchDedupStore(ttlSeconds)
-	agents := map[string]config.AgentDef{
+	agents := map[string]fleet.Agent{
 		"pr-reviewer": {Name: "pr-reviewer", AllowDispatch: true, CanDispatch: []string{"coder"}},
 		"coder":       {Name: "coder", AllowDispatch: true},
 	}
@@ -971,7 +972,7 @@ func TestDispatcherUpdateAgentsReflectsNewAllowlists(t *testing.T) {
 	}
 
 	// Hot-reload: update sec-reviewer to allow dispatch.
-	updated := []config.AgentDef{
+	updated := []fleet.Agent{
 		{Name: "coder", AllowDispatch: true, CanDispatch: []string{"pr-reviewer", "sec-reviewer"}},
 		{Name: "pr-reviewer", AllowDispatch: true, CanDispatch: []string{"coder"}},
 		{Name: "sec-reviewer", AllowDispatch: true},

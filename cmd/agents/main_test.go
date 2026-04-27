@@ -9,6 +9,7 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -35,18 +36,18 @@ func newMinimalEngine(queue workflow.EventEnqueuer) *workflow.Engine {
 	cfg := &config.Config{
 		Daemon: config.DaemonConfig{
 			Processor: config.ProcessorConfig{MaxConcurrentAgents: 1},
-			AIBackends: map[string]config.AIBackendConfig{
+			AIBackends: map[string]fleet.Backend{
 				"claude": {Command: "claude"},
 			},
 		},
-		Agents: []config.AgentDef{
+		Agents: []fleet.Agent{
 			{Name: "worker", Backend: "claude", Prompt: "Do work."},
 		},
-		Repos: []config.RepoDef{
+		Repos: []fleet.Repo{
 			{
 				Name:    "owner/repo",
 				Enabled: true,
-				Use:     []config.Binding{{Agent: "worker", Labels: []string{"run"}}},
+				Use:     []fleet.Binding{{Agent: "worker", Labels: []string{"run"}}},
 			},
 		},
 	}
@@ -105,19 +106,19 @@ func TestDrainDispatchesPropagatesHandleEventError(t *testing.T) {
 	cfg := &config.Config{
 		Daemon: config.DaemonConfig{
 			Processor: config.ProcessorConfig{MaxConcurrentAgents: 1},
-			AIBackends: map[string]config.AIBackendConfig{
+			AIBackends: map[string]fleet.Backend{
 				"claude": {Command: "claude"},
 			},
 		},
-		Agents: []config.AgentDef{
+		Agents: []fleet.Agent{
 			{Name: "worker", Backend: "claude", Prompt: "Do work."},
 		},
-		Repos: []config.RepoDef{
+		Repos: []fleet.Repo{
 			{
 				Name:    "owner/repo",
 				Enabled: true,
 				// "push" events match this binding so the worker agent is invoked.
-				Use: []config.Binding{{Agent: "worker", Events: []string{"push"}}},
+				Use: []fleet.Binding{{Agent: "worker", Events: []string{"push"}}},
 			},
 		},
 	}
@@ -165,18 +166,18 @@ func TestDrainDispatchesDrainsChainedEvents(t *testing.T) {
 	cfg := &config.Config{
 		Daemon: config.DaemonConfig{
 			Processor: config.ProcessorConfig{MaxConcurrentAgents: 1},
-			AIBackends: map[string]config.AIBackendConfig{
+			AIBackends: map[string]fleet.Backend{
 				"claude": {Command: "claude"},
 			},
 		},
-		Agents: []config.AgentDef{
+		Agents: []fleet.Agent{
 			{Name: "worker", Backend: "claude", Prompt: "Do work."},
 		},
-		Repos: []config.RepoDef{
+		Repos: []fleet.Repo{
 			{
 				Name:    "owner/repo",
 				Enabled: true,
-				Use:     []config.Binding{{Agent: "worker", Events: []string{"push"}}},
+				Use:     []fleet.Binding{{Agent: "worker", Events: []string{"push"}}},
 			},
 		},
 	}

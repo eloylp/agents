@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/robfig/cron/v3"
 )
 
@@ -38,7 +39,7 @@ var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month 
 // validateCronExpressions checks that every cron binding in repos can be
 // parsed by the same parser the autonomous scheduler uses. Returns an
 // ErrValidation if any expression is malformed.
-func validateCronExpressions(repos []config.RepoDef) error {
+func validateCronExpressions(repos []fleet.Repo) error {
 	for _, r := range repos {
 		for _, b := range r.Use {
 			if !b.IsCron() {
@@ -74,11 +75,11 @@ func validateFleet(q querier) error {
 	}
 	backends := cfg.Daemon.AIBackends
 	if backends == nil {
-		backends = map[string]config.AIBackendConfig{}
+		backends = map[string]fleet.Backend{}
 	}
 	skills := cfg.Skills
 	if skills == nil {
-		skills = map[string]config.SkillDef{}
+		skills = map[string]fleet.Skill{}
 	}
 	return config.ValidateEntities(cfg.Agents, cfg.Repos, skills, backends)
 }
@@ -106,7 +107,7 @@ func requireAtLeastOne(q querier, countQuery, entity, zeroMsg string) error {
 // all repos is a legitimate user action (fleet maintenance, evaluating prompts
 // on a different repo) and the daemon runs cleanly with zero enabled repos.
 // See issue #302.
-func validateFleetConstraints(q querier, op string, repos []config.RepoDef) error {
+func validateFleetConstraints(q querier, op string, repos []fleet.Repo) error {
 	if err := validateFleet(q); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: %s: %v", op, err)}
 	}
@@ -122,7 +123,7 @@ func validateFleetConstraints(q querier, op string, repos []config.RepoDef) erro
 // ──── Agents ────────────────────────────────────────────────────────────────────────────────────
 
 // ReadAgents returns all agents from the database, ordered by name.
-func ReadAgents(db *sql.DB) ([]config.AgentDef, error) {
+func ReadAgents(db *sql.DB) ([]fleet.Agent, error) {
 	var cfg config.Config
 	if err := loadAgents(db, &cfg); err != nil {
 		return nil, err
@@ -134,14 +135,14 @@ func ReadAgents(db *sql.DB) ([]config.AgentDef, error) {
 // The agent name and related fields are normalized (lowercase, trimmed) before
 // writing so the stored values match the canonical form that AgentByName and
 // registerJobs expect, keeping live behavior consistent with startup.
-func UpsertAgent(db *sql.DB, a config.AgentDef) error {
+func UpsertAgent(db *sql.DB, a fleet.Agent) error {
 	config.NormalizeAgentDef(&a)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert agent %s: begin: %w", a.Name, err)
 	}
 	defer tx.Rollback()
-	if err := importAgents(tx, []config.AgentDef{a}); err != nil {
+	if err := importAgents(tx, []fleet.Agent{a}); err != nil {
 		return err
 	}
 	if err := validateFleet(tx); err != nil {
@@ -230,13 +231,13 @@ func countDistinctRepos(repos []string) int {
 // ──── Skills ─────────────────────────────────────────────────────────────────────────────────────
 
 // ReadSkills returns all skills from the database.
-func ReadSkills(db *sql.DB) (map[string]config.SkillDef, error) {
+func ReadSkills(db *sql.DB) (map[string]fleet.Skill, error) {
 	var cfg config.Config
 	if err := loadSkills(db, &cfg); err != nil {
 		return nil, err
 	}
 	if cfg.Skills == nil {
-		return map[string]config.SkillDef{}, nil
+		return map[string]fleet.Skill{}, nil
 	}
 	return cfg.Skills, nil
 }
@@ -246,7 +247,7 @@ func ReadSkills(db *sql.DB) (map[string]config.SkillDef, error) {
 // (Prompt, PromptFile) are trimmed before writing, matching the normalization
 // startup applies in normalize() so that the stored values are already in
 // canonical form and validation sees the same shape as after a restart.
-func UpsertSkill(db *sql.DB, name string, s config.SkillDef) error {
+func UpsertSkill(db *sql.DB, name string, s fleet.Skill) error {
 	name = config.NormalizeSkillName(name)
 	config.NormalizeSkillDef(&s)
 	tx, err := db.Begin()
@@ -254,7 +255,7 @@ func UpsertSkill(db *sql.DB, name string, s config.SkillDef) error {
 		return fmt.Errorf("store: upsert skill %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
-	if err := importSkills(tx, map[string]config.SkillDef{name: s}); err != nil {
+	if err := importSkills(tx, map[string]fleet.Skill{name: s}); err != nil {
 		return err
 	}
 	if err := validateFleet(tx); err != nil {
@@ -283,13 +284,13 @@ func DeleteSkill(db *sql.DB, name string) error {
 // ──── Backends ───────────────────────────────────────────────────────────────────────────────────────
 
 // ReadBackends returns all AI backend configurations from the database.
-func ReadBackends(db *sql.DB) (map[string]config.AIBackendConfig, error) {
+func ReadBackends(db *sql.DB) (map[string]fleet.Backend, error) {
 	var cfg config.Config
 	if err := loadBackends(db, &cfg); err != nil {
 		return nil, err
 	}
 	if cfg.Daemon.AIBackends == nil {
-		return map[string]config.AIBackendConfig{}, nil
+		return map[string]fleet.Backend{}, nil
 	}
 	return cfg.Daemon.AIBackends, nil
 }
@@ -301,7 +302,7 @@ func ReadBackends(db *sql.DB) (map[string]config.AIBackendConfig, error) {
 // defaults (timeout_seconds 0 → 600, max_prompt_chars 0 → 12000). This
 // ensures the stored values are already in canonical form so that live
 // behavior never diverges from a post-restart load.
-func UpsertBackend(db *sql.DB, name string, b config.AIBackendConfig) error {
+func UpsertBackend(db *sql.DB, name string, b fleet.Backend) error {
 	name = config.NormalizeBackendName(name)
 	config.NormalizeBackendConfig(&b)
 	config.ApplyBackendDefaults(&b)
@@ -310,7 +311,7 @@ func UpsertBackend(db *sql.DB, name string, b config.AIBackendConfig) error {
 		return fmt.Errorf("store: upsert backend %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
-	if err := importBackends(tx, map[string]config.AIBackendConfig{name: b}); err != nil {
+	if err := importBackends(tx, map[string]fleet.Backend{name: b}); err != nil {
 		return err
 	}
 	if err := validateFleet(tx); err != nil {
@@ -347,7 +348,7 @@ func DeleteBackend(db *sql.DB, name string) error {
 // This prevents the race where a concurrent /api/store write commits between
 // reads, producing a mixed snapshot that can cause spurious Reload failures or
 // agents that see new definitions with stale skill/backend maps.
-func ReadSnapshot(db *sql.DB) ([]config.AgentDef, []config.RepoDef, map[string]config.SkillDef, map[string]config.AIBackendConfig, error) {
+func ReadSnapshot(db *sql.DB) ([]fleet.Agent, []fleet.Repo, map[string]fleet.Skill, map[string]fleet.Backend, error) {
 	tx, err := db.Begin()
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("store: begin snapshot: %w", err)
@@ -368,10 +369,10 @@ func ReadSnapshot(db *sql.DB) ([]config.AgentDef, []config.RepoDef, map[string]c
 		return nil, nil, nil, nil, err
 	}
 	if cfg.Skills == nil {
-		cfg.Skills = map[string]config.SkillDef{}
+		cfg.Skills = map[string]fleet.Skill{}
 	}
 	if cfg.Daemon.AIBackends == nil {
-		cfg.Daemon.AIBackends = map[string]config.AIBackendConfig{}
+		cfg.Daemon.AIBackends = map[string]fleet.Backend{}
 	}
 	return cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil
 }
@@ -379,7 +380,7 @@ func ReadSnapshot(db *sql.DB) ([]config.AgentDef, []config.RepoDef, map[string]c
 // ──── Repos ────────────────────────────────────────────────────────────────────────────────────────
 
 // ReadRepos returns all repos (with bindings) from the database.
-func ReadRepos(db *sql.DB) ([]config.RepoDef, error) {
+func ReadRepos(db *sql.DB) ([]fleet.Repo, error) {
 	var cfg config.Config
 	if err := loadRepos(db, &cfg); err != nil {
 		return nil, err
@@ -391,14 +392,14 @@ func ReadRepos(db *sql.DB) ([]config.RepoDef, error) {
 // replaced wholesale: any existing bindings for the repo are removed before
 // the new list is written. The repo name and binding agents/events are
 // normalized (trimmed / lowercased) before writing.
-func UpsertRepo(db *sql.DB, r config.RepoDef) error {
+func UpsertRepo(db *sql.DB, r fleet.Repo) error {
 	config.NormalizeRepoDef(&r)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert repo %s: begin: %w", r.Name, err)
 	}
 	defer tx.Rollback()
-	if err := importRepos(tx, []config.RepoDef{r}); err != nil {
+	if err := importRepos(tx, []fleet.Repo{r}); err != nil {
 		return err
 	}
 	if err := validateFleet(tx); err != nil {
@@ -410,24 +411,24 @@ func UpsertRepo(db *sql.DB, r config.RepoDef) error {
 // normalizeFleet normalizes agents and repos in-place and returns new maps
 // with normalized skills and backends. Called by ImportAll and ReplaceAll.
 func normalizeFleet(
-	agents []config.AgentDef,
-	repos []config.RepoDef,
-	skills map[string]config.SkillDef,
-	backends map[string]config.AIBackendConfig,
-) (map[string]config.SkillDef, map[string]config.AIBackendConfig) {
+	agents []fleet.Agent,
+	repos []fleet.Repo,
+	skills map[string]fleet.Skill,
+	backends map[string]fleet.Backend,
+) (map[string]fleet.Skill, map[string]fleet.Backend) {
 	for i := range agents {
 		config.NormalizeAgentDef(&agents[i])
 	}
 	for i := range repos {
 		config.NormalizeRepoDef(&repos[i])
 	}
-	normalizedSkills := make(map[string]config.SkillDef, len(skills))
+	normalizedSkills := make(map[string]fleet.Skill, len(skills))
 	for name, s := range skills {
 		name = config.NormalizeSkillName(name)
 		config.NormalizeSkillDef(&s)
 		normalizedSkills[name] = s
 	}
-	normalizedBackends := make(map[string]config.AIBackendConfig, len(backends))
+	normalizedBackends := make(map[string]fleet.Backend, len(backends))
 	for name, b := range backends {
 		name = config.NormalizeBackendName(name)
 		config.NormalizeBackendConfig(&b)
@@ -443,10 +444,10 @@ func normalizeFleet(
 // consistent with the normalization the individual Upsert* helpers apply.
 func ImportAll(
 	db *sql.DB,
-	agents []config.AgentDef,
-	repos []config.RepoDef,
-	skills map[string]config.SkillDef,
-	backends map[string]config.AIBackendConfig,
+	agents []fleet.Agent,
+	repos []fleet.Repo,
+	skills map[string]fleet.Skill,
+	backends map[string]fleet.Backend,
 ) error {
 	normalizedSkills, normalizedBackends := normalizeFleet(agents, repos, skills, backends)
 
@@ -480,10 +481,10 @@ func ImportAll(
 // left unchanged.
 func ReplaceAll(
 	db *sql.DB,
-	agents []config.AgentDef,
-	repos []config.RepoDef,
-	skills map[string]config.SkillDef,
-	backends map[string]config.AIBackendConfig,
+	agents []fleet.Agent,
+	repos []fleet.Repo,
+	skills map[string]fleet.Skill,
+	backends map[string]fleet.Backend,
 ) error {
 	normalizedSkills, normalizedBackends := normalizeFleet(agents, repos, skills, backends)
 
@@ -523,7 +524,7 @@ func ReplaceAll(
 // validateBindingShape checks the trigger-exclusivity and event-kind invariants
 // for a single binding, without requiring a full repo context. Returns an
 // *ErrValidation on failure so HTTP handlers can map it to 400 Bad Request.
-func validateBindingShape(b config.Binding) error {
+func validateBindingShape(b fleet.Binding) error {
 	if strings.TrimSpace(b.Agent) == "" {
 		return &ErrValidation{Msg: "agent is required"}
 	}
@@ -553,7 +554,7 @@ func validateBindingShape(b config.Binding) error {
 
 // normalizeBinding lowercases/trims agent and event names so writes match the
 // canonical form the daemon derives at boot (see normalize() in config.go).
-func normalizeBinding(b *config.Binding) {
+func normalizeBinding(b *fleet.Binding) {
 	b.Agent = strings.ToLower(strings.TrimSpace(b.Agent))
 	b.Cron = strings.TrimSpace(b.Cron)
 	for i := range b.Events {
@@ -569,41 +570,41 @@ func normalizeBinding(b *config.Binding) {
 // Validation failures surface as *ErrValidation (HTTP 400). Missing repo/agent
 // references surface as *ErrNotFound (HTTP 404). The caller is responsible for
 // holding the store mutex and reloading cron schedules after success.
-func CreateBinding(db *sql.DB, repoName string, b config.Binding) (int64, config.Binding, error) {
+func CreateBinding(db *sql.DB, repoName string, b fleet.Binding) (int64, fleet.Binding, error) {
 	repoName = config.NormalizeRepoName(repoName)
 	normalizeBinding(&b)
 	if err := validateBindingShape(b); err != nil {
-		return 0, config.Binding{}, err
+		return 0, fleet.Binding{}, err
 	}
 	tx, err := db.Begin()
 	if err != nil {
-		return 0, config.Binding{}, fmt.Errorf("store: create binding: begin: %w", err)
+		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: begin: %w", err)
 	}
 	defer tx.Rollback()
 
 	// Verify the repo exists so the FK violation surfaces as a typed error.
 	var repoExists bool
 	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM repos WHERE name=?)", repoName).Scan(&repoExists); err != nil {
-		return 0, config.Binding{}, fmt.Errorf("store: create binding: lookup repo: %w", err)
+		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: lookup repo: %w", err)
 	}
 	if !repoExists {
-		return 0, config.Binding{}, &ErrNotFound{Msg: fmt.Sprintf("repo %q not found", repoName)}
+		return 0, fleet.Binding{}, &ErrNotFound{Msg: fmt.Sprintf("repo %q not found", repoName)}
 	}
 	var agentExists bool
 	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM agents WHERE name=?)", b.Agent).Scan(&agentExists); err != nil {
-		return 0, config.Binding{}, fmt.Errorf("store: create binding: lookup agent: %w", err)
+		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: lookup agent: %w", err)
 	}
 	if !agentExists {
-		return 0, config.Binding{}, &ErrValidation{Msg: fmt.Sprintf("unknown agent %q", b.Agent)}
+		return 0, fleet.Binding{}, &ErrValidation{Msg: fmt.Sprintf("unknown agent %q", b.Agent)}
 	}
 
 	labels, err := json.Marshal(nilSafeStrings(b.Labels))
 	if err != nil {
-		return 0, config.Binding{}, fmt.Errorf("store: create binding: marshal labels: %w", err)
+		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: marshal labels: %w", err)
 	}
 	events, err := json.Marshal(nilSafeStrings(b.Events))
 	if err != nil {
-		return 0, config.Binding{}, fmt.Errorf("store: create binding: marshal events: %w", err)
+		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: marshal events: %w", err)
 	}
 	enabled := bindingEnabledInt(b.Enabled)
 	res, err := tx.Exec(
@@ -611,17 +612,17 @@ func CreateBinding(db *sql.DB, repoName string, b config.Binding) (int64, config
 		repoName, b.Agent, string(labels), string(events), b.Cron, enabled,
 	)
 	if err != nil {
-		return 0, config.Binding{}, fmt.Errorf("store: create binding: insert: %w", err)
+		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: insert: %w", err)
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
-		return 0, config.Binding{}, fmt.Errorf("store: create binding: last insert id: %w", err)
+		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: last insert id: %w", err)
 	}
 	if err := validateFleet(tx); err != nil {
-		return 0, config.Binding{}, &ErrValidation{Msg: fmt.Sprintf("store: create binding: %v", err)}
+		return 0, fleet.Binding{}, &ErrValidation{Msg: fmt.Sprintf("store: create binding: %v", err)}
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, config.Binding{}, fmt.Errorf("store: create binding: commit: %w", err)
+		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: commit: %w", err)
 	}
 	b.ID = id
 	return id, b, nil
@@ -633,32 +634,32 @@ func CreateBinding(db *sql.DB, repoName string, b config.Binding) (int64, config
 // unknown agent refs.
 //
 // Callers hold the store mutex and reload cron afterwards.
-func UpdateBinding(db *sql.DB, id int64, b config.Binding) (config.Binding, error) {
+func UpdateBinding(db *sql.DB, id int64, b fleet.Binding) (fleet.Binding, error) {
 	normalizeBinding(&b)
 	if err := validateBindingShape(b); err != nil {
-		return config.Binding{}, err
+		return fleet.Binding{}, err
 	}
 	tx, err := db.Begin()
 	if err != nil {
-		return config.Binding{}, fmt.Errorf("store: update binding: begin: %w", err)
+		return fleet.Binding{}, fmt.Errorf("store: update binding: begin: %w", err)
 	}
 	defer tx.Rollback()
 
 	var agentExists bool
 	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM agents WHERE name=?)", b.Agent).Scan(&agentExists); err != nil {
-		return config.Binding{}, fmt.Errorf("store: update binding: lookup agent: %w", err)
+		return fleet.Binding{}, fmt.Errorf("store: update binding: lookup agent: %w", err)
 	}
 	if !agentExists {
-		return config.Binding{}, &ErrValidation{Msg: fmt.Sprintf("unknown agent %q", b.Agent)}
+		return fleet.Binding{}, &ErrValidation{Msg: fmt.Sprintf("unknown agent %q", b.Agent)}
 	}
 
 	labels, err := json.Marshal(nilSafeStrings(b.Labels))
 	if err != nil {
-		return config.Binding{}, fmt.Errorf("store: update binding: marshal labels: %w", err)
+		return fleet.Binding{}, fmt.Errorf("store: update binding: marshal labels: %w", err)
 	}
 	events, err := json.Marshal(nilSafeStrings(b.Events))
 	if err != nil {
-		return config.Binding{}, fmt.Errorf("store: update binding: marshal events: %w", err)
+		return fleet.Binding{}, fmt.Errorf("store: update binding: marshal events: %w", err)
 	}
 	enabled := bindingEnabledInt(b.Enabled)
 	res, err := tx.Exec(
@@ -666,26 +667,26 @@ func UpdateBinding(db *sql.DB, id int64, b config.Binding) (config.Binding, erro
 		b.Agent, string(labels), string(events), b.Cron, enabled, id,
 	)
 	if err != nil {
-		return config.Binding{}, fmt.Errorf("store: update binding: %w", err)
+		return fleet.Binding{}, fmt.Errorf("store: update binding: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return config.Binding{}, fmt.Errorf("store: update binding: rows affected: %w", err)
+		return fleet.Binding{}, fmt.Errorf("store: update binding: rows affected: %w", err)
 	}
 	if n == 0 {
-		return config.Binding{}, &ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found", id)}
+		return fleet.Binding{}, &ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found", id)}
 	}
 
 	var repoName string
 	if err := tx.QueryRow("SELECT repo FROM bindings WHERE id=?", id).Scan(&repoName); err != nil {
-		return config.Binding{}, fmt.Errorf("store: update binding: lookup repo: %w", err)
+		return fleet.Binding{}, fmt.Errorf("store: update binding: lookup repo: %w", err)
 	}
 
 	if err := validateFleet(tx); err != nil {
-		return config.Binding{}, &ErrValidation{Msg: fmt.Sprintf("store: update binding: %v", err)}
+		return fleet.Binding{}, &ErrValidation{Msg: fmt.Sprintf("store: update binding: %v", err)}
 	}
 	if err := tx.Commit(); err != nil {
-		return config.Binding{}, fmt.Errorf("store: update binding: commit: %w", err)
+		return fleet.Binding{}, fmt.Errorf("store: update binding: commit: %w", err)
 	}
 	b.ID = id
 	return b, nil
@@ -722,27 +723,27 @@ func DeleteBinding(db *sql.DB, id int64) error {
 // ReadBinding fetches a single binding by ID along with its parent repo name.
 // Returns found=false when the row does not exist; errors only reflect
 // unexpected I/O failures.
-func ReadBinding(db *sql.DB, id int64) (repoName string, b config.Binding, found bool, err error) {
+func ReadBinding(db *sql.DB, id int64) (repoName string, b fleet.Binding, found bool, err error) {
 	var labelsJSON, eventsJSON, cron, agent string
 	var enabled int
 	err = db.QueryRow(
 		"SELECT repo,agent,labels,events,cron,enabled FROM bindings WHERE id=?", id,
 	).Scan(&repoName, &agent, &labelsJSON, &eventsJSON, &cron, &enabled)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", config.Binding{}, false, nil
+		return "", fleet.Binding{}, false, nil
 	}
 	if err != nil {
-		return "", config.Binding{}, false, fmt.Errorf("store: read binding %d: %w", id, err)
+		return "", fleet.Binding{}, false, fmt.Errorf("store: read binding %d: %w", id, err)
 	}
 	var labels []string
 	if err := json.Unmarshal([]byte(labelsJSON), &labels); err != nil {
-		return "", config.Binding{}, false, fmt.Errorf("store: read binding %d: parse labels: %w", id, err)
+		return "", fleet.Binding{}, false, fmt.Errorf("store: read binding %d: parse labels: %w", id, err)
 	}
 	var events []string
 	if err := json.Unmarshal([]byte(eventsJSON), &events); err != nil {
-		return "", config.Binding{}, false, fmt.Errorf("store: read binding %d: parse events: %w", id, err)
+		return "", fleet.Binding{}, false, fmt.Errorf("store: read binding %d: parse events: %w", id, err)
 	}
-	b = config.Binding{
+	b = fleet.Binding{
 		ID:     id,
 		Agent:  agent,
 		Labels: labels,

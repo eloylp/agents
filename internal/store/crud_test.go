@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -16,7 +16,7 @@ import (
 // reference it pass cross-ref validation.
 func seedBackend(t *testing.T, db *sql.DB, name string) {
 	t.Helper()
-	b := config.AIBackendConfig{Command: name}
+	b := fleet.Backend{Command: name}
 	if err := store.UpsertBackend(db, name, b); err != nil {
 		t.Fatalf("seedBackend %s: %v", name, err)
 	}
@@ -26,7 +26,7 @@ func seedBackend(t *testing.T, db *sql.DB, name string) {
 // reference it pass cross-ref validation.
 func seedSkill(t *testing.T, db *sql.DB, name string) {
 	t.Helper()
-	if err := store.UpsertSkill(db, name, config.SkillDef{Prompt: "skill prompt"}); err != nil {
+	if err := store.UpsertSkill(db, name, fleet.Skill{Prompt: "skill prompt"}); err != nil {
 		t.Fatalf("seedSkill %s: %v", name, err)
 	}
 }
@@ -42,7 +42,7 @@ func TestUpsertAndReadAgents(t *testing.T) {
 
 	// "pr-reviewer" must exist (with a description) before "coder" can list it
 	// in can_dispatch.
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name:        "pr-reviewer",
 		Backend:     "claude",
 		Prompt:      "review code",
@@ -53,7 +53,7 @@ func TestUpsertAndReadAgents(t *testing.T) {
 		t.Fatalf("UpsertAgent pr-reviewer: %v", err)
 	}
 
-	a := config.AgentDef{
+	a := fleet.Agent{
 		Name:          "coder",
 		Backend:       "claude",
 		Skills:        []string{"architect"},
@@ -72,7 +72,7 @@ func TestUpsertAndReadAgents(t *testing.T) {
 		t.Fatalf("ReadAgents: %v", err)
 	}
 	// 2 agents: pr-reviewer (seeded for can_dispatch) + coder.
-	var got *config.AgentDef
+	var got *fleet.Agent
 	for i := range agents {
 		if agents[i].Name == "coder" {
 			got = &agents[i]
@@ -96,7 +96,7 @@ func TestUpsertAgentIsIdempotent(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 
-	a := config.AgentDef{Name: "coder", Backend: "claude", Prompt: "v1", Skills: []string{}, CanDispatch: []string{}}
+	a := fleet.Agent{Name: "coder", Backend: "claude", Prompt: "v1", Skills: []string{}, CanDispatch: []string{}}
 	if err := store.UpsertAgent(db, a); err != nil {
 		t.Fatalf("first upsert: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestDeleteAgent(t *testing.T) {
 
 	// Seed two agents so that deleting one still leaves the system valid.
 	for _, name := range []string{"coder", "reviewer"} {
-		if err := store.UpsertAgent(db, config.AgentDef{
+		if err := store.UpsertAgent(db, fleet.Agent{
 			Name: name, Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
 		}); err != nil {
 			t.Fatalf("UpsertAgent %s: %v", name, err)
@@ -161,7 +161,7 @@ func TestUpsertAndReadSkills(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	s := config.SkillDef{Prompt: "Focus on architecture."}
+	s := fleet.Skill{Prompt: "Focus on architecture."}
 	if err := store.UpsertSkill(db, "architect", s); err != nil {
 		t.Fatalf("UpsertSkill: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestDeleteSkill(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	if err := store.UpsertSkill(db, "architect", config.SkillDef{Prompt: "p"}); err != nil {
+	if err := store.UpsertSkill(db, "architect", fleet.Skill{Prompt: "p"}); err != nil {
 		t.Fatalf("UpsertSkill: %v", err)
 	}
 	if err := store.DeleteSkill(db, "architect"); err != nil {
@@ -202,7 +202,7 @@ func TestUpsertAndReadBackends(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	b := config.AIBackendConfig{
+	b := fleet.Backend{
 		Command:        "claude",
 		TimeoutSeconds: 300,
 		MaxPromptChars: 8000,
@@ -233,7 +233,7 @@ func TestUpsertBackendAppliesDefaults(t *testing.T) {
 	// Persist a backend with zero numeric fields — the same payload that
 	// POST /api/store/backends would send when omitting timeout_seconds and
 	// max_prompt_chars from the request body.
-	b := config.AIBackendConfig{Command: "claude"}
+	b := fleet.Backend{Command: "claude"}
 	if err := store.UpsertBackend(db, "claude", b); err != nil {
 		t.Fatalf("UpsertBackend: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestDeleteBackend(t *testing.T) {
 
 	// Seed two backends so that deleting one still leaves the system valid.
 	for _, name := range []string{"claude", "codex"} {
-		if err := store.UpsertBackend(db, name, config.AIBackendConfig{
+		if err := store.UpsertBackend(db, name, fleet.Backend{
 			Command: name,
 		}); err != nil {
 			t.Fatalf("UpsertBackend %s: %v", name, err)
@@ -287,17 +287,17 @@ func TestUpsertAndReadRepos(t *testing.T) {
 	seedBackend(t, db, "claude")
 
 	// UpsertRepo requires the agents referenced by bindings to exist.
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
 
 	enabled := true
-	r := config.RepoDef{
+	r := fleet.Repo{
 		Name:    "owner/repo",
 		Enabled: true,
-		Use: []config.Binding{
+		Use: []fleet.Binding{
 			{Agent: "coder", Labels: []string{"ai:fix"}, Enabled: &enabled},
 		},
 	}
@@ -336,16 +336,16 @@ func TestUpsertRepoReplacesBindings(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
 
-	r := config.RepoDef{
+	r := fleet.Repo{
 		Name:    "owner/repo",
 		Enabled: true,
-		Use: []config.Binding{
+		Use: []fleet.Binding{
 			{Agent: "coder", Labels: []string{"ai:fix"}},
 			{Agent: "coder", Cron: "0 9 * * *"},
 		},
@@ -355,7 +355,7 @@ func TestUpsertRepoReplacesBindings(t *testing.T) {
 	}
 
 	// Re-upsert with only one binding.
-	r.Use = []config.Binding{{Agent: "coder", Labels: []string{"ai:fix"}}}
+	r.Use = []fleet.Binding{{Agent: "coder", Labels: []string{"ai:fix"}}}
 	if err := store.UpsertRepo(db, r); err != nil {
 		t.Fatalf("second upsert: %v", err)
 	}
@@ -375,7 +375,7 @@ func TestDeleteRepo(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
@@ -383,10 +383,10 @@ func TestDeleteRepo(t *testing.T) {
 
 	// Seed two repos so that deleting one still leaves at least one enabled.
 	for _, name := range []string{"owner/repo", "owner/other"} {
-		if err := store.UpsertRepo(db, config.RepoDef{
+		if err := store.UpsertRepo(db, fleet.Repo{
 			Name:    name,
 			Enabled: true,
-			Use:     []config.Binding{{Agent: "coder", Labels: []string{"ai:fix"}}},
+			Use:     []fleet.Binding{{Agent: "coder", Labels: []string{"ai:fix"}}},
 		}); err != nil {
 			t.Fatalf("UpsertRepo %s: %v", name, err)
 		}
@@ -425,7 +425,7 @@ func TestReadSnapshot(t *testing.T) {
 	seedBackend(t, db, "claude")
 
 	// Seed one agent and one repo.
-	a := config.AgentDef{
+	a := fleet.Agent{
 		Name:    "coder",
 		Backend: "claude",
 		Skills:  []string{},
@@ -435,10 +435,10 @@ func TestReadSnapshot(t *testing.T) {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
 	enabled := true
-	r := config.RepoDef{
+	r := fleet.Repo{
 		Name:    "owner/repo",
 		Enabled: true,
-		Use:     []config.Binding{{Agent: "coder", Events: []string{"issues.labeled"}, Enabled: &enabled}},
+		Use:     []fleet.Binding{{Agent: "coder", Events: []string{"issues.labeled"}, Enabled: &enabled}},
 	}
 	if err := store.UpsertRepo(db, r); err != nil {
 		t.Fatalf("UpsertRepo: %v", err)
@@ -472,19 +472,19 @@ func TestUpsertAgentCrossRefErrors(t *testing.T) {
 	tests := []struct {
 		name    string
 		setup   func(t *testing.T, db *sql.DB)
-		agent   config.AgentDef
+		agent   fleet.Agent
 		wantErr string
 	}{
 		{
 			name:    "unknown backend",
 			setup:   func(t *testing.T, db *sql.DB) { t.Helper() }, // no backend seeded
-			agent:   config.AgentDef{Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}},
+			agent:   fleet.Agent{Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}},
 			wantErr: "unknown backend",
 		},
 		{
 			name:    "unknown skill",
 			setup:   func(t *testing.T, db *sql.DB) { seedBackend(t, db, "claude") },
-			agent:   config.AgentDef{Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{"architect"}},
+			agent:   fleet.Agent{Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{"architect"}},
 			wantErr: "unknown skill",
 		},
 	}
@@ -511,10 +511,10 @@ func TestUpsertRepoRejectedWithUnknownAgent(t *testing.T) {
 	// No agent seeded — binding references "ghost". The FK constraint on
 	// bindings.agent may fire first, or validateCrossRefs catches it; either
 	// way an error must be returned and nothing must be committed.
-	err := store.UpsertRepo(db, config.RepoDef{
+	err := store.UpsertRepo(db, fleet.Repo{
 		Name:    "owner/repo",
 		Enabled: true,
-		Use:     []config.Binding{{Agent: "ghost", Labels: []string{"ai:fix"}}},
+		Use:     []fleet.Binding{{Agent: "ghost", Labels: []string{"ai:fix"}}},
 	})
 	if err == nil {
 		t.Fatal("UpsertRepo with unknown agent binding: want error, got nil")
@@ -538,7 +538,7 @@ func TestDeleteBackendRejectedWhenAgentReferences(t *testing.T) {
 	// reason the delete fails — only the agent reference should block it.
 	seedBackend(t, db, "claude")
 	seedBackend(t, db, "codex")
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name:    "coder",
 		Backend: "claude",
 		Prompt:  "p",
@@ -572,7 +572,7 @@ func TestDeleteSkillRejectedWhenAgentReferences(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 	seedSkill(t, db, "architect")
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name:    "coder",
 		Backend: "claude",
 		Prompt:  "p",
@@ -606,17 +606,17 @@ func TestDeleteAgentRejectedWhenBindingReferences(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 	for _, name := range []string{"coder", "reviewer"} {
-		if err := store.UpsertAgent(db, config.AgentDef{
+		if err := store.UpsertAgent(db, fleet.Agent{
 			Name: name, Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
 		}); err != nil {
 			t.Fatalf("UpsertAgent %s: %v", name, err)
 		}
 	}
 	enabled := true
-	if err := store.UpsertRepo(db, config.RepoDef{
+	if err := store.UpsertRepo(db, fleet.Repo{
 		Name:    "owner/repo",
 		Enabled: true,
-		Use:     []config.Binding{{Agent: "coder", Labels: []string{"ai:fix"}, Enabled: &enabled}},
+		Use:     []fleet.Binding{{Agent: "coder", Labels: []string{"ai:fix"}, Enabled: &enabled}},
 	}); err != nil {
 		t.Fatalf("UpsertRepo: %v", err)
 	}
@@ -652,7 +652,7 @@ func TestDeleteAgentCascadeRemovesBindings(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 	for _, name := range []string{"coder", "reviewer"} {
-		if err := store.UpsertAgent(db, config.AgentDef{
+		if err := store.UpsertAgent(db, fleet.Agent{
 			Name: name, Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
 		}); err != nil {
 			t.Fatalf("UpsertAgent %s: %v", name, err)
@@ -661,10 +661,10 @@ func TestDeleteAgentCascadeRemovesBindings(t *testing.T) {
 	enabled := true
 	// Repo keeps a binding for "reviewer" so the cascade path does not wipe
 	// the repo entirely; only bindings referencing "coder" should disappear.
-	if err := store.UpsertRepo(db, config.RepoDef{
+	if err := store.UpsertRepo(db, fleet.Repo{
 		Name:    "owner/repo",
 		Enabled: true,
-		Use: []config.Binding{
+		Use: []fleet.Binding{
 			{Agent: "coder", Labels: []string{"ai:fix"}, Enabled: &enabled},
 			{Agent: "coder", Events: []string{"issues.opened"}, Enabled: &enabled},
 			{Agent: "reviewer", Labels: []string{"ai:review"}, Enabled: &enabled},
@@ -705,7 +705,7 @@ func TestDeleteAgentCascadeStillRejectsLastAgent(t *testing.T) {
 	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
@@ -725,13 +725,13 @@ func TestDeleteAgentCascadeStillRejectsWhenInCanDispatch(t *testing.T) {
 	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name: "target", Backend: "claude", Prompt: "p", Description: "a dispatchable target",
 		Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent target: %v", err)
 	}
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name: "dispatcher", Backend: "claude", Prompt: "p",
 		Skills: []string{}, CanDispatch: []string{"target"},
 	}); err != nil {
@@ -753,7 +753,7 @@ func TestDeleteAgentRejectedWhenDispatchListReferences(t *testing.T) {
 	seedBackend(t, db, "claude")
 
 	// Seed two agents: "dispatcher" can_dispatch to "target".
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name:        "target",
 		Backend:     "claude",
 		Prompt:      "p",
@@ -763,7 +763,7 @@ func TestDeleteAgentRejectedWhenDispatchListReferences(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertAgent target: %v", err)
 	}
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name:        "dispatcher",
 		Backend:     "claude",
 		Prompt:      "p",
@@ -790,19 +790,19 @@ func TestUpsertBackendValidationErrors(t *testing.T) {
 	tests := []struct {
 		name    string
 		bName   string
-		cfg     config.AIBackendConfig
+		cfg     fleet.Backend
 		wantErr string
 	}{
 		{
 			name:    "empty command",
 			bName:   "claude",
-			cfg:     config.AIBackendConfig{Command: "", },
+			cfg:     fleet.Backend{Command: "", },
 			wantErr: "command is required",
 		},
 		{
 			name:    "invalid name",
 			bName:   "unknown-ai",
-			cfg:     config.AIBackendConfig{Command: "ai", },
+			cfg:     fleet.Backend{Command: "ai", },
 			wantErr: "unsupported ai backend",
 		},
 	}
@@ -825,7 +825,7 @@ func TestUpsertSkillRejectedWithEmptyPrompt(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	err := store.UpsertSkill(db, "testing", config.SkillDef{Prompt: ""})
+	err := store.UpsertSkill(db, "testing", fleet.Skill{Prompt: ""})
 	if err == nil {
 		t.Fatal("UpsertSkill with empty prompt: want error, got nil")
 	}
@@ -839,7 +839,7 @@ func TestUpsertAgentRejectedWithEmptyPrompt(t *testing.T) {
 	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
-	err := store.UpsertAgent(db, config.AgentDef{
+	err := store.UpsertAgent(db, fleet.Agent{
 		Name:    "coder",
 		Backend: "claude",
 		Prompt:  "",
@@ -858,16 +858,16 @@ func TestUpsertRepoRejectedWithNoTrigger(t *testing.T) {
 	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
 	// Binding has no labels, events, or cron — invalid.
-	err := store.UpsertRepo(db, config.RepoDef{
+	err := store.UpsertRepo(db, fleet.Repo{
 		Name:    "owner/repo",
 		Enabled: true,
-		Use:     []config.Binding{{Agent: "coder"}},
+		Use:     []fleet.Binding{{Agent: "coder"}},
 	})
 	if err == nil {
 		t.Fatal("UpsertRepo with no-trigger binding: want error, got nil")
@@ -882,16 +882,16 @@ func TestUpsertRepoRejectedWithMixedTriggers(t *testing.T) {
 	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
 	// Binding mixes labels and events — invalid.
-	err := store.UpsertRepo(db, config.RepoDef{
+	err := store.UpsertRepo(db, fleet.Repo{
 		Name:    "owner/repo",
 		Enabled: true,
-		Use: []config.Binding{{
+		Use: []fleet.Binding{{
 			Agent:  "coder",
 			Labels: []string{"ai:fix"},
 			Events: []string{"push"},
@@ -910,7 +910,7 @@ func TestDeleteAgentRejectedAsLast(t *testing.T) {
 	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
@@ -938,7 +938,7 @@ func TestDeleteBackendRejectedAsLast(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	if err := store.UpsertBackend(db, "claude", config.AIBackendConfig{
+	if err := store.UpsertBackend(db, "claude", fleet.Backend{
 		Command: "claude",
 	}); err != nil {
 		t.Fatalf("UpsertBackend: %v", err)
@@ -971,15 +971,15 @@ func TestDeleteRepoAllowsLastEnabled(t *testing.T) {
 	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
-	if err := store.UpsertRepo(db, config.RepoDef{
+	if err := store.UpsertRepo(db, fleet.Repo{
 		Name:    "owner/repo",
 		Enabled: true,
-		Use:     []config.Binding{{Agent: "coder", Labels: []string{"ai:fix"}}},
+		Use:     []fleet.Binding{{Agent: "coder", Labels: []string{"ai:fix"}}},
 	}); err != nil {
 		t.Fatalf("UpsertRepo: %v", err)
 	}
@@ -1018,7 +1018,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 	db := openTestDB(t)
 
 	// Backend — mixed-case name should be stored lowercase.
-	if err := store.UpsertBackend(db, "Claude", config.AIBackendConfig{
+	if err := store.UpsertBackend(db, "Claude", fleet.Backend{
 		Command: "claude",
 	}); err != nil {
 		t.Fatalf("UpsertBackend: %v", err)
@@ -1035,7 +1035,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 	}
 
 	// Skill — mixed-case key should be stored lowercase.
-	if err := store.UpsertSkill(db, "Architect", config.SkillDef{Prompt: "p"}); err != nil {
+	if err := store.UpsertSkill(db, "Architect", fleet.Skill{Prompt: "p"}); err != nil {
 		t.Fatalf("UpsertSkill: %v", err)
 	}
 	skills, err := store.ReadSkills(db)
@@ -1047,7 +1047,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 	}
 
 	// Agent — mixed-case name, backend, and skill reference should be stored lowercase.
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name:        "Coder",
 		Backend:     "Claude",
 		Prompt:      "p",
@@ -1075,10 +1075,10 @@ func TestUpsertNormalizesNames(t *testing.T) {
 	}
 
 	// Repo — binding agent name should be stored lowercase.
-	if err := store.UpsertRepo(db, config.RepoDef{
+	if err := store.UpsertRepo(db, fleet.Repo{
 		Name:    "owner/repo",
 		Enabled: true,
-		Use:     []config.Binding{{Agent: "Coder", Labels: []string{"ai:fix"}}},
+		Use:     []fleet.Binding{{Agent: "Coder", Labels: []string{"ai:fix"}}},
 	}); err != nil {
 		t.Fatalf("UpsertRepo: %v", err)
 	}
@@ -1104,7 +1104,7 @@ func TestUpsertSkillNormalizesPrompt(t *testing.T) {
 	db := openTestDB(t)
 
 	// Whitespace-only prompt should be trimmed to "" and rejected.
-	err := store.UpsertSkill(db, "testing", config.SkillDef{Prompt: "   "})
+	err := store.UpsertSkill(db, "testing", fleet.Skill{Prompt: "   "})
 	if err == nil {
 		t.Fatal("UpsertSkill with whitespace-only prompt: want error, got nil")
 	}
@@ -1113,7 +1113,7 @@ func TestUpsertSkillNormalizesPrompt(t *testing.T) {
 	}
 
 	// A prompt with surrounding whitespace should be trimmed and stored cleanly.
-	if err := store.UpsertSkill(db, "testing", config.SkillDef{Prompt: "  skill guidance  "}); err != nil {
+	if err := store.UpsertSkill(db, "testing", fleet.Skill{Prompt: "  skill guidance  "}); err != nil {
 		t.Fatalf("UpsertSkill with padded prompt: %v", err)
 	}
 	skills, err := store.ReadSkills(db)
@@ -1135,7 +1135,7 @@ func TestUpsertBackendNormalizesCommand(t *testing.T) {
 	db := openTestDB(t)
 
 	// Whitespace-only command must be trimmed to "" and rejected.
-	err := store.UpsertBackend(db, "claude", config.AIBackendConfig{
+	err := store.UpsertBackend(db, "claude", fleet.Backend{
 		Command: "   ",
 	})
 	if err == nil {
@@ -1146,7 +1146,7 @@ func TestUpsertBackendNormalizesCommand(t *testing.T) {
 	}
 
 	// Padded command should be stored trimmed.
-	if err := store.UpsertBackend(db, "claude", config.AIBackendConfig{
+	if err := store.UpsertBackend(db, "claude", fleet.Backend{
 		Command: "  claude  ",
 	}); err != nil {
 		t.Fatalf("UpsertBackend with padded command: %v", err)
@@ -1168,15 +1168,15 @@ func TestUpsertBackendNormalizesCommand(t *testing.T) {
 func seedRepoWithAgent(t *testing.T, db *sql.DB) {
 	t.Helper()
 	seedBackend(t, db, "claude")
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent coder: %v", err)
 	}
-	if err := store.UpsertRepo(db, config.RepoDef{
+	if err := store.UpsertRepo(db, fleet.Repo{
 		Name:    "owner/repo",
 		Enabled: true,
-		Use:     []config.Binding{{Agent: "coder", Labels: []string{"ai:seed"}}},
+		Use:     []fleet.Binding{{Agent: "coder", Labels: []string{"ai:seed"}}},
 	}); err != nil {
 		t.Fatalf("UpsertRepo owner/repo: %v", err)
 	}
@@ -1187,7 +1187,7 @@ func TestCreateBinding(t *testing.T) {
 	db := openTestDB(t)
 	seedRepoWithAgent(t, db)
 
-	id, persisted, err := store.CreateBinding(db, "owner/repo", config.Binding{
+	id, persisted, err := store.CreateBinding(db, "owner/repo", fleet.Binding{
 		Agent:  "coder",
 		Labels: []string{"ai:fix"},
 	})
@@ -1219,14 +1219,14 @@ func TestCreateBindingInvalidTrigger(t *testing.T) {
 	seedRepoWithAgent(t, db)
 
 	// No trigger at all.
-	_, _, err := store.CreateBinding(db, "owner/repo", config.Binding{Agent: "coder"})
+	_, _, err := store.CreateBinding(db, "owner/repo", fleet.Binding{Agent: "coder"})
 	var valErr *store.ErrValidation
 	if !errors.As(err, &valErr) {
 		t.Fatalf("expected ErrValidation for missing trigger, got %v", err)
 	}
 
 	// Mixed triggers.
-	_, _, err = store.CreateBinding(db, "owner/repo", config.Binding{
+	_, _, err = store.CreateBinding(db, "owner/repo", fleet.Binding{
 		Agent: "coder", Labels: []string{"a"}, Cron: "* * * * *",
 	})
 	if !errors.As(err, &valErr) {
@@ -1234,7 +1234,7 @@ func TestCreateBindingInvalidTrigger(t *testing.T) {
 	}
 
 	// Bad cron.
-	_, _, err = store.CreateBinding(db, "owner/repo", config.Binding{
+	_, _, err = store.CreateBinding(db, "owner/repo", fleet.Binding{
 		Agent: "coder", Cron: "bogus",
 	})
 	if !errors.As(err, &valErr) {
@@ -1247,7 +1247,7 @@ func TestCreateBindingUnknownRepo(t *testing.T) {
 	db := openTestDB(t)
 	seedRepoWithAgent(t, db)
 
-	_, _, err := store.CreateBinding(db, "owner/missing", config.Binding{
+	_, _, err := store.CreateBinding(db, "owner/missing", fleet.Binding{
 		Agent: "coder", Labels: []string{"a"},
 	})
 	var nf *store.ErrNotFound
@@ -1261,7 +1261,7 @@ func TestCreateBindingUnknownAgent(t *testing.T) {
 	db := openTestDB(t)
 	seedRepoWithAgent(t, db)
 
-	_, _, err := store.CreateBinding(db, "owner/repo", config.Binding{
+	_, _, err := store.CreateBinding(db, "owner/repo", fleet.Binding{
 		Agent: "ghost", Labels: []string{"a"},
 	})
 	var valErr *store.ErrValidation
@@ -1275,7 +1275,7 @@ func TestUpdateBinding(t *testing.T) {
 	db := openTestDB(t)
 	seedRepoWithAgent(t, db)
 
-	id, _, err := store.CreateBinding(db, "owner/repo", config.Binding{
+	id, _, err := store.CreateBinding(db, "owner/repo", fleet.Binding{
 		Agent: "coder", Labels: []string{"ai:old"},
 	})
 	if err != nil {
@@ -1283,7 +1283,7 @@ func TestUpdateBinding(t *testing.T) {
 	}
 
 	disabled := false
-	updated, err := store.UpdateBinding(db, id, config.Binding{
+	updated, err := store.UpdateBinding(db, id, fleet.Binding{
 		Agent:   "coder",
 		Cron:    "0 9 * * *",
 		Enabled: &disabled,
@@ -1312,7 +1312,7 @@ func TestUpdateBindingNotFound(t *testing.T) {
 	db := openTestDB(t)
 	seedRepoWithAgent(t, db)
 
-	_, err := store.UpdateBinding(db, 99999, config.Binding{
+	_, err := store.UpdateBinding(db, 99999, fleet.Binding{
 		Agent: "coder", Labels: []string{"x"},
 	})
 	var nf *store.ErrNotFound
@@ -1326,7 +1326,7 @@ func TestDeleteBinding(t *testing.T) {
 	db := openTestDB(t)
 	seedRepoWithAgent(t, db)
 
-	id, _, err := store.CreateBinding(db, "owner/repo", config.Binding{
+	id, _, err := store.CreateBinding(db, "owner/repo", fleet.Binding{
 		Agent: "coder", Labels: []string{"ai:gone"},
 	})
 	if err != nil {
@@ -1361,13 +1361,13 @@ func TestReadBindingExposesIDViaLoadRepos(t *testing.T) {
 	db := openTestDB(t)
 	seedRepoWithAgent(t, db)
 
-	id1, _, err := store.CreateBinding(db, "owner/repo", config.Binding{
+	id1, _, err := store.CreateBinding(db, "owner/repo", fleet.Binding{
 		Agent: "coder", Labels: []string{"ai:a"},
 	})
 	if err != nil {
 		t.Fatalf("CreateBinding 1: %v", err)
 	}
-	id2, _, err := store.CreateBinding(db, "owner/repo", config.Binding{
+	id2, _, err := store.CreateBinding(db, "owner/repo", fleet.Binding{
 		Agent: "coder", Cron: "0 * * * *",
 	})
 	if err != nil {
@@ -1378,7 +1378,7 @@ func TestReadBindingExposesIDViaLoadRepos(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadRepos: %v", err)
 	}
-	var r *config.RepoDef
+	var r *fleet.Repo
 	for i := range repos {
 		if repos[i].Name == "owner/repo" {
 			r = &repos[i]

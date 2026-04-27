@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 func TestCanonicalModels(t *testing.T) {
@@ -39,23 +40,23 @@ func TestComputeOrphanedAgents(t *testing.T) {
 	t.Parallel()
 
 	cfg := testCfg(func(c *config.Config) {
-		c.Daemon.AIBackends = map[string]config.AIBackendConfig{
+		c.Daemon.AIBackends = map[string]fleet.Backend{
 			"claude": {
 				Command: "claude",
 				Models:  []string{"claude-3.7", "claude-4"},
 			},
 		}
-		c.Agents = []config.AgentDef{
+		c.Agents = []fleet.Agent{
 			{Name: "coder", Backend: "claude", Model: "claude-3.5", Prompt: "x"},
 			{Name: "reviewer", Backend: "claude", Model: "claude-4", Prompt: "x"},
 			{Name: "defaulted", Backend: "claude", Prompt: "x"},
 		}
 		enabled := true
-		c.Repos = []config.RepoDef{
+		c.Repos = []fleet.Repo{
 			{
 				Name:    "owner/repo",
 				Enabled: true,
-				Use: []config.Binding{
+				Use: []fleet.Binding{
 					{Agent: "coder", Labels: []string{"ai:fix"}, Enabled: &enabled},
 				},
 			},
@@ -84,13 +85,13 @@ func TestAgentsOrphansEndpointAndStatusSummary(t *testing.T) {
 	t.Parallel()
 
 	cfg := testCfg(func(c *config.Config) {
-		c.Daemon.AIBackends = map[string]config.AIBackendConfig{
+		c.Daemon.AIBackends = map[string]fleet.Backend{
 			"claude": {
 				Command: "claude",
 				Models:  []string{"claude-4"},
 			},
 		}
-		c.Agents = []config.AgentDef{
+		c.Agents = []fleet.Agent{
 			{Name: "coder", Backend: "claude", Model: "claude-3.5", Prompt: "x"},
 		}
 	})

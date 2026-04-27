@@ -30,6 +30,7 @@ import (
 	_ "modernc.org/sqlite" // register the sqlite3 driver
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // querier is a minimal interface satisfied by both *sql.DB and *sql.Tx,
@@ -250,7 +251,7 @@ func importDaemon(tx *sql.Tx, d config.DaemonConfig) error {
 	return nil
 }
 
-func importBackends(tx *sql.Tx, backends map[string]config.AIBackendConfig) error {
+func importBackends(tx *sql.Tx, backends map[string]fleet.Backend) error {
 	for name, b := range backends {
 		models, err := json.Marshal(b.Models)
 		if err != nil {
@@ -271,7 +272,7 @@ func importBackends(tx *sql.Tx, backends map[string]config.AIBackendConfig) erro
 	return nil
 }
 
-func importSkills(tx *sql.Tx, skills map[string]config.SkillDef) error {
+func importSkills(tx *sql.Tx, skills map[string]fleet.Skill) error {
 	for name, s := range skills {
 		if _, err := tx.Exec(
 			"INSERT OR REPLACE INTO skills(name,prompt) VALUES(?,?)",
@@ -283,7 +284,7 @@ func importSkills(tx *sql.Tx, skills map[string]config.SkillDef) error {
 	return nil
 }
 
-func importAgents(tx *sql.Tx, agents []config.AgentDef) error {
+func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
 	for _, a := range agents {
 		skills, err := json.Marshal(a.Skills)
 		if err != nil {
@@ -309,7 +310,7 @@ func importAgents(tx *sql.Tx, agents []config.AgentDef) error {
 	return nil
 }
 
-func importRepos(tx *sql.Tx, repos []config.RepoDef) error {
+func importRepos(tx *sql.Tx, repos []fleet.Repo) error {
 	for _, r := range repos {
 		enabled := boolToInt(r.Enabled)
 		if _, err := tx.Exec(
@@ -422,7 +423,7 @@ func loadBackends(db querier, cfg *config.Config) error {
 	}
 	defer rows.Close()
 
-	backends := make(map[string]config.AIBackendConfig)
+	backends := make(map[string]fleet.Backend)
 	for rows.Next() {
 		var name, command, version, modelsJSON, healthDetail, localModelURL, saltEnv string
 		var timeout, maxChars, healthy int
@@ -433,7 +434,7 @@ func loadBackends(db querier, cfg *config.Config) error {
 		if err := json.Unmarshal([]byte(modelsJSON), &models); err != nil {
 			return fmt.Errorf("store load: parse backend %s models: %w", name, err)
 		}
-		backends[name] = config.AIBackendConfig{
+		backends[name] = fleet.Backend{
 			Command:          command,
 			Version:          version,
 			Models:           models,
@@ -459,13 +460,13 @@ func loadSkills(db querier, cfg *config.Config) error {
 	}
 	defer rows.Close()
 
-	skills := make(map[string]config.SkillDef)
+	skills := make(map[string]fleet.Skill)
 	for rows.Next() {
 		var name, prompt string
 		if err := rows.Scan(&name, &prompt); err != nil {
 			return fmt.Errorf("store load: scan skill: %w", err)
 		}
-		skills[name] = config.SkillDef{Prompt: prompt}
+		skills[name] = fleet.Skill{Prompt: prompt}
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("store load: iterate skills: %w", err)
@@ -483,7 +484,7 @@ func loadAgents(db querier, cfg *config.Config) error {
 	}
 	defer rows.Close()
 
-	var agents []config.AgentDef
+	var agents []fleet.Agent
 	for rows.Next() {
 		var name, backend, model, skillsJSON, prompt, canDispatchJSON, description string
 		var allowPRs, allowDispatch, allowMemory int
@@ -505,7 +506,7 @@ func loadAgents(db querier, cfg *config.Config) error {
 		// readers see a concrete bool reflecting the stored row, not the
 		// "absent" sentinel that nil represents on inbound YAML/JSON paths.
 		allowMem := intToBool(allowMemory)
-		agents = append(agents, config.AgentDef{
+		agents = append(agents, fleet.Agent{
 			Name:          name,
 			Backend:       backend,
 			Model:         model,
@@ -532,14 +533,14 @@ func loadRepos(db querier, cfg *config.Config) error {
 	}
 	defer rows.Close()
 
-	var repos []config.RepoDef
+	var repos []fleet.Repo
 	for rows.Next() {
 		var name string
 		var enabled int
 		if err := rows.Scan(&name, &enabled); err != nil {
 			return fmt.Errorf("store load: scan repo: %w", err)
 		}
-		repos = append(repos, config.RepoDef{Name: name, Enabled: intToBool(enabled)})
+		repos = append(repos, fleet.Repo{Name: name, Enabled: intToBool(enabled)})
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("store load: iterate repos: %w", err)
@@ -557,7 +558,7 @@ func loadRepos(db querier, cfg *config.Config) error {
 	return nil
 }
 
-func loadBindingsForRepo(db querier, repo string) ([]config.Binding, error) {
+func loadBindingsForRepo(db querier, repo string) ([]fleet.Binding, error) {
 	rows, err := db.Query(
 		"SELECT id,agent,labels,events,cron,enabled FROM bindings WHERE repo=? ORDER BY id", repo,
 	)
@@ -566,7 +567,7 @@ func loadBindingsForRepo(db querier, repo string) ([]config.Binding, error) {
 	}
 	defer rows.Close()
 
-	var bindings []config.Binding
+	var bindings []fleet.Binding
 	for rows.Next() {
 		var id int64
 		var agent, labelsJSON, eventsJSON, cron string
@@ -582,7 +583,7 @@ func loadBindingsForRepo(db querier, repo string) ([]config.Binding, error) {
 		if err := json.Unmarshal([]byte(eventsJSON), &events); err != nil {
 			return nil, fmt.Errorf("store load: parse binding events for %s: %w", repo, err)
 		}
-		b := config.Binding{
+		b := fleet.Binding{
 			ID:     id,
 			Agent:  agent,
 			Labels: labels,

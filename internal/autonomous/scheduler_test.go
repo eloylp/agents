@@ -12,6 +12,7 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -85,21 +86,21 @@ func (r *errorRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) 
 func baseCfg(modify func(*config.Config)) *config.Config {
 	cfg := &config.Config{
 		Daemon: config.DaemonConfig{
-			AIBackends: map[string]config.AIBackendConfig{
+			AIBackends: map[string]fleet.Backend{
 				"claude": {Command: "claude"},
 			},
 		},
-		Skills: map[string]config.SkillDef{
+		Skills: map[string]fleet.Skill{
 			"architect": {Prompt: "Focus on architecture."},
 		},
-		Agents: []config.AgentDef{
+		Agents: []fleet.Agent{
 			{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Review PRs."},
 		},
-		Repos: []config.RepoDef{
+		Repos: []fleet.Repo{
 			{
 				Name:    "owner/repo",
 				Enabled: true,
-				Use: []config.Binding{
+				Use: []fleet.Binding{
 					{Agent: "reviewer", Cron: "* * * * *"},
 				},
 			},
@@ -138,7 +139,7 @@ func TestNewSchedulerEntryRegistration(t *testing.T) {
 		{
 			name: "skips label-only binding",
 			mutate: func(c *config.Config) {
-				c.Repos[0].Use[0] = config.Binding{Agent: "reviewer", Labels: []string{"ai:review"}}
+				c.Repos[0].Use[0] = fleet.Binding{Agent: "reviewer", Labels: []string{"ai:review"}}
 			},
 			wantCount: 0,
 		},
@@ -190,7 +191,7 @@ func TestTriggerAgentRejections(t *testing.T) {
 		{
 			name: "unbound agent",
 			mutateCfg: func(c *config.Config) {
-				c.Agents = append(c.Agents, config.AgentDef{Name: "orphan", Backend: "claude", Prompt: "x"})
+				c.Agents = append(c.Agents, fleet.Agent{Name: "orphan", Backend: "claude", Prompt: "x"})
 			},
 			agent:   "orphan",
 			wantErr: "not bound",
@@ -329,7 +330,7 @@ func (q *fakeQueue) popped() []workflow.Event {
 // "notifier" and "notifier" has allow_dispatch: true.
 func dispatchCfgForTest() *config.Config {
 	return baseCfg(func(c *config.Config) {
-		c.Agents = []config.AgentDef{
+		c.Agents = []fleet.Agent{
 			{
 				Name:        "reviewer",
 				Backend:     "claude",
@@ -343,7 +344,7 @@ func dispatchCfgForTest() *config.Config {
 				AllowDispatch: true,
 			},
 		}
-		c.Repos[0].Use = []config.Binding{
+		c.Repos[0].Use = []fleet.Binding{
 			{Agent: "reviewer", Cron: "* * * * *"},
 			{Agent: "notifier", Cron: "0 0 * * *"},
 		}
@@ -360,7 +361,7 @@ func TestSchedulerDispatchesEnqueuedWhenDispatcherAttached(t *testing.T) {
 		},
 	}
 	q := &fakeQueue{}
-	agentMap := map[string]config.AgentDef{
+	agentMap := map[string]fleet.Agent{
 		"reviewer": cfg.Agents[0],
 		"notifier": cfg.Agents[1],
 	}
@@ -407,7 +408,7 @@ func TestSchedulerAutonomousDispatchCarriesNonEmptyRootEventID(t *testing.T) {
 		},
 	}
 	q := &fakeQueue{}
-	agentMap := map[string]config.AgentDef{
+	agentMap := map[string]fleet.Agent{
 		"reviewer": cfg.Agents[0],
 		"notifier": cfg.Agents[1],
 	}
@@ -474,7 +475,7 @@ func TestSchedulerCronRunSkippedWhenAlreadySeenInDedup(t *testing.T) {
 
 	runner := &stubRunner{}
 	q := &fakeQueue{}
-	agentMap := map[string]config.AgentDef{
+	agentMap := map[string]fleet.Agent{
 		"reviewer": cfg.Agents[0],
 		"notifier": cfg.Agents[1],
 	}
@@ -535,7 +536,7 @@ func TestCronRunBlockedByPendingDispatchClaim(t *testing.T) {
 	cfg := dispatchCfgForTest()
 
 	notifierRunner := &stubRunner{}
-	agentMap := map[string]config.AgentDef{
+	agentMap := map[string]fleet.Agent{
 		"reviewer": cfg.Agents[0],
 		"notifier": cfg.Agents[1],
 	}
@@ -600,7 +601,7 @@ func TestSchedulerCronRunNotSuppressedByPriorCronRun(t *testing.T) {
 
 	runner := &stubRunner{}
 	q := &fakeQueue{}
-	agentMap := map[string]config.AgentDef{
+	agentMap := map[string]fleet.Agent{
 		"reviewer": cfg.Agents[0],
 		"notifier": cfg.Agents[1],
 	}
@@ -658,7 +659,7 @@ func TestSchedulerCronMarkNotWrittenOnRunFailure(t *testing.T) {
 			// "notifier" can dispatch to "reviewer"; "reviewer" has allow_dispatch so
 			// whitelist and opt-in checks pass and we can isolate the cron-mark behavior.
 			cfg := baseCfg(func(c *config.Config) {
-				c.Agents = []config.AgentDef{
+				c.Agents = []fleet.Agent{
 					{
 						Name:          "reviewer",
 						Backend:       "claude",
@@ -672,14 +673,14 @@ func TestSchedulerCronMarkNotWrittenOnRunFailure(t *testing.T) {
 						CanDispatch: []string{"reviewer"},
 					},
 				}
-				c.Repos[0].Use = []config.Binding{
+				c.Repos[0].Use = []fleet.Binding{
 					{Agent: "reviewer", Cron: "* * * * *"},
 					{Agent: "notifier", Cron: "0 0 * * *"},
 				}
 			})
 
 			q := &fakeQueue{}
-			agentMap := map[string]config.AgentDef{
+			agentMap := map[string]fleet.Agent{
 				"reviewer": cfg.Agents[0],
 				"notifier": cfg.Agents[1],
 			}
@@ -727,7 +728,7 @@ func TestSchedulerDispatchEnqueueFailurePropagates(t *testing.T) {
 	}
 	queueErr := errors.New("queue full")
 	q := &fakeQueue{err: queueErr}
-	agentMap := map[string]config.AgentDef{
+	agentMap := map[string]fleet.Agent{
 		"reviewer": cfg.Agents[0],
 		"notifier": cfg.Agents[1],
 	}
@@ -765,7 +766,7 @@ func TestSchedulerDispatchEnqueueFailureRecordsErrorSpan(t *testing.T) {
 	}
 	queueErr := errors.New("queue full")
 	q := &fakeQueue{err: queueErr}
-	agentMap := map[string]config.AgentDef{
+	agentMap := map[string]fleet.Agent{
 		"reviewer": cfg.Agents[0],
 		"notifier": cfg.Agents[1],
 	}
@@ -813,7 +814,7 @@ func TestSchedulerCronMarkKeptAfterSuccessfulRunWithDispatchEnqueueFailure(t *te
 	}
 	queueErr := errors.New("queue full")
 	q := &fakeQueue{err: queueErr}
-	agentMap := map[string]config.AgentDef{
+	agentMap := map[string]fleet.Agent{
 		"reviewer": cfg.Agents[0],
 		"notifier": cfg.Agents[1],
 	}
@@ -866,7 +867,7 @@ func TestSchedulerCronRefcountDecrementedOnPostRunEnqueueFailure(t *testing.T) {
 	}
 	queueErr := errors.New("queue full")
 	q := &fakeQueue{err: queueErr}
-	agentMap := map[string]config.AgentDef{
+	agentMap := map[string]fleet.Agent{
 		"reviewer": cfg.Agents[0],
 		"notifier": cfg.Agents[1],
 	}
@@ -908,7 +909,7 @@ func TestSchedulerCronRefcountDecrementedOnPostRunEnqueueFailure(t *testing.T) {
 	// so the cron mark is at ("reviewer", "owner/repo", 0). To test that this mark
 	// no longer blocks dispatches to "reviewer", we need reviewer to have
 	// AllowDispatch: true. Add a local config that grants this.
-	agentMapWithAllowDispatch := map[string]config.AgentDef{
+	agentMapWithAllowDispatch := map[string]fleet.Agent{
 		"reviewer": {
 			Name:          "reviewer",
 			Backend:       "claude",
@@ -948,7 +949,7 @@ func TestSchedulerCronRefcountDecrementedOnPostRunEnqueueFailure(t *testing.T) {
 func TestSchedulerPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 	t.Parallel()
 	cfg := baseCfg(func(c *config.Config) {
-		c.Agents = []config.AgentDef{
+		c.Agents = []fleet.Agent{
 			{
 				Name:          "notifier",
 				Backend:       "claude",
@@ -962,7 +963,7 @@ func TestSchedulerPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 				CanDispatch: []string{"notifier"},
 			},
 		}
-		c.Repos[0].Use = []config.Binding{
+		c.Repos[0].Use = []fleet.Binding{
 			{Agent: "notifier", Cron: "* * * * *"},
 			{Agent: "reviewer", Cron: "0 0 * * *"},
 		}
@@ -970,7 +971,7 @@ func TestSchedulerPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 
 	runner := &stubRunner{}
 	q := &fakeQueue{}
-	agentMap := map[string]config.AgentDef{
+	agentMap := map[string]fleet.Agent{
 		"notifier": cfg.Agents[0],
 		"reviewer": cfg.Agents[1],
 	}
@@ -1032,7 +1033,7 @@ func TestSchedulerAllowPRsPromptPrefixing(t *testing.T) {
 			t.Parallel()
 			runner := &promptCapturingRunner{}
 			cfg := baseCfg(func(c *config.Config) {
-				c.Agents = []config.AgentDef{
+				c.Agents = []fleet.Agent{
 					{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: tc.prompt, AllowPRs: tc.allowPRs},
 				}
 			})
@@ -1068,7 +1069,7 @@ func TestSchedulerCronMarkBlocksDispatchDuringInFlightRun(t *testing.T) {
 	t.Parallel()
 
 	cfg := baseCfg(func(c *config.Config) {
-		c.Agents = []config.AgentDef{
+		c.Agents = []fleet.Agent{
 			{
 				Name:          "reviewer",
 				Backend:       "claude",
@@ -1082,7 +1083,7 @@ func TestSchedulerCronMarkBlocksDispatchDuringInFlightRun(t *testing.T) {
 				CanDispatch: []string{"reviewer"},
 			},
 		}
-		c.Repos[0].Use = []config.Binding{
+		c.Repos[0].Use = []fleet.Binding{
 			{Agent: "reviewer", Cron: "* * * * *"},
 			{Agent: "notifier", Cron: "0 0 * * *"},
 		}
@@ -1092,7 +1093,7 @@ func TestSchedulerCronMarkBlocksDispatchDuringInFlightRun(t *testing.T) {
 	block := make(chan struct{})
 	runner := &blockingRunner{ready: ready, block: block}
 	q := &fakeQueue{}
-	agentMap := map[string]config.AgentDef{
+	agentMap := map[string]fleet.Agent{
 		"reviewer": cfg.Agents[0],
 		"notifier": cfg.Agents[1],
 	}
@@ -1155,7 +1156,7 @@ func TestCronDispatchCrossNamespaceRaceOnlyOneWins(t *testing.T) {
 	ctx := context.Background()
 
 	cfg := dispatchCfgForTest()
-	agentMap := map[string]config.AgentDef{
+	agentMap := map[string]fleet.Agent{
 		"reviewer": cfg.Agents[0],
 		"notifier": cfg.Agents[1],
 	}
@@ -1223,17 +1224,17 @@ func TestSchedulerReload(t *testing.T) {
 	}
 
 	// Reload with a completely different agent and repo.
-	newAgents := []config.AgentDef{
+	newAgents := []fleet.Agent{
 		{Name: "scanner", Backend: "claude", Skills: []string{}, Prompt: "scan"},
 	}
-	newRepos := []config.RepoDef{
+	newRepos := []fleet.Repo{
 		{
 			Name:    "owner/other",
 			Enabled: true,
-			Use:     []config.Binding{{Agent: "scanner", Cron: "* * * * *"}},
+			Use:     []fleet.Binding{{Agent: "scanner", Cron: "* * * * *"}},
 		},
 	}
-	if err := s.Reload(newRepos, newAgents, cfg.Skills, map[string]config.AIBackendConfig{"claude": {Command: "claude"}}); err != nil {
+	if err := s.Reload(newRepos, newAgents, cfg.Skills, map[string]fleet.Backend{"claude": {Command: "claude"}}); err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
 
@@ -1261,10 +1262,10 @@ func TestSchedulerReloadUpdatesSkillsAndBackends(t *testing.T) {
 		t.Fatalf("NewScheduler: %v", err)
 	}
 
-	newSkills := map[string]config.SkillDef{
+	newSkills := map[string]fleet.Skill{
 		"security": {Prompt: "Think about security."},
 	}
-	newBackends := map[string]config.AIBackendConfig{
+	newBackends := map[string]fleet.Backend{
 		"claude": {Command: "claude", TimeoutSeconds: 120},
 	}
 
@@ -1293,7 +1294,7 @@ func TestSchedulerReloadClearsAllBindings(t *testing.T) {
 	}
 
 	// Reload with repos that have no cron bindings.
-	if err := s.Reload([]config.RepoDef{{Name: "owner/repo", Enabled: true, Use: []config.Binding{
+	if err := s.Reload([]fleet.Repo{{Name: "owner/repo", Enabled: true, Use: []fleet.Binding{
 		{Agent: "reviewer", Labels: []string{"ai:fix"}},
 	}}}, cfg.Agents, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
 		t.Fatalf("Reload: %v", err)
@@ -1324,12 +1325,12 @@ func TestSchedulerReloadRollsBackOnFailure(t *testing.T) {
 	}
 
 	// Attempt a reload where the binding references an agent not in the agents slice.
-	badRepos := []config.RepoDef{{
+	badRepos := []fleet.Repo{{
 		Name:    "owner/repo",
 		Enabled: true,
-		Use:     []config.Binding{{Agent: "ghost", Cron: "* * * * *"}},
+		Use:     []fleet.Binding{{Agent: "ghost", Cron: "* * * * *"}},
 	}}
-	badAgents := []config.AgentDef{} // "ghost" not in this list → registerJobs will fail
+	badAgents := []fleet.Agent{} // "ghost" not in this list → registerJobs will fail
 
 	if err := s.Reload(badRepos, badAgents, cfg.Skills, cfg.Daemon.AIBackends); err == nil {
 		t.Fatal("Reload: expected error for unknown agent binding, got nil")
@@ -1382,14 +1383,14 @@ func TestSchedulerReloadRebuildsRunners(t *testing.T) {
 
 	// Register a builder that returns a new distinct stub for each backend.
 	buildCalls := map[string]*stubRunner{}
-	s.WithRunnerBuilder(func(name string, _ config.AIBackendConfig) ai.Runner {
+	s.WithRunnerBuilder(func(name string, _ fleet.Backend) ai.Runner {
 		r := &stubRunner{}
 		buildCalls[name] = r
 		return r
 	})
 
 	// Reload with a new "codex" backend added and "claude" retained.
-	newBackends := map[string]config.AIBackendConfig{
+	newBackends := map[string]fleet.Backend{
 		"claude": {Command: "claude"},
 		"codex":  {Command: "codex"},
 	}
@@ -1476,7 +1477,7 @@ func TestSchedulerReloadConfigCopyOnWrite(t *testing.T) {
 		t.Fatalf("NewScheduler: %v", err)
 	}
 
-	newRepos := []config.RepoDef{{Name: "owner/new-repo", Enabled: true, Use: []config.Binding{{Agent: "reviewer", Cron: "* * * * *"}}}}
+	newRepos := []fleet.Repo{{Name: "owner/new-repo", Enabled: true, Use: []fleet.Binding{{Agent: "reviewer", Cron: "* * * * *"}}}}
 	if err := s.Reload(newRepos, cfg.Agents, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
@@ -1508,7 +1509,7 @@ func TestSchedulerReloadRaceWithConcurrentRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
-	s.WithRunnerBuilder(func(name string, _ config.AIBackendConfig) ai.Runner { return runner })
+	s.WithRunnerBuilder(func(name string, _ fleet.Backend) ai.Runner { return runner })
 	s.WithHotReloadSink(&testHotReloadSink{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1560,7 +1561,7 @@ func TestSchedulerReloadReleasesMuBeforeSinkCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
-	s.WithRunnerBuilder(func(_ string, _ config.AIBackendConfig) ai.Runner { return runner })
+	s.WithRunnerBuilder(func(_ string, _ fleet.Backend) ai.Runner { return runner })
 
 	// Sink that signals when UpdateConfigAndRunners is entered, then blocks
 	// until released. This lets us assert that bindMu is NOT held during the
@@ -1629,7 +1630,7 @@ func TestSchedulerCronJobUsesPostReloadAgentDef(t *testing.T) {
 	preReloadJob := s.cron.Entry(s.agentEntries[0].cronID).WrappedJob
 
 	// Reload with an updated prompt for the same agent.
-	updatedAgents := []config.AgentDef{
+	updatedAgents := []fleet.Agent{
 		{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Updated review prompt."},
 	}
 	if err := s.Reload(cfg.Repos, updatedAgents, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
@@ -1723,7 +1724,7 @@ func TestSchedulerWriteMemoryFailureFailsRun(t *testing.T) {
 	// notices the error and re-dispatches "reviewer" to recover lost memory.
 	cfg := baseCfg(func(c *config.Config) {
 		c.Agents[0].AllowDispatch = true // reviewer can receive dispatches
-		c.Agents = append(c.Agents, config.AgentDef{
+		c.Agents = append(c.Agents, fleet.Agent{
 			Name:        "notifier",
 			Backend:     "claude",
 			Prompt:      "Notify.",
@@ -1734,7 +1735,7 @@ func TestSchedulerWriteMemoryFailureFailsRun(t *testing.T) {
 	mem := &errMemory{inner: newMapMemory(), err: writeErr}
 
 	q := &fakeQueue{}
-	agentMap := map[string]config.AgentDef{
+	agentMap := map[string]fleet.Agent{
 		"reviewer": cfg.Agents[0],
 		"notifier": cfg.Agents[1],
 	}

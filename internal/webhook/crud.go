@@ -15,6 +15,7 @@ import (
 
 	"github.com/eloylp/agents/internal/backends"
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -37,7 +38,7 @@ type storeAgentJSON struct {
 	AllowMemory *bool `json:"allow_memory,omitempty"`
 }
 
-func agentToStoreJSON(a config.AgentDef) storeAgentJSON {
+func agentToStoreJSON(a fleet.Agent) storeAgentJSON {
 	allowMem := a.IsAllowMemory()
 	return storeAgentJSON{
 		Name:          a.Name,
@@ -53,8 +54,8 @@ func agentToStoreJSON(a config.AgentDef) storeAgentJSON {
 	}
 }
 
-func (j storeAgentJSON) toConfig() config.AgentDef {
-	return config.AgentDef{
+func (j storeAgentJSON) toConfig() fleet.Agent {
+	return fleet.Agent{
 		Name:          j.Name,
 		Backend:       j.Backend,
 		Model:         j.Model,
@@ -95,7 +96,7 @@ func (p storeAgentPatchJSON) anyFieldSet() bool {
 
 // apply mutates a in place with any non-nil field on p. Name is preserved
 // because it is addressed via the URL path and is not patchable.
-func (p storeAgentPatchJSON) apply(a *config.AgentDef) {
+func (p storeAgentPatchJSON) apply(a *fleet.Agent) {
 	if p.Backend != nil {
 		a.Backend = *p.Backend
 	}
@@ -140,7 +141,7 @@ type storeSkillPatchJSON struct {
 
 func (p storeSkillPatchJSON) anyFieldSet() bool { return p.Prompt != nil }
 
-func (p storeSkillPatchJSON) apply(s *config.SkillDef) {
+func (p storeSkillPatchJSON) apply(s *fleet.Skill) {
 	if p.Prompt != nil {
 		s.Prompt = *p.Prompt
 	}
@@ -187,7 +188,7 @@ func (p storeBackendPatchJSON) anyFieldSet() bool {
 		p.MaxPromptChars != nil || p.RedactionSaltEnv != nil
 }
 
-func (p storeBackendPatchJSON) apply(b *config.AIBackendConfig) {
+func (p storeBackendPatchJSON) apply(b *fleet.Backend) {
 	if p.Command != nil {
 		b.Command = *p.Command
 	}
@@ -226,7 +227,7 @@ type backendRuntimeSettingsJSON struct {
 	MaxPromptChars *int `json:"max_prompt_chars,omitempty"`
 }
 
-func backendToStoreJSON(name string, b config.AIBackendConfig) storeBackendJSON {
+func backendToStoreJSON(name string, b fleet.Backend) storeBackendJSON {
 	return storeBackendJSON{
 		Name:             name,
 		Command:          b.Command,
@@ -241,8 +242,8 @@ func backendToStoreJSON(name string, b config.AIBackendConfig) storeBackendJSON 
 	}
 }
 
-func (j storeBackendJSON) toConfig() config.AIBackendConfig {
-	return config.AIBackendConfig{
+func (j storeBackendJSON) toConfig() fleet.Backend {
+	return fleet.Backend{
 		Command:          j.Command,
 		Version:          j.Version,
 		Models:           nilSafeStrings(j.Models),
@@ -264,7 +265,7 @@ type storeBindingJSON struct {
 	Enabled *bool    `json:"enabled,omitempty"`
 }
 
-func bindingToStoreJSON(b config.Binding) storeBindingJSON {
+func bindingToStoreJSON(b fleet.Binding) storeBindingJSON {
 	enabled := b.IsEnabled()
 	return storeBindingJSON{
 		ID:      b.ID,
@@ -276,8 +277,8 @@ func bindingToStoreJSON(b config.Binding) storeBindingJSON {
 	}
 }
 
-func (j storeBindingJSON) toConfig() config.Binding {
-	return config.Binding{
+func (j storeBindingJSON) toConfig() fleet.Binding {
+	return fleet.Binding{
 		ID:      j.ID,
 		Agent:   j.Agent,
 		Labels:  j.Labels,
@@ -293,7 +294,7 @@ type storeRepoJSON struct {
 	Bindings []storeBindingJSON `json:"bindings"`
 }
 
-func repoToStoreJSON(r config.RepoDef) storeRepoJSON {
+func repoToStoreJSON(r fleet.Repo) storeRepoJSON {
 	bindings := make([]storeBindingJSON, len(r.Use))
 	for i, b := range r.Use {
 		bindings[i] = bindingToStoreJSON(b)
@@ -301,12 +302,12 @@ func repoToStoreJSON(r config.RepoDef) storeRepoJSON {
 	return storeRepoJSON{Name: r.Name, Enabled: r.Enabled, Bindings: bindings}
 }
 
-func (j storeRepoJSON) toConfig() config.RepoDef {
-	use := make([]config.Binding, len(j.Bindings))
+func (j storeRepoJSON) toConfig() fleet.Repo {
+	use := make([]fleet.Binding, len(j.Bindings))
 	for i, b := range j.Bindings {
 		use[i] = b.toConfig()
 	}
-	return config.RepoDef{Name: j.Name, Enabled: j.Enabled, Use: use}
+	return fleet.Repo{Name: j.Name, Enabled: j.Enabled, Use: use}
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -464,9 +465,9 @@ func (s *Server) handleStoreAgents(w http.ResponseWriter, r *http.Request) {
 //
 // Exposed so non-HTTP surfaces (e.g. the MCP create_agent tool) can run the
 // same upsert path as POST /agents without going through the router.
-func (s *Server) UpsertAgent(a config.AgentDef) (config.AgentDef, error) {
+func (s *Server) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 	if strings.TrimSpace(a.Name) == "" {
-		return config.AgentDef{}, &store.ErrValidation{Msg: "name is required"}
+		return fleet.Agent{}, &store.ErrValidation{Msg: "name is required"}
 	}
 	s.storeMu.Lock()
 	err := store.UpsertAgent(s.db, a)
@@ -475,7 +476,7 @@ func (s *Server) UpsertAgent(a config.AgentDef) (config.AgentDef, error) {
 	}
 	s.storeMu.Unlock()
 	if err != nil {
-		return config.AgentDef{}, err
+		return fleet.Agent{}, err
 	}
 	config.NormalizeAgentDef(&a)
 	return a, nil
@@ -541,15 +542,15 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request, name 
 //
 // Exposed so non-HTTP surfaces (e.g. the MCP update_agent tool) can drive the
 // same path as PATCH /agents/{name} without going through the router.
-func (s *Server) UpdateAgent(name string, patch storeAgentPatchJSON) (config.AgentDef, error) {
+func (s *Server) UpdateAgent(name string, patch storeAgentPatchJSON) (fleet.Agent, error) {
 	normalized := config.NormalizeAgentName(name)
 	s.storeMu.Lock()
 	defer s.storeMu.Unlock()
 	agents, err := store.ReadAgents(s.db)
 	if err != nil {
-		return config.AgentDef{}, err
+		return fleet.Agent{}, err
 	}
-	var existing *config.AgentDef
+	var existing *fleet.Agent
 	for i := range agents {
 		if agents[i].Name == normalized {
 			existing = &agents[i]
@@ -557,15 +558,15 @@ func (s *Server) UpdateAgent(name string, patch storeAgentPatchJSON) (config.Age
 		}
 	}
 	if existing == nil {
-		return config.AgentDef{}, &store.ErrNotFound{Msg: fmt.Sprintf("agent %q not found", normalized)}
+		return fleet.Agent{}, &store.ErrNotFound{Msg: fmt.Sprintf("agent %q not found", normalized)}
 	}
 	merged := *existing
 	patch.apply(&merged)
 	if err := store.UpsertAgent(s.db, merged); err != nil {
-		return config.AgentDef{}, err
+		return fleet.Agent{}, err
 	}
 	if err := s.reloadCron(); err != nil {
-		return config.AgentDef{}, err
+		return fleet.Agent{}, err
 	}
 	config.NormalizeAgentDef(&merged)
 	return merged, nil
@@ -615,7 +616,7 @@ func (s *Server) handleStoreSkills(w http.ResponseWriter, r *http.Request) {
 		if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
-		name, sk, err := s.UpsertSkill(req.Name, config.SkillDef{Prompt: req.Prompt})
+		name, sk, err := s.UpsertSkill(req.Name, fleet.Skill{Prompt: req.Prompt})
 		if err != nil {
 			s.storeWriteErr(w, err, "skill upsert or cron reload")
 			return
@@ -635,9 +636,9 @@ func (s *Server) handleStoreSkills(w http.ResponseWriter, r *http.Request) {
 //
 // Exposed so non-HTTP surfaces (e.g. the MCP create_skill tool) can run the
 // same upsert path as POST /skills without going through the router.
-func (s *Server) UpsertSkill(name string, sk config.SkillDef) (string, config.SkillDef, error) {
+func (s *Server) UpsertSkill(name string, sk fleet.Skill) (string, fleet.Skill, error) {
 	if strings.TrimSpace(name) == "" {
-		return "", config.SkillDef{}, &store.ErrValidation{Msg: "name is required"}
+		return "", fleet.Skill{}, &store.ErrValidation{Msg: "name is required"}
 	}
 	s.storeMu.Lock()
 	err := store.UpsertSkill(s.db, name, sk)
@@ -646,7 +647,7 @@ func (s *Server) UpsertSkill(name string, sk config.SkillDef) (string, config.Sk
 	}
 	s.storeMu.Unlock()
 	if err != nil {
-		return "", config.SkillDef{}, err
+		return "", fleet.Skill{}, err
 	}
 	config.NormalizeSkillDef(&sk)
 	return config.NormalizeSkillName(name), sk, nil
@@ -709,24 +710,24 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request, name 
 //
 // Exposed so non-HTTP surfaces (e.g. the MCP update_skill tool) can drive the
 // same path as PATCH /skills/{name} without going through the router.
-func (s *Server) UpdateSkill(name string, patch storeSkillPatchJSON) (string, config.SkillDef, error) {
+func (s *Server) UpdateSkill(name string, patch storeSkillPatchJSON) (string, fleet.Skill, error) {
 	normalized := config.NormalizeSkillName(name)
 	s.storeMu.Lock()
 	defer s.storeMu.Unlock()
 	skills, err := store.ReadSkills(s.db)
 	if err != nil {
-		return "", config.SkillDef{}, err
+		return "", fleet.Skill{}, err
 	}
 	existing, ok := skills[normalized]
 	if !ok {
-		return "", config.SkillDef{}, &store.ErrNotFound{Msg: fmt.Sprintf("skill %q not found", normalized)}
+		return "", fleet.Skill{}, &store.ErrNotFound{Msg: fmt.Sprintf("skill %q not found", normalized)}
 	}
 	patch.apply(&existing)
 	if err := store.UpsertSkill(s.db, normalized, existing); err != nil {
-		return "", config.SkillDef{}, err
+		return "", fleet.Skill{}, err
 	}
 	if err := s.reloadCron(); err != nil {
-		return "", config.SkillDef{}, err
+		return "", fleet.Skill{}, err
 	}
 	config.NormalizeSkillDef(&existing)
 	return normalized, existing, nil
@@ -789,9 +790,9 @@ func (s *Server) handleStoreBackends(w http.ResponseWriter, r *http.Request) {
 //
 // Exposed so non-HTTP surfaces (e.g. the MCP create_backend tool) can run the
 // same upsert path as POST /backends without going through the router.
-func (s *Server) UpsertBackend(name string, b config.AIBackendConfig) (string, config.AIBackendConfig, error) {
+func (s *Server) UpsertBackend(name string, b fleet.Backend) (string, fleet.Backend, error) {
 	if strings.TrimSpace(name) == "" {
-		return "", config.AIBackendConfig{}, &store.ErrValidation{Msg: "name is required"}
+		return "", fleet.Backend{}, &store.ErrValidation{Msg: "name is required"}
 	}
 	s.storeMu.Lock()
 	err := store.UpsertBackend(s.db, name, b)
@@ -800,7 +801,7 @@ func (s *Server) UpsertBackend(name string, b config.AIBackendConfig) (string, c
 	}
 	s.storeMu.Unlock()
 	if err != nil {
-		return "", config.AIBackendConfig{}, err
+		return "", fleet.Backend{}, err
 	}
 	config.NormalizeBackendConfig(&b)
 	config.ApplyBackendDefaults(&b)
@@ -886,7 +887,7 @@ func (s *Server) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
 	local.Command = base.Command
 	local.LocalModelURL = req.URL
 
-	diagMap := map[string]config.AIBackendConfig{
+	diagMap := map[string]fleet.Backend{
 		backends.ClaudeName: base,
 		name:                local,
 	}
@@ -975,24 +976,24 @@ func (s *Server) handleStoreBackendPatch(w http.ResponseWriter, r *http.Request)
 //
 // Exposed so non-HTTP surfaces (e.g. the MCP update_backend tool) can drive
 // the same path as PATCH /backends/{name} without going through the router.
-func (s *Server) UpdateBackend(name string, patch storeBackendPatchJSON) (string, config.AIBackendConfig, error) {
+func (s *Server) UpdateBackend(name string, patch storeBackendPatchJSON) (string, fleet.Backend, error) {
 	normalized := config.NormalizeBackendName(name)
 	s.storeMu.Lock()
 	defer s.storeMu.Unlock()
 	backendsByName, err := store.ReadBackends(s.db)
 	if err != nil {
-		return "", config.AIBackendConfig{}, err
+		return "", fleet.Backend{}, err
 	}
 	existing, ok := backendsByName[normalized]
 	if !ok {
-		return "", config.AIBackendConfig{}, &store.ErrNotFound{Msg: fmt.Sprintf("backend %q not found", normalized)}
+		return "", fleet.Backend{}, &store.ErrNotFound{Msg: fmt.Sprintf("backend %q not found", normalized)}
 	}
 	patch.apply(&existing)
 	if err := store.UpsertBackend(s.db, normalized, existing); err != nil {
-		return "", config.AIBackendConfig{}, err
+		return "", fleet.Backend{}, err
 	}
 	if err := s.reloadCron(); err != nil {
-		return "", config.AIBackendConfig{}, err
+		return "", fleet.Backend{}, err
 	}
 	config.NormalizeBackendConfig(&existing)
 	config.ApplyBackendDefaults(&existing)
@@ -1067,9 +1068,9 @@ func (s *Server) handleStoreRepos(w http.ResponseWriter, r *http.Request) {
 //
 // Exposed so non-HTTP surfaces (e.g. the MCP create_repo tool) can run the
 // same upsert path as POST /repos without going through the router.
-func (s *Server) UpsertRepo(r config.RepoDef) (config.RepoDef, error) {
+func (s *Server) UpsertRepo(r fleet.Repo) (fleet.Repo, error) {
 	if strings.TrimSpace(r.Name) == "" {
-		return config.RepoDef{}, &store.ErrValidation{Msg: "name is required"}
+		return fleet.Repo{}, &store.ErrValidation{Msg: "name is required"}
 	}
 	s.storeMu.Lock()
 	err := store.UpsertRepo(s.db, r)
@@ -1078,7 +1079,7 @@ func (s *Server) UpsertRepo(r config.RepoDef) (config.RepoDef, error) {
 	}
 	s.storeMu.Unlock()
 	if err != nil {
-		return config.RepoDef{}, err
+		return fleet.Repo{}, err
 	}
 	config.NormalizeRepoDef(&r)
 	return r, nil
@@ -1138,16 +1139,16 @@ func (s *Server) handleStoreRepo(w http.ResponseWriter, r *http.Request) {
 // PatchRepo updates the enabled flag on an existing repo without touching its
 // bindings. Returns the canonical RepoDef (with current bindings) so callers
 // can refresh their view. *ErrNotFound when the repo does not exist.
-func (s *Server) PatchRepo(repoName string, enabled bool) (config.RepoDef, error) {
+func (s *Server) PatchRepo(repoName string, enabled bool) (fleet.Repo, error) {
 	s.storeMu.Lock()
 	defer s.storeMu.Unlock()
 	// Load the repo (and its bindings) so we can rewrite it intact without
 	// having to pipe every field through the wire struct.
 	repos, err := store.ReadRepos(s.db)
 	if err != nil {
-		return config.RepoDef{}, err
+		return fleet.Repo{}, err
 	}
-	var existing *config.RepoDef
+	var existing *fleet.Repo
 	for i := range repos {
 		if repos[i].Name == repoName {
 			existing = &repos[i]
@@ -1155,7 +1156,7 @@ func (s *Server) PatchRepo(repoName string, enabled bool) (config.RepoDef, error
 		}
 	}
 	if existing == nil {
-		return config.RepoDef{}, &store.ErrNotFound{Msg: fmt.Sprintf("repo %q not found", repoName)}
+		return fleet.Repo{}, &store.ErrNotFound{Msg: fmt.Sprintf("repo %q not found", repoName)}
 	}
 	if existing.Enabled == enabled {
 		return *existing, nil
@@ -1163,10 +1164,10 @@ func (s *Server) PatchRepo(repoName string, enabled bool) (config.RepoDef, error
 	// Flip the enabled flag via a direct UPDATE so we don't re-run the
 	// delete+insert cycle that UpsertRepo performs on bindings.
 	if _, err := s.db.Exec("UPDATE repos SET enabled=? WHERE name=?", boolToInt(enabled), repoName); err != nil {
-		return config.RepoDef{}, fmt.Errorf("patch repo %s: %w", repoName, err)
+		return fleet.Repo{}, fmt.Errorf("patch repo %s: %w", repoName, err)
 	}
 	if err := s.reloadCron(); err != nil {
-		return config.RepoDef{}, err
+		return fleet.Repo{}, err
 	}
 	existing.Enabled = enabled
 	return *existing, nil
@@ -1243,15 +1244,15 @@ func (s *Server) handleCreateBinding(w http.ResponseWriter, r *http.Request) {
 
 // CreateBinding persists a new binding on repoName and reloads cron. Exposed
 // for non-HTTP callers (MCP create_binding tool).
-func (s *Server) CreateBinding(repoName string, b config.Binding) (config.Binding, error) {
+func (s *Server) CreateBinding(repoName string, b fleet.Binding) (fleet.Binding, error) {
 	s.storeMu.Lock()
 	defer s.storeMu.Unlock()
 	_, persisted, err := store.CreateBinding(s.db, repoName, b)
 	if err != nil {
-		return config.Binding{}, err
+		return fleet.Binding{}, err
 	}
 	if err := s.reloadCron(); err != nil {
-		return config.Binding{}, err
+		return fleet.Binding{}, err
 	}
 	return persisted, nil
 }
@@ -1299,22 +1300,22 @@ func (s *Server) handleUpdateBinding(w http.ResponseWriter, r *http.Request) {
 
 // UpdateBinding verifies the id belongs to repoName, replaces the row, and
 // reloads cron. Exposed for non-HTTP callers (MCP update_binding tool).
-func (s *Server) UpdateBinding(repoName string, id int64, b config.Binding) (config.Binding, error) {
+func (s *Server) UpdateBinding(repoName string, id int64, b fleet.Binding) (fleet.Binding, error) {
 	s.storeMu.Lock()
 	defer s.storeMu.Unlock()
 	existingRepo, _, found, err := store.ReadBinding(s.db, id)
 	if err != nil {
-		return config.Binding{}, err
+		return fleet.Binding{}, err
 	}
 	if !found || existingRepo != repoName {
-		return config.Binding{}, &store.ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found for repo %q", id, repoName)}
+		return fleet.Binding{}, &store.ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found for repo %q", id, repoName)}
 	}
 	updated, err := store.UpdateBinding(s.db, id, b)
 	if err != nil {
-		return config.Binding{}, err
+		return fleet.Binding{}, err
 	}
 	if err := s.reloadCron(); err != nil {
-		return config.Binding{}, err
+		return fleet.Binding{}, err
 	}
 	return updated, nil
 }
@@ -1336,13 +1337,13 @@ func (s *Server) handleDeleteBinding(w http.ResponseWriter, r *http.Request) {
 
 // ReadBinding fetches one binding by ID, verifying it belongs to repoName.
 // Exposed for non-HTTP callers (MCP get_binding tool).
-func (s *Server) ReadBinding(repoName string, id int64) (config.Binding, error) {
+func (s *Server) ReadBinding(repoName string, id int64) (fleet.Binding, error) {
 	existingRepo, b, found, err := store.ReadBinding(s.db, id)
 	if err != nil {
-		return config.Binding{}, err
+		return fleet.Binding{}, err
 	}
 	if !found || existingRepo != repoName {
-		return config.Binding{}, &store.ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found for repo %q", id, repoName)}
+		return fleet.Binding{}, &store.ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found for repo %q", id, repoName)}
 	}
 	return b, nil
 }
@@ -1371,14 +1372,14 @@ func (s *Server) DeleteBinding(repoName string, id int64) error {
 // four CRUD-mutable sections; daemon-level config (HTTP, log, proxy) is
 // intentionally excluded — it is not managed by the write API.
 type exportYAML struct {
-	Skills map[string]config.SkillDef `yaml:"skills,omitempty"`
-	Agents []config.AgentDef          `yaml:"agents,omitempty"`
-	Repos  []config.RepoDef           `yaml:"repos,omitempty"`
+	Skills map[string]fleet.Skill `yaml:"skills,omitempty"`
+	Agents []fleet.Agent          `yaml:"agents,omitempty"`
+	Repos  []fleet.Repo           `yaml:"repos,omitempty"`
 	Daemon *exportDaemonYAML          `yaml:"daemon,omitempty"`
 }
 
 type exportDaemonYAML struct {
-	AIBackends map[string]config.AIBackendConfig `yaml:"ai_backends,omitempty"`
+	AIBackends map[string]fleet.Backend `yaml:"ai_backends,omitempty"`
 }
 
 // handleStoreExport serves GET /api/store/export — returns a config.yaml
@@ -1464,7 +1465,7 @@ func (s *Server) ImportYAML(body []byte, mode string) (map[string]int, error) {
 		return nil, &store.ErrValidation{Msg: fmt.Sprintf("parse yaml: %v", err)}
 	}
 
-	backends := map[string]config.AIBackendConfig{}
+	backends := map[string]fleet.Backend{}
 	if payload.Daemon != nil {
 		backends = payload.Daemon.AIBackends
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/backends"
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/logging"
 	mcpserver "github.com/eloylp/agents/internal/mcp"
 	"github.com/eloylp/agents/internal/observe"
@@ -72,7 +73,7 @@ func run() error {
 	// Wire the runner factory so that hot-reloaded backend definitions produce
 	// live runners without a restart. The same factory is used for the initial
 	// setup, so the two paths stay in sync automatically.
-	scheduler.WithRunnerBuilder(func(name string, b config.AIBackendConfig) ai.Runner {
+	scheduler.WithRunnerBuilder(func(name string, b fleet.Backend) ai.Runner {
 		return ai.NewCommandRunner(
 			name, "command", b.Command, backendEnvOverrides(b),
 			b.TimeoutSeconds, b.MaxPromptChars, b.RedactionSaltEnv,
@@ -227,7 +228,7 @@ func setupRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runne
 	return runners
 }
 
-func backendEnvOverrides(b config.AIBackendConfig) map[string]string {
+func backendEnvOverrides(b fleet.Backend) map[string]string {
 	if b.LocalModelURL == "" {
 		return nil
 	}

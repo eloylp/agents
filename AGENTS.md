@@ -30,7 +30,8 @@ docker compose up -d                            # containerised run
 ```
 cmd/agents/main.go              # wires config, logger, runners, scheduler, webhook server, proxy
 internal/
-  config/                       # YAML parsing, defaults, validation, prompt/skill file resolution
+  fleet/                        # domain entities: Agent, Repo, Skill, Backend, Binding (zero deps)
+  config/                       # YAML parsing, defaults, validation, prompt/skill file resolution (uses fleet)
   ai/                           # prompt composition + CLI runner (hardcoded backend args + schema enforcement)
   anthropic_proxy/              # built-in Anthropic Messages ↔ OpenAI Chat Completions translation
   observe/                      # observability store: events, traces, dispatch graph, SSE hubs
@@ -93,7 +94,8 @@ When making common classes of changes, update all of these at once:
 
 | Change | Update |
 |---|---|
-| Config schema (types in `internal/config/config.go`) | Validation, `normalize()`, defaults, `config.example.yaml`, README, tests in `internal/config/config_test.go` |
+| Domain entities (`internal/fleet/`: Agent, Repo, Skill, Backend, Binding) | The struct itself, the SQLite store columns, the YAML tags, all CRUD wire shapes, tests |
+| Config schema (top-level `Config`, `Daemon*` in `internal/config/config.go`) | Validation, `normalize()`, defaults, `config.example.yaml`, README, tests in `internal/config/config_test.go` |
 | New webhook event kind | Decoder in `internal/webhook/server.go`, acceptance in `internal/workflow/engine.go`, README event table, validation in `internal/config/config.go` |
 | New AI backend behavior | `internal/ai/cmdrunner.go`, allowlist if new env vars, backend registration in `cmd/agents/main.go`, config example |
 | Agent prompt contract | Prompts in SQLite (edit via UI or CRUD API), runner parser in `internal/ai/cmdrunner.go`, `internal/ai/types.go`, `internal/ai/response-schema.json`, AGENTS.md runner-contract section, tests |

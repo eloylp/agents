@@ -8,7 +8,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog"
 
-	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // TestStringSliceArgAcceptsShapes pins the shape contract for the
@@ -170,7 +170,7 @@ func TestArrayOfAnyAcceptsShapes(t *testing.T) {
 // elements so the patch lands as the caller intended.
 func TestToolUpdateAgentAcceptsJSONStringSkills(t *testing.T) {
 	t.Parallel()
-	canonical := config.AgentDef{Name: "coder", Backend: "codex", Prompt: "p"}
+	canonical := fleet.Agent{Name: "coder", Backend: "codex", Prompt: "p"}
 	w := &stubAgentWriter{patchCanonical: canonical}
 	deps := Deps{
 		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
@@ -206,7 +206,7 @@ func TestToolUpdateBackendAcceptsJSONStringModels(t *testing.T) {
 	t.Parallel()
 	w := &stubBackendWriter{
 		patchCanonicalName:   "claude",
-		patchCanonicalConfig: config.AIBackendConfig{Command: "/bin/claude"},
+		patchCanonicalConfig: fleet.Backend{Command: "/bin/claude"},
 	}
 	deps := Deps{
 		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
@@ -236,7 +236,7 @@ func TestToolUpdateBackendAcceptsJSONStringModels(t *testing.T) {
 // the same JSON-string relief applies across CRUD tools.
 func TestToolCreateAgentAcceptsJSONStringSlices(t *testing.T) {
 	t.Parallel()
-	canonical := config.AgentDef{Name: "linter", Backend: "claude", Skills: []string{"security"}}
+	canonical := fleet.Agent{Name: "linter", Backend: "claude", Skills: []string{"security"}}
 	w := &stubAgentWriter{canonical: canonical}
 	deps := Deps{
 		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
@@ -270,7 +270,7 @@ func TestToolCreateAgentAcceptsJSONStringSlices(t *testing.T) {
 func TestToolCreateBindingAcceptsJSONStringSlices(t *testing.T) {
 	t.Parallel()
 	w := &stubBindingWriter{
-		createResult: config.Binding{ID: 1, Agent: "coder"},
+		createResult: fleet.Binding{ID: 1, Agent: "coder"},
 	}
 	deps := Deps{
 		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
@@ -301,7 +301,7 @@ func TestToolCreateBindingAcceptsJSONStringSlices(t *testing.T) {
 func TestToolUpdateBindingAcceptsJSONStringSlices(t *testing.T) {
 	t.Parallel()
 	w := &stubBindingWriter{
-		updateResult: config.Binding{ID: 5, Agent: "coder"},
+		updateResult: fleet.Binding{ID: 5, Agent: "coder"},
 	}
 	deps := Deps{
 		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
@@ -334,7 +334,7 @@ func TestToolUpdateBindingAcceptsJSONStringSlices(t *testing.T) {
 // argument is itself an array.
 func TestToolCreateRepoAcceptsJSONStringBindings(t *testing.T) {
 	t.Parallel()
-	w := &stubRepoWriter{canonical: config.RepoDef{Name: "owner/repo", Enabled: true}}
+	w := &stubRepoWriter{canonical: fleet.Repo{Name: "owner/repo", Enabled: true}}
 	deps := Deps{
 		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
 		Queue: &stubQueue{}, Status: stubStatus{},

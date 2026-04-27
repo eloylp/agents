@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/store"
@@ -24,7 +25,7 @@ import (
 func TestHandleAPIAgentsReturnsConfiguredAgents(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) {
-		c.Agents = []config.AgentDef{
+		c.Agents = []fleet.Agent{
 			{
 				Name:          "reviewer",
 				Backend:       "claude",
@@ -34,11 +35,11 @@ func TestHandleAPIAgentsReturnsConfiguredAgents(t *testing.T) {
 				CanDispatch:   []string{"sec-reviewer"},
 			},
 		}
-		c.Repos = []config.RepoDef{
+		c.Repos = []fleet.Repo{
 			{
 				Name:    "owner/repo",
 				Enabled: true,
-				Use: []config.Binding{
+				Use: []fleet.Binding{
 					{Agent: "reviewer", Labels: []string{"review-me"}},
 				},
 			},
@@ -86,12 +87,12 @@ func TestHandleAPIAgentsAttachesScheduleForCronBindings(t *testing.T) {
 	next := now.Add(time.Hour)
 
 	cfg := testCfg(func(c *config.Config) {
-		c.Agents = []config.AgentDef{{Name: "worker", Backend: "codex"}}
-		c.Repos = []config.RepoDef{
+		c.Agents = []fleet.Agent{{Name: "worker", Backend: "codex"}}
+		c.Repos = []fleet.Repo{
 			{
 				Name:    "owner/repo",
 				Enabled: true,
-				Use:     []config.Binding{{Agent: "worker", Cron: "0 * * * *"}},
+				Use:     []fleet.Binding{{Agent: "worker", Cron: "0 * * * *"}},
 			},
 		}
 	})
@@ -137,17 +138,17 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 	next2 := now.Add(2 * time.Hour)
 
 	cfg := testCfg(func(c *config.Config) {
-		c.Agents = []config.AgentDef{{Name: "worker", Backend: "codex"}}
-		c.Repos = []config.RepoDef{
+		c.Agents = []fleet.Agent{{Name: "worker", Backend: "codex"}}
+		c.Repos = []fleet.Repo{
 			{
 				Name:    "owner/repo-a",
 				Enabled: true,
-				Use:     []config.Binding{{Agent: "worker", Cron: "0 * * * *"}},
+				Use:     []fleet.Binding{{Agent: "worker", Cron: "0 * * * *"}},
 			},
 			{
 				Name:    "owner/repo-b",
 				Enabled: true,
-				Use:     []config.Binding{{Agent: "worker", Cron: "30 * * * *"}},
+				Use:     []fleet.Binding{{Agent: "worker", Cron: "30 * * * *"}},
 			},
 		}
 	})
@@ -213,17 +214,17 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 func TestHandleAPIAgentsSkipsDisabledRepos(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) {
-		c.Agents = []config.AgentDef{{Name: "worker", Backend: "claude"}}
-		c.Repos = []config.RepoDef{
+		c.Agents = []fleet.Agent{{Name: "worker", Backend: "claude"}}
+		c.Repos = []fleet.Repo{
 			{
 				Name:    "owner/active-repo",
 				Enabled: true,
-				Use:     []config.Binding{{Agent: "worker", Events: []string{"push"}}},
+				Use:     []fleet.Binding{{Agent: "worker", Events: []string{"push"}}},
 			},
 			{
 				Name:    "owner/disabled-repo",
 				Enabled: false,
-				Use:     []config.Binding{{Agent: "worker", Events: []string{"push"}}},
+				Use:     []fleet.Binding{{Agent: "worker", Events: []string{"push"}}},
 			},
 		}
 	})
@@ -305,7 +306,7 @@ func (s *stubRuntimeState) IsRunning(name string) bool { return s.running[name] 
 func TestHandleAPIAgentsCurrentStatusRunningWhenActive(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) {
-		c.Agents = []config.AgentDef{{Name: "coder", Backend: "claude"}}
+		c.Agents = []fleet.Agent{{Name: "coder", Backend: "claude"}}
 	})
 	srv, _ := newTestServer(cfg)
 	srv.WithRuntimeState(&stubRuntimeState{running: map[string]bool{"coder": true}})
@@ -351,7 +352,7 @@ func TestHandleAPIConfigRedactsSecrets(t *testing.T) {
 				APIKeyEnv: "PROXY_API_KEY",
 			},
 		}
-		c.Daemon.AIBackends = map[string]config.AIBackendConfig{
+		c.Daemon.AIBackends = map[string]fleet.Backend{
 			"claude": {
 				Command: "claude",
 			},
@@ -460,11 +461,11 @@ func TestHandleAPIConfigContentType(t *testing.T) {
 func TestHandleAPIConfigRepoBindingDefaultEnabled(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) {
-		c.Repos = []config.RepoDef{
+		c.Repos = []fleet.Repo{
 			{
 				Name:    "owner/repo",
 				Enabled: true,
-				Use: []config.Binding{
+				Use: []fleet.Binding{
 					{Agent: "worker", Labels: []string{"triage"}},
 				},
 			},

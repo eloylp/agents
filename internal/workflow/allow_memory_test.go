@@ -11,6 +11,7 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // stubMemory is a minimal MemoryBackend implementation for tests. It records
@@ -209,13 +210,13 @@ func newMemoryTestCfg(allowMemory *bool) *config.Config {
 	return &config.Config{
 		Daemon: config.DaemonConfig{
 			Processor:  config.ProcessorConfig{MaxConcurrentAgents: 4},
-			AIBackends: map[string]config.AIBackendConfig{"claude": {Command: "claude"}},
+			AIBackends: map[string]fleet.Backend{"claude": {Command: "claude"}},
 		},
-		Agents: []config.AgentDef{
+		Agents: []fleet.Agent{
 			{Name: "arch-reviewer", Backend: "claude", Prompt: "Review.", AllowMemory: allowMemory},
 		},
-		Repos: []config.RepoDef{
-			{Name: "owner/repo", Enabled: true, Use: []config.Binding{
+		Repos: []fleet.Repo{
+			{Name: "owner/repo", Enabled: true, Use: []fleet.Binding{
 				{Agent: "arch-reviewer", Labels: []string{"ai:review:arch-reviewer"}},
 			}},
 		},

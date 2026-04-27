@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
@@ -43,7 +44,7 @@ func openCRUDTestServer(t *testing.T) *Server {
 // so that subsequent agent upserts that reference it pass cross-ref validation.
 func seedStoreBackend(t *testing.T, s *Server, name string) {
 	t.Helper()
-	b := config.AIBackendConfig{Command: name}
+	b := fleet.Backend{Command: name}
 	if err := store.UpsertBackend(s.db, name, b); err != nil {
 		t.Fatalf("seedStoreBackend %s: %v", name, err)
 	}
@@ -52,7 +53,7 @@ func seedStoreBackend(t *testing.T, s *Server, name string) {
 // seedStoreSkill inserts a minimal skill into the server's store directly.
 func seedStoreSkill(t *testing.T, s *Server, name string) {
 	t.Helper()
-	if err := store.UpsertSkill(s.db, name, config.SkillDef{Prompt: "skill prompt"}); err != nil {
+	if err := store.UpsertSkill(s.db, name, fleet.Skill{Prompt: "skill prompt"}); err != nil {
 		t.Fatalf("seedStoreSkill %s: %v", name, err)
 	}
 }
@@ -484,7 +485,7 @@ func TestBackendsLocalCreateNamedAndDelete(t *testing.T) {
 	s := openCRUDTestServer(t)
 
 	// Local backend creation requires a discovered claude backend.
-	if err := store.UpsertBackend(s.db, "claude", config.AIBackendConfig{
+	if err := store.UpsertBackend(s.db, "claude", fleet.Backend{
 		Command: "/bin/sh",
 	}); err != nil {
 		t.Fatalf("seed claude backend: %v", err)
@@ -523,7 +524,7 @@ func TestBackendsLocalRejectReservedName(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
-	if err := store.UpsertBackend(s.db, "claude", config.AIBackendConfig{
+	if err := store.UpsertBackend(s.db, "claude", fleet.Backend{
 		Command: "/bin/sh",
 	}); err != nil {
 		t.Fatalf("seed claude backend: %v", err)
@@ -851,7 +852,7 @@ func itoa(i int) string { return strconv.Itoa(i) }
 // errCronReloader satisfies server.CronReloader and always returns an error from Reload.
 type errCronReloader struct{ err error }
 
-func (r *errCronReloader) Reload([]config.RepoDef, []config.AgentDef, map[string]config.SkillDef, map[string]config.AIBackendConfig) error {
+func (r *errCronReloader) Reload([]fleet.Repo, []fleet.Agent, map[string]fleet.Skill, map[string]fleet.Backend) error {
 	return r.err
 }
 
@@ -1241,10 +1242,10 @@ func TestStoreCRUDConflictErrorReturns409(t *testing.T) {
 type countingCronReloader struct {
 	mu    sync.Mutex
 	calls int32
-	last  []config.AgentDef
+	last  []fleet.Agent
 }
 
-func (r *countingCronReloader) Reload(_ []config.RepoDef, agents []config.AgentDef, _ map[string]config.SkillDef, _ map[string]config.AIBackendConfig) error {
+func (r *countingCronReloader) Reload(_ []fleet.Repo, agents []fleet.Agent, _ map[string]fleet.Skill, _ map[string]fleet.Backend) error {
 	atomic.AddInt32(&r.calls, 1)
 	r.mu.Lock()
 	r.last = agents

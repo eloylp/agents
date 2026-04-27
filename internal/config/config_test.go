@@ -1,6 +1,7 @@
 package config
 
 import (
+	"github.com/eloylp/agents/internal/fleet"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -341,7 +342,7 @@ repos:
 
 func TestBindingIsEnabledDefaultsTrue(t *testing.T) {
 	t.Parallel()
-	var b Binding
+	var b fleet.Binding
 	if !b.IsEnabled() {
 		t.Errorf("expected enabled by default")
 	}
@@ -356,7 +357,7 @@ func TestResolveBackend(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{
 		Daemon: DaemonConfig{
-			AIBackends: map[string]AIBackendConfig{
+			AIBackends: map[string]fleet.Backend{
 				"claude": {Command: "claude"},
 			},
 		},

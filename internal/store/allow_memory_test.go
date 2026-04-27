@@ -3,7 +3,7 @@ package store_test
 import (
 	"testing"
 
-	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -84,7 +84,7 @@ func TestUpsertAgentRoundTripsAllowMemoryFalse(t *testing.T) {
 	}
 
 	ff := false
-	if err := store.UpsertAgent(db, config.AgentDef{
+	if err := store.UpsertAgent(db, fleet.Agent{
 		Name:        "coder",
 		Backend:     "claude",
 		Prompt:      "You write code.",
