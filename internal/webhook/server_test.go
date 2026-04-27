@@ -743,7 +743,7 @@ func TestBuildHandlerObservabilityRoutesAreOpen(t *testing.T) {
 
 	srv, _ := newTestServer(testCfg(nil))
 	srv.WithUI(uiFS)
-	srv.WithObserve(newTestObserve(t))
+	wireObserveForTest(srv, newTestObserve(t))
 
 	ts := httptest.NewServer(srv.buildHandler())
 	t.Cleanup(ts.Close)

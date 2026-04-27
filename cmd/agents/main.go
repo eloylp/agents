@@ -6,11 +6,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
@@ -24,6 +26,7 @@ import (
 	mcpserver "github.com/eloylp/agents/internal/mcp"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/server"
+	serverobserve "github.com/eloylp/agents/internal/server/observe"
 	"github.com/eloylp/agents/internal/setup"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/ui"
@@ -153,7 +156,15 @@ func run() error {
 	// attach an SSE notifier so the UI stream stays live.
 	mem := memBackend.(*sqliteMemory)
 	mem.notifyFn = obs.PublishMemoryChange
-	srv.WithMemoryReader(&sqliteWebhookReader{db: db})
+	memReader := &sqliteWebhookReader{db: db}
+	srv.WithMemoryReader(memReader)
+
+	// Mount the observability routes via a closure so the webhook package
+	// stays free of any internal/server/observe import.
+	srv.WithObserveRegister(func(r *mux.Router, withTimeout func(http.Handler) http.Handler) {
+		obh := serverobserve.New(obs, srv, schedulerStatusAdapter{scheduler}, obs, engine, memReader)
+		obh.RegisterRoutes(r, withTimeout)
+	})
 
 	// Mount the MCP server on /mcp so MCP-capable clients (Claude Code,
 	// Cursor, Cline) can drive the fleet through the tool surface defined

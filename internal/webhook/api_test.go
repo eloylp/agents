@@ -10,12 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/server"
+	serverobserve "github.com/eloylp/agents/internal/server/observe"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -541,7 +543,7 @@ func TestBuildHandlerSSETimeoutSplit(t *testing.T) {
 	})
 	obs := newTestObserve(t)
 	srv, _ := newTestServer(cfg)
-	srv.WithObserve(obs)
+	wireObserveForTest(srv, obs)
 
 	ts := httptest.NewServer(srv.buildHandler())
 	t.Cleanup(ts.Close)
@@ -618,7 +620,7 @@ func TestServeSSEClearsServerWriteDeadline(t *testing.T) {
 
 	obs := newTestObserve(t)
 	srv, _ := newTestServer(testCfg(nil))
-	srv.WithObserve(obs)
+	wireObserveForTest(srv, obs)
 
 	ts := httptest.NewUnstartedServer(srv.buildHandler())
 	ts.Config.WriteTimeout = 200 * time.Millisecond
@@ -694,4 +696,16 @@ func newTestObserve(t *testing.T) *observe.Store {
 	}
 	t.Cleanup(func() { db.Close() })
 	return observe.NewStore(db)
+}
+
+// wireObserveForTest mounts the observability routes on srv. The observe
+// handler construction lives outside this package now (cmd/agents wires it
+// via WithObserveRegister); tests do the same so the routes are reachable
+// when integration tests exercise the full router.
+func wireObserveForTest(srv *Server, obs *observe.Store) {
+	srv.WithObserve(obs)
+	srv.WithObserveRegister(func(r *mux.Router, withTimeout func(http.Handler) http.Handler) {
+		obh := serverobserve.New(obs, srv, nil, nil, nil, nil)
+		obh.RegisterRoutes(r, withTimeout)
+	})
 }
