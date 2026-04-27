@@ -8,7 +8,6 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 )
 
@@ -44,7 +43,7 @@ func toolCreateAgent(deps Deps) server.ToolHandlerFunc {
 			AllowDispatch: req.GetBool("allow_dispatch", false),
 		}
 		// allow_memory: keep AllowMemory nil when the caller omits the field so
-		// AgentDef.IsAllowMemory() returns the documented default of true.
+		// Agent.IsAllowMemory() returns the documented default of true.
 		// Only an explicit true/false in the payload materialises a non-nil
 		// pointer, mirroring the binding-enabled convention.
 		if v, ok, errMsg := boolPtrArg(args, "allow_memory"); ok {
@@ -138,12 +137,12 @@ func toolDeleteAgent(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
 		cascade := req.GetBool("cascade", false)
-		if err := deps.AgentWrite.DeleteAgent(config.NormalizeAgentName(name), cascade); err != nil {
+		if err := deps.AgentWrite.DeleteAgent(fleet.NormalizeAgentName(name), cascade); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete agent", err), nil
 		}
 		return jsonResult(map[string]any{
 			"status":  "deleted",
-			"name":    config.NormalizeAgentName(name),
+			"name":    fleet.NormalizeAgentName(name),
 			"cascade": cascade,
 		})
 	}
@@ -207,7 +206,7 @@ func toolDeleteSkill(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
-		canonical := config.NormalizeSkillName(name)
+		canonical := fleet.NormalizeSkillName(name)
 		if err := deps.SkillWrite.DeleteSkill(canonical); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete skill", err), nil
 		}
@@ -329,7 +328,7 @@ func toolDeleteBackend(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
-		canonical := config.NormalizeBackendName(name)
+		canonical := fleet.NormalizeBackendName(name)
 		if err := deps.BackendWrite.DeleteBackend(canonical); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete backend", err), nil
 		}
@@ -382,7 +381,7 @@ func toolDeleteRepo(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
-		canonical := config.NormalizeRepoName(name)
+		canonical := fleet.NormalizeRepoName(name)
 		if err := deps.RepoWrite.DeleteRepo(canonical); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete repo", err), nil
 		}
@@ -476,7 +475,7 @@ func toolDeleteBinding(deps Deps) server.ToolHandlerFunc {
 		return jsonResult(map[string]any{
 			"status": "deleted",
 			"id":     id,
-			"repo":   config.NormalizeRepoName(repo),
+			"repo":   fleet.NormalizeRepoName(repo),
 		})
 	}
 }
@@ -508,7 +507,7 @@ func bindingFromReq(req mcpgo.CallToolRequest, agent string) (fleet.Binding, str
 	return b, ""
 }
 
-// repoJSON renders a RepoDef in the same wire shape as an element of the
+// repoJSON renders a Repo in the same wire shape as an element of the
 // list_repos / get_repo responses, so create_repo/delete_repo callers consume
 // one schema regardless of whether they are reading or writing.
 func repoJSON(r fleet.Repo) map[string]any {

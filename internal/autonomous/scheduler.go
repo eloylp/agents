@@ -397,7 +397,7 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent flee
 		}
 		return fmt.Errorf("no configured backend for agent %q (configured: %q)", agent.Name, agent.Backend)
 	}
-	if backendCfg, ok := cfg.Daemon.AIBackends[backend]; ok && config.IsPinnedModelUnavailable(agent.Model, backendCfg) {
+	if backendCfg, ok := cfg.Daemon.AIBackends[backend]; ok && fleet.IsPinnedModelUnavailable(agent.Model, backendCfg) {
 		if s.dispatcher != nil {
 			s.dispatcher.RollbackAutonomousRun(agent.Name, repo)
 		}

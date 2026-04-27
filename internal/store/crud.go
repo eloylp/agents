@@ -136,7 +136,7 @@ func ReadAgents(db *sql.DB) ([]fleet.Agent, error) {
 // writing so the stored values match the canonical form that AgentByName and
 // registerJobs expect, keeping live behavior consistent with startup.
 func UpsertAgent(db *sql.DB, a fleet.Agent) error {
-	config.NormalizeAgentDef(&a)
+	fleet.NormalizeAgent(&a)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert agent %s: begin: %w", a.Name, err)
@@ -243,13 +243,13 @@ func ReadSkills(db *sql.DB) (map[string]fleet.Skill, error) {
 }
 
 // UpsertSkill inserts or replaces a single skill.
-// The skill name is normalized (lowercase, trimmed) and SkillDef fields
+// The skill name is normalized (lowercase, trimmed) and Skill fields
 // (Prompt, PromptFile) are trimmed before writing, matching the normalization
 // startup applies in normalize() so that the stored values are already in
 // canonical form and validation sees the same shape as after a restart.
 func UpsertSkill(db *sql.DB, name string, s fleet.Skill) error {
-	name = config.NormalizeSkillName(name)
-	config.NormalizeSkillDef(&s)
+	name = fleet.NormalizeSkillName(name)
+	fleet.NormalizeSkill(&s)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert skill %s: begin: %w", name, err)
@@ -303,9 +303,9 @@ func ReadBackends(db *sql.DB) (map[string]fleet.Backend, error) {
 // ensures the stored values are already in canonical form so that live
 // behavior never diverges from a post-restart load.
 func UpsertBackend(db *sql.DB, name string, b fleet.Backend) error {
-	name = config.NormalizeBackendName(name)
-	config.NormalizeBackendConfig(&b)
-	config.ApplyBackendDefaults(&b)
+	name = fleet.NormalizeBackendName(name)
+	fleet.NormalizeBackend(&b)
+	fleet.ApplyBackendDefaults(&b)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert backend %s: begin: %w", name, err)
@@ -393,7 +393,7 @@ func ReadRepos(db *sql.DB) ([]fleet.Repo, error) {
 // the new list is written. The repo name and binding agents/events are
 // normalized (trimmed / lowercased) before writing.
 func UpsertRepo(db *sql.DB, r fleet.Repo) error {
-	config.NormalizeRepoDef(&r)
+	fleet.NormalizeRepo(&r)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert repo %s: begin: %w", r.Name, err)
@@ -417,22 +417,22 @@ func normalizeFleet(
 	backends map[string]fleet.Backend,
 ) (map[string]fleet.Skill, map[string]fleet.Backend) {
 	for i := range agents {
-		config.NormalizeAgentDef(&agents[i])
+		fleet.NormalizeAgent(&agents[i])
 	}
 	for i := range repos {
-		config.NormalizeRepoDef(&repos[i])
+		fleet.NormalizeRepo(&repos[i])
 	}
 	normalizedSkills := make(map[string]fleet.Skill, len(skills))
 	for name, s := range skills {
-		name = config.NormalizeSkillName(name)
-		config.NormalizeSkillDef(&s)
+		name = fleet.NormalizeSkillName(name)
+		fleet.NormalizeSkill(&s)
 		normalizedSkills[name] = s
 	}
 	normalizedBackends := make(map[string]fleet.Backend, len(backends))
 	for name, b := range backends {
-		name = config.NormalizeBackendName(name)
-		config.NormalizeBackendConfig(&b)
-		config.ApplyBackendDefaults(&b)
+		name = fleet.NormalizeBackendName(name)
+		fleet.NormalizeBackend(&b)
+		fleet.ApplyBackendDefaults(&b)
 		normalizedBackends[name] = b
 	}
 	return normalizedSkills, normalizedBackends
@@ -571,7 +571,7 @@ func normalizeBinding(b *fleet.Binding) {
 // references surface as *ErrNotFound (HTTP 404). The caller is responsible for
 // holding the store mutex and reloading cron schedules after success.
 func CreateBinding(db *sql.DB, repoName string, b fleet.Binding) (int64, fleet.Binding, error) {
-	repoName = config.NormalizeRepoName(repoName)
+	repoName = fleet.NormalizeRepoName(repoName)
 	normalizeBinding(&b)
 	if err := validateBindingShape(b); err != nil {
 		return 0, fleet.Binding{}, err

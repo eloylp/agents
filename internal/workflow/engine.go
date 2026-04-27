@@ -516,7 +516,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	if backend == "" {
 		return fmt.Errorf("agent %q: no runner available for backend %q", agent.Name, agent.Backend)
 	}
-	if backendCfg, ok := cfg.Daemon.AIBackends[backend]; ok && config.IsPinnedModelUnavailable(agent.Model, backendCfg) {
+	if backendCfg, ok := cfg.Daemon.AIBackends[backend]; ok && fleet.IsPinnedModelUnavailable(agent.Model, backendCfg) {
 		return fmt.Errorf(
 			"agent %q: configured model %q is not available for backend %q; run backend discovery and update the agent model",
 			agent.Name,

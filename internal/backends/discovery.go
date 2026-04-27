@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
@@ -149,8 +148,8 @@ func persistDiagnostics(db *sql.DB, existing map[string]fleet.Backend, diag Diag
 		next.Healthy = b.Healthy
 		next.HealthDetail = b.HealthDetail
 		next.LocalModelURL = b.LocalModelURL
-		config.ApplyBackendDefaults(&next)
-		config.NormalizeBackendConfig(&next)
+		fleet.ApplyBackendDefaults(&next)
+		fleet.NormalizeBackend(&next)
 
 		if err := store.UpsertBackend(db, b.Name, next); err != nil {
 			return fmt.Errorf("persist backend %s: %w", b.Name, err)

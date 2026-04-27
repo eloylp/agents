@@ -151,7 +151,7 @@ type SkillPatch struct {
 }
 
 // SkillWriter writes a single skill into the store and removes existing ones.
-// Upsert returns the canonical (normalized) name and SkillDef that were
+// Upsert returns the canonical (normalized) name and Skill that were
 // persisted so callers can surface the same shape REST clients see in the
 // POST /skills response — lowercase name, trimmed prompt. UpdateSkill applies
 // a partial patch and returns *store.ErrNotFound if the skill is missing.
@@ -182,7 +182,7 @@ type BackendPatch struct {
 
 // BackendWriter writes a single AI backend definition into the store and
 // removes existing ones. Upsert returns the canonical (normalized) name and
-// AIBackendConfig that were persisted so callers can surface the same shape
+// Backend that were persisted so callers can surface the same shape
 // REST clients see in the POST /backends response — lowercase name, trimmed
 // command, defaults applied. UpdateBackend applies a partial patch and
 // returns *store.ErrNotFound if the backend is missing.
@@ -197,7 +197,7 @@ type BackendWriter interface {
 
 // RepoWriter writes a single repo definition (name, enabled flag, bindings)
 // into the store and removes existing ones. Upsert returns the canonical
-// (normalized) RepoDef that was persisted so callers can surface the same
+// (normalized) Repo that was persisted so callers can surface the same
 // shape REST clients see in the POST /repos response — lowercase repo name,
 // lowercased binding agents, trimmed cron, lowercased events.
 //

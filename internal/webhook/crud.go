@@ -14,7 +14,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/eloylp/agents/internal/backends"
-	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
@@ -32,7 +31,7 @@ type storeAgentJSON struct {
 	CanDispatch   []string `json:"can_dispatch"`
 	Description   string   `json:"description"`
 	// AllowMemory is a *bool so POST clients that omit the field get the
-	// default-true semantics (`AgentDef.AllowMemory == nil` → IsAllowMemory()
+	// default-true semantics (`Agent.AllowMemory == nil` → IsAllowMemory()
 	// returns true). Responses always populate it (see agentToStoreJSON) so
 	// every read sees a concrete value.
 	AllowMemory *bool `json:"allow_memory,omitempty"`
@@ -478,13 +477,13 @@ func (s *Server) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 	if err != nil {
 		return fleet.Agent{}, err
 	}
-	config.NormalizeAgentDef(&a)
+	fleet.NormalizeAgent(&a)
 	return a, nil
 }
 
 // handleStoreAgent serves GET, PATCH, and DELETE /api/store/agents/{name}.
 func (s *Server) handleStoreAgent(w http.ResponseWriter, r *http.Request) {
-	name := config.NormalizeAgentName(mux.Vars(r)["name"])
+	name := fleet.NormalizeAgentName(mux.Vars(r)["name"])
 	switch r.Method {
 	case http.MethodGet:
 		agents, err := store.ReadAgents(s.db)
@@ -543,7 +542,7 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request, name 
 // Exposed so non-HTTP surfaces (e.g. the MCP update_agent tool) can drive the
 // same path as PATCH /agents/{name} without going through the router.
 func (s *Server) UpdateAgent(name string, patch storeAgentPatchJSON) (fleet.Agent, error) {
-	normalized := config.NormalizeAgentName(name)
+	normalized := fleet.NormalizeAgentName(name)
 	s.storeMu.Lock()
 	defer s.storeMu.Unlock()
 	agents, err := store.ReadAgents(s.db)
@@ -568,7 +567,7 @@ func (s *Server) UpdateAgent(name string, patch storeAgentPatchJSON) (fleet.Agen
 	if err := s.reloadCron(); err != nil {
 		return fleet.Agent{}, err
 	}
-	config.NormalizeAgentDef(&merged)
+	fleet.NormalizeAgent(&merged)
 	return merged, nil
 }
 
@@ -626,7 +625,7 @@ func (s *Server) handleStoreSkills(w http.ResponseWriter, r *http.Request) {
 }
 
 // UpsertSkill writes a single skill into the store and reloads the cron
-// scheduler. Returns the canonical (normalized) name and SkillDef that were
+// scheduler. Returns the canonical (normalized) name and Skill that were
 // persisted so callers can surface the same shape REST clients see in the
 // POST response — lowercase/trimmed name, trimmed prompt.
 //
@@ -649,13 +648,13 @@ func (s *Server) UpsertSkill(name string, sk fleet.Skill) (string, fleet.Skill, 
 	if err != nil {
 		return "", fleet.Skill{}, err
 	}
-	config.NormalizeSkillDef(&sk)
-	return config.NormalizeSkillName(name), sk, nil
+	fleet.NormalizeSkill(&sk)
+	return fleet.NormalizeSkillName(name), sk, nil
 }
 
 // handleStoreSkill serves GET, PATCH, and DELETE /api/store/skills/{name}.
 func (s *Server) handleStoreSkill(w http.ResponseWriter, r *http.Request) {
-	name := config.NormalizeSkillName(mux.Vars(r)["name"])
+	name := fleet.NormalizeSkillName(mux.Vars(r)["name"])
 	switch r.Method {
 	case http.MethodGet:
 		skills, err := store.ReadSkills(s.db)
@@ -711,7 +710,7 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request, name 
 // Exposed so non-HTTP surfaces (e.g. the MCP update_skill tool) can drive the
 // same path as PATCH /skills/{name} without going through the router.
 func (s *Server) UpdateSkill(name string, patch storeSkillPatchJSON) (string, fleet.Skill, error) {
-	normalized := config.NormalizeSkillName(name)
+	normalized := fleet.NormalizeSkillName(name)
 	s.storeMu.Lock()
 	defer s.storeMu.Unlock()
 	skills, err := store.ReadSkills(s.db)
@@ -729,7 +728,7 @@ func (s *Server) UpdateSkill(name string, patch storeSkillPatchJSON) (string, fl
 	if err := s.reloadCron(); err != nil {
 		return "", fleet.Skill{}, err
 	}
-	config.NormalizeSkillDef(&existing)
+	fleet.NormalizeSkill(&existing)
 	return normalized, existing, nil
 }
 
@@ -803,9 +802,9 @@ func (s *Server) UpsertBackend(name string, b fleet.Backend) (string, fleet.Back
 	if err != nil {
 		return "", fleet.Backend{}, err
 	}
-	config.NormalizeBackendConfig(&b)
-	config.ApplyBackendDefaults(&b)
-	return config.NormalizeBackendName(name), b, nil
+	fleet.NormalizeBackend(&b)
+	fleet.ApplyBackendDefaults(&b)
+	return fleet.NormalizeBackendName(name), b, nil
 }
 
 // handleBackendsStatus serves GET /backends/status with live diagnostics.
@@ -845,7 +844,7 @@ func (s *Server) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, s.loadCfg().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
-	name := config.NormalizeBackendName(req.Name)
+	name := fleet.NormalizeBackendName(req.Name)
 	if name == "" {
 		name = backends.ClaudeLocalName
 	}
@@ -920,7 +919,7 @@ func (s *Server) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
 }
 
 func backendPathName(r *http.Request) string {
-	name := config.NormalizeBackendName(mux.Vars(r)["name"])
+	name := fleet.NormalizeBackendName(mux.Vars(r)["name"])
 	return name
 }
 
@@ -977,7 +976,7 @@ func (s *Server) handleStoreBackendPatch(w http.ResponseWriter, r *http.Request)
 // Exposed so non-HTTP surfaces (e.g. the MCP update_backend tool) can drive
 // the same path as PATCH /backends/{name} without going through the router.
 func (s *Server) UpdateBackend(name string, patch storeBackendPatchJSON) (string, fleet.Backend, error) {
-	normalized := config.NormalizeBackendName(name)
+	normalized := fleet.NormalizeBackendName(name)
 	s.storeMu.Lock()
 	defer s.storeMu.Unlock()
 	backendsByName, err := store.ReadBackends(s.db)
@@ -995,8 +994,8 @@ func (s *Server) UpdateBackend(name string, patch storeBackendPatchJSON) (string
 	if err := s.reloadCron(); err != nil {
 		return "", fleet.Backend{}, err
 	}
-	config.NormalizeBackendConfig(&existing)
-	config.ApplyBackendDefaults(&existing)
+	fleet.NormalizeBackend(&existing)
+	fleet.ApplyBackendDefaults(&existing)
 	return normalized, existing, nil
 }
 
@@ -1081,7 +1080,7 @@ func (s *Server) UpsertRepo(r fleet.Repo) (fleet.Repo, error) {
 	if err != nil {
 		return fleet.Repo{}, err
 	}
-	config.NormalizeRepoDef(&r)
+	fleet.NormalizeRepo(&r)
 	return r, nil
 }
 
@@ -1095,7 +1094,7 @@ type repoRuntimeSettingsJSON struct {
 // handleStoreRepo serves GET, PATCH, and DELETE /api/store/repos/{owner}/{repo}.
 func (s *Server) handleStoreRepo(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	repoName := config.NormalizeRepoName(vars["owner"]) + "/" + config.NormalizeRepoName(vars["repo"])
+	repoName := fleet.NormalizeRepoName(vars["owner"]) + "/" + fleet.NormalizeRepoName(vars["repo"])
 	switch r.Method {
 	case http.MethodGet:
 		repos, err := store.ReadRepos(s.db)
@@ -1137,7 +1136,7 @@ func (s *Server) handleStoreRepo(w http.ResponseWriter, r *http.Request) {
 }
 
 // PatchRepo updates the enabled flag on an existing repo without touching its
-// bindings. Returns the canonical RepoDef (with current bindings) so callers
+// bindings. Returns the canonical Repo (with current bindings) so callers
 // can refresh their view. *ErrNotFound when the repo does not exist.
 func (s *Server) PatchRepo(repoName string, enabled bool) (fleet.Repo, error) {
 	s.storeMu.Lock()
@@ -1204,7 +1203,7 @@ func (s *Server) DeleteRepo(name string) error {
 // repoNameFromVars reconstructs the normalized owner/repo path parameter.
 func repoNameFromVars(r *http.Request) string {
 	vars := mux.Vars(r)
-	return config.NormalizeRepoName(vars["owner"]) + "/" + config.NormalizeRepoName(vars["repo"])
+	return fleet.NormalizeRepoName(vars["owner"]) + "/" + fleet.NormalizeRepoName(vars["repo"])
 }
 
 // bindingIDFromVars parses the {id} path parameter. On error it writes a 400
