@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
@@ -19,7 +18,6 @@ import (
 	"github.com/eloylp/agents/internal/server"
 	serverobserve "github.com/eloylp/agents/internal/server/observe"
 	"github.com/eloylp/agents/internal/store"
-	"github.com/eloylp/agents/internal/workflow"
 )
 
 // ── /api/agents ────────────────────────────────────────────────────────────
@@ -98,11 +96,10 @@ func TestHandleAPIAgentsAttachesScheduleForCronBindings(t *testing.T) {
 			},
 		}
 	})
-	dc := workflow.NewDataChannels(1)
 	provider := &stubStatusProvider{statuses: []server.AgentStatus{
 		{Name: "worker", Repo: "owner/repo", LastRun: &now, NextRun: next, LastStatus: "ok"},
 	}}
-	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, provider, nil, zerolog.Nop())
+	srv, _ := newTestServerWithProvider(cfg, provider)
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
@@ -154,12 +151,11 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 			},
 		}
 	})
-	dc := workflow.NewDataChannels(1)
 	provider := &stubStatusProvider{statuses: []server.AgentStatus{
 		{Name: "worker", Repo: "owner/repo-a", LastRun: &now, NextRun: next1, LastStatus: "ok"},
 		{Name: "worker", Repo: "owner/repo-b", NextRun: next2, LastStatus: "pending"},
 	}}
-	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, provider, nil, zerolog.Nop())
+	srv, _ := newTestServerWithProvider(cfg, provider)
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
@@ -310,8 +306,10 @@ func TestHandleAPIAgentsCurrentStatusRunningWhenActive(t *testing.T) {
 	cfg := testCfg(func(c *config.Config) {
 		c.Agents = []fleet.Agent{{Name: "coder", Backend: "claude"}}
 	})
-	srv, _ := newTestServer(cfg)
-	srv.WithRuntimeState(&stubRuntimeState{running: map[string]bool{"coder": true}})
+	srv, _, fleetHandler := newTestServerExposingFleet(cfg, nil)
+	rs := &stubRuntimeState{running: map[string]bool{"coder": true}}
+	srv.WithRuntimeState(rs)
+	fleetHandler.SetRuntimeState(rs)
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()

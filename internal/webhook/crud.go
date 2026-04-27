@@ -80,7 +80,9 @@ func (s *Server) reloadCron() error {
 	newCfg.Daemon.AIBackends = backends
 	s.cfg = &newCfg
 	s.cfgMu.Unlock()
-	s.fleet.RefreshOrphansFromCfg(&newCfg)
+	if s.onConfigReload != nil {
+		s.onConfigReload(&newCfg)
+	}
 
 	return nil
 }

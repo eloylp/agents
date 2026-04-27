@@ -18,6 +18,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/server"
+	serverfleet "github.com/eloylp/agents/internal/server/fleet"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -50,8 +51,68 @@ func signatureForTests(body []byte, secret string) string {
 }
 
 func newTestServer(cfg *config.Config) (*Server, *workflow.DataChannels) {
+	return newTestServerWithProvider(cfg, nil)
+}
+
+// newTestServerWithProvider mirrors what cmd/agents wires: a Server plus a
+// fleet handler attached via WithFleet. Tests that need a custom status
+// provider use this directly; tests that don't go through newTestServer.
+func newTestServerWithProvider(cfg *config.Config, provider server.StatusProvider) (*Server, *workflow.DataChannels) {
+	srv, dc, _ := newTestServerExposingFleet(cfg, provider)
+	return srv, dc
+}
+
+// newTestServerExposingFleet is the variant for tests that need to call
+// methods on the fleet handler directly (e.g. SetRuntimeState after the
+// fact, or assertions on the orphan cache).
+func newTestServerExposingFleet(cfg *config.Config, provider server.StatusProvider) (*Server, *workflow.DataChannels, *serverfleet.Handler) {
 	dc := workflow.NewDataChannels(1)
-	return NewServer(cfg, NewDeliveryStore(time.Hour), dc, nil, nil, zerolog.Nop()), dc
+	logger := zerolog.Nop()
+	srv := NewServer(cfg, NewDeliveryStore(time.Hour), dc, provider, nil, logger)
+	fleetHandler := wireFleetForTest(srv, cfg, provider, logger)
+	return srv, dc, fleetHandler
+}
+
+// wireFleetForTest constructs a fleet handler in cfg-only mode and attaches
+// it to srv via WithFleet, mirroring the wiring cmd/agents performs. Used
+// by every test helper that exercises the full router. Returns the handler
+// so CRUD-mode helpers can SetDB on it after WithStore.
+func wireFleetForTest(srv *Server, cfg *config.Config, provider server.StatusProvider, logger zerolog.Logger) *serverfleet.Handler {
+	fleetHandler := serverfleet.New(srv, srv, provider, nil, logger)
+	fleetHandler.RefreshOrphansFromCfg(cfg)
+	srv.WithFleet(
+		fleetHandler,
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				fleetHandler.HandleAgentsView(w, r)
+				return
+			}
+			fleetHandler.HandleAgentsCreate(w, r)
+		},
+		fleetOrphansBridge{fleetHandler},
+		fleetHandler.RefreshOrphansFromCfg,
+	)
+	return fleetHandler
+}
+
+// fleetOrphansBridge converts serverfleet.Handler's concrete orphan
+// snapshot type to the cross-package server.OrphansSnapshot shape /status
+// uses, mirroring the adapter cmd/agents installs.
+type fleetOrphansBridge struct {
+	h *serverfleet.Handler
+}
+
+func (b fleetOrphansBridge) OrphansSnapshot() server.OrphansSnapshot {
+	snap := b.h.OrphansSnapshot()
+	return server.OrphansSnapshot{GeneratedAt: snap.GeneratedAt, Count: snap.Count}
+}
+
+func (b fleetOrphansBridge) RefreshOrphansFromDB() (server.OrphansSnapshot, error) {
+	snap, err := b.h.RefreshOrphansFromDB()
+	if err != nil {
+		return server.OrphansSnapshot{}, err
+	}
+	return server.OrphansSnapshot{GeneratedAt: snap.GeneratedAt, Count: snap.Count}, nil
 }
 
 // webhookRequest builds a signed POST request to /webhooks/github.
