@@ -48,6 +48,41 @@ type StepRecorder interface {
 	RecordSteps(spanID string, steps []TraceStep)
 }
 
+// LastRunRecorder is an optional observer that the Engine calls after every
+// cron-fired agent run completes. The concrete implementation
+// is *autonomous.Scheduler, which updates the lastRuns map that drives the
+// per-binding schedule display in the /agents fleet view.
+//
+// Defined as an interface here purely to break an import cycle: the
+// autonomous package already imports workflow (for Event, *Dispatcher,
+// TraceRecorder), so workflow cannot import autonomous to reference the
+// concrete type. Implementations must be safe for concurrent use.
+type LastRunRecorder interface {
+	RecordLastRun(agent, repo string, at time.Time, status string)
+}
+
+// runLocks serializes concurrent runAgent calls for the same (agent, repo)
+// pair, preventing the lost-update race where two overlapping runs both read
+// the same old memory and whichever finishes last silently clobbers the
+// other's state. The cron path used to own this serialization; with cron
+// runs now flowing through the engine queue alongside webhook/dispatch/run
+// events, the engine owns it for every kind.
+type runLocks struct {
+	m sync.Map // key: string -> *sync.Mutex
+}
+
+func (r *runLocks) acquire(key string) {
+	v, _ := r.m.LoadOrStore(key, &sync.Mutex{})
+	v.(*sync.Mutex).Lock()
+}
+
+func (r *runLocks) release(key string) {
+	v, ok := r.m.Load(key)
+	if ok {
+		v.(*sync.Mutex).Unlock()
+	}
+}
+
 // Engine dispatches workflow events to the agents bound to the target repo.
 // It routes each event by matching against label bindings (labels:) for labeled
 // events and against event bindings (events:) for all event kinds.
@@ -76,6 +111,8 @@ type Engine struct {
 	graphRec      GraphRecorder
 	runTracker    RunTracker
 	stepRec       StepRecorder
+	lastRunRec    LastRunRecorder // optional; only fired for Kind=="cron"
+	runLock       runLocks        // serializes (agent, repo) runs across kinds
 	runsDeduped   atomic.Int64
 }
 
@@ -128,6 +165,14 @@ func (e *Engine) WithRunTracker(rt RunTracker) {
 // before Run.
 func (e *Engine) WithStepRecorder(r StepRecorder) {
 	e.stepRec = r
+}
+
+// WithLastRunRecorder attaches an optional recorder that is called after every
+// cron-fired run completes. Production wires the autonomous
+// scheduler here so its lastRuns map stays in sync with the actual runs
+// flowing through the engine.
+func (e *Engine) WithLastRunRecorder(r LastRunRecorder) {
+	e.lastRunRec = r
 }
 
 // WithGraphRecorder attaches an optional recorder that is called on each
@@ -217,7 +262,7 @@ func (e *Engine) HandleEvent(ctx context.Context, ev Event) error {
 	}
 	logBase.Msg("processing event")
 
-	if ev.Kind == "agent.dispatch" || ev.Kind == "agents.run" {
+	if ev.Kind == "agent.dispatch" || ev.Kind == "agents.run" || ev.Kind == "cron" {
 		return e.handleDispatchEvent(ctx, ev)
 	}
 	return e.fanOut(ctx, ev)
@@ -248,9 +293,10 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		return nil
 	}
 
-	// agent.dispatch requires an enabled binding; agents.run (manual trigger)
-	// skips the check — explicit operator intent always runs.
-	if ev.Kind != "agents.run" && !slices.ContainsFunc(repo.Use, func(b fleet.Binding) bool {
+	// agent.dispatch requires an enabled binding. agents.run (manual trigger)
+	// and autonomous (cron tick) skip the check — explicit operator intent or
+	// the cron's fire-time authority always runs.
+	if ev.Kind == "agent.dispatch" && !slices.ContainsFunc(repo.Use, func(b fleet.Binding) bool {
 		return b.Agent == targetName && b.IsEnabled()
 	}) {
 		return fmt.Errorf("dispatch: target agent %q is not bound to repo %q", targetName, ev.Repo.FullName)
@@ -281,11 +327,28 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		e.dispatcher.dedup.MarkWebhookRunInFlight(targetName, repo.Name, ev.Number)
 	}
 
+	// Autonomous (cron-fired) runs use the cron-namespace dedup window so a
+	// cron tick that fires moments after a dispatch already claimed the slot
+	// self-suppresses (matches the old scheduler.executeAgentRun behavior).
+	// Rollback on error so the slot is freed for the next tick; finalize on
+	// success so the dedup window is preserved.
+	if ev.Kind == "cron" && e.dispatcher != nil {
+		if !e.dispatcher.TryMarkAutonomousRun(targetName, repo.Name, time.Now()) {
+			e.logger.Info().
+				Str("repo", ev.Repo.FullName).
+				Str("target", targetName).
+				Msg("autonomous run skipped: dispatch already claimed within dedup window")
+			e.runsDeduped.Add(1)
+			return nil
+		}
+	}
+
 	e.logger.Info().
 		Str("repo", ev.Repo.FullName).
 		Str("target", targetName).
 		Int("number", ev.Number).
 		Str("invoked_by", ev.Actor).
+		Str("kind", ev.Kind).
 		Msg("running dispatched agent")
 
 	runErr := e.runAgent(ctx, ev, agent, cfg, runners)
@@ -297,6 +360,25 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		} else {
 			e.dispatcher.dedup.FinalizeWebhookRun(targetName, repo.Name, ev.Number)
 		}
+	}
+	// Release the cron-namespace mark taken above for autonomous runs.
+	if ev.Kind == "cron" && e.dispatcher != nil {
+		if runErr != nil {
+			e.dispatcher.RollbackAutonomousRun(targetName, repo.Name)
+		} else {
+			e.dispatcher.FinalizeAutonomousRun(targetName, repo.Name)
+		}
+	}
+	// Notify the autonomous scheduler so its lastRuns map (which drives the
+	// per-binding schedule display in /agents) reflects this run's outcome.
+	// Fired only for autonomous events — webhook/agents.run/dispatch runs
+	// have their own provenance and don't update the cron schedule view.
+	if ev.Kind == "cron" && e.lastRunRec != nil {
+		status := "success"
+		if runErr != nil {
+			status = "error"
+		}
+		e.lastRunRec.RecordLastRun(targetName, repo.Name, time.Now(), status)
 	}
 	return runErr
 }
@@ -539,6 +621,18 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		parentSpanID, _ = ev.Payload["parent_span_id"].(string)
 	}
 
+	// Serialise the read/run/write sequence for this (agent, repo) pair to
+	// prevent a lost-update race on memory. Without this lock two overlapping
+	// runs (cron tick + dispatch, two manual triggers, or any combination)
+	// would both read the same old memory, run independently, and whichever
+	// finishes last would silently clobber the other's persisted state.
+	// Held across the entire read/run/write sequence even when memory is
+	// disabled so concurrent runs of the same (agent, repo) still serialise
+	// on dispatch and trace recording.
+	runKey := agent.Name + "\x00" + ev.Repo.FullName
+	e.runLock.acquire(runKey)
+	defer e.runLock.release(runKey)
+
 	// Build the roster of peer agents for this repo.
 	roster := BuildRoster(cfg, ev.Repo.FullName, agent.Name)
 
@@ -654,13 +748,18 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Msg("agent run completed")
 
 	// Persist memory after a successful run, gated on the same flag that
-	// controlled the load above. A failure here is logged but does not fail
-	// the whole run: the agent's GitHub-side artifacts are already in place,
+	// controlled the load above. An empty resp.Memory is treated as "agent
+	// did not return updated memory — preserve existing" rather than "wipe":
+	// a structured-output omission must not silently destroy stored memory.
+	// To explicitly clear, the agent must return a non-empty sentinel that
+	// the operator opts into; the runtime's default is preserve-on-empty.
+	// A write failure here is logged but does not fail the whole run: the
+	// agent's GitHub-side artifacts are already in place,
 	// and surfacing a memory-write error as a run failure would mask the
 	// successful work that just landed. The next run reads from disk so the
 	// stale state is naturally observable; if persistence is consistently
 	// failing the operator will see it in logs.
-	if memoryEnabled {
+	if memoryEnabled && resp.Memory != "" {
 		if err := e.memory.WriteMemory(agent.Name, ev.Repo.FullName, resp.Memory); err != nil {
 			logger.Error().Err(err).Msg("agent run completed but memory write failed")
 		}

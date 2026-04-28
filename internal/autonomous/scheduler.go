@@ -110,7 +110,10 @@ func (r *runLocks) release(key string) {
 }
 
 // Scheduler wires cron-triggered agent bindings from the config into the
-// robfig/cron engine.
+// robfig/cron engine. It is a pure event producer: every cron tick pushes an
+// "cron" event onto the queue, and the engine handles execution
+// uniformly with all other event kinds. The engine notifies us back via
+// RecordLastRun so the per-binding schedule view in /agents stays current.
 type Scheduler struct {
 	cfg           *config.Config
 	runners       map[string]ai.Runner
@@ -128,6 +131,7 @@ type Scheduler struct {
 	dispatcher    *workflow.Dispatcher     // nil when dispatch is not configured
 	traceRec      workflow.TraceRecorder   // nil when tracing is not configured
 	runLock       runLocks                 // per-(agent,repo) mutex serializing the read/run/write sequence
+	queue         *workflow.DataChannels   // optional; when set, cron ticks push events here instead of running synchronously
 }
 
 // WithDispatcher attaches a Dispatcher to the Scheduler so that dispatch
@@ -163,6 +167,24 @@ func (s *Scheduler) WithRunnerBuilder(fn RunnerBuilder) {
 // stays in sync.
 func (s *Scheduler) WithHotReloadSink(sink HotReloadSink) {
 	s.hotReloadSink = sink
+}
+
+// WithEventQueue switches the scheduler to producer mode: every cron tick
+// pushes a "cron" event onto q instead of running synchronously
+// via executeAgentRun. Production wires the daemon's workflow.DataChannels
+// here so cron runs flow through the engine's normal event-handling path
+// (uniform with webhook, dispatch, on-demand). The engine's LastRunRecorder
+// hook calls RecordLastRun back into this scheduler when the run completes,
+// keeping the per-binding schedule view in /agents up to date.
+func (s *Scheduler) WithEventQueue(q *workflow.DataChannels) {
+	s.queue = q
+}
+
+// RecordLastRun is called by the engine after every autonomous run completes.
+// Implements workflow.LastRunRecorder so /agents and /status see the same
+// schedule state operators saw under the old in-scheduler execution path.
+func (s *Scheduler) RecordLastRun(agent, repo string, at time.Time, status string) {
+	s.recordLastRun(agent, repo, at, status)
 }
 
 // NewScheduler builds a scheduler and registers all cron-triggered bindings
@@ -242,12 +264,30 @@ func (s *Scheduler) makeCronJob(repo string, agentName string) func() {
 		if ctx.Err() != nil {
 			return
 		}
-		// Snapshot cfg+runners at execution time under the same lock so that
-		// the agent definition, backends, and runner set all come from the same
-		// config epoch. Resolving the agent by name here (rather than capturing
-		// a fleet.Agent by value at registration time) ensures that a cron
-		// closure that was dequeued just before a Reload completes will still
-		// execute with the post-reload definition once it acquires the read lock.
+
+		// Producer mode: push a "cron" event onto the engine's queue
+		// and return. The engine's LastRunRecorder hook calls back into
+		// RecordLastRun when the run completes, so the schedule view stays
+		// current without us watching the result here.
+		if s.queue != nil {
+			ev := workflow.Event{
+				ID:         workflow.GenEventID(),
+				Repo:       workflow.RepoRef{FullName: repo, Enabled: true},
+				Kind:       "cron",
+				Actor:      agentName,
+				Payload:    map[string]any{"target_agent": agentName},
+				EnqueuedAt: time.Now(),
+			}
+			if err := s.queue.PushEvent(ctx, ev); err != nil {
+				s.logger.Error().Str("repo", repo).Str("agent", agentName).Err(err).Msg("cron tick: enqueue failed")
+				s.recordLastRun(agentName, repo, time.Now(), "error")
+			}
+			return
+		}
+
+		// Legacy synchronous path retained for tests that don't wire a queue.
+		// Production always sets WithEventQueue; this branch is removed in a
+		// follow-up commit once the scheduler tests migrate.
 		s.bindMu.RLock()
 		cfg := s.cfg
 		runners := s.runners
@@ -264,10 +304,6 @@ func (s *Scheduler) makeCronJob(repo string, agentName string) func() {
 		if err := s.executeAgentRun(ctx, repo, agent, cfg, runners); err != nil {
 			switch {
 			case errors.Is(err, ErrDispatchSkipped):
-				// A dispatch already claimed this slot — the dedup skip is not
-				// a failure, but we record "skipped" rather than "success" so
-				// that /status does not mislead operators into thinking a real
-				// agent pass ran.
 				status = "skipped"
 			default:
 				s.logger.Error().Str("repo", repo).Str("agent", agent.Name).Err(err).Msg("autonomous agent run completed with errors")
@@ -481,7 +517,7 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent flee
 		s.traceRec.RecordSpan(
 			spanID, rootEventID, "",
 			agent.Name, backend,
-			repo, "autonomous", "",
+			repo, "cron", "",
 			0, 0,
 			0, len(resp.Artifacts), resp.Summary,
 			spanStart, spanEnd,
@@ -529,7 +565,7 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent flee
 
 	if s.dispatcher != nil && len(resp.Dispatch) > 0 {
 		// Synthesize a minimal event to carry repo context into the dispatcher.
-		// Autonomous runs have no originating GitHub event, so Kind="autonomous"
+		// Autonomous runs have no originating GitHub event, so Kind="cron"
 		// and Number=0. If the agent omitted number in a dispatch request, the
 		// dispatcher will fall back to this 0.
 		// Generate a fresh root event ID so dispatch chains from autonomous runs
@@ -538,7 +574,7 @@ func (s *Scheduler) executeAgentRun(ctx context.Context, repo string, agent flee
 		syntheticEv := workflow.Event{
 			ID:    rootEventID,
 			Repo:  workflow.RepoRef{FullName: repo, Enabled: true},
-			Kind:  "autonomous",
+			Kind:  "cron",
 			Actor: agent.Name,
 		}
 		// Autonomous runs do not belong to an inbound trace span so

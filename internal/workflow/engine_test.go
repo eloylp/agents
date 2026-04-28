@@ -947,3 +947,124 @@ func TestEngineUpdateConfigAndRunnersAtomic(t *testing.T) {
 		t.Errorf("runAgent observed %d mismatched cfg/runner pairs across reload epochs", n)
 	}
 }
+
+// stubLastRunRecorder captures LastRunRecorder calls so tests can assert that
+// only autonomous events trigger the schedule-view callback.
+type stubLastRunRecorder struct {
+	mu    sync.Mutex
+	calls []struct {
+		agent, repo, status string
+	}
+}
+
+func (s *stubLastRunRecorder) RecordLastRun(agent, repo string, _ time.Time, status string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, struct {
+		agent, repo, status string
+	}{agent, repo, status})
+}
+
+func (s *stubLastRunRecorder) snapshot() []struct{ agent, repo, status string } {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]struct{ agent, repo, status string }, len(s.calls))
+	copy(out, s.calls)
+	return out
+}
+
+// autonomousEvent builds an Event for a cron-fired autonomous run, matching
+// the shape the scheduler pushes onto the queue.
+func autonomousEvent(repo, agentName string) Event {
+	return Event{
+		ID:         GenEventID(),
+		Repo:       RepoRef{FullName: repo, Enabled: true},
+		Kind:       "cron",
+		Actor:      agentName,
+		Payload:    map[string]any{"target_agent": agentName},
+		EnqueuedAt: time.Now(),
+	}
+}
+
+// TestHandleEventAutonomousRunsTargetAgent verifies the engine handles an
+// "cron" event by resolving the target agent from the payload and
+// running it — same shape as agents.run, no binding lookup required (the
+// cron's fire-time authority is enough).
+func TestHandleEventAutonomousRunsTargetAgent(t *testing.T) {
+	t.Parallel()
+	e, runner := newTestEngine(nil)
+
+	if err := e.HandleEvent(context.Background(), autonomousEvent("owner/repo", "arch-reviewer")); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if got := runner.callCount(); got != 1 {
+		t.Fatalf("runner called %d times, want 1", got)
+	}
+	if got := runner.lastSystem(); !strings.Contains(got, "Focus on architecture.") {
+		t.Errorf("runner system prompt missing skill content: %q", got)
+	}
+}
+
+// TestHandleEventAutonomousFiresLastRunRecorder verifies that an autonomous
+// event triggers the LastRunRecorder hook so the autonomous scheduler's
+// lastRuns map (driving the per-binding schedule view in /agents) reflects
+// every run that flowed through the engine.
+func TestHandleEventAutonomousFiresLastRunRecorder(t *testing.T) {
+	t.Parallel()
+	e, _ := newTestEngine(nil)
+	rec := &stubLastRunRecorder{}
+	e.WithLastRunRecorder(rec)
+
+	if err := e.HandleEvent(context.Background(), autonomousEvent("owner/repo", "arch-reviewer")); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	calls := rec.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("LastRunRecorder calls = %d, want 1: %+v", len(calls), calls)
+	}
+	if calls[0].agent != "arch-reviewer" || calls[0].repo != "owner/repo" || calls[0].status != "success" {
+		t.Errorf("unexpected last-run record: %+v", calls[0])
+	}
+}
+
+// TestHandleEventNonAutonomousSkipsLastRunRecorder verifies that label/event
+// driven runs (webhook path) do not fire the LastRunRecorder hook — only
+// autonomous runs update the cron schedule view.
+func TestHandleEventNonAutonomousSkipsLastRunRecorder(t *testing.T) {
+	t.Parallel()
+	e, _ := newTestEngine(func(c *config.Config) {
+		c.Repos[0].Use = []fleet.Binding{
+			{Agent: "arch-reviewer", Labels: []string{"ai:review:arch-reviewer"}},
+		}
+	})
+	rec := &stubLastRunRecorder{}
+	e.WithLastRunRecorder(rec)
+
+	ev := labelEvent("issues.labeled", "owner/repo", "ai:review:arch-reviewer", 5)
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if got := len(rec.snapshot()); got != 0 {
+		t.Errorf("LastRunRecorder fired for non-autonomous event %d times, want 0", got)
+	}
+}
+
+// TestHandleEventAutonomousReportsErrorStatus verifies a runner failure
+// surfaces as status="error" in the LastRunRecorder callback so the schedule
+// view distinguishes broken from healthy bindings without a separate fetch.
+func TestHandleEventAutonomousReportsErrorStatus(t *testing.T) {
+	t.Parallel()
+	e, runner := newTestEngine(nil)
+	runner.runFn = func(ai.Request) error { return errors.New("boom") }
+	rec := &stubLastRunRecorder{}
+	e.WithLastRunRecorder(rec)
+
+	err := e.HandleEvent(context.Background(), autonomousEvent("owner/repo", "arch-reviewer"))
+	if err == nil {
+		t.Fatal("expected runner error to propagate")
+	}
+	calls := rec.snapshot()
+	if len(calls) != 1 || calls[0].status != "error" {
+		t.Fatalf("expected one error-status record, got %+v", calls)
+	}
+}

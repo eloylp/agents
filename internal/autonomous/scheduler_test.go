@@ -702,7 +702,7 @@ func TestSchedulerCronMarkNotWrittenOnRunFailure(t *testing.T) {
 			// reviewer (number=0) must NOT be suppressed — no cron mark should have
 			// been written because the run never completed.
 			originator := agentMap["notifier"]
-			ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
+			ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "cron", Number: 0}
 			dispatcher.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
 				{Agent: "reviewer", Reason: "retry after failure"},
 			})
@@ -841,7 +841,7 @@ func TestSchedulerCronMarkKeptAfterSuccessfulRunWithDispatchEnqueueFailure(t *te
 	q2 := &fakeQueue{}
 	dispatcher2 := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q2, zerolog.Nop())
 	originator := agentMap["notifier"]
-	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
+	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "cron", Number: 0}
 	dispatcher2.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
 		{Agent: "reviewer", Reason: "follow-up dispatch"},
 	})
@@ -928,7 +928,7 @@ func TestSchedulerCronRefcountDecrementedOnPostRunEnqueueFailure(t *testing.T) {
 	originator := agentMapWithAllowDispatch["notifier"]
 	ev := workflow.Event{
 		Repo:  workflow.RepoRef{FullName: "owner/repo", Enabled: true},
-		Kind:  "autonomous",
+		Kind:  "cron",
 		Actor: "notifier",
 	}
 	time.Sleep(2 * time.Second) // wait for the 1-second TTL to expire
@@ -997,7 +997,7 @@ func TestSchedulerPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 	q2 := &fakeQueue{}
 	dispatcher2 := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q2, zerolog.Nop())
 	originator := agentMap["reviewer"]
-	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
+	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "cron", Number: 0}
 	dispatcher2.ProcessDispatches(context.Background(), originator, ev, "root-post-run", 0, "", []ai.DispatchRequest{
 		{Agent: "notifier", Reason: "follow-up dispatch within dedup window"},
 	})
@@ -1117,7 +1117,7 @@ func TestSchedulerCronMarkBlocksDispatchDuringInFlightRun(t *testing.T) {
 
 	// Simulate notifier dispatching to reviewer while the run is in progress.
 	originator := agentMap["notifier"]
-	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
+	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "cron", Number: 0}
 	_ = dispatcher.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
 		{Agent: "reviewer", Reason: "arrived during in-flight run"},
 	})
@@ -1784,7 +1784,7 @@ func TestSchedulerWriteMemoryFailureFailsRun(t *testing.T) {
 	// suppressed — the caller can immediately retry to recover the lost memory.
 	// "notifier" originates the retry dispatch to "reviewer".
 	originator := agentMap["notifier"]
-	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
+	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "cron", Number: 0}
 	_ = dispatcher.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
 		{Agent: "reviewer", Reason: "retry after memory write failure"},
 	})

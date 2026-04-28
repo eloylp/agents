@@ -672,7 +672,7 @@ func TestPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 
 	// Dispatch arriving after the run — still within the TTL window — must be suppressed.
 	originator := agents["pr-reviewer"]
-	ev := Event{Repo: RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
+	ev := Event{Repo: RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "cron", Number: 0}
 	d.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
 		{Agent: "coder", Reason: "dispatch after run, within window"},
 	})
@@ -813,7 +813,7 @@ func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 	// A dispatch arriving after the TTL window must still be suppressed because
 	// the cron run is still in flight (refcount > 0).
 	originator := agents["pr-reviewer"]
-	ev := Event{Repo: RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
+	ev := Event{Repo: RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "cron", Number: 0}
 	d.ProcessDispatches(context.Background(), originator, ev, "root-past-ttl", 0, "", []ai.DispatchRequest{
 		{Agent: "coder", Reason: "dispatch while long-running cron job is still in flight"},
 	})
@@ -852,7 +852,7 @@ func TestFinalizeAutonomousRunKeepsTTLBlocksDispatchWithinWindow(t *testing.T) {
 	}
 	cfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: ttlSeconds}
 	originator := agents["pr-reviewer"]
-	ev := Event{Repo: RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "autonomous", Number: 0}
+	ev := Event{Repo: RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "cron", Number: 0}
 
 	q1 := &fakeQueue{}
 	d1 := NewDispatcher(cfg, agents, dedup, q1, zerolog.Nop())

@@ -128,6 +128,14 @@ func run() error {
 	// calls propagate new config and runner maps to the event-driven path
 	// without a daemon restart.
 	scheduler.WithHotReloadSink(engine)
+	// Cron ticks now flow through the event queue: the scheduler pushes an
+	// "cron" event and the engine handles execution uniformly with all
+	// other event kinds (transcript steps, run-tracker, queue-wait time,
+	// dispatch dedup, run-lock — all in one place). The engine notifies the
+	// scheduler back via LastRunRecorder so the per-binding schedule view in
+	// /agents stays current.
+	scheduler.WithEventQueue(dataChannels)
+	engine.WithLastRunRecorder(scheduler)
 	shutdown := time.Duration(cfg.Daemon.HTTP.ShutdownTimeoutSeconds) * time.Second
 	workers := cfg.Daemon.Processor.MaxConcurrentAgents
 	processor := workflow.NewProcessor(dataChannels, engine, workers, shutdown, logger)
