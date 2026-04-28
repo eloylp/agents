@@ -16,14 +16,17 @@ type agentScheduleJSON struct {
 
 // agentBindingJSON is the wire shape for one agent-to-repo binding in the
 // fleet snapshot view. Schedule is populated only for cron bindings that
-// have scheduling state.
+// have scheduling state. RepoEnabled mirrors the parent repo's Enabled flag
+// so consumers can distinguish "binding itself disabled" from "parent repo
+// disabled" without a second fetch against /repos.
 type agentBindingJSON struct {
-	Repo     string             `json:"repo"`
-	Labels   []string           `json:"labels,omitempty"`
-	Events   []string           `json:"events,omitempty"`
-	Cron     string             `json:"cron,omitempty"`
-	Enabled  bool               `json:"enabled"`
-	Schedule *agentScheduleJSON `json:"schedule,omitempty"`
+	Repo        string             `json:"repo"`
+	RepoEnabled bool               `json:"repo_enabled"`
+	Labels      []string           `json:"labels,omitempty"`
+	Events      []string           `json:"events,omitempty"`
+	Cron        string             `json:"cron,omitempty"`
+	Enabled     bool               `json:"enabled"`
+	Schedule    *agentScheduleJSON `json:"schedule,omitempty"`
 }
 
 // apiAgentJSON is the wire shape for one agent in the GET /agents fleet
@@ -79,23 +82,26 @@ func (h *Handler) HandleAgentsView(w http.ResponseWriter, _ *http.Request) {
 			CurrentStatus: currentStatus,
 		}
 
-		// Collect bindings from all repos that reference this agent.
-		// Disabled repos are excluded entirely — they are not active in the
-		// runtime, so they should not appear in the fleet snapshot.
+		// Collect bindings from all repos that reference this agent,
+		// including disabled-repo bindings. Filtering belongs to the consumer:
+		// the runtime refuses to dispatch to disabled repos at the boundary,
+		// but inspection surfaces (memory page, audit views, MCP) need to see
+		// the full configured topology — hiding a binding here also hides the
+		// agent's memory in the dashboard, which is exactly the bug we don't
+		// want. The repo_enabled flag travels alongside so consumers can mark
+		// inactive bindings without a second fetch.
 		for _, repo := range cfg.Repos {
-			if !repo.Enabled {
-				continue
-			}
 			for _, b := range repo.Use {
 				if b.Agent != a.Name {
 					continue
 				}
 				binding := agentBindingJSON{
-					Repo:    repo.Name,
-					Labels:  b.Labels,
-					Events:  b.Events,
-					Cron:    b.Cron,
-					Enabled: b.IsEnabled(),
+					Repo:        repo.Name,
+					RepoEnabled: repo.Enabled,
+					Labels:      b.Labels,
+					Events:      b.Events,
+					Cron:        b.Cron,
+					Enabled:     b.IsEnabled(),
 				}
 				// Attach scheduling state onto the binding so agents with cron
 				// schedules in multiple repos each carry their own schedule data.

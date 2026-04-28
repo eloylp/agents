@@ -208,9 +208,14 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 	}
 }
 
-// TestHandleAPIAgentsSkipsDisabledRepos verifies that repos with enabled:false
-// do not appear in the /api/agents fleet snapshot.
-func TestHandleAPIAgentsSkipsDisabledRepos(t *testing.T) {
+// TestHandleAPIAgentsIncludesDisabledRepoBindings verifies that bindings on
+// disabled repos appear in the /agents fleet snapshot with repo_enabled=false.
+// The wire view is for inspection (memory page, audit, MCP), not runtime
+// dispatch — hiding disabled-repo bindings here also hides the agent's
+// memory in the dashboard. The runtime entry points (POST /run, webhook,
+// engine.HandleEvent) refuse disabled repos at the boundary; the wire view
+// trusts consumers to filter.
+func TestHandleAPIAgentsIncludesDisabledRepoBindings(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) {
 		c.Agents = []fleet.Agent{{Name: "worker", Backend: "claude"}}
@@ -244,11 +249,26 @@ func TestHandleAPIAgentsSkipsDisabledRepos(t *testing.T) {
 		t.Fatalf("want 1 agent, got %d", len(agents))
 	}
 	bindings := agents[0].Bindings
-	if len(bindings) != 1 {
-		t.Fatalf("want exactly 1 binding (active repo only), got %d: %+v", len(bindings), bindings)
+	if len(bindings) != 2 {
+		t.Fatalf("want 2 bindings (both repos), got %d: %+v", len(bindings), bindings)
 	}
-	if bindings[0].Repo != "owner/active-repo" {
-		t.Errorf("want binding for owner/active-repo, got %q", bindings[0].Repo)
+	byRepo := map[string]viewBindingJSON{}
+	for _, b := range bindings {
+		byRepo[b.Repo] = b
+	}
+	active, ok := byRepo["owner/active-repo"]
+	if !ok {
+		t.Fatal("missing binding for owner/active-repo")
+	}
+	if !active.RepoEnabled {
+		t.Errorf("owner/active-repo: want repo_enabled=true, got false")
+	}
+	disabled, ok := byRepo["owner/disabled-repo"]
+	if !ok {
+		t.Fatal("missing binding for owner/disabled-repo")
+	}
+	if disabled.RepoEnabled {
+		t.Errorf("owner/disabled-repo: want repo_enabled=false, got true")
 	}
 }
 

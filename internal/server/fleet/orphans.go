@@ -103,15 +103,14 @@ func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
 		return nil
 	}
 
+	// Index every repo that references an agent, regardless of repo or
+	// binding enabled state. The orphan badge fires on a "model not in the
+	// backend catalog" criterion, not on runtime reachability — so the user
+	// needs to see every reference that would need fixing (or re-enabling)
+	// to clear the orphan, including currently-paused bindings.
 	reposByAgent := make(map[string]map[string]struct{})
 	for _, repo := range cfg.Repos {
-		if !repo.Enabled {
-			continue
-		}
 		for _, binding := range repo.Use {
-			if !binding.IsEnabled() {
-				continue
-			}
 			set := reposByAgent[binding.Agent]
 			if set == nil {
 				set = make(map[string]struct{})

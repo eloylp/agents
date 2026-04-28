@@ -47,12 +47,13 @@ type viewScheduleJSON struct {
 }
 
 type viewBindingJSON struct {
-	Repo     string            `json:"repo"`
-	Labels   []string          `json:"labels,omitempty"`
-	Events   []string          `json:"events,omitempty"`
-	Cron     string            `json:"cron,omitempty"`
-	Enabled  bool              `json:"enabled"`
-	Schedule *viewScheduleJSON `json:"schedule,omitempty"`
+	Repo        string            `json:"repo"`
+	RepoEnabled bool              `json:"repo_enabled"`
+	Labels      []string          `json:"labels,omitempty"`
+	Events      []string          `json:"events,omitempty"`
+	Cron        string            `json:"cron,omitempty"`
+	Enabled     bool              `json:"enabled"`
+	Schedule    *viewScheduleJSON `json:"schedule,omitempty"`
 }
 
 type viewAgentJSON struct {
