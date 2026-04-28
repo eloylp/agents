@@ -2,9 +2,8 @@ package autonomous
 
 import (
 	"context"
-	"errors"
-	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,16 +15,13 @@ import (
 	"github.com/eloylp/agents/internal/workflow"
 )
 
-// mapMemory is a simple in-memory MemoryBackend for tests, replacing the
-// removed file-based NewMemoryStore.
+// mapMemory is an in-memory MemoryBackend for tests that don't need a real DB.
 type mapMemory struct {
 	mu   sync.Mutex
 	data map[string]string
 }
 
-func newMapMemory() *mapMemory {
-	return &mapMemory{data: make(map[string]string)}
-}
+func newMapMemory() *mapMemory { return &mapMemory{data: make(map[string]string)} }
 
 func (m *mapMemory) ReadMemory(agent, repo string) (string, error) {
 	m.mu.Lock()
@@ -40,49 +36,68 @@ func (m *mapMemory) WriteMemory(agent, repo, content string) error {
 	return nil
 }
 
-type stubRunner struct {
-	mu        sync.Mutex
-	calls     int
-	workflows []string
-	memory    string
-}
+// stubRunner satisfies ai.Runner for the reload tests that need to construct a
+// scheduler. Cron-fired runs no longer execute through this runner — they are
+// pushed to the event queue and the engine handles them — so the runner here
+// only exists to satisfy the runners map contract during construction.
+//
+// The id field is a sentinel: two empty structs may share an address under
+// Go's zero-size variable rule, which would make newStubRunner() == newStubRunner()
+// and break the rebuild-detected-by-pointer-identity check below.
+type stubRunner struct{ id int }
 
-func (s *stubRunner) Run(_ context.Context, req ai.Request) (ai.Response, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.calls++
-	s.workflows = append(s.workflows, req.Workflow)
-	return ai.Response{Memory: s.memory}, nil
-}
-
-// blockingRunner signals on ready when a run starts, then blocks until block is closed.
-type blockingRunner struct {
-	mu    sync.Mutex
-	calls int
-	ready chan struct{}
-	block chan struct{}
-}
-
-func (b *blockingRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
-	b.mu.Lock()
-	b.calls++
-	b.mu.Unlock()
-	b.ready <- struct{}{}
-	<-b.block
+func (s *stubRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
 	return ai.Response{}, nil
 }
 
-// errorRunner satisfies ai.Runner and always returns the configured error.
-type errorRunner struct {
-	err error
+var stubRunnerSeq atomic.Int64
+
+func newStubRunner() *stubRunner {
+	return &stubRunner{id: int(stubRunnerSeq.Add(1))}
 }
 
-func (r *errorRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
-	return ai.Response{}, r.err
+// testHotReloadSink is a minimal HotReloadSink for tests.
+type testHotReloadSink struct {
+	updateConfig          func(*config.Config)
+	updateRunners         func(map[string]ai.Runner)
+	updateConfigAndRunner func(*config.Config, map[string]ai.Runner)
 }
 
-// baseCfg returns a minimal valid Config suitable for scheduler tests. Use
-// `modify` to tailor the repo bindings.
+func (s *testHotReloadSink) UpdateConfig(cfg *config.Config) {
+	if s.updateConfig != nil {
+		s.updateConfig(cfg)
+	}
+}
+func (s *testHotReloadSink) UpdateRunners(r map[string]ai.Runner) {
+	if s.updateRunners != nil {
+		s.updateRunners(r)
+	}
+}
+func (s *testHotReloadSink) UpdateConfigAndRunners(cfg *config.Config, r map[string]ai.Runner) {
+	if s.updateConfigAndRunner != nil {
+		s.updateConfigAndRunner(cfg, r)
+	}
+}
+
+// drainQueue reads up to n events from a buffered DataChannels without
+// blocking past the timeout. Used by cron-tick tests to assert the pushed
+// event shape.
+func drainQueue(t *testing.T, dc *workflow.DataChannels, n int) []workflow.Event {
+	t.Helper()
+	out := make([]workflow.Event, 0, n)
+	deadline := time.After(100 * time.Millisecond)
+	for len(out) < n {
+		select {
+		case ev := <-dc.EventChan():
+			out = append(out, ev)
+		case <-deadline:
+			return out
+		}
+	}
+	return out
+}
+
+// baseCfg returns a minimal valid Config suitable for scheduler tests.
 func baseCfg(modify func(*config.Config)) *config.Config {
 	cfg := &config.Config{
 		Daemon: config.DaemonConfig{
@@ -147,7 +162,7 @@ func TestNewSchedulerEntryRegistration(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s, err := NewScheduler(baseCfg(tc.mutate), map[string]ai.Runner{"claude": &stubRunner{}}, newMapMemory(), zerolog.Nop())
+			s, err := NewScheduler(baseCfg(tc.mutate), map[string]ai.Runner{"claude": newStubRunner()}, newMapMemory(), zerolog.Nop())
 			if err != nil {
 				t.Fatalf("NewScheduler: %v", err)
 			}
@@ -158,1062 +173,70 @@ func TestNewSchedulerEntryRegistration(t *testing.T) {
 	}
 }
 
-func TestTriggerAgentRunsSynchronously(t *testing.T) {
+// TestCronTickPushesEvent verifies the producer-mode contract: when a cron
+// closure fires, the scheduler pushes a "cron" event with the right repo,
+// agent, and target_agent payload onto the queue and returns immediately.
+// Engine handling of that event is exercised in workflow/engine_test.go.
+func TestCronTickPushesEvent(t *testing.T) {
 	t.Parallel()
-	cfg := baseCfg(nil)
-	runner := &stubRunner{}
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
+	s, err := NewScheduler(baseCfg(nil), map[string]ai.Runner{"claude": newStubRunner()}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
+	q := workflow.NewDataChannels(4)
+	s.WithEventQueue(q)
 
-	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
-		t.Fatalf("TriggerAgent: %v", err)
-	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	if runner.calls != 1 {
-		t.Errorf("expected 1 runner call, got %d", runner.calls)
-	}
-	if len(runner.workflows) == 0 || !strings.HasPrefix(runner.workflows[0], "autonomous:claude:reviewer") {
-		t.Errorf("unexpected workflow tag: %v", runner.workflows)
-	}
-}
+	// Fire the cron closure exactly once. In production the cron library
+	// invokes this on each tick.
+	s.cron.Entry(s.agentEntries[0].cronID).WrappedJob.Run()
 
-func TestTriggerAgentRejections(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name      string
-		mutateCfg func(*config.Config)
-		agent     string
-		wantErr   string
-	}{
-		{
-			name: "unbound agent",
-			mutateCfg: func(c *config.Config) {
-				c.Agents = append(c.Agents, fleet.Agent{Name: "orphan", Backend: "claude", Prompt: "x"})
-			},
-			agent:   "orphan",
-			wantErr: "not bound",
-		},
-		{
-			name:    "unknown agent",
-			agent:   "ghost",
-			wantErr: "not found",
-		},
-		{
-			name:      "disabled repo",
-			mutateCfg: func(c *config.Config) { c.Repos[0].Enabled = false },
-			agent:     "reviewer",
-			wantErr:   "disabled",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			cfg := baseCfg(tc.mutateCfg)
-			s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, newMapMemory(), zerolog.Nop())
-			if err != nil {
-				t.Fatalf("NewScheduler: %v", err)
-			}
-			err = s.TriggerAgent(context.Background(), tc.agent, "owner/repo")
-			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Errorf("expected error containing %q, got %v", tc.wantErr, err)
-			}
-		})
-	}
-}
-
-func TestResolveBackendRequiresExplicitBackend(t *testing.T) {
-	t.Parallel()
-	cfg := baseCfg(func(c *config.Config) { c.Agents[0].Backend = "" })
-	runner := &stubRunner{}
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	err = s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
-	if err == nil || !strings.Contains(err.Error(), "no configured backend") {
-		t.Fatalf("TriggerAgent: got %v, want explicit backend error", err)
-	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	if runner.calls != 0 {
-		t.Errorf("expected no runner invocation when backend is missing, got %d calls", runner.calls)
-	}
-}
-
-func TestSchedulerSkipsJobWhenPreviousRunStillRunning(t *testing.T) {
-	t.Parallel()
-	ready := make(chan struct{}, 1)
-	block := make(chan struct{})
-	runner := &blockingRunner{ready: ready, block: block}
-	cfg := baseCfg(nil)
-
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-
-	wrappedJob := s.cron.Entry(s.agentEntries[0].cronID).WrappedJob
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		wrappedJob.Run()
-	}()
-	<-ready
-	// Second invocation must be skipped while the first is still running.
-	wrappedJob.Run()
-	close(block)
-	<-done
-
-	runner.mu.Lock()
-	calls := runner.calls
-	runner.mu.Unlock()
-	if calls != 1 {
-		t.Errorf("expected 1 invocation (second skipped), got %d", calls)
-	}
-}
-
-// promptCapturingRunner records the System part from each Run call for
-// inspection. Since skills, agent prompt, and the AllowPRs restriction all
-// live in the stable System part, tests that check for those tokens inspect
-// req.System.
-type promptCapturingRunner struct {
-	mu      sync.Mutex
-	prompts []string
-}
-
-func (r *promptCapturingRunner) Run(_ context.Context, req ai.Request) (ai.Response, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.prompts = append(r.prompts, req.System)
-	return ai.Response{}, nil
-}
-
-// dispatchingRunner returns a fixed dispatch request on every Run call.
-type dispatchingRunner struct {
-	dispatches []ai.DispatchRequest
-}
-
-func (r *dispatchingRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
-	return ai.Response{Summary: "done", Dispatch: r.dispatches}, nil
-}
-
-// fakeQueue records events pushed to it, satisfying workflow.EventEnqueuer.
-type fakeQueue struct {
-	mu     sync.Mutex
-	events []workflow.Event
-	err    error
-}
-
-func (q *fakeQueue) PushEvent(_ context.Context, ev workflow.Event) error {
-	if q.err != nil {
-		return q.err
-	}
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.events = append(q.events, ev)
-	return nil
-}
-
-func (q *fakeQueue) popped() []workflow.Event {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	out := make([]workflow.Event, len(q.events))
-	copy(out, q.events)
-	return out
-}
-
-// dispatchCfgForTest builds a minimal config where "reviewer" can dispatch
-// "notifier" and "notifier" has allow_dispatch: true.
-func dispatchCfgForTest() *config.Config {
-	return baseCfg(func(c *config.Config) {
-		c.Agents = []fleet.Agent{
-			{
-				Name:        "reviewer",
-				Backend:     "claude",
-				Prompt:      "Review PRs.",
-				CanDispatch: []string{"notifier"},
-			},
-			{
-				Name:          "notifier",
-				Backend:       "claude",
-				Prompt:        "Notify team.",
-				AllowDispatch: true,
-			},
-		}
-		c.Repos[0].Use = []fleet.Binding{
-			{Agent: "reviewer", Cron: "* * * * *"},
-			{Agent: "notifier", Cron: "0 0 * * *"},
-		}
-	})
-}
-
-func TestSchedulerDispatchesEnqueuedWhenDispatcherAttached(t *testing.T) {
-	t.Parallel()
-	cfg := dispatchCfgForTest()
-
-	runner := &dispatchingRunner{
-		dispatches: []ai.DispatchRequest{
-			{Agent: "notifier", Reason: "review done", Number: 42},
-		},
-	}
-	q := &fakeQueue{}
-	agentMap := map[string]fleet.Agent{
-		"reviewer": cfg.Agents[0],
-		"notifier": cfg.Agents[1],
-	}
-	dedup := workflow.NewDispatchDedupStore(300)
-	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
-	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
-
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	s.WithDispatcher(dispatcher)
-
-	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
-		t.Fatalf("TriggerAgent: %v", err)
-	}
-
-	events := q.popped()
+	events := drainQueue(t, q, 1)
 	if len(events) != 1 {
-		t.Fatalf("expected 1 dispatched event, got %d", len(events))
+		t.Fatalf("queue events = %d, want 1", len(events))
 	}
 	ev := events[0]
-	if ev.Kind != "agent.dispatch" {
-		t.Errorf("event kind: got %q, want %q", ev.Kind, "agent.dispatch")
+	if ev.Kind != "cron" {
+		t.Errorf("Kind = %q, want %q", ev.Kind, "cron")
 	}
-	if got, ok := ev.Payload["target_agent"].(string); !ok || got != "notifier" {
-		t.Errorf("target_agent: got %v, want %q", ev.Payload["target_agent"], "notifier")
+	if ev.Repo.FullName != "owner/repo" || !ev.Repo.Enabled {
+		t.Errorf("Repo = %+v, want owner/repo enabled", ev.Repo)
 	}
-	if ev.Number != 42 {
-		t.Errorf("event number: got %d, want 42", ev.Number)
+	if target, _ := ev.Payload["target_agent"].(string); target != "reviewer" {
+		t.Errorf("payload.target_agent = %v, want reviewer", ev.Payload["target_agent"])
 	}
-	if ev.Repo.FullName != "owner/repo" {
-		t.Errorf("event repo: got %q, want %q", ev.Repo.FullName, "owner/repo")
+	if ev.Actor != "reviewer" {
+		t.Errorf("Actor = %q, want reviewer", ev.Actor)
 	}
 }
 
-func TestSchedulerAutonomousDispatchCarriesNonEmptyRootEventID(t *testing.T) {
+// TestRecordLastRunUpdatesAgentStatuses verifies the LastRunRecorder hook the
+// engine calls when a cron run completes. The status surfaces in /agents via
+// AgentStatuses() so the schedule view stays current.
+func TestRecordLastRunUpdatesAgentStatuses(t *testing.T) {
 	t.Parallel()
-	cfg := dispatchCfgForTest()
-
-	runner := &dispatchingRunner{
-		dispatches: []ai.DispatchRequest{
-			{Agent: "notifier", Reason: "cron done"},
-		},
-	}
-	q := &fakeQueue{}
-	agentMap := map[string]fleet.Agent{
-		"reviewer": cfg.Agents[0],
-		"notifier": cfg.Agents[1],
-	}
-	dedup := workflow.NewDispatchDedupStore(300)
-	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
-	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
-
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
+	s, err := NewScheduler(baseCfg(nil), map[string]ai.Runner{"claude": newStubRunner()}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
-	s.WithDispatcher(dispatcher)
+	at := time.Date(2026, 4, 28, 10, 0, 0, 0, time.UTC)
+	s.RecordLastRun("reviewer", "owner/repo", at, "success")
 
-	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
-		t.Fatalf("TriggerAgent: %v", err)
+	statuses := s.AgentStatuses()
+	if len(statuses) != 1 {
+		t.Fatalf("statuses = %d, want 1", len(statuses))
 	}
-
-	events := q.popped()
-	if len(events) != 1 {
-		t.Fatalf("expected 1 dispatched event, got %d", len(events))
+	if statuses[0].LastStatus != "success" {
+		t.Errorf("LastStatus = %q, want success", statuses[0].LastStatus)
 	}
-	ev := events[0]
-
-	// The dispatched event must carry a non-empty root_event_id so that
-	// autonomous dispatch chains preserve the correlation ID throughout.
-	rootEventID, ok := ev.Payload["root_event_id"].(string)
-	if !ok || rootEventID == "" {
-		t.Errorf("root_event_id: got %v, want non-empty string", ev.Payload["root_event_id"])
-	}
-	// ev.ID is the synthetic event's own identity and must differ from root_event_id.
-	if ev.ID == "" {
-		t.Error("dispatch event ID must not be empty")
-	}
-	if ev.ID == rootEventID {
-		t.Errorf("ev.ID must differ from root_event_id %q", rootEventID)
+	if statuses[0].LastRun == nil || !statuses[0].LastRun.Equal(at) {
+		t.Errorf("LastRun = %v, want %v", statuses[0].LastRun, at)
 	}
 }
 
-func TestSchedulerDispatchesIgnoredWhenNoDispatcherAttached(t *testing.T) {
-	t.Parallel()
-	cfg := dispatchCfgForTest()
-
-	runner := &dispatchingRunner{
-		dispatches: []ai.DispatchRequest{
-			{Agent: "notifier", Reason: "review done"},
-		},
-	}
-
-	// No dispatcher attached — TriggerAgent should still succeed and just log.
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-
-	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
-		t.Fatalf("TriggerAgent: %v", err)
-	}
-	// No panic or error: success.
-}
-
-func TestSchedulerCronRunSkippedWhenAlreadySeenInDedup(t *testing.T) {
-	t.Parallel()
-	cfg := dispatchCfgForTest()
-
-	runner := &stubRunner{}
-	q := &fakeQueue{}
-	agentMap := map[string]fleet.Agent{
-		"reviewer": cfg.Agents[0],
-		"notifier": cfg.Agents[1],
-	}
-	dedup := workflow.NewDispatchDedupStore(300)
-	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
-	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
-
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	s.WithDispatcher(dispatcher)
-
-	// Simulate a dispatch having arrived first for (reviewer, owner/repo, 0):
-	// write the dispatch-namespace dedup key directly, as ProcessDispatches
-	// would. CheckAndMarkAutonomousRun checks this dispatch namespace and must
-	// detect the prior dispatch and skip the cron run.
-	_ = dedup.SeenOrAdd("reviewer", "owner/repo", 0, time.Now())
-
-	// TriggerAgent must skip the run and return ErrDispatchSkipped.
-	err = s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
-	if !errors.Is(err, ErrDispatchSkipped) {
-		t.Fatalf("TriggerAgent: got %v, want ErrDispatchSkipped", err)
-	}
-
-	runner.mu.Lock()
-	calls := runner.calls
-	runner.mu.Unlock()
-	if calls != 0 {
-		t.Errorf("expected runner not to be called (run skipped by dedup), got %d call(s)", calls)
-	}
-}
-
-// blockingQueue is a workflow.EventEnqueuer whose PushEvent signals readyCh
-// then blocks until releaseCh is closed. It is used to freeze the dispatch
-// pipeline between TryClaim (before PushEvent) and CommitClaim (after PushEvent)
-// so that concurrent scheduler checks can be tested in that exact window.
-type blockingQueue struct {
-	readyCh   chan struct{} // closed by PushEvent to signal "I am blocking"
-	releaseCh chan struct{} // close to let PushEvent return
-}
-
-func (q *blockingQueue) PushEvent(_ context.Context, _ workflow.Event) error {
-	close(q.readyCh) // signal that TryClaim has run and we're now blocking
-	<-q.releaseCh    // wait for the test to release us
-	return nil
-}
-
-// TestCronRunBlockedByPendingDispatchClaim is a regression test for the race
-// between a dispatch's TryClaim→CommitClaim window and a concurrent cron/manual
-// run. Before the fix, DispatchAlreadyClaimed only saw committed claims; a
-// cron run that checked during the pending window would see false, proceed, and
-// run concurrently with the in-flight dispatch. After the fix,
-// SeesPendingOrCommitted makes DispatchAlreadyClaimed return true for any
-// pending or committed claim, so exactly one path wins.
-func TestCronRunBlockedByPendingDispatchClaim(t *testing.T) {
-	t.Parallel()
-	cfg := dispatchCfgForTest()
-
-	notifierRunner := &stubRunner{}
-	agentMap := map[string]fleet.Agent{
-		"reviewer": cfg.Agents[0],
-		"notifier": cfg.Agents[1],
-	}
-
-	bq := &blockingQueue{
-		readyCh:   make(chan struct{}),
-		releaseCh: make(chan struct{}),
-	}
-	dedup := workflow.NewDispatchDedupStore(300)
-	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
-	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, bq, zerolog.Nop())
-
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": notifierRunner}, newMapMemory(), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	s.WithDispatcher(dispatcher)
-
-	// Start a dispatch to "notifier" in a goroutine. ProcessDispatches will
-	// TryClaim the (notifier, owner/repo, 0) slot, then block inside PushEvent
-	// (before CommitClaim). This is the race window being tested.
-	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}}
-	dispatchDone := make(chan struct{})
-	go func() {
-		defer close(dispatchDone)
-		_ = dispatcher.ProcessDispatches(context.Background(), cfg.Agents[0], ev, "root-id", 0, "",
-			[]ai.DispatchRequest{{Agent: "notifier", Reason: "test"}})
-	}()
-
-	// Wait until PushEvent is blocked — at this point TryClaim has run and the
-	// slot is pending (not yet committed). A cron check in this window should
-	// now detect the pending claim and skip.
-	<-bq.readyCh
-
-	// TriggerAgent for "notifier" must return ErrDispatchSkipped, not proceed
-	// to run the agent concurrently with the in-flight dispatch.
-	triggerErr := s.TriggerAgent(context.Background(), "notifier", "owner/repo")
-	if !errors.Is(triggerErr, ErrDispatchSkipped) {
-		t.Errorf("TriggerAgent: got %v, want ErrDispatchSkipped", triggerErr)
-	}
-
-	// Unblock the dispatch goroutine and wait for it to finish.
-	close(bq.releaseCh)
-	<-dispatchDone
-
-	notifierRunner.mu.Lock()
-	calls := notifierRunner.calls
-	notifierRunner.mu.Unlock()
-	if calls != 0 {
-		t.Errorf("expected notifier runner not to be called (blocked by pending claim), got %d call(s)", calls)
-	}
-}
-
-// TestSchedulerCronRunNotSuppressedByPriorCronRun verifies that two consecutive
-// cron runs for the same agent both execute. MarkAutonomousRun writes a
-// cron-namespace mark (not a dispatch-namespace entry), and cron runs only check
-// the dispatch namespace via DispatchAlreadyClaimed, so the cron mark never
-// suppresses subsequent cron runs.
-func TestSchedulerCronRunNotSuppressedByPriorCronRun(t *testing.T) {
-	t.Parallel()
-	cfg := dispatchCfgForTest()
-
-	runner := &stubRunner{}
-	q := &fakeQueue{}
-	agentMap := map[string]fleet.Agent{
-		"reviewer": cfg.Agents[0],
-		"notifier": cfg.Agents[1],
-	}
-	dedup := workflow.NewDispatchDedupStore(300)
-	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
-	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
-
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	s.WithDispatcher(dispatcher)
-
-	// First cron/manual run.
-	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
-		t.Fatalf("TriggerAgent (1st): %v", err)
-	}
-	// Second cron/manual run within the same dedup window must also execute.
-	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
-		t.Fatalf("TriggerAgent (2nd): %v", err)
-	}
-
-	runner.mu.Lock()
-	calls := runner.calls
-	runner.mu.Unlock()
-	if calls != 2 {
-		t.Errorf("expected runner to be called twice (both runs should execute), got %d call(s)", calls)
-	}
-}
-
-// TestSchedulerCronMarkNotWrittenOnRunFailure verifies that when TriggerAgent
-// fails — whether because no runner is registered for the backend, or because
-// the runner itself returns an error — no cron-namespace mark is written.
-// Without this guarantee a failed run would leave a stale MarkAutonomousRun
-// entry that suppresses autonomous-context dispatches for the full
-// dedup_window_seconds even though the agent never ran.
-func TestSchedulerCronMarkNotWrittenOnRunFailure(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name    string
-		runners map[string]ai.Runner
-	}{
-		{
-			name:    "no runner registered for backend",
-			runners: map[string]ai.Runner{},
-		},
-		{
-			name:    "runner returns error",
-			runners: map[string]ai.Runner{"claude": &errorRunner{err: errors.New("backend unavailable")}},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			// "notifier" can dispatch to "reviewer"; "reviewer" has allow_dispatch so
-			// whitelist and opt-in checks pass and we can isolate the cron-mark behavior.
-			cfg := baseCfg(func(c *config.Config) {
-				c.Agents = []fleet.Agent{
-					{
-						Name:          "reviewer",
-						Backend:       "claude",
-						Prompt:        "review",
-						AllowDispatch: true,
-					},
-					{
-						Name:        "notifier",
-						Backend:     "claude",
-						Prompt:      "notify",
-						CanDispatch: []string{"reviewer"},
-					},
-				}
-				c.Repos[0].Use = []fleet.Binding{
-					{Agent: "reviewer", Cron: "* * * * *"},
-					{Agent: "notifier", Cron: "0 0 * * *"},
-				}
-			})
-
-			q := &fakeQueue{}
-			agentMap := map[string]fleet.Agent{
-				"reviewer": cfg.Agents[0],
-				"notifier": cfg.Agents[1],
-			}
-			dedup := workflow.NewDispatchDedupStore(300)
-			dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
-			dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
-
-			s, err := NewScheduler(cfg, tc.runners, newMapMemory(), zerolog.Nop())
-			if err != nil {
-				t.Fatalf("NewScheduler: %v", err)
-			}
-			s.WithDispatcher(dispatcher)
-
-			if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err == nil {
-				t.Fatal("TriggerAgent: expected error, got nil")
-			}
-
-			// Despite the failure, a subsequent autonomous-context dispatch targeting
-			// reviewer (number=0) must NOT be suppressed — no cron mark should have
-			// been written because the run never completed.
-			originator := agentMap["notifier"]
-			ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "cron", Number: 0}
-			dispatcher.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
-				{Agent: "reviewer", Reason: "retry after failure"},
-			})
-			if len(q.popped()) != 1 {
-				t.Error("expected dispatch enqueued: no cron mark should have been written on run failure")
-			}
-		})
-	}
-}
-
-// TestSchedulerDispatchEnqueueFailurePropagates verifies that when the event
-// queue rejects an enqueue during ProcessDispatches, the error bubbles up
-// through executeAgentRun and out of TriggerAgent instead of being silently
-// swallowed.
-func TestSchedulerDispatchEnqueueFailurePropagates(t *testing.T) {
-	t.Parallel()
-	cfg := dispatchCfgForTest()
-
-	runner := &dispatchingRunner{
-		dispatches: []ai.DispatchRequest{
-			{Agent: "notifier", Reason: "review done", Number: 42},
-		},
-	}
-	queueErr := errors.New("queue full")
-	q := &fakeQueue{err: queueErr}
-	agentMap := map[string]fleet.Agent{
-		"reviewer": cfg.Agents[0],
-		"notifier": cfg.Agents[1],
-	}
-	dedup := workflow.NewDispatchDedupStore(300)
-	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
-	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
-
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	s.WithDispatcher(dispatcher)
-
-	err = s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
-	if err == nil {
-		t.Fatal("expected error when dispatch enqueue fails, got nil")
-	}
-	if !strings.Contains(err.Error(), "dispatch") {
-		t.Errorf("expected 'dispatch' in error, got: %v", err)
-	}
-}
-
-// TestSchedulerDispatchEnqueueFailureRecordsErrorSpan verifies that when
-// ProcessDispatches fails after a successful runner.Run and memory write, the
-// trace span is recorded as "error" (not "success"), so /api/traces accurately
-// reflects the run outcome.
-func TestSchedulerDispatchEnqueueFailureRecordsErrorSpan(t *testing.T) {
-	t.Parallel()
-	cfg := dispatchCfgForTest()
-
-	runner := &dispatchingRunner{
-		dispatches: []ai.DispatchRequest{
-			{Agent: "notifier", Reason: "review done", Number: 42},
-		},
-	}
-	queueErr := errors.New("queue full")
-	q := &fakeQueue{err: queueErr}
-	agentMap := map[string]fleet.Agent{
-		"reviewer": cfg.Agents[0],
-		"notifier": cfg.Agents[1],
-	}
-	dedup := workflow.NewDispatchDedupStore(300)
-	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
-	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
-
-	traceRec := &stubTraceRecorder{}
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	s.WithDispatcher(dispatcher)
-	s.WithTraceRecorder(traceRec)
-
-	runErr := s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
-	if runErr == nil {
-		t.Fatal("expected error when dispatch enqueue fails, got nil")
-	}
-
-	spans := traceRec.recorded()
-	if len(spans) != 1 {
-		t.Fatalf("expected 1 recorded trace span, got %d", len(spans))
-	}
-	if spans[0].status != "error" {
-		t.Errorf("expected span status %q, got %q", "error", spans[0].status)
-	}
-	if !strings.Contains(spans[0].errMsg, "dispatch") {
-		t.Errorf("expected span errMsg to contain %q, got %q", "dispatch", spans[0].errMsg)
-	}
-}
-
-// TestSchedulerCronMarkKeptAfterSuccessfulRunWithDispatchEnqueueFailure verifies
-// that when runner.Run succeeds but the post-run dispatch enqueue fails, the
-// cron-namespace mark is NOT rolled back. The autonomous pass already committed,
-// so the dedup window must stay in force to prevent a duplicate run.
-func TestSchedulerCronMarkKeptAfterSuccessfulRunWithDispatchEnqueueFailure(t *testing.T) {
-	t.Parallel()
-	cfg := dispatchCfgForTest()
-
-	runner := &dispatchingRunner{
-		dispatches: []ai.DispatchRequest{
-			{Agent: "notifier", Reason: "review done", Number: 42},
-		},
-	}
-	queueErr := errors.New("queue full")
-	q := &fakeQueue{err: queueErr}
-	agentMap := map[string]fleet.Agent{
-		"reviewer": cfg.Agents[0],
-		"notifier": cfg.Agents[1],
-	}
-	dedup := workflow.NewDispatchDedupStore(300)
-	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
-	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
-
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	s.WithDispatcher(dispatcher)
-
-	// TriggerAgent should return an error (dispatch enqueue failed).
-	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err == nil {
-		t.Fatal("expected error from dispatch enqueue failure, got nil")
-	}
-
-	// runner.Run succeeded, so the cron mark must still be in place. A
-	// subsequent autonomous-context dispatch targeting the same (agent, repo, 0)
-	// must be suppressed — if the mark were rolled back, it would slip through.
-	// Use a fresh queue (no error) and a new dispatcher sharing the same dedup
-	// store so enqueue would succeed if the mark were absent.
-	q2 := &fakeQueue{}
-	dispatcher2 := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q2, zerolog.Nop())
-	originator := agentMap["notifier"]
-	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "cron", Number: 0}
-	dispatcher2.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
-		{Agent: "reviewer", Reason: "follow-up dispatch"},
-	})
-	if len(q2.popped()) != 0 {
-		t.Error("dispatch should be suppressed: cron mark must survive a post-run enqueue failure")
-	}
-}
-
-// TestSchedulerCronRefcountDecrementedOnPostRunEnqueueFailure verifies that
-// when runner.Run succeeds but the subsequent dispatch enqueue fails,
-// FinalizeAutonomousRun is still called so the cron refcount drops to zero.
-// Without this fix, evict() refuses to remove the cron entry (refcount > 0)
-// and TryClaimForDispatch permanently blocks autonomous-context dispatches for
-// (agent, repo, 0) until process restart.
-func TestSchedulerCronRefcountDecrementedOnPostRunEnqueueFailure(t *testing.T) {
-	t.Parallel()
-	cfg := dispatchCfgForTest()
-
-	runner := &dispatchingRunner{
-		dispatches: []ai.DispatchRequest{
-			{Agent: "notifier", Reason: "review done", Number: 42},
-		},
-	}
-	queueErr := errors.New("queue full")
-	q := &fakeQueue{err: queueErr}
-	agentMap := map[string]fleet.Agent{
-		"reviewer": cfg.Agents[0],
-		"notifier": cfg.Agents[1],
-	}
-	// Use a 1-second TTL so we can simulate expiry with a past timestamp.
-	dedup := workflow.NewDispatchDedupStore(1)
-	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 1}
-	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
-
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	s.WithDispatcher(dispatcher)
-
-	// First run — runner.Run succeeds, dispatch enqueue fails.
-	if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err == nil {
-		t.Fatal("expected error from dispatch enqueue failure, got nil")
-	}
-
-	// After the run, the cron TTL entry should have been finalized (refcount=0)
-	// so that the dedup store can evict the entry once its TTL elapses. Verify
-	// this indirectly: use TryClaimForDispatch with a timestamp 2 seconds past
-	// the start (well past the 1-second TTL). With the bug (refcount stuck at 1),
-	// TryClaimForDispatch returns false even past the TTL. With the fix (refcount=0),
-	// the TTL check and the refcount check both pass and the dispatch is allowed.
-	// After the run, FinalizeAutonomousRun must have been called (refcount=0).
-	// Verify indirectly: once the 1-second TTL elapses, TryClaimForDispatch
-	// should allow an autonomous-context dispatch to (notifier, owner/repo, 0).
-	// Without the fix (refcount stuck at 1), TryClaimForDispatch returns false
-	// even past the TTL because it checks cronRefCounts > 0 as a secondary guard.
-	//
-	// Note: "reviewer" can dispatch "notifier" (CanDispatch) and "notifier" has
-	// AllowDispatch: true — so we use reviewer as originator dispatching notifier,
-	// mirroring the original run that wrote the cron mark for "notifier".
-	// We need to trigger "notifier" (not "reviewer") to see the dedup effect
-	// for the cron mark written for notifier's slot.
-	//
-	// Actually, the first run was for "reviewer" (TriggerAgent("reviewer", ...)),
-	// so the cron mark is at ("reviewer", "owner/repo", 0). To test that this mark
-	// no longer blocks dispatches to "reviewer", we need reviewer to have
-	// AllowDispatch: true. Add a local config that grants this.
-	agentMapWithAllowDispatch := map[string]fleet.Agent{
-		"reviewer": {
-			Name:          "reviewer",
-			Backend:       "claude",
-			Prompt:        "Review PRs.",
-			AllowDispatch: true,
-		},
-		"notifier": {
-			Name:        "notifier",
-			Backend:     "claude",
-			Prompt:      "Notify team.",
-			CanDispatch: []string{"reviewer"},
-		},
-	}
-	q2 := &fakeQueue{}
-	dispatcher2 := workflow.NewDispatcher(dispatchCfg, agentMapWithAllowDispatch, dedup, q2, zerolog.Nop())
-	originator := agentMapWithAllowDispatch["notifier"]
-	ev := workflow.Event{
-		Repo:  workflow.RepoRef{FullName: "owner/repo", Enabled: true},
-		Kind:  "cron",
-		Actor: "notifier",
-	}
-	time.Sleep(2 * time.Second) // wait for the 1-second TTL to expire
-	dispatcher2.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
-		{Agent: "reviewer", Reason: "follow-up dispatch"},
-	})
-	if len(q2.popped()) == 0 {
-		t.Error("dispatch should succeed after TTL elapsed and refcount finalized: permanent suppression bug detected")
-	}
-}
-
-// TestSchedulerPostRunDispatchSuppressedWithinDedupWindow is an integration-level
-// regression test for the cron-first dedup ordering: after a cron/manual run
-// completes successfully, dispatches targeting the same (agent, repo, 0) context
-// must still be suppressed for the full dedup_window_seconds. FinalizeAutonomousRun
-// decrements the in-flight refcount but preserves the cron-namespace TTL entry so
-// TryClaimForDispatch continues to reject dispatches until the window expires.
-func TestSchedulerPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
-	t.Parallel()
-	cfg := baseCfg(func(c *config.Config) {
-		c.Agents = []fleet.Agent{
-			{
-				Name:          "notifier",
-				Backend:       "claude",
-				Prompt:        "Notify.",
-				AllowDispatch: true,
-			},
-			{
-				Name:        "reviewer",
-				Backend:     "claude",
-				Prompt:      "Review.",
-				CanDispatch: []string{"notifier"},
-			},
-		}
-		c.Repos[0].Use = []fleet.Binding{
-			{Agent: "notifier", Cron: "* * * * *"},
-			{Agent: "reviewer", Cron: "0 0 * * *"},
-		}
-	})
-
-	runner := &stubRunner{}
-	q := &fakeQueue{}
-	agentMap := map[string]fleet.Agent{
-		"notifier": cfg.Agents[0],
-		"reviewer": cfg.Agents[1],
-	}
-	dedup := workflow.NewDispatchDedupStore(300) // 5-minute window
-	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
-	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
-
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	s.WithDispatcher(dispatcher)
-
-	// Cron/manual run completes successfully.
-	if err := s.TriggerAgent(context.Background(), "notifier", "owner/repo"); err != nil {
-		t.Fatalf("TriggerAgent: %v", err)
-	}
-
-	// Within the dedup window, a dispatch to the same (notifier, owner/repo, 0)
-	// autonomous context must be suppressed. The cron-namespace TTL entry is
-	// preserved by FinalizeAutonomousRun, not cleared, so TryClaimForDispatch
-	// returns false and the dispatch is dropped.
-	q2 := &fakeQueue{}
-	dispatcher2 := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q2, zerolog.Nop())
-	originator := agentMap["reviewer"]
-	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "cron", Number: 0}
-	dispatcher2.ProcessDispatches(context.Background(), originator, ev, "root-post-run", 0, "", []ai.DispatchRequest{
-		{Agent: "notifier", Reason: "follow-up dispatch within dedup window"},
-	})
-	if len(q2.popped()) != 0 {
-		t.Error("expected dispatch suppressed: cron-namespace TTL entry must persist after successful run")
-	}
-}
-
-func TestSchedulerAllowPRsPromptPrefixing(t *testing.T) {
-	t.Parallel()
-	const noPRPrefix = "Do not open or create pull requests under any circumstances."
-	tests := []struct {
-		name     string
-		allowPRs bool
-		prompt   string
-		wantNoPR bool
-	}{
-		{
-			name:     "no-PR instruction prepended when allow_prs=false",
-			allowPRs: false,
-			prompt:   "Review PRs.",
-			wantNoPR: true,
-		},
-		{
-			name:     "no-PR instruction absent when allow_prs=true",
-			allowPRs: true,
-			prompt:   "Open a PR with the fix.",
-			wantNoPR: false,
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			runner := &promptCapturingRunner{}
-			cfg := baseCfg(func(c *config.Config) {
-				c.Agents = []fleet.Agent{
-					{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: tc.prompt, AllowPRs: tc.allowPRs},
-				}
-			})
-			s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
-			if err != nil {
-				t.Fatalf("NewScheduler: %v", err)
-			}
-			if err := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); err != nil {
-				t.Fatalf("TriggerAgent: %v", err)
-			}
-			runner.mu.Lock()
-			defer runner.mu.Unlock()
-			if len(runner.prompts) != 1 {
-				t.Fatalf("expected 1 prompt, got %d", len(runner.prompts))
-			}
-			hasNoPR := strings.Contains(runner.prompts[0], noPRPrefix)
-			if hasNoPR != tc.wantNoPR {
-				t.Errorf("no-PR prefix present=%v, want %v; prompt: %q", hasNoPR, tc.wantNoPR, runner.prompts[0])
-			}
-			if !strings.Contains(runner.prompts[0], tc.prompt) {
-				t.Errorf("expected original prompt text %q to be present, got: %q", tc.prompt, runner.prompts[0])
-			}
-		})
-	}
-}
-
-// TestSchedulerCronMarkBlocksDispatchDuringInFlightRun verifies that when an
-// autonomous run is in progress, a dispatch arriving for the same (agent, repo,
-// 0) context is suppressed by the cron-namespace mark that is written before
-// runner.Run is called. Without a pre-run mark, the dispatch would slip through
-// before the mark is written (after runner.Run) and enqueue a concurrent run.
-func TestSchedulerCronMarkBlocksDispatchDuringInFlightRun(t *testing.T) {
-	t.Parallel()
-
-	cfg := baseCfg(func(c *config.Config) {
-		c.Agents = []fleet.Agent{
-			{
-				Name:          "reviewer",
-				Backend:       "claude",
-				Prompt:        "review",
-				AllowDispatch: true,
-			},
-			{
-				Name:        "notifier",
-				Backend:     "claude",
-				Prompt:      "notify",
-				CanDispatch: []string{"reviewer"},
-			},
-		}
-		c.Repos[0].Use = []fleet.Binding{
-			{Agent: "reviewer", Cron: "* * * * *"},
-			{Agent: "notifier", Cron: "0 0 * * *"},
-		}
-	})
-
-	ready := make(chan struct{}, 1)
-	block := make(chan struct{})
-	runner := &blockingRunner{ready: ready, block: block}
-	q := &fakeQueue{}
-	agentMap := map[string]fleet.Agent{
-		"reviewer": cfg.Agents[0],
-		"notifier": cfg.Agents[1],
-	}
-	dedup := workflow.NewDispatchDedupStore(300)
-	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
-	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
-
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	s.WithDispatcher(dispatcher)
-
-	// Start the autonomous run in the background; wait until the runner is
-	// actually inside Run (i.e., the cron mark should already be written).
-	done := make(chan error, 1)
-	go func() {
-		done <- s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
-	}()
-	<-ready // blockingRunner signals here, so the cron mark is in place
-
-	// Simulate notifier dispatching to reviewer while the run is in progress.
-	originator := agentMap["notifier"]
-	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "cron", Number: 0}
-	_ = dispatcher.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
-		{Agent: "reviewer", Reason: "arrived during in-flight run"},
-	})
-
-	// Unblock the runner and wait for TriggerAgent to return.
-	close(block)
-	if err := <-done; err != nil {
-		t.Fatalf("TriggerAgent: %v", err)
-	}
-
-	// The dispatch must have been suppressed (deduped), so no event was enqueued.
-	if len(q.popped()) != 0 {
-		t.Errorf("expected dispatch suppressed by in-flight cron mark, but %d event(s) were enqueued", len(q.popped()))
-	}
-}
-
-// TestCronDispatchCrossNamespaceRaceOnlyOneWins is a regression test for the
-// TOCTOU race identified after the initial dispatch-dedup implementation. The
-// old code used two separate operations:
-//
-//	cron path:     DispatchAlreadyClaimed (read) → ... → MarkAutonomousRun (write)
-//	dispatch path: SeenCronRun (read)            → ... → TryClaim (write)
-//
-// If the reads on both sides completed before either write, both paths observed
-// "no opposing claim" and proceeded concurrently for the same (agent, repo, 0)
-// slot. The fix replaces each pair with a single mutex-held TryClaimForCron /
-// TryClaimForDispatch call that atomically checks the cross-namespace and writes
-// the reservation, so only one path can ever win per (agent, repo, 0) slot.
-//
-// This test races TriggerAgent (cron path) against ProcessDispatches (dispatch
-// path) for the same agent/repo over many iterations and asserts that the two
-// paths never both execute in the same round.
-func TestCronDispatchCrossNamespaceRaceOnlyOneWins(t *testing.T) {
-	t.Parallel()
-	const iterations = 500
-	ctx := context.Background()
-
-	cfg := dispatchCfgForTest()
-	agentMap := map[string]fleet.Agent{
-		"reviewer": cfg.Agents[0],
-		"notifier": cfg.Agents[1],
-	}
-
-	for i := range iterations {
-		// Fresh dedup store, queue, runner, and scheduler for each iteration so
-		// each round starts from an empty state.
-		dedup := workflow.NewDispatchDedupStore(300)
-		dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
-		q := &fakeQueue{}
-		dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
-
-		runner := &stubRunner{}
-		s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
-		if err != nil {
-			t.Fatalf("iteration %d: NewScheduler: %v", i, err)
-		}
-		s.WithDispatcher(dispatcher)
-
-		// Race: cron run (TriggerAgent for notifier) vs dispatch to notifier.
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			_ = s.TriggerAgent(ctx, "notifier", "owner/repo")
-		}()
-		go func() {
-			defer wg.Done()
-			ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}}
-			_ = dispatcher.ProcessDispatches(ctx, cfg.Agents[0], ev, "root", 0, "",
-				[]ai.DispatchRequest{{Agent: "notifier", Reason: "concurrent dispatch"}})
-		}()
-		wg.Wait()
-
-		runner.mu.Lock()
-		calls := runner.calls
-		runner.mu.Unlock()
-		enqueued := len(q.popped())
-
-		// Both executing concurrently is the race: runner called AND dispatch
-		// enqueued for the same (notifier, owner/repo, 0) slot in the same round.
-		if calls >= 1 && enqueued >= 1 {
-			t.Fatalf("iteration %d: TOCTOU race — cron ran (%d call(s)) AND dispatch enqueued (%d event(s)) concurrently for the same slot",
-				i, calls, enqueued)
-		}
-	}
-}
-
-// TestSchedulerReload verifies that Reload replaces cron registrations with
-// those from the updated config slices, and that AgentStatuses reflects the
-// new registrations.
 func TestSchedulerReload(t *testing.T) {
 	t.Parallel()
-
-	// Start with a config that has one cron binding.
 	cfg := baseCfg(nil)
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, newMapMemory(), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": newStubRunner()}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -1223,7 +246,6 @@ func TestSchedulerReload(t *testing.T) {
 		t.Fatalf("before reload: got %d statuses, want 1", len(statuses))
 	}
 
-	// Reload with a completely different agent and repo.
 	newAgents := []fleet.Agent{
 		{Name: "scanner", Backend: "claude", Skills: []string{}, Prompt: "scan"},
 	}
@@ -1251,13 +273,12 @@ func TestSchedulerReload(t *testing.T) {
 }
 
 // TestSchedulerReloadUpdatesSkillsAndBackends verifies that Reload replaces
-// cfg.Skills and cfg.Daemon.AIBackends so that future agent runs pick up the
-// new definitions without requiring a daemon restart.
+// cfg.Skills and cfg.Daemon.AIBackends so future runs pick up the new
+// definitions without a daemon restart.
 func TestSchedulerReloadUpdatesSkillsAndBackends(t *testing.T) {
 	t.Parallel()
-
 	cfg := baseCfg(nil)
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, newMapMemory(), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": newStubRunner()}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -1268,11 +289,9 @@ func TestSchedulerReloadUpdatesSkillsAndBackends(t *testing.T) {
 	newBackends := map[string]fleet.Backend{
 		"claude": {Command: "claude", TimeoutSeconds: 120},
 	}
-
 	if err := s.Reload(cfg.Repos, cfg.Agents, newSkills, newBackends); err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
-
 	if len(s.cfg.Skills) != 1 || s.cfg.Skills["security"].Prompt != "Think about security." {
 		t.Errorf("after reload: cfg.Skills = %v, want {security: ...}", s.cfg.Skills)
 	}
@@ -1286,57 +305,46 @@ func TestSchedulerReloadUpdatesSkillsAndBackends(t *testing.T) {
 // bindings removes all previously registered entries.
 func TestSchedulerReloadClearsAllBindings(t *testing.T) {
 	t.Parallel()
-
 	cfg := baseCfg(nil)
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, newMapMemory(), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": newStubRunner()}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
-
-	// Reload with repos that have no cron bindings.
 	if err := s.Reload([]fleet.Repo{{Name: "owner/repo", Enabled: true, Use: []fleet.Binding{
 		{Agent: "reviewer", Labels: []string{"ai:fix"}},
 	}}}, cfg.Agents, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
-
-	statuses := s.AgentStatuses()
-	if len(statuses) != 0 {
+	if statuses := s.AgentStatuses(); len(statuses) != 0 {
 		t.Errorf("after reload with no cron: got %d statuses, want 0", len(statuses))
 	}
 }
 
 // TestSchedulerReloadRollsBackOnFailure verifies that a Reload that cannot
-// register new cron entries (e.g. because a binding references an unknown
-// agent) preserves the previous scheduler state instead of leaving it empty.
+// register new cron entries preserves the previous scheduler state.
 func TestSchedulerReloadRollsBackOnFailure(t *testing.T) {
 	t.Parallel()
-
 	cfg := baseCfg(nil)
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, newMapMemory(), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": newStubRunner()}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
-
-	// Capture the pre-reload statuses.
 	before := s.AgentStatuses()
 	if len(before) != 1 {
 		t.Fatalf("before reload: got %d statuses, want 1", len(before))
 	}
 
-	// Attempt a reload where the binding references an agent not in the agents slice.
 	badRepos := []fleet.Repo{{
 		Name:    "owner/repo",
 		Enabled: true,
 		Use:     []fleet.Binding{{Agent: "ghost", Cron: "* * * * *"}},
 	}}
-	badAgents := []fleet.Agent{} // "ghost" not in this list → registerJobs will fail
+	badAgents := []fleet.Agent{}
 
 	if err := s.Reload(badRepos, badAgents, cfg.Skills, cfg.Daemon.AIBackends); err == nil {
 		t.Fatal("Reload: expected error for unknown agent binding, got nil")
 	}
 
-	// The scheduler must still have the original entries, not be empty.
 	after := s.AgentStatuses()
 	if len(after) != len(before) {
 		t.Errorf("after failed reload: got %d statuses, want %d (original preserved)",
@@ -1346,7 +354,6 @@ func TestSchedulerReloadRollsBackOnFailure(t *testing.T) {
 		t.Errorf("after failed reload: agent %q, want %q (original preserved)",
 			after[0].Name, before[0].Name)
 	}
-	// Config must also be rolled back.
 	if len(s.cfg.Agents) != len(cfg.Agents) {
 		t.Errorf("after failed reload: cfg.Agents len=%d, want %d (original preserved)",
 			len(s.cfg.Agents), len(cfg.Agents))
@@ -1355,13 +362,11 @@ func TestSchedulerReloadRollsBackOnFailure(t *testing.T) {
 
 // TestSchedulerReloadRebuildsRunners verifies that when a RunnerBuilder is
 // registered, Reload builds a fresh runner map to reflect new or changed
-// backend definitions without mutating the original map in place. This ensures
-// that backends added via the CRUD API produce live runners without a restart.
+// backend definitions.
 func TestSchedulerReloadRebuildsRunners(t *testing.T) {
 	t.Parallel()
-
-	cfg := baseCfg(nil) // starts with "claude" backend
-	oldRunner := &stubRunner{}
+	cfg := baseCfg(nil)
+	oldRunner := newStubRunner()
 	initialRunners := map[string]ai.Runner{"claude": oldRunner}
 
 	s, err := NewScheduler(cfg, initialRunners, newMapMemory(), zerolog.Nop())
@@ -1369,7 +374,6 @@ func TestSchedulerReloadRebuildsRunners(t *testing.T) {
 		t.Fatalf("NewScheduler: %v", err)
 	}
 
-	// Capture config+runners delivered to the HotReloadSink via the combined method.
 	var sinkMu sync.Mutex
 	var sinkRunners map[string]ai.Runner
 	sink := &testHotReloadSink{
@@ -1381,15 +385,13 @@ func TestSchedulerReloadRebuildsRunners(t *testing.T) {
 	}
 	s.WithHotReloadSink(sink)
 
-	// Register a builder that returns a new distinct stub for each backend.
 	buildCalls := map[string]*stubRunner{}
 	s.WithRunnerBuilder(func(name string, _ fleet.Backend) ai.Runner {
-		r := &stubRunner{}
+		r := newStubRunner()
 		buildCalls[name] = r
 		return r
 	})
 
-	// Reload with a new "codex" backend added and "claude" retained.
 	newBackends := map[string]fleet.Backend{
 		"claude": {Command: "claude"},
 		"codex":  {Command: "codex"},
@@ -1398,34 +400,24 @@ func TestSchedulerReloadRebuildsRunners(t *testing.T) {
 		t.Fatalf("Reload: %v", err)
 	}
 
-	// Builder must have been called for both backends.
 	if _, ok := buildCalls["claude"]; !ok {
 		t.Error("RunnerBuilder was not called for 'claude'")
 	}
 	if _, ok := buildCalls["codex"]; !ok {
 		t.Error("RunnerBuilder was not called for 'codex'")
 	}
-
-	// The scheduler's internal runners map must contain the rebuilt entries.
 	if _, ok := s.runners["claude"]; !ok {
 		t.Error("scheduler runners missing 'claude' after Reload")
 	}
 	if _, ok := s.runners["codex"]; !ok {
 		t.Error("scheduler runners missing 'codex' after Reload")
 	}
-
-	// The rebuilt runner for "claude" must be the new one, not the original stub.
 	if s.runners["claude"] == oldRunner {
 		t.Error("scheduler runners['claude'] was not rebuilt by RunnerBuilder")
 	}
-
-	// The original map must NOT have been mutated — copy-on-write semantics.
 	if _, ok := initialRunners["codex"]; ok {
 		t.Error("original runners map was mutated in place; expected copy-on-write")
 	}
-
-	// The HotReloadSink must have received a copy of the new runners via
-	// UpdateConfigAndRunners (not the separate UpdateRunners path).
 	sinkMu.Lock()
 	got := sinkRunners
 	sinkMu.Unlock()
@@ -1440,39 +432,13 @@ func TestSchedulerReloadRebuildsRunners(t *testing.T) {
 	}
 }
 
-// testHotReloadSink is a minimal HotReloadSink for tests.
-type testHotReloadSink struct {
-	updateConfig          func(*config.Config)
-	updateRunners         func(map[string]ai.Runner)
-	updateConfigAndRunner func(*config.Config, map[string]ai.Runner)
-}
-
-func (s *testHotReloadSink) UpdateConfig(cfg *config.Config) {
-	if s.updateConfig != nil {
-		s.updateConfig(cfg)
-	}
-}
-func (s *testHotReloadSink) UpdateRunners(r map[string]ai.Runner) {
-	if s.updateRunners != nil {
-		s.updateRunners(r)
-	}
-}
-func (s *testHotReloadSink) UpdateConfigAndRunners(cfg *config.Config, r map[string]ai.Runner) {
-	if s.updateConfigAndRunner != nil {
-		s.updateConfigAndRunner(cfg, r)
-	}
-}
-
 // TestSchedulerReloadConfigCopyOnWrite verifies that Reload does not mutate the
-// original *config.Config pointer. Goroutines that hold a snapshot of the old
-// pointer must continue to see the pre-reload values; only future snapshots
-// should see the new values.
+// original *config.Config pointer.
 func TestSchedulerReloadConfigCopyOnWrite(t *testing.T) {
 	t.Parallel()
-
 	cfg := baseCfg(nil)
-	originalPtr := cfg // remember the address
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": &stubRunner{}}, newMapMemory(), zerolog.Nop())
+	originalPtr := cfg
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": newStubRunner()}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -1482,12 +448,9 @@ func TestSchedulerReloadConfigCopyOnWrite(t *testing.T) {
 		t.Fatalf("Reload: %v", err)
 	}
 
-	// The original cfg struct must be unchanged.
 	if len(originalPtr.Repos) != 1 || originalPtr.Repos[0].Name != "owner/repo" {
 		t.Errorf("original config.Repos was mutated: got %v", originalPtr.Repos)
 	}
-
-	// The scheduler's internal cfg pointer must point to a different struct.
 	if s.cfg == cfg {
 		t.Error("scheduler still holds the original config pointer; expected copy-on-write swap")
 	}
@@ -1496,40 +459,35 @@ func TestSchedulerReloadConfigCopyOnWrite(t *testing.T) {
 	}
 }
 
-// TestSchedulerReloadRaceWithConcurrentRun is a race-detector test. It
-// exercises concurrent Reload + TriggerAgent to verify that the copy-on-write
-// config swap and the brief-lock runner snapshot do not produce data races.
-// Run with -race to catch concurrent map/struct accesses.
-func TestSchedulerReloadRaceWithConcurrentRun(t *testing.T) {
+// TestSchedulerReloadRaceWithConcurrentReads runs Reload in parallel with the
+// read paths the daemon hits concurrently — AgentStatuses (called by /agents,
+// /status) and the cron closures fired by the cron library. Run with -race
+// to catch concurrent map/struct accesses against the cfg + runners snapshot.
+func TestSchedulerReloadRaceWithConcurrentReads(t *testing.T) {
 	t.Parallel()
-
 	cfg := baseCfg(nil)
-	runner := &stubRunner{}
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": newStubRunner()}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
-	s.WithRunnerBuilder(func(name string, _ fleet.Backend) ai.Runner { return runner })
+	s.WithRunnerBuilder(func(_ string, _ fleet.Backend) ai.Runner { return newStubRunner() })
 	s.WithHotReloadSink(&testHotReloadSink{})
+	s.WithEventQueue(workflow.NewDataChannels(8))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	const goroutines = 8
 	var wg sync.WaitGroup
-
-	// Half the goroutines call TriggerAgent concurrently.
 	for range goroutines / 2 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for ctx.Err() == nil {
-				_ = s.TriggerAgent(ctx, "reviewer", "owner/repo")
+				_ = s.AgentStatuses()
 			}
 		}()
 	}
-
-	// The other half call Reload concurrently.
 	for range goroutines / 2 {
 		wg.Add(1)
 		go func() {
@@ -1539,33 +497,25 @@ func TestSchedulerReloadRaceWithConcurrentRun(t *testing.T) {
 			}
 		}()
 	}
-
 	wg.Wait()
 }
 
 // TestSchedulerReloadReleasesMuBeforeSinkCall verifies that Reload releases
-// bindMu before calling into the HotReloadSink, so that a concurrent
-// TriggerAgent call (which needs bindMu.RLock) is not blocked for the full
-// duration of the sink call.
+// bindMu before calling into the HotReloadSink. A blocked sink call must not
+// stall AgentStatuses (the read path /agents and /status hit on every poll).
 //
-// This guards against a lock-ordering inversion that would arise if the Engine
-// sink ever held cfgMu.RLock while indirectly calling back into TriggerAgent
-// (which needs bindMu.RLock): Reload holding bindMu.Lock while waiting for
-// cfgMu.Lock would form a cycle.
+// Lock-ordering rationale: if the Engine sink ever held cfgMu.RLock while
+// indirectly calling back into the scheduler (which would need bindMu.RLock),
+// Reload holding bindMu.Lock during the sink call would form a cycle.
 func TestSchedulerReloadReleasesMuBeforeSinkCall(t *testing.T) {
 	t.Parallel()
-
 	cfg := baseCfg(nil)
-	runner := &stubRunner{}
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
+	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": newStubRunner()}, newMapMemory(), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
-	s.WithRunnerBuilder(func(_ string, _ fleet.Backend) ai.Runner { return runner })
+	s.WithRunnerBuilder(func(_ string, _ fleet.Backend) ai.Runner { return newStubRunner() })
 
-	// Sink that signals when UpdateConfigAndRunners is entered, then blocks
-	// until released. This lets us assert that bindMu is NOT held during the
-	// combined sink call.
 	sinkEntered := make(chan struct{})
 	sinkRelease := make(chan struct{})
 	sink := &testHotReloadSink{
@@ -1576,386 +526,28 @@ func TestSchedulerReloadReleasesMuBeforeSinkCall(t *testing.T) {
 	}
 	s.WithHotReloadSink(sink)
 
-	// Run Reload in the background; it will block inside UpdateConfigAndRunners.
 	reloadDone := make(chan error, 1)
 	go func() {
 		reloadDone <- s.Reload(cfg.Repos, cfg.Agents, cfg.Skills, cfg.Daemon.AIBackends)
 	}()
 
-	// Wait until Reload is inside the sink call.
 	<-sinkEntered
 
-	// TriggerAgent must complete without blocking. If Reload still held
-	// bindMu.Lock() at this point, the RLock acquisition inside TriggerAgent
-	// would stall for the remainder of the sink call.
-	triggerDone := make(chan struct{})
+	statusesDone := make(chan struct{})
 	go func() {
-		_ = s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
-		close(triggerDone)
+		_ = s.AgentStatuses()
+		close(statusesDone)
 	}()
 
 	select {
-	case <-triggerDone:
+	case <-statusesDone:
 		// Good: bindMu was released before the sink call.
 	case <-time.After(2 * time.Second):
-		t.Error("TriggerAgent blocked while Reload was in the sink call — bindMu must be released before UpdateConfigAndRunners")
+		t.Error("AgentStatuses blocked while Reload was in the sink call — bindMu must be released before UpdateConfigAndRunners")
 	}
 
-	// Release the sink and wait for Reload to finish cleanly.
 	close(sinkRelease)
 	if err := <-reloadDone; err != nil {
 		t.Errorf("Reload: %v", err)
-	}
-}
-
-// TestSchedulerCronJobUsesPostReloadAgent verifies that a cron closure
-// resolves the agent definition from the config snapshot at execution time
-// rather than capturing it by value at registration time. A cron tick that
-// fires after a Reload (i.e., the closure was enqueued before the old entry
-// was removed but runs after bindMu is released) must use the post-reload
-// agent definition, not the stale pre-reload one.
-func TestSchedulerCronJobUsesPostReloadAgent(t *testing.T) {
-	t.Parallel()
-
-	runner := &promptCapturingRunner{}
-	cfg := baseCfg(nil) // agent "reviewer" with prompt "Review PRs."
-
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, newMapMemory(), zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-
-	// Capture the pre-reload cron closure. This simulates a cron tick that was
-	// dequeued by the cron library before the old entry was removed by Reload.
-	preReloadJob := s.cron.Entry(s.agentEntries[0].cronID).WrappedJob
-
-	// Reload with an updated prompt for the same agent.
-	updatedAgents := []fleet.Agent{
-		{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Updated review prompt."},
-	}
-	if err := s.Reload(cfg.Repos, updatedAgents, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
-		t.Fatalf("Reload: %v", err)
-	}
-
-	// Invoke the pre-reload closure — it should see the post-reload agent
-	// definition because it resolves the agent from the cfg snapshot at
-	// execution time (after bindMu.RLock is acquired and the new cfg is visible).
-	preReloadJob.Run()
-
-	runner.mu.Lock()
-	prompts := runner.prompts
-	runner.mu.Unlock()
-
-	if len(prompts) != 1 {
-		t.Fatalf("expected 1 prompt captured, got %d", len(prompts))
-	}
-	if !strings.Contains(prompts[0], "Updated review prompt.") {
-		t.Errorf("pre-reload cron closure used stale agent definition; prompt = %q", prompts[0])
-	}
-}
-
-// stubTraceRecorder records calls to RecordSpan for assertion in tests.
-type stubTraceRecorder struct {
-	mu    sync.Mutex
-	spans []stubSpan
-}
-
-type stubSpan struct {
-	status  string
-	errMsg  string
-	spanEnd time.Time
-}
-
-func (r *stubTraceRecorder) RecordSpan(_, _, _, _, _, _, _, _ string, _, _ int, _ int64, _ int, _ string, _ time.Time, spanEnd time.Time, status, errMsg string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.spans = append(r.spans, stubSpan{status: status, errMsg: errMsg, spanEnd: spanEnd})
-}
-
-func (r *stubTraceRecorder) recorded() []stubSpan {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]stubSpan, len(r.spans))
-	copy(out, r.spans)
-	return out
-}
-
-// errMemory is a MemoryBackend whose WriteMemory always returns an error, used
-// to test that a write failure causes executeAgentRun to surface the error.
-type errMemory struct {
-	inner MemoryBackend
-	err   error
-}
-
-func (m *errMemory) ReadMemory(agent, repo string) (string, error) {
-	return m.inner.ReadMemory(agent, repo)
-}
-
-func (m *errMemory) WriteMemory(_, _, _ string) error {
-	return m.err
-}
-
-// slowMemory wraps a MemoryStore and introduces a fixed delay on WriteMemory
-// so regression tests can verify that span durations include post-run steps.
-type slowMemory struct {
-	inner MemoryBackend
-	delay time.Duration
-}
-
-func (m *slowMemory) ReadMemory(agent, repo string) (string, error) {
-	return m.inner.ReadMemory(agent, repo)
-}
-
-func (m *slowMemory) WriteMemory(agent, repo, content string) error {
-	time.Sleep(m.delay)
-	return m.inner.WriteMemory(agent, repo, content)
-}
-
-// TestSchedulerWriteMemoryFailureFailsRun verifies that a WriteMemory error
-// after a successful agent run is surfaced as a run error, and that the dedup
-// mark is rolled back so the agent can be re-dispatched immediately for retry.
-func TestSchedulerWriteMemoryFailureFailsRun(t *testing.T) {
-	t.Parallel()
-
-	writeErr := errors.New("disk full")
-	// Use two agents: "reviewer" is the agent whose run fails on memory write;
-	// "notifier" is the originator that later tries to dispatch "reviewer".
-	// This reflects the real retry scenario: an operator or another agent
-	// notices the error and re-dispatches "reviewer" to recover lost memory.
-	cfg := baseCfg(func(c *config.Config) {
-		c.Agents[0].AllowDispatch = true // reviewer can receive dispatches
-		c.Agents = append(c.Agents, fleet.Agent{
-			Name:        "notifier",
-			Backend:     "claude",
-			Prompt:      "Notify.",
-			CanDispatch: []string{"reviewer"}, // notifier may dispatch reviewer
-		})
-	})
-	runner := &stubRunner{memory: "updated memory"}
-	mem := &errMemory{inner: newMapMemory(), err: writeErr}
-
-	q := &fakeQueue{}
-	agentMap := map[string]fleet.Agent{
-		"reviewer": cfg.Agents[0],
-		"notifier": cfg.Agents[1],
-	}
-	dedup := workflow.NewDispatchDedupStore(300)
-	dispatchCfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300}
-	dispatcher := workflow.NewDispatcher(dispatchCfg, agentMap, dedup, q, zerolog.Nop())
-
-	traceRec := &stubTraceRecorder{}
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, mem, zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	s.WithDispatcher(dispatcher)
-	s.WithTraceRecorder(traceRec)
-
-	runErr := s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
-	if runErr == nil {
-		t.Fatal("TriggerAgent: expected error from WriteMemory, got nil")
-	}
-	if !errors.Is(runErr, writeErr) {
-		t.Errorf("expected writeErr in error chain, got: %v", runErr)
-	}
-
-	// The runner was invoked (the run itself completed).
-	runner.mu.Lock()
-	calls := runner.calls
-	runner.mu.Unlock()
-	if calls != 1 {
-		t.Errorf("expected 1 runner call, got %d", calls)
-	}
-
-	// The trace span must reflect the memory write failure, not a false "success".
-	spans := traceRec.recorded()
-	if len(spans) != 1 {
-		t.Fatalf("expected 1 recorded trace span, got %d", len(spans))
-	}
-	if spans[0].status != "error" {
-		t.Errorf("expected span status %q, got %q", "error", spans[0].status)
-	}
-	if !strings.Contains(spans[0].errMsg, writeErr.Error()) {
-		t.Errorf("expected span errMsg to contain %q, got %q", writeErr.Error(), spans[0].errMsg)
-	}
-
-	// The dedup mark must be rolled back (not finalised), so a subsequent
-	// autonomous-context dispatch for the same (agent, repo, 0) slot is NOT
-	// suppressed — the caller can immediately retry to recover the lost memory.
-	// "notifier" originates the retry dispatch to "reviewer".
-	originator := agentMap["notifier"]
-	ev := workflow.Event{Repo: workflow.RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "cron", Number: 0}
-	_ = dispatcher.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
-		{Agent: "reviewer", Reason: "retry after memory write failure"},
-	})
-	if len(q.popped()) == 0 {
-		t.Error("expected dispatch to succeed after write-memory failure (dedup mark should be rolled back)")
-	}
-}
-
-// TestSchedulerSpanEndCapturedAfterPostRunSteps is a regression test verifying
-// that the autonomous trace span end time is captured inside recordTrace (after
-// WriteMemory and ProcessDispatches complete), not immediately after runner.Run.
-// Before the fix, spanEnd := time.Now() was captured right after runner.Run, so
-// a slow memory write or dispatch enqueue would emit a span whose recorded
-// duration excluded those post-run steps, leaving /api/traces internally
-// inconsistent.
-func TestSchedulerSpanEndCapturedAfterPostRunSteps(t *testing.T) {
-	t.Parallel()
-
-	const delay = 50 * time.Millisecond
-
-	cfg := baseCfg(nil)
-	runner := &stubRunner{memory: "updated memory"}
-	mem := &slowMemory{inner: newMapMemory(), delay: delay}
-
-	traceRec := &stubTraceRecorder{}
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, mem, zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	s.WithTraceRecorder(traceRec)
-
-	before := time.Now()
-	if runErr := s.TriggerAgent(context.Background(), "reviewer", "owner/repo"); runErr != nil {
-		t.Fatalf("TriggerAgent: %v", runErr)
-	}
-
-	spans := traceRec.recorded()
-	if len(spans) != 1 {
-		t.Fatalf("expected 1 recorded trace span, got %d", len(spans))
-	}
-	if spans[0].status != "success" {
-		t.Errorf("expected span status %q, got %q", "success", spans[0].status)
-	}
-	// The span end time must be recorded after the slow WriteMemory completes,
-	// so it must be at least `delay` after the start of the run.
-	if spans[0].spanEnd.Sub(before) < delay {
-		t.Errorf("span end time recorded too early: elapsed %v < delay %v — spanEnd was captured before WriteMemory completed",
-			spans[0].spanEnd.Sub(before), delay)
-	}
-}
-
-// readTrackingMemory wraps a MemoryBackend and records the content seen on
-// each ReadMemory call. Used to assert serialization ordering in tests.
-type readTrackingMemory struct {
-	inner    MemoryBackend
-	mu       sync.Mutex
-	readSeen []string // content returned by each ReadMemory call, in call order
-}
-
-func (m *readTrackingMemory) ReadMemory(agent, repo string) (string, error) {
-	content, err := m.inner.ReadMemory(agent, repo)
-	if err == nil {
-		m.mu.Lock()
-		m.readSeen = append(m.readSeen, content)
-		m.mu.Unlock()
-	}
-	return content, err
-}
-
-func (m *readTrackingMemory) WriteMemory(agent, repo, content string) error {
-	return m.inner.WriteMemory(agent, repo, content)
-}
-
-// firstCallBlockingRunner blocks only the first Run call until block is closed,
-// returning pre-configured responses in order. Subsequent calls return without
-// blocking.
-type firstCallBlockingRunner struct {
-	mu        sync.Mutex
-	calls     int
-	ready     chan struct{} // receives when first Run is entered
-	block     chan struct{} // closed to unblock first Run
-	responses []ai.Response
-}
-
-func (r *firstCallBlockingRunner) Run(_ context.Context, _ ai.Request) (ai.Response, error) {
-	r.mu.Lock()
-	callIdx := r.calls
-	resp := r.responses[callIdx%len(r.responses)]
-	r.calls++
-	r.mu.Unlock()
-
-	if callIdx == 0 {
-		r.ready <- struct{}{}
-		<-r.block
-	}
-	return resp, nil
-}
-
-// TestSchedulerMemoryRunsSerializedPerAgentRepo is a regression test verifying
-// that concurrent executeAgentRun calls for the same (agent, repo) pair are
-// serialized by runLocks so that the second run's ReadMemory always sees the
-// first run's WriteMemory result — preventing the lost-update race where both
-// runs read the same old memory and the last writer silently clobbers the other.
-func TestSchedulerMemoryRunsSerializedPerAgentRepo(t *testing.T) {
-	t.Parallel()
-
-	mem := &readTrackingMemory{inner: newMapMemory()}
-
-	ready := make(chan struct{}, 1) // first run signals when inside runner.Run
-	block := make(chan struct{})    // closed to unblock first run
-	runner := &firstCallBlockingRunner{
-		ready: ready,
-		block: block,
-		responses: []ai.Response{
-			{Memory: "first-run"},
-			{Memory: "second-run"},
-		},
-	}
-
-	cfg := baseCfg(nil)
-	// No dispatcher: both TriggerAgent calls proceed without dispatch-dedup
-	// suppression, exposing the concurrent memory read/write race.
-	s, err := NewScheduler(cfg, map[string]ai.Runner{"claude": runner}, mem, zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-
-	errc1 := make(chan error, 1)
-	go func() {
-		errc1 <- s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
-	}()
-
-	// Wait until the first run is inside runner.Run — it now holds runLock.
-	<-ready
-
-	// Start second run. It will block on runLock until the first run releases it.
-	errc2 := make(chan error, 1)
-	go func() {
-		errc2 <- s.TriggerAgent(context.Background(), "reviewer", "owner/repo")
-	}()
-
-	// Give the second goroutine time to reach runLock.acquire and park.
-	time.Sleep(20 * time.Millisecond)
-
-	// Unblock the first run: it exits runner.Run, writes "first-run", then
-	// releases runLock. The second run then acquires the lock and reads memory.
-	close(block)
-
-	if err := <-errc1; err != nil {
-		t.Fatalf("first TriggerAgent: %v", err)
-	}
-	if err := <-errc2; err != nil {
-		t.Fatalf("second TriggerAgent: %v", err)
-	}
-
-	// With serialization the reads are ordered: first run saw "" (initial state),
-	// second run saw "first-run" (what the first run wrote). Without the lock,
-	// both reads could see "" and the second writer would silently drop the first
-	// run's memory update.
-	mem.mu.Lock()
-	reads := append([]string(nil), mem.readSeen...)
-	mem.mu.Unlock()
-
-	if len(reads) != 2 {
-		t.Fatalf("expected 2 ReadMemory calls, got %d: %v", len(reads), reads)
-	}
-	if reads[0] != "" {
-		t.Errorf("first run: expected empty initial memory, got %q", reads[0])
-	}
-	if reads[1] != "first-run" {
-		t.Errorf("second run: expected %q (serialised read after first write), got %q — lost-update race may be present",
-			"first-run", reads[1])
 	}
 }

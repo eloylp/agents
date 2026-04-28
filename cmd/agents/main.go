@@ -105,14 +105,22 @@ func run() error {
 		}
 		runBuf = max(runBuf, cfg.Daemon.Processor.EventQueueBuffer)
 		dataChannels, engine, _ := buildEngine(cfg, runners, scheduler, memBackend, db, runBuf, logger)
-		logger.Info().Str("agent", *runAgent).Str("repo", *runRepo).Msg("running autonomous agent on demand")
+		logger.Info().Str("agent", *runAgent).Str("repo", *runRepo).Msg("running on-demand agent")
 		engine.StartDispatchDedup(ctx)
-		if err := scheduler.TriggerAgent(ctx, *runAgent, *runRepo); err != nil {
-			if errors.Is(err, autonomous.ErrDispatchSkipped) {
-				logger.Info().Str("agent", *runAgent).Str("repo", *runRepo).Msg("agent run skipped: dispatch already claimed within dedup window")
-				return nil
-			}
-			return fmt.Errorf("run agent: %w", err)
+		// Push an agents.run event onto the queue and let drainDispatches run
+		// it through the same engine path POST /run uses. Mirrors the daemon
+		// flow: cron, webhook, dispatch, and on-demand all converge on the
+		// engine's runAgent — there is no separate "trigger" entry point.
+		ev := workflow.Event{
+			ID:         workflow.GenEventID(),
+			Repo:       workflow.RepoRef{FullName: *runRepo, Enabled: true},
+			Kind:       "agents.run",
+			Actor:      "cli",
+			Payload:    map[string]any{"target_agent": *runAgent},
+			EnqueuedAt: time.Now(),
+		}
+		if err := dataChannels.PushEvent(ctx, ev); err != nil {
+			return fmt.Errorf("enqueue run: %w", err)
 		}
 		if err := drainDispatches(ctx, dataChannels, engine); err != nil {
 			return fmt.Errorf("drain dispatches: %w", err)
@@ -236,7 +244,6 @@ func buildEngine(cfg *config.Config, runners map[string]ai.Runner, scheduler *au
 	engine.WithGraphRecorder(obs)
 	engine.WithRunTracker(obs.ActiveRuns)
 	engine.WithStepRecorder(obs)
-	scheduler.WithTraceRecorder(obs)
 
 	return dataChannels, engine, obs
 }
