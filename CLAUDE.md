@@ -14,7 +14,7 @@ internal/
   ai/                       # Prompt composition + command-based CLI runner (per-backend env)
   anthropic_proxy/          # Built-in Anthropic↔OpenAI Chat Completions translation proxy
   observe/                  # Observability store: events, traces, dispatch graph, SSE hubs
-  autonomous/               # Cron scheduler + agent memory (SQLite-backed)
+  scheduler/                # Cron scheduler + agent memory (SQLite-backed)
   backends/                 # Backend discovery: CLI probing, GitHub MCP health checks, orphan detection
   store/                    # SQLite-backed config store: Open, Import, Load, CRUD
   workflow/                 # Event routing engine, single event queue, processor, dispatcher

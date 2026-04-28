@@ -19,9 +19,9 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/config"
 	obstore "github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/scheduler"
 	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -35,10 +35,10 @@ type ConfigGetter interface {
 
 // StatusProvider, RuntimeStateProvider, and DispatchStatsProvider are all
 // kept as interfaces in this package (rather than the concrete
-// *autonomous.Scheduler / *observe.Store / *workflow.Engine) because
+// *scheduler.Scheduler / *observe.Store / *workflow.Engine) because
 // observe_test.go stubs each one with test-controlled values.
 type StatusProvider interface {
-	AgentStatuses() []autonomous.AgentStatus
+	AgentStatuses() []scheduler.AgentStatus
 }
 
 type RuntimeStateProvider interface {

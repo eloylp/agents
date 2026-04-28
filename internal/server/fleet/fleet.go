@@ -54,7 +54,7 @@ type Handler struct {
 // New constructs a Handler. coord and srv are required; db, provider, and
 // runtimeState are optional — the handler degrades gracefully when they
 // are absent. provider and runtimeState are interfaces so tests can stub
-// them without constructing real *autonomous.Scheduler / *observe.Store
+// them without constructing real *scheduler.Scheduler / *observe.Store
 // instances; production passes those concrete types directly.
 func New(db *sql.DB, coord server.WriteCoordinator, srv *server.Server, provider server.StatusProvider, runtimeState server.RuntimeStateProvider, logger zerolog.Logger) *Handler {
 	return &Handler{

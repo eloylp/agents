@@ -50,7 +50,7 @@ type StepRecorder interface {
 
 // LastRunRecorder is an optional observer that the Engine calls after every
 // cron-fired agent run completes. The concrete implementation
-// is *autonomous.Scheduler, which updates the lastRuns map that drives the
+// is *scheduler.Scheduler, which updates the lastRuns map that drives the
 // per-binding schedule display in the /agents fleet view.
 //
 // Defined as an interface here purely to break an import cycle: the
@@ -90,9 +90,9 @@ func (r *runLocks) release(key string) {
 // target agent named in the payload directly.
 // Agent resolution, backend selection, and prompt composition all happen here;
 // the runners just execute the resulting prompt.
-// MemoryBackend matches autonomous.MemoryBackend so the same SQLite-backed
+// MemoryBackend matches scheduler.MemoryBackend so the same SQLite-backed
 // implementation can satisfy both surfaces. Defined here as a small local
-// interface so the workflow package does not depend on autonomous.
+// interface so the workflow package does not depend on scheduler.
 type MemoryBackend interface {
 	ReadMemory(agent, repo string) (string, error)
 	WriteMemory(agent, repo, content string) error

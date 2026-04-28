@@ -1,4 +1,4 @@
-package autonomous
+package scheduler
 
 import (
 	"context"
@@ -66,7 +66,6 @@ type lastRunRecord struct {
 // config. It is used by Reload to keep the in-process runner map consistent
 // with SQLite when ai_backend definitions change via the CRUD API.
 type RunnerBuilder func(name string, cfg fleet.Backend) ai.Runner
-
 
 // HotReloadSink is implemented by components that share config and runner
 // state with the Scheduler and must be notified when a CRUD-triggered
@@ -154,7 +153,7 @@ func (s *Scheduler) RecordLastRun(agent, repo string, at time.Time, status strin
 // found in cfg.Repos[].Use.
 func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, memory MemoryBackend, logger zerolog.Logger) (*Scheduler, error) {
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
-	cronLogger := zerologCronLogger{logger: logger.With().Str("component", "autonomous_scheduler").Logger()}
+	cronLogger := zerologCronLogger{logger: logger.With().Str("component", "scheduler").Logger()}
 	c := cron.New(
 		cron.WithParser(parser),
 		cron.WithChain(cron.SkipIfStillRunning(cronLogger)),
@@ -164,7 +163,7 @@ func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, memory Memor
 		runners:  runners,
 		memory:   memory,
 		cron:     c,
-		logger:   logger.With().Str("component", "autonomous_scheduler").Logger(),
+		logger:   logger.With().Str("component", "scheduler").Logger(),
 		lastRuns: make(map[string]lastRunRecord),
 	}
 	if err := s.registerJobs(); err != nil {
@@ -177,15 +176,15 @@ func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, memory Memor
 func (s *Scheduler) Run(ctx context.Context) error {
 	s.setRunCtx(ctx)
 	if len(s.cron.Entries()) == 0 {
-		s.logger.Info().Msg("no autonomous bindings configured")
+		s.logger.Info().Msg("no cron bindings configured")
 		return nil
 	}
-	s.logger.Info().Int("jobs", len(s.cron.Entries())).Msg("starting autonomous scheduler")
+	s.logger.Info().Int("jobs", len(s.cron.Entries())).Msg("starting scheduler")
 	s.cron.Start()
 	<-ctx.Done()
 	stopped := s.cron.Stop()
 	<-stopped.Done()
-	s.logger.Info().Msg("autonomous scheduler stopped")
+	s.logger.Info().Msg("scheduler stopped")
 	return nil
 }
 

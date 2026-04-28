@@ -44,11 +44,11 @@ type Server struct {
 	// (along with cross-domain hooks below) via WithFleet so this package
 	// stays free of any dependency on internal/server/fleet.
 	fleet            HandlerRegister
-	agentsDispatcher http.HandlerFunc                                 // GET vs POST /agents — supplied by WithFleet
-	orphansSource    OrphansSource                             // /status orphan summary — supplied by WithFleet
-	onConfigReload   func(*config.Config)                             // reloadCron post-hook — supplied by WithFleet
-	repos            HandlerRegister                           // wired via WithRepos by the composing caller
-	config           HandlerRegister                           // wired via WithConfig by the composing caller
+	agentsDispatcher http.HandlerFunc     // GET vs POST /agents — supplied by WithFleet
+	orphansSource    OrphansSource        // /status orphan summary — supplied by WithFleet
+	onConfigReload   func(*config.Config) // reloadCron post-hook — supplied by WithFleet
+	repos            HandlerRegister      // wired via WithRepos by the composing caller
+	config           HandlerRegister      // wired via WithConfig by the composing caller
 	// storeMu serializes the "DB write → snapshot read → in-memory Reload"
 	// sequence so that concurrent write requests cannot interleave their
 	// snapshots and leave the scheduler in a stale or inconsistent state.
@@ -88,7 +88,7 @@ func (s *Server) WithObserveRegister(register func(*mux.Router, func(http.Handle
 
 // WithStore attaches a SQLite database and the CronReloader that
 // reloadCron will call after every CRUD write. In production the reloader
-// is the same *autonomous.Scheduler that was passed to NewServer; tests
+// is the same *scheduler.Scheduler that was passed to NewServer; tests
 // can pass an errCronReloader stub to exercise reload-failure paths.
 func (s *Server) WithStore(db *sql.DB, r CronReloader) {
 	s.db = db
@@ -363,7 +363,7 @@ type statusJSON struct {
 	Status         string                     `json:"status"`
 	UptimeSeconds  int64                      `json:"uptime_seconds"`
 	Queues         map[string]statusQueueJSON `json:"queues"`
-	Agents         []AgentStatus `json:"agents"`
+	Agents         []AgentStatus              `json:"agents"`
 	Dispatch       *workflow.DispatchStats    `json:"dispatch,omitempty"`
 	OrphanedAgents statusOrphanSummaryJSON    `json:"orphaned_agents"`
 }
@@ -470,5 +470,3 @@ func (s *Server) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 		"event_id": ev.ID,
 	})
 }
-
-

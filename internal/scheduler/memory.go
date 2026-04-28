@@ -1,4 +1,4 @@
-package autonomous
+package scheduler
 
 // MemoryBackend is the interface satisfied by the SQLite-backed memory
 // implementation. The scheduler calls ReadMemory before each run to inject

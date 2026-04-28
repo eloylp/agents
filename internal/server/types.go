@@ -6,7 +6,7 @@
 // WriteCoordinator, OrphansSource), or they let tests substitute stubs for
 // runtime collaborators (StatusProvider, RuntimeStateProvider,
 // DispatchStatsProvider, CronReloader, MemoryReader). Production callers
-// supply the concrete *autonomous.Scheduler / *observe.Store /
+// supply the concrete *scheduler.Scheduler / *observe.Store /
 // *workflow.Engine that satisfy the runtime-collaborator interfaces.
 package server
 
@@ -17,12 +17,12 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/scheduler"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
-// CronReloader is implemented by *autonomous.Scheduler. It is called after a
+// CronReloader is implemented by *scheduler.Scheduler. It is called after a
 // CRUD write to update the scheduler's in-process state without restarting
 // the daemon. Kept as an interface so crud_test.go can inject an
 // errCronReloader stub to exercise reload-failure paths.
@@ -31,14 +31,14 @@ type CronReloader interface {
 }
 
 // AgentStatus is the runtime state of one autonomous agent as reported by
-// /status. Aliased to autonomous.AgentStatus so production code can pass
-// *autonomous.Scheduler directly as a StatusProvider without an adapter.
-type AgentStatus = autonomous.AgentStatus
+// /status. Aliased to scheduler.AgentStatus so production code can pass
+// *scheduler.Scheduler directly as a StatusProvider without an adapter.
+type AgentStatus = scheduler.AgentStatus
 
 // StatusProvider reports the current scheduling state of autonomous agents.
 // /status, /agents (fleet view), and the observability handlers consume it.
 // Kept as an interface so tests can stub controlled scheduling state without
-// constructing a real *autonomous.Scheduler.
+// constructing a real *scheduler.Scheduler.
 type StatusProvider interface {
 	AgentStatuses() []AgentStatus
 }

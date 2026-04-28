@@ -15,7 +15,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/observe"
-	"github.com/eloylp/agents/internal/autonomous"
+	"github.com/eloylp/agents/internal/scheduler"
 	"github.com/eloylp/agents/internal/server"
 	serverobserve "github.com/eloylp/agents/internal/server/observe"
 	"github.com/eloylp/agents/internal/store"
@@ -97,7 +97,7 @@ func TestHandleAPIAgentsAttachesScheduleForCronBindings(t *testing.T) {
 			},
 		}
 	})
-	provider := &stubStatusProvider{statuses: []autonomous.AgentStatus{
+	provider := &stubStatusProvider{statuses: []scheduler.AgentStatus{
 		{Name: "worker", Repo: "owner/repo", LastRun: &now, NextRun: next, LastStatus: "ok"},
 	}}
 	srv, _ := newTestServerWithProvider(cfg, provider)
@@ -152,7 +152,7 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 			},
 		}
 	})
-	provider := &stubStatusProvider{statuses: []autonomous.AgentStatus{
+	provider := &stubStatusProvider{statuses: []scheduler.AgentStatus{
 		{Name: "worker", Repo: "owner/repo-a", LastRun: &now, NextRun: next1, LastStatus: "ok"},
 		{Name: "worker", Repo: "owner/repo-b", NextRun: next2, LastStatus: "pending"},
 	}}
@@ -697,10 +697,10 @@ func TestServeSSEClearsServerWriteDeadline(t *testing.T) {
 // ── helpers ────────────────────────────────────────────────────────────────
 
 type stubStatusProvider struct {
-	statuses []autonomous.AgentStatus
+	statuses []scheduler.AgentStatus
 }
 
-func (p *stubStatusProvider) AgentStatuses() []autonomous.AgentStatus { return p.statuses }
+func (p *stubStatusProvider) AgentStatuses() []scheduler.AgentStatus { return p.statuses }
 
 // newTestObserve creates an observe.Store backed by a temporary SQLite DB.
 // Used by the integration tests for buildHandler routing through the SSE

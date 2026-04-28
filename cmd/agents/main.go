@@ -18,13 +18,13 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/eloylp/agents/internal/ai"
-	"github.com/eloylp/agents/internal/autonomous"
 	"github.com/eloylp/agents/internal/backends"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/logging"
 	mcpserver "github.com/eloylp/agents/internal/mcp"
 	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/scheduler"
 	"github.com/eloylp/agents/internal/server"
 	serverconfig "github.com/eloylp/agents/internal/server/config"
 	serverfleet "github.com/eloylp/agents/internal/server/fleet"
@@ -233,7 +233,7 @@ func run() error {
 // run does — they show up in the dashboard alongside cron-fired runs. The
 // processor-level event recorder is intentionally NOT wired here; the
 // daemon attaches it on top because --run-agent bypasses the processor.
-func buildEngine(cfg *config.Config, runners map[string]ai.Runner, scheduler *autonomous.Scheduler, memBackend autonomous.MemoryBackend, db *sql.DB, bufSize int, logger zerolog.Logger) (*workflow.DataChannels, *workflow.Engine, *observe.Store) {
+func buildEngine(cfg *config.Config, runners map[string]ai.Runner, scheduler *scheduler.Scheduler, memBackend scheduler.MemoryBackend, db *sql.DB, bufSize int, logger zerolog.Logger) (*workflow.DataChannels, *workflow.Engine, *observe.Store) {
 	dataChannels := workflow.NewDataChannels(bufSize)
 	engine := workflow.NewEngine(cfg, runners, dataChannels, logger)
 	engine.WithMemory(memBackend)
@@ -294,13 +294,13 @@ func backendEnvOverrides(b fleet.Backend) map[string]string {
 	}
 }
 
-func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, db *sql.DB, logger zerolog.Logger) (*autonomous.Scheduler, autonomous.MemoryBackend, error) {
+func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, db *sql.DB, logger zerolog.Logger) (*scheduler.Scheduler, scheduler.MemoryBackend, error) {
 	memBackend := &sqliteMemory{db: db}
-	sched, err := autonomous.NewScheduler(cfg, runners, memBackend, logger)
+	sched, err := scheduler.NewScheduler(cfg, runners, memBackend, logger)
 	return sched, memBackend, err
 }
 
-// sqliteMemory implements autonomous.MemoryBackend using the SQLite store.
+// sqliteMemory implements scheduler.MemoryBackend using the SQLite store.
 // Agent and repo names are normalised with ai.NormalizeToken before storage so
 // that the keys are identical to those used by the file-based backend and can
 // be looked up by the /api/memory endpoint without conversion.

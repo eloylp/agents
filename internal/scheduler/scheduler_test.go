@@ -1,4 +1,4 @@
-package autonomous
+package scheduler
 
 import (
 	"context"

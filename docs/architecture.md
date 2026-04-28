@@ -26,7 +26,7 @@ internal/
 ├─ store/                       SQLite schema, migrations, CRUD primitives
 │
 ├─ workflow/                    event queue, processor, dispatcher, dispatch dedup
-├─ autonomous/                  cron scheduler, agent memory (sqlite-backed)
+├─ scheduler/                   cron scheduler, agent memory (sqlite-backed)
 ├─ ai/                          prompt composition, CLI runner (stdin in, JSON out)
 ├─ backends/                    backend discovery (CLI probing, MCP health, model catalog)
 ├─ anthropic_proxy/             Anthropic↔OpenAI translation proxy
@@ -49,7 +49,7 @@ The tiers, from bottom to top:
 
 **Domain (zero deps):** `fleet`, `config`, `store`. Pure data shapes and persistence. Anyone in the codebase can import these without dragging the world along. `fleet` has no transitive deps at all — it's just structs and pure functions like `NormalizeAgent`.
 
-**Runtime engine:** `workflow`, `autonomous`, `ai`, `backends`, `anthropic_proxy`, `observe`. The actual fleet runtime. An event arrives on the queue, the processor pulls it, the engine looks up the right binding, the AI runner invokes the CLI, the response is parsed and traced, and any returned `dispatch` array is enqueued as new events.
+**Runtime engine:** `workflow`, `scheduler`, `ai`, `backends`, `anthropic_proxy`, `observe`. The actual fleet runtime. An event arrives on the queue, the processor pulls it, the engine looks up the right binding, the AI runner invokes the CLI, the response is parsed and traced, and any returned `dispatch` array is enqueued as new events.
 
 **HTTP layer:** `server` and its sub-packages, plus `webhook`. Each domain handler exposes the same shape: a constructor and a `RegisterRoutes(router, withTimeout)` method. The central server doesn't import them — it accepts them through interfaces and calls `RegisterRoutes` on whatever's been wired.
 
@@ -65,7 +65,7 @@ cfg, db, err := loadConfig(...)
 
 // 2. runtime engine
 engine := workflow.NewEngine(...)
-scheduler := autonomous.NewScheduler(...)
+sched := scheduler.NewScheduler(...)
 processor := workflow.NewProcessor(...)
 obs := observe.NewStore(db)
 
