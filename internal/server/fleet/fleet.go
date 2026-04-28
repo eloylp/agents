@@ -5,9 +5,9 @@
 //
 // The HTTP server constructs a Handler at startup, hands it a
 // server.WriteCoordinator that owns the cross-domain CRUD lock and reload
-// hook, and mounts the routes via RegisterRoutes. The same Handler satisfies
-// the mcp.AgentWriter, mcp.SkillWriter, and mcp.BackendWriter interfaces so
-// MCP tools hit the same code path as REST clients.
+// hook, and mounts the routes via RegisterRoutes. The same Handler is
+// consumed directly by the MCP fleet-management tools so MCP and REST hit
+// the same code path.
 package fleet
 
 import (
@@ -26,7 +26,6 @@ import (
 
 	"github.com/eloylp/agents/internal/backends"
 	"github.com/eloylp/agents/internal/fleet"
-	"github.com/eloylp/agents/internal/mcp"
 	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/store"
 )
@@ -171,12 +170,13 @@ func (j storeAgentJSON) toConfig() fleet.Agent {
 	}
 }
 
-// agentPatch is the wire shape for PATCH /agents/{name}. Every field is a
-// pointer so clients can distinguish "don't touch" (nil / omitted) from "set
-// to zero value" (explicit). Handler merges non-nil fields over the existing
+// AgentPatch is the partial-update shape for an agent. Every field is a
+// pointer so callers (REST PATCH /agents/{name} and the MCP update_agent
+// tool) can distinguish "don't touch" (nil / omitted) from "set to zero
+// value" (explicit). Handler merges non-nil fields over the existing
 // record, then runs the merged entity through UpsertAgent so the same
 // validation and cron-reload paths apply.
-type agentPatch struct {
+type AgentPatch struct {
 	Backend       *string   `json:"backend,omitempty"`
 	Model         *string   `json:"model,omitempty"`
 	Skills        *[]string `json:"skills,omitempty"`
@@ -188,13 +188,13 @@ type agentPatch struct {
 	AllowMemory   *bool     `json:"allow_memory,omitempty"`
 }
 
-func (p agentPatch) anyFieldSet() bool {
+func (p AgentPatch) anyFieldSet() bool {
 	return p.Backend != nil || p.Model != nil || p.Skills != nil || p.Prompt != nil ||
 		p.AllowPRs != nil || p.AllowDispatch != nil || p.CanDispatch != nil ||
 		p.Description != nil || p.AllowMemory != nil
 }
 
-func (p agentPatch) apply(a *fleet.Agent) {
+func (p AgentPatch) apply(a *fleet.Agent) {
 	if p.Backend != nil {
 		a.Backend = *p.Backend
 	}
@@ -222,22 +222,6 @@ func (p agentPatch) apply(a *fleet.Agent) {
 	if p.AllowMemory != nil {
 		v := *p.AllowMemory
 		a.AllowMemory = &v
-	}
-}
-
-// agentPatchFromMCP converts the public mcp.AgentPatch into the internal wire
-// shape so the same merge logic serves both REST and MCP clients.
-func agentPatchFromMCP(p mcp.AgentPatch) agentPatch {
-	return agentPatch{
-		Backend:       p.Backend,
-		Model:         p.Model,
-		Skills:        p.Skills,
-		Prompt:        p.Prompt,
-		AllowPRs:      p.AllowPRs,
-		AllowDispatch: p.AllowDispatch,
-		CanDispatch:   p.CanDispatch,
-		Description:   p.Description,
-		AllowMemory:   p.AllowMemory,
 	}
 }
 
@@ -274,7 +258,7 @@ func (h *Handler) handleAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleAgentPatch(w http.ResponseWriter, r *http.Request, name string) {
-	var req agentPatch
+	var req AgentPatch
 	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
@@ -310,13 +294,13 @@ func (h *Handler) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 }
 
 // UpdateAgentPatch applies a partial patch to the named agent. Returns
-// *store.ErrNotFound when the agent does not exist. Implements
-// mcp.AgentWriter.
-func (h *Handler) UpdateAgentPatch(name string, patch mcp.AgentPatch) (fleet.Agent, error) {
-	return h.updateAgent(name, agentPatchFromMCP(patch))
+// *store.ErrNotFound when the agent does not exist. Used by both the REST
+// PATCH handler and the MCP update_agent tool.
+func (h *Handler) UpdateAgentPatch(name string, patch AgentPatch) (fleet.Agent, error) {
+	return h.updateAgent(name, patch)
 }
 
-func (h *Handler) updateAgent(name string, patch agentPatch) (fleet.Agent, error) {
+func (h *Handler) updateAgent(name string, patch AgentPatch) (fleet.Agent, error) {
 	normalized := fleet.NormalizeAgentName(name)
 	var merged fleet.Agent
 	err := h.coord.Do(func() error {
@@ -365,20 +349,19 @@ type storeSkillJSON struct {
 	Prompt string `json:"prompt"`
 }
 
-type skillPatch struct {
+// SkillPatch is the partial-update shape for a skill. Used by both the REST
+// PATCH /skills/{name} handler and the MCP update_skill tool. A nil Prompt
+// means "don't touch".
+type SkillPatch struct {
 	Prompt *string `json:"prompt,omitempty"`
 }
 
-func (p skillPatch) anyFieldSet() bool { return p.Prompt != nil }
+func (p SkillPatch) anyFieldSet() bool { return p.Prompt != nil }
 
-func (p skillPatch) apply(s *fleet.Skill) {
+func (p SkillPatch) apply(s *fleet.Skill) {
 	if p.Prompt != nil {
 		s.Prompt = *p.Prompt
 	}
-}
-
-func skillPatchFromMCP(p mcp.SkillPatch) skillPatch {
-	return skillPatch{Prompt: p.Prompt}
 }
 
 // ── Skill handlers ───────────────────────────────────────────────────────────
@@ -440,7 +423,7 @@ func (h *Handler) handleSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleSkillPatch(w http.ResponseWriter, r *http.Request, name string) {
-	var req skillPatch
+	var req SkillPatch
 	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
@@ -476,13 +459,13 @@ func (h *Handler) UpsertSkill(name string, sk fleet.Skill) (string, fleet.Skill,
 }
 
 // UpdateSkillPatch applies a partial patch to the named skill. Returns
-// *store.ErrNotFound when the skill does not exist. Implements
-// mcp.SkillWriter.
-func (h *Handler) UpdateSkillPatch(name string, patch mcp.SkillPatch) (string, fleet.Skill, error) {
-	return h.updateSkill(name, skillPatchFromMCP(patch))
+// *store.ErrNotFound when the skill does not exist. Used by both the REST
+// PATCH handler and the MCP update_skill tool.
+func (h *Handler) UpdateSkillPatch(name string, patch SkillPatch) (string, fleet.Skill, error) {
+	return h.updateSkill(name, patch)
 }
 
-func (h *Handler) updateSkill(name string, patch skillPatch) (string, fleet.Skill, error) {
+func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skill, error) {
 	normalized := fleet.NormalizeSkillName(name)
 	var existing fleet.Skill
 	err := h.coord.Do(func() error {
@@ -534,7 +517,11 @@ type localBackendRequest struct {
 	URL  string `json:"url"`
 }
 
-type backendPatchJSON struct {
+// BackendPatch is the partial-update shape for a backend. Used by both the
+// REST PATCH /backends/{name} handler and the MCP update_backend tool. Every
+// field is a pointer so callers can bump a single setting (e.g.
+// timeout_seconds) without resubmitting the rest.
+type BackendPatch struct {
 	Command          *string   `json:"command,omitempty"`
 	Version          *string   `json:"version,omitempty"`
 	Models           *[]string `json:"models,omitempty"`
@@ -546,13 +533,13 @@ type backendPatchJSON struct {
 	RedactionSaltEnv *string   `json:"redaction_salt_env,omitempty"`
 }
 
-func (p backendPatchJSON) anyFieldSet() bool {
+func (p BackendPatch) anyFieldSet() bool {
 	return p.Command != nil || p.Version != nil || p.Models != nil || p.Healthy != nil ||
 		p.HealthDetail != nil || p.LocalModelURL != nil || p.TimeoutSeconds != nil ||
 		p.MaxPromptChars != nil || p.RedactionSaltEnv != nil
 }
 
-func (p backendPatchJSON) apply(b *fleet.Backend) {
+func (p BackendPatch) apply(b *fleet.Backend) {
 	if p.Command != nil {
 		b.Command = *p.Command
 	}
@@ -579,20 +566,6 @@ func (p backendPatchJSON) apply(b *fleet.Backend) {
 	}
 	if p.RedactionSaltEnv != nil {
 		b.RedactionSaltEnv = *p.RedactionSaltEnv
-	}
-}
-
-func backendPatchFromMCP(p mcp.BackendPatch) backendPatchJSON {
-	return backendPatchJSON{
-		Command:          p.Command,
-		Version:          p.Version,
-		Models:           p.Models,
-		Healthy:          p.Healthy,
-		HealthDetail:     p.HealthDetail,
-		LocalModelURL:    p.LocalModelURL,
-		TimeoutSeconds:   p.TimeoutSeconds,
-		MaxPromptChars:   p.MaxPromptChars,
-		RedactionSaltEnv: p.RedactionSaltEnv,
 	}
 }
 
@@ -779,7 +752,7 @@ func (h *Handler) handleBackendGet(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleBackendPatch(w http.ResponseWriter, r *http.Request) {
 	name := backendPathName(r)
-	var req backendPatchJSON
+	var req BackendPatch
 	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
@@ -833,13 +806,13 @@ func (h *Handler) UpsertBackend(name string, b fleet.Backend) (string, fleet.Bac
 }
 
 // UpdateBackendPatch applies a partial patch to the named backend. Returns
-// *store.ErrNotFound when the backend does not exist. Implements
-// mcp.BackendWriter.
-func (h *Handler) UpdateBackendPatch(name string, patch mcp.BackendPatch) (string, fleet.Backend, error) {
-	return h.updateBackend(name, backendPatchFromMCP(patch))
+// *store.ErrNotFound when the backend does not exist. Used by both the REST
+// PATCH handler and the MCP update_backend tool.
+func (h *Handler) UpdateBackendPatch(name string, patch BackendPatch) (string, fleet.Backend, error) {
+	return h.updateBackend(name, patch)
 }
 
-func (h *Handler) updateBackend(name string, patch backendPatchJSON) (string, fleet.Backend, error) {
+func (h *Handler) updateBackend(name string, patch BackendPatch) (string, fleet.Backend, error) {
 	normalized := fleet.NormalizeBackendName(name)
 	var existing fleet.Backend
 	err := h.coord.Do(func() error {

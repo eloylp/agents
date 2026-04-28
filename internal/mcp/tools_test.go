@@ -17,6 +17,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/observe"
+	serverfleet "github.com/eloylp/agents/internal/server/fleet"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -1260,7 +1261,7 @@ type stubAgentWriter struct {
 	gotDeleteName  string
 	gotCascade     bool
 	gotPatchName   string
-	gotPatch       AgentPatch
+	gotPatch       serverfleet.AgentPatch
 	canonical      fleet.Agent
 	patchCanonical fleet.Agent
 	upsertErr      error
@@ -1276,7 +1277,7 @@ func (s *stubAgentWriter) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 	return s.canonical, nil
 }
 
-func (s *stubAgentWriter) UpdateAgentPatch(name string, patch AgentPatch) (fleet.Agent, error) {
+func (s *stubAgentWriter) UpdateAgentPatch(name string, patch serverfleet.AgentPatch) (fleet.Agent, error) {
 	s.gotPatchName = name
 	s.gotPatch = patch
 	if s.patchErr != nil {
@@ -1500,7 +1501,7 @@ func TestToolDeleteAgentPropagatesConflict(t *testing.T) {
 // and the canonical values the tool surfaces back to the caller.
 type stubSkillWriter struct {
 	gotPatchName        string
-	gotPatch            SkillPatch
+	gotPatch            serverfleet.SkillPatch
 	patchCanonicalName  string
 	patchCanonicalSkill fleet.Skill
 	patchErr            error
@@ -1522,7 +1523,7 @@ func (s *stubSkillWriter) UpsertSkill(name string, sk fleet.Skill) (string, flee
 	return s.canonicalName, s.canonical, nil
 }
 
-func (s *stubSkillWriter) UpdateSkillPatch(name string, patch SkillPatch) (string, fleet.Skill, error) {
+func (s *stubSkillWriter) UpdateSkillPatch(name string, patch serverfleet.SkillPatch) (string, fleet.Skill, error) {
 	s.gotPatchName = name
 	s.gotPatch = patch
 	if s.patchErr != nil {
@@ -1767,7 +1768,7 @@ type stubBackendWriter struct {
 	gotUpsertBackend     fleet.Backend
 	gotDeleteName        string
 	gotPatchName         string
-	gotPatch             BackendPatch
+	gotPatch             serverfleet.BackendPatch
 	canonicalName        string
 	canonical            fleet.Backend
 	patchCanonicalName   string
@@ -1786,7 +1787,7 @@ func (s *stubBackendWriter) UpsertBackend(name string, b fleet.Backend) (string,
 	return s.canonicalName, s.canonical, nil
 }
 
-func (s *stubBackendWriter) UpdateBackendPatch(name string, patch BackendPatch) (string, fleet.Backend, error) {
+func (s *stubBackendWriter) UpdateBackendPatch(name string, patch serverfleet.BackendPatch) (string, fleet.Backend, error) {
 	s.gotPatchName = name
 	s.gotPatch = patch
 	if s.patchErr != nil {
