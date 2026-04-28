@@ -52,7 +52,7 @@ func toolCreateAgent(deps Deps) server.ToolHandlerFunc {
 		} else if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
-		canonical, err := deps.AgentWrite.UpsertAgent(a)
+		canonical, err := deps.Fleet.UpsertAgent(a)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("create agent", err), nil
 		}
@@ -112,7 +112,7 @@ func toolUpdateAgent(deps Deps) server.ToolHandlerFunc {
 		if !agentPatchHasField(patch) {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
-		canonical, uerr := deps.AgentWrite.UpdateAgentPatch(name, patch)
+		canonical, uerr := deps.Fleet.UpdateAgentPatch(name, patch)
 		if uerr != nil {
 			return mcpgo.NewToolResultErrorFromErr("update agent", uerr), nil
 		}
@@ -138,7 +138,7 @@ func toolDeleteAgent(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
 		cascade := req.GetBool("cascade", false)
-		if err := deps.AgentWrite.DeleteAgent(fleet.NormalizeAgentName(name), cascade); err != nil {
+		if err := deps.Fleet.DeleteAgent(fleet.NormalizeAgentName(name), cascade); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete agent", err), nil
 		}
 		return jsonResult(map[string]any{
@@ -160,7 +160,7 @@ func toolCreateSkill(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		sk := fleet.Skill{Prompt: req.GetString("prompt", "")}
-		canonicalName, canonical, err := deps.SkillWrite.UpsertSkill(name, sk)
+		canonicalName, canonical, err := deps.Fleet.UpsertSkill(name, sk)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("create skill", err), nil
 		}
@@ -187,7 +187,7 @@ func toolUpdateSkill(deps Deps) server.ToolHandlerFunc {
 		if patch.Prompt == nil {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
-		canonicalName, canonical, uerr := deps.SkillWrite.UpdateSkillPatch(name, patch)
+		canonicalName, canonical, uerr := deps.Fleet.UpdateSkillPatch(name, patch)
 		if uerr != nil {
 			return mcpgo.NewToolResultErrorFromErr("update skill", uerr), nil
 		}
@@ -208,7 +208,7 @@ func toolDeleteSkill(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
 		canonical := fleet.NormalizeSkillName(name)
-		if err := deps.SkillWrite.DeleteSkill(canonical); err != nil {
+		if err := deps.Fleet.DeleteSkill(canonical); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete skill", err), nil
 		}
 		return jsonResult(map[string]any{
@@ -242,7 +242,7 @@ func toolCreateBackend(deps Deps) server.ToolHandlerFunc {
 			MaxPromptChars:   req.GetInt("max_prompt_chars", 0),
 			RedactionSaltEnv: req.GetString("redaction_salt_env", ""),
 		}
-		canonicalName, canonical, err := deps.BackendWrite.UpsertBackend(name, b)
+		canonicalName, canonical, err := deps.Fleet.UpsertBackend(name, b)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("create backend", err), nil
 		}
@@ -305,7 +305,7 @@ func toolUpdateBackend(deps Deps) server.ToolHandlerFunc {
 		if !backendPatchHasField(patch) {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
-		canonicalName, canonical, uerr := deps.BackendWrite.UpdateBackendPatch(name, patch)
+		canonicalName, canonical, uerr := deps.Fleet.UpdateBackendPatch(name, patch)
 		if uerr != nil {
 			return mcpgo.NewToolResultErrorFromErr("update backend", uerr), nil
 		}
@@ -330,7 +330,7 @@ func toolDeleteBackend(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
 		canonical := fleet.NormalizeBackendName(name)
-		if err := deps.BackendWrite.DeleteBackend(canonical); err != nil {
+		if err := deps.Fleet.DeleteBackend(canonical); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete backend", err), nil
 		}
 		return jsonResult(map[string]any{
@@ -363,7 +363,7 @@ func toolCreateRepo(deps Deps) server.ToolHandlerFunc {
 			Enabled: req.GetBool("enabled", false),
 			Use:     bindings,
 		}
-		canonical, err := deps.RepoWrite.UpsertRepo(r)
+		canonical, err := deps.Repos.UpsertRepo(r)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("create repo", err), nil
 		}
@@ -383,7 +383,7 @@ func toolDeleteRepo(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
 		canonical := fleet.NormalizeRepoName(name)
-		if err := deps.RepoWrite.DeleteRepo(canonical); err != nil {
+		if err := deps.Repos.DeleteRepo(canonical); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete repo", err), nil
 		}
 		return jsonResult(map[string]any{
@@ -412,7 +412,7 @@ func toolCreateBinding(deps Deps) server.ToolHandlerFunc {
 		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
-		persisted, err := deps.BindingWrite.CreateBinding(repo, b)
+		persisted, err := deps.Repos.CreateBinding(repo, b)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("create binding", err), nil
 		}
@@ -438,7 +438,7 @@ func toolUpdateBinding(deps Deps) server.ToolHandlerFunc {
 		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
-		updated, uerr := deps.BindingWrite.UpdateBinding(repo, int64(id), b)
+		updated, uerr := deps.Repos.UpdateBinding(repo, int64(id), b)
 		if uerr != nil {
 			return mcpgo.NewToolResultErrorFromErr("update binding", uerr), nil
 		}
@@ -454,7 +454,7 @@ func toolGetBinding(deps Deps) server.ToolHandlerFunc {
 		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
-		b, err := deps.BindingWrite.ReadBinding(repo, int64(id))
+		b, err := deps.Repos.ReadBinding(repo, int64(id))
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get binding", err), nil
 		}
@@ -470,7 +470,7 @@ func toolDeleteBinding(deps Deps) server.ToolHandlerFunc {
 		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
-		if err := deps.BindingWrite.DeleteBinding(repo, int64(id)); err != nil {
+		if err := deps.Repos.DeleteBinding(repo, int64(id)); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete binding", err), nil
 		}
 		return jsonResult(map[string]any{

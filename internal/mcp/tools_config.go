@@ -13,7 +13,7 @@ import (
 // proxy.extra_body.
 func toolGetConfig(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		body, err := deps.ConfigBytes.ConfigJSON()
+		body, err := deps.Config.ConfigJSON()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("config snapshot", err), nil
 		}
@@ -27,7 +27,7 @@ func toolGetConfig(deps Deps) server.ToolHandlerFunc {
 // MCP session.
 func toolExportConfig(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		body, err := deps.ConfigBytes.ExportYAML()
+		body, err := deps.Config.ExportYAML()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("export config", err), nil
 		}
@@ -46,7 +46,7 @@ func toolImportConfig(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		mode, _ := trimmedStringOptional(req, "mode")
-		counts, err := deps.ConfigImport.ImportYAML([]byte(body), mode)
+		counts, err := deps.Config.ImportYAML([]byte(body), mode)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("import config", err), nil
 		}

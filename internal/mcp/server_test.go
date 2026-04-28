@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/rs/zerolog"
 )
 
 // TestHandlerRoutesInitialize exercises the streamable-http transport to
@@ -18,12 +16,8 @@ import (
 func TestHandlerInitializeAndListTools(t *testing.T) {
 	t.Parallel()
 
-	h := New(Deps{
-		Config: stubConfig{cfg: fixtureConfig()},
-		Queue:  &stubQueue{},
-		Status: stubStatus{body: []byte(`{}`)},
-		Logger: zerolog.Nop(),
-	})
+	deps := testFixture(t)
+	h := New(deps)
 
 	// Step 1: initialize. Streamable-http requires an initialize handshake
 	// before tools/list will return results.

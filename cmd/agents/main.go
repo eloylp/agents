@@ -180,25 +180,18 @@ func run() error {
 
 	// Mount the MCP server on /mcp so MCP-capable clients (Claude Code,
 	// Cursor, Cline) can drive the fleet through the tool surface defined
-	// in internal/mcp. The handler shares the daemon's config snapshot,
-	// event queue, observability store, dispatch stats, and memory reader
-	// so MCP tools stay consistent with the REST API.
+	// in internal/mcp. The handler shares the daemon's running components
+	// directly so MCP tools hit the same code paths as the REST API.
 	srv.WithMCP(mcpserver.New(mcpserver.Deps{
-		DB:            db,
-		Config:        srv,
-		Queue:         dataChannels,
-		Status:        srv,
-		Observe:       obs,
-		DispatchStats: engine,
-		Memory:        &sqliteMcpReader{db: db},
-		ConfigBytes:   configHandler,
-		ConfigImport:  configHandler,
-		AgentWrite:    fleetHandler,
-		SkillWrite:    fleetHandler,
-		BackendWrite:  fleetHandler,
-		RepoWrite:     reposHandler,
-		BindingWrite:  reposHandler,
-		Logger:        logger,
+		DB:      db,
+		Server:  srv,
+		Queue:   dataChannels,
+		Observe: obs,
+		Engine:  engine,
+		Fleet:   fleetHandler,
+		Repos:   reposHandler,
+		Config:  configHandler,
+		Logger:  logger,
 	}))
 
 	group, groupCtx := errgroup.WithContext(ctx)
@@ -327,21 +320,6 @@ func (r *sqliteWebhookReader) ReadMemory(agent, repo string) (string, time.Time,
 		return "", time.Time{}, server.ErrMemoryNotFound
 	}
 	return content, mtime, nil
-}
-
-// sqliteMcpReader implements mcp.MemoryReader. The bool `found` flag keeps
-// the MCP "memory not found" signal independent of webhook's sentinel error
-// so the two packages don't need to share a sentinel across the import graph.
-type sqliteMcpReader struct {
-	db *sql.DB
-}
-
-func (r *sqliteMcpReader) ReadMemory(agent, repo string) (string, time.Time, bool, error) {
-	content, found, mtime, err := store.ReadMemory(r.db, ai.NormalizeToken(agent), ai.NormalizeToken(repo))
-	if err != nil {
-		return "", time.Time{}, false, err
-	}
-	return content, mtime, found, nil
 }
 
 func (m *sqliteMemory) WriteMemory(agent, repo, content string) error {

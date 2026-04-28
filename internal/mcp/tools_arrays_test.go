@@ -6,9 +6,6 @@ import (
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
-	"github.com/rs/zerolog"
-
-	"github.com/eloylp/agents/internal/fleet"
 )
 
 // TestStringSliceArgAcceptsShapes pins the shape contract for the
@@ -166,36 +163,31 @@ func TestArrayOfAnyAcceptsShapes(t *testing.T) {
 // TestToolUpdateAgentAcceptsJSONStringSkills is the regression test for the
 // issue's primary repro: an MCP client that delivers `skills` as a
 // JSON-encoded string must not be rejected with "skills must be an array of
-// strings". The decoded slice must reach the writer with the expected
-// elements so the patch lands as the caller intended.
+// strings". The decoded slice must reach the persisted entity intact so the
+// patch lands as the caller intended.
 func TestToolUpdateAgentAcceptsJSONStringSkills(t *testing.T) {
 	t.Parallel()
-	canonical := fleet.Agent{Name: "coder", Backend: "codex", Prompt: "p"}
-	w := &stubAgentWriter{patchCanonical: canonical}
-	deps := Deps{
-		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
-		Queue: &stubQueue{}, Status: stubStatus{},
-		AgentWrite: w, Logger: zerolog.Nop(),
-	}
+	deps := testFixture(t)
+
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"name":         "coder",
-		"skills":       `["architect","go-testing"]`,
-		"can_dispatch": `["pr-reviewer"]`,
+		"skills":       `["testing","security"]`,
+		"can_dispatch": `["reviewer"]`,
 	}
 	res, err := toolUpdateAgent(deps)(context.Background(), req)
 	if err != nil || res.IsError {
 		t.Fatalf("update_agent failed: err=%v body=%s", err, textOf(t, res))
 	}
-	if w.gotPatch.Skills == nil || len(*w.gotPatch.Skills) != 2 {
-		t.Fatalf("skills patch not forwarded: %+v", w.gotPatch.Skills)
+	updated, ok := agentByName(t, deps.DB, "coder")
+	if !ok {
+		t.Fatal("coder missing after update")
 	}
-	if (*w.gotPatch.Skills)[0] != "architect" || (*w.gotPatch.Skills)[1] != "go-testing" {
-		t.Errorf("skills contents wrong: %+v", *w.gotPatch.Skills)
+	if len(updated.Skills) != 2 || updated.Skills[0] != "testing" || updated.Skills[1] != "security" {
+		t.Errorf("skills patch not persisted: %+v", updated.Skills)
 	}
-	if w.gotPatch.CanDispatch == nil || len(*w.gotPatch.CanDispatch) != 1 ||
-		(*w.gotPatch.CanDispatch)[0] != "pr-reviewer" {
-		t.Errorf("can_dispatch patch not forwarded: %+v", w.gotPatch.CanDispatch)
+	if len(updated.CanDispatch) != 1 || updated.CanDispatch[0] != "reviewer" {
+		t.Errorf("can_dispatch patch not persisted: %+v", updated.CanDispatch)
 	}
 }
 
@@ -204,15 +196,8 @@ func TestToolUpdateAgentAcceptsJSONStringSkills(t *testing.T) {
 // that the relief is uniform across the CRUD surface.
 func TestToolUpdateBackendAcceptsJSONStringModels(t *testing.T) {
 	t.Parallel()
-	w := &stubBackendWriter{
-		patchCanonicalName:   "claude",
-		patchCanonicalConfig: fleet.Backend{Command: "/bin/claude"},
-	}
-	deps := Deps{
-		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
-		Queue: &stubQueue{}, Status: stubStatus{},
-		BackendWrite: w, Logger: zerolog.Nop(),
-	}
+	deps := testFixture(t)
+
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"name":   "claude",
@@ -222,44 +207,43 @@ func TestToolUpdateBackendAcceptsJSONStringModels(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("update_backend failed: err=%v body=%s", err, textOf(t, res))
 	}
-	if w.gotPatch.Models == nil || len(*w.gotPatch.Models) != 2 {
-		t.Fatalf("models patch not forwarded: %+v", w.gotPatch.Models)
+	b, ok := backendByName(t, deps.DB, "claude")
+	if !ok {
+		t.Fatal("claude backend missing after update")
 	}
-	if (*w.gotPatch.Models)[0] != "opus" || (*w.gotPatch.Models)[1] != "sonnet" {
-		t.Errorf("models contents wrong: %+v", *w.gotPatch.Models)
+	if len(b.Models) != 2 || b.Models[0] != "opus" || b.Models[1] != "sonnet" {
+		t.Errorf("models patch not persisted: %+v", b.Models)
 	}
 }
 
 // TestToolCreateAgentAcceptsJSONStringSlices pins that POST-style handlers
-// also accept JSON-encoded arrays. Today these go through req.GetStringSlice
-// which silently drops bad shapes; the issue's acceptance criterion is that
-// the same JSON-string relief applies across CRUD tools.
+// also accept JSON-encoded arrays. The acceptance criterion for the issue is
+// that the same JSON-string relief applies across CRUD tools.
 func TestToolCreateAgentAcceptsJSONStringSlices(t *testing.T) {
 	t.Parallel()
-	canonical := fleet.Agent{Name: "linter", Backend: "claude", Skills: []string{"security"}}
-	w := &stubAgentWriter{canonical: canonical}
-	deps := Deps{
-		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
-		Queue: &stubQueue{}, Status: stubStatus{},
-		AgentWrite: w, Logger: zerolog.Nop(),
-	}
+	deps := testFixture(t)
+
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"name":         "linter",
 		"backend":      "claude",
-		"skills":       `["security","compliance"]`,
+		"prompt":       "audit",
+		"skills":       `["security","testing"]`,
 		"can_dispatch": `["coder"]`,
 	}
 	res, err := toolCreateAgent(deps)(context.Background(), req)
 	if err != nil || res.IsError {
 		t.Fatalf("create_agent failed: err=%v body=%s", err, textOf(t, res))
 	}
-	if len(w.gotUpsert.Skills) != 2 ||
-		w.gotUpsert.Skills[0] != "security" || w.gotUpsert.Skills[1] != "compliance" {
-		t.Errorf("skills not forwarded from JSON-string: %+v", w.gotUpsert.Skills)
+	persisted, ok := agentByName(t, deps.DB, "linter")
+	if !ok {
+		t.Fatal("linter missing after create")
 	}
-	if len(w.gotUpsert.CanDispatch) != 1 || w.gotUpsert.CanDispatch[0] != "coder" {
-		t.Errorf("can_dispatch not forwarded from JSON-string: %+v", w.gotUpsert.CanDispatch)
+	if len(persisted.Skills) != 2 || persisted.Skills[0] != "security" || persisted.Skills[1] != "testing" {
+		t.Errorf("skills not persisted from JSON-string: %+v", persisted.Skills)
+	}
+	if len(persisted.CanDispatch) != 1 || persisted.CanDispatch[0] != "coder" {
+		t.Errorf("can_dispatch not persisted from JSON-string: %+v", persisted.CanDispatch)
 	}
 }
 
@@ -269,30 +253,28 @@ func TestToolCreateAgentAcceptsJSONStringSlices(t *testing.T) {
 // repro), so the relief must reach them too.
 func TestToolCreateBindingAcceptsJSONStringSlices(t *testing.T) {
 	t.Parallel()
-	w := &stubBindingWriter{
-		createResult: fleet.Binding{ID: 1, Agent: "coder"},
-	}
-	deps := Deps{
-		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
-		Queue: &stubQueue{}, Status: stubStatus{},
-		BindingWrite: w, Logger: zerolog.Nop(),
-	}
+	deps := testFixture(t)
+
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
-		"repo":   "owner/repo",
+		"repo":   "owner/one",
 		"agent":  "coder",
 		"labels": `["ai:fix","ready"]`,
-		"events": `["push","pull_request"]`,
 	}
 	res, err := toolCreateBinding(deps)(context.Background(), req)
 	if err != nil || res.IsError {
 		t.Fatalf("create_binding failed: err=%v body=%s", err, textOf(t, res))
 	}
-	if got := w.gotCreateBinding.Labels; len(got) != 2 || got[0] != "ai:fix" || got[1] != "ready" {
-		t.Errorf("labels not forwarded from JSON-string: %+v", got)
+	r, _ := repoByName(t, deps.DB, "owner/one")
+	found := false
+	for _, b := range r.Use {
+		if b.Agent == "coder" && len(b.Labels) == 2 && b.Labels[0] == "ai:fix" && b.Labels[1] == "ready" {
+			found = true
+			break
+		}
 	}
-	if got := w.gotCreateBinding.Events; len(got) != 2 || got[0] != "push" || got[1] != "pull_request" {
-		t.Errorf("events not forwarded from JSON-string: %+v", got)
+	if !found {
+		t.Errorf("labels not persisted from JSON-string: %+v", r.Use)
 	}
 }
 
@@ -300,32 +282,31 @@ func TestToolCreateBindingAcceptsJSONStringSlices(t *testing.T) {
 // the create_binding test — same fields, same shape contract.
 func TestToolUpdateBindingAcceptsJSONStringSlices(t *testing.T) {
 	t.Parallel()
-	w := &stubBindingWriter{
-		updateResult: fleet.Binding{ID: 5, Agent: "coder"},
-	}
-	deps := Deps{
-		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
-		Queue: &stubQueue{}, Status: stubStatus{},
-		BindingWrite: w, Logger: zerolog.Nop(),
-	}
+	deps := testFixture(t)
+	id := firstBindingID(t, deps, "owner/one")
+
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
-		"id":     float64(5),
-		"repo":   "owner/repo",
+		"id":     float64(id),
+		"repo":   "owner/one",
 		"agent":  "coder",
 		"labels": `["ready"]`,
-		"events": `["push"]`,
 	}
 	res, err := toolUpdateBinding(deps)(context.Background(), req)
 	if err != nil || res.IsError {
 		t.Fatalf("update_binding failed: err=%v body=%s", err, textOf(t, res))
 	}
-	if got := w.gotUpdateBinding.Labels; len(got) != 1 || got[0] != "ready" {
-		t.Errorf("labels not forwarded from JSON-string: %+v", got)
+	r, _ := repoByName(t, deps.DB, "owner/one")
+	for _, b := range r.Use {
+		if b.ID != id {
+			continue
+		}
+		if len(b.Labels) != 1 || b.Labels[0] != "ready" {
+			t.Errorf("labels not persisted from JSON-string: %+v", b.Labels)
+		}
+		return
 	}
-	if got := w.gotUpdateBinding.Events; len(got) != 1 || got[0] != "push" {
-		t.Errorf("events not forwarded from JSON-string: %+v", got)
-	}
+	t.Fatalf("binding %d missing after update", id)
 }
 
 // TestToolCreateRepoAcceptsJSONStringBindings pins that the nested
@@ -334,15 +315,11 @@ func TestToolUpdateBindingAcceptsJSONStringSlices(t *testing.T) {
 // argument is itself an array.
 func TestToolCreateRepoAcceptsJSONStringBindings(t *testing.T) {
 	t.Parallel()
-	w := &stubRepoWriter{canonical: fleet.Repo{Name: "owner/repo", Enabled: true}}
-	deps := Deps{
-		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
-		Queue: &stubQueue{}, Status: stubStatus{},
-		RepoWrite: w, Logger: zerolog.Nop(),
-	}
+	deps := testFixture(t)
+
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
-		"name":     "owner/repo",
+		"name":     "owner/jsonbindings",
 		"enabled":  true,
 		"bindings": `[{"agent":"coder","labels":["ready"]}]`,
 	}
@@ -353,10 +330,14 @@ func TestToolCreateRepoAcceptsJSONStringBindings(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
-	if len(w.gotUpsert.Use) != 1 {
-		t.Fatalf("bindings: want 1, got %d", len(w.gotUpsert.Use))
+	persisted, ok := repoByName(t, deps.DB, "owner/jsonbindings")
+	if !ok {
+		t.Fatal("repo missing after create")
 	}
-	b := w.gotUpsert.Use[0]
+	if len(persisted.Use) != 1 {
+		t.Fatalf("bindings: want 1, got %d", len(persisted.Use))
+	}
+	b := persisted.Use[0]
 	if b.Agent != "coder" {
 		t.Errorf("agent: got %q, want %q", b.Agent, "coder")
 	}
@@ -370,12 +351,8 @@ func TestToolCreateRepoAcceptsJSONStringBindings(t *testing.T) {
 // the clear array-of-strings error rather than silently slipping through.
 func TestToolUpdateAgentRejectsBogusSkills(t *testing.T) {
 	t.Parallel()
-	w := &stubAgentWriter{}
-	deps := Deps{
-		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
-		Queue: &stubQueue{}, Status: stubStatus{},
-		AgentWrite: w, Logger: zerolog.Nop(),
-	}
+	deps := testFixture(t)
+
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"name":   "coder",
@@ -390,8 +367,5 @@ func TestToolUpdateAgentRejectsBogusSkills(t *testing.T) {
 	}
 	if got := textOf(t, res); !strings.Contains(got, "skills must be an array of strings") {
 		t.Fatalf("error body want %q, got %q", "skills must be an array of strings", got)
-	}
-	if w.gotPatchName != "" {
-		t.Errorf("writer must not be invoked on validation failure, got name=%q", w.gotPatchName)
 	}
 }

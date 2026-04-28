@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
-	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
@@ -17,16 +16,7 @@ import (
 // memory disabled" from the documented default.
 func TestToolCreateAgentForwardsAllowMemoryFalse(t *testing.T) {
 	t.Parallel()
-	canonical := fleet.Agent{Name: "linter", Backend: "claude", Prompt: "audit"}
-	w := &stubAgentWriter{canonical: canonical}
-	deps := Deps{
-		DB:         testDB(t),
-		Config:     stubConfig{cfg: fixtureConfig()},
-		Queue:      &stubQueue{},
-		Status:     stubStatus{},
-		AgentWrite: w,
-		Logger:     zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
@@ -40,10 +30,14 @@ func TestToolCreateAgentForwardsAllowMemoryFalse(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("create_agent: err=%v body=%s", err, textOf(t, res))
 	}
-	if w.gotUpsert.AllowMemory == nil {
+	persisted, ok := agentByName(t, deps.DB, "linter")
+	if !ok {
+		t.Fatal("linter not found after create")
+	}
+	if persisted.AllowMemory == nil {
 		t.Fatal("AllowMemory pointer should be non-nil after explicit false in payload")
 	}
-	if *w.gotUpsert.AllowMemory {
+	if *persisted.AllowMemory {
 		t.Errorf("AllowMemory: got &true, want &false")
 	}
 }
@@ -53,16 +47,7 @@ func TestToolCreateAgentForwardsAllowMemoryFalse(t *testing.T) {
 // returns the documented default of true downstream.
 func TestToolCreateAgentLeavesAllowMemoryNilWhenAbsent(t *testing.T) {
 	t.Parallel()
-	canonical := fleet.Agent{Name: "linter", Backend: "claude", Prompt: "audit"}
-	w := &stubAgentWriter{canonical: canonical}
-	deps := Deps{
-		DB:         testDB(t),
-		Config:     stubConfig{cfg: fixtureConfig()},
-		Queue:      &stubQueue{},
-		Status:     stubStatus{},
-		AgentWrite: w,
-		Logger:     zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
@@ -75,26 +60,24 @@ func TestToolCreateAgentLeavesAllowMemoryNilWhenAbsent(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("create_agent: err=%v body=%s", err, textOf(t, res))
 	}
-	if w.gotUpsert.AllowMemory != nil {
-		t.Errorf("AllowMemory: got %v, want nil when absent from payload", *w.gotUpsert.AllowMemory)
+	persisted, ok := agentByName(t, deps.DB, "linter")
+	if !ok {
+		t.Fatal("linter not found after create")
+	}
+	// The store always materialises AllowMemory as non-nil on read; the
+	// invariant we care about is that an OMITTED payload field round-trips
+	// as the documented default (true).
+	if !persisted.IsAllowMemory() {
+		t.Errorf("AllowMemory: got false, want documented default of true when absent from payload")
 	}
 }
 
 // TestToolUpdateAgentForwardsAllowMemoryPatch verifies that update_agent
 // surfaces allow_memory in the partial-update payload as a *bool — exactly
-// what the webhook adapter expects to merge over an existing Agent.
+// what the merge step needs to flip the gate without nuking other fields.
 func TestToolUpdateAgentForwardsAllowMemoryPatch(t *testing.T) {
 	t.Parallel()
-	canonical := fleet.Agent{Name: "coder", Backend: "claude", Prompt: "p"}
-	w := &stubAgentWriter{patchCanonical: canonical}
-	deps := Deps{
-		DB:         testDB(t),
-		Config:     stubConfig{cfg: fixtureConfig()},
-		Queue:      &stubQueue{},
-		Status:     stubStatus{},
-		AgentWrite: w,
-		Logger:     zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
@@ -105,12 +88,17 @@ func TestToolUpdateAgentForwardsAllowMemoryPatch(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("update_agent: err=%v body=%s", err, textOf(t, res))
 	}
-	if w.gotPatch.AllowMemory == nil || *w.gotPatch.AllowMemory {
-		t.Fatalf("AllowMemory patch: got %v, want non-nil &false", w.gotPatch.AllowMemory)
+	persisted, ok := agentByName(t, deps.DB, "coder")
+	if !ok {
+		t.Fatal("coder missing after update")
 	}
-	// Other fields untouched in this patch must remain nil.
-	if w.gotPatch.Backend != nil || w.gotPatch.Prompt != nil {
-		t.Errorf("unset fields should be nil, got backend=%v prompt=%v", w.gotPatch.Backend, w.gotPatch.Prompt)
+	if persisted.AllowMemory == nil || *persisted.AllowMemory {
+		t.Fatalf("AllowMemory: got %v, want non-nil &false", persisted.AllowMemory)
+	}
+	// Other fields preserved by the partial-update path. Backend was "claude"
+	// in the seed; nothing in the payload should have touched it.
+	if persisted.Backend != "claude" {
+		t.Errorf("backend should be preserved across patch, got %q", persisted.Backend)
 	}
 }
 
@@ -119,15 +107,8 @@ func TestToolUpdateAgentForwardsAllowMemoryPatch(t *testing.T) {
 // silently being treated as absent (which would mis-trigger preserve-semantics).
 func TestToolUpdateAgentRejectsNonBooleanAllowMemory(t *testing.T) {
 	t.Parallel()
-	w := &stubAgentWriter{}
-	deps := Deps{
-		DB:         testDB(t),
-		Config:     stubConfig{cfg: fixtureConfig()},
-		Queue:      &stubQueue{},
-		Status:     stubStatus{},
-		AgentWrite: w,
-		Logger:     zerolog.Nop(),
-	}
+	deps := testFixture(t)
+
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"name":         "coder",
@@ -147,19 +128,10 @@ func TestToolUpdateAgentRejectsNonBooleanAllowMemory(t *testing.T) {
 // using the same wire shape — see the effective value.
 func TestToolGetAgentSurfacesAllowMemory(t *testing.T) {
 	t.Parallel()
-	cfg := fixtureConfig()
+	deps := testFixture(t)
 	ff := false
-	cfg.Agents = []fleet.Agent{
-		{Name: "coder", Backend: "claude", Prompt: "p"},
-		{Name: "stateless", Backend: "claude", Prompt: "p", AllowMemory: &ff},
-	}
-	deps := newTestDeps(t, cfg, &stubQueue{}, stubStatus{})
-	// toolGetAgent reads from the DB, not from deps.Config; seed the agents
-	// the test cares about.
-	for _, a := range cfg.Agents {
-		if err := store.UpsertAgent(deps.DB, a); err != nil {
-			t.Fatalf("seed agent %q: %v", a.Name, err)
-		}
+	if err := store.UpsertAgent(deps.DB, fleet.Agent{Name: "stateless", Backend: "claude", Prompt: "p", AllowMemory: &ff}); err != nil {
+		t.Fatalf("seed stateless: %v", err)
 	}
 
 	// Default-true agent.

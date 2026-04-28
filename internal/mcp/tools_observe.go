@@ -9,6 +9,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -147,7 +148,7 @@ func toolGetGraph(deps Deps) server.ToolHandlerFunc {
 // toolGetDispatches returns the current dispatch counters.
 func toolGetDispatches(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		return jsonResult(deps.DispatchStats.DispatchStats())
+		return jsonResult(deps.Engine.DispatchStats())
 	}
 }
 
@@ -168,7 +169,7 @@ func toolGetMemory(deps Deps) server.ToolHandlerFunc {
 		if isTraversalComponent(agent) || isTraversalComponent(repo) {
 			return mcpgo.NewToolResultError("invalid agent or repo path"), nil
 		}
-		content, mtime, found, err := deps.Memory.ReadMemory(agent, repo)
+		content, found, mtime, err := store.ReadMemory(deps.DB, ai.NormalizeToken(agent), ai.NormalizeToken(repo))
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("read memory", err), nil
 		}

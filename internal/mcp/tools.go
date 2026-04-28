@@ -142,7 +142,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolGetGraph(deps),
 		)
 	}
-	if deps.DispatchStats != nil {
+	if deps.Engine != nil {
 		srv.AddTool(
 			mcpgo.NewTool("get_dispatches",
 				mcpgo.WithDescription("Return current dispatch counters: requested, enqueued, deduped, and drop reasons (no whitelist, no opt-in, self, depth, fanout)."),
@@ -150,7 +150,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolGetDispatches(deps),
 		)
 	}
-	if deps.Memory != nil {
+	if deps.DB != nil {
 		srv.AddTool(
 			mcpgo.NewTool("get_memory",
 				mcpgo.WithDescription("Return the stored markdown memory for an agent/repo pair. Only autonomous agents keep memory; event-driven runs don't."),
@@ -166,7 +166,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolGetMemory(deps),
 		)
 	}
-	if deps.ConfigBytes != nil {
+	if deps.Config != nil {
 		srv.AddTool(
 			mcpgo.NewTool("get_config",
 				mcpgo.WithDescription("Return the effective parsed daemon config as JSON with secrets redacted. Same wire shape as GET /config."),
@@ -179,8 +179,6 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			),
 			toolExportConfig(deps),
 		)
-	}
-	if deps.ConfigImport != nil {
 		srv.AddTool(
 			mcpgo.NewTool("import_config",
 				mcpgo.WithDescription("Write a YAML config fragment (agents, skills, repos, ai_backends) into the store. mode=\"\" or \"merge\" upserts; mode=\"replace\" prunes entries not in the payload. Returns per-section counts. Same path as POST /import."),
@@ -195,7 +193,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolImportConfig(deps),
 		)
 	}
-	if deps.SkillWrite != nil {
+	if deps.Fleet != nil {
 		srv.AddTool(
 			mcpgo.NewTool("create_skill",
 				mcpgo.WithDescription("Create or update a skill. Upsert semantics: a write to an existing name overwrites it. Returns the canonical (normalized) skill persisted by the store. Same path as POST /skills."),
@@ -233,7 +231,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolDeleteSkill(deps),
 		)
 	}
-	if deps.BackendWrite != nil {
+	if deps.Fleet != nil {
 		srv.AddTool(
 			mcpgo.NewTool("create_backend",
 				mcpgo.WithDescription("Create or update an AI backend. Upsert semantics: a write to an existing name overwrites it. Returns the canonical (normalized) backend persisted by the store. Same path as POST /backends."),
@@ -312,7 +310,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolDeleteBackend(deps),
 		)
 	}
-	if deps.AgentWrite != nil {
+	if deps.Fleet != nil {
 		srv.AddTool(
 			mcpgo.NewTool("create_agent",
 				mcpgo.WithDescription("Create or update an agent. Upsert semantics: a write to an existing name overwrites it. Returns the canonical (normalized) agent persisted by the store. Same path as POST /agents."),
@@ -405,7 +403,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolDeleteAgent(deps),
 		)
 	}
-	if deps.RepoWrite != nil {
+	if deps.Repos != nil {
 		srv.AddTool(
 			mcpgo.NewTool("create_repo",
 				mcpgo.WithDescription("Create or update a repo and its bindings. Upsert semantics: a write to an existing name overwrites it, replacing the bindings list. Returns the canonical (normalized) repo persisted by the store. Same path as POST /repos."),
@@ -444,7 +442,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolDeleteRepo(deps),
 		)
 	}
-	if deps.BindingWrite != nil {
+	if deps.Repos != nil {
 		srv.AddTool(
 			mcpgo.NewTool("get_binding",
 				mcpgo.WithDescription("Fetch one binding by ID, verifying it belongs to the given repo. Same path as GET /repos/{owner}/{repo}/bindings/{id}."),

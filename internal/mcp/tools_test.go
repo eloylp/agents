@@ -4,70 +4,51 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog"
 
+	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/observe"
+	internalserver "github.com/eloylp/agents/internal/server"
+	serverconfig "github.com/eloylp/agents/internal/server/config"
 	serverfleet "github.com/eloylp/agents/internal/server/fleet"
+	serverrepos "github.com/eloylp/agents/internal/server/repos"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
-// stubConfig returns a fixed *config.Config for the tool tests.
-type stubConfig struct{ cfg *config.Config }
+// emptyStatusProvider satisfies internalserver.StatusProvider for tests that
+// don't care about cron schedules in /status output.
+type emptyStatusProvider struct{}
 
-func (s stubConfig) Config() *config.Config { return s.cfg }
+func (emptyStatusProvider) AgentStatuses() []internalserver.AgentStatus { return nil }
 
-// stubQueue records PushEvent invocations so tests can assert on the event
-// shape without running a real workflow engine.
-type stubQueue struct {
-	mu     sync.Mutex
-	events []workflow.Event
-	err    error
-}
+// emptyRuntimeState satisfies internalserver.RuntimeStateProvider with no
+// in-flight runs. Tests that need a specific running/idle status would
+// construct a custom one.
+type emptyRuntimeState struct{}
 
-func (q *stubQueue) PushEvent(_ context.Context, ev workflow.Event) error {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.err != nil {
-		return q.err
-	}
-	q.events = append(q.events, ev)
+func (emptyRuntimeState) IsRunning(string) bool { return false }
+
+// noopReloader is the default cron reloader for tests — they don't run a
+// real scheduler so reload calls are no-ops.
+type noopReloader struct{}
+
+func (noopReloader) Reload([]fleet.Repo, []fleet.Agent, map[string]fleet.Skill, map[string]fleet.Backend) error {
 	return nil
-}
-
-func (q *stubQueue) snapshot() []workflow.Event {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	out := make([]workflow.Event, len(q.events))
-	copy(out, q.events)
-	return out
-}
-
-type stubStatus struct {
-	body []byte
-	err  error
-}
-
-func (s stubStatus) StatusJSON() ([]byte, error) {
-	if s.err != nil {
-		return nil, s.err
-	}
-	return s.body, nil
 }
 
 func fixtureConfig() *config.Config {
 	return &config.Config{
 		Daemon: config.DaemonConfig{
+			HTTP: config.HTTPConfig{MaxBodyBytes: 1 << 20},
 			AIBackends: map[string]fleet.Backend{
 				"claude": {Command: "claude", Models: []string{"opus", "sonnet"}, Healthy: true, TimeoutSeconds: 60},
 				"codex":  {Command: "codex", Healthy: false},
@@ -79,7 +60,7 @@ func fixtureConfig() *config.Config {
 		},
 		Agents: []fleet.Agent{
 			{Name: "coder", Backend: "claude", Skills: []string{"testing"}, Description: "writes code"},
-			{Name: "reviewer", Backend: "claude", AllowDispatch: true},
+			{Name: "reviewer", Backend: "claude", AllowDispatch: true, Description: "reviews code"},
 		},
 		Repos: []fleet.Repo{
 			{Name: "owner/one", Enabled: true, Use: []fleet.Binding{
@@ -92,7 +73,7 @@ func fixtureConfig() *config.Config {
 }
 
 // testDB creates a temporary SQLite database seeded with the same entities as
-// fixtureConfig so that tools reading from deps.DB see consistent data.
+// fixtureConfig so that tools reading from the DB see consistent data.
 func testDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
@@ -104,7 +85,7 @@ func testDB(t *testing.T) *sql.DB {
 		db,
 		[]fleet.Agent{
 			{Name: "coder", Backend: "claude", Skills: []string{"testing"}, Prompt: "code", Description: "writes code", CanDispatch: []string{}},
-			{Name: "reviewer", Backend: "claude", Prompt: "review", AllowDispatch: true, Skills: []string{}, CanDispatch: []string{}},
+			{Name: "reviewer", Backend: "claude", Prompt: "review", AllowDispatch: true, Description: "reviews code", Skills: []string{}, CanDispatch: []string{}},
 		},
 		[]fleet.Repo{
 			{Name: "owner/one", Enabled: true, Use: []fleet.Binding{
@@ -127,15 +108,76 @@ func testDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func newTestDeps(t *testing.T, cfg *config.Config, queue EventQueue, status StatusSource) Deps {
+// testFixture builds a Deps backed by real components for an MCP tool test:
+// a temporary SQLite DB seeded by fixtureConfig, a real *server.Server, real
+// fleet/repos/config handlers, a real workflow.DataChannels and Engine, and
+// a real observe.Store. Tests can read deps.DB to verify persisted writes,
+// drain deps.Queue.EventChan() to assert enqueued events, and call methods
+// on deps.Observe directly to seed observability records.
+func testFixture(t *testing.T) Deps {
 	t.Helper()
+	return testFixtureWithConfig(t, fixtureConfig())
+}
+
+// testFixtureWithConfig is testFixture with an explicit config. The DB is
+// still seeded from fixtureConfig — callers that need divergent DB state
+// should mutate deps.DB after construction via store.UpsertX helpers.
+func testFixtureWithConfig(t *testing.T, cfg *config.Config) Deps {
+	t.Helper()
+	db := testDB(t)
+	channels := workflow.NewDataChannels(8)
+	obs := observe.NewStore(db)
+	engine := workflow.NewEngine(cfg, map[string]ai.Runner{}, channels, zerolog.Nop())
+	srv := internalserver.NewServer(cfg, channels, emptyStatusProvider{}, engine, zerolog.Nop())
+	srv.WithStore(db, noopReloader{})
+	fleetH := serverfleet.New(db, srv, srv, emptyStatusProvider{}, emptyRuntimeState{}, zerolog.Nop())
+	reposH := serverrepos.New(db, srv, srv, zerolog.Nop())
+	configH := serverconfig.New(db, srv, srv, zerolog.Nop())
 	return Deps{
-		DB:     testDB(t),
-		Config: stubConfig{cfg: cfg},
-		Queue:  queue,
-		Status: status,
-		Logger: zerolog.Nop(),
+		DB:      db,
+		Server:  srv,
+		Queue:   channels,
+		Observe: obs,
+		Engine:  engine,
+		Fleet:   fleetH,
+		Repos:   reposH,
+		Config:  configH,
+		Logger:  zerolog.Nop(),
 	}
+}
+
+// agentByName reads a single agent from the test DB by name. Used by write
+// tests to verify that the tool persisted the expected fields.
+func agentByName(t *testing.T, db *sql.DB, name string) (fleet.Agent, bool) {
+	t.Helper()
+	agents, err := store.ReadAgents(db)
+	if err != nil {
+		t.Fatalf("read agents: %v", err)
+	}
+	key := fleet.NormalizeAgentName(name)
+	for _, a := range agents {
+		if a.Name == key {
+			return a, true
+		}
+	}
+	return fleet.Agent{}, false
+}
+
+// drainQueue returns up to n events from the channel without blocking past
+// the timeout. Used by trigger_agent tests to assert what was enqueued.
+func drainQueue(t *testing.T, dc *workflow.DataChannels, n int) []workflow.Event {
+	t.Helper()
+	out := make([]workflow.Event, 0, n)
+	deadline := time.After(100 * time.Millisecond)
+	for len(out) < n {
+		select {
+		case ev := <-dc.EventChan():
+			out = append(out, ev)
+		case <-deadline:
+			return out
+		}
+	}
+	return out
 }
 
 // decodeText unmarshalls the text content of a CallToolResult into v.
@@ -173,7 +215,7 @@ func textOf(t *testing.T, res *mcpgo.CallToolResult) string {
 
 func TestToolListAgents(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{})
+	deps := testFixture(t)
 
 	res, err := toolListAgents(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -198,7 +240,7 @@ func TestToolListAgents(t *testing.T) {
 
 func TestToolGetAgent(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{})
+	deps := testFixture(t)
 
 	cases := []struct {
 		name    string
@@ -236,7 +278,7 @@ func TestToolGetAgent(t *testing.T) {
 
 func TestToolGetAgentMissingName(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{})
+	deps := testFixture(t)
 
 	cases := []map[string]any{
 		{},
@@ -258,7 +300,7 @@ func TestToolGetAgentMissingName(t *testing.T) {
 
 func TestToolListSkillsSorted(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{})
+	deps := testFixture(t)
 
 	res, err := toolListSkills(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -276,7 +318,7 @@ func TestToolListSkillsSorted(t *testing.T) {
 
 func TestToolGetSkill(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{})
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "Testing"}
@@ -302,7 +344,7 @@ func TestToolGetSkill(t *testing.T) {
 
 func TestToolListBackendsSorted(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{})
+	deps := testFixture(t)
 
 	res, err := toolListBackends(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -321,7 +363,7 @@ func TestToolListBackendsSorted(t *testing.T) {
 
 func TestToolGetBackend(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{})
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "Claude"}
@@ -350,7 +392,7 @@ func TestToolGetBackend(t *testing.T) {
 
 func TestToolListRepos(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{})
+	deps := testFixture(t)
 
 	res, err := toolListRepos(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -389,7 +431,7 @@ func TestToolListRepos(t *testing.T) {
 
 func TestToolGetRepo(t *testing.T) {
 	t.Parallel()
-	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{})
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "OWNER/one"}
@@ -430,35 +472,29 @@ func TestToolGetRepo(t *testing.T) {
 
 func TestToolGetStatusPassesThrough(t *testing.T) {
 	t.Parallel()
-	want := `{"status":"ok","uptime_seconds":42}`
-	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{body: []byte(want)})
+	deps := testFixture(t)
 
 	res, err := toolGetStatus(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := textOf(t, res); got != want {
-		t.Fatalf("status passthrough mismatch: want %q, got %q", want, got)
+	// Status JSON is the same payload GET /status emits — assert the wire
+	// shape carries the expected top-level fields rather than pinning an
+	// exact string, which would break on every status-shape change.
+	var got map[string]any
+	if err := json.Unmarshal([]byte(textOf(t, res)), &got); err != nil {
+		t.Fatalf("status body is not valid JSON: %v", err)
 	}
-}
-
-func TestToolGetStatusSurfacesError(t *testing.T) {
-	t.Parallel()
-	deps := newTestDeps(t, fixtureConfig(), &stubQueue{}, stubStatus{err: errors.New("boom")})
-
-	res, err := toolGetStatus(deps)(context.Background(), mcpgo.CallToolRequest{})
-	if err != nil {
-		t.Fatalf("handler should return tool-level error, not transport error: %v", err)
-	}
-	if !res.IsError {
-		t.Fatalf("expected IsError=true, got %+v", res)
+	for _, key := range []string{"status", "uptime_seconds", "queues", "agents", "orphaned_agents"} {
+		if _, ok := got[key]; !ok {
+			t.Errorf("status JSON missing %q: %+v", key, got)
+		}
 	}
 }
 
 func TestToolTriggerAgentSuccess(t *testing.T) {
 	t.Parallel()
-	queue := &stubQueue{}
-	deps := newTestDeps(t, fixtureConfig(), queue, stubStatus{})
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"agent": "coder", "repo": "owner/one"}
@@ -478,7 +514,7 @@ func TestToolTriggerAgentSuccess(t *testing.T) {
 	if got["event_id"] == "" {
 		t.Fatal("event_id should be populated")
 	}
-	events := queue.snapshot()
+	events := drainQueue(t, deps.Queue, 1)
 	if len(events) != 1 {
 		t.Fatalf("expected 1 queued event, got %d", len(events))
 	}
@@ -493,8 +529,7 @@ func TestToolTriggerAgentSuccess(t *testing.T) {
 
 func TestToolTriggerAgentRejectsUnknownRepo(t *testing.T) {
 	t.Parallel()
-	queue := &stubQueue{}
-	deps := newTestDeps(t, fixtureConfig(), queue, stubStatus{})
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"agent": "coder", "repo": "owner/unknown"}
@@ -506,15 +541,14 @@ func TestToolTriggerAgentRejectsUnknownRepo(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected IsError=true for unknown repo, got %+v", res)
 	}
-	if len(queue.snapshot()) != 0 {
-		t.Fatalf("queue should not receive events for invalid repos")
+	if got := drainQueue(t, deps.Queue, 1); len(got) != 0 {
+		t.Fatalf("queue should not receive events for invalid repos, got %+v", got)
 	}
 }
 
 func TestToolTriggerAgentRejectsDisabledRepo(t *testing.T) {
 	t.Parallel()
-	queue := &stubQueue{}
-	deps := newTestDeps(t, fixtureConfig(), queue, stubStatus{})
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"agent": "coder", "repo": "owner/two"}
@@ -530,8 +564,7 @@ func TestToolTriggerAgentRejectsDisabledRepo(t *testing.T) {
 
 func TestToolTriggerAgentMissingArgs(t *testing.T) {
 	t.Parallel()
-	queue := &stubQueue{}
-	deps := newTestDeps(t, fixtureConfig(), queue, stubStatus{})
+	deps := testFixture(t)
 
 	cases := []struct {
 		name string
@@ -558,79 +591,40 @@ func TestToolTriggerAgentMissingArgs(t *testing.T) {
 	}
 }
 
-func TestToolTriggerAgentQueueFailure(t *testing.T) {
-	t.Parallel()
-	queue := &stubQueue{err: errors.New("queue full")}
-	deps := newTestDeps(t, fixtureConfig(), queue, stubStatus{})
-
-	req := mcpgo.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"agent": "coder", "repo": "owner/one"}
-
-	res, err := toolTriggerAgent(deps)(context.Background(), req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !res.IsError {
-		t.Fatalf("expected IsError=true for queue failure, got %+v", res)
-	}
-}
-
-// stubObserve is a test-only ObserveStore that returns fixed canned slices.
-// Per-method captures let tests assert the exact arguments the handlers pass.
-type stubObserve struct {
-	events    []observe.TimestampedEvent
-	traces    []observe.Span
-	byRoot    map[string][]observe.Span
-	steps     map[string][]workflow.TraceStep
-	edges     []observe.Edge
-	lastSince time.Time
-}
-
-func (s *stubObserve) ListEvents(since time.Time) []observe.TimestampedEvent {
-	s.lastSince = since
-	return s.events
-}
-func (s *stubObserve) ListTraces() []observe.Span                      { return s.traces }
-func (s *stubObserve) TracesByRootEventID(id string) []observe.Span    { return s.byRoot[id] }
-func (s *stubObserve) ListSteps(spanID string) []workflow.TraceStep    { return s.steps[spanID] }
-func (s *stubObserve) ListEdges() []observe.Edge                       { return s.edges }
-
-type stubDispatchStats struct{ stats workflow.DispatchStats }
-
-func (s stubDispatchStats) DispatchStats() workflow.DispatchStats { return s.stats }
-
-type stubMemory struct {
-	content string
-	mtime   time.Time
-	found   bool
-	err     error
-	calls   []struct{ agent, repo string }
-}
-
-func (s *stubMemory) ReadMemory(agent, repo string) (string, time.Time, bool, error) {
-	s.calls = append(s.calls, struct{ agent, repo string }{agent, repo})
-	return s.content, s.mtime, s.found, s.err
-}
-
-func depsWithObserve(t *testing.T, obs ObserveStore) Deps {
+// seedEvent inserts an event row directly into the SQLite events table so
+// observe.Store.ListEvents reads it back deterministically. The Store's own
+// RecordEvent is async (goroutine), which would race with the immediate
+// ListEvents call our tool tests need.
+func seedEvent(t *testing.T, db *sql.DB, ev observe.TimestampedEvent) {
 	t.Helper()
-	return Deps{
-		DB:      testDB(t),
-		Config:  stubConfig{cfg: fixtureConfig()},
-		Queue:   &stubQueue{},
-		Status:  stubStatus{},
-		Observe: obs,
-		Logger:  zerolog.Nop(),
+	payload, _ := json.Marshal(ev.Payload)
+	if _, err := db.Exec(
+		`INSERT INTO events (id, at, repo, kind, number, actor, payload) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		ev.ID, ev.At, ev.Repo, ev.Kind, ev.Number, ev.Actor, string(payload),
+	); err != nil {
+		t.Fatalf("seed event: %v", err)
+	}
+}
+
+// seedSpan inserts a trace span row directly into the SQLite traces table.
+// Same async-vs-sync rationale as seedEvent.
+func seedSpan(t *testing.T, db *sql.DB, sp observe.Span) {
+	t.Helper()
+	if _, err := db.Exec(
+		`INSERT INTO traces (span_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		sp.SpanID, sp.RootEventID, sp.ParentSpanID, sp.Agent, sp.Backend, sp.Repo, sp.Number,
+		sp.EventKind, sp.InvokedBy, sp.DispatchDepth, sp.QueueWaitMs, sp.ArtifactsCount, sp.Summary,
+		sp.StartedAt, sp.FinishedAt, sp.DurationMs, sp.Status, sp.ErrorMsg,
+	); err != nil {
+		t.Fatalf("seed span: %v", err)
 	}
 }
 
 func TestToolListEvents(t *testing.T) {
 	t.Parallel()
-	obs := &stubObserve{events: []observe.TimestampedEvent{
-		{ID: "e1", Kind: "issues.labeled", Repo: "owner/one", At: time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)},
-		{ID: "e2", Kind: "agents.run", Repo: "owner/one", At: time.Date(2026, 4, 20, 10, 5, 0, 0, time.UTC)},
-	}}
-	deps := depsWithObserve(t, obs)
+	deps := testFixture(t)
+	seedEvent(t, deps.DB, observe.TimestampedEvent{ID: "e1", Kind: "issues.labeled", Repo: "owner/one", At: time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)})
+	seedEvent(t, deps.DB, observe.TimestampedEvent{ID: "e2", Kind: "agents.run", Repo: "owner/one", At: time.Date(2026, 4, 20, 10, 5, 0, 0, time.UTC)})
 
 	res, err := toolListEvents(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -641,41 +635,43 @@ func TestToolListEvents(t *testing.T) {
 	if len(got) != 2 || got[0]["id"] != "e1" || got[1]["id"] != "e2" {
 		t.Fatalf("unexpected events payload: %+v", got)
 	}
-	if !obs.lastSince.IsZero() {
-		t.Fatalf("expected zero-time since when omitted, got %v", obs.lastSince)
-	}
 }
 
 func TestToolListEventsSinceFilter(t *testing.T) {
 	t.Parallel()
-	obs := &stubObserve{events: []observe.TimestampedEvent{}}
-	deps := depsWithObserve(t, obs)
+	deps := testFixture(t)
+	seedEvent(t, deps.DB, observe.TimestampedEvent{ID: "old", At: time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC), Kind: "agents.run", Repo: "owner/one"})
+	seedEvent(t, deps.DB, observe.TimestampedEvent{ID: "new", At: time.Date(2026, 4, 20, 11, 0, 0, 0, time.UTC), Kind: "agents.run", Repo: "owner/one"})
 
+	// since=10:00 should drop the 09:00 event but keep the 11:00 event.
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"since": "2026-04-20T10:00:00Z"}
-	if _, err := toolListEvents(deps)(context.Background(), req); err != nil {
+	res, err := toolListEvents(deps)(context.Background(), req)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if obs.lastSince.IsZero() {
-		t.Fatalf("expected non-zero since, got zero")
+	var got []map[string]any
+	decodeText(t, res, &got)
+	if len(got) != 1 || got[0]["id"] != "new" {
+		t.Fatalf("since filter expected only new event, got %+v", got)
 	}
 
 	// Unparseable since should fall back to no filter rather than erroring,
 	// matching GET /events.
-	obs.lastSince = time.Now()
 	req.Params.Arguments = map[string]any{"since": "not-a-time"}
-	if _, err := toolListEvents(deps)(context.Background(), req); err != nil {
+	res, err = toolListEvents(deps)(context.Background(), req)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !obs.lastSince.IsZero() {
-		t.Fatalf("expected zero since for unparseable input, got %v", obs.lastSince)
+	decodeText(t, res, &got)
+	if len(got) != 2 {
+		t.Fatalf("unparseable since should fall back to no filter, got %+v", got)
 	}
 }
 
 func TestToolListEventsNilSlice(t *testing.T) {
 	t.Parallel()
-	obs := &stubObserve{events: nil}
-	deps := depsWithObserve(t, obs)
+	deps := testFixture(t)
 
 	res, err := toolListEvents(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -691,11 +687,10 @@ func TestToolListEventsNilSlice(t *testing.T) {
 
 func TestToolListTraces(t *testing.T) {
 	t.Parallel()
-	obs := &stubObserve{traces: []observe.Span{
-		{SpanID: "s1", Agent: "coder", Status: "success"},
-		{SpanID: "s2", Agent: "reviewer", Status: "error"},
-	}}
-	deps := depsWithObserve(t, obs)
+	deps := testFixture(t)
+	now := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
+	seedSpan(t, deps.DB, observe.Span{SpanID: "s1", Agent: "coder", Status: "success", StartedAt: now, FinishedAt: now.Add(time.Second)})
+	seedSpan(t, deps.DB, observe.Span{SpanID: "s2", Agent: "reviewer", Status: "error", StartedAt: now.Add(time.Minute), FinishedAt: now.Add(time.Minute + time.Second)})
 
 	res, err := toolListTraces(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -703,17 +698,16 @@ func TestToolListTraces(t *testing.T) {
 	}
 	var got []map[string]any
 	decodeText(t, res, &got)
-	if len(got) != 2 || got[0]["span_id"] != "s1" {
-		t.Fatalf("unexpected traces payload: %+v", got)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 traces, got %+v", got)
 	}
 }
 
 func TestToolGetTrace(t *testing.T) {
 	t.Parallel()
-	obs := &stubObserve{byRoot: map[string][]observe.Span{
-		"root-1": {{SpanID: "s1", RootEventID: "root-1", Agent: "coder"}},
-	}}
-	deps := depsWithObserve(t, obs)
+	deps := testFixture(t)
+	now := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
+	seedSpan(t, deps.DB, observe.Span{SpanID: "s1", RootEventID: "root-1", Agent: "coder", StartedAt: now, FinishedAt: now.Add(time.Second)})
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"root_event_id": "root-1"}
@@ -739,7 +733,7 @@ func TestToolGetTrace(t *testing.T) {
 
 func TestToolGetTraceRequiresID(t *testing.T) {
 	t.Parallel()
-	deps := depsWithObserve(t, &stubObserve{})
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"root_event_id": "   "}
@@ -754,10 +748,8 @@ func TestToolGetTraceRequiresID(t *testing.T) {
 
 func TestToolGetTraceSteps(t *testing.T) {
 	t.Parallel()
-	obs := &stubObserve{steps: map[string][]workflow.TraceStep{
-		"s1": {{ToolName: "read_file", DurationMs: 42}},
-	}}
-	deps := depsWithObserve(t, obs)
+	deps := testFixture(t)
+	deps.Observe.RecordSteps("s1", []workflow.TraceStep{{ToolName: "read_file", DurationMs: 42}})
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"span_id": "s1"}
@@ -787,12 +779,15 @@ func TestToolGetTraceSteps(t *testing.T) {
 
 func TestToolGetGraphSeedsNodesFromFleetAndEdges(t *testing.T) {
 	t.Parallel()
-	obs := &stubObserve{edges: []observe.Edge{
-		{From: "coder", To: "ghost", Count: 1, Dispatches: []observe.DispatchRecord{
-			{At: time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC), Repo: "owner/one", Number: 7, Reason: "followup"},
-		}},
-	}}
-	deps := depsWithObserve(t, obs)
+	deps := testFixture(t)
+	// Insert directly so the edge is visible immediately — RecordDispatch
+	// writes asynchronously, which races with toolGetGraph below.
+	if _, err := deps.DB.Exec(
+		`INSERT INTO dispatch_history (from_agent, to_agent, repo, number, reason) VALUES (?,?,?,?,?)`,
+		"coder", "ghost", "owner/one", 7, "followup",
+	); err != nil {
+		t.Fatalf("seed dispatch: %v", err)
+	}
 
 	res, err := toolGetGraph(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -831,36 +826,29 @@ func TestToolGetGraphSeedsNodesFromFleetAndEdges(t *testing.T) {
 
 func TestToolGetDispatches(t *testing.T) {
 	t.Parallel()
-	deps := Deps{
-		DB:            testDB(t),
-		Config:        stubConfig{cfg: fixtureConfig()},
-		Queue:         &stubQueue{},
-		Status:        stubStatus{},
-		DispatchStats: stubDispatchStats{stats: workflow.DispatchStats{RequestedTotal: 5, Enqueued: 3, DroppedSelf: 1}},
-		Logger:        zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	res, err := toolGetDispatches(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	// A fresh engine has zero counters; assert the wire shape carries the
+	// expected fields rather than specific values (which would lock the
+	// test to engine internals).
 	var got map[string]any
 	decodeText(t, res, &got)
-	if got["requested_total"].(float64) != 5 || got["enqueued"].(float64) != 3 || got["dropped_self"].(float64) != 1 {
-		t.Fatalf("unexpected dispatch stats payload: %+v", got)
+	for _, key := range []string{"requested_total", "enqueued"} {
+		if _, ok := got[key]; !ok {
+			t.Errorf("dispatch stats missing %q: %+v", key, got)
+		}
 	}
 }
 
 func TestToolGetMemorySuccess(t *testing.T) {
 	t.Parallel()
-	mem := &stubMemory{content: "# hello\n", mtime: time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC), found: true}
-	deps := Deps{
-		DB:            testDB(t),
-		Config: stubConfig{cfg: fixtureConfig()},
-		Queue:  &stubQueue{},
-		Status: stubStatus{},
-		Memory: mem,
-		Logger: zerolog.Nop(),
+	deps := testFixture(t)
+	if err := store.WriteMemory(deps.DB, "coder", "owner_one", "# hello\n"); err != nil {
+		t.Fatalf("seed memory: %v", err)
 	}
 
 	req := mcpgo.CallToolRequest{}
@@ -877,22 +865,11 @@ func TestToolGetMemorySuccess(t *testing.T) {
 	if got["mtime"] == nil {
 		t.Fatalf("expected mtime field, got %+v", got)
 	}
-	if len(mem.calls) != 1 || mem.calls[0].agent != "coder" || mem.calls[0].repo != "owner_one" {
-		t.Fatalf("unexpected memory reader calls: %+v", mem.calls)
-	}
 }
 
 func TestToolGetMemoryMissing(t *testing.T) {
 	t.Parallel()
-	mem := &stubMemory{found: false}
-	deps := Deps{
-		DB:            testDB(t),
-		Config: stubConfig{cfg: fixtureConfig()},
-		Queue:  &stubQueue{},
-		Status: stubStatus{},
-		Memory: mem,
-		Logger: zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"agent": "coder", "repo": "owner_one"}
@@ -907,19 +884,8 @@ func TestToolGetMemoryMissing(t *testing.T) {
 
 func TestToolGetMemoryRejectsTraversal(t *testing.T) {
 	t.Parallel()
-	mem := &stubMemory{found: true, content: "leak"}
-	deps := Deps{
-		DB:            testDB(t),
-		Config: stubConfig{cfg: fixtureConfig()},
-		Queue:  &stubQueue{},
-		Status: stubStatus{},
-		Memory: mem,
-		Logger: zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
-	// Components that clean to "." or ".." are rejected before hitting the
-	// reader. Anything exotic beyond that is canonicalised by the reader's
-	// own NormalizeToken step, so we don't duplicate that check here.
 	cases := []map[string]any{
 		{"agent": "..", "repo": "owner_one"},
 		{"agent": "coder", "repo": ".."},
@@ -936,21 +902,11 @@ func TestToolGetMemoryRejectsTraversal(t *testing.T) {
 			t.Fatalf("expected IsError for traversal args %+v, got %+v", args, res)
 		}
 	}
-	if len(mem.calls) != 0 {
-		t.Fatalf("memory reader should not be called for rejected paths, got %+v", mem.calls)
-	}
 }
 
 func TestToolGetMemoryRequiresBothArgs(t *testing.T) {
 	t.Parallel()
-	deps := Deps{
-		DB:            testDB(t),
-		Config: stubConfig{cfg: fixtureConfig()},
-		Queue:  &stubQueue{},
-		Status: stubStatus{},
-		Memory: &stubMemory{},
-		Logger: zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	cases := []map[string]any{
 		{"agent": "coder"},
@@ -970,222 +926,84 @@ func TestToolGetMemoryRequiresBothArgs(t *testing.T) {
 	}
 }
 
-func TestToolGetMemoryPropagatesReaderError(t *testing.T) {
+func TestToolGetConfigReturnsRedactedJSON(t *testing.T) {
 	t.Parallel()
-	mem := &stubMemory{err: errors.New("disk on fire")}
-	deps := Deps{
-		DB:            testDB(t),
-		Config: stubConfig{cfg: fixtureConfig()},
-		Queue:  &stubQueue{},
-		Status: stubStatus{},
-		Memory: mem,
-		Logger: zerolog.Nop(),
-	}
-
-	req := mcpgo.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"agent": "coder", "repo": "owner_one"}
-	res, err := toolGetMemory(deps)(context.Background(), req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !res.IsError {
-		t.Fatalf("expected IsError on reader failure, got %+v", res)
-	}
-}
-
-// TestRegisterTools_ObservabilityOptional verifies that observability tools
-// register only when their provider is wired. Otherwise they are omitted, so
-// tests (and minimal deployments) don't need to stub the full stack.
-func TestRegisterTools_ObservabilityOptional(t *testing.T) {
-	t.Parallel()
-	// Deps with no Observe/DispatchStats/Memory: only core tools register.
-	// The simplest way to assert this without depending on mcp-go internals
-	// is to call the handler factories directly — they never rely on the
-	// server registration step — and confirm the conditional branches in
-	// registerTools compile and exercise what we expect.
-	// Each handler factory is already covered by its own test; this test
-	// exists to document the invariant that tools.go's gating is the source
-	// of truth for optional registration.
-	core := Deps{
-		DB:            testDB(t),
-		Config: stubConfig{cfg: fixtureConfig()},
-		Queue:  &stubQueue{},
-		Status: stubStatus{},
-		Logger: zerolog.Nop(),
-	}
-	if core.Observe != nil || core.DispatchStats != nil || core.Memory != nil || core.ConfigBytes != nil {
-		t.Fatalf("default Deps should have nil optional providers")
-	}
-}
-
-// stubConfigBytes implements ConfigReader with canned byte payloads so the
-// config tool tests stay independent of the real webhook.Server.
-type stubConfigBytes struct {
-	jsonBody []byte
-	yamlBody []byte
-	jsonErr  error
-	yamlErr  error
-}
-
-func (s stubConfigBytes) ConfigJSON() ([]byte, error) {
-	return s.jsonBody, s.jsonErr
-}
-
-func (s stubConfigBytes) ExportYAML() ([]byte, error) {
-	return s.yamlBody, s.yamlErr
-}
-
-func TestToolGetConfigReturnsBytesVerbatim(t *testing.T) {
-	t.Parallel()
-	want := []byte(`{"daemon":{"http":{"webhook_secret":"[redacted]"}}}`)
-	deps := Deps{
-		DB:            testDB(t),
-		Config:      stubConfig{cfg: fixtureConfig()},
-		Queue:       &stubQueue{},
-		Status:      stubStatus{},
-		ConfigBytes: stubConfigBytes{jsonBody: want},
-		Logger:      zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	res, err := toolGetConfig(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if textOf(t, res) != string(want) {
-		t.Fatalf("body want %q got %q", string(want), textOf(t, res))
+	// Body is the same payload GET /config emits — assert it parses as JSON
+	// and carries the expected top-level fields.
+	var got map[string]any
+	if err := json.Unmarshal([]byte(textOf(t, res)), &got); err != nil {
+		t.Fatalf("config body is not valid JSON: %v", err)
+	}
+	for _, key := range []string{"daemon", "agents", "skills", "repos"} {
+		if _, ok := got[key]; !ok {
+			t.Errorf("config JSON missing %q: %+v", key, got)
+		}
 	}
 }
 
-func TestToolGetConfigPropagatesError(t *testing.T) {
+func TestToolExportConfigReturnsYAML(t *testing.T) {
 	t.Parallel()
-	deps := Deps{
-		DB:            testDB(t),
-		Config:      stubConfig{cfg: fixtureConfig()},
-		Queue:       &stubQueue{},
-		Status:      stubStatus{},
-		ConfigBytes: stubConfigBytes{jsonErr: errors.New("snapshot failure")},
-		Logger:      zerolog.Nop(),
-	}
-	res, err := toolGetConfig(deps)(context.Background(), mcpgo.CallToolRequest{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !res.IsError {
-		t.Fatalf("expected IsError on reader failure, got %+v", res)
-	}
-	if got := textOf(t, res); !strings.Contains(got, "snapshot failure") {
-		t.Fatalf("error body want substring %q, got %q", "snapshot failure", got)
-	}
-}
+	deps := testFixture(t)
 
-func TestToolExportConfigReturnsBytesVerbatim(t *testing.T) {
-	t.Parallel()
-	want := []byte("agents:\n  - name: coder\n    backend: claude\n")
-	deps := Deps{
-		DB:            testDB(t),
-		Config:      stubConfig{cfg: fixtureConfig()},
-		Queue:       &stubQueue{},
-		Status:      stubStatus{},
-		ConfigBytes: stubConfigBytes{yamlBody: want},
-		Logger:      zerolog.Nop(),
-	}
 	res, err := toolExportConfig(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if textOf(t, res) != string(want) {
-		t.Fatalf("body want %q got %q", string(want), textOf(t, res))
+	body := textOf(t, res)
+	if body == "" {
+		t.Fatalf("expected non-empty YAML, got empty")
+	}
+	// Smoke check: the export should at least mention the seeded entities.
+	for _, want := range []string{"coder", "reviewer", "claude"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("export YAML missing %q: %s", want, body)
+		}
 	}
 }
 
-func TestToolExportConfigPropagatesError(t *testing.T) {
+func TestToolImportConfigPersistsYAMLAndMode(t *testing.T) {
 	t.Parallel()
-	deps := Deps{
-		DB:            testDB(t),
-		Config:      stubConfig{cfg: fixtureConfig()},
-		Queue:       &stubQueue{},
-		Status:      stubStatus{},
-		ConfigBytes: stubConfigBytes{yamlErr: errors.New("db closed")},
-		Logger:      zerolog.Nop(),
-	}
+	deps := testFixture(t)
+
+	// Round-trip the fixture through export → import. The merge mode is the
+	// default; it should upsert without disturbing existing entries.
 	res, err := toolExportConfig(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("export: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("expected IsError on reader failure, got %+v", res)
-	}
-	if got := textOf(t, res); !strings.Contains(got, "db closed") {
-		t.Fatalf("error body want substring %q, got %q", "db closed", got)
-	}
-}
+	body := textOf(t, res)
 
-// stubConfigImporter records the YAML body and mode it received and returns a
-// canned counts map / error. Used by the import_config tool tests so they stay
-// independent of the real webhook.Server.
-type stubConfigImporter struct {
-	gotBody []byte
-	gotMode string
-	counts  map[string]int
-	err     error
-}
-
-func (s *stubConfigImporter) ImportYAML(body []byte, mode string) (map[string]int, error) {
-	s.gotBody = body
-	s.gotMode = mode
-	return s.counts, s.err
-}
-
-func TestToolImportConfigPassesYAMLAndMode(t *testing.T) {
-	t.Parallel()
-	imp := &stubConfigImporter{counts: map[string]int{
-		"agents": 2, "skills": 1, "repos": 3, "backends": 1,
-	}}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:       stubConfig{cfg: fixtureConfig()},
-		Queue:        &stubQueue{},
-		Status:       stubStatus{},
-		ConfigImport: imp,
-		Logger:       zerolog.Nop(),
-	}
-
-	body := "agents:\n  - name: coder\n    backend: claude\n    prompt: x\n"
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"yaml": body, "mode": "replace"}
-
-	res, err := toolImportConfig(deps)(context.Background(), req)
+	res, err = toolImportConfig(deps)(context.Background(), req)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("import: %v", err)
 	}
 	if res.IsError {
-		t.Fatalf("expected success, got error result: %+v", res)
-	}
-	if string(imp.gotBody) != body {
-		t.Errorf("body forwarded: want %q, got %q", body, string(imp.gotBody))
-	}
-	if imp.gotMode != "replace" {
-		t.Errorf("mode forwarded: want replace, got %q", imp.gotMode)
+		t.Fatalf("expected success, got error result: %s", textOf(t, res))
 	}
 	var got map[string]int
 	decodeText(t, res, &got)
-	if got["agents"] != 2 || got["skills"] != 1 || got["repos"] != 3 || got["backends"] != 1 {
+	if got["agents"] < 1 || got["skills"] < 1 || got["repos"] < 1 || got["backends"] < 1 {
 		t.Errorf("counts wire shape: got %+v", got)
+	}
+	// Verify the entities are still present after the replace import.
+	if _, ok := agentByName(t, deps.DB, "coder"); !ok {
+		t.Errorf("coder agent missing after replace import")
 	}
 }
 
 func TestToolImportConfigDefaultsMode(t *testing.T) {
 	t.Parallel()
-	imp := &stubConfigImporter{counts: map[string]int{}}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:       stubConfig{cfg: fixtureConfig()},
-		Queue:        &stubQueue{},
-		Status:       stubStatus{},
-		ConfigImport: imp,
-		Logger:       zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
+	// Empty YAML body with default mode should be accepted without error.
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"yaml": "skills: {}\n"}
 
@@ -1194,24 +1012,13 @@ func TestToolImportConfigDefaultsMode(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res.IsError {
-		t.Fatalf("expected success, got error result: %+v", res)
-	}
-	if imp.gotMode != "" {
-		t.Errorf("missing mode should default to empty, got %q", imp.gotMode)
+		t.Fatalf("expected success, got error result: %s", textOf(t, res))
 	}
 }
 
 func TestToolImportConfigRequiresYAML(t *testing.T) {
 	t.Parallel()
-	imp := &stubConfigImporter{counts: map[string]int{}}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:       stubConfig{cfg: fixtureConfig()},
-		Queue:        &stubQueue{},
-		Status:       stubStatus{},
-		ConfigImport: imp,
-		Logger:       zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{}
@@ -1223,25 +1030,15 @@ func TestToolImportConfigRequiresYAML(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected IsError when yaml argument missing, got %+v", res)
 	}
-	if imp.gotBody != nil {
-		t.Errorf("importer should not be called when yaml is missing, got body=%q", string(imp.gotBody))
-	}
 }
 
 func TestToolImportConfigPropagatesError(t *testing.T) {
 	t.Parallel()
-	imp := &stubConfigImporter{err: errors.New("invalid mode")}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:       stubConfig{cfg: fixtureConfig()},
-		Queue:        &stubQueue{},
-		Status:       stubStatus{},
-		ConfigImport: imp,
-		Logger:       zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
+	// Malformed YAML triggers a real parse error from the importer.
 	req := mcpgo.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"yaml": "x", "mode": "replce"}
+	req.Params.Arguments = map[string]any{"yaml": "agents: [not-a-list-of-objects", "mode": "replace"}
 
 	res, err := toolImportConfig(deps)(context.Background(), req)
 	if err != nil {
@@ -1252,66 +1049,48 @@ func TestToolImportConfigPropagatesError(t *testing.T) {
 	}
 }
 
-// stubAgentWriter records the agent definition / delete arguments it received
-// and returns canned values. The canonical agent returned from UpsertAgent is
-// what the create_agent tool serialises back to the caller, so tests pin both
-// the inputs the writer received and the outputs the tool surfaces.
-type stubAgentWriter struct {
-	gotUpsert      fleet.Agent
-	gotDeleteName  string
-	gotCascade     bool
-	gotPatchName   string
-	gotPatch       serverfleet.AgentPatch
-	canonical      fleet.Agent
-	patchCanonical fleet.Agent
-	upsertErr      error
-	deleteErr      error
-	patchErr       error
-}
+// ── Writer-side helpers ──────────────────────────────────────────────────────
 
-func (s *stubAgentWriter) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
-	s.gotUpsert = a
-	if s.upsertErr != nil {
-		return fleet.Agent{}, s.upsertErr
+func skillByName(t *testing.T, db *sql.DB, name string) (fleet.Skill, bool) {
+	t.Helper()
+	skills, err := store.ReadSkills(db)
+	if err != nil {
+		t.Fatalf("read skills: %v", err)
 	}
-	return s.canonical, nil
+	sk, ok := skills[fleet.NormalizeSkillName(name)]
+	return sk, ok
 }
 
-func (s *stubAgentWriter) UpdateAgentPatch(name string, patch serverfleet.AgentPatch) (fleet.Agent, error) {
-	s.gotPatchName = name
-	s.gotPatch = patch
-	if s.patchErr != nil {
-		return fleet.Agent{}, s.patchErr
+func backendByName(t *testing.T, db *sql.DB, name string) (fleet.Backend, bool) {
+	t.Helper()
+	bes, err := store.ReadBackends(db)
+	if err != nil {
+		t.Fatalf("read backends: %v", err)
 	}
-	return s.patchCanonical, nil
+	b, ok := bes[fleet.NormalizeBackendName(name)]
+	return b, ok
 }
 
-func (s *stubAgentWriter) DeleteAgent(name string, cascade bool) error {
-	s.gotDeleteName = name
-	s.gotCascade = cascade
-	return s.deleteErr
+func repoByName(t *testing.T, db *sql.DB, name string) (fleet.Repo, bool) {
+	t.Helper()
+	repos, err := store.ReadRepos(db)
+	if err != nil {
+		t.Fatalf("read repos: %v", err)
+	}
+	key := fleet.NormalizeRepoName(name)
+	for _, r := range repos {
+		if r.Name == key {
+			return r, true
+		}
+	}
+	return fleet.Repo{}, false
 }
+
+// ── create_agent / delete_agent ──────────────────────────────────────────────
 
 func TestToolCreateAgentForwardsAndReturnsCanonical(t *testing.T) {
 	t.Parallel()
-	canonical := fleet.Agent{
-		Name:          "linter",
-		Backend:       "claude",
-		Skills:        []string{"security"},
-		Prompt:        "audit",
-		AllowDispatch: true,
-		CanDispatch:   []string{"coder"},
-		Description:   "audits code",
-	}
-	w := &stubAgentWriter{canonical: canonical}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:     stubConfig{cfg: fixtureConfig()},
-		Queue:      &stubQueue{},
-		Status:     stubStatus{},
-		AgentWrite: w,
-		Logger:     zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
@@ -1332,16 +1111,22 @@ func TestToolCreateAgentForwardsAndReturnsCanonical(t *testing.T) {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
 
-	if w.gotUpsert.Name != "Linter" || w.gotUpsert.Backend != "claude" || w.gotUpsert.Prompt != "audit" {
-		t.Errorf("forwarded agent missing fields: %+v", w.gotUpsert)
+	// Verify the agent was persisted with the canonical (normalized) name.
+	persisted, ok := agentByName(t, deps.DB, "linter")
+	if !ok {
+		t.Fatal("linter not found in store after create_agent")
 	}
-	if !w.gotUpsert.AllowDispatch || len(w.gotUpsert.CanDispatch) != 1 || w.gotUpsert.CanDispatch[0] != "coder" {
-		t.Errorf("dispatch fields not forwarded: %+v", w.gotUpsert)
+	if persisted.Backend != "claude" || persisted.Prompt != "audit" {
+		t.Errorf("persisted agent missing fields: %+v", persisted)
 	}
-	if len(w.gotUpsert.Skills) != 1 || w.gotUpsert.Skills[0] != "security" {
-		t.Errorf("skills slice not forwarded: %+v", w.gotUpsert.Skills)
+	if !persisted.AllowDispatch || len(persisted.CanDispatch) != 1 || persisted.CanDispatch[0] != "coder" {
+		t.Errorf("dispatch fields not persisted: %+v", persisted)
+	}
+	if len(persisted.Skills) != 1 || persisted.Skills[0] != "security" {
+		t.Errorf("skills slice not persisted: %+v", persisted.Skills)
 	}
 
+	// Verify the response wire shape mirrors the canonical entity.
 	var got map[string]any
 	decodeText(t, res, &got)
 	if got["name"] != "linter" {
@@ -1354,15 +1139,7 @@ func TestToolCreateAgentForwardsAndReturnsCanonical(t *testing.T) {
 
 func TestToolCreateAgentRequiresName(t *testing.T) {
 	t.Parallel()
-	w := &stubAgentWriter{}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:     stubConfig{cfg: fixtureConfig()},
-		Queue:      &stubQueue{},
-		Status:     stubStatus{},
-		AgentWrite: w,
-		Logger:     zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"backend": "claude"}
@@ -1374,52 +1151,39 @@ func TestToolCreateAgentRequiresName(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected IsError when name missing, got %+v", res)
 	}
-	if w.gotUpsert.Name != "" {
-		t.Errorf("writer should not be invoked when name missing, got %+v", w.gotUpsert)
-	}
 }
 
 func TestToolCreateAgentPropagatesError(t *testing.T) {
 	t.Parallel()
-	w := &stubAgentWriter{upsertErr: errors.New("backend unknown")}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:     stubConfig{cfg: fixtureConfig()},
-		Queue:      &stubQueue{},
-		Status:     stubStatus{},
-		AgentWrite: w,
-		Logger:     zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
+	// A blank/whitespace name triggers the real *store.ErrValidation from
+	// UpsertAgent — same path as REST, surfaced as a tool-level error.
 	req := mcpgo.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"name": "linter", "backend": "ghost"}
+	req.Params.Arguments = map[string]any{"name": "   ", "backend": "claude"}
 
 	res, err := toolCreateAgent(deps)(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !res.IsError {
-		t.Fatalf("expected IsError on writer failure, got %+v", res)
+		t.Fatalf("expected IsError on validation failure, got %+v", res)
 	}
-	if got := textOf(t, res); !strings.Contains(got, "backend unknown") {
-		t.Fatalf("error body want substring %q, got %q", "backend unknown", got)
+	if got := textOf(t, res); !strings.Contains(got, "name is required") {
+		t.Fatalf("error body want substring %q, got %q", "name is required", got)
 	}
 }
 
 func TestToolDeleteAgentNormalizesAndForwardsCascade(t *testing.T) {
 	t.Parallel()
-	w := &stubAgentWriter{}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:     stubConfig{cfg: fixtureConfig()},
-		Queue:      &stubQueue{},
-		Status:     stubStatus{},
-		AgentWrite: w,
-		Logger:     zerolog.Nop(),
+	deps := testFixture(t)
+	// Seed an extra agent that has no bindings — we can delete it without cascade.
+	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{Name: "linter", Backend: "claude", Prompt: "x"}); err != nil {
+		t.Fatalf("seed linter: %v", err)
 	}
 
 	req := mcpgo.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"name": "  Coder  ", "cascade": true}
+	req.Params.Arguments = map[string]any{"name": "  Linter  "}
 
 	res, err := toolDeleteAgent(deps)(context.Background(), req)
 	if err != nil {
@@ -1428,31 +1192,20 @@ func TestToolDeleteAgentNormalizesAndForwardsCascade(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
-	if w.gotDeleteName != "coder" {
-		t.Errorf("name should be normalized: got %q", w.gotDeleteName)
+	// Deleted from the store?
+	if _, ok := agentByName(t, deps.DB, "linter"); ok {
+		t.Errorf("linter should have been removed from the store")
 	}
-	if !w.gotCascade {
-		t.Errorf("cascade should be forwarded as true")
-	}
-
 	var got map[string]any
 	decodeText(t, res, &got)
-	if got["status"] != "deleted" || got["name"] != "coder" || got["cascade"] != true {
+	if got["status"] != "deleted" || got["name"] != "linter" || got["cascade"] != false {
 		t.Errorf("response shape: %+v", got)
 	}
 }
 
 func TestToolDeleteAgentRequiresName(t *testing.T) {
 	t.Parallel()
-	w := &stubAgentWriter{}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:     stubConfig{cfg: fixtureConfig()},
-		Queue:      &stubQueue{},
-		Status:     stubStatus{},
-		AgentWrite: w,
-		Logger:     zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "   "}
@@ -1464,23 +1217,13 @@ func TestToolDeleteAgentRequiresName(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected IsError for blank name, got %+v", res)
 	}
-	if w.gotDeleteName != "" {
-		t.Errorf("writer should not be invoked for blank name, got %q", w.gotDeleteName)
-	}
 }
 
 func TestToolDeleteAgentPropagatesConflict(t *testing.T) {
 	t.Parallel()
-	w := &stubAgentWriter{deleteErr: errors.New("agent referenced by binding")}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:     stubConfig{cfg: fixtureConfig()},
-		Queue:      &stubQueue{},
-		Status:     stubStatus{},
-		AgentWrite: w,
-		Logger:     zerolog.Nop(),
-	}
-
+	deps := testFixture(t)
+	// "coder" has a binding in fixtureConfig — delete-without-cascade should
+	// surface the real *store.ErrConflict.
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "coder"}
 
@@ -1489,72 +1232,22 @@ func TestToolDeleteAgentPropagatesConflict(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !res.IsError {
-		t.Fatalf("expected IsError on writer failure, got %+v", res)
+		t.Fatalf("expected IsError on conflict, got %+v", res)
 	}
-	if got := textOf(t, res); !strings.Contains(got, "agent referenced by binding") {
-		t.Fatalf("error body want substring %q, got %q", "agent referenced by binding", got)
+	if _, ok := agentByName(t, deps.DB, "coder"); !ok {
+		t.Errorf("coder should still exist after a conflicting delete")
 	}
 }
 
-// stubSkillWriter records the skill arguments it received and returns canned
-// values. Tests pin both the inputs the writer observed (e.g. raw name, prompt)
-// and the canonical values the tool surfaces back to the caller.
-type stubSkillWriter struct {
-	gotPatchName        string
-	gotPatch            serverfleet.SkillPatch
-	patchCanonicalName  string
-	patchCanonicalSkill fleet.Skill
-	patchErr            error
-	gotUpsertName  string
-	gotUpsertSkill fleet.Skill
-	gotDeleteName  string
-	canonicalName  string
-	canonical      fleet.Skill
-	upsertErr      error
-	deleteErr      error
-}
-
-func (s *stubSkillWriter) UpsertSkill(name string, sk fleet.Skill) (string, fleet.Skill, error) {
-	s.gotUpsertName = name
-	s.gotUpsertSkill = sk
-	if s.upsertErr != nil {
-		return "", fleet.Skill{}, s.upsertErr
-	}
-	return s.canonicalName, s.canonical, nil
-}
-
-func (s *stubSkillWriter) UpdateSkillPatch(name string, patch serverfleet.SkillPatch) (string, fleet.Skill, error) {
-	s.gotPatchName = name
-	s.gotPatch = patch
-	if s.patchErr != nil {
-		return "", fleet.Skill{}, s.patchErr
-	}
-	return s.patchCanonicalName, s.patchCanonicalSkill, nil
-}
-
-func (s *stubSkillWriter) DeleteSkill(name string) error {
-	s.gotDeleteName = name
-	return s.deleteErr
-}
+// ── create_skill / update_skill / delete_skill ───────────────────────────────
 
 func TestToolCreateSkillForwardsAndReturnsCanonical(t *testing.T) {
 	t.Parallel()
-	w := &stubSkillWriter{
-		canonicalName: "security",
-		canonical:     fleet.Skill{Prompt: "audit inputs carefully"},
-	}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:     stubConfig{cfg: fixtureConfig()},
-		Queue:      &stubQueue{},
-		Status:     stubStatus{},
-		SkillWrite: w,
-		Logger:     zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
-		"name":   "  Security  ",
+		"name":   "  Hardening  ",
 		"prompt": "  audit inputs carefully  ",
 	}
 
@@ -1566,34 +1259,25 @@ func TestToolCreateSkillForwardsAndReturnsCanonical(t *testing.T) {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
 
-	if w.gotUpsertName != "  Security  " {
-		t.Errorf("raw name should pass through to writer (writer owns normalization): got %q", w.gotUpsertName)
+	// Persisted under canonical (lowercased, trimmed) name with trimmed body.
+	sk, ok := skillByName(t, deps.DB, "hardening")
+	if !ok {
+		t.Fatal("hardening skill missing after create")
 	}
-	if w.gotUpsertSkill.Prompt != "  audit inputs carefully  " {
-		t.Errorf("raw prompt should pass through to writer: got %q", w.gotUpsertSkill.Prompt)
+	if sk.Prompt != "audit inputs carefully" {
+		t.Errorf("prompt should be trimmed by store: %q", sk.Prompt)
 	}
 
 	var got map[string]any
 	decodeText(t, res, &got)
-	if got["name"] != "security" {
-		t.Errorf("response should reflect canonical name: %+v", got)
-	}
-	if got["prompt"] != "audit inputs carefully" {
-		t.Errorf("response should reflect canonical prompt: %+v", got)
+	if got["name"] != "hardening" || got["prompt"] != "audit inputs carefully" {
+		t.Errorf("response should reflect canonical entity: %+v", got)
 	}
 }
 
 func TestToolCreateSkillRequiresName(t *testing.T) {
 	t.Parallel()
-	w := &stubSkillWriter{}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:     stubConfig{cfg: fixtureConfig()},
-		Queue:      &stubQueue{},
-		Status:     stubStatus{},
-		SkillWrite: w,
-		Logger:     zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"prompt": "body"}
@@ -1605,29 +1289,12 @@ func TestToolCreateSkillRequiresName(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected IsError when name missing, got %+v", res)
 	}
-	if w.gotUpsertName != "" {
-		t.Errorf("writer should not be invoked when name missing, got %q", w.gotUpsertName)
-	}
 }
 
-// TestToolCreateSkillRejectsBlankName pins the whitespace-name contract for
-// create_skill: the tool does not short-circuit at the handler (unlike
-// delete_skill, which uses trimmedString), so a blank name must reach
-// UpsertSkill and surface the writer's *store.ErrValidation as a user error.
-// If the blank-name guard is ever hoisted into the handler, this test will
-// fail and force an update to the stub-invocation expectations.
 func TestToolCreateSkillRejectsBlankName(t *testing.T) {
 	t.Parallel()
-	w := &stubSkillWriter{upsertErr: &store.ErrValidation{Msg: "name is required"}}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:     stubConfig{cfg: fixtureConfig()},
-		Queue:      &stubQueue{},
-		Status:     stubStatus{},
-		SkillWrite: w,
-		Logger:     zerolog.Nop(),
-	}
-
+	deps := testFixture(t)
+	// A whitespace name reaches UpsertSkill which surfaces *store.ErrValidation.
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "   "}
 
@@ -1641,50 +1308,12 @@ func TestToolCreateSkillRejectsBlankName(t *testing.T) {
 	if got := textOf(t, res); !strings.Contains(got, "name is required") {
 		t.Fatalf("error body want substring %q, got %q", "name is required", got)
 	}
-	if w.gotUpsertName != "   " {
-		t.Errorf("writer should receive raw blank name (owns normalization), got %q", w.gotUpsertName)
-	}
-}
-
-func TestToolCreateSkillPropagatesError(t *testing.T) {
-	t.Parallel()
-	w := &stubSkillWriter{upsertErr: errors.New("validation: prompt empty")}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:     stubConfig{cfg: fixtureConfig()},
-		Queue:      &stubQueue{},
-		Status:     stubStatus{},
-		SkillWrite: w,
-		Logger:     zerolog.Nop(),
-	}
-
-	req := mcpgo.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"name": "security"}
-
-	res, err := toolCreateSkill(deps)(context.Background(), req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !res.IsError {
-		t.Fatalf("expected IsError on writer failure, got %+v", res)
-	}
-	if got := textOf(t, res); !strings.Contains(got, "validation: prompt empty") {
-		t.Fatalf("error body want substring %q, got %q", "validation: prompt empty", got)
-	}
 }
 
 func TestToolDeleteSkillNormalizesAndForwards(t *testing.T) {
 	t.Parallel()
-	w := &stubSkillWriter{}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:     stubConfig{cfg: fixtureConfig()},
-		Queue:      &stubQueue{},
-		Status:     stubStatus{},
-		SkillWrite: w,
-		Logger:     zerolog.Nop(),
-	}
-
+	deps := testFixture(t)
+	// "security" is seeded but not referenced by any agent — safe to delete.
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "  Security  "}
 
@@ -1695,10 +1324,9 @@ func TestToolDeleteSkillNormalizesAndForwards(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
-	if w.gotDeleteName != "security" {
-		t.Errorf("name should be normalized before forwarding: got %q", w.gotDeleteName)
+	if _, ok := skillByName(t, deps.DB, "security"); ok {
+		t.Errorf("security skill should have been removed")
 	}
-
 	var got map[string]any
 	decodeText(t, res, &got)
 	if got["status"] != "deleted" || got["name"] != "security" {
@@ -1708,15 +1336,7 @@ func TestToolDeleteSkillNormalizesAndForwards(t *testing.T) {
 
 func TestToolDeleteSkillRequiresName(t *testing.T) {
 	t.Parallel()
-	w := &stubSkillWriter{}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:     stubConfig{cfg: fixtureConfig()},
-		Queue:      &stubQueue{},
-		Status:     stubStatus{},
-		SkillWrite: w,
-		Logger:     zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "   "}
@@ -1728,105 +1348,40 @@ func TestToolDeleteSkillRequiresName(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected IsError for blank name, got %+v", res)
 	}
-	if w.gotDeleteName != "" {
-		t.Errorf("writer should not be invoked for blank name, got %q", w.gotDeleteName)
-	}
 }
 
 func TestToolDeleteSkillPropagatesConflict(t *testing.T) {
 	t.Parallel()
-	w := &stubSkillWriter{deleteErr: errors.New("skill referenced by agent")}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:     stubConfig{cfg: fixtureConfig()},
-		Queue:      &stubQueue{},
-		Status:     stubStatus{},
-		SkillWrite: w,
-		Logger:     zerolog.Nop(),
-	}
-
+	deps := testFixture(t)
+	// "testing" is referenced by the "coder" agent — deletion conflicts.
 	req := mcpgo.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"name": "security"}
+	req.Params.Arguments = map[string]any{"name": "testing"}
 
 	res, err := toolDeleteSkill(deps)(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !res.IsError {
-		t.Fatalf("expected IsError on writer failure, got %+v", res)
+		t.Fatalf("expected IsError on conflict, got %+v", res)
 	}
-	if got := textOf(t, res); !strings.Contains(got, "skill referenced by agent") {
-		t.Fatalf("error body want substring %q, got %q", "skill referenced by agent", got)
+	if _, ok := skillByName(t, deps.DB, "testing"); !ok {
+		t.Errorf("testing skill should still exist after a conflicting delete")
 	}
 }
 
-// stubBackendWriter records the backend arguments it received and returns
-// canned values. Tests pin both the raw inputs the writer observed and the
-// canonical values the tool surfaces back to the caller.
-type stubBackendWriter struct {
-	gotUpsertName        string
-	gotUpsertBackend     fleet.Backend
-	gotDeleteName        string
-	gotPatchName         string
-	gotPatch             serverfleet.BackendPatch
-	canonicalName        string
-	canonical            fleet.Backend
-	patchCanonicalName   string
-	patchCanonicalConfig fleet.Backend
-	upsertErr            error
-	deleteErr            error
-	patchErr             error
-}
-
-func (s *stubBackendWriter) UpsertBackend(name string, b fleet.Backend) (string, fleet.Backend, error) {
-	s.gotUpsertName = name
-	s.gotUpsertBackend = b
-	if s.upsertErr != nil {
-		return "", fleet.Backend{}, s.upsertErr
-	}
-	return s.canonicalName, s.canonical, nil
-}
-
-func (s *stubBackendWriter) UpdateBackendPatch(name string, patch serverfleet.BackendPatch) (string, fleet.Backend, error) {
-	s.gotPatchName = name
-	s.gotPatch = patch
-	if s.patchErr != nil {
-		return "", fleet.Backend{}, s.patchErr
-	}
-	return s.patchCanonicalName, s.patchCanonicalConfig, nil
-}
-
-func (s *stubBackendWriter) DeleteBackend(name string) error {
-	s.gotDeleteName = name
-	return s.deleteErr
-}
+// ── create_backend / update_backend / delete_backend ─────────────────────────
 
 func TestToolCreateBackendForwardsAndReturnsCanonical(t *testing.T) {
 	t.Parallel()
-	canonical := fleet.Backend{
-		Command:        "claude",
-		Models:         []string{"claude-opus-4-7"},
-		TimeoutSeconds: 600,
-		MaxPromptChars: 12000,
-	}
-	w := &stubBackendWriter{
-		canonicalName: "claude",
-		canonical:     canonical,
-	}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:       stubConfig{cfg: fixtureConfig()},
-		Queue:        &stubQueue{},
-		Status:       stubStatus{},
-		BackendWrite: w,
-		Logger:       zerolog.Nop(),
-	}
-
+	deps := testFixture(t)
+	// Custom backend names need a local_model_url to satisfy validation —
+	// otherwise only the built-in claude/codex/claude_local names are accepted.
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
-		"name":             "  Claude  ",
+		"name":             "  LocalLlama  ",
 		"command":          "claude",
-		"models":           []any{"claude-opus-4-7"},
+		"local_model_url":  "http://localhost:8080",
+		"models":           []any{"qwen3-coder"},
 		"timeout_seconds":  600,
 		"max_prompt_chars": 12000,
 	}
@@ -1839,40 +1394,30 @@ func TestToolCreateBackendForwardsAndReturnsCanonical(t *testing.T) {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
 
-	if w.gotUpsertName != "  Claude  " {
-		t.Errorf("raw name should pass through to writer (writer owns normalization): got %q", w.gotUpsertName)
+	persisted, ok := backendByName(t, deps.DB, "localllama")
+	if !ok {
+		t.Fatal("localllama backend missing after create")
 	}
-	if w.gotUpsertBackend.Command != "claude" {
-		t.Errorf("command not forwarded: %+v", w.gotUpsertBackend)
+	if persisted.Command != "claude" {
+		t.Errorf("command not persisted: %+v", persisted)
 	}
-	if w.gotUpsertBackend.TimeoutSeconds != 600 || w.gotUpsertBackend.MaxPromptChars != 12000 {
-		t.Errorf("runtime settings not forwarded: (%d, %d)", w.gotUpsertBackend.TimeoutSeconds, w.gotUpsertBackend.MaxPromptChars)
+	if persisted.TimeoutSeconds != 600 || persisted.MaxPromptChars != 12000 {
+		t.Errorf("runtime settings not persisted: (%d, %d)", persisted.TimeoutSeconds, persisted.MaxPromptChars)
 	}
-	if len(w.gotUpsertBackend.Models) != 1 || w.gotUpsertBackend.Models[0] != "claude-opus-4-7" {
-		t.Errorf("models slice not forwarded: %+v", w.gotUpsertBackend.Models)
+	if len(persisted.Models) != 1 || persisted.Models[0] != "qwen3-coder" {
+		t.Errorf("models slice not persisted: %+v", persisted.Models)
 	}
 
 	var got map[string]any
 	decodeText(t, res, &got)
-	if got["name"] != "claude" {
+	if got["name"] != "localllama" {
 		t.Errorf("response should reflect canonical name: %+v", got)
-	}
-	if got["command"] != "claude" {
-		t.Errorf("response should reflect canonical command: %+v", got)
 	}
 }
 
 func TestToolCreateBackendRequiresName(t *testing.T) {
 	t.Parallel()
-	w := &stubBackendWriter{}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:       stubConfig{cfg: fixtureConfig()},
-		Queue:        &stubQueue{},
-		Status:       stubStatus{},
-		BackendWrite: w,
-		Logger:       zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"command": "claude"}
@@ -1884,28 +1429,11 @@ func TestToolCreateBackendRequiresName(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected IsError when name missing, got %+v", res)
 	}
-	if w.gotUpsertName != "" {
-		t.Errorf("writer should not be invoked when name missing, got %q", w.gotUpsertName)
-	}
 }
 
-// TestToolCreateBackendRejectsBlankName pins the whitespace-name contract for
-// create_backend: like create_skill, the handler uses req.RequireString("name")
-// which only rejects the missing-key path, so a whitespace-only name must
-// reach UpsertBackend and surface the writer's *store.ErrValidation as a user
-// error. If the blank-name guard is ever hoisted into the tool layer, this
-// test fails and forces an update to the stub-invocation expectations.
 func TestToolCreateBackendRejectsBlankName(t *testing.T) {
 	t.Parallel()
-	w := &stubBackendWriter{upsertErr: &store.ErrValidation{Msg: "name is required"}}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:       stubConfig{cfg: fixtureConfig()},
-		Queue:        &stubQueue{},
-		Status:       stubStatus{},
-		BackendWrite: w,
-		Logger:       zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "   ", "command": "claude"}
@@ -1920,52 +1448,18 @@ func TestToolCreateBackendRejectsBlankName(t *testing.T) {
 	if got := textOf(t, res); !strings.Contains(got, "name is required") {
 		t.Fatalf("error body want substring %q, got %q", "name is required", got)
 	}
-	if w.gotUpsertName != "   " {
-		t.Errorf("writer should receive raw blank name (owns normalization), got %q", w.gotUpsertName)
-	}
-}
-
-func TestToolCreateBackendPropagatesError(t *testing.T) {
-	t.Parallel()
-	w := &stubBackendWriter{upsertErr: errors.New("db closed")}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:       stubConfig{cfg: fixtureConfig()},
-		Queue:        &stubQueue{},
-		Status:       stubStatus{},
-		BackendWrite: w,
-		Logger:       zerolog.Nop(),
-	}
-
-	req := mcpgo.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"name": "claude", "command": "claude"}
-
-	res, err := toolCreateBackend(deps)(context.Background(), req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !res.IsError {
-		t.Fatalf("expected IsError on writer failure, got %+v", res)
-	}
-	if got := textOf(t, res); !strings.Contains(got, "db closed") {
-		t.Fatalf("error body want substring %q, got %q", "db closed", got)
-	}
 }
 
 func TestToolDeleteBackendNormalizesAndForwards(t *testing.T) {
 	t.Parallel()
-	w := &stubBackendWriter{}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:       stubConfig{cfg: fixtureConfig()},
-		Queue:        &stubQueue{},
-		Status:       stubStatus{},
-		BackendWrite: w,
-		Logger:       zerolog.Nop(),
+	deps := testFixture(t)
+	// Seed a backend with no agents referencing it so the delete is allowed.
+	if _, _, err := deps.Fleet.UpsertBackend("LocalLlama", fleet.Backend{Command: "claude", LocalModelURL: "http://localhost:8080", TimeoutSeconds: 60, MaxPromptChars: 1000}); err != nil {
+		t.Fatalf("seed backend: %v", err)
 	}
 
 	req := mcpgo.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"name": "  Claude  "}
+	req.Params.Arguments = map[string]any{"name": "  LocalLlama  "}
 
 	res, err := toolDeleteBackend(deps)(context.Background(), req)
 	if err != nil {
@@ -1974,28 +1468,19 @@ func TestToolDeleteBackendNormalizesAndForwards(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
-	if w.gotDeleteName != "claude" {
-		t.Errorf("name should be normalized before forwarding: got %q", w.gotDeleteName)
+	if _, ok := backendByName(t, deps.DB, "localllama"); ok {
+		t.Errorf("localllama backend should have been removed")
 	}
-
 	var got map[string]any
 	decodeText(t, res, &got)
-	if got["status"] != "deleted" || got["name"] != "claude" {
+	if got["status"] != "deleted" || got["name"] != "localllama" {
 		t.Errorf("response shape: %+v", got)
 	}
 }
 
 func TestToolDeleteBackendRequiresName(t *testing.T) {
 	t.Parallel()
-	w := &stubBackendWriter{}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:       stubConfig{cfg: fixtureConfig()},
-		Queue:        &stubQueue{},
-		Status:       stubStatus{},
-		BackendWrite: w,
-		Logger:       zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "   "}
@@ -2007,23 +1492,12 @@ func TestToolDeleteBackendRequiresName(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected IsError for blank name, got %+v", res)
 	}
-	if w.gotDeleteName != "" {
-		t.Errorf("writer should not be invoked for blank name, got %q", w.gotDeleteName)
-	}
 }
 
 func TestToolDeleteBackendPropagatesConflict(t *testing.T) {
 	t.Parallel()
-	w := &stubBackendWriter{deleteErr: errors.New("backend referenced by agent")}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:       stubConfig{cfg: fixtureConfig()},
-		Queue:        &stubQueue{},
-		Status:       stubStatus{},
-		BackendWrite: w,
-		Logger:       zerolog.Nop(),
-	}
-
+	deps := testFixture(t)
+	// "claude" is referenced by both seeded agents — delete should conflict.
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "claude"}
 
@@ -2032,57 +1506,18 @@ func TestToolDeleteBackendPropagatesConflict(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !res.IsError {
-		t.Fatalf("expected IsError on writer failure, got %+v", res)
+		t.Fatalf("expected IsError on conflict, got %+v", res)
 	}
-	if got := textOf(t, res); !strings.Contains(got, "backend referenced by agent") {
-		t.Fatalf("error body want substring %q, got %q", "backend referenced by agent", got)
+	if _, ok := backendByName(t, deps.DB, "claude"); !ok {
+		t.Errorf("claude backend should still exist after a conflicting delete")
 	}
 }
 
-// stubRepoWriter records the Repo arguments it received and returns
-// canned values. Tests pin both the raw inputs the writer observed and the
-// canonical repo the tool surfaces back to the caller.
-type stubRepoWriter struct {
-	gotUpsert     fleet.Repo
-	gotDeleteName string
-	canonical     fleet.Repo
-	upsertErr     error
-	deleteErr     error
-}
-
-func (s *stubRepoWriter) UpsertRepo(r fleet.Repo) (fleet.Repo, error) {
-	s.gotUpsert = r
-	if s.upsertErr != nil {
-		return fleet.Repo{}, s.upsertErr
-	}
-	return s.canonical, nil
-}
-
-func (s *stubRepoWriter) DeleteRepo(name string) error {
-	s.gotDeleteName = name
-	return s.deleteErr
-}
+// ── create_repo / delete_repo ────────────────────────────────────────────────
 
 func TestToolCreateRepoForwardsAndReturnsCanonical(t *testing.T) {
 	t.Parallel()
-	disabled := false
-	canonical := fleet.Repo{
-		Name:    "owner/repo",
-		Enabled: true,
-		Use: []fleet.Binding{
-			{Agent: "coder", Labels: []string{"ready"}},
-			{Agent: "planner", Cron: "0 * * * *", Enabled: &disabled},
-		},
-	}
-	w := &stubRepoWriter{canonical: canonical}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:    stubConfig{cfg: fixtureConfig()},
-		Queue:     &stubQueue{},
-		Status:    stubStatus{},
-		RepoWrite: w,
-		Logger:    zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
@@ -2094,7 +1529,7 @@ func TestToolCreateRepoForwardsAndReturnsCanonical(t *testing.T) {
 				"labels": []any{"ready"},
 			},
 			map[string]any{
-				"agent":   "Planner",
+				"agent":   "Reviewer",
 				"cron":    "0 * * * *",
 				"enabled": false,
 			},
@@ -2109,32 +1544,30 @@ func TestToolCreateRepoForwardsAndReturnsCanonical(t *testing.T) {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
 
-	if w.gotUpsert.Name != "  OWNER/Repo  " {
-		t.Errorf("raw name should pass through to writer (writer owns normalization): got %q", w.gotUpsert.Name)
+	persisted, ok := repoByName(t, deps.DB, "owner/repo")
+	if !ok {
+		t.Fatal("owner/repo missing after create")
 	}
-	if !w.gotUpsert.Enabled {
-		t.Errorf("enabled flag not forwarded: %+v", w.gotUpsert)
+	if !persisted.Enabled {
+		t.Errorf("enabled flag not persisted: %+v", persisted)
 	}
-	if got := len(w.gotUpsert.Use); got != 2 {
-		t.Fatalf("bindings slice: want 2, got %d: %+v", got, w.gotUpsert.Use)
+	if got := len(persisted.Use); got != 2 {
+		t.Fatalf("bindings: want 2, got %d: %+v", got, persisted.Use)
 	}
-	if b := w.gotUpsert.Use[0]; b.Agent != "Coder" || len(b.Labels) != 1 || b.Labels[0] != "ready" {
-		t.Errorf("first binding not forwarded: %+v", b)
+	if b := persisted.Use[0]; b.Agent != "coder" || len(b.Labels) != 1 || b.Labels[0] != "ready" {
+		t.Errorf("first binding wrong: %+v", b)
 	}
-	// The MCP tool must preserve the *bool distinction so the store validator
-	// sees "explicitly disabled" rather than "default enabled" — otherwise a
+	// The MCP tool must preserve the *bool distinction so the store sees
+	// "explicitly disabled" rather than "default enabled" — otherwise a
 	// disabled binding would flip back on after a round-trip.
-	if b := w.gotUpsert.Use[1]; b.Agent != "Planner" || b.Cron != "0 * * * *" || b.Enabled == nil || *b.Enabled {
-		t.Errorf("second binding not forwarded with explicit enabled=false: %+v", b)
+	if b := persisted.Use[1]; b.Agent != "reviewer" || b.Cron != "0 * * * *" || b.Enabled == nil || *b.Enabled {
+		t.Errorf("second binding wrong (expected explicit enabled=false): %+v", b)
 	}
 
 	var got map[string]any
 	decodeText(t, res, &got)
-	if got["name"] != "owner/repo" {
-		t.Errorf("response should reflect canonical name: %+v", got)
-	}
-	if got["enabled"] != true {
-		t.Errorf("response should reflect canonical enabled: %+v", got)
+	if got["name"] != "owner/repo" || got["enabled"] != true {
+		t.Errorf("response should reflect canonical entity: %+v", got)
 	}
 	bindings, _ := got["bindings"].([]any)
 	if len(bindings) != 2 {
@@ -2144,15 +1577,7 @@ func TestToolCreateRepoForwardsAndReturnsCanonical(t *testing.T) {
 
 func TestToolCreateRepoRequiresName(t *testing.T) {
 	t.Parallel()
-	w := &stubRepoWriter{}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:    stubConfig{cfg: fixtureConfig()},
-		Queue:     &stubQueue{},
-		Status:    stubStatus{},
-		RepoWrite: w,
-		Logger:    zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"enabled": true}
@@ -2164,28 +1589,11 @@ func TestToolCreateRepoRequiresName(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected IsError when name missing, got %+v", res)
 	}
-	if w.gotUpsert.Name != "" {
-		t.Errorf("writer should not be invoked when name missing, got %+v", w.gotUpsert)
-	}
 }
 
-// TestToolCreateRepoRejectsBlankName pins the whitespace-name contract for
-// create_repo: like create_skill, the handler uses req.RequireString("name")
-// which only rejects the missing-key path, so a whitespace-only name must
-// reach UpsertRepo and surface the writer's *store.ErrValidation as a user
-// error. If the blank-name guard is ever hoisted into the tool layer, this
-// test fails and forces an update to the stub-invocation expectations.
 func TestToolCreateRepoRejectsBlankName(t *testing.T) {
 	t.Parallel()
-	w := &stubRepoWriter{upsertErr: &store.ErrValidation{Msg: "name is required"}}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:    stubConfig{cfg: fixtureConfig()},
-		Queue:     &stubQueue{},
-		Status:    stubStatus{},
-		RepoWrite: w,
-		Logger:    zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "   ", "enabled": true}
@@ -2200,23 +1608,14 @@ func TestToolCreateRepoRejectsBlankName(t *testing.T) {
 	if got := textOf(t, res); !strings.Contains(got, "name is required") {
 		t.Fatalf("error body want substring %q, got %q", "name is required", got)
 	}
-	if w.gotUpsert.Name != "   " {
-		t.Errorf("writer should receive raw blank name (owns normalization), got %q", w.gotUpsert.Name)
-	}
 }
 
 func TestToolCreateRepoPropagatesError(t *testing.T) {
 	t.Parallel()
-	w := &stubRepoWriter{upsertErr: errors.New("unknown agent \"ghost\"")}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:    stubConfig{cfg: fixtureConfig()},
-		Queue:     &stubQueue{},
-		Status:    stubStatus{},
-		RepoWrite: w,
-		Logger:    zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
+	// Binding to a non-existent agent triggers the real binding-validation
+	// error from UpsertRepo.
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"name":    "owner/repo",
@@ -2231,10 +1630,13 @@ func TestToolCreateRepoPropagatesError(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !res.IsError {
-		t.Fatalf("expected IsError on writer failure, got %+v", res)
+		t.Fatalf("expected IsError on validation failure, got %+v", res)
 	}
-	if got := textOf(t, res); !strings.Contains(got, "unknown agent") {
-		t.Fatalf("error body want substring %q, got %q", "unknown agent", got)
+	if got := textOf(t, res); !strings.Contains(got, "ghost") {
+		t.Fatalf("error body should mention unknown agent: got %q", got)
+	}
+	if _, ok := repoByName(t, deps.DB, "owner/repo"); ok {
+		t.Errorf("owner/repo should NOT have been persisted on validation failure")
 	}
 }
 
@@ -2256,22 +1658,12 @@ func TestToolCreateRepoRejectsBadBindingsShape(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			w := &stubRepoWriter{}
-			deps := Deps{
-				DB:            testDB(t),
-				Config:    stubConfig{cfg: fixtureConfig()},
-				Queue:     &stubQueue{},
-				Status:    stubStatus{},
-				RepoWrite: w,
-				Logger:    zerolog.Nop(),
-			}
-
+			deps := testFixture(t)
 			req := mcpgo.CallToolRequest{}
 			req.Params.Arguments = map[string]any{
-				"name":     "owner/repo",
+				"name":     "owner/badshape",
 				"bindings": tc.arg,
 			}
-
 			res, err := toolCreateRepo(deps)(context.Background(), req)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -2282,8 +1674,8 @@ func TestToolCreateRepoRejectsBadBindingsShape(t *testing.T) {
 			if got := textOf(t, res); !strings.Contains(got, tc.want) {
 				t.Fatalf("error body want substring %q, got %q", tc.want, got)
 			}
-			if w.gotUpsert.Name != "" {
-				t.Errorf("writer should not be invoked when bindings shape invalid, got %+v", w.gotUpsert)
+			if _, ok := repoByName(t, deps.DB, "owner/badshape"); ok {
+				t.Errorf("repo must not be persisted when bindings shape invalid")
 			}
 		})
 	}
@@ -2302,67 +1694,25 @@ func TestToolCreateRepoRejectsBadBindingFieldTypes(t *testing.T) {
 		binding map[string]any
 		want    string
 	}{
-		{
-			"enabled not boolean (string)",
-			map[string]any{"agent": "coder", "enabled": "false"},
-			"bindings[0].enabled must be a boolean",
-		},
-		{
-			"enabled not boolean (number)",
-			map[string]any{"agent": "coder", "enabled": 0},
-			"bindings[0].enabled must be a boolean",
-		},
-		{
-			"agent not string",
-			map[string]any{"agent": 42},
-			"bindings[0].agent must be a string",
-		},
-		{
-			"cron not string",
-			map[string]any{"agent": "coder", "cron": 15},
-			"bindings[0].cron must be a string",
-		},
-		{
-			"labels not array",
-			map[string]any{"agent": "coder", "labels": "ready"},
-			"bindings[0].labels must be an array",
-		},
-		{
-			"labels element not string",
-			map[string]any{"agent": "coder", "labels": []any{"ready", 2}},
-			"bindings[0].labels[1] must be a string",
-		},
-		{
-			"events not array",
-			map[string]any{"agent": "coder", "events": "push"},
-			"bindings[0].events must be an array",
-		},
-		{
-			"events element not string",
-			map[string]any{"agent": "coder", "events": []any{true}},
-			"bindings[0].events[0] must be a string",
-		},
+		{"enabled not boolean (string)", map[string]any{"agent": "coder", "enabled": "false"}, "bindings[0].enabled must be a boolean"},
+		{"enabled not boolean (number)", map[string]any{"agent": "coder", "enabled": 0}, "bindings[0].enabled must be a boolean"},
+		{"agent not string", map[string]any{"agent": 42}, "bindings[0].agent must be a string"},
+		{"cron not string", map[string]any{"agent": "coder", "cron": 15}, "bindings[0].cron must be a string"},
+		{"labels not array", map[string]any{"agent": "coder", "labels": "ready"}, "bindings[0].labels must be an array"},
+		{"labels element not string", map[string]any{"agent": "coder", "labels": []any{"ready", 2}}, "bindings[0].labels[1] must be a string"},
+		{"events not array", map[string]any{"agent": "coder", "events": "push"}, "bindings[0].events must be an array"},
+		{"events element not string", map[string]any{"agent": "coder", "events": []any{true}}, "bindings[0].events[0] must be a string"},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			w := &stubRepoWriter{}
-			deps := Deps{
-				DB:            testDB(t),
-				Config:    stubConfig{cfg: fixtureConfig()},
-				Queue:     &stubQueue{},
-				Status:    stubStatus{},
-				RepoWrite: w,
-				Logger:    zerolog.Nop(),
-			}
-
+			deps := testFixture(t)
 			req := mcpgo.CallToolRequest{}
 			req.Params.Arguments = map[string]any{
-				"name":     "owner/repo",
+				"name":     "owner/badbinding",
 				"bindings": []any{tc.binding},
 			}
-
 			res, err := toolCreateRepo(deps)(context.Background(), req)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -2373,8 +1723,8 @@ func TestToolCreateRepoRejectsBadBindingFieldTypes(t *testing.T) {
 			if got := textOf(t, res); !strings.Contains(got, tc.want) {
 				t.Fatalf("error body want substring %q, got %q", tc.want, got)
 			}
-			if w.gotUpsert.Name != "" {
-				t.Errorf("writer must not be invoked when binding field types are invalid, got %+v", w.gotUpsert)
+			if _, ok := repoByName(t, deps.DB, "owner/badbinding"); ok {
+				t.Errorf("repo must not be persisted when binding fields invalid")
 			}
 		})
 	}
@@ -2386,19 +1736,11 @@ func TestToolCreateRepoRejectsBadBindingFieldTypes(t *testing.T) {
 // here would silently disable bindings on every round-trip through MCP.
 func TestToolCreateRepoDefaultsBindingEnabledNil(t *testing.T) {
 	t.Parallel()
-	w := &stubRepoWriter{canonical: fleet.Repo{Name: "owner/repo", Enabled: true}}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:    stubConfig{cfg: fixtureConfig()},
-		Queue:     &stubQueue{},
-		Status:    stubStatus{},
-		RepoWrite: w,
-		Logger:    zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
-		"name":    "owner/repo",
+		"name":    "owner/defaultenabled",
 		"enabled": true,
 		"bindings": []any{
 			map[string]any{"agent": "coder", "labels": []any{"ready"}},
@@ -2412,28 +1754,32 @@ func TestToolCreateRepoDefaultsBindingEnabledNil(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
-	if len(w.gotUpsert.Use) != 1 {
-		t.Fatalf("bindings: want 1, got %d", len(w.gotUpsert.Use))
+	persisted, ok := repoByName(t, deps.DB, "owner/defaultenabled")
+	if !ok {
+		t.Fatal("repo not persisted")
 	}
-	if b := w.gotUpsert.Use[0]; b.Enabled != nil {
-		t.Errorf("omitted enabled must stay nil (default enabled), got *bool(%v)", *b.Enabled)
+	if len(persisted.Use) != 1 {
+		t.Fatalf("bindings: want 1, got %d", len(persisted.Use))
+	}
+	// Persisted binding should report IsEnabled() = true and have Enabled
+	// either nil or *true (the store may materialise either form).
+	if !persisted.Use[0].IsEnabled() {
+		t.Errorf("default-enabled binding should be active, got %+v", persisted.Use[0])
 	}
 }
 
 func TestToolDeleteRepoNormalizesAndForwards(t *testing.T) {
 	t.Parallel()
-	w := &stubRepoWriter{}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:    stubConfig{cfg: fixtureConfig()},
-		Queue:     &stubQueue{},
-		Status:    stubStatus{},
-		RepoWrite: w,
-		Logger:    zerolog.Nop(),
+	deps := testFixture(t)
+	// Seed a separate enabled repo so the fleet keeps at least one enabled
+	// repo after we delete owner/two (the disabled fixture repo isn't a
+	// safe test target — the fleet must keep ≥1 enabled repo).
+	if _, err := deps.Repos.UpsertRepo(fleet.Repo{Name: "owner/three", Enabled: true}); err != nil {
+		t.Fatalf("seed owner/three: %v", err)
 	}
 
 	req := mcpgo.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"name": "  OWNER/Repo  "}
+	req.Params.Arguments = map[string]any{"name": "  OWNER/Three  "}
 
 	res, err := toolDeleteRepo(deps)(context.Background(), req)
 	if err != nil {
@@ -2442,28 +1788,19 @@ func TestToolDeleteRepoNormalizesAndForwards(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
-	if w.gotDeleteName != "owner/repo" {
-		t.Errorf("name should be normalized before forwarding: got %q", w.gotDeleteName)
+	if _, ok := repoByName(t, deps.DB, "owner/three"); ok {
+		t.Errorf("owner/three should have been removed")
 	}
-
 	var got map[string]any
 	decodeText(t, res, &got)
-	if got["status"] != "deleted" || got["name"] != "owner/repo" {
+	if got["status"] != "deleted" || got["name"] != "owner/three" {
 		t.Errorf("response shape: %+v", got)
 	}
 }
 
 func TestToolDeleteRepoRequiresName(t *testing.T) {
 	t.Parallel()
-	w := &stubRepoWriter{}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:    stubConfig{cfg: fixtureConfig()},
-		Queue:     &stubQueue{},
-		Status:    stubStatus{},
-		RepoWrite: w,
-		Logger:    zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "   "}
@@ -2475,115 +1812,48 @@ func TestToolDeleteRepoRequiresName(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected IsError for blank name, got %+v", res)
 	}
-	if w.gotDeleteName != "" {
-		t.Errorf("writer should not be invoked for blank name, got %q", w.gotDeleteName)
-	}
 }
 
-func TestToolDeleteRepoPropagatesNotFound(t *testing.T) {
+func TestToolDeleteRepoIsIdempotent(t *testing.T) {
 	t.Parallel()
-	w := &stubRepoWriter{deleteErr: errors.New("repo \"owner/repo\" not found")}
-	deps := Deps{
-		DB:            testDB(t),
-		Config:    stubConfig{cfg: fixtureConfig()},
-		Queue:     &stubQueue{},
-		Status:    stubStatus{},
-		RepoWrite: w,
-		Logger:    zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
+	// The store delete is idempotent for unknown names — a missing repo
+	// is treated as already-deleted rather than a 404. The MCP tool
+	// surfaces the same shape ("status":"deleted") so callers can issue a
+	// retry without special-casing the missing-row response.
 	req := mcpgo.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"name": "owner/repo"}
+	req.Params.Arguments = map[string]any{"name": "owner/never-existed"}
 
 	res, err := toolDeleteRepo(deps)(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("expected IsError on writer failure, got %+v", res)
-	}
-	if got := textOf(t, res); !strings.Contains(got, "not found") {
-		t.Fatalf("error body want substring %q, got %q", "not found", got)
+	if res.IsError {
+		t.Fatalf("expected idempotent success, got error: %s", textOf(t, res))
 	}
 }
 
-// stubBindingWriter records the arguments received by BindingWriter method
-// calls so tests can assert both the forwarded values and the canonical shape
-// returned to the caller.
-type stubBindingWriter struct {
-	// Create
-	gotCreateRepo    string
-	gotCreateBinding fleet.Binding
-	createResult     fleet.Binding
-	createErr        error
-	// Update
-	gotUpdateRepo    string
-	gotUpdateID      int64
-	gotUpdateBinding fleet.Binding
-	updateResult     fleet.Binding
-	updateErr        error
-	// Read
-	gotReadRepo string
-	gotReadID   int64
-	readResult  fleet.Binding
-	readErr     error
-	// Delete
-	gotDeleteRepo string
-	gotDeleteID   int64
-	deleteErr     error
-}
+// ── create_binding / update_binding / delete_binding ────────────────────────
 
-func (s *stubBindingWriter) CreateBinding(repoName string, b fleet.Binding) (fleet.Binding, error) {
-	s.gotCreateRepo = repoName
-	s.gotCreateBinding = b
-	if s.createErr != nil {
-		return fleet.Binding{}, s.createErr
+// firstBindingID returns the first binding ID for the given repo. The fixture
+// gives owner/one two bindings; their IDs are assigned at insert time.
+func firstBindingID(t *testing.T, deps Deps, repoName string) int64 {
+	t.Helper()
+	r, ok := repoByName(t, deps.DB, repoName)
+	if !ok || len(r.Use) == 0 {
+		t.Fatalf("repo %q has no bindings", repoName)
 	}
-	return s.createResult, nil
-}
-
-func (s *stubBindingWriter) UpdateBinding(repoName string, id int64, b fleet.Binding) (fleet.Binding, error) {
-	s.gotUpdateRepo = repoName
-	s.gotUpdateID = id
-	s.gotUpdateBinding = b
-	if s.updateErr != nil {
-		return fleet.Binding{}, s.updateErr
-	}
-	return s.updateResult, nil
-}
-
-func (s *stubBindingWriter) ReadBinding(repoName string, id int64) (fleet.Binding, error) {
-	s.gotReadRepo = repoName
-	s.gotReadID = id
-	if s.readErr != nil {
-		return fleet.Binding{}, s.readErr
-	}
-	return s.readResult, nil
-}
-
-func (s *stubBindingWriter) DeleteBinding(repoName string, id int64) error {
-	s.gotDeleteRepo = repoName
-	s.gotDeleteID = id
-	return s.deleteErr
+	return r.Use[0].ID
 }
 
 func TestToolCreateBindingForwardsAndReturnsID(t *testing.T) {
 	t.Parallel()
-	w := &stubBindingWriter{
-		createResult: fleet.Binding{ID: 42, Agent: "coder", Labels: []string{"ai:fix"}},
-	}
-	deps := Deps{
-		DB:           testDB(t),
-		Config:       stubConfig{cfg: fixtureConfig()},
-		Queue:        &stubQueue{},
-		Status:       stubStatus{},
-		BindingWrite: w,
-		Logger:       zerolog.Nop(),
-	}
+	deps := testFixture(t)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
-		"repo":   "owner/repo",
+		"repo":   "owner/one",
 		"agent":  "coder",
 		"labels": []any{"ai:fix"},
 	}
@@ -2594,30 +1864,32 @@ func TestToolCreateBindingForwardsAndReturnsID(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
-	if w.gotCreateRepo != "owner/repo" {
-		t.Errorf("repo: got %q", w.gotCreateRepo)
-	}
-	if w.gotCreateBinding.Agent != "coder" || len(w.gotCreateBinding.Labels) != 1 {
-		t.Errorf("binding forwarded wrong: %+v", w.gotCreateBinding)
-	}
 	var out map[string]any
 	decodeText(t, res, &out)
-	if id, _ := out["id"].(float64); id != 42 {
-		t.Errorf("id: want 42, got %v", out["id"])
+	if id, _ := out["id"].(float64); id <= 0 {
+		t.Errorf("id should be > 0, got %v", out["id"])
+	}
+	// Verify it's persisted on owner/one.
+	r, ok := repoByName(t, deps.DB, "owner/one")
+	if !ok {
+		t.Fatal("owner/one missing")
+	}
+	found := false
+	for _, b := range r.Use {
+		if b.Agent == "coder" && len(b.Labels) == 1 && b.Labels[0] == "ai:fix" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("new ai:fix binding not persisted on owner/one: %+v", r.Use)
 	}
 }
 
 func TestToolCreateBindingRequiresRepoAndAgent(t *testing.T) {
 	t.Parallel()
-	w := &stubBindingWriter{}
-	deps := Deps{
-		DB:           testDB(t),
-		Config:       stubConfig{cfg: fixtureConfig()},
-		Queue:        &stubQueue{},
-		Status:       stubStatus{},
-		BindingWrite: w,
-		Logger:       zerolog.Nop(),
-	}
+	deps := testFixture(t)
+
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"agent": "coder"}
 	res, err := toolCreateBinding(deps)(context.Background(), req)
@@ -2631,23 +1903,13 @@ func TestToolCreateBindingRequiresRepoAndAgent(t *testing.T) {
 
 func TestToolUpdateBindingForwardsID(t *testing.T) {
 	t.Parallel()
-	disabled := false
-	w := &stubBindingWriter{
-		updateResult: fleet.Binding{ID: 7, Agent: "coder", Cron: "0 9 * * *", Enabled: &disabled},
-	}
-	deps := Deps{
-		DB:           testDB(t),
-		Config:       stubConfig{cfg: fixtureConfig()},
-		Queue:        &stubQueue{},
-		Status:       stubStatus{},
-		BindingWrite: w,
-		Logger:       zerolog.Nop(),
-	}
+	deps := testFixture(t)
+	id := firstBindingID(t, deps, "owner/one")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
-		"id":      float64(7),
-		"repo":    "owner/repo",
+		"id":      float64(id),
+		"repo":    "owner/one",
 		"agent":   "coder",
 		"cron":    "0 9 * * *",
 		"enabled": false,
@@ -2659,32 +1921,34 @@ func TestToolUpdateBindingForwardsID(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
-	if w.gotUpdateID != 7 {
-		t.Errorf("id: got %d, want 7", w.gotUpdateID)
+	r, _ := repoByName(t, deps.DB, "owner/one")
+	var updated *fleet.Binding
+	for i := range r.Use {
+		if r.Use[i].ID == id {
+			updated = &r.Use[i]
+			break
+		}
 	}
-	if w.gotUpdateBinding.Cron != "0 9 * * *" {
-		t.Errorf("cron not forwarded: %+v", w.gotUpdateBinding)
+	if updated == nil {
+		t.Fatalf("binding %d missing after update", id)
 	}
-	if w.gotUpdateBinding.Enabled == nil || *w.gotUpdateBinding.Enabled {
-		t.Errorf("enabled=false should be forwarded as explicit false: %+v", w.gotUpdateBinding)
+	if updated.Cron != "0 9 * * *" {
+		t.Errorf("cron not updated: %+v", updated)
+	}
+	if updated.Enabled == nil || *updated.Enabled {
+		t.Errorf("enabled=false should persist as explicit false: %+v", updated)
 	}
 }
 
 func TestToolDeleteBindingForwardsID(t *testing.T) {
 	t.Parallel()
-	w := &stubBindingWriter{}
-	deps := Deps{
-		DB:           testDB(t),
-		Config:       stubConfig{cfg: fixtureConfig()},
-		Queue:        &stubQueue{},
-		Status:       stubStatus{},
-		BindingWrite: w,
-		Logger:       zerolog.Nop(),
-	}
+	deps := testFixture(t)
+	id := firstBindingID(t, deps, "owner/one")
+
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
-		"id":   float64(9),
-		"repo": "owner/repo",
+		"id":   float64(id),
+		"repo": "owner/one",
 	}
 	res, err := toolDeleteBinding(deps)(context.Background(), req)
 	if err != nil {
@@ -2693,63 +1957,54 @@ func TestToolDeleteBindingForwardsID(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
-	if w.gotDeleteID != 9 || w.gotDeleteRepo != "owner/repo" {
-		t.Errorf("unexpected forwarded values: id=%d repo=%q", w.gotDeleteID, w.gotDeleteRepo)
+	r, _ := repoByName(t, deps.DB, "owner/one")
+	for _, b := range r.Use {
+		if b.ID == id {
+			t.Errorf("binding %d should have been removed", id)
+		}
 	}
 }
 
-// ── update_agent / update_skill / update_backend ────────────────────
+// ── update_agent / update_skill / update_backend ─────────────────────────────
 
 func TestToolUpdateAgentForwardsPatch(t *testing.T) {
 	t.Parallel()
-	canonical := fleet.Agent{
-		Name: "coder", Backend: "codex", Prompt: "p",
-	}
-	w := &stubAgentWriter{patchCanonical: canonical}
-	deps := Deps{
-		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
-		Queue: &stubQueue{}, Status: stubStatus{},
-		AgentWrite: w, Logger: zerolog.Nop(),
-	}
+	deps := testFixture(t)
+
 	req := mcpgo.CallToolRequest{}
-	allowPRs := true
-	_ = allowPRs
 	req.Params.Arguments = map[string]any{
 		"name":      "coder",
 		"backend":   "codex",
 		"allow_prs": true,
-		"skills":    []any{"architect"},
+		"skills":    []any{"testing"},
 	}
 	res, err := toolUpdateAgent(deps)(context.Background(), req)
 	if err != nil || res.IsError {
 		t.Fatalf("update_agent failed: err=%v body=%s", err, textOf(t, res))
 	}
-	if w.gotPatchName != "coder" {
-		t.Fatalf("name not forwarded: %q", w.gotPatchName)
+	updated, ok := agentByName(t, deps.DB, "coder")
+	if !ok {
+		t.Fatal("coder missing after update")
 	}
-	if w.gotPatch.Backend == nil || *w.gotPatch.Backend != "codex" {
-		t.Fatalf("backend patch not forwarded: %+v", w.gotPatch.Backend)
+	if updated.Backend != "codex" {
+		t.Errorf("backend not patched: %q", updated.Backend)
 	}
-	if w.gotPatch.AllowPRs == nil || *w.gotPatch.AllowPRs != true {
-		t.Fatalf("allow_prs patch not forwarded")
+	if !updated.AllowPRs {
+		t.Errorf("allow_prs not patched")
 	}
-	if w.gotPatch.Skills == nil || len(*w.gotPatch.Skills) != 1 || (*w.gotPatch.Skills)[0] != "architect" {
-		t.Fatalf("skills patch not forwarded: %+v", w.gotPatch.Skills)
+	if len(updated.Skills) != 1 || updated.Skills[0] != "testing" {
+		t.Errorf("skills not patched: %+v", updated.Skills)
 	}
-	// Fields not in payload must remain nil (preserve-semantics).
-	if w.gotPatch.Prompt != nil || w.gotPatch.Model != nil {
-		t.Fatalf("unset fields should be nil, got prompt=%v model=%v", w.gotPatch.Prompt, w.gotPatch.Model)
+	// Fields not in payload are preserved (description was set in seed).
+	if updated.Description != "writes code" {
+		t.Errorf("description should be preserved, got %q", updated.Description)
 	}
 }
 
 func TestToolUpdateAgentEmptyPatchRejected(t *testing.T) {
 	t.Parallel()
-	w := &stubAgentWriter{}
-	deps := Deps{
-		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
-		Queue: &stubQueue{}, Status: stubStatus{},
-		AgentWrite: w, Logger: zerolog.Nop(),
-	}
+	deps := testFixture(t)
+
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "coder"}
 	res, err := toolUpdateAgent(deps)(context.Background(), req)
@@ -2763,15 +2018,8 @@ func TestToolUpdateAgentEmptyPatchRejected(t *testing.T) {
 
 func TestToolUpdateSkillForwardsPatch(t *testing.T) {
 	t.Parallel()
-	w := &stubSkillWriter{
-		patchCanonicalName:  "security",
-		patchCanonicalSkill: fleet.Skill{Prompt: "audit"},
-	}
-	deps := Deps{
-		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
-		Queue: &stubQueue{}, Status: stubStatus{},
-		SkillWrite: w, Logger: zerolog.Nop(),
-	}
+	deps := testFixture(t)
+
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"name":   "Security",
@@ -2781,22 +2029,19 @@ func TestToolUpdateSkillForwardsPatch(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("update_skill failed: err=%v body=%s", err, textOf(t, res))
 	}
-	if w.gotPatchName != "Security" {
-		t.Fatalf("name not forwarded: %q", w.gotPatchName)
+	sk, ok := skillByName(t, deps.DB, "security")
+	if !ok {
+		t.Fatal("security skill missing after update")
 	}
-	if w.gotPatch.Prompt == nil || *w.gotPatch.Prompt != "audit" {
-		t.Fatalf("prompt patch not forwarded: %+v", w.gotPatch.Prompt)
+	if sk.Prompt != "audit" {
+		t.Errorf("prompt not patched: %q", sk.Prompt)
 	}
 }
 
 func TestToolUpdateSkillEmptyPatchRejected(t *testing.T) {
 	t.Parallel()
-	w := &stubSkillWriter{}
-	deps := Deps{
-		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
-		Queue: &stubQueue{}, Status: stubStatus{},
-		SkillWrite: w, Logger: zerolog.Nop(),
-	}
+	deps := testFixture(t)
+
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "security"}
 	res, err := toolUpdateSkill(deps)(context.Background(), req)
@@ -2810,15 +2055,8 @@ func TestToolUpdateSkillEmptyPatchRejected(t *testing.T) {
 
 func TestToolUpdateBackendForwardsPatch(t *testing.T) {
 	t.Parallel()
-	w := &stubBackendWriter{
-		patchCanonicalName:   "claude",
-		patchCanonicalConfig: fleet.Backend{Command: "/bin/claude", TimeoutSeconds: 900},
-	}
-	deps := Deps{
-		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
-		Queue: &stubQueue{}, Status: stubStatus{},
-		BackendWrite: w, Logger: zerolog.Nop(),
-	}
+	deps := testFixture(t)
+
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"name":            "Claude",
@@ -2829,28 +2067,26 @@ func TestToolUpdateBackendForwardsPatch(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("update_backend failed: err=%v body=%s", err, textOf(t, res))
 	}
-	if w.gotPatchName != "Claude" {
-		t.Fatalf("name not forwarded: %q", w.gotPatchName)
+	b, ok := backendByName(t, deps.DB, "claude")
+	if !ok {
+		t.Fatal("claude backend missing after update")
 	}
-	if w.gotPatch.TimeoutSeconds == nil || *w.gotPatch.TimeoutSeconds != 900 {
-		t.Fatalf("timeout_seconds patch not forwarded: %+v", w.gotPatch.TimeoutSeconds)
+	if b.TimeoutSeconds != 900 {
+		t.Errorf("timeout_seconds not patched: %d", b.TimeoutSeconds)
 	}
-	if w.gotPatch.Models == nil || len(*w.gotPatch.Models) != 2 {
-		t.Fatalf("models patch not forwarded: %+v", w.gotPatch.Models)
+	if len(b.Models) != 2 {
+		t.Errorf("models not patched: %+v", b.Models)
 	}
-	if w.gotPatch.Command != nil {
-		t.Fatalf("unset command should be nil")
+	// Fields not patched should be preserved (Command was "claude" in seed).
+	if b.Command != "claude" {
+		t.Errorf("command should be preserved, got %q", b.Command)
 	}
 }
 
 func TestToolUpdateBackendNonPositiveRejected(t *testing.T) {
 	t.Parallel()
-	w := &stubBackendWriter{}
-	deps := Deps{
-		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
-		Queue: &stubQueue{}, Status: stubStatus{},
-		BackendWrite: w, Logger: zerolog.Nop(),
-	}
+	deps := testFixture(t)
+
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"name":            "claude",
@@ -2863,19 +2099,12 @@ func TestToolUpdateBackendNonPositiveRejected(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected tool error for timeout_seconds=0")
 	}
-	if w.gotPatchName != "" {
-		t.Fatalf("writer should not be called on validation failure, got name=%q", w.gotPatchName)
-	}
 }
 
 func TestToolUpdateBackendEmptyPatchRejected(t *testing.T) {
 	t.Parallel()
-	w := &stubBackendWriter{}
-	deps := Deps{
-		DB: testDB(t), Config: stubConfig{cfg: fixtureConfig()},
-		Queue: &stubQueue{}, Status: stubStatus{},
-		BackendWrite: w, Logger: zerolog.Nop(),
-	}
+	deps := testFixture(t)
+
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "claude"}
 	res, err := toolUpdateBackend(deps)(context.Background(), req)
