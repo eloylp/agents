@@ -40,7 +40,7 @@ type Handler struct {
 
 // New constructs a Handler. coord and srv are required; db is optional. When
 // db is nil the /export and /import routes are skipped at registration time —
-// /config still works in cfg-only mode (e.g. tests, --run-agent without
+// /config still works in cfg-only mode (e.g. tests without
 // --db).
 func New(db *sql.DB, coord server.WriteCoordinator, srv *server.Server, logger zerolog.Logger) *Handler {
 	return &Handler{

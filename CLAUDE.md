@@ -7,7 +7,7 @@
 ## Directory Structure
 
 ```
-cmd/agents/main.go          # Daemon entry point + --run-agent / --db / --import modes
+cmd/agents/main.go          # Daemon entry point + --db / --import flags
 internal/
   fleet/                    # Domain entities: Agent, Repo, Skill, Backend, Binding (zero deps)
   config/                   # YAML parsing, prompt/skill file resolution, validation (uses fleet)
@@ -53,10 +53,9 @@ go build -o agents ./cmd/agents
 # Import config into SQLite and start
 ./agents --db agents.db --import config.yaml   # one-time import
 ./agents --db agents.db                         # subsequent starts
-
-# On-demand single agent pass (synchronous, drains any dispatch chain, exits)
-./agents --db agents.db --run-agent <agent-name> --repo owner/repo
 ```
+
+On-demand runs go through the running daemon: `POST /run` (HTTP) or the `trigger_agent` MCP tool. There is no separate CLI mode for ad-hoc execution — it would be a second runtime that doesn't share the daemon's run-lock or dispatch dedup, opening a memory-write race window.
 
 ## Docker
 
@@ -101,9 +100,9 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code and Code
   - `GET /export`, `POST /import` — export/import fleet config as YAML.
   - `POST /mcp` — MCP (Model Context Protocol) Streamable HTTP endpoint. Registered MCP clients (Claude Code, Cursor, Cline) discover fleet-management tools automatically. Currently registered tools: `list_agents`, `get_agent`, `list_skills`, `get_skill`, `list_backends`, `get_backend`, `list_repos`, `get_repo`, `get_status`, `trigger_agent`, `list_events`, `list_traces`, `get_trace`, `get_trace_steps`, `get_graph`, `get_dispatches`, `get_memory`, `get_config`, `export_config`, `import_config`, `create_agent`, `update_agent`, `delete_agent`, `create_skill`, `update_skill`, `delete_skill`, `create_backend`, `update_backend`, `delete_backend`, `create_repo`, `update_repo`, `delete_repo`, `create_binding`, `get_binding`, `update_binding`, `delete_binding`. `update_agent`, `update_skill`, `update_backend`, and `update_repo` follow partial-update semantics — only supplied fields are changed, bindings are preserved with their current IDs. Exception: `update_binding` is a full-replace (all binding fields required), matching the binding `PATCH` route. The MCP surface now covers the full fleet inventory declared in #227.
 - Supported webhook events: `issues.*` (labeled, opened, edited, reopened, closed), `pull_request.*` (labeled, opened, synchronize, ready_for_review, closed), `issue_comment.created`, `pull_request_review.submitted`, `pull_request_review_comment.created`, `push` (branches only). Label-triggered routing uses `payload.label.name`. Non-label `events:` subscriptions match the event kind exactly. Draft PRs skip `pull_request.labeled`.
-- Internal event kinds (not from webhooks): `agents.run` (on-demand trigger from `POST /run` or `--run-agent`), `agent.dispatch` (inter-agent dispatch), `cron` (cron-scheduler tick).
+- Internal event kinds (not from webhooks): `agents.run` (on-demand trigger from `POST /run` or MCP `trigger_agent`), `agent.dispatch` (inter-agent dispatch), `cron` (cron-scheduler tick).
 - Duplicate webhook suppression via `X-GitHub-Delivery` TTL cache.
-- Memory persistence is a per-agent property, not a per-trigger property. When `allow_memory: true` (the default), the daemon reads existing memory before every run and persists the response's `memory` field back to the store afterwards, uniformly across every trigger surface (cron tick, `--run-agent`, webhook events, inter-agent dispatch, `POST /run`, MCP `trigger_agent`). Setting `allow_memory: false` on an agent disables memory load AND persist for every run kind, useful for inherently stateless agents that recompute their context each run.
+- Memory persistence is a per-agent property, not a per-trigger property. When `allow_memory: true` (the default), the daemon reads existing memory before every run and persists the response's `memory` field back to the store afterwards, uniformly across every trigger surface (cron tick, webhook events, inter-agent dispatch, `POST /run`, MCP `trigger_agent`). Setting `allow_memory: false` on an agent disables memory load AND persist for every run kind, useful for inherently stateless agents that recompute their context each run.
 - Memory is delivered to the agent as part of its prompt context, and the agent returns its full updated memory in the `memory` field of the JSON response. The daemon writes the value back to the store after the run. An empty string clears the memory.
 - Memory backend: SQLite (stored in the `memory` table alongside config data).
 - Backend resolution: agents must explicitly name a backend (no `auto` behavior). Built-ins are `claude` and `codex`; additional local backends are named entries with `local_model_url`.

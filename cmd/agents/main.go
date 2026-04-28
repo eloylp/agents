@@ -59,8 +59,6 @@ func run() error {
 
 	dbPath := flag.String("db", "agents.db", "path to SQLite database file")
 	importPath := flag.String("import", "", "YAML config file to import into the database")
-	runAgent := flag.String("run-agent", "", "run a single autonomous agent pass and exit (requires --repo)")
-	runRepo := flag.String("repo", "", "repo to target when using --run-agent (e.g. owner/repo)")
 	flag.Parse()
 
 	cfg, db, err := loadConfig(*dbPath, *importPath)
@@ -72,94 +70,59 @@ func run() error {
 	logger := logging.NewLogger(cfg.Daemon.Log)
 
 	runners := setupRunners(cfg, logger)
-	scheduler, memBackend, err := setupScheduler(cfg, runners, db, logger)
+	sched, err := scheduler.NewScheduler(cfg, logger)
 	if err != nil {
 		return err
-	}
-	// Wire the runner factory so that hot-reloaded backend definitions produce
-	// live runners without a restart. The same factory is used for the initial
-	// setup, so the two paths stay in sync automatically.
-	scheduler.WithRunnerBuilder(func(name string, b fleet.Backend) ai.Runner {
-		return ai.NewCommandRunner(
-			name, "command", b.Command, backendEnvOverrides(b),
-			b.TimeoutSeconds, b.MaxPromptChars, b.RedactionSaltEnv,
-			logger,
-		)
-	})
-
-	// --run-agent mode: execute one agent pass synchronously and exit.
-	if *runAgent != "" {
-		if *runRepo == "" {
-			return fmt.Errorf("--repo is required when using --run-agent")
-		}
-		// Size the buffer to hold every dispatch that could ever be in flight at
-		// once.  drainDispatches processes events serially and each handled event
-		// can enqueue up to MaxFanout children; at the deepest level the queue can
-		// therefore hold MaxFanout^MaxDepth events simultaneously.  Using a linear
-		// MaxFanout*MaxDepth estimate is too small for chained/fanout chains and
-		// would cause PushEvent to silently drop later hops.
-		d := cfg.Daemon.Processor.Dispatch
-		runBuf := 1
-		for range d.MaxDepth {
-			runBuf *= d.MaxFanout
-		}
-		runBuf = max(runBuf, cfg.Daemon.Processor.EventQueueBuffer)
-		dataChannels, engine, _ := buildEngine(cfg, runners, scheduler, memBackend, db, runBuf, logger)
-		logger.Info().Str("agent", *runAgent).Str("repo", *runRepo).Msg("running on-demand agent")
-		engine.StartDispatchDedup(ctx)
-		// Push an agents.run event onto the queue and let drainDispatches run
-		// it through the same engine path POST /run uses. Mirrors the daemon
-		// flow: cron, webhook, dispatch, and on-demand all converge on the
-		// engine's runAgent — there is no separate "trigger" entry point.
-		ev := workflow.Event{
-			ID:         workflow.GenEventID(),
-			Repo:       workflow.RepoRef{FullName: *runRepo, Enabled: true},
-			Kind:       "agents.run",
-			Actor:      "cli",
-			Payload:    map[string]any{"target_agent": *runAgent},
-			EnqueuedAt: time.Now(),
-		}
-		if err := dataChannels.PushEvent(ctx, ev); err != nil {
-			return fmt.Errorf("enqueue run: %w", err)
-		}
-		if err := drainDispatches(ctx, dataChannels, engine); err != nil {
-			return fmt.Errorf("drain dispatches: %w", err)
-		}
-		logger.Info().Str("agent", *runAgent).Str("repo", *runRepo).Msg("on-demand agent run completed")
-		return nil
 	}
 
 	logger.Info().Msg("starting agents daemon")
 
-	dataChannels, engine, obs := buildEngine(cfg, runners, scheduler, memBackend, db, cfg.Daemon.Processor.EventQueueBuffer, logger)
-	// Wire the engine as the hot-reload sink so that CRUD-triggered Reload
-	// calls propagate new config and runner maps to the event-driven path
-	// without a daemon restart.
-	scheduler.WithHotReloadSink(engine)
-	// Cron ticks now flow through the event queue: the scheduler pushes an
-	// "cron" event and the engine handles execution uniformly with all
-	// other event kinds (transcript steps, run-tracker, queue-wait time,
-	// dispatch dedup, run-lock — all in one place). The engine notifies the
-	// scheduler back via LastRunRecorder so the per-binding schedule view in
-	// /agents stays current.
-	scheduler.WithEventQueue(dataChannels)
-	engine.WithLastRunRecorder(scheduler)
+	memBackend := &sqliteMemory{db: db}
+
+	dataChannels := workflow.NewDataChannels(cfg.Daemon.Processor.EventQueueBuffer)
+	engine := workflow.NewEngine(cfg, runners, dataChannels, logger)
+	engine.WithMemory(memBackend)
+
+	obs := observe.NewStore(db)
+	engine.WithTraceRecorder(obs)
+	engine.WithGraphRecorder(obs)
+	engine.WithRunTracker(obs.ActiveRuns)
+	engine.WithStepRecorder(obs)
+
+	// Cron ticks flow through the event queue: the scheduler pushes a "cron"
+	// event and the engine handles execution uniformly with all other event
+	// kinds (transcript steps, run-tracker, queue-wait time, dispatch dedup,
+	// run-lock — all in one place). The engine notifies the scheduler back
+	// via LastRunRecorder so the per-binding schedule view in /agents stays
+	// current.
+	sched.WithEventQueue(dataChannels)
+	engine.WithLastRunRecorder(sched)
+
+	// Hot-reload coordinator: on every CRUD-triggered config change, rebuild
+	// runners + propagate to engine + dispatcher + scheduler in lockstep.
+	// The Reloader is what server.WithStore receives; from server's view it
+	// satisfies the same CronReloader contract scheduler used to provide,
+	// but it now coordinates all four runtime components.
+	reloader := &daemonReloader{
+		cfg:           cfg,
+		engine:        engine,
+		scheduler:     sched,
+		runnerBuilder: makeRunnerBuilder(logger),
+		logger:        logger,
+	}
 	shutdown := time.Duration(cfg.Daemon.HTTP.ShutdownTimeoutSeconds) * time.Second
 	workers := cfg.Daemon.Processor.MaxConcurrentAgents
 	processor := workflow.NewProcessor(dataChannels, engine, workers, shutdown, logger)
-	// Daemon-only event recorder — populates the dashboard's event firehose.
-	// --run-agent mode bypasses the processor (drainDispatches calls
-	// engine.HandleEvent directly), so no event-level records there.
 	processor.WithEventRecorder(obs)
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
-	srv := server.NewServer(cfg, dataChannels, scheduler, engine, logger)
+	srv := server.NewServer(cfg, dataChannels, sched, engine, logger)
 	srv.WithUI(ui.FS)
-	srv.WithStore(db, scheduler)
+	srv.WithStore(db, reloader)
 	srv.WithWebhook(webhook.NewHandler(deliveryStore, dataChannels, srv, logger))
 
 	// Construct each domain handler externally and wire it in.
-	fleetHandler := serverfleet.New(db, srv, srv, scheduler, obs, logger)
+	fleetHandler := serverfleet.New(db, srv, srv, sched, obs, logger)
 	fleetHandler.RefreshOrphansFromCfg(cfg)
 	srv.WithFleet(
 		fleetHandler,
@@ -180,17 +143,16 @@ func run() error {
 	configHandler := serverconfig.New(db, srv, srv, logger)
 	srv.WithConfig(configHandler)
 
-	// Wire the memory backend into the server for the /memory endpoint and
-	// attach an SSE notifier so the UI stream stays live.
-	mem := memBackend.(*sqliteMemory)
-	mem.notifyFn = obs.PublishMemoryChange
+	// Wire the memory backend's SSE notifier so the UI stream stays live on
+	// every successful write.
+	memBackend.notifyFn = obs.PublishMemoryChange
 	memReader := &sqliteWebhookReader{db: db}
 	srv.WithMemoryReader(memReader)
 
 	// Mount the observability routes via a closure so the central server
 	// doesn't import internal/server/observe.
 	srv.WithObserveRegister(func(r *mux.Router, withTimeout func(http.Handler) http.Handler) {
-		obh := serverobserve.New(obs, srv, scheduler, obs, engine, memReader)
+		obh := serverobserve.New(obs, srv, sched, obs, engine, memReader)
 		obh.RegisterRoutes(r, withTimeout)
 	})
 
@@ -214,58 +176,13 @@ func run() error {
 	deliveryStore.Start(groupCtx)
 	engine.StartDispatchDedup(groupCtx)
 	group.Go(func() error { return processor.Run(groupCtx) })
-	group.Go(func() error { return scheduler.Run(groupCtx) })
+	group.Go(func() error { return sched.Run(groupCtx) })
 	group.Go(func() error { return srv.Run(groupCtx) })
 	if err := group.Wait(); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
 	logger.Info().Msg("agents daemon stopped")
 	return nil
-}
-
-// buildEngine constructs the runtime engine and the surrounding wiring that
-// every mode of the daemon needs: event channels, the engine itself with
-// memory and dispatcher hooks, and the observability store with all of its
-// engine + scheduler recorders attached.
-//
-// Both daemon and --run-agent mode call this so an on-demand run leaves the
-// same agent traces, run-state, and step-recorder rows that an autonomous
-// run does — they show up in the dashboard alongside cron-fired runs. The
-// processor-level event recorder is intentionally NOT wired here; the
-// daemon attaches it on top because --run-agent bypasses the processor.
-func buildEngine(cfg *config.Config, runners map[string]ai.Runner, scheduler *scheduler.Scheduler, memBackend scheduler.MemoryBackend, db *sql.DB, bufSize int, logger zerolog.Logger) (*workflow.DataChannels, *workflow.Engine, *observe.Store) {
-	dataChannels := workflow.NewDataChannels(bufSize)
-	engine := workflow.NewEngine(cfg, runners, dataChannels, logger)
-	engine.WithMemory(memBackend)
-	scheduler.WithDispatcher(engine.Dispatcher())
-
-	obs := observe.NewStore(db)
-	engine.WithTraceRecorder(obs)
-	engine.WithGraphRecorder(obs)
-	engine.WithRunTracker(obs.ActiveRuns)
-	engine.WithStepRecorder(obs)
-
-	return dataChannels, engine, obs
-}
-
-// drainDispatches processes all agent.dispatch events that were enqueued during
-// a --run-agent pass. Each processed event may itself enqueue further dispatches
-// (chained dispatch), so the loop continues until the queue is empty. Any error
-// from HandleEvent is returned immediately so the caller can report a failed chain.
-func drainDispatches(ctx context.Context, dc *workflow.DataChannels, eng *workflow.Engine) error {
-	for {
-		select {
-		case ev, ok := <-dc.EventChan():
-			if !ok {
-				return nil
-			}
-			if err := eng.HandleEvent(ctx, ev); err != nil {
-				return fmt.Errorf("kind %s: %w", ev.Kind, err)
-			}
-		default:
-			return nil
-		}
-	}
 }
 
 func setupRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runner {
@@ -294,13 +211,68 @@ func backendEnvOverrides(b fleet.Backend) map[string]string {
 	}
 }
 
-func setupScheduler(cfg *config.Config, runners map[string]ai.Runner, db *sql.DB, logger zerolog.Logger) (*scheduler.Scheduler, scheduler.MemoryBackend, error) {
-	memBackend := &sqliteMemory{db: db}
-	sched, err := scheduler.NewScheduler(cfg, runners, memBackend, logger)
-	return sched, memBackend, err
+// makeRunnerBuilder returns a factory that the daemonReloader uses to
+// rebuild the runner map after a config change. Backend env overrides
+// (ANTHROPIC_BASE_URL for local-model routing) are applied here so the
+// reloaded runners match the startup-built ones bit-for-bit.
+func makeRunnerBuilder(logger zerolog.Logger) func(name string, b fleet.Backend) ai.Runner {
+	return func(name string, b fleet.Backend) ai.Runner {
+		return ai.NewCommandRunner(
+			name, "command", b.Command, backendEnvOverrides(b),
+			b.TimeoutSeconds, b.MaxPromptChars, b.RedactionSaltEnv,
+			logger,
+		)
+	}
 }
 
-// sqliteMemory implements scheduler.MemoryBackend using the SQLite store.
+// daemonReloader is the single hot-reload coordinator that the central HTTP
+// server calls after every CRUD-triggered config change. It rebuilds the
+// runner map from the new backend definitions, propagates the new cfg +
+// runners to the engine (in one combined call so readers never see a
+// mismatched pair), refreshes the dispatcher's agent map, and finally tells
+// the scheduler to swap its cron entries. Each step is a small,
+// independently testable operation on a single component — there is no
+// other path that mutates these in production.
+//
+// Implements server.CronReloader.
+type daemonReloader struct {
+	cfg           *config.Config
+	engine        *workflow.Engine
+	scheduler     *scheduler.Scheduler
+	runnerBuilder func(name string, b fleet.Backend) ai.Runner
+	logger        zerolog.Logger
+}
+
+// Reload satisfies server.CronReloader. The order matters: build runners
+// first (cheap, pure), then notify the engine (which atomically swaps
+// cfg+runners under one lock so concurrent runAgent calls cannot observe a
+// mismatched pair), then update the dispatcher's agent map (so dispatch
+// allowlists reflect the new agent set immediately), and finally rebuild
+// the scheduler's cron entries.
+func (r *daemonReloader) Reload(repos []fleet.Repo, agents []fleet.Agent, skills map[string]fleet.Skill, backends map[string]fleet.Backend) error {
+	newCfg := *r.cfg
+	newCfg.Repos = repos
+	newCfg.Agents = agents
+	newCfg.Skills = skills
+	newCfg.Daemon.AIBackends = backends
+
+	newRunners := make(map[string]ai.Runner, len(backends))
+	for name, b := range backends {
+		newRunners[name] = r.runnerBuilder(name, b)
+	}
+
+	r.engine.UpdateConfigAndRunners(&newCfg, newRunners)
+	if d := r.engine.Dispatcher(); d != nil {
+		d.UpdateAgents(agents)
+	}
+	if err := r.scheduler.RebuildCron(repos, agents, skills, backends); err != nil {
+		return err
+	}
+	r.cfg = &newCfg
+	return nil
+}
+
+// sqliteMemory implements workflow.MemoryBackend using the SQLite store.
 // Agent and repo names are normalised with ai.NormalizeToken before storage so
 // that the keys are identical to those used by the file-based backend and can
 // be looked up by the /api/memory endpoint without conversion.
@@ -315,13 +287,12 @@ func (m *sqliteMemory) ReadMemory(agent, repo string) (string, error) {
 }
 
 // sqliteWebhookReader implements server.MemoryReader using the SQLite store.
-// Unlike sqliteMemory (which serves the scheduler and treats a missing row as
+// Unlike sqliteMemory (which serves the engine and treats a missing row as
 // empty memory), this reader returns server.ErrMemoryNotFound when no row
 // exists so that GET /api/memory returns 404 for absent entries while still
 // returning 200 with an empty body for intentionally-cleared memory.
 // The updated_at timestamp is returned so that handleAPIMemory can set the
-// X-Memory-Mtime response header, keeping file and SQLite mode semantically
-// aligned.
+// X-Memory-Mtime response header.
 type sqliteWebhookReader struct {
 	db *sql.DB
 }

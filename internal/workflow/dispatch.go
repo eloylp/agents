@@ -259,7 +259,7 @@ func (s *DispatchDedupStore) AbandonWebhookRun(agent, repo string, number int) {
 	}
 }
 
-// MarkCronRun records that a cron or manual (--run-agent) execution has started
+// MarkCronRun records that a cron-fired execution has started
 // for (agent, repo, number). The mark persists for the full TTL window and lives
 // in a separate key namespace ("cron\x00…") from dispatch entries so that
 // repeated cron runs are never suppressed by this mark — only dispatches are.

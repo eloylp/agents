@@ -20,7 +20,7 @@ The `events:` field in repo bindings accepts any of the following GitHub event k
 | `pull_request_review.submitted` | Formal GitHub review submitted | `state`, `body` |
 | `pull_request_review_comment.created` | Inline review comment posted on a PR diff | `body` |
 | `push` | Commit pushed to a branch | `ref` (e.g. `refs/heads/main`), `head_sha` |
-| `agents.run` | On-demand trigger via `POST /run` or `--run-agent` CLI | `target_agent` |
+| `agents.run` | On-demand trigger via `POST /run` or MCP `trigger_agent` | `target_agent` |
 | `agent.dispatch` | Another agent dispatched this agent | `target_agent`, `reason`, `root_event_id`, `dispatch_depth`, `invoked_by` |
 
 ## Event rules

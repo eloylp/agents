@@ -63,7 +63,7 @@ type Server struct {
 
 // WithUI attaches an fs.FS containing the pre-built static UI assets to the
 // server. When set, the daemon serves the files at /ui/. Callers that do not
-// need the UI (tests, --run-agent mode) can skip this call.
+// need the UI (tests) can skip this call.
 func (s *Server) WithUI(uiFS fs.FS) {
 	s.uiFS = uiFS
 }

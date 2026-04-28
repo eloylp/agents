@@ -34,7 +34,7 @@ type Agent struct {
 	// (the YAML/JSON "absent" case), IsAllowMemory reports true so existing
 	// agents authored before this field existed retain their previous behaviour.
 	// Set to a non-nil false to disable memory load+persist for this agent
-	// across every trigger surface (cron, --run-agent, webhook events,
+	// across every trigger surface (cron, webhook events,
 	// dispatch, POST /run, MCP trigger_agent).
 	AllowMemory *bool `yaml:"allow_memory,omitempty"`
 }

@@ -51,19 +51,15 @@ After the first start, `config.yaml` is no longer read; the daemon boots from th
 
 ## On-demand single agent run
 
-Useful for testing without waiting for a cron tick or webhook:
-
-```bash
-./agents --db agents.db --run-agent <agent-name> --repo owner/repo
-```
-
-Or via HTTP on the running daemon:
+Useful for testing without waiting for a cron tick or webhook. Hit the running daemon's `/run` endpoint:
 
 ```bash
 curl -X POST https://<your-host>/run \
   -H "Content-Type: application/json" \
   -d '{"agent":"coder","repo":"owner/repo"}'
 ```
+
+Or use the MCP `trigger_agent` tool from any registered MCP client. There is no separate CLI mode — running a second `agents` process out-of-band would not share the daemon's run-lock or dispatch dedup state.
 
 ## GitHub webhook setup
 

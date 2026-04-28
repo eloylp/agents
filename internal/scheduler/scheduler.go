@@ -10,7 +10,6 @@ import (
 	"github.com/robfig/cron/v3"
 	"github.com/rs/zerolog"
 
-	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/workflow"
@@ -40,7 +39,7 @@ func appendLogKV(e *zerolog.Event, keysAndValues []any) *zerolog.Event {
 	return e
 }
 
-// AgentStatus is the runtime state of a single registered autonomous binding.
+// AgentStatus is the runtime state of a single registered cron binding.
 type AgentStatus struct {
 	Name       string
 	Repo       string
@@ -62,87 +61,41 @@ type lastRunRecord struct {
 	status string
 }
 
-// RunnerBuilder constructs a new ai.Runner for a given backend name and its
-// config. It is used by Reload to keep the in-process runner map consistent
-// with SQLite when ai_backend definitions change via the CRUD API.
-type RunnerBuilder func(name string, cfg fleet.Backend) ai.Runner
-
-// HotReloadSink is implemented by components that share config and runner
-// state with the Scheduler and must be notified when a CRUD-triggered
-// Reload replaces those values. Workflow.Engine implements it so that both
-// the autonomous and event-driven execution paths stay in sync after a
-// hot-reload. Kept as an interface so scheduler_test.go can stub it with
-// testHotReloadSink.
-type HotReloadSink interface {
-	UpdateConfig(cfg *config.Config)
-	UpdateRunners(runners map[string]ai.Runner)
-	UpdateConfigAndRunners(cfg *config.Config, runners map[string]ai.Runner)
-}
-
 // Scheduler wires cron-triggered agent bindings from the config into the
-// robfig/cron engine. It is a pure event producer: every cron tick pushes an
-// "cron" event onto the queue, and the engine handles execution
-// uniformly with all other event kinds. The engine notifies us back via
-// RecordLastRun so the per-binding schedule view in /agents stays current.
-type Scheduler struct {
-	cfg           *config.Config
-	runners       map[string]ai.Runner
-	runnerBuilder RunnerBuilder // optional; nil means Reload does not update runners
-	hotReloadSink HotReloadSink // optional; nil means no external component to notify
-	memory        MemoryBackend
-	cron          *cron.Cron
-	logger        zerolog.Logger
-	ctxMu         sync.RWMutex
-	runCtx        context.Context
-	bindMu        sync.RWMutex // protects cfg, runners, and agentEntries during Reload
-	agentEntries  []agentEntry
-	lastRunsMu    sync.RWMutex
-	lastRuns      map[string]lastRunRecord // key: "name\x00repo"
-	dispatcher    *workflow.Dispatcher     // nil when dispatch is not configured
-	queue         *workflow.DataChannels   // required at runtime; cron ticks push events here for the engine to handle
-}
-
-// WithDispatcher attaches a Dispatcher to the Scheduler so that dispatch
-// requests returned by autonomous agent runs are enqueued and safety-checked
-// through the same limits and dedup store used by the event-driven path.
-// Call this after creating both the Scheduler and the Engine but before
-// starting the Scheduler.
-func (s *Scheduler) WithDispatcher(d *workflow.Dispatcher) {
-	s.dispatcher = d
-}
-
-// WithRunnerBuilder registers the factory used to construct ai.Runner instances
-// during hot-reload. When set, Reload builds a fresh runners map after a
-// successful cron re-registration and updates both the scheduler and any
-// registered HotReloadSink so that new or updated backend definitions take
-// effect without a daemon restart.
+// robfig/cron engine. It is a pure event producer: every cron tick pushes a
+// "cron" event onto the queue, and the engine handles execution uniformly
+// with all other event kinds. The engine notifies us back via RecordLastRun
+// so the per-binding schedule view in /agents stays current.
 //
-// If not called, Reload leaves the runner map untouched; new backends added via
-// the CRUD API will return "no runner for backend" until the daemon restarts.
-func (s *Scheduler) WithRunnerBuilder(fn RunnerBuilder) {
-	s.runnerBuilder = fn
+// The scheduler intentionally knows nothing about runners, the dispatcher,
+// or memory — those live on the engine. Hot-reload is coordinated by the
+// composing daemon (cmd/agents): on config change, the daemon rebuilds
+// runners, calls Engine.UpdateConfigAndRunners + Dispatcher.UpdateAgents,
+// and finally calls Scheduler.RebuildCron. The scheduler's only job in
+// that flow is to swap out cron entries.
+type Scheduler struct {
+	cfg          *config.Config
+	cron         *cron.Cron
+	logger       zerolog.Logger
+	ctxMu        sync.RWMutex
+	runCtx       context.Context
+	bindMu       sync.RWMutex // protects cfg and agentEntries during RebuildCron
+	agentEntries []agentEntry
+	lastRunsMu   sync.RWMutex
+	lastRuns     map[string]lastRunRecord // key: "name\x00repo"
+	queue        *workflow.DataChannels   // required at runtime; cron ticks push events here for the engine to handle
 }
 
-// WithHotReloadSink registers a sink (typically *workflow.Engine) that
-// shares config and runner state with this scheduler. Updates from
-// CRUD-triggered Reloads propagate to the sink so the event-driven path
-// stays in sync.
-func (s *Scheduler) WithHotReloadSink(sink HotReloadSink) {
-	s.hotReloadSink = sink
-}
-
-// WithEventQueue switches the scheduler to producer mode: every cron tick
-// pushes a "cron" event onto q instead of running synchronously
-// via executeAgentRun. Production wires the daemon's workflow.DataChannels
-// here so cron runs flow through the engine's normal event-handling path
-// (uniform with webhook, dispatch, on-demand). The engine's LastRunRecorder
-// hook calls RecordLastRun back into this scheduler when the run completes,
-// keeping the per-binding schedule view in /agents up to date.
+// WithEventQueue wires the engine's event queue. Every cron tick builds a
+// "cron" event and pushes it here; the engine handles execution uniformly
+// with all other event kinds. The engine's LastRunRecorder hook calls
+// RecordLastRun back into this scheduler when the run completes, keeping
+// the per-binding schedule view in /agents up to date.
 func (s *Scheduler) WithEventQueue(q *workflow.DataChannels) {
 	s.queue = q
 }
 
-// RecordLastRun is called by the engine after every autonomous run completes.
+// RecordLastRun is called by the engine after every cron run completes.
 // Implements workflow.LastRunRecorder so /agents and /status see the same
 // schedule state operators saw under the old in-scheduler execution path.
 func (s *Scheduler) RecordLastRun(agent, repo string, at time.Time, status string) {
@@ -150,8 +103,10 @@ func (s *Scheduler) RecordLastRun(agent, repo string, at time.Time, status strin
 }
 
 // NewScheduler builds a scheduler and registers all cron-triggered bindings
-// found in cfg.Repos[].Use.
-func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, memory MemoryBackend, logger zerolog.Logger) (*Scheduler, error) {
+// found in cfg.Repos[].Use. The scheduler does not run agents itself — it
+// pushes "cron" events onto the queue wired via WithEventQueue, and the
+// engine handles execution.
+func NewScheduler(cfg *config.Config, logger zerolog.Logger) (*Scheduler, error) {
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	cronLogger := zerologCronLogger{logger: logger.With().Str("component", "scheduler").Logger()}
 	c := cron.New(
@@ -160,8 +115,6 @@ func NewScheduler(cfg *config.Config, runners map[string]ai.Runner, memory Memor
 	)
 	s := &Scheduler{
 		cfg:      cfg,
-		runners:  runners,
-		memory:   memory,
 		cron:     c,
 		logger:   logger.With().Str("component", "scheduler").Logger(),
 		lastRuns: make(map[string]lastRunRecord),
@@ -214,7 +167,7 @@ func (s *Scheduler) registerJobs() error {
 				Str("agent", agent.Name).
 				Str("cron", binding.Cron).
 				Time("next_run", entry.Next).
-				Msg("autonomous agent scheduled")
+				Msg("cron job registered")
 		}
 	}
 	return nil
@@ -297,43 +250,37 @@ func (s *Scheduler) AgentStatuses() []AgentStatus {
 	return statuses
 }
 
-// Reload replaces the set of registered cron bindings and updates the
-// in-memory config so that future runs see consistent agent, repo, skill, and
-// backend definitions. It is safe to call while the scheduler is running.
+// RebuildCron replaces the set of registered cron bindings with the entries
+// derived from the supplied repos + agents snapshot. It is safe to call while
+// the scheduler is running.
 //
 // The swap is atomic from the scheduler's perspective: new cron entries are
 // registered first; only if all registrations succeed are the old entries
-// removed and the config pointer updated. If registration fails, the old
-// entries remain active and the old config is preserved, so the scheduler
+// removed and the cfg pointer updated. If registration fails, the old entries
+// remain active and the previous cfg snapshot is preserved, so the scheduler
 // stays in a consistent state and the caller receives an error.
-func (s *Scheduler) Reload(repos []fleet.Repo, agents []fleet.Agent, skills map[string]fleet.Skill, backends map[string]fleet.Backend) error {
+//
+// This method does NOT touch runners, the dispatcher, or any external sink.
+// Those concerns belong to the engine; the composing daemon's Reloader
+// updates them in lockstep with the cron rebuild on every config change.
+func (s *Scheduler) RebuildCron(repos []fleet.Repo, agents []fleet.Agent, skills map[string]fleet.Skill, backends map[string]fleet.Backend) error {
 	s.bindMu.Lock()
+	defer s.bindMu.Unlock()
 
 	// Save old state for rollback.
 	oldCfg := s.cfg
-	oldRunners := s.runners
 	oldEntries := make([]agentEntry, len(s.agentEntries))
 	copy(oldEntries, s.agentEntries)
 
-	// Build a new config value so we do not mutate the existing *config.Config
-	// in place. Both this scheduler and the workflow engine may hold references
-	// to the current pointer; mutating through it would race with concurrent
-	// readers in event-driven agent runs. Copy-on-write gives every goroutine
-	// that already snapshotted the old pointer a consistent view until it
-	// finishes, while future snapshots see the new config.
-	//
-	// Note: this is a shallow copy. Sub-fields that are value types (structs,
-	// scalars) are copied; the four mutable fields (Repos, Agents, Skills,
-	// Daemon.AIBackends) are replaced with the caller-supplied slices/maps.
-	// Immutable fields such as Daemon.HTTP and Daemon.Log are shared by value
-	// and are never written after startup, so sharing is safe.
+	// Copy-on-write the cfg pointer so concurrent readers (AgentStatuses) that
+	// already snapshotted the old pointer keep seeing a consistent view until
+	// they finish; future snapshots see the new cfg.
 	newCfg := *s.cfg
 	newCfg.Repos = repos
 	newCfg.Agents = agents
 	newCfg.Skills = skills
 	newCfg.Daemon.AIBackends = backends
 
-	// Apply new config and attempt to register new cron jobs.
 	s.cfg = &newCfg
 	s.agentEntries = s.agentEntries[:0]
 
@@ -344,9 +291,7 @@ func (s *Scheduler) Reload(repos []fleet.Repo, agents []fleet.Agent, skills map[
 		}
 		// Restore old state so the scheduler stays healthy.
 		s.cfg = oldCfg
-		s.runners = oldRunners
 		s.agentEntries = oldEntries
-		s.bindMu.Unlock()
 		return err
 	}
 
@@ -355,56 +300,7 @@ func (s *Scheduler) Reload(repos []fleet.Repo, agents []fleet.Agent, skills map[
 		s.cron.Remove(e.cronID)
 	}
 
-	// Keep the dispatcher's agent map in sync so that dispatch allowlist and
-	// opt-in checks reflect the new agent definitions immediately.
-	if s.dispatcher != nil {
-		s.dispatcher.UpdateAgents(agents)
-	}
-
-	// Rebuild the runner map to reflect any new or changed backend definitions.
-	// We build a fresh map (copy-on-write) rather than mutating the existing
-	// one to avoid racing with concurrent executeAgentRun or engine.runAgent
-	// calls that may already hold a reference to the old map.
-	var sinkRunners map[string]ai.Runner
-	if s.runnerBuilder != nil {
-		newRunners := make(map[string]ai.Runner, len(backends))
-		for name, backend := range backends {
-			newRunners[name] = s.runnerBuilder(name, backend)
-		}
-		s.runners = newRunners
-		if s.hotReloadSink != nil {
-			sinkRunners = maps.Clone(newRunners)
-		}
-	}
-
-	// Capture the new config pointer for the sink notification (s.cfg == &newCfg).
-	var sinkCfg *config.Config
-	if s.hotReloadSink != nil {
-		sinkCfg = s.cfg
-	}
-
 	s.logger.Info().Int("cron_jobs", len(s.agentEntries)).Msg("scheduler reloaded")
-
-	// Release bindMu BEFORE notifying the engine sink. Engine readers such as
-	// runAgent hold cfgMu.RLock() and can call back into TriggerAgent which
-	// needs bindMu.RLock(). Calling UpdateConfig/UpdateRunners while still
-	// holding bindMu.Lock() creates a cyclic wait (A→cfgMu→bindMu, B→bindMu
-	// waiting for A to release). The new config is already committed to s.cfg,
-	// so releasing here is safe — a concurrent caller cannot start another
-	// Reload because storeMu in the HTTP layer serialises all write+reload paths.
-	s.bindMu.Unlock()
-
-	// Notify the external sink (Engine) so that event-driven runs also see the
-	// new config and runners without a restart. When both are changing, use the
-	// combined method so readers never observe a mismatched config/runner pair.
-	if s.hotReloadSink != nil {
-		if sinkRunners != nil {
-			s.hotReloadSink.UpdateConfigAndRunners(sinkCfg, sinkRunners)
-		} else {
-			s.hotReloadSink.UpdateConfig(sinkCfg)
-		}
-	}
-
 	return nil
 }
 

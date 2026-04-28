@@ -60,7 +60,7 @@ Dispatcher checks:
 agent.dispatch event enqueued -> Agent B runs with full payload
 ```
 
-Dispatch chains work across both event-driven and cron/`--run-agent` paths, and the shared dedup store prevents a cron-triggered run and a near-simultaneous dispatch from running the same target twice within the window.
+Dispatch chains work across both event-driven and cron and event-driven paths, and the shared dedup store prevents a cron-triggered run and a near-simultaneous dispatch from running the same target twice within the window.
 
 ## Config wiring
 
