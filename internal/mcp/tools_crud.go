@@ -371,6 +371,33 @@ func toolCreateRepo(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
+// toolUpdateRepo toggles a repo's enabled flag without touching its bindings.
+// Same path as PATCH /repos/{owner}/{repo} with {"enabled": ...}. Bindings
+// are preserved with their current IDs — unlike create_repo, which is a
+// full-replace and would churn binding IDs. Use this when the only change
+// is the repo's active state.
+func toolUpdateRepo(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, ok := trimmedString(req, "name")
+		if !ok {
+			return mcpgo.NewToolResultError("name is required"), nil
+		}
+		args := req.GetArguments()
+		enabledPtr, ok, errMsg := boolPtrArg(args, "enabled")
+		if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
+		if !ok {
+			return mcpgo.NewToolResultError("at least one field is required"), nil
+		}
+		canonical, err := deps.Repos.PatchRepo(fleet.NormalizeRepoName(name), *enabledPtr)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("update repo", err), nil
+		}
+		return jsonResult(repoJSON(canonical))
+	}
+}
+
 // toolDeleteRepo removes a repo (and cascades its bindings) through the same
 // path as DELETE /repos/{owner}/{repo}. The underlying store delete is
 // idempotent for unknown names; a *store.ErrConflict surfaces if deleting

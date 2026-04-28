@@ -432,6 +432,20 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolCreateRepo(deps),
 		)
 		srv.AddTool(
+			mcpgo.NewTool("update_repo",
+				mcpgo.WithDescription("Toggle a repo's enabled flag without touching its bindings. Bindings are preserved with their current IDs — unlike create_repo, which is a full-replace and would churn binding IDs. Use this when the only change is the repo's active state. Same path as PATCH /repos/{owner}/{repo}."),
+				mcpgo.WithString("name",
+					mcpgo.Required(),
+					mcpgo.Description("Repo full name \"owner/repo\" (case-insensitive; matched after lowercasing)."),
+				),
+				mcpgo.WithBoolean("enabled",
+					mcpgo.Required(),
+					mcpgo.Description("New value for the repo's active flag."),
+				),
+			),
+			toolUpdateRepo(deps),
+		)
+		srv.AddTool(
 			mcpgo.NewTool("delete_repo",
 				mcpgo.WithDescription("Delete a repo (and its bindings) by full name. Same path as DELETE /repos/{owner}/{repo}."),
 				mcpgo.WithString("name",

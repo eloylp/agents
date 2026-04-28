@@ -1768,6 +1768,107 @@ func TestToolCreateRepoDefaultsBindingEnabledNil(t *testing.T) {
 	}
 }
 
+// TestToolUpdateRepoTogglesEnabledPreservingBindings verifies the partial-
+// update contract: flipping repo.Enabled does NOT churn the bindings list
+// (unlike create_repo, which is full-replace and would re-issue IDs).
+func TestToolUpdateRepoTogglesEnabledPreservingBindings(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	// Capture the binding IDs on the fixture's enabled repo before the update.
+	before, ok := repoByName(t, deps.DB, "owner/one")
+	if !ok {
+		t.Fatal("owner/one missing in fixture")
+	}
+	if !before.Enabled {
+		t.Fatal("owner/one should start enabled")
+	}
+	beforeIDs := make([]int64, 0, len(before.Use))
+	for _, b := range before.Use {
+		beforeIDs = append(beforeIDs, b.ID)
+	}
+	if len(beforeIDs) == 0 {
+		t.Fatal("fixture repo should have bindings to assert ID preservation")
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "  OWNER/One  ", "enabled": false}
+
+	res, err := toolUpdateRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", textOf(t, res))
+	}
+
+	after, ok := repoByName(t, deps.DB, "owner/one")
+	if !ok {
+		t.Fatal("owner/one missing after update")
+	}
+	if after.Enabled {
+		t.Errorf("repo should be disabled after update, got enabled=true")
+	}
+	if len(after.Use) != len(before.Use) {
+		t.Fatalf("bindings count changed: before=%d after=%d", len(before.Use), len(after.Use))
+	}
+	for i, b := range after.Use {
+		if b.ID != beforeIDs[i] {
+			t.Errorf("binding %d: ID changed %d → %d (update_repo must preserve IDs)", i, beforeIDs[i], b.ID)
+		}
+	}
+
+	var got map[string]any
+	decodeText(t, res, &got)
+	if got["name"] != "owner/one" || got["enabled"] != false {
+		t.Errorf("response shape: %+v", got)
+	}
+}
+
+func TestToolUpdateRepoRequiresName(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"enabled": true}
+	res, err := toolUpdateRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError when name missing, got %+v", res)
+	}
+}
+
+func TestToolUpdateRepoRequiresEnabled(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "owner/one"}
+	res, err := toolUpdateRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError when enabled missing, got %+v", res)
+	}
+}
+
+func TestToolUpdateRepoPropagatesNotFound(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "owner/never-existed", "enabled": true}
+	res, err := toolUpdateRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError for unknown repo, got %+v", res)
+	}
+}
+
 func TestToolDeleteRepoNormalizesAndForwards(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
