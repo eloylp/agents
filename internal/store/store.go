@@ -622,7 +622,7 @@ func ReadMemory(db *sql.DB, agent, repo string) (string, bool, time.Time, error)
 	// the bare "YYYY-MM-DD HH:MM:SS" SQLite text format as a safety net.
 	t, parseErr := time.Parse(time.RFC3339, updatedAt)
 	if parseErr != nil {
-		t, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
+		t, _ = time.Parse(time.DateTime, updatedAt)
 	}
 	return content, true, t.UTC(), nil
 }
