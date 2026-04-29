@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -127,7 +126,9 @@ func RunDiagnostics(ctx context.Context, existing map[string]fleet.Backend) Diag
 	wg.Wait()
 
 	diag.Backends = backendsOut
-	sort.Slice(diag.Backends, func(i, j int) bool { return diag.Backends[i].Name < diag.Backends[j].Name })
+	slices.SortFunc(diag.Backends, func(a, b BackendStatus) int {
+		return strings.Compare(a.Name, b.Name)
+	})
 	return diag
 }
 
