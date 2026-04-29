@@ -109,7 +109,7 @@ func toolUpdateAgent(deps Deps) server.ToolHandlerFunc {
 		} else if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
-		if !agentPatchHasField(patch) {
+		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
 		canonical, uerr := deps.Fleet.UpdateAgentPatch(name, patch)
@@ -118,12 +118,6 @@ func toolUpdateAgent(deps Deps) server.ToolHandlerFunc {
 		}
 		return jsonResult(agentJSON(canonical))
 	}
-}
-
-func agentPatchHasField(p serverfleet.AgentPatch) bool {
-	return p.Backend != nil || p.Model != nil || p.Skills != nil || p.Prompt != nil ||
-		p.AllowPRs != nil || p.AllowDispatch != nil || p.CanDispatch != nil ||
-		p.Description != nil || p.AllowMemory != nil
 }
 
 // toolDeleteAgent removes an agent through the same path as DELETE
@@ -302,7 +296,7 @@ func toolUpdateBackend(deps Deps) server.ToolHandlerFunc {
 		} else if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
-		if !backendPatchHasField(patch) {
+		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
 		canonicalName, canonical, uerr := deps.Fleet.UpdateBackendPatch(name, patch)
@@ -311,12 +305,6 @@ func toolUpdateBackend(deps Deps) server.ToolHandlerFunc {
 		}
 		return jsonResult(backendJSON(canonicalName, canonical))
 	}
-}
-
-func backendPatchHasField(p serverfleet.BackendPatch) bool {
-	return p.Command != nil || p.Version != nil || p.Models != nil || p.Healthy != nil ||
-		p.HealthDetail != nil || p.LocalModelURL != nil || p.TimeoutSeconds != nil ||
-		p.MaxPromptChars != nil || p.RedactionSaltEnv != nil
 }
 
 // toolDeleteBackend removes a backend through the same path as DELETE
