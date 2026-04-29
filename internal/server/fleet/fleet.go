@@ -649,7 +649,7 @@ func (h *Handler) handleBackendsDiscover(w http.ResponseWriter, r *http.Request)
 		return nil
 	})
 	if err != nil {
-		status := storeErrStatus(err)
+		status := server.StoreErrStatus(err)
 		h.logger.Error().Err(err).Msg("backend discovery failed")
 		http.Error(w, fmt.Sprintf("backend discovery: %v", err), status)
 		return
@@ -723,7 +723,7 @@ func (h *Handler) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		status := storeErrStatus(err)
+		status := server.StoreErrStatus(err)
 		h.logger.Error().Err(err).Msg("local backend upsert failed")
 		http.Error(w, fmt.Sprintf("local backend upsert or cron reload: %v", err), status)
 		return
@@ -849,23 +849,7 @@ func (h *Handler) DeleteBackend(name string) error {
 
 func (h *Handler) writeErr(w http.ResponseWriter, err error, op string) {
 	h.logger.Error().Err(err).Msgf("store crud: %s failed", op)
-	http.Error(w, fmt.Sprintf("%s: %v", op, err), storeErrStatus(err))
-}
-
-func storeErrStatus(err error) int {
-	var v *store.ErrValidation
-	if errors.As(err, &v) {
-		return http.StatusBadRequest
-	}
-	var n *store.ErrNotFound
-	if errors.As(err, &n) {
-		return http.StatusNotFound
-	}
-	var c *store.ErrConflict
-	if errors.As(err, &c) {
-		return http.StatusConflict
-	}
-	return http.StatusInternalServerError
+	http.Error(w, fmt.Sprintf("%s: %v", op, err), server.StoreErrStatus(err))
 }
 
 func decodeBody[T any](w http.ResponseWriter, r *http.Request, limit int64, out *T) bool {
