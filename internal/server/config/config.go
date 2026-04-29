@@ -381,7 +381,7 @@ func (h *Handler) HandleImport(w http.ResponseWriter, r *http.Request) {
 	}
 	counts, err := h.ImportYAML(body, r.URL.Query().Get("mode"))
 	if err != nil {
-		http.Error(w, err.Error(), storeErrStatus(err))
+		http.Error(w, err.Error(), server.StoreErrStatus(err))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -423,23 +423,4 @@ func (h *Handler) ImportYAML(body []byte, mode string) (map[string]int, error) {
 		"repos":    len(payload.Repos),
 		"backends": len(backends),
 	}, nil
-}
-
-// storeErrStatus maps a store error to an HTTP status. Validation and
-// not-found errors surface as 400 and 404; conflict errors as 409;
-// everything else as 500.
-func storeErrStatus(err error) int {
-	var v *store.ErrValidation
-	if errors.As(err, &v) {
-		return http.StatusBadRequest
-	}
-	var n *store.ErrNotFound
-	if errors.As(err, &n) {
-		return http.StatusNotFound
-	}
-	var c *store.ErrConflict
-	if errors.As(err, &c) {
-		return http.StatusConflict
-	}
-	return http.StatusInternalServerError
 }
