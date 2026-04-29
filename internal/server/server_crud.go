@@ -10,11 +10,11 @@ import (
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// storeErrStatus maps store mutation errors to the appropriate HTTP status
+// StoreErrStatus maps store mutation errors to the appropriate HTTP status
 // code. ErrValidation (bad field values) → 400, ErrConflict (invariant
 // violations, referenced-by failures) → 409, ErrNotFound → 404,
 // anything else → 500.
-func storeErrStatus(err error) int {
+func StoreErrStatus(err error) int {
 	var valErr *store.ErrValidation
 	if errors.As(err, &valErr) {
 		return http.StatusBadRequest
@@ -36,7 +36,7 @@ func storeErrStatus(err error) int {
 // HTTP error body so callers and operators see the same context.
 func (s *Server) storeWriteErr(w http.ResponseWriter, err error, op string) {
 	s.logger.Error().Err(err).Msgf("store crud: %s failed", op)
-	http.Error(w, fmt.Sprintf("%s: %v", op, err), storeErrStatus(err))
+	http.Error(w, fmt.Sprintf("%s: %v", op, err), StoreErrStatus(err))
 }
 
 // reloadCron re-reads the full config from the DB as a consistent snapshot
