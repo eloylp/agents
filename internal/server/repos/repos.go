@@ -450,26 +450,7 @@ func boolToInt(b bool) int {
 // operators see the same context.
 func (h *Handler) writeErr(w http.ResponseWriter, err error, op string) {
 	h.logger.Error().Err(err).Msgf("store crud: %s failed", op)
-	http.Error(w, fmt.Sprintf("%s: %v", op, err), storeErrStatus(err))
-}
-
-// storeErrStatus maps a store error to an HTTP status. Validation and
-// not-found errors surface as 400 and 404 respectively; conflict errors as
-// 409. Everything else falls back to 500 so unexpected failures are loud.
-func storeErrStatus(err error) int {
-	var v *store.ErrValidation
-	if errors.As(err, &v) {
-		return http.StatusBadRequest
-	}
-	var n *store.ErrNotFound
-	if errors.As(err, &n) {
-		return http.StatusNotFound
-	}
-	var c *store.ErrConflict
-	if errors.As(err, &c) {
-		return http.StatusConflict
-	}
-	return http.StatusInternalServerError
+	http.Error(w, fmt.Sprintf("%s: %v", op, err), server.StoreErrStatus(err))
 }
 
 // decodeBody reads and decodes a JSON body up to limit bytes. On error it
