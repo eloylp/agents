@@ -188,7 +188,10 @@ type AgentPatch struct {
 	AllowMemory   *bool     `json:"allow_memory,omitempty"`
 }
 
-func (p AgentPatch) anyFieldSet() bool {
+// AnyFieldSet reports whether at least one patch field is non-nil. Used by
+// both the REST PATCH handler and the MCP update_agent tool to reject empty
+// payloads before hitting the store.
+func (p AgentPatch) AnyFieldSet() bool {
 	return p.Backend != nil || p.Model != nil || p.Skills != nil || p.Prompt != nil ||
 		p.AllowPRs != nil || p.AllowDispatch != nil || p.CanDispatch != nil ||
 		p.Description != nil || p.AllowMemory != nil
@@ -262,7 +265,7 @@ func (h *Handler) handleAgentPatch(w http.ResponseWriter, r *http.Request, name 
 	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
-	if !req.anyFieldSet() {
+	if !req.AnyFieldSet() {
 		http.Error(w, "at least one field is required", http.StatusBadRequest)
 		return
 	}
@@ -533,7 +536,10 @@ type BackendPatch struct {
 	RedactionSaltEnv *string   `json:"redaction_salt_env,omitempty"`
 }
 
-func (p BackendPatch) anyFieldSet() bool {
+// AnyFieldSet reports whether at least one patch field is non-nil. Used by
+// both the REST PATCH handler and the MCP update_backend tool to reject empty
+// payloads before hitting the store.
+func (p BackendPatch) AnyFieldSet() bool {
 	return p.Command != nil || p.Version != nil || p.Models != nil || p.Healthy != nil ||
 		p.HealthDetail != nil || p.LocalModelURL != nil || p.TimeoutSeconds != nil ||
 		p.MaxPromptChars != nil || p.RedactionSaltEnv != nil
@@ -756,7 +762,7 @@ func (h *Handler) handleBackendPatch(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
-	if !req.anyFieldSet() {
+	if !req.AnyFieldSet() {
 		http.Error(w, "at least one field is required", http.StatusBadRequest)
 		return
 	}
