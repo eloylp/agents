@@ -500,12 +500,3 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
-
-// nilSafeStrings returns an empty slice when in is nil so encoded JSON shows
-// `[]` rather than `null`.
-func nilSafeStrings(in []string) []string {
-	if in == nil {
-		return []string{}
-	}
-	return in
-}
