@@ -142,11 +142,8 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 	}
 
 	// Repo binding field checks and agent cross-refs (without "at least one"
-	// aggregate check). Agent lookup uses the set built above.
-	agentSet := make(map[string]struct{}, len(agents))
-	for _, a := range agents {
-		agentSet[strings.ToLower(a.Name)] = struct{}{}
-	}
+	// aggregate check). Binding-to-agent lookups reuse seen; agent names are
+	// always lowercase-normalised before ValidateEntities is called.
 	seenRepos := make(map[string]struct{}, len(repos))
 	for _, r := range repos {
 		if r.Name == "" {
@@ -161,7 +158,7 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 			if b.Agent == "" {
 				return fmt.Errorf("config: repo %q: binding #%d has no agent", r.Name, i)
 			}
-			if _, ok := agentSet[strings.ToLower(b.Agent)]; !ok {
+			if _, ok := seen[strings.ToLower(b.Agent)]; !ok {
 				return fmt.Errorf("config: repo %q: binding references unknown agent %q", r.Name, b.Agent)
 			}
 			if !b.IsCron() && !b.IsLabel() && !b.IsEvent() {
