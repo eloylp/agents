@@ -3,6 +3,7 @@ package fleet
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/eloylp/agents/internal/scheduler"
 )
@@ -108,11 +109,11 @@ func (h *Handler) HandleAgentsView(w http.ResponseWriter, _ *http.Request) {
 				if b.IsCron() {
 					if st, ok := scheduleByKey[a.Name+"\x00"+repo.Name]; ok {
 						j := &agentScheduleJSON{
-							NextRun:    st.NextRun.UTC().Format("2006-01-02T15:04:05Z"),
+							NextRun:    st.NextRun.UTC().Format(time.RFC3339),
 							LastStatus: st.LastStatus,
 						}
 						if st.LastRun != nil {
-							lr := st.LastRun.UTC().Format("2006-01-02T15:04:05Z")
+							lr := st.LastRun.UTC().Format(time.RFC3339)
 							j.LastRun = &lr
 						}
 						binding.Schedule = j
