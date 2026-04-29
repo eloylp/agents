@@ -727,17 +727,11 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		)
 	}
 
-	// Record transcript steps when available. Translate from the runner-internal
-	// ai.TraceStep to the domain-level workflow.TraceStep at this boundary.
+	// Record transcript steps when available.
 	if e.stepRec != nil && len(resp.Steps) > 0 {
 		wsteps := make([]TraceStep, len(resp.Steps))
 		for i, s := range resp.Steps {
-			wsteps[i] = TraceStep{
-				ToolName:      s.ToolName,
-				InputSummary:  s.InputSummary,
-				OutputSummary: s.OutputSummary,
-				DurationMs:    s.DurationMs,
-			}
+			wsteps[i] = TraceStep(s)
 		}
 		e.stepRec.RecordSteps(spanID, wsteps)
 	}
