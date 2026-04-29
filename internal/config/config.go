@@ -168,7 +168,7 @@ func Load(path string) (*Config, error) {
 func (c *Config) RepoByName(name string) (fleet.Repo, bool) {
 	name = strings.ToLower(strings.TrimSpace(name))
 	for _, r := range c.Repos {
-		if strings.ToLower(r.Name) == name {
+		if r.Name == name {
 			return r, true
 		}
 	}
