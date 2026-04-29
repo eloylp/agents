@@ -9,7 +9,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/eloylp/agents/internal/fleet"
-	serverfleet "github.com/eloylp/agents/internal/server/fleet"
+	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
 )
 
 // toolCreateAgent upserts an agent definition through the same path as POST
@@ -71,7 +71,7 @@ func toolUpdateAgent(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		args := req.GetArguments()
-		var patch serverfleet.AgentPatch
+		var patch daemonfleet.AgentPatch
 		if v, ok := stringPtrArg(args, "backend"); ok {
 			patch.Backend = v
 		}
@@ -120,7 +120,7 @@ func toolUpdateAgent(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
-func agentPatchHasField(p serverfleet.AgentPatch) bool {
+func agentPatchHasField(p daemonfleet.AgentPatch) bool {
 	return p.Backend != nil || p.Model != nil || p.Skills != nil || p.Prompt != nil ||
 		p.AllowPRs != nil || p.AllowDispatch != nil || p.CanDispatch != nil ||
 		p.Description != nil || p.AllowMemory != nil
@@ -180,7 +180,7 @@ func toolUpdateSkill(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		args := req.GetArguments()
-		var patch serverfleet.SkillPatch
+		var patch daemonfleet.SkillPatch
 		if v, ok := stringPtrArg(args, "prompt"); ok {
 			patch.Prompt = v
 		}
@@ -260,7 +260,7 @@ func toolUpdateBackend(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		args := req.GetArguments()
-		var patch serverfleet.BackendPatch
+		var patch daemonfleet.BackendPatch
 		if v, ok := stringPtrArg(args, "command"); ok {
 			patch.Command = v
 		}
@@ -313,7 +313,7 @@ func toolUpdateBackend(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
-func backendPatchHasField(p serverfleet.BackendPatch) bool {
+func backendPatchHasField(p daemonfleet.BackendPatch) bool {
 	return p.Command != nil || p.Version != nil || p.Models != nil || p.Healthy != nil ||
 		p.HealthDetail != nil || p.LocalModelURL != nil || p.TimeoutSeconds != nil ||
 		p.MaxPromptChars != nil || p.RedactionSaltEnv != nil

@@ -32,11 +32,11 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog"
 
-	internalserver "github.com/eloylp/agents/internal/server"
-	serverconfig "github.com/eloylp/agents/internal/server/config"
-	serverfleet "github.com/eloylp/agents/internal/server/fleet"
-	serverrepos "github.com/eloylp/agents/internal/server/repos"
+	"github.com/eloylp/agents/internal/coordinator"
 	"github.com/eloylp/agents/internal/observe"
+	daemonconfig "github.com/eloylp/agents/internal/daemon/config"
+	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
+	daemonrepos "github.com/eloylp/agents/internal/daemon/repos"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -45,25 +45,26 @@ import (
 // tool's input or output schema changes in a non-backwards-compatible way.
 const Version = "0.1.0"
 
-// Deps bundles the dependencies the MCP tools call into. The composing
-// daemon (cmd/agents) constructs each component once and hands the same
-// references to the REST and MCP surfaces so both stay in lock-step.
+// Deps bundles the dependencies the MCP tools call into. internal/daemon
+// constructs each component once and hands the same references to the
+// REST and MCP surfaces so both stay in lock-step.
 //
-// Server, Queue, and Logger are always required. Observe, Engine, Fleet,
-// Repos, and Config are optional: tools that depend on them are only
-// registered when the field is non-nil, so a minimal MCP server can serve
-// the core fleet + status + trigger surface without wiring observability
-// or CRUD writes.
+// Coord, Queue, and Logger are always required. Observe, Engine, Fleet,
+// Repos, Config, and StatusJSON are optional: tools that depend on them
+// are only registered when the field is non-nil, so a minimal MCP server
+// can serve the core fleet + trigger surface without wiring
+// observability or CRUD writes.
 type Deps struct {
-	DB      *sql.DB
-	Server  *internalserver.Server  // Config() snapshot, StatusJSON()
-	Queue   *workflow.DataChannels  // PushEvent for trigger_agent
-	Observe *observe.Store          // observability tools (events, traces, graph)
-	Engine  *workflow.Engine        // DispatchStats() for get_dispatches
-	Fleet   *serverfleet.Handler    // agent / skill / backend CRUD writes
-	Repos   *serverrepos.Handler    // repo + binding CRUD writes
-	Config  *serverconfig.Handler   // ConfigJSON / ExportYAML / ImportYAML
-	Logger  zerolog.Logger
+	DB         *sql.DB
+	Coord      *coordinator.Coordinator // Config() snapshot, write epoch
+	StatusJSON func() ([]byte, error)   // /status payload — same bytes the REST surface returns
+	Queue      *workflow.DataChannels   // PushEvent for trigger_agent
+	Observe    *observe.Store           // observability tools (events, traces, graph)
+	Engine     *workflow.Engine         // DispatchStats() for get_dispatches
+	Fleet      *daemonfleet.Handler     // agent / skill / backend CRUD writes
+	Repos      *daemonrepos.Handler     // repo + binding CRUD writes
+	Config     *daemonconfig.Handler    // ConfigJSON / ExportYAML / ImportYAML
+	Logger     zerolog.Logger
 }
 
 // Handler is an http.Handler that speaks MCP over Streamable HTTP. Mount it

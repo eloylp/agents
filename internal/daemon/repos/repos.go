@@ -3,15 +3,15 @@
 // together in this package so that the wire format, the validation gate, and
 // the storage path stay in sync.
 //
-// The HTTP server constructs a Handler at startup, hands it a
-// server.WriteCoordinator that owns the cross-domain CRUD lock and
-// reload hook, and mounts the routes via RegisterRoutes. The same Handler
-// satisfies the mcp.RepoWriter and mcp.BindingWriter interfaces so MCP tools
-// hit the same code path as REST clients.
+// The composing daemon constructs a Handler at startup with the daemon's
+// *coordinator.Coordinator (which owns both the cross-domain write epoch
+// the handler runs every mutation under, and the cfg pointer it consults
+// for per-request body-size limits) and mounts the routes via
+// RegisterRoutes. The same Handler instance is consumed directly by the
+// MCP fleet-management tools so MCP and REST hit the same code path.
 package repos
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,30 +23,24 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
 
+	"github.com/eloylp/agents/internal/coordinator"
 	"github.com/eloylp/agents/internal/fleet"
-	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/store"
 )
 
 // Handler implements the /repos and /repos/{owner}/{repo}/bindings HTTP
 // surface plus the methods exposed for the MCP repo and binding tools.
-// Construct via New and mount with RegisterRoutes.
 type Handler struct {
-	db     *sql.DB
-	coord  server.WriteCoordinator
-	srv    *server.Server // provides Config() snapshot for per-request body limits
+	coord  *coordinator.Coordinator
 	logger zerolog.Logger
 }
 
-// New constructs a Handler. db must be open; coord must be non-nil — every
-// mutation runs through coord.Do so the lock and reload hook stay coherent
-// across domains. srv supplies the per-request body-size limit via
-// Config(); logger receives storage write errors.
-func New(db *sql.DB, coord server.WriteCoordinator, srv *server.Server, logger zerolog.Logger) *Handler {
+// New constructs a Handler. coord supplies the SQLite handle (via DB()),
+// the locked write epoch (via Do()), and the cfg snapshot (via Config())
+// for per-request body-size limits.
+func New(coord *coordinator.Coordinator, logger zerolog.Logger) *Handler {
 	return &Handler{
-		db:     db,
 		coord:  coord,
-		srv:    srv,
 		logger: logger.With().Str("component", "server_repos").Logger(),
 	}
 }
@@ -135,7 +129,7 @@ type repoRuntimeSettingsJSON struct {
 func (h *Handler) handleRepos(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		repos, err := store.ReadRepos(h.db)
+		repos, err := store.ReadRepos(h.coord.DB())
 		if err != nil {
 			http.Error(w, fmt.Sprintf("read repos: %v", err), http.StatusInternalServerError)
 			return
@@ -148,7 +142,7 @@ func (h *Handler) handleRepos(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeRepoJSON
-		if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+		if !decodeBody(w, r, h.coord.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		canonical, err := h.UpsertRepo(req.toConfig())
@@ -165,7 +159,7 @@ func (h *Handler) handleRepo(w http.ResponseWriter, r *http.Request) {
 	repoName := fleet.NormalizeRepoName(vars["owner"]) + "/" + fleet.NormalizeRepoName(vars["repo"])
 	switch r.Method {
 	case http.MethodGet:
-		repos, err := store.ReadRepos(h.db)
+		repos, err := store.ReadRepos(h.coord.DB())
 		if err != nil {
 			http.Error(w, fmt.Sprintf("read repos: %v", err), http.StatusInternalServerError)
 			return
@@ -180,7 +174,7 @@ func (h *Handler) handleRepo(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPatch:
 		var req repoRuntimeSettingsJSON
-		if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+		if !decodeBody(w, r, h.coord.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		if req.Enabled == nil {
@@ -206,7 +200,7 @@ func (h *Handler) handleRepo(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleCreateBinding(w http.ResponseWriter, r *http.Request) {
 	repoName := repoNameFromVars(r)
 	var req storeBindingJSON
-	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !decodeBody(w, r, h.coord.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	// Ignore any ID the client sends — the store picks it.
@@ -225,7 +219,7 @@ func (h *Handler) handleGetBinding(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	owner, b, found, err := store.ReadBinding(h.db, id)
+	owner, b, found, err := store.ReadBinding(h.coord.DB(), id)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read binding: %v", err), http.StatusInternalServerError)
 		return
@@ -244,7 +238,7 @@ func (h *Handler) handleUpdateBinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req storeBindingJSON
-	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !decodeBody(w, r, h.coord.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	b, err := h.UpdateBinding(repoName, id, req.toConfig())
@@ -283,7 +277,7 @@ func (h *Handler) UpsertRepo(r fleet.Repo) (fleet.Repo, error) {
 		return fleet.Repo{}, &store.ErrValidation{Msg: "name is required"}
 	}
 	err := h.coord.Do(func() error {
-		return store.UpsertRepo(h.db, r)
+		return store.UpsertRepo(h.coord.DB(), r)
 	})
 	if err != nil {
 		return fleet.Repo{}, err
@@ -300,7 +294,7 @@ func (h *Handler) PatchRepo(repoName string, enabled bool) (fleet.Repo, error) {
 	err := h.coord.Do(func() error {
 		// Load the repo (and its bindings) so we can rewrite it intact without
 		// having to pipe every field through the wire struct.
-		repos, err := store.ReadRepos(h.db)
+		repos, err := store.ReadRepos(h.coord.DB())
 		if err != nil {
 			return err
 		}
@@ -320,7 +314,7 @@ func (h *Handler) PatchRepo(repoName string, enabled bool) (fleet.Repo, error) {
 		}
 		// Flip the enabled flag via a direct UPDATE so we don't re-run the
 		// delete+insert cycle that UpsertRepo performs on bindings.
-		if _, err := h.db.Exec("UPDATE repos SET enabled=? WHERE name=?", boolToInt(enabled), repoName); err != nil {
+		if _, err := h.coord.DB().Exec("UPDATE repos SET enabled=? WHERE name=?", boolToInt(enabled), repoName); err != nil {
 			return fmt.Errorf("patch repo %s: %w", repoName, err)
 		}
 		existing.Enabled = enabled
@@ -338,7 +332,7 @@ func (h *Handler) PatchRepo(repoName string, enabled bool) (fleet.Repo, error) {
 // deletion would leave the fleet with no enabled repos.
 func (h *Handler) DeleteRepo(name string) error {
 	return h.coord.Do(func() error {
-		return store.DeleteRepo(h.db, name)
+		return store.DeleteRepo(h.coord.DB(), name)
 	})
 }
 
@@ -346,7 +340,7 @@ func (h *Handler) DeleteRepo(name string) error {
 func (h *Handler) CreateBinding(repoName string, b fleet.Binding) (fleet.Binding, error) {
 	var persisted fleet.Binding
 	err := h.coord.Do(func() error {
-		_, p, err := store.CreateBinding(h.db, repoName, b)
+		_, p, err := store.CreateBinding(h.coord.DB(), repoName, b)
 		if err != nil {
 			return err
 		}
@@ -364,14 +358,14 @@ func (h *Handler) CreateBinding(repoName string, b fleet.Binding) (fleet.Binding
 func (h *Handler) UpdateBinding(repoName string, id int64, b fleet.Binding) (fleet.Binding, error) {
 	var updated fleet.Binding
 	err := h.coord.Do(func() error {
-		existingRepo, _, found, err := store.ReadBinding(h.db, id)
+		existingRepo, _, found, err := store.ReadBinding(h.coord.DB(), id)
 		if err != nil {
 			return err
 		}
 		if !found || existingRepo != repoName {
 			return &store.ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found for repo %q", id, repoName)}
 		}
-		u, err := store.UpdateBinding(h.db, id, b)
+		u, err := store.UpdateBinding(h.coord.DB(), id, b)
 		if err != nil {
 			return err
 		}
@@ -386,7 +380,7 @@ func (h *Handler) UpdateBinding(repoName string, id int64, b fleet.Binding) (fle
 
 // ReadBinding fetches one binding by ID, verifying it belongs to repoName.
 func (h *Handler) ReadBinding(repoName string, id int64) (fleet.Binding, error) {
-	existingRepo, b, found, err := store.ReadBinding(h.db, id)
+	existingRepo, b, found, err := store.ReadBinding(h.coord.DB(), id)
 	if err != nil {
 		return fleet.Binding{}, err
 	}
@@ -400,14 +394,14 @@ func (h *Handler) ReadBinding(repoName string, id int64) (fleet.Binding, error) 
 // cron.
 func (h *Handler) DeleteBinding(repoName string, id int64) error {
 	return h.coord.Do(func() error {
-		existingRepo, _, found, err := store.ReadBinding(h.db, id)
+		existingRepo, _, found, err := store.ReadBinding(h.coord.DB(), id)
 		if err != nil {
 			return err
 		}
 		if !found || existingRepo != repoName {
 			return &store.ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found for repo %q", id, repoName)}
 		}
-		return store.DeleteBinding(h.db, id)
+		return store.DeleteBinding(h.coord.DB(), id)
 	})
 }
 

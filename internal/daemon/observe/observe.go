@@ -1,12 +1,12 @@
 // Package observe implements the read-only observability HTTP surface:
-// events, traces, graph, dispatches, memory, and SSE streams. Handlers
-// share no mutable state and depend only on narrow interfaces injected at
-// construction time. The package owns the wire types and the SSE helper.
+// events, traces, graph, dispatches, memory, and SSE streams. The package
+// owns the wire types and the SSE helper.
 //
-// The HTTP server constructs a Handler at startup and mounts its routes via
-// RegisterRoutes. This isolates the observability surface from webhook
-// concerns (HMAC verification, GitHub event parsing) and from CRUD writes,
-// per the package layout described on issue #250.
+// The composing daemon constructs a Handler with concrete pointers to every
+// component the observability views aggregate from — the daemon ships as
+// one binary and these are the same instances the rest of the daemon uses.
+// Tests build the same shape against a tempdir SQLite, mirroring the
+// fixture pattern internal/mcp uses.
 package observe
 
 import (
@@ -18,68 +18,44 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/rs/zerolog"
 
-	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/coordinator"
 	obstore "github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
-	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
-// ConfigGetter returns the current effective config. Kept as an interface
-// here (rather than a *server.Server reference) so observe_test.go can
-// supply a stubConfig with test-controlled cfg values.
-type ConfigGetter interface {
-	Config() *config.Config
-}
-
-// StatusProvider, RuntimeStateProvider, and DispatchStatsProvider are all
-// kept as interfaces in this package (rather than the concrete
-// *scheduler.Scheduler / *observe.Store / *workflow.Engine) because
-// observe_test.go stubs each one with test-controlled values.
-type StatusProvider interface {
-	AgentStatuses() []scheduler.AgentStatus
-}
-
-type RuntimeStateProvider interface {
-	IsRunning(name string) bool
-}
-
-type DispatchStatsProvider interface {
-	DispatchStats() workflow.DispatchStats
-}
-
-// Handler implements the observability HTTP endpoints. Construct via New and
-// mount with RegisterRoutes. Handlers are read-only and safe for concurrent
-// use; the type holds no mutable state.
+// Handler implements the observability HTTP endpoints. Handlers are
+// read-only and safe for concurrent use; the type holds no mutable state.
 type Handler struct {
-	store         *obstore.Store
-	cfg           ConfigGetter
-	provider      StatusProvider
-	runtimeState  RuntimeStateProvider
-	dispatchStats DispatchStatsProvider
-	memReader     server.MemoryReader
+	store     *obstore.Store
+	coord     *coordinator.Coordinator
+	sched     *scheduler.Scheduler
+	engine    *workflow.Engine
+	memReader *coordinator.SQLiteMemoryReader
+	logger    zerolog.Logger
 }
 
-// New constructs a Handler. store is required; the rest may be nil —
-// handlers degrade gracefully when their dependencies are absent (no
-// schedule data, all-idle node status, empty dispatch stats, /memory
-// disabled).
+// New constructs a Handler. All components are concrete pointers to the
+// daemon's running instances — the same store the engine writes to, the
+// same scheduler that holds the cron lastRuns map, the same engine that
+// owns the dispatch counters.
 func New(
 	store *obstore.Store,
-	cfg ConfigGetter,
-	provider StatusProvider,
-	runtimeState RuntimeStateProvider,
-	dispatchStats DispatchStatsProvider,
-	memReader server.MemoryReader,
+	coord *coordinator.Coordinator,
+	sched *scheduler.Scheduler,
+	engine *workflow.Engine,
+	memReader *coordinator.SQLiteMemoryReader,
+	logger zerolog.Logger,
 ) *Handler {
 	return &Handler{
-		store:         store,
-		cfg:           cfg,
-		provider:      provider,
-		runtimeState:  runtimeState,
-		dispatchStats: dispatchStats,
-		memReader:     memReader,
+		store:     store,
+		coord:     coord,
+		sched:     sched,
+		engine:    engine,
+		memReader: memReader,
+		logger:    logger.With().Str("component", "server_observe").Logger(),
 	}
 }
 
@@ -107,8 +83,8 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 // provider is configured (e.g. dispatch disabled).
 func (h *Handler) HandleDispatches(w http.ResponseWriter, _ *http.Request) {
 	var stats workflow.DispatchStats
-	if h.dispatchStats != nil {
-		stats = h.dispatchStats.DispatchStats()
+	if h.engine != nil {
+		stats = h.engine.DispatchStats()
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(stats)
@@ -238,8 +214,8 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, _ *http.Request) {
 	// Build a map of the last cron error status for each agent so idle
 	// agents that last exited with an error are flagged in the response.
 	lastErrorByAgent := make(map[string]bool)
-	if h.provider != nil {
-		for _, as := range h.provider.AgentStatuses() {
+	if h.sched != nil {
+		for _, as := range h.sched.AgentStatuses() {
 			if as.LastStatus == "error" {
 				lastErrorByAgent[as.Name] = true
 			}
@@ -247,7 +223,7 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	nodeStatus := func(name string) string {
-		if h.runtimeState != nil && h.runtimeState.IsRunning(name) {
+		if h.store != nil && h.store.IsRunning(name) {
 			return "running"
 		}
 		if lastErrorByAgent[name] {
@@ -257,8 +233,8 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	seen := make(map[string]struct{})
-	if h.cfg != nil {
-		for _, a := range h.cfg.Config().Agents {
+	if h.coord != nil {
+		for _, a := range h.coord.Config().Agents {
 			seen[a.Name] = struct{}{}
 		}
 	}
@@ -318,7 +294,7 @@ func (h *Handler) HandleMemory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	content, mtime, err := h.memReader.ReadMemory(agent, repo)
-	if errors.Is(err, server.ErrMemoryNotFound) {
+	if errors.Is(err, coordinator.ErrMemoryNotFound) {
 		http.Error(w, "memory not found", http.StatusNotFound)
 		return
 	}

@@ -49,24 +49,24 @@ type apiAgentJSON struct {
 
 // HandleAgentsView serves GET /agents — a fleet snapshot combining agent
 // definitions from config with scheduling state from the scheduler. The
-// composing server's /agents dispatcher routes GET requests here and POST
+// composing daemon's /agents dispatcher routes GET requests here and POST
 // requests to HandleAgentsCreate.
 func (h *Handler) HandleAgentsView(w http.ResponseWriter, _ *http.Request) {
 	// Index scheduling state by (agent, repo) for O(1) lookup below.
 	scheduleByKey := map[string]scheduler.AgentStatus{}
-	if h.provider != nil {
-		for _, st := range h.provider.AgentStatuses() {
+	if h.sched != nil {
+		for _, st := range h.sched.AgentStatuses() {
 			scheduleByKey[st.Name+"\x00"+st.Repo] = st
 		}
 	}
 
-	cfg := h.srv.Config()
+	cfg := h.coord.Config()
 
 	// Build one entry per configured agent.
 	agents := make([]apiAgentJSON, 0, len(cfg.Agents))
 	for _, a := range cfg.Agents {
 		currentStatus := "idle"
-		if h.runtimeState != nil && h.runtimeState.IsRunning(a.Name) {
+		if h.obs != nil && h.obs.IsRunning(a.Name) {
 			currentStatus = "running"
 		}
 		entry := apiAgentJSON{

@@ -139,7 +139,8 @@ func (h *SSEHub) Publish(msg []byte) {
 // ─── ActiveRuns ───────────────────────────────────────────────────────────────
 
 // ActiveRuns tracks the number of in-flight agent runs per agent name.
-// It implements workflow.RunTracker and the server.RuntimeStateProvider interface.
+// It implements workflow.RunTracker; the server's observe handler reads
+// IsRunning to mark agents as running in the /graph and /agents views.
 type ActiveRuns struct {
 	mu   sync.RWMutex
 	runs map[string]int // agent name → count of active concurrent runs
@@ -335,8 +336,9 @@ func (s *Store) ListEdges() []Edge {
 	return out
 }
 
-// IsRunning implements server.RuntimeStateProvider. It returns true when the
-// named agent has at least one in-flight run.
+// IsRunning returns true when the named agent has at least one in-flight
+// run. Used by the server's observe handler to flag running agents in the
+// /graph view.
 func (s *Store) IsRunning(agentName string) bool {
 	return s.ActiveRuns.IsRunning(agentName)
 }

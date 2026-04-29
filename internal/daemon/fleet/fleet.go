@@ -3,15 +3,17 @@
 // validation, and storage paths live together so the REST and MCP surfaces
 // stay in lock-step.
 //
-// The HTTP server constructs a Handler at startup, hands it a
-// server.WriteCoordinator that owns the cross-domain CRUD lock and reload
-// hook, and mounts the routes via RegisterRoutes. The same Handler is
-// consumed directly by the MCP fleet-management tools so MCP and REST hit
-// the same code path.
+// The composing daemon constructs a Handler at startup, gives it the
+// daemon's *coordinator.Coordinator (which owns the cross-domain write
+// epoch + the cfg pointer) plus concrete pointers to the runtime
+// collaborators the snapshot view consumes (*scheduler.Scheduler for cron
+// schedules, *observe.Store for running/idle status), and mounts the
+// routes via RegisterRoutes. The same Handler instance is consumed
+// directly by the MCP fleet-management tools so MCP and REST hit the same
+// code path.
 package fleet
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,8 +27,10 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/backends"
+	"github.com/eloylp/agents/internal/coordinator"
 	"github.com/eloylp/agents/internal/fleet"
-	"github.com/eloylp/agents/internal/server"
+	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/scheduler"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -34,36 +38,23 @@ import (
 // the methods exposed for the MCP agent / skill / backend writers. It also
 // owns the /agents/orphans/status endpoint and the read-only fleet snapshot
 // view served at GET /agents.
-//
-// Construct via New and mount with RegisterRoutes. The handler is usable
-// without a database — CRUD routes self-skip at registration time in that
-// mode while the orphan cache and fleet view continue to serve from the
-// in-memory config.
 type Handler struct {
-	db           *sql.DB                     // optional; CRUD routes self-skip when nil
-	coord        server.WriteCoordinator     // required for CRUD writes
-	srv          *server.Server              // required — provides Config() snapshot
-	provider     server.StatusProvider       // optional; supplies cron schedules to the fleet view
-	runtimeState server.RuntimeStateProvider // optional; runtime running/idle status
-	logger       zerolog.Logger
+	coord    *coordinator.Coordinator
+	sched    *scheduler.Scheduler // schedule + last-run state for the /agents view
+	obs      *observe.Store       // running/idle state for the /agents view
+	logger   zerolog.Logger
 
 	orphanMu    sync.RWMutex
 	orphanCache OrphanedAgentsSnapshot
 }
 
-// New constructs a Handler. coord and srv are required; db, provider, and
-// runtimeState are optional — the handler degrades gracefully when they
-// are absent. provider and runtimeState are interfaces so tests can stub
-// them without constructing real *scheduler.Scheduler / *observe.Store
-// instances; production passes those concrete types directly.
-func New(db *sql.DB, coord server.WriteCoordinator, srv *server.Server, provider server.StatusProvider, runtimeState server.RuntimeStateProvider, logger zerolog.Logger) *Handler {
+// New constructs a Handler.
+func New(coord *coordinator.Coordinator, sched *scheduler.Scheduler, obs *observe.Store, logger zerolog.Logger) *Handler {
 	return &Handler{
-		db:           db,
-		coord:        coord,
-		srv:          srv,
-		provider:     provider,
-		runtimeState: runtimeState,
-		logger:       logger.With().Str("component", "server_fleet").Logger(),
+		coord:  coord,
+		sched:  sched,
+		obs:    obs,
+		logger: logger.With().Str("component", "server_fleet").Logger(),
 	}
 }
 
@@ -76,14 +67,14 @@ func New(db *sql.DB, coord server.WriteCoordinator, srv *server.Server, provider
 // mounted only when a database was supplied to New; without one those routes
 // do not exist on the router.
 //
-// GET /agents is mounted by the composing server's dispatcher (which also
+// GET /agents is mounted by the composing daemon's dispatcher (which also
 // handles POST /agents) so both share one mux entry; the dispatcher delegates
 // to HandleAgentsView for the read-only fleet snapshot and to
 // HandleAgentsCreate for POST.
 func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) http.Handler) {
 	r.Handle("/agents/orphans/status", withTimeout(http.HandlerFunc(h.HandleOrphansStatus))).Methods(http.MethodGet)
 
-	if h.db == nil {
+	if h.coord.DB() == nil {
 		return
 	}
 	r.Handle("/agents/{name}", withTimeout(http.HandlerFunc(h.handleAgent))).Methods(http.MethodGet, http.MethodPatch, http.MethodDelete)
@@ -100,16 +91,16 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/backends/{name}", withTimeout(http.HandlerFunc(h.handleBackendDelete))).Methods(http.MethodDelete)
 }
 
-// HandleAgentsCreate serves POST /agents. The composing server's /agents
+// HandleAgentsCreate serves POST /agents. The composing daemon's /agents
 // dispatcher routes POST here and GET to HandleAgentsView so a single mux
 // entry serves both the read-only fleet snapshot and CRUD create.
 func (h *Handler) HandleAgentsCreate(w http.ResponseWriter, r *http.Request) {
-	if h.db == nil {
+	if h.coord.DB() == nil {
 		http.Error(w, "store not attached", http.StatusServiceUnavailable)
 		return
 	}
 	var req storeAgentJSON
-	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !decodeBody(w, r, h.coord.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	canonical, err := h.UpsertAgent(req.toConfig())
@@ -231,7 +222,7 @@ func (h *Handler) handleAgent(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeAgentName(mux.Vars(r)["name"])
 	switch r.Method {
 	case http.MethodGet:
-		agents, err := store.ReadAgents(h.db)
+		agents, err := store.ReadAgents(h.coord.DB())
 		if err != nil {
 			http.Error(w, fmt.Sprintf("read agents: %v", err), http.StatusInternalServerError)
 			return
@@ -259,7 +250,7 @@ func (h *Handler) handleAgent(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleAgentPatch(w http.ResponseWriter, r *http.Request, name string) {
 	var req AgentPatch
-	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !decodeBody(w, r, h.coord.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	if !req.anyFieldSet() {
@@ -284,7 +275,7 @@ func (h *Handler) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 		return fleet.Agent{}, &store.ErrValidation{Msg: "name is required"}
 	}
 	err := h.coord.Do(func() error {
-		return store.UpsertAgent(h.db, a)
+		return store.UpsertAgent(h.coord.DB(), a)
 	})
 	if err != nil {
 		return fleet.Agent{}, err
@@ -304,7 +295,7 @@ func (h *Handler) updateAgent(name string, patch AgentPatch) (fleet.Agent, error
 	normalized := fleet.NormalizeAgentName(name)
 	var merged fleet.Agent
 	err := h.coord.Do(func() error {
-		agents, err := store.ReadAgents(h.db)
+		agents, err := store.ReadAgents(h.coord.DB())
 		if err != nil {
 			return err
 		}
@@ -320,7 +311,7 @@ func (h *Handler) updateAgent(name string, patch AgentPatch) (fleet.Agent, error
 		}
 		merged = *existing
 		patch.apply(&merged)
-		return store.UpsertAgent(h.db, merged)
+		return store.UpsertAgent(h.coord.DB(), merged)
 	})
 	if err != nil {
 		return fleet.Agent{}, err
@@ -336,9 +327,9 @@ func (h *Handler) updateAgent(name string, patch AgentPatch) (fleet.Agent, error
 func (h *Handler) DeleteAgent(name string, cascade bool) error {
 	return h.coord.Do(func() error {
 		if cascade {
-			return store.DeleteAgentCascade(h.db, name)
+			return store.DeleteAgentCascade(h.coord.DB(), name)
 		}
-		return store.DeleteAgent(h.db, name)
+		return store.DeleteAgent(h.coord.DB(), name)
 	})
 }
 
@@ -369,7 +360,7 @@ func (p SkillPatch) apply(s *fleet.Skill) {
 func (h *Handler) handleSkills(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		skills, err := store.ReadSkills(h.db)
+		skills, err := store.ReadSkills(h.coord.DB())
 		if err != nil {
 			http.Error(w, fmt.Sprintf("read skills: %v", err), http.StatusInternalServerError)
 			return
@@ -382,7 +373,7 @@ func (h *Handler) handleSkills(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeSkillJSON
-		if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+		if !decodeBody(w, r, h.coord.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		name, sk, err := h.UpsertSkill(req.Name, fleet.Skill{Prompt: req.Prompt})
@@ -398,7 +389,7 @@ func (h *Handler) handleSkill(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeSkillName(mux.Vars(r)["name"])
 	switch r.Method {
 	case http.MethodGet:
-		skills, err := store.ReadSkills(h.db)
+		skills, err := store.ReadSkills(h.coord.DB())
 		if err != nil {
 			http.Error(w, fmt.Sprintf("read skills: %v", err), http.StatusInternalServerError)
 			return
@@ -424,7 +415,7 @@ func (h *Handler) handleSkill(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleSkillPatch(w http.ResponseWriter, r *http.Request, name string) {
 	var req SkillPatch
-	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !decodeBody(w, r, h.coord.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	if !req.anyFieldSet() {
@@ -449,7 +440,7 @@ func (h *Handler) UpsertSkill(name string, sk fleet.Skill) (string, fleet.Skill,
 		return "", fleet.Skill{}, &store.ErrValidation{Msg: "name is required"}
 	}
 	err := h.coord.Do(func() error {
-		return store.UpsertSkill(h.db, name, sk)
+		return store.UpsertSkill(h.coord.DB(), name, sk)
 	})
 	if err != nil {
 		return "", fleet.Skill{}, err
@@ -469,7 +460,7 @@ func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skil
 	normalized := fleet.NormalizeSkillName(name)
 	var existing fleet.Skill
 	err := h.coord.Do(func() error {
-		skills, err := store.ReadSkills(h.db)
+		skills, err := store.ReadSkills(h.coord.DB())
 		if err != nil {
 			return err
 		}
@@ -479,7 +470,7 @@ func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skil
 		}
 		patch.apply(&s)
 		existing = s
-		return store.UpsertSkill(h.db, normalized, s)
+		return store.UpsertSkill(h.coord.DB(), normalized, s)
 	})
 	if err != nil {
 		return "", fleet.Skill{}, err
@@ -493,7 +484,7 @@ func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skil
 // skill.
 func (h *Handler) DeleteSkill(name string) error {
 	return h.coord.Do(func() error {
-		return store.DeleteSkill(h.db, name)
+		return store.DeleteSkill(h.coord.DB(), name)
 	})
 }
 
@@ -603,7 +594,7 @@ func (j storeBackendJSON) toConfig() fleet.Backend {
 func (h *Handler) handleBackends(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		all, err := store.ReadBackends(h.db)
+		all, err := store.ReadBackends(h.coord.DB())
 		if err != nil {
 			http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
 			return
@@ -616,7 +607,7 @@ func (h *Handler) handleBackends(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeBackendJSON
-		if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+		if !decodeBody(w, r, h.coord.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		name, b, err := h.UpsertBackend(req.Name, req.toConfig())
@@ -629,7 +620,7 @@ func (h *Handler) handleBackends(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleBackendsStatus(w http.ResponseWriter, r *http.Request) {
-	existing, err := store.ReadBackends(h.db)
+	existing, err := store.ReadBackends(h.coord.DB())
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
 		return
@@ -641,7 +632,7 @@ func (h *Handler) handleBackendsStatus(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleBackendsDiscover(w http.ResponseWriter, r *http.Request) {
 	var diag any
 	err := h.coord.Do(func() error {
-		d, derr := backends.DiscoverAndPersist(r.Context(), h.db)
+		d, derr := backends.DiscoverAndPersist(r.Context(), h.coord.DB())
 		if derr != nil {
 			return derr
 		}
@@ -659,7 +650,7 @@ func (h *Handler) handleBackendsDiscover(w http.ResponseWriter, r *http.Request)
 
 func (h *Handler) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
 	var req localBackendRequest
-	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !decodeBody(w, r, h.coord.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	name := fleet.NormalizeBackendName(req.Name)
@@ -682,7 +673,7 @@ func (h *Handler) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
 
 	var stored fleet.Backend
 	err := h.coord.Do(func() error {
-		existing, err := store.ReadBackends(h.db)
+		existing, err := store.ReadBackends(h.coord.DB())
 		if err != nil {
 			return err
 		}
@@ -716,7 +707,7 @@ func (h *Handler) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		if err := store.UpsertBackend(h.db, name, local); err != nil {
+		if err := store.UpsertBackend(h.coord.DB(), name, local); err != nil {
 			return err
 		}
 		stored = local
@@ -737,7 +728,7 @@ func backendPathName(r *http.Request) string {
 
 func (h *Handler) handleBackendGet(w http.ResponseWriter, r *http.Request) {
 	name := backendPathName(r)
-	all, err := store.ReadBackends(h.db)
+	all, err := store.ReadBackends(h.coord.DB())
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
 		return
@@ -753,7 +744,7 @@ func (h *Handler) handleBackendGet(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleBackendPatch(w http.ResponseWriter, r *http.Request) {
 	name := backendPathName(r)
 	var req BackendPatch
-	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !decodeBody(w, r, h.coord.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	if !req.anyFieldSet() {
@@ -795,7 +786,7 @@ func (h *Handler) UpsertBackend(name string, b fleet.Backend) (string, fleet.Bac
 		return "", fleet.Backend{}, &store.ErrValidation{Msg: "name is required"}
 	}
 	err := h.coord.Do(func() error {
-		return store.UpsertBackend(h.db, name, b)
+		return store.UpsertBackend(h.coord.DB(), name, b)
 	})
 	if err != nil {
 		return "", fleet.Backend{}, err
@@ -816,7 +807,7 @@ func (h *Handler) updateBackend(name string, patch BackendPatch) (string, fleet.
 	normalized := fleet.NormalizeBackendName(name)
 	var existing fleet.Backend
 	err := h.coord.Do(func() error {
-		all, err := store.ReadBackends(h.db)
+		all, err := store.ReadBackends(h.coord.DB())
 		if err != nil {
 			return err
 		}
@@ -826,7 +817,7 @@ func (h *Handler) updateBackend(name string, patch BackendPatch) (string, fleet.
 		}
 		patch.apply(&b)
 		existing = b
-		return store.UpsertBackend(h.db, normalized, b)
+		return store.UpsertBackend(h.coord.DB(), normalized, b)
 	})
 	if err != nil {
 		return "", fleet.Backend{}, err
@@ -841,7 +832,7 @@ func (h *Handler) updateBackend(name string, patch BackendPatch) (string, fleet.
 // backend.
 func (h *Handler) DeleteBackend(name string) error {
 	return h.coord.Do(func() error {
-		return store.DeleteBackend(h.db, name)
+		return store.DeleteBackend(h.coord.DB(), name)
 	})
 }
 

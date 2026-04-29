@@ -14,37 +14,16 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/coordinator"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
-	internalserver "github.com/eloylp/agents/internal/server"
-	serverconfig "github.com/eloylp/agents/internal/server/config"
-	serverfleet "github.com/eloylp/agents/internal/server/fleet"
-	serverrepos "github.com/eloylp/agents/internal/server/repos"
+	daemonconfig "github.com/eloylp/agents/internal/daemon/config"
+	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
+	daemonrepos "github.com/eloylp/agents/internal/daemon/repos"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
-
-// emptyStatusProvider satisfies internalserver.StatusProvider for tests that
-// don't care about cron schedules in /status output.
-type emptyStatusProvider struct{}
-
-func (emptyStatusProvider) AgentStatuses() []scheduler.AgentStatus { return nil }
-
-// emptyRuntimeState satisfies internalserver.RuntimeStateProvider with no
-// in-flight runs. Tests that need a specific running/idle status would
-// construct a custom one.
-type emptyRuntimeState struct{}
-
-func (emptyRuntimeState) IsRunning(string) bool { return false }
-
-// noopReloader is the default cron reloader for tests — they don't run a
-// real scheduler so reload calls are no-ops.
-type noopReloader struct{}
-
-func (noopReloader) Reload([]fleet.Repo, []fleet.Agent, map[string]fleet.Skill, map[string]fleet.Backend) error {
-	return nil
-}
 
 func fixtureConfig() *config.Config {
 	return &config.Config{
@@ -66,7 +45,7 @@ func fixtureConfig() *config.Config {
 		Repos: []fleet.Repo{
 			{Name: "owner/one", Enabled: true, Use: []fleet.Binding{
 				{Agent: "coder", Labels: []string{"bug"}},
-				{Agent: "reviewer", Cron: "@hourly"},
+				{Agent: "reviewer", Cron: "0 * * * *"},
 			}},
 			{Name: "owner/two", Enabled: false},
 		},
@@ -110,11 +89,15 @@ func testDB(t *testing.T) *sql.DB {
 }
 
 // testFixture builds a Deps backed by real components for an MCP tool test:
-// a temporary SQLite DB seeded by fixtureConfig, a real *server.Server, real
+// a temporary SQLite DB seeded by fixtureConfig, a real coordinator, real
 // fleet/repos/config handlers, a real workflow.DataChannels and Engine, and
 // a real observe.Store. Tests can read deps.DB to verify persisted writes,
 // drain deps.Queue.EventChan() to assert enqueued events, and call methods
 // on deps.Observe directly to seed observability records.
+//
+// Stays in package mcp (not mcp_test) so it can construct Deps directly;
+// the wiring goes through coordinator + handler packages, none of which
+// imports internal/daemon, so there is no import cycle.
 func testFixture(t *testing.T) Deps {
 	t.Helper()
 	return testFixtureWithConfig(t, fixtureConfig())
@@ -129,21 +112,30 @@ func testFixtureWithConfig(t *testing.T, cfg *config.Config) Deps {
 	channels := workflow.NewDataChannels(8)
 	obs := observe.NewStore(db)
 	engine := workflow.NewEngine(cfg, map[string]ai.Runner{}, channels, zerolog.Nop())
-	srv := internalserver.NewServer(cfg, channels, emptyStatusProvider{}, engine, zerolog.Nop())
-	srv.WithStore(db, noopReloader{})
-	fleetH := serverfleet.New(db, srv, srv, emptyStatusProvider{}, emptyRuntimeState{}, zerolog.Nop())
-	reposH := serverrepos.New(db, srv, srv, zerolog.Nop())
-	configH := serverconfig.New(db, srv, srv, zerolog.Nop())
+	sched, err := scheduler.NewScheduler(cfg, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("scheduler: %v", err)
+	}
+	coord := coordinator.New(cfg, db, func(*config.Config) error { return nil }, nil)
+	fleetH := daemonfleet.New(coord, sched, obs, zerolog.Nop())
+	reposH := daemonrepos.New(coord, zerolog.Nop())
+	configH := daemonconfig.New(coord, zerolog.Nop())
 	return Deps{
-		DB:      db,
-		Server:  srv,
-		Queue:   channels,
-		Observe: obs,
-		Engine:  engine,
-		Fleet:   fleetH,
-		Repos:   reposH,
-		Config:  configH,
-		Logger:  zerolog.Nop(),
+		DB:         db,
+		Coord:      coord,
+		StatusJSON: func() ([]byte, error) {
+			// Mirror the wire shape internal/daemon.Daemon.StatusJSON returns
+			// so MCP tool tests can assert on the same keys without booting
+			// a full *daemon.Daemon (which would create an import cycle).
+			return []byte(`{"status":"ok","uptime_seconds":0,"queues":{"events":{"buffered":0,"capacity":8}},"agents":[],"orphaned_agents":{"count":0}}`), nil
+		},
+		Queue:      channels,
+		Observe:    obs,
+		Engine:     engine,
+		Fleet:      fleetH,
+		Repos:      reposH,
+		Config:     configH,
+		Logger:     zerolog.Nop(),
 	}
 }
 

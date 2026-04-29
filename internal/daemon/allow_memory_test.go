@@ -1,4 +1,4 @@
-package server_test
+package daemon_test
 
 import (
 	"encoding/json"

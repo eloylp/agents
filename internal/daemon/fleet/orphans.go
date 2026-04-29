@@ -49,7 +49,7 @@ func (h *Handler) HandleOrphansStatus(w http.ResponseWriter, _ *http.Request) {
 }
 
 // RefreshOrphansFromCfg recomputes the orphan cache from cfg without touching
-// the database. The composing server calls this once at startup with the
+// the database. The composing daemon calls this once at startup with the
 // YAML-loaded config and again on every reloadCron after the in-memory
 // config has been swapped to a fresh DB-derived snapshot.
 func (h *Handler) RefreshOrphansFromCfg(cfg *config.Config) {
@@ -79,15 +79,15 @@ func (h *Handler) OrphansSnapshot() OrphanedAgentsSnapshot {
 // fresh snapshot. When no database is attached it returns the cached
 // snapshot unchanged so callers don't need to special-case cfg-only mode.
 func (h *Handler) RefreshOrphansFromDB() (OrphanedAgentsSnapshot, error) {
-	if h.db == nil {
+	if h.coord.DB() == nil {
 		return h.OrphansSnapshot(), nil
 	}
-	agents, repos, skills, backends, err := store.ReadSnapshot(h.db)
+	agents, repos, skills, backends, err := store.ReadSnapshot(h.coord.DB())
 	if err != nil {
 		return OrphanedAgentsSnapshot{}, fmt.Errorf("read config snapshot: %w", err)
 	}
 
-	baseCfg := h.srv.Config()
+	baseCfg := h.coord.Config()
 	cfg := *baseCfg
 	cfg.Agents = agents
 	cfg.Repos = repos

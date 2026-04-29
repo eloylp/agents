@@ -1,7 +1,7 @@
-package server_test
+package daemon_test
 
 // Test-side mirrors of the wire shapes produced by the CRUD endpoints. The
-// concrete types live in internal/server/fleet, but importing them would
+// concrete types live in internal/daemon/fleet, but importing them would
 // require either making them exported or moving every test that decodes a
 // response into that package. These minimal local types let the webhook
 // integration tests assert on response bodies without that churn.
@@ -37,7 +37,7 @@ type storeBackendJSON struct {
 }
 
 // view*JSON types mirror the fleet snapshot wire shape produced by GET
-// /agents (HandleAgentsView in internal/server/fleet) so the webhook tests
+// /agents (HandleAgentsView in internal/daemon/fleet) so the webhook tests
 // that already exercised the router can decode the response without
 // importing the fleet package's unexported types.
 type viewScheduleJSON struct {

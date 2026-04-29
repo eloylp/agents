@@ -4,15 +4,15 @@
 // apiConfigJSON tree for /config; the exportYAML fragment for /export +
 // /import) so REST and MCP clients see identical payloads.
 //
-// The HTTP server constructs a Handler at startup, hands it a
-// server.WriteCoordinator that owns the cross-domain CRUD lock and reload
-// hook, and mounts the routes via RegisterRoutes. ConfigJSON / ExportYAML /
+// The composing daemon constructs a Handler at startup with the daemon's
+// *coordinator.Coordinator (which owns the cross-domain write epoch the
+// import path runs under, and the cfg pointer /config snapshots from) and
+// mounts the routes via RegisterRoutes. ConfigJSON / ExportYAML /
 // ImportYAML are exported so the MCP layer can call them without going
 // through the router.
 package config
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,30 +23,23 @@ import (
 	"github.com/rs/zerolog"
 	"gopkg.in/yaml.v3"
 
+	"github.com/eloylp/agents/internal/coordinator"
 	"github.com/eloylp/agents/internal/fleet"
-	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/store"
 )
 
 // Handler implements the /config, /export, and /import HTTP surface plus the
-// methods exposed for the MCP config tools. Construct via New and mount with
-// RegisterRoutes.
+// methods exposed for the MCP config tools.
 type Handler struct {
-	db     *sql.DB                 // optional; export/import are skipped when nil
-	coord  server.WriteCoordinator // required for import
-	srv    *server.Server          // required — provides Config() snapshot
+	coord  *coordinator.Coordinator
 	logger zerolog.Logger
 }
 
-// New constructs a Handler. coord and srv are required; db is optional. When
-// db is nil the /export and /import routes are skipped at registration time —
-// /config still works in cfg-only mode (e.g. tests without
-// --db).
-func New(db *sql.DB, coord server.WriteCoordinator, srv *server.Server, logger zerolog.Logger) *Handler {
+// New constructs a Handler. coord supplies the SQLite handle (via DB()),
+// the locked write epoch (via Do()), and the cfg snapshot (via Config()).
+func New(coord *coordinator.Coordinator, logger zerolog.Logger) *Handler {
 	return &Handler{
-		db:     db,
 		coord:  coord,
-		srv:    srv,
 		logger: logger.With().Str("component", "server_config").Logger(),
 	}
 }
@@ -57,7 +50,7 @@ func New(db *sql.DB, coord server.WriteCoordinator, srv *server.Server, logger z
 func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) http.Handler) {
 	r.Handle("/config", withTimeout(http.HandlerFunc(h.HandleConfig))).Methods(http.MethodGet)
 
-	if h.db == nil {
+	if h.coord.DB() == nil {
 		return
 	}
 	r.Handle("/export", withTimeout(http.HandlerFunc(h.HandleExport))).Methods(http.MethodGet)
@@ -197,7 +190,7 @@ func (h *Handler) HandleConfig(w http.ResponseWriter, _ *http.Request) {
 // redacted. Exposed so surfaces beyond HTTP (e.g. the MCP get_config tool)
 // can reuse the exact same wire shape without going through the router.
 func (h *Handler) ConfigJSON() ([]byte, error) {
-	cfg := h.srv.Config()
+	cfg := h.coord.Config()
 
 	httpCfg := apiHTTPConfigJSON{
 		ListenAddr:             cfg.Daemon.HTTP.ListenAddr,
@@ -344,7 +337,7 @@ func (h *Handler) HandleExport(w http.ResponseWriter, _ *http.Request) {
 // ExportYAML returns the CRUD-mutable sections of the store as a YAML
 // fragment matching the GET /export response body.
 func (h *Handler) ExportYAML() ([]byte, error) {
-	agents, repos, skills, backends, err := store.ReadSnapshot(h.db)
+	agents, repos, skills, backends, err := store.ReadSnapshot(h.coord.DB())
 	if err != nil {
 		return nil, fmt.Errorf("read snapshot: %w", err)
 	}
@@ -367,7 +360,7 @@ func (h *Handler) ExportYAML() ([]byte, error) {
 // as HandleExport and upserts all entities into the DB. On success it
 // returns 200 with a JSON summary of imported counts.
 func (h *Handler) HandleImport(w http.ResponseWriter, r *http.Request) {
-	limit := h.srv.Config().Daemon.HTTP.MaxBodyBytes * 10
+	limit := h.coord.Config().Daemon.HTTP.MaxBodyBytes * 10
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -409,9 +402,9 @@ func (h *Handler) ImportYAML(body []byte, mode string) (map[string]int, error) {
 
 	err := h.coord.Do(func() error {
 		if mode == "replace" {
-			return store.ReplaceAll(h.db, payload.Agents, payload.Repos, payload.Skills, backends)
+			return store.ReplaceAll(h.coord.DB(), payload.Agents, payload.Repos, payload.Skills, backends)
 		}
-		return store.ImportAll(h.db, payload.Agents, payload.Repos, payload.Skills, backends)
+		return store.ImportAll(h.coord.DB(), payload.Agents, payload.Repos, payload.Skills, backends)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("import: %w", err)

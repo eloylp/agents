@@ -1,4 +1,4 @@
-package server_test
+package daemon_test
 
 import (
 	"bytes"
@@ -6,53 +6,30 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
-
-	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
-	"github.com/eloylp/agents/internal/server"
-	serverconfig "github.com/eloylp/agents/internal/server/config"
-	serverrepos "github.com/eloylp/agents/internal/server/repos"
+	"github.com/eloylp/agents/internal/daemon"
 	"github.com/eloylp/agents/internal/store"
-	"github.com/eloylp/agents/internal/webhook"
-	"github.com/eloylp/agents/internal/workflow"
 )
 
-// openCRUDTestServer creates a test server wired with an in-memory SQLite
-// store. Mirrors the wiring cmd/agents performs: NewServer + WithStore +
-// the fleet/repos handlers attached externally via WithFleet / WithRepos.
-func openCRUDTestServer(t *testing.T) *server.Server {
+// openCRUDTestServer creates a test server backed by a tempdir SQLite via
+// the shared daemontest fixture. The CRUD tests exercise the same
+// coordinator-driven write epoch + reload chain production runs.
+func openCRUDTestServer(t *testing.T) *daemon.Daemon {
 	t.Helper()
-	dir := t.TempDir()
-	db, err := store.Open(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	cfg := crudMinimalConfig()
-	dc := workflow.NewDataChannels(1)
-	logger := zerolog.Nop()
-	s := server.NewServer(cfg, dc, nil, nil, logger)
-	s.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, s, logger))
-	s.WithStore(db, nil) // nil reloader — cron hot-reload not exercised here
-	wireFleetForTest(s, db, cfg, nil, nil, logger)
-	s.WithRepos(serverrepos.New(db, s, s, logger))
-	s.WithConfig(serverconfig.New(db, s, s, logger))
-	return s
+	srv, _ := newTestServer(t, crudMinimalConfig())
+	return srv
 }
 
 // seedStoreBackend inserts a minimal backend into the server's store directly
 // so that subsequent agent upserts that reference it pass cross-ref validation.
-func seedStoreBackend(t *testing.T, s *server.Server, name string) {
+func seedStoreBackend(t *testing.T, s *daemon.Daemon, name string) {
 	t.Helper()
 	b := fleet.Backend{Command: name}
 	if err := store.UpsertBackend(s.DB(), name, b); err != nil {
@@ -61,14 +38,14 @@ func seedStoreBackend(t *testing.T, s *server.Server, name string) {
 }
 
 // seedStoreSkill inserts a minimal skill into the server's store directly.
-func seedStoreSkill(t *testing.T, s *server.Server, name string) {
+func seedStoreSkill(t *testing.T, s *daemon.Daemon, name string) {
 	t.Helper()
 	if err := store.UpsertSkill(s.DB(), name, fleet.Skill{Prompt: "skill prompt"}); err != nil {
 		t.Fatalf("seedStoreSkill %s: %v", name, err)
 	}
 }
 
-func doCRUDRequest(t *testing.T, s *server.Server, method, path string, body any) *httptest.ResponseRecorder {
+func doCRUDRequest(t *testing.T, s *daemon.Daemon, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var buf bytes.Buffer
 	if body != nil {
@@ -99,7 +76,7 @@ func crudMinimalConfig() *config.Config {
 
 // ── /agents ────────────────────────────────────────────────────────
 
-func TestStoreCRUDAgentListEmpty(t *testing.T) {
+func TestStoreCRUDAgentListReturnsArray(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
@@ -111,8 +88,11 @@ func TestStoreCRUDAgentListEmpty(t *testing.T) {
 	if err := json.NewDecoder(rr.Body).Decode(&agents); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(agents) != 0 {
-		t.Errorf("got %d agents, want 0", len(agents))
+	// Store invariants require ≥1 agent, so the fixture pre-seeds one. The
+	// endpoint just needs to return a JSON array — the array shape, not its
+	// emptiness, is what /agents commits to.
+	if agents == nil {
+		t.Errorf("/agents returned nil slice, want JSON array")
 	}
 }
 
@@ -350,21 +330,22 @@ func TestStoreCRUDBackendCreateAndDelete(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
-	// Create two backends so that deleting one still leaves the system valid.
-	for _, name := range []string{"claude", "codex"} {
-		if rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
-			"name": name, "command": name, "args": []string{}, "env": map[string]string{},
-		}); rr.Code != http.StatusOK {
-			t.Fatalf("POST backend %s: got %d — %s", name, rr.Code, rr.Body.String())
-		}
+	// Create a fresh backend on top of the fixture's seeded "claude". The
+	// seeded agent depends on "claude", so we delete the new "codex" entry
+	// in the cleanup phase — that leaves the seeded pair intact and verifies
+	// DELETE works against an unreferenced backend.
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
+		"name": "codex", "command": "codex", "args": []string{}, "env": map[string]string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("POST backend codex: got %d — %s", rr.Code, rr.Body.String())
 	}
 
-	rr := doCRUDRequest(t, s, http.MethodGet, "/backends/claude", nil)
+	rr := doCRUDRequest(t, s, http.MethodGet, "/backends/codex", nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET backend: got %d", rr.Code)
 	}
 
-	rr = doCRUDRequest(t, s, http.MethodDelete, "/backends/claude", nil)
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/backends/codex", nil)
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("DELETE backend: got %d", rr.Code)
 	}
@@ -620,7 +601,7 @@ func TestStoreCRUDRepoCreateAndDelete(t *testing.T) {
 
 // seedBindingTestRepo creates a repo + agent pair so the binding test can
 // target the /repos/{owner}/{repo}/bindings routes directly.
-func seedBindingTestRepo(t *testing.T, s *server.Server) {
+func seedBindingTestRepo(t *testing.T, s *daemon.Daemon) {
 	t.Helper()
 	seedStoreBackend(t, s, "claude")
 	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
@@ -859,34 +840,14 @@ func itoa(i int) string { return strconv.Itoa(i) }
 
 // ── reloadCron failure ────────────────────────────────────────────────────────
 
-// errCronReloader satisfies server.CronReloader and always returns an error from Reload.
-type errCronReloader struct{ err error }
-
-func (r *errCronReloader) Reload([]fleet.Repo, []fleet.Agent, map[string]fleet.Skill, map[string]fleet.Backend) error {
-	return r.err
-}
-
-// openCRUDTestServerWithReloader creates a test server wired with a SQLite
-// store and the given server.CronReloader.
-func openCRUDTestServerWithReloader(t *testing.T, reloader server.CronReloader) *server.Server {
+// openCRUDTestServerWithReloader creates a test server with a coordinator
+// reload chain that always returns the given error. Tests use it to assert
+// that CRUD endpoints surface reload failures via 500 responses.
+func openCRUDTestServerWithReloader(t *testing.T, reloadErr error) *daemon.Daemon {
 	t.Helper()
-	dir := t.TempDir()
-	db, err := store.Open(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	cfg := crudMinimalConfig()
-	dc := workflow.NewDataChannels(1)
-	logger := zerolog.Nop()
-	s := server.NewServer(cfg, dc, nil, nil, logger)
-	s.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, s, logger))
-	s.WithStore(db, reloader)
-	wireFleetForTest(s, db, cfg, nil, nil, logger)
-	s.WithRepos(serverrepos.New(db, s, s, logger))
-	s.WithConfig(serverconfig.New(db, s, s, logger))
-	return s
+	srv, _ := newTestServer(t, crudMinimalConfig())
+	srv.Coordinator().SetReload(func(*config.Config) error { return reloadErr })
+	return srv
 }
 
 // TestStoreCRUDReloadFailureReturns500 verifies that when reloadCron fails
@@ -896,14 +857,13 @@ func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
 	t.Parallel()
 
 	reloadErr := errors.New("scheduler broken")
-	reloader := &errCronReloader{err: reloadErr}
 
 	tests := []struct {
 		name   string
 		method string
 		path   string
 		body   any
-		setup  func(t *testing.T, s *server.Server)
+		setup  func(t *testing.T, s *daemon.Daemon)
 	}{
 		{
 			name:   "POST agent",
@@ -912,7 +872,7 @@ func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
 			body:   map[string]any{"name": "agent-x", "backend": "claude", "prompt": "x"},
 			// Seed the backend so cross-ref validation passes and the test
 			// genuinely exercises reload failure, not validation failure.
-			setup: func(t *testing.T, s *server.Server) { seedStoreBackend(t, s, "claude") },
+			setup: func(t *testing.T, s *daemon.Daemon) { seedStoreBackend(t, s, "claude") },
 		},
 		{
 			name:   "DELETE agent",
@@ -941,17 +901,17 @@ func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
 			body: map[string]any{"name": "codex", "command": "codex", "args": []string{}, "env": map[string]string{}},
 			// Seed claude so there is already one backend, making the new backend
 			// a valid addition (fleet validation requires at least one).
-			setup: func(t *testing.T, s *server.Server) { seedStoreBackend(t, s, "claude") },
+			setup: func(t *testing.T, s *daemon.Daemon) { seedStoreBackend(t, s, "claude") },
 		},
 		{
 			name:   "DELETE backend",
 			method: http.MethodDelete,
-			path:   "/backends/claude",
+			path:   "/backends/codex",
 			body:   nil,
-			// Seed two backends so deleting one still leaves the fleet valid;
-			// the reload failure is the only reason the handler should return 500.
-			setup: func(t *testing.T, s *server.Server) {
-				seedStoreBackend(t, s, "claude")
+			// Seed a second backend (codex). The fixture-seeded "claude" stays
+			// referenced by the seeded agent, so we delete the unreferenced
+			// codex — the reload failure is the only reason this should 500.
+			setup: func(t *testing.T, s *daemon.Daemon) {
 				seedStoreBackend(t, s, "codex")
 			},
 		},
@@ -972,7 +932,7 @@ func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s := openCRUDTestServerWithReloader(t, reloader)
+			s := openCRUDTestServerWithReloader(t, reloadErr)
 			if tc.setup != nil {
 				tc.setup(t, s)
 			}
@@ -994,8 +954,7 @@ func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
 func TestStoreCRUDReloadFailureDoesNotUpdateServerCfg(t *testing.T) {
 	t.Parallel()
 
-	reloader := &errCronReloader{err: errors.New("reload broken")}
-	s := openCRUDTestServerWithReloader(t, reloader)
+	s := openCRUDTestServerWithReloader(t, errors.New("reload broken"))
 
 	// Pre-condition: server starts with no repos.
 	if got := len(s.Config().Repos); got != 0 {
@@ -1027,23 +986,7 @@ func TestStoreCRUDPostBodySizeLimit(t *testing.T) {
 
 	cfg := crudMinimalConfig()
 	cfg.Daemon.HTTP.MaxBodyBytes = 10 // very small limit for the test
-
-	dir := t.TempDir()
-	db, err := store.Open(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	dc := workflow.NewDataChannels(1)
-	logger := zerolog.Nop()
-	s := server.NewServer(cfg, dc, nil, nil, logger)
-	s.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, s, logger))
-	s.WithStore(db, nil)
-	wireFleetForTest(s, db, cfg, nil, nil, logger)
-	s.WithRepos(serverrepos.New(db, s, s, logger))
-	configHandler := serverconfig.New(db, s, s, logger)
-	s.WithConfig(configHandler)
+	s, _ := newTestServer(t, cfg)
 
 	tests := []struct {
 		name string
@@ -1092,23 +1035,7 @@ func TestStoreCRUDPostBodyTrailingGarbageRejected(t *testing.T) {
 
 	cfg := crudMinimalConfig()
 	cfg.Daemon.HTTP.MaxBodyBytes = 15 // {"name":"x"} is 12 bytes; +5 garbage exceeds limit
-
-	dir := t.TempDir()
-	db, err := store.Open(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	dc := workflow.NewDataChannels(1)
-	logger := zerolog.Nop()
-	s := server.NewServer(cfg, dc, nil, nil, logger)
-	s.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, s, logger))
-	s.WithStore(db, nil)
-	wireFleetForTest(s, db, cfg, nil, nil, logger)
-	s.WithRepos(serverrepos.New(db, s, s, logger))
-	configHandler := serverconfig.New(db, s, s, logger)
-	s.WithConfig(configHandler)
+	s, _ := newTestServer(t, cfg)
 
 	endpoints := []string{
 		"/agents",
@@ -1145,7 +1072,7 @@ func TestStoreCRUDValidationErrorReturns400(t *testing.T) {
 		name  string
 		path  string
 		body  any
-		setup func(t *testing.T, s *server.Server)
+		setup func(t *testing.T, s *daemon.Daemon)
 	}{
 		{
 			name: "backend with empty command",
@@ -1157,7 +1084,7 @@ func TestStoreCRUDValidationErrorReturns400(t *testing.T) {
 			path: "/agents",
 			body: map[string]any{"name": "coder", "backend": "claude", "prompt": "",
 				"skills": []string{}, "can_dispatch": []string{}},
-			setup: func(t *testing.T, s *server.Server) { seedStoreBackend(t, s, "claude") },
+			setup: func(t *testing.T, s *daemon.Daemon) { seedStoreBackend(t, s, "claude") },
 		},
 		{
 			name: "agent with unknown backend",
@@ -1172,7 +1099,7 @@ func TestStoreCRUDValidationErrorReturns400(t *testing.T) {
 				"name": "owner/repo", "enabled": true,
 				"bindings": []map[string]any{{"agent": "coder"}},
 			},
-			setup: func(t *testing.T, s *server.Server) {
+			setup: func(t *testing.T, s *daemon.Daemon) {
 				seedStoreBackend(t, s, "claude")
 				if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 					"name": "coder", "backend": "claude", "prompt": "p",
@@ -1207,12 +1134,12 @@ func TestStoreCRUDConflictErrorReturns409(t *testing.T) {
 	tests := []struct {
 		name  string
 		path  string
-		setup func(t *testing.T, s *server.Server)
+		setup func(t *testing.T, s *daemon.Daemon)
 	}{
 		{
 			name: "delete last backend",
 			path: "/backends/claude",
-			setup: func(t *testing.T, s *server.Server) {
+			setup: func(t *testing.T, s *daemon.Daemon) {
 				if rr := doCRUDRequest(t, s, http.MethodPost, "/backends", map[string]any{
 					"name": "claude", "command": "claude", "args": []string{}, "env": map[string]string{},
 				}); rr.Code != http.StatusOK {
@@ -1223,7 +1150,7 @@ func TestStoreCRUDConflictErrorReturns409(t *testing.T) {
 		{
 			name: "delete last agent",
 			path: "/agents/coder",
-			setup: func(t *testing.T, s *server.Server) {
+			setup: func(t *testing.T, s *daemon.Daemon) {
 				seedStoreBackend(t, s, "claude")
 				if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 					"name": "coder", "backend": "claude", "prompt": "p",
@@ -1236,7 +1163,7 @@ func TestStoreCRUDConflictErrorReturns409(t *testing.T) {
 		{
 			name: "delete backend referenced by agent",
 			path: "/backends/claude",
-			setup: func(t *testing.T, s *server.Server) {
+			setup: func(t *testing.T, s *daemon.Daemon) {
 				seedStoreBackend(t, s, "claude")
 				seedStoreBackend(t, s, "codex")
 				if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
@@ -1264,34 +1191,37 @@ func TestStoreCRUDConflictErrorReturns409(t *testing.T) {
 
 // ── Concurrent write+reload serialization ────────────────────────────────────
 
-// countingCronReloader records how many times Reload was called and captures
-// the last snapshot it received. Safe for concurrent use.
-type countingCronReloader struct {
+// countingReloader records how many times the coordinator's reload chain
+// fired and captures the last cfg snapshot it received. Safe for
+// concurrent use.
+type countingReloader struct {
 	mu    sync.Mutex
 	calls int32
 	last  []fleet.Agent
 }
 
-func (r *countingCronReloader) Reload(_ []fleet.Repo, agents []fleet.Agent, _ map[string]fleet.Skill, _ map[string]fleet.Backend) error {
+func (r *countingReloader) reload(cfg *config.Config) error {
 	atomic.AddInt32(&r.calls, 1)
 	r.mu.Lock()
-	r.last = agents
+	r.last = append([]fleet.Agent(nil), cfg.Agents...)
 	r.mu.Unlock()
 	return nil
 }
 
 // TestConcurrentWriteReloadSerialisation verifies that concurrent POST
-// /agents requests do not interleave their DB-write and in-memory
-// Reload calls. Specifically, the last Reload that runs must see all agents
-// that were successfully committed to SQLite — it must never reflect a stale
-// snapshot from a request that finished earlier but whose Reload won the race.
+// /agents requests do not interleave their DB-write and reload calls.
+// Specifically, the last reload that runs must see all agents that were
+// successfully committed to SQLite — it must never reflect a stale
+// snapshot from a request that finished earlier but whose reload won
+// the race.
 //
 // Running with -race also detects any data race on the reloader or storeMu.
 func TestConcurrentWriteReloadSerialisation(t *testing.T) {
 	t.Parallel()
 
-	reloader := &countingCronReloader{}
-	s := openCRUDTestServerWithReloader(t, reloader)
+	reloader := &countingReloader{}
+	s, _ := newTestServer(t, crudMinimalConfig())
+	s.Coordinator().SetReload(reloader.reload)
 
 	seedStoreBackend(t, s, "claude")
 
@@ -1316,20 +1246,22 @@ func TestConcurrentWriteReloadSerialisation(t *testing.T) {
 		t.Errorf("expected %d Reload calls, got %d", n, got)
 	}
 
-	// The last recorded snapshot must include all n agents (monotonic guarantee:
-	// the final Reload saw the DB state that includes every committed write).
+	// The last recorded snapshot must include all n agents we created plus
+	// the one the fixture seeded (monotonic guarantee: the final reload
+	// saw the DB state that includes every committed write).
+	const want = n + 1 // n created + 1 fixture-seeded
 	agents, err := store.ReadAgents(s.DB())
 	if err != nil {
 		t.Fatalf("read agents: %v", err)
 	}
-	if len(agents) != n {
-		t.Fatalf("expected %d agents in DB, got %d", n, len(agents))
+	if len(agents) != want {
+		t.Fatalf("expected %d agents in DB, got %d", want, len(agents))
 	}
 	reloader.mu.Lock()
 	lastCount := len(reloader.last)
 	reloader.mu.Unlock()
-	if lastCount != n {
-		t.Errorf("last Reload snapshot had %d agents, expected %d (stale snapshot overwrote a newer one)", lastCount, n)
+	if lastCount != want {
+		t.Errorf("last reload snapshot had %d agents, expected %d (stale snapshot overwrote a newer one)", lastCount, want)
 	}
 }
 
@@ -1926,23 +1858,23 @@ repos:
 	}
 }
 
-func TestStoreImportRejectsEmptyFleetOnBlankStore(t *testing.T) {
+func TestStoreImportReplaceRejectsEmptyFleet(t *testing.T) {
 	t.Parallel()
-	// Blank store: no agents, no repos, no backends.
 	s := openCRUDTestServer(t)
 
-	// Import with only skills — should fail because the resulting store would
-	// have no agents, no enabled repos, and no backends.
+	// Replace-mode import with only skills — must fail because the
+	// resulting store would have no agents and no backends, violating
+	// the store's minimum-cardinality invariants.
 	yamlBody := `skills:
   my-skill:
     prompt: just a skill
 `
-	req := httptest.NewRequest(http.MethodPost, "/import", strings.NewReader(yamlBody))
+	req := httptest.NewRequest(http.MethodPost, "/import?mode=replace", strings.NewReader(yamlBody))
 	req.Header.Set("Content-Type", "application/x-yaml")
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
-		t.Errorf("import skills-only on blank store: want 400, got %d — %s", rr.Code, rr.Body.String())
+		t.Errorf("import skills-only with replace mode: want 400, got %d — %s", rr.Code, rr.Body.String())
 	}
 }
 

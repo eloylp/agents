@@ -12,12 +12,13 @@
 // that call Config() during a reload will block on RLock briefly and then
 // see the new value.
 //
-// Naming: this responsibility used to live on *server.Server as the Do
-// method + a CronReloader interface, conflating "the HTTP server's
-// lifecycle" with "the daemon's write coherence." The HTTP server is one
-// consumer of the coordinator; the actual responsibility is daemon-wide
-// and lives here so the cycle between server and its sub-handlers vanishes
-// without resorting to local interfaces or function-typed callbacks.
+// Naming: this responsibility used to live on *daemon.Daemon as the Do
+// method + a CronReloader interface, conflating "the HTTP listener's
+// lifecycle" with "the daemon's write coherence." The HTTP listener is
+// one consumer of the coordinator; the actual responsibility is
+// daemon-wide and lives here so the cycle between daemon and its sub-
+// handlers vanishes without resorting to local interfaces or function-
+// typed callbacks.
 package coordinator
 
 import (
@@ -67,7 +68,9 @@ type Coordinator struct {
 // New builds a Coordinator. cfg is the initial config snapshot; subsequent
 // CRUD writes through Do will swap it for fresh snapshots read from db.
 // reload propagates each new cfg to the runtime; onPost runs view-layer
-// refreshes after the swap. Either may be nil.
+// refreshes after the swap. Either may be nil; onPost can also be set
+// later via SetPostReload (the fleet handler whose orphan cache is the
+// post-reload subject is constructed after the coordinator).
 func New(cfg *config.Config, db *sql.DB, reload ReloadFunc, onPost PostReloadFunc) *Coordinator {
 	return &Coordinator{
 		db:     db,
@@ -75,6 +78,25 @@ func New(cfg *config.Config, db *sql.DB, reload ReloadFunc, onPost PostReloadFun
 		reload: reload,
 		onPost: onPost,
 	}
+}
+
+// SetPostReload installs (or replaces) the post-reload hook. Used by the
+// composing daemon when a component constructed after the coordinator
+// (typically the fleet handler) needs to be notified after each cfg swap.
+func (c *Coordinator) SetPostReload(fn PostReloadFunc) {
+	c.cfgMu.Lock()
+	c.onPost = fn
+	c.cfgMu.Unlock()
+}
+
+// SetReload installs (or replaces) the runtime reload propagation. Used by
+// tests that need to inject a controlled reload failure to assert that
+// CRUD endpoints surface the error and leave the cfg pointer unchanged.
+// Production wires this once via daemon.New and never replaces it.
+func (c *Coordinator) SetReload(fn ReloadFunc) {
+	c.storeMu.Lock()
+	c.reload = fn
+	c.storeMu.Unlock()
 }
 
 // DB returns the underlying SQLite handle. Domain handlers use this to run

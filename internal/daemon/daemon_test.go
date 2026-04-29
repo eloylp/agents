@@ -1,46 +1,29 @@
-package server_test
+package daemon_test
 
 import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"testing/fstest"
-	"time"
-
-	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/config"
-	"github.com/eloylp/agents/internal/fleet"
-	"github.com/eloylp/agents/internal/server"
-	serverconfig "github.com/eloylp/agents/internal/server/config"
-	serverfleet "github.com/eloylp/agents/internal/server/fleet"
-	"github.com/eloylp/agents/internal/webhook"
+	"github.com/eloylp/agents/internal/daemon"
+	"github.com/eloylp/agents/internal/daemon/daemontest"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
-// testCfg builds a minimal *config.Config suitable for webhook tests.
-// Callers can override fields via the mutator.
+// testCfg builds a *config.Config suitable for webhook tests, with the
+// daemon defaults the real Daemon requires populated.
 func testCfg(mutator func(*config.Config)) *config.Config {
-	cfg := &config.Config{
-		Daemon: config.DaemonConfig{
-			HTTP: config.HTTPConfig{
-				ListenAddr:         ":0",
-				WebhookPath:        "/webhooks/github",
-				StatusPath:         "/status",
-				MaxBodyBytes:       1024,
-				WebhookSecret:      "secret",
-				DeliveryTTLSeconds: 3600,
-			},
-		},
-		Repos: []fleet.Repo{{Name: "owner/repo", Enabled: true}},
-	}
+	cfg := daemontest.MinimalCfg(func(c *config.Config) {
+		c.Daemon.HTTP.MaxBodyBytes = 1024
+		c.Daemon.HTTP.WebhookSecret = "secret"
+	})
 	if mutator != nil {
 		mutator(cfg)
 	}
@@ -53,84 +36,14 @@ func signatureForTests(body []byte, secret string) string {
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
-func newTestServer(cfg *config.Config) (*server.Server, *workflow.DataChannels) {
-	return newTestServerWithProvider(cfg, nil)
-}
-
-// newTestServerWithProvider mirrors what cmd/agents wires: a Server plus a
-// fleet handler attached via WithFleet, the GitHub webhook handler attached
-// via WithWebhook, and a config handler attached via WithConfig.
-func newTestServerWithProvider(cfg *config.Config, provider server.StatusProvider) (*server.Server, *workflow.DataChannels) {
-	srv, dc, _ := newTestServerExposingFleet(cfg, provider)
-	return srv, dc
-}
-
-// newTestServerExposingFleet is the variant for tests that need to call
-// methods on the fleet handler directly.
-func newTestServerExposingFleet(cfg *config.Config, provider server.StatusProvider) (*server.Server, *workflow.DataChannels, *serverfleet.Handler) {
-	dc := workflow.NewDataChannels(1)
-	logger := zerolog.Nop()
-	srv := server.NewServer(cfg, dc, provider, nil, logger)
-	srv.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, srv, logger))
-	fleetHandler := wireFleetForTest(srv, nil, cfg, provider, nil, logger)
-	srv.WithConfig(serverconfig.New(nil, srv, srv, logger))
-	return srv, dc, fleetHandler
-}
-
-// newTestServerWithRuntimeState wires a fleet handler that knows about a
-// stub RuntimeStateProvider, used by tests asserting on the running/idle
-// status the /agents view reports.
-func newTestServerWithRuntimeState(cfg *config.Config, provider server.StatusProvider, rs server.RuntimeStateProvider) (*server.Server, *workflow.DataChannels) {
-	dc := workflow.NewDataChannels(1)
-	logger := zerolog.Nop()
-	srv := server.NewServer(cfg, dc, provider, nil, logger)
-	srv.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, srv, logger))
-	wireFleetForTest(srv, nil, cfg, provider, rs, logger)
-	srv.WithConfig(serverconfig.New(nil, srv, srv, logger))
-	return srv, dc
-}
-
-// wireFleetForTest constructs a fleet handler and attaches it to srv via
-// WithFleet, mirroring cmd/agents. Pass a nil db for cfg-only mode (the
-// orphan cache + snapshot view still work; CRUD routes self-skip);
-// CRUD-mode helpers pass the live db. rs may be nil — pass a stub when the
-// test asserts on running/idle status from the /agents view.
-func wireFleetForTest(srv *server.Server, db *sql.DB, cfg *config.Config, provider server.StatusProvider, rs server.RuntimeStateProvider, logger zerolog.Logger) *serverfleet.Handler {
-	fleetHandler := serverfleet.New(db, srv, srv, provider, rs, logger)
-	fleetHandler.RefreshOrphansFromCfg(cfg)
-	srv.WithFleet(
-		fleetHandler,
-		func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodGet {
-				fleetHandler.HandleAgentsView(w, r)
-				return
-			}
-			fleetHandler.HandleAgentsCreate(w, r)
-		},
-		fleetOrphansBridge{fleetHandler},
-		fleetHandler.RefreshOrphansFromCfg,
-	)
-	return fleetHandler
-}
-
-// fleetOrphansBridge converts serverfleet.Handler's concrete orphan
-// snapshot type to the cross-package server.OrphansSnapshot shape /status
-// uses, mirroring the adapter cmd/agents installs.
-type fleetOrphansBridge struct {
-	h *serverfleet.Handler
-}
-
-func (b fleetOrphansBridge) OrphansSnapshot() server.OrphansSnapshot {
-	snap := b.h.OrphansSnapshot()
-	return server.OrphansSnapshot{GeneratedAt: snap.GeneratedAt, Count: snap.Count}
-}
-
-func (b fleetOrphansBridge) RefreshOrphansFromDB() (server.OrphansSnapshot, error) {
-	snap, err := b.h.RefreshOrphansFromDB()
-	if err != nil {
-		return server.OrphansSnapshot{}, err
-	}
-	return server.OrphansSnapshot{GeneratedAt: snap.GeneratedAt, Count: snap.Count}, nil
+// newTestServer constructs a real *daemon.Daemon backed by a tempdir
+// SQLite seeded from cfg. The returned channels point at the same
+// EventChan production reads from, so tests can drain events the
+// webhook handler enqueued.
+func newTestServer(t *testing.T, cfg *config.Config) (*daemon.Daemon, *workflow.DataChannels) {
+	t.Helper()
+	srv := daemontest.New(t, cfg)
+	return srv, srv.Channels()
 }
 
 // webhookRequest builds a signed POST request to /webhooks/github.
@@ -170,7 +83,7 @@ func assertNoEvent(t *testing.T, dc *workflow.DataChannels) {
 
 func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
 	t.Parallel()
-	server, dc := newTestServer(testCfg(nil))
+	server, dc := newTestServer(t, testCfg(nil))
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":1},"sender":{"login":"octocat"}}`
 
@@ -193,7 +106,7 @@ func TestHandleIssueWebhookDeduplicatesDelivery(t *testing.T) {
 
 func TestHandleIssuesLabeledEnqueuesEventWithLabel(t *testing.T) {
 	t.Parallel()
-	server, dc := newTestServer(testCfg(nil))
+	server, dc := newTestServer(t, testCfg(nil))
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":7},"sender":{"login":"octocat"}}`
 	rr := httptest.NewRecorder()
@@ -219,7 +132,7 @@ func TestHandleIssuesLabeledEnqueuesEventWithLabel(t *testing.T) {
 
 func TestHandleIssuesOpenedEnqueuesEvent(t *testing.T) {
 	t.Parallel()
-	server, dc := newTestServer(testCfg(nil))
+	server, dc := newTestServer(t, testCfg(nil))
 
 	body := `{"action":"opened","repository":{"full_name":"owner/repo"},"issue":{"number":10,"title":"Bug","body":"desc"},"sender":{"login":"dev"}}`
 	rr := httptest.NewRecorder()
@@ -274,7 +187,7 @@ func TestHandleNonAILabelEnqueues(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			server, dc := newTestServer(testCfg(nil))
+			server, dc := newTestServer(t, testCfg(nil))
 			rr := httptest.NewRecorder()
 			server.Handler().ServeHTTP(rr, webhookRequest(t, tc.event, tc.delivery, tc.body))
 			if rr.Code != http.StatusAccepted {
@@ -325,7 +238,7 @@ func TestHandleIssuesEventDropsPRBackedIssueActions(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			server, dc := newTestServer(testCfg(nil))
+			server, dc := newTestServer(t, testCfg(nil))
 			rr := httptest.NewRecorder()
 			server.Handler().ServeHTTP(rr, webhookRequest(t, "issues", "d-pr-"+tc.name, tc.body))
 			if rr.Code != http.StatusAccepted {
@@ -340,7 +253,7 @@ func TestHandleIssuesEventDropsPRBackedIssueActions(t *testing.T) {
 
 func TestHandlePullRequestLabeledEnqueuesEvent(t *testing.T) {
 	t.Parallel()
-	server, dc := newTestServer(testCfg(nil))
+	server, dc := newTestServer(t, testCfg(nil))
 
 	body := `{"action":"labeled","label":{"name":"ai:review"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":5},"sender":{"login":"bot"}}`
 	rr := httptest.NewRecorder()
@@ -360,7 +273,7 @@ func TestHandlePullRequestLabeledEnqueuesEvent(t *testing.T) {
 
 func TestHandleDraftPRWebhookDoesNotEnqueue(t *testing.T) {
 	t.Parallel()
-	server, dc := newTestServer(testCfg(nil))
+	server, dc := newTestServer(t, testCfg(nil))
 
 	body := `{"action":"labeled","label":{"name":"ai:review"},"repository":{"full_name":"owner/repo"},"pull_request":{"number":5,"draft":true}}`
 	rr := httptest.NewRecorder()
@@ -373,7 +286,7 @@ func TestHandleDraftPRWebhookDoesNotEnqueue(t *testing.T) {
 
 func TestHandlePullRequestOpenedEnqueuesEvent(t *testing.T) {
 	t.Parallel()
-	server, dc := newTestServer(testCfg(nil))
+	server, dc := newTestServer(t, testCfg(nil))
 
 	body := `{"action":"opened","repository":{"full_name":"owner/repo"},"pull_request":{"number":8,"title":"feat","draft":false},"sender":{"login":"dev"}}`
 	rr := httptest.NewRecorder()
@@ -404,7 +317,7 @@ func TestHandlePullRequestClosedPayloadIncludesMerged(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			server, dc := newTestServer(testCfg(nil))
+			server, dc := newTestServer(t, testCfg(nil))
 
 			mergedVal := "false"
 			if tc.merged {
@@ -482,7 +395,7 @@ func TestHandleCommentAndReviewEventsEnqueue(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			server, dc := newTestServer(testCfg(nil))
+			server, dc := newTestServer(t, testCfg(nil))
 			rr := httptest.NewRecorder()
 			server.Handler().ServeHTTP(rr, webhookRequest(t, tc.eventType, tc.deliveryID, tc.body))
 			if rr.Code != http.StatusAccepted {
@@ -539,7 +452,7 @@ func TestHandleNonTriggeringActionsIgnored(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			server, dc := newTestServer(testCfg(nil))
+			server, dc := newTestServer(t, testCfg(nil))
 			rr := httptest.NewRecorder()
 			server.Handler().ServeHTTP(rr, webhookRequest(t, tc.eventType, tc.deliveryID, tc.body))
 			if rr.Code != http.StatusAccepted {
@@ -554,7 +467,7 @@ func TestHandleNonTriggeringActionsIgnored(t *testing.T) {
 
 func TestHandlePushEnqueuesEvent(t *testing.T) {
 	t.Parallel()
-	server, dc := newTestServer(testCfg(nil))
+	server, dc := newTestServer(t, testCfg(nil))
 
 	body := `{"ref":"refs/heads/main","after":"abc123","repository":{"full_name":"owner/repo"},"sender":{"login":"pusher"}}`
 	rr := httptest.NewRecorder()
@@ -592,7 +505,7 @@ func TestHandlePushIgnoresNonBranchRefs(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			server, dc := newTestServer(testCfg(nil))
+			server, dc := newTestServer(t, testCfg(nil))
 			body := `{"ref":"` + tc.ref + `","after":"` + tc.sha + `","repository":{"full_name":"owner/repo"},"sender":{"login":"pusher"}}`
 			rr := httptest.NewRecorder()
 			server.Handler().ServeHTTP(rr, webhookRequest(t, "push", "d-push-"+tc.name, body))
@@ -608,7 +521,7 @@ func TestHandlePushIgnoresNonBranchRefs(t *testing.T) {
 
 func TestHandleUnknownEventReturnsAccepted(t *testing.T) {
 	t.Parallel()
-	server, dc := newTestServer(testCfg(nil))
+	server, dc := newTestServer(t, testCfg(nil))
 
 	body := `{"action":"something"}`
 	rr := httptest.NewRecorder()
@@ -623,9 +536,9 @@ func TestHandleUnknownEventReturnsAccepted(t *testing.T) {
 
 func TestHandleWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) {
 	t.Parallel()
-	cfg := testCfg(nil)
-	dc := workflow.NewDataChannels(1)
-	// Preload the queue.
+	cfg := testCfg(func(c *config.Config) { c.Daemon.Processor.EventQueueBuffer = 1 })
+	srv, dc := newTestServer(t, cfg)
+	// Preload the queue so the next push trips ErrEventQueueFull.
 	if err := dc.PushEvent(context.Background(), workflow.Event{
 		Repo:   workflow.RepoRef{FullName: cfg.Repos[0].Name, Enabled: cfg.Repos[0].Enabled},
 		Kind:   "issues.labeled",
@@ -633,9 +546,6 @@ func TestHandleWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("preload event queue: %v", err)
 	}
-	logger := zerolog.Nop()
-	srv := server.NewServer(cfg, dc, nil, nil, logger)
-	srv.WithWebhook(webhook.NewHandler(webhook.NewDeliveryStore(time.Hour), dc, srv, logger))
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":2}}`
 	rr := httptest.NewRecorder()
@@ -655,9 +565,9 @@ func TestHandleWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) {
 
 // ─── /agents/run endpoint tests ───────────────────────────────────────────────
 
-func newRunServer() *server.Server {
-	cfg := testCfg(nil)
-	srv, _ := newTestServer(cfg)
+func newRunServer(t *testing.T) *daemon.Daemon {
+	t.Helper()
+	srv, _ := newTestServer(t, testCfg(nil))
 	return srv
 }
 
@@ -667,7 +577,7 @@ func newRequest(method, path, body string) *http.Request {
 
 func TestHandleAgentsRunEnqueuesEvent(t *testing.T) {
 	t.Parallel()
-	server := newRunServer()
+	server := newRunServer(t)
 
 	req := newRequest(http.MethodPost, "/run", `{"agent":"coder","repo":"owner/repo"}`)
 	rr := httptest.NewRecorder()
@@ -703,7 +613,7 @@ func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			server := newRunServer()
+			server := newRunServer(t)
 			req := newRequest(http.MethodPost, "/run", tc.body)
 			rr := httptest.NewRecorder()
 			server.Handler().ServeHTTP(rr, req)
@@ -716,7 +626,7 @@ func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
 
 func TestHandleAgentsRunReturnsNotFoundForUnknownRepo(t *testing.T) {
 	t.Parallel()
-	server := newRunServer()
+	server := newRunServer(t)
 	req := newRequest(http.MethodPost, "/run", `{"agent":"coder","repo":"unknown/repo"}`)
 	rr := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rr, req)
@@ -727,7 +637,7 @@ func TestHandleAgentsRunReturnsNotFoundForUnknownRepo(t *testing.T) {
 
 func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
 	t.Parallel()
-	server, _ := newTestServer(testCfg(nil))
+	server, _ := newTestServer(t, testCfg(nil))
 
 	body := `{"action":"labeled","label":{"name":"ai:refine"},"repository":{"full_name":"owner/repo"},"issue":{"number":7}}`
 
@@ -755,19 +665,12 @@ func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
 }
 
 // TestUISlashlessRedirect verifies that GET /ui (no trailing slash) redirects
-// to /ui/ with a 301 when a UI FS is attached to the server. This is the
-// canonical entrypoint that operators and reverse proxies tend to use.
+// to /ui/ with a 301. The UI FS is always mounted from the embedded next.js
+// build, so the redirect is unconditional in production.
 func TestUISlashlessRedirect(t *testing.T) {
 	t.Parallel()
 
-	// Build a minimal in-memory FS that satisfies fs.Sub("dist").
-	uiFS := fstest.MapFS{
-		"dist/index.html": &fstest.MapFile{Data: []byte("<html></html>")},
-	}
-
-	srv, _ := newTestServer(testCfg(nil))
-	srv.WithUI(uiFS)
-
+	srv, _ := newTestServer(t, testCfg(nil))
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -799,14 +702,7 @@ func TestUISlashlessRedirect(t *testing.T) {
 func TestBuildHandlerObservabilityRoutesAreOpen(t *testing.T) {
 	t.Parallel()
 
-	uiFS := fstest.MapFS{
-		"dist/index.html": &fstest.MapFile{Data: []byte("<html></html>")},
-	}
-
-	srv, _ := newTestServer(testCfg(nil))
-	srv.WithUI(uiFS)
-	wireObserveForTest(srv, newTestObserve(t))
-
+	srv, _ := newTestServer(t, testCfg(nil))
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
@@ -838,49 +734,6 @@ func TestBuildHandlerObservabilityRoutesAreOpen(t *testing.T) {
 			}
 		})
 	}
-
 }
 
-// TestBuildHandlerMCPMountsWhenSet verifies that WithMCP mounts the handler
-// at /mcp and is not mounted when WithMCP was never called.
-func TestBuildHandlerMCPMountsWhenSet(t *testing.T) {
-	t.Parallel()
-
-	t.Run("not mounted by default", func(t *testing.T) {
-		t.Parallel()
-		srv, _ := newTestServer(testCfg(nil))
-		ts := httptest.NewServer(srv.Handler())
-		t.Cleanup(ts.Close)
-
-		resp, err := http.Post(ts.URL+"/mcp", "application/json", strings.NewReader(`{}`))
-		if err != nil {
-			t.Fatalf("request failed: %v", err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed {
-			t.Errorf("without WithMCP /mcp should 404, got %d", resp.StatusCode)
-		}
-	})
-
-	t.Run("mounted after WithMCP", func(t *testing.T) {
-		t.Parallel()
-		srv, _ := newTestServer(testCfg(nil))
-		marker := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusTeapot)
-		})
-		srv.WithMCP(marker)
-
-		ts := httptest.NewServer(srv.Handler())
-		t.Cleanup(ts.Close)
-
-		resp, err := http.Post(ts.URL+"/mcp", "application/json", strings.NewReader(`{}`))
-		if err != nil {
-			t.Fatalf("request failed: %v", err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusTeapot {
-			t.Errorf("WithMCP handler should receive /mcp requests, got status %d", resp.StatusCode)
-		}
-	})
-}
 

@@ -1,24 +1,16 @@
-package server_test
+package daemon_test
 
 import (
 	"bufio"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/gorilla/mux"
-
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
-	"github.com/eloylp/agents/internal/observe"
-	"github.com/eloylp/agents/internal/scheduler"
-	"github.com/eloylp/agents/internal/server"
-	serverobserve "github.com/eloylp/agents/internal/server/observe"
-	"github.com/eloylp/agents/internal/store"
 )
 
 // ── /api/agents ────────────────────────────────────────────────────────────
@@ -26,10 +18,19 @@ import (
 func TestHandleAPIAgentsReturnsConfiguredAgents(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) {
+		c.Skills = map[string]fleet.Skill{"testing": {Prompt: "test thoroughly"}}
 		c.Agents = []fleet.Agent{
+			{
+				Name:          "sec-reviewer",
+				Backend:       "claude",
+				Prompt:        "security review",
+				Description:   "Reviews PRs for security issues.",
+				AllowDispatch: true,
+			},
 			{
 				Name:          "reviewer",
 				Backend:       "claude",
+				Prompt:        "review PRs",
 				Skills:        []string{"testing"},
 				Description:   "Reviews PRs",
 				AllowDispatch: true,
@@ -46,7 +47,7 @@ func TestHandleAPIAgentsReturnsConfiguredAgents(t *testing.T) {
 			},
 		}
 	})
-	srv, _ := newTestServer(cfg)
+	srv, _ := newTestServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
@@ -60,13 +61,17 @@ func TestHandleAPIAgentsReturnsConfiguredAgents(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(agents) != 1 {
-		t.Fatalf("want 1 agent, got %d", len(agents))
+	// Locate "reviewer" in the response — the fixture also seeds an agent
+	// and "sec-reviewer" exists for the can_dispatch reference.
+	var got *viewAgentJSON
+	for i := range agents {
+		if agents[i].Name == "reviewer" {
+			got = &agents[i]
+			break
+		}
 	}
-
-	got := agents[0]
-	if got.Name != "reviewer" {
-		t.Errorf("name: want %q, got %q", "reviewer", got.Name)
+	if got == nil {
+		t.Fatalf("reviewer not found in response: got %d agents", len(agents))
 	}
 	if got.Backend != "claude" {
 		t.Errorf("backend: want %q, got %q", "claude", got.Backend)
@@ -84,11 +89,8 @@ func TestHandleAPIAgentsReturnsConfiguredAgents(t *testing.T) {
 
 func TestHandleAPIAgentsAttachesScheduleForCronBindings(t *testing.T) {
 	t.Parallel()
-	now := time.Now().UTC().Truncate(time.Second)
-	next := now.Add(time.Hour)
-
 	cfg := testCfg(func(c *config.Config) {
-		c.Agents = []fleet.Agent{{Name: "worker", Backend: "codex"}}
+		c.Agents = []fleet.Agent{{Name: "worker", Backend: "claude", Prompt: "p"}}
 		c.Repos = []fleet.Repo{
 			{
 				Name:    "owner/repo",
@@ -97,10 +99,11 @@ func TestHandleAPIAgentsAttachesScheduleForCronBindings(t *testing.T) {
 			},
 		}
 	})
-	provider := &stubStatusProvider{statuses: []scheduler.AgentStatus{
-		{Name: "worker", Repo: "owner/repo", LastRun: &now, NextRun: next, LastStatus: "ok"},
-	}}
-	srv, _ := newTestServerWithProvider(cfg, provider)
+	srv, _ := newTestServer(t, cfg)
+	// Seed the scheduler's last-run state through the same hook the engine
+	// uses on real cron completions.
+	now := time.Now().UTC().Truncate(time.Second)
+	srv.Scheduler().RecordLastRun("worker", "owner/repo", now, "ok")
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
@@ -133,12 +136,8 @@ func TestHandleAPIAgentsAttachesScheduleForCronBindings(t *testing.T) {
 // each binding — not just the last repo visited in the loop.
 func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 	t.Parallel()
-	now := time.Now().UTC().Truncate(time.Second)
-	next1 := now.Add(time.Hour)
-	next2 := now.Add(2 * time.Hour)
-
 	cfg := testCfg(func(c *config.Config) {
-		c.Agents = []fleet.Agent{{Name: "worker", Backend: "codex"}}
+		c.Agents = []fleet.Agent{{Name: "worker", Backend: "claude", Prompt: "p"}}
 		c.Repos = []fleet.Repo{
 			{
 				Name:    "owner/repo-a",
@@ -152,11 +151,11 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 			},
 		}
 	})
-	provider := &stubStatusProvider{statuses: []scheduler.AgentStatus{
-		{Name: "worker", Repo: "owner/repo-a", LastRun: &now, NextRun: next1, LastStatus: "ok"},
-		{Name: "worker", Repo: "owner/repo-b", NextRun: next2, LastStatus: "pending"},
-	}}
-	srv, _ := newTestServerWithProvider(cfg, provider)
+	srv, _ := newTestServer(t, cfg)
+	now := time.Now().UTC().Truncate(time.Second)
+	// Seed last-run state for repo-a only — repo-b stays at "never run" so
+	// the test asserts the per-binding schedule slot on the agent view.
+	srv.Scheduler().RecordLastRun("worker", "owner/repo-a", now, "ok")
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
@@ -203,8 +202,8 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 	if repoB.Schedule.LastRun != nil {
 		t.Error("repo-b: want last_run nil (no run yet)")
 	}
-	if repoB.Schedule.LastStatus != "pending" {
-		t.Errorf("repo-b last_status: want %q, got %q", "pending", repoB.Schedule.LastStatus)
+	if repoB.Schedule.LastStatus != "" {
+		t.Errorf("repo-b last_status: want empty (no run yet), got %q", repoB.Schedule.LastStatus)
 	}
 }
 
@@ -218,7 +217,7 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 func TestHandleAPIAgentsIncludesDisabledRepoBindings(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) {
-		c.Agents = []fleet.Agent{{Name: "worker", Backend: "claude"}}
+		c.Agents = []fleet.Agent{{Name: "worker", Backend: "claude", Prompt: "p"}}
 		c.Repos = []fleet.Repo{
 			{
 				Name:    "owner/active-repo",
@@ -232,7 +231,7 @@ func TestHandleAPIAgentsIncludesDisabledRepoBindings(t *testing.T) {
 			},
 		}
 	})
-	srv, _ := newTestServer(cfg)
+	srv, _ := newTestServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
@@ -272,11 +271,13 @@ func TestHandleAPIAgentsIncludesDisabledRepoBindings(t *testing.T) {
 	}
 }
 
-func TestHandleAPIAgentsEmptyWhenNoAgents(t *testing.T) {
+func TestHandleAPIAgentsReturnsArrayShape(t *testing.T) {
 	t.Parallel()
-	cfg := testCfg(nil)
-	cfg.Agents = nil
-	srv, _ := newTestServer(cfg)
+	// The store invariant ("at least one agent") prevents a literal "no
+	// agents" config from booting, so the test now asserts the wire shape
+	// rather than the empty-slice case (the JSON array contract is what
+	// /agents commits to; the count is whatever the fixture seeded).
+	srv, _ := newTestServer(t, testCfg(nil))
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
@@ -289,15 +290,15 @@ func TestHandleAPIAgentsEmptyWhenNoAgents(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(agents) != 0 {
-		t.Errorf("want empty slice, got %d entries", len(agents))
+	if agents == nil {
+		t.Errorf("/agents returned nil slice, want JSON array")
 	}
 }
 
 func TestHandleAPIAgentsCurrentStatusIdleWhenNotRunning(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(nil)
-	srv, _ := newTestServer(cfg)
+	srv, _ := newTestServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
@@ -317,18 +318,15 @@ func TestHandleAPIAgentsCurrentStatusIdleWhenNotRunning(t *testing.T) {
 	}
 }
 
-// stubRuntimeState is a minimal RuntimeStateProvider for tests.
-type stubRuntimeState struct{ running map[string]bool }
-
-func (s *stubRuntimeState) IsRunning(name string) bool { return s.running[name] }
-
 func TestHandleAPIAgentsCurrentStatusRunningWhenActive(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) {
-		c.Agents = []fleet.Agent{{Name: "coder", Backend: "claude"}}
+		c.Agents = []fleet.Agent{{Name: "coder", Backend: "claude", Prompt: "p"}}
 	})
-	rs := &stubRuntimeState{running: map[string]bool{"coder": true}}
-	srv, _ := newTestServerWithRuntimeState(cfg, nil, rs)
+	srv, _ := newTestServer(t, cfg)
+	// Mark "coder" as running through the same hook the engine uses on a
+	// real run start.
+	srv.Observe().ActiveRuns.StartRun("coder")
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
@@ -377,7 +375,7 @@ func TestHandleAPIConfigRedactsSecrets(t *testing.T) {
 			},
 		}
 	})
-	srv, _ := newTestServer(cfg)
+	srv, _ := newTestServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
@@ -423,7 +421,7 @@ func TestHandleAPIConfigOmitsProxyExtraBody(t *testing.T) {
 			},
 		}
 	})
-	srv, _ := newTestServer(cfg)
+	srv, _ := newTestServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
@@ -450,7 +448,7 @@ func TestHandleAPIConfigNoSecretsWhenNotSet(t *testing.T) {
 	cfg := testCfg(func(c *config.Config) {
 		c.Daemon.HTTP.WebhookSecret = ""
 	})
-	srv, _ := newTestServer(cfg)
+	srv, _ := newTestServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
@@ -464,7 +462,7 @@ func TestHandleAPIConfigNoSecretsWhenNotSet(t *testing.T) {
 
 func TestHandleAPIConfigContentType(t *testing.T) {
 	t.Parallel()
-	srv, _ := newTestServer(testCfg(nil))
+	srv, _ := newTestServer(t, testCfg(nil))
 	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
@@ -480,6 +478,7 @@ func TestHandleAPIConfigContentType(t *testing.T) {
 func TestHandleAPIConfigRepoBindingDefaultEnabled(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) {
+		c.Agents = []fleet.Agent{{Name: "worker", Backend: "claude", Prompt: "p"}}
 		c.Repos = []fleet.Repo{
 			{
 				Name:    "owner/repo",
@@ -490,7 +489,7 @@ func TestHandleAPIConfigRepoBindingDefaultEnabled(t *testing.T) {
 			},
 		}
 	})
-	srv, _ := newTestServer(cfg)
+	srv, _ := newTestServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/config", nil)
 	rec := httptest.NewRecorder()
@@ -558,9 +557,8 @@ func TestBuildHandlerSSETimeoutSplit(t *testing.T) {
 	cfg := testCfg(func(c *config.Config) {
 		c.Daemon.HTTP.WriteTimeoutSeconds = 1
 	})
-	obs := newTestObserve(t)
-	srv, _ := newTestServer(cfg)
-	wireObserveForTest(srv, obs)
+	srv, _ := newTestServer(t, cfg)
+	obs := srv.Observe()
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -635,9 +633,8 @@ receiveLoop:
 func TestServeSSEClearsServerWriteDeadline(t *testing.T) {
 	// Not parallel: test intentionally sleeps to cross a write-deadline boundary.
 
-	obs := newTestObserve(t)
-	srv, _ := newTestServer(testCfg(nil))
-	wireObserveForTest(srv, obs)
+	srv, _ := newTestServer(t, testCfg(nil))
+	obs := srv.Observe()
 
 	ts := httptest.NewUnstartedServer(srv.Handler())
 	ts.Config.WriteTimeout = 200 * time.Millisecond
@@ -694,35 +691,3 @@ func TestServeSSEClearsServerWriteDeadline(t *testing.T) {
 	}
 }
 
-// ── helpers ────────────────────────────────────────────────────────────────
-
-type stubStatusProvider struct {
-	statuses []scheduler.AgentStatus
-}
-
-func (p *stubStatusProvider) AgentStatuses() []scheduler.AgentStatus { return p.statuses }
-
-// newTestObserve creates an observe.Store backed by a temporary SQLite DB.
-// Used by the integration tests for buildHandler routing through the SSE
-// surface.
-func newTestObserve(t *testing.T) *observe.Store {
-	t.Helper()
-	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("open test db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return observe.NewStore(db)
-}
-
-// wireObserveForTest mounts the observability routes on srv. The observe
-// handler construction lives outside this package now (cmd/agents wires it
-// via WithObserveRegister); tests do the same so the routes are reachable
-// when integration tests exercise the full router.
-func wireObserveForTest(srv *server.Server, obs *observe.Store) {
-	srv.WithObserve(obs)
-	srv.WithObserveRegister(func(r *mux.Router, withTimeout func(http.Handler) http.Handler) {
-		obh := serverobserve.New(obs, srv, nil, nil, nil, nil)
-		obh.RegisterRoutes(r, withTimeout)
-	})
-}

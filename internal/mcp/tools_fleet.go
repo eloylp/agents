@@ -171,7 +171,7 @@ func toolGetRepo(deps Deps) server.ToolHandlerFunc {
 // documentation and tooling.
 func toolGetStatus(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		body, err := deps.Server.StatusJSON()
+		body, err := deps.StatusJSON()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("status snapshot", err), nil
 		}
@@ -198,7 +198,7 @@ func toolTriggerAgent(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError("agent and repo are required"), nil
 		}
 
-		cfg := deps.Server.Config()
+		cfg := deps.Coord.Config()
 		repo, ok := cfg.RepoByName(repoName)
 		if !ok || !repo.Enabled {
 			return mcpgo.NewToolResultErrorf("repo %q not found or disabled", repoName), nil
