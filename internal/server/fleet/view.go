@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/eloylp/agents/internal/server"
+	"github.com/eloylp/agents/internal/scheduler"
 )
 
 // agentScheduleJSON carries scheduling state for cron-backed agents.
@@ -53,7 +53,7 @@ type apiAgentJSON struct {
 // requests to HandleAgentsCreate.
 func (h *Handler) HandleAgentsView(w http.ResponseWriter, _ *http.Request) {
 	// Index scheduling state by (agent, repo) for O(1) lookup below.
-	scheduleByKey := map[string]server.AgentStatus{}
+	scheduleByKey := map[string]scheduler.AgentStatus{}
 	if h.provider != nil {
 		for _, st := range h.provider.AgentStatuses() {
 			scheduleByKey[st.Name+"\x00"+st.Repo] = st

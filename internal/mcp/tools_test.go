@@ -16,6 +16,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/scheduler"
 	internalserver "github.com/eloylp/agents/internal/server"
 	serverconfig "github.com/eloylp/agents/internal/server/config"
 	serverfleet "github.com/eloylp/agents/internal/server/fleet"
@@ -28,7 +29,7 @@ import (
 // don't care about cron schedules in /status output.
 type emptyStatusProvider struct{}
 
-func (emptyStatusProvider) AgentStatuses() []internalserver.AgentStatus { return nil }
+func (emptyStatusProvider) AgentStatuses() []scheduler.AgentStatus { return nil }
 
 // emptyRuntimeState satisfies internalserver.RuntimeStateProvider with no
 // in-flight runs. Tests that need a specific running/idle status would

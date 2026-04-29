@@ -17,6 +17,7 @@ import (
 	anthropicproxy "github.com/eloylp/agents/internal/anthropic_proxy"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/scheduler"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -363,7 +364,7 @@ type statusJSON struct {
 	Status         string                     `json:"status"`
 	UptimeSeconds  int64                      `json:"uptime_seconds"`
 	Queues         map[string]statusQueueJSON `json:"queues"`
-	Agents         []AgentStatus              `json:"agents"`
+	Agents         []scheduler.AgentStatus    `json:"agents"`
 	Dispatch       *workflow.DispatchStats    `json:"dispatch,omitempty"`
 	OrphanedAgents statusOrphanSummaryJSON    `json:"orphaned_agents"`
 }
@@ -374,7 +375,7 @@ type statusJSON struct {
 func (s *Server) buildStatus() statusJSON {
 	q := s.channels.QueueStats()
 
-	agents := []AgentStatus{}
+	agents := []scheduler.AgentStatus{}
 	if s.provider != nil {
 		if got := s.provider.AgentStatuses(); len(got) > 0 {
 			agents = got

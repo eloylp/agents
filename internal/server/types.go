@@ -30,17 +30,12 @@ type CronReloader interface {
 	Reload(repos []fleet.Repo, agents []fleet.Agent, skills map[string]fleet.Skill, backends map[string]fleet.Backend) error
 }
 
-// AgentStatus is the runtime state of one autonomous agent as reported by
-// /status. Aliased to scheduler.AgentStatus so production code can pass
-// *scheduler.Scheduler directly as a StatusProvider without an adapter.
-type AgentStatus = scheduler.AgentStatus
-
-// StatusProvider reports the current scheduling state of autonomous agents.
+// StatusProvider reports the current scheduling state of cron-bound agents.
 // /status, /agents (fleet view), and the observability handlers consume it.
 // Kept as an interface so tests can stub controlled scheduling state without
 // constructing a real *scheduler.Scheduler.
 type StatusProvider interface {
-	AgentStatuses() []AgentStatus
+	AgentStatuses() []scheduler.AgentStatus
 }
 
 // DispatchStatsProvider reports aggregate dispatch statistics for /status
