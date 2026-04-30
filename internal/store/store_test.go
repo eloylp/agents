@@ -44,10 +44,9 @@ func minimalCfg() *config.Config {
 			},
 			AIBackends: map[string]fleet.Backend{
 				"claude": {
-					Command:          "claude",
-					TimeoutSeconds:   600,
-					MaxPromptChars:   12000,
-					RedactionSaltEnv: "LOG_SALT",
+					Command:        "claude",
+					TimeoutSeconds: 600,
+					MaxPromptChars: 12000,
 				},
 			},
 			Proxy: config.ProxyConfig{

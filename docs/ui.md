@@ -14,9 +14,14 @@ Live event firehose with SSE streaming. Every kind of event flows through here: 
 
 ### Traces
 
-Agent run traces with timing, status, and a drill-down to the tool-loop transcript. Each trace shows the prompt that was composed, the tool calls the AI made, the tool results, and the final response payload.
+Agent run traces with timing, status, and a drill-down to the tool-loop transcript. Each span exposes:
 
-<!-- TODO: screenshot — a trace detail view with the tool-loop transcript visible, ideally one with at least 3 tool calls so the reader sees the chain -->
+- **Token usage** — input / output / cache hit / cache write counts straight from the AI CLI's reported usage. Cache hit ratio shown inline; useful for spotting agents that bust the prompt cache and tuning their composition.
+- **Prompt** — the exact composed prompt the daemon sent to the AI CLI on this run. Gzipped on disk, lazy-fetched via `/traces/{span_id}/prompt` when expanded. This is the operator's "what did the agent see" debug surface.
+- **Tool-loop transcript** — ordered tool calls with input / output summaries and durations.
+- Summary, error message (when the run failed), Gantt position in the dispatch chain.
+
+<!-- TODO: screenshot — a trace detail view with the token usage line, the prompt panel expanded, and at least 3 tool calls visible so the reader sees the chain -->
 
 ### Graph
 

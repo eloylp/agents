@@ -461,15 +461,14 @@ func TestStoreRecordSpanPersistsAndPublishesToSSE(t *testing.T) {
 
 	start := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Second)
-	s.RecordSpan(
-		"span-1", "root-1", "",
-		"coder", "claude",
-		"owner/repo", "issues.labeled", "",
-		7, 0,
-		50, 3, "all done",
-		start, end,
-		"success", "",
-	)
+	s.RecordSpan(workflow.SpanInput{
+		SpanID: "span-1", RootEventID: "root-1",
+		Agent: "coder", Backend: "claude",
+		Repo: "owner/repo", EventKind: "issues.labeled",
+		Number: 7, QueueWaitMs: 50, ArtifactsCount: 3, Summary: "all done",
+		StartedAt: start, FinishedAt: end,
+		Status: "success",
+	})
 
 	// Wait for async persistence.
 	time.Sleep(50 * time.Millisecond)
@@ -566,9 +565,9 @@ func TestStoreTracesByRootEventID(t *testing.T) {
 	s := testDB(t)
 
 	now := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
-	s.RecordSpan("s1", "root-A", "", "coder", "claude", "r", "issues.labeled", "", 1, 0, 0, 0, "", now, now.Add(time.Second), "success", "")
-	s.RecordSpan("s2", "root-B", "", "reviewer", "claude", "r", "push", "", 0, 0, 0, 0, "", now, now.Add(time.Second), "success", "")
-	s.RecordSpan("s3", "root-A", "", "coder", "claude", "r", "agent.dispatch", "", 1, 1, 0, 0, "", now.Add(time.Second), now.Add(2*time.Second), "success", "")
+	s.RecordSpan(workflow.SpanInput{SpanID: "s1", RootEventID: "root-A", Agent: "coder", Backend: "claude", Repo: "r", EventKind: "issues.labeled", Number: 1, StartedAt: now, FinishedAt: now.Add(time.Second), Status: "success"})
+	s.RecordSpan(workflow.SpanInput{SpanID: "s2", RootEventID: "root-B", Agent: "reviewer", Backend: "claude", Repo: "r", EventKind: "push", StartedAt: now, FinishedAt: now.Add(time.Second), Status: "success"})
+	s.RecordSpan(workflow.SpanInput{SpanID: "s3", RootEventID: "root-A", Agent: "coder", Backend: "claude", Repo: "r", EventKind: "agent.dispatch", Number: 1, DispatchDepth: 1, StartedAt: now.Add(time.Second), FinishedAt: now.Add(2 * time.Second), Status: "success"})
 
 	// Poll until both spans for root-A are persisted (RecordSpan is async).
 	deadline := time.Now().Add(500 * time.Millisecond)

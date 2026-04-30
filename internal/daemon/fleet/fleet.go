@@ -457,15 +457,14 @@ func (h *Handler) DeleteSkill(name string) error {
 
 type storeBackendJSON struct {
 	Name             string   `json:"name"`
-	Command          string   `json:"command"`
-	Version          string   `json:"version,omitempty"`
-	Models           []string `json:"models,omitempty"`
-	Healthy          bool     `json:"healthy"`
-	HealthDetail     string   `json:"health_detail,omitempty"`
-	LocalModelURL    string   `json:"local_model_url,omitempty"`
-	TimeoutSeconds   int      `json:"timeout_seconds"`
-	MaxPromptChars   int      `json:"max_prompt_chars"`
-	RedactionSaltEnv string   `json:"redaction_salt_env"`
+	Command        string   `json:"command"`
+	Version        string   `json:"version,omitempty"`
+	Models         []string `json:"models,omitempty"`
+	Healthy        bool     `json:"healthy"`
+	HealthDetail   string   `json:"health_detail,omitempty"`
+	LocalModelURL  string   `json:"local_model_url,omitempty"`
+	TimeoutSeconds int      `json:"timeout_seconds"`
+	MaxPromptChars int      `json:"max_prompt_chars"`
 }
 
 type localBackendRequest struct {
@@ -478,21 +477,20 @@ type localBackendRequest struct {
 // field is a pointer so callers can bump a single setting (e.g.
 // timeout_seconds) without resubmitting the rest.
 type BackendPatch struct {
-	Command          *string   `json:"command,omitempty"`
-	Version          *string   `json:"version,omitempty"`
-	Models           *[]string `json:"models,omitempty"`
-	Healthy          *bool     `json:"healthy,omitempty"`
-	HealthDetail     *string   `json:"health_detail,omitempty"`
-	LocalModelURL    *string   `json:"local_model_url,omitempty"`
-	TimeoutSeconds   *int      `json:"timeout_seconds,omitempty"`
-	MaxPromptChars   *int      `json:"max_prompt_chars,omitempty"`
-	RedactionSaltEnv *string   `json:"redaction_salt_env,omitempty"`
+	Command        *string   `json:"command,omitempty"`
+	Version        *string   `json:"version,omitempty"`
+	Models         *[]string `json:"models,omitempty"`
+	Healthy        *bool     `json:"healthy,omitempty"`
+	HealthDetail   *string   `json:"health_detail,omitempty"`
+	LocalModelURL  *string   `json:"local_model_url,omitempty"`
+	TimeoutSeconds *int      `json:"timeout_seconds,omitempty"`
+	MaxPromptChars *int      `json:"max_prompt_chars,omitempty"`
 }
 
 func (p BackendPatch) anyFieldSet() bool {
 	return p.Command != nil || p.Version != nil || p.Models != nil || p.Healthy != nil ||
 		p.HealthDetail != nil || p.LocalModelURL != nil || p.TimeoutSeconds != nil ||
-		p.MaxPromptChars != nil || p.RedactionSaltEnv != nil
+		p.MaxPromptChars != nil
 }
 
 func (p BackendPatch) apply(b *fleet.Backend) {
@@ -520,37 +518,32 @@ func (p BackendPatch) apply(b *fleet.Backend) {
 	if p.MaxPromptChars != nil {
 		b.MaxPromptChars = *p.MaxPromptChars
 	}
-	if p.RedactionSaltEnv != nil {
-		b.RedactionSaltEnv = *p.RedactionSaltEnv
-	}
 }
 
 func backendToStoreJSON(name string, b fleet.Backend) storeBackendJSON {
 	return storeBackendJSON{
-		Name:             name,
-		Command:          b.Command,
-		Version:          b.Version,
-		Models:           nilSafeStrings(b.Models),
-		Healthy:          b.Healthy,
-		HealthDetail:     b.HealthDetail,
-		LocalModelURL:    b.LocalModelURL,
-		TimeoutSeconds:   b.TimeoutSeconds,
-		MaxPromptChars:   b.MaxPromptChars,
-		RedactionSaltEnv: b.RedactionSaltEnv,
+		Name:           name,
+		Command:        b.Command,
+		Version:        b.Version,
+		Models:         nilSafeStrings(b.Models),
+		Healthy:        b.Healthy,
+		HealthDetail:   b.HealthDetail,
+		LocalModelURL:  b.LocalModelURL,
+		TimeoutSeconds: b.TimeoutSeconds,
+		MaxPromptChars: b.MaxPromptChars,
 	}
 }
 
 func (j storeBackendJSON) toConfig() fleet.Backend {
 	return fleet.Backend{
-		Command:          j.Command,
-		Version:          j.Version,
-		Models:           nilSafeStrings(j.Models),
-		Healthy:          j.Healthy,
-		HealthDetail:     j.HealthDetail,
-		LocalModelURL:    j.LocalModelURL,
-		TimeoutSeconds:   j.TimeoutSeconds,
-		MaxPromptChars:   j.MaxPromptChars,
-		RedactionSaltEnv: j.RedactionSaltEnv,
+		Command:        j.Command,
+		Version:        j.Version,
+		Models:         nilSafeStrings(j.Models),
+		Healthy:        j.Healthy,
+		HealthDetail:   j.HealthDetail,
+		LocalModelURL:  j.LocalModelURL,
+		TimeoutSeconds: j.TimeoutSeconds,
+		MaxPromptChars: j.MaxPromptChars,
 	}
 }
 

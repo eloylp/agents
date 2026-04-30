@@ -95,25 +95,29 @@ func TestList_CompletedEventFannedOutToTwoAgentsShowsTwoRows(t *testing.T) {
 
 	// Record two completed trace spans for this event — simulates fanout.
 	now := time.Now()
-	fx.observe.RecordSpan(
-		"sp-A", "ev-fan", "", // span, root, parent
-		"coder", "claude", "a/r", "issues.labeled", "", // agent, backend, repo, kind, invokedBy
-		7, 0,                       // number, dispatchDepth
-		0, 0, "coder ran",          // queueWaitMs, artifactsCount, summary
-		now, now.Add(time.Second),
-		"success", "",
-	)
-	fx.observe.RecordSpan(
-		"sp-B", "ev-fan", "",
-		"reviewer", "claude", "a/r", "issues.labeled", "",
-		7, 0,
-		0, 0, "reviewer failed",
-		now, now.Add(2*time.Second),
-		"error", "",
-	)
-	// RecordSpan persists asynchronously; the in-memory map is updated
-	// synchronously inside the call so TracesByRootEventID sees both
-	// rows immediately. No sleep needed.
+	fx.observe.RecordSpan(workflow.SpanInput{
+		SpanID: "sp-A", RootEventID: "ev-fan",
+		Agent: "coder", Backend: "claude", Repo: "a/r", EventKind: "issues.labeled",
+		Number: 7, Summary: "coder ran",
+		StartedAt: now, FinishedAt: now.Add(time.Second),
+		Status: "success",
+	})
+	fx.observe.RecordSpan(workflow.SpanInput{
+		SpanID: "sp-B", RootEventID: "ev-fan",
+		Agent: "reviewer", Backend: "claude", Repo: "a/r", EventKind: "issues.labeled",
+		Number: 7, Summary: "reviewer failed",
+		StartedAt: now, FinishedAt: now.Add(2 * time.Second),
+		Status: "error",
+	})
+	// RecordSpan persists asynchronously into SQLite; poll until both
+	// rows are visible before asking the handler to JOIN.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(fx.observe.TracesByRootEventID("ev-fan")) >= 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	_ = fx.store.MarkEventCompleted(id)
 
 	req := httptest.NewRequest(http.MethodGet, "/runners", nil)

@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,18 +24,10 @@ type CommandRunner struct {
 	env            map[string]string
 	timeout        time.Duration
 	maxPromptChars int
-	redactionSalt  []byte
 	logger         zerolog.Logger
 }
 
-func NewCommandRunner(backendName string, mode string, command string, env map[string]string, timeoutSeconds int, maxPromptChars int, redactionSaltEnv string, logger zerolog.Logger) *CommandRunner {
-	salt := []byte{}
-	if redactionSaltEnv != "" {
-		value := os.Getenv(redactionSaltEnv)
-		if value != "" {
-			salt = []byte(value)
-		}
-	}
+func NewCommandRunner(backendName string, mode string, command string, env map[string]string, timeoutSeconds int, maxPromptChars int, logger zerolog.Logger) *CommandRunner {
 	return &CommandRunner{
 		backendName:    backendName,
 		mode:           mode,
@@ -45,24 +35,21 @@ func NewCommandRunner(backendName string, mode string, command string, env map[s
 		env:            env,
 		timeout:        time.Duration(timeoutSeconds) * time.Second,
 		maxPromptChars: maxPromptChars,
-		redactionSalt:  salt,
 		logger:         logger,
 	}
 }
 
 func (r *CommandRunner) Run(ctx context.Context, req Request) (Response, error) {
-	// Compute hash and length from the same logical combined prompt that
-	// buildDelivery will deliver: join with "\n\n" only when both parts are
-	// non-empty, then truncate to the configured budget so the logged values
-	// always reflect the actually-delivered content.
+	// The engine records the full composed prompt on the trace span,
+	// so per-run logging only needs enough breadcrumbs to correlate
+	// with that trace: workflow + repo + number + delivered prompt
+	// length.
 	combined := truncateString(combineSystemUser(req.System, req.User), r.maxPromptChars)
-	promptMeta := r.promptMeta(combined)
 	logger := r.logger.With().
 		Str("workflow", req.Workflow).
 		Str("repo", req.Repo).
 		Int("number", req.Number).
-		Str("prompt_hash", promptMeta.Hash).
-		Int("prompt_chars", promptMeta.Length).
+		Int("prompt_chars", len([]rune(combined))).
 		Logger()
 
 	switch r.mode {
@@ -194,6 +181,9 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	if strings.HasPrefix(r.backendName, "claude") {
 		response.Steps = parseClaudeSteps(stdoutCap.lines)
 	}
+	// Token usage is best-effort: scan the last JSON envelope for a
+	// usage subobject. Anthropic and OpenAI shapes are both accepted.
+	response.Usage = extractUsage(stdoutCap.all.Bytes())
 	if response.Summary == "" && len(response.Artifacts) == 0 && len(response.Dispatch) == 0 {
 		logger.Error().Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("%s response is empty (no summary, artifacts, or dispatch)", r.backendName)
 		return Response{}, fmt.Errorf("parse %s response: empty response (no fields populated)", r.backendName)
@@ -325,26 +315,6 @@ func combineSystemUser(system, user string) string {
 	return system + "\n\n" + user
 }
 
-type promptMeta struct {
-	Hash   string
-	Length int
-}
-
-// promptMeta returns a salted SHA-256 hash of the prompt for log attribution.
-// The salt is prepended so that the hash cannot be reversed to recover the
-// prompt even if the hash output is observed.
-func (r *CommandRunner) promptMeta(prompt string) promptMeta {
-	hasher := sha256.New()
-	if len(r.redactionSalt) > 0 {
-		_, _ = hasher.Write(r.redactionSalt)
-	}
-	_, _ = hasher.Write([]byte(prompt))
-	return promptMeta{
-		Hash:   hex.EncodeToString(hasher.Sum(nil)),
-		Length: utf8.RuneCountInString(prompt),
-	}
-}
-
 func truncateString(value string, maxChars int) string {
 	if maxChars <= 0 {
 		return value
@@ -384,6 +354,56 @@ func buildCommandEnv(req Request, backendEnv map[string]string) []string {
 		env = append(env, k+"="+v)
 	}
 	return env
+}
+
+// extractUsage scans the last top-level JSON object in data for a
+// usage subobject and returns it. Handles both shapes seen in the
+// wild:
+//
+//   - Anthropic / Claude Code stream-json `result` event:
+//     {"input_tokens","output_tokens",
+//      "cache_creation_input_tokens","cache_read_input_tokens"}
+//   - OpenAI / Codex envelope:
+//     {"prompt_tokens","completion_tokens","total_tokens"}
+//
+// Returns the zero Usage when no usable field is found. Best-effort:
+// usage is observability, not load-bearing — a missing parse just
+// means the row shows zero tokens, not a failed run.
+func extractUsage(data []byte) Usage {
+	last, err := extractJSON(data)
+	if err != nil {
+		return Usage{}
+	}
+	var envelope struct {
+		Usage *struct {
+			// Anthropic
+			InputTokens              int64 `json:"input_tokens"`
+			OutputTokens             int64 `json:"output_tokens"`
+			CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+			CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+			// OpenAI
+			PromptTokens     int64 `json:"prompt_tokens"`
+			CompletionTokens int64 `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(last, &envelope); err != nil || envelope.Usage == nil {
+		return Usage{}
+	}
+	u := envelope.Usage
+	out := Usage{
+		InputTokens:      u.InputTokens,
+		OutputTokens:     u.OutputTokens,
+		CacheReadTokens:  u.CacheReadInputTokens,
+		CacheWriteTokens: u.CacheCreationInputTokens,
+	}
+	// Fall back to OpenAI shape when Anthropic fields are absent.
+	if out.InputTokens == 0 && u.PromptTokens > 0 {
+		out.InputTokens = u.PromptTokens
+	}
+	if out.OutputTokens == 0 && u.CompletionTokens > 0 {
+		out.OutputTokens = u.CompletionTokens
+	}
+	return out
 }
 
 // extractStructuredOutput checks whether data is a CLI envelope

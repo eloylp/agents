@@ -122,14 +122,13 @@ type apiHTTPConfigJSON struct {
 
 type apiAIBackendConfigJSON struct {
 	Command          string   `json:"command"`
-	Version          string   `json:"version,omitempty"`
-	Models           []string `json:"models,omitempty"`
-	Healthy          bool     `json:"healthy"`
-	HealthDetail     string   `json:"health_detail,omitempty"`
-	LocalModelURL    string   `json:"local_model_url,omitempty"`
-	TimeoutSeconds   int      `json:"timeout_seconds"`
-	MaxPromptChars   int      `json:"max_prompt_chars"`
-	RedactionSaltEnv string   `json:"redaction_salt_env,omitempty"`
+	Version        string   `json:"version,omitempty"`
+	Models         []string `json:"models,omitempty"`
+	Healthy        bool     `json:"healthy"`
+	HealthDetail   string   `json:"health_detail,omitempty"`
+	LocalModelURL  string   `json:"local_model_url,omitempty"`
+	TimeoutSeconds int      `json:"timeout_seconds"`
+	MaxPromptChars int      `json:"max_prompt_chars"`
 }
 
 type apiProxyConfigJSON struct {
@@ -211,13 +210,12 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 		backends[name] = apiAIBackendConfigJSON{
 			Command:          b.Command,
 			Version:          b.Version,
-			Models:           b.Models,
-			Healthy:          b.Healthy,
-			HealthDetail:     b.HealthDetail,
-			LocalModelURL:    b.LocalModelURL,
-			TimeoutSeconds:   b.TimeoutSeconds,
-			MaxPromptChars:   b.MaxPromptChars,
-			RedactionSaltEnv: b.RedactionSaltEnv,
+			Models:         b.Models,
+			Healthy:        b.Healthy,
+			HealthDetail:   b.HealthDetail,
+			LocalModelURL:  b.LocalModelURL,
+			TimeoutSeconds: b.TimeoutSeconds,
+			MaxPromptChars: b.MaxPromptChars,
 		}
 	}
 

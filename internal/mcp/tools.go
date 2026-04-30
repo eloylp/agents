@@ -136,6 +136,16 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolGetTraceSteps(deps),
 		)
 		srv.AddTool(
+			mcpgo.NewTool("get_trace_prompt",
+				mcpgo.WithDescription("Return the composed prompt the daemon sent to the AI CLI for this span — the exact System+User text the agent saw. Stored gzipped on the trace row; this tool decompresses on the fly. Returns an error when no prompt was recorded (pre-009-migration spans). Same path as GET /traces/{span_id}/prompt."),
+				mcpgo.WithString("span_id",
+					mcpgo.Required(),
+					mcpgo.Description("Span ID to fetch the prompt for."),
+				),
+			),
+			toolGetTracePrompt(deps),
+		)
+		srv.AddTool(
 			mcpgo.NewTool("get_graph",
 				mcpgo.WithDescription("Return the agent interaction graph: every configured agent as a node plus observed inter-agent dispatch edges with counts and individual dispatch records."),
 			),
@@ -255,9 +265,6 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				mcpgo.WithNumber("max_prompt_chars",
 					mcpgo.Description("Maximum composed prompt length in characters. Defaults are applied when zero."),
 				),
-				mcpgo.WithString("redaction_salt_env",
-					mcpgo.Description("Name of the environment variable carrying the prompt-log redaction salt for this backend."),
-				),
 			),
 			toolCreateBackend(deps),
 		)
@@ -292,9 +299,6 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				),
 				mcpgo.WithNumber("max_prompt_chars",
 					mcpgo.Description("Maximum composed prompt length. Must be > 0 when supplied. Omit to leave unchanged."),
-				),
-				mcpgo.WithString("redaction_salt_env",
-					mcpgo.Description("Name of the environment variable carrying the prompt-log redaction salt. Omit to leave unchanged."),
 				),
 			),
 			toolUpdateBackend(deps),
@@ -574,12 +578,11 @@ func backendJSON(name string, b fleet.Backend) map[string]any {
 		"command":            b.Command,
 		"version":            b.Version,
 		"models":             nilSafe(b.Models),
-		"healthy":            b.Healthy,
-		"health_detail":      b.HealthDetail,
-		"local_model_url":    b.LocalModelURL,
-		"timeout_seconds":    b.TimeoutSeconds,
-		"max_prompt_chars":   b.MaxPromptChars,
-		"redaction_salt_env": b.RedactionSaltEnv,
+		"healthy":          b.Healthy,
+		"health_detail":    b.HealthDetail,
+		"local_model_url":  b.LocalModelURL,
+		"timeout_seconds":  b.TimeoutSeconds,
+		"max_prompt_chars": b.MaxPromptChars,
 	}
 }
 

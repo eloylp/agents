@@ -27,13 +27,12 @@ type storeBackendJSON struct {
 	Name             string   `json:"name"`
 	Command          string   `json:"command"`
 	Version          string   `json:"version,omitempty"`
-	Models           []string `json:"models,omitempty"`
-	Healthy          bool     `json:"healthy"`
-	HealthDetail     string   `json:"health_detail,omitempty"`
-	LocalModelURL    string   `json:"local_model_url,omitempty"`
-	TimeoutSeconds   int      `json:"timeout_seconds"`
-	MaxPromptChars   int      `json:"max_prompt_chars"`
-	RedactionSaltEnv string   `json:"redaction_salt_env"`
+	Models         []string `json:"models,omitempty"`
+	Healthy        bool     `json:"healthy"`
+	HealthDetail   string   `json:"health_detail,omitempty"`
+	LocalModelURL  string   `json:"local_model_url,omitempty"`
+	TimeoutSeconds int      `json:"timeout_seconds"`
+	MaxPromptChars int      `json:"max_prompt_chars"`
 }
 
 // view*JSON types mirror the fleet snapshot wire shape produced by GET

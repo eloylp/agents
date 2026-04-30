@@ -62,9 +62,8 @@ Validate each repo via the GitHub MCP server (e.g. its `get_repository` / `list_
 
 Generate:
 - `GITHUB_WEBHOOK_SECRET` via `openssl rand -hex 32`
-- `LOG_SALT` via `openssl rand -hex 16`
 
-Write `.env` with those values.
+Write `.env` with that value.
 
 Generate a `config.yaml` compatible with this repo's current schema:
 - `daemon`, `skills`, `agents`, `repos`

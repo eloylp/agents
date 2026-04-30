@@ -16,13 +16,12 @@ package fleet
 // AIBackends map is a custom backend, typically routed through a local LLM
 // via LocalModelURL.
 type Backend struct {
-	Command          string   `yaml:"command"`
-	Version          string   `yaml:"version"`
-	Models           []string `yaml:"models"`
-	Healthy          bool     `yaml:"healthy"`
-	HealthDetail     string   `yaml:"health_detail"`
-	LocalModelURL    string   `yaml:"local_model_url"`
-	TimeoutSeconds   int      `yaml:"timeout_seconds"`
-	MaxPromptChars   int      `yaml:"max_prompt_chars"`
-	RedactionSaltEnv string   `yaml:"redaction_salt_env"`
+	Command        string   `yaml:"command"`
+	Version        string   `yaml:"version"`
+	Models         []string `yaml:"models"`
+	Healthy        bool     `yaml:"healthy"`
+	HealthDetail   string   `yaml:"health_detail"`
+	LocalModelURL  string   `yaml:"local_model_url"`
+	TimeoutSeconds int      `yaml:"timeout_seconds"`
+	MaxPromptChars int      `yaml:"max_prompt_chars"`
 }

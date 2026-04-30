@@ -260,11 +260,11 @@ func importBackends(tx *sql.Tx, backends map[string]fleet.Backend) error {
 		healthy := boolToInt(b.Healthy)
 		if _, err := tx.Exec(`
 			INSERT OR REPLACE INTO backends
-			  (name,command,version,models,healthy,health_detail,local_model_url,timeout_seconds,max_prompt_chars,redaction_salt_env)
-			VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			  (name,command,version,models,healthy,health_detail,local_model_url,timeout_seconds,max_prompt_chars)
+			VALUES (?,?,?,?,?,?,?,?,?)`,
 			name, b.Command,
 			b.Version, string(models), healthy, b.HealthDetail, b.LocalModelURL,
-			b.TimeoutSeconds, b.MaxPromptChars, b.RedactionSaltEnv,
+			b.TimeoutSeconds, b.MaxPromptChars,
 		); err != nil {
 			return fmt.Errorf("store import: upsert backend %s: %w", name, err)
 		}
@@ -417,7 +417,10 @@ func loadDaemon(db *sql.DB, cfg *config.Config) error {
 }
 
 func loadBackends(db querier, cfg *config.Config) error {
-	rows, err := db.Query("SELECT name,command,version,models,healthy,health_detail,local_model_url,timeout_seconds,max_prompt_chars,redaction_salt_env FROM backends")
+	// redaction_salt_env was removed when prompts started being stored
+	// directly on traces. The column is left in the table (NULL on every
+	// new row) but no longer mapped to a struct field.
+	rows, err := db.Query("SELECT name,command,version,models,healthy,health_detail,local_model_url,timeout_seconds,max_prompt_chars FROM backends")
 	if err != nil {
 		return fmt.Errorf("store load: query backends: %w", err)
 	}
@@ -425,9 +428,9 @@ func loadBackends(db querier, cfg *config.Config) error {
 
 	backends := make(map[string]fleet.Backend)
 	for rows.Next() {
-		var name, command, version, modelsJSON, healthDetail, localModelURL, saltEnv string
+		var name, command, version, modelsJSON, healthDetail, localModelURL string
 		var timeout, maxChars, healthy int
-		if err := rows.Scan(&name, &command, &version, &modelsJSON, &healthy, &healthDetail, &localModelURL, &timeout, &maxChars, &saltEnv); err != nil {
+		if err := rows.Scan(&name, &command, &version, &modelsJSON, &healthy, &healthDetail, &localModelURL, &timeout, &maxChars); err != nil {
 			return fmt.Errorf("store load: scan backend: %w", err)
 		}
 		var models []string
@@ -435,15 +438,14 @@ func loadBackends(db querier, cfg *config.Config) error {
 			return fmt.Errorf("store load: parse backend %s models: %w", name, err)
 		}
 		backends[name] = fleet.Backend{
-			Command:          command,
-			Version:          version,
-			Models:           models,
-			Healthy:          intToBool(healthy),
-			HealthDetail:     healthDetail,
-			LocalModelURL:    localModelURL,
-			TimeoutSeconds:   timeout,
-			MaxPromptChars:   maxChars,
-			RedactionSaltEnv: saltEnv,
+			Command:        command,
+			Version:        version,
+			Models:         models,
+			Healthy:        intToBool(healthy),
+			HealthDetail:   healthDetail,
+			LocalModelURL:  localModelURL,
+			TimeoutSeconds: timeout,
+			MaxPromptChars: maxChars,
 		}
 	}
 	if err := rows.Err(); err != nil {

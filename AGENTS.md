@@ -79,7 +79,7 @@ These constraints are load-bearing. Read them before changing the listed areas.
 
 - **The daemon never writes to GitHub directly.** All writes go through the AI backend's MCP tools. If you introduce a new feature that seems to need a direct GitHub API call, raise it in an issue first — there's almost always a way to keep the daemon read-only.
 - **Agents must not mention external GitHub users.** Do NOT request reviews from, assign to, or @mention any GitHub user in PRs, comments, or issue descriptions. All review routing is handled by the daemon's dispatch system. Unsolicited pings to external contributors from an automated agent are a trust and reputation risk — the GitHub account could be flagged. This rule applies to every agent prompt.
-- **Prompts are never logged in plaintext.** Only their salted hash and length are recorded. If you add new log lines near prompt handling, preserve this property.
+- **Prompts are persisted on the trace span, not in logs.** Every run's composed prompt is gzipped onto the `traces` row (visible at `/runners` and `/traces` once a span is recorded). Logs carry only the prompt's character count for correlation. The persistence is gated by your reverse proxy's auth — `/runners` and `/traces` must stay behind it.
 - **Structured output is enforced at the CLI level.** Claude uses hardcoded `--output-format stream-json --json-schema <embedded-schema>` args; codex uses hardcoded `--output-schema <temp-file>`. The daemon embeds `internal/ai/response-schema.json` and appends the correct flags automatically. When changing the response contract, update `internal/ai/response-schema.json` alongside `internal/ai/types.go`.
 - **The runner contract is stdin-in, single-JSON-object-out.**
   - `internal/ai/cmdrunner.go` sends the composed prompt on stdin and parses the last top-level JSON object from stdout.
@@ -121,7 +121,7 @@ When making common classes of changes, update all of these at once:
 
 ## Operational notes
 
-- **`.env` is auto-loaded on startup** (`godotenv.Load()`). Required runtime secret: `GITHUB_WEBHOOK_SECRET`. Optional: `LOG_SALT`.
+- **`.env` is auto-loaded on startup** (`godotenv.Load()`). Required runtime secret: `GITHUB_WEBHOOK_SECRET`.
 - **Config is loaded from SQLite at startup.** Use `--import config.yaml` to seed the database, then manage changes via the CRUD API or the web dashboard. Prompt and skill content is stored in the database; changes via the API or UI take effect on the next agent run without a restart.
 - **Backend discovery lifecycle.** Startup auto-discovery runs only when the backends table is empty. Manual refresh is explicit via `POST /backends/discover`; `GET /backends/status` is diagnostics-only.
 - **Orphan visibility.** `GET /agents/orphans/status` and `/status` (`orphaned_agents.count`) expose model/backend drift requiring user remediation.

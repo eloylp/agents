@@ -22,10 +22,31 @@ import (
 // labeledKinds are the event kinds that trigger label-based bindings.
 var labeledKinds = []string{"issues.labeled", "pull_request.labeled"}
 
+// SpanInput is the call shape for TraceRecorder.RecordSpan. Defined
+// here as well as in the observe package so the engine doesn't import
+// observe just to name the struct; the two are kept structurally
+// identical and the observe.Store.RecordSpan adapter accepts this
+// shape directly via a thin wrapper at construction time. Keeping the
+// type local mirrors how the engine treats every other recorder.
+type SpanInput struct {
+	SpanID, RootEventID, ParentSpanID string
+	Agent, Backend, Repo              string
+	EventKind, InvokedBy              string
+	Number, DispatchDepth             int
+	QueueWaitMs                       int64
+	ArtifactsCount                    int
+	Summary                           string
+	StartedAt, FinishedAt             time.Time
+	Status, ErrorMsg                  string
+	Prompt                            string
+	InputTokens, OutputTokens         int64
+	CacheReadTokens, CacheWriteTokens int64
+}
+
 // TraceRecorder is an optional observer that the Engine calls when an agent
 // run completes. Implementations must be safe for concurrent use.
 type TraceRecorder interface {
-	RecordSpan(spanID, rootEventID, parentSpanID, agent, backend, repo, eventKind, invokedBy string, number, dispatchDepth int, queueWaitMs int64, artifactsCount int, summary string, startedAt, finishedAt time.Time, status, errMsg string)
+	RecordSpan(in SpanInput)
 }
 
 // RunTracker is an optional observer that the Engine calls when an agent run
@@ -181,7 +202,7 @@ func (e *Engine) defaultRunnerFor(name string, b fleet.Backend) ai.Runner {
 	}
 	return ai.NewCommandRunner(
 		name, "command", b.Command, env,
-		b.TimeoutSeconds, b.MaxPromptChars, b.RedactionSaltEnv,
+		b.TimeoutSeconds, b.MaxPromptChars,
 		e.logger,
 	)
 }
@@ -724,22 +745,48 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		queueWaitMs = spanStart.Sub(ev.EnqueuedAt).Milliseconds()
 	}
 
-	// Record the trace span regardless of outcome.
+	// Record the trace span regardless of outcome. The composed prompt
+	// (system + user) is captured so operators can inspect "what
+	// exactly did the agent see" from the Traces / Runners UI; the
+	// observe store gzips it before persistence. Token usage comes
+	// from the runner's CLI parser.
 	if e.traceRec != nil {
 		status, errMsg := "success", ""
 		if runErr != nil {
 			status = "error"
 			errMsg = runErr.Error()
 		}
-		e.traceRec.RecordSpan(
-			spanID, rootEventID, parentSpanID,
-			agent.Name, backend,
-			ev.Repo.FullName, ev.Kind, invokedBy,
-			ev.Number, dispatchDepth,
-			queueWaitMs, len(resp.Artifacts), resp.Summary,
-			spanStart, spanEnd,
-			status, errMsg,
-		)
+		composedPrompt := rendered.System
+		if rendered.User != "" {
+			if composedPrompt != "" {
+				composedPrompt += "\n\n"
+			}
+			composedPrompt += rendered.User
+		}
+		e.traceRec.RecordSpan(SpanInput{
+			SpanID:           spanID,
+			RootEventID:      rootEventID,
+			ParentSpanID:     parentSpanID,
+			Agent:            agent.Name,
+			Backend:          backend,
+			Repo:             ev.Repo.FullName,
+			EventKind:        ev.Kind,
+			InvokedBy:        invokedBy,
+			Number:           ev.Number,
+			DispatchDepth:    dispatchDepth,
+			QueueWaitMs:      queueWaitMs,
+			ArtifactsCount:   len(resp.Artifacts),
+			Summary:          resp.Summary,
+			StartedAt:        spanStart,
+			FinishedAt:       spanEnd,
+			Status:           status,
+			ErrorMsg:         errMsg,
+			Prompt:           composedPrompt,
+			InputTokens:      resp.Usage.InputTokens,
+			OutputTokens:     resp.Usage.OutputTokens,
+			CacheReadTokens:  resp.Usage.CacheReadTokens,
+			CacheWriteTokens: resp.Usage.CacheWriteTokens,
+		})
 	}
 
 	// Record transcript steps when available. Translate from the runner-internal

@@ -21,6 +21,25 @@ interface RunnerRow {
   span_id?: string
   run_duration_ms?: number
   summary?: string
+  prompt_size?: number
+  input_tokens?: number
+  output_tokens?: number
+  cache_read_tokens?: number
+  cache_write_tokens?: number
+}
+
+function fmtTokens(n?: number) {
+  if (!n) return '0'
+  if (n < 1000) return String(n)
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}K`
+  return `${(n / 1_000_000).toFixed(2)}M`
+}
+
+function fmtBytes(n?: number) {
+  if (!n) return '—'
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(2)} MB`
 }
 
 interface ListResponse {
@@ -344,6 +363,18 @@ function RunnersInner() {
                         <span style={{ color: 'var(--text-faint)' }}>Summary</span>
                         <span style={{ color: 'var(--text)' }}>{r.summary}</span>
                       </>)}
+                      {(r.input_tokens || r.output_tokens || r.cache_read_tokens || r.cache_write_tokens) ? (<>
+                        <span style={{ color: 'var(--text-faint)' }}>Tokens</span>
+                        <span style={{ color: 'var(--text)' }}>
+                          in <strong>{fmtTokens(r.input_tokens)}</strong> · out <strong>{fmtTokens(r.output_tokens)}</strong>
+                          {(r.cache_read_tokens ?? 0) > 0 && <> · cache hit <strong style={{ color: 'var(--success)' }}>{fmtTokens(r.cache_read_tokens)}</strong></>}
+                          {(r.cache_write_tokens ?? 0) > 0 && <> · cache write <strong>{fmtTokens(r.cache_write_tokens)}</strong></>}
+                        </span>
+                      </>) : null}
+                      {r.prompt_size ? (<>
+                        <span style={{ color: 'var(--text-faint)' }}>Prompt</span>
+                        <span style={{ color: 'var(--text)' }}>{fmtBytes(r.prompt_size)}{r.event_id ? <> · <Link href={`/traces/?id=${encodeURIComponent(r.event_id)}`} style={{ color: 'var(--accent)', textDecoration: 'none' }}>view in trace detail →</Link></> : null}</span>
+                      </>) : null}
                     </div>
                     {r.event_id && r.completed_at && (
                       <div style={{ marginBottom: '0.5rem' }}>

@@ -49,7 +49,6 @@ daemon:
         - "--dangerously-skip-permissions"
       timeout_seconds: 1500
       max_prompt_chars: 12000
-      redaction_salt_env: LOG_SALT
 
     codex:
       command: codex
@@ -59,7 +58,6 @@ daemon:
         - "--dangerously-bypass-approvals-and-sandbox"
       timeout_seconds: 600
       max_prompt_chars: 12000
-      redaction_salt_env: LOG_SALT
 
   # Optional: enable the built-in Anthropic↔OpenAI translation proxy so the
   # claude CLI can talk to Ollama, llama.cpp, vLLM, or any OpenAI-compatible

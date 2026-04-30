@@ -68,6 +68,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.HandleFunc("/traces/stream", h.HandleTracesStream)
 	r.Handle("/traces/{root_event_id}", withTimeout(http.HandlerFunc(h.HandleTrace))).Methods(http.MethodGet)
 	r.Handle("/traces/{span_id}/steps", withTimeout(http.HandlerFunc(h.HandleTraceSteps))).Methods(http.MethodGet)
+	r.Handle("/traces/{span_id}/prompt", withTimeout(http.HandlerFunc(h.HandleTracePrompt))).Methods(http.MethodGet)
 	r.Handle("/graph", withTimeout(http.HandlerFunc(h.HandleGraph))).Methods(http.MethodGet)
 	r.Handle("/dispatches", withTimeout(http.HandlerFunc(h.HandleDispatches))).Methods(http.MethodGet)
 	r.Handle("/memory/{agent}/{repo}", withTimeout(http.HandlerFunc(h.HandleMemory))).Methods(http.MethodGet)
@@ -206,6 +207,26 @@ func (h *Handler) HandleTraceSteps(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(steps)
+}
+
+// HandleTracePrompt serves GET /traces/{span_id}/prompt — the composed
+// prompt that was sent to the AI CLI for this run. Stored gzipped in
+// the traces row; the store decompresses on the fly. Returns 404 when
+// no prompt was recorded (pre-009-migration spans). Wire shape is plain
+// text/plain; the UI renders it in a code block.
+func (h *Handler) HandleTracePrompt(w http.ResponseWriter, r *http.Request) {
+	spanID := mux.Vars(r)["span_id"]
+	prompt, err := h.events.PromptForSpan(spanID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if prompt == "" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(prompt))
 }
 
 // ── /graph ─────────────────────────────────────────────────────────────────

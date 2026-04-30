@@ -6,9 +6,13 @@
 package observe
 
 import (
+	"bytes"
+	"compress/gzip"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"sync"
 	"time"
@@ -52,6 +56,20 @@ type Span struct {
 	DurationMs     int64     `json:"duration_ms"`
 	Status         string    `json:"status"` // "success" | "error"
 	ErrorMsg       string    `json:"error,omitempty"`
+
+	// PromptSize is the uncompressed byte count of the composed prompt.
+	// Surfaced on listings so the UI can show "32 KB prompt"; the body
+	// is gzipped on disk and fetched lazily via /traces/{span_id}/prompt.
+	PromptSize int64 `json:"prompt_size,omitempty"`
+
+	// Token usage as reported by the AI CLI. Anthropic / Claude Code
+	// emits four fields; OpenAI / Codex emits two — cache fields are
+	// zero in that case. Pre-009-migration runs have all four nil
+	// (preserved as omitempty).
+	InputTokens      int64 `json:"input_tokens,omitempty"`
+	OutputTokens     int64 `json:"output_tokens,omitempty"`
+	CacheReadTokens  int64 `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
 }
 
 // DispatchRecord is one observed inter-agent dispatch.
@@ -240,6 +258,15 @@ func (s *Store) ListEvents(since time.Time) []TimestampedEvent {
 	return out
 }
 
+// spanColumns is the column list used by every read query — kept in
+// one place so adding a new column means editing one line. The
+// prompt_gz blob is intentionally excluded; bodies are fetched on
+// demand via PromptForSpan to keep listings small.
+const spanColumns = `span_id, root_event_id, parent_span_id, agent, backend, repo, number,
+	event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary,
+	started_at, finished_at, duration_ms, status, error,
+	prompt_size, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens`
+
 // ListTraces returns stored spans ordered by started_at descending (newest
 // first). Results are capped at 200 rows.
 func (s *Store) ListTraces() []Span {
@@ -247,7 +274,7 @@ func (s *Store) ListTraces() []Span {
 		return nil
 	}
 	rows, err := s.db.Query(
-		`SELECT span_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error FROM traces ORDER BY started_at DESC LIMIT 200`,
+		`SELECT ` + spanColumns + ` FROM traces ORDER BY started_at DESC LIMIT 200`,
 	)
 	if err != nil {
 		log.Printf("observe: list traces: %v", err)
@@ -263,7 +290,7 @@ func (s *Store) TracesByRootEventID(id string) []Span {
 		return nil
 	}
 	rows, err := s.db.Query(
-		`SELECT span_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error FROM traces WHERE root_event_id = ?`,
+		`SELECT `+spanColumns+` FROM traces WHERE root_event_id = ?`,
 		id,
 	)
 	if err != nil {
@@ -274,11 +301,43 @@ func (s *Store) TracesByRootEventID(id string) []Span {
 	return scanSpans(rows)
 }
 
+// PromptForSpan returns the decompressed composed prompt for a span,
+// or ("", nil) when no prompt was stored (pre-migration rows or runs
+// that never recorded one). The blob is gzipped on disk; this method
+// is the single read site so the compression detail stays here.
+func (s *Store) PromptForSpan(spanID string) (string, error) {
+	if s.db == nil {
+		return "", nil
+	}
+	var blob []byte
+	err := s.db.QueryRow(`SELECT prompt_gz FROM traces WHERE span_id = ?`, spanID).Scan(&blob)
+	if errors.Is(err, sql.ErrNoRows) || len(blob) == 0 {
+		return "", err
+	}
+	if err != nil {
+		return "", fmt.Errorf("observe: fetch prompt %s: %w", spanID, err)
+	}
+	gr, err := gzip.NewReader(bytes.NewReader(blob))
+	if err != nil {
+		return "", fmt.Errorf("observe: gunzip prompt %s: %w", spanID, err)
+	}
+	defer gr.Close()
+	out, err := io.ReadAll(gr)
+	if err != nil {
+		return "", fmt.Errorf("observe: read prompt %s: %w", spanID, err)
+	}
+	return string(out), nil
+}
+
 // scanSpans is a shared helper that scans Span rows from a query result.
+// The token columns are sql.NullInt64 because pre-migration rows have
+// NULL — we materialise NULL to zero, the JSON layer drops zero via
+// omitempty so the UI can detect "not recorded".
 func scanSpans(rows *sql.Rows) []Span {
 	var out []Span
 	for rows.Next() {
 		var sp Span
+		var promptSize, inTok, outTok, cacheR, cacheW sql.NullInt64
 		if err := rows.Scan(
 			&sp.SpanID, &sp.RootEventID, &sp.ParentSpanID,
 			&sp.Agent, &sp.Backend, &sp.Repo, &sp.Number,
@@ -286,10 +345,16 @@ func scanSpans(rows *sql.Rows) []Span {
 			&sp.QueueWaitMs, &sp.ArtifactsCount, &sp.Summary,
 			&sp.StartedAt, &sp.FinishedAt, &sp.DurationMs,
 			&sp.Status, &sp.ErrorMsg,
+			&promptSize, &inTok, &outTok, &cacheR, &cacheW,
 		); err != nil {
 			log.Printf("observe: scan trace row: %v", err)
 			continue
 		}
+		sp.PromptSize = promptSize.Int64
+		sp.InputTokens = inTok.Int64
+		sp.OutputTokens = outTok.Int64
+		sp.CacheReadTokens = cacheR.Int64
+		sp.CacheWriteTokens = cacheW.Int64
 		out = append(out, sp)
 	}
 	return out
@@ -377,45 +442,58 @@ func (s *Store) RecordEvent(at time.Time, ev workflow.Event) {
 }
 
 // RecordSpan implements workflow.TraceRecorder. It persists the completed span
-// to SQLite and fans it out to SSE subscribers.
-func (s *Store) RecordSpan(
-	spanID, rootEventID, parentSpanID,
-	agent, backend, repo, eventKind, invokedBy string,
-	number, dispatchDepth int,
-	queueWaitMs int64, artifactsCount int, summary string,
-	startedAt, finishedAt time.Time,
-	status, errMsg string,
-) {
+// (including the gzipped prompt and token usage) to SQLite and fans the
+// summary out to SSE subscribers.
+func (s *Store) RecordSpan(in workflow.SpanInput) {
 	sp := Span{
-		SpanID:         spanID,
-		RootEventID:    rootEventID,
-		ParentSpanID:   parentSpanID,
-		Agent:          agent,
-		Backend:        backend,
-		Repo:           repo,
-		EventKind:      eventKind,
-		InvokedBy:      invokedBy,
-		Number:         number,
-		DispatchDepth:  dispatchDepth,
-		QueueWaitMs:    queueWaitMs,
-		ArtifactsCount: artifactsCount,
-		Summary:        summary,
-		StartedAt:      startedAt,
-		FinishedAt:     finishedAt,
-		DurationMs:     finishedAt.Sub(startedAt).Milliseconds(),
-		Status:         status,
-		ErrorMsg:       errMsg,
+		SpanID:           in.SpanID,
+		RootEventID:      in.RootEventID,
+		ParentSpanID:     in.ParentSpanID,
+		Agent:            in.Agent,
+		Backend:          in.Backend,
+		Repo:             in.Repo,
+		EventKind:        in.EventKind,
+		InvokedBy:        in.InvokedBy,
+		Number:           in.Number,
+		DispatchDepth:    in.DispatchDepth,
+		QueueWaitMs:      in.QueueWaitMs,
+		ArtifactsCount:   in.ArtifactsCount,
+		Summary:          in.Summary,
+		StartedAt:        in.StartedAt,
+		FinishedAt:       in.FinishedAt,
+		DurationMs:       in.FinishedAt.Sub(in.StartedAt).Milliseconds(),
+		Status:           in.Status,
+		ErrorMsg:         in.ErrorMsg,
+		PromptSize:       int64(len(in.Prompt)),
+		InputTokens:      in.InputTokens,
+		OutputTokens:     in.OutputTokens,
+		CacheReadTokens:  in.CacheReadTokens,
+		CacheWriteTokens: in.CacheWriteTokens,
+	}
+	var promptGz []byte
+	if in.Prompt != "" {
+		var buf bytes.Buffer
+		gw := gzip.NewWriter(&buf)
+		if _, err := gw.Write([]byte(in.Prompt)); err != nil {
+			log.Printf("observe: gzip prompt %s: %v", sp.SpanID, err)
+		} else if err := gw.Close(); err != nil {
+			log.Printf("observe: gzip flush prompt %s: %v", sp.SpanID, err)
+		} else {
+			promptGz = buf.Bytes()
+		}
 	}
 	if s.db != nil {
 		go func() {
 			_, err := s.db.Exec(
-				`INSERT OR IGNORE INTO traces (span_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				`INSERT OR IGNORE INTO traces (span_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error, prompt_gz, prompt_size, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 				sp.SpanID, sp.RootEventID, sp.ParentSpanID,
 				sp.Agent, sp.Backend, sp.Repo, sp.Number,
 				sp.EventKind, sp.InvokedBy, sp.DispatchDepth,
 				sp.QueueWaitMs, sp.ArtifactsCount, sp.Summary,
 				sp.StartedAt, sp.FinishedAt, sp.DurationMs,
 				sp.Status, sp.ErrorMsg,
+				promptGz, sp.PromptSize,
+				sp.InputTokens, sp.OutputTokens, sp.CacheReadTokens, sp.CacheWriteTokens,
 			)
 			if err != nil {
 				log.Printf("observe: persist trace %s: %v", sp.SpanID, err)

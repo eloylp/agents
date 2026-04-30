@@ -91,6 +91,29 @@ func toolGetTraceSteps(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
+// toolGetTracePrompt returns the composed prompt the daemon sent to the
+// AI CLI for one span — the operator's "what did the agent see" debug
+// artefact. Stored gzipped on the trace row; the store decompresses on
+// the fly. Mirrors GET /traces/{span_id}/prompt; returns a tool error
+// when no prompt is recorded (pre-009-migration spans, or runs the
+// engine never reached).
+func toolGetTracePrompt(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id, ok := trimmedString(req, "span_id")
+		if !ok {
+			return mcpgo.NewToolResultError("span_id is required"), nil
+		}
+		prompt, err := deps.Observe.PromptForSpan(id)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("get trace prompt", err), nil
+		}
+		if prompt == "" {
+			return mcpgo.NewToolResultErrorf("no prompt recorded for span %q", id), nil
+		}
+		return mcpgo.NewToolResultText(prompt), nil
+	}
+}
+
 // toolGetGraph returns the dispatch interaction graph. Nodes are seeded from
 // the configured fleet so agents with no dispatch history still show up; any
 // edge endpoints not in the current config (e.g. agents removed after they

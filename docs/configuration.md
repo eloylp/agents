@@ -46,14 +46,12 @@ daemon:
       args: ["-p", "--dangerously-skip-permissions"]
       timeout_seconds: 1500
       max_prompt_chars: 12000
-      redaction_salt_env: LOG_SALT
 
     codex:
       command: codex
       args: ["exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"]
       timeout_seconds: 600
       max_prompt_chars: 12000
-      redaction_salt_env: LOG_SALT
 ```
 
 ## `skills`
@@ -188,7 +186,6 @@ Create a `.env` file in the project root (loaded automatically):
 
 ```bash
 GITHUB_WEBHOOK_SECRET=your-webhook-secret
-LOG_SALT=optional-prompt-hash-salt
 ```
 
 ## Importing and exporting

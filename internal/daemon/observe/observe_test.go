@@ -435,8 +435,8 @@ func TestHandleTracesReturnsStoredSpans(t *testing.T) {
 	h := newHandlerOnStore(t, obs)
 
 	now := time.Now().UTC()
-	obs.RecordSpan("s1", "root-A", "", "coder", "claude", "owner/repo", "issues.labeled", "", 1, 0, 0, 0, "", now, now.Add(5*time.Second), "success", "")
-	obs.RecordSpan("s2", "root-A", "", "reviewer", "claude", "owner/repo", "agent.dispatch", "coder", 1, 1, 0, 0, "", now.Add(time.Second), now.Add(6*time.Second), "success", "")
+	obs.RecordSpan(workflow.SpanInput{SpanID: "s1", RootEventID: "root-A", Agent: "coder", Backend: "claude", Repo: "owner/repo", EventKind: "issues.labeled", Number: 1, StartedAt: now, FinishedAt: now.Add(5 * time.Second), Status: "success"})
+	obs.RecordSpan(workflow.SpanInput{SpanID: "s2", RootEventID: "root-A", Agent: "reviewer", Backend: "claude", Repo: "owner/repo", EventKind: "agent.dispatch", InvokedBy: "coder", Number: 1, DispatchDepth: 1, StartedAt: now.Add(time.Second), FinishedAt: now.Add(6 * time.Second), Status: "success"})
 	time.Sleep(50 * time.Millisecond)
 
 	req := httptest.NewRequest(http.MethodGet, "/traces", nil)
@@ -461,8 +461,8 @@ func TestHandleTraceByRootEventID(t *testing.T) {
 	h := newHandlerOnStore(t, obs)
 
 	now := time.Now().UTC()
-	obs.RecordSpan("s1", "root-A", "", "coder", "claude", "r", "issues.labeled", "", 1, 0, 0, 0, "", now, now.Add(time.Second), "success", "")
-	obs.RecordSpan("s2", "root-B", "", "reviewer", "claude", "r", "push", "", 0, 0, 0, 0, "", now, now.Add(time.Second), "success", "")
+	obs.RecordSpan(workflow.SpanInput{SpanID: "s1", RootEventID: "root-A", Agent: "coder", Backend: "claude", Repo: "r", EventKind: "issues.labeled", Number: 1, StartedAt: now, FinishedAt: now.Add(time.Second), Status: "success"})
+	obs.RecordSpan(workflow.SpanInput{SpanID: "s2", RootEventID: "root-B", Agent: "reviewer", Backend: "claude", Repo: "r", EventKind: "push", StartedAt: now, FinishedAt: now.Add(time.Second), Status: "success"})
 	time.Sleep(50 * time.Millisecond)
 
 	router := newRouter(h)

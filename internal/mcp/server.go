@@ -12,7 +12,7 @@
 //   - get_agent, get_skill, get_backend, get_repo         — per-item reads
 //   - get_status                                          — health snapshot
 //   - trigger_agent                                       — on-demand run
-//   - list_events, list_traces, get_trace, get_trace_steps — agent activity
+//   - list_events, list_traces, get_trace, get_trace_steps, get_trace_prompt — agent activity
 //   - get_graph, get_dispatches, get_memory               — dispatch + memory
 //   - get_config, export_config, import_config            — config snapshots / write
 //   - create_agent, update_agent, delete_agent            — agent CRUD writes
@@ -116,7 +116,8 @@ Use list_* tools to enumerate the fleet and get_* tools to drill into a
 single agent, skill, backend, repo, trace, or memory record.
 get_status returns daemon health. trigger_agent fires an on-demand run.
 Observability tools (list_events, list_traces, get_trace,
-get_trace_steps, get_graph, get_dispatches, get_memory) expose the same
+get_trace_steps, get_trace_prompt, get_graph, get_dispatches,
+get_memory) expose the same
 data the web dashboard shows. Config tools (get_config, export_config,
 import_config) return the redacted effective config, export the
 CRUD-mutable YAML fragment, and write a YAML payload back into the

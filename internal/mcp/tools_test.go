@@ -776,6 +776,68 @@ func TestToolGetTraceSteps(t *testing.T) {
 	}
 }
 
+func TestToolGetTracePromptReturnsBody(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	now := time.Now().UTC()
+	deps.Observe.RecordSpan(workflow.SpanInput{
+		SpanID: "sp-prompt", RootEventID: "ev-prompt",
+		Agent: "coder", Backend: "claude", Repo: "owner/one", EventKind: "issues.labeled",
+		StartedAt: now, FinishedAt: now.Add(time.Second),
+		Status: "success",
+		Prompt: "system: do the thing\n\nuser: please",
+	})
+	// RecordSpan persists asynchronously; poll briefly until visible.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got, err := deps.Observe.PromptForSpan("sp-prompt"); err == nil && got != "" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"span_id": "sp-prompt"}
+	res, err := toolGetTracePrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("tool error: %s", textOf(t, res))
+	}
+	body := textOf(t, res)
+	if body != "system: do the thing\n\nuser: please" {
+		t.Fatalf("body = %q, want round-trip of recorded prompt", body)
+	}
+}
+
+func TestToolGetTracePromptMissingErrors(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"span_id": "nope"}
+	res, err := toolGetTracePrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected IsError=true for unknown span")
+	}
+}
+
+func TestToolGetTracePromptRequiresSpanID(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	req := mcpgo.CallToolRequest{}
+	res, err := toolGetTracePrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected IsError=true when span_id is missing")
+	}
+}
+
 func TestToolGetGraphSeedsNodesFromFleetAndEdges(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)

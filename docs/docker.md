@@ -27,7 +27,7 @@ docker compose down
 The compose file shipped in the repo expects:
 
 - `config.yaml` in the project root (mounted read-only at `/etc/agents/config.yaml` for `--import` seeding).
-- `.env` in the project root, holding at least `GITHUB_WEBHOOK_SECRET` (and optionally `LOG_SALT` and `GITHUB_PAT_TOKEN`).
+- `.env` in the project root, holding at least `GITHUB_WEBHOOK_SECRET` (and optionally `GITHUB_PAT_TOKEN`).
 
 After the DB is seeded, `config.yaml` is no longer read at boot. The fleet lives in the SQLite volume and is managed through the `/ui/` dashboard or the CRUD API.
 
@@ -66,7 +66,6 @@ volumes:
 |---|---|---|
 | `HOME` | compose `environment:` | Must be `/home/agents` so Claude Code / Codex find their config dirs at the mounted paths. |
 | `GITHUB_WEBHOOK_SECRET` | `.env` via `env_file` | HMAC shared secret used to verify `POST /webhooks/github`. Matches `daemon.http.webhook_secret_env`. |
-| `LOG_SALT` (optional) | `.env` | Salt used to redact logged prompts. Matches `daemon.ai_backends.<name>.redaction_salt_env`. |
 | `GITHUB_PAT_TOKEN` (optional) | `.env` | Surfaced in the container for tools that read it; the daemon itself does not call GitHub directly. |
 
 ### Volume mounts
@@ -122,7 +121,6 @@ See the companion install guides:
 ```bash
 cat > .env <<'EOF'
 GITHUB_WEBHOOK_SECRET=<long-random-string>
-LOG_SALT=<optional-salt>
 GITHUB_PAT_TOKEN=<optional-pat>
 EOF
 chmod 600 .env

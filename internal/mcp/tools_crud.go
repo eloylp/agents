@@ -235,12 +235,11 @@ func toolCreateBackend(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
 		b := fleet.Backend{
-			Command:          req.GetString("command", ""),
-			Models:           models,
-			LocalModelURL:    req.GetString("local_model_url", ""),
-			TimeoutSeconds:   req.GetInt("timeout_seconds", 0),
-			MaxPromptChars:   req.GetInt("max_prompt_chars", 0),
-			RedactionSaltEnv: req.GetString("redaction_salt_env", ""),
+			Command:        req.GetString("command", ""),
+			Models:         models,
+			LocalModelURL:  req.GetString("local_model_url", ""),
+			TimeoutSeconds: req.GetInt("timeout_seconds", 0),
+			MaxPromptChars: req.GetInt("max_prompt_chars", 0),
 		}
 		canonicalName, canonical, err := deps.Fleet.UpsertBackend(name, b)
 		if err != nil {
@@ -272,9 +271,6 @@ func toolUpdateBackend(deps Deps) server.ToolHandlerFunc {
 		}
 		if v, ok := stringPtrArg(args, "local_model_url"); ok {
 			patch.LocalModelURL = v
-		}
-		if v, ok := stringPtrArg(args, "redaction_salt_env"); ok {
-			patch.RedactionSaltEnv = v
 		}
 		if v, ok, errMsg := boolPtrArg(args, "healthy"); ok {
 			patch.Healthy = v
@@ -316,7 +312,7 @@ func toolUpdateBackend(deps Deps) server.ToolHandlerFunc {
 func backendPatchHasField(p daemonfleet.BackendPatch) bool {
 	return p.Command != nil || p.Version != nil || p.Models != nil || p.Healthy != nil ||
 		p.HealthDetail != nil || p.LocalModelURL != nil || p.TimeoutSeconds != nil ||
-		p.MaxPromptChars != nil || p.RedactionSaltEnv != nil
+		p.MaxPromptChars != nil
 }
 
 // toolDeleteBackend removes a backend through the same path as DELETE
