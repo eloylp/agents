@@ -379,15 +379,15 @@ func (s *Server) buildStatus() statusJSON {
 		Agents: agents,
 	}
 	if s.orphanSource != nil {
-		orphanSource := s.orphanSource.OrphansSnapshot()
+		orphanSnap := s.orphanSource.OrphansSnapshot()
 		if fresh, err := s.orphanSource.RefreshOrphansFromDB(); err != nil {
 			s.logger.Warn().Err(err).Msg("status: orphan snapshot refresh failed")
 		} else {
-			orphanSource = fresh
+			orphanSnap = fresh
 		}
-		resp.OrphanedAgents = statusOrphanSummaryJSON{Count: orphanSource.Count}
-		if !orphanSource.GeneratedAt.IsZero() {
-			at := orphanSource.GeneratedAt
+		resp.OrphanedAgents = statusOrphanSummaryJSON{Count: orphanSnap.Count}
+		if !orphanSnap.GeneratedAt.IsZero() {
+			at := orphanSnap.GeneratedAt
 			resp.OrphanedAgents.UpdatedAt = &at
 		}
 	}
