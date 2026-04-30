@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -148,7 +147,7 @@ func (h *Handler) handleRepos(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeRepoJSON
-		if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+		if !server.DecodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		canonical, err := h.UpsertRepo(req.toConfig())
@@ -180,7 +179,7 @@ func (h *Handler) handleRepo(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPatch:
 		var req repoRuntimeSettingsJSON
-		if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+		if !server.DecodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		if req.Enabled == nil {
@@ -206,7 +205,7 @@ func (h *Handler) handleRepo(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleCreateBinding(w http.ResponseWriter, r *http.Request) {
 	repoName := repoNameFromVars(r)
 	var req storeBindingJSON
-	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !server.DecodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	// Ignore any ID the client sends — the store picks it.
@@ -244,7 +243,7 @@ func (h *Handler) handleUpdateBinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req storeBindingJSON
-	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !server.DecodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	b, err := h.UpdateBinding(repoName, id, req.toConfig())
@@ -470,28 +469,6 @@ func storeErrStatus(err error) int {
 		return http.StatusConflict
 	}
 	return http.StatusInternalServerError
-}
-
-// decodeBody reads and decodes a JSON body up to limit bytes. On error it
-// writes the response and returns false; callers must not write further.
-// Bodies larger than limit surface as 413; malformed JSON as 400.
-func decodeBody[T any](w http.ResponseWriter, r *http.Request, limit int64, out *T) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, limit)
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-			return false
-		}
-		http.Error(w, fmt.Sprintf("read request: %v", err), http.StatusBadRequest)
-		return false
-	}
-	if err := json.Unmarshal(body, out); err != nil {
-		http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
-		return false
-	}
-	return true
 }
 
 // writeJSON encodes v as JSON and writes it with the given status.
