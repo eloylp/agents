@@ -31,9 +31,6 @@ func ValidateCrossRefs(agents []fleet.Agent, repos []fleet.Repo, skills map[stri
 		if _, ok := backends[a.Backend]; !ok {
 			return fmt.Errorf("config: agent %q: unknown backend %q", a.Name, a.Backend)
 		}
-		if err := validateAgentModel(a.Name, a.Model, backends[a.Backend]); err != nil {
-			return err
-		}
 		for _, s := range a.Skills {
 			if _, ok := skills[s]; !ok {
 				return fmt.Errorf("config: agent %q: unknown skill %q", a.Name, s)
@@ -123,9 +120,6 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 		}
 		if _, ok := backends[a.Backend]; !ok {
 			return fmt.Errorf("config: agent %q: unknown backend %q", a.Name, a.Backend)
-		}
-		if err := validateAgentModel(a.Name, a.Model, backends[a.Backend]); err != nil {
-			return err
 		}
 		for _, s := range a.Skills {
 			if _, ok := skills[s]; !ok {
