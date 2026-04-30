@@ -16,7 +16,6 @@ import (
 
 	anthropicproxy "github.com/eloylp/agents/internal/anthropic_proxy"
 	"github.com/eloylp/agents/internal/config"
-	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -31,11 +30,10 @@ type Server struct {
 	cronReloader  CronReloader          // called from reloadCron — interface for test-stubability
 	startTime     time.Time
 	proxy         *anthropicproxy.Handler
-	uiFS          fs.FS          // optional; when set, /ui/ serves these static files
-	observeStore  *observe.Store // optional; when set, enables observability endpoints
-	db            *sql.DB        // optional; when set, enables /api/store/* CRUD endpoints
-	memReader     MemoryReader   // optional; when set, /api/memory reads from this (SQLite mode)
-	mcp           http.Handler   // optional; when set, /mcp serves this MCP handler
+	uiFS          fs.FS        // optional; when set, /ui/ serves these static files
+	db            *sql.DB      // optional; when set, enables /api/store/* CRUD endpoints
+	memReader     MemoryReader // optional; when set, /api/memory reads from this (SQLite mode)
+	mcp           http.Handler // optional; when set, /mcp serves this MCP handler
 	// observeRegister mounts the observability routes when set via
 	// WithObserveRegister. cmd/agents constructs the observe handler
 	// externally so this server doesn't import internal/server/observe.
@@ -46,7 +44,7 @@ type Server struct {
 	// stays free of any dependency on internal/server/fleet.
 	fleet            HandlerRegister
 	agentsDispatcher http.HandlerFunc     // GET vs POST /agents — supplied by WithFleet
-	orphansSource    OrphansSource        // /status orphan summary — supplied by WithFleet
+	orphanSource     OrphansSource        // /status orphan summary — supplied by WithFleet
 	onConfigReload   func(*config.Config) // reloadCron post-hook — supplied by WithFleet
 	repos            HandlerRegister      // wired via WithRepos by the composing caller
 	config           HandlerRegister      // wired via WithConfig by the composing caller
@@ -67,16 +65,6 @@ type Server struct {
 // need the UI (tests) can skip this call.
 func (s *Server) WithUI(uiFS fs.FS) {
 	s.uiFS = uiFS
-}
-
-// WithObserve stores the observability store reference. Kept for backward
-// compatibility — the observability routes themselves are now mounted via
-// WithObserveRegister, which cmd/agents calls with a closure that
-// constructs the internal/server/observe.Handler. This setter remains a
-// useful place to record the store for surfaces beyond HTTP that need
-// access to it.
-func (s *Server) WithObserve(store *observe.Store) {
-	s.observeStore = store
 }
 
 // WithObserveRegister installs a closure that mounts the observability
@@ -107,7 +95,7 @@ func (s *Server) WithStore(db *sql.DB, r CronReloader) {
 func (s *Server) WithFleet(h HandlerRegister, dispatcher http.HandlerFunc, orphans OrphansSource, onReload func(*config.Config)) {
 	s.fleet = h
 	s.agentsDispatcher = dispatcher
-	s.orphansSource = orphans
+	s.orphanSource = orphans
 	s.onConfigReload = onReload
 }
 
@@ -390,16 +378,16 @@ func (s *Server) buildStatus() statusJSON {
 		},
 		Agents: agents,
 	}
-	if s.orphansSource != nil {
-		orphans := s.orphansSource.OrphansSnapshot()
-		if fresh, err := s.orphansSource.RefreshOrphansFromDB(); err != nil {
+	if s.orphanSource != nil {
+		orphanSource := s.orphanSource.OrphansSnapshot()
+		if fresh, err := s.orphanSource.RefreshOrphansFromDB(); err != nil {
 			s.logger.Warn().Err(err).Msg("status: orphan snapshot refresh failed")
 		} else {
-			orphans = fresh
+			orphanSource = fresh
 		}
-		resp.OrphanedAgents = statusOrphanSummaryJSON{Count: orphans.Count}
-		if !orphans.GeneratedAt.IsZero() {
-			at := orphans.GeneratedAt
+		resp.OrphanedAgents = statusOrphanSummaryJSON{Count: orphanSource.Count}
+		if !orphanSource.GeneratedAt.IsZero() {
+			at := orphanSource.GeneratedAt
 			resp.OrphanedAgents.UpdatedAt = &at
 		}
 	}
