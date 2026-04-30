@@ -198,8 +198,20 @@ func toolTriggerAgent(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError("agent and repo are required"), nil
 		}
 
-		cfg := deps.Coord.Config()
-		repo, ok := cfg.RepoByName(repoName)
+		repos, err := store.ReadRepos(deps.DB)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("read repos", err), nil
+		}
+		want := fleet.NormalizeRepoName(repoName)
+		var repo fleet.Repo
+		var ok bool
+		for _, r := range repos {
+			if r.Name == want {
+				repo = r
+				ok = true
+				break
+			}
+		}
 		if !ok || !repo.Enabled {
 			return mcpgo.NewToolResultErrorf("repo %q not found or disabled", repoName), nil
 		}

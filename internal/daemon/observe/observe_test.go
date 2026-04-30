@@ -17,7 +17,7 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
-	"github.com/eloylp/agents/internal/coordinator"
+	
 	"github.com/eloylp/agents/internal/fleet"
 	obstore "github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
@@ -43,30 +43,37 @@ func minimalCfg() *config.Config {
 }
 
 // testFixture holds the per-test wiring an observe.Handler needs: a real
-// SQLite handle (for writing memory rows when tests need them), the
-// observability store (writes events / traces), and a coordinator wrapping
-// cfg + db. Tests build a Handler with `newHandler(t, fx, cfg, sched, engine)`.
+// SQLite handle and the observability store (writes events / traces).
 type testFixture struct {
 	db    *sql.DB
 	store *obstore.Store
-	coord *coordinator.Coordinator
 }
 
-// newFixture opens a temp SQLite, creates an obstore.Store on top, and
-// builds a no-op coordinator. cfg may be nil for tests that don't care.
+// newFixture opens a temp SQLite and creates an obstore.Store on top. If
+// cfg has populated entity sets, they are seeded into the DB so the
+// observe handler's SQLite reads see them.
 func newFixture(t *testing.T, cfg *config.Config) testFixture {
 	t.Helper()
-	if cfg == nil {
-		cfg = minimalCfg()
-	}
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
+	if cfg != nil && (len(cfg.Agents) > 0 || len(cfg.Repos) > 0 || len(cfg.Daemon.AIBackends) > 0 || len(cfg.Skills) > 0) {
+		backends := cfg.Daemon.AIBackends
+		if len(backends) == 0 {
+			backends = map[string]fleet.Backend{"claude": {Command: "claude"}}
+		}
+		skills := cfg.Skills
+		if skills == nil {
+			skills = map[string]fleet.Skill{}
+		}
+		if err := store.ImportAll(db, cfg.Agents, cfg.Repos, skills, backends); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
 	obs := obstore.NewStore(db)
-	coord := coordinator.New(cfg, db, func(*config.Config) error { return nil }, nil)
-	return testFixture{db: db, store: obs, coord: coord}
+	return testFixture{db: db, store: obs}
 }
 
 // newTestStore is the legacy single-arg helper kept so the test bodies that
@@ -76,12 +83,18 @@ func newTestStore(t *testing.T) *obstore.Store {
 	return newFixture(t, nil).store
 }
 
-// newSchedulerWithStatuses builds a scheduler whose AgentStatuses() returns
-// the supplied entries. The scheduler's RebuildCron is run against an
-// in-memory fleet that has a cron binding for each (name, repo) pair, then
-// RecordLastRun is called to seed lastRun + lastStatus.
+// newSchedulerWithStatuses builds a scheduler whose AgentStatuses()
+// returns the supplied entries. The scheduler reconciles cron bindings
+// from a tempdir SQLite seeded with one cron binding per (agent, repo)
+// pair; RecordLastRun is then called to populate lastRun + lastStatus.
 func newSchedulerWithStatuses(t *testing.T, statuses []scheduler.AgentStatus) *scheduler.Scheduler {
 	t.Helper()
+	db, err := store.Open(filepath.Join(t.TempDir(), "sched.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
 	repos := make([]fleet.Repo, 0, len(statuses))
 	agents := make([]fleet.Agent, 0, len(statuses))
 	seenAgent := map[string]bool{}
@@ -95,10 +108,10 @@ func newSchedulerWithStatuses(t *testing.T, statuses []scheduler.AgentStatus) *s
 			seenAgent[st.Name] = true
 		}
 	}
-	cfg := minimalCfg()
-	cfg.Repos = repos
-	cfg.Agents = agents
-	sched, err := scheduler.NewScheduler(cfg, zerolog.Nop())
+	if err := store.ImportAll(db, agents, repos, map[string]fleet.Skill{}, map[string]fleet.Backend{"claude": {Command: "claude"}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	sched, err := scheduler.NewScheduler(db, time.Hour, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("new scheduler: %v", err)
 	}
@@ -112,14 +125,13 @@ func newSchedulerWithStatuses(t *testing.T, statuses []scheduler.AgentStatus) *s
 	return sched
 }
 
-// newPlainHandler builds a Handler with a tempdir-backed obs.Store and a
-// fresh coordinator. Most observe-handler tests don't care about
-// scheduling, dispatch stats, or memory — passing nil for those slots keeps
-// the call sites short.
+// newPlainHandler builds a Handler with a tempdir-backed obs.Store. Most
+// observe-handler tests don't care about scheduling, dispatch stats, or
+// memory — passing nil for those slots keeps the call sites short.
 func newPlainHandler(t *testing.T) *Handler {
 	t.Helper()
 	fx := newFixture(t, nil)
-	return New(fx.store, fx.coord, nil, nil, nil, zerolog.Nop())
+	return New(fx.store, fx.db, nil, nil, nil, zerolog.Nop())
 }
 
 // newHandlerOnStore is like newPlainHandler but reuses an existing
@@ -127,21 +139,19 @@ func newPlainHandler(t *testing.T) *Handler {
 // handler queries them).
 func newHandlerOnStore(t *testing.T, obs *obstore.Store) *Handler {
 	t.Helper()
-	cfg := minimalCfg()
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
-		t.Fatalf("open coord db: %v", err)
+		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	coord := coordinator.New(cfg, db, func(*config.Config) error { return nil }, nil)
-	return New(obs, coord, nil, nil, nil, zerolog.Nop())
+	return New(obs, db, nil, nil, nil, zerolog.Nop())
 }
 
 // seedMemoryReader writes (agent, repo) → content rows into db so the
 // coordinator's real SQLiteMemoryReader sees them. mtimes lets tests
 // override the auto-stamped updated_at on a per-key basis. The memory
 // table references agents and repos, so we upsert each pair first.
-func seedMemoryReader(t *testing.T, db *sql.DB, content map[string]string, mtimes map[string]time.Time) *coordinator.SQLiteMemoryReader {
+func seedMemoryReader(t *testing.T, db *sql.DB, content map[string]string, mtimes map[string]time.Time) *store.MemoryReader {
 	t.Helper()
 	if err := store.UpsertBackend(db, "claude", fleet.Backend{Command: "claude"}); err != nil {
 		t.Fatalf("seed backend: %v", err)
@@ -181,7 +191,7 @@ func seedMemoryReader(t *testing.T, db *sql.DB, content map[string]string, mtime
 			}
 		}
 	}
-	return coordinator.NewSQLiteMemoryReader(db)
+	return store.NewMemoryReader(db)
 }
 
 // newRouter mounts h on a fresh router with an identity timeout wrapper so
@@ -239,8 +249,8 @@ func TestHandleDispatchesReturnsEngineStats(t *testing.T) {
 	// composing daemon hands the handler.
 	fx := newFixture(t, nil)
 	channels := workflow.NewDataChannels(1)
-	engine := workflow.NewEngine(minimalCfg(), map[string]ai.Runner{}, channels, zerolog.Nop())
-	h := New(fx.store, fx.coord, nil, engine, nil, zerolog.Nop())
+	engine := workflow.NewEngine(fx.db, minimalCfg().Daemon.Processor, channels, zerolog.Nop())
+	h := New(fx.store, fx.db, nil, engine, nil, zerolog.Nop())
 
 	req := httptest.NewRequest(http.MethodGet, "/dispatches", nil)
 	rec := httptest.NewRecorder()
@@ -535,7 +545,7 @@ func TestHandleGraphIncludesConfiguredAgentWithNoDispatches(t *testing.T) {
 	cfg := minimalCfg()
 	cfg.Agents = []fleet.Agent{{Name: "solo-agent", Backend: "claude", Prompt: "p"}}
 	fx := newFixture(t, cfg)
-	h := New(fx.store, fx.coord, nil, nil, nil, zerolog.Nop())
+	h := New(fx.store, fx.db, nil, nil, nil, zerolog.Nop())
 
 	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
 	rec := httptest.NewRecorder()
@@ -574,7 +584,7 @@ func TestHandleGraphNodeStatusReflectsRuntimeState(t *testing.T) {
 	sched := newSchedulerWithStatuses(t, []scheduler.AgentStatus{
 		{Name: "idle-err", Repo: "owner/r", LastStatus: "error"},
 	})
-	h := New(fx.store, fx.coord, sched, nil, nil, zerolog.Nop())
+	h := New(fx.store, fx.db, sched, nil, nil, zerolog.Nop())
 
 	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
 	rec := httptest.NewRecorder()
@@ -767,7 +777,7 @@ func TestHandleMemorySQLiteMode(t *testing.T) {
 			t.Parallel()
 			fx := newFixture(t, nil)
 			memReader := seedMemoryReader(t, fx.db, tc.stored, tc.mtimes)
-			h := New(fx.store, fx.coord, nil, nil, memReader, zerolog.Nop())
+			h := New(fx.store, fx.db, nil, nil, memReader, zerolog.Nop())
 
 			router := newRouter(h)
 			req := httptest.NewRequest(http.MethodGet, "/memory/"+tc.agent+"/"+tc.repo, nil)

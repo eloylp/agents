@@ -35,12 +35,12 @@ func TestAgentsOrphansEndpointAndStatusSummary(t *testing.T) {
 		t.Fatalf("GET /agents/orphans/status: got %d", rr.Code)
 	}
 
-	var snapshot daemonfleet.OrphanedAgentsSnapshot
+	var snapshot daemonfleet.OrphanedAgentsResponse
 	if err := json.NewDecoder(rr.Body).Decode(&snapshot); err != nil {
 		t.Fatalf("decode /agents/orphans/status: %v", err)
 	}
 	if snapshot.Count != 1 || len(snapshot.Agents) != 1 {
-		t.Fatalf("orphan snapshot count=%d agents=%d, want 1/1", snapshot.Count, len(snapshot.Agents))
+		t.Fatalf("orphan response count=%d agents=%d, want 1/1", snapshot.Count, len(snapshot.Agents))
 	}
 
 	rr = httptest.NewRecorder()

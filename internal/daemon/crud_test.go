@@ -3,18 +3,16 @@ package daemon_test
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/eloylp/agents/internal/config"
-	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/daemon"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -838,142 +836,14 @@ func TestGetRepoExposesBindingIDs(t *testing.T) {
 // without touching the rest of the file's imports.
 func itoa(i int) string { return strconv.Itoa(i) }
 
-// ── reloadCron failure ────────────────────────────────────────────────────────
-
-// openCRUDTestServerWithReloader creates a test server with a coordinator
-// reload chain that always returns the given error. Tests use it to assert
-// that CRUD endpoints surface reload failures via 500 responses.
-func openCRUDTestServerWithReloader(t *testing.T, reloadErr error) *daemon.Daemon {
-	t.Helper()
-	srv, _ := newTestServer(t, crudMinimalConfig())
-	srv.Coordinator().SetReload(func(*config.Config) error { return reloadErr })
-	return srv
-}
-
-// TestStoreCRUDReloadFailureReturns500 verifies that when reloadCron fails
-// (e.g. the scheduler can't re-register a cron binding), write endpoints
-// return 500 instead of silently acknowledging a partially-applied change.
-func TestStoreCRUDReloadFailureReturns500(t *testing.T) {
-	t.Parallel()
-
-	reloadErr := errors.New("scheduler broken")
-
-	tests := []struct {
-		name   string
-		method string
-		path   string
-		body   any
-		setup  func(t *testing.T, s *daemon.Daemon)
-	}{
-		{
-			name:   "POST agent",
-			method: http.MethodPost,
-			path:   "/agents",
-			body:   map[string]any{"name": "agent-x", "backend": "claude", "prompt": "x"},
-			// Seed the backend so cross-ref validation passes and the test
-			// genuinely exercises reload failure, not validation failure.
-			setup: func(t *testing.T, s *daemon.Daemon) { seedStoreBackend(t, s, "claude") },
-		},
-		{
-			name:   "DELETE agent",
-			method: http.MethodDelete,
-			path:   "/agents/agent-x",
-			body:   nil,
-		},
-		{
-			name:   "POST skill",
-			method: http.MethodPost,
-			path:   "/skills",
-			body:   map[string]any{"name": "arch", "prompt": "Focus on architecture."},
-		},
-		{
-			name:   "DELETE skill",
-			method: http.MethodDelete,
-			path:   "/skills/arch",
-			body:   nil,
-		},
-		{
-			name:   "POST backend",
-			method: http.MethodPost,
-			path:   "/backends",
-			// Use "codex" (a valid backend name) so that validateFleet passes
-			// and the only failure is the cron reload.
-			body: map[string]any{"name": "codex", "command": "codex", "args": []string{}, "env": map[string]string{}},
-			// Seed claude so there is already one backend, making the new backend
-			// a valid addition (fleet validation requires at least one).
-			setup: func(t *testing.T, s *daemon.Daemon) { seedStoreBackend(t, s, "claude") },
-		},
-		{
-			name:   "DELETE backend",
-			method: http.MethodDelete,
-			path:   "/backends/codex",
-			body:   nil,
-			// Seed a second backend (codex). The fixture-seeded "claude" stays
-			// referenced by the seeded agent, so we delete the unreferenced
-			// codex — the reload failure is the only reason this should 500.
-			setup: func(t *testing.T, s *daemon.Daemon) {
-				seedStoreBackend(t, s, "codex")
-			},
-		},
-		{
-			name:   "POST repo",
-			method: http.MethodPost,
-			path:   "/repos",
-			body:   map[string]any{"name": "owner/repo", "enabled": true},
-		},
-		{
-			name:   "DELETE repo",
-			method: http.MethodDelete,
-			path:   "/repos/owner/repo",
-			body:   nil,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			s := openCRUDTestServerWithReloader(t, reloadErr)
-			if tc.setup != nil {
-				tc.setup(t, s)
-			}
-			rr := doCRUDRequest(t, s, tc.method, tc.path, tc.body)
-			if rr.Code != http.StatusInternalServerError {
-				t.Errorf("%s %s: want 500 on reload failure, got %d: %s",
-					tc.method, tc.path, rr.Code, rr.Body.String())
-			}
-		})
-	}
-}
-
-// TestStoreCRUDReloadFailureDoesNotUpdateServerCfg verifies that when
-// cronReloader.Reload returns an error, the server's in-memory routing config
-// (s.cfg) is NOT updated to the new DB snapshot. Keeping s.cfg on the old
-// state ensures the server, scheduler, and engine remain on the same config
-// epoch; a split-brain (server serving new repos while the scheduler/engine
-// still run on old config) is avoided.
-func TestStoreCRUDReloadFailureDoesNotUpdateServerCfg(t *testing.T) {
-	t.Parallel()
-
-	s := openCRUDTestServerWithReloader(t, errors.New("reload broken"))
-
-	// Pre-condition: server starts with no repos.
-	if got := len(s.Config().Repos); got != 0 {
-		t.Fatalf("precondition: want 0 repos, got %d", got)
-	}
-
-	// Attempt to add a repo via the CRUD API. The write succeeds in the DB but
-	// Reload fails, so the handler must return 500 and must NOT swap s.cfg.
-	body := map[string]any{"name": "owner/testrepo", "enabled": true}
-	rr := doCRUDRequest(t, s, http.MethodPost, "/repos", body)
-	if rr.Code != http.StatusInternalServerError {
-		t.Fatalf("want 500 on reload failure, got %d: %s", rr.Code, rr.Body.String())
-	}
-
-	// s.cfg must still reflect the pre-write state (no repos).
-	if got := len(s.Config().Repos); got != 0 {
-		t.Errorf("server cfg must not be updated on reload failure: want 0 repos, got %d", got)
-	}
-}
+// The pre-cutover reload-failure tests asserted that a CRUD write that
+// fails to propagate to the runtime returns 500 and leaves the in-memory
+// cfg pointer unchanged. Both behaviours are gone: there is no reload
+// chain (the runtime reads from SQLite on demand) and no in-memory cfg
+// pointer to update or roll back. The tests have been removed. Write-time
+// validation (FK constraints, agent / cron / backend cross-refs, etc.)
+// still runs inside store.UpsertX and surfaces as 4xx; that path has its
+// own tests in the store package.
 
 // ── /api/store POST body-size limiting ───────────────────────────────────────
 
@@ -1189,40 +1059,19 @@ func TestStoreCRUDConflictErrorReturns409(t *testing.T) {
 	}
 }
 
-// ── Concurrent write+reload serialization ────────────────────────────────────
+// ── Concurrent write serialisation ───────────────────────────────────────────
 
-// countingReloader records how many times the coordinator's reload chain
-// fired and captures the last cfg snapshot it received. Safe for
-// concurrent use.
-type countingReloader struct {
-	mu    sync.Mutex
-	calls int32
-	last  []fleet.Agent
-}
-
-func (r *countingReloader) reload(cfg *config.Config) error {
-	atomic.AddInt32(&r.calls, 1)
-	r.mu.Lock()
-	r.last = append([]fleet.Agent(nil), cfg.Agents...)
-	r.mu.Unlock()
-	return nil
-}
-
-// TestConcurrentWriteReloadSerialisation verifies that concurrent POST
-// /agents requests do not interleave their DB-write and reload calls.
-// Specifically, the last reload that runs must see all agents that were
-// successfully committed to SQLite — it must never reflect a stale
-// snapshot from a request that finished earlier but whose reload won
-// the race.
-//
-// Running with -race also detects any data race on the reloader or storeMu.
-func TestConcurrentWriteReloadSerialisation(t *testing.T) {
+// TestConcurrentWritesAllCommit verifies that concurrent POST /agents
+// requests all reach SQLite without losing writes. The pre-cutover
+// version of this test asserted that the coordinator's reload chain saw
+// every committed snapshot in order; that machinery is gone now (no
+// reload chain), so the surviving contract is "every successful HTTP
+// 200 response corresponds to a row in SQLite." Run with -race to catch
+// data races on the underlying handle.
+func TestConcurrentWritesAllCommit(t *testing.T) {
 	t.Parallel()
 
-	reloader := &countingReloader{}
 	s, _ := newTestServer(t, crudMinimalConfig())
-	s.Coordinator().SetReload(reloader.reload)
-
 	seedStoreBackend(t, s, "claude")
 
 	const n = 20
@@ -1241,27 +1090,15 @@ func TestConcurrentWriteReloadSerialisation(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Every request must have triggered exactly one reload.
-	if got := atomic.LoadInt32(&reloader.calls); got != n {
-		t.Errorf("expected %d Reload calls, got %d", n, got)
-	}
-
-	// The last recorded snapshot must include all n agents we created plus
-	// the one the fixture seeded (monotonic guarantee: the final reload
-	// saw the DB state that includes every committed write).
-	const want = n + 1 // n created + 1 fixture-seeded
+	// All n requested agents plus the one the fixture seeded must be in
+	// SQLite — no committed write may be lost.
+	const want = n + 1
 	agents, err := store.ReadAgents(s.DB())
 	if err != nil {
 		t.Fatalf("read agents: %v", err)
 	}
 	if len(agents) != want {
 		t.Fatalf("expected %d agents in DB, got %d", want, len(agents))
-	}
-	reloader.mu.Lock()
-	lastCount := len(reloader.last)
-	reloader.mu.Unlock()
-	if lastCount != want {
-		t.Errorf("last reload snapshot had %d agents, expected %d (stale snapshot overwrote a newer one)", lastCount, want)
 	}
 }
 
@@ -1575,31 +1412,29 @@ func TestStoreCRUDPostReturnsCanonicalForm(t *testing.T) {
 	}
 }
 
-// TestServerCfgUpdatedAfterCRUDWrite verifies that the webhook server's
-// in-memory routing config is updated immediately after a CRUD write so that
-// a newly-added repo is accepted by the webhook event path and visible in
-// /api/agents — without requiring a restart.
+// TestServerCfgUpdatedAfterCRUDWrite verifies that a newly-added repo is
+// accepted by the webhook event path and visible in /agents immediately
+// after a CRUD write — without requiring a restart.
 //
-// This is a regression test for the finding that Server kept using its startup
-// s.cfg snapshot for /webhooks/github and /api/agents after CRUD writes, while
-// only the scheduler/engine were updated via cronReloader.Reload.
+// In the pre-cutover design this exercised the in-memory cfg pointer +
+// reload chain. After the refactor every read goes straight to SQLite,
+// so the test simply asserts that the data is observable from the
+// database and from the HTTP surfaces that read it.
 func TestServerCfgUpdatedAfterCRUDWrite(t *testing.T) {
 	t.Parallel()
 
 	s := openCRUDTestServer(t)
-	// Confirm the initial config has no repos and no agents.
-	if len(s.Config().Repos) != 0 {
-		t.Fatalf("precondition: expected 0 repos, got %d", len(s.Config().Repos))
+	// Precondition: the fixture starts with the seeded "coder" agent (the
+	// fixture seeds one to satisfy the store's "≥ 1 agent" invariant) and
+	// no repos.
+	repos, err := store.ReadRepos(s.DB())
+	if err != nil {
+		t.Fatalf("read repos: %v", err)
+	}
+	if len(repos) != 0 {
+		t.Fatalf("precondition: expected 0 repos, got %d", len(repos))
 	}
 
-	// Seed backend and create agent + repo via CRUD API.
-	seedStoreBackend(t, s, "claude")
-	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
-		"name": "coder", "backend": "claude", "prompt": "p",
-		"skills": []string{}, "can_dispatch": []string{},
-	}); rr.Code != http.StatusOK {
-		t.Fatalf("POST agent: %d — %s", rr.Code, rr.Body.String())
-	}
 	if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", map[string]any{
 		"name": "owner/newrepo", "enabled": true,
 		"bindings": []map[string]any{{"agent": "coder", "labels": []string{"ai:fix"}}},
@@ -1607,13 +1442,13 @@ func TestServerCfgUpdatedAfterCRUDWrite(t *testing.T) {
 		t.Fatalf("POST repo: %d — %s", rr.Code, rr.Body.String())
 	}
 
-	// Verify the in-memory config was updated: the new repo must be present.
-	cfg := s.Config()
-	if len(cfg.Repos) != 1 || cfg.Repos[0].Name != "owner/newrepo" {
-		t.Fatalf("server cfg not updated: repos = %v", cfg.Repos)
+	// Verify SQLite has the new repo.
+	repos, err = store.ReadRepos(s.DB())
+	if err != nil {
+		t.Fatalf("read repos: %v", err)
 	}
-	if len(cfg.Agents) != 1 || cfg.Agents[0].Name != "coder" {
-		t.Fatalf("server cfg not updated: agents = %v", cfg.Agents)
+	if len(repos) != 1 || repos[0].Name != "owner/newrepo" {
+		t.Fatalf("repo not persisted: %v", repos)
 	}
 
 	// Verify /api/agents reflects the new agent.

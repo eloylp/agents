@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"maps"
 	"sync"
@@ -10,10 +11,14 @@ import (
 	"github.com/robfig/cron/v3"
 	"github.com/rs/zerolog"
 
-	"github.com/eloylp/agents/internal/config"
-	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
+
+// DefaultReconcileInterval is the default cadence at which the scheduler
+// re-reads bindings from SQLite and reconciles its registered cron entries.
+// Configurable via NewScheduler's interval argument; 0 means use this default.
+const DefaultReconcileInterval = 30 * time.Second
 
 // zerologCronLogger adapts zerolog.Logger to the cron.Logger interface
 // required by chain wrappers such as SkipIfStillRunning.
@@ -52,6 +57,7 @@ type AgentStatus struct {
 type agentEntry struct {
 	name   string
 	repo   string
+	spec   string // the cron expression as registered, used to detect spec changes
 	cronID cron.EntryID
 }
 
@@ -61,29 +67,32 @@ type lastRunRecord struct {
 	status string
 }
 
-// Scheduler wires cron-triggered agent bindings from the config into the
+// Scheduler wires cron-triggered agent bindings from SQLite into the
 // robfig/cron engine. It is a pure event producer: every cron tick pushes a
 // "cron" event onto the queue, and the engine handles execution uniformly
 // with all other event kinds. The engine notifies us back via RecordLastRun
 // so the per-binding schedule view in /agents stays current.
 //
-// The scheduler intentionally knows nothing about runners, the dispatcher,
-// or memory — those live on the engine. Hot-reload is coordinated by the
-// composing daemon (cmd/agents): on config change, the daemon rebuilds
-// runners, calls Engine.UpdateConfigAndRunners + Dispatcher.UpdateAgents,
-// and finally calls Scheduler.RebuildCron. The scheduler's only job in
-// that flow is to swap out cron entries.
+// The set of registered cron entries is the one piece of in-memory state
+// the daemon still has to cache, because robfig/cron requires entries to
+// be registered up front in order to fire at scheduled times. The
+// scheduler keeps that state in sync with SQLite via a reconciler
+// goroutine that polls every reconcileInterval, diffs the current binding
+// set against what's registered, and adds/removes entries as needed.
+// CRUD writes do not push updates to the scheduler — the next reconcile
+// tick picks them up.
 type Scheduler struct {
-	cfg          *config.Config
-	cron         *cron.Cron
-	logger       zerolog.Logger
-	ctxMu        sync.RWMutex
-	runCtx       context.Context
-	bindMu       sync.RWMutex // protects cfg and agentEntries during RebuildCron
-	agentEntries []agentEntry
-	lastRunsMu   sync.RWMutex
-	lastRuns     map[string]lastRunRecord // key: "name\x00repo"
-	queue        *workflow.DataChannels   // required at runtime; cron ticks push events here for the engine to handle
+	db                *sql.DB
+	cron              *cron.Cron
+	logger            zerolog.Logger
+	reconcileInterval time.Duration
+	ctxMu             sync.RWMutex
+	runCtx            context.Context
+	bindMu            sync.RWMutex // protects agentEntries during reconcile
+	agentEntries      []agentEntry
+	lastRunsMu        sync.RWMutex
+	lastRuns          map[string]lastRunRecord // key: "name\x00repo"
+	queue             *workflow.DataChannels   // required at runtime; cron ticks push events here for the engine to handle
 }
 
 // WithEventQueue wires the engine's event queue. Every cron tick builds a
@@ -102,11 +111,16 @@ func (s *Scheduler) RecordLastRun(agent, repo string, at time.Time, status strin
 	s.recordLastRun(agent, repo, at, status)
 }
 
-// NewScheduler builds a scheduler and registers all cron-triggered bindings
-// found in cfg.Repos[].Use. The scheduler does not run agents itself — it
-// pushes "cron" events onto the queue wired via WithEventQueue, and the
-// engine handles execution.
-func NewScheduler(cfg *config.Config, logger zerolog.Logger) (*Scheduler, error) {
+// NewScheduler builds a scheduler. It performs an initial reconcile from
+// SQLite at construction time so the cron is fully populated before Run
+// starts; subsequent updates flow through the reconciler goroutine.
+//
+// reconcileInterval controls how often the scheduler polls SQLite. Pass 0
+// for the default (30s).
+func NewScheduler(db *sql.DB, reconcileInterval time.Duration, logger zerolog.Logger) (*Scheduler, error) {
+	if reconcileInterval == 0 {
+		reconcileInterval = DefaultReconcileInterval
+	}
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	cronLogger := zerologCronLogger{logger: logger.With().Str("component", "scheduler").Logger()}
 	c := cron.New(
@@ -114,26 +128,27 @@ func NewScheduler(cfg *config.Config, logger zerolog.Logger) (*Scheduler, error)
 		cron.WithChain(cron.SkipIfStillRunning(cronLogger)),
 	)
 	s := &Scheduler{
-		cfg:      cfg,
-		cron:     c,
-		logger:   logger.With().Str("component", "scheduler").Logger(),
-		lastRuns: make(map[string]lastRunRecord),
+		db:                db,
+		cron:              c,
+		logger:            logger.With().Str("component", "scheduler").Logger(),
+		reconcileInterval: reconcileInterval,
+		lastRuns:          make(map[string]lastRunRecord),
 	}
-	if err := s.registerJobs(); err != nil {
+	if err := s.reconcile(); err != nil {
 		return nil, err
 	}
 	return s, nil
 }
 
-// Run starts the cron engine and blocks until ctx is cancelled.
+// Run starts the cron engine and the reconciler goroutine, then blocks
+// until ctx is cancelled.
 func (s *Scheduler) Run(ctx context.Context) error {
 	s.setRunCtx(ctx)
-	if len(s.cron.Entries()) == 0 {
-		s.logger.Info().Msg("no cron bindings configured")
-		return nil
-	}
-	s.logger.Info().Int("jobs", len(s.cron.Entries())).Msg("starting scheduler")
+	s.logger.Info().Int("jobs", len(s.cron.Entries())).Dur("reconcile_interval", s.reconcileInterval).Msg("starting scheduler")
 	s.cron.Start()
+
+	go s.reconcileLoop(ctx)
+
 	<-ctx.Done()
 	stopped := s.cron.Stop()
 	<-stopped.Done()
@@ -141,34 +156,95 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	return nil
 }
 
-func (s *Scheduler) registerJobs() error {
-	for _, repo := range s.cfg.Repos {
+// reconcileLoop polls SQLite at reconcileInterval and reconciles registered
+// cron entries against the current binding set. CRUD-added bindings begin
+// firing within one interval; CRUD-removed bindings stop firing within one
+// interval.
+func (s *Scheduler) reconcileLoop(ctx context.Context) {
+	t := time.NewTicker(s.reconcileInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := s.reconcile(); err != nil {
+				s.logger.Error().Err(err).Msg("scheduler reconcile failed")
+			}
+		}
+	}
+}
+
+// reconcile reads the current cron-binding set from SQLite, diffs it
+// against the registered entries, and applies the difference. The diff
+// keys on (agent, repo, cron-spec): a binding whose cron string changes
+// is treated as remove-old + add-new.
+func (s *Scheduler) reconcile() error {
+	repos, err := store.ReadRepos(s.db)
+	if err != nil {
+		return fmt.Errorf("scheduler reconcile: read repos: %w", err)
+	}
+	agents, err := store.ReadAgents(s.db)
+	if err != nil {
+		return fmt.Errorf("scheduler reconcile: read agents: %w", err)
+	}
+	agentByName := make(map[string]struct{}, len(agents))
+	for _, a := range agents {
+		agentByName[a.Name] = struct{}{}
+	}
+
+	// Build the desired set of (agent, repo, spec) entries.
+	type want struct{ name, repo, spec string }
+	desired := map[want]bool{}
+	for _, repo := range repos {
 		if !repo.Enabled {
 			continue
 		}
-		for _, binding := range repo.Use {
-			if !binding.IsEnabled() || !binding.IsCron() {
+		for _, b := range repo.Use {
+			if !b.IsEnabled() || !b.IsCron() {
 				continue
 			}
-			agent, ok := s.cfg.AgentByName(binding.Agent)
-			if !ok {
-				// Validation at config load should have caught this; defensive.
-				return fmt.Errorf("binding references unknown agent %q on repo %q", binding.Agent, repo.Name)
+			if _, ok := agentByName[b.Agent]; !ok {
+				s.logger.Warn().Str("repo", repo.Name).Str("agent", b.Agent).Msg("scheduler reconcile: skipping binding to unknown agent")
+				continue
 			}
-			job := s.makeCronJob(repo.Name, agent.Name)
-			id, err := s.cron.AddFunc(binding.Cron, job)
-			if err != nil {
-				return fmt.Errorf("schedule agent %q for repo %q: %w", agent.Name, repo.Name, err)
-			}
-			s.agentEntries = append(s.agentEntries, agentEntry{name: agent.Name, repo: repo.Name, cronID: id})
-			entry := s.cron.Entry(id)
-			s.logger.Info().
-				Str("repo", repo.Name).
-				Str("agent", agent.Name).
-				Str("cron", binding.Cron).
-				Time("next_run", entry.Next).
-				Msg("cron job registered")
+			desired[want{name: b.Agent, repo: repo.Name, spec: b.Cron}] = true
 		}
+	}
+
+	s.bindMu.Lock()
+	defer s.bindMu.Unlock()
+
+	// Remove entries that are no longer desired (or whose spec changed).
+	kept := s.agentEntries[:0]
+	for _, e := range s.agentEntries {
+		key := want{name: e.name, repo: e.repo, spec: e.spec}
+		if desired[key] {
+			delete(desired, key) // mark as already registered
+			kept = append(kept, e)
+			continue
+		}
+		s.cron.Remove(e.cronID)
+	}
+	s.agentEntries = kept
+
+	// Register every entry that's desired but not yet registered. Any
+	// remaining keys in `desired` after the loop above fall in this set.
+	for w := range desired {
+		job := s.makeCronJob(w.repo, w.name)
+		id, err := s.cron.AddFunc(w.spec, job)
+		if err != nil {
+			s.logger.Error().Str("repo", w.repo).Str("agent", w.name).Str("cron", w.spec).Err(err).Msg("scheduler reconcile: add cron entry failed")
+			continue
+		}
+		s.agentEntries = append(s.agentEntries, agentEntry{name: w.name, repo: w.repo, spec: w.spec, cronID: id})
+		entry := s.cron.Entry(id)
+		s.logger.Info().
+			Str("repo", w.repo).
+			Str("agent", w.name).
+			Str("cron", w.spec).
+			Time("next_run", entry.Next).
+			Msg("cron job registered")
 	}
 	return nil
 }
@@ -250,59 +326,10 @@ func (s *Scheduler) AgentStatuses() []AgentStatus {
 	return statuses
 }
 
-// RebuildCron replaces the set of registered cron bindings with the entries
-// derived from the supplied repos + agents snapshot. It is safe to call while
-// the scheduler is running.
-//
-// The swap is atomic from the scheduler's perspective: new cron entries are
-// registered first; only if all registrations succeed are the old entries
-// removed and the cfg pointer updated. If registration fails, the old entries
-// remain active and the previous cfg snapshot is preserved, so the scheduler
-// stays in a consistent state and the caller receives an error.
-//
-// This method does NOT touch runners, the dispatcher, or any external sink.
-// Those concerns belong to the engine; the composing daemon's Reloader
-// updates them in lockstep with the cron rebuild on every config change.
-func (s *Scheduler) RebuildCron(repos []fleet.Repo, agents []fleet.Agent, skills map[string]fleet.Skill, backends map[string]fleet.Backend) error {
-	s.bindMu.Lock()
-	defer s.bindMu.Unlock()
-
-	// Save old state for rollback.
-	oldCfg := s.cfg
-	oldEntries := make([]agentEntry, len(s.agentEntries))
-	copy(oldEntries, s.agentEntries)
-
-	// Copy-on-write the cfg pointer so concurrent readers (AgentStatuses) that
-	// already snapshotted the old pointer keep seeing a consistent view until
-	// they finish; future snapshots see the new cfg.
-	newCfg := *s.cfg
-	newCfg.Repos = repos
-	newCfg.Agents = agents
-	newCfg.Skills = skills
-	newCfg.Daemon.AIBackends = backends
-
-	s.cfg = &newCfg
-	s.agentEntries = s.agentEntries[:0]
-
-	if err := s.registerJobs(); err != nil {
-		// Remove any partially-registered new entries.
-		for _, e := range s.agentEntries {
-			s.cron.Remove(e.cronID)
-		}
-		// Restore old state so the scheduler stays healthy.
-		s.cfg = oldCfg
-		s.agentEntries = oldEntries
-		return err
-	}
-
-	// New registrations succeeded — remove the old cron entries.
-	for _, e := range oldEntries {
-		s.cron.Remove(e.cronID)
-	}
-
-	s.logger.Info().Int("cron_jobs", len(s.agentEntries)).Msg("scheduler reloaded")
-	return nil
-}
+// Reconcile triggers a one-shot reconcile out of band — useful for tests
+// that want to force the registration cycle without waiting for the
+// reconciler ticker.
+func (s *Scheduler) Reconcile() error { return s.reconcile() }
 
 func (s *Scheduler) setRunCtx(ctx context.Context) {
 	s.ctxMu.Lock()

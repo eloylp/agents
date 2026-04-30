@@ -12,15 +12,13 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog"
 
-	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
-	"github.com/eloylp/agents/internal/coordinator"
-	"github.com/eloylp/agents/internal/fleet"
-	"github.com/eloylp/agents/internal/observe"
-	"github.com/eloylp/agents/internal/scheduler"
 	daemonconfig "github.com/eloylp/agents/internal/daemon/config"
 	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
 	daemonrepos "github.com/eloylp/agents/internal/daemon/repos"
+	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/scheduler"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -111,31 +109,34 @@ func testFixtureWithConfig(t *testing.T, cfg *config.Config) Deps {
 	db := testDB(t)
 	channels := workflow.NewDataChannels(8)
 	obs := observe.NewStore(db)
-	engine := workflow.NewEngine(cfg, map[string]ai.Runner{}, channels, zerolog.Nop())
-	sched, err := scheduler.NewScheduler(cfg, zerolog.Nop())
+	engine := workflow.NewEngine(db, cfg.Daemon.Processor, channels, zerolog.Nop())
+	sched, err := scheduler.NewScheduler(db, time.Hour, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("scheduler: %v", err)
 	}
-	coord := coordinator.New(cfg, db, func(*config.Config) error { return nil }, nil)
-	fleetH := daemonfleet.New(coord, sched, obs, zerolog.Nop())
-	reposH := daemonrepos.New(coord, zerolog.Nop())
-	configH := daemonconfig.New(coord, zerolog.Nop())
+	maxBody := cfg.Daemon.HTTP.MaxBodyBytes
+	if maxBody == 0 {
+		maxBody = 1 << 20
+	}
+	fleetH := daemonfleet.New(db, maxBody, sched, obs, zerolog.Nop())
+	reposH := daemonrepos.New(db, maxBody, zerolog.Nop())
+	configH := daemonconfig.New(db, cfg.Daemon, zerolog.Nop())
 	return Deps{
-		DB:         db,
-		Coord:      coord,
+		DB:           db,
+		DaemonConfig: cfg.Daemon,
 		StatusJSON: func() ([]byte, error) {
 			// Mirror the wire shape internal/daemon.Daemon.StatusJSON returns
 			// so MCP tool tests can assert on the same keys without booting
 			// a full *daemon.Daemon (which would create an import cycle).
 			return []byte(`{"status":"ok","uptime_seconds":0,"queues":{"events":{"buffered":0,"capacity":8}},"agents":[],"orphaned_agents":{"count":0}}`), nil
 		},
-		Queue:      channels,
-		Observe:    obs,
-		Engine:     engine,
-		Fleet:      fleetH,
-		Repos:      reposH,
-		Config:     configH,
-		Logger:     zerolog.Nop(),
+		Queue:   channels,
+		Observe: obs,
+		Engine:  engine,
+		Fleet:   fleetH,
+		Repos:   reposH,
+		Config:  configH,
+		Logger:  zerolog.Nop(),
 	}
 }
 

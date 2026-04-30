@@ -4,15 +4,13 @@
 // apiConfigJSON tree for /config; the exportYAML fragment for /export +
 // /import) so REST and MCP clients see identical payloads.
 //
-// The composing daemon constructs a Handler at startup with the daemon's
-// *coordinator.Coordinator (which owns the cross-domain write epoch the
-// import path runs under, and the cfg pointer /config snapshots from) and
-// mounts the routes via RegisterRoutes. ConfigJSON / ExportYAML /
-// ImportYAML are exported so the MCP layer can call them without going
-// through the router.
+// The handler reads the four CRUD-mutable entity sets from SQLite on every
+// request; the static daemon-level config (HTTP, proxy, log, processor) is
+// captured at construction since those never mutate via CRUD.
 package config
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,7 +21,7 @@ import (
 	"github.com/rs/zerolog"
 	"gopkg.in/yaml.v3"
 
-	"github.com/eloylp/agents/internal/coordinator"
+	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
@@ -31,28 +29,25 @@ import (
 // Handler implements the /config, /export, and /import HTTP surface plus the
 // methods exposed for the MCP config tools.
 type Handler struct {
-	coord  *coordinator.Coordinator
-	logger zerolog.Logger
+	db        *sql.DB
+	daemonCfg config.DaemonConfig
+	logger    zerolog.Logger
 }
 
-// New constructs a Handler. coord supplies the SQLite handle (via DB()),
-// the locked write epoch (via Do()), and the cfg snapshot (via Config()).
-func New(coord *coordinator.Coordinator, logger zerolog.Logger) *Handler {
+// New constructs a Handler. db is read on every request to assemble the
+// /config response from the latest committed entities. daemonCfg supplies
+// the static daemon-level fields the response embeds.
+func New(db *sql.DB, daemonCfg config.DaemonConfig, logger zerolog.Logger) *Handler {
 	return &Handler{
-		coord:  coord,
-		logger: logger.With().Str("component", "server_config").Logger(),
+		db:        db,
+		daemonCfg: daemonCfg,
+		logger:    logger.With().Str("component", "server_config").Logger(),
 	}
 }
 
-// RegisterRoutes mounts the config endpoints on r. /config is mounted
-// unconditionally (it serves the in-memory snapshot); /export and /import
-// only when a database has been attached.
+// RegisterRoutes mounts the config endpoints on r.
 func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) http.Handler) {
 	r.Handle("/config", withTimeout(http.HandlerFunc(h.HandleConfig))).Methods(http.MethodGet)
-
-	if h.coord.DB() == nil {
-		return
-	}
 	r.Handle("/export", withTimeout(http.HandlerFunc(h.HandleExport))).Methods(http.MethodGet)
 	r.Handle("/import", withTimeout(http.HandlerFunc(h.HandleImport))).Methods(http.MethodPost)
 }
@@ -190,25 +185,29 @@ func (h *Handler) HandleConfig(w http.ResponseWriter, _ *http.Request) {
 // redacted. Exposed so surfaces beyond HTTP (e.g. the MCP get_config tool)
 // can reuse the exact same wire shape without going through the router.
 func (h *Handler) ConfigJSON() ([]byte, error) {
-	cfg := h.coord.Config()
+	dcfg := h.daemonCfg
+	storedAgents, storedRepos, storedSkills, storedBackends, err := store.ReadSnapshot(h.db)
+	if err != nil {
+		return nil, fmt.Errorf("read snapshot: %w", err)
+	}
 
 	httpCfg := apiHTTPConfigJSON{
-		ListenAddr:             cfg.Daemon.HTTP.ListenAddr,
-		StatusPath:             cfg.Daemon.HTTP.StatusPath,
-		WebhookPath:            cfg.Daemon.HTTP.WebhookPath,
-		WebhookSecretEnv:       cfg.Daemon.HTTP.WebhookSecretEnv,
-		ReadTimeoutSeconds:     cfg.Daemon.HTTP.ReadTimeoutSeconds,
-		WriteTimeoutSeconds:    cfg.Daemon.HTTP.WriteTimeoutSeconds,
-		IdleTimeoutSeconds:     cfg.Daemon.HTTP.IdleTimeoutSeconds,
-		MaxBodyBytes:           cfg.Daemon.HTTP.MaxBodyBytes,
-		DeliveryTTLSeconds:     cfg.Daemon.HTTP.DeliveryTTLSeconds,
-		ShutdownTimeoutSeconds: cfg.Daemon.HTTP.ShutdownTimeoutSeconds,
+		ListenAddr:             dcfg.HTTP.ListenAddr,
+		StatusPath:             dcfg.HTTP.StatusPath,
+		WebhookPath:            dcfg.HTTP.WebhookPath,
+		WebhookSecretEnv:       dcfg.HTTP.WebhookSecretEnv,
+		ReadTimeoutSeconds:     dcfg.HTTP.ReadTimeoutSeconds,
+		WriteTimeoutSeconds:    dcfg.HTTP.WriteTimeoutSeconds,
+		IdleTimeoutSeconds:     dcfg.HTTP.IdleTimeoutSeconds,
+		MaxBodyBytes:           dcfg.HTTP.MaxBodyBytes,
+		DeliveryTTLSeconds:     dcfg.HTTP.DeliveryTTLSeconds,
+		ShutdownTimeoutSeconds: dcfg.HTTP.ShutdownTimeoutSeconds,
 	}
-	if cfg.Daemon.HTTP.WebhookSecret != "" {
+	if dcfg.HTTP.WebhookSecret != "" {
 		httpCfg.WebhookSecret = redacted
 	}
-	backends := make(map[string]apiAIBackendConfigJSON, len(cfg.Daemon.AIBackends))
-	for name, b := range cfg.Daemon.AIBackends {
+	backends := make(map[string]apiAIBackendConfigJSON, len(storedBackends))
+	for name, b := range storedBackends {
 		backends[name] = apiAIBackendConfigJSON{
 			Command:          b.Command,
 			Version:          b.Version,
@@ -223,27 +222,27 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 	}
 
 	proxy := apiProxyConfigJSON{
-		Enabled: cfg.Daemon.Proxy.Enabled,
-		Path:    cfg.Daemon.Proxy.Path,
+		Enabled: dcfg.Proxy.Enabled,
+		Path:    dcfg.Proxy.Path,
 		Upstream: apiProxyUpstreamJSON{
-			URL:            cfg.Daemon.Proxy.Upstream.URL,
-			Model:          cfg.Daemon.Proxy.Upstream.Model,
-			APIKeyEnv:      cfg.Daemon.Proxy.Upstream.APIKeyEnv,
-			TimeoutSeconds: cfg.Daemon.Proxy.Upstream.TimeoutSeconds,
+			URL:            dcfg.Proxy.Upstream.URL,
+			Model:          dcfg.Proxy.Upstream.Model,
+			APIKeyEnv:      dcfg.Proxy.Upstream.APIKeyEnv,
+			TimeoutSeconds: dcfg.Proxy.Upstream.TimeoutSeconds,
 			// ExtraBody is not copied: see apiProxyUpstreamJSON comment.
 		},
 	}
-	if cfg.Daemon.Proxy.Upstream.APIKey != "" {
+	if dcfg.Proxy.Upstream.APIKey != "" {
 		proxy.Upstream.APIKey = redacted
 	}
 
-	skills := make(map[string]apiSkillJSON, len(cfg.Skills))
-	for name, skill := range cfg.Skills {
+	skills := make(map[string]apiSkillJSON, len(storedSkills))
+	for name, skill := range storedSkills {
 		skills[name] = apiSkillJSON{Prompt: skill.Prompt}
 	}
 
-	agents := make([]apiAgentConfigJSON, 0, len(cfg.Agents))
-	for _, a := range cfg.Agents {
+	agents := make([]apiAgentConfigJSON, 0, len(storedAgents))
+	for _, a := range storedAgents {
 		agents = append(agents, apiAgentConfigJSON{
 			Name:          a.Name,
 			Backend:       a.Backend,
@@ -258,8 +257,8 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 		})
 	}
 
-	repos := make([]apiRepoConfigJSON, 0, len(cfg.Repos))
-	for _, r := range cfg.Repos {
+	repos := make([]apiRepoConfigJSON, 0, len(storedRepos))
+	for _, r := range storedRepos {
 		bindings := make([]apiBindingConfigJSON, 0, len(r.Use))
 		for _, b := range r.Use {
 			bindings = append(bindings, apiBindingConfigJSON{
@@ -280,17 +279,17 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 	resp := apiConfigJSON{
 		Daemon: apiDaemonJSON{
 			Log: apiLogConfigJSON{
-				Level:  cfg.Daemon.Log.Level,
-				Format: cfg.Daemon.Log.Format,
+				Level:  dcfg.Log.Level,
+				Format: dcfg.Log.Format,
 			},
 			HTTP: httpCfg,
 			Processor: apiProcessorConfigJSON{
-				EventQueueBuffer:    cfg.Daemon.Processor.EventQueueBuffer,
-				MaxConcurrentAgents: cfg.Daemon.Processor.MaxConcurrentAgents,
+				EventQueueBuffer:    dcfg.Processor.EventQueueBuffer,
+				MaxConcurrentAgents: dcfg.Processor.MaxConcurrentAgents,
 				Dispatch: apiDispatchConfigJSON{
-					MaxDepth:           cfg.Daemon.Processor.Dispatch.MaxDepth,
-					MaxFanout:          cfg.Daemon.Processor.Dispatch.MaxFanout,
-					DedupWindowSeconds: cfg.Daemon.Processor.Dispatch.DedupWindowSeconds,
+					MaxDepth:           dcfg.Processor.Dispatch.MaxDepth,
+					MaxFanout:          dcfg.Processor.Dispatch.MaxFanout,
+					DedupWindowSeconds: dcfg.Processor.Dispatch.DedupWindowSeconds,
 				},
 			},
 			AIBackends: backends,
@@ -337,7 +336,7 @@ func (h *Handler) HandleExport(w http.ResponseWriter, _ *http.Request) {
 // ExportYAML returns the CRUD-mutable sections of the store as a YAML
 // fragment matching the GET /export response body.
 func (h *Handler) ExportYAML() ([]byte, error) {
-	agents, repos, skills, backends, err := store.ReadSnapshot(h.coord.DB())
+	agents, repos, skills, backends, err := store.ReadSnapshot(h.db)
 	if err != nil {
 		return nil, fmt.Errorf("read snapshot: %w", err)
 	}
@@ -360,7 +359,7 @@ func (h *Handler) ExportYAML() ([]byte, error) {
 // as HandleExport and upserts all entities into the DB. On success it
 // returns 200 with a JSON summary of imported counts.
 func (h *Handler) HandleImport(w http.ResponseWriter, r *http.Request) {
-	limit := h.coord.Config().Daemon.HTTP.MaxBodyBytes * 10
+	limit := h.daemonCfg.HTTP.MaxBodyBytes * 10
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -400,12 +399,12 @@ func (h *Handler) ImportYAML(body []byte, mode string) (map[string]int, error) {
 		backends = payload.Daemon.AIBackends
 	}
 
-	err := h.coord.Do(func() error {
-		if mode == "replace" {
-			return store.ReplaceAll(h.coord.DB(), payload.Agents, payload.Repos, payload.Skills, backends)
-		}
-		return store.ImportAll(h.coord.DB(), payload.Agents, payload.Repos, payload.Skills, backends)
-	})
+	var err error
+	if mode == "replace" {
+		err = store.ReplaceAll(h.db, payload.Agents, payload.Repos, payload.Skills, backends)
+	} else {
+		err = store.ImportAll(h.db, payload.Agents, payload.Repos, payload.Skills, backends)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("import: %w", err)
 	}

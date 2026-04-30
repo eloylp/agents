@@ -9,18 +9,18 @@
 // component together and returns a fully-formed *Daemon. There are no
 // With-setters and no optional fields — production wires the same shape
 // every time and the binary ships as one process, so the type is allowed
-// to know about its components concretely. The cross-cutting interfaces
-// this package used to declare (CronReloader, StatusProvider, MemoryReader,
-// …) lived only to support per-test stubs and have been removed; tests
-// construct a real *Daemon against a tempdir SQLite via internal/daemon/
-// daemontest, the same fixture pattern internal/mcp uses.
+// to know about its components concretely. Tests construct a real *Daemon
+// against a tempdir SQLite via internal/daemon/daemontest.
 //
-// The daemon-wide write epoch (the lock that serializes every CRUD write
-// across domains, the in-memory cfg pointer, the post-write reload chain)
-// lives in internal/coordinator. *Daemon holds a *coordinator.Coordinator
-// and exposes Config() as a convenience for callers that already hold a
-// *Daemon reference (the MCP get_status tool, mostly); domain handlers
-// receive the coordinator directly.
+// State and the database. SQLite is the source of truth. Daemon-level
+// config (HTTP, proxy, log, processor) is set at startup and never
+// mutates — it lives on the Daemon struct. The four CRUD-mutable entity
+// sets (agents, repos, skills, backends) live only in SQLite; every
+// runtime component reads them on demand. The scheduler is the one
+// exception: robfig/cron requires registered entries to fire, so the
+// scheduler holds a registered set in memory and reconciles it against
+// SQLite via a polling goroutine. CRUD writes never push updates into
+// the runtime — the next read or reconcile picks them up.
 package daemon
 
 import (
@@ -38,32 +38,37 @@ import (
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/eloylp/agents/internal/ai"
 	anthropicproxy "github.com/eloylp/agents/internal/anthropic_proxy"
 	"github.com/eloylp/agents/internal/backends"
 	"github.com/eloylp/agents/internal/config"
-	"github.com/eloylp/agents/internal/coordinator"
-	"github.com/eloylp/agents/internal/fleet"
-	mcpserver "github.com/eloylp/agents/internal/mcp"
-	"github.com/eloylp/agents/internal/observe"
-	"github.com/eloylp/agents/internal/scheduler"
 	daemonconfig "github.com/eloylp/agents/internal/daemon/config"
 	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
 	daemonobserve "github.com/eloylp/agents/internal/daemon/observe"
 	daemonrepos "github.com/eloylp/agents/internal/daemon/repos"
+	"github.com/eloylp/agents/internal/fleet"
+	mcpserver "github.com/eloylp/agents/internal/mcp"
+	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/scheduler"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/ui"
 	"github.com/eloylp/agents/internal/webhook"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
-// Daemon bundles the agents process. Constructed once via New; Run blocks until the
-// supplied context is cancelled and then drives a graceful shutdown.
+// Daemon bundles the agents process. Constructed once via New; Run blocks
+// until the supplied context is cancelled and then drives a graceful
+// shutdown.
 type Daemon struct {
 	logger zerolog.Logger
 
-	// Coordinator owns the daemon-wide write epoch + the cfg pointer.
-	coord *coordinator.Coordinator
+	// db is the SQLite handle every runtime component reads from.
+	db *sql.DB
+
+	// daemonCfg is the static daemon-level configuration: HTTP, proxy, log,
+	// processor settings. Set at startup and never mutated. The four
+	// CRUD-mutable entity sets are NOT held here — they live only in
+	// SQLite and are read on demand.
+	daemonCfg config.DaemonConfig
 
 	// Runtime collaborators.
 	channels  *workflow.DataChannels
@@ -73,33 +78,31 @@ type Daemon struct {
 	obs       *observe.Store
 
 	// HTTP-side concrete handlers. All non-nil after New returns.
-	fleet     *daemonfleet.Handler
-	repos     *daemonrepos.Handler
-	config    *daemonconfig.Handler
-	observe   *daemonobserve.Handler
-	webhook   *webhook.Handler
-	delivery  *webhook.DeliveryStore
-	mcp       http.Handler
-	proxy     *anthropicproxy.Handler
-	uiFS      fs.FS
+	fleet    *daemonfleet.Handler
+	repos    *daemonrepos.Handler
+	config   *daemonconfig.Handler
+	observe  *daemonobserve.Handler
+	webhook  *webhook.Handler
+	delivery *webhook.DeliveryStore
+	mcp      http.Handler
+	proxy    *anthropicproxy.Handler
+	uiFS     fs.FS
 
 	startTime time.Time
 }
 
-// New builds the daemon. cfg is the initial config snapshot (typically
-// loaded from SQLite via store.LoadAndValidate); db is the live SQLite
-// handle the caller owns and closes. New constructs every runtime
-// component, wires the hot-reload chain through the coordinator, and
-// returns a Server ready for Run.
+// New builds the daemon. cfg supplies the static daemon-level fields
+// (HTTP, proxy, log, processor) — those never mutate via CRUD, so they
+// are captured by value at startup. The four CRUD-mutable entity sets
+// (agents, repos, skills, backends) live only in db and are read on
+// demand by every runtime component. The caller owns and closes db.
 func New(cfg *config.Config, db *sql.DB, logger zerolog.Logger) (*Daemon, error) {
 	httpLogger := logger.With().Str("component", "http_server").Logger()
 
-	// Runtime tier first — everything below depends on these.
-	runners := buildRunners(cfg, logger)
 	channels := workflow.NewDataChannels(cfg.Daemon.Processor.EventQueueBuffer)
-	engine := workflow.NewEngine(cfg, runners, channels, logger)
+	engine := workflow.NewEngine(db, cfg.Daemon.Processor, channels, logger)
 
-	memBackend := coordinator.NewSQLiteMemory(db)
+	memBackend := store.NewMemoryBackend(db)
 	engine.WithMemory(memBackend)
 
 	obs := observe.NewStore(db)
@@ -109,35 +112,25 @@ func New(cfg *config.Config, db *sql.DB, logger zerolog.Logger) (*Daemon, error)
 	engine.WithStepRecorder(obs)
 	memBackend.SetChangeNotifier(obs.PublishMemoryChange)
 
-	sched, err := scheduler.NewScheduler(cfg, logger)
+	sched, err := scheduler.NewScheduler(db, scheduler.DefaultReconcileInterval, logger)
 	if err != nil {
 		return nil, fmt.Errorf("scheduler: %w", err)
 	}
 	sched.WithEventQueue(channels)
 	engine.WithLastRunRecorder(sched)
 
-	// Coordinator owns the cfg pointer + write epoch + reload chain. Built
-	// after the runtime so its ReloadFunc can close over the live engine
-	// and scheduler. The fleet handler attaches its orphan-cache refresh
-	// below as the post-reload hook.
-	reloadRecipe := makeReloadRecipe(engine, sched, runnerBuilder(logger), httpLogger)
-	coord := coordinator.New(cfg, db, reloadRecipe, nil) // onPost wired below
+	// Domain handlers (HTTP layer). All take the SQLite handle directly
+	// and the static daemon-level config; CRUD-mutable state is read from
+	// db on every request.
+	fleetHandler := daemonfleet.New(db, cfg.Daemon.HTTP.MaxBodyBytes, sched, obs, logger)
+	reposHandler := daemonrepos.New(db, cfg.Daemon.HTTP.MaxBodyBytes, logger)
+	configHandler := daemonconfig.New(db, cfg.Daemon, logger)
 
-	// Domain handlers (HTTP layer). All take *coordinator.Coordinator for
-	// the write epoch + Config; runtime-side concrete pointers for the
-	// scheduling / observability / dispatch info their views need.
-	fleetHandler := daemonfleet.New(coord, sched, obs, logger)
-	fleetHandler.RefreshOrphansFromCfg(cfg)
-	coord.SetPostReload(fleetHandler.RefreshOrphansFromCfg)
-
-	reposHandler := daemonrepos.New(coord, logger)
-	configHandler := daemonconfig.New(coord, logger)
-
-	memReader := coordinator.NewSQLiteMemoryReader(db)
-	observeHandler := daemonobserve.New(obs, coord, sched, engine, memReader, logger)
+	memReader := store.NewMemoryReader(db)
+	observeHandler := daemonobserve.New(obs, db, sched, engine, memReader, logger)
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
-	webhookHandler := webhook.NewHandler(deliveryStore, channels, coord, logger)
+	webhookHandler := webhook.NewHandler(deliveryStore, channels, db, cfg.Daemon.HTTP, logger)
 
 	// Processor sits over the queue; event recorder writes into observe so
 	// /events shows the firehose.
@@ -148,7 +141,8 @@ func New(cfg *config.Config, db *sql.DB, logger zerolog.Logger) (*Daemon, error)
 
 	d := &Daemon{
 		logger:    httpLogger,
-		coord:     coord,
+		db:        db,
+		daemonCfg: cfg.Daemon,
 		channels:  channels,
 		engine:    engine,
 		scheduler: sched,
@@ -175,35 +169,32 @@ func New(cfg *config.Config, db *sql.DB, logger zerolog.Logger) (*Daemon, error)
 		}, logger)
 	}
 
-	// MCP last — it consumes every other component. Constructed here so the
-	// handler picks up exactly the wiring the REST surface uses.
+	// MCP last — it consumes every other component. Constructed here so
+	// the handler picks up exactly the wiring the REST surface uses.
 	d.mcp = mcpserver.New(mcpserver.Deps{
-		DB:         db,
-		Coord:      coord,
-		StatusJSON: d.StatusJSON,
-		Queue:      channels,
-		Observe:    obs,
-		Engine:     engine,
-		Fleet:      fleetHandler,
-		Repos:      reposHandler,
-		Config:     configHandler,
-		Logger:     logger,
+		DB:           db,
+		DaemonConfig: cfg.Daemon,
+		StatusJSON:   d.StatusJSON,
+		Queue:        channels,
+		Observe:      obs,
+		Engine:       engine,
+		Fleet:        fleetHandler,
+		Repos:        reposHandler,
+		Config:       configHandler,
+		Logger:       logger,
 	})
 
 	return d, nil
 }
 
-// Config delegates to the coordinator. Convenience for callers (notably the
-// MCP get_status tool) that already hold *Daemon.
-func (d *Daemon) Config() *config.Config { return d.coord.Config() }
+// DB returns the SQLite handle. Exported for tests; production callers
+// use the domain handlers.
+func (d *Daemon) DB() *sql.DB { return d.db }
 
-// DB returns the SQLite handle. Exported for tests; production callers use
-// the domain handlers.
-func (d *Daemon) DB() *sql.DB { return d.coord.DB() }
-
-// Coordinator returns the daemon's coordinator. Exported for tests that need
-// to call Do() directly without going through an HTTP route.
-func (d *Daemon) Coordinator() *coordinator.Coordinator { return d.coord }
+// DaemonConfig returns the static daemon-level configuration — HTTP,
+// proxy, log, processor. CRUD-mutable state is NOT here; read it from
+// SQLite via the store package.
+func (d *Daemon) DaemonConfig() config.DaemonConfig { return d.daemonCfg }
 
 // Engine returns the workflow engine. Exported for tests asserting on
 // dispatch counters or active-run state.
@@ -213,8 +204,7 @@ func (d *Daemon) Engine() *workflow.Engine { return d.engine }
 // assert events were enqueued by reading directly off EventChan.
 func (d *Daemon) Channels() *workflow.DataChannels { return d.channels }
 
-// Fleet returns the fleet HTTP handler. Exported for tests that need to
-// invoke fleet handlers directly (e.g., to assert on the orphan cache).
+// Fleet returns the fleet HTTP handler. Exported for tests.
 func (d *Daemon) Fleet() *daemonfleet.Handler { return d.fleet }
 
 // Repos returns the repos HTTP handler. Exported for tests.
@@ -234,11 +224,11 @@ func (d *Daemon) Observe() *observe.Store { return d.obs }
 // exercise routing without starting a real TCP listener.
 func (d *Daemon) Handler() http.Handler { return d.buildRouter() }
 
-// Run starts every long-running goroutine the daemon needs (delivery store
-// eviction, dispatch dedup eviction, the worker pool, the cron scheduler,
-// the HTTP listener) and blocks until ctx is cancelled. Graceful shutdown
-// drains the HTTP server first, then the worker pool drains its in-flight
-// events; cron entries stop firing immediately.
+// Run starts every long-running goroutine the daemon needs (delivery
+// store eviction, dispatch dedup eviction, the worker pool, the cron
+// scheduler, the HTTP listener) and blocks until ctx is cancelled.
+// Graceful shutdown drains the HTTP server first, then the worker pool
+// drains its in-flight events; cron entries stop firing immediately.
 func (d *Daemon) Run(ctx context.Context) error {
 	d.logger.Info().Msg("starting agents daemon")
 
@@ -258,28 +248,28 @@ func (d *Daemon) Run(ctx context.Context) error {
 }
 
 func (d *Daemon) runHTTP(ctx context.Context) error {
-	cfg := d.coord.Config()
+	httpCfg := d.daemonCfg.HTTP
 	router := d.buildRouter()
 
 	srv := &http.Server{
-		Addr:         cfg.Daemon.HTTP.ListenAddr,
+		Addr:         httpCfg.ListenAddr,
 		Handler:      router,
-		ReadTimeout:  time.Duration(cfg.Daemon.HTTP.ReadTimeoutSeconds) * time.Second,
-		WriteTimeout: time.Duration(cfg.Daemon.HTTP.WriteTimeoutSeconds) * time.Second,
-		IdleTimeout:  time.Duration(cfg.Daemon.HTTP.IdleTimeoutSeconds) * time.Second,
+		ReadTimeout:  time.Duration(httpCfg.ReadTimeoutSeconds) * time.Second,
+		WriteTimeout: time.Duration(httpCfg.WriteTimeoutSeconds) * time.Second,
+		IdleTimeout:  time.Duration(httpCfg.IdleTimeoutSeconds) * time.Second,
 	}
 
 	errCh := make(chan error, 1)
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Daemon.HTTP.ShutdownTimeoutSeconds)*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(httpCfg.ShutdownTimeoutSeconds)*time.Second)
 		defer cancel()
 		errCh <- srv.Shutdown(shutdownCtx)
 	}()
 
-	logEvent := d.logger.Info().Str("addr", cfg.Daemon.HTTP.ListenAddr).Str("status_path", cfg.Daemon.HTTP.StatusPath).Str("webhook_path", cfg.Daemon.HTTP.WebhookPath)
+	logEvent := d.logger.Info().Str("addr", httpCfg.ListenAddr).Str("status_path", httpCfg.StatusPath).Str("webhook_path", httpCfg.WebhookPath)
 	if d.proxy != nil {
-		logEvent = logEvent.Str("proxy_path", cfg.Daemon.Proxy.Path)
+		logEvent = logEvent.Str("proxy_path", d.daemonCfg.Proxy.Path)
 	}
 	logEvent.Msg("starting webhook server")
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -289,9 +279,9 @@ func (d *Daemon) runHTTP(ctx context.Context) error {
 }
 
 func (d *Daemon) buildRouter() http.Handler {
-	cfg := d.coord.Config()
+	httpCfg := d.daemonCfg.HTTP
 
-	writeTimeout := time.Duration(cfg.Daemon.HTTP.WriteTimeoutSeconds) * time.Second
+	writeTimeout := time.Duration(httpCfg.WriteTimeoutSeconds) * time.Second
 	withTimeout := func(h http.Handler) http.Handler {
 		if writeTimeout <= 0 {
 			return h
@@ -300,12 +290,12 @@ func (d *Daemon) buildRouter() http.Handler {
 	}
 
 	router := mux.NewRouter()
-	router.Handle(cfg.Daemon.HTTP.StatusPath, withTimeout(http.HandlerFunc(d.handleStatus))).Methods(http.MethodGet)
+	router.Handle(httpCfg.StatusPath, withTimeout(http.HandlerFunc(d.handleStatus))).Methods(http.MethodGet)
 	router.Handle("/run", withTimeout(http.HandlerFunc(d.handleAgentsRun))).Methods(http.MethodPost)
 	d.webhook.RegisterRoutes(router, withTimeout)
 
-	// /agents merges the read-only fleet snapshot view (GET) with CRUD create
-	// (POST) on a single mux entry.
+	// /agents merges the read-only fleet snapshot view (GET) with CRUD
+	// create (POST) on a single mux entry.
 	router.Handle("/agents", withTimeout(http.HandlerFunc(d.handleAgents))).Methods(http.MethodGet, http.MethodPost)
 
 	d.fleet.RegisterRoutes(router, withTimeout)
@@ -330,9 +320,9 @@ func (d *Daemon) buildRouter() http.Handler {
 		// Proxy enforces its own upstream timeout via http.Client; wrapping
 		// with http.TimeoutHandler would impose a hard cap shorter than the
 		// configured LLM inference timeout and break long completions.
-		router.Handle(cfg.Daemon.Proxy.Path, d.proxy).Methods(http.MethodPost)
+		router.Handle(d.daemonCfg.Proxy.Path, d.proxy).Methods(http.MethodPost)
 		router.Handle("/v1/models", withTimeout(http.HandlerFunc(d.proxy.ModelsHandler))).Methods(http.MethodGet)
-		d.logger.Info().Str("path", cfg.Daemon.Proxy.Path).Str("upstream", cfg.Daemon.Proxy.Upstream.URL).Msg("anthropic proxy enabled")
+		d.logger.Info().Str("path", d.daemonCfg.Proxy.Path).Str("upstream", d.daemonCfg.Proxy.Upstream.URL).Msg("anthropic proxy enabled")
 	}
 	if d.mcp != nil {
 		// MCP streamable-HTTP can hold SSE streams open; do not wrap in
@@ -374,8 +364,8 @@ type statusJSON struct {
 	OrphanedAgents statusOrphanSummaryJSON    `json:"orphaned_agents"`
 }
 
-// buildStatus assembles the /status payload. Same struct backs the
-// MCP get_status tool so both surfaces share one source of truth.
+// buildStatus assembles the /status payload. Same struct backs the MCP
+// get_status tool so both surfaces share one source of truth.
 func (d *Daemon) buildStatus() statusJSON {
 	q := d.channels.QueueStats()
 
@@ -388,17 +378,11 @@ func (d *Daemon) buildStatus() statusJSON {
 		Agents: append([]scheduler.AgentStatus{}, d.scheduler.AgentStatuses()...),
 	}
 
-	orphans := d.fleet.OrphansSnapshot()
-	if fresh, err := d.fleet.RefreshOrphansFromDB(); err != nil {
-		d.logger.Warn().Err(err).Msg("status: orphan snapshot refresh failed")
-	} else {
-		orphans = fresh
+	orphans, err := d.fleet.OrphanedAgents()
+	if err != nil {
+		d.logger.Warn().Err(err).Msg("status: orphan computation failed")
 	}
-	resp.OrphanedAgents = statusOrphanSummaryJSON{Count: orphans.Count}
-	if !orphans.GeneratedAt.IsZero() {
-		at := orphans.GeneratedAt
-		resp.OrphanedAgents.UpdatedAt = &at
-	}
+	resp.OrphanedAgents = statusOrphanSummaryJSON{Count: len(orphans)}
 
 	stats := d.engine.DispatchStats()
 	resp.Dispatch = &stats
@@ -425,9 +409,8 @@ type agentsRunRequest struct {
 }
 
 func (d *Daemon) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
-	cfg := d.coord.Config()
 	var req agentsRunRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, cfg.Daemon.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, d.daemonCfg.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -436,7 +419,13 @@ func (d *Daemon) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repo, ok := cfg.RepoByName(req.Repo)
+	repos, err := store.ReadRepos(d.db)
+	if err != nil {
+		d.logger.Error().Err(err).Msg("/run: read repos")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	repo, ok := findRepo(repos, req.Repo)
 	if !ok || !repo.Enabled {
 		http.Error(w, "repo not found or disabled", http.StatusNotFound)
 		return
@@ -469,68 +458,23 @@ func (d *Daemon) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ── helpers: runner construction + reload recipe ──────────────────────────
-
-// runnerBuilder returns the factory used to construct ai.Runner instances at
-// startup AND on every CRUD-triggered backend change. The same factory in
-// both paths means hot-reloaded backends produce runners bit-for-bit
-// identical to startup-built ones.
-func runnerBuilder(logger zerolog.Logger) func(name string, b fleet.Backend) ai.Runner {
-	return func(name string, b fleet.Backend) ai.Runner {
-		return ai.NewCommandRunner(
-			name, "command", b.Command, backendEnvOverrides(b),
-			b.TimeoutSeconds, b.MaxPromptChars, b.RedactionSaltEnv,
-			logger,
-		)
-	}
-}
-
-func backendEnvOverrides(b fleet.Backend) map[string]string {
-	if b.LocalModelURL == "" {
-		return nil
-	}
-	return map[string]string{"ANTHROPIC_BASE_URL": b.LocalModelURL}
-}
-
-func buildRunners(cfg *config.Config, logger zerolog.Logger) map[string]ai.Runner {
-	build := runnerBuilder(logger)
-	out := make(map[string]ai.Runner, len(cfg.Daemon.AIBackends))
-	for name, b := range cfg.Daemon.AIBackends {
-		out[name] = build(name, b)
-	}
-	return out
-}
-
-// makeReloadRecipe returns the coordinator.ReloadFunc that propagates each
-// post-write cfg snapshot to the runtime in lockstep: rebuild runners,
-// engine.UpdateConfigAndRunners (atomic cfg+runners swap so concurrent
-// runAgent calls cannot observe a torn pair), refresh the dispatcher's
-// agent map, then ask the scheduler to swap its cron entries. Each step
-// is one line; the recipe lives in one place.
-func makeReloadRecipe(engine *workflow.Engine, sched *scheduler.Scheduler, build func(name string, b fleet.Backend) ai.Runner, logger zerolog.Logger) coordinator.ReloadFunc {
-	return func(cfg *config.Config) error {
-		runners := make(map[string]ai.Runner, len(cfg.Daemon.AIBackends))
-		for name, b := range cfg.Daemon.AIBackends {
-			runners[name] = build(name, b)
+// findRepo locates the repo with the given full name (case-insensitive
+// match via fleet name normalization, the same rule applied at write time).
+func findRepo(repos []fleet.Repo, name string) (fleet.Repo, bool) {
+	want := fleet.NormalizeRepoName(name)
+	for _, r := range repos {
+		if r.Name == want {
+			return r, true
 		}
-		engine.UpdateConfigAndRunners(cfg, runners)
-		if d := engine.Dispatcher(); d != nil {
-			d.UpdateAgents(cfg.Agents)
-		}
-		if err := sched.RebuildCron(cfg.Repos, cfg.Agents, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
-			logger.Error().Err(err).Msg("hot reload: scheduler rebuild failed")
-			return err
-		}
-		return nil
 	}
+	return fleet.Repo{}, false
 }
 
-// LoadConfig is the daemon's startup config-load helper, kept here (rather
-// than in cmd/agents/main.go) so the server package owns the full daemon
-// boot path. It opens the SQLite database, optionally imports a YAML file
-// into it, runs auto-discovery for AI backends if none are configured,
-// and returns the validated *config.Config. The caller owns and closes db.
-// Status/import progress messages are written to msg (typically os.Stderr);
+// LoadConfig is the daemon's startup config-load helper. It opens the
+// SQLite database, optionally imports a YAML file into it, runs auto-
+// discovery for AI backends if none are configured, and returns the
+// validated *config.Config. The caller owns and closes db. Status /
+// import progress messages are written to msg (typically os.Stderr);
 // pass nil to silence them.
 func LoadConfig(ctx context.Context, dbPath, importPath string, msg io.Writer) (*config.Config, *sql.DB, error) {
 	db, err := store.Open(dbPath)

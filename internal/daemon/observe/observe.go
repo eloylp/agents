@@ -10,6 +10,7 @@
 package observe
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,9 +21,9 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
 
-	"github.com/eloylp/agents/internal/coordinator"
 	obstore "github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
+	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -30,10 +31,10 @@ import (
 // read-only and safe for concurrent use; the type holds no mutable state.
 type Handler struct {
 	store     *obstore.Store
-	coord     *coordinator.Coordinator
+	db        *sql.DB
 	sched     *scheduler.Scheduler
 	engine    *workflow.Engine
-	memReader *coordinator.SQLiteMemoryReader
+	memReader *store.MemoryReader
 	logger    zerolog.Logger
 }
 
@@ -42,16 +43,16 @@ type Handler struct {
 // same scheduler that holds the cron lastRuns map, the same engine that
 // owns the dispatch counters.
 func New(
-	store *obstore.Store,
-	coord *coordinator.Coordinator,
+	obs *obstore.Store,
+	db *sql.DB,
 	sched *scheduler.Scheduler,
 	engine *workflow.Engine,
-	memReader *coordinator.SQLiteMemoryReader,
+	memReader *store.MemoryReader,
 	logger zerolog.Logger,
 ) *Handler {
 	return &Handler{
-		store:     store,
-		coord:     coord,
+		store:     obs,
+		db:        db,
 		sched:     sched,
 		engine:    engine,
 		memReader: memReader,
@@ -233,9 +234,13 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	seen := make(map[string]struct{})
-	if h.coord != nil {
-		for _, a := range h.coord.Config().Agents {
-			seen[a.Name] = struct{}{}
+	if h.db != nil {
+		if agents, err := store.ReadAgents(h.db); err == nil {
+			for _, a := range agents {
+				seen[a.Name] = struct{}{}
+			}
+		} else {
+			h.logger.Warn().Err(err).Msg("graph: read agents failed; node list will only include those with dispatch edges")
 		}
 	}
 	for _, e := range edges {
@@ -294,7 +299,7 @@ func (h *Handler) HandleMemory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	content, mtime, err := h.memReader.ReadMemory(agent, repo)
-	if errors.Is(err, coordinator.ErrMemoryNotFound) {
+	if errors.Is(err, store.ErrMemoryNotFound) {
 		http.Error(w, "memory not found", http.StatusNotFound)
 		return
 	}

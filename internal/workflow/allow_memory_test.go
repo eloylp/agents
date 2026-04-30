@@ -7,8 +7,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/rs/zerolog"
-
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
@@ -90,11 +88,11 @@ func TestEngineLoadsAndPersistsMemoryWhenAllowed(t *testing.T) {
 	}
 
 	cfg := newMemoryTestCfg(nil) // AllowMemory unset → IsAllowMemory()==true
-	e := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, nil, zerolog.Nop())
+	e := newEngineFromCfg(t, cfg, map[string]ai.Runner{"claude": runner}, nil)
 	e.WithMemory(mem)
 
 	ev := labelEvent("issues.labeled", "owner/repo", "ai:review:arch-reviewer", 42)
-	if err := e.runAgent(context.Background(), ev, cfg.Agents[0], cfg, e.runners); err != nil {
+	if err := e.runAgent(context.Background(), ev, cfg.Agents[0], cfg); err != nil {
 		t.Fatalf("runAgent: %v", err)
 	}
 
@@ -133,11 +131,11 @@ func TestEngineSkipsMemoryWhenAllowMemoryFalse(t *testing.T) {
 
 	ff := false
 	cfg := newMemoryTestCfg(&ff)
-	e := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, nil, zerolog.Nop())
+	e := newEngineFromCfg(t, cfg, map[string]ai.Runner{"claude": runner}, nil)
 	e.WithMemory(mem)
 
 	ev := labelEvent("issues.labeled", "owner/repo", "ai:review:arch-reviewer", 42)
-	if err := e.runAgent(context.Background(), ev, cfg.Agents[0], cfg, e.runners); err != nil {
+	if err := e.runAgent(context.Background(), ev, cfg.Agents[0], cfg); err != nil {
 		t.Fatalf("runAgent: %v", err)
 	}
 
@@ -168,11 +166,11 @@ func TestEngineNoMemoryBackendIsHarmless(t *testing.T) {
 	}}
 
 	cfg := newMemoryTestCfg(nil) // AllowMemory unset → true
-	e := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, nil, zerolog.Nop())
+	e := newEngineFromCfg(t, cfg, map[string]ai.Runner{"claude": runner}, nil)
 	// Note: e.WithMemory NOT called.
 
 	ev := labelEvent("issues.labeled", "owner/repo", "ai:review:arch-reviewer", 42)
-	if err := e.runAgent(context.Background(), ev, cfg.Agents[0], cfg, e.runners); err != nil {
+	if err := e.runAgent(context.Background(), ev, cfg.Agents[0], cfg); err != nil {
 		t.Fatalf("runAgent: %v", err)
 	}
 }
@@ -192,11 +190,11 @@ func TestEngineMemoryWriteErrorDoesNotFailRun(t *testing.T) {
 	}
 
 	cfg := newMemoryTestCfg(nil)
-	e := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, nil, zerolog.Nop())
+	e := newEngineFromCfg(t, cfg, map[string]ai.Runner{"claude": runner}, nil)
 	e.WithMemory(mem)
 
 	ev := labelEvent("issues.labeled", "owner/repo", "ai:review:arch-reviewer", 42)
-	if err := e.runAgent(context.Background(), ev, cfg.Agents[0], cfg, e.runners); err != nil {
+	if err := e.runAgent(context.Background(), ev, cfg.Agents[0], cfg); err != nil {
 		t.Fatalf("runAgent should not fail on memory-write error, got: %v", err)
 	}
 	if mem.writeCount() != 1 {

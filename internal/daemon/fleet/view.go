@@ -2,9 +2,11 @@ package fleet
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/eloylp/agents/internal/scheduler"
+	"github.com/eloylp/agents/internal/store"
 )
 
 // agentScheduleJSON carries scheduling state for cron-backed agents.
@@ -60,11 +62,15 @@ func (h *Handler) HandleAgentsView(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 
-	cfg := h.coord.Config()
+	storedAgents, storedRepos, _, _, err := store.ReadSnapshot(h.db)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read snapshot: %v", err), http.StatusInternalServerError)
+		return
+	}
 
 	// Build one entry per configured agent.
-	agents := make([]apiAgentJSON, 0, len(cfg.Agents))
-	for _, a := range cfg.Agents {
+	agents := make([]apiAgentJSON, 0, len(storedAgents))
+	for _, a := range storedAgents {
 		currentStatus := "idle"
 		if h.obs != nil && h.obs.IsRunning(a.Name) {
 			currentStatus = "running"
@@ -90,7 +96,7 @@ func (h *Handler) HandleAgentsView(w http.ResponseWriter, _ *http.Request) {
 		// agent's memory in the dashboard, which is exactly the bug we don't
 		// want. The repo_enabled flag travels alongside so consumers can mark
 		// inactive bindings without a second fetch.
-		for _, repo := range cfg.Repos {
+		for _, repo := range storedRepos {
 			for _, b := range repo.Use {
 				if b.Agent != a.Name {
 					continue

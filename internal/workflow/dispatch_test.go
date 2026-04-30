@@ -2,7 +2,9 @@ package workflow
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +15,7 @@ import (
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/store"
 )
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -71,8 +74,51 @@ func testAgentMap() map[string]fleet.Agent {
 	}
 }
 
-func testDispatcher(q *fakeQueue) *Dispatcher {
-	return NewDispatcher(testDispatchCfg(), testAgentMap(), NewDispatchDedupStore(300), q, zerolog.Nop())
+// testDispatcher seeds testAgentMap into a tempdir SQLite and returns a
+// Dispatcher reading from it. Agents are written individually with a
+// minimal claude backend so the FK constraints pass.
+func testDispatcher(t *testing.T, q *fakeQueue) *Dispatcher {
+	t.Helper()
+	db := dispatchTestDB(t)
+	return NewDispatcher(testDispatchCfg(), db, NewDispatchDedupStore(300), q, zerolog.Nop())
+}
+
+// dispatchTestDB seeds the testAgentMap fleet into a tempdir SQLite.
+func dispatchTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	return seedAgentMap(t, testAgentMap())
+}
+
+// seedAgentMap seeds an arbitrary agent map into a fresh tempdir SQLite,
+// filling in Backend / Prompt where missing so the store's validators
+// pass. Returns the live handle.
+func seedAgentMap(t *testing.T, m map[string]fleet.Agent) *sql.DB {
+	t.Helper()
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	agents := []fleet.Agent{}
+	for _, a := range m {
+		if a.Backend == "" {
+			a.Backend = "claude"
+		}
+		if a.Prompt == "" {
+			a.Prompt = "test"
+		}
+		// Description is required for any agent that appears in another
+		// agent's CanDispatch list. seedAgentMap is permissive: fill in a
+		// default so the validator doesn't reject the seed.
+		if a.AllowDispatch && a.Description == "" {
+			a.Description = "test"
+		}
+		agents = append(agents, a)
+	}
+	if err := store.ImportAll(db, agents, nil, map[string]fleet.Skill{}, map[string]fleet.Backend{"claude": {Command: "claude"}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	return db
 }
 
 func originatorAgent(name string) fleet.Agent {
@@ -93,7 +139,7 @@ func testEvent(repo string, number int) Event {
 func TestDispatcherEnqueuesValidRequest(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}
-	d := testDispatcher(q)
+	d := testDispatcher(t, q)
 
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 42, Reason: "please review"}}
 	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 42), "root-123", 0, "span-parent-42", reqs)
@@ -139,7 +185,7 @@ func TestDispatcherEnqueuesValidRequest(t *testing.T) {
 func TestDispatcherEventIDIsUniquePerHop(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}
-	d := testDispatcher(q)
+	d := testDispatcher(t, q)
 
 	// Dispatch the same agent against two different issue numbers from the same
 	// root event. Each synthetic event must carry a distinct ID that is not
@@ -217,7 +263,7 @@ func TestDispatcherDropsRequest(t *testing.T) {
 			if tc.modifyAgents != nil {
 				tc.modifyAgents(agents)
 			}
-			d := NewDispatcher(cfg, agents, NewDispatchDedupStore(300), q, zerolog.Nop())
+			d := NewDispatcher(cfg, seedAgentMap(t, agents), NewDispatchDedupStore(300), q, zerolog.Nop())
 			reqs := []ai.DispatchRequest{{Agent: tc.targetAgent, Number: 1, Reason: "test"}}
 			d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", tc.currentDepth, "", reqs)
 			if len(q.popped()) != 0 {
@@ -245,7 +291,7 @@ func TestDispatcherDropsExceedsMaxFanout(t *testing.T) {
 	cfg := testDispatchCfg()
 	cfg.MaxFanout = 3
 	q := &fakeQueue{}
-	d := NewDispatcher(cfg, agents, NewDispatchDedupStore(300), q, zerolog.Nop())
+	d := NewDispatcher(cfg, seedAgentMap(t, agents), NewDispatchDedupStore(300), q, zerolog.Nop())
 
 	reqs := []ai.DispatchRequest{
 		{Agent: "a", Number: 1, Reason: "r"},
@@ -268,7 +314,7 @@ func TestDispatcherDropsExceedsMaxFanout(t *testing.T) {
 func TestDispatcherDeduplicatesWithinWindow(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}
-	d := testDispatcher(q)
+	d := testDispatcher(t, q)
 
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 42, Reason: "review"}}
 	ev := testEvent("owner/repo", 42)
@@ -375,7 +421,7 @@ func TestEngineHandlesAgentDispatchEvent(t *testing.T) {
 	}
 
 	q := &fakeQueue{}
-	e := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, q, zerolog.Nop())
+	e := newEngineFromCfg(t, cfg, map[string]ai.Runner{"claude": runner}, q)
 
 	ev := Event{
 		ID:   "root-abc",
@@ -425,7 +471,7 @@ func TestEngineDispatchEventUnboundTargetReturnsError(t *testing.T) {
 			},
 		},
 	}
-	e := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, nil, zerolog.Nop())
+	e := newEngineFromCfg(t, cfg, map[string]ai.Runner{"claude": runner}, nil)
 
 	ev := Event{
 		Repo: RepoRef{FullName: "owner/repo", Enabled: true},
@@ -445,7 +491,7 @@ func TestEngineDispatchEventUnboundTargetReturnsError(t *testing.T) {
 func TestDispatcherNormalizesAgentName(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}
-	d := testDispatcher(q)
+	d := testDispatcher(t, q)
 
 	// Mixed-case and whitespace in request — should be normalized.
 	reqs := []ai.DispatchRequest{{Agent: "  PR-Reviewer  ", Number: 1, Reason: "review"}}
@@ -460,7 +506,7 @@ func TestDispatcherNormalizesAgentName(t *testing.T) {
 func TestDispatcherCountersAccumulateAcrossMultipleCalls(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}
-	d := testDispatcher(q)
+	d := testDispatcher(t, q)
 
 	// Two valid dispatches.
 	for range 2 {
@@ -482,7 +528,7 @@ func TestDispatcherCountersAccumulateAcrossMultipleCalls(t *testing.T) {
 func TestDispatcherHandlesQueueError(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{err: errors.New("queue full")}
-	d := testDispatcher(q)
+	d := testDispatcher(t, q)
 
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 1, Reason: "review"}}
 	err := d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, "", reqs)
@@ -500,7 +546,7 @@ func TestDispatcherHandlesQueueError(t *testing.T) {
 func TestDispatcherOmittedNumberFallsBackToEventNumber(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}
-	d := testDispatcher(q)
+	d := testDispatcher(t, q)
 
 	// req.Number == 0 (agent omitted number field) — must fall back to ev.Number.
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 0, Reason: "review"}}
@@ -519,7 +565,7 @@ func TestDispatcherOmittedNumberFallsBackToEventNumber(t *testing.T) {
 func TestDispatcherDedupUsesEventNumberWhenRequestNumberOmitted(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}
-	d := testDispatcher(q)
+	d := testDispatcher(t, q)
 
 	// Two dispatch requests from different event numbers, both with omitted req.Number.
 	// They must NOT collapse into the same dedup key.
@@ -546,7 +592,7 @@ func TestDispatcherRetrySucceedsAfterEnqueueFailure(t *testing.T) {
 	// claimed only after a successful enqueue, no dedup entry is written and
 	// the retry is not suppressed.
 	qFail := &fakeQueue{err: errors.New("queue full")}
-	d := testDispatcher(qFail)
+	d := testDispatcher(t, qFail)
 
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 1, Reason: "review"}}
 	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, "", reqs)
@@ -571,7 +617,7 @@ func TestDispatcherRetrySucceedsAfterEnqueueFailure(t *testing.T) {
 func TestDispatchClaimOnlyVisibleAfterSuccessfulEnqueue(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{err: errors.New("queue full")}
-	d := testDispatcher(q)
+	d := testDispatcher(t, q)
 
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 0, Reason: "check"}}
 	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 0), "root-1", 0, "", reqs)
@@ -591,7 +637,7 @@ func TestDispatchClaimOnlyVisibleAfterSuccessfulEnqueue(t *testing.T) {
 func TestMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}
-	d := testDispatcher(q)
+	d := testDispatcher(t, q)
 
 	// Simulate: cron run confirms it will proceed and writes the cron-namespace mark.
 	alreadyClaimed := d.DispatchAlreadyClaimed("coder", "owner/repo", time.Now())
@@ -629,7 +675,7 @@ func TestMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.T) {
 func TestMarkAutonomousRunDoesNotSuppressDispatchForDifferentNumber(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}
-	d := testDispatcher(q)
+	d := testDispatcher(t, q)
 
 	// Cron run for pr-reviewer marks (pr-reviewer, owner/repo, 0).
 	d.MarkAutonomousRun("coder", "owner/repo", time.Now())
@@ -661,7 +707,7 @@ func TestPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 	}
 	cfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 2}
 	q := &fakeQueue{}
-	d := NewDispatcher(cfg, agents, dedup, q, zerolog.Nop())
+	d := NewDispatcher(cfg, seedAgentMap(t, agents), dedup, q, zerolog.Nop())
 
 	// Autonomous run confirms it will proceed and writes the cron mark.
 	now := time.Now()
@@ -683,7 +729,7 @@ func TestPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 	// After the TTL expires the dispatch must succeed. The expiry is simulated
 	// by creating a fresh dedup store (no cron mark) rather than advancing a
 	// real clock.
-	d2 := NewDispatcher(cfg, agents, NewDispatchDedupStore(2), q, zerolog.Nop())
+	d2 := NewDispatcher(cfg, seedAgentMap(t, agents), NewDispatchDedupStore(2), q, zerolog.Nop())
 	d2.ProcessDispatches(context.Background(), originator, ev, "root-2", 0, "", []ai.DispatchRequest{
 		{Agent: "coder", Reason: "dispatch after window expired"},
 	})
@@ -719,7 +765,7 @@ func TestConcurrentDispatchesDoNotDuplicateEnqueue(t *testing.T) {
 	t.Parallel()
 
 	q := &fakeQueue{}
-	d := testDispatcher(q)
+	d := testDispatcher(t, q)
 
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 42, Reason: "review"}}
 	ev := testEvent("owner/repo", 42)
@@ -747,7 +793,7 @@ func TestConcurrentDispatchesDoNotDuplicateEnqueue(t *testing.T) {
 func TestRemoveCronMarkWithOverlappingRunsRefcount(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}
-	d := testDispatcher(q)
+	d := testDispatcher(t, q)
 
 	now := time.Now()
 	// Simulate two overlapping autonomous runs for the same (agent, repo).
@@ -772,7 +818,7 @@ func TestRemoveCronMarkWithOverlappingRunsRefcount(t *testing.T) {
 
 	// A new dispatcher with a fresh store simulates the expired/cleared state.
 	q2 := &fakeQueue{}
-	d2 := testDispatcher(q2)
+	d2 := testDispatcher(t, q2)
 	d2.ProcessDispatches(context.Background(), originator, ev, "root-after", 0, "", []ai.DispatchRequest{
 		{Agent: "coder", Reason: "dispatch after both runs rolled back"},
 	})
@@ -798,7 +844,7 @@ func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 	}
 	cfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: ttlSeconds}
 	q := &fakeQueue{}
-	d := NewDispatcher(cfg, agents, dedup, q, zerolog.Nop())
+	d := NewDispatcher(cfg, seedAgentMap(t, agents), dedup, q, zerolog.Nop())
 
 	// Autonomous run starts; writes cron mark.
 	start := time.Now()
@@ -828,7 +874,7 @@ func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 	d.FinalizeAutonomousRun("coder", "owner/repo")
 	dedup.evict(pastTTL) // TTL already elapsed; now that refcount is 0, entry is evicted.
 	q2 := &fakeQueue{}
-	d2 := NewDispatcher(cfg, agents, dedup, q2, zerolog.Nop())
+	d2 := NewDispatcher(cfg, seedAgentMap(t, agents), dedup, q2, zerolog.Nop())
 	d2.ProcessDispatches(context.Background(), originator, ev, "root-after-run", 0, "", []ai.DispatchRequest{
 		{Agent: "coder", Reason: "dispatch after run completed and TTL expired"},
 	})
@@ -855,7 +901,7 @@ func TestFinalizeAutonomousRunKeepsTTLBlocksDispatchWithinWindow(t *testing.T) {
 	ev := Event{Repo: RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "cron", Number: 0}
 
 	q1 := &fakeQueue{}
-	d1 := NewDispatcher(cfg, agents, dedup, q1, zerolog.Nop())
+	d1 := NewDispatcher(cfg, seedAgentMap(t, agents), dedup, q1, zerolog.Nop())
 
 	// Cron run starts and completes successfully.
 	now := time.Now()
@@ -865,7 +911,7 @@ func TestFinalizeAutonomousRunKeepsTTLBlocksDispatchWithinWindow(t *testing.T) {
 	// Within the TTL window, a dispatch to the same (agent, repo, 0) slot must
 	// still be suppressed — the entry is kept for the full dedup window.
 	q2 := &fakeQueue{}
-	d2 := NewDispatcher(cfg, agents, dedup, q2, zerolog.Nop())
+	d2 := NewDispatcher(cfg, seedAgentMap(t, agents), dedup, q2, zerolog.Nop())
 	d2.ProcessDispatches(context.Background(), originator, ev, "root-post-run", 0, "", []ai.DispatchRequest{
 		{Agent: "coder", Reason: "dispatch shortly after successful cron run"},
 	})
@@ -877,7 +923,7 @@ func TestFinalizeAutonomousRunKeepsTTLBlocksDispatchWithinWindow(t *testing.T) {
 	// check the dispatch namespace (not the cron namespace), so the mark never
 	// blocks repeated autonomous runs.
 	q3 := &fakeQueue{}
-	d3 := NewDispatcher(cfg, agents, dedup, q3, zerolog.Nop())
+	d3 := NewDispatcher(cfg, seedAgentMap(t, agents), dedup, q3, zerolog.Nop())
 	if !d3.TryMarkAutonomousRun("coder", "owner/repo", now) {
 		t.Error("expected second cron run to proceed: cron marks must not suppress other cron runs")
 	}
@@ -951,13 +997,16 @@ func TestLongRunningWebhookRunBlocksCronPastTTL(t *testing.T) {
 	}
 }
 
-// TestDispatcherUpdateAgentsReflectsNewAllowlists verifies that UpdateAgents
-// replaces the opt-in map used by ProcessDispatches so that subsequent dispatch
-// calls see the new agent definitions without a restart.
-func TestDispatcherUpdateAgentsReflectsNewAllowlists(t *testing.T) {
+// TestDispatcherReflectsLiveAllowlistChanges verifies that the dispatcher
+// reads the agent's allow_dispatch flag from SQLite on every dispatch
+// (replacing the pre-cutover hot-reload UpdateAgents call): updating the
+// flag in the database between two dispatch calls is observed by the
+// second one without a restart.
+func TestDispatcherReflectsLiveAllowlistChanges(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}
-	d := testDispatcher(q)
+	db := dispatchTestDB(t)
+	d := NewDispatcher(testDispatchCfg(), db, NewDispatchDedupStore(300), q, zerolog.Nop())
 
 	// Initially "sec-reviewer" has AllowDispatch: false — dispatch is dropped.
 	originator := originatorAgent("coder")
@@ -971,18 +1020,18 @@ func TestDispatcherUpdateAgentsReflectsNewAllowlists(t *testing.T) {
 		t.Error("expected dispatch dropped: sec-reviewer has allow_dispatch: false")
 	}
 
-	// Hot-reload: update sec-reviewer to allow dispatch.
-	updated := []fleet.Agent{
-		{Name: "coder", AllowDispatch: true, CanDispatch: []string{"pr-reviewer", "sec-reviewer"}},
-		{Name: "pr-reviewer", AllowDispatch: true, CanDispatch: []string{"coder"}},
-		{Name: "sec-reviewer", AllowDispatch: true},
+	// Live update: flip sec-reviewer to allow dispatch by writing to SQLite.
+	if err := store.UpsertAgent(db, fleet.Agent{
+		Name: "sec-reviewer", Backend: "claude", Prompt: "review",
+		Description: "test", AllowDispatch: true,
+	}); err != nil {
+		t.Fatalf("update agent: %v", err)
 	}
-	d.UpdateAgents(updated)
 
 	d.ProcessDispatches(context.Background(), originator, ev, "root-2", 0, "", []ai.DispatchRequest{
 		{Agent: "sec-reviewer", Reason: "after update — should be enqueued"},
 	})
 	if len(q.popped()) != 1 {
-		t.Error("expected dispatch enqueued: sec-reviewer now has allow_dispatch: true after UpdateAgents")
+		t.Error("expected dispatch enqueued: sec-reviewer now has allow_dispatch: true")
 	}
 }

@@ -7,15 +7,14 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
 
-// OrphanedAgent describes an agent whose pinned model no longer exists in the
-// backend model catalog stored in the database snapshot.
+// OrphanedAgent describes an agent whose pinned model no longer exists in
+// the backend model catalog stored in the database.
 type OrphanedAgent struct {
 	Name            string   `json:"name"`
 	Backend         string   `json:"backend"`
@@ -24,78 +23,44 @@ type OrphanedAgent struct {
 	AvailableModels []string `json:"available_models,omitempty"`
 }
 
-// OrphanedAgentsSnapshot is the cached orphan-check result used by /status
-// and /agents/orphans/status.
-type OrphanedAgentsSnapshot struct {
-	GeneratedAt time.Time       `json:"generated_at"`
-	Count       int             `json:"count"`
-	Agents      []OrphanedAgent `json:"agents"`
+// OrphanedAgentsResponse is the wire shape for /agents/orphans/status.
+type OrphanedAgentsResponse struct {
+	Count  int             `json:"count"`
+	Agents []OrphanedAgent `json:"agents"`
 }
 
-// HandleOrphansStatus serves GET /agents/orphans/status. It refreshes from
-// the database snapshot when one is attached so callers see post-write
-// state immediately, falling back to the cached cfg-derived snapshot if the
-// DB read fails or no database is wired.
+// HandleOrphansStatus serves GET /agents/orphans/status. It computes the
+// orphan list on the fly from the current SQLite snapshot — there is no
+// cache.
 func (h *Handler) HandleOrphansStatus(w http.ResponseWriter, _ *http.Request) {
-	snapshot := h.OrphansSnapshot()
-	if fresh, err := h.RefreshOrphansFromDB(); err != nil {
-		h.logger.Warn().Err(err).Msg("orphan status: falling back to cached snapshot")
-	} else {
-		snapshot = fresh
+	orphans, err := h.OrphanedAgents()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(snapshot)
+	_ = json.NewEncoder(w).Encode(OrphanedAgentsResponse{
+		Count:  len(orphans),
+		Agents: orphans,
+	})
 }
 
-// RefreshOrphansFromCfg recomputes the orphan cache from cfg without touching
-// the database. The composing daemon calls this once at startup with the
-// YAML-loaded config and again on every reloadCron after the in-memory
-// config has been swapped to a fresh DB-derived snapshot.
-func (h *Handler) RefreshOrphansFromCfg(cfg *config.Config) {
-	snap := OrphanedAgentsSnapshot{
-		GeneratedAt: time.Now().UTC(),
-		Agents:      computeOrphanedAgents(cfg),
-	}
-	snap.Count = len(snap.Agents)
-
-	h.orphanMu.Lock()
-	h.orphanCache = snap
-	h.orphanMu.Unlock()
-}
-
-// OrphansSnapshot returns a defensive copy of the cached orphan snapshot so
-// callers can safely mutate the slice without affecting the cache.
-func (h *Handler) OrphansSnapshot() OrphanedAgentsSnapshot {
-	h.orphanMu.RLock()
-	defer h.orphanMu.RUnlock()
-	out := h.orphanCache
-	out.Agents = append([]OrphanedAgent(nil), h.orphanCache.Agents...)
-	return out
-}
-
-// RefreshOrphansFromDB re-reads the four entity sets from SQLite, splices
-// them onto the daemon-level config, recomputes orphans, and returns the
-// fresh snapshot. When no database is attached it returns the cached
-// snapshot unchanged so callers don't need to special-case cfg-only mode.
-func (h *Handler) RefreshOrphansFromDB() (OrphanedAgentsSnapshot, error) {
-	if h.coord.DB() == nil {
-		return h.OrphansSnapshot(), nil
-	}
-	agents, repos, skills, backends, err := store.ReadSnapshot(h.coord.DB())
+// OrphanedAgents reads the four entity sets from SQLite and returns the
+// list of agents whose pinned model is unavailable in the backend's
+// catalog. Callers (the orphan endpoint and /status) re-evaluate on every
+// request; there is no cache.
+func (h *Handler) OrphanedAgents() ([]OrphanedAgent, error) {
+	agents, repos, _, backends, err := store.ReadSnapshot(h.db)
 	if err != nil {
-		return OrphanedAgentsSnapshot{}, fmt.Errorf("read config snapshot: %w", err)
+		return nil, fmt.Errorf("read snapshot: %w", err)
 	}
-
-	baseCfg := h.coord.Config()
-	cfg := *baseCfg
-	cfg.Agents = agents
-	cfg.Repos = repos
-	cfg.Skills = skills
-	cfg.Daemon.AIBackends = backends
-
-	h.RefreshOrphansFromCfg(&cfg)
-	return h.OrphansSnapshot(), nil
+	cfg := &config.Config{
+		Agents: agents,
+		Repos:  repos,
+		Daemon: config.DaemonConfig{AIBackends: backends},
+	}
+	return computeOrphanedAgents(cfg), nil
 }
 
 func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
@@ -104,10 +69,11 @@ func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
 	}
 
 	// Index every repo that references an agent, regardless of repo or
-	// binding enabled state. The orphan badge fires on a "model not in the
-	// backend catalog" criterion, not on runtime reachability — so the user
-	// needs to see every reference that would need fixing (or re-enabling)
-	// to clear the orphan, including currently-paused bindings.
+	// binding enabled state. The orphan badge fires on a "model not in
+	// the backend catalog" criterion, not on runtime reachability — so
+	// the user needs to see every reference that would need fixing (or
+	// re-enabling) to clear the orphan, including currently-paused
+	// bindings.
 	reposByAgent := make(map[string]map[string]struct{})
 	for _, repo := range cfg.Repos {
 		for _, binding := range repo.Use {

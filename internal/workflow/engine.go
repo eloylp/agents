@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/store"
 )
 
 // labeledKinds are the event kinds that trigger label-based bindings.
@@ -99,10 +101,8 @@ type MemoryBackend interface {
 }
 
 type Engine struct {
-	cfg           *config.Config
-	cfgMu         sync.RWMutex // protects cfg during hot-reload
-	runners       map[string]ai.Runner
-	runnersMu     sync.RWMutex // protects runners during hot-reload
+	db            *sql.DB
+	runnerBuilder func(name string, b fleet.Backend) ai.Runner
 	dispatcher    *Dispatcher
 	memory        MemoryBackend
 	maxConcurrent int
@@ -126,26 +126,73 @@ func (e *Engine) WithMemory(m MemoryBackend) {
 
 // NewEngine builds an Engine. queue may be nil, in which case dispatch
 // requests from agent responses are validated and logged but not enqueued.
-func NewEngine(cfg *config.Config, runners map[string]ai.Runner, queue EventEnqueuer, logger zerolog.Logger) *Engine {
-	max := cfg.Daemon.Processor.MaxConcurrentAgents
+//
+// The engine reads agents, repos, skills, and backends from db on every
+// event — there is no in-memory cfg cache. Static processor settings
+// (concurrency cap, dispatch safety limits) are passed at construction
+// because they never mutate via CRUD; CRUD touches the four entity sets
+// only.
+func NewEngine(db *sql.DB, processorCfg config.ProcessorConfig, queue EventEnqueuer, logger zerolog.Logger) *Engine {
+	max := processorCfg.MaxConcurrentAgents
 	if max <= 0 {
 		max = 4
 	}
 	eng := &Engine{
-		cfg:           cfg,
-		runners:       runners,
+		db:            db,
 		maxConcurrent: max,
 		logger:        logger.With().Str("component", "workflow_engine").Logger(),
 	}
+	eng.runnerBuilder = eng.defaultRunnerFor
 	if queue != nil {
-		agentMap := make(map[string]fleet.Agent, len(cfg.Agents))
-		for _, a := range cfg.Agents {
-			agentMap[a.Name] = a
-		}
-		dedup := NewDispatchDedupStore(cfg.Daemon.Processor.Dispatch.DedupWindowSeconds)
-		eng.dispatcher = NewDispatcher(cfg.Daemon.Processor.Dispatch, agentMap, dedup, queue, logger)
+		dedup := NewDispatchDedupStore(processorCfg.Dispatch.DedupWindowSeconds)
+		eng.dispatcher = NewDispatcher(processorCfg.Dispatch, db, dedup, queue, logger)
 	}
 	return eng
+}
+
+// loadCfg reads the four entity sets from SQLite and returns a *config.Config
+// scoped to a single event. The returned snapshot has only the fields the
+// hot path looks at populated (agents, repos, skills, AIBackends); daemon-
+// level fields the engine doesn't read are left zero.
+func (e *Engine) loadCfg() (*config.Config, error) {
+	agents, repos, skills, backends, err := store.ReadSnapshot(e.db)
+	if err != nil {
+		return nil, fmt.Errorf("engine: load cfg snapshot: %w", err)
+	}
+	cfg := &config.Config{
+		Agents: agents,
+		Repos:  repos,
+		Skills: skills,
+		Daemon: config.DaemonConfig{AIBackends: backends},
+	}
+	return cfg, nil
+}
+
+// defaultRunnerFor builds the ai.Runner that drives the AI CLI for the
+// named backend. Built per-event so that backend changes via CRUD take
+// effect immediately on the next event without any reload chain. The
+// construction is cheap: a struct holding command + env + timeouts.
+//
+// Tests override the runner via WithRunnerBuilder so they can observe
+// what the engine asked the runner to do without spawning a real CLI.
+func (e *Engine) defaultRunnerFor(name string, b fleet.Backend) ai.Runner {
+	var env map[string]string
+	if b.LocalModelURL != "" {
+		env = map[string]string{"ANTHROPIC_BASE_URL": b.LocalModelURL}
+	}
+	return ai.NewCommandRunner(
+		name, "command", b.Command, env,
+		b.TimeoutSeconds, b.MaxPromptChars, b.RedactionSaltEnv,
+		e.logger,
+	)
+}
+
+// WithRunnerBuilder overrides the runner factory the engine uses to
+// resolve a backend to an ai.Runner on each dispatch. Production wires
+// the default that constructs an ai.NewCommandRunner; tests inject stub
+// runners so they can observe the request the engine produced.
+func (e *Engine) WithRunnerBuilder(fn func(name string, b fleet.Backend) ai.Runner) {
+	e.runnerBuilder = fn
 }
 
 // WithTraceRecorder attaches an optional recorder that is called on each
@@ -182,38 +229,6 @@ func (e *Engine) WithGraphRecorder(r GraphRecorder) {
 	if e.dispatcher != nil {
 		e.dispatcher.WithGraphRecorder(r)
 	}
-}
-
-// UpdateConfig atomically replaces the config snapshot used for event routing
-// and prompt rendering. It is safe to call concurrently with ongoing agent
-// runs. Each handler method takes a snapshot at entry and releases the lock
-// before the slow runner.Run call, so hot-reload latency is minimal.
-func (e *Engine) UpdateConfig(cfg *config.Config) {
-	e.cfgMu.Lock()
-	e.cfg = cfg
-	e.cfgMu.Unlock()
-}
-
-// UpdateRunners atomically replaces the runner map. It is safe to call
-// concurrently with ongoing agent runs.
-func (e *Engine) UpdateRunners(runners map[string]ai.Runner) {
-	e.runnersMu.Lock()
-	e.runners = runners
-	e.runnersMu.Unlock()
-}
-
-// UpdateConfigAndRunners atomically replaces both the config snapshot and the
-// runner map in a single critical section (cfgMu then runnersMu, consistent
-// with the read order in runAgent). Use this instead of calling UpdateConfig
-// and UpdateRunners separately when both values are changing together so that
-// concurrent readers never observe a mismatched config/runner pair.
-func (e *Engine) UpdateConfigAndRunners(cfg *config.Config, runners map[string]ai.Runner) {
-	e.cfgMu.Lock()
-	e.runnersMu.Lock()
-	e.cfg = cfg
-	e.runners = runners
-	e.runnersMu.Unlock()
-	e.cfgMu.Unlock()
 }
 
 // StartDispatchDedup starts the background eviction loop for the dispatch
@@ -276,16 +291,14 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		return fmt.Errorf("agent.dispatch event missing target_agent in payload")
 	}
 
-	// Snapshot both cfg and runners atomically (same lock order as
-	// UpdateConfigAndRunners) so that the routing lookup and the subsequent
-	// runAgent call operate on a single consistent epoch. Releasing both locks
-	// before the slow runAgent call keeps contention minimal.
-	e.cfgMu.RLock()
-	e.runnersMu.RLock()
-	cfg := e.cfg
-	runners := e.runners
-	e.runnersMu.RUnlock()
-	e.cfgMu.RUnlock()
+	// Read the four entity sets fresh from SQLite for this event. The
+	// returned cfg is a per-event snapshot — no caching across events, no
+	// reload chain. Cost is one SQLite snapshot read (~111µs for typical
+	// fleet sizes); irrelevant at this daemon's traffic.
+	cfg, err := e.loadCfg()
+	if err != nil {
+		return err
+	}
 
 	repo, ok := cfg.RepoByName(ev.Repo.FullName)
 	if !ok || !repo.Enabled {
@@ -351,7 +364,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		Str("kind", ev.Kind).
 		Msg("running dispatched agent")
 
-	runErr := e.runAgent(ctx, ev, agent, cfg, runners)
+	runErr := e.runAgent(ctx, ev, agent, cfg)
 
 	// Release the on-demand claim taken above for agents.run.
 	if ev.Kind == "agents.run" && e.dispatcher != nil {
@@ -390,14 +403,13 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 // duplicate runs within the dedup window.
 // A failing agent does not abort the others; all errors are joined and returned.
 func (e *Engine) fanOut(ctx context.Context, ev Event) error {
-	// Snapshot both cfg and runners in one critical section so that the
-	// agent lookup and the subsequent runAgent calls share a single epoch.
-	e.cfgMu.RLock()
-	e.runnersMu.RLock()
-	cfg := e.cfg
-	runners := e.runners
-	e.runnersMu.RUnlock()
-	e.cfgMu.RUnlock()
+	// Read the four entity sets from SQLite for this event. The cfg
+	// snapshot scopes the agent lookup and the runAgent calls beneath it
+	// to a single consistent epoch.
+	cfg, err := e.loadCfg()
+	if err != nil {
+		return err
+	}
 
 	matched := e.agentsForEvent(cfg, ev)
 	if len(matched) == 0 {
@@ -464,7 +476,7 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 				}
 			}()
 
-			if err := e.runAgent(ctx, ev, a, cfg, runners); err != nil {
+			if err := e.runAgent(ctx, ev, a, cfg); err != nil {
 				// Abandon on failure so that a retry or a subsequent event can
 				// claim the slot and attempt the run again.
 				if e.dispatcher != nil && ev.Number > 0 {
@@ -589,16 +601,20 @@ func extractDispatchContext(ev Event) (rootEventID string, depth int) {
 	return GenEventID(), 0
 }
 
-// runAgent executes agent using the cfg and runners snapshot provided by the
-// caller. Both must come from the same atomic snapshot so that agent lookup
-// and backend resolution operate on a single consistent epoch. The caller is
-// responsible for snapshotting under cfgMu+runnersMu before calling here.
-func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg *config.Config, runners map[string]ai.Runner) error {
+// runAgent executes agent using the per-event cfg snapshot the caller
+// loaded from SQLite. Backend resolution and runner construction happen
+// here from that same snapshot, so the agent's backend, prompt, skills,
+// and runner configuration all come from one consistent read.
+func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg *config.Config) error {
 	backend := cfg.ResolveBackend(agent.Backend)
 	if backend == "" {
 		return fmt.Errorf("agent %q: no runner available for backend %q", agent.Name, agent.Backend)
 	}
-	if backendCfg, ok := cfg.Daemon.AIBackends[backend]; ok && fleet.IsPinnedModelUnavailable(agent.Model, backendCfg) {
+	backendCfg, ok := cfg.Daemon.AIBackends[backend]
+	if !ok {
+		return fmt.Errorf("agent %q: no runner for backend %q", agent.Name, backend)
+	}
+	if fleet.IsPinnedModelUnavailable(agent.Model, backendCfg) {
 		return fmt.Errorf(
 			"agent %q: configured model %q is not available for backend %q; run backend discovery and update the agent model",
 			agent.Name,
@@ -606,10 +622,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 			backend,
 		)
 	}
-	runner, ok := runners[backend]
-	if !ok {
-		return fmt.Errorf("agent %q: no runner for backend %q", agent.Name, backend)
-	}
+	runner := e.runnerBuilder(backend, backendCfg)
 
 	rootEventID, dispatchDepth := extractDispatchContext(ev)
 

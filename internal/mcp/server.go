@@ -32,11 +32,11 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog"
 
-	"github.com/eloylp/agents/internal/coordinator"
-	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/config"
 	daemonconfig "github.com/eloylp/agents/internal/daemon/config"
 	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
 	daemonrepos "github.com/eloylp/agents/internal/daemon/repos"
+	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -55,16 +55,16 @@ const Version = "0.1.0"
 // can serve the core fleet + trigger surface without wiring
 // observability or CRUD writes.
 type Deps struct {
-	DB         *sql.DB
-	Coord      *coordinator.Coordinator // Config() snapshot, write epoch
-	StatusJSON func() ([]byte, error)   // /status payload — same bytes the REST surface returns
-	Queue      *workflow.DataChannels   // PushEvent for trigger_agent
-	Observe    *observe.Store           // observability tools (events, traces, graph)
-	Engine     *workflow.Engine         // DispatchStats() for get_dispatches
-	Fleet      *daemonfleet.Handler     // agent / skill / backend CRUD writes
-	Repos      *daemonrepos.Handler     // repo + binding CRUD writes
-	Config     *daemonconfig.Handler    // ConfigJSON / ExportYAML / ImportYAML
-	Logger     zerolog.Logger
+	DB           *sql.DB
+	DaemonConfig config.DaemonConfig    // static daemon-level config (HTTP, proxy, processor, log)
+	StatusJSON   func() ([]byte, error) // /status payload — same bytes the REST surface returns
+	Queue        *workflow.DataChannels // PushEvent for trigger_agent
+	Observe      *observe.Store         // observability tools (events, traces, graph)
+	Engine       *workflow.Engine       // DispatchStats() for get_dispatches
+	Fleet        *daemonfleet.Handler   // agent / skill / backend CRUD writes
+	Repos        *daemonrepos.Handler   // repo + binding CRUD writes
+	Config       *daemonconfig.Handler  // ConfigJSON / ExportYAML / ImportYAML
+	Logger       zerolog.Logger
 }
 
 // Handler is an http.Handler that speaks MCP over Streamable HTTP. Mount it

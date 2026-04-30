@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/store"
 )
 
 // EventEnqueuer can accept events for async processing.
@@ -411,8 +413,7 @@ func (s *DispatchDedupStore) TryClaimForDispatch(agent, repo string, number int,
 // dedup safety limits.
 type Dispatcher struct {
 	cfg      config.DispatchConfig
-	agents   map[string]fleet.Agent // all agents by name (lower-cased)
-	agentsMu sync.RWMutex               // protects agents map
+	db       *sql.DB
 	dedup    *DispatchDedupStore
 	counters dispatchCounters
 	queue    EventEnqueuer
@@ -420,12 +421,12 @@ type Dispatcher struct {
 	logger   zerolog.Logger
 }
 
-// NewDispatcher builds a Dispatcher. agents must be the full agent map (by
-// lower-cased name) from the loaded config.
-func NewDispatcher(cfg config.DispatchConfig, agents map[string]fleet.Agent, dedup *DispatchDedupStore, queue EventEnqueuer, logger zerolog.Logger) *Dispatcher {
+// NewDispatcher builds a Dispatcher. db is read on every dispatch to look up
+// the target agent's allow_dispatch flag — there is no in-memory agent cache.
+func NewDispatcher(cfg config.DispatchConfig, db *sql.DB, dedup *DispatchDedupStore, queue EventEnqueuer, logger zerolog.Logger) *Dispatcher {
 	return &Dispatcher{
 		cfg:    cfg,
-		agents: agents,
+		db:     db,
 		dedup:  dedup,
 		queue:  queue,
 		logger: logger.With().Str("component", "dispatcher").Logger(),
@@ -438,17 +439,21 @@ func (d *Dispatcher) WithGraphRecorder(r GraphRecorder) {
 	d.graphRec = r
 }
 
-// UpdateAgents replaces the agent map used for dispatch allowlist and opt-in
-// checks. It is safe to call concurrently with ProcessDispatches and is
-// intended for hot-reload paths (e.g. CRUD API followed by cron reload).
-func (d *Dispatcher) UpdateAgents(agents []fleet.Agent) {
-	m := make(map[string]fleet.Agent, len(agents))
-	for _, a := range agents {
-		m[a.Name] = a
+// lookupAgent returns the named agent from SQLite, or false when no row
+// matches. Called on every dispatch to check the target's allow_dispatch
+// flag.
+func (d *Dispatcher) lookupAgent(name string) (fleet.Agent, bool) {
+	agents, err := store.ReadAgents(d.db)
+	if err != nil {
+		d.logger.Error().Err(err).Msg("dispatcher: read agents")
+		return fleet.Agent{}, false
 	}
-	d.agentsMu.Lock()
-	d.agents = m
-	d.agentsMu.Unlock()
+	for _, a := range agents {
+		if a.Name == name {
+			return a, true
+		}
+	}
+	return fleet.Agent{}, false
 }
 
 // ProcessDispatches validates and enqueues each dispatch request from a single
@@ -502,9 +507,7 @@ func (d *Dispatcher) ProcessDispatches(
 		}
 
 		// Opt-in check: target must have allow_dispatch: true.
-		d.agentsMu.RLock()
-		target, ok := d.agents[req.Agent]
-		d.agentsMu.RUnlock()
+		target, ok := d.lookupAgent(req.Agent)
 		if !ok || !target.AllowDispatch {
 			logBase.Warn().Msg("dispatch dropped: target has allow_dispatch: false")
 			d.counters.droppedNoOptin.Add(1)
