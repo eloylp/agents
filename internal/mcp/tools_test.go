@@ -15,6 +15,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	daemonconfig "github.com/eloylp/agents/internal/daemon/config"
 	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
+	daemonqueue "github.com/eloylp/agents/internal/daemon/queue"
 	daemonrepos "github.com/eloylp/agents/internal/daemon/repos"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/observe"
@@ -109,7 +110,7 @@ func testFixtureWithConfig(t *testing.T, cfg *config.Config) Deps {
 	t.Helper()
 	db := testDB(t)
 	st := store.New(db)
-	channels := workflow.NewDataChannels(8)
+	channels := workflow.NewDataChannels(8, st)
 	obs := observe.NewStore(db)
 	engine := workflow.NewEngine(st, cfg.Daemon.Processor, channels, zerolog.Nop())
 	sched, err := scheduler.NewScheduler(st, time.Hour, zerolog.Nop())
@@ -123,6 +124,7 @@ func testFixtureWithConfig(t *testing.T, cfg *config.Config) Deps {
 	fleetH := daemonfleet.New(st, maxBody, sched, obs, zerolog.Nop())
 	reposH := daemonrepos.New(st, maxBody, zerolog.Nop())
 	configH := daemonconfig.New(st, cfg.Daemon, zerolog.Nop())
+	queueH := daemonqueue.New(st, channels, zerolog.Nop())
 	return Deps{
 		Store:        st,
 		DaemonConfig: cfg.Daemon,
@@ -138,6 +140,7 @@ func testFixtureWithConfig(t *testing.T, cfg *config.Config) Deps {
 		Fleet:   fleetH,
 		Repos:   reposH,
 		Config:  configH,
+		QueueH:  queueH,
 		Logger:  zerolog.Nop(),
 	}
 }
@@ -167,8 +170,8 @@ func drainQueue(t *testing.T, dc *workflow.DataChannels, n int) []workflow.Event
 	deadline := time.After(100 * time.Millisecond)
 	for len(out) < n {
 		select {
-		case ev := <-dc.EventChan():
-			out = append(out, ev)
+		case qe := <-dc.EventChan():
+			out = append(out, qe.Event)
 		case <-deadline:
 			return out
 		}

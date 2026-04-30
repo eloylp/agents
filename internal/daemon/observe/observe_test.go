@@ -252,7 +252,7 @@ func TestHandleDispatchesReturnsEngineStats(t *testing.T) {
 	// returns a parseable DispatchStats payload backed by the engine the
 	// composing daemon hands the handler.
 	fx := newFixture(t, nil)
-	channels := workflow.NewDataChannels(1)
+	channels := workflow.NewDataChannels(1, fx.store)
 	engine := workflow.NewEngine(fx.store, minimalCfg().Daemon.Processor, channels, zerolog.Nop())
 	h := New(fx.events, fx.store, nil, engine, nil, zerolog.Nop())
 

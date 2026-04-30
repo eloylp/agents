@@ -266,7 +266,7 @@ func (s *Scheduler) makeCronJob(repo string, agentName string) func() {
 			Payload:    map[string]any{"target_agent": agentName},
 			EnqueuedAt: time.Now(),
 		}
-		if err := s.queue.PushEvent(ctx, ev); err != nil {
+		if _, err := s.queue.PushEvent(ctx, ev); err != nil {
 			s.logger.Error().Str("repo", repo).Str("agent", agentName).Err(err).Msg("cron tick: enqueue failed")
 			s.recordLastRun(agentName, repo, time.Now(), "error")
 		}

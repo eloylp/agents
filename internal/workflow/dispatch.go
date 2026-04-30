@@ -20,10 +20,12 @@ import (
 	"github.com/eloylp/agents/internal/store"
 )
 
-// EventEnqueuer can accept events for async processing.
+// EventEnqueuer can accept events for async processing. Returns the
+// new event_queue row id so operator-facing surfaces (retry, MCP) can
+// echo it back; most callers discard it.
 // *DataChannels satisfies this interface.
 type EventEnqueuer interface {
-	PushEvent(ctx context.Context, ev Event) error
+	PushEvent(ctx context.Context, ev Event) (int64, error)
 }
 
 // DispatchStats is a snapshot of dispatch counters for reporting in /status.
@@ -562,7 +564,7 @@ func (d *Dispatcher) ProcessDispatches(
 			},
 		}
 
-		if err := d.queue.PushEvent(ctx, dispatchEv); err != nil {
+		if _, err := d.queue.PushEvent(ctx, dispatchEv); err != nil {
 			// Release the pending claim so future retries are not blocked and
 			// DispatchAlreadyClaimed never sees a phantom committed slot.
 			d.dedup.AbandonClaim(req.Agent, ev.Repo.FullName, number)

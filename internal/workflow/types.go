@@ -10,6 +10,18 @@ type RepoRef struct {
 	Enabled  bool
 }
 
+// QueuedEvent wraps an Event with its persistent event_queue row id.
+// Producers persist the event in SQLite first (PushEvent), get the id,
+// and push the QueuedEvent onto the in-memory channel; workers receive
+// it, mark the row started, run the agent, and mark the row completed.
+// On daemon startup the replay step also pushes QueuedEvents onto the
+// channel for any row whose completed_at is still NULL — events whose
+// runs were interrupted by a crash get a second chance.
+type QueuedEvent struct {
+	ID    int64
+	Event Event
+}
+
 // Event is the single in-process event type for all workflow triggers.
 // Kind follows the convention "{github_event_type}.{action}" for most events
 // (e.g. "issues.labeled", "pull_request.opened", "issue_comment.created") or

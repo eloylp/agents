@@ -14,6 +14,20 @@ import (
 
 func testLogger() zerolog.Logger { return zerolog.Nop() }
 
+// newTempStore opens a fresh tempdir SQLite and returns the data-access
+// store. Used by tests that need a Store for DataChannels but don't need
+// any seeded entities.
+func newTempStore(t *testing.T) *store.Store {
+	t.Helper()
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
+	return st
+}
+
 // seedStoreFromCfg opens a tempdir SQLite, imports the four entity sets
 // from cfg, and returns the data-access store. Tests build their
 // *config.Config the way they always have and hand it here to

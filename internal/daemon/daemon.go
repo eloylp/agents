@@ -43,6 +43,7 @@ import (
 	daemonconfig "github.com/eloylp/agents/internal/daemon/config"
 	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
 	daemonobserve "github.com/eloylp/agents/internal/daemon/observe"
+	daemonqueue "github.com/eloylp/agents/internal/daemon/queue"
 	daemonrepos "github.com/eloylp/agents/internal/daemon/repos"
 	"github.com/eloylp/agents/internal/fleet"
 	mcpserver "github.com/eloylp/agents/internal/mcp"
@@ -83,6 +84,7 @@ type Daemon struct {
 	repos    *daemonrepos.Handler
 	config   *daemonconfig.Handler
 	observe  *daemonobserve.Handler
+	queue    *daemonqueue.Handler
 	webhook  *webhook.Handler
 	delivery *webhook.DeliveryStore
 	mcp      http.Handler
@@ -101,7 +103,7 @@ type Daemon struct {
 func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, error) {
 	httpLogger := logger.With().Str("component", "http_server").Logger()
 
-	channels := workflow.NewDataChannels(cfg.Daemon.Processor.EventQueueBuffer)
+	channels := workflow.NewDataChannels(cfg.Daemon.Processor.EventQueueBuffer, st)
 	engine := workflow.NewEngine(st, cfg.Daemon.Processor, channels, logger)
 
 	memBackend := st.NewMemoryBackend()
@@ -130,6 +132,7 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 
 	memReader := st.NewMemoryReader()
 	observeHandler := daemonobserve.New(obs, st, sched, engine, memReader, logger)
+	queueHandler := daemonqueue.New(st, channels, logger)
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
 	webhookHandler := webhook.NewHandler(deliveryStore, channels, st, cfg.Daemon.HTTP, logger)
@@ -154,6 +157,7 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 		repos:     reposHandler,
 		config:    configHandler,
 		observe:   observeHandler,
+		queue:     queueHandler,
 		webhook:   webhookHandler,
 		delivery:  deliveryStore,
 		uiFS:      ui.FS,
@@ -183,6 +187,7 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 		Fleet:        fleetHandler,
 		Repos:        reposHandler,
 		Config:       configHandler,
+		QueueH:       queueHandler,
 		Logger:       logger,
 	})
 
@@ -234,9 +239,14 @@ func (d *Daemon) Handler() http.Handler { return d.buildRouter() }
 //     from parentCtx; they stop emitting webhooks and cron events as
 //     soon as parentCtx fires or any producer returns an error;
 //   - consumers (worker pool, delivery dedup eviction, dispatch dedup
-//     eviction) live on a separate background context; they keep running
-//     after producers stop so the queue can drain to completion before
-//     workers exit.
+//     eviction, event-queue cleanup) live on a separate background
+//     context; they keep running after producers stop so workers can
+//     finish processing already-claimed events before exiting.
+//
+// Before producers start, any pending event_queue rows from a previous
+// run are replayed onto the channel so events that were buffered when
+// the daemon stopped — or whose runs were interrupted mid-prompt — get
+// a second chance.
 //
 // Sequence on shutdown:
 //  1. parentCtx cancelled (SIGTERM) or producer returns error.
@@ -245,7 +255,7 @@ func (d *Daemon) Handler() http.Handler { return d.buildRouter() }
 //  3. Producer goroutines join.
 //  4. Consumer ctx cancels; processor closes the queue and waits for
 //     in-flight runs (bounded by shutdown_timeout_seconds); dedup
-//     eviction loops exit.
+//     eviction loops and event-queue cleanup exit.
 //  5. Consumer goroutines join.
 //
 // Each phase is logged so an operator reading logs sees the full
@@ -263,7 +273,21 @@ func (d *Daemon) Run(parentCtx context.Context) error {
 	consumers.Go(func() error { return d.delivery.Run(consumerCtx) })
 	consumers.Go(func() error { return d.engine.RunDispatchDedup(consumerCtx) })
 	consumers.Go(func() error { return d.processor.Run(consumerCtx) })
-	log.Info().Msg("consumers ready: processor, delivery dedup, dispatch dedup")
+	consumers.Go(func() error {
+		return d.store.RunQueueCleanup(consumerCtx, queueRetention, queueCleanupInterval, func(err error) {
+			log.Warn().Err(err).Msg("event queue cleanup tick failed")
+		})
+	})
+	log.Info().Msg("consumers ready: processor, delivery dedup, dispatch dedup, queue cleanup")
+
+	// Replay any pending events from a previous run before producers start
+	// pushing new ones. Pending = completed_at IS NULL — covers events
+	// buffered at shutdown plus runs that crashed mid-prompt. The replay
+	// goroutine pushes onto the channel concurrently with workers
+	// consuming; it blocks naturally if the channel buffer fills.
+	consumers.Go(func() error {
+		return d.replayPendingEvents(consumerCtx)
+	})
 
 	// ── producer tier ────────────────────────────────────────────────
 	// Derived from parentCtx so SIGTERM cancels it; errgroup will cancel
@@ -300,6 +324,63 @@ func (d *Daemon) Run(parentCtx context.Context) error {
 	}
 	return nil
 }
+
+// replayPendingEvents reads every pending event_queue row from the
+// previous run and pushes it onto the in-memory channel for workers.
+// Returns nil when ctx is cancelled or the replay completes — either is
+// a clean exit. Errors fetching individual rows are logged and the
+// replay continues; a row that vanished between scan and fetch is
+// already gone, and a malformed blob is best-effort dropped.
+func (d *Daemon) replayPendingEvents(ctx context.Context) error {
+	ids, err := d.store.PendingEventIDs()
+	if err != nil {
+		return fmt.Errorf("event queue replay: scan: %w", err)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	d.logger.Info().Int("pending_events", len(ids)).Msg("replaying pending events from previous run")
+	for _, id := range ids {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+		blob, err := d.store.ReadQueuedEvent(id)
+		if err != nil {
+			if errors.Is(err, store.ErrEventNotFound) {
+				continue
+			}
+			d.logger.Warn().Err(err).Int64("event_id", id).Msg("replay: read event failed")
+			continue
+		}
+		var ev workflow.Event
+		if err := json.Unmarshal([]byte(blob), &ev); err != nil {
+			d.logger.Warn().Err(err).Int64("event_id", id).Msg("replay: unmarshal event failed")
+			continue
+		}
+		if err := d.channels.ReplayQueued(ctx, workflow.QueuedEvent{ID: id, Event: ev}); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, workflow.ErrQueueClosed) {
+				return nil
+			}
+			d.logger.Warn().Err(err).Int64("event_id", id).Msg("replay: push failed")
+		}
+	}
+	d.logger.Info().Msg("replay complete")
+	return nil
+}
+
+// queueRetention is how long completed event_queue rows are kept around
+// before the cleanup loop removes them. A week is enough to debug recent
+// activity (the row carries the original event blob, useful for tracing
+// "did this issue ever fire an agent?") without growing the table
+// indefinitely on a long-running daemon.
+const queueRetention = 7 * 24 * time.Hour
+
+// queueCleanupInterval controls how often the cleanup loop ticks. Hourly
+// is plenty — the table is bounded by retention regardless of cadence,
+// the cadence just controls the deletion granularity.
+const queueCleanupInterval = time.Hour
 
 func (d *Daemon) runHTTP(ctx context.Context) error {
 	httpCfg := d.daemonCfg.HTTP
@@ -356,6 +437,7 @@ func (d *Daemon) buildRouter() http.Handler {
 	d.repos.RegisterRoutes(router, withTimeout)
 	d.config.RegisterRoutes(router, withTimeout)
 	d.observe.RegisterRoutes(router, withTimeout)
+	d.queue.RegisterRoutes(router, withTimeout)
 
 	if d.uiFS != nil {
 		if sub, err := fs.Sub(d.uiFS, "dist"); err == nil {
@@ -495,7 +577,7 @@ func (d *Daemon) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	if err := d.channels.PushEvent(r.Context(), ev); err != nil {
+	if _, err := d.channels.PushEvent(r.Context(), ev); err != nil {
 		d.logger.Error().Err(err).Str("agent", req.Agent).Str("repo", req.Repo).Msg("failed to enqueue on-demand agent run")
 		http.Error(w, "event queue full", http.StatusServiceUnavailable)
 		return

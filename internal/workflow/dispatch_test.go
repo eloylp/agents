@@ -25,14 +25,15 @@ type fakeQueue struct {
 	err    error
 }
 
-func (q *fakeQueue) PushEvent(_ context.Context, ev Event) error {
+func (q *fakeQueue) PushEvent(_ context.Context, ev Event) (int64, error) {
 	if q.err != nil {
-		return q.err
+		return 0, q.err
 	}
 	q.mu.Lock()
 	q.events = append(q.events, ev)
+	id := int64(len(q.events))
 	q.mu.Unlock()
-	return nil
+	return id, nil
 }
 
 func (q *fakeQueue) popped() []Event {

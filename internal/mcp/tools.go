@@ -456,6 +456,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolDeleteRepo(deps),
 		)
 	}
+	registerQueueTools(srv, deps)
 	if deps.Repos != nil {
 		srv.AddTool(
 			mcpgo.NewTool("get_binding",

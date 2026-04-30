@@ -444,7 +444,7 @@ func (h *Handler) handlePushEvent(ctx context.Context, w http.ResponseWriter, bo
 
 // enqueue pushes ev onto the event queue, handling all error cases.
 func (h *Handler) enqueue(ctx context.Context, w http.ResponseWriter, ev workflow.Event, deliveryID string) {
-	if err := h.channels.PushEvent(ctx, ev); err != nil {
+	if _, err := h.channels.PushEvent(ctx, ev); err != nil {
 		if errors.Is(err, workflow.ErrEventQueueFull) {
 			h.delivery.Delete(deliveryID)
 			h.logger.Warn().Str("repo", ev.Repo.FullName).Str("kind", ev.Kind).Msg("event queue full, dropping webhook")

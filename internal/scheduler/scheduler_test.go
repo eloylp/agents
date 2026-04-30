@@ -22,8 +22,8 @@ func drainQueue(t *testing.T, dc *workflow.DataChannels, n int) []workflow.Event
 	deadline := time.After(100 * time.Millisecond)
 	for len(out) < n {
 		select {
-		case ev := <-dc.EventChan():
-			out = append(out, ev)
+		case qe := <-dc.EventChan():
+			out = append(out, qe.Event)
 		case <-deadline:
 			return out
 		}
@@ -129,7 +129,7 @@ func TestCronTickPushesEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
-	q := workflow.NewDataChannels(4)
+	q := workflow.NewDataChannels(4, st)
 	s.WithEventQueue(q)
 
 	s.cron.Entry(s.agentEntries[0].cronID).WrappedJob.Run()
@@ -246,7 +246,7 @@ func TestReconcileRaceWithConcurrentReads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
-	s.WithEventQueue(workflow.NewDataChannels(8))
+	s.WithEventQueue(workflow.NewDataChannels(8, st))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()

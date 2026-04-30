@@ -61,8 +61,8 @@ func webhookRequest(t *testing.T, event, deliveryID, body string) *http.Request 
 func drainEvent(t *testing.T, dc *workflow.DataChannels) workflow.Event {
 	t.Helper()
 	select {
-	case ev := <-dc.EventChan():
-		return ev
+	case qe := <-dc.EventChan():
+		return qe.Event
 	default:
 		t.Fatal("expected an event in the queue but found none")
 		panic("unreachable")
@@ -539,7 +539,7 @@ func TestHandleWebhookReturnsServiceUnavailableWhenQueueFull(t *testing.T) {
 	cfg := testCfg(func(c *config.Config) { c.Daemon.Processor.EventQueueBuffer = 1 })
 	srv, dc := newTestServer(t, cfg)
 	// Preload the queue so the next push trips ErrEventQueueFull.
-	if err := dc.PushEvent(context.Background(), workflow.Event{
+	if _, err := dc.PushEvent(context.Background(), workflow.Event{
 		Repo:   workflow.RepoRef{FullName: cfg.Repos[0].Name, Enabled: cfg.Repos[0].Enabled},
 		Kind:   "issues.labeled",
 		Number: 99,

@@ -20,6 +20,7 @@
 //   - create_backend, update_backend, delete_backend      — backend CRUD writes
 //   - create_repo, update_repo, delete_repo               — repo CRUD writes
 //   - create_binding, get_binding, update_binding, delete_binding — atomic binding CRUD
+//   - list_queue_events, delete_queue_event, retry_queue_event — durable event queue ops
 //
 // With repo CRUD in place this surface now covers the full fleet inventory
 // declared in #227.
@@ -34,6 +35,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	daemonconfig "github.com/eloylp/agents/internal/daemon/config"
 	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
+	daemonqueue "github.com/eloylp/agents/internal/daemon/queue"
 	daemonrepos "github.com/eloylp/agents/internal/daemon/repos"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/store"
@@ -64,6 +66,7 @@ type Deps struct {
 	Fleet        *daemonfleet.Handler   // agent / skill / backend CRUD writes
 	Repos        *daemonrepos.Handler   // repo + binding CRUD writes
 	Config       *daemonconfig.Handler  // ConfigJSON / ExportYAML / ImportYAML
+	QueueH       *daemonqueue.Handler   // event_queue listing + delete + retry
 	Logger       zerolog.Logger
 }
 
@@ -120,5 +123,7 @@ CRUD-mutable YAML fragment, and write a YAML payload back into the
 store. CRUD write tools (create_agent, delete_agent, create_skill,
 delete_skill, create_backend, delete_backend, create_repo, update_repo,
 delete_repo, create_binding, update_binding, delete_binding) mutate
-the fleet through the same code path as the REST API. This server is
-the v3 foundation for conversational fleet management.`
+the fleet through the same code path as the REST API. Queue ops
+(list_queue_events, delete_queue_event, retry_queue_event) inspect and
+manage the durable event_queue table. This server is the v3 foundation
+for conversational fleet management.`

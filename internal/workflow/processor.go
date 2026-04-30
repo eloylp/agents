@@ -80,12 +80,25 @@ func (p *Processor) Run(ctx context.Context) error {
 
 func (p *Processor) runWorker(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
-	for ev := range p.channels.EventChan() {
+	st := p.channels.Store()
+	for qe := range p.channels.EventChan() {
+		ev := qe.Event
+		if err := st.MarkEventStarted(qe.ID); err != nil {
+			p.logger.Warn().Err(err).Int64("event_id", qe.ID).Msg("mark event started failed")
+		}
 		if p.eventRec != nil {
 			p.eventRec.RecordEvent(time.Now(), ev)
 		}
 		if err := p.handler.HandleEvent(p.processingCtx(ctx), ev); err != nil {
-			p.logger.Error().Err(err).Str("repo", ev.Repo.FullName).Str("kind", ev.Kind).Int("number", ev.Number).Msg("failed to process webhook event")
+			p.logger.Error().Err(err).Str("repo", ev.Repo.FullName).Str("kind", ev.Kind).Int("number", ev.Number).Msg("failed to process event")
+		}
+		// Mark completed regardless of HandleEvent's error: the queue's
+		// job is "did this event flow through the worker?", not "did the
+		// agent succeed?" — agent failures are surfaced through traces /
+		// /events / dispatch counters, not by replaying the same event
+		// forever.
+		if err := st.MarkEventCompleted(qe.ID); err != nil {
+			p.logger.Warn().Err(err).Int64("event_id", qe.ID).Msg("mark event completed failed")
 		}
 	}
 }
