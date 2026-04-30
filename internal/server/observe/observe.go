@@ -33,31 +33,15 @@ type ConfigGetter interface {
 	Config() *config.Config
 }
 
-// StatusProvider, RuntimeStateProvider, and DispatchStatsProvider are all
-// kept as interfaces in this package (rather than the concrete
-// *scheduler.Scheduler / *observe.Store / *workflow.Engine) because
-// observe_test.go stubs each one with test-controlled values.
-type StatusProvider interface {
-	AgentStatuses() []scheduler.AgentStatus
-}
-
-type RuntimeStateProvider interface {
-	IsRunning(name string) bool
-}
-
-type DispatchStatsProvider interface {
-	DispatchStats() workflow.DispatchStats
-}
-
 // Handler implements the observability HTTP endpoints. Construct via New and
 // mount with RegisterRoutes. Handlers are read-only and safe for concurrent
 // use; the type holds no mutable state.
 type Handler struct {
 	store         *obstore.Store
 	cfg           ConfigGetter
-	provider      StatusProvider
-	runtimeState  RuntimeStateProvider
-	dispatchStats DispatchStatsProvider
+	provider      server.StatusProvider
+	runtimeState  server.RuntimeStateProvider
+	dispatchStats server.DispatchStatsProvider
 	memReader     server.MemoryReader
 }
 
@@ -68,9 +52,9 @@ type Handler struct {
 func New(
 	store *obstore.Store,
 	cfg ConfigGetter,
-	provider StatusProvider,
-	runtimeState RuntimeStateProvider,
-	dispatchStats DispatchStatsProvider,
+	provider server.StatusProvider,
+	runtimeState server.RuntimeStateProvider,
+	dispatchStats server.DispatchStatsProvider,
 	memReader server.MemoryReader,
 ) *Handler {
 	return &Handler{
@@ -418,3 +402,8 @@ func ServeSSEWithInterval(w http.ResponseWriter, r *http.Request, hub SSEHub, he
 		}
 	}
 }
+
+// MemoryChangeEvent is published to the MemorySSE hub when an agent's memory
+// is updated. Kept here so observe_test.go and production callers share the
+// same wire type without importing internal/observe directly.
+type MemoryChangeEvent = obstore.MemoryChangeEvent
