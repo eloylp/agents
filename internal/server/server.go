@@ -44,7 +44,7 @@ type Server struct {
 	// stays free of any dependency on internal/server/fleet.
 	fleet            HandlerRegister
 	agentsDispatcher http.HandlerFunc     // GET vs POST /agents — supplied by WithFleet
-	orphanSource     OrphansSource        // /status orphan summary — supplied by WithFleet
+	orphanSource    OrphansSource        // /status orphan summary — supplied by WithFleet
 	onConfigReload   func(*config.Config) // reloadCron post-hook — supplied by WithFleet
 	repos            HandlerRegister      // wired via WithRepos by the composing caller
 	config           HandlerRegister      // wired via WithConfig by the composing caller
