@@ -44,7 +44,7 @@ type Server struct {
 	// stays free of any dependency on internal/server/fleet.
 	fleet            HandlerRegister
 	agentsDispatcher http.HandlerFunc     // GET vs POST /agents — supplied by WithFleet
-	orphanssource    OrphansSource        // /status orphan summary — supplied by WithFleet
+	orphanSource    OrphansSource        // /status orphan summary — supplied by WithFleet
 	onConfigReload   func(*config.Config) // reloadCron post-hook — supplied by WithFleet
 	repos            HandlerRegister      // wired via WithRepos by the composing caller
 	config           HandlerRegister      // wired via WithConfig by the composing caller
@@ -95,7 +95,7 @@ func (s *Server) WithStore(db *sql.DB, r CronReloader) {
 func (s *Server) WithFleet(h HandlerRegister, dispatcher http.HandlerFunc, orphans OrphansSource, onReload func(*config.Config)) {
 	s.fleet = h
 	s.agentsDispatcher = dispatcher
-	s.orphanssource = orphans
+	s.orphanSource = orphans
 	s.onConfigReload = onReload
 }
 
@@ -378,16 +378,16 @@ func (s *Server) buildStatus() statusJSON {
 		},
 		Agents: agents,
 	}
-	if s.orphanssource != nil {
-		orphanssource := s.orphanssource.OrphansSnapshot()
-		if fresh, err := s.orphanssource.RefreshOrphansFromDB(); err != nil {
+	if s.orphanSource != nil {
+		orphansSrc := s.orphanSource.OrphansSnapshot()
+		if fresh, err := s.orphanSource.RefreshOrphansFromDB(); err != nil {
 			s.logger.Warn().Err(err).Msg("status: orphan snapshot refresh failed")
 		} else {
-			orphanssource = fresh
+			orphansSrc = fresh
 		}
-		resp.OrphanedAgents = statusOrphanSummaryJSON{Count: orphanssource.Count}
-		if !orphanssource.GeneratedAt.IsZero() {
-			at := orphanssource.GeneratedAt
+		resp.OrphanedAgents = statusOrphanSummaryJSON{Count: orphansSrc.Count}
+		if !orphansSrc.GeneratedAt.IsZero() {
+			at := orphansSrc.GeneratedAt
 			resp.OrphanedAgents.UpdatedAt = &at
 		}
 	}
