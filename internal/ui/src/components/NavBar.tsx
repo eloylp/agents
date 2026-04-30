@@ -4,16 +4,21 @@ import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { useTheme } from '@/lib/theme'
 
+// `flow: true` marks the three pages on the event lifecycle path
+// (Events → Runners → Traces). The navbar renders a small arrow
+// between consecutive flow items so the natural traversal is visible
+// at a glance: an event arrives, a runner picks it up, the trace
+// records the execution detail.
 const links = [
-  { href: '/', label: 'Fleet' },
-  { href: '/skills/', label: 'Skills' },
-  { href: '/repos/', label: 'Repos' },
-  { href: '/traces/', label: 'Traces' },
-  { href: '/graph/', label: 'Graph' },
-  { href: '/events/', label: 'Events' },
-  { href: '/runners/', label: 'Runners' },
-  { href: '/memory/', label: 'Memory' },
-  { href: '/config/', label: 'Config' },
+  { href: '/events/',  label: 'Events',  flow: true },
+  { href: '/runners/', label: 'Runners', flow: true },
+  { href: '/traces/',  label: 'Traces',  flow: true },
+  { href: '/graph/',   label: 'Graph' },
+  { href: '/',         label: 'Fleet' },
+  { href: '/skills/',  label: 'Skills' },
+  { href: '/memory/',  label: 'Memory' },
+  { href: '/repos/',   label: 'Repos' },
+  { href: '/config/',  label: 'Config' },
 ]
 
 export default function NavBar() {
@@ -57,25 +62,36 @@ export default function NavBar() {
         <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--accent)', marginRight: '2rem', letterSpacing: '0.05em' }}>
           AGENTS
         </span>
-        {links.map(({ href, label }) => {
+        {links.map(({ href, label, flow }, i) => {
           const active = pathname === href || (href !== '/' && pathname.startsWith(href))
+          const next = links[i + 1]
+          const showFlowArrow = flow && next?.flow
           return (
-            <Link
-              key={href}
-              href={href}
-              style={{
-                padding: '0 1rem',
-                height: '48px',
-                display: 'flex',
-                alignItems: 'center',
-                fontSize: '0.875rem',
-                color: active ? 'var(--accent)' : 'var(--text-muted)',
-                borderBottom: active ? '2px solid var(--accent)' : '2px solid transparent',
-                fontWeight: active ? 600 : 400,
-              }}
-            >
-              {label}
-            </Link>
+            <span key={href} style={{ display: 'flex', alignItems: 'center' }}>
+              <Link
+                href={href}
+                style={{
+                  padding: flow ? '0 0.65rem' : '0 1rem',
+                  height: '48px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  fontSize: '0.875rem',
+                  color: active ? 'var(--accent)' : 'var(--text-muted)',
+                  borderBottom: active ? '2px solid var(--accent)' : '2px solid transparent',
+                  fontWeight: active ? 600 : 400,
+                }}
+              >
+                {label}
+              </Link>
+              {showFlowArrow && (
+                <span aria-hidden style={{
+                  color: 'var(--text-faint)',
+                  fontSize: '0.85rem',
+                  margin: '0 0.1rem',
+                  userSelect: 'none',
+                }}>→</span>
+              )}
+            </span>
           )
         })}
         <button

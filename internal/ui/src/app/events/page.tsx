@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
+import Link from 'next/link'
 import Card from '@/components/Card'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 
@@ -68,7 +69,7 @@ function EventRow({ event, isNew }: { event: Event; isNew: boolean }) {
         <span style={{ color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.actor}</span>
         <span style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
           {(event.agents ?? []).map(a => (
-            <a key={a} href={`/?focus=${encodeURIComponent(a)}`} style={{
+            <Link key={a} href={`/?focus=${encodeURIComponent(a)}`} style={{
               background: 'rgba(56,189,248,0.12)',
               color: 'var(--accent)',
               border: '1px solid var(--accent)',
@@ -76,11 +77,11 @@ function EventRow({ event, isNew }: { event: Event; isNew: boolean }) {
               borderRadius: '4px',
               fontSize: '0.68rem',
               textDecoration: 'none',
-            }}>{a}</a>
+            }}>{a}</Link>
           ))}
           {(event.agents ?? []).length === 0 && <span style={{ color: 'var(--text-faint)' }}>—</span>}
         </span>
-        <a
+        <Link
           href={`/runners/?event=${encodeURIComponent(event.id)}`}
           style={{
             color: 'var(--accent)',
@@ -93,7 +94,7 @@ function EventRow({ event, isNew }: { event: Event; isNew: boolean }) {
           }}
           onClick={e => e.stopPropagation()}
           title="Open Runners filtered to this event"
-        >View runners →</a>
+        >View runners →</Link>
         <span
           onClick={() => setExpanded(!expanded)}
           style={{

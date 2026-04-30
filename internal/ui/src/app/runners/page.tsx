@@ -1,6 +1,7 @@
 'use client'
 import { Suspense, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import Card from '@/components/Card'
 
 interface RunnerRow {
@@ -37,7 +38,7 @@ const statusStyle: Record<string, { bg: string; text: string; border: string }> 
 }
 
 const POLL_MS = 2000
-const HIGHLIGHT_MS = 3000
+const HIGHLIGHT_MS = 4000
 
 function fmtTime(s?: string) {
   if (!s) return '—'
@@ -94,14 +95,24 @@ function RunnersInner() {
     return () => window.clearInterval(id)
   }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Trigger highlight pulse when arriving with ?event=X
+  // Trigger highlight pulse when arriving with ?event=X. Wait until
+  // the first batch of rows lands — otherwise the animation runs while
+  // the page still shows "Loading..." and the user never sees it. Once
+  // we've kicked it off for a given focus, don't re-fire on every
+  // subsequent poll (rows.length stays > 0).
+  const [highlighted, setHighlighted] = useState(false)
   useEffect(() => {
-    if (focusEvent) {
-      setHighlightUntil(Date.now() + HIGHLIGHT_MS)
-      const t = window.setTimeout(() => setHighlightUntil(null), HIGHLIGHT_MS)
-      return () => window.clearTimeout(t)
+    if (!focusEvent) {
+      setHighlighted(false)
+      setHighlightUntil(null)
+      return
     }
-  }, [focusEvent])
+    if (highlighted || rows.length === 0) return
+    setHighlighted(true)
+    setHighlightUntil(Date.now() + HIGHLIGHT_MS)
+    const t = window.setTimeout(() => setHighlightUntil(null), HIGHLIGHT_MS)
+    return () => window.clearTimeout(t)
+  }, [focusEvent, rows.length, highlighted])
 
   const filtered = useMemo(
     () => focusEvent ? rows.filter(r => r.event_id === focusEvent) : rows,
@@ -147,10 +158,13 @@ function RunnersInner() {
     <div>
       <style>{`
         @keyframes highlight-pulse {
-          0%   { background: rgba(56,189,248,0.20); }
-          100% { background: transparent; }
+          0%, 100% { background: transparent; box-shadow: inset 4px 0 0 transparent; }
+          10%, 35%, 60% { background: rgba(56,189,248,0.32); box-shadow: inset 4px 0 0 var(--accent); }
+          25%, 50%, 75% { background: rgba(56,189,248,0.10); box-shadow: inset 4px 0 0 var(--accent); }
         }
-        .runner-row-highlight { animation: highlight-pulse ${HIGHLIGHT_MS}ms ease-out; }
+        .runner-row-highlight {
+          animation: highlight-pulse ${HIGHLIGHT_MS}ms ease-out;
+        }
       `}</style>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
@@ -166,11 +180,11 @@ function RunnersInner() {
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           {focusEvent && (
-            <a href="/runners/" style={{
+            <Link href="/runners/" style={{
               background: 'var(--bg-card)', border: '1px solid var(--border)',
               color: 'var(--text-muted)', padding: '4px 10px', borderRadius: '4px',
               fontSize: '0.8rem', textDecoration: 'none',
-            }}>Clear filter</a>
+            }}>Clear filter</Link>
           )}
           {(['', 'enqueued', 'running', 'completed'] as const).map(s => (
             <button key={s || 'all'} onClick={() => setStatus(s)} style={{
@@ -258,7 +272,7 @@ function RunnersInner() {
                   }}>{r.status}</span>
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {r.agent ? (
-                      <a href={`/?focus=${encodeURIComponent(r.agent)}`} onClick={e => e.stopPropagation()} style={{
+                      <Link href={`/?focus=${encodeURIComponent(r.agent)}`} onClick={e => e.stopPropagation()} style={{
                         background: 'rgba(56,189,248,0.12)',
                         color: 'var(--accent)',
                         border: '1px solid var(--accent)',
@@ -266,7 +280,7 @@ function RunnersInner() {
                         borderRadius: '4px',
                         fontSize: '0.72rem',
                         textDecoration: 'none',
-                      }}>{r.agent}</a>
+                      }}>{r.agent}</Link>
                     ) : r.target_agent ? (
                       <span style={{ color: 'var(--text-faint)', fontStyle: 'italic' }}>→ {r.target_agent}</span>
                     ) : (
@@ -333,10 +347,10 @@ function RunnersInner() {
                     </div>
                     {r.event_id && r.completed_at && (
                       <div style={{ marginBottom: '0.5rem' }}>
-                        <a href={`/traces/${encodeURIComponent(r.event_id)}`} style={{
+                        <Link href={`/traces/?id=${encodeURIComponent(r.event_id)}`} style={{
                           color: 'var(--accent)', fontSize: '0.78rem', textDecoration: 'none',
                           border: '1px solid var(--accent)', padding: '3px 10px', borderRadius: '4px',
-                        }}>View trace detail →</a>
+                        }}>View trace detail →</Link>
                       </div>
                     )}
                     {r.payload && (
