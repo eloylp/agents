@@ -21,7 +21,6 @@ import (
 
 	"github.com/eloylp/agents/internal/config"
 	obstore "github.com/eloylp/agents/internal/observe"
-	"github.com/eloylp/agents/internal/scheduler"
 	"github.com/eloylp/agents/internal/server"
 	"github.com/eloylp/agents/internal/workflow"
 )
