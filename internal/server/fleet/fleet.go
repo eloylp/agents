@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -109,7 +108,7 @@ func (h *Handler) HandleAgentsCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req storeAgentJSON
-	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !server.DecodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	canonical, err := h.UpsertAgent(req.toConfig())
@@ -259,7 +258,7 @@ func (h *Handler) handleAgent(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleAgentPatch(w http.ResponseWriter, r *http.Request, name string) {
 	var req AgentPatch
-	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !server.DecodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	if !req.anyFieldSet() {
@@ -382,7 +381,7 @@ func (h *Handler) handleSkills(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeSkillJSON
-		if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+		if !server.DecodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		name, sk, err := h.UpsertSkill(req.Name, fleet.Skill{Prompt: req.Prompt})
@@ -424,7 +423,7 @@ func (h *Handler) handleSkill(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleSkillPatch(w http.ResponseWriter, r *http.Request, name string) {
 	var req SkillPatch
-	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !server.DecodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	if !req.anyFieldSet() {
@@ -616,7 +615,7 @@ func (h *Handler) handleBackends(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req storeBackendJSON
-		if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+		if !server.DecodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 			return
 		}
 		name, b, err := h.UpsertBackend(req.Name, req.toConfig())
@@ -659,7 +658,7 @@ func (h *Handler) handleBackendsDiscover(w http.ResponseWriter, r *http.Request)
 
 func (h *Handler) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
 	var req localBackendRequest
-	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !server.DecodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	name := fleet.NormalizeBackendName(req.Name)
@@ -753,7 +752,7 @@ func (h *Handler) handleBackendGet(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleBackendPatch(w http.ResponseWriter, r *http.Request) {
 	name := backendPathName(r)
 	var req BackendPatch
-	if !decodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
+	if !server.DecodeBody(w, r, h.srv.Config().Daemon.HTTP.MaxBodyBytes, &req) {
 		return
 	}
 	if !req.anyFieldSet() {
@@ -866,25 +865,6 @@ func storeErrStatus(err error) int {
 		return http.StatusConflict
 	}
 	return http.StatusInternalServerError
-}
-
-func decodeBody[T any](w http.ResponseWriter, r *http.Request, limit int64, out *T) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, limit)
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-			return false
-		}
-		http.Error(w, fmt.Sprintf("read request: %v", err), http.StatusBadRequest)
-		return false
-	}
-	if err := json.Unmarshal(body, out); err != nil {
-		http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
-		return false
-	}
-	return true
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
