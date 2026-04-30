@@ -20,6 +20,7 @@ import (
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/backends"
 	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/coordinator"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/logging"
 	mcpserver "github.com/eloylp/agents/internal/mcp"
@@ -77,7 +78,7 @@ func run() error {
 
 	logger.Info().Msg("starting agents daemon")
 
-	memBackend := &sqliteMemory{db: db}
+	memBackend := coordinator.NewSQLiteMemory(db)
 
 	dataChannels := workflow.NewDataChannels(cfg.Daemon.Processor.EventQueueBuffer)
 	engine := workflow.NewEngine(cfg, runners, dataChannels, logger)
@@ -145,7 +146,7 @@ func run() error {
 
 	// Wire the memory backend's SSE notifier so the UI stream stays live on
 	// every successful write.
-	memBackend.notifyFn = obs.PublishMemoryChange
+	memBackend.SetChangeNotifier(obs.PublishMemoryChange)
 	memReader := &sqliteWebhookReader{db: db}
 	srv.WithMemoryReader(memReader)
 
@@ -272,27 +273,13 @@ func (r *daemonReloader) Reload(repos []fleet.Repo, agents []fleet.Agent, skills
 	return nil
 }
 
-// sqliteMemory implements workflow.MemoryBackend using the SQLite store.
-// Agent and repo names are normalised with ai.NormalizeToken before storage so
-// that the keys are identical to those used by the file-based backend and can
-// be looked up by the /api/memory endpoint without conversion.
-type sqliteMemory struct {
-	db       *sql.DB
-	notifyFn func(agent, repo string) // optional; called after each successful write
-}
-
-func (m *sqliteMemory) ReadMemory(agent, repo string) (string, error) {
-	content, _, _, err := store.ReadMemory(m.db, ai.NormalizeToken(agent), ai.NormalizeToken(repo))
-	return content, err
-}
-
 // sqliteWebhookReader implements server.MemoryReader using the SQLite store.
-// Unlike sqliteMemory (which serves the engine and treats a missing row as
-// empty memory), this reader returns server.ErrMemoryNotFound when no row
-// exists so that GET /api/memory returns 404 for absent entries while still
-// returning 200 with an empty body for intentionally-cleared memory.
-// The updated_at timestamp is returned so that handleAPIMemory can set the
-// X-Memory-Mtime response header.
+// Unlike coordinator.SQLiteMemory (which serves the engine and treats a
+// missing row as empty memory), this reader returns server.ErrMemoryNotFound
+// when no row exists so that GET /api/memory returns 404 for absent entries
+// while still returning 200 with an empty body for intentionally-cleared
+// memory. The updated_at timestamp is returned so that handleAPIMemory can
+// set the X-Memory-Mtime response header.
 type sqliteWebhookReader struct {
 	db *sql.DB
 }
@@ -306,16 +293,6 @@ func (r *sqliteWebhookReader) ReadMemory(agent, repo string) (string, time.Time,
 		return "", time.Time{}, server.ErrMemoryNotFound
 	}
 	return content, mtime, nil
-}
-
-func (m *sqliteMemory) WriteMemory(agent, repo, content string) error {
-	if err := store.WriteMemory(m.db, ai.NormalizeToken(agent), ai.NormalizeToken(repo), content); err != nil {
-		return err
-	}
-	if m.notifyFn != nil {
-		m.notifyFn(ai.NormalizeToken(agent), ai.NormalizeToken(repo))
-	}
-	return nil
 }
 
 // loadConfig loads the daemon configuration from a SQLite database. When
