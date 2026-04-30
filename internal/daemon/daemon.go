@@ -31,6 +31,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -511,7 +512,7 @@ func (d *Daemon) buildStatus() statusJSON {
 		Queues: map[string]statusQueueJSON{
 			"events": {Buffered: q.Buffered, Capacity: q.Capacity},
 		},
-		Agents: append([]scheduler.AgentStatus{}, d.scheduler.AgentStatuses()...),
+		Agents: slices.Clone(d.scheduler.AgentStatuses()),
 	}
 
 	orphans, err := d.fleet.OrphanedAgents()
