@@ -31,6 +31,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -561,11 +562,13 @@ func (d *Daemon) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	repo, ok := findRepo(repos, req.Repo)
-	if !ok || !repo.Enabled {
+	want := fleet.NormalizeRepoName(req.Repo)
+	idx := slices.IndexFunc(repos, func(r fleet.Repo) bool { return r.Name == want })
+	if idx < 0 || !repos[idx].Enabled {
 		http.Error(w, "repo not found or disabled", http.StatusNotFound)
 		return
 	}
+	repo := repos[idx]
 
 	ev := workflow.Event{
 		ID:    workflow.GenEventID(),
@@ -592,18 +595,6 @@ func (d *Daemon) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 		"repo":     req.Repo,
 		"event_id": ev.ID,
 	})
-}
-
-// findRepo locates the repo with the given full name (case-insensitive
-// match via fleet name normalization, the same rule applied at write time).
-func findRepo(repos []fleet.Repo, name string) (fleet.Repo, bool) {
-	want := fleet.NormalizeRepoName(name)
-	for _, r := range repos {
-		if r.Name == want {
-			return r, true
-		}
-	}
-	return fleet.Repo{}, false
 }
 
 // LoadConfig is the daemon's startup config-load helper. It opens the
