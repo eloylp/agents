@@ -1,8 +1,10 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/eloylp/agents/internal/store"
@@ -85,4 +87,26 @@ func (s *Server) reloadCron() error {
 	}
 
 	return nil
+}
+
+// DecodeBody reads and decodes a JSON body up to limit bytes. On error it
+// writes the response and returns false; callers must not write further.
+// Bodies larger than limit surface as 413; malformed JSON as 400.
+func DecodeBody[T any](w http.ResponseWriter, r *http.Request, limit int64, out *T) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return false
+		}
+		http.Error(w, fmt.Sprintf("read request: %v", err), http.StatusBadRequest)
+		return false
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
+		return false
+	}
+	return true
 }
