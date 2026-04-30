@@ -140,7 +140,7 @@ func (c *Config) validateSkills() error {
 			return errors.New("config: skill name is required")
 		}
 		if skill.Prompt == "" {
-			return fmt.Errorf("config: skill %q: prompt is empty after resolution", name)
+			return fmt.Errorf("config: skill %q: prompt is empty", name)
 		}
 	}
 	return nil
@@ -172,7 +172,7 @@ func (c *Config) validateAgents() error {
 			}
 		}
 		if a.Prompt == "" {
-			return fmt.Errorf("config: agent %q: prompt is empty after resolution", a.Name)
+			return fmt.Errorf("config: agent %q: prompt is empty", a.Name)
 		}
 	}
 	// Validate can_dispatch references after all agents are seen.

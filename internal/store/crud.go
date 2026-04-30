@@ -243,10 +243,10 @@ func ReadSkills(db *sql.DB) (map[string]fleet.Skill, error) {
 }
 
 // UpsertSkill inserts or replaces a single skill.
-// The skill name is normalized (lowercase, trimmed) and Skill fields
-// (Prompt, PromptFile) are trimmed before writing, matching the normalization
-// startup applies in normalize() so that the stored values are already in
-// canonical form and validation sees the same shape as after a restart.
+// The skill name is normalized (lowercase, trimmed) and Skill.Prompt is
+// trimmed before writing, matching the normalization startup applies in
+// normalize() so that the stored values are already in canonical form and
+// validation sees the same shape as after a restart.
 func UpsertSkill(db *sql.DB, name string, s fleet.Skill) error {
 	name = fleet.NormalizeSkillName(name)
 	fleet.NormalizeSkill(&s)

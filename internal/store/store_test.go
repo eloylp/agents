@@ -12,9 +12,8 @@ import (
 )
 
 // minimalCfg returns a minimal *config.Config suitable for round-trip tests.
-// It mirrors the structure produced by config.Load on a small YAML file and
-// has already had defaults applied and secrets resolved (prompt_file is empty;
-// prompts are inline).
+// It mirrors the structure produced by config.Load on a small YAML file:
+// defaults applied, secrets resolved, prompts inline.
 func minimalCfg() *config.Config {
 	enabled := true
 	disabled := false

@@ -79,8 +79,6 @@ volumes:
 | `~/.claude.json` | `/home/agents/.claude.json` | Claude Code main config. **MCP server entries with auth headers live here**, not in `~/.claude/settings.json`. |
 | `~/.codex` | `/home/agents/.codex` | Codex configuration. |
 
-If your `config.yaml` uses `prompt_file:` paths that point outside the project root, mount the containing directory yourself. The shipped example config is inline-only, so no extra prompt mount is needed.
-
 ### Ports
 
 The daemon listens on `:8080` (matches `daemon.http.listen_addr` in the example config). The compose file publishes `8080:8080` for local use. In production, drop the host-side publish and expose the service only through your reverse proxy's internal Docker network.

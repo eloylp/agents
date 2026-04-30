@@ -82,9 +82,8 @@ daemon:
 #
 # Each skill is a named chunk of guidance. Agents reference skills by
 # name; at runtime the guidance is concatenated into the agent's prompt.
-# Use `prompt:` for short inline guidance or `prompt_file:` to load from
-# a file (path relative to this config). The shipping example keeps them
-# inline so it imports cleanly out of the box.
+# Skill prompts are inline strings — keep them in this YAML file or let
+# the daemon manage them through the CRUD API / UI / MCP after import.
 # ──────────────────────────────────────────────
 skills:
   architect:
@@ -136,9 +135,6 @@ skills:
 # can_dispatch: [agent-name, ...]
 #   Whitelist of agents this agent is allowed to dispatch. Entries must
 #   reference real agents in this config; self-reference is rejected.
-# prompt_file: path relative to the config file's directory.
-#   Use it when you want prompts in separate files; this example keeps
-#   prompts inline so it is importable as-is.
 #
 # Runtime "Available experts" roster
 # ──────────────────────────────────

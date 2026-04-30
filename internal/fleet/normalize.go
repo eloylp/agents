@@ -51,7 +51,6 @@ func NormalizeAgent(a *Agent) {
 	a.Backend = NormalizeBackendName(a.Backend)
 	a.Model = strings.TrimSpace(a.Model)
 	a.Prompt = strings.TrimSpace(a.Prompt)
-	a.PromptFile = strings.TrimSpace(a.PromptFile)
 	a.Description = strings.TrimSpace(a.Description)
 	for i := range a.Skills {
 		a.Skills[i] = NormalizeSkillName(a.Skills[i])
@@ -62,10 +61,9 @@ func NormalizeAgent(a *Agent) {
 }
 
 // NormalizeSkill applies the same field normalization that the YAML loader
-// performs on skill values: trims Prompt and PromptFile.
+// performs on skill values: trims Prompt.
 func NormalizeSkill(s *Skill) {
 	s.Prompt = strings.TrimSpace(s.Prompt)
-	s.PromptFile = strings.TrimSpace(s.PromptFile)
 }
 
 // NormalizeBackend applies the same per-entry field normalization that the

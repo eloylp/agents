@@ -140,9 +140,9 @@ func migrate(db *sql.DB) error {
 }
 
 // Import writes cfg into the database, upserting every entity. Existing rows
-// are replaced (INSERT OR REPLACE). Prompts are stored inline — any
-// prompt_file references must be resolved in cfg before calling Import (i.e.
-// pass the output of config.Load which resolves them eagerly).
+// are replaced (INSERT OR REPLACE). Prompts are stored inline — agents and
+// skills must carry their full prompt text in cfg.Prompt before calling
+// Import.
 //
 // Secrets (WebhookSecret) are NOT written — only the env-var name
 // (WebhookSecretEnv) is stored. The secret is re-resolved from the

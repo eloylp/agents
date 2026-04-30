@@ -103,7 +103,7 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 			return errors.New("config: skill name is required")
 		}
 		if s.Prompt == "" {
-			return fmt.Errorf("config: skill %q: prompt is empty after resolution", name)
+			return fmt.Errorf("config: skill %q: prompt is empty", name)
 		}
 	}
 
@@ -133,7 +133,7 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 			}
 		}
 		if a.Prompt == "" {
-			return fmt.Errorf("config: agent %q: prompt is empty after resolution", a.Name)
+			return fmt.Errorf("config: agent %q: prompt is empty", a.Name)
 		}
 	}
 	// Dispatch wiring reuses the Config method which only reads c.Agents.

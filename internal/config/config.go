@@ -13,7 +13,7 @@
 //
 //	config.go             — types, Load / FinishLoad entry points, lookups
 //	defaults.go           — applyDefaults, normalize, setDefault helpers
-//	prompts.go            — prompt_file resolution + secret env-var resolution
+//	secrets.go            — secret env-var resolution
 //	validate.go           — internal validate* tree called from Config.validate()
 //	validate_entities.go  — exported ValidateCrossRefs / ValidateEntities for the
 //	                        SQLite CRUD layer (entity-level checks, no daemon section)
@@ -22,7 +22,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -36,10 +35,6 @@ type Config struct {
 	Skills map[string]fleet.Skill `yaml:"skills"`
 	Agents []fleet.Agent          `yaml:"agents"`
 	Repos  []fleet.Repo           `yaml:"repos"`
-
-	// configDir is the directory containing the config file, used to resolve
-	// prompt_file paths.
-	configDir string `yaml:"-"`
 }
 
 // DaemonConfig holds infrastructure-level configuration for the running
@@ -119,9 +114,8 @@ type DispatchConfig struct {
 
 // FinishLoad applies defaults, normalization, secret resolution, and
 // validation to a Config that was populated by means other than Load (e.g.
-// read from the SQLite store). It does NOT attempt to resolve prompt_file
-// references — callers are expected to have already populated cfg.Agents and
-// cfg.Skills with inline prompt text.
+// read from the SQLite store). All prompts are expected to be inline by
+// the time FinishLoad runs.
 func FinishLoad(cfg *Config) (*Config, error) {
 	cfg.applyDefaults()
 	cfg.normalize()
@@ -132,9 +126,9 @@ func FinishLoad(cfg *Config) (*Config, error) {
 	return cfg, nil
 }
 
-// Load reads, parses, validates, and resolves a config file at the given
-// path. Prompt files referenced by PromptFile fields are read eagerly;
-// any I/O or validation error is reported here.
+// Load reads, parses, validates, and resolves a YAML config file at the
+// given path. Prompts are expected inline; the loader does not read any
+// other files.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -144,23 +138,7 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
-
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return nil, fmt.Errorf("resolve config path: %w", err)
-	}
-	cfg.configDir = filepath.Dir(abs)
-
-	cfg.applyDefaults()
-	cfg.normalize()
-	cfg.resolveSecrets()
-	if err := cfg.loadPromptFiles(); err != nil {
-		return nil, err
-	}
-	if err := cfg.validate(); err != nil {
-		return nil, err
-	}
-	return &cfg, nil
+	return FinishLoad(&cfg)
 }
 
 // RepoByName returns the repo definition with the given full name

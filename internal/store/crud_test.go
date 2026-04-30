@@ -1094,9 +1094,9 @@ func TestUpsertNormalizesNames(t *testing.T) {
 	}
 }
 
-// TestUpsertSkillNormalizesPrompt verifies that UpsertSkill trims Prompt and
-// PromptFile before persisting, matching the normalization startup applies.
-// A whitespace-only prompt must be trimmed to "" and then rejected by
+// TestUpsertSkillNormalizesPrompt verifies that UpsertSkill trims Prompt
+// before persisting, matching the normalization startup applies. A
+// whitespace-only prompt must be trimmed to "" and then rejected by
 // validation — otherwise the write API would persist state that the daemon
 // refuses to load on restart.
 func TestUpsertSkillNormalizesPrompt(t *testing.T) {

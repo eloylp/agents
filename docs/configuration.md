@@ -69,7 +69,7 @@ skills:
       Focus on authn/authz, secrets exposure, injection vectors, and unsafe defaults.
 ```
 
-Skills are referenced by name from agents. You can also use `prompt_file: path/to/file.md` instead of inline `prompt`. The shipping [`config.example.yaml`](../config.example.yaml) keeps prompts inline so a fresh clone imports without extra files.
+Skills are referenced by name from agents. Prompts are inline strings — once the YAML has been imported into SQLite, manage them through the CRUD API, the web UI, or the MCP tools.
 
 ## `agents`
 
@@ -118,8 +118,7 @@ agents:
 Each agent is a pure capability definition: backend + skills + prompt. Agents don't run until a repo binds them to a trigger.
 
 - `backend` must match an entry in `daemon.ai_backends` (e.g. `claude`, `codex`, or any custom local-backend name). There is no `auto` selection; every agent must name a backend explicitly.
-- `prompt_file` paths are resolved relative to the config file's directory.
-  Use them for your own longer prompts; the repo no longer ships a `prompts/` tree.
+- `prompt` is an inline string in the YAML. After import the prompt lives in SQLite — edit it through the CRUD API, the web UI, or the MCP `update_agent` tool.
 - Agent names must be unique.
 - `allow_prs` (default `false`): when `false`, the scheduler prepends a hard instruction forbidding the agent from opening pull requests, regardless of what the prompt says. Set `allow_prs: true` only on agents that are explicitly meant to author PRs (e.g. coders, refactorers). Reviewer-only agents should leave this unset.
 - `allow_dispatch` (default `false`): opt-in gate. An agent must have `allow_dispatch: true` for any other agent to dispatch it. Agents without this flag silently drop any incoming dispatch requests.
