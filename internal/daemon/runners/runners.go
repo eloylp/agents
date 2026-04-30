@@ -75,18 +75,18 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 //   - "enqueued" / "running": event is in flight, no trace yet
 //   - "success" / "error":     trace exists, run finished with that outcome
 type RunnerRow struct {
-	ID            int64           `json:"id"`
-	EventID       string          `json:"event_id"`
-	Kind          string          `json:"kind"`
-	Repo          string          `json:"repo"`
-	Number        int             `json:"number,omitempty"`
-	Actor         string          `json:"actor,omitempty"`
-	TargetAgent   string          `json:"target_agent,omitempty"`
-	Status        string          `json:"status"`
-	EnqueuedAt    time.Time       `json:"enqueued_at"`
-	StartedAt     *time.Time      `json:"started_at,omitempty"`
-	CompletedAt   *time.Time      `json:"completed_at,omitempty"`
-	Payload       json.RawMessage `json:"payload,omitempty"`
+	ID          int64           `json:"id"`
+	EventID     string          `json:"event_id"`
+	Kind        string          `json:"kind"`
+	Repo        string          `json:"repo"`
+	Number      int             `json:"number,omitempty"`
+	Actor       string          `json:"actor,omitempty"`
+	TargetAgent string          `json:"target_agent,omitempty"`
+	Status      string          `json:"status"`
+	EnqueuedAt  time.Time       `json:"enqueued_at"`
+	StartedAt   *time.Time      `json:"started_at,omitempty"`
+	CompletedAt *time.Time      `json:"completed_at,omitempty"`
+	Payload     json.RawMessage `json:"payload,omitempty"`
 
 	// Trace-derived fields, populated only when CompletedAt != nil and a
 	// matching span exists. Agent is the canonical "which runner is this".
@@ -123,9 +123,11 @@ var ErrRunnerRunning = errors.New("runners: cannot retry running event")
 // Each event_queue row produces 0..N output rows depending on whether
 // traces have been recorded for it (see package doc).
 func (h *Handler) List(status string, limit, offset int) (ListResponse, error) {
-	st, err := parseStatus(status)
-	if err != nil {
-		return ListResponse{}, err
+	st := store.RunnerStatus(status)
+	switch st {
+	case "", store.RunnerEnqueued, store.RunnerRunning, store.RunnerCompleted:
+	default:
+		return ListResponse{}, fmt.Errorf("invalid status %q", status)
 	}
 	events, err := h.store.ListRunners(st, limit, offset)
 	if err != nil {
@@ -294,14 +296,6 @@ func pathID(r *http.Request) (int64, error) {
 		return 0, fmt.Errorf("invalid id %q", raw)
 	}
 	return id, nil
-}
-
-func parseStatus(s string) (store.RunnerStatus, error) {
-	switch s {
-	case "", "enqueued", "running", "completed":
-		return store.RunnerStatus(s), nil
-	}
-	return "", fmt.Errorf("invalid status %q", s)
 }
 
 func writeJSON(w http.ResponseWriter, code int, body any) {
