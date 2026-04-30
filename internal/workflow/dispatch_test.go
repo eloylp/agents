@@ -704,11 +704,6 @@ func TestDispatchDedupStoreStartSmallTTLDoesNotPanic(t *testing.T) {
 	}
 }
 
-// TestRemoveCronMarkWithOverlappingRunsRefcount verifies that a rollback from one
-// failed autonomous run does not clear a cron mark that a second overlapping run
-// is still relying on. Without refcount semantics, the first rollback would delete
-// the shared key and allow dispatches to slip through while the second run is
-// still in flight.
 // TestConcurrentDispatchesDoNotDuplicateEnqueue is a regression test for the
 // non-atomic Seen+PushEvent+SeenOrAdd race: two concurrent ProcessDispatches
 // calls for the same (target, repo, number) must enqueue exactly one event, not
@@ -744,6 +739,11 @@ func TestConcurrentDispatchesDoNotDuplicateEnqueue(t *testing.T) {
 	}
 }
 
+// TestRemoveCronMarkWithOverlappingRunsRefcount verifies that a rollback from one
+// failed autonomous run does not clear a cron mark that a second overlapping run
+// is still relying on. Without refcount semantics, the first rollback would delete
+// the shared key and allow dispatches to slip through while the second run is
+// still in flight.
 func TestRemoveCronMarkWithOverlappingRunsRefcount(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}
