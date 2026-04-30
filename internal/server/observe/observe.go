@@ -402,8 +402,3 @@ func ServeSSEWithInterval(w http.ResponseWriter, r *http.Request, hub SSEHub, he
 		}
 	}
 }
-
-// MemoryChangeEvent is published to the MemorySSE hub when an agent's memory
-// is updated. Kept here so observe_test.go and production callers share the
-// same wire type without importing internal/observe directly.
-type MemoryChangeEvent = obstore.MemoryChangeEvent
