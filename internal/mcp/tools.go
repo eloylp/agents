@@ -230,8 +230,6 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			),
 			toolDeleteSkill(deps),
 		)
-	}
-	if deps.Fleet != nil {
 		srv.AddTool(
 			mcpgo.NewTool("create_backend",
 				mcpgo.WithDescription("Create or update an AI backend. Upsert semantics: a write to an existing name overwrites it. Returns the canonical (normalized) backend persisted by the store. Same path as POST /backends."),
@@ -309,8 +307,6 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			),
 			toolDeleteBackend(deps),
 		)
-	}
-	if deps.Fleet != nil {
 		srv.AddTool(
 			mcpgo.NewTool("create_agent",
 				mcpgo.WithDescription("Create or update an agent. Upsert semantics: a write to an existing name overwrites it. Returns the canonical (normalized) agent persisted by the store. Same path as POST /agents."),
