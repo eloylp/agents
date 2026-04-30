@@ -16,13 +16,14 @@ internal/
   observe/                  # Observability store: events, traces, dispatch graph, SSE hubs
   scheduler/                # Cron scheduler + agent memory (SQLite-backed)
   backends/                 # Backend discovery: CLI probing, GitHub MCP health checks, orphan detection
-  store/                    # SQLite-backed config store: Open, Import, Load, CRUD
-  workflow/                 # Event routing engine, single event queue, processor, dispatcher
-  server/                   # Central HTTP server: lifecycle, router, /status, /run, proxy + UI + MCP mounts; cross-cutting types (StatusProvider, EventQueue, WriteCoordinator, ...)
-  server/observe/           # Observability HTTP handlers (events, traces, graph, dispatches, memory, SSE)
-  server/config/            # /config snapshot, /export, /import HTTP handlers and methods
-  server/fleet/             # Agents/skills/backends CRUD + GET /agents fleet view + orphans cache (incl. /agents/orphans/status)
-  server/repos/             # Repos + per-binding HTTP CRUD handlers and methods
+  store/                    # SQLite-backed config + event_queue store: Open, Import, Load, CRUD; *store.Store facade hides the *sql.DB
+  workflow/                 # Event routing engine, durable event queue (persist-on-push + replay), processor, dispatcher
+  daemon/                   # Daemon as a single composed unit: lifecycle, router, /status, /run, proxy + UI + MCP mounts
+  daemon/observe/           # Observability HTTP handlers (events, traces, graph, dispatches, memory, SSE)
+  daemon/config/            # /config snapshot, /export, /import HTTP handlers and methods
+  daemon/fleet/             # Agents/skills/backends CRUD + GET /agents fleet view + orphans (incl. /agents/orphans/status)
+  daemon/repos/             # Repos + per-binding HTTP CRUD handlers and methods
+  daemon/queue/             # /queue listing + delete + retry handlers (durable event_queue surface)
   webhook/                  # GitHub webhook receiver only: HMAC verification, delivery dedupe, /webhooks/github event parsing
   mcp/                      # MCP server exposing fleet-management tools at /mcp
   ui/                       # Embedded Next.js web dashboard (served at /ui/)
@@ -77,6 +78,8 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code and Code
 ## Architecture Notes
 
 - Event-driven for label-based workflows; cron scheduler for autonomous agents. Both paths resolve to the same agent definitions.
+- **Durable event queue.** Every `PushEvent` writes the event to the SQLite `event_queue` table before signalling workers via the in-memory channel — the DB is the source of truth, the channel is just a wake-up notification. At startup the daemon replays rows whose `completed_at` is still `NULL` so events buffered at shutdown (or runs interrupted mid-prompt) get a second chance instead of vanishing. An hourly cleanup loop prunes completed rows older than 7 days. `/queue` exposes the table for inspection, deletion, and retry.
+- **Structured concurrency.** Every long-lived goroutine implements `Run(ctx) error`. The daemon arranges them in two errgroup tiers with separate contexts: producers (HTTP listener, cron scheduler) live on a context derived from the parent — they stop emitting webhooks and cron events as soon as the parent fires; consumers (worker pool, delivery dedup eviction, dispatch dedup eviction, queue cleanup, the one-shot replay step) live on a separate background context that outlives the producer tier so the queue can drain after producers stop. Phase boundaries are logged.
 - HTTP endpoints:
   - `GET /status` — JSON with uptime, event queue depth, agent schedules, dispatch counters, and orphaned-agent summary.
   - `POST /webhooks/github` — HMAC-verified webhook receiver.

@@ -66,6 +66,16 @@ The same pattern works for Cursor, Cline, and any other MCP-compatible client; c
 | `get_dispatches` | Dispatch counters and drop reasons. |
 | `get_memory` | Agent memory for an agent/repo pair. |
 
+### Queue
+
+These tools mirror the `/queue` REST surface; see [api.md](api.md#queue-management) for the persistence + retry semantics.
+
+| Tool | Description |
+|---|---|
+| `list_queue_events` | List rows in the durable event queue with `id`, `kind`, `repo`, `number`, `status`, and timestamps. Optional `status` filter (`enqueued` / `running` / `completed`); `limit` (default 100); `offset`. |
+| `delete_queue_event` | Remove one row by id. Best-effort — if a worker has already dequeued the QueuedEvent from the channel buffer it will still run; the row simply won't appear in subsequent listings. |
+| `retry_queue_event` | Re-enqueue an event by copying its blob into a fresh row and pushing onto the channel. The original row stays as audit history. Errors when the source is in `running` state, when the channel is full, or when the queue has been closed. |
+
 ### Config
 
 | Tool | Description |

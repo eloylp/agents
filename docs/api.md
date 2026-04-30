@@ -19,6 +19,7 @@ The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/agents` | Fleet snapshot: per-agent status, bindings, dispatch wiring |
+| `GET` | `/agents/orphans/status` | DB-only orphan report (agents pinning models unavailable in their backend's catalog) |
 | `GET` | `/events` | Recent webhook events (time-windowed) |
 | `GET` | `/events/stream` | Live event firehose (SSE) |
 | `GET` | `/traces` | Recent agent run traces with timing |
@@ -30,6 +31,24 @@ The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 
 | `GET` | `/memory/{agent}/{repo}` | Raw agent memory markdown. `{repo}` uses `owner_repo` format (underscore-separated) |
 | `GET` | `/memory/stream` | Memory file change notifications (SSE) |
 | `GET` | `/config` | Effective parsed config (secrets redacted) |
+
+## Queue management
+
+The daemon's event queue is durable: every `PushEvent` writes to the SQLite `event_queue` table before signalling workers. Rows whose `completed_at` is `NULL` are replayed on startup; completed rows are pruned after 7 days. These endpoints expose that table for inspection and operator action.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/queue` | Paginated listing, newest first. Each row carries `id`, `kind`, `repo`, `number`, `status` (`enqueued` / `running` / `completed`), and the relevant timestamps. Query params: `status` (filter by state), `limit` (default 100), `offset` (default 0). |
+| `DELETE` | `/queue/{id}` | Remove one row. **Best-effort:** if a worker has already received the `QueuedEvent` from the in-memory channel buffer, it will still run; the row simply won't appear in subsequent listings. Returns `404` for unknown ids. |
+| `POST` | `/queue/{id}/retry` | Re-enqueue an event by copying its blob into a fresh `event_queue` row and pushing onto the channel. The original row stays as audit history. The response body is `{"new_id": <id>}`. Returns `409` when the source row is in `running` state, `404` when missing, `503` when the in-memory channel is full or closed. |
+
+## Backend diagnostics
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/backends/status` | Health snapshot for every configured backend (CLI version, model catalog, GitHub MCP probe result). |
+| `POST` | `/backends/discover` | Trigger an explicit re-probe of every backend's CLI and update the stored model catalog. |
+| `POST` | `/backends/local` | Probe one local OpenAI-compatible base URL and return its advertised models without persisting. Useful for dry-running a `local_model_url` setting before saving it. |
 
 ## Web dashboard
 

@@ -48,6 +48,17 @@ Repository bindings. Wire agents to repos with labels, events, or cron triggers.
 
 <!-- TODO: screenshot — a repo with two bindings, one event-triggered and one cron-triggered, so the reader sees the trigger types side by side -->
 
+### Queue
+
+Operator view of the durable event queue. Each row in `event_queue` is shown with its `id`, derived `status` (`enqueued` / `running` / `completed`), kind, repo, number, and the relevant timestamps. The header bar offers a status filter; the page polls every two seconds for fresh state.
+
+Two per-row actions:
+
+- **Retry** copies the original event blob into a fresh `event_queue` row with a new `enqueued_at` and pushes it onto the channel — the source row stays as audit history. Disabled while the source is in `running` state, since retrying a row a worker is already processing would race.
+- **Delete** removes the row from the table. Best-effort: a worker that has already dequeued the `QueuedEvent` from the channel buffer will still run it; the row simply won't appear in the listing afterwards. Confirm dialog warns about this.
+
+<!-- TODO: screenshot — queue page with a mix of statuses (one running, two completed, one enqueued) and the action buttons visible -->
+
 ### Memory
 
 Raw agent memory markdown per `(agent, repo)` pair. Useful for inspecting what an autonomous agent has learned across runs.
@@ -62,4 +73,4 @@ Effective parsed config (secrets redacted). Includes YAML import/export.
 
 ## Authentication
 
-The dashboard is unauthenticated at the daemon level. Place the daemon behind a reverse proxy that gates `/ui/` and the rest of the authenticated surface (everything except `/webhooks/github`, `/status`, `/run`, `/v1/*`). See [docker.md](docker.md) for one concrete pattern using Traefik basic-auth.
+The dashboard is unauthenticated at the daemon level. Place the daemon behind a reverse proxy that gates `/ui/`, `/queue`, and the rest of the authenticated surface (everything except `/webhooks/github`, `/status`, `/run`, `/v1/*`). See [docker.md](docker.md) for one concrete pattern using Traefik basic-auth.

@@ -138,7 +138,7 @@ All endpoints are unauthenticated at the daemon level. **Access control is the r
 
 | Router | Paths | Auth | Purpose |
 |---|---|---|---|
-| **UI / API** (authenticated) | everything except the public paths below | basic auth, OAuth2 proxy, or mTLS | `/ui/`, `/agents`, `/skills`, `/repos`, `/traces`, `/events`, `/graph`, `/memory`, `/config`, `/export`, `/import`, `/backends` |
+| **UI / API** (authenticated) | everything except the public paths below | basic auth, OAuth2 proxy, or mTLS | `/ui/`, `/agents`, `/skills`, `/repos`, `/traces`, `/events`, `/graph`, `/memory`, `/queue`, `/config`, `/export`, `/import`, `/backends` |
 | **Public** (no auth) | `/status`, `/webhooks/github`, `/run`, `/v1/*` | none | GitHub can't send a basic-auth header on webhooks; `/status` must stay reachable for liveness probes; `/run` and `/v1/*` (proxy) are meant to be called by trusted external systems that authenticate with their own mechanism. |
 
 `/webhooks/github` is safe to expose publicly because every request is HMAC-verified against `GITHUB_WEBHOOK_SECRET` before it is accepted. `/run` does not currently authenticate callers. If you enable it, restrict it at the proxy with an allowlist or a shared secret header.
@@ -259,6 +259,24 @@ curl -X POST http://localhost:8080/run \
 ```
 
 Returns `202 Accepted` with an `event_id`; the agent runs asynchronously. Watch its trace from `/ui/` → Traces, or via `GET /traces/stream`.
+
+### Inspect or replay the event queue
+
+After a crash, an unexpected SIGKILL, or a stuck run, look at the durable event queue. Rows whose `completed_at` is still `NULL` were either buffered at shutdown or interrupted mid-prompt; the daemon replays them automatically on the next start.
+
+```bash
+# All rows, newest first
+curl -s http://localhost:8080/queue | jq
+
+# Only rows still in flight or never picked up
+curl -s 'http://localhost:8080/queue?status=running' | jq
+curl -s 'http://localhost:8080/queue?status=enqueued' | jq
+
+# Re-run a completed event manually (returns the new row id)
+curl -X POST http://localhost:8080/queue/<id>/retry
+```
+
+The same operations are available from the `/ui/` Queue page and the MCP tools `list_queue_events` / `delete_queue_event` / `retry_queue_event`. See [api.md](api.md#queue-management) for retry semantics and the running-state guard.
 
 ### Export and import the fleet
 
