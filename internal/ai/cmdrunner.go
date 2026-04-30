@@ -111,7 +111,14 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	for {
 		line, err := reader.ReadBytes('\n')
 		if len(line) > 0 {
-			stdoutCap.addLine(bytes.TrimRight(line, "\n"))
+			stripped := bytes.TrimRight(line, "\n")
+			stdoutCap.addLine(stripped)
+			// Live publish: hand the line to the engine-supplied
+			// callback as soon as it lands. Empty lines are still
+			// forwarded so the UI can render blank separators verbatim.
+			if req.OnLine != nil {
+				req.OnLine(stripped)
+			}
 		}
 		if err != nil {
 			if err != io.EOF {

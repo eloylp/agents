@@ -57,6 +57,23 @@ type RunTracker interface {
 	FinishRun(agentName string)
 }
 
+// RunStreamPublisher is an optional collaborator the Engine notifies as a
+// run's stdout streams in. Implementations register the active span on
+// BeginRun (so the runners view can render an in-flight row with span_id
+// and the UI can subscribe), receive each stdout line via PublishLine,
+// and clean up via EndRun. Must be safe for concurrent use.
+type RunStreamPublisher interface {
+	BeginRun(in BeginRunInput)
+	PublishLine(spanID string, line []byte)
+	EndRun(spanID string)
+}
+
+// BeginRunInput is the call shape for RunStreamPublisher.BeginRun.
+type BeginRunInput struct {
+	SpanID, EventID, Agent, Backend, Repo, EventKind string
+	StartedAt                                        time.Time
+}
+
 // GraphRecorder is an optional observer that the Engine calls when a dispatch
 // is issued. Implementations must be safe for concurrent use.
 type GraphRecorder interface {
@@ -130,6 +147,7 @@ type Engine struct {
 	traceRec      TraceRecorder
 	graphRec      GraphRecorder
 	runTracker    RunTracker
+	streamPub     RunStreamPublisher
 	stepRec       StepRecorder
 	lastRunRec    LastRunRecorder // optional; only fired for Kind=="cron"
 	runLock       runLocks        // serializes (agent, repo) runs across kinds
@@ -219,6 +237,14 @@ func (e *Engine) WithRunnerBuilder(fn func(name string, b fleet.Backend) ai.Runn
 // completed agent run. It is safe to call after NewEngine and before Run.
 func (e *Engine) WithTraceRecorder(r TraceRecorder) {
 	e.traceRec = r
+}
+
+// WithRunStreamPublisher attaches an optional collaborator the engine
+// notifies on every run's lifecycle and stdout. Wires the AI CLI's
+// per-line output through to observe.RunRegistry's per-span hub so the
+// UI can stream the agent's "thinking" live.
+func (e *Engine) WithRunStreamPublisher(p RunStreamPublisher) {
+	e.streamPub = p
 }
 
 // WithRunTracker attaches an optional tracker that is called when an agent run
@@ -727,6 +753,25 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 
 	spanStart := time.Now()
 	spanID := GenEventID()
+
+	// Live-stream registration: announce the run to the publisher so the
+	// runners view can show an in-flight row with this span_id and the
+	// SSE hub is ready before stdout starts arriving. Always pair with
+	// EndRun so the active entry is cleared.
+	var onLine func([]byte)
+	if e.streamPub != nil {
+		e.streamPub.BeginRun(BeginRunInput{
+			SpanID:    spanID,
+			EventID:   ev.ID,
+			Agent:     agent.Name,
+			Backend:   backend,
+			Repo:      ev.Repo.FullName,
+			EventKind: ev.Kind,
+			StartedAt: spanStart,
+		})
+		defer e.streamPub.EndRun(spanID)
+		onLine = func(line []byte) { e.streamPub.PublishLine(spanID, line) }
+	}
 	resp, runErr := runner.Run(ctx, ai.Request{
 		Workflow: workflow,
 		Repo:     ev.Repo.FullName,
@@ -734,6 +779,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		Model:    agent.Model,
 		System:   rendered.System,
 		User:     rendered.User,
+		OnLine:   onLine,
 	})
 	spanEnd := time.Now()
 

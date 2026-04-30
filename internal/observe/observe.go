@@ -191,6 +191,230 @@ func (a *ActiveRuns) IsRunning(agentName string) bool {
 	return a.runs[agentName] > 0
 }
 
+// ─── RunRegistry ─────────────────────────────────────────────────────────────
+
+// ActiveRun is the in-memory snapshot of a span that's currently running.
+// Used by the runners view to surface in-flight rows (agent populated,
+// span_id available so the UI can offer a live-stream affordance) and by
+// the live-stream SSE handler to enumerate / look up the per-span hub.
+//
+// Lives only in memory by design — once the run completes, the canonical
+// trace row in SQLite supersedes it.
+type ActiveRun struct {
+	SpanID    string
+	EventID   string
+	Agent     string
+	Backend   string
+	Repo      string
+	EventKind string
+	StartedAt time.Time
+}
+
+// runStream is the per-span pub/sub hub for live stdout lines, plus a
+// bounded ring buffer so a UI client connecting mid-run sees the
+// recent history before the live tail kicks in.
+type runStream struct {
+	mu       sync.Mutex
+	history  [][]byte         // most recent N lines (newest at end)
+	subs     map[chan []byte]struct{}
+	closed   bool             // true after End is called; subs still drain history
+	finishAt time.Time        // when End was called; registry sweeps after grace period
+}
+
+const (
+	runStreamHistoryCap = 1000   // ring buffer per span
+	runStreamSubBufCap  = 256    // per-subscriber channel buffer
+	runStreamGrace      = 60 * time.Second // keep streams subscribable after End
+)
+
+func newRunStream() *runStream {
+	return &runStream{
+		history: make([][]byte, 0, 64),
+		subs:    make(map[chan []byte]struct{}),
+	}
+}
+
+// publish records a line in the ring buffer and fans it out to live
+// subscribers. A full subscriber channel drops the line silently —
+// observability must not back-pressure the runner.
+func (r *runStream) publish(line []byte) {
+	cp := make([]byte, len(line))
+	copy(cp, line)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
+	if len(r.history) >= runStreamHistoryCap {
+		// drop oldest
+		r.history = append(r.history[:0], r.history[1:]...)
+	}
+	r.history = append(r.history, cp)
+	for ch := range r.subs {
+		select {
+		case ch <- cp:
+		default:
+		}
+	}
+}
+
+func (r *runStream) end() {
+	r.mu.Lock()
+	if !r.closed {
+		r.closed = true
+		r.finishAt = time.Now()
+	}
+	subs := r.subs
+	r.mu.Unlock()
+	// Close every subscriber channel so SSE handlers exit their range
+	// loop. Replay clients that connect after End still see the full
+	// history (Subscribe replays first), then immediately get a closed
+	// channel and disconnect.
+	for ch := range subs {
+		close(ch)
+	}
+	r.mu.Lock()
+	r.subs = make(map[chan []byte]struct{})
+	r.mu.Unlock()
+}
+
+// subscribe returns the current history snapshot plus a channel for
+// future lines. The caller MUST consume the channel until close to
+// avoid leaking the subscription.
+func (r *runStream) subscribe() ([][]byte, chan []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	hist := make([][]byte, len(r.history))
+	copy(hist, r.history)
+	if r.closed {
+		// Run finished — return history but no live channel. Hand back
+		// a closed channel so the caller's range loop exits cleanly
+		// after rendering history.
+		ch := make(chan []byte)
+		close(ch)
+		return hist, ch
+	}
+	ch := make(chan []byte, runStreamSubBufCap)
+	r.subs[ch] = struct{}{}
+	return hist, ch
+}
+
+func (r *runStream) unsubscribe(ch chan []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.subs[ch]; ok {
+		delete(r.subs, ch)
+		// Don't close here — the caller is the consumer; end() handles
+		// the close path.
+	}
+}
+
+// RunRegistry tracks active agent runs in memory. Each entry carries
+// enough metadata for the runners view to render an in-flight row
+// (agent + span_id) and a per-span stream hub for live stdout. Only
+// in-memory: a daemon restart loses the live data; persisted state
+// remains in the traces table.
+type RunRegistry struct {
+	mu      sync.RWMutex
+	active  map[string]*ActiveRun // span_id → active entry
+	streams map[string]*runStream // span_id → stream (also kept after End during grace)
+}
+
+func newRunRegistry() *RunRegistry {
+	return &RunRegistry{
+		active:  make(map[string]*ActiveRun),
+		streams: make(map[string]*runStream),
+	}
+}
+
+// BeginRun registers a new active run and creates its stream hub. Call
+// before invoking the AI runner so the runners view can surface the
+// span_id and the live-stream subscriber sees lines from the start.
+func (r *RunRegistry) BeginRun(run ActiveRun) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.active[run.SpanID] = &run
+	if _, ok := r.streams[run.SpanID]; !ok {
+		r.streams[run.SpanID] = newRunStream()
+	}
+}
+
+// PublishLine fans one stdout line out to live subscribers and records
+// it in the per-span ring buffer. Safe to call before BeginRun (no-op)
+// or after EndRun (also no-op, the stream is closed).
+func (r *RunRegistry) PublishLine(spanID string, line []byte) {
+	r.mu.RLock()
+	st := r.streams[spanID]
+	r.mu.RUnlock()
+	if st == nil {
+		return
+	}
+	st.publish(line)
+}
+
+// EndRun marks a run finished. The stream hub stays subscribable for
+// runStreamGrace so a slow UI client can still pull the tail; the
+// active-run entry is removed immediately so the runners view stops
+// showing it as live.
+func (r *RunRegistry) EndRun(spanID string) {
+	r.mu.Lock()
+	delete(r.active, spanID)
+	st := r.streams[spanID]
+	r.mu.Unlock()
+	if st != nil {
+		st.end()
+	}
+	// Schedule cleanup of the stream hub after the grace window.
+	go func() {
+		time.Sleep(runStreamGrace)
+		r.mu.Lock()
+		delete(r.streams, spanID)
+		r.mu.Unlock()
+	}()
+}
+
+// ListActive returns the currently-running spans matching eventID, in
+// arbitrary order. Used by the runners handler to surface in-flight
+// rows (one per agent that's currently fanned out for this event).
+// Returns the empty slice when no runs match.
+func (r *RunRegistry) ListActive(eventID string) []ActiveRun {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]ActiveRun, 0)
+	for _, e := range r.active {
+		if e.EventID == eventID {
+			out = append(out, *e)
+		}
+	}
+	return out
+}
+
+// SubscribeStream returns the current history of stdout lines for a
+// span plus a channel that receives subsequent lines. Returns ("", nil)
+// when no stream exists for the span (unknown id, or grace window
+// elapsed). Caller must drain the channel until it closes.
+func (r *RunRegistry) SubscribeStream(spanID string) ([][]byte, chan []byte, bool) {
+	r.mu.RLock()
+	st := r.streams[spanID]
+	r.mu.RUnlock()
+	if st == nil {
+		return nil, nil, false
+	}
+	hist, ch := st.subscribe()
+	return hist, ch, true
+}
+
+// UnsubscribeStream removes a per-stream subscriber. Idempotent.
+func (r *RunRegistry) UnsubscribeStream(spanID string, ch chan []byte) {
+	r.mu.RLock()
+	st := r.streams[spanID]
+	r.mu.RUnlock()
+	if st == nil {
+		return
+	}
+	st.unsubscribe(ch)
+}
+
 // ─── Store ───────────────────────────────────────────────────────────────────
 
 // Store is the single observability container injected throughout the daemon.
@@ -202,6 +426,7 @@ type Store struct {
 	TracesSSE  *SSEHub
 	MemorySSE  *SSEHub
 	ActiveRuns *ActiveRuns
+	Runs       *RunRegistry
 }
 
 // NewStore creates a Store. The db handle is used for all read/write
@@ -213,6 +438,7 @@ func NewStore(db *sql.DB) *Store {
 		TracesSSE:  NewSSEHub(64),
 		MemorySSE:  NewSSEHub(32),
 		ActiveRuns: newActiveRuns(),
+		Runs:       newRunRegistry(),
 	}
 }
 
@@ -411,6 +637,35 @@ func (s *Store) IsRunning(agentName string) bool {
 // ─── workflow interface implementations ──────────────────────────────────────
 // Store satisfies workflow.EventRecorder, workflow.TraceRecorder, and
 // workflow.GraphRecorder through the methods below.
+
+// BeginRun implements workflow.RunStreamPublisher. Forwards to the
+// in-memory RunRegistry so the runners view can surface in-flight rows
+// and the live-stream SSE hub is ready before any stdout arrives.
+func (s *Store) BeginRun(in workflow.BeginRunInput) {
+	s.Runs.BeginRun(ActiveRun{
+		SpanID:    in.SpanID,
+		EventID:   in.EventID,
+		Agent:     in.Agent,
+		Backend:   in.Backend,
+		Repo:      in.Repo,
+		EventKind: in.EventKind,
+		StartedAt: in.StartedAt,
+	})
+}
+
+// PublishLine implements workflow.RunStreamPublisher. Forwards each
+// stdout line to the per-span hub. Drops silently when the span is
+// unknown (run not registered) or already ended.
+func (s *Store) PublishLine(spanID string, line []byte) {
+	s.Runs.PublishLine(spanID, line)
+}
+
+// EndRun implements workflow.RunStreamPublisher. Marks the run finished
+// in the registry and starts the grace window before the per-span hub
+// is reaped.
+func (s *Store) EndRun(spanID string) {
+	s.Runs.EndRun(spanID)
+}
 
 // RecordEvent implements workflow.EventRecorder. It persists the event to
 // SQLite and fans it out to SSE subscribers.

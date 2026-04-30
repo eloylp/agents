@@ -114,6 +114,7 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 	engine.WithGraphRecorder(obs)
 	engine.WithRunTracker(obs.ActiveRuns)
 	engine.WithStepRecorder(obs)
+	engine.WithRunStreamPublisher(obs)
 	memBackend.SetChangeNotifier(obs.PublishMemoryChange)
 
 	sched, err := scheduler.NewScheduler(st, scheduler.DefaultReconcileInterval, logger)

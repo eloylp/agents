@@ -164,9 +164,27 @@ func (h *Handler) expand(ev store.RunnerRecord) []RunnerRow {
 		CompletedAt: ev.CompletedAt,
 		Payload:     ev.Payload,
 	}
-	// Not yet completed: emit one in-flight row with no trace fields.
+	// Not yet completed: ask the live registry for any spans actively
+	// running on this event. One row per active span so the UI can
+	// surface a live-stream affordance per fanned-out agent. When no
+	// spans are active yet (worker hasn't fanned out, or the event is
+	// still queued) emit one placeholder row with agent=null.
 	if ev.CompletedAt == nil {
 		base.Status = string(ev.Status)
+		if h.traces != nil && ev.EventID != "" {
+			active := h.traces.Runs.ListActive(ev.EventID)
+			if len(active) > 0 {
+				out := make([]RunnerRow, 0, len(active))
+				for _, a := range active {
+					row := base
+					row.Agent = a.Agent
+					row.SpanID = a.SpanID
+					row.Status = "running"
+					out = append(out, row)
+				}
+				return out
+			}
+		}
 		return []RunnerRow{base}
 	}
 	// Completed: JOIN with traces. Each span becomes one row.

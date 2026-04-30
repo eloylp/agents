@@ -276,6 +276,82 @@ func TestExtractSSEData(t *testing.T) {
 
 // ─── ActiveRuns ──────────────────────────────────────────────────────────────
 
+func TestRunRegistryListActiveAndStream(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+	now := time.Now()
+	s.Runs.BeginRun(observe.ActiveRun{
+		SpanID: "sp-A", EventID: "ev-1", Agent: "coder", Backend: "claude",
+		Repo: "owner/r", EventKind: "issues.labeled", StartedAt: now,
+	})
+	s.Runs.BeginRun(observe.ActiveRun{
+		SpanID: "sp-B", EventID: "ev-1", Agent: "reviewer", Backend: "claude",
+		Repo: "owner/r", EventKind: "issues.labeled", StartedAt: now,
+	})
+
+	active := s.Runs.ListActive("ev-1")
+	if len(active) != 2 {
+		t.Fatalf("active = %d, want 2", len(active))
+	}
+
+	// Subscribe → publish → see line. Use a buffered fixture by
+	// publishing a line BEFORE subscribing, which exercises the
+	// history-replay path.
+	s.Runs.PublishLine("sp-A", []byte("line-pre-sub"))
+	hist, ch, ok := s.Runs.SubscribeStream("sp-A")
+	if !ok {
+		t.Fatal("expected stream for sp-A")
+	}
+	defer s.Runs.UnsubscribeStream("sp-A", ch)
+	if len(hist) != 1 || string(hist[0]) != "line-pre-sub" {
+		t.Errorf("history = %v, want [line-pre-sub]", hist)
+	}
+
+	// Live publish after subscribe lands on the channel.
+	s.Runs.PublishLine("sp-A", []byte("line-live"))
+	select {
+	case got := <-ch:
+		if string(got) != "line-live" {
+			t.Errorf("live line = %q, want line-live", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("live channel did not receive the published line")
+	}
+
+	// EndRun removes the active entry and closes the channel.
+	s.Runs.EndRun("sp-A")
+	if got := s.Runs.ListActive("ev-1"); len(got) != 1 {
+		t.Errorf("active after EndRun(sp-A) = %d, want 1", len(got))
+	}
+	select {
+	case _, open := <-ch:
+		if open {
+			t.Error("expected channel to be closed after EndRun")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("channel did not close after EndRun")
+	}
+
+	// Subscribing after EndRun: still works during the grace window,
+	// returns history with a closed channel so the SSE handler exits
+	// cleanly after replay.
+	hist2, ch2, ok2 := s.Runs.SubscribeStream("sp-A")
+	if !ok2 {
+		t.Fatal("expected post-end subscribe to succeed during grace window")
+	}
+	if len(hist2) < 2 {
+		t.Errorf("post-end history len = %d, want >= 2", len(hist2))
+	}
+	if _, open := <-ch2; open {
+		t.Error("post-end channel should be closed, was open")
+	}
+
+	// Unknown span returns ok=false.
+	if _, _, ok := s.Runs.SubscribeStream("nope"); ok {
+		t.Error("expected ok=false for unknown span")
+	}
+}
+
 func TestActiveRunsStartFinishIsRunning(t *testing.T) {
 	t.Parallel()
 	s := testDB(t)

@@ -63,6 +63,8 @@ The same pattern works for Cursor, Cline, and any other MCP-compatible client; c
 | `get_trace` | Full dispatch chain by root event ID. |
 | `get_trace_steps` | Tool-loop transcript for one span. |
 | `get_trace_prompt` | Composed prompt the daemon sent to the AI CLI for one span (gzipped on disk; decompressed on the fly). The "what did the agent see" debug artefact. Errors when no prompt is recorded (pre-009-migration spans). |
+
+The live stdout stream (`GET /traces/{span_id}/stream`) is intentionally not mirrored as an MCP tool — SSE is a long-lived streaming protocol that doesn't fit MCP's request/response contract. MCP clients that need the post-completion transcript use `get_trace_steps` instead.
 | `get_graph` | Agent interaction graph (dispatch edges). |
 | `get_dispatches` | Dispatch counters and drop reasons. |
 | `get_memory` | Agent memory for an agent/repo pair. |

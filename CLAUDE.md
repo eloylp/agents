@@ -96,6 +96,7 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code and Code
   - `GET /traces/{root_event_id}` — all spans for a single root event.
   - `GET /traces/{span_id}/steps` — tool-loop transcript (ordered tool calls + durations) for a completed agent span.
   - `GET /traces/{span_id}/prompt` — composed prompt the daemon sent to the AI CLI for this run (text/plain). Stored gzipped on the trace row.
+  - `GET /traces/{span_id}/stream` — SSE stream of the AI CLI's stdout JSONL line-by-line for in-flight (or recently-finished) spans. Replays per-span ring buffer history first, then live-tails. Emits `event: end` on run completion. In-memory only.
   - `GET /graph` — agent interaction graph (dispatch edges + counts).
   - `GET /dispatches` — dispatch dedup store snapshot + counters.
   - `GET /memory/{agent}/{repo}` — raw agent memory markdown.

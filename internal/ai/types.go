@@ -23,6 +23,14 @@ type Request struct {
 	Model    string // optional per-agent model override
 	System   string // stable system-level content (from RenderedPrompt.System)
 	User     string // per-run user content (from RenderedPrompt.User)
+
+	// OnLine, when non-nil, is invoked synchronously for every line the
+	// AI CLI writes to stdout, with the trailing newline stripped. Used
+	// by the engine to publish lines into observe.RunRegistry's per-span
+	// stream hub for live UI streaming. Must not block — the runner
+	// reads stdout in a tight loop and the callback runs on that
+	// goroutine.
+	OnLine func(line []byte)
 }
 
 type Artifact struct {

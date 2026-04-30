@@ -863,6 +863,87 @@ func TestHandleTraceStepsReturnsOrderedSteps(t *testing.T) {
 	}
 }
 
+func TestHandleTraceStreamReplaysHistoryAndEndsCleanly(t *testing.T) {
+	t.Parallel()
+	obs := newTestEvents(t)
+	h := newHandlerOnStore(t, obs)
+
+	// Register a run and publish two history lines BEFORE the SSE
+	// connection opens, exercising the replay path in the handler.
+	obs.Runs.BeginRun(obstore.ActiveRun{
+		SpanID: "sp-stream", EventID: "ev-1", Agent: "coder", Backend: "claude",
+		Repo: "owner/r", EventKind: "issues.labeled", StartedAt: time.Now(),
+	})
+	obs.Runs.PublishLine("sp-stream", []byte(`{"type":"start"}`))
+	obs.Runs.PublishLine("sp-stream", []byte(`{"type":"assistant"}`))
+
+	server := httptest.NewServer(newRouter(h))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/traces/sp-stream/stream", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	// Read the body until the run ends. The handler emits one
+	// "data: <line>\n\n" per published line plus "event: end\ndata: {}\n\n"
+	// when the stream closes.
+	bodyDone := make(chan []byte, 1)
+	go func() {
+		buf := make([]byte, 0, 4096)
+		tmp := make([]byte, 1024)
+		for {
+			n, err := resp.Body.Read(tmp)
+			if n > 0 {
+				buf = append(buf, tmp[:n]...)
+			}
+			if err != nil {
+				bodyDone <- buf
+				return
+			}
+		}
+	}()
+
+	// Publish one more line live, then end.
+	time.Sleep(50 * time.Millisecond)
+	obs.Runs.PublishLine("sp-stream", []byte(`{"type":"result"}`))
+	time.Sleep(50 * time.Millisecond)
+	obs.Runs.EndRun("sp-stream")
+
+	body := <-bodyDone
+	got := string(body)
+	for _, want := range []string{`{"type":"start"}`, `{"type":"assistant"}`, `{"type":"result"}`, "event: end"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("body missing %q\nfull body:\n%s", want, got)
+		}
+	}
+}
+
+func TestHandleTraceStreamUnknownSpanReturns404(t *testing.T) {
+	t.Parallel()
+	obs := newTestEvents(t)
+	h := newHandlerOnStore(t, obs)
+	server := httptest.NewServer(newRouter(h))
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/traces/nope/stream")
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
 func TestHandleTraceStepsEmptyArray(t *testing.T) {
 	t.Parallel()
 	obs := newTestEvents(t)

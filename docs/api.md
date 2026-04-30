@@ -27,6 +27,7 @@ The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 
 | `GET` | `/traces/{root_event_id}` | All spans for a single root event |
 | `GET` | `/traces/{span_id}/steps` | Tool-loop transcript for a completed agent span |
 | `GET` | `/traces/{span_id}/prompt` | Composed prompt the daemon sent to the AI CLI for this run. Stored gzipped on the trace row; this endpoint decompresses on the fly and returns `text/plain`. `404` when no prompt was recorded (pre-009-migration spans). Operator-grade — keep behind your auth proxy. |
+| `GET` | `/traces/{span_id}/stream` | Server-Sent Events stream of the AI CLI's stdout JSONL line-by-line for an in-flight (or recently-finished) span. Replays the per-span ring buffer first, then live-tails until the run ends or the client disconnects. Emits a final `event: end` SSE message when the run finishes. `404` when no stream exists for the span (never registered, or grace window elapsed). In-memory only — daemon restart loses the live data; the trace row in SQLite keeps the structured record. |
 | `GET` | `/graph` | Agent interaction graph (dispatch edges) |
 | `GET` | `/dispatches` | Dispatch dedup store contents + counters |
 | `GET` | `/memory/{agent}/{repo}` | Raw agent memory markdown. `{repo}` uses `owner_repo` format (underscore-separated) |
