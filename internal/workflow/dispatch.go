@@ -98,24 +98,24 @@ func NewDispatchDedupStore(ttlSeconds int) *DispatchDedupStore {
 	}
 }
 
-// Start launches a background goroutine that periodically evicts expired entries.
-func (s *DispatchDedupStore) Start(ctx context.Context) {
+// Run blocks until ctx is cancelled, periodically evicting expired
+// entries. The caller (typically the engine's errgroup) owns goroutine
+// creation and waits on Run for clean shutdown.
+func (s *DispatchDedupStore) Run(ctx context.Context) error {
 	if s.ttl <= 0 {
-		return
+		return nil
 	}
-	go func() {
-		tickInterval := max(s.ttl/4, time.Second)
-		ticker := time.NewTicker(tickInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case now := <-ticker.C:
-				s.evict(now)
-			}
+	tickInterval := max(s.ttl/4, time.Second)
+	ticker := time.NewTicker(tickInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case now := <-ticker.C:
+			s.evict(now)
 		}
-	}()
+	}
 }
 
 func (s *DispatchDedupStore) evict(now time.Time) {

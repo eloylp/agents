@@ -230,12 +230,15 @@ func (e *Engine) WithGraphRecorder(r GraphRecorder) {
 	}
 }
 
-// StartDispatchDedup starts the background eviction loop for the dispatch
-// dedup store. It is a no-op when dispatch is not configured.
-func (e *Engine) StartDispatchDedup(ctx context.Context) {
-	if e.dispatcher != nil {
-		e.dispatcher.dedup.Start(ctx)
+// RunDispatchDedup blocks until ctx is cancelled, running the dispatch
+// dedup eviction loop. Returns immediately when dispatch is not
+// configured. The caller (typically the daemon's errgroup) owns
+// goroutine creation and waits on Run for clean shutdown.
+func (e *Engine) RunDispatchDedup(ctx context.Context) error {
+	if e.dispatcher == nil {
+		return nil
 	}
+	return e.dispatcher.dedup.Run(ctx)
 }
 
 // DispatchStats returns a snapshot of dispatch counters. Returns zero values

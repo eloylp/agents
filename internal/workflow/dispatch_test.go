@@ -375,7 +375,7 @@ func TestDispatchDedupStoreBackgroundEviction(t *testing.T) {
 	s := NewDispatchDedupStore(1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s.Start(ctx)
+	go func() { _ = s.Run(ctx) }()
 
 	now := time.Now()
 	s.SeenOrAdd("x", "repo", 1, now)
@@ -741,13 +741,15 @@ func TestPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 
 func TestDispatchDedupStoreStartSmallTTLDoesNotPanic(t *testing.T) {
 	t.Parallel()
-	// TTL values of 1, 2, 3 seconds previously could produce a very small
-	// ticker interval; ensure Start does not panic for these values.
+	// TTL values of 1, 2, 3 seconds previously could produce a very
+	// small ticker interval; ensure Run does not panic for these values.
 	for _, ttl := range []int{1, 2, 3} {
 		s := NewDispatchDedupStore(ttl)
 		ctx, cancel := context.WithCancel(context.Background())
-		s.Start(ctx) // must not panic
+		done := make(chan struct{})
+		go func() { _ = s.Run(ctx); close(done) }()
 		cancel()
+		<-done
 	}
 }
 

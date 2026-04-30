@@ -19,26 +19,25 @@ func NewDeliveryStore(ttl time.Duration) *DeliveryStore {
 	}
 }
 
-// Start launches a background goroutine that periodically evicts expired entries.
-// It runs until ctx is cancelled. Call this once after constructing the store.
-// If the TTL is non-positive Start is a no-op; entries will never be evicted in
-// the background (they are still correctly expired on SeenOrAdd access).
-func (s *DeliveryStore) Start(ctx context.Context) {
+// Run blocks until ctx is cancelled, periodically evicting expired
+// entries. The caller (typically the daemon's errgroup) owns goroutine
+// creation and waits on Run for clean shutdown. If the TTL is
+// non-positive Run returns immediately; entries are still correctly
+// expired on SeenOrAdd access.
+func (s *DeliveryStore) Run(ctx context.Context) error {
 	if s.ttl <= 0 {
-		return
+		return nil
 	}
-	go func() {
-		ticker := time.NewTicker(s.ttl / 4)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case now := <-ticker.C:
-				s.evict(now)
-			}
+	ticker := time.NewTicker(s.ttl / 4)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case now := <-ticker.C:
+			s.evict(now)
 		}
-	}()
+	}
 }
 
 // evict removes all entries whose TTL has expired. Callers must not hold s.mu.
@@ -52,9 +51,9 @@ func (s *DeliveryStore) evict(now time.Time) {
 	}
 }
 
-// SeenOrAdd returns true if id has been seen within the TTL window, otherwise
-// it records id and returns false. Expired entries are evicted by the background
-// goroutine started with Start.
+// SeenOrAdd returns true if id has been seen within the TTL window,
+// otherwise it records id and returns false. Expired entries are evicted
+// by the background goroutine driving Run.
 func (s *DeliveryStore) SeenOrAdd(id string, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

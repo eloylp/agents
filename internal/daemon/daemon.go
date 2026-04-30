@@ -226,26 +226,78 @@ func (d *Daemon) Observe() *observe.Store { return d.obs }
 // exercise routing without starting a real TCP listener.
 func (d *Daemon) Handler() http.Handler { return d.buildRouter() }
 
-// Run starts every long-running goroutine the daemon needs (delivery
-// store eviction, dispatch dedup eviction, the worker pool, the cron
-// scheduler, the HTTP listener) and blocks until ctx is cancelled.
-// Graceful shutdown drains the HTTP server first, then the worker pool
-// drains its in-flight events; cron entries stop firing immediately.
-func (d *Daemon) Run(ctx context.Context) error {
-	d.logger.Info().Msg("starting agents daemon")
+// Run starts every long-running goroutine the daemon needs and blocks
+// until parentCtx is cancelled. Goroutines are arranged in two tiers
+// with separate lifetimes so graceful shutdown is ordered:
+//
+//   - producers (HTTP listener, cron scheduler) live on a context derived
+//     from parentCtx; they stop emitting webhooks and cron events as
+//     soon as parentCtx fires or any producer returns an error;
+//   - consumers (worker pool, delivery dedup eviction, dispatch dedup
+//     eviction) live on a separate background context; they keep running
+//     after producers stop so the queue can drain to completion before
+//     workers exit.
+//
+// Sequence on shutdown:
+//  1. parentCtx cancelled (SIGTERM) or producer returns error.
+//  2. Producer ctx cancels; HTTP server is gracefully drained, scheduler
+//     stops cron and reconciler.
+//  3. Producer goroutines join.
+//  4. Consumer ctx cancels; processor closes the queue and waits for
+//     in-flight runs (bounded by shutdown_timeout_seconds); dedup
+//     eviction loops exit.
+//  5. Consumer goroutines join.
+//
+// Each phase is logged so an operator reading logs sees the full
+// lifecycle.
+func (d *Daemon) Run(parentCtx context.Context) error {
+	log := d.logger
+	log.Info().Msg("starting agents daemon")
 
-	d.delivery.Start(ctx)
-	d.engine.StartDispatchDedup(ctx)
+	// ── consumer tier ────────────────────────────────────────────────
+	// Lives on its own background ctx so it outlives the producer tier
+	// during shutdown; that's how the queue drains after producers stop.
+	consumerCtx, stopConsumers := context.WithCancel(context.Background())
+	defer stopConsumers()
+	consumers, _ := errgroup.WithContext(consumerCtx)
+	consumers.Go(func() error { return d.delivery.Run(consumerCtx) })
+	consumers.Go(func() error { return d.engine.RunDispatchDedup(consumerCtx) })
+	consumers.Go(func() error { return d.processor.Run(consumerCtx) })
+	log.Info().Msg("consumers ready: processor, delivery dedup, dispatch dedup")
 
-	group, groupCtx := errgroup.WithContext(ctx)
-	group.Go(func() error { return d.processor.Run(groupCtx) })
-	group.Go(func() error { return d.scheduler.Run(groupCtx) })
-	group.Go(func() error { return d.runHTTP(groupCtx) })
+	// ── producer tier ────────────────────────────────────────────────
+	// Derived from parentCtx so SIGTERM cancels it; errgroup will cancel
+	// producerCtx if any producer returns a non-nil error so the others
+	// wind down cooperatively.
+	producers, producerCtx := errgroup.WithContext(parentCtx)
+	producers.Go(func() error { return d.scheduler.Run(producerCtx) })
+	producers.Go(func() error { return d.runHTTP(producerCtx) })
+	log.Info().Str("addr", d.daemonCfg.HTTP.ListenAddr).Msg("producers ready: http listener, scheduler")
+	log.Info().Msg("daemon ready")
 
-	if err := group.Wait(); err != nil && !errors.Is(err, context.Canceled) {
-		return err
+	// Block until parentCtx fires or a producer fails.
+	producerErr := producers.Wait()
+	if producerErr != nil && !errors.Is(producerErr, context.Canceled) {
+		log.Warn().Err(producerErr).Msg("producer returned an error; beginning shutdown")
+	} else {
+		log.Info().Msg("shutdown signal received; stopping producers")
 	}
-	d.logger.Info().Msg("agents daemon stopped")
+	log.Info().Msg("producers stopped: no new webhooks, no new cron ticks")
+
+	// ── drain ────────────────────────────────────────────────────────
+	queueDepth := d.channels.QueueStats().Buffered
+	log.Info().Int("buffered_events", queueDepth).Dur("shutdown_timeout", time.Duration(d.daemonCfg.HTTP.ShutdownTimeoutSeconds)*time.Second).Msg("draining event queue")
+	stopConsumers()
+	consumerErr := consumers.Wait()
+	log.Info().Msg("consumers stopped; queue drained")
+	log.Info().Msg("agents daemon stopped")
+
+	if producerErr != nil && !errors.Is(producerErr, context.Canceled) {
+		return producerErr
+	}
+	if consumerErr != nil && !errors.Is(consumerErr, context.Canceled) {
+		return consumerErr
+	}
 	return nil
 }
 
