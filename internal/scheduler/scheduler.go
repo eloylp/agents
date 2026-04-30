@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"maps"
 	"sync"
@@ -82,7 +81,7 @@ type lastRunRecord struct {
 // CRUD writes do not push updates to the scheduler — the next reconcile
 // tick picks them up.
 type Scheduler struct {
-	db                *sql.DB
+	store             *store.Store
 	cron              *cron.Cron
 	logger            zerolog.Logger
 	reconcileInterval time.Duration
@@ -117,7 +116,7 @@ func (s *Scheduler) RecordLastRun(agent, repo string, at time.Time, status strin
 //
 // reconcileInterval controls how often the scheduler polls SQLite. Pass 0
 // for the default (30s).
-func NewScheduler(db *sql.DB, reconcileInterval time.Duration, logger zerolog.Logger) (*Scheduler, error) {
+func NewScheduler(st *store.Store, reconcileInterval time.Duration, logger zerolog.Logger) (*Scheduler, error) {
 	if reconcileInterval == 0 {
 		reconcileInterval = DefaultReconcileInterval
 	}
@@ -128,7 +127,7 @@ func NewScheduler(db *sql.DB, reconcileInterval time.Duration, logger zerolog.Lo
 		cron.WithChain(cron.SkipIfStillRunning(cronLogger)),
 	)
 	s := &Scheduler{
-		db:                db,
+		store:             st,
 		cron:              c,
 		logger:            logger.With().Str("component", "scheduler").Logger(),
 		reconcileInterval: reconcileInterval,
@@ -180,11 +179,11 @@ func (s *Scheduler) reconcileLoop(ctx context.Context) {
 // keys on (agent, repo, cron-spec): a binding whose cron string changes
 // is treated as remove-old + add-new.
 func (s *Scheduler) reconcile() error {
-	repos, err := store.ReadRepos(s.db)
+	repos, err := s.store.ReadRepos()
 	if err != nil {
 		return fmt.Errorf("scheduler reconcile: read repos: %w", err)
 	}
-	agents, err := store.ReadAgents(s.db)
+	agents, err := s.store.ReadAgents()
 	if err != nil {
 		return fmt.Errorf("scheduler reconcile: read agents: %w", err)
 	}

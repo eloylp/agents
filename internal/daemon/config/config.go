@@ -10,7 +10,6 @@
 package config
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,17 +28,18 @@ import (
 // Handler implements the /config, /export, and /import HTTP surface plus the
 // methods exposed for the MCP config tools.
 type Handler struct {
-	db        *sql.DB
+	store     *store.Store
 	daemonCfg config.DaemonConfig
 	logger    zerolog.Logger
 }
 
-// New constructs a Handler. db is read on every request to assemble the
-// /config response from the latest committed entities. daemonCfg supplies
-// the static daemon-level fields the response embeds.
-func New(db *sql.DB, daemonCfg config.DaemonConfig, logger zerolog.Logger) *Handler {
+// New constructs a Handler. store is the data-access facade read on every
+// request to assemble the /config response from the latest committed
+// entities. daemonCfg supplies the static daemon-level fields the
+// response embeds.
+func New(st *store.Store, daemonCfg config.DaemonConfig, logger zerolog.Logger) *Handler {
 	return &Handler{
-		db:        db,
+		store:     st,
 		daemonCfg: daemonCfg,
 		logger:    logger.With().Str("component", "server_config").Logger(),
 	}
@@ -186,7 +186,7 @@ func (h *Handler) HandleConfig(w http.ResponseWriter, _ *http.Request) {
 // can reuse the exact same wire shape without going through the router.
 func (h *Handler) ConfigJSON() ([]byte, error) {
 	dcfg := h.daemonCfg
-	storedAgents, storedRepos, storedSkills, storedBackends, err := store.ReadSnapshot(h.db)
+	storedAgents, storedRepos, storedSkills, storedBackends, err := h.store.ReadSnapshot()
 	if err != nil {
 		return nil, fmt.Errorf("read snapshot: %w", err)
 	}
@@ -336,7 +336,7 @@ func (h *Handler) HandleExport(w http.ResponseWriter, _ *http.Request) {
 // ExportYAML returns the CRUD-mutable sections of the store as a YAML
 // fragment matching the GET /export response body.
 func (h *Handler) ExportYAML() ([]byte, error) {
-	agents, repos, skills, backends, err := store.ReadSnapshot(h.db)
+	agents, repos, skills, backends, err := h.store.ReadSnapshot()
 	if err != nil {
 		return nil, fmt.Errorf("read snapshot: %w", err)
 	}
@@ -401,9 +401,9 @@ func (h *Handler) ImportYAML(body []byte, mode string) (map[string]int, error) {
 
 	var err error
 	if mode == "replace" {
-		err = store.ReplaceAll(h.db, payload.Agents, payload.Repos, payload.Skills, backends)
+		err = h.store.ReplaceAll(payload.Agents, payload.Repos, payload.Skills, backends)
 	} else {
-		err = store.ImportAll(h.db, payload.Agents, payload.Repos, payload.Skills, backends)
+		err = h.store.ImportAll(payload.Agents, payload.Repos, payload.Skills, backends)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("import: %w", err)

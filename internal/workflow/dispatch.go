@@ -3,7 +3,6 @@ package workflow
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -413,7 +412,7 @@ func (s *DispatchDedupStore) TryClaimForDispatch(agent, repo string, number int,
 // dedup safety limits.
 type Dispatcher struct {
 	cfg      config.DispatchConfig
-	db       *sql.DB
+	store    *store.Store
 	dedup    *DispatchDedupStore
 	counters dispatchCounters
 	queue    EventEnqueuer
@@ -421,12 +420,13 @@ type Dispatcher struct {
 	logger   zerolog.Logger
 }
 
-// NewDispatcher builds a Dispatcher. db is read on every dispatch to look up
-// the target agent's allow_dispatch flag — there is no in-memory agent cache.
-func NewDispatcher(cfg config.DispatchConfig, db *sql.DB, dedup *DispatchDedupStore, queue EventEnqueuer, logger zerolog.Logger) *Dispatcher {
+// NewDispatcher builds a Dispatcher. store is read on every dispatch to look
+// up the target agent's allow_dispatch flag — there is no in-memory agent
+// cache.
+func NewDispatcher(cfg config.DispatchConfig, st *store.Store, dedup *DispatchDedupStore, queue EventEnqueuer, logger zerolog.Logger) *Dispatcher {
 	return &Dispatcher{
 		cfg:    cfg,
-		db:     db,
+		store:  st,
 		dedup:  dedup,
 		queue:  queue,
 		logger: logger.With().Str("component", "dispatcher").Logger(),
@@ -443,7 +443,7 @@ func (d *Dispatcher) WithGraphRecorder(r GraphRecorder) {
 // matches. Called on every dispatch to check the target's allow_dispatch
 // flag.
 func (d *Dispatcher) lookupAgent(name string) (fleet.Agent, bool) {
-	agents, err := store.ReadAgents(d.db)
+	agents, err := d.store.ReadAgents()
 	if err != nil {
 		d.logger.Error().Err(err).Msg("dispatcher: read agents")
 		return fleet.Agent{}, false

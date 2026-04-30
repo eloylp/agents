@@ -25,7 +25,6 @@ package daemon
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,8 +60,10 @@ import (
 type Daemon struct {
 	logger zerolog.Logger
 
-	// db is the SQLite handle every runtime component reads from.
-	db *sql.DB
+	// store is the data-access facade every runtime component reads
+	// fleet entities through. The bare *sql.DB stays inside the store
+	// package; this type does not hold one.
+	store *store.Store
 
 	// daemonCfg is the static daemon-level configuration: HTTP, proxy, log,
 	// processor settings. Set at startup and never mutated. The four
@@ -94,43 +95,44 @@ type Daemon struct {
 // New builds the daemon. cfg supplies the static daemon-level fields
 // (HTTP, proxy, log, processor) — those never mutate via CRUD, so they
 // are captured by value at startup. The four CRUD-mutable entity sets
-// (agents, repos, skills, backends) live only in db and are read on
-// demand by every runtime component. The caller owns and closes db.
-func New(cfg *config.Config, db *sql.DB, logger zerolog.Logger) (*Daemon, error) {
+// (agents, repos, skills, backends) live only in the store and are read
+// on demand by every runtime component. The caller owns the underlying
+// SQLite handle through the store; daemon does not close it.
+func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, error) {
 	httpLogger := logger.With().Str("component", "http_server").Logger()
 
 	channels := workflow.NewDataChannels(cfg.Daemon.Processor.EventQueueBuffer)
-	engine := workflow.NewEngine(db, cfg.Daemon.Processor, channels, logger)
+	engine := workflow.NewEngine(st, cfg.Daemon.Processor, channels, logger)
 
-	memBackend := store.NewMemoryBackend(db)
+	memBackend := st.NewMemoryBackend()
 	engine.WithMemory(memBackend)
 
-	obs := observe.NewStore(db)
+	obs := observe.NewStore(st.DB())
 	engine.WithTraceRecorder(obs)
 	engine.WithGraphRecorder(obs)
 	engine.WithRunTracker(obs.ActiveRuns)
 	engine.WithStepRecorder(obs)
 	memBackend.SetChangeNotifier(obs.PublishMemoryChange)
 
-	sched, err := scheduler.NewScheduler(db, scheduler.DefaultReconcileInterval, logger)
+	sched, err := scheduler.NewScheduler(st, scheduler.DefaultReconcileInterval, logger)
 	if err != nil {
 		return nil, fmt.Errorf("scheduler: %w", err)
 	}
 	sched.WithEventQueue(channels)
 	engine.WithLastRunRecorder(sched)
 
-	// Domain handlers (HTTP layer). All take the SQLite handle directly
-	// and the static daemon-level config; CRUD-mutable state is read from
-	// db on every request.
-	fleetHandler := daemonfleet.New(db, cfg.Daemon.HTTP.MaxBodyBytes, sched, obs, logger)
-	reposHandler := daemonrepos.New(db, cfg.Daemon.HTTP.MaxBodyBytes, logger)
-	configHandler := daemonconfig.New(db, cfg.Daemon, logger)
+	// Domain handlers (HTTP layer). All take the data-access facade and
+	// the static daemon-level config; CRUD-mutable state is read on every
+	// request.
+	fleetHandler := daemonfleet.New(st, cfg.Daemon.HTTP.MaxBodyBytes, sched, obs, logger)
+	reposHandler := daemonrepos.New(st, cfg.Daemon.HTTP.MaxBodyBytes, logger)
+	configHandler := daemonconfig.New(st, cfg.Daemon, logger)
 
-	memReader := store.NewMemoryReader(db)
-	observeHandler := daemonobserve.New(obs, db, sched, engine, memReader, logger)
+	memReader := st.NewMemoryReader()
+	observeHandler := daemonobserve.New(obs, st, sched, engine, memReader, logger)
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
-	webhookHandler := webhook.NewHandler(deliveryStore, channels, db, cfg.Daemon.HTTP, logger)
+	webhookHandler := webhook.NewHandler(deliveryStore, channels, st, cfg.Daemon.HTTP, logger)
 
 	// Processor sits over the queue; event recorder writes into observe so
 	// /events shows the firehose.
@@ -141,7 +143,7 @@ func New(cfg *config.Config, db *sql.DB, logger zerolog.Logger) (*Daemon, error)
 
 	d := &Daemon{
 		logger:    httpLogger,
-		db:        db,
+		store:     st,
 		daemonCfg: cfg.Daemon,
 		channels:  channels,
 		engine:    engine,
@@ -172,7 +174,7 @@ func New(cfg *config.Config, db *sql.DB, logger zerolog.Logger) (*Daemon, error)
 	// MCP last — it consumes every other component. Constructed here so
 	// the handler picks up exactly the wiring the REST surface uses.
 	d.mcp = mcpserver.New(mcpserver.Deps{
-		DB:           db,
+		Store:        st,
 		DaemonConfig: cfg.Daemon,
 		StatusJSON:   d.StatusJSON,
 		Queue:        channels,
@@ -187,9 +189,9 @@ func New(cfg *config.Config, db *sql.DB, logger zerolog.Logger) (*Daemon, error)
 	return d, nil
 }
 
-// DB returns the SQLite handle. Exported for tests; production callers
-// use the domain handlers.
-func (d *Daemon) DB() *sql.DB { return d.db }
+// Store returns the data-access facade. Exported for tests; production
+// callers use the domain handlers.
+func (d *Daemon) Store() *store.Store { return d.store }
 
 // DaemonConfig returns the static daemon-level configuration — HTTP,
 // proxy, log, processor. CRUD-mutable state is NOT here; read it from
@@ -419,7 +421,7 @@ func (d *Daemon) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repos, err := store.ReadRepos(d.db)
+	repos, err := d.store.ReadRepos()
 	if err != nil {
 		d.logger.Error().Err(err).Msg("/run: read repos")
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -473,22 +475,23 @@ func findRepo(repos []fleet.Repo, name string) (fleet.Repo, bool) {
 // LoadConfig is the daemon's startup config-load helper. It opens the
 // SQLite database, optionally imports a YAML file into it, runs auto-
 // discovery for AI backends if none are configured, and returns the
-// validated *config.Config. The caller owns and closes db. Status /
-// import progress messages are written to msg (typically os.Stderr);
-// pass nil to silence them.
-func LoadConfig(ctx context.Context, dbPath, importPath string, msg io.Writer) (*config.Config, *sql.DB, error) {
+// validated *config.Config plus the data-access store. The caller owns
+// and closes the store. Status / import progress messages are written
+// to msg (typically os.Stderr); pass nil to silence them.
+func LoadConfig(ctx context.Context, dbPath, importPath string, msg io.Writer) (*config.Config, *store.Store, error) {
 	db, err := store.Open(dbPath)
 	if err != nil {
 		return nil, nil, err
 	}
+	st := store.New(db)
 	if importPath != "" {
 		yamlCfg, err := config.Load(importPath)
 		if err != nil {
-			db.Close()
+			st.Close()
 			return nil, nil, fmt.Errorf("import: load YAML: %w", err)
 		}
-		if err := store.Import(db, yamlCfg); err != nil {
-			db.Close()
+		if err := st.Import(yamlCfg); err != nil {
+			st.Close()
 			return nil, nil, fmt.Errorf("import: write to database: %w", err)
 		}
 		if msg != nil {
@@ -501,18 +504,18 @@ func LoadConfig(ctx context.Context, dbPath, importPath string, msg io.Writer) (
 				len(yamlCfg.Agents), len(yamlCfg.Repos), nBindings)
 		}
 	}
-	autoDiscovered, _, err := backends.AutoDiscoverIfBackendsMissing(ctx, db)
+	autoDiscovered, _, err := backends.AutoDiscoverIfBackendsMissing(ctx, st)
 	if err != nil {
-		db.Close()
+		st.Close()
 		return nil, nil, fmt.Errorf("auto-discover backends: %w", err)
 	}
 	if autoDiscovered && msg != nil {
 		fmt.Fprintln(msg, "startup: discovered AI backends from local CLI tools")
 	}
-	cfg, err := store.LoadAndValidate(db)
+	cfg, err := st.LoadAndValidate()
 	if err != nil {
-		db.Close()
+		st.Close()
 		return nil, nil, err
 	}
-	return cfg, db, nil
+	return cfg, st, nil
 }

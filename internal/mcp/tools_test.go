@@ -86,31 +86,33 @@ func testDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// testFixture builds a Deps backed by real components for an MCP tool test:
-// a temporary SQLite DB seeded by fixtureConfig, a real coordinator, real
-// fleet/repos/config handlers, a real workflow.DataChannels and Engine, and
-// a real observe.Store. Tests can read deps.DB to verify persisted writes,
-// drain deps.Queue.EventChan() to assert enqueued events, and call methods
-// on deps.Observe directly to seed observability records.
+// testFixture builds a Deps backed by real components for an MCP tool
+// test: a tempdir SQLite seeded by fixtureConfig, a real *store.Store,
+// real fleet/repos/config handlers, a real workflow.DataChannels and
+// Engine, and a real observe.Store. Tests can read through deps.Store
+// to verify persisted writes, drain deps.Queue.EventChan() to assert
+// enqueued events, and call methods on deps.Observe directly to seed
+// observability records.
 //
 // Stays in package mcp (not mcp_test) so it can construct Deps directly;
-// the wiring goes through coordinator + handler packages, none of which
+// the wiring goes through store + handler packages, none of which
 // imports internal/daemon, so there is no import cycle.
 func testFixture(t *testing.T) Deps {
 	t.Helper()
 	return testFixtureWithConfig(t, fixtureConfig())
 }
 
-// testFixtureWithConfig is testFixture with an explicit config. The DB is
-// still seeded from fixtureConfig — callers that need divergent DB state
-// should mutate deps.DB after construction via store.UpsertX helpers.
+// testFixtureWithConfig is testFixture with an explicit config. The
+// store is still seeded from fixtureConfig — callers that need
+// divergent state should call deps.Store.Upsert*() after construction.
 func testFixtureWithConfig(t *testing.T, cfg *config.Config) Deps {
 	t.Helper()
 	db := testDB(t)
+	st := store.New(db)
 	channels := workflow.NewDataChannels(8)
 	obs := observe.NewStore(db)
-	engine := workflow.NewEngine(db, cfg.Daemon.Processor, channels, zerolog.Nop())
-	sched, err := scheduler.NewScheduler(db, time.Hour, zerolog.Nop())
+	engine := workflow.NewEngine(st, cfg.Daemon.Processor, channels, zerolog.Nop())
+	sched, err := scheduler.NewScheduler(st, time.Hour, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("scheduler: %v", err)
 	}
@@ -118,11 +120,11 @@ func testFixtureWithConfig(t *testing.T, cfg *config.Config) Deps {
 	if maxBody == 0 {
 		maxBody = 1 << 20
 	}
-	fleetH := daemonfleet.New(db, maxBody, sched, obs, zerolog.Nop())
-	reposH := daemonrepos.New(db, maxBody, zerolog.Nop())
-	configH := daemonconfig.New(db, cfg.Daemon, zerolog.Nop())
+	fleetH := daemonfleet.New(st, maxBody, sched, obs, zerolog.Nop())
+	reposH := daemonrepos.New(st, maxBody, zerolog.Nop())
+	configH := daemonconfig.New(st, cfg.Daemon, zerolog.Nop())
 	return Deps{
-		DB:           db,
+		Store:        st,
 		DaemonConfig: cfg.Daemon,
 		StatusJSON: func() ([]byte, error) {
 			// Mirror the wire shape internal/daemon.Daemon.StatusJSON returns
@@ -140,11 +142,11 @@ func testFixtureWithConfig(t *testing.T, cfg *config.Config) Deps {
 	}
 }
 
-// agentByName reads a single agent from the test DB by name. Used by write
-// tests to verify that the tool persisted the expected fields.
-func agentByName(t *testing.T, db *sql.DB, name string) (fleet.Agent, bool) {
+// agentByName reads a single agent from the test store by name. Used by
+// write tests to verify that the tool persisted the expected fields.
+func agentByName(t *testing.T, st *store.Store, name string) (fleet.Agent, bool) {
 	t.Helper()
-	agents, err := store.ReadAgents(db)
+	agents, err := st.ReadAgents()
 	if err != nil {
 		t.Fatalf("read agents: %v", err)
 	}
@@ -617,8 +619,8 @@ func seedSpan(t *testing.T, db *sql.DB, sp observe.Span) {
 func TestToolListEvents(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
-	seedEvent(t, deps.DB, observe.TimestampedEvent{ID: "e1", Kind: "issues.labeled", Repo: "owner/one", At: time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)})
-	seedEvent(t, deps.DB, observe.TimestampedEvent{ID: "e2", Kind: "agents.run", Repo: "owner/one", At: time.Date(2026, 4, 20, 10, 5, 0, 0, time.UTC)})
+	seedEvent(t, deps.Store.DB(), observe.TimestampedEvent{ID: "e1", Kind: "issues.labeled", Repo: "owner/one", At: time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)})
+	seedEvent(t, deps.Store.DB(), observe.TimestampedEvent{ID: "e2", Kind: "agents.run", Repo: "owner/one", At: time.Date(2026, 4, 20, 10, 5, 0, 0, time.UTC)})
 
 	res, err := toolListEvents(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -634,8 +636,8 @@ func TestToolListEvents(t *testing.T) {
 func TestToolListEventsSinceFilter(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
-	seedEvent(t, deps.DB, observe.TimestampedEvent{ID: "old", At: time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC), Kind: "agents.run", Repo: "owner/one"})
-	seedEvent(t, deps.DB, observe.TimestampedEvent{ID: "new", At: time.Date(2026, 4, 20, 11, 0, 0, 0, time.UTC), Kind: "agents.run", Repo: "owner/one"})
+	seedEvent(t, deps.Store.DB(), observe.TimestampedEvent{ID: "old", At: time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC), Kind: "agents.run", Repo: "owner/one"})
+	seedEvent(t, deps.Store.DB(), observe.TimestampedEvent{ID: "new", At: time.Date(2026, 4, 20, 11, 0, 0, 0, time.UTC), Kind: "agents.run", Repo: "owner/one"})
 
 	// since=10:00 should drop the 09:00 event but keep the 11:00 event.
 	req := mcpgo.CallToolRequest{}
@@ -683,8 +685,8 @@ func TestToolListTraces(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
 	now := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
-	seedSpan(t, deps.DB, observe.Span{SpanID: "s1", Agent: "coder", Status: "success", StartedAt: now, FinishedAt: now.Add(time.Second)})
-	seedSpan(t, deps.DB, observe.Span{SpanID: "s2", Agent: "reviewer", Status: "error", StartedAt: now.Add(time.Minute), FinishedAt: now.Add(time.Minute + time.Second)})
+	seedSpan(t, deps.Store.DB(), observe.Span{SpanID: "s1", Agent: "coder", Status: "success", StartedAt: now, FinishedAt: now.Add(time.Second)})
+	seedSpan(t, deps.Store.DB(), observe.Span{SpanID: "s2", Agent: "reviewer", Status: "error", StartedAt: now.Add(time.Minute), FinishedAt: now.Add(time.Minute + time.Second)})
 
 	res, err := toolListTraces(deps)(context.Background(), mcpgo.CallToolRequest{})
 	if err != nil {
@@ -701,7 +703,7 @@ func TestToolGetTrace(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
 	now := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
-	seedSpan(t, deps.DB, observe.Span{SpanID: "s1", RootEventID: "root-1", Agent: "coder", StartedAt: now, FinishedAt: now.Add(time.Second)})
+	seedSpan(t, deps.Store.DB(), observe.Span{SpanID: "s1", RootEventID: "root-1", Agent: "coder", StartedAt: now, FinishedAt: now.Add(time.Second)})
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"root_event_id": "root-1"}
@@ -776,7 +778,7 @@ func TestToolGetGraphSeedsNodesFromFleetAndEdges(t *testing.T) {
 	deps := testFixture(t)
 	// Insert directly so the edge is visible immediately — RecordDispatch
 	// writes asynchronously, which races with toolGetGraph below.
-	if _, err := deps.DB.Exec(
+	if _, err := deps.Store.DB().Exec(
 		`INSERT INTO dispatch_history (from_agent, to_agent, repo, number, reason) VALUES (?,?,?,?,?)`,
 		"coder", "ghost", "owner/one", 7, "followup",
 	); err != nil {
@@ -841,7 +843,7 @@ func TestToolGetDispatches(t *testing.T) {
 func TestToolGetMemorySuccess(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
-	if err := store.WriteMemory(deps.DB, "coder", "owner_one", "# hello\n"); err != nil {
+	if err := deps.Store.WriteMemoryRaw("coder", "owner_one", "# hello\n"); err != nil {
 		t.Fatalf("seed memory: %v", err)
 	}
 
@@ -988,7 +990,7 @@ func TestToolImportConfigPersistsYAMLAndMode(t *testing.T) {
 		t.Errorf("counts wire shape: got %+v", got)
 	}
 	// Verify the entities are still present after the replace import.
-	if _, ok := agentByName(t, deps.DB, "coder"); !ok {
+	if _, ok := agentByName(t, deps.Store, "coder"); !ok {
 		t.Errorf("coder agent missing after replace import")
 	}
 }
@@ -1045,9 +1047,9 @@ func TestToolImportConfigPropagatesError(t *testing.T) {
 
 // ── Writer-side helpers ──────────────────────────────────────────────────────
 
-func skillByName(t *testing.T, db *sql.DB, name string) (fleet.Skill, bool) {
+func skillByName(t *testing.T, st *store.Store, name string) (fleet.Skill, bool) {
 	t.Helper()
-	skills, err := store.ReadSkills(db)
+	skills, err := st.ReadSkills()
 	if err != nil {
 		t.Fatalf("read skills: %v", err)
 	}
@@ -1055,9 +1057,9 @@ func skillByName(t *testing.T, db *sql.DB, name string) (fleet.Skill, bool) {
 	return sk, ok
 }
 
-func backendByName(t *testing.T, db *sql.DB, name string) (fleet.Backend, bool) {
+func backendByName(t *testing.T, st *store.Store, name string) (fleet.Backend, bool) {
 	t.Helper()
-	bes, err := store.ReadBackends(db)
+	bes, err := st.ReadBackends()
 	if err != nil {
 		t.Fatalf("read backends: %v", err)
 	}
@@ -1065,9 +1067,9 @@ func backendByName(t *testing.T, db *sql.DB, name string) (fleet.Backend, bool) 
 	return b, ok
 }
 
-func repoByName(t *testing.T, db *sql.DB, name string) (fleet.Repo, bool) {
+func repoByName(t *testing.T, st *store.Store, name string) (fleet.Repo, bool) {
 	t.Helper()
-	repos, err := store.ReadRepos(db)
+	repos, err := st.ReadRepos()
 	if err != nil {
 		t.Fatalf("read repos: %v", err)
 	}
@@ -1106,7 +1108,7 @@ func TestToolCreateAgentForwardsAndReturnsCanonical(t *testing.T) {
 	}
 
 	// Verify the agent was persisted with the canonical (normalized) name.
-	persisted, ok := agentByName(t, deps.DB, "linter")
+	persisted, ok := agentByName(t, deps.Store, "linter")
 	if !ok {
 		t.Fatal("linter not found in store after create_agent")
 	}
@@ -1187,7 +1189,7 @@ func TestToolDeleteAgentNormalizesAndForwardsCascade(t *testing.T) {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
 	// Deleted from the store?
-	if _, ok := agentByName(t, deps.DB, "linter"); ok {
+	if _, ok := agentByName(t, deps.Store, "linter"); ok {
 		t.Errorf("linter should have been removed from the store")
 	}
 	var got map[string]any
@@ -1228,7 +1230,7 @@ func TestToolDeleteAgentPropagatesConflict(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected IsError on conflict, got %+v", res)
 	}
-	if _, ok := agentByName(t, deps.DB, "coder"); !ok {
+	if _, ok := agentByName(t, deps.Store, "coder"); !ok {
 		t.Errorf("coder should still exist after a conflicting delete")
 	}
 }
@@ -1254,7 +1256,7 @@ func TestToolCreateSkillForwardsAndReturnsCanonical(t *testing.T) {
 	}
 
 	// Persisted under canonical (lowercased, trimmed) name with trimmed body.
-	sk, ok := skillByName(t, deps.DB, "hardening")
+	sk, ok := skillByName(t, deps.Store, "hardening")
 	if !ok {
 		t.Fatal("hardening skill missing after create")
 	}
@@ -1318,7 +1320,7 @@ func TestToolDeleteSkillNormalizesAndForwards(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
-	if _, ok := skillByName(t, deps.DB, "security"); ok {
+	if _, ok := skillByName(t, deps.Store, "security"); ok {
 		t.Errorf("security skill should have been removed")
 	}
 	var got map[string]any
@@ -1358,7 +1360,7 @@ func TestToolDeleteSkillPropagatesConflict(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected IsError on conflict, got %+v", res)
 	}
-	if _, ok := skillByName(t, deps.DB, "testing"); !ok {
+	if _, ok := skillByName(t, deps.Store, "testing"); !ok {
 		t.Errorf("testing skill should still exist after a conflicting delete")
 	}
 }
@@ -1388,7 +1390,7 @@ func TestToolCreateBackendForwardsAndReturnsCanonical(t *testing.T) {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
 
-	persisted, ok := backendByName(t, deps.DB, "localllama")
+	persisted, ok := backendByName(t, deps.Store, "localllama")
 	if !ok {
 		t.Fatal("localllama backend missing after create")
 	}
@@ -1462,7 +1464,7 @@ func TestToolDeleteBackendNormalizesAndForwards(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
-	if _, ok := backendByName(t, deps.DB, "localllama"); ok {
+	if _, ok := backendByName(t, deps.Store, "localllama"); ok {
 		t.Errorf("localllama backend should have been removed")
 	}
 	var got map[string]any
@@ -1502,7 +1504,7 @@ func TestToolDeleteBackendPropagatesConflict(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected IsError on conflict, got %+v", res)
 	}
-	if _, ok := backendByName(t, deps.DB, "claude"); !ok {
+	if _, ok := backendByName(t, deps.Store, "claude"); !ok {
 		t.Errorf("claude backend should still exist after a conflicting delete")
 	}
 }
@@ -1538,7 +1540,7 @@ func TestToolCreateRepoForwardsAndReturnsCanonical(t *testing.T) {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
 
-	persisted, ok := repoByName(t, deps.DB, "owner/repo")
+	persisted, ok := repoByName(t, deps.Store, "owner/repo")
 	if !ok {
 		t.Fatal("owner/repo missing after create")
 	}
@@ -1629,7 +1631,7 @@ func TestToolCreateRepoPropagatesError(t *testing.T) {
 	if got := textOf(t, res); !strings.Contains(got, "ghost") {
 		t.Fatalf("error body should mention unknown agent: got %q", got)
 	}
-	if _, ok := repoByName(t, deps.DB, "owner/repo"); ok {
+	if _, ok := repoByName(t, deps.Store, "owner/repo"); ok {
 		t.Errorf("owner/repo should NOT have been persisted on validation failure")
 	}
 }
@@ -1668,7 +1670,7 @@ func TestToolCreateRepoRejectsBadBindingsShape(t *testing.T) {
 			if got := textOf(t, res); !strings.Contains(got, tc.want) {
 				t.Fatalf("error body want substring %q, got %q", tc.want, got)
 			}
-			if _, ok := repoByName(t, deps.DB, "owner/badshape"); ok {
+			if _, ok := repoByName(t, deps.Store, "owner/badshape"); ok {
 				t.Errorf("repo must not be persisted when bindings shape invalid")
 			}
 		})
@@ -1717,7 +1719,7 @@ func TestToolCreateRepoRejectsBadBindingFieldTypes(t *testing.T) {
 			if got := textOf(t, res); !strings.Contains(got, tc.want) {
 				t.Fatalf("error body want substring %q, got %q", tc.want, got)
 			}
-			if _, ok := repoByName(t, deps.DB, "owner/badbinding"); ok {
+			if _, ok := repoByName(t, deps.Store, "owner/badbinding"); ok {
 				t.Errorf("repo must not be persisted when binding fields invalid")
 			}
 		})
@@ -1748,7 +1750,7 @@ func TestToolCreateRepoDefaultsBindingEnabledNil(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
-	persisted, ok := repoByName(t, deps.DB, "owner/defaultenabled")
+	persisted, ok := repoByName(t, deps.Store, "owner/defaultenabled")
 	if !ok {
 		t.Fatal("repo not persisted")
 	}
@@ -1769,7 +1771,7 @@ func TestToolUpdateRepoTogglesEnabledPreservingBindings(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
 	// Capture the binding IDs on the fixture's enabled repo before the update.
-	before, ok := repoByName(t, deps.DB, "owner/one")
+	before, ok := repoByName(t, deps.Store, "owner/one")
 	if !ok {
 		t.Fatal("owner/one missing in fixture")
 	}
@@ -1795,7 +1797,7 @@ func TestToolUpdateRepoTogglesEnabledPreservingBindings(t *testing.T) {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
 
-	after, ok := repoByName(t, deps.DB, "owner/one")
+	after, ok := repoByName(t, deps.Store, "owner/one")
 	if !ok {
 		t.Fatal("owner/one missing after update")
 	}
@@ -1883,7 +1885,7 @@ func TestToolDeleteRepoNormalizesAndForwards(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
-	if _, ok := repoByName(t, deps.DB, "owner/three"); ok {
+	if _, ok := repoByName(t, deps.Store, "owner/three"); ok {
 		t.Errorf("owner/three should have been removed")
 	}
 	var got map[string]any
@@ -1935,7 +1937,7 @@ func TestToolDeleteRepoIsIdempotent(t *testing.T) {
 // gives owner/one two bindings; their IDs are assigned at insert time.
 func firstBindingID(t *testing.T, deps Deps, repoName string) int64 {
 	t.Helper()
-	r, ok := repoByName(t, deps.DB, repoName)
+	r, ok := repoByName(t, deps.Store, repoName)
 	if !ok || len(r.Use) == 0 {
 		t.Fatalf("repo %q has no bindings", repoName)
 	}
@@ -1965,7 +1967,7 @@ func TestToolCreateBindingForwardsAndReturnsID(t *testing.T) {
 		t.Errorf("id should be > 0, got %v", out["id"])
 	}
 	// Verify it's persisted on owner/one.
-	r, ok := repoByName(t, deps.DB, "owner/one")
+	r, ok := repoByName(t, deps.Store, "owner/one")
 	if !ok {
 		t.Fatal("owner/one missing")
 	}
@@ -2016,7 +2018,7 @@ func TestToolUpdateBindingForwardsID(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
-	r, _ := repoByName(t, deps.DB, "owner/one")
+	r, _ := repoByName(t, deps.Store, "owner/one")
 	var updated *fleet.Binding
 	for i := range r.Use {
 		if r.Use[i].ID == id {
@@ -2052,7 +2054,7 @@ func TestToolDeleteBindingForwardsID(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
-	r, _ := repoByName(t, deps.DB, "owner/one")
+	r, _ := repoByName(t, deps.Store, "owner/one")
 	for _, b := range r.Use {
 		if b.ID == id {
 			t.Errorf("binding %d should have been removed", id)
@@ -2077,7 +2079,7 @@ func TestToolUpdateAgentForwardsPatch(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("update_agent failed: err=%v body=%s", err, textOf(t, res))
 	}
-	updated, ok := agentByName(t, deps.DB, "coder")
+	updated, ok := agentByName(t, deps.Store, "coder")
 	if !ok {
 		t.Fatal("coder missing after update")
 	}
@@ -2124,7 +2126,7 @@ func TestToolUpdateSkillForwardsPatch(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("update_skill failed: err=%v body=%s", err, textOf(t, res))
 	}
-	sk, ok := skillByName(t, deps.DB, "security")
+	sk, ok := skillByName(t, deps.Store, "security")
 	if !ok {
 		t.Fatal("security skill missing after update")
 	}
@@ -2162,7 +2164,7 @@ func TestToolUpdateBackendForwardsPatch(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("update_backend failed: err=%v body=%s", err, textOf(t, res))
 	}
-	b, ok := backendByName(t, deps.DB, "claude")
+	b, ok := backendByName(t, deps.Store, "claude")
 	if !ok {
 		t.Fatal("claude backend missing after update")
 	}

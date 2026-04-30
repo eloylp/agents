@@ -10,7 +10,6 @@
 package observe
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,8 +29,8 @@ import (
 // Handler implements the observability HTTP endpoints. Handlers are
 // read-only and safe for concurrent use; the type holds no mutable state.
 type Handler struct {
-	store     *obstore.Store
-	db        *sql.DB
+	events    *obstore.Store // events/traces/SSE pub-sub
+	store     *store.Store   // fleet data access (agents for graph nodes)
 	sched     *scheduler.Scheduler
 	engine    *workflow.Engine
 	memReader *store.MemoryReader
@@ -39,20 +38,18 @@ type Handler struct {
 }
 
 // New constructs a Handler. All components are concrete pointers to the
-// daemon's running instances — the same store the engine writes to, the
-// same scheduler that holds the cron lastRuns map, the same engine that
-// owns the dispatch counters.
+// daemon's running instances.
 func New(
-	obs *obstore.Store,
-	db *sql.DB,
+	events *obstore.Store,
+	st *store.Store,
 	sched *scheduler.Scheduler,
 	engine *workflow.Engine,
 	memReader *store.MemoryReader,
 	logger zerolog.Logger,
 ) *Handler {
 	return &Handler{
-		store:     obs,
-		db:        db,
+		events:    events,
+		store:     st,
 		sched:     sched,
 		engine:    engine,
 		memReader: memReader,
@@ -115,7 +112,7 @@ func (h *Handler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	events := h.store.ListEvents(since)
+	events := h.events.ListEvents(since)
 	out := make([]eventJSON, 0, len(events))
 	for _, e := range events {
 		out = append(out, eventJSON{
@@ -135,14 +132,14 @@ func (h *Handler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 // HandleEventsStream serves GET /events/stream as a Server-Sent Events
 // stream. Each new event is pushed as a "data: <json>\n\n" message.
 func (h *Handler) HandleEventsStream(w http.ResponseWriter, r *http.Request) {
-	serveSSE(w, r, h.store.EventsSSE)
+	serveSSE(w, r, h.events.EventsSSE)
 }
 
 // ── /traces ────────────────────────────────────────────────────────────────
 
 // HandleTraces serves GET /traces — the most recent agent run spans.
 func (h *Handler) HandleTraces(w http.ResponseWriter, _ *http.Request) {
-	spans := h.store.ListTraces()
+	spans := h.events.ListTraces()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(spans)
 }
@@ -150,7 +147,7 @@ func (h *Handler) HandleTraces(w http.ResponseWriter, _ *http.Request) {
 // HandleTrace serves GET /traces/{root_event_id} — all spans for one root.
 func (h *Handler) HandleTrace(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["root_event_id"]
-	spans := h.store.TracesByRootEventID(id)
+	spans := h.events.TracesByRootEventID(id)
 	if len(spans) == 0 {
 		http.Error(w, "trace not found", http.StatusNotFound)
 		return
@@ -162,7 +159,7 @@ func (h *Handler) HandleTrace(w http.ResponseWriter, r *http.Request) {
 // HandleTracesStream serves GET /traces/stream as a Server-Sent Events
 // stream. Each completed span is pushed as a "data: <json>\n\n" message.
 func (h *Handler) HandleTracesStream(w http.ResponseWriter, r *http.Request) {
-	serveSSE(w, r, h.store.TracesSSE)
+	serveSSE(w, r, h.events.TracesSSE)
 }
 
 // HandleTraceSteps serves GET /traces/{span_id}/steps — the tool-loop
@@ -170,7 +167,7 @@ func (h *Handler) HandleTracesStream(w http.ResponseWriter, r *http.Request) {
 // have been recorded (e.g. the span used a non-claude backend).
 func (h *Handler) HandleTraceSteps(w http.ResponseWriter, r *http.Request) {
 	spanID := mux.Vars(r)["span_id"]
-	steps := h.store.ListSteps(spanID)
+	steps := h.events.ListSteps(spanID)
 	if steps == nil {
 		steps = []workflow.TraceStep{} // always return a JSON array, never null
 	}
@@ -210,7 +207,7 @@ type dispatchRecord struct {
 // and any edge endpoints not already covered by the current config (e.g.
 // agents removed from config but with recorded dispatch history).
 func (h *Handler) HandleGraph(w http.ResponseWriter, _ *http.Request) {
-	edges := h.store.ListEdges()
+	edges := h.events.ListEdges()
 
 	// Build a map of the last cron error status for each agent so idle
 	// agents that last exited with an error are flagged in the response.
@@ -224,7 +221,7 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	nodeStatus := func(name string) string {
-		if h.store != nil && h.store.IsRunning(name) {
+		if h.events != nil && h.events.IsRunning(name) {
 			return "running"
 		}
 		if lastErrorByAgent[name] {
@@ -234,8 +231,8 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	seen := make(map[string]struct{})
-	if h.db != nil {
-		if agents, err := store.ReadAgents(h.db); err == nil {
+	if h.store != nil {
+		if agents, err := h.store.ReadAgents(); err == nil {
 			for _, a := range agents {
 				seen[a.Name] = struct{}{}
 			}
@@ -317,7 +314,7 @@ func (h *Handler) HandleMemory(w http.ResponseWriter, r *http.Request) {
 // HandleMemoryStream serves GET /memory/stream as a Server-Sent Events
 // stream that notifies subscribers when any memory file changes.
 func (h *Handler) HandleMemoryStream(w http.ResponseWriter, r *http.Request) {
-	serveSSE(w, r, h.store.MemorySSE)
+	serveSSE(w, r, h.events.MemorySSE)
 }
 
 // ── SSE helper ─────────────────────────────────────────────────────────────

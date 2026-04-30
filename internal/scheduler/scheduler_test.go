@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"database/sql"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -32,25 +31,27 @@ func drainQueue(t *testing.T, dc *workflow.DataChannels, n int) []workflow.Event
 	return out
 }
 
-// seedDB opens a tempdir SQLite, imports a minimal valid fleet, and returns
-// the live handle. The fixture has one cron-bound agent on owner/repo.
-func seedDB(t *testing.T, repos []fleet.Repo) *sql.DB {
+// seedStore opens a tempdir SQLite, imports a minimal valid fleet, and
+// returns the data-access store. The fixture has one cron-bound agent
+// on owner/repo.
+func seedStore(t *testing.T, repos []fleet.Repo) *store.Store {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
 
 	agents := []fleet.Agent{
 		{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Review PRs."},
 	}
 	skills := map[string]fleet.Skill{"architect": {Prompt: "Focus on architecture."}}
 	backends := map[string]fleet.Backend{"claude": {Command: "claude"}}
-	if err := store.ImportAll(db, agents, repos, skills, backends); err != nil {
+	if err := st.ImportAll(agents, repos, skills, backends); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	return db
+	return st
 }
 
 func defaultRepos() []fleet.Repo {
@@ -107,8 +108,8 @@ func TestNewSchedulerEntryRegistration(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			db := seedDB(t, tc.repos)
-			s, err := NewScheduler(db, time.Hour, zerolog.Nop())
+			st := seedStore(t, tc.repos)
+			s, err := NewScheduler(st, time.Hour, zerolog.Nop())
 			if err != nil {
 				t.Fatalf("NewScheduler: %v", err)
 			}
@@ -123,8 +124,8 @@ func TestNewSchedulerEntryRegistration(t *testing.T) {
 // cron entry pushes a "cron" event onto the queue.
 func TestCronTickPushesEvent(t *testing.T) {
 	t.Parallel()
-	db := seedDB(t, defaultRepos())
-	s, err := NewScheduler(db, time.Hour, zerolog.Nop())
+	st := seedStore(t, defaultRepos())
+	s, err := NewScheduler(st, time.Hour, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -156,8 +157,8 @@ func TestCronTickPushesEvent(t *testing.T) {
 // the engine calls when a cron run completes.
 func TestRecordLastRunUpdatesAgentStatuses(t *testing.T) {
 	t.Parallel()
-	db := seedDB(t, defaultRepos())
-	s, err := NewScheduler(db, time.Hour, zerolog.Nop())
+	st := seedStore(t, defaultRepos())
+	s, err := NewScheduler(st, time.Hour, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -181,10 +182,10 @@ func TestRecordLastRunUpdatesAgentStatuses(t *testing.T) {
 // reconcile.
 func TestReconcilePicksUpAddedBinding(t *testing.T) {
 	t.Parallel()
-	db := seedDB(t, []fleet.Repo{
+	st := seedStore(t, []fleet.Repo{
 		{Name: "owner/repo", Enabled: true, Use: []fleet.Binding{{Agent: "reviewer", Labels: []string{"ai:fix"}}}},
 	})
-	s, err := NewScheduler(db, time.Hour, zerolog.Nop())
+	s, err := NewScheduler(st, time.Hour, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -193,7 +194,7 @@ func TestReconcilePicksUpAddedBinding(t *testing.T) {
 	}
 
 	// Replace the binding with a cron one and reconcile.
-	if err := store.UpsertRepo(db, fleet.Repo{
+	if err := st.UpsertRepo(fleet.Repo{
 		Name:    "owner/repo",
 		Enabled: true,
 		Use:     []fleet.Binding{{Agent: "reviewer", Cron: "* * * * *"}},
@@ -212,8 +213,8 @@ func TestReconcilePicksUpAddedBinding(t *testing.T) {
 // from SQLite is unregistered from cron on the next reconcile.
 func TestReconcileRemovesStaleBinding(t *testing.T) {
 	t.Parallel()
-	db := seedDB(t, defaultRepos())
-	s, err := NewScheduler(db, time.Hour, zerolog.Nop())
+	st := seedStore(t, defaultRepos())
+	s, err := NewScheduler(st, time.Hour, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -221,7 +222,7 @@ func TestReconcileRemovesStaleBinding(t *testing.T) {
 		t.Fatalf("initial agentEntries = %d, want 1", got)
 	}
 
-	if err := store.UpsertRepo(db, fleet.Repo{
+	if err := st.UpsertRepo(fleet.Repo{
 		Name:    "owner/repo",
 		Enabled: true,
 		Use:     []fleet.Binding{{Agent: "reviewer", Labels: []string{"ai:fix"}}},
@@ -240,8 +241,8 @@ func TestReconcileRemovesStaleBinding(t *testing.T) {
 // AgentStatuses to catch races. Run with -race.
 func TestReconcileRaceWithConcurrentReads(t *testing.T) {
 	t.Parallel()
-	db := seedDB(t, defaultRepos())
-	s, err := NewScheduler(db, time.Hour, zerolog.Nop())
+	st := seedStore(t, defaultRepos())
+	s, err := NewScheduler(st, time.Hour, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}

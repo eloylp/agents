@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
@@ -101,7 +100,7 @@ type MemoryBackend interface {
 }
 
 type Engine struct {
-	db            *sql.DB
+	store         *store.Store
 	runnerBuilder func(name string, b fleet.Backend) ai.Runner
 	dispatcher    *Dispatcher
 	memory        MemoryBackend
@@ -132,20 +131,20 @@ func (e *Engine) WithMemory(m MemoryBackend) {
 // (concurrency cap, dispatch safety limits) are passed at construction
 // because they never mutate via CRUD; CRUD touches the four entity sets
 // only.
-func NewEngine(db *sql.DB, processorCfg config.ProcessorConfig, queue EventEnqueuer, logger zerolog.Logger) *Engine {
+func NewEngine(st *store.Store, processorCfg config.ProcessorConfig, queue EventEnqueuer, logger zerolog.Logger) *Engine {
 	max := processorCfg.MaxConcurrentAgents
 	if max <= 0 {
 		max = 4
 	}
 	eng := &Engine{
-		db:            db,
+		store:         st,
 		maxConcurrent: max,
 		logger:        logger.With().Str("component", "workflow_engine").Logger(),
 	}
 	eng.runnerBuilder = eng.defaultRunnerFor
 	if queue != nil {
 		dedup := NewDispatchDedupStore(processorCfg.Dispatch.DedupWindowSeconds)
-		eng.dispatcher = NewDispatcher(processorCfg.Dispatch, db, dedup, queue, logger)
+		eng.dispatcher = NewDispatcher(processorCfg.Dispatch, st, dedup, queue, logger)
 	}
 	return eng
 }
@@ -155,7 +154,7 @@ func NewEngine(db *sql.DB, processorCfg config.ProcessorConfig, queue EventEnque
 // hot path looks at populated (agents, repos, skills, AIBackends); daemon-
 // level fields the engine doesn't read are left zero.
 func (e *Engine) loadCfg() (*config.Config, error) {
-	agents, repos, skills, backends, err := store.ReadSnapshot(e.db)
+	agents, repos, skills, backends, err := e.store.ReadSnapshot()
 	if err != nil {
 		return nil, fmt.Errorf("engine: load cfg snapshot: %w", err)
 	}

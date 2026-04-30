@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -79,26 +78,28 @@ func testAgentMap() map[string]fleet.Agent {
 // minimal claude backend so the FK constraints pass.
 func testDispatcher(t *testing.T, q *fakeQueue) *Dispatcher {
 	t.Helper()
-	db := dispatchTestDB(t)
-	return NewDispatcher(testDispatchCfg(), db, NewDispatchDedupStore(300), q, zerolog.Nop())
+	st := dispatchTestStore(t)
+	return NewDispatcher(testDispatchCfg(), st, NewDispatchDedupStore(300), q, zerolog.Nop())
 }
 
-// dispatchTestDB seeds the testAgentMap fleet into a tempdir SQLite.
-func dispatchTestDB(t *testing.T) *sql.DB {
+// dispatchTestStore seeds the testAgentMap fleet into a tempdir SQLite
+// and returns the store wrapping it.
+func dispatchTestStore(t *testing.T) *store.Store {
 	t.Helper()
 	return seedAgentMap(t, testAgentMap())
 }
 
 // seedAgentMap seeds an arbitrary agent map into a fresh tempdir SQLite,
 // filling in Backend / Prompt where missing so the store's validators
-// pass. Returns the live handle.
-func seedAgentMap(t *testing.T, m map[string]fleet.Agent) *sql.DB {
+// pass. Returns the live store.
+func seedAgentMap(t *testing.T, m map[string]fleet.Agent) *store.Store {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
 	agents := []fleet.Agent{}
 	for _, a := range m {
 		if a.Backend == "" {
@@ -115,10 +116,10 @@ func seedAgentMap(t *testing.T, m map[string]fleet.Agent) *sql.DB {
 		}
 		agents = append(agents, a)
 	}
-	if err := store.ImportAll(db, agents, nil, map[string]fleet.Skill{}, map[string]fleet.Backend{"claude": {Command: "claude"}}); err != nil {
+	if err := st.ImportAll(agents, nil, map[string]fleet.Skill{}, map[string]fleet.Backend{"claude": {Command: "claude"}}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	return db
+	return st
 }
 
 func originatorAgent(name string) fleet.Agent {
@@ -1005,8 +1006,8 @@ func TestLongRunningWebhookRunBlocksCronPastTTL(t *testing.T) {
 func TestDispatcherReflectsLiveAllowlistChanges(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}
-	db := dispatchTestDB(t)
-	d := NewDispatcher(testDispatchCfg(), db, NewDispatchDedupStore(300), q, zerolog.Nop())
+	st := dispatchTestStore(t)
+	d := NewDispatcher(testDispatchCfg(), st, NewDispatchDedupStore(300), q, zerolog.Nop())
 
 	// Initially "sec-reviewer" has AllowDispatch: false — dispatch is dropped.
 	originator := originatorAgent("coder")
@@ -1021,7 +1022,7 @@ func TestDispatcherReflectsLiveAllowlistChanges(t *testing.T) {
 	}
 
 	// Live update: flip sec-reviewer to allow dispatch by writing to SQLite.
-	if err := store.UpsertAgent(db, fleet.Agent{
+	if err := st.UpsertAgent(fleet.Agent{
 		Name: "sec-reviewer", Backend: "claude", Prompt: "review",
 		Description: "test", AllowDispatch: true,
 	}); err != nil {

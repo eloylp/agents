@@ -1,7 +1,6 @@
 package workflow
 
 import (
-	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -15,32 +14,32 @@ import (
 
 func testLogger() zerolog.Logger { return zerolog.Nop() }
 
-// seedDBFromCfg opens a tempdir SQLite, imports the four entity sets from
-// cfg, and returns the live handle. Tests build their *config.Config the
-// way they always have and hand it here to materialise the DB the engine
-// reads from.
-func seedDBFromCfg(t *testing.T, cfg *config.Config) *sql.DB {
+// seedStoreFromCfg opens a tempdir SQLite, imports the four entity sets
+// from cfg, and returns the data-access store. Tests build their
+// *config.Config the way they always have and hand it here to
+// materialise the DB the engine reads from.
+func seedStoreFromCfg(t *testing.T, cfg *config.Config) *store.Store {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
-	if err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
+	if err := st.ImportAll(cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	return db
+	return st
 }
 
-// newEngineFromCfg builds an Engine that reads from a tempdir SQLite seeded
-// from cfg, with a stub runner that the test can configure. Replaces the
-// pre-cutover NewEngine(cfg, runners, ...) shape used throughout the
-// workflow test files.
+// newEngineFromCfg builds an Engine that reads from a tempdir SQLite
+// seeded from cfg, with a stub runner that the test can configure.
+// Replaces the pre-cutover NewEngine(cfg, runners, ...) shape used
+// throughout the workflow test files.
 func newEngineFromCfg(t *testing.T, cfg *config.Config, runners map[string]ai.Runner, queue EventEnqueuer) *Engine {
 	t.Helper()
-	db := seedDBFromCfg(t, cfg)
-	logger := testLogger()
-	e := NewEngine(db, cfg.Daemon.Processor, queue, logger)
+	st := seedStoreFromCfg(t, cfg)
+	e := NewEngine(st, cfg.Daemon.Processor, queue, testLogger())
 	if len(runners) > 0 {
 		e.WithRunnerBuilder(func(name string, _ fleet.Backend) ai.Runner {
 			if r, ok := runners[name]; ok {
@@ -52,13 +51,13 @@ func newEngineFromCfg(t *testing.T, cfg *config.Config, runners map[string]ai.Ru
 	return e
 }
 
-// updateRuntimeConfig writes the new entity sets to the engine's DB so the
-// next event-handling pass picks them up. Replaces the pre-cutover
-// e.UpdateConfigAndRunners hot-reload call site for tests that exercise
-// config changes mid-test.
+// updateRuntimeConfig writes the new entity sets to the engine's store
+// so the next event-handling pass picks them up. Replaces the
+// pre-cutover e.UpdateConfigAndRunners hot-reload call site for tests
+// that exercise config changes mid-test.
 func updateRuntimeConfig(t *testing.T, e *Engine, cfg *config.Config, runners map[string]ai.Runner) {
 	t.Helper()
-	if err := store.ReplaceAll(e.db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
+	if err := e.store.ReplaceAll(cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
 		t.Fatalf("replace: %v", err)
 	}
 	if len(runners) > 0 {

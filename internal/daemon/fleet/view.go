@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/eloylp/agents/internal/scheduler"
-	"github.com/eloylp/agents/internal/store"
 )
 
 // agentScheduleJSON carries scheduling state for cron-backed agents.
@@ -62,7 +61,7 @@ func (h *Handler) HandleAgentsView(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 
-	storedAgents, storedRepos, _, _, err := store.ReadSnapshot(h.db)
+	storedAgents, storedRepos, _, _, err := h.store.ReadSnapshot()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read snapshot: %v", err), http.StatusInternalServerError)
 		return

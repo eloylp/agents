@@ -13,7 +13,6 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/daemon"
 	"github.com/eloylp/agents/internal/fleet"
-	"github.com/eloylp/agents/internal/store"
 )
 
 // openCRUDTestServer creates a test server backed by a tempdir SQLite via
@@ -30,7 +29,7 @@ func openCRUDTestServer(t *testing.T) *daemon.Daemon {
 func seedStoreBackend(t *testing.T, s *daemon.Daemon, name string) {
 	t.Helper()
 	b := fleet.Backend{Command: name}
-	if err := store.UpsertBackend(s.DB(), name, b); err != nil {
+	if err := s.Store().UpsertBackend(name, b); err != nil {
 		t.Fatalf("seedStoreBackend %s: %v", name, err)
 	}
 }
@@ -38,7 +37,7 @@ func seedStoreBackend(t *testing.T, s *daemon.Daemon, name string) {
 // seedStoreSkill inserts a minimal skill into the server's store directly.
 func seedStoreSkill(t *testing.T, s *daemon.Daemon, name string) {
 	t.Helper()
-	if err := store.UpsertSkill(s.DB(), name, fleet.Skill{Prompt: "skill prompt"}); err != nil {
+	if err := s.Store().UpsertSkill(name, fleet.Skill{Prompt: "skill prompt"}); err != nil {
 		t.Fatalf("seedStoreSkill %s: %v", name, err)
 	}
 }
@@ -420,7 +419,7 @@ func TestStoreCRUDBackendPatchRuntimeSettings(t *testing.T) {
 		t.Fatalf("response max_prompt_chars = %d, want 45000", out.MaxPromptChars)
 	}
 
-	backends, err := store.ReadBackends(s.DB())
+	backends, err := s.Store().ReadBackends()
 	if err != nil {
 		t.Fatalf("ReadBackends: %v", err)
 	}
@@ -474,7 +473,7 @@ func TestBackendsLocalCreateNamedAndDelete(t *testing.T) {
 	s := openCRUDTestServer(t)
 
 	// Local backend creation requires a discovered claude backend.
-	if err := store.UpsertBackend(s.DB(), "claude", fleet.Backend{
+	if err := s.Store().UpsertBackend("claude", fleet.Backend{
 		Command: "/bin/sh",
 	}); err != nil {
 		t.Fatalf("seed claude backend: %v", err)
@@ -513,7 +512,7 @@ func TestBackendsLocalRejectReservedName(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 
-	if err := store.UpsertBackend(s.DB(), "claude", fleet.Backend{
+	if err := s.Store().UpsertBackend("claude", fleet.Backend{
 		Command: "/bin/sh",
 	}); err != nil {
 		t.Fatalf("seed claude backend: %v", err)
@@ -1093,7 +1092,7 @@ func TestConcurrentWritesAllCommit(t *testing.T) {
 	// All n requested agents plus the one the fixture seeded must be in
 	// SQLite — no committed write may be lost.
 	const want = n + 1
-	agents, err := store.ReadAgents(s.DB())
+	agents, err := s.Store().ReadAgents()
 	if err != nil {
 		t.Fatalf("read agents: %v", err)
 	}
@@ -1427,7 +1426,7 @@ func TestServerCfgUpdatedAfterCRUDWrite(t *testing.T) {
 	// Precondition: the fixture starts with the seeded "coder" agent (the
 	// fixture seeds one to satisfy the store's "≥ 1 agent" invariant) and
 	// no repos.
-	repos, err := store.ReadRepos(s.DB())
+	repos, err := s.Store().ReadRepos()
 	if err != nil {
 		t.Fatalf("read repos: %v", err)
 	}
@@ -1443,7 +1442,7 @@ func TestServerCfgUpdatedAfterCRUDWrite(t *testing.T) {
 	}
 
 	// Verify SQLite has the new repo.
-	repos, err = store.ReadRepos(s.DB())
+	repos, err = s.Store().ReadRepos()
 	if err != nil {
 		t.Fatalf("read repos: %v", err)
 	}

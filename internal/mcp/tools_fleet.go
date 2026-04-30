@@ -10,7 +10,6 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/eloylp/agents/internal/fleet"
-	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -19,7 +18,7 @@ import (
 // see identical data.
 func toolListAgents(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		agents, err := store.ReadAgents(deps.DB)
+		agents, err := deps.Store.ReadAgents()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list agents", err), nil
 		}
@@ -40,7 +39,7 @@ func toolGetAgent(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
-		agents, err := store.ReadAgents(deps.DB)
+		agents, err := deps.Store.ReadAgents()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get agent", err), nil
 		}
@@ -54,7 +53,7 @@ func toolGetAgent(deps Deps) server.ToolHandlerFunc {
 
 func toolListSkills(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		skills, err := store.ReadSkills(deps.DB)
+		skills, err := deps.Store.ReadSkills()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list skills", err), nil
 		}
@@ -80,7 +79,7 @@ func toolGetSkill(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
-		skills, err := store.ReadSkills(deps.DB)
+		skills, err := deps.Store.ReadSkills()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get skill", err), nil
 		}
@@ -98,7 +97,7 @@ func toolGetSkill(deps Deps) server.ToolHandlerFunc {
 
 func toolListBackends(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		backends, err := store.ReadBackends(deps.DB)
+		backends, err := deps.Store.ReadBackends()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list backends", err), nil
 		}
@@ -119,7 +118,7 @@ func toolGetBackend(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
-		backends, err := store.ReadBackends(deps.DB)
+		backends, err := deps.Store.ReadBackends()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get backend", err), nil
 		}
@@ -134,7 +133,7 @@ func toolGetBackend(deps Deps) server.ToolHandlerFunc {
 
 func toolListRepos(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		repos, err := store.ReadRepos(deps.DB)
+		repos, err := deps.Store.ReadRepos()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list repos", err), nil
 		}
@@ -154,7 +153,7 @@ func toolGetRepo(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
-		repos, err := store.ReadRepos(deps.DB)
+		repos, err := deps.Store.ReadRepos()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get repo", err), nil
 		}
@@ -198,7 +197,7 @@ func toolTriggerAgent(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError("agent and repo are required"), nil
 		}
 
-		repos, err := store.ReadRepos(deps.DB)
+		repos, err := deps.Store.ReadRepos()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("read repos", err), nil
 		}

@@ -9,7 +9,6 @@
 package repos
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,17 +27,16 @@ import (
 // Handler implements the /repos and /repos/{owner}/{repo}/bindings HTTP
 // surface plus the methods exposed for the MCP repo and binding tools.
 type Handler struct {
-	db           *sql.DB
+	store        *store.Store
 	maxBodyBytes int64
 	logger       zerolog.Logger
 }
 
-// New constructs a Handler. db is the SQLite handle the handler reads /
-// writes through; maxBodyBytes caps incoming request bodies for write
-// endpoints.
-func New(db *sql.DB, maxBodyBytes int64, logger zerolog.Logger) *Handler {
+// New constructs a Handler. store is the data-access facade;
+// maxBodyBytes caps incoming request bodies for write endpoints.
+func New(st *store.Store, maxBodyBytes int64, logger zerolog.Logger) *Handler {
 	return &Handler{
-		db:           db,
+		store:        st,
 		maxBodyBytes: maxBodyBytes,
 		logger:       logger.With().Str("component", "server_repos").Logger(),
 	}
@@ -128,7 +126,7 @@ type repoRuntimeSettingsJSON struct {
 func (h *Handler) handleRepos(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		repos, err := store.ReadRepos(h.db)
+		repos, err := h.store.ReadRepos()
 		if err != nil {
 			http.Error(w, fmt.Sprintf("read repos: %v", err), http.StatusInternalServerError)
 			return
@@ -158,7 +156,7 @@ func (h *Handler) handleRepo(w http.ResponseWriter, r *http.Request) {
 	repoName := fleet.NormalizeRepoName(vars["owner"]) + "/" + fleet.NormalizeRepoName(vars["repo"])
 	switch r.Method {
 	case http.MethodGet:
-		repos, err := store.ReadRepos(h.db)
+		repos, err := h.store.ReadRepos()
 		if err != nil {
 			http.Error(w, fmt.Sprintf("read repos: %v", err), http.StatusInternalServerError)
 			return
@@ -218,7 +216,7 @@ func (h *Handler) handleGetBinding(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	owner, b, found, err := store.ReadBinding(h.db, id)
+	owner, b, found, err := h.store.ReadBinding(id)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read binding: %v", err), http.StatusInternalServerError)
 		return
@@ -275,7 +273,7 @@ func (h *Handler) UpsertRepo(r fleet.Repo) (fleet.Repo, error) {
 	if strings.TrimSpace(r.Name) == "" {
 		return fleet.Repo{}, &store.ErrValidation{Msg: "name is required"}
 	}
-	if err := store.UpsertRepo(h.db, r); err != nil {
+	if err := h.store.UpsertRepo(r); err != nil {
 		return fleet.Repo{}, err
 	}
 	fleet.NormalizeRepo(&r)
@@ -287,7 +285,7 @@ func (h *Handler) UpsertRepo(r fleet.Repo) (fleet.Repo, error) {
 // refresh their view. *store.ErrNotFound when the repo does not exist.
 func (h *Handler) PatchRepo(repoName string, enabled bool) (fleet.Repo, error) {
 	// Load the repo (and its bindings) so we can return it intact.
-	repos, err := store.ReadRepos(h.db)
+	repos, err := h.store.ReadRepos()
 	if err != nil {
 		return fleet.Repo{}, err
 	}
@@ -306,7 +304,7 @@ func (h *Handler) PatchRepo(repoName string, enabled bool) (fleet.Repo, error) {
 	}
 	// Flip the enabled flag via a direct UPDATE so we don't re-run the
 	// delete+insert cycle that UpsertRepo performs on bindings.
-	if _, err := h.db.Exec("UPDATE repos SET enabled=? WHERE name=?", boolToInt(enabled), repoName); err != nil {
+	if err := h.store.EnableRepo(repoName, enabled); err != nil {
 		return fleet.Repo{}, fmt.Errorf("patch repo %s: %w", repoName, err)
 	}
 	existing.Enabled = enabled
@@ -316,12 +314,12 @@ func (h *Handler) PatchRepo(repoName string, enabled bool) (fleet.Repo, error) {
 // DeleteRepo removes the named repo (and cascades its bindings). The
 // scheduler picks up the change on its next reconcile tick.
 func (h *Handler) DeleteRepo(name string) error {
-	return store.DeleteRepo(h.db, name)
+	return h.store.DeleteRepo(name)
 }
 
 // CreateBinding persists a new binding on repoName.
 func (h *Handler) CreateBinding(repoName string, b fleet.Binding) (fleet.Binding, error) {
-	_, persisted, err := store.CreateBinding(h.db, repoName, b)
+	_, persisted, err := h.store.CreateBinding(repoName, b)
 	if err != nil {
 		return fleet.Binding{}, err
 	}
@@ -330,19 +328,19 @@ func (h *Handler) CreateBinding(repoName string, b fleet.Binding) (fleet.Binding
 
 // UpdateBinding verifies the id belongs to repoName and replaces the row.
 func (h *Handler) UpdateBinding(repoName string, id int64, b fleet.Binding) (fleet.Binding, error) {
-	existingRepo, _, found, err := store.ReadBinding(h.db, id)
+	existingRepo, _, found, err := h.store.ReadBinding(id)
 	if err != nil {
 		return fleet.Binding{}, err
 	}
 	if !found || existingRepo != repoName {
 		return fleet.Binding{}, &store.ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found for repo %q", id, repoName)}
 	}
-	return store.UpdateBinding(h.db, id, b)
+	return h.store.UpdateBinding(id, b)
 }
 
 // ReadBinding fetches one binding by ID, verifying it belongs to repoName.
 func (h *Handler) ReadBinding(repoName string, id int64) (fleet.Binding, error) {
-	existingRepo, b, found, err := store.ReadBinding(h.db, id)
+	existingRepo, b, found, err := h.store.ReadBinding(id)
 	if err != nil {
 		return fleet.Binding{}, err
 	}
@@ -354,14 +352,14 @@ func (h *Handler) ReadBinding(repoName string, id int64) (fleet.Binding, error) 
 
 // DeleteBinding verifies the id belongs to repoName and deletes it.
 func (h *Handler) DeleteBinding(repoName string, id int64) error {
-	existingRepo, _, found, err := store.ReadBinding(h.db, id)
+	existingRepo, _, found, err := h.store.ReadBinding(id)
 	if err != nil {
 		return err
 	}
 	if !found || existingRepo != repoName {
 		return &store.ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found for repo %q", id, repoName)}
 	}
-	return store.DeleteBinding(h.db, id)
+	return h.store.DeleteBinding(id)
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -386,15 +384,6 @@ func bindingIDFromVars(w http.ResponseWriter, r *http.Request) (int64, bool) {
 		return 0, false
 	}
 	return id, true
-}
-
-// boolToInt matches store.boolToInt (unexported there) for the tiny PATCH
-// path above. Duplicating a 6-line helper keeps the store package closed.
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }
 
 // writeErr maps a store error to an HTTP response and a structured log entry.

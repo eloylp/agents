@@ -36,7 +36,8 @@ func New(t *testing.T, cfg *config.Config) *daemon.Daemon {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
 
 	agents := cfg.Agents
 	backends := cfg.Daemon.AIBackends
@@ -51,17 +52,11 @@ func New(t *testing.T, cfg *config.Config) *daemon.Daemon {
 		cfg.Agents = agents
 	}
 
-	if err := store.ImportAll(
-		db,
-		agents,
-		cfg.Repos,
-		cfg.Skills,
-		backends,
-	); err != nil {
+	if err := st.ImportAll(agents, cfg.Repos, cfg.Skills, backends); err != nil {
 		t.Fatalf("import seed: %v", err)
 	}
 
-	d, err := daemon.New(cfg, db, zerolog.Nop())
+	d, err := daemon.New(cfg, st, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("daemon.New: %v", err)
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -32,19 +31,19 @@ import (
 type Handler struct {
 	delivery *DeliveryStore
 	channels *workflow.DataChannels
-	db       *sql.DB
+	store    *store.Store
 	httpCfg  config.HTTPConfig
 	logger   zerolog.Logger
 }
 
-// NewHandler constructs a Handler. delivery, channels, db, and httpCfg
+// NewHandler constructs a Handler. delivery, channels, store, and httpCfg
 // are required; logger may be the daemon's root logger (the handler
 // scopes a sub-logger via the standard component label).
-func NewHandler(delivery *DeliveryStore, channels *workflow.DataChannels, db *sql.DB, httpCfg config.HTTPConfig, logger zerolog.Logger) *Handler {
+func NewHandler(delivery *DeliveryStore, channels *workflow.DataChannels, st *store.Store, httpCfg config.HTTPConfig, logger zerolog.Logger) *Handler {
 	return &Handler{
 		delivery: delivery,
 		channels: channels,
-		db:       db,
+		store:    st,
 		httpCfg:  httpCfg,
 		logger:   logger.With().Str("component", "webhook").Logger(),
 	}
@@ -57,7 +56,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 
 // repoByName returns the named repo from SQLite, or false if not present.
 func (h *Handler) repoByName(name string) (fleet.Repo, bool) {
-	repos, err := store.ReadRepos(h.db)
+	repos, err := h.store.ReadRepos()
 	if err != nil {
 		h.logger.Error().Err(err).Msg("webhook: read repos")
 		return fleet.Repo{}, false

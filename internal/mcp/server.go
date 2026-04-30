@@ -26,7 +26,6 @@
 package mcp
 
 import (
-	"database/sql"
 	"net/http"
 
 	"github.com/mark3labs/mcp-go/server"
@@ -37,6 +36,7 @@ import (
 	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
 	daemonrepos "github.com/eloylp/agents/internal/daemon/repos"
 	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -55,7 +55,7 @@ const Version = "0.1.0"
 // can serve the core fleet + trigger surface without wiring
 // observability or CRUD writes.
 type Deps struct {
-	DB           *sql.DB
+	Store        *store.Store           // data-access facade for tools that read fleet entities
 	DaemonConfig config.DaemonConfig    // static daemon-level config (HTTP, proxy, processor, log)
 	StatusJSON   func() ([]byte, error) // /status payload — same bytes the REST surface returns
 	Queue        *workflow.DataChannels // PushEvent for trigger_agent

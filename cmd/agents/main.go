@@ -39,15 +39,15 @@ func run() error {
 	importPath := flag.String("import", "", "YAML config file to import into the database")
 	flag.Parse()
 
-	cfg, db, err := daemon.LoadConfig(ctx, *dbPath, *importPath, os.Stderr)
+	cfg, st, err := daemon.LoadConfig(ctx, *dbPath, *importPath, os.Stderr)
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer st.Close()
 
 	logger := logging.NewLogger(cfg.Daemon.Log)
 
-	d, err := daemon.New(cfg, db, logger)
+	d, err := daemon.New(cfg, st, logger)
 	if err != nil {
 		return err
 	}

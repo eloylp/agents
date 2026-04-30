@@ -10,7 +10,6 @@ import (
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
-	"github.com/eloylp/agents/internal/store"
 )
 
 // OrphanedAgent describes an agent whose pinned model no longer exists in
@@ -51,7 +50,7 @@ func (h *Handler) HandleOrphansStatus(w http.ResponseWriter, _ *http.Request) {
 // catalog. Callers (the orphan endpoint and /status) re-evaluate on every
 // request; there is no cache.
 func (h *Handler) OrphanedAgents() ([]OrphanedAgent, error) {
-	agents, repos, _, backends, err := store.ReadSnapshot(h.db)
+	agents, repos, _, backends, err := h.store.ReadSnapshot()
 	if err != nil {
 		return nil, fmt.Errorf("read snapshot: %w", err)
 	}

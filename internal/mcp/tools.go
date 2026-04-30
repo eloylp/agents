@@ -150,7 +150,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolGetDispatches(deps),
 		)
 	}
-	if deps.DB != nil {
+	if deps.Store != nil {
 		srv.AddTool(
 			mcpgo.NewTool("get_memory",
 				mcpgo.WithDescription("Return the stored markdown memory for an agent/repo pair. Only autonomous agents keep memory; event-driven runs don't."),

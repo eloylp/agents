@@ -11,7 +11,6 @@
 package fleet
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,7 +34,7 @@ import (
 // owns the /agents/orphans/status endpoint and the read-only fleet snapshot
 // view served at GET /agents.
 type Handler struct {
-	db           *sql.DB
+	store        *store.Store
 	maxBodyBytes int64
 	sched        *scheduler.Scheduler // schedule + last-run state for the /agents view
 	obs          *observe.Store       // running/idle state for the /agents view
@@ -43,9 +42,9 @@ type Handler struct {
 }
 
 // New constructs a Handler.
-func New(db *sql.DB, maxBodyBytes int64, sched *scheduler.Scheduler, obs *observe.Store, logger zerolog.Logger) *Handler {
+func New(st *store.Store, maxBodyBytes int64, sched *scheduler.Scheduler, obs *observe.Store, logger zerolog.Logger) *Handler {
 	return &Handler{
-		db:           db,
+		store:        st,
 		maxBodyBytes: maxBodyBytes,
 		sched:        sched,
 		obs:          obs,
@@ -81,7 +80,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 // dispatcher routes POST here and GET to HandleAgentsView so a single mux
 // entry serves both the read-only fleet snapshot and CRUD create.
 func (h *Handler) HandleAgentsCreate(w http.ResponseWriter, r *http.Request) {
-	if h.db == nil {
+	if h.store == nil {
 		http.Error(w, "store not attached", http.StatusServiceUnavailable)
 		return
 	}
@@ -208,7 +207,7 @@ func (h *Handler) handleAgent(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeAgentName(mux.Vars(r)["name"])
 	switch r.Method {
 	case http.MethodGet:
-		agents, err := store.ReadAgents(h.db)
+		agents, err := h.store.ReadAgents()
 		if err != nil {
 			http.Error(w, fmt.Sprintf("read agents: %v", err), http.StatusInternalServerError)
 			return
@@ -260,7 +259,7 @@ func (h *Handler) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 	if strings.TrimSpace(a.Name) == "" {
 		return fleet.Agent{}, &store.ErrValidation{Msg: "name is required"}
 	}
-	if err := store.UpsertAgent(h.db, a); err != nil {
+	if err := h.store.UpsertAgent(a); err != nil {
 		return fleet.Agent{}, err
 	}
 	fleet.NormalizeAgent(&a)
@@ -276,7 +275,7 @@ func (h *Handler) UpdateAgentPatch(name string, patch AgentPatch) (fleet.Agent, 
 
 func (h *Handler) updateAgent(name string, patch AgentPatch) (fleet.Agent, error) {
 	normalized := fleet.NormalizeAgentName(name)
-	agents, err := store.ReadAgents(h.db)
+	agents, err := h.store.ReadAgents()
 	if err != nil {
 		return fleet.Agent{}, err
 	}
@@ -292,7 +291,7 @@ func (h *Handler) updateAgent(name string, patch AgentPatch) (fleet.Agent, error
 	}
 	merged := *existing
 	patch.apply(&merged)
-	if err := store.UpsertAgent(h.db, merged); err != nil {
+	if err := h.store.UpsertAgent(merged); err != nil {
 		return fleet.Agent{}, err
 	}
 	fleet.NormalizeAgent(&merged)
@@ -305,9 +304,9 @@ func (h *Handler) updateAgent(name string, patch AgentPatch) (fleet.Agent, error
 // agent.
 func (h *Handler) DeleteAgent(name string, cascade bool) error {
 	if cascade {
-		return store.DeleteAgentCascade(h.db, name)
+		return h.store.DeleteAgentCascade(name)
 	}
-	return store.DeleteAgent(h.db, name)
+	return h.store.DeleteAgent(name)
 }
 
 // ── Skill wire types ─────────────────────────────────────────────────────────
@@ -337,7 +336,7 @@ func (p SkillPatch) apply(s *fleet.Skill) {
 func (h *Handler) handleSkills(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		skills, err := store.ReadSkills(h.db)
+		skills, err := h.store.ReadSkills()
 		if err != nil {
 			http.Error(w, fmt.Sprintf("read skills: %v", err), http.StatusInternalServerError)
 			return
@@ -366,7 +365,7 @@ func (h *Handler) handleSkill(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeSkillName(mux.Vars(r)["name"])
 	switch r.Method {
 	case http.MethodGet:
-		skills, err := store.ReadSkills(h.db)
+		skills, err := h.store.ReadSkills()
 		if err != nil {
 			http.Error(w, fmt.Sprintf("read skills: %v", err), http.StatusInternalServerError)
 			return
@@ -416,7 +415,7 @@ func (h *Handler) UpsertSkill(name string, sk fleet.Skill) (string, fleet.Skill,
 	if strings.TrimSpace(name) == "" {
 		return "", fleet.Skill{}, &store.ErrValidation{Msg: "name is required"}
 	}
-	if err := store.UpsertSkill(h.db, name, sk); err != nil {
+	if err := h.store.UpsertSkill(name, sk); err != nil {
 		return "", fleet.Skill{}, err
 	}
 	fleet.NormalizeSkill(&sk)
@@ -432,7 +431,7 @@ func (h *Handler) UpdateSkillPatch(name string, patch SkillPatch) (string, fleet
 
 func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skill, error) {
 	normalized := fleet.NormalizeSkillName(name)
-	skills, err := store.ReadSkills(h.db)
+	skills, err := h.store.ReadSkills()
 	if err != nil {
 		return "", fleet.Skill{}, err
 	}
@@ -441,7 +440,7 @@ func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skil
 		return "", fleet.Skill{}, &store.ErrNotFound{Msg: fmt.Sprintf("skill %q not found", normalized)}
 	}
 	patch.apply(&existing)
-	if err := store.UpsertSkill(h.db, normalized, existing); err != nil {
+	if err := h.store.UpsertSkill(normalized, existing); err != nil {
 		return "", fleet.Skill{}, err
 	}
 	fleet.NormalizeSkill(&existing)
@@ -451,7 +450,7 @@ func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skil
 // DeleteSkill removes the named skill from the store. Returns
 // *store.ErrConflict if any agent still references the skill.
 func (h *Handler) DeleteSkill(name string) error {
-	return store.DeleteSkill(h.db, name)
+	return h.store.DeleteSkill(name)
 }
 
 // ── Backend wire types ───────────────────────────────────────────────────────
@@ -560,7 +559,7 @@ func (j storeBackendJSON) toConfig() fleet.Backend {
 func (h *Handler) handleBackends(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		all, err := store.ReadBackends(h.db)
+		all, err := h.store.ReadBackends()
 		if err != nil {
 			http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
 			return
@@ -586,7 +585,7 @@ func (h *Handler) handleBackends(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleBackendsStatus(w http.ResponseWriter, r *http.Request) {
-	existing, err := store.ReadBackends(h.db)
+	existing, err := h.store.ReadBackends()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
 		return
@@ -596,7 +595,7 @@ func (h *Handler) handleBackendsStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleBackendsDiscover(w http.ResponseWriter, r *http.Request) {
-	diag, err := backends.DiscoverAndPersist(r.Context(), h.db)
+	diag, err := backends.DiscoverAndPersist(r.Context(), h.store)
 	if err != nil {
 		status := storeErrStatus(err)
 		h.logger.Error().Err(err).Msg("backend discovery failed")
@@ -629,7 +628,7 @@ func (h *Handler) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existing, err := store.ReadBackends(h.db)
+	existing, err := h.store.ReadBackends()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
 		return
@@ -666,7 +665,7 @@ func (h *Handler) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
 		break
 	}
 
-	if err := store.UpsertBackend(h.db, name, local); err != nil {
+	if err := h.store.UpsertBackend(name, local); err != nil {
 		status := storeErrStatus(err)
 		h.logger.Error().Err(err).Msg("local backend upsert failed")
 		http.Error(w, fmt.Sprintf("local backend upsert: %v", err), status)
@@ -681,7 +680,7 @@ func backendPathName(r *http.Request) string {
 
 func (h *Handler) handleBackendGet(w http.ResponseWriter, r *http.Request) {
 	name := backendPathName(r)
-	all, err := store.ReadBackends(h.db)
+	all, err := h.store.ReadBackends()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
 		return
@@ -738,7 +737,7 @@ func (h *Handler) UpsertBackend(name string, b fleet.Backend) (string, fleet.Bac
 	if strings.TrimSpace(name) == "" {
 		return "", fleet.Backend{}, &store.ErrValidation{Msg: "name is required"}
 	}
-	if err := store.UpsertBackend(h.db, name, b); err != nil {
+	if err := h.store.UpsertBackend(name, b); err != nil {
 		return "", fleet.Backend{}, err
 	}
 	fleet.NormalizeBackend(&b)
@@ -755,7 +754,7 @@ func (h *Handler) UpdateBackendPatch(name string, patch BackendPatch) (string, f
 
 func (h *Handler) updateBackend(name string, patch BackendPatch) (string, fleet.Backend, error) {
 	normalized := fleet.NormalizeBackendName(name)
-	all, err := store.ReadBackends(h.db)
+	all, err := h.store.ReadBackends()
 	if err != nil {
 		return "", fleet.Backend{}, err
 	}
@@ -764,7 +763,7 @@ func (h *Handler) updateBackend(name string, patch BackendPatch) (string, fleet.
 		return "", fleet.Backend{}, &store.ErrNotFound{Msg: fmt.Sprintf("backend %q not found", normalized)}
 	}
 	patch.apply(&existing)
-	if err := store.UpsertBackend(h.db, normalized, existing); err != nil {
+	if err := h.store.UpsertBackend(normalized, existing); err != nil {
 		return "", fleet.Backend{}, err
 	}
 	fleet.NormalizeBackend(&existing)
@@ -775,7 +774,7 @@ func (h *Handler) updateBackend(name string, patch BackendPatch) (string, fleet.
 // DeleteBackend removes the named backend from the store. Returns
 // *store.ErrConflict if any agent still references the backend.
 func (h *Handler) DeleteBackend(name string) error {
-	return store.DeleteBackend(h.db, name)
+	return h.store.DeleteBackend(name)
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

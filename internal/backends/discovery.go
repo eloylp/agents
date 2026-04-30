@@ -3,7 +3,6 @@ package backends
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -48,32 +47,32 @@ type Diagnostics struct {
 	Backends    []BackendStatus `json:"backends"`
 }
 
-// AutoDiscoverIfBackendsMissing runs discovery and persists results only when
-// the backends table is currently empty.
-func AutoDiscoverIfBackendsMissing(ctx context.Context, db *sql.DB) (bool, Diagnostics, error) {
-	existing, err := store.ReadBackends(db)
+// AutoDiscoverIfBackendsMissing runs discovery and persists results only
+// when the backends table is currently empty.
+func AutoDiscoverIfBackendsMissing(ctx context.Context, st *store.Store) (bool, Diagnostics, error) {
+	existing, err := st.ReadBackends()
 	if err != nil {
 		return false, Diagnostics{}, err
 	}
 	if len(existing) > 0 {
 		return false, Diagnostics{}, nil
 	}
-	diag, err := DiscoverAndPersist(ctx, db)
+	diag, err := DiscoverAndPersist(ctx, st)
 	if err != nil {
 		return false, Diagnostics{}, err
 	}
 	return true, diag, nil
 }
 
-// DiscoverAndPersist runs diagnostics and writes discovered backend metadata to
-// the store (upsert semantics).
-func DiscoverAndPersist(ctx context.Context, db *sql.DB) (Diagnostics, error) {
-	existing, err := store.ReadBackends(db)
+// DiscoverAndPersist runs diagnostics and writes discovered backend
+// metadata to the store (upsert semantics).
+func DiscoverAndPersist(ctx context.Context, st *store.Store) (Diagnostics, error) {
+	existing, err := st.ReadBackends()
 	if err != nil {
 		return Diagnostics{}, err
 	}
 	diag := RunDiagnostics(ctx, existing)
-	if err := persistDiagnostics(db, existing, diag); err != nil {
+	if err := persistDiagnostics(st, existing, diag); err != nil {
 		return Diagnostics{}, err
 	}
 	return diag, nil
@@ -131,7 +130,7 @@ func RunDiagnostics(ctx context.Context, existing map[string]fleet.Backend) Diag
 	return diag
 }
 
-func persistDiagnostics(db *sql.DB, existing map[string]fleet.Backend, diag Diagnostics) error {
+func persistDiagnostics(st *store.Store, existing map[string]fleet.Backend, diag Diagnostics) error {
 	for _, b := range diag.Backends {
 		prev, hadPrev := existing[b.Name]
 		if !b.Detected && !hadPrev {
@@ -151,7 +150,7 @@ func persistDiagnostics(db *sql.DB, existing map[string]fleet.Backend, diag Diag
 		fleet.ApplyBackendDefaults(&next)
 		fleet.NormalizeBackend(&next)
 
-		if err := store.UpsertBackend(db, b.Name, next); err != nil {
+		if err := st.UpsertBackend(b.Name, next); err != nil {
 			return fmt.Errorf("persist backend %s: %w", b.Name, err)
 		}
 	}

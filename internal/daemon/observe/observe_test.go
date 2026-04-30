@@ -42,23 +42,26 @@ func minimalCfg() *config.Config {
 	}
 }
 
-// testFixture holds the per-test wiring an observe.Handler needs: a real
-// SQLite handle and the observability store (writes events / traces).
+// testFixture holds the per-test wiring an observe.Handler needs: the
+// raw SQLite handle (for memory-row seeding helpers), the observability
+// pub-sub store, and the data-access facade.
 type testFixture struct {
-	db    *sql.DB
-	store *obstore.Store
+	db     *sql.DB        // raw handle, only for memory-row seeding
+	events *obstore.Store // events / traces / SSE pub-sub
+	store  *store.Store   // data-access facade
 }
 
-// newFixture opens a temp SQLite and creates an obstore.Store on top. If
-// cfg has populated entity sets, they are seeded into the DB so the
-// observe handler's SQLite reads see them.
+// newFixture opens a temp SQLite and creates an obstore.Store + data-
+// access store on top. If cfg has populated entity sets, they are seeded
+// so the observe handler's SQLite reads see them.
 func newFixture(t *testing.T, cfg *config.Config) testFixture {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
 	if cfg != nil && (len(cfg.Agents) > 0 || len(cfg.Repos) > 0 || len(cfg.Daemon.AIBackends) > 0 || len(cfg.Skills) > 0) {
 		backends := cfg.Daemon.AIBackends
 		if len(backends) == 0 {
@@ -68,19 +71,19 @@ func newFixture(t *testing.T, cfg *config.Config) testFixture {
 		if skills == nil {
 			skills = map[string]fleet.Skill{}
 		}
-		if err := store.ImportAll(db, cfg.Agents, cfg.Repos, skills, backends); err != nil {
+		if err := st.ImportAll(cfg.Agents, cfg.Repos, skills, backends); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
-	obs := obstore.NewStore(db)
-	return testFixture{db: db, store: obs}
+	events := obstore.NewStore(db)
+	return testFixture{db: db, events: events, store: st}
 }
 
-// newTestStore is the legacy single-arg helper kept so the test bodies that
-// only touch obs need no more than a one-line change.
-func newTestStore(t *testing.T) *obstore.Store {
+// newTestEvents is the legacy single-arg helper kept so the test bodies
+// that only touch obs need no more than a one-line change.
+func newTestEvents(t *testing.T) *obstore.Store {
 	t.Helper()
-	return newFixture(t, nil).store
+	return newFixture(t, nil).events
 }
 
 // newSchedulerWithStatuses builds a scheduler whose AgentStatuses()
@@ -108,10 +111,11 @@ func newSchedulerWithStatuses(t *testing.T, statuses []scheduler.AgentStatus) *s
 			seenAgent[st.Name] = true
 		}
 	}
-	if err := store.ImportAll(db, agents, repos, map[string]fleet.Skill{}, map[string]fleet.Backend{"claude": {Command: "claude"}}); err != nil {
+	st := store.New(db)
+	if err := st.ImportAll(agents, repos, map[string]fleet.Skill{}, map[string]fleet.Backend{"claude": {Command: "claude"}}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	sched, err := scheduler.NewScheduler(db, time.Hour, zerolog.Nop())
+	sched, err := scheduler.NewScheduler(st, time.Hour, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("new scheduler: %v", err)
 	}
@@ -131,7 +135,7 @@ func newSchedulerWithStatuses(t *testing.T, statuses []scheduler.AgentStatus) *s
 func newPlainHandler(t *testing.T) *Handler {
 	t.Helper()
 	fx := newFixture(t, nil)
-	return New(fx.store, fx.db, nil, nil, nil, zerolog.Nop())
+	return New(fx.events, fx.store, nil, nil, nil, zerolog.Nop())
 }
 
 // newHandlerOnStore is like newPlainHandler but reuses an existing
@@ -144,7 +148,7 @@ func newHandlerOnStore(t *testing.T, obs *obstore.Store) *Handler {
 		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	return New(obs, db, nil, nil, nil, zerolog.Nop())
+	return New(obs, store.New(db), nil, nil, nil, zerolog.Nop())
 }
 
 // seedMemoryReader writes (agent, repo) → content rows into db so the
@@ -249,8 +253,8 @@ func TestHandleDispatchesReturnsEngineStats(t *testing.T) {
 	// composing daemon hands the handler.
 	fx := newFixture(t, nil)
 	channels := workflow.NewDataChannels(1)
-	engine := workflow.NewEngine(fx.db, minimalCfg().Daemon.Processor, channels, zerolog.Nop())
-	h := New(fx.store, fx.db, nil, engine, nil, zerolog.Nop())
+	engine := workflow.NewEngine(fx.store, minimalCfg().Daemon.Processor, channels, zerolog.Nop())
+	h := New(fx.events, fx.store, nil, engine, nil, zerolog.Nop())
 
 	req := httptest.NewRequest(http.MethodGet, "/dispatches", nil)
 	rec := httptest.NewRecorder()
@@ -292,7 +296,7 @@ func TestHandleDispatchesZeroWhenNoEngine(t *testing.T) {
 
 func TestHandleEventsReturnsStoredEvents(t *testing.T) {
 	t.Parallel()
-	obs := newTestStore(t)
+	obs := newTestEvents(t)
 	h := newHandlerOnStore(t, obs)
 
 	now := time.Now().UTC()
@@ -321,7 +325,7 @@ func TestHandleEventsReturnsStoredEvents(t *testing.T) {
 
 func TestHandleEventsSinceFilter(t *testing.T) {
 	t.Parallel()
-	obs := newTestStore(t)
+	obs := newTestEvents(t)
 	h := newHandlerOnStore(t, obs)
 
 	base := time.Now().UTC()
@@ -350,7 +354,7 @@ func TestHandleEventsSinceFilter(t *testing.T) {
 func TestHandleSSEStreams(t *testing.T) {
 	t.Parallel()
 
-	obs := newTestStore(t)
+	obs := newTestEvents(t)
 	h := newHandlerOnStore(t, obs)
 
 	tests := []struct {
@@ -427,7 +431,7 @@ func TestHandleSSEStreams(t *testing.T) {
 
 func TestHandleTracesReturnsStoredSpans(t *testing.T) {
 	t.Parallel()
-	obs := newTestStore(t)
+	obs := newTestEvents(t)
 	h := newHandlerOnStore(t, obs)
 
 	now := time.Now().UTC()
@@ -453,7 +457,7 @@ func TestHandleTracesReturnsStoredSpans(t *testing.T) {
 
 func TestHandleTraceByRootEventID(t *testing.T) {
 	t.Parallel()
-	obs := newTestStore(t)
+	obs := newTestEvents(t)
 	h := newHandlerOnStore(t, obs)
 
 	now := time.Now().UTC()
@@ -478,7 +482,7 @@ func TestHandleTraceByRootEventID(t *testing.T) {
 
 func TestHandleTraceNotFound(t *testing.T) {
 	t.Parallel()
-	obs := newTestStore(t)
+	obs := newTestEvents(t)
 	h := newHandlerOnStore(t, obs)
 
 	router := newRouter(h)
@@ -495,7 +499,7 @@ func TestHandleTraceNotFound(t *testing.T) {
 
 func TestHandleGraphReturnsEdges(t *testing.T) {
 	t.Parallel()
-	obs := newTestStore(t)
+	obs := newTestEvents(t)
 	h := newHandlerOnStore(t, obs)
 
 	obs.RecordDispatch("coder", "reviewer", "owner/repo", 10, "needs review")
@@ -526,7 +530,7 @@ func TestHandleGraphReturnsEdges(t *testing.T) {
 
 func TestHandleGraphEmptyWhenNoDispatches(t *testing.T) {
 	t.Parallel()
-	obs := newTestStore(t)
+	obs := newTestEvents(t)
 	h := newHandlerOnStore(t, obs)
 
 	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
@@ -545,7 +549,7 @@ func TestHandleGraphIncludesConfiguredAgentWithNoDispatches(t *testing.T) {
 	cfg := minimalCfg()
 	cfg.Agents = []fleet.Agent{{Name: "solo-agent", Backend: "claude", Prompt: "p"}}
 	fx := newFixture(t, cfg)
-	h := New(fx.store, fx.db, nil, nil, nil, zerolog.Nop())
+	h := New(fx.events, fx.store, nil, nil, nil, zerolog.Nop())
 
 	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
 	rec := httptest.NewRecorder()
@@ -579,12 +583,12 @@ func TestHandleGraphNodeStatusReflectsRuntimeState(t *testing.T) {
 	}
 	fx := newFixture(t, cfg)
 	// Mark "runner" as in-flight via the same hook the engine uses.
-	fx.store.ActiveRuns.StartRun("runner")
+	fx.events.ActiveRuns.StartRun("runner")
 	// Seed the scheduler so "idle-err" has a recorded last_status="error".
 	sched := newSchedulerWithStatuses(t, []scheduler.AgentStatus{
 		{Name: "idle-err", Repo: "owner/r", LastStatus: "error"},
 	})
-	h := New(fx.store, fx.db, sched, nil, nil, zerolog.Nop())
+	h := New(fx.events, fx.store, sched, nil, nil, zerolog.Nop())
 
 	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
 	rec := httptest.NewRecorder()
@@ -777,7 +781,7 @@ func TestHandleMemorySQLiteMode(t *testing.T) {
 			t.Parallel()
 			fx := newFixture(t, nil)
 			memReader := seedMemoryReader(t, fx.db, tc.stored, tc.mtimes)
-			h := New(fx.store, fx.db, nil, nil, memReader, zerolog.Nop())
+			h := New(fx.events, fx.store, nil, nil, memReader, zerolog.Nop())
 
 			router := newRouter(h)
 			req := httptest.NewRequest(http.MethodGet, "/memory/"+tc.agent+"/"+tc.repo, nil)
@@ -827,7 +831,7 @@ func TestHandleMemoryReturns503WhenReaderUnconfigured(t *testing.T) {
 
 func TestHandleTraceStepsReturnsOrderedSteps(t *testing.T) {
 	t.Parallel()
-	obs := newTestStore(t)
+	obs := newTestEvents(t)
 	h := newHandlerOnStore(t, obs)
 
 	steps := []workflow.TraceStep{
@@ -861,7 +865,7 @@ func TestHandleTraceStepsReturnsOrderedSteps(t *testing.T) {
 
 func TestHandleTraceStepsEmptyArray(t *testing.T) {
 	t.Parallel()
-	obs := newTestStore(t)
+	obs := newTestEvents(t)
 	h := newHandlerOnStore(t, obs)
 
 	router := newRouter(h)
