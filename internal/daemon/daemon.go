@@ -43,8 +43,8 @@ import (
 	daemonconfig "github.com/eloylp/agents/internal/daemon/config"
 	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
 	daemonobserve "github.com/eloylp/agents/internal/daemon/observe"
-	daemonqueue "github.com/eloylp/agents/internal/daemon/queue"
 	daemonrepos "github.com/eloylp/agents/internal/daemon/repos"
+	daemonrunners "github.com/eloylp/agents/internal/daemon/runners"
 	"github.com/eloylp/agents/internal/fleet"
 	mcpserver "github.com/eloylp/agents/internal/mcp"
 	"github.com/eloylp/agents/internal/observe"
@@ -84,7 +84,7 @@ type Daemon struct {
 	repos    *daemonrepos.Handler
 	config   *daemonconfig.Handler
 	observe  *daemonobserve.Handler
-	queue    *daemonqueue.Handler
+	runners  *daemonrunners.Handler
 	webhook  *webhook.Handler
 	delivery *webhook.DeliveryStore
 	mcp      http.Handler
@@ -132,7 +132,7 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 
 	memReader := st.NewMemoryReader()
 	observeHandler := daemonobserve.New(obs, st, sched, engine, memReader, logger)
-	queueHandler := daemonqueue.New(st, channels, logger)
+	runnersHandler := daemonrunners.New(st, channels, obs, logger)
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
 	webhookHandler := webhook.NewHandler(deliveryStore, channels, st, cfg.Daemon.HTTP, logger)
@@ -157,7 +157,7 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 		repos:     reposHandler,
 		config:    configHandler,
 		observe:   observeHandler,
-		queue:     queueHandler,
+		runners:   runnersHandler,
 		webhook:   webhookHandler,
 		delivery:  deliveryStore,
 		uiFS:      ui.FS,
@@ -181,13 +181,13 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 		Store:        st,
 		DaemonConfig: cfg.Daemon,
 		StatusJSON:   d.StatusJSON,
-		Queue:        channels,
+		Channels:     channels,
 		Observe:      obs,
 		Engine:       engine,
 		Fleet:        fleetHandler,
 		Repos:        reposHandler,
 		Config:       configHandler,
-		QueueH:       queueHandler,
+		RunnersH:     runnersHandler,
 		Logger:       logger,
 	})
 
@@ -348,7 +348,7 @@ func (d *Daemon) replayPendingEvents(ctx context.Context) error {
 		}
 		blob, err := d.store.ReadQueuedEvent(id)
 		if err != nil {
-			if errors.Is(err, store.ErrEventNotFound) {
+			if errors.Is(err, store.ErrRunnerNotFound) {
 				continue
 			}
 			d.logger.Warn().Err(err).Int64("event_id", id).Msg("replay: read event failed")
@@ -437,7 +437,7 @@ func (d *Daemon) buildRouter() http.Handler {
 	d.repos.RegisterRoutes(router, withTimeout)
 	d.config.RegisterRoutes(router, withTimeout)
 	d.observe.RegisterRoutes(router, withTimeout)
-	d.queue.RegisterRoutes(router, withTimeout)
+	d.runners.RegisterRoutes(router, withTimeout)
 
 	if d.uiFS != nil {
 		if sub, err := fs.Sub(d.uiFS, "dist"); err == nil {

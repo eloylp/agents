@@ -224,7 +224,7 @@ func toolTriggerAgent(deps Deps) server.ToolHandlerFunc {
 				"target_agent": agent,
 			},
 		}
-		if _, err := deps.Queue.PushEvent(ctx, ev); err != nil {
+		if _, err := deps.Channels.PushEvent(ctx, ev); err != nil {
 			deps.Logger.Error().Err(err).Str("agent", agent).Str("repo", repoName).Msg("mcp: failed to enqueue on-demand agent run")
 			return mcpgo.NewToolResultErrorf("event queue full: %v", err), nil
 		}

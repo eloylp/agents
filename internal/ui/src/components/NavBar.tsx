@@ -11,7 +11,7 @@ const links = [
   { href: '/traces/', label: 'Traces' },
   { href: '/graph/', label: 'Graph' },
   { href: '/events/', label: 'Events' },
-  { href: '/queue/', label: 'Queue' },
+  { href: '/runners/', label: 'Runners' },
   { href: '/memory/', label: 'Memory' },
   { href: '/config/', label: 'Config' },
 ]

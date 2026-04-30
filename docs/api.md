@@ -32,15 +32,15 @@ The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 
 | `GET` | `/memory/stream` | Memory file change notifications (SSE) |
 | `GET` | `/config` | Effective parsed config (secrets redacted) |
 
-## Queue management
+## Runners management
 
-The daemon's event queue is durable: every `PushEvent` writes to the SQLite `event_queue` table before signalling workers. Rows whose `completed_at` is `NULL` are replayed on startup; completed rows are pruned after 7 days. These endpoints expose that table for inspection and operator action.
+The daemon's event queue is durable: every `PushEvent` writes to the SQLite `event_queue` table before signalling workers. Rows whose `completed_at` is `NULL` are replayed on startup; completed rows are pruned after 7 days. The `/runners` surface presents this table as a per-runner view: each event_queue row is JOINed with `observe.traces` so an event that fanned out to N agents shows up as N rows on the wire (one per trace span). Events still in flight (no spans yet) appear as a single row with `agent: null`.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/queue` | Paginated listing, newest first. Each row carries `id`, `kind`, `repo`, `number`, `status` (`enqueued` / `running` / `completed`), and the relevant timestamps. Query params: `status` (filter by state), `limit` (default 100), `offset` (default 0). |
-| `DELETE` | `/queue/{id}` | Remove one row. **Best-effort:** if a worker has already received the `QueuedEvent` from the in-memory channel buffer, it will still run; the row simply won't appear in subsequent listings. Returns `404` for unknown ids. |
-| `POST` | `/queue/{id}/retry` | Re-enqueue an event by copying its blob into a fresh `event_queue` row and pushing onto the channel. The original row stays as audit history. The response body is `{"new_id": <id>}`. Returns `409` when the source row is in `running` state, `404` when missing, `503` when the in-memory channel is full or closed. |
+| `GET` | `/runners` | Paginated listing, newest first. Each row carries event-level fields (`id`, `event_id`, `kind`, `repo`, `number`, `actor`, `target_agent`, `enqueued_at`, `started_at`, `completed_at`, `payload`) plus per-run fields when a trace exists (`agent`, `span_id`, `run_duration_ms`, `summary`). The `status` field is the unified lifecycle: `enqueued`/`running` (in-flight) or `success`/`error` (from the trace). Query params: `status` (filter on the event_queue lifecycle, accepts `enqueued`/`running`/`completed`), `limit` (default 100, applies to events not output rows), `offset`. Completed events with no traces (webhook with no matching binding) are skipped — listing them would be misleading. |
+| `DELETE` | `/runners/{id}` | Remove one event_queue row. **Best-effort:** if a worker has already received the `QueuedEvent` from the in-memory channel buffer, it will still run; the row simply won't appear in subsequent listings. Affects every fanned-out agent for this event since the action is event-level. Returns `404` for unknown ids. |
+| `POST` | `/runners/{id}/retry` | Re-enqueue an event by copying its blob into a fresh `event_queue` row and pushing onto the channel. Re-runs every fanned-out agent for the event (event-level retry). The original row stays as audit history. The response body is `{"new_id": <id>}`. Returns `409` when the source row is in `running` state, `404` when missing, `503` when the in-memory channel is full or closed. |
 
 ## Backend diagnostics
 

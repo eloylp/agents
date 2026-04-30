@@ -66,15 +66,15 @@ The same pattern works for Cursor, Cline, and any other MCP-compatible client; c
 | `get_dispatches` | Dispatch counters and drop reasons. |
 | `get_memory` | Agent memory for an agent/repo pair. |
 
-### Queue
+### Runners
 
-These tools mirror the `/queue` REST surface; see [api.md](api.md#queue-management) for the persistence + retry semantics.
+These tools mirror the `/runners` REST surface; see [api.md](api.md#runners-management) for the wire shape, JOIN-with-traces semantics, and retry behaviour.
 
 | Tool | Description |
 |---|---|
-| `list_queue_events` | List rows in the durable event queue with `id`, `kind`, `repo`, `number`, `status`, and timestamps. Optional `status` filter (`enqueued` / `running` / `completed`); `limit` (default 100); `offset`. |
-| `delete_queue_event` | Remove one row by id. Best-effort — if a worker has already dequeued the QueuedEvent from the channel buffer it will still run; the row simply won't appear in subsequent listings. |
-| `retry_queue_event` | Re-enqueue an event by copying its blob into a fresh row and pushing onto the channel. The original row stays as audit history. Errors when the source is in `running` state, when the channel is full, or when the queue has been closed. |
+| `list_runners` | One row per (event, agent) once traces have been recorded; one row per event with `agent: null` while in-flight. Carries event metadata (kind, repo, number, actor, target_agent, payload, timestamps) plus trace fields (agent, span_id, run_duration_ms, summary) when present. Optional `status` filter on the event_queue lifecycle (`enqueued`/`running`/`completed`); `limit` (default 100); `offset`. |
+| `delete_runner` | Remove an event_queue row by id. Best-effort — if a worker has already dequeued the QueuedEvent from the channel buffer it will still run. Event-level: affects every fanned-out agent for this event. |
+| `retry_runner` | Re-enqueue an event by copying its blob into a fresh row and pushing onto the channel. Re-runs every fanned-out agent (event-level retry). The original row stays as audit history. Errors when the source is in `running` state, when the channel is full, or when the queue has been closed. |
 
 ### Config
 

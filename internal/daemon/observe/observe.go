@@ -90,7 +90,10 @@ func (h *Handler) HandleDispatches(w http.ResponseWriter, _ *http.Request) {
 
 // ── /events ────────────────────────────────────────────────────────────────
 
-// eventJSON is the wire shape for one event in /events.
+// eventJSON is the wire shape for one event in /events. Agents is a
+// JOIN against the traces store: each event_id resolves to the set of
+// agent names that ran (or are running) for it. Empty for events that
+// have not yet fanned out, or webhooks that matched no binding.
 type eventJSON struct {
 	At      string         `json:"at"`
 	ID      string         `json:"id"`
@@ -99,6 +102,7 @@ type eventJSON struct {
 	Number  int            `json:"number"`
 	Actor   string         `json:"actor"`
 	Payload map[string]any `json:"payload,omitempty"`
+	Agents  []string       `json:"agents,omitempty"`
 }
 
 // HandleEvents serves GET /events — recent event history.
@@ -123,6 +127,7 @@ func (h *Handler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 			Number:  e.Number,
 			Actor:   e.Actor,
 			Payload: e.Payload,
+			Agents:  agentsForEvent(h.events, e.ID),
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -133,6 +138,34 @@ func (h *Handler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 // stream. Each new event is pushed as a "data: <json>\n\n" message.
 func (h *Handler) HandleEventsStream(w http.ResponseWriter, r *http.Request) {
 	serveSSE(w, r, h.events.EventsSSE)
+}
+
+// agentsForEvent resolves the set of agents that ran (or are running)
+// for a given event id by querying the traces store. Empty when no
+// span has been recorded yet — either the event hasn't been picked up,
+// or its run hasn't reached the recording site, or no binding matched.
+// De-duplicated; preserves trace insertion order.
+func agentsForEvent(s *obstore.Store, eventID string) []string {
+	if s == nil || eventID == "" {
+		return nil
+	}
+	spans := s.TracesByRootEventID(eventID)
+	if len(spans) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(spans))
+	out := make([]string, 0, len(spans))
+	for _, sp := range spans {
+		if sp.Agent == "" {
+			continue
+		}
+		if _, ok := seen[sp.Agent]; ok {
+			continue
+		}
+		seen[sp.Agent] = struct{}{}
+		out = append(out, sp.Agent)
+	}
+	return out
 }
 
 // ── /traces ────────────────────────────────────────────────────────────────

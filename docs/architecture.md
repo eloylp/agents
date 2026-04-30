@@ -8,7 +8,7 @@ The daemon is a single binary, a single runtime, with a few moving parts:
 
 - A **runtime engine** that turns events into agent invocations.
 - A **durable event queue** backed by SQLite — the DB is the source of truth, the in-memory channel is just a wake-up notification.
-- A handful of **domain handlers** (fleet, repos, config, observe, queue, webhook) that own the HTTP surface.
+- A handful of **domain handlers** (fleet, repos, config, observe, runners, webhook) that own the HTTP surface.
 - A **cron scheduler** that produces events on a schedule — it doesn't run agents itself.
 - An **MCP server** at `/mcp` that wraps the same handlers as fleet-management tools.
 - A **composing root**, `internal/daemon.New`, that assembles every component and exposes a single blocking `Run(ctx) error`.
@@ -41,7 +41,7 @@ internal/
 │   ├─ repos/                   /repos, /repos/{}/bindings
 │   ├─ config/                  /config snapshot, /export, /import
 │   ├─ observe/                 /events, /traces, /graph, /dispatches, /memory + SSE
-│   └─ queue/                   /queue listing + delete + retry (durable event_queue surface)
+│   └─ runners/                 /runners listing + delete + retry (durable event_queue surface; JOINs with traces)
 │
 ├─ webhook/                     /webhooks/github only — HMAC, delivery dedup, event parsing
 ├─ mcp/                         MCP server; one Deps struct of concrete pointers
@@ -89,7 +89,7 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
     reposH   := daemonrepos.New(st, cfg.Daemon.HTTP.MaxBodyBytes, logger)
     configH  := daemonconfig.New(st, cfg.Daemon, logger)
     observeH := daemonobserve.New(obs, st, sched, engine, st.NewMemoryReader(), logger)
-    queueH   := daemonqueue.New(st, channels, logger)
+    runnersH := daemonrunners.New(st, channels, obs, logger)
     webhookH := webhook.NewHandler(deliveryStore, channels, st, cfg.Daemon.HTTP, logger)
 
     // 4. processor over the queue
@@ -100,8 +100,8 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 
     // 5. MCP last — concrete pointers to the same instances above
     d.mcp = mcpserver.New(mcpserver.Deps{
-        Store: st, Queue: channels, Observe: obs, Engine: engine,
-        Fleet: fleetH, Repos: reposH, Config: configH, QueueH: queueH,
+        Store: st, Channels: channels, Observe: obs, Engine: engine,
+        Fleet: fleetH, Repos: reposH, Config: configH, RunnersH: runnersH,
         StatusJSON: d.StatusJSON, Logger: logger,
     })
     return d, nil
@@ -149,7 +149,7 @@ The DB is the source of truth; the channel is just a notification. On a clean sh
 
 A consumer-tier cleanup loop ticks hourly and deletes rows whose `completed_at` is older than 7 days. The table stays bounded regardless of throughput.
 
-`internal/daemon/queue` exposes the table for inspection and operator action through `GET /queue`, `DELETE /queue/{id}`, and `POST /queue/{id}/retry`. Retry copies the source row's blob into a fresh row and pushes onto the channel — the source row stays as audit history. The same operations are wired as MCP tools.
+`internal/daemon/runners` exposes the table as a per-runner view through `GET /runners`, `DELETE /runners/{id}`, and `POST /runners/{id}/retry`. Each event_queue row is JOINed with `observe.traces` so a completed event that fanned out to N agents shows up as N rows on the wire (one per trace span). In-flight events with no spans recorded yet appear as a single row with `agent: null` and `status: enqueued|running` — that's the "what's running right now" surface. Retry copies the source row's blob into a fresh row and pushes onto the channel — the source row stays as audit history; the same operations are wired as MCP tools.
 
 ## Structured concurrency — startup and shutdown
 

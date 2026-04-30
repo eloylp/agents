@@ -67,12 +67,12 @@ func (dc *DataChannels) PushEvent(ctx context.Context, ev Event) (int64, error) 
 	qe := QueuedEvent{ID: id, Event: ev}
 	select {
 	case <-ctx.Done():
-		_ = dc.store.DeleteQueuedEvent(id)
+		_ = dc.store.DeleteRunner(id)
 		return 0, ctx.Err()
 	case dc.eventQueue <- qe:
 		return id, nil
 	default:
-		_ = dc.store.DeleteQueuedEvent(id)
+		_ = dc.store.DeleteRunner(id)
 		return 0, ErrEventQueueFull
 	}
 }

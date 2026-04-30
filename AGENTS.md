@@ -44,7 +44,7 @@ internal/
   daemon/config/                # /config snapshot, /export, /import HTTP handlers and methods
   daemon/fleet/                 # agents/skills/backends CRUD + GET /agents fleet view + orphans (incl. /agents/orphans/status)
   daemon/repos/                 # repos + per-binding HTTP CRUD handlers and methods
-  daemon/queue/                 # /queue listing + delete + retry handlers (durable event_queue surface)
+  daemon/runners/               # /runners listing + delete + retry (event_queue × traces JOIN)
   webhook/                      # GitHub webhook receiver only: HMAC signature verification, delivery dedupe, /webhooks/github event parsing
   mcp/                          # MCP server exposing fleet-management tools at /mcp
   ui/                           # embedded Next.js web dashboard (static assets served at /ui/)
@@ -126,7 +126,7 @@ When making common classes of changes, update all of these at once:
 - **Backend discovery lifecycle.** Startup auto-discovery runs only when the backends table is empty. Manual refresh is explicit via `POST /backends/discover`; `GET /backends/status` is diagnostics-only.
 - **Orphan visibility.** `GET /agents/orphans/status` and `/status` (`orphaned_agents.count`) expose model/backend drift requiring user remediation.
 - **Agent memory** is stored in SQLite (in the `memory` table), keyed by `(agent, repo)`. It's the agent's job to return updated memory in its response; the daemon writes it back to the store unchanged. Load/persist is gated by `allow_memory` (default `true`) and applies uniformly across cron, webhook, dispatch, `POST /run`, and `trigger_agent`.
-- **The event queue is durable.** Every `PushEvent` persists the event to the SQLite `event_queue` table before signalling workers via the in-memory channel. Rows whose `completed_at` is still `NULL` at startup are replayed onto the channel — events buffered at shutdown, or runs interrupted mid-prompt, get a second chance instead of vanishing. Completed rows older than 7 days are pruned by an hourly cleanup loop. Inspect / delete / retry rows through the `/queue` REST surface, the matching MCP tools, or the UI's Queue page.
+- **The event queue is durable.** Every `PushEvent` persists the event to the SQLite `event_queue` table before signalling workers via the in-memory channel. Rows whose `completed_at` is still `NULL` at startup are replayed onto the channel — events buffered at shutdown, or runs interrupted mid-prompt, get a second chance instead of vanishing. Completed rows older than 7 days are pruned by an hourly cleanup loop. Inspect / delete / retry rows through the `/runners` REST surface, the matching MCP tools, or the UI's Runners page.
 - **Dispatch dedup is process-local and in-memory.** It's shared across cron-fired runs, event-fired runs, dispatched runs, and on-demand triggers (`POST /run` / `trigger_agent`) within one process. Restarting the daemon clears the dedup state.
 - **Avoid `--no-verify` on commits.** Pre-commit hooks exist for a reason. If a hook fails, fix the underlying issue.
 - **The `ports: "8080:8080"` in `docker-compose.yaml`** publishes the daemon port on the host. In production, consider restricting access via a reverse proxy (e.g. Traefik with basic auth) or binding to `127.0.0.1:8080:8080`.

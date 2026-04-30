@@ -33,7 +33,7 @@ Events flow through a durable, in-process queue:
 4. **Crash recovery.** At startup the daemon scans for rows whose `completed_at` is still `NULL` and pushes each one back onto the channel via `ReplayQueued`. Events buffered at shutdown, or runs interrupted mid-prompt, get a second chance instead of vanishing. Replay relies on agent idempotency — orchestrators (Docker, Kubernetes) `SIGKILL` after ~30 seconds, so an in-flight prompt may be killed mid-execution and re-run from scratch.
 5. **Retention.** A consumer-tier cleanup loop ticks hourly and deletes rows whose `completed_at` is older than 7 days. The table stays bounded regardless of throughput.
 
-The `/queue` REST surface, the matching MCP tools (`list_queue_events`, `delete_queue_event`, `retry_queue_event`), and the UI's Queue page all read and write through this same table.
+The `/runners` REST surface, the matching MCP tools (`list_runners`, `delete_runner`, `retry_runner`), and the UI's Runners page all read and write through this same table.
 
 ## Event rules
 

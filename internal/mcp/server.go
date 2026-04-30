@@ -35,7 +35,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	daemonconfig "github.com/eloylp/agents/internal/daemon/config"
 	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
-	daemonqueue "github.com/eloylp/agents/internal/daemon/queue"
+	daemonrunners "github.com/eloylp/agents/internal/daemon/runners"
 	daemonrepos "github.com/eloylp/agents/internal/daemon/repos"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/store"
@@ -60,13 +60,13 @@ type Deps struct {
 	Store        *store.Store           // data-access facade for tools that read fleet entities
 	DaemonConfig config.DaemonConfig    // static daemon-level config (HTTP, proxy, processor, log)
 	StatusJSON   func() ([]byte, error) // /status payload — same bytes the REST surface returns
-	Queue        *workflow.DataChannels // PushEvent for trigger_agent
+	Channels     *workflow.DataChannels // PushEvent for trigger_agent
 	Observe      *observe.Store         // observability tools (events, traces, graph)
 	Engine       *workflow.Engine       // DispatchStats() for get_dispatches
 	Fleet        *daemonfleet.Handler   // agent / skill / backend CRUD writes
 	Repos        *daemonrepos.Handler   // repo + binding CRUD writes
 	Config       *daemonconfig.Handler  // ConfigJSON / ExportYAML / ImportYAML
-	QueueH       *daemonqueue.Handler   // event_queue listing + delete + retry
+	RunnersH     *daemonrunners.Handler // /runners listing + delete + retry
 	Logger       zerolog.Logger
 }
 

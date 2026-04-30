@@ -12,7 +12,7 @@ import (
 )
 
 // registerTools wires the core tool set onto the MCP server. Handlers read
-// config from deps.Config and enqueue events via deps.Queue, matching the
+// config from deps.Config and enqueue events via deps.Channels, matching the
 // semantics of the equivalent REST endpoints.
 func registerTools(srv *server.MCPServer, deps Deps) {
 	srv.AddTool(
@@ -456,7 +456,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolDeleteRepo(deps),
 		)
 	}
-	registerQueueTools(srv, deps)
+	registerRunnersTools(srv, deps)
 	if deps.Repos != nil {
 		srv.AddTool(
 			mcpgo.NewTool("get_binding",

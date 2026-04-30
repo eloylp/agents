@@ -15,8 +15,8 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	daemonconfig "github.com/eloylp/agents/internal/daemon/config"
 	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
-	daemonqueue "github.com/eloylp/agents/internal/daemon/queue"
 	daemonrepos "github.com/eloylp/agents/internal/daemon/repos"
+	daemonrunners "github.com/eloylp/agents/internal/daemon/runners"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
@@ -91,7 +91,7 @@ func testDB(t *testing.T) *sql.DB {
 // test: a tempdir SQLite seeded by fixtureConfig, a real *store.Store,
 // real fleet/repos/config handlers, a real workflow.DataChannels and
 // Engine, and a real observe.Store. Tests can read through deps.Store
-// to verify persisted writes, drain deps.Queue.EventChan() to assert
+// to verify persisted writes, drain deps.Channels.EventChan() to assert
 // enqueued events, and call methods on deps.Observe directly to seed
 // observability records.
 //
@@ -124,7 +124,7 @@ func testFixtureWithConfig(t *testing.T, cfg *config.Config) Deps {
 	fleetH := daemonfleet.New(st, maxBody, sched, obs, zerolog.Nop())
 	reposH := daemonrepos.New(st, maxBody, zerolog.Nop())
 	configH := daemonconfig.New(st, cfg.Daemon, zerolog.Nop())
-	queueH := daemonqueue.New(st, channels, zerolog.Nop())
+	runnersH := daemonrunners.New(st, channels, obs, zerolog.Nop())
 	return Deps{
 		Store:        st,
 		DaemonConfig: cfg.Daemon,
@@ -134,14 +134,14 @@ func testFixtureWithConfig(t *testing.T, cfg *config.Config) Deps {
 			// a full *daemon.Daemon (which would create an import cycle).
 			return []byte(`{"status":"ok","uptime_seconds":0,"queues":{"events":{"buffered":0,"capacity":8}},"agents":[],"orphaned_agents":{"count":0}}`), nil
 		},
-		Queue:   channels,
-		Observe: obs,
-		Engine:  engine,
-		Fleet:   fleetH,
-		Repos:   reposH,
-		Config:  configH,
-		QueueH:  queueH,
-		Logger:  zerolog.Nop(),
+		Channels: channels,
+		Observe:  obs,
+		Engine:   engine,
+		Fleet:    fleetH,
+		Repos:    reposH,
+		Config:   configH,
+		RunnersH: runnersH,
+		Logger:   zerolog.Nop(),
 	}
 }
 
@@ -513,7 +513,7 @@ func TestToolTriggerAgentSuccess(t *testing.T) {
 	if got["event_id"] == "" {
 		t.Fatal("event_id should be populated")
 	}
-	events := drainQueue(t, deps.Queue, 1)
+	events := drainQueue(t, deps.Channels, 1)
 	if len(events) != 1 {
 		t.Fatalf("expected 1 queued event, got %d", len(events))
 	}
@@ -540,7 +540,7 @@ func TestToolTriggerAgentRejectsUnknownRepo(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected IsError=true for unknown repo, got %+v", res)
 	}
-	if got := drainQueue(t, deps.Queue, 1); len(got) != 0 {
+	if got := drainQueue(t, deps.Channels, 1); len(got) != 0 {
 		t.Fatalf("queue should not receive events for invalid repos, got %+v", got)
 	}
 }

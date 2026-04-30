@@ -105,23 +105,23 @@ func TestReadQueuedEventMissingReturnsErrEventNotFound(t *testing.T) {
 	db := openTestDB(t)
 	st := store.New(db)
 
-	if _, err := st.ReadQueuedEvent(99999); !errors.Is(err, store.ErrEventNotFound) {
+	if _, err := st.ReadQueuedEvent(99999); !errors.Is(err, store.ErrRunnerNotFound) {
 		t.Fatalf("err = %v, want ErrEventNotFound", err)
 	}
 }
 
-// TestDeleteQueuedEventRemovesRow verifies the cleanup path PushEvent
+// TestDeleteRunnerRemovesRow verifies the cleanup path PushEvent
 // uses when the in-memory channel rejects the queued event.
-func TestDeleteQueuedEventRemovesRow(t *testing.T) {
+func TestDeleteRunnerRemovesRow(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 	st := store.New(db)
 
 	id, _ := st.EnqueueEvent(`{"kind":"x"}`)
-	if err := st.DeleteQueuedEvent(id); err != nil {
+	if err := st.DeleteRunner(id); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, err := st.ReadQueuedEvent(id); !errors.Is(err, store.ErrEventNotFound) {
+	if _, err := st.ReadQueuedEvent(id); !errors.Is(err, store.ErrRunnerNotFound) {
 		t.Fatalf("read after delete: err = %v, want ErrEventNotFound", err)
 	}
 }
@@ -162,7 +162,7 @@ func TestDeleteCompletedEventsBeforePrunesOnlyCompletedRows(t *testing.T) {
 	}
 
 	// idOldDone gone, idRecentDone and idPending remain.
-	if _, err := st.ReadQueuedEvent(idOldDone); !errors.Is(err, store.ErrEventNotFound) {
+	if _, err := st.ReadQueuedEvent(idOldDone); !errors.Is(err, store.ErrRunnerNotFound) {
 		t.Fatalf("old still present: err = %v", err)
 	}
 	if _, err := st.ReadQueuedEvent(idRecentDone); err != nil {
@@ -173,9 +173,9 @@ func TestDeleteCompletedEventsBeforePrunesOnlyCompletedRows(t *testing.T) {
 	}
 }
 
-// TestListQueueEventsReturnsParsedRows seeds three rows in distinct
+// TestListRunnersReturnsParsedRows seeds three rows in distinct
 // states and asserts the listing decodes status + blob fields.
-func TestListQueueEventsReturnsParsedRows(t *testing.T) {
+func TestListRunnersReturnsParsedRows(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 	st := store.New(db)
@@ -190,7 +190,7 @@ func TestListQueueEventsReturnsParsedRows(t *testing.T) {
 		t.Fatalf("mark done: %v", err)
 	}
 
-	all, err := st.ListQueueEvents("", 0, 0)
+	all, err := st.ListRunners("", 0, 0)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -203,10 +203,10 @@ func TestListQueueEventsReturnsParsedRows(t *testing.T) {
 			all[0].ID, all[1].ID, all[2].ID, idDone, idRun, idEnq)
 	}
 
-	wantStatus := map[int64]store.QueueEventStatus{
-		idEnq:  store.QueueEventEnqueued,
-		idRun:  store.QueueEventRunning,
-		idDone: store.QueueEventCompleted,
+	wantStatus := map[int64]store.RunnerStatus{
+		idEnq:  store.RunnerEnqueued,
+		idRun:  store.RunnerRunning,
+		idDone: store.RunnerCompleted,
 	}
 	for _, r := range all {
 		if r.Status != wantStatus[r.ID] {
@@ -222,8 +222,8 @@ func TestListQueueEventsReturnsParsedRows(t *testing.T) {
 	}
 }
 
-// TestListQueueEventsFilterByStatus exercises the WHERE branches.
-func TestListQueueEventsFilterByStatus(t *testing.T) {
+// TestListRunnersFilterByStatus exercises the WHERE branches.
+func TestListRunnersFilterByStatus(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 	st := store.New(db)
@@ -235,15 +235,15 @@ func TestListQueueEventsFilterByStatus(t *testing.T) {
 	_ = st.MarkEventCompleted(idDone)
 
 	cases := []struct {
-		status store.QueueEventStatus
+		status store.RunnerStatus
 		wantID int64
 	}{
-		{store.QueueEventEnqueued, idEnq},
-		{store.QueueEventRunning, idRun},
-		{store.QueueEventCompleted, idDone},
+		{store.RunnerEnqueued, idEnq},
+		{store.RunnerRunning, idRun},
+		{store.RunnerCompleted, idDone},
 	}
 	for _, tc := range cases {
-		out, err := st.ListQueueEvents(tc.status, 0, 0)
+		out, err := st.ListRunners(tc.status, 0, 0)
 		if err != nil {
 			t.Fatalf("list %s: %v", tc.status, err)
 		}
@@ -253,9 +253,9 @@ func TestListQueueEventsFilterByStatus(t *testing.T) {
 	}
 }
 
-// TestCountQueueEventsMatchesList verifies CountQueueEvents agrees with
+// TestCountRunnersMatchesList verifies CountRunners agrees with
 // the listing under each filter.
-func TestCountQueueEventsMatchesList(t *testing.T) {
+func TestCountRunnersMatchesList(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 	st := store.New(db)
@@ -266,14 +266,14 @@ func TestCountQueueEventsMatchesList(t *testing.T) {
 	idDone, _ := st.EnqueueEvent(`{}`)
 	_ = st.MarkEventCompleted(idDone)
 
-	got, err := st.CountQueueEvents("")
+	got, err := st.CountRunners("")
 	if err != nil {
 		t.Fatalf("count all: %v", err)
 	}
 	if got != 4 {
 		t.Errorf("count all = %d, want 4", got)
 	}
-	gotDone, err := st.CountQueueEvents(store.QueueEventCompleted)
+	gotDone, err := st.CountRunners(store.RunnerCompleted)
 	if err != nil {
 		t.Fatalf("count completed: %v", err)
 	}
@@ -282,26 +282,26 @@ func TestCountQueueEventsMatchesList(t *testing.T) {
 	}
 }
 
-// TestGetQueueEventReturnsRecord covers the by-id lookup the retry
+// TestGetRunnerReturnsRecord covers the by-id lookup the retry
 // handler uses to validate a row exists before fetching its blob.
-func TestGetQueueEventReturnsRecord(t *testing.T) {
+func TestGetRunnerReturnsRecord(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 	st := store.New(db)
 
 	id, _ := st.EnqueueEvent(`{"Kind":"issues.labeled","Number":7,"Repo":{"FullName":"owner/repo"}}`)
-	rec, err := st.GetQueueEvent(id)
+	rec, err := st.GetRunner(id)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	if rec.ID != id || rec.Kind != "issues.labeled" || rec.Number != 7 || rec.Repo != "owner/repo" {
 		t.Fatalf("rec = %+v", rec)
 	}
-	if rec.Status != store.QueueEventEnqueued {
+	if rec.Status != store.RunnerEnqueued {
 		t.Errorf("status = %q, want enqueued", rec.Status)
 	}
 
-	if _, err := st.GetQueueEvent(99999); !errors.Is(err, store.ErrEventNotFound) {
+	if _, err := st.GetRunner(99999); !errors.Is(err, store.ErrRunnerNotFound) {
 		t.Fatalf("err = %v, want ErrEventNotFound", err)
 	}
 }

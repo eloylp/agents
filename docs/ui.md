@@ -8,9 +8,9 @@ The daemon ships an embedded web dashboard at `/ui/`. It is the primary interfac
 
 ### Events
 
-Live webhook firehose with SSE streaming. Watch GitHub events arrive in real time as the daemon processes them.
+Live event firehose with SSE streaming. Every kind of event flows through here: webhooks (`issues.*`, `pull_request.*`, `push`, ...), cron ticks (`cron`), on-demand triggers (`agents.run`), and inter-agent dispatches (`agent.dispatch`). Each row carries time, kind, repo, number, actor, an **agents** column with badges for every agent that ran (or is running) for that event — each badge links to the Fleet page — and a **View runners** link that opens the Runners page filtered to the event id with the matching rows pulsing on arrival.
 
-<!-- TODO: short video (~10s) — the events page receiving a live event from a manually-fired webhook, showing the row appearing at the top with the kind, repo, and timestamp populated -->
+<!-- TODO: short video (~10s) — the events page receiving a live event, showing the agents column populating as the runners complete, then clicking "View runners" to navigate to the filtered runners view -->
 
 ### Traces
 
@@ -48,16 +48,26 @@ Repository bindings. Wire agents to repos with labels, events, or cron triggers.
 
 <!-- TODO: screenshot — a repo with two bindings, one event-triggered and one cron-triggered, so the reader sees the trigger types side by side -->
 
-### Queue
+### Runners
 
-Operator view of the durable event queue. Each row in `event_queue` is shown with its `id`, derived `status` (`enqueued` / `running` / `completed`), kind, repo, number, and the relevant timestamps. The header bar offers a status filter; the page polls every two seconds for fresh state.
+Operator view of the work that's running and recently ran. Each row is one runner — a unit of work the daemon picked up. Mental model:
 
-Two per-row actions:
+1. **Event arrives** → visible on the Events page (firehose).
+2. **Runners working** → visible here (this page). One row per (event, agent) once traces have been recorded; one row per event with no agent badge while in-flight.
+3. **Execution detail** → visible on the Traces page (tool-loop transcript).
 
-- **Retry** copies the original event blob into a fresh `event_queue` row with a new `enqueued_at` and pushes it onto the channel — the source row stays as audit history. Disabled while the source is in `running` state, since retrying a row a worker is already processing would race.
-- **Delete** removes the row from the table. Best-effort: a worker that has already dequeued the `QueuedEvent` from the channel buffer will still run it; the row simply won't appear in the listing afterwards. Confirm dialog warns about this.
+The page combines two sources: the durable `event_queue` table for in-flight lifecycle (so freshly queued and currently fanning-out events stay visible), plus per-agent trace spans for completed runs. Once the event_queue row is pruned (>7 days), the trace alone is the source of truth.
 
-<!-- TODO: screenshot — queue page with a mix of statuses (one running, two completed, one enqueued) and the action buttons visible -->
+Each row carries: event id, queue lifecycle status (`enqueued` / `running`) or trace status (`success` / `error`), agent badge (links to the Fleet page), repo, kind, started at, duration. Click any row to expand: actor, payload, and a **View trace detail** link to `/ui/traces/<event_id>`.
+
+Two per-row actions, both **event-level** (a single event_queue row drives multiple displayed rows after fan-out, so the actions affect every fanned-out agent for that event — the confirm dialog says so explicitly):
+
+- **Retry** copies the original event blob into a fresh `event_queue` row with a new `enqueued_at` and pushes it onto the channel — the source row stays as audit history. Disabled while the source is in `enqueued` or `running` state.
+- **Delete** removes the event_queue row from the table. Best-effort: a worker that has already dequeued the `QueuedEvent` from the channel buffer will still run it; the row simply won't appear in subsequent listings.
+
+Arriving with `?event=<id>` (e.g. via the **View runners** link on the Events page) filters to the runners for that event and pulses the matching rows for ~3s so the operator can spot them at a glance.
+
+<!-- TODO: screenshot — runners page with a fanned-out event (multiple rows, same event id, different agents) and an in-flight row visible at the top -->
 
 ### Memory
 
@@ -73,4 +83,4 @@ Effective parsed config (secrets redacted). Includes YAML import/export.
 
 ## Authentication
 
-The dashboard is unauthenticated at the daemon level. Place the daemon behind a reverse proxy that gates `/ui/`, `/queue`, and the rest of the authenticated surface (everything except `/webhooks/github`, `/status`, `/run`, `/v1/*`). See [docker.md](docker.md) for one concrete pattern using Traefik basic-auth.
+The dashboard is unauthenticated at the daemon level. Place the daemon behind a reverse proxy that gates `/ui/`, `/runners`, and the rest of the authenticated surface (everything except `/webhooks/github`, `/status`, `/run`, `/v1/*`). See [docker.md](docker.md) for one concrete pattern using Traefik basic-auth.
