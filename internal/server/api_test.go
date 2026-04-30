@@ -715,12 +715,10 @@ func newTestObserve(t *testing.T) *observe.Store {
 	return observe.NewStore(db)
 }
 
-// wireObserveForTest mounts the observability routes on srv. The observe
-// handler construction lives outside this package now (cmd/agents wires it
-// via WithObserveRegister); tests do the same so the routes are reachable
-// when integration tests exercise the full router.
+// wireObserveForTest mounts the observability routes on srv via
+// WithObserveRegister, mirroring how cmd/agents wires observability
+// without importing internal/server/observe from the central server package.
 func wireObserveForTest(srv *server.Server, obs *observe.Store) {
-	srv.WithObserve(obs)
 	srv.WithObserveRegister(func(r *mux.Router, withTimeout func(http.Handler) http.Handler) {
 		obh := serverobserve.New(obs, srv, nil, nil, nil, nil)
 		obh.RegisterRoutes(r, withTimeout)
