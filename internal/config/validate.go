@@ -176,19 +176,19 @@ func (c *Config) validateAgents() error {
 		}
 	}
 	// Validate can_dispatch references after all agents are seen.
-	return c.validateDispatchWiring()
+	return validateDispatchWiring(c.Agents)
 }
 
 // validateDispatchWiring checks cross-agent dispatch references:
-//   - can_dispatch entries must reference real agents in this config
+//   - can_dispatch entries must reference real agents
 //   - can_dispatch must not include the agent itself
 //   - agents referenced in any can_dispatch list must have a description
-func (c *Config) validateDispatchWiring() error {
-	agentByName := make(map[string]fleet.Agent, len(c.Agents))
-	for _, a := range c.Agents {
+func validateDispatchWiring(agents []fleet.Agent) error {
+	agentByName := make(map[string]fleet.Agent, len(agents))
+	for _, a := range agents {
 		agentByName[a.Name] = a
 	}
-	for _, a := range c.Agents {
+	for _, a := range agents {
 		for _, t := range a.CanDispatch {
 			target, ok := agentByName[t]
 			if !ok {

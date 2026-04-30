@@ -136,8 +136,7 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 			return fmt.Errorf("config: agent %q: prompt is empty after resolution", a.Name)
 		}
 	}
-	// Dispatch wiring reuses the Config method which only reads c.Agents.
-	if err := (&Config{Agents: agents}).validateDispatchWiring(); err != nil {
+	if err := validateDispatchWiring(agents); err != nil {
 		return err
 	}
 
