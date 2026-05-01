@@ -27,7 +27,7 @@ docker compose down
 The compose file shipped in the repo expects:
 
 - `config.yaml` in the project root (mounted read-only at `/etc/agents/config.yaml` for `--import` seeding).
-- `.env` in the project root, holding at least `GITHUB_WEBHOOK_SECRET` (and optionally `LOG_SALT` and `GITHUB_PAT_TOKEN`).
+- `.env` in the project root, holding at least `GITHUB_WEBHOOK_SECRET` (and optionally `GITHUB_PAT_TOKEN`).
 
 After the DB is seeded, `config.yaml` is no longer read at boot. The fleet lives in the SQLite volume and is managed through the `/ui/` dashboard or the CRUD API.
 
@@ -66,7 +66,6 @@ volumes:
 |---|---|---|
 | `HOME` | compose `environment:` | Must be `/home/agents` so Claude Code / Codex find their config dirs at the mounted paths. |
 | `GITHUB_WEBHOOK_SECRET` | `.env` via `env_file` | HMAC shared secret used to verify `POST /webhooks/github`. Matches `daemon.http.webhook_secret_env`. |
-| `LOG_SALT` (optional) | `.env` | Salt used to redact logged prompts. Matches `daemon.ai_backends.<name>.redaction_salt_env`. |
 | `GITHUB_PAT_TOKEN` (optional) | `.env` | Surfaced in the container for tools that read it; the daemon itself does not call GitHub directly. |
 
 ### Volume mounts
@@ -78,8 +77,6 @@ volumes:
 | `~/.claude` | `/home/agents/.claude` | Claude Code session data and local auth. |
 | `~/.claude.json` | `/home/agents/.claude.json` | Claude Code main config. **MCP server entries with auth headers live here**, not in `~/.claude/settings.json`. |
 | `~/.codex` | `/home/agents/.codex` | Codex configuration. |
-
-If your `config.yaml` uses `prompt_file:` paths that point outside the project root, mount the containing directory yourself. The shipped example config is inline-only, so no extra prompt mount is needed.
 
 ### Ports
 
@@ -124,7 +121,6 @@ See the companion install guides:
 ```bash
 cat > .env <<'EOF'
 GITHUB_WEBHOOK_SECRET=<long-random-string>
-LOG_SALT=<optional-salt>
 GITHUB_PAT_TOKEN=<optional-pat>
 EOF
 chmod 600 .env
@@ -140,7 +136,7 @@ All endpoints are unauthenticated at the daemon level. **Access control is the r
 
 | Router | Paths | Auth | Purpose |
 |---|---|---|---|
-| **UI / API** (authenticated) | everything except the public paths below | basic auth, OAuth2 proxy, or mTLS | `/ui/`, `/agents`, `/skills`, `/repos`, `/traces`, `/events`, `/graph`, `/memory`, `/config`, `/export`, `/import`, `/backends` |
+| **UI / API** (authenticated) | everything except the public paths below | basic auth, OAuth2 proxy, or mTLS | `/ui/`, `/agents`, `/skills`, `/repos`, `/traces`, `/events`, `/graph`, `/memory`, `/runners`, `/config`, `/export`, `/import`, `/backends` |
 | **Public** (no auth) | `/status`, `/webhooks/github`, `/run`, `/v1/*` | none | GitHub can't send a basic-auth header on webhooks; `/status` must stay reachable for liveness probes; `/run` and `/v1/*` (proxy) are meant to be called by trusted external systems that authenticate with their own mechanism. |
 
 `/webhooks/github` is safe to expose publicly because every request is HMAC-verified against `GITHUB_WEBHOOK_SECRET` before it is accepted. `/run` does not currently authenticate callers. If you enable it, restrict it at the proxy with an allowlist or a shared secret header.
@@ -261,6 +257,24 @@ curl -X POST http://localhost:8080/run \
 ```
 
 Returns `202 Accepted` with an `event_id`; the agent runs asynchronously. Watch its trace from `/ui/` → Traces, or via `GET /traces/stream`.
+
+### Inspect or replay the event queue
+
+After a crash, an unexpected SIGKILL, or a stuck run, look at the durable event queue. Rows whose `completed_at` is still `NULL` were either buffered at shutdown or interrupted mid-prompt; the daemon replays them automatically on the next start.
+
+```bash
+# All rows, newest first
+curl -s http://localhost:8080/runners | jq
+
+# Only rows still in flight or never picked up
+curl -s 'http://localhost:8080/runners?status=running' | jq
+curl -s 'http://localhost:8080/runners?status=enqueued' | jq
+
+# Re-run a completed event manually (returns the new row id)
+curl -X POST http://localhost:8080/runners/<id>/retry
+```
+
+The same operations are available from the `/ui/` Runners page and the MCP tools `list_runners` / `delete_runner` / `retry_runner`. See [api.md](api.md#runners-management) for retry semantics and the running-state guard.
 
 ### Export and import the fleet
 

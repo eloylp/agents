@@ -16,13 +16,14 @@ internal/
   observe/                  # Observability store: events, traces, dispatch graph, SSE hubs
   scheduler/                # Cron scheduler + agent memory (SQLite-backed)
   backends/                 # Backend discovery: CLI probing, GitHub MCP health checks, orphan detection
-  store/                    # SQLite-backed config store: Open, Import, Load, CRUD
-  workflow/                 # Event routing engine, single event queue, processor, dispatcher
-  server/                   # Central HTTP server: lifecycle, router, /status, /run, proxy + UI + MCP mounts; cross-cutting types (StatusProvider, EventQueue, WriteCoordinator, ...)
-  server/observe/           # Observability HTTP handlers (events, traces, graph, dispatches, memory, SSE)
-  server/config/            # /config snapshot, /export, /import HTTP handlers and methods
-  server/fleet/             # Agents/skills/backends CRUD + GET /agents fleet view + orphans cache (incl. /agents/orphans/status)
-  server/repos/             # Repos + per-binding HTTP CRUD handlers and methods
+  store/                    # SQLite-backed config + event_queue store: Open, Import, Load, CRUD; *store.Store facade hides the *sql.DB
+  workflow/                 # Event routing engine, durable event queue (persist-on-push + replay), processor, dispatcher
+  daemon/                   # Daemon as a single composed unit: lifecycle, router, /status, /run, proxy + UI + MCP mounts
+  daemon/observe/           # Observability HTTP handlers (events, traces, graph, dispatches, memory, SSE)
+  daemon/config/            # /config snapshot, /export, /import HTTP handlers and methods
+  daemon/fleet/             # Agents/skills/backends CRUD + GET /agents fleet view + orphans (incl. /agents/orphans/status)
+  daemon/repos/             # Repos + per-binding HTTP CRUD handlers and methods
+  daemon/runners/           # /runners listing + delete + retry (event_queue × traces JOIN; in-flight + completed runs)
   webhook/                  # GitHub webhook receiver only: HMAC verification, delivery dedupe, /webhooks/github event parsing
   mcp/                      # MCP server exposing fleet-management tools at /mcp
   ui/                       # Embedded Next.js web dashboard (served at /ui/)
@@ -72,11 +73,13 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code and Code
 ## Environment Variables
 
 - `GITHUB_WEBHOOK_SECRET` — HMAC shared secret (`daemon.http.webhook_secret_env`)
-- `LOG_SALT` — optional prompt-log redaction salt (`daemon.ai_backends.<name>.redaction_salt_env`)
 
 ## Architecture Notes
 
 - Event-driven for label-based workflows; cron scheduler for autonomous agents. Both paths resolve to the same agent definitions.
+- **Durable event queue.** Every `PushEvent` writes the event to the SQLite `event_queue` table before signalling workers via the in-memory channel — the DB is the source of truth, the channel is just a wake-up notification. At startup the daemon replays rows whose `completed_at` is still `NULL` so events buffered at shutdown (or runs interrupted mid-prompt) get a second chance instead of vanishing. An hourly cleanup loop prunes completed rows older than 7 days. `/runners` exposes the table — JOINed with traces — for inspection, deletion, and retry.
+- **Prompts and tokens on the trace.** Every completed run gzips its composed prompt onto the `traces` row and stores the AI CLI's reported token usage (input / output / cache_read / cache_write — Anthropic shape; OpenAI/Codex emits only input/output). Surfaced on `/runners`, `/traces`, and the UI's expanded panels. The prompt body is fetched lazily via `GET /traces/{span_id}/prompt` to keep listings cheap. Logs no longer carry a prompt hash — the trace span IS the audit record. Persistence is gated by your reverse proxy's auth.
+- **Structured concurrency.** Every long-lived goroutine implements `Run(ctx) error`. The daemon arranges them in two errgroup tiers with separate contexts: producers (HTTP listener, cron scheduler) live on a context derived from the parent — they stop emitting webhooks and cron events as soon as the parent fires; consumers (worker pool, delivery dedup eviction, dispatch dedup eviction, queue cleanup, the one-shot replay step) live on a separate background context that outlives the producer tier so the queue can drain after producers stop. Phase boundaries are logged.
 - HTTP endpoints:
   - `GET /status` — JSON with uptime, event queue depth, agent schedules, dispatch counters, and orphaned-agent summary.
   - `POST /webhooks/github` — HMAC-verified webhook receiver.
@@ -86,9 +89,14 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code and Code
   - `GET /agents` — fleet snapshot with per-agent status, skills, dispatch wiring, bindings.
   - `GET /agents/orphans/status` — DB-only orphan report (agents pinning models unavailable in backend model catalogs).
   - `GET /events[/stream]` — recent events + SSE firehose.
+  - `GET /runners` — paginated runner-row listing. Each event_queue row is JOINed with traces: completed events with N agents fan out to N rows on the wire, in-flight events appear as 1 row with `agent: null`. Carries event metadata + per-run trace fields. `?status=enqueued|running|completed` filters on event_queue lifecycle; `?limit` / `?offset` paginate.
+  - `DELETE /runners/{id}` — best-effort row removal (event-level). A worker that has already received the QueuedEvent from the in-memory channel may still run it; the row simply won't appear in subsequent listings.
+  - `POST /runners/{id}/retry` — re-enqueue an event by copying its blob into a fresh event_queue row and pushing onto the channel. Re-runs every fanned-out agent (event-level retry). The original row stays as audit history. Returns 409 when the source is in `running` state.
   - `GET /traces[/stream]` — recent agent run traces with timing, summary, status + SSE.
   - `GET /traces/{root_event_id}` — all spans for a single root event.
   - `GET /traces/{span_id}/steps` — tool-loop transcript (ordered tool calls + durations) for a completed agent span.
+  - `GET /traces/{span_id}/prompt` — composed prompt the daemon sent to the AI CLI for this run (text/plain). Stored gzipped on the trace row.
+  - `GET /traces/{span_id}/stream` — SSE stream of the AI CLI's stdout JSONL line-by-line for in-flight (or recently-finished) spans. Replays per-span ring buffer history first, then live-tails. Emits `event: end` on run completion. In-memory only.
   - `GET /graph` — agent interaction graph (dispatch edges + counts).
   - `GET /dispatches` — dispatch dedup store snapshot + counters.
   - `GET /memory/{agent}/{repo}` — raw agent memory markdown.
@@ -98,7 +106,7 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code and Code
   - CRUD endpoints (always mounted): `GET|POST /skills`, `GET|POST /backends`, `GET|POST /repos`, `POST /agents`, plus item routes (`GET|PATCH|DELETE /agents/{name}`, `GET|PATCH|DELETE /skills/{name}`, `GET|PATCH|DELETE /backends/{name}`, `GET|PATCH|DELETE /repos/{owner}/{repo}`). PATCH is partial-update semantics — only fields present in the JSON body are applied, the rest are preserved; POST remains full-replace. Atomic per-binding routes: `POST /repos/{owner}/{repo}/bindings`, `GET|PATCH|DELETE /repos/{owner}/{repo}/bindings/{id}`. Exception: binding `PATCH` is a full-replace — all fields (agent, labels, events, cron, enabled) must be supplied.
   - Backend diagnostics endpoints: `GET /backends/status`, `POST /backends/discover`, `POST /backends/local`.
   - `GET /export`, `POST /import` — export/import fleet config as YAML.
-  - `POST /mcp` — MCP (Model Context Protocol) Streamable HTTP endpoint. Registered MCP clients (Claude Code, Cursor, Cline) discover fleet-management tools automatically. Currently registered tools: `list_agents`, `get_agent`, `list_skills`, `get_skill`, `list_backends`, `get_backend`, `list_repos`, `get_repo`, `get_status`, `trigger_agent`, `list_events`, `list_traces`, `get_trace`, `get_trace_steps`, `get_graph`, `get_dispatches`, `get_memory`, `get_config`, `export_config`, `import_config`, `create_agent`, `update_agent`, `delete_agent`, `create_skill`, `update_skill`, `delete_skill`, `create_backend`, `update_backend`, `delete_backend`, `create_repo`, `update_repo`, `delete_repo`, `create_binding`, `get_binding`, `update_binding`, `delete_binding`. `update_agent`, `update_skill`, `update_backend`, and `update_repo` follow partial-update semantics — only supplied fields are changed, bindings are preserved with their current IDs. Exception: `update_binding` is a full-replace (all binding fields required), matching the binding `PATCH` route. The MCP surface now covers the full fleet inventory declared in #227.
+  - `POST /mcp` — MCP (Model Context Protocol) Streamable HTTP endpoint. Registered MCP clients (Claude Code, Cursor, Cline) discover fleet-management tools automatically. Currently registered tools: `list_agents`, `get_agent`, `list_skills`, `get_skill`, `list_backends`, `get_backend`, `list_repos`, `get_repo`, `get_status`, `trigger_agent`, `list_events`, `list_traces`, `get_trace`, `get_trace_steps`, `get_trace_prompt`, `get_graph`, `get_dispatches`, `get_memory`, `get_config`, `export_config`, `import_config`, `create_agent`, `update_agent`, `delete_agent`, `create_skill`, `update_skill`, `delete_skill`, `create_backend`, `update_backend`, `delete_backend`, `create_repo`, `update_repo`, `delete_repo`, `create_binding`, `get_binding`, `update_binding`, `delete_binding`, `list_runners`, `delete_runner`, `retry_runner`. `update_agent`, `update_skill`, `update_backend`, and `update_repo` follow partial-update semantics — only supplied fields are changed, bindings are preserved with their current IDs. Exception: `update_binding` is a full-replace (all binding fields required), matching the binding `PATCH` route. Queue tools mirror the `/runners` REST surface (list / delete / retry). The MCP surface now covers the full fleet inventory declared in #227.
 - Supported webhook events: `issues.*` (labeled, opened, edited, reopened, closed), `pull_request.*` (labeled, opened, synchronize, ready_for_review, closed), `issue_comment.created`, `pull_request_review.submitted`, `pull_request_review_comment.created`, `push` (branches only). Label-triggered routing uses `payload.label.name`. Non-label `events:` subscriptions match the event kind exactly. Draft PRs skip `pull_request.labeled`.
 - Internal event kinds (not from webhooks): `agents.run` (on-demand trigger from `POST /run` or MCP `trigger_agent`), `agent.dispatch` (inter-agent dispatch), `cron` (cron-scheduler tick).
 - Duplicate webhook suppression via `X-GitHub-Delivery` TTL cache.

@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/rs/zerolog"
 )
@@ -250,7 +249,7 @@ func TestResponseDispatchOmittedWhenEmpty(t *testing.T) {
 func TestCommandRunnerEmptyStdoutIsError(t *testing.T) {
 	t.Parallel()
 	// "true" exits 0 with no stdout — the canonical empty-output case.
-	r := NewCommandRunner("test", "command", "true", nil, 10, 4000, "", zerolog.Nop())
+	r := NewCommandRunner("test", "command", "true", nil, 10, 4000, zerolog.Nop())
 	_, err := r.Run(context.Background(), Request{Workflow: "wf", Repo: "owner/repo"})
 	if err == nil {
 		t.Fatal("expected error for empty stdout, got nil")
@@ -300,6 +299,36 @@ func TestExtractStructuredOutputFallbackHandlesStreamJSON(t *testing.T) {
 	}
 	if resp.Summary != "all done" {
 		t.Errorf("summary = %q, want %q", resp.Summary, "all done")
+	}
+}
+
+func TestExtractUsageAnthropicShape(t *testing.T) {
+	t.Parallel()
+	stdout := []byte(`{"type":"result","structured_output":{"summary":"x"},"usage":{"input_tokens":1234,"output_tokens":567,"cache_creation_input_tokens":100,"cache_read_input_tokens":2000}}`)
+	got := extractUsage(stdout)
+	want := Usage{InputTokens: 1234, OutputTokens: 567, CacheReadTokens: 2000, CacheWriteTokens: 100}
+	if got != want {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestExtractUsageOpenAIShape(t *testing.T) {
+	t.Parallel()
+	stdout := []byte(`{"type":"result","structured_output":{"summary":"x"},"usage":{"prompt_tokens":800,"completion_tokens":120,"total_tokens":920}}`)
+	got := extractUsage(stdout)
+	want := Usage{InputTokens: 800, OutputTokens: 120}
+	if got != want {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestExtractUsageMissingReturnsZero(t *testing.T) {
+	t.Parallel()
+	if got := extractUsage([]byte(`{"type":"result","structured_output":{"summary":"x"}}`)); got != (Usage{}) {
+		t.Fatalf("expected zero Usage, got %+v", got)
+	}
+	if got := extractUsage([]byte(`not json at all`)); got != (Usage{}) {
+		t.Fatalf("expected zero Usage on non-JSON, got %+v", got)
 	}
 }
 
@@ -355,7 +384,7 @@ func TestBuildDeliveryClaudeUsesAppendSystemPrompt(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			r := NewCommandRunner(tc.backendName, "command", "true", nil, 10, 0, "", zerolog.Nop())
+			r := NewCommandRunner(tc.backendName, "command", "true", nil, 10, 0, zerolog.Nop())
 			args, stdin := r.buildDelivery(Request{System: tc.system, User: tc.user})
 
 			hasFlag := slices.Contains(args, "--append-system-prompt")
@@ -475,7 +504,7 @@ func TestBuildDeliveryRespectsTotalBudget(t *testing.T) {
 	for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()
-				r := NewCommandRunner(tc.backendName, "command", "true", nil, 10, tc.maxChars, "", zerolog.Nop())
+				r := NewCommandRunner(tc.backendName, "command", "true", nil, 10, tc.maxChars, zerolog.Nop())
 				args, stdin := r.buildDelivery(Request{System: tc.system, User: tc.user})
 			if stdin != tc.wantStdin {
 				t.Errorf("stdin = %q, want %q", stdin, tc.wantStdin)
@@ -545,8 +574,8 @@ func TestBuildDeliveryClaudeAndCodexSameTruncationBoundary(t *testing.T) {
 	for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()
-				claude := NewCommandRunner("claude", "command", "true", nil, 10, tc.maxChars, "", zerolog.Nop())
-				codex := NewCommandRunner("codex", "command", "true", nil, 10, tc.maxChars, "", zerolog.Nop())
+				claude := NewCommandRunner("claude", "command", "true", nil, 10, tc.maxChars, zerolog.Nop())
+				codex := NewCommandRunner("codex", "command", "true", nil, 10, tc.maxChars, zerolog.Nop())
 
 			claudeArgs, claudeStdin := claude.buildDelivery(Request{System: tc.system, User: tc.user})
 			_, codexStdin := codex.buildDelivery(Request{System: tc.system, User: tc.user})
@@ -599,99 +628,6 @@ func TestCombineSystemUser(t *testing.T) {
 	}
 }
 
-// TestPromptMetaReflectsDeliveredPrompt verifies that prompt_hash and
-// prompt_chars are computed from the post-truncation logical combined prompt,
-// and that Length is measured in runes (not bytes).
-func TestPromptMetaReflectsDeliveredPrompt(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name       string
-		system     string
-		user       string
-		maxChars   int
-		wantLen    int    // expected rune count
-		wantPrompt string // the exact string that should be hashed
-	}{
-		{
-			name:       "truncated-combined",
-			system:     "abcde",
-			user:       "0123456789",
-			maxChars:   8,
-			wantPrompt: "abcde\n\n0",
-			wantLen:    8,
-		},
-		{
-			name:       "fits-within-budget",
-			system:     "abc",
-			user:       "xyz",
-			maxChars:   100,
-			wantPrompt: "abc\n\nxyz",
-			wantLen:    8,
-		},
-		{
-			name:       "unlimited",
-			system:     "abc",
-			user:       "xyz",
-			maxChars:   0,
-			wantPrompt: "abc\n\nxyz",
-			wantLen:    8,
-		},
-		{
-			name:       "system-only-truncated",
-			system:     "abcdefgh",
-			user:       "",
-			maxChars:   5,
-			wantPrompt: "abcde",
-			wantLen:    5,
-		},
-		{
-			name:       "user-only-truncated",
-			system:     "",
-			user:       "0123456789",
-			maxChars:   4,
-			wantPrompt: "0123",
-			wantLen:    4,
-		},
-		{
-			// Non-ASCII: "é" is 2 bytes but 1 rune. Budget=1 keeps 1 rune,
-			// so Length must be 1, not 2.
-			name:       "multibyte-unicode-rune-count",
-			system:     "",
-			user:       "é",
-			maxChars:   1,
-			wantPrompt: "é",
-			wantLen:    1,
-		},
-		{
-			// Budget=0 means no truncation; "é" is 1 rune.
-			name:       "multibyte-unicode-unlimited",
-			system:     "",
-			user:       "é",
-			maxChars:   0,
-			wantPrompt: "é",
-			wantLen:    1,
-		},
-	}
-	for _, tc := range tests {
-			t.Run(tc.name, func(t *testing.T) {
-				t.Parallel()
-				r := NewCommandRunner("codex", "noop", "", nil, 10, tc.maxChars, "", zerolog.Nop())
-			combined := truncateString(combineSystemUser(tc.system, tc.user), tc.maxChars)
-			meta := r.promptMeta(combined)
-
-			if meta.Length != tc.wantLen {
-				t.Errorf("Length = %d, want %d (prompt=%q)", meta.Length, tc.wantLen, combined)
-			}
-			if combined != tc.wantPrompt {
-				t.Errorf("combined = %q, want %q", combined, tc.wantPrompt)
-			}
-			// Verify Length matches actual rune count of the delivered prompt.
-			if meta.Length != utf8.RuneCountInString(combined) {
-				t.Errorf("Length %d != utf8.RuneCountInString(%q)=%d", meta.Length, combined, utf8.RuneCountInString(combined))
-			}
-		})
-	}
-}
 
 func TestParseClaudeSteps(t *testing.T) {
 	t.Parallel()

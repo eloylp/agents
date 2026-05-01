@@ -20,30 +20,31 @@ go test ./... -race                             # run all tests
 go build -o agents ./cmd/agents                 # build the daemon
 ./agents --db agents.db --import config.yaml    # import config + start
 ./agents --db agents.db                         # start (after import)
-./agents --db agents.db \                       # one-shot synchronous pass
-  --run-agent <agent-name> --repo owner/repo   # (drains any dispatch chain)
 docker compose up -d                            # containerised run
 ```
+
+On-demand runs go through the running daemon: `POST /run` (HTTP) or the `trigger_agent` MCP tool. There is no separate CLI mode for ad-hoc execution — it would be a second runtime that doesn't share the daemon's run-lock or dispatch dedup, opening a memory-write race window.
 
 ## Code map (current)
 
 ```
-cmd/agents/main.go              # wires config, logger, runners, scheduler, webhook server, proxy
+cmd/agents/main.go              # daemon entrypoint + --db / --import flags
 internal/
   fleet/                        # domain entities: Agent, Repo, Skill, Backend, Binding (zero deps)
-  config/                       # YAML parsing, defaults, validation, prompt/skill file resolution (uses fleet)
+  config/                       # YAML parsing, defaults, validation (uses fleet)
   ai/                           # prompt composition + CLI runner (hardcoded backend args + schema enforcement)
   anthropic_proxy/              # built-in Anthropic Messages ↔ OpenAI Chat Completions translation
   observe/                      # observability store: events, traces, dispatch graph, SSE hubs
-  autonomous/                   # cron scheduler + agent memory (SQLite-backed)
+  scheduler/                    # cron scheduler + agent memory (SQLite-backed)
   backends/                     # backend discovery: CLI probing, GitHub MCP health checks, orphan detection
-  store/                        # SQLite-backed config store: Open, Import, Load, CRUD
-  workflow/                     # event routing engine (single event queue), processor, dispatcher
-  server/                       # central HTTP server: lifecycle, router, /status, /run, proxy + UI + MCP mounts; cross-cutting types
-  server/observe/               # observability HTTP handlers (events, traces, graph, dispatches, memory, SSE)
-  server/config/                # /config snapshot, /export, /import HTTP handlers and methods
-  server/fleet/                 # agents/skills/backends CRUD + GET /agents fleet view + orphans cache (incl. /agents/orphans/status)
-  server/repos/                 # repos + per-binding HTTP CRUD handlers and methods
+  store/                        # SQLite-backed config + event_queue store: Open, Import, Load, CRUD, *store.Store facade
+  workflow/                     # event routing engine, durable event queue (persist-on-push + replay), processor, dispatcher
+  daemon/                       # owns the daemon as a single composed unit: lifecycle, router, /status, /run, proxy + UI + MCP mounts
+  daemon/observe/               # observability HTTP handlers (events, traces, graph, dispatches, memory, SSE)
+  daemon/config/                # /config snapshot, /export, /import HTTP handlers and methods
+  daemon/fleet/                 # agents/skills/backends CRUD + GET /agents fleet view + orphans (incl. /agents/orphans/status)
+  daemon/repos/                 # repos + per-binding HTTP CRUD handlers and methods
+  daemon/runners/               # /runners listing + delete + retry (event_queue × traces JOIN)
   webhook/                      # GitHub webhook receiver only: HMAC signature verification, delivery dedupe, /webhooks/github event parsing
   mcp/                          # MCP server exposing fleet-management tools at /mcp
   ui/                           # embedded Next.js web dashboard (static assets served at /ui/)
@@ -78,12 +79,12 @@ These constraints are load-bearing. Read them before changing the listed areas.
 
 - **The daemon never writes to GitHub directly.** All writes go through the AI backend's MCP tools. If you introduce a new feature that seems to need a direct GitHub API call, raise it in an issue first — there's almost always a way to keep the daemon read-only.
 - **Agents must not mention external GitHub users.** Do NOT request reviews from, assign to, or @mention any GitHub user in PRs, comments, or issue descriptions. All review routing is handled by the daemon's dispatch system. Unsolicited pings to external contributors from an automated agent are a trust and reputation risk — the GitHub account could be flagged. This rule applies to every agent prompt.
-- **Prompts are never logged in plaintext.** Only their salted hash and length are recorded. If you add new log lines near prompt handling, preserve this property.
+- **Prompts are persisted on the trace span, not in logs.** Every run's composed prompt is gzipped onto the `traces` row (visible at `/runners` and `/traces` once a span is recorded). Logs carry only the prompt's character count for correlation. The persistence is gated by your reverse proxy's auth — `/runners` and `/traces` must stay behind it.
 - **Structured output is enforced at the CLI level.** Claude uses hardcoded `--output-format stream-json --json-schema <embedded-schema>` args; codex uses hardcoded `--output-schema <temp-file>`. The daemon embeds `internal/ai/response-schema.json` and appends the correct flags automatically. When changing the response contract, update `internal/ai/response-schema.json` alongside `internal/ai/types.go`.
 - **The runner contract is stdin-in, single-JSON-object-out.**
   - `internal/ai/cmdrunner.go` sends the composed prompt on stdin and parses the last top-level JSON object from stdout.
   - Agents emit `{"summary": "...", "artifacts": [...], "dispatch": [...], "memory": "..."}`. `dispatch` and `memory` are optional fields but all four keys are present in the schema. A missing JSON object, an empty response, or a response where `summary`, `artifacts`, and `dispatch` are all empty fails the run with a clear error.
-  - `memory` is the agent's full updated memory state. The daemon writes it back to the SQLite store after each autonomous run. An empty string clears the memory. Event-driven runs do not receive or persist memory.
+  - `memory` is the agent's full updated memory state. Memory load/persist is governed by `allow_memory` (default `true`) uniformly across cron, webhook, dispatch, `POST /run`, and MCP `trigger_agent` runs. Setting `allow_memory: false` skips both load and persist for every trigger kind. An empty string clears the memory.
   - Small prose outputs with no JSON are an agent-prompt issue, not a runner bug — don't relax the parser to cover them; fix the prompt.
 - **Subprocess env is filtered.** `internal/ai/cmdrunner.go::allowCommandEnvKey` is an explicit allowlist. When adding a new env-var-driven integration, add the variable to the allowlist **and** document why (see `ANTHROPIC_BASE_URL` / `OPENAI_*` for precedent).
 - **Backend args are daemon-managed.** User/runtime edits are limited to `timeout_seconds`, `max_prompt_chars`, and (for local backends) `local_model_url`. Do not reintroduce user-configurable runner args.
@@ -102,9 +103,9 @@ When making common classes of changes, update all of these at once:
 | New webhook event kind | Decoder in `internal/webhook/handler.go`, acceptance in `internal/workflow/engine.go`, README event table, validation in `internal/config/config.go` |
 | New AI backend behavior | `internal/ai/cmdrunner.go`, allowlist if new env vars, backend registration in `cmd/agents/main.go`, config example |
 | Agent prompt contract | Prompts in SQLite (edit via UI or CRUD API), runner parser in `internal/ai/cmdrunner.go`, `internal/ai/types.go`, `internal/ai/response-schema.json`, AGENTS.md runner-contract section, tests |
-| Memory contract | `internal/autonomous/memory.go` (MemoryBackend interface), `internal/store/store.go` (SQLite path), `cmd/agents/main.go` (wiring), agent prompts "Memory hygiene" sections, `internal/ai/types.go` |
+| Memory contract | `internal/workflow/engine.go` (memory load/persist around runs), `internal/store/store.go` (SQLite path), agent prompts "Memory hygiene" sections, `internal/ai/types.go` |
 | Dispatch semantics | `internal/workflow/dispatch.go` (runtime), `internal/config/config.go` (load-time validation), agent response schema in `internal/ai/types.go`, README dispatch section, all prompt "Response format" sections, tests on both paths |
-| SQLite store schema | `internal/store/migrations/`, `internal/store/store.go`, `internal/store/crud.go`, the per-domain handlers under `internal/server/{fleet,repos,config}`, tests |
+| SQLite store schema | `internal/store/migrations/`, `internal/store/store.go`, `internal/store/crud.go`, the per-domain handlers under `internal/daemon/{fleet,repos,config,queue}`, tests |
 | Proxy translation behavior | `internal/anthropic_proxy/{types,translate,handler}.go`, unit tests for the affected shape, `docs/local-models.md` if user-visible |
 | Anything in the README | Also check `CLAUDE.md`, `AGENTS.md`, `config.example.yaml` — these four should stay in sync |
 
@@ -112,7 +113,7 @@ When making common classes of changes, update all of these at once:
 
 - **Run `go test ./... -race` before every commit.** Race detection is cheap and catches real bugs in the concurrent event processing and dispatch paths.
 - **Table-driven tests** for anything with more than two interesting input shapes (config validation, label parsing, event decoding, translation, dispatch rejection reasons). `t.Parallel()` where independent; **not** when using `t.Setenv`.
-- **Use `httptest.Server` for HTTP integration tests.** See `internal/server/server_test.go` and `internal/server/observe/observe_test.go` for the patterns.
+- **Use `httptest.Server` for HTTP integration tests.** See `internal/daemon/daemon_test.go` and `internal/daemon/observe/observe_test.go` for the patterns.
 - **No `-short` or skipped tests on main.** If a test needs external services, gate it behind a build tag or an explicit env var check.
 - **Do not mock what you do not own.** Wrap third-party clients behind an interface you control, then mock that interface. `internal/ai.Runner` is the canonical example.
 - **Test error paths, not just the happy path.** Dispatch rejection modes each deserve a dedicated test.
@@ -120,13 +121,13 @@ When making common classes of changes, update all of these at once:
 
 ## Operational notes
 
-- **`.env` is auto-loaded on startup** (`godotenv.Load()`). Required runtime secret: `GITHUB_WEBHOOK_SECRET`. Optional: `LOG_SALT`.
+- **`.env` is auto-loaded on startup** (`godotenv.Load()`). Required runtime secret: `GITHUB_WEBHOOK_SECRET`.
 - **Config is loaded from SQLite at startup.** Use `--import config.yaml` to seed the database, then manage changes via the CRUD API or the web dashboard. Prompt and skill content is stored in the database; changes via the API or UI take effect on the next agent run without a restart.
 - **Backend discovery lifecycle.** Startup auto-discovery runs only when the backends table is empty. Manual refresh is explicit via `POST /backends/discover`; `GET /backends/status` is diagnostics-only.
 - **Orphan visibility.** `GET /agents/orphans/status` and `/status` (`orphaned_agents.count`) expose model/backend drift requiring user remediation.
-- **Autonomous agent memory** is stored in SQLite (in the `memory` table), keyed by `(agent, repo)`. It's the agent's job to return updated memory in its response; the daemon writes it back to the store unchanged.
-- **Dispatch dedup is process-local and in-memory.** It's shared across cron-fired runs, event-fired runs, and `--run-agent` invocations within one process. Restarting the daemon clears the dedup state.
-- **`--run-agent` drains dispatch chains synchronously.** When invoking an agent on demand via the CLI flag, the process waits for the originating agent and all dispatched children to finish before exiting. The in-memory event queue is sized to hold `MaxFanout^MaxDepth` events so deep chains don't silently drop.
+- **Agent memory** is stored in SQLite (in the `memory` table), keyed by `(agent, repo)`. It's the agent's job to return updated memory in its response; the daemon writes it back to the store unchanged. Load/persist is gated by `allow_memory` (default `true`) and applies uniformly across cron, webhook, dispatch, `POST /run`, and `trigger_agent`.
+- **The event queue is durable.** Every `PushEvent` persists the event to the SQLite `event_queue` table before signalling workers via the in-memory channel. Rows whose `completed_at` is still `NULL` at startup are replayed onto the channel — events buffered at shutdown, or runs interrupted mid-prompt, get a second chance instead of vanishing. Completed rows older than 7 days are pruned by an hourly cleanup loop. Inspect / delete / retry rows through the `/runners` REST surface, the matching MCP tools, or the UI's Runners page.
+- **Dispatch dedup is process-local and in-memory.** It's shared across cron-fired runs, event-fired runs, dispatched runs, and on-demand triggers (`POST /run` / `trigger_agent`) within one process. Restarting the daemon clears the dedup state.
 - **Avoid `--no-verify` on commits.** Pre-commit hooks exist for a reason. If a hook fails, fix the underlying issue.
 - **The `ports: "8080:8080"` in `docker-compose.yaml`** publishes the daemon port on the host. In production, consider restricting access via a reverse proxy (e.g. Traefik with basic auth) or binding to `127.0.0.1:8080:8080`.
 

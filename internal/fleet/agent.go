@@ -4,12 +4,11 @@ package fleet
 // Agents are pure definitions — they don't run on their own. Repos bind them
 // to triggers.
 type Agent struct {
-	Name       string   `yaml:"name"`
-	Backend    string   `yaml:"backend"`
-	Model      string   `yaml:"model"`
-	Skills     []string `yaml:"skills"`
-	Prompt     string   `yaml:"prompt"`
-	PromptFile string   `yaml:"prompt_file"`
+	Name    string   `yaml:"name"`
+	Backend string   `yaml:"backend"`
+	Model   string   `yaml:"model"`
+	Skills  []string `yaml:"skills"`
+	Prompt  string   `yaml:"prompt"`
 	// AllowPRs controls whether the agent is permitted to open pull requests.
 	// Defaults to false; the scheduler prepends a hard no-PR instruction when
 	// false so the gate is code-level rather than relying on prompt wording.

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,12 +16,15 @@ import (
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/store"
 )
 
-// EventEnqueuer can accept events for async processing.
+// EventEnqueuer can accept events for async processing. Returns the
+// new event_queue row id so operator-facing surfaces (retry, MCP) can
+// echo it back; most callers discard it.
 // *DataChannels satisfies this interface.
 type EventEnqueuer interface {
-	PushEvent(ctx context.Context, ev Event) error
+	PushEvent(ctx context.Context, ev Event) (int64, error)
 }
 
 // DispatchStats is a snapshot of dispatch counters for reporting in /status.
@@ -97,24 +99,24 @@ func NewDispatchDedupStore(ttlSeconds int) *DispatchDedupStore {
 	}
 }
 
-// Start launches a background goroutine that periodically evicts expired entries.
-func (s *DispatchDedupStore) Start(ctx context.Context) {
+// Run blocks until ctx is cancelled, periodically evicting expired
+// entries. The caller (typically the engine's errgroup) owns goroutine
+// creation and waits on Run for clean shutdown.
+func (s *DispatchDedupStore) Run(ctx context.Context) error {
 	if s.ttl <= 0 {
-		return
+		return nil
 	}
-	go func() {
-		tickInterval := max(s.ttl/4, time.Second)
-		ticker := time.NewTicker(tickInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case now := <-ticker.C:
-				s.evict(now)
-			}
+	tickInterval := max(s.ttl/4, time.Second)
+	ticker := time.NewTicker(tickInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case now := <-ticker.C:
+			s.evict(now)
 		}
-	}()
+	}
 }
 
 func (s *DispatchDedupStore) evict(now time.Time) {
@@ -411,8 +413,7 @@ func (s *DispatchDedupStore) TryClaimForDispatch(agent, repo string, number int,
 // dedup safety limits.
 type Dispatcher struct {
 	cfg      config.DispatchConfig
-	agents   map[string]fleet.Agent // all agents by name (lower-cased)
-	agentsMu sync.RWMutex               // protects agents map
+	store    *store.Store
 	dedup    *DispatchDedupStore
 	counters dispatchCounters
 	queue    EventEnqueuer
@@ -420,12 +421,13 @@ type Dispatcher struct {
 	logger   zerolog.Logger
 }
 
-// NewDispatcher builds a Dispatcher. agents must be the full agent map (by
-// lower-cased name) from the loaded config.
-func NewDispatcher(cfg config.DispatchConfig, agents map[string]fleet.Agent, dedup *DispatchDedupStore, queue EventEnqueuer, logger zerolog.Logger) *Dispatcher {
+// NewDispatcher builds a Dispatcher. store is read on every dispatch to look
+// up the target agent's allow_dispatch flag — there is no in-memory agent
+// cache.
+func NewDispatcher(cfg config.DispatchConfig, st *store.Store, dedup *DispatchDedupStore, queue EventEnqueuer, logger zerolog.Logger) *Dispatcher {
 	return &Dispatcher{
 		cfg:    cfg,
-		agents: agents,
+		store:  st,
 		dedup:  dedup,
 		queue:  queue,
 		logger: logger.With().Str("component", "dispatcher").Logger(),
@@ -438,17 +440,21 @@ func (d *Dispatcher) WithGraphRecorder(r GraphRecorder) {
 	d.graphRec = r
 }
 
-// UpdateAgents replaces the agent map used for dispatch allowlist and opt-in
-// checks. It is safe to call concurrently with ProcessDispatches and is
-// intended for hot-reload paths (e.g. CRUD API followed by cron reload).
-func (d *Dispatcher) UpdateAgents(agents []fleet.Agent) {
-	m := make(map[string]fleet.Agent, len(agents))
-	for _, a := range agents {
-		m[a.Name] = a
+// lookupAgent returns the named agent from SQLite, or false when no row
+// matches. Called on every dispatch to check the target's allow_dispatch
+// flag.
+func (d *Dispatcher) lookupAgent(name string) (fleet.Agent, bool) {
+	agents, err := d.store.ReadAgents()
+	if err != nil {
+		d.logger.Error().Err(err).Msg("dispatcher: read agents")
+		return fleet.Agent{}, false
 	}
-	d.agentsMu.Lock()
-	d.agents = m
-	d.agentsMu.Unlock()
+	for _, a := range agents {
+		if a.Name == name {
+			return a, true
+		}
+	}
+	return fleet.Agent{}, false
 }
 
 // ProcessDispatches validates and enqueues each dispatch request from a single
@@ -469,7 +475,7 @@ func (d *Dispatcher) ProcessDispatches(
 	var errs []error
 	fanout := 0
 	for _, req := range requests {
-		req.Agent = sanitizeName(req.Agent)
+		req.Agent = fleet.NormalizeAgentName(req.Agent)
 		d.counters.requestedTotal.Add(1)
 
 		// When the agent omits number (zero value), fall back to the originating
@@ -502,9 +508,7 @@ func (d *Dispatcher) ProcessDispatches(
 		}
 
 		// Opt-in check: target must have allow_dispatch: true.
-		d.agentsMu.RLock()
-		target, ok := d.agents[req.Agent]
-		d.agentsMu.RUnlock()
+		target, ok := d.lookupAgent(req.Agent)
 		if !ok || !target.AllowDispatch {
 			logBase.Warn().Msg("dispatch dropped: target has allow_dispatch: false")
 			d.counters.droppedNoOptin.Add(1)
@@ -559,7 +563,7 @@ func (d *Dispatcher) ProcessDispatches(
 			},
 		}
 
-		if err := d.queue.PushEvent(ctx, dispatchEv); err != nil {
+		if _, err := d.queue.PushEvent(ctx, dispatchEv); err != nil {
 			// Release the pending claim so future retries are not blocked and
 			// DispatchAlreadyClaimed never sees a phantom committed slot.
 			d.dedup.AbandonClaim(req.Agent, ev.Repo.FullName, number)
@@ -646,11 +650,6 @@ func (d *Dispatcher) FinalizeAutonomousRun(agentName, repo string) {
 // Stats returns a snapshot of the current dispatch counters.
 func (d *Dispatcher) Stats() DispatchStats {
 	return d.counters.snapshot()
-}
-
-// sanitizeName lowercases and trims a name for safe comparison.
-func sanitizeName(s string) string {
-	return strings.ToLower(strings.TrimSpace(s))
 }
 
 // GenEventID returns a short random hex string suitable for use as a root

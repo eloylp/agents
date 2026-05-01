@@ -32,6 +32,120 @@ interface Span {
   duration_ms: number
   status: string
   error?: string
+  prompt_size?: number
+  input_tokens?: number
+  output_tokens?: number
+  cache_read_tokens?: number
+  cache_write_tokens?: number
+}
+
+function fmtTokens(n?: number) {
+  if (!n) return '0'
+  if (n < 1000) return String(n)
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}K`
+  return `${(n / 1_000_000).toFixed(2)}M`
+}
+
+function fmtBytes(n?: number) {
+  if (!n) return '0'
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(2)} MB`
+}
+
+// PromptPanel lazy-fetches /traces/{span_id}/prompt and shows the
+// composed prompt the daemon sent to the AI CLI on this run. Hidden
+// behind an accordion so the trace listing stays cheap; expanded only
+// when the operator clicks. 404 → "no prompt recorded" (pre-009 spans
+// or runs that didn't capture one).
+function PromptPanel({ span }: { span: Span }) {
+  const [open, setOpen] = useState(false)
+  const [text, setText] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  if (!span.prompt_size) {
+    return null
+  }
+
+  const toggle = () => {
+    if (!open && text === null) {
+      setLoading(true)
+      fetch(`/traces/${encodeURIComponent(span.span_id)}/prompt`)
+        .then(async r => {
+          if (r.status === 404) { setText(''); return }
+          if (!r.ok) throw new Error(`status ${r.status}`)
+          setText(await r.text())
+        })
+        .catch(e => setError((e as Error).message))
+        .finally(() => setLoading(false))
+    }
+    setOpen(!open)
+  }
+
+  return (
+    <div style={{ marginTop: '0.75rem', borderTop: '1px solid var(--border-subtle)', paddingTop: '0.5rem' }}>
+      <button onClick={toggle} style={{
+        background: 'none', border: 'none', color: 'var(--accent)',
+        fontSize: '0.78rem', cursor: 'pointer', padding: 0,
+        textAlign: 'left',
+      }}>
+        {open ? '▼' : '▶'} Prompt ({fmtBytes(span.prompt_size)})
+      </button>
+      {open && (
+        <div style={{ marginTop: '0.5rem' }}>
+          {loading && <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Loading...</span>}
+          {error && <span style={{ color: 'var(--text-danger)', fontSize: '0.8rem' }}>Error: {error}</span>}
+          {text === '' && <span style={{ color: 'var(--text-faint)', fontSize: '0.8rem' }}>No prompt recorded.</span>}
+          {text && text !== '' && (
+            <pre style={{
+              background: 'var(--bg-input)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: '4px',
+              padding: '0.75rem',
+              fontSize: '0.72rem',
+              fontFamily: 'monospace',
+              color: 'var(--text)',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              maxHeight: '500px',
+              overflowY: 'auto',
+              margin: 0,
+            }}>{text}</pre>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// TokenUsagePanel renders the four-field token breakdown when present.
+// Hidden when no tokens were recorded (pre-009 spans or non-CLI backends).
+function TokenUsagePanel({ span }: { span: Span }) {
+  const inT = span.input_tokens ?? 0
+  const outT = span.output_tokens ?? 0
+  const cacheR = span.cache_read_tokens ?? 0
+  const cacheW = span.cache_write_tokens ?? 0
+  if (inT + outT + cacheR + cacheW === 0) return null
+  const total = inT + outT
+  const cacheHitRatio = cacheR + cacheW > 0 ? cacheR / (cacheR + cacheW + inT) : 0
+  return (
+    <div style={{
+      marginTop: '0.5rem',
+      display: 'flex',
+      gap: '0.75rem',
+      fontSize: '0.78rem',
+      color: 'var(--text-muted)',
+      flexWrap: 'wrap',
+    }}>
+      <span><strong style={{ color: 'var(--text)' }}>Tokens:</strong></span>
+      <span>in <strong style={{ color: 'var(--text)' }}>{fmtTokens(inT)}</strong></span>
+      <span>out <strong style={{ color: 'var(--text)' }}>{fmtTokens(outT)}</strong></span>
+      {cacheR > 0 && <span>cache hit <strong style={{ color: 'var(--success)' }}>{fmtTokens(cacheR)}</strong> ({(cacheHitRatio * 100).toFixed(0)}%)</span>}
+      {cacheW > 0 && <span>cache write <strong style={{ color: 'var(--text)' }}>{fmtTokens(cacheW)}</strong></span>}
+      <span style={{ color: 'var(--text-faint)' }}>· total {fmtTokens(total)}</span>
+    </div>
+  )
 }
 
 function fmt(iso: string) {
@@ -180,6 +294,8 @@ function TraceDetail({ rootId, allSpans, onBack }: { rootId: string; allSpans: S
                     <td colSpan={7} style={{ padding: '2px 0 8px', paddingLeft: `${s.dispatch_depth * 12 + 12}px` }}>
                       {s.summary && <div style={{ fontSize: '0.78rem', color: 'var(--text-faint)', fontStyle: 'italic' }}>{s.summary}</div>}
                       {s.error && <div style={{ fontSize: '0.78rem', color: 'var(--text-danger)', marginTop: '2px' }}>{s.error}</div>}
+                      <TokenUsagePanel span={s} />
+                      <PromptPanel span={s} />
                       <SpanTranscript spanId={s.span_id} />
                     </td>
                   </tr>

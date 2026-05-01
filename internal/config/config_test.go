@@ -76,52 +76,6 @@ func TestLoadMinimalConfig(t *testing.T) {
 	}
 }
 
-func TestLoadResolvesPromptFile(t *testing.T) {
-	t.Setenv("TEST_SECRET", "s3cret")
-	dir := t.TempDir()
-	promptPath := filepath.Join(dir, "reviewer.md")
-	if err := os.WriteFile(promptPath, []byte("  review the PR carefully  "), 0o644); err != nil {
-		t.Fatalf("write prompt: %v", err)
-	}
-	content := `
-daemon:
-  http:
-    webhook_secret_env: TEST_SECRET
-  ai_backends:
-    claude:
-      command: claude
-      args: ["-p"]
-
-skills:
-  architect: {prompt: "Focus on architecture."}
-
-agents:
-  - name: reviewer
-    backend: claude
-    skills: [architect]
-    prompt_file: reviewer.md
-
-repos:
-  - name: "owner/repo"
-    enabled: true
-    use:
-      - agent: reviewer
-        labels: ["ai:review:reviewer"]
-`
-	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if got := cfg.Agents[0].Prompt; got != "review the PR carefully" {
-		t.Errorf("prompt_file not resolved: got %q", got)
-	}
-}
-
 // agentConfigYAML builds a full config YAML with a custom agents block,
 // mirroring minimalYAML but allowing the agents section to be overridden.
 func agentConfigYAML(agentsBlock string) string {

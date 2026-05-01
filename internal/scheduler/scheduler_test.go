@@ -2,28 +2,28 @@ package scheduler
 
 import (
 	"context"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
 
-	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
 // drainQueue reads up to n events from a buffered DataChannels without
-// blocking past the timeout. Used by cron-tick tests to assert the pushed
-// event shape.
+// blocking past the timeout.
 func drainQueue(t *testing.T, dc *workflow.DataChannels, n int) []workflow.Event {
 	t.Helper()
 	out := make([]workflow.Event, 0, n)
 	deadline := time.After(100 * time.Millisecond)
 	for len(out) < n {
 		select {
-		case ev := <-dc.EventChan():
-			out = append(out, ev)
+		case qe := <-dc.EventChan():
+			out = append(out, qe.Event)
 		case <-deadline:
 			return out
 		}
@@ -31,93 +31,105 @@ func drainQueue(t *testing.T, dc *workflow.DataChannels, n int) []workflow.Event
 	return out
 }
 
-// baseCfg returns a minimal valid Config suitable for scheduler tests.
-func baseCfg(modify func(*config.Config)) *config.Config {
-	cfg := &config.Config{
-		Daemon: config.DaemonConfig{
-			AIBackends: map[string]fleet.Backend{
-				"claude": {Command: "claude"},
-			},
-		},
-		Skills: map[string]fleet.Skill{
-			"architect": {Prompt: "Focus on architecture."},
-		},
-		Agents: []fleet.Agent{
-			{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Review PRs."},
-		},
-		Repos: []fleet.Repo{
-			{
-				Name:    "owner/repo",
-				Enabled: true,
-				Use: []fleet.Binding{
-					{Agent: "reviewer", Cron: "* * * * *"},
-				},
-			},
-		},
+// seedStore opens a tempdir SQLite, imports a minimal valid fleet, and
+// returns the data-access store. The fixture has one cron-bound agent
+// on owner/repo.
+func seedStore(t *testing.T, repos []fleet.Repo) *store.Store {
+	t.Helper()
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
 	}
-	if modify != nil {
-		modify(cfg)
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
+
+	agents := []fleet.Agent{
+		{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Review PRs."},
 	}
-	return cfg
+	skills := map[string]fleet.Skill{"architect": {Prompt: "Focus on architecture."}}
+	backends := map[string]fleet.Backend{"claude": {Command: "claude"}}
+	if err := st.ImportAll(agents, repos, skills, backends); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	return st
 }
 
+func defaultRepos() []fleet.Repo {
+	return []fleet.Repo{{
+		Name:    "owner/repo",
+		Enabled: true,
+		Use:     []fleet.Binding{{Agent: "reviewer", Cron: "* * * * *"}},
+	}}
+}
+
+// TestNewSchedulerEntryRegistration checks the initial reconcile that runs
+// inside NewScheduler picks up the cron bindings from SQLite.
 func TestNewSchedulerEntryRegistration(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name      string
-		mutate    func(*config.Config)
+		repos     []fleet.Repo
 		wantCount int
 	}{
 		{
 			name:      "cron binding registered",
+			repos:     defaultRepos(),
 			wantCount: 1,
 		},
 		{
-			name:      "skips disabled repo",
-			mutate:    func(c *config.Config) { c.Repos[0].Enabled = false },
+			name: "skips disabled repo",
+			repos: func() []fleet.Repo {
+				r := defaultRepos()
+				r[0].Enabled = false
+				return r
+			}(),
 			wantCount: 0,
 		},
 		{
 			name: "skips disabled binding",
-			mutate: func(c *config.Config) {
+			repos: func() []fleet.Repo {
 				f := false
-				c.Repos[0].Use[0].Enabled = &f
-			},
+				r := defaultRepos()
+				r[0].Use[0].Enabled = &f
+				return r
+			}(),
 			wantCount: 0,
 		},
 		{
 			name: "skips label-only binding",
-			mutate: func(c *config.Config) {
-				c.Repos[0].Use[0] = fleet.Binding{Agent: "reviewer", Labels: []string{"ai:review"}}
-			},
+			repos: []fleet.Repo{{
+				Name:    "owner/repo",
+				Enabled: true,
+				Use:     []fleet.Binding{{Agent: "reviewer", Labels: []string{"ai:review"}}},
+			}},
 			wantCount: 0,
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s, err := NewScheduler(baseCfg(tc.mutate), zerolog.Nop())
+			st := seedStore(t, tc.repos)
+			s, err := NewScheduler(st, time.Hour, zerolog.Nop())
 			if err != nil {
 				t.Fatalf("NewScheduler: %v", err)
 			}
-			if len(s.agentEntries) != tc.wantCount {
-				t.Errorf("agentEntries = %d, want %d", len(s.agentEntries), tc.wantCount)
+			if got := len(s.agentEntries); got != tc.wantCount {
+				t.Errorf("agentEntries = %d, want %d", got, tc.wantCount)
 			}
 		})
 	}
 }
 
-// TestCronTickPushesEvent verifies the producer-mode contract: when a cron
-// closure fires, the scheduler pushes a "cron" event with the right repo,
-// agent, and target_agent payload onto the queue and returns immediately.
-// Engine handling of that event is exercised in workflow/engine_test.go.
+// TestCronTickPushesEvent verifies the producer-mode contract: a fired
+// cron entry pushes a "cron" event onto the queue.
 func TestCronTickPushesEvent(t *testing.T) {
 	t.Parallel()
-	s, err := NewScheduler(baseCfg(nil), zerolog.Nop())
+	st := seedStore(t, defaultRepos())
+	s, err := NewScheduler(st, time.Hour, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
-	q := workflow.NewDataChannels(4)
+	q := workflow.NewDataChannels(4, st)
 	s.WithEventQueue(q)
 
 	s.cron.Entry(s.agentEntries[0].cronID).WrappedJob.Run()
@@ -141,12 +153,12 @@ func TestCronTickPushesEvent(t *testing.T) {
 	}
 }
 
-// TestRecordLastRunUpdatesAgentStatuses verifies the LastRunRecorder hook the
-// engine calls when a cron run completes. The status surfaces in /agents via
-// AgentStatuses() so the schedule view stays current.
+// TestRecordLastRunUpdatesAgentStatuses verifies the LastRunRecorder hook
+// the engine calls when a cron run completes.
 func TestRecordLastRunUpdatesAgentStatuses(t *testing.T) {
 	t.Parallel()
-	s, err := NewScheduler(baseCfg(nil), zerolog.Nop())
+	st := seedStore(t, defaultRepos())
+	s, err := NewScheduler(st, time.Hour, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -165,149 +177,83 @@ func TestRecordLastRunUpdatesAgentStatuses(t *testing.T) {
 	}
 }
 
-func TestRebuildCron(t *testing.T) {
+// TestReconcilePicksUpAddedBinding verifies that a cron binding added to
+// SQLite after the scheduler is constructed is registered on the next
+// reconcile.
+func TestReconcilePicksUpAddedBinding(t *testing.T) {
 	t.Parallel()
-	cfg := baseCfg(nil)
-	s, err := NewScheduler(cfg, zerolog.Nop())
+	st := seedStore(t, []fleet.Repo{
+		{Name: "owner/repo", Enabled: true, Use: []fleet.Binding{{Agent: "reviewer", Labels: []string{"ai:fix"}}}},
+	})
+	s, err := NewScheduler(st, time.Hour, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
-	if got := len(s.AgentStatuses()); got != 1 {
-		t.Fatalf("before rebuild: got %d statuses, want 1", got)
+	if got := len(s.agentEntries); got != 0 {
+		t.Fatalf("initial agentEntries = %d, want 0", got)
 	}
 
-	newAgents := []fleet.Agent{
-		{Name: "scanner", Backend: "claude", Skills: []string{}, Prompt: "scan"},
-	}
-	newRepos := []fleet.Repo{
-		{
-			Name:    "owner/other",
-			Enabled: true,
-			Use:     []fleet.Binding{{Agent: "scanner", Cron: "* * * * *"}},
-		},
-	}
-	if err := s.RebuildCron(newRepos, newAgents, cfg.Skills, map[string]fleet.Backend{"claude": {Command: "claude"}}); err != nil {
-		t.Fatalf("RebuildCron: %v", err)
-	}
-
-	statuses := s.AgentStatuses()
-	if len(statuses) != 1 {
-		t.Fatalf("after rebuild: got %d statuses, want 1", len(statuses))
-	}
-	if statuses[0].Name != "scanner" || statuses[0].Repo != "owner/other" {
-		t.Errorf("after rebuild: got %s/%s, want scanner/owner/other", statuses[0].Name, statuses[0].Repo)
-	}
-}
-
-// TestRebuildCronClearsAllBindings verifies that a rebuild with no cron
-// bindings removes all previously registered entries.
-func TestRebuildCronClearsAllBindings(t *testing.T) {
-	t.Parallel()
-	cfg := baseCfg(nil)
-	s, err := NewScheduler(cfg, zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	repos := []fleet.Repo{{Name: "owner/repo", Enabled: true, Use: []fleet.Binding{
-		{Agent: "reviewer", Labels: []string{"ai:fix"}},
-	}}}
-	if err := s.RebuildCron(repos, cfg.Agents, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
-		t.Fatalf("RebuildCron: %v", err)
-	}
-	if got := len(s.AgentStatuses()); got != 0 {
-		t.Errorf("after rebuild with no cron: got %d statuses, want 0", got)
-	}
-}
-
-// TestRebuildCronRollsBackOnFailure verifies that a rebuild that cannot
-// register new cron entries preserves the previous scheduler state.
-func TestRebuildCronRollsBackOnFailure(t *testing.T) {
-	t.Parallel()
-	cfg := baseCfg(nil)
-	s, err := NewScheduler(cfg, zerolog.Nop())
-	if err != nil {
-		t.Fatalf("NewScheduler: %v", err)
-	}
-	before := s.AgentStatuses()
-	if len(before) != 1 {
-		t.Fatalf("before rebuild: got %d statuses, want 1", len(before))
-	}
-
-	badRepos := []fleet.Repo{{
+	// Replace the binding with a cron one and reconcile.
+	if err := st.UpsertRepo(fleet.Repo{
 		Name:    "owner/repo",
 		Enabled: true,
-		Use:     []fleet.Binding{{Agent: "ghost", Cron: "* * * * *"}},
-	}}
-	badAgents := []fleet.Agent{}
-
-	if err := s.RebuildCron(badRepos, badAgents, cfg.Skills, cfg.Daemon.AIBackends); err == nil {
-		t.Fatal("RebuildCron: expected error for unknown agent binding, got nil")
+		Use:     []fleet.Binding{{Agent: "reviewer", Cron: "* * * * *"}},
+	}); err != nil {
+		t.Fatalf("upsert repo: %v", err)
 	}
-
-	after := s.AgentStatuses()
-	if len(after) != len(before) {
-		t.Errorf("after failed rebuild: got %d statuses, want %d (original preserved)",
-			len(after), len(before))
+	if err := s.Reconcile(); err != nil {
+		t.Fatalf("reconcile: %v", err)
 	}
-	if len(after) > 0 && after[0].Name != before[0].Name {
-		t.Errorf("after failed rebuild: agent %q, want %q (original preserved)",
-			after[0].Name, before[0].Name)
-	}
-	if len(s.cfg.Agents) != len(cfg.Agents) {
-		t.Errorf("after failed rebuild: cfg.Agents len=%d, want %d (original preserved)",
-			len(s.cfg.Agents), len(cfg.Agents))
+	if got := len(s.agentEntries); got != 1 {
+		t.Fatalf("after reconcile: agentEntries = %d, want 1", got)
 	}
 }
 
-// TestRebuildCronCopyOnWrite verifies that RebuildCron does not mutate the
-// caller's *config.Config pointer. Goroutines that hold a snapshot of the old
-// pointer must keep seeing the pre-rebuild values; only future snapshots
-// should see the new values.
-func TestRebuildCronCopyOnWrite(t *testing.T) {
+// TestReconcileRemovesStaleBinding verifies that a cron binding removed
+// from SQLite is unregistered from cron on the next reconcile.
+func TestReconcileRemovesStaleBinding(t *testing.T) {
 	t.Parallel()
-	cfg := baseCfg(nil)
-	originalPtr := cfg
-	s, err := NewScheduler(cfg, zerolog.Nop())
+	st := seedStore(t, defaultRepos())
+	s, err := NewScheduler(st, time.Hour, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
-
-	newRepos := []fleet.Repo{{Name: "owner/new-repo", Enabled: true, Use: []fleet.Binding{{Agent: "reviewer", Cron: "* * * * *"}}}}
-	if err := s.RebuildCron(newRepos, cfg.Agents, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
-		t.Fatalf("RebuildCron: %v", err)
+	if got := len(s.agentEntries); got != 1 {
+		t.Fatalf("initial agentEntries = %d, want 1", got)
 	}
 
-	if len(originalPtr.Repos) != 1 || originalPtr.Repos[0].Name != "owner/repo" {
-		t.Errorf("original config.Repos was mutated: got %v", originalPtr.Repos)
+	if err := st.UpsertRepo(fleet.Repo{
+		Name:    "owner/repo",
+		Enabled: true,
+		Use:     []fleet.Binding{{Agent: "reviewer", Labels: []string{"ai:fix"}}},
+	}); err != nil {
+		t.Fatalf("upsert repo: %v", err)
 	}
-	if s.cfg == cfg {
-		t.Error("scheduler still holds the original config pointer; expected copy-on-write swap")
+	if err := s.Reconcile(); err != nil {
+		t.Fatalf("reconcile: %v", err)
 	}
-	if len(s.cfg.Repos) != 1 || s.cfg.Repos[0].Name != "owner/new-repo" {
-		t.Errorf("scheduler config.Repos not updated: got %v", s.cfg.Repos)
+	if got := len(s.agentEntries); got != 0 {
+		t.Fatalf("after reconcile: agentEntries = %d, want 0", got)
 	}
 }
 
-// TestRebuildCronRaceWithConcurrentReads runs RebuildCron in parallel with
-// the read paths the daemon hits concurrently — AgentStatuses (called by
-// /agents, /status) and the cron closures fired by the cron library. Run
-// with -race to catch concurrent map/struct accesses against the cfg
-// snapshot.
-func TestRebuildCronRaceWithConcurrentReads(t *testing.T) {
+// TestReconcileRaceWithConcurrentReads runs reconcile concurrently with
+// AgentStatuses to catch races. Run with -race.
+func TestReconcileRaceWithConcurrentReads(t *testing.T) {
 	t.Parallel()
-	cfg := baseCfg(nil)
-	s, err := NewScheduler(cfg, zerolog.Nop())
+	st := seedStore(t, defaultRepos())
+	s, err := NewScheduler(st, time.Hour, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
-	s.WithEventQueue(workflow.NewDataChannels(8))
+	s.WithEventQueue(workflow.NewDataChannels(8, st))
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
 	const goroutines = 8
 	var wg sync.WaitGroup
-	for range goroutines / 2 {
+	for i := 0; i < goroutines/2; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -316,12 +262,12 @@ func TestRebuildCronRaceWithConcurrentReads(t *testing.T) {
 			}
 		}()
 	}
-	for range goroutines / 2 {
+	for i := 0; i < goroutines/2; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for ctx.Err() == nil {
-				_ = s.RebuildCron(cfg.Repos, cfg.Agents, cfg.Skills, cfg.Daemon.AIBackends)
+				_ = s.Reconcile()
 			}
 		}()
 	}

@@ -7,7 +7,6 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/eloylp/agents/internal/fleet"
-	"github.com/eloylp/agents/internal/store"
 )
 
 // TestToolCreateAgentForwardsAllowMemoryFalse verifies that the create_agent
@@ -30,7 +29,7 @@ func TestToolCreateAgentForwardsAllowMemoryFalse(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("create_agent: err=%v body=%s", err, textOf(t, res))
 	}
-	persisted, ok := agentByName(t, deps.DB, "linter")
+	persisted, ok := agentByName(t, deps.Store, "linter")
 	if !ok {
 		t.Fatal("linter not found after create")
 	}
@@ -60,7 +59,7 @@ func TestToolCreateAgentLeavesAllowMemoryNilWhenAbsent(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("create_agent: err=%v body=%s", err, textOf(t, res))
 	}
-	persisted, ok := agentByName(t, deps.DB, "linter")
+	persisted, ok := agentByName(t, deps.Store, "linter")
 	if !ok {
 		t.Fatal("linter not found after create")
 	}
@@ -88,7 +87,7 @@ func TestToolUpdateAgentForwardsAllowMemoryPatch(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("update_agent: err=%v body=%s", err, textOf(t, res))
 	}
-	persisted, ok := agentByName(t, deps.DB, "coder")
+	persisted, ok := agentByName(t, deps.Store, "coder")
 	if !ok {
 		t.Fatal("coder missing after update")
 	}
@@ -130,7 +129,7 @@ func TestToolGetAgentSurfacesAllowMemory(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
 	ff := false
-	if err := store.UpsertAgent(deps.DB, fleet.Agent{Name: "stateless", Backend: "claude", Prompt: "p", AllowMemory: &ff}); err != nil {
+	if err := deps.Store.UpsertAgent(fleet.Agent{Name: "stateless", Backend: "claude", Prompt: "p", AllowMemory: &ff}); err != nil {
 		t.Fatalf("seed stateless: %v", err)
 	}
 

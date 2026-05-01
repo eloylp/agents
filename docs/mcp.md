@@ -4,6 +4,8 @@ The daemon exposes a [Model Context Protocol](https://modelcontextprotocol.io) s
 
 The MCP surface is functionally equivalent to the REST CRUD API documented in [api.md](api.md). The difference is the wire protocol and the consumer: REST is for scripts and dashboards; MCP is for AI clients that can call tools.
 
+![Claude Code session asking "show me all agents and their status" and rendering a table from list_agents](img/mcp-terminal.png)
+
 ## Register the server
 
 From Claude Code:
@@ -59,12 +61,25 @@ The same pattern works for Cursor, Cline, and any other MCP-compatible client; c
 | Tool | Description |
 |---|---|
 | `list_events` | Recent events with optional `since` filter. |
-| `list_traces` | Recent agent run spans with timing and summary. |
+| `list_traces` | Recent agent run spans with timing, summary, and token usage (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `prompt_size`). The composed prompt body is fetched separately via the `/traces/{span_id}/prompt` REST endpoint — not an MCP tool, since it can be many KB. |
 | `get_trace` | Full dispatch chain by root event ID. |
 | `get_trace_steps` | Tool-loop transcript for one span. |
+| `get_trace_prompt` | Composed prompt the daemon sent to the AI CLI for one span (gzipped on disk; decompressed on the fly). The "what did the agent see" debug artefact. Errors when no prompt is recorded (pre-009-migration spans). |
+
+The live stdout stream (`GET /traces/{span_id}/stream`) is intentionally not mirrored as an MCP tool — SSE is a long-lived streaming protocol that doesn't fit MCP's request/response contract. MCP clients that need the post-completion transcript use `get_trace_steps` instead.
 | `get_graph` | Agent interaction graph (dispatch edges). |
 | `get_dispatches` | Dispatch counters and drop reasons. |
 | `get_memory` | Agent memory for an agent/repo pair. |
+
+### Runners
+
+These tools mirror the `/runners` REST surface; see [api.md](api.md#runners-management) for the wire shape, JOIN-with-traces semantics, and retry behaviour.
+
+| Tool | Description |
+|---|---|
+| `list_runners` | One row per (event, agent) once traces have been recorded; one row per event with `agent: null` while in-flight. Carries event metadata (kind, repo, number, actor, target_agent, payload, timestamps) plus trace fields (agent, span_id, run_duration_ms, summary, prompt_size, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) when present. Optional `status` filter on the event_queue lifecycle (`enqueued`/`running`/`completed`); `limit` (default 100); `offset`. |
+| `delete_runner` | Remove an event_queue row by id. Best-effort — if a worker has already dequeued the QueuedEvent from the channel buffer it will still run. Event-level: affects every fanned-out agent for this event. |
+| `retry_runner` | Re-enqueue an event by copying its blob into a fresh row and pushing onto the channel. Re-runs every fanned-out agent (event-level retry). The original row stays as audit history. Errors when the source is in `running` state, when the channel is full, or when the queue has been closed. |
 
 ### Config
 

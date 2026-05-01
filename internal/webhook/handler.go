@@ -15,7 +15,9 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
 
-	"github.com/eloylp/agents/internal/server"
+	"github.com/eloylp/agents/internal/config"
+	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -23,49 +25,65 @@ import (
 // delivery dedupe, and per-event-type parsing into workflow events. It is
 // the single piece of webhook-domain logic in this package.
 //
-// Construct via NewHandler; mount with RegisterRoutes (the path is read from
-// the server's current config snapshot at registration time).
+// The handler reads repos from SQLite on every request; the static HTTP
+// config (webhook path, secret, body limits) is captured once at
+// construction since those never mutate via CRUD.
 type Handler struct {
 	delivery *DeliveryStore
 	channels *workflow.DataChannels
-	srv      *server.Server // provides Config() snapshot
+	store    *store.Store
+	httpCfg  config.HTTPConfig
 	logger   zerolog.Logger
 }
 
-// NewHandler constructs a Handler. delivery, channels, and srv are required;
-// logger may be the daemon's root logger (the handler scopes a sub-logger
-// via the standard component label).
-func NewHandler(delivery *DeliveryStore, channels *workflow.DataChannels, srv *server.Server, logger zerolog.Logger) *Handler {
+// NewHandler constructs a Handler. delivery, channels, store, and httpCfg
+// are required; logger may be the daemon's root logger (the handler
+// scopes a sub-logger via the standard component label).
+func NewHandler(delivery *DeliveryStore, channels *workflow.DataChannels, st *store.Store, httpCfg config.HTTPConfig, logger zerolog.Logger) *Handler {
 	return &Handler{
 		delivery: delivery,
 		channels: channels,
-		srv:      srv,
+		store:    st,
+		httpCfg:  httpCfg,
 		logger:   logger.With().Str("component", "webhook").Logger(),
 	}
 }
 
-// RegisterRoutes mounts POST {cfg.Daemon.HTTP.WebhookPath} on r. The path
-// is read from the server's Config() snapshot at registration time so
-// operators can change it via config without code edits.
+// RegisterRoutes mounts POST {httpCfg.WebhookPath} on r.
 func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) http.Handler) {
-	path := h.srv.Config().Daemon.HTTP.WebhookPath
-	r.Handle(path, withTimeout(http.HandlerFunc(h.handleGitHubWebhook))).Methods(http.MethodPost)
+	r.Handle(h.httpCfg.WebhookPath, withTimeout(http.HandlerFunc(h.handleGitHubWebhook))).Methods(http.MethodPost)
+}
+
+// repoByName returns the named repo from SQLite, or false if not present.
+func (h *Handler) repoByName(name string) (fleet.Repo, bool) {
+	repos, err := h.store.ReadRepos()
+	if err != nil {
+		h.logger.Error().Err(err).Msg("webhook: read repos")
+		return fleet.Repo{}, false
+	}
+	want := fleet.NormalizeRepoName(name)
+	for _, r := range repos {
+		if r.Name == want {
+			return r, true
+		}
+	}
+	return fleet.Repo{}, false
 }
 
 func (h *Handler) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
-	cfg := h.srv.Config()
+	
 	deliveryID := strings.TrimSpace(r.Header.Get("X-GitHub-Delivery"))
 	if deliveryID == "" {
 		http.Error(w, "missing delivery id", http.StatusBadRequest)
 		return
 	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, cfg.Daemon.HTTP.MaxBodyBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, h.httpCfg.MaxBodyBytes))
 	if err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if !verifySignature(body, cfg.Daemon.HTTP.WebhookSecret, r.Header.Get("X-Hub-Signature-256")) {
+	if !verifySignature(body, h.httpCfg.WebhookSecret, r.Header.Get("X-Hub-Signature-256")) {
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
 	}
@@ -142,7 +160,7 @@ type webhookReview struct {
 // Events from issues that are pull requests (GitHub sends both) are dropped
 // for the "labeled" action; the pull_request event handles those.
 func (h *Handler) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	cfg := h.srv.Config()
+	
 	var payload struct {
 		Action     string            `json:"action"`
 		Label      webhookLabel      `json:"label"`
@@ -155,7 +173,7 @@ func (h *Handler) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 
-	repo, ok := cfg.RepoByName(payload.Repository.FullName)
+	repo, ok := h.repoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -203,7 +221,7 @@ func (h *Handler) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, 
 // For "labeled" actions it filters to AI labels (and skips drafts) and emits
 // "pull_request.labeled". For lifecycle actions it emits "pull_request.{action}".
 func (h *Handler) handlePullRequestEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	cfg := h.srv.Config()
+	
 	var payload struct {
 		Action      string             `json:"action"`
 		Label       webhookLabel       `json:"label"`
@@ -216,7 +234,7 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, w http.ResponseWri
 		return
 	}
 
-	repo, ok := cfg.RepoByName(payload.Repository.FullName)
+	repo, ok := h.repoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -267,7 +285,7 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, w http.ResponseWri
 // handleIssueCommentEvent handles X-GitHub-Event: issue_comment.
 // Only "created" actions are forwarded as "issue_comment.created".
 func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	cfg := h.srv.Config()
+	
 	var payload struct {
 		Action     string            `json:"action"`
 		Comment    webhookComment    `json:"comment"`
@@ -284,7 +302,7 @@ func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWr
 		return
 	}
 
-	repo, ok := cfg.RepoByName(payload.Repository.FullName)
+	repo, ok := h.repoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -306,7 +324,7 @@ func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWr
 // handlePullRequestReviewEvent handles X-GitHub-Event: pull_request_review.
 // Only "submitted" actions are forwarded as "pull_request_review.submitted".
 func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	cfg := h.srv.Config()
+	
 	var payload struct {
 		Action      string             `json:"action"`
 		Review      webhookReview      `json:"review"`
@@ -323,7 +341,7 @@ func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, w http.Respo
 		return
 	}
 
-	repo, ok := cfg.RepoByName(payload.Repository.FullName)
+	repo, ok := h.repoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -347,7 +365,7 @@ func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, w http.Respo
 // pull_request_review_comment. Only "created" actions are forwarded as
 // "pull_request_review_comment.created".
 func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	cfg := h.srv.Config()
+	
 	var payload struct {
 		Action      string             `json:"action"`
 		Comment     webhookComment     `json:"comment"`
@@ -364,7 +382,7 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 		return
 	}
 
-	repo, ok := cfg.RepoByName(payload.Repository.FullName)
+	repo, ok := h.repoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -385,7 +403,7 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 
 // handlePushEvent handles X-GitHub-Event: push.
 func (h *Handler) handlePushEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	cfg := h.srv.Config()
+	
 	var payload struct {
 		Ref        string            `json:"ref"`
 		After      string            `json:"after"`
@@ -397,7 +415,7 @@ func (h *Handler) handlePushEvent(ctx context.Context, w http.ResponseWriter, bo
 		return
 	}
 
-	repo, ok := cfg.RepoByName(payload.Repository.FullName)
+	repo, ok := h.repoByName(payload.Repository.FullName)
 	if !ok || !repo.Enabled {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -426,7 +444,7 @@ func (h *Handler) handlePushEvent(ctx context.Context, w http.ResponseWriter, bo
 
 // enqueue pushes ev onto the event queue, handling all error cases.
 func (h *Handler) enqueue(ctx context.Context, w http.ResponseWriter, ev workflow.Event, deliveryID string) {
-	if err := h.channels.PushEvent(ctx, ev); err != nil {
+	if _, err := h.channels.PushEvent(ctx, ev); err != nil {
 		if errors.Is(err, workflow.ErrEventQueueFull) {
 			h.delivery.Delete(deliveryID)
 			h.logger.Warn().Str("repo", ev.Repo.FullName).Str("kind", ev.Kind).Msg("event queue full, dropping webhook")

@@ -12,7 +12,7 @@ import (
 )
 
 // registerTools wires the core tool set onto the MCP server. Handlers read
-// config from deps.Config and enqueue events via deps.Queue, matching the
+// config from deps.Config and enqueue events via deps.Channels, matching the
 // semantics of the equivalent REST endpoints.
 func registerTools(srv *server.MCPServer, deps Deps) {
 	srv.AddTool(
@@ -136,6 +136,16 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolGetTraceSteps(deps),
 		)
 		srv.AddTool(
+			mcpgo.NewTool("get_trace_prompt",
+				mcpgo.WithDescription("Return the composed prompt the daemon sent to the AI CLI for this span — the exact System+User text the agent saw. Stored gzipped on the trace row; this tool decompresses on the fly. Returns an error when no prompt was recorded (pre-009-migration spans). Same path as GET /traces/{span_id}/prompt."),
+				mcpgo.WithString("span_id",
+					mcpgo.Required(),
+					mcpgo.Description("Span ID to fetch the prompt for."),
+				),
+			),
+			toolGetTracePrompt(deps),
+		)
+		srv.AddTool(
 			mcpgo.NewTool("get_graph",
 				mcpgo.WithDescription("Return the agent interaction graph: every configured agent as a node plus observed inter-agent dispatch edges with counts and individual dispatch records."),
 			),
@@ -150,7 +160,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolGetDispatches(deps),
 		)
 	}
-	if deps.DB != nil {
+	if deps.Store != nil {
 		srv.AddTool(
 			mcpgo.NewTool("get_memory",
 				mcpgo.WithDescription("Return the stored markdown memory for an agent/repo pair. Only autonomous agents keep memory; event-driven runs don't."),
@@ -230,8 +240,6 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			),
 			toolDeleteSkill(deps),
 		)
-	}
-	if deps.Fleet != nil {
 		srv.AddTool(
 			mcpgo.NewTool("create_backend",
 				mcpgo.WithDescription("Create or update an AI backend. Upsert semantics: a write to an existing name overwrites it. Returns the canonical (normalized) backend persisted by the store. Same path as POST /backends."),
@@ -254,9 +262,6 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				),
 				mcpgo.WithNumber("max_prompt_chars",
 					mcpgo.Description("Maximum composed prompt length in characters. Defaults are applied when zero."),
-				),
-				mcpgo.WithString("redaction_salt_env",
-					mcpgo.Description("Name of the environment variable carrying the prompt-log redaction salt for this backend."),
 				),
 			),
 			toolCreateBackend(deps),
@@ -293,9 +298,6 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				mcpgo.WithNumber("max_prompt_chars",
 					mcpgo.Description("Maximum composed prompt length. Must be > 0 when supplied. Omit to leave unchanged."),
 				),
-				mcpgo.WithString("redaction_salt_env",
-					mcpgo.Description("Name of the environment variable carrying the prompt-log redaction salt. Omit to leave unchanged."),
-				),
 			),
 			toolUpdateBackend(deps),
 		)
@@ -309,8 +311,6 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			),
 			toolDeleteBackend(deps),
 		)
-	}
-	if deps.Fleet != nil {
 		srv.AddTool(
 			mcpgo.NewTool("create_agent",
 				mcpgo.WithDescription("Create or update an agent. Upsert semantics: a write to an existing name overwrites it. Returns the canonical (normalized) agent persisted by the store. Same path as POST /agents."),
@@ -456,6 +456,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolDeleteRepo(deps),
 		)
 	}
+	registerRunnersTools(srv, deps)
 	if deps.Repos != nil {
 		srv.AddTool(
 			mcpgo.NewTool("get_binding",
@@ -573,12 +574,11 @@ func backendJSON(name string, b fleet.Backend) map[string]any {
 		"command":            b.Command,
 		"version":            b.Version,
 		"models":             nilSafe(b.Models),
-		"healthy":            b.Healthy,
-		"health_detail":      b.HealthDetail,
-		"local_model_url":    b.LocalModelURL,
-		"timeout_seconds":    b.TimeoutSeconds,
-		"max_prompt_chars":   b.MaxPromptChars,
-		"redaction_salt_env": b.RedactionSaltEnv,
+		"healthy":          b.Healthy,
+		"health_detail":    b.HealthDetail,
+		"local_model_url":  b.LocalModelURL,
+		"timeout_seconds":  b.TimeoutSeconds,
+		"max_prompt_chars": b.MaxPromptChars,
 	}
 }
 

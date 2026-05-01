@@ -140,9 +140,9 @@ func migrate(db *sql.DB) error {
 }
 
 // Import writes cfg into the database, upserting every entity. Existing rows
-// are replaced (INSERT OR REPLACE). Prompts are stored inline — any
-// prompt_file references must be resolved in cfg before calling Import (i.e.
-// pass the output of config.Load which resolves them eagerly).
+// are replaced (INSERT OR REPLACE). Prompts are stored inline — agents and
+// skills must carry their full prompt text in cfg.Prompt before calling
+// Import.
 //
 // Secrets (WebhookSecret) are NOT written — only the env-var name
 // (WebhookSecretEnv) is stored. The secret is re-resolved from the
@@ -260,11 +260,11 @@ func importBackends(tx *sql.Tx, backends map[string]fleet.Backend) error {
 		healthy := boolToInt(b.Healthy)
 		if _, err := tx.Exec(`
 			INSERT OR REPLACE INTO backends
-			  (name,command,version,models,healthy,health_detail,local_model_url,timeout_seconds,max_prompt_chars,redaction_salt_env)
-			VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			  (name,command,version,models,healthy,health_detail,local_model_url,timeout_seconds,max_prompt_chars)
+			VALUES (?,?,?,?,?,?,?,?,?)`,
 			name, b.Command,
 			b.Version, string(models), healthy, b.HealthDetail, b.LocalModelURL,
-			b.TimeoutSeconds, b.MaxPromptChars, b.RedactionSaltEnv,
+			b.TimeoutSeconds, b.MaxPromptChars,
 		); err != nil {
 			return fmt.Errorf("store import: upsert backend %s: %w", name, err)
 		}
@@ -296,7 +296,7 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
 		}
 		allowPRs := boolToInt(a.AllowPRs)
 		allowDispatch := boolToInt(a.AllowDispatch)
-		allowMemory := allowMemoryInt(a.AllowMemory)
+		allowMemory := bindingEnabledInt(a.AllowMemory)
 		if _, err := tx.Exec(`
 			INSERT OR REPLACE INTO agents
 			  (name,backend,model,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description,allow_memory)
@@ -417,7 +417,10 @@ func loadDaemon(db *sql.DB, cfg *config.Config) error {
 }
 
 func loadBackends(db querier, cfg *config.Config) error {
-	rows, err := db.Query("SELECT name,command,version,models,healthy,health_detail,local_model_url,timeout_seconds,max_prompt_chars,redaction_salt_env FROM backends")
+	// redaction_salt_env was removed when prompts started being stored
+	// directly on traces. The column is left in the table (NULL on every
+	// new row) but no longer mapped to a struct field.
+	rows, err := db.Query("SELECT name,command,version,models,healthy,health_detail,local_model_url,timeout_seconds,max_prompt_chars FROM backends")
 	if err != nil {
 		return fmt.Errorf("store load: query backends: %w", err)
 	}
@@ -425,9 +428,9 @@ func loadBackends(db querier, cfg *config.Config) error {
 
 	backends := make(map[string]fleet.Backend)
 	for rows.Next() {
-		var name, command, version, modelsJSON, healthDetail, localModelURL, saltEnv string
+		var name, command, version, modelsJSON, healthDetail, localModelURL string
 		var timeout, maxChars, healthy int
-		if err := rows.Scan(&name, &command, &version, &modelsJSON, &healthy, &healthDetail, &localModelURL, &timeout, &maxChars, &saltEnv); err != nil {
+		if err := rows.Scan(&name, &command, &version, &modelsJSON, &healthy, &healthDetail, &localModelURL, &timeout, &maxChars); err != nil {
 			return fmt.Errorf("store load: scan backend: %w", err)
 		}
 		var models []string
@@ -435,15 +438,14 @@ func loadBackends(db querier, cfg *config.Config) error {
 			return fmt.Errorf("store load: parse backend %s models: %w", name, err)
 		}
 		backends[name] = fleet.Backend{
-			Command:          command,
-			Version:          version,
-			Models:           models,
-			Healthy:          intToBool(healthy),
-			HealthDetail:     healthDetail,
-			LocalModelURL:    localModelURL,
-			TimeoutSeconds:   timeout,
-			MaxPromptChars:   maxChars,
-			RedactionSaltEnv: saltEnv,
+			Command:        command,
+			Version:        version,
+			Models:         models,
+			Healthy:        intToBool(healthy),
+			HealthDetail:   healthDetail,
+			LocalModelURL:  localModelURL,
+			TimeoutSeconds: timeout,
+			MaxPromptChars: maxChars,
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -622,7 +624,7 @@ func ReadMemory(db *sql.DB, agent, repo string) (string, bool, time.Time, error)
 	// the bare "YYYY-MM-DD HH:MM:SS" SQLite text format as a safety net.
 	t, parseErr := time.Parse(time.RFC3339, updatedAt)
 	if parseErr != nil {
-		t, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
+		t, _ = time.Parse(time.DateTime, updatedAt)
 	}
 	return content, true, t.UTC(), nil
 }
@@ -651,20 +653,12 @@ func boolToInt(b bool) int {
 // intToBool converts a SQLite 0/1 to bool.
 func intToBool(i int) bool { return i != 0 }
 
-// bindingEnabledInt converts a binding's nullable enabled flag to 0/1 for
-// SQLite storage. Nil means the default (enabled), matching IsEnabled().
+// bindingEnabledInt converts a nullable *bool flag to 0/1 for SQLite storage.
+// Nil means the default (enabled); only an explicit non-nil false maps to 0.
+// Used for both binding.Enabled and agent.AllowMemory, which share this
+// nil-means-default-on semantics.
 func bindingEnabledInt(enabled *bool) int {
 	if enabled != nil && !*enabled {
-		return 0
-	}
-	return 1
-}
-
-// allowMemoryInt converts an agent's nullable allow_memory flag to 0/1 for
-// SQLite storage. Nil means the default (enabled), matching
-// Agent.IsAllowMemory(); only an explicit non-nil false maps to 0.
-func allowMemoryInt(allow *bool) int {
-	if allow != nil && !*allow {
 		return 0
 	}
 	return 1

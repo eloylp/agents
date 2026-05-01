@@ -13,24 +13,28 @@ const (
 	DefaultMaxPromptChars   = 12000
 )
 
+func normalize(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
 // NormalizeAgentName returns the canonical form of an agent name (lowercase,
 // trimmed). CRUD callers should normalise path-parameter names before lookups
 // or deletes so HTTP routes follow the same case-insensitive semantics as the
 // in-memory lookups.
 func NormalizeAgentName(name string) string {
-	return strings.ToLower(strings.TrimSpace(name))
+	return normalize(name)
 }
 
 // NormalizeSkillName returns the canonical form of a skill map key
 // (lowercase, trimmed). CRUD callers should normalise the key before writing.
 func NormalizeSkillName(name string) string {
-	return strings.ToLower(strings.TrimSpace(name))
+	return normalize(name)
 }
 
 // NormalizeBackendName returns the canonical form of a backend map key
 // (lowercase, trimmed). CRUD callers should normalise the key before writing.
 func NormalizeBackendName(name string) string {
-	return strings.ToLower(strings.TrimSpace(name))
+	return normalize(name)
 }
 
 // NormalizeRepoName returns the canonical form of a repo full name
@@ -38,7 +42,7 @@ func NormalizeBackendName(name string) string {
 // before lookups or deletes so HTTP routes follow the same case-insensitive
 // semantics as the in-memory lookups.
 func NormalizeRepoName(name string) string {
-	return strings.ToLower(strings.TrimSpace(name))
+	return normalize(name)
 }
 
 // NormalizeAgent applies the same name/field normalization that the YAML
@@ -51,7 +55,6 @@ func NormalizeAgent(a *Agent) {
 	a.Backend = NormalizeBackendName(a.Backend)
 	a.Model = strings.TrimSpace(a.Model)
 	a.Prompt = strings.TrimSpace(a.Prompt)
-	a.PromptFile = strings.TrimSpace(a.PromptFile)
 	a.Description = strings.TrimSpace(a.Description)
 	for i := range a.Skills {
 		a.Skills[i] = NormalizeSkillName(a.Skills[i])
@@ -62,10 +65,9 @@ func NormalizeAgent(a *Agent) {
 }
 
 // NormalizeSkill applies the same field normalization that the YAML loader
-// performs on skill values: trims Prompt and PromptFile.
+// performs on skill values: trims Prompt.
 func NormalizeSkill(s *Skill) {
 	s.Prompt = strings.TrimSpace(s.Prompt)
-	s.PromptFile = strings.TrimSpace(s.PromptFile)
 }
 
 // NormalizeBackend applies the same per-entry field normalization that the
@@ -91,7 +93,7 @@ func NormalizeRepo(r *Repo) {
 		r.Use[i].Agent = NormalizeAgentName(r.Use[i].Agent)
 		r.Use[i].Cron = strings.TrimSpace(r.Use[i].Cron)
 		for k := range r.Use[i].Events {
-			r.Use[i].Events[k] = strings.ToLower(strings.TrimSpace(r.Use[i].Events[k]))
+			r.Use[i].Events[k] = normalize(r.Use[i].Events[k])
 		}
 	}
 }

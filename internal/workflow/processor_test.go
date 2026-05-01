@@ -28,7 +28,7 @@ func (s *stubProcessorHandler) HandleEvent(_ context.Context, _ Event) error {
 // installed — not an already-cancelled sentinel.
 func TestProcessorProcessingCtxReturnsDrainContextWithDeadline(t *testing.T) {
 	t.Parallel()
-	dataChannels := NewDataChannels(1)
+	dataChannels := NewDataChannels(1, newTempStore(t))
 	processor := NewProcessor(dataChannels, &stubProcessorHandler{}, 1, time.Second, zerolog.Nop())
 
 	// Simulate shutdown: run ctx is cancelled.
@@ -76,7 +76,7 @@ func TestProcessorProcessingCtxReturnsDrainContextWithDeadline(t *testing.T) {
 
 func TestProcessorRunDrainsQueueOnCancellation(t *testing.T) {
 	t.Parallel()
-	dataChannels := NewDataChannels(4)
+	dataChannels := NewDataChannels(4, newTempStore(t))
 	handler := &stubProcessorHandler{}
 	processor := NewProcessor(dataChannels, handler, 1, time.Second, zerolog.Nop())
 
@@ -87,10 +87,10 @@ func TestProcessorRunDrainsQueueOnCancellation(t *testing.T) {
 		close(done)
 	}()
 
-	if err := dataChannels.PushEvent(context.Background(), Event{Repo: RepoRef{FullName: "owner/repo"}, Kind: "issues.labeled", Number: 1}); err != nil {
+	if _, err := dataChannels.PushEvent(context.Background(), Event{Repo: RepoRef{FullName: "owner/repo"}, Kind: "issues.labeled", Number: 1}); err != nil {
 		t.Fatalf("push issue event: %v", err)
 	}
-	if err := dataChannels.PushEvent(context.Background(), Event{Repo: RepoRef{FullName: "owner/repo"}, Kind: "pull_request.labeled", Number: 2}); err != nil {
+	if _, err := dataChannels.PushEvent(context.Background(), Event{Repo: RepoRef{FullName: "owner/repo"}, Kind: "pull_request.labeled", Number: 2}); err != nil {
 		t.Fatalf("push pr event: %v", err)
 	}
 
@@ -145,7 +145,7 @@ func TestProcessorWorkerPoolAllowsConcurrentProcessing(t *testing.T) {
 	const workers = 3
 	const events = workers // saturate the pool
 
-	dataChannels := NewDataChannels(events * 2)
+	dataChannels := NewDataChannels(events*2, newTempStore(t))
 	handler := newBlockingProcessorHandler()
 	processor := NewProcessor(dataChannels, handler, workers, 5*time.Second, zerolog.Nop())
 
@@ -160,7 +160,7 @@ func TestProcessorWorkerPoolAllowsConcurrentProcessing(t *testing.T) {
 
 	// Push enough events to fill all workers.
 	for i := range events {
-		if err := dataChannels.PushEvent(context.Background(), Event{
+		if _, err := dataChannels.PushEvent(context.Background(), Event{
 			Repo:   RepoRef{FullName: "owner/repo"},
 			Kind:   "issues.labeled",
 			Number: i + 1,

@@ -16,15 +16,37 @@ import (
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/store"
 )
 
 // labeledKinds are the event kinds that trigger label-based bindings.
 var labeledKinds = []string{"issues.labeled", "pull_request.labeled"}
 
+// SpanInput is the call shape for TraceRecorder.RecordSpan. Defined
+// here as well as in the observe package so the engine doesn't import
+// observe just to name the struct; the two are kept structurally
+// identical and the observe.Store.RecordSpan adapter accepts this
+// shape directly via a thin wrapper at construction time. Keeping the
+// type local mirrors how the engine treats every other recorder.
+type SpanInput struct {
+	SpanID, RootEventID, ParentSpanID string
+	Agent, Backend, Repo              string
+	EventKind, InvokedBy              string
+	Number, DispatchDepth             int
+	QueueWaitMs                       int64
+	ArtifactsCount                    int
+	Summary                           string
+	StartedAt, FinishedAt             time.Time
+	Status, ErrorMsg                  string
+	Prompt                            string
+	InputTokens, OutputTokens         int64
+	CacheReadTokens, CacheWriteTokens int64
+}
+
 // TraceRecorder is an optional observer that the Engine calls when an agent
 // run completes. Implementations must be safe for concurrent use.
 type TraceRecorder interface {
-	RecordSpan(spanID, rootEventID, parentSpanID, agent, backend, repo, eventKind, invokedBy string, number, dispatchDepth int, queueWaitMs int64, artifactsCount int, summary string, startedAt, finishedAt time.Time, status, errMsg string)
+	RecordSpan(in SpanInput)
 }
 
 // RunTracker is an optional observer that the Engine calls when an agent run
@@ -33,6 +55,23 @@ type TraceRecorder interface {
 type RunTracker interface {
 	StartRun(agentName string)
 	FinishRun(agentName string)
+}
+
+// RunStreamPublisher is an optional collaborator the Engine notifies as a
+// run's stdout streams in. Implementations register the active span on
+// BeginRun (so the runners view can render an in-flight row with span_id
+// and the UI can subscribe), receive each stdout line via PublishLine,
+// and clean up via EndRun. Must be safe for concurrent use.
+type RunStreamPublisher interface {
+	BeginRun(in BeginRunInput)
+	PublishLine(spanID string, line []byte)
+	EndRun(spanID string)
+}
+
+// BeginRunInput is the call shape for RunStreamPublisher.BeginRun.
+type BeginRunInput struct {
+	SpanID, EventID, Agent, Backend, Repo, EventKind string
+	StartedAt                                        time.Time
 }
 
 // GraphRecorder is an optional observer that the Engine calls when a dispatch
@@ -99,10 +138,8 @@ type MemoryBackend interface {
 }
 
 type Engine struct {
-	cfg           *config.Config
-	cfgMu         sync.RWMutex // protects cfg during hot-reload
-	runners       map[string]ai.Runner
-	runnersMu     sync.RWMutex // protects runners during hot-reload
+	store         *store.Store
+	runnerBuilder func(name string, b fleet.Backend) ai.Runner
 	dispatcher    *Dispatcher
 	memory        MemoryBackend
 	maxConcurrent int
@@ -110,6 +147,7 @@ type Engine struct {
 	traceRec      TraceRecorder
 	graphRec      GraphRecorder
 	runTracker    RunTracker
+	streamPub     RunStreamPublisher
 	stepRec       StepRecorder
 	lastRunRec    LastRunRecorder // optional; only fired for Kind=="cron"
 	runLock       runLocks        // serializes (agent, repo) runs across kinds
@@ -126,32 +164,87 @@ func (e *Engine) WithMemory(m MemoryBackend) {
 
 // NewEngine builds an Engine. queue may be nil, in which case dispatch
 // requests from agent responses are validated and logged but not enqueued.
-func NewEngine(cfg *config.Config, runners map[string]ai.Runner, queue EventEnqueuer, logger zerolog.Logger) *Engine {
-	max := cfg.Daemon.Processor.MaxConcurrentAgents
+//
+// The engine reads agents, repos, skills, and backends from db on every
+// event — there is no in-memory cfg cache. Static processor settings
+// (concurrency cap, dispatch safety limits) are passed at construction
+// because they never mutate via CRUD; CRUD touches the four entity sets
+// only.
+func NewEngine(st *store.Store, processorCfg config.ProcessorConfig, queue EventEnqueuer, logger zerolog.Logger) *Engine {
+	max := processorCfg.MaxConcurrentAgents
 	if max <= 0 {
 		max = 4
 	}
 	eng := &Engine{
-		cfg:           cfg,
-		runners:       runners,
+		store:         st,
 		maxConcurrent: max,
 		logger:        logger.With().Str("component", "workflow_engine").Logger(),
 	}
+	eng.runnerBuilder = eng.defaultRunnerFor
 	if queue != nil {
-		agentMap := make(map[string]fleet.Agent, len(cfg.Agents))
-		for _, a := range cfg.Agents {
-			agentMap[a.Name] = a
-		}
-		dedup := NewDispatchDedupStore(cfg.Daemon.Processor.Dispatch.DedupWindowSeconds)
-		eng.dispatcher = NewDispatcher(cfg.Daemon.Processor.Dispatch, agentMap, dedup, queue, logger)
+		dedup := NewDispatchDedupStore(processorCfg.Dispatch.DedupWindowSeconds)
+		eng.dispatcher = NewDispatcher(processorCfg.Dispatch, st, dedup, queue, logger)
 	}
 	return eng
+}
+
+// loadCfg reads the four entity sets from SQLite and returns a *config.Config
+// scoped to a single event. The returned snapshot has only the fields the
+// hot path looks at populated (agents, repos, skills, AIBackends); daemon-
+// level fields the engine doesn't read are left zero.
+func (e *Engine) loadCfg() (*config.Config, error) {
+	agents, repos, skills, backends, err := e.store.ReadSnapshot()
+	if err != nil {
+		return nil, fmt.Errorf("engine: load cfg snapshot: %w", err)
+	}
+	cfg := &config.Config{
+		Agents: agents,
+		Repos:  repos,
+		Skills: skills,
+		Daemon: config.DaemonConfig{AIBackends: backends},
+	}
+	return cfg, nil
+}
+
+// defaultRunnerFor builds the ai.Runner that drives the AI CLI for the
+// named backend. Built per-event so that backend changes via CRUD take
+// effect immediately on the next event without any reload chain. The
+// construction is cheap: a struct holding command + env + timeouts.
+//
+// Tests override the runner via WithRunnerBuilder so they can observe
+// what the engine asked the runner to do without spawning a real CLI.
+func (e *Engine) defaultRunnerFor(name string, b fleet.Backend) ai.Runner {
+	var env map[string]string
+	if b.LocalModelURL != "" {
+		env = map[string]string{"ANTHROPIC_BASE_URL": b.LocalModelURL}
+	}
+	return ai.NewCommandRunner(
+		name, "command", b.Command, env,
+		b.TimeoutSeconds, b.MaxPromptChars,
+		e.logger,
+	)
+}
+
+// WithRunnerBuilder overrides the runner factory the engine uses to
+// resolve a backend to an ai.Runner on each dispatch. Production wires
+// the default that constructs an ai.NewCommandRunner; tests inject stub
+// runners so they can observe the request the engine produced.
+func (e *Engine) WithRunnerBuilder(fn func(name string, b fleet.Backend) ai.Runner) {
+	e.runnerBuilder = fn
 }
 
 // WithTraceRecorder attaches an optional recorder that is called on each
 // completed agent run. It is safe to call after NewEngine and before Run.
 func (e *Engine) WithTraceRecorder(r TraceRecorder) {
 	e.traceRec = r
+}
+
+// WithRunStreamPublisher attaches an optional collaborator the engine
+// notifies on every run's lifecycle and stdout. Wires the AI CLI's
+// per-line output through to observe.RunRegistry's per-span hub so the
+// UI can stream the agent's "thinking" live.
+func (e *Engine) WithRunStreamPublisher(p RunStreamPublisher) {
+	e.streamPub = p
 }
 
 // WithRunTracker attaches an optional tracker that is called when an agent run
@@ -184,44 +277,15 @@ func (e *Engine) WithGraphRecorder(r GraphRecorder) {
 	}
 }
 
-// UpdateConfig atomically replaces the config snapshot used for event routing
-// and prompt rendering. It is safe to call concurrently with ongoing agent
-// runs. Each handler method takes a snapshot at entry and releases the lock
-// before the slow runner.Run call, so hot-reload latency is minimal.
-func (e *Engine) UpdateConfig(cfg *config.Config) {
-	e.cfgMu.Lock()
-	e.cfg = cfg
-	e.cfgMu.Unlock()
-}
-
-// UpdateRunners atomically replaces the runner map. It is safe to call
-// concurrently with ongoing agent runs.
-func (e *Engine) UpdateRunners(runners map[string]ai.Runner) {
-	e.runnersMu.Lock()
-	e.runners = runners
-	e.runnersMu.Unlock()
-}
-
-// UpdateConfigAndRunners atomically replaces both the config snapshot and the
-// runner map in a single critical section (cfgMu then runnersMu, consistent
-// with the read order in runAgent). Use this instead of calling UpdateConfig
-// and UpdateRunners separately when both values are changing together so that
-// concurrent readers never observe a mismatched config/runner pair.
-func (e *Engine) UpdateConfigAndRunners(cfg *config.Config, runners map[string]ai.Runner) {
-	e.cfgMu.Lock()
-	e.runnersMu.Lock()
-	e.cfg = cfg
-	e.runners = runners
-	e.runnersMu.Unlock()
-	e.cfgMu.Unlock()
-}
-
-// StartDispatchDedup starts the background eviction loop for the dispatch
-// dedup store. It is a no-op when dispatch is not configured.
-func (e *Engine) StartDispatchDedup(ctx context.Context) {
-	if e.dispatcher != nil {
-		e.dispatcher.dedup.Start(ctx)
+// RunDispatchDedup blocks until ctx is cancelled, running the dispatch
+// dedup eviction loop. Returns immediately when dispatch is not
+// configured. The caller (typically the daemon's errgroup) owns
+// goroutine creation and waits on Run for clean shutdown.
+func (e *Engine) RunDispatchDedup(ctx context.Context) error {
+	if e.dispatcher == nil {
+		return nil
 	}
+	return e.dispatcher.dedup.Run(ctx)
 }
 
 // DispatchStats returns a snapshot of dispatch counters. Returns zero values
@@ -276,16 +340,14 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		return fmt.Errorf("agent.dispatch event missing target_agent in payload")
 	}
 
-	// Snapshot both cfg and runners atomically (same lock order as
-	// UpdateConfigAndRunners) so that the routing lookup and the subsequent
-	// runAgent call operate on a single consistent epoch. Releasing both locks
-	// before the slow runAgent call keeps contention minimal.
-	e.cfgMu.RLock()
-	e.runnersMu.RLock()
-	cfg := e.cfg
-	runners := e.runners
-	e.runnersMu.RUnlock()
-	e.cfgMu.RUnlock()
+	// Read the four entity sets fresh from SQLite for this event. The
+	// returned cfg is a per-event snapshot — no caching across events, no
+	// reload chain. Cost is one SQLite snapshot read (~111µs for typical
+	// fleet sizes); irrelevant at this daemon's traffic.
+	cfg, err := e.loadCfg()
+	if err != nil {
+		return err
+	}
 
 	repo, ok := cfg.RepoByName(ev.Repo.FullName)
 	if !ok || !repo.Enabled {
@@ -351,7 +413,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		Str("kind", ev.Kind).
 		Msg("running dispatched agent")
 
-	runErr := e.runAgent(ctx, ev, agent, cfg, runners)
+	runErr := e.runAgent(ctx, ev, agent, cfg)
 
 	// Release the on-demand claim taken above for agents.run.
 	if ev.Kind == "agents.run" && e.dispatcher != nil {
@@ -390,14 +452,13 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 // duplicate runs within the dedup window.
 // A failing agent does not abort the others; all errors are joined and returned.
 func (e *Engine) fanOut(ctx context.Context, ev Event) error {
-	// Snapshot both cfg and runners in one critical section so that the
-	// agent lookup and the subsequent runAgent calls share a single epoch.
-	e.cfgMu.RLock()
-	e.runnersMu.RLock()
-	cfg := e.cfg
-	runners := e.runners
-	e.runnersMu.RUnlock()
-	e.cfgMu.RUnlock()
+	// Read the four entity sets from SQLite for this event. The cfg
+	// snapshot scopes the agent lookup and the runAgent calls beneath it
+	// to a single consistent epoch.
+	cfg, err := e.loadCfg()
+	if err != nil {
+		return err
+	}
 
 	matched := e.agentsForEvent(cfg, ev)
 	if len(matched) == 0 {
@@ -464,7 +525,7 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 				}
 			}()
 
-			if err := e.runAgent(ctx, ev, a, cfg, runners); err != nil {
+			if err := e.runAgent(ctx, ev, a, cfg); err != nil {
 				// Abandon on failure so that a retry or a subsequent event can
 				// claim the slot and attempt the run again.
 				if e.dispatcher != nil && ev.Number > 0 {
@@ -589,16 +650,20 @@ func extractDispatchContext(ev Event) (rootEventID string, depth int) {
 	return GenEventID(), 0
 }
 
-// runAgent executes agent using the cfg and runners snapshot provided by the
-// caller. Both must come from the same atomic snapshot so that agent lookup
-// and backend resolution operate on a single consistent epoch. The caller is
-// responsible for snapshotting under cfgMu+runnersMu before calling here.
-func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg *config.Config, runners map[string]ai.Runner) error {
+// runAgent executes agent using the per-event cfg snapshot the caller
+// loaded from SQLite. Backend resolution and runner construction happen
+// here from that same snapshot, so the agent's backend, prompt, skills,
+// and runner configuration all come from one consistent read.
+func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg *config.Config) error {
 	backend := cfg.ResolveBackend(agent.Backend)
 	if backend == "" {
 		return fmt.Errorf("agent %q: no runner available for backend %q", agent.Name, agent.Backend)
 	}
-	if backendCfg, ok := cfg.Daemon.AIBackends[backend]; ok && fleet.IsPinnedModelUnavailable(agent.Model, backendCfg) {
+	backendCfg, ok := cfg.Daemon.AIBackends[backend]
+	if !ok {
+		return fmt.Errorf("agent %q: no runner for backend %q", agent.Name, backend)
+	}
+	if fleet.IsPinnedModelUnavailable(agent.Model, backendCfg) {
 		return fmt.Errorf(
 			"agent %q: configured model %q is not available for backend %q; run backend discovery and update the agent model",
 			agent.Name,
@@ -606,10 +671,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 			backend,
 		)
 	}
-	runner, ok := runners[backend]
-	if !ok {
-		return fmt.Errorf("agent %q: no runner for backend %q", agent.Name, backend)
-	}
+	runner := e.runnerBuilder(backend, backendCfg)
 
 	rootEventID, dispatchDepth := extractDispatchContext(ev)
 
@@ -691,6 +753,25 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 
 	spanStart := time.Now()
 	spanID := GenEventID()
+
+	// Live-stream registration: announce the run to the publisher so the
+	// runners view can show an in-flight row with this span_id and the
+	// SSE hub is ready before stdout starts arriving. Always pair with
+	// EndRun so the active entry is cleared.
+	var onLine func([]byte)
+	if e.streamPub != nil {
+		e.streamPub.BeginRun(BeginRunInput{
+			SpanID:    spanID,
+			EventID:   ev.ID,
+			Agent:     agent.Name,
+			Backend:   backend,
+			Repo:      ev.Repo.FullName,
+			EventKind: ev.Kind,
+			StartedAt: spanStart,
+		})
+		defer e.streamPub.EndRun(spanID)
+		onLine = func(line []byte) { e.streamPub.PublishLine(spanID, line) }
+	}
 	resp, runErr := runner.Run(ctx, ai.Request{
 		Workflow: workflow,
 		Repo:     ev.Repo.FullName,
@@ -698,6 +779,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		Model:    agent.Model,
 		System:   rendered.System,
 		User:     rendered.User,
+		OnLine:   onLine,
 	})
 	spanEnd := time.Now()
 
@@ -709,35 +791,55 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		queueWaitMs = spanStart.Sub(ev.EnqueuedAt).Milliseconds()
 	}
 
-	// Record the trace span regardless of outcome.
+	// Record the trace span regardless of outcome. The composed prompt
+	// (system + user) is captured so operators can inspect "what
+	// exactly did the agent see" from the Traces / Runners UI; the
+	// observe store gzips it before persistence. Token usage comes
+	// from the runner's CLI parser.
 	if e.traceRec != nil {
 		status, errMsg := "success", ""
 		if runErr != nil {
 			status = "error"
 			errMsg = runErr.Error()
 		}
-		e.traceRec.RecordSpan(
-			spanID, rootEventID, parentSpanID,
-			agent.Name, backend,
-			ev.Repo.FullName, ev.Kind, invokedBy,
-			ev.Number, dispatchDepth,
-			queueWaitMs, len(resp.Artifacts), resp.Summary,
-			spanStart, spanEnd,
-			status, errMsg,
-		)
+		composedPrompt := rendered.System
+		if rendered.User != "" {
+			if composedPrompt != "" {
+				composedPrompt += "\n\n"
+			}
+			composedPrompt += rendered.User
+		}
+		e.traceRec.RecordSpan(SpanInput{
+			SpanID:           spanID,
+			RootEventID:      rootEventID,
+			ParentSpanID:     parentSpanID,
+			Agent:            agent.Name,
+			Backend:          backend,
+			Repo:             ev.Repo.FullName,
+			EventKind:        ev.Kind,
+			InvokedBy:        invokedBy,
+			Number:           ev.Number,
+			DispatchDepth:    dispatchDepth,
+			QueueWaitMs:      queueWaitMs,
+			ArtifactsCount:   len(resp.Artifacts),
+			Summary:          resp.Summary,
+			StartedAt:        spanStart,
+			FinishedAt:       spanEnd,
+			Status:           status,
+			ErrorMsg:         errMsg,
+			Prompt:           composedPrompt,
+			InputTokens:      resp.Usage.InputTokens,
+			OutputTokens:     resp.Usage.OutputTokens,
+			CacheReadTokens:  resp.Usage.CacheReadTokens,
+			CacheWriteTokens: resp.Usage.CacheWriteTokens,
+		})
 	}
 
-	// Record transcript steps when available. Translate from the runner-internal
-	// ai.TraceStep to the domain-level workflow.TraceStep at this boundary.
+	// Record transcript steps when available.
 	if e.stepRec != nil && len(resp.Steps) > 0 {
 		wsteps := make([]TraceStep, len(resp.Steps))
 		for i, s := range resp.Steps {
-			wsteps[i] = TraceStep{
-				ToolName:      s.ToolName,
-				InputSummary:  s.InputSummary,
-				OutputSummary: s.OutputSummary,
-				DurationMs:    s.DurationMs,
-			}
+			wsteps[i] = TraceStep(s)
 		}
 		e.stepRec.RecordSteps(spanID, wsteps)
 	}

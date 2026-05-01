@@ -140,7 +140,7 @@ func (c *Config) validateSkills() error {
 			return errors.New("config: skill name is required")
 		}
 		if skill.Prompt == "" {
-			return fmt.Errorf("config: skill %q: prompt is empty after resolution", name)
+			return fmt.Errorf("config: skill %q: prompt is empty", name)
 		}
 	}
 	return nil
@@ -163,32 +163,29 @@ func (c *Config) validateAgents() error {
 		if _, ok := c.Daemon.AIBackends[a.Backend]; !ok {
 			return fmt.Errorf("config: agent %q: unknown backend %q", a.Name, a.Backend)
 		}
-		if err := validateAgentModel(a.Name, a.Model, c.Daemon.AIBackends[a.Backend]); err != nil {
-			return err
-		}
 		for _, s := range a.Skills {
 			if _, ok := c.Skills[s]; !ok {
 				return fmt.Errorf("config: agent %q: unknown skill %q", a.Name, s)
 			}
 		}
 		if a.Prompt == "" {
-			return fmt.Errorf("config: agent %q: prompt is empty after resolution", a.Name)
+			return fmt.Errorf("config: agent %q: prompt is empty", a.Name)
 		}
 	}
 	// Validate can_dispatch references after all agents are seen.
-	return c.validateDispatchWiring()
+	return validateDispatchWiring(c.Agents)
 }
 
 // validateDispatchWiring checks cross-agent dispatch references:
-//   - can_dispatch entries must reference real agents in this config
+//   - can_dispatch entries must reference real agents
 //   - can_dispatch must not include the agent itself
 //   - agents referenced in any can_dispatch list must have a description
-func (c *Config) validateDispatchWiring() error {
-	agentByName := make(map[string]fleet.Agent, len(c.Agents))
-	for _, a := range c.Agents {
+func validateDispatchWiring(agents []fleet.Agent) error {
+	agentByName := make(map[string]fleet.Agent, len(agents))
+	for _, a := range agents {
 		agentByName[a.Name] = a
 	}
-	for _, a := range c.Agents {
+	for _, a := range agents {
 		for _, t := range a.CanDispatch {
 			target, ok := agentByName[t]
 			if !ok {
@@ -262,22 +259,9 @@ func countBindingTriggers(b fleet.Binding) int {
 	return n
 }
 
-func isValidBackendName(name string) bool {
-	return slices.Contains(validAIBackendNames, name)
-}
-
 func isSupportedBackend(name string, backend fleet.Backend) bool {
-	if isValidBackendName(name) {
+	if slices.Contains(validAIBackendNames, name) {
 		return true
 	}
 	return strings.TrimSpace(backend.LocalModelURL) != ""
-}
-
-// validateAgentModel is intentionally permissive at config validation time:
-// model/backend mismatches are allowed so that backend discovery can persist
-// model-catalog changes even when agents become temporarily orphaned.
-// Runtime paths enforce model availability strictly before invoking a
-// backend, and the UI surfaces orphan remediation flows.
-func validateAgentModel(_ string, _ string, _ fleet.Backend) error {
-	return nil
 }

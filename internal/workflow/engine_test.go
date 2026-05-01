@@ -5,11 +5,8 @@ import (
 	"errors"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
@@ -56,7 +53,8 @@ func (s *stubRunner) lastSystem() string {
 
 // newTestEngine builds an Engine with a canned agent set. The cfgMutator
 // hook lets tests override bindings, backends, etc.
-func newTestEngine(cfgMutator func(*config.Config)) (*Engine, *stubRunner) {
+func newTestEngine(t *testing.T, cfgMutator func(*config.Config)) (*Engine, *stubRunner) {
+	t.Helper()
 	runner := &stubRunner{}
 	cfg := &config.Config{
 		Daemon: config.DaemonConfig{
@@ -87,7 +85,7 @@ func newTestEngine(cfgMutator func(*config.Config)) (*Engine, *stubRunner) {
 	if cfgMutator != nil {
 		cfgMutator(cfg)
 	}
-	return NewEngine(cfg, map[string]ai.Runner{"claude": runner}, nil, zerolog.Nop()), runner
+	return newEngineFromCfg(t, cfg, map[string]ai.Runner{"claude": runner}, nil), runner
 }
 
 // labelEvent builds an Event for a labeled trigger (issues or pull_request).
@@ -102,7 +100,7 @@ func labelEvent(kind, repo, label string, number int) Event {
 
 func TestHandleEventIssueRunsMatchingLabelBinding(t *testing.T) {
 	t.Parallel()
-	e, runner := newTestEngine(func(c *config.Config) {
+	e, runner := newTestEngine(t, func(c *config.Config) {
 		c.Agents = append(c.Agents, fleet.Agent{Name: "refiner", Backend: "claude", Prompt: "Refine the issue."})
 		c.Repos[0].Use = append(c.Repos[0].Use, fleet.Binding{Agent: "refiner", Labels: []string{"ai:refine"}})
 	})
@@ -117,7 +115,7 @@ func TestHandleEventIssueRunsMatchingLabelBinding(t *testing.T) {
 
 func TestHandleEventPRRunsSingleLabelBinding(t *testing.T) {
 	t.Parallel()
-	e, runner := newTestEngine(nil)
+	e, runner := newTestEngine(t, nil)
 	err := e.HandleEvent(context.Background(), labelEvent("pull_request.labeled", "owner/repo", "ai:review:arch-reviewer", 1))
 	if err != nil {
 		t.Fatalf("HandleEvent: %v", err)
@@ -129,7 +127,7 @@ func TestHandleEventPRRunsSingleLabelBinding(t *testing.T) {
 
 func TestHandleEventFansOutToMultipleLabelBindings(t *testing.T) {
 	t.Parallel()
-	e, runner := newTestEngine(func(c *config.Config) {
+	e, runner := newTestEngine(t, func(c *config.Config) {
 		c.Repos[0].Use = []fleet.Binding{
 			{Agent: "arch-reviewer", Labels: []string{"ai:review:all"}},
 			{Agent: "sec-reviewer", Labels: []string{"ai:review:all"}},
@@ -146,7 +144,7 @@ func TestHandleEventFansOutToMultipleLabelBindings(t *testing.T) {
 
 func TestEngineSkipsUnmatchedLabel(t *testing.T) {
 	t.Parallel()
-	e, runner := newTestEngine(nil)
+	e, runner := newTestEngine(t, nil)
 	err := e.HandleEvent(context.Background(), labelEvent("issues.labeled", "owner/repo", "ai:review:no-such-agent", 1))
 	if err != nil {
 		t.Fatalf("HandleEvent: %v", err)
@@ -159,7 +157,7 @@ func TestEngineSkipsUnmatchedLabel(t *testing.T) {
 func TestEngineSkipsDisabledBinding(t *testing.T) {
 	t.Parallel()
 	f := false
-	e, runner := newTestEngine(func(c *config.Config) {
+	e, runner := newTestEngine(t, func(c *config.Config) {
 		c.Repos[0].Use[0].Enabled = &f
 	})
 	err := e.HandleEvent(context.Background(), labelEvent("issues.labeled", "owner/repo", "ai:review:arch-reviewer", 1))
@@ -174,7 +172,7 @@ func TestEngineSkipsDisabledBinding(t *testing.T) {
 func TestEngineJoinsErrorsAcrossAgents(t *testing.T) {
 	t.Parallel()
 	boom := errors.New("boom")
-	e, runner := newTestEngine(func(c *config.Config) {
+	e, runner := newTestEngine(t, func(c *config.Config) {
 		c.Repos[0].Use = []fleet.Binding{
 			{Agent: "arch-reviewer", Labels: []string{"ai:review:all"}},
 			{Agent: "sec-reviewer", Labels: []string{"ai:review:all"}},
@@ -232,7 +230,7 @@ func TestHandleEventEventBindings(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			e, runner := newTestEngine(func(c *config.Config) {
+			e, runner := newTestEngine(t, func(c *config.Config) {
 				c.Agents = append(c.Agents, fleet.Agent{Name: "watcher", Backend: "claude", Prompt: "React to events."})
 				c.Repos[0].Use = append(c.Repos[0].Use, fleet.Binding{Agent: "watcher", Events: []string{tc.bindEvent}})
 			})
@@ -254,7 +252,7 @@ func TestHandleEventEventBindings(t *testing.T) {
 func TestHandleEventLabelBindingDoesNotMatchNonLabeledKind(t *testing.T) {
 	t.Parallel()
 	// arch-reviewer has a label binding; a push event must not trigger it.
-	e, runner := newTestEngine(nil)
+	e, runner := newTestEngine(t, nil)
 	ev := Event{
 		Repo:    RepoRef{FullName: "owner/repo", Enabled: true},
 		Kind:    "push",
@@ -307,7 +305,7 @@ func TestEngineDispatchEventPayloadPropagatedToPrompt(t *testing.T) {
 		},
 	}
 	q := &fakeQueue{}
-	e := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, q, zerolog.Nop())
+	e := newEngineFromCfg(t, cfg, map[string]ai.Runner{"claude": runner}, q)
 
 	ev := Event{
 		ID:     "root-abc",
@@ -360,7 +358,7 @@ func TestEngineAllowPRsFalseInjectsNoPRGuard(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			e, runner := newTestEngine(func(c *config.Config) {
+			e, runner := newTestEngine(t, func(c *config.Config) {
 				c.Agents[0].AllowPRs = tc.allowPRs
 			})
 			ev := labelEvent("issues.labeled", "owner/repo", "ai:review:arch-reviewer", 1)
@@ -381,7 +379,8 @@ func TestEngineAllowPRsFalseInjectsNoPRGuard(t *testing.T) {
 // newTestEngineWithDedup builds an Engine with the dispatch dedup store enabled.
 // A non-nil queue is required to activate the Dispatcher; the dedup window is
 // set to 60 s so tests stay well within the window.
-func newTestEngineWithDedup(cfgMutator func(*config.Config)) (*Engine, *stubRunner, *fakeQueue) {
+func newTestEngineWithDedup(t *testing.T, cfgMutator func(*config.Config)) (*Engine, *stubRunner, *fakeQueue) {
+	t.Helper()
 	runner := &stubRunner{}
 	cfg := &config.Config{
 		Daemon: config.DaemonConfig{
@@ -399,7 +398,7 @@ func newTestEngineWithDedup(cfgMutator func(*config.Config)) (*Engine, *stubRunn
 		},
 		Skills: map[string]fleet.Skill{},
 		Agents: []fleet.Agent{
-			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review PR."},
+			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review PR.", Description: "Reviews PRs", AllowDispatch: true},
 		},
 		Repos: []fleet.Repo{
 			{
@@ -415,7 +414,7 @@ func newTestEngineWithDedup(cfgMutator func(*config.Config)) (*Engine, *stubRunn
 		cfgMutator(cfg)
 	}
 	q := &fakeQueue{}
-	e := NewEngine(cfg, map[string]ai.Runner{"claude": runner}, q, zerolog.Nop())
+	e := newEngineFromCfg(t, cfg, map[string]ai.Runner{"claude": runner}, q)
 	return e, runner, q
 }
 
@@ -424,7 +423,7 @@ func newTestEngineWithDedup(cfgMutator func(*config.Config)) (*Engine, *stubRunn
 // suppressed — the claim committed by the first run blocks the second.
 func TestFanOutDeduplicatesSequentialEventsWithinTTL(t *testing.T) {
 	t.Parallel()
-	e, runner, _ := newTestEngineWithDedup(nil)
+	e, runner, _ := newTestEngineWithDedup(t, nil)
 	ev := Event{
 		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
 		Kind:   "pull_request.synchronize",
@@ -455,7 +454,7 @@ func TestFanOutDeduplicatesSequentialEventsWithinTTL(t *testing.T) {
 // goroutine scheduling order.
 func TestFanOutDeduplicatesConcurrentEvents(t *testing.T) {
 	t.Parallel()
-	e, runner, _ := newTestEngineWithDedup(nil)
+	e, runner, _ := newTestEngineWithDedup(t, nil)
 	ev := Event{
 		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
 		Kind:   "pull_request.synchronize",
@@ -485,7 +484,7 @@ func TestFanOutDeduplicatesConcurrentEvents(t *testing.T) {
 // collapse distinct items under the same agent/repo umbrella.
 func TestFanOutDifferentNumbersAreNotDeduped(t *testing.T) {
 	t.Parallel()
-	e, runner, _ := newTestEngineWithDedup(nil)
+	e, runner, _ := newTestEngineWithDedup(t, nil)
 
 	for _, number := range []int{1, 2, 3} {
 		ev := Event{
@@ -511,7 +510,7 @@ func TestFanOutDifferentNumbersAreNotDeduped(t *testing.T) {
 // (agent, repo, number) is allowed to proceed.
 func TestFanOutClaimAbandonedOnRunFailure(t *testing.T) {
 	t.Parallel()
-	e, runner, _ := newTestEngineWithDedup(nil)
+	e, runner, _ := newTestEngineWithDedup(t, nil)
 	ev := Event{
 		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
 		Kind:   "pull_request.synchronize",
@@ -545,7 +544,7 @@ func TestFanOutClaimAbandonedOnRunFailure(t *testing.T) {
 // pushes to the same repo must each trigger their bound agent.
 func TestFanOutDoesNotDedupZeroNumberEvents(t *testing.T) {
 	t.Parallel()
-	e, runner, _ := newTestEngineWithDedup(func(c *config.Config) {
+	e, runner, _ := newTestEngineWithDedup(t, func(c *config.Config) {
 		c.Agents = append(c.Agents, fleet.Agent{Name: "pusher", Backend: "claude", Prompt: "React to pushes."})
 		c.Repos[0].Use = append(c.Repos[0].Use, fleet.Binding{Agent: "pusher", Events: []string{"push"}})
 	})
@@ -584,7 +583,7 @@ func TestFanOutDoesNotDedupZeroNumberEvents(t *testing.T) {
 // silently dropped. This test goes through the real enqueue→dequeue path.
 func TestDispatchEventRunsAfterEnqueue(t *testing.T) {
 	t.Parallel()
-	e, runner, q := newTestEngineWithDedup(func(c *config.Config) {
+	e, runner, q := newTestEngineWithDedup(t, func(c *config.Config) {
 		c.Agents[0].AllowDispatch = true
 		c.Agents = append(c.Agents, fleet.Agent{
 			Name:          "coder",
@@ -632,7 +631,7 @@ func TestDispatchEventRunsAfterEnqueue(t *testing.T) {
 // within the TTL window. The dedup gate belongs at enqueue, not at execution.
 func TestDispatchDedupPreventsDoubleEnqueue(t *testing.T) {
 	t.Parallel()
-	e, _, q := newTestEngineWithDedup(func(c *config.Config) {
+	e, _, q := newTestEngineWithDedup(t, func(c *config.Config) {
 		c.Agents[0].AllowDispatch = true
 		c.Agents = append(c.Agents, fleet.Agent{
 			Name:          "coder",
@@ -684,7 +683,7 @@ func TestFanOutDedupSurvivesTTLExpiry(t *testing.T) {
 	t.Parallel()
 
 	// Use an engine with a 1-second dedup window so the TTL expires quickly.
-	e, runner, _ := newTestEngineWithDedup(func(c *config.Config) {
+	e, runner, _ := newTestEngineWithDedup(t, func(c *config.Config) {
 		c.Daemon.Processor.Dispatch.DedupWindowSeconds = 1
 	})
 
@@ -742,7 +741,7 @@ func TestFanOutDedupSurvivesTTLExpiry(t *testing.T) {
 // dedup unconditionally (valid only for pre-claimed agent.dispatch events).
 func TestAgentsRunDeduplicatesDuplicateRequests(t *testing.T) {
 	t.Parallel()
-	e, runner, _ := newTestEngineWithDedup(nil)
+	e, runner, _ := newTestEngineWithDedup(t, nil)
 
 	onDemandEvent := func() Event {
 		return Event{
@@ -776,16 +775,15 @@ func TestAgentsRunDeduplicatesDuplicateRequests(t *testing.T) {
 	}
 }
 
-// TestEngineUpdateConfigRunnersRaceWithHandleEvent is a race-detector test. It
-// exercises concurrent UpdateConfig + UpdateRunners (the hot-reload path) and
-// HandleEvent (the event-driven path) to verify that the cfgMu / runnersMu
-// snapshot pattern does not produce data races.
-// Run with -race to catch concurrent map/struct accesses.
-func TestEngineUpdateConfigRunnersRaceWithHandleEvent(t *testing.T) {
+// TestEngineConcurrentReadsAreRaceFree verifies that concurrent
+// HandleEvent calls don't race on internal engine state. The pre-cutover
+// hot-reload path (UpdateConfigAndRunners) is gone — every event reads
+// fresh from SQLite, so the prior cfgMu/runnersMu race tests don't apply.
+// Run with -race.
+func TestEngineConcurrentReadsAreRaceFree(t *testing.T) {
 	t.Parallel()
 
-	e, runner := newTestEngine(func(c *config.Config) {
-		// Add an event binding so HandleEvent actually dispatches the agent.
+	e, _ := newTestEngine(t, func(c *config.Config) {
 		c.Repos[0].Use = append(c.Repos[0].Use, fleet.Binding{
 			Agent:  "arch-reviewer",
 			Events: []string{"push"},
@@ -800,36 +798,12 @@ func TestEngineUpdateConfigRunnersRaceWithHandleEvent(t *testing.T) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-
-	// Build an alternate config (same shape, different pointer).
-	altCfg := &config.Config{
-		Daemon: config.DaemonConfig{
-			Processor:  config.ProcessorConfig{MaxConcurrentAgents: 4},
-			AIBackends: map[string]fleet.Backend{"claude": {Command: "claude"}},
-		},
-		Skills: map[string]fleet.Skill{
-			"architect": {Prompt: "Focus on architecture."},
-		},
-		Agents: []fleet.Agent{
-			{Name: "arch-reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Review architecture."},
-		},
-		Repos: []fleet.Repo{
-			{
-				Name:    "owner/repo",
-				Enabled: true,
-				Use:     []fleet.Binding{{Agent: "arch-reviewer", Events: []string{"push"}}},
-			},
-		},
-	}
-	altRunners := map[string]ai.Runner{"claude": runner}
 
 	const goroutines = 8
 	var wg sync.WaitGroup
-
-	// Half the goroutines call HandleEvent concurrently.
-	for range goroutines / 2 {
+	for range goroutines {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -838,114 +812,7 @@ func TestEngineUpdateConfigRunnersRaceWithHandleEvent(t *testing.T) {
 			}
 		}()
 	}
-
-	// The other half call UpdateConfigAndRunners concurrently.
-	for range goroutines / 2 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for ctx.Err() == nil {
-				e.UpdateConfigAndRunners(altCfg, altRunners)
-			}
-		}()
-	}
-
 	wg.Wait()
-}
-
-// TestEngineUpdateConfigAndRunnersAtomic verifies that runAgent never observes
-// a cfg/runner pair from different reload epochs. It sets up two epochs:
-//   - epoch A: backend "claude_a", runner stubA
-//   - epoch B: backend "claude_b", runner stubB
-//
-// A goroutine continuously calls UpdateConfigAndRunners to cycle between them.
-// Meanwhile, a goroutine continuously fires events. If runAgent ever resolves
-// a backend from epoch A but looks up a runner from epoch B (or vice-versa), it
-// would fail with "no runner for backend" — any such error is counted and
-// reported as a test failure.
-func TestEngineUpdateConfigAndRunnersAtomic(t *testing.T) {
-	t.Parallel()
-
-	makeEpochCfg := func(backendName string) *config.Config {
-		return &config.Config{
-			Daemon: config.DaemonConfig{
-				Processor:  config.ProcessorConfig{MaxConcurrentAgents: 8},
-				AIBackends: map[string]fleet.Backend{backendName: {Command: backendName}},
-			},
-			Agents: []fleet.Agent{
-				{Name: "worker", Backend: backendName, Prompt: "do work"},
-			},
-			Repos: []fleet.Repo{
-				{
-					Name:    "owner/repo",
-					Enabled: true,
-					Use:     []fleet.Binding{{Agent: "worker", Events: []string{"push"}}},
-				},
-			},
-		}
-	}
-
-	stubA := &stubRunner{}
-	stubB := &stubRunner{}
-	cfgA := makeEpochCfg("claude_a")
-	cfgB := makeEpochCfg("claude_b")
-
-	e := NewEngine(cfgA, map[string]ai.Runner{"claude_a": stubA}, nil, zerolog.Nop())
-
-	pushEvent := func() Event {
-		return Event{
-			Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
-			Kind:  "push",
-			Actor: "bot",
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	var mismatchErrors atomic.Int64
-
-	var wg sync.WaitGroup
-
-	// Fire events continuously, counting any "no runner for backend" errors.
-	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for ctx.Err() == nil {
-				if err := e.HandleEvent(ctx, pushEvent()); err != nil {
-					// The only valid errors here would be "no runner for backend X"
-					// caused by observing a mismatched config/runner pair.
-					if strings.Contains(err.Error(), "no runner for backend") {
-						mismatchErrors.Add(1)
-					}
-				}
-			}
-		}()
-	}
-
-	// Cycle between epoch A and epoch B continuously.
-	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			flip := true
-			for ctx.Err() == nil {
-				if flip {
-					e.UpdateConfigAndRunners(cfgA, map[string]ai.Runner{"claude_a": stubA})
-				} else {
-					e.UpdateConfigAndRunners(cfgB, map[string]ai.Runner{"claude_b": stubB})
-				}
-				flip = !flip
-			}
-		}()
-	}
-
-	wg.Wait()
-
-	if n := mismatchErrors.Load(); n > 0 {
-		t.Errorf("runAgent observed %d mismatched cfg/runner pairs across reload epochs", n)
-	}
 }
 
 // stubLastRunRecorder captures LastRunRecorder calls so tests can assert that
@@ -992,7 +859,7 @@ func autonomousEvent(repo, agentName string) Event {
 // cron's fire-time authority is enough).
 func TestHandleEventAutonomousRunsTargetAgent(t *testing.T) {
 	t.Parallel()
-	e, runner := newTestEngine(nil)
+	e, runner := newTestEngine(t, nil)
 
 	if err := e.HandleEvent(context.Background(), autonomousEvent("owner/repo", "arch-reviewer")); err != nil {
 		t.Fatalf("HandleEvent: %v", err)
@@ -1011,7 +878,7 @@ func TestHandleEventAutonomousRunsTargetAgent(t *testing.T) {
 // every run that flowed through the engine.
 func TestHandleEventAutonomousFiresLastRunRecorder(t *testing.T) {
 	t.Parallel()
-	e, _ := newTestEngine(nil)
+	e, _ := newTestEngine(t, nil)
 	rec := &stubLastRunRecorder{}
 	e.WithLastRunRecorder(rec)
 
@@ -1032,7 +899,7 @@ func TestHandleEventAutonomousFiresLastRunRecorder(t *testing.T) {
 // autonomous runs update the cron schedule view.
 func TestHandleEventNonAutonomousSkipsLastRunRecorder(t *testing.T) {
 	t.Parallel()
-	e, _ := newTestEngine(func(c *config.Config) {
+	e, _ := newTestEngine(t, func(c *config.Config) {
 		c.Repos[0].Use = []fleet.Binding{
 			{Agent: "arch-reviewer", Labels: []string{"ai:review:arch-reviewer"}},
 		}
@@ -1054,7 +921,7 @@ func TestHandleEventNonAutonomousSkipsLastRunRecorder(t *testing.T) {
 // view distinguishes broken from healthy bindings without a separate fetch.
 func TestHandleEventAutonomousReportsErrorStatus(t *testing.T) {
 	t.Parallel()
-	e, runner := newTestEngine(nil)
+	e, runner := newTestEngine(t, nil)
 	runner.runFn = func(ai.Request) error { return errors.New("boom") }
 	rec := &stubLastRunRecorder{}
 	e.WithLastRunRecorder(rec)

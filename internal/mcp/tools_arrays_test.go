@@ -37,7 +37,6 @@ func TestStringSliceArgAcceptsShapes(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got, errMsg := stringSliceArg(tc.in, "skills")
@@ -84,7 +83,6 @@ func TestStringSlicePtrArgAcceptsJSONString(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ptr, ok, errMsg := stringSlicePtrArg(tc.args, "skills")
@@ -140,7 +138,6 @@ func TestArrayOfAnyAcceptsShapes(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got, errMsg := arrayOfAny(tc.in, "bindings")
@@ -179,7 +176,7 @@ func TestToolUpdateAgentAcceptsJSONStringSkills(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("update_agent failed: err=%v body=%s", err, textOf(t, res))
 	}
-	updated, ok := agentByName(t, deps.DB, "coder")
+	updated, ok := agentByName(t, deps.Store, "coder")
 	if !ok {
 		t.Fatal("coder missing after update")
 	}
@@ -207,7 +204,7 @@ func TestToolUpdateBackendAcceptsJSONStringModels(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("update_backend failed: err=%v body=%s", err, textOf(t, res))
 	}
-	b, ok := backendByName(t, deps.DB, "claude")
+	b, ok := backendByName(t, deps.Store, "claude")
 	if !ok {
 		t.Fatal("claude backend missing after update")
 	}
@@ -235,7 +232,7 @@ func TestToolCreateAgentAcceptsJSONStringSlices(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("create_agent failed: err=%v body=%s", err, textOf(t, res))
 	}
-	persisted, ok := agentByName(t, deps.DB, "linter")
+	persisted, ok := agentByName(t, deps.Store, "linter")
 	if !ok {
 		t.Fatal("linter missing after create")
 	}
@@ -265,7 +262,7 @@ func TestToolCreateBindingAcceptsJSONStringSlices(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("create_binding failed: err=%v body=%s", err, textOf(t, res))
 	}
-	r, _ := repoByName(t, deps.DB, "owner/one")
+	r, _ := repoByName(t, deps.Store, "owner/one")
 	found := false
 	for _, b := range r.Use {
 		if b.Agent == "coder" && len(b.Labels) == 2 && b.Labels[0] == "ai:fix" && b.Labels[1] == "ready" {
@@ -296,7 +293,7 @@ func TestToolUpdateBindingAcceptsJSONStringSlices(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("update_binding failed: err=%v body=%s", err, textOf(t, res))
 	}
-	r, _ := repoByName(t, deps.DB, "owner/one")
+	r, _ := repoByName(t, deps.Store, "owner/one")
 	for _, b := range r.Use {
 		if b.ID != id {
 			continue
@@ -330,7 +327,7 @@ func TestToolCreateRepoAcceptsJSONStringBindings(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", textOf(t, res))
 	}
-	persisted, ok := repoByName(t, deps.DB, "owner/jsonbindings")
+	persisted, ok := repoByName(t, deps.Store, "owner/jsonbindings")
 	if !ok {
 		t.Fatal("repo missing after create")
 	}

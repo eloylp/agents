@@ -103,7 +103,7 @@ func TestDeliveryStore_BackgroundEviction(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s.Start(ctx)
+	go func() { _ = s.Run(ctx) }()
 
 	now := time.Now()
 	s.SeenOrAdd("abc", now)
@@ -133,8 +133,10 @@ func TestDeliveryStore_StartStopsOnContextCancel(t *testing.T) {
 	s := NewDeliveryStore(ttl)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	s.Start(ctx)
+	done := make(chan struct{})
+	go func() { _ = s.Run(ctx); close(done) }()
 	cancel() // Stop the background goroutine immediately.
+	<-done
 
 	// Add an entry after the goroutine has stopped.
 	s.SeenOrAdd("abc", time.Now())
@@ -151,10 +153,12 @@ func TestDeliveryStore_StartStopsOnContextCancel(t *testing.T) {
 func TestDeliveryStore_StartIsNoOpForNonPositiveTTL(t *testing.T) {
 	t.Parallel()
 
-	// Start must not panic when TTL is zero or negative.
+	// Run must return immediately when TTL is zero or negative — no
+	// ticker is started so there is nothing to keep alive.
 	for _, ttl := range []time.Duration{0, -1 * time.Second} {
 		s := NewDeliveryStore(ttl)
-		// Should return immediately without spawning a goroutine or panicking.
-		s.Start(context.Background())
+		if err := s.Run(context.Background()); err != nil {
+			t.Errorf("Run with ttl=%v: got %v, want nil", ttl, err)
+		}
 	}
 }

@@ -12,7 +12,7 @@
 //   - get_agent, get_skill, get_backend, get_repo         — per-item reads
 //   - get_status                                          — health snapshot
 //   - trigger_agent                                       — on-demand run
-//   - list_events, list_traces, get_trace, get_trace_steps — agent activity
+//   - list_events, list_traces, get_trace, get_trace_steps, get_trace_prompt — agent activity
 //   - get_graph, get_dispatches, get_memory               — dispatch + memory
 //   - get_config, export_config, import_config            — config snapshots / write
 //   - create_agent, update_agent, delete_agent            — agent CRUD writes
@@ -20,23 +20,25 @@
 //   - create_backend, update_backend, delete_backend      — backend CRUD writes
 //   - create_repo, update_repo, delete_repo               — repo CRUD writes
 //   - create_binding, get_binding, update_binding, delete_binding — atomic binding CRUD
+//   - list_queue_events, delete_queue_event, retry_queue_event — durable event queue ops
 //
 // With repo CRUD in place this surface now covers the full fleet inventory
 // declared in #227.
 package mcp
 
 import (
-	"database/sql"
 	"net/http"
 
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog"
 
-	internalserver "github.com/eloylp/agents/internal/server"
-	serverconfig "github.com/eloylp/agents/internal/server/config"
-	serverfleet "github.com/eloylp/agents/internal/server/fleet"
-	serverrepos "github.com/eloylp/agents/internal/server/repos"
+	"github.com/eloylp/agents/internal/config"
+	daemonconfig "github.com/eloylp/agents/internal/daemon/config"
+	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
+	daemonrunners "github.com/eloylp/agents/internal/daemon/runners"
+	daemonrepos "github.com/eloylp/agents/internal/daemon/repos"
 	"github.com/eloylp/agents/internal/observe"
+	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -45,25 +47,27 @@ import (
 // tool's input or output schema changes in a non-backwards-compatible way.
 const Version = "0.1.0"
 
-// Deps bundles the dependencies the MCP tools call into. The composing
-// daemon (cmd/agents) constructs each component once and hands the same
-// references to the REST and MCP surfaces so both stay in lock-step.
+// Deps bundles the dependencies the MCP tools call into. internal/daemon
+// constructs each component once and hands the same references to the
+// REST and MCP surfaces so both stay in lock-step.
 //
-// Server, Queue, and Logger are always required. Observe, Engine, Fleet,
-// Repos, and Config are optional: tools that depend on them are only
-// registered when the field is non-nil, so a minimal MCP server can serve
-// the core fleet + status + trigger surface without wiring observability
-// or CRUD writes.
+// Coord, Queue, and Logger are always required. Observe, Engine, Fleet,
+// Repos, Config, and StatusJSON are optional: tools that depend on them
+// are only registered when the field is non-nil, so a minimal MCP server
+// can serve the core fleet + trigger surface without wiring
+// observability or CRUD writes.
 type Deps struct {
-	DB      *sql.DB
-	Server  *internalserver.Server  // Config() snapshot, StatusJSON()
-	Queue   *workflow.DataChannels  // PushEvent for trigger_agent
-	Observe *observe.Store          // observability tools (events, traces, graph)
-	Engine  *workflow.Engine        // DispatchStats() for get_dispatches
-	Fleet   *serverfleet.Handler    // agent / skill / backend CRUD writes
-	Repos   *serverrepos.Handler    // repo + binding CRUD writes
-	Config  *serverconfig.Handler   // ConfigJSON / ExportYAML / ImportYAML
-	Logger  zerolog.Logger
+	Store        *store.Store           // data-access facade for tools that read fleet entities
+	DaemonConfig config.DaemonConfig    // static daemon-level config (HTTP, proxy, processor, log)
+	StatusJSON   func() ([]byte, error) // /status payload — same bytes the REST surface returns
+	Channels     *workflow.DataChannels // PushEvent for trigger_agent
+	Observe      *observe.Store         // observability tools (events, traces, graph)
+	Engine       *workflow.Engine       // DispatchStats() for get_dispatches
+	Fleet        *daemonfleet.Handler   // agent / skill / backend CRUD writes
+	Repos        *daemonrepos.Handler   // repo + binding CRUD writes
+	Config       *daemonconfig.Handler  // ConfigJSON / ExportYAML / ImportYAML
+	RunnersH     *daemonrunners.Handler // /runners listing + delete + retry
+	Logger       zerolog.Logger
 }
 
 // Handler is an http.Handler that speaks MCP over Streamable HTTP. Mount it
@@ -112,12 +116,15 @@ Use list_* tools to enumerate the fleet and get_* tools to drill into a
 single agent, skill, backend, repo, trace, or memory record.
 get_status returns daemon health. trigger_agent fires an on-demand run.
 Observability tools (list_events, list_traces, get_trace,
-get_trace_steps, get_graph, get_dispatches, get_memory) expose the same
+get_trace_steps, get_trace_prompt, get_graph, get_dispatches,
+get_memory) expose the same
 data the web dashboard shows. Config tools (get_config, export_config,
 import_config) return the redacted effective config, export the
 CRUD-mutable YAML fragment, and write a YAML payload back into the
 store. CRUD write tools (create_agent, delete_agent, create_skill,
 delete_skill, create_backend, delete_backend, create_repo, update_repo,
 delete_repo, create_binding, update_binding, delete_binding) mutate
-the fleet through the same code path as the REST API. This server is
-the v3 foundation for conversational fleet management.`
+the fleet through the same code path as the REST API. Queue ops
+(list_queue_events, delete_queue_event, retry_queue_event) inspect and
+manage the durable event_queue table. This server is the v3 foundation
+for conversational fleet management.`

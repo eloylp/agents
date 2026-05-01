@@ -23,6 +23,14 @@ type Request struct {
 	Model    string // optional per-agent model override
 	System   string // stable system-level content (from RenderedPrompt.System)
 	User     string // per-run user content (from RenderedPrompt.User)
+
+	// OnLine, when non-nil, is invoked synchronously for every line the
+	// AI CLI writes to stdout, with the trailing newline stripped. Used
+	// by the engine to publish lines into observe.RunRegistry's per-span
+	// stream hub for live UI streaming. Must not block — the runner
+	// reads stdout in a tight loop and the callback runs on that
+	// goroutine.
+	OnLine func(line []byte)
 }
 
 type Artifact struct {
@@ -62,4 +70,21 @@ type Response struct {
 	// Steps holds the tool-loop transcript extracted from stream-json CLI
 	// output. It is populated by the runner and not part of the agent schema.
 	Steps []TraceStep `json:"-"`
+	// Usage holds the token counts the AI CLI reported for this run.
+	// Populated by the runner from the CLI's streaming output (Anthropic's
+	// `result` event for Claude Code, OpenAI's `usage` event for Codex).
+	// Not part of the agent schema. Cache fields are zero on backends that
+	// do not report them (e.g. Codex emits only input/output).
+	Usage Usage `json:"-"`
+}
+
+// Usage is the per-run token consumption reported by the AI CLI. Total
+// tokens billed = InputTokens + OutputTokens + CacheWriteTokens; cache
+// reads are billed at a discount. Surfaced on traces so operators can
+// spot agents that burst the cache and tune accordingly.
+type Usage struct {
+	InputTokens      int64 `json:"input_tokens"`
+	OutputTokens     int64 `json:"output_tokens"`
+	CacheReadTokens  int64 `json:"cache_read_tokens"`
+	CacheWriteTokens int64 `json:"cache_write_tokens"`
 }

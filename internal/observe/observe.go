@@ -6,9 +6,13 @@
 package observe
 
 import (
+	"bytes"
+	"compress/gzip"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"sync"
 	"time"
@@ -52,6 +56,20 @@ type Span struct {
 	DurationMs     int64     `json:"duration_ms"`
 	Status         string    `json:"status"` // "success" | "error"
 	ErrorMsg       string    `json:"error,omitempty"`
+
+	// PromptSize is the uncompressed byte count of the composed prompt.
+	// Surfaced on listings so the UI can show "32 KB prompt"; the body
+	// is gzipped on disk and fetched lazily via /traces/{span_id}/prompt.
+	PromptSize int64 `json:"prompt_size,omitempty"`
+
+	// Token usage as reported by the AI CLI. Anthropic / Claude Code
+	// emits four fields; OpenAI / Codex emits two — cache fields are
+	// zero in that case. Pre-009-migration runs have all four nil
+	// (preserved as omitempty).
+	InputTokens      int64 `json:"input_tokens,omitempty"`
+	OutputTokens     int64 `json:"output_tokens,omitempty"`
+	CacheReadTokens  int64 `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
 }
 
 // DispatchRecord is one observed inter-agent dispatch.
@@ -139,7 +157,8 @@ func (h *SSEHub) Publish(msg []byte) {
 // ─── ActiveRuns ───────────────────────────────────────────────────────────────
 
 // ActiveRuns tracks the number of in-flight agent runs per agent name.
-// It implements workflow.RunTracker and the server.RuntimeStateProvider interface.
+// It implements workflow.RunTracker; the server's observe handler reads
+// IsRunning to mark agents as running in the /graph and /agents views.
 type ActiveRuns struct {
 	mu   sync.RWMutex
 	runs map[string]int // agent name → count of active concurrent runs
@@ -172,6 +191,230 @@ func (a *ActiveRuns) IsRunning(agentName string) bool {
 	return a.runs[agentName] > 0
 }
 
+// ─── RunRegistry ─────────────────────────────────────────────────────────────
+
+// ActiveRun is the in-memory snapshot of a span that's currently running.
+// Used by the runners view to surface in-flight rows (agent populated,
+// span_id available so the UI can offer a live-stream affordance) and by
+// the live-stream SSE handler to enumerate / look up the per-span hub.
+//
+// Lives only in memory by design — once the run completes, the canonical
+// trace row in SQLite supersedes it.
+type ActiveRun struct {
+	SpanID    string
+	EventID   string
+	Agent     string
+	Backend   string
+	Repo      string
+	EventKind string
+	StartedAt time.Time
+}
+
+// runStream is the per-span pub/sub hub for live stdout lines, plus a
+// bounded ring buffer so a UI client connecting mid-run sees the
+// recent history before the live tail kicks in.
+type runStream struct {
+	mu       sync.Mutex
+	history  [][]byte         // most recent N lines (newest at end)
+	subs     map[chan []byte]struct{}
+	closed   bool             // true after End is called; subs still drain history
+	finishAt time.Time        // when End was called; registry sweeps after grace period
+}
+
+const (
+	runStreamHistoryCap = 1000   // ring buffer per span
+	runStreamSubBufCap  = 256    // per-subscriber channel buffer
+	runStreamGrace      = 60 * time.Second // keep streams subscribable after End
+)
+
+func newRunStream() *runStream {
+	return &runStream{
+		history: make([][]byte, 0, 64),
+		subs:    make(map[chan []byte]struct{}),
+	}
+}
+
+// publish records a line in the ring buffer and fans it out to live
+// subscribers. A full subscriber channel drops the line silently —
+// observability must not back-pressure the runner.
+func (r *runStream) publish(line []byte) {
+	cp := make([]byte, len(line))
+	copy(cp, line)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
+	if len(r.history) >= runStreamHistoryCap {
+		// drop oldest
+		r.history = append(r.history[:0], r.history[1:]...)
+	}
+	r.history = append(r.history, cp)
+	for ch := range r.subs {
+		select {
+		case ch <- cp:
+		default:
+		}
+	}
+}
+
+func (r *runStream) end() {
+	r.mu.Lock()
+	if !r.closed {
+		r.closed = true
+		r.finishAt = time.Now()
+	}
+	subs := r.subs
+	r.mu.Unlock()
+	// Close every subscriber channel so SSE handlers exit their range
+	// loop. Replay clients that connect after End still see the full
+	// history (Subscribe replays first), then immediately get a closed
+	// channel and disconnect.
+	for ch := range subs {
+		close(ch)
+	}
+	r.mu.Lock()
+	r.subs = make(map[chan []byte]struct{})
+	r.mu.Unlock()
+}
+
+// subscribe returns the current history snapshot plus a channel for
+// future lines. The caller MUST consume the channel until close to
+// avoid leaking the subscription.
+func (r *runStream) subscribe() ([][]byte, chan []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	hist := make([][]byte, len(r.history))
+	copy(hist, r.history)
+	if r.closed {
+		// Run finished — return history but no live channel. Hand back
+		// a closed channel so the caller's range loop exits cleanly
+		// after rendering history.
+		ch := make(chan []byte)
+		close(ch)
+		return hist, ch
+	}
+	ch := make(chan []byte, runStreamSubBufCap)
+	r.subs[ch] = struct{}{}
+	return hist, ch
+}
+
+func (r *runStream) unsubscribe(ch chan []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.subs[ch]; ok {
+		delete(r.subs, ch)
+		// Don't close here — the caller is the consumer; end() handles
+		// the close path.
+	}
+}
+
+// RunRegistry tracks active agent runs in memory. Each entry carries
+// enough metadata for the runners view to render an in-flight row
+// (agent + span_id) and a per-span stream hub for live stdout. Only
+// in-memory: a daemon restart loses the live data; persisted state
+// remains in the traces table.
+type RunRegistry struct {
+	mu      sync.RWMutex
+	active  map[string]*ActiveRun // span_id → active entry
+	streams map[string]*runStream // span_id → stream (also kept after End during grace)
+}
+
+func newRunRegistry() *RunRegistry {
+	return &RunRegistry{
+		active:  make(map[string]*ActiveRun),
+		streams: make(map[string]*runStream),
+	}
+}
+
+// BeginRun registers a new active run and creates its stream hub. Call
+// before invoking the AI runner so the runners view can surface the
+// span_id and the live-stream subscriber sees lines from the start.
+func (r *RunRegistry) BeginRun(run ActiveRun) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.active[run.SpanID] = &run
+	if _, ok := r.streams[run.SpanID]; !ok {
+		r.streams[run.SpanID] = newRunStream()
+	}
+}
+
+// PublishLine fans one stdout line out to live subscribers and records
+// it in the per-span ring buffer. Safe to call before BeginRun (no-op)
+// or after EndRun (also no-op, the stream is closed).
+func (r *RunRegistry) PublishLine(spanID string, line []byte) {
+	r.mu.RLock()
+	st := r.streams[spanID]
+	r.mu.RUnlock()
+	if st == nil {
+		return
+	}
+	st.publish(line)
+}
+
+// EndRun marks a run finished. The stream hub stays subscribable for
+// runStreamGrace so a slow UI client can still pull the tail; the
+// active-run entry is removed immediately so the runners view stops
+// showing it as live.
+func (r *RunRegistry) EndRun(spanID string) {
+	r.mu.Lock()
+	delete(r.active, spanID)
+	st := r.streams[spanID]
+	r.mu.Unlock()
+	if st != nil {
+		st.end()
+	}
+	// Schedule cleanup of the stream hub after the grace window.
+	go func() {
+		time.Sleep(runStreamGrace)
+		r.mu.Lock()
+		delete(r.streams, spanID)
+		r.mu.Unlock()
+	}()
+}
+
+// ListActive returns the currently-running spans matching eventID, in
+// arbitrary order. Used by the runners handler to surface in-flight
+// rows (one per agent that's currently fanned out for this event).
+// Returns the empty slice when no runs match.
+func (r *RunRegistry) ListActive(eventID string) []ActiveRun {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]ActiveRun, 0)
+	for _, e := range r.active {
+		if e.EventID == eventID {
+			out = append(out, *e)
+		}
+	}
+	return out
+}
+
+// SubscribeStream returns the current history of stdout lines for a
+// span plus a channel that receives subsequent lines. Returns ("", nil)
+// when no stream exists for the span (unknown id, or grace window
+// elapsed). Caller must drain the channel until it closes.
+func (r *RunRegistry) SubscribeStream(spanID string) ([][]byte, chan []byte, bool) {
+	r.mu.RLock()
+	st := r.streams[spanID]
+	r.mu.RUnlock()
+	if st == nil {
+		return nil, nil, false
+	}
+	hist, ch := st.subscribe()
+	return hist, ch, true
+}
+
+// UnsubscribeStream removes a per-stream subscriber. Idempotent.
+func (r *RunRegistry) UnsubscribeStream(spanID string, ch chan []byte) {
+	r.mu.RLock()
+	st := r.streams[spanID]
+	r.mu.RUnlock()
+	if st == nil {
+		return
+	}
+	st.unsubscribe(ch)
+}
+
 // ─── Store ───────────────────────────────────────────────────────────────────
 
 // Store is the single observability container injected throughout the daemon.
@@ -183,6 +426,7 @@ type Store struct {
 	TracesSSE  *SSEHub
 	MemorySSE  *SSEHub
 	ActiveRuns *ActiveRuns
+	Runs       *RunRegistry
 }
 
 // NewStore creates a Store. The db handle is used for all read/write
@@ -194,6 +438,7 @@ func NewStore(db *sql.DB) *Store {
 		TracesSSE:  NewSSEHub(64),
 		MemorySSE:  NewSSEHub(32),
 		ActiveRuns: newActiveRuns(),
+		Runs:       newRunRegistry(),
 	}
 }
 
@@ -239,6 +484,15 @@ func (s *Store) ListEvents(since time.Time) []TimestampedEvent {
 	return out
 }
 
+// spanColumns is the column list used by every read query — kept in
+// one place so adding a new column means editing one line. The
+// prompt_gz blob is intentionally excluded; bodies are fetched on
+// demand via PromptForSpan to keep listings small.
+const spanColumns = `span_id, root_event_id, parent_span_id, agent, backend, repo, number,
+	event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary,
+	started_at, finished_at, duration_ms, status, error,
+	prompt_size, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens`
+
 // ListTraces returns stored spans ordered by started_at descending (newest
 // first). Results are capped at 200 rows.
 func (s *Store) ListTraces() []Span {
@@ -246,7 +500,7 @@ func (s *Store) ListTraces() []Span {
 		return nil
 	}
 	rows, err := s.db.Query(
-		`SELECT span_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error FROM traces ORDER BY started_at DESC LIMIT 200`,
+		`SELECT ` + spanColumns + ` FROM traces ORDER BY started_at DESC LIMIT 200`,
 	)
 	if err != nil {
 		log.Printf("observe: list traces: %v", err)
@@ -262,7 +516,7 @@ func (s *Store) TracesByRootEventID(id string) []Span {
 		return nil
 	}
 	rows, err := s.db.Query(
-		`SELECT span_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error FROM traces WHERE root_event_id = ?`,
+		`SELECT `+spanColumns+` FROM traces WHERE root_event_id = ?`,
 		id,
 	)
 	if err != nil {
@@ -273,11 +527,43 @@ func (s *Store) TracesByRootEventID(id string) []Span {
 	return scanSpans(rows)
 }
 
+// PromptForSpan returns the decompressed composed prompt for a span,
+// or ("", nil) when no prompt was stored (pre-migration rows or runs
+// that never recorded one). The blob is gzipped on disk; this method
+// is the single read site so the compression detail stays here.
+func (s *Store) PromptForSpan(spanID string) (string, error) {
+	if s.db == nil {
+		return "", nil
+	}
+	var blob []byte
+	err := s.db.QueryRow(`SELECT prompt_gz FROM traces WHERE span_id = ?`, spanID).Scan(&blob)
+	if errors.Is(err, sql.ErrNoRows) || len(blob) == 0 {
+		return "", err
+	}
+	if err != nil {
+		return "", fmt.Errorf("observe: fetch prompt %s: %w", spanID, err)
+	}
+	gr, err := gzip.NewReader(bytes.NewReader(blob))
+	if err != nil {
+		return "", fmt.Errorf("observe: gunzip prompt %s: %w", spanID, err)
+	}
+	defer gr.Close()
+	out, err := io.ReadAll(gr)
+	if err != nil {
+		return "", fmt.Errorf("observe: read prompt %s: %w", spanID, err)
+	}
+	return string(out), nil
+}
+
 // scanSpans is a shared helper that scans Span rows from a query result.
+// The token columns are sql.NullInt64 because pre-migration rows have
+// NULL — we materialise NULL to zero, the JSON layer drops zero via
+// omitempty so the UI can detect "not recorded".
 func scanSpans(rows *sql.Rows) []Span {
 	var out []Span
 	for rows.Next() {
 		var sp Span
+		var promptSize, inTok, outTok, cacheR, cacheW sql.NullInt64
 		if err := rows.Scan(
 			&sp.SpanID, &sp.RootEventID, &sp.ParentSpanID,
 			&sp.Agent, &sp.Backend, &sp.Repo, &sp.Number,
@@ -285,10 +571,16 @@ func scanSpans(rows *sql.Rows) []Span {
 			&sp.QueueWaitMs, &sp.ArtifactsCount, &sp.Summary,
 			&sp.StartedAt, &sp.FinishedAt, &sp.DurationMs,
 			&sp.Status, &sp.ErrorMsg,
+			&promptSize, &inTok, &outTok, &cacheR, &cacheW,
 		); err != nil {
 			log.Printf("observe: scan trace row: %v", err)
 			continue
 		}
+		sp.PromptSize = promptSize.Int64
+		sp.InputTokens = inTok.Int64
+		sp.OutputTokens = outTok.Int64
+		sp.CacheReadTokens = cacheR.Int64
+		sp.CacheWriteTokens = cacheW.Int64
 		out = append(out, sp)
 	}
 	return out
@@ -335,8 +627,9 @@ func (s *Store) ListEdges() []Edge {
 	return out
 }
 
-// IsRunning implements server.RuntimeStateProvider. It returns true when the
-// named agent has at least one in-flight run.
+// IsRunning returns true when the named agent has at least one in-flight
+// run. Used by the server's observe handler to flag running agents in the
+// /graph view.
 func (s *Store) IsRunning(agentName string) bool {
 	return s.ActiveRuns.IsRunning(agentName)
 }
@@ -344,6 +637,35 @@ func (s *Store) IsRunning(agentName string) bool {
 // ─── workflow interface implementations ──────────────────────────────────────
 // Store satisfies workflow.EventRecorder, workflow.TraceRecorder, and
 // workflow.GraphRecorder through the methods below.
+
+// BeginRun implements workflow.RunStreamPublisher. Forwards to the
+// in-memory RunRegistry so the runners view can surface in-flight rows
+// and the live-stream SSE hub is ready before any stdout arrives.
+func (s *Store) BeginRun(in workflow.BeginRunInput) {
+	s.Runs.BeginRun(ActiveRun{
+		SpanID:    in.SpanID,
+		EventID:   in.EventID,
+		Agent:     in.Agent,
+		Backend:   in.Backend,
+		Repo:      in.Repo,
+		EventKind: in.EventKind,
+		StartedAt: in.StartedAt,
+	})
+}
+
+// PublishLine implements workflow.RunStreamPublisher. Forwards each
+// stdout line to the per-span hub. Drops silently when the span is
+// unknown (run not registered) or already ended.
+func (s *Store) PublishLine(spanID string, line []byte) {
+	s.Runs.PublishLine(spanID, line)
+}
+
+// EndRun implements workflow.RunStreamPublisher. Marks the run finished
+// in the registry and starts the grace window before the per-span hub
+// is reaped.
+func (s *Store) EndRun(spanID string) {
+	s.Runs.EndRun(spanID)
+}
 
 // RecordEvent implements workflow.EventRecorder. It persists the event to
 // SQLite and fans it out to SSE subscribers.
@@ -375,45 +697,58 @@ func (s *Store) RecordEvent(at time.Time, ev workflow.Event) {
 }
 
 // RecordSpan implements workflow.TraceRecorder. It persists the completed span
-// to SQLite and fans it out to SSE subscribers.
-func (s *Store) RecordSpan(
-	spanID, rootEventID, parentSpanID,
-	agent, backend, repo, eventKind, invokedBy string,
-	number, dispatchDepth int,
-	queueWaitMs int64, artifactsCount int, summary string,
-	startedAt, finishedAt time.Time,
-	status, errMsg string,
-) {
+// (including the gzipped prompt and token usage) to SQLite and fans the
+// summary out to SSE subscribers.
+func (s *Store) RecordSpan(in workflow.SpanInput) {
 	sp := Span{
-		SpanID:         spanID,
-		RootEventID:    rootEventID,
-		ParentSpanID:   parentSpanID,
-		Agent:          agent,
-		Backend:        backend,
-		Repo:           repo,
-		EventKind:      eventKind,
-		InvokedBy:      invokedBy,
-		Number:         number,
-		DispatchDepth:  dispatchDepth,
-		QueueWaitMs:    queueWaitMs,
-		ArtifactsCount: artifactsCount,
-		Summary:        summary,
-		StartedAt:      startedAt,
-		FinishedAt:     finishedAt,
-		DurationMs:     finishedAt.Sub(startedAt).Milliseconds(),
-		Status:         status,
-		ErrorMsg:       errMsg,
+		SpanID:           in.SpanID,
+		RootEventID:      in.RootEventID,
+		ParentSpanID:     in.ParentSpanID,
+		Agent:            in.Agent,
+		Backend:          in.Backend,
+		Repo:             in.Repo,
+		EventKind:        in.EventKind,
+		InvokedBy:        in.InvokedBy,
+		Number:           in.Number,
+		DispatchDepth:    in.DispatchDepth,
+		QueueWaitMs:      in.QueueWaitMs,
+		ArtifactsCount:   in.ArtifactsCount,
+		Summary:          in.Summary,
+		StartedAt:        in.StartedAt,
+		FinishedAt:       in.FinishedAt,
+		DurationMs:       in.FinishedAt.Sub(in.StartedAt).Milliseconds(),
+		Status:           in.Status,
+		ErrorMsg:         in.ErrorMsg,
+		PromptSize:       int64(len(in.Prompt)),
+		InputTokens:      in.InputTokens,
+		OutputTokens:     in.OutputTokens,
+		CacheReadTokens:  in.CacheReadTokens,
+		CacheWriteTokens: in.CacheWriteTokens,
+	}
+	var promptGz []byte
+	if in.Prompt != "" {
+		var buf bytes.Buffer
+		gw := gzip.NewWriter(&buf)
+		if _, err := gw.Write([]byte(in.Prompt)); err != nil {
+			log.Printf("observe: gzip prompt %s: %v", sp.SpanID, err)
+		} else if err := gw.Close(); err != nil {
+			log.Printf("observe: gzip flush prompt %s: %v", sp.SpanID, err)
+		} else {
+			promptGz = buf.Bytes()
+		}
 	}
 	if s.db != nil {
 		go func() {
 			_, err := s.db.Exec(
-				`INSERT OR IGNORE INTO traces (span_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				`INSERT OR IGNORE INTO traces (span_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error, prompt_gz, prompt_size, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 				sp.SpanID, sp.RootEventID, sp.ParentSpanID,
 				sp.Agent, sp.Backend, sp.Repo, sp.Number,
 				sp.EventKind, sp.InvokedBy, sp.DispatchDepth,
 				sp.QueueWaitMs, sp.ArtifactsCount, sp.Summary,
 				sp.StartedAt, sp.FinishedAt, sp.DurationMs,
 				sp.Status, sp.ErrorMsg,
+				promptGz, sp.PromptSize,
+				sp.InputTokens, sp.OutputTokens, sp.CacheReadTokens, sp.CacheWriteTokens,
 			)
 			if err != nil {
 				log.Printf("observe: persist trace %s: %v", sp.SpanID, err)

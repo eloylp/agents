@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
+import Link from 'next/link'
 import Card from '@/components/Card'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 
@@ -11,6 +12,7 @@ interface Event {
   number: number
   actor: string
   payload?: Record<string, unknown>
+  agents?: string[]
 }
 
 const kindStyle: Record<string, { bg: string; text: string; border: string }> = {
@@ -42,7 +44,7 @@ function EventRow({ event, isNew }: { event: Event; isNew: boolean }) {
     }}>
       <div style={{
         display: 'grid',
-        gridTemplateColumns: '140px 200px 140px 60px 100px 1fr',
+        gridTemplateColumns: '120px 180px 130px 50px 90px 160px 130px 1fr',
         gap: '0.5rem',
         padding: '8px 0',
         fontSize: '0.8rem',
@@ -64,7 +66,35 @@ function EventRow({ event, isNew }: { event: Event; isNew: boolean }) {
         </span>
         <span style={{ color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.repo}</span>
         <span style={{ color: 'var(--text-faint)' }}>{event.number > 0 ? `#${event.number}` : '—'}</span>
-        <span style={{ color: 'var(--text-muted)' }}>{event.actor}</span>
+        <span style={{ color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.actor}</span>
+        <span style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
+          {(event.agents ?? []).map(a => (
+            <Link key={a} href={`/?focus=${encodeURIComponent(a)}`} style={{
+              background: 'rgba(56,189,248,0.12)',
+              color: 'var(--accent)',
+              border: '1px solid var(--accent)',
+              padding: '1px 6px',
+              borderRadius: '4px',
+              fontSize: '0.68rem',
+              textDecoration: 'none',
+            }}>{a}</Link>
+          ))}
+          {(event.agents ?? []).length === 0 && <span style={{ color: 'var(--text-faint)' }}>—</span>}
+        </span>
+        <Link
+          href={`/runners/?event=${encodeURIComponent(event.id)}`}
+          style={{
+            color: 'var(--accent)',
+            border: '1px solid var(--accent)',
+            padding: '2px 8px',
+            borderRadius: '4px',
+            fontSize: '0.72rem',
+            textDecoration: 'none',
+            width: 'fit-content',
+          }}
+          onClick={e => e.stopPropagation()}
+          title="Open Runners filtered to this event"
+        >View runners →</Link>
         <span
           onClick={() => setExpanded(!expanded)}
           style={{
@@ -186,7 +216,7 @@ export default function EventsPage() {
       <Card title="Event Stream">
         <div style={{
           display: 'grid',
-          gridTemplateColumns: '140px 200px 140px 60px 100px 1fr',
+          gridTemplateColumns: '120px 180px 130px 50px 90px 160px 130px 1fr',
           gap: '0.5rem',
           padding: '4px 0',
           borderBottom: '2px solid var(--border)',
@@ -194,7 +224,7 @@ export default function EventsPage() {
           color: 'var(--accent)',
           fontWeight: 600,
         }}>
-          <span>Time</span><span>Kind</span><span>Repo</span><span>#</span><span>Actor</span><span>Payload (click to expand)</span>
+          <span>Time</span><span>Kind</span><span>Repo</span><span>#</span><span>Actor</span><span>Agents</span><span>Runners</span><span>Payload</span>
         </div>
 
         {loading && <p style={{ color: 'var(--text-muted)', padding: '0.5rem 0' }}>Loading...</p>}

@@ -4,13 +4,11 @@ import (
 	"context"
 	"maps"
 	"slices"
-	"strings"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/eloylp/agents/internal/fleet"
-	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -19,7 +17,7 @@ import (
 // see identical data.
 func toolListAgents(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		agents, err := store.ReadAgents(deps.DB)
+		agents, err := deps.Store.ReadAgents()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list agents", err), nil
 		}
@@ -40,7 +38,7 @@ func toolGetAgent(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
-		agents, err := store.ReadAgents(deps.DB)
+		agents, err := deps.Store.ReadAgents()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get agent", err), nil
 		}
@@ -54,7 +52,7 @@ func toolGetAgent(deps Deps) server.ToolHandlerFunc {
 
 func toolListSkills(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		skills, err := store.ReadSkills(deps.DB)
+		skills, err := deps.Store.ReadSkills()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list skills", err), nil
 		}
@@ -80,7 +78,7 @@ func toolGetSkill(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
-		skills, err := store.ReadSkills(deps.DB)
+		skills, err := deps.Store.ReadSkills()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get skill", err), nil
 		}
@@ -98,7 +96,7 @@ func toolGetSkill(deps Deps) server.ToolHandlerFunc {
 
 func toolListBackends(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		backends, err := store.ReadBackends(deps.DB)
+		backends, err := deps.Store.ReadBackends()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list backends", err), nil
 		}
@@ -119,7 +117,7 @@ func toolGetBackend(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
-		backends, err := store.ReadBackends(deps.DB)
+		backends, err := deps.Store.ReadBackends()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get backend", err), nil
 		}
@@ -134,7 +132,7 @@ func toolGetBackend(deps Deps) server.ToolHandlerFunc {
 
 func toolListRepos(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		repos, err := store.ReadRepos(deps.DB)
+		repos, err := deps.Store.ReadRepos()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list repos", err), nil
 		}
@@ -154,7 +152,7 @@ func toolGetRepo(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
-		repos, err := store.ReadRepos(deps.DB)
+		repos, err := deps.Store.ReadRepos()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get repo", err), nil
 		}
@@ -171,7 +169,7 @@ func toolGetRepo(deps Deps) server.ToolHandlerFunc {
 // documentation and tooling.
 func toolGetStatus(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		body, err := deps.Server.StatusJSON()
+		body, err := deps.StatusJSON()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("status snapshot", err), nil
 		}
@@ -184,22 +182,29 @@ func toolGetStatus(deps Deps) server.ToolHandlerFunc {
 // correlate with trace data later.
 func toolTriggerAgent(deps Deps) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		agent, err := req.RequireString("agent")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
+		agent, ok := trimmedString(req, "agent")
+		if !ok {
+			return mcpgo.NewToolResultError("agent is required"), nil
 		}
-		repoName, err := req.RequireString("repo")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		agent = strings.TrimSpace(agent)
-		repoName = strings.TrimSpace(repoName)
-		if agent == "" || repoName == "" {
-			return mcpgo.NewToolResultError("agent and repo are required"), nil
+		repoName, ok := trimmedString(req, "repo")
+		if !ok {
+			return mcpgo.NewToolResultError("repo is required"), nil
 		}
 
-		cfg := deps.Server.Config()
-		repo, ok := cfg.RepoByName(repoName)
+		repos, err := deps.Store.ReadRepos()
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("read repos", err), nil
+		}
+		want := fleet.NormalizeRepoName(repoName)
+		var repo fleet.Repo
+		var ok bool
+		for _, r := range repos {
+			if r.Name == want {
+				repo = r
+				ok = true
+				break
+			}
+		}
 		if !ok || !repo.Enabled {
 			return mcpgo.NewToolResultErrorf("repo %q not found or disabled", repoName), nil
 		}
@@ -213,7 +218,7 @@ func toolTriggerAgent(deps Deps) server.ToolHandlerFunc {
 				"target_agent": agent,
 			},
 		}
-		if err := deps.Queue.PushEvent(ctx, ev); err != nil {
+		if _, err := deps.Channels.PushEvent(ctx, ev); err != nil {
 			deps.Logger.Error().Err(err).Str("agent", agent).Str("repo", repoName).Msg("mcp: failed to enqueue on-demand agent run")
 			return mcpgo.NewToolResultErrorf("event queue full: %v", err), nil
 		}

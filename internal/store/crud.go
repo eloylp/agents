@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/eloylp/agents/internal/config"
@@ -183,7 +184,8 @@ func deleteAgent(db *sql.DB, name string, cascade bool) error {
 		// Surface this as an ErrConflict rather than letting the raw FK
 		// constraint fire. Callers can show the referenced repos and
 		// offer a cascade without parsing SQLite error strings.
-		return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: still referenced by %d binding(s) across %d repo(s); use cascade to remove them", name, len(refs), countDistinctRepos(refs))}
+		distinct := slices.Compact(slices.Sorted(slices.Values(refs)))
+		return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: still referenced by %d binding(s) across %d repo(s); use cascade to remove them", name, len(refs), len(distinct))}
 	}
 	res, err := tx.Exec("DELETE FROM agents WHERE name=?", name)
 	if err != nil {
@@ -220,14 +222,6 @@ func bindingsReferencing(q querier, agentName string) ([]string, error) {
 	return out, rows.Err()
 }
 
-func countDistinctRepos(repos []string) int {
-	seen := make(map[string]struct{}, len(repos))
-	for _, r := range repos {
-		seen[r] = struct{}{}
-	}
-	return len(seen)
-}
-
 // ──── Skills ─────────────────────────────────────────────────────────────────────────────────────
 
 // ReadSkills returns all skills from the database.
@@ -243,10 +237,10 @@ func ReadSkills(db *sql.DB) (map[string]fleet.Skill, error) {
 }
 
 // UpsertSkill inserts or replaces a single skill.
-// The skill name is normalized (lowercase, trimmed) and Skill fields
-// (Prompt, PromptFile) are trimmed before writing, matching the normalization
-// startup applies in normalize() so that the stored values are already in
-// canonical form and validation sees the same shape as after a restart.
+// The skill name is normalized (lowercase, trimmed) and Skill.Prompt is
+// trimmed before writing, matching the normalization startup applies in
+// normalize() so that the stored values are already in canonical form and
+// validation sees the same shape as after a restart.
 func UpsertSkill(db *sql.DB, name string, s fleet.Skill) error {
 	name = fleet.NormalizeSkillName(name)
 	fleet.NormalizeSkill(&s)
@@ -519,7 +513,7 @@ func ReplaceAll(
 	return tx.Commit()
 }
 
-// ──── Bindings (atomic per-item CRUD) ────────────────────────────────────────────────
+// ──── Bindings (atomic per-item CRUD) ────────────────────────────────────────────
 
 // validateBindingShape checks the trigger-exclusivity and event-kind invariants
 // for a single binding, without requiring a full repo context. Returns an
