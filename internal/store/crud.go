@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/eloylp/agents/internal/config"
@@ -183,7 +184,8 @@ func deleteAgent(db *sql.DB, name string, cascade bool) error {
 		// Surface this as an ErrConflict rather than letting the raw FK
 		// constraint fire. Callers can show the referenced repos and
 		// offer a cascade without parsing SQLite error strings.
-		return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: still referenced by %d binding(s) across %d repo(s); use cascade to remove them", name, len(refs), countDistinctRepos(refs))}
+		distinct := slices.Compact(slices.Sorted(slices.Values(refs)))
+		return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: still referenced by %d binding(s) across %d repo(s); use cascade to remove them", name, len(refs), len(distinct))}
 	}
 	res, err := tx.Exec("DELETE FROM agents WHERE name=?", name)
 	if err != nil {
@@ -218,14 +220,6 @@ func bindingsReferencing(q querier, agentName string) ([]string, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
-}
-
-func countDistinctRepos(repos []string) int {
-	seen := make(map[string]struct{}, len(repos))
-	for _, r := range repos {
-		seen[r] = struct{}{}
-	}
-	return len(seen)
 }
 
 // ──── Skills ─────────────────────────────────────────────────────────────────────────────────────
@@ -519,7 +513,7 @@ func ReplaceAll(
 	return tx.Commit()
 }
 
-// ──── Bindings (atomic per-item CRUD) ────────────────────────────────────────────────
+// ──── Bindings (atomic per-item CRUD) ────────────────────────────────────────────
 
 // validateBindingShape checks the trigger-exclusivity and event-kind invariants
 // for a single binding, without requiring a full repo context. Returns an
