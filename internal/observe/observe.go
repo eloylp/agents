@@ -164,10 +164,6 @@ type ActiveRuns struct {
 	runs map[string]int // agent name → count of active concurrent runs
 }
 
-func newActiveRuns() *ActiveRuns {
-	return &ActiveRuns{runs: make(map[string]int)}
-}
-
 // StartRun increments the in-flight run count for agentName.
 func (a *ActiveRuns) StartRun(agentName string) {
 	a.mu.Lock()
@@ -437,7 +433,7 @@ func NewStore(db *sql.DB) *Store {
 		EventsSSE:  NewSSEHub(64),
 		TracesSSE:  NewSSEHub(64),
 		MemorySSE:  NewSSEHub(32),
-		ActiveRuns: newActiveRuns(),
+		ActiveRuns: &ActiveRuns{runs: make(map[string]int)},
 		Runs:       newRunRegistry(),
 	}
 }
