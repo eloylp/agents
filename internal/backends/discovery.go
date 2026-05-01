@@ -184,7 +184,7 @@ func diagnoseBackend(ctx context.Context, backendName, commandName, preferredCom
 	models, modelsDetail := discoverModels(ctx, commandName, path, env)
 	status.Models = models
 
-	_, mcpDetail := checkGitHubMCP(ctx, path, env)
+	mcpDetail := checkGitHubMCP(ctx, path, env)
 	status.Healthy = versionOK
 
 	details := make([]string, 0, 3)
@@ -256,23 +256,23 @@ func modelCommands(name string) [][]string {
 	}
 }
 
-func checkGitHubMCP(ctx context.Context, command string, env map[string]string) (bool, string) {
+func checkGitHubMCP(ctx context.Context, command string, env map[string]string) string {
 	stdout, stderr, err := runToolCommand(ctx, command, []string{"mcp", "list"}, env)
 	if err != nil {
 		detail := firstNonEmptyLine(stderr, stdout)
 		if detail == "" {
 			detail = err.Error()
 		}
-		return false, "mcp check failed: " + detail
+		return "mcp check failed: " + detail
 	}
 	hasGitHub, connected := parseGitHubMCPStatus(stdout + "\n" + stderr)
 	if connected {
-		return true, "github MCP: connected"
+		return "github MCP: connected"
 	}
 	if hasGitHub {
-		return false, "github MCP: found but disconnected"
+		return "github MCP: found but disconnected"
 	}
-	return false, "github MCP: not configured"
+	return "github MCP: not configured"
 }
 
 func parseGitHubMCPStatus(output string) (hasGitHub bool, connected bool) {
