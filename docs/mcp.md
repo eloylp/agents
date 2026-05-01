@@ -4,6 +4,8 @@ The daemon exposes a [Model Context Protocol](https://modelcontextprotocol.io) s
 
 The MCP surface is functionally equivalent to the REST CRUD API documented in [api.md](api.md). The difference is the wire protocol and the consumer: REST is for scripts and dashboards; MCP is for AI clients that can call tools.
 
+![Claude Code session asking "show me all agents and their status" and rendering a table from list_agents](img/mcp-terminal.png)
+
 ## Register the server
 
 From Claude Code:

@@ -2,7 +2,7 @@
 
 The daemon ships an embedded web dashboard at `/ui/`. It is the primary interface for managing the fleet. Every CRUD operation (agents, skills, backends, repos, bindings) is available there alongside live monitoring.
 
-<!-- TODO: screenshot — dashboard landing page, full window, light or dark theme depending on whichever is shipped -->
+![Fleet dashboard](img/fleet.png)
 
 ## Pages
 
@@ -10,7 +10,7 @@ The daemon ships an embedded web dashboard at `/ui/`. It is the primary interfac
 
 Live event firehose with SSE streaming. Every kind of event flows through here: webhooks (`issues.*`, `pull_request.*`, `push`, ...), cron ticks (`cron`), on-demand triggers (`agents.run`), and inter-agent dispatches (`agent.dispatch`). Each row carries time, kind, repo, number, actor, an **agents** column with badges for every agent that ran (or is running) for that event — each badge links to the Fleet page — and a **View runners** link that opens the Runners page filtered to the event id with the matching rows pulsing on arrival.
 
-<!-- TODO: short video (~10s) — the events page receiving a live event, showing the agents column populating as the runners complete, then clicking "View runners" to navigate to the filtered runners view -->
+![Events firehose](img/events.png)
 
 ### Traces
 
@@ -21,37 +21,40 @@ Agent run traces with timing, status, and a drill-down to the tool-loop transcri
 - **Tool-loop transcript** — ordered tool calls with input / output summaries and durations.
 - Summary, error message (when the run failed), Gantt position in the dispatch chain.
 
-<!-- TODO: screenshot — a trace detail view with the token usage line, the prompt panel expanded, and at least 3 tool calls visible so the reader sees the chain -->
+![Trace detail with token usage and prompt panel expanded](img/traces.png)
 
 ### Graph
 
 Visual dispatch graph showing which agents invoke which, with edge counts. Toggle "Edit wiring" to add or remove dispatch connections by drag-and-drop. The change writes back to the source agent's `can_dispatch` list and the target's `allow_dispatch` flag.
 
-<!-- TODO: short video (~15s) — graph in edit mode, dragging from one agent node to another to create a dispatch edge, then clicking an existing edge to confirm-and-remove it. This is the marquee interaction; worth a polished gif. -->
+![Agent interaction graph](img/graph.png)
+
+![Graph edit mode — dragging between nodes to wire a dispatch edge](img/graph-edit.gif)
 
 ### Agents
 
 Fleet snapshot with per-agent status, skills, bindings, dispatch wiring. Create, edit, and delete agents from this page.
 
-<!-- TODO: screenshot — agents page with one agent's edit panel open, showing the skills checklist and the dispatch toggles populated -->
+<!-- The Fleet page (above) is the agents page: same surface, same capture. -->
+![Fleet / Agents page](img/fleet.png)
 
 ### Skills
 
 Manage the reusable guidance blocks composed into agent prompts. Create, edit, delete.
 
-<!-- TODO: screenshot — skills editor with one skill open and another visible in the side list -->
+![Skills editor](img/skills.png)
 
 ### Backends and tools
 
-Backend discovery status, including per-backend GitHub MCP connectivity. Manage runtime limits (timeout, max prompt chars), local-backend URLs, and orphaned-model remediation.
+Backend discovery status, including per-backend GitHub MCP connectivity. Manage runtime limits (timeout, max prompt chars), local-backend URLs, and orphaned-model remediation. Lives as a tab inside the Config page.
 
-<!-- TODO: screenshot — backends page showing a healthy claude entry alongside a backend with a discovery error or warning, so the reader sees both states at once -->
+![Config page — Backends and tools tab is one of three tabs at the top](img/config.png)
 
 ### Repos
 
 Repository bindings. Wire agents to repos with labels, events, or cron triggers. Each binding has its own enable / disable toggle.
 
-<!-- TODO: screenshot — a repo with two bindings, one event-triggered and one cron-triggered, so the reader sees the trigger types side by side -->
+![Repos with mixed event-triggered and cron-triggered bindings](img/repos.png)
 
 ### Runners
 
@@ -74,20 +77,44 @@ Arriving with `?event=<id>` (e.g. via the **View runners** link on the Events pa
 
 **Live stream.** Rows in the `running` state with a known `span_id` show a `▶ Live` button. Clicking it opens a modal that subscribes to `/traces/{span_id}/stream` and renders the AI CLI's stdout as an annotated stream — `🔧 tool call` cards, `💬 thinking` text, `📤 tool result` payloads. Each card collapses to a one-line preview by default and expands to the raw JSON. The modal handles both Anthropic's stream-json shape (claude) and OpenAI's chat-completion-chunk shape (codex); unknown shapes fall back to a `raw output` card that preserves the full JSON. Arriving mid-run replays the per-span ring buffer (last ~1000 lines) before live-tailing. When the run ends, the modal shows a "✓ Run completed" footer with a link to the trace detail. The stream is in-memory only — restarting the daemon loses the live tail; structured trace data stays in SQLite.
 
-<!-- TODO: screenshot — runners page with a fanned-out event (multiple rows, same event id, different agents) and an in-flight row visible at the top -->
+![Runners page — event #144 fanned out to coder and pr-reviewer, both in flight with the ▶ Live button visible](img/runners.png)
 
 ### Memory
 
 Raw agent memory markdown per `(agent, repo)` pair. Useful for inspecting what an autonomous agent has learned across runs.
 
-<!-- TODO: screenshot — memory page with a non-trivial memory entry showing structure (sections, list items) -->
+![Agent memory entry](img/memory.png)
 
 ### Config
 
 Effective parsed config (secrets redacted). Includes YAML import/export.
 
-<!-- TODO: screenshot — config page with a redacted secret visible in the rendered tree -->
+![Config inspector — webhook_secret rendered as `[redacted]`](img/config.png)
 
 ## Authentication
 
 The dashboard is unauthenticated at the daemon level. Place the daemon behind a reverse proxy that gates `/ui/`, `/runners`, and the rest of the authenticated surface (everything except `/webhooks/github`, `/status`, `/run`, `/v1/*`). See [docker.md](docker.md) for one concrete pattern using Traefik basic-auth.
+
+## Regenerating these screenshots
+
+The images in `docs/img/` are generated from a synthetic fixture so the
+content stays neutral and reproducible. Regenerate after a UI change:
+
+```bash
+# Terminal 1 — boot the seeded daemon on :8081
+go run ./cmd/screenshotseed
+
+# Terminal 2 — drive headless Chromium (Playwright) + ffmpeg → docs/img/
+cd internal/ui
+node scripts/screenshots.mjs
+```
+
+`cmd/screenshotseed` builds a tempdir SQLite, imports a fictional fleet
+(`acme/widgets`, `acme/control-plane`), seeds events / traces / dispatch
+history, registers an in-flight `pr-reviewer` run on event #144, and
+swaps the AI runner for a stub that blocks forever — so the runners
+page shows live rows for the screenshot rather than completed-but-failed
+ones (the screenshotting host has no real `claude` / `codex` binary).
+First-time setup needs `npm install --save-dev playwright` in
+`internal/ui` and `npx playwright install chromium`. The graph edit
+GIF additionally needs `ffmpeg`.
