@@ -163,9 +163,6 @@ func (c *Config) validateAgents() error {
 		if _, ok := c.Daemon.AIBackends[a.Backend]; !ok {
 			return fmt.Errorf("config: agent %q: unknown backend %q", a.Name, a.Backend)
 		}
-		if err := validateAgentModel(a.Name, a.Model, c.Daemon.AIBackends[a.Backend]); err != nil {
-			return err
-		}
 		for _, s := range a.Skills {
 			if _, ok := c.Skills[s]; !ok {
 				return fmt.Errorf("config: agent %q: unknown skill %q", a.Name, s)
@@ -271,13 +268,4 @@ func isSupportedBackend(name string, backend fleet.Backend) bool {
 		return true
 	}
 	return strings.TrimSpace(backend.LocalModelURL) != ""
-}
-
-// validateAgentModel is intentionally permissive at config validation time:
-// model/backend mismatches are allowed so that backend discovery can persist
-// model-catalog changes even when agents become temporarily orphaned.
-// Runtime paths enforce model availability strictly before invoking a
-// backend, and the UI surfaces orphan remediation flows.
-func validateAgentModel(_ string, _ string, _ fleet.Backend) error {
-	return nil
 }
