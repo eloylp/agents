@@ -197,15 +197,15 @@ func toolTriggerAgent(deps Deps) server.ToolHandlerFunc {
 		}
 		want := fleet.NormalizeRepoName(repoName)
 		var repo fleet.Repo
-		var ok bool
+		var found bool
 		for _, r := range repos {
 			if r.Name == want {
 				repo = r
-				ok = true
+				found = true
 				break
 			}
 		}
-		if !ok || !repo.Enabled {
+		if !found || !repo.Enabled {
 			return mcpgo.NewToolResultErrorf("repo %q not found or disabled", repoName), nil
 		}
 
