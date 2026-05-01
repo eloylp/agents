@@ -37,7 +37,6 @@ func TestStringSliceArgAcceptsShapes(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got, errMsg := stringSliceArg(tc.in, "skills")
@@ -84,7 +83,6 @@ func TestStringSlicePtrArgAcceptsJSONString(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ptr, ok, errMsg := stringSlicePtrArg(tc.args, "skills")
@@ -140,7 +138,6 @@ func TestArrayOfAnyAcceptsShapes(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got, errMsg := arrayOfAny(tc.in, "bindings")
