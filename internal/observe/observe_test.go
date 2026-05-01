@@ -3,8 +3,10 @@ package observe_test
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -513,7 +515,7 @@ func TestStoreRecordEventSSEUsesLowercaseJSON(t *testing.T) {
 
 	for _, key := range []string{"at", "id", "repo", "kind", "number", "actor"} {
 		if _, ok := fields[key]; !ok {
-			t.Errorf("SSE payload missing lowercase key %q; got keys: %v", key, mapKeys(fields))
+			t.Errorf("SSE payload missing lowercase key %q; got keys: %v", key, slices.Sorted(maps.Keys(fields)))
 		}
 	}
 	// Ensure no uppercase duplicates leaked through.
@@ -709,13 +711,4 @@ func TestStoreRecordStepsNoOpOnEmpty(t *testing.T) {
 	if got != nil {
 		t.Fatalf("want nil after no-op records, got %v", got)
 	}
-}
-
-// mapKeys returns the sorted keys of a map for use in error messages.
-func mapKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
 }
