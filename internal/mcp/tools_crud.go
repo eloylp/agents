@@ -178,7 +178,7 @@ func toolUpdateSkill(deps Deps) server.ToolHandlerFunc {
 		if v, ok := stringPtrArg(args, "prompt"); ok {
 			patch.Prompt = v
 		}
-		if patch.Prompt == nil {
+		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
 		canonicalName, canonical, uerr := deps.Fleet.UpdateSkillPatch(name, patch)

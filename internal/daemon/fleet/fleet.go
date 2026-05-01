@@ -96,7 +96,7 @@ func (h *Handler) HandleAgentsCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, agentToStoreJSON(canonical))
 }
 
-// ── Agent wire types ─────────────────────────────────────────────────────────
+// ── Agent wire types ────────────────────────────────────────────────────────────────────────────────────
 
 type storeAgentJSON struct {
 	Name          string   `json:"name"`
@@ -204,7 +204,7 @@ func (p AgentPatch) apply(a *fleet.Agent) {
 	}
 }
 
-// ── Agent handlers ───────────────────────────────────────────────────────────
+// ── Agent handlers ────────────────────────────────────────────────────────────────────────────────────
 
 func (h *Handler) handleAgent(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeAgentName(mux.Vars(r)["name"])
@@ -253,7 +253,7 @@ func (h *Handler) handleAgentPatch(w http.ResponseWriter, r *http.Request, name 
 	writeJSON(w, http.StatusOK, agentToStoreJSON(canonical))
 }
 
-// ── Agent methods (exposed for MCP) ──────────────────────────────────────────
+// ── Agent methods (exposed for MCP) ───────────────────────────────────────────────────────────────────────────────
 
 // UpsertAgent writes a single agent definition into the store and reloads the
 // cron scheduler. Returns the canonical (normalized) form that was persisted.
@@ -312,7 +312,7 @@ func (h *Handler) DeleteAgent(name string, cascade bool) error {
 	return h.store.DeleteAgent(name)
 }
 
-// ── Skill wire types ─────────────────────────────────────────────────────────
+// ── Skill wire types ────────────────────────────────────────────────────────────────────────────────────
 
 type storeSkillJSON struct {
 	Name   string `json:"name"`
@@ -326,7 +326,10 @@ type SkillPatch struct {
 	Prompt *string `json:"prompt,omitempty"`
 }
 
-func (p SkillPatch) anyFieldSet() bool { return p.Prompt != nil }
+// AnyFieldSet reports whether at least one patch field is non-nil. Used by
+// both the REST PATCH handler and the MCP update_skill tool to reject empty
+// payloads before hitting the store.
+func (p SkillPatch) AnyFieldSet() bool { return p.Prompt != nil }
 
 func (p SkillPatch) apply(s *fleet.Skill) {
 	if p.Prompt != nil {
@@ -334,7 +337,7 @@ func (p SkillPatch) apply(s *fleet.Skill) {
 	}
 }
 
-// ── Skill handlers ───────────────────────────────────────────────────────────
+// ── Skill handlers ────────────────────────────────────────────────────────────────────────────────────
 
 func (h *Handler) handleSkills(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -397,7 +400,7 @@ func (h *Handler) handleSkillPatch(w http.ResponseWriter, r *http.Request, name 
 	if !decodeBody(w, r, h.maxBodyBytes, &req) {
 		return
 	}
-	if !req.anyFieldSet() {
+	if !req.AnyFieldSet() {
 		http.Error(w, "at least one field is required", http.StatusBadRequest)
 		return
 	}
@@ -409,7 +412,7 @@ func (h *Handler) handleSkillPatch(w http.ResponseWriter, r *http.Request, name 
 	writeJSON(w, http.StatusOK, storeSkillJSON{Name: canonicalName, Prompt: canonical.Prompt})
 }
 
-// ── Skill methods (exposed for MCP) ──────────────────────────────────────────
+// ── Skill methods (exposed for MCP) ───────────────────────────────────────────────────────────────────────────────
 
 // UpsertSkill writes a single skill into the store and reloads the cron
 // scheduler. Returns the canonical (normalized) name and Skill that were
@@ -456,10 +459,10 @@ func (h *Handler) DeleteSkill(name string) error {
 	return h.store.DeleteSkill(name)
 }
 
-// ── Backend wire types ───────────────────────────────────────────────────────
+// ── Backend wire types ──────────────────────────────────────────────────────────────────────────────────
 
 type storeBackendJSON struct {
-	Name             string   `json:"name"`
+	Name           string   `json:"name"`
 	Command        string   `json:"command"`
 	Version        string   `json:"version,omitempty"`
 	Models         []string `json:"models,omitempty"`
@@ -553,7 +556,7 @@ func (j storeBackendJSON) toConfig() fleet.Backend {
 	}
 }
 
-// ── Backend handlers ─────────────────────────────────────────────────────────
+// ── Backend handlers ────────────────────────────────────────────────────────────────────────────────────
 
 func (h *Handler) handleBackends(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -727,7 +730,7 @@ func (h *Handler) handleBackendDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ── Backend methods (exposed for MCP) ────────────────────────────────────────
+// ── Backend methods (exposed for MCP) ────────────────────────────────────────────────────────────────────────────
 
 // UpsertBackend writes a single backend definition into the store and reloads
 // the cron scheduler. Returns the canonical (normalized) name and config that
@@ -776,7 +779,7 @@ func (h *Handler) DeleteBackend(name string) error {
 	return h.store.DeleteBackend(name)
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────────────────────────────
 
 func (h *Handler) writeErr(w http.ResponseWriter, err error, op string) {
 	h.logger.Error().Err(err).Msgf("store crud: %s failed", op)
