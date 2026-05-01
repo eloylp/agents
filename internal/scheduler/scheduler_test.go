@@ -253,7 +253,7 @@ func TestReconcileRaceWithConcurrentReads(t *testing.T) {
 
 	const goroutines = 8
 	var wg sync.WaitGroup
-	for i := 0; i < goroutines/2; i++ {
+	for range goroutines / 2 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -262,7 +262,7 @@ func TestReconcileRaceWithConcurrentReads(t *testing.T) {
 			}
 		}()
 	}
-	for i := 0; i < goroutines/2; i++ {
+	for range goroutines / 2 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
