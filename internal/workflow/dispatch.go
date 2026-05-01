@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -476,7 +475,7 @@ func (d *Dispatcher) ProcessDispatches(
 	var errs []error
 	fanout := 0
 	for _, req := range requests {
-		req.Agent = sanitizeName(req.Agent)
+		req.Agent = fleet.NormalizeAgentName(req.Agent)
 		d.counters.requestedTotal.Add(1)
 
 		// When the agent omits number (zero value), fall back to the originating
@@ -651,11 +650,6 @@ func (d *Dispatcher) FinalizeAutonomousRun(agentName, repo string) {
 // Stats returns a snapshot of the current dispatch counters.
 func (d *Dispatcher) Stats() DispatchStats {
 	return d.counters.snapshot()
-}
-
-// sanitizeName lowercases and trims a name for safe comparison.
-func sanitizeName(s string) string {
-	return strings.ToLower(strings.TrimSpace(s))
 }
 
 // GenEventID returns a short random hex string suitable for use as a root
