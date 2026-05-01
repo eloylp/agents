@@ -260,8 +260,5 @@ func countBindingTriggers(b fleet.Binding) int {
 }
 
 func isSupportedBackend(name string, backend fleet.Backend) bool {
-	if slices.Contains(validAIBackendNames, name) {
-		return true
-	}
-	return strings.TrimSpace(backend.LocalModelURL) != ""
+	return slices.Contains(validAIBackendNames, name) || strings.TrimSpace(backend.LocalModelURL) != ""
 }
