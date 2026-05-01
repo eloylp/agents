@@ -1716,7 +1716,6 @@ func TestToolCreateRepoRejectsBadBindingsShape(t *testing.T) {
 		{"element not object", []any{"coder"}, "bindings[0]: must be an object"},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			deps := testFixture(t)
@@ -1765,7 +1764,6 @@ func TestToolCreateRepoRejectsBadBindingFieldTypes(t *testing.T) {
 		{"events element not string", map[string]any{"agent": "coder", "events": []any{true}}, "bindings[0].events[0] must be a string"},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			deps := testFixture(t)
