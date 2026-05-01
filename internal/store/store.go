@@ -296,7 +296,7 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
 		}
 		allowPRs := boolToInt(a.AllowPRs)
 		allowDispatch := boolToInt(a.AllowDispatch)
-		allowMemory := allowMemoryInt(a.AllowMemory)
+		allowMemory := bindingEnabledInt(a.AllowMemory)
 		if _, err := tx.Exec(`
 			INSERT OR REPLACE INTO agents
 			  (name,backend,model,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description,allow_memory)
@@ -653,20 +653,12 @@ func boolToInt(b bool) int {
 // intToBool converts a SQLite 0/1 to bool.
 func intToBool(i int) bool { return i != 0 }
 
-// bindingEnabledInt converts a binding's nullable enabled flag to 0/1 for
-// SQLite storage. Nil means the default (enabled), matching IsEnabled().
+// bindingEnabledInt converts a nullable *bool flag to 0/1 for SQLite storage.
+// Nil means the default (enabled); only an explicit non-nil false maps to 0.
+// Used for both binding.Enabled and agent.AllowMemory, which share this
+// nil-means-default-on semantics.
 func bindingEnabledInt(enabled *bool) int {
 	if enabled != nil && !*enabled {
-		return 0
-	}
-	return 1
-}
-
-// allowMemoryInt converts an agent's nullable allow_memory flag to 0/1 for
-// SQLite storage. Nil means the default (enabled), matching
-// Agent.IsAllowMemory(); only an explicit non-nil false maps to 0.
-func allowMemoryInt(allow *bool) int {
-	if allow != nil && !*allow {
 		return 0
 	}
 	return 1
