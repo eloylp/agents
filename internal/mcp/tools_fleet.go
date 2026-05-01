@@ -4,7 +4,6 @@ import (
 	"context"
 	"maps"
 	"slices"
-	"strings"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -183,18 +182,13 @@ func toolGetStatus(deps Deps) server.ToolHandlerFunc {
 // correlate with trace data later.
 func toolTriggerAgent(deps Deps) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		agent, err := req.RequireString("agent")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
+		agent, ok := trimmedString(req, "agent")
+		if !ok {
+			return mcpgo.NewToolResultError("agent is required"), nil
 		}
-		repoName, err := req.RequireString("repo")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
-		}
-		agent = strings.TrimSpace(agent)
-		repoName = strings.TrimSpace(repoName)
-		if agent == "" || repoName == "" {
-			return mcpgo.NewToolResultError("agent and repo are required"), nil
+		repoName, ok := trimmedString(req, "repo")
+		if !ok {
+			return mcpgo.NewToolResultError("repo is required"), nil
 		}
 
 		repos, err := deps.Store.ReadRepos()
