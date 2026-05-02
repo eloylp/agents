@@ -368,7 +368,11 @@ func TestEngineAllowPRsFalseInjectsNoPRGuard(t *testing.T) {
 			if runner.callCount() != 1 {
 				t.Fatalf("expected 1 run, got %d", runner.callCount())
 			}
-			hasGuard := strings.HasPrefix(runner.lastSystem(), noPRGuard)
+			// Guardrails (when seeded) sit in front of the no-PR guard, so a
+			// prefix check would fail in any test environment that applied the
+			// guardrails migration. Contains captures the intent: is the guard
+			// in the System block when allow_prs=false?
+			hasGuard := strings.Contains(runner.lastSystem(), noPRGuard)
 			if hasGuard != tc.wantGuard {
 				t.Errorf("no-PR guard present=%v, want %v\nsystem: %q", hasGuard, tc.wantGuard, runner.lastSystem())
 			}

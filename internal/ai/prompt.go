@@ -47,20 +47,36 @@ type PromptContext struct {
 // RenderedPrompt with two parts:
 //
 //   - System: stable content that is identical across every run of the same
-//     agent on the same repo — no-PR guard (when allow_prs=false), concatenated
-//     skill guidance, the agent's own prompt body, and the available-experts
-//     roster. Backends that support a native system channel (e.g. Claude's
-//     --append-system-prompt) can deliver this part separately to benefit from
-//     prompt caching.
+//     agent on the same repo — operator-set guardrails (prepended at the very
+//     top so they precede everything else the model reads), the no-PR guard
+//     (when allow_prs=false), concatenated skill guidance, the agent's own
+//     prompt body, and the available-experts roster. Backends that support a
+//     native system channel (e.g. Claude's --append-system-prompt) can deliver
+//     this part separately to benefit from prompt caching.
 //
 //   - User: per-run content — the ## Runtime context block containing the
 //     repo, event, actor, payload, and memory. This changes every run and must
 //     travel as the user turn.
 //
+// Guardrails are passed in render order (caller selects only enabled rows
+// and orders them by position ASC, name ASC); each entry's Content is
+// emitted verbatim, separated by a blank line. The renderer does not
+// inspect the Enabled or Position fields itself — those are the caller's
+// gate, so the renderer stays a pure text composer.
+//
 // No Go templates, no {{.Field}} substitution — just text composition. The
 // agent's prompt is expected to be self-contained.
-func RenderAgentPrompt(agent fleet.Agent, skills map[string]fleet.Skill, ctx PromptContext) (RenderedPrompt, error) {
+func RenderAgentPrompt(agent fleet.Agent, skills map[string]fleet.Skill, guardrails []fleet.Guardrail, ctx PromptContext) (RenderedPrompt, error) {
 	var sys strings.Builder
+
+	for _, g := range guardrails {
+		content := strings.TrimSpace(g.Content)
+		if content == "" {
+			continue
+		}
+		sys.WriteString(content)
+		sys.WriteString("\n\n")
+	}
 
 	if !agent.AllowPRs {
 		sys.WriteString("Do not open or create pull requests under any circumstances.\n")

@@ -714,7 +714,12 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		existingMemory = mem
 	}
 
-	rendered, err := ai.RenderAgentPrompt(agent, cfg.Skills, ai.PromptContext{
+	guardrails, err := e.store.ReadEnabledGuardrails()
+	if err != nil {
+		return fmt.Errorf("agent %q: load guardrails: %w", agent.Name, err)
+	}
+
+	rendered, err := ai.RenderAgentPrompt(agent, cfg.Skills, guardrails, ai.PromptContext{
 		Repo:          ev.Repo.FullName,
 		Number:        ev.Number,
 		Backend:       backend,
