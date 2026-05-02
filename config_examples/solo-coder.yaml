@@ -1,0 +1,55 @@
+# solo-coder.yaml — the "hello world" fleet
+#
+# One repo, one agent, one trigger. Open an issue on the bound repo
+# with the label `coder:run` and the daemon dispatches the coder to
+# implement it. The coder opens a PR; closing or merging is up to
+# you.
+#
+# Use this as a starting point if you want a single AI teammate
+# picking up labelled issues and don't yet need review or
+# multi-agent flows. Grow into coder-and-reviewer.yaml when you
+# want a second agent reviewing the coder's PRs.
+#
+# Import:  ./agents --db agents.db --import config_examples/solo-coder.yaml
+
+daemon:
+  log:
+    level: info
+    format: text
+  http:
+    listen_addr: ":8080"
+    webhook_secret_env: GITHUB_WEBHOOK_SECRET
+  processor:
+    event_queue_buffer: 256
+    max_concurrent_agents: 2
+  ai_backends:
+    claude:
+      command: claude
+      args: ["-p", "--dangerously-skip-permissions"]
+      timeout_seconds: 1500
+      max_prompt_chars: 12000
+
+skills:
+  architect:
+    prompt: |
+      Focus on architecture boundaries, coupling, and maintainability risks.
+  testing:
+    prompt: |
+      Focus on behavioral regressions, missing tests, and weak assertions.
+
+agents:
+  - name: coder
+    backend: claude
+    description: "Implements fixes and features from labelled issues; opens pull requests"
+    skills: [architect, testing]
+    prompt: |
+      Implement the requested change end-to-end.
+      Run the narrowest meaningful tests and open a pull request when the work is ready.
+    allow_prs: true
+
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+      - agent: coder
+        labels: ["coder:run"]

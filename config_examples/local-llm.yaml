@@ -1,0 +1,88 @@
+# local-llm.yaml — fleet pinned to a local OpenAI-compatible LLM
+#
+# Adds a custom backend with `local_model_url` and enables the built-
+# in Anthropic↔OpenAI translation proxy, so the unmodified `claude`
+# CLI talks to llama.cpp, Ollama, vLLM, or anything else that speaks
+# OpenAI Chat Completions.
+#
+# How the routing works at runtime:
+#   1. The agent invokes the `claude` CLI.
+#   2. The daemon injects ANTHROPIC_BASE_URL pointing at its own
+#      proxy endpoint (default `/v1/messages` on the daemon).
+#   3. The proxy translates the Anthropic request shape into OpenAI
+#      Chat Completions and forwards it to `upstream.url`.
+#   4. The OpenAI response is translated back into Anthropic shape.
+#
+# See docs/local-models.md for verification steps and how to point
+# `claude_local` at a different upstream (Ollama on :11434, vLLM on
+# :8000, llama.cpp on :8080 etc.).
+#
+# Import:  ./agents --db agents.db --import config_examples/local-llm.yaml
+
+daemon:
+  log:
+    level: info
+    format: text
+  http:
+    listen_addr: ":8080"
+    webhook_secret_env: GITHUB_WEBHOOK_SECRET
+  processor:
+    event_queue_buffer: 256
+    max_concurrent_agents: 2
+
+  ai_backends:
+    claude:
+      command: claude
+      args: ["-p", "--dangerously-skip-permissions"]
+      timeout_seconds: 1500
+      max_prompt_chars: 12000
+
+    # Custom backend: same `claude` CLI, but routed at runtime to the
+    # local upstream below. The presence of `local_model_url` is what
+    # marks this as a local backend.
+    claude_local:
+      command: claude
+      args: ["-p", "--dangerously-skip-permissions"]
+      local_model_url: http://local-llm:18000/v1
+      timeout_seconds: 3600
+      max_prompt_chars: 8000
+
+  # Built-in translation proxy. `claude_local` runs against this
+  # endpoint, which forwards to `upstream.url` after translation.
+  proxy:
+    enabled: true
+    path: /v1/messages
+    upstream:
+      url: http://local-llm:18000/v1
+      model: qwen3-coder
+      timeout_seconds: 3600
+      # Most local LLM servers (Ollama, llama.cpp, vLLM in default config)
+      # don't require auth, so api_key_env is omitted. Set it if your
+      # upstream is behind a token gate; the named env variable must
+      # exist at daemon start, otherwise the proxy refuses to enable.
+      # api_key_env: LOCAL_LLM_API_KEY
+
+skills:
+  architect:
+    prompt: |
+      Focus on architecture boundaries, coupling, and maintainability risks.
+  testing:
+    prompt: |
+      Focus on behavioral regressions, missing tests, and weak assertions.
+
+agents:
+  - name: refactorer
+    backend: claude_local            # routed through the local LLM
+    description: "Cleans up code style and small refactors using the local model"
+    skills: [architect, testing]
+    prompt: |
+      Refactor code for clarity and maintainability without changing behavior.
+      Leave the repo in a state where tests still pass.
+    allow_prs: true
+
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+      - agent: refactorer
+        labels: ["refactor:run"]

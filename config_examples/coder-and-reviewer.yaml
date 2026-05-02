@@ -1,0 +1,79 @@
+# coder-and-reviewer.yaml — minimal dispatch protocol
+#
+# Two agents wired so the coder can hand off to the reviewer when
+# its PR is ready, and the reviewer can dispatch back to the coder
+# on REQUEST_CHANGES. Smallest config that demonstrates the
+# `can_dispatch` / `allow_dispatch` handshake.
+#
+# coder       — implements changes from labelled issues; opens PRs.
+# pr-reviewer — reviews PR opens/syncs and approves or requests changes.
+#
+# The coder uses Claude (good at implementation), the pr-reviewer
+# uses Codex (good at fresh-eyes review). Switch backends to taste.
+#
+# Import:  ./agents --db agents.db --import config_examples/coder-and-reviewer.yaml
+
+daemon:
+  log:
+    level: info
+    format: text
+  http:
+    listen_addr: ":8080"
+    webhook_secret_env: GITHUB_WEBHOOK_SECRET
+  processor:
+    event_queue_buffer: 256
+    max_concurrent_agents: 2
+    dispatch:
+      max_depth: 3
+      max_fanout: 4
+      dedup_window_seconds: 300
+  ai_backends:
+    claude:
+      command: claude
+      args: ["-p", "--dangerously-skip-permissions"]
+      timeout_seconds: 1500
+      max_prompt_chars: 12000
+    codex:
+      command: codex
+      args: ["exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"]
+      timeout_seconds: 600
+      max_prompt_chars: 12000
+
+skills:
+  architect:
+    prompt: |
+      Focus on architecture boundaries, coupling, and maintainability risks.
+  testing:
+    prompt: |
+      Focus on behavioral regressions, missing tests, and weak assertions.
+
+agents:
+  - name: coder
+    backend: claude
+    description: "Implements fixes and features; opens pull requests"
+    skills: [architect, testing]
+    prompt: |
+      Implement the requested change end-to-end.
+      Run the narrowest meaningful tests and open a pull request when the work is ready.
+    allow_prs: true
+    allow_dispatch: true            # pr-reviewer dispatches back here on REQUEST_CHANGES
+    can_dispatch: [pr-reviewer]     # coder dispatches the reviewer when the PR is ready
+
+  - name: pr-reviewer
+    backend: codex
+    description: "Reviews pull requests for quality, test coverage, and correctness"
+    skills: [architect, testing]
+    prompt: |
+      Review pull requests for correctness, regressions, and missing tests.
+      Prefer concrete findings over broad summaries.
+    allow_dispatch: true            # coder dispatches the reviewer when its PR is ready
+    can_dispatch: [coder]           # reviewer dispatches the coder back on REQUEST_CHANGES
+
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+      - agent: coder
+        labels: ["coder:run"]
+      - agent: pr-reviewer
+        events: ["pull_request.opened", "pull_request.synchronize"]

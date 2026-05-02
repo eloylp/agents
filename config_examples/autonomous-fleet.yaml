@@ -1,0 +1,100 @@
+# autonomous-fleet.yaml — production-shaped fleet
+#
+# Mirrors the maintainer's own running setup: a scout that surveys
+# the repo on a cron and opens issues, a coder that picks up
+# `ai ready`-labelled issues, and a pr-reviewer that watches PR
+# events. The scout's findings flow into issues; the maintainer
+# triages and applies `ai ready` to admit them into the work queue.
+#
+# Memory is enabled by default on the cron-scheduled scout so it
+# remembers what it has already filed across runs and avoids
+# re-filing the same finding day after day.
+#
+# Import:  ./agents --db agents.db --import config_examples/autonomous-fleet.yaml
+
+daemon:
+  log:
+    level: info
+    format: text
+  http:
+    listen_addr: ":8080"
+    webhook_secret_env: GITHUB_WEBHOOK_SECRET
+  processor:
+    event_queue_buffer: 256
+    max_concurrent_agents: 4
+    dispatch:
+      max_depth: 3
+      max_fanout: 4
+      dedup_window_seconds: 300
+  ai_backends:
+    claude:
+      command: claude
+      args: ["-p", "--dangerously-skip-permissions"]
+      timeout_seconds: 1500
+      max_prompt_chars: 12000
+    codex:
+      command: codex
+      args: ["exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"]
+      timeout_seconds: 600
+      max_prompt_chars: 12000
+
+skills:
+  architect:
+    prompt: |
+      Focus on architecture boundaries, coupling, and maintainability risks.
+  testing:
+    prompt: |
+      Focus on behavioral regressions, missing tests, and weak assertions.
+  security:
+    prompt: |
+      Focus on auth, secrets handling, trust boundaries, and unsafe defaults.
+  dx:
+    prompt: |
+      Focus on onboarding friction, naming, docs drift, and actionable errors.
+
+agents:
+  - name: scout
+    backend: claude
+    description: "Surveys the codebase for issues worth tracking; files findings as GitHub issues"
+    skills: [architect, dx]
+    prompt: |
+      Inspect the repository for user-visible bugs, stale docs, or maintenance gaps.
+      Open or update GitHub issues with concrete evidence and next steps.
+      Do not refile findings already captured in your memory of prior runs.
+
+  - name: coder
+    backend: claude
+    description: "Implements fixes and features from `ai ready` issues; opens pull requests"
+    skills: [architect, testing]
+    prompt: |
+      Implement the requested change end-to-end.
+      Run the narrowest meaningful tests and open a pull request when the work is ready.
+    allow_prs: true
+    allow_dispatch: true            # pr-reviewer dispatches the coder back on REQUEST_CHANGES
+    can_dispatch: [pr-reviewer]     # coder asks for review when the PR is ready
+
+  - name: pr-reviewer
+    backend: codex
+    description: "Reviews pull requests for correctness, regressions, and missing tests"
+    skills: [architect, testing, security]
+    prompt: |
+      Review pull requests for correctness, regressions, and missing tests.
+      Prefer concrete findings over broad summaries.
+    allow_dispatch: true            # coder dispatches the reviewer when its PR is ready
+    can_dispatch: [coder]           # reviewer dispatches the coder back on REQUEST_CHANGES
+
+repos:
+  - name: "owner/repo"
+    enabled: true
+    use:
+      # Scout surveys the repo every hour at minute 0.
+      - agent: scout
+        cron: "0 * * * *"
+
+      # Coder picks up issues admitted by the maintainer.
+      - agent: coder
+        labels: ["ai ready"]
+
+      # PR-reviewer watches every PR open and push.
+      - agent: pr-reviewer
+        events: ["pull_request.opened", "pull_request.synchronize"]
