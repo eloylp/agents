@@ -449,12 +449,11 @@ func (d *Dispatcher) lookupAgent(name string) (fleet.Agent, bool) {
 		d.logger.Error().Err(err).Msg("dispatcher: read agents")
 		return fleet.Agent{}, false
 	}
-	for _, a := range agents {
-		if a.Name == name {
-			return a, true
-		}
+	idx := slices.IndexFunc(agents, func(a fleet.Agent) bool { return a.Name == name })
+	if idx < 0 {
+		return fleet.Agent{}, false
 	}
-	return fleet.Agent{}, false
+	return agents[idx], true
 }
 
 // ProcessDispatches validates and enqueues each dispatch request from a single
