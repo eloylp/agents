@@ -1,5 +1,5 @@
 'use client'
-import { Suspense, useEffect, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import Card from '@/components/Card'
@@ -146,6 +146,9 @@ function parseStreamLine(line: string): LiveStreamEntry {
 function LiveStreamModal({ span, onClose }: { span: { id: string; agent: string; repo: string; kind: string }; onClose: () => void }) {
   const [entries, setEntries] = useState<LiveStreamEntry[]>([])
   const [status, setStatus] = useState<'connecting' | 'live' | 'ended' | 'error'>('connecting')
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const stuckToBottom = useRef(true)
+  const [hasNewWhileDetached, setHasNewWhileDetached] = useState(false)
 
   useEffect(() => {
     const es = new EventSource(`/traces/${encodeURIComponent(span.id)}/stream`)
@@ -164,6 +167,33 @@ function LiveStreamModal({ span, onClose }: { span: { id: string; agent: string;
     }
     return () => es.close()
   }, [span.id])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (stuckToBottom.current) {
+      el.scrollTop = el.scrollHeight
+    } else {
+      setHasNewWhileDetached(true)
+    }
+  }, [entries.length])
+
+  const onScroll = () => {
+    const el = scrollRef.current
+    if (!el) return
+    const distance = el.scrollHeight - (el.scrollTop + el.clientHeight)
+    const atBottom = distance < 32
+    stuckToBottom.current = atBottom
+    if (atBottom && hasNewWhileDetached) setHasNewWhileDetached(false)
+  }
+
+  const jumpToLatest = () => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    stuckToBottom.current = true
+    setHasNewWhileDetached(false)
+  }
 
   return (
     <div onClick={onClose} style={{
@@ -194,24 +224,42 @@ function LiveStreamModal({ span, onClose }: { span: { id: string; agent: string;
             cursor: 'pointer', fontSize: '0.85rem',
           }}>Close</button>
         </div>
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0.75rem 1rem' }}>
-          {entries.length === 0 && status === 'connecting' && (
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Waiting for output...</p>
-          )}
-          {entries.length === 0 && status === 'ended' && (
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Run finished without emitting any output that the daemon captured.</p>
-          )}
-          {entries.length === 0 && status === 'error' && (
-            <p style={{ color: 'var(--text-danger)', fontSize: '0.85rem' }}>Lost connection to the live stream. The run may still be in flight; close and reopen to retry.</p>
-          )}
-          {entries.map((e, i) => <LiveStreamCard key={i} entry={e} />)}
-          {status === 'ended' && entries.length > 0 && (
-            <div style={{ marginTop: '1rem', padding: '0.5rem 0.75rem', background: 'var(--bg-input)', borderRadius: '4px', fontSize: '0.8rem' }}>
-              ✓ Run completed.{' '}
-              <Link href={`/traces/?id=${encodeURIComponent(span.id)}`} style={{ color: 'var(--accent)' }}>
-                View full trace detail →
-              </Link>
-            </div>
+        <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+          <div
+            ref={scrollRef}
+            onScroll={onScroll}
+            style={{ position: 'absolute', inset: 0, overflowY: 'auto', padding: '0.75rem 1rem' }}
+          >
+            {entries.length === 0 && status === 'connecting' && (
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Waiting for output...</p>
+            )}
+            {entries.length === 0 && status === 'ended' && (
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Run finished without emitting any output that the daemon captured.</p>
+            )}
+            {entries.length === 0 && status === 'error' && (
+              <p style={{ color: 'var(--text-danger)', fontSize: '0.85rem' }}>Lost connection to the live stream. The run may still be in flight; close and reopen to retry.</p>
+            )}
+            {entries.map((e, i) => <LiveStreamCard key={i} entry={e} />)}
+            {status === 'ended' && entries.length > 0 && (
+              <div style={{ marginTop: '1rem', padding: '0.5rem 0.75rem', background: 'var(--bg-input)', borderRadius: '4px', fontSize: '0.8rem' }}>
+                ✓ Run completed.{' '}
+                <Link href={`/traces/?id=${encodeURIComponent(span.id)}`} style={{ color: 'var(--accent)' }}>
+                  View full trace detail →
+                </Link>
+              </div>
+            )}
+          </div>
+          {hasNewWhileDetached && (
+            <button
+              onClick={jumpToLatest}
+              style={{
+                position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)',
+                background: 'var(--accent)', color: 'var(--bg-card)',
+                border: 'none', borderRadius: '999px',
+                padding: '4px 14px', fontSize: '0.8rem', fontWeight: 600,
+                cursor: 'pointer', boxShadow: '0 4px 12px rgba(0,0,0,0.25)',
+              }}
+            >↓ Latest</button>
           )}
         </div>
       </div>
