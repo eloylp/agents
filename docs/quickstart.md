@@ -40,6 +40,8 @@ cp config.example.yaml config.yaml
 
 Edit `config.yaml` to taste. The shipped example is small enough to read in one pass and is a working starting point; you can grow the fleet later through the dashboard or CRUD API.
 
+Prefer a more focused starting point? See [`config_examples/`](../config_examples/) for five import-ready scenarios — `solo-coder`, `coder-and-reviewer`, `autonomous-fleet`, `local-llm`, and `multi-repo` — each with a header comment explaining what it shows. Copy any of those over `config.yaml` instead.
+
 Create `.env` next to `docker-compose.yaml`:
 
 ```bash

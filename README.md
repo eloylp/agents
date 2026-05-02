@@ -32,7 +32,7 @@ The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthr
 
 ## Get started
 
-See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a repo in a few minutes — `docker compose up -d` is the recommended path.
+See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a repo in a few minutes — `docker compose up -d` is the recommended path. For five import-ready fleet scenarios (solo coder, coder + reviewer, autonomous fleet, local LLM, multi-repo) see [`config_examples/`](config_examples/).
 
 ## Contributing
 
