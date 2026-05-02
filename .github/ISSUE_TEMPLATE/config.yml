@@ -8,3 +8,9 @@ contact_links:
       will apply the `discussing` label so the agent fleet skips it while it's
       still being shaped, and remove it once the body is concrete enough to
       implement against.
+
+  - name: Security disclosure
+    url: https://github.com/eloylp/agents/blob/main/SECURITY.md
+    about: |
+      Please follow the responsible-disclosure flow in SECURITY.md instead of
+      filing a public issue.
