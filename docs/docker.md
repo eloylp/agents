@@ -1,35 +1,13 @@
 # Docker deployment
 
-A complete guide to running the daemon with Docker Compose: the compose file reference, pre-flight setup, reverse-proxy routing, first boot, and day-2 operations.
+The deep reference for running the daemon with Docker Compose: compose schema, reverse-proxy routing, first boot, and day-2 operations. For the bring-up walkthrough, see [`quickstart.md`](quickstart.md).
 
-- [Quick start](#quick-start)
 - [Compose reference](#compose-reference)
 - [Pre-flight setup](#pre-flight-setup)
 - [Reverse-proxy routing](#reverse-proxy-routing)
 - [First boot](#first-boot)
 - [Operations](#operations)
 - [Image details](#image-details)
-
----
-
-## Quick start
-
-```bash
-# First run: import config into the SQLite database, then exit.
-docker compose run --rm agents --db /var/lib/agents/agents.db --import /etc/agents/config.yaml
-
-# Start the daemon (subsequent runs boot from the persisted DB).
-docker compose up -d
-docker compose logs -f agents
-docker compose down
-```
-
-The compose file shipped in the repo expects:
-
-- `config.yaml` in the project root (mounted read-only at `/etc/agents/config.yaml` for `--import` seeding).
-- `.env` in the project root, holding at least `GITHUB_WEBHOOK_SECRET` (and optionally `GITHUB_PAT_TOKEN`).
-
-After the DB is seeded, `config.yaml` is no longer read at boot. The fleet lives in the SQLite volume and is managed through the `/ui/` dashboard or the CRUD API.
 
 ---
 
