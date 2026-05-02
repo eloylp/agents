@@ -107,7 +107,7 @@ func toolUpdateGuardrail(deps Deps) server.ToolHandlerFunc {
 			pos := int(n)
 			patch.Position = &pos
 		}
-		if patch.Description == nil && patch.Content == nil && patch.Enabled == nil && patch.Position == nil {
+		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
 		canonical, err := deps.Fleet.UpdateGuardrailPatch(name, patch)
