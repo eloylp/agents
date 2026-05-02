@@ -516,11 +516,11 @@ func (d *Daemon) buildStatus() statusJSON {
 		Agents: slices.Clone(d.scheduler.AgentStatuses()),
 	}
 
-	orphanagents, err := d.fleet.OrphanedAgents()
+	orphan_list, err := d.fleet.OrphanedAgents()
 	if err != nil {
 		d.logger.Warn().Err(err).Msg("status: orphan computation failed")
 	}
-	resp.OrphanedAgents = statusOrphanSummaryJSON{Count: len(orphanagents)}
+	resp.OrphanedAgents = statusOrphanSummaryJSON{Count: len(orphan_list)}
 
 	stats := d.engine.DispatchStats()
 	resp.Dispatch = &stats
