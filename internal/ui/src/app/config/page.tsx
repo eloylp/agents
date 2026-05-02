@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
+import GuardrailsManager from '@/components/GuardrailsManager'
 
 type Config = Record<string, unknown>
 
@@ -164,7 +165,7 @@ export default function ConfigPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [raw, setRaw] = useState(false)
-  const [tab, setTab] = useState<'inspector' | 'backends' | 'import-export'>('inspector')
+  const [tab, setTab] = useState<'inspector' | 'backends' | 'guardrails' | 'import-export'>('inspector')
 
   const [backends, setBackends] = useState<Backend[]>([])
   const [backendsLoading, setBackendsLoading] = useState(false)
@@ -465,7 +466,7 @@ export default function ConfigPage() {
       return
     }
     const summary = await res.json() as Record<string, number>
-    setImportStatus(`Imported: ${summary.agents} agents, ${summary.skills} skills, ${summary.repos} repos, ${summary.backends} backends.`)
+    setImportStatus(`Imported: ${summary.agents} agents, ${summary.skills} skills, ${summary.repos} repos, ${summary.backends} backends, ${summary.guardrails ?? 0} guardrails.`)
   }
 
   const tabStyle = (t: string): React.CSSProperties => ({
@@ -496,6 +497,7 @@ export default function ConfigPage() {
       <div style={{ display: 'flex', gap: '0', marginBottom: '0', borderBottom: '1px solid var(--border)' }}>
         <button style={tabStyle('inspector')} onClick={() => setTab('inspector')}>Inspector</button>
         <button style={tabStyle('backends')} onClick={() => setTab('backends')}>Backends and tools</button>
+        <button style={tabStyle('guardrails')} onClick={() => setTab('guardrails')}>Guardrails</button>
         <button style={tabStyle('import-export')} onClick={() => setTab('import-export')}>Import / Export</button>
       </div>
 
@@ -714,13 +716,19 @@ export default function ConfigPage() {
         </Card>
       )}
 
+      {tab === 'guardrails' && (
+        <Card style={{ borderTopLeftRadius: 0 }}>
+          <GuardrailsManager />
+        </Card>
+      )}
+
       {tab === 'import-export' && (
         <Card style={{ borderTopLeftRadius: 0 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             <div>
               <h3 style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-heading)', marginBottom: '0.5rem' }}>Export YAML</h3>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-                Download the current fleet configuration (agents, skills, repos, backends) as a YAML file.
+                Download the current fleet configuration (agents, skills, repos, backends, guardrails) as a YAML file.
               </p>
               <button
                 onClick={handleExport}
