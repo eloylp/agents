@@ -185,15 +185,18 @@ setup_claude() {
   else
     # Remove any prior failed registration so the add doesn't conflict.
     claude mcp remove github 2>/dev/null || true
-    info "registering GitHub MCP via add-json (HTTP + Bearer PAT)..."
+    info "registering GitHub MCP via add-json -s user (HTTP + Bearer PAT)..."
+    note "user scope is cwd-independent — the daemon's probe runs with"
+    note "cwd=/home/agents while this script may run with cwd=/, so a"
+    note "project-scoped entry would be invisible to the daemon."
     local mcp_json
     mcp_json=$(jq -nc \
       --arg url "$GITHUB_MCP_URL" \
       --arg auth "Bearer $GITHUB_PAT_TOKEN" \
       '{type:"http", url:$url, headers:{Authorization:$auth}}')
-    claude mcp add-json github "$mcp_json" \
+    claude mcp add-json github -s user "$mcp_json" \
       || { err "claude mcp add-json failed"; return 1; }
-    ok "GitHub MCP registered with PAT-based Bearer auth"
+    ok "GitHub MCP registered with PAT-based Bearer auth (user scope)"
   fi
 
   info "verifying GitHub MCP connectivity..."
