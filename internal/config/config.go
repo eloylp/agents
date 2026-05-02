@@ -22,6 +22,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -145,10 +146,8 @@ func Load(path string) (*Config, error) {
 // (case-insensitive).
 func (c *Config) RepoByName(name string) (fleet.Repo, bool) {
 	name = strings.ToLower(strings.TrimSpace(name))
-	for _, r := range c.Repos {
-		if r.Name == name {
-			return r, true
-		}
+	if i := slices.IndexFunc(c.Repos, func(r fleet.Repo) bool { return r.Name == name }); i >= 0 {
+		return c.Repos[i], true
 	}
 	return fleet.Repo{}, false
 }
@@ -157,10 +156,8 @@ func (c *Config) RepoByName(name string) (fleet.Repo, bool) {
 // (case-insensitive).
 func (c *Config) AgentByName(name string) (fleet.Agent, bool) {
 	name = strings.ToLower(strings.TrimSpace(name))
-	for _, a := range c.Agents {
-		if a.Name == name {
-			return a, true
-		}
+	if i := slices.IndexFunc(c.Agents, func(a fleet.Agent) bool { return a.Name == name }); i >= 0 {
+		return c.Agents[i], true
 	}
 	return fleet.Agent{}, false
 }
