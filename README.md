@@ -39,7 +39,7 @@ Every run, regardless of trigger, goes through the same pipeline:
 3. **Parse the structured response**: artifacts, dispatch requests, updated memory.
 4. **Persist the trace**, fan out any dispatches, write back memory.
 
-Read [`docs/mental-model.md`](docs/mental-model.md) before writing your first prompt; the rest of the docs assume you have the model.
+Read [`docs/mental-model.md`](docs/mental-model.md) before writing your first prompt; the rest of the docs assume you have the model. For the daemon's package layout and how a request flows through the Go code, see [`docs/architecture.md`](docs/architecture.md).
 
 ## Get started
 
