@@ -837,11 +837,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 
 	// Record transcript steps when available.
 	if e.stepRec != nil && len(resp.Steps) > 0 {
-		wsteps := make([]TraceStep, len(resp.Steps))
-		for i, s := range resp.Steps {
-			wsteps[i] = TraceStep(s)
-		}
-		e.stepRec.RecordSteps(spanID, wsteps)
+		e.stepRec.RecordSteps(spanID, resp.Steps)
 	}
 
 	if runErr != nil {
