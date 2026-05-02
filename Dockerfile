@@ -27,7 +27,7 @@ SHELL ["/bin/bash", "-c"]
 
 RUN adduser -D -h /home/agents -s /bin/bash agents \
     && mkdir -p /var/lib/agents/memory \
-    && chown agents:agents /var/lib/agents/memory
+    && chown -R agents:agents /var/lib/agents
 ENV HOME=/home/agents
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
