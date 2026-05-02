@@ -519,15 +519,41 @@ func TestCountFrom(t *testing.T) {
 	}
 }
 
-// TestLoadEmptyDatabase verifies that Load on a fresh (empty) database returns
-// a descriptive error rather than a zero-value Config.
+// TestLoadEmptyDatabase verifies that Load on a fresh (empty) database
+// returns a zero-value *Config without error. The daemon's startup path
+// runs config.FinishLoad on the result, which fills every required
+// field with built-in defaults — so an empty store boots cleanly with
+// no YAML import required.
 func TestLoadEmptyDatabase(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	_, err := store.Load(db)
-	if err == nil {
-		t.Fatal("expected error loading from empty database, got nil")
+	cfg, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load on empty database should succeed, got: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("Load on empty database returned nil config")
+	}
+	// Daemon block left at zero — applyDefaults populates it later.
+	if cfg.Daemon.HTTP.ListenAddr != "" {
+		t.Errorf("expected zero daemon block before FinishLoad; got listen_addr=%q", cfg.Daemon.HTTP.ListenAddr)
+	}
+
+	// FinishLoad turns the zero block into a fully-populated default
+	// config the daemon can boot against.
+	cfg, err = config.FinishLoad(cfg)
+	if err != nil {
+		t.Fatalf("FinishLoad should fill defaults on empty config: %v", err)
+	}
+	if cfg.Daemon.HTTP.ListenAddr == "" {
+		t.Error("FinishLoad did not populate HTTP listen_addr from defaults")
+	}
+	if cfg.Daemon.Log.Level == "" {
+		t.Error("FinishLoad did not populate log level from defaults")
+	}
+	if cfg.Daemon.HTTP.WebhookSecretEnv == "" {
+		t.Error("FinishLoad did not populate webhook_secret_env from defaults")
 	}
 }
 

@@ -9,12 +9,11 @@ The daemon dispatches AI CLIs (`claude`, `codex`) with sandbox-bypass flags so a
 ```bash
 git clone https://github.com/eloylp/agents
 cd agents
-cp config.example.yaml config.yaml
 echo "GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)" > .env
 docker compose up -d
 ```
 
-The shipped [`docker-compose.yaml`](../docker-compose.yaml) is the source of truth for what gets mounted and exposed. Two named volumes back the runtime: `agents-data` (SQLite store) and `agents-home` (Claude / Codex auth + MCP config).
+The shipped [`docker-compose.yaml`](../docker-compose.yaml) is the source of truth for what gets mounted and exposed. Two named volumes back the runtime: `agents-data` (SQLite store) and `agents-home` (Claude / Codex auth + MCP config). The daemon boots against an empty database with built-in defaults — no YAML seed is required.
 
 > **First-run note.** The compose file builds the image locally on first invocation — multi-stage build (UI + Go binary), expect ~3-5 minutes depending on the host. `docker compose logs -f agents` shows progress.
 

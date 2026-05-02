@@ -604,6 +604,10 @@ func (d *Daemon) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 // validated *config.Config plus the data-access store. The caller owns
 // and closes the store. Status / import progress messages are written
 // to msg (typically os.Stderr); pass nil to silence them.
+//
+// An empty database boots cleanly with built-in defaults — no YAML
+// import is required. Operators configure the fleet through the
+// dashboard / REST / MCP after the daemon is up.
 func LoadConfig(ctx context.Context, dbPath, importPath string, msg io.Writer) (*config.Config, *store.Store, error) {
 	db, err := store.Open(dbPath)
 	if err != nil {

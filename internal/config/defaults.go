@@ -7,9 +7,13 @@ import (
 )
 
 const (
+	defaultLogLevel  = "info"
+	defaultLogFormat = "text"
+
 	defaultHTTPListenAddr          = ":8080"
 	defaultHTTPStatusPath          = "/status"
 	defaultHTTPWebhookPath         = "/webhooks/github"
+	defaultHTTPWebhookSecretEnv    = "GITHUB_WEBHOOK_SECRET"
 	defaultHTTPReadTimeoutSeconds  = 15
 	defaultHTTPWriteTimeoutSeconds = 15
 	defaultHTTPIdleTimeoutSeconds  = 60
@@ -29,10 +33,15 @@ const (
 // that obtains a *Config sees the same effective values without each caller
 // having to remember which field has a non-zero default.
 func (c *Config) applyDefaults() {
+	// daemon.log
+	setDefault(&c.Daemon.Log.Level, defaultLogLevel)
+	setDefault(&c.Daemon.Log.Format, defaultLogFormat)
+
 	// daemon.http
 	setDefault(&c.Daemon.HTTP.ListenAddr, defaultHTTPListenAddr)
 	setDefault(&c.Daemon.HTTP.StatusPath, defaultHTTPStatusPath)
 	setDefault(&c.Daemon.HTTP.WebhookPath, defaultHTTPWebhookPath)
+	setDefault(&c.Daemon.HTTP.WebhookSecretEnv, defaultHTTPWebhookSecretEnv)
 	setDefaultInt(&c.Daemon.HTTP.ReadTimeoutSeconds, defaultHTTPReadTimeoutSeconds)
 	setDefaultInt(&c.Daemon.HTTP.WriteTimeoutSeconds, defaultHTTPWriteTimeoutSeconds)
 	setDefaultInt(&c.Daemon.HTTP.IdleTimeoutSeconds, defaultHTTPIdleTimeoutSeconds)

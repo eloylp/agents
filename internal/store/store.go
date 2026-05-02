@@ -421,7 +421,13 @@ func loadDaemon(db *sql.DB, cfg *config.Config) error {
 	var value string
 	err := db.QueryRow("SELECT value FROM config WHERE key='daemon'").Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("store load: daemon config not found in database (did you run --import?)")
+		// Fresh database — leave cfg.Daemon at its zero value and let
+		// config.applyDefaults populate every field with sensible
+		// defaults during FinishLoad. The daemon should boot against
+		// an empty store without requiring a YAML seed; operators
+		// configure the fleet through the dashboard / CRUD / MCP
+		// after the daemon is up.
+		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("store load: query daemon config: %w", err)
