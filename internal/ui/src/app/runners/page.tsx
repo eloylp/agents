@@ -204,6 +204,7 @@ function LiveStreamModal({ span, onClose }: { span: { id: string; agent: string;
         width: 'min(900px, 92vw)', maxHeight: '90vh',
         background: 'var(--bg-card)', border: '1px solid var(--border)',
         borderRadius: '8px', display: 'flex', flexDirection: 'column',
+        position: 'relative',
       }}>
         <div style={{
           padding: '0.75rem 1rem',
@@ -224,44 +225,42 @@ function LiveStreamModal({ span, onClose }: { span: { id: string; agent: string;
             cursor: 'pointer', fontSize: '0.85rem',
           }}>Close</button>
         </div>
-        <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
-          <div
-            ref={scrollRef}
-            onScroll={onScroll}
-            style={{ position: 'absolute', inset: 0, overflowY: 'auto', padding: '0.75rem 1rem' }}
-          >
-            {entries.length === 0 && status === 'connecting' && (
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Waiting for output...</p>
-            )}
-            {entries.length === 0 && status === 'ended' && (
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Run finished without emitting any output that the daemon captured.</p>
-            )}
-            {entries.length === 0 && status === 'error' && (
-              <p style={{ color: 'var(--text-danger)', fontSize: '0.85rem' }}>Lost connection to the live stream. The run may still be in flight; close and reopen to retry.</p>
-            )}
-            {entries.map((e, i) => <LiveStreamCard key={i} entry={e} />)}
-            {status === 'ended' && entries.length > 0 && (
-              <div style={{ marginTop: '1rem', padding: '0.5rem 0.75rem', background: 'var(--bg-input)', borderRadius: '4px', fontSize: '0.8rem' }}>
-                ✓ Run completed.{' '}
-                <Link href={`/traces/?id=${encodeURIComponent(span.id)}`} style={{ color: 'var(--accent)' }}>
-                  View full trace detail →
-                </Link>
-              </div>
-            )}
-          </div>
-          {hasNewWhileDetached && (
-            <button
-              onClick={jumpToLatest}
-              style={{
-                position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)',
-                background: 'var(--accent)', color: 'var(--bg-card)',
-                border: 'none', borderRadius: '999px',
-                padding: '4px 14px', fontSize: '0.8rem', fontWeight: 600,
-                cursor: 'pointer', boxShadow: '0 4px 12px rgba(0,0,0,0.25)',
-              }}
-            >↓ Latest</button>
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          style={{ flex: 1, overflowY: 'auto', padding: '0.75rem 1rem', minHeight: 0 }}
+        >
+          {entries.length === 0 && status === 'connecting' && (
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Waiting for output...</p>
+          )}
+          {entries.length === 0 && status === 'ended' && (
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Run finished without emitting any output that the daemon captured.</p>
+          )}
+          {entries.length === 0 && status === 'error' && (
+            <p style={{ color: 'var(--text-danger)', fontSize: '0.85rem' }}>Lost connection to the live stream. The run may still be in flight; close and reopen to retry.</p>
+          )}
+          {entries.map((e, i) => <LiveStreamCard key={i} entry={e} />)}
+          {status === 'ended' && entries.length > 0 && (
+            <div style={{ marginTop: '1rem', padding: '0.5rem 0.75rem', background: 'var(--bg-input)', borderRadius: '4px', fontSize: '0.8rem' }}>
+              ✓ Run completed.{' '}
+              <Link href={`/traces/?id=${encodeURIComponent(span.id)}`} style={{ color: 'var(--accent)' }}>
+                View full trace detail →
+              </Link>
+            </div>
           )}
         </div>
+        {hasNewWhileDetached && (
+          <button
+            onClick={jumpToLatest}
+            style={{
+              position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)',
+              background: 'var(--accent)', color: 'var(--bg-card)',
+              border: 'none', borderRadius: '999px',
+              padding: '4px 14px', fontSize: '0.8rem', fontWeight: 600,
+              cursor: 'pointer', boxShadow: '0 4px 12px rgba(0,0,0,0.25)',
+            }}
+          >↓ Latest</button>
+        )}
       </div>
     </div>
   )
