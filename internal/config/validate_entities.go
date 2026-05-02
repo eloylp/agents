@@ -157,7 +157,7 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 			if !b.IsCron() && !b.IsLabel() && !b.IsEvent() {
 				return fmt.Errorf("config: repo %q: binding for agent %q has no trigger (set cron, labels, or events)", r.Name, b.Agent)
 			}
-			if countBindingTriggers(b) > 1 {
+			if b.TriggerCount() > 1 {
 				return fmt.Errorf("config: repo %q: binding for agent %q mixes multiple trigger types (labels, events, cron); each binding must use exactly one trigger", r.Name, b.Agent)
 			}
 			for _, kind := range b.Events {
