@@ -1,6 +1,6 @@
 # Web dashboard
 
-The daemon ships an embedded web dashboard at `/ui/`. It is the primary interface for managing the fleet. Every CRUD operation (agents, skills, backends, repos, bindings) is available there alongside live monitoring.
+The daemon ships an embedded web dashboard at `/ui/`. It is the primary interface for managing the agent fleet. Every CRUD operation (agents, skills, backends, repos, bindings) is available there alongside live monitoring.
 
 ![Fleet dashboard](img/fleet.png)
 
