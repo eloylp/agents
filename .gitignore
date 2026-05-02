@@ -1,4 +1,5 @@
 .env
+.publish-checklist.md
 config.yaml
 main
 agents
