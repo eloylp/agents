@@ -513,14 +513,14 @@ func (d *Daemon) buildStatus() statusJSON {
 		Queues: map[string]statusQueueJSON{
 			"events": {Buffered: q.Buffered, Capacity: q.Capacity},
 		},
-		Agents: append([]scheduler.AgentStatus{}, d.scheduler.AgentStatuses()...),
+		Agents: slices.Clone(d.scheduler.AgentStatuses()),
 	}
 
-	orphans, err := d.fleet.OrphanedAgents()
+	orphanagents, err := d.fleet.OrphanedAgents()
 	if err != nil {
 		d.logger.Warn().Err(err).Msg("status: orphan computation failed")
 	}
-	resp.OrphanedAgents = statusOrphanSummaryJSON{Count: len(orphans)}
+	resp.OrphanedAgents = statusOrphanSummaryJSON{Count: len(orphanagents)}
 
 	stats := d.engine.DispatchStats()
 	resp.Dispatch = &stats
