@@ -71,7 +71,7 @@ func newFixture(t *testing.T, cfg *config.Config) testFixture {
 		if skills == nil {
 			skills = map[string]fleet.Skill{}
 		}
-		if err := st.ImportAll(cfg.Agents, cfg.Repos, skills, backends); err != nil {
+		if err := st.ImportAll(cfg.Agents, cfg.Repos, skills, backends, nil); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
@@ -112,7 +112,7 @@ func newSchedulerWithStatuses(t *testing.T, statuses []scheduler.AgentStatus) *s
 		}
 	}
 	st := store.New(db)
-	if err := st.ImportAll(agents, repos, map[string]fleet.Skill{}, map[string]fleet.Backend{"claude": {Command: "claude"}}); err != nil {
+	if err := st.ImportAll(agents, repos, map[string]fleet.Skill{}, map[string]fleet.Backend{"claude": {Command: "claude"}}, nil); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	sched, err := scheduler.NewScheduler(st, time.Hour, zerolog.Nop())

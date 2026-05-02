@@ -70,7 +70,7 @@ func run() error {
 	st := store.New(db)
 
 	cfg := buildFixtureConfig()
-	if err := st.ImportAll(cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
+	if err := st.ImportAll(cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, cfg.Guardrails); err != nil {
 		return fmt.Errorf("import seed: %w", err)
 	}
 

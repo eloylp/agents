@@ -40,7 +40,7 @@ func seedStoreFromCfg(t *testing.T, cfg *config.Config) *store.Store {
 	}
 	st := store.New(db)
 	t.Cleanup(func() { st.Close() })
-	if err := st.ImportAll(cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
+	if err := st.ImportAll(cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, cfg.Guardrails); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	return st
@@ -71,7 +71,7 @@ func newEngineFromCfg(t *testing.T, cfg *config.Config, runners map[string]ai.Ru
 // that exercise config changes mid-test.
 func updateRuntimeConfig(t *testing.T, e *Engine, cfg *config.Config, runners map[string]ai.Runner) {
 	t.Helper()
-	if err := e.store.ReplaceAll(cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends); err != nil {
+	if err := e.store.ReplaceAll(cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, cfg.Guardrails); err != nil {
 		t.Fatalf("replace: %v", err)
 	}
 	if len(runners) > 0 {

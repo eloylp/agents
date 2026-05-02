@@ -31,10 +31,11 @@ import (
 
 // Config is the root configuration loaded from YAML.
 type Config struct {
-	Daemon DaemonConfig           `yaml:"daemon"`
-	Skills map[string]fleet.Skill `yaml:"skills"`
-	Agents []fleet.Agent          `yaml:"agents"`
-	Repos  []fleet.Repo           `yaml:"repos"`
+	Daemon     DaemonConfig           `yaml:"daemon"`
+	Skills     map[string]fleet.Skill `yaml:"skills"`
+	Agents     []fleet.Agent          `yaml:"agents"`
+	Repos      []fleet.Repo           `yaml:"repos"`
+	Guardrails []fleet.Guardrail      `yaml:"guardrails,omitempty"`
 }
 
 // DaemonConfig holds infrastructure-level configuration for the running

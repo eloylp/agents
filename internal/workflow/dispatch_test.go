@@ -117,7 +117,7 @@ func seedAgentMap(t *testing.T, m map[string]fleet.Agent) *store.Store {
 		}
 		agents = append(agents, a)
 	}
-	if err := st.ImportAll(agents, nil, map[string]fleet.Skill{}, map[string]fleet.Backend{"claude": {Command: "claude"}}); err != nil {
+	if err := st.ImportAll(agents, nil, map[string]fleet.Skill{}, map[string]fleet.Backend{"claude": {Command: "claude"}}, nil); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	return st

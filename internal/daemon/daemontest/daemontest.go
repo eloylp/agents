@@ -52,7 +52,7 @@ func New(t *testing.T, cfg *config.Config) *daemon.Daemon {
 		cfg.Agents = agents
 	}
 
-	if err := st.ImportAll(agents, cfg.Repos, cfg.Skills, backends); err != nil {
+	if err := st.ImportAll(agents, cfg.Repos, cfg.Skills, backends, cfg.Guardrails); err != nil {
 		t.Fatalf("import seed: %v", err)
 	}
 

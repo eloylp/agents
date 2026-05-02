@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -106,6 +107,216 @@ func openTestDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { db.Close() })
 	return db
+}
+
+// TestGuardrailsSeed verifies that migration 010 created the generic
+// guardrails table and seeded the built-in 'security' row with content
+// equal to default_content (so a "Reset to default" from the unedited
+// state is a no-op), is_builtin=1, enabled=1, and position=0.
+func TestGuardrailsSeed(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	var (
+		count                   int
+		isBuiltin, enabled, pos int
+		content, defaultContent sql.NullString
+		description             sql.NullString
+		updatedAt               string
+	)
+	if err := db.QueryRow("SELECT COUNT(*) FROM guardrails").Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("row count after migration: got %d, want 1", count)
+	}
+	if err := db.QueryRow(
+		"SELECT description, content, default_content, is_builtin, enabled, position, updated_at FROM guardrails WHERE name = 'security'",
+	).Scan(&description, &content, &defaultContent, &isBuiltin, &enabled, &pos, &updatedAt); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if !description.Valid || description.String == "" {
+		t.Error("description is empty")
+	}
+	if !content.Valid || content.String == "" {
+		t.Error("content is empty")
+	}
+	if !defaultContent.Valid {
+		t.Error("default_content is NULL on built-in row")
+	}
+	if content.String != defaultContent.String {
+		t.Error("content and default_content diverge on first migration")
+	}
+	if isBuiltin != 1 {
+		t.Errorf("is_builtin: got %d, want 1", isBuiltin)
+	}
+	if enabled != 1 {
+		t.Errorf("enabled: got %d, want 1", enabled)
+	}
+	if pos != 0 {
+		t.Errorf("position: got %d, want 0", pos)
+	}
+	if updatedAt == "" {
+		t.Error("updated_at is empty")
+	}
+}
+
+// TestGuardrailsCRUD exercises every store-side guardrail operation:
+// the seeded built-in row is visible, operator rows can be created and
+// updated, the render-order query returns enabled rows in the right
+// order, deleting works and propagates *ErrNotFound, and reset copies
+// default_content back into content for built-ins while rejecting reset
+// on operator rows that have no default to fall back to.
+func TestGuardrailsCRUD(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	// 1. Seeded built-in security row is visible via every read path.
+	all, err := store.ReadAllGuardrails(db)
+	if err != nil {
+		t.Fatalf("ReadAllGuardrails: %v", err)
+	}
+	if len(all) != 1 || all[0].Name != "security" {
+		t.Fatalf("seed: got %d rows starting with %q, want 1 starting with 'security'", len(all), all[0].Name)
+	}
+	if !all[0].IsBuiltin || !all[0].Enabled || all[0].Position != 0 {
+		t.Errorf("security row flags: builtin=%v enabled=%v pos=%d", all[0].IsBuiltin, all[0].Enabled, all[0].Position)
+	}
+	if all[0].DefaultContent == "" || all[0].DefaultContent != all[0].Content {
+		t.Error("security default_content must equal content on first migration")
+	}
+
+	// 2. Operator can add a custom guardrail; it lands at the configured
+	//    position and shows up in render order after the security row.
+	custom := fleet.Guardrail{
+		Name:        "Code Style",
+		Description: "Project conventions",
+		Content:     "Always run gofmt before submitting.",
+		Enabled:     true,
+		Position:    50,
+	}
+	if err := store.UpsertGuardrail(db, custom); err != nil {
+		t.Fatalf("UpsertGuardrail (insert): %v", err)
+	}
+	enabled, err := store.ReadEnabledGuardrails(db)
+	if err != nil {
+		t.Fatalf("ReadEnabledGuardrails: %v", err)
+	}
+	if len(enabled) != 2 || enabled[0].Name != "security" || enabled[1].Name != "code-style" {
+		t.Errorf("render order: got %v, want [security code-style]", names(enabled))
+	}
+	if enabled[1].IsBuiltin {
+		t.Error("operator row should not be flagged as built-in")
+	}
+
+	// 3. Update through Upsert preserves built-in flag and default_content.
+	editedSecurity := all[0]
+	editedSecurity.Content = "edited by operator"
+	if err := store.UpsertGuardrail(db, editedSecurity); err != nil {
+		t.Fatalf("UpsertGuardrail (update security): %v", err)
+	}
+	got, err := store.GetGuardrail(db, "security")
+	if err != nil {
+		t.Fatalf("GetGuardrail: %v", err)
+	}
+	if got.Content != "edited by operator" {
+		t.Errorf("security content after edit: got %q, want %q", got.Content, "edited by operator")
+	}
+	if !got.IsBuiltin {
+		t.Error("UpsertGuardrail must not clear is_builtin on built-in row")
+	}
+	if got.DefaultContent == got.Content {
+		t.Error("UpsertGuardrail must not overwrite default_content on built-in row")
+	}
+
+	// 4. ResetGuardrail copies default_content back into content for built-ins.
+	if err := store.ResetGuardrail(db, "security"); err != nil {
+		t.Fatalf("ResetGuardrail: %v", err)
+	}
+	got, err = store.GetGuardrail(db, "security")
+	if err != nil {
+		t.Fatalf("GetGuardrail after reset: %v", err)
+	}
+	if got.Content != got.DefaultContent {
+		t.Error("ResetGuardrail did not restore default_content into content")
+	}
+
+	// 5. ResetGuardrail rejects reset on operator rows with no default.
+	err = store.ResetGuardrail(db, "code-style")
+	var valErr *store.ErrValidation
+	if !errors.As(err, &valErr) {
+		t.Errorf("reset operator row: want *ErrValidation, got %T: %v", err, err)
+	}
+
+	// 6. Delete removes the row; second delete returns *ErrNotFound.
+	if err := store.DeleteGuardrail(db, "code-style"); err != nil {
+		t.Fatalf("DeleteGuardrail: %v", err)
+	}
+	err = store.DeleteGuardrail(db, "code-style")
+	var notFound *store.ErrNotFound
+	if !errors.As(err, &notFound) {
+		t.Errorf("delete missing: want *ErrNotFound, got %T: %v", err, err)
+	}
+	all, err = store.ReadAllGuardrails(db)
+	if err != nil {
+		t.Fatalf("ReadAllGuardrails after delete: %v", err)
+	}
+	if len(all) != 1 {
+		t.Errorf("after delete: got %d rows, want 1", len(all))
+	}
+}
+
+func names(gs []fleet.Guardrail) []string {
+	out := make([]string, len(gs))
+	for i, g := range gs {
+		out[i] = g.Name
+	}
+	return out
+}
+
+// TestImportLoadGuardrails covers the YAML round-trip path: an import that
+// carries operator-added guardrails is persisted alongside the seeded
+// built-in 'security' row, the load path returns every row (built-ins +
+// operator) ready for a subsequent /export, and re-importing an edited
+// security guardrail updates its content but leaves is_builtin and
+// default_content untouched (the migration is the sole source for those).
+func TestImportLoadGuardrails(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	// 1. Import operator-added rows + an edited security override.
+	cfg := minimalCfg()
+	cfg.Guardrails = []fleet.Guardrail{
+		{Name: "security", Content: "Operator-edited security body.", Enabled: true, Position: 0},
+		{Name: "code-style", Description: "Conventions", Content: "Always run gofmt.", Enabled: true, Position: 50},
+	}
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	// 2. Load returns every row, ordered for the renderer.
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := names(out.Guardrails); len(got) != 2 || got[0] != "security" || got[1] != "code-style" {
+		t.Fatalf("Load order: got %v, want [security code-style]", got)
+	}
+	sec := out.Guardrails[0]
+	if !sec.IsBuiltin {
+		t.Error("built-in security row must keep IsBuiltin = true after import")
+	}
+	if sec.Content != "Operator-edited security body." {
+		t.Errorf("security content: got %q", sec.Content)
+	}
+	if sec.DefaultContent == "" || sec.DefaultContent == sec.Content {
+		t.Error("DefaultContent must remain the migration's seeded text after operator override")
+	}
+	custom := out.Guardrails[1]
+	if custom.IsBuiltin || custom.DefaultContent != "" {
+		t.Errorf("operator row must not be built-in and must have empty DefaultContent; got builtin=%v default=%q",
+			custom.IsBuiltin, custom.DefaultContent)
+	}
 }
 
 // TestOpenAndMigrate verifies that Open creates a new database and applies all

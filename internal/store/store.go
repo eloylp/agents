@@ -169,7 +169,40 @@ func Import(db *sql.DB, cfg *config.Config) error {
 	if err := importRepos(tx, cfg.Repos); err != nil {
 		return err
 	}
+	if err := importGuardrails(tx, cfg.Guardrails); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+// importGuardrails upserts each guardrail using the same ON CONFLICT shape
+// as store.UpsertGuardrail: existing rows have their description, content,
+// enabled, and position fields updated; is_builtin and default_content are
+// preserved (they are migration-controlled and intentionally not editable
+// from YAML). Operator-added rows are inserted with default_content NULL
+// and is_builtin = 0.
+func importGuardrails(tx *sql.Tx, guardrails []fleet.Guardrail) error {
+	for _, g := range guardrails {
+		fleet.NormalizeGuardrail(&g)
+		if g.Name == "" || g.Content == "" {
+			return fmt.Errorf("store import: guardrail requires name and content (got name=%q)", g.Name)
+		}
+		enabled := boolToInt(g.Enabled)
+		if _, err := tx.Exec(`
+			INSERT INTO guardrails (name, description, content, enabled, position, updated_at)
+			VALUES (?, ?, ?, ?, ?, datetime('now'))
+			ON CONFLICT(name) DO UPDATE SET
+				description = excluded.description,
+				content     = excluded.content,
+				enabled     = excluded.enabled,
+				position    = excluded.position,
+				updated_at  = datetime('now')`,
+			g.Name, g.Description, g.Content, enabled, g.Position,
+		); err != nil {
+			return fmt.Errorf("store import: upsert guardrail %s: %w", g.Name, err)
+		}
+	}
+	return nil
 }
 
 // daemonRecord is a JSON-serializable view of DaemonConfig that excludes
@@ -369,7 +402,19 @@ func Load(db *sql.DB) (*config.Config, error) {
 	if err := loadRepos(db, cfg); err != nil {
 		return nil, err
 	}
+	if err := loadGuardrails(db, cfg); err != nil {
+		return nil, err
+	}
 	return cfg, nil
+}
+
+func loadGuardrails(db *sql.DB, cfg *config.Config) error {
+	rows, err := ReadAllGuardrails(db)
+	if err != nil {
+		return fmt.Errorf("store load: read guardrails: %w", err)
+	}
+	cfg.Guardrails = rows
+	return nil
 }
 
 func loadDaemon(db *sql.DB, cfg *config.Config) error {

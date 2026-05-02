@@ -81,6 +81,7 @@ func testDB(t *testing.T) *sql.DB {
 			"claude": {Command: "claude", Models: []string{"opus", "sonnet"}, Healthy: true, TimeoutSeconds: 60},
 			"codex":  {Command: "codex"},
 		},
+		nil,
 	); err != nil {
 		t.Fatalf("seed test db: %v", err)
 	}

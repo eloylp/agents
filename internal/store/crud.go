@@ -432,16 +432,20 @@ func normalizeFleet(
 	return normalizedSkills, normalizedBackends
 }
 
-// ImportAll upserts agents, repos, skills, and backends in a single atomic
-// transaction. If any entity fails validation the entire import is rolled back
-// and no writes are persisted. Each entity is normalized before writing,
-// consistent with the normalization the individual Upsert* helpers apply.
+// ImportAll upserts agents, repos, skills, backends, and guardrails in a
+// single atomic transaction. If any entity fails validation the entire
+// import is rolled back and no writes are persisted. Each entity is
+// normalized before writing, consistent with the normalization the
+// individual Upsert* helpers apply. Guardrails are upserted with
+// ON CONFLICT semantics that preserve the migration-managed
+// is_builtin / default_content fields.
 func ImportAll(
 	db *sql.DB,
 	agents []fleet.Agent,
 	repos []fleet.Repo,
 	skills map[string]fleet.Skill,
 	backends map[string]fleet.Backend,
+	guardrails []fleet.Guardrail,
 ) error {
 	normalizedSkills, normalizedBackends := normalizeFleet(agents, repos, skills, backends)
 
@@ -462,23 +466,30 @@ func ImportAll(
 	if err := importBackends(tx, normalizedBackends); err != nil {
 		return err
 	}
+	if err := importGuardrails(tx, guardrails); err != nil {
+		return err
+	}
 	if err := validateFleetConstraints(tx, "import", repos); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-// ReplaceAll replaces the entire fleet configuration atomically. All existing
-// agents, repos, skills, backends, and bindings are deleted and replaced with
-// the provided entities. Identical normalization and validation to ImportAll
-// applies. If validation fails the transaction is rolled back and the store is
-// left unchanged.
+// ReplaceAll replaces the entire fleet configuration atomically. All
+// existing agents, repos, skills, backends, bindings, and operator-added
+// guardrails are deleted and replaced with the provided entities.
+// Built-in guardrails are kept across replace (their is_builtin and
+// default_content are migration-managed and not editable from YAML);
+// when the inbound guardrails list contains a name that matches a
+// built-in, the upsert path updates content / description / enabled /
+// position while preserving the built-in flags.
 func ReplaceAll(
 	db *sql.DB,
 	agents []fleet.Agent,
 	repos []fleet.Repo,
 	skills map[string]fleet.Skill,
 	backends map[string]fleet.Backend,
+	guardrails []fleet.Guardrail,
 ) error {
 	normalizedSkills, normalizedBackends := normalizeFleet(agents, repos, skills, backends)
 
@@ -494,6 +505,11 @@ func ReplaceAll(
 			return fmt.Errorf("store: replace: truncate %s: %w", tbl, err)
 		}
 	}
+	// Operator-added guardrails are wiped; built-ins survive so the
+	// migration-managed default_content and is_builtin flags persist.
+	if _, err := tx.Exec("DELETE FROM guardrails WHERE is_builtin = 0"); err != nil {
+		return fmt.Errorf("store: replace: truncate operator guardrails: %w", err)
+	}
 
 	if err := importAgents(tx, agents); err != nil {
 		return err
@@ -505,6 +521,9 @@ func ReplaceAll(
 		return err
 	}
 	if err := importBackends(tx, normalizedBackends); err != nil {
+		return err
+	}
+	if err := importGuardrails(tx, guardrails); err != nil {
 		return err
 	}
 	if err := validateFleetConstraints(tx, "replace", repos); err != nil {

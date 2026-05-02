@@ -81,6 +81,15 @@ func (s *Store) EnableRepo(name string, enabled bool) error {
 	return err
 }
 
+// ── Guardrails ──────────────────────────────────────────────────────────
+
+func (s *Store) ReadEnabledGuardrails() ([]fleet.Guardrail, error)   { return ReadEnabledGuardrails(s.db) }
+func (s *Store) ReadAllGuardrails() ([]fleet.Guardrail, error)       { return ReadAllGuardrails(s.db) }
+func (s *Store) GetGuardrail(name string) (fleet.Guardrail, error)   { return GetGuardrail(s.db, name) }
+func (s *Store) UpsertGuardrail(g fleet.Guardrail) error             { return UpsertGuardrail(s.db, g) }
+func (s *Store) DeleteGuardrail(name string) error                   { return DeleteGuardrail(s.db, name) }
+func (s *Store) ResetGuardrail(name string) error                    { return ResetGuardrail(s.db, name) }
+
 // ── Memory ──────────────────────────────────────────────────────────────
 
 // ReadMemoryRaw exposes the four-value result the engine uses; the
@@ -110,12 +119,12 @@ func (s *Store) ReadSnapshot() ([]fleet.Agent, []fleet.Repo, map[string]fleet.Sk
 	return ReadSnapshot(s.db)
 }
 
-func (s *Store) ImportAll(agents []fleet.Agent, repos []fleet.Repo, skills map[string]fleet.Skill, backends map[string]fleet.Backend) error {
-	return ImportAll(s.db, agents, repos, skills, backends)
+func (s *Store) ImportAll(agents []fleet.Agent, repos []fleet.Repo, skills map[string]fleet.Skill, backends map[string]fleet.Backend, guardrails []fleet.Guardrail) error {
+	return ImportAll(s.db, agents, repos, skills, backends, guardrails)
 }
 
-func (s *Store) ReplaceAll(agents []fleet.Agent, repos []fleet.Repo, skills map[string]fleet.Skill, backends map[string]fleet.Backend) error {
-	return ReplaceAll(s.db, agents, repos, skills, backends)
+func (s *Store) ReplaceAll(agents []fleet.Agent, repos []fleet.Repo, skills map[string]fleet.Skill, backends map[string]fleet.Backend, guardrails []fleet.Guardrail) error {
+	return ReplaceAll(s.db, agents, repos, skills, backends, guardrails)
 }
 
 func (s *Store) Import(cfg *config.Config) error            { return Import(s.db, cfg) }
