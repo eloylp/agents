@@ -73,17 +73,22 @@ These routes are always mounted and backed by the SQLite database.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/{resource}` | List all entries for a resource type (`skills`, `backends`, `repos`). Note: `GET /agents` is the fleet snapshot above, not the CRUD list. |
+| `GET` | `/{resource}` | List all entries for a resource type (`skills`, `backends`, `repos`, `guardrails`). Note: `GET /agents` is the fleet snapshot above, not the CRUD list. |
 | `GET` | `/{resource}/{name}` | Fetch one entry. Repos use two path segments: `/repos/{owner}/{repo}`. |
-| `POST` | `/{resource}` | Create or replace an entry. Resources: `agents`, `skills`, `backends`, `repos`. |
-| `PATCH` | `/{resource}/{name}` | Partial update of an entry. Only fields present in the JSON body are applied; unset fields are preserved. At least one field required. Resources: `agents`, `skills`, `backends`, `repos`. |
+| `POST` | `/{resource}` | Create or replace an entry. Resources: `agents`, `skills`, `backends`, `repos`, `guardrails`. |
+| `PATCH` | `/{resource}/{name}` | Partial update of an entry. Only fields present in the JSON body are applied; unset fields are preserved. At least one field required. Resources: `agents`, `skills`, `backends`, `repos`, `guardrails`. |
 | `DELETE` | `/{resource}/{name}` | Remove an entry. |
 | `POST` | `/repos/{owner}/{repo}/bindings` | Create one binding on a repo. Returns the persisted binding with its generated ID. |
 | `GET` | `/repos/{owner}/{repo}/bindings/{id}` | Fetch one binding by ID. |
 | `PATCH` | `/repos/{owner}/{repo}/bindings/{id}` | Replace all fields of a binding by ID. |
 | `DELETE` | `/repos/{owner}/{repo}/bindings/{id}` | Remove a binding by ID. |
+| `POST` | `/guardrails/{name}/reset` | Copy a built-in guardrail's `default_content` back into its `content`. Returns 400 for operator-added rows (no default to fall back to). |
 | `GET` | `/export` | Export full fleet config as YAML. |
 | `POST` | `/import` | Import a YAML config into the SQLite store. |
+
+### Guardrails
+
+Guardrails are operator-defined policy blocks the renderer prepends to every agent's composed prompt. Wire shape: `{name, description, content, default_content, is_builtin, enabled, position}`. PATCH covers `description`, `content`, `enabled`, `position` only — `is_builtin` and `default_content` are migration-managed and not editable from the API. The shipped 'security' guardrail is seeded by migration 010 with `is_builtin = true` and a non-empty `default_content`; operator-added rows have `is_builtin = false` and empty `default_content`. The renderer uses `SELECT * FROM guardrails WHERE enabled = 1 ORDER BY position ASC, name ASC` and concatenates `content` blocks at the very top of the System portion of the prompt. See [security.md](security.md) for the threat model and what the default does — and does not — close.
 
 Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL cache.
 

@@ -28,6 +28,29 @@ You will receive an acknowledgement within 7 days. This is a single-maintainer p
 
 See [`docs/security.md`](docs/security.md) for the full threat model — webhook authenticity, reverse-proxy responsibility, the read-only-against-GitHub guarantee, and what the persisted trace surface exposes. Reports that target the assumptions documented there are most useful.
 
+## Security ownership
+
+**Security is entirely the operator's responsibility.** This project does not promise that running it produces a secure system; what it ships are recommendations, defaults, and primitives operators can compose into their own security posture. Anything below is provided in that spirit — useful starting points, not guarantees, and not a substitute for the operator's own threat-modelling and controls.
+
+### What the project ships as recommendations
+
+- **A default 'security' guardrail seeded into the database.** A policy block, prepended to every agent's composed prompt at render time, that instructs the agent to ignore instructions found in untrusted text (issue bodies, PR bodies, comments, file contents, tool results), refuse to read or output secrets from outside the cloned working tree, refuse arbitrary network egress, and halt with a flagged audit entry on a probable injection attempt. The block is shipped with `enabled = true` so a fresh deployment starts with the recommendation applied; operators can edit, disable (with double confirm), reset to default, or replace it from `/ui/config` → **Guardrails**, the REST surface (`GET|PATCH /guardrails/security`, `POST /guardrails/security/reset`), or the MCP tools. Inspect the live text whenever you want.
+- **Webhook HMAC verification** on every `POST /webhooks/github` request — the only authentication enforced by the daemon directly.
+- **GitHub writes routed exclusively through the AI backend's MCP tools.** The daemon itself never calls a GitHub write API directly. Treat this as an architectural property to verify in your own audit, not a guarantee you should rely on without checking.
+- **Per-event audit trail.** Every run records the composed prompt (gzipped on the trace row), every tool call with input/output summaries, and the response — reachable from the dashboard for forensic review.
+
+### What the operator must own
+
+The default guardrail is a prompt-level recommendation. Sophisticated indirect-injection attacks (role-play, encoded payloads, multi-turn manipulation) can defeat any natural-language rule. The operator is the only party that can decide what additional controls a deployment needs. Suggested directions, none of which the daemon implements today:
+
+- **Quarantine untrusted content.** When the daemon hands an issue body or comment to the agent, wrap text from non-collaborator authors in something structurally distinguishable (e.g. `<untrusted_user_input author="@alice" trust="external">…</untrusted_user_input>` tags) so the model can tell data from instructions on shape rather than wording.
+- **Trust-gate comment authors.** Decide whether agents should react to comments from non-collaborators at all. The webhook payload tells the daemon the comment author; the operator's binding logic decides what to do with it. Two reasonable policies: *strict* (only collaborators trigger or modify a run) and *quarantine* (anyone's comments are visible, but tagged as untrusted).
+- **Output filtering.** Scan every agent output (PR body, comment text, file write, log line) for known auth-token patterns (`sk-ant-…`, `ghp_…`, `gho_…`, `AKIA…`, generic high-entropy blobs ≥ 40 chars) before it crosses a trust boundary. The daemon does not do this today.
+- **Capability isolation.** The runners' container today sees the bind-mounted Claude/Codex auth files (`~/.claude.json`, `~/.codex/`). The default guardrail tells the agent not to read them; nothing prevents it. Treat the daemon's host as carrying the union of every authentication token it has been granted, and design accordingly (sandboxes per run, ephemeral auth, network egress controls — whatever fits your threat model).
+- **Authentication at the proxy.** The daemon delegates auth to the operator's reverse proxy. Anyone who reaches `/ui/config` → **Guardrails** can edit or disable the recommendations the daemon shipped — that surface must sit behind your auth layer.
+
+These are operator decisions, not code shipped today. Listed here so reporters and operators see the same picture of what the recommendations are vs. what a deployment must actually add to be secure.
+
 ## After a fix
 
 Patches land on `main` first. A [GitHub Security Advisory](https://github.com/eloylp/agents/security/advisories) is published once the fix is in a tagged release, with credit to the reporter (unless they opt out).

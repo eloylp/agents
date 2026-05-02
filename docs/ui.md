@@ -50,6 +50,10 @@ Backend discovery status, including per-backend GitHub MCP connectivity. Manage 
 
 ![Config page — Backends and tools tab is one of three tabs at the top](img/config.png)
 
+### Guardrails
+
+Tab inside the Config page. Lists every prompt guardrail prepended to every agent's composed prompt at render time, with built-in / disabled / position badges. Click a row to edit name, description, content (markdown editor with **⛶ Expand** affordance), enabled toggle, and position. **Reset to default** restores a built-in's seeded text. **Delete** asks for double confirmation, with a stronger warning when the row is built-in. Disabling the shipped 'security' guardrail surfaces an extra-stern confirm modal explaining what protection is removed. The shipped daemon arrives with one built-in guardrail (`security`) seeded by migration 010; operators can add code-style, deployment-policy, or any other policy block on top.
+
 ### Repos
 
 Repository bindings. Wire agents to repos with labels, events, or cron triggers. Each binding has its own enable / disable toggle.

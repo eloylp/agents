@@ -48,6 +48,12 @@ The same pattern works for Cursor, Cline, and any other MCP-compatible client; c
 | `get_binding` | Fetch one binding by ID, scoped to a repo. |
 | `update_binding` | Replace all fields of a binding by ID. |
 | `delete_binding` | Delete a binding by ID. |
+| `list_guardrails` | List every prompt guardrail (built-in + operator-added) in render order. |
+| `get_guardrail` | Fetch one guardrail by name. |
+| `create_guardrail` | Create or update an operator-defined guardrail. Built-in flags (`is_builtin`, `default_content`) are migration-managed and ignored on the wire. |
+| `update_guardrail` | Partially update a guardrail by name. Patchable: `description`, `content`, `enabled`, `position`. |
+| `delete_guardrail` | Delete a guardrail. Built-ins can be deleted from the MCP path; the dashboard double-confirms in the UI. |
+| `reset_guardrail` | Copy a built-in guardrail's `default_content` back into its `content`. Returns a validation error on operator-added rows. |
 
 ### Operations
 

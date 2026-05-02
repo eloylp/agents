@@ -4,13 +4,14 @@ The fleet lives in a SQLite database that the daemon boots from. You manage it t
 
 This page documents the schema, using YAML examples for clarity. Every field shown here also exists as a column in the SQLite store and as a JSON field on the CRUD endpoints; the three surfaces are interchangeable.
 
-The schema is split into four conceptual domains:
+The schema is split into five conceptual domains:
 
 ```yaml
-daemon:    # how the service runs: log, http, processor, backends, optional proxy
-skills:    # reusable guidance blocks, keyed by name
-agents:    # named capabilities: backend + skills + prompt + dispatch wiring
-repos:     # wiring: which agents run on which repo, and when
+daemon:      # how the service runs: log, http, processor, backends, optional proxy
+skills:      # reusable guidance blocks, keyed by name
+agents:      # named capabilities: backend + skills + prompt + dispatch wiring
+repos:       # wiring: which agents run on which repo, and when
+guardrails:  # operator-defined prompt blocks prepended to every agent's composed prompt
 ```
 
 The shortest useful YAML representation is roughly 30 lines.
@@ -180,6 +181,42 @@ Rules:
 - `events:` bindings fire on the exact event kinds listed, with no additional filtering.
 - Multiple bindings matching the same event fan out in parallel (capped by `daemon.processor.max_concurrent_agents`).
 
+## `guardrails`
+
+Operator-defined policy blocks the renderer prepends to every agent's composed prompt at render time, ahead of the no-PR guard, skills, and the agent prompt body itself. The shipped 'security' guardrail (seeded by migration 010) recommends against indirect prompt injection — see [security.md](security.md) for the threat model and what the recommendation does *not* close.
+
+```yaml
+guardrails:
+  # The shipped 'security' default — already seeded into the database by migration 010.
+  # Listed here for visibility; including it in YAML lets you customise the active
+  # content. is_builtin and default_content are migration-managed and ignored on the
+  # wire (the migration's seeded default_content is preserved across imports).
+  - name: security
+    description: "Default protection against indirect prompt injection."
+    content: |
+      ## Security guardrails — read before every action
+      … (see migrations/010_guardrails.sql for the full default text)
+    enabled: true
+    position: 0
+
+  # Operator-added guardrails: any policy block you want prepended to every run.
+  - name: code-style
+    description: "Project coding conventions."
+    content: |
+      Always run `gofmt` before committing. Prefer `any` over `interface{}` in new
+      code. Tests use `t.Parallel()` whenever they don't share resources.
+    enabled: true
+    position: 50
+```
+
+Rules:
+
+- `name` is a stable identifier, normalised to lowercase + dash-joined.
+- `content` is the text the agent sees, prepended verbatim to the System portion of its prompt.
+- `enabled = false` keeps the row in the database but skips it at render time.
+- `position` orders rendering: lower first, ties broken by name. Built-ins use 0; operator-added rows default to 100.
+- `is_builtin` and `default_content` are migration-managed and intentionally not part of the YAML schema. A re-import that includes the `security` row updates `content` / `description` / `enabled` / `position` only; the seeded `default_content` is preserved so the dashboard's **Reset to default** button keeps working.
+
 ## Environment variables
 
 Create a `.env` file in the project root (loaded automatically):
@@ -206,4 +243,4 @@ curl -s http://localhost:8080/export > fleet.yaml
 curl -X POST http://localhost:8080/import --data-binary @fleet.yaml
 ```
 
-The CRUD endpoints for `/agents`, `/skills`, `/backends`, and `/repos` are always mounted and backed by the SQLite database. All four resource types support `PATCH /{resource}/{name}` for partial updates: only fields present in the request body are applied, the rest are preserved. For `/agents`, `POST /agents`, `PATCH /agents/{name}`, and `DELETE /agents/{name}` are CRUD write endpoints, but `GET /agents` always returns the live fleet snapshot (not the stored agent list). The daemon auto-reloads cron schedules after any write to agents, skills, backends, or repos. Agent memory is stored in the same SQLite database.
+The CRUD endpoints for `/agents`, `/skills`, `/backends`, `/repos`, and `/guardrails` are always mounted and backed by the SQLite database. All five resource types support `PATCH /{resource}/{name}` for partial updates: only fields present in the request body are applied, the rest are preserved. Guardrails additionally support `POST /guardrails/{name}/reset` for built-ins. For `/agents`, `POST /agents`, `PATCH /agents/{name}`, and `DELETE /agents/{name}` are CRUD write endpoints, but `GET /agents` always returns the live fleet snapshot (not the stored agent list). The daemon auto-reloads cron schedules after any write to agents, skills, backends, or repos. Agent memory is stored in the same SQLite database.

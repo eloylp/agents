@@ -21,6 +21,7 @@ The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthr
   - **[MCP server](docs/mcp.md)**: conversational. Control agents and trigger runs straight from Claude Code in your terminal (or Cursor, Cline, or any MCP client).
   - **[REST API](docs/api.md)**: programmatic. Scriptable from any HTTP client; the dashboard itself runs on top of it.
 - **[Self-hosted](docs/docker.md)**: your code and prompts stay on your infrastructure. No SaaS dependency.
+- **[Security recommendations](docs/security.md)**: ships a default `security` guardrail prepended to every agent prompt to push back against indirect prompt injection. The threat model and the controls the daemon does *not* implement (untrusted-input quarantining, author trust gating, output filtering, sandboxing) are documented openly so operators can decide what to layer on top.
 - **[Multi-backend](docs/configuration.md)**: pick Claude, Codex, or a custom backend per agent. Different agents in the same fleet can use different providers.
 - **[Discovery and diagnostics](docs/configuration.md)**: the daemon detects backends and tools, validates CLI health, and persists discovery snapshots.
 - **[Local-model support](docs/local-models.md)**: run any agent through `llama.cpp`, Ollama, vLLM, or any OpenAI-compatible endpoint. The daemon ships a built-in Anthropic-to-OpenAI translation proxy so the existing `claude` CLI works unchanged against your own LLM.
@@ -33,6 +34,10 @@ The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthr
 ## Get started
 
 See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a repo in a few minutes — `docker compose up -d` is the recommended path. For five import-ready fleet scenarios (solo coder, coder + reviewer, autonomous fleet, local LLM, multi-repo) see [`config_examples/`](config_examples/).
+
+## Security
+
+Security is the operator's responsibility; this project ships defaults and recommendations to start from, not guarantees. See [`docs/security.md`](docs/security.md) for the threat model, what the daemon does and does not protect against, and the additional controls operators should layer for production. Vulnerability disclosure: [`SECURITY.md`](SECURITY.md).
 
 ## Contributing
 
