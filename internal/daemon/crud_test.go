@@ -321,6 +321,116 @@ func TestStoreCRUDSkillCreateAndDelete(t *testing.T) {
 	}
 }
 
+// ── /guardrails ─────────────────────────────────────────────────────
+
+func TestStoreCRUDGuardrailsListSeeded(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	rr := doCRUDRequest(t, s, http.MethodGet, "/guardrails", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /guardrails: got %d — %s", rr.Code, rr.Body.String())
+	}
+	var rows []map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(rows) != 1 || rows[0]["name"] != "security" || rows[0]["is_builtin"] != true {
+		t.Fatalf("expected seeded built-in 'security', got %+v", rows)
+	}
+}
+
+func TestStoreCRUDGuardrailCreatePatchDelete(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	// Create operator-added guardrail.
+	rr := doCRUDRequest(t, s, http.MethodPost, "/guardrails", map[string]any{
+		"name":        "Code Style",
+		"description": "Project conventions",
+		"content":     "Always run gofmt.",
+		"enabled":     true,
+		"position":    50,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST guardrail: got %d — %s", rr.Code, rr.Body.String())
+	}
+	var created map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created: %v", err)
+	}
+	if created["name"] != "code-style" {
+		t.Errorf("name normalisation: got %v, want code-style", created["name"])
+	}
+	if created["is_builtin"] != false {
+		t.Errorf("operator row must not be flagged built-in; got is_builtin=%v", created["is_builtin"])
+	}
+
+	// PATCH content + disable.
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/guardrails/code-style", map[string]any{
+		"content": "Always run gofmt and goimports.",
+		"enabled": false,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH guardrail: got %d — %s", rr.Code, rr.Body.String())
+	}
+	var patched map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&patched); err != nil {
+		t.Fatalf("decode patched: %v", err)
+	}
+	if patched["content"] != "Always run gofmt and goimports." || patched["enabled"] != false {
+		t.Errorf("PATCH did not apply: %+v", patched)
+	}
+	if patched["position"] != float64(50) {
+		t.Errorf("PATCH must preserve unrelated fields; position=%v want 50", patched["position"])
+	}
+
+	// DELETE removes the row.
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/guardrails/code-style", nil)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("DELETE guardrail: got %d — %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodGet, "/guardrails/code-style", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("GET after DELETE: got %d, want 404", rr.Code)
+	}
+}
+
+func TestStoreCRUDGuardrailReset(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	// Edit the security guardrail, then reset.
+	rr := doCRUDRequest(t, s, http.MethodPatch, "/guardrails/security", map[string]any{
+		"content": "Operator-edited body.",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH security: got %d — %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodPost, "/guardrails/security/reset", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST reset: got %d — %s", rr.Code, rr.Body.String())
+	}
+	var reset map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&reset); err != nil {
+		t.Fatalf("decode reset: %v", err)
+	}
+	if reset["content"] != reset["default_content"] {
+		t.Error("reset did not restore default_content into content")
+	}
+
+	// Reset on an operator-added row (no default) returns 400.
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/guardrails", map[string]any{
+		"name": "code-style", "content": "x", "enabled": true,
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("POST seed code-style: got %d — %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodPost, "/guardrails/code-style/reset", nil)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("reset on operator row: got %d, want 400", rr.Code)
+	}
+}
+
 // ── /backends ───────────────────────────────────────────────────────
 
 func TestStoreCRUDBackendCreateAndDelete(t *testing.T) {

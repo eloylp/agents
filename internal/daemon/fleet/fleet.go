@@ -67,6 +67,10 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/skills", withTimeout(http.HandlerFunc(h.handleSkills))).Methods(http.MethodGet, http.MethodPost)
 	r.Handle("/skills/{name}", withTimeout(http.HandlerFunc(h.handleSkill))).Methods(http.MethodGet, http.MethodPatch, http.MethodDelete)
 
+	r.Handle("/guardrails", withTimeout(http.HandlerFunc(h.handleGuardrails))).Methods(http.MethodGet, http.MethodPost)
+	r.Handle("/guardrails/{name}", withTimeout(http.HandlerFunc(h.handleGuardrail))).Methods(http.MethodGet, http.MethodPatch, http.MethodDelete)
+	r.Handle("/guardrails/{name}/reset", withTimeout(http.HandlerFunc(h.handleGuardrailReset))).Methods(http.MethodPost)
+
 	r.Handle("/backends", withTimeout(http.HandlerFunc(h.handleBackends))).Methods(http.MethodGet, http.MethodPost)
 	r.Handle("/backends/status", withTimeout(http.HandlerFunc(h.handleBackendsStatus))).Methods(http.MethodGet)
 	r.Handle("/backends/discover", withTimeout(http.HandlerFunc(h.handleBackendsDiscover))).Methods(http.MethodPost)

@@ -48,6 +48,22 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		toolGetSkill(deps),
 	)
 	srv.AddTool(
+		mcpgo.NewTool("list_guardrails",
+			mcpgo.WithDescription("List every prompt guardrail (operator-defined policy blocks prepended to every agent's composed prompt). Includes the shipped 'security' default and any operator-added rules. Returns enabled and disabled rows in render order (position ASC, name ASC)."),
+		),
+		toolListGuardrails(deps),
+	)
+	srv.AddTool(
+		mcpgo.NewTool("get_guardrail",
+			mcpgo.WithDescription("Fetch one guardrail by name. Returns content, default_content (built-ins only), is_builtin, enabled, position."),
+			mcpgo.WithString("name",
+				mcpgo.Required(),
+				mcpgo.Description("Guardrail name (case-insensitive). Built-in: 'security'."),
+			),
+		),
+		toolGetGuardrail(deps),
+	)
+	srv.AddTool(
 		mcpgo.NewTool("list_backends",
 			mcpgo.WithDescription("List every configured AI backend (command, models, timeouts). Includes local backends routed through the translation proxy."),
 		),
@@ -239,6 +255,70 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				),
 			),
 			toolDeleteSkill(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("create_guardrail",
+				mcpgo.WithDescription("Create or update an operator-defined prompt guardrail. Upsert semantics: a write to an existing name overwrites the editable fields and preserves built-in flags (is_builtin / default_content). Same path as POST /guardrails."),
+				mcpgo.WithString("name",
+					mcpgo.Required(),
+					mcpgo.Description("Guardrail name. Lowercased, trimmed, and dash-joined by the store."),
+				),
+				mcpgo.WithString("description",
+					mcpgo.Description("Short label shown in the dashboard list."),
+				),
+				mcpgo.WithString("content",
+					mcpgo.Description("The policy text prepended to every agent's composed prompt at render time."),
+				),
+				mcpgo.WithBoolean("enabled",
+					mcpgo.Description("Whether the renderer includes this guardrail. Defaults to true."),
+				),
+				mcpgo.WithNumber("position",
+					mcpgo.Description("Render order: lower first, ties broken by name. Built-in 'security' uses 0; operator-added rows default to 100."),
+				),
+			),
+			toolCreateGuardrail(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("update_guardrail",
+				mcpgo.WithDescription("Partially update a guardrail by name. Only fields present in the call are modified; everything else is preserved. is_builtin and default_content are migration-managed and cannot be patched. Same path as PATCH /guardrails/{name}."),
+				mcpgo.WithString("name",
+					mcpgo.Required(),
+					mcpgo.Description("Guardrail name (case-insensitive; matched after lowercasing)."),
+				),
+				mcpgo.WithString("description",
+					mcpgo.Description("New description. Omit to leave unchanged."),
+				),
+				mcpgo.WithString("content",
+					mcpgo.Description("New policy text. Omit to leave unchanged."),
+				),
+				mcpgo.WithBoolean("enabled",
+					mcpgo.Description("New enabled state. Omit to leave unchanged."),
+				),
+				mcpgo.WithNumber("position",
+					mcpgo.Description("New render position. Omit to leave unchanged."),
+				),
+			),
+			toolUpdateGuardrail(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("delete_guardrail",
+				mcpgo.WithDescription("Delete a guardrail by name. Built-ins (e.g. 'security') can be deleted too — the dashboard double-confirms in the UI; the MCP path does not. Same path as DELETE /guardrails/{name}."),
+				mcpgo.WithString("name",
+					mcpgo.Required(),
+					mcpgo.Description("Guardrail name (case-insensitive; matched after lowercasing)."),
+				),
+			),
+			toolDeleteGuardrail(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("reset_guardrail",
+				mcpgo.WithDescription("Reset a built-in guardrail's content back to its migration-seeded default_content. Returns a validation error when called on an operator-added row (no default to fall back to). Same path as POST /guardrails/{name}/reset."),
+				mcpgo.WithString("name",
+					mcpgo.Required(),
+					mcpgo.Description("Guardrail name (case-insensitive; matched after lowercasing). Must be a built-in."),
+				),
+			),
+			toolResetGuardrail(deps),
 		)
 		srv.AddTool(
 			mcpgo.NewTool("create_backend",

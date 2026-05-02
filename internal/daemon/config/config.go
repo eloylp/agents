@@ -307,10 +307,11 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 // four CRUD-mutable sections; daemon-level config (HTTP, log, proxy) is
 // intentionally excluded — it is not managed by the write API.
 type exportYAML struct {
-	Skills map[string]fleet.Skill `yaml:"skills,omitempty"`
-	Agents []fleet.Agent          `yaml:"agents,omitempty"`
-	Repos  []fleet.Repo           `yaml:"repos,omitempty"`
-	Daemon *exportDaemonYAML      `yaml:"daemon,omitempty"`
+	Skills     map[string]fleet.Skill `yaml:"skills,omitempty"`
+	Agents     []fleet.Agent          `yaml:"agents,omitempty"`
+	Repos      []fleet.Repo           `yaml:"repos,omitempty"`
+	Guardrails []fleet.Guardrail      `yaml:"guardrails,omitempty"`
+	Daemon     *exportDaemonYAML      `yaml:"daemon,omitempty"`
 }
 
 type exportDaemonYAML struct {
@@ -338,10 +339,15 @@ func (h *Handler) ExportYAML() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read snapshot: %w", err)
 	}
+	guardrails, err := h.store.ReadAllGuardrails()
+	if err != nil {
+		return nil, fmt.Errorf("read guardrails: %w", err)
+	}
 	out := exportYAML{
-		Skills: skills,
-		Agents: agents,
-		Repos:  repos,
+		Skills:     skills,
+		Agents:     agents,
+		Repos:      repos,
+		Guardrails: guardrails,
 	}
 	if len(backends) > 0 {
 		out.Daemon = &exportDaemonYAML{AIBackends: backends}
@@ -399,19 +405,20 @@ func (h *Handler) ImportYAML(body []byte, mode string) (map[string]int, error) {
 
 	var err error
 	if mode == "replace" {
-		err = h.store.ReplaceAll(payload.Agents, payload.Repos, payload.Skills, backends)
+		err = h.store.ReplaceAll(payload.Agents, payload.Repos, payload.Skills, backends, payload.Guardrails)
 	} else {
-		err = h.store.ImportAll(payload.Agents, payload.Repos, payload.Skills, backends)
+		err = h.store.ImportAll(payload.Agents, payload.Repos, payload.Skills, backends, payload.Guardrails)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("import: %w", err)
 	}
 
 	return map[string]int{
-		"agents":   len(payload.Agents),
-		"skills":   len(payload.Skills),
-		"repos":    len(payload.Repos),
-		"backends": len(backends),
+		"agents":     len(payload.Agents),
+		"skills":     len(payload.Skills),
+		"repos":      len(payload.Repos),
+		"backends":   len(backends),
+		"guardrails": len(payload.Guardrails),
 	}, nil
 }
 
