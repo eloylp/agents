@@ -2,6 +2,12 @@
 
 ![agents](docs/agents.jpg)
 
+[![CI](https://img.shields.io/github/actions/workflow/status/eloylp/agents/ci.yml?label=CI)](https://github.com/eloylp/agents/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/github/go-mod/go-version/eloylp/agents)](go.mod)
+[![License](https://img.shields.io/github/license/eloylp/agents)](LICENSE)
+[![MCP](https://img.shields.io/badge/MCP-compatible-7c3aed)](docs/mcp.md)
+[![Stars](https://img.shields.io/github/stars/eloylp/agents?style=flat)](https://github.com/eloylp/agents/stargazers)
+
 **A self-hosted, observable orchestrator for multi-agent workflows on your repos.**
 
 Create agents and compose them with skills, memory, and triggers — repo events, cron, or inter-agent dispatch. Route runs through any local OpenAI-compatible model via the built-in proxy. Your fleet, your prompts, your traces — all on your hardware.
