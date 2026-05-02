@@ -613,7 +613,7 @@ func ReadMemory(db *sql.DB, agent, repo string) (string, bool, time.Time, error)
 	err := db.QueryRow(
 		"SELECT content, updated_at FROM memory WHERE agent=? AND repo=?", agent, repo,
 	).Scan(&content, &updatedAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, time.Time{}, nil
 	}
 	if err != nil {
