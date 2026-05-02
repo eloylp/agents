@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -62,10 +63,8 @@ func (h *Handler) repoByName(name string) (fleet.Repo, bool) {
 		return fleet.Repo{}, false
 	}
 	want := fleet.NormalizeRepoName(name)
-	for _, r := range repos {
-		if r.Name == want {
-			return r, true
-		}
+	if i := slices.IndexFunc(repos, func(r fleet.Repo) bool { return r.Name == want }); i >= 0 {
+		return repos[i], true
 	}
 	return fleet.Repo{}, false
 }
