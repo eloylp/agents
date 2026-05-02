@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -716,9 +717,7 @@ func stringSliceArg(v any, keyForErr string) ([]string, string) {
 		}
 		return out, ""
 	case []string:
-		cp := make([]string, len(raw))
-		copy(cp, raw)
-		return cp, ""
+		return slices.Clone(raw), ""
 	case string:
 		var decoded []string
 		if err := json.Unmarshal([]byte(raw), &decoded); err == nil {
