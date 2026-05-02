@@ -139,56 +139,106 @@ phase_pick_backends() {
   ok "will authenticate: ${c_bold}${BACKENDS[*]}${c_rst}"
 }
 
+# ── phase 2.5 — GitHub PAT presence check ───────────────────────────
+
+phase_check_pat() {
+  phase "2.5" "verify GitHub Personal Access Token"
+  info "looking for GITHUB_PAT_TOKEN in the container environment..."
+  if [[ -z "${GITHUB_PAT_TOKEN:-}" ]]; then
+    err "GITHUB_PAT_TOKEN is not set."
+    say ""
+    say "  The GitHub MCP server needs a Personal Access Token to talk to"
+    say "  GitHub on behalf of your agents. Generate one at:"
+    say "      ${c_cyn}https://github.com/settings/tokens${c_rst}"
+    say "  with at least the ${c_bold}repo${c_rst} scope (and ${c_bold}workflow${c_rst} if your agents will touch CI)."
+    say ""
+    say "  Then add it to your .env (next to docker-compose.yaml):"
+    say "      ${c_bold}GITHUB_PAT_TOKEN=ghp_...${c_rst}"
+    say ""
+    say "  Restart the container so the env var is visible inside:"
+    say "      ${c_bold}docker compose up -d${c_rst}"
+    say ""
+    say "  Then re-run agents-setup."
+    exit 1
+  fi
+  ok "GITHUB_PAT_TOKEN is present (${#GITHUB_PAT_TOKEN} chars)"
+  note "claude stores the token in ~/.claude.json on the agents-home volume."
+  note "codex resolves it from \$GITHUB_PAT_TOKEN at runtime (token never on disk)."
+}
+
 # ── phase 3 — per-backend login + GitHub MCP wiring ──────────────────
 
 setup_claude() {
   phase 3 "claude — log in + wire GitHub MCP"
-  info "starting claude OAuth flow..."
+
+  info "running ${c_bold}claude auth login${c_rst} (clean auth, no REPL drop)..."
   note "claude prints a URL. Open it in any browser, sign in, paste the"
   note "returned code back into this terminal. Auth lands in /home/agents"
   note "(the agents-home named volume) and is reused on every run."
   say ""
-  claude login || { err "claude login failed"; return 1; }
-  ok "claude logged in"
+  claude auth login || { err "claude auth login failed"; return 1; }
+  ok "claude authenticated"
 
-  info "checking whether GitHub MCP is already registered..."
-  if claude mcp list 2>/dev/null | grep -qE '^github\b'; then
-    ok "GitHub MCP already registered (skipping add)"
+  info "checking whether GitHub MCP is already registered for claude..."
+  if claude mcp list 2>/dev/null | grep -qE '^github\b.*Connected'; then
+    ok "GitHub MCP already registered and connected (skipping add)"
   else
-    info "registering GitHub MCP server (user-scope) at $GITHUB_MCP_URL..."
-    claude mcp add -t http -s user github "$GITHUB_MCP_URL" \
-      || { err "failed to register GitHub MCP for claude"; return 1; }
-    ok "GitHub MCP registered"
+    # Remove any prior failed registration so the add doesn't conflict.
+    claude mcp remove github 2>/dev/null || true
+    info "registering GitHub MCP via add-json (HTTP + Bearer PAT)..."
+    local mcp_json
+    mcp_json=$(jq -nc \
+      --arg url "$GITHUB_MCP_URL" \
+      --arg auth "Bearer $GITHUB_PAT_TOKEN" \
+      '{type:"http", url:$url, headers:{Authorization:$auth}}')
+    claude mcp add-json github "$mcp_json" \
+      || { err "claude mcp add-json failed"; return 1; }
+    ok "GitHub MCP registered with PAT-based Bearer auth"
   fi
 
-  info "verifying with claude mcp list..."
-  say ""
-  claude mcp list || { err "claude mcp list failed"; return 1; }
-  say ""
+  info "verifying GitHub MCP connectivity..."
+  local listing
+  listing=$(claude mcp list 2>&1)
+  if printf '%s' "$listing" | grep -qE '^github\b.*Connected'; then
+    ok "github MCP shows Connected"
+  else
+    err "github MCP did not connect — claude mcp list said:"
+    printf '%s\n' "$listing" | grep -E '^github\b' | sed 's/^/      /'
+    say "    Likely causes: invalid PAT, missing scopes, or rate limit."
+    say "    Check the token has 'repo' scope, then re-run agents-setup."
+    return 1
+  fi
 }
 
 setup_codex() {
   phase 3 "codex — log in + wire GitHub MCP"
-  info "starting codex OAuth flow (device-auth mode for headless)..."
+
+  info "running ${c_bold}codex login --device-auth${c_rst} (headless device-auth flow)..."
   note "codex prints a URL and a one-time code. Open the URL in any"
   note "browser (your laptop, your phone — anything), enter the code,"
   note "approve, return here. --device-auth avoids needing a localhost"
   note "callback that the container can't expose to your browser."
   say ""
   codex login --device-auth || { err "codex login failed"; return 1; }
-  ok "codex logged in"
+  ok "codex authenticated"
 
-  info "registering GitHub MCP for codex..."
-  warn "codex's MCP registration UX varies by version — please follow:"
-  say  "    ${c_bold}https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-codex.md${c_rst}"
-  say  "    GitHub MCP URL to use: ${c_bold}$GITHUB_MCP_URL${c_rst}"
-  local cont
-  ask  "Press Enter when codex MCP is registered (or 's' to skip):" cont
-  if [[ "${cont:-}" == "s" || "${cont:-}" == "S" ]]; then
-    warn "codex MCP registration skipped — agents on codex won't reach GitHub until you wire it"
+  info "checking whether GitHub MCP is already registered for codex..."
+  if codex mcp list 2>/dev/null | grep -qE '^github\b'; then
+    ok "GitHub MCP already registered (skipping add)"
   else
-    ok "codex MCP registration acknowledged"
+    info "registering GitHub MCP via codex mcp add (HTTP + bearer-token-env-var)..."
+    note "codex resolves the PAT from \$GITHUB_PAT_TOKEN at runtime, not at rest."
+    codex mcp add github \
+      --url "$GITHUB_MCP_URL/" \
+      --bearer-token-env-var GITHUB_PAT_TOKEN \
+      || { err "codex mcp add failed"; return 1; }
+    ok "GitHub MCP registered for codex"
   fi
+
+  info "verifying codex MCP listing..."
+  say ""
+  codex mcp list || { err "codex mcp list failed"; return 1; }
+  say ""
 }
 
 phase_per_backend() {
@@ -249,6 +299,7 @@ main() {
   banner
   phase_sanity
   phase_pick_backends
+  phase_check_pat
   phase_per_backend
   phase_refresh_discovery
   phase_diagnostics
