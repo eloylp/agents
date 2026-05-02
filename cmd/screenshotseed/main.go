@@ -92,12 +92,12 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	fmt.Fprintln(os.Stderr, "screenshotseed: daemon listening on :8081 — Ctrl-C to stop")
+	fmt.Fprintln(os.Stderr, "screenshotseed: daemon listening on :8081, Ctrl-C to stop")
 	return d.Run(ctx)
 }
 
 // buildFixtureConfig assembles a small but realistic fleet so screenshots
-// have rich content — multiple agents with descriptions, two backends
+// have rich content, multiple agents with descriptions, two backends
 // with one healthy / one with a discovery warning, a couple of repos
 // with mixed binding shapes (labels + cron).
 func buildFixtureConfig() *config.Config {
@@ -136,7 +136,7 @@ func buildFixtureConfig() *config.Config {
 				"codex": {
 					Command: "codex", Version: "codex 0.9.1",
 					Models:         []string{"gpt-5", "gpt-5-mini"},
-					Healthy:        false, HealthDetail: "GitHub MCP server not registered — run `codex mcp add github`",
+					Healthy:        false, HealthDetail: "GitHub MCP server not registered, run `codex mcp add github`",
 					TimeoutSeconds: 600, MaxPromptChars: 10000,
 				},
 				"local-qwen": {
@@ -150,7 +150,7 @@ func buildFixtureConfig() *config.Config {
 			},
 		},
 		Skills: map[string]fleet.Skill{
-			"architect": {Prompt: "## Architect mindset\n\nFavour boring solutions. Write down the trade-offs you considered. Reject premature abstractions; three similar lines beats a clever helper.\n\nThink about reversibility — destructive actions need a confirmation gate.\n"},
+			"architect": {Prompt: "## Architect mindset\n\nFavour boring solutions. Write down the trade-offs you considered. Reject premature abstractions; three similar lines beats a clever helper.\n\nThink about reversibility, destructive actions need a confirmation gate.\n"},
 			"security":  {Prompt: "## Security review\n\nThink about: input validation, authn/authz boundaries, secrets handling, injection vectors (SQL, command, prompt), supply-chain (dependency pinning), and the OWASP top 10.\n\nFlag risks in the response summary; do not mention them on PR comments without an explicit operator request.\n"},
 			"testing":   {Prompt: "## Testing discipline\n\nEvery behavioural change ships with a test. Table-driven for >2 input shapes. `t.Parallel()` when independent. Run `-race` before declaring done.\n"},
 			"dx":        {Prompt: "## Developer experience\n\nReadable error messages. Sensible defaults. Logs that an operator can grep without a manual.\n"},
@@ -250,7 +250,7 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 		obs.RecordEvent(at, ev)
 	}
 
-	// Trace spans — both completed and one in-flight (registered separately).
+	// Trace spans, both completed and one in-flight (registered separately).
 	completed := []workflow.SpanInput{
 		{
 			SpanID: "span-001", RootEventID: "evt-001",
@@ -259,7 +259,7 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 			Summary: "Implemented checkout fix; opened PR #143 with two regression tests",
 			StartedAt: now.Add(-22 * time.Minute), FinishedAt: now.Add(-19 * time.Minute),
 			Status: "success",
-			Prompt: "## Runtime context\n\nEvent: issues.labeled\nActor: alice\nRepo: acme/widgets #142\n\n## Issue\n\n**Empty cart in checkout returns 500.** Reproduce by clicking 'pay' with no items in the cart.\n\n## Available experts\n\n- pr-reviewer — Reviews open PRs for correctness, design, and test coverage.\n\n## Memory\n\n_no memory yet_\n\n## Response format\n\nReturn a single JSON object matching the response schema. Include a one-line summary, any artifacts you produced, and any agents you want to dispatch.\n",
+			Prompt: "## Runtime context\n\nEvent: issues.labeled\nActor: alice\nRepo: acme/widgets #142\n\n## Issue\n\n**Empty cart in checkout returns 500.** Reproduce by clicking 'pay' with no items in the cart.\n\n## Available experts\n\n- pr-reviewer, Reviews open PRs for correctness, design, and test coverage.\n\n## Memory\n\n_no memory yet_\n\n## Response format\n\nReturn a single JSON object matching the response schema. Include a one-line summary, any artifacts you produced, and any agents you want to dispatch.\n",
 			InputTokens: 4321, OutputTokens: 1850, CacheReadTokens: 12400, CacheWriteTokens: 2100,
 			ArtifactsCount: 1,
 		},
@@ -322,7 +322,7 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 	if _, err := st.DB().Exec(
 		`INSERT OR REPLACE INTO memory (agent, repo, content, updated_at) VALUES (?, ?, ?, ?)`,
 		"refactorer", "acme/widgets",
-		"# refactorer notes — acme/widgets\n\n## Recent sweeps\n\n- 2026-04-29: removed three unused helpers in `internal/checkout/`. PR #129 merged.\n- 2026-04-22: migrated 12 call sites off the deprecated `db.Tx{}` shape. PR #117 merged.\n\n## Known follow-ups\n\n- The `pricing.Strategy` interface has only one impl. Worth collapsing; not urgent.\n- `internal/audit/` has a `// TODO(coder): index by tenant` comment that's been there for two months.\n\n## Style decisions I've absorbed\n\n- Repo prefers concrete types over interfaces unless 2+ impls exist.\n- Tests next to code, not in `_test/` subdirs.\n- Error wrapping uses `fmt.Errorf(\"x: %w\", err)`, never `errors.Wrap`.\n",
+		"# refactorer notes, acme/widgets\n\n## Recent sweeps\n\n- 2026-04-29: removed three unused helpers in `internal/checkout/`. PR #129 merged.\n- 2026-04-22: migrated 12 call sites off the deprecated `db.Tx{}` shape. PR #117 merged.\n\n## Known follow-ups\n\n- The `pricing.Strategy` interface has only one impl. Worth collapsing; not urgent.\n- `internal/audit/` has a `// TODO(coder): index by tenant` comment that's been there for two months.\n\n## Style decisions I've absorbed\n\n- Repo prefers concrete types over interfaces unless 2+ impls exist.\n- Tests next to code, not in `_test/` subdirs.\n- Error wrapping uses `fmt.Errorf(\"x: %w\", err)`, never `errors.Wrap`.\n",
 		now.UTC().Format(time.RFC3339Nano),
 	); err != nil {
 		log.Println("seed memory:", err)

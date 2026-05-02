@@ -41,7 +41,7 @@ body:
     attributes:
       label: Scope notes (optional)
       description: Things deliberately *out of scope*, or constraints the implementer should respect.
-      placeholder: "Don't expand to also store full responses — that's a separate proposal."
+      placeholder: "Don't expand to also store full responses, that's a separate proposal."
     validations:
       required: false
 

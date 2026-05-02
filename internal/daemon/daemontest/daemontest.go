@@ -1,12 +1,12 @@
 // Package daemontest is the shared test fixture for *daemon.Daemon. It
 // builds a Daemon backed by a tempdir SQLite, with the rest of the
-// runtime components wired exactly the way production wires them — the
+// runtime components wired exactly the way production wires them, the
 // same fixture pattern internal/coordinator and internal/mcp use.
 //
 // Using a real Daemon (rather than per-package stubs) keeps the tests
 // honest: a CRUD write that triggers a reload exercises the real
 // coordinator chain, the real engine's UpdateConfigAndRunners, the real
-// scheduler's RebuildCron — same code paths production runs.
+// scheduler's RebuildCron, same code paths production runs.
 package daemontest
 
 import (
@@ -27,7 +27,7 @@ import (
 // the same cfg snapshot until a CRUD write triggers a reload.
 //
 // If cfg has no agents or backends, default ones are seeded so ImportAll's
-// "at least one agent / backend" constraint passes — most webhook /status
+// "at least one agent / backend" constraint passes, most webhook /status
 // tests don't care which agents exist; they just need the daemon to boot.
 func New(t *testing.T, cfg *config.Config) *daemon.Daemon {
 	t.Helper()

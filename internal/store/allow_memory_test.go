@@ -9,7 +9,7 @@ import (
 
 // TestImportLoadAgentAllowMemoryDefaultsTrue verifies that an agent imported
 // without an explicit AllowMemory field round-trips through SQLite as the
-// documented default — IsAllowMemory() reports true on read. This protects
+// documented default, IsAllowMemory() reports true on read. This protects
 // against silently flipping the default when migrations or load paths change.
 func TestImportLoadAgentAllowMemoryDefaultsTrue(t *testing.T) {
 	t.Parallel()
@@ -40,7 +40,7 @@ func TestImportLoadAgentAllowMemoryDefaultsTrue(t *testing.T) {
 }
 
 // TestImportLoadAgentAllowMemoryFalseRoundTrips verifies that an explicit
-// non-nil false survives an Import → Load round trip — the row must store 0
+// non-nil false survives an Import → Load round trip, the row must store 0
 // and the loader must materialise &false so IsAllowMemory() reports false.
 func TestImportLoadAgentAllowMemoryFalseRoundTrips(t *testing.T) {
 	t.Parallel()

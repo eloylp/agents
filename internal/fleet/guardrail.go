@@ -18,7 +18,7 @@ type Guardrail struct {
 	Position int `yaml:"position"`
 	// DefaultContent is set only on built-in guardrails shipped with the
 	// daemon. The dashboard's "Reset to default" affordance copies it back
-	// into Content. Excluded from the YAML import/export shape — the
+	// into Content. Excluded from the YAML import/export shape, the
 	// migration is the sole source of truth for built-in defaults, and a
 	// re-import must not be able to mutate them.
 	DefaultContent string `yaml:"-"`

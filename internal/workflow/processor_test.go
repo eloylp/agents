@@ -25,7 +25,7 @@ func (s *stubProcessorHandler) HandleEvent(_ context.Context, _ Event) error {
 // test for issue #36. It simulates the race window where the run ctx is already
 // cancelled but setDrainCtx has not yet been called, and asserts that
 // processingCtx blocks until the real drain context (with a live deadline) is
-// installed — not an already-cancelled sentinel.
+// installed, not an already-cancelled sentinel.
 func TestProcessorProcessingCtxReturnsDrainContextWithDeadline(t *testing.T) {
 	t.Parallel()
 	dataChannels := NewDataChannels(1, newTempStore(t))
@@ -53,7 +53,7 @@ func TestProcessorProcessingCtxReturnsDrainContextWithDeadline(t *testing.T) {
 	default:
 	}
 
-	// Install the real drain context — this should unblock processingCtx.
+	// Install the real drain context, this should unblock processingCtx.
 	drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer drainCancel()
 	processor.setDrainCtx(drainCtx)

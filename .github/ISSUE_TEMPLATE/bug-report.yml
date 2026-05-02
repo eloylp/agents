@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Thanks for reporting. Issues filed here become the contract that the
-        autonomous agent fleet implements against — the clearer the body, the
+        autonomous agent fleet implements against, the clearer the body, the
         better the outcome. See [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md)
         for the flow and label semantics.
 
@@ -24,7 +24,7 @@ body:
     id: reproduction
     attributes:
       label: How to reproduce
-      description: Minimal steps a reader can follow. Config snippets, the trigger you hit, the resulting trace span — whatever is needed to land on the same failure.
+      description: Minimal steps a reader can follow. Config snippets, the trigger you hit, the resulting trace span, whatever is needed to land on the same failure.
       placeholder: |
         1. Configure a cron-bound agent at `*/5 * * * *`.
         2. Restart the daemon a few seconds before the minute boundary.

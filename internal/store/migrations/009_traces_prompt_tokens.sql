@@ -6,7 +6,7 @@
 -- four-field shape (input / output / cache_creation / cache_read) so
 -- operators can spot agents that bust the cache and tune accordingly.
 --
--- Old rows from before this migration get NULL for every new column —
+-- Old rows from before this migration get NULL for every new column;
 -- the UI renders that as "not recorded" rather than zero.
 ALTER TABLE traces ADD COLUMN prompt_gz          BLOB;
 ALTER TABLE traces ADD COLUMN prompt_size        INTEGER;

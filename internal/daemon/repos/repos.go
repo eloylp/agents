@@ -200,7 +200,7 @@ func (h *Handler) handleCreateBinding(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, h.maxBodyBytes, &req) {
 		return
 	}
-	// Ignore any ID the client sends — the store picks it.
+	// Ignore any ID the client sends, the store picks it.
 	req.ID = 0
 	b, err := h.CreateBinding(repoName, req.toConfig())
 	if err != nil {
@@ -264,7 +264,7 @@ func (h *Handler) handleDeleteBinding(w http.ResponseWriter, r *http.Request) {
 // UpsertRepo writes a single repo definition (and its bindings) into the store
 // and reloads the cron scheduler. Returns the canonical (normalized) form so
 // callers can surface the exact shape REST clients see in the POST /repos
-// response — lowercase repo name, lowercased binding agents, trimmed cron, and
+// response, lowercase repo name, lowercased binding agents, trimmed cron, and
 // lowercased events.
 //
 // Empty/whitespace names are rejected as *store.ErrValidation so callers can

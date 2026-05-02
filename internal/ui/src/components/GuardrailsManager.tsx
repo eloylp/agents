@@ -183,7 +183,7 @@ export default function GuardrailsManager() {
       const body = isNew
         ? { name: g.name, description: g.description, content: g.content, enabled: g.enabled, position: g.position }
         : { description: g.description, content: g.content, enabled: g.enabled, position: g.position }
-      // Disabling a guardrail (especially a built-in) is sensitive — bounce
+      // Disabling a guardrail (especially a built-in) is sensitive, bounce
       // through a confirm modal before posting.
       if (!isNew && selected.enabled && !g.enabled) {
         setSelected(g)
@@ -281,7 +281,7 @@ export default function GuardrailsManager() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-          {guardrails.length} guardrail{guardrails.length === 1 ? '' : 's'} — prepended to every agent's composed prompt in render order.
+          {guardrails.length} guardrail{guardrails.length === 1 ? '' : 's'}, prepended to every agent's composed prompt in render order.
         </span>
         <button
           onClick={() => { setSelected(emptyForm); setModal('create') }}
@@ -321,7 +321,7 @@ export default function GuardrailsManager() {
           </div>
         ))}
         {guardrails.length === 0 && (
-          <p style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>No guardrails yet. The 'security' default should ship with the daemon — check that migrations applied.</p>
+          <p style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>No guardrails yet. The 'security' default should ship with the daemon, check that migrations applied.</p>
         )}
       </div>
 

@@ -12,7 +12,7 @@
 //	// First-time import from YAML:
 //	cfg, _ := config.Load("config.yaml")
 //	store.Import(db, cfg)
-//	// Subsequent starts — read from DB:
+//	// Subsequent starts, read from DB:
 //	cfg, err = store.Load(db)
 package store
 
@@ -140,11 +140,11 @@ func migrate(db *sql.DB) error {
 }
 
 // Import writes cfg into the database, upserting every entity. Existing rows
-// are replaced (INSERT OR REPLACE). Prompts are stored inline — agents and
+// are replaced (INSERT OR REPLACE). Prompts are stored inline, agents and
 // skills must carry their full prompt text in cfg.Prompt before calling
 // Import.
 //
-// Secrets (WebhookSecret) are NOT written — only the env-var name
+// Secrets (WebhookSecret) are NOT written, only the env-var name
 // (WebhookSecretEnv) is stored. The secret is re-resolved from the
 // environment at Load time.
 func Import(db *sql.DB, cfg *config.Config) error {
@@ -421,7 +421,7 @@ func loadDaemon(db *sql.DB, cfg *config.Config) error {
 	var value string
 	err := db.QueryRow("SELECT value FROM config WHERE key='daemon'").Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {
-		// Fresh database — leave cfg.Daemon at its zero value and let
+		// Fresh database, leave cfg.Daemon at its zero value and let
 		// config.applyDefaults populate every field with sensible
 		// defaults during FinishLoad. The daemon should boot against
 		// an empty store without requiring a YAML seed; operators

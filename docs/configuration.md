@@ -68,7 +68,7 @@ skills:
       Focus on authn/authz, secrets exposure, injection vectors, and unsafe defaults.
 ```
 
-Skills are referenced by name from agents. Prompts are inline strings — once the YAML has been imported into SQLite, manage them through the CRUD API, the web UI, or the MCP tools.
+Skills are referenced by name from agents. Prompts are inline strings, once the YAML has been imported into SQLite, manage them through the CRUD API, the web UI, or the MCP tools.
 
 ## `agents`
 
@@ -117,11 +117,11 @@ agents:
 Each agent is a pure capability definition: backend + skills + prompt. Agents don't run until a repo binds them to a trigger.
 
 - `backend` must match an entry in `daemon.ai_backends` (e.g. `claude`, `codex`, or any custom local-backend name). There is no `auto` selection; every agent must name a backend explicitly.
-- `prompt` is an inline string in the YAML. After import the prompt lives in SQLite — edit it through the CRUD API, the web UI, or the MCP `update_agent` tool.
+- `prompt` is an inline string in the YAML. After import the prompt lives in SQLite, edit it through the CRUD API, the web UI, or the MCP `update_agent` tool.
 - Agent names must be unique.
 - `allow_prs` (default `false`): when `false`, the scheduler prepends a hard instruction forbidding the agent from opening pull requests, regardless of what the prompt says. Set `allow_prs: true` only on agents that are explicitly meant to author PRs (e.g. coders, refactorers). Reviewer-only agents should leave this unset.
 - `allow_dispatch` (default `false`): opt-in gate. An agent must have `allow_dispatch: true` for any other agent to dispatch it. Agents without this flag silently drop any incoming dispatch requests.
-- `allow_memory` (default `true`): controls whether the daemon loads existing memory into the prompt and persists the agent's returned `memory` field after the run. The flag is the single authority on memory across every trigger surface (cron, webhook events, inter-agent dispatch, `POST /run`, MCP `trigger_agent`). Set `allow_memory: false` to skip both the load and the persist for an agent — useful for inherently stateless agents (e.g. research / strategy agents whose work is recomputed each run) so they don't waste prompt budget on memory they will never use. The toggle is a hard runtime gate that does not depend on the agent's prompt cooperating. Existing agents authored before this field existed continue to behave exactly as they did, since the default is `true`.
+- `allow_memory` (default `true`): controls whether the daemon loads existing memory into the prompt and persists the agent's returned `memory` field after the run. The flag is the single authority on memory across every trigger surface (cron, webhook events, inter-agent dispatch, `POST /run`, MCP `trigger_agent`). Set `allow_memory: false` to skip both the load and the persist for an agent, useful for inherently stateless agents (e.g. research / strategy agents whose work is recomputed each run) so they don't waste prompt budget on memory they will never use. The toggle is a hard runtime gate that does not depend on the agent's prompt cooperating. Existing agents authored before this field existed continue to behave exactly as they did, since the default is `true`.
 - `can_dispatch`: whitelist of agent names this agent is allowed to dispatch. A dispatch to an agent not on this list is silently dropped. Entries must reference real agents in the same config and must not include the agent itself.
 - `description`: required when an agent appears in any `can_dispatch` list. Used by the dispatcher to include context about the target in the originating agent's prompt roster.
 
@@ -183,18 +183,18 @@ Rules:
 
 ## `guardrails`
 
-Operator-defined policy blocks the renderer prepends to every agent's composed prompt at render time, ahead of the no-PR guard, skills, and the agent prompt body itself. The shipped 'security' guardrail (seeded by migration 010) recommends against indirect prompt injection — see [security.md](security.md) for the threat model and what the recommendation does *not* close.
+Operator-defined policy blocks the renderer prepends to every agent's composed prompt at render time, ahead of the no-PR guard, skills, and the agent prompt body itself. The shipped 'security' guardrail (seeded by migration 010) recommends against indirect prompt injection, see [security.md](security.md) for the threat model and what the recommendation does *not* close.
 
 ```yaml
 guardrails:
-  # The shipped 'security' default — already seeded into the database by migration 010.
+  # The shipped 'security' default, already seeded into the database by migration 010.
   # Listed here for visibility; including it in YAML lets you customise the active
   # content. is_builtin and default_content are migration-managed and ignored on the
   # wire (the migration's seeded default_content is preserved across imports).
   - name: security
     description: "Default protection against indirect prompt injection."
     content: |
-      ## Security guardrails — read before every action
+      ## Security guardrails, read before every action
       … (see migrations/010_guardrails.sql for the full default text)
     enabled: true
     position: 0

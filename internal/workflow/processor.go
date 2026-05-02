@@ -94,7 +94,7 @@ func (p *Processor) runWorker(ctx context.Context, wg *sync.WaitGroup) {
 		}
 		// Mark completed regardless of HandleEvent's error: the queue's
 		// job is "did this event flow through the worker?", not "did the
-		// agent succeed?" — agent failures are surfaced through traces /
+		// agent succeed?", agent failures are surfaced through traces /
 		// /events / dispatch counters, not by replaying the same event
 		// forever.
 		if err := st.MarkEventCompleted(qe.ID); err != nil {
@@ -109,7 +109,7 @@ func (p *Processor) runWorker(ctx context.Context, wg *sync.WaitGroup) {
 // drainReady until Run installs the real drain context via setDrainCtx.
 // This guarantees that any item dequeued during the brief race window between
 // ctx cancellation and setDrainCtx being called still receives a live context
-// with the full shutdown deadline — not an already-cancelled sentinel.
+// with the full shutdown deadline, not an already-cancelled sentinel.
 // The channel close in setDrainCtx provides the happens-before guarantee so
 // no separate mutex is required on the drainCtx read.
 func (p *Processor) processingCtx(ctx context.Context) context.Context {

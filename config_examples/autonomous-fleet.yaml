@@ -1,4 +1,4 @@
-# autonomous-fleet.yaml — production-shaped fleet
+# autonomous-fleet.yaml, production-shaped fleet
 #
 # Mirrors the maintainer's own running setup: a scout that surveys
 # the repo on a cron and opens issues, a coder that picks up

@@ -230,7 +230,7 @@ func TestUpsertBackendAppliesDefaults(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	// Persist a backend with zero numeric fields — the same payload that
+	// Persist a backend with zero numeric fields, the same payload that
 	// POST /api/store/backends would send when omitting timeout_seconds and
 	// max_prompt_chars from the request body.
 	b := fleet.Backend{Command: "claude"}
@@ -508,7 +508,7 @@ func TestUpsertRepoRejectedWithUnknownAgent(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	// No agent seeded — binding references "ghost". The FK constraint on
+	// No agent seeded, binding references "ghost". The FK constraint on
 	// bindings.agent may fire first, or validateCrossRefs catches it; either
 	// way an error must be returned and nothing must be committed.
 	err := store.UpsertRepo(db, fleet.Repo{
@@ -535,7 +535,7 @@ func TestDeleteBackendRejectedWhenAgentReferences(t *testing.T) {
 	db := openTestDB(t)
 
 	// Seed two backends so that the "at least one backend" constraint is not the
-	// reason the delete fails — only the agent reference should block it.
+	// reason the delete fails, only the agent reference should block it.
 	seedBackend(t, db, "claude")
 	seedBackend(t, db, "codex")
 	if err := store.UpsertAgent(db, fleet.Agent{
@@ -863,7 +863,7 @@ func TestUpsertRepoRejectedWithNoTrigger(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
-	// Binding has no labels, events, or cron — invalid.
+	// Binding has no labels, events, or cron, invalid.
 	err := store.UpsertRepo(db, fleet.Repo{
 		Name:    "owner/repo",
 		Enabled: true,
@@ -887,7 +887,7 @@ func TestUpsertRepoRejectedWithMixedTriggers(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
-	// Binding mixes labels and events — invalid.
+	// Binding mixes labels and events, invalid.
 	err := store.UpsertRepo(db, fleet.Repo{
 		Name:    "owner/repo",
 		Enabled: true,
@@ -1017,7 +1017,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	// Backend — mixed-case name should be stored lowercase.
+	// Backend, mixed-case name should be stored lowercase.
 	if err := store.UpsertBackend(db, "Claude", fleet.Backend{
 		Command: "claude",
 	}); err != nil {
@@ -1034,7 +1034,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 		t.Error("original mixed-case key 'Claude' should not be present after normalisation")
 	}
 
-	// Skill — mixed-case key should be stored lowercase.
+	// Skill, mixed-case key should be stored lowercase.
 	if err := store.UpsertSkill(db, "Architect", fleet.Skill{Prompt: "p"}); err != nil {
 		t.Fatalf("UpsertSkill: %v", err)
 	}
@@ -1046,7 +1046,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 		t.Errorf("skill name not normalised: got keys %v, want 'architect'", slices.Collect(maps.Keys(skills)))
 	}
 
-	// Agent — mixed-case name, backend, and skill reference should be stored lowercase.
+	// Agent, mixed-case name, backend, and skill reference should be stored lowercase.
 	if err := store.UpsertAgent(db, fleet.Agent{
 		Name:        "Coder",
 		Backend:     "Claude",
@@ -1074,7 +1074,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 		t.Errorf("agent skills not normalised: got %v, want ['architect']", got.Skills)
 	}
 
-	// Repo — binding agent name should be stored lowercase.
+	// Repo, binding agent name should be stored lowercase.
 	if err := store.UpsertRepo(db, fleet.Repo{
 		Name:    "owner/repo",
 		Enabled: true,
@@ -1097,7 +1097,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 // TestUpsertSkillNormalizesPrompt verifies that UpsertSkill trims Prompt
 // before persisting, matching the normalization startup applies. A
 // whitespace-only prompt must be trimmed to "" and then rejected by
-// validation — otherwise the write API would persist state that the daemon
+// validation, otherwise the write API would persist state that the daemon
 // refuses to load on restart.
 func TestUpsertSkillNormalizesPrompt(t *testing.T) {
 	t.Parallel()

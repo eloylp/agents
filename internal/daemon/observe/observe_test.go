@@ -131,7 +131,7 @@ func newSchedulerWithStatuses(t *testing.T, statuses []scheduler.AgentStatus) *s
 
 // newPlainHandler builds a Handler with a tempdir-backed obs.Store. Most
 // observe-handler tests don't care about scheduling, dispatch stats, or
-// memory — passing nil for those slots keeps the call sites short.
+// memory, passing nil for those slots keeps the call sites short.
 func newPlainHandler(t *testing.T) *Handler {
 	t.Helper()
 	fx := newFixture(t, nil)
@@ -799,7 +799,7 @@ func TestHandleMemorySQLiteMode(t *testing.T) {
 			// Only assert the X-Memory-Mtime header when the test pinned an
 			// expected value. The real SQLite store auto-stamps updated_at
 			// on every write, so a "want empty" assertion no longer makes
-			// sense — mtime is always populated for present rows.
+			// sense, mtime is always populated for present rows.
 			if tc.wantMtime != "" {
 				if got := rec.Header().Get("X-Memory-Mtime"); got != tc.wantMtime {
 					t.Fatalf("X-Memory-Mtime: want %q, got %q", tc.wantMtime, got)

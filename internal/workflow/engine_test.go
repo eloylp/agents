@@ -328,7 +328,7 @@ func TestEngineDispatchEventPayloadPropagatedToPrompt(t *testing.T) {
 	if runner.callCount() != 1 {
 		t.Fatalf("expected 1 run, got %d", runner.callCount())
 	}
-	// Dispatch context is per-run content — it must appear in the User part.
+	// Dispatch context is per-run content, it must appear in the User part.
 	for _, want := range []string{"target_agent", "please review", "root-abc"} {
 		if !strings.Contains(capturedUser, want) {
 			t.Errorf("User missing %q\nfull User:\n%s", want, capturedUser)
@@ -424,7 +424,7 @@ func newTestEngineWithDedup(t *testing.T, cfgMutator func(*config.Config)) (*Eng
 
 // TestFanOutDeduplicatesSequentialEventsWithinTTL verifies that a second event
 // for the same (agent, repo, number) arriving within the dedup window is
-// suppressed — the claim committed by the first run blocks the second.
+// suppressed, the claim committed by the first run blocks the second.
 func TestFanOutDeduplicatesSequentialEventsWithinTTL(t *testing.T) {
 	t.Parallel()
 	e, runner, _ := newTestEngineWithDedup(t, nil)
@@ -484,7 +484,7 @@ func TestFanOutDeduplicatesConcurrentEvents(t *testing.T) {
 }
 
 // TestFanOutDifferentNumbersAreNotDeduped verifies that events for different
-// (agent, repo, number) keys each get their own run — dedup must not
+// (agent, repo, number) keys each get their own run, dedup must not
 // collapse distinct items under the same agent/repo umbrella.
 func TestFanOutDifferentNumbersAreNotDeduped(t *testing.T) {
 	t.Parallel()
@@ -679,7 +679,7 @@ func TestDispatchDedupPreventsDoubleEnqueue(t *testing.T) {
 
 // TestFanOutDedupSurvivesTTLExpiry is a regression test for the in-flight
 // refcount fix: a second identical event arriving after dedup_window_seconds
-// has elapsed — but while the first run is still executing — must be suppressed.
+// has elapsed, but while the first run is still executing, must be suppressed.
 // Before the fix, TryClaimForDispatch only checked the TTL entry; once the
 // entry expired the second event could claim the slot and start a concurrent
 // duplicate run.
@@ -759,7 +759,7 @@ func TestAgentsRunDeduplicatesDuplicateRequests(t *testing.T) {
 		}
 	}
 
-	// First on-demand request — must run the agent.
+	// First on-demand request, must run the agent.
 	if err := e.HandleEvent(context.Background(), onDemandEvent()); err != nil {
 		t.Fatalf("first HandleEvent: %v", err)
 	}
@@ -767,7 +767,7 @@ func TestAgentsRunDeduplicatesDuplicateRequests(t *testing.T) {
 		t.Fatalf("expected 1 run after first request, got %d", got)
 	}
 
-	// Second identical on-demand request within the dedup window — must be suppressed.
+	// Second identical on-demand request within the dedup window, must be suppressed.
 	if err := e.HandleEvent(context.Background(), onDemandEvent()); err != nil {
 		t.Fatalf("second HandleEvent: %v", err)
 	}
@@ -781,7 +781,7 @@ func TestAgentsRunDeduplicatesDuplicateRequests(t *testing.T) {
 
 // TestEngineConcurrentReadsAreRaceFree verifies that concurrent
 // HandleEvent calls don't race on internal engine state. The pre-cutover
-// hot-reload path (UpdateConfigAndRunners) is gone — every event reads
+// hot-reload path (UpdateConfigAndRunners) is gone, every event reads
 // fresh from SQLite, so the prior cfgMu/runnersMu race tests don't apply.
 // Run with -race.
 func TestEngineConcurrentReadsAreRaceFree(t *testing.T) {
@@ -859,7 +859,7 @@ func autonomousEvent(repo, agentName string) Event {
 
 // TestHandleEventAutonomousRunsTargetAgent verifies the engine handles an
 // "cron" event by resolving the target agent from the payload and
-// running it — same shape as agents.run, no binding lookup required (the
+// running it, same shape as agents.run, no binding lookup required (the
 // cron's fire-time authority is enough).
 func TestHandleEventAutonomousRunsTargetAgent(t *testing.T) {
 	t.Parallel()
@@ -899,7 +899,7 @@ func TestHandleEventAutonomousFiresLastRunRecorder(t *testing.T) {
 }
 
 // TestHandleEventNonAutonomousSkipsLastRunRecorder verifies that label/event
-// driven runs (webhook path) do not fire the LastRunRecorder hook — only
+// driven runs (webhook path) do not fire the LastRunRecorder hook, only
 // autonomous runs update the cron schedule view.
 func TestHandleEventNonAutonomousSkipsLastRunRecorder(t *testing.T) {
 	t.Parallel()

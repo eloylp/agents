@@ -8,7 +8,7 @@ import (
 )
 
 // responseSchema is the structured output JSON schema shared by all backends.
-// It is embedded in the binary so the daemon is fully self-contained — no
+// It is embedded in the binary so the daemon is fully self-contained, no
 // external file mounts or inline JSON in config needed.
 //
 // - Claude backends receive it via --output-format stream-json --json-schema <string>

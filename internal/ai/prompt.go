@@ -20,7 +20,7 @@ type RosterEntry struct {
 }
 
 // PromptContext is the runtime data passed when rendering an agent's prompt.
-// Fields are optional — zero values are simply omitted from the rendered
+// Fields are optional, zero values are simply omitted from the rendered
 // output.
 type PromptContext struct {
 	Repo        string // "owner/repo"
@@ -28,7 +28,7 @@ type PromptContext struct {
 	Backend     string // resolved backend name (claude, codex, ...)
 	Memory      string // existing memory snapshot injected before each autonomous run
 	HasMemory    bool  // true when the caller is loading memory for this run; enables the memory section
-	EventKind   string         // e.g. "issues.labeled", "push" — empty for autonomous runs
+	EventKind   string         // e.g. "issues.labeled", "push", empty for autonomous runs
 	Actor       string         // GitHub login that triggered the event; empty for autonomous runs
 	Payload     map[string]any // kind-specific event fields; nil for autonomous runs
 
@@ -36,7 +36,7 @@ type PromptContext struct {
 	// The current agent is excluded. Only populated when dispatch is configured.
 	Roster []RosterEntry
 
-	// Dispatch context — populated when this agent was invoked via agent.dispatch.
+	// Dispatch context, populated when this agent was invoked via agent.dispatch.
 	InvokedBy     string // name of the agent that dispatched this run
 	Reason        string // reason provided by the dispatching agent
 	RootEventID   string // ID of the root (non-dispatch) event that started the chain
@@ -47,24 +47,24 @@ type PromptContext struct {
 // RenderedPrompt with two parts:
 //
 //   - System: stable content that is identical across every run of the same
-//     agent on the same repo — operator-set guardrails (prepended at the very
+//     agent on the same repo, operator-set guardrails (prepended at the very
 //     top so they precede everything else the model reads), the no-PR guard
 //     (when allow_prs=false), concatenated skill guidance, the agent's own
 //     prompt body, and the available-experts roster. Backends that support a
 //     native system channel (e.g. Claude's --append-system-prompt) can deliver
 //     this part separately to benefit from prompt caching.
 //
-//   - User: per-run content — the ## Runtime context block containing the
+//   - User: per-run content, the ## Runtime context block containing the
 //     repo, event, actor, payload, and memory. This changes every run and must
 //     travel as the user turn.
 //
 // Guardrails are passed in render order (caller selects only enabled rows
 // and orders them by position ASC, name ASC); each entry's Content is
 // emitted verbatim, separated by a blank line. The renderer does not
-// inspect the Enabled or Position fields itself — those are the caller's
+// inspect the Enabled or Position fields itself, those are the caller's
 // gate, so the renderer stays a pure text composer.
 //
-// No Go templates, no {{.Field}} substitution — just text composition. The
+// No Go templates, no {{.Field}} substitution, just text composition. The
 // agent's prompt is expected to be self-contained.
 func RenderAgentPrompt(agent fleet.Agent, skills map[string]fleet.Skill, guardrails []fleet.Guardrail, ctx PromptContext) (RenderedPrompt, error) {
 	var sys strings.Builder

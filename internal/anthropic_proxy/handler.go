@@ -136,7 +136,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // derived from a single non-streaming upstream response. The client sees the
 // whole response arrive as one burst of events rather than token-by-token, but
 // the event shape and ordering match what clients (claude CLI) expect, so they
-// parse without error. Upstream streaming is not yet piped through — this is a
+// parse without error. Upstream streaming is not yet piped through, this is a
 // minimally viable implementation that unblocks real claude CLI usage.
 func (h *Handler) writeStreamingResponse(w http.ResponseWriter, resp MessagesResponse) {
 	w.Header().Set("Content-Type", "text/event-stream")

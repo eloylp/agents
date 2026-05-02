@@ -104,7 +104,7 @@ func requireAtLeastOne(q querier, countQuery, entity, zeroMsg string) error {
 // cron-expression parseability. op ("import" or "replace") is used verbatim in
 // error messages.
 //
-// "At least one enabled repo" is intentionally NOT enforced here — disabling
+// "At least one enabled repo" is intentionally NOT enforced here, disabling
 // all repos is a legitimate user action (fleet maintenance, evaluating prompts
 // on a different repo) and the daemon runs cleanly with zero enabled repos.
 // See issue #302.
@@ -781,7 +781,7 @@ func nilSafeStrings(s []string) []string {
 }
 
 // DeleteRepo removes a repo and all of its bindings. Deleting the last enabled
-// (or only) repo is allowed — see issue #302; the daemon runs cleanly with zero
+// (or only) repo is allowed, see issue #302; the daemon runs cleanly with zero
 // enabled repos.
 func DeleteRepo(db *sql.DB, name string) error {
 	tx, err := db.Begin()

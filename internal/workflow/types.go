@@ -15,7 +15,7 @@ type RepoRef struct {
 // and push the QueuedEvent onto the in-memory channel; workers receive
 // it, mark the row started, run the agent, and mark the row completed.
 // On daemon startup the replay step also pushes QueuedEvents onto the
-// channel for any row whose completed_at is still NULL — events whose
+// channel for any row whose completed_at is still NULL, events whose
 // runs were interrupted by a crash get a second chance.
 type QueuedEvent struct {
 	ID    int64

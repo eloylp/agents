@@ -55,7 +55,7 @@ func toolGetGuardrail(deps Deps) server.ToolHandlerFunc {
 
 // toolCreateGuardrail upserts an operator-defined guardrail. The is_builtin
 // and default_content fields are migration-managed and intentionally not
-// part of the wire shape — passing them is silently ignored, matching the
+// part of the wire shape, passing them is silently ignored, matching the
 // REST POST /guardrails handler.
 func toolCreateGuardrail(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {

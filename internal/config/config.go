@@ -2,20 +2,20 @@
 //
 // The config file is structured in three top-level sections:
 //
-//	daemon — how the service runs (logging, HTTP, queues, AI backends)
-//	skills — reusable guidance blocks referenced by agents
-//	agents — named capabilities (backend + skills + prompt)
-//	repos  — wiring: which agents run on which repo, and when
+//	daemon, how the service runs (logging, HTTP, queues, AI backends)
+//	skills, reusable guidance blocks referenced by agents
+//	agents, named capabilities (backend + skills + prompt)
+//	repos, wiring: which agents run on which repo, and when
 //
 // See config.example.yaml for a complete annotated example.
 //
 // The package is split across a handful of files by concern:
 //
-//	config.go             — types, Load / FinishLoad entry points, lookups
-//	defaults.go           — applyDefaults, normalize, setDefault helpers
-//	secrets.go            — secret env-var resolution
-//	validate.go           — internal validate* tree called from Config.validate()
-//	validate_entities.go  — exported ValidateCrossRefs / ValidateEntities for the
+//	config.go, types, Load / FinishLoad entry points, lookups
+//	defaults.go, applyDefaults, normalize, setDefault helpers
+//	secrets.go, secret env-var resolution
+//	validate.go, internal validate* tree called from Config.validate()
+//	validate_entities.go, exported ValidateCrossRefs / ValidateEntities for the
 //	                        SQLite CRUD layer (entity-level checks, no daemon section)
 package config
 

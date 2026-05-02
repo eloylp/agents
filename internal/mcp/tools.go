@@ -153,7 +153,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("get_trace_prompt",
-				mcpgo.WithDescription("Return the composed prompt the daemon sent to the AI CLI for this span — the exact System+User text the agent saw. Stored gzipped on the trace row; this tool decompresses on the fly. Returns an error when no prompt was recorded (pre-009-migration spans). Same path as GET /traces/{span_id}/prompt."),
+				mcpgo.WithDescription("Return the composed prompt the daemon sent to the AI CLI for this span, the exact System+User text the agent saw. Stored gzipped on the trace row; this tool decompresses on the fly. Returns an error when no prompt was recorded (pre-009-migration spans). Same path as GET /traces/{span_id}/prompt."),
 				mcpgo.WithString("span_id",
 					mcpgo.Required(),
 					mcpgo.Description("Span ID to fetch the prompt for."),
@@ -201,7 +201,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("export_config",
-				mcpgo.WithDescription("Return the CRUD-mutable fleet config (agents, skills, repos, ai_backends) as a YAML fragment. Same body as GET /export — suitable for piping back into POST /import."),
+				mcpgo.WithDescription("Return the CRUD-mutable fleet config (agents, skills, repos, ai_backends) as a YAML fragment. Same body as GET /export, suitable for piping back into POST /import."),
 			),
 			toolExportConfig(deps),
 		)
@@ -302,7 +302,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("delete_guardrail",
-				mcpgo.WithDescription("Delete a guardrail by name. Built-ins (e.g. 'security') can be deleted too — the dashboard double-confirms in the UI; the MCP path does not. Same path as DELETE /guardrails/{name}."),
+				mcpgo.WithDescription("Delete a guardrail by name. Built-ins (e.g. 'security') can be deleted too, the dashboard double-confirms in the UI; the MCP path does not. Same path as DELETE /guardrails/{name}."),
 				mcpgo.WithString("name",
 					mcpgo.Required(),
 					mcpgo.Description("Guardrail name (case-insensitive; matched after lowercasing)."),
@@ -492,7 +492,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 					mcpgo.Description("Repo full name \"owner/repo\". Lowercased and trimmed by the store."),
 				),
 				mcpgo.WithBoolean("enabled",
-					mcpgo.Description("Whether the repo is active. Defaults to false — callers must opt in explicitly, matching POST /repos."),
+					mcpgo.Description("Whether the repo is active. Defaults to false, callers must opt in explicitly, matching POST /repos."),
 				),
 				mcpgo.WithArray("bindings",
 					mcpgo.Description("Optional list of agent bindings on this repo. Each binding wires one agent to exactly one trigger: labels (array), events (array), or cron (string). An agent may appear multiple times with different triggers. Replacing a repo replaces the whole bindings list."),
@@ -513,7 +513,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("update_repo",
-				mcpgo.WithDescription("Toggle a repo's enabled flag without touching its bindings. Bindings are preserved with their current IDs — unlike create_repo, which is a full-replace and would churn binding IDs. Use this when the only change is the repo's active state. Same path as PATCH /repos/{owner}/{repo}."),
+				mcpgo.WithDescription("Toggle a repo's enabled flag without touching its bindings. Bindings are preserved with their current IDs, unlike create_repo, which is a full-replace and would churn binding IDs. Use this when the only change is the repo's active state. Same path as PATCH /repos/{owner}/{repo}."),
 				mcpgo.WithString("name",
 					mcpgo.Required(),
 					mcpgo.Description("Repo full name \"owner/repo\" (case-insensitive; matched after lowercasing)."),
@@ -693,7 +693,7 @@ func jsonResult(v any) (*mcpgo.CallToolResult, error) {
 }
 
 // nilSafe normalises a nil slice to an empty slice so JSON output is a
-// predictable [] rather than null. Consumers — especially LLMs — parse the
+// predictable [] rather than null. Consumers, especially LLMs, parse the
 // two differently, and we already follow the same convention in REST handlers.
 func nilSafe[T any](xs []T) []T {
 	if xs == nil {
@@ -720,7 +720,7 @@ func trimmedString(req mcpgo.CallToolRequest, key string) (string, bool) {
 
 // trimmedStringOptional reads a string argument without treating absence as
 // an error. It mirrors trimmedString but returns (value, true) even when the
-// caller omits the argument — useful for optional filters like `since`.
+// caller omits the argument, useful for optional filters like `since`.
 func trimmedStringOptional(req mcpgo.CallToolRequest, key string) (string, bool) {
 	raw, err := req.RequireString(key)
 	if err != nil {
@@ -729,7 +729,7 @@ func trimmedStringOptional(req mcpgo.CallToolRequest, key string) (string, bool)
 	return strings.TrimSpace(raw), true
 }
 
-// isTraversalComponent flags identifiers that clean to "." or ".." — the same
+// isTraversalComponent flags identifiers that clean to "." or "..", the same
 // rejection GET /memory/{agent}/{repo} applies. Anything more exotic is
 // canonicalised by ai.NormalizeToken downstream and cannot escape the store.
 func isTraversalComponent(s string) bool {

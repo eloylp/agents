@@ -1,7 +1,7 @@
 package fleet
 
 // Agent is a named capability: a backend, a set of skills, and a prompt.
-// Agents are pure definitions — they don't run on their own. Repos bind them
+// Agents are pure definitions, they don't run on their own. Repos bind them
 // to triggers.
 type Agent struct {
 	Name    string   `yaml:"name"`

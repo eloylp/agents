@@ -105,7 +105,7 @@ func testFixture(t *testing.T) Deps {
 }
 
 // testFixtureWithConfig is testFixture with an explicit config. The
-// store is still seeded from fixtureConfig — callers that need
+// store is still seeded from fixtureConfig, callers that need
 // divergent state should call deps.Store.Upsert*() after construction.
 func testFixtureWithConfig(t *testing.T, cfg *config.Config) Deps {
 	t.Helper()
@@ -411,7 +411,7 @@ func TestToolListRepos(t *testing.T) {
 	if !ok || len(bindings) != 2 {
 		t.Fatalf("owner/one should have 2 bindings, got %+v", one["bindings"])
 	}
-	// All trigger fields are always included (non-sparse shape) — empty ones
+	// All trigger fields are always included (non-sparse shape), empty ones
 	// just carry empty values. Consumers rely on a stable field set.
 	labelBinding := bindings[0].(map[string]any)
 	cronBinding := bindings[1].(map[string]any)
@@ -449,7 +449,7 @@ func TestToolGetRepo(t *testing.T) {
 		t.Fatalf("expected 2 bindings, got %+v", got["bindings"])
 	}
 
-	// Disabled repos still resolve — callers decide what to do with enabled=false.
+	// Disabled repos still resolve, callers decide what to do with enabled=false.
 	req.Params.Arguments = map[string]any{"name": "owner/two"}
 	res, err = toolGetRepo(deps)(context.Background(), req)
 	if err != nil {
@@ -478,7 +478,7 @@ func TestToolGetStatusPassesThrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Status JSON is the same payload GET /status emits — assert the wire
+	// Status JSON is the same payload GET /status emits, assert the wire
 	// shape carries the expected top-level fields rather than pinning an
 	// exact string, which would break on every status-shape change.
 	var got map[string]any
@@ -677,7 +677,7 @@ func TestToolListEventsNilSlice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Nil slice from the store should serialise as [] not null — easier for
+	// Nil slice from the store should serialise as [] not null, easier for
 	// LLM clients that don't distinguish the two.
 	got := textOf(t, res)
 	if got != "[]" {
@@ -842,7 +842,7 @@ func TestToolGetTracePromptRequiresSpanID(t *testing.T) {
 func TestToolGetGraphSeedsNodesFromFleetAndEdges(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
-	// Insert directly so the edge is visible immediately — RecordDispatch
+	// Insert directly so the edge is visible immediately, RecordDispatch
 	// writes asynchronously, which races with toolGetGraph below.
 	if _, err := deps.Store.DB().Exec(
 		`INSERT INTO dispatch_history (from_agent, to_agent, repo, number, reason) VALUES (?,?,?,?,?)`,
@@ -996,7 +996,7 @@ func TestToolGetConfigReturnsRedactedJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Body is the same payload GET /config emits — assert it parses as JSON
+	// Body is the same payload GET /config emits, assert it parses as JSON
 	// and carries the expected top-level fields.
 	var got map[string]any
 	if err := json.Unmarshal([]byte(textOf(t, res)), &got); err != nil {
@@ -1220,7 +1220,7 @@ func TestToolCreateAgentPropagatesError(t *testing.T) {
 	deps := testFixture(t)
 
 	// A blank/whitespace name triggers the real *store.ErrValidation from
-	// UpsertAgent — same path as REST, surfaced as a tool-level error.
+	// UpsertAgent, same path as REST, surfaced as a tool-level error.
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "   ", "backend": "claude"}
 
@@ -1239,7 +1239,7 @@ func TestToolCreateAgentPropagatesError(t *testing.T) {
 func TestToolDeleteAgentNormalizesAndForwardsCascade(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
-	// Seed an extra agent that has no bindings — we can delete it without cascade.
+	// Seed an extra agent that has no bindings, we can delete it without cascade.
 	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{Name: "linter", Backend: "claude", Prompt: "x"}); err != nil {
 		t.Fatalf("seed linter: %v", err)
 	}
@@ -1284,7 +1284,7 @@ func TestToolDeleteAgentRequiresName(t *testing.T) {
 func TestToolDeleteAgentPropagatesConflict(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
-	// "coder" has a binding in fixtureConfig — delete-without-cascade should
+	// "coder" has a binding in fixtureConfig, delete-without-cascade should
 	// surface the real *store.ErrConflict.
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "coder"}
@@ -1375,7 +1375,7 @@ func TestToolCreateSkillRejectsBlankName(t *testing.T) {
 func TestToolDeleteSkillNormalizesAndForwards(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
-	// "security" is seeded but not referenced by any agent — safe to delete.
+	// "security" is seeded but not referenced by any agent, safe to delete.
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "  Security  "}
 
@@ -1415,7 +1415,7 @@ func TestToolDeleteSkillRequiresName(t *testing.T) {
 func TestToolDeleteSkillPropagatesConflict(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
-	// "testing" is referenced by the "coder" agent — deletion conflicts.
+	// "testing" is referenced by the "coder" agent, deletion conflicts.
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "testing"}
 
@@ -1436,7 +1436,7 @@ func TestToolDeleteSkillPropagatesConflict(t *testing.T) {
 func TestToolCreateBackendForwardsAndReturnsCanonical(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
-	// Custom backend names need a local_model_url to satisfy validation —
+	// Custom backend names need a local_model_url to satisfy validation , 
 	// otherwise only the built-in claude/codex/claude_local names are accepted.
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
@@ -1559,7 +1559,7 @@ func TestToolDeleteBackendRequiresName(t *testing.T) {
 func TestToolDeleteBackendPropagatesConflict(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
-	// "claude" is referenced by both seeded agents — delete should conflict.
+	// "claude" is referenced by both seeded agents, delete should conflict.
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "claude"}
 
@@ -1620,7 +1620,7 @@ func TestToolCreateRepoForwardsAndReturnsCanonical(t *testing.T) {
 		t.Errorf("first binding wrong: %+v", b)
 	}
 	// The MCP tool must preserve the *bool distinction so the store sees
-	// "explicitly disabled" rather than "default enabled" — otherwise a
+	// "explicitly disabled" rather than "default enabled", otherwise a
 	// disabled binding would flip back on after a round-trip.
 	if b := persisted.Use[1]; b.Agent != "reviewer" || b.Cron != "0 * * * *" || b.Enabled == nil || *b.Enabled {
 		t.Errorf("second binding wrong (expected explicit enabled=false): %+v", b)
@@ -1746,7 +1746,7 @@ func TestToolCreateRepoRejectsBadBindingsShape(t *testing.T) {
 // for nested binding fields. REST decodes POST /repos through json.Unmarshal
 // into storeBindingJSON, which rejects wrong JSON types; parseBindings must
 // refuse the same payloads rather than silently coercing them. In particular,
-// `{"enabled":"false"}` must NOT be treated as omitted — that would leave
+// `{"enabled":"false"}` must NOT be treated as omitted, that would leave
 // Binding.Enabled=nil (default enabled) and silently flip the caller's intent.
 func TestToolCreateRepoRejectsBadBindingFieldTypes(t *testing.T) {
 	t.Parallel()
@@ -1934,7 +1934,7 @@ func TestToolDeleteRepoNormalizesAndForwards(t *testing.T) {
 	deps := testFixture(t)
 	// Seed a separate enabled repo so the fleet keeps at least one enabled
 	// repo after we delete owner/two (the disabled fixture repo isn't a
-	// safe test target — the fleet must keep ≥1 enabled repo).
+	// safe test target, the fleet must keep ≥1 enabled repo).
 	if _, err := deps.Repos.UpsertRepo(fleet.Repo{Name: "owner/three", Enabled: true}); err != nil {
 		t.Fatalf("seed owner/three: %v", err)
 	}
@@ -1979,7 +1979,7 @@ func TestToolDeleteRepoIsIdempotent(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
 
-	// The store delete is idempotent for unknown names — a missing repo
+	// The store delete is idempotent for unknown names, a missing repo
 	// is treated as already-deleted rather than a 404. The MCP tool
 	// surfaces the same shape ("status":"deleted") so callers can issue a
 	// retry without special-casing the missing-row response.

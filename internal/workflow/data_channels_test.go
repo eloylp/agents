@@ -44,7 +44,7 @@ func TestConcurrentPushAndCloseDoesNotPanic(t *testing.T) {
 		}()
 	}
 
-	// Close while writers are still active — must not panic.
+	// Close while writers are still active, must not panic.
 	dc.Close()
 	wg.Wait()
 }
@@ -142,7 +142,7 @@ func TestReplayQueuedDeliversWithoutPersisting(t *testing.T) {
 		t.Fatal("ReplayQueued did not deliver onto the channel")
 	}
 
-	// The pending list must still contain exactly the seeded row — no
+	// The pending list must still contain exactly the seeded row, no
 	// extra row should have been inserted by the replay path.
 	pending, err := st.PendingEventIDs()
 	if err != nil {

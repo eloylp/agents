@@ -29,7 +29,7 @@ type OrphanedAgentsResponse struct {
 }
 
 // HandleOrphansStatus serves GET /agents/orphans/status. It computes the
-// orphan list on the fly from the current SQLite snapshot — there is no
+// orphan list on the fly from the current SQLite snapshot, there is no
 // cache.
 func (h *Handler) HandleOrphansStatus(w http.ResponseWriter, _ *http.Request) {
 	orphans, err := h.OrphanedAgents()
@@ -69,7 +69,7 @@ func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
 
 	// Index every repo that references an agent, regardless of repo or
 	// binding enabled state. The orphan badge fires on a "model not in
-	// the backend catalog" criterion, not on runtime reachability — so
+	// the backend catalog" criterion, not on runtime reachability, so
 	// the user needs to see every reference that would need fixing (or
 	// re-enabling) to clear the orphan, including currently-paused
 	// bindings.

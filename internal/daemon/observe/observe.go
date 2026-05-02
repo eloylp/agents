@@ -3,7 +3,7 @@
 // owns the wire types and the SSE helper.
 //
 // The composing daemon constructs a Handler with concrete pointers to every
-// component the observability views aggregate from — the daemon ships as
+// component the observability views aggregate from, the daemon ships as
 // one binary and these are the same instances the rest of the daemon uses.
 // Tests build the same shape against a tempdir SQLite, mirroring the
 // fixture pattern internal/mcp uses.
@@ -78,7 +78,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 
 // ── /dispatches ────────────────────────────────────────────────────────────
 
-// HandleDispatches serves GET /dispatches — the current dispatch counters as
+// HandleDispatches serves GET /dispatches, the current dispatch counters as
 // reported by the DispatchStatsProvider. Returns an empty object when no
 // provider is configured (e.g. dispatch disabled).
 func (h *Handler) HandleDispatches(w http.ResponseWriter, _ *http.Request) {
@@ -107,7 +107,7 @@ type eventJSON struct {
 	Agents  []string       `json:"agents,omitempty"`
 }
 
-// HandleEvents serves GET /events — recent event history.
+// HandleEvents serves GET /events, recent event history.
 // An optional ?since=<RFC3339> query parameter filters to events after that
 // time.
 func (h *Handler) HandleEvents(w http.ResponseWriter, r *http.Request) {
@@ -144,7 +144,7 @@ func (h *Handler) HandleEventsStream(w http.ResponseWriter, r *http.Request) {
 
 // agentsForEvent resolves the set of agents that ran (or are running)
 // for a given event id by querying the traces store. Empty when no
-// span has been recorded yet — either the event hasn't been picked up,
+// span has been recorded yet, either the event hasn't been picked up,
 // or its run hasn't reached the recording site, or no binding matched.
 // De-duplicated; preserves trace insertion order.
 func agentsForEvent(s *obstore.Store, eventID string) []string {
@@ -172,14 +172,14 @@ func agentsForEvent(s *obstore.Store, eventID string) []string {
 
 // ── /traces ────────────────────────────────────────────────────────────────
 
-// HandleTraces serves GET /traces — the most recent agent run spans.
+// HandleTraces serves GET /traces, the most recent agent run spans.
 func (h *Handler) HandleTraces(w http.ResponseWriter, _ *http.Request) {
 	spans := h.events.ListTraces()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(spans)
 }
 
-// HandleTrace serves GET /traces/{root_event_id} — all spans for one root.
+// HandleTrace serves GET /traces/{root_event_id}, all spans for one root.
 func (h *Handler) HandleTrace(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["root_event_id"]
 	spans := h.events.TracesByRootEventID(id)
@@ -197,7 +197,7 @@ func (h *Handler) HandleTracesStream(w http.ResponseWriter, r *http.Request) {
 	serveSSE(w, r, h.events.TracesSSE)
 }
 
-// HandleTraceSteps serves GET /traces/{span_id}/steps — the tool-loop
+// HandleTraceSteps serves GET /traces/{span_id}/steps, the tool-loop
 // transcript for a single span. Returns an empty JSON array when no steps
 // have been recorded (e.g. the span used a non-claude backend).
 func (h *Handler) HandleTraceSteps(w http.ResponseWriter, r *http.Request) {
@@ -214,7 +214,7 @@ func (h *Handler) HandleTraceSteps(w http.ResponseWriter, r *http.Request) {
 // Events streaming the AI CLI's stdout JSONL line-by-line for one
 // in-flight (or recently-finished) span. Replays the per-span ring
 // buffer first, then live-tails until the run ends or the client
-// disconnects. Returns 404 when no stream exists for the span — either
+// disconnects. Returns 404 when no stream exists for the span, either
 // the span never started, was never registered, or its grace window
 // has elapsed.
 func (h *Handler) HandleTraceStream(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +226,7 @@ func (h *Handler) HandleTraceStream(w http.ResponseWriter, r *http.Request) {
 	}
 	defer h.events.Runs.UnsubscribeStream(spanID, ch)
 
-	// SSE headers + flush controller. Mirrors serveSSE plumbing — kept
+	// SSE headers + flush controller. Mirrors serveSSE plumbing, kept
 	// inline because the data source is a per-span channel + history,
 	// not a global hub.
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -274,7 +274,7 @@ func (h *Handler) HandleTraceStream(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		case line, ok := <-ch:
 			if !ok {
-				// Run ended and the hub closed the channel — emit a
+				// Run ended and the hub closed the channel, emit a
 				// terminal SSE event so the UI can mark the modal as
 				// complete instead of treating the disconnect as an
 				// error.
@@ -289,7 +289,7 @@ func (h *Handler) HandleTraceStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// HandleTracePrompt serves GET /traces/{span_id}/prompt — the composed
+// HandleTracePrompt serves GET /traces/{span_id}/prompt, the composed
 // prompt that was sent to the AI CLI for this run. Stored gzipped in
 // the traces row; the store decompresses on the fly. Returns 404 when
 // no prompt was recorded (pre-009-migration spans). Wire shape is plain
@@ -336,7 +336,7 @@ type dispatchRecord struct {
 	Reason string `json:"reason"`
 }
 
-// HandleGraph serves GET /graph — the current agent interaction graph.
+// HandleGraph serves GET /graph, the current agent interaction graph.
 // Nodes are seeded from the configured fleet (issue #151: "Nodes = agents")
 // and any edge endpoints not already covered by the current config (e.g.
 // agents removed from config but with recorded dispatch history).
@@ -408,7 +408,7 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, _ *http.Request) {
 
 // ── /memory ────────────────────────────────────────────────────────────────
 
-// HandleMemory serves GET /memory/{agent}/{repo} — returns the raw markdown
+// HandleMemory serves GET /memory/{agent}/{repo}, returns the raw markdown
 // content of the agent's memory for the given repo. The {repo} path segment
 // is expected in the format "owner_repo" (underscore separator), matching
 // both the filesystem layout and the normalised key in the SQLite memory

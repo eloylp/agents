@@ -24,12 +24,12 @@ const BASE = 'http://localhost:8081'
 const VIEWPORT = { width: 1440, height: 900 }
 
 // One screenshot capture: visit url, wait for content, save PNG.
-// `prep` runs once after navigation lands — use it to expand panels,
+// `prep` runs once after navigation lands, use it to expand panels,
 // click into modals, etc., before snapping the final frame.
 async function capture(browser, { name, url, prep, fullPage = false, settle = 1000 }) {
   const ctx = await browser.newContext({ viewport: VIEWPORT })
   const page = await ctx.newPage()
-  // domcontentloaded — not networkidle — because pages with SSE keep
+  // domcontentloaded, not networkidle, because pages with SSE keep
   // the network busy indefinitely. settle gives React hydration +
   // initial fetch a moment to land before we snap.
   await page.goto(BASE + url, { waitUntil: 'domcontentloaded' })
@@ -88,7 +88,7 @@ await capture(browser, {
     if (await liveRow.count()) await liveRow.click()
   },
 })
-// Trace detail (not the list) — show the token usage + prompt panel.
+// Trace detail (not the list), show the token usage + prompt panel.
 // span-001 is seeded with realistic prompt + tokens; navigate straight
 // to the detail URL the in-app router uses (`/ui/traces/?id=<root>`),
 // then expand the Prompt accordion before snapping.
@@ -172,7 +172,7 @@ await captureVideo(browser, {
       await page.mouse.move(srcCx + (tgtCx - srcCx) * t, srcCy + (tgtCy - srcCy) * t, { steps: 1 })
       await page.waitForTimeout(35)
     }
-    // Settle on the target handle for a beat — React Flow needs a
+    // Settle on the target handle for a beat, React Flow needs a
     // stable hover before mouseup commits the connection.
     await page.mouse.move(tgtCx, tgtCy)
     await page.waitForTimeout(250)
@@ -186,22 +186,22 @@ await captureVideo(browser, {
 console.log('rendering MCP terminal mock...')
 await captureMcpTerminal(browser)
 
-console.log(`done — output in ${OUT}`)
+console.log(`done, output in ${OUT}`)
 await browser.close()
 
 // captureMcpTerminal renders a faux Claude Code terminal session that
 // asks "show me all agents and their status" and replies with a real
 // table built from the seeded daemon's /agents endpoint. The mock
 // shows what an MCP client conversation looks like without depending
-// on a real Claude account — the data is genuine, the dialogue is
+// on a real Claude account, the data is genuine, the dialogue is
 // synthesised. Output: docs/img/mcp-terminal.png.
 async function captureMcpTerminal(browser) {
   const ctx = await browser.newContext({ viewport: { width: 1100, height: 820 } })
   const page = await ctx.newPage()
 
   // Pull the same data Claude would see if it called list_agents via
-  // the MCP server. /agents is the fleet snapshot — same wire shape as
-  // the MCP tool — and carries current_status per agent so the rendered
+  // the MCP server. /agents is the fleet snapshot, same wire shape as
+  // the MCP tool, and carries current_status per agent so the rendered
   // table can show running vs idle authentically.
   const agents = await fetch(BASE + '/agents').then(r => r.json())
 
@@ -217,7 +217,7 @@ async function captureMcpTerminal(browser) {
 // renderTerminal emits standalone HTML that looks like a Claude Code
 // session in iTerm2. Monospace, dark background, distinct colours for
 // the user prompt, the assistant's narration, the [Tool: ...] markers,
-// and the rendered table. No external assets — the screenshotting
+// and the rendered table. No external assets, the screenshotting
 // pipeline must work offline.
 function renderTerminal(agents) {
   const padCell = (s, n) => String(s).padEnd(n)
@@ -231,7 +231,7 @@ function renderTerminal(agents) {
   const rows = agents.map(a => ({
     name:    a.name,
     backend: a.backend,
-    model:   a.model || '—',
+    model:   a.model || ', ',
     skills:  (a.skills ?? []).join(', '),
     status:  a.current_status === 'running' ? 'running' : 'idle',
   }))
@@ -297,7 +297,7 @@ function renderTerminal(agents) {
 <body>
   <div class="titlebar">
     <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-    <span style="margin-left: 8px;">claude — agents-fleet MCP — 100×40</span>
+    <span style="margin-left: 8px;">claude, agents-fleet MCP, 100×40</span>
   </div>
   <pre><span class="prompt">❯</span> claude</pre>
   <pre class="muted">Welcome to Claude Code (claude-opus-4-7)</pre>

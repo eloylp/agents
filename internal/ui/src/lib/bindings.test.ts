@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Binding, bindingsEqual, groupByAgent } from './bindings'
 
 describe('bindingsEqual', () => {
-  it('ignores id differences — the diff drives PATCH decisions on edits', () => {
+  it('ignores id differences, the diff drives PATCH decisions on edits', () => {
     const a: Binding = { id: 1, agent: 'coder', labels: ['ai:x'] }
     const b: Binding = { id: 2, agent: 'coder', labels: ['ai:x'] }
     expect(bindingsEqual(a, b)).toBe(true)

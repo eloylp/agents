@@ -12,12 +12,12 @@
 //   - event_queue.completed_at IS NOT NULL → query traces for the
 //     event id. Emit 1 row per trace span (status=success|error,
 //     agent populated). Events that completed with 0 traces (webhook
-//     with no matching binding) are skipped — nothing actually ran,
+//     with no matching binding) are skipped, nothing actually ran,
 //     so listing them on a "runners" page would be misleading.
 //
 // Retry / delete operate on the underlying event_queue row, not on a
 // specific trace. Retry copies the event blob into a new row and
-// pushes onto the channel — the source row stays as audit history.
+// pushes onto the channel, the source row stays as audit history.
 // Delete removes the queue row best-effort: the in-memory channel
 // buffer may still hold a copy a worker will dequeue. Both operations
 // are event-level even when the row appears multiple times on the
@@ -69,7 +69,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/runners/{id}/retry", withTimeout(http.HandlerFunc(h.handleRetry))).Methods(http.MethodPost)
 }
 
-// RunnerRow is the wire shape of one runner — either an in-flight event
+// RunnerRow is the wire shape of one runner, either an in-flight event
 // (no traces yet, agent=null) or one fanned-out agent run (trace fields
 // populated). Status is the unified lifecycle:
 //   - "enqueued" / "running": event is in flight, no trace yet
@@ -97,7 +97,7 @@ type RunnerRow struct {
 }
 
 // ListResponse is the wire shape returned by GET /runners. Total counts
-// queue rows (events) under the same filter — not output rows, since a
+// queue rows (events) under the same filter, not output rows, since a
 // completed event can produce multiple rows after the trace JOIN.
 type ListResponse struct {
 	Runners []RunnerRow `json:"runners"`
@@ -117,7 +117,7 @@ var ErrRunnerRunning = errors.New("runners: cannot retry running event")
 
 // List returns one page of runner rows plus the total event count
 // under the same filter. status accepts "" / "enqueued" / "running" /
-// "completed" — these gate the underlying event_queue rows. Other
+// "completed", these gate the underlying event_queue rows. Other
 // values return an error.
 //
 // Each event_queue row produces 0..N output rows depending on whether
@@ -196,7 +196,7 @@ func (h *Handler) expand(ev store.RunnerRecord) []RunnerRow {
 	spans := h.traces.TracesByRootEventID(ev.EventID)
 	if len(spans) == 0 {
 		// Event completed without spawning any runner (e.g. webhook with no
-		// matching binding). Skip — listing it under "runners" would be
+		// matching binding). Skip, listing it under "runners" would be
 		// misleading.
 		return nil
 	}
@@ -214,7 +214,7 @@ func (h *Handler) expand(ev store.RunnerRecord) []RunnerRow {
 }
 
 // Delete removes the row with id. Returns store.ErrRunnerNotFound when
-// the row was already gone — the handler maps that to 404.
+// the row was already gone, the handler maps that to 404.
 func (h *Handler) Delete(id int64) error {
 	if _, err := h.store.GetRunner(id); err != nil {
 		return err
@@ -242,7 +242,7 @@ func (h *Handler) Retry(r *http.Request, id int64) (int64, error) {
 		return 0, fmt.Errorf("runners retry: unmarshal: %w", err)
 	}
 	// Reset enqueue stamp so the retried row's EnqueuedAt reflects the
-	// retry instant — original timing stays preserved on the source row.
+	// retry instant, original timing stays preserved on the source row.
 	ev.EnqueuedAt = time.Time{}
 	newID, err := h.channels.PushEvent(r.Context(), ev)
 	if err != nil {

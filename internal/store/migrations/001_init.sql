@@ -1,4 +1,4 @@
--- Phase 1: SQLite foundation — fleet config and daemon settings.
+-- Phase 1: SQLite foundation, fleet config and daemon settings.
 -- All entities that previously lived in config.yaml now live here.
 -- Arrays and maps are stored as JSON text.
 

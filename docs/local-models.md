@@ -1,6 +1,6 @@
 # Local models
 
-Run your agent fleet against a self-hosted or OpenAI-compatible LLM backend — without changing how you write agents, prompts, or routing rules.
+Run your agent fleet against a self-hosted or OpenAI-compatible LLM backend, without changing how you write agents, prompts, or routing rules.
 
 **What this unlocks:**
 
@@ -26,7 +26,7 @@ This doc walks through the complete setup: the architecture, a working recipe ag
 │        ▼                                            
 │ ┌──────────────┐ │                                  
 │ │  /v1/messages│ │   built-in Anthropic↔OpenAI proxy (Go, single binary)
-│ │  /v1/models  │ │   — translates tool_use, system, streaming
+│ │  /v1/models  │ │, translates tool_use, system, streaming
 │ └──────┬───────┘ │                                  
 └────────┼─────────┘                                  
          │                                            
@@ -41,15 +41,15 @@ This doc walks through the complete setup: the architecture, a working recipe ag
 
 Two moving pieces inside the daemon:
 
-1. **The proxy** (`internal/anthropic_proxy/`) — an HTTP handler mounted on the daemon's existing server at `/v1/messages` and `/v1/models`. Accepts Anthropic Messages format, translates to OpenAI Chat Completions, forwards to your configured upstream, translates the response back. Text, system messages, tool-use / tool-result round-trips, streaming (fake-streaming via SSE, token-by-token streaming coming). Covered by unit tests.
+1. **The proxy** (`internal/anthropic_proxy/`), an HTTP handler mounted on the daemon's existing server at `/v1/messages` and `/v1/models`. Accepts Anthropic Messages format, translates to OpenAI Chat Completions, forwards to your configured upstream, translates the response back. Text, system messages, tool-use / tool-result round-trips, streaming (fake-streaming via SSE, token-by-token streaming coming). Covered by unit tests.
 
-2. **Per-backend `local_model_url`** (`AIBackendConfig.local_model_url`) — set this on a backend entry and the daemon injects `ANTHROPIC_BASE_URL=<url>` into the subprocess environment, routing that backend's `claude` CLI through the local proxy. You can have two backends that both run `claude` — one hitting hosted Anthropic (no `local_model_url`), one hitting the proxy. You pick per-agent.
+2. **Per-backend `local_model_url`** (`AIBackendConfig.local_model_url`), set this on a backend entry and the daemon injects `ANTHROPIC_BASE_URL=<url>` into the subprocess environment, routing that backend's `claude` CLI through the local proxy. You can have two backends that both run `claude`, one hitting hosted Anthropic (no `local_model_url`), one hitting the proxy. You pick per-agent.
 
 Nothing else changes. Same agents, same prompts, same config.
 
 ---
 
-## Quick recipe — `llama.cpp` + Qwen 3.5 on a single box
+## Quick recipe, `llama.cpp` + Qwen 3.5 on a single box
 
 The setup tested in [Phase 0.5](https://github.com/eloylp/agents/issues/78) of the local-models research. Adjust for your hardware.
 
@@ -67,7 +67,7 @@ llama-server \
   --cache-type-v q8_0 \
   --batch-size 2048 \
   --ubatch-size 2048 \
-  --cache-reuse 256 \                         # prefix-cache reuse — huge win
+  --cache-reuse 256 \                         # prefix-cache reuse, huge win
   --parallel 1 \
   --jinja \
   --flash-attn on
@@ -150,7 +150,7 @@ You'll see per-request observability in the daemon log:
 proxy upstream ok  body_bytes=1471  client_stream=true  msgs=1  tools=32
 ```
 
-`msgs` and `tools` grow through multi-turn tool loops — that's how you know real work is flowing.
+`msgs` and `tools` grow through multi-turn tool loops, that's how you know real work is flowing.
 
 ---
 
@@ -172,7 +172,7 @@ All numbers assume Q4_K_M quantization unless stated. Larger quants (Q5, Q6, Q8)
 
 - **Qwen 3.5 uses a hybrid attention** (Gated Delta Net linear-attention + softmax). The fused-chunked GDN path needs a ~525 MB compute buffer that cannot be shrunk by context/batch/KV-precision tuning. On 6–8 GB cards this buffer plus model + KV exceeds VRAM, forcing CPU-only. Expect GPU speedup only at 12 GB+.
 - **MoE models** (e.g. 35B-A3B: 35B total, 3B active per token) need the full model in memory but only compute against active experts per token. Generation speed tracks the active size, so 35B-A3B on CPU is closer to dense-3B-speed than dense-35B-speed. Excellent fit for workstations with plenty of RAM but modest GPU.
-- **Avoid Unsloth "UD" dynamic quant variants** for 35B+ MoE models with llama.cpp build b8804 — tensor load can take 15–25 min single-threaded (vs seconds for standard Q4_K_M). Standard quants load fast.
+- **Avoid Unsloth "UD" dynamic quant variants** for 35B+ MoE models with llama.cpp build b8804, tensor load can take 15–25 min single-threaded (vs seconds for standard Q4_K_M). Standard quants load fast.
 
 ---
 
@@ -191,7 +191,7 @@ From our Phase 0.5 test: Qwen3.5-35B-A3B-UD-Q5_K_XL on NVIDIA RTX 5090 (32 GB VR
 
 **Projected with full tuning** (`--cache-reuse 256` + `--batch-size 2048`): per-agent wall time drops 30–50% on cron runs that share prompt prefix with the previous run.
 
-**Comparison context**: hosted Claude Sonnet decode is typically 60–100 tok/s, GPT-4o 80–120 tok/s. Qwen 3.5 on a local 5090 is in the same ballpark — not a downgrade.
+**Comparison context**: hosted Claude Sonnet decode is typically 60–100 tok/s, GPT-4o 80–120 tok/s. Qwen 3.5 on a local 5090 is in the same ballpark, not a downgrade.
 
 ---
 
@@ -201,7 +201,7 @@ Not everything is sunshine. Things we learned the hard way:
 
 ### Structured output enforcement
 
-Both backends enforce a JSON response schema at the CLI level. The daemon embeds the schema (`internal/ai/response-schema.json`) in the binary and appends the appropriate flags automatically — no config or file mounts needed:
+Both backends enforce a JSON response schema at the CLI level. The daemon embeds the schema (`internal/ai/response-schema.json`) in the binary and appends the appropriate flags automatically, no config or file mounts needed:
 
 - **Claude** (including `claude_local`): `--output-format json --json-schema '<schema>'` appended automatically. The CLI wraps stdout in an envelope; the daemon extracts `structured_output` from it.
 - **Codex**: `--output-schema <temp-file>` appended automatically. Model output is schema-constrained directly.
@@ -209,7 +209,7 @@ Both backends enforce a JSON response schema at the CLI level. The daemon embeds
 
 ### Capability gap on action-taking agents
 
-We validated Qwen 3.5 driving `pr-reviewer` and `scout`-class agents cleanly. When we flipped `coder` — an action-heavy agent that edits code, commits, posts comments — two failure modes appeared:
+We validated Qwen 3.5 driving `pr-reviewer` and `scout`-class agents cleanly. When we flipped `coder`, an action-heavy agent that edits code, commits, posts comments, two failure modes appeared:
 
 1. **Conservative disposition.** Qwen reads and analyses thoroughly but is reluctant to invoke write tools even when the prompt asks for action. Prompting heavily with imperative verbs and "silence is not an option" framing fixes this partially.
 2. **Fact hallucination in populated templates.** Given a "post a status comment in this format" instruction, Qwen will populate the template fields with **fabricated** values (non-existent commit SHAs, false merge states) when the real facts aren't easily derived. This can put misleading text on real PRs.
@@ -244,7 +244,7 @@ The `claude` CLI's Task tool can spawn sub-agents whose conversations build up t
 
 ### "Invalid API key" on every run
 
-`ANTHROPIC_BASE_URL` is not reaching the subprocess. Check that `local_model_url` is set on the `claude_local` backend in your daemon config — the daemon injects `ANTHROPIC_BASE_URL` from that field. `ANTHROPIC_API_KEY` must still be present in the container environment (any non-empty value works; the local endpoint ignores it). Set it in your `.env` file or compose `environment:` block.
+`ANTHROPIC_BASE_URL` is not reaching the subprocess. Check that `local_model_url` is set on the `claude_local` backend in your daemon config, the daemon injects `ANTHROPIC_BASE_URL` from that field. `ANTHROPIC_API_KEY` must still be present in the container environment (any non-empty value works; the local endpoint ignores it). Set it in your `.env` file or compose `environment:` block.
 
 Verify with:
 
@@ -279,12 +279,12 @@ You picked an Unsloth "UD" Dynamic quant variant. Switch to standard Q4_K_M.
 - **Set `--api-key`** on llama-server if the network is not fully trusted.
 - **Monitor token use** via the `proxy upstream ok body_bytes=… msgs=… tools=…` log line. Increasing `msgs` across runs means agents are converging through tool loops; flat `msgs` counts may indicate the model is bailing without real work.
 - **Pre-download GGUFs.** `llama-server -hf ...` auto-downloads on first run but can be slow on throttled networks. Pre-fetch to a local path and pass `-m /path/to/file.gguf` for reliable startup.
-- **Rebuild your docker image after changing backend env** — the daemon reads config on startup.
+- **Rebuild your docker image after changing backend env**, the daemon reads config on startup.
 
 ---
 
 ## Related
 
-- [#78](https://github.com/eloylp/agents/issues/78) — full research log including Phase 0.5 validation numbers, hardware findings, and all the mistakes we made getting here.
-- [#137](https://github.com/eloylp/agents/issues/137) / [#138](https://github.com/eloylp/agents/pull/138) — the in-daemon Anthropic↔OpenAI proxy design and implementation.
-- [#146](https://github.com/eloylp/agents/issues/146) — follow-up: routing the codex CLI through a local backend (OpenAI Responses API translation).
+- [#78](https://github.com/eloylp/agents/issues/78), full research log including Phase 0.5 validation numbers, hardware findings, and all the mistakes we made getting here.
+- [#137](https://github.com/eloylp/agents/issues/137) / [#138](https://github.com/eloylp/agents/pull/138), the in-daemon Anthropic↔OpenAI proxy design and implementation.
+- [#146](https://github.com/eloylp/agents/issues/146), follow-up: routing the codex CLI through a local backend (OpenAI Responses API translation).

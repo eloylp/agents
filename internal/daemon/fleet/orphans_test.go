@@ -82,7 +82,7 @@ func TestComputeOrphanedAgents(t *testing.T) {
 // TestComputeOrphanedAgentsIncludesDisabledRefs verifies the Repos field on
 // each orphan reflects every repo that references the agent, including
 // disabled-repo and disabled-binding references. The orphan badge fires on
-// "model not in backend catalog" — runtime reachability is a separate
+// "model not in backend catalog", runtime reachability is a separate
 // concern. Hiding disabled references made the orphan report inaccurate
 // when a repo was paused but its bindings still need fixing or
 // re-pointing before re-enabling.

@@ -62,7 +62,7 @@ func WatchMemoryDir(ctx context.Context, dir string, interval time.Duration, hub
 				return nil
 			}
 			if mtime.After(prev) {
-				// File has been modified since last scan — publish.
+				// File has been modified since last scan, publish.
 				ev := buildMemoryChangeEvent(rel)
 				if b, err := sseData(ev); err == nil {
 					hub.Publish(b)

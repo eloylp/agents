@@ -83,7 +83,7 @@ func translateAnthropicMessage(msg AnthropicMessage) ([]ChatMessage, error) {
 // (consecutive text blocks are merged) and tool_result blocks become
 // role:tool messages, preserving mixed-content ordering.
 func translateUserMessage(text string, blocks []ContentBlock) ([]ChatMessage, error) {
-	// Plain string content (no block array) — emit as-is.
+	// Plain string content (no block array), emit as-is.
 	if len(blocks) == 0 {
 		if text != "" {
 			return []ChatMessage{{Role: "user", Content: text}}, nil
@@ -127,7 +127,7 @@ func translateUserMessage(text string, blocks []ContentBlock) ([]ChatMessage, er
 	flushText()
 
 	if len(out) == 0 {
-		// No text, no tool results — emit an empty user message to preserve turn order.
+		// No text, no tool results, emit an empty user message to preserve turn order.
 		return []ChatMessage{{Role: "user"}}, nil
 	}
 
@@ -247,7 +247,7 @@ func ToAnthropic(resp ChatResponse, upstreamModel string) (MessagesResponse, err
 // systemToString extracts the system prompt as a plain string from either the
 // legacy string form or the array-of-text-blocks form used by the claude CLI.
 // Multiple text blocks are joined with a blank line between them.
-// cache_control metadata on blocks is intentionally ignored — the upstream is
+// cache_control metadata on blocks is intentionally ignored, the upstream is
 // not Anthropic and does not honour it.
 func systemToString(raw json.RawMessage) (string, error) {
 	if len(raw) == 0 {

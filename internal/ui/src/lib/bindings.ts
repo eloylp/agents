@@ -30,7 +30,7 @@ function arrEq(a?: string[], b?: string[]): boolean {
 
 // bindingsEqual compares two bindings by their user-editable fields. The id
 // field is intentionally excluded since equality drives the diff that decides
-// whether to emit a PATCH — a PATCH with identical fields is a no-op so
+// whether to emit a PATCH, a PATCH with identical fields is a no-op so
 // skipping them keeps the save flow lean. Enabled normalises undefined/true
 // into a single state so a new binding isn't flagged as "changed" on every
 // save.

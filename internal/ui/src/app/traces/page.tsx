@@ -223,7 +223,7 @@ function SpanTranscript({ spanId, stepCount }: { spanId: string; stepCount?: num
               </span>
               <span style={{ color: 'var(--text-faint)', margin: '0 4px' }}>→</span>
               <span style={{ color: 'var(--text)', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 2 }} title={step.output_summary}>
-                {step.output_summary || '—'}
+                {step.output_summary || ', '}
               </span>
               {step.duration_ms > 0 && (
                 <span style={{ color: 'var(--text-faint)', flexShrink: 0, marginLeft: '4px' }}>({step.duration_ms}ms)</span>

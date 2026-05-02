@@ -3,7 +3,7 @@ import NavBar from '@/components/NavBar'
 import { ThemeProvider } from '@/lib/theme'
 
 export const metadata: Metadata = {
-  title: 'Agents — Observability Dashboard',
+  title: 'Agents, Observability Dashboard',
   description: 'Runtime dashboard for the agents daemon',
 }
 

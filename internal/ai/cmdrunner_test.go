@@ -56,13 +56,13 @@ func TestBuildCommandEnvDaemonNumber(t *testing.T) {
 }
 
 func TestBuildCommandEnvBackendOverride(t *testing.T) {
-	// No t.Parallel() — t.Setenv mutates the process env and can't coexist
+	// No t.Parallel(), t.Setenv mutates the process env and can't coexist
 	// with parallel tests that read os.Environ.
 
 	// Per-backend env is appended after the allowlist + AI_DAEMON_* vars.
 	// When the same key appears in both the inherited env (via allowlist)
 	// and the backend override, exec.Command uses the last occurrence, so
-	// the backend override wins — as documented.
+	// the backend override wins, as documented.
 	t.Setenv("ANTHROPIC_API_KEY", "hosted-key")
 
 	env := buildCommandEnv(
@@ -159,7 +159,7 @@ func TestExtractJSON(t *testing.T) {
 		{
 			// A top-level JSON array whose only element is an object: the scanner
 			// locates the '{' inside the array and returns that object.  This pins
-			// the documented contract — future changes that alter this behaviour
+			// the documented contract, future changes that alter this behaviour
 			// should update this test intentionally.
 			name:  "top-level array containing object returns the inner object",
 			input: `[{"a":1}]`,
@@ -248,7 +248,7 @@ func TestResponseDispatchOmittedWhenEmpty(t *testing.T) {
 // silent success with an empty Response.
 func TestCommandRunnerEmptyStdoutIsError(t *testing.T) {
 	t.Parallel()
-	// "true" exits 0 with no stdout — the canonical empty-output case.
+	// "true" exits 0 with no stdout, the canonical empty-output case.
 	r := NewCommandRunner("test", "command", "true", nil, 10, 4000, zerolog.Nop())
 	_, err := r.Run(context.Background(), Request{Workflow: "wf", Repo: "owner/repo"})
 	if err == nil {
@@ -272,7 +272,7 @@ func TestExtractStructuredOutputFallbackHandlesStreamJSON(t *testing.T) {
 		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"file.txt"}]}}` + "\n" +
 		`{"type":"result","subtype":"success","structured_output":` + structuredPayload + `}` + "\n"
 
-	// Full stdout is JSONL — extractStructuredOutput on the whole thing fails,
+	// Full stdout is JSONL, extractStructuredOutput on the whole thing fails,
 	// falls through to extractJSON → last object → extractStructuredOutput succeeds.
 	full := []byte(streamOut)
 
@@ -473,7 +473,7 @@ func TestBuildDeliveryRespectsTotalBudget(t *testing.T) {
 		{
 			// Truncation falls within the "\n\n" separator: system(5) + sep(2) > budget(6).
 			// Claude must pass the truncated combined prefix ("abcde\n") as the system
-			// arg and produce empty stdin — matching codex which sends "abcde\n".
+			// arg and produce empty stdin, matching codex which sends "abcde\n".
 			name:          "claude-truncation-in-separator",
 			backendName:   "claude",
 			system:        "abcde",
@@ -698,7 +698,7 @@ func TestParseClaudeSteps(t *testing.T) {
 			wantNames: []string{"Bash", "Read", "Write"},
 		},
 		{
-			name:      "result-only output — no tool events",
+			name:      "result-only output, no tool events",
 			input:     []byte(`{"type":"result","subtype":"success","structured_output":{"summary":"ok","artifacts":[]}}` + "\n"),
 			wantNames: nil,
 		},
@@ -792,7 +792,7 @@ func TestHasBackendPrefix(t *testing.T) {
 		{name: "codex via name", beName: "codex-fast", command: "", prefix: "codex", want: true},
 		{name: "codex via command", beName: "", command: "/opt/bin/codex", prefix: "codex", want: true},
 		{name: "empty name and command", beName: "", command: "", prefix: "claude", want: false},
-		{name: "substring only — not a prefix", beName: "anthropic-claude", command: "/usr/bin/gpt", prefix: "claude", want: false},
+		{name: "substring only, not a prefix", beName: "anthropic-claude", command: "/usr/bin/gpt", prefix: "claude", want: false},
 	}
 
 	for _, tc := range cases {

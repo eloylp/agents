@@ -141,7 +141,7 @@ func BenchmarkReadSnapshotParallel(b *testing.B) {
 }
 
 // BenchmarkPointerRead measures the cost of the current in-memory cfg
-// snapshot — what coord.Config() does today: an RWMutex.RLock, a pointer
+// snapshot, what coord.Config() does today: an RWMutex.RLock, a pointer
 // load, an unlock. The number is the baseline we'd be giving up if we
 // went database-on-every-read.
 func BenchmarkPointerRead(b *testing.B) {

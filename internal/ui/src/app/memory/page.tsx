@@ -63,7 +63,7 @@ export default function MemoryPage() {
   }
 
   // Build the tree: agent → [repoKey, ...]
-  // Include ALL agents — bound or unbound. For bound agents, use their repo bindings.
+  // Include ALL agents, bound or unbound. For bound agents, use their repo bindings.
   // For unbound agents, we still show them so the user can click and check if memory exists.
   const tree: Record<string, string[]> = {}
   const allRepoKeys = new Set<string>()
@@ -75,7 +75,7 @@ export default function MemoryPage() {
     if (repos.length > 0) {
       tree[a.name] = repos
     } else {
-      // Unbound agent — show all known repos so user can check for memory
+      // Unbound agent, show all known repos so user can check for memory
       tree[a.name] = []
     }
   }

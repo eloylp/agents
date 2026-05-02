@@ -61,7 +61,7 @@ func TestHandleAPIAgentsReturnsConfiguredAgents(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	// Locate "reviewer" in the response — the fixture also seeds an agent
+	// Locate "reviewer" in the response, the fixture also seeds an agent
 	// and "sec-reviewer" exists for the can_dispatch reference.
 	var got *viewAgentJSON
 	for i := range agents {
@@ -133,7 +133,7 @@ func TestHandleAPIAgentsAttachesScheduleForCronBindings(t *testing.T) {
 
 // TestHandleAPIAgentsMultiRepoSchedulePreserved verifies that an agent with
 // cron bindings in two different repos carries independent schedule state on
-// each binding — not just the last repo visited in the loop.
+// each binding, not just the last repo visited in the loop.
 func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) {
@@ -153,7 +153,7 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 	})
 	srv, _ := newTestServer(t, cfg)
 	now := time.Now().UTC().Truncate(time.Second)
-	// Seed last-run state for repo-a only — repo-b stays at "never run" so
+	// Seed last-run state for repo-a only, repo-b stays at "never run" so
 	// the test asserts the per-binding schedule slot on the agent view.
 	srv.Scheduler().RecordLastRun("worker", "owner/repo-a", now, "ok")
 
@@ -210,7 +210,7 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 // TestHandleAPIAgentsIncludesDisabledRepoBindings verifies that bindings on
 // disabled repos appear in the /agents fleet snapshot with repo_enabled=false.
 // The wire view is for inspection (memory page, audit, MCP), not runtime
-// dispatch — hiding disabled-repo bindings here also hides the agent's
+// dispatch, hiding disabled-repo bindings here also hides the agent's
 // memory in the dashboard. The runtime entry points (POST /run, webhook,
 // engine.HandleEvent) refuse disabled repos at the boundary; the wire view
 // trusts consumers to filter.

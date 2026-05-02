@@ -167,7 +167,7 @@ type apiAgentConfigJSON struct {
 
 const redacted = "[redacted]"
 
-// HandleConfig serves GET /config — the effective parsed config with secret
+// HandleConfig serves GET /config, the effective parsed config with secret
 // values replaced by "[redacted]". Env-var names are preserved so operators
 // can identify which environment variable holds a given secret.
 func (h *Handler) HandleConfig(w http.ResponseWriter, _ *http.Request) {
@@ -305,7 +305,7 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 
 // exportYAML is the wire shape for YAML export/import. It captures only the
 // four CRUD-mutable sections; daemon-level config (HTTP, log, proxy) is
-// intentionally excluded — it is not managed by the write API.
+// intentionally excluded, it is not managed by the write API.
 type exportYAML struct {
 	Skills     map[string]fleet.Skill `yaml:"skills,omitempty"`
 	Agents     []fleet.Agent          `yaml:"agents,omitempty"`
@@ -318,7 +318,7 @@ type exportDaemonYAML struct {
 	AIBackends map[string]fleet.Backend `yaml:"ai_backends,omitempty"`
 }
 
-// HandleExport serves GET /export — returns a config.yaml fragment covering
+// HandleExport serves GET /export, returns a config.yaml fragment covering
 // the four CRUD-mutable sections (skills, agents, repos, daemon.ai_backends).
 func (h *Handler) HandleExport(w http.ResponseWriter, _ *http.Request) {
 	b, err := h.ExportYAML()
@@ -359,7 +359,7 @@ func (h *Handler) ExportYAML() ([]byte, error) {
 	return b, nil
 }
 
-// HandleImport serves POST /import — accepts a YAML body in the same format
+// HandleImport serves POST /import, accepts a YAML body in the same format
 // as HandleExport and upserts all entities into the DB. On success it
 // returns 200 with a JSON summary of imported counts.
 func (h *Handler) HandleImport(w http.ResponseWriter, r *http.Request) {

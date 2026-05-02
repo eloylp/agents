@@ -6,13 +6,12 @@
 [![Go](https://img.shields.io/github/go-mod/go-version/eloylp/agents)](go.mod)
 [![License](https://img.shields.io/github/license/eloylp/agents)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-compatible-7c3aed)](docs/mcp.md)
-[![Stars](https://img.shields.io/github/stars/eloylp/agents?style=flat)](https://github.com/eloylp/agents/stargazers)
 
 **A self-hosted, observable orchestrator for multi-agent workflows on your repos.**
 
-Create agents and compose them with skills, memory, and triggers — repo events, cron, or inter-agent dispatch. Route runs through any local OpenAI-compatible model via the built-in proxy. Your fleet, your prompts, your traces — all on your hardware.
+Create agents and compose them with skills, memory, and triggers: repo events, cron, or inter-agent dispatch. Route runs through any local OpenAI-compatible model via the built-in proxy. Your fleet, your prompts, your traces, all on your hardware.
 
-The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), or your own local LLM) and lets it work through your repo host's native primitives — issues, PRs, reviews, comments. GitHub today; [GitLab](https://github.com/eloylp/agents/issues/359) under discussion.
+The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), or your own local LLM) and lets it work through your repo host's native primitives: issues, PRs, reviews, comments. GitHub today; [GitLab](https://github.com/eloylp/agents/issues/359) under discussion.
 
 ## Features
 
@@ -33,7 +32,7 @@ The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthr
 
 ## Get started
 
-See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a repo in a few minutes — `docker compose up -d` is the recommended path. For five import-ready fleet scenarios (solo coder, coder + reviewer, autonomous fleet, local LLM, multi-repo) see [`config_examples/`](config_examples/).
+See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a repo in a few minutes, `docker compose up -d` is the recommended path. For five import-ready fleet scenarios (solo coder, coder + reviewer, autonomous fleet, local LLM, multi-repo) see [`config_examples/`](config_examples/).
 
 ## Security
 

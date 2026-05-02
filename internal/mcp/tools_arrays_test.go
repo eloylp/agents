@@ -189,7 +189,7 @@ func TestToolUpdateAgentAcceptsJSONStringSkills(t *testing.T) {
 }
 
 // TestToolUpdateBackendAcceptsJSONStringModels mirrors the agent test for
-// the backend tool — same transport bug, same fix, different field. Pins
+// the backend tool, same transport bug, same fix, different field. Pins
 // that the relief is uniform across the CRUD surface.
 func TestToolUpdateBackendAcceptsJSONStringModels(t *testing.T) {
 	t.Parallel()
@@ -276,7 +276,7 @@ func TestToolCreateBindingAcceptsJSONStringSlices(t *testing.T) {
 }
 
 // TestToolUpdateBindingAcceptsJSONStringSlices is the PUT-replace mirror of
-// the create_binding test — same fields, same shape contract.
+// the create_binding test, same fields, same shape contract.
 func TestToolUpdateBindingAcceptsJSONStringSlices(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
@@ -308,7 +308,7 @@ func TestToolUpdateBindingAcceptsJSONStringSlices(t *testing.T) {
 
 // TestToolCreateRepoAcceptsJSONStringBindings pins that the nested
 // "bindings" payload also accepts a JSON-encoded array string at the top
-// level — the same MCP-transport quirk surfaces here too because the
+// level, the same MCP-transport quirk surfaces here too because the
 // argument is itself an array.
 func TestToolCreateRepoAcceptsJSONStringBindings(t *testing.T) {
 	t.Parallel()

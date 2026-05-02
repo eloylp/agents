@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agents-setup — interactive AI-CLI auth bootstrap for the agents daemon.
+# agents-setup, interactive AI-CLI auth bootstrap for the agents daemon.
 #
 # Run inside the daemon's container:
 #
@@ -10,7 +10,7 @@
 # server on each, and refresh backend discovery so the daemon sees the
 # newly authenticated tooling. Fleet configuration (agents, skills,
 # repos, bindings, webhooks) is the operator's job through the
-# dashboard at /ui/ or the CRUD / MCP surfaces — those are graphical
+# dashboard at /ui/ or the CRUD / MCP surfaces, those are graphical
 # tasks that don't fit a bash prompt loop.
 
 set -euo pipefail
@@ -52,7 +52,7 @@ banner() {
 
    ╭───────────────────────────────────────────────────────╮
    │                                                       │
-   │     a g e n t s   —   interactive setup wizard        │
+   │     a g e n t s   ·   interactive setup wizard       │
    │                                                       │
    │     authenticates AI CLIs · wires GitHub MCP ·        │
    │     refreshes backend discovery                       │
@@ -100,7 +100,7 @@ require_daemon_up() {
   ok "daemon reachable (uptime ${uptime}s)"
 }
 
-# ── phase 1 — sanity checks ──────────────────────────────────────────
+# ── phase 1, sanity checks ──────────────────────────────────────────
 
 phase_sanity() {
   phase 1 "sanity checks"
@@ -117,16 +117,16 @@ phase_sanity() {
   require_daemon_up
 }
 
-# ── phase 2 — backend selection ──────────────────────────────────────
+# ── phase 2, backend selection ──────────────────────────────────────
 
 phase_pick_backends() {
   phase 2 "pick AI backend(s) to authenticate"
   say "  ${c_bold}Most operators only have an account with one of the two.${c_rst}"
-  say "  Pick whichever you actually have — you can always add the other later."
+  say "  Pick whichever you actually have, you can always add the other later."
   say ""
   say "    ${c_bold}c${c_rst}   Claude Code  (Anthropic)"
   say "    ${c_bold}d${c_rst}   Codex        (OpenAI)"
-  say "    ${c_bold}b${c_rst}   both         ${c_dim}(default — press Enter)${c_rst}"
+  say "    ${c_bold}b${c_rst}   both         ${c_dim}(default, press Enter)${c_rst}"
   say ""
   local choice
   ask "Choice [c/d/b]:" choice
@@ -139,7 +139,7 @@ phase_pick_backends() {
   ok "will authenticate: ${c_bold}${BACKENDS[*]}${c_rst}"
 }
 
-# ── phase 2.5 — GitHub PAT presence check ───────────────────────────
+# ── phase 2.5, GitHub PAT presence check ───────────────────────────
 
 phase_check_pat() {
   phase "2.5" "verify GitHub Personal Access Token"
@@ -166,10 +166,10 @@ phase_check_pat() {
   note "codex resolves it from \$GITHUB_PAT_TOKEN at runtime (token never on disk)."
 }
 
-# ── phase 3 — per-backend login + GitHub MCP wiring ──────────────────
+# ── phase 3, per-backend login + GitHub MCP wiring ──────────────────
 
 setup_claude() {
-  phase 3 "claude — log in + wire GitHub MCP"
+  phase 3 "claude: log in + wire GitHub MCP"
 
   info "running ${c_bold}claude auth login${c_rst} (clean auth, no REPL drop)..."
   note "claude prints a URL. Open it in any browser, sign in, paste the"
@@ -186,7 +186,7 @@ setup_claude() {
     # Remove any prior failed registration so the add doesn't conflict.
     claude mcp remove github 2>/dev/null || true
     info "registering GitHub MCP via add-json -s user (HTTP + Bearer PAT)..."
-    note "user scope is cwd-independent — the daemon's probe runs with"
+    note "user scope is cwd-independent, the daemon's probe runs with"
     note "cwd=/home/agents while this script may run with cwd=/, so a"
     note "project-scoped entry would be invisible to the daemon."
     local mcp_json
@@ -205,7 +205,7 @@ setup_claude() {
   if printf '%s' "$listing" | grep -qE '^github\b.*Connected'; then
     ok "github MCP shows Connected"
   else
-    err "github MCP did not connect — claude mcp list said:"
+    err "github MCP did not connect, claude mcp list said:"
     printf '%s\n' "$listing" | grep -E '^github\b' | sed 's/^/      /'
     say "    Likely causes: invalid PAT, missing scopes, or rate limit."
     say "    Check the token has 'repo' scope, then re-run agents-setup."
@@ -214,11 +214,11 @@ setup_claude() {
 }
 
 setup_codex() {
-  phase 3 "codex — log in + wire GitHub MCP"
+  phase 3 "codex: log in + wire GitHub MCP"
 
   info "running ${c_bold}codex login --device-auth${c_rst} (headless device-auth flow)..."
   note "codex prints a URL and a one-time code. Open the URL in any"
-  note "browser (your laptop, your phone — anything), enter the code,"
+  note "browser (your laptop, your phone, anything), enter the code,"
   note "approve, return here. --device-auth avoids needing a localhost"
   note "callback that the container can't expose to your browser."
   say ""
@@ -253,17 +253,17 @@ phase_per_backend() {
   done
 }
 
-# ── phase 4 — refresh backend discovery ──────────────────────────────
+# ── phase 4, refresh backend discovery ──────────────────────────────
 
 phase_refresh_discovery() {
   phase 4 "refresh backend discovery"
   info "POST $DAEMON_URL/backends/discover (probes each CLI, persists model catalog)..."
   curl -fsS -X POST "$DAEMON_URL/backends/discover" >/dev/null \
     || { err "POST /backends/discover failed"; return 1; }
-  ok "discovery refreshed — daemon sees the freshly-authenticated CLIs"
+  ok "discovery refreshed, daemon sees the freshly-authenticated CLIs"
 }
 
-# ── phase 5 — diagnostics ────────────────────────────────────────────
+# ── phase 5, diagnostics ────────────────────────────────────────────
 
 phase_diagnostics() {
   phase 5 "diagnostics"

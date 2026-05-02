@@ -93,7 +93,7 @@ func TestList_CompletedEventFannedOutToTwoAgentsShowsTwoRows(t *testing.T) {
 	<-fx.channels.EventChan()
 	_ = fx.store.MarkEventStarted(id)
 
-	// Record two completed trace spans for this event — simulates fanout.
+	// Record two completed trace spans for this event, simulates fanout.
 	now := time.Now()
 	fx.observe.RecordSpan(workflow.SpanInput{
 		SpanID: "sp-A", RootEventID: "ev-fan",
@@ -172,7 +172,7 @@ func TestList_CompletedEventWithNoTracesIsHidden(t *testing.T) {
 	if len(resp.Runners) != 0 {
 		t.Fatalf("rows = %+v, want 0 (completed event with no traces should be hidden)", resp.Runners)
 	}
-	// But the queue row itself is still counted in Total — paging is on
+	// But the queue row itself is still counted in Total, paging is on
 	// event rows, not output rows.
 	if resp.Total != 1 {
 		t.Errorf("total = %d, want 1", resp.Total)

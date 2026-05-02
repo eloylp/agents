@@ -425,7 +425,7 @@ export default function GraphPage() {
               border: `1px solid ${selectedEdge.isActive ? 'var(--btn-primary-border)' : 'var(--border-subtle)'}`,
               marginBottom: '1rem',
             }}>
-              {selectedEdge.isActive ? `${selectedEdge.count} dispatch${selectedEdge.count !== 1 ? 'es' : ''}` : 'wired — no dispatches yet'}
+              {selectedEdge.isActive ? `${selectedEdge.count} dispatch${selectedEdge.count !== 1 ? 'es' : ''}` : 'wired, no dispatches yet'}
             </div>
             {selectedEdge.dispatches.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>

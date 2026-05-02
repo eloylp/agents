@@ -34,7 +34,7 @@ const selectStyle: React.CSSProperties = {
 }
 
 /**
- * BadgePicker — multi-select chip picker backed by a known options list.
+ * BadgePicker, multi-select chip picker backed by a known options list.
  *
  * Selected values render as removable chips. The dropdown only shows
  * options not yet selected. When all options are selected the dropdown

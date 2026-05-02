@@ -153,7 +153,7 @@ func TestDeliveryStore_StartStopsOnContextCancel(t *testing.T) {
 func TestDeliveryStore_StartIsNoOpForNonPositiveTTL(t *testing.T) {
 	t.Parallel()
 
-	// Run must return immediately when TTL is zero or negative — no
+	// Run must return immediately when TTL is zero or negative, no
 	// ticker is started so there is nothing to keep alive.
 	for _, ttl := range []time.Duration{0, -1 * time.Second} {
 		s := NewDeliveryStore(ttl)

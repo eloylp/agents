@@ -5,7 +5,7 @@
 -- channel notifies workers. On clean shutdown the table is mostly empty;
 -- on a crash, rows whose completed_at is NULL are replayed at next startup
 -- so no work is lost. In-flight runs that were killed mid-prompt
--- re-execute on replay — agents are expected to be idempotent enough that
+-- re-execute on replay; agents are expected to be idempotent enough that
 -- a second run on the same input is acceptable.
 
 CREATE TABLE event_queue (

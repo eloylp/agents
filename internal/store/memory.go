@@ -38,7 +38,7 @@ func (m *MemoryBackend) SetChangeNotifier(fn func(agent, repo string)) {
 }
 
 // ReadMemory reads the persisted memory for (agent, repo). A missing row
-// returns the empty string and nil error — the engine treats that as
+// returns the empty string and nil error, the engine treats that as
 // "no prior memory" rather than a hard miss, so first-run agents work.
 func (m *MemoryBackend) ReadMemory(agent, repo string) (string, error) {
 	content, _, _, err := ReadMemory(m.db, ai.NormalizeToken(agent), ai.NormalizeToken(repo))

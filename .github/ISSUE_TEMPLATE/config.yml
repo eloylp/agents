@@ -3,7 +3,7 @@ contact_links:
   - name: Half-formed idea or open question?
     url: https://github.com/eloylp/agents/issues/new?template=feature-request.yml&labels=enhancement
     about: |
-      Open it as a feature request anyway — start with the problem statement
+      Open it as a feature request anyway, start with the problem statement
       and leave the acceptance criteria thin if you're unsure. The maintainer
       will apply the `discussing` label so the agent fleet skips it while it's
       still being shaped, and remove it once the body is concrete enough to

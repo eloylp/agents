@@ -79,7 +79,7 @@ func toolGetTrace(deps Deps) server.ToolHandlerFunc {
 
 // toolGetTraceSteps returns the tool-loop transcript for one span. A span
 // with no recorded steps (non-claude backend, or span still in flight)
-// yields an empty array rather than an error — the span itself is valid,
+// yields an empty array rather than an error, the span itself is valid,
 // it just has no transcript.
 func toolGetTraceSteps(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -92,7 +92,7 @@ func toolGetTraceSteps(deps Deps) server.ToolHandlerFunc {
 }
 
 // toolGetTracePrompt returns the composed prompt the daemon sent to the
-// AI CLI for one span — the operator's "what did the agent see" debug
+// AI CLI for one span, the operator's "what did the agent see" debug
 // artefact. Stored gzipped on the trace row; the store decompresses on
 // the fly. Mirrors GET /traces/{span_id}/prompt; returns a tool error
 // when no prompt is recorded (pre-009-migration spans, or runs the

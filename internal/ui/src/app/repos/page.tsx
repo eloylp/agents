@@ -100,7 +100,7 @@ function bindingTrigger(b: Binding): string {
   if (b.cron) return `cron: ${b.cron}`
   if (b.labels && b.labels.length > 0) return `labels: ${b.labels.join(', ')}`
   if (b.events && b.events.length > 0) return `events: ${b.events.join(', ')}`
-  return '—'
+  return ', '
 }
 
 // TriggerEditor edits one trigger row (type + value + enabled + delete).
@@ -161,7 +161,7 @@ function TriggerEditor({ trigger, onChange, onRemove, knownLabels }: {
             />
             {trigger.cron && !isValidCron(trigger.cron) && (
               <p style={{ color: 'var(--text-danger)', fontSize: '0.75rem', marginTop: '3px' }}>
-                Invalid cron — expected 5 fields: minute hour day month weekday (e.g. 0 9 * * 1-5)
+                Invalid cron, expected 5 fields: minute hour day month weekday (e.g. 0 9 * * 1-5)
               </p>
             )}
           </div>
@@ -308,7 +308,7 @@ function RepoForm({ initial, isNew, agentNames, knownLabels, existingRepos, onSa
               value={cloneSource}
               onChange={e => setCloneSource(e.target.value)}
             >
-              <option value="">— none —</option>
+              <option value="">,  none , </option>
               {existingRepos.map(r => <option key={r.name} value={r.name}>{r.name}</option>)}
             </select>
             <button
@@ -398,7 +398,7 @@ export default function ReposPage() {
     fetch('/agents')
       .then(r => r.ok ? r.json() : [])
       .then((data: { name: string }[]) => setAgentNames(data.map(a => a.name)))
-      .catch(() => { /* store not configured — no-op */ })
+      .catch(() => { /* store not configured, no-op */ })
   }, [])
 
   const openCreate = () => {
@@ -420,7 +420,7 @@ export default function ReposPage() {
   }
 
   // saveRepo persists changes to a repo. For new repos it POSTs the whole
-  // payload (repo + bindings) in one shot — the existing full-replace path.
+  // payload (repo + bindings) in one shot, the existing full-replace path.
   // For existing repos it diffs the bindings against the original load and
   // issues atomic CREATE/PATCH/DELETE calls so a single edit doesn't clobber
   // unrelated bindings (e.g. between two tabs). The enabled flag, when it
@@ -629,7 +629,7 @@ export default function ReposPage() {
       </div>
 
       {(modal === 'create' || modal === 'edit') && (
-        <Modal title={modal === 'create' ? 'Add repo' : `Edit — ${selected.name}`} onClose={() => setModal(null)}>
+        <Modal title={modal === 'create' ? 'Add repo' : `Edit, ${selected.name}`} onClose={() => setModal(null)}>
           <RepoForm
             initial={selected}
             isNew={modal === 'create'}

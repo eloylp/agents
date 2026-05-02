@@ -214,7 +214,7 @@ func toolDeleteSkill(deps Deps) server.ToolHandlerFunc {
 
 // toolCreateBackend upserts a backend definition through the same path as
 // POST /backends. Returns the canonical (normalized) form so callers see the
-// backend the way the store actually persisted it — lowercased name, trimmed
+// backend the way the store actually persisted it, lowercased name, trimmed
 // command, defaults applied for zero-value timeout/max-prompt fields. Empty
 // names surface as *store.ErrValidation via Server.UpsertBackend, which
 // storeErrStatus maps to a user-actionable error.
@@ -326,7 +326,7 @@ func toolDeleteBackend(deps Deps) server.ToolHandlerFunc {
 
 // toolCreateRepo upserts a repo definition (and its bindings) through the
 // same path as POST /repos. Returns the canonical (normalized) form so
-// callers see the repo the way the store actually persisted it — lowercased
+// callers see the repo the way the store actually persisted it, lowercased
 // owner/name, lowercased binding agents, trimmed cron, lowercased events.
 // Empty names surface as *store.ErrValidation via Server.UpsertRepo, which
 // storeErrStatus maps to a user-actionable error. Binding validation errors
@@ -357,7 +357,7 @@ func toolCreateRepo(deps Deps) server.ToolHandlerFunc {
 
 // toolUpdateRepo toggles a repo's enabled flag without touching its bindings.
 // Same path as PATCH /repos/{owner}/{repo} with {"enabled": ...}. Bindings
-// are preserved with their current IDs — unlike create_repo, which is a
+// are preserved with their current IDs, unlike create_repo, which is a
 // full-replace and would churn binding IDs. Use this when the only change
 // is the repo's active state.
 func toolUpdateRepo(deps Deps) server.ToolHandlerFunc {
@@ -433,7 +433,7 @@ func toolCreateBinding(deps Deps) server.ToolHandlerFunc {
 
 // toolUpdateBinding replaces all fields of an existing binding by ID through
 // the same path as PATCH /repos/{owner}/{repo}/bindings/{id}. The repo path
-// parameter is cross-checked against the stored binding's repo — mismatches
+// parameter is cross-checked against the stored binding's repo, mismatches
 // surface as not-found.
 func toolUpdateBinding(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -540,7 +540,7 @@ func repoJSON(r fleet.Repo) map[string]any {
 // destructure it here. A nil/missing value yields an empty binding list.
 //
 // Type mismatches are rejected with explicit user errors instead of being
-// silently dropped — REST decodes this payload through json.Unmarshal into
+// silently dropped, REST decodes this payload through json.Unmarshal into
 // storeBindingJSON, which refuses wrong JSON types. Matching that strictness
 // here is what keeps a payload like `{"enabled":"false"}` from being treated
 // as omitted (and therefore default-enabled), which would silently flip the
@@ -550,7 +550,7 @@ func repoJSON(r fleet.Repo) map[string]any {
 // enabled" case fleet.Binding.IsEnabled relies on). A literal false/true sets
 // the pointer so downstream validation sees the user's intent preserved.
 //
-// The top-level value is also accepted as a JSON-encoded array string — see
+// The top-level value is also accepted as a JSON-encoded array string, see
 // stringSliceArg for the same MCP-transport rationale (some clients
 // stringify array params at the JSON-RPC boundary).
 func parseBindings(v any) ([]fleet.Binding, string) {
@@ -682,7 +682,7 @@ func stringSlicePtrArg(args map[string]any, key string) (*[]string, bool, string
 
 // stringSliceArg coerces v into []string for a tool argument.
 //
-// Returns (nil, "") when v is nil/missing — callers that need to distinguish
+// Returns (nil, "") when v is nil/missing, callers that need to distinguish
 // absence from an explicit empty array should use stringSlicePtrArg instead.
 // Returns ([]string, "") on success and (nil, errMsg) when v is the wrong
 // shape (e.g. a number, a non-string element, or a non-array string that
@@ -693,8 +693,8 @@ func stringSlicePtrArg(args map[string]any, key string) (*[]string, bool, string
 //   - native []string (defensive, for callers that pre-decoded)
 //   - a JSON-encoded array string (e.g. `["a","b"]`)
 //
-// The JSON-string path exists because some MCP clients — observed with
-// mark3labs/mcp-go when batching tool calls into a single JSON-RPC message —
+// The JSON-string path exists because some MCP clients, observed with
+// mark3labs/mcp-go when batching tool calls into a single JSON-RPC message , 
 // stringify array parameters at the transport boundary. Decoding here keeps
 // the server permissive without requiring clients to know about the quirk.
 //

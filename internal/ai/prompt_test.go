@@ -142,7 +142,7 @@ func TestRenderAgentPromptMemoryOmittedForEventDrivenRuns(t *testing.T) {
 	usr := renderUser(t, agent, nil, ai.PromptContext{
 		Repo:   "owner/repo",
 		Number: 42,
-		// HasMemory is false — event-driven run, no memory section expected.
+		// HasMemory is false, event-driven run, no memory section expected.
 		Memory: "some content that should not appear",
 	})
 	if strings.Contains(usr, "Existing memory") {
@@ -404,7 +404,7 @@ func TestRenderAgentPromptMultipleGuardrailsConcatenatedInOrder(t *testing.T) {
 }
 
 // TestRenderAgentPromptGuardrailsPrecedeNoPRGuard pins guardrails ahead of
-// every other System block — including the synthesized no-PR guard. This
+// every other System block, including the synthesized no-PR guard. This
 // is the precedence rule the security guardrail's text relies on.
 func TestRenderAgentPromptGuardrailsPrecedeNoPRGuard(t *testing.T) {
 	t.Parallel()
@@ -495,7 +495,7 @@ func TestNormalizeTokenSanitizesForFilesystemUse(t *testing.T) {
 }
 
 // TestRenderAgentPromptTotalContentPreserved verifies that the combined
-// System+User content contains all original tokens — no content is dropped by
+// System+User content contains all original tokens, no content is dropped by
 // the split. This is the regression guard required by the issue.
 func TestRenderAgentPromptTotalContentPreserved(t *testing.T) {
 	t.Parallel()

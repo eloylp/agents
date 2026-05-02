@@ -70,7 +70,7 @@ func ValidateCrossRefs(agents []fleet.Agent, repos []fleet.Repo, skills map[stri
 // mutable entity sets. It is a superset of ValidateCrossRefs: it additionally
 // checks field-level constraints (non-empty prompts, valid backend names,
 // binding trigger types) but does NOT enforce aggregate minimums ("at least one
-// agent/repo/backend required") — those are enforced separately on DELETE paths
+// agent/repo/backend required"), those are enforced separately on DELETE paths
 // so that incremental UPSERT builds remain possible.
 //
 // The intent is that every CRUD write on the SQLite store passes ValidateEntities

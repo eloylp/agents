@@ -41,7 +41,7 @@ func TestPendingEventIDsReturnsRowsWithoutCompletedAt(t *testing.T) {
 	idB, _ := st.EnqueueEvent(`{"kind":"b"}`)
 	idC, _ := st.EnqueueEvent(`{"kind":"c"}`)
 
-	// Mark B completed — A and C must remain pending.
+	// Mark B completed, A and C must remain pending.
 	if err := st.MarkEventCompleted(idB); err != nil {
 		t.Fatalf("mark completed: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestPendingEventIDsReturnsRowsWithoutCompletedAt(t *testing.T) {
 
 // TestPendingIncludesInterruptedRuns verifies that rows whose
 // started_at is set but completed_at is still NULL come back in the
-// pending list — that's the crash-recovery case for interrupted runs.
+// pending list, that's the crash-recovery case for interrupted runs.
 func TestPendingIncludesInterruptedRuns(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
@@ -307,7 +307,7 @@ func TestGetRunnerReturnsRecord(t *testing.T) {
 }
 
 // TestRunQueueCleanupReturnsOnContextCancel verifies the loop exits
-// promptly when its context is cancelled — a producer-tier shutdown
+// promptly when its context is cancelled, a producer-tier shutdown
 // must not block on this consumer goroutine.
 func TestRunQueueCleanupReturnsOnContextCancel(t *testing.T) {
 	t.Parallel()

@@ -56,7 +56,7 @@ func TestLoadAllowMemoryFalseRoundTrips(t *testing.T) {
 
 // TestLoadAllowMemoryDefaultsTrueWhenAbsent confirms that omitting the field
 // in YAML leaves AllowMemory nil and IsAllowMemory reports the documented
-// default of true — the historical behaviour for autonomous agents.
+// default of true, the historical behaviour for autonomous agents.
 func TestLoadAllowMemoryDefaultsTrueWhenAbsent(t *testing.T) {
 	t.Setenv("TEST_SECRET", "s3cret")
 	path := writeConfig(t, minimalYAML(""))
@@ -77,7 +77,7 @@ func TestLoadAllowMemoryDefaultsTrueWhenAbsent(t *testing.T) {
 }
 
 // TestLoadAllowMemoryTrueExplicitlyHonoured confirms that `allow_memory: true`
-// also round-trips and is treated identically to the default — no surprises
+// also round-trips and is treated identically to the default, no surprises
 // when an operator chooses to be explicit.
 func TestLoadAllowMemoryTrueExplicitlyHonoured(t *testing.T) {
 	t.Setenv("TEST_SECRET", "s3cret")

@@ -746,11 +746,11 @@ export default function ConfigPage() {
               <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '0.75rem' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer', color: 'var(--text)' }}>
                   <input type="radio" name="importMode" value="merge" checked={importMode === 'merge'} onChange={() => setImportMode('merge')} />
-                  Merge — upsert records; existing records not in the file are kept
+                  Merge, upsert records; existing records not in the file are kept
                 </label>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer', color: 'var(--text-danger)' }}>
                   <input type="radio" name="importMode" value="replace" checked={importMode === 'replace'} onChange={() => setImportMode('replace')} />
-                  Replace — delete all existing records and replace with file contents
+                  Replace, delete all existing records and replace with file contents
                 </label>
               </div>
               <input
@@ -858,7 +858,7 @@ export default function ConfigPage() {
       )}
 
       {settingsTarget && (
-        <Modal title={`Runtime settings — ${settingsTarget.name}`} onClose={() => setSettingsTarget(null)}>
+        <Modal title={`Runtime settings, ${settingsTarget.name}`} onClose={() => setSettingsTarget(null)}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
             <div>
               <label style={labelStyle}>Timeout (seconds)</label>

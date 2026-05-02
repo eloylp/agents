@@ -88,7 +88,7 @@ func postMCP(t *testing.T, h http.Handler, body, sessionID string) *httptest.Res
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	// Streamable-http requires the client to accept both JSON and SSE media
-	// types on POST — it chooses which to return based on whether the tool
+	// types on POST, it chooses which to return based on whether the tool
 	// streams incremental results.
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	if sessionID != "" {

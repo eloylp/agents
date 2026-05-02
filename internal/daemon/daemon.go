@@ -2,25 +2,25 @@
 // runtime component (event channels, workflow engine, scheduler, observe
 // store, processor, dispatcher), every HTTP handler (fleet, repos, config,
 // observe, webhook), the MCP server, the optional proxy, and the embedded
-// UI mount. The HTTP listener is one of its goroutines, not its identity —
+// UI mount. The HTTP listener is one of its goroutines, not its identity , 
 // the type is named *Daemon because it is the daemon.
 //
 // Construction is one call: daemon.New(cfg, db, logger) wires every
 // component together and returns a fully-formed *Daemon. There are no
-// With-setters and no optional fields — production wires the same shape
+// With-setters and no optional fields, production wires the same shape
 // every time and the binary ships as one process, so the type is allowed
 // to know about its components concretely. Tests construct a real *Daemon
 // against a tempdir SQLite via internal/daemon/daemontest.
 //
 // State and the database. SQLite is the source of truth. Daemon-level
 // config (HTTP, proxy, log, processor) is set at startup and never
-// mutates — it lives on the Daemon struct. The four CRUD-mutable entity
+// mutates, it lives on the Daemon struct. The four CRUD-mutable entity
 // sets (agents, repos, skills, backends) live only in SQLite; every
 // runtime component reads them on demand. The scheduler is the one
 // exception: robfig/cron requires registered entries to fire, so the
 // scheduler holds a registered set in memory and reconciles it against
 // SQLite via a polling goroutine. CRUD writes never push updates into
-// the runtime — the next read or reconcile picks them up.
+// the runtime, the next read or reconcile picks them up.
 package daemon
 
 import (
@@ -69,7 +69,7 @@ type Daemon struct {
 
 	// daemonCfg is the static daemon-level configuration: HTTP, proxy, log,
 	// processor settings. Set at startup and never mutated. The four
-	// CRUD-mutable entity sets are NOT held here — they live only in
+	// CRUD-mutable entity sets are NOT held here, they live only in
 	// SQLite and are read on demand.
 	daemonCfg config.DaemonConfig
 
@@ -96,7 +96,7 @@ type Daemon struct {
 }
 
 // New builds the daemon. cfg supplies the static daemon-level fields
-// (HTTP, proxy, log, processor) — those never mutate via CRUD, so they
+// (HTTP, proxy, log, processor), those never mutate via CRUD, so they
 // are captured by value at startup. The four CRUD-mutable entity sets
 // (agents, repos, skills, backends) live only in the store and are read
 // on demand by every runtime component. The caller owns the underlying
@@ -177,7 +177,7 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 		}, logger)
 	}
 
-	// MCP last — it consumes every other component. Constructed here so
+	// MCP last, it consumes every other component. Constructed here so
 	// the handler picks up exactly the wiring the REST surface uses.
 	d.mcp = mcpserver.New(mcpserver.Deps{
 		Store:        st,
@@ -200,7 +200,7 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 // callers use the domain handlers.
 func (d *Daemon) Store() *store.Store { return d.store }
 
-// DaemonConfig returns the static daemon-level configuration — HTTP,
+// DaemonConfig returns the static daemon-level configuration, HTTP,
 // proxy, log, processor. CRUD-mutable state is NOT here; read it from
 // SQLite via the store package.
 func (d *Daemon) DaemonConfig() config.DaemonConfig { return d.daemonCfg }
@@ -247,7 +247,7 @@ func (d *Daemon) Handler() http.Handler { return d.buildRouter() }
 //
 // Before producers start, any pending event_queue rows from a previous
 // run are replayed onto the channel so events that were buffered when
-// the daemon stopped — or whose runs were interrupted mid-prompt — get
+// the daemon stopped, or whose runs were interrupted mid-prompt, get
 // a second chance.
 //
 // Sequence on shutdown:
@@ -283,7 +283,7 @@ func (d *Daemon) Run(parentCtx context.Context) error {
 	log.Info().Msg("consumers ready: processor, delivery dedup, dispatch dedup, queue cleanup")
 
 	// Replay any pending events from a previous run before producers start
-	// pushing new ones. Pending = completed_at IS NULL — covers events
+	// pushing new ones. Pending = completed_at IS NULL, covers events
 	// buffered at shutdown plus runs that crashed mid-prompt. The replay
 	// goroutine pushes onto the channel concurrently with workers
 	// consuming; it blocks naturally if the channel buffer fills.
@@ -329,7 +329,7 @@ func (d *Daemon) Run(parentCtx context.Context) error {
 
 // replayPendingEvents reads every pending event_queue row from the
 // previous run and pushes it onto the in-memory channel for workers.
-// Returns nil when ctx is cancelled or the replay completes — either is
+// Returns nil when ctx is cancelled or the replay completes, either is
 // a clean exit. Errors fetching individual rows are logged and the
 // replay continues; a row that vanished between scan and fetch is
 // already gone, and a malformed blob is best-effort dropped.
@@ -380,7 +380,7 @@ func (d *Daemon) replayPendingEvents(ctx context.Context) error {
 const queueRetention = 7 * 24 * time.Hour
 
 // queueCleanupInterval controls how often the cleanup loop ticks. Hourly
-// is plenty — the table is bounded by retention regardless of cadence,
+// is plenty, the table is bounded by retention regardless of cadence,
 // the cadence just controls the deletion granularity.
 const queueCleanupInterval = time.Hour
 
@@ -605,7 +605,7 @@ func (d *Daemon) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 // and closes the store. Status / import progress messages are written
 // to msg (typically os.Stderr); pass nil to silence them.
 //
-// An empty database boots cleanly with built-in defaults — no YAML
+// An empty database boots cleanly with built-in defaults, no YAML
 // import is required. Operators configure the fleet through the
 // dashboard / REST / MCP after the daemon is up.
 func LoadConfig(ctx context.Context, dbPath, importPath string, msg io.Writer) (*config.Config, *store.Store, error) {

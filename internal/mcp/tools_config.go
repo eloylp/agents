@@ -9,7 +9,7 @@ import (
 
 // toolGetConfig returns the redacted effective config JSON. The bytes are
 // pass-through from ConfigReader.ConfigJSON so REST and MCP callers see the
-// exact same payload — including secret redaction and omitted fields like
+// exact same payload, including secret redaction and omitted fields like
 // proxy.extra_body.
 func toolGetConfig(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {

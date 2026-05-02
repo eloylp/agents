@@ -38,7 +38,7 @@ func guardrailToJSON(g fleet.Guardrail) storeGuardrailJSON {
 // GuardrailPatch is the partial-update shape for a guardrail. Used by both
 // the REST PATCH /guardrails/{name} handler and the MCP update_guardrail
 // tool. A nil field means "don't touch". The is_builtin and
-// default_content fields are deliberately not patchable — built-in
+// default_content fields are deliberately not patchable, built-in
 // status is set by the migration; default_content is reset territory.
 type GuardrailPatch struct {
 	Description *string `json:"description,omitempty"`

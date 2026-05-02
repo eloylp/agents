@@ -11,7 +11,7 @@ import (
 
 // TestToolCreateAgentForwardsAllowMemoryFalse verifies that the create_agent
 // tool reads the boolean argument and forwards it to UpsertAgent as a non-nil
-// *bool — without that the runtime gate cannot distinguish "user wants
+// *bool, without that the runtime gate cannot distinguish "user wants
 // memory disabled" from the documented default.
 func TestToolCreateAgentForwardsAllowMemoryFalse(t *testing.T) {
 	t.Parallel()
@@ -72,7 +72,7 @@ func TestToolCreateAgentLeavesAllowMemoryNilWhenAbsent(t *testing.T) {
 }
 
 // TestToolUpdateAgentForwardsAllowMemoryPatch verifies that update_agent
-// surfaces allow_memory in the partial-update payload as a *bool — exactly
+// surfaces allow_memory in the partial-update payload as a *bool, exactly
 // what the merge step needs to flip the gate without nuking other fields.
 func TestToolUpdateAgentForwardsAllowMemoryPatch(t *testing.T) {
 	t.Parallel()
@@ -123,8 +123,8 @@ func TestToolUpdateAgentRejectsNonBooleanAllowMemory(t *testing.T) {
 }
 
 // TestToolGetAgentSurfacesAllowMemory verifies the read path: agentJSON must
-// include allow_memory as a boolean so MCP callers — and downstream UI clients
-// using the same wire shape — see the effective value.
+// include allow_memory as a boolean so MCP callers, and downstream UI clients
+// using the same wire shape, see the effective value.
 func TestToolGetAgentSurfacesAllowMemory(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)

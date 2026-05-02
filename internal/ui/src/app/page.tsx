@@ -49,7 +49,7 @@ interface StoreAgent {
 }
 
 function fmt(iso?: string) {
-  if (!iso) return '—'
+  if (!iso) return ', '
   return new Date(iso).toLocaleString()
 }
 
@@ -274,12 +274,12 @@ function AgentCard({ agent, onEdit, onDelete }: { agent: Agent; onEdit: () => vo
               <tr key={i} style={{ borderTop: '1px solid var(--border-subtle)' }}>
                 <td style={{ padding: '4px 0', color: 'var(--text-muted)' }}>{b.repo}</td>
                 <td style={{ padding: '4px 0', color: 'var(--text-muted)' }}>
-                  {b.cron ? `cron: ${b.cron}` : b.labels?.join(', ') ?? b.events?.join(', ') ?? '—'}
+                  {b.cron ? `cron: ${b.cron}` : b.labels?.join(', ') ?? b.events?.join(', ') ?? ', '}
                 </td>
                 <td style={{ padding: '4px 0', color: 'var(--text-muted)' }}>{fmt(b.schedule?.last_run)}</td>
-                <td style={{ padding: '4px 0', color: 'var(--text-muted)' }}>{b.schedule ? fmt(b.schedule.next_run) : '—'}</td>
+                <td style={{ padding: '4px 0', color: 'var(--text-muted)' }}>{b.schedule ? fmt(b.schedule.next_run) : ', '}</td>
                 <td style={{ padding: '4px 0' }}>
-                  {b.schedule?.last_status ? <StatusBadge status={b.schedule.last_status} /> : <span style={{ color: 'var(--text-faint)' }}>—</span>}
+                  {b.schedule?.last_status ? <StatusBadge status={b.schedule.last_status} /> : <span style={{ color: 'var(--text-faint)' }}>, </span>}
                 </td>
               </tr>
             ))}
@@ -447,7 +447,7 @@ export default function FleetPage() {
     if (b.cron) return `cron: ${b.cron}`
     if (b.labels && b.labels.length > 0) return `labels: ${b.labels.join(', ')}`
     if (b.events && b.events.length > 0) return `events: ${b.events.join(', ')}`
-    return '—'
+    return ', '
   }
 
   const visibleAgents = repoFilter
@@ -499,7 +499,7 @@ export default function FleetPage() {
       </div>
 
       {(modal === 'create' || modal === 'edit') && (
-        <Modal title={modal === 'create' ? 'Create agent' : `Edit — ${selected.name}`} onClose={() => setModal(null)}>
+        <Modal title={modal === 'create' ? 'Create agent' : `Edit, ${selected.name}`} onClose={() => setModal(null)}>
           <AgentForm
             key={`${modal}:${selected.name}`}
             initial={selected}

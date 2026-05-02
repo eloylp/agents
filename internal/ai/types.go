@@ -27,7 +27,7 @@ type Request struct {
 	// OnLine, when non-nil, is invoked synchronously for every line the
 	// AI CLI writes to stdout, with the trailing newline stripped. Used
 	// by the engine to publish lines into observe.RunRegistry's per-span
-	// stream hub for live UI streaming. Must not block — the runner
+	// stream hub for live UI streaming. Must not block, the runner
 	// reads stdout in a tight loop and the callback runs on that
 	// goroutine.
 	OnLine func(line []byte)
@@ -51,7 +51,7 @@ type DispatchRequest struct {
 
 // TraceStep records one tool call in the agent's tool loop.
 // It is populated by the runner from stream-json output and is never part of
-// the agent's JSON schema — agents do not return steps themselves.
+// the agent's JSON schema, agents do not return steps themselves.
 type TraceStep struct {
 	ToolName      string `json:"tool_name"`
 	InputSummary  string `json:"input_summary"`

@@ -204,7 +204,7 @@ func validateDispatchWiring(agents []fleet.Agent) error {
 
 // validateRepos checks per-repo invariants: name presence, name uniqueness,
 // binding agent references, trigger exclusivity, and event-kind allow-list.
-// It does NOT enforce an "at least one enabled repo" minimum — disabling all
+// It does NOT enforce an "at least one enabled repo" minimum, disabling all
 // repos is a legitimate user action (fleet maintenance, evaluating prompts on
 // a different repo) and the daemon runs cleanly with zero enabled repos:
 // webhook events for disabled repos route through workflow_engine which logs

@@ -476,7 +476,7 @@ func TestToOpenAI_InvalidInputsRejected(t *testing.T) {
 			},
 		},
 		{
-			// text("before"), tool_use(A), text("after") — trailing text after tool_use
+			// text("before"), tool_use(A), text("after"), trailing text after tool_use
 			// cannot be represented in OpenAI's schema without data loss.
 			name: "interleaved text/tool_use in assistant turn",
 			req: MessagesRequest{

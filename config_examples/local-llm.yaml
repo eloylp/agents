@@ -1,4 +1,4 @@
-# local-llm.yaml — fleet pinned to a local OpenAI-compatible LLM
+# local-llm.yaml, fleet pinned to a local OpenAI-compatible LLM
 #
 # Adds a custom backend with `local_model_url` and enables the built-
 # in Anthropic↔OpenAI translation proxy, so the unmodified `claude`

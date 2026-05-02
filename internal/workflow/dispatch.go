@@ -159,7 +159,7 @@ func (s *DispatchDedupStore) SeenOrAdd(target, repo string, number int, now time
 }
 
 // SeesPendingOrCommitted returns true if (target, repo, number) has any dispatch
-// claim — pending or committed — within the TTL window. Pending (not-yet-committed)
+// claim, pending or committed, within the TTL window. Pending (not-yet-committed)
 // claims are included so that a TryClaim still in flight (PushEvent running) blocks
 // concurrent cron/manual runs from also starting. This closes the race between a
 // dispatch's TryClaim→CommitClaim window and an autonomous scheduler check.
@@ -264,7 +264,7 @@ func (s *DispatchDedupStore) AbandonWebhookRun(agent, repo string, number int) {
 // MarkCronRun records that a cron-fired execution has started
 // for (agent, repo, number). The mark persists for the full TTL window and lives
 // in a separate key namespace ("cron\x00…") from dispatch entries so that
-// repeated cron runs are never suppressed by this mark — only dispatches are.
+// repeated cron runs are never suppressed by this mark, only dispatches are.
 // Autonomous runs always pass number=0 because they are not tied to a specific
 // issue or PR; this scoping ensures that a cron run for a repo-level context
 // (number=0) does not suppress dispatches for unrelated items such as PR #42.
@@ -332,7 +332,7 @@ func (s *DispatchDedupStore) SeenCronRun(agent, repo string, number int, now tim
 // TryClaimForCron atomically checks whether a dispatch has already claimed
 // the (agent, repo, number) slot and, if not, writes a cron-namespace mark.
 // Returns true if the mark was written (caller may proceed with the run).
-// Returns false if a dispatch claim — pending or committed — exists within
+// Returns false if a dispatch claim, pending or committed, exists within
 // the TTL window (caller should skip the run; dispatch-first ordering).
 //
 // Unlike the split DispatchAlreadyClaimed → MarkAutonomousRun sequence, this
@@ -363,7 +363,7 @@ func (s *DispatchDedupStore) TryClaimForCron(agent, repo string, number int, now
 	// Write the cron mark immediately so any dispatch arriving after this
 	// point (including during backend/runner resolution) sees it and backs
 	// off. The refcount allows concurrent autonomous passes to each hold a
-	// reservation independently — a rollback from one does not clear a mark
+	// reservation independently, a rollback from one does not clear a mark
 	// that another is still holding.
 	s.entries[cronKey] = dispatchEntry{expiresAt: now.Add(s.ttl), committed: true}
 	s.cronRefCounts[cronKey]++
@@ -387,7 +387,7 @@ func (s *DispatchDedupStore) TryClaimForDispatch(agent, repo string, number int,
 	dispatchKey := dispatchStoreKey(agent, repo, number)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Block if any cron/manual run is active — either within its original TTL
+	// Block if any cron/manual run is active, either within its original TTL
 	// window or still in flight after the window expired (refcount > 0). The
 	// second condition closes the race: a long-running job that outlasts
 	// dedup_window_seconds would have an expired expiresAt, but its refcount
@@ -422,7 +422,7 @@ type Dispatcher struct {
 }
 
 // NewDispatcher builds a Dispatcher. store is read on every dispatch to look
-// up the target agent's allow_dispatch flag — there is no in-memory agent
+// up the target agent's allow_dispatch flag, there is no in-memory agent
 // cache.
 func NewDispatcher(cfg config.DispatchConfig, st *store.Store, dedup *DispatchDedupStore, queue EventEnqueuer, logger zerolog.Logger) *Dispatcher {
 	return &Dispatcher{
@@ -572,7 +572,7 @@ func (d *Dispatcher) ProcessDispatches(
 			continue
 		}
 
-		// Enqueue succeeded — commit the claim so DispatchAlreadyClaimed returns
+		// Enqueue succeeded, commit the claim so DispatchAlreadyClaimed returns
 		// true and the autonomous scheduler skips a duplicate run for this target.
 		d.dedup.CommitClaim(req.Agent, ev.Repo.FullName, number)
 
@@ -609,7 +609,7 @@ func (d *Dispatcher) DispatchAlreadyClaimed(agentName, repo string, now time.Tim
 // dispatches are not spuriously suppressed for the full dedup window.
 //
 // The cron mark lives in a different key namespace from dispatch entries,
-// so repeated cron runs are never blocked by this mark — only dispatches
+// so repeated cron runs are never blocked by this mark, only dispatches
 // that share the same item context (number=0, the autonomous context) are.
 func (d *Dispatcher) MarkAutonomousRun(agentName, repo string, now time.Time) {
 	d.dedup.MarkCronRun(agentName, repo, 0, now)

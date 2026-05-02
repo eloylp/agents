@@ -333,7 +333,7 @@ func TestOpenAndMigrate(t *testing.T) {
 	}
 	db.Close()
 
-	// Second open should not fail — migrations already applied.
+	// Second open should not fail, migrations already applied.
 	db2, err := store.Open(path)
 	if err != nil {
 		t.Fatalf("second open: %v", err)
@@ -365,7 +365,7 @@ func TestImportLoad(t *testing.T) {
 	if out.Daemon.HTTP.ListenAddr != ":8080" {
 		t.Errorf("http.listen_addr: got %q, want %q", out.Daemon.HTTP.ListenAddr, ":8080")
 	}
-	// Resolved secret must NOT be stored — Load returns empty WebhookSecret.
+	// Resolved secret must NOT be stored, Load returns empty WebhookSecret.
 	if out.Daemon.HTTP.WebhookSecret != "" {
 		t.Errorf("WebhookSecret should not be persisted, got %q", out.Daemon.HTTP.WebhookSecret)
 	}
@@ -522,7 +522,7 @@ func TestCountFrom(t *testing.T) {
 // TestLoadEmptyDatabase verifies that Load on a fresh (empty) database
 // returns a zero-value *Config without error. The daemon's startup path
 // runs config.FinishLoad on the result, which fills every required
-// field with built-in defaults — so an empty store boots cleanly with
+// field with built-in defaults, so an empty store boots cleanly with
 // no YAML import required.
 func TestLoadEmptyDatabase(t *testing.T) {
 	t.Parallel()
@@ -535,7 +535,7 @@ func TestLoadEmptyDatabase(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("Load on empty database returned nil config")
 	}
-	// Daemon block left at zero — applyDefaults populates it later.
+	// Daemon block left at zero, applyDefaults populates it later.
 	if cfg.Daemon.HTTP.ListenAddr != "" {
 		t.Errorf("expected zero daemon block before FinishLoad; got listen_addr=%q", cfg.Daemon.HTTP.ListenAddr)
 	}

@@ -1,12 +1,12 @@
-# coder-and-reviewer.yaml — minimal dispatch protocol
+# coder-and-reviewer.yaml, minimal dispatch protocol
 #
 # Two agents wired so the coder can hand off to the reviewer when
 # its PR is ready, and the reviewer can dispatch back to the coder
 # on REQUEST_CHANGES. Smallest config that demonstrates the
 # `can_dispatch` / `allow_dispatch` handshake.
 #
-# coder       — implements changes from labelled issues; opens PRs.
-# pr-reviewer — reviews PR opens/syncs and approves or requests changes.
+# coder, implements changes from labelled issues; opens PRs.
+# pr-reviewer, reviews PR opens/syncs and approves or requests changes.
 #
 # The coder uses Claude (good at implementation), the pr-reviewer
 # uses Codex (good at fresh-eyes review). Switch backends to taste.

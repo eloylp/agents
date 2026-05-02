@@ -32,7 +32,7 @@ type agentBindingJSON struct {
 }
 
 // apiAgentJSON is the wire shape for one agent in the GET /agents fleet
-// snapshot view. Distinct from storeAgentJSON (the CRUD wire shape) — the
+// snapshot view. Distinct from storeAgentJSON (the CRUD wire shape), the
 // snapshot view exposes runtime status and binding schedules that the CRUD
 // representation does not.
 type apiAgentJSON struct {
@@ -49,7 +49,7 @@ type apiAgentJSON struct {
 	Bindings      []agentBindingJSON `json:"bindings,omitempty"`
 }
 
-// HandleAgentsView serves GET /agents — a fleet snapshot combining agent
+// HandleAgentsView serves GET /agents, a fleet snapshot combining agent
 // definitions from config with scheduling state from the scheduler. The
 // composing daemon's /agents dispatcher routes GET requests here and POST
 // requests to HandleAgentsCreate.
@@ -92,7 +92,7 @@ func (h *Handler) HandleAgentsView(w http.ResponseWriter, _ *http.Request) {
 		// including disabled-repo bindings. Filtering belongs to the consumer:
 		// the runtime refuses to dispatch to disabled repos at the boundary,
 		// but inspection surfaces (memory page, audit views, MCP) need to see
-		// the full configured topology — hiding a binding here also hides the
+		// the full configured topology, hiding a binding here also hides the
 		// agent's memory in the dashboard, which is exactly the bug we don't
 		// want. The repo_enabled flag travels alongside so consumers can mark
 		// inactive bindings without a second fetch.

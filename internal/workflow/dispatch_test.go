@@ -495,7 +495,7 @@ func TestDispatcherNormalizesAgentName(t *testing.T) {
 	q := &fakeQueue{}
 	d := testDispatcher(t, q)
 
-	// Mixed-case and whitespace in request — should be normalized.
+	// Mixed-case and whitespace in request, should be normalized.
 	reqs := []ai.DispatchRequest{{Agent: "  PR-Reviewer  ", Number: 1, Reason: "review"}}
 	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", 0, "", reqs)
 
@@ -550,7 +550,7 @@ func TestDispatcherOmittedNumberFallsBackToEventNumber(t *testing.T) {
 	q := &fakeQueue{}
 	d := testDispatcher(t, q)
 
-	// req.Number == 0 (agent omitted number field) — must fall back to ev.Number.
+	// req.Number == 0 (agent omitted number field), must fall back to ev.Number.
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 0, Reason: "review"}}
 	ev := testEvent("owner/repo", 42)
 	d.ProcessDispatches(context.Background(), originatorAgent("coder"), ev, "root-1", 0, "", reqs)
@@ -590,7 +590,7 @@ func TestDispatcherDedupUsesEventNumberWhenRequestNumberOmitted(t *testing.T) {
 
 func TestDispatcherRetrySucceedsAfterEnqueueFailure(t *testing.T) {
 	t.Parallel()
-	// First call uses a failing queue — enqueue fails. Because the dedup slot is
+	// First call uses a failing queue, enqueue fails. Because the dedup slot is
 	// claimed only after a successful enqueue, no dedup entry is written and
 	// the retry is not suppressed.
 	qFail := &fakeQueue{err: errors.New("queue full")}
@@ -634,7 +634,7 @@ func TestDispatchClaimOnlyVisibleAfterSuccessfulEnqueue(t *testing.T) {
 // test for the cron-first dedup ordering: when an autonomous run starts and
 // MarkAutonomousRun writes a cron-namespace mark, dispatches targeting the
 // same agent/repo with number=0 (autonomous context) must be suppressed for
-// the full dedup_window_seconds — both while the run is in-flight and after
+// the full dedup_window_seconds, both while the run is in-flight and after
 // it completes.
 func TestMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.T) {
 	t.Parallel()
@@ -660,7 +660,7 @@ func TestMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.T) {
 		t.Error("expected dispatch suppressed: cron mark is active within dedup window")
 	}
 
-	// The mark persists — a second dispatch attempt within the same window is also suppressed.
+	// The mark persists, a second dispatch attempt within the same window is also suppressed.
 	d.ProcessDispatches(context.Background(), originator, ev, "root-y", 0, "", []ai.DispatchRequest{
 		{Agent: "coder", Reason: "second dispatch attempt within dedup window"},
 	})
@@ -683,7 +683,7 @@ func TestMarkAutonomousRunDoesNotSuppressDispatchForDifferentNumber(t *testing.T
 	d.MarkAutonomousRun("coder", "owner/repo", time.Now())
 
 	// A dispatch targeting coder for PR #42 (number=42) must still be enqueued
-	// — it is a different item context from the autonomous cron run (number=0).
+	//, it is a different item context from the autonomous cron run (number=0).
 	originator := originatorAgent("pr-reviewer")
 	ev := testEvent("owner/repo", 42)
 	d.ProcessDispatches(context.Background(), originator, ev, "root-pr42", 0, "", []ai.DispatchRequest{
@@ -718,7 +718,7 @@ func TestPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 	}
 	d.MarkAutonomousRun("coder", "owner/repo", now)
 
-	// Dispatch arriving after the run — still within the TTL window — must be suppressed.
+	// Dispatch arriving after the run, still within the TTL window, must be suppressed.
 	originator := agents["pr-reviewer"]
 	ev := Event{Repo: RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "cron", Number: 0}
 	d.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
@@ -834,7 +834,7 @@ func TestRemoveCronMarkWithOverlappingRunsRefcount(t *testing.T) {
 // TestLongRunningCronMarkBlocksDispatchPastTTL is a regression test for the
 // case where an autonomous run outlasts its dedup_window_seconds TTL. Without
 // the refcount-based guard, the sweeper would evict the cron entry once its
-// expiresAt passed, and TryClaimForDispatch would no longer see the mark —
+// expiresAt passed, and TryClaimForDispatch would no longer see the mark , 
 // allowing a dispatch to race the still-in-flight cron run.
 func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 	t.Parallel()
@@ -872,7 +872,7 @@ func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 	}
 
 	// Once the run completes successfully, the refcount is decremented via
-	// FinalizeAutonomousRun. The entry itself is kept until the TTL expires —
+	// FinalizeAutonomousRun. The entry itself is kept until the TTL expires , 
 	// but since we advanced past the TTL in the simulation, the next eviction
 	// pass will remove it and dispatches may then proceed.
 	d.FinalizeAutonomousRun("coder", "owner/repo")
@@ -913,7 +913,7 @@ func TestFinalizeAutonomousRunKeepsTTLBlocksDispatchWithinWindow(t *testing.T) {
 	d1.FinalizeAutonomousRun("coder", "owner/repo")
 
 	// Within the TTL window, a dispatch to the same (agent, repo, 0) slot must
-	// still be suppressed — the entry is kept for the full dedup window.
+	// still be suppressed, the entry is kept for the full dedup window.
 	q2 := &fakeQueue{}
 	d2 := NewDispatcher(cfg, seedAgentMap(t, agents), dedup, q2, zerolog.Nop())
 	d2.ProcessDispatches(context.Background(), originator, ev, "root-post-run", 0, "", []ai.DispatchRequest{
@@ -1012,13 +1012,13 @@ func TestDispatcherReflectsLiveAllowlistChanges(t *testing.T) {
 	st := dispatchTestStore(t)
 	d := NewDispatcher(testDispatchCfg(), st, NewDispatchDedupStore(300), q, zerolog.Nop())
 
-	// Initially "sec-reviewer" has AllowDispatch: false — dispatch is dropped.
+	// Initially "sec-reviewer" has AllowDispatch: false, dispatch is dropped.
 	originator := originatorAgent("coder")
 	originator.CanDispatch = append(originator.CanDispatch, "sec-reviewer")
 	ev := testEvent("owner/repo", 1)
 
 	d.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
-		{Agent: "sec-reviewer", Reason: "initial — should be dropped"},
+		{Agent: "sec-reviewer", Reason: "initial, should be dropped"},
 	})
 	if len(q.popped()) != 0 {
 		t.Error("expected dispatch dropped: sec-reviewer has allow_dispatch: false")
@@ -1033,7 +1033,7 @@ func TestDispatcherReflectsLiveAllowlistChanges(t *testing.T) {
 	}
 
 	d.ProcessDispatches(context.Background(), originator, ev, "root-2", 0, "", []ai.DispatchRequest{
-		{Agent: "sec-reviewer", Reason: "after update — should be enqueued"},
+		{Agent: "sec-reviewer", Reason: "after update, should be enqueued"},
 	})
 	if len(q.popped()) != 1 {
 		t.Error("expected dispatch enqueued: sec-reviewer now has allow_dispatch: true")

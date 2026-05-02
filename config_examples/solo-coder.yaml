@@ -1,4 +1,4 @@
-# solo-coder.yaml — the "hello world" fleet
+# solo-coder.yaml, the "hello world" fleet
 #
 # One repo, one agent, one trigger. Open an issue on the bound repo
 # with the label `coder:run` and the daemon dispatches the coder to

@@ -3,24 +3,24 @@
 //
 // MCP clients (Claude Code, Cursor, Cline, ...) register the daemon at /mcp
 // and then discover the available tools automatically. This is the v3
-// foundation for conversational fleet management — tracked in issue #227.
+// foundation for conversational fleet management, tracked in issue #227.
 //
 // The current tool inventory covers fleet reads, on-demand runs, the
 // read-only observability surface, and config snapshots / import:
 //
-//   - list_agents, list_skills, list_backends, list_repos — fleet lists
-//   - get_agent, get_skill, get_backend, get_repo         — per-item reads
-//   - get_status                                          — health snapshot
-//   - trigger_agent                                       — on-demand run
-//   - list_events, list_traces, get_trace, get_trace_steps, get_trace_prompt — agent activity
-//   - get_graph, get_dispatches, get_memory               — dispatch + memory
-//   - get_config, export_config, import_config            — config snapshots / write
-//   - create_agent, update_agent, delete_agent            — agent CRUD writes
-//   - create_skill, update_skill, delete_skill            — skill CRUD writes
-//   - create_backend, update_backend, delete_backend      — backend CRUD writes
-//   - create_repo, update_repo, delete_repo               — repo CRUD writes
-//   - create_binding, get_binding, update_binding, delete_binding — atomic binding CRUD
-//   - list_queue_events, delete_queue_event, retry_queue_event — durable event queue ops
+//   - list_agents, list_skills, list_backends, list_repos, fleet lists
+//   - get_agent, get_skill, get_backend, get_repo, per-item reads
+//   - get_status, health snapshot
+//   - trigger_agent, on-demand run
+//   - list_events, list_traces, get_trace, get_trace_steps, get_trace_prompt, agent activity
+//   - get_graph, get_dispatches, get_memory, dispatch + memory
+//   - get_config, export_config, import_config, config snapshots / write
+//   - create_agent, update_agent, delete_agent, agent CRUD writes
+//   - create_skill, update_skill, delete_skill, skill CRUD writes
+//   - create_backend, update_backend, delete_backend, backend CRUD writes
+//   - create_repo, update_repo, delete_repo, repo CRUD writes
+//   - create_binding, get_binding, update_binding, delete_binding, atomic binding CRUD
+//   - list_queue_events, delete_queue_event, retry_queue_event, durable event queue ops
 //
 // With repo CRUD in place this surface now covers the full fleet inventory
 // declared in #227.
@@ -43,7 +43,7 @@ import (
 )
 
 // Version is advertised to MCP clients during the initialize handshake.
-// It tracks the wire contract (tool names, shapes) — bump it whenever a
+// It tracks the wire contract (tool names, shapes), bump it whenever a
 // tool's input or output schema changes in a non-backwards-compatible way.
 const Version = "0.1.0"
 
@@ -59,7 +59,7 @@ const Version = "0.1.0"
 type Deps struct {
 	Store        *store.Store           // data-access facade for tools that read fleet entities
 	DaemonConfig config.DaemonConfig    // static daemon-level config (HTTP, proxy, processor, log)
-	StatusJSON   func() ([]byte, error) // /status payload — same bytes the REST surface returns
+	StatusJSON   func() ([]byte, error) // /status payload, same bytes the REST surface returns
 	Channels     *workflow.DataChannels // PushEvent for trigger_agent
 	Observe      *observe.Store         // observability tools (events, traces, graph)
 	Engine       *workflow.Engine       // DispatchStats() for get_dispatches
@@ -93,7 +93,7 @@ func New(deps Deps) *Handler {
 }
 
 // ServeHTTP dispatches MCP requests to the underlying streamable HTTP server.
-// The mcp-go library interprets the request method (POST/GET/DELETE) — the
+// The mcp-go library interprets the request method (POST/GET/DELETE), the
 // mount path can be anything, including the canonical /mcp used by the
 // daemon.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -102,14 +102,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // serverInstructions is shown to MCP clients during the initialize handshake
 // so the connected model understands the domain without a custom system
-// prompt. Keep it short — the tool descriptions carry the per-call details.
+// prompt. Keep it short, the tool descriptions carry the per-call details.
 const serverInstructions = `This MCP server exposes fleet management tools for the agents daemon.
 
 Domain model:
-  - agent   — a capability definition (backend, model, skills, prompt).
-  - skill   — a reusable prompt fragment that agents can compose.
-  - backend — an AI CLI runner (claude, codex, or a named local backend).
-  - repo    — a GitHub repo with bindings that wire agents to triggers
+  - agent, a capability definition (backend, model, skills, prompt).
+  - skill, a reusable prompt fragment that agents can compose.
+  - backend, an AI CLI runner (claude, codex, or a named local backend).
+  - repo, a GitHub repo with bindings that wire agents to triggers
               (labels, events, or cron).
 
 Use list_* tools to enumerate the fleet and get_* tools to drill into a

@@ -78,7 +78,7 @@ type lastRunRecord struct {
 // scheduler keeps that state in sync with SQLite via a reconciler
 // goroutine that polls every reconcileInterval, diffs the current binding
 // set against what's registered, and adds/removes entries as needed.
-// CRUD writes do not push updates to the scheduler — the next reconcile
+// CRUD writes do not push updates to the scheduler, the next reconcile
 // tick picks them up.
 type Scheduler struct {
 	store             *store.Store
@@ -325,7 +325,7 @@ func (s *Scheduler) AgentStatuses() []AgentStatus {
 	return statuses
 }
 
-// Reconcile triggers a one-shot reconcile out of band — useful for tests
+// Reconcile triggers a one-shot reconcile out of band, useful for tests
 // that want to force the registration cycle without waiting for the
 // reconciler ticker.
 func (s *Scheduler) Reconcile() error { return s.reconcile() }

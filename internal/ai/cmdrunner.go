@@ -71,7 +71,7 @@ func (r *CommandRunner) Run(ctx context.Context, req Request) (Response, error) 
 // content is delivered via --append-system-prompt so Claude Code's built-in
 // tool definitions are preserved; the user content travels on stdin as before.
 // For all other backends (codex, openai_compatible, unknown) the two parts are
-// concatenated and sent on stdin — the semantics are identical to the previous
+// concatenated and sent on stdin, the semantics are identical to the previous
 // single-prompt behaviour.
 func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, req Request) (Response, error) {
 	var cmdCtx context.Context
@@ -105,7 +105,7 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	// (unlike bufio.Scanner which silently truncates at its buffer limit).
 	// ReadBytes blocks until a complete newline-delimited line arrives from the
 	// pipe, so time.Now() inside addLine reflects when that specific line was
-	// received — not when a larger pipe-read chunk happened to land.
+	// received, not when a larger pipe-read chunk happened to land.
 	var stdoutCap lineCapture
 	reader := bufio.NewReader(stdoutPipe)
 	for {
@@ -184,7 +184,7 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	}
 
 	// Extract the tool-loop transcript from stream-json output (claude backends).
-	// This is a best-effort parse — errors are logged but do not fail the run.
+	// This is a best-effort parse, errors are logged but do not fail the run.
 	if strings.HasPrefix(r.backendName, "claude") {
 		response.Steps = parseClaudeSteps(stdoutCap.lines)
 	}
@@ -374,7 +374,7 @@ func buildCommandEnv(req Request, backendEnv map[string]string) []string {
 //     {"prompt_tokens","completion_tokens","total_tokens"}
 //
 // Returns the zero Usage when no usable field is found. Best-effort:
-// usage is observability, not load-bearing — a missing parse just
+// usage is observability, not load-bearing, a missing parse just
 // means the row shows zero tokens, not a failed run.
 func extractUsage(data []byte) Usage {
 	last, err := extractJSON(data)
@@ -471,7 +471,7 @@ type timedLine struct {
 
 // lineCapture records each stdout line together with the wall-clock time it
 // was read from the subprocess pipe. addLine is called once per Scanner.Scan
-// iteration, so each line gets its own time.Now() — lines that arrive in
+// iteration, so each line gets its own time.Now(), lines that arrive in
 // different pipe reads will have meaningfully different timestamps.
 type lineCapture struct {
 	lines []timedLine
@@ -497,7 +497,7 @@ func (c *lineCapture) addLine(data []byte) {
 // tool_result block, giving a coarse-grained measure of how long the tool ran.
 //
 // Steps are capped at 100 and input/output are truncated to 200 runes.
-// Any event that cannot be parsed is silently skipped — this is best-effort.
+// Any event that cannot be parsed is silently skipped, this is best-effort.
 func parseClaudeSteps(lines []timedLine) []TraceStep {
 	// streamEvent is the minimal shape of a single JSONL line.
 	type contentBlock struct {
@@ -586,7 +586,7 @@ func extractToolResultText(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return s
 	}
-	// Try array of content blocks — concatenate all text blocks.
+	// Try array of content blocks, concatenate all text blocks.
 	var blocks []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`

@@ -166,7 +166,7 @@ func (e *Engine) WithMemory(m MemoryBackend) {
 // requests from agent responses are validated and logged but not enqueued.
 //
 // The engine reads agents, repos, skills, and backends from db on every
-// event — there is no in-memory cfg cache. Static processor settings
+// event, there is no in-memory cfg cache. Static processor settings
 // (concurrency cap, dispatch safety limits) are passed at construction
 // because they never mutate via CRUD; CRUD touches the four entity sets
 // only.
@@ -341,7 +341,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 	}
 
 	// Read the four entity sets fresh from SQLite for this event. The
-	// returned cfg is a per-event snapshot — no caching across events, no
+	// returned cfg is a per-event snapshot, no caching across events, no
 	// reload chain. Cost is one SQLite snapshot read (~111µs for typical
 	// fleet sizes); irrelevant at this daemon's traffic.
 	cfg, err := e.loadCfg()
@@ -356,7 +356,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 	}
 
 	// agent.dispatch requires an enabled binding. agents.run (manual trigger)
-	// and autonomous (cron tick) skip the check — explicit operator intent or
+	// and autonomous (cron tick) skip the check, explicit operator intent or
 	// the cron's fire-time authority always runs.
 	if ev.Kind == "agent.dispatch" && !slices.ContainsFunc(repo.Use, func(b fleet.Binding) bool {
 		return b.Agent == targetName && b.IsEnabled()
@@ -433,7 +433,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 	}
 	// Notify the autonomous scheduler so its lastRuns map (which drives the
 	// per-binding schedule display in /agents) reflects this run's outcome.
-	// Fired only for autonomous events — webhook/agents.run/dispatch runs
+	// Fired only for autonomous events, webhook/agents.run/dispatch runs
 	// have their own provenance and don't update the cron schedule view.
 	if ev.Kind == "cron" && e.lastRunRec != nil {
 		status := "success"
@@ -487,7 +487,7 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 
 			// Gate through the dedup store when configured, but only for
 			// item-scoped events (number > 0).  Repo-level events such as
-			// push have number=0 and must never be collapsed — each push is
+			// push have number=0 and must never be collapsed, each push is
 			// a distinct event with a different head_sha, so two quick pushes
 			// to the same repo should both trigger their bound agents.
 			if e.dispatcher != nil && ev.Number > 0 {
@@ -538,7 +538,7 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 				// Commit the claim and release the in-flight marker. CommitClaim
 				// marks the entry as committed so the TTL window stays active;
 				// FinalizeWebhookRun decrements the refcount while preserving
-				// the TTL entry — together they suppress duplicate runs until
+				// the TTL entry, together they suppress duplicate runs until
 				// the window expires without blocking new events after it does.
 				if e.dispatcher != nil && ev.Number > 0 {
 					e.dispatcher.dedup.CommitClaim(a.Name, ev.Repo.FullName, ev.Number)
@@ -856,7 +856,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 
 	// Persist memory after a successful run, gated on the same flag that
 	// controlled the load above. An empty resp.Memory is treated as "agent
-	// did not return updated memory — preserve existing" rather than "wipe":
+	// did not return updated memory, preserve existing" rather than "wipe":
 	// a structured-output omission must not silently destroy stored memory.
 	// To explicitly clear, the agent must return a non-empty sentinel that
 	// the operator opts into; the runtime's default is preserve-on-empty.

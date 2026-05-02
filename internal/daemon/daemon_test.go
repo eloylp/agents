@@ -651,7 +651,7 @@ func TestInvalidSignatureDoesNotPoisonDeliveryDedupe(t *testing.T) {
 		t.Fatalf("bad signature: got %d, want %d", rrBad.Code, http.StatusUnauthorized)
 	}
 
-	// Retry the same delivery ID with valid sig — it must be processed.
+	// Retry the same delivery ID with valid sig, it must be processed.
 	sig := signatureForTests([]byte(body), "secret")
 	reqGood := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(body))
 	reqGood.Header.Set("X-GitHub-Event", "issues")

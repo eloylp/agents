@@ -67,7 +67,7 @@ func (c *Config) applyDefaults() {
 	}
 
 	// repos: default enabled to true when field absent is ambiguous; YAML
-	// zero-value is false. We leave it as-is — absent means false here,
+	// zero-value is false. We leave it as-is, absent means false here,
 	// because repos are an explicit allow-list.
 }
 

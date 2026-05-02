@@ -101,7 +101,7 @@ func UpsertGuardrail(db *sql.DB, g fleet.Guardrail) error {
 }
 
 // DeleteGuardrail removes the named guardrail. Built-in rows can be
-// deleted too — operators who really mean it can run a complete cleanup;
+// deleted too, operators who really mean it can run a complete cleanup;
 // the dashboard double-confirms before letting them.
 func DeleteGuardrail(db *sql.DB, name string) error {
 	name = fleet.NormalizeGuardrailName(name)

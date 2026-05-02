@@ -63,7 +63,7 @@ type Span struct {
 	PromptSize int64 `json:"prompt_size,omitempty"`
 
 	// Token usage as reported by the AI CLI. Anthropic / Claude Code
-	// emits four fields; OpenAI / Codex emits two — cache fields are
+	// emits four fields; OpenAI / Codex emits two, cache fields are
 	// zero in that case. Pre-009-migration runs have all four nil
 	// (preserved as omitempty).
 	InputTokens      int64 `json:"input_tokens,omitempty"`
@@ -194,7 +194,7 @@ func (a *ActiveRuns) IsRunning(agentName string) bool {
 // span_id available so the UI can offer a live-stream affordance) and by
 // the live-stream SSE handler to enumerate / look up the per-span hub.
 //
-// Lives only in memory by design — once the run completes, the canonical
+// Lives only in memory by design, once the run completes, the canonical
 // trace row in SQLite supersedes it.
 type ActiveRun struct {
 	SpanID    string
@@ -231,7 +231,7 @@ func newRunStream() *runStream {
 }
 
 // publish records a line in the ring buffer and fans it out to live
-// subscribers. A full subscriber channel drops the line silently —
+// subscribers. A full subscriber channel drops the line silently , 
 // observability must not back-pressure the runner.
 func (r *runStream) publish(line []byte) {
 	cp := make([]byte, len(line))
@@ -283,7 +283,7 @@ func (r *runStream) subscribe() ([][]byte, chan []byte) {
 	hist := make([][]byte, len(r.history))
 	copy(hist, r.history)
 	if r.closed {
-		// Run finished — return history but no live channel. Hand back
+		// Run finished, return history but no live channel. Hand back
 		// a closed channel so the caller's range loop exits cleanly
 		// after rendering history.
 		ch := make(chan []byte)
@@ -300,7 +300,7 @@ func (r *runStream) unsubscribe(ch chan []byte) {
 	defer r.mu.Unlock()
 	if _, ok := r.subs[ch]; ok {
 		delete(r.subs, ch)
-		// Don't close here — the caller is the consumer; end() handles
+		// Don't close here, the caller is the consumer; end() handles
 		// the close path.
 	}
 }
@@ -480,7 +480,7 @@ func (s *Store) ListEvents(since time.Time) []TimestampedEvent {
 	return out
 }
 
-// spanColumns is the column list used by every read query — kept in
+// spanColumns is the column list used by every read query, kept in
 // one place so adding a new column means editing one line. The
 // prompt_gz blob is intentionally excluded; bodies are fetched on
 // demand via PromptForSpan to keep listings small.
@@ -553,7 +553,7 @@ func (s *Store) PromptForSpan(spanID string) (string, error) {
 
 // scanSpans is a shared helper that scans Span rows from a query result.
 // The token columns are sql.NullInt64 because pre-migration rows have
-// NULL — we materialise NULL to zero, the JSON layer drops zero via
+// NULL, we materialise NULL to zero, the JSON layer drops zero via
 // omitempty so the UI can detect "not recorded".
 func scanSpans(rows *sql.Rows) []Span {
 	var out []Span

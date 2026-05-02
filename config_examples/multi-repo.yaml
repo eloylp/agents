@@ -1,4 +1,4 @@
-# multi-repo.yaml — same agents, several repos, mixed triggers
+# multi-repo.yaml, same agents, several repos, mixed triggers
 #
 # Demonstrates that agent definitions are independent of where they
 # run. Three agents are defined once and bound to three different
@@ -9,7 +9,7 @@
 #   - service-c: PR-event-triggered reviewer only
 #
 # Adding a new repo to the fleet means adding another `repos:`
-# entry and binding the agents it needs — no agent duplication.
+# entry and binding the agents it needs, no agent duplication.
 #
 # Import (running daemon): cp multi-repo.yaml ../config.yaml && docker compose restart agents
 #                          OR  curl -X POST -H 'Content-Type: application/x-yaml' --data-binary @multi-repo.yaml http://localhost:8080/import
@@ -93,7 +93,7 @@ repos:
       - agent: pr-reviewer
         events: ["pull_request.opened", "pull_request.synchronize"]
 
-  # service-c: review-only — no agents authoring code here.
+  # service-c: review-only, no agents authoring code here.
   - name: "owner/service-c"
     enabled: true
     use:

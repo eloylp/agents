@@ -40,11 +40,11 @@ func NewDataChannels(buffer int, st *store.Store) *DataChannels {
 }
 
 // PushEvent persists ev to SQLite and notifies workers via the channel.
-// Returns the new event_queue row id on success — useful to operators
+// Returns the new event_queue row id on success, useful to operators
 // re-running an event from /queue/{id}/retry. On channel-full or context
 // cancellation it deletes the just-inserted row and returns the error so
 // the caller surfaces back-pressure (a 503 to GitHub on webhook arrival,
-// etc.) — the row never lingers as a "phantom" the next startup would
+// etc.), the row never lingers as a "phantom" the next startup would
 // replay. EnqueuedAt is stamped here so queue-wait time can be computed
 // by the engine.
 func (dc *DataChannels) PushEvent(ctx context.Context, ev Event) (int64, error) {
@@ -80,7 +80,7 @@ func (dc *DataChannels) PushEvent(ctx context.Context, ev Event) (int64, error) 
 // ReplayQueued pushes a pre-persisted event onto the channel without
 // going through the store. Used by the daemon's startup replay step
 // where the row already exists in event_queue. Blocks if the channel
-// buffer is full — startup wants every pending event delivered, even
+// buffer is full, startup wants every pending event delivered, even
 // if it has to wait for workers to catch up.
 func (dc *DataChannels) ReplayQueued(ctx context.Context, qe QueuedEvent) error {
 	dc.mu.RLock()

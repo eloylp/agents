@@ -7,7 +7,7 @@ import (
 )
 
 // TestStoreCRUDAgentCreateDefaultsAllowMemoryTrue verifies that a POST that
-// omits allow_memory persists the documented default — the GET response and
+// omits allow_memory persists the documented default, the GET response and
 // the round-trip back through the wire shape both report true.
 func TestStoreCRUDAgentCreateDefaultsAllowMemoryTrue(t *testing.T) {
 	t.Parallel()
@@ -18,7 +18,7 @@ func TestStoreCRUDAgentCreateDefaultsAllowMemoryTrue(t *testing.T) {
 		"name": "coder", "backend": "claude", "prompt": "p",
 		"skills": []string{}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
-		t.Fatalf("POST /agents: got %d — %s", rr.Code, rr.Body.String())
+		t.Fatalf("POST /agents: got %d, %s", rr.Code, rr.Body.String())
 	}
 
 	rr := doCRUDRequest(t, s, http.MethodGet, "/agents/coder", nil)
@@ -49,7 +49,7 @@ func TestStoreCRUDAgentCreateRoundTripsAllowMemoryFalse(t *testing.T) {
 		"skills": []string{}, "can_dispatch": []string{},
 		"allow_memory": false,
 	}); rr.Code != http.StatusOK {
-		t.Fatalf("POST /agents: got %d — %s", rr.Code, rr.Body.String())
+		t.Fatalf("POST /agents: got %d, %s", rr.Code, rr.Body.String())
 	}
 
 	rr := doCRUDRequest(t, s, http.MethodGet, "/agents/stateless", nil)
@@ -78,14 +78,14 @@ func TestStoreCRUDAgentPatchAllowMemoryFlipsWithoutAffectingOtherFields(t *testi
 		"prompt": "p", "description": "d",
 		"skills": []string{}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
-		t.Fatalf("seed coder: got %d — %s", rr.Code, rr.Body.String())
+		t.Fatalf("seed coder: got %d, %s", rr.Code, rr.Body.String())
 	}
 
 	rr := doCRUDRequest(t, s, http.MethodPatch, "/agents/coder", map[string]any{
 		"allow_memory": false,
 	})
 	if rr.Code != http.StatusOK {
-		t.Fatalf("PATCH /agents/coder: got %d — %s", rr.Code, rr.Body.String())
+		t.Fatalf("PATCH /agents/coder: got %d, %s", rr.Code, rr.Body.String())
 	}
 	var out storeAgentJSON
 	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
@@ -94,7 +94,7 @@ func TestStoreCRUDAgentPatchAllowMemoryFlipsWithoutAffectingOtherFields(t *testi
 	if out.AllowMemory == nil || *out.AllowMemory {
 		t.Errorf("AllowMemory after patch: got %v, want non-nil &false", out.AllowMemory)
 	}
-	// Other fields must be preserved — patching one toggle should not
+	// Other fields must be preserved, patching one toggle should not
 	// disturb prompt, model, description, or backend.
 	if out.Backend != "claude" || out.Model != "opus" || out.Prompt != "p" || out.Description != "d" {
 		t.Errorf("non-patched fields drifted: %+v", out)
@@ -115,14 +115,14 @@ func TestStoreCRUDAgentPatchAllowMemoryTrueResetsExplicitFalse(t *testing.T) {
 		"skills": []string{}, "can_dispatch": []string{},
 		"allow_memory": false,
 	}); rr.Code != http.StatusOK {
-		t.Fatalf("seed: got %d — %s", rr.Code, rr.Body.String())
+		t.Fatalf("seed: got %d, %s", rr.Code, rr.Body.String())
 	}
 
 	rr := doCRUDRequest(t, s, http.MethodPatch, "/agents/stateless", map[string]any{
 		"allow_memory": true,
 	})
 	if rr.Code != http.StatusOK {
-		t.Fatalf("PATCH /agents/stateless: got %d — %s", rr.Code, rr.Body.String())
+		t.Fatalf("PATCH /agents/stateless: got %d, %s", rr.Code, rr.Body.String())
 	}
 	var out storeAgentJSON
 	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {

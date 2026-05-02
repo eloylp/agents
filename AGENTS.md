@@ -4,7 +4,7 @@ Repo-specific guidance for any coding agent (Claude Code, Codex, Cursor, Aider, 
 
 ## What this repo is
 
-**agents** is a self-hosted Go daemon that dispatches AI CLIs (Claude Code, Codex, or any CLI pointed at a local LLM via the built-in proxy) to work on GitHub repos. Agents are declared in YAML, bound to repos via **labels**, **GitHub event subscriptions**, or **cron schedules**, and execute inside the AI CLI — which in turn uses GitHub MCP tools for all writes. The daemon itself is strictly read-only against GitHub.
+**agents** is a self-hosted Go daemon that dispatches AI CLIs (Claude Code, Codex, or any CLI pointed at a local LLM via the built-in proxy) to work on GitHub repos. Agents are declared in YAML, bound to repos via **labels**, **GitHub event subscriptions**, or **cron schedules**, and execute inside the AI CLI, which in turn uses GitHub MCP tools for all writes. The daemon itself is strictly read-only against GitHub.
 
 Agents can also invoke each other at runtime via the **reactive inter-agent dispatcher**: an agent returns `dispatch: [{agent, number, reason}]` in its response JSON, the daemon validates against per-agent whitelists and safety limits, then enqueues a synthetic `agent.dispatch` event that runs the target agent.
 
@@ -21,7 +21,7 @@ docker compose build   # build the image (multi-stage Dockerfile handles go buil
 docker compose up -d   # run the daemon
 ```
 
-The supported runtime is Docker Compose — there is no local-binary workflow. On-demand runs go through the running daemon: `POST /run` (HTTP) or the `trigger_agent` MCP tool. There is no separate CLI mode for ad-hoc execution — it would be a second runtime that doesn't share the daemon's run-lock or dispatch dedup, opening a memory-write race window.
+The supported runtime is Docker Compose, there is no local-binary workflow. On-demand runs go through the running daemon: `POST /run` (HTTP) or the `trigger_agent` MCP tool. There is no separate CLI mode for ad-hoc execution, it would be a second runtime that doesn't share the daemon's run-lock or dispatch dedup, opening a memory-write race window.
 
 ## Code map (current)
 
@@ -55,17 +55,17 @@ internal/ai/response-schema.json # embedded JSON schema for structured output (c
 
 ## Conceptual model
 
-- **Agent** — a named capability: `backend` + `skills: []` + `prompt`. An agent is a pure definition. It does not run by itself. Prompts are stored in SQLite (seeded via `--import` from YAML, or created directly in the UI).
-- **Skill** — a reusable chunk of guidance referenced by name in multiple agents. Skill text is concatenated before the agent's own prompt at render time.
-- **Binding** — `repos[*].use[*]`: pairs one agent with exactly one trigger (`labels:`, `events:`, or `cron:`). The same agent can have multiple bindings on the same repo with different triggers.
-- **Backend** — explicit backend selection per agent (no `auto`). Built-ins are `claude` and `codex`; additional named local backends are supported via `local_model_url`.
-- **Proxy** — optional in-daemon Anthropic↔OpenAI translator mounted at `/v1/messages` and `/v1/models`. Disabled by default. When enabled, set `local_model_url` on the backend entry to the proxy's URL; the daemon injects `ANTHROPIC_BASE_URL` for that backend automatically.
-- **Dispatcher** — the runtime mechanism by which agents invoke each other. See "Reactive dispatch" below.
+- **Agent**, a named capability: `backend` + `skills: []` + `prompt`. An agent is a pure definition. It does not run by itself. Prompts are stored in SQLite (seeded via `--import` from YAML, or created directly in the UI).
+- **Skill**, a reusable chunk of guidance referenced by name in multiple agents. Skill text is concatenated before the agent's own prompt at render time.
+- **Binding**, `repos[*].use[*]`: pairs one agent with exactly one trigger (`labels:`, `events:`, or `cron:`). The same agent can have multiple bindings on the same repo with different triggers.
+- **Backend**, explicit backend selection per agent (no `auto`). Built-ins are `claude` and `codex`; additional named local backends are supported via `local_model_url`.
+- **Proxy**, optional in-daemon Anthropic↔OpenAI translator mounted at `/v1/messages` and `/v1/models`. Disabled by default. When enabled, set `local_model_url` on the backend entry to the proxy's URL; the daemon injects `ANTHROPIC_BASE_URL` for that backend automatically.
+- **Dispatcher**, the runtime mechanism by which agents invoke each other. See "Reactive dispatch" below.
 
-## Reactive dispatch — the model you must keep in mind
+## Reactive dispatch: the model you must keep in mind
 
 - Each agent's YAML may declare `allow_dispatch: true` (opt-in as a target) and `can_dispatch: [name, ...]` (whitelist of targets).
-- A target named in any `can_dispatch` list must also declare a `description` — it is rendered into the originating agent's prompt as part of an `## Available experts` roster.
+- A target named in any `can_dispatch` list must also declare a `description`, it is rendered into the originating agent's prompt as part of an `## Available experts` roster.
 - An agent's response JSON may include a `dispatch: []` array. Each element names a target and a reason.
 - The dispatcher validates every request against: whitelist match, target's opt-in, chain depth, fan-out per run, and a dedup window keyed on `(target_agent, repo, number)`. Safety limits live under `daemon.processor.dispatch.{max_depth, max_fanout, dedup_window_seconds}` and all three must be positive integers.
 - Accepted requests are enqueued as synthetic `agent.dispatch` events with payload fields `target_agent`, `reason`, `invoked_by`, `root_event_id`, `dispatch_depth`. They flow through the same single event queue as webhook events and cron-fired events.
@@ -75,15 +75,15 @@ internal/ai/response-schema.json # embedded JSON schema for structured output (c
 
 These constraints are load-bearing. Read them before changing the listed areas.
 
-- **The daemon never writes to GitHub directly.** All writes go through the AI backend's MCP tools. If you introduce a new feature that seems to need a direct GitHub API call, raise it in an issue first — there's almost always a way to keep the daemon read-only.
-- **Agents must not mention external GitHub users.** Do NOT request reviews from, assign to, or @mention any GitHub user in PRs, comments, or issue descriptions. All review routing is handled by the daemon's dispatch system. Unsolicited pings to external contributors from an automated agent are a trust and reputation risk — the GitHub account could be flagged. This rule applies to every agent prompt.
-- **Prompts are persisted on the trace span, not in logs.** Every run's composed prompt is gzipped onto the `traces` row (visible at `/runners` and `/traces` once a span is recorded). Logs carry only the prompt's character count for correlation. The persistence is gated by your reverse proxy's auth — `/runners` and `/traces` must stay behind it.
+- **The daemon never writes to GitHub directly.** All writes go through the AI backend's MCP tools. If you introduce a new feature that seems to need a direct GitHub API call, raise it in an issue first, there's almost always a way to keep the daemon read-only.
+- **Agents must not mention external GitHub users.** Do NOT request reviews from, assign to, or @mention any GitHub user in PRs, comments, or issue descriptions. All review routing is handled by the daemon's dispatch system. Unsolicited pings to external contributors from an automated agent are a trust and reputation risk, the GitHub account could be flagged. This rule applies to every agent prompt.
+- **Prompts are persisted on the trace span, not in logs.** Every run's composed prompt is gzipped onto the `traces` row (visible at `/runners` and `/traces` once a span is recorded). Logs carry only the prompt's character count for correlation. The persistence is gated by your reverse proxy's auth, `/runners` and `/traces` must stay behind it.
 - **Structured output is enforced at the CLI level.** Claude uses hardcoded `--output-format stream-json --json-schema <embedded-schema>` args; codex uses hardcoded `--output-schema <temp-file>`. The daemon embeds `internal/ai/response-schema.json` and appends the correct flags automatically. When changing the response contract, update `internal/ai/response-schema.json` alongside `internal/ai/types.go`.
 - **The runner contract is stdin-in, single-JSON-object-out.**
   - `internal/ai/cmdrunner.go` sends the composed prompt on stdin and parses the last top-level JSON object from stdout.
   - Agents emit `{"summary": "...", "artifacts": [...], "dispatch": [...], "memory": "..."}`. `dispatch` and `memory` are optional fields but all four keys are present in the schema. A missing JSON object, an empty response, or a response where `summary`, `artifacts`, and `dispatch` are all empty fails the run with a clear error.
   - `memory` is the agent's full updated memory state. Memory load/persist is governed by `allow_memory` (default `true`) uniformly across cron, webhook, dispatch, `POST /run`, and MCP `trigger_agent` runs. Setting `allow_memory: false` skips both load and persist for every trigger kind. An empty string clears the memory.
-  - Small prose outputs with no JSON are an agent-prompt issue, not a runner bug — don't relax the parser to cover them; fix the prompt.
+  - Small prose outputs with no JSON are an agent-prompt issue, not a runner bug, don't relax the parser to cover them; fix the prompt.
 - **Subprocess env is filtered.** `internal/ai/cmdrunner.go::allowCommandEnvKey` is an explicit allowlist. When adding a new env-var-driven integration, add the variable to the allowlist **and** document why (see `ANTHROPIC_BASE_URL` / `OPENAI_*` for precedent).
 - **Backend args are daemon-managed.** User/runtime edits are limited to `timeout_seconds`, `max_prompt_chars`, and (for local backends) `local_model_url`. Do not reintroduce user-configurable runner args.
 - **Model pinning safety.** Config may contain pinned models that become unavailable after discovery. These agents are treated as orphaned in diagnostics/UI and fail fast at runtime until remapped or cleared.
@@ -105,7 +105,7 @@ When making common classes of changes, update all of these at once:
 | Dispatch semantics | `internal/workflow/dispatch.go` (runtime), `internal/config/config.go` (load-time validation), agent response schema in `internal/ai/types.go`, README dispatch section, all prompt "Response format" sections, tests on both paths |
 | SQLite store schema | `internal/store/migrations/`, `internal/store/store.go`, `internal/store/crud.go`, the per-domain handlers under `internal/daemon/{fleet,repos,config,queue}`, tests |
 | Proxy translation behavior | `internal/anthropic_proxy/{types,translate,handler}.go`, unit tests for the affected shape, `docs/local-models.md` if user-visible |
-| Anything in the README | Also check `CLAUDE.md`, `AGENTS.md`, `config.example.yaml` — these four should stay in sync |
+| Anything in the README | Also check `CLAUDE.md`, `AGENTS.md`, `config.example.yaml`, these four should stay in sync |
 
 ## Testing expectations
 
@@ -124,7 +124,7 @@ When making common classes of changes, update all of these at once:
 - **Backend discovery lifecycle.** Startup auto-discovery runs only when the backends table is empty. Manual refresh is explicit via `POST /backends/discover`; `GET /backends/status` is diagnostics-only.
 - **Orphan visibility.** `GET /agents/orphans/status` and `/status` (`orphaned_agents.count`) expose model/backend drift requiring user remediation.
 - **Agent memory** is stored in SQLite (in the `memory` table), keyed by `(agent, repo)`. It's the agent's job to return updated memory in its response; the daemon writes it back to the store unchanged. Load/persist is gated by `allow_memory` (default `true`) and applies uniformly across cron, webhook, dispatch, `POST /run`, and `trigger_agent`.
-- **The event queue is durable.** Every `PushEvent` persists the event to the SQLite `event_queue` table before signalling workers via the in-memory channel. Rows whose `completed_at` is still `NULL` at startup are replayed onto the channel — events buffered at shutdown, or runs interrupted mid-prompt, get a second chance instead of vanishing. Completed rows older than 7 days are pruned by an hourly cleanup loop. Inspect / delete / retry rows through the `/runners` REST surface, the matching MCP tools, or the UI's Runners page.
+- **The event queue is durable.** Every `PushEvent` persists the event to the SQLite `event_queue` table before signalling workers via the in-memory channel. Rows whose `completed_at` is still `NULL` at startup are replayed onto the channel, events buffered at shutdown, or runs interrupted mid-prompt, get a second chance instead of vanishing. Completed rows older than 7 days are pruned by an hourly cleanup loop. Inspect / delete / retry rows through the `/runners` REST surface, the matching MCP tools, or the UI's Runners page.
 - **Dispatch dedup is process-local and in-memory.** It's shared across cron-fired runs, event-fired runs, dispatched runs, and on-demand triggers (`POST /run` / `trigger_agent`) within one process. Restarting the daemon clears the dedup state.
 - **Avoid `--no-verify` on commits.** Pre-commit hooks exist for a reason. If a hook fails, fix the underlying issue.
 - **The `ports: "8080:8080"` in `docker-compose.yaml`** publishes the daemon port on the host. In production, consider restricting access via a reverse proxy (e.g. Traefik with basic auth) or binding to `127.0.0.1:8080:8080`.
@@ -136,7 +136,7 @@ When making common classes of changes, update all of these at once:
 - **Making the daemon's event queue depth dependent on backend response time.** The queue and the workers are decoupled on purpose. Slow backends should accumulate queue depth, not block new events from arriving.
 - **Spawning new goroutines inside an agent run that outlive the parent context.** Respect context cancellation so shutdown drains cleanly.
 - **Dispatching to an agent the originator doesn't know about.** Any dispatch entry whose `agent` isn't in the originator's `can_dispatch` list is dropped with a WARN. Agents should only name targets they see in their `## Available experts` roster.
-- **Fabricating facts inside populated response templates.** Less-capable local models will happily populate a "post status comment in this format" template with invented values (non-existent SHAs, false merge states). If you write prompts that use templated outputs, add verification steps — require SHAs to be fetched live within the same run, require CI status to be fetched via the GitHub MCP server's workflow-run tools, and so on.
+- **Fabricating facts inside populated response templates.** Less-capable local models will happily populate a "post status comment in this format" template with invented values (non-existent SHAs, false merge states). If you write prompts that use templated outputs, add verification steps, require SHAs to be fetched live within the same run, require CI status to be fetched via the GitHub MCP server's workflow-run tools, and so on.
 
 ## Local-model routing
 

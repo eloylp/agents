@@ -11,7 +11,7 @@ import (
 
 // RunnerStatus is the derived state of an event_queue row, surfaced as
 // "runner status" on the wire. The SQLite table is still called
-// event_queue (one row per durable event) — externally we frame each
+// event_queue (one row per durable event), externally we frame each
 // row as a runner because that's how operators think about a unit of
 // work. A single event row may correspond to N agent runs (fanout); the
 // REST handler does that JOIN with the traces table at read time.
@@ -91,7 +91,7 @@ func (s *Store) MarkEventStarted(id int64) error {
 }
 
 // MarkEventCompleted stamps completed_at on the row with id. Workers
-// call this after HandleEvent returns (whether it succeeded or not — a
+// call this after HandleEvent returns (whether it succeeded or not, a
 // failed run is still considered "done" from the queue's perspective;
 // dropping the row prevents a replay loop on a deterministically failing
 // event).
@@ -188,7 +188,7 @@ func (s *Store) CountRunners(status RunnerStatus) (int, error) {
 }
 
 // GetRunner returns one row by id. Returns ErrRunnerNotFound when
-// missing — same error ReadQueuedEvent uses.
+// missing, same error ReadQueuedEvent uses.
 func (s *Store) GetRunner(id int64) (RunnerRecord, error) {
 	row := s.db.QueryRow(
 		"SELECT id, event_blob, enqueued_at, started_at, completed_at FROM event_queue WHERE id = ?",
@@ -253,7 +253,7 @@ func scanRunnerRow(s scanner) (RunnerRecord, error) {
 	default:
 		rec.Status = RunnerEnqueued
 	}
-	// Partial blob decode — keep the listing useful even if the payload
+	// Partial blob decode, keep the listing useful even if the payload
 	// schema gets new fields. A malformed blob leaves Kind/Repo/Number
 	// zero rather than failing the whole listing.
 	var partial struct {
@@ -313,7 +313,7 @@ func (s *Store) DeleteCompletedEventsBefore(before time.Time) (int64, error) {
 // defaults to 1h.
 //
 // A delete error logs through onErr (when provided) and the loop
-// continues — a transient cleanup failure must not bring down the
+// continues, a transient cleanup failure must not bring down the
 // daemon, and the next tick retries.
 func (s *Store) RunQueueCleanup(ctx context.Context, retain, interval time.Duration, onErr func(error)) error {
 	if interval <= 0 {

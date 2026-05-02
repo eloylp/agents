@@ -65,7 +65,7 @@ function EventRow({ event, isNew }: { event: Event; isNew: boolean }) {
           {event.kind}
         </span>
         <span style={{ color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.repo}</span>
-        <span style={{ color: 'var(--text-faint)' }}>{event.number > 0 ? `#${event.number}` : '—'}</span>
+        <span style={{ color: 'var(--text-faint)' }}>{event.number > 0 ? `#${event.number}` : ', '}</span>
         <span style={{ color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.actor}</span>
         <span style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
           {(event.agents ?? []).map(a => (
@@ -79,7 +79,7 @@ function EventRow({ event, isNew }: { event: Event; isNew: boolean }) {
               textDecoration: 'none',
             }}>{a}</Link>
           ))}
-          {(event.agents ?? []).length === 0 && <span style={{ color: 'var(--text-faint)' }}>—</span>}
+          {(event.agents ?? []).length === 0 && <span style={{ color: 'var(--text-faint)' }}>, </span>}
         </span>
         <Link
           href={`/runners/?event=${encodeURIComponent(event.id)}`}

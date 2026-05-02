@@ -2,7 +2,7 @@
 
 ## Why a container
 
-The daemon dispatches AI CLIs (`claude`, `codex`) with sandbox-bypass flags so agents can edit files and run tools without per-call prompts. The container is what bounds that blast radius — running the binary on your host is not supported. See [security.md](security.md) for the threat model.
+The daemon dispatches AI CLIs (`claude`, `codex`) with sandbox-bypass flags so agents can edit files and run tools without per-call prompts. The container is what bounds that blast radius, running the binary on your host is not supported. See [security.md](security.md) for the threat model.
 
 ## Bring up the daemon
 
@@ -13,9 +13,9 @@ echo "GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)" > .env
 docker compose up -d
 ```
 
-The shipped [`docker-compose.yaml`](../docker-compose.yaml) is the source of truth for what gets mounted and exposed. Two named volumes back the runtime: `agents-data` (SQLite store) and `agents-home` (Claude / Codex auth + MCP config). The daemon boots against an empty database with built-in defaults — no YAML seed is required.
+The shipped [`docker-compose.yaml`](../docker-compose.yaml) is the source of truth for what gets mounted and exposed. Two named volumes back the runtime: `agents-data` (SQLite store) and `agents-home` (Claude / Codex auth + MCP config). The daemon boots against an empty database with built-in defaults, no YAML seed is required.
 
-> **First-run note.** The compose file builds the image locally on first invocation — multi-stage build (UI + Go binary), expect ~3-5 minutes depending on the host. `docker compose logs -f agents` shows progress.
+> **First-run note.** The compose file builds the image locally on first invocation, multi-stage build (UI + Go binary), expect ~3-5 minutes depending on the host. `docker compose logs -f agents` shows progress.
 
 Verify the daemon is healthy:
 
@@ -31,13 +31,13 @@ docker compose exec -it agents agents-setup
 
 `agents-setup` is a small bash script (see [`scripts/setup.sh`](../scripts/setup.sh)) that does only what genuinely needs interactive shell access:
 
-1. picks which AI backend(s) you want — claude, codex, or both,
+1. picks which AI backend(s) you want, claude, codex, or both,
 2. runs `claude login` / `codex login` against your terminal so you can complete the OAuth flow in your browser,
 3. registers the GitHub MCP server on each authenticated CLI,
 4. refreshes the daemon's backend discovery so the fleet sees the freshly authenticated tooling,
 5. prints diagnostics from `/status`, `/backends/status`, `/agents/orphans/status`.
 
-Once it finishes, the daemon has working backends and tools. **Fleet configuration (agents, skills, repos, bindings, webhooks) lives in the dashboard** — open `http://localhost:8080/ui/` and configure from there. Those tasks are graphical-shaped and don't fit a bash prompt loop.
+Once it finishes, the daemon has working backends and tools. **Fleet configuration (agents, skills, repos, bindings, webhooks) lives in the dashboard**, open `http://localhost:8080/ui/` and configure from there. Those tasks are graphical-shaped and don't fit a bash prompt loop.
 
 ## Production essentials
 
@@ -59,7 +59,7 @@ git pull && docker compose build && docker compose up -d
 curl -X POST http://localhost:8080/backends/discover
 
 # Snapshot the SQLite store while the daemon runs (the agents image
-# does not ship sqlite3 — use a one-shot Alpine sidecar against the
+# does not ship sqlite3, use a one-shot Alpine sidecar against the
 # data volume; SQLite's online-backup API handles concurrent writes).
 docker run --rm \
   -v $(basename "$PWD")_agents-data:/src \
@@ -73,12 +73,12 @@ curl -X POST -H 'Content-Type: application/x-yaml' \
   --data-binary @fleet.yaml http://localhost:8080/import
 ```
 
-The `agents-data` volume is the only piece of state worth backing up regularly — `agents-home` holds OAuth tokens and is meant to be re-populated via `claude login` rather than backed up.
+The `agents-data` volume is the only piece of state worth backing up regularly, `agents-home` holds OAuth tokens and is meant to be re-populated via `claude login` rather than backed up.
 
 ## Next steps
 
-- [Mental model](mental-model.md) — how the daemon composes prompts and what an agent must return. Read this before writing your first prompt.
-- [Configuration](configuration.md) — full schema (skills, agents, repos, backends, guardrails).
-- [Web dashboard](ui.md) — the management UI you will spend most of your time in.
-- [Local models](local-models.md) — running the fleet on your own LLM.
-- [Security](security.md) — threat model, recommendations, reverse-proxy routing.
+- [Mental model](mental-model.md), how the daemon composes prompts and what an agent must return. Read this before writing your first prompt.
+- [Configuration](configuration.md), full schema (skills, agents, repos, backends, guardrails).
+- [Web dashboard](ui.md), the management UI you will spend most of your time in.
+- [Local models](local-models.md), running the fleet on your own LLM.
+- [Security](security.md), threat model, recommendations, reverse-proxy routing.
