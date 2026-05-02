@@ -2,9 +2,11 @@
 
 ![agents](docs/agents.jpg)
 
-**A thin orchestration layer for AI agents. Compose them from reusable skills, run them across your repos on events or cron schedules, and let them dispatch work to each other.**
+**A self-hosted, observable orchestrator for multi-agent workflows on your repos.**
 
-The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), or your own local LLM) and lets it work through native GitHub primitives: issues, PRs, reviews, comments.
+Create agents and compose them with skills, memory, and triggers — repo events, cron, or inter-agent dispatch. Route runs through any local OpenAI-compatible model via the built-in proxy. Your fleet, your prompts, your traces — all on your hardware.
+
+The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), or your own local LLM) and lets it work through your repo host's native primitives — issues, PRs, reviews, comments. GitHub today; [GitLab](https://github.com/eloylp/agents/issues/359) under discussion.
 
 ## Features
 
