@@ -502,10 +502,10 @@ func TestBuildDeliveryRespectsTotalBudget(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-			t.Run(tc.name, func(t *testing.T) {
-				t.Parallel()
-				r := NewCommandRunner(tc.backendName, "command", "true", nil, 10, tc.maxChars, zerolog.Nop())
-				args, stdin := r.buildDelivery(Request{System: tc.system, User: tc.user})
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := NewCommandRunner(tc.backendName, "command", "true", nil, 10, tc.maxChars, zerolog.Nop())
+			args, stdin := r.buildDelivery(Request{System: tc.system, User: tc.user})
 			if stdin != tc.wantStdin {
 				t.Errorf("stdin = %q, want %q", stdin, tc.wantStdin)
 			}
@@ -572,10 +572,10 @@ func TestBuildDeliveryClaudeAndCodexSameTruncationBoundary(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-			t.Run(tc.name, func(t *testing.T) {
-				t.Parallel()
-				claude := NewCommandRunner("claude", "command", "true", nil, 10, tc.maxChars, zerolog.Nop())
-				codex := NewCommandRunner("codex", "command", "true", nil, 10, tc.maxChars, zerolog.Nop())
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			claude := NewCommandRunner("claude", "command", "true", nil, 10, tc.maxChars, zerolog.Nop())
+			codex := NewCommandRunner("codex", "command", "true", nil, 10, tc.maxChars, zerolog.Nop())
 
 			claudeArgs, claudeStdin := claude.buildDelivery(Request{System: tc.system, User: tc.user})
 			_, codexStdin := codex.buildDelivery(Request{System: tc.system, User: tc.user})
@@ -640,9 +640,7 @@ func TestParseClaudeSteps(t *testing.T) {
 			if len(raw) == 0 {
 				continue
 			}
-			line := make([]byte, len(raw)+1)
-			copy(line, raw)
-			line[len(raw)] = '\n'
+			line := append(bytes.Clone(raw), '\n')
 			tls = append(tls, timedLine{data: line, at: base})
 			base = base.Add(step)
 		}

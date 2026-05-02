@@ -480,9 +480,7 @@ type lineCapture struct {
 
 // addLine records a single line (without trailing newline) and its arrival time.
 func (c *lineCapture) addLine(data []byte) {
-	line := make([]byte, len(data)+1)
-	copy(line, data)
-	line[len(data)] = '\n'
+	line := append(bytes.Clone(data), '\n')
 	c.lines = append(c.lines, timedLine{data: line, at: time.Now()})
 	c.all.Write(line)
 }
