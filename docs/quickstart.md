@@ -23,26 +23,21 @@ Verify the daemon is healthy:
 curl -s http://localhost:8080/status | jq
 ```
 
-## Run the setup wizard
+## Authenticate the AI CLIs
 
 ```bash
-docker compose exec -it agents agents setup
+docker compose exec -it agents agents-setup
 ```
 
-This drops you into an interactive Claude REPL inside the container. The wizard walks the operator phase by phase:
+`agents-setup` is a small bash script (see [`scripts/setup.sh`](../scripts/setup.sh)) that does only what genuinely needs interactive shell access:
 
-1. asks which AI backend(s) you want to use (claude, codex, or both),
-2. guides you through `!claude login` / `!codex login` and GitHub MCP registration via shell-escape commands,
-3. gathers the repos you want to manage and validates them via the GitHub MCP,
-4. seeds a starter fleet by POSTing a YAML payload to `/import`,
-5. runs diagnostics against `/status`, `/backends/status`, `/agents/orphans/status`,
-6. registers webhooks via the GitHub MCP server.
+1. picks which AI backend(s) you want — claude, codex, or both,
+2. runs `claude login` / `codex login` against your terminal so you can complete the OAuth flow in your browser,
+3. registers the GitHub MCP server on each authenticated CLI,
+4. refreshes the daemon's backend discovery so the fleet sees the freshly authenticated tooling,
+5. prints diagnostics from `/status`, `/backends/status`, `/agents/orphans/status`.
 
-When the wizard finishes, the fleet is live. Manage it from `http://localhost:8080/ui/`.
-
-## Manual walkthrough (optional)
-
-If you'd rather not use the wizard, the steps it performs are documented in [`internal/setup/prompt.md`](../internal/setup/prompt.md). Each phase is a few HTTP calls or `claude` / `codex` invocations against the running container — copy them yourself.
+Once it finishes, the daemon has working backends and tools. **Fleet configuration (agents, skills, repos, bindings, webhooks) lives in the dashboard** — open `http://localhost:8080/ui/` and configure from there. Those tasks are graphical-shaped and don't fit a bash prompt loop.
 
 ## Production essentials
 

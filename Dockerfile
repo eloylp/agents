@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w
 
 FROM node:22-alpine
 
-RUN apk add --no-cache bash \
+RUN apk add --no-cache bash curl jq \
     && npm install -g @anthropic-ai/claude-code @openai/codex \
     && npm cache clean --force
 
@@ -32,6 +32,8 @@ ENV HOME=/home/agents
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /agents /usr/local/bin/agents
+COPY scripts/setup.sh /usr/local/bin/agents-setup
+RUN chmod +x /usr/local/bin/agents-setup
 USER agents
 ENTRYPOINT ["agents"]
 CMD ["--db", "/var/lib/agents/agents.db"]

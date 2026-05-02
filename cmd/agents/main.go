@@ -12,7 +12,6 @@ import (
 
 	"github.com/eloylp/agents/internal/daemon"
 	"github.com/eloylp/agents/internal/logging"
-	"github.com/eloylp/agents/internal/setup"
 )
 
 func main() {
@@ -25,13 +24,6 @@ func main() {
 func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	// "setup" is the only subcommand that runs without a config; handle it
-	// before touching the database.
-	if len(os.Args) > 1 && os.Args[1] == "setup" {
-		dryRun := len(os.Args) > 2 && os.Args[2] == "--dry-run"
-		return setup.Run(setup.NewCommandRunner(), dryRun, os.Stdin, os.Stdout, os.Stderr)
-	}
 
 	_ = godotenv.Load()
 
