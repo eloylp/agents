@@ -30,6 +30,17 @@ The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthr
 - **[SQLite-backed fleet](docs/configuration.md)**: state lives in a SQLite database, managed through the three interfaces above. `config.yaml` is an optional export/import format, not a runtime dependency.
 - **Transparent**: every agent action is a GitHub comment, issue, or PR. Reviewable. Revertable.
 
+## How it works
+
+Every run, regardless of trigger, goes through the same pipeline:
+
+1. **Compose the prompt**: guardrails + skills + agent prompt + runtime context + memory.
+2. **Spawn the AI CLI** (`claude`, `codex`, or your local model) with JSON-schema-enforced output.
+3. **Parse the structured response**: artifacts, dispatch requests, updated memory.
+4. **Persist the trace**, fan out any dispatches, write back memory.
+
+Read [`docs/mental-model.md`](docs/mental-model.md) before writing your first prompt; the rest of the docs assume you have the model.
+
 ## Get started
 
 See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a repo in a few minutes, `docker compose up -d` is the recommended path. For five import-ready fleet scenarios (solo coder, coder + reviewer, autonomous fleet, local LLM, multi-repo) see [`config_examples/`](config_examples/).
