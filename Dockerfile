@@ -31,7 +31,7 @@ RUN adduser -D -h /home/agents -s /bin/bash agents \
 ENV HOME=/home/agents
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=builder /agents /agents
+COPY --from=builder /agents /usr/local/bin/agents
 USER agents
-ENTRYPOINT ["/agents"]
+ENTRYPOINT ["agents"]
 CMD ["--db", "/var/lib/agents/agents.db"]
