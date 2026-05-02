@@ -2,6 +2,7 @@ package observe
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -17,7 +18,7 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
-	
+
 	"github.com/eloylp/agents/internal/fleet"
 	obstore "github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
@@ -25,7 +26,7 @@ import (
 	"github.com/eloylp/agents/internal/workflow"
 )
 
-// ── helpers ────────────────────────────────────────────────────────────────
+// ── helpers ──────────────────────────────────────────────────────────────────────────────
 
 // minimalCfg builds a *config.Config sufficient for the coordinator + observe
 // handler under test. The four entity sets are filled by store.ImportAll into
@@ -224,9 +225,7 @@ func newSSECapture() *sseCapture {
 func (c *sseCapture) Header() http.Header { return c.header }
 func (c *sseCapture) WriteHeader(_ int)   {}
 func (c *sseCapture) Write(b []byte) (int, error) {
-	cp := make([]byte, len(b))
-	copy(cp, b)
-	c.writes <- cp
+	c.writes <- bytes.Clone(b)
 	return len(b), nil
 }
 func (c *sseCapture) Flush() {}
@@ -243,7 +242,7 @@ func mustReadSSEMsg(t *testing.T, ch <-chan []byte, timeout time.Duration) strin
 	}
 }
 
-// ── /dispatches ────────────────────────────────────────────────────────────
+// ── /dispatches ────────────────────────────────────────────────────────────────────────────
 
 func TestHandleDispatchesReturnsEngineStats(t *testing.T) {
 	t.Parallel()
@@ -292,7 +291,7 @@ func TestHandleDispatchesZeroWhenNoEngine(t *testing.T) {
 	}
 }
 
-// ── /events ────────────────────────────────────────────────────────────────
+// ── /events ──────────────────────────────────────────────────────────────────────────────
 
 func TestHandleEventsReturnsStoredEvents(t *testing.T) {
 	t.Parallel()
@@ -345,7 +344,7 @@ func TestHandleEventsSinceFilter(t *testing.T) {
 	}
 }
 
-// ── SSE stream handlers ────────────────────────────────────────────────────
+// ── SSE stream handlers ──────────────────────────────────────────────────────────────────────────
 
 // TestHandleSSEStreams verifies the three SSE stream handlers
 // (events/stream, traces/stream, memory/stream) using a table-driven
@@ -427,7 +426,7 @@ func TestHandleSSEStreams(t *testing.T) {
 	}
 }
 
-// ── /traces ────────────────────────────────────────────────────────────────
+// ── /traces ──────────────────────────────────────────────────────────────────────────────
 
 func TestHandleTracesReturnsStoredSpans(t *testing.T) {
 	t.Parallel()
@@ -495,7 +494,7 @@ func TestHandleTraceNotFound(t *testing.T) {
 	}
 }
 
-// ── /graph ─────────────────────────────────────────────────────────────────
+// ── /graph ───────────────────────────────────────────────────────────────────────────────
 
 func TestHandleGraphReturnsEdges(t *testing.T) {
 	t.Parallel()
@@ -616,7 +615,7 @@ func TestHandleGraphNodeStatusReflectsRuntimeState(t *testing.T) {
 	}
 }
 
-// ── SSE helper ─────────────────────────────────────────────────────────────
+// ── SSE helper ────────────────────────────────────────────────────────────────────────────
 
 // TestServeSSEHeartbeatSentPeriodically verifies that ServeSSEWithInterval
 // writes periodic ": heartbeat" SSE comments when no data arrives.
@@ -724,7 +723,7 @@ func TestServeSSEDeliversDataMessages(t *testing.T) {
 	}
 }
 
-// ── /memory ────────────────────────────────────────────────────────────────
+// ── /memory ──────────────────────────────────────────────────────────────────────────────
 
 func TestHandleMemorySQLiteMode(t *testing.T) {
 	t.Parallel()
@@ -827,7 +826,7 @@ func TestHandleMemoryReturns503WhenReaderUnconfigured(t *testing.T) {
 	}
 }
 
-// ── /traces/{span_id}/steps ────────────────────────────────────────────────
+// ── /traces/{span_id}/steps ─────────────────────────────────────────────────────────────────────
 
 func TestHandleTraceStepsReturnsOrderedSteps(t *testing.T) {
 	t.Parallel()
