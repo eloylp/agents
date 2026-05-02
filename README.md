@@ -10,7 +10,6 @@ The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthr
 
 ## Features
 
-- **[Quick start](docs/quickstart.md)**: get the daemon running on a repo in under five minutes.
 - **Three ways to interact with your fleet**:
   - **[Web dashboard](docs/ui.md)**: graphical. Manage agents, skills, repos, and bindings; watch the live event firehose, agent traces with tool-loop transcripts, dispatch graph, and memory viewer.
   - **[MCP server](docs/mcp.md)**: conversational. Control agents and trigger runs straight from Claude Code in your terminal (or Cursor, Cline, or any MCP client).
@@ -24,6 +23,10 @@ The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthr
 - **[Reactive inter-agent dispatch](docs/dispatch.md)**: agents invoke each other at runtime with depth, fanout, and dedup safety limits.
 - **[SQLite-backed fleet](docs/configuration.md)**: state lives in a SQLite database, managed through the three interfaces above. `config.yaml` is an optional export/import format, not a runtime dependency.
 - **Transparent**: every agent action is a GitHub comment, issue, or PR. Reviewable. Revertable.
+
+## Get started
+
+See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a repo in a few minutes — `docker compose up -d` is the recommended path.
 
 ## Contributing
 
