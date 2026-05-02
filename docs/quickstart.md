@@ -74,25 +74,6 @@ curl -X POST -H 'Content-Type: application/x-yaml' \
 
 The `agents-data` volume is the only piece of state worth backing up regularly — `agents-home` holds OAuth tokens and is meant to be re-populated via `claude login` rather than backed up.
 
-## Migrating from older host bind-mount setups
-
-Earlier compose files bind-mounted `~/.claude.json`, `~/.claude/`, and `~/.codex/` from the host. The current compose drops those mounts in favor of the per-container `agents-home` named volume. To migrate without redoing the OAuth flow:
-
-```bash
-docker compose stop agents
-docker volume create $(basename "$PWD")_agents-home
-docker run --rm \
-  -v "$(basename "$PWD")_agents-home:/dst" \
-  -v "$HOME:/src:ro" \
-  alpine sh -c '
-    cp -a /src/.claude.json /dst/.claude.json && \
-    cp -a /src/.claude       /dst/.claude && \
-    cp -a /src/.codex        /dst/.codex && \
-    chown -R 1000:1000 /dst
-  '
-git pull && docker compose build && docker compose up -d
-```
-
 ## Next steps
 
 - [Mental model](mental-model.md) — how the daemon composes prompts and what an agent must return. Read this before writing your first prompt.
