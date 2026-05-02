@@ -33,14 +33,14 @@ Visual dispatch graph showing which agents invoke which, with edge counts. Toggl
 
 ### Agents
 
-Fleet snapshot with per-agent status, skills, bindings, dispatch wiring. Create, edit, and delete agents from this page.
+Fleet snapshot with per-agent status, skills, bindings, dispatch wiring. Create, edit, and delete agents from this page. Long-form fields like the agent prompt show an **⛶ Expand** affordance that pops the editor into a fullscreen modal — same `value` flows back into the form on close.
 
 <!-- The Fleet page (above) is the agents page: same surface, same capture. -->
 ![Fleet / Agents page](img/fleet.png)
 
 ### Skills
 
-Manage the reusable guidance blocks composed into agent prompts. Create, edit, delete.
+Manage the reusable guidance blocks composed into agent prompts. Create, edit, delete. The skill body editor has the same **⛶ Expand** affordance as the agent prompt — useful when a skill grows past a screenful.
 
 ![Skills editor](img/skills.png)
 
