@@ -2,7 +2,7 @@
 
 The fastest path from zero to a daemon dispatching agents on a GitHub repo. Plan on ~10 minutes if you already have Claude Code or Codex installed; ~20 if you don't.
 
-Docker Compose is the recommended way to run the daemon, and is the path this guide follows. The agents call their AI CLIs with sandbox-bypass flags (`--dangerously-skip-permissions` for Claude, `--dangerously-bypass-approvals-and-sandbox` for Codex) so they can edit files and run tools without per-call prompts. Container isolation is what makes that safe — the runners are unrestricted *inside* the container, bounded *outside* it. Running the binary directly on your host is supported but not recommended; see [Build from source](#build-from-source) at the bottom.
+Docker Compose is the strongly recommended way to run the daemon, and is the path this guide follows. **The container is the project's sandbox.** Agents call their AI CLIs with sandbox-bypass flags (`--dangerously-skip-permissions` for Claude, `--dangerously-bypass-approvals-and-sandbox` for Codex) so they can edit files and run tools without per-call prompts; the container's filesystem and process isolation is what bounds the blast radius. Without it the runners are unrestricted on the host. Running the binary directly is supported for local hacking only — see [Build from source](#build-from-source) at the bottom — and should not be used for any deployment that processes untrusted input. See [`docs/security.md`](security.md) for the full threat model.
 
 ## Requirements
 
@@ -109,7 +109,7 @@ You can also use the MCP `trigger_agent` tool from any registered MCP client (Cl
 
 ## Build from source
 
-Prefer the Docker Compose path above unless you have a specific reason — running the AI CLIs with their sandbox-bypass flags directly on your host means the runners can edit any file and execute any tool the host user can. The container isolates that blast radius.
+**Strongly prefer the Docker Compose path above.** Running the AI CLIs with their sandbox-bypass flags directly on your host means the runners can edit any file, execute any tool, and reach any service the host user can. The container is the project's only sandbox; without it the daemon provides no isolation at all. Use this path for local hacking only.
 
 If you still want to:
 
