@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -835,9 +836,7 @@ func (s *stubLastRunRecorder) RecordLastRun(agent, repo string, _ time.Time, sta
 func (s *stubLastRunRecorder) snapshot() []struct{ agent, repo, status string } {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]struct{ agent, repo, status string }, len(s.calls))
-	copy(out, s.calls)
-	return out
+	return slices.Clone(s.calls)
 }
 
 // autonomousEvent builds an Event for a cron-fired autonomous run, matching
@@ -917,7 +916,7 @@ func TestHandleEventNonAutonomousSkipsLastRunRecorder(t *testing.T) {
 }
 
 // TestHandleEventAutonomousReportsErrorStatus verifies a runner failure
-// surfaces as status="error" in the LastRunRecorder callback so the schedule
+// surfaces as status=\"error\" in the LastRunRecorder callback so the schedule
 // view distinguishes broken from healthy bindings without a separate fetch.
 func TestHandleEventAutonomousReportsErrorStatus(t *testing.T) {
 	t.Parallel()
