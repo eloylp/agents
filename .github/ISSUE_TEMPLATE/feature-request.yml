@@ -1,0 +1,57 @@
+name: Feature request
+description: Propose a new capability, behaviour, or improvement.
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues filed here become the contract that the autonomous agent fleet
+        implements against. State the *what* and *why*; let the implementer
+        (human or agent) decide the *how*. The clearer the acceptance criteria,
+        the higher the chance of a clean first PR.
+
+        See [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md) for the flow and
+        the `ai ready` / `discussing` label semantics.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What's missing, awkward, or impossible today? Why does it matter?
+      placeholder: "Operators have no way to inspect the composed prompt that was sent to the AI CLI for a given run, which makes debugging silent regressions painful."
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Proposed outcome
+      description: How would you know it's done? List concrete, testable acceptance criteria. Avoid prescribing implementation details.
+      placeholder: |
+        - The composed prompt for any completed run is retrievable.
+        - It survives daemon restarts.
+        - It is exposed via both the dashboard and an HTTP endpoint.
+        - It is gzipped on disk to keep storage bounded.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope notes (optional)
+      description: Things deliberately *out of scope*, or constraints the implementer should respect.
+      placeholder: "Don't expand to also store full responses — that's a separate proposal."
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Related code or docs (optional)
+      description: Links to files, packages, or doc sections that frame the work.
+      placeholder: |
+        - `internal/observe/observe.go` (where traces are persisted)
+        - `docs/api.md` (where the new endpoint would be documented)
+    validations:
+      required: false

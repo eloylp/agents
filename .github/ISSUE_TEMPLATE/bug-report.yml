@@ -1,0 +1,73 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Issues filed here become the contract that the
+        autonomous agent fleet implements against — the clearer the body, the
+        better the outcome. See [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md)
+        for the flow and label semantics.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What's broken?
+      description: One or two sentences on the symptom. Avoid prescribing the fix.
+      placeholder: "Cron-triggered runs occasionally re-fire within the same minute when the daemon restarts."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How to reproduce
+      description: Minimal steps a reader can follow. Config snippets, the trigger you hit, the resulting trace span — whatever is needed to land on the same failure.
+      placeholder: |
+        1. Configure a cron-bound agent at `*/5 * * * *`.
+        2. Restart the daemon a few seconds before the minute boundary.
+        3. Observe two `cron` events for the same minute in `/runners`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual behaviour
+      description: What did you expect to happen, and what happened instead?
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Daemon version or commit SHA
+      description: Output of `agents --version` if a release, or the commit you built from.
+      placeholder: "v0.1.0 / 32b6a59"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: AI backend in use
+      description: Helps narrow whether the bug is backend-specific.
+      multiple: true
+      options:
+        - Claude Code
+        - Codex
+        - Local model via proxy
+        - Not applicable (daemon-side only)
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or trace span
+      description: Daemon logs (text or JSON), or the `/traces/{id}` span if the bug surfaced inside a run.
+      render: shell
+    validations:
+      required: false
