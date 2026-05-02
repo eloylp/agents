@@ -11,7 +11,8 @@
 # Adding a new repo to the fleet means adding another `repos:`
 # entry and binding the agents it needs — no agent duplication.
 #
-# Import:  ./agents --db agents.db --import config_examples/multi-repo.yaml
+# Import (running daemon): cp multi-repo.yaml ../config.yaml && docker compose restart agents
+#                          OR  curl -X POST -H 'Content-Type: application/x-yaml' --data-binary @multi-repo.yaml http://localhost:8080/import
 
 daemon:
   log:

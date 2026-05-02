@@ -1,13 +1,16 @@
 # ──────────────────────────────────────────────
 # Import-format reference
 # ──────────────────────────────────────────────
-# This file is a YAML import template. Use it with:
+# This file is a YAML import template. The shipped docker-compose mounts
+# config.yaml into the container; the daemon seeds the empty SQLite store
+# from it on first boot. After that, manage the fleet through the /ui/
+# dashboard, the CRUD API, or the agents-fleet MCP tools — the YAML file
+# is a seeding convenience, not a separate runtime mode.
 #
-#   ./agents --db agents.db --import config.yaml
+# To re-seed a running daemon, POST this file at /import:
 #
-# After the one-time import, manage the fleet through the /ui/ dashboard or
-# the CRUD API. The daemon always runs from SQLite; this YAML file is a
-# seeding convenience, not a separate runtime mode.
+#   curl -X POST -H 'Content-Type: application/x-yaml' \
+#     --data-binary @config.yaml http://localhost:8080/import
 #
 # This example is intentionally small enough to read in one pass. Start here,
 # then grow the fleet in the dashboard at /ui/ or over the CRUD API.

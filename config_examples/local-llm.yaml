@@ -17,7 +17,8 @@
 # `claude_local` at a different upstream (Ollama on :11434, vLLM on
 # :8000, llama.cpp on :8080 etc.).
 #
-# Import:  ./agents --db agents.db --import config_examples/local-llm.yaml
+# Import (running daemon): cp local-llm.yaml ../config.yaml && docker compose restart agents
+#                          OR  curl -X POST -H 'Content-Type: application/x-yaml' --data-binary @local-llm.yaml http://localhost:8080/import
 
 daemon:
   log:

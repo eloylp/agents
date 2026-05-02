@@ -20,7 +20,7 @@ The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthr
   - **[Web dashboard](docs/ui.md)**: graphical. Manage agents, skills, repos, and bindings; watch the live event firehose, agent traces with tool-loop transcripts, dispatch graph, and memory viewer.
   - **[MCP server](docs/mcp.md)**: conversational. Control agents and trigger runs straight from Claude Code in your terminal (or Cursor, Cline, or any MCP client).
   - **[REST API](docs/api.md)**: programmatic. Scriptable from any HTTP client; the dashboard itself runs on top of it.
-- **[Self-hosted](docs/docker.md)**: your code and prompts stay on your infrastructure. No SaaS dependency.
+- **[Self-hosted](docs/quickstart.md)**: your code and prompts stay on your infrastructure. No SaaS dependency.
 - **[Security recommendations](docs/security.md)**: ships a default `security` guardrail prepended to every agent prompt to push back against indirect prompt injection. The threat model and the controls the daemon does *not* implement (untrusted-input quarantining, author trust gating, output filtering, sandboxing) are documented openly so operators can decide what to layer on top.
 - **[Multi-backend](docs/configuration.md)**: pick Claude, Codex, or a custom backend per agent. Different agents in the same fleet can use different providers.
 - **[Discovery and diagnostics](docs/configuration.md)**: the daemon detects backends and tools, validates CLI health, and persists discovery snapshots.

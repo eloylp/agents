@@ -11,7 +11,8 @@
 # The coder uses Claude (good at implementation), the pr-reviewer
 # uses Codex (good at fresh-eyes review). Switch backends to taste.
 #
-# Import:  ./agents --db agents.db --import config_examples/coder-and-reviewer.yaml
+# Import (running daemon): cp coder-and-reviewer.yaml ../config.yaml && docker compose restart agents
+#                          OR  curl -X POST -H 'Content-Type: application/x-yaml' --data-binary @coder-and-reviewer.yaml http://localhost:8080/import
 
 daemon:
   log:

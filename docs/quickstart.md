@@ -1,126 +1,102 @@
-# Quick start
+# Quickstart
 
-The fastest path from zero to a daemon dispatching agents on a GitHub repo. Plan on ~10 minutes if you already have Claude Code or Codex installed; ~20 if you don't.
+## Why a container
 
-Docker Compose is the strongly recommended way to run the daemon, and is the path this guide follows. **The container is the project's sandbox.** Agents call their AI CLIs with sandbox-bypass flags (`--dangerously-skip-permissions` for Claude, `--dangerously-bypass-approvals-and-sandbox` for Codex) so they can edit files and run tools without per-call prompts; the container's filesystem and process isolation is what bounds the blast radius. Without it the runners are unrestricted on the host. Running the binary directly is supported for local hacking only — see [Build from source](#build-from-source) at the bottom — and should not be used for any deployment that processes untrusted input. See [`docs/security.md`](security.md) for the full threat model.
+The daemon dispatches AI CLIs (`claude`, `codex`) with sandbox-bypass flags so agents can edit files and run tools without per-call prompts. The container is what bounds that blast radius — running the binary on your host is not supported. See [security.md](security.md) for the threat model.
 
-## Requirements
-
-| Dependency | Where | Purpose |
-|---|---|---|
-| Docker + Docker Compose | host | Runs the daemon |
-| Claude Code or Codex | host | The AI backend that does the work; its config dir is bind-mounted into the container |
-| [GitHub MCP server](https://github.com/github/github-mcp-server) | configured on the AI CLI | Authenticated GitHub access for the AI CLIs (the only path the daemon and its agents use to reach GitHub) |
-
-You only need one of Claude Code or Codex to get started. Both can coexist in the same fleet on a per-agent basis.
-
-## 1. Install an AI CLI on the host
-
-Follow the official setup guides:
-
-- [Claude Code](https://code.claude.com/docs/en/setup)
-- [Codex](https://github.com/openai/codex)
-
-Then register the GitHub MCP server against whichever CLI you installed:
-
-- [Claude Code + GitHub MCP](https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-claude.md)
-- [Codex + GitHub MCP](https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-codex.md)
-
-The container reuses your host's CLI auth and MCP config through bind mounts, so getting these working on the host once is enough.
-
-> Claude Code stores MCP config per-project keyed by the working directory. Inside the container the working directory is `/`, so the relevant `~/.claude.json` entry must be keyed under `/`. The simplest way to make this true is to add the GitHub MCP server with `claude mcp add -t http -s user github https://api.githubcopilot.com/mcp` from `/` (or `cd /` first), which writes a user-scope entry that applies everywhere.
-
-## 2. Clone the repo and prepare config
+## Bring up the daemon
 
 ```bash
 git clone https://github.com/eloylp/agents
 cd agents
 cp config.example.yaml config.yaml
-```
-
-Edit `config.yaml` to taste. The shipped example is small enough to read in one pass and is a working starting point; you can grow the fleet later through the dashboard or CRUD API.
-
-Prefer a more focused starting point? See [`config_examples/`](../config_examples/) for five import-ready scenarios — `solo-coder`, `coder-and-reviewer`, `autonomous-fleet`, `local-llm`, and `multi-repo` — each with a header comment explaining what it shows. Copy any of those over `config.yaml` instead.
-
-Create `.env` next to `docker-compose.yaml`:
-
-```bash
-cat > .env <<EOF
-GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)
-EOF
-chmod 600 .env
-```
-
-Save the secret — you'll paste the same value into the GitHub webhook in step 5.
-
-## 3. Boot the daemon
-
-```bash
+echo "GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)" > .env
 docker compose up -d
-docker compose logs -f agents
 ```
 
-The compose file bind-mounts `./config.yaml`, your host's Claude Code / Codex config, and a named volume for the SQLite database. The daemon imports `config.yaml` on first boot if the database is empty; on subsequent boots it reads exclusively from the database and the YAML file is no longer consulted.
+The shipped [`docker-compose.yaml`](../docker-compose.yaml) is the source of truth for what gets mounted and exposed. Two named volumes back the runtime: `agents-data` (SQLite store) and `agents-home` (Claude / Codex auth + MCP config).
 
-## 4. Verify it's healthy
+Verify the daemon is healthy:
 
 ```bash
 curl -s http://localhost:8080/status | jq
 ```
 
-Expect uptime, event-queue depth, and an `orphaned_agents.count` field. Then open the dashboard at <http://localhost:8080/ui/> — agents, skills, repos, and bindings are all manageable from there.
-
-## 5. Wire a GitHub webhook
-
-So events (label triggers, issue creation, PR opens, pushes) reach the daemon:
-
-1. Open **Settings → Webhooks → Add webhook** on the repo.
-2. **Payload URL**: `https://<your-host>/webhooks/github`
-3. **Content type**: `application/json`
-4. **Secret**: same value as `GITHUB_WEBHOOK_SECRET` in `.env`.
-5. **Events**: enable any of Issues, Pull requests, Issue comments, Pull request reviews, Pull request review comments, Pushes. Pick whichever ones you want to trigger agents on. Unused events are silently dropped.
-6. **Active**: checked.
-
-See [events.md](events.md) for the full list of supported event kinds and their filtering rules.
-
-For a publicly reachable URL behind auth (recommended for everything except `/webhooks/github`, `/status`, `/run`, and `/v1/*`), see [docker.md](docker.md#reverse-proxy-routing).
-
-## 6. (Optional) Run an agent on demand
-
-Useful for testing without waiting for a webhook or cron tick:
+## Run the setup wizard
 
 ```bash
-curl -X POST http://localhost:8080/run \
-  -H "Content-Type: application/json" \
-  -d '{"agent":"coder","repo":"owner/repo"}'
+docker compose exec -it agents agents setup
 ```
 
-You can also use the MCP `trigger_agent` tool from any registered MCP client (Claude Code, Cursor, Cline). There is no separate CLI mode — running a second `agents` process out-of-band would not share the daemon's run-lock or dispatch dedup state.
+This drops you into an interactive Claude REPL inside the container. The wizard walks the operator phase by phase:
+
+1. asks which AI backend(s) you want to use (claude, codex, or both),
+2. guides you through `!claude login` / `!codex login` and GitHub MCP registration via shell-escape commands,
+3. gathers the repos you want to manage and validates them via the GitHub MCP,
+4. seeds a starter fleet by POSTing a YAML payload to `/import`,
+5. runs diagnostics against `/status`, `/backends/status`, `/agents/orphans/status`,
+6. registers webhooks via the GitHub MCP server.
+
+When the wizard finishes, the fleet is live. Manage it from `http://localhost:8080/ui/`.
+
+## Manual walkthrough (optional)
+
+If you'd rather not use the wizard, the steps it performs are documented in [`internal/setup/prompt.md`](../internal/setup/prompt.md). Each phase is a few HTTP calls or `claude` / `codex` invocations against the running container — copy them yourself.
+
+## Production essentials
+
+Before exposing the daemon publicly, configure your reverse proxy: see [security.md → Reverse-proxy routing](security.md#reverse-proxy-routing) for the auth-vs-public path split (which paths must sit behind your auth layer, which must stay open so GitHub webhooks and liveness probes can reach the daemon).
+
+## Day-2 operations
+
+```bash
+# Tail logs.
+docker compose logs -f agents
+
+# Graceful restart (in-flight runs are allowed to finish).
+docker compose restart agents
+
+# Upgrade.
+git pull && docker compose build && docker compose up -d
+
+# Re-run backend discovery (after rotating auth or adding a CLI).
+curl -X POST http://localhost:8080/backends/discover
+
+# Snapshot the SQLite store while the daemon runs.
+docker compose exec agents sqlite3 /var/lib/agents/agents.db \
+  ".backup /var/lib/agents/backup-$(date +%F).db"
+
+# Export / re-import the fleet as YAML.
+curl -s http://localhost:8080/export > fleet.yaml
+curl -X POST -H 'Content-Type: application/x-yaml' \
+  --data-binary @fleet.yaml http://localhost:8080/import
+```
+
+The `agents-data` volume is the only piece of state worth backing up regularly — `agents-home` holds OAuth tokens and is meant to be re-populated via `claude login` rather than backed up.
+
+## Migrating from older host bind-mount setups
+
+Earlier compose files bind-mounted `~/.claude.json`, `~/.claude/`, and `~/.codex/` from the host. The current compose drops those mounts in favor of the per-container `agents-home` named volume. To migrate without redoing the OAuth flow:
+
+```bash
+docker compose stop agents
+docker volume create $(basename "$PWD")_agents-home
+docker run --rm \
+  -v "$(basename "$PWD")_agents-home:/dst" \
+  -v "$HOME:/src:ro" \
+  alpine sh -c '
+    cp -a /src/.claude.json /dst/.claude.json && \
+    cp -a /src/.claude       /dst/.claude && \
+    cp -a /src/.codex        /dst/.codex && \
+    chown -R 1000:1000 /dst
+  '
+git pull && docker compose build && docker compose up -d
+```
 
 ## Next steps
 
-- [Mental model](mental-model.md) for how the daemon composes prompts and what an agent must return. Read this before writing your first prompt.
-- [Configuration](configuration.md) for the full config schema (skills, agents, repos, backends).
-- [Docker deployment](docker.md) for the compose reference, reverse-proxy routing, day-2 operations, and image internals.
-- [Web dashboard](ui.md) for the management UI you will spend most of your time in.
-- [Local models](local-models.md) for running the fleet on your own LLM.
-
----
-
-## Build from source
-
-**Strongly prefer the Docker Compose path above.** Running the AI CLIs with their sandbox-bypass flags directly on your host means the runners can edit any file, execute any tool, and reach any service the host user can. The container is the project's only sandbox; without it the daemon provides no isolation at all. Use this path for local hacking only.
-
-If you still want to:
-
-```bash
-go build -o agents ./cmd/agents
-./agents setup                           # interactive first-time setup
-# or:
-./agents --db agents.db --import config.yaml   # one-time seed
-./agents --db agents.db                         # subsequent starts
-```
-
-`./agents setup` walks you through wiring up the daemon and validates readiness end-to-end (`/status`, `/backends/status`, `/backends/discover`, `/agents/orphans/status`) before finishing, so you know your CLIs and tokens are correct before the first scheduled run.
-
-After the first start, `config.yaml` is no longer read; the daemon boots from the persisted database. Export the current fleet back to YAML at any time via `GET /export`.
+- [Mental model](mental-model.md) — how the daemon composes prompts and what an agent must return. Read this before writing your first prompt.
+- [Configuration](configuration.md) — full schema (skills, agents, repos, backends, guardrails).
+- [Web dashboard](ui.md) — the management UI you will spend most of your time in.
+- [Local models](local-models.md) — running the fleet on your own LLM.
+- [Security](security.md) — threat model, recommendations, reverse-proxy routing.

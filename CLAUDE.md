@@ -47,14 +47,7 @@ No framework prompt templates. Each agent owns its full prompt; skill guidance i
 
 ## Build & Run
 
-```bash
-go test ./... -race
-go build -o agents ./cmd/agents
-
-# Import config into SQLite and start
-./agents --db agents.db --import config.yaml   # one-time import
-./agents --db agents.db                         # subsequent starts
-```
+The supported runtime is Docker Compose — see the Docker section below. For development, `go test ./... -race` runs the full suite; the multi-stage Dockerfile handles `go build` during image build, no local-binary workflow.
 
 On-demand runs go through the running daemon: `POST /run` (HTTP) or the `trigger_agent` MCP tool. There is no separate CLI mode for ad-hoc execution — it would be a second runtime that doesn't share the daemon's run-lock or dispatch dedup, opening a memory-write race window.
 
@@ -67,8 +60,8 @@ docker compose up -d
 
 Multi-stage build on `node:22-alpine` so the image includes Claude Code and Codex alongside the daemon. Runs as non-root `agents` user. Default CMD is `--db /var/lib/agents/agents.db`. Compose mounts:
 - `./config.yaml` → `/etc/agents/config.yaml` (read-only; used for `--import` seeding)
-- Claude/Codex config dirs from host (GitHub access flows through the GitHub MCP server configured on those CLIs)
 - `agents-data` named volume → `/var/lib/agents` (SQLite database persistence)
+- `agents-home` named volume → `/home/agents` (Claude / Codex auth + MCP config; populated by `docker compose run --rm --entrypoint claude agents login` once during setup, no host bind-mount of `~/.claude.json` etc.). GitHub access still flows through the GitHub MCP server configured on each CLI inside the container.
 
 ## Environment Variables
 

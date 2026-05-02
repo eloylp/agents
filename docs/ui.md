@@ -97,7 +97,7 @@ Effective parsed config (secrets redacted). Includes YAML import/export.
 
 ## Authentication
 
-The dashboard is unauthenticated at the daemon level. Place the daemon behind a reverse proxy that gates `/ui/`, `/runners`, and the rest of the authenticated surface (everything except `/webhooks/github`, `/status`, `/run`, `/v1/*`). See [docker.md](docker.md) for one concrete pattern using Traefik basic-auth.
+The dashboard is unauthenticated at the daemon level. Place the daemon behind a reverse proxy that gates `/ui/`, `/runners`, and the rest of the authenticated surface (everything except `/webhooks/github`, `/status`, `/run`, `/v1/*`). See [security.md → Reverse-proxy routing](security.md#reverse-proxy-routing) for one concrete pattern using Traefik basic-auth.
 
 ## Regenerating these screenshots
 

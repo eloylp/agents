@@ -227,19 +227,13 @@ GITHUB_WEBHOOK_SECRET=your-webhook-secret
 
 ## Importing and exporting
 
-The daemon always boots from the SQLite database (`--db agents.db`). YAML is an optional import / export format, not a second runtime mode.
+The daemon always boots from the SQLite database. YAML is an optional import / export format, not a second runtime mode. The shipped compose mounts `./config.yaml` into the container; if the SQLite store is empty on boot the daemon seeds it from that file. After the first boot the YAML file is no longer consulted.
 
 ```bash
-# Start with an empty database; create your fleet through /ui/ or the CRUD API
-./agents --db agents.db
-
-# Or seed the database from YAML at first start
-./agents --db agents.db --import config.yaml
-
-# Export the current fleet back to YAML at any time
+# Export the current fleet back to YAML at any time.
 curl -s http://localhost:8080/export > fleet.yaml
 
-# Import a YAML payload into a running daemon
+# Import a YAML payload into a running daemon (merges into the SQLite store).
 curl -X POST http://localhost:8080/import --data-binary @fleet.yaml
 ```
 

@@ -10,7 +10,8 @@
 # remembers what it has already filed across runs and avoids
 # re-filing the same finding day after day.
 #
-# Import:  ./agents --db agents.db --import config_examples/autonomous-fleet.yaml
+# Import (running daemon): cp autonomous-fleet.yaml ../config.yaml && docker compose restart agents
+#                          OR  curl -X POST -H 'Content-Type: application/x-yaml' --data-binary @autonomous-fleet.yaml http://localhost:8080/import
 
 daemon:
   log:

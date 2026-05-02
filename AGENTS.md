@@ -16,14 +16,12 @@ Key numbers:
 ## Quick commands
 
 ```bash
-go test ./... -race                             # run all tests
-go build -o agents ./cmd/agents                 # build the daemon
-./agents --db agents.db --import config.yaml    # import config + start
-./agents --db agents.db                         # start (after import)
-docker compose up -d                            # containerised run
+go test ./... -race    # run all tests
+docker compose build   # build the image (multi-stage Dockerfile handles go build)
+docker compose up -d   # run the daemon
 ```
 
-On-demand runs go through the running daemon: `POST /run` (HTTP) or the `trigger_agent` MCP tool. There is no separate CLI mode for ad-hoc execution — it would be a second runtime that doesn't share the daemon's run-lock or dispatch dedup, opening a memory-write race window.
+The supported runtime is Docker Compose — there is no local-binary workflow. On-demand runs go through the running daemon: `POST /run` (HTTP) or the `trigger_agent` MCP tool. There is no separate CLI mode for ad-hoc execution — it would be a second runtime that doesn't share the daemon's run-lock or dispatch dedup, opening a memory-write race window.
 
 ## Code map (current)
 
@@ -122,7 +120,7 @@ When making common classes of changes, update all of these at once:
 ## Operational notes
 
 - **`.env` is auto-loaded on startup** (`godotenv.Load()`). Required runtime secret: `GITHUB_WEBHOOK_SECRET`.
-- **Config is loaded from SQLite at startup.** Use `--import config.yaml` to seed the database, then manage changes via the CRUD API or the web dashboard. Prompt and skill content is stored in the database; changes via the API or UI take effect on the next agent run without a restart.
+- **Config is loaded from SQLite at startup.** The compose mounts `./config.yaml` into the container; the daemon seeds the empty SQLite store from it on first boot. Manage subsequent changes via the CRUD API or the web dashboard. Prompt and skill content is stored in the database; changes via the API or UI take effect on the next agent run without a restart.
 - **Backend discovery lifecycle.** Startup auto-discovery runs only when the backends table is empty. Manual refresh is explicit via `POST /backends/discover`; `GET /backends/status` is diagnostics-only.
 - **Orphan visibility.** `GET /agents/orphans/status` and `/status` (`orphaned_agents.count`) expose model/backend drift requiring user remediation.
 - **Agent memory** is stored in SQLite (in the `memory` table), keyed by `(agent, repo)`. It's the agent's job to return updated memory in its response; the daemon writes it back to the store unchanged. Load/persist is gated by `allow_memory` (default `true`) and applies uniformly across cron, webhook, dispatch, `POST /run`, and `trigger_agent`.

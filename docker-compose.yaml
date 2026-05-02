@@ -8,14 +8,18 @@ services:
       - GITHUB_PAT_TOKEN=${GITHUB_PAT_TOKEN}
     volumes:
       - ./config.yaml:/etc/agents/config.yaml:ro
-      # Persists the SQLite database (config + agent memory) across restarts.
+      # SQLite database (config + agent memory).
       - agents-data:/var/lib/agents
-      - ~/.claude:/home/agents/.claude
-      - ~/.claude.json:/home/agents/.claude.json
-      - ~/.codex:/home/agents/.codex
+      # Claude Code / Codex auth + MCP config. Populate once via
+      # `docker compose run --rm --entrypoint claude agents login`
+      # (and the codex equivalent). Kept separate from agents-data so
+      # operators can rotate auth (rm + re-login) without touching
+      # fleet state, and back up fleet state without copying tokens.
+      - agents-home:/home/agents
     env_file:
       - .env
     restart: unless-stopped
 
 volumes:
   agents-data:
+  agents-home:
