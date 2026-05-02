@@ -16,6 +16,8 @@ docker compose up -d
 
 The shipped [`docker-compose.yaml`](../docker-compose.yaml) is the source of truth for what gets mounted and exposed. Two named volumes back the runtime: `agents-data` (SQLite store) and `agents-home` (Claude / Codex auth + MCP config).
 
+> **First-run note.** The compose file builds the image locally on first invocation — multi-stage build (UI + Go binary), expect ~3-5 minutes depending on the host. `docker compose logs -f agents` shows progress.
+
 Verify the daemon is healthy:
 
 ```bash
@@ -62,9 +64,14 @@ git pull && docker compose build && docker compose up -d
 # Re-run backend discovery (after rotating auth or adding a CLI).
 curl -X POST http://localhost:8080/backends/discover
 
-# Snapshot the SQLite store while the daemon runs.
-docker compose exec agents sqlite3 /var/lib/agents/agents.db \
-  ".backup /var/lib/agents/backup-$(date +%F).db"
+# Snapshot the SQLite store while the daemon runs (the agents image
+# does not ship sqlite3 — use a one-shot Alpine sidecar against the
+# data volume; SQLite's online-backup API handles concurrent writes).
+docker run --rm \
+  -v $(basename "$PWD")_agents-data:/src \
+  -v "$PWD/backups":/dst \
+  alpine sh -c 'apk add --no-cache sqlite >/dev/null && \
+    sqlite3 /src/agents.db ".backup /dst/agents-$(date +%F).db"'
 
 # Export / re-import the fleet as YAML.
 curl -s http://localhost:8080/export > fleet.yaml
