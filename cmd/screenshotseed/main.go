@@ -141,10 +141,10 @@ func buildFixtureConfig() *config.Config {
 				},
 				"local-qwen": {
 					Command:        "claude",
-					Version:        "claude-code 0.4.2 → vast-qwen",
+					Version:        "claude-code 0.4.2 → local-llm",
 					Models:         []string{"qwen3-coder-480b"},
 					Healthy:        true, HealthDetail: "routed via Anthropic↔OpenAI proxy",
-					LocalModelURL:  "http://vast-qwen:18000/v1",
+					LocalModelURL:  "http://local-llm:18000/v1",
 					TimeoutSeconds: 900, MaxPromptChars: 8000,
 				},
 			},
