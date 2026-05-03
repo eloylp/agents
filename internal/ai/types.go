@@ -49,15 +49,24 @@ type DispatchRequest struct {
 	Reason string `json:"reason"`
 }
 
-// TraceStep records one tool call in the agent's tool loop.
-// It is populated by the runner from stream-json output and is never part of
-// the agent's JSON schema, agents do not return steps themselves.
+// TraceStep records one event in the agent's tool loop. Two kinds are
+// emitted: "tool" (paired tool_use + tool_result) and "thinking" (a
+// text block the assistant produced between tool calls). Populated by
+// the runner from stream-json output and never part of the agent's
+// JSON schema, agents do not return steps themselves.
 type TraceStep struct {
-	ToolName      string `json:"tool_name"`
-	InputSummary  string `json:"input_summary"`
-	OutputSummary string `json:"output_summary"`
-	DurationMs    int64  `json:"duration_ms"`
+	Kind          string `json:"kind"`
+	ToolName      string `json:"tool_name,omitempty"`
+	InputSummary  string `json:"input_summary,omitempty"`
+	OutputSummary string `json:"output_summary,omitempty"`
+	DurationMs    int64  `json:"duration_ms,omitempty"`
 }
+
+// Step kind constants.
+const (
+	StepKindTool     = "tool"
+	StepKindThinking = "thinking"
+)
 
 type Response struct {
 	Artifacts []Artifact        `json:"artifacts"`

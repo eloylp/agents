@@ -789,9 +789,13 @@ func (s *Store) RecordSteps(spanID string, steps []workflow.TraceStep) {
 		if i >= 100 {
 			break
 		}
+		kind := step.Kind
+		if kind == "" {
+			kind = workflow.StepKindTool
+		}
 		if _, err := tx.Exec(
-			`INSERT INTO trace_steps (span_id, step_index, tool_name, input_summary, output_summary, duration_ms) VALUES (?,?,?,?,?,?)`,
-			spanID, i, step.ToolName, step.InputSummary, step.OutputSummary, step.DurationMs,
+			`INSERT INTO trace_steps (span_id, step_index, kind, tool_name, input_summary, output_summary, duration_ms) VALUES (?,?,?,?,?,?,?)`,
+			spanID, i, kind, step.ToolName, step.InputSummary, step.OutputSummary, step.DurationMs,
 		); err != nil {
 			log.Printf("observe: insert trace step %d for %s: %v", i, spanID, err)
 		}
@@ -810,7 +814,7 @@ func (s *Store) ListSteps(spanID string) []workflow.TraceStep {
 		return nil
 	}
 	rows, err := s.db.Query(
-		`SELECT tool_name, input_summary, output_summary, duration_ms FROM trace_steps WHERE span_id=? ORDER BY step_index ASC`,
+		`SELECT kind, tool_name, input_summary, output_summary, duration_ms FROM trace_steps WHERE span_id=? ORDER BY step_index ASC`,
 		spanID,
 	)
 	if err != nil {
@@ -821,7 +825,7 @@ func (s *Store) ListSteps(spanID string) []workflow.TraceStep {
 	var out []workflow.TraceStep
 	for rows.Next() {
 		var step workflow.TraceStep
-		if err := rows.Scan(&step.ToolName, &step.InputSummary, &step.OutputSummary, &step.DurationMs); err != nil {
+		if err := rows.Scan(&step.Kind, &step.ToolName, &step.InputSummary, &step.OutputSummary, &step.DurationMs); err != nil {
 			log.Printf("observe: scan step for %s: %v", spanID, err)
 			continue
 		}

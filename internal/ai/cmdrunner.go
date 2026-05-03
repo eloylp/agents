@@ -488,22 +488,28 @@ func (c *lineCapture) addLine(data []byte) {
 }
 
 // parseClaudeSteps scans --output-format stream-json stdout and reconstructs
-// the tool-loop transcript as a slice of TraceStep values. Each step pairs one
-// tool_use block (from an assistant event) with its corresponding tool_result
-// block (from the following user event), matched by tool_use_id.
+// the run's transcript as a slice of TraceStep values. Two kinds are emitted
+// in stream order:
 //
-// DurationMs is computed as the wall-clock interval between the line that
-// carried the tool_use block and the line that carried the matching
-// tool_result block, giving a coarse-grained measure of how long the tool ran.
+//   - "thinking": one step per text content block in an assistant event.
+//                 InputSummary carries the full text.
+//   - "tool":     one step per tool_use + matching tool_result pair, joined
+//                 by tool_use_id. ToolName is the tool name; InputSummary
+//                 is the call args (raw JSON); OutputSummary is the
+//                 tool's reply; DurationMs is the wall-clock interval
+//                 between the tool_use and tool_result lines.
 //
-// Steps are capped at 100 and input/output are truncated to 200 runes.
-// Any event that cannot be parsed is silently skipped, this is best-effort.
+// Step content is preserved in full up to 64 KB per field; longer values are
+// truncated with a marker noting how many bytes were cut. Steps are capped
+// at 100 per run. Any event that cannot be parsed is silently skipped, this
+// is best-effort.
 func parseClaudeSteps(lines []timedLine) []TraceStep {
 	// streamEvent is the minimal shape of a single JSONL line.
 	type contentBlock struct {
 		Type      string          `json:"type"`
 		ID        string          `json:"id"`
 		Name      string          `json:"name"`
+		Text      string          `json:"text"` // for type:"text" blocks
 		Input     json.RawMessage `json:"input"`
 		ToolUseID string          `json:"tool_use_id"`
 		Content   json.RawMessage `json:"content"` // string or array
@@ -518,12 +524,10 @@ func parseClaudeSteps(lines []timedLine) []TraceStep {
 	type pending struct {
 		name   string
 		input  string
-		order  int
 		seenAt time.Time
 	}
 	pendingTools := make(map[string]pending) // tool_use_id → pending
 	var steps []TraceStep
-	order := 0
 
 	for _, tl := range lines {
 		line := bytes.TrimSpace(tl.data)
@@ -538,16 +542,29 @@ func parseClaudeSteps(lines []timedLine) []TraceStep {
 		switch ev.Type {
 		case "assistant":
 			for _, b := range ev.Message.Content {
-				if b.Type != "tool_use" || b.ID == "" {
-					continue
+				switch b.Type {
+				case "text":
+					text := strings.TrimSpace(b.Text)
+					if text == "" {
+						continue
+					}
+					steps = append(steps, TraceStep{
+						Kind:         StepKindThinking,
+						InputSummary: capStepContent(text),
+					})
+					if len(steps) >= 100 {
+						return steps
+					}
+				case "tool_use":
+					if b.ID == "" {
+						continue
+					}
+					pendingTools[b.ID] = pending{
+						name:   b.Name,
+						input:  capStepContent(string(b.Input)),
+						seenAt: tl.at,
+					}
 				}
-				pendingTools[b.ID] = pending{
-					name:   b.Name,
-					input:  truncateString(string(b.Input), 200),
-					order:  order,
-					seenAt: tl.at,
-				}
-				order++
 			}
 		case "user":
 			for _, b := range ev.Message.Content {
@@ -561,9 +578,10 @@ func parseClaudeSteps(lines []timedLine) []TraceStep {
 				delete(pendingTools, b.ToolUseID)
 				output := extractToolResultText(b.Content)
 				steps = append(steps, TraceStep{
+					Kind:          StepKindTool,
 					ToolName:      p.name,
 					InputSummary:  p.input,
-					OutputSummary: truncateString(output, 200),
+					OutputSummary: capStepContent(output),
 					DurationMs:    tl.at.Sub(p.seenAt).Milliseconds(),
 				})
 				if len(steps) >= 100 {
@@ -573,6 +591,26 @@ func parseClaudeSteps(lines []timedLine) []TraceStep {
 		}
 	}
 	return steps
+}
+
+// stepContentMaxBytes bounds the per-field content stored on a TraceStep.
+// Set generously so typical tool I/O and thinking blocks pass through
+// untouched; pathological output (binary blobs, runaway logs) is cut with
+// a clear marker so the user can see something was truncated.
+const stepContentMaxBytes = 64 * 1024
+
+// capStepContent returns s if it fits under stepContentMaxBytes, otherwise
+// returns the head plus a clear truncation marker. The cut point is rounded
+// down to a valid UTF-8 boundary so the result is always valid UTF-8.
+func capStepContent(s string) string {
+	if len(s) <= stepContentMaxBytes {
+		return s
+	}
+	end := stepContentMaxBytes
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end] + fmt.Sprintf("…[truncated, %d more bytes]", len(s)-end)
 }
 
 // extractToolResultText returns a plain-text summary from a tool_result

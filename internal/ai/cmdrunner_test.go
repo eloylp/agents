@@ -741,8 +741,141 @@ func TestParseClaudeSteps(t *testing.T) {
 					t.Errorf("step 0: DurationMs = %d, want >= %d", steps[0].DurationMs, tc.wantMinDurMs)
 				}
 			}
+			for i, s := range steps {
+				if s.Kind != StepKindTool {
+					t.Errorf("step %d: Kind = %q, want %q (tool-only fixture)", i, s.Kind, StepKindTool)
+				}
+			}
 		})
 	}
+}
+
+// TestParseClaudeStepsThinking covers the kind="thinking" path: text content
+// blocks emitted by the assistant between tool calls, persisted as their own
+// steps so the Traces detail page can replay reasoning alongside tool use.
+func TestParseClaudeStepsThinking(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	toLines := func(raw string) []timedLine {
+		var tls []timedLine
+		for _, line := range strings.Split(strings.TrimRight(raw, "\n"), "\n") {
+			if line == "" {
+				continue
+			}
+			b := []byte(line + "\n")
+			tls = append(tls, timedLine{data: b, at: base})
+		}
+		return tls
+	}
+
+	t.Run("single text block becomes one thinking step", func(t *testing.T) {
+		t.Parallel()
+		raw := `{"type":"assistant","message":{"content":[{"type":"text","text":"Let me check the file structure first."}]}}`
+		steps := parseClaudeSteps(toLines(raw))
+		if len(steps) != 1 {
+			t.Fatalf("got %d steps, want 1: %+v", len(steps), steps)
+		}
+		s := steps[0]
+		if s.Kind != StepKindThinking {
+			t.Errorf("Kind = %q, want %q", s.Kind, StepKindThinking)
+		}
+		if s.ToolName != "" {
+			t.Errorf("ToolName = %q, want empty", s.ToolName)
+		}
+		if s.InputSummary != "Let me check the file structure first." {
+			t.Errorf("InputSummary = %q, want full text", s.InputSummary)
+		}
+		if s.OutputSummary != "" {
+			t.Errorf("OutputSummary = %q, want empty", s.OutputSummary)
+		}
+	})
+
+	t.Run("text then tool_use emits thinking then tool in order", func(t *testing.T) {
+		t.Parallel()
+		raw := `{"type":"assistant","message":{"content":[{"type":"text","text":"I need to read the README."}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_01","name":"Read","input":{"path":"README.md"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"# Project"}]}}`
+		steps := parseClaudeSteps(toLines(raw))
+		if len(steps) != 2 {
+			t.Fatalf("got %d steps, want 2: %+v", len(steps), steps)
+		}
+		if steps[0].Kind != StepKindThinking {
+			t.Errorf("step 0: Kind = %q, want %q", steps[0].Kind, StepKindThinking)
+		}
+		if steps[1].Kind != StepKindTool {
+			t.Errorf("step 1: Kind = %q, want %q", steps[1].Kind, StepKindTool)
+		}
+		if steps[1].ToolName != "Read" {
+			t.Errorf("step 1: ToolName = %q, want Read", steps[1].ToolName)
+		}
+	})
+
+	t.Run("multiple text blocks in one assistant event become separate thinking steps", func(t *testing.T) {
+		t.Parallel()
+		raw := `{"type":"assistant","message":{"content":[{"type":"text","text":"First thought."},{"type":"text","text":"Second thought."}]}}`
+		steps := parseClaudeSteps(toLines(raw))
+		if len(steps) != 2 {
+			t.Fatalf("got %d steps, want 2: %+v", len(steps), steps)
+		}
+		for i, want := range []string{"First thought.", "Second thought."} {
+			if steps[i].Kind != StepKindThinking {
+				t.Errorf("step %d: Kind = %q, want %q", i, steps[i].Kind, StepKindThinking)
+			}
+			if steps[i].InputSummary != want {
+				t.Errorf("step %d: InputSummary = %q, want %q", i, steps[i].InputSummary, want)
+			}
+		}
+	})
+
+	t.Run("empty or whitespace-only text blocks are skipped", func(t *testing.T) {
+		t.Parallel()
+		raw := `{"type":"assistant","message":{"content":[{"type":"text","text":"  "},{"type":"text","text":""}]}}`
+		steps := parseClaudeSteps(toLines(raw))
+		if len(steps) != 0 {
+			t.Errorf("got %d steps, want 0: %+v", len(steps), steps)
+		}
+	})
+
+	t.Run("oversized thinking text is truncated with marker", func(t *testing.T) {
+		t.Parallel()
+		// Build a text block well over 64 KB.
+		big := strings.Repeat("x", 70*1024)
+		raw := `{"type":"assistant","message":{"content":[{"type":"text","text":"` + big + `"}]}}`
+		steps := parseClaudeSteps(toLines(raw))
+		if len(steps) != 1 {
+			t.Fatalf("got %d steps, want 1", len(steps))
+		}
+		s := steps[0]
+		if !strings.Contains(s.InputSummary, "[truncated,") {
+			t.Errorf("expected truncation marker in InputSummary, got tail: %q", tail(s.InputSummary, 80))
+		}
+		if len(s.InputSummary) > stepContentMaxBytes+200 {
+			t.Errorf("InputSummary too long: %d bytes (cap+marker should be near %d)", len(s.InputSummary), stepContentMaxBytes)
+		}
+	})
+
+	t.Run("oversized tool input is truncated with marker", func(t *testing.T) {
+		t.Parallel()
+		// 70 KB string baked into the tool_use input args.
+		big := strings.Repeat("a", 70*1024)
+		raw := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"cmd":"` + big + `"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"ok"}]}}`
+		steps := parseClaudeSteps(toLines(raw))
+		if len(steps) != 1 {
+			t.Fatalf("got %d steps, want 1", len(steps))
+		}
+		if !strings.Contains(steps[0].InputSummary, "[truncated,") {
+			t.Errorf("expected truncation marker in tool InputSummary")
+		}
+	})
+}
+
+func tail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return "..." + s[len(s)-n:]
 }
 
 func TestExtractToolResultText(t *testing.T) {

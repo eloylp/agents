@@ -143,7 +143,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("get_trace_steps",
-				mcpgo.WithDescription("Fetch the tool-loop transcript for one span: ordered tool calls with input/output summaries and durations."),
+				mcpgo.WithDescription("Fetch the recorded transcript for one span. Each row carries a `kind`: `tool` for paired tool_use+tool_result rounds (with input/output summaries and duration), or `thinking` for assistant text blocks emitted between tool calls (full text in input_summary). Steps are ordered by occurrence."),
 				mcpgo.WithString("span_id",
 					mcpgo.Required(),
 					mcpgo.Description("Span ID to fetch steps for."),

@@ -5,13 +5,9 @@ import Card from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 import Link from 'next/link'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
+import { StreamCard, stepToCardEntries, type PersistedStep } from '@/components/StreamCard'
 
-interface TraceStep {
-  tool_name: string
-  input_summary: string
-  output_summary: string
-  duration_ms: number
-}
+type TraceStep = PersistedStep
 
 interface Span {
   span_id: string
@@ -214,22 +210,11 @@ function SpanTranscript({ spanId, stepCount }: { spanId: string; stepCount?: num
           {!loading && steps !== null && steps.length === 0 && (
             <p style={{ color: 'var(--text-faint)', fontSize: '0.75rem', fontStyle: 'italic' }}>No transcript recorded for this span.</p>
           )}
-          {!loading && steps !== null && steps.map((step, i) => (
-            <div key={i} style={{ display: 'flex', gap: '0.5rem', padding: '3px 0', fontSize: '0.73rem', borderTop: i > 0 ? '1px solid var(--border-subtle)' : undefined, alignItems: 'flex-start' }}>
-              <span style={{ color: 'var(--text-faint)', flexShrink: 0, width: '28px', textAlign: 'right' }}>{i + 1}.</span>
-              <span style={{ color: 'var(--accent)', flexShrink: 0, fontFamily: 'monospace', fontWeight: 600 }}>{step.tool_name}</span>
-              <span style={{ color: 'var(--text-muted)', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }} title={step.input_summary}>
-                ({step.input_summary})
-              </span>
-              <span style={{ color: 'var(--text-faint)', margin: '0 4px' }}>→</span>
-              <span style={{ color: 'var(--text)', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 2 }} title={step.output_summary}>
-                {step.output_summary || ', '}
-              </span>
-              {step.duration_ms > 0 && (
-                <span style={{ color: 'var(--text-faint)', flexShrink: 0, marginLeft: '4px' }}>({step.duration_ms}ms)</span>
-              )}
-            </div>
-          ))}
+          {!loading && steps !== null && steps.flatMap((step, i) =>
+            stepToCardEntries(step, i * 2).map((entry, j) => (
+              <StreamCard key={`${i}-${j}`} entry={entry} />
+            ))
+          )}
         </div>
       )}
     </div>
