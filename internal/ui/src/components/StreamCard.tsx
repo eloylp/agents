@@ -1,16 +1,112 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
 // StreamCardEntry is the visual shape every transcript surface (live tail
 // or persisted replay) maps onto. parseStreamLine builds entries from raw
 // stdout JSONL; stepToCardEntries builds them from a persisted TraceStep.
 export type StreamCardEntry = {
   at: number
-  kind: 'thinking' | 'tool_use' | 'tool_result' | 'usage' | 'end' | 'raw'
+  kind: StreamCardKind
   title: string
   detail?: string
   raw?: string
+}
+
+export type StreamCardKind = 'thinking' | 'tool_use' | 'tool_result' | 'usage' | 'end' | 'raw'
+
+// kindMeta is the visual + label config for each card kind. Used by
+// StreamCard for the accent colour and TranscriptFilter for the chip labels.
+const kindMeta: Record<StreamCardKind, { label: string; emoji: string; accent: string }> = {
+  tool_use:    { label: 'Tool calls',   emoji: '🔧', accent: '#fcd34d' },
+  tool_result: { label: 'Tool results', emoji: '📤', accent: '#5eead4' },
+  thinking:    { label: 'Thinking',     emoji: '💬', accent: '#60a5fa' },
+  usage:       { label: 'Usage',        emoji: '📊', accent: '#a5b4fc' },
+  end:         { label: 'End',          emoji: '✓',  accent: 'var(--success)' },
+  raw:         { label: 'Other',        emoji: '·',  accent: 'var(--text-faint)' },
+}
+
+// TranscriptFilter renders a row of toggle pills, one per card kind that
+// actually appears in the entries list. Clicking a pill toggles whether
+// cards of that kind are visible. Returns null when only one kind is
+// present (nothing to filter). Both Runners (live tail) and Traces
+// (persisted replay) reuse it so the filtering UX is consistent.
+export function TranscriptFilter({
+  entries,
+  visibleKinds,
+  onChange,
+}: {
+  entries: StreamCardEntry[]
+  visibleKinds: Set<StreamCardKind>
+  onChange: (next: Set<StreamCardKind>) => void
+}) {
+  const counts = useMemo(() => {
+    const c: Partial<Record<StreamCardKind, number>> = {}
+    for (const e of entries) c[e.kind] = (c[e.kind] ?? 0) + 1
+    return c
+  }, [entries])
+  const presentKinds = (Object.keys(kindMeta) as StreamCardKind[]).filter(k => (counts[k] ?? 0) > 0)
+  if (presentKinds.length <= 1) return null
+
+  const toggle = (k: StreamCardKind) => {
+    const next = new Set(visibleKinds)
+    if (next.has(k)) next.delete(k)
+    else next.add(k)
+    onChange(next)
+  }
+  const allOn = presentKinds.every(k => visibleKinds.has(k))
+  const reset = () => onChange(new Set(presentKinds))
+
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '0.5rem', alignItems: 'center' }}>
+      {presentKinds.map(k => {
+        const meta = kindMeta[k]
+        const on = visibleKinds.has(k)
+        return (
+          <button
+            key={k}
+            onClick={() => toggle(k)}
+            title={`${on ? 'Hide' : 'Show'} ${meta.label.toLowerCase()}`}
+            style={{
+              padding: '2px 10px',
+              borderRadius: '999px',
+              cursor: 'pointer',
+              fontSize: '0.7rem',
+              fontWeight: 500,
+              border: `1px solid ${on ? meta.accent : 'var(--border)'}`,
+              background: on ? 'var(--bg-input)' : 'transparent',
+              color: on ? 'var(--text)' : 'var(--text-faint)',
+              opacity: on ? 1 : 0.6,
+            }}
+          >
+            {meta.emoji} {meta.label} ({counts[k]})
+          </button>
+        )
+      })}
+      {!allOn && (
+        <button
+          onClick={reset}
+          title="Show all kinds"
+          style={{
+            padding: '2px 10px',
+            borderRadius: '999px',
+            cursor: 'pointer',
+            fontSize: '0.7rem',
+            border: '1px solid var(--border-subtle)',
+            background: 'transparent',
+            color: 'var(--text-faint)',
+          }}
+        >
+          show all
+        </button>
+      )}
+    </div>
+  )
+}
+
+// allStreamCardKinds is the default visibleKinds set: every kind on.
+export function allStreamCardKinds(): Set<StreamCardKind> {
+  return new Set(Object.keys(kindMeta) as StreamCardKind[])
 }
 
 // PersistedStep mirrors the wire shape of one row from
@@ -170,18 +266,7 @@ export function stepToCardEntries(step: PersistedStep, indexAt = 0): StreamCardE
 // detail (or the raw line, if the parser couldn't classify it).
 export function StreamCard({ entry }: { entry: StreamCardEntry }) {
   const [open, setOpen] = useState(false)
-  const accent =
-    entry.kind === 'tool_use'
-      ? '#fcd34d'
-      : entry.kind === 'tool_result'
-      ? '#5eead4'
-      : entry.kind === 'thinking'
-      ? '#60a5fa'
-      : entry.kind === 'usage'
-      ? '#a5b4fc'
-      : entry.kind === 'end'
-      ? 'var(--success)'
-      : 'var(--text-faint)'
+  const accent = kindMeta[entry.kind]?.accent ?? 'var(--text-faint)'
   return (
     <div
       style={{

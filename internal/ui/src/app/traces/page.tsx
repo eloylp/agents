@@ -5,7 +5,7 @@ import Card from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 import Link from 'next/link'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
-import { StreamCard, stepToCardEntries, type PersistedStep } from '@/components/StreamCard'
+import { StreamCard, TranscriptFilter, allStreamCardKinds, stepToCardEntries, type PersistedStep, type StreamCardKind } from '@/components/StreamCard'
 import { fmtDuration } from '@/lib/format'
 
 type TraceStep = PersistedStep
@@ -180,6 +180,7 @@ function SpanTranscript({ spanId, stepCount }: { spanId: string; stepCount?: num
   const [open, setOpen] = useState(false)
   const [steps, setSteps] = useState<TraceStep[] | null>(null)
   const [loading, setLoading] = useState(false)
+  const [visibleKinds, setVisibleKinds] = useState<Set<StreamCardKind>>(allStreamCardKinds)
 
   const toggle = () => {
     if (!open && steps === null) {
@@ -211,11 +212,19 @@ function SpanTranscript({ spanId, stepCount }: { spanId: string; stepCount?: num
           {!loading && steps !== null && steps.length === 0 && (
             <p style={{ color: 'var(--text-faint)', fontSize: '0.75rem', fontStyle: 'italic' }}>No transcript recorded for this span.</p>
           )}
-          {!loading && steps !== null && steps.flatMap((step, i) =>
-            stepToCardEntries(step, i * 2).map((entry, j) => (
-              <StreamCard key={`${i}-${j}`} entry={entry} />
-            ))
-          )}
+          {!loading && steps !== null && steps.length > 0 && (() => {
+            const allEntries = steps.flatMap((step, i) => stepToCardEntries(step, i * 2))
+            const visible = allEntries.filter(e => visibleKinds.has(e.kind))
+            return (
+              <>
+                <TranscriptFilter entries={allEntries} visibleKinds={visibleKinds} onChange={setVisibleKinds} />
+                {visible.map((entry, i) => <StreamCard key={i} entry={entry} />)}
+                {visible.length === 0 && (
+                  <p style={{ color: 'var(--text-faint)', fontSize: '0.75rem', fontStyle: 'italic' }}>All cards filtered out. Toggle a chip above to show them.</p>
+                )}
+              </>
+            )
+          })()}
         </div>
       )}
     </div>
@@ -277,12 +286,14 @@ function TraceDetail({ rootId, allSpans, onBack }: { rootId: string; allSpans: S
                     <td style={{ padding: '6px 0' }}><StatusBadge status={s.status} /></td>
                   </tr>
                   <tr>
-                    <td colSpan={7} style={{ padding: '2px 0 8px', paddingLeft: `${s.dispatch_depth * 12 + 12}px` }}>
-                      {s.summary && <div style={{ fontSize: '0.78rem', color: 'var(--text-faint)', fontStyle: 'italic' }}>{s.summary}</div>}
-                      {s.error && <div style={{ fontSize: '0.78rem', color: 'var(--text-danger)', marginTop: '2px' }}>{s.error}</div>}
-                      <TokenUsagePanel span={s} />
-                      <PromptPanel span={s} />
-                      <SpanTranscript spanId={s.span_id} />
+                    <td colSpan={7} style={{ padding: '2px 0 8px', paddingLeft: `${s.dispatch_depth * 12 + 12}px`, maxWidth: 0 }}>
+                      <div style={{ minWidth: 0, maxWidth: '100%', overflow: 'hidden' }}>
+                        {s.summary && <div style={{ fontSize: '0.78rem', color: 'var(--text-faint)', fontStyle: 'italic', wordBreak: 'break-word' }}>{s.summary}</div>}
+                        {s.error && <div style={{ fontSize: '0.78rem', color: 'var(--text-danger)', marginTop: '2px', wordBreak: 'break-word' }}>{s.error}</div>}
+                        <TokenUsagePanel span={s} />
+                        <PromptPanel span={s} />
+                        <SpanTranscript spanId={s.span_id} />
+                      </div>
                     </td>
                   </tr>
                 </React.Fragment>

@@ -3,7 +3,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import Card from '@/components/Card'
-import { StreamCard, parseStreamLine, type StreamCardEntry } from '@/components/StreamCard'
+import { StreamCard, TranscriptFilter, allStreamCardKinds, parseStreamLine, type StreamCardEntry, type StreamCardKind } from '@/components/StreamCard'
 import { fmtDuration } from '@/lib/format'
 
 interface RunnerRow {
@@ -81,9 +81,11 @@ export default function RunnersPage() {
 function LiveStreamModal({ span, onClose }: { span: { id: string; agent: string; repo: string; kind: string }; onClose: () => void }) {
   const [entries, setEntries] = useState<StreamCardEntry[]>([])
   const [status, setStatus] = useState<'connecting' | 'live' | 'ended' | 'error'>('connecting')
+  const [visibleKinds, setVisibleKinds] = useState<Set<StreamCardKind>>(allStreamCardKinds)
   const scrollRef = useRef<HTMLDivElement>(null)
   const stuckToBottom = useRef(true)
   const [hasNewWhileDetached, setHasNewWhileDetached] = useState(false)
+  const visibleEntries = entries.filter(e => visibleKinds.has(e.kind))
 
   useEffect(() => {
     const es = new EventSource(`/traces/${encodeURIComponent(span.id)}/stream`)
@@ -111,7 +113,7 @@ function LiveStreamModal({ span, onClose }: { span: { id: string; agent: string;
     } else {
       setHasNewWhileDetached(true)
     }
-  }, [entries.length])
+  }, [visibleEntries.length])
 
   const onScroll = () => {
     const el = scrollRef.current
@@ -174,7 +176,13 @@ function LiveStreamModal({ span, onClose }: { span: { id: string; agent: string;
           {entries.length === 0 && status === 'error' && (
             <p style={{ color: 'var(--text-danger)', fontSize: '0.85rem' }}>Lost connection to the live stream. The run may still be in flight; close and reopen to retry.</p>
           )}
-          {entries.map((e, i) => <StreamCard key={i} entry={e} />)}
+          {entries.length > 0 && (
+            <TranscriptFilter entries={entries} visibleKinds={visibleKinds} onChange={setVisibleKinds} />
+          )}
+          {visibleEntries.map((e, i) => <StreamCard key={i} entry={e} />)}
+          {entries.length > 0 && visibleEntries.length === 0 && (
+            <p style={{ color: 'var(--text-faint)', fontSize: '0.78rem', fontStyle: 'italic' }}>All cards filtered out. Toggle a chip above to show them.</p>
+          )}
           {status === 'ended' && entries.length > 0 && (
             <div style={{ marginTop: '1rem', padding: '0.5rem 0.75rem', background: 'var(--bg-input)', borderRadius: '4px', fontSize: '0.8rem' }}>
               ✓ Run completed.{' '}
