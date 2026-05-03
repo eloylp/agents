@@ -59,13 +59,15 @@ docker compose up -d
 ```
 
 Multi-stage build on `node:22-alpine` so the image includes Claude Code and Codex alongside the daemon. Runs as non-root `agents` user. Default CMD is `--db /var/lib/agents/agents.db`. Compose mounts:
-- `./config.yaml` → `/etc/agents/config.yaml` (read-only; used for `--import` seeding)
 - `agents-data` named volume → `/var/lib/agents` (SQLite database persistence)
-- `agents-home` named volume → `/home/agents` (Claude / Codex auth + MCP config; populated by `docker compose run --rm --entrypoint claude agents login` once during setup, no host bind-mount of `~/.claude.json` etc.). GitHub access still flows through the GitHub MCP server configured on each CLI inside the container.
+- `agents-home` named volume → `/home/agents` (Claude / Codex auth + MCP config; populated by `docker compose exec -it agents agents-setup` once during setup, no host bind-mount of `~/.claude.json` etc.). GitHub access still flows through the GitHub MCP server configured on each CLI inside the container.
+
+YAML config is import/export only, not a runtime input. To seed an empty fleet, POST a YAML payload at `/import`.
 
 ## Environment Variables
 
-- `GITHUB_WEBHOOK_SECRET`, HMAC shared secret (`daemon.http.webhook_secret_env`)
+- `GITHUB_WEBHOOK_SECRET`, HMAC shared secret for the webhook receiver (`daemon.http.webhook_secret_env`).
+- `GITHUB_PAT_TOKEN`, Personal Access Token used by the GitHub MCP server inside the container. Required by `scripts/setup.sh` (hard-fails if unset). `repo` scope minimum; add `workflow` if agents touch CI. Codex resolves at runtime; Claude stores in `~/.claude.json` on the `agents-home` volume.
 
 ## Architecture Notes
 
@@ -96,10 +98,10 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code and Code
   - `GET /memory/stream`, memory change notifications (SSE).
   - `GET /config`, effective parsed config (secrets redacted).
   - `GET /ui/`, embedded web dashboard (Next.js static assets).
-  - CRUD endpoints (always mounted): `GET|POST /skills`, `GET|POST /backends`, `GET|POST /repos`, `POST /agents`, `GET|POST /guardrails`, plus item routes (`GET|PATCH|DELETE /agents/{name}`, `GET|PATCH|DELETE /skills/{name}`, `GET|PATCH|DELETE /backends/{name}`, `GET|PATCH|DELETE /repos/{owner}/{repo}`, `GET|PATCH|DELETE /guardrails/{name}`, `POST /guardrails/{name}/reset`). PATCH is partial-update semantics, only fields present in the JSON body are applied, the rest are preserved; POST remains full-replace. Atomic per-binding routes: `POST /repos/{owner}/{repo}/bindings`, `GET|PATCH|DELETE /repos/{owner}/{repo}/bindings/{id}`. Exception: binding `PATCH` is a full-replace, all fields (agent, labels, events, cron, enabled) must be supplied. Guardrail PATCH covers `description`, `content`, `enabled`, `position`; `is_builtin` and `default_content` are migration-managed and not patchable. `POST /guardrails/{name}/reset` copies `default_content` back into `content` (built-ins only; operator-added rows return 400).
+  - CRUD endpoints (always mounted): `GET|POST /skills`, `GET|POST /backends`, `GET|POST /repos`, `POST /agents`, `GET|POST /guardrails`, plus item routes (`GET|PATCH|DELETE /agents/{name}`, `GET|PATCH|DELETE /skills/{name}`, `GET|PATCH|DELETE /backends/{name}`, `GET|PATCH|DELETE /repos/{owner}/{repo}`, `GET|PATCH|DELETE /guardrails/{name}`, `POST /guardrails/{name}/reset`). PATCH is partial-update semantics, only fields present in the JSON body are applied, the rest are preserved; POST remains full-replace. Exception: `PATCH /repos/{owner}/{repo}` is enabled-only (the only patchable repo field is `enabled`); use the per-binding routes for binding edits, or `POST /repos` for a full replace including bindings. Atomic per-binding routes: `POST /repos/{owner}/{repo}/bindings`, `GET|PATCH|DELETE /repos/{owner}/{repo}/bindings/{id}`. Exception: binding `PATCH` is a full-replace, all fields (agent, labels, events, cron, enabled) must be supplied. Guardrail PATCH covers `description`, `content`, `enabled`, `position`; `is_builtin` and `default_content` are migration-managed and not patchable. `POST /guardrails/{name}/reset` copies `default_content` back into `content` (built-ins only; operator-added rows return 400).
   - Backend diagnostics endpoints: `GET /backends/status`, `POST /backends/discover`, `POST /backends/local`.
   - `GET /export`, `POST /import`, export/import fleet config as YAML.
-  - `POST /mcp`, MCP (Model Context Protocol) Streamable HTTP endpoint. Registered MCP clients (Claude Code, Cursor, Cline) discover fleet-management tools automatically. Currently registered tools: `list_agents`, `get_agent`, `list_skills`, `get_skill`, `list_backends`, `get_backend`, `list_repos`, `get_repo`, `list_guardrails`, `get_guardrail`, `get_status`, `trigger_agent`, `list_events`, `list_traces`, `get_trace`, `get_trace_steps`, `get_trace_prompt`, `get_graph`, `get_dispatches`, `get_memory`, `get_config`, `export_config`, `import_config`, `create_agent`, `update_agent`, `delete_agent`, `create_skill`, `update_skill`, `delete_skill`, `create_backend`, `update_backend`, `delete_backend`, `create_repo`, `update_repo`, `delete_repo`, `create_binding`, `get_binding`, `update_binding`, `delete_binding`, `create_guardrail`, `update_guardrail`, `delete_guardrail`, `reset_guardrail`, `list_runners`, `delete_runner`, `retry_runner`. `update_agent`, `update_skill`, `update_backend`, `update_repo`, and `update_guardrail` follow partial-update semantics, only supplied fields are changed. Exception: `update_binding` is a full-replace (all binding fields required), matching the binding `PATCH` route. Queue tools mirror the `/runners` REST surface (list / delete / retry). The MCP surface now covers the full fleet inventory declared in #227.
+  - `POST /mcp`, MCP (Model Context Protocol) Streamable HTTP endpoint. Registered MCP clients (Claude Code, Cursor, Cline) discover fleet-management tools automatically. Currently registered tools: `list_agents`, `get_agent`, `list_skills`, `get_skill`, `list_backends`, `get_backend`, `list_repos`, `get_repo`, `list_guardrails`, `get_guardrail`, `get_status`, `trigger_agent`, `list_events`, `list_traces`, `get_trace`, `get_trace_steps`, `get_trace_prompt`, `get_graph`, `get_dispatches`, `get_memory`, `get_config`, `export_config`, `import_config`, `create_agent`, `update_agent`, `delete_agent`, `create_skill`, `update_skill`, `delete_skill`, `create_backend`, `update_backend`, `delete_backend`, `create_repo`, `update_repo`, `delete_repo`, `create_binding`, `get_binding`, `update_binding`, `delete_binding`, `create_guardrail`, `update_guardrail`, `delete_guardrail`, `reset_guardrail`, `list_runners`, `delete_runner`, `retry_runner`. `update_agent`, `update_skill`, `update_backend`, and `update_guardrail` follow partial-update semantics, only supplied fields are changed. `update_repo` is the exception: only `enabled` is patchable. `update_binding` is a full-replace (all binding fields required), matching the binding `PATCH` route. Queue tools mirror the `/runners` REST surface (list / delete / retry). The MCP surface now covers the full fleet inventory declared in #227.
 - Supported webhook events: `issues.*` (labeled, opened, edited, reopened, closed), `pull_request.*` (labeled, opened, synchronize, ready_for_review, closed), `issue_comment.created`, `pull_request_review.submitted`, `pull_request_review_comment.created`, `push` (branches only). Label-triggered routing uses `payload.label.name`. Non-label `events:` subscriptions match the event kind exactly. Draft PRs skip `pull_request.labeled`.
 - Internal event kinds (not from webhooks): `agents.run` (on-demand trigger from `POST /run` or MCP `trigger_agent`), `agent.dispatch` (inter-agent dispatch), `cron` (cron-scheduler tick).
 - Duplicate webhook suppression via `X-GitHub-Delivery` TTL cache.
@@ -115,7 +117,11 @@ Multi-stage build on `node:22-alpine` so the image includes Claude Code and Code
 
 ## Contribution Model
 
-This project is built by its own agent fleet. External contributions come as issues, not code PRs, the coder agent implements accepted issues, the pr-reviewer validates, and a maintainer merges. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full flow and exceptions (doc typo fixes and security patches are accepted as direct PRs).
+This project is built alongside its own agent fleet. Both paths are welcome:
+- **Issue path**: open an issue. If a maintainer applies the `ai ready` label, the coder agent picks it up on its next run, opens a PR, and the pr-reviewer validates. A maintainer merges.
+- **PR path**: open a pull request directly. The maintainer either reviews it themselves or applies `ai ready` to invite the pr-reviewer agent. A human always makes the final merge decision.
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full flow, label semantics, and security disclosure.
 
 ## Security Notes
 

@@ -9,7 +9,12 @@ The daemon dispatches AI CLIs (`claude`, `codex`) with sandbox-bypass flags so a
 ```bash
 git clone https://github.com/eloylp/agents
 cd agents
-echo "GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)" > .env
+# .env holds runtime secrets (loaded automatically by compose).
+# Webhook secret: random per install. PAT: from https://github.com/settings/tokens with repo scope.
+cat > .env <<EOF
+GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)
+GITHUB_PAT_TOKEN=ghp_paste_your_token_here
+EOF
 docker compose up -d
 ```
 
@@ -32,7 +37,7 @@ docker compose exec -it agents agents-setup
 `agents-setup` is a small bash script (see [`scripts/setup.sh`](../scripts/setup.sh)) that does only what genuinely needs interactive shell access:
 
 1. picks which AI backend(s) you want, claude, codex, or both,
-2. runs `claude login` / `codex login` against your terminal so you can complete the OAuth flow in your browser,
+2. runs `claude auth login` and `codex login --device-auth` against your terminal so you can complete the OAuth flow in your browser,
 3. registers the GitHub MCP server on each authenticated CLI,
 4. refreshes the daemon's backend discovery so the fleet sees the freshly authenticated tooling,
 5. prints diagnostics from `/status`, `/backends/status`, `/agents/orphans/status`.
@@ -73,7 +78,7 @@ curl -X POST -H 'Content-Type: application/x-yaml' \
   --data-binary @fleet.yaml http://localhost:8080/import
 ```
 
-The `agents-data` volume is the only piece of state worth backing up regularly, `agents-home` holds OAuth tokens and is meant to be re-populated via `claude login` rather than backed up.
+The `agents-data` volume is the only piece of state worth backing up regularly, `agents-home` holds OAuth tokens and is meant to be re-populated via `agents-setup` rather than backed up.
 
 ## Next steps
 

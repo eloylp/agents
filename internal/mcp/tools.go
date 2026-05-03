@@ -179,7 +179,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 	if deps.Store != nil {
 		srv.AddTool(
 			mcpgo.NewTool("get_memory",
-				mcpgo.WithDescription("Return the stored markdown memory for an agent/repo pair. Only autonomous agents keep memory; event-driven runs don't."),
+				mcpgo.WithDescription("Return the stored markdown memory for an (agent, repo) pair. Memory is loaded and persisted around every run when the agent has allow_memory: true (the default), uniformly across cron, webhooks, dispatch, POST /run, and trigger_agent."),
 				mcpgo.WithString("agent",
 					mcpgo.Required(),
 					mcpgo.Description("Agent name."),
@@ -425,7 +425,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 					mcpgo.Description("Allow other agents to dispatch this agent. Defaults to false."),
 				),
 				mcpgo.WithBoolean("allow_memory",
-					mcpgo.Description("Load and persist this agent's memory across autonomous runs. Defaults to true; set to false to skip memory load and persist regardless of run kind."),
+					mcpgo.Description("Load and persist this agent's memory uniformly across every run kind (cron, webhooks, dispatch, POST /run, trigger_agent). Defaults to true; set to false for stateless agents."),
 				),
 			),
 			toolCreateAgent(deps),
@@ -464,7 +464,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 					mcpgo.Description("Allow other agents to dispatch this agent. Omit to leave unchanged."),
 				),
 				mcpgo.WithBoolean("allow_memory",
-					mcpgo.Description("Load and persist this agent's memory across autonomous runs. Omit to leave unchanged."),
+					mcpgo.Description("Load and persist this agent's memory uniformly across every run kind. Defaults to true; set to false for stateless agents. Omit to leave unchanged."),
 				),
 			),
 			toolUpdateAgent(deps),

@@ -185,7 +185,11 @@ func deleteAgent(db *sql.DB, name string, cascade bool) error {
 		// constraint fire. Callers can show the referenced repos and
 		// offer a cascade without parsing SQLite error strings.
 		distinct := slices.Compact(slices.Sorted(slices.Values(refs)))
-		return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: still referenced by %d binding(s) across %d repo(s); use cascade to remove them", name, len(refs), len(distinct))}
+		list := strings.Join(distinct, ", ")
+		if len(distinct) > 8 {
+			list = strings.Join(distinct[:8], ", ") + fmt.Sprintf(", and %d more", len(distinct)-8)
+		}
+		return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: still referenced by %d binding(s) across %d repo(s) (%s); use cascade to remove them", name, len(refs), len(distinct), list)}
 	}
 	res, err := tx.Exec("DELETE FROM agents WHERE name=?", name)
 	if err != nil {

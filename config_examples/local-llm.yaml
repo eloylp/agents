@@ -17,8 +17,7 @@
 # `claude_local` at a different upstream (Ollama on :11434, vLLM on
 # :8000, llama.cpp on :8080 etc.).
 #
-# Import (running daemon): cp local-llm.yaml ../config.yaml && docker compose restart agents
-#                          OR  curl -X POST -H 'Content-Type: application/x-yaml' --data-binary @local-llm.yaml http://localhost:8080/import
+# Import: curl -X POST -H 'Content-Type: application/x-yaml' --data-binary @local-llm.yaml http://localhost:8080/import
 
 daemon:
   log:
@@ -34,7 +33,6 @@ daemon:
   ai_backends:
     claude:
       command: claude
-      args: ["-p", "--dangerously-skip-permissions"]
       timeout_seconds: 1500
       max_prompt_chars: 12000
 
@@ -43,7 +41,6 @@ daemon:
     # marks this as a local backend.
     claude_local:
       command: claude
-      args: ["-p", "--dangerously-skip-permissions"]
       local_model_url: http://local-llm:18000/v1
       timeout_seconds: 3600
       max_prompt_chars: 8000

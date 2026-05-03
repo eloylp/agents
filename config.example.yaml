@@ -1,11 +1,11 @@
 # ──────────────────────────────────────────────
 # Import-format reference
 # ──────────────────────────────────────────────
-# This file is a YAML import template. The shipped docker-compose mounts
-# config.yaml into the container; the daemon seeds the empty SQLite store
-# from it on first boot. After that, manage the fleet through the /ui/
-# dashboard, the CRUD API, or the agents-fleet MCP tools, the YAML file
-# is a seeding convenience, not a separate runtime mode.
+# This file is a YAML import template. The daemon's source of truth is
+# the SQLite store; YAML is an optional import/export format. To seed
+# an empty fleet or re-import after edits, POST this file to /import.
+# After that, manage the fleet through the /ui/ dashboard, the CRUD
+# API, or the agents-fleet MCP tools.
 #
 # To re-seed a running daemon, POST this file at /import:
 #
@@ -47,18 +47,11 @@ daemon:
   ai_backends:
     claude:
       command: claude
-      args:
-        - "-p"
-        - "--dangerously-skip-permissions"
       timeout_seconds: 1500
       max_prompt_chars: 12000
 
     codex:
       command: codex
-      args:
-        - "exec"
-        - "--skip-git-repo-check"
-        - "--dangerously-bypass-approvals-and-sandbox"
       timeout_seconds: 600
       max_prompt_chars: 12000
 

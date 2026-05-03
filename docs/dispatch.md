@@ -33,6 +33,7 @@ The dispatched agent receives an `agent.dispatch` event with these payload field
 | `root_event_id` | ID of the original triggering event (stable across the full chain) |
 | `dispatch_depth` | How many hops deep in the chain this invocation is |
 | `invoked_by` | Name of the agent that dispatched this run |
+| `parent_span_id` | Span ID of the originating agent's run (used by trace stitching to link the dispatch chain) |
 
 ## Safety limits (`daemon.processor.dispatch`)
 

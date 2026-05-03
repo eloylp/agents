@@ -68,7 +68,7 @@ internal/ai/response-schema.json # embedded JSON schema for structured output (c
 - A target named in any `can_dispatch` list must also declare a `description`, it is rendered into the originating agent's prompt as part of an `## Available experts` roster.
 - An agent's response JSON may include a `dispatch: []` array. Each element names a target and a reason.
 - The dispatcher validates every request against: whitelist match, target's opt-in, chain depth, fan-out per run, and a dedup window keyed on `(target_agent, repo, number)`. Safety limits live under `daemon.processor.dispatch.{max_depth, max_fanout, dedup_window_seconds}` and all three must be positive integers.
-- Accepted requests are enqueued as synthetic `agent.dispatch` events with payload fields `target_agent`, `reason`, `invoked_by`, `root_event_id`, `dispatch_depth`. They flow through the same single event queue as webhook events and cron-fired events.
+- Accepted requests are enqueued as synthetic `agent.dispatch` events with payload fields `target_agent`, `reason`, `invoked_by`, `root_event_id`, `dispatch_depth`, `parent_span_id`. They flow through the same single event queue as webhook events and cron-fired events.
 - Rejection modes log at `WARN` (whitelist/opt-in/depth/fanout breaches) or `DEBUG` (dedup skip).
 
 ## Behavioral guardrails
@@ -120,7 +120,7 @@ When making common classes of changes, update all of these at once:
 ## Operational notes
 
 - **`.env` is auto-loaded on startup** (`godotenv.Load()`). Required runtime secret: `GITHUB_WEBHOOK_SECRET`.
-- **Config is loaded from SQLite at startup.** The compose mounts `./config.yaml` into the container; the daemon seeds the empty SQLite store from it on first boot. Manage subsequent changes via the CRUD API or the web dashboard. Prompt and skill content is stored in the database; changes via the API or UI take effect on the next agent run without a restart.
+- **Config is loaded from SQLite at startup.** Seed an empty SQLite store via `POST /import` or the `agents-setup` script; YAML is import/export only, not a runtime input. Manage subsequent changes via the CRUD API or the web dashboard. Prompt and skill content is stored in the database; changes via the API or UI take effect on the next agent run without a restart.
 - **Backend discovery lifecycle.** Startup auto-discovery runs only when the backends table is empty. Manual refresh is explicit via `POST /backends/discover`; `GET /backends/status` is diagnostics-only.
 - **Orphan visibility.** `GET /agents/orphans/status` and `/status` (`orphaned_agents.count`) expose model/backend drift requiring user remediation.
 - **Agent memory** is stored in SQLite (in the `memory` table), keyed by `(agent, repo)`. It's the agent's job to return updated memory in its response; the daemon writes it back to the store unchanged. Load/persist is gated by `allow_memory` (default `true`) and applies uniformly across cron, webhook, dispatch, `POST /run`, and `trigger_agent`.

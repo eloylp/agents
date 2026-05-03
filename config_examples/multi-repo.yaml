@@ -11,8 +11,7 @@
 # Adding a new repo to the fleet means adding another `repos:`
 # entry and binding the agents it needs, no agent duplication.
 #
-# Import (running daemon): cp multi-repo.yaml ../config.yaml && docker compose restart agents
-#                          OR  curl -X POST -H 'Content-Type: application/x-yaml' --data-binary @multi-repo.yaml http://localhost:8080/import
+# Import: curl -X POST -H 'Content-Type: application/x-yaml' --data-binary @multi-repo.yaml http://localhost:8080/import
 
 daemon:
   log:
@@ -27,12 +26,10 @@ daemon:
   ai_backends:
     claude:
       command: claude
-      args: ["-p", "--dangerously-skip-permissions"]
       timeout_seconds: 1500
       max_prompt_chars: 12000
     codex:
       command: codex
-      args: ["exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"]
       timeout_seconds: 600
       max_prompt_chars: 12000
 

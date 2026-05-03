@@ -2,7 +2,7 @@
 
 The `events:` field in repo bindings accepts any of the following GitHub event kinds. Each event delivers a `## Runtime context` block into the agent's prompt with `Event`, `Actor` (the GitHub login that triggered it), an issue/PR number where applicable, and the payload fields listed below.
 
-## Event reference
+## Webhook event kinds (subscribable via `events:`)
 
 | Kind | When | Payload fields |
 |------|------|----------------|
@@ -20,8 +20,15 @@ The `events:` field in repo bindings accepts any of the following GitHub event k
 | `pull_request_review.submitted` | Formal GitHub review submitted | `state`, `body` |
 | `pull_request_review_comment.created` | Inline review comment posted on a PR diff | `body` |
 | `push` | Commit pushed to a branch | `ref` (e.g. `refs/heads/main`), `head_sha` |
+
+## Internal event kinds (emitted by the daemon, not subscribable)
+
+These flow through the same queue and trace pipeline as webhook events but cannot be referenced in `events:` bindings, validation rejects them at config load.
+
+| Kind | When | Payload fields |
+|------|------|----------------|
 | `agents.run` | On-demand trigger via `POST /run` or MCP `trigger_agent` | `target_agent` |
-| `agent.dispatch` | Another agent dispatched this agent | `target_agent`, `reason`, `root_event_id`, `dispatch_depth`, `invoked_by` |
+| `agent.dispatch` | Another agent dispatched this agent | `target_agent`, `reason`, `root_event_id`, `dispatch_depth`, `invoked_by`, `parent_span_id` |
 
 ## Event lifecycle
 

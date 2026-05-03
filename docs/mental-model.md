@@ -46,14 +46,15 @@ Any agent can invoke another at runtime by returning a `dispatch` array in its r
 
 Every run, the daemon assembles the prompt from these pieces, in this order:
 
-1. **Hard guardrails.** The scheduler prepends fixed instructions based on the agent's flags. The most visible example: when `allow_prs: false`, a clause forbidding the agent from opening pull requests is inserted before anything else, so the gate is code-level rather than relying on the agent's prompt remembering it.
-2. **Composed skills.** Every skill in the agent's `skills:` list, concatenated. Skills are reusable guidance blocks (architecture, testing, security, ...) that compose orthogonally.
-3. **The agent's own prompt.** The agent-specific instructions you wrote in `prompt:`.
-4. **Available experts roster.** When the agent has a non-empty `can_dispatch:` list, the daemon injects an `## Available experts` section listing each dispatchable target with its `description`.
-5. **Runtime context.** A `## Runtime context` block carrying event details: `Event` kind, `Actor` (the GitHub login that triggered it), an issue or PR number where applicable, and the payload fields documented per event kind in [events.md](events.md).
-6. **Memory.** When the agent has `allow_memory: true` (the default), the daemon reads its persisted memory before the run and appends it to the prompt; the response's `memory` field is persisted back after a successful run. This applies uniformly across every trigger surface: cron, webhook events, dispatch, `POST /run`, and the `trigger_agent` MCP tool. Setting `allow_memory: false` skips both the load and the persist regardless of how the run was triggered.
+1. **Operator guardrails.** Every row from the `guardrails` table where `enabled = true`, ordered by `position ASC, name ASC`, prepended verbatim. The shipped `security` default (seeded by migration 010) is at position 0 and pushes back on indirect prompt injection, secret exfiltration, and out-of-tree filesystem or network access. Operators can edit, disable, replace, or add their own (code style, deployment policy, ...) via the Guardrails tab in `/ui/config`. See [security.md](security.md) for the threat model and what the default does *not* close.
+2. **Hard agent-flag guards.** Code-level clauses inserted based on the agent's flags. The most visible example: when `allow_prs: false`, a clause forbidding the agent from opening pull requests is inserted before the skills, so the gate is code-level rather than relying on the agent's prompt remembering it.
+3. **Composed skills.** Every skill in the agent's `skills:` list, concatenated. Skills are reusable guidance blocks (architecture, testing, security, ...) that compose orthogonally.
+4. **The agent's own prompt.** The agent-specific instructions you wrote in `prompt:`.
+5. **Available experts roster.** When the agent has a non-empty `can_dispatch:` list, the daemon injects an `## Available experts` section listing each dispatchable target with its `description`.
+6. **Runtime context.** A `## Runtime context` block carrying event details: `Event` kind, `Actor` (the GitHub login that triggered it), an issue or PR number where applicable, and the payload fields documented per event kind in [events.md](events.md).
+7. **Memory.** When the agent has `allow_memory: true` (the default), the daemon reads its persisted memory before the run and appends it to the prompt; the response's `memory` field is persisted back after a successful run. This applies uniformly across every trigger surface: cron, webhook events, dispatch, `POST /run`, and the `trigger_agent` MCP tool. Setting `allow_memory: false` skips both the load and the persist regardless of how the run was triggered.
 
-The order matters: guardrails before skills, skills before the agent's own prompt, runtime context last. The agent's prompt can reference its skills, and runtime details come pre-loaded so the prompt does not need to ask "what triggered this?"
+The order matters: guardrails before everything (so untrusted text the agent reads later cannot retroactively unset them), skills before the agent's own prompt, runtime context last. The agent's prompt can reference its skills, and runtime details come pre-loaded so the prompt does not need to ask "what triggered this?"
 
 ### What it looks like assembled
 
@@ -136,9 +137,9 @@ Every agent run produces a single top-level JSON object on stdout:
 | Field | Required | Meaning |
 |---|---|---|
 | `summary` | yes | One-line overall outcome. Surfaced in observability views and logs. |
-| `artifacts` | yes (may be empty) | Every GitHub object the agent created or updated (comments, PRs, issues, labels). Used for observability and audit. |
-| `dispatch` | no | Inter-agent dispatch requests. See [dispatch.md](dispatch.md) for the contract. Omit or use `[]` when no dispatch is needed. |
-| `memory` | no | The agent's full updated memory. Persisted only for autonomous runs and only when the agent's memory persistence flag is true. An empty string clears the memory. |
+| `artifacts` | yes (may be `[]`) | Every GitHub object the agent created or updated (comments, PRs, issues, labels). Used for observability and audit. |
+| `dispatch` | yes (may be `[]`) | Inter-agent dispatch requests. See [dispatch.md](dispatch.md) for the contract. Use `[]` when no dispatch is needed. |
+| `memory` | yes (may be `""`) | The agent's full updated memory. Persisted after every run when the agent has `allow_memory: true` (the default), uniformly across cron, webhooks, dispatch, `POST /run`, and `trigger_agent`. An empty string clears the memory. |
 
 A run that returns no JSON, an empty response, or a response where `summary`, `artifacts`, and `dispatch` are all empty fails with a clear error.
 

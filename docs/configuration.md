@@ -44,16 +44,16 @@ daemon:
   ai_backends:
     claude:
       command: claude
-      args: ["-p", "--dangerously-skip-permissions"]
       timeout_seconds: 1500
       max_prompt_chars: 12000
 
     codex:
       command: codex
-      args: ["exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"]
       timeout_seconds: 600
       max_prompt_chars: 12000
 ```
+
+> **Backend launch args are daemon-managed.** The arguments passed to `claude` and `codex` are hardcoded by the daemon (`-p --dangerously-skip-permissions` for Claude, `exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox` for Codex). The YAML schema does not expose them; the only backend fields you can change at runtime are `timeout_seconds`, `max_prompt_chars`, and (for local backends) `local_model_url`.
 
 ## `skills`
 
@@ -222,12 +222,13 @@ Rules:
 Create a `.env` file in the project root (loaded automatically):
 
 ```bash
-GITHUB_WEBHOOK_SECRET=your-webhook-secret
+GITHUB_WEBHOOK_SECRET=your-webhook-secret  # HMAC shared secret for /webhooks/github
+GITHUB_PAT_TOKEN=ghp_...                   # Personal Access Token used by the GitHub MCP server (repo scope)
 ```
 
 ## Importing and exporting
 
-The daemon always boots from the SQLite database. YAML is an optional import / export format, not a second runtime mode. The shipped compose mounts `./config.yaml` into the container; if the SQLite store is empty on boot the daemon seeds it from that file. After the first boot the YAML file is no longer consulted.
+The daemon always boots from the SQLite database. YAML is an optional import / export format, not a second runtime mode. To seed an empty fleet or re-import after edits, POST a YAML payload at `/import`.
 
 ```bash
 # Export the current fleet back to YAML at any time.
@@ -237,4 +238,4 @@ curl -s http://localhost:8080/export > fleet.yaml
 curl -X POST http://localhost:8080/import --data-binary @fleet.yaml
 ```
 
-The CRUD endpoints for `/agents`, `/skills`, `/backends`, `/repos`, and `/guardrails` are always mounted and backed by the SQLite database. All five resource types support `PATCH /{resource}/{name}` for partial updates: only fields present in the request body are applied, the rest are preserved. Guardrails additionally support `POST /guardrails/{name}/reset` for built-ins. For `/agents`, `POST /agents`, `PATCH /agents/{name}`, and `DELETE /agents/{name}` are CRUD write endpoints, but `GET /agents` always returns the live fleet snapshot (not the stored agent list). The daemon auto-reloads cron schedules after any write to agents, skills, backends, or repos. Agent memory is stored in the same SQLite database.
+The CRUD endpoints for `/agents`, `/skills`, `/backends`, `/repos`, and `/guardrails` are always mounted and backed by the SQLite database. `agents`, `skills`, `backends`, and `guardrails` support `PATCH /{resource}/{name}` for partial updates: only fields present in the request body are applied, the rest are preserved. `PATCH /repos/{owner}/{repo}` is enabled-only; binding edits go through `/repos/{owner}/{repo}/bindings/{id}`, and full repo replacement goes through `POST /repos`. Guardrails additionally support `POST /guardrails/{name}/reset` for built-ins. For `/agents`, `POST /agents`, `PATCH /agents/{name}`, and `DELETE /agents/{name}` are CRUD write endpoints, but `GET /agents` always returns the live fleet snapshot (not the stored agent list). The daemon auto-reloads cron schedules after any write to agents, skills, backends, or repos. Agent memory is stored in the same SQLite database.

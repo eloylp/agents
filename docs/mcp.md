@@ -43,6 +43,7 @@ The same pattern works for Cursor, Cline, and any other MCP-compatible client; c
 | `list_repos` | List all repos with bindings. |
 | `get_repo` | Fetch one repo by name. |
 | `create_repo` | Create or update a repo with bindings (full replace of the bindings list). |
+| `update_repo` | Toggle a repo's `enabled` flag without churning binding IDs. Only `enabled` is patchable; binding edits go through the binding tools below. |
 | `delete_repo` | Delete a repo and its bindings. |
 | `create_binding` | Create one binding on a repo; returns the persisted binding with its generated ID. |
 | `get_binding` | Fetch one binding by ID, scoped to a repo. |

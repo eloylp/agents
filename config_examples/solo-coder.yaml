@@ -10,8 +10,7 @@
 # multi-agent flows. Grow into coder-and-reviewer.yaml when you
 # want a second agent reviewing the coder's PRs.
 #
-# Import (running daemon): cp solo-coder.yaml ../config.yaml && docker compose restart agents
-#                          OR  curl -X POST -H 'Content-Type: application/x-yaml' --data-binary @solo-coder.yaml http://localhost:8080/import
+# Import: curl -X POST -H 'Content-Type: application/x-yaml' --data-binary @solo-coder.yaml http://localhost:8080/import
 
 daemon:
   log:
@@ -26,7 +25,6 @@ daemon:
   ai_backends:
     claude:
       command: claude
-      args: ["-p", "--dangerously-skip-permissions"]
       timeout_seconds: 1500
       max_prompt_chars: 12000
 

@@ -203,7 +203,7 @@ Not everything is sunshine. Things we learned the hard way:
 
 Both backends enforce a JSON response schema at the CLI level. The daemon embeds the schema (`internal/ai/response-schema.json`) in the binary and appends the appropriate flags automatically, no config or file mounts needed:
 
-- **Claude** (including `claude_local`): `--output-format json --json-schema '<schema>'` appended automatically. The CLI wraps stdout in an envelope; the daemon extracts `structured_output` from it.
+- **Claude** (including `claude_local`): `--output-format stream-json --json-schema '<schema>'` appended automatically. Claude emits a stream-JSON response and the daemon extracts the final top-level JSON object from it.
 - **Codex**: `--output-schema <temp-file>` appended automatically. Model output is schema-constrained directly.
 - **Local models via proxy**: structured output enforcement works the same as hosted Claude (the `claude_local` backend gets the flags automatically). The proxy passes the response through; what matters is whether the local model respects the schema.
 

@@ -20,7 +20,7 @@
 //   - create_backend, update_backend, delete_backend, backend CRUD writes
 //   - create_repo, update_repo, delete_repo, repo CRUD writes
 //   - create_binding, get_binding, update_binding, delete_binding, atomic binding CRUD
-//   - list_queue_events, delete_queue_event, retry_queue_event, durable event queue ops
+//   - list_runners, delete_runner, retry_runner, durable event queue ops (per-runner view)
 //
 // With repo CRUD in place this surface now covers the full fleet inventory
 // declared in #227.
@@ -124,7 +124,8 @@ CRUD-mutable YAML fragment, and write a YAML payload back into the
 store. CRUD write tools (create_agent, delete_agent, create_skill,
 delete_skill, create_backend, delete_backend, create_repo, update_repo,
 delete_repo, create_binding, update_binding, delete_binding) mutate
-the fleet through the same code path as the REST API. Queue ops
-(list_queue_events, delete_queue_event, retry_queue_event) inspect and
-manage the durable event_queue table. This server is the v3 foundation
-for conversational fleet management.`
+the fleet through the same code path as the REST API. Runner ops
+(list_runners, delete_runner, retry_runner) inspect and manage the
+durable event_queue table as a per-runner view (events JOINed with
+trace spans). This server is the v3 foundation for conversational
+fleet management.`

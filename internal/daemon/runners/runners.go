@@ -90,10 +90,15 @@ type RunnerRow struct {
 
 	// Trace-derived fields, populated only when CompletedAt != nil and a
 	// matching span exists. Agent is the canonical "which runner is this".
-	Agent       string `json:"agent,omitempty"`
-	SpanID      string `json:"span_id,omitempty"`
-	RunDuration int64  `json:"run_duration_ms,omitempty"`
-	Summary     string `json:"summary,omitempty"`
+	Agent            string `json:"agent,omitempty"`
+	SpanID           string `json:"span_id,omitempty"`
+	RunDuration      int64  `json:"run_duration_ms,omitempty"`
+	Summary          string `json:"summary,omitempty"`
+	PromptSize       int64  `json:"prompt_size,omitempty"`
+	InputTokens      int64  `json:"input_tokens,omitempty"`
+	OutputTokens     int64  `json:"output_tokens,omitempty"`
+	CacheReadTokens  int64  `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64  `json:"cache_write_tokens,omitempty"`
 }
 
 // ListResponse is the wire shape returned by GET /runners. Total counts
@@ -208,6 +213,11 @@ func (h *Handler) expand(ev store.RunnerRecord) []RunnerRow {
 		row.RunDuration = sp.DurationMs
 		row.Summary = sp.Summary
 		row.Status = sp.Status // "success" | "error"
+		row.PromptSize = sp.PromptSize
+		row.InputTokens = sp.InputTokens
+		row.OutputTokens = sp.OutputTokens
+		row.CacheReadTokens = sp.CacheReadTokens
+		row.CacheWriteTokens = sp.CacheWriteTokens
 		out = append(out, row)
 	}
 	return out
