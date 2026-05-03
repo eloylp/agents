@@ -70,14 +70,10 @@ func (s *Store) ReadBinding(id int64) (string, fleet.Binding, bool, error) {
 	return ReadBinding(s.db, id)
 }
 
-// EnableRepo flips a repo's enabled flag without rewriting bindings , 
+// EnableRepo flips a repo's enabled flag without rewriting bindings ,
 // the dedicated path that PATCH /repos/{owner}/{repo} relies on.
 func (s *Store) EnableRepo(name string, enabled bool) error {
-	v := 0
-	if enabled {
-		v = 1
-	}
-	_, err := s.db.Exec("UPDATE repos SET enabled=? WHERE name=?", v, name)
+	_, err := s.db.Exec("UPDATE repos SET enabled=? WHERE name=?", boolToInt(enabled), name)
 	return err
 }
 
