@@ -335,10 +335,11 @@ func TestStoreCRUDGuardrailsListSeeded(t *testing.T) {
 	if err := json.NewDecoder(rr.Body).Decode(&rows); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(rows) != 2 ||
+	if len(rows) != 3 ||
 		rows[0]["name"] != "security" || rows[0]["is_builtin"] != true ||
-		rows[1]["name"] != "mcp-tool-usage" || rows[1]["is_builtin"] != true {
-		t.Fatalf("expected seeded built-ins [security, mcp-tool-usage], got %+v", rows)
+		rows[1]["name"] != "discretion" || rows[1]["is_builtin"] != true ||
+		rows[2]["name"] != "mcp-tool-usage" || rows[2]["is_builtin"] != true {
+		t.Fatalf("expected seeded built-ins [security, discretion, mcp-tool-usage], got %+v", rows)
 	}
 }
 
