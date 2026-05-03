@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/eloylp/agents/internal/fleet"
@@ -57,13 +58,12 @@ func TestImportLoadAgentAllowMemoryFalseRoundTrips(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 
-	var got *bool
 	target := in.Agents[0].Name
-	for _, a := range out.Agents {
-		if a.Name == target {
-			got = a.AllowMemory
-		}
+	idx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.Name == target })
+	if idx == -1 {
+		t.Fatalf("agent %q: not found after load", target)
 	}
+	got := out.Agents[idx].AllowMemory
 	if got == nil {
 		t.Fatalf("agent %q: AllowMemory pointer is nil after load, want non-nil &false", target)
 	}
@@ -98,12 +98,11 @@ func TestUpsertAgentRoundTripsAllowMemoryFalse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	var got *bool
-	for _, a := range out.Agents {
-		if a.Name == "coder" {
-			got = a.AllowMemory
-		}
+	idx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.Name == "coder" })
+	if idx == -1 {
+		t.Fatalf("coder: agent not found after upsert")
 	}
+	got := out.Agents[idx].AllowMemory
 	if got == nil || *got {
 		t.Errorf("coder.AllowMemory after upsert: got %v, want non-nil &false", got)
 	}
