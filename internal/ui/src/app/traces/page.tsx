@@ -6,6 +6,7 @@ import StatusBadge from '@/components/StatusBadge'
 import Link from 'next/link'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 import { StreamCard, stepToCardEntries, type PersistedStep } from '@/components/StreamCard'
+import { fmtDuration } from '@/lib/format'
 
 type TraceStep = PersistedStep
 
@@ -167,7 +168,7 @@ function GanttRow({ span, minMs, totalMs }: { span: Span; minMs: number; totalMs
       <div style={{ flex: 1, height: '18px', background: 'var(--bg)', borderRadius: '3px', position: 'relative' }}>
         <div style={{ position: 'absolute', left: `${leftPct}%`, width: `${widthPct}%`, height: '100%', background: color, borderRadius: '3px', opacity: 0.8 }} />
       </div>
-      <div style={{ width: '70px', flexShrink: 0, textAlign: 'right', color: 'var(--text-muted)' }}>{span.duration_ms}ms</div>
+      <div style={{ width: '70px', flexShrink: 0, textAlign: 'right', color: 'var(--text-muted)' }}>{fmtDuration(span.duration_ms)}</div>
       <div style={{ width: '70px', flexShrink: 0 }}><StatusBadge status={span.status} /></div>
     </div>
   )
@@ -272,7 +273,7 @@ function TraceDetail({ rootId, allSpans, onBack }: { rootId: string; allSpans: S
                     <td style={{ padding: '6px 0', color: 'var(--text-muted)' }}>{s.repo}{s.number > 0 ? ` #${s.number}` : ''}</td>
                     <td style={{ padding: '6px 0', color: 'var(--text-muted)' }}>{s.event_kind}</td>
                     <td style={{ padding: '6px 0', color: 'var(--text-muted)' }}>{fmt(s.started_at)}</td>
-                    <td style={{ padding: '6px 0', color: 'var(--text-muted)' }}>{s.duration_ms}ms</td>
+                    <td style={{ padding: '6px 0', color: 'var(--text-muted)' }}>{fmtDuration(s.duration_ms)}</td>
                     <td style={{ padding: '6px 0' }}><StatusBadge status={s.status} /></td>
                   </tr>
                   <tr>
@@ -345,7 +346,7 @@ function TraceListItem({ rootId, spans, onSelect }: { rootId: string; spans: Spa
             <div style={{ flex: 1, height: '12px', background: 'var(--bg)', borderRadius: '2px', position: 'relative' }}>
               <div style={{ position: 'absolute', left: `${leftPct}%`, width: `${widthPct}%`, height: '100%', background: color, borderRadius: '2px', opacity: 0.7 }} />
             </div>
-            <div style={{ width: '60px', textAlign: 'right', color: 'var(--text-faint)' }}>{s.duration_ms}ms</div>
+            <div style={{ width: '60px', textAlign: 'right', color: 'var(--text-faint)' }}>{fmtDuration(s.duration_ms)}</div>
           </div>
         )
       })}

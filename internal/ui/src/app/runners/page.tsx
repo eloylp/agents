@@ -4,6 +4,7 @@ import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import Card from '@/components/Card'
 import { StreamCard, parseStreamLine, type StreamCardEntry } from '@/components/StreamCard'
+import { fmtDuration } from '@/lib/format'
 
 interface RunnerRow {
   id: number
@@ -63,13 +64,6 @@ const HIGHLIGHT_MS = 4000
 function fmtTime(s?: string) {
   if (!s) return ', '
   return new Date(s).toLocaleTimeString()
-}
-
-function fmtDuration(ms?: number) {
-  if (ms === undefined || ms === 0) return ', '
-  if (ms < 1000) return `${ms}ms`
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
-  return `${(ms / 60_000).toFixed(1)}m`
 }
 
 export default function RunnersPage() {

@@ -75,6 +75,44 @@ export function parseStreamLine(line: string): StreamCardEntry {
       : ''
     return { at, kind: 'usage', title: '📊 result', detail: usageStr || JSON.stringify(parsed, null, 2), raw }
   }
+  // Codex --json: events wrap the actual item under `item`.
+  // - thread.started / turn.started: noise, render minimal raw entry
+  // - item.started: a tool/command is starting → tool_use card with input
+  // - item.completed:
+  //     agent_message → thinking card with item.text
+  //     command_execution → tool_result card with aggregated_output
+  //     mcp_tool_call / function_call / etc. → tool_use card with output
+  // - turn.completed: usage card
+  if (parsed?.type === 'item.started' && parsed?.item?.type === 'command_execution') {
+    const cmd = parsed.item.command || ''
+    return { at, kind: 'tool_use', title: '🔧 bash', detail: cmd, raw }
+  }
+  if (parsed?.type === 'item.completed' && parsed?.item) {
+    const it = parsed.item
+    if (it.type === 'agent_message') {
+      const text = (it.text || '').trim()
+      if (text) return { at, kind: 'thinking', title: '💬 thinking', detail: text, raw }
+    }
+    if (it.type === 'command_execution') {
+      return { at, kind: 'tool_result', title: '📤 tool result', detail: it.aggregated_output || '', raw }
+    }
+    // Generic tool fallback (mcp_tool_call, function_call, ...).
+    if (it.name) {
+      const tn = it.server ? `${it.server}.${it.name}` : it.name
+      const input = typeof it.arguments === 'string' ? it.arguments : JSON.stringify(it.arguments ?? {}, null, 2)
+      const output = typeof it.output === 'string' ? it.output : JSON.stringify(it.output ?? '', null, 2)
+      const detail = output ? `${input}\n→\n${output}` : input
+      return { at, kind: 'tool_use', title: `🔧 ${tn}`, detail, raw }
+    }
+  }
+  if (parsed?.type === 'turn.completed') {
+    const u = parsed.usage
+    const usageStr = u
+      ? `in ${u.input_tokens ?? 0} · out ${u.output_tokens ?? 0}` +
+        (u.cached_input_tokens ? ` · cache ${u.cached_input_tokens}` : '')
+      : ''
+    return { at, kind: 'usage', title: '📊 turn completed', detail: usageStr || JSON.stringify(parsed, null, 2), raw }
+  }
   // OpenAI / codex chat.completion.chunk
   if (parsed?.choices?.[0]?.delta) {
     const delta = parsed.choices[0].delta
@@ -152,6 +190,10 @@ export function StreamCard({ entry }: { entry: StreamCardEntry }) {
         marginBottom: '0.4rem',
         background: 'var(--bg-input)',
         borderRadius: '0 4px 4px 0',
+        boxSizing: 'border-box',
+        maxWidth: '100%',
+        minWidth: 0,
+        overflow: 'hidden',
       }}
     >
       <div
@@ -159,15 +201,18 @@ export function StreamCard({ entry }: { entry: StreamCardEntry }) {
         style={{
           display: 'flex',
           justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          gap: '0.5rem',
           cursor: 'pointer',
           fontSize: '0.82rem',
           color: 'var(--text)',
+          minWidth: 0,
         }}
       >
-        <span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>
           <strong>{entry.title}</strong>
         </span>
-        <span style={{ color: 'var(--text-faint)', fontSize: '0.72rem' }}>{open ? '▼' : '▶'}</span>
+        <span style={{ color: 'var(--text-faint)', fontSize: '0.72rem', flexShrink: 0 }}>{open ? '▼' : '▶'}</span>
       </div>
       {entry.detail && !open && (
         <div
@@ -178,6 +223,7 @@ export function StreamCard({ entry }: { entry: StreamCardEntry }) {
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
+            maxWidth: '100%',
           }}
         >
           {entry.detail.slice(0, 200)}
@@ -196,8 +242,12 @@ export function StreamCard({ entry }: { entry: StreamCardEntry }) {
             color: 'var(--text)',
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
+            overflowWrap: 'anywhere',
             maxHeight: '300px',
+            maxWidth: '100%',
+            boxSizing: 'border-box',
             overflowY: 'auto',
+            overflowX: 'hidden',
             margin: 0,
           }}
         >

@@ -56,10 +56,12 @@ function fmt(iso?: string) {
 function RunButton({ agent, repo }: { agent: string; repo: string }) {
   const [state, setState] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
   const [eventId, setEventId] = useState('')
+  const [errorMsg, setErrorMsg] = useState('')
 
   const run = async () => {
     if (!repo) return
     setState('running')
+    setErrorMsg('')
     try {
       const res = await fetch('/run', {
         method: 'POST',
@@ -72,18 +74,21 @@ function RunButton({ agent, repo }: { agent: string; repo: string }) {
         setState('done')
         setTimeout(() => setState('idle'), 3000)
       } else {
+        const body = (await res.text()).trim()
+        setErrorMsg(body || `HTTP ${res.status}`)
         setState('error')
-        setTimeout(() => setState('idle'), 3000)
+        setTimeout(() => { setState('idle'); setErrorMsg('') }, 6000)
       }
-    } catch {
+    } catch (e) {
+      setErrorMsg(String(e))
       setState('error')
-      setTimeout(() => setState('idle'), 3000)
+      setTimeout(() => { setState('idle'); setErrorMsg('') }, 6000)
     }
   }
 
   if (!repo) return null
 
-  const label = state === 'running' ? 'Queuing...' : state === 'done' ? `Queued ${eventId.slice(0, 8)}` : state === 'error' ? 'Failed' : 'Run'
+  const label = state === 'running' ? 'Queuing...' : state === 'done' ? `Queued ${eventId.slice(0, 8)}` : state === 'error' ? `Failed: ${errorMsg.slice(0, 60)}` : 'Run'
   const bg = state === 'done' ? 'var(--success-bg)' : state === 'error' ? 'var(--error-bg)' : 'var(--accent-bg)'
   const color = state === 'done' ? 'var(--success)' : state === 'error' ? 'var(--text-danger)' : 'var(--accent)'
   const border = state === 'done' ? 'var(--success-border)' : state === 'error' ? 'var(--border-danger)' : 'var(--btn-primary-border)'
@@ -92,10 +97,13 @@ function RunButton({ agent, repo }: { agent: string; repo: string }) {
     <button
       onClick={run}
       disabled={state === 'running'}
+      title={state === 'error' ? errorMsg : undefined}
       style={{
         background: bg, color, border: `1px solid ${border}`,
         padding: '4px 12px', borderRadius: '6px', cursor: state === 'running' ? 'wait' : 'pointer',
         fontSize: '0.75rem', fontWeight: 600,
+        maxWidth: state === 'error' ? '320px' : undefined,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}
     >
       {label}
