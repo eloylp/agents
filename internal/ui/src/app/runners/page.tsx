@@ -3,6 +3,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import Card from '@/components/Card'
+import Modal from '@/components/Modal'
 import { StreamCard, TranscriptFilter, allStreamCardKinds, parseStreamLine, type StreamCardEntry, type StreamCardKind } from '@/components/StreamCard'
 import { fmtDuration } from '@/lib/format'
 
@@ -269,14 +270,24 @@ function RunnersInner() {
     [rows, focusEvent],
   )
 
-  const onDelete = async (id: number) => {
-    if (!confirm(`Delete runner #${id}?\n\nRemoves the underlying event_queue row. If a worker has already received it from the in-memory channel buffer, it may still run; the row simply won't appear here afterwards. Affects every fanned-out agent for this event.`)) return
+  // Native browser confirm()/alert() are jarring against the dashboard
+  // styling, plus they block the JS event loop. Drive every confirm /
+  // failure surface through a single Modal-state machine instead.
+  type DialogState =
+    | null
+    | { kind: 'confirm-delete'; id: number }
+    | { kind: 'confirm-retry'; id: number }
+    | { kind: 'error'; title: string; message: string }
+  const [dialog, setDialog] = useState<DialogState>(null)
+
+  const performDelete = async (id: number) => {
+    setDialog(null)
     setPendingId(id)
     try {
       const res = await fetch(`/runners/${id}`, { method: 'DELETE' })
       if (!res.ok && res.status !== 404) {
         const body = await res.text()
-        alert(`Delete failed: ${body || res.status}`)
+        setDialog({ kind: 'error', title: 'Delete failed', message: body || `HTTP ${res.status}` })
       }
       await load()
     } finally {
@@ -284,20 +295,23 @@ function RunnersInner() {
     }
   }
 
-  const onRetry = async (id: number) => {
-    if (!confirm(`Retry runner #${id}?\n\nRe-enqueues the underlying event, every fanned-out agent will run again. The original row stays as audit history.`)) return
+  const performRetry = async (id: number) => {
+    setDialog(null)
     setPendingId(id)
     try {
       const res = await fetch(`/runners/${id}/retry`, { method: 'POST' })
       if (!res.ok) {
         const body = await res.text()
-        alert(`Retry failed: ${body || res.status}`)
+        setDialog({ kind: 'error', title: 'Retry failed', message: body || `HTTP ${res.status}` })
       }
       await load()
     } finally {
       setPendingId(null)
     }
   }
+
+  const onDelete = (id: number) => setDialog({ kind: 'confirm-delete', id })
+  const onRetry = (id: number) => setDialog({ kind: 'confirm-retry', id })
 
   const counts = filtered.reduce<Record<string, number>>((m, r) => {
     m[r.status] = (m[r.status] ?? 0) + 1
@@ -554,6 +568,53 @@ function RunnersInner() {
         </div>
       </Card>
       {streamSpan && <LiveStreamModal span={streamSpan} onClose={() => setStreamSpan(null)} />}
+      {dialog?.kind === 'confirm-delete' && (
+        <Modal title={`Delete runner #${dialog.id}?`} onClose={() => setDialog(null)}>
+          <p style={{ color: 'var(--text)', fontSize: '0.85rem', marginBottom: '1rem' }}>
+            Removes the underlying <code>event_queue</code> row. If a worker has already received it from the in-memory channel buffer, it may still run; the row simply won&apos;t appear here afterwards. Affects every fanned-out agent for this event.
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+            <button
+              onClick={() => setDialog(null)}
+              style={{ padding: '6px 14px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', cursor: 'pointer', fontSize: '0.85rem' }}
+            >Cancel</button>
+            <button
+              onClick={() => performDelete(dialog.id)}
+              style={{ padding: '6px 14px', borderRadius: '6px', border: '1px solid var(--border-danger)', background: 'var(--error-bg)', color: 'var(--text-danger)', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}
+            >Delete</button>
+          </div>
+        </Modal>
+      )}
+      {dialog?.kind === 'confirm-retry' && (
+        <Modal title={`Retry runner #${dialog.id}?`} onClose={() => setDialog(null)}>
+          <p style={{ color: 'var(--text)', fontSize: '0.85rem', marginBottom: '1rem' }}>
+            Re-enqueues the underlying event; every fanned-out agent will run again. The original row stays as audit history.
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+            <button
+              onClick={() => setDialog(null)}
+              style={{ padding: '6px 14px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', cursor: 'pointer', fontSize: '0.85rem' }}
+            >Cancel</button>
+            <button
+              onClick={() => performRetry(dialog.id)}
+              style={{ padding: '6px 14px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--accent-bg)', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}
+            >Retry</button>
+          </div>
+        </Modal>
+      )}
+      {dialog?.kind === 'error' && (
+        <Modal title={dialog.title} onClose={() => setDialog(null)}>
+          <pre style={{ color: 'var(--text-danger)', fontSize: '0.82rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0, marginBottom: '1rem' }}>
+            {dialog.message}
+          </pre>
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              onClick={() => setDialog(null)}
+              style={{ padding: '6px 14px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', cursor: 'pointer', fontSize: '0.85rem' }}
+            >Close</button>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

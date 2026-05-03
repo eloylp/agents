@@ -175,6 +175,7 @@ export default function ConfigPage() {
 
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [errorDialog, setErrorDialog] = useState<{ title: string; message: string } | null>(null)
   const [localBackendModalOpen, setLocalBackendModalOpen] = useState(false)
   const [localBackendName, setLocalBackendName] = useState('claude_local')
   const [localBackendURL, setLocalBackendURL] = useState('http://localhost:8080/v1/messages')
@@ -441,7 +442,10 @@ export default function ConfigPage() {
 
   const handleExport = async () => {
     const res = await fetch('/export')
-    if (!res.ok) { alert('Export failed: ' + await res.text()); return }
+    if (!res.ok) {
+      setErrorDialog({ title: 'Export failed', message: (await res.text()).trim() || `HTTP ${res.status}` })
+      return
+    }
     const blob = await res.blob()
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -915,6 +919,19 @@ export default function ConfigPage() {
         </Modal>
       )}
 
+      {errorDialog && (
+        <Modal title={errorDialog.title} onClose={() => setErrorDialog(null)}>
+          <pre style={{ color: 'var(--text-danger)', fontSize: '0.82rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0, marginBottom: '1rem' }}>
+            {errorDialog.message}
+          </pre>
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              onClick={() => setErrorDialog(null)}
+              style={{ padding: '6px 14px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', cursor: 'pointer', fontSize: '0.85rem' }}
+            >Close</button>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
