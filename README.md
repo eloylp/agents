@@ -13,6 +13,10 @@ Build and take ownership your agentic universe. Create your agents and compose t
 
 The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), or your own local LLM) and lets it work through your repo host's native primitives: issues, PRs, reviews, comments. GitHub today; [GitLab](https://github.com/eloylp/agents/issues/359) under discussion.
 
+## Get started
+
+See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a repo in a few minutes, `docker compose up -d` is the recommended path. For five import-ready fleet scenarios (solo coder, coder + reviewer, autonomous fleet, local LLM, multi-repo) see [`config_examples/`](config_examples/).
+
 ## Features
 
 - **Three ways to interact with your agent fleet**:
@@ -40,10 +44,6 @@ Every run, regardless of trigger, goes through the same pipeline:
 4. **Persist the trace**, fan out any dispatches, write back memory.
 
 Read [`docs/mental-model.md`](docs/mental-model.md) before writing your first prompt; the rest of the docs assume you have the model. For the daemon's package layout and how a request flows through the Go code, see [`docs/architecture.md`](docs/architecture.md).
-
-## Get started
-
-See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a repo in a few minutes, `docker compose up -d` is the recommended path. For five import-ready fleet scenarios (solo coder, coder + reviewer, autonomous fleet, local LLM, multi-repo) see [`config_examples/`](config_examples/).
 
 ## Security
 
