@@ -183,7 +183,10 @@ Rules:
 
 ## `guardrails`
 
-Operator-defined policy blocks the renderer prepends to every agent's composed prompt at render time, ahead of the no-PR guard, skills, and the agent prompt body itself. The shipped 'security' guardrail (seeded by migration 010) recommends against indirect prompt injection, see [security.md](security.md) for the threat model and what the recommendation does *not* close.
+Operator-defined policy blocks the renderer prepends to every agent's composed prompt at render time, ahead of the no-PR guard, skills, and the agent prompt body itself. Two built-ins ship enabled by default:
+
+- **`security`** (position 0, seeded by migration 010): pushes back on indirect prompt injection, secret exfiltration, and out-of-tree filesystem or network access. See [security.md](security.md) for the threat model and what the recommendation does *not* close.
+- **`mcp-tool-usage`** (position 10, seeded by migration 012): tells every agent to use the GitHub MCP tools for repo interactions and to fetch surrounding context (PR description, diff, prior comments, linked issue) when the trigger envelope is too thin. Especially load-bearing for agents routed through local OpenAI-compatible models, see [local-models.md](local-models.md).
 
 ```yaml
 guardrails:

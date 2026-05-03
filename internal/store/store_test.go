@@ -109,10 +109,10 @@ func openTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// TestGuardrailsSeed verifies that migration 010 created the generic
-// guardrails table and seeded the built-in 'security' row with content
+// TestGuardrailsSeed verifies that migrations 010 and 012 created the
+// generic guardrails table and seeded the built-in rows with content
 // equal to default_content (so a "Reset to default" from the unedited
-// state is a no-op), is_builtin=1, enabled=1, and position=0.
+// state is a no-op), is_builtin=1, enabled=1, and the expected position.
 func TestGuardrailsSeed(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
@@ -127,8 +127,8 @@ func TestGuardrailsSeed(t *testing.T) {
 	if err := db.QueryRow("SELECT COUNT(*) FROM guardrails").Scan(&count); err != nil {
 		t.Fatalf("count: %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("row count after migration: got %d, want 1", count)
+	if count != 2 {
+		t.Fatalf("row count after migrations: got %d, want 2 (security + mcp-tool-usage)", count)
 	}
 	if err := db.QueryRow(
 		"SELECT description, content, default_content, is_builtin, enabled, position, updated_at FROM guardrails WHERE name = 'security'",
@@ -171,19 +171,28 @@ func TestGuardrailsCRUD(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
-	// 1. Seeded built-in security row is visible via every read path.
+	// 1. Seeded built-in rows are visible via every read path. Today there
+	//    are two: `security` (position 0, migration 010) and
+	//    `mcp-tool-usage` (position 10, migration 012). Both must be
+	//    flagged is_builtin and have default_content == content on a fresh
+	//    install.
 	all, err := store.ReadAllGuardrails(db)
 	if err != nil {
 		t.Fatalf("ReadAllGuardrails: %v", err)
 	}
-	if len(all) != 1 || all[0].Name != "security" {
-		t.Fatalf("seed: got %d rows starting with %q, want 1 starting with 'security'", len(all), all[0].Name)
+	if len(all) != 2 || all[0].Name != "security" || all[1].Name != "mcp-tool-usage" {
+		t.Fatalf("seed: got %v, want [security mcp-tool-usage]", names(all))
 	}
-	if !all[0].IsBuiltin || !all[0].Enabled || all[0].Position != 0 {
-		t.Errorf("security row flags: builtin=%v enabled=%v pos=%d", all[0].IsBuiltin, all[0].Enabled, all[0].Position)
+	for _, g := range all {
+		if !g.IsBuiltin || !g.Enabled {
+			t.Errorf("%q: builtin=%v enabled=%v", g.Name, g.IsBuiltin, g.Enabled)
+		}
+		if g.DefaultContent == "" || g.DefaultContent != g.Content {
+			t.Errorf("%q: default_content must equal content on first migration", g.Name)
+		}
 	}
-	if all[0].DefaultContent == "" || all[0].DefaultContent != all[0].Content {
-		t.Error("security default_content must equal content on first migration")
+	if all[0].Position != 0 || all[1].Position != 10 {
+		t.Errorf("positions: security=%d mcp-tool-usage=%d, want 0 and 10", all[0].Position, all[1].Position)
 	}
 
 	// 2. Operator can add a custom guardrail; it lands at the configured
@@ -202,10 +211,13 @@ func TestGuardrailsCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadEnabledGuardrails: %v", err)
 	}
-	if len(enabled) != 2 || enabled[0].Name != "security" || enabled[1].Name != "code-style" {
-		t.Errorf("render order: got %v, want [security code-style]", names(enabled))
+	if len(enabled) != 3 || enabled[0].Name != "security" || enabled[1].Name != "mcp-tool-usage" || enabled[2].Name != "code-style" {
+		t.Errorf("render order: got %v, want [security mcp-tool-usage code-style]", names(enabled))
 	}
-	if enabled[1].IsBuiltin {
+	if !enabled[1].IsBuiltin {
+		t.Error("mcp-tool-usage row should be flagged as built-in")
+	}
+	if enabled[2].IsBuiltin {
 		t.Error("operator row should not be flagged as built-in")
 	}
 
@@ -261,8 +273,8 @@ func TestGuardrailsCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadAllGuardrails after delete: %v", err)
 	}
-	if len(all) != 1 {
-		t.Errorf("after delete: got %d rows, want 1", len(all))
+	if len(all) != 2 {
+		t.Errorf("after delete: got %d rows, want 2 (security + mcp-tool-usage built-ins)", len(all))
 	}
 }
 
@@ -299,8 +311,8 @@ func TestImportLoadGuardrails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := names(out.Guardrails); len(got) != 2 || got[0] != "security" || got[1] != "code-style" {
-		t.Fatalf("Load order: got %v, want [security code-style]", got)
+	if got := names(out.Guardrails); len(got) != 3 || got[0] != "security" || got[1] != "mcp-tool-usage" || got[2] != "code-style" {
+		t.Fatalf("Load order: got %v, want [security mcp-tool-usage code-style]", got)
 	}
 	sec := out.Guardrails[0]
 	if !sec.IsBuiltin {
@@ -312,7 +324,12 @@ func TestImportLoadGuardrails(t *testing.T) {
 	if sec.DefaultContent == "" || sec.DefaultContent == sec.Content {
 		t.Error("DefaultContent must remain the migration's seeded text after operator override")
 	}
-	custom := out.Guardrails[1]
+	mcp := out.Guardrails[1]
+	if !mcp.IsBuiltin || mcp.DefaultContent == "" {
+		t.Errorf("mcp-tool-usage must be built-in with non-empty DefaultContent; got builtin=%v default-len=%d",
+			mcp.IsBuiltin, len(mcp.DefaultContent))
+	}
+	custom := out.Guardrails[2]
 	if custom.IsBuiltin || custom.DefaultContent != "" {
 		t.Errorf("operator row must not be built-in and must have empty DefaultContent; got builtin=%v default=%q",
 			custom.IsBuiltin, custom.DefaultContent)
