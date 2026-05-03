@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import BadgePicker from '@/components/BadgePicker'
+import RunButton from '@/components/RunButton'
 import { Binding, groupByAgent, bindingsEqual } from '@/lib/bindings'
 
 interface Repo {
@@ -589,7 +590,10 @@ export default function ReposPage() {
 
               {activeGroups.map(([agent, bindings]) => (
                 <div key={`active-${agent}`} style={{ marginBottom: '0.5rem' }}>
-                  <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--accent)', marginBottom: '0.25rem' }}>{agent}</div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--accent)' }}>{agent}</span>
+                    {repo.enabled && <RunButton agent={agent} repos={[repo.name]} />}
+                  </div>
                   {bindings.map((b, i) => (
                     <div key={i} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', fontSize: '0.78rem', padding: '2px 0 2px 0.75rem', borderLeft: '2px solid var(--border)' }}>
                       <span style={{ color: 'var(--text-faint)' }}>{bindingTrigger(b)}</span>
