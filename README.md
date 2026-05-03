@@ -25,7 +25,7 @@ See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a re
   - **[REST API](docs/api.md)**: programmatic. Scriptable from any HTTP client; the dashboard itself runs on top of it.
 - **Observable**: See the full event chain in realtime from the [UI](docs/ui.md), from events to runners to traces that will facilitate your prompt tunning journey.
 - **[Self-hosted](docs/quickstart.md)**: your code and prompts stay on your infrastructure. No SaaS dependency.
-- **[Security recommendations](docs/security.md)**: ships a default `security` guardrail prepended to every agent prompt to push back against indirect prompt injection. The threat model and the controls the daemon does *not* implement (untrusted-input quarantining, author trust gating, output filtering, sandboxing) are documented openly so operators can decide what to layer on top.
+- **[Security recommendations](docs/security.md)**: ships a default `security` guardrail prepended to every agent prompt to push back against indirect prompt injection.
 - **Multi-backend**: pick Claude, Codex, or a custom backend per agent. Different agents in the same fleet can use different providers.
 - **Discovery and diagnostics**: the daemon detects backends and tools, validates CLI health, and persists discovery snapshots.
 - **[Local-model support](docs/local-models.md)**: run any agent through `llama.cpp`, Ollama, vLLM, or any OpenAI-compatible endpoint. The daemon ships a built-in Anthropic-to-OpenAI translation proxy so the existing `claude` CLI works unchanged against your own LLM (experimental).
