@@ -448,12 +448,12 @@ function RunnersInner() {
                     ) : r.target_agent ? (
                       <span style={{ color: 'var(--text-faint)', fontStyle: 'italic' }}>→ {r.target_agent}</span>
                     ) : (
-                      <span style={{ color: 'var(--text-faint)' }}>, </span>
+                      <span style={{ color: 'var(--text-faint)' }}>-</span>
                     )}
                   </span>
-                  <span style={{ color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.repo || ', '}</span>
+                  <span style={{ color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.repo || '-'}</span>
                   <span style={{ color: 'var(--text-faint)' }}>{r.number > 0 ? `#${r.number}` : '-'}</span>
-                  <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.75rem' }}>{r.kind || ', '}</span>
+                  <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.75rem' }}>{r.kind || '-'}</span>
                   <span style={{ color: 'var(--text-faint)' }} title={startedAt}>{fmtTime(startedAt)}</span>
                   <span style={{ color: 'var(--text-faint)' }}>{fmtDuration(r.run_duration_ms)}</span>
                   <span style={{ display: 'flex', gap: '0.4rem' }} onClick={e => e.stopPropagation()}>
@@ -510,9 +510,9 @@ function RunnersInner() {
                   }}>
                     <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '4px 12px', marginBottom: '0.5rem' }}>
                       <span style={{ color: 'var(--text-faint)' }}>Event ID</span>
-                      <span style={{ fontFamily: 'monospace', color: 'var(--text)' }}>{r.event_id || ', '}</span>
+                      <span style={{ fontFamily: 'monospace', color: 'var(--text)' }}>{r.event_id || '-'}</span>
                       <span style={{ color: 'var(--text-faint)' }}>Actor</span>
-                      <span style={{ color: 'var(--text)' }}>{r.actor || ', '}</span>
+                      <span style={{ color: 'var(--text)' }}>{r.actor || '-'}</span>
                       <span style={{ color: 'var(--text-faint)' }}>Enqueued</span>
                       <span style={{ color: 'var(--text-faint)' }}>{new Date(r.enqueued_at).toLocaleString()}</span>
                       {r.completed_at && (<>

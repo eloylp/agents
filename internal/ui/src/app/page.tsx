@@ -230,7 +230,7 @@ function AgentCard({ agent, onEdit, onDelete }: { agent: Agent; onEdit: () => vo
                 <td style={{ padding: '4px 0', color: 'var(--text-muted)' }}>{fmt(b.schedule?.last_run)}</td>
                 <td style={{ padding: '4px 0', color: 'var(--text-muted)' }}>{b.schedule ? fmt(b.schedule.next_run) : '-'}</td>
                 <td style={{ padding: '4px 0' }}>
-                  {b.schedule?.last_status ? <StatusBadge status={b.schedule.last_status} /> : <span style={{ color: 'var(--text-faint)' }}>, </span>}
+                  {b.schedule?.last_status ? <StatusBadge status={b.schedule.last_status} /> : <span style={{ color: 'var(--text-faint)' }}>-</span>}
                 </td>
               </tr>
             ))}

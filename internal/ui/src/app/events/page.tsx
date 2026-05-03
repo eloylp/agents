@@ -79,7 +79,7 @@ function EventRow({ event, isNew }: { event: Event; isNew: boolean }) {
               textDecoration: 'none',
             }}>{a}</Link>
           ))}
-          {(event.agents ?? []).length === 0 && <span style={{ color: 'var(--text-faint)' }}>, </span>}
+          {(event.agents ?? []).length === 0 && <span style={{ color: 'var(--text-faint)' }}>-</span>}
         </span>
         <Link
           href={`/runners/?event=${encodeURIComponent(event.id)}`}
