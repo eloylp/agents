@@ -233,9 +233,13 @@ We initially thought we needed `--bare` to skip OAuth and force env-based routin
 
 The `claude` CLI's Task tool can spawn sub-agents whose conversations build up to 30k+ tokens. If the upstream request takes longer than `daemon.proxy.upstream.timeout_seconds`, the proxy returns 502 mid-stream. **Bump to 3600 seconds** (matching the claude backend timeout) in any serious setup.
 
+### Prompt caching is stripped at translation
+
+The Anthropic `cache_control: {type: "ephemeral"}` markers the `claude` CLI emits on system blocks (and on tools, when present) get dropped at translation time, the OpenAI Chat Completions schema has no equivalent. There's no Anthropic-compatible prompt cache when routing through the proxy. Recover the prefix-share benefit at the LLM-server layer with `--cache-reuse 256` on `llama.cpp` (already in the Quick recipe). The cache token columns on traces (`cache_read_tokens`, `cache_write_tokens`) report `0` for any local-model run, that's expected, not a missed-cache bug. See [#402](https://github.com/eloylp/agents/issues/402).
+
 ### Not in scope yet
 
-- **True pipe-through streaming.** The current implementation fakes streaming by emitting the whole response as a canonical SSE sequence at the end of generation. The CLI parses it correctly, but you don't see token-by-token output mid-generation. True streaming is a follow-up.
+- **True pipe-through streaming.** The current implementation fakes streaming by emitting the whole response as a canonical SSE sequence at the end of generation. The CLI parses it correctly, but you don't see token-by-token output mid-generation. True streaming is tracked at [#401](https://github.com/eloylp/agents/issues/401).
 - **Codex backend routing via the proxy.** Codex speaks OpenAI's Responses API (`/v1/responses`), not Chat Completions. Our proxy doesn't translate that. If you want `pr-reviewer` on codex against a local endpoint, that's [#146](https://github.com/eloylp/agents/issues/146).
 
 ---
@@ -288,3 +292,5 @@ You picked an Unsloth "UD" Dynamic quant variant. Switch to standard Q4_K_M.
 - [#78](https://github.com/eloylp/agents/issues/78), full research log including Phase 0.5 validation numbers, hardware findings, and all the mistakes we made getting here.
 - [#137](https://github.com/eloylp/agents/issues/137) / [#138](https://github.com/eloylp/agents/pull/138), the in-daemon Anthropic↔OpenAI proxy design and implementation.
 - [#146](https://github.com/eloylp/agents/issues/146), follow-up: routing the codex CLI through a local backend (OpenAI Responses API translation).
+- [#401](https://github.com/eloylp/agents/issues/401), follow-up: real token-by-token streaming through the proxy (today fake-streamed).
+- [#402](https://github.com/eloylp/agents/issues/402), the prompt-caching translation gap and zero cache-token columns on local-model traces.
