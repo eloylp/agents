@@ -148,12 +148,24 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 		return Response{}, fmt.Errorf("parse %s response: empty response (no output)", r.backendName)
 	}
 
+	// Codex with --json wraps the schema-constrained response inside the
+	// last agent_message item's `text` field. Peel that envelope first so
+	// the generic structured_output / extractJSON path sees just the
+	// response JSON. For non-codex (or codex without --json output), the
+	// peel is a no-op and the generic flow runs unchanged.
+	stdoutForParse := stdoutCap.all.Bytes()
+	if r.isCodexBackend() {
+		if peeled, ok := extractCodexAgentMessageJSON(stdoutForParse); ok {
+			stdoutForParse = peeled
+		}
+	}
+
 	// When the CLI uses --output-format json (single-object envelope) or
 	// --output-format stream-json (JSONL), the structured_output field holds
 	// the schema-constrained response. Try parsing the full stdout as a single
 	// JSON envelope first (handles --output-format json and any backend that
 	// emits a single result object).
-	if parsed, ok := extractStructuredOutput(stdoutCap.all.Bytes()); ok {
+	if parsed, ok := extractStructuredOutput(stdoutForParse); ok {
 		if err := json.Unmarshal(parsed, &response); err != nil {
 			logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s structured_output", r.backendName)
 			return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
@@ -163,7 +175,7 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 		// --output-format stream-json this is the result event, which also
 		// has a structured_output wrapper. For legacy CLIs it may be a bare
 		// response object.
-		jsonBytes, err := extractJSON(stdoutCap.all.Bytes())
+		jsonBytes, err := extractJSON(stdoutForParse)
 		if err != nil {
 			logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s response", r.backendName)
 			return Response{}, fmt.Errorf("parse %s response: %w", r.backendName, err)
@@ -183,10 +195,14 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 		}
 	}
 
-	// Extract the tool-loop transcript from stream-json output (claude backends).
-	// This is a best-effort parse, errors are logged but do not fail the run.
-	if strings.HasPrefix(r.backendName, "claude") {
+	// Extract the tool-loop transcript from the backend's JSONL stdout.
+	// Both parsers return TraceStep values with kind="tool" or "thinking".
+	// This is best-effort, errors are logged but do not fail the run.
+	switch {
+	case strings.HasPrefix(r.backendName, "claude"):
 		response.Steps = parseClaudeSteps(stdoutCap.lines)
+	case strings.HasPrefix(r.backendName, "codex"):
+		response.Steps = parseCodexSteps(stdoutCap.lines)
 	}
 	// Token usage is best-effort: scan the last JSON envelope for a
 	// usage subobject. Anthropic and OpenAI shapes are both accepted.
@@ -289,10 +305,13 @@ func (r *CommandRunner) buildClaudeDelivery(req Request) (args []string, stdin s
 
 // buildCodexDelivery concatenates system + user on stdin and appends
 // --output-schema pointing to the embedded response schema temp file.
+// --json makes codex emit one event per JSONL line on stdout so the
+// daemon can reconstruct the tool-loop transcript (parseCodexSteps).
 func (r *CommandRunner) buildCodexDelivery(req Request) (args []string, stdin string) {
 	combinedStdin := truncateString(combineSystemUser(req.System, req.User), r.maxPromptChars)
 	args = []string{
 		"exec",
+		"--json",
 		"--skip-git-repo-check",
 		"--dangerously-bypass-approvals-and-sandbox",
 	}
@@ -591,6 +610,160 @@ func parseClaudeSteps(lines []timedLine) []TraceStep {
 		}
 	}
 	return steps
+}
+
+// parseCodexSteps scans `codex exec --json` stdout (one JSONL event per line)
+// and reconstructs the run transcript as a slice of TraceStep values. Two
+// kinds are emitted in stream order:
+//
+//   - "thinking": one step per `item.completed` event whose `item.type` is
+//                 `agent_message`. InputSummary carries the message text.
+//   - "tool":     one step per `item.completed` event whose `item.type` is
+//                 a recognised tool (`command_execution`, `mcp_tool_call`,
+//                 etc.). ToolName, InputSummary, and OutputSummary are
+//                 populated from the matching item fields. DurationMs is
+//                 the wall-clock delta between the prior `item.started`
+//                 and this `item.completed` line, when both are observed.
+//
+// Unrecognised item.completed kinds are skipped. The 64 KB-per-field cap
+// (capStepContent) and 100-step cap match parseClaudeSteps exactly. Any
+// event that cannot be parsed is silently skipped, this is best-effort.
+func parseCodexSteps(lines []timedLine) []TraceStep {
+	type item struct {
+		ID               string          `json:"id"`
+		Type             string          `json:"type"`
+		Text             string          `json:"text"`
+		Command          string          `json:"command"`
+		AggregatedOutput string          `json:"aggregated_output"`
+		Name             string          `json:"name"`
+		Arguments        json.RawMessage `json:"arguments"`
+		Output           json.RawMessage `json:"output"`
+		Server           string          `json:"server"`
+	}
+	type streamEvent struct {
+		Type string `json:"type"`
+		Item item   `json:"item"`
+	}
+
+	startedAt := make(map[string]time.Time) // item.id → seen-at
+	var steps []TraceStep
+
+	for _, tl := range lines {
+		line := bytes.TrimSpace(tl.data)
+		if len(line) == 0 || line[0] != '{' {
+			continue
+		}
+		var ev streamEvent
+		if err := json.Unmarshal(line, &ev); err != nil {
+			continue
+		}
+
+		switch ev.Type {
+		case "item.started":
+			if ev.Item.ID != "" {
+				startedAt[ev.Item.ID] = tl.at
+			}
+		case "item.completed":
+			it := ev.Item
+			switch it.Type {
+			case "agent_message":
+				text := strings.TrimSpace(it.Text)
+				if text == "" {
+					continue
+				}
+				steps = append(steps, TraceStep{
+					Kind:         StepKindThinking,
+					InputSummary: capStepContent(text),
+				})
+			case "command_execution":
+				dur := int64(0)
+				if started, ok := startedAt[it.ID]; ok {
+					dur = tl.at.Sub(started).Milliseconds()
+					delete(startedAt, it.ID)
+				}
+				steps = append(steps, TraceStep{
+					Kind:          StepKindTool,
+					ToolName:      "bash",
+					InputSummary:  capStepContent(it.Command),
+					OutputSummary: capStepContent(it.AggregatedOutput),
+					DurationMs:    dur,
+				})
+			default:
+				// Generic tool fallback for MCP / function calls. Codex
+				// item.types this matches today: "mcp_tool_call",
+				// "function_call", and any future tool kind that carries a
+				// name plus input/output payloads.
+				if it.Name == "" {
+					continue
+				}
+				toolName := it.Name
+				if it.Server != "" {
+					toolName = it.Server + "." + it.Name
+				}
+				input := strings.TrimSpace(string(it.Arguments))
+				output := strings.TrimSpace(string(it.Output))
+				if input == "" && output == "" {
+					continue
+				}
+				dur := int64(0)
+				if started, ok := startedAt[it.ID]; ok {
+					dur = tl.at.Sub(started).Milliseconds()
+					delete(startedAt, it.ID)
+				}
+				steps = append(steps, TraceStep{
+					Kind:          StepKindTool,
+					ToolName:      toolName,
+					InputSummary:  capStepContent(input),
+					OutputSummary: capStepContent(output),
+					DurationMs:    dur,
+				})
+			}
+			if len(steps) >= 100 {
+				return steps
+			}
+		}
+	}
+	return steps
+}
+
+// extractCodexAgentMessageJSON walks codex --json JSONL output and returns
+// the bytes of the last `agent_message.item.text` field. Codex emits the
+// schema-constrained response as that field's content (a JSON envelope
+// when --output-schema is set), so peeling this envelope lets the generic
+// response parser handle it like any other JSON-emitting backend.
+//
+// Returns (text-bytes, true) when an agent_message is found; (nil, false)
+// otherwise. Best-effort: any parse error per line is silently skipped.
+func extractCodexAgentMessageJSON(all []byte) ([]byte, bool) {
+	type item struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	type evt struct {
+		Type string `json:"type"`
+		Item item   `json:"item"`
+	}
+	var lastText string
+	var found bool
+	for _, line := range bytes.Split(all, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 || line[0] != '{' {
+			continue
+		}
+		var e evt
+		if err := json.Unmarshal(line, &e); err != nil {
+			continue
+		}
+		if e.Type != "item.completed" || e.Item.Type != "agent_message" {
+			continue
+		}
+		lastText = e.Item.Text
+		found = true
+	}
+	if !found {
+		return nil, false
+	}
+	return []byte(lastText), true
 }
 
 // stepContentMaxBytes bounds the per-field content stored on a TraceStep.

@@ -871,6 +871,149 @@ func TestParseClaudeStepsThinking(t *testing.T) {
 	})
 }
 
+// TestParseCodexSteps covers the codex --json JSONL parser. Fixtures are
+// captured from real `codex exec --json` runs against the production
+// container; the shape (item.started / item.completed events with
+// item.type = agent_message | command_execution | mcp_tool_call) is
+// stable for the codex 0.124+ family.
+func TestParseCodexSteps(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	toLines := func(raw string) []timedLine {
+		var tls []timedLine
+		for _, line := range strings.Split(strings.TrimRight(raw, "\n"), "\n") {
+			if line == "" {
+				continue
+			}
+			b := []byte(line + "\n")
+			tls = append(tls, timedLine{data: b, at: base})
+		}
+		return tls
+	}
+
+	t.Run("agent_message becomes thinking step", func(t *testing.T) {
+		t.Parallel()
+		raw := `{"type":"thread.started","thread_id":"x"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"The first 3 prime numbers are 2, 3, 5."}}
+{"type":"turn.completed","usage":{"input_tokens":17000,"output_tokens":50}}`
+		steps := parseCodexSteps(toLines(raw))
+		if len(steps) != 1 {
+			t.Fatalf("got %d steps, want 1: %+v", len(steps), steps)
+		}
+		s := steps[0]
+		if s.Kind != StepKindThinking {
+			t.Errorf("Kind = %q, want %q", s.Kind, StepKindThinking)
+		}
+		if s.InputSummary != "The first 3 prime numbers are 2, 3, 5." {
+			t.Errorf("InputSummary = %q", s.InputSummary)
+		}
+	})
+
+	t.Run("command_execution emits tool step with input/output", func(t *testing.T) {
+		t.Parallel()
+		raw := `{"type":"thread.started","thread_id":"x"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/bash -lc 'ls /etc | head -3'","aggregated_output":"","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/bash -lc 'ls /etc | head -3'","aggregated_output":"alpine-release\napk\nbash\n","exit_code":0,"status":"completed"}}
+{"type":"turn.completed","usage":{}}`
+		steps := parseCodexSteps(toLines(raw))
+		if len(steps) != 1 {
+			t.Fatalf("got %d steps, want 1: %+v", len(steps), steps)
+		}
+		s := steps[0]
+		if s.Kind != StepKindTool {
+			t.Errorf("Kind = %q, want %q", s.Kind, StepKindTool)
+		}
+		if s.ToolName != "bash" {
+			t.Errorf("ToolName = %q, want bash", s.ToolName)
+		}
+		if !strings.Contains(s.InputSummary, "ls /etc") {
+			t.Errorf("InputSummary = %q, want command", s.InputSummary)
+		}
+		if !strings.Contains(s.OutputSummary, "alpine-release") {
+			t.Errorf("OutputSummary = %q, want command output", s.OutputSummary)
+		}
+	})
+
+	t.Run("interleaved thinking and tool preserve order", func(t *testing.T) {
+		t.Parallel()
+		raw := `{"type":"thread.started","thread_id":"x"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Running the command."}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"ls","aggregated_output":"","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"ls","aggregated_output":"foo\nbar","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Found foo and bar."}}
+{"type":"turn.completed","usage":{}}`
+		steps := parseCodexSteps(toLines(raw))
+		if len(steps) != 3 {
+			t.Fatalf("got %d steps, want 3: %+v", len(steps), steps)
+		}
+		want := []string{StepKindThinking, StepKindTool, StepKindThinking}
+		for i, k := range want {
+			if steps[i].Kind != k {
+				t.Errorf("step %d: Kind = %q, want %q", i, steps[i].Kind, k)
+			}
+		}
+	})
+
+	t.Run("mcp_tool_call uses generic tool fallback", func(t *testing.T) {
+		t.Parallel()
+		raw := `{"type":"item.completed","item":{"id":"item_3","type":"mcp_tool_call","name":"create_issue","server":"github","arguments":{"title":"x"},"output":{"id":42}}}`
+		steps := parseCodexSteps(toLines(raw))
+		if len(steps) != 1 {
+			t.Fatalf("got %d steps, want 1: %+v", len(steps), steps)
+		}
+		s := steps[0]
+		if s.Kind != StepKindTool {
+			t.Errorf("Kind = %q, want %q", s.Kind, StepKindTool)
+		}
+		if s.ToolName != "github.create_issue" {
+			t.Errorf("ToolName = %q, want github.create_issue", s.ToolName)
+		}
+		if !strings.Contains(s.InputSummary, "title") {
+			t.Errorf("InputSummary missing arguments: %q", s.InputSummary)
+		}
+		if !strings.Contains(s.OutputSummary, "42") {
+			t.Errorf("OutputSummary missing output: %q", s.OutputSummary)
+		}
+	})
+
+	t.Run("empty agent_message is skipped", func(t *testing.T) {
+		t.Parallel()
+		raw := `{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"  "}}`
+		steps := parseCodexSteps(toLines(raw))
+		if len(steps) != 0 {
+			t.Errorf("got %d steps, want 0: %+v", len(steps), steps)
+		}
+	})
+
+	t.Run("turn.started and thread.started are ignored", func(t *testing.T) {
+		t.Parallel()
+		raw := `{"type":"thread.started","thread_id":"x"}
+{"type":"turn.started"}
+{"type":"turn.completed","usage":{}}`
+		steps := parseCodexSteps(toLines(raw))
+		if len(steps) != 0 {
+			t.Errorf("got %d steps, want 0: %+v", len(steps), steps)
+		}
+	})
+
+	t.Run("oversized command output truncated with marker", func(t *testing.T) {
+		t.Parallel()
+		big := strings.Repeat("x", 70*1024)
+		raw := `{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"cat big","aggregated_output":"` + big + `","exit_code":0,"status":"completed"}}`
+		steps := parseCodexSteps(toLines(raw))
+		if len(steps) != 1 {
+			t.Fatalf("got %d steps, want 1", len(steps))
+		}
+		if !strings.Contains(steps[0].OutputSummary, "[truncated,") {
+			t.Errorf("expected truncation marker in OutputSummary")
+		}
+	})
+}
+
 func tail(s string, n int) string {
 	if len(s) <= n {
 		return s

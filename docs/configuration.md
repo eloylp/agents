@@ -53,7 +53,7 @@ daemon:
       max_prompt_chars: 12000
 ```
 
-> **Backend launch args are daemon-managed.** The arguments passed to `claude` and `codex` are hardcoded by the daemon (`-p --dangerously-skip-permissions` for Claude, `exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox` for Codex). The YAML schema does not expose them; the only backend fields you can change at runtime are `timeout_seconds`, `max_prompt_chars`, and (for local backends) `local_model_url`.
+> **Backend launch args are daemon-managed.** The arguments passed to `claude` and `codex` are hardcoded by the daemon (`-p --dangerously-skip-permissions --output-format stream-json --json-schema <embedded>` for Claude, `exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --output-schema <embedded>` for Codex). The JSONL/stream-json output is what lets the daemon reconstruct the tool-loop transcript on `trace_steps`. The YAML schema does not expose these args; the only backend fields you can change at runtime are `timeout_seconds`, `max_prompt_chars`, and (for local backends) `local_model_url`.
 
 ## `skills`
 
