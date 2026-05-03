@@ -49,65 +49,115 @@ interface StoreAgent {
 }
 
 function fmt(iso?: string) {
-  if (!iso) return ', '
+  if (!iso) return '-'
   return new Date(iso).toLocaleString()
 }
 
-function RunButton({ agent, repo }: { agent: string; repo: string }) {
+const ALL_REPOS = '__all__'
+
+function RunButton({ agent, repos }: { agent: string; repos: string[] }) {
+  // Dedupe (an agent may be bound to the same repo via multiple triggers).
+  const uniqueRepos = Array.from(new Set(repos.filter(Boolean)))
   const [state, setState] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
-  const [eventId, setEventId] = useState('')
+  const [statusMsg, setStatusMsg] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
+  const [target, setTarget] = useState(uniqueRepos[0] ?? '')
+
+  // Keep target in sync if the bindings list changes (e.g. after a fleet reload).
+  useEffect(() => {
+    if (uniqueRepos.length === 0) {
+      setTarget('')
+      return
+    }
+    if (target === ALL_REPOS) return
+    if (!uniqueRepos.includes(target)) setTarget(uniqueRepos[0])
+  }, [uniqueRepos.join('|')]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const run = async () => {
-    if (!repo) return
+    if (!target) return
+    const targets = target === ALL_REPOS ? uniqueRepos : [target]
+    if (targets.length === 0) return
     setState('running')
     setErrorMsg('')
-    try {
-      const res = await fetch('/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agent, repo }),
-      })
-      if (res.status === 202) {
-        const data = await res.json()
-        setEventId(data.event_id ?? '')
-        setState('done')
-        setTimeout(() => setState('idle'), 3000)
-      } else {
+    setStatusMsg('')
+    const results = await Promise.all(targets.map(async (repo) => {
+      try {
+        const res = await fetch('/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent, repo }),
+        })
+        if (res.status === 202) {
+          const data = await res.json()
+          return { repo, ok: true, eventId: data.event_id ?? '' }
+        }
         const body = (await res.text()).trim()
-        setErrorMsg(body || `HTTP ${res.status}`)
-        setState('error')
-        setTimeout(() => { setState('idle'); setErrorMsg('') }, 6000)
+        return { repo, ok: false, err: body || `HTTP ${res.status}` }
+      } catch (e) {
+        return { repo, ok: false, err: String(e) }
       }
-    } catch (e) {
-      setErrorMsg(String(e))
+    }))
+    const ok = results.filter(r => r.ok)
+    const failed = results.filter(r => !r.ok)
+    if (failed.length === 0) {
+      setStatusMsg(targets.length === 1 ? `Queued ${ok[0].eventId.slice(0, 8)}` : `Queued ${ok.length} runs`)
+      setState('done')
+      setTimeout(() => { setState('idle'); setStatusMsg('') }, 3000)
+    } else {
+      const first = failed[0]
+      const tag = targets.length === 1 ? '' : ` (${ok.length}/${targets.length} ok)`
+      setErrorMsg(`${first.repo}: ${first.err}${tag}`)
       setState('error')
       setTimeout(() => { setState('idle'); setErrorMsg('') }, 6000)
     }
   }
 
-  if (!repo) return null
+  if (uniqueRepos.length === 0) return null
 
-  const label = state === 'running' ? 'Queuing...' : state === 'done' ? `Queued ${eventId.slice(0, 8)}` : state === 'error' ? `Failed: ${errorMsg.slice(0, 60)}` : 'Run'
+  const label = state === 'running' ? 'Queuing...'
+    : state === 'done' ? statusMsg
+    : state === 'error' ? `Failed: ${errorMsg.slice(0, 60)}`
+    : 'Run'
   const bg = state === 'done' ? 'var(--success-bg)' : state === 'error' ? 'var(--error-bg)' : 'var(--accent-bg)'
   const color = state === 'done' ? 'var(--success)' : state === 'error' ? 'var(--text-danger)' : 'var(--accent)'
   const border = state === 'done' ? 'var(--success-border)' : state === 'error' ? 'var(--border-danger)' : 'var(--btn-primary-border)'
 
   return (
-    <button
-      onClick={run}
-      disabled={state === 'running'}
-      title={state === 'error' ? errorMsg : undefined}
-      style={{
-        background: bg, color, border: `1px solid ${border}`,
-        padding: '4px 12px', borderRadius: '6px', cursor: state === 'running' ? 'wait' : 'pointer',
-        fontSize: '0.75rem', fontWeight: 600,
-        maxWidth: state === 'error' ? '320px' : undefined,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}
-    >
-      {label}
-    </button>
+    <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+      {uniqueRepos.length > 1 && (
+        <select
+          value={target}
+          onChange={e => setTarget(e.target.value)}
+          disabled={state === 'running'}
+          style={{
+            background: 'var(--bg-input)', color: 'var(--text)',
+            border: '1px solid var(--border)', borderRadius: '6px',
+            padding: '4px 6px', fontSize: '0.72rem',
+            maxWidth: '180px', cursor: state === 'running' ? 'wait' : 'pointer',
+          }}
+          title="Pick the bound repo to fire on, or All to fan out to every binding."
+        >
+          {uniqueRepos.map(r => (
+            <option key={r} value={r}>{r}</option>
+          ))}
+          <option value={ALL_REPOS}>All ({uniqueRepos.length})</option>
+        </select>
+      )}
+      <button
+        onClick={run}
+        disabled={state === 'running' || !target}
+        title={state === 'error' ? errorMsg : (target === ALL_REPOS ? `Fire on ${uniqueRepos.length} repos` : `Fire on ${target}`)}
+        style={{
+          background: bg, color, border: `1px solid ${border}`,
+          padding: '4px 12px', borderRadius: '6px', cursor: state === 'running' ? 'wait' : 'pointer',
+          fontSize: '0.75rem', fontWeight: 600,
+          maxWidth: state === 'error' ? '320px' : undefined,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}
+      >
+        {label}
+      </button>
+    </div>
   )
 }
 
@@ -282,10 +332,10 @@ function AgentCard({ agent, onEdit, onDelete }: { agent: Agent; onEdit: () => vo
               <tr key={i} style={{ borderTop: '1px solid var(--border-subtle)' }}>
                 <td style={{ padding: '4px 0', color: 'var(--text-muted)' }}>{b.repo}</td>
                 <td style={{ padding: '4px 0', color: 'var(--text-muted)' }}>
-                  {b.cron ? `cron: ${b.cron}` : b.labels?.join(', ') ?? b.events?.join(', ') ?? ', '}
+                  {b.cron ? `cron: ${b.cron}` : b.labels?.join(', ') ?? b.events?.join(', ') ?? '-'}
                 </td>
                 <td style={{ padding: '4px 0', color: 'var(--text-muted)' }}>{fmt(b.schedule?.last_run)}</td>
-                <td style={{ padding: '4px 0', color: 'var(--text-muted)' }}>{b.schedule ? fmt(b.schedule.next_run) : ', '}</td>
+                <td style={{ padding: '4px 0', color: 'var(--text-muted)' }}>{b.schedule ? fmt(b.schedule.next_run) : '-'}</td>
                 <td style={{ padding: '4px 0' }}>
                   {b.schedule?.last_status ? <StatusBadge status={b.schedule.last_status} /> : <span style={{ color: 'var(--text-faint)' }}>, </span>}
                 </td>
@@ -302,7 +352,7 @@ function AgentCard({ agent, onEdit, onDelete }: { agent: Agent; onEdit: () => vo
           {agent.allow_memory === false && <span>✗ memory</span>}
           {(agent.can_dispatch ?? []).length > 0 && <span>→ {agent.can_dispatch!.join(', ')}</span>}
         </div>
-        <RunButton agent={agent.name} repo={(agent.bindings ?? [])[0]?.repo ?? ''} />
+        <RunButton agent={agent.name} repos={(agent.bindings ?? []).map(b => b.repo)} />
       </div>
     </Card>
   )
@@ -455,7 +505,7 @@ export default function FleetPage() {
     if (b.cron) return `cron: ${b.cron}`
     if (b.labels && b.labels.length > 0) return `labels: ${b.labels.join(', ')}`
     if (b.events && b.events.length > 0) return `events: ${b.events.join(', ')}`
-    return ', '
+    return '-'
   }
 
   const visibleAgents = repoFilter

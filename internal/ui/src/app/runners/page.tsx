@@ -38,7 +38,7 @@ function fmtTokens(n?: number) {
 }
 
 function fmtBytes(n?: number) {
-  if (!n) return ', '
+  if (!n) return '-'
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
   return `${(n / 1024 / 1024).toFixed(2)} MB`
@@ -62,7 +62,7 @@ const POLL_MS = 2000
 const HIGHLIGHT_MS = 4000
 
 function fmtTime(s?: string) {
-  if (!s) return ', '
+  if (!s) return '-'
   return new Date(s).toLocaleTimeString()
 }
 
@@ -430,7 +430,7 @@ function RunnersInner() {
                     )}
                   </span>
                   <span style={{ color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.repo || ', '}</span>
-                  <span style={{ color: 'var(--text-faint)' }}>{r.number > 0 ? `#${r.number}` : ', '}</span>
+                  <span style={{ color: 'var(--text-faint)' }}>{r.number > 0 ? `#${r.number}` : '-'}</span>
                   <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.75rem' }}>{r.kind || ', '}</span>
                   <span style={{ color: 'var(--text-faint)' }} title={startedAt}>{fmtTime(startedAt)}</span>
                   <span style={{ color: 'var(--text-faint)' }}>{fmtDuration(r.run_duration_ms)}</span>

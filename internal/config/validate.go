@@ -212,8 +212,8 @@ func validateDispatchWiring(agents []fleet.Agent) error {
 func (c *Config) validateRepos() error {
 	seen := make(map[string]struct{}, len(c.Repos))
 	for _, r := range c.Repos {
-		if r.Name == "" {
-			return errors.New("config: repo name is required")
+		if err := fleet.ValidateRepoName(r.Name); err != nil {
+			return fmt.Errorf("config: %w", err)
 		}
 		key := strings.ToLower(r.Name)
 		if _, dup := seen[key]; dup {

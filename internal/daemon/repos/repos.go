@@ -270,8 +270,8 @@ func (h *Handler) handleDeleteBinding(w http.ResponseWriter, r *http.Request) {
 // Empty/whitespace names are rejected as *store.ErrValidation so callers can
 // map them to HTTP 400 / MCP user errors.
 func (h *Handler) UpsertRepo(r fleet.Repo) (fleet.Repo, error) {
-	if strings.TrimSpace(r.Name) == "" {
-		return fleet.Repo{}, &store.ErrValidation{Msg: "name is required"}
+	if err := fleet.ValidateRepoName(r.Name); err != nil {
+		return fleet.Repo{}, &store.ErrValidation{Msg: err.Error()}
 	}
 	if err := h.store.UpsertRepo(r); err != nil {
 		return fleet.Repo{}, err

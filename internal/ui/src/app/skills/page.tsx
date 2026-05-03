@@ -188,7 +188,7 @@ export default function SkillsPage() {
                   maxHeight: '80px', overflow: 'hidden', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                   fontFamily: 'inherit',
                 }}>
-                  {sk.prompt ? sk.prompt.slice(0, 200) + (sk.prompt.length > 200 ? '…' : '') : ', '}
+                  {sk.prompt ? sk.prompt.slice(0, 200) + (sk.prompt.length > 200 ? '…' : '') : '-'}
                 </pre>
               </div>
               <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>

@@ -100,7 +100,7 @@ function bindingTrigger(b: Binding): string {
   if (b.cron) return `cron: ${b.cron}`
   if (b.labels && b.labels.length > 0) return `labels: ${b.labels.join(', ')}`
   if (b.events && b.events.length > 0) return `events: ${b.events.join(', ')}`
-  return ', '
+  return '-'
 }
 
 // TriggerEditor edits one trigger row (type + value + enabled + delete).
@@ -308,7 +308,7 @@ function RepoForm({ initial, isNew, agentNames, knownLabels, existingRepos, onSa
               value={cloneSource}
               onChange={e => setCloneSource(e.target.value)}
             >
-              <option value="">,  none , </option>
+              <option value="">(none)</option>
               {existingRepos.map(r => <option key={r.name} value={r.name}>{r.name}</option>)}
             </select>
             <button
