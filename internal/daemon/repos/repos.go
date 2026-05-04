@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -54,7 +55,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/repos/{owner}/{repo}/bindings/{id}", withTimeout(http.HandlerFunc(h.handleDeleteBinding))).Methods(http.MethodDelete)
 }
 
-// ── Wire types ───────────────────────────────────────────────────────────────
+// ── Wire types ──────────────────────────────────────────────────────────────────────
 
 // storeBindingJSON is the wire shape for one binding inside a repo (atomic
 // per-binding routes use the same shape).
@@ -121,7 +122,7 @@ type repoRuntimeSettingsJSON struct {
 	Enabled *bool `json:"enabled,omitempty"`
 }
 
-// ── Handlers ─────────────────────────────────────────────────────────────────
+// ── Handlers ──────────────────────────────────────────────────────────────────────────
 
 func (h *Handler) handleRepos(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -259,7 +260,7 @@ func (h *Handler) handleDeleteBinding(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ── Methods exposed for non-HTTP callers (MCP tools) ─────────────────────────
+// ── Methods exposed for non-HTTP callers (MCP tools) ─────────────────────────────────────────────
 
 // UpsertRepo writes a single repo definition (and its bindings) into the store
 // and reloads the cron scheduler. Returns the canonical (normalized) form so
@@ -289,16 +290,11 @@ func (h *Handler) PatchRepo(repoName string, enabled bool) (fleet.Repo, error) {
 	if err != nil {
 		return fleet.Repo{}, err
 	}
-	var existing *fleet.Repo
-	for i := range repos {
-		if repos[i].Name == repoName {
-			existing = &repos[i]
-			break
-		}
-	}
-	if existing == nil {
+	idx := slices.IndexFunc(repos, func(r fleet.Repo) bool { return r.Name == repoName })
+	if idx == -1 {
 		return fleet.Repo{}, &store.ErrNotFound{Msg: fmt.Sprintf("repo %q not found", repoName)}
 	}
+	existing := &repos[idx]
 	if existing.Enabled == enabled {
 		return *existing, nil
 	}
@@ -362,7 +358,7 @@ func (h *Handler) DeleteBinding(repoName string, id int64) error {
 	return h.store.DeleteBinding(id)
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────────────
 
 // repoNameFromVars reconstructs the normalized owner/repo path parameter.
 func repoNameFromVars(r *http.Request) string {
