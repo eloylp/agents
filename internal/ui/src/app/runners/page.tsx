@@ -7,6 +7,7 @@ import Modal from '@/components/Modal'
 import RepoFilter from '@/components/RepoFilter'
 import { StreamCard, TranscriptFilter, allStreamCardKinds, parseStreamLine, type StreamCardEntry, type StreamCardKind } from '@/components/StreamCard'
 import { fmtDuration } from '@/lib/format'
+import { openAuthenticatedSSE } from '@/lib/sse'
 
 interface RunnerRow {
   id: number
@@ -90,21 +91,15 @@ function LiveStreamModal({ span, onClose }: { span: { id: string; agent: string;
   const visibleEntries = entries.filter(e => visibleKinds.has(e.kind))
 
   useEffect(() => {
-    const es = new EventSource(`/traces/${encodeURIComponent(span.id)}/stream`)
-    es.onopen = () => setStatus('live')
-    es.onmessage = (e) => {
-      setEntries(prev => [...prev, parseStreamLine(e.data)])
-    }
-    es.addEventListener('end', () => {
-      setStatus('ended')
-      es.close()
+    const stream = openAuthenticatedSSE(`/traces/${encodeURIComponent(span.id)}/stream`, {
+      onOpen: () => setStatus('live'),
+      onMessage: data => setEntries(prev => [...prev, parseStreamLine(data)]),
+      onEvent: event => {
+        if (event === 'end') setStatus('ended')
+      },
+      onError: () => setStatus('error'),
     })
-    es.onerror = () => {
-      // EventSource auto-retries on transient failures; only surface the
-      // error state when the connection genuinely fails to establish.
-      if (es.readyState === EventSource.CLOSED) setStatus('error')
-    }
-    return () => es.close()
+    return () => stream.close()
   }, [span.id])
 
   useEffect(() => {

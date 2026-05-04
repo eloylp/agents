@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
 import Card from '@/components/Card'
+import { openAuthenticatedSSE } from '@/lib/sse'
 
 interface Agent {
   name: string
@@ -30,18 +31,19 @@ export default function MemoryPage() {
 
   // Watch memory stream for change notifications
   useEffect(() => {
-    const es = new EventSource('/memory/stream')
-    setStreaming(true)
-    es.onmessage = (e) => {
-      try {
-        const msg: { agent: string; repo: string } = JSON.parse(e.data)
-        if (selected && msg.agent === selected.agent && msg.repo === selected.repoKey) {
-          loadFile(selected.agent, selected.repoKey)
-        }
-      } catch { /* ignore */ }
-    }
-    es.onerror = () => setStreaming(false)
-    return () => es.close()
+    const stream = openAuthenticatedSSE('/memory/stream', {
+      onOpen: () => setStreaming(true),
+      onMessage: data => {
+        try {
+          const msg: { agent: string; repo: string } = JSON.parse(data)
+          if (selected && msg.agent === selected.agent && msg.repo === selected.repoKey) {
+            loadFile(selected.agent, selected.repoKey)
+          }
+        } catch { /* ignore */ }
+      },
+      onError: () => setStreaming(false),
+    })
+    return () => stream.close()
   }, [selected]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadFile = (agent: string, repoKey: string) => {

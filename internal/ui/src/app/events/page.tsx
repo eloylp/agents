@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import Card from '@/components/Card'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
+import { openAuthenticatedSSE } from '@/lib/sse'
 
 interface Event {
   at: string
@@ -139,18 +140,19 @@ export default function EventsPage() {
   useEffect(() => { load() }, [timeRange]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const es = new EventSource('/events/stream')
-    setStreaming(true)
-    es.onmessage = (e) => {
-      try {
-        const ev: Event = JSON.parse(e.data)
-        setEvents(prev => [ev, ...prev.slice(0, 499)])
-        setNewIds(prev => { const s = new Set(prev); s.add(ev.id); return s })
-        setTimeout(() => setNewIds(prev => { const s = new Set(prev); s.delete(ev.id); return s }), 2000)
-      } catch { /* ignore */ }
-    }
-    es.onerror = () => setStreaming(false)
-    return () => es.close()
+    const stream = openAuthenticatedSSE('/events/stream', {
+      onOpen: () => setStreaming(true),
+      onMessage: data => {
+        try {
+          const ev: Event = JSON.parse(data)
+          setEvents(prev => [ev, ...prev.slice(0, 499)])
+          setNewIds(prev => { const s = new Set(prev); s.add(ev.id); return s })
+          setTimeout(() => setNewIds(prev => { const s = new Set(prev); s.delete(ev.id); return s }), 2000)
+        } catch { /* ignore */ }
+      },
+      onError: () => setStreaming(false),
+    })
+    return () => stream.close()
   }, [])
 
   const filtered = events.filter(e =>
