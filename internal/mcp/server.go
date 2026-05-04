@@ -45,7 +45,7 @@ import (
 // Version is advertised to MCP clients during the initialize handshake.
 // It tracks the wire contract (tool names, shapes), bump it whenever a
 // tool's input or output schema changes in a non-backwards-compatible way.
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 // Deps bundles the dependencies the MCP tools call into. internal/daemon
 // constructs each component once and hands the same references to the

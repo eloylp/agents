@@ -45,7 +45,7 @@ body:
     attributes:
       label: Daemon version or commit SHA
       description: Output of `agents --version` if a release, or the commit you built from.
-      placeholder: "v0.1.0 / 32b6a59"
+      placeholder: "v0.2.0 / <commit-sha>"
     validations:
       required: false
 

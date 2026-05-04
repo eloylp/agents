@@ -7,7 +7,7 @@ The daemon dispatches AI CLIs (`claude`, `codex`) with sandbox-bypass flags so a
 ## Bring up the daemon
 
 ```bash
-git clone --branch v0.1.0 https://github.com/eloylp/agents
+git clone --branch v0.2.0 https://github.com/eloylp/agents
 cd agents
 # .env holds runtime secrets (loaded automatically by compose).
 # Webhook secret: random per install. PAT: from https://github.com/settings/tokens with repo scope.
@@ -57,9 +57,9 @@ docker compose logs -f agents
 # Graceful restart (in-flight runs are allowed to finish).
 docker compose restart agents
 
-# Upgrade to a newer tagged release. Pick the latest from
-# https://github.com/eloylp/agents/releases and substitute below.
-git fetch origin --tags && git checkout v0.1.0 && docker compose build && docker compose up -d
+# Upgrade to a newer tagged release. Pick the latest tag from
+# https://github.com/eloylp/agents/tags and substitute below.
+git fetch origin --tags && git checkout v0.2.0 && docker compose build && docker compose up -d
 # Or track main directly (latest fixes, less stable than tagged releases):
 # git checkout main && git pull && docker compose build && docker compose up -d
 
