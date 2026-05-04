@@ -65,14 +65,8 @@ func UpsertGuardrail(db *sql.DB, g fleet.Guardrail) error {
 	if g.Content == "" {
 		return &ErrValidation{Msg: fmt.Sprintf("store: guardrail %q: content is required", g.Name)}
 	}
-	enabled := 0
-	if g.Enabled {
-		enabled = 1
-	}
-	isBuiltin := 0
-	if g.IsBuiltin {
-		isBuiltin = 1
-	}
+	enabled := boolToInt(g.Enabled)
+	isBuiltin := boolToInt(g.IsBuiltin)
 	var defaultContent any = g.DefaultContent
 	if g.DefaultContent == "" {
 		defaultContent = nil
@@ -170,7 +164,7 @@ func scanGuardrailRow(r rowScanner) (fleet.Guardrail, error) {
 	if err := r.Scan(&g.Name, &g.Description, &g.Content, &g.DefaultContent, &isBuiltin, &enabled, &g.Position); err != nil {
 		return fleet.Guardrail{}, err
 	}
-	g.IsBuiltin = isBuiltin == 1
-	g.Enabled = enabled == 1
+	g.IsBuiltin = intToBool(isBuiltin)
+	g.Enabled = intToBool(enabled)
 	return g, nil
 }
