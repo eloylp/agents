@@ -242,8 +242,7 @@ func (r *runStream) publish(line []byte) {
 		return
 	}
 	if len(r.history) >= runStreamHistoryCap {
-		// drop oldest
-		r.history = append(r.history[:0], r.history[1:]...)
+		r.history = slices.Delete(r.history, 0, 1)
 	}
 	r.history = append(r.history, cp)
 	for ch := range r.subs {
