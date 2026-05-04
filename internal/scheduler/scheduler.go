@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -293,8 +294,7 @@ func (s *Scheduler) AgentStatuses() []AgentStatus {
 	}
 
 	s.bindMu.RLock()
-	agentEntries := make([]agentEntry, len(s.agentEntries))
-	copy(agentEntries, s.agentEntries)
+	agentEntries := slices.Clone(s.agentEntries)
 	s.bindMu.RUnlock()
 
 	statuses := make([]AgentStatus, 0, len(agentEntries))
