@@ -1189,7 +1189,7 @@ func TestConcurrentWritesAllCommit(t *testing.T) {
 	const n = 20
 	var wg sync.WaitGroup
 	wg.Add(n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		name := "agent-concurrent-" + string(rune('a'+i))
 		go func(agentName string) {
 			defer wg.Done()
