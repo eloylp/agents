@@ -1,9 +1,10 @@
 'use client'
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
+import RepoFilter from '@/components/RepoFilter'
 import { StreamCard, TranscriptFilter, allStreamCardKinds, parseStreamLine, type StreamCardEntry, type StreamCardKind } from '@/components/StreamCard'
 import { fmtDuration } from '@/lib/format'
 
@@ -212,7 +213,16 @@ function LiveStreamModal({ span, onClose }: { span: { id: string; agent: string;
 
 function RunnersInner() {
   const params = useSearchParams()
+  const router = useRouter()
   const focusEvent = params.get('event') ?? ''
+  const repoParam = params.get('repo') ?? ''
+
+  const setRepoFilter = (repo: string) => {
+    const p = new URLSearchParams(params.toString())
+    if (repo) p.set('repo', repo)
+    else p.delete('repo')
+    router.push(`/runners?${p.toString()}`)
+  }
 
   const [rows, setRows] = useState<RunnerRow[]>([])
   const [total, setTotal] = useState(0)
@@ -265,10 +275,12 @@ function RunnersInner() {
     return () => window.clearTimeout(t)
   }, [focusEvent, rows.length, highlighted])
 
-  const filtered = useMemo(
-    () => focusEvent ? rows.filter(r => r.event_id === focusEvent) : rows,
-    [rows, focusEvent],
-  )
+  const filtered = useMemo(() => {
+    let result = rows
+    if (focusEvent) result = result.filter(r => r.event_id === focusEvent)
+    if (repoParam) result = result.filter(r => r.repo === repoParam)
+    return result
+  }, [rows, focusEvent, repoParam])
 
   // Native browser confirm()/alert() are jarring against the dashboard
   // styling, plus they block the JS event loop. Drive every confirm /
@@ -344,13 +356,17 @@ function RunnersInner() {
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           {focusEvent && (
-            <Link href="/runners/" style={{
-              background: 'var(--bg-card)', border: '1px solid var(--border)',
-              color: 'var(--text-muted)', padding: '4px 10px', borderRadius: '4px',
-              fontSize: '0.8rem', textDecoration: 'none',
-            }}>Clear filter</Link>
+            <Link
+              href={repoParam ? `/runners?repo=${encodeURIComponent(repoParam)}` : '/runners/'}
+              style={{
+                background: 'var(--bg-card)', border: '1px solid var(--border)',
+                color: 'var(--text-muted)', padding: '4px 10px', borderRadius: '4px',
+                fontSize: '0.8rem', textDecoration: 'none',
+              }}
+            >Clear filter</Link>
           )}
-          {(['', 'enqueued', 'running', 'completed'] as const).map(s => (
+          <RepoFilter selected={repoParam} onChange={setRepoFilter} />
+          {([\'\'\', 'enqueued', 'running', 'completed'] as const).map(s => (
             <button key={s || 'all'} onClick={() => setStatus(s)} style={{
               background: status === s ? 'var(--btn-primary-bg)' : 'var(--bg-card)',
               border: '1px solid var(--border)',
