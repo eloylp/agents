@@ -396,8 +396,11 @@ func (h *Handler) HandleImport(w http.ResponseWriter, r *http.Request) {
 }
 
 // ImportYAML parses a YAML payload in HandleExport's format and writes it to
-// the store. mode controls upsert semantics: empty or "merge" preserves
-// existing records, "replace" prunes anything not present in the payload.
+// the store atomically. mode controls upsert semantics: empty or "merge"
+// preserves existing records, "replace" prunes anything not present in the
+// payload. All sections — agents, repos, skills, backends, guardrails, and
+// token budgets — are written in a single transaction so a failure in any
+// section rolls back the entire import.
 //
 // On success it returns the per-section counts.
 func (h *Handler) ImportYAML(body []byte, mode string) (map[string]int, error) {
@@ -416,16 +419,12 @@ func (h *Handler) ImportYAML(body []byte, mode string) (map[string]int, error) {
 
 	var err error
 	if mode == "replace" {
-		err = h.store.ReplaceAll(payload.Agents, payload.Repos, payload.Skills, backends, payload.Guardrails)
+		err = h.store.ReplaceAll(payload.Agents, payload.Repos, payload.Skills, backends, payload.Guardrails, payload.TokenBudgets)
 	} else {
-		err = h.store.ImportAll(payload.Agents, payload.Repos, payload.Skills, backends, payload.Guardrails)
+		err = h.store.ImportAll(payload.Agents, payload.Repos, payload.Skills, backends, payload.Guardrails, payload.TokenBudgets)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("import: %w", err)
-	}
-
-	if err := h.store.ImportTokenBudgets(payload.TokenBudgets, mode == "replace"); err != nil {
-		return nil, fmt.Errorf("import token budgets: %w", err)
 	}
 
 	return map[string]int{

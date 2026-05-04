@@ -69,7 +69,7 @@ func validateBudget(b TokenBudget) error {
 	return nil
 }
 
-func scanTokenBudget(s rowScanner) (TokenBudget, error) {
+func scanTokenBudget(s scanner) (TokenBudget, error) {
 	var b TokenBudget
 	var enabled int
 	if err := s.Scan(&b.ID, &b.ScopeKind, &b.ScopeName, &b.Period, &b.CapTokens, &b.AlertAtPct, &enabled); err != nil {
@@ -335,19 +335,14 @@ func TokenLeaderboard(db *sql.DB, repo, period string) ([]LeaderboardEntry, erro
 	return out, rows.Err()
 }
 
-// ImportTokenBudgets upserts token budgets. In replace mode all existing rows
-// are deleted first; in merge mode existing rows (keyed on scope_kind +
-// scope_name + period) are updated in place and absent rows are inserted.
-// IDs from the caller are ignored; the database assigns them.
-func ImportTokenBudgets(db *sql.DB, budgets []TokenBudget, replace bool) error {
+// importTokenBudgetsTx upserts token budgets inside an existing transaction.
+// In replace mode all existing rows are deleted first; in merge mode existing
+// rows (keyed on scope_kind + scope_name + period) are updated in place and
+// absent rows are inserted. IDs from the caller are ignored.
+func importTokenBudgetsTx(tx *sql.Tx, budgets []TokenBudget, replace bool) error {
 	if len(budgets) == 0 && !replace {
 		return nil
 	}
-	tx, err := db.Begin()
-	if err != nil {
-		return fmt.Errorf("store: import token budgets: begin: %w", err)
-	}
-	defer tx.Rollback()
 	if replace {
 		if _, err := tx.Exec("DELETE FROM token_budgets"); err != nil {
 			return fmt.Errorf("store: import token budgets: truncate: %w", err)
@@ -371,6 +366,26 @@ func ImportTokenBudgets(db *sql.DB, budgets []TokenBudget, replace bool) error {
 		); err != nil {
 			return fmt.Errorf("store: import token budget (%s/%s/%s): %w", b.ScopeKind, b.ScopeName, b.Period, err)
 		}
+	}
+	return nil
+}
+
+// ImportTokenBudgets upserts token budgets in a standalone transaction.
+// In replace mode all existing rows are deleted first; in merge mode existing
+// rows (keyed on scope_kind + scope_name + period) are updated in place and
+// absent rows are inserted. IDs from the caller are ignored; the database
+// assigns them.
+func ImportTokenBudgets(db *sql.DB, budgets []TokenBudget, replace bool) error {
+	if len(budgets) == 0 && !replace {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: import token budgets: begin: %w", err)
+	}
+	defer tx.Rollback()
+	if err := importTokenBudgetsTx(tx, budgets, replace); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

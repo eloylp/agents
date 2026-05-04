@@ -115,12 +115,12 @@ func (s *Store) ReadSnapshot() ([]fleet.Agent, []fleet.Repo, map[string]fleet.Sk
 	return ReadSnapshot(s.db)
 }
 
-func (s *Store) ImportAll(agents []fleet.Agent, repos []fleet.Repo, skills map[string]fleet.Skill, backends map[string]fleet.Backend, guardrails []fleet.Guardrail) error {
-	return ImportAll(s.db, agents, repos, skills, backends, guardrails)
+func (s *Store) ImportAll(agents []fleet.Agent, repos []fleet.Repo, skills map[string]fleet.Skill, backends map[string]fleet.Backend, guardrails []fleet.Guardrail, budgets []TokenBudget) error {
+	return ImportAll(s.db, agents, repos, skills, backends, guardrails, budgets)
 }
 
-func (s *Store) ReplaceAll(agents []fleet.Agent, repos []fleet.Repo, skills map[string]fleet.Skill, backends map[string]fleet.Backend, guardrails []fleet.Guardrail) error {
-	return ReplaceAll(s.db, agents, repos, skills, backends, guardrails)
+func (s *Store) ReplaceAll(agents []fleet.Agent, repos []fleet.Repo, skills map[string]fleet.Skill, backends map[string]fleet.Backend, guardrails []fleet.Guardrail, budgets []TokenBudget) error {
+	return ReplaceAll(s.db, agents, repos, skills, backends, guardrails, budgets)
 }
 
 func (s *Store) Import(cfg *config.Config) error            { return Import(s.db, cfg) }
