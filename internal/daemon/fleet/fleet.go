@@ -57,22 +57,29 @@ func New(st *store.Store, maxBodyBytes int64, sched *scheduler.Scheduler, obs *o
 // on r. withTimeout wraps each handler in an http.TimeoutHandler matching
 // the daemon's HTTP write-timeout setting.
 //
-// GET /agents is mounted by the composing daemon's dispatcher (which also
-// handles POST /agents) so both share one mux entry; the dispatcher
-// delegates to HandleAgentsView for the read-only fleet snapshot and to
-// HandleAgentsCreate for POST.
+// GET /agents and POST /agents are mounted by the composing daemon so the
+// top-level route can combine the read-only fleet snapshot with CRUD create.
 func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) http.Handler) {
 	r.Handle("/agents/orphans/status", withTimeout(http.HandlerFunc(h.HandleOrphansStatus))).Methods(http.MethodGet)
-	r.Handle("/agents/{name}", withTimeout(http.HandlerFunc(h.handleAgent))).Methods(http.MethodGet, http.MethodPatch, http.MethodDelete)
+	r.Handle("/agents/{name}", withTimeout(http.HandlerFunc(h.handleAgentGet))).Methods(http.MethodGet)
+	r.Handle("/agents/{name}", withTimeout(http.HandlerFunc(h.handleAgentPatchByName))).Methods(http.MethodPatch)
+	r.Handle("/agents/{name}", withTimeout(http.HandlerFunc(h.handleAgentDelete))).Methods(http.MethodDelete)
 
-	r.Handle("/skills", withTimeout(http.HandlerFunc(h.handleSkills))).Methods(http.MethodGet, http.MethodPost)
-	r.Handle("/skills/{name}", withTimeout(http.HandlerFunc(h.handleSkill))).Methods(http.MethodGet, http.MethodPatch, http.MethodDelete)
+	r.Handle("/skills", withTimeout(http.HandlerFunc(h.handleSkillsList))).Methods(http.MethodGet)
+	r.Handle("/skills", withTimeout(http.HandlerFunc(h.handleSkillCreate))).Methods(http.MethodPost)
+	r.Handle("/skills/{name}", withTimeout(http.HandlerFunc(h.handleSkillGet))).Methods(http.MethodGet)
+	r.Handle("/skills/{name}", withTimeout(http.HandlerFunc(h.handleSkillPatchByName))).Methods(http.MethodPatch)
+	r.Handle("/skills/{name}", withTimeout(http.HandlerFunc(h.handleSkillDelete))).Methods(http.MethodDelete)
 
-	r.Handle("/guardrails", withTimeout(http.HandlerFunc(h.handleGuardrails))).Methods(http.MethodGet, http.MethodPost)
-	r.Handle("/guardrails/{name}", withTimeout(http.HandlerFunc(h.handleGuardrail))).Methods(http.MethodGet, http.MethodPatch, http.MethodDelete)
+	r.Handle("/guardrails", withTimeout(http.HandlerFunc(h.handleGuardrailsList))).Methods(http.MethodGet)
+	r.Handle("/guardrails", withTimeout(http.HandlerFunc(h.handleGuardrailCreate))).Methods(http.MethodPost)
+	r.Handle("/guardrails/{name}", withTimeout(http.HandlerFunc(h.handleGuardrailGet))).Methods(http.MethodGet)
+	r.Handle("/guardrails/{name}", withTimeout(http.HandlerFunc(h.handleGuardrailPatchByName))).Methods(http.MethodPatch)
+	r.Handle("/guardrails/{name}", withTimeout(http.HandlerFunc(h.handleGuardrailDelete))).Methods(http.MethodDelete)
 	r.Handle("/guardrails/{name}/reset", withTimeout(http.HandlerFunc(h.handleGuardrailReset))).Methods(http.MethodPost)
 
-	r.Handle("/backends", withTimeout(http.HandlerFunc(h.handleBackends))).Methods(http.MethodGet, http.MethodPost)
+	r.Handle("/backends", withTimeout(http.HandlerFunc(h.handleBackendsList))).Methods(http.MethodGet)
+	r.Handle("/backends", withTimeout(http.HandlerFunc(h.handleBackendCreate))).Methods(http.MethodPost)
 	r.Handle("/backends/status", withTimeout(http.HandlerFunc(h.handleBackendsStatus))).Methods(http.MethodGet)
 	r.Handle("/backends/discover", withTimeout(http.HandlerFunc(h.handleBackendsDiscover))).Methods(http.MethodPost)
 	r.Handle("/backends/local", withTimeout(http.HandlerFunc(h.handleBackendsLocal))).Methods(http.MethodPost)
@@ -211,33 +218,34 @@ func (p AgentPatch) apply(a *fleet.Agent) {
 
 // ── Agent handlers ────────────────────────────────────────────────────────────────────────────────────
 
-func (h *Handler) handleAgent(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleAgentGet(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeAgentName(mux.Vars(r)["name"])
-	switch r.Method {
-	case http.MethodGet:
-		agents, err := h.store.ReadAgents()
-		if err != nil {
-			http.Error(w, fmt.Sprintf("read agents: %v", err), http.StatusInternalServerError)
-			return
-		}
-		idx := slices.IndexFunc(agents, func(a fleet.Agent) bool { return a.Name == name })
-		if idx < 0 {
-			http.NotFound(w, r)
-			return
-		}
-		writeJSON(w, http.StatusOK, agentToStoreJSON(agents[idx]))
-
-	case http.MethodPatch:
-		h.handleAgentPatch(w, r, name)
-
-	case http.MethodDelete:
-		cascade := r.URL.Query().Get("cascade") == "true"
-		if err := h.DeleteAgent(name, cascade); err != nil {
-			h.writeErr(w, err, "agent delete or cron reload")
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
+	agents, err := h.store.ReadAgents()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read agents: %v", err), http.StatusInternalServerError)
+		return
 	}
+	idx := slices.IndexFunc(agents, func(a fleet.Agent) bool { return a.Name == name })
+	if idx < 0 {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, agentToStoreJSON(agents[idx]))
+}
+
+func (h *Handler) handleAgentPatchByName(w http.ResponseWriter, r *http.Request) {
+	name := fleet.NormalizeAgentName(mux.Vars(r)["name"])
+	h.handleAgentPatch(w, r, name)
+}
+
+func (h *Handler) handleAgentDelete(w http.ResponseWriter, r *http.Request) {
+	name := fleet.NormalizeAgentName(mux.Vars(r)["name"])
+	cascade := r.URL.Query().Get("cascade") == "true"
+	if err := h.DeleteAgent(name, cascade); err != nil {
+		h.writeErr(w, err, "agent delete or cron reload")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) handleAgentPatch(w http.ResponseWriter, r *http.Request, name string) {
@@ -337,60 +345,59 @@ func (p SkillPatch) apply(s *fleet.Skill) {
 
 // ── Skill handlers ────────────────────────────────────────────────────────────────────────────────────
 
-func (h *Handler) handleSkills(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		skills, err := h.store.ReadSkills()
-		if err != nil {
-			http.Error(w, fmt.Sprintf("read skills: %v", err), http.StatusInternalServerError)
-			return
-		}
-		out := make([]storeSkillJSON, 0, len(skills))
-		for name, sk := range skills {
-			out = append(out, storeSkillJSON{Name: name, Prompt: sk.Prompt})
-		}
-		writeJSON(w, http.StatusOK, out)
-
-	case http.MethodPost:
-		var req storeSkillJSON
-		if !decodeBody(w, r, h.maxBodyBytes, &req) {
-			return
-		}
-		name, sk, err := h.UpsertSkill(req.Name, fleet.Skill{Prompt: req.Prompt})
-		if err != nil {
-			h.writeErr(w, err, "skill upsert or cron reload")
-			return
-		}
-		writeJSON(w, http.StatusOK, storeSkillJSON{Name: name, Prompt: sk.Prompt})
+func (h *Handler) handleSkillsList(w http.ResponseWriter, _ *http.Request) {
+	skills, err := h.store.ReadSkills()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read skills: %v", err), http.StatusInternalServerError)
+		return
 	}
+	out := make([]storeSkillJSON, 0, len(skills))
+	for name, sk := range skills {
+		out = append(out, storeSkillJSON{Name: name, Prompt: sk.Prompt})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
-func (h *Handler) handleSkill(w http.ResponseWriter, r *http.Request) {
-	name := fleet.NormalizeSkillName(mux.Vars(r)["name"])
-	switch r.Method {
-	case http.MethodGet:
-		skills, err := h.store.ReadSkills()
-		if err != nil {
-			http.Error(w, fmt.Sprintf("read skills: %v", err), http.StatusInternalServerError)
-			return
-		}
-		sk, ok := skills[name]
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		writeJSON(w, http.StatusOK, storeSkillJSON{Name: name, Prompt: sk.Prompt})
-
-	case http.MethodPatch:
-		h.handleSkillPatch(w, r, name)
-
-	case http.MethodDelete:
-		if err := h.DeleteSkill(name); err != nil {
-			h.writeErr(w, err, "skill delete or cron reload")
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
+func (h *Handler) handleSkillCreate(w http.ResponseWriter, r *http.Request) {
+	var req storeSkillJSON
+	if !decodeBody(w, r, h.maxBodyBytes, &req) {
+		return
 	}
+	name, sk, err := h.UpsertSkill(req.Name, fleet.Skill{Prompt: req.Prompt})
+	if err != nil {
+		h.writeErr(w, err, "skill upsert or cron reload")
+		return
+	}
+	writeJSON(w, http.StatusOK, storeSkillJSON{Name: name, Prompt: sk.Prompt})
+}
+
+func (h *Handler) handleSkillGet(w http.ResponseWriter, r *http.Request) {
+	name := fleet.NormalizeSkillName(mux.Vars(r)["name"])
+	skills, err := h.store.ReadSkills()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read skills: %v", err), http.StatusInternalServerError)
+		return
+	}
+	sk, ok := skills[name]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, storeSkillJSON{Name: name, Prompt: sk.Prompt})
+}
+
+func (h *Handler) handleSkillPatchByName(w http.ResponseWriter, r *http.Request) {
+	name := fleet.NormalizeSkillName(mux.Vars(r)["name"])
+	h.handleSkillPatch(w, r, name)
+}
+
+func (h *Handler) handleSkillDelete(w http.ResponseWriter, r *http.Request) {
+	name := fleet.NormalizeSkillName(mux.Vars(r)["name"])
+	if err := h.DeleteSkill(name); err != nil {
+		h.writeErr(w, err, "skill delete or cron reload")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) handleSkillPatch(w http.ResponseWriter, r *http.Request, name string) {
@@ -556,32 +563,30 @@ func (j storeBackendJSON) toConfig() fleet.Backend {
 
 // ── Backend handlers ────────────────────────────────────────────────────────────────────────────────────
 
-func (h *Handler) handleBackends(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		all, err := h.store.ReadBackends()
-		if err != nil {
-			http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
-			return
-		}
-		out := make([]storeBackendJSON, 0, len(all))
-		for name, b := range all {
-			out = append(out, backendToStoreJSON(name, b))
-		}
-		writeJSON(w, http.StatusOK, out)
-
-	case http.MethodPost:
-		var req storeBackendJSON
-		if !decodeBody(w, r, h.maxBodyBytes, &req) {
-			return
-		}
-		name, b, err := h.UpsertBackend(req.Name, req.toConfig())
-		if err != nil {
-			h.writeErr(w, err, "backend upsert or cron reload")
-			return
-		}
-		writeJSON(w, http.StatusOK, backendToStoreJSON(name, b))
+func (h *Handler) handleBackendsList(w http.ResponseWriter, _ *http.Request) {
+	all, err := h.store.ReadBackends()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
+		return
 	}
+	out := make([]storeBackendJSON, 0, len(all))
+	for name, b := range all {
+		out = append(out, backendToStoreJSON(name, b))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleBackendCreate(w http.ResponseWriter, r *http.Request) {
+	var req storeBackendJSON
+	if !decodeBody(w, r, h.maxBodyBytes, &req) {
+		return
+	}
+	name, b, err := h.UpsertBackend(req.Name, req.toConfig())
+	if err != nil {
+		h.writeErr(w, err, "backend upsert or cron reload")
+		return
+	}
+	writeJSON(w, http.StatusOK, backendToStoreJSON(name, b))
 }
 
 func (h *Handler) handleBackendsStatus(w http.ResponseWriter, r *http.Request) {

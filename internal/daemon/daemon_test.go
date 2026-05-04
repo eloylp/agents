@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gorilla/mux"
+
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/daemon"
 	"github.com/eloylp/agents/internal/daemon/daemontest"
@@ -44,6 +46,89 @@ func newTestServer(t *testing.T, cfg *config.Config) (*daemon.Daemon, *workflow.
 	t.Helper()
 	srv := daemontest.New(t, cfg)
 	return srv, srv.Channels()
+}
+
+func TestBuildRouterRegistersExpectedRoutes(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := newTestServer(t, testCfg(nil))
+	router, ok := srv.Handler().(*mux.Router)
+	if !ok {
+		t.Fatalf("handler type = %T, want *mux.Router", srv.Handler())
+	}
+
+	expected := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/status"},
+		{http.MethodPost, "/run"},
+		{http.MethodPost, "/webhooks/github"},
+		{http.MethodGet, "/agents"},
+		{http.MethodPost, "/agents"},
+		{http.MethodGet, "/agents/orphans/status"},
+		{http.MethodGet, "/agents/coder"},
+		{http.MethodPatch, "/agents/coder"},
+		{http.MethodDelete, "/agents/coder"},
+		{http.MethodGet, "/skills"},
+		{http.MethodPost, "/skills"},
+		{http.MethodGet, "/skills/reviewer"},
+		{http.MethodPatch, "/skills/reviewer"},
+		{http.MethodDelete, "/skills/reviewer"},
+		{http.MethodGet, "/guardrails"},
+		{http.MethodPost, "/guardrails"},
+		{http.MethodGet, "/guardrails/security"},
+		{http.MethodPatch, "/guardrails/security"},
+		{http.MethodDelete, "/guardrails/security"},
+		{http.MethodPost, "/guardrails/security/reset"},
+		{http.MethodGet, "/backends"},
+		{http.MethodPost, "/backends"},
+		{http.MethodGet, "/backends/status"},
+		{http.MethodPost, "/backends/discover"},
+		{http.MethodPost, "/backends/local"},
+		{http.MethodGet, "/backends/claude"},
+		{http.MethodPatch, "/backends/claude"},
+		{http.MethodDelete, "/backends/claude"},
+		{http.MethodGet, "/repos"},
+		{http.MethodPost, "/repos"},
+		{http.MethodGet, "/repos/owner/repo"},
+		{http.MethodPatch, "/repos/owner/repo"},
+		{http.MethodDelete, "/repos/owner/repo"},
+		{http.MethodPost, "/repos/owner/repo/bindings"},
+		{http.MethodGet, "/repos/owner/repo/bindings/1"},
+		{http.MethodPatch, "/repos/owner/repo/bindings/1"},
+		{http.MethodDelete, "/repos/owner/repo/bindings/1"},
+		{http.MethodGet, "/config"},
+		{http.MethodGet, "/export"},
+		{http.MethodPost, "/import"},
+		{http.MethodGet, "/token_budgets"},
+		{http.MethodPost, "/token_budgets"},
+		{http.MethodGet, "/token_budgets/alerts"},
+		{http.MethodGet, "/token_budgets/1"},
+		{http.MethodPatch, "/token_budgets/1"},
+		{http.MethodDelete, "/token_budgets/1"},
+		{http.MethodGet, "/token_leaderboard"},
+		{http.MethodGet, "/events"},
+		{http.MethodGet, "/traces"},
+		{http.MethodGet, "/traces/root-1"},
+		{http.MethodGet, "/traces/span-1/steps"},
+		{http.MethodGet, "/traces/span-1/prompt"},
+		{http.MethodGet, "/graph"},
+		{http.MethodGet, "/dispatches"},
+		{http.MethodGet, "/memory/coder/owner_repo"},
+		{http.MethodGet, "/runners"},
+		{http.MethodDelete, "/runners/1"},
+		{http.MethodPost, "/runners/1/retry"},
+	}
+
+	for _, tc := range expected {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			if !router.Match(req, &mux.RouteMatch{}) {
+				t.Fatalf("route not registered")
+			}
+		})
+	}
 }
 
 // webhookRequest builds a signed POST request to /webhooks/github.
@@ -425,10 +510,10 @@ func TestHandleCommentAndReviewEventsEnqueue(t *testing.T) {
 func TestHandleNonTriggeringActionsIgnored(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name      string
-		eventType string
+		name       string
+		eventType  string
 		deliveryID string
-		body      string
+		body       string
 	}{
 		{
 			name:       "issue_comment non-created action ignored",
@@ -598,7 +683,6 @@ func TestHandleAgentsRunEnqueuesEvent(t *testing.T) {
 	}
 }
 
-
 func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -735,5 +819,3 @@ func TestBuildHandlerObservabilityRoutesAreOpen(t *testing.T) {
 		})
 	}
 }
-
-

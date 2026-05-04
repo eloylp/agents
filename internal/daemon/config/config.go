@@ -49,9 +49,12 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/config", withTimeout(http.HandlerFunc(h.HandleConfig))).Methods(http.MethodGet)
 	r.Handle("/export", withTimeout(http.HandlerFunc(h.HandleExport))).Methods(http.MethodGet)
 	r.Handle("/import", withTimeout(http.HandlerFunc(h.HandleImport))).Methods(http.MethodPost)
-	r.Handle("/token_budgets", withTimeout(http.HandlerFunc(h.handleTokenBudgets))).Methods(http.MethodGet, http.MethodPost)
+	r.Handle("/token_budgets", withTimeout(http.HandlerFunc(h.listTokenBudgets))).Methods(http.MethodGet)
+	r.Handle("/token_budgets", withTimeout(http.HandlerFunc(h.createTokenBudget))).Methods(http.MethodPost)
 	r.Handle("/token_budgets/alerts", withTimeout(http.HandlerFunc(h.handleTokenBudgetAlerts))).Methods(http.MethodGet)
-	r.Handle("/token_budgets/{id:[0-9]+}", withTimeout(http.HandlerFunc(h.handleTokenBudget))).Methods(http.MethodGet, http.MethodPatch, http.MethodDelete)
+	r.Handle("/token_budgets/{id:[0-9]+}", withTimeout(http.HandlerFunc(h.getTokenBudgetByID))).Methods(http.MethodGet)
+	r.Handle("/token_budgets/{id:[0-9]+}", withTimeout(http.HandlerFunc(h.updateTokenBudgetByID))).Methods(http.MethodPatch)
+	r.Handle("/token_budgets/{id:[0-9]+}", withTimeout(http.HandlerFunc(h.deleteTokenBudgetByID))).Methods(http.MethodDelete)
 	r.Handle("/token_leaderboard", withTimeout(http.HandlerFunc(h.handleTokenLeaderboard))).Methods(http.MethodGet)
 }
 
