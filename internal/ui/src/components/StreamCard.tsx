@@ -58,7 +58,19 @@ export function TranscriptFilter({
   const reset = () => onChange(new Set(presentKinds))
 
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '0.5rem', alignItems: 'center' }}>
+    <div style={{
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: '4px',
+      marginBottom: '0.5rem',
+      alignItems: 'center',
+      position: 'sticky',
+      top: 0,
+      zIndex: 1,
+      background: 'var(--bg-card)',
+      paddingBottom: '6px',
+      borderBottom: '1px solid var(--border-subtle)',
+    }}>
       {presentKinds.map(k => {
         const meta = kindMeta[k]
         const on = visibleKinds.has(k)
