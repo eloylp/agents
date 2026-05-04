@@ -958,7 +958,12 @@ export default function ConfigPage() {
         <Card style={{ borderTopLeftRadius: 0 }}>
           <div style={{ marginBottom: '2rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <h3 style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-heading)', margin: 0 }}>Token Leaderboard</h3>
+              <div>
+                <h3 style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-heading)', margin: 0 }}>Token Leaderboard</h3>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.76rem', marginTop: '0.25rem' }}>
+                  Average is total tokens per run, including input, output, cache reads, and cache writes.
+                </p>
+              </div>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                 <RepoFilter selected={lbRepo} onChange={setLbRepo} />
                 <select
@@ -984,7 +989,7 @@ export default function ConfigPage() {
                       <th style={{ padding: '4px 8px', fontWeight: 600 }}>#</th>
                       <th style={{ padding: '4px 8px', fontWeight: 600 }}>Agent</th>
                       <th style={{ padding: '4px 8px', fontWeight: 600, textAlign: 'right' }}>Runs</th>
-                      <th style={{ padding: '4px 8px', fontWeight: 600, textAlign: 'right' }}>Avg / run</th>
+                      <th title="Total tokens per run: input + output + cache reads + cache writes." style={{ padding: '4px 8px', fontWeight: 600, textAlign: 'right' }}>Avg total / run</th>
                       <th style={{ padding: '4px 8px', fontWeight: 600, textAlign: 'right' }}>Input</th>
                       <th style={{ padding: '4px 8px', fontWeight: 600, textAlign: 'right' }}>Output</th>
                       <th style={{ padding: '4px 8px', fontWeight: 600, textAlign: 'right' }}>Cache r/w</th>
@@ -997,7 +1002,7 @@ export default function ConfigPage() {
                         <td style={{ padding: '5px 8px', color: 'var(--text-faint)' }}>{i + 1}</td>
                         <td style={{ padding: '5px 8px', fontWeight: 600, color: 'var(--text-heading)' }}>{e.agent}</td>
                         <td style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--text-muted)' }}>{e.runs.toLocaleString()}</td>
-                        <td style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--accent)', fontWeight: 600 }}>{(e.avg_tokens_per_run ?? Math.floor(e.total / Math.max(e.runs, 1))).toLocaleString()}</td>
+                        <td title="Includes input, output, cache read, and cache write tokens." style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--accent)', fontWeight: 600 }}>{(e.avg_tokens_per_run ?? Math.floor(e.total / Math.max(e.runs, 1))).toLocaleString()}</td>
                         <td style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--text)' }}>{e.input_tokens.toLocaleString()}</td>
                         <td style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--text)' }}>{e.output_tokens.toLocaleString()}</td>
                         <td style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--text-muted)' }}>{(e.cache_read_tokens + e.cache_write_tokens).toLocaleString()}</td>
