@@ -36,6 +36,26 @@ interface OrphanedAgentsResponse {
   agents?: OrphanedAgent[]
 }
 
+interface TokenBudget {
+  id: number
+  scope_kind: string
+  scope_name: string
+  period: string
+  cap_tokens: number
+  alert_at_pct: number
+  enabled: boolean
+}
+
+interface LeaderboardEntry {
+  agent: string
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  total: number
+  runs: number
+}
+
 const orderedBackendNames = ['claude', 'codex']
 
 const normalizeModels = (models?: string[]) => (models ?? []).map(m => m.trim()).filter(Boolean).sort()
@@ -165,7 +185,7 @@ export default function ConfigPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [raw, setRaw] = useState(false)
-  const [tab, setTab] = useState<'inspector' | 'backends' | 'guardrails' | 'import-export'>('inspector')
+  const [tab, setTab] = useState<'inspector' | 'backends' | 'guardrails' | 'import-export' | 'tokens'>('inspector')
 
   const [backends, setBackends] = useState<Backend[]>([])
   const [backendsLoading, setBackendsLoading] = useState(false)
@@ -190,6 +210,19 @@ export default function ConfigPage() {
   const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  const [budgets, setBudgets] = useState<TokenBudget[]>([])
+  const [budgetsLoading, setBudgetsLoading] = useState(false)
+  const [budgetError, setBudgetError] = useState('')
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([])
+  const [lbLoading, setLbLoading] = useState(false)
+  const [lbPeriod, setLbPeriod] = useState('monthly')
+  const [lbRepo, setLbRepo] = useState('')
+  const [createBudgetOpen, setCreateBudgetOpen] = useState(false)
+  const [editBudget, setEditBudget] = useState<TokenBudget | null>(null)
+  const [deleteBudgetTarget, setDeleteBudgetTarget] = useState<TokenBudget | null>(null)
+  const [budgetSaving, setBudgetSaving] = useState(false)
+  const [budgetForm, setBudgetForm] = useState({ scope_kind: 'global', scope_name: '', period: 'daily', cap_tokens: 100000, alert_at_pct: 80, enabled: true })
+
   const sortBackends = (list: Backend[]) => {
     const rank = (name: string) => {
       const idx = orderedBackendNames.indexOf(name)
@@ -213,7 +246,7 @@ export default function ConfigPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const requestedTab = params.get('tab')
-    if (requestedTab === 'inspector' || requestedTab === 'backends' || requestedTab === 'import-export') {
+    if (requestedTab === 'inspector' || requestedTab === 'backends' || requestedTab === 'guardrails' || requestedTab === 'import-export' || requestedTab === 'tokens') {
       setTab(requestedTab)
     }
     setOrphanFocus(params.get('focus') === 'orphans')
@@ -473,6 +506,95 @@ export default function ConfigPage() {
     setImportStatus(`Imported: ${summary.agents} agents, ${summary.skills} skills, ${summary.repos} repos, ${summary.backends} backends, ${summary.guardrails ?? 0} guardrails.`)
   }
 
+  const loadBudgets = async () => {
+    setBudgetsLoading(true)
+    setBudgetError('')
+    try {
+      const res = await fetch('/token_budgets')
+      if (!res.ok) throw new Error((await res.text()) || 'Failed to load budgets')
+      const data = await res.json() as TokenBudget[] | null
+      setBudgets(data ?? [])
+    } catch (e) {
+      setBudgetError(String(e))
+    }
+    setBudgetsLoading(false)
+  }
+
+  const loadLeaderboard = async (period: string, repo: string) => {
+    setLbLoading(true)
+    try {
+      const params = new URLSearchParams({ period })
+      if (repo) params.set('repo', repo)
+      const res = await fetch(`/token_leaderboard?${params}`)
+      if (!res.ok) throw new Error((await res.text()) || 'Failed to load leaderboard')
+      const data = await res.json() as LeaderboardEntry[] | null
+      setLeaderboard(data ?? [])
+    } catch {
+      setLeaderboard([])
+    }
+    setLbLoading(false)
+  }
+
+  const saveBudget = async () => {
+    setBudgetSaving(true)
+    setBudgetError('')
+    try {
+      const body = JSON.stringify({
+        ...budgetForm,
+        cap_tokens: Number(budgetForm.cap_tokens),
+        alert_at_pct: Number(budgetForm.alert_at_pct),
+      })
+      let res: Response
+      if (editBudget) {
+        res = await fetch(`/token_budgets/${editBudget.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+        })
+      } else {
+        res = await fetch('/token_budgets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+        })
+      }
+      if (!res.ok) throw new Error((await res.text()) || 'Failed to save budget')
+      setCreateBudgetOpen(false)
+      setEditBudget(null)
+      setBudgetForm({ scope_kind: 'global', scope_name: '', period: 'daily', cap_tokens: 100000, alert_at_pct: 80, enabled: true })
+      await loadBudgets()
+    } catch (e) {
+      setBudgetError(String(e))
+    }
+    setBudgetSaving(false)
+  }
+
+  const deleteBudget = async () => {
+    if (!deleteBudgetTarget) return
+    setBudgetSaving(true)
+    setBudgetError('')
+    try {
+      const res = await fetch(`/token_budgets/${deleteBudgetTarget.id}`, { method: 'DELETE' })
+      if (!res.ok && res.status !== 204) throw new Error((await res.text()) || 'Failed to delete budget')
+      setDeleteBudgetTarget(null)
+      await loadBudgets()
+    } catch (e) {
+      setBudgetError(String(e))
+    }
+    setBudgetSaving(false)
+  }
+
+  useEffect(() => {
+    if (tab === 'tokens') {
+      loadBudgets()
+      loadLeaderboard(lbPeriod, lbRepo)
+    }
+  }, [tab])
+
+  useEffect(() => {
+    if (tab === 'tokens') loadLeaderboard(lbPeriod, lbRepo)
+  }, [lbPeriod, lbRepo])
+
   const tabStyle = (t: string): React.CSSProperties => ({
     padding: '6px 16px', borderRadius: '6px 6px 0 0', cursor: 'pointer', fontSize: '0.875rem',
     background: tab === t ? 'var(--bg-card)' : 'transparent',
@@ -503,6 +625,7 @@ export default function ConfigPage() {
         <button style={tabStyle('backends')} onClick={() => setTab('backends')}>Backends and tools</button>
         <button style={tabStyle('guardrails')} onClick={() => setTab('guardrails')}>Guardrails</button>
         <button style={tabStyle('import-export')} onClick={() => setTab('import-export')}>Import / Export</button>
+        <button style={tabStyle('tokens')} onClick={() => setTab('tokens')}>Token usage and limits</button>
       </div>
 
       {tab === 'inspector' && (
@@ -781,6 +904,135 @@ export default function ConfigPage() {
         </Card>
       )}
 
+      {tab === 'tokens' && (
+        <Card style={{ borderTopLeftRadius: 0 }}>
+          <div style={{ marginBottom: '2rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <h3 style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-heading)', margin: 0 }}>Token Leaderboard</h3>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <input
+                  style={{ ...inputStyle, width: '180px', fontSize: '0.8rem' }}
+                  placeholder="Filter by repo…"
+                  value={lbRepo}
+                  onChange={e => setLbRepo(e.target.value)}
+                />
+                <select
+                  style={{ ...inputStyle, width: '120px', fontSize: '0.8rem' }}
+                  value={lbPeriod}
+                  onChange={e => setLbPeriod(e.target.value)}
+                >
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </div>
+            </div>
+            {lbLoading ? (
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading…</p>
+            ) : leaderboard.length === 0 ? (
+              <p style={{ color: 'var(--text-faint)', fontSize: '0.85rem' }}>No token usage recorded for this period.</p>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)', textAlign: 'left' }}>
+                      <th style={{ padding: '4px 8px', fontWeight: 600 }}>#</th>
+                      <th style={{ padding: '4px 8px', fontWeight: 600 }}>Agent</th>
+                      <th style={{ padding: '4px 8px', fontWeight: 600, textAlign: 'right' }}>Runs</th>
+                      <th style={{ padding: '4px 8px', fontWeight: 600, textAlign: 'right' }}>Input</th>
+                      <th style={{ padding: '4px 8px', fontWeight: 600, textAlign: 'right' }}>Output</th>
+                      <th style={{ padding: '4px 8px', fontWeight: 600, textAlign: 'right' }}>Cache r/w</th>
+                      <th style={{ padding: '4px 8px', fontWeight: 600, textAlign: 'right' }}>Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {leaderboard.map((e, i) => (
+                      <tr key={e.agent} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                        <td style={{ padding: '5px 8px', color: 'var(--text-faint)' }}>{i + 1}</td>
+                        <td style={{ padding: '5px 8px', fontWeight: 600, color: 'var(--text-heading)' }}>{e.agent}</td>
+                        <td style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--text-muted)' }}>{e.runs.toLocaleString()}</td>
+                        <td style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--text)' }}>{e.input_tokens.toLocaleString()}</td>
+                        <td style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--text)' }}>{e.output_tokens.toLocaleString()}</td>
+                        <td style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--text-muted)' }}>{(e.cache_read_tokens + e.cache_write_tokens).toLocaleString()}</td>
+                        <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 700, color: 'var(--accent)' }}>{e.total.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '1.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <h3 style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-heading)', margin: 0 }}>Token Budgets</h3>
+              <button
+                onClick={() => {
+                  setBudgetError('')
+                  setBudgetForm({ scope_kind: 'global', scope_name: '', period: 'daily', cap_tokens: 100000, alert_at_pct: 80, enabled: true })
+                  setCreateBudgetOpen(true)
+                }}
+                style={{ padding: '5px 12px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+              >
+                + Add budget
+              </button>
+            </div>
+            <p style={{ color: 'var(--text-faint)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
+              Budgets enforce token caps per scope (global, backend, or agent) over a rolling period. When a cap is reached, new runs for that scope are blocked until the period resets.
+            </p>
+            {budgetsLoading ? (
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading…</p>
+            ) : budgets.length === 0 ? (
+              <p style={{ color: 'var(--text-faint)', fontSize: '0.85rem' }}>No token budgets configured. Add one to enforce token caps and receive alerts.</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {budgets.map(b => (
+                  <div key={b.id} style={{ border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '0.65rem 0.75rem', background: 'var(--bg)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-heading)' }}>
+                        {b.scope_kind === 'global' ? 'Global' : `${b.scope_kind}: ${b.scope_name}`}
+                        {' · '}
+                        <span style={{ color: 'var(--text-muted)' }}>{b.period}</span>
+                      </div>
+                      <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                        cap: {b.cap_tokens.toLocaleString()} tokens · alert at {b.alert_at_pct}%
+                        {!b.enabled && <span style={{ color: 'var(--text-danger)', marginLeft: '0.4rem' }}>(disabled)</span>}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.35rem' }}>
+                      <button
+                        onClick={() => {
+                          setBudgetError('')
+                          setBudgetForm({
+                            scope_kind: b.scope_kind,
+                            scope_name: b.scope_name,
+                            period: b.period,
+                            cap_tokens: b.cap_tokens,
+                            alert_at_pct: b.alert_at_pct,
+                            enabled: b.enabled,
+                          })
+                          setEditBudget(b)
+                        }}
+                        style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', cursor: 'pointer', fontSize: '0.76rem' }}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => { setBudgetError(''); setDeleteBudgetTarget(b) }}
+                        style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', color: 'var(--text-danger)', cursor: 'pointer', fontSize: '0.76rem' }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {budgetError && <p style={{ color: 'var(--text-danger)', fontSize: '0.85rem', marginTop: '0.75rem' }}>{budgetError}</p>}
+          </div>
+        </Card>
+      )}
+
       {localBackendModalOpen && (
         <Modal title="Add Local Backend" onClose={() => setLocalBackendModalOpen(false)}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
@@ -929,6 +1181,122 @@ export default function ConfigPage() {
               onClick={() => setErrorDialog(null)}
               style={{ padding: '6px 14px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', cursor: 'pointer', fontSize: '0.85rem' }}
             >Close</button>
+          </div>
+        </Modal>
+      )}
+
+      {(createBudgetOpen || !!editBudget) && (
+        <Modal
+          title={editBudget ? 'Edit Token Budget' : 'Add Token Budget'}
+          onClose={() => { setCreateBudgetOpen(false); setEditBudget(null) }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+            <div>
+              <label style={labelStyle}>Scope</label>
+              <select
+                style={inputStyle}
+                value={budgetForm.scope_kind}
+                onChange={e => setBudgetForm(f => ({ ...f, scope_kind: e.target.value, scope_name: e.target.value === 'global' ? '' : f.scope_name }))}
+              >
+                <option value="global">Global (all agents and backends)</option>
+                <option value="backend">Backend</option>
+                <option value="agent">Agent</option>
+              </select>
+            </div>
+            {budgetForm.scope_kind !== 'global' && (
+              <div>
+                <label style={labelStyle}>{budgetForm.scope_kind === 'backend' ? 'Backend name' : 'Agent name'}</label>
+                <input
+                  style={inputStyle}
+                  value={budgetForm.scope_name}
+                  onChange={e => setBudgetForm(f => ({ ...f, scope_name: e.target.value }))}
+                  placeholder={budgetForm.scope_kind === 'backend' ? 'claude' : 'coder'}
+                />
+              </div>
+            )}
+            <div>
+              <label style={labelStyle}>Period</label>
+              <select
+                style={inputStyle}
+                value={budgetForm.period}
+                onChange={e => setBudgetForm(f => ({ ...f, period: e.target.value }))}
+              >
+                <option value="daily">Daily (resets at midnight UTC)</option>
+                <option value="weekly">Weekly (rolling 7 days)</option>
+                <option value="monthly">Monthly (resets start of month UTC)</option>
+              </select>
+            </div>
+            <div>
+              <label style={labelStyle}>Cap (tokens)</label>
+              <input
+                style={inputStyle}
+                type="number"
+                min={1}
+                value={budgetForm.cap_tokens}
+                onChange={e => setBudgetForm(f => ({ ...f, cap_tokens: Number(e.target.value) }))}
+              />
+            </div>
+            <div>
+              <label style={labelStyle}>Alert threshold % (0 = no alerts)</label>
+              <input
+                style={inputStyle}
+                type="number"
+                min={0}
+                max={100}
+                value={budgetForm.alert_at_pct}
+                onChange={e => setBudgetForm(f => ({ ...f, alert_at_pct: Number(e.target.value) }))}
+              />
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', cursor: 'pointer', color: 'var(--text)' }}>
+              <input
+                type="checkbox"
+                checked={budgetForm.enabled}
+                onChange={e => setBudgetForm(f => ({ ...f, enabled: e.target.checked }))}
+              />
+              Enabled
+            </label>
+            {budgetError && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', margin: 0 }}>{budgetError}</p>}
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => { setCreateBudgetOpen(false); setEditBudget(null) }}
+                style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', cursor: 'pointer', fontSize: '0.875rem', color: 'var(--text-muted)' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveBudget}
+                disabled={budgetSaving}
+                style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: budgetSaving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+              >
+                {budgetSaving ? 'Saving…' : editBudget ? 'Update budget' : 'Add budget'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {deleteBudgetTarget && (
+        <Modal title="Delete Token Budget" onClose={() => setDeleteBudgetTarget(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+            <p style={{ color: 'var(--text)', fontSize: '0.9rem', margin: 0 }}>
+              Delete the {deleteBudgetTarget.scope_kind === 'global' ? 'global' : `${deleteBudgetTarget.scope_kind} “${deleteBudgetTarget.scope_name}”`} {deleteBudgetTarget.period} budget?
+            </p>
+            {budgetError && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', margin: 0 }}>{budgetError}</p>}
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setDeleteBudgetTarget(null)}
+                style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', cursor: 'pointer', fontSize: '0.875rem', color: 'var(--text-muted)' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={deleteBudget}
+                disabled={budgetSaving}
+                style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border-danger)', background: '#dc2626', color: '#fff', cursor: budgetSaving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+              >
+                {budgetSaving ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
           </div>
         </Modal>
       )}
