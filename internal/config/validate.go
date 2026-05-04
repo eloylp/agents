@@ -230,7 +230,7 @@ func (c *Config) validateRepos() error {
 			if !b.IsCron() && !b.IsLabel() && !b.IsEvent() {
 				return fmt.Errorf("config: repo %q: binding for agent %q has no trigger (set cron, labels, or events)", r.Name, b.Agent)
 			}
-			if countBindingTriggers(b) > 1 {
+			if b.TriggerCount() > 1 {
 				return fmt.Errorf("config: repo %q: binding for agent %q mixes multiple trigger types (labels, events, cron); each binding must use exactly one trigger", r.Name, b.Agent)
 			}
 			for _, kind := range b.Events {
@@ -242,21 +242,6 @@ func (c *Config) validateRepos() error {
 		}
 	}
 	return nil
-}
-
-// countBindingTriggers returns the number of trigger types (labels, events, cron) set on b.
-func countBindingTriggers(b fleet.Binding) int {
-	n := 0
-	if b.IsLabel() {
-		n++
-	}
-	if b.IsEvent() {
-		n++
-	}
-	if b.IsCron() {
-		n++
-	}
-	return n
 }
 
 func isSupportedBackend(name string, backend fleet.Backend) bool {

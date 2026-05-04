@@ -545,20 +545,11 @@ func validateBindingShape(b fleet.Binding) error {
 	if strings.TrimSpace(b.Agent) == "" {
 		return &ErrValidation{Msg: "agent is required"}
 	}
-	triggerCount := 0
-	if b.IsLabel() {
-		triggerCount++
-	}
-	if b.IsEvent() {
-		triggerCount++
-	}
-	if b.IsCron() {
-		triggerCount++
-	}
-	if triggerCount == 0 {
+	n := b.TriggerCount()
+	if n == 0 {
 		return &ErrValidation{Msg: "binding has no trigger (set cron, labels, or events)"}
 	}
-	if triggerCount > 1 {
+	if n > 1 {
 		return &ErrValidation{Msg: "binding mixes multiple trigger types (labels, events, cron); each binding must use exactly one trigger"}
 	}
 	if b.IsCron() {

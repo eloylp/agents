@@ -34,3 +34,20 @@ func (b Binding) IsLabel() bool { return len(b.Labels) > 0 }
 
 // IsEvent reports whether this binding is event-triggered (via the events: field).
 func (b Binding) IsEvent() bool { return len(b.Events) > 0 }
+
+// TriggerCount returns the number of trigger types (cron, labels, events) set
+// on this binding. Bindings must use exactly one trigger; callers use
+// TriggerCount to enforce that invariant without repeating the three IsX checks.
+func (b Binding) TriggerCount() int {
+	n := 0
+	if b.IsLabel() {
+		n++
+	}
+	if b.IsEvent() {
+		n++
+	}
+	if b.IsCron() {
+		n++
+	}
+	return n
+}
