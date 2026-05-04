@@ -76,6 +76,10 @@ export default function RunnersPage() {
   )
 }
 
+// LiveStreamEntry is one parsed event from the stream, either a known
+// shape (claude/codex) or a raw fallback. The UI renders each entry as
+// a card; unknown shapes still show as collapsible JSON so nothing is
+// lost.
 function LiveStreamModal({ span, onClose }: { span: { id: string; agent: string; repo: string; kind: string }; onClose: () => void }) {
   const [entries, setEntries] = useState<StreamCardEntry[]>([])
   const [status, setStatus] = useState<'connecting' | 'live' | 'ended' | 'error'>('connecting')
@@ -96,6 +100,8 @@ function LiveStreamModal({ span, onClose }: { span: { id: string; agent: string;
       es.close()
     })
     es.onerror = () => {
+      // EventSource auto-retries on transient failures; only surface the
+      // error state when the connection genuinely fails to establish.
       if (es.readyState === EventSource.CLOSED) setStatus('error')
     }
     return () => es.close()
@@ -250,6 +256,11 @@ function RunnersInner() {
     return () => window.clearInterval(id)
   }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Trigger highlight pulse when arriving with ?event=X. Wait until
+  // the first batch of rows lands, otherwise the animation runs while
+  // the page still shows "Loading..." and the user never sees it. Once
+  // we've kicked it off for a given focus, don't re-fire on every
+  // subsequent poll (rows.length stays > 0).
   const [highlighted, setHighlighted] = useState(false)
   useEffect(() => {
     if (!focusEvent) {
@@ -271,6 +282,9 @@ function RunnersInner() {
     return result
   }, [rows, focusEvent, repoParam])
 
+  // Native browser confirm()/alert() are jarring against the dashboard
+  // styling, plus they block the JS event loop. Drive every confirm /
+  // failure surface through a single Modal-state machine instead.
   type DialogState =
     | null
     | { kind: 'confirm-delete'; id: number }
