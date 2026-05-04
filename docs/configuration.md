@@ -55,6 +55,28 @@ daemon:
 
 > **Backend launch args are daemon-managed.** The arguments passed to `claude` and `codex` are hardcoded by the daemon (`-p --dangerously-skip-permissions --output-format stream-json --json-schema <embedded>` for Claude, `exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --output-schema <embedded>` for Codex). The JSONL/stream-json output is what lets the daemon reconstruct the tool-loop transcript on `trace_steps`. The YAML schema does not expose these args; the only backend fields you can change at runtime are `timeout_seconds`, `max_prompt_chars`, and (for local backends) `local_model_url`.
 
+Daemon runtime settings can also be overridden at startup with environment variables. Empty variables are ignored, so defaults and YAML values continue to apply unless an operator explicitly sets a value. These settings are startup-only; changing them still requires restarting the daemon.
+
+| Env var | YAML field |
+|---|---|
+| `AGENTS_LOG_LEVEL` | `daemon.log.level` |
+| `AGENTS_LOG_FORMAT` | `daemon.log.format` |
+| `AGENTS_HTTP_LISTEN_ADDR` | `daemon.http.listen_addr` |
+| `AGENTS_HTTP_STATUS_PATH` | `daemon.http.status_path` |
+| `AGENTS_HTTP_WEBHOOK_PATH` | `daemon.http.webhook_path` |
+| `AGENTS_HTTP_WEBHOOK_SECRET_ENV` | `daemon.http.webhook_secret_env` |
+| `AGENTS_HTTP_READ_TIMEOUT_SECONDS` | `daemon.http.read_timeout_seconds` |
+| `AGENTS_HTTP_WRITE_TIMEOUT_SECONDS` | `daemon.http.write_timeout_seconds` |
+| `AGENTS_HTTP_IDLE_TIMEOUT_SECONDS` | `daemon.http.idle_timeout_seconds` |
+| `AGENTS_HTTP_MAX_BODY_BYTES` | `daemon.http.max_body_bytes` |
+| `AGENTS_HTTP_DELIVERY_TTL_SECONDS` | `daemon.http.delivery_ttl_seconds` |
+| `AGENTS_HTTP_SHUTDOWN_TIMEOUT_SECONDS` | `daemon.http.shutdown_timeout_seconds` |
+| `AGENTS_PROCESSOR_EVENT_QUEUE_BUFFER` | `daemon.processor.event_queue_buffer` |
+| `AGENTS_PROCESSOR_MAX_CONCURRENT_AGENTS` | `daemon.processor.max_concurrent_agents` |
+| `AGENTS_DISPATCH_MAX_DEPTH` | `daemon.processor.dispatch.max_depth` |
+| `AGENTS_DISPATCH_MAX_FANOUT` | `daemon.processor.dispatch.max_fanout` |
+| `AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS` | `daemon.processor.dispatch.dedup_window_seconds` |
+
 ## `skills`
 
 ```yaml

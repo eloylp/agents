@@ -120,6 +120,9 @@ type DispatchConfig struct {
 // the time FinishLoad runs.
 func FinishLoad(cfg *Config) (*Config, error) {
 	cfg.applyDefaults()
+	if err := cfg.applyEnvOverrides(); err != nil {
+		return nil, err
+	}
 	cfg.normalize()
 	cfg.resolveSecrets()
 	if err := cfg.validate(); err != nil {

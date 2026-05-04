@@ -19,6 +19,8 @@
 # ──────────────────────────────────────────────
 # daemon, how the service runs
 # ──────────────────────────────────────────────
+# Daemon runtime fields below can be overridden at startup with AGENTS_* env
+# vars (for example AGENTS_HTTP_LISTEN_ADDR=:9090). Empty env vars are ignored.
 daemon:
   log:
     level: info

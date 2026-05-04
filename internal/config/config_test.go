@@ -1,12 +1,13 @@
 package config
 
 import (
-	"github.com/eloylp/agents/internal/fleet"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // minimalYAML returns a complete valid config with the given repo override.
@@ -73,6 +74,95 @@ func TestLoadMinimalConfig(t *testing.T) {
 	}
 	if cfg.Agents[0].Prompt != "You review PRs." {
 		t.Errorf("agent prompt not preserved: got %q", cfg.Agents[0].Prompt)
+	}
+}
+
+func TestLoadAppliesDaemonEnvOverrides(t *testing.T) {
+	t.Setenv("OVERRIDE_SECRET", "from-override")
+	t.Setenv("AGENTS_LOG_LEVEL", "debug")
+	t.Setenv("AGENTS_LOG_FORMAT", "json")
+	t.Setenv("AGENTS_HTTP_LISTEN_ADDR", "127.0.0.1:9090")
+	t.Setenv("AGENTS_HTTP_STATUS_PATH", "/healthz")
+	t.Setenv("AGENTS_HTTP_WEBHOOK_PATH", "/hooks/github")
+	t.Setenv("AGENTS_HTTP_WEBHOOK_SECRET_ENV", "OVERRIDE_SECRET")
+	t.Setenv("AGENTS_HTTP_READ_TIMEOUT_SECONDS", "21")
+	t.Setenv("AGENTS_HTTP_WRITE_TIMEOUT_SECONDS", "22")
+	t.Setenv("AGENTS_HTTP_IDLE_TIMEOUT_SECONDS", "23")
+	t.Setenv("AGENTS_HTTP_MAX_BODY_BYTES", "2048")
+	t.Setenv("AGENTS_HTTP_DELIVERY_TTL_SECONDS", "24")
+	t.Setenv("AGENTS_HTTP_SHUTDOWN_TIMEOUT_SECONDS", "25")
+	t.Setenv("AGENTS_PROCESSOR_EVENT_QUEUE_BUFFER", "26")
+	t.Setenv("AGENTS_PROCESSOR_MAX_CONCURRENT_AGENTS", "27")
+	t.Setenv("AGENTS_DISPATCH_MAX_DEPTH", "28")
+	t.Setenv("AGENTS_DISPATCH_MAX_FANOUT", "29")
+	t.Setenv("AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS", "30")
+	path := writeConfig(t, minimalYAML(""))
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Daemon.Log.Level != "debug" || cfg.Daemon.Log.Format != "json" {
+		t.Fatalf("log overrides = %+v, want debug/json", cfg.Daemon.Log)
+	}
+	if got := cfg.Daemon.HTTP.ListenAddr; got != "127.0.0.1:9090" {
+		t.Fatalf("listen addr = %q, want env override", got)
+	}
+	if got := cfg.Daemon.HTTP.StatusPath; got != "/healthz" {
+		t.Fatalf("status path = %q, want env override", got)
+	}
+	if got := cfg.Daemon.HTTP.WebhookPath; got != "/hooks/github" {
+		t.Fatalf("webhook path = %q, want env override", got)
+	}
+	if got := cfg.Daemon.HTTP.WebhookSecretEnv; got != "OVERRIDE_SECRET" {
+		t.Fatalf("webhook secret env = %q, want override", got)
+	}
+	if got := cfg.Daemon.HTTP.WebhookSecret; got != "from-override" {
+		t.Fatalf("webhook secret = %q, want value from override env", got)
+	}
+	if h := cfg.Daemon.HTTP; h.ReadTimeoutSeconds != 21 ||
+		h.WriteTimeoutSeconds != 22 ||
+		h.IdleTimeoutSeconds != 23 ||
+		h.MaxBodyBytes != 2048 ||
+		h.DeliveryTTLSeconds != 24 ||
+		h.ShutdownTimeoutSeconds != 25 {
+		t.Fatalf("http overrides = %+v", h)
+	}
+	if p := cfg.Daemon.Processor; p.EventQueueBuffer != 26 ||
+		p.MaxConcurrentAgents != 27 ||
+		p.Dispatch.MaxDepth != 28 ||
+		p.Dispatch.MaxFanout != 29 ||
+		p.Dispatch.DedupWindowSeconds != 30 {
+		t.Fatalf("processor overrides = %+v", p)
+	}
+}
+
+func TestLoadRejectsInvalidDaemonEnvOverride(t *testing.T) {
+	t.Setenv("TEST_SECRET", "s3cret")
+	t.Setenv("AGENTS_HTTP_READ_TIMEOUT_SECONDS", "not-a-number")
+	path := writeConfig(t, minimalYAML(""))
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load got nil error, want invalid env error")
+	}
+	if !strings.Contains(err.Error(), "AGENTS_HTTP_READ_TIMEOUT_SECONDS") {
+		t.Fatalf("error = %q, want env var name", err)
+	}
+}
+
+func TestLoadRejectsInvalidDaemonPathEnvOverride(t *testing.T) {
+	t.Setenv("TEST_SECRET", "s3cret")
+	t.Setenv("AGENTS_HTTP_STATUS_PATH", "healthz")
+	path := writeConfig(t, minimalYAML(""))
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load got nil error, want invalid path env error")
+	}
+	if !strings.Contains(err.Error(), "AGENTS_HTTP_STATUS_PATH") {
+		t.Fatalf("error = %q, want env var name", err)
 	}
 }
 
