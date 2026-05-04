@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -219,13 +220,12 @@ func (h *Handler) handleAgent(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("read agents: %v", err), http.StatusInternalServerError)
 			return
 		}
-		for _, a := range agents {
-			if a.Name == name {
-				writeJSON(w, http.StatusOK, agentToStoreJSON(a))
-				return
-			}
+		idx := slices.IndexFunc(agents, func(a fleet.Agent) bool { return a.Name == name })
+		if idx < 0 {
+			http.NotFound(w, r)
+			return
 		}
-		http.NotFound(w, r)
+		writeJSON(w, http.StatusOK, agentToStoreJSON(agents[idx]))
 
 	case http.MethodPatch:
 		h.handleAgentPatch(w, r, name)
@@ -286,17 +286,11 @@ func (h *Handler) updateAgent(name string, patch AgentPatch) (fleet.Agent, error
 	if err != nil {
 		return fleet.Agent{}, err
 	}
-	var existing *fleet.Agent
-	for i := range agents {
-		if agents[i].Name == normalized {
-			existing = &agents[i]
-			break
-		}
-	}
-	if existing == nil {
+	idx := slices.IndexFunc(agents, func(a fleet.Agent) bool { return a.Name == normalized })
+	if idx < 0 {
 		return fleet.Agent{}, &store.ErrNotFound{Msg: fmt.Sprintf("agent %q not found", normalized)}
 	}
-	merged := *existing
+	merged := agents[idx]
 	patch.apply(&merged)
 	if err := h.store.UpsertAgent(merged); err != nil {
 		return fleet.Agent{}, err
@@ -463,7 +457,7 @@ func (h *Handler) DeleteSkill(name string) error {
 // ── Backend wire types ───────────────────────────────────────────────────────
 
 type storeBackendJSON struct {
-	Name             string   `json:"name"`
+	Name           string   `json:"name"`
 	Command        string   `json:"command"`
 	Version        string   `json:"version,omitempty"`
 	Models         []string `json:"models,omitempty"`
