@@ -52,7 +52,7 @@ Backend discovery status, including per-backend GitHub MCP connectivity. Manage 
 
 ### Guardrails
 
-Tab inside the Config page. Lists every prompt guardrail prepended to every agent's composed prompt at render time, with built-in / disabled / position badges. Click a row to edit name, description, content (markdown editor with **⛶ Expand** affordance), enabled toggle, and position. **Reset to default** restores a built-in's seeded text. **Delete** asks for double confirmation, with a stronger warning when the row is built-in. Disabling the shipped 'security' guardrail surfaces an extra-stern confirm modal explaining what protection is removed. The shipped daemon arrives with one built-in guardrail (`security`) seeded by migration 010; operators can add code-style, deployment-policy, or any other policy block on top.
+Tab inside the Config page. Lists every prompt guardrail prepended to every agent's composed prompt at render time, with built-in / disabled / position badges. Click a row to edit name, description, content (markdown editor with **⛶ Expand** affordance), enabled toggle, and position. **Reset to default** restores a built-in's seeded text. **Delete** asks for double confirmation, with a stronger warning when the row is built-in. Disabling the shipped 'security' guardrail surfaces an extra-stern confirm modal explaining what protection is removed. The shipped daemon arrives with built-in guardrails for security, public-action discretion, daemon-only memory scope, and GitHub MCP tool usage; operators can add code-style, deployment-policy, or any other policy block on top.
 
 ### Repos
 
