@@ -7,6 +7,7 @@ import Link from 'next/link'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 import { StreamCard, TranscriptFilter, allStreamCardKinds, stepToCardEntries, type PersistedStep, type StreamCardKind } from '@/components/StreamCard'
 import { fmtDuration } from '@/lib/format'
+import { openAuthenticatedSSE } from '@/lib/sse'
 
 type TraceStep = PersistedStep
 
@@ -388,16 +389,17 @@ function TracesContent() {
 
   useEffect(() => {
     load()
-    const es = new EventSource('/traces/stream')
-    setStreaming(true)
-    es.onmessage = (e) => {
-      try {
-        const sp: Span = JSON.parse(e.data)
-        setSpans(prev => [...prev.slice(-199), sp])
-      } catch { /* ignore */ }
-    }
-    es.onerror = () => setStreaming(false)
-    return () => es.close()
+    const stream = openAuthenticatedSSE('/traces/stream', {
+      onOpen: () => setStreaming(true),
+      onMessage: data => {
+        try {
+          const sp: Span = JSON.parse(data)
+          setSpans(prev => [...prev.slice(-199), sp])
+        } catch { /* ignore */ }
+      },
+      onError: () => setStreaming(false),
+    })
+    return () => stream.close()
   }, [])
 
   const handleSelect = (id: string) => {
