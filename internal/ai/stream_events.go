@@ -79,10 +79,10 @@ func rawStreamLine(line []byte) []StreamEvent {
 	return []StreamEvent{{Kind: StreamKindRaw, Raw: string(line)}}
 }
 
-// ── Claude (stream-json) ─────────────────────────────────────────────────────
+// -- Claude (stream-json) -----------------------------------------------------
 
 type claudeStreamParser struct {
-	pending map[string]claudeStreamPending // tool_use_id → pending
+	pending map[string]claudeStreamPending // tool_use_id -> pending
 }
 
 type claudeStreamPending struct {
@@ -95,7 +95,7 @@ type claudeStreamPending struct {
 func (p *claudeStreamParser) process(line []byte) []StreamEvent {
 	trimmed := bytes.TrimSpace(line)
 	if len(trimmed) == 0 || trimmed[0] != '{' {
-		return nil
+		return rawStreamLine(line)
 	}
 
 	type contentBlock struct {
@@ -117,7 +117,7 @@ func (p *claudeStreamParser) process(line []byte) []StreamEvent {
 
 	var ev streamLine
 	if err := json.Unmarshal(trimmed, &ev); err != nil {
-		return nil
+		return rawStreamLine(line)
 	}
 
 	now := time.Now()
@@ -168,6 +168,9 @@ func (p *claudeStreamParser) process(line []byte) []StreamEvent {
 			out = append(out, StreamEvent{Kind: StreamKindUsage, Usage: &u})
 		}
 	}
+	if len(out) == 0 {
+		return rawStreamLine(line)
+	}
 	return out
 }
 
@@ -178,9 +181,9 @@ func parseClaudeUsage(raw json.RawMessage) (StreamEventUsage, bool) {
 		return StreamEventUsage{}, false
 	}
 	var u struct {
-		InputTokens             int64 `json:"input_tokens"`
-		OutputTokens            int64 `json:"output_tokens"`
-		CacheReadInputTokens    int64 `json:"cache_read_input_tokens"`
+		InputTokens              int64 `json:"input_tokens"`
+		OutputTokens             int64 `json:"output_tokens"`
+		CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
 		CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 	}
 	if err := json.Unmarshal(raw, &u); err != nil {
@@ -197,10 +200,10 @@ func parseClaudeUsage(raw json.RawMessage) (StreamEventUsage, bool) {
 	}, true
 }
 
-// ── Codex (--json) ───────────────────────────────────────────────────────────
+// -- Codex (--json) -----------------------------------------------------------
 
 type codexStreamParser struct {
-	started map[string]codexStreamStarted // item.id → started
+	started map[string]codexStreamStarted // item.id -> started
 }
 
 type codexStreamStarted struct {
@@ -210,7 +213,7 @@ type codexStreamStarted struct {
 func (p *codexStreamParser) process(line []byte) []StreamEvent {
 	trimmed := bytes.TrimSpace(line)
 	if len(trimmed) == 0 || trimmed[0] != '{' {
-		return nil
+		return rawStreamLine(line)
 	}
 
 	type item struct {
@@ -235,11 +238,12 @@ func (p *codexStreamParser) process(line []byte) []StreamEvent {
 
 	var ev streamLine
 	if err := json.Unmarshal(trimmed, &ev); err != nil {
-		return nil
+		return rawStreamLine(line)
 	}
 
 	now := time.Now()
 	var out []StreamEvent
+	suppressNoop := false
 	switch ev.Type {
 	case "item.started":
 		if ev.Item.ID != "" {
@@ -250,10 +254,11 @@ func (p *codexStreamParser) process(line []byte) []StreamEvent {
 			out = append(out, StreamEvent{Kind: StreamKindToolUse, Tool: "bash", Input: ev.Item.Command})
 		case "agent_message":
 			// noise, agent_message becomes thinking on completion
+			suppressNoop = true
 		default:
 			tool, server := codexToolIdentity(ev.Item.Tool, ev.Item.Name, ev.Item.Server)
 			if tool == "" {
-				return nil
+				return rawStreamLine(line)
 			}
 			out = append(out, StreamEvent{
 				Kind:   StreamKindToolUse,
@@ -272,6 +277,7 @@ func (p *codexStreamParser) process(line []byte) []StreamEvent {
 		case "agent_message":
 			text := strings.TrimSpace(ev.Item.Text)
 			if text == "" {
+				suppressNoop = true
 				return nil
 			}
 			out = append(out, StreamEvent{Kind: StreamKindThinking, Text: text})
@@ -285,7 +291,7 @@ func (p *codexStreamParser) process(line []byte) []StreamEvent {
 		default:
 			tool, server := codexToolIdentity(ev.Item.Tool, ev.Item.Name, ev.Item.Server)
 			if tool == "" {
-				return nil
+				return rawStreamLine(line)
 			}
 			out = append(out, StreamEvent{
 				Kind:       StreamKindToolResult,
@@ -300,6 +306,12 @@ func (p *codexStreamParser) process(line []byte) []StreamEvent {
 		if u, ok := parseCodexUsage(ev.Usage); ok {
 			out = append(out, StreamEvent{Kind: StreamKindUsage, Usage: &u})
 		}
+	}
+	if suppressNoop {
+		return nil
+	}
+	if len(out) == 0 {
+		return rawStreamLine(line)
 	}
 	return out
 }
@@ -346,9 +358,9 @@ func parseCodexUsage(raw json.RawMessage) (StreamEventUsage, bool) {
 		return StreamEventUsage{}, false
 	}
 	var u struct {
-		InputTokens        int64 `json:"input_tokens"`
-		OutputTokens       int64 `json:"output_tokens"`
-		CachedInputTokens  int64 `json:"cached_input_tokens"`
+		InputTokens       int64 `json:"input_tokens"`
+		OutputTokens      int64 `json:"output_tokens"`
+		CachedInputTokens int64 `json:"cached_input_tokens"`
 	}
 	if err := json.Unmarshal(raw, &u); err != nil {
 		return StreamEventUsage{}, false

@@ -55,12 +55,12 @@ func TestClaudeStreamParserToolUsePairing(t *testing.T) {
 	}
 }
 
-func TestClaudeStreamParserOrphanToolResultIgnored(t *testing.T) {
+func TestClaudeStreamParserOrphanToolResultFallsBackToRaw(t *testing.T) {
 	t.Parallel()
 	parse := NewStreamLineParser("claude")
 	got := parse([]byte(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"unknown","content":"x"}]}}`))
-	if got != nil {
-		t.Errorf("orphan tool_result should yield no events, got %+v", got)
+	if len(got) != 1 || got[0].Kind != StreamKindRaw {
+		t.Errorf("orphan tool_result should yield a raw event, got %+v", got)
 	}
 }
 
@@ -89,12 +89,23 @@ func TestClaudeStreamParserResultEmitsUsage(t *testing.T) {
 	}
 }
 
-func TestClaudeStreamParserSkipsNonJSONLines(t *testing.T) {
+func TestClaudeStreamParserSkipsBlankLines(t *testing.T) {
 	t.Parallel()
 	parse := NewStreamLineParser("claude")
-	for _, line := range [][]byte{nil, []byte(""), []byte("   "), []byte("not json"), []byte(`{"type":"unknown"}`)} {
+	for _, line := range [][]byte{nil, []byte(""), []byte("   ")} {
 		if got := parse(line); got != nil {
 			t.Errorf("line %q: want no events, got %+v", line, got)
+		}
+	}
+}
+
+func TestClaudeStreamParserUnclassifiedLinesFallBackToRaw(t *testing.T) {
+	t.Parallel()
+	parse := NewStreamLineParser("claude")
+	for _, line := range [][]byte{[]byte("not json"), []byte(`{"type":"unknown"}`)} {
+		got := parse(line)
+		if len(got) != 1 || got[0].Kind != StreamKindRaw {
+			t.Errorf("line %q: want one raw event, got %+v", line, got)
 		}
 	}
 }
@@ -211,5 +222,16 @@ func TestCodexStreamParserDurationsBetweenStartAndComplete(t *testing.T) {
 	got := parse([]byte(`{"type":"item.completed","item":{"id":"d","type":"command_execution","aggregated_output":""}}`))
 	if len(got) != 1 || got[0].DurationMs < 0 {
 		t.Fatalf("duration must be non-negative when start was observed, got %+v", got)
+	}
+}
+
+func TestCodexStreamParserUnclassifiedLinesFallBackToRaw(t *testing.T) {
+	t.Parallel()
+	parse := NewStreamLineParser("codex")
+	for _, line := range [][]byte{[]byte("not json"), []byte(`{"type":"thread.started"}`), []byte(`{"type":"item.started","item":{"id":"x","type":"future_tool"}}`)} {
+		got := parse(line)
+		if len(got) != 1 || got[0].Kind != StreamKindRaw {
+			t.Errorf("line %q: want one raw event, got %+v", line, got)
+		}
 	}
 }
