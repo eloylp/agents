@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -423,12 +424,11 @@ func TestImportLoad(t *testing.T) {
 	if len(out.Agents) != 2 {
 		t.Fatalf("agents: got %d, want 2", len(out.Agents))
 	}
-	var coder fleet.Agent
-	for _, a := range out.Agents {
-		if a.Name == "coder" {
-			coder = a
-		}
+	idx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.Name == "coder" })
+	if idx < 0 {
+		t.Fatal("coder agent not found after load")
 	}
+	coder := out.Agents[idx]
 	if !coder.AllowPRs {
 		t.Error("coder.allow_prs: want true")
 	}
