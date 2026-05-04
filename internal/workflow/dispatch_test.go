@@ -18,7 +18,7 @@ import (
 	"github.com/eloylp/agents/internal/store"
 )
 
-// ─── helpers ────────────────────────────────────────────────────────────────────────────────────
+// ─── helpers ─────────────────────────────────────────────────────────────────────
 
 type fakeQueue struct {
 	mu     sync.Mutex
@@ -135,7 +135,7 @@ func testEvent(repo string, number int) Event {
 	}
 }
 
-// ─── Dispatcher tests ───────────────────────────────────────────────────────────────────────────────────────────────
+// ─── Dispatcher tests ──────────────────────────────────────────────────────────────────────────────────
 
 func TestDispatcherEnqueuesValidRequest(t *testing.T) {
 	t.Parallel()
@@ -336,7 +336,7 @@ func TestDispatcherDeduplicatesWithinWindow(t *testing.T) {
 	}
 }
 
-// ─── DispatchDedupStore tests ─────────────────────────────────────────────────────────────────────────────────────────
+// ─── DispatchDedupStore tests ──────────────────────────────────────────────────────────────────────────────
 
 func TestDispatchDedupStoreSeenOrAdd(t *testing.T) {
 	t.Parallel()
@@ -389,7 +389,7 @@ func TestDispatchDedupStoreBackgroundEviction(t *testing.T) {
 	}
 }
 
-// ─── Engine dispatch handling tests ───────────────────────────────────────────────────────────────────────────────────────────────────
+// ─── Engine dispatch handling tests ───────────────────────────────────────────────────────────────────────────────────────
 
 func TestEngineHandlesAgentDispatchEvent(t *testing.T) {
 	t.Parallel()
@@ -633,7 +633,7 @@ func TestDispatchClaimOnlyVisibleAfterSuccessfulEnqueue(t *testing.T) {
 // test for the cron-first dedup ordering: when an autonomous run starts and
 // TryMarkAutonomousRun writes a cron-namespace mark, dispatches targeting the
 // same agent/repo with number=0 (autonomous context) must be suppressed for
-// the full dedup_window_seconds — both while the run is in-flight and after
+// the full dedup_window_seconds, both while the run is in-flight and after
 // it completes.
 func TestMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.T) {
 	t.Parallel()
@@ -679,8 +679,8 @@ func TestMarkAutonomousRunDoesNotSuppressDispatchForDifferentNumber(t *testing.T
 	// Cron run marks (coder, owner/repo, 0).
 	d.TryMarkAutonomousRun("coder", "owner/repo", time.Now())
 
-	// A dispatch targeting coder for PR #42 (number=42) must still be enqueued
-	// — it is a different item context from the autonomous cron run (number=0).
+	// A dispatch targeting coder for PR #42 (number=42) must still be enqueued;
+	// it is a different item context from the autonomous cron run (number=0).
 	originator := originatorAgent("pr-reviewer")
 	ev := testEvent("owner/repo", 42)
 	d.ProcessDispatches(context.Background(), originator, ev, "root-pr42", 0, "", []ai.DispatchRequest{
@@ -714,7 +714,7 @@ func TestPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 		t.Fatal("TryMarkAutonomousRun: expected to succeed on first call (no prior dispatch)")
 	}
 
-	// Dispatch arriving after the run — still within the TTL window — must be suppressed.
+	// Dispatch arriving after the run, still within the TTL window, must be suppressed.
 	originator := agents["pr-reviewer"]
 	ev := Event{Repo: RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "cron", Number: 0}
 	d.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
@@ -909,7 +909,7 @@ func TestFinalizeAutonomousRunKeepsTTLBlocksDispatchWithinWindow(t *testing.T) {
 	d1.FinalizeAutonomousRun("coder", "owner/repo")
 
 	// Within the TTL window, a dispatch to the same (agent, repo, 0) slot must
-	// still be suppressed — the entry is kept for the full dedup window.
+	// still be suppressed: the entry is kept for the full dedup window.
 	q2 := &fakeQueue{}
 	d2 := NewDispatcher(cfg, seedAgentMap(t, agents), dedup, q2, zerolog.Nop())
 	d2.ProcessDispatches(context.Background(), originator, ev, "root-post-run", 0, "", []ai.DispatchRequest{
