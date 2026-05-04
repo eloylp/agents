@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -839,9 +840,7 @@ func (s *stubLastRunRecorder) RecordLastRun(agent, repo string, _ time.Time, sta
 func (s *stubLastRunRecorder) snapshot() []struct{ agent, repo, status string } {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]struct{ agent, repo, status string }, len(s.calls))
-	copy(out, s.calls)
-	return out
+	return slices.Clone(s.calls)
 }
 
 // autonomousEvent builds an Event for a cron-fired autonomous run, matching
