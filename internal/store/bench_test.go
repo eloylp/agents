@@ -36,7 +36,7 @@ func benchSeed(b *testing.B, fs fixtureSize) string {
 		b.Fatalf("backends > %d", len(backendNames))
 	}
 	backends := map[string]fleet.Backend{}
-	for i := 0; i < fs.backends; i++ {
+	for i := range fs.backends {
 		name := backendNames[i]
 		bk := fleet.Backend{
 			Command: name, TimeoutSeconds: 600, MaxPromptChars: 12000,
@@ -49,11 +49,11 @@ func benchSeed(b *testing.B, fs fixtureSize) string {
 	}
 	primaryBackend := backendNames[0]
 	skills := map[string]fleet.Skill{}
-	for i := 0; i < fs.skills; i++ {
+	for i := range fs.skills {
 		skills["skill-"+strconv.Itoa(i)] = fleet.Skill{Prompt: "guidance number " + strconv.Itoa(i)}
 	}
 	agents := make([]fleet.Agent, 0, fs.agents)
-	for i := 0; i < fs.agents; i++ {
+	for i := range fs.agents {
 		name := "agent-" + strconv.Itoa(i)
 		agents = append(agents, fleet.Agent{
 			Name: name, Backend: primaryBackend, Prompt: "do work " + strconv.Itoa(i),
@@ -61,10 +61,10 @@ func benchSeed(b *testing.B, fs fixtureSize) string {
 		})
 	}
 	repos := make([]fleet.Repo, 0, fs.repos)
-	for i := 0; i < fs.repos; i++ {
+	for i := range fs.repos {
 		repoName := "owner/repo-" + strconv.Itoa(i)
 		bindings := make([]fleet.Binding, 0, fs.bindings)
-		for j := 0; j < fs.bindings; j++ {
+		for j := range fs.bindings {
 			bindings = append(bindings, fleet.Binding{
 				Agent:  "agent-" + strconv.Itoa((i+j)%fs.agents),
 				Labels: []string{"ai:label-" + strconv.Itoa(j)},
@@ -100,7 +100,7 @@ func BenchmarkReadSnapshot(b *testing.B) {
 			defer db.Close()
 
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for range b.N {
 				if _, _, _, _, err := store.ReadSnapshot(db); err != nil {
 					b.Fatalf("ReadSnapshot: %v", err)
 				}
@@ -149,7 +149,7 @@ func BenchmarkPointerRead(b *testing.B) {
 	x := 42
 	p.Store(&x)
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_ = p.Load()
 	}
 }
