@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,7 +18,7 @@ import (
 	"github.com/eloylp/agents/internal/store"
 )
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// ─── helpers ─────────────────────────────────────────────────────────────────────────────
 
 type fakeQueue struct {
 	mu     sync.Mutex
@@ -39,9 +40,7 @@ func (q *fakeQueue) PushEvent(_ context.Context, ev Event) (int64, error) {
 func (q *fakeQueue) popped() []Event {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	out := make([]Event, len(q.events))
-	copy(out, q.events)
-	return out
+	return slices.Clone(q.events)
 }
 
 func testDispatchCfg() config.DispatchConfig {
@@ -136,7 +135,7 @@ func testEvent(repo string, number int) Event {
 	}
 }
 
-// ─── Dispatcher tests ─────────────────────────────────────────────────────────
+// ─── Dispatcher tests ───────────────────────────────────────────────────────────────────────────────
 
 func TestDispatcherEnqueuesValidRequest(t *testing.T) {
 	t.Parallel()
@@ -337,7 +336,7 @@ func TestDispatcherDeduplicatesWithinWindow(t *testing.T) {
 	}
 }
 
-// ─── DispatchDedupStore tests ─────────────────────────────────────────────────
+// ─── DispatchDedupStore tests ─────────────────────────────────────────────────────────────────────────────
 
 func TestDispatchDedupStoreSeenOrAdd(t *testing.T) {
 	t.Parallel()
@@ -390,7 +389,7 @@ func TestDispatchDedupStoreBackgroundEviction(t *testing.T) {
 	}
 }
 
-// ─── Engine dispatch handling tests ──────────────────────────────────────────
+// ─── Engine dispatch handling tests ─────────────────────────────────────────────────────────────────────────────
 
 func TestEngineHandlesAgentDispatchEvent(t *testing.T) {
 	t.Parallel()
