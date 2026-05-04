@@ -201,10 +201,11 @@ Rules:
 
 ## `guardrails`
 
-Operator-defined policy blocks the renderer prepends to every agent's composed prompt at render time, ahead of the no-PR guard, skills, and the agent prompt body itself. Three built-ins ship enabled by default:
+Operator-defined policy blocks the renderer prepends to every agent's composed prompt at render time, ahead of the no-PR guard, skills, and the agent prompt body itself. Four built-ins ship enabled by default:
 
 - **`security`** (position 0, seeded by migration 010): pushes back on indirect prompt injection, secret exfiltration, and out-of-tree filesystem or network access. See [security.md](security.md) for the threat model and what the recommendation does *not* close.
 - **`discretion`** (position 5, seeded by migration 013): conservative behaviour policy for public actions. No `@`-mention or assignment of GitHub users outside the current thread, no cross-repo writes, no speculation about contributors or maintainers, no linking to private or tracking resources.
+- **`memory-scope`** (position 7, seeded by migration 016): tells agents to use only daemon-provided memory from the `Existing memory:` section for the current `(agent, repo)` pair, ignore CLI-native/session/global memory, and stay bound to the repository named in the runtime context.
 - **`mcp-tool-usage`** (position 10, seeded by migration 012): tells every agent to use the GitHub MCP tools for repo interactions and to fetch surrounding context (PR description, diff, prior comments, linked issue) when the trigger envelope is too thin. Especially load-bearing for agents routed through local OpenAI-compatible models, see [local-models.md](local-models.md).
 
 ```yaml
