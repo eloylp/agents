@@ -634,8 +634,10 @@ func parseCodexSteps(lines []timedLine) []TraceStep {
 		Command          string          `json:"command"`
 		AggregatedOutput string          `json:"aggregated_output"`
 		Name             string          `json:"name"`
+		Tool             string          `json:"tool"`
 		Arguments        json.RawMessage `json:"arguments"`
 		Output           json.RawMessage `json:"output"`
+		Result           json.RawMessage `json:"result"`
 		Server           string          `json:"server"`
 	}
 	type streamEvent struct {
@@ -688,18 +690,23 @@ func parseCodexSteps(lines []timedLine) []TraceStep {
 				})
 			default:
 				// Generic tool fallback for MCP / function calls. Codex
-				// item.types this matches today: "mcp_tool_call",
-				// "function_call", and any future tool kind that carries a
-				// name plus input/output payloads.
-				if it.Name == "" {
+				// item.types this matches today: "mcp_tool_call" (uses
+				// `tool` + `result`), "function_call" (uses `name` +
+				// `output`), and any future tool kind that carries one of
+				// those identifier+output pairs.
+				name := it.Tool
+				if name == "" {
+					name = it.Name
+				}
+				if name == "" {
 					continue
 				}
-				toolName := it.Name
+				toolName := name
 				if it.Server != "" {
-					toolName = it.Server + "." + it.Name
+					toolName = it.Server + "." + name
 				}
-				input := strings.TrimSpace(string(it.Arguments))
-				output := strings.TrimSpace(string(it.Output))
+				input := rawJSONString(it.Arguments)
+				output := codexOutput(it.Result, it.Output)
 				if input == "" && output == "" {
 					continue
 				}
