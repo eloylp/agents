@@ -916,7 +916,7 @@ func TestHandleEventNonAutonomousSkipsLastRunRecorder(t *testing.T) {
 }
 
 // TestHandleEventAutonomousReportsErrorStatus verifies a runner failure
-// surfaces as status=\"error\" in the LastRunRecorder callback so the schedule
+// surfaces as status="error" in the LastRunRecorder callback so the schedule
 // view distinguishes broken from healthy bindings without a separate fetch.
 func TestHandleEventAutonomousReportsErrorStatus(t *testing.T) {
 	t.Parallel()
