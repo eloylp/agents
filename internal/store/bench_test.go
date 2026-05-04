@@ -73,7 +73,7 @@ func benchSeed(b *testing.B, fs fixtureSize) string {
 		repos = append(repos, fleet.Repo{Name: repoName, Enabled: true, Use: bindings})
 	}
 
-	if err := store.ImportAll(db, agents, repos, skills, backends, nil); err != nil {
+	if err := store.ImportAll(db, agents, repos, skills, backends, nil, nil); err != nil {
 		b.Fatalf("seed: %v", err)
 	}
 	return dbPath
