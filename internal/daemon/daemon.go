@@ -2,7 +2,7 @@
 // runtime component (event channels, workflow engine, scheduler, observe
 // store, processor, dispatcher), every HTTP handler (fleet, repos, config,
 // observe, webhook), the MCP server, the optional proxy, and the embedded
-// UI mount. The HTTP listener is one of its goroutines, not its identity , 
+// UI mount. The HTTP listener is one of its goroutines, not its identity ,
 // the type is named *Daemon because it is the daemon.
 //
 // Construction is one call: daemon.New(cfg, db, logger) wires every
@@ -38,7 +38,7 @@ import (
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
 
-	anthropicproxy "github.com/eloylp/agents/internal/anthropic_proxy"
+	anthrpicproxy "github.com/eloylp/agents/internal/anthropic_proxy"
 	"github.com/eloylp/agents/internal/backends"
 	"github.com/eloylp/agents/internal/config"
 	daemonconfig "github.com/eloylp/agents/internal/daemon/config"
@@ -89,7 +89,7 @@ type Daemon struct {
 	webhook  *webhook.Handler
 	delivery *webhook.DeliveryStore
 	mcp      http.Handler
-	proxy    *anthropicproxy.Handler
+	proxy    *anthrpicproxy.Handler
 	uiFS     fs.FS
 
 	startTime time.Time
@@ -124,6 +124,7 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 	}
 	sched.WithEventQueue(channels)
 	engine.WithLastRunRecorder(sched)
+	engine.WithBudgetChecker(st)
 
 	// Domain handlers (HTTP layer). All take the data-access facade and
 	// the static daemon-level config; CRUD-mutable state is read on every
@@ -168,7 +169,7 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 
 	if cfg.Daemon.Proxy.Enabled {
 		up := cfg.Daemon.Proxy.Upstream
-		d.proxy = anthropicproxy.NewHandler(anthropicproxy.UpstreamConfig{
+		d.proxy = anthrpicproxy.NewHandler(anthrpicproxy.UpstreamConfig{
 			URL:       up.URL,
 			Model:     up.Model,
 			APIKey:    up.APIKey,
@@ -516,11 +517,11 @@ func (d *Daemon) buildStatus() statusJSON {
 		Agents: slices.Clone(d.scheduler.AgentStatuses()),
 	}
 
-	orphans, err := d.fleet.OrphanedAgents()
+	orphanedAgents, err := d.fleet.OrphanedAgents()
 	if err != nil {
 		d.logger.Warn().Err(err).Msg("status: orphan computation failed")
 	}
-	resp.OrphanedAgents = statusOrphanSummaryJSON{Count: len(orphans)}
+	resp.OrphanedAgents = statusOrphanSummaryJSON{Count: len(orphanedAgents)}
 
 	stats := d.engine.DispatchStats()
 	resp.Dispatch = &stats
