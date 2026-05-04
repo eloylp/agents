@@ -68,13 +68,14 @@ YAML config is import/export only, not a runtime input. To seed an empty fleet, 
 
 - `GITHUB_WEBHOOK_SECRET`, HMAC shared secret for the webhook receiver.
 - `GITHUB_TOKEN`, Personal Access Token used by the GitHub MCP server inside the container, by the `gh` CLI fallback, and forwarded into AI backend subprocesses through the env allowlist (`internal/ai/cmdrunner.go`). Required by `scripts/setup.sh` (hard-fails if unset). `repo` scope minimum; add `workflow` if agents touch CI. Codex resolves it at runtime; Claude stores it in `~/.claude.json`; `gh auth login --with-token` runs during setup so agents have a working CLI fallback when GitHub MCP tools fail to register. All credentials live on the `agents-home` volume.
+- `AGENTS_AUTH_BEARER_TOKEN_HASH`, optional SHA-256 hex hash of the daemon bearer token. When set, sensitive API and MCP routes require `Authorization: Bearer <token>`; `/status`, `/webhooks/github`, `/v1/*`, and the `/ui/` shell/assets remain public so liveness, webhooks, proxy clients, and the first-use UI token modal work.
 - Daemon runtime settings can be overridden at startup with `AGENTS_*` env vars for log, HTTP, processor, and dispatch fields. See `docs/configuration.md` for the full mapping. Empty env vars are ignored, and changes still require a process/container restart.
 
 ## Architecture Notes
 
 - Event-driven for label-based workflows; cron scheduler for autonomous agents. Both paths resolve to the same agent definitions.
 - **Durable event queue.** Every `PushEvent` writes the event to the SQLite `event_queue` table before signalling workers via the in-memory channel, the DB is the source of truth, the channel is just a wake-up notification. At startup the daemon replays rows whose `completed_at` is still `NULL` so events buffered at shutdown (or runs interrupted mid-prompt) get a second chance instead of vanishing. An hourly cleanup loop prunes completed rows older than 7 days. `/runners` exposes the table, JOINed with traces, for inspection, deletion, and retry.
-- **Prompts and tokens on the trace.** Every completed run gzips its composed prompt onto the `traces` row and stores the AI CLI's reported token usage (input / output / cache_read / cache_write, Anthropic shape; OpenAI/Codex emits only input/output). Surfaced on `/runners`, `/traces`, and the UI's expanded panels. The prompt body is fetched lazily via `GET /traces/{span_id}/prompt` to keep listings cheap. Logs no longer carry a prompt hash, the trace span IS the audit record. Persistence is gated by your reverse proxy's auth.
+- **Prompts and tokens on the trace.** Every completed run gzips its composed prompt onto the `traces` row and stores the AI CLI's reported token usage (input / output / cache_read / cache_write, Anthropic shape; OpenAI/Codex emits only input/output). Surfaced on `/runners`, `/traces`, and the UI's expanded panels. The prompt body is fetched lazily via `GET /traces/{span_id}/prompt` to keep listings cheap. Logs no longer carry a prompt hash, the trace span IS the audit record. Persistence is gated by daemon bearer auth when `AGENTS_AUTH_BEARER_TOKEN_HASH` is set.
 - **Structured concurrency.** Every long-lived goroutine implements `Run(ctx) error`. The daemon arranges them in two errgroup tiers with separate contexts: producers (HTTP listener, cron scheduler) live on a context derived from the parent, they stop emitting webhooks and cron events as soon as the parent fires; consumers (worker pool, delivery dedup eviction, dispatch dedup eviction, queue cleanup, the one-shot replay step) live on a separate background context that outlives the producer tier so the queue can drain after producers stop. Phase boundaries are logged.
 - HTTP endpoints:
   - `GET /status`, JSON with uptime, event queue depth, agent schedules, dispatch counters, and orphaned-agent summary.
@@ -129,6 +130,6 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full flow, label semantics, and
 ## Security Notes
 
 - Webhook authenticity is enforced with HMAC SHA-256 signature verification.
-- All endpoints are unauthenticated at the daemon level; access control is the reverse proxy's responsibility.
-- Prompts are never logged in plaintext; only the hash and length are recorded.
+- Sensitive API and MCP endpoints require daemon bearer auth when `AGENTS_AUTH_BEARER_TOKEN_HASH` is set. This is minimal token auth for launch, not a full user/session/token-management system.
+- Prompts are never logged in plaintext; only the length is recorded.
 - The daemon delegates all GitHub writes to the configured AI backend via MCP tools.

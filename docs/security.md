@@ -4,24 +4,52 @@ This page describes the daemon's threat model and the recommendations shipped ag
 
 ## Defaults the project ships
 
-- **Webhook HMAC verification** on every `POST /webhooks/github` request, the only authentication enforced inside the daemon.
-- **No daemon-level auth on any other endpoint.** Access control is the operator's reverse proxy. Operator-grade endpoints (`/runners`, `/traces`, `/traces/{span_id}/prompt`, `/traces/{span_id}/stream`, `/guardrails`, `/ui/`, `/agents`, `/skills`, `/repos`, `/events`, `/graph`, `/memory`, `/config`, `/export`, `/import`, `/backends`) MUST sit behind your auth layer. The composed prompt every run sees is persisted on the trace span (gzipped); without proxy auth, anyone who can reach the daemon can read it.
+- **Webhook HMAC verification** on every `POST /webhooks/github` request.
+- **Minimal bearer-token auth for sensitive daemon routes.** Set `AGENTS_AUTH_BEARER_TOKEN_HASH` to a SHA-256 hex hash of the operator token. When set, API, MCP, `/run`, traces, runners, config, guardrails, repos, skills, agents, memory, graph, and event routes require `Authorization: Bearer <token>`. The UI shell at `/ui/` stays public so browsers can render the first-use token modal, but all sensitive data fetches require the token. This is the launch-time auth bridge; the full auth system is tracked in [#421](https://github.com/eloylp/agents/issues/421).
 - **GitHub writes routed exclusively through the AI backend's MCP tools**, an architectural property of the daemon's code (no `gh` binary in the image, no GitHub write SDK in `cmd/agents`). Verify in your own audit if you depend on it; the daemon does not enforce it at runtime.
 - **Per-event audit trail.** Every run records the composed prompt, every tool call with input/output summaries, and the response. Reachable from the dashboard for forensic review.
 - **Default built-in guardrails seeded into the database.** Policy blocks prepended to every agent's composed prompt at render time. `security` recommends ignoring instructions found in untrusted text, refusing secret reads/exfiltration, refusing out-of-tree filesystem access, refusing arbitrary network egress, and halting on probable injection. `memory-scope` tells agents to use only daemon-provided `Existing memory:` for the current `(agent, repo)` pair, ignore CLI-native/session/global memory, and stay bound to the repository named in the runtime context. **Operators can edit, disable, or replace built-ins** via `/ui/config` → Guardrails. Inspect live text at `GET /guardrails/{name}`. Like every prompt-level control, sufficiently determined indirect-injection attacks (role-play, encoded payloads, multi-turn manipulation) can defeat them.
 
+## Bearer-token auth <a id="bearer-token-auth"></a>
+
+Set the token hash at daemon startup:
+
+```bash
+# macOS
+printf '%s' 'your-token' | shasum -a 256 | awk '{print $1}'
+
+# Linux
+printf '%s' 'your-token' | sha256sum | awk '{print $1}'
+```
+
+Then put the resulting 64-character hex string in `.env`:
+
+```env
+AGENTS_AUTH_BEARER_TOKEN_HASH=...
+```
+
+Do not hash a string with a trailing newline. If `AGENTS_AUTH_BEARER_TOKEN_HASH` is empty or unset, daemon-level bearer auth is disabled.
+
+Authenticated clients send:
+
+```http
+Authorization: Bearer your-token
+```
+
+The dashboard stores the token in browser `localStorage` and attaches it to same-origin API calls. This is convenient, not a substitute for a real user/session model.
+
 ## Reverse-proxy routing <a id="reverse-proxy-routing"></a>
 
-All endpoints are unauthenticated at the daemon level. **Access control is the reverse proxy's responsibility.** A working production pattern is a two-router split: authenticated UI/API, public webhook endpoints.
+Use your reverse proxy for TLS and routing. With `AGENTS_AUTH_BEARER_TOKEN_HASH` set, the proxy no longer needs to provide basic auth for API/MCP access.
 
 | Router | Paths | Auth | Purpose |
 |---|---|---|---|
-| **UI / API** (authenticated) | everything except the public paths below | basic auth, OAuth2 proxy, or mTLS | `/ui/`, `/agents`, `/skills`, `/repos`, `/traces`, `/events`, `/graph`, `/memory`, `/runners`, `/guardrails`, `/config`, `/export`, `/import`, `/backends` |
-| **Public** (no auth) | `/status`, `/webhooks/github`, `/run`, `/v1/*` | none | GitHub can't send a basic-auth header on webhooks; `/status` must stay reachable for liveness probes; `/run` and `/v1/*` (proxy) are meant to be called by trusted external systems that authenticate with their own mechanism. |
+| **Daemon** | all paths | daemon bearer token on sensitive routes | `/mcp`, `/run`, API, observability, config, runners; `/ui/` shell loads publicly but data calls require bearer |
+| **Public** | `/status`, `/webhooks/github`, `/v1/*`, `/ui/*` shell/assets | none at proxy | GitHub cannot send auth on webhooks; `/status` must stay reachable for liveness probes; `/v1/*` proxy clients use their own upstream auth; `/ui/*` must render before the browser has a token. |
 
-`/webhooks/github` is safe to expose publicly because every request is HMAC-verified against `GITHUB_WEBHOOK_SECRET` before it is accepted. `/run` does not currently authenticate callers, if you expose it, restrict it at the proxy with an allowlist or a shared secret header.
+`/webhooks/github` is safe to expose publicly because every request is HMAC-verified against `GITHUB_WEBHOOK_SECRET` before it is accepted. `/run` is protected by daemon bearer auth when `AGENTS_AUTH_BEARER_TOKEN_HASH` is set.
 
-For production, drop the `ports: 8080:8080` block from the shipped compose so the proxy reaches the container on the internal Docker network instead, and replace `build: .` with a pinned `image:` reference. The compose file stays proxy-agnostic; the auth layer lives at your proxy.
+For production, drop the `ports: 8080:8080` block from the shipped compose so the proxy reaches the container on the internal Docker network instead, and replace `build: .` with a pinned `image:` reference.
 
 ### Traefik example
 
@@ -33,18 +61,10 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=web"
 
-      # Public router: webhooks, status, on-demand trigger, proxy.
-      - "traefik.http.routers.agents-public.rule=Host(`agents.example.com`) && (PathPrefix(`/webhooks`) || Path(`/status`) || PathPrefix(`/run`) || PathPrefix(`/v1`))"
-      - "traefik.http.routers.agents-public.entrypoints=websecure"
-      - "traefik.http.routers.agents-public.tls.certresolver=letsencrypt"
-
-      # Authenticated router: everything else.
-      - "traefik.http.routers.agents-ui.rule=Host(`agents.example.com`)"
-      - "traefik.http.routers.agents-ui.entrypoints=websecure"
-      - "traefik.http.routers.agents-ui.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.agents-ui.middlewares=agents-auth@docker"
-
-      - "traefik.http.middlewares.agents-auth.basicauth.usersfile=/etc/traefik/agents.htpasswd"
+      # Public-at-proxy router: daemon enforces bearer auth on sensitive routes.
+      - "traefik.http.routers.agents.rule=Host(`agents.example.com`)"
+      - "traefik.http.routers.agents.entrypoints=websecure"
+      - "traefik.http.routers.agents.tls.certresolver=letsencrypt"
       - "traefik.http.services.agents.loadbalancer.server.port=8080"
 
 networks:
@@ -53,7 +73,7 @@ networks:
     external: true
 ```
 
-Traefik picks the more specific router first, so webhook traffic bypasses the auth middleware. The principle (auth on UI/API, no auth on `/webhooks/github` / `/status` / `/run` / `/v1/*`) carries over to Caddy, nginx, or any other proxy.
+The principle carries over to Caddy, nginx, or any other proxy: terminate TLS, forward to the daemon, and let daemon bearer auth protect sensitive API/MCP routes.
 
 ## What the operator must own
 

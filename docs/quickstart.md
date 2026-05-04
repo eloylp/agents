@@ -14,6 +14,7 @@ cd agents
 cp .env.sample .env
 sed -i.bak "s/^GITHUB_WEBHOOK_SECRET=.*/GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)/" .env && rm .env.bak
 # Edit GITHUB_TOKEN in .env before continuing.
+# Optional before exposing the daemon: set AGENTS_AUTH_BEARER_TOKEN_HASH.
 docker compose up -d
 ```
 
@@ -45,7 +46,7 @@ Once it finishes, the daemon has working backends and tools. **Fleet configurati
 
 ## Production essentials
 
-Before exposing the daemon publicly, configure your reverse proxy: see [security.md → Reverse-proxy routing](security.md#reverse-proxy-routing) for the auth-vs-public path split (which paths must sit behind your auth layer, which must stay open so GitHub webhooks and liveness probes can reach the daemon).
+Before exposing the daemon publicly, set `AGENTS_AUTH_BEARER_TOKEN_HASH` and configure your reverse proxy for TLS/routing: see [security.md → Bearer-token auth](security.md#bearer-token-auth) and [Reverse-proxy routing](security.md#reverse-proxy-routing).
 
 ## Day-2 operations
 

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import NavBar from '@/components/NavBar'
+import { AuthProvider } from '@/lib/auth'
 import { ThemeProvider } from '@/lib/theme'
 
 export const metadata: Metadata = {
@@ -106,10 +107,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <ThemeProvider>
-          <NavBar />
-          <main style={{ padding: '1.5rem', maxWidth: '1400px', margin: '0 auto' }}>
-            {children}
-          </main>
+          <AuthProvider>
+            <NavBar />
+            <main style={{ padding: '1.5rem', maxWidth: '1400px', margin: '0 auto' }}>
+              {children}
+            </main>
+          </AuthProvider>
         </ThemeProvider>
       </body>
     </html>

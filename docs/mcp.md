@@ -11,11 +11,19 @@ The MCP surface is functionally equivalent to the REST CRUD API documented in [a
 From Claude Code:
 
 ```bash
+export AGENTS_MCP_TOKEN='your-token'
 claude mcp add -t http -s user agents-fleet https://agents.example.com/mcp \
-  -H "Authorization: Basic $(echo -n 'user:password' | base64)"
+  -H "Authorization: Bearer $AGENTS_MCP_TOKEN"
 ```
 
-When the daemon runs behind a reverse proxy with basic auth (e.g. Traefik), the `-H` flag passes the credentials so MCP requests authenticate automatically. For unauthenticated local development, drop the `-H` flag.
+From Codex:
+
+```bash
+export AGENTS_MCP_TOKEN='your-token'
+codex mcp add agents-fleet --url https://agents.example.com/mcp --bearer-token-env-var AGENTS_MCP_TOKEN
+```
+
+When `AGENTS_AUTH_BEARER_TOKEN_HASH` is set on the daemon, MCP clients must send the matching bearer token. For unauthenticated local development, drop the `-H` flag in Claude or the `--bearer-token-env-var` flag in Codex.
 
 The same pattern works for Cursor, Cline, and any other MCP-compatible client; consult their docs for the exact config syntax.
 

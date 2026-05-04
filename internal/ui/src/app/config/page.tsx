@@ -4,6 +4,7 @@ import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import GuardrailsManager from '@/components/GuardrailsManager'
 import RepoFilter from '@/components/RepoFilter'
+import { AuthTokenSettings } from '@/lib/auth'
 
 type Config = Record<string, unknown>
 
@@ -677,6 +678,8 @@ export default function ConfigPage() {
 
       {tab === 'inspector' && (
         <Card style={{ borderTopLeftRadius: 0 }}>
+          <AuthTokenSettings />
+          <hr style={{ border: 0, borderTop: '1px solid var(--border-subtle)', margin: '1rem 0' }} />
           {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
           {error && <p style={{ color: 'var(--text-danger)' }}>Error: {error}. (Is the API key set? Check Authorization header.)</p>}
           {config && (
