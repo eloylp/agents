@@ -40,7 +40,7 @@ github: https://api.githubcopilot.com/mcp (HTTP) - ✓ Connected`,
 		{
 			name: "codex table output enabled bearer token",
 			output: `Name    Url                                 Bearer Token Env Var  Status   Auth
-github  https://api.githubcopilot.com/mcp/  GITHUB_PAT_TOKEN      enabled  Bearer token`,
+github  https://api.githubcopilot.com/mcp/  GITHUB_TOKEN          enabled  Bearer token`,
 			wantFound:  true,
 			wantOnline: true,
 		},

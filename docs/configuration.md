@@ -227,7 +227,7 @@ Create a `.env` file in the project root (loaded automatically):
 
 ```bash
 GITHUB_WEBHOOK_SECRET=your-webhook-secret  # HMAC shared secret for /webhooks/github
-GITHUB_PAT_TOKEN=ghp_...                   # Personal Access Token used by the GitHub MCP server (repo scope)
+GITHUB_TOKEN=ghp_...                       # Personal Access Token used by the GitHub MCP server, the `gh` CLI fallback, and forwarded into AI backend subprocesses (repo scope, +workflow if agents touch CI)
 ```
 
 ## Importing and exporting

@@ -13,7 +13,7 @@ cd agents
 # Webhook secret: random per install. PAT: from https://github.com/settings/tokens with repo scope.
 cat > .env <<EOF
 GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)
-GITHUB_PAT_TOKEN=ghp_paste_your_token_here
+GITHUB_TOKEN=ghp_paste_your_token_here
 EOF
 docker compose up -d
 ```

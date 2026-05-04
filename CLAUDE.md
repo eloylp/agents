@@ -67,7 +67,7 @@ YAML config is import/export only, not a runtime input. To seed an empty fleet, 
 ## Environment Variables
 
 - `GITHUB_WEBHOOK_SECRET`, HMAC shared secret for the webhook receiver (`daemon.http.webhook_secret_env`).
-- `GITHUB_PAT_TOKEN`, Personal Access Token used by the GitHub MCP server inside the container. Required by `scripts/setup.sh` (hard-fails if unset). `repo` scope minimum; add `workflow` if agents touch CI. Codex resolves at runtime; Claude stores in `~/.claude.json` on the `agents-home` volume.
+- `GITHUB_TOKEN`, Personal Access Token used by the GitHub MCP server inside the container, by the `gh` CLI fallback, and forwarded into AI backend subprocesses through the env allowlist (`internal/ai/cmdrunner.go`). Required by `scripts/setup.sh` (hard-fails if unset). `repo` scope minimum; add `workflow` if agents touch CI. Codex resolves it at runtime; Claude stores it in `~/.claude.json`; `gh auth login --with-token` runs during setup so agents have a working CLI fallback when GitHub MCP tools fail to register. All credentials live on the `agents-home` volume.
 
 ## Architecture Notes
 

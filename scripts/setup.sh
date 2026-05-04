@@ -143,9 +143,9 @@ phase_pick_backends() {
 
 phase_check_pat() {
   phase "2.5" "verify GitHub Personal Access Token"
-  info "looking for GITHUB_PAT_TOKEN in the container environment..."
-  if [[ -z "${GITHUB_PAT_TOKEN:-}" ]]; then
-    err "GITHUB_PAT_TOKEN is not set."
+  info "looking for GITHUB_TOKEN in the container environment..."
+  if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+    err "GITHUB_TOKEN is not set."
     say ""
     say "  The GitHub MCP server needs a Personal Access Token to talk to"
     say "  GitHub on behalf of your agents. Generate one at:"
@@ -153,7 +153,7 @@ phase_check_pat() {
     say "  with at least the ${c_bold}repo${c_rst} scope (and ${c_bold}workflow${c_rst} if your agents will touch CI)."
     say ""
     say "  Then add it to your .env (next to docker-compose.yaml):"
-    say "      ${c_bold}GITHUB_PAT_TOKEN=ghp_...${c_rst}"
+    say "      ${c_bold}GITHUB_TOKEN=ghp_...${c_rst}"
     say ""
     say "  Restart the container so the env var is visible inside:"
     say "      ${c_bold}docker compose up -d${c_rst}"
@@ -161,9 +161,9 @@ phase_check_pat() {
     say "  Then re-run agents-setup."
     exit 1
   fi
-  ok "GITHUB_PAT_TOKEN is present (${#GITHUB_PAT_TOKEN} chars)"
+  ok "GITHUB_TOKEN is present (${#GITHUB_TOKEN} chars)"
   note "claude stores the token in ~/.claude.json on the agents-home volume."
-  note "codex resolves it from \$GITHUB_PAT_TOKEN at runtime (token never on disk)."
+  note "codex resolves it from \$GITHUB_TOKEN at runtime (token never on disk)."
 }
 
 # ── phase 3, per-backend login + GitHub MCP wiring ──────────────────
@@ -192,7 +192,7 @@ setup_claude() {
     local mcp_json
     mcp_json=$(jq -nc \
       --arg url "$GITHUB_MCP_URL" \
-      --arg auth "Bearer $GITHUB_PAT_TOKEN" \
+      --arg auth "Bearer $GITHUB_TOKEN" \
       '{type:"http", url:$url, headers:{Authorization:$auth}}')
     claude mcp add-json github -s user "$mcp_json" \
       || { err "claude mcp add-json failed"; return 1; }
@@ -225,18 +225,15 @@ setup_codex() {
   codex login --device-auth || { err "codex login failed"; return 1; }
   ok "codex authenticated"
 
-  info "checking whether GitHub MCP is already registered for codex..."
-  if codex mcp list 2>/dev/null | grep -qE '^github\b'; then
-    ok "GitHub MCP already registered (skipping add)"
-  else
-    info "registering GitHub MCP via codex mcp add (HTTP + bearer-token-env-var)..."
-    note "codex resolves the PAT from \$GITHUB_PAT_TOKEN at runtime, not at rest."
-    codex mcp add github \
-      --url "$GITHUB_MCP_URL/" \
-      --bearer-token-env-var GITHUB_PAT_TOKEN \
-      || { err "codex mcp add failed"; return 1; }
-    ok "GitHub MCP registered for codex"
-  fi
+  info "ensuring codex GitHub MCP is registered with the current GITHUB_TOKEN binding..."
+  note "codex resolves the PAT from \$GITHUB_TOKEN at runtime, not at rest."
+  note "remove + re-add is idempotent and self-heals stale bearer-token-env-var bindings."
+  codex mcp remove github 2>/dev/null || true
+  codex mcp add github \
+    --url "$GITHUB_MCP_URL/" \
+    --bearer-token-env-var GITHUB_TOKEN \
+    || { err "codex mcp add failed"; return 1; }
+  ok "GitHub MCP registered for codex"
 
   info "verifying codex MCP listing..."
   say ""
