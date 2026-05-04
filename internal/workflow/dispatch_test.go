@@ -18,7 +18,7 @@ import (
 	"github.com/eloylp/agents/internal/store"
 )
 
-// ─── helpers ─────────────────────────────────────────────────────────────────────────────
+// ─── helpers ────────────────────────────────────────────────────────────────────────────────────
 
 type fakeQueue struct {
 	mu     sync.Mutex
@@ -135,7 +135,7 @@ func testEvent(repo string, number int) Event {
 	}
 }
 
-// ─── Dispatcher tests ───────────────────────────────────────────────────────────────────────────────
+// ─── Dispatcher tests ───────────────────────────────────────────────────────────────────────────────────────────────
 
 func TestDispatcherEnqueuesValidRequest(t *testing.T) {
 	t.Parallel()
@@ -336,7 +336,7 @@ func TestDispatcherDeduplicatesWithinWindow(t *testing.T) {
 	}
 }
 
-// ─── DispatchDedupStore tests ─────────────────────────────────────────────────────────────────────────────
+// ─── DispatchDedupStore tests ─────────────────────────────────────────────────────────────────────────────────────────
 
 func TestDispatchDedupStoreSeenOrAdd(t *testing.T) {
 	t.Parallel()
@@ -389,7 +389,7 @@ func TestDispatchDedupStoreBackgroundEviction(t *testing.T) {
 	}
 }
 
-// ─── Engine dispatch handling tests ─────────────────────────────────────────────────────────────────────────────
+// ─── Engine dispatch handling tests ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 func TestEngineHandlesAgentDispatchEvent(t *testing.T) {
 	t.Parallel()
@@ -611,10 +611,10 @@ func TestDispatcherRetrySucceedsAfterEnqueueFailure(t *testing.T) {
 
 // TestDispatchClaimOnlyVisibleAfterSuccessfulEnqueue is a regression test for
 // the lost-work race: if ProcessDispatches fails to enqueue a dispatch event,
-// DispatchAlreadyClaimed must return false so the autonomous scheduler can
-// still run the target. Previously, SeenOrAdd was called before PushEvent and
-// a failed enqueue followed by a dedup rollback still left a brief window where
-// DispatchAlreadyClaimed could return true, causing both paths to skip.
+// no dispatch claim must be visible so the autonomous scheduler can still run
+// the target. Previously, SeenOrAdd was called before PushEvent and a failed
+// enqueue followed by a dedup rollback still left a brief window where a
+// pending claim could remain, causing both paths to skip.
 func TestDispatchClaimOnlyVisibleAfterSuccessfulEnqueue(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{err: errors.New("queue full")}
@@ -624,28 +624,26 @@ func TestDispatchClaimOnlyVisibleAfterSuccessfulEnqueue(t *testing.T) {
 	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 0), "root-1", 0, "", reqs)
 
 	// The enqueue failed, so the dispatch slot must NOT be claimed.
-	if d.DispatchAlreadyClaimed("pr-reviewer", "owner/repo", time.Now()) {
-		t.Error("DispatchAlreadyClaimed returned true after a failed enqueue: phantom claim left by failed dispatch")
+	if d.dedup.SeesPendingOrCommitted("pr-reviewer", "owner/repo", 0, time.Now()) {
+		t.Error("SeesPendingOrCommitted returned true after a failed enqueue: phantom claim left by failed dispatch")
 	}
 }
 
 // TestMarkAutonomousRunSuppressesNearSimultaneousDispatch is a regression
 // test for the cron-first dedup ordering: when an autonomous run starts and
-// MarkAutonomousRun writes a cron-namespace mark, dispatches targeting the
+// TryMarkAutonomousRun writes a cron-namespace mark, dispatches targeting the
 // same agent/repo with number=0 (autonomous context) must be suppressed for
-// the full dedup_window_seconds, both while the run is in-flight and after
+// the full dedup_window_seconds — both while the run is in-flight and after
 // it completes.
 func TestMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}
 	d := testDispatcher(t, q)
 
-	// Simulate: cron run confirms it will proceed and writes the cron-namespace mark.
-	alreadyClaimed := d.DispatchAlreadyClaimed("coder", "owner/repo", time.Now())
-	if alreadyClaimed {
-		t.Fatal("DispatchAlreadyClaimed: expected false on first call (no prior dispatch)")
+	// Simulate: cron run atomically checks for a dispatch claim and writes the cron-namespace mark.
+	if !d.TryMarkAutonomousRun("coder", "owner/repo", time.Now()) {
+		t.Fatal("TryMarkAutonomousRun: expected to succeed on first call (no prior dispatch)")
 	}
-	d.MarkAutonomousRun("coder", "owner/repo", time.Now())
 
 	// Dispatches targeting the same agent/repo with number=0 must be suppressed
 	// for the full dedup window (coder dispatching to itself is not allowed, so use
@@ -678,11 +676,11 @@ func TestMarkAutonomousRunDoesNotSuppressDispatchForDifferentNumber(t *testing.T
 	q := &fakeQueue{}
 	d := testDispatcher(t, q)
 
-	// Cron run for pr-reviewer marks (pr-reviewer, owner/repo, 0).
-	d.MarkAutonomousRun("coder", "owner/repo", time.Now())
+	// Cron run marks (coder, owner/repo, 0).
+	d.TryMarkAutonomousRun("coder", "owner/repo", time.Now())
 
 	// A dispatch targeting coder for PR #42 (number=42) must still be enqueued
-	//, it is a different item context from the autonomous cron run (number=0).
+	// — it is a different item context from the autonomous cron run (number=0).
 	originator := originatorAgent("pr-reviewer")
 	ev := testEvent("owner/repo", 42)
 	d.ProcessDispatches(context.Background(), originator, ev, "root-pr42", 0, "", []ai.DispatchRequest{
@@ -710,14 +708,13 @@ func TestPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 	q := &fakeQueue{}
 	d := NewDispatcher(cfg, seedAgentMap(t, agents), dedup, q, zerolog.Nop())
 
-	// Autonomous run confirms it will proceed and writes the cron mark.
+	// Autonomous run atomically checks for a dispatch claim and writes the cron mark.
 	now := time.Now()
-	if d.DispatchAlreadyClaimed("coder", "owner/repo", now) {
-		t.Fatal("DispatchAlreadyClaimed: expected false on first call (no prior dispatch)")
+	if !d.TryMarkAutonomousRun("coder", "owner/repo", now) {
+		t.Fatal("TryMarkAutonomousRun: expected to succeed on first call (no prior dispatch)")
 	}
-	d.MarkAutonomousRun("coder", "owner/repo", now)
 
-	// Dispatch arriving after the run, still within the TTL window, must be suppressed.
+	// Dispatch arriving after the run — still within the TTL window — must be suppressed.
 	originator := agents["pr-reviewer"]
 	ev := Event{Repo: RepoRef{FullName: "owner/repo", Enabled: true}, Kind: "cron", Number: 0}
 	d.ProcessDispatches(context.Background(), originator, ev, "root-1", 0, "", []ai.DispatchRequest{
@@ -800,8 +797,8 @@ func TestRemoveCronMarkWithOverlappingRunsRefcount(t *testing.T) {
 
 	now := time.Now()
 	// Simulate two overlapping autonomous runs for the same (agent, repo).
-	d.MarkAutonomousRun("coder", "owner/repo", now)
-	d.MarkAutonomousRun("coder", "owner/repo", now)
+	d.TryMarkAutonomousRun("coder", "owner/repo", now)
+	d.TryMarkAutonomousRun("coder", "owner/repo", now)
 
 	// First run fails: rolls back. The second run is still in flight, so
 	// dispatches must still be suppressed.
@@ -833,7 +830,7 @@ func TestRemoveCronMarkWithOverlappingRunsRefcount(t *testing.T) {
 // TestLongRunningCronMarkBlocksDispatchPastTTL is a regression test for the
 // case where an autonomous run outlasts its dedup_window_seconds TTL. Without
 // the refcount-based guard, the sweeper would evict the cron entry once its
-// expiresAt passed, and TryClaimForDispatch would no longer see the mark , 
+// expiresAt passed, and TryClaimForDispatch would no longer see the mark,
 // allowing a dispatch to race the still-in-flight cron run.
 func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 	t.Parallel()
@@ -851,7 +848,7 @@ func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 
 	// Autonomous run starts; writes cron mark.
 	start := time.Now()
-	d.MarkAutonomousRun("coder", "owner/repo", start)
+	d.TryMarkAutonomousRun("coder", "owner/repo", start)
 
 	// Simulate the sweeper running after the TTL has elapsed but before the
 	// run completes. The cron mark's refcount is still 1, so it must NOT be
@@ -871,7 +868,7 @@ func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 	}
 
 	// Once the run completes successfully, the refcount is decremented via
-	// FinalizeAutonomousRun. The entry itself is kept until the TTL expires , 
+	// FinalizeAutonomousRun. The entry itself is kept until the TTL expires,
 	// but since we advanced past the TTL in the simulation, the next eviction
 	// pass will remove it and dispatches may then proceed.
 	d.FinalizeAutonomousRun("coder", "owner/repo")
@@ -912,7 +909,7 @@ func TestFinalizeAutonomousRunKeepsTTLBlocksDispatchWithinWindow(t *testing.T) {
 	d1.FinalizeAutonomousRun("coder", "owner/repo")
 
 	// Within the TTL window, a dispatch to the same (agent, repo, 0) slot must
-	// still be suppressed, the entry is kept for the full dedup window.
+	// still be suppressed — the entry is kept for the full dedup window.
 	q2 := &fakeQueue{}
 	d2 := NewDispatcher(cfg, seedAgentMap(t, agents), dedup, q2, zerolog.Nop())
 	d2.ProcessDispatches(context.Background(), originator, ev, "root-post-run", 0, "", []ai.DispatchRequest{
