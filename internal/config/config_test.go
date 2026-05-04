@@ -1,12 +1,13 @@
 package config
 
 import (
-	"github.com/eloylp/agents/internal/fleet"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // minimalYAML returns a complete valid config with the given repo override.
@@ -23,10 +24,7 @@ repos:
 `
 	}
 	return `
-daemon:
-  http:
-    webhook_secret_env: TEST_SECRET
-  ai_backends:
+backends:
     claude:
       command: claude
       args: ["-p"]
@@ -54,7 +52,6 @@ func writeConfig(t *testing.T, content string) string {
 }
 
 func TestLoadMinimalConfig(t *testing.T) {
-	t.Setenv("TEST_SECRET", "s3cret")
 	path := writeConfig(t, minimalYAML(""))
 
 	cfg, err := Load(path)
@@ -65,9 +62,6 @@ func TestLoadMinimalConfig(t *testing.T) {
 	if got := cfg.Daemon.HTTP.ListenAddr; got != defaultHTTPListenAddr {
 		t.Errorf("listen_addr default: got %q, want %q", got, defaultHTTPListenAddr)
 	}
-	if got := cfg.Daemon.HTTP.WebhookSecret; got != "s3cret" {
-		t.Errorf("webhook secret not resolved from env: got %q", got)
-	}
 	if len(cfg.Agents) != 1 || cfg.Agents[0].Name != "reviewer" {
 		t.Errorf("agents: got %+v", cfg.Agents)
 	}
@@ -76,14 +70,106 @@ func TestLoadMinimalConfig(t *testing.T) {
 	}
 }
 
+func TestLoadAppliesDaemonEnvOverrides(t *testing.T) {
+	t.Setenv("LLM_KEY", "key-abc")
+	t.Setenv("AGENTS_LOG_LEVEL", "debug")
+	t.Setenv("AGENTS_LOG_FORMAT", "json")
+	t.Setenv("AGENTS_HTTP_LISTEN_ADDR", "127.0.0.1:9090")
+	t.Setenv("AGENTS_HTTP_STATUS_PATH", "/healthz")
+	t.Setenv("AGENTS_HTTP_WEBHOOK_PATH", "/hooks/github")
+	t.Setenv("AGENTS_HTTP_READ_TIMEOUT_SECONDS", "21")
+	t.Setenv("AGENTS_HTTP_WRITE_TIMEOUT_SECONDS", "22")
+	t.Setenv("AGENTS_HTTP_IDLE_TIMEOUT_SECONDS", "23")
+	t.Setenv("AGENTS_HTTP_MAX_BODY_BYTES", "2048")
+	t.Setenv("AGENTS_HTTP_DELIVERY_TTL_SECONDS", "24")
+	t.Setenv("AGENTS_HTTP_SHUTDOWN_TIMEOUT_SECONDS", "25")
+	t.Setenv("AGENTS_PROCESSOR_EVENT_QUEUE_BUFFER", "26")
+	t.Setenv("AGENTS_PROCESSOR_MAX_CONCURRENT_AGENTS", "27")
+	t.Setenv("AGENTS_DISPATCH_MAX_DEPTH", "28")
+	t.Setenv("AGENTS_DISPATCH_MAX_FANOUT", "29")
+	t.Setenv("AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS", "30")
+	t.Setenv("AGENTS_PROXY_ENABLED", "true")
+	t.Setenv("AGENTS_PROXY_PATH", "/proxy/messages")
+	t.Setenv("AGENTS_PROXY_UPSTREAM_URL", "http://localhost:8001/v1")
+	t.Setenv("AGENTS_PROXY_UPSTREAM_MODEL", "qwen")
+	t.Setenv("AGENTS_PROXY_UPSTREAM_API_KEY_ENV", "LLM_KEY")
+	t.Setenv("AGENTS_PROXY_UPSTREAM_TIMEOUT_SECONDS", "31")
+	path := writeConfig(t, minimalYAML(""))
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Daemon.Log.Level != "debug" || cfg.Daemon.Log.Format != "json" {
+		t.Fatalf("log overrides = %+v, want debug/json", cfg.Daemon.Log)
+	}
+	if got := cfg.Daemon.HTTP.ListenAddr; got != "127.0.0.1:9090" {
+		t.Fatalf("listen addr = %q, want env override", got)
+	}
+	if got := cfg.Daemon.HTTP.StatusPath; got != "/healthz" {
+		t.Fatalf("status path = %q, want env override", got)
+	}
+	if got := cfg.Daemon.HTTP.WebhookPath; got != "/hooks/github" {
+		t.Fatalf("webhook path = %q, want env override", got)
+	}
+	if h := cfg.Daemon.HTTP; h.ReadTimeoutSeconds != 21 ||
+		h.WriteTimeoutSeconds != 22 ||
+		h.IdleTimeoutSeconds != 23 ||
+		h.MaxBodyBytes != 2048 ||
+		h.DeliveryTTLSeconds != 24 ||
+		h.ShutdownTimeoutSeconds != 25 {
+		t.Fatalf("http overrides = %+v", h)
+	}
+	if p := cfg.Daemon.Processor; p.EventQueueBuffer != 26 ||
+		p.MaxConcurrentAgents != 27 ||
+		p.Dispatch.MaxDepth != 28 ||
+		p.Dispatch.MaxFanout != 29 ||
+		p.Dispatch.DedupWindowSeconds != 30 {
+		t.Fatalf("processor overrides = %+v", p)
+	}
+	if p := cfg.Daemon.Proxy; !p.Enabled ||
+		p.Path != "/proxy/messages" ||
+		p.Upstream.URL != "http://localhost:8001/v1" ||
+		p.Upstream.Model != "qwen" ||
+		p.Upstream.APIKeyEnv != "LLM_KEY" ||
+		p.Upstream.APIKey != "key-abc" ||
+		p.Upstream.TimeoutSeconds != 31 {
+		t.Fatalf("proxy overrides = %+v", p)
+	}
+}
+
+func TestLoadRejectsInvalidDaemonEnvOverride(t *testing.T) {
+	t.Setenv("AGENTS_HTTP_READ_TIMEOUT_SECONDS", "not-a-number")
+	path := writeConfig(t, minimalYAML(""))
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load got nil error, want invalid env error")
+	}
+	if !strings.Contains(err.Error(), "AGENTS_HTTP_READ_TIMEOUT_SECONDS") {
+		t.Fatalf("error = %q, want env var name", err)
+	}
+}
+
+func TestLoadRejectsInvalidDaemonPathEnvOverride(t *testing.T) {
+	t.Setenv("AGENTS_HTTP_STATUS_PATH", "healthz")
+	path := writeConfig(t, minimalYAML(""))
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load got nil error, want invalid path env error")
+	}
+	if !strings.Contains(err.Error(), "AGENTS_HTTP_STATUS_PATH") {
+		t.Fatalf("error = %q, want env var name", err)
+	}
+}
+
 // agentConfigYAML builds a full config YAML with a custom agents block,
 // mirroring minimalYAML but allowing the agents section to be overridden.
 func agentConfigYAML(agentsBlock string) string {
 	return `
-daemon:
-  http:
-    webhook_secret_env: TEST_SECRET
-  ai_backends:
+backends:
     claude:
       command: claude
       args: ["-p"]
@@ -323,7 +409,7 @@ func TestResolveBackend(t *testing.T) {
 		{"", ""},
 		{"auto", ""},
 		{"claude", "claude"},
-		{"codex", ""},        // not in ai_backends
+		{"codex", ""},        // not in backends
 		{"CLAUDE", "claude"}, // case-folded
 	}
 	for _, tc := range cases {
@@ -334,33 +420,8 @@ func TestResolveBackend(t *testing.T) {
 }
 
 func TestLoadRejectsNegativeDeliveryTTL(t *testing.T) {
-	t.Setenv("TEST_SECRET", "secret")
-
-	content := `
-daemon:
-  http:
-    webhook_secret_env: TEST_SECRET
-    delivery_ttl_seconds: -1
-  ai_backends:
-    claude:
-      command: claude
-      args: ["-p"]
-skills:
-  architect:
-    prompt: "Focus on architecture."
-agents:
-  - name: reviewer
-    backend: claude
-    skills: [architect]
-    prompt: "You review PRs."
-repos:
-  - name: "owner/repo"
-    enabled: true
-    use:
-      - agent: reviewer
-        labels: ["ai:review:reviewer"]
-`
-	path := writeConfig(t, content)
+	t.Setenv("AGENTS_HTTP_DELIVERY_TTL_SECONDS", "-1")
+	path := writeConfig(t, minimalYAML(""))
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected validation error for negative delivery_ttl_seconds")
 	}
@@ -368,10 +429,7 @@ repos:
 
 func logConfigYAML(field, value string) string {
 	return `
-daemon:
-  http:
-    webhook_secret_env: TEST_SECRET
-  ai_backends:
+backends:
     claude:
       command: claude
       args: ["-p"]
@@ -395,8 +453,6 @@ repos:
 }
 
 func TestLoadRejectsInvalidLogLevel(t *testing.T) {
-	t.Setenv("TEST_SECRET", "secret")
-
 	cases := []struct {
 		name       string
 		level      string
@@ -425,8 +481,8 @@ func TestLoadRejectsInvalidLogLevel(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			path := writeConfig(t, logConfigYAML("level", tc.level))
+			t.Setenv("AGENTS_LOG_LEVEL", tc.level)
+			path := writeConfig(t, minimalYAML(""))
 			_, err := Load(path)
 			if err == nil {
 				t.Fatalf("expected error for log level %q", tc.level)
@@ -439,7 +495,6 @@ func TestLoadRejectsInvalidLogLevel(t *testing.T) {
 }
 
 func TestLoadAcceptsValidLogConfig(t *testing.T) {
-	t.Setenv("TEST_SECRET", "secret")
 	tests := []struct {
 		field string
 		value string
@@ -455,18 +510,22 @@ func TestLoadAcceptsValidLogConfig(t *testing.T) {
 		{field: "level", value: "DEBUG"},
 		{field: "level", value: "INFO"},
 		{field: "level", value: ""},
-		{field: "level", value: `"  debug  "`},
+		{field: "level", value: "  debug  "},
 		{field: "format", value: "json"},
 		{field: "format", value: "text"},
 		{field: "format", value: "JSON"},
 		{field: "format", value: "TEXT"},
 		{field: "format", value: ""},
-		{field: "format", value: `"  json  "`},
+		{field: "format", value: "  json  "},
 	}
 	for _, tc := range tests {
 		t.Run(tc.field+"="+tc.value, func(t *testing.T) {
-			t.Parallel()
-			path := writeConfig(t, logConfigYAML(tc.field, tc.value))
+			if tc.field == "level" {
+				t.Setenv("AGENTS_LOG_LEVEL", tc.value)
+			} else {
+				t.Setenv("AGENTS_LOG_FORMAT", tc.value)
+			}
+			path := writeConfig(t, minimalYAML(""))
 			if _, err := Load(path); err != nil {
 				t.Fatalf("unexpected error for log %s %q: %v", tc.field, tc.value, err)
 			}
@@ -475,8 +534,6 @@ func TestLoadAcceptsValidLogConfig(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidLogFormat(t *testing.T) {
-	t.Setenv("TEST_SECRET", "secret")
-
 	cases := []struct {
 		name       string
 		format     string
@@ -495,8 +552,8 @@ func TestLoadRejectsInvalidLogFormat(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			path := writeConfig(t, logConfigYAML("format", tc.format))
+			t.Setenv("AGENTS_LOG_FORMAT", tc.format)
+			path := writeConfig(t, minimalYAML(""))
 			_, err := Load(path)
 			if err == nil {
 				t.Fatalf("expected error for log format %q", tc.format)
@@ -512,10 +569,7 @@ func TestLoadRejectsInvalidLogFormat(t *testing.T) {
 
 func dispatchYAML(agentBlock string) string {
 	return fmt.Sprintf(`
-daemon:
-  http:
-    webhook_secret_env: TEST_SECRET
-  ai_backends:
+backends:
     claude:
       command: claude
       args: ["-p"]
@@ -640,89 +694,33 @@ func TestDispatchConfigValidationRejectsNonPositiveValues(t *testing.T) {
 	t.Setenv("TEST_SECRET", "s3cret")
 	cases := []struct {
 		name   string
-		yaml   string
+		envKey string
+		envVal string
 		errMsg string
 	}{
 		{
-			name: "negative max_depth",
-			yaml: `
-daemon:
-  http:
-    webhook_secret_env: TEST_SECRET
-  ai_backends:
-    claude:
-      command: claude
-  processor:
-    dispatch:
-      max_depth: -1
-agents:
-  - name: reviewer
-    backend: claude
-    prompt: "You review PRs."
-repos:
-  - name: "owner/repo"
-    enabled: true
-    use:
-      - agent: reviewer
-        labels: ["ai:review"]
-`,
-			errMsg: "max_depth",
+			name:   "negative max_depth",
+			envKey: "AGENTS_DISPATCH_MAX_DEPTH",
+			envVal: "-1",
+			errMsg: "AGENTS_DISPATCH_MAX_DEPTH",
 		},
 		{
-			name: "negative max_fanout",
-			yaml: `
-daemon:
-  http:
-    webhook_secret_env: TEST_SECRET
-  ai_backends:
-    claude:
-      command: claude
-  processor:
-    dispatch:
-      max_fanout: -2
-agents:
-  - name: reviewer
-    backend: claude
-    prompt: "You review PRs."
-repos:
-  - name: "owner/repo"
-    enabled: true
-    use:
-      - agent: reviewer
-        labels: ["ai:review"]
-`,
-			errMsg: "max_fanout",
+			name:   "negative max_fanout",
+			envKey: "AGENTS_DISPATCH_MAX_FANOUT",
+			envVal: "-2",
+			errMsg: "AGENTS_DISPATCH_MAX_FANOUT",
 		},
 		{
-			name: "negative dedup_window_seconds",
-			yaml: `
-daemon:
-  http:
-    webhook_secret_env: TEST_SECRET
-  ai_backends:
-    claude:
-      command: claude
-  processor:
-    dispatch:
-      dedup_window_seconds: -5
-agents:
-  - name: reviewer
-    backend: claude
-    prompt: "You review PRs."
-repos:
-  - name: "owner/repo"
-    enabled: true
-    use:
-      - agent: reviewer
-        labels: ["ai:review"]
-`,
-			errMsg: "dedup_window_seconds",
+			name:   "negative dedup_window_seconds",
+			envKey: "AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS",
+			envVal: "-5",
+			errMsg: "AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			path := writeConfig(t, tc.yaml)
+			t.Setenv(tc.envKey, tc.envVal)
+			path := writeConfig(t, minimalYAML(""))
 			_, err := Load(path)
 			if err == nil {
 				t.Fatalf("expected error containing %q, got nil", tc.errMsg)
@@ -755,32 +753,6 @@ func TestDispatchDefaultsApplied(t *testing.T) {
 
 // ── proxy config ───────────────────────────────────────────────────────────────
 
-func proxyYAML(proxyBlock string) string {
-	return fmt.Sprintf(`
-daemon:
-  http:
-    webhook_secret_env: TEST_SECRET
-  ai_backends:
-    claude:
-      command: claude
-      args: ["-p"]
-  proxy:
-%s
-
-agents:
-  - name: reviewer
-    backend: claude
-    prompt: "You review PRs."
-
-repos:
-  - name: "owner/repo"
-    enabled: true
-    use:
-      - agent: reviewer
-        labels: ["ai:review"]
-`, proxyBlock)
-}
-
 func TestProxyDisabledByDefault(t *testing.T) {
 	t.Setenv("TEST_SECRET", "s3cret")
 	path := writeConfig(t, minimalYAML(""))
@@ -809,16 +781,13 @@ func TestProxyDefaultsApplied(t *testing.T) {
 }
 
 func TestProxyValidConfigLoads(t *testing.T) {
-	t.Setenv("TEST_SECRET", "s3cret")
 	t.Setenv("LLM_KEY", "key-abc")
-	block := `
-    enabled: true
-    upstream:
-      url: http://localhost:8001/v1
-      model: qwen
-      api_key_env: LLM_KEY
-      timeout_seconds: 60`
-	path := writeConfig(t, proxyYAML(block))
+	t.Setenv("AGENTS_PROXY_ENABLED", "true")
+	t.Setenv("AGENTS_PROXY_UPSTREAM_URL", "http://localhost:8001/v1")
+	t.Setenv("AGENTS_PROXY_UPSTREAM_MODEL", "qwen")
+	t.Setenv("AGENTS_PROXY_UPSTREAM_API_KEY_ENV", "LLM_KEY")
+	t.Setenv("AGENTS_PROXY_UPSTREAM_TIMEOUT_SECONDS", "60")
+	path := writeConfig(t, minimalYAML(""))
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -841,65 +810,65 @@ func TestProxyValidConfigLoads(t *testing.T) {
 }
 
 func TestProxyValidationErrors(t *testing.T) {
-	t.Setenv("TEST_SECRET", "s3cret")
-
 	tests := []struct {
 		name       string
-		block      string
+		env        map[string]string
 		wantErrMsg string
 	}{
 		{
 			name: "missing url",
-			block: `
-    enabled: true
-    upstream:
-      model: qwen`,
+			env: map[string]string{
+				"AGENTS_PROXY_ENABLED":        "true",
+				"AGENTS_PROXY_UPSTREAM_MODEL": "qwen",
+			},
 			wantErrMsg: "config: proxy.upstream.url is required when proxy.enabled is true",
 		},
 		{
 			name: "missing model",
-			block: `
-    enabled: true
-    upstream:
-      url: http://localhost:8001/v1`,
+			env: map[string]string{
+				"AGENTS_PROXY_ENABLED":      "true",
+				"AGENTS_PROXY_UPSTREAM_URL": "http://localhost:8001/v1",
+			},
 			wantErrMsg: "config: proxy.upstream.model is required when proxy.enabled is true",
 		},
 		{
 			name: "path without slash",
-			block: `
-    enabled: true
-    path: v1/messages
-    upstream:
-      url: http://localhost:8001/v1
-      model: qwen`,
-			wantErrMsg: `config: proxy.path must start with '/', got "v1/messages"`,
+			env: map[string]string{
+				"AGENTS_PROXY_ENABLED":        "true",
+				"AGENTS_PROXY_PATH":           "v1/messages",
+				"AGENTS_PROXY_UPSTREAM_URL":   "http://localhost:8001/v1",
+				"AGENTS_PROXY_UPSTREAM_MODEL": "qwen",
+			},
+			wantErrMsg: `config: AGENTS_PROXY_PATH must start with '/', got "v1/messages"`,
 		},
 		{
 			name: "non-positive timeout",
-			block: `
-    enabled: true
-    upstream:
-      url: http://localhost:8001/v1
-      model: qwen
-      timeout_seconds: -1`,
-			wantErrMsg: "config: proxy.upstream.timeout_seconds must be positive, got -1",
+			env: map[string]string{
+				"AGENTS_PROXY_ENABLED":                  "true",
+				"AGENTS_PROXY_UPSTREAM_URL":             "http://localhost:8001/v1",
+				"AGENTS_PROXY_UPSTREAM_MODEL":           "qwen",
+				"AGENTS_PROXY_UPSTREAM_TIMEOUT_SECONDS": "-1",
+			},
+			wantErrMsg: `config: AGENTS_PROXY_UPSTREAM_TIMEOUT_SECONDS must be a positive integer, got "-1"`,
 		},
 		{
 			name: "api_key_env set but variable unset",
-			block: `
-    enabled: true
-    upstream:
-      url: http://localhost:8001/v1
-      model: qwen
-      api_key_env: MISSING_LLM_KEY`,
+			env: map[string]string{
+				"AGENTS_PROXY_ENABLED":              "true",
+				"AGENTS_PROXY_UPSTREAM_URL":         "http://localhost:8001/v1",
+				"AGENTS_PROXY_UPSTREAM_MODEL":       "qwen",
+				"AGENTS_PROXY_UPSTREAM_API_KEY_ENV": "MISSING_LLM_KEY",
+			},
 			wantErrMsg: `config: proxy.upstream.api_key_env "MISSING_LLM_KEY" is set but the environment variable is empty or unset`,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			path := writeConfig(t, proxyYAML(tc.block))
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			path := writeConfig(t, minimalYAML(""))
 			_, err := Load(path)
 			if err == nil {
 				t.Fatal("expected error, got nil")

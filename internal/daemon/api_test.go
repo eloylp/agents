@@ -351,9 +351,9 @@ func TestHandleAPIAgentsCurrentStatusRunningWhenActive(t *testing.T) {
 	}
 }
 
-// ── /api/config ────────────────────────────────────────────────────────────
+// ── /config ────────────────────────────────────────────────────────────────
 
-func TestHandleAPIConfigRedactsSecrets(t *testing.T) {
+func TestHandleAPIConfigOmitsDaemonRuntimeConfig(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) {
 		c.Daemon.HTTP.WebhookSecret = "super-secret-webhook"
@@ -383,20 +383,19 @@ func TestHandleAPIConfigRedactsSecrets(t *testing.T) {
 
 	body := rec.Body.String()
 
-	// Actual secret values must not appear anywhere in the response.
 	secrets := []string{"super-secret-webhook", "proxy-secret", "sk-ant-secret"}
 	for _, s := range secrets {
 		if strings.Contains(body, s) {
-			t.Errorf("secret %q must be redacted but appears in response", s)
+			t.Errorf("daemon secret %q must not appear in fleet config response", s)
 		}
 	}
-
-	// The "[redacted]" sentinel and env var names must be present.
-	if !strings.Contains(body, "[redacted]") {
-		t.Error("want at least one [redacted] marker in response")
+	for _, key := range []string{"daemon", "http", "processor", "proxy", "webhook_secret_env", "api_key_env"} {
+		if strings.Contains(body, key) {
+			t.Errorf("daemon runtime key %q must not appear in fleet config response: %s", key, body)
+		}
 	}
-	if !strings.Contains(body, "GITHUB_WEBHOOK_SECRET") {
-		t.Error("env var name GITHUB_WEBHOOK_SECRET must be preserved")
+	if !strings.Contains(body, "backends") {
+		t.Errorf("fleet config response should include backends: %s", body)
 	}
 }
 

@@ -92,6 +92,6 @@ These tools mirror the `/runners` REST surface; see [api.md](api.md#runners-mana
 
 | Tool | Description |
 |---|---|
-| `get_config` | Effective config snapshot (secrets redacted). |
+| `get_config` | Current fleet config snapshot. |
 | `export_config` | Fleet config as YAML (round-trippable via `import_config`). |
 | `import_config` | Import YAML config. `mode=replace` prunes missing entries. |

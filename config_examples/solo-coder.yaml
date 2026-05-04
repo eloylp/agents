@@ -12,21 +12,11 @@
 #
 # Import: curl -X POST -H 'Content-Type: application/x-yaml' --data-binary @solo-coder.yaml http://localhost:8080/import
 
-daemon:
-  log:
-    level: info
-    format: text
-  http:
-    listen_addr: ":8080"
-    webhook_secret_env: GITHUB_WEBHOOK_SECRET
-  processor:
-    event_queue_buffer: 256
-    max_concurrent_agents: 2
-  ai_backends:
-    claude:
-      command: claude
-      timeout_seconds: 1500
-      max_prompt_chars: 12000
+backends:
+  claude:
+    command: claude
+    timeout_seconds: 1500
+    max_prompt_chars: 12000
 
 skills:
   architect:

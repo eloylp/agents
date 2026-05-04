@@ -30,6 +30,7 @@ type LeaderboardEntry struct {
 	CacheWriteTokens int64  `json:"cache_write_tokens"`
 	Total            int64  `json:"total"`
 	Runs             int64  `json:"runs"`
+	AvgTokensPerRun  int64  `json:"avg_tokens_per_run"`
 }
 
 // BudgetAlert describes a budget that has reached or exceeded its alert threshold.
@@ -397,6 +398,9 @@ func TokenLeaderboard(db *sql.DB, repo, period string) ([]LeaderboardEntry, erro
 		var e LeaderboardEntry
 		if err := rows.Scan(&e.Agent, &e.InputTokens, &e.OutputTokens, &e.CacheReadTokens, &e.CacheWriteTokens, &e.Total, &e.Runs); err != nil {
 			return nil, err
+		}
+		if e.Runs > 0 {
+			e.AvgTokensPerRun = e.Total / e.Runs
 		}
 		out = append(out, e)
 	}

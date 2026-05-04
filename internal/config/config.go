@@ -1,8 +1,8 @@
 // Package config defines the agents daemon configuration schema and loader.
 //
-// The config file is structured in three top-level sections:
+// The import/export config file is structured in fleet-owned top-level sections:
 //
-//	daemon, how the service runs (logging, HTTP, queues, AI backends)
+//	backends, AI CLI/runtime definitions used by agents
 //	skills, reusable guidance blocks referenced by agents
 //	agents, named capabilities (backend + skills + prompt)
 //	repos, wiring: which agents run on which repo, and when
@@ -32,11 +32,12 @@ import (
 
 // Config is the root configuration loaded from YAML.
 type Config struct {
-	Daemon     DaemonConfig           `yaml:"daemon"`
-	Skills     map[string]fleet.Skill `yaml:"skills"`
-	Agents     []fleet.Agent          `yaml:"agents"`
-	Repos      []fleet.Repo           `yaml:"repos"`
-	Guardrails []fleet.Guardrail      `yaml:"guardrails,omitempty"`
+	Daemon     DaemonConfig             `yaml:"-"`
+	Backends   map[string]fleet.Backend `yaml:"backends,omitempty"`
+	Skills     map[string]fleet.Skill   `yaml:"skills"`
+	Agents     []fleet.Agent            `yaml:"agents"`
+	Repos      []fleet.Repo             `yaml:"repos"`
+	Guardrails []fleet.Guardrail        `yaml:"guardrails,omitempty"`
 }
 
 // DaemonConfig holds infrastructure-level configuration for the running
@@ -45,7 +46,7 @@ type DaemonConfig struct {
 	Log        LogConfig                `yaml:"log"`
 	HTTP       HTTPConfig               `yaml:"http"`
 	Processor  ProcessorConfig          `yaml:"processor"`
-	AIBackends map[string]fleet.Backend `yaml:"ai_backends"`
+	AIBackends map[string]fleet.Backend `yaml:"-"`
 	Proxy      ProxyConfig              `yaml:"proxy"`
 }
 
@@ -119,13 +120,28 @@ type DispatchConfig struct {
 // read from the SQLite store). All prompts are expected to be inline by
 // the time FinishLoad runs.
 func FinishLoad(cfg *Config) (*Config, error) {
+	cfg.syncBackendsIntoDaemon()
 	cfg.applyDefaults()
+	if err := cfg.applyEnvOverrides(); err != nil {
+		return nil, err
+	}
 	cfg.normalize()
+	cfg.syncBackendsFromDaemon()
 	cfg.resolveSecrets()
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+func (c *Config) syncBackendsIntoDaemon() {
+	if len(c.Backends) > 0 && len(c.Daemon.AIBackends) == 0 {
+		c.Daemon.AIBackends = c.Backends
+	}
+}
+
+func (c *Config) syncBackendsFromDaemon() {
+	c.Backends = c.Daemon.AIBackends
 }
 
 // Load reads, parses, validates, and resolves a YAML config file at the

@@ -11,10 +11,9 @@ git clone --branch v0.1.0 https://github.com/eloylp/agents
 cd agents
 # .env holds runtime secrets (loaded automatically by compose).
 # Webhook secret: random per install. PAT: from https://github.com/settings/tokens with repo scope.
-cat > .env <<EOF
-GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)
-GITHUB_TOKEN=ghp_paste_your_token_here
-EOF
+cp .env.sample .env
+sed -i.bak "s/^GITHUB_WEBHOOK_SECRET=.*/GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)/" .env && rm .env.bak
+# Edit GITHUB_TOKEN in .env before continuing.
 docker compose up -d
 ```
 

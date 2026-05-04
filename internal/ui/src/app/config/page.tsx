@@ -37,6 +37,11 @@ interface OrphanedAgentsResponse {
   agents?: OrphanedAgent[]
 }
 
+interface Agent {
+  name: string
+  backend?: string
+}
+
 interface TokenBudget {
   id: number
   scope_kind: string
@@ -55,6 +60,7 @@ interface LeaderboardEntry {
   cache_write_tokens: number
   total: number
   runs: number
+  avg_tokens_per_run: number
 }
 
 const orderedBackendNames = ['claude', 'codex']
@@ -189,6 +195,7 @@ export default function ConfigPage() {
   const [tab, setTab] = useState<'inspector' | 'backends' | 'guardrails' | 'import-export' | 'tokens'>('inspector')
 
   const [backends, setBackends] = useState<Backend[]>([])
+  const [agents, setAgents] = useState<Agent[]>([])
   const [backendsLoading, setBackendsLoading] = useState(false)
   const [backendDriftWarnings, setBackendDriftWarnings] = useState<string[]>([])
   const [orphanedAgents, setOrphanedAgents] = useState<OrphanedAgent[]>([])
@@ -546,12 +553,29 @@ export default function ConfigPage() {
     setLbLoading(false)
   }
 
+  const loadBudgetScopeOptions = async () => {
+    try {
+      const [backendRes, agentRes] = await Promise.all([fetch('/backends'), fetch('/agents')])
+      if (backendRes.ok) {
+        const backendData = await backendRes.json() as Backend[] | null
+        setBackends(sortBackends(backendData ?? []))
+      }
+      if (agentRes.ok) {
+        const agentData = await agentRes.json() as Agent[] | null
+        setAgents((agentData ?? []).slice().sort((a, b) => a.name.localeCompare(b.name)))
+      }
+    } catch {
+      // Keep any already-loaded options; validation still happens server-side.
+    }
+  }
+
   const saveBudget = async () => {
     setBudgetSaving(true)
     setBudgetError('')
     try {
       const body = JSON.stringify({
         ...budgetForm,
+        scope_name: budgetForm.scope_kind === 'global' ? '' : budgetForm.scope_name.trim(),
         cap_tokens: Number(budgetForm.cap_tokens),
         alert_at_pct: Number(budgetForm.alert_at_pct),
       })
@@ -599,6 +623,7 @@ export default function ConfigPage() {
     if (tab === 'tokens') {
       loadBudgets()
       loadLeaderboard(lbPeriod, lbRepo)
+      loadBudgetScopeOptions()
     }
   }, [tab])
 
@@ -614,6 +639,17 @@ export default function ConfigPage() {
     color: tab === t ? 'var(--text-heading)' : 'var(--text-muted)', fontWeight: tab === t ? 600 : 400,
     marginBottom: '-1px',
   })
+
+  const budgetScopeOptions = budgetForm.scope_kind === 'backend'
+    ? backends.map(b => b.name)
+    : budgetForm.scope_kind === 'agent'
+      ? agents.map(a => a.name)
+      : []
+  const budgetScopeOptionsWithCurrent = budgetForm.scope_name && !budgetScopeOptions.includes(budgetForm.scope_name)
+    ? [budgetForm.scope_name, ...budgetScopeOptions]
+    : budgetScopeOptions
+  const budgetNeedsScope = budgetForm.scope_kind !== 'global'
+  const budgetCanSave = !budgetSaving && (!budgetNeedsScope || budgetForm.scope_name.trim() !== '')
 
   return (
     <div>
@@ -945,6 +981,7 @@ export default function ConfigPage() {
                       <th style={{ padding: '4px 8px', fontWeight: 600 }}>#</th>
                       <th style={{ padding: '4px 8px', fontWeight: 600 }}>Agent</th>
                       <th style={{ padding: '4px 8px', fontWeight: 600, textAlign: 'right' }}>Runs</th>
+                      <th style={{ padding: '4px 8px', fontWeight: 600, textAlign: 'right' }}>Avg / run</th>
                       <th style={{ padding: '4px 8px', fontWeight: 600, textAlign: 'right' }}>Input</th>
                       <th style={{ padding: '4px 8px', fontWeight: 600, textAlign: 'right' }}>Output</th>
                       <th style={{ padding: '4px 8px', fontWeight: 600, textAlign: 'right' }}>Cache r/w</th>
@@ -957,6 +994,7 @@ export default function ConfigPage() {
                         <td style={{ padding: '5px 8px', color: 'var(--text-faint)' }}>{i + 1}</td>
                         <td style={{ padding: '5px 8px', fontWeight: 600, color: 'var(--text-heading)' }}>{e.agent}</td>
                         <td style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--text-muted)' }}>{e.runs.toLocaleString()}</td>
+                        <td style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--accent)', fontWeight: 600 }}>{(e.avg_tokens_per_run ?? Math.floor(e.total / Math.max(e.runs, 1))).toLocaleString()}</td>
                         <td style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--text)' }}>{e.input_tokens.toLocaleString()}</td>
                         <td style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--text)' }}>{e.output_tokens.toLocaleString()}</td>
                         <td style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--text-muted)' }}>{(e.cache_read_tokens + e.cache_write_tokens).toLocaleString()}</td>
@@ -1202,7 +1240,19 @@ export default function ConfigPage() {
               <select
                 style={inputStyle}
                 value={budgetForm.scope_kind}
-                onChange={e => setBudgetForm(f => ({ ...f, scope_kind: e.target.value, scope_name: e.target.value === 'global' ? '' : f.scope_name }))}
+                onChange={e => {
+                  const nextKind = e.target.value
+                  const nextOptions = nextKind === 'backend'
+                    ? backends.map(b => b.name)
+                    : nextKind === 'agent'
+                      ? agents.map(a => a.name)
+                      : []
+                  setBudgetForm(f => ({
+                    ...f,
+                    scope_kind: nextKind,
+                    scope_name: nextKind === 'global' ? '' : nextOptions[0] ?? '',
+                  }))
+                }}
               >
                 <option value="global">Global (all agents and backends)</option>
                 <option value="backend">Backend</option>
@@ -1211,13 +1261,25 @@ export default function ConfigPage() {
             </div>
             {budgetForm.scope_kind !== 'global' && (
               <div>
-                <label style={labelStyle}>{budgetForm.scope_kind === 'backend' ? 'Backend name' : 'Agent name'}</label>
-                <input
+                <label style={labelStyle}>{budgetForm.scope_kind === 'backend' ? 'Backend' : 'Agent'}</label>
+                <select
                   style={inputStyle}
                   value={budgetForm.scope_name}
                   onChange={e => setBudgetForm(f => ({ ...f, scope_name: e.target.value }))}
-                  placeholder={budgetForm.scope_kind === 'backend' ? 'claude' : 'coder'}
-                />
+                  disabled={budgetScopeOptionsWithCurrent.length === 0}
+                >
+                  {budgetScopeOptionsWithCurrent.length === 0 && (
+                    <option value="">No {budgetForm.scope_kind === 'backend' ? 'backends' : 'agents'} available</option>
+                  )}
+                  {budgetScopeOptionsWithCurrent.map(name => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+                {budgetScopeOptionsWithCurrent.length === 0 && (
+                  <p style={{ color: 'var(--text-faint)', fontSize: '0.76rem', margin: '0.35rem 0 0' }}>
+                    No {budgetForm.scope_kind === 'backend' ? 'backends' : 'agents'} are configured yet.
+                  </p>
+                )}
               </div>
             )}
             <div>
@@ -1271,7 +1333,7 @@ export default function ConfigPage() {
               </button>
               <button
                 onClick={saveBudget}
-                disabled={budgetSaving}
+                disabled={!budgetCanSave}
                 style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: budgetSaving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
               >
                 {budgetSaving ? 'Saving…' : editBudget ? 'Update budget' : 'Add budget'}

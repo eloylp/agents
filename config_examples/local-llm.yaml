@@ -19,46 +19,27 @@
 #
 # Import: curl -X POST -H 'Content-Type: application/x-yaml' --data-binary @local-llm.yaml http://localhost:8080/import
 
-daemon:
-  log:
-    level: info
-    format: text
-  http:
-    listen_addr: ":8080"
-    webhook_secret_env: GITHUB_WEBHOOK_SECRET
-  processor:
-    event_queue_buffer: 256
-    max_concurrent_agents: 2
+backends:
+  claude:
+    command: claude
+    timeout_seconds: 1500
+    max_prompt_chars: 12000
 
-  ai_backends:
-    claude:
-      command: claude
-      timeout_seconds: 1500
-      max_prompt_chars: 12000
+  # Custom backend: same `claude` CLI, but routed at runtime to the
+  # local upstream below. The presence of `local_model_url` is what
+  # marks this as a local backend.
+  claude_local:
+    command: claude
+    local_model_url: http://local-llm:18000/v1
+    timeout_seconds: 3600
+    max_prompt_chars: 8000
 
-    # Custom backend: same `claude` CLI, but routed at runtime to the
-    # local upstream below. The presence of `local_model_url` is what
-    # marks this as a local backend.
-    claude_local:
-      command: claude
-      local_model_url: http://local-llm:18000/v1
-      timeout_seconds: 3600
-      max_prompt_chars: 8000
-
-  # Built-in translation proxy. `claude_local` runs against this
-  # endpoint, which forwards to `upstream.url` after translation.
-  proxy:
-    enabled: true
-    path: /v1/messages
-    upstream:
-      url: http://local-llm:18000/v1
-      model: qwen3-coder
-      timeout_seconds: 3600
-      # Most local LLM servers (Ollama, llama.cpp, vLLM in default config)
-      # don't require auth, so api_key_env is omitted. Set it if your
-      # upstream is behind a token gate; the named env variable must
-      # exist at daemon start, otherwise the proxy refuses to enable.
-      # api_key_env: LOCAL_LLM_API_KEY
+# Built-in translation proxy settings are daemon runtime env vars, not YAML.
+# For this example, set:
+# AGENTS_PROXY_ENABLED=true
+# AGENTS_PROXY_UPSTREAM_URL=http://local-llm:18000/v1
+# AGENTS_PROXY_UPSTREAM_MODEL=qwen3-coder
+# AGENTS_PROXY_UPSTREAM_TIMEOUT_SECONDS=3600
 
 skills:
   architect:

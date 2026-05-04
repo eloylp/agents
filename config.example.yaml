@@ -17,59 +17,18 @@
 # ──────────────────────────────────────────────
 
 # ──────────────────────────────────────────────
-# daemon, how the service runs
+# backends, AI CLI runtimes agents can use
 # ──────────────────────────────────────────────
-daemon:
-  log:
-    level: info
-    format: text          # text or json
+backends:
+  claude:
+    command: claude
+    timeout_seconds: 1500
+    max_prompt_chars: 12000
 
-  http:
-    listen_addr: ":8080"
-    status_path: /status
-    webhook_path: /webhooks/github
-    webhook_secret_env: GITHUB_WEBHOOK_SECRET
-    read_timeout_seconds: 15
-    write_timeout_seconds: 15   # non-SSE routes only; SSE streams stay open
-    idle_timeout_seconds: 60
-    max_body_bytes: 1048576     # 1 MiB
-    delivery_ttl_seconds: 3600
-    shutdown_timeout_seconds: 15
-
-  processor:
-    event_queue_buffer: 256
-    max_concurrent_agents: 4
-    dispatch:
-      max_depth: 3
-      max_fanout: 4
-      dedup_window_seconds: 300
-
-  ai_backends:
-    claude:
-      command: claude
-      timeout_seconds: 1500
-      max_prompt_chars: 12000
-
-    codex:
-      command: codex
-      timeout_seconds: 600
-      max_prompt_chars: 12000
-
-  # Optional: enable the built-in Anthropic↔OpenAI translation proxy so the
-  # claude CLI can talk to Ollama, llama.cpp, vLLM, or any OpenAI-compatible
-  # endpoint through the daemon itself.
-  #
-  # proxy:
-  #   enabled: true
-  #   path: /v1/messages
-  #   upstream:
-  #     url: http://localhost:18000/v1
-  #     model: qwen
-  #     api_key_env: LOCAL_LLM_API_KEY
-  #     timeout_seconds: 3600
-  #     extra_body:
-  #       chat_template_kwargs:
-  #         enable_thinking: false
+  codex:
+    command: codex
+    timeout_seconds: 600
+    max_prompt_chars: 12000
 
 # ──────────────────────────────────────────────
 # skills, reusable guidance blocks

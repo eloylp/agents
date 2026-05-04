@@ -4,9 +4,9 @@
 // apiConfigJSON tree for /config; the exportYAML fragment for /export +
 // /import) so REST and MCP clients see identical payloads.
 //
-// The handler reads the four CRUD-mutable entity sets from SQLite on every
-// request; the static daemon-level config (HTTP, proxy, log, processor) is
-// captured at construction since those never mutate via CRUD.
+// The handler reads CRUD-mutable fleet entities from SQLite on every request.
+// Daemon runtime config is process-owned and is not exposed by /config,
+// /export, or /import.
 package config
 
 import (
@@ -34,9 +34,8 @@ type Handler struct {
 }
 
 // New constructs a Handler. store is the data-access facade read on every
-// request to assemble the /config response from the latest committed
-// entities. daemonCfg supplies the static daemon-level fields the
-// response embeds.
+// request to assemble the /config response from the latest committed entities.
+// daemonCfg supplies process-owned request limits for import and budget writes.
 func New(st *store.Store, daemonCfg config.DaemonConfig, logger zerolog.Logger) *Handler {
 	return &Handler{
 		store:     st,
@@ -58,38 +57,12 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 
 // ── /config ─────────────────────────────────────────────────────────────────
 
-// apiConfigJSON is the wire shape for /config with secrets redacted.
-// Secrets (resolved values of *_env fields) are replaced with "[redacted]".
+// apiConfigJSON is the fleet-only wire shape for /config.
 type apiConfigJSON struct {
-	Daemon apiDaemonJSON           `json:"daemon"`
-	Skills map[string]apiSkillJSON `json:"skills,omitempty"`
-	Agents []apiAgentConfigJSON    `json:"agents,omitempty"`
-	Repos  []apiRepoConfigJSON     `json:"repos,omitempty"`
-}
-
-type apiDaemonJSON struct {
-	Log        apiLogConfigJSON                  `json:"log"`
-	HTTP       apiHTTPConfigJSON                 `json:"http"`
-	Processor  apiProcessorConfigJSON            `json:"processor"`
-	AIBackends map[string]apiAIBackendConfigJSON `json:"ai_backends,omitempty"`
-	Proxy      apiProxyConfigJSON                `json:"proxy"`
-}
-
-type apiLogConfigJSON struct {
-	Level  string `json:"level"`
-	Format string `json:"format"`
-}
-
-type apiDispatchConfigJSON struct {
-	MaxDepth           int `json:"max_depth"`
-	MaxFanout          int `json:"max_fanout"`
-	DedupWindowSeconds int `json:"dedup_window_seconds"`
-}
-
-type apiProcessorConfigJSON struct {
-	EventQueueBuffer    int                   `json:"event_queue_buffer"`
-	MaxConcurrentAgents int                   `json:"max_concurrent_agents"`
-	Dispatch            apiDispatchConfigJSON `json:"dispatch"`
+	Backends map[string]apiAIBackendConfigJSON `json:"backends,omitempty"`
+	Skills   map[string]apiSkillJSON           `json:"skills,omitempty"`
+	Agents   []apiAgentConfigJSON              `json:"agents,omitempty"`
+	Repos    []apiRepoConfigJSON               `json:"repos,omitempty"`
 }
 
 // apiBindingConfigJSON is the wire shape for a repo binding in /config.
@@ -110,20 +83,6 @@ type apiRepoConfigJSON struct {
 	Bindings []apiBindingConfigJSON `json:"bindings,omitempty"`
 }
 
-type apiHTTPConfigJSON struct {
-	ListenAddr             string `json:"listen_addr"`
-	StatusPath             string `json:"status_path"`
-	WebhookPath            string `json:"webhook_path"`
-	WebhookSecretEnv       string `json:"webhook_secret_env,omitempty"`
-	WebhookSecret          string `json:"webhook_secret,omitempty"` // always "[redacted]" when set
-	ReadTimeoutSeconds     int    `json:"read_timeout_seconds"`
-	WriteTimeoutSeconds    int    `json:"write_timeout_seconds"`
-	IdleTimeoutSeconds     int    `json:"idle_timeout_seconds"`
-	MaxBodyBytes           int64  `json:"max_body_bytes"`
-	DeliveryTTLSeconds     int    `json:"delivery_ttl_seconds"`
-	ShutdownTimeoutSeconds int    `json:"shutdown_timeout_seconds"`
-}
-
 type apiAIBackendConfigJSON struct {
 	Command        string   `json:"command"`
 	Version        string   `json:"version,omitempty"`
@@ -133,23 +92,6 @@ type apiAIBackendConfigJSON struct {
 	LocalModelURL  string   `json:"local_model_url,omitempty"`
 	TimeoutSeconds int      `json:"timeout_seconds"`
 	MaxPromptChars int      `json:"max_prompt_chars"`
-}
-
-type apiProxyConfigJSON struct {
-	Enabled  bool                 `json:"enabled"`
-	Path     string               `json:"path,omitempty"`
-	Upstream apiProxyUpstreamJSON `json:"upstream,omitempty"`
-}
-
-type apiProxyUpstreamJSON struct {
-	URL            string `json:"url,omitempty"`
-	Model          string `json:"model,omitempty"`
-	APIKeyEnv      string `json:"api_key_env,omitempty"`
-	APIKey         string `json:"api_key,omitempty"` // always "[redacted]" when set
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
-	// ExtraBody is intentionally omitted: values can contain bearer tokens or
-	// other secrets and there is no way to safely distinguish them from safe
-	// tuning knobs without domain knowledge of every possible upstream vendor.
 }
 
 type apiSkillJSON struct {
@@ -169,11 +111,7 @@ type apiAgentConfigJSON struct {
 	CanDispatch   []string `json:"can_dispatch,omitempty"`
 }
 
-const redacted = "[redacted]"
-
-// HandleConfig serves GET /config, the effective parsed config with secret
-// values replaced by "[redacted]". Env-var names are preserved so operators
-// can identify which environment variable holds a given secret.
+// HandleConfig serves GET /config, the current fleet config snapshot.
 func (h *Handler) HandleConfig(w http.ResponseWriter, _ *http.Request) {
 	body, err := h.ConfigJSON()
 	if err != nil {
@@ -184,30 +122,13 @@ func (h *Handler) HandleConfig(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(body)
 }
 
-// ConfigJSON returns the effective parsed config as JSON bytes with secrets
-// redacted. Exposed so surfaces beyond HTTP (e.g. the MCP get_config tool)
-// can reuse the exact same wire shape without going through the router.
+// ConfigJSON returns the current fleet config snapshot as JSON bytes. Exposed
+// so surfaces beyond HTTP (e.g. the MCP get_config tool) can reuse the exact
+// same wire shape without going through the router.
 func (h *Handler) ConfigJSON() ([]byte, error) {
-	dcfg := h.daemonCfg
 	storedAgents, storedRepos, storedSkills, storedBackends, err := h.store.ReadSnapshot()
 	if err != nil {
 		return nil, fmt.Errorf("read snapshot: %w", err)
-	}
-
-	httpCfg := apiHTTPConfigJSON{
-		ListenAddr:             dcfg.HTTP.ListenAddr,
-		StatusPath:             dcfg.HTTP.StatusPath,
-		WebhookPath:            dcfg.HTTP.WebhookPath,
-		WebhookSecretEnv:       dcfg.HTTP.WebhookSecretEnv,
-		ReadTimeoutSeconds:     dcfg.HTTP.ReadTimeoutSeconds,
-		WriteTimeoutSeconds:    dcfg.HTTP.WriteTimeoutSeconds,
-		IdleTimeoutSeconds:     dcfg.HTTP.IdleTimeoutSeconds,
-		MaxBodyBytes:           dcfg.HTTP.MaxBodyBytes,
-		DeliveryTTLSeconds:     dcfg.HTTP.DeliveryTTLSeconds,
-		ShutdownTimeoutSeconds: dcfg.HTTP.ShutdownTimeoutSeconds,
-	}
-	if dcfg.HTTP.WebhookSecret != "" {
-		httpCfg.WebhookSecret = redacted
 	}
 	backends := make(map[string]apiAIBackendConfigJSON, len(storedBackends))
 	for name, b := range storedBackends {
@@ -221,21 +142,6 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 			TimeoutSeconds: b.TimeoutSeconds,
 			MaxPromptChars: b.MaxPromptChars,
 		}
-	}
-
-	proxy := apiProxyConfigJSON{
-		Enabled: dcfg.Proxy.Enabled,
-		Path:    dcfg.Proxy.Path,
-		Upstream: apiProxyUpstreamJSON{
-			URL:            dcfg.Proxy.Upstream.URL,
-			Model:          dcfg.Proxy.Upstream.Model,
-			APIKeyEnv:      dcfg.Proxy.Upstream.APIKeyEnv,
-			TimeoutSeconds: dcfg.Proxy.Upstream.TimeoutSeconds,
-			// ExtraBody is not copied: see apiProxyUpstreamJSON comment.
-		},
-	}
-	if dcfg.Proxy.Upstream.APIKey != "" {
-		proxy.Upstream.APIKey = redacted
 	}
 
 	skills := make(map[string]apiSkillJSON, len(storedSkills))
@@ -279,27 +185,10 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 	}
 
 	resp := apiConfigJSON{
-		Daemon: apiDaemonJSON{
-			Log: apiLogConfigJSON{
-				Level:  dcfg.Log.Level,
-				Format: dcfg.Log.Format,
-			},
-			HTTP: httpCfg,
-			Processor: apiProcessorConfigJSON{
-				EventQueueBuffer:    dcfg.Processor.EventQueueBuffer,
-				MaxConcurrentAgents: dcfg.Processor.MaxConcurrentAgents,
-				Dispatch: apiDispatchConfigJSON{
-					MaxDepth:           dcfg.Processor.Dispatch.MaxDepth,
-					MaxFanout:          dcfg.Processor.Dispatch.MaxFanout,
-					DedupWindowSeconds: dcfg.Processor.Dispatch.DedupWindowSeconds,
-				},
-			},
-			AIBackends: backends,
-			Proxy:      proxy,
-		},
-		Skills: skills,
-		Agents: agents,
-		Repos:  repos,
+		Backends: backends,
+		Skills:   skills,
+		Agents:   agents,
+		Repos:    repos,
 	}
 
 	return json.Marshal(resp)
@@ -311,20 +200,16 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 // CRUD-mutable sections; daemon-level config (HTTP, log, proxy) is
 // intentionally excluded, it is not managed by the write API.
 type exportYAML struct {
-	Skills       map[string]fleet.Skill `yaml:"skills,omitempty"`
-	Agents       []fleet.Agent          `yaml:"agents,omitempty"`
-	Repos        []fleet.Repo           `yaml:"repos,omitempty"`
-	Guardrails   []fleet.Guardrail      `yaml:"guardrails,omitempty"`
-	TokenBudgets []store.TokenBudget    `yaml:"token_budgets,omitempty"`
-	Daemon       *exportDaemonYAML      `yaml:"daemon,omitempty"`
-}
-
-type exportDaemonYAML struct {
-	AIBackends map[string]fleet.Backend `yaml:"ai_backends,omitempty"`
+	Backends     map[string]fleet.Backend `yaml:"backends,omitempty"`
+	Skills       map[string]fleet.Skill   `yaml:"skills,omitempty"`
+	Agents       []fleet.Agent            `yaml:"agents,omitempty"`
+	Repos        []fleet.Repo             `yaml:"repos,omitempty"`
+	Guardrails   []fleet.Guardrail        `yaml:"guardrails,omitempty"`
+	TokenBudgets []store.TokenBudget      `yaml:"token_budgets,omitempty"`
 }
 
 // HandleExport serves GET /export, returns a config.yaml fragment covering
-// the CRUD-mutable sections (skills, agents, repos, daemon.ai_backends,
+// the CRUD-mutable sections (backends, skills, agents, repos,
 // guardrails, token_budgets).
 func (h *Handler) HandleExport(w http.ResponseWriter, _ *http.Request) {
 	b, err := h.ExportYAML()
@@ -354,14 +239,12 @@ func (h *Handler) ExportYAML() ([]byte, error) {
 		return nil, fmt.Errorf("list token budgets: %w", err)
 	}
 	out := exportYAML{
+		Backends:     backends,
 		Skills:       skills,
 		Agents:       agents,
 		Repos:        repos,
 		Guardrails:   guardrails,
 		TokenBudgets: budgets,
-	}
-	if len(backends) > 0 {
-		out.Daemon = &exportDaemonYAML{AIBackends: backends}
 	}
 	b, err := yaml.Marshal(out)
 	if err != nil {
@@ -412,16 +295,11 @@ func (h *Handler) ImportYAML(body []byte, mode string) (map[string]int, error) {
 		return nil, &store.ErrValidation{Msg: fmt.Sprintf("parse yaml: %v", err)}
 	}
 
-	backends := map[string]fleet.Backend{}
-	if payload.Daemon != nil {
-		backends = payload.Daemon.AIBackends
-	}
-
 	var err error
 	if mode == "replace" {
-		err = h.store.ReplaceAll(payload.Agents, payload.Repos, payload.Skills, backends, payload.Guardrails, payload.TokenBudgets)
+		err = h.store.ReplaceAll(payload.Agents, payload.Repos, payload.Skills, payload.Backends, payload.Guardrails, payload.TokenBudgets)
 	} else {
-		err = h.store.ImportAll(payload.Agents, payload.Repos, payload.Skills, backends, payload.Guardrails, payload.TokenBudgets)
+		err = h.store.ImportAll(payload.Agents, payload.Repos, payload.Skills, payload.Backends, payload.Guardrails, payload.TokenBudgets)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("import: %w", err)
@@ -431,7 +309,7 @@ func (h *Handler) ImportYAML(body []byte, mode string) (map[string]int, error) {
 		"agents":        len(payload.Agents),
 		"skills":        len(payload.Skills),
 		"repos":         len(payload.Repos),
-		"backends":      len(backends),
+		"backends":      len(payload.Backends),
 		"guardrails":    len(payload.Guardrails),
 		"token_budgets": len(payload.TokenBudgets),
 	}, nil

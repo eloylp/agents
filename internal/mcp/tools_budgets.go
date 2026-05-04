@@ -86,7 +86,7 @@ func registerBudgetTools(srv *server.MCPServer, deps Deps) {
 	)
 	srv.AddTool(
 		mcpgo.NewTool("get_token_leaderboard",
-			mcpgo.WithDescription("Return per-agent token usage aggregated over a UTC calendar period, ordered by total tokens descending. Optionally filtered to a single repo. Returns at most 20 rows."),
+			mcpgo.WithDescription("Return per-agent token usage aggregated over a UTC calendar period, ordered by total tokens descending. Each row includes runs and avg_tokens_per_run. Optionally filtered to a single repo. Returns at most 20 rows."),
 			mcpgo.WithString("repo",
 				mcpgo.Description(`Optional repo full name "owner/repo" to filter to.`),
 			),

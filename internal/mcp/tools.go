@@ -195,19 +195,19 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 	if deps.Config != nil {
 		srv.AddTool(
 			mcpgo.NewTool("get_config",
-				mcpgo.WithDescription("Return the effective parsed daemon config as JSON with secrets redacted. Same wire shape as GET /config."),
+				mcpgo.WithDescription("Return the current fleet config snapshot as JSON. Same wire shape as GET /config."),
 			),
 			toolGetConfig(deps),
 		)
 		srv.AddTool(
 			mcpgo.NewTool("export_config",
-				mcpgo.WithDescription("Return the CRUD-mutable fleet config (agents, skills, repos, ai_backends) as a YAML fragment. Same body as GET /export, suitable for piping back into POST /import."),
+				mcpgo.WithDescription("Return the CRUD-mutable fleet config (backends, agents, skills, repos, guardrails, token_budgets) as a YAML fragment. Same body as GET /export, suitable for piping back into POST /import."),
 			),
 			toolExportConfig(deps),
 		)
 		srv.AddTool(
 			mcpgo.NewTool("import_config",
-				mcpgo.WithDescription("Write a YAML config fragment (agents, skills, repos, ai_backends) into the store. mode=\"\" or \"merge\" upserts; mode=\"replace\" prunes entries not in the payload. Returns per-section counts. Same path as POST /import."),
+				mcpgo.WithDescription("Write a YAML config fragment (backends, agents, skills, repos, guardrails, token_budgets) into the store. mode=\"\" or \"merge\" upserts; mode=\"replace\" prunes entries not in the payload. Returns per-section counts. Same path as POST /import."),
 				mcpgo.WithString("yaml",
 					mcpgo.Required(),
 					mcpgo.Description("YAML body matching the export_config / GET /export shape."),

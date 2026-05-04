@@ -33,11 +33,11 @@ const (
 // that obtains a *Config sees the same effective values without each caller
 // having to remember which field has a non-zero default.
 func (c *Config) applyDefaults() {
-	// daemon.log
+	// daemon log
 	setDefault(&c.Daemon.Log.Level, defaultLogLevel)
 	setDefault(&c.Daemon.Log.Format, defaultLogFormat)
 
-	// daemon.http
+	// daemon HTTP
 	setDefault(&c.Daemon.HTTP.ListenAddr, defaultHTTPListenAddr)
 	setDefault(&c.Daemon.HTTP.StatusPath, defaultHTTPStatusPath)
 	setDefault(&c.Daemon.HTTP.WebhookPath, defaultHTTPWebhookPath)
@@ -49,18 +49,18 @@ func (c *Config) applyDefaults() {
 	setDefaultInt(&c.Daemon.HTTP.DeliveryTTLSeconds, defaultDeliveryTTLSeconds)
 	setDefaultInt(&c.Daemon.HTTP.ShutdownTimeoutSeconds, defaultHTTPShutdownSeconds)
 
-	// daemon.processor
+	// daemon processor
 	setDefaultInt(&c.Daemon.Processor.EventQueueBuffer, defaultEventQueueBufferSize)
 	setDefaultInt(&c.Daemon.Processor.MaxConcurrentAgents, defaultMaxConcurrentAgents)
 	setDefaultInt(&c.Daemon.Processor.Dispatch.MaxDepth, 3)
 	setDefaultInt(&c.Daemon.Processor.Dispatch.MaxFanout, 4)
 	setDefaultInt(&c.Daemon.Processor.Dispatch.DedupWindowSeconds, 300)
 
-	// daemon.proxy defaults (only applied when proxy is enabled or path is set)
+	// daemon proxy defaults (only applied when proxy is enabled or path is set)
 	setDefault(&c.Daemon.Proxy.Path, defaultProxyPath)
 	setDefaultInt(&c.Daemon.Proxy.Upstream.TimeoutSeconds, defaultProxyTimeoutSeconds)
 
-	// daemon.ai_backends defaults
+	// backend defaults
 	for name, backend := range c.Daemon.AIBackends {
 		fleet.ApplyBackendDefaults(&backend)
 		c.Daemon.AIBackends[name] = backend

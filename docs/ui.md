@@ -91,7 +91,7 @@ Raw agent memory markdown per `(agent, repo)` pair. Useful for inspecting what a
 
 ### Config
 
-Effective parsed config (secrets redacted). Includes YAML import/export.
+Current fleet config snapshot. Includes YAML import/export for shareable fleet strategy.
 
 ![Config inspector, webhook_secret rendered as `[redacted]`](img/config.png)
 

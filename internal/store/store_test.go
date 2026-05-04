@@ -386,25 +386,14 @@ func TestImportLoad(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 
-	// Daemon config checks.
-	if out.Daemon.Log.Level != "info" {
-		t.Errorf("log.level: got %q, want %q", out.Daemon.Log.Level, "info")
+	// Daemon runtime config is process-owned and is no longer persisted in the
+	// DB. Store.Load only materialises fleet entities; FinishLoad later applies
+	// daemon defaults/env overrides for the process.
+	if out.Daemon.Log.Level != "" || out.Daemon.HTTP.ListenAddr != "" || out.Daemon.Processor.Dispatch.MaxDepth != 0 {
+		t.Errorf("daemon runtime config should not be loaded from DB: %+v", out.Daemon)
 	}
-	if out.Daemon.HTTP.ListenAddr != ":8080" {
-		t.Errorf("http.listen_addr: got %q, want %q", out.Daemon.HTTP.ListenAddr, ":8080")
-	}
-	// Resolved secret must NOT be stored, Load returns empty WebhookSecret.
-	if out.Daemon.HTTP.WebhookSecret != "" {
-		t.Errorf("WebhookSecret should not be persisted, got %q", out.Daemon.HTTP.WebhookSecret)
-	}
-	// But the env-var name must survive the round-trip.
-	if out.Daemon.HTTP.WebhookSecretEnv != "GITHUB_WEBHOOK_SECRET" {
-		t.Errorf("WebhookSecretEnv: got %q, want %q", out.Daemon.HTTP.WebhookSecretEnv, "GITHUB_WEBHOOK_SECRET")
-	}
-	if out.Daemon.Processor.Dispatch.MaxDepth != 3 {
-		t.Errorf("dispatch.max_depth: got %d, want 3", out.Daemon.Processor.Dispatch.MaxDepth)
-	}
-	// Backends.
+
+	// Backends are fleet entities and still round-trip through SQLite.
 	if len(out.Daemon.AIBackends) != 1 {
 		t.Fatalf("backends: got %d, want 1", len(out.Daemon.AIBackends))
 	}
@@ -552,7 +541,8 @@ func TestCountFrom(t *testing.T) {
 // field with built-in defaults, so an empty store boots cleanly with
 // no YAML import required.
 func TestLoadEmptyDatabase(t *testing.T) {
-	t.Parallel()
+	t.Setenv("AGENTS_HTTP_LISTEN_ADDR", "127.0.0.1:9090")
+	t.Setenv("AGENTS_PROCESSOR_MAX_CONCURRENT_AGENTS", "7")
 	db := openTestDB(t)
 
 	cfg, err := store.Load(db)
@@ -567,20 +557,23 @@ func TestLoadEmptyDatabase(t *testing.T) {
 		t.Errorf("expected zero daemon block before FinishLoad; got listen_addr=%q", cfg.Daemon.HTTP.ListenAddr)
 	}
 
-	// FinishLoad turns the zero block into a fully-populated default
-	// config the daemon can boot against.
+	// FinishLoad turns the zero block into a fully-populated config the daemon
+	// can boot against, with startup env overrides applied on top of defaults.
 	cfg, err = config.FinishLoad(cfg)
 	if err != nil {
 		t.Fatalf("FinishLoad should fill defaults on empty config: %v", err)
 	}
-	if cfg.Daemon.HTTP.ListenAddr == "" {
-		t.Error("FinishLoad did not populate HTTP listen_addr from defaults")
+	if cfg.Daemon.HTTP.ListenAddr != "127.0.0.1:9090" {
+		t.Errorf("FinishLoad listen_addr = %q, want env override on empty DB", cfg.Daemon.HTTP.ListenAddr)
 	}
 	if cfg.Daemon.Log.Level == "" {
 		t.Error("FinishLoad did not populate log level from defaults")
 	}
 	if cfg.Daemon.HTTP.WebhookSecretEnv == "" {
-		t.Error("FinishLoad did not populate webhook_secret_env from defaults")
+		t.Error("FinishLoad did not populate webhook secret env from defaults")
+	}
+	if cfg.Daemon.Processor.MaxConcurrentAgents != 7 {
+		t.Errorf("FinishLoad max_concurrent_agents = %d, want env override on empty DB", cfg.Daemon.Processor.MaxConcurrentAgents)
 	}
 }
 
