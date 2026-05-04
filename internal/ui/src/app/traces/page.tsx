@@ -322,45 +322,47 @@ function TraceListItem({ rootId, spans, onSelect }: { rootId: string; spans: Spa
 
   return (
     <Card style={{ marginBottom: '1rem', cursor: 'pointer' }} >
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
-        <div>
-          <button
-            onClick={() => onSelect(rootId)}
-            style={{ background: 'none', border: 'none', fontFamily: 'monospace', fontSize: '0.8rem', color: 'var(--accent)', cursor: 'pointer', padding: 0 }}
-          >
-            {rootId}
-          </button>
-          <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginLeft: '1rem' }}>
-            {sorted[0]?.repo ?? ''} · {sorted[0]?.event_kind ?? ''} · {spans.length} span{spans.length !== 1 ? 's' : ''}
-          </span>
-        </div>
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          {hasError && <StatusBadge status="error" />}
-          <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{wallMs}ms</span>
-        </div>
-      </div>
-      {startedAt && (
-        <div style={{ color: 'var(--text-faint)', fontSize: '0.75rem', marginBottom: '0.75rem', display: 'flex', gap: '1rem' }}>
-          <span>Started: {fmt(startedAt)}</span>
-          {finishedAt && <span>Finished: {fmt(finishedAt)}</span>}
-        </div>
-      )}
-      {sorted.map(s => {
-        const start = new Date(s.started_at).getTime()
-        const leftPct = ((start - minMs) / totalMs) * 100
-        const widthPct = Math.max(0.3, (s.duration_ms / totalMs) * 100)
-        const colors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899']
-        const color = s.status === 'error' ? '#ef4444' : colors[s.dispatch_depth % colors.length]
-        return (
-          <div key={s.span_id} style={{ display: 'flex', alignItems: 'center', padding: '2px 0', gap: '0.75rem', fontSize: '0.75rem' }}>
-            <div style={{ width: '120px', flexShrink: 0, paddingLeft: `${s.dispatch_depth * 10}px`, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.agent}</div>
-            <div style={{ flex: 1, height: '12px', background: 'var(--bg)', borderRadius: '2px', position: 'relative' }}>
-              <div style={{ position: 'absolute', left: `${leftPct}%`, width: `${widthPct}%`, height: '100%', background: color, borderRadius: '2px', opacity: 0.7 }} />
-            </div>
-            <div style={{ width: '60px', textAlign: 'right', color: 'var(--text-faint)' }}>{fmtDuration(s.duration_ms)}</div>
+      <div onClick={() => onSelect(rootId)} role="button" tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') onSelect(rootId) }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+          <div>
+            <button
+              onClick={(e) => { e.stopPropagation(); onSelect(rootId) }}
+              style={{ background: 'none', border: 'none', fontFamily: 'monospace', fontSize: '0.8rem', color: 'var(--accent)', cursor: 'pointer', padding: 0 }}
+            >
+              {rootId}
+            </button>
+            <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginLeft: '1rem' }}>
+              {sorted[0]?.repo ?? ''} · {sorted[0]?.event_kind ?? ''} · {spans.length} span{spans.length !== 1 ? 's' : ''}
+            </span>
           </div>
-        )
-      })}
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+            {hasError && <StatusBadge status="error" />}
+            <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{wallMs}ms</span>
+          </div>
+        </div>
+        {startedAt && (
+          <div style={{ color: 'var(--text-faint)', fontSize: '0.75rem', marginBottom: '0.75rem', display: 'flex', gap: '1rem' }}>
+            <span>Started: {fmt(startedAt)}</span>
+            {finishedAt && <span>Finished: {fmt(finishedAt)}</span>}
+          </div>
+        )}
+        {sorted.map(s => {
+          const start = new Date(s.started_at).getTime()
+          const leftPct = ((start - minMs) / totalMs) * 100
+          const widthPct = Math.max(0.3, (s.duration_ms / totalMs) * 100)
+          const colors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899']
+          const color = s.status === 'error' ? '#ef4444' : colors[s.dispatch_depth % colors.length]
+          return (
+            <div key={s.span_id} style={{ display: 'flex', alignItems: 'center', padding: '2px 0', gap: '0.75rem', fontSize: '0.75rem' }}>
+              <div style={{ width: '120px', flexShrink: 0, paddingLeft: `${s.dispatch_depth * 10}px`, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.agent}</div>
+              <div style={{ flex: 1, height: '12px', background: 'var(--bg)', borderRadius: '2px', position: 'relative' }}>
+                <div style={{ position: 'absolute', left: `${leftPct}%`, width: `${widthPct}%`, height: '100%', background: color, borderRadius: '2px', opacity: 0.7 }} />
+              </div>
+              <div style={{ width: '60px', textAlign: 'right', color: 'var(--text-faint)' }}>{fmtDuration(s.duration_ms)}</div>
+            </div>
+          )
+        })}
+      </div>
     </Card>
   )
 }

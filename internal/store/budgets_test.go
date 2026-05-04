@@ -152,16 +152,16 @@ func TestBudgetAlertsAndLeaderboard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("leaderboard all: %v", err)
 	}
-	if len(all) != 2 || all[0].Agent != "coder" || all[0].Total != 70 {
-		t.Fatalf("leaderboard all = %+v, want coder first with 70", all)
+	if len(all) != 2 || all[0].Agent != "coder" || all[0].Total != 70 || all[0].Runs != 2 || all[0].AvgTokensPerRun != 35 {
+		t.Fatalf("leaderboard all = %+v, want coder first with 70 total, 2 runs, 35 avg", all)
 	}
 
 	filtered, err := store.TokenLeaderboard(db, "owner/two", "daily")
 	if err != nil {
 		t.Fatalf("leaderboard filtered: %v", err)
 	}
-	if len(filtered) != 1 || filtered[0].Agent != "coder" || filtered[0].Total != 10 {
-		t.Fatalf("leaderboard filtered = %+v, want coder owner/two total 10", filtered)
+	if len(filtered) != 1 || filtered[0].Agent != "coder" || filtered[0].Total != 10 || filtered[0].AvgTokensPerRun != 10 {
+		t.Fatalf("leaderboard filtered = %+v, want coder owner/two total 10 avg 10", filtered)
 	}
 }
 
