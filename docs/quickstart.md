@@ -15,7 +15,7 @@ cp .env.sample .env
 sed -i.bak "s/^GITHUB_WEBHOOK_SECRET=.*/GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)/" .env && rm .env.bak
 # Edit GITHUB_TOKEN in .env before continuing.
 # Optional before exposing the daemon: set AGENTS_AUTH_BEARER_TOKEN_HASH.
-docker compose up -d
+docker compose up -d --build
 ```
 
 The shipped [`docker-compose.yaml`](../docker-compose.yaml) is the source of truth for what gets mounted and exposed. Two named volumes back the runtime: `agents-data` (SQLite store) and `agents-home` (Claude / Codex auth + MCP config). The daemon boots against an empty database with built-in defaults, no YAML seed is required.
@@ -59,9 +59,9 @@ docker compose restart agents
 
 # Upgrade to a newer tagged release. Pick the latest tag from
 # https://github.com/eloylp/agents/tags and substitute below.
-git fetch origin --tags && git checkout v0.2.0 && docker compose build && docker compose up -d
+git fetch origin --tags && git checkout v0.2.0 && docker compose up -d --build
 # Or track main directly (latest fixes, less stable than tagged releases):
-# git checkout main && git pull && docker compose build && docker compose up -d
+# git checkout main && git pull && docker compose up -d --build
 
 # Re-run backend discovery (after rotating auth or adding a CLI).
 curl -X POST http://localhost:8080/backends/discover

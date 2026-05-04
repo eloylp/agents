@@ -49,6 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   method instead of dispatching inside handler bodies.
 - UI documentation screenshots and auth guidance were refreshed for the
   current dashboard.
+- Quickstart install and upgrade commands now force a local image rebuild so
+  the checked-out release tag is what actually runs.
 
 ### Fixed
 
