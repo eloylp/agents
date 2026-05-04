@@ -58,7 +58,19 @@ export function TranscriptFilter({
   const reset = () => onChange(new Set(presentKinds))
 
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '0.5rem', alignItems: 'center' }}>
+    <div style={{
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: '4px',
+      marginBottom: '0.5rem',
+      alignItems: 'center',
+      position: 'sticky',
+      top: 0,
+      zIndex: 1,
+      background: 'var(--bg-card)',
+      paddingBottom: '6px',
+      borderBottom: '1px solid var(--border-subtle)',
+    }}>
       {presentKinds.map(k => {
         const meta = kindMeta[k]
         const on = visibleKinds.has(k)
@@ -119,110 +131,66 @@ export type PersistedStep = {
   duration_ms?: number
 }
 
-// parseStreamLine turns one CLI stdout JSONL line into a StreamCardEntry.
-// Recognises Anthropic's stream-json shape (assistant / user / result
-// events with content blocks) and OpenAI's chat.completion.chunk shape
-// (choices[].delta.content). Anything else falls through as 'raw'.
+// StreamEvent mirrors ai.StreamEvent on the Go side. The daemon parses the
+// AI CLI's raw stdout into this canonical shape before publishing to the
+// per-span SSE feed, so the frontend no longer carries format-specific
+// (claude / codex / openai) parsers. Lifecycle for a tool call is two
+// events: tool_use on start, tool_result on completion. Anything the
+// daemon could not classify arrives as kind: 'raw'.
+type StreamEvent = {
+  kind: 'tool_use' | 'tool_result' | 'thinking' | 'usage' | 'raw'
+  tool?: string
+  server?: string
+  input?: string
+  output?: string
+  text?: string
+  error?: string
+  duration_ms?: number
+  usage?: {
+    input_tokens?: number
+    output_tokens?: number
+    cache_read_tokens?: number
+    cache_write_tokens?: number
+  }
+  raw?: string
+}
+
+// parseStreamLine turns one normalized SSE payload into a StreamCardEntry.
+// Lines that cannot be parsed as JSON, or whose `kind` is unknown, render
+// as 'raw' so nothing is silently dropped.
 export function parseStreamLine(line: string): StreamCardEntry {
   const at = Date.now()
-  const raw = line
-  let parsed: any
+  let ev: StreamEvent
   try {
-    parsed = JSON.parse(line)
+    ev = JSON.parse(line) as StreamEvent
   } catch {
-    return { at, kind: 'raw', title: 'raw output', raw }
+    return { at, kind: 'raw', title: 'raw output', raw: line }
   }
-  // Anthropic / claude stream-json
-  if (parsed?.type === 'assistant' && parsed?.message?.content) {
-    const blocks = parsed.message.content as Array<any>
-    const tools = blocks.filter((b) => b?.type === 'tool_use')
-    if (tools.length > 0) {
-      const t = tools[0]
-      return {
-        at,
-        kind: 'tool_use',
-        title: `🔧 ${t.name || 'tool_use'}`,
-        detail: typeof t.input === 'string' ? t.input : JSON.stringify(t.input ?? {}, null, 2),
-        raw,
-      }
+  switch (ev.kind) {
+    case 'tool_use': {
+      const name = ev.server ? `${ev.server}.${ev.tool || 'tool'}` : (ev.tool || 'tool_use')
+      return { at, kind: 'tool_use', title: `🔧 ${name}`, detail: ev.input || '', raw: line }
     }
-    const texts = blocks
-      .filter((b) => b?.type === 'text')
-      .map((b) => b.text)
-      .filter(Boolean)
-    if (texts.length > 0) {
-      return { at, kind: 'thinking', title: '💬 thinking', detail: texts.join('\n\n'), raw }
+    case 'tool_result': {
+      const name = ev.server ? `${ev.server}.${ev.tool || 'tool'}` : (ev.tool || 'tool')
+      const detail = ev.error ? `error: ${ev.error}` : (ev.output || '')
+      return { at, kind: 'tool_result', title: `📤 ${name}`, detail, raw: line }
     }
+    case 'thinking':
+      return { at, kind: 'thinking', title: '💬 thinking', detail: ev.text || '', raw: line }
+    case 'usage': {
+      const u = ev.usage
+      const detail = u
+        ? `in ${u.input_tokens ?? 0} · out ${u.output_tokens ?? 0}` +
+          (u.cache_read_tokens ? ` · cache ${u.cache_read_tokens}` : '')
+        : ''
+      return { at, kind: 'usage', title: '📊 usage', detail, raw: line }
+    }
+    case 'raw':
+      return { at, kind: 'raw', title: 'raw output', raw: ev.raw || line }
+    default:
+      return { at, kind: 'raw', title: ev.kind ? `· ${ev.kind}` : 'raw output', raw: line }
   }
-  if (parsed?.type === 'user' && parsed?.message?.content) {
-    const blocks = parsed.message.content as Array<any>
-    const results = blocks.filter((b) => b?.type === 'tool_result')
-    if (results.length > 0) {
-      const r = results[0]
-      const content = typeof r.content === 'string' ? r.content : JSON.stringify(r.content ?? '', null, 2)
-      return { at, kind: 'tool_result', title: '📤 tool result', detail: content, raw }
-    }
-  }
-  if (parsed?.type === 'result') {
-    const usage = parsed.usage
-    const usageStr = usage
-      ? `in ${usage.input_tokens ?? usage.prompt_tokens ?? 0} · out ${usage.output_tokens ?? usage.completion_tokens ?? 0}` +
-        (usage.cache_read_input_tokens ? ` · cache ${usage.cache_read_input_tokens}` : '')
-      : ''
-    return { at, kind: 'usage', title: '📊 result', detail: usageStr || JSON.stringify(parsed, null, 2), raw }
-  }
-  // Codex --json: events wrap the actual item under `item`.
-  // - thread.started / turn.started: noise, render minimal raw entry
-  // - item.started: a tool/command is starting → tool_use card with input
-  // - item.completed:
-  //     agent_message → thinking card with item.text
-  //     command_execution → tool_result card with aggregated_output
-  //     mcp_tool_call / function_call / etc. → tool_use card with output
-  // - turn.completed: usage card
-  if (parsed?.type === 'item.started' && parsed?.item?.type === 'command_execution') {
-    const cmd = parsed.item.command || ''
-    return { at, kind: 'tool_use', title: '🔧 bash', detail: cmd, raw }
-  }
-  if (parsed?.type === 'item.completed' && parsed?.item) {
-    const it = parsed.item
-    if (it.type === 'agent_message') {
-      const text = (it.text || '').trim()
-      if (text) return { at, kind: 'thinking', title: '💬 thinking', detail: text, raw }
-    }
-    if (it.type === 'command_execution') {
-      return { at, kind: 'tool_result', title: '📤 tool result', detail: it.aggregated_output || '', raw }
-    }
-    // Generic tool fallback (mcp_tool_call, function_call, ...).
-    if (it.name) {
-      const tn = it.server ? `${it.server}.${it.name}` : it.name
-      const input = typeof it.arguments === 'string' ? it.arguments : JSON.stringify(it.arguments ?? {}, null, 2)
-      const output = typeof it.output === 'string' ? it.output : JSON.stringify(it.output ?? '', null, 2)
-      const detail = output ? `${input}\n→\n${output}` : input
-      return { at, kind: 'tool_use', title: `🔧 ${tn}`, detail, raw }
-    }
-  }
-  if (parsed?.type === 'turn.completed') {
-    const u = parsed.usage
-    const usageStr = u
-      ? `in ${u.input_tokens ?? 0} · out ${u.output_tokens ?? 0}` +
-        (u.cached_input_tokens ? ` · cache ${u.cached_input_tokens}` : '')
-      : ''
-    return { at, kind: 'usage', title: '📊 turn completed', detail: usageStr || JSON.stringify(parsed, null, 2), raw }
-  }
-  // OpenAI / codex chat.completion.chunk
-  if (parsed?.choices?.[0]?.delta) {
-    const delta = parsed.choices[0].delta
-    if (delta.content) {
-      return { at, kind: 'thinking', title: '💬 thinking', detail: String(delta.content), raw }
-    }
-    if (delta.tool_calls?.[0]) {
-      const tc = delta.tool_calls[0]
-      const fnName = tc.function?.name || 'tool_call'
-      const args = tc.function?.arguments || ''
-      return { at, kind: 'tool_use', title: `🔧 ${fnName}`, detail: args, raw }
-    }
-  }
-  return { at, kind: 'raw', title: parsed?.type ? `· ${parsed.type}` : 'raw output', raw }
 }
 
 // stepToCardEntries maps a persisted TraceStep (one row from /steps) to one

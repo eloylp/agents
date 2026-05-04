@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -796,7 +797,16 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 			StartedAt: spanStart,
 		})
 		defer e.streamPub.EndRun(spanID)
-		onLine = func(line []byte) { e.streamPub.PublishLine(spanID, line) }
+		parser := ai.NewStreamLineParser(backend)
+		onLine = func(line []byte) {
+			for _, sev := range parser(line) {
+				payload, err := json.Marshal(sev)
+				if err != nil {
+					continue
+				}
+				e.streamPub.PublishLine(spanID, payload)
+			}
+		}
 	}
 	resp, runErr := runner.Run(ctx, ai.Request{
 		Workflow: workflow,

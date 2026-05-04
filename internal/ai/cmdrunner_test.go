@@ -978,6 +978,29 @@ func TestParseCodexSteps(t *testing.T) {
 		}
 	})
 
+	t.Run("mcp_tool_call with tool+result fields persists correctly", func(t *testing.T) {
+		t.Parallel()
+		// Real codex shape from the live SSE feed: identifier on `tool`,
+		// output on `result`. The earlier persistence path looked only at
+		// `name` and `output`, dropping these items silently. Regression
+		// test for that bug.
+		raw := `{"type":"item.completed","item":{"id":"item_8","type":"mcp_tool_call","server":"github","tool":"issue_read","arguments":{"owner":"eloylp","repo":"agents","issue_number":411},"result":"ok","status":"completed"}}`
+		steps := parseCodexSteps(toLines(raw))
+		if len(steps) != 1 {
+			t.Fatalf("got %d steps, want 1: %+v", len(steps), steps)
+		}
+		s := steps[0]
+		if s.ToolName != "github.issue_read" {
+			t.Errorf("ToolName = %q, want github.issue_read", s.ToolName)
+		}
+		if !strings.Contains(s.InputSummary, "issue_number") {
+			t.Errorf("InputSummary missing arguments: %q", s.InputSummary)
+		}
+		if s.OutputSummary != "ok" {
+			t.Errorf("OutputSummary = %q, want ok (from result field)", s.OutputSummary)
+		}
+	})
+
 	t.Run("empty agent_message is skipped", func(t *testing.T) {
 		t.Parallel()
 		raw := `{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"  "}}`
