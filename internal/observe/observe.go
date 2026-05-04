@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"slices"
 	"sync"
 	"time"
 
@@ -279,8 +280,7 @@ func (r *runStream) end() {
 func (r *runStream) subscribe() ([][]byte, chan []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	hist := make([][]byte, len(r.history))
-	copy(hist, r.history)
+	hist := slices.Clone(r.history)
 	if r.closed {
 		// Run finished, return history but no live channel. Hand back
 		// a closed channel so the caller's range loop exits cleanly
