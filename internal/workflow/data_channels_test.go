@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -12,7 +13,7 @@ func TestPushAfterCloseReturnsErrQueueClosed(t *testing.T) {
 	dc := NewDataChannels(4, newTempStore(t))
 	dc.Close()
 
-	if _, err := dc.PushEvent(context.Background(), Event{}); err != ErrQueueClosed {
+	if _, err := dc.PushEvent(context.Background(), Event{}); !errors.Is(err, ErrQueueClosed) {
 		t.Fatalf("PushEvent after close: got %v, want ErrQueueClosed", err)
 	}
 }
@@ -103,7 +104,7 @@ func TestPushEventOnFullChannelDeletesRow(t *testing.T) {
 		t.Fatalf("first push: %v", err)
 	}
 	// Second push must hit the default branch and roll back.
-	if _, err := dc.PushEvent(context.Background(), Event{Kind: "b"}); err != ErrEventQueueFull {
+	if _, err := dc.PushEvent(context.Background(), Event{Kind: "b"}); !errors.Is(err, ErrEventQueueFull) {
 		t.Fatalf("second push err = %v, want ErrEventQueueFull", err)
 	}
 
