@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -63,16 +64,11 @@ func TestHandleAPIAgentsReturnsConfiguredAgents(t *testing.T) {
 	}
 	// Locate "reviewer" in the response, the fixture also seeds an agent
 	// and "sec-reviewer" exists for the can_dispatch reference.
-	var got *viewAgentJSON
-	for i := range agents {
-		if agents[i].Name == "reviewer" {
-			got = &agents[i]
-			break
-		}
-	}
-	if got == nil {
+	idx := slices.IndexFunc(agents, func(a viewAgentJSON) bool { return a.Name == "reviewer" })
+	if idx == -1 {
 		t.Fatalf("reviewer not found in response: got %d agents", len(agents))
 	}
+	got := &agents[idx]
 	if got.Backend != "claude" {
 		t.Errorf("backend: want %q, got %q", "claude", got.Backend)
 	}
@@ -690,4 +686,3 @@ func TestServeSSEClearsServerWriteDeadline(t *testing.T) {
 		}
 	}
 }
-
