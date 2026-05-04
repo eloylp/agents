@@ -570,7 +570,7 @@ func (d *Dispatcher) ProcessDispatches(
 			continue
 		}
 
-		// Enqueue succeeded — commit the claim so the autonomous scheduler skips
+		// Enqueue succeeded; commit the claim so the autonomous scheduler skips
 		// a duplicate run for this target.
 		d.dedup.CommitClaim(req.Agent, ev.Repo.FullName, number)
 
