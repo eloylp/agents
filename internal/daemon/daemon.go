@@ -2,7 +2,7 @@
 // runtime component (event channels, workflow engine, scheduler, observe
 // store, processor, dispatcher), every HTTP handler (fleet, repos, config,
 // observe, webhook), the MCP server, the optional proxy, and the embedded
-// UI mount. The HTTP listener is one of its goroutines, not its identity , 
+// UI mount. The HTTP listener is one of its goroutines, not its identity ,
 // the type is named *Daemon because it is the daemon.
 //
 // Construction is one call: daemon.New(cfg, db, logger) wires every
@@ -124,6 +124,7 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 	}
 	sched.WithEventQueue(channels)
 	engine.WithLastRunRecorder(sched)
+	engine.WithBudgetStore(st)
 
 	// Domain handlers (HTTP layer). All take the data-access facade and
 	// the static daemon-level config; CRUD-mutable state is read on every
@@ -266,7 +267,7 @@ func (d *Daemon) Run(parentCtx context.Context) error {
 	log := d.logger
 	log.Info().Msg("starting agents daemon")
 
-	// ── consumer tier ────────────────────────────────────────────────
+	// ── consumer tier ───────────────────────────────────────────
 	// Lives on its own background ctx so it outlives the producer tier
 	// during shutdown; that's how the queue drains after producers stop.
 	consumerCtx, stopConsumers := context.WithCancel(context.Background())
@@ -291,7 +292,7 @@ func (d *Daemon) Run(parentCtx context.Context) error {
 		return d.replayPendingEvents(consumerCtx)
 	})
 
-	// ── producer tier ────────────────────────────────────────────────
+	// ── producer tier ───────────────────────────────────────────
 	// Derived from parentCtx so SIGTERM cancels it; errgroup will cancel
 	// producerCtx if any producer returns a non-nil error so the others
 	// wind down cooperatively.
@@ -310,7 +311,7 @@ func (d *Daemon) Run(parentCtx context.Context) error {
 	}
 	log.Info().Msg("producers stopped: no new webhooks, no new cron ticks")
 
-	// ── drain ────────────────────────────────────────────────────────
+	// ── drain ─────────────────────────────────────────────────
 	queueDepth := d.channels.QueueStats().Buffered
 	log.Info().Int("buffered_events", queueDepth).Dur("shutdown_timeout", time.Duration(d.daemonCfg.HTTP.ShutdownTimeoutSeconds)*time.Second).Msg("draining event queue")
 	stopConsumers()
@@ -481,7 +482,7 @@ func (d *Daemon) handleAgents(w http.ResponseWriter, r *http.Request) {
 	d.fleet.HandleAgentsCreate(w, r)
 }
 
-// ── /status ───────────────────────────────────────────────────────────────
+// ── /status ─────────────────────────────────────────────────────────────
 
 type statusQueueJSON struct {
 	Buffered int `json:"buffered"`
@@ -516,11 +517,11 @@ func (d *Daemon) buildStatus() statusJSON {
 		Agents: slices.Clone(d.scheduler.AgentStatuses()),
 	}
 
-	orphans, err := d.fleet.OrphanedAgents()
+	orphanedAgents, err := d.fleet.OrphanedAgents()
 	if err != nil {
 		d.logger.Warn().Err(err).Msg("status: orphan computation failed")
 	}
-	resp.OrphanedAgents = statusOrphanSummaryJSON{Count: len(orphans)}
+	resp.OrphanedAgents = statusOrphanSummaryJSON{Count: len(orphanedAgents)}
 
 	stats := d.engine.DispatchStats()
 	resp.Dispatch = &stats
@@ -539,7 +540,7 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(d.buildStatus())
 }
 
-// ── /run ──────────────────────────────────────────────────────────────────
+// ── /run ─────────────────────────────────────────────────────────────────
 
 type agentsRunRequest struct {
 	Agent string `json:"agent"`

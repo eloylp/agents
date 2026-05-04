@@ -116,7 +116,7 @@ func seedAgentMap(t *testing.T, m map[string]fleet.Agent) *store.Store {
 		}
 		agents = append(agents, a)
 	}
-	if err := st.ImportAll(agents, nil, map[string]fleet.Skill{}, map[string]fleet.Backend{"claude": {Command: "claude"}}, nil); err != nil {
+	if err := st.ImportAll(agents, nil, map[string]fleet.Skill{}, map[string]fleet.Backend{"claude": {Command: "claude"}}, nil, nil); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	return st
@@ -833,7 +833,7 @@ func TestRemoveCronMarkWithOverlappingRunsRefcount(t *testing.T) {
 // TestLongRunningCronMarkBlocksDispatchPastTTL is a regression test for the
 // case where an autonomous run outlasts its dedup_window_seconds TTL. Without
 // the refcount-based guard, the sweeper would evict the cron entry once its
-// expiresAt passed, and TryClaimForDispatch would no longer see the mark , 
+// expiresAt passed, and TryClaimForDispatch would no longer see the mark ,
 // allowing a dispatch to race the still-in-flight cron run.
 func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 	t.Parallel()
@@ -871,7 +871,7 @@ func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 	}
 
 	// Once the run completes successfully, the refcount is decremented via
-	// FinalizeAutonomousRun. The entry itself is kept until the TTL expires , 
+	// FinalizeAutonomousRun. The entry itself is kept until the TTL expires ,
 	// but since we advanced past the TTL in the simulation, the next eviction
 	// pass will remove it and dispatches may then proceed.
 	d.FinalizeAutonomousRun("coder", "owner/repo")

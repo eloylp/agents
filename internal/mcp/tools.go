@@ -627,6 +627,9 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolDeleteBinding(deps),
 		)
 	}
+	if deps.Store != nil {
+		registerBudgetTools(srv, deps)
+	}
 }
 
 // agentJSON converts a fleet.Agent to the snake_case map shape used by
@@ -650,10 +653,10 @@ func agentJSON(a fleet.Agent) map[string]any {
 // between list_backends and get_backend.
 func backendJSON(name string, b fleet.Backend) map[string]any {
 	return map[string]any{
-		"name":               name,
-		"command":            b.Command,
-		"version":            b.Version,
-		"models":             nilSafe(b.Models),
+		"name":             name,
+		"command":          b.Command,
+		"version":          b.Version,
+		"models":           nilSafe(b.Models),
 		"healthy":          b.Healthy,
 		"health_detail":    b.HealthDetail,
 		"local_model_url":  b.LocalModelURL,

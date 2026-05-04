@@ -50,6 +50,10 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/config", withTimeout(http.HandlerFunc(h.HandleConfig))).Methods(http.MethodGet)
 	r.Handle("/export", withTimeout(http.HandlerFunc(h.HandleExport))).Methods(http.MethodGet)
 	r.Handle("/import", withTimeout(http.HandlerFunc(h.HandleImport))).Methods(http.MethodPost)
+	r.Handle("/token_budgets", withTimeout(http.HandlerFunc(h.handleTokenBudgets))).Methods(http.MethodGet, http.MethodPost)
+	r.Handle("/token_budgets/alerts", withTimeout(http.HandlerFunc(h.handleTokenBudgetAlerts))).Methods(http.MethodGet)
+	r.Handle("/token_budgets/{id:[0-9]+}", withTimeout(http.HandlerFunc(h.handleTokenBudget))).Methods(http.MethodGet, http.MethodPatch, http.MethodDelete)
+	r.Handle("/token_leaderboard", withTimeout(http.HandlerFunc(h.handleTokenLeaderboard))).Methods(http.MethodGet)
 }
 
 // ── /config ─────────────────────────────────────────────────────────────────
@@ -121,7 +125,7 @@ type apiHTTPConfigJSON struct {
 }
 
 type apiAIBackendConfigJSON struct {
-	Command          string   `json:"command"`
+	Command        string   `json:"command"`
 	Version        string   `json:"version,omitempty"`
 	Models         []string `json:"models,omitempty"`
 	Healthy        bool     `json:"healthy"`
@@ -208,8 +212,8 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 	backends := make(map[string]apiAIBackendConfigJSON, len(storedBackends))
 	for name, b := range storedBackends {
 		backends[name] = apiAIBackendConfigJSON{
-			Command:          b.Command,
-			Version:          b.Version,
+			Command:        b.Command,
+			Version:        b.Version,
 			Models:         b.Models,
 			Healthy:        b.Healthy,
 			HealthDetail:   b.HealthDetail,
@@ -304,14 +308,15 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 // ── /export and /import ──────────────────────────────────────────────────────
 
 // exportYAML is the wire shape for YAML export/import. It captures only the
-// four CRUD-mutable sections; daemon-level config (HTTP, log, proxy) is
+// CRUD-mutable sections; daemon-level config (HTTP, log, proxy) is
 // intentionally excluded, it is not managed by the write API.
 type exportYAML struct {
-	Skills     map[string]fleet.Skill `yaml:"skills,omitempty"`
-	Agents     []fleet.Agent          `yaml:"agents,omitempty"`
-	Repos      []fleet.Repo           `yaml:"repos,omitempty"`
-	Guardrails []fleet.Guardrail      `yaml:"guardrails,omitempty"`
-	Daemon     *exportDaemonYAML      `yaml:"daemon,omitempty"`
+	Skills       map[string]fleet.Skill `yaml:"skills,omitempty"`
+	Agents       []fleet.Agent          `yaml:"agents,omitempty"`
+	Repos        []fleet.Repo           `yaml:"repos,omitempty"`
+	Guardrails   []fleet.Guardrail      `yaml:"guardrails,omitempty"`
+	TokenBudgets []store.TokenBudget    `yaml:"token_budgets,omitempty"`
+	Daemon       *exportDaemonYAML      `yaml:"daemon,omitempty"`
 }
 
 type exportDaemonYAML struct {
@@ -319,7 +324,8 @@ type exportDaemonYAML struct {
 }
 
 // HandleExport serves GET /export, returns a config.yaml fragment covering
-// the four CRUD-mutable sections (skills, agents, repos, daemon.ai_backends).
+// the CRUD-mutable sections (skills, agents, repos, daemon.ai_backends,
+// guardrails, token_budgets).
 func (h *Handler) HandleExport(w http.ResponseWriter, _ *http.Request) {
 	b, err := h.ExportYAML()
 	if err != nil {
@@ -343,11 +349,16 @@ func (h *Handler) ExportYAML() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read guardrails: %w", err)
 	}
+	budgets, err := h.store.ListTokenBudgets()
+	if err != nil {
+		return nil, fmt.Errorf("list token budgets: %w", err)
+	}
 	out := exportYAML{
-		Skills:     skills,
-		Agents:     agents,
-		Repos:      repos,
-		Guardrails: guardrails,
+		Skills:       skills,
+		Agents:       agents,
+		Repos:        repos,
+		Guardrails:   guardrails,
+		TokenBudgets: budgets,
 	}
 	if len(backends) > 0 {
 		out.Daemon = &exportDaemonYAML{AIBackends: backends}
@@ -385,8 +396,11 @@ func (h *Handler) HandleImport(w http.ResponseWriter, r *http.Request) {
 }
 
 // ImportYAML parses a YAML payload in HandleExport's format and writes it to
-// the store. mode controls upsert semantics: empty or "merge" preserves
-// existing records, "replace" prunes anything not present in the payload.
+// the store atomically. mode controls upsert semantics: empty or "merge"
+// preserves existing records, "replace" prunes anything not present in the
+// payload. All sections — agents, repos, skills, backends, guardrails, and
+// token budgets — are written in a single transaction so a failure in any
+// section rolls back the entire import.
 //
 // On success it returns the per-section counts.
 func (h *Handler) ImportYAML(body []byte, mode string) (map[string]int, error) {
@@ -405,20 +419,21 @@ func (h *Handler) ImportYAML(body []byte, mode string) (map[string]int, error) {
 
 	var err error
 	if mode == "replace" {
-		err = h.store.ReplaceAll(payload.Agents, payload.Repos, payload.Skills, backends, payload.Guardrails)
+		err = h.store.ReplaceAll(payload.Agents, payload.Repos, payload.Skills, backends, payload.Guardrails, payload.TokenBudgets)
 	} else {
-		err = h.store.ImportAll(payload.Agents, payload.Repos, payload.Skills, backends, payload.Guardrails)
+		err = h.store.ImportAll(payload.Agents, payload.Repos, payload.Skills, backends, payload.Guardrails, payload.TokenBudgets)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("import: %w", err)
 	}
 
 	return map[string]int{
-		"agents":     len(payload.Agents),
-		"skills":     len(payload.Skills),
-		"repos":      len(payload.Repos),
-		"backends":   len(backends),
-		"guardrails": len(payload.Guardrails),
+		"agents":        len(payload.Agents),
+		"skills":        len(payload.Skills),
+		"repos":         len(payload.Repos),
+		"backends":      len(backends),
+		"guardrails":    len(payload.Guardrails),
+		"token_budgets": len(payload.TokenBudgets),
 	}, nil
 }
 

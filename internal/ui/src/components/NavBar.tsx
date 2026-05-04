@@ -25,6 +25,7 @@ export default function NavBar() {
   const pathname = usePathname()
   const { theme, toggle } = useTheme()
   const [orphanCount, setOrphanCount] = useState(0)
+  const [budgetAlertCount, setBudgetAlertCount] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -35,6 +36,28 @@ export default function NavBar() {
         const data = await res.json() as { orphaned_agents?: { count?: number } }
         if (cancelled) return
         setOrphanCount(Number(data.orphaned_agents?.count ?? 0))
+      } catch {
+        // keep last known banner state on transient polling errors
+      }
+    }
+
+    load()
+    const id = window.setInterval(load, 30000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const res = await fetch('/token_budgets/alerts', { cache: 'no-store' })
+        if (!res.ok) return
+        const data = await res.json() as { count?: number }
+        if (cancelled) return
+        setBudgetAlertCount(Number(data.count ?? 0))
       } catch {
         // keep last known banner state on transient polling errors
       }
@@ -125,6 +148,23 @@ export default function NavBar() {
           }}
         >
           {orphanCount} orphaned agent{orphanCount === 1 ? '' : 's'} detected (pinned model unavailable). Click to review and fix in Backends and tools.
+        </Link>
+      )}
+      {budgetAlertCount > 0 && (
+        <Link
+          href="/config/?tab=tokens"
+          style={{
+            display: 'block',
+            background: 'var(--bg-danger)',
+            borderBottom: '1px solid var(--border-danger)',
+            color: 'var(--text-danger)',
+            padding: '0.5rem 1.5rem',
+            fontSize: '0.82rem',
+            fontWeight: 600,
+            textDecoration: 'none',
+          }}
+        >
+          {budgetAlertCount} token budget{budgetAlertCount === 1 ? '' : 's'} at or above alert threshold. Click to review in Token usage and limits.
         </Link>
       )}
     </>
