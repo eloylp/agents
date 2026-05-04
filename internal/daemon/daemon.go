@@ -38,7 +38,7 @@ import (
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
 
-	anthrpicproxy "github.com/eloylp/agents/internal/anthropic_proxy"
+	anthropicproxy "github.com/eloylp/agents/internal/anthropic_proxy"
 	"github.com/eloylp/agents/internal/backends"
 	"github.com/eloylp/agents/internal/config"
 	daemonconfig "github.com/eloylp/agents/internal/daemon/config"
@@ -89,7 +89,7 @@ type Daemon struct {
 	webhook  *webhook.Handler
 	delivery *webhook.DeliveryStore
 	mcp      http.Handler
-	proxy    *anthrpicproxy.Handler
+	proxy    *anthropicproxy.Handler
 	uiFS     fs.FS
 
 	startTime time.Time
@@ -169,7 +169,7 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 
 	if cfg.Daemon.Proxy.Enabled {
 		up := cfg.Daemon.Proxy.Upstream
-		d.proxy = anthrpicproxy.NewHandler(anthrpicproxy.UpstreamConfig{
+		d.proxy = anthropicproxy.NewHandler(anthropicproxy.UpstreamConfig{
 			URL:       up.URL,
 			Model:     up.Model,
 			APIKey:    up.APIKey,
@@ -267,7 +267,7 @@ func (d *Daemon) Run(parentCtx context.Context) error {
 	log := d.logger
 	log.Info().Msg("starting agents daemon")
 
-	// ── consumer tier ────────────────────────────────────────────────
+	// ── consumer tier ───────────────────────────────────────────
 	// Lives on its own background ctx so it outlives the producer tier
 	// during shutdown; that's how the queue drains after producers stop.
 	consumerCtx, stopConsumers := context.WithCancel(context.Background())
@@ -292,7 +292,7 @@ func (d *Daemon) Run(parentCtx context.Context) error {
 		return d.replayPendingEvents(consumerCtx)
 	})
 
-	// ── producer tier ────────────────────────────────────────────────
+	// ── producer tier ───────────────────────────────────────────
 	// Derived from parentCtx so SIGTERM cancels it; errgroup will cancel
 	// producerCtx if any producer returns a non-nil error so the others
 	// wind down cooperatively.
@@ -311,7 +311,7 @@ func (d *Daemon) Run(parentCtx context.Context) error {
 	}
 	log.Info().Msg("producers stopped: no new webhooks, no new cron ticks")
 
-	// ── drain ────────────────────────────────────────────────────────
+	// ── drain ─────────────────────────────────────────────────
 	queueDepth := d.channels.QueueStats().Buffered
 	log.Info().Int("buffered_events", queueDepth).Dur("shutdown_timeout", time.Duration(d.daemonCfg.HTTP.ShutdownTimeoutSeconds)*time.Second).Msg("draining event queue")
 	stopConsumers()
@@ -482,7 +482,7 @@ func (d *Daemon) handleAgents(w http.ResponseWriter, r *http.Request) {
 	d.fleet.HandleAgentsCreate(w, r)
 }
 
-// ── /status ───────────────────────────────────────────────────────────────
+// ── /status ─────────────────────────────────────────────────────────────
 
 type statusQueueJSON struct {
 	Buffered int `json:"buffered"`
@@ -540,7 +540,7 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(d.buildStatus())
 }
 
-// ── /run ──────────────────────────────────────────────────────────────────
+// ── /run ─────────────────────────────────────────────────────────────────
 
 type agentsRunRequest struct {
 	Agent string `json:"agent"`

@@ -1,6 +1,8 @@
 package mcp
 
 import (
+	"context"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
@@ -100,7 +102,7 @@ func registerBudgetTools(srv *server.MCPServer, deps Deps) {
 }
 
 func toolListTokenBudgets(deps Deps) server.ToolHandlerFunc {
-	return func(req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		budgets, err := deps.Store.ListTokenBudgets()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list token budgets", err), nil
@@ -113,7 +115,7 @@ func toolListTokenBudgets(deps Deps) server.ToolHandlerFunc {
 }
 
 func toolCreateTokenBudget(deps Deps) server.ToolHandlerFunc {
-	return func(req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		args := req.GetArguments()
 		scopeKind, _ := args["scope_kind"].(string)
 		scopeName, _ := args["scope_name"].(string)
@@ -150,7 +152,7 @@ func toolCreateTokenBudget(deps Deps) server.ToolHandlerFunc {
 }
 
 func toolUpdateTokenBudget(deps Deps) server.ToolHandlerFunc {
-	return func(req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		args := req.GetArguments()
 		idF, _ := args["id"].(float64)
 		id := int64(idF)
@@ -180,7 +182,7 @@ func toolUpdateTokenBudget(deps Deps) server.ToolHandlerFunc {
 }
 
 func toolDeleteTokenBudget(deps Deps) server.ToolHandlerFunc {
-	return func(req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		args := req.GetArguments()
 		idF, _ := args["id"].(float64)
 		id := int64(idF)
@@ -192,7 +194,7 @@ func toolDeleteTokenBudget(deps Deps) server.ToolHandlerFunc {
 }
 
 func toolGetTokenLeaderboard(deps Deps) server.ToolHandlerFunc {
-	return func(req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		args := req.GetArguments()
 		repo, _ := args["repo"].(string)
 		period, _ := args["period"].(string)
