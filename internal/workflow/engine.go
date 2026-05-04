@@ -100,6 +100,13 @@ type LastRunRecorder interface {
 	RecordLastRun(agent, repo string, at time.Time, status string)
 }
 
+// BudgetChecker gates agent runs by token budget caps. CheckBudgets returns
+// an error when a cap is exceeded for the given backend and agent.
+// Implementations must be safe for concurrent use.
+type BudgetChecker interface {
+	CheckBudgets(backend, agentName string) error
+}
+
 // runLocks serializes concurrent runAgent calls for the same (agent, repo)
 // pair, preventing the lost-update race where two overlapping runs both read
 // the same old memory and whichever finishes last silently clobbers the
@@ -150,6 +157,7 @@ type Engine struct {
 	streamPub     RunStreamPublisher
 	stepRec       StepRecorder
 	lastRunRec    LastRunRecorder // optional; only fired for Kind=="cron"
+	budgetChecker BudgetChecker   // optional; gates runs by token budget caps
 	runLock       runLocks        // serializes (agent, repo) runs across kinds
 	runsDeduped   atomic.Int64
 }
@@ -160,6 +168,12 @@ type Engine struct {
 // AllowMemory flag.
 func (e *Engine) WithMemory(m MemoryBackend) {
 	e.memory = m
+}
+
+// WithBudgetChecker attaches an optional budget checker called before each
+// agent run. When a cap is exceeded the run is rejected with an error.
+func (e *Engine) WithBudgetChecker(bc BudgetChecker) {
+	e.budgetChecker = bc
 }
 
 // NewEngine builds an Engine. queue may be nil, in which case dispatch
@@ -671,6 +685,13 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 			backend,
 		)
 	}
+
+	if e.budgetChecker != nil {
+		if err := e.budgetChecker.CheckBudgets(backend, agent.Name); err != nil {
+			return fmt.Errorf("agent %q: %w", agent.Name, err)
+		}
+	}
+
 	runner := e.runnerBuilder(backend, backendCfg)
 
 	rootEventID, dispatchDepth := extractDispatchContext(ev)

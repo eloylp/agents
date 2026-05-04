@@ -128,6 +128,17 @@ func (s *Store) Load() (*config.Config, error)              { return Load(s.db) 
 func (s *Store) LoadAndValidate() (*config.Config, error)   { return LoadAndValidate(s.db) }
 func (s *Store) CountFrom() (ImportCount, error)            { return CountFrom(s.db) }
 
+// ── Token budgets and leaderboard ────────────────────────────────────────
+
+func (s *Store) ListTokenBudgets() ([]TokenBudget, error)                         { return ListTokenBudgets(s.db) }
+func (s *Store) GetTokenBudget(id int64) (TokenBudget, error)                     { return GetTokenBudget(s.db, id) }
+func (s *Store) CreateTokenBudget(b TokenBudget) (TokenBudget, error)             { return CreateTokenBudget(s.db, b) }
+func (s *Store) UpdateTokenBudget(id int64, b TokenBudget) (TokenBudget, error)   { return UpdateTokenBudget(s.db, id, b) }
+func (s *Store) DeleteTokenBudget(id int64) error                                 { return DeleteTokenBudget(s.db, id) }
+func (s *Store) BudgetAlerts() ([]BudgetAlert, error)                             { return BudgetAlerts(s.db) }
+func (s *Store) TokenLeaderboard(repo, period string) ([]LeaderboardEntry, error) { return TokenLeaderboard(s.db, repo, period) }
+func (s *Store) CheckBudgets(backend, agentName string) error                     { return CheckBudgets(s.db, backend, agentName) }
+
 // Close closes the underlying handle. Provided so the daemon's lifecycle
 // only juggles one handle.
 func (s *Store) Close() error { return s.db.Close() }
