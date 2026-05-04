@@ -82,6 +82,7 @@ func testDB(t *testing.T) *sql.DB {
 			"codex":  {Command: "codex"},
 		},
 		nil,
+		nil,
 	); err != nil {
 		t.Fatalf("seed test db: %v", err)
 	}
