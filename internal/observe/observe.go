@@ -234,8 +234,7 @@ func newRunStream() *runStream {
 // subscribers. A full subscriber channel drops the line silently , 
 // observability must not back-pressure the runner.
 func (r *runStream) publish(line []byte) {
-	cp := make([]byte, len(line))
-	copy(cp, line)
+	cp := bytes.Clone(line)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
