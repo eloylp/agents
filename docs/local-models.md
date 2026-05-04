@@ -85,34 +85,32 @@ Key flags explained:
 | `--parallel 1` | One concurrent request per worker. Bump up if you're running many agents in parallel and have spare VRAM. |
 | `--flash-attn on` | Explicit FlashAttention. Usually on by default on recent builds. |
 
-### 2. Configure the daemon
+### 2. Configure daemon proxy env and fleet backends
 
-In your `config.yaml`:
+The proxy is daemon runtime configuration, so set it through environment variables:
+
+```env
+AGENTS_PROXY_ENABLED=true
+AGENTS_PROXY_PATH=/v1/messages
+AGENTS_PROXY_UPSTREAM_URL=http://localhost:18000/v1
+AGENTS_PROXY_UPSTREAM_MODEL=qwen
+AGENTS_PROXY_UPSTREAM_TIMEOUT_SECONDS=3600
+```
+
+Then define the backends in your fleet YAML:
 
 ```yaml
-daemon:
-  proxy:
-    enabled: true
-    path: /v1/messages
-    upstream:
-      url: http://localhost:18000/v1
-      model: qwen                         # llama-server ignores this; set anything
-      timeout_seconds: 3600               # big agent runs can take minutes
-      extra_body:                         # merged into every upstream request
-        chat_template_kwargs:
-          enable_thinking: false          # Qwen 3.5 reasoning mode is wasteful for agent loops
+backends:
+  claude:                                 # default: hosted Anthropic
+    command: claude
+    timeout_seconds: 3600
+    max_prompt_chars: 12000
 
-  ai_backends:
-    claude:                               # default: hosted Anthropic
-      command: claude
-      timeout_seconds: 3600
-      max_prompt_chars: 12000
-
-    claude_local:                         # same binary, routed through the daemon proxy
-      command: claude
-      local_model_url: http://localhost:8080    # daemon injects ANTHROPIC_BASE_URL
-      timeout_seconds: 3600
-      max_prompt_chars: 12000
+  claude_local:                           # same binary, routed through the daemon proxy
+    command: claude
+    local_model_url: http://localhost:8080      # daemon injects ANTHROPIC_BASE_URL
+    timeout_seconds: 3600
+    max_prompt_chars: 12000
 ```
 
 ### 3. Pick which agents use local
@@ -233,7 +231,7 @@ We initially thought we needed `--bare` to skip OAuth and force env-based routin
 
 ### Long sub-agent tool loops can hit the proxy timeout
 
-The `claude` CLI's Task tool can spawn sub-agents whose conversations build up to 30k+ tokens. If the upstream request takes longer than `daemon.proxy.upstream.timeout_seconds`, the proxy returns 502 mid-stream. **Bump to 3600 seconds** (matching the claude backend timeout) in any serious setup.
+The `claude` CLI's Task tool can spawn sub-agents whose conversations build up to 30k+ tokens. If the upstream request takes longer than `AGENTS_PROXY_UPSTREAM_TIMEOUT_SECONDS`, the proxy returns 502 mid-stream. **Bump to 3600 seconds** (matching the claude backend timeout) in any serious setup.
 
 ### Prompt caching is stripped at translation
 
@@ -250,7 +248,7 @@ The Anthropic `cache_control: {type: "ephemeral"}` markers the `claude` CLI emit
 
 ### "Invalid API key" on every run
 
-`ANTHROPIC_BASE_URL` is not reaching the subprocess. Check that `local_model_url` is set on the `claude_local` backend in your daemon config, the daemon injects `ANTHROPIC_BASE_URL` from that field. `ANTHROPIC_API_KEY` must still be present in the container environment (any non-empty value works; the local endpoint ignores it). Set it in your `.env` file or compose `environment:` block.
+`ANTHROPIC_BASE_URL` is not reaching the subprocess. Check that `local_model_url` is set on the `claude_local` backend in your fleet config, the daemon injects `ANTHROPIC_BASE_URL` from that field. `ANTHROPIC_API_KEY` must still be present in the container environment (any non-empty value works; the local endpoint ignores it). Set it in your `.env` file or compose `environment:` block.
 
 Verify with:
 
@@ -260,7 +258,7 @@ docker compose exec agents env | grep ANTHROPIC_
 
 ### Model responds in `<think>...</think>` blocks and burns all tokens before producing output
 
-Qwen 3.5's reasoning mode ate your `max_tokens`. Add `extra_body.chat_template_kwargs.enable_thinking: false` to the proxy config. Restart.
+Qwen 3.5's reasoning mode ate your `max_tokens`. Configure your upstream server to disable reasoning mode where supported, then restart it.
 
 ### llama-server on 6 GB GPU fails with `failed to allocate compute pp buffers`
 
@@ -271,7 +269,7 @@ Qwen 3.5's hybrid-attention fused-chunk buffer doesn't fit on 6 GB cards alongsi
 
 ### Agent runs take very long and eventually fail with "Unable to connect"
 
-Your `daemon.proxy.upstream.timeout_seconds` is too low for deep tool loops. Bump to 3600.
+Your `AGENTS_PROXY_UPSTREAM_TIMEOUT_SECONDS` is too low for deep tool loops. Bump to 3600.
 
 ### llama-server takes 15+ minutes to load a 35B model
 
@@ -285,7 +283,7 @@ You picked an Unsloth "UD" Dynamic quant variant. Switch to standard Q4_K_M.
 - **Set `--api-key`** on llama-server if the network is not fully trusted.
 - **Monitor token use** via the `proxy upstream ok body_bytes=… msgs=… tools=…` log line. Increasing `msgs` across runs means agents are converging through tool loops; flat `msgs` counts may indicate the model is bailing without real work.
 - **Pre-download GGUFs.** `llama-server -hf ...` auto-downloads on first run but can be slow on throttled networks. Pre-fetch to a local path and pass `-m /path/to/file.gguf` for reliable startup.
-- **Rebuild your docker image after changing backend env**, the daemon reads config on startup.
+- **Restart the daemon after changing backend or proxy env**, the daemon reads runtime env on startup.
 
 ---
 

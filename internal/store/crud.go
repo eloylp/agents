@@ -115,7 +115,7 @@ func validateFleetConstraints(q querier, op string, repos []fleet.Repo) error {
 	if err := requireAtLeastOne(q, "SELECT COUNT(*) FROM agents", "agents", "config: at least one agent is required"); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: %s: %v", op, err)}
 	}
-	if err := requireAtLeastOne(q, "SELECT COUNT(*) FROM backends", "backends", "config: at least one ai_backends entry is required"); err != nil {
+	if err := requireAtLeastOne(q, "SELECT COUNT(*) FROM backends", "backends", "config: at least one backend entry is required"); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: %s: %v", op, err)}
 	}
 	return validateCronExpressions(repos)
@@ -331,7 +331,7 @@ func DeleteBackend(db *sql.DB, name string) error {
 		return fmt.Errorf("store: delete backend %s: %w", name, err)
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
-		if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM backends", "backends", "config: at least one ai_backends entry is required"); err != nil {
+		if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM backends", "backends", "config: at least one backend entry is required"); err != nil {
 			return &ErrConflict{Msg: fmt.Sprintf("store: delete backend %s: %v", name, err)}
 		}
 		if err := validateFleet(tx); err != nil {

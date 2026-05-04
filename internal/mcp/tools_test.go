@@ -1003,7 +1003,7 @@ func TestToolGetConfigReturnsRedactedJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(textOf(t, res)), &got); err != nil {
 		t.Fatalf("config body is not valid JSON: %v", err)
 	}
-	for _, key := range []string{"daemon", "agents", "skills", "repos"} {
+	for _, key := range []string{"backends", "agents", "skills", "repos"} {
 		if _, ok := got[key]; !ok {
 			t.Errorf("config JSON missing %q: %+v", key, got)
 		}
@@ -1437,7 +1437,7 @@ func TestToolDeleteSkillPropagatesConflict(t *testing.T) {
 func TestToolCreateBackendForwardsAndReturnsCanonical(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
-	// Custom backend names need a local_model_url to satisfy validation , 
+	// Custom backend names need a local_model_url to satisfy validation ,
 	// otherwise only the built-in claude/codex/claude_local names are accepted.
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{

@@ -1,13 +1,13 @@
 # Configuration
 
-The agent fleet lives in a SQLite database that the daemon boots from. You manage it through the web dashboard at `/ui/` and the CRUD API. **`config.yaml` is optional**: it is a portable serialization of the same data the database holds, useful for one-time seeding, version-controlled fleet definitions, or moving a fleet between environments. The example file [`config.example.yaml`](../config.example.yaml) shows the shape.
+The agent fleet lives in a SQLite database that the daemon boots from. You manage it through the web dashboard at `/ui/` and the CRUD API. **`config.yaml` is optional**: it is a portable serialization of shareable fleet strategy, useful for one-time seeding, version-controlled fleet definitions, or moving a fleet between environments. The example file [`config.example.yaml`](../config.example.yaml) shows the shape.
 
 This page documents the schema, using YAML examples for clarity. Every field shown here also exists as a column in the SQLite store and as a JSON field on the CRUD endpoints; the three surfaces are interchangeable.
 
-The schema is split into five conceptual domains:
+The import/export schema is split into five fleet domains:
 
 ```yaml
-daemon:      # how the service runs: log, http, processor, backends, optional proxy
+backends:    # AI CLI/runtime definitions agents can use
 skills:      # reusable guidance blocks, keyed by name
 agents:      # named capabilities: backend + skills + prompt + dispatch wiring
 repos:       # wiring: which agents run on which repo, and when
@@ -18,64 +18,60 @@ The shortest useful YAML representation is roughly 30 lines.
 
 ---
 
-## `daemon`
+## Daemon Runtime Settings
+
+Daemon runtime settings are process configuration, not fleet strategy. They are not stored in SQLite, not accepted by `/import`, and not returned by `/export` or `/config`. Configure them at startup with environment variables. Empty variables are ignored, so built-in defaults remain in effect unless an operator explicitly sets a value. Changing any of these settings requires restarting the daemon.
+
+See [`.env.sample`](../.env.sample) for a copy-pasteable list with current defaults.
+
+| Env var | Runtime setting |
+|---|---|
+| `AGENTS_LOG_LEVEL` | log level |
+| `AGENTS_LOG_FORMAT` | log format |
+| `AGENTS_HTTP_LISTEN_ADDR` | HTTP listen address |
+| `AGENTS_HTTP_STATUS_PATH` | status route |
+| `AGENTS_HTTP_WEBHOOK_PATH` | GitHub webhook route |
+| `AGENTS_HTTP_READ_TIMEOUT_SECONDS` | HTTP read timeout |
+| `AGENTS_HTTP_WRITE_TIMEOUT_SECONDS` | HTTP write timeout for non-SSE routes |
+| `AGENTS_HTTP_IDLE_TIMEOUT_SECONDS` | HTTP idle timeout |
+| `AGENTS_HTTP_MAX_BODY_BYTES` | max request body size |
+| `AGENTS_HTTP_DELIVERY_TTL_SECONDS` | webhook delivery dedupe TTL |
+| `AGENTS_HTTP_SHUTDOWN_TIMEOUT_SECONDS` | graceful shutdown timeout |
+| `AGENTS_PROCESSOR_EVENT_QUEUE_BUFFER` | event queue buffer size |
+| `AGENTS_PROCESSOR_MAX_CONCURRENT_AGENTS` | worker concurrency |
+| `AGENTS_DISPATCH_MAX_DEPTH` | max inter-agent dispatch chain depth |
+| `AGENTS_DISPATCH_MAX_FANOUT` | max dispatches requested by one run |
+| `AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS` | dispatch dedupe window |
+| `AGENTS_PROXY_ENABLED` | enable built-in Anthropic to OpenAI proxy |
+| `AGENTS_PROXY_PATH` | proxy route |
+| `AGENTS_PROXY_UPSTREAM_URL` | OpenAI-compatible upstream URL |
+| `AGENTS_PROXY_UPSTREAM_MODEL` | upstream model name |
+| `AGENTS_PROXY_UPSTREAM_API_KEY_ENV` | env var name holding upstream API key |
+| `AGENTS_PROXY_UPSTREAM_TIMEOUT_SECONDS` | upstream request timeout |
+
+Secrets keep their integration-specific names:
+
+```bash
+GITHUB_WEBHOOK_SECRET=... # HMAC shared secret for /webhooks/github
+GITHUB_TOKEN=...          # GitHub MCP server and gh CLI fallback
+```
+
+## `backends`
 
 ```yaml
-daemon:
-  log:
-    level: info            # trace, debug, info, warn, error, fatal
-    format: text           # text (human) or json (structured)
+backends:
+  claude:
+    command: claude
+    timeout_seconds: 1500
+    max_prompt_chars: 12000
 
-  http:
-    listen_addr: ":8080"
-    status_path: /status
-    webhook_path: /webhooks/github
-    webhook_secret_env: GITHUB_WEBHOOK_SECRET
-    shutdown_timeout_seconds: 15
-
-  processor:
-    event_queue_buffer: 256
-    max_concurrent_agents: 4                # cap on per-event fan-out
-    dispatch:
-      max_depth: 3                          # max chain length before drop + WARN
-      max_fanout: 4                         # max dispatches per single agent run
-      dedup_window_seconds: 300             # suppress duplicate (target, repo, number) within window
-
-  ai_backends:
-    claude:
-      command: claude
-      timeout_seconds: 1500
-      max_prompt_chars: 12000
-
-    codex:
-      command: codex
-      timeout_seconds: 600
-      max_prompt_chars: 12000
+  codex:
+    command: codex
+    timeout_seconds: 600
+    max_prompt_chars: 12000
 ```
 
 > **Backend launch args are daemon-managed.** The arguments passed to `claude` and `codex` are hardcoded by the daemon (`-p --dangerously-skip-permissions --output-format stream-json --json-schema <embedded>` for Claude, `exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --output-schema <embedded>` for Codex). The JSONL/stream-json output is what lets the daemon reconstruct the tool-loop transcript on `trace_steps`. The YAML schema does not expose these args; the only backend fields you can change at runtime are `timeout_seconds`, `max_prompt_chars`, and (for local backends) `local_model_url`.
-
-Daemon runtime settings can also be overridden at startup with environment variables. Empty variables are ignored, so defaults and YAML values continue to apply unless an operator explicitly sets a value. These settings are startup-only; changing them still requires restarting the daemon.
-
-| Env var | YAML field |
-|---|---|
-| `AGENTS_LOG_LEVEL` | `daemon.log.level` |
-| `AGENTS_LOG_FORMAT` | `daemon.log.format` |
-| `AGENTS_HTTP_LISTEN_ADDR` | `daemon.http.listen_addr` |
-| `AGENTS_HTTP_STATUS_PATH` | `daemon.http.status_path` |
-| `AGENTS_HTTP_WEBHOOK_PATH` | `daemon.http.webhook_path` |
-| `AGENTS_HTTP_WEBHOOK_SECRET_ENV` | `daemon.http.webhook_secret_env` |
-| `AGENTS_HTTP_READ_TIMEOUT_SECONDS` | `daemon.http.read_timeout_seconds` |
-| `AGENTS_HTTP_WRITE_TIMEOUT_SECONDS` | `daemon.http.write_timeout_seconds` |
-| `AGENTS_HTTP_IDLE_TIMEOUT_SECONDS` | `daemon.http.idle_timeout_seconds` |
-| `AGENTS_HTTP_MAX_BODY_BYTES` | `daemon.http.max_body_bytes` |
-| `AGENTS_HTTP_DELIVERY_TTL_SECONDS` | `daemon.http.delivery_ttl_seconds` |
-| `AGENTS_HTTP_SHUTDOWN_TIMEOUT_SECONDS` | `daemon.http.shutdown_timeout_seconds` |
-| `AGENTS_PROCESSOR_EVENT_QUEUE_BUFFER` | `daemon.processor.event_queue_buffer` |
-| `AGENTS_PROCESSOR_MAX_CONCURRENT_AGENTS` | `daemon.processor.max_concurrent_agents` |
-| `AGENTS_DISPATCH_MAX_DEPTH` | `daemon.processor.dispatch.max_depth` |
-| `AGENTS_DISPATCH_MAX_FANOUT` | `daemon.processor.dispatch.max_fanout` |
-| `AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS` | `daemon.processor.dispatch.dedup_window_seconds` |
 
 ## `skills`
 
@@ -98,7 +94,7 @@ Skills are referenced by name from agents. Prompts are inline strings, once the 
 agents:
   # Short inline prompt for a reviewer that never opens PRs (default)
   - name: arch-reviewer
-    backend: claude        # must match a key under daemon.ai_backends
+    backend: claude        # must match a key under backends
     skills: [architect]
     prompt: |
       You are an architecture-focused PR reviewer. Post one high-signal review comment.
@@ -138,7 +134,7 @@ agents:
 
 Each agent is a pure capability definition: backend + skills + prompt. Agents don't run until a repo binds them to a trigger.
 
-- `backend` must match an entry in `daemon.ai_backends` (e.g. `claude`, `codex`, or any custom local-backend name). There is no `auto` selection; every agent must name a backend explicitly.
+- `backend` must match an entry in `backends` (e.g. `claude`, `codex`, or any custom local-backend name). There is no `auto` selection; every agent must name a backend explicitly.
 - `prompt` is an inline string in the YAML. After import the prompt lives in SQLite, edit it through the CRUD API, the web UI, or the MCP `update_agent` tool.
 - Agent names must be unique.
 - `allow_prs` (default `false`): when `false`, the scheduler prepends a hard instruction forbidding the agent from opening pull requests, regardless of what the prompt says. Set `allow_prs: true` only on agents that are explicitly meant to author PRs (e.g. coders, refactorers). Reviewer-only agents should leave this unset.
@@ -201,7 +197,7 @@ Rules:
 - The trigger label comes from the webhook event payload, not the issue/PR's current label set.
 - Draft PRs skip `pull_request.labeled` for both `labels:` and `events:` bindings; they may still receive other event kinds such as `pull_request.opened` and `pull_request.synchronize`.
 - `events:` bindings fire on the exact event kinds listed, with no additional filtering.
-- Multiple bindings matching the same event fan out in parallel (capped by `daemon.processor.max_concurrent_agents`).
+- Multiple bindings matching the same event fan out in parallel (capped by `AGENTS_PROCESSOR_MAX_CONCURRENT_AGENTS`).
 
 ## `guardrails`
 
@@ -248,9 +244,10 @@ Rules:
 Create a `.env` file in the project root (loaded automatically):
 
 ```bash
-GITHUB_WEBHOOK_SECRET=your-webhook-secret  # HMAC shared secret for /webhooks/github
-GITHUB_TOKEN=ghp_...                       # Personal Access Token used by the GitHub MCP server, the `gh` CLI fallback, and forwarded into AI backend subprocesses (repo scope, +workflow if agents touch CI)
+cp .env.sample .env
 ```
+
+Then edit the required secret values. See [`.env.sample`](../.env.sample) for all supported environment variables.
 
 ## Importing and exporting
 

@@ -154,10 +154,11 @@ func Import(db *sql.DB, cfg *config.Config) error {
 	}
 	defer tx.Rollback()
 
-	if err := importDaemon(tx, cfg.Daemon); err != nil {
-		return err
+	backends := cfg.Daemon.AIBackends
+	if len(backends) == 0 {
+		backends = cfg.Backends
 	}
-	if err := importBackends(tx, cfg.Daemon.AIBackends); err != nil {
+	if err := importBackends(tx, backends); err != nil {
 		return err
 	}
 	if err := importSkills(tx, cfg.Skills); err != nil {
@@ -201,85 +202,6 @@ func importGuardrails(tx *sql.Tx, guardrails []fleet.Guardrail) error {
 		); err != nil {
 			return fmt.Errorf("store import: upsert guardrail %s: %w", g.Name, err)
 		}
-	}
-	return nil
-}
-
-// daemonRecord is a JSON-serializable view of DaemonConfig that excludes
-// resolved secret values (only the env-var name fields are kept).
-type daemonRecord struct {
-	Log       config.LogConfig       `json:"log"`
-	HTTP      httpRecord             `json:"http"`
-	Processor config.ProcessorConfig `json:"processor"`
-	Proxy     proxyRecord            `json:"proxy"`
-}
-
-// httpRecord mirrors HTTPConfig but omits resolved secret fields.
-type httpRecord struct {
-	ListenAddr             string `json:"listen_addr"`
-	StatusPath             string `json:"status_path"`
-	WebhookPath            string `json:"webhook_path"`
-	WebhookSecretEnv       string `json:"webhook_secret_env"`
-	ReadTimeoutSeconds     int    `json:"read_timeout_seconds"`
-	WriteTimeoutSeconds    int    `json:"write_timeout_seconds"`
-	IdleTimeoutSeconds     int    `json:"idle_timeout_seconds"`
-	MaxBodyBytes           int64  `json:"max_body_bytes"`
-	DeliveryTTLSeconds     int    `json:"delivery_ttl_seconds"`
-	ShutdownTimeoutSeconds int    `json:"shutdown_timeout_seconds"`
-}
-
-// proxyRecord mirrors ProxyConfig but omits the resolved APIKey.
-type proxyRecord struct {
-	Enabled  bool                `json:"enabled"`
-	Path     string              `json:"path"`
-	Upstream proxyUpstreamRecord `json:"upstream"`
-}
-
-type proxyUpstreamRecord struct {
-	URL            string         `json:"url"`
-	Model          string         `json:"model"`
-	APIKeyEnv      string         `json:"api_key_env"`
-	TimeoutSeconds int            `json:"timeout_seconds"`
-	ExtraBody      map[string]any `json:"extra_body,omitempty"`
-}
-
-func importDaemon(tx *sql.Tx, d config.DaemonConfig) error {
-	rec := daemonRecord{
-		Log: d.Log,
-		HTTP: httpRecord{
-			ListenAddr:       d.HTTP.ListenAddr,
-			StatusPath:       d.HTTP.StatusPath,
-			WebhookPath:      d.HTTP.WebhookPath,
-			WebhookSecretEnv: d.HTTP.WebhookSecretEnv,
-
-			ReadTimeoutSeconds:     d.HTTP.ReadTimeoutSeconds,
-			WriteTimeoutSeconds:    d.HTTP.WriteTimeoutSeconds,
-			IdleTimeoutSeconds:     d.HTTP.IdleTimeoutSeconds,
-			MaxBodyBytes:           d.HTTP.MaxBodyBytes,
-			DeliveryTTLSeconds:     d.HTTP.DeliveryTTLSeconds,
-			ShutdownTimeoutSeconds: d.HTTP.ShutdownTimeoutSeconds,
-		},
-		Processor: d.Processor,
-		Proxy: proxyRecord{
-			Enabled: d.Proxy.Enabled,
-			Path:    d.Proxy.Path,
-			Upstream: proxyUpstreamRecord{
-				URL:            d.Proxy.Upstream.URL,
-				Model:          d.Proxy.Upstream.Model,
-				APIKeyEnv:      d.Proxy.Upstream.APIKeyEnv,
-				TimeoutSeconds: d.Proxy.Upstream.TimeoutSeconds,
-				ExtraBody:      d.Proxy.Upstream.ExtraBody,
-			},
-		},
-	}
-	data, err := json.Marshal(rec)
-	if err != nil {
-		return fmt.Errorf("store import: marshal daemon config: %w", err)
-	}
-	if _, err := tx.Exec(
-		"INSERT OR REPLACE INTO config(key,value) VALUES('daemon',?)", string(data),
-	); err != nil {
-		return fmt.Errorf("store import: upsert daemon config: %w", err)
 	}
 	return nil
 }
@@ -387,9 +309,6 @@ func importRepos(tx *sql.Tx, repos []fleet.Repo) error {
 func Load(db *sql.DB) (*config.Config, error) {
 	cfg := &config.Config{}
 
-	if err := loadDaemon(db, cfg); err != nil {
-		return nil, err
-	}
 	if err := loadBackends(db, cfg); err != nil {
 		return nil, err
 	}
@@ -414,56 +333,6 @@ func loadGuardrails(db *sql.DB, cfg *config.Config) error {
 		return fmt.Errorf("store load: read guardrails: %w", err)
 	}
 	cfg.Guardrails = rows
-	return nil
-}
-
-func loadDaemon(db *sql.DB, cfg *config.Config) error {
-	var value string
-	err := db.QueryRow("SELECT value FROM config WHERE key='daemon'").Scan(&value)
-	if errors.Is(err, sql.ErrNoRows) {
-		// Fresh database, leave cfg.Daemon at its zero value and let
-		// config.applyDefaults populate every field with sensible
-		// defaults during FinishLoad. The daemon should boot against
-		// an empty store without requiring a YAML seed; operators
-		// configure the fleet through the dashboard / CRUD / MCP
-		// after the daemon is up.
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("store load: query daemon config: %w", err)
-	}
-
-	var rec daemonRecord
-	if err := json.Unmarshal([]byte(value), &rec); err != nil {
-		return fmt.Errorf("store load: parse daemon config: %w", err)
-	}
-
-	cfg.Daemon.Log = rec.Log
-	cfg.Daemon.HTTP = config.HTTPConfig{
-		ListenAddr:       rec.HTTP.ListenAddr,
-		StatusPath:       rec.HTTP.StatusPath,
-		WebhookPath:      rec.HTTP.WebhookPath,
-		WebhookSecretEnv: rec.HTTP.WebhookSecretEnv,
-
-		ReadTimeoutSeconds:     rec.HTTP.ReadTimeoutSeconds,
-		WriteTimeoutSeconds:    rec.HTTP.WriteTimeoutSeconds,
-		IdleTimeoutSeconds:     rec.HTTP.IdleTimeoutSeconds,
-		MaxBodyBytes:           rec.HTTP.MaxBodyBytes,
-		DeliveryTTLSeconds:     rec.HTTP.DeliveryTTLSeconds,
-		ShutdownTimeoutSeconds: rec.HTTP.ShutdownTimeoutSeconds,
-	}
-	cfg.Daemon.Processor = rec.Processor
-	cfg.Daemon.Proxy = config.ProxyConfig{
-		Enabled: rec.Proxy.Enabled,
-		Path:    rec.Proxy.Path,
-		Upstream: config.ProxyUpstreamConfig{
-			URL:            rec.Proxy.Upstream.URL,
-			Model:          rec.Proxy.Upstream.Model,
-			APIKeyEnv:      rec.Proxy.Upstream.APIKeyEnv,
-			TimeoutSeconds: rec.Proxy.Upstream.TimeoutSeconds,
-			ExtraBody:      rec.Proxy.Upstream.ExtraBody,
-		},
-	}
 	return nil
 }
 
@@ -503,6 +372,7 @@ func loadBackends(db querier, cfg *config.Config) error {
 		return fmt.Errorf("store load: iterate backends: %w", err)
 	}
 	cfg.Daemon.AIBackends = backends
+	cfg.Backends = backends
 	return nil
 }
 

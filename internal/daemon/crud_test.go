@@ -499,7 +499,6 @@ func TestStoreCRUDBackendGetRedactsEnv(t *testing.T) {
 	}
 }
 
-
 func TestStoreCRUDBackendPatchRuntimeSettings(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
@@ -960,7 +959,7 @@ func itoa(i int) string { return strconv.Itoa(i) }
 // ── /api/store POST body-size limiting ───────────────────────────────────────
 
 // TestStoreCRUDPostBodySizeLimit verifies that POST write endpoints return
-// 413 when the request body exceeds daemon.http.max_body_bytes, including
+// 413 when the request body exceeds AGENTS_HTTP_MAX_BODY_BYTES, including
 // the case where the body starts with a valid JSON object followed by
 // extra bytes that push the total over the limit.
 func TestStoreCRUDPostBodySizeLimit(t *testing.T) {
@@ -1759,8 +1758,7 @@ func TestStoreImportReplacePrunesExistingRecords(t *testing.T) {
 
 	// Replace with a YAML that contains only a new agent + repo (no old-agent).
 	yamlBody := `
-daemon:
-  ai_backends:
+backends:
     claude:
       command: claude
       args: []
@@ -1845,8 +1843,7 @@ func TestStoreReplaceRejectsEmptyAgentList(t *testing.T) {
 	}
 
 	// Replace with a YAML that contains a backend but no agents, should fail.
-	yamlBody := `daemon:
-  ai_backends:
+	yamlBody := `backends:
     claude:
       command: claude
       args: []
@@ -1902,8 +1899,7 @@ func TestStoreImportMergeRejectsInvalidCron(t *testing.T) {
 	}
 
 	yamlBody := `
-daemon:
-  ai_backends:
+backends:
     claude:
       command: claude
       args: []
@@ -1954,8 +1950,7 @@ func TestStoreImportReplaceRejectsInvalidCron(t *testing.T) {
 	}
 
 	yamlBody := `
-daemon:
-  ai_backends:
+backends:
     claude:
       command: claude
       args: []

@@ -32,7 +32,7 @@ The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 
 | `GET` | `/dispatches` | Dispatch dedup store contents + counters |
 | `GET` | `/memory/{agent}/{repo}` | Raw agent memory markdown. `{repo}` uses `owner_repo` format (underscore-separated) |
 | `GET` | `/memory/stream` | Memory file change notifications (SSE) |
-| `GET` | `/config` | Effective parsed config (secrets redacted) |
+| `GET` | `/config` | Current fleet config snapshot |
 
 ## Runners management
 
@@ -60,7 +60,7 @@ The daemon's event queue is durable: every `PushEvent` writes to the SQLite `eve
 
 ## Proxy endpoints (opt-in)
 
-These are only mounted when `daemon.proxy.enabled: true` is set in the config.
+These are only mounted when `AGENTS_PROXY_ENABLED=true` is set in the daemon environment.
 
 | Method | Path | Description |
 |---|---|---|

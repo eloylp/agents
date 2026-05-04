@@ -491,7 +491,7 @@ func TestUpsertAgentCrossRefErrors(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-	db := openTestDB(t)
+			db := openTestDB(t)
 			tc.setup(t, db)
 			err := store.UpsertAgent(db, tc.agent)
 			if err == nil {
@@ -796,20 +796,20 @@ func TestUpsertBackendValidationErrors(t *testing.T) {
 		{
 			name:    "empty command",
 			bName:   "claude",
-			cfg:     fleet.Backend{Command: "", },
+			cfg:     fleet.Backend{Command: ""},
 			wantErr: "command is required",
 		},
 		{
 			name:    "invalid name",
 			bName:   "unknown-ai",
-			cfg:     fleet.Backend{Command: "ai", },
+			cfg:     fleet.Backend{Command: "ai"},
 			wantErr: "unsupported ai backend",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-	db := openTestDB(t)
+			db := openTestDB(t)
 			err := store.UpsertBackend(db, tc.bName, tc.cfg)
 			if err == nil {
 				t.Fatalf("UpsertBackend with %s: want error, got nil", tc.name)
@@ -948,7 +948,7 @@ func TestDeleteBackendRejectedAsLast(t *testing.T) {
 	if err == nil {
 		t.Fatal("DeleteBackend last backend: want error, got nil")
 	}
-	if !strings.Contains(err.Error(), "at least one ai_backends") {
+	if !strings.Contains(err.Error(), "at least one backend") {
 		t.Errorf("unexpected error: %v", err)
 	}
 

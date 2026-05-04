@@ -35,13 +35,13 @@ The dispatched agent receives an `agent.dispatch` event with these payload field
 | `invoked_by` | Name of the agent that dispatched this run |
 | `parent_span_id` | Span ID of the originating agent's run (used by trace stitching to link the dispatch chain) |
 
-## Safety limits (`daemon.processor.dispatch`)
+## Safety limits
 
-| Field | Default | Meaning |
+| Env var | Default | Meaning |
 |-------|---------|----------|
-| `max_depth` | 3 | Maximum dispatch chain length. Requests that would exceed this are dropped with a warning. |
-| `max_fanout` | 4 | Maximum number of dispatches a single agent run may enqueue. Additional requests are dropped. |
-| `dedup_window_seconds` | 300 | Suppress duplicate `(target, repo, number)` dispatch requests within this window (seconds). |
+| `AGENTS_DISPATCH_MAX_DEPTH` | 3 | Maximum dispatch chain length. Requests that would exceed this are dropped with a warning. |
+| `AGENTS_DISPATCH_MAX_FANOUT` | 4 | Maximum number of dispatches a single agent run may enqueue. Additional requests are dropped. |
+| `AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS` | 300 | Suppress duplicate `(target, repo, number)` dispatch requests within this window (seconds). |
 
 All three fields must be positive integers; the daemon rejects non-positive values at startup.
 
