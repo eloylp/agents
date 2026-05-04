@@ -468,7 +468,7 @@ func (d *Daemon) buildRouter() http.Handler {
 		router.PathPrefix("/mcp").Handler(d.mcp)
 		d.logger.Info().Str("path", "/mcp").Msg("mcp server enabled")
 	}
-	return router
+	return d.withBearerAuth(router)
 }
 
 // ── /status ─────────────────────────────────────────────────────────────

@@ -26,6 +26,7 @@ See [`.env.sample`](../.env.sample) for a copy-pasteable list with current defau
 
 | Env var | Runtime setting |
 |---|---|
+| `AGENTS_AUTH_BEARER_TOKEN_HASH` | optional SHA-256 hex hash for daemon bearer-token auth |
 | `AGENTS_LOG_LEVEL` | log level |
 | `AGENTS_LOG_FORMAT` | log format |
 | `AGENTS_HTTP_LISTEN_ADDR` | HTTP listen address |
