@@ -69,7 +69,7 @@ func validateBudget(b TokenBudget) error {
 	return nil
 }
 
-func scanTokenBudget(s scanner) (TokenBudget, error) {
+func scanTokenBudget(s rowScanner) (TokenBudget, error) {
 	var b TokenBudget
 	var enabled int
 	if err := s.Scan(&b.ID, &b.ScopeKind, &b.ScopeName, &b.Period, &b.CapTokens, &b.AlertAtPct, &enabled); err != nil {
