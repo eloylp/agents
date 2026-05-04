@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-05
+
+### Added
+
+- Minimal bearer-token auth for sensitive daemon surfaces. Set
+  `AGENTS_AUTH_BEARER_TOKEN_HASH` to protect REST write/read APIs, MCP tools,
+  runners, traces, prompts, and live streams while keeping `/status`,
+  `/webhooks/github`, `/v1/*`, and the UI shell reachable.
+- Dashboard token prompt and local token management so browser users can
+  authenticate against protected API and SSE endpoints without query-string
+  secrets.
+- Codex-compatible MCP access with bearer auth, enabling both Claude Code and
+  Codex users to manage the fleet through the same `/mcp` endpoint.
+- Token budgets and leaderboard across REST, MCP, and the dashboard:
+  global/backend/agent caps, daily/weekly/monthly UTC windows, alert
+  thresholds, per-scope CRUD, and per-agent average total tokens per run.
+- Built-in `discretion` and `memory-scope` guardrails. `discretion` reduces
+  noisy public GitHub actions, while `memory-scope` instructs agents to ignore
+  CLI-native, global, or session memory and use only the daemon-rendered memory
+  for the current `(agent, repo)` pair.
+- Daemon runtime environment overrides for log, HTTP, processor, dispatch, and
+  proxy settings, documented in `.env.sample` and `docs/configuration.md`.
+
+### Changed
+
+- Daemon runtime configuration is no longer part of the persisted fleet
+  config, `/config`, `/export`, `/import`, REST CRUD, or MCP config surfaces.
+  Fleet strategy remains database-backed and import/exportable; process
+  settings are startup-only environment variables.
+- Authenticated live streams now use fetch-based SSE clients so runners,
+  traces, events, and memory streams can send `Authorization: Bearer ...`
+  headers instead of leaking tokens through URL query parameters.
+- Token budget scope selection in the dashboard uses backend/agent dropdowns
+  instead of requiring operators to type stored names manually.
+- Trace cards in the dashboard are easier to open, and the transcript filter
+  remains sticky inside scroll containers.
+- `/runners` adds a per-repo filter, improving queue and trace triage on
+  multi-repo fleets.
+- Daemon route registration was refactored to register handlers per HTTP
+  method instead of dispatching inside handler bodies.
+- UI documentation screenshots and auth guidance were refreshed for the
+  current dashboard.
+
+### Fixed
+
+- Propagated `GITHUB_TOKEN` into AI subprocesses so GitHub MCP tooling keeps
+  working after the environment variable rename from `GITHUB_PAT_TOKEN`.
+- Normalized daemon SSE event handling to keep live transcript/ring-buffer
+  rendering consistent across Claude and Codex backend output parsers.
+- Corrected token leaderboard average wording so average total tokens per run
+  is not confused with the separate input/output/cache columns.
+
 ## [0.1.0] - 2026-05-03
 
 First public release. The daemon is a self-hosted orchestrator that dispatches
@@ -141,5 +193,6 @@ calls, or runtime inter-agent dispatch. Everything below ships in this release.
   are expected as issues, with the autonomous fleet implementing
   `ai ready`-labelled work. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-[Unreleased]: https://github.com/eloylp/agents/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/eloylp/agents/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/eloylp/agents/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/eloylp/agents/releases/tag/v0.1.0
