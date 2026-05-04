@@ -138,6 +138,7 @@ func (s *Store) DeleteTokenBudget(id int64) error                               
 func (s *Store) BudgetAlerts() ([]BudgetAlert, error)                             { return BudgetAlerts(s.db) }
 func (s *Store) TokenLeaderboard(repo, period string) ([]LeaderboardEntry, error) { return TokenLeaderboard(s.db, repo, period) }
 func (s *Store) CheckBudgets(backend, agentName string) error                     { return CheckBudgets(s.db, backend, agentName) }
+func (s *Store) ImportTokenBudgets(budgets []TokenBudget, replace bool) error     { return ImportTokenBudgets(s.db, budgets, replace) }
 
 // Close closes the underlying handle. Provided so the daemon's lifecycle
 // only juggles one handle.

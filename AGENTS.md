@@ -39,7 +39,7 @@ internal/
   workflow/                     # event routing engine, durable event queue (persist-on-push + replay), processor, dispatcher
   daemon/                       # owns the daemon as a single composed unit: lifecycle, router, /status, /run, proxy + UI + MCP mounts
   daemon/observe/               # observability HTTP handlers (events, traces, graph, dispatches, memory, SSE)
-  daemon/config/                # /config snapshot, /export, /import HTTP handlers and methods
+  daemon/config/                # /config snapshot, /export, /import HTTP handlers and methods; token budget CRUD and leaderboard endpoints
   daemon/fleet/                 # agents/skills/backends CRUD + GET /agents fleet view + orphans (incl. /agents/orphans/status)
   daemon/repos/                 # repos + per-binding HTTP CRUD handlers and methods
   daemon/runners/               # /runners listing + delete + retry (event_queue × traces JOIN)
@@ -105,6 +105,7 @@ When making common classes of changes, update all of these at once:
 | Dispatch semantics | `internal/workflow/dispatch.go` (runtime), `internal/config/config.go` (load-time validation), agent response schema in `internal/ai/types.go`, README dispatch section, all prompt "Response format" sections, tests on both paths |
 | SQLite store schema | `internal/store/migrations/`, `internal/store/store.go`, `internal/store/crud.go`, the per-domain handlers under `internal/daemon/{fleet,repos,config,queue}`, tests |
 | Proxy translation behavior | `internal/anthropic_proxy/{types,translate,handler}.go`, unit tests for the affected shape, `docs/local-models.md` if user-visible |
+| Token budget schema (`token_budgets` table) | `internal/store/migrations/`, `internal/store/budgets.go`, `internal/store/facade.go`, `internal/daemon/config/budgets.go`, `internal/daemon/config/config.go` (export/import), `internal/mcp/tools_budgets.go`, docs |
 | Anything in the README | Also check `CLAUDE.md`, `AGENTS.md`, `config.example.yaml`, these four should stay in sync |
 
 ## Testing expectations

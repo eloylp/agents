@@ -334,3 +334,43 @@ func TokenLeaderboard(db *sql.DB, repo, period string) ([]LeaderboardEntry, erro
 	}
 	return out, rows.Err()
 }
+
+// ImportTokenBudgets upserts token budgets. In replace mode all existing rows
+// are deleted first; in merge mode existing rows (keyed on scope_kind +
+// scope_name + period) are updated in place and absent rows are inserted.
+// IDs from the caller are ignored; the database assigns them.
+func ImportTokenBudgets(db *sql.DB, budgets []TokenBudget, replace bool) error {
+	if len(budgets) == 0 && !replace {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: import token budgets: begin: %w", err)
+	}
+	defer tx.Rollback()
+	if replace {
+		if _, err := tx.Exec("DELETE FROM token_budgets"); err != nil {
+			return fmt.Errorf("store: import token budgets: truncate: %w", err)
+		}
+	}
+	for _, b := range budgets {
+		if b.ScopeKind == "global" {
+			b.ScopeName = ""
+		}
+		if err := validateBudget(b); err != nil {
+			return fmt.Errorf("store: import token budget: %w", err)
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO token_budgets (scope_kind, scope_name, period, cap_tokens, alert_at_pct, enabled)
+			VALUES (?, ?, ?, ?, ?, ?)
+			ON CONFLICT(scope_kind, scope_name, period) DO UPDATE SET
+				cap_tokens   = excluded.cap_tokens,
+				alert_at_pct = excluded.alert_at_pct,
+				enabled      = excluded.enabled`,
+			b.ScopeKind, b.ScopeName, b.Period, b.CapTokens, b.AlertAtPct, boolToInt(b.Enabled),
+		); err != nil {
+			return fmt.Errorf("store: import token budget (%s/%s/%s): %w", b.ScopeKind, b.ScopeName, b.Period, err)
+		}
+	}
+	return tx.Commit()
+}

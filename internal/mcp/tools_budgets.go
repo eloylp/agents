@@ -119,9 +119,15 @@ func toolCreateTokenBudget(deps Deps) server.ToolHandlerFunc {
 		scopeName, _ := args["scope_name"].(string)
 		period, _ := args["period"].(string)
 		capTokens, _ := args["cap_tokens"].(float64)
-		alertAtPct, _ := args["alert_at_pct"].(float64)
-		if alertAtPct == 0 {
-			alertAtPct = 80
+		// Use map-key-presence to distinguish "caller omitted" from "caller
+		// explicitly passed 0". A zero alert_at_pct disables alerts; omitting
+		// the argument defaults to 80.
+		alertAtPctRaw, hasAlertAtPct := args["alert_at_pct"]
+		var alertAtPct float64 = 80
+		if hasAlertAtPct {
+			if v, ok := alertAtPctRaw.(float64); ok {
+				alertAtPct = v
+			}
 		}
 		enabled, hasEnabled := args["enabled"].(bool)
 		if !hasEnabled {
