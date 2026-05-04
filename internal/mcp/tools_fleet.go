@@ -196,18 +196,11 @@ func toolTriggerAgent(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultErrorFromErr("read repos", err), nil
 		}
 		want := fleet.NormalizeRepoName(repoName)
-		var repo fleet.Repo
-		var found bool
-		for _, r := range repos {
-			if r.Name == want {
-				repo = r
-				found = true
-				break
-			}
-		}
-		if !found || !repo.Enabled {
+		idx := slices.IndexFunc(repos, func(r fleet.Repo) bool { return r.Name == want })
+		if idx < 0 || !repos[idx].Enabled {
 			return mcpgo.NewToolResultErrorf("repo %q not found or disabled", repoName), nil
 		}
+		repo := repos[idx]
 
 		ev := workflow.Event{
 			ID:    workflow.GenEventID(),
