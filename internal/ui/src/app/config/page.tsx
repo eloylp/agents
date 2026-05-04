@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import GuardrailsManager from '@/components/GuardrailsManager'
+import RepoFilter from '@/components/RepoFilter'
 
 type Config = Record<string, unknown>
 
@@ -249,8 +250,18 @@ export default function ConfigPage() {
     if (requestedTab === 'inspector' || requestedTab === 'backends' || requestedTab === 'guardrails' || requestedTab === 'import-export' || requestedTab === 'tokens') {
       setTab(requestedTab)
     }
+    setLbRepo(params.get('repo') ?? '')
     setOrphanFocus(params.get('focus') === 'orphans')
   }, [])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    params.set('tab', tab)
+    if (tab === 'tokens' && lbRepo) params.set('repo', lbRepo)
+    else params.delete('repo')
+    const query = params.toString()
+    window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}`)
+  }, [tab, lbRepo])
 
   const loadBackends = () => {
     setBackendsLoading(true)
@@ -503,7 +514,7 @@ export default function ConfigPage() {
       return
     }
     const summary = await res.json() as Record<string, number>
-    setImportStatus(`Imported: ${summary.agents} agents, ${summary.skills} skills, ${summary.repos} repos, ${summary.backends} backends, ${summary.guardrails ?? 0} guardrails.`)
+    setImportStatus(`Imported: ${summary.agents} agents, ${summary.skills} skills, ${summary.repos} repos, ${summary.backends} backends, ${summary.guardrails ?? 0} guardrails, ${summary.token_budgets ?? 0} token budgets.`)
   }
 
   const loadBudgets = async () => {
@@ -855,7 +866,7 @@ export default function ConfigPage() {
             <div>
               <h3 style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-heading)', marginBottom: '0.5rem' }}>Export YAML</h3>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-                Download the current fleet configuration (agents, skills, repos, backends, guardrails) as a YAML file.
+                Download the current fleet configuration (agents, skills, repos, backends, guardrails, token budgets) as a YAML file.
               </p>
               <button
                 onClick={handleExport}
@@ -868,7 +879,7 @@ export default function ConfigPage() {
             <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '1.25rem' }}>
               <h3 style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-heading)', marginBottom: '0.5rem' }}>Import YAML</h3>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-                Upload a YAML file to import agents, skills, repos, and backends into the store.
+                Upload a YAML file to import agents, skills, repos, backends, guardrails, and token budgets into the store.
               </p>
               <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '0.75rem' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer', color: 'var(--text)' }}>
@@ -910,12 +921,7 @@ export default function ConfigPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
               <h3 style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-heading)', margin: 0 }}>Token Leaderboard</h3>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                <input
-                  style={{ ...inputStyle, width: '180px', fontSize: '0.8rem' }}
-                  placeholder="Filter by repo…"
-                  value={lbRepo}
-                  onChange={e => setLbRepo(e.target.value)}
-                />
+                <RepoFilter selected={lbRepo} onChange={setLbRepo} />
                 <select
                   style={{ ...inputStyle, width: '120px', fontSize: '0.8rem' }}
                   value={lbPeriod}
@@ -978,7 +984,7 @@ export default function ConfigPage() {
               </button>
             </div>
             <p style={{ color: 'var(--text-faint)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
-              Budgets enforce token caps per scope (global, backend, or agent) over a rolling period. When a cap is reached, new runs for that scope are blocked until the period resets.
+              Budgets enforce token caps per scope (global, backend, or agent) over UTC calendar periods. Daily resets at 00:00 UTC, weekly resets Sunday 00:00 UTC, and monthly resets on the first day at 00:00 UTC.
             </p>
             {budgetsLoading ? (
               <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading…</p>
@@ -995,7 +1001,7 @@ export default function ConfigPage() {
                         <span style={{ color: 'var(--text-muted)' }}>{b.period}</span>
                       </div>
                       <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        cap: {b.cap_tokens.toLocaleString()} tokens · alert at {b.alert_at_pct}%
+                        cap: {b.cap_tokens.toLocaleString()} tokens · {b.alert_at_pct === 0 ? 'alerts disabled' : `alert at ${b.alert_at_pct}%`}
                         {!b.enabled && <span style={{ color: 'var(--text-danger)', marginLeft: '0.4rem' }}>(disabled)</span>}
                       </div>
                     </div>
@@ -1222,7 +1228,7 @@ export default function ConfigPage() {
                 onChange={e => setBudgetForm(f => ({ ...f, period: e.target.value }))}
               >
                 <option value="daily">Daily (resets at midnight UTC)</option>
-                <option value="weekly">Weekly (rolling 7 days)</option>
+                <option value="weekly">Weekly (resets Sunday 00:00 UTC)</option>
                 <option value="monthly">Monthly (resets start of month UTC)</option>
               </select>
             </div>

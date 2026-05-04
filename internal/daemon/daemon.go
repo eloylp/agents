@@ -124,7 +124,7 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 	}
 	sched.WithEventQueue(channels)
 	engine.WithLastRunRecorder(sched)
-	engine.WithBudgetChecker(st)
+	engine.WithBudgetStore(st)
 
 	// Domain handlers (HTTP layer). All take the data-access facade and
 	// the static daemon-level config; CRUD-mutable state is read on every

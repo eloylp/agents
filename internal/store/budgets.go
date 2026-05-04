@@ -4,15 +4,18 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+
+	"github.com/rs/zerolog"
 )
 
 // TokenBudget represents a token cap for a scope over a time period.
 type TokenBudget struct {
 	ID         int64  `json:"id"`
-	ScopeKind  string `json:"scope_kind"`   // "global", "backend", "agent"
-	ScopeName  string `json:"scope_name"`   // "" for global
-	Period     string `json:"period"`       // "daily", "weekly", "monthly"
+	ScopeKind  string `json:"scope_kind"` // "global", "backend", "agent"
+	ScopeName  string `json:"scope_name"` // "" for global
+	Period     string `json:"period"`     // "daily", "weekly", "monthly"
 	CapTokens  int64  `json:"cap_tokens"`
 	AlertAtPct int    `json:"alert_at_pct"` // 0-100; 0 disables alerts
 	Enabled    bool   `json:"enabled"`
@@ -36,25 +39,42 @@ type BudgetAlert struct {
 	PctUsed    float64 `json:"pct_used"`
 }
 
+// BudgetExceededError is returned by CheckBudgets when an enabled cap already
+// has usage at or above its limit for the current UTC calendar period.
+type BudgetExceededError struct {
+	Budget     TokenBudget
+	UsedTokens int64
+}
+
+func (e *BudgetExceededError) Error() string {
+	return fmt.Sprintf("token budget exceeded: %s scope %q %s cap %d (used %d tokens)", e.Budget.ScopeKind, e.Budget.ScopeName, e.Budget.Period, e.Budget.CapTokens, e.UsedTokens)
+}
+
+// TokenBudgetPatch is the partial-update shape used by PATCH surfaces. Nil
+// fields are preserved; non-nil fields replace the current value.
+type TokenBudgetPatch struct {
+	ScopeKind  *string
+	ScopeName  *string
+	Period     *string
+	CapTokens  *int64
+	AlertAtPct *int
+	Enabled    *bool
+}
+
+func (p TokenBudgetPatch) AnyFieldSet() bool {
+	return p.ScopeKind != nil ||
+		p.ScopeName != nil ||
+		p.Period != nil ||
+		p.CapTokens != nil ||
+		p.AlertAtPct != nil ||
+		p.Enabled != nil
+}
+
 func validateBudget(b TokenBudget) error {
-	validScope := false
-	for _, k := range []string{"global", "backend", "agent"} {
-		if b.ScopeKind == k {
-			validScope = true
-			break
-		}
-	}
-	if !validScope {
+	if !slices.Contains([]string{"global", "backend", "agent"}, b.ScopeKind) {
 		return &ErrValidation{Msg: fmt.Sprintf("invalid scope_kind %q: must be one of global, backend, agent", b.ScopeKind)}
 	}
-	validPeriod := false
-	for _, p := range []string{"daily", "weekly", "monthly"} {
-		if b.Period == p {
-			validPeriod = true
-			break
-		}
-	}
-	if !validPeriod {
+	if !slices.Contains([]string{"daily", "weekly", "monthly"}, b.Period) {
 		return &ErrValidation{Msg: fmt.Sprintf("invalid period %q: must be one of daily, weekly, monthly", b.Period)}
 	}
 	if b.ScopeKind != "global" && strings.TrimSpace(b.ScopeName) == "" {
@@ -171,6 +191,37 @@ func UpdateTokenBudget(db *sql.DB, id int64, b TokenBudget) (TokenBudget, error)
 	return b, nil
 }
 
+// PatchTokenBudget partially updates an existing budget and returns the
+// canonical merged row.
+func PatchTokenBudget(db *sql.DB, id int64, patch TokenBudgetPatch) (TokenBudget, error) {
+	if !patch.AnyFieldSet() {
+		return TokenBudget{}, &ErrValidation{Msg: "at least one field is required"}
+	}
+	current, err := GetTokenBudget(db, id)
+	if err != nil {
+		return TokenBudget{}, err
+	}
+	if patch.ScopeKind != nil {
+		current.ScopeKind = *patch.ScopeKind
+	}
+	if patch.ScopeName != nil {
+		current.ScopeName = *patch.ScopeName
+	}
+	if patch.Period != nil {
+		current.Period = *patch.Period
+	}
+	if patch.CapTokens != nil {
+		current.CapTokens = *patch.CapTokens
+	}
+	if patch.AlertAtPct != nil {
+		current.AlertAtPct = *patch.AlertAtPct
+	}
+	if patch.Enabled != nil {
+		current.Enabled = *patch.Enabled
+	}
+	return UpdateTokenBudget(db, id, current)
+}
+
 // DeleteTokenBudget removes a budget by ID.
 func DeleteTokenBudget(db *sql.DB, id int64) error {
 	res, err := db.Exec(`DELETE FROM token_budgets WHERE id=?`, id)
@@ -185,10 +236,12 @@ func DeleteTokenBudget(db *sql.DB, id int64) error {
 }
 
 // periodWhereClause returns a SQLite WHERE clause fragment for started_at.
+// Boundaries use SQLite's UTC clock: daily starts at 00:00 UTC, weekly starts
+// on Sunday 00:00 UTC, and monthly starts at the first day 00:00 UTC.
 func periodWhereClause(period string) string {
 	switch period {
 	case "weekly":
-		return "started_at >= datetime('now', '-7 days')"
+		return "started_at >= datetime('now', 'start of day', '-' || strftime('%w', 'now') || ' days')"
 	case "monthly":
 		return "started_at >= datetime('now', 'start of month')"
 	default: // daily
@@ -221,8 +274,15 @@ func TokenUsageFor(db *sql.DB, backend, agentName, period string) (int64, error)
 // backend and agent. Returns nil on any query failure (fail-open so a broken
 // token_budgets table never blocks all agent runs).
 func CheckBudgets(db *sql.DB, backend, agentName string) error {
+	return CheckBudgetsWithLogger(db, backend, agentName, zerolog.Nop())
+}
+
+// CheckBudgetsWithLogger is CheckBudgets plus fail-open diagnostics. Query
+// errors are logged and ignored so enforcement defects do not halt the fleet.
+func CheckBudgetsWithLogger(db *sql.DB, backend, agentName string, logger zerolog.Logger) error {
 	budgets, err := ListTokenBudgets(db)
 	if err != nil {
+		logger.Error().Err(err).Str("backend", backend).Str("agent", agentName).Msg("token budget check failed open: list budgets")
 		return nil // fail-open
 	}
 	for _, b := range budgets {
@@ -252,10 +312,17 @@ func CheckBudgets(db *sql.DB, backend, agentName string) error {
 		}
 		used, err := TokenUsageFor(db, scopeBackend, scopeAgent, b.Period)
 		if err != nil {
+			logger.Error().
+				Err(err).
+				Int64("budget_id", b.ID).
+				Str("scope_kind", b.ScopeKind).
+				Str("scope_name", b.ScopeName).
+				Str("period", b.Period).
+				Msg("token budget check failed open: usage query")
 			continue // fail-open per budget
 		}
 		if used >= b.CapTokens {
-			return fmt.Errorf("token budget exceeded: %s scope %q %s cap %d (used %d tokens)", b.ScopeKind, b.ScopeName, b.Period, b.CapTokens, used)
+			return &BudgetExceededError{Budget: b, UsedTokens: used}
 		}
 	}
 	return nil
@@ -318,6 +385,7 @@ func TokenLeaderboard(db *sql.DB, repo, period string) ([]LeaderboardEntry, erro
 		WHERE %s
 		GROUP BY agent
 		ORDER BY total DESC
+		LIMIT 20
 	`, strings.Join(conditions, " AND "))
 	rows, err := db.Query(q, args...)
 	if err != nil {

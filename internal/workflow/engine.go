@@ -101,13 +101,6 @@ type LastRunRecorder interface {
 	RecordLastRun(agent, repo string, at time.Time, status string)
 }
 
-// BudgetChecker gates agent runs by token budget caps. CheckBudgets returns
-// an error when a cap is exceeded for the given backend and agent.
-// Implementations must be safe for concurrent use.
-type BudgetChecker interface {
-	CheckBudgets(backend, agentName string) error
-}
-
 // runLocks serializes concurrent runAgent calls for the same (agent, repo)
 // pair, preventing the lost-update race where two overlapping runs both read
 // the same old memory and whichever finishes last silently clobbers the
@@ -158,7 +151,7 @@ type Engine struct {
 	streamPub     RunStreamPublisher
 	stepRec       StepRecorder
 	lastRunRec    LastRunRecorder // optional; only fired for Kind=="cron"
-	budgetChecker BudgetChecker   // optional; gates runs by token budget caps
+	budgetStore   *store.Store    // optional; gates runs by token budget caps
 	runLock       runLocks        // serializes (agent, repo) runs across kinds
 	runsDeduped   atomic.Int64
 }
@@ -171,10 +164,11 @@ func (e *Engine) WithMemory(m MemoryBackend) {
 	e.memory = m
 }
 
-// WithBudgetChecker attaches an optional budget checker called before each
-// agent run. When a cap is exceeded the run is rejected with an error.
-func (e *Engine) WithBudgetChecker(bc BudgetChecker) {
-	e.budgetChecker = bc
+// WithBudgetStore attaches the store used to check token budgets before each
+// agent run. When a cap is exceeded the run is rejected before the runner is
+// constructed.
+func (e *Engine) WithBudgetStore(st *store.Store) {
+	e.budgetStore = st
 }
 
 // NewEngine builds an Engine. queue may be nil, in which case dispatch
@@ -687,14 +681,6 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		)
 	}
 
-	if e.budgetChecker != nil {
-		if err := e.budgetChecker.CheckBudgets(backend, agent.Name); err != nil {
-			return fmt.Errorf("agent %q: %w", agent.Name, err)
-		}
-	}
-
-	runner := e.runnerBuilder(backend, backendCfg)
-
 	rootEventID, dispatchDepth := extractDispatchContext(ev)
 
 	// Build dispatch context fields for dispatched agents.
@@ -771,6 +757,54 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	if invokedBy != "" {
 		logger = logger.With().Str("invoked_by", invokedBy).Logger()
 	}
+
+	spanStart := time.Now()
+	spanID := GenEventID()
+	composedPrompt := rendered.System
+	if rendered.User != "" {
+		if composedPrompt != "" {
+			composedPrompt += "\n\n"
+		}
+		composedPrompt += rendered.User
+	}
+
+	if e.budgetStore != nil {
+		if err := e.budgetStore.CheckBudgetsWithLogger(backend, agent.Name, logger); err != nil {
+			spanEnd := time.Now()
+			var queueWaitMs int64
+			if !ev.EnqueuedAt.IsZero() {
+				queueWaitMs = spanStart.Sub(ev.EnqueuedAt).Milliseconds()
+			}
+			if e.traceRec != nil {
+				status := "error"
+				var exceeded *store.BudgetExceededError
+				if errors.As(err, &exceeded) {
+					status = "budget_exceeded"
+				}
+				e.traceRec.RecordSpan(SpanInput{
+					SpanID:        spanID,
+					RootEventID:   rootEventID,
+					ParentSpanID:  parentSpanID,
+					Agent:         agent.Name,
+					Backend:       backend,
+					Repo:          ev.Repo.FullName,
+					EventKind:     ev.Kind,
+					InvokedBy:     invokedBy,
+					Number:        ev.Number,
+					DispatchDepth: dispatchDepth,
+					QueueWaitMs:   queueWaitMs,
+					StartedAt:     spanStart,
+					FinishedAt:    spanEnd,
+					Status:        status,
+					ErrorMsg:      err.Error(),
+					Prompt:        composedPrompt,
+				})
+			}
+			logger.Warn().Err(err).Msg("agent run rejected by token budget")
+			return fmt.Errorf("agent %q: %w", agent.Name, err)
+		}
+	}
+
 	logger.Info().Str("workflow", workflow).Msg("invoking ai agent")
 
 	if e.runTracker != nil {
@@ -778,8 +812,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		defer e.runTracker.FinishRun(agent.Name)
 	}
 
-	spanStart := time.Now()
-	spanID := GenEventID()
+	runner := e.runnerBuilder(backend, backendCfg)
 
 	// Live-stream registration: announce the run to the publisher so the
 	// runners view can show an in-flight row with this span_id and the
@@ -837,13 +870,6 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		if runErr != nil {
 			status = "error"
 			errMsg = runErr.Error()
-		}
-		composedPrompt := rendered.System
-		if rendered.User != "" {
-			if composedPrompt != "" {
-				composedPrompt += "\n\n"
-			}
-			composedPrompt += rendered.User
 		}
 		e.traceRec.RecordSpan(SpanInput{
 			SpanID:           spanID,

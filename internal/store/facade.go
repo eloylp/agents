@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 )
@@ -36,28 +38,30 @@ func (s *Store) DB() *sql.DB { return s.db }
 
 // ── Agents ──────────────────────────────────────────────────────────────
 
-func (s *Store) ReadAgents() ([]fleet.Agent, error)            { return ReadAgents(s.db) }
-func (s *Store) UpsertAgent(a fleet.Agent) error               { return UpsertAgent(s.db, a) }
-func (s *Store) DeleteAgent(name string) error                 { return DeleteAgent(s.db, name) }
-func (s *Store) DeleteAgentCascade(name string) error          { return DeleteAgentCascade(s.db, name) }
+func (s *Store) ReadAgents() ([]fleet.Agent, error)   { return ReadAgents(s.db) }
+func (s *Store) UpsertAgent(a fleet.Agent) error      { return UpsertAgent(s.db, a) }
+func (s *Store) DeleteAgent(name string) error        { return DeleteAgent(s.db, name) }
+func (s *Store) DeleteAgentCascade(name string) error { return DeleteAgentCascade(s.db, name) }
 
 // ── Skills ──────────────────────────────────────────────────────────────
 
-func (s *Store) ReadSkills() (map[string]fleet.Skill, error)        { return ReadSkills(s.db) }
-func (s *Store) UpsertSkill(name string, sk fleet.Skill) error      { return UpsertSkill(s.db, name, sk) }
-func (s *Store) DeleteSkill(name string) error                      { return DeleteSkill(s.db, name) }
+func (s *Store) ReadSkills() (map[string]fleet.Skill, error)   { return ReadSkills(s.db) }
+func (s *Store) UpsertSkill(name string, sk fleet.Skill) error { return UpsertSkill(s.db, name, sk) }
+func (s *Store) DeleteSkill(name string) error                 { return DeleteSkill(s.db, name) }
 
 // ── Backends ────────────────────────────────────────────────────────────
 
-func (s *Store) ReadBackends() (map[string]fleet.Backend, error)        { return ReadBackends(s.db) }
-func (s *Store) UpsertBackend(name string, b fleet.Backend) error       { return UpsertBackend(s.db, name, b) }
-func (s *Store) DeleteBackend(name string) error                        { return DeleteBackend(s.db, name) }
+func (s *Store) ReadBackends() (map[string]fleet.Backend, error) { return ReadBackends(s.db) }
+func (s *Store) UpsertBackend(name string, b fleet.Backend) error {
+	return UpsertBackend(s.db, name, b)
+}
+func (s *Store) DeleteBackend(name string) error { return DeleteBackend(s.db, name) }
 
 // ── Repos and bindings ──────────────────────────────────────────────────
 
-func (s *Store) ReadRepos() ([]fleet.Repo, error)              { return ReadRepos(s.db) }
-func (s *Store) UpsertRepo(r fleet.Repo) error                 { return UpsertRepo(s.db, r) }
-func (s *Store) DeleteRepo(name string) error                  { return DeleteRepo(s.db, name) }
+func (s *Store) ReadRepos() ([]fleet.Repo, error) { return ReadRepos(s.db) }
+func (s *Store) UpsertRepo(r fleet.Repo) error    { return UpsertRepo(s.db, r) }
+func (s *Store) DeleteRepo(name string) error     { return DeleteRepo(s.db, name) }
 
 func (s *Store) CreateBinding(repoName string, b fleet.Binding) (int64, fleet.Binding, error) {
 	return CreateBinding(s.db, repoName, b)
@@ -79,12 +83,14 @@ func (s *Store) EnableRepo(name string, enabled bool) error {
 
 // ── Guardrails ──────────────────────────────────────────────────────────
 
-func (s *Store) ReadEnabledGuardrails() ([]fleet.Guardrail, error)   { return ReadEnabledGuardrails(s.db) }
-func (s *Store) ReadAllGuardrails() ([]fleet.Guardrail, error)       { return ReadAllGuardrails(s.db) }
-func (s *Store) GetGuardrail(name string) (fleet.Guardrail, error)   { return GetGuardrail(s.db, name) }
-func (s *Store) UpsertGuardrail(g fleet.Guardrail) error             { return UpsertGuardrail(s.db, g) }
-func (s *Store) DeleteGuardrail(name string) error                   { return DeleteGuardrail(s.db, name) }
-func (s *Store) ResetGuardrail(name string) error                    { return ResetGuardrail(s.db, name) }
+func (s *Store) ReadEnabledGuardrails() ([]fleet.Guardrail, error) {
+	return ReadEnabledGuardrails(s.db)
+}
+func (s *Store) ReadAllGuardrails() ([]fleet.Guardrail, error)     { return ReadAllGuardrails(s.db) }
+func (s *Store) GetGuardrail(name string) (fleet.Guardrail, error) { return GetGuardrail(s.db, name) }
+func (s *Store) UpsertGuardrail(g fleet.Guardrail) error           { return UpsertGuardrail(s.db, g) }
+func (s *Store) DeleteGuardrail(name string) error                 { return DeleteGuardrail(s.db, name) }
+func (s *Store) ResetGuardrail(name string) error                  { return ResetGuardrail(s.db, name) }
 
 // ── Memory ──────────────────────────────────────────────────────────────
 
@@ -123,22 +129,38 @@ func (s *Store) ReplaceAll(agents []fleet.Agent, repos []fleet.Repo, skills map[
 	return ReplaceAll(s.db, agents, repos, skills, backends, guardrails, budgets)
 }
 
-func (s *Store) Import(cfg *config.Config) error            { return Import(s.db, cfg) }
-func (s *Store) Load() (*config.Config, error)              { return Load(s.db) }
-func (s *Store) LoadAndValidate() (*config.Config, error)   { return LoadAndValidate(s.db) }
-func (s *Store) CountFrom() (ImportCount, error)            { return CountFrom(s.db) }
+func (s *Store) Import(cfg *config.Config) error          { return Import(s.db, cfg) }
+func (s *Store) Load() (*config.Config, error)            { return Load(s.db) }
+func (s *Store) LoadAndValidate() (*config.Config, error) { return LoadAndValidate(s.db) }
+func (s *Store) CountFrom() (ImportCount, error)          { return CountFrom(s.db) }
 
 // ── Token budgets and leaderboard ────────────────────────────────────────
 
-func (s *Store) ListTokenBudgets() ([]TokenBudget, error)                         { return ListTokenBudgets(s.db) }
-func (s *Store) GetTokenBudget(id int64) (TokenBudget, error)                     { return GetTokenBudget(s.db, id) }
-func (s *Store) CreateTokenBudget(b TokenBudget) (TokenBudget, error)             { return CreateTokenBudget(s.db, b) }
-func (s *Store) UpdateTokenBudget(id int64, b TokenBudget) (TokenBudget, error)   { return UpdateTokenBudget(s.db, id, b) }
-func (s *Store) DeleteTokenBudget(id int64) error                                 { return DeleteTokenBudget(s.db, id) }
-func (s *Store) BudgetAlerts() ([]BudgetAlert, error)                             { return BudgetAlerts(s.db) }
-func (s *Store) TokenLeaderboard(repo, period string) ([]LeaderboardEntry, error) { return TokenLeaderboard(s.db, repo, period) }
-func (s *Store) CheckBudgets(backend, agentName string) error                     { return CheckBudgets(s.db, backend, agentName) }
-func (s *Store) ImportTokenBudgets(budgets []TokenBudget, replace bool) error     { return ImportTokenBudgets(s.db, budgets, replace) }
+func (s *Store) ListTokenBudgets() ([]TokenBudget, error)     { return ListTokenBudgets(s.db) }
+func (s *Store) GetTokenBudget(id int64) (TokenBudget, error) { return GetTokenBudget(s.db, id) }
+func (s *Store) CreateTokenBudget(b TokenBudget) (TokenBudget, error) {
+	return CreateTokenBudget(s.db, b)
+}
+func (s *Store) UpdateTokenBudget(id int64, b TokenBudget) (TokenBudget, error) {
+	return UpdateTokenBudget(s.db, id, b)
+}
+func (s *Store) PatchTokenBudget(id int64, p TokenBudgetPatch) (TokenBudget, error) {
+	return PatchTokenBudget(s.db, id, p)
+}
+func (s *Store) DeleteTokenBudget(id int64) error     { return DeleteTokenBudget(s.db, id) }
+func (s *Store) BudgetAlerts() ([]BudgetAlert, error) { return BudgetAlerts(s.db) }
+func (s *Store) TokenLeaderboard(repo, period string) ([]LeaderboardEntry, error) {
+	return TokenLeaderboard(s.db, repo, period)
+}
+func (s *Store) CheckBudgets(backend, agentName string) error {
+	return CheckBudgets(s.db, backend, agentName)
+}
+func (s *Store) CheckBudgetsWithLogger(backend, agentName string, logger zerolog.Logger) error {
+	return CheckBudgetsWithLogger(s.db, backend, agentName, logger)
+}
+func (s *Store) ImportTokenBudgets(budgets []TokenBudget, replace bool) error {
+	return ImportTokenBudgets(s.db, budgets, replace)
+}
 
 // Close closes the underlying handle. Provided so the daemon's lifecycle
 // only juggles one handle.

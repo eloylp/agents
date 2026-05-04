@@ -2,7 +2,6 @@ package config
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 
@@ -10,6 +9,26 @@ import (
 
 	"github.com/eloylp/agents/internal/store"
 )
+
+type tokenBudgetPatchRequest struct {
+	ScopeKind  *string `json:"scope_kind"`
+	ScopeName  *string `json:"scope_name"`
+	Period     *string `json:"period"`
+	CapTokens  *int64  `json:"cap_tokens"`
+	AlertAtPct *int    `json:"alert_at_pct"`
+	Enabled    *bool   `json:"enabled"`
+}
+
+func (r tokenBudgetPatchRequest) toStorePatch() store.TokenBudgetPatch {
+	return store.TokenBudgetPatch{
+		ScopeKind:  r.ScopeKind,
+		ScopeName:  r.ScopeName,
+		Period:     r.Period,
+		CapTokens:  r.CapTokens,
+		AlertAtPct: r.AlertAtPct,
+		Enabled:    r.Enabled,
+	}
+}
 
 // handleTokenBudgets dispatches GET /token_budgets and POST /token_budgets.
 func (h *Handler) handleTokenBudgets(w http.ResponseWriter, r *http.Request) {
@@ -59,8 +78,7 @@ func (h *Handler) listTokenBudgets(w http.ResponseWriter, _ *http.Request) {
 
 func (h *Handler) createTokenBudget(w http.ResponseWriter, r *http.Request) {
 	var b store.TokenBudget
-	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
-		http.Error(w, fmt.Sprintf("invalid body: %v", err), http.StatusBadRequest)
+	if !decodeBody(w, r, h.daemonCfg.HTTP.MaxBodyBytes, &b) {
 		return
 	}
 	created, err := h.store.CreateTokenBudget(b)
@@ -84,12 +102,11 @@ func (h *Handler) getTokenBudget(w http.ResponseWriter, _ *http.Request, id int6
 }
 
 func (h *Handler) updateTokenBudget(w http.ResponseWriter, r *http.Request, id int64) {
-	var b store.TokenBudget
-	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
-		http.Error(w, fmt.Sprintf("invalid body: %v", err), http.StatusBadRequest)
+	var req tokenBudgetPatchRequest
+	if !decodeBody(w, r, h.daemonCfg.HTTP.MaxBodyBytes, &req) {
 		return
 	}
-	updated, err := h.store.UpdateTokenBudget(id, b)
+	updated, err := h.store.PatchTokenBudget(id, req.toStorePatch())
 	if err != nil {
 		http.Error(w, err.Error(), storeErrStatus(err))
 		return

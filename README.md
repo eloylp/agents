@@ -32,7 +32,7 @@ See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a re
 - **One agent model, many triggers**: label events, cron schedules, [GitHub event subscriptions](docs/events.md), on-demand API calls. Same agent, wired however you want.
 - **Composable skills**: reusable guidance blocks (architecture, security, testing, DX, ...) composed into any agent.
 - **[Reactive inter-agent dispatch](docs/dispatch.md)**: agents invoke each other at runtime with depth, fanout, and dedup safety limits.
-- **Token budgets and leaderboard**: per-scope (global, backend, or agent) daily/weekly/monthly token caps enforced before each run. NavBar alert banner when any budget crosses its alert threshold. Per-agent leaderboard for tracking token consumption over any period. Full CRUD via dashboard, REST, and MCP.
+- **Token budgets and leaderboard**: per-scope (global, backend, or agent) daily/weekly/monthly UTC calendar token caps enforced before each run. NavBar alert banner when any budget crosses its alert threshold. Per-agent leaderboard for tracking token consumption. Full CRUD via dashboard, REST, and MCP.
 - **SQLite-backed**: state lives in a SQLite database, managed through the three interfaces above. [config.yaml](docs/configuration.md) is an optional export/import format, not a runtime dependency.
 
 ## How it works

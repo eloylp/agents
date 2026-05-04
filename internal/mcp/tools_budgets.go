@@ -15,13 +15,13 @@ func registerBudgetTools(srv *server.MCPServer, deps Deps) {
 	}
 	srv.AddTool(
 		mcpgo.NewTool("list_token_budgets",
-			mcpgo.WithDescription("List all token budgets. Each budget caps token usage for a scope (global, backend, or agent) over a period (daily, weekly, monthly)."),
+			mcpgo.WithDescription("List all token budgets. Each budget caps token usage for a scope (global, backend, or agent) over a UTC calendar period (daily, weekly, monthly)."),
 		),
 		toolListTokenBudgets(deps),
 	)
 	srv.AddTool(
 		mcpgo.NewTool("create_token_budget",
-			mcpgo.WithDescription("Create a token budget. scope_kind: global (all runs), backend (by backend name), agent (by agent name). Periods: daily, weekly, monthly. alert_at_pct (0-100) triggers the NavBar banner when usage reaches that percentage of cap_tokens; 0 disables alerts."),
+			mcpgo.WithDescription("Create a token budget. scope_kind: global (all runs), backend (by backend name), agent (by agent name). Periods are UTC calendar windows: daily, weekly (Sunday start), monthly. alert_at_pct (0-100) triggers the NavBar banner when usage reaches that percentage of cap_tokens; 0 disables alerts."),
 			mcpgo.WithString("scope_kind",
 				mcpgo.Required(),
 				mcpgo.Description(`"global", "backend", or "agent".`),
@@ -48,24 +48,21 @@ func registerBudgetTools(srv *server.MCPServer, deps Deps) {
 	)
 	srv.AddTool(
 		mcpgo.NewTool("update_token_budget",
-			mcpgo.WithDescription("Replace all fields of a token budget by ID."),
+			mcpgo.WithDescription("Partially update a token budget by ID. Only supplied fields are changed; omitted fields are preserved."),
 			mcpgo.WithNumber("id",
 				mcpgo.Required(),
 				mcpgo.Description("Budget ID (from list_token_budgets)."),
 			),
 			mcpgo.WithString("scope_kind",
-				mcpgo.Required(),
 				mcpgo.Description(`"global", "backend", or "agent".`),
 			),
 			mcpgo.WithString("scope_name",
 				mcpgo.Description("Backend or agent name for non-global scopes."),
 			),
 			mcpgo.WithString("period",
-				mcpgo.Required(),
 				mcpgo.Description(`"daily", "weekly", or "monthly".`),
 			),
 			mcpgo.WithNumber("cap_tokens",
-				mcpgo.Required(),
 				mcpgo.Description("Maximum token count."),
 			),
 			mcpgo.WithNumber("alert_at_pct",
@@ -89,7 +86,7 @@ func registerBudgetTools(srv *server.MCPServer, deps Deps) {
 	)
 	srv.AddTool(
 		mcpgo.NewTool("get_token_leaderboard",
-			mcpgo.WithDescription("Return per-agent token usage aggregated over a period, ordered by total tokens descending. Optionally filtered to a single repo."),
+			mcpgo.WithDescription("Return per-agent token usage aggregated over a UTC calendar period, ordered by total tokens descending. Optionally filtered to a single repo. Returns at most 20 rows."),
 			mcpgo.WithString("repo",
 				mcpgo.Description(`Optional repo full name "owner/repo" to filter to.`),
 			),
@@ -154,26 +151,40 @@ func toolCreateTokenBudget(deps Deps) server.ToolHandlerFunc {
 func toolUpdateTokenBudget(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		args := req.GetArguments()
-		idF, _ := args["id"].(float64)
-		id := int64(idF)
-		scopeKind, _ := args["scope_kind"].(string)
-		scopeName, _ := args["scope_name"].(string)
-		period, _ := args["period"].(string)
-		capTokens, _ := args["cap_tokens"].(float64)
-		alertAtPct, _ := args["alert_at_pct"].(float64)
-		enabled, hasEnabled := args["enabled"].(bool)
-		if !hasEnabled {
-			enabled = true
+		id, ok := mcpRequiredInt64(req, "id")
+		if !ok {
+			return mcpgo.NewToolResultError("id is required"), nil
 		}
-		b := store.TokenBudget{
-			ScopeKind:  scopeKind,
-			ScopeName:  scopeName,
-			Period:     period,
-			CapTokens:  int64(capTokens),
-			AlertAtPct: int(alertAtPct),
-			Enabled:    enabled,
+		var patch store.TokenBudgetPatch
+		if v, ok := stringPtrArg(args, "scope_kind"); ok {
+			patch.ScopeKind = v
 		}
-		updated, err := deps.Store.UpdateTokenBudget(id, b)
+		if v, ok := stringPtrArg(args, "scope_name"); ok {
+			patch.ScopeName = v
+		}
+		if v, ok := stringPtrArg(args, "period"); ok {
+			patch.Period = v
+		}
+		if v, ok, errMsg := intPtrArg(args, "cap_tokens"); ok {
+			capTokens := int64(*v)
+			patch.CapTokens = &capTokens
+		} else if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
+		if v, ok, errMsg := intPtrArg(args, "alert_at_pct"); ok {
+			patch.AlertAtPct = v
+		} else if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
+		if v, ok, errMsg := boolPtrArg(args, "enabled"); ok {
+			patch.Enabled = v
+		} else if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
+		if !patch.AnyFieldSet() {
+			return mcpgo.NewToolResultError("at least one field is required"), nil
+		}
+		updated, err := deps.Store.PatchTokenBudget(id, patch)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
