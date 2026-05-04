@@ -47,7 +47,10 @@ type GuardrailPatch struct {
 	Position    *int    `json:"position,omitempty"`
 }
 
-func (p GuardrailPatch) anyFieldSet() bool {
+// AnyFieldSet reports whether at least one patch field is non-nil. Used by
+// both the REST PATCH handler and the MCP update_guardrail tool to reject
+// empty payloads before hitting the store.
+func (p GuardrailPatch) AnyFieldSet() bool {
 	return p.Description != nil || p.Content != nil || p.Enabled != nil || p.Position != nil
 }
 
@@ -133,7 +136,7 @@ func (h *Handler) handleGuardrailPatch(w http.ResponseWriter, r *http.Request, n
 	if !decodeBody(w, r, h.maxBodyBytes, &req) {
 		return
 	}
-	if !req.anyFieldSet() {
+	if !req.AnyFieldSet() {
 		http.Error(w, "at least one field is required", http.StatusBadRequest)
 		return
 	}
