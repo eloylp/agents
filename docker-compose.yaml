@@ -7,7 +7,7 @@ services:
       - HOME=/home/agents
       - GITHUB_TOKEN=${GITHUB_TOKEN}
     volumes:
-      # SQLite database (daemon config + fleet + agent memory).
+      # SQLite database (fleet config + agent memory + observability).
       - agents-data:/var/lib/agents
       # Claude Code / Codex auth + MCP config. Populate once via
       # `docker compose run --rm --entrypoint claude agents login`
