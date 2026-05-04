@@ -97,7 +97,9 @@ Current fleet config snapshot. Includes YAML import/export for shareable fleet s
 
 ## Authentication
 
-The dashboard is unauthenticated at the daemon level. Place the daemon behind a reverse proxy that gates `/ui/`, `/runners`, and the rest of the authenticated surface (everything except `/webhooks/github`, `/status`, `/run`, `/v1/*`). See [security.md → Reverse-proxy routing](security.md#reverse-proxy-routing) for one concrete pattern using Traefik basic-auth.
+When `AGENTS_AUTH_BEARER_TOKEN_HASH` is set, dashboard data calls use `Authorization: Bearer <token>`. The UI shell at `/ui/` stays public so the browser can render the first-use token modal; sensitive API calls, MCP, runners, traces, config, graph, memory, and live streams require the bearer token. The token is stored only in the browser's `localStorage` and can be changed from Config → Inspector → UI bearer token.
+
+Use your reverse proxy for TLS/routing, not as the primary API auth layer. See [security.md → Bearer-token auth](security.md#bearer-token-auth) and [Reverse-proxy routing](security.md#reverse-proxy-routing).
 
 ## Regenerating these screenshots
 
