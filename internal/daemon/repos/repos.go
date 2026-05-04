@@ -47,8 +47,11 @@ func New(st *store.Store, maxBodyBytes int64, logger zerolog.Logger) *Handler {
 // each handler in an http.TimeoutHandler matching the daemon's
 // HTTP write-timeout setting.
 func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) http.Handler) {
-	r.Handle("/repos", withTimeout(http.HandlerFunc(h.handleRepos))).Methods(http.MethodGet, http.MethodPost)
-	r.Handle("/repos/{owner}/{repo}", withTimeout(http.HandlerFunc(h.handleRepo))).Methods(http.MethodGet, http.MethodPatch, http.MethodDelete)
+	r.Handle("/repos", withTimeout(http.HandlerFunc(h.handleReposList))).Methods(http.MethodGet)
+	r.Handle("/repos", withTimeout(http.HandlerFunc(h.handleRepoCreate))).Methods(http.MethodPost)
+	r.Handle("/repos/{owner}/{repo}", withTimeout(http.HandlerFunc(h.handleRepoGet))).Methods(http.MethodGet)
+	r.Handle("/repos/{owner}/{repo}", withTimeout(http.HandlerFunc(h.handleRepoPatch))).Methods(http.MethodPatch)
+	r.Handle("/repos/{owner}/{repo}", withTimeout(http.HandlerFunc(h.handleRepoDelete))).Methods(http.MethodDelete)
 	r.Handle("/repos/{owner}/{repo}/bindings", withTimeout(http.HandlerFunc(h.handleCreateBinding))).Methods(http.MethodPost)
 	r.Handle("/repos/{owner}/{repo}/bindings/{id}", withTimeout(http.HandlerFunc(h.handleGetBinding))).Methods(http.MethodGet)
 	r.Handle("/repos/{owner}/{repo}/bindings/{id}", withTimeout(http.HandlerFunc(h.handleUpdateBinding))).Methods(http.MethodPatch)
@@ -124,75 +127,78 @@ type repoRuntimeSettingsJSON struct {
 
 // ── Handlers ──────────────────────────────────────────────────────────────────────────
 
-func (h *Handler) handleRepos(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		repos, err := h.store.ReadRepos()
-		if err != nil {
-			http.Error(w, fmt.Sprintf("read repos: %v", err), http.StatusInternalServerError)
-			return
-		}
-		out := make([]storeRepoJSON, len(repos))
-		for i, r := range repos {
-			out[i] = repoToStoreJSON(r)
-		}
-		writeJSON(w, http.StatusOK, out)
-
-	case http.MethodPost:
-		var req storeRepoJSON
-		if !decodeBody(w, r, h.maxBodyBytes, &req) {
-			return
-		}
-		canonical, err := h.UpsertRepo(req.toConfig())
-		if err != nil {
-			h.writeErr(w, err, "repo upsert or cron reload")
-			return
-		}
-		writeJSON(w, http.StatusOK, repoToStoreJSON(canonical))
+func (h *Handler) handleReposList(w http.ResponseWriter, _ *http.Request) {
+	repos, err := h.store.ReadRepos()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read repos: %v", err), http.StatusInternalServerError)
+		return
 	}
+	out := make([]storeRepoJSON, len(repos))
+	for i, r := range repos {
+		out[i] = repoToStoreJSON(r)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
-func (h *Handler) handleRepo(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	repoName := fleet.NormalizeRepoName(vars["owner"]) + "/" + fleet.NormalizeRepoName(vars["repo"])
-	switch r.Method {
-	case http.MethodGet:
-		repos, err := h.store.ReadRepos()
-		if err != nil {
-			http.Error(w, fmt.Sprintf("read repos: %v", err), http.StatusInternalServerError)
-			return
-		}
-		for _, repo := range repos {
-			if repo.Name == repoName {
-				writeJSON(w, http.StatusOK, repoToStoreJSON(repo))
-				return
-			}
-		}
-		http.NotFound(w, r)
-
-	case http.MethodPatch:
-		var req repoRuntimeSettingsJSON
-		if !decodeBody(w, r, h.maxBodyBytes, &req) {
-			return
-		}
-		if req.Enabled == nil {
-			http.Error(w, "at least one field is required", http.StatusBadRequest)
-			return
-		}
-		repo, err := h.PatchRepo(repoName, *req.Enabled)
-		if err != nil {
-			h.writeErr(w, err, "repo patch or cron reload")
-			return
-		}
-		writeJSON(w, http.StatusOK, repoToStoreJSON(repo))
-
-	case http.MethodDelete:
-		if err := h.DeleteRepo(repoName); err != nil {
-			h.writeErr(w, err, "repo delete or cron reload")
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
+func (h *Handler) handleRepoCreate(w http.ResponseWriter, r *http.Request) {
+	var req storeRepoJSON
+	if !decodeBody(w, r, h.maxBodyBytes, &req) {
+		return
 	}
+	canonical, err := h.UpsertRepo(req.toConfig())
+	if err != nil {
+		h.writeErr(w, err, "repo upsert or cron reload")
+		return
+	}
+	writeJSON(w, http.StatusOK, repoToStoreJSON(canonical))
+}
+
+func repoNameFromRequest(r *http.Request) string {
+	vars := mux.Vars(r)
+	return fleet.NormalizeRepoName(vars["owner"]) + "/" + fleet.NormalizeRepoName(vars["repo"])
+}
+
+func (h *Handler) handleRepoGet(w http.ResponseWriter, r *http.Request) {
+	repoName := repoNameFromRequest(r)
+	repos, err := h.store.ReadRepos()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read repos: %v", err), http.StatusInternalServerError)
+		return
+	}
+	for _, repo := range repos {
+		if repo.Name == repoName {
+			writeJSON(w, http.StatusOK, repoToStoreJSON(repo))
+			return
+		}
+	}
+	http.NotFound(w, r)
+}
+
+func (h *Handler) handleRepoPatch(w http.ResponseWriter, r *http.Request) {
+	repoName := repoNameFromRequest(r)
+	var req repoRuntimeSettingsJSON
+	if !decodeBody(w, r, h.maxBodyBytes, &req) {
+		return
+	}
+	if req.Enabled == nil {
+		http.Error(w, "at least one field is required", http.StatusBadRequest)
+		return
+	}
+	repo, err := h.PatchRepo(repoName, *req.Enabled)
+	if err != nil {
+		h.writeErr(w, err, "repo patch or cron reload")
+		return
+	}
+	writeJSON(w, http.StatusOK, repoToStoreJSON(repo))
+}
+
+func (h *Handler) handleRepoDelete(w http.ResponseWriter, r *http.Request) {
+	repoName := repoNameFromRequest(r)
+	if err := h.DeleteRepo(repoName); err != nil {
+		h.writeErr(w, err, "repo delete or cron reload")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) handleCreateBinding(w http.ResponseWriter, r *http.Request) {

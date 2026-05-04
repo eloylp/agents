@@ -432,9 +432,8 @@ func (d *Daemon) buildRouter() http.Handler {
 	router.Handle("/run", withTimeout(http.HandlerFunc(d.handleAgentsRun))).Methods(http.MethodPost)
 	d.webhook.RegisterRoutes(router, withTimeout)
 
-	// /agents merges the read-only fleet snapshot view (GET) with CRUD
-	// create (POST) on a single mux entry.
-	router.Handle("/agents", withTimeout(http.HandlerFunc(d.handleAgents))).Methods(http.MethodGet, http.MethodPost)
+	router.Handle("/agents", withTimeout(http.HandlerFunc(d.fleet.HandleAgentsView))).Methods(http.MethodGet)
+	router.Handle("/agents", withTimeout(http.HandlerFunc(d.fleet.HandleAgentsCreate))).Methods(http.MethodPost)
 
 	d.fleet.RegisterRoutes(router, withTimeout)
 	d.repos.RegisterRoutes(router, withTimeout)
@@ -470,16 +469,6 @@ func (d *Daemon) buildRouter() http.Handler {
 		d.logger.Info().Str("path", "/mcp").Msg("mcp server enabled")
 	}
 	return router
-}
-
-// handleAgents dispatches GET to the fleet snapshot view and POST to the
-// fleet handler's CRUD create. Single mux entry covers both methods.
-func (d *Daemon) handleAgents(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet {
-		d.fleet.HandleAgentsView(w, r)
-		return
-	}
-	d.fleet.HandleAgentsCreate(w, r)
 }
 
 // ── /status ─────────────────────────────────────────────────────────────

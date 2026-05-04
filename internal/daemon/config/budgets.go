@@ -30,36 +30,38 @@ func (r tokenBudgetPatchRequest) toStorePatch() store.TokenBudgetPatch {
 	}
 }
 
-// handleTokenBudgets dispatches GET /token_budgets and POST /token_budgets.
-func (h *Handler) handleTokenBudgets(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		h.listTokenBudgets(w, r)
-	case http.MethodPost:
-		h.createTokenBudget(w, r)
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-// handleTokenBudget dispatches GET/PATCH/DELETE /token_budgets/{id}.
-func (h *Handler) handleTokenBudget(w http.ResponseWriter, r *http.Request) {
+func tokenBudgetID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	idStr := mux.Vars(r)["id"]
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		http.Error(w, "invalid id", http.StatusBadRequest)
+		return 0, false
+	}
+	return id, true
+}
+
+func (h *Handler) getTokenBudgetByID(w http.ResponseWriter, r *http.Request) {
+	id, ok := tokenBudgetID(w, r)
+	if !ok {
 		return
 	}
-	switch r.Method {
-	case http.MethodGet:
-		h.getTokenBudget(w, r, id)
-	case http.MethodPatch:
-		h.updateTokenBudget(w, r, id)
-	case http.MethodDelete:
-		h.deleteTokenBudget(w, r, id)
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	h.getTokenBudget(w, r, id)
+}
+
+func (h *Handler) updateTokenBudgetByID(w http.ResponseWriter, r *http.Request) {
+	id, ok := tokenBudgetID(w, r)
+	if !ok {
+		return
 	}
+	h.updateTokenBudget(w, r, id)
+}
+
+func (h *Handler) deleteTokenBudgetByID(w http.ResponseWriter, r *http.Request) {
+	id, ok := tokenBudgetID(w, r)
+	if !ok {
+		return
+	}
+	h.deleteTokenBudget(w, r, id)
 }
 
 func (h *Handler) listTokenBudgets(w http.ResponseWriter, _ *http.Request) {
