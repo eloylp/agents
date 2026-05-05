@@ -161,6 +161,21 @@ func TestGuardrailsSeed(t *testing.T) {
 	if updatedAt == "" {
 		t.Error("updated_at is empty")
 	}
+	for _, want := range []string{"GitHub MCP tools", "authenticated GitHub CLI (`gh`)", "current repository"} {
+		if !strings.Contains(content.String, want) {
+			t.Errorf("security content missing %q", want)
+		}
+	}
+
+	var mcpContent string
+	if err := db.QueryRow("SELECT content FROM guardrails WHERE name = 'mcp-tool-usage'").Scan(&mcpContent); err != nil {
+		t.Fatalf("scan mcp-tool-usage: %v", err)
+	}
+	for _, want := range []string{"Prefer the GitHub MCP tools", "GitHub CLI (`gh`)", "Do not make remote-only code patches"} {
+		if !strings.Contains(mcpContent, want) {
+			t.Errorf("mcp-tool-usage content missing %q", want)
+		}
+	}
 
 	var memoryContent string
 	if err := db.QueryRow("SELECT content FROM guardrails WHERE name = 'memory-scope'").Scan(&memoryContent); err != nil {

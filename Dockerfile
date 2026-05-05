@@ -19,8 +19,8 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w
 
 FROM node:22-alpine
 
-RUN apk add --no-cache bash curl jq \
-    && npm install -g @anthropic-ai/claude-code @openai/codex \
+RUN apk add --no-cache bash build-base cargo curl git github-cli go jq rust \
+    && npm install -g @anthropic-ai/claude-code @openai/codex typescript \
     && npm cache clean --force
 
 SHELL ["/bin/bash", "-c"]

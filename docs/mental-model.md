@@ -8,7 +8,7 @@ An agent is a backend, a list of skills, a prompt, and a few flags (`allow_prs`,
 
 ## How an agent fires
 
-There are four trigger paths. They all end in the same execution model: the daemon composes a prompt, hands it to the AI CLI, and the CLI reads / writes GitHub through its MCP tools.
+There are four trigger paths. They all end in the same execution model: the daemon composes a prompt, hands it to the AI CLI, and the CLI reads / writes GitHub through MCP tools first. Authenticated `gh` is available inside the container as a fallback when a complex task needs a safe local checkout, test, and PR loop.
 
 ### Label-triggered
 
@@ -46,7 +46,7 @@ Any agent can invoke another at runtime by returning a `dispatch` array in its r
 
 Every run, the daemon assembles the prompt from these pieces, in this order:
 
-1. **Operator guardrails.** Every row from the `guardrails` table where `enabled = true`, ordered by `position ASC, name ASC`, prepended verbatim. Shipped built-ins include `security` (indirect prompt injection, secret exfiltration, out-of-tree filesystem/network access), `discretion` (public-action conservatism), `memory-scope` (only daemon-provided memory for the current `(agent, repo)` pair; ignore CLI-native memory), and `mcp-tool-usage` (use GitHub MCP tools for repository state). Operators can edit, disable, replace, or add their own via the Guardrails tab in `/ui/config`. See [security.md](security.md) for the threat model and what prompt-level controls do *not* close.
+1. **Operator guardrails.** Every row from the `guardrails` table where `enabled = true`, ordered by `position ASC, name ASC`, prepended verbatim. Shipped built-ins include `security` (indirect prompt injection, secret exfiltration, out-of-tree filesystem/network access), `discretion` (public-action conservatism), `memory-scope` (only daemon-provided memory for the current `(agent, repo)` pair; ignore CLI-native memory), and `mcp-tool-usage` (use GitHub MCP tools first, authenticated `gh` fallback only when MCP is insufficient or a local checkout/test loop is required). Operators can edit, disable, replace, or add their own via the Guardrails tab in `/ui/config`. See [security.md](security.md) for the threat model and what prompt-level controls do *not* close.
 2. **Hard agent-flag guards.** Code-level clauses inserted based on the agent's flags. The most visible example: when `allow_prs: false`, a clause forbidding the agent from opening pull requests is inserted before the skills, so the gate is code-level rather than relying on the agent's prompt remembering it.
 3. **Composed skills.** Every skill in the agent's `skills:` list, concatenated. Skills are reusable guidance blocks (architecture, testing, security, ...) that compose orthogonally.
 4. **The agent's own prompt.** The agent-specific instructions you wrote in `prompt:`.

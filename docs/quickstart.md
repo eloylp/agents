@@ -18,7 +18,7 @@ sed -i.bak "s/^GITHUB_WEBHOOK_SECRET=.*/GITHUB_WEBHOOK_SECRET=$(openssl rand -he
 docker compose up -d --build
 ```
 
-The shipped [`docker-compose.yaml`](../docker-compose.yaml) is the source of truth for what gets mounted and exposed. Two named volumes back the runtime: `agents-data` (SQLite store) and `agents-home` (Claude / Codex auth + MCP config). The daemon boots against an empty database with built-in defaults, no YAML seed is required.
+The shipped [`docker-compose.yaml`](../docker-compose.yaml) is the source of truth for what gets mounted and exposed. Two named volumes back the runtime: `agents-data` (SQLite store) and `agents-home` (Claude / Codex auth, MCP config, and `gh` auth). The image includes the AI CLIs plus `git`, `gh`, Go, Rust/Cargo, Node/npm, and TypeScript so agents can run local checkout/test loops when MCP alone is not enough. The daemon boots against an empty database with built-in defaults, no YAML seed is required.
 
 > **First-run note.** The compose file builds the image locally on first invocation, multi-stage build (UI + Go binary), expect ~3-5 minutes depending on the host. `docker compose logs -f agents` shows progress.
 
@@ -39,8 +39,9 @@ docker compose exec -it agents agents-setup
 1. picks which AI backend(s) you want, claude, codex, or both,
 2. runs `claude auth login` and `codex login --device-auth` against your terminal so you can complete the OAuth flow in your browser,
 3. registers the GitHub MCP server on each authenticated CLI,
-4. refreshes the daemon's backend discovery so the fleet sees the freshly authenticated tooling,
-5. prints diagnostics from `/status`, `/backends/status`, `/agents/orphans/status`.
+4. authenticates the `gh` CLI with the same `GITHUB_TOKEN` for fallback local checkout/test/PR flows,
+5. refreshes the daemon's backend discovery so the fleet sees the freshly authenticated tooling,
+6. prints diagnostics from `/status`, `/backends/status`, `/agents/orphans/status`.
 
 Once it finishes, the daemon has working backends and tools. **Fleet configuration (agents, skills, repos, bindings, webhooks) lives in the dashboard**, open `http://localhost:8080/ui/` and configure from there. Those tasks are graphical-shaped and don't fit a bash prompt loop.
 

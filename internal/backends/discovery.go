@@ -25,6 +25,20 @@ const (
 
 var builtinBackendNames = []string{ClaudeName, CodexName}
 
+// ToolStatus captures diagnostics for one supporting CLI/tool available to
+// agent subprocesses. GitHub CLI is special: it must be both installed and
+// authenticated because agents use it as the fallback when GitHub MCP is not
+// enough for a complex local checkout/test/push loop.
+type ToolStatus struct {
+	Name          string `json:"name"`
+	Detected      bool   `json:"detected"`
+	Command       string `json:"command,omitempty"`
+	Version       string `json:"version,omitempty"`
+	Authenticated bool   `json:"authenticated,omitempty"`
+	Healthy       bool   `json:"healthy"`
+	Detail        string `json:"detail,omitempty"`
+}
+
 // BackendStatus captures diagnostics for one backend.
 type BackendStatus struct {
 	Name          string   `json:"name"`
@@ -37,13 +51,16 @@ type BackendStatus struct {
 	LocalModelURL string   `json:"local_model_url,omitempty"`
 }
 
-// Diagnostics is the full tool-discovery and health snapshot. GitHub access is
-// verified per-backend through the AI CLI's GitHub MCP server (see the
-// `github MCP:` line in BackendStatus.HealthDetail) rather than through a
-// standalone CLI check.
+// Diagnostics is the full backend-and-tool discovery snapshot. Backends cover
+// AI CLIs. Tools cover supporting CLIs available inside agent runs, including
+// the authenticated GitHub CLI fallback.
 type Diagnostics struct {
 	GeneratedAt time.Time       `json:"generated_at"`
 	Backends    []BackendStatus `json:"backends"`
+	Tools       []ToolStatus    `json:"tools"`
+	// GitHubCLI is kept as a compatibility alias for older UI/client code that
+	// read the pre-tools diagnostic field directly.
+	GitHubCLI *ToolStatus `json:"github_cli,omitempty"`
 }
 
 // AutoDiscoverIfBackendsMissing runs discovery and persists results only
@@ -110,8 +127,14 @@ func RunDiagnostics(ctx context.Context, existing map[string]fleet.Backend) Diag
 
 	backendsOut := make([]BackendStatus, 0, len(targets))
 	var outMu sync.Mutex
+	var toolsOut []ToolStatus
 
 	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		toolsOut = diagnoseTools(ctx)
+	}()
 	for _, target := range targets {
 		wg.Add(1)
 		go func() {
@@ -128,7 +151,107 @@ func RunDiagnostics(ctx context.Context, existing map[string]fleet.Backend) Diag
 	slices.SortFunc(diag.Backends, func(a, b BackendStatus) int {
 		return strings.Compare(a.Name, b.Name)
 	})
+	diag.Tools = toolsOut
+	for i := range diag.Tools {
+		if diag.Tools[i].Name == "github_cli" {
+			gh := diag.Tools[i]
+			diag.GitHubCLI = &gh
+			break
+		}
+	}
 	return diag
+}
+
+func diagnoseTools(ctx context.Context) []ToolStatus {
+	tools := []ToolStatus{
+		diagnoseGitHubCLI(ctx),
+		diagnoseVersionedTool(ctx, "git", "git", []string{"--version"}),
+		diagnoseVersionedTool(ctx, "go", "go", []string{"version"}),
+		diagnoseVersionedTool(ctx, "rustc", "rustc", []string{"--version"}),
+		diagnoseVersionedTool(ctx, "cargo", "cargo", []string{"--version"}),
+		diagnoseVersionedTool(ctx, "node", "node", []string{"--version"}),
+		diagnoseVersionedTool(ctx, "npm", "npm", []string{"--version"}),
+		diagnoseVersionedTool(ctx, "typescript", "tsc", []string{"--version"}),
+	}
+	slices.SortFunc(tools, func(a, b ToolStatus) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	return tools
+}
+
+func diagnoseVersionedTool(ctx context.Context, name, command string, args []string) ToolStatus {
+	path, detected := resolveCommand(command, "")
+	status := ToolStatus{
+		Name:     name,
+		Detected: detected,
+		Command:  path,
+	}
+	if !detected {
+		status.Detail = command + " binary not found on PATH"
+		return status
+	}
+	stdout, stderr, err := runToolCommand(ctx, path, args, nil)
+	status.Version = firstNonEmptyLine(stdout, stderr)
+	status.Healthy = err == nil
+	if err != nil {
+		status.Detail = "version check failed: " + firstNonEmptyLine(stderr, stdout, err.Error())
+	} else if status.Version != "" {
+		status.Detail = "version: " + status.Version
+	} else {
+		status.Detail = "version: ok"
+	}
+	return status
+}
+
+func diagnoseGitHubCLI(ctx context.Context) ToolStatus {
+	path, detected := resolveCommand("gh", "")
+	status := ToolStatus{
+		Name:     "github_cli",
+		Detected: detected,
+		Command:  path,
+	}
+	if !detected {
+		status.Detail = "gh binary not found on PATH"
+		return status
+	}
+
+	versionOut, versionErr, versionRunErr := runToolCommand(ctx, path, []string{"--version"}, nil)
+	status.Version = firstNonEmptyLine(versionOut, versionErr)
+
+	authOut, authErr, authRunErr := runToolCommand(ctx, path, []string{"auth", "status", "--hostname", "github.com"}, nil)
+	authDetail := firstNonEmptyLine(authOut, authErr)
+	if authDetail == "" {
+		authDetail = firstNonEmptyLine(authRunErrString(authRunErr))
+	}
+	status.Authenticated = authRunErr == nil
+	status.Healthy = versionRunErr == nil && authRunErr == nil
+
+	details := make([]string, 0, 2)
+	if versionRunErr == nil {
+		if status.Version != "" {
+			details = append(details, "version: "+status.Version)
+		} else {
+			details = append(details, "version: ok")
+		}
+	} else {
+		details = append(details, "version check failed: "+firstNonEmptyLine(versionErr, versionOut, versionRunErr.Error()))
+	}
+	if status.Authenticated {
+		details = append(details, "auth: authenticated")
+	} else if authDetail != "" {
+		details = append(details, "auth failed: "+authDetail)
+	} else {
+		details = append(details, "auth failed")
+	}
+	status.Detail = strings.Join(details, " | ")
+	return status
+}
+
+func authRunErrString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func persistDiagnostics(st *store.Store, existing map[string]fleet.Backend, diag Diagnostics) error {

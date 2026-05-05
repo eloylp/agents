@@ -9,11 +9,11 @@ services:
     volumes:
       # SQLite database (fleet config + agent memory + observability).
       - agents-data:/var/lib/agents
-      # Claude Code / Codex auth + MCP config. Populate once via
-      # `docker compose run --rm --entrypoint claude agents login`
-      # (and the codex equivalent). Kept separate from agents-data so
-      # operators can rotate auth (rm + re-login) without touching
-      # fleet state, and back up fleet state without copying tokens.
+      # Claude Code / Codex auth, GitHub MCP config, and gh CLI auth.
+      # Populate once via `docker compose exec -it agents agents-setup`.
+      # Kept separate from agents-data so operators can rotate auth
+      # (rm + re-run setup) without touching fleet state, and back up
+      # fleet state without copying tokens.
       - agents-home:/home/agents
     env_file:
       - .env

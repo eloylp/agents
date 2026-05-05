@@ -48,7 +48,7 @@ The daemon's event queue is durable: every `PushEvent` writes to the SQLite `eve
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/backends/status` | Health snapshot for every configured backend (CLI version, model catalog, GitHub MCP probe result). |
+| `GET` | `/backends/status` | Health snapshot for every configured backend (CLI version, model catalog, GitHub MCP probe result) plus supporting tool diagnostics (`tools[]`) for GitHub CLI authentication, git, Go, Rust/Cargo, Node/npm, and TypeScript. `github_cli` is kept as a compatibility alias for the GitHub CLI tool row. |
 | `POST` | `/backends/discover` | Trigger an explicit re-probe of every backend's CLI and update the stored model catalog. |
 | `POST` | `/backends/local` | Probe one local OpenAI-compatible base URL and return its advertised models without persisting. Useful for dry-running a `local_model_url` setting before saving it. |
 

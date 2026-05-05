@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**agents** is a self-hosted Go daemon that dispatches AI CLIs (Claude, Codex) to work on GitHub repos. Agents are configured declaratively in YAML and bound to repos via labels, GitHub event subscriptions (event-driven), and/or cron schedules (autonomous). All GitHub writes happen through the AI backend's MCP tools, the daemon itself is read-only against GitHub. The daemon also ships a built-in Anthropic↔OpenAI translation proxy so the `claude` CLI can be routed through any OpenAI-compatible backend (local `llama.cpp`, hosted Qwen, vLLM, etc.), see [`docs/local-models.md`](docs/local-models.md). Agents can additionally invoke each other at runtime via the reactive inter-agent dispatcher (see Architecture Notes).
+**agents** is a self-hosted Go daemon that dispatches AI CLIs (Claude, Codex) to work on GitHub repos. Agents are configured declaratively in YAML and bound to repos via labels, GitHub event subscriptions (event-driven), and/or cron schedules (autonomous). GitHub operations happen through the AI backend: GitHub MCP tools are preferred, with authenticated `gh` available as fallback for complex local checkout/test/PR loops. The daemon itself is read-only against GitHub. The daemon also ships a built-in Anthropic↔OpenAI translation proxy so the `claude` CLI can be routed through any OpenAI-compatible backend (local `llama.cpp`, hosted Qwen, vLLM, etc.), see [`docs/local-models.md`](docs/local-models.md). Agents can additionally invoke each other at runtime via the reactive inter-agent dispatcher (see Architecture Notes).
 
 ## Directory Structure
 
@@ -15,7 +15,7 @@ internal/
   anthropic_proxy/          # Built-in Anthropic↔OpenAI Chat Completions translation proxy
   observe/                  # Observability store: events, traces, dispatch graph, SSE hubs
   scheduler/                # Cron scheduler + agent memory (SQLite-backed)
-  backends/                 # Backend discovery: CLI probing, GitHub MCP health checks, orphan detection
+  backends/                 # Backend discovery: CLI probing, GitHub MCP health checks, tool diagnostics, orphan detection
   store/                    # SQLite-backed config + event_queue store: Open, Import, Load, CRUD; *store.Store facade hides the *sql.DB
   workflow/                 # Event routing engine, durable event queue (persist-on-push + replay), processor, dispatcher
   daemon/                   # Daemon as a single composed unit: lifecycle, router, /status, /run, proxy + UI + MCP mounts
@@ -58,9 +58,9 @@ docker compose build
 docker compose up -d
 ```
 
-Multi-stage build on `node:22-alpine` so the image includes Claude Code and Codex alongside the daemon. Runs as non-root `agents` user. Default CMD is `--db /var/lib/agents/agents.db`. Compose mounts:
+Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, git, GitHub CLI, Go, Rust/Cargo, Node/npm, TypeScript, and the daemon. Runs as non-root `agents` user. Default CMD is `--db /var/lib/agents/agents.db`. Compose mounts:
 - `agents-data` named volume → `/var/lib/agents` (SQLite database persistence)
-- `agents-home` named volume → `/home/agents` (Claude / Codex auth + MCP config; populated by `docker compose exec -it agents agents-setup` once during setup, no host bind-mount of `~/.claude.json` etc.). GitHub access still flows through the GitHub MCP server configured on each CLI inside the container.
+- `agents-home` named volume → `/home/agents` (Claude / Codex auth, MCP config, and gh auth; populated by `docker compose exec -it agents agents-setup` once during setup, no host bind-mount of `~/.claude.json` etc.). GitHub access should flow through MCP first; authenticated gh is kept as fallback for complex workflows that need a local checkout/test/PR loop.
 
 YAML config is import/export only, not a runtime input. To seed an empty fleet, POST a YAML payload at `/import`.
 
@@ -116,7 +116,7 @@ YAML config is import/export only, not a runtime input. To seed an empty fleet, 
 - Runtime guardrail: if an agent pins a model not present in its backend's DB model catalog, the run fails fast with an actionable error (and the agent appears in orphan reports).
 - Local-model routing is configured via `local_model_url`; the daemon injects `ANTHROPIC_BASE_URL` for that backend at runtime. See [`docs/local-models.md`](docs/local-models.md).
 - **Reactive inter-agent dispatch**: agents can return a `dispatch: [{agent, number, reason}]` array in their JSON response to invoke other agents. Enqueued as synthetic `agent.dispatch` events. Target must opt in via `allow_dispatch: true`; originator must whitelist targets in `can_dispatch: [...]`. Safety limits are process-owned daemon settings configured by `AGENTS_DISPATCH_MAX_DEPTH`, `AGENTS_DISPATCH_MAX_FANOUT`, and `AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS`. The originating agent's prompt receives an `## Available experts` roster listing dispatchable targets.
-- **Prompt guardrails**: a generic `guardrails` table holds operator-defined policy blocks that the renderer prepends to every agent's composed prompt at render time, ahead of the no-PR guard, skills, and the agent prompt body itself. Security is the operator's responsibility; shipped built-ins cover indirect prompt injection / secret exfiltration (`security`), public-action discretion (`discretion`), daemon-only per `(agent, repo)` memory scope (`memory-scope`), and GitHub MCP tool usage (`mcp-tool-usage`). Operators can edit, disable, reset to default, or add their own (code style, deployment policy, etc.) via the `Guardrails` tab in `/ui/config`, the REST surface, or the MCP tools. Queried at render time as `SELECT * FROM guardrails WHERE enabled = 1 ORDER BY position ASC, name ASC`. See `docs/security.md` for the threat model and what prompt-level guardrails do *not* close; quarantining untrusted input, author-based trust gating, output filtering, and capability isolation are all operator territory the daemon does not implement today.
+- **Prompt guardrails**: a generic `guardrails` table holds operator-defined policy blocks that the renderer prepends to every agent's composed prompt at render time, ahead of the no-PR guard, skills, and the agent prompt body itself. Security is the operator's responsibility; shipped built-ins cover indirect prompt injection / secret exfiltration (`security`), public-action discretion (`discretion`), daemon-only per `(agent, repo)` memory scope (`memory-scope`), and GitHub repository tool usage, MCP first with gh fallback (`mcp-tool-usage`). Operators can edit, disable, reset to default, or add their own (code style, deployment policy, etc.) via the `Guardrails` tab in `/ui/config`, the REST surface, or the MCP tools. Queried at render time as `SELECT * FROM guardrails WHERE enabled = 1 ORDER BY position ASC, name ASC`. See `docs/security.md` for the threat model and what prompt-level guardrails do *not* close; quarantining untrusted input, author-based trust gating, output filtering, and capability isolation are all operator territory the daemon does not implement today.
 - **Token budgets**: per-scope (global, backend, or agent) token caps over daily/weekly/monthly UTC calendar periods. Checked before each agent run through the concrete SQLite store; fail-open with error logging so a broken `token_budgets` table never blocks runs. Alert thresholds (0 = disabled, 1-100 = percentage of cap) drive the NavBar danger banner. Token leaderboard aggregates per-agent usage from the `traces` table, including total tokens, run count, and average tokens per run. Budget CRUD is exposed at `/token_budgets` (REST) and via the `list_token_budgets`, `create_token_budget`, `update_token_budget`, `delete_token_budget` MCP tools. `PATCH /token_budgets/{id}` and `update_token_budget` are partial-update surfaces. The `get_token_leaderboard` MCP tool and `GET /token_leaderboard` endpoint aggregate per-agent usage. Budgets are included in `/export` and `/import` round-trips.
 
 ## Contribution Model
@@ -132,4 +132,4 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full flow, label semantics, and
 - Webhook authenticity is enforced with HMAC SHA-256 signature verification.
 - Sensitive API and MCP endpoints require daemon bearer auth when `AGENTS_AUTH_BEARER_TOKEN_HASH` is set. This is minimal token auth for launch, not a full user/session/token-management system.
 - Prompts are never logged in plaintext; only the length is recorded.
-- The daemon delegates all GitHub writes to the configured AI backend via MCP tools.
+- The daemon delegates GitHub operations to the configured AI backend; agents prefer MCP tools and may use authenticated gh only as the documented fallback.

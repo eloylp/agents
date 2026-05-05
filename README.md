@@ -11,7 +11,7 @@
 
 Build and take ownership your agentic universe. Create your agents and compose them with skills, memory, and triggers: repo events/labels, cron, or inter-agent dispatch. 
 
-The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), or your own local LLM) and lets it work through your repo host's native primitives: issues, PRs, reviews, comments. GitHub today; [GitLab](https://github.com/eloylp/agents/issues/359) under discussion.
+The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), or your own local LLM) and lets it work through your repo host's native primitives: issues, PRs, reviews, comments. GitHub MCP tools are preferred; authenticated `gh` is available as fallback for complex local checkout/test/PR loops. GitHub today; [GitLab](https://github.com/eloylp/agents/issues/359) under discussion.
 
 ## Get started
 
@@ -25,7 +25,7 @@ See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a re
   - **[REST API](docs/api.md)**: programmatic. Scriptable from any HTTP client; the dashboard itself runs on top of it.
 - **Observable**: See the full event chain in realtime from the [UI](docs/ui.md), from events to runners to traces that will facilitate your prompt tunning journey.
 - **[Self-hosted](docs/quickstart.md)**: your code and prompts stay on your infrastructure. No SaaS dependency.
-- **[Security recommendations](docs/security.md)**: ships built-in guardrails prepended to every agent prompt for indirect prompt-injection resistance, public-action discretion, daemon-only memory scope, and GitHub MCP tool usage.
+- **[Security recommendations](docs/security.md)**: ships built-in guardrails prepended to every agent prompt for indirect prompt-injection resistance, public-action discretion, daemon-only memory scope, and GitHub repository tool usage (MCP first, gh fallback).
 - **Minimal token auth for now**: set a daemon bearer-token hash to protect API and MCP access while the full auth system is tracked in [#421](https://github.com/eloylp/agents/issues/421).
 - **Multi-backend**: pick Claude, Codex, or a custom backend per agent. Different agents in the same fleet can use different providers.
 - **Discovery and diagnostics**: the daemon detects backends and tools, validates CLI health, and persists discovery snapshots.
@@ -41,7 +41,7 @@ See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a re
 Every run, regardless of trigger, goes through the same pipeline:
 
 1. **Compose the prompt**: guardrails + skills + agent prompt + runtime context + memory.
-2. **Spawn the AI CLI** (`claude`, `codex`, or your local model) with JSON-schema-enforced output.
+2. **Spawn the AI CLI** (`claude`, `codex`, or your local model) with JSON-schema-enforced output and repository tools available inside the container.
 3. **Parse the structured response**: artifacts, dispatch requests, updated memory.
 4. **Persist the trace**, fan out any dispatches, write back memory.
 
