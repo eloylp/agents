@@ -611,10 +611,10 @@ func TestDispatcherRetrySucceedsAfterEnqueueFailure(t *testing.T) {
 
 // TestDispatchClaimOnlyVisibleAfterSuccessfulEnqueue is a regression test for
 // the lost-work race: if ProcessDispatches fails to enqueue a dispatch event,
-// DispatchAlreadyClaimed must return false so the autonomous scheduler can
+// SeesPendingOrCommitted must return false so the autonomous scheduler can
 // still run the target. Previously, SeenOrAdd was called before PushEvent and
 // a failed enqueue followed by a dedup rollback still left a brief window where
-// DispatchAlreadyClaimed could return true, causing both paths to skip.
+// the slot appeared claimed, causing both paths to skip.
 func TestDispatchClaimOnlyVisibleAfterSuccessfulEnqueue(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{err: errors.New("queue full")}
@@ -624,28 +624,27 @@ func TestDispatchClaimOnlyVisibleAfterSuccessfulEnqueue(t *testing.T) {
 	d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 0), "root-1", 0, "", reqs)
 
 	// The enqueue failed, so the dispatch slot must NOT be claimed.
-	if d.DispatchAlreadyClaimed("pr-reviewer", "owner/repo", time.Now()) {
-		t.Error("DispatchAlreadyClaimed returned true after a failed enqueue: phantom claim left by failed dispatch")
+	if d.dedup.SeesPendingOrCommitted("pr-reviewer", "owner/repo", 0, time.Now()) {
+		t.Error("SeesPendingOrCommitted returned true after a failed enqueue: phantom claim left by failed dispatch")
 	}
 }
 
-// TestMarkAutonomousRunSuppressesNearSimultaneousDispatch is a regression
+// TestTryMarkAutonomousRunSuppressesNearSimultaneousDispatch is a regression
 // test for the cron-first dedup ordering: when an autonomous run starts and
-// MarkAutonomousRun writes a cron-namespace mark, dispatches targeting the
+// TryMarkAutonomousRun writes a cron-namespace mark, dispatches targeting the
 // same agent/repo with number=0 (autonomous context) must be suppressed for
 // the full dedup_window_seconds, both while the run is in-flight and after
 // it completes.
-func TestMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.T) {
+func TestTryMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}
 	d := testDispatcher(t, q)
 
-	// Simulate: cron run confirms it will proceed and writes the cron-namespace mark.
-	alreadyClaimed := d.DispatchAlreadyClaimed("coder", "owner/repo", time.Now())
-	if alreadyClaimed {
-		t.Fatal("DispatchAlreadyClaimed: expected false on first call (no prior dispatch)")
+	// Simulate: cron run claims the slot; TryMarkAutonomousRun returns true when
+	// no prior dispatch exists.
+	if !d.TryMarkAutonomousRun("coder", "owner/repo", time.Now()) {
+		t.Fatal("TryMarkAutonomousRun: expected true on first call (no prior dispatch)")
 	}
-	d.MarkAutonomousRun("coder", "owner/repo", time.Now())
 
 	// Dispatches targeting the same agent/repo with number=0 must be suppressed
 	// for the full dedup window (coder dispatching to itself is not allowed, so use
@@ -668,18 +667,18 @@ func TestMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.T) {
 	}
 }
 
-// TestMarkAutonomousRunDoesNotSuppressDispatchForDifferentNumber verifies that
+// TestTryMarkAutonomousRunDoesNotSuppressDispatchForDifferentNumber verifies that
 // a cron mark (number=0, autonomous context) does not suppress dispatches
 // targeting a different item number on the same repo. This guards against the
 // cron mark being too broad and blocking valid event-driven dispatches such as
 // "coder → pr-reviewer for PR #42" just because pr-reviewer had a cron run.
-func TestMarkAutonomousRunDoesNotSuppressDispatchForDifferentNumber(t *testing.T) {
+func TestTryMarkAutonomousRunDoesNotSuppressDispatchForDifferentNumber(t *testing.T) {
 	t.Parallel()
 	q := &fakeQueue{}
 	d := testDispatcher(t, q)
 
 	// Cron run for pr-reviewer marks (pr-reviewer, owner/repo, 0).
-	d.MarkAutonomousRun("coder", "owner/repo", time.Now())
+	d.TryMarkAutonomousRun("coder", "owner/repo", time.Now())
 
 	// A dispatch targeting coder for PR #42 (number=42) must still be enqueued
 	//, it is a different item context from the autonomous cron run (number=0).
@@ -710,12 +709,11 @@ func TestPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 	q := &fakeQueue{}
 	d := NewDispatcher(cfg, seedAgentMap(t, agents), dedup, q, zerolog.Nop())
 
-	// Autonomous run confirms it will proceed and writes the cron mark.
+	// Autonomous run claims the slot.
 	now := time.Now()
-	if d.DispatchAlreadyClaimed("coder", "owner/repo", now) {
-		t.Fatal("DispatchAlreadyClaimed: expected false on first call (no prior dispatch)")
+	if !d.TryMarkAutonomousRun("coder", "owner/repo", now) {
+		t.Fatal("TryMarkAutonomousRun: expected true on first call (no prior dispatch)")
 	}
-	d.MarkAutonomousRun("coder", "owner/repo", now)
 
 	// Dispatch arriving after the run, still within the TTL window, must be suppressed.
 	originator := agents["pr-reviewer"]
@@ -800,8 +798,8 @@ func TestRemoveCronMarkWithOverlappingRunsRefcount(t *testing.T) {
 
 	now := time.Now()
 	// Simulate two overlapping autonomous runs for the same (agent, repo).
-	d.MarkAutonomousRun("coder", "owner/repo", now)
-	d.MarkAutonomousRun("coder", "owner/repo", now)
+	d.TryMarkAutonomousRun("coder", "owner/repo", now)
+	d.TryMarkAutonomousRun("coder", "owner/repo", now)
 
 	// First run fails: rolls back. The second run is still in flight, so
 	// dispatches must still be suppressed.
@@ -851,7 +849,7 @@ func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 
 	// Autonomous run starts; writes cron mark.
 	start := time.Now()
-	d.MarkAutonomousRun("coder", "owner/repo", start)
+	d.TryMarkAutonomousRun("coder", "owner/repo", start)
 
 	// Simulate the sweeper running after the TTL has elapsed but before the
 	// run completes. The cron mark's refcount is still 1, so it must NOT be
