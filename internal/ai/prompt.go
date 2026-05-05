@@ -27,7 +27,7 @@ type PromptContext struct {
 	Number      int    // issue or PR number, 0 for runs with no GitHub item
 	Backend     string // resolved backend name (claude, codex, ...)
 	Memory      string // existing memory snapshot injected before each autonomous run
-	HasMemory    bool  // true when the caller is loading memory for this run; enables the memory section
+	HasMemory   bool   // true when the caller is loading memory for this run; enables the memory section
 	EventKind   string         // e.g. "issues.labeled", "push", empty for autonomous runs
 	Actor       string         // GitHub login that triggered the event; empty for autonomous runs
 	Payload     map[string]any // kind-specific event fields; nil for autonomous runs
@@ -176,7 +176,7 @@ func renderRuntimeContext(ctx PromptContext) string {
 			v := ctx.Payload[k]
 			if s, ok := v.(string); ok && strings.Contains(s, "\n") {
 				fmt.Fprintf(&b, "%s:\n", k)
-				for _, line := range strings.Split(s, "\n") {
+				for line := range strings.SplitSeq(s, "\n") {
 					fmt.Fprintf(&b, "  %s\n", line)
 				}
 			} else {
