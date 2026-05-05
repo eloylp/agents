@@ -28,8 +28,8 @@ func ValidateRepoName(name string) error {
 	if strings.ContainsAny(trimmed, " \t\r\n") {
 		return fmt.Errorf("repo name %q contains whitespace; expected owner/repo", trimmed)
 	}
-	parts := strings.Split(trimmed, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	owner, repo, ok := strings.Cut(trimmed, "/")
+	if !ok || owner == "" || repo == "" || strings.Contains(repo, "/") {
 		return fmt.Errorf("repo name %q must be in owner/repo form", trimmed)
 	}
 	return nil
