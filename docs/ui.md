@@ -46,13 +46,13 @@ Manage the reusable guidance blocks composed into agent prompts. Create, edit, d
 
 ### Backends and tools
 
-Backend discovery status, including per-backend GitHub MCP connectivity. Manage runtime limits (timeout, max prompt chars), local-backend URLs, and orphaned-model remediation. Lives as a tab inside the Config page.
+Backend discovery status, including per-backend GitHub MCP connectivity, plus supporting tool health for `gh`, `git`, Go, Rust/Cargo, Node/npm, and TypeScript. The Tools column shows whether GitHub CLI is authenticated, because agents prefer MCP but may fall back to `gh` for complex local checkout/test/PR loops. Manage runtime limits (timeout, max prompt chars), local-backend URLs, and orphaned-model remediation. Lives as a tab inside the Config page.
 
 ![Config page, Backends and tools tab is one of three tabs at the top](img/config.png)
 
 ### Guardrails
 
-Tab inside the Config page. Lists every prompt guardrail prepended to every agent's composed prompt at render time, with built-in / disabled / position badges. Click a row to edit name, description, content (markdown editor with **⛶ Expand** affordance), enabled toggle, and position. **Reset to default** restores a built-in's seeded text. **Delete** asks for double confirmation, with a stronger warning when the row is built-in. Disabling the shipped 'security' guardrail surfaces an extra-stern confirm modal explaining what protection is removed. The shipped daemon arrives with built-in guardrails for security, public-action discretion, daemon-only memory scope, and GitHub MCP tool usage; operators can add code-style, deployment-policy, or any other policy block on top.
+Tab inside the Config page. Lists every prompt guardrail prepended to every agent's composed prompt at render time, with built-in / disabled / position badges. Click a row to edit name, description, content (markdown editor with **⛶ Expand** affordance), enabled toggle, and position. **Reset to default** restores a built-in's seeded text. **Delete** asks for double confirmation, with a stronger warning when the row is built-in. Disabling the shipped 'security' guardrail surfaces an extra-stern confirm modal explaining what protection is removed. The shipped daemon arrives with built-in guardrails for security, public-action discretion, daemon-only memory scope, and repository tool usage (MCP first, gh fallback); operators can add code-style, deployment-policy, or any other policy block on top.
 
 ### Repos
 

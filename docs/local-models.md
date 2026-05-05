@@ -219,7 +219,7 @@ Neither is a proxy bug. Both are Qwen-family disposition issues vs Claude. The g
 - **Reviewer-class agents** (pr-reviewer, scouts, specialist reviewers, product-strategist): local Qwen works fine.
 - **Acting agents** (coder, refactorer): default them to hosted Claude. Graduate to local only after you've measured their output against GitHub reality over a meaningful time window.
 
-**The shipped `mcp-tool-usage` guardrail** (seeded by migration 012, position 10, enabled by default) directly addresses the conservative-disposition issue. It tells every agent to use the GitHub MCP tools for repo interactions and to fetch the surrounding context (PR description, diff, prior comments, linked issue) rather than relying on the daemon's thin trigger envelope. Hosted Claude reaches for tools without prompting; local Qwen-class models benefit visibly from the explicit reminder. Edit, disable, or replace it in the dashboard's Guardrails tab if you want a different shape, hosted-only fleets can disable it with no harm.
+**The shipped `mcp-tool-usage` guardrail** (seeded by migration 012, position 10, enabled by default) directly addresses the conservative-disposition issue. It tells every agent to use GitHub MCP tools first, fetch surrounding context (PR description, diff, prior comments, linked issue), and fall back to authenticated `gh` only when MCP is insufficient or a safe local checkout/test/PR loop is required. Hosted Claude reaches for tools without prompting; local Qwen-class models benefit visibly from the explicit reminder. Edit, disable, or replace it in the dashboard's Guardrails tab if you want a different shape, hosted-only fleets can disable it with no harm.
 
 ### Tailscale DERP relay adds ~500 ms
 

@@ -7,11 +7,11 @@
 #
 # The script does only what genuinely benefits from interactive shell
 # access: log into the AI CLIs (Claude / Codex), wire up the GitHub MCP
-# server on each, and refresh backend discovery so the daemon sees the
-# newly authenticated tooling. Fleet configuration (agents, skills,
-# repos, bindings, webhooks) is the operator's job through the
-# dashboard at /ui/ or the CRUD / MCP surfaces, those are graphical
-# tasks that don't fit a bash prompt loop.
+# server on each, authenticate the gh fallback, and refresh backend
+# discovery so the daemon sees the newly authenticated tooling. Fleet
+# configuration (agents, skills, repos, bindings, webhooks) is the
+# operator's job through the dashboard at /ui/ or the CRUD / MCP surfaces,
+# those are graphical tasks that don't fit a bash prompt loop.
 
 set -euo pipefail
 
@@ -55,7 +55,7 @@ banner() {
    │     a g e n t s   ·   interactive setup wizard       │
    │                                                       │
    │     authenticates AI CLIs · wires GitHub MCP ·        │
-   │     refreshes backend discovery                       │
+   │     logs in gh fallback · refreshes discovery         │
    │                                                       │
    ╰───────────────────────────────────────────────────────╯
 BANNER
@@ -109,10 +109,10 @@ phase_sanity() {
   ok   "running inside the agents container"
 
   info "verifying required tooling is on PATH..."
-  for cmd in curl jq claude codex; do
+  for cmd in curl jq git gh go rustc cargo node npm tsc claude codex; do
     require_cmd "$cmd"
   done
-  ok   "curl, jq, claude, codex all present"
+  ok   "core tools, language runtimes, gh, claude, and codex are present"
 
   require_daemon_up
 }
@@ -164,6 +164,29 @@ phase_check_pat() {
   ok "GITHUB_TOKEN is present (${#GITHUB_TOKEN} chars)"
   note "claude stores the token in ~/.claude.json on the agents-home volume."
   note "codex resolves it from \$GITHUB_TOKEN at runtime (token never on disk)."
+  note "gh is authenticated with the same token as the fallback GitHub tool."
+}
+
+# ── phase 2.6, GitHub CLI fallback auth ─────────────────────────────
+
+phase_github_cli_auth() {
+  phase "2.6" "authenticate GitHub CLI fallback"
+  info "refreshing ${c_bold}gh${c_rst} auth with GITHUB_TOKEN..."
+  if printf '%s\n' "$GITHUB_TOKEN" | env -u GH_TOKEN -u GITHUB_TOKEN gh auth login --with-token >/dev/null 2>&1; then
+    ok "gh token stored for the agents user"
+  else
+    warn "gh auth login --with-token did not replace stored auth; verifying existing auth before failing"
+  fi
+
+  info "verifying ${c_bold}gh auth status --hostname github.com${c_rst}..."
+  local status
+  if status=$(env -u GH_TOKEN -u GITHUB_TOKEN gh auth status --hostname github.com 2>&1); then
+    ok "gh is authenticated for github.com"
+  else
+    err "gh auth status failed:"
+    printf '%s\n' "$status" | sed 's/^/      /'
+    return 1
+  fi
 }
 
 # ── phase 3, per-backend login + GitHub MCP wiring ──────────────────
@@ -269,9 +292,9 @@ phase_diagnostics() {
   curl -fsS "$DAEMON_URL/status" \
     | jq '{status, uptime_seconds, queue: .queues.events, orphaned_agents}'
 
-  info "fetching ${c_bold}/backends/status${c_rst} (per-backend health + model catalog)..."
+  info "fetching ${c_bold}/backends/status${c_rst} (backend + tool health)..."
   curl -fsS "$DAEMON_URL/backends/status" \
-    | jq '.backends | map({name, healthy, models, health_detail})'
+    | jq '{backends: (.backends | map({name, healthy, models, health_detail})), tools: (.tools | map({name, healthy, authenticated, detail}))}'
 
   info "fetching ${c_bold}/agents/orphans/status${c_rst} (agents pinning unavailable models)..."
   curl -fsS "$DAEMON_URL/agents/orphans/status" \
@@ -282,7 +305,7 @@ phase_diagnostics() {
 
 phase_done() {
   farewell
-  ok "AI CLIs authenticated; auth persists in the agents-home volume"
+  ok "AI CLIs and gh authenticated; auth persists in the agents-home volume"
   ok "backend discovery refreshed; daemon's catalog is current"
   say ""
   say "  ${c_bold}Next steps:${c_rst}"
@@ -300,6 +323,7 @@ main() {
   phase_sanity
   phase_pick_backends
   phase_check_pat
+  phase_github_cli_auth
   phase_per_backend
   phase_refresh_discovery
   phase_diagnostics

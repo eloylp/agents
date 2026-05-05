@@ -23,6 +23,18 @@ interface Backend {
 
 interface BackendsDiscoveryResponse {
   backends?: Backend[]
+  tools?: ToolStatus[]
+  github_cli?: ToolStatus
+}
+
+interface ToolStatus {
+  name: string
+  detected?: boolean
+  command?: string
+  version?: string
+  authenticated?: boolean
+  healthy?: boolean
+  detail?: string
 }
 
 interface OrphanedAgent {
@@ -142,6 +154,15 @@ const healthBadgeStyle = (ok: boolean | undefined): React.CSSProperties => ({
   background: ok ? 'rgba(16,185,129,0.1)' : 'var(--bg-danger)',
 })
 
+const toolDisplayName = (name: string) => {
+  switch (name) {
+    case 'github_cli': return 'GitHub CLI'
+    case 'rustc': return 'Rust'
+    case 'typescript': return 'TypeScript'
+    default: return name
+  }
+}
+
 function JsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
   if (value === null) return <span style={{ color: 'var(--text-muted)' }}>null</span>
   if (typeof value === 'boolean') return <span style={{ color: '#f59e0b' }}>{String(value)}</span>
@@ -196,6 +217,7 @@ export default function ConfigPage() {
   const [tab, setTab] = useState<'inspector' | 'backends' | 'guardrails' | 'import-export' | 'tokens'>('inspector')
 
   const [backends, setBackends] = useState<Backend[]>([])
+  const [tools, setTools] = useState<ToolStatus[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
   const [backendsLoading, setBackendsLoading] = useState(false)
   const [backendDriftWarnings, setBackendDriftWarnings] = useState<string[]>([])
@@ -282,10 +304,12 @@ export default function ConfigPage() {
         const dbData = sortBackends(await dbRes.json() as Backend[])
         const diagData = await diagRes.json() as BackendsDiscoveryResponse
         const diagBackends = sortBackends(diagData.backends ?? [])
+        const diagTools = diagData.tools ?? (diagData.github_cli ? [diagData.github_cli] : [])
         const orphanData = await orphanRes.json() as OrphanedAgentsResponse
         const orphanAgents = orphanData.agents ?? []
 
         setBackends(dbData)
+        setTools(diagTools)
         setBackendDriftWarnings(buildBackendDriftWarnings(dbData, diagBackends))
         setOrphanedAgents(orphanAgents)
         setOrphanModelSelection(prev => {
@@ -304,6 +328,7 @@ export default function ConfigPage() {
         setOrphanedAgents([])
         setOrphanModelSelection({})
         setBackends([])
+        setTools([])
         setBackendsLoading(false)
       })
   }
@@ -882,6 +907,37 @@ export default function ConfigPage() {
                           )}
                         </div>
                       </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ flex: '1 1 320px', minWidth: '280px' }}>
+              <div style={{ border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '0.75rem', background: 'var(--bg)' }}>
+                <div style={{ fontWeight: 700, color: 'var(--text-heading)', marginBottom: '0.4rem' }}>Tools</div>
+                <p style={{ color: 'var(--text-faint)', fontSize: '0.78rem', marginTop: 0, marginBottom: '0.65rem' }}>
+                  Supporting CLIs available to agent subprocesses. GitHub CLI must be authenticated; agents prefer MCP but may use gh for complex local checkout and PR flows.
+                </p>
+                {!backendsLoading && tools.length === 0 && (
+                  <p style={{ color: 'var(--text-faint)', fontSize: '0.85rem' }}>No tool diagnostics reported.</p>
+                )}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
+                  {tools.map(t => (
+                    <div key={t.name} style={{ border: `1px solid ${t.healthy ? 'var(--border-subtle)' : 'var(--border-danger)'}`, borderRadius: '6px', padding: '0.65rem', background: 'var(--bg-card)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                        <div style={{ fontWeight: 700, color: 'var(--text-heading)' }}>{toolDisplayName(t.name)}</div>
+                        <span style={healthBadgeStyle(t.healthy)}>{t.healthy ? 'healthy' : 'failed'}</span>
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px', overflowWrap: 'anywhere' }}>
+                        {t.command || 'not detected'}{t.version ? ` · ${t.version}` : ''}
+                      </div>
+                      {t.name === 'github_cli' && (
+                        <div style={{ fontSize: '0.74rem', color: t.authenticated ? 'var(--success)' : 'var(--text-danger)', marginTop: '2px' }}>
+                          {t.authenticated ? 'Authenticated for github.com' : 'Not authenticated'}
+                        </div>
+                      )}
+                      {t.detail && <div style={{ fontSize: '0.74rem', color: t.healthy ? 'var(--text-faint)' : 'var(--text-danger)', marginTop: '2px' }}>{t.detail}</div>}
                     </div>
                   ))}
                 </div>

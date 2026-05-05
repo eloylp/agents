@@ -4,14 +4,14 @@ Repo-specific guidance for any coding agent (Claude Code, Codex, Cursor, Aider, 
 
 ## What this repo is
 
-**agents** is a self-hosted Go daemon that dispatches AI CLIs (Claude Code, Codex, or any CLI pointed at a local LLM via the built-in proxy) to work on GitHub repos. Agents are declared in YAML, bound to repos via **labels**, **GitHub event subscriptions**, or **cron schedules**, and execute inside the AI CLI, which in turn uses GitHub MCP tools for all writes. The daemon itself is strictly read-only against GitHub.
+**agents** is a self-hosted Go daemon that dispatches AI CLIs (Claude Code, Codex, or any CLI pointed at a local LLM via the built-in proxy) to work on GitHub repos. Agents are declared in YAML, bound to repos via **labels**, **GitHub event subscriptions**, or **cron schedules**, and execute inside the AI CLI, which in turn uses GitHub MCP tools first and an authenticated `gh` CLI fallback for complex local checkout/test/PR loops. The daemon itself is strictly read-only against GitHub.
 
 Agents can also invoke each other at runtime via the **reactive inter-agent dispatcher**: an agent returns `dispatch: [{agent, number, reason}]` in its response JSON, the daemon validates against per-agent whitelists and safety limits, then enqueues a synthetic `agent.dispatch` event that runs the target agent.
 
 Key numbers:
 - Language: **Go 1.25** (check `go.mod`).
 - Binary entrypoint: `cmd/agents/main.go`.
-- Single-binary deployment; no required runtime dependencies beyond the AI CLIs (GitHub access flows through the GitHub MCP server configured on each AI CLI).
+- Single-binary deployment; the image includes the AI CLIs plus git, gh, Go, Rust/Cargo, Node/npm, and TypeScript; GitHub access flows through MCP first, with gh as fallback.
 
 ## Quick commands
 
@@ -34,7 +34,7 @@ internal/
   anthropic_proxy/              # built-in Anthropic Messages ↔ OpenAI Chat Completions translation
   observe/                      # observability store: events, traces, dispatch graph, SSE hubs
   scheduler/                    # cron scheduler + agent memory (SQLite-backed)
-  backends/                     # backend discovery: CLI probing, GitHub MCP health checks, orphan detection
+  backends/                     # backend discovery: CLI probing, GitHub MCP health checks, tool diagnostics, orphan detection
   store/                        # SQLite-backed config + event_queue store: Open, Import, Load, CRUD, *store.Store facade
   workflow/                     # event routing engine, durable event queue (persist-on-push + replay), processor, dispatcher
   daemon/                       # owns the daemon as a single composed unit: lifecycle, router, /status, /run, proxy + UI + MCP mounts
@@ -75,7 +75,7 @@ internal/ai/response-schema.json # embedded JSON schema for structured output (c
 
 These constraints are load-bearing. Read them before changing the listed areas.
 
-- **The daemon never writes to GitHub directly.** All writes go through the AI backend's MCP tools. If you introduce a new feature that seems to need a direct GitHub API call, raise it in an issue first, there's almost always a way to keep the daemon read-only.
+- **The daemon never writes to GitHub directly.** Agents should prefer the AI backend's GitHub MCP tools. Authenticated `gh` is available only as a fallback for complex local checkout, test, and PR flows. If you introduce a new feature that seems to need a direct GitHub API call, raise it in an issue first, there's almost always a way to keep the daemon read-only.
 - **Agents must not mention external GitHub users.** Do NOT request reviews from, assign to, or @mention any GitHub user in PRs, comments, or issue descriptions. All review routing is handled by the daemon's dispatch system. Unsolicited pings to external contributors from an automated agent are a trust and reputation risk, the GitHub account could be flagged. This rule applies to every agent prompt.
 - **Prompts are persisted on the trace span, not in logs.** Every run's composed prompt is gzipped onto the `traces` row (visible at `/runners` and `/traces` once a span is recorded). Logs carry only the prompt's character count for correlation. The persistence is gated by daemon bearer auth when `AGENTS_AUTH_BEARER_TOKEN_HASH` is set; `/runners` and `/traces` must stay protected.
 - **Structured output is enforced at the CLI level.** Claude uses hardcoded `--output-format stream-json --json-schema <embedded-schema>` args; codex uses hardcoded `--output-schema <temp-file>`. The daemon embeds `internal/ai/response-schema.json` and appends the correct flags automatically. When changing the response contract, update `internal/ai/response-schema.json` alongside `internal/ai/types.go`.
@@ -123,6 +123,7 @@ When making common classes of changes, update all of these at once:
 - **`.env` is auto-loaded on startup** (`godotenv.Load()`). Required runtime secret: `GITHUB_WEBHOOK_SECRET`. Optional `AGENTS_AUTH_BEARER_TOKEN_HASH` enables minimal bearer-token auth for sensitive API/MCP routes. Daemon runtime settings can be overridden at startup with `AGENTS_*` env vars for log, HTTP, processor, and dispatch fields; see `docs/configuration.md` for the full mapping. Empty env vars are ignored, and changes still require a process/container restart.
 - **Config is loaded from SQLite at startup.** Seed an empty SQLite store via `POST /import` or the `agents-setup` script; YAML is import/export only, not a runtime input. Manage subsequent changes via the CRUD API or the web dashboard. Prompt and skill content is stored in the database; changes via the API or UI take effect on the next agent run without a restart.
 - **Backend discovery lifecycle.** Startup auto-discovery runs only when the backends table is empty. Manual refresh is explicit via `POST /backends/discover`; `GET /backends/status` is diagnostics-only.
+- **Runtime toolchain.** The Docker image includes `git`, authenticated `gh`, Go, Rust/Cargo, Node/npm, and TypeScript so agents can establish a safe local checkout/test loop when MCP alone is insufficient. `agents-setup` authenticates `gh` with `GITHUB_TOKEN`; `/backends/status` reports tool health.
 - **Orphan visibility.** `GET /agents/orphans/status` and `/status` (`orphaned_agents.count`) expose model/backend drift requiring user remediation.
 - **Agent memory** is stored in SQLite (in the `memory` table), keyed by `(agent, repo)`. It's the agent's job to return updated memory in its response; the daemon writes it back to the store unchanged. Load/persist is gated by `allow_memory` (default `true`) and applies uniformly across cron, webhook, dispatch, `POST /run`, and `trigger_agent`. The built-in `memory-scope` guardrail tells agents to ignore CLI-native/global/session memory and use only the daemon-rendered `Existing memory:` section for the current `(agent, repo)`.
 - **The event queue is durable.** Every `PushEvent` persists the event to the SQLite `event_queue` table before signalling workers via the in-memory channel. Rows whose `completed_at` is still `NULL` at startup are replayed onto the channel, events buffered at shutdown, or runs interrupted mid-prompt, get a second chance instead of vanishing. Completed rows older than 7 days are pruned by an hourly cleanup loop. Inspect / delete / retry rows through the `/runners` REST surface, the matching MCP tools, or the UI's Runners page.
@@ -137,7 +138,7 @@ When making common classes of changes, update all of these at once:
 - **Making the daemon's event queue depth dependent on backend response time.** The queue and the workers are decoupled on purpose. Slow backends should accumulate queue depth, not block new events from arriving.
 - **Spawning new goroutines inside an agent run that outlive the parent context.** Respect context cancellation so shutdown drains cleanly.
 - **Dispatching to an agent the originator doesn't know about.** Any dispatch entry whose `agent` isn't in the originator's `can_dispatch` list is dropped with a WARN. Agents should only name targets they see in their `## Available experts` roster.
-- **Fabricating facts inside populated response templates.** Less-capable local models will happily populate a "post status comment in this format" template with invented values (non-existent SHAs, false merge states). If you write prompts that use templated outputs, add verification steps, require SHAs to be fetched live within the same run, require CI status to be fetched via the GitHub MCP server's workflow-run tools, and so on.
+- **Fabricating facts inside populated response templates.** Less-capable local models will happily populate a "post status comment in this format" template with invented values (non-existent SHAs, false merge states). If you write prompts that use templated outputs, add verification steps, require SHAs to be fetched live within the same run, require CI status to be fetched via the GitHub MCP server's workflow-run tools or `gh` fallback, and so on.
 
 ## Local-model routing
 
