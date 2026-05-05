@@ -23,7 +23,10 @@ const (
 	ClaudeLocalName = "claude_local"
 )
 
-var builtinBackendNames = []string{ClaudeName, CodexName}
+var (
+	builtinBackendNames    = []string{ClaudeName, CodexName}
+	backtickModelIDPattern = regexp.MustCompile("`([a-zA-Z][a-zA-Z0-9._-]+)`")
+)
 
 // ToolStatus captures diagnostics for one supporting CLI/tool available to
 // agent subprocesses. GitHub CLI is special: it must be both installed and
@@ -493,7 +496,7 @@ func parseModels(raw string) []string {
 
 	// Extract backtick-enclosed model IDs (e.g. `claude-opus-4-7` from markdown tables).
 	var backtickModels []string
-	for _, match := range regexp.MustCompile("`([a-zA-Z][a-zA-Z0-9._-]+)`").FindAllStringSubmatch(raw, -1) {
+	for _, match := range backtickModelIDPattern.FindAllStringSubmatch(raw, -1) {
 		backtickModels = append(backtickModels, match[1])
 	}
 	if len(backtickModels) > 0 {
