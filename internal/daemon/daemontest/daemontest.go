@@ -92,9 +92,9 @@ func MinimalCfg(mutator func(*config.Config)) *config.Config {
 				EventQueueBuffer:    16,
 				MaxConcurrentAgents: 1,
 				Dispatch: config.DispatchConfig{
-					MaxDepth:           2,
-					MaxFanout:          2,
-					DedupWindowSeconds: 60,
+					MaxDepth:            2,
+					MaxFanout:           2,
+					DedupWindowSeconds:  60,
 				},
 			},
 			AIBackends: map[string]fleet.Backend{
