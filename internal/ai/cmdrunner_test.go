@@ -748,6 +748,22 @@ func TestParseClaudeSteps(t *testing.T) {
 	}
 }
 
+// jsonlToTimedLines splits a raw JSONL string into []timedLine, assigning base
+// to every line's timestamp. Empty lines are skipped. Call t.Helper() so
+// failures report the caller's line number.
+func jsonlToTimedLines(t *testing.T, raw string, base time.Time) []timedLine {
+	t.Helper()
+	var tls []timedLine
+	for _, line := range strings.Split(strings.TrimRight(raw, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		b := []byte(line + "\n")
+		tls = append(tls, timedLine{data: b, at: base})
+	}
+	return tls
+}
+
 // TestParseClaudeStepsThinking covers the kind="thinking" path: text content
 // blocks emitted by the assistant between tool calls, persisted as their own
 // steps so the Traces detail page can replay reasoning alongside tool use.
@@ -755,17 +771,7 @@ func TestParseClaudeStepsThinking(t *testing.T) {
 	t.Parallel()
 
 	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	toLines := func(raw string) []timedLine {
-		var tls []timedLine
-		for _, line := range strings.Split(strings.TrimRight(raw, "\n"), "\n") {
-			if line == "" {
-				continue
-			}
-			b := []byte(line + "\n")
-			tls = append(tls, timedLine{data: b, at: base})
-		}
-		return tls
-	}
+	toLines := func(raw string) []timedLine { return jsonlToTimedLines(t, raw, base) }
 
 	t.Run("single text block becomes one thinking step", func(t *testing.T) {
 		t.Parallel()
@@ -878,17 +884,7 @@ func TestParseCodexSteps(t *testing.T) {
 	t.Parallel()
 
 	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	toLines := func(raw string) []timedLine {
-		var tls []timedLine
-		for _, line := range strings.Split(strings.TrimRight(raw, "\n"), "\n") {
-			if line == "" {
-				continue
-			}
-			b := []byte(line + "\n")
-			tls = append(tls, timedLine{data: b, at: base})
-		}
-		return tls
-	}
+	toLines := func(raw string) []timedLine { return jsonlToTimedLines(t, raw, base) }
 
 	t.Run("agent_message becomes thinking step", func(t *testing.T) {
 		t.Parallel()
