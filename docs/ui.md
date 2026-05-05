@@ -97,9 +97,9 @@ Current fleet config snapshot. Includes YAML import/export for shareable fleet s
 
 ## Authentication
 
-When `AGENTS_AUTH_BEARER_TOKEN_HASH` is set, dashboard data calls use `Authorization: Bearer <token>`. The UI shell at `/ui/` stays public so the browser can render the first-use token modal; sensitive API calls, MCP, runners, traces, config, graph, memory, and live streams require the bearer token. The token is stored only in the browser's `localStorage` and can be changed from Config → Inspector → UI bearer token.
+The dashboard supports first-user setup, username/password login, logout, and named API token management in Config -> Tokens. Browser sessions use an opaque DB-backed token in an `HttpOnly` cookie. MCP and REST clients use API tokens created in the dashboard and sent as `Authorization: Bearer <token>`.
 
-Use your reverse proxy for TLS/routing, not as the primary API auth layer. See [security.md → Bearer-token auth](security.md#bearer-token-auth) and [Reverse-proxy routing](security.md#reverse-proxy-routing).
+Use your reverse proxy for TLS/routing, not as the primary API auth layer. See [security.md → Daemon auth](security.md#daemon-auth) and [Reverse-proxy routing](security.md#reverse-proxy-routing).
 
 ## Regenerating these screenshots
 

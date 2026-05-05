@@ -14,7 +14,7 @@ cd agents
 cp .env.sample .env
 sed -i.bak "s/^GITHUB_WEBHOOK_SECRET=.*/GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)/" .env && rm .env.bak
 # Edit GITHUB_TOKEN in .env before continuing.
-# Optional before exposing the daemon: set AGENTS_AUTH_BEARER_TOKEN_HASH.
+# Optional before migration/exposure: set legacy AGENTS_AUTH_BEARER_TOKEN_HASH.
 docker compose up -d --build
 ```
 
@@ -47,7 +47,7 @@ Once it finishes, the daemon has working backends and tools. **Fleet configurati
 
 ## Production essentials
 
-Before exposing the daemon publicly, set `AGENTS_AUTH_BEARER_TOKEN_HASH` and configure your reverse proxy for TLS/routing: see [security.md → Bearer-token auth](security.md#bearer-token-auth) and [Reverse-proxy routing](security.md#reverse-proxy-routing).
+Before exposing the daemon publicly, open the dashboard and create the first local user, then create named API tokens for MCP/REST clients from Config -> Tokens. Existing operators may set `AGENTS_AUTH_BEARER_TOKEN_HASH` as bootstrap/compatibility auth during migration. Configure your reverse proxy for TLS/routing: see [security.md → Daemon auth](security.md#daemon-auth) and [Reverse-proxy routing](security.md#reverse-proxy-routing).
 
 ## Day-2 operations
 

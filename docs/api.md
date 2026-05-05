@@ -2,7 +2,7 @@
 
 This page documents the REST endpoints exposed by the daemon. The MCP (Model Context Protocol) server at `/mcp` has its own reference in [mcp.md](mcp.md).
 
-All endpoints are unauthenticated at the daemon level; access control is the reverse proxy's responsibility.
+Sensitive endpoints require daemon auth after the first local user is created. Browser clients use the `agents_session` `HttpOnly` cookie; REST and MCP clients send a DB-backed API token with `Authorization: Bearer <token>`. `/status`, `/webhooks/github`, `/auth/status`, `/auth/login`, `/auth/bootstrap`, UI static assets, and the local-model proxy remain public where applicable.
 
 ## Core endpoints
 

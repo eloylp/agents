@@ -426,10 +426,15 @@ func (d *Daemon) buildRouter() http.Handler {
 		}
 		return http.TimeoutHandler(h, writeTimeout, "handler timed out")
 	}
+	return d.withBearerAuth(d.buildMuxRouter(withTimeout))
+}
 
+func (d *Daemon) buildMuxRouter(withTimeout func(http.Handler) http.Handler) *mux.Router {
+	httpCfg := d.daemonCfg.HTTP
 	router := mux.NewRouter()
 	router.Handle(httpCfg.StatusPath, withTimeout(http.HandlerFunc(d.handleStatus))).Methods(http.MethodGet)
 	router.Handle("/run", withTimeout(http.HandlerFunc(d.handleAgentsRun))).Methods(http.MethodPost)
+	d.registerAuthRoutes(router, withTimeout)
 	d.webhook.RegisterRoutes(router, withTimeout)
 
 	router.Handle("/agents", withTimeout(http.HandlerFunc(d.fleet.HandleAgentsView))).Methods(http.MethodGet)
@@ -468,7 +473,21 @@ func (d *Daemon) buildRouter() http.Handler {
 		router.PathPrefix("/mcp").Handler(d.mcp)
 		d.logger.Info().Str("path", "/mcp").Msg("mcp server enabled")
 	}
-	return d.withBearerAuth(router)
+	return router
+}
+
+// Router returns the raw mux router before auth middleware wrapping.
+// Exported for route registration tests.
+func (d *Daemon) Router() *mux.Router {
+	httpCfg := d.daemonCfg.HTTP
+	writeTimeout := time.Duration(httpCfg.WriteTimeoutSeconds) * time.Second
+	withTimeout := func(h http.Handler) http.Handler {
+		if writeTimeout <= 0 {
+			return h
+		}
+		return http.TimeoutHandler(h, writeTimeout, "handler timed out")
+	}
+	return d.buildMuxRouter(withTimeout)
 }
 
 // ── /status ─────────────────────────────────────────────────────────────

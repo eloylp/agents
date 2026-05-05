@@ -1,6 +1,7 @@
 package daemon_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -52,10 +53,7 @@ func TestBuildRouterRegistersExpectedRoutes(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := newTestServer(t, testCfg(nil))
-	router, ok := srv.Handler().(*mux.Router)
-	if !ok {
-		t.Fatalf("handler type = %T, want *mux.Router", srv.Handler())
-	}
+	router := srv.Router()
 
 	expected := []struct {
 		method string
@@ -861,5 +859,95 @@ func TestBuildHandlerBearerAuthProtectsSensitiveRoutes(t *testing.T) {
 				t.Fatalf("%s %s got %d, want %d", tc.method, tc.path, resp.StatusCode, tc.wantStatus)
 			}
 		})
+	}
+}
+
+func TestBuildHandlerDBAuthBootstrapLoginAndAPIToken(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := newTestServer(t, testCfg(nil))
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/config", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("pre-bootstrap config request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("pre-bootstrap /config got %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	bootstrapBody := []byte(`{"username":"admin","password":"correct horse battery staple"}`)
+	resp, err = http.Post(ts.URL+"/auth/bootstrap", "application/json", bytes.NewReader(bootstrapBody))
+	if err != nil {
+		t.Fatalf("bootstrap request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("bootstrap got %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+	var sessionCookie *http.Cookie
+	for _, cookie := range resp.Cookies() {
+		if cookie.Name == "agents_session" {
+			sessionCookie = cookie
+		}
+	}
+	if sessionCookie == nil || !sessionCookie.HttpOnly {
+		t.Fatalf("bootstrap session cookie = %#v, want HttpOnly agents_session", sessionCookie)
+	}
+
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+"/config", nil)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("unauthenticated config request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("post-bootstrap unauthenticated /config got %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+"/config", nil)
+	req.AddCookie(sessionCookie)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("session config request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("session /config got %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/auth/tokens", bytes.NewReader([]byte(`{"name":"Codex MCP"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(sessionCookie)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create token request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create token got %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+	var created struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode token response: %v", err)
+	}
+	if created.Token == "" {
+		t.Fatal("created API token is empty")
+	}
+
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+"/config", nil)
+	req.Header.Set("Authorization", "Bearer "+created.Token)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("api token config request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("api token /config got %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 }
