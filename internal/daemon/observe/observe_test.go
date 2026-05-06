@@ -164,12 +164,7 @@ func seedMemoryReader(t *testing.T, db *sql.DB, content map[string]string, mtime
 	seenAgent := map[string]bool{}
 	seenRepo := map[string]bool{}
 	for key, body := range content {
-		parts := strings.SplitN(key, "\x00", 2)
-		agent := parts[0]
-		repo := ""
-		if len(parts) == 2 {
-			repo = parts[1]
-		}
+		agent, repo, _ := strings.Cut(key, "\x00")
 		agent = ai.NormalizeToken(agent)
 		repo = ai.NormalizeToken(repo)
 		if !seenAgent[agent] {
