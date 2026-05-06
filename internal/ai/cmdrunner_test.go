@@ -756,15 +756,7 @@ func TestParseClaudeStepsThinking(t *testing.T) {
 
 	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	toLines := func(raw string) []timedLine {
-		var tls []timedLine
-		for _, line := range strings.Split(strings.TrimRight(raw, "\n"), "\n") {
-			if line == "" {
-				continue
-			}
-			b := []byte(line + "\n")
-			tls = append(tls, timedLine{data: b, at: base})
-		}
-		return tls
+		return timedLines(raw, base)
 	}
 
 	t.Run("single text block becomes one thinking step", func(t *testing.T) {
@@ -879,15 +871,7 @@ func TestParseCodexSteps(t *testing.T) {
 
 	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	toLines := func(raw string) []timedLine {
-		var tls []timedLine
-		for _, line := range strings.Split(strings.TrimRight(raw, "\n"), "\n") {
-			if line == "" {
-				continue
-			}
-			b := []byte(line + "\n")
-			tls = append(tls, timedLine{data: b, at: base})
-		}
-		return tls
+		return timedLines(raw, base)
 	}
 
 	t.Run("agent_message becomes thinking step", func(t *testing.T) {
@@ -1040,6 +1024,17 @@ func tail(s string, n int) string {
 		return s
 	}
 	return "..." + s[len(s)-n:]
+}
+
+func timedLines(raw string, at time.Time) []timedLine {
+	var tls []timedLine
+	for line := range strings.SplitSeq(strings.TrimRight(raw, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		tls = append(tls, timedLine{data: []byte(line + "\n"), at: at})
+	}
+	return tls
 }
 
 func TestExtractToolResultText(t *testing.T) {
