@@ -5,7 +5,6 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -108,10 +107,10 @@ func seedAgentMap(t *testing.T, m map[string]fleet.Agent) *store.Store {
 		if a.Prompt == "" {
 			a.Prompt = "test"
 		}
-		// Description is required for any agent that appears in another
-		// agent's CanDispatch list. seedAgentMap is permissive: fill in a
-		// default so the validator doesn't reject the seed.
-		if a.AllowDispatch && a.Description == "" {
+		// Descriptions are required for every agent. seedAgentMap is
+		// permissive: fill in a default so focused dispatch tests don't need
+		// repetitive metadata.
+		if a.Description == "" {
 			a.Description = "test"
 		}
 		agents = append(agents, a)
@@ -217,6 +216,7 @@ func TestDispatcherDropsRequest(t *testing.T) {
 		currentDepth int
 		modifyCfg    func(*config.DispatchConfig)
 		modifyAgents func(map[string]fleet.Agent)
+		modifyStore  func(*testing.T, *store.Store)
 		wantStat     func(DispatchStats) int64
 		wantStatName string
 	}{
@@ -235,10 +235,23 @@ func TestDispatcherDropsRequest(t *testing.T) {
 		{
 			name:        "target has allow_dispatch false",
 			targetAgent: "pr-reviewer",
-			modifyAgents: func(agents map[string]fleet.Agent) {
-				a := agents["pr-reviewer"]
-				a.AllowDispatch = false
-				agents["pr-reviewer"] = a
+			modifyStore: func(t *testing.T, st *store.Store) {
+				t.Helper()
+				if _, err := st.DB().Exec(`UPDATE agents SET allow_dispatch=0 WHERE name='pr-reviewer'`); err != nil {
+					t.Fatalf("clear allow_dispatch: %v", err)
+				}
+			},
+			wantStat:     func(s DispatchStats) int64 { return s.DroppedNoOptin },
+			wantStatName: "dropped_no_optin",
+		},
+		{
+			name:        "target has no description",
+			targetAgent: "pr-reviewer",
+			modifyStore: func(t *testing.T, st *store.Store) {
+				t.Helper()
+				if _, err := st.DB().Exec(`UPDATE agents SET description='' WHERE name='pr-reviewer'`); err != nil {
+					t.Fatalf("clear description: %v", err)
+				}
 			},
 			wantStat:     func(s DispatchStats) int64 { return s.DroppedNoOptin },
 			wantStatName: "dropped_no_optin",
@@ -264,7 +277,11 @@ func TestDispatcherDropsRequest(t *testing.T) {
 			if tc.modifyAgents != nil {
 				tc.modifyAgents(agents)
 			}
-			d := NewDispatcher(cfg, seedAgentMap(t, agents), NewDispatchDedupStore(300), q, zerolog.Nop())
+			st := seedAgentMap(t, agents)
+			if tc.modifyStore != nil {
+				tc.modifyStore(t, st)
+			}
+			d := NewDispatcher(cfg, st, NewDispatchDedupStore(300), q, zerolog.Nop())
 			reqs := []ai.DispatchRequest{{Agent: tc.targetAgent, Number: 1, Reason: "test"}}
 			d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", tc.currentDepth, "", reqs)
 			if len(q.popped()) != 0 {
@@ -425,11 +442,11 @@ func TestEngineHandlesAgentDispatchEvent(t *testing.T) {
 	e := newEngineFromCfg(t, cfg, map[string]ai.Runner{"claude": runner}, q)
 
 	ev := Event{
-		ID:   "root-abc",
-		Repo: RepoRef{FullName: "owner/repo", Enabled: true},
-		Kind: "agent.dispatch",
+		ID:     "root-abc",
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "agent.dispatch",
 		Number: 5,
-		Actor: "coder",
+		Actor:  "coder",
 		Payload: map[string]any{
 			"target_agent":   "pr-reviewer",
 			"reason":         "please review this PR",
@@ -447,7 +464,7 @@ func TestEngineHandlesAgentDispatchEvent(t *testing.T) {
 	}
 }
 
-func TestEngineDispatchEventUnboundTargetReturnsError(t *testing.T) {
+func TestEngineDispatchEventRunsUnboundTarget(t *testing.T) {
 	t.Parallel()
 	runner := &stubRunner{}
 	cfg := &config.Config{
@@ -461,7 +478,7 @@ func TestEngineDispatchEventUnboundTargetReturnsError(t *testing.T) {
 		Skills: map[string]fleet.Skill{},
 		Agents: []fleet.Agent{
 			{Name: "coder", Backend: "claude", Prompt: "Code."},
-			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review."},
+			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review.", AllowDispatch: true, Description: "Reviews PRs"},
 		},
 		Repos: []fleet.Repo{
 			{
@@ -483,9 +500,47 @@ func TestEngineDispatchEventUnboundTargetReturnsError(t *testing.T) {
 			"dispatch_depth": 1,
 		},
 	}
-	err := e.HandleEvent(context.Background(), ev)
-	if err == nil || !strings.Contains(err.Error(), "not bound") {
-		t.Errorf("expected 'not bound' error, got %v", err)
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if runner.callCount() != 1 {
+		t.Errorf("expected 1 run for unbound dispatched agent, got %d", runner.callCount())
+	}
+}
+
+func TestEngineDispatchEventDisabledRepoSkipsTarget(t *testing.T) {
+	t.Parallel()
+	runner := &stubRunner{}
+	cfg := &config.Config{
+		Daemon: config.DaemonConfig{
+			Processor: config.ProcessorConfig{
+				MaxConcurrentAgents: 4,
+				Dispatch:            config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300},
+			},
+			AIBackends: map[string]fleet.Backend{"claude": {Command: "claude"}},
+		},
+		Skills: map[string]fleet.Skill{},
+		Agents: []fleet.Agent{
+			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review.", AllowDispatch: true, Description: "Reviews PRs"},
+		},
+		Repos: []fleet.Repo{{Name: "owner/repo", Enabled: false}},
+	}
+	e := newEngineFromCfg(t, cfg, map[string]ai.Runner{"claude": runner}, nil)
+
+	ev := Event{
+		Repo: RepoRef{FullName: "owner/repo", Enabled: false},
+		Kind: "agent.dispatch",
+		Payload: map[string]any{
+			"target_agent":   "pr-reviewer",
+			"reason":         "review",
+			"dispatch_depth": 1,
+		},
+	}
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if runner.callCount() != 0 {
+		t.Errorf("expected disabled repo to skip dispatch, got %d runs", runner.callCount())
 	}
 }
 
@@ -704,7 +759,7 @@ func TestPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 	dedup := NewDispatchDedupStore(2)
 	agents := map[string]fleet.Agent{
 		"pr-reviewer": {Name: "pr-reviewer", AllowDispatch: true, CanDispatch: []string{"coder"}},
-		"coder":        {Name: "coder", AllowDispatch: true},
+		"coder":       {Name: "coder", AllowDispatch: true},
 	}
 	cfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 2}
 	q := &fakeQueue{}
@@ -843,7 +898,7 @@ func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 	dedup := NewDispatchDedupStore(ttlSeconds)
 	agents := map[string]fleet.Agent{
 		"pr-reviewer": {Name: "pr-reviewer", AllowDispatch: true, CanDispatch: []string{"coder"}},
-		"coder":        {Name: "coder", AllowDispatch: true},
+		"coder":       {Name: "coder", AllowDispatch: true},
 	}
 	cfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: ttlSeconds}
 	q := &fakeQueue{}

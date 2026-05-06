@@ -36,6 +36,7 @@ func TestLoadAllowMemoryFalseRoundTrips(t *testing.T) {
     backend: claude
     skills: [architect]
     prompt: "You review PRs."
+    description: "Reviews pull requests"
     allow_memory: false`)
 	path := writeConfig(t, yaml)
 	cfg, err := Load(path)
@@ -85,6 +86,7 @@ func TestLoadAllowMemoryTrueExplicitlyHonoured(t *testing.T) {
     backend: claude
     skills: [architect]
     prompt: "You review PRs."
+    description: "Reviews pull requests"
     allow_memory: true`)
 	path := writeConfig(t, yaml)
 	cfg, err := Load(path)

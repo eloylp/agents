@@ -43,12 +43,13 @@ func TestUpsertAndReadAgents(t *testing.T) {
 	// "pr-reviewer" must exist (with a description) before "coder" can list it
 	// in can_dispatch.
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name:        "pr-reviewer",
-		Backend:     "claude",
-		Prompt:      "review code",
-		Description: "A code review agent",
-		Skills:      []string{},
-		CanDispatch: []string{},
+		Name:          "pr-reviewer",
+		Backend:       "claude",
+		Prompt:        "review code",
+		Description:   "A code review agent",
+		AllowDispatch: true,
+		Skills:        []string{},
+		CanDispatch:   []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent pr-reviewer: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestUpsertAgentIsIdempotent(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 
-	a := fleet.Agent{Name: "coder", Backend: "claude", Prompt: "v1", Skills: []string{}, CanDispatch: []string{}}
+	a := fleet.Agent{Name: "coder", Backend: "claude", Prompt: "v1", Description: "coder agent", Skills: []string{}, CanDispatch: []string{}}
 	if err := store.UpsertAgent(db, a); err != nil {
 		t.Fatalf("first upsert: %v", err)
 	}
@@ -126,7 +127,7 @@ func TestDeleteAgent(t *testing.T) {
 	// Seed two agents so that deleting one still leaves the system valid.
 	for _, name := range []string{"coder", "reviewer"} {
 		if err := store.UpsertAgent(db, fleet.Agent{
-			Name: name, Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+			Name: name, Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 		}); err != nil {
 			t.Fatalf("UpsertAgent %s: %v", name, err)
 		}
@@ -288,7 +289,7 @@ func TestUpsertAndReadRepos(t *testing.T) {
 
 	// UpsertRepo requires the agents referenced by bindings to exist.
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+		Name: "coder", Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -337,7 +338,7 @@ func TestUpsertRepoReplacesBindings(t *testing.T) {
 	seedBackend(t, db, "claude")
 
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+		Name: "coder", Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -376,7 +377,7 @@ func TestDeleteRepo(t *testing.T) {
 	seedBackend(t, db, "claude")
 
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+		Name: "coder", Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -426,10 +427,11 @@ func TestReadSnapshot(t *testing.T) {
 
 	// Seed one agent and one repo.
 	a := fleet.Agent{
-		Name:    "coder",
-		Backend: "claude",
-		Skills:  []string{},
-		Prompt:  "You write code.",
+		Name:        "coder",
+		Backend:     "claude",
+		Skills:      []string{},
+		Prompt:      "You write code.",
+		Description: "coder agent",
 	}
 	if err := store.UpsertAgent(db, a); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
@@ -478,13 +480,13 @@ func TestUpsertAgentCrossRefErrors(t *testing.T) {
 		{
 			name:    "unknown backend",
 			setup:   func(t *testing.T, db *sql.DB) { t.Helper() }, // no backend seeded
-			agent:   fleet.Agent{Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}},
+			agent:   fleet.Agent{Name: "coder", Backend: "claude", Prompt: "p", Description: "coder agent", Skills: []string{}},
 			wantErr: "unknown backend",
 		},
 		{
 			name:    "unknown skill",
 			setup:   func(t *testing.T, db *sql.DB) { seedBackend(t, db, "claude") },
-			agent:   fleet.Agent{Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{"architect"}},
+			agent:   fleet.Agent{Name: "coder", Backend: "claude", Prompt: "p", Description: "coder agent", Skills: []string{"architect"}},
 			wantErr: "unknown skill",
 		},
 	}
@@ -539,10 +541,11 @@ func TestDeleteBackendRejectedWhenAgentReferences(t *testing.T) {
 	seedBackend(t, db, "claude")
 	seedBackend(t, db, "codex")
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name:    "coder",
-		Backend: "claude",
-		Prompt:  "p",
-		Skills:  []string{},
+		Name:        "coder",
+		Backend:     "claude",
+		Prompt:      "p",
+		Description: "coder agent",
+		Skills:      []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -573,10 +576,11 @@ func TestDeleteSkillRejectedWhenAgentReferences(t *testing.T) {
 	seedBackend(t, db, "claude")
 	seedSkill(t, db, "architect")
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name:    "coder",
-		Backend: "claude",
-		Prompt:  "p",
-		Skills:  []string{"architect"},
+		Name:        "coder",
+		Backend:     "claude",
+		Prompt:      "p",
+		Description: "coder agent",
+		Skills:      []string{"architect"},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -607,7 +611,7 @@ func TestDeleteAgentRejectedWhenBindingReferences(t *testing.T) {
 	seedBackend(t, db, "claude")
 	for _, name := range []string{"coder", "reviewer"} {
 		if err := store.UpsertAgent(db, fleet.Agent{
-			Name: name, Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+			Name: name, Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 		}); err != nil {
 			t.Fatalf("UpsertAgent %s: %v", name, err)
 		}
@@ -653,7 +657,7 @@ func TestDeleteAgentCascadeRemovesBindings(t *testing.T) {
 	seedBackend(t, db, "claude")
 	for _, name := range []string{"coder", "reviewer"} {
 		if err := store.UpsertAgent(db, fleet.Agent{
-			Name: name, Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+			Name: name, Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 		}); err != nil {
 			t.Fatalf("UpsertAgent %s: %v", name, err)
 		}
@@ -706,7 +710,7 @@ func TestDeleteAgentCascadeStillRejectsLastAgent(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+		Name: "coder", Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -727,13 +731,14 @@ func TestDeleteAgentCascadeStillRejectsWhenInCanDispatch(t *testing.T) {
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, fleet.Agent{
 		Name: "target", Backend: "claude", Prompt: "p", Description: "a dispatchable target",
-		Skills: []string{}, CanDispatch: []string{},
+		AllowDispatch: true, Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent target: %v", err)
 	}
 	if err := store.UpsertAgent(db, fleet.Agent{
 		Name: "dispatcher", Backend: "claude", Prompt: "p",
-		Skills: []string{}, CanDispatch: []string{"target"},
+		Description: "test agent",
+		Skills:      []string{}, CanDispatch: []string{"target"},
 	}); err != nil {
 		t.Fatalf("UpsertAgent dispatcher: %v", err)
 	}
@@ -754,12 +759,13 @@ func TestDeleteAgentRejectedWhenDispatchListReferences(t *testing.T) {
 
 	// Seed two agents: "dispatcher" can_dispatch to "target".
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name:        "target",
-		Backend:     "claude",
-		Prompt:      "p",
-		Description: "a dispatchable target",
-		Skills:      []string{},
-		CanDispatch: []string{},
+		Name:          "target",
+		Backend:       "claude",
+		Prompt:        "p",
+		Description:   "a dispatchable target",
+		AllowDispatch: true,
+		Skills:        []string{},
+		CanDispatch:   []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent target: %v", err)
 	}
@@ -767,6 +773,7 @@ func TestDeleteAgentRejectedWhenDispatchListReferences(t *testing.T) {
 		Name:        "dispatcher",
 		Backend:     "claude",
 		Prompt:      "p",
+		Description: "dispatches work",
 		Skills:      []string{},
 		CanDispatch: []string{"target"},
 	}); err != nil {
@@ -859,7 +866,7 @@ func TestUpsertRepoRejectedWithNoTrigger(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+		Name: "coder", Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -883,7 +890,7 @@ func TestUpsertRepoRejectedWithMixedTriggers(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+		Name: "coder", Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -911,7 +918,7 @@ func TestDeleteAgentRejectedAsLast(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+		Name: "coder", Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -972,7 +979,7 @@ func TestDeleteRepoAllowsLastEnabled(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+		Name: "coder", Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -1051,6 +1058,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 		Name:        "Coder",
 		Backend:     "Claude",
 		Prompt:      "p",
+		Description: "coder agent",
 		Skills:      []string{"Architect"},
 		CanDispatch: []string{},
 	}); err != nil {
@@ -1169,7 +1177,7 @@ func seedRepoWithAgent(t *testing.T, db *sql.DB) {
 	t.Helper()
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "coder", Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+		Name: "coder", Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent coder: %v", err)
 	}

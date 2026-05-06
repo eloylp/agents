@@ -362,15 +362,6 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		return nil
 	}
 
-	// agent.dispatch requires an enabled binding. agents.run (manual trigger)
-	// and autonomous (cron tick) skip the check, explicit operator intent or
-	// the cron's fire-time authority always runs.
-	if ev.Kind == "agent.dispatch" && !slices.ContainsFunc(repo.Use, func(b fleet.Binding) bool {
-		return b.Agent == targetName && b.IsEnabled()
-	}) {
-		return fmt.Errorf("dispatch: target agent %q is not bound to repo %q", targetName, ev.Repo.FullName)
-	}
-
 	agent, ok := cfg.AgentByName(targetName)
 	if !ok {
 		return fmt.Errorf("dispatch: target agent %q not found", targetName)
@@ -607,33 +598,29 @@ func (e *Engine) agentsForEvent(cfg *config.Config, ev Event) []fleet.Agent {
 	return matched
 }
 
-// BuildRoster constructs the roster of peer agents for the given repo and
-// agent name. The current agent is excluded. It is shared with the autonomous
-// scheduler to avoid duplicating the dedup+lookup logic.
+// BuildRoster constructs the dispatch target roster for the current agent.
+// Dispatch wiring is the authority: only agents in currentAgent.CanDispatch
+// that exist, opt in, and have a description are visible.
 func BuildRoster(cfg *config.Config, repoName, currentAgentName string) []ai.RosterEntry {
-	repo, ok := cfg.RepoByName(repoName)
+	if _, ok := cfg.RepoByName(repoName); !ok {
+		return nil
+	}
+	currentAgent, ok := cfg.AgentByName(currentAgentName)
 	if !ok {
 		return nil
 	}
-	seen := make(map[string]struct{})
+
 	var roster []ai.RosterEntry
-	for _, b := range repo.Use {
-		if !b.IsEnabled() || b.Agent == currentAgentName {
+	for _, targetName := range currentAgent.CanDispatch {
+		target, ok := cfg.AgentByName(targetName)
+		if !ok || !target.AllowDispatch || target.Description == "" {
 			continue
 		}
-		if _, dup := seen[b.Agent]; dup {
-			continue
-		}
-		agent, ok := cfg.AgentByName(b.Agent)
-		if !ok {
-			continue
-		}
-		seen[b.Agent] = struct{}{}
 		roster = append(roster, ai.RosterEntry{
-			Name:          agent.Name,
-			Description:   agent.Description,
-			Skills:        agent.Skills,
-			AllowDispatch: agent.AllowDispatch,
+			Name:          target.Name,
+			Description:   target.Description,
+			Skills:        target.Skills,
+			AllowDispatch: true,
 		})
 	}
 	return roster

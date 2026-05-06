@@ -48,8 +48,13 @@ func New(t *testing.T, cfg *config.Config) *daemon.Daemon {
 		cfg.Daemon.AIBackends = backends
 	}
 	if len(agents) == 0 {
-		agents = []fleet.Agent{{Name: "coder", Backend: pickAnyBackend(backends), Prompt: "code"}}
+		agents = []fleet.Agent{{Name: "coder", Backend: pickAnyBackend(backends), Prompt: "code", Description: "Writes code"}}
 		cfg.Agents = agents
+	}
+	for i := range agents {
+		if agents[i].Description == "" {
+			agents[i].Description = agents[i].Name + " agent"
+		}
 	}
 
 	if err := st.ImportAll(agents, cfg.Repos, cfg.Skills, backends, cfg.Guardrails, nil); err != nil {
@@ -89,9 +94,9 @@ func MinimalCfg(mutator func(*config.Config)) *config.Config {
 				EventQueueBuffer:    16,
 				MaxConcurrentAgents: 1,
 				Dispatch: config.DispatchConfig{
-					MaxDepth:            2,
-					MaxFanout:           2,
-					DedupWindowSeconds:  60,
+					MaxDepth:           2,
+					MaxFanout:          2,
+					DedupWindowSeconds: 60,
 				},
 			},
 			AIBackends: map[string]fleet.Backend{

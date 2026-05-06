@@ -38,7 +38,7 @@ The import/export config file is a fleet strategy document with four top-level d
 
 - `backends`, AI CLI/runtime definitions agents can use
 - `skills`, map of reusable guidance blocks, keyed by name (inline or file-based at import time; stored in SQLite)
-- `agents`, list of named capabilities (backend + skills + prompt, optional `allow_prs` / `allow_dispatch` / `allow_memory` / `can_dispatch` / `description`)
+- `agents`, list of named capabilities (backend + skills + prompt + description, optional `allow_prs` / `allow_dispatch` / `allow_memory` / `can_dispatch`)
 - `repos`, list of repos and their `use[]` bindings (which agents run, and with what triggers)
 
 An agent is a pure capability definition, it doesn't run until a repo binds it. A binding sets exactly one trigger: `labels: [...]`, `events: [...]`, or `cron: "..."`. The same agent can have multiple bindings on the same repo with different triggers.

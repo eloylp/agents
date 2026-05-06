@@ -132,8 +132,13 @@ function AgentForm({
         <BadgePicker options={skillNames} selected={form.skills} onChange={v => set('skills', v)} placeholder="Add skill…" />
       </div>
       <div>
-        <label style={labelStyle}>Description</label>
-        <input style={inputStyle} value={form.description} onChange={e => set('description', e.target.value)} placeholder="Short description" />
+        <label style={labelStyle}>Description *</label>
+        <input
+          style={inputStyle}
+          value={form.description}
+          onChange={e => set('description', e.target.value)}
+          placeholder="Used for identification and inter-agent routing context"
+        />
       </div>
       <div>
         <label style={labelStyle}>Prompt</label>
@@ -169,7 +174,7 @@ function AgentForm({
         </button>
         <button
           onClick={() => onSave(form)}
-          disabled={saving || !form.name.trim() || !form.backend.trim()}
+          disabled={saving || !form.name.trim() || !form.backend.trim() || !form.description.trim()}
           style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
           {saving ? 'Saving…' : 'Save'}

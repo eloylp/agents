@@ -108,7 +108,7 @@ func newSchedulerWithStatuses(t *testing.T, statuses []scheduler.AgentStatus) *s
 			Use: []fleet.Binding{{Agent: st.Name, Cron: "0 * * * *"}},
 		})
 		if !seenAgent[st.Name] {
-			agents = append(agents, fleet.Agent{Name: st.Name, Backend: "claude", Prompt: "p"})
+			agents = append(agents, fleet.Agent{Name: st.Name, Backend: "claude", Prompt: "p", Description: st.Name + " agent"})
 			seenAgent[st.Name] = true
 		}
 	}
@@ -173,7 +173,7 @@ func seedMemoryReader(t *testing.T, db *sql.DB, content map[string]string, mtime
 		agent = ai.NormalizeToken(agent)
 		repo = ai.NormalizeToken(repo)
 		if !seenAgent[agent] {
-			if err := store.UpsertAgent(db, fleet.Agent{Name: agent, Backend: "claude", Prompt: "p"}); err != nil {
+			if err := store.UpsertAgent(db, fleet.Agent{Name: agent, Backend: "claude", Prompt: "p", Description: agent + " agent"}); err != nil {
 				t.Fatalf("seed agent %s: %v", agent, err)
 			}
 			seenAgent[agent] = true
@@ -546,7 +546,7 @@ func TestHandleGraphEmptyWhenNoDispatches(t *testing.T) {
 func TestHandleGraphIncludesConfiguredAgentWithNoDispatches(t *testing.T) {
 	t.Parallel()
 	cfg := minimalCfg()
-	cfg.Agents = []fleet.Agent{{Name: "solo-agent", Backend: "claude", Prompt: "p"}}
+	cfg.Agents = []fleet.Agent{{Name: "solo-agent", Backend: "claude", Prompt: "p", Description: "solo agent"}}
 	fx := newFixture(t, cfg)
 	h := New(fx.events, fx.store, nil, nil, nil, zerolog.Nop())
 
@@ -576,9 +576,9 @@ func TestHandleGraphNodeStatusReflectsRuntimeState(t *testing.T) {
 	t.Parallel()
 	cfg := minimalCfg()
 	cfg.Agents = []fleet.Agent{
-		{Name: "runner", Backend: "claude", Prompt: "p"},
-		{Name: "idle-ok", Backend: "claude", Prompt: "p"},
-		{Name: "idle-err", Backend: "claude", Prompt: "p"},
+		{Name: "runner", Backend: "claude", Prompt: "p", Description: "runner agent"},
+		{Name: "idle-ok", Backend: "claude", Prompt: "p", Description: "idle ok agent"},
+		{Name: "idle-err", Backend: "claude", Prompt: "p", Description: "idle err agent"},
 	}
 	fx := newFixture(t, cfg)
 	// Mark "runner" as in-flight via the same hook the engine uses.

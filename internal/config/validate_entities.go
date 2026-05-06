@@ -15,7 +15,8 @@ import (
 //
 // Specifically it verifies:
 //   - every agent references a known backend and known skills
-//   - dispatch wiring (can_dispatch) references existing agents with descriptions
+//   - every agent has a description
+//   - dispatch wiring (can_dispatch) references existing dispatchable agents
 //   - every repo binding references a known agent
 func ValidateCrossRefs(agents []fleet.Agent, repos []fleet.Repo, skills map[string]fleet.Skill, backends map[string]fleet.Backend) error {
 	agentByName := make(map[string]fleet.Agent, len(agents))
@@ -36,6 +37,9 @@ func ValidateCrossRefs(agents []fleet.Agent, repos []fleet.Repo, skills map[stri
 				return fmt.Errorf("config: agent %q: unknown skill %q", a.Name, s)
 			}
 		}
+		if a.Description == "" {
+			return fmt.Errorf("config: agent %q: description is required (used for agent identification and inter-agent conversations)", a.Name)
+		}
 	}
 
 	// Validate can_dispatch wiring.
@@ -48,8 +52,8 @@ func ValidateCrossRefs(agents []fleet.Agent, repos []fleet.Repo, skills map[stri
 			if t == a.Name {
 				return fmt.Errorf("config: agent %q: can_dispatch must not include itself", a.Name)
 			}
-			if target.Description == "" {
-				return fmt.Errorf("config: agent %q is in a can_dispatch list but has no description (description is required for dispatch targets)", t)
+			if !target.AllowDispatch {
+				return fmt.Errorf("config: agent %q: can_dispatch target %q has allow_dispatch disabled", a.Name, t)
 			}
 		}
 	}
@@ -128,6 +132,9 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 		}
 		if a.Prompt == "" {
 			return fmt.Errorf("config: agent %q: prompt is empty", a.Name)
+		}
+		if a.Description == "" {
+			return fmt.Errorf("config: agent %q: description is required (used for agent identification and inter-agent conversations)", a.Name)
 		}
 	}
 	if err := validateDispatchWiring(agents); err != nil {

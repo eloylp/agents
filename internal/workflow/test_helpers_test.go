@@ -40,6 +40,11 @@ func seedStoreFromCfg(t *testing.T, cfg *config.Config) *store.Store {
 	}
 	st := store.New(db)
 	t.Cleanup(func() { st.Close() })
+	for i := range cfg.Agents {
+		if cfg.Agents[i].Description == "" {
+			cfg.Agents[i].Description = cfg.Agents[i].Name + " agent"
+		}
+	}
 	if err := st.ImportAll(cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, cfg.Guardrails, nil); err != nil {
 		t.Fatalf("seed: %v", err)
 	}

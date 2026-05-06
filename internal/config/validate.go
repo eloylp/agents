@@ -189,15 +189,17 @@ func (c *Config) validateAgents() error {
 		if a.Prompt == "" {
 			return fmt.Errorf("config: agent %q: prompt is empty", a.Name)
 		}
+		if a.Description == "" {
+			return fmt.Errorf("config: agent %q: description is required (used for agent identification and inter-agent conversations)", a.Name)
+		}
 	}
 	// Validate can_dispatch references after all agents are seen.
 	return validateDispatchWiring(c.Agents)
 }
 
 // validateDispatchWiring checks cross-agent dispatch references:
-//   - can_dispatch entries must reference real agents
+//   - can_dispatch entries must reference real dispatchable agents
 //   - can_dispatch must not include the agent itself
-//   - agents referenced in any can_dispatch list must have a description
 func validateDispatchWiring(agents []fleet.Agent) error {
 	agentByName := make(map[string]fleet.Agent, len(agents))
 	for _, a := range agents {
@@ -212,8 +214,8 @@ func validateDispatchWiring(agents []fleet.Agent) error {
 			if t == a.Name {
 				return fmt.Errorf("config: agent %q: can_dispatch must not include itself", a.Name)
 			}
-			if target.Description == "" {
-				return fmt.Errorf("config: agent %q is in a can_dispatch list but has no description (description is required for dispatch targets)", t)
+			if !target.AllowDispatch {
+				return fmt.Errorf("config: agent %q: can_dispatch target %q has allow_dispatch disabled", a.Name, t)
 			}
 		}
 	}

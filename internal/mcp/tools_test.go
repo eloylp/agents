@@ -38,7 +38,7 @@ func fixtureConfig() *config.Config {
 			"security": {Prompt: "audit inputs"},
 		},
 		Agents: []fleet.Agent{
-			{Name: "coder", Backend: "claude", Skills: []string{"testing"}, Description: "writes code"},
+			{Name: "coder", Backend: "claude", Skills: []string{"testing"}, Description: "writes code", AllowDispatch: true},
 			{Name: "reviewer", Backend: "claude", AllowDispatch: true, Description: "reviews code"},
 		},
 		Repos: []fleet.Repo{
@@ -63,7 +63,7 @@ func testDB(t *testing.T) *sql.DB {
 	if err := store.ImportAll(
 		db,
 		[]fleet.Agent{
-			{Name: "coder", Backend: "claude", Skills: []string{"testing"}, Prompt: "code", Description: "writes code", CanDispatch: []string{}},
+			{Name: "coder", Backend: "claude", Skills: []string{"testing"}, Prompt: "code", Description: "writes code", AllowDispatch: true, CanDispatch: []string{}},
 			{Name: "reviewer", Backend: "claude", Prompt: "review", AllowDispatch: true, Description: "reviews code", Skills: []string{}, CanDispatch: []string{}},
 		},
 		[]fleet.Repo{
@@ -1241,7 +1241,7 @@ func TestToolDeleteAgentNormalizesAndForwardsCascade(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
 	// Seed an extra agent that has no bindings, we can delete it without cascade.
-	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{Name: "linter", Backend: "claude", Prompt: "x"}); err != nil {
+	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{Name: "linter", Backend: "claude", Prompt: "x", Description: "lints code"}); err != nil {
 		t.Fatalf("seed linter: %v", err)
 	}
 

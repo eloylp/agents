@@ -506,10 +506,12 @@ func (d *Dispatcher) ProcessDispatches(
 			continue
 		}
 
-		// Opt-in check: target must have allow_dispatch: true.
+		// Opt-in check: target must be visible in the originator's roster.
+		// Config validation requires descriptions for all agents; keep the
+		// runtime gate in sync for live DB changes and belt-and-braces protection.
 		target, ok := d.lookupAgent(req.Agent)
-		if !ok || !target.AllowDispatch {
-			logBase.Warn().Msg("dispatch dropped: target has allow_dispatch: false")
+		if !ok || !target.AllowDispatch || target.Description == "" {
+			logBase.Warn().Msg("dispatch dropped: target is not dispatchable")
 			d.counters.droppedNoOptin.Add(1)
 			continue
 		}

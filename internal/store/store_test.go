@@ -620,7 +620,7 @@ func seedAgent(t *testing.T, db *sql.DB, name string) {
 		t.Fatalf("seedAgent backend: %v", err)
 	}
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: name, Backend: "claude", Prompt: "p", Skills: []string{}, CanDispatch: []string{},
+		Name: name, Backend: "claude", Prompt: "p", Description: name + " agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("seedAgent %s: %v", name, err)
 	}

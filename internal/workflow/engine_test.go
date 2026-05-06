@@ -337,13 +337,54 @@ func TestEngineDispatchEventPayloadPropagatedToPrompt(t *testing.T) {
 	}
 }
 
+func TestBuildRosterUsesDispatchWiring(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Agents: []fleet.Agent{
+			{Name: "coder", CanDispatch: []string{"sec-reviewer", "arch-reviewer", "missing-reviewer", "docs-reviewer"}},
+			{Name: "sec-reviewer", Description: "Reviews security", Skills: []string{"security"}, AllowDispatch: true},
+			{Name: "arch-reviewer", Description: "Reviews architecture", Skills: []string{"architect"}, AllowDispatch: false},
+			{Name: "docs-reviewer", AllowDispatch: true},
+			{Name: "repo-peer", Description: "Bound peer only", AllowDispatch: true},
+		},
+		Repos: []fleet.Repo{
+			{
+				Name:    "owner/repo",
+				Enabled: true,
+				Use: []fleet.Binding{
+					{Agent: "coder", Labels: []string{"ai:code"}},
+					{Agent: "repo-peer", Labels: []string{"ai:review"}},
+				},
+			},
+		},
+	}
+
+	roster := BuildRoster(cfg, "owner/repo", "coder")
+	if len(roster) != 1 {
+		t.Fatalf("len(roster) = %d, want 1: %+v", len(roster), roster)
+	}
+	got := roster[0]
+	if got.Name != "sec-reviewer" {
+		t.Errorf("roster[0].Name = %q, want sec-reviewer", got.Name)
+	}
+	if !got.AllowDispatch {
+		t.Errorf("roster[0].AllowDispatch = false, want true")
+	}
+	if got.Description != "Reviews security" {
+		t.Errorf("roster[0].Description = %q, want Reviews security", got.Description)
+	}
+	if !slices.Equal(got.Skills, []string{"security"}) {
+		t.Errorf("roster[0].Skills = %v, want [security]", got.Skills)
+	}
+}
+
 func TestEngineAllowPRsFalseInjectsNoPRGuard(t *testing.T) {
 	t.Parallel()
 	const noPRGuard = "Do not open or create pull requests under any circumstances."
 	tests := []struct {
-		name        string
-		allowPRs    bool
-		wantGuard   bool
+		name      string
+		allowPRs  bool
+		wantGuard bool
 	}{
 		{
 			name:      "guard prepended when allow_prs=false",
@@ -604,10 +645,10 @@ func TestDispatchEventRunsAfterEnqueue(t *testing.T) {
 		CanDispatch: []string{"pr-reviewer"},
 	}
 	triggerEv := Event{
-		ID:     "root-1",
-		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
-		Kind:   "issues.labeled",
-		Number: 7,
+		ID:      "root-1",
+		Repo:    RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:    "issues.labeled",
+		Number:  7,
 		Payload: map[string]any{"label": "ai:code"},
 	}
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 7, Reason: "ready"}}
@@ -652,10 +693,10 @@ func TestDispatchDedupPreventsDoubleEnqueue(t *testing.T) {
 		CanDispatch: []string{"pr-reviewer"},
 	}
 	triggerEv := Event{
-		ID:     "root-2",
-		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
-		Kind:   "issues.labeled",
-		Number: 9,
+		ID:      "root-2",
+		Repo:    RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:    "issues.labeled",
+		Number:  9,
 		Payload: map[string]any{"label": "ai:code"},
 	}
 	reqs := []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 9, Reason: "first"}}
