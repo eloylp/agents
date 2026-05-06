@@ -873,8 +873,8 @@ func TestHandleTraceStreamReplaysHistoryAndEndsCleanly(t *testing.T) {
 		SpanID: "sp-stream", EventID: "ev-1", Agent: "coder", Backend: "claude",
 		Repo: "owner/r", EventKind: "issues.labeled", StartedAt: time.Now(),
 	})
-	obs.Runs.PublishLine("sp-stream", []byte(`{"type":"start"}`))
-	obs.Runs.PublishLine("sp-stream", []byte(`{"type":"assistant"}`))
+	obs.RecordStep("sp-stream", workflow.TraceStep{Kind: workflow.StepKindThinking, InputSummary: "start"})
+	obs.RecordStep("sp-stream", workflow.TraceStep{Kind: workflow.StepKindTool, ToolName: "Read", InputSummary: "/x", OutputSummary: "ok"})
 
 	server := httptest.NewServer(newRouter(h))
 	defer server.Close()
@@ -911,15 +911,13 @@ func TestHandleTraceStreamReplaysHistoryAndEndsCleanly(t *testing.T) {
 		}
 	}()
 
-	// Publish one more line live, then end.
-	time.Sleep(50 * time.Millisecond)
-	obs.Runs.PublishLine("sp-stream", []byte(`{"type":"result"}`))
-	time.Sleep(50 * time.Millisecond)
+	// Publish one more step live, then end.
+	obs.RecordStep("sp-stream", workflow.TraceStep{Kind: workflow.StepKindThinking, InputSummary: "result"})
 	obs.Runs.EndRun("sp-stream")
 
 	body := <-bodyDone
 	got := string(body)
-	for _, want := range []string{`{"type":"start"}`, `{"type":"assistant"}`, `{"type":"result"}`, "event: end"} {
+	for _, want := range []string{`"input_summary":"start"`, `"tool_name":"Read"`, `"input_summary":"result"`, "event: end"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("body missing %q\nfull body:\n%s", want, got)
 		}

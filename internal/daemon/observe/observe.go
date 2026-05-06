@@ -210,24 +210,23 @@ func (h *Handler) HandleTraceSteps(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(steps)
 }
 
-// HandleTraceStream serves GET /traces/{span_id}/stream as Server-Sent
-// Events streaming the AI CLI's stdout JSONL line-by-line for one
-// in-flight (or recently-finished) span. Replays the per-span ring
-// buffer first, then live-tails until the run ends or the client
-// disconnects. Returns 404 when no stream exists for the span, either
-// the span never started, was never registered, or its grace window
-// has elapsed.
+// HandleTraceStream serves GET /traces/{span_id}/stream as Server-Sent Events
+// streaming persisted TraceStep rows for one span. It replays rows already in
+// trace_steps, then live-tails committed rows until the run ends or the client
+// disconnects. Completed spans with persisted steps remain streamable.
 func (h *Handler) HandleTraceStream(w http.ResponseWriter, r *http.Request) {
 	spanID := mux.Vars(r)["span_id"]
-	hist, ch, ok := h.events.Runs.SubscribeStream(spanID)
-	if !ok {
+	steps, ch, active := h.events.SubscribeSteps(spanID)
+	if !active && len(steps) == 0 {
 		http.NotFound(w, r)
 		return
 	}
-	defer h.events.Runs.UnsubscribeStream(spanID, ch)
+	if active {
+		defer h.events.Runs.UnsubscribeStream(spanID, ch)
+	}
 
-	// SSE headers + flush controller. Mirrors serveSSE plumbing, kept
-	// inline because the data source is a per-span channel + history,
+	// SSE headers + flush controller. Mirrors serveSSE plumbing, kept inline
+	// because the data source is a persisted replay plus a per-span channel,
 	// not a global hub.
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -242,23 +241,31 @@ func (h *Handler) HandleTraceStream(w http.ResponseWriter, r *http.Request) {
 		_ = rc.SetWriteDeadline(time.Time{})
 	}
 
-	send := func(line []byte) bool {
-		// SSE multi-line bodies must prefix every line with "data: ";
-		// our payloads are single JSON lines so one prefix is enough.
-		if _, err := fmt.Fprintf(w, "data: %s\n\n", line); err != nil {
+	send := func(step workflow.TraceStep) bool {
+		payload, err := json.Marshal(step)
+		if err != nil {
+			h.logger.Debug().Err(err).Str("span_id", spanID).Msg("trace stream: marshal step failed")
+			return true
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
+			h.logger.Debug().Err(err).Str("span_id", spanID).Msg("trace stream: write step failed")
 			return false
 		}
 		flusher.Flush()
 		return true
 	}
 
-	// Replay history first so a late-joining client sees what the run
-	// did before they connected. After history, range the live channel
-	// until close (run ended) or context cancel.
-	for _, line := range hist {
-		if !send(line) {
+	// Replay persisted steps first so a late-joining client sees what the run
+	// did before they connected. After replay, tail committed rows until close.
+	for _, step := range steps {
+		if !send(step) {
 			return
 		}
+	}
+	if !active {
+		_, _ = fmt.Fprint(w, "event: end\ndata: {}\n\n")
+		flusher.Flush()
+		return
 	}
 	heartbeat := time.NewTicker(defaultSSEHeartbeatInterval)
 	defer heartbeat.Stop()
@@ -269,10 +276,11 @@ func (h *Handler) HandleTraceStream(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-heartbeat.C:
 			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
+				h.logger.Debug().Err(err).Str("span_id", spanID).Msg("trace stream: write heartbeat failed")
 				return
 			}
 			flusher.Flush()
-		case line, ok := <-ch:
+		case step, ok := <-ch:
 			if !ok {
 				// Run ended and the hub closed the channel, emit a
 				// terminal SSE event so the UI can mark the modal as
@@ -282,7 +290,7 @@ func (h *Handler) HandleTraceStream(w http.ResponseWriter, r *http.Request) {
 				flusher.Flush()
 				return
 			}
-			if !send(line) {
+			if !send(step) {
 				return
 			}
 		}

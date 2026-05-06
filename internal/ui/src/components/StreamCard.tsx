@@ -2,9 +2,8 @@
 
 import { useMemo, useState } from 'react'
 
-// StreamCardEntry is the visual shape every transcript surface (live tail
-// or persisted replay) maps onto. parseStreamLine builds entries from raw
-// stdout JSONL; stepToCardEntries builds them from a persisted TraceStep.
+// StreamCardEntry is the visual shape every transcript surface maps onto.
+// stepToCardEntries builds entries from persisted TraceStep rows.
 export type StreamCardEntry = {
   at: number
   kind: StreamCardKind
@@ -13,7 +12,7 @@ export type StreamCardEntry = {
   raw?: string
 }
 
-export type StreamCardKind = 'thinking' | 'tool_use' | 'tool_result' | 'usage' | 'end' | 'raw'
+export type StreamCardKind = 'thinking' | 'tool_use' | 'tool_result' | 'end'
 
 // kindMeta is the visual + label config for each card kind. Used by
 // StreamCard for the accent colour and TranscriptFilter for the chip labels.
@@ -21,9 +20,7 @@ const kindMeta: Record<StreamCardKind, { label: string; emoji: string; accent: s
   tool_use:    { label: 'Tool calls',   emoji: '🔧', accent: '#fcd34d' },
   tool_result: { label: 'Tool results', emoji: '📤', accent: '#5eead4' },
   thinking:    { label: 'Thinking',     emoji: '💬', accent: '#60a5fa' },
-  usage:       { label: 'Usage',        emoji: '📊', accent: '#a5b4fc' },
-  end:         { label: 'End',          emoji: '✓',  accent: 'var(--success)' },
-  raw:         { label: 'Other',        emoji: '·',  accent: 'var(--text-faint)' },
+ end:         { label: 'End',          emoji: '✓',  accent: 'var(--success)' },
 }
 
 // TranscriptFilter renders a row of toggle pills, one per card kind that
@@ -129,68 +126,6 @@ export type PersistedStep = {
   input_summary?: string
   output_summary?: string
   duration_ms?: number
-}
-
-// StreamEvent mirrors ai.StreamEvent on the Go side. The daemon parses the
-// AI CLI's raw stdout into this canonical shape before publishing to the
-// per-span SSE feed, so the frontend no longer carries format-specific
-// (claude / codex / openai) parsers. Lifecycle for a tool call is two
-// events: tool_use on start, tool_result on completion. Anything the
-// daemon could not classify arrives as kind: 'raw'.
-type StreamEvent = {
-  kind: 'tool_use' | 'tool_result' | 'thinking' | 'usage' | 'raw'
-  tool?: string
-  server?: string
-  input?: string
-  output?: string
-  text?: string
-  error?: string
-  duration_ms?: number
-  usage?: {
-    input_tokens?: number
-    output_tokens?: number
-    cache_read_tokens?: number
-    cache_write_tokens?: number
-  }
-  raw?: string
-}
-
-// parseStreamLine turns one normalized SSE payload into a StreamCardEntry.
-// Lines that cannot be parsed as JSON, or whose `kind` is unknown, render
-// as 'raw' so nothing is silently dropped.
-export function parseStreamLine(line: string): StreamCardEntry {
-  const at = Date.now()
-  let ev: StreamEvent
-  try {
-    ev = JSON.parse(line) as StreamEvent
-  } catch {
-    return { at, kind: 'raw', title: 'raw output', raw: line }
-  }
-  switch (ev.kind) {
-    case 'tool_use': {
-      const name = ev.server ? `${ev.server}.${ev.tool || 'tool'}` : (ev.tool || 'tool_use')
-      return { at, kind: 'tool_use', title: `🔧 ${name}`, detail: ev.input || '', raw: line }
-    }
-    case 'tool_result': {
-      const name = ev.server ? `${ev.server}.${ev.tool || 'tool'}` : (ev.tool || 'tool')
-      const detail = ev.error ? `error: ${ev.error}` : (ev.output || '')
-      return { at, kind: 'tool_result', title: `📤 ${name}`, detail, raw: line }
-    }
-    case 'thinking':
-      return { at, kind: 'thinking', title: '💬 thinking', detail: ev.text || '', raw: line }
-    case 'usage': {
-      const u = ev.usage
-      const detail = u
-        ? `in ${u.input_tokens ?? 0} · out ${u.output_tokens ?? 0}` +
-          (u.cache_read_tokens ? ` · cache ${u.cache_read_tokens}` : '')
-        : ''
-      return { at, kind: 'usage', title: '📊 usage', detail, raw: line }
-    }
-    case 'raw':
-      return { at, kind: 'raw', title: 'raw output', raw: ev.raw || line }
-    default:
-      return { at, kind: 'raw', title: ev.kind ? `· ${ev.kind}` : 'raw output', raw: line }
-  }
 }
 
 // stepToCardEntries maps a persisted TraceStep (one row from /steps) to one

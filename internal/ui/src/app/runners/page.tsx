@@ -5,7 +5,7 @@ import Link from 'next/link'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import RepoFilter from '@/components/RepoFilter'
-import { StreamCard, TranscriptFilter, allStreamCardKinds, parseStreamLine, type StreamCardEntry, type StreamCardKind } from '@/components/StreamCard'
+import { StreamCard, TranscriptFilter, allStreamCardKinds, stepToCardEntries, type PersistedStep, type StreamCardEntry, type StreamCardKind } from '@/components/StreamCard'
 import { fmtDuration } from '@/lib/format'
 import { openAuthenticatedSSE } from '@/lib/sse'
 
@@ -77,10 +77,6 @@ export default function RunnersPage() {
   )
 }
 
-// LiveStreamEntry is one parsed event from the stream, either a known
-// shape (claude/codex) or a raw fallback. The UI renders each entry as
-// a card; unknown shapes still show as collapsible JSON so nothing is
-// lost.
 function LiveStreamModal({ span, onClose }: { span: { id: string; agent: string; repo: string; kind: string }; onClose: () => void }) {
   const [entries, setEntries] = useState<StreamCardEntry[]>([])
   const [status, setStatus] = useState<'connecting' | 'live' | 'ended' | 'error'>('connecting')
@@ -93,7 +89,15 @@ function LiveStreamModal({ span, onClose }: { span: { id: string; agent: string;
   useEffect(() => {
     const stream = openAuthenticatedSSE(`/traces/${encodeURIComponent(span.id)}/stream`, {
       onOpen: () => setStatus('live'),
-      onMessage: data => setEntries(prev => [...prev, parseStreamLine(data)]),
+      onMessage: data => {
+        try {
+          const step = JSON.parse(data) as PersistedStep
+          setEntries(prev => [...prev, ...stepToCardEntries(step, prev.length)])
+        } catch {
+          // Malformed stream rows are ignored; the durable /steps endpoint is
+          // still the source of truth for transcript recovery.
+        }
+      },
       onEvent: event => {
         if (event === 'end') setStatus('ended')
       },

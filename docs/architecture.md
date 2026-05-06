@@ -267,7 +267,7 @@ A single `*observe.Store` records everything; no buffering layer between the eng
 
 - `RecordEvent`, events table (async insert) → `/events` + `/events/stream` SSE
 - `RecordSpan`, traces table (async insert) → `/traces` + `/traces/{root_event_id}` + SSE
-- `RecordSteps`, trace_steps table (**sync** insert; UI accordion needs to read freshly committed rows) → `/traces/{span_id}/steps`
+- `RecordStep` / `RecordSteps`, trace_steps table (**sync** insert; live replay and UI accordions need freshly committed rows) → `/traces/{span_id}/stream` + `/traces/{span_id}/steps`
 - `RecordDispatch`, dispatch_history table (async insert) → `/graph`
 - `ActiveRuns`, in-memory tracker, `IsRunning(agent)` → `/agents.current_status`
 - Memory: writes go through `Engine.memory.WriteMemory` (production: `*store.MemoryBackend`); change notifications fan out via the observe store's pub-sub → `/memory/stream`

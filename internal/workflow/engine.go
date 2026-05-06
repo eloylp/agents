@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -58,14 +57,12 @@ type RunTracker interface {
 	FinishRun(agentName string)
 }
 
-// RunStreamPublisher is an optional collaborator the Engine notifies as a
-// run's stdout streams in. Implementations register the active span on
-// BeginRun (so the runners view can render an in-flight row with span_id
-// and the UI can subscribe), receive each stdout line via PublishLine,
-// and clean up via EndRun. Must be safe for concurrent use.
+// RunStreamPublisher is an optional collaborator the Engine notifies when a
+// run starts and ends. Implementations register the active span on BeginRun
+// so the runners view can render an in-flight row with span_id and the UI can
+// subscribe to the DB-backed transcript stream. Must be safe for concurrent use.
 type RunStreamPublisher interface {
 	BeginRun(in BeginRunInput)
-	PublishLine(spanID string, line []byte)
 	EndRun(spanID string)
 }
 
@@ -81,10 +78,11 @@ type GraphRecorder interface {
 	RecordDispatch(from, to, repo string, number int, reason string)
 }
 
-// StepRecorder is an optional observer that the Engine calls when an agent run
-// produces a tool-loop transcript. Implementations must be safe for concurrent
-// use.
+// StepRecorder is an optional observer that the Engine calls as an agent run
+// produces tool-loop transcript steps. Implementations must be safe for
+// concurrent use.
 type StepRecorder interface {
+	RecordStep(spanID string, step TraceStep)
 	RecordSteps(spanID string, steps []TraceStep)
 }
 
@@ -815,9 +813,9 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	runner := e.runnerBuilder(backend, backendCfg)
 
 	// Live-stream registration: announce the run to the publisher so the
-	// runners view can show an in-flight row with this span_id and the
-	// SSE hub is ready before stdout starts arriving. Always pair with
-	// EndRun so the active entry is cleared.
+	// runners view can show an in-flight row with this span_id. The stream
+	// body itself is backed by persisted trace_steps rows; RecordStep fans
+	// each row out after it commits.
 	var onLine func([]byte)
 	if e.streamPub != nil {
 		e.streamPub.BeginRun(BeginRunInput{
@@ -830,14 +828,15 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 			StartedAt: spanStart,
 		})
 		defer e.streamPub.EndRun(spanID)
-		parser := ai.NewStreamLineParser(backend)
+	}
+	if e.stepRec != nil {
+		parser := ai.NewTraceStepParser(backend)
 		onLine = func(line []byte) {
-			for _, sev := range parser(line) {
-				payload, err := json.Marshal(sev)
-				if err != nil {
-					continue
-				}
-				e.streamPub.PublishLine(spanID, payload)
+			if parser == nil {
+				return
+			}
+			for _, step := range parser(line) {
+				e.stepRec.RecordStep(spanID, step)
 			}
 		}
 	}
@@ -897,8 +896,10 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		})
 	}
 
-	// Record transcript steps when available.
-	if e.stepRec != nil && len(resp.Steps) > 0 {
+	// Record transcript steps when available and the run was not already
+	// parsed incrementally from stdout. The incremental path is used for
+	// known streaming backends so live streams can replay and tail DB rows.
+	if e.stepRec != nil && onLine == nil && len(resp.Steps) > 0 {
 		e.stepRec.RecordSteps(spanID, resp.Steps)
 	}
 
