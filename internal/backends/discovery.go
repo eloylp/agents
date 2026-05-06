@@ -561,7 +561,7 @@ func resolveCommand(defaultName, preferred string) (string, bool) {
 
 func firstNonEmptyLine(values ...string) string {
 	for _, v := range values {
-		for _, line := range strings.Split(strings.TrimSpace(v), "\n") {
+		for line := range strings.SplitSeq(strings.TrimSpace(v), "\n") {
 			line = strings.TrimSpace(line)
 			if line != "" {
 				return line
