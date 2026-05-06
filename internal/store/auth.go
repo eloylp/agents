@@ -265,15 +265,11 @@ func hashPassword(password string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	key, err := pbkdf2SHA256(password, salt)
+	key, err := pbkdf2SHA256WithIter(password, salt, passwordHashIterations, passwordHashBytes)
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("pbkdf2-sha256$%d$%s$%s", passwordHashIterations, base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(key)), nil
-}
-
-func pbkdf2SHA256(password string, salt []byte) ([]byte, error) {
-	return pbkdf2SHA256WithIter(password, salt, passwordHashIterations, passwordHashBytes)
 }
 
 func pbkdf2SHA256WithIter(password string, salt []byte, iter, keyLen int) ([]byte, error) {
