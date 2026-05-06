@@ -88,6 +88,7 @@ func TestUpsertAgentRoundTripsAllowMemoryFalse(t *testing.T) {
 		Name:        "coder",
 		Backend:     "claude",
 		Prompt:      "You write code.",
+		Description: "Writes code",
 		Skills:      []string{"architect"},
 		AllowMemory: &ff,
 	}); err != nil {

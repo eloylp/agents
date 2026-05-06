@@ -74,7 +74,8 @@ skills:
 #   before the agent's prompt. Set to true only for agents explicitly
 #   designed to open pull requests (coders, refactorers).
 # description: short human-readable summary of the agent's role.
-#   Required when the agent appears in any other agent's can_dispatch list.
+#   Required for every agent. Used for UI identification and, when the agent
+#   is dispatchable, inter-agent routing context in originators' rosters.
 # allow_dispatch: false (default) | true
 #   Opt-in gate: only agents with allow_dispatch: true can be dispatched.
 # allow_memory: true (default) | false
@@ -87,14 +88,15 @@ skills:
 #   on the agent's prompt cooperating.
 # can_dispatch: [agent-name, ...]
 #   Whitelist of agents this agent is allowed to dispatch. Entries must
-#   reference real agents in this config; self-reference is rejected.
+#   reference real agents in this config with allow_dispatch: true;
+#   self-reference is rejected.
 #
 # Runtime "Available experts" roster
 # ──────────────────────────────────
 # At render time the daemon injects an "## Available experts" section
 # into every agent's prompt, listing valid targets from that agent's own
 # `can_dispatch` list. A target appears only when it exists, has
-# `allow_dispatch: true`, and has a non-empty description. Each entry shows
+# `allow_dispatch: true`. Each entry shows
 # the target's name, description, skills, and a [dispatchable] marker.
 #
 # For example, the `pr-reviewer` agent below has `can_dispatch: [coder,

@@ -40,6 +40,7 @@ agents:
     backend: claude
     skills: [architect]
     prompt: "You review PRs."
+    description: "Reviews pull requests"
 ` + repoBlock
 }
 
@@ -238,10 +239,12 @@ func TestLoadRejectsInvalidAgentConfig(t *testing.T) {
     backend: claude
     skills: [architect]
     prompt: "A"
+    description: "First reviewer"
   - name: reviewer
     backend: claude
     skills: [architect]
-    prompt: "B"`,
+    prompt: "B"
+    description: "Second reviewer"`,
 			wantErrMsg: "duplicate agent",
 		},
 	}
@@ -624,6 +627,7 @@ func TestDispatchWiringValidationErrors(t *testing.T) {
     backend: claude
     skills: [architect]
     prompt: "Write code."
+    description: "Writes code"
     can_dispatch: [nonexistent-agent]
 `,
 			errMsg: "unknown agent",
@@ -635,6 +639,7 @@ func TestDispatchWiringValidationErrors(t *testing.T) {
     backend: claude
     skills: [architect]
     prompt: "Write code."
+    description: "Writes code"
     can_dispatch: [coder]
 `,
 			errMsg: "itself",
@@ -646,6 +651,7 @@ func TestDispatchWiringValidationErrors(t *testing.T) {
     backend: claude
     skills: [architect]
     prompt: "Write code."
+    description: "Writes code"
     can_dispatch: [pr-reviewer]
   - name: pr-reviewer
     backend: claude
@@ -653,7 +659,34 @@ func TestDispatchWiringValidationErrors(t *testing.T) {
     prompt: "Review PRs."
     allow_dispatch: true
 `,
-			errMsg: `agent "pr-reviewer" is in a can_dispatch list but has no description`,
+			errMsg: `agent "pr-reviewer": description is required`,
+		},
+		{
+			name: "can_dispatch target must allow dispatch",
+			agents: `
+  - name: coder
+    backend: claude
+    skills: [architect]
+    prompt: "Write code."
+    description: "Writes code"
+    can_dispatch: [pr-reviewer]
+  - name: pr-reviewer
+    backend: claude
+    skills: [architect]
+    prompt: "Review PRs."
+    description: "Reviews pull requests"
+`,
+			errMsg: `agent "coder": can_dispatch target "pr-reviewer" has allow_dispatch disabled`,
+		},
+		{
+			name: "description is always required",
+			agents: `
+  - name: coder
+    backend: claude
+    skills: [architect]
+    prompt: "Write code."
+`,
+			errMsg: `agent "coder": description is required`,
 		},
 	}
 	for _, tc := range cases {
@@ -678,6 +711,7 @@ func TestDispatchValidConfigAccepted(t *testing.T) {
     backend: claude
     skills: [architect]
     prompt: "Write code."
+    description: "Writes code"
     can_dispatch: [pr-reviewer]
   - name: pr-reviewer
     backend: claude

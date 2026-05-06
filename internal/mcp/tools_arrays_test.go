@@ -225,6 +225,7 @@ func TestToolCreateAgentAcceptsJSONStringSlices(t *testing.T) {
 		"name":         "linter",
 		"backend":      "claude",
 		"prompt":       "audit",
+		"description":  "Audits code",
 		"skills":       `["security","testing"]`,
 		"can_dispatch": `["coder"]`,
 	}

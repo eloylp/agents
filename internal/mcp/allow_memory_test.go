@@ -22,6 +22,7 @@ func TestToolCreateAgentForwardsAllowMemoryFalse(t *testing.T) {
 		"name":         "linter",
 		"backend":      "claude",
 		"prompt":       "audit",
+		"description":  "Audits code",
 		"allow_memory": false,
 	}
 
@@ -50,9 +51,10 @@ func TestToolCreateAgentLeavesAllowMemoryNilWhenAbsent(t *testing.T) {
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
-		"name":    "linter",
-		"backend": "claude",
-		"prompt":  "audit",
+		"name":        "linter",
+		"backend":     "claude",
+		"prompt":      "audit",
+		"description": "Audits code",
 	}
 
 	res, err := toolCreateAgent(deps)(context.Background(), req)
@@ -129,7 +131,7 @@ func TestToolGetAgentSurfacesAllowMemory(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
 	ff := false
-	if err := deps.Store.UpsertAgent(fleet.Agent{Name: "stateless", Backend: "claude", Prompt: "p", AllowMemory: &ff}); err != nil {
+	if err := deps.Store.UpsertAgent(fleet.Agent{Name: "stateless", Backend: "claude", Prompt: "p", Description: "stateless agent", AllowMemory: &ff}); err != nil {
 		t.Fatalf("seed stateless: %v", err)
 	}
 

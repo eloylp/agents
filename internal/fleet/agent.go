@@ -15,7 +15,8 @@ type Agent struct {
 	AllowPRs bool `yaml:"allow_prs"`
 
 	// Description is a short human-readable summary of what this agent does.
-	// Required when the agent appears in any other agent's can_dispatch list.
+	// Required for every agent. Used for UI identification and, when the agent
+	// is dispatchable, for originators' dispatch rosters.
 	Description string `yaml:"description"`
 
 	// AllowDispatch opts this agent in as a dispatch target. Default false.

@@ -107,10 +107,10 @@ func seedAgentMap(t *testing.T, m map[string]fleet.Agent) *store.Store {
 		if a.Prompt == "" {
 			a.Prompt = "test"
 		}
-		// Description is required for any agent that appears in another
-		// agent's CanDispatch list. seedAgentMap is permissive: fill in a
-		// default so the validator doesn't reject the seed.
-		if a.AllowDispatch && a.Description == "" {
+		// Descriptions are required for every agent. seedAgentMap is
+		// permissive: fill in a default so focused dispatch tests don't need
+		// repetitive metadata.
+		if a.Description == "" {
 			a.Description = "test"
 		}
 		agents = append(agents, a)
@@ -216,6 +216,7 @@ func TestDispatcherDropsRequest(t *testing.T) {
 		currentDepth int
 		modifyCfg    func(*config.DispatchConfig)
 		modifyAgents func(map[string]fleet.Agent)
+		modifyStore  func(*testing.T, *store.Store)
 		wantStat     func(DispatchStats) int64
 		wantStatName string
 	}{
@@ -234,10 +235,23 @@ func TestDispatcherDropsRequest(t *testing.T) {
 		{
 			name:        "target has allow_dispatch false",
 			targetAgent: "pr-reviewer",
-			modifyAgents: func(agents map[string]fleet.Agent) {
-				a := agents["pr-reviewer"]
-				a.AllowDispatch = false
-				agents["pr-reviewer"] = a
+			modifyStore: func(t *testing.T, st *store.Store) {
+				t.Helper()
+				if _, err := st.DB().Exec(`UPDATE agents SET allow_dispatch=0 WHERE name='pr-reviewer'`); err != nil {
+					t.Fatalf("clear allow_dispatch: %v", err)
+				}
+			},
+			wantStat:     func(s DispatchStats) int64 { return s.DroppedNoOptin },
+			wantStatName: "dropped_no_optin",
+		},
+		{
+			name:        "target has no description",
+			targetAgent: "pr-reviewer",
+			modifyStore: func(t *testing.T, st *store.Store) {
+				t.Helper()
+				if _, err := st.DB().Exec(`UPDATE agents SET description='' WHERE name='pr-reviewer'`); err != nil {
+					t.Fatalf("clear description: %v", err)
+				}
 			},
 			wantStat:     func(s DispatchStats) int64 { return s.DroppedNoOptin },
 			wantStatName: "dropped_no_optin",
@@ -263,7 +277,11 @@ func TestDispatcherDropsRequest(t *testing.T) {
 			if tc.modifyAgents != nil {
 				tc.modifyAgents(agents)
 			}
-			d := NewDispatcher(cfg, seedAgentMap(t, agents), NewDispatchDedupStore(300), q, zerolog.Nop())
+			st := seedAgentMap(t, agents)
+			if tc.modifyStore != nil {
+				tc.modifyStore(t, st)
+			}
+			d := NewDispatcher(cfg, st, NewDispatchDedupStore(300), q, zerolog.Nop())
 			reqs := []ai.DispatchRequest{{Agent: tc.targetAgent, Number: 1, Reason: "test"}}
 			d.ProcessDispatches(context.Background(), originatorAgent("coder"), testEvent("owner/repo", 1), "root-1", tc.currentDepth, "", reqs)
 			if len(q.popped()) != 0 {

@@ -65,8 +65,8 @@ internal/ai/response-schema.json # embedded JSON schema for structured output (c
 
 ## Reactive dispatch: the model you must keep in mind
 
-- Each agent's YAML may declare `allow_dispatch: true` (opt-in as a target) and `can_dispatch: [name, ...]` (whitelist of targets).
-- A target named in any `can_dispatch` list must also declare a `description`, it is rendered into the originating agent's prompt as part of an `## Available experts` roster.
+- Each agent must declare a `description`; it is used for UI identification and, when dispatch is enabled, for inter-agent routing context.
+- Each agent's YAML may declare `allow_dispatch: true` (opt-in as a target) and `can_dispatch: [name, ...]` (whitelist of targets). Dispatchable targets are rendered into the originating agent's prompt as part of an `## Available experts` roster when another agent lists them in `can_dispatch`.
 - Dispatch wiring authorizes runtime handoffs. Repo bindings only decide how agents start independently; a dispatch-only target does not need a fake repo binding.
 - An agent's response JSON may include a `dispatch: []` array. Each element names a target and a reason.
 - The dispatcher validates every request against: whitelist match, target's opt-in, chain depth, fan-out per run, and a dedup window keyed on `(target_agent, repo, number)`. Safety limits are process-owned daemon settings configured by `AGENTS_DISPATCH_MAX_DEPTH`, `AGENTS_DISPATCH_MAX_FANOUT`, and `AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS`; all three must be positive integers.

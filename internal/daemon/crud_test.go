@@ -44,6 +44,13 @@ func seedStoreSkill(t *testing.T, s *daemon.Daemon, name string) {
 
 func doCRUDRequest(t *testing.T, s *daemon.Daemon, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
+	if method == http.MethodPost && path == "/agents" {
+		if m, ok := body.(map[string]any); ok {
+			if _, exists := m["description"]; !exists {
+				m["description"] = "test agent"
+			}
+		}
+	}
 	var buf bytes.Buffer
 	if body != nil {
 		if err := json.NewEncoder(&buf).Encode(body); err != nil {
@@ -102,7 +109,7 @@ func TestStoreCRUDAgentCreateAndGet(t *testing.T) {
 	// "pr-reviewer" must exist for can_dispatch validation.
 	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name": "pr-reviewer", "backend": "claude", "prompt": "review code",
-		"description": "a reviewer agent", "skills": []string{}, "can_dispatch": []string{},
+		"description": "a reviewer agent", "allow_dispatch": true, "skills": []string{}, "can_dispatch": []string{},
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("seed pr-reviewer agent: got %d, %s", rr.Code, rr.Body.String())
 	}
@@ -1706,6 +1713,7 @@ func TestStoreImportRoundTrip(t *testing.T) {
   - name: imported-agent
     backend: claude
     prompt: imported prompt
+    description: imported agent
     skills: []
     can_dispatch: []
 skills:
@@ -1767,6 +1775,7 @@ agents:
   - name: new-agent
     backend: claude
     prompt: fresh
+    description: new agent
     skills: []
     can_dispatch: []
 repos:

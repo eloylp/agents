@@ -126,7 +126,7 @@ await captureVideo(browser, {
     await page.waitForTimeout(1200)
 
     // The seeded fixture has pr-reviewer with no can_dispatch entries
-    // and scout with allow_dispatch=true plus a description, so the
+    // and scout with allow_dispatch=true, so the
     // pr-reviewer→scout connection passes validateConnection and
     // onConnect actually persists the wiring change. The agent name
     // is the React Flow node id and shows up as data-id on
