@@ -230,9 +230,23 @@ func (d *Daemon) Scheduler() *scheduler.Scheduler { return d.scheduler }
 // trace / event rows directly via observe.Store methods.
 func (d *Daemon) Observe() *observe.Store { return d.obs }
 
-// Handler builds and returns the HTTP router. Exported for tests that
-// exercise routing without starting a real TCP listener.
-func (d *Daemon) Handler() http.Handler { return d.buildRouter() }
+// Handler builds and returns the raw HTTP router without daemon auth middleware.
+// Exported for handler-level tests that exercise domain behavior directly.
+func (d *Daemon) Handler() http.Handler {
+	httpCfg := d.daemonCfg.HTTP
+	writeTimeout := time.Duration(httpCfg.WriteTimeoutSeconds) * time.Second
+	withTimeout := func(h http.Handler) http.Handler {
+		if writeTimeout <= 0 {
+			return h
+		}
+		return http.TimeoutHandler(h, writeTimeout, "handler timed out")
+	}
+	return d.buildMuxRouter(withTimeout)
+}
+
+// AuthHandler builds and returns the production HTTP handler with daemon auth
+// middleware. Exported for tests that need to verify access-control behavior.
+func (d *Daemon) AuthHandler() http.Handler { return d.buildRouter() }
 
 // Run starts every long-running goroutine the daemon needs and blocks
 // until parentCtx is cancelled. Goroutines are arranged in two tiers

@@ -57,7 +57,8 @@ Use your reverse proxy for TLS and routing. With `AGENTS_AUTH_BEARER_TOKEN_HASH`
 | Router | Paths | Auth | Purpose |
 |---|---|---|---|
 | **Daemon** | all paths | session cookie or daemon API token on sensitive routes | `/mcp`, `/run`, API, observability, config, runners; `/ui/` shell loads publicly but data calls require auth |
-| **Public** | `/status`, `/webhooks/github`, `/auth/status`, `/auth/login`, `/auth/bootstrap`, `/v1/*`, `/ui/*` shell/assets | none at proxy | GitHub cannot send auth on webhooks; `/status` must stay reachable for liveness probes; `/v1/*` proxy clients use their own upstream auth; `/ui/*` must render before the browser has a session. |
+| **Public** | `/status`, `/webhooks/github`, `/auth/status`, `/auth/login`, `/auth/bootstrap`, `/ui/*` shell/assets | none at proxy | GitHub cannot send auth on webhooks; `/status` must stay reachable for liveness probes; `/ui/*` must render before the browser has a session. |
+| **Local proxy** | `/v1/messages`, `/v1/models` when proxy is enabled | no daemon auth only for loopback clients; remote clients need daemon auth | Backend CLI subprocesses run on the daemon host/container and call the proxy locally. Do not expose the proxy as an unauthenticated public route. |
 
 `/webhooks/github` is safe to expose publicly because every request is HMAC-verified against `GITHUB_WEBHOOK_SECRET` before it is accepted. `/run` is protected once daemon auth is initialized.
 

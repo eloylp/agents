@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -70,12 +71,6 @@ func (d *Daemon) withBearerAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if legacyExpected == nil {
-			if count, err := d.store.UserCount(r.Context()); err == nil && count == 0 {
-				next.ServeHTTP(w, r)
-				return
-			}
-		}
 		identity, ok := d.authenticateRequest(r)
 		if ok {
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), authContextKey{}, identity)))
@@ -104,10 +99,19 @@ func (d *Daemon) isPublicRoute(r *http.Request) bool {
 	if path == "/" || path == "/ui" || path == "/ui/" || strings.HasPrefix(path, "/ui/") {
 		return true
 	}
-	if d.proxy != nil && (path == d.daemonCfg.Proxy.Path || path == "/v1/models") {
+	if d.proxy != nil && (path == d.daemonCfg.Proxy.Path || path == "/v1/models") && isLoopbackRequest(r) {
 		return true
 	}
 	return false
+}
+
+func isLoopbackRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (d *Daemon) authenticateRequest(r *http.Request) (store.AuthIdentity, bool) {

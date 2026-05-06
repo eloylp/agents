@@ -41,7 +41,7 @@ This doc walks through the complete setup: the architecture, a working recipe ag
 
 Two moving pieces inside the daemon:
 
-1. **The proxy** (`internal/anthropic_proxy/`), an HTTP handler mounted on the daemon's existing server at `/v1/messages` and `/v1/models`. Accepts Anthropic Messages format, translates to OpenAI Chat Completions, forwards to your configured upstream, translates the response back. Text, system messages, tool-use / tool-result round-trips, streaming (fake-streaming via SSE, token-by-token streaming coming). Covered by unit tests.
+1. **The proxy** (`internal/anthropic_proxy/`), an HTTP handler mounted on the daemon's existing server at `/v1/messages` and `/v1/models`. Accepts Anthropic Messages format, translates to OpenAI Chat Completions, forwards to your configured upstream, translates the response back. Text, system messages, tool-use / tool-result round-trips, streaming (fake-streaming via SSE, token-by-token streaming coming). Unauthenticated access is loopback-only for backend subprocesses; remote callers need daemon auth. Covered by unit tests.
 
 2. **Per-backend `local_model_url`** (`AIBackendConfig.local_model_url`), set this on a backend entry and the daemon injects `ANTHROPIC_BASE_URL=<url>` into the subprocess environment, routing that backend's `claude` CLI through the local proxy. You can have two backends that both run `claude`, one hitting hosted Anthropic (no `local_model_url`), one hitting the proxy. You pick per-agent.
 
@@ -136,7 +136,7 @@ Restart the daemon. Done.
 ### 4. Verify
 
 ```bash
-# From inside the agents docker network, or directly on the host:
+# From inside the agents container/network, or directly on the daemon host:
 curl -sS http://localhost:8080/v1/models
 
 # Expected: {"object":"list","data":[{"id":"qwen","object":"model","owned_by":"proxy"}]}
