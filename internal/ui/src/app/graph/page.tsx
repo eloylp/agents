@@ -145,7 +145,7 @@ export default function GraphPage() {
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] })
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [selectedEdge, setSelectedEdge] = useState<{ from: string; to: string; count: number; dispatches: DispatchRecord[]; isActive: boolean } | null>(null)
-  const [selectedNode, setSelectedNode] = useState<AgentInfo | null>(null)
+  const [selectedNodeName, setSelectedNodeName] = useState<string | null>(null)
   const [hoveredEdge, setHoveredEdge] = useState<{ from: string; to: string } | null>(null)
   const [addTargetName, setAddTargetName] = useState('')
   const [loading, setLoading] = useState(true)
@@ -166,7 +166,7 @@ export default function GraphPage() {
 
   useEffect(() => {
     setAddTargetName('')
-  }, [selectedNode?.name])
+  }, [selectedNodeName])
 
   const load = useCallback(() => {
     if (!loadedOnce.current) setLoading(true)
@@ -239,7 +239,7 @@ export default function GraphPage() {
         ? 'source'
         : highlightedEdge?.to === a.name
           ? 'target'
-          : selectedNode?.name === a.name
+          : selectedNodeName === a.name
             ? 'selected'
             : undefined
       return {
@@ -300,18 +300,18 @@ export default function GraphPage() {
       flowEdges: edges,
       wiringInfo: { active: allEdges.filter(e => e.isActive).length, total: allEdges.length },
     }
-  }, [agents, graphData.edges, activeEdgeMap, repoFilter, selectedEdge, selectedEdgeKey, hoveredEdge, hoveredEdgeKey, selectedNode?.name])
+  }, [agents, graphData.edges, activeEdgeMap, repoFilter, selectedEdge, selectedEdgeKey, hoveredEdge, hoveredEdgeKey, selectedNodeName])
 
   const onEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
     const d = edge.data as { from: string; to: string; isActive: boolean; count: number; dispatches: DispatchRecord[] }
     if (editMode) {
       setPendingEdgeDelete({ from: d.from, to: d.to })
       setSelectedEdge(null)
-      setSelectedNode(null)
+      setSelectedNodeName(null)
       return
     }
     setSelectedEdge(d)
-    setSelectedNode(null)
+    setSelectedNodeName(null)
   }, [editMode])
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
@@ -320,7 +320,7 @@ export default function GraphPage() {
     if (editMode) return
     const agent = agents.find(a => a.name === node.id)
     if (agent) {
-      setSelectedNode(agent)
+      setSelectedNodeName(agent.name)
       setSelectedEdge(null)
     }
   }, [agents, editMode])
@@ -445,10 +445,11 @@ export default function GraphPage() {
   const openAgent = useCallback((name: string) => {
     const agent = agents.find(a => a.name === name)
     if (!agent) return
-    setSelectedNode(agent)
+    setSelectedNodeName(agent.name)
     setSelectedEdge(null)
   }, [agents])
 
+  const selectedNode = selectedNodeName ? agents.find(a => a.name === selectedNodeName) ?? null : null
   const selectedNodeOutgoing = selectedNode ? outgoingDispatchTargets(selectedNode, relationshipAgents) : []
   const selectedNodeIncoming = selectedNode ? incomingDispatchSources(selectedNode.name, relationshipAgents) : []
   const selectedNodeTargets = selectedNode ? availableDispatchTargets(selectedNode.name, selectedNode.can_dispatch ?? [], relationshipAgents) : []
@@ -466,7 +467,7 @@ export default function GraphPage() {
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <RepoFilter selected={repoFilter} onChange={setRepoFilter} />
           <button
-            onClick={() => { setEditMode(m => !m); setWiringError(''); setSelectedEdge(null); setSelectedNode(null); }}
+            onClick={() => { setEditMode(m => !m); setWiringError(''); setSelectedEdge(null); setSelectedNodeName(null); }}
             style={{
               background: editMode ? 'var(--btn-primary-bg)' : 'var(--bg-card)',
               border: `1px solid ${editMode ? 'var(--btn-primary-border)' : 'var(--border)'}`,
@@ -621,7 +622,7 @@ export default function GraphPage() {
       {/* Modal for node (agent) details */}
       {selectedNode && (
         <div
-          onClick={() => setSelectedNode(null)}
+          onClick={() => setSelectedNodeName(null)}
           style={{
             position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
             background: 'var(--bg-modal-overlay)', zIndex: 1000,
@@ -635,7 +636,7 @@ export default function GraphPage() {
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
               <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-heading)' }}>{selectedNode.name}</h2>
-              <button onClick={() => setSelectedNode(null)} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--text-faint)' }}>x</button>
+              <button onClick={() => setSelectedNodeName(null)} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--text-faint)' }}>x</button>
             </div>
             {selectedNode.description && (
               <p style={{ color: 'var(--text-faint)', fontSize: '0.875rem', marginBottom: '1rem' }}>{selectedNode.description}</p>
