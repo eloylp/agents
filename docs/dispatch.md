@@ -2,6 +2,8 @@
 
 Agents can invoke each other at runtime. When an agent's AI run returns a `dispatch[]` field in its JSON response, the daemon validates and enqueues a synthetic `agent.dispatch` event for each entry. The target agent then runs with the full event payload as its runtime context.
 
+Repo bindings decide how agents start independently from labels, GitHub events, cron, or manual runs. Dispatch wiring decides which already-running agents may call other agents. A dispatched target does not need its own binding on the repo; it inherits the source run's repo and issue/PR context.
+
 ## Agent response contract
 
 ```json
@@ -54,14 +56,15 @@ Agent A runs -> returns dispatch[{agent:"B", number:42, reason:"..."}]
 Dispatcher checks:
   1. B is in A's can_dispatch list
   2. B has allow_dispatch: true
-  3. depth <= max_depth, fanout <= max_fanout
-  4. (B, repo, 42) not seen within dedup_window_seconds
+  3. B has a non-empty description
+  4. depth <= max_depth, fanout <= max_fanout
+  5. (B, repo, 42) not seen within dedup_window_seconds
     |
     v
-agent.dispatch event enqueued -> Agent B runs with full payload
+agent.dispatch event enqueued -> Agent B runs with inherited repo context and full payload
 ```
 
-Dispatch chains work across both event-driven and cron and event-driven paths, and the shared dedup store prevents a cron-triggered run and a near-simultaneous dispatch from running the same target twice within the window.
+Dispatch chains work across both event-driven and cron paths, and the shared dedup store prevents a cron-triggered run and a near-simultaneous dispatch from running the same target twice within the window.
 
 ## Config wiring
 
@@ -89,3 +92,5 @@ The **Graph** page in the web dashboard (`/ui/`) has an "Edit wiring" toggle. Wh
 - **Remove a connection**: click an existing edge to open a confirmation modal. The daemon removes the target from the source agent's `can_dispatch` list; the target's `allow_dispatch` flag is left alone, since other agents may still dispatch to it.
 
 Self-dispatch and duplicate edges are rejected before any network call. Config-level constraints (`description` required on dispatch targets, no self-reference) still apply, the UI enforces them before writing.
+
+Creating a dispatch edge is enough to authorize runtime dispatch when the target opts in. Do not add fake repo bindings for targets that should only run when another agent dispatches them.

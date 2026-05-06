@@ -5,7 +5,6 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -425,11 +424,11 @@ func TestEngineHandlesAgentDispatchEvent(t *testing.T) {
 	e := newEngineFromCfg(t, cfg, map[string]ai.Runner{"claude": runner}, q)
 
 	ev := Event{
-		ID:   "root-abc",
-		Repo: RepoRef{FullName: "owner/repo", Enabled: true},
-		Kind: "agent.dispatch",
+		ID:     "root-abc",
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "agent.dispatch",
 		Number: 5,
-		Actor: "coder",
+		Actor:  "coder",
 		Payload: map[string]any{
 			"target_agent":   "pr-reviewer",
 			"reason":         "please review this PR",
@@ -447,7 +446,7 @@ func TestEngineHandlesAgentDispatchEvent(t *testing.T) {
 	}
 }
 
-func TestEngineDispatchEventUnboundTargetReturnsError(t *testing.T) {
+func TestEngineDispatchEventRunsUnboundTarget(t *testing.T) {
 	t.Parallel()
 	runner := &stubRunner{}
 	cfg := &config.Config{
@@ -461,7 +460,7 @@ func TestEngineDispatchEventUnboundTargetReturnsError(t *testing.T) {
 		Skills: map[string]fleet.Skill{},
 		Agents: []fleet.Agent{
 			{Name: "coder", Backend: "claude", Prompt: "Code."},
-			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review."},
+			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review.", AllowDispatch: true, Description: "Reviews PRs"},
 		},
 		Repos: []fleet.Repo{
 			{
@@ -483,9 +482,47 @@ func TestEngineDispatchEventUnboundTargetReturnsError(t *testing.T) {
 			"dispatch_depth": 1,
 		},
 	}
-	err := e.HandleEvent(context.Background(), ev)
-	if err == nil || !strings.Contains(err.Error(), "not bound") {
-		t.Errorf("expected 'not bound' error, got %v", err)
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if runner.callCount() != 1 {
+		t.Errorf("expected 1 run for unbound dispatched agent, got %d", runner.callCount())
+	}
+}
+
+func TestEngineDispatchEventDisabledRepoSkipsTarget(t *testing.T) {
+	t.Parallel()
+	runner := &stubRunner{}
+	cfg := &config.Config{
+		Daemon: config.DaemonConfig{
+			Processor: config.ProcessorConfig{
+				MaxConcurrentAgents: 4,
+				Dispatch:            config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300},
+			},
+			AIBackends: map[string]fleet.Backend{"claude": {Command: "claude"}},
+		},
+		Skills: map[string]fleet.Skill{},
+		Agents: []fleet.Agent{
+			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review.", AllowDispatch: true, Description: "Reviews PRs"},
+		},
+		Repos: []fleet.Repo{{Name: "owner/repo", Enabled: false}},
+	}
+	e := newEngineFromCfg(t, cfg, map[string]ai.Runner{"claude": runner}, nil)
+
+	ev := Event{
+		Repo: RepoRef{FullName: "owner/repo", Enabled: false},
+		Kind: "agent.dispatch",
+		Payload: map[string]any{
+			"target_agent":   "pr-reviewer",
+			"reason":         "review",
+			"dispatch_depth": 1,
+		},
+	}
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if runner.callCount() != 0 {
+		t.Errorf("expected disabled repo to skip dispatch, got %d runs", runner.callCount())
 	}
 }
 
@@ -704,7 +741,7 @@ func TestPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 	dedup := NewDispatchDedupStore(2)
 	agents := map[string]fleet.Agent{
 		"pr-reviewer": {Name: "pr-reviewer", AllowDispatch: true, CanDispatch: []string{"coder"}},
-		"coder":        {Name: "coder", AllowDispatch: true},
+		"coder":       {Name: "coder", AllowDispatch: true},
 	}
 	cfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 2}
 	q := &fakeQueue{}
@@ -843,7 +880,7 @@ func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 	dedup := NewDispatchDedupStore(ttlSeconds)
 	agents := map[string]fleet.Agent{
 		"pr-reviewer": {Name: "pr-reviewer", AllowDispatch: true, CanDispatch: []string{"coder"}},
-		"coder":        {Name: "coder", AllowDispatch: true},
+		"coder":       {Name: "coder", AllowDispatch: true},
 	}
 	cfg := config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: ttlSeconds}
 	q := &fakeQueue{}

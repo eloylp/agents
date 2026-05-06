@@ -92,10 +92,10 @@ skills:
 # Runtime "Available experts" roster
 # ──────────────────────────────────
 # At render time the daemon injects an "## Available experts" section
-# into every agent's prompt, listing the agents in that agent's own
-# `can_dispatch` list. Each entry shows the target's name, description,
-# skills, and (when allow_dispatch: true) a [dispatchable] marker so
-# the originator knows where it's permitted to hand off work.
+# into every agent's prompt, listing valid targets from that agent's own
+# `can_dispatch` list. A target appears only when it exists, has
+# `allow_dispatch: true`, and has a non-empty description. Each entry shows
+# the target's name, description, skills, and a [dispatchable] marker.
 #
 # For example, the `pr-reviewer` agent below has `can_dispatch: [coder,
 # sec-reviewer]`, so its runtime prompt includes an "## Available experts"
@@ -111,9 +111,9 @@ skills:
 #     Skills: security
 #
 # The agent then references these names in its response JSON's `dispatch`
-# array when it wants to invoke them. An agent can only dispatch targets
-# that appear in its roster AND are marked [dispatchable]. This is enforced
-# at runtime; an out-of-roster dispatch is dropped with a WARN log.
+# array when it wants to invoke them. Dispatch wiring is the authority:
+# the target does not need a repo binding just to receive a dispatch.
+# Runtime validation drops out-of-roster dispatches with a WARN log.
 # ──────────────────────────────────────────────
 agents:
   # Autonomous scouts, survey the codebase and open issues for follow-up.
