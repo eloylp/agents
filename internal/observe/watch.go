@@ -89,10 +89,10 @@ func WatchMemoryDir(ctx context.Context, dir string, interval time.Duration, hub
 // such as "agentname/owner_repo.md".
 func buildMemoryChangeEvent(rel string) MemoryChangeEvent {
 	ev := MemoryChangeEvent{Path: rel}
-	parts := strings.SplitN(rel, string(filepath.Separator), 2)
-	if len(parts) == 2 {
-		ev.Agent = parts[0]
-		ev.Repo = strings.TrimSuffix(parts[1], ".md")
+	agent, repoPath, ok := strings.Cut(rel, string(filepath.Separator))
+	if ok {
+		ev.Agent = agent
+		ev.Repo = strings.TrimSuffix(repoPath, ".md")
 	}
 	return ev
 }
