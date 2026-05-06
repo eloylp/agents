@@ -19,6 +19,14 @@ export interface ConnectionCheck {
   reason?: string
 }
 
+export interface DispatchRelationship {
+  name: string
+  description: string
+  allow_dispatch: boolean
+  can_dispatch: string[]
+  status?: string
+}
+
 export function validateConnection(
   source: string,
   target: string,
@@ -49,4 +57,29 @@ export function removeCanDispatch(agent: StoreAgent, target: string): StoreAgent
 export function enableAllowDispatch(agent: StoreAgent): StoreAgent {
   if (agent.allow_dispatch) return agent
   return { ...agent, allow_dispatch: true }
+}
+
+export function outgoingDispatchTargets(
+  source: { can_dispatch?: string[] },
+  agents: DispatchRelationship[],
+): DispatchRelationship[] {
+  const byName = new Map(agents.map(a => [a.name, a]))
+  return (source.can_dispatch ?? [])
+    .map(name => byName.get(name))
+    .filter((a): a is DispatchRelationship => Boolean(a))
+}
+
+export function incomingDispatchSources(
+  target: string,
+  agents: DispatchRelationship[],
+): DispatchRelationship[] {
+  return agents.filter(a => (a.can_dispatch ?? []).includes(target))
+}
+
+export function availableDispatchTargets(
+  source: string,
+  existingCanDispatch: string[],
+  agents: DispatchRelationship[],
+): DispatchRelationship[] {
+  return agents.filter(a => a.name !== source && !existingCanDispatch.includes(a.name))
 }

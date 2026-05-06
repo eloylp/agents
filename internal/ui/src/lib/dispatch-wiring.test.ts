@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   addCanDispatch,
+  availableDispatchTargets,
   enableAllowDispatch,
+  incomingDispatchSources,
+  outgoingDispatchTargets,
   removeCanDispatch,
   validateConnection,
+  type DispatchRelationship,
   type StoreAgent,
 } from './dispatch-wiring'
 
@@ -98,5 +102,36 @@ describe('enableAllowDispatch', () => {
     const a = makeAgent({ allow_dispatch: true })
     const out = enableAllowDispatch(a)
     expect(out).toBe(a)
+  })
+})
+
+function makeRelationship(overrides: Partial<DispatchRelationship>): DispatchRelationship {
+  return {
+    name: 'agent',
+    description: 'does work',
+    allow_dispatch: true,
+    can_dispatch: [],
+    status: 'idle',
+    ...overrides,
+  }
+}
+
+describe('dispatch relationship derivation', () => {
+  const agents = [
+    makeRelationship({ name: 'coder', can_dispatch: ['reviewer', 'missing'] }),
+    makeRelationship({ name: 'reviewer', can_dispatch: ['docs'] }),
+    makeRelationship({ name: 'docs', allow_dispatch: false }),
+  ]
+
+  it('lists outgoing targets that exist', () => {
+    expect(outgoingDispatchTargets({ can_dispatch: ['reviewer', 'missing'] }, agents).map(a => a.name)).toEqual(['reviewer'])
+  })
+
+  it('lists incoming sources for a target', () => {
+    expect(incomingDispatchSources('docs', agents).map(a => a.name)).toEqual(['reviewer'])
+  })
+
+  it('lists available targets excluding self and duplicates', () => {
+    expect(availableDispatchTargets('coder', ['reviewer'], agents).map(a => a.name)).toEqual(['docs'])
   })
 })

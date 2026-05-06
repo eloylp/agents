@@ -18,9 +18,13 @@ import dagre from 'dagre'
 import Card from '@/components/Card'
 import {
   addCanDispatch,
+  availableDispatchTargets,
   enableAllowDispatch,
+  incomingDispatchSources,
+  outgoingDispatchTargets,
   removeCanDispatch,
   validateConnection,
+  type DispatchRelationship,
   type StoreAgent,
 } from '@/lib/dispatch-wiring'
 
@@ -53,28 +57,34 @@ interface AgentInfo {
   bindings?: Array<{ repo: string }>
 }
 
-// Custom agent node
 function AgentNode({ data }: NodeProps) {
-  const d = data as { label: string; status: string; description: string; dispatchable: boolean; skills: string[] }
+  const d = data as { label: string; status: string; description: string; dispatchable: boolean; skills: string[]; highlight?: 'source' | 'target' | 'selected' }
   const statusColors: Record<string, { bg: string; border: string; icon: string }> = {
     running: { bg: 'var(--success-bg)', border: 'var(--success)', icon: '⚡' },
     error:   { bg: 'var(--error-bg)', border: 'var(--text-danger)', icon: '⚠' },
     idle:    { bg: 'var(--accent-bg)', border: 'var(--accent)', icon: '●' },
   }
   const c = statusColors[d.status] ?? statusColors.idle
+  const highlightBorder = d.highlight === 'source'
+    ? '#f59e0b'
+    : d.highlight === 'target'
+      ? '#38bdf8'
+      : d.highlight === 'selected'
+        ? 'var(--accent)'
+        : c.border
 
   return (
     <>
       <Handle type="target" position={Position.Top} style={{ background: 'var(--text-faint)', border: 'none', width: 6, height: 6 }} />
       <div style={{
         background: 'var(--bg-card)',
-        border: `2px solid ${c.border}`,
+        border: `2px solid ${highlightBorder}`,
         borderRadius: '12px',
         padding: '10px 20px',
         minWidth: '180px',
         maxWidth: '220px',
         textAlign: 'center',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+        boxShadow: d.highlight ? `0 0 0 3px rgba(56,189,248,0.18), 0 2px 8px rgba(0,0,0,0.3)` : '0 2px 8px rgba(0,0,0,0.3)',
         position: 'relative',
       }}>
         {d.dispatchable && (
@@ -135,7 +145,9 @@ export default function GraphPage() {
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] })
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [selectedEdge, setSelectedEdge] = useState<{ from: string; to: string; count: number; dispatches: DispatchRecord[]; isActive: boolean } | null>(null)
-  const [selectedNode, setSelectedNode] = useState<AgentInfo | null>(null)
+  const [selectedNodeName, setSelectedNodeName] = useState<string | null>(null)
+  const [hoveredEdge, setHoveredEdge] = useState<{ from: string; to: string } | null>(null)
+  const [addTargetName, setAddTargetName] = useState('')
   const [loading, setLoading] = useState(true)
   const [repoFilter, setRepoFilter] = useRepoFilter()
   const [editMode, setEditMode] = useState(false)
@@ -144,6 +156,18 @@ export default function GraphPage() {
   const [wiringBusy, setWiringBusy] = useState(false)
 
   const loadedOnce = useRef(false)
+  const relationshipAgents = useMemo<DispatchRelationship[]>(() => agents.map(a => ({
+    name: a.name,
+    description: a.description ?? '',
+    allow_dispatch: a.allow_dispatch ?? false,
+    can_dispatch: a.can_dispatch ?? [],
+    status: a.current_status,
+  })), [agents])
+
+  useEffect(() => {
+    setAddTargetName('')
+  }, [selectedNodeName])
+
   const load = useCallback(() => {
     if (!loadedOnce.current) setLoading(true)
     loadedOnce.current = true
@@ -176,6 +200,9 @@ export default function GraphPage() {
     return m
   }, [graphData.edges, repoFilter])
 
+  const selectedEdgeKey = selectedEdge ? `${selectedEdge.from}->${selectedEdge.to}` : ''
+  const hoveredEdgeKey = hoveredEdge ? `${hoveredEdge.from}->${hoveredEdge.to}` : ''
+
   const { flowNodes, flowEdges, wiringInfo } = useMemo(() => {
     const visibleAgents = repoFilter
       ? agents.filter(a => (a.bindings ?? []).some(b => b.repo === repoFilter))
@@ -205,47 +232,66 @@ export default function GraphPage() {
     })
 
     // Build nodes from visible agents
-    const nodes: Node[] = visibleAgents.map(a => ({
-      id: a.name,
-      type: 'agent',
-      position: { x: 0, y: 0 },
-      data: {
-        label: a.name,
-        status: a.current_status ?? 'idle',
-        description: a.description ?? '',
-        dispatchable: a.allow_dispatch ?? false,
-        skills: a.skills ?? [],
-      },
-    }))
+    const highlightedEdge = selectedEdge ?? hoveredEdge
+
+    const nodes: Node[] = visibleAgents.map(a => {
+      const highlight = highlightedEdge?.from === a.name
+        ? 'source'
+        : highlightedEdge?.to === a.name
+          ? 'target'
+          : selectedNodeName === a.name
+            ? 'selected'
+            : undefined
+      return {
+        id: a.name,
+        type: 'agent',
+        position: { x: 0, y: 0 },
+        data: {
+          label: a.name,
+          status: a.current_status ?? 'idle',
+          description: a.description ?? '',
+          dispatchable: a.allow_dispatch ?? false,
+          skills: a.skills ?? [],
+          highlight,
+        },
+      }
+    })
 
     // Build edges
-    const edges: Edge[] = allEdges.map((e, i) => ({
-      id: `e-${i}`,
-      source: e.from,
-      target: e.to,
-      type: 'default',
-      selectable: true,
-      animated: e.isActive && e.count > 0,
-      interactionWidth: 40,
-      style: {
-        stroke: e.isActive ? 'var(--accent)' : 'var(--border)',
-        strokeWidth: e.isActive ? 2.5 : 1.5,
-        strokeDasharray: e.isActive ? undefined : '6 4',
-        cursor: 'pointer',
-      },
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        color: e.isActive ? '#38bdf8' : '#1e3a5f',
-        width: 16,
-        height: 12,
-      },
-      label: e.count > 0 ? `${e.count}` : undefined,
-      labelStyle: { fill: '#38bdf8', fontWeight: 700, fontSize: 11 },
-      labelBgStyle: { fill: '#111d2e', fillOpacity: 0.9 },
-      labelBgPadding: [4, 4] as [number, number],
-      labelBgBorderRadius: 4,
-      data: e,
-    }))
+    const edges: Edge[] = allEdges.map((e, i) => {
+      const key = `${e.from}->${e.to}`
+      const selected = key === selectedEdgeKey
+      const hovered = key === hoveredEdgeKey
+      const emphasized = selected || hovered
+      const stroke = selected ? '#f59e0b' : e.isActive ? 'var(--accent)' : 'var(--border)'
+      return {
+        id: `e-${i}`,
+        source: e.from,
+        target: e.to,
+        type: 'default',
+        selectable: true,
+        animated: e.isActive && e.count > 0,
+        interactionWidth: 40,
+        style: {
+          stroke,
+          strokeWidth: emphasized ? 4 : e.isActive ? 2.5 : 1.5,
+          strokeDasharray: e.isActive ? undefined : '6 4',
+          cursor: 'pointer',
+        },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          color: selected ? '#f59e0b' : e.isActive ? '#38bdf8' : '#1e3a5f',
+          width: emphasized ? 20 : 16,
+          height: emphasized ? 16 : 12,
+        },
+        label: emphasized ? `${e.from} -> ${e.to}` : e.count > 0 ? `${e.count}` : undefined,
+        labelStyle: { fill: selected ? '#fbbf24' : '#38bdf8', fontWeight: 700, fontSize: 11 },
+        labelBgStyle: { fill: '#111d2e', fillOpacity: 0.95 },
+        labelBgPadding: [4, 4] as [number, number],
+        labelBgBorderRadius: 4,
+        data: e,
+      }
+    })
 
     const laid = layoutGraph(nodes, edges)
 
@@ -254,18 +300,18 @@ export default function GraphPage() {
       flowEdges: edges,
       wiringInfo: { active: allEdges.filter(e => e.isActive).length, total: allEdges.length },
     }
-  }, [agents, graphData.edges, activeEdgeMap, repoFilter])
+  }, [agents, graphData.edges, activeEdgeMap, repoFilter, selectedEdge, selectedEdgeKey, hoveredEdge, hoveredEdgeKey, selectedNodeName])
 
   const onEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
     const d = edge.data as { from: string; to: string; isActive: boolean; count: number; dispatches: DispatchRecord[] }
     if (editMode) {
       setPendingEdgeDelete({ from: d.from, to: d.to })
       setSelectedEdge(null)
-      setSelectedNode(null)
+      setSelectedNodeName(null)
       return
     }
     setSelectedEdge(d)
-    setSelectedNode(null)
+    setSelectedNodeName(null)
   }, [editMode])
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
@@ -274,7 +320,7 @@ export default function GraphPage() {
     if (editMode) return
     const agent = agents.find(a => a.name === node.id)
     if (agent) {
-      setSelectedNode(agent)
+      setSelectedNodeName(agent.name)
       setSelectedEdge(null)
     }
   }, [agents, editMode])
@@ -325,6 +371,11 @@ export default function GraphPage() {
       setWiringError(check.reason ?? 'invalid connection')
       return
     }
+    const targetInfo = agents.find(a => a.name === c.target)
+    if (!targetInfo?.description) {
+      setWiringError(`${c.target} needs a description before it can be used as a dispatch expert`)
+      return
+    }
     setWiringError('')
     setWiringBusy(true)
     try {
@@ -350,6 +401,7 @@ export default function GraphPage() {
       const source = await fetchStoreAgent(from)
       await postStoreAgent(removeCanDispatch(source, to))
       setPendingEdgeDelete(null)
+      setSelectedEdge(null)
       load()
     } catch (e) {
       setWiringError(String(e))
@@ -357,6 +409,51 @@ export default function GraphPage() {
       setWiringBusy(false)
     }
   }, [fetchStoreAgent, postStoreAgent, load, wiringBusy])
+
+  const addWiring = useCallback(async (from: string, to: string) => {
+    if (wiringBusy) return
+    const sourceInfo = agents.find(a => a.name === from)
+    const targetInfo = agents.find(a => a.name === to)
+    const check = validateConnection(from, to, sourceInfo?.can_dispatch ?? [])
+    if (!check.ok) {
+      setWiringError(check.reason ?? 'invalid connection')
+      return
+    }
+    if (!targetInfo?.description) {
+      setWiringError(`${to} needs a description before it can be used as a dispatch expert`)
+      return
+    }
+
+    setWiringError('')
+    setWiringBusy(true)
+    try {
+      const source = await fetchStoreAgent(from)
+      await postStoreAgent(addCanDispatch(source, to))
+      const target = await fetchStoreAgent(to)
+      if (!target.allow_dispatch) {
+        await postStoreAgent(enableAllowDispatch(target))
+      }
+      setAddTargetName('')
+      load()
+    } catch (e) {
+      setWiringError(String(e))
+    } finally {
+      setWiringBusy(false)
+    }
+  }, [agents, fetchStoreAgent, postStoreAgent, load, wiringBusy])
+
+  const openAgent = useCallback((name: string) => {
+    const agent = agents.find(a => a.name === name)
+    if (!agent) return
+    setSelectedNodeName(agent.name)
+    setSelectedEdge(null)
+  }, [agents])
+
+  const selectedNode = selectedNodeName ? agents.find(a => a.name === selectedNodeName) ?? null : null
+  const selectedNodeOutgoing = selectedNode ? outgoingDispatchTargets(selectedNode, relationshipAgents) : []
+  const selectedNodeIncoming = selectedNode ? incomingDispatchSources(selectedNode.name, relationshipAgents) : []
+  const selectedNodeTargets = selectedNode ? availableDispatchTargets(selectedNode.name, selectedNode.can_dispatch ?? [], relationshipAgents) : []
+  const selectedAddTarget = selectedNodeTargets.find(a => a.name === addTargetName) ?? null
 
   return (
     <div>
@@ -370,7 +467,7 @@ export default function GraphPage() {
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <RepoFilter selected={repoFilter} onChange={setRepoFilter} />
           <button
-            onClick={() => { setEditMode(m => !m); setWiringError(''); setSelectedEdge(null); setSelectedNode(null); }}
+            onClick={() => { setEditMode(m => !m); setWiringError(''); setSelectedEdge(null); setSelectedNodeName(null); }}
             style={{
               background: editMode ? 'var(--btn-primary-bg)' : 'var(--bg-card)',
               border: `1px solid ${editMode ? 'var(--btn-primary-border)' : 'var(--border)'}`,
@@ -426,6 +523,38 @@ export default function GraphPage() {
               marginBottom: '1rem',
             }}>
               {selectedEdge.isActive ? `${selectedEdge.count} dispatch${selectedEdge.count !== 1 ? 'es' : ''}` : 'wired, no dispatches yet'}
+            </div>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '0.75rem' }}>
+              <strong style={{ color: 'var(--text)' }}>{selectedEdge.from}</strong> can dispatch{' '}
+              <strong style={{ color: 'var(--text)' }}>{selectedEdge.to}</strong>.
+            </p>
+            <div style={{ background: 'var(--bg)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '10px', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+              <div style={{ color: 'var(--text-faint)', marginBottom: '4px' }}>Remove config change</div>
+              <code>{selectedEdge.from}.can_dispatch -= [&quot;{selectedEdge.to}&quot;]</code>
+            </div>
+            {wiringError && (
+              <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>{wiringError}</p>
+            )}
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+              <button
+                onClick={() => openAgent(selectedEdge.from)}
+                style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.8rem' }}
+              >
+                Open source
+              </button>
+              <button
+                onClick={() => openAgent(selectedEdge.to)}
+                style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.8rem' }}
+              >
+                Open target
+              </button>
+              <button
+                onClick={() => removeEdge(selectedEdge.from, selectedEdge.to)}
+                disabled={wiringBusy}
+                style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', color: 'var(--text-danger)', cursor: wiringBusy ? 'wait' : 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+              >
+                {wiringBusy ? 'Removing...' : 'Remove wiring'}
+              </button>
             </div>
             {selectedEdge.dispatches.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -493,7 +622,7 @@ export default function GraphPage() {
       {/* Modal for node (agent) details */}
       {selectedNode && (
         <div
-          onClick={() => setSelectedNode(null)}
+          onClick={() => setSelectedNodeName(null)}
           style={{
             position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
             background: 'var(--bg-modal-overlay)', zIndex: 1000,
@@ -507,7 +636,7 @@ export default function GraphPage() {
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
               <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-heading)' }}>{selectedNode.name}</h2>
-              <button onClick={() => setSelectedNode(null)} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--text-faint)' }}>x</button>
+              <button onClick={() => setSelectedNodeName(null)} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--text-faint)' }}>x</button>
             </div>
             {selectedNode.description && (
               <p style={{ color: 'var(--text-faint)', fontSize: '0.875rem', marginBottom: '1rem' }}>{selectedNode.description}</p>
@@ -530,16 +659,91 @@ export default function GraphPage() {
                 </div>
               </div>
             )}
-            {(selectedNode.can_dispatch ?? []).length > 0 && (
+            <div style={{ display: 'grid', gap: '1rem' }}>
               <div>
-                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Can dispatch</div>
-                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  {selectedNode.can_dispatch!.map(a => (
-                    <span key={a} style={{ background: 'rgba(245,158,11,0.15)', border: '1px solid #78350f', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: '#fcd34d' }}>{a}</span>
-                  ))}
-                </div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Outgoing dispatch targets</div>
+                {selectedNodeOutgoing.length === 0 ? (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No outgoing dispatch wiring.</p>
+                ) : (
+                  <div style={{ display: 'grid', gap: '0.5rem' }}>
+                    {selectedNodeOutgoing.map(target => (
+                      <div key={target.name} style={{ background: 'var(--bg)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '10px', display: 'grid', gap: '6px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center' }}>
+                          <div>
+                            <div style={{ color: 'var(--text)', fontWeight: 600 }}>{target.name}</div>
+                            <div style={{ color: target.allow_dispatch ? 'var(--text-muted)' : 'var(--text-danger)', fontSize: '0.75rem' }}>
+                              {target.allow_dispatch ? 'can receive dispatches' : 'allow_dispatch is disabled'}
+                              {!target.description && ' · missing description'}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => removeEdge(selectedNode.name, target.name)}
+                            disabled={wiringBusy}
+                            style={{ padding: '5px 10px', borderRadius: '6px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', color: 'var(--text-danger)', cursor: wiringBusy ? 'wait' : 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        <code style={{ color: 'var(--text-faint)', fontSize: '0.75rem' }}>{selectedNode.name}.can_dispatch -= [&quot;{target.name}&quot;]</code>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
+
+              <div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Incoming dispatch sources</div>
+                {selectedNodeIncoming.length === 0 ? (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No agents dispatch to this agent.</p>
+                ) : (
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    {selectedNodeIncoming.map(source => (
+                      <span key={source.name} style={{ background: 'rgba(245,158,11,0.15)', border: '1px solid #78350f', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: '#fcd34d' }}>{source.name}</span>
+                    ))}
+                  </div>
+                )}
+                <p style={{ color: selectedNode.allow_dispatch ? 'var(--text-muted)' : 'var(--text-danger)', fontSize: '0.75rem', marginTop: '0.5rem' }}>
+                  {selectedNode.allow_dispatch ? `${selectedNode.name} can receive dispatches.` : `${selectedNode.name} cannot receive dispatches until allow_dispatch is enabled.`}
+                </p>
+              </div>
+
+              <div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Add wiring</div>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <select
+                    value={addTargetName}
+                    onChange={e => setAddTargetName(e.target.value)}
+                    style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '6px', padding: '6px 8px', minWidth: '180px' }}
+                  >
+                    <option value="">Select target...</option>
+                    {selectedNodeTargets.map(target => (
+                      <option key={target.name} value={target.name}>{target.name}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => selectedAddTarget && addWiring(selectedNode.name, selectedAddTarget.name)}
+                    disabled={!selectedAddTarget || !selectedAddTarget.description || wiringBusy}
+                    style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: !selectedAddTarget || !selectedAddTarget.description || wiringBusy ? 'not-allowed' : 'pointer', fontSize: '0.8rem', fontWeight: 600, opacity: !selectedAddTarget || !selectedAddTarget.description || wiringBusy ? 0.65 : 1 }}
+                  >
+                    {wiringBusy ? 'Saving...' : 'Add wiring'}
+                  </button>
+                </div>
+                {selectedAddTarget && (
+                  <div style={{ background: 'var(--bg)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '10px', marginTop: '0.5rem', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                    <div style={{ color: 'var(--text-faint)', marginBottom: '4px' }}>Apply config changes</div>
+                    <div><code>{selectedNode.name}.can_dispatch += [&quot;{selectedAddTarget.name}&quot;]</code></div>
+                    {!selectedAddTarget.allow_dispatch && <div><code>{selectedAddTarget.name}.allow_dispatch = true</code></div>}
+                    {!selectedAddTarget.description && <div style={{ color: 'var(--text-danger)', marginTop: '6px' }}>This target needs a description before it can be used as a dispatch expert.</div>}
+                  </div>
+                )}
+                {selectedNodeTargets.length === 0 && (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '0.5rem' }}>No available targets remain.</p>
+                )}
+                {wiringError && (
+                  <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', marginTop: '0.5rem' }}>{wiringError}</p>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -552,6 +756,11 @@ export default function GraphPage() {
                 edges={flowEdges}
                 nodeTypes={nodeTypes}
                 onEdgeClick={onEdgeClick}
+                onEdgeMouseEnter={(_, edge) => {
+                  const d = edge.data as { from: string; to: string }
+                  setHoveredEdge({ from: d.from, to: d.to })
+                }}
+                onEdgeMouseLeave={() => setHoveredEdge(null)}
                 onNodeClick={onNodeClick}
                 onConnect={onConnect}
                 isValidConnection={isValidConnection}
