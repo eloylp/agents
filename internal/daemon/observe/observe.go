@@ -244,9 +244,11 @@ func (h *Handler) HandleTraceStream(w http.ResponseWriter, r *http.Request) {
 	send := func(step workflow.TraceStep) bool {
 		payload, err := json.Marshal(step)
 		if err != nil {
+			h.logger.Debug().Err(err).Str("span_id", spanID).Msg("trace stream: marshal step failed")
 			return true
 		}
 		if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
+			h.logger.Debug().Err(err).Str("span_id", spanID).Msg("trace stream: write step failed")
 			return false
 		}
 		flusher.Flush()
@@ -274,6 +276,7 @@ func (h *Handler) HandleTraceStream(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-heartbeat.C:
 			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
+				h.logger.Debug().Err(err).Str("span_id", spanID).Msg("trace stream: write heartbeat failed")
 				return
 			}
 			flusher.Flush()

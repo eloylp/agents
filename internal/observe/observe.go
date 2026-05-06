@@ -243,18 +243,19 @@ func (r *runStream) publish(step workflow.TraceStep) {
 
 func (r *runStream) end() {
 	r.mu.Lock()
-	if !r.closed {
-		r.closed = true
+	if r.closed {
+		r.mu.Unlock()
+		return
 	}
+	r.closed = true
 	subs := r.subs
+	r.subs = make(map[chan workflow.TraceStep]struct{})
 	r.mu.Unlock()
+
 	// Close every subscriber channel so SSE handlers emit the terminal event.
 	for ch := range subs {
 		close(ch)
 	}
-	r.mu.Lock()
-	r.subs = make(map[chan workflow.TraceStep]struct{})
-	r.mu.Unlock()
 }
 
 // subscribe returns a channel for future steps. The caller MUST consume the
@@ -390,9 +391,12 @@ type Store struct {
 	Runs       *RunRegistry
 }
 
-// NewStore creates a Store. The db handle is used for all read/write
-// operations against the events, traces, and dispatch_history tables.
+// NewStore creates a Store. The db handle is required for all read/write
+// operations against observability tables.
 func NewStore(db *sql.DB) *Store {
+	if db == nil {
+		panic("observe: nil db")
+	}
 	return &Store{
 		db:         db,
 		EventsSSE:  NewSSEHub(64),
@@ -409,9 +413,6 @@ func NewStore(db *sql.DB) *Store {
 // When since is non-zero, only events strictly after that time are returned.
 // Results are capped at 500 rows.
 func (s *Store) ListEvents(since time.Time) []TimestampedEvent {
-	if s.db == nil {
-		return nil
-	}
 	var rows *sql.Rows
 	var err error
 	if since.IsZero() {
@@ -457,9 +458,6 @@ const spanColumns = `span_id, root_event_id, parent_span_id, agent, backend, rep
 // ListTraces returns stored spans ordered by started_at descending (newest
 // first). Results are capped at 200 rows.
 func (s *Store) ListTraces() []Span {
-	if s.db == nil {
-		return nil
-	}
 	rows, err := s.db.Query(
 		`SELECT ` + spanColumns + ` FROM traces ORDER BY started_at DESC LIMIT 200`,
 	)
@@ -473,9 +471,6 @@ func (s *Store) ListTraces() []Span {
 
 // TracesByRootEventID returns all spans whose root_event_id matches id.
 func (s *Store) TracesByRootEventID(id string) []Span {
-	if s.db == nil {
-		return nil
-	}
 	rows, err := s.db.Query(
 		`SELECT `+spanColumns+` FROM traces WHERE root_event_id = ?`,
 		id,
@@ -493,9 +488,6 @@ func (s *Store) TracesByRootEventID(id string) []Span {
 // that never recorded one). The blob is gzipped on disk; this method
 // is the single read site so the compression detail stays here.
 func (s *Store) PromptForSpan(spanID string) (string, error) {
-	if s.db == nil {
-		return "", nil
-	}
 	var blob []byte
 	err := s.db.QueryRow(`SELECT prompt_gz FROM traces WHERE span_id = ?`, spanID).Scan(&blob)
 	if errors.Is(err, sql.ErrNoRows) || len(blob) == 0 {
@@ -550,9 +542,6 @@ func scanSpans(rows *sql.Rows) []Span {
 // ListEdges returns the dispatch interaction graph by grouping rows from
 // dispatch_history by (from_agent, to_agent) into Edge structs.
 func (s *Store) ListEdges() []Edge {
-	if s.db == nil {
-		return nil
-	}
 	rows, err := s.db.Query(
 		`SELECT from_agent, to_agent, repo, number, reason, at FROM dispatch_history ORDER BY at ASC`,
 	)
@@ -731,9 +720,6 @@ func (s *Store) RecordDispatch(from, to, repo string, number int, reason string)
 // transcript step to SQLite, then fans the committed row out to live stream
 // subscribers. Steps are stored sequentially and capped at 100 per span.
 func (s *Store) RecordStep(spanID string, step workflow.TraceStep) {
-	if s.db == nil {
-		return
-	}
 	if step.Kind == "" {
 		step.Kind = workflow.StepKindTool
 	}
@@ -766,7 +752,7 @@ func (s *Store) RecordStep(spanID string, step workflow.TraceStep) {
 // The write is synchronous so that a subsequent ListSteps call (e.g. from the
 // UI on first accordion open) always observes the committed rows.
 func (s *Store) RecordSteps(spanID string, steps []workflow.TraceStep) {
-	if s.db == nil || len(steps) == 0 {
+	if len(steps) == 0 {
 		return
 	}
 	s.stepMu.Lock()
@@ -798,12 +784,8 @@ func (s *Store) RecordSteps(spanID string, steps []workflow.TraceStep) {
 }
 
 // ListSteps returns the tool-loop transcript steps for a span, ordered by
-// step_index ascending. Returns nil when no steps exist or the database is
-// not configured.
+// step_index ascending. Returns nil when no steps exist.
 func (s *Store) ListSteps(spanID string) []workflow.TraceStep {
-	if s.db == nil {
-		return nil
-	}
 	return s.listSteps(spanID)
 }
 
@@ -834,9 +816,6 @@ func (s *Store) listSteps(spanID string) []workflow.TraceStep {
 // ordered under stepMu so a caller cannot miss rows committed between replay
 // and live tail subscription.
 func (s *Store) SubscribeSteps(spanID string) ([]workflow.TraceStep, chan workflow.TraceStep, bool) {
-	if s.db == nil {
-		return nil, nil, false
-	}
 	s.stepMu.Lock()
 	defer s.stepMu.Unlock()
 	steps := s.listSteps(spanID)
