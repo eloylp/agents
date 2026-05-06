@@ -48,7 +48,12 @@ func New(t *testing.T, cfg *config.Config) *daemon.Daemon {
 		cfg.Daemon.AIBackends = backends
 	}
 	if len(agents) == 0 {
-		agents = []fleet.Agent{{Name: "coder", Backend: pickAnyBackend(backends), Prompt: "code", Description: "Writes code"}}
+		backend := "claude"
+		for name := range backends {
+			backend = name
+			break
+		}
+		agents = []fleet.Agent{{Name: "coder", Backend: backend, Prompt: "code", Description: "Writes code"}}
 		cfg.Agents = agents
 	}
 	for i := range agents {
@@ -66,13 +71,6 @@ func New(t *testing.T, cfg *config.Config) *daemon.Daemon {
 		t.Fatalf("daemon.New: %v", err)
 	}
 	return d
-}
-
-func pickAnyBackend(backends map[string]fleet.Backend) string {
-	for name := range backends {
-		return name
-	}
-	return "claude"
 }
 
 // MinimalCfg returns a *config.Config with the daemon-level fields the
@@ -94,9 +92,9 @@ func MinimalCfg(mutator func(*config.Config)) *config.Config {
 				EventQueueBuffer:    16,
 				MaxConcurrentAgents: 1,
 				Dispatch: config.DispatchConfig{
-					MaxDepth:           2,
-					MaxFanout:          2,
-					DedupWindowSeconds: 60,
+					MaxDepth:            2,
+					MaxFanout:           2,
+					DedupWindowSeconds:  60,
 				},
 			},
 			AIBackends: map[string]fleet.Backend{
