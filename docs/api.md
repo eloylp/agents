@@ -2,7 +2,7 @@
 
 This page documents the REST endpoints exposed by the daemon. The MCP (Model Context Protocol) server at `/mcp` has its own reference in [mcp.md](mcp.md).
 
-All endpoints are unauthenticated at the daemon level; access control is the reverse proxy's responsibility.
+Sensitive endpoints require daemon auth. Browser clients use the `agents_session` `HttpOnly` cookie; REST and MCP clients send a DB-backed API token with `Authorization: Bearer <token>`. `/status`, `/webhooks/github`, `/auth/status`, `/auth/login`, `/auth/bootstrap`, and UI static assets remain public where applicable. The local-model proxy accepts unauthenticated loopback calls from backend subprocesses; remote proxy callers need daemon auth.
 
 ## Core endpoints
 
@@ -60,7 +60,7 @@ The daemon's event queue is durable: every `PushEvent` writes to the SQLite `eve
 
 ## Proxy endpoints (opt-in)
 
-These are only mounted when `AGENTS_PROXY_ENABLED=true` is set in the daemon environment.
+These are only mounted when `AGENTS_PROXY_ENABLED=true` is set in the daemon environment. Unauthenticated access is limited to loopback clients (`127.0.0.1` / `::1`) so local backend subprocesses can call the proxy. Remote clients must authenticate with the same daemon session/API-token mechanisms as the rest of the sensitive API.
 
 | Method | Path | Description |
 |---|---|---|

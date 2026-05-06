@@ -1,6 +1,7 @@
 package daemon_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -52,10 +53,7 @@ func TestBuildRouterRegistersExpectedRoutes(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := newTestServer(t, testCfg(nil))
-	router, ok := srv.Handler().(*mux.Router)
-	if !ok {
-		t.Fatalf("handler type = %T, want *mux.Router", srv.Handler())
-	}
+	router := srv.Router()
 
 	expected := []struct {
 		method string
@@ -660,13 +658,32 @@ func newRequest(method, path, body string) *http.Request {
 	return httptest.NewRequest(method, path, strings.NewReader(body))
 }
 
+func bootstrapSessionCookie(t *testing.T, server *daemon.Daemon) *http.Cookie {
+	t.Helper()
+	req := newRequest(http.MethodPost, "/auth/bootstrap", `{"username":"admin","password":"correct horse battery staple"}`)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	server.AuthHandler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("bootstrap got %d, want %d: %s", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+	for _, cookie := range rr.Result().Cookies() {
+		if cookie.Name == "agents_session" {
+			return cookie
+		}
+	}
+	t.Fatal("bootstrap did not set agents_session cookie")
+	return nil
+}
+
 func TestHandleAgentsRunEnqueuesEvent(t *testing.T) {
 	t.Parallel()
 	server := newRunServer(t)
 
 	req := newRequest(http.MethodPost, "/run", `{"agent":"coder","repo":"owner/repo"}`)
+	req.AddCookie(bootstrapSessionCookie(t, server))
 	rr := httptest.NewRecorder()
-	server.Handler().ServeHTTP(rr, req)
+	server.AuthHandler().ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("expected %d, got %d: %s", http.StatusAccepted, rr.Code, rr.Body.String())
@@ -699,8 +716,9 @@ func TestHandleAgentsRunReturnsBadRequestOnMissingFields(t *testing.T) {
 			t.Parallel()
 			server := newRunServer(t)
 			req := newRequest(http.MethodPost, "/run", tc.body)
+			req.AddCookie(bootstrapSessionCookie(t, server))
 			rr := httptest.NewRecorder()
-			server.Handler().ServeHTTP(rr, req)
+			server.AuthHandler().ServeHTTP(rr, req)
 			if rr.Code != http.StatusBadRequest {
 				t.Fatalf("got %d, want %d", rr.Code, http.StatusBadRequest)
 			}
@@ -712,8 +730,9 @@ func TestHandleAgentsRunReturnsNotFoundForUnknownRepo(t *testing.T) {
 	t.Parallel()
 	server := newRunServer(t)
 	req := newRequest(http.MethodPost, "/run", `{"agent":"coder","repo":"unknown/repo"}`)
+	req.AddCookie(bootstrapSessionCookie(t, server))
 	rr := httptest.NewRecorder()
-	server.Handler().ServeHTTP(rr, req)
+	server.AuthHandler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("got %d, want %d", rr.Code, http.StatusNotFound)
 	}
@@ -755,7 +774,7 @@ func TestUISlashlessRedirect(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := newTestServer(t, testCfg(nil))
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(srv.AuthHandler())
 	defer ts.Close()
 
 	client := &http.Client{
@@ -780,27 +799,22 @@ func TestUISlashlessRedirect(t *testing.T) {
 	}
 }
 
-// TestBuildHandlerObservabilityRoutesAreOpen verifies that the read-only
-// observability endpoints and the UI paths are accessible without any
-// daemon-level auth. Access control is the reverse proxy's responsibility.
-func TestBuildHandlerObservabilityRoutesAreOpen(t *testing.T) {
+// TestBuildHandlerPublicRoutesStayOpen verifies that setup/liveness/browser-shell
+// routes are reachable without daemon auth. Sensitive APIs stay protected even
+// before the first user is created.
+func TestBuildHandlerPublicRoutesStayOpen(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := newTestServer(t, testCfg(nil))
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(srv.AuthHandler())
 	t.Cleanup(ts.Close)
 
-	// These read-only routes must NOT require a Bearer token.
 	openRoutes := []struct {
 		method string
 		path   string
 	}{
-		{http.MethodGet, "/agents"},
-		{http.MethodGet, "/config"},
-		{http.MethodGet, "/dispatches"},
-		{http.MethodGet, "/events"},
-		{http.MethodGet, "/traces"},
-		{http.MethodGet, "/graph"},
+		{http.MethodGet, "/status"},
+		{http.MethodGet, "/auth/status"},
 		{http.MethodGet, "/ui/"},
 	}
 
@@ -814,7 +828,7 @@ func TestBuildHandlerObservabilityRoutesAreOpen(t *testing.T) {
 			}
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusUnauthorized {
-				t.Errorf("observability route %s %s must be open (no auth required), got 401", tc.method, tc.path)
+				t.Errorf("public route %s %s must be open, got 401", tc.method, tc.path)
 			}
 		})
 	}
@@ -827,7 +841,7 @@ func TestBuildHandlerBearerAuthProtectsSensitiveRoutes(t *testing.T) {
 	srv, _ := newTestServer(t, testCfg(func(c *config.Config) {
 		c.Daemon.Auth.BearerTokenHash = hex.EncodeToString(sum[:])
 	}))
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(srv.AuthHandler())
 	t.Cleanup(ts.Close)
 
 	tests := []struct {
@@ -861,5 +875,140 @@ func TestBuildHandlerBearerAuthProtectsSensitiveRoutes(t *testing.T) {
 				t.Fatalf("%s %s got %d, want %d", tc.method, tc.path, resp.StatusCode, tc.wantStatus)
 			}
 		})
+	}
+}
+
+func TestBuildHandlerProxyRoutesAreLocalOnlyWithoutAuth(t *testing.T) {
+	t.Parallel()
+
+	sum := sha256.Sum256([]byte("secret-token"))
+	srv, _ := newTestServer(t, testCfg(func(c *config.Config) {
+		c.Daemon.Auth.BearerTokenHash = hex.EncodeToString(sum[:])
+		c.Daemon.Proxy = config.ProxyConfig{
+			Enabled: true,
+			Path:    "/v1/messages",
+			Upstream: config.ProxyUpstreamConfig{
+				URL:            "http://llm.local/v1",
+				Model:          "local-model",
+				TimeoutSeconds: 60,
+			},
+		}
+	}))
+
+	tests := []struct {
+		name       string
+		remoteAddr string
+		authHeader string
+		wantStatus int
+	}{
+		{name: "remote proxy call requires auth", remoteAddr: "203.0.113.10:4444", wantStatus: http.StatusUnauthorized},
+		{name: "loopback proxy call reaches proxy", remoteAddr: "127.0.0.1:4444", wantStatus: http.StatusBadRequest},
+		{name: "remote proxy call with auth reaches proxy", remoteAddr: "203.0.113.10:4444", authHeader: "Bearer secret-token", wantStatus: http.StatusBadRequest},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{}`))
+			req.RemoteAddr = tc.remoteAddr
+			if tc.authHeader != "" {
+				req.Header.Set("Authorization", tc.authHeader)
+			}
+			rr := httptest.NewRecorder()
+			srv.AuthHandler().ServeHTTP(rr, req)
+			if rr.Code != tc.wantStatus {
+				t.Fatalf("got %d, want %d: %s", rr.Code, tc.wantStatus, rr.Body.String())
+			}
+		})
+	}
+}
+
+func TestBuildHandlerDBAuthBootstrapLoginAndAPIToken(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := newTestServer(t, testCfg(nil))
+	ts := httptest.NewServer(srv.AuthHandler())
+	t.Cleanup(ts.Close)
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/config", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("pre-bootstrap config request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("pre-bootstrap /config got %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+
+	bootstrapBody := []byte(`{"username":"admin","password":"correct horse battery staple"}`)
+	resp, err = http.Post(ts.URL+"/auth/bootstrap", "application/json", bytes.NewReader(bootstrapBody))
+	if err != nil {
+		t.Fatalf("bootstrap request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("bootstrap got %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+	var sessionCookie *http.Cookie
+	for _, cookie := range resp.Cookies() {
+		if cookie.Name == "agents_session" {
+			sessionCookie = cookie
+		}
+	}
+	if sessionCookie == nil || !sessionCookie.HttpOnly {
+		t.Fatalf("bootstrap session cookie = %#v, want HttpOnly agents_session", sessionCookie)
+	}
+
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+"/config", nil)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("unauthenticated config request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("post-bootstrap unauthenticated /config got %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+"/config", nil)
+	req.AddCookie(sessionCookie)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("session config request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("session /config got %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/auth/tokens", bytes.NewReader([]byte(`{"name":"Codex MCP"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(sessionCookie)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create token request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create token got %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+	var created struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode token response: %v", err)
+	}
+	if created.Token == "" {
+		t.Fatal("created API token is empty")
+	}
+
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+"/config", nil)
+	req.Header.Set("Authorization", "Bearer "+created.Token)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("api token config request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("api token /config got %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 }

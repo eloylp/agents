@@ -11,7 +11,7 @@ The MCP surface is functionally equivalent to the REST CRUD API documented in [a
 From Claude Code:
 
 ```bash
-export AGENTS_MCP_TOKEN='your-token'
+export AGENTS_MCP_TOKEN='agents_...'
 claude mcp add -t http -s user agents-fleet https://agents.example.com/mcp \
   -H "Authorization: Bearer $AGENTS_MCP_TOKEN"
 ```
@@ -19,11 +19,11 @@ claude mcp add -t http -s user agents-fleet https://agents.example.com/mcp \
 From Codex:
 
 ```bash
-export AGENTS_MCP_TOKEN='your-token'
+export AGENTS_MCP_TOKEN='agents_...'
 codex mcp add agents-fleet --url https://agents.example.com/mcp --bearer-token-env-var AGENTS_MCP_TOKEN
 ```
 
-When `AGENTS_AUTH_BEARER_TOKEN_HASH` is set on the daemon, MCP clients must send the matching bearer token. For unauthenticated local development, drop the `-H` flag in Claude or the `--bearer-token-env-var` flag in Codex.
+Create `AGENTS_MCP_TOKEN` from the dashboard at Config -> Tokens. Plaintext tokens are shown only once and can be revoked from the same page. Legacy deployments that still set `AGENTS_AUTH_BEARER_TOKEN_HASH` may use the matching bearer token during migration, but named DB-backed API tokens are the recommended MCP credential.
 
 The same pattern works for Cursor, Cline, and any other MCP-compatible client; consult their docs for the exact config syntax.
 

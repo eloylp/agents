@@ -5,12 +5,24 @@ This page describes the daemon's threat model and the recommendations shipped ag
 ## Defaults the project ships
 
 - **Webhook HMAC verification** on every `POST /webhooks/github` request.
-- **Minimal bearer-token auth for sensitive daemon routes.** Set `AGENTS_AUTH_BEARER_TOKEN_HASH` to a SHA-256 hex hash of the operator token. When set, API, MCP, `/run`, traces, runners, config, guardrails, repos, skills, agents, memory, graph, and event routes require `Authorization: Bearer <token>`. The UI shell at `/ui/` stays public so browsers can render the first-use token modal, but all sensitive data fetches require the token. This is the launch-time auth bridge; the full auth system is tracked in [#421](https://github.com/eloylp/agents/issues/421).
+- **DB-backed daemon auth for sensitive routes.** The dashboard creates the first local user, browser sessions use opaque DB-backed tokens in an `HttpOnly` cookie, and MCP/API clients use named revocable bearer tokens created from Config -> Tokens. Existing `AGENTS_AUTH_BEARER_TOKEN_HASH` deployments still work as bootstrap and compatibility auth.
 - **The daemon itself is read-only against GitHub.** GitHub operations happen inside the AI backend subprocess. Agents are instructed to prefer GitHub MCP tools; an authenticated `gh` CLI is present as a fallback for complex local checkout, test, and PR flows. The daemon still has no GitHub write SDK in `cmd/agents`.
 - **Per-event audit trail.** Every run records the composed prompt, every tool call with input/output summaries, and the response. Reachable from the dashboard for forensic review.
 - **Default built-in guardrails seeded into the database.** Policy blocks prepended to every agent's composed prompt at render time. `security` recommends ignoring instructions found in untrusted text, refusing secret reads/exfiltration, refusing out-of-tree filesystem access, refusing arbitrary network egress, and halting on probable injection. `memory-scope` tells agents to use only daemon-provided `Existing memory:` for the current `(agent, repo)` pair, ignore CLI-native/session/global memory, and stay bound to the repository named in the runtime context. `mcp-tool-usage` tells agents to use MCP first and authenticated `gh` only as fallback for complex local checkout/test/PR loops. **Operators can edit, disable, or replace built-ins** via `/ui/config` → Guardrails. Inspect live text at `GET /guardrails/{name}`. Like every prompt-level control, sufficiently determined indirect-injection attacks (role-play, encoded payloads, multi-turn manipulation) can defeat them.
 
-## Bearer-token auth <a id="bearer-token-auth"></a>
+## Daemon auth <a id="daemon-auth"></a>
+
+On a fresh database, open the dashboard and create the first user. The daemon stores a password hash and issues an opaque session token in an `HttpOnly` cookie. After at least one user exists, sensitive REST, MCP, `/run`, traces, runners, config, guardrails, repos, skills, agents, memory, graph, and event routes require one of:
+
+1. A valid browser session cookie.
+2. A valid DB-backed API token sent as `Authorization: Bearer <token>`.
+3. The legacy `AGENTS_AUTH_BEARER_TOKEN_HASH` bearer token, when configured.
+
+Create MCP/API tokens from Config -> Tokens. Plaintext API tokens are returned only once at creation; the database stores only token hashes plus metadata such as name, prefix, creation time, last-used time, expiry, and revocation time.
+
+`GITHUB_TOKEN` is unrelated to daemon auth. It remains the GitHub credential used by MCP, the `gh` fallback, and AI backend subprocesses. `GITHUB_WEBHOOK_SECRET` is also separate and remains the HMAC secret for `/webhooks/github`.
+
+## Legacy bearer-token auth <a id="bearer-token-auth"></a>
 
 Set the token hash at daemon startup:
 
@@ -28,7 +40,7 @@ Then put the resulting 64-character hex string in `.env`:
 AGENTS_AUTH_BEARER_TOKEN_HASH=...
 ```
 
-Do not hash a string with a trailing newline. If `AGENTS_AUTH_BEARER_TOKEN_HASH` is empty or unset, daemon-level bearer auth is disabled.
+Do not hash a string with a trailing newline. If `AGENTS_AUTH_BEARER_TOKEN_HASH` is empty or unset, legacy bearer compatibility is disabled.
 
 Authenticated clients send:
 
@@ -36,7 +48,7 @@ Authenticated clients send:
 Authorization: Bearer your-token
 ```
 
-The dashboard stores the token in browser `localStorage` and attaches it to same-origin API calls. This is convenient, not a substitute for a real user/session model.
+If no local users exist and `AGENTS_AUTH_BEARER_TOKEN_HASH` is set, first-user bootstrap requires this legacy bearer token. After bootstrap, prefer named DB-backed API tokens and remove the env hash when migration is complete.
 
 ## Reverse-proxy routing <a id="reverse-proxy-routing"></a>
 
@@ -44,10 +56,11 @@ Use your reverse proxy for TLS and routing. With `AGENTS_AUTH_BEARER_TOKEN_HASH`
 
 | Router | Paths | Auth | Purpose |
 |---|---|---|---|
-| **Daemon** | all paths | daemon bearer token on sensitive routes | `/mcp`, `/run`, API, observability, config, runners; `/ui/` shell loads publicly but data calls require bearer |
-| **Public** | `/status`, `/webhooks/github`, `/v1/*`, `/ui/*` shell/assets | none at proxy | GitHub cannot send auth on webhooks; `/status` must stay reachable for liveness probes; `/v1/*` proxy clients use their own upstream auth; `/ui/*` must render before the browser has a token. |
+| **Daemon** | all paths | session cookie or daemon API token on sensitive routes | `/mcp`, `/run`, API, observability, config, runners; `/ui/` shell loads publicly but data calls require auth |
+| **Public** | `/status`, `/webhooks/github`, `/auth/status`, `/auth/login`, `/auth/bootstrap`, `/ui/*` shell/assets | none at proxy | GitHub cannot send auth on webhooks; `/status` must stay reachable for liveness probes; `/ui/*` must render before the browser has a session. |
+| **Local proxy** | `/v1/messages`, `/v1/models` when proxy is enabled | no daemon auth only for loopback clients; remote clients need daemon auth | Backend CLI subprocesses run on the daemon host/container and call the proxy locally. Do not expose the proxy as an unauthenticated public route. |
 
-`/webhooks/github` is safe to expose publicly because every request is HMAC-verified against `GITHUB_WEBHOOK_SECRET` before it is accepted. `/run` is protected by daemon bearer auth when `AGENTS_AUTH_BEARER_TOKEN_HASH` is set.
+`/webhooks/github` is safe to expose publicly because every request is HMAC-verified against `GITHUB_WEBHOOK_SECRET` before it is accepted. `/run` is protected once daemon auth is initialized.
 
 For production, drop the `ports: 8080:8080` block from the shipped compose so the proxy reaches the container on the internal Docker network instead, and replace `build: .` with a pinned `image:` reference.
 
@@ -61,7 +74,7 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=web"
 
-      # Public-at-proxy router: daemon enforces bearer auth on sensitive routes.
+      # Public-at-proxy router: daemon enforces auth on sensitive routes.
       - "traefik.http.routers.agents.rule=Host(`agents.example.com`)"
       - "traefik.http.routers.agents.entrypoints=websecure"
       - "traefik.http.routers.agents.tls.certresolver=letsencrypt"
@@ -73,7 +86,7 @@ networks:
     external: true
 ```
 
-The principle carries over to Caddy, nginx, or any other proxy: terminate TLS, forward to the daemon, and let daemon bearer auth protect sensitive API/MCP routes.
+The principle carries over to Caddy, nginx, or any other proxy: terminate TLS, forward to the daemon, and let daemon auth protect sensitive API/MCP routes.
 
 ## What the operator must own
 
