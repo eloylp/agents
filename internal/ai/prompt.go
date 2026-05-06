@@ -176,7 +176,7 @@ func renderRuntimeContext(ctx PromptContext) string {
 			v := ctx.Payload[k]
 			if s, ok := v.(string); ok && strings.Contains(s, "\n") {
 				fmt.Fprintf(&b, "%s:\n", k)
-				for _, line := range strings.Split(s, "\n") {
+				for line := range strings.SplitSeq(s, "\n") {
 					fmt.Fprintf(&b, "  %s\n", line)
 				}
 			} else {
