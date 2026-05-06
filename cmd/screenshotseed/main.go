@@ -129,21 +129,21 @@ func buildFixtureConfig() *config.Config {
 			AIBackends: map[string]fleet.Backend{
 				"claude": {
 					Command: "claude", Version: "claude-code 0.4.2",
-					Models:         []string{"claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"},
-					Healthy:        true, HealthDetail: "GitHub MCP reachable",
+					Models:  []string{"claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"},
+					Healthy: true, HealthDetail: "GitHub MCP reachable",
 					TimeoutSeconds: 1500, MaxPromptChars: 12000,
 				},
 				"codex": {
 					Command: "codex", Version: "codex 0.9.1",
-					Models:         []string{"gpt-5", "gpt-5-mini"},
-					Healthy:        false, HealthDetail: "GitHub MCP server not registered, run `codex mcp add github`",
+					Models:  []string{"gpt-5", "gpt-5-mini"},
+					Healthy: false, HealthDetail: "GitHub MCP server not registered, run `codex mcp add github`",
 					TimeoutSeconds: 600, MaxPromptChars: 10000,
 				},
 				"local-qwen": {
-					Command:        "claude",
-					Version:        "claude-code 0.4.2 → local-llm",
-					Models:         []string{"qwen3-coder-480b"},
-					Healthy:        true, HealthDetail: "routed via Anthropic↔OpenAI proxy",
+					Command: "claude",
+					Version: "claude-code 0.4.2 → local-llm",
+					Models:  []string{"qwen3-coder-480b"},
+					Healthy: true, HealthDetail: "routed via Anthropic↔OpenAI proxy",
 					LocalModelURL:  "http://local-llm:18000/v1",
 					TimeoutSeconds: 900, MaxPromptChars: 8000,
 				},
@@ -256,10 +256,10 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 			SpanID: "span-001", RootEventID: "evt-001",
 			Agent: "coder", Backend: "claude", Repo: "acme/widgets",
 			Number: 142, EventKind: "issues.labeled",
-			Summary: "Implemented checkout fix; opened PR #143 with two regression tests",
+			Summary:   "Implemented checkout fix; opened PR #143 with two regression tests",
 			StartedAt: now.Add(-22 * time.Minute), FinishedAt: now.Add(-19 * time.Minute),
-			Status: "success",
-			Prompt: "## Runtime context\n\nEvent: issues.labeled\nActor: alice\nRepo: acme/widgets #142\n\n## Issue\n\n**Empty cart in checkout returns 500.** Reproduce by clicking 'pay' with no items in the cart.\n\n## Available experts\n\n- pr-reviewer, Reviews open PRs for correctness, design, and test coverage.\n\n## Memory\n\n_no memory yet_\n\n## Response format\n\nReturn a single JSON object matching the response schema. Include a one-line summary, any artifacts you produced, and any agents you want to dispatch.\n",
+			Status:      "success",
+			Prompt:      "## Runtime context\n\nEvent: issues.labeled\nActor: alice\nRepo: acme/widgets #142\n\n## Issue\n\n**Empty cart in checkout returns 500.** Reproduce by clicking 'pay' with no items in the cart.\n\n## Available experts\n\n- pr-reviewer, Reviews open PRs for correctness, design, and test coverage.\n\n## Memory\n\n_no memory yet_\n\n## Response format\n\nReturn a single JSON object matching the response schema. Include a one-line summary, any artifacts you produced, and any agents you want to dispatch.\n",
 			InputTokens: 4321, OutputTokens: 1850, CacheReadTokens: 12400, CacheWriteTokens: 2100,
 			ArtifactsCount: 1,
 		},
@@ -267,37 +267,37 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 			SpanID: "span-002", RootEventID: "evt-005", ParentSpanID: "span-001",
 			Agent: "pr-reviewer", Backend: "claude", Repo: "acme/widgets",
 			Number: 143, EventKind: "agent.dispatch", InvokedBy: "coder", DispatchDepth: 1,
-			Summary: "Approved with one nit: missing edge case for negative totals",
+			Summary:   "Approved with one nit: missing edge case for negative totals",
 			StartedAt: now.Add(-17 * time.Minute), FinishedAt: now.Add(-14 * time.Minute),
-			Status: "success",
-			Prompt: "## Runtime context\n\nEvent: agent.dispatch\nInvoked by: coder\nReason: PR ready for review\nRepo: acme/widgets #143\n\nReview PR #143: 'fix: handle empty cart in checkout'.\n",
+			Status:      "success",
+			Prompt:      "## Runtime context\n\nEvent: agent.dispatch\nInvoked by: coder\nReason: PR ready for review\nRepo: acme/widgets #143\n\nReview PR #143: 'fix: handle empty cart in checkout'.\n",
 			InputTokens: 5210, OutputTokens: 920, CacheReadTokens: 11800, CacheWriteTokens: 1500,
 		},
 		{
 			SpanID: "span-003", RootEventID: "evt-004",
 			Agent: "pr-reviewer", Backend: "claude", Repo: "acme/control-plane",
 			Number: 88, EventKind: "pull_request.opened",
-			Summary: "Requested changes: rate limiter algorithm choice doesn't account for the cron-tick burst pattern",
+			Summary:   "Requested changes: rate limiter algorithm choice doesn't account for the cron-tick burst pattern",
 			StartedAt: now.Add(-10 * time.Minute), FinishedAt: now.Add(-7 * time.Minute),
-			Status: "success",
+			Status:      "success",
 			InputTokens: 6100, OutputTokens: 1340, CacheReadTokens: 9800, CacheWriteTokens: 1100,
 		},
 		{
 			SpanID: "span-004", RootEventID: "evt-006",
 			Agent: "scout", Backend: "claude", Repo: "acme/control-plane",
 			Number: 0, EventKind: "cron",
-			Summary: "Found 3 stale TODOs in internal/limiter; filed issue #91",
+			Summary:   "Found 3 stale TODOs in internal/limiter; filed issue #91",
 			StartedAt: now.Add(-5 * time.Minute), FinishedAt: now.Add(-3 * time.Minute),
-			Status: "success",
+			Status:      "success",
 			InputTokens: 2200, OutputTokens: 410, CacheReadTokens: 8200, CacheWriteTokens: 800,
 		},
 		{
 			SpanID: "span-005", RootEventID: "evt-008",
 			Agent: "pr-reviewer", Backend: "claude", Repo: "acme/widgets",
 			Number: 138, EventKind: "pull_request.opened",
-			Summary: "Approved",
+			Summary:   "Approved",
 			StartedAt: now.Add(-45 * time.Minute), FinishedAt: now.Add(-42 * time.Minute),
-			Status:    "success",
+			Status: "success",
 		},
 	}
 	for _, sp := range completed {
@@ -331,7 +331,7 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 	// Event_queue rows so the runners view has both completed and
 	// in-flight rows. The completed rows JOIN to the trace spans above.
 	for _, q := range []struct {
-		ev          workflow.Event
+		ev           workflow.Event
 		started, end *time.Time
 	}{
 		queueRow(events[0], ptrMinus(now, 22*time.Minute), ptrMinus(now, 19*time.Minute)),
@@ -376,26 +376,24 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 		Repo: "acme/widgets", EventKind: "issues.labeled",
 		StartedAt: now.Add(-30 * time.Second),
 	})
-	// Pre-publish a few stream lines so a fresh subscriber sees content
+	// Pre-persist a few transcript steps so a fresh subscriber sees content
 	// in the Live modal immediately.
-	for _, line := range []string{
-		`{"type":"system","subtype":"init","model":"claude-opus-4-7","tools":["read_file","write_file","bash","gh"]}`,
-		`{"type":"assistant","message":{"content":[{"type":"text","text":"Reading the existing checkout module to understand the empty-cart code path."}]}}`,
-		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu_1","name":"read_file","input":{"path":"internal/checkout/handler.go"}}]}}`,
-		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_1","content":"package checkout\n\nfunc Handle(...)... (truncated 220 lines)"}]}}`,
-		`{"type":"assistant","message":{"content":[{"type":"text","text":"The handler doesn't validate that the cart is non-empty before computing total. I'll add a guard and a regression test."}]}}`,
-		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu_2","name":"write_file","input":{"path":"internal/checkout/handler.go","content":"<patched body, ~40 lines>"}}]}}`,
+	for _, step := range []workflow.TraceStep{
+		{Kind: workflow.StepKindThinking, InputSummary: "Reading the existing checkout module to understand the empty-cart code path."},
+		{Kind: workflow.StepKindTool, ToolName: "read_file", InputSummary: `{"path":"internal/checkout/handler.go"}`, OutputSummary: "package checkout\n\nfunc Handle(...)... (truncated 220 lines)"},
+		{Kind: workflow.StepKindThinking, InputSummary: "The handler doesn't validate that the cart is non-empty before computing total. I'll add a guard and a regression test."},
+		{Kind: workflow.StepKindTool, ToolName: "write_file", InputSummary: `{"path":"internal/checkout/handler.go","content":"<patched body, ~40 lines>"}`},
 	} {
-		obs.Runs.PublishLine("span-live-1", []byte(line))
+		obs.RecordStep("span-live-1", step)
 	}
 }
 
 func queueRow(ev workflow.Event, started, completed *time.Time) struct {
-	ev          workflow.Event
+	ev           workflow.Event
 	started, end *time.Time
 } {
 	return struct {
-		ev          workflow.Event
+		ev           workflow.Event
 		started, end *time.Time
 	}{ev, started, completed}
 }

@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"slices"
 	"sync"
 	"time"
 
@@ -39,9 +38,9 @@ type TimestampedEvent struct {
 
 // Span records the timing and outcome of a single agent run.
 type Span struct {
-	SpanID        string    `json:"span_id"`
-	RootEventID   string    `json:"root_event_id"`
-	ParentSpanID  string    `json:"parent_span_id,omitempty"`
+	SpanID         string    `json:"span_id"`
+	RootEventID    string    `json:"root_event_id"`
+	ParentSpanID   string    `json:"parent_span_id,omitempty"`
 	Agent          string    `json:"agent"`
 	Backend        string    `json:"backend"`
 	Repo           string    `json:"repo"`
@@ -49,8 +48,8 @@ type Span struct {
 	EventKind      string    `json:"event_kind"`
 	InvokedBy      string    `json:"invoked_by,omitempty"`
 	DispatchDepth  int       `json:"dispatch_depth"`
-	QueueWaitMs    int64     `json:"queue_wait_ms"`   // time from enqueue to run start
-	ArtifactsCount int       `json:"artifacts_count"` // number of artifacts produced
+	QueueWaitMs    int64     `json:"queue_wait_ms"`     // time from enqueue to run start
+	ArtifactsCount int       `json:"artifacts_count"`   // number of artifacts produced
 	Summary        string    `json:"summary,omitempty"` // agent's one-line response summary
 	StartedAt      time.Time `json:"started_at"`
 	FinishedAt     time.Time `json:"finished_at"`
@@ -207,47 +206,36 @@ type ActiveRun struct {
 	StartedAt time.Time
 }
 
-// runStream is the per-span pub/sub hub for live stdout lines, plus a
-// bounded ring buffer so a UI client connecting mid-run sees the
-// recent history before the live tail kicks in.
+// runStream is the per-span pub/sub hub for live persisted TraceStep rows.
+// History lives in trace_steps; this hub is only a wake-up/tail notifier.
 type runStream struct {
-	mu       sync.Mutex
-	history  [][]byte         // most recent N lines (newest at end)
-	subs     map[chan []byte]struct{}
-	closed   bool             // true after End is called; subs still drain history
-	finishAt time.Time        // when End was called; registry sweeps after grace period
+	mu     sync.Mutex
+	subs   map[chan workflow.TraceStep]struct{}
+	closed bool
 }
 
 const (
-	runStreamHistoryCap = 1000   // ring buffer per span
-	runStreamSubBufCap  = 256    // per-subscriber channel buffer
-	runStreamGrace      = 60 * time.Second // keep streams subscribable after End
+	runStreamSubBufCap = 256 // per-subscriber channel buffer
 )
 
 func newRunStream() *runStream {
 	return &runStream{
-		history: make([][]byte, 0, 64),
-		subs:    make(map[chan []byte]struct{}),
+		subs: make(map[chan workflow.TraceStep]struct{}),
 	}
 }
 
-// publish records a line in the ring buffer and fans it out to live
-// subscribers. A full subscriber channel drops the line silently , 
-// observability must not back-pressure the runner.
-func (r *runStream) publish(line []byte) {
-	cp := bytes.Clone(line)
+// publish fans a persisted step out to live subscribers. A full subscriber
+// channel drops the step silently; observability must not back-pressure the
+// runner after the DB write has committed.
+func (r *runStream) publish(step workflow.TraceStep) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
 		return
 	}
-	if len(r.history) >= runStreamHistoryCap {
-		r.history = slices.Delete(r.history, 0, 1)
-	}
-	r.history = append(r.history, cp)
 	for ch := range r.subs {
 		select {
-		case ch <- cp:
+		case ch <- step:
 		default:
 		}
 	}
@@ -257,43 +245,34 @@ func (r *runStream) end() {
 	r.mu.Lock()
 	if !r.closed {
 		r.closed = true
-		r.finishAt = time.Now()
 	}
 	subs := r.subs
 	r.mu.Unlock()
-	// Close every subscriber channel so SSE handlers exit their range
-	// loop. Replay clients that connect after End still see the full
-	// history (Subscribe replays first), then immediately get a closed
-	// channel and disconnect.
+	// Close every subscriber channel so SSE handlers emit the terminal event.
 	for ch := range subs {
 		close(ch)
 	}
 	r.mu.Lock()
-	r.subs = make(map[chan []byte]struct{})
+	r.subs = make(map[chan workflow.TraceStep]struct{})
 	r.mu.Unlock()
 }
 
-// subscribe returns the current history snapshot plus a channel for
-// future lines. The caller MUST consume the channel until close to
-// avoid leaking the subscription.
-func (r *runStream) subscribe() ([][]byte, chan []byte) {
+// subscribe returns a channel for future steps. The caller MUST consume the
+// channel until close or call unsubscribe to avoid leaking the subscription.
+func (r *runStream) subscribe() chan workflow.TraceStep {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	hist := slices.Clone(r.history)
 	if r.closed {
-		// Run finished, return history but no live channel. Hand back
-		// a closed channel so the caller's range loop exits cleanly
-		// after rendering history.
-		ch := make(chan []byte)
+		ch := make(chan workflow.TraceStep)
 		close(ch)
-		return hist, ch
+		return ch
 	}
-	ch := make(chan []byte, runStreamSubBufCap)
+	ch := make(chan workflow.TraceStep, runStreamSubBufCap)
 	r.subs[ch] = struct{}{}
-	return hist, ch
+	return ch
 }
 
-func (r *runStream) unsubscribe(ch chan []byte) {
+func (r *runStream) unsubscribe(ch chan workflow.TraceStep) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.subs[ch]; ok {
@@ -303,15 +282,13 @@ func (r *runStream) unsubscribe(ch chan []byte) {
 	}
 }
 
-// RunRegistry tracks active agent runs in memory. Each entry carries
-// enough metadata for the runners view to render an in-flight row
-// (agent + span_id) and a per-span stream hub for live stdout. Only
-// in-memory: a daemon restart loses the live data; persisted state
-// remains in the traces table.
+// RunRegistry tracks active agent runs in memory. Each entry carries enough
+// metadata for the runners view to render an in-flight row (agent + span_id)
+// and a per-span notifier for newly persisted transcript steps.
 type RunRegistry struct {
 	mu      sync.RWMutex
 	active  map[string]*ActiveRun // span_id → active entry
-	streams map[string]*runStream // span_id → stream (also kept after End during grace)
+	streams map[string]*runStream // span_id → live step notifier
 }
 
 func newRunRegistry() *RunRegistry {
@@ -321,9 +298,9 @@ func newRunRegistry() *RunRegistry {
 	}
 }
 
-// BeginRun registers a new active run and creates its stream hub. Call
-// before invoking the AI runner so the runners view can surface the
-// span_id and the live-stream subscriber sees lines from the start.
+// BeginRun registers a new active run and creates its step notifier. Call
+// before invoking the AI runner so the runners view can surface the span_id
+// and the live-stream subscriber can tail rows from the start.
 func (r *RunRegistry) BeginRun(run ActiveRun) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -333,38 +310,29 @@ func (r *RunRegistry) BeginRun(run ActiveRun) {
 	}
 }
 
-// PublishLine fans one stdout line out to live subscribers and records
-// it in the per-span ring buffer. Safe to call before BeginRun (no-op)
-// or after EndRun (also no-op, the stream is closed).
-func (r *RunRegistry) PublishLine(spanID string, line []byte) {
+// PublishStep fans one persisted step out to live subscribers. Safe to call
+// before BeginRun (no-op) or after EndRun (also no-op, the stream is closed).
+func (r *RunRegistry) PublishStep(spanID string, step workflow.TraceStep) {
 	r.mu.RLock()
 	st := r.streams[spanID]
 	r.mu.RUnlock()
 	if st == nil {
 		return
 	}
-	st.publish(line)
+	st.publish(step)
 }
 
-// EndRun marks a run finished. The stream hub stays subscribable for
-// runStreamGrace so a slow UI client can still pull the tail; the
-// active-run entry is removed immediately so the runners view stops
-// showing it as live.
+// EndRun marks a run finished. The active-run entry and step notifier are
+// removed immediately; completed streams remain readable from trace_steps.
 func (r *RunRegistry) EndRun(spanID string) {
 	r.mu.Lock()
 	delete(r.active, spanID)
 	st := r.streams[spanID]
+	delete(r.streams, spanID)
 	r.mu.Unlock()
 	if st != nil {
 		st.end()
 	}
-	// Schedule cleanup of the stream hub after the grace window.
-	go func() {
-		time.Sleep(runStreamGrace)
-		r.mu.Lock()
-		delete(r.streams, spanID)
-		r.mu.Unlock()
-	}()
 }
 
 // ListActive returns the currently-running spans matching eventID, in
@@ -383,23 +351,21 @@ func (r *RunRegistry) ListActive(eventID string) []ActiveRun {
 	return out
 }
 
-// SubscribeStream returns the current history of stdout lines for a
-// span plus a channel that receives subsequent lines. Returns ("", nil)
-// when no stream exists for the span (unknown id, or grace window
-// elapsed). Caller must drain the channel until it closes.
-func (r *RunRegistry) SubscribeStream(spanID string) ([][]byte, chan []byte, bool) {
+// SubscribeStream returns a channel that receives subsequent persisted steps.
+// Returns false when no stream exists for the span because the run is not
+// active. Caller must drain the channel until it closes.
+func (r *RunRegistry) SubscribeStream(spanID string) (chan workflow.TraceStep, bool) {
 	r.mu.RLock()
 	st := r.streams[spanID]
 	r.mu.RUnlock()
 	if st == nil {
-		return nil, nil, false
+		return nil, false
 	}
-	hist, ch := st.subscribe()
-	return hist, ch, true
+	return st.subscribe(), true
 }
 
 // UnsubscribeStream removes a per-stream subscriber. Idempotent.
-func (r *RunRegistry) UnsubscribeStream(spanID string, ch chan []byte) {
+func (r *RunRegistry) UnsubscribeStream(spanID string, ch chan workflow.TraceStep) {
 	r.mu.RLock()
 	st := r.streams[spanID]
 	r.mu.RUnlock()
@@ -416,6 +382,7 @@ func (r *RunRegistry) UnsubscribeStream(spanID string, ch chan []byte) {
 // streaming, and the active-run tracker for ephemeral per-process state.
 type Store struct {
 	db         *sql.DB
+	stepMu     sync.Mutex
 	EventsSSE  *SSEHub
 	TracesSSE  *SSEHub
 	MemorySSE  *SSEHub
@@ -632,9 +599,8 @@ func (s *Store) IsRunning(agentName string) bool {
 // Store satisfies workflow.EventRecorder, workflow.TraceRecorder, and
 // workflow.GraphRecorder through the methods below.
 
-// BeginRun implements workflow.RunStreamPublisher. Forwards to the
-// in-memory RunRegistry so the runners view can surface in-flight rows
-// and the live-stream SSE hub is ready before any stdout arrives.
+// BeginRun implements workflow.RunStreamPublisher. Forwards to the in-memory
+// RunRegistry so the runners view can surface in-flight rows.
 func (s *Store) BeginRun(in workflow.BeginRunInput) {
 	s.Runs.BeginRun(ActiveRun{
 		SpanID:    in.SpanID,
@@ -647,16 +613,8 @@ func (s *Store) BeginRun(in workflow.BeginRunInput) {
 	})
 }
 
-// PublishLine implements workflow.RunStreamPublisher. Forwards each
-// stdout line to the per-span hub. Drops silently when the span is
-// unknown (run not registered) or already ended.
-func (s *Store) PublishLine(spanID string, line []byte) {
-	s.Runs.PublishLine(spanID, line)
-}
-
-// EndRun implements workflow.RunStreamPublisher. Marks the run finished
-// in the registry and starts the grace window before the per-span hub
-// is reaped.
+// EndRun implements workflow.RunStreamPublisher. Marks the run finished in
+// the registry.
 func (s *Store) EndRun(spanID string) {
 	s.Runs.EndRun(spanID)
 }
@@ -769,6 +727,39 @@ func (s *Store) RecordDispatch(from, to, repo string, number int, reason string)
 	}
 }
 
+// RecordStep implements workflow.StepRecorder. It persists one tool-loop
+// transcript step to SQLite, then fans the committed row out to live stream
+// subscribers. Steps are stored sequentially and capped at 100 per span.
+func (s *Store) RecordStep(spanID string, step workflow.TraceStep) {
+	if s.db == nil {
+		return
+	}
+	if step.Kind == "" {
+		step.Kind = workflow.StepKindTool
+	}
+	inserted := false
+	s.stepMu.Lock()
+	var idx int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM trace_steps WHERE span_id=?`, spanID).Scan(&idx)
+	if err != nil {
+		log.Printf("observe: count trace steps for %s: %v", spanID, err)
+	} else if idx < 100 {
+		_, err = s.db.Exec(
+			`INSERT INTO trace_steps (span_id, step_index, kind, tool_name, input_summary, output_summary, duration_ms) VALUES (?,?,?,?,?,?,?)`,
+			spanID, idx, step.Kind, step.ToolName, step.InputSummary, step.OutputSummary, step.DurationMs,
+		)
+		if err != nil {
+			log.Printf("observe: insert trace step %d for %s: %v", idx, spanID, err)
+		} else {
+			inserted = true
+		}
+	}
+	s.stepMu.Unlock()
+	if inserted && s.Runs != nil {
+		s.Runs.PublishStep(spanID, step)
+	}
+}
+
 // RecordSteps implements workflow.StepRecorder. It persists the tool-loop
 // transcript steps for a completed span to SQLite. Steps are stored
 // sequentially (step_index 0, 1, …) and capped at 100 per span.
@@ -778,6 +769,8 @@ func (s *Store) RecordSteps(spanID string, steps []workflow.TraceStep) {
 	if s.db == nil || len(steps) == 0 {
 		return
 	}
+	s.stepMu.Lock()
+	defer s.stepMu.Unlock()
 	tx, err := s.db.Begin()
 	if err != nil {
 		log.Printf("observe: begin trace steps tx for %s: %v", spanID, err)
@@ -811,6 +804,10 @@ func (s *Store) ListSteps(spanID string) []workflow.TraceStep {
 	if s.db == nil {
 		return nil
 	}
+	return s.listSteps(spanID)
+}
+
+func (s *Store) listSteps(spanID string) []workflow.TraceStep {
 	rows, err := s.db.Query(
 		`SELECT kind, tool_name, input_summary, output_summary, duration_ms FROM trace_steps WHERE span_id=? ORDER BY step_index ASC`,
 		spanID,
@@ -830,6 +827,24 @@ func (s *Store) ListSteps(spanID string) []workflow.TraceStep {
 		out = append(out, step)
 	}
 	return out
+}
+
+// SubscribeSteps returns a replay snapshot and, when the run is still active,
+// a channel for subsequent persisted steps. The snapshot and subscription are
+// ordered under stepMu so a caller cannot miss rows committed between replay
+// and live tail subscription.
+func (s *Store) SubscribeSteps(spanID string) ([]workflow.TraceStep, chan workflow.TraceStep, bool) {
+	if s.db == nil {
+		return nil, nil, false
+	}
+	s.stepMu.Lock()
+	defer s.stepMu.Unlock()
+	steps := s.listSteps(spanID)
+	if s.Runs == nil {
+		return steps, nil, false
+	}
+	ch, active := s.Runs.SubscribeStream(spanID)
+	return steps, ch, active
 }
 
 // PublishMemoryChange emits a MemoryChangeEvent to the MemorySSE hub for the

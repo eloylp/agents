@@ -93,7 +93,7 @@ YAML config is import/export only, not a runtime input. To seed an empty fleet, 
   - `GET /traces/{root_event_id}`, all spans for a single root event.
   - `GET /traces/{span_id}/steps`, tool-loop transcript (ordered tool calls + durations) for a completed agent span.
   - `GET /traces/{span_id}/prompt`, composed prompt the daemon sent to the AI CLI for this run (text/plain). Stored gzipped on the trace row.
-  - `GET /traces/{span_id}/stream`, SSE stream of normalized `ai.StreamEvent` payloads (one JSON object per line) for in-flight or recently-finished spans. The daemon parses each AI CLI stdout line through a per-backend stream parser (`internal/ai/stream_events.go`) and publishes the canonical `{kind: tool_use|tool_result|thinking|usage|raw, ...}` shape, so the frontend ships one renderer instead of three format-specific parsers. Replays per-span ring buffer history first, then live-tails. Emits `event: end` on run completion. In-memory only.
+  - `GET /traces/{span_id}/stream`, SSE stream of persisted `TraceStep` rows (one JSON object per line). The daemon parses AI CLI stdout incrementally, writes each step to `trace_steps`, replays committed rows on connect, then live-tails newly committed rows. Emits `event: end` on run completion. SQLite is the transcript source of truth; the in-memory channel is only a notification path.
   - `GET /graph`, agent interaction graph (dispatch edges + counts).
   - `GET /dispatches`, dispatch dedup store snapshot + counters.
   - `GET /memory/{agent}/{repo}`, raw agent memory markdown.

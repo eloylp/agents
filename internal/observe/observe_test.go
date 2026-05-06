@@ -296,28 +296,22 @@ func TestRunRegistryListActiveAndStream(t *testing.T) {
 		t.Fatalf("active = %d, want 2", len(active))
 	}
 
-	// Subscribe → publish → see line. Use a buffered fixture by
-	// publishing a line BEFORE subscribing, which exercises the
-	// history-replay path.
-	s.Runs.PublishLine("sp-A", []byte("line-pre-sub"))
-	hist, ch, ok := s.Runs.SubscribeStream("sp-A")
+	ch, ok := s.Runs.SubscribeStream("sp-A")
 	if !ok {
 		t.Fatal("expected stream for sp-A")
 	}
 	defer s.Runs.UnsubscribeStream("sp-A", ch)
-	if len(hist) != 1 || string(hist[0]) != "line-pre-sub" {
-		t.Errorf("history = %v, want [line-pre-sub]", hist)
-	}
 
 	// Live publish after subscribe lands on the channel.
-	s.Runs.PublishLine("sp-A", []byte("line-live"))
+	step := workflow.TraceStep{Kind: workflow.StepKindThinking, InputSummary: "line-live"}
+	s.Runs.PublishStep("sp-A", step)
 	select {
 	case got := <-ch:
-		if string(got) != "line-live" {
-			t.Errorf("live line = %q, want line-live", got)
+		if got != step {
+			t.Errorf("live step = %+v, want %+v", got, step)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("live channel did not receive the published line")
+		t.Fatal("live channel did not receive the published step")
 	}
 
 	// EndRun removes the active entry and closes the channel.
@@ -334,22 +328,14 @@ func TestRunRegistryListActiveAndStream(t *testing.T) {
 		t.Fatal("channel did not close after EndRun")
 	}
 
-	// Subscribing after EndRun: still works during the grace window,
-	// returns history with a closed channel so the SSE handler exits
-	// cleanly after replay.
-	hist2, ch2, ok2 := s.Runs.SubscribeStream("sp-A")
-	if !ok2 {
-		t.Fatal("expected post-end subscribe to succeed during grace window")
-	}
-	if len(hist2) < 2 {
-		t.Errorf("post-end history len = %d, want >= 2", len(hist2))
-	}
-	if _, open := <-ch2; open {
-		t.Error("post-end channel should be closed, was open")
+	// Subscribing after EndRun fails because replay is served from trace_steps,
+	// not from an in-memory post-run buffer.
+	if _, ok := s.Runs.SubscribeStream("sp-A"); ok {
+		t.Fatal("expected post-end subscribe to fail")
 	}
 
 	// Unknown span returns ok=false.
-	if _, _, ok := s.Runs.SubscribeStream("nope"); ok {
+	if _, ok := s.Runs.SubscribeStream("nope"); ok {
 		t.Error("expected ok=false for unknown span")
 	}
 }
@@ -687,6 +673,33 @@ func TestStoreRecordAndListSteps(t *testing.T) {
 	}
 	if got[0].DurationMs != 200 || got[1].DurationMs != 50 {
 		t.Fatalf("unexpected DurationMs: %d %d", got[0].DurationMs, got[1].DurationMs)
+	}
+}
+
+func TestStoreRecordStepAppendsAndPublishes(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+	s.Runs.BeginRun(observe.ActiveRun{SpanID: "span-1", EventID: "event-1", Agent: "coder"})
+	ch, ok := s.Runs.SubscribeStream("span-1")
+	if !ok {
+		t.Fatal("SubscribeStream active = false, want true")
+	}
+	t.Cleanup(func() { s.Runs.UnsubscribeStream("span-1", ch) })
+
+	step := workflow.TraceStep{Kind: workflow.StepKindThinking, InputSummary: "plan"}
+	s.RecordStep("span-1", step)
+
+	select {
+	case got := <-ch:
+		if got != step {
+			t.Fatalf("published step = %+v, want %+v", got, step)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for published step")
+	}
+	got := s.ListSteps("span-1")
+	if len(got) != 1 || got[0] != step {
+		t.Fatalf("stored steps = %+v, want [%+v]", got, step)
 	}
 }
 

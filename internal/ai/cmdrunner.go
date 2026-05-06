@@ -388,7 +388,7 @@ func buildCommandEnv(req Request, backendEnv map[string]string) []string {
 //
 //   - Anthropic / Claude Code stream-json `result` event:
 //     {"input_tokens","output_tokens",
-//      "cache_creation_input_tokens","cache_read_input_tokens"}
+//     "cache_creation_input_tokens","cache_read_input_tokens"}
 //   - OpenAI / Codex envelope:
 //     {"prompt_tokens","completion_tokens","total_tokens"}
 //
@@ -509,102 +509,24 @@ func (c *lineCapture) addLine(data []byte) {
 // in stream order:
 //
 //   - "thinking": one step per text content block in an assistant event.
-//                 InputSummary carries the full text.
+//     InputSummary carries the full text.
 //   - "tool":     one step per tool_use + matching tool_result pair, joined
-//                 by tool_use_id. ToolName is the tool name; InputSummary
-//                 is the call args (raw JSON); OutputSummary is the
-//                 tool's reply; DurationMs is the wall-clock interval
-//                 between the tool_use and tool_result lines.
+//     by tool_use_id. ToolName is the tool name; InputSummary
+//     is the call args (raw JSON); OutputSummary is the
+//     tool's reply; DurationMs is the wall-clock interval
+//     between the tool_use and tool_result lines.
 //
 // Step content is preserved in full up to 64 KB per field; longer values are
 // truncated with a marker noting how many bytes were cut. Steps are capped
 // at 100 per run. Any event that cannot be parsed is silently skipped, this
 // is best-effort.
 func parseClaudeSteps(lines []timedLine) []TraceStep {
-	// streamEvent is the minimal shape of a single JSONL line.
-	type contentBlock struct {
-		Type      string          `json:"type"`
-		ID        string          `json:"id"`
-		Name      string          `json:"name"`
-		Text      string          `json:"text"` // for type:"text" blocks
-		Input     json.RawMessage `json:"input"`
-		ToolUseID string          `json:"tool_use_id"`
-		Content   json.RawMessage `json:"content"` // string or array
-	}
-	type streamEvent struct {
-		Type    string `json:"type"`
-		Message struct {
-			Content []contentBlock `json:"content"`
-		} `json:"message"`
-	}
-
-	type pending struct {
-		name   string
-		input  string
-		seenAt time.Time
-	}
-	pendingTools := make(map[string]pending) // tool_use_id → pending
+	parser := newTimedTraceStepParser("claude")
 	var steps []TraceStep
-
 	for _, tl := range lines {
-		line := bytes.TrimSpace(tl.data)
-		if len(line) == 0 || line[0] != '{' {
-			continue
-		}
-		var ev streamEvent
-		if err := json.Unmarshal(line, &ev); err != nil {
-			continue
-		}
-
-		switch ev.Type {
-		case "assistant":
-			for _, b := range ev.Message.Content {
-				switch b.Type {
-				case "text":
-					text := strings.TrimSpace(b.Text)
-					if text == "" {
-						continue
-					}
-					steps = append(steps, TraceStep{
-						Kind:         StepKindThinking,
-						InputSummary: capStepContent(text),
-					})
-					if len(steps) >= 100 {
-						return steps
-					}
-				case "tool_use":
-					if b.ID == "" {
-						continue
-					}
-					pendingTools[b.ID] = pending{
-						name:   b.Name,
-						input:  capStepContent(string(b.Input)),
-						seenAt: tl.at,
-					}
-				}
-			}
-		case "user":
-			for _, b := range ev.Message.Content {
-				if b.Type != "tool_result" || b.ToolUseID == "" {
-					continue
-				}
-				p, ok := pendingTools[b.ToolUseID]
-				if !ok {
-					continue
-				}
-				delete(pendingTools, b.ToolUseID)
-				output := extractToolResultText(b.Content)
-				steps = append(steps, TraceStep{
-					Kind:          StepKindTool,
-					ToolName:      p.name,
-					InputSummary:  p.input,
-					OutputSummary: capStepContent(output),
-					DurationMs:    tl.at.Sub(p.seenAt).Milliseconds(),
-				})
-				if len(steps) >= 100 {
-					return steps
-				}
-			}
+		steps = append(steps, parser.process(tl.data, tl.at)...)
+		if len(steps) >= 100 {
+			return steps[:100]
 		}
 	}
 	return steps
@@ -615,117 +537,24 @@ func parseClaudeSteps(lines []timedLine) []TraceStep {
 // kinds are emitted in stream order:
 //
 //   - "thinking": one step per `item.completed` event whose `item.type` is
-//                 `agent_message`. InputSummary carries the message text.
+//     `agent_message`. InputSummary carries the message text.
 //   - "tool":     one step per `item.completed` event whose `item.type` is
-//                 a recognised tool (`command_execution`, `mcp_tool_call`,
-//                 etc.). ToolName, InputSummary, and OutputSummary are
-//                 populated from the matching item fields. DurationMs is
-//                 the wall-clock delta between the prior `item.started`
-//                 and this `item.completed` line, when both are observed.
+//     a recognised tool (`command_execution`, `mcp_tool_call`,
+//     etc.). ToolName, InputSummary, and OutputSummary are
+//     populated from the matching item fields. DurationMs is
+//     the wall-clock delta between the prior `item.started`
+//     and this `item.completed` line, when both are observed.
 //
 // Unrecognised item.completed kinds are skipped. The 64 KB-per-field cap
 // (capStepContent) and 100-step cap match parseClaudeSteps exactly. Any
 // event that cannot be parsed is silently skipped, this is best-effort.
 func parseCodexSteps(lines []timedLine) []TraceStep {
-	type item struct {
-		ID               string          `json:"id"`
-		Type             string          `json:"type"`
-		Text             string          `json:"text"`
-		Command          string          `json:"command"`
-		AggregatedOutput string          `json:"aggregated_output"`
-		Name             string          `json:"name"`
-		Tool             string          `json:"tool"`
-		Arguments        json.RawMessage `json:"arguments"`
-		Output           json.RawMessage `json:"output"`
-		Result           json.RawMessage `json:"result"`
-		Server           string          `json:"server"`
-	}
-	type streamEvent struct {
-		Type string `json:"type"`
-		Item item   `json:"item"`
-	}
-
-	startedAt := make(map[string]time.Time) // item.id → seen-at
+	parser := newTimedTraceStepParser("codex")
 	var steps []TraceStep
-
 	for _, tl := range lines {
-		line := bytes.TrimSpace(tl.data)
-		if len(line) == 0 || line[0] != '{' {
-			continue
-		}
-		var ev streamEvent
-		if err := json.Unmarshal(line, &ev); err != nil {
-			continue
-		}
-
-		switch ev.Type {
-		case "item.started":
-			if ev.Item.ID != "" {
-				startedAt[ev.Item.ID] = tl.at
-			}
-		case "item.completed":
-			it := ev.Item
-			switch it.Type {
-			case "agent_message":
-				text := strings.TrimSpace(it.Text)
-				if text == "" {
-					continue
-				}
-				steps = append(steps, TraceStep{
-					Kind:         StepKindThinking,
-					InputSummary: capStepContent(text),
-				})
-			case "command_execution":
-				dur := int64(0)
-				if started, ok := startedAt[it.ID]; ok {
-					dur = tl.at.Sub(started).Milliseconds()
-					delete(startedAt, it.ID)
-				}
-				steps = append(steps, TraceStep{
-					Kind:          StepKindTool,
-					ToolName:      "bash",
-					InputSummary:  capStepContent(it.Command),
-					OutputSummary: capStepContent(it.AggregatedOutput),
-					DurationMs:    dur,
-				})
-			default:
-				// Generic tool fallback for MCP / function calls. Codex
-				// item.types this matches today: "mcp_tool_call" (uses
-				// `tool` + `result`), "function_call" (uses `name` +
-				// `output`), and any future tool kind that carries one of
-				// those identifier+output pairs.
-				name := it.Tool
-				if name == "" {
-					name = it.Name
-				}
-				if name == "" {
-					continue
-				}
-				toolName := name
-				if it.Server != "" {
-					toolName = it.Server + "." + name
-				}
-				input := rawJSONString(it.Arguments)
-				output := codexOutput(it.Result, it.Output)
-				if input == "" && output == "" {
-					continue
-				}
-				dur := int64(0)
-				if started, ok := startedAt[it.ID]; ok {
-					dur = tl.at.Sub(started).Milliseconds()
-					delete(startedAt, it.ID)
-				}
-				steps = append(steps, TraceStep{
-					Kind:          StepKindTool,
-					ToolName:      toolName,
-					InputSummary:  capStepContent(input),
-					OutputSummary: capStepContent(output),
-					DurationMs:    dur,
-				})
-			}
-			if len(steps) >= 100 {
-				return steps
-			}
+		steps = append(steps, parser.process(tl.data, tl.at)...)
+		if len(steps) >= 100 {
+			return steps[:100]
 		}
 	}
 	return steps
