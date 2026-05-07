@@ -763,7 +763,7 @@ func TestCreateBindingEndpoint(t *testing.T) {
 	}
 
 	// GET the created binding.
-	rr = doCRUDRequest(t, s, http.MethodGet, "/repos/owner/repo/bindings/"+itoa(int(id)), nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/repos/owner/repo/bindings/"+strconv.Itoa(int(id)), nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET binding: got %d, %s", rr.Code, rr.Body.String())
 	}
@@ -811,7 +811,7 @@ func TestUpdateBindingEndpoint(t *testing.T) {
 	id := int(created["id"].(float64))
 
 	enabled := false
-	rr = doCRUDRequest(t, s, http.MethodPatch, "/repos/owner/repo/bindings/"+itoa(id), map[string]any{
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/repos/owner/repo/bindings/"+strconv.Itoa(id), map[string]any{
 		"agent":   "coder",
 		"cron":    "0 9 * * *",
 		"enabled": enabled,
@@ -853,7 +853,7 @@ func TestUpdateBindingMismatchedRepoReturns404(t *testing.T) {
 	id := int(created["id"].(float64))
 
 	// PATCH it through the wrong repo's URL.
-	rr = doCRUDRequest(t, s, http.MethodPatch, "/repos/owner/repo/bindings/"+itoa(id), map[string]any{
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/repos/owner/repo/bindings/"+strconv.Itoa(id), map[string]any{
 		"agent": "coder", "labels": []string{"ai:changed"},
 	})
 	if rr.Code != http.StatusNotFound {
@@ -873,12 +873,12 @@ func TestDeleteBindingEndpoint(t *testing.T) {
 	_ = json.NewDecoder(rr.Body).Decode(&created)
 	id := int(created["id"].(float64))
 
-	rr = doCRUDRequest(t, s, http.MethodDelete, "/repos/owner/repo/bindings/"+itoa(id), nil)
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/repos/owner/repo/bindings/"+strconv.Itoa(id), nil)
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("delete: got %d, %s", rr.Code, rr.Body.String())
 	}
 
-	rr = doCRUDRequest(t, s, http.MethodGet, "/repos/owner/repo/bindings/"+itoa(id), nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/repos/owner/repo/bindings/"+strconv.Itoa(id), nil)
 	if rr.Code != http.StatusNotFound {
 		t.Errorf("GET after delete: got %d, want 404", rr.Code)
 	}
@@ -950,10 +950,6 @@ func TestGetRepoExposesBindingIDs(t *testing.T) {
 		t.Errorf("binding missing id: %v", first)
 	}
 }
-
-// itoa wraps strconv.Itoa locally so the binding tests can construct URLs
-// without touching the rest of the file's imports.
-func itoa(i int) string { return strconv.Itoa(i) }
 
 // The pre-cutover reload-failure tests asserted that a CRUD write that
 // fails to propagate to the runtime returns 500 and leaves the in-memory
