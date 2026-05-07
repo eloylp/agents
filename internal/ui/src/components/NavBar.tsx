@@ -27,6 +27,11 @@ export default function NavBar() {
   const [orphanCount, setOrphanCount] = useState(0)
   const [budgetAlertCount, setBudgetAlertCount] = useState(0)
 
+  const signOut = async () => {
+    await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' })
+    window.location.replace('/')
+  }
+
   useEffect(() => {
     let cancelled = false
     const load = async () => {
@@ -123,7 +128,7 @@ export default function NavBar() {
             marginLeft: 'auto',
             background: 'none',
             border: '1px solid var(--border)',
-            borderRadius: '6px',
+            borderRadius: 0,
             padding: '4px 10px',
             cursor: 'pointer',
             fontSize: '0.78rem',
@@ -131,6 +136,21 @@ export default function NavBar() {
           }}
         >
           {theme === 'light' ? 'Dark' : 'Light'}
+        </button>
+        <button
+          onClick={signOut}
+          style={{
+            marginLeft: '0.5rem',
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border)',
+            borderRadius: 0,
+            padding: '4px 10px',
+            cursor: 'pointer',
+            fontSize: '0.78rem',
+            color: 'var(--text-muted)',
+          }}
+        >
+          Sign out
         </button>
       </nav>
       {orphanCount > 0 && (

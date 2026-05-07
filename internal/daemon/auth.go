@@ -437,7 +437,7 @@ const rootLoginHTML = `<!doctype html>
       position: relative;
       width: min(430px, 100%);
       border: 1px solid rgba(255,255,255,0.55);
-      border-radius: 20px;
+      border-radius: 0;
       background: rgba(255,255,255,0.88);
       backdrop-filter: blur(18px);
       padding: 22px;
@@ -476,7 +476,7 @@ const rootLoginHTML = `<!doctype html>
       margin-top: 0.35rem;
       padding: 0.65rem 0.75rem;
       border: 1px solid #bfdbfe;
-      border-radius: 6px;
+      border-radius: 0;
       background: #f8fafc;
       color: #1e293b;
       font: inherit;
@@ -486,7 +486,7 @@ const rootLoginHTML = `<!doctype html>
       margin-top: 1rem;
       padding: 0.7rem 0.9rem;
       border: 1px solid #1d4ed8;
-      border-radius: 6px;
+      border-radius: 0;
       background: #2563eb;
       color: #fff;
       font: inherit;
@@ -496,7 +496,7 @@ const rootLoginHTML = `<!doctype html>
     button:disabled { cursor: wait; opacity: 0.72; }
     .status {
       border: 1px solid rgba(37,99,235,0.22);
-      border-radius: 12px;
+      border-radius: 0;
       background: rgba(239,246,255,0.72);
       color: #1e3a5f;
       padding: 0.8rem;
@@ -517,7 +517,7 @@ const rootLoginHTML = `<!doctype html>
     <p id="copy">Checking your browser session.</p>
     <div id="loading" class="status">Checking session...</div>
     <form id="form" hidden>
-      <label>Username<input id="username" name="username" autocomplete="username" value="admin" autofocus></label>
+      <label>Username<input id="username" name="username" autocomplete="username" autofocus></label>
       <label>Password<input id="password" name="password" type="password" autocomplete="current-password"></label>
       <p id="error" class="error" hidden></p>
       <button id="submit" type="submit">Sign in</button>
@@ -532,12 +532,21 @@ const rootLoginHTML = `<!doctype html>
     const error = document.getElementById('error');
     let bootstrapRequired = false;
 
+    function openDashboard() {
+      try {
+        window.top.location.assign('/ui/');
+      } catch {
+        window.location.assign('/ui/');
+      }
+      setTimeout(() => window.location.replace('/ui/'), 75);
+    }
+
     async function refresh() {
       const res = await fetch('/auth/status', { cache: 'no-store', credentials: 'same-origin' });
       if (!res.ok) throw new Error('Could not check auth status.');
       const status = await res.json();
       if (status.authenticated) {
-        window.location.replace('/ui/');
+        openDashboard();
         return;
       }
       bootstrapRequired = Boolean(status.bootstrap_required);
@@ -564,13 +573,23 @@ const rootLoginHTML = `<!doctype html>
           password: document.getElementById('password').value,
         }),
       });
-      button.disabled = false;
       if (!res.ok) {
+        button.disabled = false;
         error.textContent = bootstrapRequired ? 'Bootstrap failed.' : 'Login failed.';
         error.hidden = false;
         return;
       }
-      window.location.replace('/ui/');
+      button.textContent = 'Opening dashboard...';
+      const statusRes = await fetch('/auth/status', { cache: 'no-store', credentials: 'same-origin' });
+      const status = statusRes.ok ? await statusRes.json() : null;
+      if (!status || !status.authenticated) {
+        button.disabled = false;
+        button.textContent = bootstrapRequired ? 'Create admin user' : 'Sign in';
+        error.textContent = 'Signed in, but the browser session was not confirmed. Reload and try again.';
+        error.hidden = false;
+        return;
+      }
+      openDashboard();
     });
 
     refresh().catch((err) => {
