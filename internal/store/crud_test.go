@@ -1386,16 +1386,11 @@ func TestReadBindingExposesIDViaLoadRepos(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadRepos: %v", err)
 	}
-	var r *fleet.Repo
-	for i := range repos {
-		if repos[i].Name == "owner/repo" {
-			r = &repos[i]
-			break
-		}
-	}
-	if r == nil {
+	idx := slices.IndexFunc(repos, func(r fleet.Repo) bool { return r.Name == "owner/repo" })
+	if idx == -1 {
 		t.Fatalf("repo not found")
 	}
+	r := &repos[idx]
 	// First binding was seeded by seedRepoWithAgent; the two additions we
 	// expect as id1/id2 below it.
 	seen := map[int64]bool{}
