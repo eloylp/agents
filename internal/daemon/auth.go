@@ -358,6 +358,17 @@ func (d *Daemon) handleAuthTokenRevoke(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (d *Daemon) handleRootLogin(w http.ResponseWriter, r *http.Request) {
+	if _, ok := d.authenticateRequest(r); ok {
+		http.Redirect(w, r, "/ui/", http.StatusFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(rootLoginHTML))
+}
+
 func setSessionCookie(w http.ResponseWriter, token string, expires *time.Time) {
 	cookie := &http.Cookie{
 		Name:     sessionCookieName,
@@ -389,3 +400,184 @@ func writeJSON(w http.ResponseWriter, v any, status int) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
+
+const rootLoginHTML = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agents login</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      padding: 20px;
+      font-family: "SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+      background:
+        linear-gradient(135deg, rgba(7,17,31,0.82), rgba(13,34,55,0.58) 44%, rgba(238,246,255,0.18)),
+        url("/ui/agents.jpg") center / cover no-repeat,
+        linear-gradient(135deg, #07111f 0%, #0d2237 48%, #eef6ff 100%);
+      color: #0f2742;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      opacity: 0.32;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.16) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.16) 1px, transparent 1px);
+      background-size: 44px 44px;
+      mask-image: linear-gradient(120deg, transparent 0%, black 18%, black 82%, transparent 100%);
+    }
+    .card {
+      position: relative;
+      width: min(430px, 100%);
+      border: 1px solid rgba(255,255,255,0.55);
+      border-radius: 20px;
+      background: rgba(255,255,255,0.88);
+      backdrop-filter: blur(18px);
+      padding: 22px;
+      box-shadow: 0 30px 90px rgba(2,6,23,0.34);
+    }
+    .eyebrow {
+      color: #2563eb;
+      font-size: 0.72rem;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      margin-bottom: 0.55rem;
+    }
+    h1 {
+      color: #0f2742;
+      font-size: 1.65rem;
+      letter-spacing: -0.04em;
+      line-height: 1.05;
+      margin-bottom: 0.65rem;
+    }
+    p {
+      color: #475569;
+      font-size: 0.88rem;
+      line-height: 1.55;
+      margin-bottom: 1.15rem;
+    }
+    label {
+      display: block;
+      color: #1e3a5f;
+      font-size: 0.76rem;
+      font-weight: 700;
+      margin-top: 0.75rem;
+    }
+    input {
+      width: 100%;
+      margin-top: 0.35rem;
+      padding: 0.65rem 0.75rem;
+      border: 1px solid #bfdbfe;
+      border-radius: 6px;
+      background: #f8fafc;
+      color: #1e293b;
+      font: inherit;
+    }
+    button {
+      width: 100%;
+      margin-top: 1rem;
+      padding: 0.7rem 0.9rem;
+      border: 1px solid #1d4ed8;
+      border-radius: 6px;
+      background: #2563eb;
+      color: #fff;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:disabled { cursor: wait; opacity: 0.72; }
+    .status {
+      border: 1px solid rgba(37,99,235,0.22);
+      border-radius: 12px;
+      background: rgba(239,246,255,0.72);
+      color: #1e3a5f;
+      padding: 0.8rem;
+      font-size: 0.82rem;
+    }
+    .error {
+      color: #dc2626;
+      font-size: 0.78rem;
+      margin-top: 0.75rem;
+      margin-bottom: 0;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="eyebrow">Agents dashboard</div>
+    <h1 id="title">Checking session</h1>
+    <p id="copy">Checking your browser session.</p>
+    <div id="loading" class="status">Checking session...</div>
+    <form id="form" hidden>
+      <label>Username<input id="username" name="username" autocomplete="username" value="admin" autofocus></label>
+      <label>Password<input id="password" name="password" type="password" autocomplete="current-password"></label>
+      <p id="error" class="error" hidden></p>
+      <button id="submit" type="submit">Sign in</button>
+    </form>
+  </main>
+  <script>
+    const title = document.getElementById('title');
+    const copy = document.getElementById('copy');
+    const loading = document.getElementById('loading');
+    const form = document.getElementById('form');
+    const button = document.getElementById('submit');
+    const error = document.getElementById('error');
+    let bootstrapRequired = false;
+
+    async function refresh() {
+      const res = await fetch('/auth/status', { cache: 'no-store', credentials: 'same-origin' });
+      if (!res.ok) throw new Error('Could not check auth status.');
+      const status = await res.json();
+      if (status.authenticated) {
+        window.location.replace('/ui/');
+        return;
+      }
+      bootstrapRequired = Boolean(status.bootstrap_required);
+      title.textContent = bootstrapRequired ? 'Create the first admin' : 'Sign in to your fleet';
+      copy.textContent = bootstrapRequired
+        ? 'Bootstrap the local admin account before exposing fleet configuration, traces, runners, and MCP tokens.'
+        : 'Use your local dashboard account to access fleet configuration, traces, runners, and token management.';
+      button.textContent = bootstrapRequired ? 'Create admin user' : 'Sign in';
+      loading.hidden = true;
+      form.hidden = false;
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      error.hidden = true;
+      button.disabled = true;
+      const path = bootstrapRequired ? '/auth/bootstrap' : '/auth/login';
+      const res = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          username: document.getElementById('username').value,
+          password: document.getElementById('password').value,
+        }),
+      });
+      button.disabled = false;
+      if (!res.ok) {
+        error.textContent = bootstrapRequired ? 'Bootstrap failed.' : 'Login failed.';
+        error.hidden = false;
+        return;
+      }
+      window.location.replace('/ui/');
+    });
+
+    refresh().catch((err) => {
+      title.textContent = 'Authentication unavailable';
+      copy.textContent = err.message || 'Could not check the daemon auth state.';
+      loading.hidden = true;
+    });
+  </script>
+</body>
+</html>`

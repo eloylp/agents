@@ -78,89 +78,30 @@ async function loadAuthStatus(): Promise<AuthStatus | null> {
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = useState(false)
   const [status, setStatus] = useState<AuthStatus | null>(null)
-  const [username, setUsername] = useState('admin')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
 
   useEffect(() => {
     patchFetch()
     let cancelled = false
     loadAuthStatus().then(next => {
-      if (cancelled || !next) return
-      setStatus(next)
-      setOpen(next.bootstrap_required || !next.authenticated)
+      if (cancelled) return
+      setStatus(next ?? { bootstrap_required: false, authenticated: false })
     })
-    const openModal = () => setOpen(true)
-    window.addEventListener(openAuthModalEvent, openModal)
+    const redirectToLogin = () => window.location.replace('/')
+    window.addEventListener(openAuthModalEvent, redirectToLogin)
     return () => {
       cancelled = true
-      window.removeEventListener(openAuthModalEvent, openModal)
+      window.removeEventListener(openAuthModalEvent, redirectToLogin)
     }
   }, [])
 
-  const submit = async () => {
-    setError('')
-    const path = status?.bootstrap_required ? '/auth/bootstrap' : '/auth/login'
-    const res = await fetch(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    })
-    if (!res.ok) {
-      setError(status?.bootstrap_required ? 'Bootstrap failed.' : 'Login failed.')
-      return
-    }
-    const next = await loadAuthStatus()
-    setStatus(next)
-    setPassword('')
-    setOpen(next?.bootstrap_required || !next?.authenticated)
-  }
+  useEffect(() => {
+    if (status && !status.authenticated) window.location.replace('/')
+  }, [status])
 
-  const authenticated = status?.authenticated === true
-  const authRequired = status === null || status.bootstrap_required || !status.authenticated
+  if (status?.authenticated === true) return <>{children}</>
 
-  return (
-    <>
-      {authenticated ? children : <LockedScreen loading={status === null} />}
-      {(open || authRequired) && (
-        <div style={overlayStyle}>
-          <div style={modalStyle}>
-            <h2 style={{ color: 'var(--text-heading)', fontSize: '1rem', marginBottom: '0.75rem' }}>
-              {status?.bootstrap_required ? 'Create first user' : 'Sign in'}
-            </h2>
-            <input
-              autoFocus
-              value={username}
-              onChange={e => setUsername(e.target.value)}
-              placeholder="Username"
-              style={inputStyle}
-            />
-            <input
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              placeholder="Password"
-              style={{ ...inputStyle, marginTop: '0.65rem' }}
-              onKeyDown={e => {
-                if (e.key === 'Enter') void submit()
-              }}
-            />
-            {error && <p style={{ color: 'var(--text-danger)', fontSize: '0.78rem', marginTop: '0.65rem' }}>{error}</p>}
-            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
-              {authenticated && !status?.bootstrap_required && (
-                <button type="button" onClick={() => setOpen(false)} style={secondaryButtonStyle}>Cancel</button>
-              )}
-              <button type="button" onClick={submit} style={primaryButtonStyle}>
-                {status?.bootstrap_required ? 'Create user' : 'Sign in'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  )
+  return <AuthRedirectScreen loading={status === null} />
 }
 
 export function AuthTokenSettings() {
@@ -327,19 +268,17 @@ export function AuthTokenSettings() {
   )
 }
 
-function LockedScreen({ loading }: { loading: boolean }) {
+function AuthRedirectScreen({ loading }: { loading: boolean }) {
   return (
-    <div style={lockedScreenStyle}>
-      <div style={lockedCardStyle}>
-        <div style={{ fontSize: '0.72rem', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: '0.5rem' }}>
-          Agents dashboard
-        </div>
-        <h1 style={{ color: 'var(--text-heading)', fontSize: '1.2rem', marginBottom: '0.5rem' }}>
-          Authentication required
-        </h1>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', lineHeight: 1.6 }}>
-          {loading ? 'Checking your session…' : 'Sign in to access fleet configuration, traces, runners, and API-backed dashboard data.'}
+    <div style={authPageStyle}>
+      <div style={authBackdropStyle} />
+      <div style={authCardStyle}>
+        <p style={authEyebrowStyle}>Agents dashboard</p>
+        <h1 style={authTitleStyle}>{loading ? 'Checking session' : 'Redirecting to sign in'}</h1>
+        <p style={authCopyStyle}>
+          {loading ? 'Checking your browser session.' : 'Opening the root login page.'}
         </p>
+        <div style={authLoadingStyle}>{loading ? 'Checking session...' : 'Redirecting...'}</div>
       </div>
     </div>
   )
@@ -395,41 +334,70 @@ const pillStyle: React.CSSProperties = {
   padding: '0.15rem 0.45rem',
 }
 
-const lockedScreenStyle: React.CSSProperties = {
+const authPageStyle: React.CSSProperties = {
   minHeight: '100vh',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  padding: '1rem',
-}
-
-const lockedCardStyle: React.CSSProperties = {
-  width: 'min(520px, 100%)',
-  border: '1px solid var(--border)',
-  borderRadius: '10px',
-  background: 'var(--bg-card)',
+  position: 'relative',
+  overflow: 'hidden',
   padding: '1.25rem',
-  boxShadow: '0 18px 55px rgba(15,23,42,0.14)',
+  background:
+    'linear-gradient(135deg, rgba(7,17,31,0.82), rgba(13,34,55,0.58) 44%, rgba(238,246,255,0.18)), url("/ui/agents.jpg") center / cover no-repeat, linear-gradient(135deg, #07111f 0%, #0d2237 48%, #eef6ff 100%)',
 }
 
-const overlayStyle: React.CSSProperties = {
-  position: 'fixed',
+const authBackdropStyle: React.CSSProperties = {
+  position: 'absolute',
   inset: 0,
-  background: 'var(--bg-modal-overlay)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '1rem',
-  zIndex: 1000,
+  opacity: 0.32,
+  backgroundImage:
+    'linear-gradient(rgba(255,255,255,0.16) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.16) 1px, transparent 1px)',
+  backgroundSize: '44px 44px',
+  maskImage: 'linear-gradient(120deg, transparent 0%, black 18%, black 82%, transparent 100%)',
 }
 
-const modalStyle: React.CSSProperties = {
-  width: 'min(460px, 100%)',
-  background: 'var(--bg-card)',
-  border: '1px solid var(--border)',
-  borderRadius: '8px',
-  boxShadow: '0 20px 60px rgba(0,0,0,0.22)',
-  padding: '1.25rem',
+const authCardStyle: React.CSSProperties = {
+  position: 'relative',
+  width: 'min(430px, 100%)',
+  border: '1px solid rgba(255,255,255,0.55)',
+  borderRadius: '20px',
+  background: 'rgba(255,255,255,0.88)',
+  backdropFilter: 'blur(18px)',
+  padding: '1.35rem',
+  boxShadow: '0 30px 90px rgba(2,6,23,0.34)',
+}
+
+const authEyebrowStyle: React.CSSProperties = {
+  color: '#2563eb',
+  fontSize: '0.72rem',
+  fontWeight: 800,
+  letterSpacing: '0.14em',
+  textTransform: 'uppercase',
+  marginBottom: '0.55rem',
+}
+
+const authTitleStyle: React.CSSProperties = {
+  color: '#0f2742',
+  fontSize: '1.65rem',
+  letterSpacing: '-0.04em',
+  lineHeight: 1.05,
+  marginBottom: '0.65rem',
+}
+
+const authCopyStyle: React.CSSProperties = {
+  color: '#475569',
+  fontSize: '0.88rem',
+  lineHeight: 1.55,
+  marginBottom: '1.15rem',
+}
+
+const authLoadingStyle: React.CSSProperties = {
+  border: '1px solid rgba(37,99,235,0.22)',
+  borderRadius: '12px',
+  background: 'rgba(239,246,255,0.72)',
+  color: '#1e3a5f',
+  padding: '0.8rem',
+  fontSize: '0.82rem',
 }
 
 const inputStyle: React.CSSProperties = {

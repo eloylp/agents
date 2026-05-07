@@ -467,9 +467,7 @@ func (d *Daemon) buildMuxRouter(withTimeout func(http.Handler) http.Handler) *mu
 			router.Handle("/ui", withTimeout(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
 			}))).Methods(http.MethodGet)
-			router.Handle("/", withTimeout(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
-			}))).Methods(http.MethodGet)
+			router.Handle("/", withTimeout(http.HandlerFunc(d.handleRootLogin))).Methods(http.MethodGet)
 		}
 	}
 

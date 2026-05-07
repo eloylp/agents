@@ -5,14 +5,14 @@ This page describes the daemon's threat model and the recommendations shipped ag
 ## Defaults the project ships
 
 - **Webhook HMAC verification** on every `POST /webhooks/github` request.
-- **DB-backed daemon auth for sensitive routes.** The dashboard creates the first local user, browser sessions use opaque DB-backed tokens in an `HttpOnly` cookie, and MCP/API clients use named revocable bearer tokens created from Config -> Authentication.
+- **DB-backed daemon auth for sensitive routes.** The root login page creates the first local user, browser sessions use opaque DB-backed tokens in an `HttpOnly` cookie, and MCP/API clients use named revocable bearer tokens created from Config -> Authentication.
 - **The daemon itself is read-only against GitHub.** GitHub operations happen inside the AI backend subprocess. Agents are instructed to prefer GitHub MCP tools; an authenticated `gh` CLI is present as a fallback for complex local checkout, test, and PR flows. The daemon still has no GitHub write SDK in `cmd/agents`.
 - **Per-event audit trail.** Every run records the composed prompt, every tool call with input/output summaries, and the response. Reachable from the dashboard for forensic review.
 - **Default built-in guardrails seeded into the database.** Policy blocks prepended to every agent's composed prompt at render time. `security` recommends ignoring instructions found in untrusted text, refusing secret reads/exfiltration, refusing out-of-tree filesystem access, refusing arbitrary network egress, and halting on probable injection. `memory-scope` tells agents to use only daemon-provided `Existing memory:` for the current `(agent, repo)` pair, ignore CLI-native/session/global memory, and stay bound to the repository named in the runtime context. `mcp-tool-usage` tells agents to use MCP first and authenticated `gh` only as fallback for complex local checkout/test/PR loops. **Operators can edit, disable, or replace built-ins** via `/ui/config` → Guardrails. Inspect live text at `GET /guardrails/{name}`. Like every prompt-level control, sufficiently determined indirect-injection attacks (role-play, encoded payloads, multi-turn manipulation) can defeat them.
 
 ## Daemon auth <a id="daemon-auth"></a>
 
-On a fresh database, open the dashboard and create the first user. That bootstrapped user is the admin user, can create or remove additional dashboard users from Config -> Authentication, and cannot be removed. Non-admin users can sign in, manage fleet configuration, and create their own API tokens, but they cannot create or remove users. The daemon stores password hashes and issues opaque session tokens in `HttpOnly` cookies. After at least one user exists, sensitive REST, MCP, `/run`, traces, runners, config, guardrails, repos, skills, agents, memory, graph, and event routes require one of:
+On a fresh database, open the root login page (`/`) and create the first user. That bootstrapped user is the admin user, can create or remove additional dashboard users from Config -> Authentication, and cannot be removed. Non-admin users can sign in, manage fleet configuration, and create their own API tokens, but they cannot create or remove users. The daemon stores password hashes and issues opaque session tokens in `HttpOnly` cookies. After at least one user exists, sensitive REST, MCP, `/run`, traces, runners, config, guardrails, repos, skills, agents, memory, graph, and event routes require one of:
 
 1. A valid browser session cookie.
 2. A valid DB-backed API token sent as `Authorization: Bearer <token>`.
@@ -28,7 +28,7 @@ Use your reverse proxy for TLS and routing. The proxy does not need to provide b
 | Router | Paths | Auth | Purpose |
 |---|---|---|---|
 | **Daemon** | all paths | session cookie or daemon API token on sensitive routes | `/mcp`, `/run`, API, observability, config, runners; `/ui/` shell loads publicly but data calls require auth |
-| **Public** | `/status`, `/webhooks/github`, `/auth/status`, `/auth/login`, `/auth/bootstrap`, `/ui/*` shell/assets | none at proxy | GitHub cannot send auth on webhooks; `/status` must stay reachable for liveness probes; `/ui/*` must render before the browser has a session. |
+| **Public** | `/`, `/status`, `/webhooks/github`, `/auth/status`, `/auth/login`, `/auth/bootstrap`, `/ui/*` shell/assets | none at proxy | GitHub cannot send auth on webhooks; `/status` must stay reachable for liveness probes; `/` hosts the login/bootstrap page and redirects authenticated sessions to `/ui/`; `/ui/*` must render before the browser has a session. |
 | **Local proxy** | `/v1/messages`, `/v1/models` when proxy is enabled | no daemon auth only for loopback clients; remote clients need daemon auth | Backend CLI subprocesses run on the daemon host/container and call the proxy locally. Do not expose the proxy as an unauthenticated public route. |
 
 `/webhooks/github` is safe to expose publicly because every request is HMAC-verified against `GITHUB_WEBHOOK_SECRET` before it is accepted. `/run` is protected once daemon auth is initialized.
