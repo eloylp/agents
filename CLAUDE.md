@@ -129,6 +129,6 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full flow, label semantics, and
 ## Security Notes
 
 - Webhook authenticity is enforced with HMAC SHA-256 signature verification.
-- Sensitive API and MCP endpoints require daemon auth after first-user setup. Browser users receive DB-backed opaque session tokens in `HttpOnly` cookies; MCP/API clients use named DB-backed bearer tokens.
+- Sensitive API and MCP endpoints require daemon auth after first-user setup. Browser users receive DB-backed opaque session tokens in `HttpOnly` cookies; MCP/API clients use named DB-backed bearer tokens. The first bootstrapped dashboard user is the admin user, can create/remove additional non-admin users through the UI/REST auth surface, and cannot be removed. User/password administration is intentionally not exposed as MCP tools, so passwords do not flow through MCP clients.
 - Prompts are never logged in plaintext; only the length is recorded.
 - The daemon delegates GitHub operations to the configured AI backend; agents prefer MCP tools and may use authenticated gh only as the documented fallback.

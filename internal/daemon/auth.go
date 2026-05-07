@@ -56,6 +56,7 @@ func (d *Daemon) registerAuthRoutes(router *mux.Router, withTimeout func(http.Ha
 	router.Handle("/auth/me", withTimeout(http.HandlerFunc(d.handleAuthMe))).Methods(http.MethodGet)
 	router.Handle("/auth/users", withTimeout(http.HandlerFunc(d.handleAuthUsersList))).Methods(http.MethodGet)
 	router.Handle("/auth/users", withTimeout(http.HandlerFunc(d.handleAuthUsersCreate))).Methods(http.MethodPost)
+	router.Handle("/auth/users/{id}", withTimeout(http.HandlerFunc(d.handleAuthUserDelete))).Methods(http.MethodDelete)
 	router.Handle("/auth/tokens", withTimeout(http.HandlerFunc(d.handleAuthTokensList))).Methods(http.MethodGet)
 	router.Handle("/auth/tokens", withTimeout(http.HandlerFunc(d.handleAuthTokensCreate))).Methods(http.MethodPost)
 	router.Handle("/auth/tokens/{id}", withTimeout(http.HandlerFunc(d.handleAuthTokenRevoke))).Methods(http.MethodDelete)
@@ -233,8 +234,13 @@ func (d *Daemon) handleAuthUsersList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) handleAuthUsersCreate(w http.ResponseWriter, r *http.Request) {
-	if _, ok := d.currentIdentity(r); !ok {
+	identity, ok := d.currentIdentity(r)
+	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !identity.User.IsAdmin {
+		http.Error(w, "admin required", http.StatusForbidden)
 		return
 	}
 	var req createUserRequest
@@ -257,6 +263,38 @@ func (d *Daemon) handleAuthUsersCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, user, http.StatusCreated)
+}
+
+func (d *Daemon) handleAuthUserDelete(w http.ResponseWriter, r *http.Request) {
+	identity, ok := d.currentIdentity(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !identity.User.IsAdmin {
+		http.Error(w, "admin required", http.StatusForbidden)
+		return
+	}
+	id, err := strconv.ParseInt(mux.Vars(r)["id"], 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid user id", http.StatusBadRequest)
+		return
+	}
+	if err := d.store.DeleteUser(r.Context(), id); errors.Is(err, store.ErrAuthForbidden) {
+		http.Error(w, "admin user cannot be removed", http.StatusConflict)
+		return
+	} else if errors.Is(err, store.ErrAuthNotFound) {
+		http.Error(w, "user not found", http.StatusNotFound)
+		return
+	} else if errors.Is(err, store.ErrAuthInvalid) {
+		http.Error(w, "invalid user id", http.StatusBadRequest)
+		return
+	} else if err != nil {
+		d.logger.Error().Err(err).Msg("auth users: delete")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (d *Daemon) handleAuthTokensList(w http.ResponseWriter, r *http.Request) {

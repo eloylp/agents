@@ -2,7 +2,7 @@
 
 The daemon exposes a [Model Context Protocol](https://modelcontextprotocol.io) server at `/mcp` over the Streamable HTTP transport. MCP-capable clients (Claude Code, Cursor, Cline, ...) register the endpoint once and then discover the available tools automatically. From there you can manage agents, skills, repos, and bindings, trigger runs, and inspect traces conversationally from your editor.
 
-The MCP surface is functionally equivalent to the REST CRUD API documented in [api.md](api.md). The difference is the wire protocol and the consumer: REST is for scripts and dashboards; MCP is for AI clients that can call tools.
+The MCP surface mirrors the fleet-management REST API documented in [api.md](api.md). The difference is the wire protocol and the consumer: REST is for scripts and dashboards; MCP is for AI clients that can call tools. Dashboard user administration stays in the UI/REST auth surface so passwords are not sent through MCP clients.
 
 ![Claude Code session asking "show me all agents and their status" and rendering a table from list_agents](img/mcp-terminal.png)
 

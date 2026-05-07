@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -62,6 +63,17 @@ func TestBuildRouterRegistersExpectedRoutes(t *testing.T) {
 		{http.MethodGet, "/status"},
 		{http.MethodPost, "/run"},
 		{http.MethodPost, "/webhooks/github"},
+		{http.MethodGet, "/auth/status"},
+		{http.MethodPost, "/auth/bootstrap"},
+		{http.MethodPost, "/auth/login"},
+		{http.MethodPost, "/auth/logout"},
+		{http.MethodGet, "/auth/me"},
+		{http.MethodGet, "/auth/users"},
+		{http.MethodPost, "/auth/users"},
+		{http.MethodDelete, "/auth/users/2"},
+		{http.MethodGet, "/auth/tokens"},
+		{http.MethodPost, "/auth/tokens"},
+		{http.MethodDelete, "/auth/tokens/1"},
 		{http.MethodGet, "/agents"},
 		{http.MethodPost, "/agents"},
 		{http.MethodGet, "/agents/orphans/status"},
@@ -117,6 +129,7 @@ func TestBuildRouterRegistersExpectedRoutes(t *testing.T) {
 		{http.MethodGet, "/runners"},
 		{http.MethodDelete, "/runners/1"},
 		{http.MethodPost, "/runners/1/retry"},
+		{http.MethodPost, "/mcp"},
 	}
 
 	for _, tc := range expected {
@@ -849,8 +862,46 @@ func TestBuildHandlerAuthProtectsSensitiveRoutes(t *testing.T) {
 	}{
 		{name: "status stays public", method: http.MethodGet, path: "/status", wantStatus: http.StatusOK},
 		{name: "ui shell stays public", method: http.MethodGet, path: "/ui/", wantStatus: http.StatusOK},
-		{name: "api requires auth", method: http.MethodGet, path: "/config", wantStatus: http.StatusUnauthorized},
-		{name: "mcp requires auth", method: http.MethodPost, path: "/mcp", wantStatus: http.StatusUnauthorized},
+		{name: "config requires auth", method: http.MethodGet, path: "/config", wantStatus: http.StatusUnauthorized},
+		{name: "agents requires auth", method: http.MethodGet, path: "/agents", wantStatus: http.StatusUnauthorized},
+		{name: "repos requires auth", method: http.MethodGet, path: "/repos", wantStatus: http.StatusUnauthorized},
+		{name: "skills requires auth", method: http.MethodGet, path: "/skills", wantStatus: http.StatusUnauthorized},
+		{name: "runners requires auth", method: http.MethodGet, path: "/runners", wantStatus: http.StatusUnauthorized},
+		{name: "traces requires auth", method: http.MethodGet, path: "/traces", wantStatus: http.StatusUnauthorized},
+		{name: "events requires auth", method: http.MethodGet, path: "/events", wantStatus: http.StatusUnauthorized},
+		{name: "graph requires auth", method: http.MethodGet, path: "/graph", wantStatus: http.StatusUnauthorized},
+		{name: "memory requires auth", method: http.MethodGet, path: "/memory/coder/eloylp_agents", wantStatus: http.StatusUnauthorized},
+		{name: "backends status requires auth", method: http.MethodGet, path: "/backends/status", wantStatus: http.StatusUnauthorized},
+		{name: "orphans requires auth", method: http.MethodGet, path: "/agents/orphans/status", wantStatus: http.StatusUnauthorized},
+		{name: "auth users requires auth", method: http.MethodGet, path: "/auth/users", wantStatus: http.StatusUnauthorized},
+		{name: "auth me requires auth", method: http.MethodGet, path: "/auth/me", wantStatus: http.StatusUnauthorized},
+		{name: "logout requires auth", method: http.MethodPost, path: "/auth/logout", wantStatus: http.StatusUnauthorized},
+		{name: "create auth user requires auth", method: http.MethodPost, path: "/auth/users", wantStatus: http.StatusUnauthorized},
+		{name: "delete auth user requires auth", method: http.MethodDelete, path: "/auth/users/2", wantStatus: http.StatusUnauthorized},
+		{name: "auth tokens requires auth", method: http.MethodGet, path: "/auth/tokens", wantStatus: http.StatusUnauthorized},
+		{name: "create token requires auth", method: http.MethodPost, path: "/auth/tokens", wantStatus: http.StatusUnauthorized},
+		{name: "revoke token requires auth", method: http.MethodDelete, path: "/auth/tokens/1", wantStatus: http.StatusUnauthorized},
+		{name: "run requires auth", method: http.MethodPost, path: "/run", wantStatus: http.StatusUnauthorized},
+		{name: "import requires auth", method: http.MethodPost, path: "/import", wantStatus: http.StatusUnauthorized},
+		{name: "export requires auth", method: http.MethodGet, path: "/export", wantStatus: http.StatusUnauthorized},
+		{name: "token budgets require auth", method: http.MethodGet, path: "/token_budgets", wantStatus: http.StatusUnauthorized},
+		{name: "create token budget requires auth", method: http.MethodPost, path: "/token_budgets", wantStatus: http.StatusUnauthorized},
+		{name: "token budget alerts require auth", method: http.MethodGet, path: "/token_budgets/alerts", wantStatus: http.StatusUnauthorized},
+		{name: "token budget detail requires auth", method: http.MethodGet, path: "/token_budgets/1", wantStatus: http.StatusUnauthorized},
+		{name: "token budget update requires auth", method: http.MethodPatch, path: "/token_budgets/1", wantStatus: http.StatusUnauthorized},
+		{name: "token budget delete requires auth", method: http.MethodDelete, path: "/token_budgets/1", wantStatus: http.StatusUnauthorized},
+		{name: "token leaderboard requires auth", method: http.MethodGet, path: "/token_leaderboard", wantStatus: http.StatusUnauthorized},
+		{name: "discovery requires auth", method: http.MethodPost, path: "/backends/discover", wantStatus: http.StatusUnauthorized},
+		{name: "local backend probe requires auth", method: http.MethodPost, path: "/backends/local", wantStatus: http.StatusUnauthorized},
+		{name: "events stream requires auth", method: http.MethodGet, path: "/events/stream", wantStatus: http.StatusUnauthorized},
+		{name: "traces stream requires auth", method: http.MethodGet, path: "/traces/stream", wantStatus: http.StatusUnauthorized},
+		{name: "memory stream requires auth", method: http.MethodGet, path: "/memory/stream", wantStatus: http.StatusUnauthorized},
+		{name: "trace step stream requires auth", method: http.MethodGet, path: "/traces/not-a-span/stream", wantStatus: http.StatusUnauthorized},
+		{name: "mcp post requires auth", method: http.MethodPost, path: "/mcp", wantStatus: http.StatusUnauthorized},
+		{name: "mcp get requires auth", method: http.MethodGet, path: "/mcp", wantStatus: http.StatusUnauthorized},
+		{name: "mcp delete requires auth", method: http.MethodDelete, path: "/mcp", wantStatus: http.StatusUnauthorized},
+		{name: "proxy models requires auth remotely", method: http.MethodGet, path: "/v1/models", wantStatus: http.StatusUnauthorized},
+		{name: "proxy messages requires auth remotely", method: http.MethodPost, path: "/v1/messages", wantStatus: http.StatusUnauthorized},
 	}
 
 	for _, tc := range tests {
@@ -982,9 +1033,85 @@ func TestBuildHandlerDBAuthBootstrapLoginAndAPIToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create user request failed: %v", err)
 	}
-	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
+		resp.Body.Close()
 		t.Fatalf("create user got %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+	var user struct {
+		ID      int64 `json:"id"`
+		IsAdmin bool  `json:"is_admin"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+		resp.Body.Close()
+		t.Fatalf("decode created user: %v", err)
+	}
+	resp.Body.Close()
+	if user.ID == 0 || user.IsAdmin {
+		t.Fatalf("created user = %+v, want non-admin with id", user)
+	}
+
+	operatorLogin := []byte(`{"username":"operator","password":"correct horse battery staple"}`)
+	resp, err = http.Post(ts.URL+"/auth/login", "application/json", bytes.NewReader(operatorLogin))
+	if err != nil {
+		t.Fatalf("operator login request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("operator login got %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	var operatorCookie *http.Cookie
+	for _, cookie := range resp.Cookies() {
+		if cookie.Name == "agents_session" {
+			operatorCookie = cookie
+		}
+	}
+	if operatorCookie == nil {
+		t.Fatal("operator login did not return session cookie")
+	}
+
+	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/auth/users", bytes.NewReader([]byte(`{"username":"blocked","password":"correct horse battery staple"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(operatorCookie)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("non-admin create user request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin create user got %d, want %d", resp.StatusCode, http.StatusForbidden)
+	}
+
+	req, _ = http.NewRequest(http.MethodDelete, ts.URL+"/auth/users/1", nil)
+	req.AddCookie(operatorCookie)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("non-admin delete user request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin delete user got %d, want %d", resp.StatusCode, http.StatusForbidden)
+	}
+
+	req, _ = http.NewRequest(http.MethodDelete, ts.URL+"/auth/users/1", nil)
+	req.AddCookie(sessionCookie)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete admin request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("delete admin got %d, want %d", resp.StatusCode, http.StatusConflict)
+	}
+
+	req, _ = http.NewRequest(http.MethodDelete, ts.URL+"/auth/users/"+strconv.FormatInt(user.ID, 10), nil)
+	req.AddCookie(sessionCookie)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete user request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete user got %d, want %d", resp.StatusCode, http.StatusNoContent)
 	}
 
 	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/auth/tokens", bytes.NewReader([]byte(`{"name":"Codex MCP"}`)))

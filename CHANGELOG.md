@@ -15,7 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Moved dashboard auth management into a dedicated Config -> Authentication tab
-  with user creation and current-user API token management.
+  with admin-only user creation/removal and current-user API token management.
+- The dashboard now stays behind an authentication-required screen until the
+  browser has an active session, instead of rendering the app shell behind the
+  login modal.
 - Publish Docker images to GitHub Container Registry on `main` and version tags,
   with release-only `latest` tags and explicit `dev-<short_sha>` tags for main.
   The default Compose file pulls `ghcr.io/eloylp/agents:latest`.

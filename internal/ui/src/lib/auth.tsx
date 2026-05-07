@@ -7,7 +7,7 @@ const openAuthModalEvent = 'agents-auth-token-request'
 type AuthStatus = {
   bootstrap_required: boolean
   authenticated: boolean
-  user?: { username: string }
+  user?: { username: string; is_admin: boolean }
 }
 
 type AuthToken = {
@@ -28,6 +28,7 @@ type AuthUser = {
   updated_at: string
   last_login_at?: string
   disabled_at?: string
+  is_admin: boolean
 }
 
 let fetchPatched = false
@@ -114,13 +115,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const next = await loadAuthStatus()
     setStatus(next)
     setPassword('')
-    setOpen(false)
+    setOpen(next?.bootstrap_required || !next?.authenticated)
   }
+
+  const authenticated = status?.authenticated === true
+  const authRequired = status === null || status.bootstrap_required || !status.authenticated
 
   return (
     <>
-      {children}
-      {open && (
+      {authenticated ? children : <LockedScreen loading={status === null} />}
+      {(open || authRequired) && (
         <div style={overlayStyle}>
           <div style={modalStyle}>
             <h2 style={{ color: 'var(--text-heading)', fontSize: '1rem', marginBottom: '0.75rem' }}>
@@ -145,7 +149,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             />
             {error && <p style={{ color: 'var(--text-danger)', fontSize: '0.78rem', marginTop: '0.65rem' }}>{error}</p>}
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
-              {!status?.bootstrap_required && (
+              {authenticated && !status?.bootstrap_required && (
                 <button type="button" onClick={() => setOpen(false)} style={secondaryButtonStyle}>Cancel</button>
               )}
               <button type="button" onClick={submit} style={primaryButtonStyle}>
@@ -220,6 +224,17 @@ export function AuthTokenSettings() {
     await refresh()
   }
 
+  const deleteUser = async (id: number) => {
+    setUserError('')
+    const res = await fetch(`/auth/users/${id}`, { method: 'DELETE' })
+    if (!res.ok) {
+      const text = await res.text()
+      setUserError(text.trim() || 'Could not remove user.')
+      return
+    }
+    await refresh()
+  }
+
   const revoke = async (id: number) => {
     const res = await fetch(`/auth/tokens/${id}`, { method: 'DELETE' })
     if (res.ok) await refresh()
@@ -244,7 +259,7 @@ export function AuthTokenSettings() {
           <section style={sectionStyle}>
             <div>
               <h4 style={sectionTitleStyle}>Users</h4>
-              <p style={sectionHelpStyle}>Create additional dashboard users. Every user can manage daemon configuration and create their own API tokens.</p>
+              <p style={sectionHelpStyle}>Admin users can create or remove dashboard users. Every user can manage daemon configuration and create their own API tokens.</p>
             </div>
             <div style={{ display: 'grid', gap: '0.5rem' }}>
               {users.map(user => (
@@ -257,15 +272,25 @@ export function AuthTokenSettings() {
                       {user.disabled_at ? ' · disabled' : ''}
                     </p>
                   </div>
-                  {status.user?.username === user.username && <span style={pillStyle}>current</span>}
+                  <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    {user.is_admin && <span style={pillStyle}>admin</span>}
+                    {status.user?.username === user.username && <span style={pillStyle}>current</span>}
+                    {status.user?.is_admin && !user.is_admin && status.user?.username !== user.username && (
+                      <button type="button" onClick={() => deleteUser(user.id)} style={secondaryButtonStyle}>Remove</button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <input value={newUsername} onChange={e => setNewUsername(e.target.value)} placeholder="Username" style={{ ...inputStyle, maxWidth: '220px' }} />
-              <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="Password" style={{ ...inputStyle, maxWidth: '260px' }} />
-              <button type="button" onClick={createUser} style={primaryButtonStyle}>Create user</button>
-            </div>
+            {status.user?.is_admin ? (
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <input value={newUsername} onChange={e => setNewUsername(e.target.value)} placeholder="Username" style={{ ...inputStyle, maxWidth: '220px' }} />
+                <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="Password" style={{ ...inputStyle, maxWidth: '260px' }} />
+                <button type="button" onClick={createUser} style={primaryButtonStyle}>Create user</button>
+              </div>
+            ) : (
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>Only the admin user can create or remove dashboard users.</p>
+            )}
             {userError && <p style={{ color: 'var(--text-danger)', fontSize: '0.78rem' }}>{userError}</p>}
           </section>
 
@@ -298,6 +323,24 @@ export function AuthTokenSettings() {
           </section>
         </>
       )}
+    </div>
+  )
+}
+
+function LockedScreen({ loading }: { loading: boolean }) {
+  return (
+    <div style={lockedScreenStyle}>
+      <div style={lockedCardStyle}>
+        <div style={{ fontSize: '0.72rem', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: '0.5rem' }}>
+          Agents dashboard
+        </div>
+        <h1 style={{ color: 'var(--text-heading)', fontSize: '1.2rem', marginBottom: '0.5rem' }}>
+          Authentication required
+        </h1>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', lineHeight: 1.6 }}>
+          {loading ? 'Checking your session…' : 'Sign in to access fleet configuration, traces, runners, and API-backed dashboard data.'}
+        </p>
+      </div>
     </div>
   )
 }
@@ -350,6 +393,23 @@ const pillStyle: React.CSSProperties = {
   borderRadius: '999px',
   color: 'var(--text-muted)',
   padding: '0.15rem 0.45rem',
+}
+
+const lockedScreenStyle: React.CSSProperties = {
+  minHeight: '100vh',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: '1rem',
+}
+
+const lockedCardStyle: React.CSSProperties = {
+  width: 'min(520px, 100%)',
+  border: '1px solid var(--border)',
+  borderRadius: '10px',
+  background: 'var(--bg-card)',
+  padding: '1.25rem',
+  boxShadow: '0 18px 55px rgba(15,23,42,0.14)',
 }
 
 const overlayStyle: React.CSSProperties = {

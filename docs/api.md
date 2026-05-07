@@ -17,12 +17,13 @@ Sensitive endpoints require daemon auth. Browser clients use the `agents_session
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/auth/status` | Public auth state: whether first-user bootstrap is required and whether the caller is authenticated |
-| `POST` | `/auth/bootstrap` | Create the first user on an empty database and set an `agents_session` cookie |
+| `POST` | `/auth/bootstrap` | Create the first admin user on an empty database and set an `agents_session` cookie |
 | `POST` | `/auth/login` | Exchange username/password for an `agents_session` cookie |
 | `POST` | `/auth/logout` | Revoke the current browser session and clear the session cookie |
 | `GET` | `/auth/me` | Current authenticated user |
 | `GET` | `/auth/users` | List dashboard users |
-| `POST` | `/auth/users` | Create an additional dashboard user with `{"username":"...","password":"..."}` |
+| `POST` | `/auth/users` | Create an additional dashboard user with `{"username":"...","password":"..."}`. Admin-only |
+| `DELETE` | `/auth/users/{id}` | Remove a dashboard user. Admin-only; the bootstrapped admin user cannot be removed |
 | `GET` | `/auth/tokens` | List the current user's API tokens |
 | `POST` | `/auth/tokens` | Create a named API token. The plaintext token is returned once |
 | `DELETE` | `/auth/tokens/{id}` | Revoke one of the current user's API tokens |

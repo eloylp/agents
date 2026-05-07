@@ -97,7 +97,7 @@ Current fleet config snapshot. Includes YAML import/export for shareable fleet s
 
 ## Authentication
 
-The dashboard supports first-user setup, username/password login, logout, additional user creation, and named API token management in Config -> Authentication. Browser sessions use an opaque DB-backed token in an `HttpOnly` cookie. MCP and REST clients use API tokens created in the dashboard and sent as `Authorization: Bearer <token>`.
+The dashboard supports first-user setup, username/password login, logout, admin-only user creation/removal, and named API token management in Config -> Authentication. The first bootstrapped user is the admin user and cannot be removed. Browser sessions use an opaque DB-backed token in an `HttpOnly` cookie. MCP and REST clients use API tokens created in the dashboard and sent as `Authorization: Bearer <token>`.
 
 Use your reverse proxy for TLS/routing, not as the primary API auth layer. See [security.md → Daemon auth](security.md#daemon-auth) and [Reverse-proxy routing](security.md#reverse-proxy-routing).
 
