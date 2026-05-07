@@ -190,10 +190,6 @@ export function AuthTokenSettings() {
             {status?.authenticated ? `Signed in as ${status.user?.username || 'user'}.` : 'No active browser session.'}
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {!status?.authenticated && <button type="button" onClick={requestBearerTokenModal} style={secondaryButtonStyle}>Sign in</button>}
-          {status?.authenticated && <button type="button" onClick={async () => { await fetch('/auth/logout', { method: 'POST' }); window.location.reload() }} style={secondaryButtonStyle}>Sign out</button>}
-        </div>
       </div>
       {status?.authenticated && (
         <>
@@ -360,7 +356,7 @@ const authCardStyle: React.CSSProperties = {
   position: 'relative',
   width: 'min(430px, 100%)',
   border: '1px solid rgba(255,255,255,0.55)',
-  borderRadius: '20px',
+  borderRadius: 0,
   background: 'rgba(255,255,255,0.88)',
   backdropFilter: 'blur(18px)',
   padding: '1.35rem',
@@ -393,7 +389,7 @@ const authCopyStyle: React.CSSProperties = {
 
 const authLoadingStyle: React.CSSProperties = {
   border: '1px solid rgba(37,99,235,0.22)',
-  borderRadius: '12px',
+  borderRadius: 0,
   background: 'rgba(239,246,255,0.72)',
   color: '#1e3a5f',
   padding: '0.8rem',

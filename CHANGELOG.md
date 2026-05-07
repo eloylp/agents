@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   login modal.
 - Added a dedicated public root login/bootstrap page that redirects
   authenticated browser sessions into `/ui/`.
+- Root login now confirms the browser session before redirecting and uses
+  square-corner controls.
+- Moved sign out to the top-right dashboard navigation.
 - Publish Docker images to GitHub Container Registry on `main` and version tags,
   with release-only `latest` tags and explicit `dev-<short_sha>` tags for main.
   The default Compose file pulls `ghcr.io/eloylp/agents:latest`.
