@@ -54,11 +54,11 @@ On-demand runs go through the running daemon: `POST /run` (HTTP) or the `trigger
 ## Docker
 
 ```bash
-docker compose build
+docker compose pull
 docker compose up -d
 ```
 
-Multi-stage build on `node:22-alpine` so the image includes Claude Code, Codex, git, GitHub CLI, Go, Rust/Cargo, Node/npm, TypeScript, and the daemon. Runs as non-root `agents` user. Default CMD is `--db /var/lib/agents/agents.db`. Compose mounts:
+The default compose file pulls the published `ghcr.io/eloylp/agents:latest` image. `latest` is release-only; main-branch builds are explicit `dev-<short_sha>` tags. The image is built from the multi-stage Dockerfile and includes Claude Code, Codex, git, GitHub CLI, Go, Rust/Cargo, Node/npm, TypeScript, and the daemon. Runs as non-root `agents` user. Default CMD is `--db /var/lib/agents/agents.db`. Compose mounts:
 - `agents-data` named volume → `/var/lib/agents` (SQLite database persistence)
 - `agents-home` named volume → `/home/agents` (Claude / Codex auth, MCP config, and gh auth; populated by `docker compose exec -it agents agents-setup` once during setup, no host bind-mount of `~/.claude.json` etc.). GitHub access should flow through MCP first; authenticated gh is kept as fallback for complex workflows that need a local checkout/test/PR loop.
 
@@ -68,7 +68,6 @@ YAML config is import/export only, not a runtime input. To seed an empty fleet, 
 
 - `GITHUB_WEBHOOK_SECRET`, HMAC shared secret for the webhook receiver.
 - `GITHUB_TOKEN`, Personal Access Token used by the GitHub MCP server inside the container, by the `gh` CLI fallback, and forwarded into AI backend subprocesses through the env allowlist (`internal/ai/cmdrunner.go`). Required by `scripts/setup.sh` (hard-fails if unset). `repo` scope minimum; add `workflow` if agents touch CI. Codex resolves it at runtime; Claude stores it in `~/.claude.json`; `gh auth login --with-token` runs during setup so agents have a working CLI fallback when GitHub MCP tools fail to register. All credentials live on the `agents-home` volume.
-- `AGENTS_AUTH_BEARER_TOKEN_HASH`, optional SHA-256 hex hash of a legacy daemon bearer token. When set, first-user bootstrap requires that token and sensitive API/MCP routes still accept it during migration. The normal auth model is DB-backed users, `HttpOnly` browser sessions, and named API tokens created from the dashboard.
 - Daemon runtime settings can be overridden at startup with `AGENTS_*` env vars for log, HTTP, processor, and dispatch fields. See `docs/configuration.md` for the full mapping. Empty env vars are ignored, and changes still require a process/container restart.
 
 ## Architecture Notes
@@ -130,6 +129,6 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full flow, label semantics, and
 ## Security Notes
 
 - Webhook authenticity is enforced with HMAC SHA-256 signature verification.
-- Sensitive API and MCP endpoints require daemon auth after first-user setup. Browser users receive DB-backed opaque session tokens in `HttpOnly` cookies; MCP/API clients use named DB-backed bearer tokens; `AGENTS_AUTH_BEARER_TOKEN_HASH` remains as bootstrap/compatibility auth.
+- Sensitive API and MCP endpoints require daemon auth after first-user setup. Browser users receive DB-backed opaque session tokens in `HttpOnly` cookies; MCP/API clients use named DB-backed bearer tokens.
 - Prompts are never logged in plaintext; only the length is recorded.
 - The daemon delegates GitHub operations to the configured AI backend; agents prefer MCP tools and may use authenticated gh only as the documented fallback.

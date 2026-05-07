@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -53,9 +52,6 @@ func (c *Config) validate() error {
 	if err := c.validateLogConfig(); err != nil {
 		return err
 	}
-	if err := c.validateAuthConfig(); err != nil {
-		return err
-	}
 	if err := c.validateBackends(); err != nil {
 		return err
 	}
@@ -72,20 +68,6 @@ func (c *Config) validate() error {
 		return err
 	}
 	return c.validateRepos()
-}
-
-func (c *Config) validateAuthConfig() error {
-	hash := c.Daemon.Auth.BearerTokenHash
-	if hash == "" {
-		return nil
-	}
-	if len(hash) != 64 {
-		return fmt.Errorf("config: auth bearer token hash must be 64 hex characters, got %d", len(hash))
-	}
-	if _, err := hex.DecodeString(hash); err != nil {
-		return fmt.Errorf("config: auth bearer token hash must be valid hex: %w", err)
-	}
-	return nil
 }
 
 func (c *Config) validateProxy() error {

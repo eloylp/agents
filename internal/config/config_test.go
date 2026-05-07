@@ -1,8 +1,6 @@
 package config
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -77,8 +75,6 @@ func TestLoadAppliesDaemonEnvOverrides(t *testing.T) {
 	t.Setenv("LLM_KEY", "key-abc")
 	t.Setenv("AGENTS_LOG_LEVEL", "debug")
 	t.Setenv("AGENTS_LOG_FORMAT", "json")
-	hash := sha256.Sum256([]byte("secret-token"))
-	t.Setenv("AGENTS_AUTH_BEARER_TOKEN_HASH", hex.EncodeToString(hash[:]))
 	t.Setenv("AGENTS_HTTP_LISTEN_ADDR", "127.0.0.1:9090")
 	t.Setenv("AGENTS_HTTP_STATUS_PATH", "/healthz")
 	t.Setenv("AGENTS_HTTP_WEBHOOK_PATH", "/hooks/github")
@@ -108,9 +104,6 @@ func TestLoadAppliesDaemonEnvOverrides(t *testing.T) {
 
 	if cfg.Daemon.Log.Level != "debug" || cfg.Daemon.Log.Format != "json" {
 		t.Fatalf("log overrides = %+v, want debug/json", cfg.Daemon.Log)
-	}
-	if cfg.Daemon.Auth.BearerTokenHash != hex.EncodeToString(hash[:]) {
-		t.Fatalf("auth bearer token hash = %q, want env override", cfg.Daemon.Auth.BearerTokenHash)
 	}
 	if got := cfg.Daemon.HTTP.ListenAddr; got != "127.0.0.1:9090" {
 		t.Fatalf("listen addr = %q, want env override", got)
@@ -170,19 +163,6 @@ func TestLoadRejectsInvalidDaemonPathEnvOverride(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "AGENTS_HTTP_STATUS_PATH") {
 		t.Fatalf("error = %q, want env var name", err)
-	}
-}
-
-func TestLoadRejectsInvalidAuthBearerTokenHashEnv(t *testing.T) {
-	t.Setenv("AGENTS_AUTH_BEARER_TOKEN_HASH", "not-hex")
-	path := writeConfig(t, minimalYAML(""))
-
-	_, err := Load(path)
-	if err == nil {
-		t.Fatal("Load got nil error, want invalid auth hash error")
-	}
-	if !strings.Contains(err.Error(), "auth bearer token hash") {
-		t.Fatalf("error = %q, want auth hash context", err)
 	}
 }
 

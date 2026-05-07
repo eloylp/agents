@@ -214,7 +214,7 @@ export default function ConfigPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [raw, setRaw] = useState(false)
-  const [tab, setTab] = useState<'inspector' | 'backends' | 'guardrails' | 'import-export' | 'tokens'>('inspector')
+  const [tab, setTab] = useState<'inspector' | 'authentication' | 'backends' | 'guardrails' | 'import-export' | 'tokens'>('inspector')
 
   const [backends, setBackends] = useState<Backend[]>([])
   const [tools, setTools] = useState<ToolStatus[]>([])
@@ -695,6 +695,7 @@ export default function ConfigPage() {
 
       <div style={{ display: 'flex', gap: '0', marginBottom: '0', borderBottom: '1px solid var(--border)' }}>
         <button style={tabStyle('inspector')} onClick={() => setTab('inspector')}>Inspector</button>
+        <button style={tabStyle('authentication')} onClick={() => setTab('authentication')}>Authentication</button>
         <button style={tabStyle('backends')} onClick={() => setTab('backends')}>Backends and tools</button>
         <button style={tabStyle('guardrails')} onClick={() => setTab('guardrails')}>Guardrails</button>
         <button style={tabStyle('import-export')} onClick={() => setTab('import-export')}>Import / Export</button>
@@ -703,8 +704,6 @@ export default function ConfigPage() {
 
       {tab === 'inspector' && (
         <Card style={{ borderTopLeftRadius: 0 }}>
-          <AuthTokenSettings />
-          <hr style={{ border: 0, borderTop: '1px solid var(--border-subtle)', margin: '1rem 0' }} />
           {loading && <p style={{ color: 'var(--text-muted)' }}>Loading…</p>}
           {error && <p style={{ color: 'var(--text-danger)' }}>Error: {error}. (Is the API key set? Check Authorization header.)</p>}
           {config && (
@@ -720,6 +719,12 @@ export default function ConfigPage() {
               )}
             </pre>
           )}
+        </Card>
+      )}
+
+      {tab === 'authentication' && (
+        <Card style={{ borderTopLeftRadius: 0 }}>
+          <AuthTokenSettings />
         </Card>
       )}
 

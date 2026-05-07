@@ -8,7 +8,6 @@ type AuthStatus = {
   bootstrap_required: boolean
   authenticated: boolean
   user?: { username: string }
-  legacy_enabled: boolean
 }
 
 type AuthToken = {
@@ -20,6 +19,15 @@ type AuthToken = {
   expires_at?: string
   last_used_at?: string
   revoked_at?: string
+}
+
+type AuthUser = {
+  id: number
+  username: string
+  created_at: string
+  updated_at: string
+  last_login_at?: string
+  disabled_at?: string
 }
 
 let fetchPatched = false
@@ -153,16 +161,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
 export function AuthTokenSettings() {
   const [status, setStatus] = useState<AuthStatus | null>(null)
+  const [users, setUsers] = useState<AuthUser[]>([])
   const [tokens, setTokens] = useState<AuthToken[]>([])
   const [name, setName] = useState('Codex MCP')
   const [created, setCreated] = useState('')
+  const [newUsername, setNewUsername] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [userError, setUserError] = useState('')
+  const [tokenError, setTokenError] = useState('')
 
   const refresh = async () => {
     const next = await loadAuthStatus()
     setStatus(next)
     if (!next?.authenticated) return
-    const res = await fetch('/auth/tokens', { cache: 'no-store' })
-    if (res.ok) setTokens(await res.json() as AuthToken[])
+    const [usersRes, tokensRes] = await Promise.all([
+      fetch('/auth/users', { cache: 'no-store' }),
+      fetch('/auth/tokens', { cache: 'no-store' }),
+    ])
+    if (usersRes.ok) setUsers(await usersRes.json() as AuthUser[])
+    if (tokensRes.ok) setTokens(await tokensRes.json() as AuthToken[])
   }
 
   useEffect(() => {
@@ -171,14 +188,35 @@ export function AuthTokenSettings() {
 
   const create = async () => {
     setCreated('')
+    setTokenError('')
     const res = await fetch('/auth/tokens', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     })
-    if (!res.ok) return
+    if (!res.ok) {
+      setTokenError('Could not create API token.')
+      return
+    }
     const data = await res.json() as AuthToken & { token: string }
     setCreated(data.token)
+    await refresh()
+  }
+
+  const createUser = async () => {
+    setUserError('')
+    const res = await fetch('/auth/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: newUsername, password: newPassword }),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      setUserError(text.trim() || 'Could not create user.')
+      return
+    }
+    setNewUsername('')
+    setNewPassword('')
     await refresh()
   }
 
@@ -203,30 +241,115 @@ export function AuthTokenSettings() {
       </div>
       {status?.authenticated && (
         <>
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <input value={name} onChange={e => setName(e.target.value)} style={{ ...inputStyle, maxWidth: '260px' }} />
-            <button type="button" onClick={create} style={primaryButtonStyle}>Create API token</button>
-          </div>
-          {created && (
-            <code style={{ display: 'block', padding: '0.75rem', border: '1px solid var(--border)', borderRadius: '6px', overflowWrap: 'anywhere', color: 'var(--text-heading)' }}>
-              {created}
-            </code>
-          )}
-          <div style={{ display: 'grid', gap: '0.5rem' }}>
-            {tokens.map(token => (
-              <div key={token.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '0.65rem' }}>
-                <div>
-                  <strong style={{ color: 'var(--text-heading)', fontSize: '0.82rem' }}>{token.name}</strong>
-                  <p style={{ color: 'var(--text-muted)', fontSize: '0.74rem' }}>{token.kind} · {token.prefix} · {token.revoked_at ? 'revoked' : 'active'}</p>
+          <section style={sectionStyle}>
+            <div>
+              <h4 style={sectionTitleStyle}>Users</h4>
+              <p style={sectionHelpStyle}>Create additional dashboard users. Every user can manage daemon configuration and create their own API tokens.</p>
+            </div>
+            <div style={{ display: 'grid', gap: '0.5rem' }}>
+              {users.map(user => (
+                <div key={user.id} style={rowStyle}>
+                  <div>
+                    <strong style={{ color: 'var(--text-heading)', fontSize: '0.82rem' }}>{user.username}</strong>
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.74rem' }}>
+                      created {formatDate(user.created_at)}
+                      {user.last_login_at ? ` · last login ${formatDate(user.last_login_at)}` : ''}
+                      {user.disabled_at ? ' · disabled' : ''}
+                    </p>
+                  </div>
+                  {status.user?.username === user.username && <span style={pillStyle}>current</span>}
                 </div>
-                {!token.revoked_at && <button type="button" onClick={() => revoke(token.id)} style={secondaryButtonStyle}>Revoke</button>}
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <input value={newUsername} onChange={e => setNewUsername(e.target.value)} placeholder="Username" style={{ ...inputStyle, maxWidth: '220px' }} />
+              <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="Password" style={{ ...inputStyle, maxWidth: '260px' }} />
+              <button type="button" onClick={createUser} style={primaryButtonStyle}>Create user</button>
+            </div>
+            {userError && <p style={{ color: 'var(--text-danger)', fontSize: '0.78rem' }}>{userError}</p>}
+          </section>
+
+          <section style={sectionStyle}>
+            <div>
+              <h4 style={sectionTitleStyle}>API tokens</h4>
+              <p style={sectionHelpStyle}>Create revocable bearer tokens for MCP and REST clients. Plaintext tokens are shown only once.</p>
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <input value={name} onChange={e => setName(e.target.value)} style={{ ...inputStyle, maxWidth: '260px' }} />
+              <button type="button" onClick={create} style={primaryButtonStyle}>Create API token</button>
+            </div>
+            {tokenError && <p style={{ color: 'var(--text-danger)', fontSize: '0.78rem' }}>{tokenError}</p>}
+            {created && (
+              <code style={{ display: 'block', padding: '0.75rem', border: '1px solid var(--border)', borderRadius: '6px', overflowWrap: 'anywhere', color: 'var(--text-heading)' }}>
+                {created}
+              </code>
+            )}
+            <div style={{ display: 'grid', gap: '0.5rem' }}>
+              {tokens.map(token => (
+                <div key={token.id} style={rowStyle}>
+                  <div>
+                    <strong style={{ color: 'var(--text-heading)', fontSize: '0.82rem' }}>{token.name}</strong>
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.74rem' }}>{token.kind} · {token.prefix} · {token.revoked_at ? 'revoked' : 'active'}</p>
+                  </div>
+                  {!token.revoked_at && <button type="button" onClick={() => revoke(token.id)} style={secondaryButtonStyle}>Revoke</button>}
+                </div>
+              ))}
+            </div>
+          </section>
         </>
       )}
     </div>
   )
+}
+
+function formatDate(value: string) {
+  if (!value) return 'unknown'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString()
+}
+
+const sectionStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: '0.75rem',
+  padding: '0.85rem',
+  border: '1px solid var(--border-subtle)',
+  borderRadius: '8px',
+  background: 'var(--bg)',
+}
+
+const sectionTitleStyle: React.CSSProperties = {
+  fontSize: '0.9rem',
+  fontWeight: 700,
+  color: 'var(--text-heading)',
+  margin: 0,
+}
+
+const sectionHelpStyle: React.CSSProperties = {
+  color: 'var(--text-muted)',
+  fontSize: '0.76rem',
+  marginTop: '0.25rem',
+}
+
+const rowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: '1rem',
+  border: '1px solid var(--border-subtle)',
+  borderRadius: '6px',
+  padding: '0.65rem',
+  background: 'var(--bg-card)',
+}
+
+const pillStyle: React.CSSProperties = {
+  fontSize: '0.68rem',
+  textTransform: 'uppercase',
+  letterSpacing: '0.04em',
+  border: '1px solid var(--border)',
+  borderRadius: '999px',
+  color: 'var(--text-muted)',
+  padding: '0.15rem 0.45rem',
 }
 
 const overlayStyle: React.CSSProperties = {

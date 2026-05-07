@@ -18,6 +18,7 @@ import (
 var (
 	ErrAuthNotFound    = errors.New("auth: not found")
 	ErrAuthInvalid     = errors.New("auth: invalid credentials")
+	ErrAuthConflict    = errors.New("auth: conflict")
 	ErrBootstrapClosed = errors.New("auth: bootstrap closed")
 )
 
@@ -68,6 +69,67 @@ func (s *Store) UserCount(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("auth: count users: %w", err)
 	}
 	return count, nil
+}
+
+func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id,username,created_at,updated_at,last_login_at,disabled_at
+		FROM users ORDER BY username ASC, id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("auth: list users: %w", err)
+	}
+	defer rows.Close()
+	var out []User
+	for rows.Next() {
+		user, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, user)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("auth: list users rows: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) CreateUser(ctx context.Context, username, password string) (User, error) {
+	username = strings.TrimSpace(username)
+	if username == "" || password == "" {
+		return User{}, ErrAuthInvalid
+	}
+	hash, err := hashPassword(password)
+	if err != nil {
+		return User{}, err
+	}
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO users(username,password_hash,created_at,updated_at)
+		VALUES(?,?,datetime('now'),datetime('now'))`, username, hash)
+	if err != nil {
+		if isUniqueConstraintError(err) {
+			return User{}, ErrAuthConflict
+		}
+		return User{}, fmt.Errorf("auth: create user: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return User{}, fmt.Errorf("auth: user id: %w", err)
+	}
+	return s.GetUser(ctx, id)
+}
+
+func (s *Store) GetUser(ctx context.Context, id int64) (User, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id,username,created_at,updated_at,last_login_at,disabled_at
+		FROM users WHERE id=?`, id)
+	user, err := scanUser(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, ErrAuthNotFound
+	}
+	if err != nil {
+		return User{}, err
+	}
+	return user, nil
 }
 
 func (s *Store) BootstrapUser(ctx context.Context, username, password string, sessionTTL time.Duration) (CreatedAuthToken, error) {
@@ -217,6 +279,11 @@ func (s *Store) RevokeAuthToken(ctx context.Context, userID, tokenID int64) erro
 		return ErrAuthNotFound
 	}
 	return nil
+}
+
+func isUniqueConstraintError(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unique constraint") || strings.Contains(msg, "constraint failed")
 }
 
 func (s *Store) RevokeAuthTokenByHash(ctx context.Context, token string) error {
@@ -375,6 +442,19 @@ func randomBytes(n int) ([]byte, error) {
 
 type tokenScanner interface {
 	Scan(dest ...any) error
+}
+
+func scanUser(row tokenScanner) (User, error) {
+	var user User
+	var created, updated, lastLogin, disabled sql.NullString
+	if err := row.Scan(&user.ID, &user.Username, &created, &updated, &lastLogin, &disabled); err != nil {
+		return User{}, err
+	}
+	user.CreatedAt = parseDBTime(created)
+	user.UpdatedAt = parseDBTime(updated)
+	user.LastLoginAt = parseDBTimePtr(lastLogin)
+	user.DisabledAt = parseDBTimePtr(disabled)
+	return user, nil
 }
 
 func scanAuthToken(row tokenScanner) (AuthToken, error) {

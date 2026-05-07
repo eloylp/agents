@@ -45,17 +45,9 @@ type Config struct {
 type DaemonConfig struct {
 	Log        LogConfig                `yaml:"log"`
 	HTTP       HTTPConfig               `yaml:"http"`
-	Auth       AuthConfig               `yaml:"-"`
 	Processor  ProcessorConfig          `yaml:"processor"`
 	AIBackends map[string]fleet.Backend `yaml:"-"`
 	Proxy      ProxyConfig              `yaml:"proxy"`
-}
-
-// AuthConfig controls daemon-level access to sensitive HTTP surfaces. The UI
-// shell stays public so browsers can render the token prompt; API/MCP routes
-// are protected when BearerTokenHash is set.
-type AuthConfig struct {
-	BearerTokenHash string `yaml:"-"`
 }
 
 // ProxyConfig controls the built-in Anthropic↔OpenAI translation proxy.
