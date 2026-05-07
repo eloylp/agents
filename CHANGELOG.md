@@ -7,14 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the legacy `AGENTS_AUTH_BEARER_TOKEN_HASH` auth model. Daemon auth is
+  now only DB-backed browser sessions and named API bearer tokens.
+
+### Changed
+
+- Moved dashboard auth management into a dedicated Config -> Authentication tab
+  with user creation and current-user API token management.
+- Publish Docker images to GitHub Container Registry on `main` and version tags,
+  with release-only `latest` tags and explicit `dev-<short_sha>` tags for main.
+  The default Compose file pulls `ghcr.io/eloylp/agents:latest`.
+
 ## [0.2.0] - 2026-05-05
 
 ### Added
 
-- Minimal bearer-token auth for sensitive daemon surfaces. Set
-  `AGENTS_AUTH_BEARER_TOKEN_HASH` to protect REST write/read APIs, MCP tools,
-  runners, traces, prompts, and live streams while keeping `/status`,
-  `/webhooks/github`, `/v1/*`, and the UI shell reachable.
+- DB-backed daemon auth for sensitive surfaces: browser sessions for the
+  dashboard and named bearer tokens for REST/MCP clients, while keeping
+  `/status`, `/webhooks/github`, `/v1/*`, and the UI shell reachable.
 - Dashboard token prompt and local token management so browser users can
   authenticate against protected API and SSE endpoints without query-string
   secrets.

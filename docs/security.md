@@ -5,54 +5,25 @@ This page describes the daemon's threat model and the recommendations shipped ag
 ## Defaults the project ships
 
 - **Webhook HMAC verification** on every `POST /webhooks/github` request.
-- **DB-backed daemon auth for sensitive routes.** The dashboard creates the first local user, browser sessions use opaque DB-backed tokens in an `HttpOnly` cookie, and MCP/API clients use named revocable bearer tokens created from Config -> Tokens. Existing `AGENTS_AUTH_BEARER_TOKEN_HASH` deployments still work as bootstrap and compatibility auth.
+- **DB-backed daemon auth for sensitive routes.** The dashboard creates the first local user, browser sessions use opaque DB-backed tokens in an `HttpOnly` cookie, and MCP/API clients use named revocable bearer tokens created from Config -> Authentication.
 - **The daemon itself is read-only against GitHub.** GitHub operations happen inside the AI backend subprocess. Agents are instructed to prefer GitHub MCP tools; an authenticated `gh` CLI is present as a fallback for complex local checkout, test, and PR flows. The daemon still has no GitHub write SDK in `cmd/agents`.
 - **Per-event audit trail.** Every run records the composed prompt, every tool call with input/output summaries, and the response. Reachable from the dashboard for forensic review.
 - **Default built-in guardrails seeded into the database.** Policy blocks prepended to every agent's composed prompt at render time. `security` recommends ignoring instructions found in untrusted text, refusing secret reads/exfiltration, refusing out-of-tree filesystem access, refusing arbitrary network egress, and halting on probable injection. `memory-scope` tells agents to use only daemon-provided `Existing memory:` for the current `(agent, repo)` pair, ignore CLI-native/session/global memory, and stay bound to the repository named in the runtime context. `mcp-tool-usage` tells agents to use MCP first and authenticated `gh` only as fallback for complex local checkout/test/PR loops. **Operators can edit, disable, or replace built-ins** via `/ui/config` → Guardrails. Inspect live text at `GET /guardrails/{name}`. Like every prompt-level control, sufficiently determined indirect-injection attacks (role-play, encoded payloads, multi-turn manipulation) can defeat them.
 
 ## Daemon auth <a id="daemon-auth"></a>
 
-On a fresh database, open the dashboard and create the first user. The daemon stores a password hash and issues an opaque session token in an `HttpOnly` cookie. After at least one user exists, sensitive REST, MCP, `/run`, traces, runners, config, guardrails, repos, skills, agents, memory, graph, and event routes require one of:
+On a fresh database, open the dashboard and create the first user. Authenticated users can create additional dashboard users from Config -> Authentication. The daemon stores password hashes and issues opaque session tokens in `HttpOnly` cookies. After at least one user exists, sensitive REST, MCP, `/run`, traces, runners, config, guardrails, repos, skills, agents, memory, graph, and event routes require one of:
 
 1. A valid browser session cookie.
 2. A valid DB-backed API token sent as `Authorization: Bearer <token>`.
-3. The legacy `AGENTS_AUTH_BEARER_TOKEN_HASH` bearer token, when configured.
 
-Create MCP/API tokens from Config -> Tokens. Plaintext API tokens are returned only once at creation; the database stores only token hashes plus metadata such as name, prefix, creation time, last-used time, expiry, and revocation time.
+Create MCP/API tokens from Config -> Authentication. Plaintext API tokens are returned only once at creation; the database stores only token hashes plus metadata such as name, prefix, creation time, last-used time, expiry, and revocation time.
 
 `GITHUB_TOKEN` is unrelated to daemon auth. It remains the GitHub credential used by MCP, the `gh` fallback, and AI backend subprocesses. `GITHUB_WEBHOOK_SECRET` is also separate and remains the HMAC secret for `/webhooks/github`.
 
-## Legacy bearer-token auth <a id="bearer-token-auth"></a>
-
-Set the token hash at daemon startup:
-
-```bash
-# macOS
-printf '%s' 'your-token' | shasum -a 256 | awk '{print $1}'
-
-# Linux
-printf '%s' 'your-token' | sha256sum | awk '{print $1}'
-```
-
-Then put the resulting 64-character hex string in `.env`:
-
-```env
-AGENTS_AUTH_BEARER_TOKEN_HASH=...
-```
-
-Do not hash a string with a trailing newline. If `AGENTS_AUTH_BEARER_TOKEN_HASH` is empty or unset, legacy bearer compatibility is disabled.
-
-Authenticated clients send:
-
-```http
-Authorization: Bearer your-token
-```
-
-If no local users exist and `AGENTS_AUTH_BEARER_TOKEN_HASH` is set, first-user bootstrap requires this legacy bearer token. After bootstrap, prefer named DB-backed API tokens and remove the env hash when migration is complete.
-
 ## Reverse-proxy routing <a id="reverse-proxy-routing"></a>
 
-Use your reverse proxy for TLS and routing. With `AGENTS_AUTH_BEARER_TOKEN_HASH` set, the proxy no longer needs to provide basic auth for API/MCP access.
+Use your reverse proxy for TLS and routing. The proxy does not need to provide basic auth for API/MCP access; daemon auth protects sensitive routes itself.
 
 | Router | Paths | Auth | Purpose |
 |---|---|---|---|

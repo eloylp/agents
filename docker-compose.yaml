@@ -1,6 +1,6 @@
 services:
   agents:
-    build: .
+    image: ghcr.io/eloylp/agents:latest
     ports:
       - "8080:8080"
     environment:

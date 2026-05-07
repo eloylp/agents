@@ -12,6 +12,21 @@ Sensitive endpoints require daemon auth. Browser clients use the `agents_session
 | `POST` | `/webhooks/github` | GitHub webhook receiver (`X-Hub-Signature-256` HMAC verified) |
 | `POST` | `/run` | On-demand agent trigger |
 
+## Auth endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/auth/status` | Public auth state: whether first-user bootstrap is required and whether the caller is authenticated |
+| `POST` | `/auth/bootstrap` | Create the first user on an empty database and set an `agents_session` cookie |
+| `POST` | `/auth/login` | Exchange username/password for an `agents_session` cookie |
+| `POST` | `/auth/logout` | Revoke the current browser session and clear the session cookie |
+| `GET` | `/auth/me` | Current authenticated user |
+| `GET` | `/auth/users` | List dashboard users |
+| `POST` | `/auth/users` | Create an additional dashboard user with `{"username":"...","password":"..."}` |
+| `GET` | `/auth/tokens` | List the current user's API tokens |
+| `POST` | `/auth/tokens` | Create a named API token. The plaintext token is returned once |
+| `DELETE` | `/auth/tokens/{id}` | Revoke one of the current user's API tokens |
+
 The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 Accepted` immediately with an `event_id`; the agent runs asynchronously.
 
 ## Observability endpoints

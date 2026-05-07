@@ -15,7 +15,7 @@ The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthr
 
 ## Get started
 
-See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a repo in a few minutes, `docker compose up -d` is the recommended path. For five import-ready fleet scenarios (solo coder, coder + reviewer, autonomous fleet, local LLM, multi-repo) see [`config_examples/`](config_examples/).
+See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a repo in a few minutes from the published `ghcr.io/eloylp/agents` image. For five import-ready fleet scenarios (solo coder, coder + reviewer, autonomous fleet, local LLM, multi-repo) see [`config_examples/`](config_examples/).
 
 ## Features
 
@@ -26,7 +26,7 @@ See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a re
 - **Observable**: See the full event chain in realtime from the [UI](docs/ui.md), from events to runners to traces that will facilitate your prompt tunning journey.
 - **[Self-hosted](docs/quickstart.md)**: your code and prompts stay on your infrastructure. No SaaS dependency.
 - **[Security recommendations](docs/security.md)**: ships built-in guardrails prepended to every agent prompt for indirect prompt-injection resistance, public-action discretion, daemon-only memory scope, and GitHub repository tool usage (MCP first, gh fallback).
-- **Daemon auth**: create the first local user in the dashboard, use an `HttpOnly` browser session for UI access, and create revocable named bearer tokens for MCP/API clients. Existing `AGENTS_AUTH_BEARER_TOKEN_HASH` deployments still work as bootstrap/compatibility auth.
+- **Daemon auth**: create the first local user in the dashboard, use an `HttpOnly` browser session for UI access, and create revocable named bearer tokens for MCP/API clients.
 - **Multi-backend**: pick Claude, Codex, or a custom backend per agent. Different agents in the same fleet can use different providers.
 - **Discovery and diagnostics**: the daemon detects backends and tools, validates CLI health, and persists discovery snapshots.
 - **[Local-model support](docs/local-models.md)**: run any agent through `llama.cpp`, Ollama, vLLM, or any OpenAI-compatible endpoint. The daemon ships a built-in Anthropic-to-OpenAI translation proxy so the existing `claude` CLI works unchanged against your own LLM (experimental).

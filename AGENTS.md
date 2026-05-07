@@ -17,7 +17,7 @@ Key numbers:
 
 ```bash
 go test ./... -race    # run all tests
-docker compose build   # build the image (multi-stage Dockerfile handles go build)
+docker compose pull    # pull the published image
 docker compose up -d   # run the daemon
 ```
 
@@ -122,7 +122,8 @@ When making common classes of changes, update all of these at once:
 
 ## Operational notes
 
-- **`.env` is auto-loaded on startup** (`godotenv.Load()`). Required runtime secret: `GITHUB_WEBHOOK_SECRET`. Optional `AGENTS_AUTH_BEARER_TOKEN_HASH` provides legacy bootstrap/compatibility bearer auth; the normal daemon auth model is DB-backed users, browser sessions, and named API tokens. Daemon runtime settings can be overridden at startup with `AGENTS_*` env vars for log, HTTP, processor, and dispatch fields; see `docs/configuration.md` for the full mapping. Empty env vars are ignored, and changes still require a process/container restart.
+- **`.env` is auto-loaded on startup** (`godotenv.Load()`). Required runtime secret: `GITHUB_WEBHOOK_SECRET`. Daemon auth is DB-backed users, browser sessions, and named API tokens. Daemon runtime settings can be overridden at startup with `AGENTS_*` env vars for log, HTTP, processor, and dispatch fields; see `docs/configuration.md` for the full mapping. Empty env vars are ignored, and changes still require a process/container restart.
+- **Published Docker images live at `ghcr.io/eloylp/agents`.** The default compose file pulls `latest`, and `latest` must remain release-only. Pushes to `main` publish explicit `dev-<short_sha>` images for maintainer testing; version tags publish `latest`, `X.Y.Z`, `vX.Y.Z`, and `X.Y`. Do not document local image builds as the default user setup path.
 - **Config is loaded from SQLite at startup.** Seed an empty SQLite store via `POST /import` or the `agents-setup` script; YAML is import/export only, not a runtime input. Manage subsequent changes via the CRUD API or the web dashboard. Prompt and skill content is stored in the database; changes via the API or UI take effect on the next agent run without a restart.
 - **Backend discovery lifecycle.** Startup auto-discovery runs only when the backends table is empty. Manual refresh is explicit via `POST /backends/discover`; `GET /backends/status` is diagnostics-only.
 - **Runtime toolchain.** The Docker image includes `git`, authenticated `gh`, Go, Rust/Cargo, Node/npm, and TypeScript so agents can establish a safe local checkout/test loop when MCP alone is insufficient. `agents-setup` authenticates `gh` with `GITHUB_TOKEN`; `/backends/status` reports tool health.

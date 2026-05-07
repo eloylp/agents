@@ -23,7 +23,7 @@ export AGENTS_MCP_TOKEN='agents_...'
 codex mcp add agents-fleet --url https://agents.example.com/mcp --bearer-token-env-var AGENTS_MCP_TOKEN
 ```
 
-Create `AGENTS_MCP_TOKEN` from the dashboard at Config -> Tokens. Plaintext tokens are shown only once and can be revoked from the same page. Legacy deployments that still set `AGENTS_AUTH_BEARER_TOKEN_HASH` may use the matching bearer token during migration, but named DB-backed API tokens are the recommended MCP credential.
+Create `AGENTS_MCP_TOKEN` from the dashboard at Config -> Authentication. Plaintext tokens are shown only once and can be revoked from the same page.
 
 The same pattern works for Cursor, Cline, and any other MCP-compatible client; consult their docs for the exact config syntax.
 

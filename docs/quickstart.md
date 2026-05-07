@@ -7,20 +7,20 @@ The daemon dispatches AI CLIs (`claude`, `codex`) with sandbox-bypass flags so a
 ## Bring up the daemon
 
 ```bash
-git clone --branch v0.2.0 https://github.com/eloylp/agents
-cd agents
+mkdir agents && cd agents
+curl -fsSLO https://raw.githubusercontent.com/eloylp/agents/main/docker-compose.yaml
+curl -fsSLO https://raw.githubusercontent.com/eloylp/agents/main/.env.sample
 # .env holds runtime secrets (loaded automatically by compose).
 # Webhook secret: random per install. PAT: from https://github.com/settings/tokens with repo scope.
 cp .env.sample .env
 sed -i.bak "s/^GITHUB_WEBHOOK_SECRET=.*/GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)/" .env && rm .env.bak
 # Edit GITHUB_TOKEN in .env before continuing.
-# Optional before migration/exposure: set legacy AGENTS_AUTH_BEARER_TOKEN_HASH.
-docker compose up -d --build
+docker compose up -d
 ```
 
 The shipped [`docker-compose.yaml`](../docker-compose.yaml) is the source of truth for what gets mounted and exposed. Two named volumes back the runtime: `agents-data` (SQLite store) and `agents-home` (Claude / Codex auth, MCP config, and `gh` auth). The image includes the AI CLIs plus `git`, `gh`, Go, Rust/Cargo, Node/npm, and TypeScript so agents can run local checkout/test loops when MCP alone is not enough. The daemon boots against an empty database with built-in defaults, no YAML seed is required.
 
-> **First-run note.** The compose file builds the image locally on first invocation, multi-stage build (UI + Go binary), expect ~3-5 minutes depending on the host. `docker compose logs -f agents` shows progress.
+> **First-run note.** The compose file pulls `ghcr.io/eloylp/agents:latest`, which is only updated from version tags. Main-branch builds are published separately as `ghcr.io/eloylp/agents:dev-<short_sha>` so users do not accidentally pull development images.
 
 Verify the daemon is healthy:
 
@@ -47,7 +47,7 @@ Once it finishes, the daemon has working backends and tools. **Fleet configurati
 
 ## Production essentials
 
-Before exposing the daemon publicly, open the dashboard and create the first local user, then create named API tokens for MCP/REST clients from Config -> Tokens. Existing operators may set `AGENTS_AUTH_BEARER_TOKEN_HASH` as bootstrap/compatibility auth during migration. Configure your reverse proxy for TLS/routing: see [security.md → Daemon auth](security.md#daemon-auth) and [Reverse-proxy routing](security.md#reverse-proxy-routing).
+Before exposing the daemon publicly, open the dashboard and create the first local user, then create named API tokens for MCP/REST clients from Config -> Authentication. Configure your reverse proxy for TLS/routing: see [security.md → Daemon auth](security.md#daemon-auth) and [Reverse-proxy routing](security.md#reverse-proxy-routing).
 
 ## Day-2 operations
 
@@ -58,11 +58,18 @@ docker compose logs -f agents
 # Graceful restart (in-flight runs are allowed to finish).
 docker compose restart agents
 
-# Upgrade to a newer tagged release. Pick the latest tag from
-# https://github.com/eloylp/agents/tags and substitute below.
-git fetch origin --tags && git checkout v0.2.0 && docker compose up -d --build
-# Or track main directly (latest fixes, less stable than tagged releases):
-# git checkout main && git pull && docker compose up -d --build
+# Upgrade to the latest published image.
+docker compose pull agents && docker compose up -d agents
+
+# To pin a tagged release, edit docker-compose.yaml to use either:
+# image: ghcr.io/eloylp/agents:0.2.0
+# or:
+# image: ghcr.io/eloylp/agents:v0.2.0
+# then run:
+# docker compose pull agents && docker compose up -d agents
+
+# To test an unreleased main-branch build, explicitly use:
+# image: ghcr.io/eloylp/agents:dev-<short_sha>
 
 # Re-run backend discovery (after rotating auth or adding a CLI).
 curl -X POST http://localhost:8080/backends/discover
