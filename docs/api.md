@@ -2,7 +2,7 @@
 
 This page documents the REST endpoints exposed by the daemon. The MCP (Model Context Protocol) server at `/mcp` has its own reference in [mcp.md](mcp.md).
 
-Sensitive endpoints require daemon auth. Browser clients use the `agents_session` `HttpOnly` cookie; REST and MCP clients send a DB-backed API token with `Authorization: Bearer <token>`. `/status`, `/webhooks/github`, `/auth/status`, `/auth/login`, `/auth/bootstrap`, and UI static assets remain public where applicable. The local-model proxy accepts unauthenticated loopback calls from backend subprocesses; remote proxy callers need daemon auth.
+Sensitive endpoints require daemon auth. Browser clients use the `agents_session` `HttpOnly` cookie; REST and MCP clients send a DB-backed API token with `Authorization: Bearer <token>`. `/`, `/status`, `/webhooks/github`, `/auth/status`, `/auth/login`, `/auth/bootstrap`, and UI static assets remain public where applicable. The local-model proxy accepts unauthenticated loopback calls from backend subprocesses; remote proxy callers need daemon auth.
 
 ## Core endpoints
 
@@ -72,6 +72,7 @@ The daemon's event queue is durable: every `PushEvent` writes to the SQLite `eve
 
 | Method | Path | Description |
 |---|---|---|
+| `GET` | `/` | Public login/bootstrap page. Redirects authenticated browser sessions to `/ui/` |
 | `GET` | `/ui/` | Built-in web dashboard (static assets; embedded in binary) |
 
 ## Proxy endpoints (opt-in)

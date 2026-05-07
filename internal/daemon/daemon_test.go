@@ -61,6 +61,7 @@ func TestBuildRouterRegistersExpectedRoutes(t *testing.T) {
 		path   string
 	}{
 		{http.MethodGet, "/status"},
+		{http.MethodGet, "/"},
 		{http.MethodPost, "/run"},
 		{http.MethodPost, "/webhooks/github"},
 		{http.MethodGet, "/auth/status"},
@@ -827,6 +828,7 @@ func TestBuildHandlerPublicRoutesStayOpen(t *testing.T) {
 		path   string
 	}{
 		{http.MethodGet, "/status"},
+		{http.MethodGet, "/"},
 		{http.MethodGet, "/auth/status"},
 		{http.MethodGet, "/ui/"},
 	}
@@ -992,6 +994,32 @@ func TestBuildHandlerDBAuthBootstrapLoginAndAPIToken(t *testing.T) {
 	}
 	if sessionCookie == nil || !sessionCookie.HttpOnly {
 		t.Fatalf("bootstrap session cookie = %#v, want HttpOnly agents_session", sessionCookie)
+	}
+
+	noRedirect := &http.Client{
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+"/", nil)
+	resp, err = noRedirect.Do(req)
+	if err != nil {
+		t.Fatalf("root login request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unauthenticated root got %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+"/", nil)
+	req.AddCookie(sessionCookie)
+	resp, err = noRedirect.Do(req)
+	if err != nil {
+		t.Fatalf("authenticated root request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/ui/" {
+		t.Fatalf("authenticated root got status=%d location=%q, want 302 /ui/", resp.StatusCode, resp.Header.Get("Location"))
 	}
 
 	req, _ = http.NewRequest(http.MethodGet, ts.URL+"/config", nil)

@@ -43,11 +43,11 @@ docker compose exec -it agents agents-setup
 5. refreshes the daemon's backend discovery so the fleet sees the freshly authenticated tooling,
 6. prints diagnostics from `/status`, `/backends/status`, `/agents/orphans/status`.
 
-Once it finishes, the daemon has working backends and tools. **Fleet configuration (agents, skills, repos, bindings, webhooks) lives in the dashboard**, open `http://localhost:8080/ui/` and configure from there. Those tasks are graphical-shaped and don't fit a bash prompt loop.
+Once it finishes, the daemon has working backends and tools. **Fleet configuration (agents, skills, repos, bindings, webhooks) lives in the dashboard**, open `http://localhost:8080/`, sign in or bootstrap the first user, and configure from there. Those tasks are graphical-shaped and don't fit a bash prompt loop.
 
 ## Production essentials
 
-Before exposing the daemon publicly, open the dashboard and create the first local user, then create named API tokens for MCP/REST clients from Config -> Authentication. Configure your reverse proxy for TLS/routing: see [security.md → Daemon auth](security.md#daemon-auth) and [Reverse-proxy routing](security.md#reverse-proxy-routing).
+Before exposing the daemon publicly, open the root login page and create the first local user, then create named API tokens for MCP/REST clients from Config -> Authentication. Configure your reverse proxy for TLS/routing: see [security.md → Daemon auth](security.md#daemon-auth) and [Reverse-proxy routing](security.md#reverse-proxy-routing).
 
 ## Day-2 operations
 

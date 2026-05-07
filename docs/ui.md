@@ -1,6 +1,6 @@
 # Web dashboard
 
-The daemon ships an embedded web dashboard at `/ui/`. It is the primary interface for managing the agent fleet. Every CRUD operation (agents, skills, backends, repos, bindings) is available there alongside live monitoring.
+The daemon ships an embedded web dashboard at `/ui/`. The public root path `/` serves the login/bootstrap page and redirects authenticated browser sessions into `/ui/`. The dashboard is the primary interface for managing the agent fleet. Every CRUD operation (agents, skills, backends, repos, bindings) is available there alongside live monitoring.
 
 ![Fleet dashboard](img/fleet.png)
 
@@ -97,7 +97,7 @@ Current fleet config snapshot. Includes YAML import/export for shareable fleet s
 
 ## Authentication
 
-The dashboard supports first-user setup, username/password login, logout, admin-only user creation/removal, and named API token management in Config -> Authentication. The first bootstrapped user is the admin user and cannot be removed. Browser sessions use an opaque DB-backed token in an `HttpOnly` cookie. MCP and REST clients use API tokens created in the dashboard and sent as `Authorization: Bearer <token>`.
+The root login page supports first-user setup and username/password login before redirecting authenticated browsers to `/ui/`. Inside the dashboard, Config -> Authentication supports logout, admin-only user creation/removal, and named API token management. The first bootstrapped user is the admin user and cannot be removed. Browser sessions use an opaque DB-backed token in an `HttpOnly` cookie. MCP and REST clients use API tokens created in the dashboard and sent as `Authorization: Bearer <token>`.
 
 Use your reverse proxy for TLS/routing, not as the primary API auth layer. See [security.md → Daemon auth](security.md#daemon-auth) and [Reverse-proxy routing](security.md#reverse-proxy-routing).
 
