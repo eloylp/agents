@@ -1,7 +1,7 @@
 package fleet
 
 import (
-	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/eloylp/agents/internal/config"
@@ -26,7 +26,7 @@ func TestCanonicalModels(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := canonicalModels(tc.input)
-			if !reflect.DeepEqual(got, tc.want) {
+			if !slices.Equal(got, tc.want) || (got == nil) != (tc.want == nil) {
 				t.Fatalf("canonicalModels(%v) = %#v, want %#v", tc.input, got, tc.want)
 			}
 		})
@@ -132,7 +132,7 @@ func TestComputeOrphanedAgentsIncludesDisabledRefs(t *testing.T) {
 		t.Fatalf("len(orphans) = %d, want 1", len(orphans))
 	}
 	wantRepos := []string{"owner/active", "owner/halfway", "owner/paused"}
-	if !reflect.DeepEqual(orphans[0].Repos, wantRepos) {
+	if !slices.Equal(orphans[0].Repos, wantRepos) {
 		t.Fatalf("repos = %v, want %v (all references including disabled)", orphans[0].Repos, wantRepos)
 	}
 }
