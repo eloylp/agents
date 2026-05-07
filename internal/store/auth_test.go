@@ -42,6 +42,27 @@ func TestAuthBootstrapLoginAndAPITokenLifecycle(t *testing.T) {
 	if len(users) != 2 {
 		t.Fatalf("ListUsers() len = %d, want 2", len(users))
 	}
+	for _, user := range users {
+		if user.Username == "admin" && !user.IsAdmin {
+			t.Fatal("bootstrap user is not marked admin")
+		}
+		if user.Username == "other" && user.IsAdmin {
+			t.Fatal("non-bootstrap user is marked admin")
+		}
+	}
+	if err := st.DeleteUser(ctx, created.UserID); !errors.Is(err, store.ErrAuthForbidden) {
+		t.Fatalf("DeleteUser(admin) error = %v, want %v", err, store.ErrAuthForbidden)
+	}
+	if err := st.DeleteUser(ctx, other.ID); err != nil {
+		t.Fatalf("DeleteUser(other) error = %v", err)
+	}
+	users, err = st.ListUsers(ctx)
+	if err != nil {
+		t.Fatalf("ListUsers(after delete) error = %v", err)
+	}
+	if len(users) != 1 || users[0].Username != "admin" {
+		t.Fatalf("ListUsers(after delete) = %+v, want only admin", users)
+	}
 
 	if _, err := st.Login(ctx, "admin", "wrong", 0); !errors.Is(err, store.ErrAuthInvalid) {
 		t.Fatalf("Login(wrong password) error = %v, want %v", err, store.ErrAuthInvalid)

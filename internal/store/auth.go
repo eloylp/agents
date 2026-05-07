@@ -19,6 +19,7 @@ var (
 	ErrAuthNotFound    = errors.New("auth: not found")
 	ErrAuthInvalid     = errors.New("auth: invalid credentials")
 	ErrAuthConflict    = errors.New("auth: conflict")
+	ErrAuthForbidden   = errors.New("auth: forbidden")
 	ErrBootstrapClosed = errors.New("auth: bootstrap closed")
 )
 
@@ -29,6 +30,7 @@ type User struct {
 	UpdatedAt   time.Time  `json:"updated_at"`
 	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
 	DisabledAt  *time.Time `json:"disabled_at,omitempty"`
+	IsAdmin     bool       `json:"is_admin"`
 }
 
 type AuthToken struct {
@@ -73,7 +75,7 @@ func (s *Store) UserCount(ctx context.Context) (int, error) {
 
 func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id,username,created_at,updated_at,last_login_at,disabled_at
+		SELECT id,username,created_at,updated_at,last_login_at,disabled_at,id=(SELECT MIN(id) FROM users)
 		FROM users ORDER BY username ASC, id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("auth: list users: %w", err)
@@ -120,7 +122,7 @@ func (s *Store) CreateUser(ctx context.Context, username, password string) (User
 
 func (s *Store) GetUser(ctx context.Context, id int64) (User, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id,username,created_at,updated_at,last_login_at,disabled_at
+		SELECT id,username,created_at,updated_at,last_login_at,disabled_at,id=(SELECT MIN(id) FROM users)
 		FROM users WHERE id=?`, id)
 	user, err := scanUser(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -130,6 +132,40 @@ func (s *Store) GetUser(ctx context.Context, id int64) (User, error) {
 		return User{}, err
 	}
 	return user, nil
+}
+
+func (s *Store) DeleteUser(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return ErrAuthInvalid
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("auth: begin delete user: %w", err)
+	}
+	defer tx.Rollback()
+
+	var adminID int64
+	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MIN(id), 0) FROM users").Scan(&adminID); err != nil {
+		return fmt.Errorf("auth: admin lookup: %w", err)
+	}
+	if adminID == id {
+		return ErrAuthForbidden
+	}
+	res, err := tx.ExecContext(ctx, "DELETE FROM users WHERE id=?", id)
+	if err != nil {
+		return fmt.Errorf("auth: delete user: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("auth: delete rows: %w", err)
+	}
+	if n == 0 {
+		return ErrAuthNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("auth: commit delete user: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) BootstrapUser(ctx context.Context, username, password string, sessionTTL time.Duration) (CreatedAuthToken, error) {
@@ -302,7 +338,7 @@ func (s *Store) AuthenticateToken(ctx context.Context, token, kind string) (Auth
 	hash := hashToken(token)
 	row := s.db.QueryRowContext(ctx, `
 		SELECT
-			u.id,u.username,u.created_at,u.updated_at,u.last_login_at,u.disabled_at,
+			u.id,u.username,u.created_at,u.updated_at,u.last_login_at,u.disabled_at,u.id=(SELECT MIN(id) FROM users),
 			t.id,t.user_id,t.kind,t.name,t.prefix,t.created_at,t.expires_at,t.last_used_at,t.revoked_at
 		FROM auth_tokens t
 		JOIN users u ON u.id = t.user_id
@@ -446,14 +482,16 @@ type tokenScanner interface {
 
 func scanUser(row tokenScanner) (User, error) {
 	var user User
+	var isAdmin int
 	var created, updated, lastLogin, disabled sql.NullString
-	if err := row.Scan(&user.ID, &user.Username, &created, &updated, &lastLogin, &disabled); err != nil {
+	if err := row.Scan(&user.ID, &user.Username, &created, &updated, &lastLogin, &disabled, &isAdmin); err != nil {
 		return User{}, err
 	}
 	user.CreatedAt = parseDBTime(created)
 	user.UpdatedAt = parseDBTime(updated)
 	user.LastLoginAt = parseDBTimePtr(lastLogin)
 	user.DisabledAt = parseDBTimePtr(disabled)
+	user.IsAdmin = isAdmin != 0
 	return user, nil
 }
 
@@ -472,10 +510,11 @@ func scanAuthToken(row tokenScanner) (AuthToken, error) {
 
 func scanAuthIdentity(row tokenScanner) (AuthIdentity, error) {
 	var ident AuthIdentity
+	var isAdmin int
 	var userCreated, userUpdated, lastLogin, disabled sql.NullString
 	var tokCreated, expires, lastUsed, revoked sql.NullString
 	err := row.Scan(
-		&ident.User.ID, &ident.User.Username, &userCreated, &userUpdated, &lastLogin, &disabled,
+		&ident.User.ID, &ident.User.Username, &userCreated, &userUpdated, &lastLogin, &disabled, &isAdmin,
 		&ident.Token.ID, &ident.Token.UserID, &ident.Token.Kind, &ident.Token.Name, &ident.Token.Prefix, &tokCreated, &expires, &lastUsed, &revoked,
 	)
 	if err != nil {
@@ -485,6 +524,7 @@ func scanAuthIdentity(row tokenScanner) (AuthIdentity, error) {
 	ident.User.UpdatedAt = parseDBTime(userUpdated)
 	ident.User.LastLoginAt = parseDBTimePtr(lastLogin)
 	ident.User.DisabledAt = parseDBTimePtr(disabled)
+	ident.User.IsAdmin = isAdmin != 0
 	ident.Token.CreatedAt = parseDBTime(tokCreated)
 	ident.Token.ExpiresAt = parseDBTimePtr(expires)
 	ident.Token.LastUsedAt = parseDBTimePtr(lastUsed)
