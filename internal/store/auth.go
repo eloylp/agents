@@ -277,19 +277,27 @@ func pbkdf2SHA256WithIter(password string, salt []byte, iter, keyLen int) ([]byt
 }
 
 func verifyPassword(password, encoded string) bool {
-	parts := strings.Split(encoded, "$")
-	if len(parts) != 4 || parts[0] != "pbkdf2-sha256" {
+	algorithm, rest, ok := strings.Cut(encoded, "$")
+	if !ok || algorithm != "pbkdf2-sha256" {
+		return false
+	}
+	iterRaw, rest, ok := strings.Cut(rest, "$")
+	if !ok {
+		return false
+	}
+	saltRaw, keyRaw, ok := strings.Cut(rest, "$")
+	if !ok || strings.Contains(keyRaw, "$") {
 		return false
 	}
 	var iter int
-	if _, err := fmt.Sscanf(parts[1], "%d", &iter); err != nil || iter <= 0 {
+	if _, err := fmt.Sscanf(iterRaw, "%d", &iter); err != nil || iter <= 0 {
 		return false
 	}
-	salt, err := base64.RawStdEncoding.DecodeString(parts[2])
+	salt, err := base64.RawStdEncoding.DecodeString(saltRaw)
 	if err != nil {
 		return false
 	}
-	want, err := base64.RawStdEncoding.DecodeString(parts[3])
+	want, err := base64.RawStdEncoding.DecodeString(keyRaw)
 	if err != nil {
 		return false
 	}
