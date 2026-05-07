@@ -109,9 +109,6 @@ func (c *Config) normalize() {
 	// Log.
 	c.Daemon.Log.Level = strings.ToLower(strings.TrimSpace(c.Daemon.Log.Level))
 	c.Daemon.Log.Format = strings.ToLower(strings.TrimSpace(c.Daemon.Log.Format))
-
-	// Auth.
-	c.Daemon.Auth.BearerTokenHash = strings.ToLower(strings.TrimSpace(c.Daemon.Auth.BearerTokenHash))
 }
 
 // setDefault writes def into *dst if *dst is empty (after trimming).

@@ -11,8 +11,6 @@ const (
 	envLogLevel  = "AGENTS_LOG_LEVEL"
 	envLogFormat = "AGENTS_LOG_FORMAT"
 
-	envAuthBearerTokenHash = "AGENTS_AUTH_BEARER_TOKEN_HASH"
-
 	envHTTPListenAddr             = "AGENTS_HTTP_LISTEN_ADDR"
 	envHTTPStatusPath             = "AGENTS_HTTP_STATUS_PATH"
 	envHTTPWebhookPath            = "AGENTS_HTTP_WEBHOOK_PATH"
@@ -44,8 +42,6 @@ const (
 func (c *Config) applyEnvOverrides() error {
 	applyStringEnv(envLogLevel, &c.Daemon.Log.Level)
 	applyStringEnv(envLogFormat, &c.Daemon.Log.Format)
-
-	applyStringEnv(envAuthBearerTokenHash, &c.Daemon.Auth.BearerTokenHash)
 
 	applyStringEnv(envHTTPListenAddr, &c.Daemon.HTTP.ListenAddr)
 	if err := applyPathEnv(envHTTPStatusPath, &c.Daemon.HTTP.StatusPath); err != nil {

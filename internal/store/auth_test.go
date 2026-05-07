@@ -25,6 +25,23 @@ func TestAuthBootstrapLoginAndAPITokenLifecycle(t *testing.T) {
 	if _, err := st.BootstrapUser(ctx, "other", "password", 0); !errors.Is(err, store.ErrBootstrapClosed) {
 		t.Fatalf("second BootstrapUser() error = %v, want %v", err, store.ErrBootstrapClosed)
 	}
+	other, err := st.CreateUser(ctx, "other", "password")
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+	if other.Username != "other" {
+		t.Fatalf("CreateUser() username = %q, want other", other.Username)
+	}
+	if _, err := st.CreateUser(ctx, "other", "password"); !errors.Is(err, store.ErrAuthConflict) {
+		t.Fatalf("CreateUser(duplicate) error = %v, want %v", err, store.ErrAuthConflict)
+	}
+	users, err := st.ListUsers(ctx)
+	if err != nil {
+		t.Fatalf("ListUsers() error = %v", err)
+	}
+	if len(users) != 2 {
+		t.Fatalf("ListUsers() len = %d, want 2", len(users))
+	}
 
 	if _, err := st.Login(ctx, "admin", "wrong", 0); !errors.Is(err, store.ErrAuthInvalid) {
 		t.Fatalf("Login(wrong password) error = %v, want %v", err, store.ErrAuthInvalid)

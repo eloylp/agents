@@ -834,13 +834,10 @@ func TestBuildHandlerPublicRoutesStayOpen(t *testing.T) {
 	}
 }
 
-func TestBuildHandlerBearerAuthProtectsSensitiveRoutes(t *testing.T) {
+func TestBuildHandlerAuthProtectsSensitiveRoutes(t *testing.T) {
 	t.Parallel()
 
-	sum := sha256.Sum256([]byte("secret-token"))
-	srv, _ := newTestServer(t, testCfg(func(c *config.Config) {
-		c.Daemon.Auth.BearerTokenHash = hex.EncodeToString(sum[:])
-	}))
+	srv, _ := newTestServer(t, testCfg(nil))
 	ts := httptest.NewServer(srv.AuthHandler())
 	t.Cleanup(ts.Close)
 
@@ -848,24 +845,18 @@ func TestBuildHandlerBearerAuthProtectsSensitiveRoutes(t *testing.T) {
 		name       string
 		method     string
 		path       string
-		authHeader string
 		wantStatus int
 	}{
 		{name: "status stays public", method: http.MethodGet, path: "/status", wantStatus: http.StatusOK},
 		{name: "ui shell stays public", method: http.MethodGet, path: "/ui/", wantStatus: http.StatusOK},
-		{name: "api requires bearer", method: http.MethodGet, path: "/config", wantStatus: http.StatusUnauthorized},
-		{name: "api rejects wrong bearer", method: http.MethodGet, path: "/config", authHeader: "Bearer wrong", wantStatus: http.StatusUnauthorized},
-		{name: "api accepts bearer", method: http.MethodGet, path: "/config", authHeader: "Bearer secret-token", wantStatus: http.StatusOK},
-		{name: "mcp requires bearer", method: http.MethodPost, path: "/mcp", wantStatus: http.StatusUnauthorized},
+		{name: "api requires auth", method: http.MethodGet, path: "/config", wantStatus: http.StatusUnauthorized},
+		{name: "mcp requires auth", method: http.MethodPost, path: "/mcp", wantStatus: http.StatusUnauthorized},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			req, _ := http.NewRequest(tc.method, ts.URL+tc.path, nil)
-			if tc.authHeader != "" {
-				req.Header.Set("Authorization", tc.authHeader)
-			}
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				t.Fatalf("request failed: %v", err)
@@ -881,9 +872,7 @@ func TestBuildHandlerBearerAuthProtectsSensitiveRoutes(t *testing.T) {
 func TestBuildHandlerProxyRoutesAreLocalOnlyWithoutAuth(t *testing.T) {
 	t.Parallel()
 
-	sum := sha256.Sum256([]byte("secret-token"))
 	srv, _ := newTestServer(t, testCfg(func(c *config.Config) {
-		c.Daemon.Auth.BearerTokenHash = hex.EncodeToString(sum[:])
 		c.Daemon.Proxy = config.ProxyConfig{
 			Enabled: true,
 			Path:    "/v1/messages",
@@ -898,12 +887,10 @@ func TestBuildHandlerProxyRoutesAreLocalOnlyWithoutAuth(t *testing.T) {
 	tests := []struct {
 		name       string
 		remoteAddr string
-		authHeader string
 		wantStatus int
 	}{
 		{name: "remote proxy call requires auth", remoteAddr: "203.0.113.10:4444", wantStatus: http.StatusUnauthorized},
 		{name: "loopback proxy call reaches proxy", remoteAddr: "127.0.0.1:4444", wantStatus: http.StatusBadRequest},
-		{name: "remote proxy call with auth reaches proxy", remoteAddr: "203.0.113.10:4444", authHeader: "Bearer secret-token", wantStatus: http.StatusBadRequest},
 	}
 
 	for _, tc := range tests {
@@ -911,9 +898,6 @@ func TestBuildHandlerProxyRoutesAreLocalOnlyWithoutAuth(t *testing.T) {
 			t.Parallel()
 			req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{}`))
 			req.RemoteAddr = tc.remoteAddr
-			if tc.authHeader != "" {
-				req.Header.Set("Authorization", tc.authHeader)
-			}
 			rr := httptest.NewRecorder()
 			srv.AuthHandler().ServeHTTP(rr, req)
 			if rr.Code != tc.wantStatus {
@@ -978,6 +962,29 @@ func TestBuildHandlerDBAuthBootstrapLoginAndAPIToken(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("session /config got %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+"/auth/users", nil)
+	req.AddCookie(sessionCookie)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("list users request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list users got %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/auth/users", bytes.NewReader([]byte(`{"username":"operator","password":"correct horse battery staple"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(sessionCookie)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create user request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create user got %d, want %d", resp.StatusCode, http.StatusCreated)
 	}
 
 	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/auth/tokens", bytes.NewReader([]byte(`{"name":"Codex MCP"}`)))

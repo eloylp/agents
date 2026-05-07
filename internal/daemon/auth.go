@@ -2,9 +2,6 @@ package daemon
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net"
@@ -29,10 +26,14 @@ type authStatusResponse struct {
 	BootstrapRequired bool        `json:"bootstrap_required"`
 	Authenticated     bool        `json:"authenticated"`
 	User              *store.User `json:"user,omitempty"`
-	LegacyEnabled     bool        `json:"legacy_enabled"`
 }
 
 type authCredentialsRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type createUserRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
@@ -53,19 +54,14 @@ func (d *Daemon) registerAuthRoutes(router *mux.Router, withTimeout func(http.Ha
 	router.Handle("/auth/login", withTimeout(http.HandlerFunc(d.handleAuthLogin))).Methods(http.MethodPost)
 	router.Handle("/auth/logout", withTimeout(http.HandlerFunc(d.handleAuthLogout))).Methods(http.MethodPost)
 	router.Handle("/auth/me", withTimeout(http.HandlerFunc(d.handleAuthMe))).Methods(http.MethodGet)
+	router.Handle("/auth/users", withTimeout(http.HandlerFunc(d.handleAuthUsersList))).Methods(http.MethodGet)
+	router.Handle("/auth/users", withTimeout(http.HandlerFunc(d.handleAuthUsersCreate))).Methods(http.MethodPost)
 	router.Handle("/auth/tokens", withTimeout(http.HandlerFunc(d.handleAuthTokensList))).Methods(http.MethodGet)
 	router.Handle("/auth/tokens", withTimeout(http.HandlerFunc(d.handleAuthTokensCreate))).Methods(http.MethodPost)
 	router.Handle("/auth/tokens/{id}", withTimeout(http.HandlerFunc(d.handleAuthTokenRevoke))).Methods(http.MethodDelete)
 }
 
 func (d *Daemon) withBearerAuth(next http.Handler) http.Handler {
-	legacyHash := strings.TrimSpace(d.daemonCfg.Auth.BearerTokenHash)
-	var legacyExpected []byte
-	if legacyHash != "" {
-		if decoded, err := hex.DecodeString(legacyHash); err == nil && len(decoded) == sha256.Size {
-			legacyExpected = decoded
-		}
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if d.isPublicRoute(r) {
 			next.ServeHTTP(w, r)
@@ -74,10 +70,6 @@ func (d *Daemon) withBearerAuth(next http.Handler) http.Handler {
 		identity, ok := d.authenticateRequest(r)
 		if ok {
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), authContextKey{}, identity)))
-			return
-		}
-		if legacyExpected != nil && validBearerToken(legacyExpected, r.Header.Get("Authorization")) {
-			next.ServeHTTP(w, r)
 			return
 		}
 		w.Header().Set("WWW-Authenticate", `Bearer realm="agents"`)
@@ -145,7 +137,6 @@ func (d *Daemon) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := authStatusResponse{
 		BootstrapRequired: count == 0,
-		LegacyEnabled:     strings.TrimSpace(d.daemonCfg.Auth.BearerTokenHash) != "",
 	}
 	if identity, ok := d.currentIdentity(r); ok {
 		resp.Authenticated = true
@@ -164,15 +155,6 @@ func (d *Daemon) handleAuthBootstrap(w http.ResponseWriter, r *http.Request) {
 	if count != 0 {
 		http.Error(w, "bootstrap closed", http.StatusConflict)
 		return
-	}
-	legacyHash := strings.TrimSpace(d.daemonCfg.Auth.BearerTokenHash)
-	if legacyHash != "" {
-		expected, err := hex.DecodeString(legacyHash)
-		if err != nil || len(expected) != sha256.Size || !validBearerToken(expected, r.Header.Get("Authorization")) {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="agents"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
 	}
 	var req authCredentialsRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, d.daemonCfg.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
@@ -234,6 +216,47 @@ func (d *Daemon) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, identity.User, http.StatusOK)
+}
+
+func (d *Daemon) handleAuthUsersList(w http.ResponseWriter, r *http.Request) {
+	if _, ok := d.currentIdentity(r); !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	users, err := d.store.ListUsers(r.Context())
+	if err != nil {
+		d.logger.Error().Err(err).Msg("auth users: list")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, users, http.StatusOK)
+}
+
+func (d *Daemon) handleAuthUsersCreate(w http.ResponseWriter, r *http.Request) {
+	if _, ok := d.currentIdentity(r); !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req createUserRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, d.daemonCfg.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	user, err := d.store.CreateUser(r.Context(), req.Username, req.Password)
+	if errors.Is(err, store.ErrAuthInvalid) {
+		http.Error(w, "invalid user request", http.StatusBadRequest)
+		return
+	}
+	if errors.Is(err, store.ErrAuthConflict) {
+		http.Error(w, "user already exists", http.StatusConflict)
+		return
+	}
+	if err != nil {
+		d.logger.Error().Err(err).Msg("auth users: create")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, user, http.StatusCreated)
 }
 
 func (d *Daemon) handleAuthTokensList(w http.ResponseWriter, r *http.Request) {
@@ -327,17 +350,4 @@ func writeJSON(w http.ResponseWriter, v any, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-func validBearerToken(expected []byte, header string) bool {
-	scheme, token, ok := strings.Cut(strings.TrimSpace(header), " ")
-	if !ok || !strings.EqualFold(scheme, "Bearer") {
-		return false
-	}
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return false
-	}
-	sum := sha256.Sum256([]byte(token))
-	return subtle.ConstantTimeCompare(sum[:], expected) == 1
 }
