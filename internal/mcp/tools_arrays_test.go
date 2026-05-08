@@ -2,9 +2,11 @@ package mcp
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/eloylp/agents/internal/fleet"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -264,14 +266,9 @@ func TestToolCreateBindingAcceptsJSONStringSlices(t *testing.T) {
 		t.Fatalf("create_binding failed: err=%v body=%s", err, textOf(t, res))
 	}
 	r, _ := repoByName(t, deps.Store, "owner/one")
-	found := false
-	for _, b := range r.Use {
-		if b.Agent == "coder" && len(b.Labels) == 2 && b.Labels[0] == "ai:fix" && b.Labels[1] == "ready" {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(r.Use, func(b fleet.Binding) bool {
+		return b.Agent == "coder" && slices.Equal(b.Labels, []string{"ai:fix", "ready"})
+	}) {
 		t.Errorf("labels not persisted from JSON-string: %+v", r.Use)
 	}
 }
