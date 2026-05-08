@@ -231,7 +231,6 @@ export default function GraphPage() {
   const [addTargetName, setAddTargetName] = useState('')
   const [loading, setLoading] = useState(true)
   const [repoFilter, setRepoFilter] = useRepoFilter()
-  const [editMode, setEditMode] = useState(false)
   const [wiringError, setWiringError] = useState('')
   const [wiringBusy, setWiringBusy] = useState(false)
   const [backendOptions, setBackendOptions] = useState<BackendOption[]>([])
@@ -463,16 +462,13 @@ export default function GraphPage() {
   }, [])
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
-    // In edit mode, clicks on nodes initiate drag-connect via React Flow handles;
-    // suppress the details modal so the focus stays on wiring.
-    if (editMode) return
     const agent = agents.find(a => (a.id || a.name) === node.id)
     if (agent) {
       setSelectedNodeName(agent.name)
       setSelectedEdge(null)
       setPanelMode('details')
     }
-  }, [agents, editMode])
+  }, [agents])
 
   const onNodeDragStop = useCallback((_: React.MouseEvent, node: Node) => {
     const nodeID = node.id
@@ -803,18 +799,6 @@ export default function GraphPage() {
           <button onClick={openCreateAgent} style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>
             + Create agent
           </button>
-          <button
-            onClick={() => { setEditMode(m => !m); setWiringError(''); setSelectedEdge(null); setSelectedNodeName(null); setPanelMode(null); }}
-            style={{
-              background: editMode ? 'var(--btn-primary-bg)' : 'var(--bg-card)',
-              border: `1px solid ${editMode ? 'var(--btn-primary-border)' : 'var(--border)'}`,
-              color: editMode ? '#fff' : 'var(--accent)',
-              padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500,
-            }}
-            aria-pressed={editMode}
-          >
-            {editMode ? 'Editing wiring' : 'Edit wiring'}
-          </button>
           <button onClick={load} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--accent)', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500 }}>
             Refresh
           </button>
@@ -824,11 +808,10 @@ export default function GraphPage() {
         </div>
       </div>
 
-      {editMode && (
+      {(wiringBusy || wiringError) && (
         <div style={{ marginBottom: '1rem', padding: '8px 12px', background: 'var(--accent-bg)', border: '1px solid var(--btn-primary-border)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--text)' }}>
-          Drag from one agent to another to wire a dispatch edge. Click an edge to remove it.
-          {wiringBusy && <span style={{ marginLeft: '0.5rem', color: 'var(--text-muted)' }}>Saving…</span>}
-          {wiringError && <span style={{ marginLeft: '0.5rem', color: 'var(--text-danger)' }}>{wiringError}</span>}
+          {wiringBusy && <span style={{ color: 'var(--text-muted)' }}>Saving dispatch wiring...</span>}
+          {wiringError && <span style={{ color: 'var(--text-danger)' }}>{wiringError}</span>}
         </div>
       )}
 
@@ -963,39 +946,6 @@ export default function GraphPage() {
                   </div>
                 </div>
               )}
-
-              <div>
-                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Latest runs and traces</div>
-                {agentActivityLoading && <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Loading recent runs...</p>}
-                {!agentActivityLoading && agentRuns.length === 0 && (
-                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No recent runs for this agent.</p>
-                )}
-                {!agentActivityLoading && agentRuns.length > 0 && (
-                  <div style={{ display: 'grid', gap: '0.5rem' }}>
-                    {agentRuns.map(run => (
-                      <div key={`${run.id}:${run.span_id ?? ''}`} style={{ background: 'var(--bg)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '10px', display: 'grid', gap: '4px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center' }}>
-                          <div style={{ color: 'var(--text)', fontWeight: 600, fontSize: '0.8rem' }}>
-                            {run.repo || '-'} {run.number > 0 ? `#${run.number}` : ''}
-                          </div>
-                          <span style={{ color: run.status === 'error' ? 'var(--text-danger)' : run.status === 'success' ? 'var(--success)' : 'var(--accent)', fontSize: '0.72rem', fontWeight: 700 }}>
-                            {run.status}
-                          </span>
-                        </div>
-                        <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
-                          {run.kind || '-'} · {fmtTime(run.started_at ?? run.completed_at)} · {fmtDuration(run.run_duration_ms)}
-                        </div>
-                        {run.summary && <div style={{ color: 'var(--text-faint)', fontSize: '0.75rem', fontStyle: 'italic' }}>{run.summary}</div>}
-                        {run.event_id && (
-                          <Link href={`/traces/?id=${encodeURIComponent(run.event_id)}`} style={{ color: 'var(--accent)', fontSize: '0.75rem', textDecoration: 'none' }}>
-                            Open trace →
-                          </Link>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
 
               <div>
                 <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Repo triggers</div>
@@ -1169,6 +1119,39 @@ export default function GraphPage() {
                   <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', marginTop: '0.5rem' }}>{wiringError}</p>
                 )}
               </div>
+
+              <div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Latest runs and traces</div>
+                {agentActivityLoading && <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Loading recent runs...</p>}
+                {!agentActivityLoading && agentRuns.length === 0 && (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No recent runs for this agent.</p>
+                )}
+                {!agentActivityLoading && agentRuns.length > 0 && (
+                  <div style={{ display: 'grid', gap: '0.5rem' }}>
+                    {agentRuns.map(run => (
+                      <div key={`${run.id}:${run.span_id ?? ''}`} style={{ background: 'var(--bg)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '10px', display: 'grid', gap: '4px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center' }}>
+                          <div style={{ color: 'var(--text)', fontWeight: 600, fontSize: '0.8rem' }}>
+                            {run.repo || '-'} {run.number > 0 ? `#${run.number}` : ''}
+                          </div>
+                          <span style={{ color: run.status === 'error' ? 'var(--text-danger)' : run.status === 'success' ? 'var(--success)' : 'var(--accent)', fontSize: '0.72rem', fontWeight: 700 }}>
+                            {run.status}
+                          </span>
+                        </div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                          {run.kind || '-'} · {fmtTime(run.started_at ?? run.completed_at)} · {fmtDuration(run.run_duration_ms)}
+                        </div>
+                        {run.summary && <div style={{ color: 'var(--text-faint)', fontSize: '0.75rem', fontStyle: 'italic' }}>{run.summary}</div>}
+                        {run.event_id && (
+                          <Link href={`/traces/?id=${encodeURIComponent(run.event_id)}`} style={{ color: 'var(--accent)', fontSize: '0.75rem', textDecoration: 'none' }}>
+                            Open trace →
+                          </Link>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </aside>
@@ -1208,7 +1191,7 @@ export default function GraphPage() {
                 fitView
                 proOptions={{ hideAttribution: true }}
                 nodesDraggable={true}
-                nodesConnectable={editMode}
+                nodesConnectable={true}
                 elementsSelectable={true}
                 edgesFocusable={true}
                 minZoom={0.3}
