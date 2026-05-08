@@ -24,6 +24,7 @@ import {
   incomingDispatchSources,
   outgoingDispatchTargets,
   removeCanDispatch,
+  storeAgentFromResponse,
   validateConnection,
   type DispatchRelationship,
   type StoreAgent,
@@ -394,18 +395,7 @@ export default function GraphPage() {
     const res = await fetch(`/agents/${encodeURIComponent(name)}`)
     if (!res.ok) throw new Error(`fetch ${name}: ${res.status}`)
     const data = await res.json() as Partial<StoreAgent>
-    return {
-      name: data.name ?? name,
-      backend: data.backend ?? '',
-      model: data.model ?? '',
-      skills: data.skills ?? [],
-      prompt: data.prompt ?? '',
-      allow_prs: data.allow_prs ?? false,
-      allow_dispatch: data.allow_dispatch ?? false,
-      allow_memory: data.allow_memory ?? true,
-      can_dispatch: data.can_dispatch ?? [],
-      description: data.description ?? '',
-    }
+    return storeAgentFromResponse(data, name)
   }, [])
 
   const postStoreAgent = useCallback(async (a: StoreAgent): Promise<void> => {
@@ -575,8 +565,9 @@ export default function GraphPage() {
         setAgentSaving(false)
         return
       }
+      const saved = storeAgentFromResponse(await res.json() as Partial<StoreAgent>, form.name)
       setPanelMode('details')
-      setSelectedNodeName(form.name)
+      setSelectedNodeName(saved.name)
       load()
       loadLookups()
     } catch (e) {
