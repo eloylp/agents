@@ -1,6 +1,7 @@
 package observe_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"maps"
@@ -249,8 +250,8 @@ func TestWatchMemoryDirNoOpOnEmptyDir(t *testing.T) {
 // extractSSEData strips the "data: " prefix and trailing newlines added by
 // sseData so the payload can be unmarshalled as JSON.
 func extractSSEData(raw []byte) []byte {
-	s, _ := strings.CutPrefix(string(raw), "data: ")
-	return []byte(strings.TrimRight(s, "\n"))
+	payload, _ := bytes.CutPrefix(raw, []byte("data: "))
+	return bytes.TrimRight(payload, "\n")
 }
 
 func TestExtractSSEData(t *testing.T) {
