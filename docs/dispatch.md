@@ -86,10 +86,10 @@ agents:
 
 ## UI wiring editor
 
-The **Graph** page in the web dashboard (`/ui/`) has an "Edit wiring" toggle and a right-side Agent Studio panel. When active:
+The **Graph** page in the web dashboard (`/ui/`) has an "Edit wiring" toggle and a right-side Agent editor. When active:
 
 - **Add a connection**: drag from any agent node to another. The dashboard writes the source agent's `can_dispatch` list and enables `allow_dispatch` on the target through the normal agent save surface.
-- **Remove a connection**: click an existing edge to open it in the Agent Studio panel, then remove the wiring. The daemon removes the target from the source agent's `can_dispatch` list; the target's `allow_dispatch` flag is left alone, since other agents may still dispatch to it.
+- **Remove a connection**: click an existing edge to open it in the Agent editor, then remove the wiring. The daemon removes the target from the source agent's `can_dispatch` list; the target's `allow_dispatch` flag is left alone, since other agents may still dispatch to it.
 
 Self-dispatch and duplicate edges are rejected before any network call. Config-level constraints (agent `description` is required, targets must opt in with `allow_dispatch`, no self-reference) still apply, the UI enforces them before writing.
 

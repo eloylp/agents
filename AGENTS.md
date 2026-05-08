@@ -61,7 +61,7 @@ internal/ai/response-schema.json # embedded JSON schema for structured output (c
 - **Backend**, explicit backend selection per agent (no `auto`). Built-ins are `claude` and `codex`; additional named local backends are supported via `local_model_url`.
 - **Proxy**, optional in-daemon Anthropic↔OpenAI translator mounted at `/v1/messages` and `/v1/models`. Disabled by default. When enabled, set `local_model_url` on the backend entry to the proxy's URL; the daemon injects `ANTHROPIC_BASE_URL` for that backend automatically.
 - **Dispatcher**, the runtime mechanism by which agents invoke each other. See "Reactive dispatch" below.
-- **Agent Studio graph**, the dashboard's graph-first workflow designer. It uses stable agent database IDs for node identity/layout, edits agents through the shared agent form, manages repo trigger bindings through the repo binding API, and edits dispatch edges through `can_dispatch` / `allow_dispatch`.
+- **Graph workflow designer**, the dashboard's primary visual workflow surface. It uses stable agent database IDs for node identity/layout, edits agents through the shared agent form, manages repo trigger bindings through the repo binding API, and edits dispatch edges through `can_dispatch` / `allow_dispatch`.
 - **Trace steps**, the durable transcript source for `/traces/{span_id}/steps` and `/traces/{span_id}/stream`. AI CLI stdout is parsed incrementally into `TraceStep` rows, persisted to SQLite, replayed to stream subscribers on connect, and live-tailed through in-memory notifications until `event: end`.
 
 ## Reactive dispatch: the model you must keep in mind
