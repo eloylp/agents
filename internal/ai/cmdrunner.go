@@ -579,7 +579,7 @@ func extractCodexAgentMessageJSON(all []byte) ([]byte, bool) {
 	}
 	var lastText string
 	var found bool
-	for _, line := range bytes.Split(all, []byte("\n")) {
+	for line := range bytes.Lines(all) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 || line[0] != '{' {
 			continue
