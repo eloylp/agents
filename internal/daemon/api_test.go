@@ -335,19 +335,19 @@ func TestHandleAPIAgentsCurrentStatusRunningWhenActive(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	found := false
-	for _, a := range agents {
-		if a.Name == "coder" {
-			if a.CurrentStatus != "running" {
-				t.Errorf("want current_status=running for active agent, got %q", a.CurrentStatus)
-			}
-			found = true
-		} else if a.CurrentStatus != "idle" {
+	coderIdx := slices.IndexFunc(agents, func(a viewAgentJSON) bool {
+		return a.Name == "coder"
+	})
+	if coderIdx == -1 {
+		t.Fatal("agent 'coder' not found in response")
+	}
+	if agents[coderIdx].CurrentStatus != "running" {
+		t.Errorf("want current_status=running for active agent, got %q", agents[coderIdx].CurrentStatus)
+	}
+	for i, a := range agents {
+		if i != coderIdx && a.CurrentStatus != "idle" {
 			t.Errorf("agent %q: want current_status=idle, got %q", a.Name, a.CurrentStatus)
 		}
-	}
-	if !found {
-		t.Error("agent 'coder' not found in response")
 	}
 }
 
