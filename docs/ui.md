@@ -29,7 +29,7 @@ Primary workflow designer showing agents as draggable graph nodes and dispatch p
 
 The right-side **Agent editor** is the graph's main editing surface. Click an agent to inspect or edit its definition, run it against bound repos, review recent runner rows / trace links, manage repo triggers, and add or remove dispatch wiring. Operators can create agents without leaving the designer.
 
-Toggle "Edit wiring" to add dispatch connections by drag-and-drop. Click an edge to inspect runtime dispatch history or remove the wiring from the Agent editor. Dispatch changes write back to the source agent's `can_dispatch` list and the target's `allow_dispatch` flag.
+Dispatch wiring is always editable: drag from one agent to another to add a connection, or click an edge to inspect runtime dispatch history and remove the wiring from the Agent editor. Dispatch changes write back to the source agent's `can_dispatch` list and the target's `allow_dispatch` flag.
 
 ![Agent interaction graph](img/graph.png)
 

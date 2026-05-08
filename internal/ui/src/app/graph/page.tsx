@@ -231,7 +231,6 @@ export default function GraphPage() {
   const [addTargetName, setAddTargetName] = useState('')
   const [loading, setLoading] = useState(true)
   const [repoFilter, setRepoFilter] = useRepoFilter()
-  const [editMode, setEditMode] = useState(false)
   const [wiringError, setWiringError] = useState('')
   const [wiringBusy, setWiringBusy] = useState(false)
   const [backendOptions, setBackendOptions] = useState<BackendOption[]>([])
@@ -463,16 +462,13 @@ export default function GraphPage() {
   }, [])
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
-    // In edit mode, clicks on nodes initiate drag-connect via React Flow handles;
-    // suppress the details modal so the focus stays on wiring.
-    if (editMode) return
     const agent = agents.find(a => (a.id || a.name) === node.id)
     if (agent) {
       setSelectedNodeName(agent.name)
       setSelectedEdge(null)
       setPanelMode('details')
     }
-  }, [agents, editMode])
+  }, [agents])
 
   const onNodeDragStop = useCallback((_: React.MouseEvent, node: Node) => {
     const nodeID = node.id
@@ -803,18 +799,6 @@ export default function GraphPage() {
           <button onClick={openCreateAgent} style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>
             + Create agent
           </button>
-          <button
-            onClick={() => { setEditMode(m => !m); setWiringError(''); setSelectedEdge(null); setSelectedNodeName(null); setPanelMode(null); }}
-            style={{
-              background: editMode ? 'var(--btn-primary-bg)' : 'var(--bg-card)',
-              border: `1px solid ${editMode ? 'var(--btn-primary-border)' : 'var(--border)'}`,
-              color: editMode ? '#fff' : 'var(--accent)',
-              padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500,
-            }}
-            aria-pressed={editMode}
-          >
-            {editMode ? 'Editing wiring' : 'Edit wiring'}
-          </button>
           <button onClick={load} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--accent)', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500 }}>
             Refresh
           </button>
@@ -824,11 +808,10 @@ export default function GraphPage() {
         </div>
       </div>
 
-      {editMode && (
+      {(wiringBusy || wiringError) && (
         <div style={{ marginBottom: '1rem', padding: '8px 12px', background: 'var(--accent-bg)', border: '1px solid var(--btn-primary-border)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--text)' }}>
-          Drag from one agent to another to wire a dispatch edge. Click an edge to remove it.
-          {wiringBusy && <span style={{ marginLeft: '0.5rem', color: 'var(--text-muted)' }}>Saving…</span>}
-          {wiringError && <span style={{ marginLeft: '0.5rem', color: 'var(--text-danger)' }}>{wiringError}</span>}
+          {wiringBusy && <span style={{ color: 'var(--text-muted)' }}>Saving dispatch wiring...</span>}
+          {wiringError && <span style={{ color: 'var(--text-danger)' }}>{wiringError}</span>}
         </div>
       )}
 
@@ -1208,7 +1191,7 @@ export default function GraphPage() {
                 fitView
                 proOptions={{ hideAttribution: true }}
                 nodesDraggable={true}
-                nodesConnectable={editMode}
+                nodesConnectable={true}
                 elementsSelectable={true}
                 edgesFocusable={true}
                 minZoom={0.3}
