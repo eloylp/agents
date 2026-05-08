@@ -12,8 +12,6 @@ import (
 	"github.com/eloylp/agents/internal/store"
 )
 
-func testLogger() zerolog.Logger { return zerolog.Nop() }
-
 // newTempStore opens a fresh tempdir SQLite and returns the data-access
 // store. Used by tests that need a Store for DataChannels but don't need
 // any seeded entities.
@@ -58,7 +56,7 @@ func seedStoreFromCfg(t *testing.T, cfg *config.Config) *store.Store {
 func newEngineFromCfg(t *testing.T, cfg *config.Config, runners map[string]ai.Runner, queue EventEnqueuer) *Engine {
 	t.Helper()
 	st := seedStoreFromCfg(t, cfg)
-	e := NewEngine(st, cfg.Daemon.Processor, queue, testLogger())
+	e := NewEngine(st, cfg.Daemon.Processor, queue, zerolog.Nop())
 	if len(runners) > 0 {
 		e.WithRunnerBuilder(func(name string, _ fleet.Backend) ai.Runner {
 			if r, ok := runners[name]; ok {
