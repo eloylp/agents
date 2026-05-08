@@ -493,12 +493,15 @@ func TestHandleTraceNotFound(t *testing.T) {
 
 func TestHandleGraphReturnsEdges(t *testing.T) {
 	t.Parallel()
-	obs := newTestEvents(t)
-	h := newHandlerOnStore(t, obs)
-
-	obs.RecordDispatch("coder", "reviewer", "owner/repo", 10, "needs review")
-	obs.RecordDispatch("coder", "reviewer", "owner/repo", 11, "follow-up")
-	time.Sleep(50 * time.Millisecond)
+	fx := newFixture(t, nil)
+	h := New(fx.events, fx.store, nil, nil, nil, zerolog.Nop())
+	if _, err := fx.db.Exec(
+		`INSERT INTO dispatch_history (from_agent, to_agent, repo, number, reason) VALUES (?,?,?,?,?), (?,?,?,?,?)`,
+		"coder", "reviewer", "owner/repo", 10, "needs review",
+		"coder", "reviewer", "owner/repo", 11, "follow-up",
+	); err != nil {
+		t.Fatalf("seed dispatches: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
 	rec := httptest.NewRecorder()
