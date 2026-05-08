@@ -107,7 +107,7 @@ func extractJSONRPC(t *testing.T, rec *httptest.ResponseRecorder) []byte {
 	body := rec.Body.Bytes()
 	if bytes.HasPrefix(body, []byte("data:")) {
 		// Minimal SSE extraction: find the first "data:" line payload.
-		for _, line := range bytes.Split(body, []byte("\n")) {
+		for line := range bytes.Lines(body) {
 			if payload, ok := bytes.CutPrefix(line, []byte("data:")); ok {
 				return bytes.TrimSpace(payload)
 			}
