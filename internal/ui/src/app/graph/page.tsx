@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import Link from 'next/link'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 import {
   ReactFlow,
@@ -17,6 +18,10 @@ import '@xyflow/react/dist/style.css'
 import dagre from 'dagre'
 import Card from '@/components/Card'
 import AgentForm, { emptyAgentForm, type BackendOption } from '@/components/AgentForm'
+import BadgePicker from '@/components/BadgePicker'
+import RunButton from '@/components/RunButton'
+import { type Binding } from '@/lib/bindings'
+import { fmtDuration } from '@/lib/format'
 import {
   addCanDispatch,
   availableDispatchTargets,
@@ -62,6 +67,73 @@ interface AgentInfo {
   allow_memory?: boolean
   skills?: string[]
   bindings?: Array<{ repo: string }>
+}
+
+interface RepoInfo {
+  name: string
+  enabled: boolean
+  bindings: Binding[]
+}
+
+interface RunnerRow {
+  id: number
+  event_id: string
+  kind: string
+  repo: string
+  number: number
+  status: 'enqueued' | 'running' | 'success' | 'error'
+  agent?: string
+  target_agent?: string
+  span_id?: string
+  started_at?: string
+  completed_at?: string
+  run_duration_ms?: number
+  summary?: string
+}
+
+interface BindingDraft {
+  repo: string
+  kind: 'labels' | 'events' | 'cron'
+  labels: string[]
+  events: string[]
+  cron: string
+  enabled: boolean
+}
+
+const emptyBindingDraft: BindingDraft = { repo: '', kind: 'labels', labels: [], events: [], cron: '', enabled: true }
+
+const SUPPORTED_EVENTS = [
+  'issues.labeled', 'issues.opened', 'issues.edited', 'issues.reopened', 'issues.closed',
+  'pull_request.labeled', 'pull_request.opened', 'pull_request.synchronize',
+  'pull_request.ready_for_review', 'pull_request.closed',
+  'issue_comment.created',
+  'pull_request_review.submitted', 'pull_request_review_comment.created',
+  'push',
+]
+
+function repoPath(name: string): string {
+  const [owner, ...rest] = name.split('/')
+  const repo = rest.join('/')
+  return `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
+}
+
+function bindingTrigger(b: Binding): string {
+  if (b.cron) return `cron: ${b.cron}`
+  if (b.labels && b.labels.length > 0) return `labels: ${b.labels.join(', ')}`
+  if (b.events && b.events.length > 0) return `events: ${b.events.join(', ')}`
+  return 'no trigger'
+}
+
+function bindingFromDraft(agent: string, draft: BindingDraft): Binding {
+  const base: Binding = { agent, enabled: draft.enabled }
+  if (draft.kind === 'labels') return { ...base, labels: draft.labels }
+  if (draft.kind === 'events') return { ...base, events: draft.events }
+  return { ...base, cron: draft.cron.trim() }
+}
+
+function fmtTime(s?: string) {
+  if (!s) return '-'
+  return new Date(s).toLocaleString()
 }
 
 function AgentNode({ data }: NodeProps) {
@@ -151,6 +223,7 @@ function layoutGraph(nodes: Node[], edges: Edge[]): Node[] {
 export default function GraphPage() {
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] })
   const [agents, setAgents] = useState<AgentInfo[]>([])
+  const [repos, setRepos] = useState<RepoInfo[]>([])
   const [layoutPositions, setLayoutPositions] = useState<Record<string, { x: number; y: number }>>({})
   const [selectedEdge, setSelectedEdge] = useState<{ from: string; to: string; count: number; dispatches: DispatchRecord[]; isActive: boolean } | null>(null)
   const [selectedNodeName, setSelectedNodeName] = useState<string | null>(null)
@@ -159,16 +232,20 @@ export default function GraphPage() {
   const [loading, setLoading] = useState(true)
   const [repoFilter, setRepoFilter] = useRepoFilter()
   const [editMode, setEditMode] = useState(false)
-  const [pendingEdgeDelete, setPendingEdgeDelete] = useState<{ from: string; to: string } | null>(null)
   const [wiringError, setWiringError] = useState('')
   const [wiringBusy, setWiringBusy] = useState(false)
   const [backendOptions, setBackendOptions] = useState<BackendOption[]>([])
   const [skillNames, setSkillNames] = useState<string[]>([])
   const [agentNames, setAgentNames] = useState<string[]>([])
-  const [panelMode, setPanelMode] = useState<'details' | 'create' | 'edit' | null>(null)
+  const [panelMode, setPanelMode] = useState<'details' | 'edge' | 'create' | 'edit' | null>(null)
   const [agentForm, setAgentForm] = useState<StoreAgent>(emptyAgentForm)
   const [agentSaving, setAgentSaving] = useState(false)
   const [agentSaveError, setAgentSaveError] = useState('')
+  const [agentRuns, setAgentRuns] = useState<RunnerRow[]>([])
+  const [agentActivityLoading, setAgentActivityLoading] = useState(false)
+  const [bindingDraft, setBindingDraft] = useState<BindingDraft>(emptyBindingDraft)
+  const [bindingSaving, setBindingSaving] = useState(false)
+  const [bindingError, setBindingError] = useState('')
 
   const loadedOnce = useRef(false)
   const relationshipAgents = useMemo<DispatchRelationship[]>(() => agents.map(a => ({
@@ -181,7 +258,14 @@ export default function GraphPage() {
 
   useEffect(() => {
     setAddTargetName('')
+    setBindingDraft(emptyBindingDraft)
+    setBindingError('')
   }, [selectedNodeName])
+
+  useEffect(() => {
+    if (bindingDraft.repo || repos.length === 0) return
+    setBindingDraft(d => ({ ...d, repo: repos[0].name }))
+  }, [repos, bindingDraft.repo])
 
   const loadLookups = useCallback(() => {
     fetch('/backends')
@@ -205,9 +289,11 @@ export default function GraphPage() {
       fetch('/graph').then(r => r.json()),
       fetch('/agents').then(r => r.json()),
       fetch('/graph/layout').then(r => r.ok ? r.json() : { positions: [] }),
-    ]).then(([gd, ad, ld]) => {
+      fetch('/repos').then(r => r.ok ? r.json() : []),
+    ]).then(([gd, ad, ld, rd]) => {
       setGraphData(gd)
       setAgents(ad)
+      setRepos(rd ?? [])
       setAgentNames((ad ?? []).map((a: AgentInfo) => a.name))
       const nextPositions: Record<string, { x: number; y: number }> = {}
       ;(ld.positions ?? []).forEach((p: { node_id: string; x: number; y: number }) => {
@@ -224,6 +310,29 @@ export default function GraphPage() {
     const interval = setInterval(load, 5000)
     return () => clearInterval(interval)
   }, [load, loadLookups])
+
+  const loadAgentActivity = useCallback(async (agentName: string) => {
+    setAgentActivityLoading(true)
+    try {
+      const res = await fetch('/runners?limit=200', { cache: 'no-store' })
+      if (!res.ok) throw new Error(`runners ${res.status}`)
+      const data = await res.json() as { runners?: RunnerRow[] }
+      const rows = (data.runners ?? [])
+        .filter(r => r.agent === agentName || r.target_agent === agentName)
+        .slice(0, 8)
+      setAgentRuns(rows)
+    } catch {
+      setAgentRuns([])
+    } finally {
+      setAgentActivityLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (panelMode === 'details' && selectedNodeName) {
+      loadAgentActivity(selectedNodeName)
+    }
+  }, [panelMode, selectedNodeName, loadAgentActivity])
 
   const activeEdgeMap = useMemo(() => {
     const m = new Map<string, GraphEdge>()
@@ -348,15 +457,10 @@ export default function GraphPage() {
 
   const onEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
     const d = edge.data as { from: string; to: string; isActive: boolean; count: number; dispatches: DispatchRecord[] }
-    if (editMode) {
-      setPendingEdgeDelete({ from: d.from, to: d.to })
-      setSelectedEdge(null)
-      setSelectedNodeName(null)
-      return
-    }
     setSelectedEdge(d)
     setSelectedNodeName(null)
-  }, [editMode])
+    setPanelMode('edge')
+  }, [])
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     // In edit mode, clicks on nodes initiate drag-connect via React Flow handles;
@@ -463,8 +567,8 @@ export default function GraphPage() {
     try {
       const source = await fetchStoreAgent(from)
       await postStoreAgent(removeCanDispatch(source, to))
-      setPendingEdgeDelete(null)
       setSelectedEdge(null)
+      setPanelMode(null)
       load()
     } catch (e) {
       setWiringError(String(e))
@@ -577,10 +681,93 @@ export default function GraphPage() {
     }
   }, [load, loadLookups])
 
+  const saveBinding = useCallback(async () => {
+    const agent = selectedNodeName
+    if (!agent) return
+    const draft = bindingDraft
+    if (!draft.repo) {
+      setBindingError('Select a repo first.')
+      return
+    }
+    if (draft.kind === 'labels' && draft.labels.length === 0) {
+      setBindingError('Add at least one label.')
+      return
+    }
+    if (draft.kind === 'events' && draft.events.length === 0) {
+      setBindingError('Add at least one event.')
+      return
+    }
+    if (draft.kind === 'cron' && !draft.cron.trim()) {
+      setBindingError('Enter a cron expression.')
+      return
+    }
+    setBindingSaving(true)
+    setBindingError('')
+    try {
+      const res = await fetch(`${repoPath(draft.repo)}/bindings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bindingFromDraft(agent, draft)),
+      })
+      if (!res.ok) {
+        setBindingError((await res.text()) || 'Binding save failed')
+        return
+      }
+      setBindingDraft({ ...emptyBindingDraft, repo: draft.repo })
+      load()
+    } catch (e) {
+      setBindingError(String(e))
+    } finally {
+      setBindingSaving(false)
+    }
+  }, [bindingDraft, load, selectedNodeName])
+
+  const toggleBinding = useCallback(async (repo: string, binding: Binding, enabled: boolean) => {
+    if (typeof binding.id !== 'number') return
+    setBindingSaving(true)
+    setBindingError('')
+    try {
+      const res = await fetch(`${repoPath(repo)}/bindings/${binding.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...binding, enabled }),
+      })
+      if (!res.ok) {
+        setBindingError((await res.text()) || 'Binding update failed')
+        return
+      }
+      load()
+    } catch (e) {
+      setBindingError(String(e))
+    } finally {
+      setBindingSaving(false)
+    }
+  }, [load])
+
+  const deleteBinding = useCallback(async (repo: string, binding: Binding) => {
+    if (typeof binding.id !== 'number') return
+    setBindingSaving(true)
+    setBindingError('')
+    try {
+      const res = await fetch(`${repoPath(repo)}/bindings/${binding.id}`, { method: 'DELETE' })
+      if (!res.ok && res.status !== 204) {
+        setBindingError((await res.text()) || 'Binding delete failed')
+        return
+      }
+      load()
+    } catch (e) {
+      setBindingError(String(e))
+    } finally {
+      setBindingSaving(false)
+    }
+  }, [load])
+
   const closePanel = useCallback(() => {
     setPanelMode(null)
     setSelectedNodeName(null)
+    setSelectedEdge(null)
     setAgentSaveError('')
+    setBindingError('')
   }, [])
 
   const selectedNode = selectedNodeName ? agents.find(a => a.name === selectedNodeName) ?? null : null
@@ -588,6 +775,19 @@ export default function GraphPage() {
   const selectedNodeIncoming = selectedNode ? incomingDispatchSources(selectedNode.name, relationshipAgents) : []
   const selectedNodeTargets = selectedNode ? availableDispatchTargets(selectedNode.name, selectedNode.can_dispatch ?? [], relationshipAgents) : []
   const selectedAddTarget = selectedNodeTargets.find(a => a.name === addTargetName) ?? null
+  const selectedNodeBindings = selectedNode ? repos.flatMap(repo => (repo.bindings ?? [])
+    .filter(binding => binding.agent === selectedNode.name)
+    .map(binding => ({ repo, binding }))) : []
+  const selectedNodeRepos = Array.from(new Set(selectedNodeBindings.map(({ repo }) => repo.name)))
+  const knownLabels = useMemo(() => {
+    const set = new Set<string>()
+    for (const repo of repos) {
+      for (const binding of repo.bindings ?? []) {
+        for (const label of binding.labels ?? []) set.add(label)
+      }
+    }
+    return Array.from(set).sort()
+  }, [repos])
 
   return (
     <div>
@@ -634,131 +834,6 @@ export default function GraphPage() {
 
       {loading && <p style={{ color: 'var(--text-muted)' }}>Loading...</p>}
 
-      {/* Modal for edge details */}
-      {selectedEdge && (
-        <div
-          onClick={() => setSelectedEdge(null)}
-          style={{
-            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-            background: 'var(--bg-modal-overlay)', zIndex: 1000,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}
-        >
-          <div onClick={e => e.stopPropagation()} style={{
-            background: 'var(--bg-card)', borderRadius: '12px', padding: '1.5rem',
-            maxWidth: '480px', width: '90%', maxHeight: '80vh', overflowY: 'auto',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.4)', border: '1px solid var(--border)',
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-heading)' }}>{selectedEdge.from} → {selectedEdge.to}</h2>
-              <button onClick={() => setSelectedEdge(null)} style={{
-                background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--text-faint)',
-              }}>x</button>
-            </div>
-            <div style={{
-              display: 'inline-block', padding: '2px 8px', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 500,
-              background: selectedEdge.isActive ? 'var(--accent-bg)' : 'rgba(100,116,139,0.15)',
-              color: selectedEdge.isActive ? 'var(--accent)' : 'var(--text-muted)',
-              border: `1px solid ${selectedEdge.isActive ? 'var(--btn-primary-border)' : 'var(--border-subtle)'}`,
-              marginBottom: '1rem',
-            }}>
-              {selectedEdge.isActive ? `${selectedEdge.count} dispatch${selectedEdge.count !== 1 ? 'es' : ''}` : 'wired, no dispatches yet'}
-            </div>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '0.75rem' }}>
-              <strong style={{ color: 'var(--text)' }}>{selectedEdge.from}</strong> can dispatch{' '}
-              <strong style={{ color: 'var(--text)' }}>{selectedEdge.to}</strong>.
-            </p>
-            <div style={{ background: 'var(--bg)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '10px', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-              <div style={{ color: 'var(--text-faint)', marginBottom: '4px' }}>Remove config change</div>
-              <code>{selectedEdge.from}.can_dispatch -= [&quot;{selectedEdge.to}&quot;]</code>
-            </div>
-            {wiringError && (
-              <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>{wiringError}</p>
-            )}
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-              <button
-                onClick={() => openAgent(selectedEdge.from)}
-                style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.8rem' }}
-              >
-                Open source
-              </button>
-              <button
-                onClick={() => openAgent(selectedEdge.to)}
-                style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.8rem' }}
-              >
-                Open target
-              </button>
-              <button
-                onClick={() => removeEdge(selectedEdge.from, selectedEdge.to)}
-                disabled={wiringBusy}
-                style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', color: 'var(--text-danger)', cursor: wiringBusy ? 'wait' : 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
-              >
-                {wiringBusy ? 'Removing...' : 'Remove wiring'}
-              </button>
-            </div>
-            {selectedEdge.dispatches.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {selectedEdge.dispatches.slice().reverse().map((d, i) => (
-                  <div key={i} style={{ background: 'var(--bg)', borderRadius: '6px', padding: '10px', fontSize: '0.8rem', border: '1px solid var(--border-subtle)' }}>
-                    <div style={{ color: 'var(--text)', fontWeight: 500 }}>{new Date(d.at).toLocaleString()}</div>
-                    <div style={{ color: 'var(--text-muted)' }}>{d.repo} #{d.number}</div>
-                    {d.reason && <div style={{ color: 'var(--text-faint)', fontStyle: 'italic', marginTop: '4px' }}>{d.reason}</div>}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Modal for edge removal (edit mode) */}
-      {pendingEdgeDelete && (
-        <div
-          onClick={() => !wiringBusy && setPendingEdgeDelete(null)}
-          style={{
-            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-            background: 'var(--bg-modal-overlay)', zIndex: 1000,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}
-        >
-          <div onClick={e => e.stopPropagation()} style={{
-            background: 'var(--bg-card)', borderRadius: '12px', padding: '1.5rem',
-            maxWidth: '420px', width: '90%',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.4)', border: '1px solid var(--border)',
-          }}>
-            <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-heading)', marginBottom: '0.75rem' }}>
-              Remove dispatch wiring
-            </h2>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1rem' }}>
-              Remove <strong style={{ color: 'var(--text)' }}>{pendingEdgeDelete.to}</strong> from{' '}
-              <strong style={{ color: 'var(--text)' }}>{pendingEdgeDelete.from}</strong>&rsquo;s{' '}
-              <code>can_dispatch</code>? Other agents may still dispatch to{' '}
-              <strong style={{ color: 'var(--text)' }}>{pendingEdgeDelete.to}</strong>; its{' '}
-              <code>allow_dispatch</code> setting is not changed.
-            </p>
-            {wiringError && (
-              <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>{wiringError}</p>
-            )}
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => setPendingEdgeDelete(null)}
-                disabled={wiringBusy}
-                style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', cursor: wiringBusy ? 'wait' : 'pointer', fontSize: '0.875rem', color: 'var(--text-muted)' }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => removeEdge(pendingEdgeDelete.from, pendingEdgeDelete.to)}
-                disabled={wiringBusy}
-                style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', color: 'var(--text-danger)', cursor: wiringBusy ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
-              >
-                {wiringBusy ? 'Removing…' : 'Remove dispatch wiring'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {panelMode && (
         <aside style={{
           position: 'fixed', top: 0, right: 0, bottom: 0, width: 'min(520px, 100vw)',
@@ -768,7 +843,13 @@ export default function GraphPage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', gap: '1rem' }}>
             <div>
               <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-heading)' }}>
-                {panelMode === 'create' ? 'Create agent' : panelMode === 'edit' ? `Edit ${agentForm.name}` : selectedNode?.name}
+                {panelMode === 'create'
+                  ? 'Create agent'
+                  : panelMode === 'edit'
+                    ? `Edit ${agentForm.name}`
+                    : panelMode === 'edge' && selectedEdge
+                      ? `${selectedEdge.from} -> ${selectedEdge.to}`
+                      : selectedNode?.name}
               </h2>
               {panelMode === 'details' && selectedNode?.description && (
                 <p style={{ color: 'var(--text-faint)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{selectedNode.description}</p>
@@ -792,6 +873,67 @@ export default function GraphPage() {
             />
           )}
 
+          {panelMode === 'edge' && selectedEdge && (
+            <div style={{ display: 'grid', gap: '1rem' }}>
+              <div style={{
+                display: 'inline-block', justifySelf: 'start', padding: '2px 8px', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 500,
+                background: selectedEdge.isActive ? 'var(--accent-bg)' : 'rgba(100,116,139,0.15)',
+                color: selectedEdge.isActive ? 'var(--accent)' : 'var(--text-muted)',
+                border: `1px solid ${selectedEdge.isActive ? 'var(--btn-primary-border)' : 'var(--border-subtle)'}`,
+              }}>
+                {selectedEdge.isActive ? `${selectedEdge.count} dispatch${selectedEdge.count !== 1 ? 'es' : ''}` : 'wired, no dispatches yet'}
+              </div>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                <strong style={{ color: 'var(--text)' }}>{selectedEdge.from}</strong> can dispatch{' '}
+                <strong style={{ color: 'var(--text)' }}>{selectedEdge.to}</strong>.
+              </p>
+              <div style={{ background: 'var(--bg)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '10px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                <div style={{ color: 'var(--text-faint)', marginBottom: '4px' }}>Remove config change</div>
+                <code>{selectedEdge.from}.can_dispatch -= [&quot;{selectedEdge.to}&quot;]</code>
+              </div>
+              {wiringError && (
+                <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem' }}>{wiringError}</p>
+              )}
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => openAgent(selectedEdge.from)}
+                  style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.8rem' }}
+                >
+                  Open source
+                </button>
+                <button
+                  onClick={() => openAgent(selectedEdge.to)}
+                  style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.8rem' }}
+                >
+                  Open target
+                </button>
+                <button
+                  onClick={() => removeEdge(selectedEdge.from, selectedEdge.to)}
+                  disabled={wiringBusy}
+                  style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', color: 'var(--text-danger)', cursor: wiringBusy ? 'wait' : 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+                >
+                  {wiringBusy ? 'Removing...' : 'Remove wiring'}
+                </button>
+              </div>
+              <div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Recent dispatches</div>
+                {selectedEdge.dispatches.length === 0 ? (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No runtime dispatches recorded for this edge yet.</p>
+                ) : (
+                  <div style={{ display: 'grid', gap: '0.5rem' }}>
+                    {selectedEdge.dispatches.slice().reverse().map((d, i) => (
+                      <div key={i} style={{ background: 'var(--bg)', borderRadius: '6px', padding: '10px', fontSize: '0.8rem', border: '1px solid var(--border-subtle)' }}>
+                        <div style={{ color: 'var(--text)', fontWeight: 500 }}>{fmtTime(d.at)}</div>
+                        <div style={{ color: 'var(--text-muted)' }}>{d.repo} #{d.number}</div>
+                        {d.reason && <div style={{ color: 'var(--text-faint)', fontStyle: 'italic', marginTop: '4px' }}>{d.reason}</div>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {panelMode === 'details' && selectedNode && (
             <div style={{ display: 'grid', gap: '1rem' }}>
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -808,6 +950,9 @@ export default function GraphPage() {
               >
                 Edit agent
               </button>
+              {selectedNodeRepos.length > 0 && (
+                <RunButton agent={selectedNode.name} repos={selectedNodeRepos} />
+              )}
               {(selectedNode.skills ?? []).length > 0 && (
                 <div>
                   <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Skills</div>
@@ -818,6 +963,129 @@ export default function GraphPage() {
                   </div>
                 </div>
               )}
+
+              <div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Latest runs and traces</div>
+                {agentActivityLoading && <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Loading recent runs...</p>}
+                {!agentActivityLoading && agentRuns.length === 0 && (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No recent runs for this agent.</p>
+                )}
+                {!agentActivityLoading && agentRuns.length > 0 && (
+                  <div style={{ display: 'grid', gap: '0.5rem' }}>
+                    {agentRuns.map(run => (
+                      <div key={`${run.id}:${run.span_id ?? ''}`} style={{ background: 'var(--bg)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '10px', display: 'grid', gap: '4px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center' }}>
+                          <div style={{ color: 'var(--text)', fontWeight: 600, fontSize: '0.8rem' }}>
+                            {run.repo || '-'} {run.number > 0 ? `#${run.number}` : ''}
+                          </div>
+                          <span style={{ color: run.status === 'error' ? 'var(--text-danger)' : run.status === 'success' ? 'var(--success)' : 'var(--accent)', fontSize: '0.72rem', fontWeight: 700 }}>
+                            {run.status}
+                          </span>
+                        </div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                          {run.kind || '-'} · {fmtTime(run.started_at ?? run.completed_at)} · {fmtDuration(run.run_duration_ms)}
+                        </div>
+                        {run.summary && <div style={{ color: 'var(--text-faint)', fontSize: '0.75rem', fontStyle: 'italic' }}>{run.summary}</div>}
+                        {run.event_id && (
+                          <Link href={`/traces/?id=${encodeURIComponent(run.event_id)}`} style={{ color: 'var(--accent)', fontSize: '0.75rem', textDecoration: 'none' }}>
+                            Open trace →
+                          </Link>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Repo triggers</div>
+                {selectedNodeBindings.length === 0 ? (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No repo triggers are bound to this agent.</p>
+                ) : (
+                  <div style={{ display: 'grid', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                    {selectedNodeBindings.map(({ repo, binding }) => (
+                      <div key={`${repo.name}:${binding.id ?? bindingTrigger(binding)}`} style={{ background: 'var(--bg)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '10px', display: 'grid', gap: '6px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center' }}>
+                          <div>
+                            <div style={{ color: 'var(--text)', fontWeight: 600, fontSize: '0.8rem' }}>{repo.name}</div>
+                            <div style={{ color: binding.enabled === false ? 'var(--text-muted)' : 'var(--text-faint)', fontSize: '0.75rem' }}>{bindingTrigger(binding)}</div>
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                            <label style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
+                              <input
+                                type="checkbox"
+                                checked={binding.enabled !== false}
+                                disabled={bindingSaving || typeof binding.id !== 'number'}
+                                onChange={e => toggleBinding(repo.name, binding, e.target.checked)}
+                              />
+                              on
+                            </label>
+                            <button
+                              onClick={() => deleteBinding(repo.name, binding)}
+                              disabled={bindingSaving || typeof binding.id !== 'number'}
+                              style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', color: 'var(--text-danger)', cursor: bindingSaving ? 'wait' : 'pointer', fontSize: '0.72rem', fontWeight: 600 }}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={{ background: 'var(--bg)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '10px', display: 'grid', gap: '0.6rem' }}>
+                  <div style={{ color: 'var(--text)', fontWeight: 600, fontSize: '0.8rem' }}>Add trigger</div>
+                  {repos.length === 0 ? (
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Create a repo first from the Repos section, then bind this agent here.</p>
+                  ) : (
+                    <>
+                      <select
+                        value={bindingDraft.repo}
+                        onChange={e => setBindingDraft(d => ({ ...d, repo: e.target.value }))}
+                        style={{ background: 'var(--bg-card)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '6px', padding: '6px 8px' }}
+                      >
+                        {repos.map(repo => <option key={repo.name} value={repo.name}>{repo.name}{repo.enabled ? '' : ' (disabled)'}</option>)}
+                      </select>
+                      <select
+                        value={bindingDraft.kind}
+                        onChange={e => setBindingDraft(d => ({ ...d, kind: e.target.value as BindingDraft['kind'], labels: [], events: [], cron: '' }))}
+                        style={{ background: 'var(--bg-card)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '6px', padding: '6px 8px' }}
+                      >
+                        <option value="labels">labels</option>
+                        <option value="events">events</option>
+                        <option value="cron">cron</option>
+                      </select>
+                      {bindingDraft.kind === 'labels' && (
+                        <BadgePicker options={knownLabels} selected={bindingDraft.labels} onChange={labels => setBindingDraft(d => ({ ...d, labels }))} placeholder="Add label..." freeText />
+                      )}
+                      {bindingDraft.kind === 'events' && (
+                        <BadgePicker options={SUPPORTED_EVENTS} selected={bindingDraft.events} onChange={events => setBindingDraft(d => ({ ...d, events }))} placeholder="Add event..." />
+                      )}
+                      {bindingDraft.kind === 'cron' && (
+                        <input
+                          value={bindingDraft.cron}
+                          onChange={e => setBindingDraft(d => ({ ...d, cron: e.target.value }))}
+                          placeholder="0 9 * * *"
+                          style={{ background: 'var(--bg-card)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '6px', padding: '6px 8px' }}
+                        />
+                      )}
+                      <label style={{ color: 'var(--text-muted)', fontSize: '0.8rem', display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+                        <input type="checkbox" checked={bindingDraft.enabled} onChange={e => setBindingDraft(d => ({ ...d, enabled: e.target.checked }))} />
+                        enabled
+                      </label>
+                      {bindingError && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem' }}>{bindingError}</p>}
+                      <button
+                        onClick={saveBinding}
+                        disabled={bindingSaving}
+                        style={{ justifySelf: 'start', padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: bindingSaving ? 'wait' : 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+                      >
+                        {bindingSaving ? 'Saving...' : 'Add trigger'}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
               <div>
                 <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Outgoing dispatch targets</div>
                 {selectedNodeOutgoing.length === 0 ? (

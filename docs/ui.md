@@ -27,7 +27,9 @@ Agent run traces with timing, status, and a drill-down to the tool-loop transcri
 
 Primary workflow designer showing agents as draggable graph nodes and dispatch permissions as edges. Node identity is keyed by the agent's stable database ID, so saved positions survive mutable agent names. Manual layout is persisted globally; **Reset layout** clears saved positions and returns to the automatic graph layout.
 
-Toggle "Edit wiring" to add or remove dispatch connections by drag-and-drop. The change writes back to the source agent's `can_dispatch` list and the target's `allow_dispatch` flag.
+The right-side **Agent Studio** panel is the graph's main editing surface. Click an agent to inspect or edit its definition, run it against bound repos, review recent runner rows / trace links, manage repo triggers, and add or remove dispatch wiring. The empty graph state and toolbar both let operators create agents without leaving the designer.
+
+Toggle "Edit wiring" to add dispatch connections by drag-and-drop. Click an edge to inspect runtime dispatch history or remove the wiring from the same right-side panel. Dispatch changes write back to the source agent's `can_dispatch` list and the target's `allow_dispatch` flag.
 
 ![Agent interaction graph](img/graph.png)
 

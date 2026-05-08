@@ -86,11 +86,11 @@ agents:
 
 ## UI wiring editor
 
-The **Graph** page in the web dashboard (`/ui/`) has an "Edit wiring" toggle. When active:
+The **Graph** page in the web dashboard (`/ui/`) has an "Edit wiring" toggle and a right-side Agent Studio panel. When active:
 
-- **Add a connection**: drag from any agent node to another. The daemon writes the source agent's `can_dispatch` list and enables `allow_dispatch` on the target via `PATCH /agents`.
-- **Remove a connection**: click an existing edge to open a confirmation modal. The daemon removes the target from the source agent's `can_dispatch` list; the target's `allow_dispatch` flag is left alone, since other agents may still dispatch to it.
+- **Add a connection**: drag from any agent node to another. The dashboard writes the source agent's `can_dispatch` list and enables `allow_dispatch` on the target through the normal agent save surface.
+- **Remove a connection**: click an existing edge to open it in the Agent Studio panel, then remove the wiring. The daemon removes the target from the source agent's `can_dispatch` list; the target's `allow_dispatch` flag is left alone, since other agents may still dispatch to it.
 
 Self-dispatch and duplicate edges are rejected before any network call. Config-level constraints (agent `description` is required, targets must opt in with `allow_dispatch`, no self-reference) still apply, the UI enforces them before writing.
 
-Creating a dispatch edge is enough to authorize runtime dispatch when the target opts in. Do not add fake repo bindings for targets that should only run when another agent dispatches them.
+Creating a dispatch edge is enough to authorize runtime dispatch when the target opts in. Do not add fake repo bindings for targets that should only run when another agent dispatches them. Repo triggers are managed separately from the agent node panel and still use the normal repo binding API.

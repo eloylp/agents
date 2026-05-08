@@ -20,7 +20,7 @@ See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a re
 ## Features
 
 - **Three ways to interact with your agent fleet**:
-  - **[Web dashboard](docs/ui.md)**: graphical. Manage agents, skills, repos, and bindings; watch the live event firehose, agent traces with tool-loop transcripts, dispatch graph, and memory viewer.
+  - **[Web dashboard](docs/ui.md)**: graphical. Design the fleet from the graph-first Agent Studio, manage agents, skills, repos, and bindings; watch the live event firehose, agent traces with tool-loop transcripts, and memory viewer.
   - **[MCP server](docs/mcp.md)**: conversational. Control agents and trigger runs straight from Claude Code in your terminal (or Cursor, Cline, or any MCP client).
   - **[REST API](docs/api.md)**: programmatic. Scriptable from any HTTP client; the dashboard itself runs on top of it.
 - **Observable**: See the full event chain in realtime from the [UI](docs/ui.md), from events to runners to traces that will facilitate your prompt tunning journey.
