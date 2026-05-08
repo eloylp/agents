@@ -636,7 +636,8 @@ func TestParseClaudeSteps(t *testing.T) {
 	// time, simulating lineCapture.addLine but with a controllable clock.
 	toTimedLines := func(data []byte, base time.Time, step time.Duration) []timedLine {
 		var tls []timedLine
-		for _, raw := range bytes.Split(bytes.TrimRight(data, "\n"), []byte("\n")) {
+		for raw := range bytes.Lines(data) {
+			raw = bytes.TrimSuffix(raw, []byte("\n"))
 			if len(raw) == 0 {
 				continue
 			}
