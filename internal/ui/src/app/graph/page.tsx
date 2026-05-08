@@ -948,39 +948,6 @@ export default function GraphPage() {
               )}
 
               <div>
-                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Latest runs and traces</div>
-                {agentActivityLoading && <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Loading recent runs...</p>}
-                {!agentActivityLoading && agentRuns.length === 0 && (
-                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No recent runs for this agent.</p>
-                )}
-                {!agentActivityLoading && agentRuns.length > 0 && (
-                  <div style={{ display: 'grid', gap: '0.5rem' }}>
-                    {agentRuns.map(run => (
-                      <div key={`${run.id}:${run.span_id ?? ''}`} style={{ background: 'var(--bg)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '10px', display: 'grid', gap: '4px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center' }}>
-                          <div style={{ color: 'var(--text)', fontWeight: 600, fontSize: '0.8rem' }}>
-                            {run.repo || '-'} {run.number > 0 ? `#${run.number}` : ''}
-                          </div>
-                          <span style={{ color: run.status === 'error' ? 'var(--text-danger)' : run.status === 'success' ? 'var(--success)' : 'var(--accent)', fontSize: '0.72rem', fontWeight: 700 }}>
-                            {run.status}
-                          </span>
-                        </div>
-                        <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
-                          {run.kind || '-'} · {fmtTime(run.started_at ?? run.completed_at)} · {fmtDuration(run.run_duration_ms)}
-                        </div>
-                        {run.summary && <div style={{ color: 'var(--text-faint)', fontSize: '0.75rem', fontStyle: 'italic' }}>{run.summary}</div>}
-                        {run.event_id && (
-                          <Link href={`/traces/?id=${encodeURIComponent(run.event_id)}`} style={{ color: 'var(--accent)', fontSize: '0.75rem', textDecoration: 'none' }}>
-                            Open trace →
-                          </Link>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div>
                 <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Repo triggers</div>
                 {selectedNodeBindings.length === 0 ? (
                   <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No repo triggers are bound to this agent.</p>
@@ -1150,6 +1117,39 @@ export default function GraphPage() {
                 )}
                 {wiringError && (
                   <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', marginTop: '0.5rem' }}>{wiringError}</p>
+                )}
+              </div>
+
+              <div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Latest runs and traces</div>
+                {agentActivityLoading && <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Loading recent runs...</p>}
+                {!agentActivityLoading && agentRuns.length === 0 && (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No recent runs for this agent.</p>
+                )}
+                {!agentActivityLoading && agentRuns.length > 0 && (
+                  <div style={{ display: 'grid', gap: '0.5rem' }}>
+                    {agentRuns.map(run => (
+                      <div key={`${run.id}:${run.span_id ?? ''}`} style={{ background: 'var(--bg)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '10px', display: 'grid', gap: '4px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center' }}>
+                          <div style={{ color: 'var(--text)', fontWeight: 600, fontSize: '0.8rem' }}>
+                            {run.repo || '-'} {run.number > 0 ? `#${run.number}` : ''}
+                          </div>
+                          <span style={{ color: run.status === 'error' ? 'var(--text-danger)' : run.status === 'success' ? 'var(--success)' : 'var(--accent)', fontSize: '0.72rem', fontWeight: 700 }}>
+                            {run.status}
+                          </span>
+                        </div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                          {run.kind || '-'} · {fmtTime(run.started_at ?? run.completed_at)} · {fmtDuration(run.run_duration_ms)}
+                        </div>
+                        {run.summary && <div style={{ color: 'var(--text-faint)', fontSize: '0.75rem', fontStyle: 'italic' }}>{run.summary}</div>}
+                        {run.event_id && (
+                          <Link href={`/traces/?id=${encodeURIComponent(run.event_id)}`} style={{ color: 'var(--accent)', fontSize: '0.75rem', textDecoration: 'none' }}>
+                            Open trace →
+                          </Link>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
