@@ -8,10 +8,14 @@ import {
   Controls,
   MarkerType,
   Position,
+  BaseEdge,
+  EdgeLabelRenderer,
   type Node,
   type Edge,
   type NodeProps,
+  type EdgeProps,
   type Connection,
+  getBezierPath,
   Handle,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
@@ -102,6 +106,16 @@ interface BindingDraft {
 
 const emptyBindingDraft: BindingDraft = { repo: '', kind: 'labels', labels: [], events: [], cron: '', enabled: true }
 
+type DispatchEdgeData = {
+  from: string
+  to: string
+  count: number
+  dispatches: DispatchRecord[]
+  isActive: boolean
+  selected?: boolean
+  onOpen?: (edge: DispatchEdgeData) => void
+}
+
 const SUPPORTED_EVENTS = [
   'issues.labeled', 'issues.opened', 'issues.edited', 'issues.reopened', 'issues.closed',
   'pull_request.labeled', 'pull_request.opened', 'pull_request.synchronize',
@@ -136,6 +150,67 @@ function fmtTime(s?: string) {
   return new Date(s).toLocaleString()
 }
 
+const handleStyle = {
+  background: 'var(--accent)',
+  border: '2px solid var(--bg-card)',
+  borderRadius: 3,
+  width: 34,
+  height: 12,
+  opacity: 0.9,
+}
+
+function DispatchEdge(props: EdgeProps) {
+  const data = props.data as DispatchEdgeData
+  const [edgePath, labelX, labelY] = getBezierPath({
+    sourceX: props.sourceX,
+    sourceY: props.sourceY,
+    sourcePosition: props.sourcePosition,
+    targetX: props.targetX,
+    targetY: props.targetY,
+    targetPosition: props.targetPosition,
+  })
+  const selected = data.selected || props.selected
+  const label = data.count > 0 ? `${data.count}` : 'wire'
+
+  return (
+    <>
+      <BaseEdge
+        id={props.id}
+        path={edgePath}
+        markerEnd={props.markerEnd}
+        style={props.style}
+        interactionWidth={72}
+      />
+      <EdgeLabelRenderer>
+        <button
+          className="nodrag nopan"
+          onClick={(event) => {
+            event.stopPropagation()
+            data.onOpen?.(data)
+          }}
+          title={`${data.from} can dispatch ${data.to}`}
+          style={{
+            position: 'absolute',
+            transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+            pointerEvents: 'all',
+            background: selected ? '#78350f' : data.isActive ? 'var(--accent-bg)' : 'var(--bg-card)',
+            border: `1px solid ${selected ? '#f59e0b' : data.isActive ? 'var(--btn-primary-border)' : 'var(--border)'}`,
+            color: selected ? '#fbbf24' : data.isActive ? 'var(--accent)' : 'var(--text-muted)',
+            borderRadius: 3,
+            padding: '3px 9px',
+            fontSize: '0.7rem',
+            fontWeight: 700,
+            cursor: 'pointer',
+            boxShadow: selected ? '0 0 0 3px rgba(245,158,11,0.18)' : '0 2px 8px rgba(0,0,0,0.25)',
+          }}
+        >
+          {label}
+        </button>
+      </EdgeLabelRenderer>
+    </>
+  )
+}
+
 function AgentNode({ data }: NodeProps) {
   const d = data as { label: string; status: string; description: string; dispatchable: boolean; skills: string[]; highlight?: 'source' | 'target' | 'selected' }
   const statusColors: Record<string, { bg: string; border: string; icon: string }> = {
@@ -154,7 +229,7 @@ function AgentNode({ data }: NodeProps) {
 
   return (
     <>
-      <Handle type="target" position={Position.Top} style={{ background: 'var(--text-faint)', border: 'none', width: 6, height: 6 }} />
+      <Handle type="target" position={Position.Top} title="Drop dispatch wiring here" style={{ ...handleStyle, top: -7 }} />
       <div style={{
         background: 'var(--bg-card)',
         border: `2px solid ${highlightBorder}`,
@@ -197,12 +272,13 @@ function AgentNode({ data }: NodeProps) {
           </div>
         )}
       </div>
-      <Handle type="source" position={Position.Bottom} style={{ background: 'var(--text-faint)', border: 'none', width: 6, height: 6 }} />
+      <Handle type="source" position={Position.Bottom} title="Drag to another agent to add dispatch wiring" style={{ ...handleStyle, bottom: -7 }} />
     </>
   )
 }
 
 const nodeTypes = { agent: AgentNode }
+const edgeTypes = { dispatch: DispatchEdge }
 
 function layoutGraph(nodes: Node[], edges: Edge[]): Node[] {
   const g = new dagre.graphlib.Graph()
@@ -348,6 +424,17 @@ export default function GraphPage() {
 
   const selectedEdgeKey = selectedEdge ? `${selectedEdge.from}->${selectedEdge.to}` : ''
   const hoveredEdgeKey = hoveredEdge ? `${hoveredEdge.from}->${hoveredEdge.to}` : ''
+  const openEdge = useCallback((edge: DispatchEdgeData) => {
+    setSelectedEdge({
+      from: edge.from,
+      to: edge.to,
+      count: edge.count,
+      dispatches: edge.dispatches,
+      isActive: edge.isActive,
+    })
+    setSelectedNodeName(null)
+    setPanelMode('edge')
+  }, [])
 
   const { flowNodes, flowEdges, wiringInfo } = useMemo(() => {
     const visibleAgents = repoFilter
@@ -414,13 +501,13 @@ export default function GraphPage() {
       const emphasized = selected || hovered
       const stroke = selected ? '#f59e0b' : e.isActive ? 'var(--accent)' : 'var(--border)'
       return {
-        id: `e-${i}`,
+        id: `dispatch:${e.from}->${e.to}`,
         source: idByName.get(e.from) ?? e.from,
         target: idByName.get(e.to) ?? e.to,
-        type: 'default',
+        type: 'dispatch',
         selectable: true,
         animated: e.isActive && e.count > 0,
-        interactionWidth: 40,
+        interactionWidth: 72,
         style: {
           stroke,
           strokeWidth: emphasized ? 4 : e.isActive ? 2.5 : 1.5,
@@ -433,12 +520,7 @@ export default function GraphPage() {
           width: emphasized ? 20 : 16,
           height: emphasized ? 16 : 12,
         },
-        label: emphasized ? `${e.from} -> ${e.to}` : e.count > 0 ? `${e.count}` : undefined,
-        labelStyle: { fill: selected ? '#fbbf24' : '#38bdf8', fontWeight: 700, fontSize: 11 },
-        labelBgStyle: { fill: '#111d2e', fillOpacity: 0.95 },
-        labelBgPadding: [4, 4] as [number, number],
-        labelBgBorderRadius: 4,
-        data: e,
+        data: { ...e, selected, onOpen: openEdge },
       }
     })
 
@@ -452,14 +534,11 @@ export default function GraphPage() {
       flowEdges: edges,
       wiringInfo: { active: allEdges.filter(e => e.isActive).length, total: allEdges.length },
     }
-  }, [agents, graphData.edges, activeEdgeMap, repoFilter, selectedEdge, selectedEdgeKey, hoveredEdge, hoveredEdgeKey, selectedNodeName, layoutPositions])
+  }, [agents, graphData.edges, activeEdgeMap, repoFilter, selectedEdge, selectedEdgeKey, hoveredEdge, hoveredEdgeKey, selectedNodeName, layoutPositions, openEdge])
 
   const onEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
-    const d = edge.data as { from: string; to: string; isActive: boolean; count: number; dispatches: DispatchRecord[] }
-    setSelectedEdge(d)
-    setSelectedNodeName(null)
-    setPanelMode('edge')
-  }, [])
+    openEdge(edge.data as DispatchEdgeData)
+  }, [openEdge])
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     const agent = agents.find(a => (a.id || a.name) === node.id)
@@ -1178,6 +1257,7 @@ export default function GraphPage() {
                 nodes={flowNodes}
                 edges={flowEdges}
                 nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
                 onEdgeClick={onEdgeClick}
                 onEdgeMouseEnter={(_, edge) => {
                   const d = edge.data as { from: string; to: string }
@@ -1192,6 +1272,9 @@ export default function GraphPage() {
                 proOptions={{ hideAttribution: true }}
                 nodesDraggable={true}
                 nodesConnectable={true}
+                connectOnClick={true}
+                connectionRadius={60}
+                connectionDragThreshold={1}
                 elementsSelectable={true}
                 edgesFocusable={true}
                 minZoom={0.3}
