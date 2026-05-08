@@ -130,6 +130,13 @@ func TestStoreCRUDAgentCreateAndGet(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("POST /agents: got %d, want 200, %s", rr.Code, rr.Body.String())
 	}
+	var created storeAgentJSON
+	if err := json.NewDecoder(rr.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("created agent id is empty, want generated stable id")
+	}
 
 	// GET list, should have two entries: pr-reviewer (seeded) + coder.
 	rr = doCRUDRequest(t, s, http.MethodGet, "/agents", nil)

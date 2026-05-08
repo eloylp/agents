@@ -280,11 +280,19 @@ func (h *Handler) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 	if strings.TrimSpace(a.Name) == "" {
 		return fleet.Agent{}, &store.ErrValidation{Msg: "name is required"}
 	}
+	normalizedName := fleet.NormalizeAgentName(a.Name)
 	if err := h.store.UpsertAgent(a); err != nil {
 		return fleet.Agent{}, err
 	}
-	fleet.NormalizeAgent(&a)
-	return a, nil
+	agents, err := h.store.ReadAgents()
+	if err != nil {
+		return fleet.Agent{}, err
+	}
+	idx := slices.IndexFunc(agents, func(agent fleet.Agent) bool { return agent.Name == normalizedName })
+	if idx < 0 {
+		return fleet.Agent{}, fmt.Errorf("agent %q not found after upsert", normalizedName)
+	}
+	return agents[idx], nil
 }
 
 // UpdateAgentPatch applies a partial patch to the named agent. Returns

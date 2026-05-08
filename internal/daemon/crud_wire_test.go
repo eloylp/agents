@@ -6,6 +6,7 @@ package daemon_test
 // response into that package. These minimal local types let the webhook
 // integration tests assert on response bodies without that churn.
 type storeAgentJSON struct {
+	ID            string   `json:"id,omitempty"`
 	Name          string   `json:"name"`
 	Backend       string   `json:"backend"`
 	Model         string   `json:"model,omitempty"`
@@ -24,9 +25,9 @@ type storeSkillJSON struct {
 }
 
 type storeBackendJSON struct {
-	Name             string   `json:"name"`
-	Command          string   `json:"command"`
-	Version          string   `json:"version,omitempty"`
+	Name           string   `json:"name"`
+	Command        string   `json:"command"`
+	Version        string   `json:"version,omitempty"`
 	Models         []string `json:"models,omitempty"`
 	Healthy        bool     `json:"healthy"`
 	HealthDetail   string   `json:"health_detail,omitempty"`
