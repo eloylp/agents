@@ -16,6 +16,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import dagre from 'dagre'
 import Card from '@/components/Card'
+import AgentForm, { emptyAgentForm, type BackendOption } from '@/components/AgentForm'
 import {
   addCanDispatch,
   availableDispatchTargets,
@@ -50,10 +51,14 @@ interface GraphData {
 interface AgentInfo {
   id: string
   name: string
+  backend?: string
+  model?: string
   current_status: string
   description?: string
   can_dispatch?: string[]
   allow_dispatch?: boolean
+  allow_prs?: boolean
+  allow_memory?: boolean
   skills?: string[]
   bindings?: Array<{ repo: string }>
 }
@@ -156,6 +161,13 @@ export default function GraphPage() {
   const [pendingEdgeDelete, setPendingEdgeDelete] = useState<{ from: string; to: string } | null>(null)
   const [wiringError, setWiringError] = useState('')
   const [wiringBusy, setWiringBusy] = useState(false)
+  const [backendOptions, setBackendOptions] = useState<BackendOption[]>([])
+  const [skillNames, setSkillNames] = useState<string[]>([])
+  const [agentNames, setAgentNames] = useState<string[]>([])
+  const [panelMode, setPanelMode] = useState<'details' | 'create' | 'edit' | null>(null)
+  const [agentForm, setAgentForm] = useState<StoreAgent>(emptyAgentForm)
+  const [agentSaving, setAgentSaving] = useState(false)
+  const [agentSaveError, setAgentSaveError] = useState('')
 
   const loadedOnce = useRef(false)
   const relationshipAgents = useMemo<DispatchRelationship[]>(() => agents.map(a => ({
@@ -170,6 +182,21 @@ export default function GraphPage() {
     setAddTargetName('')
   }, [selectedNodeName])
 
+  const loadLookups = useCallback(() => {
+    fetch('/backends')
+      .then(r => r.ok ? r.json() : [])
+      .then((data: BackendOption[]) => setBackendOptions((data ?? []).filter(b => b.detected !== false)))
+      .catch(() => {})
+    fetch('/skills')
+      .then(r => r.ok ? r.json() : [])
+      .then((data: { name: string }[]) => setSkillNames(data.map(s => s.name)))
+      .catch(() => {})
+    fetch('/agents')
+      .then(r => r.ok ? r.json() : [])
+      .then((data: { name: string }[]) => setAgentNames(data.map(a => a.name)))
+      .catch(() => {})
+  }, [])
+
   const load = useCallback(() => {
     if (!loadedOnce.current) setLoading(true)
     loadedOnce.current = true
@@ -180,6 +207,7 @@ export default function GraphPage() {
     ]).then(([gd, ad, ld]) => {
       setGraphData(gd)
       setAgents(ad)
+      setAgentNames((ad ?? []).map((a: AgentInfo) => a.name))
       const nextPositions: Record<string, { x: number; y: number }> = {}
       ;(ld.positions ?? []).forEach((p: { node_id: string; x: number; y: number }) => {
         nextPositions[p.node_id] = { x: p.x, y: p.y }
@@ -191,9 +219,10 @@ export default function GraphPage() {
 
   useEffect(() => {
     load()
+    loadLookups()
     const interval = setInterval(load, 5000)
     return () => clearInterval(interval)
-  }, [load])
+  }, [load, loadLookups])
 
   const activeEdgeMap = useMemo(() => {
     const m = new Map<string, GraphEdge>()
@@ -336,6 +365,7 @@ export default function GraphPage() {
     if (agent) {
       setSelectedNodeName(agent.name)
       setSelectedEdge(null)
+      setPanelMode('details')
     }
   }, [agents, editMode])
 
@@ -490,7 +520,77 @@ export default function GraphPage() {
     if (!agent) return
     setSelectedNodeName(agent.name)
     setSelectedEdge(null)
+    setPanelMode('details')
   }, [agents])
+
+  const openCreateAgent = useCallback(() => {
+    setSelectedEdge(null)
+    setSelectedNodeName(null)
+    setAgentSaveError('')
+    setAgentForm(emptyAgentForm)
+    setPanelMode('create')
+    loadLookups()
+  }, [loadLookups])
+
+  const openEditAgent = useCallback(async (agentName: string) => {
+    const agent = agents.find(a => a.name === agentName)
+    setSelectedEdge(null)
+    setSelectedNodeName(agentName)
+    setAgentSaveError('')
+    setAgentForm({
+      ...emptyAgentForm,
+      name: agentName,
+      backend: agent?.backend ?? '',
+      model: agent?.model ?? '',
+      skills: agent?.skills ?? [],
+      allow_prs: agent?.allow_prs ?? false,
+      allow_dispatch: agent?.allow_dispatch ?? false,
+      allow_memory: agent?.allow_memory ?? true,
+      can_dispatch: agent?.can_dispatch ?? [],
+      description: agent?.description ?? '',
+    })
+    setPanelMode('edit')
+    loadLookups()
+    try {
+      const full = await fetchStoreAgent(agentName)
+      setAgentForm({ ...emptyAgentForm, ...full, allow_memory: full.allow_memory ?? true })
+    } catch {
+      // The panel keeps the graph snapshot data so editing can still recover
+      // if the detail fetch succeeds on the next save attempt.
+    }
+  }, [agents, fetchStoreAgent, loadLookups])
+
+  const saveAgent = useCallback(async (form: StoreAgent) => {
+    setAgentSaving(true)
+    setAgentSaveError('')
+    try {
+      const res = await fetch('/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+      if (!res.ok) {
+        const msg = await res.text()
+        setAgentSaveError(msg || 'Save failed')
+        setAgentSaving(false)
+        return
+      }
+      setPanelMode('details')
+      setSelectedNodeName(form.name)
+      load()
+      loadLookups()
+    } catch (e) {
+      setAgentSaveError(String(e))
+    } finally {
+      setAgentSaving(false)
+    }
+  }, [load, loadLookups])
+
+  const closePanel = useCallback(() => {
+    setPanelMode(null)
+    setSelectedNodeName(null)
+    setAgentSaveError('')
+  }, [])
 
   const selectedNode = selectedNodeName ? agents.find(a => a.name === selectedNodeName) ?? null : null
   const selectedNodeOutgoing = selectedNode ? outgoingDispatchTargets(selectedNode, relationshipAgents) : []
@@ -509,8 +609,11 @@ export default function GraphPage() {
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <RepoFilter selected={repoFilter} onChange={setRepoFilter} />
+          <button onClick={openCreateAgent} style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>
+            + Create agent
+          </button>
           <button
-            onClick={() => { setEditMode(m => !m); setWiringError(''); setSelectedEdge(null); setSelectedNodeName(null); }}
+            onClick={() => { setEditMode(m => !m); setWiringError(''); setSelectedEdge(null); setSelectedNodeName(null); setPanelMode(null); }}
             style={{
               background: editMode ? 'var(--btn-primary-bg)' : 'var(--bg-card)',
               border: `1px solid ${editMode ? 'var(--btn-primary-border)' : 'var(--border)'}`,
@@ -665,47 +768,65 @@ export default function GraphPage() {
         </div>
       )}
 
-      {/* Modal for node (agent) details */}
-      {selectedNode && (
-        <div
-          onClick={() => setSelectedNodeName(null)}
-          style={{
-            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-            background: 'var(--bg-modal-overlay)', zIndex: 1000,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}
-        >
-          <div onClick={e => e.stopPropagation()} style={{
-            background: 'var(--bg-card)', borderRadius: '12px', padding: '1.5rem',
-            maxWidth: '480px', width: '90%', maxHeight: '80vh', overflowY: 'auto',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.4)', border: '1px solid var(--border)',
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-heading)' }}>{selectedNode.name}</h2>
-              <button onClick={() => setSelectedNodeName(null)} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--text-faint)' }}>x</button>
-            </div>
-            {selectedNode.description && (
-              <p style={{ color: 'var(--text-faint)', fontSize: '0.875rem', marginBottom: '1rem' }}>{selectedNode.description}</p>
-            )}
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-              <span style={{ background: 'var(--accent-bg)', border: '1px solid var(--btn-primary-border)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: 'var(--accent)' }}>
-                {selectedNode.current_status}
-              </span>
-              {selectedNode.allow_dispatch && (
-                <span style={{ background: 'var(--accent-bg)', border: '1px solid var(--btn-primary-border)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: 'var(--accent)' }}>dispatchable</span>
+      {panelMode && (
+        <aside style={{
+          position: 'fixed', top: 0, right: 0, bottom: 0, width: 'min(520px, 100vw)',
+          background: 'var(--bg-card)', borderLeft: '1px solid var(--border)', zIndex: 1000,
+          boxShadow: '-12px 0 32px rgba(0,0,0,0.32)', overflowY: 'auto', padding: '1.25rem',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', gap: '1rem' }}>
+            <div>
+              <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-heading)' }}>
+                {panelMode === 'create' ? 'Create agent' : panelMode === 'edit' ? `Edit ${agentForm.name}` : selectedNode?.name}
+              </h2>
+              {panelMode === 'details' && selectedNode?.description && (
+                <p style={{ color: 'var(--text-faint)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{selectedNode.description}</p>
               )}
             </div>
-            {(selectedNode.skills ?? []).length > 0 && (
-              <div style={{ marginBottom: '1rem' }}>
-                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Skills</div>
-                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  {selectedNode.skills!.map(s => (
-                    <span key={s} style={{ background: 'rgba(100,116,139,0.15)', border: '1px solid var(--border-subtle)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: 'var(--text-faint)' }}>{s}</span>
-                  ))}
-                </div>
-              </div>
-            )}
+            <button onClick={closePanel} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--text-faint)' }}>x</button>
+          </div>
+
+          {(panelMode === 'create' || panelMode === 'edit') && (
+            <AgentForm
+              key={`${panelMode}:${agentForm.name}`}
+              initial={agentForm}
+              isNew={panelMode === 'create'}
+              backends={backendOptions}
+              skillNames={skillNames}
+              agentNames={agentNames}
+              onSave={saveAgent}
+              onCancel={closePanel}
+              saving={agentSaving}
+              error={agentSaveError}
+            />
+          )}
+
+          {panelMode === 'details' && selectedNode && (
             <div style={{ display: 'grid', gap: '1rem' }}>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <span style={{ background: 'var(--accent-bg)', border: '1px solid var(--btn-primary-border)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: 'var(--accent)' }}>
+                  {selectedNode.current_status}
+                </span>
+                {selectedNode.allow_dispatch && (
+                  <span style={{ background: 'var(--accent-bg)', border: '1px solid var(--btn-primary-border)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: 'var(--accent)' }}>dispatchable</span>
+                )}
+              </div>
+              <button
+                onClick={() => openEditAgent(selectedNode.name)}
+                style={{ justifySelf: 'start', padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+              >
+                Edit agent
+              </button>
+              {(selectedNode.skills ?? []).length > 0 && (
+                <div>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Skills</div>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    {selectedNode.skills!.map(s => (
+                      <span key={s} style={{ background: 'rgba(100,116,139,0.15)', border: '1px solid var(--border-subtle)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: 'var(--text-faint)' }}>{s}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div>
                 <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Outgoing dispatch targets</div>
                 {selectedNodeOutgoing.length === 0 ? (
@@ -790,13 +911,27 @@ export default function GraphPage() {
                 )}
               </div>
             </div>
-          </div>
-        </div>
+          )}
+        </aside>
       )}
 
       {!loading && (
         <Card style={{ padding: 0, overflow: 'hidden' }}>
-          <div style={{ height: 'calc(100vh - 200px)', minHeight: '500px' }}>
+          <div style={{ height: 'calc(100vh - 200px)', minHeight: '500px', position: 'relative' }}>
+              {flowNodes.length === 0 && (
+                <div style={{
+                  position: 'absolute', zIndex: 5, left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
+                  display: 'grid', gap: '0.75rem', justifyItems: 'center', padding: '1rem',
+                }}>
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No agents configured.</p>
+                  <button
+                    onClick={openCreateAgent}
+                    style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '7px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+                  >
+                    Create first agent
+                  </button>
+                </div>
+              )}
               <ReactFlow
                 nodes={flowNodes}
                 edges={flowEdges}
