@@ -402,8 +402,8 @@ func checkGitHubMCP(ctx context.Context, command string, env map[string]string) 
 }
 
 func parseGitHubMCPStatus(output string) (hasGitHub bool, connected bool) {
-	for _, line := range strings.Split(strings.ToLower(output), "\n") {
-		line = strings.TrimSpace(line)
+	for line := range strings.SplitSeq(output, "\n") {
+		line = strings.ToLower(strings.TrimSpace(line))
 		if line == "" || !strings.Contains(line, "github") {
 			continue
 		}
