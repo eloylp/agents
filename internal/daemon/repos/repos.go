@@ -169,11 +169,11 @@ func (h *Handler) handleRepoGet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("read repos: %v", err), http.StatusInternalServerError)
 		return
 	}
-	for _, repo := range repos {
-		if repo.Name == repoName && fleet.NormalizeWorkspaceID(repo.WorkspaceID) == workspaceID {
-			writeJSON(w, http.StatusOK, repoToStoreJSON(repo))
-			return
-		}
+	if idx := slices.IndexFunc(repos, func(repo fleet.Repo) bool {
+		return repo.Name == repoName && fleet.NormalizeWorkspaceID(repo.WorkspaceID) == workspaceID
+	}); idx >= 0 {
+		writeJSON(w, http.StatusOK, repoToStoreJSON(repos[idx]))
+		return
 	}
 	http.NotFound(w, r)
 }
