@@ -64,6 +64,9 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/agents/{name}", withTimeout(http.HandlerFunc(h.handleAgentGet))).Methods(http.MethodGet)
 	r.Handle("/agents/{name}", withTimeout(http.HandlerFunc(h.handleAgentPatchByName))).Methods(http.MethodPatch)
 	r.Handle("/agents/{name}", withTimeout(http.HandlerFunc(h.handleAgentDelete))).Methods(http.MethodDelete)
+	r.Handle("/graph/layout", withTimeout(http.HandlerFunc(h.handleGraphLayoutGet))).Methods(http.MethodGet)
+	r.Handle("/graph/layout", withTimeout(http.HandlerFunc(h.handleGraphLayoutPut))).Methods(http.MethodPut)
+	r.Handle("/graph/layout", withTimeout(http.HandlerFunc(h.handleGraphLayoutDelete))).Methods(http.MethodDelete)
 
 	r.Handle("/skills", withTimeout(http.HandlerFunc(h.handleSkillsList))).Methods(http.MethodGet)
 	r.Handle("/skills", withTimeout(http.HandlerFunc(h.handleSkillCreate))).Methods(http.MethodPost)
@@ -111,6 +114,7 @@ func (h *Handler) HandleAgentsCreate(w http.ResponseWriter, r *http.Request) {
 // ── Agent wire types ────────────────────────────────────────────────────────────────────────────────────
 
 type storeAgentJSON struct {
+	ID            string   `json:"id,omitempty"`
 	Name          string   `json:"name"`
 	Backend       string   `json:"backend"`
 	Model         string   `json:"model,omitempty"`
@@ -130,6 +134,7 @@ type storeAgentJSON struct {
 func agentToStoreJSON(a fleet.Agent) storeAgentJSON {
 	allowMem := a.IsAllowMemory()
 	return storeAgentJSON{
+		ID:            a.ID,
 		Name:          a.Name,
 		Backend:       a.Backend,
 		Model:         a.Model,
@@ -145,6 +150,7 @@ func agentToStoreJSON(a fleet.Agent) storeAgentJSON {
 
 func (j storeAgentJSON) toConfig() fleet.Agent {
 	return fleet.Agent{
+		ID:            j.ID,
 		Name:          j.Name,
 		Backend:       j.Backend,
 		Model:         j.Model,

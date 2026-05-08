@@ -48,6 +48,7 @@ interface GraphData {
 }
 
 interface AgentInfo {
+  id: string
   name: string
   current_status: string
   description?: string
@@ -144,6 +145,7 @@ function layoutGraph(nodes: Node[], edges: Edge[]): Node[] {
 export default function GraphPage() {
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] })
   const [agents, setAgents] = useState<AgentInfo[]>([])
+  const [layoutPositions, setLayoutPositions] = useState<Record<string, { x: number; y: number }>>({})
   const [selectedEdge, setSelectedEdge] = useState<{ from: string; to: string; count: number; dispatches: DispatchRecord[]; isActive: boolean } | null>(null)
   const [selectedNodeName, setSelectedNodeName] = useState<string | null>(null)
   const [hoveredEdge, setHoveredEdge] = useState<{ from: string; to: string } | null>(null)
@@ -174,9 +176,15 @@ export default function GraphPage() {
     Promise.all([
       fetch('/graph').then(r => r.json()),
       fetch('/agents').then(r => r.json()),
-    ]).then(([gd, ad]) => {
+      fetch('/graph/layout').then(r => r.ok ? r.json() : { positions: [] }),
+    ]).then(([gd, ad, ld]) => {
       setGraphData(gd)
       setAgents(ad)
+      const nextPositions: Record<string, { x: number; y: number }> = {}
+      ;(ld.positions ?? []).forEach((p: { node_id: string; x: number; y: number }) => {
+        nextPositions[p.node_id] = { x: p.x, y: p.y }
+      })
+      setLayoutPositions(nextPositions)
       setLoading(false)
     }).catch(() => setLoading(false))
   }, [])
@@ -208,6 +216,7 @@ export default function GraphPage() {
       ? agents.filter(a => (a.bindings ?? []).some(b => b.repo === repoFilter))
       : agents
     const visibleNames = new Set(visibleAgents.map(a => a.name))
+    const idByName = new Map(visibleAgents.map(a => [a.name, a.id || a.name]))
 
     // Build combined edge set
     const allEdges: Array<{ from: string; to: string; isActive: boolean; count: number; dispatches: DispatchRecord[] }> = []
@@ -242,11 +251,13 @@ export default function GraphPage() {
           : selectedNodeName === a.name
             ? 'selected'
             : undefined
+      const nodeID = a.id || a.name
       return {
-        id: a.name,
+        id: nodeID,
         type: 'agent',
-        position: { x: 0, y: 0 },
+        position: layoutPositions[nodeID] ?? { x: 0, y: 0 },
         data: {
+          name: a.name,
           label: a.name,
           status: a.current_status ?? 'idle',
           description: a.description ?? '',
@@ -266,8 +277,8 @@ export default function GraphPage() {
       const stroke = selected ? '#f59e0b' : e.isActive ? 'var(--accent)' : 'var(--border)'
       return {
         id: `e-${i}`,
-        source: e.from,
-        target: e.to,
+        source: idByName.get(e.from) ?? e.from,
+        target: idByName.get(e.to) ?? e.to,
         type: 'default',
         selectable: true,
         animated: e.isActive && e.count > 0,
@@ -293,14 +304,17 @@ export default function GraphPage() {
       }
     })
 
-    const laid = layoutGraph(nodes, edges)
+    const laid = layoutGraph(nodes, edges).map(n => {
+      const saved = layoutPositions[n.id]
+      return saved ? { ...n, position: saved } : n
+    })
 
     return {
       flowNodes: laid,
       flowEdges: edges,
       wiringInfo: { active: allEdges.filter(e => e.isActive).length, total: allEdges.length },
     }
-  }, [agents, graphData.edges, activeEdgeMap, repoFilter, selectedEdge, selectedEdgeKey, hoveredEdge, hoveredEdgeKey, selectedNodeName])
+  }, [agents, graphData.edges, activeEdgeMap, repoFilter, selectedEdge, selectedEdgeKey, hoveredEdge, hoveredEdgeKey, selectedNodeName, layoutPositions])
 
   const onEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
     const d = edge.data as { from: string; to: string; isActive: boolean; count: number; dispatches: DispatchRecord[] }
@@ -318,12 +332,33 @@ export default function GraphPage() {
     // In edit mode, clicks on nodes initiate drag-connect via React Flow handles;
     // suppress the details modal so the focus stays on wiring.
     if (editMode) return
-    const agent = agents.find(a => a.name === node.id)
+    const agent = agents.find(a => (a.id || a.name) === node.id)
     if (agent) {
       setSelectedNodeName(agent.name)
       setSelectedEdge(null)
     }
   }, [agents, editMode])
+
+  const onNodeDragStop = useCallback((_: React.MouseEvent, node: Node) => {
+    const nodeID = node.id
+    const next = { x: node.position.x, y: node.position.y }
+    setLayoutPositions(prev => ({ ...prev, [nodeID]: next }))
+    fetch('/graph/layout', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ positions: [{ node_id: nodeID, x: next.x, y: next.y }] }),
+    }).catch(() => {
+      // Layout persistence is operational UI state; a failed save should not
+      // block graph editing or hide the local drag result.
+    })
+  }, [])
+
+  const autoLayout = useCallback(() => {
+    fetch('/graph/layout', { method: 'DELETE' }).finally(() => {
+      setLayoutPositions({})
+      load()
+    })
+  }, [load])
 
   const fetchStoreAgent = useCallback(async (name: string): Promise<StoreAgent> => {
     const res = await fetch(`/agents/${encodeURIComponent(name)}`)
@@ -355,33 +390,41 @@ export default function GraphPage() {
     }
   }, [])
 
+  const agentNameForNodeID = useCallback((nodeID: string) => {
+    return agents.find(a => (a.id || a.name) === nodeID)?.name ?? nodeID
+  }, [agents])
+
   const isValidConnection = useCallback((c: Connection | Edge) => {
     if (!c.source || !c.target) return false
-    const src = agents.find(a => a.name === c.source)
+    const sourceName = agentNameForNodeID(c.source)
+    const targetName = agentNameForNodeID(c.target)
+    const src = agents.find(a => a.name === sourceName)
     const existing = src?.can_dispatch ?? []
-    return validateConnection(c.source, c.target, existing).ok
-  }, [agents])
+    return validateConnection(sourceName, targetName, existing).ok
+  }, [agents, agentNameForNodeID])
 
   const onConnect = useCallback(async (c: Connection) => {
     if (!c.source || !c.target || wiringBusy) return
-    const src = agents.find(a => a.name === c.source)
+    const sourceName = agentNameForNodeID(c.source)
+    const targetName = agentNameForNodeID(c.target)
+    const src = agents.find(a => a.name === sourceName)
     const existing = src?.can_dispatch ?? []
-    const check = validateConnection(c.source, c.target, existing)
+    const check = validateConnection(sourceName, targetName, existing)
     if (!check.ok) {
       setWiringError(check.reason ?? 'invalid connection')
       return
     }
-    const targetInfo = agents.find(a => a.name === c.target)
+    const targetInfo = agents.find(a => a.name === targetName)
     if (!targetInfo?.description) {
-      setWiringError(`${c.target} needs a description before it can be used as a dispatch expert`)
+      setWiringError(`${targetName} needs a description before it can be used as a dispatch expert`)
       return
     }
     setWiringError('')
     setWiringBusy(true)
     try {
-      const source = await fetchStoreAgent(c.source)
-      await postStoreAgent(addCanDispatch(source, c.target))
-      const target = await fetchStoreAgent(c.target)
+      const source = await fetchStoreAgent(sourceName)
+      await postStoreAgent(addCanDispatch(source, targetName))
+      const target = await fetchStoreAgent(targetName)
       if (!target.allow_dispatch) {
         await postStoreAgent(enableAllowDispatch(target))
       }
@@ -391,7 +434,7 @@ export default function GraphPage() {
     } finally {
       setWiringBusy(false)
     }
-  }, [agents, fetchStoreAgent, postStoreAgent, load, wiringBusy])
+  }, [agents, fetchStoreAgent, postStoreAgent, load, wiringBusy, agentNameForNodeID])
 
   const removeEdge = useCallback(async (from: string, to: string) => {
     if (wiringBusy) return
@@ -480,6 +523,9 @@ export default function GraphPage() {
           </button>
           <button onClick={load} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--accent)', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500 }}>
             Refresh
+          </button>
+          <button onClick={autoLayout} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--accent)', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500 }}>
+            Reset layout
           </button>
         </div>
       </div>
@@ -762,6 +808,7 @@ export default function GraphPage() {
                 }}
                 onEdgeMouseLeave={() => setHoveredEdge(null)}
                 onNodeClick={onNodeClick}
+                onNodeDragStop={onNodeDragStop}
                 onConnect={onConnect}
                 isValidConnection={isValidConnection}
                 fitView

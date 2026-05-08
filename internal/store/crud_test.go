@@ -116,6 +116,62 @@ func TestUpsertAgentIsIdempotent(t *testing.T) {
 	if agents[0].Prompt != "v2" {
 		t.Errorf("Prompt: got %q, want %q", agents[0].Prompt, "v2")
 	}
+	if agents[0].ID == "" {
+		t.Fatal("ID is empty, want stable generated id")
+	}
+	firstID := agents[0].ID
+
+	a.Prompt = "v3"
+	if err := store.UpsertAgent(db, a); err != nil {
+		t.Fatalf("third upsert: %v", err)
+	}
+	agents, err = store.ReadAgents(db)
+	if err != nil {
+		t.Fatalf("ReadAgents after third upsert: %v", err)
+	}
+	if agents[0].ID != firstID {
+		t.Errorf("ID changed across upsert: got %q, want %q", agents[0].ID, firstID)
+	}
+}
+
+func TestGraphLayoutPersistsByStableAgentID(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	seedBackend(t, db, "claude")
+	if err := store.UpsertAgent(db, fleet.Agent{Name: "coder", Backend: "claude", Prompt: "p", Description: "coder agent", Skills: []string{}, CanDispatch: []string{}}); err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
+	}
+	agents, err := store.ReadAgents(db)
+	if err != nil {
+		t.Fatalf("ReadAgents: %v", err)
+	}
+	id := agents[0].ID
+	if id == "" {
+		t.Fatal("agent ID is empty")
+	}
+
+	if err := store.UpsertGraphLayout(db, []store.GraphNodePosition{{NodeID: id, X: 12.5, Y: -8}}); err != nil {
+		t.Fatalf("UpsertGraphLayout: %v", err)
+	}
+	got, err := store.ReadGraphLayout(db)
+	if err != nil {
+		t.Fatalf("ReadGraphLayout: %v", err)
+	}
+	if len(got) != 1 || got[0].NodeID != id || got[0].X != 12.5 || got[0].Y != -8 {
+		t.Fatalf("layout = %+v, want one position for %s", got, id)
+	}
+
+	if err := store.UpsertAgent(db, fleet.Agent{Name: "coder", Backend: "claude", Prompt: "updated", Description: "coder agent", Skills: []string{}, CanDispatch: []string{}}); err != nil {
+		t.Fatalf("UpsertAgent rename-preserve simulation: %v", err)
+	}
+	got, err = store.ReadGraphLayout(db)
+	if err != nil {
+		t.Fatalf("ReadGraphLayout after agent update: %v", err)
+	}
+	if len(got) != 1 || got[0].NodeID != id {
+		t.Fatalf("layout after agent update = %+v, want node id %s preserved", got, id)
+	}
 }
 
 func TestDeleteAgent(t *testing.T) {

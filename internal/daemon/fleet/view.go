@@ -36,6 +36,7 @@ type agentBindingJSON struct {
 // snapshot view exposes runtime status and binding schedules that the CRUD
 // representation does not.
 type apiAgentJSON struct {
+	ID            string             `json:"id"`
 	Name          string             `json:"name"`
 	Backend       string             `json:"backend"`
 	Model         string             `json:"model,omitempty"`
@@ -76,6 +77,7 @@ func (h *Handler) HandleAgentsView(w http.ResponseWriter, _ *http.Request) {
 			currentStatus = "running"
 		}
 		entry := apiAgentJSON{
+			ID:            a.ID,
 			Name:          a.Name,
 			Backend:       a.Backend,
 			Model:         a.Model,

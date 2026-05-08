@@ -360,7 +360,7 @@ func (d *Daemon) handleAuthTokenRevoke(w http.ResponseWriter, r *http.Request) {
 
 func (d *Daemon) handleRootLogin(w http.ResponseWriter, r *http.Request) {
 	if _, ok := d.authenticateRequest(r); ok {
-		http.Redirect(w, r, "/ui/", http.StatusFound)
+		http.Redirect(w, r, "/ui/graph/", http.StatusFound)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -534,11 +534,11 @@ const rootLoginHTML = `<!doctype html>
 
     function openDashboard() {
       try {
-        window.top.location.assign('/ui/');
+        window.top.location.assign('/ui/graph/');
       } catch {
-        window.location.assign('/ui/');
+        window.location.assign('/ui/graph/');
       }
-      setTimeout(() => window.location.replace('/ui/'), 75);
+      setTimeout(() => window.location.replace('/ui/graph/'), 75);
     }
 
     async function refresh() {

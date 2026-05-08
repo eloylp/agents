@@ -81,6 +81,9 @@ func TestBuildRouterRegistersExpectedRoutes(t *testing.T) {
 		{http.MethodGet, "/agents/coder"},
 		{http.MethodPatch, "/agents/coder"},
 		{http.MethodDelete, "/agents/coder"},
+		{http.MethodGet, "/graph/layout"},
+		{http.MethodPut, "/graph/layout"},
+		{http.MethodDelete, "/graph/layout"},
 		{http.MethodGet, "/skills"},
 		{http.MethodPost, "/skills"},
 		{http.MethodGet, "/skills/reviewer"},
@@ -1018,8 +1021,8 @@ func TestBuildHandlerDBAuthBootstrapLoginAndAPIToken(t *testing.T) {
 		t.Fatalf("authenticated root request failed: %v", err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/ui/" {
-		t.Fatalf("authenticated root got status=%d location=%q, want 302 /ui/", resp.StatusCode, resp.Header.Get("Location"))
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/ui/graph/" {
+		t.Fatalf("authenticated root got status=%d location=%q, want 302 /ui/graph/", resp.StatusCode, resp.Header.Get("Location"))
 	}
 
 	req, _ = http.NewRequest(http.MethodGet, ts.URL+"/config", nil)
