@@ -134,6 +134,42 @@ func TestUpsertAgentIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestUpsertAgentIgnoresCallerProvidedID(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	seedBackend(t, db, "claude")
+
+	a := fleet.Agent{ID: "client-id", Name: "coder", Backend: "claude", Prompt: "v1", Description: "coder agent", Skills: []string{}, CanDispatch: []string{}}
+	if err := store.UpsertAgent(db, a); err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
+	}
+	agents, err := store.ReadAgents(db)
+	if err != nil {
+		t.Fatalf("ReadAgents: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("got %d agents, want 1", len(agents))
+	}
+	if agents[0].ID == "" || agents[0].ID == "client-id" {
+		t.Fatalf("ID = %q, want server-generated id", agents[0].ID)
+	}
+	firstID := agents[0].ID
+
+	a.ID = "mutated-client-id"
+	a.Prompt = "v2"
+	if err := store.UpsertAgent(db, a); err != nil {
+		t.Fatalf("UpsertAgent update: %v", err)
+	}
+	agents, err = store.ReadAgents(db)
+	if err != nil {
+		t.Fatalf("ReadAgents after update: %v", err)
+	}
+	if agents[0].ID != firstID {
+		t.Fatalf("ID after update = %q, want preserved server id %q", agents[0].ID, firstID)
+	}
+}
+
 func TestGraphLayoutPersistsByStableAgentID(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
@@ -171,6 +207,45 @@ func TestGraphLayoutPersistsByStableAgentID(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].NodeID != id {
 		t.Fatalf("layout after agent update = %+v, want node id %s preserved", got, id)
+	}
+}
+
+func TestGraphLayoutDeletedWithAgent(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	seedBackend(t, db, "claude")
+	for _, name := range []string{"coder", "reviewer"} {
+		if err := store.UpsertAgent(db, fleet.Agent{Name: name, Backend: "claude", Prompt: "p", Description: name + " agent", Skills: []string{}, CanDispatch: []string{}}); err != nil {
+			t.Fatalf("UpsertAgent %s: %v", name, err)
+		}
+	}
+	agents, err := store.ReadAgents(db)
+	if err != nil {
+		t.Fatalf("ReadAgents: %v", err)
+	}
+	var coderID string
+	for _, a := range agents {
+		if a.Name == "coder" {
+			coderID = a.ID
+			break
+		}
+	}
+	if coderID == "" {
+		t.Fatal("coder ID is empty")
+	}
+	if err := store.UpsertGraphLayout(db, []store.GraphNodePosition{{NodeID: coderID, X: 1, Y: 2}}); err != nil {
+		t.Fatalf("UpsertGraphLayout: %v", err)
+	}
+	if err := store.DeleteAgent(db, "coder"); err != nil {
+		t.Fatalf("DeleteAgent: %v", err)
+	}
+	got, err := store.ReadGraphLayout(db)
+	if err != nil {
+		t.Fatalf("ReadGraphLayout: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("layout after agent delete = %+v, want empty", got)
 	}
 }
 

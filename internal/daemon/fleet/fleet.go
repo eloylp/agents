@@ -150,7 +150,6 @@ func agentToStoreJSON(a fleet.Agent) storeAgentJSON {
 
 func (j storeAgentJSON) toConfig() fleet.Agent {
 	return fleet.Agent{
-		ID:            j.ID,
 		Name:          j.Name,
 		Backend:       j.Backend,
 		Model:         j.Model,

@@ -259,9 +259,20 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
 		allowDispatch := boolToInt(a.AllowDispatch)
 		allowMemory := bindingEnabledInt(a.AllowMemory)
 		if _, err := tx.Exec(`
-			INSERT OR REPLACE INTO agents
+			INSERT INTO agents
 			  (id,name,backend,model,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description,allow_memory)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			VALUES (?,?,?,?,?,?,?,?,?,?,?)
+			ON CONFLICT(name) DO UPDATE SET
+				id = excluded.id,
+				backend = excluded.backend,
+				model = excluded.model,
+				skills = excluded.skills,
+				prompt = excluded.prompt,
+				allow_prs = excluded.allow_prs,
+				allow_dispatch = excluded.allow_dispatch,
+				can_dispatch = excluded.can_dispatch,
+				description = excluded.description,
+				allow_memory = excluded.allow_memory`,
 			id, a.Name, a.Backend, a.Model, string(skills), a.Prompt,
 			allowPRs, allowDispatch, string(canDispatch), a.Description, allowMemory,
 		); err != nil {
@@ -272,9 +283,6 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
 }
 
 func stableAgentID(q querier, a fleet.Agent) (string, error) {
-	if strings.TrimSpace(a.ID) != "" {
-		return strings.TrimSpace(a.ID), nil
-	}
 	var existing string
 	err := q.QueryRow("SELECT COALESCE(id, '') FROM agents WHERE name=?", a.Name).Scan(&existing)
 	if err == nil && existing != "" {

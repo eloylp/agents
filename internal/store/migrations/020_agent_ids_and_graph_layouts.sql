@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS graph_layouts (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     scope      TEXT NOT NULL DEFAULT 'global',
     node_kind  TEXT NOT NULL,
-    node_id    TEXT NOT NULL,
+    node_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     x          REAL NOT NULL,
     y          REAL NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),

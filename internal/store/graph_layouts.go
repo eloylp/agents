@@ -15,10 +15,11 @@ type GraphNodePosition struct {
 // ReadGraphLayout returns the global agent-node layout keyed by stable agent ID.
 func ReadGraphLayout(db *sql.DB) ([]GraphNodePosition, error) {
 	rows, err := db.Query(`
-		SELECT node_id, x, y
-		FROM graph_layouts
-		WHERE scope = 'global' AND node_kind = 'agent'
-		ORDER BY node_id`)
+		SELECT gl.node_id, gl.x, gl.y
+		FROM graph_layouts gl
+		JOIN agents a ON a.id = gl.node_id
+		WHERE gl.scope = 'global' AND gl.node_kind = 'agent'
+		ORDER BY gl.node_id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: read graph layout: %w", err)
 	}
