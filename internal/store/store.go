@@ -17,8 +17,10 @@
 package store
 
 import (
+	"crypto/rand"
 	"database/sql"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -241,6 +243,10 @@ func importSkills(tx *sql.Tx, skills map[string]fleet.Skill) error {
 
 func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
 	for _, a := range agents {
+		id, err := stableAgentID(tx, a)
+		if err != nil {
+			return err
+		}
 		skills, err := json.Marshal(a.Skills)
 		if err != nil {
 			return fmt.Errorf("store import: marshal agent %s skills: %w", a.Name, err)
@@ -253,16 +259,47 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
 		allowDispatch := boolToInt(a.AllowDispatch)
 		allowMemory := bindingEnabledInt(a.AllowMemory)
 		if _, err := tx.Exec(`
-			INSERT OR REPLACE INTO agents
-			  (name,backend,model,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description,allow_memory)
-			VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			a.Name, a.Backend, a.Model, string(skills), a.Prompt,
+			INSERT INTO agents
+			  (id,name,backend,model,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description,allow_memory)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?)
+			ON CONFLICT(name) DO UPDATE SET
+				id = excluded.id,
+				backend = excluded.backend,
+				model = excluded.model,
+				skills = excluded.skills,
+				prompt = excluded.prompt,
+				allow_prs = excluded.allow_prs,
+				allow_dispatch = excluded.allow_dispatch,
+				can_dispatch = excluded.can_dispatch,
+				description = excluded.description,
+				allow_memory = excluded.allow_memory`,
+			id, a.Name, a.Backend, a.Model, string(skills), a.Prompt,
 			allowPRs, allowDispatch, string(canDispatch), a.Description, allowMemory,
 		); err != nil {
 			return fmt.Errorf("store import: upsert agent %s: %w", a.Name, err)
 		}
 	}
 	return nil
+}
+
+func stableAgentID(q querier, a fleet.Agent) (string, error) {
+	var existing string
+	err := q.QueryRow("SELECT COALESCE(id, '') FROM agents WHERE name=?", a.Name).Scan(&existing)
+	if err == nil && existing != "" {
+		return existing, nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("store import: read agent %s id: %w", a.Name, err)
+	}
+	return newAgentID()
+}
+
+func newAgentID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("store import: generate agent id: %w", err)
+	}
+	return "agent_" + hex.EncodeToString(b[:]), nil
 }
 
 func importRepos(tx *sql.Tx, repos []fleet.Repo) error {
@@ -400,7 +437,7 @@ func loadSkills(db querier, cfg *config.Config) error {
 
 func loadAgents(db querier, cfg *config.Config) error {
 	rows, err := db.Query(`
-		SELECT name,backend,model,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description,allow_memory
+		SELECT id,name,backend,model,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description,allow_memory
 		FROM agents ORDER BY name`)
 	if err != nil {
 		return fmt.Errorf("store load: query agents: %w", err)
@@ -409,10 +446,10 @@ func loadAgents(db querier, cfg *config.Config) error {
 
 	var agents []fleet.Agent
 	for rows.Next() {
-		var name, backend, model, skillsJSON, prompt, canDispatchJSON, description string
+		var id, name, backend, model, skillsJSON, prompt, canDispatchJSON, description string
 		var allowPRs, allowDispatch, allowMemory int
 		if err := rows.Scan(
-			&name, &backend, &model, &skillsJSON, &prompt,
+			&id, &name, &backend, &model, &skillsJSON, &prompt,
 			&allowPRs, &allowDispatch, &canDispatchJSON, &description, &allowMemory,
 		); err != nil {
 			return fmt.Errorf("store load: scan agent: %w", err)
@@ -430,6 +467,7 @@ func loadAgents(db querier, cfg *config.Config) error {
 		// "absent" sentinel that nil represents on inbound YAML/JSON paths.
 		allowMem := intToBool(allowMemory)
 		agents = append(agents, fleet.Agent{
+			ID:            id,
 			Name:          name,
 			Backend:       backend,
 			Model:         model,

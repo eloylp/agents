@@ -64,6 +64,9 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/agents/{name}", withTimeout(http.HandlerFunc(h.handleAgentGet))).Methods(http.MethodGet)
 	r.Handle("/agents/{name}", withTimeout(http.HandlerFunc(h.handleAgentPatchByName))).Methods(http.MethodPatch)
 	r.Handle("/agents/{name}", withTimeout(http.HandlerFunc(h.handleAgentDelete))).Methods(http.MethodDelete)
+	r.Handle("/graph/layout", withTimeout(http.HandlerFunc(h.handleGraphLayoutGet))).Methods(http.MethodGet)
+	r.Handle("/graph/layout", withTimeout(http.HandlerFunc(h.handleGraphLayoutPut))).Methods(http.MethodPut)
+	r.Handle("/graph/layout", withTimeout(http.HandlerFunc(h.handleGraphLayoutDelete))).Methods(http.MethodDelete)
 
 	r.Handle("/skills", withTimeout(http.HandlerFunc(h.handleSkillsList))).Methods(http.MethodGet)
 	r.Handle("/skills", withTimeout(http.HandlerFunc(h.handleSkillCreate))).Methods(http.MethodPost)
@@ -111,6 +114,7 @@ func (h *Handler) HandleAgentsCreate(w http.ResponseWriter, r *http.Request) {
 // ── Agent wire types ────────────────────────────────────────────────────────────────────────────────────
 
 type storeAgentJSON struct {
+	ID            string   `json:"id,omitempty"`
 	Name          string   `json:"name"`
 	Backend       string   `json:"backend"`
 	Model         string   `json:"model,omitempty"`
@@ -130,6 +134,7 @@ type storeAgentJSON struct {
 func agentToStoreJSON(a fleet.Agent) storeAgentJSON {
 	allowMem := a.IsAllowMemory()
 	return storeAgentJSON{
+		ID:            a.ID,
 		Name:          a.Name,
 		Backend:       a.Backend,
 		Model:         a.Model,
@@ -274,11 +279,19 @@ func (h *Handler) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 	if strings.TrimSpace(a.Name) == "" {
 		return fleet.Agent{}, &store.ErrValidation{Msg: "name is required"}
 	}
+	normalizedName := fleet.NormalizeAgentName(a.Name)
 	if err := h.store.UpsertAgent(a); err != nil {
 		return fleet.Agent{}, err
 	}
-	fleet.NormalizeAgent(&a)
-	return a, nil
+	agents, err := h.store.ReadAgents()
+	if err != nil {
+		return fleet.Agent{}, err
+	}
+	idx := slices.IndexFunc(agents, func(agent fleet.Agent) bool { return agent.Name == normalizedName })
+	if idx < 0 {
+		return fleet.Agent{}, fmt.Errorf("agent %q not found after upsert", normalizedName)
+	}
+	return agents[idx], nil
 }
 
 // UpdateAgentPatch applies a partial patch to the named agent. Returns

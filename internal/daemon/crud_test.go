@@ -130,6 +130,13 @@ func TestStoreCRUDAgentCreateAndGet(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("POST /agents: got %d, want 200, %s", rr.Code, rr.Body.String())
 	}
+	var created storeAgentJSON
+	if err := json.NewDecoder(rr.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("created agent id is empty, want generated stable id")
+	}
 
 	// GET list, should have two entries: pr-reviewer (seeded) + coder.
 	rr = doCRUDRequest(t, s, http.MethodGet, "/agents", nil)
@@ -155,6 +162,27 @@ func TestStoreCRUDAgentCreateAndGet(t *testing.T) {
 	rr = doCRUDRequest(t, s, http.MethodGet, "/agents/coder", nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET /agents/coder: got %d", rr.Code)
+	}
+}
+
+func TestStoreCRUDAgentCreateIgnoresClientProvidedID(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	seedStoreBackend(t, s, "claude")
+	rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"id": "client-id", "name": "coder", "backend": "claude", "prompt": "p",
+		"description": "coding agent", "skills": []string{}, "can_dispatch": []string{},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST /agents: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var created storeAgentJSON
+	if err := json.NewDecoder(rr.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.ID == "" || created.ID == "client-id" {
+		t.Fatalf("created ID = %q, want server-owned id", created.ID)
 	}
 }
 

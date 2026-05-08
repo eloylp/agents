@@ -10,11 +10,11 @@ import { useTheme } from '@/lib/theme'
 // at a glance: an event arrives, a runner picks it up, the trace
 // records the execution detail.
 const links = [
+  { href: '/graph/',   label: 'Graph' },
+  { href: '/',         label: 'Fleet' },
   { href: '/events/',  label: 'Events',  flow: true },
   { href: '/runners/', label: 'Runners', flow: true },
   { href: '/traces/',  label: 'Traces',  flow: true },
-  { href: '/graph/',   label: 'Graph' },
-  { href: '/',         label: 'Fleet' },
   { href: '/skills/',  label: 'Skills' },
   { href: '/memory/',  label: 'Memory' },
   { href: '/repos/',   label: 'Repos' },

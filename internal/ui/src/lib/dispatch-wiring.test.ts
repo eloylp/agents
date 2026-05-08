@@ -6,6 +6,7 @@ import {
   incomingDispatchSources,
   outgoingDispatchTargets,
   removeCanDispatch,
+  storeAgentFromResponse,
   validateConnection,
   type DispatchRelationship,
   type StoreAgent,
@@ -28,6 +29,37 @@ function makeAgent(overrides: Partial<StoreAgent> = {}): StoreAgent {
 }
 
 describe('validateConnection', () => {
+  it('normalizes store agent responses with the backend canonical name', () => {
+    const agent = storeAgentFromResponse({
+      name: 'canonical-agent',
+      skills: ['go-testing'],
+      allow_dispatch: true,
+      can_dispatch: ['reviewer'],
+    }, ' user supplied ')
+
+    expect(agent).toEqual({
+      name: 'canonical-agent',
+      backend: '',
+      model: '',
+      skills: ['go-testing'],
+      prompt: '',
+      allow_prs: false,
+      allow_dispatch: true,
+      allow_memory: true,
+      can_dispatch: ['reviewer'],
+      description: '',
+    })
+  })
+
+  it('falls back to the requested name when a store agent response omits it', () => {
+    const agent = storeAgentFromResponse({}, 'fallback-agent')
+
+    expect(agent.name).toBe('fallback-agent')
+    expect(agent.allow_memory).toBe(true)
+    expect(agent.skills).toEqual([])
+    expect(agent.can_dispatch).toEqual([])
+  })
+
   it('accepts a connection between two distinct agents', () => {
     expect(validateConnection('a1', 'a2', [])).toEqual({ ok: true })
   })

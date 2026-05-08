@@ -27,6 +27,21 @@ export interface DispatchRelationship {
   status?: string
 }
 
+export function storeAgentFromResponse(data: Partial<StoreAgent>, fallbackName: string): StoreAgent {
+  return {
+    name: data.name ?? fallbackName,
+    backend: data.backend ?? '',
+    model: data.model ?? '',
+    skills: data.skills ?? [],
+    prompt: data.prompt ?? '',
+    allow_prs: data.allow_prs ?? false,
+    allow_dispatch: data.allow_dispatch ?? false,
+    allow_memory: data.allow_memory ?? true,
+    can_dispatch: data.can_dispatch ?? [],
+    description: data.description ?? '',
+  }
+}
+
 export function validateConnection(
   source: string,
   target: string,

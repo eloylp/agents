@@ -43,6 +43,8 @@ The import/export config file is a fleet strategy document with four top-level d
 
 An agent is a pure capability definition, it doesn't run until a repo binds it. A binding sets exactly one trigger: `labels: [...]`, `events: [...]`, or `cron: "..."`. The same agent can have multiple bindings on the same repo with different triggers.
 
+The dashboard's graph-first workflow designer is the primary visual workflow surface. It keeps graph node identity/layout on stable agent database IDs, edits agents through the shared form, manages repo trigger bindings through the repo binding API, and edits dispatch edges through `can_dispatch` / `allow_dispatch`.
+
 No framework prompt templates. Each agent owns its full prompt; skill guidance is concatenated in Go code before the agent's prompt at render time. A runtime "Available experts" roster is also injected, see Architecture Notes.
 
 ## Build & Run

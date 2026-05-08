@@ -42,6 +42,13 @@ func (s *Store) ReadAgents() ([]fleet.Agent, error)   { return ReadAgents(s.db) 
 func (s *Store) UpsertAgent(a fleet.Agent) error      { return UpsertAgent(s.db, a) }
 func (s *Store) DeleteAgent(name string) error        { return DeleteAgent(s.db, name) }
 func (s *Store) DeleteAgentCascade(name string) error { return DeleteAgentCascade(s.db, name) }
+func (s *Store) ReadGraphLayout() ([]GraphNodePosition, error) {
+	return ReadGraphLayout(s.db)
+}
+func (s *Store) UpsertGraphLayout(positions []GraphNodePosition) error {
+	return UpsertGraphLayout(s.db, positions)
+}
+func (s *Store) ClearGraphLayout() error { return ClearGraphLayout(s.db) }
 
 // ── Skills ──────────────────────────────────────────────────────────────
 
