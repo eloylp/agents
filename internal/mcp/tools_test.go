@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2036,14 +2037,9 @@ func TestToolCreateBindingForwardsAndReturnsID(t *testing.T) {
 	if !ok {
 		t.Fatal("owner/one missing")
 	}
-	found := false
-	for _, b := range r.Use {
-		if b.Agent == "coder" && len(b.Labels) == 1 && b.Labels[0] == "ai:fix" {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(r.Use, func(b fleet.Binding) bool {
+		return b.Agent == "coder" && len(b.Labels) == 1 && b.Labels[0] == "ai:fix"
+	}) {
 		t.Errorf("new ai:fix binding not persisted on owner/one: %+v", r.Use)
 	}
 }
