@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -441,13 +442,23 @@ func (d *Dispatcher) WithGraphRecorder(r GraphRecorder) {
 // lookupAgent returns the named agent from SQLite, or false when no row
 // matches. Called on every dispatch to check the target's allow_dispatch
 // flag.
-func (d *Dispatcher) lookupAgent(name string) (fleet.Agent, bool) {
+func (d *Dispatcher) lookupAgent(name, workspaceID string) (fleet.Agent, bool) {
 	agents, err := d.store.ReadAgents()
 	if err != nil {
 		d.logger.Error().Err(err).Msg("dispatcher: read agents")
 		return fleet.Agent{}, false
 	}
-	idx := slices.IndexFunc(agents, func(a fleet.Agent) bool { return a.Name == name })
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		workspaceID = fleet.DefaultWorkspaceID
+	}
+	idx := slices.IndexFunc(agents, func(a fleet.Agent) bool {
+		agentWorkspace := a.WorkspaceID
+		if agentWorkspace == "" {
+			agentWorkspace = fleet.DefaultWorkspaceID
+		}
+		return a.Name == name && agentWorkspace == workspaceID
+	})
 	if idx < 0 {
 		return fleet.Agent{}, false
 	}
@@ -471,6 +482,8 @@ func (d *Dispatcher) ProcessDispatches(
 ) error {
 	var errs []error
 	fanout := 0
+	workspaceID := eventWorkspaceID(ev)
+	repo, repoOK := d.lookupRepo(ev.Repo.FullName, workspaceID)
 	for _, req := range requests {
 		req.Agent = fleet.NormalizeAgentName(req.Agent)
 		d.counters.requestedTotal.Add(1)
@@ -507,8 +520,8 @@ func (d *Dispatcher) ProcessDispatches(
 		// Opt-in check: target must be visible in the originator's roster.
 		// Config validation requires descriptions for all agents; keep the
 		// runtime gate in sync for live DB changes and belt-and-braces protection.
-		target, ok := d.lookupAgent(req.Agent)
-		if !ok || !target.AllowDispatch || target.Description == "" {
+		target, ok := d.lookupAgent(req.Agent, workspaceID)
+		if !ok || !target.AllowDispatch || target.Description == "" || !repoOK || !agentScopeAllowsRepo(target, repo) {
 			logBase.Warn().Msg("dispatch dropped: target is not dispatchable")
 			d.counters.droppedNoOptin.Add(1)
 			continue
@@ -540,18 +553,20 @@ func (d *Dispatcher) ProcessDispatches(
 		//
 		// On success, CommitClaim (after PushEvent) or AbandonClaim (on failure)
 		// finalises the reservation.
-		if !d.dedup.TryClaimForDispatch(req.Agent, ev.Repo.FullName, number, time.Now()) {
+		dedupRepo := dedupRepoKey(workspaceID, ev.Repo.FullName)
+		if !d.dedup.TryClaimForDispatch(req.Agent, dedupRepo, number, time.Now()) {
 			logBase.Debug().Msg("dispatch deduped: active cron run or existing dispatch claim within window")
 			d.counters.deduped.Add(1)
 			continue
 		}
 
 		dispatchEv := Event{
-			ID:     GenEventID(),
-			Repo:   ev.Repo,
-			Kind:   "agent.dispatch",
-			Number: number,
-			Actor:  originator.Name,
+			ID:          GenEventID(),
+			WorkspaceID: workspaceID,
+			Repo:        ev.Repo,
+			Kind:        "agent.dispatch",
+			Number:      number,
+			Actor:       originator.Name,
 			Payload: map[string]any{
 				"target_agent":   req.Agent,
 				"reason":         req.Reason,
@@ -565,7 +580,7 @@ func (d *Dispatcher) ProcessDispatches(
 		if _, err := d.queue.PushEvent(ctx, dispatchEv); err != nil {
 			// Release the pending claim so future retries are not blocked and
 			// the dedup store never keeps a phantom committed slot.
-			d.dedup.AbandonClaim(req.Agent, ev.Repo.FullName, number)
+			d.dedup.AbandonClaim(req.Agent, dedupRepo, number)
 			logBase.Error().Err(err).Msg("failed to enqueue dispatch event")
 			errs = append(errs, fmt.Errorf("dispatch %q: %w", req.Agent, err))
 			continue
@@ -573,7 +588,7 @@ func (d *Dispatcher) ProcessDispatches(
 
 		// Enqueue succeeded, commit the claim so the dedup window suppresses
 		// duplicate dispatches for this target.
-		d.dedup.CommitClaim(req.Agent, ev.Repo.FullName, number)
+		d.dedup.CommitClaim(req.Agent, dedupRepo, number)
 
 		// Record the dispatch edge in the interaction graph if an observer is set.
 		if d.graphRec != nil {
@@ -599,7 +614,7 @@ func (d *Dispatcher) ProcessDispatches(
 // If the run fails before completing, call RollbackAutonomousRun to remove the
 // mark so that future dispatches are not spuriously suppressed.
 func (d *Dispatcher) TryMarkAutonomousRun(agentName, repo string, now time.Time) bool {
-	return d.dedup.TryClaimForCron(agentName, repo, 0, now)
+	return d.dedup.TryClaimForCron(agentName, normalizeDedupRepo(repo), 0, now)
 }
 
 // RollbackAutonomousRun removes the cron-namespace mark written by
@@ -607,7 +622,7 @@ func (d *Dispatcher) TryMarkAutonomousRun(agentName, repo string, now time.Time)
 // mark does not suppress autonomous-context dispatches for the full
 // dedup_window_seconds.
 func (d *Dispatcher) RollbackAutonomousRun(agentName, repo string) {
-	d.dedup.RemoveCronMark(agentName, repo, 0)
+	d.dedup.RemoveCronMark(agentName, normalizeDedupRepo(repo), 0)
 }
 
 // FinalizeAutonomousRun decrements the cron-namespace refcount for
@@ -616,7 +631,7 @@ func (d *Dispatcher) RollbackAutonomousRun(agentName, repo string) {
 // TryClaimForDispatch continues to suppress autonomous-context dispatches
 // until the full dedup_window_seconds window expires naturally.
 func (d *Dispatcher) FinalizeAutonomousRun(agentName, repo string) {
-	d.dedup.FinalizeCronMark(agentName, repo, 0)
+	d.dedup.FinalizeCronMark(agentName, normalizeDedupRepo(repo), 0)
 }
 
 // Stats returns a snapshot of the current dispatch counters.
@@ -630,4 +645,35 @@ func GenEventID() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+func (d *Dispatcher) lookupRepo(name, workspaceID string) (fleet.Repo, bool) {
+	name = fleet.NormalizeRepoName(name)
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		workspaceID = fleet.DefaultWorkspaceID
+	}
+	repos, err := d.store.ReadRepos()
+	if err != nil {
+		d.logger.Error().Err(err).Msg("dispatcher: read repos")
+		return fleet.Repo{}, false
+	}
+	idx := slices.IndexFunc(repos, func(r fleet.Repo) bool {
+		repoWorkspace := r.WorkspaceID
+		if repoWorkspace == "" {
+			repoWorkspace = fleet.DefaultWorkspaceID
+		}
+		return r.Name == name && repoWorkspace == workspaceID
+	})
+	if idx < 0 {
+		return fleet.Repo{}, false
+	}
+	return repos[idx], true
+}
+
+func normalizeDedupRepo(repo string) string {
+	if strings.Contains(repo, "\x00") {
+		return repo
+	}
+	return dedupRepoKey(fleet.DefaultWorkspaceID, repo)
 }

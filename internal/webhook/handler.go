@@ -69,8 +69,16 @@ func (h *Handler) repoByName(name string) (fleet.Repo, bool) {
 	return fleet.Repo{}, false
 }
 
+func eventWorkspaceID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fleet.DefaultWorkspaceID
+	}
+	return id
+}
+
 func (h *Handler) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
-	
+
 	deliveryID := strings.TrimSpace(r.Header.Get("X-GitHub-Delivery"))
 	if deliveryID == "" {
 		http.Error(w, "missing delivery id", http.StatusBadRequest)
@@ -159,7 +167,7 @@ type webhookReview struct {
 // Events from issues that are pull requests (GitHub sends both) are dropped
 // for the "labeled" action; the pull_request event handles those.
 func (h *Handler) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	
+
 	var payload struct {
 		Action     string            `json:"action"`
 		Label      webhookLabel      `json:"label"`
@@ -179,6 +187,7 @@ func (h *Handler) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, 
 	}
 
 	repoRef := workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled}
+	workspaceID := eventWorkspaceID(repo.WorkspaceID)
 
 	if payload.Issue.PullRequest != nil {
 		w.WriteHeader(http.StatusAccepted)
@@ -188,11 +197,12 @@ func (h *Handler) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, 
 	switch payload.Action {
 	case "labeled":
 		ev := workflow.Event{
-			ID:     deliveryID,
-			Repo:   repoRef,
-			Kind:   "issues.labeled",
-			Number: payload.Issue.Number,
-			Actor:  payload.Sender.Login,
+			ID:          deliveryID,
+			WorkspaceID: workspaceID,
+			Repo:        repoRef,
+			Kind:        "issues.labeled",
+			Number:      payload.Issue.Number,
+			Actor:       payload.Sender.Login,
 			Payload: map[string]any{
 				"label": payload.Label.Name,
 			},
@@ -200,11 +210,12 @@ func (h *Handler) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, 
 		h.enqueue(ctx, w, ev, deliveryID)
 	case "opened", "edited", "reopened", "closed":
 		ev := workflow.Event{
-			ID:     deliveryID,
-			Repo:   repoRef,
-			Kind:   "issues." + payload.Action,
-			Number: payload.Issue.Number,
-			Actor:  payload.Sender.Login,
+			ID:          deliveryID,
+			WorkspaceID: workspaceID,
+			Repo:        repoRef,
+			Kind:        "issues." + payload.Action,
+			Number:      payload.Issue.Number,
+			Actor:       payload.Sender.Login,
 			Payload: map[string]any{
 				"title": payload.Issue.Title,
 				"body":  payload.Issue.Body,
@@ -220,7 +231,7 @@ func (h *Handler) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, 
 // For "labeled" actions it filters to AI labels (and skips drafts) and emits
 // "pull_request.labeled". For lifecycle actions it emits "pull_request.{action}".
 func (h *Handler) handlePullRequestEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	
+
 	var payload struct {
 		Action      string             `json:"action"`
 		Label       webhookLabel       `json:"label"`
@@ -240,6 +251,7 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, w http.ResponseWri
 	}
 
 	repoRef := workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled}
+	workspaceID := eventWorkspaceID(repo.WorkspaceID)
 
 	switch payload.Action {
 	case "labeled":
@@ -249,11 +261,12 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, w http.ResponseWri
 			return
 		}
 		ev := workflow.Event{
-			ID:     deliveryID,
-			Repo:   repoRef,
-			Kind:   "pull_request.labeled",
-			Number: payload.PullRequest.Number,
-			Actor:  payload.Sender.Login,
+			ID:          deliveryID,
+			WorkspaceID: workspaceID,
+			Repo:        repoRef,
+			Kind:        "pull_request.labeled",
+			Number:      payload.PullRequest.Number,
+			Actor:       payload.Sender.Login,
 			Payload: map[string]any{
 				"label": payload.Label.Name,
 			},
@@ -268,12 +281,13 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, w http.ResponseWri
 			eventPayload["merged"] = payload.PullRequest.Merged
 		}
 		ev := workflow.Event{
-			ID:      deliveryID,
-			Repo:    repoRef,
-			Kind:    "pull_request." + payload.Action,
-			Number:  payload.PullRequest.Number,
-			Actor:   payload.Sender.Login,
-			Payload: eventPayload,
+			ID:          deliveryID,
+			WorkspaceID: workspaceID,
+			Repo:        repoRef,
+			Kind:        "pull_request." + payload.Action,
+			Number:      payload.PullRequest.Number,
+			Actor:       payload.Sender.Login,
+			Payload:     eventPayload,
 		}
 		h.enqueue(ctx, w, ev, deliveryID)
 	default:
@@ -284,7 +298,7 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, w http.ResponseWri
 // handleIssueCommentEvent handles X-GitHub-Event: issue_comment.
 // Only "created" actions are forwarded as "issue_comment.created".
 func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	
+
 	var payload struct {
 		Action     string            `json:"action"`
 		Comment    webhookComment    `json:"comment"`
@@ -308,11 +322,12 @@ func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWr
 	}
 
 	ev := workflow.Event{
-		ID:     deliveryID,
-		Repo:   workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
-		Kind:   "issue_comment.created",
-		Number: payload.Issue.Number,
-		Actor:  payload.Sender.Login,
+		ID:          deliveryID,
+		WorkspaceID: eventWorkspaceID(repo.WorkspaceID),
+		Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+		Kind:        "issue_comment.created",
+		Number:      payload.Issue.Number,
+		Actor:       payload.Sender.Login,
 		Payload: map[string]any{
 			"body": payload.Comment.Body,
 		},
@@ -323,7 +338,7 @@ func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWr
 // handlePullRequestReviewEvent handles X-GitHub-Event: pull_request_review.
 // Only "submitted" actions are forwarded as "pull_request_review.submitted".
 func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	
+
 	var payload struct {
 		Action      string             `json:"action"`
 		Review      webhookReview      `json:"review"`
@@ -347,11 +362,12 @@ func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, w http.Respo
 	}
 
 	ev := workflow.Event{
-		ID:     deliveryID,
-		Repo:   workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
-		Kind:   "pull_request_review.submitted",
-		Number: payload.PullRequest.Number,
-		Actor:  payload.Sender.Login,
+		ID:          deliveryID,
+		WorkspaceID: eventWorkspaceID(repo.WorkspaceID),
+		Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+		Kind:        "pull_request_review.submitted",
+		Number:      payload.PullRequest.Number,
+		Actor:       payload.Sender.Login,
 		Payload: map[string]any{
 			"state": payload.Review.State,
 			"body":  payload.Review.Body,
@@ -364,7 +380,7 @@ func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, w http.Respo
 // pull_request_review_comment. Only "created" actions are forwarded as
 // "pull_request_review_comment.created".
 func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	
+
 	var payload struct {
 		Action      string             `json:"action"`
 		Comment     webhookComment     `json:"comment"`
@@ -388,11 +404,12 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 	}
 
 	ev := workflow.Event{
-		ID:     deliveryID,
-		Repo:   workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
-		Kind:   "pull_request_review_comment.created",
-		Number: payload.PullRequest.Number,
-		Actor:  payload.Sender.Login,
+		ID:          deliveryID,
+		WorkspaceID: eventWorkspaceID(repo.WorkspaceID),
+		Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+		Kind:        "pull_request_review_comment.created",
+		Number:      payload.PullRequest.Number,
+		Actor:       payload.Sender.Login,
 		Payload: map[string]any{
 			"body": payload.Comment.Body,
 		},
@@ -402,7 +419,7 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 
 // handlePushEvent handles X-GitHub-Event: push.
 func (h *Handler) handlePushEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
-	
+
 	var payload struct {
 		Ref        string            `json:"ref"`
 		After      string            `json:"after"`
@@ -429,10 +446,11 @@ func (h *Handler) handlePushEvent(ctx context.Context, w http.ResponseWriter, bo
 	}
 
 	ev := workflow.Event{
-		ID:    deliveryID,
-		Repo:  workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
-		Kind:  "push",
-		Actor: payload.Sender.Login,
+		ID:          deliveryID,
+		WorkspaceID: eventWorkspaceID(repo.WorkspaceID),
+		Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+		Kind:        "push",
+		Actor:       payload.Sender.Login,
 		Payload: map[string]any{
 			"ref":      payload.Ref,
 			"head_sha": payload.After,

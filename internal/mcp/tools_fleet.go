@@ -267,23 +267,34 @@ func toolTriggerAgent(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("repo is required"), nil
 		}
+		workspaceID := strings.TrimSpace(req.GetString("workspace", fleet.DefaultWorkspaceID))
+		if workspaceID == "" {
+			workspaceID = fleet.DefaultWorkspaceID
+		}
 
 		repos, err := deps.Store.ReadRepos()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("read repos", err), nil
 		}
 		want := fleet.NormalizeRepoName(repoName)
-		idx := slices.IndexFunc(repos, func(r fleet.Repo) bool { return r.Name == want })
+		idx := slices.IndexFunc(repos, func(r fleet.Repo) bool {
+			repoWorkspace := r.WorkspaceID
+			if repoWorkspace == "" {
+				repoWorkspace = fleet.DefaultWorkspaceID
+			}
+			return r.Name == want && repoWorkspace == workspaceID
+		})
 		if idx < 0 || !repos[idx].Enabled {
 			return mcpgo.NewToolResultErrorf("repo %q not found or disabled", repoName), nil
 		}
 		repo := repos[idx]
 
 		ev := workflow.Event{
-			ID:    workflow.GenEventID(),
-			Repo:  workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
-			Kind:  "agents.run",
-			Actor: "mcp",
+			ID:          workflow.GenEventID(),
+			WorkspaceID: workspaceID,
+			Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+			Kind:        "agents.run",
+			Actor:       "mcp",
 			Payload: map[string]any{
 				"target_agent": agent,
 			},

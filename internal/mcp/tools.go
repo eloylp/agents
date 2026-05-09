@@ -145,6 +145,9 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 	srv.AddTool(
 		mcpgo.NewTool("trigger_agent",
 			mcpgo.WithDescription("Trigger an on-demand agent run on a repo. Returns the event ID; the run is async."),
+			mcpgo.WithString("workspace",
+				mcpgo.Description("Workspace id or display name. Defaults to default."),
+			),
 			mcpgo.WithString("agent",
 				mcpgo.Required(),
 				mcpgo.Description("Name of the agent to run (must exist in the fleet)."),

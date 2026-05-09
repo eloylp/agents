@@ -118,6 +118,9 @@ func seedAgentMap(t *testing.T, m map[string]fleet.Agent) *store.Store {
 	if err := st.ImportAll(agents, nil, map[string]fleet.Skill{}, map[string]fleet.Backend{"claude": {Command: "claude"}}, nil, nil); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+	if _, err := st.DB().Exec("INSERT OR IGNORE INTO repos(name, workspace_id, enabled) VALUES('owner/repo', 'default', 1)"); err != nil {
+		t.Fatalf("seed default repo: %v", err)
+	}
 	return st
 }
 
@@ -179,6 +182,88 @@ func TestDispatcherEnqueuesValidRequest(t *testing.T) {
 	}
 	if stats.Enqueued != 1 {
 		t.Errorf("enqueued: got %d, want 1", stats.Enqueued)
+	}
+}
+
+func TestDispatcherDropsTargetOutsideWorkspace(t *testing.T) {
+	t.Parallel()
+	q := &fakeQueue{}
+	st := seedAgentMap(t, map[string]fleet.Agent{
+		"coder": {
+			Name:          "coder",
+			WorkspaceID:   "team-a",
+			Description:   "Writes code",
+			AllowDispatch: true,
+			CanDispatch:   []string{"pr-reviewer"},
+		},
+		"pr-reviewer": {
+			Name:          "pr-reviewer",
+			Description:   "Reviews PRs",
+			AllowDispatch: true,
+		},
+	})
+	if _, err := st.DB().Exec("INSERT OR REPLACE INTO repos(name, workspace_id, enabled) VALUES('owner/repo', 'team-a', 1)"); err != nil {
+		t.Fatalf("seed repo workspace: %v", err)
+	}
+	d := NewDispatcher(testDispatchCfg(), st, NewDispatchDedupStore(300), q, zerolog.Nop())
+	ev := testEvent("owner/repo", 42)
+	ev.WorkspaceID = "team-a"
+
+	err := d.ProcessDispatches(context.Background(), fleet.Agent{
+		Name:        "coder",
+		WorkspaceID: "team-a",
+		CanDispatch: []string{"pr-reviewer"},
+	}, ev, "root-123", 0, "span-parent-42", []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 42, Reason: "please review"}})
+	if err != nil {
+		t.Fatalf("ProcessDispatches: %v", err)
+	}
+	if got := len(q.popped()); got != 0 {
+		t.Fatalf("enqueued events = %d, want 0", got)
+	}
+	if stats := d.Stats(); stats.DroppedNoOptin != 1 {
+		t.Fatalf("DroppedNoOptin = %d, want 1", stats.DroppedNoOptin)
+	}
+}
+
+func TestDispatcherEventInheritsWorkspace(t *testing.T) {
+	t.Parallel()
+	q := &fakeQueue{}
+	st := seedAgentMap(t, map[string]fleet.Agent{
+		"coder": {
+			Name:          "coder",
+			WorkspaceID:   "team-a",
+			Description:   "Writes code",
+			AllowDispatch: true,
+			CanDispatch:   []string{"pr-reviewer"},
+		},
+		"pr-reviewer": {
+			Name:          "pr-reviewer",
+			WorkspaceID:   "team-a",
+			Description:   "Reviews PRs",
+			AllowDispatch: true,
+		},
+	})
+	if _, err := st.DB().Exec("INSERT OR REPLACE INTO repos(name, workspace_id, enabled) VALUES('owner/repo', 'team-a', 1)"); err != nil {
+		t.Fatalf("seed repo workspace: %v", err)
+	}
+	d := NewDispatcher(testDispatchCfg(), st, NewDispatchDedupStore(300), q, zerolog.Nop())
+	ev := testEvent("owner/repo", 42)
+	ev.WorkspaceID = "team-a"
+
+	err := d.ProcessDispatches(context.Background(), fleet.Agent{
+		Name:        "coder",
+		WorkspaceID: "team-a",
+		CanDispatch: []string{"pr-reviewer"},
+	}, ev, "root-123", 0, "span-parent-42", []ai.DispatchRequest{{Agent: "pr-reviewer", Number: 42, Reason: "please review"}})
+	if err != nil {
+		t.Fatalf("ProcessDispatches: %v", err)
+	}
+	events := q.popped()
+	if len(events) != 1 {
+		t.Fatalf("enqueued events = %d, want 1", len(events))
+	}
+	if events[0].WorkspaceID != "team-a" {
+		t.Fatalf("dispatch workspace = %q, want team-a", events[0].WorkspaceID)
 	}
 }
 

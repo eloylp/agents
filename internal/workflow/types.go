@@ -31,11 +31,12 @@ type QueuedEvent struct {
 // Draft PR filtering and AI-label filtering happen at the webhook boundary
 // before the event is enqueued.
 type Event struct {
-	ID         string         // unique event identifier; delivery ID for webhook events
-	Repo       RepoRef
-	Kind       string         // e.g. "issues.labeled", "pull_request.opened", "push", "agent.dispatch"
-	Number     int            // issue/PR number; 0 for push and other non-item events
-	Actor      string         // GitHub login that triggered the event
-	Payload    map[string]any // kind-specific fields (label name, comment body, head SHA, ...)
-	EnqueuedAt time.Time      // set by PushEvent; used to compute queue-wait time in trace spans
+	ID          string // unique event identifier; delivery ID for webhook events
+	WorkspaceID string // workspace that owns this run; empty means default for compatibility
+	Repo        RepoRef
+	Kind        string         // e.g. "issues.labeled", "pull_request.opened", "push", "agent.dispatch"
+	Number      int            // issue/PR number; 0 for push and other non-item events
+	Actor       string         // GitHub login that triggered the event
+	Payload     map[string]any // kind-specific fields (label name, comment body, head SHA, ...)
+	EnqueuedAt  time.Time      // set by PushEvent; used to compute queue-wait time in trace spans
 }

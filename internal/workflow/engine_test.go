@@ -155,6 +155,59 @@ func TestEngineSkipsUnmatchedLabel(t *testing.T) {
 	}
 }
 
+func TestEngineSkipsAgentOutsideEventWorkspace(t *testing.T) {
+	t.Parallel()
+	e, runner := newTestEngine(t, func(c *config.Config) {
+		c.Agents = []fleet.Agent{
+			{Name: "team-reviewer", WorkspaceID: "team-a", Backend: "claude", Prompt: "Review team workspace."},
+			{Name: "default-reviewer", Backend: "claude", Prompt: "Review default workspace."},
+		}
+		c.Repos = []fleet.Repo{{
+			WorkspaceID: "team-a",
+			Name:        "owner/repo",
+			Enabled:     true,
+			Use: []fleet.Binding{
+				{Agent: "team-reviewer", Labels: []string{"ai:review"}},
+				{Agent: "default-reviewer", Labels: []string{"ai:review"}},
+			},
+		}}
+	})
+	ev := labelEvent("issues.labeled", "owner/repo", "ai:review", 7)
+	ev.WorkspaceID = "team-a"
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if runner.callCount() != 1 {
+		t.Fatalf("callCount = %d, want only the team workspace agent", runner.callCount())
+	}
+}
+
+func TestEngineRejectsRepoScopedAgentOutsideRepo(t *testing.T) {
+	t.Parallel()
+	e, runner := newTestEngine(t, func(c *config.Config) {
+		c.Agents = []fleet.Agent{{
+			Name:        "repo-reviewer",
+			WorkspaceID: "team-a",
+			Backend:     "claude",
+			Prompt:      "Review repo.",
+			ScopeType:   "repo",
+			ScopeRepo:   "owner/other",
+		}}
+		c.Repos = []fleet.Repo{
+			{WorkspaceID: "team-a", Name: "owner/repo", Enabled: true, Use: []fleet.Binding{{Agent: "repo-reviewer", Labels: []string{"ai:review"}}}},
+			{WorkspaceID: "team-a", Name: "owner/other", Enabled: true},
+		}
+	})
+	ev := labelEvent("issues.labeled", "owner/repo", "ai:review", 7)
+	ev.WorkspaceID = "team-a"
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if runner.callCount() != 0 {
+		t.Fatalf("callCount = %d, want repo-scoped agent skipped", runner.callCount())
+	}
+}
+
 func TestEngineSkipsDisabledBinding(t *testing.T) {
 	t.Parallel()
 	f := false
@@ -359,7 +412,7 @@ func TestBuildRosterUsesDispatchWiring(t *testing.T) {
 		},
 	}
 
-	roster := BuildRoster(cfg, "owner/repo", "coder")
+	roster := BuildRoster(cfg, fleet.DefaultWorkspaceID, "owner/repo", "coder")
 	if len(roster) != 1 {
 		t.Fatalf("len(roster) = %d, want 1: %+v", len(roster), roster)
 	}

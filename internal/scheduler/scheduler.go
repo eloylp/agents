@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
 	"github.com/rs/zerolog"
 
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -55,10 +57,11 @@ type AgentStatus struct {
 
 // agentEntry records the metadata for a registered cron job.
 type agentEntry struct {
-	name   string
-	repo   string
-	spec   string // the cron expression as registered, used to detect spec changes
-	cronID cron.EntryID
+	workspaceID string
+	name        string
+	repo        string
+	spec        string // the cron expression as registered, used to detect spec changes
+	cronID      cron.EntryID
 }
 
 // lastRunRecord holds the outcome of the most recent binding execution.
@@ -190,25 +193,26 @@ func (s *Scheduler) reconcile() error {
 	}
 	agentByName := make(map[string]struct{}, len(agents))
 	for _, a := range agents {
-		agentByName[a.Name] = struct{}{}
+		agentByName[schedulerKey(workspaceID(a.WorkspaceID), a.Name)] = struct{}{}
 	}
 
 	// Build the desired set of (agent, repo, spec) entries.
-	type want struct{ name, repo, spec string }
+	type want struct{ workspaceID, name, repo, spec string }
 	desired := map[want]bool{}
 	for _, repo := range repos {
 		if !repo.Enabled {
 			continue
 		}
+		repoWorkspace := workspaceID(repo.WorkspaceID)
 		for _, b := range repo.Use {
 			if !b.IsEnabled() || !b.IsCron() {
 				continue
 			}
-			if _, ok := agentByName[b.Agent]; !ok {
+			if _, ok := agentByName[schedulerKey(repoWorkspace, b.Agent)]; !ok {
 				s.logger.Warn().Str("repo", repo.Name).Str("agent", b.Agent).Msg("scheduler reconcile: skipping binding to unknown agent")
 				continue
 			}
-			desired[want{name: b.Agent, repo: repo.Name, spec: b.Cron}] = true
+			desired[want{workspaceID: repoWorkspace, name: b.Agent, repo: repo.Name, spec: b.Cron}] = true
 		}
 	}
 
@@ -218,7 +222,7 @@ func (s *Scheduler) reconcile() error {
 	// Remove entries that are no longer desired (or whose spec changed).
 	kept := s.agentEntries[:0]
 	for _, e := range s.agentEntries {
-		key := want{name: e.name, repo: e.repo, spec: e.spec}
+		key := want{workspaceID: e.workspaceID, name: e.name, repo: e.repo, spec: e.spec}
 		if desired[key] {
 			delete(desired, key) // mark as already registered
 			kept = append(kept, e)
@@ -231,13 +235,13 @@ func (s *Scheduler) reconcile() error {
 	// Register every entry that's desired but not yet registered. Any
 	// remaining keys in `desired` after the loop above fall in this set.
 	for w := range desired {
-		job := s.makeCronJob(w.repo, w.name)
+		job := s.makeCronJob(w.workspaceID, w.repo, w.name)
 		id, err := s.cron.AddFunc(w.spec, job)
 		if err != nil {
 			s.logger.Error().Str("repo", w.repo).Str("agent", w.name).Str("cron", w.spec).Err(err).Msg("scheduler reconcile: add cron entry failed")
 			continue
 		}
-		s.agentEntries = append(s.agentEntries, agentEntry{name: w.name, repo: w.repo, spec: w.spec, cronID: id})
+		s.agentEntries = append(s.agentEntries, agentEntry{workspaceID: w.workspaceID, name: w.name, repo: w.repo, spec: w.spec, cronID: id})
 		entry := s.cron.Entry(id)
 		s.logger.Info().
 			Str("repo", w.repo).
@@ -249,7 +253,7 @@ func (s *Scheduler) reconcile() error {
 	return nil
 }
 
-func (s *Scheduler) makeCronJob(repo string, agentName string) func() {
+func (s *Scheduler) makeCronJob(workspaceID, repo string, agentName string) func() {
 	return func() {
 		ctx := s.currentRunCtx()
 		if ctx.Err() != nil {
@@ -260,12 +264,13 @@ func (s *Scheduler) makeCronJob(repo string, agentName string) func() {
 			return
 		}
 		ev := workflow.Event{
-			ID:         workflow.GenEventID(),
-			Repo:       workflow.RepoRef{FullName: repo, Enabled: true},
-			Kind:       "cron",
-			Actor:      agentName,
-			Payload:    map[string]any{"target_agent": agentName},
-			EnqueuedAt: time.Now(),
+			ID:          workflow.GenEventID(),
+			WorkspaceID: workspaceID,
+			Repo:        workflow.RepoRef{FullName: repo, Enabled: true},
+			Kind:        "cron",
+			Actor:       agentName,
+			Payload:     map[string]any{"target_agent": agentName},
+			EnqueuedAt:  time.Now(),
 		}
 		if _, err := s.queue.PushEvent(ctx, ev); err != nil {
 			s.logger.Error().Str("repo", repo).Str("agent", agentName).Err(err).Msg("cron tick: enqueue failed")
@@ -279,6 +284,18 @@ func (s *Scheduler) recordLastRun(name, repo string, at time.Time, status string
 	s.lastRunsMu.Lock()
 	s.lastRuns[key] = lastRunRecord{at: at, status: status}
 	s.lastRunsMu.Unlock()
+}
+
+func workspaceID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fleet.DefaultWorkspaceID
+	}
+	return id
+}
+
+func schedulerKey(workspaceID, name string) string {
+	return workspaceID + "\x00" + name
 }
 
 // AgentStatuses returns the current scheduling state for all registered bindings.
