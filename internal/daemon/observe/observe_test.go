@@ -101,15 +101,15 @@ func newSchedulerWithStatuses(t *testing.T, statuses []scheduler.AgentStatus) *s
 
 	repos := make([]fleet.Repo, 0, len(statuses))
 	agents := make([]fleet.Agent, 0, len(statuses))
-	seenAgent := map[string]bool{}
+	seenAgent := map[string]struct{}{}
 	for _, st := range statuses {
 		repos = append(repos, fleet.Repo{
 			Name: st.Repo, Enabled: true,
 			Use: []fleet.Binding{{Agent: st.Name, Cron: "0 * * * *"}},
 		})
-		if !seenAgent[st.Name] {
+		if _, ok := seenAgent[st.Name]; !ok {
 			agents = append(agents, fleet.Agent{Name: st.Name, Backend: "claude", Prompt: "p", Description: st.Name + " agent"})
-			seenAgent[st.Name] = true
+			seenAgent[st.Name] = struct{}{}
 		}
 	}
 	st := store.New(db)
@@ -165,8 +165,8 @@ func seedMemoryReader(t *testing.T, db *sql.DB, content map[string]string, mtime
 	if err := store.UpsertBackend(db, "claude", fleet.Backend{Command: "claude"}); err != nil {
 		t.Fatalf("seed backend: %v", err)
 	}
-	seenAgent := map[string]bool{}
-	seenRepo := map[string]bool{}
+	seenAgent := map[string]struct{}{}
+	seenRepo := map[string]struct{}{}
 	for key, body := range content {
 		workspace, agent, repo := parseSeedMemoryKey(key)
 		agent = ai.NormalizeToken(agent)
@@ -176,17 +176,17 @@ func seedMemoryReader(t *testing.T, db *sql.DB, content map[string]string, mtime
 				t.Fatalf("seed workspace %s: %v", workspace, err)
 			}
 		}
-		if !seenAgent[agent] {
+		if _, ok := seenAgent[agent]; !ok {
 			if err := store.UpsertAgent(db, fleet.Agent{Name: agent, Backend: "claude", Prompt: "p", Description: agent + " agent"}); err != nil {
 				t.Fatalf("seed agent %s: %v", agent, err)
 			}
-			seenAgent[agent] = true
+			seenAgent[agent] = struct{}{}
 		}
-		if !seenRepo[repo] {
+		if _, ok := seenRepo[repo]; !ok {
 			if err := store.UpsertRepo(db, fleet.Repo{Name: repo, Enabled: true}); err != nil {
 				t.Fatalf("seed repo %s: %v", repo, err)
 			}
-			seenRepo[repo] = true
+			seenRepo[repo] = struct{}{}
 		}
 		if err := store.WriteMemory(db, workspace, agent, repo, body); err != nil {
 			t.Fatalf("seed memory %s/%s: %v", agent, repo, err)
