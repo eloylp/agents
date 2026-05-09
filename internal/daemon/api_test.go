@@ -99,7 +99,7 @@ func TestHandleAPIAgentsAttachesScheduleForCronBindings(t *testing.T) {
 	// Seed the scheduler's last-run state through the same hook the engine
 	// uses on real cron completions.
 	now := time.Now().UTC().Truncate(time.Second)
-	srv.Scheduler().RecordLastRun("worker", "owner/repo", now, "ok")
+	srv.Scheduler().RecordLastRun(fleet.DefaultWorkspaceID, "worker", "owner/repo", now, "ok")
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
@@ -151,7 +151,7 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	// Seed last-run state for repo-a only, repo-b stays at "never run" so
 	// the test asserts the per-binding schedule slot on the agent view.
-	srv.Scheduler().RecordLastRun("worker", "owner/repo-a", now, "ok")
+	srv.Scheduler().RecordLastRun(fleet.DefaultWorkspaceID, "worker", "owner/repo-a", now, "ok")
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()

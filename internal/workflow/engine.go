@@ -96,15 +96,15 @@ type StepRecorder interface {
 // TraceRecorder), so workflow cannot import autonomous to reference the
 // concrete type. Implementations must be safe for concurrent use.
 type LastRunRecorder interface {
-	RecordLastRun(agent, repo string, at time.Time, status string)
+	RecordLastRun(workspaceID, agent, repo string, at time.Time, status string)
 }
 
-// runLocks serializes concurrent runAgent calls for the same (agent, repo)
-// pair, preventing the lost-update race where two overlapping runs both read
-// the same old memory and whichever finishes last silently clobbers the
-// other's state. The cron path used to own this serialization; with cron
-// runs now flowing through the engine queue alongside webhook/dispatch/run
-// events, the engine owns it for every kind.
+// runLocks serializes concurrent runAgent calls for the same workspace, agent,
+// and repo, preventing the lost-update race where two overlapping runs both
+// read the same old memory and whichever finishes last silently clobbers the
+// other's state. The cron path used to own this serialization; with cron runs
+// now flowing through the engine queue alongside webhook/dispatch/run events,
+// the engine owns it for every kind.
 type runLocks struct {
 	m sync.Map // key: string -> *sync.Mutex
 }
@@ -446,7 +446,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		if runErr != nil {
 			status = "error"
 		}
-		e.lastRunRec.RecordLastRun(targetName, repo.Name, time.Now(), status)
+		e.lastRunRec.RecordLastRun(workspaceID, targetName, repo.Name, time.Now(), status)
 	}
 	return runErr
 }

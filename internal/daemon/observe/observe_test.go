@@ -125,7 +125,11 @@ func newSchedulerWithStatuses(t *testing.T, statuses []scheduler.AgentStatus) *s
 		if st.LastRun != nil {
 			ts = *st.LastRun
 		}
-		sched.RecordLastRun(st.Name, st.Repo, ts, st.LastStatus)
+		workspaceID := st.WorkspaceID
+		if workspaceID == "" {
+			workspaceID = fleet.DefaultWorkspaceID
+		}
+		sched.RecordLastRun(workspaceID, st.Name, st.Repo, ts, st.LastStatus)
 	}
 	return sched
 }

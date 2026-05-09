@@ -48,11 +48,12 @@ func appendLogKV(e *zerolog.Event, keysAndValues []any) *zerolog.Event {
 
 // AgentStatus is the runtime state of a single registered cron binding.
 type AgentStatus struct {
-	Name       string
-	Repo       string
-	LastRun    *time.Time // nil if never run in this process lifetime
-	NextRun    time.Time
-	LastStatus string // "success", "error", or "" if never run
+	WorkspaceID string
+	Name        string
+	Repo        string
+	LastRun     *time.Time // nil if never run in this process lifetime
+	NextRun     time.Time
+	LastStatus  string // "success", "error", or "" if never run
 }
 
 // agentEntry records the metadata for a registered cron job.
@@ -94,7 +95,7 @@ type Scheduler struct {
 	bindMu            sync.RWMutex // protects agentEntries during reconcile
 	agentEntries      []agentEntry
 	lastRunsMu        sync.RWMutex
-	lastRuns          map[string]lastRunRecord // key: "name\x00repo"
+	lastRuns          map[string]lastRunRecord // key: "workspaceID\x00name\x00repo"
 	queue             *workflow.DataChannels   // required at runtime; cron ticks push events here for the engine to handle
 }
 
@@ -110,8 +111,8 @@ func (s *Scheduler) WithEventQueue(q *workflow.DataChannels) {
 // RecordLastRun is called by the engine after every cron run completes.
 // Implements workflow.LastRunRecorder so /agents and /status see the same
 // schedule state operators saw under the old in-scheduler execution path.
-func (s *Scheduler) RecordLastRun(agent, repo string, at time.Time, status string) {
-	s.recordLastRun(agent, repo, at, status)
+func (s *Scheduler) RecordLastRun(workspaceID, agent, repo string, at time.Time, status string) {
+	s.recordLastRun(workspaceID, agent, repo, at, status)
 }
 
 // NewScheduler builds a scheduler. It performs an initial reconcile from
@@ -180,8 +181,8 @@ func (s *Scheduler) reconcileLoop(ctx context.Context) {
 
 // reconcile reads the current cron-binding set from SQLite, diffs it
 // against the registered entries, and applies the difference. The diff
-// keys on (agent, repo, cron-spec): a binding whose cron string changes
-// is treated as remove-old + add-new.
+// keys on (workspace, agent, repo, cron-spec): a binding whose cron string
+// changes is treated as remove-old + add-new.
 func (s *Scheduler) reconcile() error {
 	repos, err := s.store.ReadRepos()
 	if err != nil {
@@ -274,13 +275,13 @@ func (s *Scheduler) makeCronJob(workspaceID, repo string, agentName string) func
 		}
 		if _, err := s.queue.PushEvent(ctx, ev); err != nil {
 			s.logger.Error().Str("repo", repo).Str("agent", agentName).Err(err).Msg("cron tick: enqueue failed")
-			s.recordLastRun(agentName, repo, time.Now(), "error")
+			s.recordLastRun(workspaceID, agentName, repo, time.Now(), "error")
 		}
 	}
 }
 
-func (s *Scheduler) recordLastRun(name, repo string, at time.Time, status string) {
-	key := name + "\x00" + repo
+func (s *Scheduler) recordLastRun(workspaceID, name, repo string, at time.Time, status string) {
+	key := lastRunKey(workspaceID, name, repo)
 	s.lastRunsMu.Lock()
 	s.lastRuns[key] = lastRunRecord{at: at, status: status}
 	s.lastRunsMu.Unlock()
@@ -296,6 +297,10 @@ func workspaceID(id string) string {
 
 func schedulerKey(workspaceID, name string) string {
 	return workspaceID + "\x00" + name
+}
+
+func lastRunKey(workspaceID, name, repo string) string {
+	return workspaceID + "\x00" + name + "\x00" + repo
 }
 
 // AgentStatuses returns the current scheduling state for all registered bindings.
@@ -320,7 +325,7 @@ func (s *Scheduler) AgentStatuses() []AgentStatus {
 		if !ok {
 			continue
 		}
-		key := ae.name + "\x00" + ae.repo
+		key := lastRunKey(ae.workspaceID, ae.name, ae.repo)
 		lr := runs[key]
 		var lastRun *time.Time
 		if !lr.at.IsZero() {
@@ -332,11 +337,12 @@ func (s *Scheduler) AgentStatuses() []AgentStatus {
 			nextRun = entry.Schedule.Next(time.Now())
 		}
 		statuses = append(statuses, AgentStatus{
-			Name:       ae.name,
-			Repo:       ae.repo,
-			LastRun:    lastRun,
-			NextRun:    nextRun,
-			LastStatus: lr.status,
+			WorkspaceID: ae.workspaceID,
+			Name:        ae.name,
+			Repo:        ae.repo,
+			LastRun:     lastRun,
+			NextRun:     nextRun,
+			LastStatus:  lr.status,
 		})
 	}
 	return statuses

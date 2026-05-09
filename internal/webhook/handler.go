@@ -63,6 +63,15 @@ func (h *Handler) repoByName(name string) (fleet.Repo, bool) {
 		return fleet.Repo{}, false
 	}
 	want := fleet.NormalizeRepoName(name)
+	i := slices.IndexFunc(repos, func(r fleet.Repo) bool {
+		return r.Name == want && eventWorkspaceID(r.WorkspaceID) == fleet.DefaultWorkspaceID
+	})
+	if i >= 0 {
+		return repos[i], true
+	}
+	// GitHub webhooks do not carry workspace identity. Until repo names stop
+	// being globally unique, prefer the default workspace when present and
+	// otherwise fall back to the deterministic ReadRepos ordering.
 	if i := slices.IndexFunc(repos, func(r fleet.Repo) bool { return r.Name == want }); i >= 0 {
 		return repos[i], true
 	}

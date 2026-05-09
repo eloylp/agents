@@ -161,7 +161,8 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 			if a.ScopeRepo == "" {
 				return fmt.Errorf("config: agent %q: scope_repo is required for repo scope", a.Name)
 			}
-			if _, ok := reposByWorkspace[workspaceID][a.ScopeRepo]; !ok {
+			scopeRepo := fleet.NormalizeRepoName(a.ScopeRepo)
+			if _, ok := reposByWorkspace[workspaceID][scopeRepo]; !ok {
 				return fmt.Errorf("config: agent %q: scope_repo %q is not a repo in workspace %q", a.Name, a.ScopeRepo, workspaceID)
 			}
 		default:

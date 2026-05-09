@@ -919,19 +919,19 @@ func TestEngineConcurrentReadsAreRaceFree(t *testing.T) {
 type stubLastRunRecorder struct {
 	mu    sync.Mutex
 	calls []struct {
-		agent, repo, status string
+		workspaceID, agent, repo, status string
 	}
 }
 
-func (s *stubLastRunRecorder) RecordLastRun(agent, repo string, _ time.Time, status string) {
+func (s *stubLastRunRecorder) RecordLastRun(workspaceID, agent, repo string, _ time.Time, status string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, struct {
-		agent, repo, status string
-	}{agent, repo, status})
+		workspaceID, agent, repo, status string
+	}{workspaceID, agent, repo, status})
 }
 
-func (s *stubLastRunRecorder) snapshot() []struct{ agent, repo, status string } {
+func (s *stubLastRunRecorder) snapshot() []struct{ workspaceID, agent, repo, status string } {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.calls)
@@ -986,7 +986,7 @@ func TestHandleEventAutonomousFiresLastRunRecorder(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("LastRunRecorder calls = %d, want 1: %+v", len(calls), calls)
 	}
-	if calls[0].agent != "arch-reviewer" || calls[0].repo != "owner/repo" || calls[0].status != "success" {
+	if calls[0].workspaceID != fleet.DefaultWorkspaceID || calls[0].agent != "arch-reviewer" || calls[0].repo != "owner/repo" || calls[0].status != "success" {
 		t.Errorf("unexpected last-run record: %+v", calls[0])
 	}
 }
