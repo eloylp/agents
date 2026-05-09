@@ -311,7 +311,7 @@ func (h *Handler) handleAgentPatch(w http.ResponseWriter, r *http.Request, name 
 		http.Error(w, "at least one field is required", http.StatusBadRequest)
 		return
 	}
-	canonical, err := h.updateAgent(name, req)
+	canonical, err := h.updateAgent(name, fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace")), req)
 	if err != nil {
 		h.writeErr(w, err, "agent patch or cron reload")
 		return
@@ -350,20 +350,26 @@ func (h *Handler) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 // *store.ErrNotFound when the agent does not exist. Used by both the REST
 // PATCH handler and the MCP update_agent tool.
 func (h *Handler) UpdateAgentPatch(name string, patch AgentPatch) (fleet.Agent, error) {
-	return h.updateAgent(name, patch)
+	return h.updateAgent(name, fleet.DefaultWorkspaceID, patch)
 }
 
-func (h *Handler) updateAgent(name string, patch AgentPatch) (fleet.Agent, error) {
+func (h *Handler) updateAgent(name, workspaceID string, patch AgentPatch) (fleet.Agent, error) {
 	normalized := fleet.NormalizeAgentName(name)
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	agents, err := h.store.ReadAgents()
 	if err != nil {
 		return fleet.Agent{}, err
 	}
-	idx := slices.IndexFunc(agents, func(a fleet.Agent) bool { return a.Name == normalized })
+	idx := slices.IndexFunc(agents, func(a fleet.Agent) bool {
+		return a.Name == normalized && fleet.NormalizeWorkspaceID(a.WorkspaceID) == workspaceID
+	})
 	if idx < 0 {
-		return fleet.Agent{}, &store.ErrNotFound{Msg: fmt.Sprintf("agent %q not found", normalized)}
+		return fleet.Agent{}, &store.ErrNotFound{Msg: fmt.Sprintf("agent %q not found in workspace %q", normalized, workspaceID)}
 	}
 	merged := agents[idx]
+	if patch.WorkspaceID != nil && fleet.NormalizeWorkspaceID(*patch.WorkspaceID) != fleet.NormalizeWorkspaceID(merged.WorkspaceID) {
+		return fleet.Agent{}, &store.ErrValidation{Msg: "workspace_id cannot be changed with PATCH; create the agent in the target workspace instead"}
+	}
 	patch.apply(&merged)
 	if err := h.store.UpsertAgent(merged); err != nil {
 		return fleet.Agent{}, err

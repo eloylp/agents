@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/eloylp/agents/internal/ai"
@@ -23,6 +24,7 @@ var ErrMemoryNotFound = errors.New("store: memory not found")
 // /memory HTTP endpoint reads.
 type MemoryBackend struct {
 	db       *sql.DB
+	mu       sync.RWMutex
 	notifyFn func(workspace, agent, repo string) // optional; called after each successful write
 }
 
@@ -35,6 +37,8 @@ func NewMemoryBackend(db *sql.DB) *MemoryBackend {
 // write so SSE subscribers (e.g. the dashboard's memory page) see the
 // change immediately. Idempotent; setting nil disables notifications.
 func (m *MemoryBackend) SetChangeNotifier(fn func(workspace, agent, repo string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.notifyFn = fn
 }
 
@@ -53,8 +57,11 @@ func (m *MemoryBackend) WriteMemory(workspace, agent, repo, content string) erro
 	if err := WriteMemory(m.db, workspace, a, r, content); err != nil {
 		return err
 	}
-	if m.notifyFn != nil {
-		m.notifyFn(workspace, a, r)
+	m.mu.RLock()
+	notify := m.notifyFn
+	m.mu.RUnlock()
+	if notify != nil {
+		notify(workspace, a, r)
 	}
 	return nil
 }

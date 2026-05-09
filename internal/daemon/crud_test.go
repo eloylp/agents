@@ -2428,6 +2428,68 @@ func TestStoreCRUDAgentPatchValidationFailsFast(t *testing.T) {
 	}
 }
 
+func TestStoreCRUDAgentPatchRejectsWorkspaceMove(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/workspaces", map[string]any{
+		"id": "team-a", "name": "Team A",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "p",
+		"description": "default coder", "skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed agent: got %d, %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodPatch, "/agents/coder", map[string]any{
+		"workspace_id": "team-a",
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("workspace move patch: got %d, want 400, %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestStoreCRUDAgentPatchHonorsWorkspaceQuery(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/workspaces", map[string]any{
+		"id": "team-a", "name": "Team A",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"workspace_id": "team-a", "name": "team-coder", "backend": "claude", "prompt": "p",
+		"description": "team coder", "skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed team agent: got %d, %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodPatch, "/agents/team-coder?workspace=default", map[string]any{
+		"description": "wrong workspace",
+	})
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("patch from wrong workspace: got %d, want 404, %s", rr.Code, rr.Body.String())
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/agents/team-coder?workspace=team-a", map[string]any{
+		"description": "updated team coder",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("patch from matching workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var out storeAgentJSON
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.WorkspaceID != "team-a" || out.Description != "updated team coder" {
+		t.Fatalf("patched agent = %+v, want team-a updated description", out)
+	}
+}
+
 // ── PATCH /skills/{name} ────────────────────────────────────────────
 
 func TestStoreCRUDSkillPatchPrompt(t *testing.T) {

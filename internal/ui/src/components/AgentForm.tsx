@@ -55,6 +55,10 @@ export default function AgentForm({
 
   const backendOptions = backends.filter(b => b.detected !== false)
   const modelsForBackend = backendOptions.find(b => b.name === form.backend)?.models ?? []
+  const promptRef = form.prompt_ref.trim()
+  const scopeRepo = form.scope_repo.trim()
+  const canSave = !saving && form.name.trim() !== '' && form.backend.trim() !== '' && form.description.trim() !== '' &&
+    promptRef !== '' && promptNames.includes(promptRef) && (form.scope_type !== 'repo' || scopeRepo !== '')
 
   useEffect(() => {
     if (!form.model) return
@@ -151,7 +155,7 @@ export default function AgentForm({
         </button>
         <button
           onClick={() => onSave(form)}
-          disabled={saving || !form.name.trim() || !form.backend.trim() || !form.description.trim() || !form.prompt_ref.trim() || (form.scope_type === 'repo' && !form.scope_repo.trim())}
+          disabled={!canSave}
           style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
           {saving ? 'Saving...' : 'Save'}
