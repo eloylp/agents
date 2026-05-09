@@ -15,16 +15,16 @@ func registerBudgetTools(srv *server.MCPServer, deps Deps) {
 	}
 	srv.AddTool(
 		mcpgo.NewTool("list_token_budgets",
-			mcpgo.WithDescription("List all token budgets. Each budget caps token usage for a scope (global, backend, or agent) over a UTC calendar period (daily, weekly, monthly)."),
+			mcpgo.WithDescription("List all token budgets. Each budget caps token usage for a scope (global, workspace, repo, agent, backend, or workspace combinations) over a UTC calendar period (daily, weekly, monthly)."),
 		),
 		toolListTokenBudgets(deps),
 	)
 	srv.AddTool(
 		mcpgo.NewTool("create_token_budget",
-			mcpgo.WithDescription("Create a token budget. scope_kind: global (all runs), backend (by backend name), agent (by agent name). Periods are UTC calendar windows: daily, weekly (Sunday start), monthly. alert_at_pct (0-100) triggers the NavBar banner when usage reaches that percentage of cap_tokens; 0 disables alerts."),
+			mcpgo.WithDescription("Create a token budget. scope_kind supports global, workspace, repo, agent, backend, workspace+repo, workspace+agent, workspace+backend, and workspace+repo+agent. Periods are UTC calendar windows: daily, weekly (Sunday start), monthly. alert_at_pct (0-100) triggers the NavBar banner when usage reaches that percentage of cap_tokens; 0 disables alerts."),
 			mcpgo.WithString("scope_kind",
 				mcpgo.Required(),
-				mcpgo.Description(`"global", "backend", or "agent".`),
+				mcpgo.Description(`"global", "workspace", "repo", "agent", "backend", "workspace+repo", "workspace+agent", "workspace+backend", or "workspace+repo+agent".`),
 			),
 			mcpgo.WithString("scope_name",
 				mcpgo.Description("Legacy name for simple workspace, repo, agent, or backend scopes. Prefer workspace/repo/agent/backend fields for composite scopes."),
@@ -66,10 +66,10 @@ func registerBudgetTools(srv *server.MCPServer, deps Deps) {
 				mcpgo.Description("Budget ID (from list_token_budgets)."),
 			),
 			mcpgo.WithString("scope_kind",
-				mcpgo.Description(`"global", "backend", or "agent".`),
+				mcpgo.Description(`"global", "workspace", "repo", "agent", "backend", "workspace+repo", "workspace+agent", "workspace+backend", or "workspace+repo+agent".`),
 			),
 			mcpgo.WithString("scope_name",
-				mcpgo.Description("Backend or agent name for non-global scopes."),
+				mcpgo.Description("Legacy name for simple workspace, repo, agent, or backend scopes. Prefer workspace/repo/agent/backend fields for composite scopes."),
 			),
 			mcpgo.WithString("workspace", mcpgo.Description("Workspace id/name.")),
 			mcpgo.WithString("repo", mcpgo.Description(`Repo full name "owner/repo".`)),

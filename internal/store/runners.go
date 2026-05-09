@@ -227,6 +227,8 @@ func appendRunnerWorkspaceFilter(where string) string {
 }
 
 func workspaceFromEventBlob(blob string) string {
+	// These field names intentionally mirror workflow.Event's default JSON
+	// encoding; keep this partial decode aligned if Event gains explicit tags.
 	var partial struct {
 		WorkspaceID string `json:"WorkspaceID"`
 	}
@@ -290,8 +292,9 @@ func scanRunnerRow(s scanner) (RunnerRecord, error) {
 		rec.Status = RunnerEnqueued
 	}
 	// Partial blob decode, keep the listing useful even if the payload
-	// schema gets new fields. A malformed blob leaves Kind/Repo/Number
-	// zero rather than failing the whole listing.
+	// schema gets new fields. Field names mirror workflow.Event's default
+	// JSON encoding. A malformed blob leaves Kind/Repo/Number zero rather
+	// than failing the whole listing.
 	var partial struct {
 		ID          string `json:"ID"`
 		WorkspaceID string `json:"WorkspaceID"`

@@ -140,12 +140,12 @@ func normalizeBudget(b TokenBudget) TokenBudget {
 	b.ScopeKind = strings.TrimSpace(b.ScopeKind)
 	b.ScopeName = strings.TrimSpace(b.ScopeName)
 	b.WorkspaceID = strings.TrimSpace(b.WorkspaceID)
-	b.Repo = strings.TrimSpace(b.Repo)
-	b.Agent = strings.TrimSpace(b.Agent)
-	b.Backend = strings.TrimSpace(b.Backend)
 	if b.WorkspaceID != "" {
 		b.WorkspaceID = fleet.NormalizeWorkspaceID(b.WorkspaceID)
 	}
+	b.Repo = fleet.NormalizeRepoName(b.Repo)
+	b.Agent = fleet.NormalizeAgentName(b.Agent)
+	b.Backend = fleet.NormalizeBackendName(b.Backend)
 	if b.ScopeName != "" {
 		switch b.ScopeKind {
 		case "workspace":
@@ -154,15 +154,15 @@ func normalizeBudget(b TokenBudget) TokenBudget {
 			}
 		case "repo":
 			if b.Repo == "" {
-				b.Repo = b.ScopeName
+				b.Repo = fleet.NormalizeRepoName(b.ScopeName)
 			}
 		case "agent":
 			if b.Agent == "" {
-				b.Agent = b.ScopeName
+				b.Agent = fleet.NormalizeAgentName(b.ScopeName)
 			}
 		case "backend":
 			if b.Backend == "" {
-				b.Backend = b.ScopeName
+				b.Backend = fleet.NormalizeBackendName(b.ScopeName)
 			}
 		}
 	}
@@ -194,7 +194,7 @@ func scanTokenBudget(s rowScanner) (TokenBudget, error) {
 		return TokenBudget{}, err
 	}
 	b.Enabled = intToBool(enabled)
-	return b, nil
+	return normalizeBudget(b), nil
 }
 
 // ListTokenBudgets returns all token budgets ordered by scope_kind, scope_name, period.
@@ -366,15 +366,15 @@ func TokenUsageFor(db *sql.DB, workspaceID, repo, backend, agentName, period str
 	}
 	if repo != "" {
 		conditions = append(conditions, "repo = ?")
-		args = append(args, repo)
+		args = append(args, fleet.NormalizeRepoName(repo))
 	}
 	if backend != "" {
 		conditions = append(conditions, "backend = ?")
-		args = append(args, backend)
+		args = append(args, fleet.NormalizeBackendName(backend))
 	}
 	if agentName != "" {
 		conditions = append(conditions, "agent = ?")
-		args = append(args, agentName)
+		args = append(args, fleet.NormalizeAgentName(agentName))
 	}
 	q := fmt.Sprintf(
 		`SELECT COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0) FROM traces WHERE %s`,
@@ -395,6 +395,9 @@ func CheckBudgets(db *sql.DB, workspaceID, repo, backend, agentName string) erro
 // errors are logged and ignored so enforcement defects do not halt the fleet.
 func CheckBudgetsWithLogger(db *sql.DB, workspaceID, repo, backend, agentName string, logger zerolog.Logger) error {
 	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	repo = fleet.NormalizeRepoName(repo)
+	backend = fleet.NormalizeBackendName(backend)
+	agentName = fleet.NormalizeAgentName(agentName)
 	budgets, err := ListTokenBudgets(db)
 	if err != nil {
 		logger.Error().Err(err).Str("backend", backend).Str("agent", agentName).Msg("token budget check failed open: list budgets")
@@ -404,6 +407,8 @@ func CheckBudgetsWithLogger(db *sql.DB, workspaceID, repo, backend, agentName st
 		if !b.Enabled || b.CapTokens <= 0 {
 			continue
 		}
+		// Simple repo/agent/backend budgets are intentionally global across
+		// workspaces; use workspace+* kinds for workspace-isolated caps.
 		switch b.ScopeKind {
 		case "global":
 			// always applies
@@ -494,6 +499,8 @@ func BudgetAlerts(db *sql.DB) ([]BudgetAlert, error) {
 		var scopeBackend, scopeAgent string
 		var scopeWorkspace, scopeRepo string
 		switch b.ScopeKind {
+		case "global":
+			// Empty filters make TokenUsageFor aggregate all workspaces and dimensions.
 		case "workspace":
 			scopeWorkspace = b.WorkspaceID
 		case "repo":
@@ -538,7 +545,7 @@ func TokenLeaderboard(db *sql.DB, workspaceID, repo, period string) ([]Leaderboa
 	}
 	if repo != "" {
 		conditions = append(conditions, "repo = ?")
-		args = append(args, repo)
+		args = append(args, fleet.NormalizeRepoName(repo))
 	}
 	q := fmt.Sprintf(`
 		SELECT

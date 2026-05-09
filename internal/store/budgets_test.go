@@ -138,6 +138,110 @@ func TestTokenBudgetCreatePatchConflictAndValidation(t *testing.T) {
 	}
 }
 
+func TestTokenBudgetNormalizesLegacyScopeName(t *testing.T) {
+	t.Parallel()
+	db := budgetTestDB(t)
+
+	tests := []struct {
+		name       string
+		budget     store.TokenBudget
+		checkRepo  string
+		checkBack  string
+		checkAgent string
+		wantName   string
+	}{
+		{
+			name: "repo",
+			budget: store.TokenBudget{
+				ScopeKind:  "repo",
+				ScopeName:  " Owner/Foo ",
+				Period:     "daily",
+				CapTokens:  10,
+				AlertAtPct: 80,
+				Enabled:    true,
+			},
+			checkRepo:  "OWNER/FOO",
+			checkBack:  "claude",
+			checkAgent: "coder",
+			wantName:   "owner/foo",
+		},
+		{
+			name: "agent",
+			budget: store.TokenBudget{
+				ScopeKind:  "agent",
+				ScopeName:  " Coder ",
+				Period:     "daily",
+				CapTokens:  10,
+				AlertAtPct: 80,
+				Enabled:    true,
+			},
+			checkRepo:  "owner/foo",
+			checkBack:  "claude",
+			checkAgent: "CODER",
+			wantName:   "coder",
+		},
+		{
+			name: "backend",
+			budget: store.TokenBudget{
+				ScopeKind:  "backend",
+				ScopeName:  " Claude ",
+				Period:     "daily",
+				CapTokens:  10,
+				AlertAtPct: 80,
+				Enabled:    true,
+			},
+			checkRepo:  "owner/foo",
+			checkBack:  "CLAUDE",
+			checkAgent: "coder",
+			wantName:   "claude",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			created, err := store.CreateTokenBudget(db, tc.budget)
+			if err != nil {
+				t.Fatalf("create budget: %v", err)
+			}
+			if created.ScopeName != tc.wantName {
+				t.Fatalf("scope_name = %q, want %q", created.ScopeName, tc.wantName)
+			}
+
+			insertTraceUsage(t, db, "legacy-"+tc.name, "coder", "claude", "owner/foo", 10, 0, 0, 0)
+			err = store.CheckBudgets(db, "default", tc.checkRepo, tc.checkBack, tc.checkAgent)
+			var exceeded *store.BudgetExceededError
+			if !errors.As(err, &exceeded) {
+				t.Fatalf("CheckBudgets err = %T %v, want BudgetExceededError", err, err)
+			}
+
+			if err := store.DeleteTokenBudget(db, created.ID); err != nil {
+				t.Fatalf("delete budget: %v", err)
+			}
+		})
+	}
+}
+
+func TestLegacyStoredBudgetRowsAreNormalizedForChecks(t *testing.T) {
+	t.Parallel()
+	db := budgetTestDB(t)
+	if _, err := db.Exec(`
+		INSERT INTO token_budgets (scope_kind, scope_name, workspace_id, repo, agent, backend, period, cap_tokens, alert_at_pct, enabled)
+		VALUES ('repo', 'Owner/Foo', '', 'Owner/Foo', '', '', 'daily', 10, 80, 1)`,
+	); err != nil {
+		t.Fatalf("insert legacy budget: %v", err)
+	}
+	insertTraceUsage(t, db, "legacy-row", "coder", "claude", "owner/foo", 10, 0, 0, 0)
+
+	err := store.CheckBudgets(db, "default", "OWNER/FOO", "CLAUDE", "CODER")
+	var exceeded *store.BudgetExceededError
+	if !errors.As(err, &exceeded) {
+		t.Fatalf("CheckBudgets err = %T %v, want BudgetExceededError", err, err)
+	}
+	if exceeded.Budget.ScopeName != "owner/foo" || exceeded.Budget.Repo != "owner/foo" {
+		t.Fatalf("budget = %+v, want normalized owner/foo scope", exceeded.Budget)
+	}
+}
+
 func TestCheckBudgetsExceededAndFailOpen(t *testing.T) {
 	t.Parallel()
 	db := budgetTestDB(t)

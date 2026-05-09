@@ -866,8 +866,6 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	// observe store gzips it before persistence. Token usage comes
 	// from the runner's CLI parser.
 	if e.traceRec != nil {
-		// TODO(workspaces): persist workspace on trace spans when the observe
-		// schema grows workspace-scoped event and trace filters.
 		status, errMsg := "success", ""
 		if runErr != nil {
 			status = "error"

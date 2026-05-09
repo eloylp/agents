@@ -269,6 +269,10 @@ func importWorkspaces(tx *sql.Tx, workspaces []fleet.Workspace) error {
 		if err := validateEntityID(w.ID); err != nil {
 			return fmt.Errorf("store import: workspace %q: %w", w.Name, err)
 		}
+		var exists bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM workspaces WHERE id = ?)`, w.ID).Scan(&exists); err != nil {
+			return fmt.Errorf("store import: check workspace %s: %w", w.ID, err)
+		}
 		if _, err := tx.Exec(`
 			INSERT INTO workspaces (id, name, description, updated_at)
 			VALUES (?, ?, ?, datetime('now'))
@@ -283,8 +287,10 @@ func importWorkspaces(tx *sql.Tx, workspaces []fleet.Workspace) error {
 			}
 			return fmt.Errorf("store import: upsert workspace %s: %w", w.ID, err)
 		}
-		if err := seedWorkspaceGuardrails(tx, w.ID); err != nil {
-			return err
+		if !exists {
+			if err := seedWorkspaceGuardrails(tx, w.ID); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

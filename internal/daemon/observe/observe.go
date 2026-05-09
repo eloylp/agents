@@ -10,6 +10,7 @@
 package observe
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -143,7 +144,7 @@ func (h *Handler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 // HandleEventsStream serves GET /events/stream as a Server-Sent Events
 // stream. Each new event is pushed as a "data: <json>\n\n" message.
 func (h *Handler) HandleEventsStream(w http.ResponseWriter, r *http.Request) {
-	serveSSE(w, r, h.events.EventsSSE)
+	serveWorkspaceSSE(w, r, h.events.EventsSSE)
 }
 
 // agentsForEvent resolves the set of agents that ran (or are running)
@@ -198,7 +199,7 @@ func (h *Handler) HandleTrace(w http.ResponseWriter, r *http.Request) {
 // HandleTracesStream serves GET /traces/stream as a Server-Sent Events
 // stream. Each completed span is pushed as a "data: <json>\n\n" message.
 func (h *Handler) HandleTracesStream(w http.ResponseWriter, r *http.Request) {
-	serveSSE(w, r, h.events.TracesSSE)
+	serveWorkspaceSSE(w, r, h.events.TracesSSE)
 }
 
 // HandleTraceSteps serves GET /traces/{span_id}/steps, the tool-loop
@@ -488,6 +489,21 @@ func serveSSE(w http.ResponseWriter, r *http.Request, hub SSEHub) {
 	ServeSSEWithInterval(w, r, hub, defaultSSEHeartbeatInterval)
 }
 
+func serveWorkspaceSSE(w http.ResponseWriter, r *http.Request, hub SSEHub) {
+	raw, ok := r.URL.Query()["workspace"]
+	if !ok {
+		serveSSE(w, r, hub)
+		return
+	}
+	workspaceID := fleet.NormalizeWorkspaceID("")
+	if len(raw) > 0 {
+		workspaceID = fleet.NormalizeWorkspaceID(raw[0])
+	}
+	ServeSSEWithIntervalFiltered(w, r, hub, defaultSSEHeartbeatInterval, func(msg []byte) bool {
+		return workspaceFromSSEMessage(msg) == workspaceID
+	})
+}
+
 // ServeSSEWithInterval is the testable core of serveSSE; callers that need a
 // different heartbeat period (e.g. tests) use this directly.
 //
@@ -497,6 +513,13 @@ func serveSSE(w http.ResponseWriter, r *http.Request, hub SSEHub) {
 // allowed to write indefinitely, so we remove the deadline here without
 // affecting other connections.
 func ServeSSEWithInterval(w http.ResponseWriter, r *http.Request, hub SSEHub, heartbeatInterval time.Duration) {
+	ServeSSEWithIntervalFiltered(w, r, hub, heartbeatInterval, nil)
+}
+
+// ServeSSEWithIntervalFiltered is ServeSSEWithInterval with an optional
+// per-message predicate. Heartbeats and connection setup comments are never
+// filtered.
+func ServeSSEWithIntervalFiltered(w http.ResponseWriter, r *http.Request, hub SSEHub, heartbeatInterval time.Duration, filter func([]byte) bool) {
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 
 	flusher, ok := w.(http.Flusher)
@@ -536,6 +559,9 @@ func ServeSSEWithInterval(w http.ResponseWriter, r *http.Request, hub SSEHub, he
 			if !ok {
 				return
 			}
+			if filter != nil && !filter(msg) {
+				continue
+			}
 			_, err := w.Write(msg)
 			if err != nil {
 				return
@@ -543,4 +569,29 @@ func ServeSSEWithInterval(w http.ResponseWriter, r *http.Request, hub SSEHub, he
 			flusher.Flush()
 		}
 	}
+}
+
+func workspaceFromSSEMessage(msg []byte) string {
+	for _, line := range bytes.Split(msg, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		var payload struct {
+			WorkspaceID string `json:"workspace_id"`
+			Workspace   string `json:"workspace"`
+		}
+		data := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+		if err := json.Unmarshal(data, &payload); err != nil {
+			return ""
+		}
+		if payload.WorkspaceID != "" {
+			return fleet.NormalizeWorkspaceID(payload.WorkspaceID)
+		}
+		if payload.Workspace != "" {
+			return fleet.NormalizeWorkspaceID(payload.Workspace)
+		}
+		return ""
+	}
+	return ""
 }
