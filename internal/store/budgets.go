@@ -181,6 +181,18 @@ func normalizeBudget(b TokenBudget) TokenBudget {
 	case "backend":
 		b.ScopeName = b.Backend
 		b.WorkspaceID, b.Repo, b.Agent = "", "", ""
+	case "workspace+repo":
+		b.ScopeName = ""
+		b.Agent, b.Backend = "", ""
+	case "workspace+agent":
+		b.ScopeName = ""
+		b.Repo, b.Backend = "", ""
+	case "workspace+backend":
+		b.ScopeName = ""
+		b.Repo, b.Agent = "", ""
+	case "workspace+repo+agent":
+		b.ScopeName = ""
+		b.Backend = ""
 	default:
 		b.ScopeName = ""
 	}

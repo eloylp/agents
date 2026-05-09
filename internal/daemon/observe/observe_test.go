@@ -441,6 +441,66 @@ func TestHandleSSEStreams(t *testing.T) {
 	}
 }
 
+func TestHandleWorkspaceSSEStreamsFilterByWorkspace(t *testing.T) {
+	t.Parallel()
+
+	obs := newTestEvents(t)
+	h := newHandlerOnStore(t, obs)
+
+	tests := []struct {
+		name    string
+		handler func(http.ResponseWriter, *http.Request)
+		publish func(msg []byte)
+	}{
+		{
+			name:    "events/stream",
+			handler: h.HandleEventsStream,
+			publish: obs.EventsSSE.Publish,
+		},
+		{
+			name:    "traces/stream",
+			handler: h.HandleTracesStream,
+			publish: obs.TracesSSE.Publish,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			cap := newSSECapture()
+			req := httptest.NewRequest(http.MethodGet, "/"+tc.name+"?workspace=team-a", nil).WithContext(ctx)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				tc.handler(cap, req)
+			}()
+
+			if got := mustReadSSEMsg(t, cap.writes, 2*time.Second); got != ": connected\n\n" {
+				t.Fatalf("want connected comment, got %q", got)
+			}
+
+			skipped := `data: {"id":"default","workspace_id":"default"}` + "\n\n"
+			delivered := `data: {"id":"team","workspace_id":"team-a"}` + "\n\n"
+			tc.publish([]byte(skipped))
+			tc.publish([]byte(delivered))
+			if got := mustReadSSEMsg(t, cap.writes, 2*time.Second); got != delivered {
+				t.Fatalf("workspace-filtered stream delivered %q, want %q", got, delivered)
+			}
+
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Error("handler did not exit after context cancellation")
+			}
+		})
+	}
+}
+
 // ── /traces ──────────────────────────────────────────────────────────────────────────────
 
 func TestHandleTracesReturnsStoredSpans(t *testing.T) {

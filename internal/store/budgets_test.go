@@ -81,6 +81,94 @@ func TestWorkspaceBudgetsAndLeaderboardFilter(t *testing.T) {
 	}
 }
 
+func TestTokenBudgetCompositeScopesClearUnusedFields(t *testing.T) {
+	t.Parallel()
+	db := budgetTestDB(t)
+
+	tests := []struct {
+		name string
+		in   store.TokenBudget
+		want store.TokenBudget
+	}{
+		{
+			name: "workspace repo clears agent and backend",
+			in: store.TokenBudget{
+				ScopeKind:   "workspace+repo",
+				WorkspaceID: "Team-A",
+				Repo:        "Owner/Repo",
+				Agent:       "stale-agent",
+				Backend:     "stale-backend",
+				Period:      "daily",
+				CapTokens:   100,
+				Enabled:     true,
+			},
+			want: store.TokenBudget{WorkspaceID: "Team-A", Repo: "owner/repo"},
+		},
+		{
+			name: "workspace agent clears repo and backend",
+			in: store.TokenBudget{
+				ScopeKind:   "workspace+agent",
+				WorkspaceID: "Team-A",
+				Repo:        "stale/repo",
+				Agent:       "Coder",
+				Backend:     "stale-backend",
+				Period:      "daily",
+				CapTokens:   100,
+				Enabled:     true,
+			},
+			want: store.TokenBudget{WorkspaceID: "Team-A", Agent: "coder"},
+		},
+		{
+			name: "workspace backend clears repo and agent",
+			in: store.TokenBudget{
+				ScopeKind:   "workspace+backend",
+				WorkspaceID: "Team-A",
+				Repo:        "stale/repo",
+				Agent:       "stale-agent",
+				Backend:     "Claude",
+				Period:      "daily",
+				CapTokens:   100,
+				Enabled:     true,
+			},
+			want: store.TokenBudget{WorkspaceID: "Team-A", Backend: "claude"},
+		},
+		{
+			name: "workspace repo agent clears backend",
+			in: store.TokenBudget{
+				ScopeKind:   "workspace+repo+agent",
+				WorkspaceID: "Team-A",
+				Repo:        "Owner/Repo",
+				Agent:       "Coder",
+				Backend:     "stale-backend",
+				Period:      "daily",
+				CapTokens:   100,
+				Enabled:     true,
+			},
+			want: store.TokenBudget{WorkspaceID: "Team-A", Repo: "owner/repo", Agent: "coder"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			created, err := store.CreateTokenBudget(db, tc.in)
+			if err != nil {
+				t.Fatalf("CreateTokenBudget: %v", err)
+			}
+			if created.ScopeName != "" {
+				t.Fatalf("scope_name = %q, want empty composite display field", created.ScopeName)
+			}
+			if created.WorkspaceID != tc.want.WorkspaceID || created.Repo != tc.want.Repo || created.Agent != tc.want.Agent || created.Backend != tc.want.Backend {
+				t.Fatalf("created scope fields = workspace=%q repo=%q agent=%q backend=%q, want workspace=%q repo=%q agent=%q backend=%q",
+					created.WorkspaceID, created.Repo, created.Agent, created.Backend,
+					tc.want.WorkspaceID, tc.want.Repo, tc.want.Agent, tc.want.Backend)
+			}
+			if err := store.DeleteTokenBudget(db, created.ID); err != nil {
+				t.Fatalf("DeleteTokenBudget: %v", err)
+			}
+		})
+	}
+}
+
 func TestTokenBudgetCreatePatchConflictAndValidation(t *testing.T) {
 	t.Parallel()
 	db := budgetTestDB(t)
