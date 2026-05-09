@@ -866,12 +866,10 @@ func TestToolGetGraphSeedsNodesFromFleetAndEdges(t *testing.T) {
 	if len(got.Nodes) != 3 {
 		t.Fatalf("expected 3 nodes, got %+v", got.Nodes)
 	}
-	ids := map[string]bool{}
-	for _, n := range got.Nodes {
-		ids[n["id"].(string)] = true
-	}
 	for _, want := range []string{"coder", "reviewer", "ghost"} {
-		if !ids[want] {
+		if !slices.ContainsFunc(got.Nodes, func(n map[string]any) bool {
+			return n["id"] == want
+		}) {
 			t.Errorf("missing node %q in %+v", want, got.Nodes)
 		}
 	}
