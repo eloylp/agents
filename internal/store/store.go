@@ -396,6 +396,9 @@ func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent, updatePromptContent bool) (str
 		if err == nil {
 			return existingID, nil
 		}
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("store import: agent %s references unknown prompt_ref %q", a.Name, a.PromptRef)
+		}
 		if !errors.Is(err, sql.ErrNoRows) {
 			return "", fmt.Errorf("store import: read prompt %s: %w", name, err)
 		}

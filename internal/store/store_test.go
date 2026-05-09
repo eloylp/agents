@@ -730,6 +730,22 @@ func TestAgentPromptIDMustExist(t *testing.T) {
 	}
 }
 
+func TestAgentPromptRefMustExistWithoutInlinePrompt(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Agents[0].PromptRef = "missing-prompt"
+	cfg.Agents[0].Prompt = ""
+	err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil)
+	if err == nil {
+		t.Fatal("ImportAll succeeded, want missing prompt_ref error")
+	}
+	if !strings.Contains(err.Error(), `references unknown prompt_ref "missing-prompt"`) {
+		t.Fatalf("error = %v, want missing prompt_ref validation", err)
+	}
+}
+
 func TestPromptRefDoesNotOverwritePromptCatalogContent(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
