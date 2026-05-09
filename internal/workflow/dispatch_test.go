@@ -198,10 +198,14 @@ func TestDispatcherDropsTargetOutsideWorkspace(t *testing.T) {
 		},
 		"pr-reviewer": {
 			Name:          "pr-reviewer",
+			WorkspaceID:   "team-a",
 			Description:   "Reviews PRs",
 			AllowDispatch: true,
 		},
 	})
+	if _, err := st.DB().Exec("UPDATE agents SET workspace_id = 'default' WHERE name = 'pr-reviewer'"); err != nil {
+		t.Fatalf("move target outside workspace: %v", err)
+	}
 	if _, err := st.DB().Exec("INSERT OR REPLACE INTO repos(name, workspace_id, enabled) VALUES('owner/repo', 'team-a', 1)"); err != nil {
 		t.Fatalf("seed repo workspace: %v", err)
 	}

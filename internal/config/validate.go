@@ -152,10 +152,11 @@ func (c *Config) validateAgents() error {
 		if a.Name == "" {
 			return errors.New("config: agent name is required")
 		}
-		if _, dup := seen[a.Name]; dup {
-			return fmt.Errorf("config: duplicate agent name %q", a.Name)
+		key := workspaceNameKey(a.WorkspaceID, a.Name)
+		if _, dup := seen[key]; dup {
+			return fmt.Errorf("config: duplicate agent name %q in workspace %q", a.Name, fleet.NormalizeWorkspaceID(a.WorkspaceID))
 		}
-		seen[a.Name] = struct{}{}
+		seen[key] = struct{}{}
 
 		if a.Backend == "" {
 			return fmt.Errorf("config: agent %q: backend is required", a.Name)
@@ -185,11 +186,11 @@ func (c *Config) validateAgents() error {
 func validateDispatchWiring(agents []fleet.Agent) error {
 	agentByName := make(map[string]fleet.Agent, len(agents))
 	for _, a := range agents {
-		agentByName[a.Name] = a
+		agentByName[workspaceNameKey(a.WorkspaceID, a.Name)] = a
 	}
 	for _, a := range agents {
 		for _, t := range a.CanDispatch {
-			target, ok := agentByName[t]
+			target, ok := agentByName[workspaceNameKey(a.WorkspaceID, t)]
 			if !ok {
 				return fmt.Errorf("config: agent %q: can_dispatch references unknown agent %q", a.Name, t)
 			}
@@ -217,16 +218,16 @@ func (c *Config) validateRepos() error {
 		if err := fleet.ValidateRepoName(r.Name); err != nil {
 			return fmt.Errorf("config: %w", err)
 		}
-		key := strings.ToLower(r.Name)
+		key := workspaceNameKey(r.WorkspaceID, r.Name)
 		if _, dup := seen[key]; dup {
-			return fmt.Errorf("config: duplicate repo %q", r.Name)
+			return fmt.Errorf("config: duplicate repo %q in workspace %q", r.Name, fleet.NormalizeWorkspaceID(r.WorkspaceID))
 		}
 		seen[key] = struct{}{}
 		for i, b := range r.Use {
 			if b.Agent == "" {
 				return fmt.Errorf("config: repo %q: binding #%d has no agent", r.Name, i)
 			}
-			if _, ok := c.AgentByName(b.Agent); !ok {
+			if _, ok := c.AgentByNameInWorkspace(b.Agent, r.WorkspaceID); !ok {
 				return fmt.Errorf("config: repo %q: binding references unknown agent %q", r.Name, b.Agent)
 			}
 			if !b.IsCron() && !b.IsLabel() && !b.IsEvent() {

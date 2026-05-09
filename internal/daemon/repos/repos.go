@@ -185,6 +185,7 @@ func (h *Handler) handleRepoGet(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleRepoPatch(w http.ResponseWriter, r *http.Request) {
 	repoName := repoNameFromRequest(r)
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	var req repoRuntimeSettingsJSON
 	if !decodeBody(w, r, h.maxBodyBytes, &req) {
 		return
@@ -193,7 +194,7 @@ func (h *Handler) handleRepoPatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "at least one field is required", http.StatusBadRequest)
 		return
 	}
-	repo, err := h.PatchRepo(repoName, *req.Enabled)
+	repo, err := h.PatchRepoInWorkspace(workspaceID, repoName, *req.Enabled)
 	if err != nil {
 		h.writeErr(w, err, "repo patch or cron reload")
 		return
@@ -203,7 +204,8 @@ func (h *Handler) handleRepoPatch(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleRepoDelete(w http.ResponseWriter, r *http.Request) {
 	repoName := repoNameFromRequest(r)
-	if err := h.DeleteRepo(repoName); err != nil {
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
+	if err := h.DeleteRepoInWorkspace(workspaceID, repoName); err != nil {
 		h.writeErr(w, err, "repo delete or cron reload")
 		return
 	}
@@ -212,13 +214,14 @@ func (h *Handler) handleRepoDelete(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleCreateBinding(w http.ResponseWriter, r *http.Request) {
 	repoName := repoNameFromVars(r)
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	var req storeBindingJSON
 	if !decodeBody(w, r, h.maxBodyBytes, &req) {
 		return
 	}
 	// Ignore any ID the client sends, the store picks it.
 	req.ID = 0
-	b, err := h.CreateBinding(repoName, req.toConfig())
+	b, err := h.CreateBindingInWorkspace(workspaceID, repoName, req.toConfig())
 	if err != nil {
 		h.writeErr(w, err, "binding create or cron reload")
 		return
@@ -228,16 +231,17 @@ func (h *Handler) handleCreateBinding(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleGetBinding(w http.ResponseWriter, r *http.Request) {
 	repoName := repoNameFromVars(r)
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	id, ok := bindingIDFromVars(w, r)
 	if !ok {
 		return
 	}
-	owner, b, found, err := h.store.ReadBinding(id)
+	bindingWorkspace, owner, b, found, err := h.store.ReadWorkspaceBinding(id)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read binding: %v", err), http.StatusInternalServerError)
 		return
 	}
-	if !found || owner != repoName {
+	if !found || owner != repoName || fleet.NormalizeWorkspaceID(bindingWorkspace) != workspaceID {
 		http.NotFound(w, r)
 		return
 	}
@@ -246,6 +250,7 @@ func (h *Handler) handleGetBinding(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleUpdateBinding(w http.ResponseWriter, r *http.Request) {
 	repoName := repoNameFromVars(r)
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	id, ok := bindingIDFromVars(w, r)
 	if !ok {
 		return
@@ -254,7 +259,7 @@ func (h *Handler) handleUpdateBinding(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, h.maxBodyBytes, &req) {
 		return
 	}
-	b, err := h.UpdateBinding(repoName, id, req.toConfig())
+	b, err := h.UpdateBindingInWorkspace(workspaceID, repoName, id, req.toConfig())
 	if err != nil {
 		h.writeErr(w, err, "binding update or cron reload")
 		return
@@ -264,11 +269,12 @@ func (h *Handler) handleUpdateBinding(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleDeleteBinding(w http.ResponseWriter, r *http.Request) {
 	repoName := repoNameFromVars(r)
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	id, ok := bindingIDFromVars(w, r)
 	if !ok {
 		return
 	}
-	if err := h.DeleteBinding(repoName, id); err != nil {
+	if err := h.DeleteBindingInWorkspace(workspaceID, repoName, id); err != nil {
 		h.writeErr(w, err, "binding delete or cron reload")
 		return
 	}
@@ -300,12 +306,19 @@ func (h *Handler) UpsertRepo(r fleet.Repo) (fleet.Repo, error) {
 // bindings. Returns the canonical Repo (with current bindings) so callers can
 // refresh their view. *store.ErrNotFound when the repo does not exist.
 func (h *Handler) PatchRepo(repoName string, enabled bool) (fleet.Repo, error) {
+	return h.PatchRepoInWorkspace(fleet.DefaultWorkspaceID, repoName, enabled)
+}
+
+func (h *Handler) PatchRepoInWorkspace(workspaceID, repoName string, enabled bool) (fleet.Repo, error) {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	// Load the repo (and its bindings) so we can return it intact.
 	repos, err := h.store.ReadRepos()
 	if err != nil {
 		return fleet.Repo{}, err
 	}
-	idx := slices.IndexFunc(repos, func(r fleet.Repo) bool { return r.Name == repoName })
+	idx := slices.IndexFunc(repos, func(r fleet.Repo) bool {
+		return r.Name == repoName && fleet.NormalizeWorkspaceID(r.WorkspaceID) == workspaceID
+	})
 	if idx == -1 {
 		return fleet.Repo{}, &store.ErrNotFound{Msg: fmt.Sprintf("repo %q not found", repoName)}
 	}
@@ -315,7 +328,7 @@ func (h *Handler) PatchRepo(repoName string, enabled bool) (fleet.Repo, error) {
 	}
 	// Flip the enabled flag via a direct UPDATE so we don't re-run the
 	// delete+insert cycle that UpsertRepo performs on bindings.
-	if err := h.store.EnableRepo(repoName, enabled); err != nil {
+	if err := h.store.EnableWorkspaceRepo(workspaceID, repoName, enabled); err != nil {
 		return fleet.Repo{}, fmt.Errorf("patch repo %s: %w", repoName, err)
 	}
 	existing.Enabled = enabled
@@ -325,12 +338,20 @@ func (h *Handler) PatchRepo(repoName string, enabled bool) (fleet.Repo, error) {
 // DeleteRepo removes the named repo (and cascades its bindings). The
 // scheduler picks up the change on its next reconcile tick.
 func (h *Handler) DeleteRepo(name string) error {
-	return h.store.DeleteRepo(name)
+	return h.DeleteRepoInWorkspace(fleet.DefaultWorkspaceID, name)
+}
+
+func (h *Handler) DeleteRepoInWorkspace(workspaceID, name string) error {
+	return h.store.DeleteWorkspaceRepo(workspaceID, name)
 }
 
 // CreateBinding persists a new binding on repoName.
 func (h *Handler) CreateBinding(repoName string, b fleet.Binding) (fleet.Binding, error) {
-	_, persisted, err := h.store.CreateBinding(repoName, b)
+	return h.CreateBindingInWorkspace(fleet.DefaultWorkspaceID, repoName, b)
+}
+
+func (h *Handler) CreateBindingInWorkspace(workspaceID, repoName string, b fleet.Binding) (fleet.Binding, error) {
+	_, persisted, err := h.store.CreateWorkspaceBinding(workspaceID, repoName, b)
 	if err != nil {
 		return fleet.Binding{}, err
 	}
@@ -339,11 +360,15 @@ func (h *Handler) CreateBinding(repoName string, b fleet.Binding) (fleet.Binding
 
 // UpdateBinding verifies the id belongs to repoName and replaces the row.
 func (h *Handler) UpdateBinding(repoName string, id int64, b fleet.Binding) (fleet.Binding, error) {
-	existingRepo, _, found, err := h.store.ReadBinding(id)
+	return h.UpdateBindingInWorkspace(fleet.DefaultWorkspaceID, repoName, id, b)
+}
+
+func (h *Handler) UpdateBindingInWorkspace(workspaceID, repoName string, id int64, b fleet.Binding) (fleet.Binding, error) {
+	bindingWorkspace, existingRepo, _, found, err := h.store.ReadWorkspaceBinding(id)
 	if err != nil {
 		return fleet.Binding{}, err
 	}
-	if !found || existingRepo != repoName {
+	if !found || existingRepo != repoName || fleet.NormalizeWorkspaceID(bindingWorkspace) != fleet.NormalizeWorkspaceID(workspaceID) {
 		return fleet.Binding{}, &store.ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found for repo %q", id, repoName)}
 	}
 	return h.store.UpdateBinding(id, b)
@@ -363,11 +388,15 @@ func (h *Handler) ReadBinding(repoName string, id int64) (fleet.Binding, error) 
 
 // DeleteBinding verifies the id belongs to repoName and deletes it.
 func (h *Handler) DeleteBinding(repoName string, id int64) error {
-	existingRepo, _, found, err := h.store.ReadBinding(id)
+	return h.DeleteBindingInWorkspace(fleet.DefaultWorkspaceID, repoName, id)
+}
+
+func (h *Handler) DeleteBindingInWorkspace(workspaceID, repoName string, id int64) error {
+	bindingWorkspace, existingRepo, _, found, err := h.store.ReadWorkspaceBinding(id)
 	if err != nil {
 		return err
 	}
-	if !found || existingRepo != repoName {
+	if !found || existingRepo != repoName || fleet.NormalizeWorkspaceID(bindingWorkspace) != fleet.NormalizeWorkspaceID(workspaceID) {
 		return &store.ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found for repo %q", id, repoName)}
 	}
 	return h.store.DeleteBinding(id)

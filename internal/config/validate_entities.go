@@ -8,6 +8,10 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 )
 
+func workspaceNameKey(workspaceID, name string) string {
+	return fleet.NormalizeWorkspaceID(workspaceID) + "\x00" + strings.ToLower(strings.TrimSpace(name))
+}
+
 // ValidateCrossRefs checks cross-entity reference consistency across the four
 // mutable entity sets. It is called by the SQLite CRUD layer after each write
 // (within the same transaction) so that invalid fleet configurations cannot be
@@ -19,9 +23,9 @@ import (
 //   - dispatch wiring (can_dispatch) references existing dispatchable agents
 //   - every repo binding references a known agent
 func ValidateCrossRefs(agents []fleet.Agent, repos []fleet.Repo, skills map[string]fleet.Skill, backends map[string]fleet.Backend) error {
-	agentByName := make(map[string]fleet.Agent, len(agents))
+	agentByWorkspaceName := make(map[string]fleet.Agent, len(agents))
 	for _, a := range agents {
-		agentByName[a.Name] = a
+		agentByWorkspaceName[workspaceNameKey(a.WorkspaceID, a.Name)] = a
 	}
 
 	// Validate agent → backend and skill references.
@@ -45,7 +49,7 @@ func ValidateCrossRefs(agents []fleet.Agent, repos []fleet.Repo, skills map[stri
 	// Validate can_dispatch wiring.
 	for _, a := range agents {
 		for _, t := range a.CanDispatch {
-			target, ok := agentByName[t]
+			target, ok := agentByWorkspaceName[workspaceNameKey(a.WorkspaceID, t)]
 			if !ok {
 				return fmt.Errorf("config: agent %q: can_dispatch references unknown agent %q", a.Name, t)
 			}
@@ -61,7 +65,7 @@ func ValidateCrossRefs(agents []fleet.Agent, repos []fleet.Repo, skills map[stri
 	// Validate repo binding → agent references.
 	for _, r := range repos {
 		for i, b := range r.Use {
-			if _, ok := agentByName[b.Agent]; !ok {
+			if _, ok := agentByWorkspaceName[workspaceNameKey(r.WorkspaceID, b.Agent)]; !ok {
 				return fmt.Errorf("config: repo %q: binding #%d references unknown agent %q", r.Name, i, b.Agent)
 			}
 		}
@@ -126,10 +130,11 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 		if a.Name == "" {
 			return errors.New("config: agent name is required")
 		}
-		if _, dup := seen[a.Name]; dup {
-			return fmt.Errorf("config: duplicate agent name %q", a.Name)
+		agentKey := workspaceNameKey(a.WorkspaceID, a.Name)
+		if _, dup := seen[agentKey]; dup {
+			return fmt.Errorf("config: duplicate agent name %q in workspace %q", a.Name, fleet.NormalizeWorkspaceID(a.WorkspaceID))
 		}
-		seen[a.Name] = struct{}{}
+		seen[agentKey] = struct{}{}
 		if a.Backend == "" {
 			return fmt.Errorf("config: agent %q: backend is required", a.Name)
 		}
@@ -184,16 +189,16 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 		if r.Name == "" {
 			return errors.New("config: repo name is required")
 		}
-		key := strings.ToLower(r.Name)
+		key := workspaceNameKey(r.WorkspaceID, r.Name)
 		if _, dup := seenRepos[key]; dup {
-			return fmt.Errorf("config: duplicate repo %q", r.Name)
+			return fmt.Errorf("config: duplicate repo %q in workspace %q", r.Name, fleet.NormalizeWorkspaceID(r.WorkspaceID))
 		}
 		seenRepos[key] = struct{}{}
 		for i, b := range r.Use {
 			if b.Agent == "" {
 				return fmt.Errorf("config: repo %q: binding #%d has no agent", r.Name, i)
 			}
-			if _, ok := seen[strings.ToLower(b.Agent)]; !ok {
+			if _, ok := seen[workspaceNameKey(r.WorkspaceID, b.Agent)]; !ok {
 				return fmt.Errorf("config: repo %q: binding references unknown agent %q", r.Name, b.Agent)
 			}
 			if !b.IsCron() && !b.IsLabel() && !b.IsEvent() {

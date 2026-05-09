@@ -156,7 +156,7 @@ func UpsertAgent(db *sql.DB, a fleet.Agent) error {
 // delete a name that does not exist. Returns an error if the agent is still
 // referenced by any repo binding or can_dispatch list, or if it is the last agent.
 func DeleteAgent(db *sql.DB, name string) error {
-	return deleteAgent(db, name, false)
+	return DeleteWorkspaceAgent(db, fleet.DefaultWorkspaceID, name)
 }
 
 // DeleteAgentCascade removes the agent and all repo bindings that reference it
@@ -165,20 +165,29 @@ func DeleteAgent(db *sql.DB, name string) error {
 // (cascading across agent relationships would silently reshape the dispatch
 // graph; the user should opt in explicitly).
 func DeleteAgentCascade(db *sql.DB, name string) error {
-	return deleteAgent(db, name, true)
+	return DeleteWorkspaceAgentCascade(db, fleet.DefaultWorkspaceID, name)
 }
 
-func deleteAgent(db *sql.DB, name string, cascade bool) error {
+func DeleteWorkspaceAgent(db *sql.DB, workspaceID, name string) error {
+	return deleteAgent(db, workspaceID, name, false)
+}
+
+func DeleteWorkspaceAgentCascade(db *sql.DB, workspaceID, name string) error {
+	return deleteAgent(db, workspaceID, name, true)
+}
+
+func deleteAgent(db *sql.DB, workspaceID, name string, cascade bool) error {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: delete agent %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
 	if cascade {
-		if _, err := tx.Exec("DELETE FROM bindings WHERE agent=?", name); err != nil {
+		if _, err := tx.Exec("DELETE FROM bindings WHERE workspace_id=? AND agent=?", workspaceID, name); err != nil {
 			return fmt.Errorf("store: delete agent %s: cascade bindings: %w", name, err)
 		}
-	} else if refs, err := bindingsReferencing(tx, name); err != nil {
+	} else if refs, err := bindingsReferencing(tx, workspaceID, name); err != nil {
 		return fmt.Errorf("store: delete agent %s: check bindings: %w", name, err)
 	} else if len(refs) > 0 {
 		// Surface this as an ErrConflict rather than letting the raw FK
@@ -191,7 +200,7 @@ func deleteAgent(db *sql.DB, name string, cascade bool) error {
 		}
 		return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: still referenced by %d binding(s) across %d repo(s) (%s); use cascade to remove them", name, len(refs), len(distinct), list)}
 	}
-	res, err := tx.Exec("DELETE FROM agents WHERE name=?", name)
+	res, err := tx.Exec("DELETE FROM agents WHERE workspace_id=? AND name=?", workspaceID, name)
 	if err != nil {
 		return fmt.Errorf("store: delete agent %s: %w", name, err)
 	}
@@ -209,8 +218,8 @@ func deleteAgent(db *sql.DB, name string, cascade bool) error {
 // bindingsReferencing returns the repo names of every binding that points at
 // the given agent. Used by the non-cascade delete path to produce a typed
 // conflict error instead of a raw FK failure.
-func bindingsReferencing(q querier, agentName string) ([]string, error) {
-	rows, err := q.Query("SELECT repo FROM bindings WHERE agent=?", agentName)
+func bindingsReferencing(q querier, workspaceID, agentName string) ([]string, error) {
+	rows, err := q.Query("SELECT repo FROM bindings WHERE workspace_id=? AND agent=?", workspaceID, agentName)
 	if err != nil {
 		return nil, err
 	}
@@ -682,6 +691,11 @@ func normalizeBinding(b *fleet.Binding) {
 // references surface as *ErrNotFound (HTTP 404). The caller is responsible for
 // holding the store mutex and reloading cron schedules after success.
 func CreateBinding(db *sql.DB, repoName string, b fleet.Binding) (int64, fleet.Binding, error) {
+	return CreateWorkspaceBinding(db, fleet.DefaultWorkspaceID, repoName, b)
+}
+
+func CreateWorkspaceBinding(db *sql.DB, workspaceID, repoName string, b fleet.Binding) (int64, fleet.Binding, error) {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	repoName = fleet.NormalizeRepoName(repoName)
 	normalizeBinding(&b)
 	if err := validateBindingShape(b); err != nil {
@@ -695,14 +709,14 @@ func CreateBinding(db *sql.DB, repoName string, b fleet.Binding) (int64, fleet.B
 
 	// Verify the repo exists so the FK violation surfaces as a typed error.
 	var repoExists bool
-	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM repos WHERE name=?)", repoName).Scan(&repoExists); err != nil {
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM repos WHERE workspace_id=? AND name=?)", workspaceID, repoName).Scan(&repoExists); err != nil {
 		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: lookup repo: %w", err)
 	}
 	if !repoExists {
 		return 0, fleet.Binding{}, &ErrNotFound{Msg: fmt.Sprintf("repo %q not found", repoName)}
 	}
 	var agentExists bool
-	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM agents WHERE name=?)", b.Agent).Scan(&agentExists); err != nil {
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM agents WHERE workspace_id=? AND name=?)", workspaceID, b.Agent).Scan(&agentExists); err != nil {
 		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: lookup agent: %w", err)
 	}
 	if !agentExists {
@@ -719,8 +733,8 @@ func CreateBinding(db *sql.DB, repoName string, b fleet.Binding) (int64, fleet.B
 	}
 	enabled := bindingEnabledInt(b.Enabled)
 	res, err := tx.Exec(
-		`INSERT INTO bindings(repo,agent,labels,events,cron,enabled) VALUES (?,?,?,?,?,?)`,
-		repoName, b.Agent, string(labels), string(events), b.Cron, enabled,
+		`INSERT INTO bindings(workspace_id,repo,agent,labels,events,cron,enabled) VALUES (?,?,?,?,?,?,?)`,
+		workspaceID, repoName, b.Agent, string(labels), string(events), b.Cron, enabled,
 	)
 	if err != nil {
 		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: insert: %w", err)
@@ -756,8 +770,15 @@ func UpdateBinding(db *sql.DB, id int64, b fleet.Binding) (fleet.Binding, error)
 	}
 	defer tx.Rollback()
 
+	var workspaceID string
+	if err := tx.QueryRow("SELECT workspace_id FROM bindings WHERE id=?", id).Scan(&workspaceID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fleet.Binding{}, &ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found", id)}
+		}
+		return fleet.Binding{}, fmt.Errorf("store: update binding: lookup workspace: %w", err)
+	}
 	var agentExists bool
-	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM agents WHERE name=?)", b.Agent).Scan(&agentExists); err != nil {
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM agents WHERE workspace_id=? AND name=?)", workspaceID, b.Agent).Scan(&agentExists); err != nil {
 		return fleet.Binding{}, fmt.Errorf("store: update binding: lookup agent: %w", err)
 	}
 	if !agentExists {
@@ -835,24 +856,29 @@ func DeleteBinding(db *sql.DB, id int64) error {
 // Returns found=false when the row does not exist; errors only reflect
 // unexpected I/O failures.
 func ReadBinding(db *sql.DB, id int64) (repoName string, b fleet.Binding, found bool, err error) {
+	_, repoName, b, found, err = ReadWorkspaceBinding(db, id)
+	return repoName, b, found, err
+}
+
+func ReadWorkspaceBinding(db *sql.DB, id int64) (workspaceID, repoName string, b fleet.Binding, found bool, err error) {
 	var labelsJSON, eventsJSON, cron, agent string
 	var enabled int
 	err = db.QueryRow(
-		"SELECT repo,agent,labels,events,cron,enabled FROM bindings WHERE id=?", id,
-	).Scan(&repoName, &agent, &labelsJSON, &eventsJSON, &cron, &enabled)
+		"SELECT workspace_id,repo,agent,labels,events,cron,enabled FROM bindings WHERE id=?", id,
+	).Scan(&workspaceID, &repoName, &agent, &labelsJSON, &eventsJSON, &cron, &enabled)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", fleet.Binding{}, false, nil
+		return "", "", fleet.Binding{}, false, nil
 	}
 	if err != nil {
-		return "", fleet.Binding{}, false, fmt.Errorf("store: read binding %d: %w", id, err)
+		return "", "", fleet.Binding{}, false, fmt.Errorf("store: read binding %d: %w", id, err)
 	}
 	var labels []string
 	if err := json.Unmarshal([]byte(labelsJSON), &labels); err != nil {
-		return "", fleet.Binding{}, false, fmt.Errorf("store: read binding %d: parse labels: %w", id, err)
+		return "", "", fleet.Binding{}, false, fmt.Errorf("store: read binding %d: parse labels: %w", id, err)
 	}
 	var events []string
 	if err := json.Unmarshal([]byte(eventsJSON), &events); err != nil {
-		return "", fleet.Binding{}, false, fmt.Errorf("store: read binding %d: parse events: %w", id, err)
+		return "", "", fleet.Binding{}, false, fmt.Errorf("store: read binding %d: parse events: %w", id, err)
 	}
 	b = fleet.Binding{
 		ID:     id,
@@ -865,7 +891,7 @@ func ReadBinding(db *sql.DB, id int64) (repoName string, b fleet.Binding, found 
 		f := false
 		b.Enabled = &f
 	}
-	return repoName, b, true, nil
+	return workspaceID, repoName, b, true, nil
 }
 
 // nilSafeStrings normalises nil to empty slices so JSON marshalling stays
@@ -882,15 +908,20 @@ func nilSafeStrings(s []string) []string {
 // (or only) repo is allowed, see issue #302; the daemon runs cleanly with zero
 // enabled repos.
 func DeleteRepo(db *sql.DB, name string) error {
+	return DeleteWorkspaceRepo(db, fleet.DefaultWorkspaceID, name)
+}
+
+func DeleteWorkspaceRepo(db *sql.DB, workspaceID, name string) error {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: delete repo %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec("DELETE FROM bindings WHERE repo=?", name); err != nil {
+	if _, err := tx.Exec("DELETE FROM bindings WHERE workspace_id=? AND repo=?", workspaceID, name); err != nil {
 		return fmt.Errorf("store: delete bindings for repo %s: %w", name, err)
 	}
-	if _, err := tx.Exec("DELETE FROM repos WHERE name=?", name); err != nil {
+	if _, err := tx.Exec("DELETE FROM repos WHERE workspace_id=? AND name=?", workspaceID, name); err != nil {
 		return fmt.Errorf("store: delete repo %s: %w", name, err)
 	}
 	return tx.Commit()

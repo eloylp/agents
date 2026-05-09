@@ -160,17 +160,20 @@ func TestEngineSkipsAgentOutsideEventWorkspace(t *testing.T) {
 	e, runner := newTestEngine(t, func(c *config.Config) {
 		c.Agents = []fleet.Agent{
 			{Name: "team-reviewer", WorkspaceID: "team-a", Backend: "claude", Prompt: "Review team workspace."},
-			{Name: "default-reviewer", Backend: "claude", Prompt: "Review default workspace."},
+			{Name: "default-reviewer", WorkspaceID: "team-a", Backend: "claude", Prompt: "Review other repo.", ScopeType: "repo", ScopeRepo: "owner/other"},
 		}
-		c.Repos = []fleet.Repo{{
-			WorkspaceID: "team-a",
-			Name:        "owner/repo",
-			Enabled:     true,
-			Use: []fleet.Binding{
-				{Agent: "team-reviewer", Labels: []string{"ai:review"}},
-				{Agent: "default-reviewer", Labels: []string{"ai:review"}},
+		c.Repos = []fleet.Repo{
+			{
+				WorkspaceID: "team-a",
+				Name:        "owner/repo",
+				Enabled:     true,
+				Use: []fleet.Binding{
+					{Agent: "team-reviewer", Labels: []string{"ai:review"}},
+					{Agent: "default-reviewer", Labels: []string{"ai:review"}},
+				},
 			},
-		}}
+			{WorkspaceID: "team-a", Name: "owner/other", Enabled: true},
+		}
 	})
 	ev := labelEvent("issues.labeled", "owner/repo", "ai:review", 7)
 	ev.WorkspaceID = "team-a"

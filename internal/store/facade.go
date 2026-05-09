@@ -42,6 +42,12 @@ func (s *Store) ReadAgents() ([]fleet.Agent, error)   { return ReadAgents(s.db) 
 func (s *Store) UpsertAgent(a fleet.Agent) error      { return UpsertAgent(s.db, a) }
 func (s *Store) DeleteAgent(name string) error        { return DeleteAgent(s.db, name) }
 func (s *Store) DeleteAgentCascade(name string) error { return DeleteAgentCascade(s.db, name) }
+func (s *Store) DeleteWorkspaceAgent(workspace, name string) error {
+	return DeleteWorkspaceAgent(s.db, workspace, name)
+}
+func (s *Store) DeleteWorkspaceAgentCascade(workspace, name string) error {
+	return DeleteWorkspaceAgentCascade(s.db, workspace, name)
+}
 func (s *Store) ReadGraphLayout() ([]GraphNodePosition, error) {
 	return ReadGraphLayout(s.db)
 }
@@ -100,9 +106,15 @@ func (s *Store) DeleteBackend(name string) error { return DeleteBackend(s.db, na
 func (s *Store) ReadRepos() ([]fleet.Repo, error) { return ReadRepos(s.db) }
 func (s *Store) UpsertRepo(r fleet.Repo) error    { return UpsertRepo(s.db, r) }
 func (s *Store) DeleteRepo(name string) error     { return DeleteRepo(s.db, name) }
+func (s *Store) DeleteWorkspaceRepo(workspace, name string) error {
+	return DeleteWorkspaceRepo(s.db, workspace, name)
+}
 
 func (s *Store) CreateBinding(repoName string, b fleet.Binding) (int64, fleet.Binding, error) {
 	return CreateBinding(s.db, repoName, b)
+}
+func (s *Store) CreateWorkspaceBinding(workspace, repoName string, b fleet.Binding) (int64, fleet.Binding, error) {
+	return CreateWorkspaceBinding(s.db, workspace, repoName, b)
 }
 func (s *Store) UpdateBinding(id int64, b fleet.Binding) (fleet.Binding, error) {
 	return UpdateBinding(s.db, id, b)
@@ -111,11 +123,18 @@ func (s *Store) DeleteBinding(id int64) error { return DeleteBinding(s.db, id) }
 func (s *Store) ReadBinding(id int64) (string, fleet.Binding, bool, error) {
 	return ReadBinding(s.db, id)
 }
+func (s *Store) ReadWorkspaceBinding(id int64) (string, string, fleet.Binding, bool, error) {
+	return ReadWorkspaceBinding(s.db, id)
+}
 
 // EnableRepo flips a repo's enabled flag without rewriting bindings ,
 // the dedicated path that PATCH /repos/{owner}/{repo} relies on.
 func (s *Store) EnableRepo(name string, enabled bool) error {
-	_, err := s.db.Exec("UPDATE repos SET enabled=? WHERE name=?", boolToInt(enabled), name)
+	_, err := s.db.Exec("UPDATE repos SET enabled=? WHERE workspace_id=? AND name=?", boolToInt(enabled), fleet.DefaultWorkspaceID, name)
+	return err
+}
+func (s *Store) EnableWorkspaceRepo(workspace, name string, enabled bool) error {
+	_, err := s.db.Exec("UPDATE repos SET enabled=? WHERE workspace_id=? AND name=?", boolToInt(enabled), fleet.NormalizeWorkspaceID(workspace), name)
 	return err
 }
 

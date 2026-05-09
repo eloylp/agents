@@ -393,10 +393,7 @@ func importPrompts(tx *sql.Tx, prompts []fleet.Prompt) error {
 
 func importAgents(tx *sql.Tx, agents []fleet.Agent, updatePromptContent bool) error {
 	for _, a := range agents {
-		workspaceID := a.WorkspaceID
-		if workspaceID == "" {
-			workspaceID = fleet.DefaultWorkspaceID
-		}
+		workspaceID := fleet.NormalizeWorkspaceID(a.WorkspaceID)
 		scopeType := a.ScopeType
 		if scopeType == "" {
 			scopeType = "workspace"
@@ -405,7 +402,7 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent, updatePromptContent bool) er
 		if err != nil {
 			return err
 		}
-		id, err := stableAgentID(tx, a)
+		id, err := stableAgentID(tx, workspaceID, a)
 		if err != nil {
 			return err
 		}
@@ -424,9 +421,8 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent, updatePromptContent bool) er
 			INSERT INTO agents
 			  (id,workspace_id,name,backend,model,skills,prompt,prompt_id,scope_type,scope_repo,allow_prs,allow_dispatch,can_dispatch,description,allow_memory)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-			ON CONFLICT(name) DO UPDATE SET
+			ON CONFLICT(workspace_id, name) DO UPDATE SET
 				id = excluded.id,
-				workspace_id = excluded.workspace_id,
 				backend = excluded.backend,
 				model = excluded.model,
 				skills = excluded.skills,
@@ -548,9 +544,9 @@ func isUniqueConstraint(err error) bool {
 	return strings.Contains(err.Error(), "constraint failed") && strings.Contains(err.Error(), "UNIQUE")
 }
 
-func stableAgentID(q querier, a fleet.Agent) (string, error) {
+func stableAgentID(q querier, workspaceID string, a fleet.Agent) (string, error) {
 	var existing string
-	err := q.QueryRow("SELECT COALESCE(id, '') FROM agents WHERE name=?", a.Name).Scan(&existing)
+	err := q.QueryRow("SELECT COALESCE(id, '') FROM agents WHERE workspace_id=? AND name=?", workspaceID, a.Name).Scan(&existing)
 	if err == nil && existing != "" {
 		return existing, nil
 	}
@@ -570,13 +566,11 @@ func newAgentID() (string, error) {
 
 func importRepos(tx *sql.Tx, repos []fleet.Repo) error {
 	for _, r := range repos {
-		workspaceID := r.WorkspaceID
-		if workspaceID == "" {
-			workspaceID = fleet.DefaultWorkspaceID
-		}
+		workspaceID := fleet.NormalizeWorkspaceID(r.WorkspaceID)
 		enabled := boolToInt(r.Enabled)
 		if _, err := tx.Exec(
-			"INSERT OR REPLACE INTO repos(name,workspace_id,enabled) VALUES(?,?,?)",
+			`INSERT INTO repos(name,workspace_id,enabled) VALUES(?,?,?)
+			ON CONFLICT(workspace_id, name) DO UPDATE SET enabled = excluded.enabled`,
 			r.Name, workspaceID, enabled,
 		); err != nil {
 			return fmt.Errorf("store import: upsert repo %s: %w", r.Name, err)
@@ -585,7 +579,7 @@ func importRepos(tx *sql.Tx, repos []fleet.Repo) error {
 		// does not accumulate duplicate rows. A repo's binding list is treated
 		// as a whole (replace-all semantics): remove what was there, write
 		// what the new config says.
-		if _, err := tx.Exec("DELETE FROM bindings WHERE repo=?", r.Name); err != nil {
+		if _, err := tx.Exec("DELETE FROM bindings WHERE workspace_id=? AND repo=?", workspaceID, r.Name); err != nil {
 			return fmt.Errorf("store import: clear bindings for repo %s: %w", r.Name, err)
 		}
 		for _, b := range r.Use {
@@ -599,9 +593,9 @@ func importRepos(tx *sql.Tx, repos []fleet.Repo) error {
 			}
 			bindingEnabled := bindingEnabledInt(b.Enabled)
 			if _, err := tx.Exec(`
-				INSERT INTO bindings(repo,agent,labels,events,cron,enabled)
-				VALUES (?,?,?,?,?,?)`,
-				r.Name, b.Agent, string(labels), string(events), b.Cron, bindingEnabled,
+				INSERT INTO bindings(workspace_id,repo,agent,labels,events,cron,enabled)
+				VALUES (?,?,?,?,?,?,?)`,
+				workspaceID, r.Name, b.Agent, string(labels), string(events), b.Cron, bindingEnabled,
 			); err != nil {
 				return fmt.Errorf("store import: insert binding repo %s agent %s: %w", r.Name, b.Agent, err)
 			}
@@ -803,7 +797,7 @@ func loadAgents(db querier, cfg *config.Config) error {
 }
 
 func loadRepos(db querier, cfg *config.Config) error {
-	rows, err := db.Query("SELECT workspace_id,name,enabled FROM repos ORDER BY name")
+	rows, err := db.Query("SELECT workspace_id,name,enabled FROM repos ORDER BY workspace_id, name")
 	if err != nil {
 		return fmt.Errorf("store load: query repos: %w", err)
 	}
@@ -824,7 +818,7 @@ func loadRepos(db querier, cfg *config.Config) error {
 
 	// Load bindings for each repo.
 	for i := range repos {
-		bindings, err := loadBindingsForRepo(db, repos[i].Name)
+		bindings, err := loadBindingsForRepo(db, repos[i].WorkspaceID, repos[i].Name)
 		if err != nil {
 			return err
 		}
@@ -834,9 +828,9 @@ func loadRepos(db querier, cfg *config.Config) error {
 	return nil
 }
 
-func loadBindingsForRepo(db querier, repo string) ([]fleet.Binding, error) {
+func loadBindingsForRepo(db querier, workspaceID, repo string) ([]fleet.Binding, error) {
 	rows, err := db.Query(
-		"SELECT id,agent,labels,events,cron,enabled FROM bindings WHERE repo=? ORDER BY id", repo,
+		"SELECT id,agent,labels,events,cron,enabled FROM bindings WHERE workspace_id=? AND repo=? ORDER BY id", fleet.NormalizeWorkspaceID(workspaceID), repo,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store load: query bindings for %s: %w", repo, err)

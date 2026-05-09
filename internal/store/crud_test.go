@@ -134,6 +134,74 @@ func TestUpsertAgentIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestAgentsAndReposAreUniquePerWorkspace(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	seedBackend(t, db, "claude")
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+
+	defaultAgent := fleet.Agent{Name: "coder", Backend: "claude", Prompt: "default prompt", Description: "Default coder"}
+	teamAgent := fleet.Agent{WorkspaceID: "team-a", Name: "coder", Backend: "claude", Prompt: "team prompt", Description: "Team coder"}
+	if err := store.UpsertAgent(db, defaultAgent); err != nil {
+		t.Fatalf("UpsertAgent default: %v", err)
+	}
+	if err := store.UpsertAgent(db, teamAgent); err != nil {
+		t.Fatalf("UpsertAgent team: %v", err)
+	}
+
+	if err := store.UpsertRepo(db, fleet.Repo{
+		Name:    "owner/repo",
+		Enabled: true,
+		Use:     []fleet.Binding{{Agent: "coder", Labels: []string{"ai:default"}}},
+	}); err != nil {
+		t.Fatalf("UpsertRepo default: %v", err)
+	}
+	if err := store.UpsertRepo(db, fleet.Repo{
+		WorkspaceID: "team-a",
+		Name:        "owner/repo",
+		Enabled:     true,
+		Use:         []fleet.Binding{{Agent: "coder", Labels: []string{"ai:team"}}},
+	}); err != nil {
+		t.Fatalf("UpsertRepo team: %v", err)
+	}
+
+	agents, err := store.ReadAgents(db)
+	if err != nil {
+		t.Fatalf("ReadAgents: %v", err)
+	}
+	var defaultID, teamID string
+	for _, a := range agents {
+		if a.Name != "coder" {
+			continue
+		}
+		switch a.WorkspaceID {
+		case fleet.DefaultWorkspaceID:
+			defaultID = a.ID
+		case "team-a":
+			teamID = a.ID
+		}
+	}
+	if defaultID == "" || teamID == "" || defaultID == teamID {
+		t.Fatalf("agent ids: default=%q team=%q, want distinct non-empty ids", defaultID, teamID)
+	}
+
+	repos, err := store.ReadRepos(db)
+	if err != nil {
+		t.Fatalf("ReadRepos: %v", err)
+	}
+	labelsByWorkspace := map[string]string{}
+	for _, r := range repos {
+		if r.Name == "owner/repo" && len(r.Use) == 1 && len(r.Use[0].Labels) == 1 {
+			labelsByWorkspace[r.WorkspaceID] = r.Use[0].Labels[0]
+		}
+	}
+	if labelsByWorkspace[fleet.DefaultWorkspaceID] != "ai:default" || labelsByWorkspace["team-a"] != "ai:team" {
+		t.Fatalf("repo bindings by workspace = %+v, want isolated default/team bindings", labelsByWorkspace)
+	}
+}
+
 func TestUpsertAgentIgnoresCallerProvidedID(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)

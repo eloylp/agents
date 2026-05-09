@@ -294,8 +294,9 @@ func (h *Handler) handleAgentPatchByName(w http.ResponseWriter, r *http.Request)
 
 func (h *Handler) handleAgentDelete(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeAgentName(mux.Vars(r)["name"])
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	cascade := r.URL.Query().Get("cascade") == "true"
-	if err := h.DeleteAgent(name, cascade); err != nil {
+	if err := h.DeleteAgentInWorkspace(workspaceID, name, cascade); err != nil {
 		h.writeErr(w, err, "agent delete or cron reload")
 		return
 	}
@@ -383,10 +384,14 @@ func (h *Handler) updateAgent(name, workspaceID string, patch AgentPatch) (fleet
 // *store.ErrConflict is returned if any binding still references the
 // agent.
 func (h *Handler) DeleteAgent(name string, cascade bool) error {
+	return h.DeleteAgentInWorkspace(fleet.DefaultWorkspaceID, name, cascade)
+}
+
+func (h *Handler) DeleteAgentInWorkspace(workspaceID, name string, cascade bool) error {
 	if cascade {
-		return h.store.DeleteAgentCascade(name)
+		return h.store.DeleteWorkspaceAgentCascade(workspaceID, name)
 	}
-	return h.store.DeleteAgent(name)
+	return h.store.DeleteWorkspaceAgent(workspaceID, name)
 }
 
 // ── Skill wire types ────────────────────────────────────────────────────────────────────────────────────
