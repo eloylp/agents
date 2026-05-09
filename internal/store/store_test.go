@@ -1206,7 +1206,7 @@ func TestReadWriteMemory(t *testing.T) {
 	seedAgent(t, db, "coder")
 
 	// Non-existent agent/repo returns not-found (found=false).
-	content, found, mtime, err := store.ReadMemory(db, "coder", "owner/repo")
+	content, found, mtime, err := store.ReadMemory(db, fleet.DefaultWorkspaceID, "coder", "owner/repo")
 	if err != nil {
 		t.Fatalf("ReadMemory missing row: %v", err)
 	}
@@ -1222,10 +1222,10 @@ func TestReadWriteMemory(t *testing.T) {
 
 	// Write and read back; updated_at should be a recent non-zero time.
 	before := time.Now().UTC().Add(-time.Second)
-	if err := store.WriteMemory(db, "coder", "owner/repo", "## Active PRs\n- PR #1"); err != nil {
+	if err := store.WriteMemory(db, fleet.DefaultWorkspaceID, "coder", "owner/repo", "## Active PRs\n- PR #1"); err != nil {
 		t.Fatalf("WriteMemory: %v", err)
 	}
-	content, found, mtime, err = store.ReadMemory(db, "coder", "owner/repo")
+	content, found, mtime, err = store.ReadMemory(db, fleet.DefaultWorkspaceID, "coder", "owner/repo")
 	if err != nil {
 		t.Fatalf("ReadMemory after write: %v", err)
 	}
@@ -1243,10 +1243,10 @@ func TestReadWriteMemory(t *testing.T) {
 	}
 
 	// Overwrite with empty string to clear: row still exists (found=true) but content is "".
-	if err := store.WriteMemory(db, "coder", "owner/repo", ""); err != nil {
+	if err := store.WriteMemory(db, fleet.DefaultWorkspaceID, "coder", "owner/repo", ""); err != nil {
 		t.Fatalf("WriteMemory clear: %v", err)
 	}
-	content, found, mtime, err = store.ReadMemory(db, "coder", "owner/repo")
+	content, found, mtime, err = store.ReadMemory(db, fleet.DefaultWorkspaceID, "coder", "owner/repo")
 	if err != nil {
 		t.Fatalf("ReadMemory after clear: %v", err)
 	}
@@ -1261,22 +1261,28 @@ func TestReadWriteMemory(t *testing.T) {
 	}
 }
 
-// TestReadWriteMemoryIsolation verifies that different agent/repo combinations
-// are stored independently.
+// TestReadWriteMemoryIsolation verifies that different workspace/agent/repo
+// combinations are stored independently.
 func TestReadWriteMemoryIsolation(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 	seedAgent(t, db, "agent-a")
 	seedAgent(t, db, "agent-b")
 
-	if err := store.WriteMemory(db, "agent-a", "repo", "mem-A"); err != nil {
+	if err := store.WriteMemory(db, fleet.DefaultWorkspaceID, "agent-a", "repo", "mem-A"); err != nil {
 		t.Fatalf("WriteMemory A: %v", err)
 	}
-	if err := store.WriteMemory(db, "agent-b", "repo", "mem-B"); err != nil {
+	if err := store.WriteMemory(db, fleet.DefaultWorkspaceID, "agent-b", "repo", "mem-B"); err != nil {
 		t.Fatalf("WriteMemory B: %v", err)
 	}
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+	if err := store.WriteMemory(db, "team-a", "agent-a", "repo", "mem-team"); err != nil {
+		t.Fatalf("WriteMemory workspace: %v", err)
+	}
 
-	a, _, _, err := store.ReadMemory(db, "agent-a", "repo")
+	a, _, _, err := store.ReadMemory(db, fleet.DefaultWorkspaceID, "agent-a", "repo")
 	if err != nil {
 		t.Fatalf("ReadMemory A: %v", err)
 	}
@@ -1284,11 +1290,19 @@ func TestReadWriteMemoryIsolation(t *testing.T) {
 		t.Errorf("agent-a: got %q, want %q", a, "mem-A")
 	}
 
-	b, _, _, err := store.ReadMemory(db, "agent-b", "repo")
+	b, _, _, err := store.ReadMemory(db, fleet.DefaultWorkspaceID, "agent-b", "repo")
 	if err != nil {
 		t.Fatalf("ReadMemory B: %v", err)
 	}
 	if b != "mem-B" {
 		t.Errorf("agent-b: got %q, want %q", b, "mem-B")
+	}
+
+	team, _, _, err := store.ReadMemory(db, "team-a", "agent-a", "repo")
+	if err != nil {
+		t.Fatalf("ReadMemory workspace: %v", err)
+	}
+	if team != "mem-team" {
+		t.Errorf("team-a/agent-a: got %q, want %q", team, "mem-team")
 	}
 }
