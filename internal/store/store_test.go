@@ -427,6 +427,15 @@ func TestWorkspacePromptMigrationBackfillsExistingAgents(t *testing.T) {
 			id TEXT
 		);
 		CREATE TABLE repos (name TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1);
+		CREATE TABLE bindings (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			repo TEXT NOT NULL REFERENCES repos(name),
+			agent TEXT NOT NULL REFERENCES agents(name),
+			labels TEXT NOT NULL DEFAULT '[]',
+			events TEXT NOT NULL DEFAULT '[]',
+			cron TEXT NOT NULL DEFAULT '',
+			enabled INTEGER NOT NULL DEFAULT 1
+		);
 		CREATE TABLE guardrails (
 			name TEXT PRIMARY KEY,
 			description TEXT NOT NULL DEFAULT '',

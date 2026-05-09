@@ -58,16 +58,6 @@ CREATE TABLE bindings_copy (
     enabled      INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS bindings (
-    id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    repo    TEXT NOT NULL REFERENCES repos(name),
-    agent   TEXT NOT NULL REFERENCES agents(name),
-    labels  TEXT NOT NULL DEFAULT '[]',
-    events  TEXT NOT NULL DEFAULT '[]',
-    cron    TEXT NOT NULL DEFAULT '',
-    enabled INTEGER NOT NULL DEFAULT 1
-);
-
 INSERT INTO bindings_copy (id, workspace_id, repo, agent, labels, events, cron, enabled)
 SELECT b.id, COALESCE(NULLIF(r.workspace_id, ''), 'default'), b.repo, b.agent, b.labels, b.events, b.cron, b.enabled
 FROM bindings b
