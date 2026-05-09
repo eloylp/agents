@@ -56,9 +56,10 @@ export default function AgentForm({
   const backendOptions = backends.filter(b => b.detected !== false)
   const modelsForBackend = backendOptions.find(b => b.name === form.backend)?.models ?? []
   const promptRef = form.prompt_ref.trim()
+  const promptRefMissing = promptRef !== '' && !promptNames.includes(promptRef)
   const scopeRepo = form.scope_repo.trim()
   const canSave = !saving && form.name.trim() !== '' && form.backend.trim() !== '' && form.description.trim() !== '' &&
-    promptRef !== '' && promptNames.includes(promptRef) && (form.scope_type !== 'repo' || scopeRepo !== '')
+    promptRef !== '' && !promptRefMissing && (form.scope_type !== 'repo' || scopeRepo !== '')
 
   useEffect(() => {
     if (!form.model) return
@@ -105,8 +106,14 @@ export default function AgentForm({
         <label style={labelStyle}>Prompt *</label>
         <select style={inputStyle} value={form.prompt_ref} onChange={e => set('prompt_ref', e.target.value)}>
           <option value="">Select prompt...</option>
+          {promptRefMissing && <option value={form.prompt_ref}>{form.prompt_ref} (missing)</option>}
           {promptNames.map(name => <option key={name} value={name}>{name}</option>)}
         </select>
+        {promptRefMissing && (
+          <div role="alert" style={{ marginTop: '4px', fontSize: '0.78rem', color: 'var(--text-danger)' }}>
+            Selected prompt is no longer in the catalog.
+          </div>
+        )}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: form.scope_type === 'repo' ? '1fr 1fr' : '1fr', gap: '0.75rem' }}>
         <div>

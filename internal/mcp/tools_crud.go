@@ -34,10 +34,14 @@ func toolCreateAgent(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
 		a := fleet.Agent{
+			WorkspaceID:   req.GetString("workspace", fleet.DefaultWorkspaceID),
 			Name:          name,
 			Backend:       req.GetString("backend", ""),
 			Model:         req.GetString("model", ""),
 			Prompt:        req.GetString("prompt", ""),
+			PromptRef:     req.GetString("prompt_ref", ""),
+			ScopeType:     req.GetString("scope_type", ""),
+			ScopeRepo:     req.GetString("scope_repo", ""),
 			Description:   req.GetString("description", ""),
 			Skills:        skills,
 			CanDispatch:   canDispatch,
@@ -82,6 +86,15 @@ func toolUpdateAgent(deps Deps) server.ToolHandlerFunc {
 		if v, ok := stringPtrArg(args, "prompt"); ok {
 			patch.Prompt = v
 		}
+		if v, ok := stringPtrArg(args, "prompt_ref"); ok {
+			patch.PromptRef = v
+		}
+		if v, ok := stringPtrArg(args, "scope_type"); ok {
+			patch.ScopeType = v
+		}
+		if v, ok := stringPtrArg(args, "scope_repo"); ok {
+			patch.ScopeRepo = v
+		}
 		if v, ok := stringPtrArg(args, "description"); ok {
 			patch.Description = v
 		}
@@ -113,7 +126,8 @@ func toolUpdateAgent(deps Deps) server.ToolHandlerFunc {
 		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
-		canonical, uerr := deps.Fleet.UpdateAgentPatch(name, patch)
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		canonical, uerr := deps.Fleet.UpdateAgentPatchInWorkspace(workspace, name, patch)
 		if uerr != nil {
 			return mcpgo.NewToolResultErrorFromErr("update agent", uerr), nil
 		}
@@ -133,13 +147,15 @@ func toolDeleteAgent(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
 		cascade := req.GetBool("cascade", false)
-		if err := deps.Fleet.DeleteAgent(fleet.NormalizeAgentName(name), cascade); err != nil {
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		if err := deps.Fleet.DeleteAgentInWorkspace(workspace, fleet.NormalizeAgentName(name), cascade); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete agent", err), nil
 		}
 		return jsonResult(map[string]any{
-			"status":  "deleted",
-			"name":    fleet.NormalizeAgentName(name),
-			"cascade": cascade,
+			"status":    "deleted",
+			"workspace": fleet.NormalizeWorkspaceID(workspace),
+			"name":      fleet.NormalizeAgentName(name),
+			"cascade":   cascade,
 		})
 	}
 }

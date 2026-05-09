@@ -351,7 +351,13 @@ func (h *Handler) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 // *store.ErrNotFound when the agent does not exist. Used by both the REST
 // PATCH handler and the MCP update_agent tool.
 func (h *Handler) UpdateAgentPatch(name string, patch AgentPatch) (fleet.Agent, error) {
-	return h.updateAgent(name, fleet.DefaultWorkspaceID, patch)
+	return h.UpdateAgentPatchInWorkspace(fleet.DefaultWorkspaceID, name, patch)
+}
+
+// UpdateAgentPatchInWorkspace applies a partial patch to the named agent in
+// workspace. Empty workspace keeps the default-workspace compatibility path.
+func (h *Handler) UpdateAgentPatchInWorkspace(workspaceID, name string, patch AgentPatch) (fleet.Agent, error) {
+	return h.updateAgent(name, workspaceID, patch)
 }
 
 func (h *Handler) updateAgent(name, workspaceID string, patch AgentPatch) (fleet.Agent, error) {

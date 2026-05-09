@@ -62,10 +62,15 @@ type apiAgentJSON struct {
 func (h *Handler) HandleAgentsView(w http.ResponseWriter, r *http.Request) {
 	workspaceID := fleetcfg.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	// Index scheduling state by (workspace, agent, repo) for O(1) lookup below.
-	scheduleByKey := map[string]scheduler.AgentStatus{}
+	type scheduleKey struct {
+		Workspace string
+		Agent     string
+		Repo      string
+	}
+	scheduleByKey := map[scheduleKey]scheduler.AgentStatus{}
 	if h.sched != nil {
 		for _, st := range h.sched.AgentStatuses() {
-			scheduleByKey[fleetcfg.NormalizeWorkspaceID(st.WorkspaceID)+"\x00"+st.Name+"\x00"+st.Repo] = st
+			scheduleByKey[scheduleKey{Workspace: fleetcfg.NormalizeWorkspaceID(st.WorkspaceID), Agent: st.Name, Repo: st.Repo}] = st
 		}
 	}
 
@@ -130,7 +135,7 @@ func (h *Handler) HandleAgentsView(w http.ResponseWriter, r *http.Request) {
 				// Attach scheduling state onto the binding so agents with cron
 				// schedules in multiple repos each carry their own schedule data.
 				if b.IsCron() {
-					if st, ok := scheduleByKey[workspaceID+"\x00"+a.Name+"\x00"+repo.Name]; ok {
+					if st, ok := scheduleByKey[scheduleKey{Workspace: workspaceID, Agent: a.Name, Repo: repo.Name}]; ok {
 						j := &agentScheduleJSON{
 							NextRun:    st.NextRun.UTC().Format(time.RFC3339),
 							LastStatus: st.LastStatus,

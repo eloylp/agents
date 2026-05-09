@@ -29,6 +29,7 @@ describe('<AgentForm />', () => {
     )
 
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+    expect(screen.getByRole('alert')).toHaveTextContent('Selected prompt is no longer in the catalog.')
   })
 
   it('enables saving when the selected prompt_ref is in the prompt catalog', () => {

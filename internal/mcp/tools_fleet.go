@@ -17,13 +17,17 @@ import (
 // snake_case wire shape as GET /agents so MCP consumers and REST consumers
 // see identical data.
 func toolListAgents(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace := strings.TrimSpace(req.GetString("workspace", ""))
 		agents, err := deps.Store.ReadAgents()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list agents", err), nil
 		}
 		out := make([]map[string]any, 0, len(agents))
 		for _, a := range agents {
+			if workspace != "" && fleet.NormalizeWorkspaceID(a.WorkspaceID) != fleet.NormalizeWorkspaceID(workspace) {
+				continue
+			}
 			out = append(out, agentJSON(a))
 		}
 		return jsonResult(out)
@@ -44,10 +48,13 @@ func toolGetAgent(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultErrorFromErr("get agent", err), nil
 		}
 		key := fleet.NormalizeAgentName(name)
-		if idx := slices.IndexFunc(agents, func(a fleet.Agent) bool { return a.Name == key }); idx != -1 {
+		workspace := fleet.NormalizeWorkspaceID(req.GetString("workspace", fleet.DefaultWorkspaceID))
+		if idx := slices.IndexFunc(agents, func(a fleet.Agent) bool {
+			return a.Name == key && fleet.NormalizeWorkspaceID(a.WorkspaceID) == workspace
+		}); idx != -1 {
 			return jsonResult(agentJSON(agents[idx]))
 		}
-		return mcpgo.NewToolResultErrorf("agent %q not found", name), nil
+		return mcpgo.NewToolResultErrorf("agent %q not found in workspace %q", name, workspace), nil
 	}
 }
 

@@ -152,13 +152,19 @@ func testFixtureWithConfig(t *testing.T, cfg *config.Config) Deps {
 // write tests to verify that the tool persisted the expected fields.
 func agentByName(t *testing.T, st *store.Store, name string) (fleet.Agent, bool) {
 	t.Helper()
+	return agentByNameInWorkspace(t, st, name, fleet.DefaultWorkspaceID)
+}
+
+func agentByNameInWorkspace(t *testing.T, st *store.Store, name, workspace string) (fleet.Agent, bool) {
+	t.Helper()
 	agents, err := st.ReadAgents()
 	if err != nil {
 		t.Fatalf("read agents: %v", err)
 	}
 	key := fleet.NormalizeAgentName(name)
+	workspace = fleet.NormalizeWorkspaceID(workspace)
 	for _, a := range agents {
-		if a.Name == key {
+		if a.Name == key && fleet.NormalizeWorkspaceID(a.WorkspaceID) == workspace {
 			return a, true
 		}
 	}
@@ -2284,6 +2290,81 @@ func TestToolUpdateAgentForwardsPatch(t *testing.T) {
 	// Fields not in payload are preserved (description was set in seed).
 	if updated.Description != "writes code" {
 		t.Errorf("description should be preserved, got %q", updated.Description)
+	}
+}
+
+func TestToolUpdateAgentHonorsWorkspace(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	if _, err := deps.Fleet.UpsertWorkspace(fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{
+		WorkspaceID: "team-a",
+		Name:        "coder",
+		Backend:     "claude",
+		PromptRef:   "coder",
+		Description: "team coder",
+	}); err != nil {
+		t.Fatalf("seed team agent: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"workspace":   "team-a",
+		"name":        "coder",
+		"description": "team coder patched",
+	}
+	res, err := toolUpdateAgent(deps)(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("update_agent failed: err=%v body=%s", err, textOf(t, res))
+	}
+	team, ok := agentByNameInWorkspace(t, deps.Store, "coder", "team-a")
+	if !ok {
+		t.Fatal("team coder missing after update")
+	}
+	if team.Description != "team coder patched" {
+		t.Fatalf("team coder description = %q, want patched", team.Description)
+	}
+	def, ok := agentByNameInWorkspace(t, deps.Store, "coder", fleet.DefaultWorkspaceID)
+	if !ok {
+		t.Fatal("default coder missing after team update")
+	}
+	if def.Description != "writes code" {
+		t.Fatalf("default coder description = %q, want unchanged", def.Description)
+	}
+}
+
+func TestToolGetAgentHonorsWorkspace(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	if _, err := deps.Fleet.UpsertWorkspace(fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{
+		WorkspaceID: "team-a",
+		Name:        "coder",
+		Backend:     "claude",
+		PromptRef:   "coder",
+		Description: "team coder",
+	}); err != nil {
+		t.Fatalf("seed team agent: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"workspace": "team-a", "name": "coder"}
+	res, err := toolGetAgent(deps)(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("get_agent failed: err=%v body=%s", err, textOf(t, res))
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(textOf(t, res)), &got); err != nil {
+		t.Fatalf("decode get_agent response: %v", err)
+	}
+	if got["workspace_id"] != "team-a" || got["description"] != "team coder" {
+		t.Fatalf("get_agent response = %+v, want team-a coder", got)
 	}
 }
 
