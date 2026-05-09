@@ -213,6 +213,118 @@ func toolDeleteSkill(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
+func toolCreateWorkspace(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, err := req.RequireString("name")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		workspace := fleet.Workspace{
+			ID:          req.GetString("id", ""),
+			Name:        name,
+			Description: req.GetString("description", ""),
+		}
+		canonical, err := deps.Fleet.UpsertWorkspace(workspace)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("create workspace", err), nil
+		}
+		return jsonResult(workspaceJSON(canonical))
+	}
+}
+
+func toolUpdateWorkspace(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace, err := req.RequireString("workspace")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		args := req.GetArguments()
+		var patch daemonfleet.WorkspacePatch
+		if v, ok := stringPtrArg(args, "name"); ok {
+			patch.Name = v
+		}
+		if v, ok := stringPtrArg(args, "description"); ok {
+			patch.Description = v
+		}
+		if !patch.AnyFieldSet() {
+			return mcpgo.NewToolResultError("at least one field is required"), nil
+		}
+		canonical, err := deps.Fleet.UpdateWorkspacePatch(workspace, patch)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("update workspace", err), nil
+		}
+		return jsonResult(workspaceJSON(canonical))
+	}
+}
+
+func toolDeleteWorkspace(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace, ok := trimmedString(req, "workspace")
+		if !ok {
+			return mcpgo.NewToolResultError("workspace is required"), nil
+		}
+		if err := deps.Fleet.DeleteWorkspace(workspace); err != nil {
+			return mcpgo.NewToolResultErrorFromErr("delete workspace", err), nil
+		}
+		return jsonResult(map[string]any{
+			"status":    "deleted",
+			"workspace": workspace,
+		})
+	}
+}
+
+func toolUpdateWorkspaceGuardrails(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		raw, errMsg := arrayOfAny(req.GetArguments()["guardrails"], "guardrails")
+		if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
+		refs := make([]fleet.WorkspaceGuardrailRef, 0, len(raw))
+		for i, item := range raw {
+			m, ok := item.(map[string]any)
+			if !ok {
+				return mcpgo.NewToolResultErrorf("guardrails[%d] must be an object", i), nil
+			}
+			name, ok := m["guardrail_name"].(string)
+			if !ok || name == "" {
+				return mcpgo.NewToolResultErrorf("guardrails[%d].guardrail_name is required", i), nil
+			}
+			ref := fleet.WorkspaceGuardrailRef{GuardrailName: name, Position: i}
+			if v, ok := m["position"]; ok && v != nil {
+				switch n := v.(type) {
+				case float64:
+					if n != float64(int(n)) {
+						return mcpgo.NewToolResultErrorf("guardrails[%d].position must be an integer", i), nil
+					}
+					ref.Position = int(n)
+				case int:
+					ref.Position = n
+				default:
+					return mcpgo.NewToolResultErrorf("guardrails[%d].position must be a number", i), nil
+				}
+			}
+			if v, ok := m["enabled"]; ok && v != nil {
+				enabled, ok := v.(bool)
+				if !ok {
+					return mcpgo.NewToolResultErrorf("guardrails[%d].enabled must be a boolean", i), nil
+				}
+				ref.Enabled = enabled
+			}
+			refs = append(refs, ref)
+		}
+		updated, err := deps.Store.ReplaceWorkspaceGuardrails(workspace, refs)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("update workspace guardrails", err), nil
+		}
+		out := make([]map[string]any, 0, len(updated))
+		for _, ref := range updated {
+			out = append(out, workspaceGuardrailJSON(ref))
+		}
+		return jsonResult(out)
+	}
+}
+
 func toolCreatePrompt(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		name, err := req.RequireString("name")

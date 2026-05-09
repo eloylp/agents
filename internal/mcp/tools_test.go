@@ -344,6 +344,63 @@ func TestToolGetSkill(t *testing.T) {
 	}
 }
 
+func TestToolWorkspaceCRUDAndGuardrails(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "Team A", "description": "Product workspace"}
+	res, err := toolCreateWorkspace(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var created map[string]any
+	decodeText(t, res, &created)
+	if created["id"] != "team-a" || created["name"] != "Team A" {
+		t.Fatalf("created workspace = %+v, want team-a", created)
+	}
+
+	req.Params.Arguments = map[string]any{"workspace": "team-a", "description": "Updated"}
+	res, err = toolUpdateWorkspace(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var patched map[string]any
+	decodeText(t, res, &patched)
+	if patched["description"] != "Updated" {
+		t.Fatalf("patched workspace = %+v, want updated description", patched)
+	}
+
+	req.Params.Arguments = map[string]any{
+		"workspace": "team-a",
+		"guardrails": []any{
+			map[string]any{"guardrail_name": "security", "position": float64(10), "enabled": true},
+			map[string]any{"guardrail_name": "memory-scope", "position": float64(20), "enabled": false},
+		},
+	}
+	res, err = toolUpdateWorkspaceGuardrails(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var guardrails []map[string]any
+	decodeText(t, res, &guardrails)
+	if len(guardrails) != 2 {
+		t.Fatalf("workspace guardrails len = %d, want 2", len(guardrails))
+	}
+	if guardrails[0]["guardrail_name"] != "security" || guardrails[0]["position"] != float64(10) || guardrails[0]["enabled"] != true {
+		t.Fatalf("guardrails[0] = %+v, want enabled security at position 10", guardrails[0])
+	}
+
+	req.Params.Arguments = map[string]any{"workspace": "team-a"}
+	res, err = toolDeleteWorkspace(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("delete workspace returned error result: %+v", res.Content)
+	}
+}
+
 func TestToolListBackendsSorted(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)

@@ -426,6 +426,117 @@ func TestStoreCRUDPromptDeleteReferencedByAgent(t *testing.T) {
 	}
 }
 
+// ── /workspaces ────────────────────────────────────────────────────────
+
+func TestStoreCRUDWorkspaceCreatePatchDelete(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	rr := doCRUDRequest(t, s, http.MethodPost, "/workspaces", map[string]any{
+		"name":        "Team A",
+		"description": "Product workspace",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var created storeWorkspaceJSON
+	if err := json.NewDecoder(rr.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created workspace: %v", err)
+	}
+	if created.ID != "team-a" || created.Name != "Team A" || created.Description != "Product workspace" {
+		t.Fatalf("created workspace = %+v, want derived id and fields", created)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/workspaces/team-a", map[string]any{
+		"description": "Updated",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var patched storeWorkspaceJSON
+	if err := json.NewDecoder(rr.Body).Decode(&patched); err != nil {
+		t.Fatalf("decode patched workspace: %v", err)
+	}
+	if patched.ID != created.ID || patched.Description != "Updated" {
+		t.Fatalf("patched workspace = %+v, want same id and updated description", patched)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodGet, "/workspaces/Team%20A", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET workspace by name: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/workspaces/team-a", nil)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("DELETE workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodGet, "/workspaces/team-a", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("GET deleted workspace: got %d, want 404", rr.Code)
+	}
+}
+
+func TestStoreCRUDWorkspaceDeleteDefaultRejected(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	rr := doCRUDRequest(t, s, http.MethodDelete, "/workspaces/default", nil)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("DELETE default workspace: got %d, want 409, %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestStoreCRUDWorkspaceGuardrailsReplace(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/workspaces", map[string]any{
+		"id":   "team-a",
+		"name": "Team A",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodGet, "/workspaces/team-a/guardrails", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET inherited workspace guardrails: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var inherited []workspaceGuardrailJSON
+	if err := json.NewDecoder(rr.Body).Decode(&inherited); err != nil {
+		t.Fatalf("decode inherited guardrails: %v", err)
+	}
+	if len(inherited) == 0 {
+		t.Fatal("inherited guardrails are empty, want built-in references")
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPut, "/workspaces/team-a/guardrails", []map[string]any{
+		{"guardrail_name": "security", "position": 10, "enabled": true},
+		{"guardrail_name": "memory-scope", "position": 20, "enabled": false},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PUT workspace guardrails: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var updated []workspaceGuardrailJSON
+	if err := json.NewDecoder(rr.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode updated guardrails: %v", err)
+	}
+	if len(updated) != 2 {
+		t.Fatalf("updated guardrails len = %d, want 2", len(updated))
+	}
+	if updated[0].GuardrailName != "security" || updated[0].Position != 10 || !updated[0].Enabled {
+		t.Fatalf("updated[0] = %+v, want enabled security at position 10", updated[0])
+	}
+	if updated[1].GuardrailName != "memory-scope" || updated[1].Position != 20 || updated[1].Enabled {
+		t.Fatalf("updated[1] = %+v, want disabled memory-scope at position 20", updated[1])
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPut, "/workspaces/team-a/guardrails", []map[string]any{
+		{"guardrail_name": "missing", "enabled": true},
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("PUT unknown workspace guardrail: got %d, want 400, %s", rr.Code, rr.Body.String())
+	}
+}
+
 // ── /guardrails ─────────────────────────────────────────────────────
 
 func TestStoreCRUDGuardrailsListSeeded(t *testing.T) {

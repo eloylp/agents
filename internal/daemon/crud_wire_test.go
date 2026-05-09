@@ -31,6 +31,18 @@ type storePromptJSON struct {
 	Content     string `json:"content"`
 }
 
+type storeWorkspaceJSON struct {
+	ID          string `json:"id,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+type workspaceGuardrailJSON struct {
+	GuardrailName string `json:"guardrail_name"`
+	Position      int    `json:"position"`
+	Enabled       bool   `json:"enabled"`
+}
+
 type storeBackendJSON struct {
 	Name           string   `json:"name"`
 	Command        string   `json:"command"`

@@ -68,6 +68,14 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/graph/layout", withTimeout(http.HandlerFunc(h.handleGraphLayoutPut))).Methods(http.MethodPut)
 	r.Handle("/graph/layout", withTimeout(http.HandlerFunc(h.handleGraphLayoutDelete))).Methods(http.MethodDelete)
 
+	r.Handle("/workspaces", withTimeout(http.HandlerFunc(h.handleWorkspacesList))).Methods(http.MethodGet)
+	r.Handle("/workspaces", withTimeout(http.HandlerFunc(h.handleWorkspaceCreate))).Methods(http.MethodPost)
+	r.Handle("/workspaces/{workspace}", withTimeout(http.HandlerFunc(h.handleWorkspaceGet))).Methods(http.MethodGet)
+	r.Handle("/workspaces/{workspace}", withTimeout(http.HandlerFunc(h.handleWorkspacePatch))).Methods(http.MethodPatch)
+	r.Handle("/workspaces/{workspace}", withTimeout(http.HandlerFunc(h.handleWorkspaceDelete))).Methods(http.MethodDelete)
+	r.Handle("/workspaces/{workspace}/guardrails", withTimeout(http.HandlerFunc(h.handleWorkspaceGuardrailsGet))).Methods(http.MethodGet)
+	r.Handle("/workspaces/{workspace}/guardrails", withTimeout(http.HandlerFunc(h.handleWorkspaceGuardrailsPut))).Methods(http.MethodPut)
+
 	r.Handle("/skills", withTimeout(http.HandlerFunc(h.handleSkillsList))).Methods(http.MethodGet)
 	r.Handle("/skills", withTimeout(http.HandlerFunc(h.handleSkillCreate))).Methods(http.MethodPost)
 	r.Handle("/skills/{name}", withTimeout(http.HandlerFunc(h.handleSkillGet))).Methods(http.MethodGet)

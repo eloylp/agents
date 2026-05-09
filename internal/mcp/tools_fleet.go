@@ -83,6 +83,54 @@ func toolListPrompts(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
+func toolListWorkspaces(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspaces, err := deps.Store.ReadWorkspaces()
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("list workspaces", err), nil
+		}
+		out := make([]map[string]any, 0, len(workspaces))
+		for _, w := range workspaces {
+			out = append(out, workspaceJSON(w))
+		}
+		return jsonResult(out)
+	}
+}
+
+func toolGetWorkspace(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace, ok := trimmedString(req, "workspace")
+		if !ok {
+			return mcpgo.NewToolResultError("workspace is required"), nil
+		}
+		workspaces, err := deps.Store.ReadWorkspaces()
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("get workspace", err), nil
+		}
+		if idx := slices.IndexFunc(workspaces, func(w fleet.Workspace) bool {
+			return w.ID == workspace || w.Name == workspace
+		}); idx != -1 {
+			return jsonResult(workspaceJSON(workspaces[idx]))
+		}
+		return mcpgo.NewToolResultErrorf("workspace %q not found", workspace), nil
+	}
+}
+
+func toolListWorkspaceGuardrails(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		refs, err := deps.Store.ReadWorkspaceGuardrails(workspace)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("list workspace guardrails", err), nil
+		}
+		out := make([]map[string]any, 0, len(refs))
+		for _, ref := range refs {
+			out = append(out, workspaceGuardrailJSON(ref))
+		}
+		return jsonResult(out)
+	}
+}
+
 func toolGetPrompt(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		name, ok := trimmedString(req, "name")

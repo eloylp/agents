@@ -44,6 +44,12 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		toolListPrompts(deps),
 	)
 	srv.AddTool(
+		mcpgo.NewTool("list_workspaces",
+			mcpgo.WithDescription("List every workspace. Workspaces scope repos, agents, runs, memory, graph layout, and budgets."),
+		),
+		toolListWorkspaces(deps),
+	)
+	srv.AddTool(
 		mcpgo.NewTool("get_skill",
 			mcpgo.WithDescription("Fetch one skill's full prompt body by name."),
 			mcpgo.WithString("name",
@@ -64,6 +70,16 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		toolGetPrompt(deps),
 	)
 	srv.AddTool(
+		mcpgo.NewTool("get_workspace",
+			mcpgo.WithDescription("Fetch one workspace by id or display name."),
+			mcpgo.WithString("workspace",
+				mcpgo.Required(),
+				mcpgo.Description("Workspace id or display name."),
+			),
+		),
+		toolGetWorkspace(deps),
+	)
+	srv.AddTool(
 		mcpgo.NewTool("list_guardrails",
 			mcpgo.WithDescription("List every prompt guardrail (operator-defined policy blocks prepended to every agent's composed prompt). Includes the shipped 'security' default and any operator-added rules. Returns enabled and disabled rows in render order (position ASC, name ASC)."),
 		),
@@ -78,6 +94,15 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			),
 		),
 		toolGetGuardrail(deps),
+	)
+	srv.AddTool(
+		mcpgo.NewTool("list_workspace_guardrails",
+			mcpgo.WithDescription("List the global guardrail references selected by one workspace. Defaults to Default when workspace is omitted."),
+			mcpgo.WithString("workspace",
+				mcpgo.Description("Workspace id or display name. Defaults to default."),
+			),
+		),
+		toolListWorkspaceGuardrails(deps),
 	)
 	srv.AddTool(
 		mcpgo.NewTool("list_backends",
@@ -271,6 +296,70 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				),
 			),
 			toolDeleteSkill(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("create_workspace",
+				mcpgo.WithDescription("Create or update a workspace and seed its built-in guardrail references. Same path as POST /workspaces."),
+				mcpgo.WithString("name",
+					mcpgo.Required(),
+					mcpgo.Description("Workspace display name."),
+				),
+				mcpgo.WithString("id",
+					mcpgo.Description("Optional stable workspace id. Omit to derive a URL-safe id from name."),
+				),
+				mcpgo.WithString("description",
+					mcpgo.Description("Short human-readable workspace description."),
+				),
+			),
+			toolCreateWorkspace(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("update_workspace",
+				mcpgo.WithDescription("Partially update a workspace by id or display name. Same path as PATCH /workspaces/{workspace}."),
+				mcpgo.WithString("workspace",
+					mcpgo.Required(),
+					mcpgo.Description("Workspace id or display name."),
+				),
+				mcpgo.WithString("name",
+					mcpgo.Description("New workspace display name. Omit to leave unchanged."),
+				),
+				mcpgo.WithString("description",
+					mcpgo.Description("New workspace description. Omit to leave unchanged."),
+				),
+			),
+			toolUpdateWorkspace(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("delete_workspace",
+				mcpgo.WithDescription("Delete a workspace by id or display name. Fails for Default and while agents or repos still reference it. Same path as DELETE /workspaces/{workspace}."),
+				mcpgo.WithString("workspace",
+					mcpgo.Required(),
+					mcpgo.Description("Workspace id or display name."),
+				),
+			),
+			toolDeleteWorkspace(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("update_workspace_guardrails",
+				mcpgo.WithDescription("Replace a workspace's selected global guardrail references. Same path as PUT /workspaces/{workspace}/guardrails."),
+				mcpgo.WithString("workspace",
+					mcpgo.Description("Workspace id or display name. Defaults to default."),
+				),
+				mcpgo.WithArray("guardrails",
+					mcpgo.Required(),
+					mcpgo.Description("Replacement list of guardrail references. Each item needs guardrail_name; enabled defaults false if omitted; position defaults to list order when zero."),
+					mcpgo.Items(map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"guardrail_name": map[string]any{"type": "string", "description": "Global guardrail catalog name."},
+							"position":       map[string]any{"type": "integer", "description": "Render order. Lower renders first."},
+							"enabled":        map[string]any{"type": "boolean", "description": "Whether this workspace reference is active."},
+						},
+						"required": []any{"guardrail_name"},
+					}),
+				),
+			),
+			toolUpdateWorkspaceGuardrails(deps),
 		)
 		srv.AddTool(
 			mcpgo.NewTool("create_prompt",
@@ -716,6 +805,23 @@ func promptJSON(p fleet.Prompt) map[string]any {
 		"name":        p.Name,
 		"description": p.Description,
 		"content":     p.Content,
+	}
+}
+
+func workspaceJSON(w fleet.Workspace) map[string]any {
+	return map[string]any{
+		"id":          w.ID,
+		"name":        w.Name,
+		"description": w.Description,
+	}
+}
+
+func workspaceGuardrailJSON(ref fleet.WorkspaceGuardrailRef) map[string]any {
+	return map[string]any{
+		"workspace_id":   ref.WorkspaceID,
+		"guardrail_name": ref.GuardrailName,
+		"position":       ref.Position,
+		"enabled":        ref.Enabled,
 	}
 }
 
