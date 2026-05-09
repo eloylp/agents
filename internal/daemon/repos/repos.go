@@ -151,7 +151,7 @@ func (h *Handler) handleRepoCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.WorkspaceID == "" {
-		req.WorkspaceID = r.URL.Query().Get("workspace")
+		req.WorkspaceID = fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	}
 	canonical, err := h.UpsertRepo(req.toConfig())
 	if err != nil {

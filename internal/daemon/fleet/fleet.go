@@ -118,7 +118,7 @@ func (h *Handler) HandleAgentsCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.WorkspaceID == "" {
-		req.WorkspaceID = r.URL.Query().Get("workspace")
+		req.WorkspaceID = fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	}
 	canonical, err := h.UpsertAgent(req.toConfig())
 	if err != nil {
@@ -336,7 +336,10 @@ func (h *Handler) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 	if err != nil {
 		return fleet.Agent{}, err
 	}
-	idx := slices.IndexFunc(agents, func(agent fleet.Agent) bool { return agent.Name == normalizedName })
+	workspaceID := fleet.NormalizeWorkspaceID(a.WorkspaceID)
+	idx := slices.IndexFunc(agents, func(agent fleet.Agent) bool {
+		return agent.Name == normalizedName && fleet.NormalizeWorkspaceID(agent.WorkspaceID) == workspaceID
+	})
 	if idx < 0 {
 		return fleet.Agent{}, fmt.Errorf("agent %q not found after upsert", normalizedName)
 	}

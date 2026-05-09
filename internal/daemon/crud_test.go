@@ -165,6 +165,43 @@ func TestStoreCRUDAgentCreateAndGet(t *testing.T) {
 	}
 }
 
+func TestStoreCRUDAgentsListFiltersByWorkspace(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	seedStoreBackend(t, s, "claude")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/workspaces", map[string]any{
+		"id": "team-a", "name": "Team A",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	for _, body := range []map[string]any{
+		{"name": "default-reviewer", "backend": "claude", "prompt": "review default", "description": "default reviewer", "skills": []string{}, "can_dispatch": []string{}},
+		{"workspace_id": "team-a", "name": "team-reviewer", "backend": "claude", "prompt": "review team", "description": "team reviewer", "skills": []string{}, "can_dispatch": []string{}},
+	} {
+		if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", body); rr.Code != http.StatusOK {
+			t.Fatalf("seed agent %+v: got %d, %s", body, rr.Code, rr.Body.String())
+		}
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodGet, "/agents?workspace=team-a", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET team agents: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var agents []viewAgentJSON
+	if err := json.NewDecoder(rr.Body).Decode(&agents); err != nil {
+		t.Fatalf("decode agents: %v", err)
+	}
+	if len(agents) != 1 || agents[0].Name != "team-reviewer" || agents[0].WorkspaceID != "team-a" {
+		t.Fatalf("team agents = %+v, want only team-reviewer", agents)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodGet, "/agents/team-reviewer?workspace=default", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("GET team agent from default workspace: got %d, want 404", rr.Code)
+	}
+}
+
 func TestStoreCRUDAgentCreateIgnoresClientProvidedID(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
@@ -610,6 +647,37 @@ func TestStoreCRUDWorkspaceGuardrailsPreserveExplicitZeroPosition(t *testing.T) 
 	}
 	if refs[2].GuardrailName != "security" || refs[2].Position != 5 {
 		t.Fatalf("refs[2] = %+v, want security at position 5", refs[2])
+	}
+}
+
+func TestStoreCRUDReposListFiltersByWorkspace(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/workspaces", map[string]any{
+		"id": "team-a", "name": "Team A",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	for _, body := range []map[string]any{
+		{"name": "owner/default", "enabled": true, "bindings": []map[string]any{}},
+		{"workspace_id": "team-a", "name": "owner/team", "enabled": true, "bindings": []map[string]any{}},
+	} {
+		if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", body); rr.Code != http.StatusOK {
+			t.Fatalf("seed repo %+v: got %d, %s", body, rr.Code, rr.Body.String())
+		}
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodGet, "/repos?workspace=team-a", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET team repos: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var repos []storeRepoJSON
+	if err := json.NewDecoder(rr.Body).Decode(&repos); err != nil {
+		t.Fatalf("decode repos: %v", err)
+	}
+	if len(repos) != 1 || repos[0].Name != "owner/team" || repos[0].WorkspaceID != "team-a" {
+		t.Fatalf("team repos = %+v, want only owner/team", repos)
 	}
 }
 

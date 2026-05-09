@@ -24,6 +24,7 @@ export function withWorkspace(path: string, workspace: string): string {
 export function useSelectedWorkspace() {
   const [workspace, setWorkspaceState] = useState(defaultWorkspaceID)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [workspaceNotice, setWorkspaceNotice] = useState('')
 
   useEffect(() => {
     const stored = window.localStorage.getItem(storageKey)
@@ -38,17 +39,24 @@ export function useSelectedWorkspace() {
         if (cancelled) return
         const rows = data ?? []
         setWorkspaces(rows)
-        if (rows.length > 0 && !rows.some(w => w.id === workspace)) {
-          setWorkspaceState(rows[0].id)
-          window.localStorage.setItem(storageKey, rows[0].id)
-        }
       })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [workspace])
+  }, [])
+
+  useEffect(() => {
+    if (workspaces.length === 0 || workspaces.some(w => w.id === workspace)) {
+      return
+    }
+    const next = workspaces[0].id
+    setWorkspaceNotice(`Workspace ${workspace} is no longer available. Switched to ${workspaces[0].name}.`)
+    setWorkspaceState(next)
+    window.localStorage.setItem(storageKey, next)
+  }, [workspace, workspaces])
 
   const setWorkspace = (next: string) => {
     const id = next || defaultWorkspaceID
+    setWorkspaceNotice('')
     setWorkspaceState(id)
     window.localStorage.setItem(storageKey, id)
     window.dispatchEvent(new CustomEvent('agents:workspace', { detail: id }))
@@ -63,5 +71,5 @@ export function useSelectedWorkspace() {
     return () => window.removeEventListener('agents:workspace', onChange)
   }, [])
 
-  return useMemo(() => ({ workspace, workspaces, setWorkspace }), [workspace, workspaces])
+  return useMemo(() => ({ workspace, workspaces, workspaceNotice, setWorkspace }), [workspace, workspaces, workspaceNotice])
 }

@@ -26,7 +26,7 @@ const links = [
 export default function NavBar() {
   const pathname = usePathname()
   const { theme, toggle } = useTheme()
-  const { workspace, workspaces, setWorkspace } = useSelectedWorkspace()
+  const { workspace, workspaces, workspaceNotice, setWorkspace } = useSelectedWorkspace()
   const [orphanCount, setOrphanCount] = useState(0)
   const [budgetAlertCount, setBudgetAlertCount] = useState(0)
 
@@ -143,6 +143,11 @@ export default function NavBar() {
           {workspaces.length === 0 && <option value={workspace}>{workspace}</option>}
           {workspaces.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
         </select>
+        {workspaceNotice && (
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.72rem', maxWidth: '18rem', marginLeft: '0.5rem' }}>
+            {workspaceNotice}
+          </span>
+        )}
         <button
           onClick={toggle}
           style={{

@@ -227,7 +227,7 @@ export default function FleetPage() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch('/agents', {
+      const res = await fetch(withWorkspace('/agents', workspace), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...form, workspace_id: workspace }),

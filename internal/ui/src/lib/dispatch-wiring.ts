@@ -38,7 +38,7 @@ export function storeAgentFromResponse(data: Partial<StoreAgent>, fallbackName: 
     model: data.model ?? '',
     skills: data.skills ?? [],
     prompt: data.prompt ?? '',
-    prompt_ref: data.prompt_ref ?? data.prompt ?? '',
+    prompt_ref: data.prompt_ref ?? '',
     scope_type: data.scope_type ?? 'workspace',
     scope_repo: data.scope_repo ?? '',
     allow_prs: data.allow_prs ?? false,
