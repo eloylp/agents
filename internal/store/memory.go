@@ -23,7 +23,7 @@ var ErrMemoryNotFound = errors.New("store: memory not found")
 // /memory HTTP endpoint reads.
 type MemoryBackend struct {
 	db       *sql.DB
-	notifyFn func(agent, repo string) // optional; called after each successful write
+	notifyFn func(workspace, agent, repo string) // optional; called after each successful write
 }
 
 // NewMemoryBackend constructs the engine-side memory accessor.
@@ -34,7 +34,7 @@ func NewMemoryBackend(db *sql.DB) *MemoryBackend {
 // SetChangeNotifier registers a callback invoked after each successful
 // write so SSE subscribers (e.g. the dashboard's memory page) see the
 // change immediately. Idempotent; setting nil disables notifications.
-func (m *MemoryBackend) SetChangeNotifier(fn func(agent, repo string)) {
+func (m *MemoryBackend) SetChangeNotifier(fn func(workspace, agent, repo string)) {
 	m.notifyFn = fn
 }
 
@@ -42,18 +42,19 @@ func (m *MemoryBackend) SetChangeNotifier(fn func(agent, repo string)) {
 // returns the empty string and nil error, the engine treats that as
 // "no prior memory" rather than a hard miss, so first-run agents work.
 func (m *MemoryBackend) ReadMemory(workspace, agent, repo string) (string, error) {
-	content, _, _, err := ReadMemory(m.db, normalizeWorkspace(workspace), ai.NormalizeToken(agent), ai.NormalizeToken(repo))
+	content, _, _, err := ReadMemory(m.db, fleet.NormalizeWorkspaceID(workspace), ai.NormalizeToken(agent), ai.NormalizeToken(repo))
 	return content, err
 }
 
 // WriteMemory persists the agent's returned memory blob.
 func (m *MemoryBackend) WriteMemory(workspace, agent, repo, content string) error {
+	workspace = fleet.NormalizeWorkspaceID(workspace)
 	a, r := ai.NormalizeToken(agent), ai.NormalizeToken(repo)
-	if err := WriteMemory(m.db, normalizeWorkspace(workspace), a, r, content); err != nil {
+	if err := WriteMemory(m.db, workspace, a, r, content); err != nil {
 		return err
 	}
 	if m.notifyFn != nil {
-		m.notifyFn(a, r)
+		m.notifyFn(workspace, a, r)
 	}
 	return nil
 }
@@ -75,7 +76,7 @@ func NewMemoryReader(db *sql.DB) *MemoryReader {
 // ReadMemory returns the memory content + last-updated time for the named
 // (workspace, agent, repo) tuple, or ErrMemoryNotFound if no row exists.
 func (r *MemoryReader) ReadMemory(workspace, agent, repo string) (string, time.Time, error) {
-	content, found, mtime, err := ReadMemory(r.db, normalizeWorkspace(workspace), ai.NormalizeToken(agent), ai.NormalizeToken(repo))
+	content, found, mtime, err := ReadMemory(r.db, fleet.NormalizeWorkspaceID(workspace), ai.NormalizeToken(agent), ai.NormalizeToken(repo))
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -83,11 +84,4 @@ func (r *MemoryReader) ReadMemory(workspace, agent, repo string) (string, time.T
 		return "", time.Time{}, ErrMemoryNotFound
 	}
 	return content, mtime, nil
-}
-
-func normalizeWorkspace(workspace string) string {
-	if workspace == "" {
-		return fleet.DefaultWorkspaceID
-	}
-	return workspace
 }

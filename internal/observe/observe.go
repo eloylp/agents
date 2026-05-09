@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -827,10 +828,11 @@ func (s *Store) SubscribeSteps(spanID string) ([]workflow.TraceStep, chan workfl
 }
 
 // PublishMemoryChange emits a MemoryChangeEvent to the MemorySSE hub for the
-// given agent and repo. Called by the SQLite memory backend after each write so
-// the UI SSE stream stays live when the daemon runs in --db mode.
-func (s *Store) PublishMemoryChange(agent, repo string) {
-	ev := MemoryChangeEvent{Agent: agent, Repo: repo, Path: agent + "/" + repo}
+// given workspace, agent, and repo. Called by the SQLite memory backend after
+// each write so the UI SSE stream stays live when the daemon runs in --db mode.
+func (s *Store) PublishMemoryChange(workspace, agent, repo string) {
+	workspace = fleet.NormalizeWorkspaceID(workspace)
+	ev := MemoryChangeEvent{Workspace: workspace, Agent: agent, Repo: repo, Path: workspace + "/" + agent + "/" + repo}
 	if b, err := sseData(ev); err == nil {
 		s.MemorySSE.Publish(b)
 	}

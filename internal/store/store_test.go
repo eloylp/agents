@@ -1306,3 +1306,33 @@ func TestReadWriteMemoryIsolation(t *testing.T) {
 		t.Errorf("team-a/agent-a: got %q, want %q", team, "mem-team")
 	}
 }
+
+func TestMemoryBackendNotifierIncludesWorkspace(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	seedAgent(t, db, "coder")
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+
+	backend := store.New(db).NewMemoryBackend()
+	var gotWorkspace, gotAgent, gotRepo string
+	backend.SetChangeNotifier(func(workspace, agent, repo string) {
+		gotWorkspace = workspace
+		gotAgent = agent
+		gotRepo = repo
+	})
+
+	if err := backend.WriteMemory(" team-a ", "Coder", "Owner/Repo", "memory"); err != nil {
+		t.Fatalf("WriteMemory: %v", err)
+	}
+	if gotWorkspace != "team-a" {
+		t.Errorf("workspace: got %q, want %q", gotWorkspace, "team-a")
+	}
+	if gotAgent != "coder" {
+		t.Errorf("agent: got %q, want %q", gotAgent, "coder")
+	}
+	if gotRepo != "owner_repo" {
+		t.Errorf("repo: got %q, want %q", gotRepo, "owner_repo")
+	}
+}

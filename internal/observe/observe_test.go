@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
@@ -139,6 +140,9 @@ func TestWatchMemoryDirPublishesOnChange(t *testing.T) {
 		if ev.Repo != "owner_repo" {
 			t.Errorf("repo: want %q, got %q", "owner_repo", ev.Repo)
 		}
+		if ev.Workspace != fleet.DefaultWorkspaceID {
+			t.Errorf("workspace: want %q, got %q", fleet.DefaultWorkspaceID, ev.Workspace)
+		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("timed out waiting for memory change SSE event")
 	}
@@ -217,8 +221,43 @@ func TestWatchMemoryDirPublishesOnNewFileAfterBaseline(t *testing.T) {
 		if ev.Repo != "new_repo" {
 			t.Errorf("repo: want %q, got %q", "new_repo", ev.Repo)
 		}
+		if ev.Workspace != fleet.DefaultWorkspaceID {
+			t.Errorf("workspace: want %q, got %q", fleet.DefaultWorkspaceID, ev.Workspace)
+		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("timed out waiting for new-file MemoryChangeEvent")
+	}
+}
+
+func TestPublishMemoryChangeIncludesWorkspace(t *testing.T) {
+	t.Parallel()
+
+	st := testDB(t)
+	ch := st.MemorySSE.Subscribe()
+	defer st.MemorySSE.Unsubscribe(ch)
+
+	st.PublishMemoryChange("team-a", "coder", "owner_repo")
+
+	select {
+	case raw := <-ch:
+		var ev observe.MemoryChangeEvent
+		if err := json.Unmarshal(extractSSEData(raw), &ev); err != nil {
+			t.Fatalf("could not unmarshal SSE payload: %v (raw: %s)", err, raw)
+		}
+		if ev.Workspace != "team-a" {
+			t.Errorf("workspace: got %q, want %q", ev.Workspace, "team-a")
+		}
+		if ev.Agent != "coder" {
+			t.Errorf("agent: got %q, want %q", ev.Agent, "coder")
+		}
+		if ev.Repo != "owner_repo" {
+			t.Errorf("repo: got %q, want %q", ev.Repo, "owner_repo")
+		}
+		if ev.Path != "team-a/coder/owner_repo" {
+			t.Errorf("path: got %q, want %q", ev.Path, "team-a/coder/owner_repo")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for memory change SSE event")
 	}
 }
 

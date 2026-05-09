@@ -6,13 +6,16 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // MemoryChangeEvent is the SSE payload published when a memory file changes.
 type MemoryChangeEvent struct {
-	Agent string `json:"agent"`
-	Repo  string `json:"repo"`
-	Path  string `json:"path"` // relative to memory_dir, e.g. "coder/owner_repo.md"
+	Workspace string `json:"workspace"`
+	Agent     string `json:"agent"`
+	Repo      string `json:"repo"`
+	Path      string `json:"path"` // relative to memory_dir, e.g. "coder/owner_repo.md"
 }
 
 // WatchMemoryDir polls dir every interval and publishes a MemoryChangeEvent to
@@ -88,7 +91,7 @@ func WatchMemoryDir(ctx context.Context, dir string, interval time.Duration, hub
 // buildMemoryChangeEvent constructs a MemoryChangeEvent from a relative path
 // such as "agentname/owner_repo.md".
 func buildMemoryChangeEvent(rel string) MemoryChangeEvent {
-	ev := MemoryChangeEvent{Path: rel}
+	ev := MemoryChangeEvent{Workspace: fleet.DefaultWorkspaceID, Path: rel}
 	agent, repoPath, ok := strings.Cut(rel, string(filepath.Separator))
 	if ok {
 		ev.Agent = agent

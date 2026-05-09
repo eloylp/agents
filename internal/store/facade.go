@@ -45,10 +45,19 @@ func (s *Store) DeleteAgentCascade(name string) error { return DeleteAgentCascad
 func (s *Store) ReadGraphLayout() ([]GraphNodePosition, error) {
 	return ReadGraphLayout(s.db)
 }
+func (s *Store) ReadWorkspaceGraphLayout(workspace string) ([]GraphNodePosition, error) {
+	return ReadWorkspaceGraphLayout(s.db, workspace)
+}
 func (s *Store) UpsertGraphLayout(positions []GraphNodePosition) error {
 	return UpsertGraphLayout(s.db, positions)
 }
+func (s *Store) UpsertWorkspaceGraphLayout(workspace string, positions []GraphNodePosition) error {
+	return UpsertWorkspaceGraphLayout(s.db, workspace, positions)
+}
 func (s *Store) ClearGraphLayout() error { return ClearGraphLayout(s.db) }
+func (s *Store) ClearWorkspaceGraphLayout(workspace string) error {
+	return ClearWorkspaceGraphLayout(s.db, workspace)
+}
 
 // ── Workspaces and prompts ──────────────────────────────────────────────
 
@@ -134,7 +143,7 @@ func (s *Store) ReadMemoryRaw(agent, repo string) (string, bool, time.Time, erro
 
 // ReadWorkspaceMemoryRaw exposes the workspace-scoped four-value memory read.
 func (s *Store) ReadWorkspaceMemoryRaw(workspace, agent, repo string) (string, bool, time.Time, error) {
-	return ReadMemory(s.db, normalizeWorkspace(workspace), agent, repo)
+	return ReadMemory(s.db, fleet.NormalizeWorkspaceID(workspace), agent, repo)
 }
 
 // WriteMemoryRaw exposes the raw write for the Default workspace; production
@@ -145,7 +154,7 @@ func (s *Store) WriteMemoryRaw(agent, repo, content string) error {
 
 // WriteWorkspaceMemoryRaw exposes the workspace-scoped raw write.
 func (s *Store) WriteWorkspaceMemoryRaw(workspace, agent, repo, content string) error {
-	return WriteMemory(s.db, normalizeWorkspace(workspace), agent, repo, content)
+	return WriteMemory(s.db, fleet.NormalizeWorkspaceID(workspace), agent, repo, content)
 }
 
 // NewMemoryBackend constructs the engine-side MemoryBackend rooted in

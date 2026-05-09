@@ -201,7 +201,7 @@ func toolGetMemory(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultErrorf("memory for %s/%s not found", agent, repo), nil
 		}
 		out := map[string]any{
-			"workspace": normalizeWorkspaceArg(workspace),
+			"workspace": fleet.NormalizeWorkspaceID(workspace),
 			"agent":     agent,
 			"repo":      repo,
 			"content":   content,
@@ -211,11 +211,4 @@ func toolGetMemory(deps Deps) server.ToolHandlerFunc {
 		}
 		return jsonResult(out)
 	}
-}
-
-func normalizeWorkspaceArg(workspace string) string {
-	if workspace == "" {
-		return fleet.DefaultWorkspaceID
-	}
-	return workspace
 }

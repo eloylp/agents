@@ -210,6 +210,58 @@ func TestGraphLayoutPersistsByStableAgentID(t *testing.T) {
 	}
 }
 
+func TestGraphLayoutIsWorkspaceScoped(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	seedBackend(t, db, "claude")
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+	for _, agent := range []fleet.Agent{
+		{Name: "default-coder", Backend: "claude", Prompt: "p", Description: "default coder", WorkspaceID: fleet.DefaultWorkspaceID, Skills: []string{}, CanDispatch: []string{}},
+		{Name: "team-coder", Backend: "claude", Prompt: "p", Description: "team coder", WorkspaceID: "team-a", Skills: []string{}, CanDispatch: []string{}},
+	} {
+		if err := store.UpsertAgent(db, agent); err != nil {
+			t.Fatalf("UpsertAgent %s: %v", agent.Name, err)
+		}
+	}
+	agents, err := store.ReadAgents(db)
+	if err != nil {
+		t.Fatalf("ReadAgents: %v", err)
+	}
+	ids := map[string]string{}
+	for _, a := range agents {
+		ids[a.Name] = a.ID
+	}
+
+	if err := store.UpsertWorkspaceGraphLayout(db, fleet.DefaultWorkspaceID, []store.GraphNodePosition{{NodeID: ids["default-coder"], X: 1, Y: 2}}); err != nil {
+		t.Fatalf("UpsertWorkspaceGraphLayout default: %v", err)
+	}
+	if err := store.UpsertWorkspaceGraphLayout(db, "team-a", []store.GraphNodePosition{{NodeID: ids["team-coder"], X: 3, Y: 4}}); err != nil {
+		t.Fatalf("UpsertWorkspaceGraphLayout team-a: %v", err)
+	}
+
+	defaultLayout, err := store.ReadWorkspaceGraphLayout(db, fleet.DefaultWorkspaceID)
+	if err != nil {
+		t.Fatalf("ReadWorkspaceGraphLayout default: %v", err)
+	}
+	if len(defaultLayout) != 1 || defaultLayout[0].NodeID != ids["default-coder"] {
+		t.Fatalf("default layout = %+v, want default-coder only", defaultLayout)
+	}
+	teamLayout, err := store.ReadWorkspaceGraphLayout(db, "team-a")
+	if err != nil {
+		t.Fatalf("ReadWorkspaceGraphLayout team-a: %v", err)
+	}
+	if len(teamLayout) != 1 || teamLayout[0].NodeID != ids["team-coder"] {
+		t.Fatalf("team layout = %+v, want team-coder only", teamLayout)
+	}
+
+	if err := store.UpsertWorkspaceGraphLayout(db, "team-a", []store.GraphNodePosition{{NodeID: ids["default-coder"], X: 9, Y: 9}}); err == nil {
+		t.Fatal("UpsertWorkspaceGraphLayout accepted agent from another workspace")
+	}
+}
+
 func TestGraphLayoutDeletedWithAgent(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)

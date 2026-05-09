@@ -168,13 +168,7 @@ func seedMemoryReader(t *testing.T, db *sql.DB, content map[string]string, mtime
 	seenAgent := map[string]bool{}
 	seenRepo := map[string]bool{}
 	for key, body := range content {
-		workspace := fleet.DefaultWorkspaceID
-		agent, repo, _ := strings.Cut(key, "\x00")
-		if first, rest, ok := strings.Cut(repo, "\x00"); ok {
-			workspace = agent
-			agent = first
-			repo = rest
-		}
+		workspace, agent, repo := parseSeedMemoryKey(key)
 		agent = ai.NormalizeToken(agent)
 		repo = ai.NormalizeToken(repo)
 		if workspace != fleet.DefaultWorkspaceID {
@@ -207,6 +201,17 @@ func seedMemoryReader(t *testing.T, db *sql.DB, content map[string]string, mtime
 		}
 	}
 	return store.NewMemoryReader(db)
+}
+
+func parseSeedMemoryKey(key string) (workspace, agent, repo string) {
+	workspace = fleet.DefaultWorkspaceID
+	agent, repo, _ = strings.Cut(key, "\x00")
+	if first, rest, ok := strings.Cut(repo, "\x00"); ok {
+		workspace = agent
+		agent = first
+		repo = rest
+	}
+	return workspace, agent, repo
 }
 
 // newRouter mounts h on a fresh router with an identity timeout wrapper so

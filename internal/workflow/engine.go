@@ -947,30 +947,16 @@ func containsNormalized(haystack []string, needle string) bool {
 }
 
 func eventWorkspaceID(ev Event) string {
-	workspaceID := strings.TrimSpace(ev.WorkspaceID)
-	if workspaceID == "" {
-		return fleet.DefaultWorkspaceID
-	}
-	return workspaceID
+	return fleet.NormalizeWorkspaceID(ev.WorkspaceID)
 }
 
 func dedupRepoKey(workspaceID, repo string) string {
-	workspaceID = strings.TrimSpace(workspaceID)
-	if workspaceID == "" {
-		workspaceID = fleet.DefaultWorkspaceID
-	}
-	return workspaceID + "\x00" + repo
+	return fleet.NormalizeWorkspaceID(workspaceID) + "\x00" + repo
 }
 
 func agentScopeAllowsRepo(agent fleet.Agent, repo fleet.Repo) bool {
-	agentWorkspace := strings.TrimSpace(agent.WorkspaceID)
-	if agentWorkspace == "" {
-		agentWorkspace = fleet.DefaultWorkspaceID
-	}
-	repoWorkspace := strings.TrimSpace(repo.WorkspaceID)
-	if repoWorkspace == "" {
-		repoWorkspace = fleet.DefaultWorkspaceID
-	}
+	agentWorkspace := fleet.NormalizeWorkspaceID(agent.WorkspaceID)
+	repoWorkspace := fleet.NormalizeWorkspaceID(repo.WorkspaceID)
 	if agentWorkspace != repoWorkspace {
 		return false
 	}
@@ -992,7 +978,7 @@ func agentScopeAllowsRepo(agent fleet.Agent, repo fleet.Repo) bool {
 const dynamicWorkspaceGuardrailName = "workspace-boundary"
 
 func dynamicWorkspaceGuardrail(workspaceID string, agent fleet.Agent, repos []fleet.Repo) fleet.Guardrail {
-	workspaceID = normalizedWorkspaceID(workspaceID)
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	allowed := allowedReposForAgent(workspaceID, agent, repos)
 	var b strings.Builder
 	b.WriteString("## Workspace and repository boundaries\n\n")
@@ -1018,7 +1004,7 @@ func dynamicWorkspaceGuardrail(workspaceID string, agent fleet.Agent, repos []fl
 }
 
 func allowedReposForAgent(workspaceID string, agent fleet.Agent, repos []fleet.Repo) []string {
-	workspaceID = normalizedWorkspaceID(workspaceID)
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	scopeType := strings.TrimSpace(agent.ScopeType)
 	if scopeType == "" {
 		scopeType = "workspace"
@@ -1030,10 +1016,7 @@ func allowedReposForAgent(workspaceID string, agent fleet.Agent, repos []fleet.R
 	}
 	var allowed []string
 	for _, repo := range repos {
-		repoWorkspace := strings.TrimSpace(repo.WorkspaceID)
-		if repoWorkspace == "" {
-			repoWorkspace = fleet.DefaultWorkspaceID
-		}
+		repoWorkspace := fleet.NormalizeWorkspaceID(repo.WorkspaceID)
 		if repoWorkspace != workspaceID || !repo.Enabled {
 			continue
 		}
@@ -1044,12 +1027,4 @@ func allowedReposForAgent(workspaceID string, agent fleet.Agent, repos []fleet.R
 	}
 	slices.Sort(allowed)
 	return slices.Compact(allowed)
-}
-
-func normalizedWorkspaceID(workspaceID string) string {
-	workspaceID = strings.TrimSpace(workspaceID)
-	if workspaceID == "" {
-		return fleet.DefaultWorkspaceID
-	}
-	return workspaceID
 }

@@ -64,7 +64,7 @@ func (h *Handler) repoByName(name string) (fleet.Repo, bool) {
 	}
 	want := fleet.NormalizeRepoName(name)
 	i := slices.IndexFunc(repos, func(r fleet.Repo) bool {
-		return r.Name == want && eventWorkspaceID(r.WorkspaceID) == fleet.DefaultWorkspaceID
+		return r.Name == want && fleet.NormalizeWorkspaceID(r.WorkspaceID) == fleet.DefaultWorkspaceID
 	})
 	if i >= 0 {
 		return repos[i], true
@@ -76,14 +76,6 @@ func (h *Handler) repoByName(name string) (fleet.Repo, bool) {
 		return repos[i], true
 	}
 	return fleet.Repo{}, false
-}
-
-func eventWorkspaceID(id string) string {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return fleet.DefaultWorkspaceID
-	}
-	return id
 }
 
 func (h *Handler) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +188,7 @@ func (h *Handler) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, 
 	}
 
 	repoRef := workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled}
-	workspaceID := eventWorkspaceID(repo.WorkspaceID)
+	workspaceID := fleet.NormalizeWorkspaceID(repo.WorkspaceID)
 
 	if payload.Issue.PullRequest != nil {
 		w.WriteHeader(http.StatusAccepted)
@@ -260,7 +252,7 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, w http.ResponseWri
 	}
 
 	repoRef := workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled}
-	workspaceID := eventWorkspaceID(repo.WorkspaceID)
+	workspaceID := fleet.NormalizeWorkspaceID(repo.WorkspaceID)
 
 	switch payload.Action {
 	case "labeled":
@@ -332,7 +324,7 @@ func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWr
 
 	ev := workflow.Event{
 		ID:          deliveryID,
-		WorkspaceID: eventWorkspaceID(repo.WorkspaceID),
+		WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
 		Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
 		Kind:        "issue_comment.created",
 		Number:      payload.Issue.Number,
@@ -372,7 +364,7 @@ func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, w http.Respo
 
 	ev := workflow.Event{
 		ID:          deliveryID,
-		WorkspaceID: eventWorkspaceID(repo.WorkspaceID),
+		WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
 		Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
 		Kind:        "pull_request_review.submitted",
 		Number:      payload.PullRequest.Number,
@@ -414,7 +406,7 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 
 	ev := workflow.Event{
 		ID:          deliveryID,
-		WorkspaceID: eventWorkspaceID(repo.WorkspaceID),
+		WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
 		Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
 		Kind:        "pull_request_review_comment.created",
 		Number:      payload.PullRequest.Number,
@@ -456,7 +448,7 @@ func (h *Handler) handlePushEvent(ctx context.Context, w http.ResponseWriter, bo
 
 	ev := workflow.Event{
 		ID:          deliveryID,
-		WorkspaceID: eventWorkspaceID(repo.WorkspaceID),
+		WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
 		Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
 		Kind:        "push",
 		Actor:       payload.Sender.Login,
