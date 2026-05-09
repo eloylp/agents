@@ -393,7 +393,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		e.dispatcher.dedup.MarkWebhookRunInFlight(targetName, dedupRepo, ev.Number)
 	}
 
-	// Autonomous (cron-fired) runs use the cron-namespace dedup window so a
+	// Autonomous (cron-fired) runs use the cron bucket dedup window so a
 	// cron tick that fires moments after a dispatch already claimed the slot
 	// self-suppresses (matches the old scheduler.executeAgentRun behavior).
 	// Rollback on error so the slot is freed for the next tick; finalize on
@@ -428,7 +428,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 			e.dispatcher.dedup.FinalizeWebhookRun(targetName, dedupRepo, ev.Number)
 		}
 	}
-	// Release the cron-namespace mark taken above for autonomous runs.
+	// Release the cron bucket mark taken above for autonomous runs.
 	if ev.Kind == "cron" && e.dispatcher != nil {
 		if runErr != nil {
 			e.dispatcher.RollbackAutonomousRun(workspaceID, targetName, repo.Name)

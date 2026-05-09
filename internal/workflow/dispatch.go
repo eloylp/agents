@@ -135,12 +135,12 @@ func (s *DispatchDedupStore) evict(now time.Time) {
 	}
 }
 
-// dispatchStoreKey builds the map key for a dispatch-namespace entry.
+// dispatchStoreKey builds the map key for a dispatch bucket entry.
 func dispatchStoreKey(agent, repo string, number int) string {
 	return fmt.Sprintf("%s\x00%s\x00%d", agent, repo, number)
 }
 
-// cronStoreKey builds the map key for a cron-namespace entry.
+// cronStoreKey builds the map key for a cron bucket entry.
 func cronStoreKey(agent, repo string, number int) string {
 	return fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
 }
@@ -216,7 +216,7 @@ func (s *DispatchDedupStore) AbandonClaim(target, repo string, number int) {
 }
 
 // MarkWebhookRunInFlight increments the in-flight reference count for the
-// dispatch-namespace entry (agent, repo, number). It must be called immediately
+// dispatch bucket entry (agent, repo, number). It must be called immediately
 // after a successful TryClaimForDispatch in the webhook/fanOut path so that the
 // claim survives past the TTL window while the agent run is still executing.
 // Callers must follow with FinalizeWebhookRun (success) or AbandonWebhookRun
@@ -229,7 +229,7 @@ func (s *DispatchDedupStore) MarkWebhookRunInFlight(agent, repo string, number i
 }
 
 // FinalizeWebhookRun decrements the in-flight reference count for the
-// dispatch-namespace entry (agent, repo, number) after a successful run.
+// dispatch bucket entry (agent, repo, number) after a successful run.
 // The TTL entry is preserved so TryClaimForDispatch continues to suppress
 // duplicates until the dedup_window_seconds elapses. Once the refcount reaches
 // zero, the evict() loop is free to remove the entry when expiresAt passes.
@@ -246,7 +246,7 @@ func (s *DispatchDedupStore) FinalizeWebhookRun(agent, repo string, number int) 
 }
 
 // AbandonWebhookRun decrements the in-flight reference count and removes the
-// dispatch-namespace entry for (agent, repo, number) after a failed run. Used
+// dispatch bucket entry for (agent, repo, number) after a failed run. Used
 // by the error and panic paths in fanOut so that a retry or a subsequent event
 // for the same item can claim the slot and attempt the run again.
 func (s *DispatchDedupStore) AbandonWebhookRun(agent, repo string, number int) {
@@ -263,7 +263,7 @@ func (s *DispatchDedupStore) AbandonWebhookRun(agent, repo string, number int) {
 
 // MarkCronRun records that a cron-fired execution has started
 // for (agent, repo, number). The mark persists for the full TTL window and lives
-// in a separate key namespace ("cron\x00…") from dispatch entries so that
+// in a separate key bucket ("cron\x00…") from dispatch entries so that
 // repeated cron runs are never suppressed by this mark, only dispatches are.
 // Autonomous runs always pass number=0 because they are not tied to a specific
 // issue or PR; this scoping ensures that a cron run for a repo-level context
@@ -280,7 +280,7 @@ func (s *DispatchDedupStore) MarkCronRun(agent, repo string, number int, now tim
 	s.cronRefCounts[key]++
 }
 
-// RemoveCronMark decrements the in-flight reference count for the cron-namespace
+// RemoveCronMark decrements the in-flight reference count for the cron bucket
 // entry (agent, repo, number) and deletes the entry from the store so that
 // future dispatches are no longer suppressed. It is used by the rollback path
 // (run failed before completing). When the count reaches zero, the entry is
@@ -298,7 +298,7 @@ func (s *DispatchDedupStore) RemoveCronMark(agent, repo string, number int) {
 	}
 }
 
-// FinalizeCronMark decrements the in-flight reference count for the cron-namespace
+// FinalizeCronMark decrements the in-flight reference count for the cron bucket
 // entry (agent, repo, number) without deleting the entry. It is used by the
 // success path after a cron/manual run completes: the entry's expiresAt is kept
 // in place so that TryClaimForDispatch continues to suppress autonomous-context
@@ -330,7 +330,7 @@ func (s *DispatchDedupStore) SeenCronRun(agent, repo string, number int, now tim
 }
 
 // TryClaimForCron atomically checks whether a dispatch has already claimed
-// the (agent, repo, number) slot and, if not, writes a cron-namespace mark.
+// the (agent, repo, number) slot and, if not, writes a cron bucket mark.
 // Returns true if the mark was written (caller may proceed with the run).
 // Returns false if a dispatch claim, pending or committed, exists within
 // the TTL window (caller should skip the run; dispatch-first ordering).
@@ -543,8 +543,8 @@ func (d *Dispatcher) ProcessDispatches(
 		}
 
 		// Atomic cron-and-dispatch dedup: TryClaimForDispatch checks the cron
-		// namespace (any active cron/manual run for this item context) and the
-		// dispatch namespace (any existing dispatch claim) in a single mutex
+		// bucket (any active cron/manual run for this item context) and the
+		// dispatch bucket (any existing dispatch claim) in a single mutex
 		// acquisition, then reserves a pending dispatch slot. This eliminates
 		// the TOCTOU race that existed when SeenCronRun and TryClaim were
 		// separate operations: the old sequence allowed a concurrent cron path
@@ -604,7 +604,7 @@ func (d *Dispatcher) ProcessDispatches(
 
 // TryMarkAutonomousRun atomically checks whether a dispatch has already
 // claimed the (workspaceID, agentName, repo, 0) slot and, if not, writes a
-// cron-namespace mark. Returns true if the mark was written and the caller may
+// cron bucket mark. Returns true if the mark was written and the caller may
 // proceed with the run. Returns false if a dispatch claim exists (caller should
 // return ErrDispatchSkipped).
 //
@@ -617,7 +617,7 @@ func (d *Dispatcher) TryMarkAutonomousRun(workspaceID, agentName, repo string, n
 	return d.dedup.TryClaimForCron(agentName, dedupRepoKey(workspaceID, repo), 0, now)
 }
 
-// RollbackAutonomousRun removes the cron-namespace mark written by
+// RollbackAutonomousRun removes the cron bucket mark written by
 // TryMarkAutonomousRun. It must be called when a run fails so that the stale
 // mark does not suppress autonomous-context dispatches for the full
 // dedup_window_seconds.
@@ -625,7 +625,7 @@ func (d *Dispatcher) RollbackAutonomousRun(workspaceID, agentName, repo string) 
 	d.dedup.RemoveCronMark(agentName, dedupRepoKey(workspaceID, repo), 0)
 }
 
-// FinalizeAutonomousRun decrements the cron-namespace refcount for
+// FinalizeAutonomousRun decrements the cron bucket refcount for
 // (workspaceID, agentName, repo, 0) after a run completes successfully. Unlike
 // RollbackAutonomousRun it preserves the cron entry so that
 // TryClaimForDispatch continues to suppress autonomous-context dispatches

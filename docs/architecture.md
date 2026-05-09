@@ -116,7 +116,7 @@ The MCP `Deps` struct holds **concrete pointers**, not interfaces. Coupling is f
 
 | Surface | Push site | Event Kind | Pre-run dedup gate |
 |---|---|---|---|
-| Cron tick | `scheduler.makeCronJob` | `cron` | `Dispatcher.TryMarkAutonomousRun` (cron-namespace) |
+| Cron tick | `scheduler.makeCronJob` | `cron` | `Dispatcher.TryMarkAutonomousRun` (cron bucket) |
 | GitHub webhook | `webhook.Handler.ServeHTTP` | `issues.*`, `pull_request.*`, `push`, … | per-(agent, repo, number) `TryClaimForDispatch` (in `fanOut`) |
 | `POST /run` | `daemon.handleAgentsRun` | `agents.run` | per-(agent, repo, 0) `TryClaimForDispatch` |
 | MCP `trigger_agent` | `mcp/tools_fleet.go: toolTriggerAgent` | `agents.run` | same as `POST /run` |
@@ -221,7 +221,7 @@ robfig/cron fires the closure registered by scheduler.registerJobs
 async on a worker goroutine:
   workflow.Processor → workflow.Engine.HandleEvent
     → handleDispatchEvent
-        → Dispatcher.TryMarkAutonomousRun (cron-namespace dedup)
+        → Dispatcher.TryMarkAutonomousRun (cron bucket dedup)
         → runAgent (same path as everything else)
         → on completion: dispatcher.FinalizeAutonomousRun
                        + lastRunRec.RecordLastRun
@@ -256,7 +256,7 @@ REST and MCP converge at the handler layer, one set of methods, one persistence 
 ## Race-prevention invariants
 
 1. **Memory races on (agent, repo)**, `Engine.runLock` (per-key `*sync.Mutex`, lazily created) is held across the read-run-write sequence in `runAgent`. Single process means no second writer; the legacy CLI execution mode was removed precisely because it created a second-process race surface the run-lock can't close.
-2. **Duplicate-fire dedup**, `Dispatcher.dedup` keyed by namespace × (agent, repo, number). Three claim contexts: webhook + on-demand share a "dispatch" namespace (`TryClaimForDispatch`); cron has a separate "autonomous" namespace (`TryMarkAutonomousRun`); inter-agent dispatch is claimed at enqueue, not re-claimed at handle. A near-simultaneous webhook and cron tick for the same target both consult the cross-namespace state at gate time, so one self-suppresses.
+2. **Duplicate-fire dedup**, `Dispatcher.dedup` keyed by dedup bucket × (agent, repo, number). Three claim contexts: webhook + on-demand share a "dispatch" bucket (`TryClaimForDispatch`); cron has a separate "autonomous" bucket (`TryMarkAutonomousRun`); inter-agent dispatch is claimed at enqueue, not re-claimed at handle. A near-simultaneous webhook and cron tick for the same target both consult the cross-bucket state at gate time, so one self-suppresses.
 3. **Durable enqueue / channel coherence**, `PushEvent` inserts into `event_queue` *before* sending on the channel, and rolls back the row if the channel push fails. There is no window where a row sits in SQLite but never reaches a worker, and no window where the channel holds a `QueuedEvent` whose row was never persisted.
 4. **Replay idempotency boundary**, replay only re-pushes rows whose `completed_at` is `NULL`. Workers stamp `completed_at` regardless of the agent's success, so a deterministically-failing event is removed from the queue's view (it appears in `/traces` instead of replaying forever).
 5. **Cron schedule view freshness**, `Engine.runAgent` calls `lastRunRec.RecordLastRun` after every `Kind=="cron"` event; scheduler's `lastRuns` map carries the latest outcome to `AgentStatuses()`, which feeds `/agents`.

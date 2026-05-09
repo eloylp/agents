@@ -108,7 +108,6 @@ DROP TABLE repos;
 ALTER TABLE agents_new RENAME TO agents;
 ALTER TABLE repos_new RENAME TO repos;
 
-CREATE UNIQUE INDEX idx_agents_id ON agents(id);
 CREATE UNIQUE INDEX idx_agents_workspace_name ON agents(workspace_id, name);
 CREATE INDEX idx_agents_workspace ON agents(workspace_id);
 CREATE INDEX idx_agents_prompt ON agents(prompt_id);
@@ -116,6 +115,8 @@ CREATE INDEX idx_agents_prompt ON agents(prompt_id);
 CREATE UNIQUE INDEX idx_repos_workspace_name ON repos(workspace_id, name);
 CREATE INDEX idx_repos_workspace ON repos(workspace_id);
 
+-- Memory intentionally remains keyed by workspace/agent-name/repo instead of an
+-- agent-id FK so deleting and recreating an agent can preserve its workspace memory.
 CREATE TABLE memory (
     workspace_id TEXT NOT NULL DEFAULT 'default' REFERENCES workspaces(id) ON DELETE CASCADE,
     agent        TEXT NOT NULL,

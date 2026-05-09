@@ -776,7 +776,7 @@ func TestDispatchClaimOnlyVisibleAfterSuccessfulEnqueue(t *testing.T) {
 
 // TestTryMarkAutonomousRunSuppressesNearSimultaneousDispatch is a regression
 // test for the cron-first dedup ordering: when an autonomous run starts and
-// TryMarkAutonomousRun writes a cron-namespace mark, dispatches targeting the
+// TryMarkAutonomousRun writes a cron bucket mark, dispatches targeting the
 // same agent/repo with number=0 (autonomous context) must be suppressed for
 // the full dedup_window_seconds, both while the run is in-flight and after
 // it completes.
@@ -785,7 +785,7 @@ func TestTryMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.T) {
 	q := &fakeQueue{}
 	d := testDispatcher(t, q)
 
-	// Simulate: cron run confirms it will proceed and writes the cron-namespace mark.
+	// Simulate: cron run confirms it will proceed and writes the cron bucket mark.
 	if !d.TryMarkAutonomousRun(fleet.DefaultWorkspaceID, "coder", "owner/repo", time.Now()) {
 		t.Fatal("TryMarkAutonomousRun: expected true on first call (no prior dispatch)")
 	}
@@ -1114,7 +1114,7 @@ func TestFinalizeAutonomousRunKeepsTTLBlocksDispatchWithinWindow(t *testing.T) {
 	}
 
 	// A second cron run within the window must NOT be suppressed: cron runs
-	// check the dispatch namespace (not the cron namespace), so the mark never
+	// check the dispatch bucket (not the cron bucket), so the mark never
 	// blocks repeated autonomous runs.
 	q3 := &fakeQueue{}
 	d3 := NewDispatcher(cfg, seedAgentMap(t, agents), dedup, q3, zerolog.Nop())

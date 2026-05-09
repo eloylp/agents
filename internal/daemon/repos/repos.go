@@ -161,13 +161,8 @@ func (h *Handler) handleRepoCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, repoToStoreJSON(canonical))
 }
 
-func repoNameFromRequest(r *http.Request) string {
-	vars := mux.Vars(r)
-	return fleet.NormalizeRepoName(vars["owner"]) + "/" + fleet.NormalizeRepoName(vars["repo"])
-}
-
 func (h *Handler) handleRepoGet(w http.ResponseWriter, r *http.Request) {
-	repoName := repoNameFromRequest(r)
+	repoName := repoNameFromVars(r)
 	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	repos, err := h.store.ReadRepos()
 	if err != nil {
@@ -184,7 +179,7 @@ func (h *Handler) handleRepoGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleRepoPatch(w http.ResponseWriter, r *http.Request) {
-	repoName := repoNameFromRequest(r)
+	repoName := repoNameFromVars(r)
 	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	var req repoRuntimeSettingsJSON
 	if !decodeBody(w, r, h.maxBodyBytes, &req) {
@@ -203,7 +198,7 @@ func (h *Handler) handleRepoPatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleRepoDelete(w http.ResponseWriter, r *http.Request) {
-	repoName := repoNameFromRequest(r)
+	repoName := repoNameFromVars(r)
 	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	if err := h.DeleteRepoInWorkspace(workspaceID, repoName); err != nil {
 		h.writeErr(w, err, "repo delete or cron reload")

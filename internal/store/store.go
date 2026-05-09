@@ -327,6 +327,7 @@ func importWorkspaceGuardrails(tx *sql.Tx, workspaces []fleet.Workspace) error {
 		} else {
 			workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 		}
+		// Omitted guardrails preserve existing refs; an explicit empty list clears them.
 		if err := replaceWorkspaceGuardrailsTx(tx, workspaceID, w.Guardrails); err != nil {
 			return err
 		}
@@ -779,6 +780,7 @@ func loadWorkspaces(db querier, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("store load: query workspaces: %w", err)
 	}
+	defer rows.Close()
 	var workspaces []fleet.Workspace
 	for rows.Next() {
 		var w fleet.Workspace

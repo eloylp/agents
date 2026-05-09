@@ -288,6 +288,7 @@ func (h *Handler) ExportYAML() ([]byte, error) {
 			continue
 		}
 		idx := ensureWorkspace(b.WorkspaceID)
+		b.WorkspaceID = ""
 		workspaces[idx].TokenBudgets = append(workspaces[idx].TokenBudgets, b)
 	}
 	var globalBudgets []store.TokenBudget
