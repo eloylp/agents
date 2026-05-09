@@ -52,6 +52,7 @@ export function useSelectedWorkspace() {
     setWorkspaceNotice(`Workspace ${workspace} is no longer available. Switched to ${workspaces[0].name}.`)
     setWorkspaceState(next)
     window.localStorage.setItem(storageKey, next)
+    window.dispatchEvent(new CustomEvent('agents:workspace', { detail: next }))
   }, [workspace, workspaces])
 
   const setWorkspace = (next: string) => {

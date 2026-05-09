@@ -168,13 +168,14 @@ func repoNameFromRequest(r *http.Request) string {
 
 func (h *Handler) handleRepoGet(w http.ResponseWriter, r *http.Request) {
 	repoName := repoNameFromRequest(r)
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	repos, err := h.store.ReadRepos()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read repos: %v", err), http.StatusInternalServerError)
 		return
 	}
 	for _, repo := range repos {
-		if repo.Name == repoName {
+		if repo.Name == repoName && fleet.NormalizeWorkspaceID(repo.WorkspaceID) == workspaceID {
 			writeJSON(w, http.StatusOK, repoToStoreJSON(repo))
 			return
 		}

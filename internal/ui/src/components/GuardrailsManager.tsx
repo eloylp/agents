@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import FullscreenModal from '@/components/FullscreenModal'
@@ -153,6 +153,7 @@ function GuardrailForm({
 
 export default function GuardrailsManager() {
   const { workspace, workspaces } = useSelectedWorkspace()
+  const currentWorkspaceRef = useRef(workspace)
   const [guardrails, setGuardrails] = useState<Guardrail[]>([])
   const [workspaceRefs, setWorkspaceRefs] = useState<WorkspaceGuardrailRef[]>([])
   const [loading, setLoading] = useState(true)
@@ -165,7 +166,12 @@ export default function GuardrailsManager() {
   const [saveError, setSaveError] = useState('')
   const [workspaceSaveError, setWorkspaceSaveError] = useState('')
 
+  useEffect(() => {
+    currentWorkspaceRef.current = workspace
+  }, [workspace])
+
   const load = (isCancelled: () => boolean = () => false) => {
+    const targetWorkspace = workspace
     setLoading(true)
     setLoadError('')
     Promise.all([
@@ -179,13 +185,13 @@ export default function GuardrailsManager() {
       }),
     ])
       .then(([catalog, refs]: [Guardrail[], WorkspaceGuardrailRef[]]) => {
-        if (isCancelled()) return
+        if (isCancelled() || currentWorkspaceRef.current !== targetWorkspace) return
         setGuardrails(catalog ?? [])
         setWorkspaceRefs((refs ?? []).slice().sort((a, b) => a.position - b.position || a.guardrail_name.localeCompare(b.guardrail_name)))
         setLoading(false)
       })
       .catch(e => {
-        if (isCancelled()) return
+        if (isCancelled() || currentWorkspaceRef.current !== targetWorkspace) return
         setLoadError(String(e))
         setLoading(false)
       })
@@ -209,6 +215,7 @@ export default function GuardrailsManager() {
   const unselectedGuardrails = guardrails.filter(g => !workspaceRefNames.has(g.name))
 
   const saveWorkspaceRefs = async (nextRefs: WorkspaceGuardrailRef[]) => {
+    const targetWorkspace = workspace
     setSaving(true)
     setWorkspaceSaveError('')
     try {
@@ -223,12 +230,15 @@ export default function GuardrailsManager() {
         body: JSON.stringify(body),
       })
       if (!res.ok) {
+        if (currentWorkspaceRef.current !== targetWorkspace) return
         setWorkspaceSaveError((await res.text()) || 'Save workspace guardrails failed')
         return
       }
       const saved = await res.json() as WorkspaceGuardrailRef[]
+      if (currentWorkspaceRef.current !== targetWorkspace) return
       setWorkspaceRefs(saved.slice().sort((a, b) => a.position - b.position || a.guardrail_name.localeCompare(b.guardrail_name)))
     } catch (e) {
+      if (currentWorkspaceRef.current !== targetWorkspace) return
       setWorkspaceSaveError(String(e))
     } finally {
       setSaving(false)
@@ -388,7 +398,8 @@ export default function GuardrailsManager() {
                     padding: '0.55rem 0.65rem',
                     border: '1px solid var(--border)',
                     borderRadius: '8px',
-                    background: 'var(--bg-card)',
+                    background: ref.enabled ? 'var(--bg-card)' : 'var(--bg-input)',
+                    opacity: ref.enabled ? 1 : 0.72,
                   }}
                 >
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-faint)', minWidth: '2.5rem' }}>#{index + 1}</span>
@@ -396,6 +407,7 @@ export default function GuardrailsManager() {
                     <input
                       type="checkbox"
                       checked
+                      aria-label={`Remove ${name} from workspace`}
                       disabled={saving}
                       onChange={e => toggleWorkspaceRef(name, e.target.checked)}
                     />
@@ -454,6 +466,7 @@ export default function GuardrailsManager() {
                   <input
                     type="checkbox"
                     checked={false}
+                    aria-label={`Add ${g.name} to workspace`}
                     disabled={saving}
                     onChange={e => toggleWorkspaceRef(g.name, e.target.checked)}
                   />

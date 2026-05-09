@@ -679,6 +679,11 @@ func TestStoreCRUDReposListFiltersByWorkspace(t *testing.T) {
 	if len(repos) != 1 || repos[0].Name != "owner/team" || repos[0].WorkspaceID != "team-a" {
 		t.Fatalf("team repos = %+v, want only owner/team", repos)
 	}
+
+	rr = doCRUDRequest(t, s, http.MethodGet, "/repos/owner/team?workspace=default", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("GET team repo from default workspace: got %d, want 404", rr.Code)
+	}
 }
 
 // ── /guardrails ─────────────────────────────────────────────────────
