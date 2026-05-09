@@ -167,7 +167,13 @@ func Import(db *sql.DB, cfg *config.Config) error {
 	if err := importSkills(tx, cfg.Skills); err != nil {
 		return err
 	}
+	if err := importGuardrails(tx, cfg.Guardrails); err != nil {
+		return err
+	}
 	if err := importWorkspaces(tx, cfg.Workspaces); err != nil {
+		return err
+	}
+	if err := importWorkspaceGuardrails(tx, cfg.Workspaces); err != nil {
 		return err
 	}
 	if err := importPrompts(tx, cfg.Prompts); err != nil {
@@ -180,9 +186,6 @@ func Import(db *sql.DB, cfg *config.Config) error {
 		return err
 	}
 	if err := importRepos(tx, cfg.Repos); err != nil {
-		return err
-	}
-	if err := importGuardrails(tx, cfg.Guardrails); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -305,6 +308,72 @@ func seedWorkspaceGuardrails(tx *sql.Tx, workspaceID string) error {
 		workspaceID,
 	); err != nil {
 		return fmt.Errorf("store import: seed workspace %s guardrails: %w", workspaceID, err)
+	}
+	return nil
+}
+
+func importWorkspaceGuardrails(tx *sql.Tx, workspaces []fleet.Workspace) error {
+	for _, w := range workspaces {
+		if w.Guardrails == nil {
+			continue
+		}
+		workspaceID := strings.TrimSpace(w.ID)
+		if workspaceID == "" {
+			id, err := derivedEntityID("", w.Name)
+			if err != nil {
+				return fmt.Errorf("store import: workspace %q guardrails: %w", w.Name, err)
+			}
+			workspaceID = id
+		} else {
+			workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+		}
+		if err := replaceWorkspaceGuardrailsTx(tx, workspaceID, w.Guardrails); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func replaceWorkspaceGuardrailsTx(tx *sql.Tx, workspaceID string, refs []fleet.WorkspaceGuardrailRef) error {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	var exists bool
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM workspaces WHERE id = ?)`, workspaceID).Scan(&exists); err != nil {
+		return fmt.Errorf("store import: check workspace %s: %w", workspaceID, err)
+	}
+	if !exists {
+		return &ErrValidation{Msg: fmt.Sprintf("workspace %q not found", workspaceID)}
+	}
+	if _, err := tx.Exec(`DELETE FROM workspace_guardrails WHERE workspace_id = ?`, workspaceID); err != nil {
+		return fmt.Errorf("store import: replace workspace %s guardrails: %w", workspaceID, err)
+	}
+	seen := map[string]struct{}{}
+	for i, ref := range refs {
+		name := fleet.NormalizeGuardrailName(ref.GuardrailName)
+		if name == "" {
+			return &ErrValidation{Msg: fmt.Sprintf("workspace %q guardrail name is required", workspaceID)}
+		}
+		if _, ok := seen[name]; ok {
+			return &ErrValidation{Msg: fmt.Sprintf("workspace %q references guardrail %q more than once", workspaceID, name)}
+		}
+		seen[name] = struct{}{}
+		var guardrailExists bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM guardrails WHERE name = ?)`, name).Scan(&guardrailExists); err != nil {
+			return fmt.Errorf("store import: validate workspace %s guardrail %s: %w", workspaceID, name, err)
+		}
+		if !guardrailExists {
+			return &ErrValidation{Msg: fmt.Sprintf("workspace %q references unknown guardrail %q", workspaceID, name)}
+		}
+		position := ref.Position
+		if position == 0 {
+			position = i
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO workspace_guardrails (workspace_id, guardrail_name, position, enabled)
+			VALUES (?, ?, ?, ?)`,
+			workspaceID, name, position, boolToInt(ref.Enabled),
+		); err != nil {
+			return fmt.Errorf("store import: insert workspace %s guardrail %s: %w", workspaceID, name, err)
+		}
 	}
 	return nil
 }
@@ -710,15 +779,29 @@ func loadWorkspaces(db querier, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("store load: query workspaces: %w", err)
 	}
-	defer rows.Close()
+	var workspaces []fleet.Workspace
 	for rows.Next() {
 		var w fleet.Workspace
 		if err := rows.Scan(&w.ID, &w.Name, &w.Description); err != nil {
 			return fmt.Errorf("store load: scan workspace: %w", err)
 		}
-		cfg.Workspaces = append(cfg.Workspaces, w)
+		workspaces = append(workspaces, w)
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("store load: close workspaces: %w", err)
+	}
+	for i := range workspaces {
+		refs, err := readWorkspaceGuardrails(db, workspaces[i].ID)
+		if err != nil {
+			return err
+		}
+		workspaces[i].Guardrails = refs
+	}
+	cfg.Workspaces = workspaces
+	return nil
 }
 
 func loadPrompts(db querier, cfg *config.Config) error {

@@ -149,6 +149,10 @@ func ReadWorkspaceGuardrails(db *sql.DB, workspace string) ([]fleet.WorkspaceGua
 	if err != nil {
 		return nil, err
 	}
+	return readWorkspaceGuardrails(db, workspaceID)
+}
+
+func readWorkspaceGuardrails(db querier, workspaceID string) ([]fleet.WorkspaceGuardrailRef, error) {
 	rows, err := db.Query(`
 		SELECT workspace_id, guardrail_name, position, enabled
 		FROM workspace_guardrails

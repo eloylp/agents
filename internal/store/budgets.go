@@ -13,17 +13,17 @@ import (
 
 // TokenBudget represents a token cap for a scope over a time period.
 type TokenBudget struct {
-	ID          int64  `json:"id"`
-	ScopeKind   string `json:"scope_kind"`
-	ScopeName   string `json:"scope_name,omitempty"` // legacy display/input field
-	WorkspaceID string `json:"workspace_id,omitempty"`
-	Repo        string `json:"repo,omitempty"`
-	Agent       string `json:"agent,omitempty"`
-	Backend     string `json:"backend,omitempty"`
-	Period      string `json:"period"` // "daily", "weekly", "monthly"
-	CapTokens   int64  `json:"cap_tokens"`
-	AlertAtPct  int    `json:"alert_at_pct"` // 0-100; 0 disables alerts
-	Enabled     bool   `json:"enabled"`
+	ID          int64  `json:"id" yaml:"id,omitempty"`
+	ScopeKind   string `json:"scope_kind" yaml:"scope_kind"`
+	ScopeName   string `json:"scope_name,omitempty" yaml:"scope_name,omitempty"` // legacy display/input field
+	WorkspaceID string `json:"workspace_id,omitempty" yaml:"workspace_id,omitempty"`
+	Repo        string `json:"repo,omitempty" yaml:"repo,omitempty"`
+	Agent       string `json:"agent,omitempty" yaml:"agent,omitempty"`
+	Backend     string `json:"backend,omitempty" yaml:"backend,omitempty"`
+	Period      string `json:"period" yaml:"period"` // "daily", "weekly", "monthly"
+	CapTokens   int64  `json:"cap_tokens" yaml:"cap_tokens"`
+	AlertAtPct  int    `json:"alert_at_pct" yaml:"alert_at_pct"` // 0-100; 0 disables alerts
+	Enabled     bool   `json:"enabled" yaml:"enabled"`
 }
 
 // LeaderboardEntry aggregates token usage for one agent over a period.

@@ -90,10 +90,10 @@ These routes are always mounted and backed by the SQLite database.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/{resource}` | List all entries for a resource type (`skills`, `backends`, `repos`, `guardrails`). Note: `GET /agents` is the fleet snapshot above, not the CRUD list. |
+| `GET` | `/{resource}` | List all entries for a resource type (`workspaces`, `prompts`, `skills`, `backends`, `repos`, `guardrails`). Note: `GET /agents` is the workspace-filterable fleet snapshot above, not the CRUD list. |
 | `GET` | `/{resource}/{name}` | Fetch one entry. Repos use two path segments: `/repos/{owner}/{repo}`. |
-| `POST` | `/{resource}` | Create or replace an entry. Resources: `agents`, `skills`, `backends`, `repos`, `guardrails`. |
-| `PATCH` | `/{resource}/{name}` | Partial update of an entry. Only fields present in the JSON body are applied; unset fields are preserved. At least one field required. Resources: `agents`, `skills`, `backends`, `guardrails`. |
+| `POST` | `/{resource}` | Create or replace an entry. Resources: `workspaces`, `prompts`, `agents`, `skills`, `backends`, `repos`, `guardrails`. |
+| `PATCH` | `/{resource}/{name}` | Partial update of an entry. Only fields present in the JSON body are applied; unset fields are preserved. At least one field required. Resources: `workspaces`, `prompts`, `agents`, `skills`, `backends`, `guardrails`. |
 | `PATCH` | `/repos/{owner}/{repo}` | Toggle a repo's `enabled` flag. Only `enabled` is patchable; binding edits go through `/repos/{owner}/{repo}/bindings/{id}`, and full repo replacement (including bindings) goes through `POST /repos`. |
 | `DELETE` | `/{resource}/{name}` | Remove an entry. |
 | `DELETE` | `/agents/{name}` | Same as the generic delete, plus a `cascade` query param. By default returns `409 Conflict` with the list of repos still binding the agent; pass `?cascade=true` to also drop those bindings in the same transaction. |
@@ -102,12 +102,14 @@ These routes are always mounted and backed by the SQLite database.
 | `PATCH` | `/repos/{owner}/{repo}/bindings/{id}` | Replace all fields of a binding by ID. |
 | `DELETE` | `/repos/{owner}/{repo}/bindings/{id}` | Remove a binding by ID. |
 | `POST` | `/guardrails/{name}/reset` | Copy a built-in guardrail's `default_content` back into its `content`. Returns 400 for operator-added rows (no default to fall back to). |
-| `GET` | `/export` | Export full fleet config as YAML. |
-| `POST` | `/import` | Import a YAML config into the SQLite store. |
+| `GET` | `/workspaces/{workspace}/guardrails` | List the selected guardrail references for one workspace in render order. |
+| `PUT` | `/workspaces/{workspace}/guardrails` | Replace the selected guardrail references for one workspace. |
+| `GET` | `/export` | Export full fleet config as workspace-aware YAML, including global prompts, global guardrails, and workspace-local agents/repos/budgets. |
+| `POST` | `/import` | Import workspace-aware YAML into the SQLite store. Legacy top-level agents/repos remain accepted into `default`. |
 
 ### Guardrails
 
-Guardrails are operator-defined policy blocks the renderer prepends to every agent's composed prompt. Wire shape: `{name, description, content, default_content, is_builtin, enabled, position}`. PATCH covers `description`, `content`, `enabled`, `position` only, `is_builtin` and `default_content` are migration-managed and not editable from the API. The shipped 'security' guardrail is seeded by migration 010 with `is_builtin = true` and a non-empty `default_content`; operator-added rows have `is_builtin = false` and empty `default_content`. The renderer uses `SELECT * FROM guardrails WHERE enabled = 1 ORDER BY position ASC, name ASC` and concatenates `content` blocks at the very top of the System portion of the prompt. See [security.md](security.md) for the threat model and what the default does, and does not, close.
+Guardrails are global policy catalog entries; workspaces choose which catalog entries to render. Catalog wire shape: `{name, description, content, default_content, is_builtin, enabled, position}`. Workspace references use `{workspace_id, guardrail_name, position, enabled}`. PATCH covers catalog `description`, `content`, `enabled`, `position` only; `is_builtin` and `default_content` are migration-managed and not editable from the API. The renderer combines mandatory dynamic workspace/repository boundary guidance with the selected workspace references in one guardrails section. See [security.md](security.md) for the threat model and what the default does, and does not, close.
 
 Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL cache.
 

@@ -4,6 +4,31 @@
 # This file is a YAML import template. The daemon's source of truth is
 # the SQLite store; YAML is an optional import/export format. To seed
 # an empty fleet or re-import after edits, POST this file to /import.
+# Exports use the workspace-aware shape:
+#
+#   prompts:
+#     - name: coder
+#       content: |
+#         ...
+#   workspaces:
+#     - id: default
+#       name: Default
+#       guardrails:
+#         - guardrail_name: security
+#           enabled: true
+#       agents:
+#         - name: coder
+#           prompt_ref: coder
+#           scope_type: workspace
+#       repos:
+#         - name: owner/repo
+#           use:
+#             - agent: coder
+#               labels: [ai ready]
+#
+# This example still uses the legacy top-level agents/repos form because it is
+# concise for hand-authored bootstraps; import migrates those entries into the
+# Default workspace and creates prompt catalog rows automatically.
 # After that, manage the fleet through the /ui/ dashboard, the CRUD
 # API, or the agents-fleet MCP tools.
 #

@@ -198,6 +198,14 @@ func (s *Store) ReplaceAll(agents []fleet.Agent, repos []fleet.Repo, skills map[
 	return ReplaceAll(s.db, agents, repos, skills, backends, guardrails, budgets)
 }
 
+func (s *Store) ImportConfig(cfg *config.Config, budgets []TokenBudget) error {
+	return ImportConfig(s.db, cfg, budgets)
+}
+
+func (s *Store) ReplaceConfig(cfg *config.Config, budgets []TokenBudget) error {
+	return ReplaceConfig(s.db, cfg, budgets)
+}
+
 func (s *Store) Import(cfg *config.Config) error          { return Import(s.db, cfg) }
 func (s *Store) Load() (*config.Config, error)            { return Load(s.db) }
 func (s *Store) LoadAndValidate() (*config.Config, error) { return LoadAndValidate(s.db) }

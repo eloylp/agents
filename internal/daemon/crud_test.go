@@ -2029,8 +2029,13 @@ func TestStoreExportReturnsYAML(t *testing.T) {
 		t.Fatalf("export: got %d, %s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	if !strings.Contains(body, "coder") {
-		t.Errorf("export YAML missing agent name: %s", body)
+	for _, want := range []string{"prompts:", "workspaces:", "prompt_ref: coder", "guardrails:", "coder"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("export YAML missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "agents:\n    -") && strings.Contains(body, "prompt: help") {
+		t.Errorf("export nested agent includes inline prompt content: %s", body)
 	}
 	if !strings.Contains(body, "owner/repo") {
 		t.Errorf("export YAML missing repo name: %s", body)
@@ -2038,6 +2043,80 @@ func TestStoreExportReturnsYAML(t *testing.T) {
 	ct := rr.Header().Get("Content-Type")
 	if !strings.Contains(ct, "yaml") {
 		t.Errorf("export Content-Type want yaml, got %q", ct)
+	}
+}
+
+func TestStoreImportWorkspaceShape(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	yamlBody := `backends:
+  claude:
+    command: claude
+prompts:
+  - name: imported-prompt
+    content: imported prompt
+skills: {}
+workspaces:
+  - id: team-a
+    name: Team A
+    guardrails:
+      - guardrail_name: security
+        enabled: true
+    agents:
+      - name: imported-agent
+        backend: claude
+        prompt_ref: imported-prompt
+        description: imported agent
+        skills: []
+        can_dispatch: []
+        scope_type: repo
+        scope_repo: owner/new-repo
+    repos:
+      - name: owner/new-repo
+        enabled: true
+        use:
+          - agent: imported-agent
+            labels: [ai:run]
+    token_budgets:
+      - scope_kind: workspace+agent
+        agent: imported-agent
+        period: monthly
+        cap_tokens: 100000
+        alert_at_pct: 80
+        enabled: true
+`
+	req := httptest.NewRequest(http.MethodPost, "/import?mode=replace", strings.NewReader(yamlBody))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("workspace import: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var summary map[string]int
+	if err := json.NewDecoder(rr.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if summary["workspaces"] != 1 || summary["prompts"] != 1 || summary["agents"] != 1 || summary["repos"] != 1 || summary["token_budgets"] != 1 {
+		t.Fatalf("summary = %+v, want one imported workspace/prompt/agent/repo/budget", summary)
+	}
+
+	agents := doCRUDRequest(t, s, http.MethodGet, "/agents?workspace=team-a", nil)
+	if !strings.Contains(agents.Body.String(), "imported-agent") || !strings.Contains(agents.Body.String(), "imported-prompt") {
+		t.Fatalf("workspace agent missing after import: %s", agents.Body.String())
+	}
+	defaultAgents := doCRUDRequest(t, s, http.MethodGet, "/agents", nil)
+	if strings.Contains(defaultAgents.Body.String(), "imported-agent") {
+		t.Fatalf("workspace agent leaked into default workspace listing: %s", defaultAgents.Body.String())
+	}
+	exported := doCRUDRequest(t, s, http.MethodGet, "/export", nil)
+	if exported.Code != http.StatusOK {
+		t.Fatalf("export after workspace import: got %d, %s", exported.Code, exported.Body.String())
+	}
+	for _, want := range []string{"workspaces:", "id: team-a", "prompts:", "prompt_ref: imported-prompt", "workspace+agent"} {
+		if !strings.Contains(exported.Body.String(), want) {
+			t.Errorf("export after import missing %q: %s", want, exported.Body.String())
+		}
 	}
 }
 

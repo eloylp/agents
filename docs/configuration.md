@@ -4,14 +4,15 @@ The agent fleet lives in a SQLite database that the daemon boots from. You manag
 
 This page documents the schema, using YAML examples for clarity. Every field shown here also exists as a column in the SQLite store and as a JSON field on the CRUD endpoints; the three surfaces are interchangeable.
 
-The import/export schema is split into five fleet domains:
+The import/export schema is split into global catalog domains and workspace-local
+runtime wiring:
 
 ```yaml
 backends:    # AI CLI/runtime definitions agents can use
+prompts:     # global reusable prompt catalog entries
 skills:      # reusable guidance blocks, keyed by name
-agents:      # named capabilities: backend + skills + prompt + dispatch wiring
-repos:       # wiring: which agents run on which repo, and when
-guardrails:  # operator-defined prompt blocks prepended to every agent's composed prompt
+guardrails:  # global reusable policy catalog entries
+workspaces:  # selected guardrails plus workspace-local agents, repos, and budgets
 ```
 
 The shortest useful YAML representation is roughly 30 lines.
@@ -73,6 +74,23 @@ backends:
 
 > **Backend launch args are daemon-managed.** The arguments passed to `claude` and `codex` are hardcoded by the daemon (`-p --dangerously-skip-permissions --output-format stream-json --json-schema <embedded>` for Claude, `exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --output-schema <embedded>` for Codex). The JSONL/stream-json output is what lets the daemon reconstruct the tool-loop transcript on `trace_steps`. The YAML schema does not expose these args; the only backend fields you can change at runtime are `timeout_seconds`, `max_prompt_chars`, and (for local backends) `local_model_url`.
 
+## `prompts`
+
+```yaml
+prompts:
+  - name: coder
+    description: Implements approved work
+    content: |
+      Implement the requested change end-to-end.
+      Run focused tests before opening a pull request.
+```
+
+Prompts are global reusable assets. Agents reference them by name through
+`prompt_ref`; editing a prompt updates every agent that references it. Legacy
+imports may still provide inline agent `prompt` text, which the store migrates
+into a prompt catalog entry, but exports prefer `prompt_ref` and do not emit
+inline agent prompt bodies.
+
 ## `skills`
 
 ```yaml
@@ -86,64 +104,63 @@ skills:
       Focus on authn/authz, secrets exposure, injection vectors, and unsafe defaults.
 ```
 
-Skills are referenced by name from agents. Prompts are inline strings, once the YAML has been imported into SQLite, manage them through the CRUD API, the web UI, or the MCP tools.
+Skills are referenced by name from agents. Skill text remains a global reusable
+guidance block, separate from the prompt catalog.
 
-## `agents`
+## `workspaces`
 
 ```yaml
-agents:
-  # Short inline prompt for a reviewer that never opens PRs (default)
-  - name: arch-reviewer
-    backend: claude        # must match a key under backends
-    skills: [architect]
-    prompt: |
-      You are an architecture-focused PR reviewer. Post one high-signal review comment.
-
-  # PR-authoring agent
-  - name: coder
-    backend: claude
-    skills: [architect, testing]
-    prompt: |
-      Implement the requested change end-to-end.
-      Run focused tests and open a pull request when the work is ready.
-    allow_prs: true            # required for agents that open PRs
-
-  # Dispatch target that can be invoked by pr-reviewer
-  - name: sec-reviewer
-    description: "Deep-dive security reviewer for risky changes"
-    backend: claude
-    allow_dispatch: true       # opt-in to being dispatched
-    prompt: |
-      Review the change for security risks and trust-boundary violations.
-
-  # Agent that may dispatch to sec-reviewer
-  - name: pr-reviewer
-    backend: claude
-    can_dispatch: [sec-reviewer]   # whitelist of agents this agent may dispatch
-    prompt: |
-      Review the pull request for correctness, regressions, and missing tests.
-
-  # Stateless researcher whose memory is recomputed on every run
-  - name: product-strategist
-    backend: claude
-    skills: [architect]
-    allow_memory: false         # disable memory load+persist for this agent
-    prompt: |
-      Research current product priorities from scratch each run.
+workspaces:
+  - id: default
+    name: Default
+    guardrails:
+      - guardrail_name: security
+        enabled: true
+      - guardrail_name: memory-scope
+        enabled: true
+    agents:
+      - name: coder
+        backend: claude
+        description: Implements fixes and features
+        skills: [architect, testing]
+        prompt_ref: coder
+        scope_type: workspace
+        allow_prs: true
+    repos:
+      - name: "owner/repo"
+        enabled: true
+        use:
+          - agent: coder
+            labels: ["ai:ready"]
+    token_budgets:
+      - scope_kind: workspace+agent
+        agent: coder
+        period: monthly
+        cap_tokens: 5000000
+        alert_at_pct: 80
+        enabled: true
 ```
 
-Each agent is a pure capability definition: backend + skills + prompt. Agents don't run until a repo binds them to a trigger.
+Each workspace is an operational boundary for agents, repos, memory, graph
+layout, runs, traces, events, dispatches, and workspace-scoped budgets. New
+workspaces inherit built-in guardrail references; exports show the selected
+references in render order so operators can remove, re-order, or add them.
+
+Each agent is a workspace-local capability definition: backend + skills +
+`prompt_ref` + scope + dispatch wiring. Agents don't run until a repo in the
+same workspace binds them to a trigger.
 
 - `backend` must match an entry in `backends` (e.g. `claude`, `codex`, or any custom local-backend name). There is no `auto` selection; every agent must name a backend explicitly.
-- `prompt` is an inline string in the YAML. After import the prompt lives in SQLite, edit it through the CRUD API, the web UI, or the MCP `update_agent` tool. JSON responses may omit an empty `prompt` once `prompt_ref` names the catalog prompt; treat `prompt_ref` as the canonical reference.
-- Agent names must be unique.
+- `prompt_ref` must name a global prompt. Legacy inline `prompt` imports are accepted for migration compatibility only.
+- `scope_type` is `workspace` or `repo`. `repo` scope also requires `scope_repo`, and the daemon rejects runs outside that repo.
+- Agent names must be unique inside a workspace.
 - `allow_prs` (default `false`): when `false`, the scheduler prepends a hard instruction forbidding the agent from opening pull requests, regardless of what the prompt says. Set `allow_prs: true` only on agents that are explicitly meant to author PRs (e.g. coders, refactorers). Reviewer-only agents should leave this unset.
 - `allow_dispatch` (default `false`): opt-in gate. An agent must have `allow_dispatch: true` for any other agent to dispatch it. Agents without this flag silently drop any incoming dispatch requests.
 - `allow_memory` (default `true`): controls whether the daemon loads existing memory into the prompt and persists the agent's returned `memory` field after the run. The flag is the single authority on memory across every trigger surface (cron, webhook events, inter-agent dispatch, `POST /run`, MCP `trigger_agent`). Set `allow_memory: false` to skip both the load and the persist for an agent, useful for inherently stateless agents (e.g. research / strategy agents whose work is recomputed each run) so they don't waste prompt budget on memory they will never use. The toggle is a hard runtime gate that does not depend on the agent's prompt cooperating. Existing agents authored before this field existed continue to behave exactly as they did, since the default is `true`.
 - `can_dispatch`: whitelist of agent names this agent is allowed to dispatch. A dispatch to an agent not on this list is silently dropped. Entries must reference real agents in the same config and must not include the agent itself. This wiring is the runtime dispatch authority; the target does not need its own repo binding unless it should also start independently.
 - `description`: required for every agent. Used for UI identification and, when the agent is dispatchable, to explain the target in the originating agent's prompt roster for inter-agent conversations.
 
-## `repos`
+### Workspace `repos`
 
 ```yaml
 repos:
@@ -201,7 +218,11 @@ Rules:
 
 ## `guardrails`
 
-Operator-defined policy blocks the renderer prepends to every agent's composed prompt at render time, ahead of the no-PR guard, skills, and the agent prompt body itself. Four built-ins ship enabled by default:
+Operator-defined global policy catalog entries that workspaces can reference.
+At render time the daemon builds one guardrails section from mandatory dynamic
+workspace/repository boundary text plus the selected workspace guardrails, ahead
+of skills and the selected global prompt content. Four built-ins ship by
+default:
 
 - **`security`** (position 0, seeded by migration 010): pushes back on indirect prompt injection, secret exfiltration, and out-of-tree filesystem or network access. See [security.md](security.md) for the threat model and what the recommendation does *not* close.
 - **`discretion`** (position 5, seeded by migration 013): conservative behaviour policy for public actions. No `@`-mention or assignment of GitHub users outside the current thread, no cross-repo writes, no speculation about contributors or maintainers, no linking to private or tracking resources.
@@ -236,8 +257,8 @@ Rules:
 
 - `name` is a stable identifier, normalised to lowercase + dash-joined.
 - `content` is the text the agent sees, prepended verbatim to the System portion of its prompt.
-- `enabled = false` keeps the row in the database but skips it at render time.
-- `position` orders rendering: lower first, ties broken by name. Built-ins use 0; operator-added rows default to 100.
+- `enabled` on the global catalog records the default state copied into new workspace references. The workspace reference's `enabled` flag controls whether that workspace renders it.
+- `position` on the global catalog is the default order copied into new workspace references. Workspace references carry their own order.
 - `is_builtin` and `default_content` are migration-managed and intentionally not part of the YAML schema. A re-import that includes the `security` row updates `content` / `description` / `enabled` / `position` only; the seeded `default_content` is preserved so the dashboard's **Reset to default** button keeps working.
 
 ## Environment variables
@@ -262,4 +283,4 @@ curl -s http://localhost:8080/export > fleet.yaml
 curl -X POST http://localhost:8080/import --data-binary @fleet.yaml
 ```
 
-The CRUD endpoints for `/agents`, `/skills`, `/backends`, `/repos`, and `/guardrails` are always mounted and backed by the SQLite database. `agents`, `skills`, `backends`, and `guardrails` support `PATCH /{resource}/{name}` for partial updates: only fields present in the request body are applied, the rest are preserved. `PATCH /repos/{owner}/{repo}` is enabled-only; binding edits go through `/repos/{owner}/{repo}/bindings/{id}`, and full repo replacement goes through `POST /repos`. Guardrails additionally support `POST /guardrails/{name}/reset` for built-ins. For `/agents`, `POST /agents`, `PATCH /agents/{name}`, and `DELETE /agents/{name}` are CRUD write endpoints, but `GET /agents` always returns the live fleet snapshot (not the stored agent list). The daemon auto-reloads cron schedules after any write to agents, skills, backends, or repos. Agent memory is stored in the same SQLite database.
+The CRUD endpoints for `/workspaces`, `/prompts`, `/agents`, `/skills`, `/backends`, `/repos`, and `/guardrails` are always mounted and backed by the SQLite database. Workspace-scoped endpoints accept `?workspace=<id>` and default to `default` for compatibility. `agents`, `skills`, `backends`, `prompts`, and `guardrails` support partial update routes where documented; `PATCH /repos/{owner}/{repo}` is enabled-only; binding edits go through `/repos/{owner}/{repo}/bindings/{id}`, and full repo replacement goes through `POST /repos`. Guardrails additionally support `POST /guardrails/{name}/reset` for built-ins. The daemon auto-reloads cron schedules after writes that affect runnable fleet state. Agent memory is stored in the same SQLite database and is scoped by workspace.

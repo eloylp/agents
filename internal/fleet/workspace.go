@@ -19,9 +19,10 @@ func NormalizeWorkspaceID(id string) string {
 // Workspace is the top-level operational context for repos, agents, runtime
 // events, memory, graph layout, and budgets.
 type Workspace struct {
-	ID          string `yaml:"id,omitempty" json:"id"`
-	Name        string `yaml:"name" json:"name"`
-	Description string `yaml:"description,omitempty" json:"description"`
+	ID          string                  `yaml:"id,omitempty" json:"id"`
+	Name        string                  `yaml:"name" json:"name"`
+	Description string                  `yaml:"description,omitempty" json:"description"`
+	Guardrails  []WorkspaceGuardrailRef `yaml:"guardrails,omitempty" json:"-"`
 }
 
 // WorkspaceGuardrailRef is a workspace-local reference to a global guardrail

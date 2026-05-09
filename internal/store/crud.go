@@ -648,6 +648,93 @@ func ReplaceAll(
 	return tx.Commit()
 }
 
+// ImportConfig upserts the workspace-aware YAML import/export shape in a
+// single transaction. It includes global prompts and workspace guardrail
+// references in addition to the legacy fleet sections.
+func ImportConfig(db *sql.DB, cfg *config.Config, budgets []TokenBudget) error {
+	return importConfig(db, cfg, budgets, false)
+}
+
+// ReplaceConfig replaces the workspace-aware YAML import/export shape in a
+// single transaction. The default workspace row is retained as the compatibility
+// fallback, but all dependent mutable fleet rows are pruned before import.
+func ReplaceConfig(db *sql.DB, cfg *config.Config, budgets []TokenBudget) error {
+	return importConfig(db, cfg, budgets, true)
+}
+
+func importConfig(db *sql.DB, cfg *config.Config, budgets []TokenBudget, replace bool) error {
+	normalizedSkills, normalizedBackends := normalizeFleet(cfg.Agents, cfg.Repos, cfg.Skills, cfg.Backends)
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: import config: begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	if replace {
+		for _, tbl := range []string{"bindings", "repos", "agents", "token_budgets"} {
+			if _, err := tx.Exec("DELETE FROM " + tbl); err != nil {
+				return fmt.Errorf("store: replace config: truncate %s: %w", tbl, err)
+			}
+		}
+		if _, err := tx.Exec("DELETE FROM prompts"); err != nil {
+			return fmt.Errorf("store: replace config: truncate prompts: %w", err)
+		}
+		if _, err := tx.Exec("DELETE FROM workspace_guardrails"); err != nil {
+			return fmt.Errorf("store: replace config: truncate workspace guardrails: %w", err)
+		}
+		if err := seedWorkspaceGuardrails(tx, fleet.DefaultWorkspaceID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("DELETE FROM workspaces WHERE id <> ?", fleet.DefaultWorkspaceID); err != nil {
+			return fmt.Errorf("store: replace config: truncate workspaces: %w", err)
+		}
+		for _, tbl := range []string{"skills", "backends"} {
+			if _, err := tx.Exec("DELETE FROM " + tbl); err != nil {
+				return fmt.Errorf("store: replace config: truncate %s: %w", tbl, err)
+			}
+		}
+		if _, err := tx.Exec("DELETE FROM guardrails WHERE is_builtin = 0"); err != nil {
+			return fmt.Errorf("store: replace config: truncate operator guardrails: %w", err)
+		}
+	}
+
+	if err := importSkills(tx, normalizedSkills); err != nil {
+		return err
+	}
+	if err := importBackends(tx, normalizedBackends); err != nil {
+		return err
+	}
+	if err := importGuardrails(tx, cfg.Guardrails); err != nil {
+		return err
+	}
+	if err := importWorkspaces(tx, cfg.Workspaces); err != nil {
+		return err
+	}
+	if err := importWorkspaceGuardrails(tx, cfg.Workspaces); err != nil {
+		return err
+	}
+	if err := importPrompts(tx, cfg.Prompts); err != nil {
+		return err
+	}
+	if err := importReferencedWorkspaces(tx, cfg.Agents, cfg.Repos); err != nil {
+		return err
+	}
+	if err := importAgents(tx, cfg.Agents, true); err != nil {
+		return err
+	}
+	if err := importRepos(tx, cfg.Repos); err != nil {
+		return err
+	}
+	if err := importTokenBudgetsTx(tx, budgets, replace); err != nil {
+		return err
+	}
+	if err := validateFleetConstraints(tx, "import", cfg.Repos); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // ──── Bindings (atomic per-item CRUD) ────────────────────────────────────────────
 
 // validateBindingShape checks the trigger-exclusivity and event-kind invariants
