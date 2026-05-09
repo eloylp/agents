@@ -4,6 +4,7 @@ import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import FullscreenModal from '@/components/FullscreenModal'
 import MarkdownEditor from '@/components/MarkdownEditor'
+import { useSelectedWorkspace } from '@/lib/workspace'
 
 interface Guardrail {
   name: string
@@ -13,6 +14,13 @@ interface Guardrail {
   is_builtin: boolean
   enabled: boolean
   position: number
+}
+
+interface WorkspaceGuardrailRef {
+  workspace_id?: string
+  guardrail_name: string
+  position: number
+  enabled: boolean
 }
 
 const emptyForm: Guardrail = {
@@ -144,7 +152,9 @@ function GuardrailForm({
 }
 
 export default function GuardrailsManager() {
+  const { workspace, workspaces } = useSelectedWorkspace()
   const [guardrails, setGuardrails] = useState<Guardrail[]>([])
+  const [workspaceRefs, setWorkspaceRefs] = useState<WorkspaceGuardrailRef[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
 
@@ -153,18 +163,80 @@ export default function GuardrailsManager() {
   const [confirmStep, setConfirmStep] = useState(0)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [workspaceSaveError, setWorkspaceSaveError] = useState('')
 
   const load = () => {
     setLoading(true)
-    fetch('/guardrails')
-      .then(r => r.json())
-      .then((data: Guardrail[]) => {
-        setGuardrails(data ?? [])
+    setLoadError('')
+    Promise.all([
+      fetch('/guardrails').then(r => {
+        if (!r.ok) throw new Error(`load guardrails: ${r.status}`)
+        return r.json()
+      }),
+      fetch(`/workspaces/${encodeURIComponent(workspace)}/guardrails`).then(r => {
+        if (!r.ok) throw new Error(`load workspace guardrails: ${r.status}`)
+        return r.json()
+      }),
+    ])
+      .then(([catalog, refs]: [Guardrail[], WorkspaceGuardrailRef[]]) => {
+        setGuardrails(catalog ?? [])
+        setWorkspaceRefs((refs ?? []).slice().sort((a, b) => a.position - b.position || a.guardrail_name.localeCompare(b.guardrail_name)))
         setLoading(false)
       })
       .catch(e => { setLoadError(String(e)); setLoading(false) })
   }
-  useEffect(load, [])
+  useEffect(load, [workspace])
+
+  const selectedWorkspace = workspaces.find(w => w.id === workspace)
+  const workspaceLabel = selectedWorkspace?.name || workspace
+  const workspaceRefNames = new Set(workspaceRefs.map(r => r.guardrail_name))
+
+  const saveWorkspaceRefs = async (nextRefs: WorkspaceGuardrailRef[]) => {
+    setSaving(true)
+    setWorkspaceSaveError('')
+    try {
+      const body = nextRefs.map((ref, index) => ({
+        guardrail_name: ref.guardrail_name,
+        position: index,
+        enabled: ref.enabled,
+      }))
+      const res = await fetch(`/workspaces/${encodeURIComponent(workspace)}/guardrails`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        setWorkspaceSaveError((await res.text()) || 'Save workspace guardrails failed')
+        return
+      }
+      const saved = await res.json() as WorkspaceGuardrailRef[]
+      setWorkspaceRefs(saved.slice().sort((a, b) => a.position - b.position || a.guardrail_name.localeCompare(b.guardrail_name)))
+    } catch (e) {
+      setWorkspaceSaveError(String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const toggleWorkspaceRef = (name: string, checked: boolean) => {
+    const next = checked
+      ? [...workspaceRefs, { guardrail_name: name, position: workspaceRefs.length, enabled: true }]
+      : workspaceRefs.filter(ref => ref.guardrail_name !== name)
+    void saveWorkspaceRefs(next)
+  }
+
+  const setWorkspaceRefEnabled = (name: string, enabled: boolean) => {
+    void saveWorkspaceRefs(workspaceRefs.map(ref => ref.guardrail_name === name ? { ...ref, enabled } : ref))
+  }
+
+  const moveWorkspaceRef = (name: string, direction: -1 | 1) => {
+    const idx = workspaceRefs.findIndex(ref => ref.guardrail_name === name)
+    const swap = idx + direction
+    if (idx < 0 || swap < 0 || swap >= workspaceRefs.length) return
+    const next = workspaceRefs.slice()
+    ;[next[idx], next[swap]] = [next[swap], next[idx]]
+    void saveWorkspaceRefs(next)
+  }
 
   const closeModal = () => {
     setModal(null)
@@ -279,9 +351,81 @@ export default function GuardrailsManager() {
 
   return (
     <div>
+      <Card title={`Workspace guardrails: ${workspaceLabel}`} style={{ marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', margin: 0 }}>
+            Selected guardrails render for this workspace in the order shown. The global catalog below controls the reusable guardrail text.
+          </p>
+          {workspaceSaveError && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', margin: 0 }}>{workspaceSaveError}</p>}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+            {guardrails.map(g => {
+              const ref = workspaceRefs.find(r => r.guardrail_name === g.name)
+              const selectedForWorkspace = !!ref
+              const refIndex = ref ? workspaceRefs.findIndex(r => r.guardrail_name === g.name) : -1
+              return (
+                <div
+                  key={`workspace-${g.name}`}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(160px, 1fr) auto auto',
+                    gap: '0.5rem',
+                    alignItems: 'center',
+                    padding: '0.55rem 0.65rem',
+                    border: '1px solid var(--border)',
+                    borderRadius: '8px',
+                    background: selectedForWorkspace ? 'var(--bg-card)' : 'transparent',
+                  }}
+                >
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={selectedForWorkspace}
+                      disabled={saving}
+                      onChange={e => toggleWorkspaceRef(g.name, e.target.checked)}
+                    />
+                    <span style={{ color: 'var(--text-heading)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{g.name}</span>
+                  </label>
+                  {selectedForWorkspace && (
+                    <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={ref?.enabled ?? true}
+                        disabled={saving}
+                        onChange={e => setWorkspaceRefEnabled(g.name, e.target.checked)}
+                      />
+                      Enabled
+                    </label>
+                  )}
+                  {selectedForWorkspace ? (
+                    <div style={{ display: 'flex', gap: '0.35rem', justifyContent: 'flex-end' }}>
+                      <button
+                        disabled={saving || refIndex <= 0}
+                        onClick={() => moveWorkspaceRef(g.name, -1)}
+                        style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)', cursor: saving || refIndex <= 0 ? 'not-allowed' : 'pointer' }}
+                      >
+                        Up
+                      </button>
+                      <button
+                        disabled={saving || refIndex >= workspaceRefs.length - 1}
+                        onClick={() => moveWorkspaceRef(g.name, 1)}
+                        style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)', cursor: saving || refIndex >= workspaceRefs.length - 1 ? 'not-allowed' : 'pointer' }}
+                      >
+                        Down
+                      </button>
+                    </div>
+                  ) : (
+                    <span style={{ color: 'var(--text-faint)', fontSize: '0.8rem', textAlign: 'right' }}>not selected</span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </Card>
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-          {guardrails.length} guardrail{guardrails.length === 1 ? '' : 's'}, prepended to every agent's composed prompt in render order.
+          {guardrails.length} global guardrail{guardrails.length === 1 ? '' : 's'} in the reusable catalog.
         </span>
         <button
           onClick={() => { setSelected(emptyForm); setModal('create') }}
@@ -305,6 +449,9 @@ export default function GuardrailsManager() {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                 <span style={{ fontWeight: 600, color: 'var(--text-heading)' }}>{g.name}</span>
+                {workspaceRefNames.has(g.name) && (
+                  <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'var(--bg-input)', color: 'var(--accent)', border: '1px solid var(--accent)' }}>selected</span>
+                )}
                 {g.is_builtin && (
                   <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'var(--accent)', color: 'var(--bg-card)' }}>built-in</span>
                 )}
