@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { useTheme } from '@/lib/theme'
+import { inferredBackends, setupComplete, type BackendsDiagnostics } from '@/lib/tooling-setup'
 
 const links = [
   { href: '/graph/', label: 'Graph', group: 'Design' },
@@ -27,6 +28,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [orphanCount, setOrphanCount] = useState(0)
   const [budgetAlertCount, setBudgetAlertCount] = useState(0)
+  const [toolingSetupNeeded, setToolingSetupNeeded] = useState(false)
 
   const signOut = async () => {
     await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' })
@@ -71,6 +73,28 @@ export default function DashboardShell({ children }: { children: React.ReactNode
     }
     load()
     const id = window.setInterval(load, 30000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const res = await fetch('/backends/status', { cache: 'no-store' })
+        if (!res.ok) return
+        const data = await res.json() as BackendsDiagnostics
+        const stored = window.localStorage.getItem('agents_tooling_setup_backends')
+        const complete = setupComplete(data, inferredBackends(data, stored))
+        if (!cancelled) setToolingSetupNeeded(!complete)
+      } catch {
+        // The setup wizard itself shows detailed diagnostic failures.
+      }
+    }
+    load()
+    const id = window.setInterval(load, 60000)
     return () => {
       cancelled = true
       window.clearInterval(id)
@@ -203,6 +227,11 @@ export default function DashboardShell({ children }: { children: React.ReactNode
         {budgetAlertCount > 0 && (
           <Link href="/config/?tab=tokens" style={{ display: 'block', background: 'var(--bg-danger)', borderBottom: '1px solid var(--border-danger)', color: 'var(--text-danger)', padding: '0.5rem 1rem', fontSize: '0.82rem', fontWeight: 600, textDecoration: 'none' }}>
             {budgetAlertCount} token budget{budgetAlertCount === 1 ? '' : 's'} at or above alert threshold. Click to review in Token usage and limits.
+          </Link>
+        )}
+        {toolingSetupNeeded && !pathname.startsWith('/setup/tooling') && (
+          <Link href="/setup/tooling/" style={{ display: 'block', background: 'var(--accent-bg)', borderBottom: '1px solid var(--border)', color: 'var(--accent)', padding: '0.5rem 1rem', fontSize: '0.82rem', fontWeight: 600, textDecoration: 'none' }}>
+            Tooling setup is incomplete. Open the guided setup checklist.
           </Link>
         )}
         <main className="shell-content">{children}</main>

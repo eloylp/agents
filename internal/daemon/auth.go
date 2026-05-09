@@ -532,13 +532,13 @@ const rootLoginHTML = `<!doctype html>
     const error = document.getElementById('error');
     let bootstrapRequired = false;
 
-    function openDashboard() {
+    function openDashboard(path = '/ui/graph/') {
       try {
-        window.top.location.assign('/ui/graph/');
+        window.top.location.assign(path);
       } catch {
-        window.location.assign('/ui/graph/');
+        window.location.assign(path);
       }
-      setTimeout(() => window.location.replace('/ui/graph/'), 75);
+      setTimeout(() => window.location.replace(path), 75);
     }
 
     async function refresh() {
@@ -589,7 +589,7 @@ const rootLoginHTML = `<!doctype html>
         error.hidden = false;
         return;
       }
-      openDashboard();
+      openDashboard(bootstrapRequired ? '/ui/setup/tooling/' : '/ui/graph/');
     });
 
     refresh().catch((err) => {

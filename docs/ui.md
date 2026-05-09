@@ -103,7 +103,9 @@ Current fleet config snapshot. Includes YAML import/export for shareable fleet s
 
 ## Authentication
 
-The root login page supports first-user setup and username/password login before redirecting authenticated browsers to `/ui/`. Inside the dashboard, Config -> Authentication supports logout, admin-only user creation/removal, and named API token management. The first bootstrapped user is the admin user and cannot be removed. Browser sessions use an opaque DB-backed token in an `HttpOnly` cookie. MCP and REST clients use API tokens created in the dashboard and sent as `Authorization: Bearer <token>`.
+The root login page supports first-user setup and username/password login. The first admin bootstrap redirects to `/ui/setup/tooling/`, where the browser wizard checks daemon tooling health and points at `docker compose exec -it agents agents-setup` for CLI-owned auth. Normal sign-in still opens the graph workflow designer, and incomplete tooling shows a non-blocking dashboard callout.
+
+Inside the dashboard, Config -> Authentication supports logout, admin-only user creation/removal, and named API token management. The first bootstrapped user is the admin user and cannot be removed. Browser sessions use an opaque DB-backed token in an `HttpOnly` cookie. MCP and REST clients use API tokens created in the dashboard and sent as `Authorization: Bearer <token>`.
 
 The authenticated dashboard uses a left-side navigation shell on desktop and a hamburger drawer on small screens. The shell owns global alerts for orphaned agents and token-budget thresholds; individual pages keep their own operational state.
 

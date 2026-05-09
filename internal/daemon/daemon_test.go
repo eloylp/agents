@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -1043,9 +1044,16 @@ func TestBuildHandlerDBAuthBootstrapLoginAndAPIToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("root login request failed: %v", err)
 	}
+	rootBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read root login body: %v", err)
+	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("unauthenticated root got %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if !strings.Contains(string(rootBody), "bootstrapRequired ? '/ui/setup/tooling/' : '/ui/graph/'") {
+		t.Fatalf("root login HTML does not route first admin bootstrap to tooling setup")
 	}
 
 	req, _ = http.NewRequest(http.MethodGet, ts.URL+"/", nil)

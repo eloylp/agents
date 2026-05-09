@@ -27,6 +27,7 @@ See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a re
 - **[Self-hosted](docs/quickstart.md)**: your code and prompts stay on your infrastructure. No SaaS dependency.
 - **[Security recommendations](docs/security.md)**: ships built-in guardrails prepended to every agent prompt for indirect prompt-injection resistance, public-action discretion, daemon-only memory scope, and GitHub repository tool usage (MCP first, gh fallback).
 - **Daemon auth**: create the first local admin user from the root login page, use an `HttpOnly` browser session for UI access, manage additional users, and create revocable named bearer tokens for MCP/API clients.
+- **First-run tooling wizard**: after admin bootstrap, the dashboard guides Claude/Codex, GitHub MCP, `gh`, and backend discovery setup while keeping interactive auth in the terminal companion.
 - **Multi-backend**: pick Claude, Codex, or a custom backend per agent. Different agents in the same fleet can use different providers.
 - **Discovery and diagnostics**: the daemon detects backends and tools, validates CLI health, and persists discovery snapshots.
 - **[Local-model support](docs/local-models.md)**: run any agent through `llama.cpp`, Ollama, vLLM, or any OpenAI-compatible endpoint. The daemon ships a built-in Anthropic-to-OpenAI translation proxy so the existing `claude` CLI works unchanged against your own LLM (experimental).

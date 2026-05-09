@@ -65,7 +65,11 @@ CODEX_AUTH_JSON_BASE64="$(base64 < ~/.codex/auth.json | tr -d '\n')"
 
 Copy that value into `.env`. Treat it like a password; it contains refreshable Codex credentials. The daemon does not mount your home directory or any Codex volume into runner containers. It passes the base64 value through the runner environment and materializes `auth.json` only inside each ephemeral runner container.
 
-Then open `http://localhost:8080/`, bootstrap the first admin user, and use Config -> Runtime / Backends diagnostics to verify the runner image, credentials, and backend readiness. Fleet configuration (workspaces, agents, prompts, skills, repos, bindings, webhooks) lives in the dashboard.
+## Bootstrap the dashboard and tooling
+
+Open `http://localhost:8080/` and create the first admin user. A fresh install sends you to the browser tooling setup wizard at `/ui/setup/tooling/` before the graph designer. The wizard shows the current health of the daemon, runner image, `gh`, Claude, Codex, GitHub MCP, and backend model discovery.
+
+When the wizard reports missing interactive auth, run the terminal companion again, restart the daemon, then click **Re-check** or **Refresh discovery** in the wizard. When the selected backend tooling is healthy, continue into the graph workflow designer. **Fleet configuration (workspaces, agents, prompts, skills, repos, bindings, webhooks) lives in the dashboard**. Those tasks are graphical-shaped and don't fit a bash prompt loop.
 
 Before enabling scheduled runs, perform a smoke test from the dashboard or REST API: run a trivial agent against a test repository and confirm the run creates a fresh runner container, streams trace steps while in flight, persists the final trace, and removes the runner container afterward. This proves the mounted Docker socket and configured runner image work in your environment.
 
