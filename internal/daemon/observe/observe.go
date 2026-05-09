@@ -360,11 +360,11 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, r *http.Request) {
 
 	// Build a map of the last cron error status for each agent so idle
 	// agents that last exited with an error are flagged in the response.
-	lastErrorByAgent := make(map[string]bool)
+	lastErrorByAgent := make(map[string]struct{})
 	if h.sched != nil {
 		for _, as := range h.sched.AgentStatuses() {
 			if fleet.NormalizeWorkspaceID(as.WorkspaceID) == workspaceID && as.LastStatus == "error" {
-				lastErrorByAgent[as.Name] = true
+				lastErrorByAgent[as.Name] = struct{}{}
 			}
 		}
 	}
@@ -373,7 +373,7 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, r *http.Request) {
 		if h.events != nil && h.events.IsRunning(name) {
 			return "running"
 		}
-		if lastErrorByAgent[name] {
+		if _, ok := lastErrorByAgent[name]; ok {
 			return "error"
 		}
 		return ""
