@@ -398,8 +398,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 	// Rollback on error so the slot is freed for the next tick; finalize on
 	// success so the dedup window is preserved.
 	if ev.Kind == "cron" && e.dispatcher != nil {
-		dedupRepo := dedupRepoKey(workspaceID, repo.Name)
-		if !e.dispatcher.TryMarkAutonomousRun(targetName, dedupRepo, time.Now()) {
+		if !e.dispatcher.TryMarkAutonomousRun(workspaceID, targetName, repo.Name, time.Now()) {
 			e.logger.Info().
 				Str("repo", ev.Repo.FullName).
 				Str("target", targetName).
@@ -430,11 +429,10 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 	}
 	// Release the cron-namespace mark taken above for autonomous runs.
 	if ev.Kind == "cron" && e.dispatcher != nil {
-		dedupRepo := dedupRepoKey(workspaceID, repo.Name)
 		if runErr != nil {
-			e.dispatcher.RollbackAutonomousRun(targetName, dedupRepo)
+			e.dispatcher.RollbackAutonomousRun(workspaceID, targetName, repo.Name)
 		} else {
-			e.dispatcher.FinalizeAutonomousRun(targetName, dedupRepo)
+			e.dispatcher.FinalizeAutonomousRun(workspaceID, targetName, repo.Name)
 		}
 	}
 	// Notify the autonomous scheduler so its lastRuns map (which drives the
@@ -712,6 +710,8 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	memoryEnabled := agent.IsAllowMemory() && e.memory != nil
 	var existingMemory string
 	if memoryEnabled {
+		// TODO(workspaces): scope memory by workspace once memory persistence
+		// layout is rebuilt; runtime locking already includes workspace.
 		mem, err := e.memory.ReadMemory(agent.Name, ev.Repo.FullName)
 		if err != nil {
 			return fmt.Errorf("agent %q: read memory: %w", agent.Name, err)
@@ -766,6 +766,8 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	}
 
 	if e.budgetStore != nil {
+		// TODO(workspaces): include workspace in budget checks when budgets move
+		// from global agent/backend limits to workspace-scoped policy.
 		if err := e.budgetStore.CheckBudgetsWithLogger(backend, agent.Name, logger); err != nil {
 			spanEnd := time.Now()
 			var queueWaitMs int64
@@ -864,6 +866,8 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	// observe store gzips it before persistence. Token usage comes
 	// from the runner's CLI parser.
 	if e.traceRec != nil {
+		// TODO(workspaces): persist workspace on trace spans when the observe
+		// schema grows workspace-scoped event and trace filters.
 		status, errMsg := "success", ""
 		if runErr != nil {
 			status = "error"
@@ -920,6 +924,8 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	// stale state is naturally observable; if persistence is consistently
 	// failing the operator will see it in logs.
 	if memoryEnabled && resp.Memory != "" {
+		// TODO(workspaces): write memory with the same workspace component used
+		// by the load path once memory storage becomes workspace-scoped.
 		if err := e.memory.WriteMemory(agent.Name, ev.Repo.FullName, resp.Memory); err != nil {
 			logger.Error().Err(err).Msg("agent run completed but memory write failed")
 		}

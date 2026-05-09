@@ -603,35 +603,35 @@ func (d *Dispatcher) ProcessDispatches(
 }
 
 // TryMarkAutonomousRun atomically checks whether a dispatch has already
-// claimed the (agentName, repo, 0) slot and, if not, writes a cron-namespace
-// mark. Returns true if the mark was written and the caller may proceed with
-// the run. Returns false if a dispatch claim exists (caller should return
-// ErrDispatchSkipped).
+// claimed the (workspaceID, agentName, repo, 0) slot and, if not, writes a
+// cron-namespace mark. Returns true if the mark was written and the caller may
+// proceed with the run. Returns false if a dispatch claim exists (caller should
+// return ErrDispatchSkipped).
 //
 // This single-lock operation closes the TOCTOU race between the dispatch and
 // autonomous-run paths.
 //
 // If the run fails before completing, call RollbackAutonomousRun to remove the
 // mark so that future dispatches are not spuriously suppressed.
-func (d *Dispatcher) TryMarkAutonomousRun(agentName, repo string, now time.Time) bool {
-	return d.dedup.TryClaimForCron(agentName, normalizeDedupRepo(repo), 0, now)
+func (d *Dispatcher) TryMarkAutonomousRun(workspaceID, agentName, repo string, now time.Time) bool {
+	return d.dedup.TryClaimForCron(agentName, dedupRepoKey(workspaceID, repo), 0, now)
 }
 
 // RollbackAutonomousRun removes the cron-namespace mark written by
 // TryMarkAutonomousRun. It must be called when a run fails so that the stale
 // mark does not suppress autonomous-context dispatches for the full
 // dedup_window_seconds.
-func (d *Dispatcher) RollbackAutonomousRun(agentName, repo string) {
-	d.dedup.RemoveCronMark(agentName, normalizeDedupRepo(repo), 0)
+func (d *Dispatcher) RollbackAutonomousRun(workspaceID, agentName, repo string) {
+	d.dedup.RemoveCronMark(agentName, dedupRepoKey(workspaceID, repo), 0)
 }
 
 // FinalizeAutonomousRun decrements the cron-namespace refcount for
-// (agentName, repo, 0) after a run completes successfully. Unlike
+// (workspaceID, agentName, repo, 0) after a run completes successfully. Unlike
 // RollbackAutonomousRun it preserves the cron entry so that
 // TryClaimForDispatch continues to suppress autonomous-context dispatches
 // until the full dedup_window_seconds window expires naturally.
-func (d *Dispatcher) FinalizeAutonomousRun(agentName, repo string) {
-	d.dedup.FinalizeCronMark(agentName, normalizeDedupRepo(repo), 0)
+func (d *Dispatcher) FinalizeAutonomousRun(workspaceID, agentName, repo string) {
+	d.dedup.FinalizeCronMark(agentName, dedupRepoKey(workspaceID, repo), 0)
 }
 
 // Stats returns a snapshot of the current dispatch counters.
@@ -669,11 +669,4 @@ func (d *Dispatcher) lookupRepo(name, workspaceID string) (fleet.Repo, bool) {
 		return fleet.Repo{}, false
 	}
 	return repos[idx], true
-}
-
-func normalizeDedupRepo(repo string) string {
-	if strings.Contains(repo, "\x00") {
-		return repo
-	}
-	return dedupRepoKey(fleet.DefaultWorkspaceID, repo)
 }

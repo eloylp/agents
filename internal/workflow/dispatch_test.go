@@ -765,7 +765,7 @@ func TestDispatchClaimOnlyVisibleAfterSuccessfulEnqueue(t *testing.T) {
 
 	// The enqueue failed, so the dispatch slot must NOT be claimed and an
 	// autonomous run for the same slot can still proceed.
-	if !d.TryMarkAutonomousRun("pr-reviewer", "owner/repo", time.Now()) {
+	if !d.TryMarkAutonomousRun(fleet.DefaultWorkspaceID, "pr-reviewer", "owner/repo", time.Now()) {
 		t.Error("TryMarkAutonomousRun returned false after a failed enqueue: phantom claim left by failed dispatch")
 	}
 }
@@ -782,7 +782,7 @@ func TestTryMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.T) {
 	d := testDispatcher(t, q)
 
 	// Simulate: cron run confirms it will proceed and writes the cron-namespace mark.
-	if !d.TryMarkAutonomousRun("coder", "owner/repo", time.Now()) {
+	if !d.TryMarkAutonomousRun(fleet.DefaultWorkspaceID, "coder", "owner/repo", time.Now()) {
 		t.Fatal("TryMarkAutonomousRun: expected true on first call (no prior dispatch)")
 	}
 
@@ -807,6 +807,47 @@ func TestTryMarkAutonomousRunSuppressesNearSimultaneousDispatch(t *testing.T) {
 	}
 }
 
+func TestTryMarkAutonomousRunDoesNotSuppressDifferentWorkspace(t *testing.T) {
+	t.Parallel()
+	q := &fakeQueue{}
+	dedup := NewDispatchDedupStore(300)
+	st := seedAgentMap(t, map[string]fleet.Agent{
+		"pr-reviewer": {
+			Name:          "pr-reviewer",
+			WorkspaceID:   "team-b",
+			Description:   "Reviews PRs",
+			AllowDispatch: true,
+			CanDispatch:   []string{"coder"},
+		},
+		"coder": {
+			Name:          "coder",
+			WorkspaceID:   "team-b",
+			Description:   "Writes code",
+			AllowDispatch: true,
+		},
+	})
+	if _, err := st.DB().Exec("UPDATE repos SET workspace_id = 'team-b' WHERE name = 'owner/repo'"); err != nil {
+		t.Fatalf("seed repo workspace: %v", err)
+	}
+	d := NewDispatcher(testDispatchCfg(), st, dedup, q, zerolog.Nop())
+
+	if !d.TryMarkAutonomousRun("team-a", "coder", "owner/repo", time.Now()) {
+		t.Fatal("TryMarkAutonomousRun: expected cron mark to be written")
+	}
+	ev := testEvent("owner/repo", 0)
+	ev.WorkspaceID = "team-b"
+	d.ProcessDispatches(context.Background(), fleet.Agent{
+		Name:        "pr-reviewer",
+		WorkspaceID: "team-b",
+		CanDispatch: []string{"coder"},
+	}, ev, "root-workspace-dedup", 0, "", []ai.DispatchRequest{
+		{Agent: "coder", Reason: "same repo in another workspace"},
+	})
+	if len(q.popped()) != 1 {
+		t.Error("expected dispatch enqueued: cron mark in another workspace must not suppress this workspace")
+	}
+}
+
 // TestTryMarkAutonomousRunDoesNotSuppressDispatchForDifferentNumber verifies that
 // a cron mark (number=0, autonomous context) does not suppress dispatches
 // targeting a different item number on the same repo. This guards against the
@@ -818,7 +859,7 @@ func TestTryMarkAutonomousRunDoesNotSuppressDispatchForDifferentNumber(t *testin
 	d := testDispatcher(t, q)
 
 	// Cron run for pr-reviewer marks (pr-reviewer, owner/repo, 0).
-	if !d.TryMarkAutonomousRun("coder", "owner/repo", time.Now()) {
+	if !d.TryMarkAutonomousRun(fleet.DefaultWorkspaceID, "coder", "owner/repo", time.Now()) {
 		t.Fatal("TryMarkAutonomousRun: expected cron mark to be written")
 	}
 
@@ -853,7 +894,7 @@ func TestPostRunDispatchSuppressedWithinDedupWindow(t *testing.T) {
 
 	// Autonomous run confirms it will proceed and writes the cron mark.
 	now := time.Now()
-	if !d.TryMarkAutonomousRun("coder", "owner/repo", now) {
+	if !d.TryMarkAutonomousRun(fleet.DefaultWorkspaceID, "coder", "owner/repo", now) {
 		t.Fatal("TryMarkAutonomousRun: expected true on first call (no prior dispatch)")
 	}
 
@@ -940,16 +981,16 @@ func TestRemoveCronMarkWithOverlappingRunsRefcount(t *testing.T) {
 
 	now := time.Now()
 	// Simulate two overlapping autonomous runs for the same (agent, repo).
-	if !d.TryMarkAutonomousRun("coder", "owner/repo", now) {
+	if !d.TryMarkAutonomousRun(fleet.DefaultWorkspaceID, "coder", "owner/repo", now) {
 		t.Fatal("first TryMarkAutonomousRun: expected cron mark to be written")
 	}
-	if !d.TryMarkAutonomousRun("coder", "owner/repo", now) {
+	if !d.TryMarkAutonomousRun(fleet.DefaultWorkspaceID, "coder", "owner/repo", now) {
 		t.Fatal("second TryMarkAutonomousRun: expected cron mark to be written")
 	}
 
 	// First run fails: rolls back. The second run is still in flight, so
 	// dispatches must still be suppressed.
-	d.RollbackAutonomousRun("coder", "owner/repo")
+	d.RollbackAutonomousRun(fleet.DefaultWorkspaceID, "coder", "owner/repo")
 
 	originator := originatorAgent("pr-reviewer")
 	ev := testEvent("owner/repo", 0)
@@ -961,7 +1002,7 @@ func TestRemoveCronMarkWithOverlappingRunsRefcount(t *testing.T) {
 	}
 
 	// Second run also fails: mark is now fully released.
-	d.RollbackAutonomousRun("coder", "owner/repo")
+	d.RollbackAutonomousRun(fleet.DefaultWorkspaceID, "coder", "owner/repo")
 
 	// A new dispatcher with a fresh store simulates the expired/cleared state.
 	q2 := &fakeQueue{}
@@ -995,7 +1036,7 @@ func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 
 	// Autonomous run starts; writes cron mark.
 	start := time.Now()
-	if !d.TryMarkAutonomousRun("coder", "owner/repo", start) {
+	if !d.TryMarkAutonomousRun(fleet.DefaultWorkspaceID, "coder", "owner/repo", start) {
 		t.Fatal("TryMarkAutonomousRun: expected cron mark to be written")
 	}
 
@@ -1020,7 +1061,7 @@ func TestLongRunningCronMarkBlocksDispatchPastTTL(t *testing.T) {
 	// FinalizeAutonomousRun. The entry itself is kept until the TTL expires ,
 	// but since we advanced past the TTL in the simulation, the next eviction
 	// pass will remove it and dispatches may then proceed.
-	d.FinalizeAutonomousRun("coder", "owner/repo")
+	d.FinalizeAutonomousRun(fleet.DefaultWorkspaceID, "coder", "owner/repo")
 	dedup.evict(pastTTL) // TTL already elapsed; now that refcount is 0, entry is evicted.
 	q2 := &fakeQueue{}
 	d2 := NewDispatcher(cfg, seedAgentMap(t, agents), dedup, q2, zerolog.Nop())
@@ -1054,8 +1095,8 @@ func TestFinalizeAutonomousRunKeepsTTLBlocksDispatchWithinWindow(t *testing.T) {
 
 	// Cron run starts and completes successfully.
 	now := time.Now()
-	d1.TryMarkAutonomousRun("coder", "owner/repo", now)
-	d1.FinalizeAutonomousRun("coder", "owner/repo")
+	d1.TryMarkAutonomousRun(fleet.DefaultWorkspaceID, "coder", "owner/repo", now)
+	d1.FinalizeAutonomousRun(fleet.DefaultWorkspaceID, "coder", "owner/repo")
 
 	// Within the TTL window, a dispatch to the same (agent, repo, 0) slot must
 	// still be suppressed, the entry is kept for the full dedup window.
@@ -1073,10 +1114,10 @@ func TestFinalizeAutonomousRunKeepsTTLBlocksDispatchWithinWindow(t *testing.T) {
 	// blocks repeated autonomous runs.
 	q3 := &fakeQueue{}
 	d3 := NewDispatcher(cfg, seedAgentMap(t, agents), dedup, q3, zerolog.Nop())
-	if !d3.TryMarkAutonomousRun("coder", "owner/repo", now) {
+	if !d3.TryMarkAutonomousRun(fleet.DefaultWorkspaceID, "coder", "owner/repo", now) {
 		t.Error("expected second cron run to proceed: cron marks must not suppress other cron runs")
 	}
-	d3.FinalizeAutonomousRun("coder", "owner/repo")
+	d3.FinalizeAutonomousRun(fleet.DefaultWorkspaceID, "coder", "owner/repo")
 }
 
 // TestSuccessfulCronRunRefcountIsZeroAfterFinalize verifies that
