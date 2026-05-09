@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -155,16 +156,14 @@ func agentsForEvent(s *obstore.Store, eventID string) []string {
 	if len(spans) == 0 {
 		return nil
 	}
-	seen := make(map[string]struct{}, len(spans))
 	out := make([]string, 0, len(spans))
 	for _, sp := range spans {
 		if sp.Agent == "" {
 			continue
 		}
-		if _, ok := seen[sp.Agent]; ok {
+		if slices.Contains(out, sp.Agent) {
 			continue
 		}
-		seen[sp.Agent] = struct{}{}
 		out = append(out, sp.Agent)
 	}
 	return out
