@@ -111,6 +111,17 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 	// Agent field checks, backend/skill cross-refs, and dispatch wiring
 	// (without "at least one" aggregate check).
 	seen := make(map[string]struct{}, len(agents))
+	reposByWorkspace := make(map[string]map[string]struct{})
+	for _, r := range repos {
+		workspaceID := r.WorkspaceID
+		if workspaceID == "" {
+			workspaceID = fleet.DefaultWorkspaceID
+		}
+		if reposByWorkspace[workspaceID] == nil {
+			reposByWorkspace[workspaceID] = map[string]struct{}{}
+		}
+		reposByWorkspace[workspaceID][strings.ToLower(r.Name)] = struct{}{}
+	}
 	for _, a := range agents {
 		if a.Name == "" {
 			return errors.New("config: agent name is required")
@@ -132,6 +143,29 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 		}
 		if a.Prompt == "" {
 			return fmt.Errorf("config: agent %q: prompt is empty", a.Name)
+		}
+		scopeType := a.ScopeType
+		if scopeType == "" {
+			scopeType = "workspace"
+		}
+		switch scopeType {
+		case "workspace":
+			if a.ScopeRepo != "" {
+				return fmt.Errorf("config: agent %q: scope_repo must be empty for workspace scope", a.Name)
+			}
+		case "repo":
+			workspaceID := a.WorkspaceID
+			if workspaceID == "" {
+				workspaceID = fleet.DefaultWorkspaceID
+			}
+			if a.ScopeRepo == "" {
+				return fmt.Errorf("config: agent %q: scope_repo is required for repo scope", a.Name)
+			}
+			if _, ok := reposByWorkspace[workspaceID][strings.ToLower(a.ScopeRepo)]; !ok {
+				return fmt.Errorf("config: agent %q: scope_repo %q is not a repo in workspace %q", a.Name, a.ScopeRepo, workspaceID)
+			}
+		default:
+			return fmt.Errorf("config: agent %q: unsupported scope_type %q", a.Name, a.ScopeType)
 		}
 		if a.Description == "" {
 			return fmt.Errorf("config: agent %q: description is required (used for agent identification and inter-agent conversations)", a.Name)

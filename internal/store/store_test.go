@@ -443,6 +443,12 @@ func TestImportLoad(t *testing.T) {
 	if out.Skills["architect"].Prompt != "Focus on architecture." {
 		t.Errorf("skill architect prompt: got %q", out.Skills["architect"].Prompt)
 	}
+	if len(out.Workspaces) != 1 || out.Workspaces[0].ID != fleet.DefaultWorkspaceID {
+		t.Fatalf("workspaces on config load: got %+v, want Default", out.Workspaces)
+	}
+	if len(out.Prompts) != 2 {
+		t.Fatalf("prompts on config load: got %d, want 2", len(out.Prompts))
+	}
 
 	// Agents.
 	if len(out.Agents) != 2 {
@@ -453,6 +459,21 @@ func TestImportLoad(t *testing.T) {
 		t.Fatal("coder agent not found after load")
 	}
 	coder := out.Agents[idx]
+	if coder.WorkspaceID != fleet.DefaultWorkspaceID {
+		t.Errorf("coder.workspace_id: got %q, want %q", coder.WorkspaceID, fleet.DefaultWorkspaceID)
+	}
+	if coder.PromptID == "" {
+		t.Error("coder.prompt_id is empty")
+	}
+	if coder.PromptRef != "coder" {
+		t.Errorf("coder.prompt_ref: got %q, want coder", coder.PromptRef)
+	}
+	if coder.ScopeType != "workspace" {
+		t.Errorf("coder.scope_type: got %q, want workspace", coder.ScopeType)
+	}
+	if coder.ScopeRepo != "" {
+		t.Errorf("coder.scope_repo: got %q, want empty", coder.ScopeRepo)
+	}
 	if !coder.AllowPRs {
 		t.Error("coder.allow_prs: want true")
 	}
@@ -470,6 +491,9 @@ func TestImportLoad(t *testing.T) {
 	repo := out.Repos[0]
 	if repo.Name != "owner/repo" {
 		t.Errorf("repo name: got %q, want %q", repo.Name, "owner/repo")
+	}
+	if repo.WorkspaceID != fleet.DefaultWorkspaceID {
+		t.Errorf("repo.workspace_id: got %q, want %q", repo.WorkspaceID, fleet.DefaultWorkspaceID)
 	}
 	if !repo.Enabled {
 		t.Error("repo.enabled: want true")
@@ -506,6 +530,42 @@ func TestImportLoad(t *testing.T) {
 	}
 	if !b2.IsEnabled() {
 		t.Error("binding[2]: nil enabled should mean enabled")
+	}
+
+	workspaces, err := store.ReadWorkspaces(db)
+	if err != nil {
+		t.Fatalf("ReadWorkspaces: %v", err)
+	}
+	if len(workspaces) != 1 || workspaces[0].ID != fleet.DefaultWorkspaceID || workspaces[0].Name != "Default" {
+		t.Fatalf("workspaces: got %+v, want Default workspace", workspaces)
+	}
+	prompts, err := store.ReadPrompts(db)
+	if err != nil {
+		t.Fatalf("ReadPrompts: %v", err)
+	}
+	if len(prompts) != 2 {
+		t.Fatalf("prompts: got %d, want 2", len(prompts))
+	}
+	if i := slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == "coder" }); i < 0 {
+		t.Fatal("coder prompt not found")
+	} else if prompts[i].Content != "You write code." {
+		t.Errorf("coder prompt content: got %q", prompts[i].Content)
+	}
+}
+
+func TestRepoScopedAgentRequiresRepoInSameWorkspace(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Agents[0].ScopeType = "repo"
+	cfg.Agents[0].ScopeRepo = "owner/missing"
+	err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil)
+	if err == nil {
+		t.Fatal("ImportAll succeeded, want validation error")
+	}
+	if !strings.Contains(err.Error(), `scope_repo "owner/missing" is not a repo in workspace "default"`) {
+		t.Fatalf("error = %v, want scope repo validation", err)
 	}
 }
 

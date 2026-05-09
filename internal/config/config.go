@@ -34,6 +34,8 @@ import (
 type Config struct {
 	Daemon     DaemonConfig             `yaml:"-"`
 	Backends   map[string]fleet.Backend `yaml:"backends,omitempty"`
+	Workspaces []fleet.Workspace        `yaml:"workspaces,omitempty"`
+	Prompts    []fleet.Prompt           `yaml:"prompts,omitempty"`
 	Skills     map[string]fleet.Skill   `yaml:"skills"`
 	Agents     []fleet.Agent            `yaml:"agents"`
 	Repos      []fleet.Repo             `yaml:"repos"`

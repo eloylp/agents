@@ -166,6 +166,12 @@ func Import(db *sql.DB, cfg *config.Config) error {
 	if err := importSkills(tx, cfg.Skills); err != nil {
 		return err
 	}
+	if err := importWorkspaces(tx, cfg.Workspaces); err != nil {
+		return err
+	}
+	if err := importPrompts(tx, cfg.Prompts); err != nil {
+		return err
+	}
 	if err := importAgents(tx, cfg.Agents); err != nil {
 		return err
 	}
@@ -241,8 +247,67 @@ func importSkills(tx *sql.Tx, skills map[string]fleet.Skill) error {
 	return nil
 }
 
+func importWorkspaces(tx *sql.Tx, workspaces []fleet.Workspace) error {
+	for _, w := range workspaces {
+		if w.ID == "" {
+			w.ID = strings.ToLower(strings.ReplaceAll(w.Name, " ", "-"))
+		}
+		if w.ID == "" || w.Name == "" {
+			return fmt.Errorf("store import: workspace requires id or name")
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO workspaces (id, name, description, updated_at)
+			VALUES (?, ?, ?, datetime('now'))
+			ON CONFLICT(id) DO UPDATE SET
+				name = excluded.name,
+				description = excluded.description,
+				updated_at = datetime('now')`,
+			w.ID, w.Name, w.Description,
+		); err != nil {
+			return fmt.Errorf("store import: upsert workspace %s: %w", w.ID, err)
+		}
+	}
+	return nil
+}
+
+func importPrompts(tx *sql.Tx, prompts []fleet.Prompt) error {
+	for _, p := range prompts {
+		if p.ID == "" {
+			p.ID = "prompt_" + strings.ToLower(strings.ReplaceAll(p.Name, " ", "-"))
+		}
+		if p.ID == "" || p.Name == "" {
+			return fmt.Errorf("store import: prompt requires id or name")
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO prompts (id, name, description, content, updated_at)
+			VALUES (?, ?, ?, ?, datetime('now'))
+			ON CONFLICT(id) DO UPDATE SET
+				name = excluded.name,
+				description = excluded.description,
+				content = excluded.content,
+				updated_at = datetime('now')`,
+			p.ID, p.Name, p.Description, p.Content,
+		); err != nil {
+			return fmt.Errorf("store import: upsert prompt %s: %w", p.Name, err)
+		}
+	}
+	return nil
+}
+
 func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
 	for _, a := range agents {
+		workspaceID := a.WorkspaceID
+		if workspaceID == "" {
+			workspaceID = fleet.DefaultWorkspaceID
+		}
+		scopeType := a.ScopeType
+		if scopeType == "" {
+			scopeType = "workspace"
+		}
+		promptID, err := ensureAgentPrompt(tx, a)
+		if err != nil {
+			return err
+		}
 		id, err := stableAgentID(tx, a)
 		if err != nil {
 			return err
@@ -260,26 +325,72 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
 		allowMemory := bindingEnabledInt(a.AllowMemory)
 		if _, err := tx.Exec(`
 			INSERT INTO agents
-			  (id,name,backend,model,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description,allow_memory)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?)
+			  (id,workspace_id,name,backend,model,skills,prompt,prompt_id,scope_type,scope_repo,allow_prs,allow_dispatch,can_dispatch,description,allow_memory)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(name) DO UPDATE SET
 				id = excluded.id,
+				workspace_id = excluded.workspace_id,
 				backend = excluded.backend,
 				model = excluded.model,
 				skills = excluded.skills,
 				prompt = excluded.prompt,
+				prompt_id = excluded.prompt_id,
+				scope_type = excluded.scope_type,
+				scope_repo = excluded.scope_repo,
 				allow_prs = excluded.allow_prs,
 				allow_dispatch = excluded.allow_dispatch,
 				can_dispatch = excluded.can_dispatch,
 				description = excluded.description,
 				allow_memory = excluded.allow_memory`,
-			id, a.Name, a.Backend, a.Model, string(skills), a.Prompt,
+			id, workspaceID, a.Name, a.Backend, a.Model, string(skills), a.Prompt, promptID, scopeType, a.ScopeRepo,
 			allowPRs, allowDispatch, string(canDispatch), a.Description, allowMemory,
 		); err != nil {
 			return fmt.Errorf("store import: upsert agent %s: %w", a.Name, err)
 		}
 	}
 	return nil
+}
+
+func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent) (string, error) {
+	if a.PromptID != "" {
+		return a.PromptID, nil
+	}
+	name := a.PromptRef
+	if name == "" {
+		name = a.Name
+	}
+	if name == "" {
+		return "", fmt.Errorf("store import: agent prompt requires agent name or prompt_ref")
+	}
+	content := a.Prompt
+	if content == "" && a.PromptRef != "" {
+		var existingID string
+		err := tx.QueryRow("SELECT id FROM prompts WHERE name=?", name).Scan(&existingID)
+		if err == nil {
+			return existingID, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("store import: read prompt %s: %w", name, err)
+		}
+	}
+	id := "prompt_" + a.Name
+	if a.PromptRef != "" {
+		id = "prompt_" + strings.ReplaceAll(a.PromptRef, " ", "-")
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO prompts (id, name, description, content, updated_at)
+		VALUES (?, ?, ?, ?, datetime('now'))
+		ON CONFLICT(name) DO UPDATE SET
+			content = excluded.content,
+			updated_at = datetime('now')`,
+		id, name, "Migrated prompt for agent "+a.Name, content,
+	); err != nil {
+		return "", fmt.Errorf("store import: upsert prompt %s for agent %s: %w", name, a.Name, err)
+	}
+	if err := tx.QueryRow("SELECT id FROM prompts WHERE name=?", name).Scan(&id); err != nil {
+		return "", fmt.Errorf("store import: read prompt %s id: %w", name, err)
+	}
+	return id, nil
 }
 
 func stableAgentID(q querier, a fleet.Agent) (string, error) {
@@ -304,10 +415,14 @@ func newAgentID() (string, error) {
 
 func importRepos(tx *sql.Tx, repos []fleet.Repo) error {
 	for _, r := range repos {
+		workspaceID := r.WorkspaceID
+		if workspaceID == "" {
+			workspaceID = fleet.DefaultWorkspaceID
+		}
 		enabled := boolToInt(r.Enabled)
 		if _, err := tx.Exec(
-			"INSERT OR REPLACE INTO repos(name,enabled) VALUES(?,?)",
-			r.Name, enabled,
+			"INSERT OR REPLACE INTO repos(name,workspace_id,enabled) VALUES(?,?,?)",
+			r.Name, workspaceID, enabled,
 		); err != nil {
 			return fmt.Errorf("store import: upsert repo %s: %w", r.Name, err)
 		}
@@ -350,6 +465,12 @@ func Load(db *sql.DB) (*config.Config, error) {
 		return nil, err
 	}
 	if err := loadSkills(db, cfg); err != nil {
+		return nil, err
+	}
+	if err := loadWorkspaces(db, cfg); err != nil {
+		return nil, err
+	}
+	if err := loadPrompts(db, cfg); err != nil {
 		return nil, err
 	}
 	if err := loadAgents(db, cfg); err != nil {
@@ -435,10 +556,44 @@ func loadSkills(db querier, cfg *config.Config) error {
 	return nil
 }
 
+func loadWorkspaces(db querier, cfg *config.Config) error {
+	rows, err := db.Query("SELECT id,name,description FROM workspaces ORDER BY name")
+	if err != nil {
+		return fmt.Errorf("store load: query workspaces: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var w fleet.Workspace
+		if err := rows.Scan(&w.ID, &w.Name, &w.Description); err != nil {
+			return fmt.Errorf("store load: scan workspace: %w", err)
+		}
+		cfg.Workspaces = append(cfg.Workspaces, w)
+	}
+	return rows.Err()
+}
+
+func loadPrompts(db querier, cfg *config.Config) error {
+	rows, err := db.Query("SELECT id,name,description,content FROM prompts ORDER BY name")
+	if err != nil {
+		return fmt.Errorf("store load: query prompts: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p fleet.Prompt
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Content); err != nil {
+			return fmt.Errorf("store load: scan prompt: %w", err)
+		}
+		cfg.Prompts = append(cfg.Prompts, p)
+	}
+	return rows.Err()
+}
+
 func loadAgents(db querier, cfg *config.Config) error {
 	rows, err := db.Query(`
-		SELECT id,name,backend,model,skills,prompt,allow_prs,allow_dispatch,can_dispatch,description,allow_memory
-		FROM agents ORDER BY name`)
+		SELECT a.id,a.workspace_id,a.name,a.backend,a.model,a.skills,COALESCE(p.content, a.prompt),a.prompt_id,COALESCE(p.name, ''),a.scope_type,a.scope_repo,a.allow_prs,a.allow_dispatch,a.can_dispatch,a.description,a.allow_memory
+		FROM agents a
+		LEFT JOIN prompts p ON p.id = a.prompt_id
+		ORDER BY a.name`)
 	if err != nil {
 		return fmt.Errorf("store load: query agents: %w", err)
 	}
@@ -446,10 +601,10 @@ func loadAgents(db querier, cfg *config.Config) error {
 
 	var agents []fleet.Agent
 	for rows.Next() {
-		var id, name, backend, model, skillsJSON, prompt, canDispatchJSON, description string
+		var id, workspaceID, name, backend, model, skillsJSON, prompt, promptID, promptRef, scopeType, scopeRepo, canDispatchJSON, description string
 		var allowPRs, allowDispatch, allowMemory int
 		if err := rows.Scan(
-			&id, &name, &backend, &model, &skillsJSON, &prompt,
+			&id, &workspaceID, &name, &backend, &model, &skillsJSON, &prompt, &promptID, &promptRef, &scopeType, &scopeRepo,
 			&allowPRs, &allowDispatch, &canDispatchJSON, &description, &allowMemory,
 		); err != nil {
 			return fmt.Errorf("store load: scan agent: %w", err)
@@ -468,11 +623,16 @@ func loadAgents(db querier, cfg *config.Config) error {
 		allowMem := intToBool(allowMemory)
 		agents = append(agents, fleet.Agent{
 			ID:            id,
+			WorkspaceID:   workspaceID,
 			Name:          name,
 			Backend:       backend,
 			Model:         model,
 			Skills:        skills,
 			Prompt:        prompt,
+			PromptID:      promptID,
+			PromptRef:     promptRef,
+			ScopeType:     scopeType,
+			ScopeRepo:     scopeRepo,
 			AllowPRs:      intToBool(allowPRs),
 			AllowDispatch: intToBool(allowDispatch),
 			CanDispatch:   canDispatch,
@@ -488,7 +648,7 @@ func loadAgents(db querier, cfg *config.Config) error {
 }
 
 func loadRepos(db querier, cfg *config.Config) error {
-	rows, err := db.Query("SELECT name,enabled FROM repos ORDER BY name")
+	rows, err := db.Query("SELECT workspace_id,name,enabled FROM repos ORDER BY name")
 	if err != nil {
 		return fmt.Errorf("store load: query repos: %w", err)
 	}
@@ -496,12 +656,12 @@ func loadRepos(db querier, cfg *config.Config) error {
 
 	var repos []fleet.Repo
 	for rows.Next() {
-		var name string
+		var workspaceID, name string
 		var enabled int
-		if err := rows.Scan(&name, &enabled); err != nil {
+		if err := rows.Scan(&workspaceID, &name, &enabled); err != nil {
 			return fmt.Errorf("store load: scan repo: %w", err)
 		}
-		repos = append(repos, fleet.Repo{Name: name, Enabled: intToBool(enabled)})
+		repos = append(repos, fleet.Repo{WorkspaceID: workspaceID, Name: name, Enabled: intToBool(enabled)})
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("store load: iterate repos: %w", err)
