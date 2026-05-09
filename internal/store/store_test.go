@@ -967,6 +967,41 @@ func TestImportedWorkspaceInheritsBuiltInGuardrails(t *testing.T) {
 	}
 }
 
+func TestReadWorkspacePromptGuardrailsUsesWorkspaceReferences(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{
+		Name:     "workspace-only",
+		Content:  "Apply only in Team A.",
+		Enabled:  false,
+		Position: 99,
+	}); err != nil {
+		t.Fatalf("UpsertGuardrail: %v", err)
+	}
+	refs := []fleet.WorkspaceGuardrailRef{
+		{GuardrailName: "workspace-only", Position: 0, Enabled: true},
+		{GuardrailName: "security", Position: 1, Enabled: false},
+	}
+	if _, err := store.ReplaceWorkspaceGuardrails(db, "team-a", refs); err != nil {
+		t.Fatalf("ReplaceWorkspaceGuardrails: %v", err)
+	}
+
+	guardrails, err := store.ReadWorkspacePromptGuardrails(db, "team-a")
+	if err != nil {
+		t.Fatalf("ReadWorkspacePromptGuardrails: %v", err)
+	}
+	if len(guardrails) != 1 {
+		t.Fatalf("guardrails len = %d, want 1: %+v", len(guardrails), guardrails)
+	}
+	if guardrails[0].Name != "workspace-only" || !guardrails[0].Enabled || guardrails[0].Position != 0 {
+		t.Fatalf("guardrail = %+v, want enabled workspace-only from workspace reference", guardrails[0])
+	}
+}
+
 // TestImportIsIdempotent verifies that calling Import twice on the same config
 // does not fail and does not duplicate rows.
 func TestImportIsIdempotent(t *testing.T) {

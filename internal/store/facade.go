@@ -115,6 +115,9 @@ func (s *Store) EnableRepo(name string, enabled bool) error {
 func (s *Store) ReadEnabledGuardrails() ([]fleet.Guardrail, error) {
 	return ReadEnabledGuardrails(s.db)
 }
+func (s *Store) ReadWorkspacePromptGuardrails(workspace string) ([]fleet.Guardrail, error) {
+	return ReadWorkspacePromptGuardrails(s.db, workspace)
+}
 func (s *Store) ReadAllGuardrails() ([]fleet.Guardrail, error)     { return ReadAllGuardrails(s.db) }
 func (s *Store) GetGuardrail(name string) (fleet.Guardrail, error) { return GetGuardrail(s.db, name) }
 func (s *Store) UpsertGuardrail(g fleet.Guardrail) error           { return UpsertGuardrail(s.db, g) }

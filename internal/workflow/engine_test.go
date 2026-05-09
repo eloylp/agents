@@ -475,6 +475,54 @@ func TestEngineAllowPRsFalseInjectsNoPRGuard(t *testing.T) {
 	}
 }
 
+func TestEnginePromptUsesWorkspaceGuardrailsAndBoundary(t *testing.T) {
+	t.Parallel()
+	e, runner := newTestEngine(t, func(c *config.Config) {
+		c.Agents[0].ScopeType = "repo"
+		c.Agents[0].ScopeRepo = "owner/repo"
+		c.Repos = append(c.Repos, fleet.Repo{Name: "owner/other", Enabled: true})
+	})
+	if err := e.store.UpsertGuardrail(fleet.Guardrail{
+		Name:     "workspace-only",
+		Content:  "STATIC_WORKSPACE_GUARDRAIL",
+		Enabled:  false,
+		Position: 50,
+	}); err != nil {
+		t.Fatalf("UpsertGuardrail: %v", err)
+	}
+	if _, err := e.store.ReplaceWorkspaceGuardrails(fleet.DefaultWorkspaceID, []fleet.WorkspaceGuardrailRef{
+		{GuardrailName: "workspace-only", Position: 5, Enabled: true},
+	}); err != nil {
+		t.Fatalf("ReplaceWorkspaceGuardrails: %v", err)
+	}
+
+	ev := labelEvent("issues.labeled", "owner/repo", "ai:review:arch-reviewer", 1)
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if runner.callCount() != 1 {
+		t.Fatalf("expected 1 run, got %d", runner.callCount())
+	}
+	system := runner.lastSystem()
+	if !strings.HasPrefix(system, "## Workspace and repository boundaries") {
+		t.Fatalf("system prompt must start with dynamic workspace boundary guardrail:\n%s", system)
+	}
+	if !strings.Contains(system, "You are running inside workspace: default.") {
+		t.Fatalf("system prompt missing workspace boundary:\n%s", system)
+	}
+	if !strings.Contains(system, "- owner/repo") {
+		t.Fatalf("system prompt missing allowed repo:\n%s", system)
+	}
+	if strings.Contains(system, "owner/other") {
+		t.Fatalf("repo-scoped boundary must not allow owner/other:\n%s", system)
+	}
+	staticIdx := strings.Index(system, "STATIC_WORKSPACE_GUARDRAIL")
+	promptIdx := strings.Index(system, "Review architecture.")
+	if staticIdx < 0 || promptIdx < 0 || staticIdx > promptIdx {
+		t.Fatalf("workspace static guardrail must precede prompt body; static=%d prompt=%d\n%s", staticIdx, promptIdx, system)
+	}
+}
+
 // newTestEngineWithDedup builds an Engine with the dispatch dedup store enabled.
 // A non-nil queue is required to activate the Dispatcher; the dedup window is
 // set to 60 s so tests stay well within the window.

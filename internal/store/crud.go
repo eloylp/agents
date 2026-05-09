@@ -548,19 +548,22 @@ func ImportAll(
 		return fmt.Errorf("store: import: begin: %w", err)
 	}
 	defer tx.Rollback()
-	if err := importAgents(tx, agents, true); err != nil {
-		return err
-	}
 	if err := importSkills(tx, normalizedSkills); err != nil {
-		return err
-	}
-	if err := importRepos(tx, repos); err != nil {
 		return err
 	}
 	if err := importBackends(tx, normalizedBackends); err != nil {
 		return err
 	}
 	if err := importGuardrails(tx, guardrails); err != nil {
+		return err
+	}
+	if err := importReferencedWorkspaces(tx, agents, repos); err != nil {
+		return err
+	}
+	if err := importAgents(tx, agents, true); err != nil {
+		return err
+	}
+	if err := importRepos(tx, repos); err != nil {
 		return err
 	}
 	if err := importTokenBudgetsTx(tx, budgets, false); err != nil {
@@ -609,19 +612,22 @@ func ReplaceAll(
 		return fmt.Errorf("store: replace: truncate operator guardrails: %w", err)
 	}
 
-	if err := importAgents(tx, agents, false); err != nil {
-		return err
-	}
 	if err := importSkills(tx, normalizedSkills); err != nil {
-		return err
-	}
-	if err := importRepos(tx, repos); err != nil {
 		return err
 	}
 	if err := importBackends(tx, normalizedBackends); err != nil {
 		return err
 	}
 	if err := importGuardrails(tx, guardrails); err != nil {
+		return err
+	}
+	if err := importReferencedWorkspaces(tx, agents, repos); err != nil {
+		return err
+	}
+	if err := importAgents(tx, agents, false); err != nil {
+		return err
+	}
+	if err := importRepos(tx, repos); err != nil {
 		return err
 	}
 	if err := importTokenBudgetsTx(tx, budgets, true); err != nil {

@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io/fs"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -172,6 +173,9 @@ func Import(db *sql.DB, cfg *config.Config) error {
 	if err := importPrompts(tx, cfg.Prompts); err != nil {
 		return err
 	}
+	if err := importReferencedWorkspaces(tx, cfg.Agents, cfg.Repos); err != nil {
+		return err
+	}
 	if err := importAgents(tx, cfg.Agents, false); err != nil {
 		return err
 	}
@@ -294,6 +298,57 @@ func seedWorkspaceGuardrails(tx *sql.Tx, workspaceID string) error {
 		return fmt.Errorf("store import: seed workspace %s guardrails: %w", workspaceID, err)
 	}
 	return nil
+}
+
+func importReferencedWorkspaces(tx *sql.Tx, agents []fleet.Agent, repos []fleet.Repo) error {
+	seen := map[string]struct{}{fleet.DefaultWorkspaceID: {}}
+	for _, a := range agents {
+		id := strings.TrimSpace(a.WorkspaceID)
+		if id == "" {
+			id = fleet.DefaultWorkspaceID
+		}
+		seen[id] = struct{}{}
+	}
+	for _, r := range repos {
+		id := strings.TrimSpace(r.WorkspaceID)
+		if id == "" {
+			id = fleet.DefaultWorkspaceID
+		}
+		seen[id] = struct{}{}
+	}
+	ids := mapsKeys(seen)
+	sort.Strings(ids)
+	for _, id := range ids {
+		if err := validateEntityID(id); err != nil {
+			return fmt.Errorf("store import: workspace %q: %w", id, err)
+		}
+		if _, err := tx.Exec(`
+			INSERT OR IGNORE INTO workspaces (id, name, description, updated_at)
+			VALUES (?, ?, '', datetime('now'))`,
+			id, workspaceNameFromID(id),
+		); err != nil {
+			return fmt.Errorf("store import: ensure workspace %s: %w", id, err)
+		}
+		if err := seedWorkspaceGuardrails(tx, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func mapsKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func workspaceNameFromID(id string) string {
+	if id == fleet.DefaultWorkspaceID {
+		return "Default"
+	}
+	return id
 }
 
 func importPrompts(tx *sql.Tx, prompts []fleet.Prompt) error {

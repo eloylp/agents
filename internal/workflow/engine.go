@@ -719,10 +719,11 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		existingMemory = mem
 	}
 
-	guardrails, err := e.store.ReadEnabledGuardrails()
+	guardrails, err := e.store.ReadWorkspacePromptGuardrails(workspaceID)
 	if err != nil {
 		return fmt.Errorf("agent %q: load guardrails: %w", agent.Name, err)
 	}
+	guardrails = slices.Insert(guardrails, 0, dynamicWorkspaceGuardrail(workspaceID, agent, cfg.Repos))
 
 	rendered, err := ai.RenderAgentPrompt(agent, cfg.Skills, guardrails, ai.PromptContext{
 		Repo:          ev.Repo.FullName,
@@ -990,4 +991,50 @@ func agentScopeAllowsRepo(agent fleet.Agent, repo fleet.Repo) bool {
 	default:
 		return false
 	}
+}
+
+func dynamicWorkspaceGuardrail(workspaceID string, agent fleet.Agent, repos []fleet.Repo) fleet.Guardrail {
+	allowed := allowedReposForAgent(workspaceID, agent, repos)
+	var b strings.Builder
+	b.WriteString("## Workspace and repository boundaries\n\n")
+	fmt.Fprintf(&b, "You are running inside workspace: %s.\n\n", workspaceID)
+	b.WriteString("Allowed repositories for this run:\n")
+	for _, repo := range allowed {
+		fmt.Fprintf(&b, "- %s\n", repo)
+	}
+	b.WriteString("\nYou must not read, write, inspect, clone, modify, comment on, or open pull requests against repositories outside this allow-list.\n\n")
+	b.WriteString("If the task appears to require a repository outside this allow-list, abort and explain that the requested repository is outside your workspace/scope boundary.")
+	return fleet.Guardrail{
+		Name:     "workspace-boundary",
+		Content:  b.String(),
+		Enabled:  true,
+		Position: -1,
+	}
+}
+
+func allowedReposForAgent(workspaceID string, agent fleet.Agent, repos []fleet.Repo) []string {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		workspaceID = fleet.DefaultWorkspaceID
+	}
+	scopeType := strings.TrimSpace(agent.ScopeType)
+	if scopeType == "" {
+		scopeType = "workspace"
+	}
+	var allowed []string
+	for _, repo := range repos {
+		repoWorkspace := strings.TrimSpace(repo.WorkspaceID)
+		if repoWorkspace == "" {
+			repoWorkspace = fleet.DefaultWorkspaceID
+		}
+		if repoWorkspace != workspaceID || !repo.Enabled {
+			continue
+		}
+		if scopeType == "repo" && fleet.NormalizeRepoName(agent.ScopeRepo) != repo.Name {
+			continue
+		}
+		allowed = append(allowed, repo.Name)
+	}
+	slices.Sort(allowed)
+	return slices.Compact(allowed)
 }

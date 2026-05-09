@@ -21,6 +21,24 @@ func ReadEnabledGuardrails(db *sql.DB) ([]fleet.Guardrail, error) {
 	return scanGuardrails(db, q)
 }
 
+// ReadWorkspacePromptGuardrails returns the workspace-selected guardrails in
+// prompt render order. Workspace references, not the global catalog enabled
+// bit, decide whether a static guardrail is applied to a run.
+func ReadWorkspacePromptGuardrails(db *sql.DB, workspace string) ([]fleet.Guardrail, error) {
+	workspaceID, err := ResolveWorkspaceID(db, workspace)
+	if err != nil {
+		return nil, err
+	}
+	const q = `
+		SELECT g.name, COALESCE(g.description, ''), g.content,
+		       COALESCE(g.default_content, ''), g.is_builtin, wg.enabled, wg.position
+		FROM workspace_guardrails wg
+		JOIN guardrails g ON g.name = wg.guardrail_name
+		WHERE wg.workspace_id = ? AND wg.enabled = 1
+		ORDER BY wg.position ASC, wg.guardrail_name ASC`
+	return scanGuardrails(db, q, workspaceID)
+}
+
 // ReadAllGuardrails returns every guardrail (enabled and disabled),
 // ordered the same way the renderer would. Used by the dashboard / API
 // surfaces to expose the full list.
