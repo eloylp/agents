@@ -165,7 +165,7 @@ export default function GuardrailsManager() {
   const [saveError, setSaveError] = useState('')
   const [workspaceSaveError, setWorkspaceSaveError] = useState('')
 
-  const load = () => {
+  const load = (isCancelled: () => boolean = () => false) => {
     setLoading(true)
     setLoadError('')
     Promise.all([
@@ -179,17 +179,34 @@ export default function GuardrailsManager() {
       }),
     ])
       .then(([catalog, refs]: [Guardrail[], WorkspaceGuardrailRef[]]) => {
+        if (isCancelled()) return
         setGuardrails(catalog ?? [])
         setWorkspaceRefs((refs ?? []).slice().sort((a, b) => a.position - b.position || a.guardrail_name.localeCompare(b.guardrail_name)))
         setLoading(false)
       })
-      .catch(e => { setLoadError(String(e)); setLoading(false) })
+      .catch(e => {
+        if (isCancelled()) return
+        setLoadError(String(e))
+        setLoading(false)
+      })
   }
-  useEffect(load, [workspace])
+  useEffect(() => {
+    let cancelled = false
+    load(() => cancelled)
+    return () => { cancelled = true }
+  }, [workspace])
 
   const selectedWorkspace = workspaces.find(w => w.id === workspace)
   const workspaceLabel = selectedWorkspace?.name || workspace
   const workspaceRefNames = new Set(workspaceRefs.map(r => r.guardrail_name))
+  const workspaceRefByName = new Map(workspaceRefs.map(r => [r.guardrail_name, r]))
+  const guardrailByName = new Map(guardrails.map(g => [g.name, g]))
+  const selectedWorkspaceRows = workspaceRefs.map((ref, index) => ({
+    ref,
+    index,
+    guardrail: guardrailByName.get(ref.guardrail_name),
+  }))
+  const unselectedGuardrails = guardrails.filter(g => !workspaceRefNames.has(g.name))
 
   const saveWorkspaceRefs = async (nextRefs: WorkspaceGuardrailRef[]) => {
     setSaving(true)
@@ -358,67 +375,93 @@ export default function GuardrailsManager() {
           </p>
           {workspaceSaveError && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', margin: 0 }}>{workspaceSaveError}</p>}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-            {guardrails.map(g => {
-              const ref = workspaceRefs.find(r => r.guardrail_name === g.name)
-              const selectedForWorkspace = !!ref
-              const refIndex = ref ? workspaceRefs.findIndex(r => r.guardrail_name === g.name) : -1
+            {selectedWorkspaceRows.map(({ ref, index, guardrail }) => {
+              const name = ref.guardrail_name
               return (
                 <div
-                  key={`workspace-${g.name}`}
+                  key={`workspace-selected-${name}`}
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: 'minmax(160px, 1fr) auto auto',
+                    gridTemplateColumns: 'auto minmax(160px, 1fr) auto auto',
                     gap: '0.5rem',
                     alignItems: 'center',
                     padding: '0.55rem 0.65rem',
                     border: '1px solid var(--border)',
                     borderRadius: '8px',
-                    background: selectedForWorkspace ? 'var(--bg-card)' : 'transparent',
+                    background: 'var(--bg-card)',
                   }}
                 >
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-faint)', minWidth: '2.5rem' }}>#{index + 1}</span>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, cursor: 'pointer' }}>
                     <input
                       type="checkbox"
-                      checked={selectedForWorkspace}
+                      checked
                       disabled={saving}
-                      onChange={e => toggleWorkspaceRef(g.name, e.target.checked)}
+                      onChange={e => toggleWorkspaceRef(name, e.target.checked)}
                     />
-                    <span style={{ color: 'var(--text-heading)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{g.name}</span>
+                    <span style={{ color: 'var(--text-heading)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
+                    {!guardrail && <span style={{ color: 'var(--text-danger)', fontSize: '0.75rem' }}>missing from catalog</span>}
                   </label>
-                  {selectedForWorkspace && (
-                    <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer' }}>
-                      <input
-                        type="checkbox"
-                        checked={ref?.enabled ?? true}
-                        disabled={saving}
-                        onChange={e => setWorkspaceRefEnabled(g.name, e.target.checked)}
-                      />
-                      Enabled
-                    </label>
-                  )}
-                  {selectedForWorkspace ? (
-                    <div style={{ display: 'flex', gap: '0.35rem', justifyContent: 'flex-end' }}>
-                      <button
-                        disabled={saving || refIndex <= 0}
-                        onClick={() => moveWorkspaceRef(g.name, -1)}
-                        style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)', cursor: saving || refIndex <= 0 ? 'not-allowed' : 'pointer' }}
-                      >
-                        Up
-                      </button>
-                      <button
-                        disabled={saving || refIndex >= workspaceRefs.length - 1}
-                        onClick={() => moveWorkspaceRef(g.name, 1)}
-                        style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)', cursor: saving || refIndex >= workspaceRefs.length - 1 ? 'not-allowed' : 'pointer' }}
-                      >
-                        Down
-                      </button>
-                    </div>
-                  ) : (
-                    <span style={{ color: 'var(--text-faint)', fontSize: '0.8rem', textAlign: 'right' }}>not selected</span>
-                  )}
+                  <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={ref.enabled}
+                      disabled={saving}
+                      onChange={e => setWorkspaceRefEnabled(name, e.target.checked)}
+                    />
+                    Enabled
+                  </label>
+                  <div style={{ display: 'flex', gap: '0.35rem', justifyContent: 'flex-end' }}>
+                    <button
+                      disabled={saving || index <= 0}
+                      onClick={() => moveWorkspaceRef(name, -1)}
+                      style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)', cursor: saving || index <= 0 ? 'not-allowed' : 'pointer' }}
+                    >
+                      Up
+                    </button>
+                    <button
+                      disabled={saving || index >= workspaceRefs.length - 1}
+                      onClick={() => moveWorkspaceRef(name, 1)}
+                      style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)', cursor: saving || index >= workspaceRefs.length - 1 ? 'not-allowed' : 'pointer' }}
+                    >
+                      Down
+                    </button>
+                  </div>
                 </div>
               )
             })}
+            {selectedWorkspaceRows.length === 0 && (
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', margin: '0.25rem 0' }}>No guardrails selected for this workspace.</p>
+            )}
+            {unselectedGuardrails.length > 0 && (
+              <p style={{ color: 'var(--text-faint)', fontSize: '0.75rem', margin: '0.45rem 0 0' }}>Available catalog guardrails</p>
+            )}
+            {unselectedGuardrails.map(g => (
+              <div
+                key={`workspace-available-${g.name}`}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(160px, 1fr) auto',
+                  gap: '0.5rem',
+                  alignItems: 'center',
+                  padding: '0.55rem 0.65rem',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  background: 'transparent',
+                }}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={false}
+                    disabled={saving}
+                    onChange={e => toggleWorkspaceRef(g.name, e.target.checked)}
+                  />
+                  <span style={{ color: 'var(--text-heading)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{g.name}</span>
+                </label>
+                <span style={{ color: 'var(--text-faint)', fontSize: '0.8rem', textAlign: 'right' }}>not selected</span>
+              </div>
+            ))}
           </div>
         </div>
       </Card>
@@ -449,8 +492,10 @@ export default function GuardrailsManager() {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                 <span style={{ fontWeight: 600, color: 'var(--text-heading)' }}>{g.name}</span>
-                {workspaceRefNames.has(g.name) && (
-                  <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'var(--bg-input)', color: 'var(--accent)', border: '1px solid var(--accent)' }}>selected</span>
+                {workspaceRefByName.has(g.name) && (
+                  <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'var(--bg-input)', color: workspaceRefByName.get(g.name)?.enabled ? 'var(--accent)' : 'var(--text-muted)', border: `1px solid ${workspaceRefByName.get(g.name)?.enabled ? 'var(--accent)' : 'var(--border)'}` }}>
+                    {workspaceRefByName.get(g.name)?.enabled ? 'selected' : 'selected (disabled)'}
+                  </span>
                 )}
                 {g.is_builtin && (
                   <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'var(--accent)', color: 'var(--bg-card)' }}>built-in</span>
