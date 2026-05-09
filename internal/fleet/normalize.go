@@ -45,6 +45,13 @@ func NormalizeRepoName(name string) string {
 	return normalize(name)
 }
 
+// NormalizePromptName returns the canonical form of a prompt name
+// (lowercase, trimmed). Prompt CRUD follows the same case-insensitive naming
+// convention as agents, skills, backends, repos, and guardrails.
+func NormalizePromptName(name string) string {
+	return normalize(name)
+}
+
 // NormalizeAgent applies the same name/field normalization that the YAML
 // loader performs at startup (lowercase + trim on names, backend, skills,
 // can_dispatch, plus trim on free-text fields). CRUD callers must invoke this

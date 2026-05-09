@@ -3,13 +3,11 @@ package fleet
 import (
 	"fmt"
 	"net/http"
-	"slices"
 	"strings"
 
 	"github.com/gorilla/mux"
 
 	"github.com/eloylp/agents/internal/fleet"
-	"github.com/eloylp/agents/internal/store"
 )
 
 type storeWorkspaceJSON struct {
@@ -43,23 +41,30 @@ func (j storeWorkspaceJSON) toConfig() fleet.Workspace {
 }
 
 type workspaceGuardrailJSON struct {
+	WorkspaceID   string `json:"workspace_id,omitempty"`
 	GuardrailName string `json:"guardrail_name"`
-	Position      int    `json:"position"`
+	Position      *int   `json:"position"`
 	Enabled       bool   `json:"enabled"`
 }
 
 func workspaceGuardrailToJSON(ref fleet.WorkspaceGuardrailRef) workspaceGuardrailJSON {
+	position := ref.Position
 	return workspaceGuardrailJSON{
+		WorkspaceID:   ref.WorkspaceID,
 		GuardrailName: ref.GuardrailName,
-		Position:      ref.Position,
+		Position:      &position,
 		Enabled:       ref.Enabled,
 	}
 }
 
-func (j workspaceGuardrailJSON) toConfig() fleet.WorkspaceGuardrailRef {
+func (j workspaceGuardrailJSON) toConfig(defaultPosition int) fleet.WorkspaceGuardrailRef {
+	position := defaultPosition
+	if j.Position != nil {
+		position = *j.Position
+	}
 	return fleet.WorkspaceGuardrailRef{
 		GuardrailName: j.GuardrailName,
-		Position:      j.Position,
+		Position:      position,
 		Enabled:       j.Enabled,
 	}
 }
@@ -143,8 +148,8 @@ func (h *Handler) handleWorkspaceGuardrailsPut(w http.ResponseWriter, r *http.Re
 		return
 	}
 	refs := make([]fleet.WorkspaceGuardrailRef, 0, len(req))
-	for _, ref := range req {
-		refs = append(refs, ref.toConfig())
+	for i, ref := range req {
+		refs = append(refs, ref.toConfig(i))
 	}
 	updated, err := h.store.ReplaceWorkspaceGuardrails(workspacePathValue(r), refs)
 	if err != nil {
@@ -176,21 +181,7 @@ func (h *Handler) DeleteWorkspace(workspace string) error {
 }
 
 func (h *Handler) getWorkspace(workspace string) (fleet.Workspace, error) {
-	workspace = strings.TrimSpace(workspace)
-	if workspace == "" {
-		workspace = fleet.DefaultWorkspaceID
-	}
-	workspaces, err := h.store.ReadWorkspaces()
-	if err != nil {
-		return fleet.Workspace{}, err
-	}
-	idx := slices.IndexFunc(workspaces, func(w fleet.Workspace) bool {
-		return w.ID == workspace || w.Name == workspace
-	})
-	if idx < 0 {
-		return fleet.Workspace{}, &store.ErrNotFound{Msg: fmt.Sprintf("workspace %q not found", workspace)}
-	}
-	return workspaces[idx], nil
+	return h.store.ReadWorkspace(workspace)
 }
 
 func workspacePathValue(r *http.Request) string {

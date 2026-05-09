@@ -234,9 +234,9 @@ func toolCreateWorkspace(deps Deps) server.ToolHandlerFunc {
 
 func toolUpdateWorkspace(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		workspace, err := req.RequireString("workspace")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		if workspace == "" {
+			workspace = fleet.DefaultWorkspaceID
 		}
 		args := req.GetArguments()
 		var patch daemonfleet.WorkspacePatch
@@ -259,9 +259,9 @@ func toolUpdateWorkspace(deps Deps) server.ToolHandlerFunc {
 
 func toolDeleteWorkspace(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		workspace, ok := trimmedString(req, "workspace")
-		if !ok {
-			return mcpgo.NewToolResultError("workspace is required"), nil
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		if workspace == "" {
+			workspace = fleet.DefaultWorkspaceID
 		}
 		if err := deps.Fleet.DeleteWorkspace(workspace); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete workspace", err), nil
@@ -362,7 +362,7 @@ func toolUpdatePrompt(deps Deps) server.ToolHandlerFunc {
 		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
-		canonical, uerr := deps.Fleet.UpdatePromptPatch(name, patch)
+		canonical, uerr := deps.Fleet.UpdatePromptPatch(fleet.NormalizePromptName(name), patch)
 		if uerr != nil {
 			return mcpgo.NewToolResultErrorFromErr("update prompt", uerr), nil
 		}
@@ -376,12 +376,13 @@ func toolDeletePrompt(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
-		if err := deps.Fleet.DeletePrompt(name); err != nil {
+		canonical := fleet.NormalizePromptName(name)
+		if err := deps.Fleet.DeletePrompt(canonical); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete prompt", err), nil
 		}
 		return jsonResult(map[string]any{
 			"status": "deleted",
-			"name":   name,
+			"name":   canonical,
 		})
 	}
 }

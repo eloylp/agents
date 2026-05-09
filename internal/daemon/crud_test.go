@@ -378,7 +378,7 @@ func TestStoreCRUDPromptCreatePatchDelete(t *testing.T) {
 		t.Fatalf("created ID = %q, want prompt_release-notes", created.ID)
 	}
 
-	rr = doCRUDRequest(t, s, http.MethodPatch, "/prompts/release-notes", map[string]any{
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/prompts/Release-Notes", map[string]any{
 		"description": "Updated",
 		"content":     "Write concise release notes.",
 	})
@@ -392,13 +392,16 @@ func TestStoreCRUDPromptCreatePatchDelete(t *testing.T) {
 	if patched.ID != created.ID || patched.Description != "Updated" || patched.Content != "Write concise release notes." {
 		t.Fatalf("patched prompt = %+v, want same id and updated fields", patched)
 	}
+	if patched.Name != "release-notes" {
+		t.Fatalf("patched prompt name = %q, want canonical release-notes", patched.Name)
+	}
 
-	rr = doCRUDRequest(t, s, http.MethodGet, "/prompts/release-notes", nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/prompts/Release-Notes", nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET prompt: got %d", rr.Code)
 	}
 
-	rr = doCRUDRequest(t, s, http.MethodDelete, "/prompts/release-notes", nil)
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/prompts/Release-Notes", nil)
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("DELETE prompt: got %d, %s", rr.Code, rr.Body.String())
 	}
@@ -485,6 +488,43 @@ func TestStoreCRUDWorkspaceDeleteDefaultRejected(t *testing.T) {
 	}
 }
 
+func TestStoreCRUDWorkspaceLookupPrefersIDOverNameCollision(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	for _, body := range []map[string]any{
+		{"id": "foo", "name": "Zulu"},
+		{"id": "bar", "name": "foo"},
+	} {
+		if rr := doCRUDRequest(t, s, http.MethodPost, "/workspaces", body); rr.Code != http.StatusOK {
+			t.Fatalf("seed workspace %+v: got %d, %s", body, rr.Code, rr.Body.String())
+		}
+	}
+	rr := doCRUDRequest(t, s, http.MethodGet, "/workspaces/foo", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /workspaces/foo: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var got storeWorkspaceJSON
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode workspace: %v", err)
+	}
+	if got.ID != "foo" || got.Name != "Zulu" {
+		t.Fatalf("GET /workspaces/foo = %+v, want id match foo/Zulu", got)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodGet, "/workspaces/foo/guardrails", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /workspaces/foo/guardrails: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var refs []workspaceGuardrailJSON
+	if err := json.NewDecoder(rr.Body).Decode(&refs); err != nil {
+		t.Fatalf("decode guardrails: %v", err)
+	}
+	if len(refs) == 0 || refs[0].WorkspaceID != "foo" {
+		t.Fatalf("guardrails workspace = %+v, want workspace_id foo", refs)
+	}
+}
+
 func TestStoreCRUDWorkspaceGuardrailsReplace(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
@@ -534,6 +574,42 @@ func TestStoreCRUDWorkspaceGuardrailsReplace(t *testing.T) {
 	})
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("PUT unknown workspace guardrail: got %d, want 400, %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestStoreCRUDWorkspaceGuardrailsPreserveExplicitZeroPosition(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/workspaces", map[string]any{
+		"id":   "team-a",
+		"name": "Team A",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr := doCRUDRequest(t, s, http.MethodPut, "/workspaces/team-a/guardrails", []map[string]any{
+		{"guardrail_name": "security", "position": 5, "enabled": true},
+		{"guardrail_name": "memory-scope", "position": 0, "enabled": true},
+		{"guardrail_name": "mcp-tool-usage", "enabled": true},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PUT workspace guardrails: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var refs []workspaceGuardrailJSON
+	if err := json.NewDecoder(rr.Body).Decode(&refs); err != nil {
+		t.Fatalf("decode guardrails: %v", err)
+	}
+	if len(refs) != 3 {
+		t.Fatalf("guardrails len = %d, want 3", len(refs))
+	}
+	if refs[0].GuardrailName != "memory-scope" || refs[0].Position != 0 {
+		t.Fatalf("refs[0] = %+v, want explicit position 0 memory-scope", refs[0])
+	}
+	if refs[1].GuardrailName != "mcp-tool-usage" || refs[1].Position != 2 {
+		t.Fatalf("refs[1] = %+v, want omitted position defaulted to request index 2", refs[1])
+	}
+	if refs[2].GuardrailName != "security" || refs[2].Position != 5 {
+		t.Fatalf("refs[2] = %+v, want security at position 5", refs[2])
 	}
 }
 

@@ -31,19 +31,36 @@ func ReadWorkspaces(db *sql.DB) ([]fleet.Workspace, error) {
 // ResolveWorkspaceID resolves either a workspace id or display name to the
 // stable workspace id used by storage.
 func ResolveWorkspaceID(db *sql.DB, workspace string) (string, error) {
+	w, err := ReadWorkspace(db, workspace)
+	if err != nil {
+		return "", err
+	}
+	return w.ID, nil
+}
+
+// ReadWorkspace resolves either a workspace id or display name. IDs are the
+// stable URL contract, so an exact id match wins over a display-name collision.
+func ReadWorkspace(db *sql.DB, workspace string) (fleet.Workspace, error) {
 	workspace = strings.TrimSpace(workspace)
 	if workspace == "" {
 		workspace = fleet.DefaultWorkspaceID
 	}
-	var id string
-	err := db.QueryRow("SELECT id FROM workspaces WHERE id=? OR name=?", workspace, workspace).Scan(&id)
+	var w fleet.Workspace
+	err := db.QueryRow("SELECT id, name, description FROM workspaces WHERE id=?", workspace).Scan(&w.ID, &w.Name, &w.Description)
+	if err == nil {
+		return w, nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fleet.Workspace{}, fmt.Errorf("store: read workspace %q by id: %w", workspace, err)
+	}
+	err = db.QueryRow("SELECT id, name, description FROM workspaces WHERE name=?", workspace).Scan(&w.ID, &w.Name, &w.Description)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", &ErrNotFound{Msg: fmt.Sprintf("workspace %q not found", workspace)}
+		return fleet.Workspace{}, &ErrNotFound{Msg: fmt.Sprintf("workspace %q not found", workspace)}
 	}
 	if err != nil {
-		return "", fmt.Errorf("store: resolve workspace %q: %w", workspace, err)
+		return fleet.Workspace{}, fmt.Errorf("store: read workspace %q by name: %w", workspace, err)
 	}
-	return id, nil
+	return w, nil
 }
 
 // UpsertWorkspace creates or updates a workspace and seeds built-in guardrail
@@ -170,7 +187,7 @@ func ReplaceWorkspaceGuardrails(db *sql.DB, workspace string, refs []fleet.Works
 		return nil, fmt.Errorf("store: replace workspace %s guardrails: clear: %w", workspaceID, err)
 	}
 	seen := make(map[string]struct{}, len(refs))
-	for i, ref := range refs {
+	for _, ref := range refs {
 		name := fleet.NormalizeGuardrailName(ref.GuardrailName)
 		if name == "" {
 			return nil, &ErrValidation{Msg: "guardrail_name is required"}
@@ -187,14 +204,10 @@ func ReplaceWorkspaceGuardrails(db *sql.DB, workspace string, refs []fleet.Works
 		if err != nil {
 			return nil, fmt.Errorf("store: replace workspace %s guardrails: validate %s: %w", workspaceID, name, err)
 		}
-		position := ref.Position
-		if position == 0 {
-			position = i
-		}
 		if _, err := tx.Exec(`
 			INSERT INTO workspace_guardrails (workspace_id, guardrail_name, position, enabled)
 			VALUES (?, ?, ?, ?)`,
-			workspaceID, name, position, boolToInt(ref.Enabled),
+			workspaceID, name, ref.Position, boolToInt(ref.Enabled),
 		); err != nil {
 			return nil, fmt.Errorf("store: replace workspace %s guardrails: insert %s: %w", workspaceID, name, err)
 		}

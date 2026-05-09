@@ -805,7 +805,7 @@ func TestPromptCRUD(t *testing.T) {
 	}
 
 	updated, err := store.UpsertPrompt(db, fleet.Prompt{
-		Name:        "release-notes",
+		Name:        "Release-Notes",
 		Description: "Updated",
 		Content:     "Write concise notes.",
 	})
@@ -826,8 +826,11 @@ func TestPromptCRUD(t *testing.T) {
 	if prompts[idx].Content != "Write concise notes." || prompts[idx].Description != "Updated" {
 		t.Fatalf("updated prompt = %+v, want updated description/content", prompts[idx])
 	}
+	if prompts[idx].Name != "release-notes" {
+		t.Fatalf("updated prompt name = %q, want canonical release-notes", prompts[idx].Name)
+	}
 
-	if err := store.DeletePrompt(db, "release-notes"); err != nil {
+	if err := store.DeletePrompt(db, "Release-Notes"); err != nil {
 		t.Fatalf("DeletePrompt: %v", err)
 	}
 	prompts, err = store.ReadPrompts(db)
@@ -836,6 +839,32 @@ func TestPromptCRUD(t *testing.T) {
 	}
 	if slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == "release-notes" }) >= 0 {
 		t.Fatal("release-notes prompt still present after delete")
+	}
+}
+
+func TestReadWorkspacePrefersIDOverNameCollision(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "foo", Name: "Zulu"}); err != nil {
+		t.Fatalf("UpsertWorkspace foo: %v", err)
+	}
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "bar", Name: "foo"}); err != nil {
+		t.Fatalf("UpsertWorkspace bar: %v", err)
+	}
+	w, err := store.ReadWorkspace(db, "foo")
+	if err != nil {
+		t.Fatalf("ReadWorkspace: %v", err)
+	}
+	if w.ID != "foo" || w.Name != "Zulu" {
+		t.Fatalf("ReadWorkspace(foo) = %+v, want id match foo/Zulu", w)
+	}
+	id, err := store.ResolveWorkspaceID(db, "foo")
+	if err != nil {
+		t.Fatalf("ResolveWorkspaceID: %v", err)
+	}
+	if id != "foo" {
+		t.Fatalf("ResolveWorkspaceID(foo) = %q, want foo", id)
 	}
 }
 

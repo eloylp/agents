@@ -4,6 +4,7 @@ import (
 	"context"
 	"maps"
 	"slices"
+	"strings"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -99,20 +100,16 @@ func toolListWorkspaces(deps Deps) server.ToolHandlerFunc {
 
 func toolGetWorkspace(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		workspace, ok := trimmedString(req, "workspace")
-		if !ok {
-			return mcpgo.NewToolResultError("workspace is required"), nil
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		workspace = strings.TrimSpace(workspace)
+		if workspace == "" {
+			workspace = fleet.DefaultWorkspaceID
 		}
-		workspaces, err := deps.Store.ReadWorkspaces()
+		w, err := deps.Store.ReadWorkspace(workspace)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get workspace", err), nil
 		}
-		if idx := slices.IndexFunc(workspaces, func(w fleet.Workspace) bool {
-			return w.ID == workspace || w.Name == workspace
-		}); idx != -1 {
-			return jsonResult(workspaceJSON(workspaces[idx]))
-		}
-		return mcpgo.NewToolResultErrorf("workspace %q not found", workspace), nil
+		return jsonResult(workspaceJSON(w))
 	}
 }
 
@@ -141,7 +138,8 @@ func toolGetPrompt(deps Deps) server.ToolHandlerFunc {
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get prompt", err), nil
 		}
-		if idx := slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == name }); idx != -1 {
+		key := fleet.NormalizePromptName(name)
+		if idx := slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == key }); idx != -1 {
 			return jsonResult(promptJSON(prompts[idx]))
 		}
 		return mcpgo.NewToolResultErrorf("prompt %q not found", name), nil

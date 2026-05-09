@@ -1147,7 +1147,7 @@ func TestDeleteRepoAllowsLastEnabled(t *testing.T) {
 // ──── Normalization ───────────────────────────────────────────────────────────
 
 // TestUpsertNormalizesNames verifies that UpsertAgent, UpsertSkill,
-// UpsertBackend, and UpsertRepo all lowercase+trim entity keys before writing
+// UpsertBackend, UpsertPrompt, and UpsertRepo all lowercase+trim entity keys before writing
 // to SQLite. This ensures the stored form matches what FinishLoad would
 // produce at startup, so AgentByName lookups and registerJobs cron bindings
 // never silently diverge from the persisted rows after a live CRUD write.
@@ -1170,6 +1170,21 @@ func TestUpsertNormalizesNames(t *testing.T) {
 	}
 	if _, bad := backends["Claude"]; bad {
 		t.Error("original mixed-case key 'Claude' should not be present after normalisation")
+	}
+
+	// Prompt, mixed-case name should be stored lowercase.
+	if _, err := store.UpsertPrompt(db, fleet.Prompt{Name: "Release-Notes", Content: "p"}); err != nil {
+		t.Fatalf("UpsertPrompt: %v", err)
+	}
+	prompts, err := store.ReadPrompts(db)
+	if err != nil {
+		t.Fatalf("ReadPrompts: %v", err)
+	}
+	if !slices.ContainsFunc(prompts, func(p fleet.Prompt) bool { return p.Name == "release-notes" }) {
+		t.Errorf("prompt name not normalised: got %+v, want release-notes", prompts)
+	}
+	if slices.ContainsFunc(prompts, func(p fleet.Prompt) bool { return p.Name == "Release-Notes" }) {
+		t.Error("original mixed-case prompt name 'Release-Notes' should not be present after normalisation")
 	}
 
 	// Skill, mixed-case key should be stored lowercase.

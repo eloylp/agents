@@ -347,7 +347,7 @@ func DeleteBackend(db *sql.DB, name string) error {
 // names are globally unique; existing rows keep their id while content and
 // description are updated.
 func UpsertPrompt(db *sql.DB, p fleet.Prompt) (fleet.Prompt, error) {
-	p.Name = strings.TrimSpace(p.Name)
+	p.Name = fleet.NormalizePromptName(p.Name)
 	p.Description = strings.TrimSpace(p.Description)
 	p.Content = strings.TrimSpace(p.Content)
 	if p.Name == "" {
@@ -401,7 +401,7 @@ func UpsertPrompt(db *sql.DB, p fleet.Prompt) (fleet.Prompt, error) {
 // agent cannot be deleted because agents must always point at existing global
 // prompt content.
 func DeletePrompt(db *sql.DB, name string) error {
-	name = strings.TrimSpace(name)
+	name = fleet.NormalizePromptName(name)
 	if name == "" {
 		return &ErrValidation{Msg: "prompt name is required"}
 	}

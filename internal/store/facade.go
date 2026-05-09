@@ -54,6 +54,9 @@ func (s *Store) ClearGraphLayout() error { return ClearGraphLayout(s.db) }
 
 func (s *Store) ReadWorkspaces() ([]fleet.Workspace, error) { return ReadWorkspaces(s.db) }
 func (s *Store) ReadPrompts() ([]fleet.Prompt, error)       { return ReadPrompts(s.db) }
+func (s *Store) ReadWorkspace(workspace string) (fleet.Workspace, error) {
+	return ReadWorkspace(s.db, workspace)
+}
 func (s *Store) UpsertWorkspace(w fleet.Workspace) (fleet.Workspace, error) {
 	return UpsertWorkspace(s.db, w)
 }

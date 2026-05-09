@@ -561,7 +561,7 @@ func (h *Handler) handlePromptCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handlePromptGet(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimSpace(mux.Vars(r)["name"])
+	name := fleet.NormalizePromptName(mux.Vars(r)["name"])
 	prompts, err := h.store.ReadPrompts()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read prompts: %v", err), http.StatusInternalServerError)
@@ -576,7 +576,7 @@ func (h *Handler) handlePromptGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handlePromptPatchByName(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimSpace(mux.Vars(r)["name"])
+	name := fleet.NormalizePromptName(mux.Vars(r)["name"])
 	var req PromptPatch
 	if !decodeBody(w, r, h.maxBodyBytes, &req) {
 		return
@@ -594,7 +594,7 @@ func (h *Handler) handlePromptPatchByName(w http.ResponseWriter, r *http.Request
 }
 
 func (h *Handler) handlePromptDelete(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimSpace(mux.Vars(r)["name"])
+	name := fleet.NormalizePromptName(mux.Vars(r)["name"])
 	if err := h.DeletePrompt(name); err != nil {
 		h.writeErr(w, err, "prompt delete")
 		return
@@ -611,6 +611,7 @@ func (h *Handler) UpdatePromptPatch(name string, patch PromptPatch) (fleet.Promp
 }
 
 func (h *Handler) updatePrompt(name string, patch PromptPatch) (fleet.Prompt, error) {
+	name = fleet.NormalizePromptName(name)
 	prompts, err := h.store.ReadPrompts()
 	if err != nil {
 		return fleet.Prompt{}, err

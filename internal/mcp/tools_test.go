@@ -360,6 +360,17 @@ func TestToolWorkspaceCRUDAndGuardrails(t *testing.T) {
 		t.Fatalf("created workspace = %+v, want team-a", created)
 	}
 
+	req.Params.Arguments = map[string]any{}
+	res, err = toolGetWorkspace(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var defaultWorkspace map[string]any
+	decodeText(t, res, &defaultWorkspace)
+	if defaultWorkspace["id"] != "default" {
+		t.Fatalf("default workspace = %+v, want default id", defaultWorkspace)
+	}
+
 	req.Params.Arguments = map[string]any{"workspace": "team-a", "description": "Updated"}
 	res, err = toolUpdateWorkspace(deps)(context.Background(), req)
 	if err != nil {
@@ -375,7 +386,7 @@ func TestToolWorkspaceCRUDAndGuardrails(t *testing.T) {
 		"workspace": "team-a",
 		"guardrails": []any{
 			map[string]any{"guardrail_name": "security", "position": float64(10), "enabled": true},
-			map[string]any{"guardrail_name": "memory-scope", "position": float64(20), "enabled": false},
+			map[string]any{"guardrail_name": "memory-scope", "position": float64(0), "enabled": false},
 		},
 	}
 	res, err = toolUpdateWorkspaceGuardrails(deps)(context.Background(), req)
@@ -387,8 +398,11 @@ func TestToolWorkspaceCRUDAndGuardrails(t *testing.T) {
 	if len(guardrails) != 2 {
 		t.Fatalf("workspace guardrails len = %d, want 2", len(guardrails))
 	}
-	if guardrails[0]["guardrail_name"] != "security" || guardrails[0]["position"] != float64(10) || guardrails[0]["enabled"] != true {
-		t.Fatalf("guardrails[0] = %+v, want enabled security at position 10", guardrails[0])
+	if guardrails[0]["guardrail_name"] != "memory-scope" || guardrails[0]["position"] != float64(0) || guardrails[0]["enabled"] != false {
+		t.Fatalf("guardrails[0] = %+v, want disabled memory-scope at explicit position 0", guardrails[0])
+	}
+	if guardrails[1]["guardrail_name"] != "security" || guardrails[1]["position"] != float64(10) || guardrails[1]["enabled"] != true {
+		t.Fatalf("guardrails[1] = %+v, want enabled security at position 10", guardrails[1])
 	}
 
 	req.Params.Arguments = map[string]any{"workspace": "team-a"}
@@ -398,6 +412,60 @@ func TestToolWorkspaceCRUDAndGuardrails(t *testing.T) {
 	}
 	if res.IsError {
 		t.Fatalf("delete workspace returned error result: %+v", res.Content)
+	}
+}
+
+func TestToolPromptCRUDNormalizesNames(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":        "Release-Notes",
+		"description": "Drafts releases",
+		"content":     "Summarize work",
+	}
+	res, err := toolCreatePrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var created map[string]any
+	decodeText(t, res, &created)
+	if created["id"] != "prompt_release-notes" || created["name"] != "release-notes" {
+		t.Fatalf("created prompt = %+v, want canonical release-notes", created)
+	}
+
+	req.Params.Arguments = map[string]any{"name": "RELEASE-NOTES", "content": "Updated"}
+	res, err = toolUpdatePrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var updated map[string]any
+	decodeText(t, res, &updated)
+	if updated["id"] != created["id"] || updated["name"] != "release-notes" || updated["content"] != "Updated" {
+		t.Fatalf("updated prompt = %+v, want same id and canonical name", updated)
+	}
+
+	req.Params.Arguments = map[string]any{"name": "Release-Notes"}
+	res, err = toolGetPrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("get prompt returned error result: %+v", res.Content)
+	}
+
+	res, err = toolDeletePrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("delete prompt returned error result: %+v", res.Content)
+	}
+	var deleted map[string]any
+	decodeText(t, res, &deleted)
+	if deleted["name"] != "release-notes" {
+		t.Fatalf("deleted prompt = %+v, want canonical name", deleted)
 	}
 }
 

@@ -38,6 +38,7 @@ type storeWorkspaceJSON struct {
 }
 
 type workspaceGuardrailJSON struct {
+	WorkspaceID   string `json:"workspace_id"`
 	GuardrailName string `json:"guardrail_name"`
 	Position      int    `json:"position"`
 	Enabled       bool   `json:"enabled"`
