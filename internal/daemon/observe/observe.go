@@ -20,6 +20,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
 
+	"github.com/eloylp/agents/internal/fleet"
 	obstore "github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
 	"github.com/eloylp/agents/internal/store"
@@ -97,14 +98,15 @@ func (h *Handler) HandleDispatches(w http.ResponseWriter, _ *http.Request) {
 // agent names that ran (or are running) for it. Empty for events that
 // have not yet fanned out, or webhooks that matched no binding.
 type eventJSON struct {
-	At      string         `json:"at"`
-	ID      string         `json:"id"`
-	Repo    string         `json:"repo"`
-	Kind    string         `json:"kind"`
-	Number  int            `json:"number"`
-	Actor   string         `json:"actor"`
-	Payload map[string]any `json:"payload,omitempty"`
-	Agents  []string       `json:"agents,omitempty"`
+	At          string         `json:"at"`
+	ID          string         `json:"id"`
+	WorkspaceID string         `json:"workspace_id"`
+	Repo        string         `json:"repo"`
+	Kind        string         `json:"kind"`
+	Number      int            `json:"number"`
+	Actor       string         `json:"actor"`
+	Payload     map[string]any `json:"payload,omitempty"`
+	Agents      []string       `json:"agents,omitempty"`
 }
 
 // HandleEvents serves GET /events, recent event history.
@@ -118,18 +120,20 @@ func (h *Handler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	events := h.events.ListEvents(since)
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
+	events := h.events.ListEventsForWorkspace(workspaceID, since)
 	out := make([]eventJSON, 0, len(events))
 	for _, e := range events {
 		out = append(out, eventJSON{
-			At:      e.At.UTC().Format(time.RFC3339Nano),
-			ID:      e.ID,
-			Repo:    e.Repo,
-			Kind:    e.Kind,
-			Number:  e.Number,
-			Actor:   e.Actor,
-			Payload: e.Payload,
-			Agents:  agentsForEvent(h.events, e.ID),
+			At:          e.At.UTC().Format(time.RFC3339Nano),
+			ID:          e.ID,
+			WorkspaceID: e.WorkspaceID,
+			Repo:        e.Repo,
+			Kind:        e.Kind,
+			Number:      e.Number,
+			Actor:       e.Actor,
+			Payload:     e.Payload,
+			Agents:      agentsForEvent(h.events, workspaceID, e.ID),
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -147,11 +151,11 @@ func (h *Handler) HandleEventsStream(w http.ResponseWriter, r *http.Request) {
 // span has been recorded yet, either the event hasn't been picked up,
 // or its run hasn't reached the recording site, or no binding matched.
 // De-duplicated; preserves trace insertion order.
-func agentsForEvent(s *obstore.Store, eventID string) []string {
+func agentsForEvent(s *obstore.Store, workspaceID, eventID string) []string {
 	if s == nil || eventID == "" {
 		return nil
 	}
-	spans := s.TracesByRootEventID(eventID)
+	spans := s.TracesByRootEventIDForWorkspace(workspaceID, eventID)
 	if len(spans) == 0 {
 		return nil
 	}
@@ -173,8 +177,8 @@ func agentsForEvent(s *obstore.Store, eventID string) []string {
 // ── /traces ────────────────────────────────────────────────────────────────
 
 // HandleTraces serves GET /traces, the most recent agent run spans.
-func (h *Handler) HandleTraces(w http.ResponseWriter, _ *http.Request) {
-	spans := h.events.ListTraces()
+func (h *Handler) HandleTraces(w http.ResponseWriter, r *http.Request) {
+	spans := h.events.ListTracesForWorkspace(r.URL.Query().Get("workspace"))
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(spans)
 }
@@ -182,7 +186,7 @@ func (h *Handler) HandleTraces(w http.ResponseWriter, _ *http.Request) {
 // HandleTrace serves GET /traces/{root_event_id}, all spans for one root.
 func (h *Handler) HandleTrace(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["root_event_id"]
-	spans := h.events.TracesByRootEventID(id)
+	spans := h.events.TracesByRootEventIDForWorkspace(r.URL.Query().Get("workspace"), id)
 	if len(spans) == 0 {
 		http.Error(w, "trace not found", http.StatusNotFound)
 		return

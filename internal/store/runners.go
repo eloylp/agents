@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // RunnerStatus is the derived state of an event_queue row, surfaced as
@@ -32,6 +34,7 @@ const (
 type RunnerRecord struct {
 	ID          int64           `json:"id"`
 	EventID     string          `json:"event_id"`
+	WorkspaceID string          `json:"workspace_id"`
 	Kind        string          `json:"kind"`
 	Repo        string          `json:"repo"`
 	Number      int             `json:"number"`
@@ -54,9 +57,10 @@ var ErrRunnerNotFound = errors.New("store: runner not found")
 // auto-generated row id. The id flows through the in-memory channel to
 // the worker, which uses it to mark the row started/completed.
 func (s *Store) EnqueueEvent(blob string) (int64, error) {
+	workspaceID := workspaceFromEventBlob(blob)
 	res, err := s.db.Exec(
-		"INSERT INTO event_queue(event_blob, enqueued_at) VALUES (?, ?)",
-		blob, time.Now().UTC().Format(time.RFC3339Nano),
+		"INSERT INTO event_queue(workspace_id, event_blob, enqueued_at) VALUES (?, ?, ?)",
+		workspaceID, blob, time.Now().UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("store: enqueue event: %w", err)
@@ -149,6 +153,11 @@ func (s *Store) ReadQueuedEvent(id int64) (string, error) {
 // / event_id / target_agent / payload so the UI can render a useful row
 // without a second query.
 func (s *Store) ListRunners(status RunnerStatus, limit, offset int) ([]RunnerRecord, error) {
+	return s.ListWorkspaceRunners("", status, limit, offset)
+}
+
+func (s *Store) ListWorkspaceRunners(workspaceID string, status RunnerStatus, limit, offset int) ([]RunnerRecord, error) {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	if limit <= 0 {
 		limit = 100
 	}
@@ -156,7 +165,9 @@ func (s *Store) ListRunners(status RunnerStatus, limit, offset int) ([]RunnerRec
 		offset = 0
 	}
 	where, args := runnerStatusFilter(status)
-	q := "SELECT id, event_blob, enqueued_at, started_at, completed_at FROM event_queue " +
+	where = appendRunnerWorkspaceFilter(where)
+	args = append([]any{workspaceID}, args...)
+	q := "SELECT id, workspace_id, event_blob, enqueued_at, started_at, completed_at FROM event_queue " +
 		where + " ORDER BY id DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 	rows, err := s.db.Query(q, args...)
@@ -178,7 +189,14 @@ func (s *Store) ListRunners(status RunnerStatus, limit, offset int) ([]RunnerRec
 // CountRunners returns the number of rows matching status (empty status
 // counts every row). Used by listings for client-side pagination.
 func (s *Store) CountRunners(status RunnerStatus) (int, error) {
+	return s.CountWorkspaceRunners("", status)
+}
+
+func (s *Store) CountWorkspaceRunners(workspaceID string, status RunnerStatus) (int, error) {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	where, args := runnerStatusFilter(status)
+	where = appendRunnerWorkspaceFilter(where)
+	args = append([]any{workspaceID}, args...)
 	q := "SELECT COUNT(*) FROM event_queue " + where
 	var n int
 	if err := s.db.QueryRow(q, args...).Scan(&n); err != nil {
@@ -191,7 +209,7 @@ func (s *Store) CountRunners(status RunnerStatus) (int, error) {
 // missing, same error ReadQueuedEvent uses.
 func (s *Store) GetRunner(id int64) (RunnerRecord, error) {
 	row := s.db.QueryRow(
-		"SELECT id, event_blob, enqueued_at, started_at, completed_at FROM event_queue WHERE id = ?",
+		"SELECT id, workspace_id, event_blob, enqueued_at, started_at, completed_at FROM event_queue WHERE id = ?",
 		id,
 	)
 	rec, err := scanRunnerRow(row)
@@ -199,6 +217,23 @@ func (s *Store) GetRunner(id int64) (RunnerRecord, error) {
 		return RunnerRecord{}, ErrRunnerNotFound
 	}
 	return rec, err
+}
+
+func appendRunnerWorkspaceFilter(where string) string {
+	if where == "" {
+		return "WHERE workspace_id = ?"
+	}
+	return where + " AND workspace_id = ?"
+}
+
+func workspaceFromEventBlob(blob string) string {
+	var partial struct {
+		WorkspaceID string `json:"WorkspaceID"`
+	}
+	if err := json.Unmarshal([]byte(blob), &partial); err != nil {
+		return fleet.DefaultWorkspaceID
+	}
+	return fleet.NormalizeWorkspaceID(partial.WorkspaceID)
 }
 
 // runnerStatusFilter maps a RunnerStatus to a SQL WHERE fragment and
@@ -224,14 +259,15 @@ type scanner interface {
 func scanRunnerRow(s scanner) (RunnerRecord, error) {
 	var (
 		id              int64
+		workspaceID     string
 		blob            string
 		enq             string
 		started, comple sql.NullString
 	)
-	if err := s.Scan(&id, &blob, &enq, &started, &comple); err != nil {
+	if err := s.Scan(&id, &workspaceID, &blob, &enq, &started, &comple); err != nil {
 		return RunnerRecord{}, err
 	}
-	rec := RunnerRecord{ID: id}
+	rec := RunnerRecord{ID: id, WorkspaceID: fleet.NormalizeWorkspaceID(workspaceID)}
 	if t, err := time.Parse(time.RFC3339Nano, enq); err == nil {
 		rec.EnqueuedAt = t
 	}
@@ -257,17 +293,21 @@ func scanRunnerRow(s scanner) (RunnerRecord, error) {
 	// schema gets new fields. A malformed blob leaves Kind/Repo/Number
 	// zero rather than failing the whole listing.
 	var partial struct {
-		ID      string          `json:"ID"`
-		Kind    string          `json:"Kind"`
-		Number  int             `json:"Number"`
-		Actor   string          `json:"Actor"`
-		Repo    struct {
+		ID          string `json:"ID"`
+		WorkspaceID string `json:"WorkspaceID"`
+		Kind        string `json:"Kind"`
+		Number      int    `json:"Number"`
+		Actor       string `json:"Actor"`
+		Repo        struct {
 			FullName string `json:"FullName"`
 		} `json:"Repo"`
 		Payload json.RawMessage `json:"Payload"`
 	}
 	if err := json.Unmarshal([]byte(blob), &partial); err == nil {
 		rec.EventID = partial.ID
+		if rec.WorkspaceID == "" {
+			rec.WorkspaceID = fleet.NormalizeWorkspaceID(partial.WorkspaceID)
+		}
 		rec.Kind = partial.Kind
 		rec.Number = partial.Number
 		rec.Actor = partial.Actor

@@ -27,7 +27,19 @@ func registerBudgetTools(srv *server.MCPServer, deps Deps) {
 				mcpgo.Description(`"global", "backend", or "agent".`),
 			),
 			mcpgo.WithString("scope_name",
-				mcpgo.Description("Backend or agent name for non-global scopes. Leave empty for global."),
+				mcpgo.Description("Legacy name for simple workspace, repo, agent, or backend scopes. Prefer workspace/repo/agent/backend fields for composite scopes."),
+			),
+			mcpgo.WithString("workspace",
+				mcpgo.Description("Workspace id/name for workspace-scoped budgets."),
+			),
+			mcpgo.WithString("repo",
+				mcpgo.Description(`Repo full name "owner/repo" for repo-scoped budgets.`),
+			),
+			mcpgo.WithString("agent",
+				mcpgo.Description("Agent name for agent-scoped budgets."),
+			),
+			mcpgo.WithString("backend",
+				mcpgo.Description("Backend name for backend-scoped budgets."),
 			),
 			mcpgo.WithString("period",
 				mcpgo.Required(),
@@ -59,6 +71,10 @@ func registerBudgetTools(srv *server.MCPServer, deps Deps) {
 			mcpgo.WithString("scope_name",
 				mcpgo.Description("Backend or agent name for non-global scopes."),
 			),
+			mcpgo.WithString("workspace", mcpgo.Description("Workspace id/name.")),
+			mcpgo.WithString("repo", mcpgo.Description(`Repo full name "owner/repo".`)),
+			mcpgo.WithString("agent", mcpgo.Description("Agent name.")),
+			mcpgo.WithString("backend", mcpgo.Description("Backend name.")),
 			mcpgo.WithString("period",
 				mcpgo.Description(`"daily", "weekly", or "monthly".`),
 			),
@@ -90,6 +106,9 @@ func registerBudgetTools(srv *server.MCPServer, deps Deps) {
 			mcpgo.WithString("repo",
 				mcpgo.Description(`Optional repo full name "owner/repo" to filter to.`),
 			),
+			mcpgo.WithString("workspace",
+				mcpgo.Description("Optional workspace id/name to filter to. Defaults to all workspaces for compatibility."),
+			),
 			mcpgo.WithString("period",
 				mcpgo.Description(`"daily", "weekly", or "monthly". Defaults to monthly.`),
 			),
@@ -116,6 +135,10 @@ func toolCreateTokenBudget(deps Deps) server.ToolHandlerFunc {
 		args := req.GetArguments()
 		scopeKind, _ := args["scope_kind"].(string)
 		scopeName, _ := args["scope_name"].(string)
+		workspace, _ := args["workspace"].(string)
+		repo, _ := args["repo"].(string)
+		agent, _ := args["agent"].(string)
+		backend, _ := args["backend"].(string)
 		period, _ := args["period"].(string)
 		capTokens, _ := args["cap_tokens"].(float64)
 		// Use map-key-presence to distinguish "caller omitted" from "caller
@@ -133,12 +156,16 @@ func toolCreateTokenBudget(deps Deps) server.ToolHandlerFunc {
 			enabled = true
 		}
 		b := store.TokenBudget{
-			ScopeKind:  scopeKind,
-			ScopeName:  scopeName,
-			Period:     period,
-			CapTokens:  int64(capTokens),
-			AlertAtPct: int(alertAtPct),
-			Enabled:    enabled,
+			ScopeKind:   scopeKind,
+			ScopeName:   scopeName,
+			WorkspaceID: workspace,
+			Repo:        repo,
+			Agent:       agent,
+			Backend:     backend,
+			Period:      period,
+			CapTokens:   int64(capTokens),
+			AlertAtPct:  int(alertAtPct),
+			Enabled:     enabled,
 		}
 		created, err := deps.Store.CreateTokenBudget(b)
 		if err != nil {
@@ -161,6 +188,18 @@ func toolUpdateTokenBudget(deps Deps) server.ToolHandlerFunc {
 		}
 		if v, ok := stringPtrArg(args, "scope_name"); ok {
 			patch.ScopeName = v
+		}
+		if v, ok := stringPtrArg(args, "workspace"); ok {
+			patch.WorkspaceID = v
+		}
+		if v, ok := stringPtrArg(args, "repo"); ok {
+			patch.Repo = v
+		}
+		if v, ok := stringPtrArg(args, "agent"); ok {
+			patch.Agent = v
+		}
+		if v, ok := stringPtrArg(args, "backend"); ok {
+			patch.Backend = v
 		}
 		if v, ok := stringPtrArg(args, "period"); ok {
 			patch.Period = v
@@ -208,11 +247,12 @@ func toolGetTokenLeaderboard(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		args := req.GetArguments()
 		repo, _ := args["repo"].(string)
+		workspace, _ := args["workspace"].(string)
 		period, _ := args["period"].(string)
 		if period == "" {
 			period = "monthly"
 		}
-		entries, err := deps.Store.TokenLeaderboard(repo, period)
+		entries, err := deps.Store.TokenLeaderboard(workspace, repo, period)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("token leaderboard", err), nil
 		}

@@ -199,14 +199,14 @@ func (s *Store) PatchTokenBudget(id int64, p TokenBudgetPatch) (TokenBudget, err
 }
 func (s *Store) DeleteTokenBudget(id int64) error     { return DeleteTokenBudget(s.db, id) }
 func (s *Store) BudgetAlerts() ([]BudgetAlert, error) { return BudgetAlerts(s.db) }
-func (s *Store) TokenLeaderboard(repo, period string) ([]LeaderboardEntry, error) {
-	return TokenLeaderboard(s.db, repo, period)
+func (s *Store) TokenLeaderboard(workspaceID, repo, period string) ([]LeaderboardEntry, error) {
+	return TokenLeaderboard(s.db, workspaceID, repo, period)
 }
-func (s *Store) CheckBudgets(backend, agentName string) error {
-	return CheckBudgets(s.db, backend, agentName)
+func (s *Store) CheckBudgets(workspaceID, repo, backend, agentName string) error {
+	return CheckBudgets(s.db, workspaceID, repo, backend, agentName)
 }
-func (s *Store) CheckBudgetsWithLogger(backend, agentName string, logger zerolog.Logger) error {
-	return CheckBudgetsWithLogger(s.db, backend, agentName, logger)
+func (s *Store) CheckBudgetsWithLogger(workspaceID, repo, backend, agentName string, logger zerolog.Logger) error {
+	return CheckBudgetsWithLogger(s.db, workspaceID, repo, backend, agentName, logger)
 }
 func (s *Store) ImportTokenBudgets(budgets []TokenBudget, replace bool) error {
 	return ImportTokenBudgets(s.db, budgets, replace)

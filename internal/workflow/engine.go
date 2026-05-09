@@ -30,6 +30,7 @@ var labeledKinds = []string{"issues.labeled", "pull_request.labeled"}
 // type local mirrors how the engine treats every other recorder.
 type SpanInput struct {
 	SpanID, RootEventID, ParentSpanID string
+	WorkspaceID                       string
 	Agent, Backend, Repo              string
 	EventKind, InvokedBy              string
 	Number, DispatchDepth             int
@@ -68,14 +69,14 @@ type RunStreamPublisher interface {
 
 // BeginRunInput is the call shape for RunStreamPublisher.BeginRun.
 type BeginRunInput struct {
-	SpanID, EventID, Agent, Backend, Repo, EventKind string
-	StartedAt                                        time.Time
+	SpanID, EventID, WorkspaceID, Agent, Backend, Repo, EventKind string
+	StartedAt                                                     time.Time
 }
 
 // GraphRecorder is an optional observer that the Engine calls when a dispatch
 // is issued. Implementations must be safe for concurrent use.
 type GraphRecorder interface {
-	RecordDispatch(from, to, repo string, number int, reason string)
+	RecordDispatch(workspaceID, from, to, repo string, number int, reason string)
 }
 
 // StepRecorder is an optional observer that the Engine calls as an agent run
@@ -765,9 +766,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	}
 
 	if e.budgetStore != nil {
-		// TODO(workspaces): include workspace in budget checks when budgets move
-		// from global agent/backend limits to workspace-scoped policy.
-		if err := e.budgetStore.CheckBudgetsWithLogger(backend, agent.Name, logger); err != nil {
+		if err := e.budgetStore.CheckBudgetsWithLogger(workspaceID, ev.Repo.FullName, backend, agent.Name, logger); err != nil {
 			spanEnd := time.Now()
 			var queueWaitMs int64
 			if !ev.EnqueuedAt.IsZero() {
@@ -781,6 +780,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 				}
 				e.traceRec.RecordSpan(SpanInput{
 					SpanID:        spanID,
+					WorkspaceID:   workspaceID,
 					RootEventID:   rootEventID,
 					ParentSpanID:  parentSpanID,
 					Agent:         agent.Name,
@@ -819,13 +819,14 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	var onLine func([]byte)
 	if e.streamPub != nil {
 		e.streamPub.BeginRun(BeginRunInput{
-			SpanID:    spanID,
-			EventID:   ev.ID,
-			Agent:     agent.Name,
-			Backend:   backend,
-			Repo:      ev.Repo.FullName,
-			EventKind: ev.Kind,
-			StartedAt: spanStart,
+			SpanID:      spanID,
+			EventID:     ev.ID,
+			WorkspaceID: workspaceID,
+			Agent:       agent.Name,
+			Backend:     backend,
+			Repo:        ev.Repo.FullName,
+			EventKind:   ev.Kind,
+			StartedAt:   spanStart,
 		})
 		defer e.streamPub.EndRun(spanID)
 	}
@@ -874,6 +875,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		}
 		e.traceRec.RecordSpan(SpanInput{
 			SpanID:           spanID,
+			WorkspaceID:      workspaceID,
 			RootEventID:      rootEventID,
 			ParentSpanID:     parentSpanID,
 			Agent:            agent.Name,

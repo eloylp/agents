@@ -7,18 +7,23 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/rs/zerolog"
 )
 
 // TokenBudget represents a token cap for a scope over a time period.
 type TokenBudget struct {
-	ID         int64  `json:"id"`
-	ScopeKind  string `json:"scope_kind"` // "global", "backend", "agent"
-	ScopeName  string `json:"scope_name"` // "" for global
-	Period     string `json:"period"`     // "daily", "weekly", "monthly"
-	CapTokens  int64  `json:"cap_tokens"`
-	AlertAtPct int    `json:"alert_at_pct"` // 0-100; 0 disables alerts
-	Enabled    bool   `json:"enabled"`
+	ID          int64  `json:"id"`
+	ScopeKind   string `json:"scope_kind"`
+	ScopeName   string `json:"scope_name,omitempty"` // legacy display/input field
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Repo        string `json:"repo,omitempty"`
+	Agent       string `json:"agent,omitempty"`
+	Backend     string `json:"backend,omitempty"`
+	Period      string `json:"period"` // "daily", "weekly", "monthly"
+	CapTokens   int64  `json:"cap_tokens"`
+	AlertAtPct  int    `json:"alert_at_pct"` // 0-100; 0 disables alerts
+	Enabled     bool   `json:"enabled"`
 }
 
 // LeaderboardEntry aggregates token usage for one agent over a period.
@@ -54,17 +59,25 @@ func (e *BudgetExceededError) Error() string {
 // TokenBudgetPatch is the partial-update shape used by PATCH surfaces. Nil
 // fields are preserved; non-nil fields replace the current value.
 type TokenBudgetPatch struct {
-	ScopeKind  *string
-	ScopeName  *string
-	Period     *string
-	CapTokens  *int64
-	AlertAtPct *int
-	Enabled    *bool
+	ScopeKind   *string
+	ScopeName   *string
+	WorkspaceID *string
+	Repo        *string
+	Agent       *string
+	Backend     *string
+	Period      *string
+	CapTokens   *int64
+	AlertAtPct  *int
+	Enabled     *bool
 }
 
 func (p TokenBudgetPatch) AnyFieldSet() bool {
 	return p.ScopeKind != nil ||
 		p.ScopeName != nil ||
+		p.WorkspaceID != nil ||
+		p.Repo != nil ||
+		p.Agent != nil ||
+		p.Backend != nil ||
 		p.Period != nil ||
 		p.CapTokens != nil ||
 		p.AlertAtPct != nil ||
@@ -72,14 +85,47 @@ func (p TokenBudgetPatch) AnyFieldSet() bool {
 }
 
 func validateBudget(b TokenBudget) error {
-	if !slices.Contains([]string{"global", "backend", "agent"}, b.ScopeKind) {
-		return &ErrValidation{Msg: fmt.Sprintf("invalid scope_kind %q: must be one of global, backend, agent", b.ScopeKind)}
+	b = normalizeBudget(b)
+	if !slices.Contains([]string{"global", "workspace", "repo", "agent", "workspace+repo", "workspace+agent", "workspace+repo+agent", "backend", "workspace+backend"}, b.ScopeKind) {
+		return &ErrValidation{Msg: fmt.Sprintf("invalid scope_kind %q", b.ScopeKind)}
 	}
 	if !slices.Contains([]string{"daily", "weekly", "monthly"}, b.Period) {
 		return &ErrValidation{Msg: fmt.Sprintf("invalid period %q: must be one of daily, weekly, monthly", b.Period)}
 	}
-	if b.ScopeKind != "global" && strings.TrimSpace(b.ScopeName) == "" {
-		return &ErrValidation{Msg: "scope_name is required for backend and agent scopes"}
+	switch b.ScopeKind {
+	case "global":
+	case "workspace":
+		if b.WorkspaceID == "" {
+			return &ErrValidation{Msg: "workspace_id is required for workspace scope"}
+		}
+	case "repo":
+		if b.Repo == "" {
+			return &ErrValidation{Msg: "repo is required for repo scope"}
+		}
+	case "agent":
+		if b.Agent == "" {
+			return &ErrValidation{Msg: "agent is required for agent scope"}
+		}
+	case "backend":
+		if b.Backend == "" {
+			return &ErrValidation{Msg: "backend is required for backend scope"}
+		}
+	case "workspace+repo":
+		if b.WorkspaceID == "" || b.Repo == "" {
+			return &ErrValidation{Msg: "workspace_id and repo are required for workspace+repo scope"}
+		}
+	case "workspace+agent":
+		if b.WorkspaceID == "" || b.Agent == "" {
+			return &ErrValidation{Msg: "workspace_id and agent are required for workspace+agent scope"}
+		}
+	case "workspace+backend":
+		if b.WorkspaceID == "" || b.Backend == "" {
+			return &ErrValidation{Msg: "workspace_id and backend are required for workspace+backend scope"}
+		}
+	case "workspace+repo+agent":
+		if b.WorkspaceID == "" || b.Repo == "" || b.Agent == "" {
+			return &ErrValidation{Msg: "workspace_id, repo, and agent are required for workspace+repo+agent scope"}
+		}
 	}
 	if b.CapTokens <= 0 {
 		return &ErrValidation{Msg: "cap_tokens must be greater than 0"}
@@ -90,10 +136,61 @@ func validateBudget(b TokenBudget) error {
 	return nil
 }
 
+func normalizeBudget(b TokenBudget) TokenBudget {
+	b.ScopeKind = strings.TrimSpace(b.ScopeKind)
+	b.ScopeName = strings.TrimSpace(b.ScopeName)
+	b.WorkspaceID = strings.TrimSpace(b.WorkspaceID)
+	b.Repo = strings.TrimSpace(b.Repo)
+	b.Agent = strings.TrimSpace(b.Agent)
+	b.Backend = strings.TrimSpace(b.Backend)
+	if b.WorkspaceID != "" {
+		b.WorkspaceID = fleet.NormalizeWorkspaceID(b.WorkspaceID)
+	}
+	if b.ScopeName != "" {
+		switch b.ScopeKind {
+		case "workspace":
+			if b.WorkspaceID == "" {
+				b.WorkspaceID = fleet.NormalizeWorkspaceID(b.ScopeName)
+			}
+		case "repo":
+			if b.Repo == "" {
+				b.Repo = b.ScopeName
+			}
+		case "agent":
+			if b.Agent == "" {
+				b.Agent = b.ScopeName
+			}
+		case "backend":
+			if b.Backend == "" {
+				b.Backend = b.ScopeName
+			}
+		}
+	}
+	switch b.ScopeKind {
+	case "global":
+		b.ScopeName, b.WorkspaceID, b.Repo, b.Agent, b.Backend = "", "", "", "", ""
+	case "workspace":
+		b.ScopeName = b.WorkspaceID
+		b.Repo, b.Agent, b.Backend = "", "", ""
+	case "repo":
+		b.ScopeName = b.Repo
+		b.WorkspaceID, b.Agent, b.Backend = "", "", ""
+	case "agent":
+		b.ScopeName = b.Agent
+		b.WorkspaceID, b.Repo, b.Backend = "", "", ""
+	case "backend":
+		b.ScopeName = b.Backend
+		b.WorkspaceID, b.Repo, b.Agent = "", "", ""
+	default:
+		b.ScopeName = ""
+	}
+	return b
+}
+
 func scanTokenBudget(s rowScanner) (TokenBudget, error) {
 	var b TokenBudget
 	var enabled int
-	if err := s.Scan(&b.ID, &b.ScopeKind, &b.ScopeName, &b.Period, &b.CapTokens, &b.AlertAtPct, &enabled); err != nil {
+	if err := s.Scan(&b.ID, &b.ScopeKind, &b.ScopeName, &b.WorkspaceID, &b.Repo, &b.Agent, &b.Backend, &b.Period, &b.CapTokens, &b.AlertAtPct, &enabled); err != nil {
 		return TokenBudget{}, err
 	}
 	b.Enabled = intToBool(enabled)
@@ -102,7 +199,7 @@ func scanTokenBudget(s rowScanner) (TokenBudget, error) {
 
 // ListTokenBudgets returns all token budgets ordered by scope_kind, scope_name, period.
 func ListTokenBudgets(db *sql.DB) ([]TokenBudget, error) {
-	rows, err := db.Query(`SELECT id, scope_kind, scope_name, period, cap_tokens, alert_at_pct, enabled FROM token_budgets ORDER BY scope_kind, scope_name, period`)
+	rows, err := db.Query(`SELECT id, scope_kind, scope_name, workspace_id, repo, agent, backend, period, cap_tokens, alert_at_pct, enabled FROM token_budgets ORDER BY scope_kind, workspace_id, repo, agent, backend, period`)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +217,7 @@ func ListTokenBudgets(db *sql.DB) ([]TokenBudget, error) {
 
 // GetTokenBudget returns one budget by ID.
 func GetTokenBudget(db *sql.DB, id int64) (TokenBudget, error) {
-	row := db.QueryRow(`SELECT id, scope_kind, scope_name, period, cap_tokens, alert_at_pct, enabled FROM token_budgets WHERE id = ?`, id)
+	row := db.QueryRow(`SELECT id, scope_kind, scope_name, workspace_id, repo, agent, backend, period, cap_tokens, alert_at_pct, enabled FROM token_budgets WHERE id = ?`, id)
 	b, err := scanTokenBudget(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return TokenBudget{}, &ErrNotFound{Msg: fmt.Sprintf("token_budget id=%d not found", id)}
@@ -130,16 +227,14 @@ func GetTokenBudget(db *sql.DB, id int64) (TokenBudget, error) {
 
 // CreateTokenBudget inserts a new budget and returns it with its generated ID.
 func CreateTokenBudget(db *sql.DB, b TokenBudget) (TokenBudget, error) {
-	if b.ScopeKind == "global" {
-		b.ScopeName = ""
-	}
+	b = normalizeBudget(b)
 	if err := validateBudget(b); err != nil {
 		return TokenBudget{}, err
 	}
 	var exists bool
 	if err := db.QueryRow(
-		`SELECT EXISTS(SELECT 1 FROM token_budgets WHERE scope_kind=? AND scope_name=? AND period=?)`,
-		b.ScopeKind, b.ScopeName, b.Period,
+		`SELECT EXISTS(SELECT 1 FROM token_budgets WHERE scope_kind=? AND workspace_id=? AND repo=? AND agent=? AND backend=? AND period=?)`,
+		b.ScopeKind, b.WorkspaceID, b.Repo, b.Agent, b.Backend, b.Period,
 	).Scan(&exists); err != nil {
 		return TokenBudget{}, err
 	}
@@ -147,8 +242,8 @@ func CreateTokenBudget(db *sql.DB, b TokenBudget) (TokenBudget, error) {
 		return TokenBudget{}, &ErrConflict{Msg: fmt.Sprintf("token budget for scope_kind=%q scope_name=%q period=%q already exists", b.ScopeKind, b.ScopeName, b.Period)}
 	}
 	res, err := db.Exec(
-		`INSERT INTO token_budgets (scope_kind, scope_name, period, cap_tokens, alert_at_pct, enabled) VALUES (?, ?, ?, ?, ?, ?)`,
-		b.ScopeKind, b.ScopeName, b.Period, b.CapTokens, b.AlertAtPct, boolToInt(b.Enabled),
+		`INSERT INTO token_budgets (scope_kind, scope_name, workspace_id, repo, agent, backend, period, cap_tokens, alert_at_pct, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		b.ScopeKind, b.ScopeName, b.WorkspaceID, b.Repo, b.Agent, b.Backend, b.Period, b.CapTokens, b.AlertAtPct, boolToInt(b.Enabled),
 	)
 	if err != nil {
 		return TokenBudget{}, err
@@ -160,16 +255,14 @@ func CreateTokenBudget(db *sql.DB, b TokenBudget) (TokenBudget, error) {
 
 // UpdateTokenBudget replaces all fields of an existing budget.
 func UpdateTokenBudget(db *sql.DB, id int64, b TokenBudget) (TokenBudget, error) {
-	if b.ScopeKind == "global" {
-		b.ScopeName = ""
-	}
+	b = normalizeBudget(b)
 	if err := validateBudget(b); err != nil {
 		return TokenBudget{}, err
 	}
 	var conflictID int64
 	err := db.QueryRow(
-		`SELECT id FROM token_budgets WHERE scope_kind=? AND scope_name=? AND period=? AND id != ?`,
-		b.ScopeKind, b.ScopeName, b.Period, id,
+		`SELECT id FROM token_budgets WHERE scope_kind=? AND workspace_id=? AND repo=? AND agent=? AND backend=? AND period=? AND id != ?`,
+		b.ScopeKind, b.WorkspaceID, b.Repo, b.Agent, b.Backend, b.Period, id,
 	).Scan(&conflictID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return TokenBudget{}, err
@@ -178,8 +271,8 @@ func UpdateTokenBudget(db *sql.DB, id int64, b TokenBudget) (TokenBudget, error)
 		return TokenBudget{}, &ErrConflict{Msg: fmt.Sprintf("token budget for scope_kind=%q scope_name=%q period=%q already exists", b.ScopeKind, b.ScopeName, b.Period)}
 	}
 	res, err := db.Exec(
-		`UPDATE token_budgets SET scope_kind=?, scope_name=?, period=?, cap_tokens=?, alert_at_pct=?, enabled=? WHERE id=?`,
-		b.ScopeKind, b.ScopeName, b.Period, b.CapTokens, b.AlertAtPct, boolToInt(b.Enabled), id,
+		`UPDATE token_budgets SET scope_kind=?, scope_name=?, workspace_id=?, repo=?, agent=?, backend=?, period=?, cap_tokens=?, alert_at_pct=?, enabled=? WHERE id=?`,
+		b.ScopeKind, b.ScopeName, b.WorkspaceID, b.Repo, b.Agent, b.Backend, b.Period, b.CapTokens, b.AlertAtPct, boolToInt(b.Enabled), id,
 	)
 	if err != nil {
 		return TokenBudget{}, err
@@ -207,6 +300,18 @@ func PatchTokenBudget(db *sql.DB, id int64, patch TokenBudgetPatch) (TokenBudget
 	}
 	if patch.ScopeName != nil {
 		current.ScopeName = *patch.ScopeName
+	}
+	if patch.WorkspaceID != nil {
+		current.WorkspaceID = *patch.WorkspaceID
+	}
+	if patch.Repo != nil {
+		current.Repo = *patch.Repo
+	}
+	if patch.Agent != nil {
+		current.Agent = *patch.Agent
+	}
+	if patch.Backend != nil {
+		current.Backend = *patch.Backend
 	}
 	if patch.Period != nil {
 		current.Period = *patch.Period
@@ -250,11 +355,19 @@ func periodWhereClause(period string) string {
 	}
 }
 
-// TokenUsageFor sums tokens consumed by a scope over a period.
-// backend and agentName are optional filters (empty means all).
-func TokenUsageFor(db *sql.DB, backend, agentName, period string) (int64, error) {
+// TokenUsageFor sums tokens consumed by a scope over a period. Empty filters
+// mean "all" for that dimension.
+func TokenUsageFor(db *sql.DB, workspaceID, repo, backend, agentName, period string) (int64, error) {
 	conditions := []string{periodWhereClause(period)}
 	var args []any
+	if workspaceID != "" {
+		conditions = append(conditions, "workspace_id = ?")
+		args = append(args, fleet.NormalizeWorkspaceID(workspaceID))
+	}
+	if repo != "" {
+		conditions = append(conditions, "repo = ?")
+		args = append(args, repo)
+	}
 	if backend != "" {
 		conditions = append(conditions, "backend = ?")
 		args = append(args, backend)
@@ -274,13 +387,14 @@ func TokenUsageFor(db *sql.DB, backend, agentName, period string) (int64, error)
 // CheckBudgets verifies that no enabled budget cap is exceeded for the given
 // backend and agent. Returns nil on any query failure (fail-open so a broken
 // token_budgets table never blocks all agent runs).
-func CheckBudgets(db *sql.DB, backend, agentName string) error {
-	return CheckBudgetsWithLogger(db, backend, agentName, zerolog.Nop())
+func CheckBudgets(db *sql.DB, workspaceID, repo, backend, agentName string) error {
+	return CheckBudgetsWithLogger(db, workspaceID, repo, backend, agentName, zerolog.Nop())
 }
 
 // CheckBudgetsWithLogger is CheckBudgets plus fail-open diagnostics. Query
 // errors are logged and ignored so enforcement defects do not halt the fleet.
-func CheckBudgetsWithLogger(db *sql.DB, backend, agentName string, logger zerolog.Logger) error {
+func CheckBudgetsWithLogger(db *sql.DB, workspaceID, repo, backend, agentName string, logger zerolog.Logger) error {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	budgets, err := ListTokenBudgets(db)
 	if err != nil {
 		logger.Error().Err(err).Str("backend", backend).Str("agent", agentName).Msg("token budget check failed open: list budgets")
@@ -293,25 +407,61 @@ func CheckBudgetsWithLogger(db *sql.DB, backend, agentName string, logger zerolo
 		switch b.ScopeKind {
 		case "global":
 			// always applies
+		case "workspace":
+			if b.WorkspaceID != workspaceID {
+				continue
+			}
+		case "repo":
+			if b.Repo != repo {
+				continue
+			}
+		case "workspace+repo":
+			if b.WorkspaceID != workspaceID || b.Repo != repo {
+				continue
+			}
+		case "workspace+agent":
+			if b.WorkspaceID != workspaceID || b.Agent != agentName {
+				continue
+			}
+		case "workspace+repo+agent":
+			if b.WorkspaceID != workspaceID || b.Repo != repo || b.Agent != agentName {
+				continue
+			}
+		case "workspace+backend":
+			if b.WorkspaceID != workspaceID || b.Backend != backend {
+				continue
+			}
 		case "backend":
-			if b.ScopeName != backend {
+			if b.Backend != backend {
 				continue
 			}
 		case "agent":
-			if b.ScopeName != agentName {
+			if b.Agent != agentName {
 				continue
 			}
 		default:
 			continue
 		}
-		var scopeBackend, scopeAgent string
+		var scopeWorkspace, scopeRepo, scopeBackend, scopeAgent string
 		switch b.ScopeKind {
+		case "workspace":
+			scopeWorkspace = b.WorkspaceID
+		case "repo":
+			scopeRepo = b.Repo
+		case "workspace+repo":
+			scopeWorkspace, scopeRepo = b.WorkspaceID, b.Repo
+		case "workspace+agent":
+			scopeWorkspace, scopeAgent = b.WorkspaceID, b.Agent
+		case "workspace+repo+agent":
+			scopeWorkspace, scopeRepo, scopeAgent = b.WorkspaceID, b.Repo, b.Agent
+		case "workspace+backend":
+			scopeWorkspace, scopeBackend = b.WorkspaceID, b.Backend
 		case "backend":
-			scopeBackend = b.ScopeName
+			scopeBackend = b.Backend
 		case "agent":
-			scopeAgent = b.ScopeName
+			scopeAgent = b.Agent
 		}
-		used, err := TokenUsageFor(db, scopeBackend, scopeAgent, b.Period)
+		used, err := TokenUsageFor(db, scopeWorkspace, scopeRepo, scopeBackend, scopeAgent, b.Period)
 		if err != nil {
 			logger.Error().
 				Err(err).
@@ -342,13 +492,26 @@ func BudgetAlerts(db *sql.DB) ([]BudgetAlert, error) {
 			continue
 		}
 		var scopeBackend, scopeAgent string
+		var scopeWorkspace, scopeRepo string
 		switch b.ScopeKind {
+		case "workspace":
+			scopeWorkspace = b.WorkspaceID
+		case "repo":
+			scopeRepo = b.Repo
+		case "workspace+repo":
+			scopeWorkspace, scopeRepo = b.WorkspaceID, b.Repo
+		case "workspace+agent":
+			scopeWorkspace, scopeAgent = b.WorkspaceID, b.Agent
+		case "workspace+repo+agent":
+			scopeWorkspace, scopeRepo, scopeAgent = b.WorkspaceID, b.Repo, b.Agent
+		case "workspace+backend":
+			scopeWorkspace, scopeBackend = b.WorkspaceID, b.Backend
 		case "backend":
-			scopeBackend = b.ScopeName
+			scopeBackend = b.Backend
 		case "agent":
-			scopeAgent = b.ScopeName
+			scopeAgent = b.Agent
 		}
-		used, err := TokenUsageFor(db, scopeBackend, scopeAgent, b.Period)
+		used, err := TokenUsageFor(db, scopeWorkspace, scopeRepo, scopeBackend, scopeAgent, b.Period)
 		if err != nil {
 			continue
 		}
@@ -366,9 +529,13 @@ func BudgetAlerts(db *sql.DB) ([]BudgetAlert, error) {
 
 // TokenLeaderboard returns per-agent token usage aggregated over the given period,
 // optionally filtered to a single repo. Ordered by total tokens descending.
-func TokenLeaderboard(db *sql.DB, repo, period string) ([]LeaderboardEntry, error) {
+func TokenLeaderboard(db *sql.DB, workspaceID, repo, period string) ([]LeaderboardEntry, error) {
 	conditions := []string{periodWhereClause(period)}
 	var args []any
+	if workspaceID != "" {
+		conditions = append(conditions, "workspace_id = ?")
+		args = append(args, fleet.NormalizeWorkspaceID(workspaceID))
+	}
 	if repo != "" {
 		conditions = append(conditions, "repo = ?")
 		args = append(args, repo)
@@ -421,20 +588,19 @@ func importTokenBudgetsTx(tx *sql.Tx, budgets []TokenBudget, replace bool) error
 		}
 	}
 	for _, b := range budgets {
-		if b.ScopeKind == "global" {
-			b.ScopeName = ""
-		}
+		b = normalizeBudget(b)
 		if err := validateBudget(b); err != nil {
 			return fmt.Errorf("store: import token budget: %w", err)
 		}
 		if _, err := tx.Exec(`
-			INSERT INTO token_budgets (scope_kind, scope_name, period, cap_tokens, alert_at_pct, enabled)
-			VALUES (?, ?, ?, ?, ?, ?)
-			ON CONFLICT(scope_kind, scope_name, period) DO UPDATE SET
+			INSERT INTO token_budgets (scope_kind, scope_name, workspace_id, repo, agent, backend, period, cap_tokens, alert_at_pct, enabled)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(scope_kind, workspace_id, repo, agent, backend, period) DO UPDATE SET
+				scope_name   = excluded.scope_name,
 				cap_tokens   = excluded.cap_tokens,
 				alert_at_pct = excluded.alert_at_pct,
 				enabled      = excluded.enabled`,
-			b.ScopeKind, b.ScopeName, b.Period, b.CapTokens, b.AlertAtPct, boolToInt(b.Enabled),
+			b.ScopeKind, b.ScopeName, b.WorkspaceID, b.Repo, b.Agent, b.Backend, b.Period, b.CapTokens, b.AlertAtPct, boolToInt(b.Enabled),
 		); err != nil {
 			return fmt.Errorf("store: import token budget (%s/%s/%s): %w", b.ScopeKind, b.ScopeName, b.Period, err)
 		}

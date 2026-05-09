@@ -614,7 +614,7 @@ func TestStoreRecordDispatchPersistsToDB(t *testing.T) {
 	t.Parallel()
 	s := testDB(t)
 
-	s.RecordDispatch("coder", "reviewer", "owner/repo", 42, "needs review")
+	s.RecordDispatch("default", "coder", "reviewer", "owner/repo", 42, "needs review")
 
 	// Wait for async persistence.
 	time.Sleep(50 * time.Millisecond)

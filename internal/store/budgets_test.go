@@ -21,17 +21,63 @@ func budgetTestDB(t *testing.T) *sql.DB {
 
 func insertTraceUsage(t *testing.T, db *sql.DB, spanID, agent, backend, repo string, input, output, cacheRead, cacheWrite int64) {
 	t.Helper()
+	insertWorkspaceTraceUsage(t, db, "default", spanID, agent, backend, repo, input, output, cacheRead, cacheWrite)
+}
+
+func insertWorkspaceTraceUsage(t *testing.T, db *sql.DB, workspaceID, spanID, agent, backend, repo string, input, output, cacheRead, cacheWrite int64) {
+	t.Helper()
 	_, err := db.Exec(`
 		INSERT INTO traces (
-			span_id, root_event_id, parent_span_id, agent, backend, repo, event_kind,
+			span_id, workspace_id, root_event_id, parent_span_id, agent, backend, repo, event_kind,
 			started_at, finished_at, duration_ms, status,
 			input_tokens, output_tokens, cache_read_tokens, cache_write_tokens
 		)
-		VALUES (?, ?, '', ?, ?, ?, 'issues.labeled', datetime('now'), datetime('now'), 1, 'success', ?, ?, ?, ?)`,
-		spanID, "root-"+spanID, agent, backend, repo, input, output, cacheRead, cacheWrite,
+		VALUES (?, ?, ?, '', ?, ?, ?, 'issues.labeled', datetime('now'), datetime('now'), 1, 'success', ?, ?, ?, ?)`,
+		spanID, workspaceID, "root-"+spanID, agent, backend, repo, input, output, cacheRead, cacheWrite,
 	)
 	if err != nil {
 		t.Fatalf("insert trace usage: %v", err)
+	}
+}
+
+func TestWorkspaceBudgetsAndLeaderboardFilter(t *testing.T) {
+	t.Parallel()
+	db := budgetTestDB(t)
+	if _, err := db.Exec(`INSERT INTO workspaces(id, name) VALUES('team-a', 'Team A')`); err != nil {
+		t.Fatalf("insert workspace: %v", err)
+	}
+	if _, err := store.CreateTokenBudget(db, store.TokenBudget{
+		ScopeKind:   "workspace+agent",
+		WorkspaceID: "team-a",
+		Agent:       "coder",
+		Period:      "daily",
+		CapTokens:   40,
+		AlertAtPct:  80,
+		Enabled:     true,
+	}); err != nil {
+		t.Fatalf("create workspace budget: %v", err)
+	}
+	insertTraceUsage(t, db, "default-coder", "coder", "claude", "owner/repo", 30, 20, 0, 0)
+	insertWorkspaceTraceUsage(t, db, "team-a", "team-coder", "coder", "claude", "owner/repo", 25, 15, 0, 0)
+
+	if err := store.CheckBudgets(db, "default", "owner/repo", "claude", "coder"); err != nil {
+		t.Fatalf("default workspace should not trip team budget: %v", err)
+	}
+	err := store.CheckBudgets(db, "team-a", "owner/repo", "claude", "coder")
+	var exceeded *store.BudgetExceededError
+	if !errors.As(err, &exceeded) {
+		t.Fatalf("team workspace budget err = %T %v, want BudgetExceededError", err, err)
+	}
+	if exceeded.UsedTokens != 40 {
+		t.Fatalf("used = %d, want 40", exceeded.UsedTokens)
+	}
+
+	rows, err := store.TokenLeaderboard(db, "team-a", "", "daily")
+	if err != nil {
+		t.Fatalf("leaderboard: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Agent != "coder" || rows[0].Total != 40 {
+		t.Fatalf("leaderboard = %+v, want team-a coder total 40", rows)
 	}
 }
 
@@ -106,7 +152,7 @@ func TestCheckBudgetsExceededAndFailOpen(t *testing.T) {
 	}
 	insertTraceUsage(t, db, "s1", "coder", "claude", "owner/repo", 60, 40, 0, 0)
 
-	err := store.CheckBudgets(db, "claude", "coder")
+	err := store.CheckBudgets(db, "default", "owner/repo", "claude", "coder")
 	var exceeded *store.BudgetExceededError
 	if !errors.As(err, &exceeded) {
 		t.Fatalf("CheckBudgets err = %T %v, want BudgetExceededError", err, err)
@@ -118,7 +164,7 @@ func TestCheckBudgetsExceededAndFailOpen(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatalf("close db: %v", err)
 	}
-	if err := store.CheckBudgets(db, "claude", "coder"); err != nil {
+	if err := store.CheckBudgets(db, "default", "owner/repo", "claude", "coder"); err != nil {
 		t.Fatalf("closed db should fail open, got %v", err)
 	}
 }
@@ -148,7 +194,7 @@ func TestBudgetAlertsAndLeaderboard(t *testing.T) {
 		t.Fatalf("alerts = %+v, want coder alert at 70 tokens", alerts)
 	}
 
-	all, err := store.TokenLeaderboard(db, "", "daily")
+	all, err := store.TokenLeaderboard(db, "", "", "daily")
 	if err != nil {
 		t.Fatalf("leaderboard all: %v", err)
 	}
@@ -156,7 +202,7 @@ func TestBudgetAlertsAndLeaderboard(t *testing.T) {
 		t.Fatalf("leaderboard all = %+v, want coder first with 70 total, 2 runs, 35 avg", all)
 	}
 
-	filtered, err := store.TokenLeaderboard(db, "owner/two", "daily")
+	filtered, err := store.TokenLeaderboard(db, "", "owner/two", "daily")
 	if err != nil {
 		t.Fatalf("leaderboard filtered: %v", err)
 	}
@@ -172,7 +218,7 @@ func TestTokenLeaderboardLimit(t *testing.T) {
 		agent := "agent-" + string(rune('a'+i))
 		insertTraceUsage(t, db, agent, agent, "claude", "owner/repo", int64(i+1), 0, 0, 0)
 	}
-	rows, err := store.TokenLeaderboard(db, "", "daily")
+	rows, err := store.TokenLeaderboard(db, "", "", "daily")
 	if err != nil {
 		t.Fatalf("leaderboard: %v", err)
 	}

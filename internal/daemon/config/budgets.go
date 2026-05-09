@@ -11,22 +11,30 @@ import (
 )
 
 type tokenBudgetPatchRequest struct {
-	ScopeKind  *string `json:"scope_kind"`
-	ScopeName  *string `json:"scope_name"`
-	Period     *string `json:"period"`
-	CapTokens  *int64  `json:"cap_tokens"`
-	AlertAtPct *int    `json:"alert_at_pct"`
-	Enabled    *bool   `json:"enabled"`
+	ScopeKind   *string `json:"scope_kind"`
+	ScopeName   *string `json:"scope_name"`
+	WorkspaceID *string `json:"workspace_id"`
+	Repo        *string `json:"repo"`
+	Agent       *string `json:"agent"`
+	Backend     *string `json:"backend"`
+	Period      *string `json:"period"`
+	CapTokens   *int64  `json:"cap_tokens"`
+	AlertAtPct  *int    `json:"alert_at_pct"`
+	Enabled     *bool   `json:"enabled"`
 }
 
 func (r tokenBudgetPatchRequest) toStorePatch() store.TokenBudgetPatch {
 	return store.TokenBudgetPatch{
-		ScopeKind:  r.ScopeKind,
-		ScopeName:  r.ScopeName,
-		Period:     r.Period,
-		CapTokens:  r.CapTokens,
-		AlertAtPct: r.AlertAtPct,
-		Enabled:    r.Enabled,
+		ScopeKind:   r.ScopeKind,
+		ScopeName:   r.ScopeName,
+		WorkspaceID: r.WorkspaceID,
+		Repo:        r.Repo,
+		Agent:       r.Agent,
+		Backend:     r.Backend,
+		Period:      r.Period,
+		CapTokens:   r.CapTokens,
+		AlertAtPct:  r.AlertAtPct,
+		Enabled:     r.Enabled,
 	}
 }
 
@@ -146,11 +154,12 @@ func (h *Handler) handleTokenBudgetAlerts(w http.ResponseWriter, _ *http.Request
 // handleTokenLeaderboard serves GET /token_leaderboard?repo=&period=.
 func (h *Handler) handleTokenLeaderboard(w http.ResponseWriter, r *http.Request) {
 	repo := r.URL.Query().Get("repo")
+	workspace := r.URL.Query().Get("workspace")
 	period := r.URL.Query().Get("period")
 	if period == "" {
 		period = "monthly"
 	}
-	entries, err := h.store.TokenLeaderboard(repo, period)
+	entries, err := h.store.TokenLeaderboard(workspace, repo, period)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("token leaderboard")
 		http.Error(w, "internal error", http.StatusInternalServerError)

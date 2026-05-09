@@ -592,7 +592,7 @@ func (d *Dispatcher) ProcessDispatches(
 
 		// Record the dispatch edge in the interaction graph if an observer is set.
 		if d.graphRec != nil {
-			d.graphRec.RecordDispatch(originator.Name, req.Agent, ev.Repo.FullName, number, req.Reason)
+			d.graphRec.RecordDispatch(workspaceID, originator.Name, req.Agent, ev.Repo.FullName, number, req.Reason)
 		}
 
 		fanout++
