@@ -523,6 +523,65 @@ func TestEnginePromptUsesWorkspaceGuardrailsAndBoundary(t *testing.T) {
 	}
 }
 
+func TestDynamicWorkspaceGuardrailAllowsWorkspaceScopeRepos(t *testing.T) {
+	t.Parallel()
+	g := dynamicWorkspaceGuardrail("", fleet.Agent{
+		WorkspaceID: fleet.DefaultWorkspaceID,
+		ScopeType:   "workspace",
+	}, []fleet.Repo{
+		{Name: "owner/repo", WorkspaceID: fleet.DefaultWorkspaceID, Enabled: true},
+		{Name: "owner/other", WorkspaceID: fleet.DefaultWorkspaceID, Enabled: true},
+		{Name: "owner/disabled", WorkspaceID: fleet.DefaultWorkspaceID, Enabled: false},
+		{Name: "owner/team", WorkspaceID: "team-a", Enabled: true},
+	})
+
+	if !strings.Contains(g.Content, "You are running inside workspace: default.") {
+		t.Fatalf("guardrail content missing normalized default workspace:\n%s", g.Content)
+	}
+	for _, want := range []string{"- owner/other", "- owner/repo"} {
+		if !strings.Contains(g.Content, want) {
+			t.Fatalf("guardrail content missing allowed repo %q:\n%s", want, g.Content)
+		}
+	}
+	for _, notWant := range []string{"owner/disabled", "owner/team", "- (none)"} {
+		if strings.Contains(g.Content, notWant) {
+			t.Fatalf("guardrail content contains %q, want excluded:\n%s", notWant, g.Content)
+		}
+	}
+}
+
+func TestDynamicWorkspaceGuardrailFailsClosedForUnknownScopeAndEmptyRepos(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		agent fleet.Agent
+		repos []fleet.Repo
+	}{
+		{
+			name:  "unknown scope",
+			agent: fleet.Agent{WorkspaceID: fleet.DefaultWorkspaceID, ScopeType: "team"},
+			repos: []fleet.Repo{{Name: "owner/repo", WorkspaceID: fleet.DefaultWorkspaceID, Enabled: true}},
+		},
+		{
+			name:  "empty repos",
+			agent: fleet.Agent{WorkspaceID: fleet.DefaultWorkspaceID, ScopeType: "workspace"},
+			repos: nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			g := dynamicWorkspaceGuardrail(fleet.DefaultWorkspaceID, tc.agent, tc.repos)
+			if !strings.Contains(g.Content, "- (none)") {
+				t.Fatalf("guardrail content should render explicit empty allow-list:\n%s", g.Content)
+			}
+			if strings.Contains(g.Content, "- owner/repo") {
+				t.Fatalf("guardrail content allowed repo for fail-closed case:\n%s", g.Content)
+			}
+		})
+	}
+}
+
 // newTestEngineWithDedup builds an Engine with the dispatch dedup store enabled.
 // A non-nil queue is required to activate the Dispatcher; the dedup window is
 // set to 60 s so tests stay well within the window.

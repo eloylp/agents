@@ -993,33 +993,44 @@ func agentScopeAllowsRepo(agent fleet.Agent, repo fleet.Repo) bool {
 	}
 }
 
+const dynamicWorkspaceGuardrailName = "workspace-boundary"
+
 func dynamicWorkspaceGuardrail(workspaceID string, agent fleet.Agent, repos []fleet.Repo) fleet.Guardrail {
+	workspaceID = normalizedWorkspaceID(workspaceID)
 	allowed := allowedReposForAgent(workspaceID, agent, repos)
 	var b strings.Builder
 	b.WriteString("## Workspace and repository boundaries\n\n")
 	fmt.Fprintf(&b, "You are running inside workspace: %s.\n\n", workspaceID)
 	b.WriteString("Allowed repositories for this run:\n")
-	for _, repo := range allowed {
-		fmt.Fprintf(&b, "- %s\n", repo)
+	if len(allowed) == 0 {
+		b.WriteString("- (none)\n")
+	} else {
+		for _, repo := range allowed {
+			fmt.Fprintf(&b, "- %s\n", repo)
+		}
 	}
 	b.WriteString("\nYou must not read, write, inspect, clone, modify, comment on, or open pull requests against repositories outside this allow-list.\n\n")
 	b.WriteString("If the task appears to require a repository outside this allow-list, abort and explain that the requested repository is outside your workspace/scope boundary.")
 	return fleet.Guardrail{
-		Name:     "workspace-boundary",
-		Content:  b.String(),
-		Enabled:  true,
+		Name:    dynamicWorkspaceGuardrailName,
+		Content: b.String(),
+		Enabled: true,
+		// The renderer preserves input order today; keep the negative
+		// position as a defensive marker if guardrails are sorted later.
 		Position: -1,
 	}
 }
 
 func allowedReposForAgent(workspaceID string, agent fleet.Agent, repos []fleet.Repo) []string {
-	workspaceID = strings.TrimSpace(workspaceID)
-	if workspaceID == "" {
-		workspaceID = fleet.DefaultWorkspaceID
-	}
+	workspaceID = normalizedWorkspaceID(workspaceID)
 	scopeType := strings.TrimSpace(agent.ScopeType)
 	if scopeType == "" {
 		scopeType = "workspace"
+	}
+	switch scopeType {
+	case "workspace", "repo":
+	default:
+		return nil
 	}
 	var allowed []string
 	for _, repo := range repos {
@@ -1037,4 +1048,12 @@ func allowedReposForAgent(workspaceID string, agent fleet.Agent, repos []fleet.R
 	}
 	slices.Sort(allowed)
 	return slices.Compact(allowed)
+}
+
+func normalizedWorkspaceID(workspaceID string) string {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return fleet.DefaultWorkspaceID
+	}
+	return workspaceID
 }

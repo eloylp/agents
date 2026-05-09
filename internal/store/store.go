@@ -25,8 +25,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -200,6 +200,9 @@ func importGuardrails(tx *sql.Tx, guardrails []fleet.Guardrail) error {
 		if g.Name == "" || g.Content == "" {
 			return fmt.Errorf("store import: guardrail requires name and content (got name=%q)", g.Name)
 		}
+		if isReservedGuardrailName(g.Name) {
+			return fmt.Errorf("store import: guardrail name %q is reserved for runtime-generated policy", g.Name)
+		}
 		enabled := boolToInt(g.Enabled)
 		if _, err := tx.Exec(`
 			INSERT INTO guardrails (name, description, content, enabled, position, updated_at)
@@ -316,32 +319,29 @@ func importReferencedWorkspaces(tx *sql.Tx, agents []fleet.Agent, repos []fleet.
 		}
 		seen[id] = struct{}{}
 	}
-	ids := mapsKeys(seen)
-	sort.Strings(ids)
+	ids := slices.Collect(maps.Keys(seen))
+	slices.Sort(ids)
 	for _, id := range ids {
 		if err := validateEntityID(id); err != nil {
 			return fmt.Errorf("store import: workspace %q: %w", id, err)
 		}
-		if _, err := tx.Exec(`
+		res, err := tx.Exec(`
 			INSERT OR IGNORE INTO workspaces (id, name, description, updated_at)
 			VALUES (?, ?, '', datetime('now'))`,
 			id, workspaceNameFromID(id),
-		); err != nil {
+		)
+		if err != nil {
 			return fmt.Errorf("store import: ensure workspace %s: %w", id, err)
 		}
-		if err := seedWorkspaceGuardrails(tx, id); err != nil {
-			return err
+		if inserted, err := res.RowsAffected(); err != nil {
+			return fmt.Errorf("store import: check workspace %s insert result: %w", id, err)
+		} else if inserted > 0 {
+			if err := seedWorkspaceGuardrails(tx, id); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
-}
-
-func mapsKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
 }
 
 func workspaceNameFromID(id string) string {

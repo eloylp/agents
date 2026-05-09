@@ -967,6 +967,38 @@ func TestImportedWorkspaceInheritsBuiltInGuardrails(t *testing.T) {
 	}
 }
 
+func TestReferencedWorkspaceIsCreatedBeforeAgentImport(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = nil
+	cfg.Agents[0].WorkspaceID = "team-a"
+	cfg.Agents[1].WorkspaceID = "team-a"
+	cfg.Repos[0].WorkspaceID = "team-a"
+	cfg.Repos[0].Use = []fleet.Binding{
+		{Agent: "coder", Events: []string{"issues.labeled"}},
+	}
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	var name string
+	if err := db.QueryRow("SELECT name FROM workspaces WHERE id = 'team-a'").Scan(&name); err != nil {
+		t.Fatalf("read auto-created workspace: %v", err)
+	}
+	if name != "team-a" {
+		t.Fatalf("workspace name = %q, want team-a", name)
+	}
+	var refs int
+	if err := db.QueryRow("SELECT COUNT(*) FROM workspace_guardrails WHERE workspace_id = 'team-a'").Scan(&refs); err != nil {
+		t.Fatalf("count auto-created workspace guardrails: %v", err)
+	}
+	if refs == 0 {
+		t.Fatal("auto-created workspace guardrails = 0, want inherited built-ins")
+	}
+}
+
 func TestReadWorkspacePromptGuardrailsUsesWorkspaceReferences(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
@@ -999,6 +1031,37 @@ func TestReadWorkspacePromptGuardrailsUsesWorkspaceReferences(t *testing.T) {
 	}
 	if guardrails[0].Name != "workspace-only" || !guardrails[0].Enabled || guardrails[0].Position != 0 {
 		t.Fatalf("guardrail = %+v, want enabled workspace-only from workspace reference", guardrails[0])
+	}
+}
+
+func TestWorkspaceBoundaryGuardrailNameIsReserved(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	err := store.UpsertGuardrail(db, fleet.Guardrail{
+		Name:    "workspace-boundary",
+		Content: "Operator override",
+		Enabled: true,
+	})
+	if err == nil {
+		t.Fatal("UpsertGuardrail succeeded, want reserved-name validation error")
+	}
+	if !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("UpsertGuardrail error = %v, want reserved-name guidance", err)
+	}
+
+	cfg := minimalCfg()
+	cfg.Guardrails = []fleet.Guardrail{{
+		Name:    "workspace-boundary",
+		Content: "Operator override",
+		Enabled: true,
+	}}
+	err = store.Import(db, cfg)
+	if err == nil {
+		t.Fatal("Import succeeded, want reserved-name validation error")
+	}
+	if !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("Import error = %v, want reserved-name guidance", err)
 	}
 }
 

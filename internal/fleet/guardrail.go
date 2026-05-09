@@ -8,6 +8,8 @@ import "strings"
 // can add their own (code style, deployment safety, project norms, etc.)
 // without touching code.
 type Guardrail struct {
+	// Name is operator-controlled except for "workspace-boundary", which is
+	// reserved for the mandatory runtime-generated workspace/repo guardrail.
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
 	Content     string `yaml:"content"`

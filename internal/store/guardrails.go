@@ -80,6 +80,9 @@ func UpsertGuardrail(db *sql.DB, g fleet.Guardrail) error {
 	if g.Name == "" {
 		return &ErrValidation{Msg: "store: guardrail name is required"}
 	}
+	if isReservedGuardrailName(g.Name) {
+		return &ErrValidation{Msg: fmt.Sprintf("store: guardrail name %q is reserved for runtime-generated policy", g.Name)}
+	}
 	if g.Content == "" {
 		return &ErrValidation{Msg: fmt.Sprintf("store: guardrail %q: content is required", g.Name)}
 	}
@@ -110,6 +113,10 @@ func UpsertGuardrail(db *sql.DB, g fleet.Guardrail) error {
 		return fmt.Errorf("store: upsert guardrail %q: %w", g.Name, err)
 	}
 	return nil
+}
+
+func isReservedGuardrailName(name string) bool {
+	return name == "workspace-boundary"
 }
 
 // DeleteGuardrail removes the named guardrail. Built-in rows can be
