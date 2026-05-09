@@ -81,6 +81,12 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/guardrails/{name}", withTimeout(http.HandlerFunc(h.handleGuardrailDelete))).Methods(http.MethodDelete)
 	r.Handle("/guardrails/{name}/reset", withTimeout(http.HandlerFunc(h.handleGuardrailReset))).Methods(http.MethodPost)
 
+	r.Handle("/prompts", withTimeout(http.HandlerFunc(h.handlePromptsList))).Methods(http.MethodGet)
+	r.Handle("/prompts", withTimeout(http.HandlerFunc(h.handlePromptCreate))).Methods(http.MethodPost)
+	r.Handle("/prompts/{name}", withTimeout(http.HandlerFunc(h.handlePromptGet))).Methods(http.MethodGet)
+	r.Handle("/prompts/{name}", withTimeout(http.HandlerFunc(h.handlePromptPatchByName))).Methods(http.MethodPatch)
+	r.Handle("/prompts/{name}", withTimeout(http.HandlerFunc(h.handlePromptDelete))).Methods(http.MethodDelete)
+
 	r.Handle("/backends", withTimeout(http.HandlerFunc(h.handleBackendsList))).Methods(http.MethodGet)
 	r.Handle("/backends", withTimeout(http.HandlerFunc(h.handleBackendCreate))).Methods(http.MethodPost)
 	r.Handle("/backends/status", withTimeout(http.HandlerFunc(h.handleBackendsStatus))).Methods(http.MethodGet)
@@ -475,6 +481,143 @@ func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skil
 // *store.ErrConflict if any agent still references the skill.
 func (h *Handler) DeleteSkill(name string) error {
 	return h.store.DeleteSkill(name)
+}
+
+// ── Prompt wire types ────────────────────────────────────────────────────────────────────────────────────
+
+type storePromptJSON struct {
+	ID          string `json:"id,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Content     string `json:"content"`
+}
+
+type PromptPatch struct {
+	Description *string `json:"description,omitempty"`
+	Content     *string `json:"content,omitempty"`
+}
+
+func (p PromptPatch) AnyFieldSet() bool { return p.Description != nil || p.Content != nil }
+
+func (p PromptPatch) apply(prompt *fleet.Prompt) {
+	if p.Description != nil {
+		prompt.Description = *p.Description
+	}
+	if p.Content != nil {
+		prompt.Content = *p.Content
+	}
+}
+
+func promptToStoreJSON(p fleet.Prompt) storePromptJSON {
+	return storePromptJSON{
+		ID:          p.ID,
+		Name:        p.Name,
+		Description: p.Description,
+		Content:     p.Content,
+	}
+}
+
+func (j storePromptJSON) toConfig() fleet.Prompt {
+	return fleet.Prompt{
+		ID:          j.ID,
+		Name:        j.Name,
+		Description: j.Description,
+		Content:     j.Content,
+	}
+}
+
+func (h *Handler) handlePromptsList(w http.ResponseWriter, _ *http.Request) {
+	prompts, err := h.store.ReadPrompts()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read prompts: %v", err), http.StatusInternalServerError)
+		return
+	}
+	out := make([]storePromptJSON, 0, len(prompts))
+	for _, p := range prompts {
+		out = append(out, promptToStoreJSON(p))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) handlePromptCreate(w http.ResponseWriter, r *http.Request) {
+	var req storePromptJSON
+	if !decodeBody(w, r, h.maxBodyBytes, &req) {
+		return
+	}
+	prompt, err := h.UpsertPrompt(req.toConfig())
+	if err != nil {
+		h.writeErr(w, err, "prompt upsert")
+		return
+	}
+	writeJSON(w, http.StatusOK, promptToStoreJSON(prompt))
+}
+
+func (h *Handler) handlePromptGet(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(mux.Vars(r)["name"])
+	prompts, err := h.store.ReadPrompts()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read prompts: %v", err), http.StatusInternalServerError)
+		return
+	}
+	idx := slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == name })
+	if idx < 0 {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, promptToStoreJSON(prompts[idx]))
+}
+
+func (h *Handler) handlePromptPatchByName(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(mux.Vars(r)["name"])
+	var req PromptPatch
+	if !decodeBody(w, r, h.maxBodyBytes, &req) {
+		return
+	}
+	if !req.AnyFieldSet() {
+		http.Error(w, "at least one field is required", http.StatusBadRequest)
+		return
+	}
+	prompt, err := h.updatePrompt(name, req)
+	if err != nil {
+		h.writeErr(w, err, "prompt patch")
+		return
+	}
+	writeJSON(w, http.StatusOK, promptToStoreJSON(prompt))
+}
+
+func (h *Handler) handlePromptDelete(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(mux.Vars(r)["name"])
+	if err := h.DeletePrompt(name); err != nil {
+		h.writeErr(w, err, "prompt delete")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) UpsertPrompt(p fleet.Prompt) (fleet.Prompt, error) {
+	return h.store.UpsertPrompt(p)
+}
+
+func (h *Handler) UpdatePromptPatch(name string, patch PromptPatch) (fleet.Prompt, error) {
+	return h.updatePrompt(name, patch)
+}
+
+func (h *Handler) updatePrompt(name string, patch PromptPatch) (fleet.Prompt, error) {
+	prompts, err := h.store.ReadPrompts()
+	if err != nil {
+		return fleet.Prompt{}, err
+	}
+	idx := slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == name })
+	if idx < 0 {
+		return fleet.Prompt{}, &store.ErrNotFound{Msg: fmt.Sprintf("prompt %q not found", name)}
+	}
+	merged := prompts[idx]
+	patch.apply(&merged)
+	return h.store.UpsertPrompt(merged)
+}
+
+func (h *Handler) DeletePrompt(name string) error {
+	return h.store.DeletePrompt(name)
 }
 
 // ── Backend wire types ──────────────────────────────────────────────────────────────────────────────────

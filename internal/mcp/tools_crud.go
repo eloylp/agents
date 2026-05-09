@@ -9,8 +9,8 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/eloylp/agents/internal/fleet"
 	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // toolCreateAgent upserts an agent definition through the same path as POST
@@ -209,6 +209,67 @@ func toolDeleteSkill(deps Deps) server.ToolHandlerFunc {
 		return jsonResult(map[string]any{
 			"status": "deleted",
 			"name":   canonical,
+		})
+	}
+}
+
+func toolCreatePrompt(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, err := req.RequireString("name")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		prompt := fleet.Prompt{
+			ID:          req.GetString("id", ""),
+			Name:        name,
+			Description: req.GetString("description", ""),
+			Content:     req.GetString("content", ""),
+		}
+		canonical, err := deps.Fleet.UpsertPrompt(prompt)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("create prompt", err), nil
+		}
+		return jsonResult(promptJSON(canonical))
+	}
+}
+
+func toolUpdatePrompt(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, err := req.RequireString("name")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		args := req.GetArguments()
+		var patch daemonfleet.PromptPatch
+		if v, ok := stringPtrArg(args, "description"); ok {
+			patch.Description = v
+		}
+		if v, ok := stringPtrArg(args, "content"); ok {
+			patch.Content = v
+		}
+		if !patch.AnyFieldSet() {
+			return mcpgo.NewToolResultError("at least one field is required"), nil
+		}
+		canonical, uerr := deps.Fleet.UpdatePromptPatch(name, patch)
+		if uerr != nil {
+			return mcpgo.NewToolResultErrorFromErr("update prompt", uerr), nil
+		}
+		return jsonResult(promptJSON(canonical))
+	}
+}
+
+func toolDeletePrompt(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, ok := trimmedString(req, "name")
+		if !ok {
+			return mcpgo.NewToolResultError("name is required"), nil
+		}
+		if err := deps.Fleet.DeletePrompt(name); err != nil {
+			return mcpgo.NewToolResultErrorFromErr("delete prompt", err), nil
+		}
+		return jsonResult(map[string]any{
+			"status": "deleted",
+			"name":   name,
 		})
 	}
 }
@@ -695,7 +756,7 @@ func stringSlicePtrArg(args map[string]any, key string) (*[]string, bool, string
 //   - a JSON-encoded array string (e.g. `["a","b"]`)
 //
 // The JSON-string path exists because some MCP clients, observed with
-// mark3labs/mcp-go when batching tool calls into a single JSON-RPC message , 
+// mark3labs/mcp-go when batching tool calls into a single JSON-RPC message ,
 // stringify array parameters at the transport boundary. Decoding here keeps
 // the server permissive without requiring clients to know about the quirk.
 //

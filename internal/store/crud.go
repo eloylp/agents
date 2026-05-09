@@ -341,6 +341,97 @@ func DeleteBackend(db *sql.DB, name string) error {
 	return tx.Commit()
 }
 
+// ──── Prompts ───────────────────────────────────────────────────────────────────────────────────────
+
+// UpsertPrompt inserts or replaces one global prompt catalog entry. Prompt
+// names are globally unique; existing rows keep their id while content and
+// description are updated.
+func UpsertPrompt(db *sql.DB, p fleet.Prompt) (fleet.Prompt, error) {
+	p.Name = strings.TrimSpace(p.Name)
+	p.Description = strings.TrimSpace(p.Description)
+	p.Content = strings.TrimSpace(p.Content)
+	if p.Name == "" {
+		return fleet.Prompt{}, &ErrValidation{Msg: "prompt name is required"}
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: begin: %w", p.Name, err)
+	}
+	defer tx.Rollback()
+
+	var existingID string
+	err = tx.QueryRow("SELECT id FROM prompts WHERE name=?", p.Name).Scan(&existingID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: read existing: %w", p.Name, err)
+	}
+	if existingID != "" {
+		p.ID = existingID
+	} else if p.ID == "" {
+		id, err := derivedEntityID("prompt_", p.Name)
+		if err != nil {
+			return fleet.Prompt{}, &ErrValidation{Msg: fmt.Sprintf("prompt %q: %v", p.Name, err)}
+		}
+		p.ID = id
+	}
+	if err := validateEntityID(p.ID); err != nil {
+		return fleet.Prompt{}, &ErrValidation{Msg: fmt.Sprintf("prompt %q: %v", p.Name, err)}
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO prompts (id, name, description, content, updated_at)
+		VALUES (?, ?, ?, ?, datetime('now'))
+		ON CONFLICT(id) DO UPDATE SET
+			name = excluded.name,
+			description = excluded.description,
+			content = excluded.content,
+			updated_at = datetime('now')`,
+		p.ID, p.Name, p.Description, p.Content,
+	); err != nil {
+		if isUniqueConstraint(err) {
+			return fleet.Prompt{}, &ErrConflict{Msg: fmt.Sprintf("prompt name %q is already used by another prompt id", p.Name)}
+		}
+		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: %w", p.Name, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: commit: %w", p.Name, err)
+	}
+	return p, nil
+}
+
+// DeletePrompt removes one global prompt by name. A prompt referenced by any
+// agent cannot be deleted because agents must always point at existing global
+// prompt content.
+func DeletePrompt(db *sql.DB, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return &ErrValidation{Msg: "prompt name is required"}
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: delete prompt %s: begin: %w", name, err)
+	}
+	defer tx.Rollback()
+
+	var id string
+	err = tx.QueryRow("SELECT id FROM prompts WHERE name=?", name).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return &ErrNotFound{Msg: fmt.Sprintf("prompt %q not found", name)}
+	}
+	if err != nil {
+		return fmt.Errorf("store: delete prompt %s: lookup: %w", name, err)
+	}
+	var refs int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM agents WHERE prompt_id=?", id).Scan(&refs); err != nil {
+		return fmt.Errorf("store: delete prompt %s: count agents: %w", name, err)
+	}
+	if refs > 0 {
+		return &ErrConflict{Msg: fmt.Sprintf("prompt %q is referenced by %d agent(s)", name, refs)}
+	}
+	if _, err := tx.Exec("DELETE FROM prompts WHERE id=?", id); err != nil {
+		return fmt.Errorf("store: delete prompt %s: %w", name, err)
+	}
+	return tx.Commit()
+}
+
 // ReadSnapshot returns agents, repos, skills, and backends as a consistent
 // point-in-time snapshot by reading all four within a single SQLite transaction.
 // This prevents the race where a concurrent /api/store write commits between

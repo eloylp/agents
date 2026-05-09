@@ -788,6 +788,78 @@ func TestPromptRefDoesNotOverwritePromptCatalogContent(t *testing.T) {
 	}
 }
 
+func TestPromptCRUD(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	created, err := store.UpsertPrompt(db, fleet.Prompt{
+		Name:        "release-notes",
+		Description: "Drafts release notes",
+		Content:     "Summarize merged changes.",
+	})
+	if err != nil {
+		t.Fatalf("UpsertPrompt create: %v", err)
+	}
+	if created.ID != "prompt_release-notes" {
+		t.Fatalf("created ID = %q, want prompt_release-notes", created.ID)
+	}
+
+	updated, err := store.UpsertPrompt(db, fleet.Prompt{
+		Name:        "release-notes",
+		Description: "Updated",
+		Content:     "Write concise notes.",
+	})
+	if err != nil {
+		t.Fatalf("UpsertPrompt update: %v", err)
+	}
+	if updated.ID != created.ID {
+		t.Fatalf("updated ID = %q, want existing id %q", updated.ID, created.ID)
+	}
+	prompts, err := store.ReadPrompts(db)
+	if err != nil {
+		t.Fatalf("ReadPrompts: %v", err)
+	}
+	idx := slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == "release-notes" })
+	if idx < 0 {
+		t.Fatal("release-notes prompt not found")
+	}
+	if prompts[idx].Content != "Write concise notes." || prompts[idx].Description != "Updated" {
+		t.Fatalf("updated prompt = %+v, want updated description/content", prompts[idx])
+	}
+
+	if err := store.DeletePrompt(db, "release-notes"); err != nil {
+		t.Fatalf("DeletePrompt: %v", err)
+	}
+	prompts, err = store.ReadPrompts(db)
+	if err != nil {
+		t.Fatalf("ReadPrompts after delete: %v", err)
+	}
+	if slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == "release-notes" }) >= 0 {
+		t.Fatal("release-notes prompt still present after delete")
+	}
+}
+
+func TestDeletePromptReferencedByAgentRejected(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	err := store.DeletePrompt(db, "coder")
+	if err == nil {
+		t.Fatal("DeletePrompt succeeded, want referenced-prompt conflict")
+	}
+	var conflict *store.ErrConflict
+	if !errors.As(err, &conflict) {
+		t.Fatalf("DeletePrompt error = %T %[1]v, want ErrConflict", err)
+	}
+	if !strings.Contains(err.Error(), `prompt "coder" is referenced`) {
+		t.Fatalf("error = %v, want referenced prompt message", err)
+	}
+}
+
 func TestDerivedWorkspaceAndPromptIDsMustBeURLSafe(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)

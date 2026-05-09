@@ -69,6 +69,37 @@ func toolListSkills(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
+func toolListPrompts(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		prompts, err := deps.Store.ReadPrompts()
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("list prompts", err), nil
+		}
+		out := make([]map[string]any, 0, len(prompts))
+		for _, p := range prompts {
+			out = append(out, promptJSON(p))
+		}
+		return jsonResult(out)
+	}
+}
+
+func toolGetPrompt(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, ok := trimmedString(req, "name")
+		if !ok {
+			return mcpgo.NewToolResultError("name is required"), nil
+		}
+		prompts, err := deps.Store.ReadPrompts()
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("get prompt", err), nil
+		}
+		if idx := slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == name }); idx != -1 {
+			return jsonResult(promptJSON(prompts[idx]))
+		}
+		return mcpgo.NewToolResultErrorf("prompt %q not found", name), nil
+	}
+}
+
 // toolGetSkill fetches one skill by its map key. Map lookup is
 // case-insensitive via fleet.NormalizeSkillName so agents can reference
 // skills without worrying about casing.

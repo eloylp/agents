@@ -356,6 +356,76 @@ func TestStoreCRUDSkillCreateAndDelete(t *testing.T) {
 	}
 }
 
+// ── /prompts ────────────────────────────────────────────────────────
+
+func TestStoreCRUDPromptCreatePatchDelete(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
+		"name":        "release-notes",
+		"description": "Drafts releases",
+		"content":     "Summarize merged work.",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST prompt: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var created storePromptJSON
+	if err := json.NewDecoder(rr.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created: %v", err)
+	}
+	if created.ID != "prompt_release-notes" {
+		t.Fatalf("created ID = %q, want prompt_release-notes", created.ID)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/prompts/release-notes", map[string]any{
+		"description": "Updated",
+		"content":     "Write concise release notes.",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH prompt: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var patched storePromptJSON
+	if err := json.NewDecoder(rr.Body).Decode(&patched); err != nil {
+		t.Fatalf("decode patched: %v", err)
+	}
+	if patched.ID != created.ID || patched.Description != "Updated" || patched.Content != "Write concise release notes." {
+		t.Fatalf("patched prompt = %+v, want same id and updated fields", patched)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodGet, "/prompts/release-notes", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET prompt: got %d", rr.Code)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/prompts/release-notes", nil)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("DELETE prompt: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodGet, "/prompts/release-notes", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("GET after delete: got %d, want 404", rr.Code)
+	}
+}
+
+func TestStoreCRUDPromptDeleteReferencedByAgent(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	seedStoreBackend(t, s, "claude")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "p",
+		"description": "coding agent", "skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed agent: got %d, %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodDelete, "/prompts/coder", nil)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("DELETE referenced prompt: got %d, want 409, %s", rr.Code, rr.Body.String())
+	}
+}
+
 // ── /guardrails ─────────────────────────────────────────────────────
 
 func TestStoreCRUDGuardrailsListSeeded(t *testing.T) {

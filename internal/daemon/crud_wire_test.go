@@ -24,6 +24,13 @@ type storeSkillJSON struct {
 	Prompt string `json:"prompt"`
 }
 
+type storePromptJSON struct {
+	ID          string `json:"id,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Content     string `json:"content"`
+}
+
 type storeBackendJSON struct {
 	Name           string   `json:"name"`
 	Command        string   `json:"command"`

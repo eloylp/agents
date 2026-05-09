@@ -38,6 +38,12 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		toolListSkills(deps),
 	)
 	srv.AddTool(
+		mcpgo.NewTool("list_prompts",
+			mcpgo.WithDescription("List every global prompt catalog entry. Prompts are reusable task/personality contracts referenced by workspace-local agents."),
+		),
+		toolListPrompts(deps),
+	)
+	srv.AddTool(
 		mcpgo.NewTool("get_skill",
 			mcpgo.WithDescription("Fetch one skill's full prompt body by name."),
 			mcpgo.WithString("name",
@@ -46,6 +52,16 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			),
 		),
 		toolGetSkill(deps),
+	)
+	srv.AddTool(
+		mcpgo.NewTool("get_prompt",
+			mcpgo.WithDescription("Fetch one global prompt catalog entry by name."),
+			mcpgo.WithString("name",
+				mcpgo.Required(),
+				mcpgo.Description("Prompt name."),
+			),
+		),
+		toolGetPrompt(deps),
 	)
 	srv.AddTool(
 		mcpgo.NewTool("list_guardrails",
@@ -255,6 +271,51 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				),
 			),
 			toolDeleteSkill(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("create_prompt",
+				mcpgo.WithDescription("Create or update a global prompt catalog entry. Same path as POST /prompts."),
+				mcpgo.WithString("name",
+					mcpgo.Required(),
+					mcpgo.Description("Prompt name."),
+				),
+				mcpgo.WithString("id",
+					mcpgo.Description("Optional stable prompt id. Omit to derive a URL-safe id from name."),
+				),
+				mcpgo.WithString("description",
+					mcpgo.Description("Short human-readable prompt description."),
+				),
+				mcpgo.WithString("content",
+					mcpgo.Description("Prompt body agents receive when they reference this prompt."),
+				),
+			),
+			toolCreatePrompt(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("update_prompt",
+				mcpgo.WithDescription("Partially update a prompt by name. Same path as PATCH /prompts/{name}."),
+				mcpgo.WithString("name",
+					mcpgo.Required(),
+					mcpgo.Description("Prompt name."),
+				),
+				mcpgo.WithString("description",
+					mcpgo.Description("New prompt description. Omit to leave unchanged."),
+				),
+				mcpgo.WithString("content",
+					mcpgo.Description("New prompt content. Omit to leave unchanged."),
+				),
+			),
+			toolUpdatePrompt(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("delete_prompt",
+				mcpgo.WithDescription("Delete a global prompt by name. Fails while any agent references it. Same path as DELETE /prompts/{name}."),
+				mcpgo.WithString("name",
+					mcpgo.Required(),
+					mcpgo.Description("Prompt name."),
+				),
+			),
+			toolDeletePrompt(deps),
 		)
 		srv.AddTool(
 			mcpgo.NewTool("create_guardrail",
@@ -646,6 +707,15 @@ func agentJSON(a fleet.Agent) map[string]any {
 		"allow_dispatch": a.AllowDispatch,
 		"allow_memory":   a.IsAllowMemory(),
 		"can_dispatch":   nilSafe(a.CanDispatch),
+	}
+}
+
+func promptJSON(p fleet.Prompt) map[string]any {
+	return map[string]any{
+		"id":          p.ID,
+		"name":        p.Name,
+		"description": p.Description,
+		"content":     p.Content,
 	}
 }
 

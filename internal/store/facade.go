@@ -50,6 +50,15 @@ func (s *Store) UpsertGraphLayout(positions []GraphNodePosition) error {
 }
 func (s *Store) ClearGraphLayout() error { return ClearGraphLayout(s.db) }
 
+// ── Workspaces and prompts ──────────────────────────────────────────────
+
+func (s *Store) ReadWorkspaces() ([]fleet.Workspace, error) { return ReadWorkspaces(s.db) }
+func (s *Store) ReadPrompts() ([]fleet.Prompt, error)       { return ReadPrompts(s.db) }
+func (s *Store) UpsertPrompt(p fleet.Prompt) (fleet.Prompt, error) {
+	return UpsertPrompt(s.db, p)
+}
+func (s *Store) DeletePrompt(name string) error { return DeletePrompt(s.db, name) }
+
 // ── Skills ──────────────────────────────────────────────────────────────
 
 func (s *Store) ReadSkills() (map[string]fleet.Skill, error)   { return ReadSkills(s.db) }
