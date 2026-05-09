@@ -126,17 +126,26 @@ func (s *Store) ResetGuardrail(name string) error                  { return Rese
 
 // ── Memory ──────────────────────────────────────────────────────────────
 
-// ReadMemoryRaw exposes the four-value result the engine uses; the
-// engine-side MemoryBackend and the HTTP-side MemoryReader (constructed
-// via NewMemoryBackend / NewMemoryReader) are higher-level wrappers.
+// ReadMemoryRaw exposes the four-value result for the Default workspace.
+// New callers should prefer ReadWorkspaceMemoryRaw.
 func (s *Store) ReadMemoryRaw(agent, repo string) (string, bool, time.Time, error) {
-	return ReadMemory(s.db, agent, repo)
+	return ReadMemory(s.db, fleet.DefaultWorkspaceID, agent, repo)
 }
 
-// WriteMemoryRaw exposes the raw write; production callers use
-// NewMemoryBackend (which also fires the SSE notifier).
+// ReadWorkspaceMemoryRaw exposes the workspace-scoped four-value memory read.
+func (s *Store) ReadWorkspaceMemoryRaw(workspace, agent, repo string) (string, bool, time.Time, error) {
+	return ReadMemory(s.db, normalizeWorkspace(workspace), agent, repo)
+}
+
+// WriteMemoryRaw exposes the raw write for the Default workspace; production
+// callers use NewMemoryBackend (which also fires the SSE notifier).
 func (s *Store) WriteMemoryRaw(agent, repo, content string) error {
-	return WriteMemory(s.db, agent, repo, content)
+	return WriteMemory(s.db, fleet.DefaultWorkspaceID, agent, repo, content)
+}
+
+// WriteWorkspaceMemoryRaw exposes the workspace-scoped raw write.
+func (s *Store) WriteWorkspaceMemoryRaw(workspace, agent, repo, content string) error {
+	return WriteMemory(s.db, normalizeWorkspace(workspace), agent, repo, content)
 }
 
 // NewMemoryBackend constructs the engine-side MemoryBackend rooted in

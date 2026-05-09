@@ -232,6 +232,9 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 					mcpgo.Required(),
 					mcpgo.Description("Repo in owner/repo or owner_repo form."),
 				),
+				mcpgo.WithString("workspace",
+					mcpgo.Description("Workspace id. Defaults to default when omitted."),
+				),
 			),
 			toolGetMemory(deps),
 		)

@@ -132,8 +132,8 @@ func (r *runLocks) release(key string) {
 // implementation can satisfy both surfaces. Defined here as a small local
 // interface so the workflow package does not depend on scheduler.
 type MemoryBackend interface {
-	ReadMemory(agent, repo string) (string, error)
-	WriteMemory(agent, repo, content string) error
+	ReadMemory(workspace, agent, repo string) (string, error)
+	WriteMemory(workspace, agent, repo, content string) error
 }
 
 type Engine struct {
@@ -710,9 +710,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	memoryEnabled := agent.IsAllowMemory() && e.memory != nil
 	var existingMemory string
 	if memoryEnabled {
-		// TODO(workspaces): scope memory by workspace once memory persistence
-		// layout is rebuilt; runtime locking already includes workspace.
-		mem, err := e.memory.ReadMemory(agent.Name, ev.Repo.FullName)
+		mem, err := e.memory.ReadMemory(workspaceID, agent.Name, ev.Repo.FullName)
 		if err != nil {
 			return fmt.Errorf("agent %q: read memory: %w", agent.Name, err)
 		}
@@ -925,9 +923,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	// stale state is naturally observable; if persistence is consistently
 	// failing the operator will see it in logs.
 	if memoryEnabled && resp.Memory != "" {
-		// TODO(workspaces): write memory with the same workspace component used
-		// by the load path once memory storage becomes workspace-scoped.
-		if err := e.memory.WriteMemory(agent.Name, ev.Repo.FullName, resp.Memory); err != nil {
+		if err := e.memory.WriteMemory(workspaceID, agent.Name, ev.Repo.FullName, resp.Memory); err != nil {
 			logger.Error().Err(err).Msg("agent run completed but memory write failed")
 		}
 	}

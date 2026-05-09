@@ -168,9 +168,20 @@ func seedMemoryReader(t *testing.T, db *sql.DB, content map[string]string, mtime
 	seenAgent := map[string]bool{}
 	seenRepo := map[string]bool{}
 	for key, body := range content {
+		workspace := fleet.DefaultWorkspaceID
 		agent, repo, _ := strings.Cut(key, "\x00")
+		if first, rest, ok := strings.Cut(repo, "\x00"); ok {
+			workspace = agent
+			agent = first
+			repo = rest
+		}
 		agent = ai.NormalizeToken(agent)
 		repo = ai.NormalizeToken(repo)
+		if workspace != fleet.DefaultWorkspaceID {
+			if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: workspace, Name: workspace}); err != nil {
+				t.Fatalf("seed workspace %s: %v", workspace, err)
+			}
+		}
 		if !seenAgent[agent] {
 			if err := store.UpsertAgent(db, fleet.Agent{Name: agent, Backend: "claude", Prompt: "p", Description: agent + " agent"}); err != nil {
 				t.Fatalf("seed agent %s: %v", agent, err)
@@ -183,13 +194,13 @@ func seedMemoryReader(t *testing.T, db *sql.DB, content map[string]string, mtime
 			}
 			seenRepo[repo] = true
 		}
-		if err := store.WriteMemory(db, agent, repo, body); err != nil {
+		if err := store.WriteMemory(db, workspace, agent, repo, body); err != nil {
 			t.Fatalf("seed memory %s/%s: %v", agent, repo, err)
 		}
 		if ts, ok := mtimes[key]; ok && !ts.IsZero() {
 			if _, err := db.Exec(
-				"UPDATE memory SET updated_at = ? WHERE agent = ? AND repo = ?",
-				ts.UTC().Format(time.RFC3339Nano), agent, repo,
+				"UPDATE memory SET updated_at = ? WHERE workspace_id = ? AND agent = ? AND repo = ?",
+				ts.UTC().Format(time.RFC3339Nano), workspace, agent, repo,
 			); err != nil {
 				t.Fatalf("override mtime: %v", err)
 			}
@@ -734,6 +745,7 @@ func TestHandleMemorySQLiteMode(t *testing.T) {
 
 	tests := []struct {
 		name      string
+		workspace string
 		agent     string
 		repo      string
 		stored    map[string]string
@@ -775,6 +787,15 @@ func TestHandleMemorySQLiteMode(t *testing.T) {
 			wantBody:  "# memory",
 			wantMtime: fixedTime.UTC().Format(time.RFC3339),
 		},
+		{
+			name:      "workspace query isolates memory",
+			workspace: "team-a",
+			agent:     "coder",
+			repo:      "owner_repo",
+			stored:    map[string]string{"default\x00coder\x00owner_repo": "# default memory", "team-a\x00coder\x00owner_repo": "# team memory"},
+			wantCode:  http.StatusOK,
+			wantBody:  "# team memory",
+		},
 	}
 
 	for _, tc := range tests {
@@ -786,6 +807,9 @@ func TestHandleMemorySQLiteMode(t *testing.T) {
 
 			router := newRouter(h)
 			req := httptest.NewRequest(http.MethodGet, "/memory/"+tc.agent+"/"+tc.repo, nil)
+			if tc.workspace != "" {
+				req = httptest.NewRequest(http.MethodGet, "/memory/"+tc.agent+"/"+tc.repo+"?workspace="+tc.workspace, nil)
+			}
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, req)
 

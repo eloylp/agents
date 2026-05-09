@@ -1036,19 +1036,22 @@ func TestToolGetDispatches(t *testing.T) {
 func TestToolGetMemorySuccess(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
-	if err := deps.Store.WriteMemoryRaw("coder", "owner_one", "# hello\n"); err != nil {
+	if _, err := deps.Store.UpsertWorkspace(fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if err := deps.Store.WriteWorkspaceMemoryRaw("team-a", "coder", "owner_one", "# hello\n"); err != nil {
 		t.Fatalf("seed memory: %v", err)
 	}
 
 	req := mcpgo.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"agent": "coder", "repo": "owner_one"}
+	req.Params.Arguments = map[string]any{"workspace": "team-a", "agent": "coder", "repo": "owner_one"}
 	res, err := toolGetMemory(deps)(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var got map[string]any
 	decodeText(t, res, &got)
-	if got["agent"] != "coder" || got["repo"] != "owner_one" || got["content"] != "# hello\n" {
+	if got["workspace"] != "team-a" || got["agent"] != "coder" || got["repo"] != "owner_one" || got["content"] != "# hello\n" {
 		t.Fatalf("unexpected memory payload: %+v", got)
 	}
 	if got["mtime"] == nil {

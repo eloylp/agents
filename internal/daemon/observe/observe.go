@@ -420,11 +420,13 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, _ *http.Request) {
 // content of the agent's memory for the given repo. The {repo} path segment
 // is expected in the format "owner_repo" (underscore separator), matching
 // both the filesystem layout and the normalised key in the SQLite memory
-// store. Returns 503 when no memory reader is configured.
+// store. The optional workspace query parameter defaults to Default. Returns
+// 503 when no memory reader is configured.
 func (h *Handler) HandleMemory(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	agent := filepath.Clean(vars["agent"])
 	repo := filepath.Clean(vars["repo"])
+	workspace := r.URL.Query().Get("workspace")
 
 	// Reject path traversal attempts.
 	if agent == "." || repo == "." || agent == ".." || repo == ".." {
@@ -437,7 +439,7 @@ func (h *Handler) HandleMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	content, mtime, err := h.memReader.ReadMemory(agent, repo)
+	content, mtime, err := h.memReader.ReadMemory(workspace, agent, repo)
 	if errors.Is(err, store.ErrMemoryNotFound) {
 		http.Error(w, "memory not found", http.StatusNotFound)
 		return

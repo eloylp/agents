@@ -6,10 +6,11 @@ import (
 	"time"
 
 	"github.com/eloylp/agents/internal/ai"
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // ErrMemoryNotFound is returned by MemoryReader.ReadMemory when no row
-// exists for the requested (agent, repo) pair. Distinct from a row that
+// exists for the requested (workspace, agent, repo) tuple. Distinct from a row that
 // exists with empty content (which returns "" and a nil error) so the
 // /memory HTTP endpoint can return 404 for absent entries while still
 // returning 200 with an empty body for intentionally-cleared memory.
@@ -37,18 +38,18 @@ func (m *MemoryBackend) SetChangeNotifier(fn func(agent, repo string)) {
 	m.notifyFn = fn
 }
 
-// ReadMemory reads the persisted memory for (agent, repo). A missing row
+// ReadMemory reads the persisted memory for (workspace, agent, repo). A missing row
 // returns the empty string and nil error, the engine treats that as
 // "no prior memory" rather than a hard miss, so first-run agents work.
-func (m *MemoryBackend) ReadMemory(agent, repo string) (string, error) {
-	content, _, _, err := ReadMemory(m.db, ai.NormalizeToken(agent), ai.NormalizeToken(repo))
+func (m *MemoryBackend) ReadMemory(workspace, agent, repo string) (string, error) {
+	content, _, _, err := ReadMemory(m.db, normalizeWorkspace(workspace), ai.NormalizeToken(agent), ai.NormalizeToken(repo))
 	return content, err
 }
 
 // WriteMemory persists the agent's returned memory blob.
-func (m *MemoryBackend) WriteMemory(agent, repo, content string) error {
+func (m *MemoryBackend) WriteMemory(workspace, agent, repo, content string) error {
 	a, r := ai.NormalizeToken(agent), ai.NormalizeToken(repo)
-	if err := WriteMemory(m.db, a, r, content); err != nil {
+	if err := WriteMemory(m.db, normalizeWorkspace(workspace), a, r, content); err != nil {
 		return err
 	}
 	if m.notifyFn != nil {
@@ -72,9 +73,9 @@ func NewMemoryReader(db *sql.DB) *MemoryReader {
 }
 
 // ReadMemory returns the memory content + last-updated time for the named
-// (agent, repo) pair, or ErrMemoryNotFound if no row exists.
-func (r *MemoryReader) ReadMemory(agent, repo string) (string, time.Time, error) {
-	content, found, mtime, err := ReadMemory(r.db, ai.NormalizeToken(agent), ai.NormalizeToken(repo))
+// (workspace, agent, repo) tuple, or ErrMemoryNotFound if no row exists.
+func (r *MemoryReader) ReadMemory(workspace, agent, repo string) (string, time.Time, error) {
+	content, found, mtime, err := ReadMemory(r.db, normalizeWorkspace(workspace), ai.NormalizeToken(agent), ai.NormalizeToken(repo))
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -82,4 +83,11 @@ func (r *MemoryReader) ReadMemory(agent, repo string) (string, time.Time, error)
 		return "", time.Time{}, ErrMemoryNotFound
 	}
 	return content, mtime, nil
+}
+
+func normalizeWorkspace(workspace string) string {
+	if workspace == "" {
+		return fleet.DefaultWorkspaceID
+	}
+	return workspace
 }
