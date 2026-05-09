@@ -2,11 +2,15 @@
 // Exported from src/lib/ so they can be unit-tested without mounting React Flow.
 
 export interface StoreAgent {
+  workspace_id?: string
   name: string
   backend: string
   model: string
   skills: string[]
-  prompt: string
+  prompt?: string
+  prompt_ref: string
+  scope_type: 'workspace' | 'repo' | string
+  scope_repo: string
   allow_prs: boolean
   allow_dispatch: boolean
   allow_memory: boolean
@@ -34,6 +38,9 @@ export function storeAgentFromResponse(data: Partial<StoreAgent>, fallbackName: 
     model: data.model ?? '',
     skills: data.skills ?? [],
     prompt: data.prompt ?? '',
+    prompt_ref: data.prompt_ref ?? data.prompt ?? '',
+    scope_type: data.scope_type ?? 'workspace',
+    scope_repo: data.scope_repo ?? '',
     allow_prs: data.allow_prs ?? false,
     allow_dispatch: data.allow_dispatch ?? false,
     allow_memory: data.allow_memory ?? true,

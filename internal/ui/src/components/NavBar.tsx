@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { useTheme } from '@/lib/theme'
+import { useSelectedWorkspace } from '@/lib/workspace'
 
 // `flow: true` marks the three pages on the event lifecycle path
 // (Events → Runners → Traces). The navbar renders a small arrow
@@ -15,6 +16,7 @@ const links = [
   { href: '/events/',  label: 'Events',  flow: true },
   { href: '/runners/', label: 'Runners', flow: true },
   { href: '/traces/',  label: 'Traces',  flow: true },
+  { href: '/prompts/', label: 'Prompts' },
   { href: '/skills/',  label: 'Skills' },
   { href: '/memory/',  label: 'Memory' },
   { href: '/repos/',   label: 'Repos' },
@@ -24,6 +26,7 @@ const links = [
 export default function NavBar() {
   const pathname = usePathname()
   const { theme, toggle } = useTheme()
+  const { workspace, workspaces, setWorkspace } = useSelectedWorkspace()
   const [orphanCount, setOrphanCount] = useState(0)
   const [budgetAlertCount, setBudgetAlertCount] = useState(0)
 
@@ -122,10 +125,28 @@ export default function NavBar() {
             </span>
           )
         })}
+        <select
+          value={workspace}
+          onChange={e => setWorkspace(e.target.value)}
+          title="Workspace"
+          style={{
+            marginLeft: 'auto',
+            maxWidth: '180px',
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border)',
+            borderRadius: 4,
+            padding: '4px 8px',
+            fontSize: '0.78rem',
+            color: 'var(--text-muted)',
+          }}
+        >
+          {workspaces.length === 0 && <option value={workspace}>{workspace}</option>}
+          {workspaces.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+        </select>
         <button
           onClick={toggle}
           style={{
-            marginLeft: 'auto',
+            marginLeft: '0.5rem',
             background: 'none',
             border: '1px solid var(--border)',
             borderRadius: 0,

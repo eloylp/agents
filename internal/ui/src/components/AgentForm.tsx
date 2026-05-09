@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react'
 import BadgePicker from '@/components/BadgePicker'
-import MarkdownEditor from '@/components/MarkdownEditor'
 import type { StoreAgent } from '@/lib/dispatch-wiring'
 
 export type { StoreAgent }
@@ -13,22 +12,28 @@ export interface BackendOption {
   detected?: boolean
 }
 
+export interface PromptOption {
+  name: string
+}
+
 // allow_memory defaults to true so newly created agents preserve the
 // historical behaviour where autonomous runs persist memory by default.
 export const emptyAgentForm: StoreAgent = {
-  name: '', backend: '', model: '', skills: [], prompt: '',
+  name: '', backend: '', model: '', skills: [], prompt_ref: '', scope_type: 'workspace', scope_repo: '',
   allow_prs: false, allow_dispatch: false, allow_memory: true,
   can_dispatch: [], description: '',
 }
 
 export default function AgentForm({
-  initial, isNew, backends, skillNames, agentNames, onSave, onCancel, saving, error,
+  initial, isNew, backends, skillNames, agentNames, promptNames, repoNames, onSave, onCancel, saving, error,
 }: {
   initial: StoreAgent
   isNew: boolean
   backends: BackendOption[]
   skillNames: string[]
   agentNames: string[]
+  promptNames: string[]
+  repoNames: string[]
   onSave: (a: StoreAgent) => void
   onCancel: () => void
   saving: boolean
@@ -93,13 +98,33 @@ export default function AgentForm({
         />
       </div>
       <div>
-        <label style={labelStyle}>Prompt</label>
-        <MarkdownEditor
-          value={form.prompt}
-          onChange={v => set('prompt', v)}
-          placeholder="Agent system prompt..."
-          minHeight={200}
-        />
+        <label style={labelStyle}>Prompt *</label>
+        <select style={inputStyle} value={form.prompt_ref} onChange={e => set('prompt_ref', e.target.value)}>
+          <option value="">Select prompt...</option>
+          {promptNames.map(name => <option key={name} value={name}>{name}</option>)}
+        </select>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: form.scope_type === 'repo' ? '1fr 1fr' : '1fr', gap: '0.75rem' }}>
+        <div>
+          <label style={labelStyle}>Scope</label>
+          <select
+            style={inputStyle}
+            value={form.scope_type || 'workspace'}
+            onChange={e => setForm(f => ({ ...f, scope_type: e.target.value, scope_repo: e.target.value === 'repo' ? f.scope_repo : '' }))}
+          >
+            <option value="workspace">Workspace</option>
+            <option value="repo">Repo</option>
+          </select>
+        </div>
+        {form.scope_type === 'repo' && (
+          <div>
+            <label style={labelStyle}>Scoped repo *</label>
+            <select style={inputStyle} value={form.scope_repo} onChange={e => set('scope_repo', e.target.value)}>
+              <option value="">Select repo...</option>
+              {repoNames.map(name => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </div>
+        )}
       </div>
       <div>
         <label style={labelStyle}>Can dispatch</label>
@@ -126,7 +151,7 @@ export default function AgentForm({
         </button>
         <button
           onClick={() => onSave(form)}
-          disabled={saving || !form.name.trim() || !form.backend.trim() || !form.description.trim()}
+          disabled={saving || !form.name.trim() || !form.backend.trim() || !form.description.trim() || !form.prompt_ref.trim() || (form.scope_type === 'repo' && !form.scope_repo.trim())}
           style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
           {saving ? 'Saving...' : 'Save'}

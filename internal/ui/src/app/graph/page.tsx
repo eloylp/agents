@@ -24,6 +24,7 @@ import Card from '@/components/Card'
 import AgentForm, { emptyAgentForm, type BackendOption } from '@/components/AgentForm'
 import BadgePicker from '@/components/BadgePicker'
 import RunButton from '@/components/RunButton'
+import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 import { type Binding } from '@/lib/bindings'
 import { fmtDuration } from '@/lib/format'
 import {
@@ -69,6 +70,9 @@ interface AgentInfo {
   allow_dispatch?: boolean
   allow_prs?: boolean
   allow_memory?: boolean
+  prompt_ref?: string
+  scope_type?: string
+  scope_repo?: string
   skills?: string[]
   bindings?: Array<{ repo: string }>
 }
@@ -312,6 +316,7 @@ export default function GraphPage() {
   const [backendOptions, setBackendOptions] = useState<BackendOption[]>([])
   const [skillNames, setSkillNames] = useState<string[]>([])
   const [agentNames, setAgentNames] = useState<string[]>([])
+  const [promptNames, setPromptNames] = useState<string[]>([])
   const [panelMode, setPanelMode] = useState<'details' | 'edge' | 'create' | 'edit' | null>(null)
   const [agentForm, setAgentForm] = useState<StoreAgent>(emptyAgentForm)
   const [agentSaving, setAgentSaving] = useState(false)
@@ -321,6 +326,7 @@ export default function GraphPage() {
   const [bindingDraft, setBindingDraft] = useState<BindingDraft>(emptyBindingDraft)
   const [bindingSaving, setBindingSaving] = useState(false)
   const [bindingError, setBindingError] = useState('')
+  const { workspace } = useSelectedWorkspace()
 
   const loadedOnce = useRef(false)
   const relationshipAgents = useMemo<DispatchRelationship[]>(() => agents.map(a => ({
@@ -351,20 +357,24 @@ export default function GraphPage() {
       .then(r => r.ok ? r.json() : [])
       .then((data: { name: string }[]) => setSkillNames(data.map(s => s.name)))
       .catch(() => {})
-    fetch('/agents')
+    fetch(withWorkspace('/agents', workspace))
       .then(r => r.ok ? r.json() : [])
       .then((data: { name: string }[]) => setAgentNames(data.map(a => a.name)))
       .catch(() => {})
-  }, [])
+    fetch('/prompts')
+      .then(r => r.ok ? r.json() : [])
+      .then((data: { name: string }[]) => setPromptNames(data.map(p => p.name)))
+      .catch(() => {})
+  }, [workspace])
 
   const load = useCallback(() => {
     if (!loadedOnce.current) setLoading(true)
     loadedOnce.current = true
     Promise.all([
-      fetch('/graph').then(r => r.json()),
-      fetch('/agents').then(r => r.json()),
-      fetch('/graph/layout').then(r => r.ok ? r.json() : { positions: [] }),
-      fetch('/repos').then(r => r.ok ? r.json() : []),
+      fetch(withWorkspace('/graph', workspace)).then(r => r.json()),
+      fetch(withWorkspace('/agents', workspace)).then(r => r.json()),
+      fetch(withWorkspace('/graph/layout', workspace)).then(r => r.ok ? r.json() : { positions: [] }),
+      fetch(withWorkspace('/repos', workspace)).then(r => r.ok ? r.json() : []),
     ]).then(([gd, ad, ld, rd]) => {
       setGraphData(gd)
       setAgents(ad)
@@ -377,7 +387,7 @@ export default function GraphPage() {
       setLayoutPositions(nextPositions)
       setLoading(false)
     }).catch(() => setLoading(false))
-  }, [])
+  }, [workspace])
 
   useEffect(() => {
     load()
@@ -389,7 +399,7 @@ export default function GraphPage() {
   const loadAgentActivity = useCallback(async (agentName: string) => {
     setAgentActivityLoading(true)
     try {
-      const res = await fetch('/runners?limit=200', { cache: 'no-store' })
+      const res = await fetch(withWorkspace('/runners?limit=200', workspace), { cache: 'no-store' })
       if (!res.ok) throw new Error(`runners ${res.status}`)
       const data = await res.json() as { runners?: RunnerRow[] }
       const rows = (data.runners ?? [])
@@ -401,7 +411,7 @@ export default function GraphPage() {
     } finally {
       setAgentActivityLoading(false)
     }
-  }, [])
+  }, [workspace])
 
   useEffect(() => {
     if (panelMode === 'details' && selectedNodeName) {
@@ -553,7 +563,7 @@ export default function GraphPage() {
     const nodeID = node.id
     const next = { x: node.position.x, y: node.position.y }
     setLayoutPositions(prev => ({ ...prev, [nodeID]: next }))
-    fetch('/graph/layout', {
+    fetch(withWorkspace('/graph/layout', workspace), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ positions: [{ node_id: nodeID, x: next.x, y: next.y }] }),
@@ -561,33 +571,33 @@ export default function GraphPage() {
       // Layout persistence is operational UI state; a failed save should not
       // block graph editing or hide the local drag result.
     })
-  }, [])
+  }, [workspace])
 
   const autoLayout = useCallback(() => {
-    fetch('/graph/layout', { method: 'DELETE' }).finally(() => {
+    fetch(withWorkspace('/graph/layout', workspace), { method: 'DELETE' }).finally(() => {
       setLayoutPositions({})
       load()
     })
-  }, [load])
+  }, [load, workspace])
 
   const fetchStoreAgent = useCallback(async (name: string): Promise<StoreAgent> => {
-    const res = await fetch(`/agents/${encodeURIComponent(name)}`)
+    const res = await fetch(withWorkspace(`/agents/${encodeURIComponent(name)}`, workspace))
     if (!res.ok) throw new Error(`fetch ${name}: ${res.status}`)
     const data = await res.json() as Partial<StoreAgent>
     return storeAgentFromResponse(data, name)
-  }, [])
+  }, [workspace])
 
   const postStoreAgent = useCallback(async (a: StoreAgent): Promise<void> => {
-    const res = await fetch('/agents', {
+    const res = await fetch(withWorkspace('/agents', workspace), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(a),
+      body: JSON.stringify({ ...a, workspace_id: workspace }),
     })
     if (!res.ok) {
       const msg = await res.text()
       throw new Error(msg || `save ${a.name} failed (${res.status})`)
     }
-  }, [])
+  }, [workspace])
 
   const agentNameForNodeID = useCallback((nodeID: string) => {
     return agents.find(a => (a.id || a.name) === nodeID)?.name ?? nodeID
@@ -712,6 +722,9 @@ export default function GraphPage() {
       backend: agent?.backend ?? '',
       model: agent?.model ?? '',
       skills: agent?.skills ?? [],
+      prompt_ref: agent?.prompt_ref ?? '',
+      scope_type: agent?.scope_type ?? 'workspace',
+      scope_repo: agent?.scope_repo ?? '',
       allow_prs: agent?.allow_prs ?? false,
       allow_dispatch: agent?.allow_dispatch ?? false,
       allow_memory: agent?.allow_memory ?? true,
@@ -733,10 +746,10 @@ export default function GraphPage() {
     setAgentSaving(true)
     setAgentSaveError('')
     try {
-      const res = await fetch('/agents', {
+      const res = await fetch(withWorkspace('/agents', workspace), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, workspace_id: workspace }),
       })
       if (!res.ok) {
         const msg = await res.text()
@@ -754,7 +767,7 @@ export default function GraphPage() {
     } finally {
       setAgentSaving(false)
     }
-  }, [load, loadLookups])
+  }, [load, loadLookups, workspace])
 
   const saveBinding = useCallback(async () => {
     const agent = selectedNodeName
@@ -928,6 +941,8 @@ export default function GraphPage() {
               backends={backendOptions}
               skillNames={skillNames}
               agentNames={agentNames}
+              promptNames={promptNames}
+              repoNames={repos.map(r => r.name)}
               onSave={saveAgent}
               onCancel={closePanel}
               saving={agentSaving}

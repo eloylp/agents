@@ -117,6 +117,9 @@ func (h *Handler) HandleAgentsCreate(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, h.maxBodyBytes, &req) {
 		return
 	}
+	if req.WorkspaceID == "" {
+		req.WorkspaceID = r.URL.Query().Get("workspace")
+	}
 	canonical, err := h.UpsertAgent(req.toConfig())
 	if err != nil {
 		h.writeErr(w, err, "agent upsert or cron reload")
@@ -129,11 +132,15 @@ func (h *Handler) HandleAgentsCreate(w http.ResponseWriter, r *http.Request) {
 
 type storeAgentJSON struct {
 	ID            string   `json:"id,omitempty"`
+	WorkspaceID   string   `json:"workspace_id,omitempty"`
 	Name          string   `json:"name"`
 	Backend       string   `json:"backend"`
 	Model         string   `json:"model,omitempty"`
 	Skills        []string `json:"skills"`
-	Prompt        string   `json:"prompt"`
+	Prompt        string   `json:"prompt,omitempty"`
+	PromptRef     string   `json:"prompt_ref,omitempty"`
+	ScopeType     string   `json:"scope_type,omitempty"`
+	ScopeRepo     string   `json:"scope_repo,omitempty"`
 	AllowPRs      bool     `json:"allow_prs"`
 	AllowDispatch bool     `json:"allow_dispatch"`
 	CanDispatch   []string `json:"can_dispatch"`
@@ -149,11 +156,15 @@ func agentToStoreJSON(a fleet.Agent) storeAgentJSON {
 	allowMem := a.IsAllowMemory()
 	return storeAgentJSON{
 		ID:            a.ID,
+		WorkspaceID:   a.WorkspaceID,
 		Name:          a.Name,
 		Backend:       a.Backend,
 		Model:         a.Model,
 		Skills:        nilSafeStrings(a.Skills),
 		Prompt:        a.Prompt,
+		PromptRef:     a.PromptRef,
+		ScopeType:     a.ScopeType,
+		ScopeRepo:     a.ScopeRepo,
 		AllowPRs:      a.AllowPRs,
 		AllowDispatch: a.AllowDispatch,
 		CanDispatch:   nilSafeStrings(a.CanDispatch),
@@ -164,11 +175,15 @@ func agentToStoreJSON(a fleet.Agent) storeAgentJSON {
 
 func (j storeAgentJSON) toConfig() fleet.Agent {
 	return fleet.Agent{
+		WorkspaceID:   j.WorkspaceID,
 		Name:          j.Name,
 		Backend:       j.Backend,
 		Model:         j.Model,
 		Skills:        nilSafeStrings(j.Skills),
 		Prompt:        j.Prompt,
+		PromptRef:     j.PromptRef,
+		ScopeType:     j.ScopeType,
+		ScopeRepo:     j.ScopeRepo,
 		AllowPRs:      j.AllowPRs,
 		AllowDispatch: j.AllowDispatch,
 		CanDispatch:   nilSafeStrings(j.CanDispatch),
@@ -184,10 +199,14 @@ func (j storeAgentJSON) toConfig() fleet.Agent {
 // record, then runs the merged entity through UpsertAgent so the same
 // validation and cron-reload paths apply.
 type AgentPatch struct {
+	WorkspaceID   *string   `json:"workspace_id,omitempty"`
 	Backend       *string   `json:"backend,omitempty"`
 	Model         *string   `json:"model,omitempty"`
 	Skills        *[]string `json:"skills,omitempty"`
 	Prompt        *string   `json:"prompt,omitempty"`
+	PromptRef     *string   `json:"prompt_ref,omitempty"`
+	ScopeType     *string   `json:"scope_type,omitempty"`
+	ScopeRepo     *string   `json:"scope_repo,omitempty"`
 	AllowPRs      *bool     `json:"allow_prs,omitempty"`
 	AllowDispatch *bool     `json:"allow_dispatch,omitempty"`
 	CanDispatch   *[]string `json:"can_dispatch,omitempty"`
@@ -199,12 +218,16 @@ type AgentPatch struct {
 // both the REST PATCH handler and the MCP update_agent tool to reject empty
 // payloads before hitting the store.
 func (p AgentPatch) AnyFieldSet() bool {
-	return p.Backend != nil || p.Model != nil || p.Skills != nil || p.Prompt != nil ||
+	return p.WorkspaceID != nil || p.Backend != nil || p.Model != nil || p.Skills != nil || p.Prompt != nil ||
+		p.PromptRef != nil || p.ScopeType != nil || p.ScopeRepo != nil ||
 		p.AllowPRs != nil || p.AllowDispatch != nil || p.CanDispatch != nil ||
 		p.Description != nil || p.AllowMemory != nil
 }
 
 func (p AgentPatch) apply(a *fleet.Agent) {
+	if p.WorkspaceID != nil {
+		a.WorkspaceID = *p.WorkspaceID
+	}
 	if p.Backend != nil {
 		a.Backend = *p.Backend
 	}
@@ -216,6 +239,15 @@ func (p AgentPatch) apply(a *fleet.Agent) {
 	}
 	if p.Prompt != nil {
 		a.Prompt = *p.Prompt
+	}
+	if p.PromptRef != nil {
+		a.PromptRef = *p.PromptRef
+	}
+	if p.ScopeType != nil {
+		a.ScopeType = *p.ScopeType
+	}
+	if p.ScopeRepo != nil {
+		a.ScopeRepo = *p.ScopeRepo
 	}
 	if p.AllowPRs != nil {
 		a.AllowPRs = *p.AllowPRs
@@ -239,12 +271,15 @@ func (p AgentPatch) apply(a *fleet.Agent) {
 
 func (h *Handler) handleAgentGet(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeAgentName(mux.Vars(r)["name"])
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	agents, err := h.store.ReadAgents()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read agents: %v", err), http.StatusInternalServerError)
 		return
 	}
-	idx := slices.IndexFunc(agents, func(a fleet.Agent) bool { return a.Name == name })
+	idx := slices.IndexFunc(agents, func(a fleet.Agent) bool {
+		return a.Name == name && fleet.NormalizeWorkspaceID(a.WorkspaceID) == workspaceID
+	})
 	if idx < 0 {
 		http.NotFound(w, r)
 		return

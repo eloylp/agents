@@ -97,9 +97,10 @@ func (j storeBindingJSON) toConfig() fleet.Binding {
 // storeRepoJSON is the wire shape for POST/GET /repos. POST replaces all
 // bindings on the repo.
 type storeRepoJSON struct {
-	Name     string             `json:"name"`
-	Enabled  bool               `json:"enabled"`
-	Bindings []storeBindingJSON `json:"bindings"`
+	WorkspaceID string             `json:"workspace_id,omitempty"`
+	Name        string             `json:"name"`
+	Enabled     bool               `json:"enabled"`
+	Bindings    []storeBindingJSON `json:"bindings"`
 }
 
 func repoToStoreJSON(r fleet.Repo) storeRepoJSON {
@@ -107,7 +108,7 @@ func repoToStoreJSON(r fleet.Repo) storeRepoJSON {
 	for i, b := range r.Use {
 		bindings[i] = bindingToStoreJSON(b)
 	}
-	return storeRepoJSON{Name: r.Name, Enabled: r.Enabled, Bindings: bindings}
+	return storeRepoJSON{WorkspaceID: r.WorkspaceID, Name: r.Name, Enabled: r.Enabled, Bindings: bindings}
 }
 
 func (j storeRepoJSON) toConfig() fleet.Repo {
@@ -115,7 +116,7 @@ func (j storeRepoJSON) toConfig() fleet.Repo {
 	for i, b := range j.Bindings {
 		use[i] = b.toConfig()
 	}
-	return fleet.Repo{Name: j.Name, Enabled: j.Enabled, Use: use}
+	return fleet.Repo{WorkspaceID: j.WorkspaceID, Name: j.Name, Enabled: j.Enabled, Use: use}
 }
 
 // repoRuntimeSettingsJSON is the wire shape for PATCH /repos/{owner}/{repo}.
@@ -127,15 +128,19 @@ type repoRuntimeSettingsJSON struct {
 
 // ── Handlers ──────────────────────────────────────────────────────────────────────────
 
-func (h *Handler) handleReposList(w http.ResponseWriter, _ *http.Request) {
+func (h *Handler) handleReposList(w http.ResponseWriter, r *http.Request) {
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	repos, err := h.store.ReadRepos()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read repos: %v", err), http.StatusInternalServerError)
 		return
 	}
-	out := make([]storeRepoJSON, len(repos))
-	for i, r := range repos {
-		out[i] = repoToStoreJSON(r)
+	out := make([]storeRepoJSON, 0, len(repos))
+	for _, r := range repos {
+		if fleet.NormalizeWorkspaceID(r.WorkspaceID) != workspaceID {
+			continue
+		}
+		out = append(out, repoToStoreJSON(r))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -144,6 +149,9 @@ func (h *Handler) handleRepoCreate(w http.ResponseWriter, r *http.Request) {
 	var req storeRepoJSON
 	if !decodeBody(w, r, h.maxBodyBytes, &req) {
 		return
+	}
+	if req.WorkspaceID == "" {
+		req.WorkspaceID = r.URL.Query().Get("workspace")
 	}
 	canonical, err := h.UpsertRepo(req.toConfig())
 	if err != nil {

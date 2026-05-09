@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	fleetcfg "github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/scheduler"
 )
 
@@ -37,10 +38,14 @@ type agentBindingJSON struct {
 // representation does not.
 type apiAgentJSON struct {
 	ID            string             `json:"id"`
+	WorkspaceID   string             `json:"workspace_id"`
 	Name          string             `json:"name"`
 	Backend       string             `json:"backend"`
 	Model         string             `json:"model,omitempty"`
 	Skills        []string           `json:"skills,omitempty"`
+	PromptRef     string             `json:"prompt_ref,omitempty"`
+	ScopeType     string             `json:"scope_type,omitempty"`
+	ScopeRepo     string             `json:"scope_repo,omitempty"`
 	Description   string             `json:"description,omitempty"`
 	AllowDispatch bool               `json:"allow_dispatch"`
 	CanDispatch   []string           `json:"can_dispatch,omitempty"`
@@ -54,7 +59,8 @@ type apiAgentJSON struct {
 // definitions from config with scheduling state from the scheduler. The
 // composing daemon's /agents dispatcher routes GET requests here and POST
 // requests to HandleAgentsCreate.
-func (h *Handler) HandleAgentsView(w http.ResponseWriter, _ *http.Request) {
+func (h *Handler) HandleAgentsView(w http.ResponseWriter, r *http.Request) {
+	workspaceID := fleetcfg.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	// Index scheduling state by (agent, repo) for O(1) lookup below.
 	scheduleByKey := map[string]scheduler.AgentStatus{}
 	if h.sched != nil {
@@ -72,16 +78,23 @@ func (h *Handler) HandleAgentsView(w http.ResponseWriter, _ *http.Request) {
 	// Build one entry per configured agent.
 	agents := make([]apiAgentJSON, 0, len(storedAgents))
 	for _, a := range storedAgents {
+		if fleetcfg.NormalizeWorkspaceID(a.WorkspaceID) != workspaceID {
+			continue
+		}
 		currentStatus := "idle"
 		if h.obs != nil && h.obs.IsRunning(a.Name) {
 			currentStatus = "running"
 		}
 		entry := apiAgentJSON{
 			ID:            a.ID,
+			WorkspaceID:   fleetcfg.NormalizeWorkspaceID(a.WorkspaceID),
 			Name:          a.Name,
 			Backend:       a.Backend,
 			Model:         a.Model,
 			Skills:        a.Skills,
+			PromptRef:     a.PromptRef,
+			ScopeType:     a.ScopeType,
+			ScopeRepo:     a.ScopeRepo,
 			Description:   a.Description,
 			AllowDispatch: a.AllowDispatch,
 			CanDispatch:   a.CanDispatch,
@@ -99,6 +112,9 @@ func (h *Handler) HandleAgentsView(w http.ResponseWriter, _ *http.Request) {
 		// want. The repo_enabled flag travels alongside so consumers can mark
 		// inactive bindings without a second fetch.
 		for _, repo := range storedRepos {
+			if fleetcfg.NormalizeWorkspaceID(repo.WorkspaceID) != workspaceID {
+				continue
+			}
 			for _, b := range repo.Use {
 				if b.Agent != a.Name {
 					continue
