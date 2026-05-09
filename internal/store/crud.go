@@ -143,7 +143,7 @@ func UpsertAgent(db *sql.DB, a fleet.Agent) error {
 		return fmt.Errorf("store: upsert agent %s: begin: %w", a.Name, err)
 	}
 	defer tx.Rollback()
-	if err := importAgents(tx, []fleet.Agent{a}); err != nil {
+	if err := importAgents(tx, []fleet.Agent{a}, true); err != nil {
 		return err
 	}
 	if err := validateFleet(tx); err != nil {
@@ -457,7 +457,7 @@ func ImportAll(
 		return fmt.Errorf("store: import: begin: %w", err)
 	}
 	defer tx.Rollback()
-	if err := importAgents(tx, agents); err != nil {
+	if err := importAgents(tx, agents, true); err != nil {
 		return err
 	}
 	if err := importSkills(tx, normalizedSkills); err != nil {
@@ -518,7 +518,7 @@ func ReplaceAll(
 		return fmt.Errorf("store: replace: truncate operator guardrails: %w", err)
 	}
 
-	if err := importAgents(tx, agents); err != nil {
+	if err := importAgents(tx, agents, false); err != nil {
 		return err
 	}
 	if err := importSkills(tx, normalizedSkills); err != nil {

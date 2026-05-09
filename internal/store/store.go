@@ -172,7 +172,7 @@ func Import(db *sql.DB, cfg *config.Config) error {
 	if err := importPrompts(tx, cfg.Prompts); err != nil {
 		return err
 	}
-	if err := importAgents(tx, cfg.Agents); err != nil {
+	if err := importAgents(tx, cfg.Agents, false); err != nil {
 		return err
 	}
 	if err := importRepos(tx, cfg.Repos); err != nil {
@@ -250,10 +250,17 @@ func importSkills(tx *sql.Tx, skills map[string]fleet.Skill) error {
 func importWorkspaces(tx *sql.Tx, workspaces []fleet.Workspace) error {
 	for _, w := range workspaces {
 		if w.ID == "" {
-			w.ID = strings.ToLower(strings.ReplaceAll(w.Name, " ", "-"))
+			id, err := derivedEntityID("", w.Name)
+			if err != nil {
+				return fmt.Errorf("store import: workspace %q: %w", w.Name, err)
+			}
+			w.ID = id
 		}
 		if w.ID == "" || w.Name == "" {
 			return fmt.Errorf("store import: workspace requires id or name")
+		}
+		if err := validateEntityID(w.ID); err != nil {
+			return fmt.Errorf("store import: workspace %q: %w", w.Name, err)
 		}
 		if _, err := tx.Exec(`
 			INSERT INTO workspaces (id, name, description, updated_at)
@@ -264,6 +271,9 @@ func importWorkspaces(tx *sql.Tx, workspaces []fleet.Workspace) error {
 				updated_at = datetime('now')`,
 			w.ID, w.Name, w.Description,
 		); err != nil {
+			if isUniqueConstraint(err) {
+				return fmt.Errorf("store import: workspace name %q is already used by another workspace id", w.Name)
+			}
 			return fmt.Errorf("store import: upsert workspace %s: %w", w.ID, err)
 		}
 	}
@@ -273,10 +283,17 @@ func importWorkspaces(tx *sql.Tx, workspaces []fleet.Workspace) error {
 func importPrompts(tx *sql.Tx, prompts []fleet.Prompt) error {
 	for _, p := range prompts {
 		if p.ID == "" {
-			p.ID = "prompt_" + strings.ToLower(strings.ReplaceAll(p.Name, " ", "-"))
+			id, err := derivedEntityID("prompt-", p.Name)
+			if err != nil {
+				return fmt.Errorf("store import: prompt %q: %w", p.Name, err)
+			}
+			p.ID = id
 		}
 		if p.ID == "" || p.Name == "" {
 			return fmt.Errorf("store import: prompt requires id or name")
+		}
+		if err := validateEntityID(p.ID); err != nil {
+			return fmt.Errorf("store import: prompt %q: %w", p.Name, err)
 		}
 		if _, err := tx.Exec(`
 			INSERT INTO prompts (id, name, description, content, updated_at)
@@ -288,13 +305,16 @@ func importPrompts(tx *sql.Tx, prompts []fleet.Prompt) error {
 				updated_at = datetime('now')`,
 			p.ID, p.Name, p.Description, p.Content,
 		); err != nil {
+			if isUniqueConstraint(err) {
+				return fmt.Errorf("store import: prompt name %q is already used by another prompt id", p.Name)
+			}
 			return fmt.Errorf("store import: upsert prompt %s: %w", p.Name, err)
 		}
 	}
 	return nil
 }
 
-func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
+func importAgents(tx *sql.Tx, agents []fleet.Agent, updatePromptContent bool) error {
 	for _, a := range agents {
 		workspaceID := a.WorkspaceID
 		if workspaceID == "" {
@@ -304,7 +324,7 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
 		if scopeType == "" {
 			scopeType = "workspace"
 		}
-		promptID, err := ensureAgentPrompt(tx, a)
+		promptID, err := ensureAgentPrompt(tx, a, updatePromptContent)
 		if err != nil {
 			return err
 		}
@@ -351,8 +371,15 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
 	return nil
 }
 
-func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent) (string, error) {
+func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent, updatePromptContent bool) (string, error) {
 	if a.PromptID != "" {
+		var id string
+		if err := tx.QueryRow("SELECT id FROM prompts WHERE id=?", a.PromptID).Scan(&id); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return "", fmt.Errorf("store import: agent %s references unknown prompt_id %q", a.Name, a.PromptID)
+			}
+			return "", fmt.Errorf("store import: read prompt_id %s for agent %s: %w", a.PromptID, a.Name, err)
+		}
 		return a.PromptID, nil
 	}
 	name := a.PromptRef
@@ -373,17 +400,28 @@ func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent) (string, error) {
 			return "", fmt.Errorf("store import: read prompt %s: %w", name, err)
 		}
 	}
-	id := "prompt_" + a.Name
-	if a.PromptRef != "" {
-		id = "prompt_" + strings.ReplaceAll(a.PromptRef, " ", "-")
+	if !updatePromptContent && content != "" {
+		var existingID string
+		err := tx.QueryRow("SELECT id FROM prompts WHERE name=?", name).Scan(&existingID)
+		if err == nil {
+			return existingID, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("store import: read prompt %s: %w", name, err)
+		}
+	}
+	id, err := derivedEntityID("prompt-", name)
+	if err != nil {
+		return "", fmt.Errorf("store import: prompt %q for agent %s: %w", name, a.Name, err)
 	}
 	if _, err := tx.Exec(`
 		INSERT INTO prompts (id, name, description, content, updated_at)
 		VALUES (?, ?, ?, ?, datetime('now'))
 		ON CONFLICT(name) DO UPDATE SET
-			content = excluded.content,
-			updated_at = datetime('now')`,
+			content = CASE WHEN ? THEN excluded.content ELSE prompts.content END,
+			updated_at = CASE WHEN ? THEN datetime('now') ELSE prompts.updated_at END`,
 		id, name, "Migrated prompt for agent "+a.Name, content,
+		updatePromptContent, updatePromptContent,
 	); err != nil {
 		return "", fmt.Errorf("store import: upsert prompt %s for agent %s: %w", name, a.Name, err)
 	}
@@ -391,6 +429,43 @@ func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent) (string, error) {
 		return "", fmt.Errorf("store import: read prompt %s id: %w", name, err)
 	}
 	return id, nil
+}
+
+func derivedEntityID(prefix, name string) (string, error) {
+	if name == "" {
+		return "", nil
+	}
+	id := prefix + strings.ToLower(strings.ReplaceAll(name, " ", "-"))
+	if err := validateEntityID(id); err != nil {
+		return "", fmt.Errorf("derived id %q is not URL-safe; set an explicit id using lowercase letters, digits, and hyphens", id)
+	}
+	return id, nil
+}
+
+func validateEntityID(id string) error {
+	if id == "" {
+		return nil
+	}
+	for _, r := range id {
+		if r >= 'a' && r <= 'z' {
+			continue
+		}
+		if r >= '0' && r <= '9' {
+			continue
+		}
+		if r == '-' {
+			continue
+		}
+		if r == '_' {
+			continue
+		}
+		return fmt.Errorf("id %q must contain only lowercase letters, digits, hyphens, and underscores", id)
+	}
+	return nil
+}
+
+func isUniqueConstraint(err error) bool {
+	return strings.Contains(err.Error(), "constraint failed") && strings.Contains(err.Error(), "UNIQUE")
 }
 
 func stableAgentID(q querier, a fleet.Agent) (string, error) {

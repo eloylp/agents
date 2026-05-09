@@ -14,8 +14,8 @@ type Agent struct {
 	Model       string   `yaml:"model"`
 	Skills      []string `yaml:"skills"`
 	// Prompt keeps import compatibility with the original inline-prompt config
-	// shape. New storage writes it into the global prompt catalog and stores the
-	// resulting PromptID/PromptRef on the agent.
+	// shape. PromptID is authoritative when present, then PromptRef, then the
+	// legacy inline Prompt text, which import stores in the prompt catalog.
 	Prompt    string `yaml:"prompt,omitempty"`
 	PromptID  string `yaml:"-"`
 	PromptRef string `yaml:"prompt_ref,omitempty"`

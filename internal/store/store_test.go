@@ -404,6 +404,118 @@ func TestOpenAndMigrate(t *testing.T) {
 	db2.Close()
 }
 
+func TestWorkspacePromptMigrationBackfillsExistingAgents(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "agents.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
+		CREATE TABLE agents (
+			name TEXT PRIMARY KEY,
+			backend TEXT NOT NULL DEFAULT 'auto',
+			model TEXT NOT NULL DEFAULT '',
+			skills TEXT NOT NULL DEFAULT '[]',
+			prompt TEXT NOT NULL,
+			allow_prs INTEGER NOT NULL DEFAULT 0,
+			allow_dispatch INTEGER NOT NULL DEFAULT 0,
+			can_dispatch TEXT NOT NULL DEFAULT '[]',
+			description TEXT NOT NULL DEFAULT '',
+			allow_memory INTEGER NOT NULL DEFAULT 1,
+			id TEXT
+		);
+		CREATE TABLE repos (name TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1);
+		CREATE TABLE guardrails (
+			name TEXT PRIMARY KEY,
+			description TEXT NOT NULL DEFAULT '',
+			content TEXT NOT NULL DEFAULT '',
+			default_content TEXT,
+			is_builtin INTEGER NOT NULL DEFAULT 0,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			position INTEGER NOT NULL DEFAULT 0,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+		INSERT INTO agents (name, backend, prompt, description, id) VALUES
+			('coder', 'claude', 'You write code.', 'Implements fixes', 'agent_coder'),
+			('empty', 'claude', '', 'Empty legacy prompt', 'agent_empty');
+		INSERT INTO repos (name, enabled) VALUES ('owner/repo', 1);
+		INSERT INTO guardrails (name, is_builtin, enabled, position) VALUES
+			('security', 1, 1, 0),
+			('discretion', 1, 0, 5),
+			('operator', 0, 1, 50);
+	`); err != nil {
+		t.Fatalf("seed pre-021 schema: %v", err)
+	}
+	for _, name := range []string{
+		"001_init.sql",
+		"002_observability_and_memory.sql",
+		"003_memory_cascade.sql",
+		"004_drop_unused_tables.sql",
+		"005_trace_steps.sql",
+		"006_backend_metadata_and_agent_model.sql",
+		"007_agent_allow_memory.sql",
+		"008_event_queue.sql",
+		"009_traces_prompt_tokens.sql",
+		"010_guardrails.sql",
+		"011_trace_steps_kind.sql",
+		"012_mcp_tool_usage_guardrail.sql",
+		"013_discretion_guardrail.sql",
+		"014_token_budgets.sql",
+		"015_remove_daemon_config.sql",
+		"016_memory_scope_guardrail.sql",
+		"017_repository_tool_fallback_guardrail.sql",
+		"018_security_guardrail_gh_fallback.sql",
+		"019_auth.sql",
+		"020_agent_ids_and_graph_layouts.sql",
+	} {
+		if _, err := db.Exec("INSERT INTO schema_migrations(name) VALUES(?)", name); err != nil {
+			t.Fatalf("mark migration %s applied: %v", name, err)
+		}
+	}
+	db.Close()
+
+	db, err = store.Open(path)
+	if err != nil {
+		t.Fatalf("Open after pre-021 seed: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	var promptID, promptContent string
+	if err := db.QueryRow("SELECT prompt_id FROM agents WHERE name='coder'").Scan(&promptID); err != nil {
+		t.Fatalf("coder prompt_id: %v", err)
+	}
+	if promptID != "prompt_coder" {
+		t.Fatalf("coder prompt_id = %q, want prompt_coder", promptID)
+	}
+	if err := db.QueryRow("SELECT content FROM prompts WHERE id='prompt_coder'").Scan(&promptContent); err != nil {
+		t.Fatalf("coder prompt content: %v", err)
+	}
+	if promptContent != "You write code." {
+		t.Fatalf("coder prompt content = %q, want inline prompt", promptContent)
+	}
+	if err := db.QueryRow("SELECT prompt_id FROM agents WHERE name='empty'").Scan(&promptID); err != nil {
+		t.Fatalf("empty prompt_id: %v", err)
+	}
+	if promptID != "" {
+		t.Fatalf("empty prompt_id = %q, want empty", promptID)
+	}
+	var guardrailCount, disabledCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM workspace_guardrails").Scan(&guardrailCount); err != nil {
+		t.Fatalf("workspace guardrail count: %v", err)
+	}
+	if guardrailCount != 2 {
+		t.Fatalf("workspace guardrails = %d, want 2 built-ins", guardrailCount)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM workspace_guardrails WHERE guardrail_name='discretion' AND enabled=0").Scan(&disabledCount); err != nil {
+		t.Fatalf("disabled built-in count: %v", err)
+	}
+	if disabledCount != 1 {
+		t.Fatalf("disabled built-in copies = %d, want 1", disabledCount)
+	}
+}
+
 // TestImportLoad verifies the full round-trip: Import writes a config into the
 // database, Load reads it back, and the resulting *config.Config matches the
 // original on all fields that are persisted.
@@ -551,6 +663,9 @@ func TestImportLoad(t *testing.T) {
 	} else if prompts[i].Content != "You write code." {
 		t.Errorf("coder prompt content: got %q", prompts[i].Content)
 	}
+	if coder.Prompt != "You write code." {
+		t.Errorf("coder.prompt resolved from prompt catalog: got %q, want %q", coder.Prompt, "You write code.")
+	}
 }
 
 func TestRepoScopedAgentRequiresRepoInSameWorkspace(t *testing.T) {
@@ -566,6 +681,133 @@ func TestRepoScopedAgentRequiresRepoInSameWorkspace(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `scope_repo "owner/missing" is not a repo in workspace "default"`) {
 		t.Fatalf("error = %v, want scope repo validation", err)
+	}
+}
+
+func TestWorkspaceScopedAgentRejectsScopeRepo(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Agents[0].ScopeType = "workspace"
+	cfg.Agents[0].ScopeRepo = "owner/repo"
+	err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil)
+	if err == nil {
+		t.Fatal("ImportAll succeeded, want validation error")
+	}
+	if !strings.Contains(err.Error(), "scope_repo must be empty for workspace scope") {
+		t.Fatalf("error = %v, want workspace scope_repo validation", err)
+	}
+}
+
+func TestUnsupportedAgentScopeTypeRejected(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Agents[0].ScopeType = "team"
+	err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil)
+	if err == nil {
+		t.Fatal("ImportAll succeeded, want validation error")
+	}
+	if !strings.Contains(err.Error(), `unsupported scope_type "team"`) {
+		t.Fatalf("error = %v, want unsupported scope_type validation", err)
+	}
+}
+
+func TestAgentPromptIDMustExist(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Agents[0].PromptID = "missing-prompt"
+	err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil)
+	if err == nil {
+		t.Fatal("ImportAll succeeded, want missing prompt_id error")
+	}
+	if !strings.Contains(err.Error(), `references unknown prompt_id "missing-prompt"`) {
+		t.Fatalf("error = %v, want missing prompt_id validation", err)
+	}
+}
+
+func TestPromptRefDoesNotOverwritePromptCatalogContent(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Prompts = []fleet.Prompt{{
+		ID:      "shared-prompt",
+		Name:    "shared",
+		Content: "operator-edited prompt",
+	}}
+	cfg.Agents[0].PromptRef = "shared"
+	cfg.Agents[0].Prompt = "legacy inline prompt"
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	idx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.Name == "coder" })
+	if idx < 0 {
+		t.Fatal("coder agent not found after load")
+	}
+	if out.Agents[idx].Prompt != "operator-edited prompt" {
+		t.Fatalf("loaded prompt = %q, want catalog content", out.Agents[idx].Prompt)
+	}
+	prompts, err := store.ReadPrompts(db)
+	if err != nil {
+		t.Fatalf("ReadPrompts: %v", err)
+	}
+	idx = slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == "shared" })
+	if idx < 0 {
+		t.Fatal("shared prompt not found")
+	}
+	if prompts[idx].Content != "operator-edited prompt" {
+		t.Fatalf("prompt catalog content = %q, want operator-edited prompt", prompts[idx].Content)
+	}
+}
+
+func TestDerivedWorkspaceAndPromptIDsMustBeURLSafe(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = []fleet.Workspace{{Name: "Project/A&B"}}
+	err := store.Import(db, cfg)
+	if err == nil {
+		t.Fatal("Import succeeded, want invalid workspace id error")
+	}
+	if !strings.Contains(err.Error(), "not URL-safe") {
+		t.Fatalf("workspace error = %v, want URL-safe guidance", err)
+	}
+
+	db = openTestDB(t)
+	cfg = minimalCfg()
+	cfg.Prompts = []fleet.Prompt{{Name: "Project/A&B", Content: "Prompt"}}
+	err = store.Import(db, cfg)
+	if err == nil {
+		t.Fatal("Import succeeded, want invalid prompt id error")
+	}
+	if !strings.Contains(err.Error(), "not URL-safe") {
+		t.Fatalf("prompt error = %v, want URL-safe guidance", err)
+	}
+}
+
+func TestDuplicateWorkspaceNameReportsClearError(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = []fleet.Workspace{{ID: "another-default", Name: "Default"}}
+	err := store.Import(db, cfg)
+	if err == nil {
+		t.Fatal("Import succeeded, want duplicate workspace name error")
+	}
+	if !strings.Contains(err.Error(), `workspace name "Default" is already used`) {
+		t.Fatalf("error = %v, want clear duplicate workspace name error", err)
 	}
 }
 
@@ -592,6 +834,21 @@ func TestImportIsIdempotent(t *testing.T) {
 	}
 	if counts.Bindings != 3 {
 		t.Errorf("bindings: got %d, want 3 after idempotent import (duplicate rows indicate non-idempotent import)", counts.Bindings)
+	}
+	for _, table := range []struct {
+		name string
+		want int
+	}{
+		{"workspaces", 1},
+		{"prompts", 2},
+	} {
+		var got int
+		if err := db.QueryRow("SELECT COUNT(*) FROM " + table.name).Scan(&got); err != nil {
+			t.Fatalf("count %s: %v", table.name, err)
+		}
+		if got != table.want {
+			t.Errorf("%s: got %d, want %d after idempotent import", table.name, got, table.want)
+		}
 	}
 }
 

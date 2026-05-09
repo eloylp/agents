@@ -34,13 +34,17 @@ WHERE prompt <> '';
 
 UPDATE agents
 SET prompt_id = 'prompt_' || name
-WHERE prompt_id = '';
+WHERE prompt_id = '' AND prompt <> '';
 
+-- The original agents.name primary key remains authoritative in this phase;
+-- scoped uniqueness becomes effective only after a later table rebuild.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_workspace_name ON agents(workspace_id, name);
 CREATE INDEX IF NOT EXISTS idx_agents_workspace ON agents(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_agents_prompt ON agents(prompt_id);
 
 ALTER TABLE repos ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default';
+-- The original repos.name primary key remains authoritative in this phase;
+-- scoped uniqueness becomes effective only after a later table rebuild.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_repos_workspace_name ON repos(workspace_id, name);
 CREATE INDEX IF NOT EXISTS idx_repos_workspace ON repos(workspace_id);
 
@@ -55,4 +59,4 @@ CREATE TABLE IF NOT EXISTS workspace_guardrails (
 INSERT OR IGNORE INTO workspace_guardrails (workspace_id, guardrail_name, position, enabled)
 SELECT 'default', name, position, enabled
 FROM guardrails
-WHERE enabled = 1;
+WHERE is_builtin = 1;

@@ -120,7 +120,7 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 		if reposByWorkspace[workspaceID] == nil {
 			reposByWorkspace[workspaceID] = map[string]struct{}{}
 		}
-		reposByWorkspace[workspaceID][strings.ToLower(r.Name)] = struct{}{}
+		reposByWorkspace[workspaceID][r.Name] = struct{}{}
 	}
 	for _, a := range agents {
 		if a.Name == "" {
@@ -161,7 +161,7 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 			if a.ScopeRepo == "" {
 				return fmt.Errorf("config: agent %q: scope_repo is required for repo scope", a.Name)
 			}
-			if _, ok := reposByWorkspace[workspaceID][strings.ToLower(a.ScopeRepo)]; !ok {
+			if _, ok := reposByWorkspace[workspaceID][a.ScopeRepo]; !ok {
 				return fmt.Errorf("config: agent %q: scope_repo %q is not a repo in workspace %q", a.Name, a.ScopeRepo, workspaceID)
 			}
 		default:
