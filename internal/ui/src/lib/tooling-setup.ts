@@ -53,6 +53,8 @@ export function setupComplete(diag: BackendsDiagnostics | null | undefined, sele
 }
 
 export function buildSetupChecks(diag: BackendsDiagnostics | null | undefined, selected: string[]): SetupCheck[] {
+  // Older diagnostics exposed github_cli as a top-level singleton; newer
+  // responses include it in tools so additional tool checks can share a shape.
   const tools = diag?.tools ?? (diag?.github_cli ? [diag.github_cli] : [])
   const toolByName = new Map(tools.map(tool => [tool.name, tool]))
   const backendByName = new Map((diag?.backends ?? []).map(backend => [backend.name, backend]))
@@ -67,7 +69,7 @@ export function buildSetupChecks(diag: BackendsDiagnostics | null | undefined, s
     },
     {
       key: 'github_token',
-      label: 'GitHub token / MCP credential',
+      label: 'GitHub MCP credential',
       ok: selected.some(name => githubMCPConnected(backendByName.get(name))),
       detail: selected.some(name => githubMCPConnected(backendByName.get(name)))
         ? 'At least one selected backend reports GitHub MCP connected.'
