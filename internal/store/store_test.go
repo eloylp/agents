@@ -576,6 +576,8 @@ func TestImportLoad(t *testing.T) {
 	}
 	if coder.PromptID == "" {
 		t.Error("coder.prompt_id is empty")
+	} else if coder.PromptID != "prompt_coder" {
+		t.Errorf("coder.prompt_id: got %q, want prompt_coder", coder.PromptID)
 	}
 	if coder.PromptRef != "coder" {
 		t.Errorf("coder.prompt_ref: got %q, want coder", coder.PromptRef)
@@ -824,6 +826,43 @@ func TestDuplicateWorkspaceNameReportsClearError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `workspace name "Default" is already used`) {
 		t.Fatalf("error = %v, want clear duplicate workspace name error", err)
+	}
+}
+
+func TestImportedWorkspaceInheritsBuiltInGuardrails(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = []fleet.Workspace{{ID: "team-a", Name: "Team A"}}
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	var builtIns, inherited, catalogEnabled, workspaceEnabled int
+	if err := db.QueryRow("SELECT COUNT(*) FROM guardrails WHERE is_builtin = 1").Scan(&builtIns); err != nil {
+		t.Fatalf("count built-in guardrails: %v", err)
+	}
+	if err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM workspace_guardrails
+		WHERE workspace_id = 'team-a'`).Scan(&inherited); err != nil {
+		t.Fatalf("count inherited guardrails: %v", err)
+	}
+	if inherited != builtIns {
+		t.Fatalf("team-a workspace guardrails = %d, want %d built-ins", inherited, builtIns)
+	}
+	if err := db.QueryRow("SELECT enabled FROM guardrails WHERE name = 'discretion'").Scan(&catalogEnabled); err != nil {
+		t.Fatalf("read catalog discretion guardrail: %v", err)
+	}
+	if err := db.QueryRow(`
+		SELECT enabled
+		FROM workspace_guardrails
+		WHERE workspace_id = 'team-a' AND guardrail_name = 'discretion'`).Scan(&workspaceEnabled); err != nil {
+		t.Fatalf("read inherited discretion guardrail: %v", err)
+	}
+	if workspaceEnabled != catalogEnabled {
+		t.Fatalf("inherited discretion enabled = %d, want catalog value %d", workspaceEnabled, catalogEnabled)
 	}
 }
 

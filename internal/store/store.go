@@ -276,6 +276,22 @@ func importWorkspaces(tx *sql.Tx, workspaces []fleet.Workspace) error {
 			}
 			return fmt.Errorf("store import: upsert workspace %s: %w", w.ID, err)
 		}
+		if err := seedWorkspaceGuardrails(tx, w.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func seedWorkspaceGuardrails(tx *sql.Tx, workspaceID string) error {
+	if _, err := tx.Exec(`
+		INSERT OR IGNORE INTO workspace_guardrails (workspace_id, guardrail_name, position, enabled)
+		SELECT ?, name, position, enabled
+		FROM guardrails
+		WHERE is_builtin = 1`,
+		workspaceID,
+	); err != nil {
+		return fmt.Errorf("store import: seed workspace %s guardrails: %w", workspaceID, err)
 	}
 	return nil
 }
@@ -283,7 +299,7 @@ func importWorkspaces(tx *sql.Tx, workspaces []fleet.Workspace) error {
 func importPrompts(tx *sql.Tx, prompts []fleet.Prompt) error {
 	for _, p := range prompts {
 		if p.ID == "" {
-			id, err := derivedEntityID("prompt-", p.Name)
+			id, err := derivedEntityID("prompt_", p.Name)
 			if err != nil {
 				return fmt.Errorf("store import: prompt %q: %w", p.Name, err)
 			}
@@ -399,9 +415,7 @@ func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent, updatePromptContent bool) (str
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", fmt.Errorf("store import: agent %s references unknown prompt_ref %q", a.Name, a.PromptRef)
 		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return "", fmt.Errorf("store import: read prompt %s: %w", name, err)
-		}
+		return "", fmt.Errorf("store import: read prompt %s: %w", name, err)
 	}
 	if !updatePromptContent && content != "" {
 		var existingID string
@@ -413,7 +427,7 @@ func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent, updatePromptContent bool) (str
 			return "", fmt.Errorf("store import: read prompt %s: %w", name, err)
 		}
 	}
-	id, err := derivedEntityID("prompt-", name)
+	id, err := derivedEntityID("prompt_", name)
 	if err != nil {
 		return "", fmt.Errorf("store import: prompt %q for agent %s: %w", name, a.Name, err)
 	}
@@ -440,7 +454,7 @@ func derivedEntityID(prefix, name string) (string, error) {
 	}
 	id := prefix + strings.ToLower(strings.ReplaceAll(name, " ", "-"))
 	if err := validateEntityID(id); err != nil {
-		return "", fmt.Errorf("derived id %q is not URL-safe; set an explicit id using lowercase letters, digits, and hyphens", id)
+		return "", fmt.Errorf("derived id %q is not URL-safe; set an explicit id using lowercase letters, digits, hyphens, and underscores", id)
 	}
 	return id, nil
 }
@@ -468,6 +482,8 @@ func validateEntityID(id string) error {
 }
 
 func isUniqueConstraint(err error) bool {
+	// modernc.org/sqlite v1.49.1 includes both fragments for UNIQUE failures;
+	// tests cover the friendly errors that depend on this compatibility shim.
 	return strings.Contains(err.Error(), "constraint failed") && strings.Contains(err.Error(), "UNIQUE")
 }
 

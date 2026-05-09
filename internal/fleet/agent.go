@@ -16,8 +16,10 @@ type Agent struct {
 	// Prompt keeps import compatibility with the original inline-prompt config
 	// shape. PromptID is authoritative when present, then PromptRef, then the
 	// legacy inline Prompt text, which import stores in the prompt catalog.
-	Prompt    string `yaml:"prompt,omitempty"`
-	PromptID  string `yaml:"-"`
+	Prompt   string `yaml:"prompt,omitempty"`
+	PromptID string `yaml:"-"`
+	// PromptRef is explicit on export once an agent resolves through the prompt
+	// catalog, including legacy inline prompts migrated under the agent name.
 	PromptRef string `yaml:"prompt_ref,omitempty"`
 	ScopeType string `yaml:"scope_type,omitempty"`
 	ScopeRepo string `yaml:"scope_repo,omitempty"`
