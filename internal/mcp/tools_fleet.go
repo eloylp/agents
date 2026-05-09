@@ -122,7 +122,10 @@ func toolGetWorkspace(deps Deps) server.ToolHandlerFunc {
 
 func toolListWorkspaceGuardrails(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		workspace, ok := trimmedStringOptional(req, "workspace")
+		if !ok || workspace == "" {
+			workspace = fleet.DefaultWorkspaceID
+		}
 		refs, err := deps.Store.ReadWorkspaceGuardrails(workspace)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list workspace guardrails", err), nil

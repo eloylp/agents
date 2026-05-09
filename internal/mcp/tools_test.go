@@ -1046,22 +1046,48 @@ func TestToolGetMemorySuccess(t *testing.T) {
 		t.Fatalf("seed workspace: %v", err)
 	}
 	if err := deps.Store.WriteWorkspaceMemoryRaw("team-a", "coder", "owner_one", "# hello\n"); err != nil {
-		t.Fatalf("seed memory: %v", err)
+		t.Fatalf("seed team memory: %v", err)
+	}
+	if err := deps.Store.WriteWorkspaceMemoryRaw(fleet.DefaultWorkspaceID, "coder", "owner_one", "# default\n"); err != nil {
+		t.Fatalf("seed default memory: %v", err)
 	}
 
-	req := mcpgo.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"workspace": "team-a", "agent": "coder", "repo": "owner_one"}
-	res, err := toolGetMemory(deps)(context.Background(), req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	tests := []struct {
+		name          string
+		args          map[string]any
+		wantWorkspace string
+		wantContent   string
+	}{
+		{
+			name:          "explicit workspace",
+			args:          map[string]any{"workspace": "team-a", "agent": "coder", "repo": "owner_one"},
+			wantWorkspace: "team-a",
+			wantContent:   "# hello\n",
+		},
+		{
+			name:          "omitted workspace defaults to default",
+			args:          map[string]any{"agent": "coder", "repo": "owner_one"},
+			wantWorkspace: fleet.DefaultWorkspaceID,
+			wantContent:   "# default\n",
+		},
 	}
-	var got map[string]any
-	decodeText(t, res, &got)
-	if got["workspace"] != "team-a" || got["agent"] != "coder" || got["repo"] != "owner_one" || got["content"] != "# hello\n" {
-		t.Fatalf("unexpected memory payload: %+v", got)
-	}
-	if got["mtime"] == nil {
-		t.Fatalf("expected mtime field, got %+v", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := mcpgo.CallToolRequest{}
+			req.Params.Arguments = tt.args
+			res, err := toolGetMemory(deps)(context.Background(), req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			var got map[string]any
+			decodeText(t, res, &got)
+			if got["workspace"] != tt.wantWorkspace || got["agent"] != "coder" || got["repo"] != "owner_one" || got["content"] != tt.wantContent {
+				t.Fatalf("unexpected memory payload: %+v", got)
+			}
+			if got["mtime"] == nil {
+				t.Fatalf("expected mtime field, got %+v", got)
+			}
+		})
 	}
 }
 

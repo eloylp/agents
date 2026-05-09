@@ -312,7 +312,8 @@ func (h *Handler) handleAgentPatch(w http.ResponseWriter, r *http.Request, name 
 		http.Error(w, "at least one field is required", http.StatusBadRequest)
 		return
 	}
-	canonical, err := h.updateAgent(name, fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace")), req)
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
+	canonical, err := h.updateAgent(name, workspaceID, req)
 	if err != nil {
 		h.writeErr(w, err, "agent patch or cron reload")
 		return

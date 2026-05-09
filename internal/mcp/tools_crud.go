@@ -250,8 +250,8 @@ func toolCreateWorkspace(deps Deps) server.ToolHandlerFunc {
 
 func toolUpdateWorkspace(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
-		if workspace == "" {
+		workspace, ok := trimmedStringOptional(req, "workspace")
+		if !ok || workspace == "" {
 			workspace = fleet.DefaultWorkspaceID
 		}
 		args := req.GetArguments()
@@ -275,8 +275,8 @@ func toolUpdateWorkspace(deps Deps) server.ToolHandlerFunc {
 
 func toolDeleteWorkspace(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
-		if workspace == "" {
+		workspace, ok := trimmedStringOptional(req, "workspace")
+		if !ok || workspace == "" {
 			workspace = fleet.DefaultWorkspaceID
 		}
 		if err := deps.Fleet.DeleteWorkspace(workspace); err != nil {
@@ -291,7 +291,10 @@ func toolDeleteWorkspace(deps Deps) server.ToolHandlerFunc {
 
 func toolUpdateWorkspaceGuardrails(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		workspace, ok := trimmedStringOptional(req, "workspace")
+		if !ok || workspace == "" {
+			workspace = fleet.DefaultWorkspaceID
+		}
 		raw, errMsg := arrayOfAny(req.GetArguments()["guardrails"], "guardrails")
 		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil

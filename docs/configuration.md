@@ -135,7 +135,7 @@ agents:
 Each agent is a pure capability definition: backend + skills + prompt. Agents don't run until a repo binds them to a trigger.
 
 - `backend` must match an entry in `backends` (e.g. `claude`, `codex`, or any custom local-backend name). There is no `auto` selection; every agent must name a backend explicitly.
-- `prompt` is an inline string in the YAML. After import the prompt lives in SQLite, edit it through the CRUD API, the web UI, or the MCP `update_agent` tool.
+- `prompt` is an inline string in the YAML. After import the prompt lives in SQLite, edit it through the CRUD API, the web UI, or the MCP `update_agent` tool. JSON responses may omit an empty `prompt` once `prompt_ref` names the catalog prompt; treat `prompt_ref` as the canonical reference.
 - Agent names must be unique.
 - `allow_prs` (default `false`): when `false`, the scheduler prepends a hard instruction forbidding the agent from opening pull requests, regardless of what the prompt says. Set `allow_prs: true` only on agents that are explicitly meant to author PRs (e.g. coders, refactorers). Reviewer-only agents should leave this unset.
 - `allow_dispatch` (default `false`): opt-in gate. An agent must have `allow_dispatch: true` for any other agent to dispatch it. Agents without this flag silently drop any incoming dispatch requests.
