@@ -4,6 +4,7 @@ import Link from 'next/link'
 import Card from '@/components/Card'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 import { openAuthenticatedSSE } from '@/lib/sse'
+import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
 interface Event {
   at: string
@@ -124,6 +125,7 @@ export default function EventsPage() {
   const [filter, setFilter] = useState('')
   const [timeRange, setTimeRange] = useState('1h')
   const [repoFilter, setRepoFilter] = useRepoFilter()
+  const { workspace } = useSelectedWorkspace()
 
   const timeRanges: Record<string, number> = { '15m': 15 * 60, '1h': 3600, '6h': 6 * 3600, '24h': 24 * 3600 }
 
@@ -131,16 +133,16 @@ export default function EventsPage() {
     setLoading(true)
     const sinceMs = Date.now() - (timeRanges[timeRange] ?? 3600) * 1000
     const since = new Date(sinceMs).toISOString()
-    fetch(`/events?since=${encodeURIComponent(since)}`)
+    fetch(withWorkspace(`/events?since=${encodeURIComponent(since)}`, workspace))
       .then(r => r.json())
       .then(data => { setEvents((data ?? []).reverse()); setLoading(false) })
       .catch(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [timeRange]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [timeRange, workspace]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const stream = openAuthenticatedSSE('/events/stream', {
+    const stream = openAuthenticatedSSE(withWorkspace('/events/stream', workspace), {
       onOpen: () => setStreaming(true),
       onMessage: data => {
         try {
@@ -153,7 +155,7 @@ export default function EventsPage() {
       onError: () => setStreaming(false),
     })
     return () => stream.close()
-  }, [])
+  }, [workspace])
 
   const filtered = events.filter(e =>
     (!repoFilter || e.repo === repoFilter) &&
@@ -188,7 +190,7 @@ export default function EventsPage() {
               padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem',
             }}>{r}</button>
           ))}
-          <RepoFilter selected={repoFilter} onChange={setRepoFilter} />
+          <RepoFilter selected={repoFilter} onChange={setRepoFilter} workspace={workspace} />
           <input
             placeholder="Filter..."
             value={filter}

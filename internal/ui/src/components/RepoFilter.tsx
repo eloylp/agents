@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
+import { withWorkspace } from '@/lib/workspace'
 
 const STORAGE_KEY = 'agents_repo_filter'
 
@@ -20,15 +21,15 @@ export function useRepoFilter(): [string, (r: string) => void] {
   return [selected, set]
 }
 
-export default function RepoFilter({ selected, onChange }: { selected: string; onChange: (r: string) => void }) {
+export default function RepoFilter({ selected, onChange, workspace }: { selected: string; onChange: (r: string) => void; workspace?: string }) {
   const [repos, setRepos] = useState<string[]>([])
 
   useEffect(() => {
-    fetch('/repos')
+    fetch(workspace ? withWorkspace('/repos', workspace) : '/repos')
       .then(r => r.ok ? r.json() : [])
       .then((data: { name: string }[]) => setRepos((data ?? []).map(r => r.name)))
       .catch(() => {})
-  }, [])
+  }, [workspace])
 
   // Evict stale localStorage value when the stored repo no longer exists
   useEffect(() => {

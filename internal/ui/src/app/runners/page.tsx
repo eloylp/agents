@@ -8,6 +8,7 @@ import RepoFilter from '@/components/RepoFilter'
 import { StreamCard, TranscriptFilter, allStreamCardKinds, stepToCardEntries, type PersistedStep, type StreamCardEntry, type StreamCardKind } from '@/components/StreamCard'
 import { fmtDuration } from '@/lib/format'
 import { openAuthenticatedSSE } from '@/lib/sse'
+import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
 interface RunnerRow {
   id: number
@@ -215,6 +216,7 @@ function RunnersInner() {
   const router = useRouter()
   const focusEvent = params.get('event') ?? ''
   const repoParam = params.get('repo') ?? ''
+  const { workspace } = useSelectedWorkspace()
 
   const setRepoFilter = (repo: string) => {
     const p = new URLSearchParams(params.toString())
@@ -235,7 +237,7 @@ function RunnersInner() {
 
   const load = async () => {
     try {
-      const url = `/runners?limit=200${status ? `&status=${status}` : ''}`
+      const url = withWorkspace(`/runners?limit=200${status ? `&status=${status}` : ''}`, workspace)
       const res = await fetch(url, { cache: 'no-store' })
       if (!res.ok) throw new Error(`status ${res.status}`)
       const data: ListResponse = await res.json()
@@ -253,7 +255,7 @@ function RunnersInner() {
     load()
     const id = window.setInterval(load, POLL_MS)
     return () => window.clearInterval(id)
-  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [status, workspace]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Trigger highlight pulse when arriving with ?event=X. Wait until
   // the first batch of rows lands, otherwise the animation runs while
@@ -364,7 +366,7 @@ function RunnersInner() {
               }}
             >Clear filter</Link>
           )}
-          <RepoFilter selected={repoParam} onChange={setRepoFilter} />
+          <RepoFilter selected={repoParam} onChange={setRepoFilter} workspace={workspace} />
           {(['', 'enqueued', 'running', 'completed'] as const).map(s => (
             <button key={s || 'all'} onClick={() => setStatus(s)} style={{
               background: status === s ? 'var(--btn-primary-bg)' : 'var(--bg-card)',
