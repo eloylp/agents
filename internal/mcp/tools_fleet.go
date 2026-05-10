@@ -218,13 +218,17 @@ func toolGetBackend(deps Deps) server.ToolHandlerFunc {
 }
 
 func toolListRepos(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace := strings.TrimSpace(req.GetString("workspace", ""))
 		repos, err := deps.Store.ReadRepos()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list repos", err), nil
 		}
 		out := make([]map[string]any, 0, len(repos))
 		for _, r := range repos {
+			if workspace != "" && fleet.NormalizeWorkspaceID(r.WorkspaceID) != fleet.NormalizeWorkspaceID(workspace) {
+				continue
+			}
 			out = append(out, repoJSON(r))
 		}
 		return jsonResult(out)
@@ -244,10 +248,13 @@ func toolGetRepo(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultErrorFromErr("get repo", err), nil
 		}
 		key := fleet.NormalizeRepoName(name)
-		if idx := slices.IndexFunc(repos, func(r fleet.Repo) bool { return r.Name == key }); idx != -1 {
+		workspace := fleet.NormalizeWorkspaceID(req.GetString("workspace", fleet.DefaultWorkspaceID))
+		if idx := slices.IndexFunc(repos, func(r fleet.Repo) bool {
+			return r.Name == key && fleet.NormalizeWorkspaceID(r.WorkspaceID) == workspace
+		}); idx != -1 {
 			return jsonResult(repoJSON(repos[idx]))
 		}
-		return mcpgo.NewToolResultErrorf("repo %q not found", name), nil
+		return mcpgo.NewToolResultErrorf("repo %q not found in workspace %q", name, workspace), nil
 	}
 }
 

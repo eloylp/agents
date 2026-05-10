@@ -1297,13 +1297,19 @@ func backendByName(t *testing.T, st *store.Store, name string) (fleet.Backend, b
 
 func repoByName(t *testing.T, st *store.Store, name string) (fleet.Repo, bool) {
 	t.Helper()
+	return repoByWorkspaceName(t, st, fleet.DefaultWorkspaceID, name)
+}
+
+func repoByWorkspaceName(t *testing.T, st *store.Store, workspace, name string) (fleet.Repo, bool) {
+	t.Helper()
 	repos, err := st.ReadRepos()
 	if err != nil {
 		t.Fatalf("read repos: %v", err)
 	}
 	key := fleet.NormalizeRepoName(name)
+	workspace = fleet.NormalizeWorkspaceID(workspace)
 	for _, r := range repos {
-		if r.Name == key {
+		if r.Name == key && fleet.NormalizeWorkspaceID(r.WorkspaceID) == workspace {
 			return r, true
 		}
 	}
@@ -1799,6 +1805,48 @@ func TestToolCreateRepoForwardsAndReturnsCanonical(t *testing.T) {
 	}
 }
 
+func TestToolCreateRepoUsesWorkspace(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	if _, err := deps.Fleet.UpsertWorkspace(fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{
+		WorkspaceID: "team-a", Name: "coder", Backend: "claude", Prompt: "team prompt",
+		Description: "team coder", Skills: []string{}, CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("seed team agent: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"workspace": "team-a",
+		"name":      "OWNER/Repo",
+		"enabled":   true,
+		"bindings": []any{
+			map[string]any{"agent": "coder", "labels": []any{"ready"}},
+		},
+	}
+	res, err := toolCreateRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", textOf(t, res))
+	}
+	if _, ok := repoByWorkspaceName(t, deps.Store, "team-a", "owner/repo"); !ok {
+		t.Fatal("team-a owner/repo missing after create")
+	}
+	if _, ok := repoByWorkspaceName(t, deps.Store, fleet.DefaultWorkspaceID, "owner/repo"); ok {
+		t.Fatal("default owner/repo should not be created by team-a request")
+	}
+	var got map[string]any
+	decodeText(t, res, &got)
+	if got["workspace_id"] != "team-a" {
+		t.Fatalf("response workspace_id = %v, want team-a", got["workspace_id"])
+	}
+}
+
 func TestToolCreateRepoRequiresName(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
@@ -2046,6 +2094,47 @@ func TestToolUpdateRepoTogglesEnabledPreservingBindings(t *testing.T) {
 	}
 }
 
+func TestToolUpdateRepoUsesWorkspace(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	if _, err := deps.Fleet.UpsertWorkspace(fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{
+		WorkspaceID: "team-a", Name: "coder", Backend: "claude", Prompt: "team prompt",
+		Description: "team coder", Skills: []string{}, CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("seed team agent: %v", err)
+	}
+	if _, err := deps.Repos.UpsertRepo(fleet.Repo{WorkspaceID: "team-a", Name: "owner/one", Enabled: true}); err != nil {
+		t.Fatalf("seed team repo: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"workspace": "team-a", "name": "owner/one", "enabled": false}
+	res, err := toolUpdateRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", textOf(t, res))
+	}
+	teamRepo, ok := repoByWorkspaceName(t, deps.Store, "team-a", "owner/one")
+	if !ok {
+		t.Fatal("team-a owner/one missing")
+	}
+	if teamRepo.Enabled {
+		t.Fatal("team-a repo should be disabled")
+	}
+	defaultRepo, ok := repoByWorkspaceName(t, deps.Store, fleet.DefaultWorkspaceID, "owner/one")
+	if !ok {
+		t.Fatal("default owner/one missing")
+	}
+	if !defaultRepo.Enabled {
+		t.Fatal("default repo should remain enabled")
+	}
+}
+
 func TestToolUpdateRepoRequiresName(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
@@ -2201,6 +2290,66 @@ func TestToolCreateBindingForwardsAndReturnsID(t *testing.T) {
 		return b.Agent == "coder" && len(b.Labels) == 1 && b.Labels[0] == "ai:fix"
 	}) {
 		t.Errorf("new ai:fix binding not persisted on owner/one: %+v", r.Use)
+	}
+}
+
+func TestToolBindingOperationsUseWorkspace(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	if _, err := deps.Fleet.UpsertWorkspace(fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{
+		WorkspaceID: "team-a", Name: "coder", Backend: "claude", Prompt: "team prompt",
+		Description: "team coder", Skills: []string{}, CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("seed team agent: %v", err)
+	}
+	if _, err := deps.Repos.UpsertRepo(fleet.Repo{WorkspaceID: "team-a", Name: "owner/one", Enabled: true}); err != nil {
+		t.Fatalf("seed team repo: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"workspace": "team-a",
+		"repo":      "owner/one",
+		"agent":     "coder",
+		"labels":    []any{"team-ready"},
+	}
+	res, err := toolCreateBinding(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected create error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected create success, got error: %s", textOf(t, res))
+	}
+	teamRepo, ok := repoByWorkspaceName(t, deps.Store, "team-a", "owner/one")
+	if !ok {
+		t.Fatal("team-a owner/one missing")
+	}
+	if len(teamRepo.Use) != 1 {
+		t.Fatalf("team-a bindings = %d, want 1", len(teamRepo.Use))
+	}
+	id := teamRepo.Use[0].ID
+
+	getReq := mcpgo.CallToolRequest{}
+	getReq.Params.Arguments = map[string]any{"workspace": "team-a", "repo": "owner/one", "id": float64(id)}
+	res, err = toolGetBinding(deps)(context.Background(), getReq)
+	if err != nil {
+		t.Fatalf("unexpected get error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected get success, got error: %s", textOf(t, res))
+	}
+
+	wrongWorkspace := mcpgo.CallToolRequest{}
+	wrongWorkspace.Params.Arguments = map[string]any{"repo": "owner/one", "id": float64(id)}
+	res, err = toolGetBinding(deps)(context.Background(), wrongWorkspace)
+	if err != nil {
+		t.Fatalf("unexpected wrong-workspace get error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected wrong-workspace get to fail, got %+v", res)
 	}
 }
 

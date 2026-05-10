@@ -371,11 +371,15 @@ func (h *Handler) UpdateBindingInWorkspace(workspaceID, repoName string, id int6
 
 // ReadBinding fetches one binding by ID, verifying it belongs to repoName.
 func (h *Handler) ReadBinding(repoName string, id int64) (fleet.Binding, error) {
-	existingRepo, b, found, err := h.store.ReadBinding(id)
+	return h.ReadBindingInWorkspace(fleet.DefaultWorkspaceID, repoName, id)
+}
+
+func (h *Handler) ReadBindingInWorkspace(workspaceID, repoName string, id int64) (fleet.Binding, error) {
+	bindingWorkspace, existingRepo, b, found, err := h.store.ReadWorkspaceBinding(id)
 	if err != nil {
 		return fleet.Binding{}, err
 	}
-	if !found || existingRepo != repoName {
+	if !found || existingRepo != repoName || fleet.NormalizeWorkspaceID(bindingWorkspace) != fleet.NormalizeWorkspaceID(workspaceID) {
 		return fleet.Binding{}, &store.ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found for repo %q", id, repoName)}
 	}
 	return b, nil

@@ -537,9 +537,10 @@ func toolCreateRepo(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError(bErr), nil
 		}
 		r := fleet.Repo{
-			Name:    name,
-			Enabled: req.GetBool("enabled", false),
-			Use:     bindings,
+			WorkspaceID: req.GetString("workspace", fleet.DefaultWorkspaceID),
+			Name:        name,
+			Enabled:     req.GetBool("enabled", false),
+			Use:         bindings,
 		}
 		canonical, err := deps.Repos.UpsertRepo(r)
 		if err != nil {
@@ -568,7 +569,8 @@ func toolUpdateRepo(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
-		canonical, err := deps.Repos.PatchRepo(fleet.NormalizeRepoName(name), *enabledPtr)
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		canonical, err := deps.Repos.PatchRepoInWorkspace(workspace, fleet.NormalizeRepoName(name), *enabledPtr)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("update repo", err), nil
 		}
@@ -588,12 +590,14 @@ func toolDeleteRepo(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
 		canonical := fleet.NormalizeRepoName(name)
-		if err := deps.Repos.DeleteRepo(canonical); err != nil {
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		if err := deps.Repos.DeleteRepoInWorkspace(workspace, canonical); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete repo", err), nil
 		}
 		return jsonResult(map[string]any{
-			"status": "deleted",
-			"name":   canonical,
+			"status":    "deleted",
+			"workspace": fleet.NormalizeWorkspaceID(workspace),
+			"name":      canonical,
 		})
 	}
 }
@@ -617,7 +621,8 @@ func toolCreateBinding(deps Deps) server.ToolHandlerFunc {
 		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
-		persisted, err := deps.Repos.CreateBinding(repo, b)
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		persisted, err := deps.Repos.CreateBindingInWorkspace(workspace, repo, b)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("create binding", err), nil
 		}
@@ -643,7 +648,8 @@ func toolUpdateBinding(deps Deps) server.ToolHandlerFunc {
 		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
-		updated, uerr := deps.Repos.UpdateBinding(repo, int64(id), b)
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		updated, uerr := deps.Repos.UpdateBindingInWorkspace(workspace, repo, int64(id), b)
 		if uerr != nil {
 			return mcpgo.NewToolResultErrorFromErr("update binding", uerr), nil
 		}
@@ -659,7 +665,8 @@ func toolGetBinding(deps Deps) server.ToolHandlerFunc {
 		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
-		b, err := deps.Repos.ReadBinding(repo, int64(id))
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		b, err := deps.Repos.ReadBindingInWorkspace(workspace, repo, int64(id))
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get binding", err), nil
 		}
@@ -675,13 +682,15 @@ func toolDeleteBinding(deps Deps) server.ToolHandlerFunc {
 		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
-		if err := deps.Repos.DeleteBinding(repo, int64(id)); err != nil {
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		if err := deps.Repos.DeleteBindingInWorkspace(workspace, repo, int64(id)); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete binding", err), nil
 		}
 		return jsonResult(map[string]any{
-			"status": "deleted",
-			"id":     id,
-			"repo":   fleet.NormalizeRepoName(repo),
+			"status":    "deleted",
+			"workspace": fleet.NormalizeWorkspaceID(workspace),
+			"id":        id,
+			"repo":      fleet.NormalizeRepoName(repo),
 		})
 	}
 }
@@ -722,9 +731,10 @@ func repoJSON(r fleet.Repo) map[string]any {
 		bindings = append(bindings, bindingJSON(b))
 	}
 	return map[string]any{
-		"name":     r.Name,
-		"enabled":  r.Enabled,
-		"bindings": bindings,
+		"workspace_id": fleet.NormalizeWorkspaceID(r.WorkspaceID),
+		"name":         r.Name,
+		"enabled":      r.Enabled,
+		"bindings":     bindings,
 	}
 }
 
