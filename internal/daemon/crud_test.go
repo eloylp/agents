@@ -42,6 +42,13 @@ func seedStoreSkill(t *testing.T, s *daemon.Daemon, name string) {
 	}
 }
 
+func seedStorePrompt(t *testing.T, s *daemon.Daemon, name string) {
+	t.Helper()
+	if _, err := s.Store().UpsertPrompt(fleet.Prompt{Name: name, Content: "prompt body"}); err != nil {
+		t.Fatalf("seedStorePrompt %s: %v", name, err)
+	}
+}
+
 func doCRUDRequest(t *testing.T, s *daemon.Daemon, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	if method == http.MethodPost && path == "/agents" {
@@ -49,8 +56,32 @@ func doCRUDRequest(t *testing.T, s *daemon.Daemon, method, path string, body any
 			if _, exists := m["description"]; !exists {
 				m["description"] = "test agent"
 			}
+			if prompt, ok := m["prompt"].(string); ok && prompt != "" {
+				ref, _ := m["prompt_ref"].(string)
+				if ref == "" {
+					ref, _ = m["name"].(string)
+					ref = fleet.NormalizePromptName(ref)
+					m["prompt_ref"] = ref
+				}
+				seedStorePrompt(t, s, ref)
+				delete(m, "prompt")
+			}
 		}
 	}
+	var buf bytes.Buffer
+	if body != nil {
+		if err := json.NewEncoder(&buf).Encode(body); err != nil {
+			t.Fatalf("encode body: %v", err)
+		}
+	}
+	req := httptest.NewRequest(method, path, &buf)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	return rr
+}
+
+func doRawCRUDRequest(t *testing.T, s *daemon.Daemon, method, path string, body any) *httptest.ResponseRecorder {
+	t.Helper()
 	var buf bytes.Buffer
 	if body != nil {
 		if err := json.NewEncoder(&buf).Encode(body); err != nil {
@@ -162,6 +193,23 @@ func TestStoreCRUDAgentCreateAndGet(t *testing.T) {
 	rr = doCRUDRequest(t, s, http.MethodGet, "/agents/coder", nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET /agents/coder: got %d", rr.Code)
+	}
+}
+
+func TestStoreCRUDAgentCreateRejectsInlinePrompt(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+
+	rr := doRawCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "p",
+		"description": "coding agent", "skills": []string{}, "can_dispatch": []string{},
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("POST /agents inline prompt: got %d, want 400, %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "prompt bodies are import-only") {
+		t.Fatalf("error body = %q, want inline prompt rejection", rr.Body.String())
 	}
 }
 
@@ -1811,7 +1859,7 @@ func TestStoreCRUDPostReturnsCanonicalForm(t *testing.T) {
 	}
 	// ── agent ────────────────────────────────────────────────────────────────
 	// POST with mixed-case name and extra whitespace; response must have
-	// lowercase name and trimmed prompt.
+	// lowercase name and an explicit prompt_ref.
 	rr = doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name":    "  Coder  ",
 		"backend": "claude",
@@ -1827,8 +1875,11 @@ func TestStoreCRUDPostReturnsCanonicalForm(t *testing.T) {
 	if agent["name"] != "coder" {
 		t.Errorf("agent name: got %q, want %q", agent["name"], "coder")
 	}
-	if agent["prompt"] != "You write code." {
-		t.Errorf("agent prompt not trimmed: got %q", agent["prompt"])
+	if prompt, ok := agent["prompt"].(string); ok && prompt != "" {
+		t.Errorf("agent prompt field: got %q, want omitted or empty", prompt)
+	}
+	if agent["prompt_ref"] != "coder" {
+		t.Errorf("agent prompt fields: got prompt=%q prompt_ref=%q, want empty prompt and coder ref", agent["prompt"], agent["prompt_ref"])
 	}
 
 	// ── skill ────────────────────────────────────────────────────────────────
@@ -2458,7 +2509,7 @@ func TestStoreCRUDAgentPatchSingleField(t *testing.T) {
 	if out.Backend != "codex" {
 		t.Fatalf("backend: got %q, want %q", out.Backend, "codex")
 	}
-	if out.Model != "opus" || out.Prompt != "p" || out.Description != "d" {
+	if out.Model != "opus" || out.Prompt != "" || out.PromptRef != "coder" || out.Description != "d" {
 		t.Fatalf("non-patched fields drifted: %+v", out)
 	}
 }
@@ -2482,9 +2533,32 @@ func TestStoreCRUDAgentPatchNotFound(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 	if rr := doCRUDRequest(t, s, http.MethodPatch, "/agents/missing", map[string]any{
-		"prompt": "new",
+		"description": "new",
 	}); rr.Code != http.StatusNotFound {
 		t.Fatalf("PATCH missing: got %d, want 404", rr.Code)
+	}
+}
+
+func TestStoreCRUDAgentPatchRejectsInlinePrompt(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+	seedStorePrompt(t, s, "coder")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt_ref": "coder",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed: %s", rr.Body.String())
+	}
+
+	rr := doRawCRUDRequest(t, s, http.MethodPatch, "/agents/coder", map[string]any{
+		"prompt": "new body",
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH /agents/coder inline prompt: got %d, want 400, %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "prompt bodies are import-only") {
+		t.Fatalf("error body = %q, want inline prompt rejection", rr.Body.String())
 	}
 }
 

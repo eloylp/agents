@@ -1326,7 +1326,7 @@ func TestToolCreateAgentForwardsAndReturnsCanonical(t *testing.T) {
 	req.Params.Arguments = map[string]any{
 		"name":           "Linter",
 		"backend":        "claude",
-		"prompt":         "audit",
+		"prompt_ref":     "coder",
 		"description":    "audits code",
 		"skills":         []any{"security"},
 		"can_dispatch":   []any{"coder"},
@@ -1346,7 +1346,7 @@ func TestToolCreateAgentForwardsAndReturnsCanonical(t *testing.T) {
 	if !ok {
 		t.Fatal("linter not found in store after create_agent")
 	}
-	if persisted.Backend != "claude" || persisted.Prompt != "audit" {
+	if persisted.Backend != "claude" || persisted.PromptRef != "coder" {
 		t.Errorf("persisted agent missing fields: %+v", persisted)
 	}
 	if !persisted.AllowDispatch || len(persisted.CanDispatch) != 1 || persisted.CanDispatch[0] != "coder" {
@@ -1383,6 +1383,27 @@ func TestToolCreateAgentRequiresName(t *testing.T) {
 	}
 }
 
+func TestToolCreateAgentRejectsInlinePrompt(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":        "linter",
+		"backend":     "claude",
+		"prompt":      "audit",
+		"description": "audits code",
+	}
+
+	res, err := toolCreateAgent(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(textOf(t, res), "prompt bodies are import-only") {
+		t.Fatalf("expected inline prompt rejection, got error=%v body=%s", res.IsError, textOf(t, res))
+	}
+}
+
 func TestToolCreateAgentPropagatesError(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
@@ -1408,7 +1429,7 @@ func TestToolDeleteAgentNormalizesAndForwardsCascade(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
 	// Seed an extra agent that has no bindings, we can delete it without cascade.
-	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{Name: "linter", Backend: "claude", Prompt: "x", Description: "lints code"}); err != nil {
+	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{Name: "linter", Backend: "claude", PromptRef: "coder", Description: "lints code"}); err != nil {
 		t.Fatalf("seed linter: %v", err)
 	}
 
@@ -1812,7 +1833,7 @@ func TestToolCreateRepoUsesWorkspace(t *testing.T) {
 		t.Fatalf("seed workspace: %v", err)
 	}
 	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{
-		WorkspaceID: "team-a", Name: "coder", Backend: "claude", Prompt: "team prompt",
+		WorkspaceID: "team-a", Name: "coder", Backend: "claude", PromptRef: "coder",
 		Description: "team coder", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("seed team agent: %v", err)
@@ -2101,7 +2122,7 @@ func TestToolUpdateRepoUsesWorkspace(t *testing.T) {
 		t.Fatalf("seed workspace: %v", err)
 	}
 	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{
-		WorkspaceID: "team-a", Name: "coder", Backend: "claude", Prompt: "team prompt",
+		WorkspaceID: "team-a", Name: "coder", Backend: "claude", PromptRef: "coder",
 		Description: "team coder", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("seed team agent: %v", err)
@@ -2300,7 +2321,7 @@ func TestToolBindingOperationsUseWorkspace(t *testing.T) {
 		t.Fatalf("seed workspace: %v", err)
 	}
 	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{
-		WorkspaceID: "team-a", Name: "coder", Backend: "claude", Prompt: "team prompt",
+		WorkspaceID: "team-a", Name: "coder", Backend: "claude", PromptRef: "coder",
 		Description: "team coder", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("seed team agent: %v", err)
@@ -2465,6 +2486,24 @@ func TestToolUpdateAgentForwardsPatch(t *testing.T) {
 	// Fields not in payload are preserved (description was set in seed).
 	if updated.Description != "writes code" {
 		t.Errorf("description should be preserved, got %q", updated.Description)
+	}
+}
+
+func TestToolUpdateAgentRejectsInlinePrompt(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":   "coder",
+		"prompt": "new body",
+	}
+	res, err := toolUpdateAgent(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(textOf(t, res), "prompt bodies are import-only") {
+		t.Fatalf("expected inline prompt rejection, got error=%v body=%s", res.IsError, textOf(t, res))
 	}
 }
 

@@ -226,7 +226,7 @@ func TestToolCreateAgentAcceptsJSONStringSlices(t *testing.T) {
 	req.Params.Arguments = map[string]any{
 		"name":         "linter",
 		"backend":      "claude",
-		"prompt":       "audit",
+		"prompt_ref":   "coder",
 		"description":  "Audits code",
 		"skills":       `["security","testing"]`,
 		"can_dispatch": `["coder"]`,

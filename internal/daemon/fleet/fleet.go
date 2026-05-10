@@ -161,7 +161,6 @@ func agentToStoreJSON(a fleet.Agent) storeAgentJSON {
 		Backend:       a.Backend,
 		Model:         a.Model,
 		Skills:        nilSafeStrings(a.Skills),
-		Prompt:        a.Prompt,
 		PromptRef:     a.PromptRef,
 		ScopeType:     a.ScopeType,
 		ScopeRepo:     a.ScopeRepo,
@@ -312,6 +311,10 @@ func (h *Handler) handleAgentPatch(w http.ResponseWriter, r *http.Request, name 
 		http.Error(w, "at least one field is required", http.StatusBadRequest)
 		return
 	}
+	if req.Prompt != nil {
+		http.Error(w, "agent prompt bodies are import-only; use prompt_ref", http.StatusBadRequest)
+		return
+	}
 	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	canonical, err := h.updateAgent(name, workspaceID, req)
 	if err != nil {
@@ -329,6 +332,12 @@ func (h *Handler) handleAgentPatch(w http.ResponseWriter, r *http.Request, name 
 func (h *Handler) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 	if strings.TrimSpace(a.Name) == "" {
 		return fleet.Agent{}, &store.ErrValidation{Msg: "name is required"}
+	}
+	if strings.TrimSpace(a.Prompt) != "" {
+		return fleet.Agent{}, &store.ErrValidation{Msg: "agent prompt bodies are import-only; use prompt_ref"}
+	}
+	if strings.TrimSpace(a.PromptRef) == "" && strings.TrimSpace(a.PromptID) == "" {
+		return fleet.Agent{}, &store.ErrValidation{Msg: "prompt_ref is required"}
 	}
 	normalizedName := fleet.NormalizeAgentName(a.Name)
 	if err := h.store.UpsertAgent(a); err != nil {
@@ -362,6 +371,9 @@ func (h *Handler) UpdateAgentPatchInWorkspace(workspaceID, name string, patch Ag
 }
 
 func (h *Handler) updateAgent(name, workspaceID string, patch AgentPatch) (fleet.Agent, error) {
+	if patch.Prompt != nil {
+		return fleet.Agent{}, &store.ErrValidation{Msg: "agent prompt bodies are import-only; use prompt_ref"}
+	}
 	normalized := fleet.NormalizeAgentName(name)
 	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	agents, err := h.store.ReadAgents()

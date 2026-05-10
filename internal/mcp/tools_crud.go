@@ -33,12 +33,14 @@ func toolCreateAgent(deps Deps) server.ToolHandlerFunc {
 		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
+		if _, ok := args["prompt"]; ok {
+			return mcpgo.NewToolResultError("agent prompt bodies are import-only; use prompt_ref"), nil
+		}
 		a := fleet.Agent{
 			WorkspaceID:   req.GetString("workspace", fleet.DefaultWorkspaceID),
 			Name:          name,
 			Backend:       req.GetString("backend", ""),
 			Model:         req.GetString("model", ""),
-			Prompt:        req.GetString("prompt", ""),
 			PromptRef:     req.GetString("prompt_ref", ""),
 			ScopeType:     req.GetString("scope_type", ""),
 			ScopeRepo:     req.GetString("scope_repo", ""),
@@ -83,8 +85,8 @@ func toolUpdateAgent(deps Deps) server.ToolHandlerFunc {
 		if v, ok := stringPtrArg(args, "model"); ok {
 			patch.Model = v
 		}
-		if v, ok := stringPtrArg(args, "prompt"); ok {
-			patch.Prompt = v
+		if _, ok := args["prompt"]; ok {
+			return mcpgo.NewToolResultError("agent prompt bodies are import-only; use prompt_ref"), nil
 		}
 		if v, ok := stringPtrArg(args, "prompt_ref"); ok {
 			patch.PromptRef = v
