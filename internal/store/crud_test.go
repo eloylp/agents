@@ -796,7 +796,7 @@ func TestUpsertRepoRejectedWithUnknownAgent(t *testing.T) {
 	db := openTestDB(t)
 
 	// No agent seeded, binding references "ghost". The FK constraint on
-	// bindings.agent may fire first, or validateCrossRefs catches it; either
+	// bindings.agent may fire first, or ValidateEntities catches it; either
 	// way an error must be returned and nothing must be committed.
 	err := store.UpsertRepo(db, fleet.Repo{
 		Name:    "owner/repo",
