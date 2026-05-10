@@ -102,8 +102,6 @@ func run() error {
 // with mixed binding shapes (labels + cron).
 func buildFixtureConfig() *config.Config {
 	enabled := true
-	disabled := false
-	_ = disabled
 
 	cfg := &config.Config{
 		Daemon: config.DaemonConfig{
