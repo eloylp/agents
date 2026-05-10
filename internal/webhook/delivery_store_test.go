@@ -122,6 +122,7 @@ func TestDeliveryStore_BackgroundEviction(t *testing.T) {
 	}
 
 	ticks <- now.Add(ttl + time.Millisecond)
+	ticks <- now.Add(ttl + time.Millisecond)
 
 	s.mu.Lock()
 	count := len(s.deliveries)
