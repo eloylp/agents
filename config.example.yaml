@@ -26,9 +26,8 @@
 #             - agent: coder
 #               labels: [ai ready]
 #
-# This example still uses the legacy top-level agents/repos form because it is
-# concise for hand-authored bootstraps; import migrates those entries into the
-# Default workspace and creates prompt catalog rows automatically.
+# Keep agents under workspaces and reference reusable prompt catalog entries
+# with prompt_ref. Inline agent prompt bodies are not part of the normal model.
 # After that, manage the fleet through the /ui/ dashboard, the CRUD
 # API, or the agents-fleet MCP tools.
 #
@@ -87,194 +86,199 @@ skills:
       Translate technical findings into user-facing impact, priorities, and tradeoffs.
 
 # ──────────────────────────────────────────────
-# agents, named capabilities
-#
-# Each agent is a capability definition: a name, a backend, the skills
-# it uses, and a prompt. Agents don't run on their own, repos
-# below decide when and where they run.
-#
-# backend: claude | codex | claude_local
-# allow_prs: false (default) | true
-#   When false the scheduler prepends a hard "do not open PRs" instruction
-#   before the agent's prompt. Set to true only for agents explicitly
-#   designed to open pull requests (coders, refactorers).
-# description: short human-readable summary of the agent's role.
-#   Required for every agent. Used for UI identification and, when the agent
-#   is dispatchable, inter-agent routing context in originators' rosters.
-# allow_dispatch: false (default) | true
-#   Opt-in gate: only agents with allow_dispatch: true can be dispatched.
-# allow_memory: true (default) | false
-#   Controls whether the autonomous (cron) scheduler loads existing memory
-#   into the prompt and persists the agent's returned `memory` field after
-#   the run. Set to false for inherently stateless autonomous agents whose
-#   work is recomputed each run, so they don't waste prompt budget on
-#   memory they will never use. Event-driven runs already neither load nor
-#   persist memory; this toggle is a hard runtime gate that does not depend
-#   on the agent's prompt cooperating.
-# can_dispatch: [agent-name, ...]
-#   Whitelist of agents this agent is allowed to dispatch. Entries must
-#   reference real agents in this config with allow_dispatch: true;
-#   self-reference is rejected.
-#
-# Runtime "Available experts" roster
-# ──────────────────────────────────
-# At render time the daemon injects an "## Available experts" section
-# into every agent's prompt, listing valid targets from that agent's own
-# `can_dispatch` list. A target appears only when it exists, has
-# `allow_dispatch: true`. Each entry shows
-# the target's name, description, skills, and a [dispatchable] marker.
-#
-# For example, the `pr-reviewer` agent below has `can_dispatch: [coder,
-# sec-reviewer]`, so its runtime prompt includes an "## Available experts"
-# section like:
-#
-#   ## Available experts
-#
-#   - coder [dispatchable]
-#     Implements fixes and features; opens pull requests.
-#     Skills: architect, testing
-#   - sec-reviewer [dispatchable]
-#     Reviews security concerns and potential vulnerabilities.
-#     Skills: security
-#
-# The agent then references these names in its response JSON's `dispatch`
-# array when it wants to invoke them. Dispatch wiring is the authority:
-# the target does not need a repo binding just to receive a dispatch.
-# Runtime validation drops out-of-roster dispatches with a WARN log.
+# prompts, reusable task/personality contracts
 # ──────────────────────────────────────────────
-agents:
-  # Autonomous scouts, survey the codebase and open issues for follow-up.
+prompts:
   - name: scout-issues
-    backend: claude
-    description: "Surveys the codebase for issues worth tracking in the issue tracker"
-    skills: &scout-skills [architect, dx]
-    prompt: |
+    content: |
       Inspect the repository for user-visible bugs, stale docs, or maintenance gaps.
       Open or update GitHub issues with concrete evidence and next steps.
-    can_dispatch: [product-strategist]
-
   - name: scout-code
-    backend: claude
-    description: "Surveys the codebase for code-quality and architectural concerns"
-    skills: *scout-skills
-    prompt: |
+    content: |
       Inspect the codebase for architectural debt, risky complexity, and weak invariants.
       Capture findings as concrete GitHub issues with reproduction details when possible.
-    can_dispatch: [product-strategist]
-
-  # PR-authoring agents, require allow_prs: true.
   - name: coder
-    backend: claude
-    description: "Implements fixes and features; opens pull requests"
-    skills: [architect, testing]
-    prompt: |
+    content: |
       Implement the requested change end-to-end.
       Run the narrowest meaningful tests and open a pull request when the work is ready.
-    allow_prs: true
-    allow_dispatch: true    # can be dispatched by pr-reviewer on REQUEST_CHANGES
-    can_dispatch: [pr-reviewer]
-
   - name: refactorer
-    backend: claude
-    description: "Refactors existing code for readability and maintainability"
-    skills: [architect, testing, dx]
-    prompt: |
+    content: |
       Refactor code for clarity and maintainability without changing behavior.
       Leave the repo in a state where tests still pass.
-    allow_prs: true
-
-  # Documentation agent, reviews code + git history, keeps docs accurate and readable.
   - name: docs-writer
-    backend: claude
-    description: "Keeps README, CLAUDE.md, AGENTS.md, and docs/*.md accurate and readable"
-    skills: [documentation, dx]
-    prompt: |
+    content: |
       Read the code before editing docs.
       Keep README, CLAUDE.md, AGENTS.md, and docs/*.md aligned with shipped behavior.
-    allow_prs: true
-
-  # PR-reviewing agent, comments only, no PRs (default allow_prs: false).
   - name: pr-reviewer
-    backend: codex
-    description: "Reviews pull requests for quality, test coverage, and correctness"
-    skills: [architect, testing, security]
-    prompt: |
+    content: |
       Review pull requests for correctness, regressions, and missing tests.
       Prefer concrete findings over broad summaries.
-    allow_dispatch: true    # can be dispatched by coder when PR is ready
-    can_dispatch: [coder, sec-reviewer]
-
   - name: product-strategist
-    backend: claude
-    description: "Translates technical findings into product-level insights and priorities"
-    skills: [product, dx]
-    # product-strategist is research-driven each run, there's no useful state to
-    # carry between invocations, so disable memory load + persist to keep the
-    # prompt budget focused on the current findings.
-    allow_memory: false
-    prompt: |
+    content: |
       Convert technical findings into product priorities, tradeoffs, and sequencing advice.
-    allow_dispatch: true    # scouts dispatch here with product-facing findings
-
-  # Single-axis review agents, one per skill.
   - name: arch-reviewer
-    backend: claude
-    description: "Reviews architecture and design decisions"
-    skills: [architect]
-    prompt: |
+    content: |
       Review the change for architecture boundaries, coupling, and long-term maintainability.
-
   - name: sec-reviewer
-    backend: claude
-    description: "Reviews security concerns and potential vulnerabilities"
-    skills: [security]
-    prompt: |
+    content: |
       Review the change for security risks, trust-boundary violations, and unsafe defaults.
-    allow_dispatch: true    # pr-reviewer escalates security smells here
-
   - name: test-reviewer
-    backend: claude
-    description: "Reviews test coverage and testing strategy"
-    skills: [testing]
-    prompt: |
+    content: |
       Review the change for missing tests, brittle assertions, and blind spots in coverage.
-
   - name: ops-reviewer
-    backend: claude
-    description: "Reviews operational concerns: CI, deployment, observability"
-    skills: [devops]
-    prompt: |
+    content: |
       Review the change for CI reliability, deploy safety, and observability gaps.
-
   - name: dx-reviewer
-    backend: claude
-    description: "Reviews developer experience: docs, tooling, onboarding"
-    skills: [dx]
-    prompt: |
+    content: |
       Review the change for onboarding friction, confusing naming, and stale documentation.
 
 # ──────────────────────────────────────────────
-# repos, wiring: where and when agents run
+# workspaces, workspace-local agents and repo wiring
 #
-# Each binding sets exactly one trigger: labels, events, or cron.
-# The same agent can appear multiple times on the same repo with different
-# triggers.
+# Each agent is a workspace-local capability definition: a name, a backend,
+# reusable skills, a prompt_ref, and scope. Agents don't run on their own;
+# repos below decide when and where they run.
+#
+# backend: claude | codex | claude_local
+# prompt_ref: reusable prompt catalog entry
+# scope_type: workspace | repo
+# allow_prs: false (default) | true
+#   When false the scheduler prepends a hard "do not open PRs" instruction.
+# description: short human-readable summary of the agent's role.
+# allow_dispatch: false (default) | true
+# allow_memory: true (default) | false
+# can_dispatch: [agent-name, ...]
 # ──────────────────────────────────────────────
-repos:
-  - name: "owner/repo"
-    enabled: true
-    use:
-      - agent: arch-reviewer
-        labels: ["ai:review:arch-reviewer"]
+workspaces:
+  - id: default
+    name: Default
+    guardrails:
+      - guardrail_name: security
+        enabled: true
+      - guardrail_name: memory-scope
+        enabled: true
+      - guardrail_name: mcp-tool-usage
+        enabled: true
+      - guardrail_name: repository-tool-fallback
+        enabled: true
+      - guardrail_name: discretion
+        enabled: true
+    agents:
+      # Autonomous scouts, survey the codebase and open issues for follow-up.
+      - name: scout-issues
+        backend: claude
+        description: "Surveys the codebase for issues worth tracking in the issue tracker"
+        skills: &scout-skills [architect, dx]
+        prompt_ref: scout-issues
+        scope_type: workspace
+        can_dispatch: [product-strategist]
 
-      - agent: pr-reviewer
-        events: ["pull_request.opened", "pull_request.synchronize"]
+      - name: scout-code
+        backend: claude
+        description: "Surveys the codebase for code-quality and architectural concerns"
+        skills: *scout-skills
+        prompt_ref: scout-code
+        scope_type: workspace
+        can_dispatch: [product-strategist]
 
-      - agent: coder
-        events: ["issue_comment.created"]
+      # PR-authoring agents, require allow_prs: true.
+      - name: coder
+        backend: claude
+        description: "Implements fixes and features; opens pull requests"
+        skills: [architect, testing]
+        prompt_ref: coder
+        scope_type: workspace
+        allow_prs: true
+        allow_dispatch: true
+        can_dispatch: [pr-reviewer]
 
-      - agent: docs-writer
-        cron: "0 6 * * *"
+      - name: refactorer
+        backend: claude
+        description: "Refactors existing code for readability and maintainability"
+        skills: [architect, testing, dx]
+        prompt_ref: refactorer
+        scope_type: workspace
+        allow_prs: true
 
-      - agent: coder
-        cron: "0,30 8-18 * * *"
+      - name: docs-writer
+        backend: claude
+        description: "Keeps README, CLAUDE.md, AGENTS.md, and docs/*.md accurate and readable"
+        skills: [documentation, dx]
+        prompt_ref: docs-writer
+        scope_type: workspace
+        allow_prs: true
+
+      # PR-reviewing agent, comments only, no PRs (default allow_prs: false).
+      - name: pr-reviewer
+        backend: codex
+        description: "Reviews pull requests for quality, test coverage, and correctness"
+        skills: [architect, testing, security]
+        prompt_ref: pr-reviewer
+        scope_type: workspace
+        allow_dispatch: true
+        can_dispatch: [coder, sec-reviewer]
+
+      - name: product-strategist
+        backend: claude
+        description: "Translates technical findings into product-level insights and priorities"
+        skills: [product, dx]
+        prompt_ref: product-strategist
+        scope_type: workspace
+        allow_memory: false
+        allow_dispatch: true
+
+      # Single-axis review agents, one per skill.
+      - name: arch-reviewer
+        backend: claude
+        description: "Reviews architecture and design decisions"
+        skills: [architect]
+        prompt_ref: arch-reviewer
+        scope_type: workspace
+
+      - name: sec-reviewer
+        backend: claude
+        description: "Reviews security concerns and potential vulnerabilities"
+        skills: [security]
+        prompt_ref: sec-reviewer
+        scope_type: workspace
+        allow_dispatch: true
+
+      - name: test-reviewer
+        backend: claude
+        description: "Reviews test coverage and testing strategy"
+        skills: [testing]
+        prompt_ref: test-reviewer
+        scope_type: workspace
+
+      - name: ops-reviewer
+        backend: claude
+        description: "Reviews operational concerns: CI, deployment, observability"
+        skills: [devops]
+        prompt_ref: ops-reviewer
+        scope_type: workspace
+
+      - name: dx-reviewer
+        backend: claude
+        description: "Reviews developer experience: docs, tooling, onboarding"
+        skills: [dx]
+        prompt_ref: dx-reviewer
+        scope_type: workspace
+
+    repos:
+      - name: "owner/repo"
+        enabled: true
+        use:
+          - agent: arch-reviewer
+            labels: ["ai:review:arch-reviewer"]
+
+          - agent: pr-reviewer
+            events: ["pull_request.opened", "pull_request.synchronize"]
+
+          - agent: coder
+            events: ["issue_comment.created"]
+
+          - agent: docs-writer
+            cron: "0 6 * * *"
+
+          - agent: coder
+            cron: "0,30 8-18 * * *"

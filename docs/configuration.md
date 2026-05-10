@@ -151,7 +151,7 @@ Each agent is a workspace-local capability definition: backend + skills +
 same workspace binds them to a trigger.
 
 - `backend` must match an entry in `backends` (e.g. `claude`, `codex`, or any custom local-backend name). There is no `auto` selection; every agent must name a backend explicitly.
-- `prompt_ref` must name a global prompt. Legacy inline `prompt` imports are accepted for migration compatibility only.
+- `prompt_ref` must name a prompt visible to the agent's workspace and repo scope. Agent config should not include inline prompt bodies.
 - `scope_type` is `workspace` or `repo`. `repo` scope also requires `scope_repo`, and the daemon rejects runs outside that repo.
 - Agent names must be unique inside a workspace.
 - `allow_prs` (default `false`): when `false`, the scheduler prepends a hard instruction forbidding the agent from opening pull requests, regardless of what the prompt says. Set `allow_prs: true` only on agents that are explicitly meant to author PRs (e.g. coders, refactorers). Reviewer-only agents should leave this unset.
