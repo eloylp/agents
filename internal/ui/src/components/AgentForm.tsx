@@ -81,6 +81,21 @@ export default function AgentForm({
   }
 
   useEffect(() => {
+    setForm(f => {
+      const selected = (f.prompt_id || f.prompt_ref).trim()
+      const nextSkills = f.skills.filter(s => skillValues.includes(s))
+      const promptVisible = selected === '' || promptValues.includes(selected)
+      if (promptVisible && nextSkills.length === f.skills.length) return f
+      return {
+        ...f,
+        skills: nextSkills,
+        prompt_id: promptVisible ? f.prompt_id : '',
+        prompt_ref: promptVisible ? f.prompt_ref : '',
+      }
+    })
+  }, [workspace, catalogRepo, promptValues.join('|'), skillValues.join('|')])
+
+  useEffect(() => {
     if (!form.model) return
     if (modelsForBackend.length === 0) return
     if (!modelsForBackend.includes(form.model)) {
@@ -149,7 +164,7 @@ export default function AgentForm({
         {form.scope_type === 'repo' && (
           <div>
             <label style={labelStyle}>Scoped repo *</label>
-            <select style={inputStyle} value={form.scope_repo} onChange={e => set('scope_repo', e.target.value)}>
+            <select style={inputStyle} value={form.scope_repo} onChange={e => setForm(f => ({ ...f, scope_repo: e.target.value, prompt_id: '', prompt_ref: '', skills: [] }))}>
               <option value="">Select repo...</option>
               {repoNames.map(name => <option key={name} value={name}>{name}</option>)}
             </select>

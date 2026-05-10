@@ -1404,6 +1404,28 @@ func TestToolCreateAgentRejectsInlinePrompt(t *testing.T) {
 	}
 }
 
+func TestToolCreateAgentRejectsConflictingPromptRefs(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":        "linter",
+		"backend":     "claude",
+		"prompt_id":   "prompt_coder",
+		"prompt_ref":  "coder",
+		"description": "audits code",
+	}
+
+	res, err := toolCreateAgent(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(textOf(t, res), "prompt_id and prompt_ref are mutually exclusive") {
+		t.Fatalf("expected prompt ref conflict rejection, got error=%v body=%s", res.IsError, textOf(t, res))
+	}
+}
+
 func TestToolCreateAgentPropagatesError(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
@@ -2504,6 +2526,25 @@ func TestToolUpdateAgentRejectsInlinePrompt(t *testing.T) {
 	}
 	if !res.IsError || !strings.Contains(textOf(t, res), "prompt bodies are import-only") {
 		t.Fatalf("expected inline prompt rejection, got error=%v body=%s", res.IsError, textOf(t, res))
+	}
+}
+
+func TestToolUpdateAgentRejectsConflictingPromptRefs(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":       "coder",
+		"prompt_id":  "prompt_coder",
+		"prompt_ref": "coder",
+	}
+	res, err := toolUpdateAgent(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(textOf(t, res), "prompt_id and prompt_ref are mutually exclusive") {
+		t.Fatalf("expected prompt ref conflict rejection, got error=%v body=%s", res.IsError, textOf(t, res))
 	}
 }
 

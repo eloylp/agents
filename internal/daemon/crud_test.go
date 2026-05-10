@@ -213,6 +213,24 @@ func TestStoreCRUDAgentCreateRejectsInlinePrompt(t *testing.T) {
 	}
 }
 
+func TestStoreCRUDAgentCreateRejectsConflictingPromptRefs(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+	seedStorePrompt(t, s, "coder")
+
+	rr := doRawCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt_id": "prompt_coder", "prompt_ref": "coder",
+		"description": "coding agent", "skills": []string{}, "can_dispatch": []string{},
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("POST /agents conflicting prompt refs: got %d, want 400, %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "prompt_id and prompt_ref are mutually exclusive") {
+		t.Fatalf("error body = %q, want prompt ref conflict rejection", rr.Body.String())
+	}
+}
+
 func TestStoreCRUDAgentsListFiltersByWorkspace(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
@@ -2559,6 +2577,30 @@ func TestStoreCRUDAgentPatchRejectsInlinePrompt(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "prompt bodies are import-only") {
 		t.Fatalf("error body = %q, want inline prompt rejection", rr.Body.String())
+	}
+}
+
+func TestStoreCRUDAgentPatchRejectsConflictingPromptRefs(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+	seedStorePrompt(t, s, "coder")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt_ref": "coder",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed: %s", rr.Body.String())
+	}
+
+	rr := doRawCRUDRequest(t, s, http.MethodPatch, "/agents/coder", map[string]any{
+		"prompt_id":  "prompt_coder",
+		"prompt_ref": "coder",
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH /agents/coder conflicting prompt refs: got %d, want 400, %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "prompt_id and prompt_ref are mutually exclusive") {
+		t.Fatalf("error body = %q, want prompt ref conflict rejection", rr.Body.String())
 	}
 }
 

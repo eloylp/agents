@@ -349,6 +349,9 @@ func (h *Handler) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 	if strings.TrimSpace(a.Prompt) != "" {
 		return fleet.Agent{}, &store.ErrValidation{Msg: "agent prompt bodies are import-only; use prompt_ref"}
 	}
+	if strings.TrimSpace(a.PromptID) != "" && strings.TrimSpace(a.PromptRef) != "" {
+		return fleet.Agent{}, &store.ErrValidation{Msg: "prompt_id and prompt_ref are mutually exclusive"}
+	}
 	if strings.TrimSpace(a.PromptRef) == "" && strings.TrimSpace(a.PromptID) == "" {
 		return fleet.Agent{}, &store.ErrValidation{Msg: "prompt_ref is required"}
 	}
@@ -386,6 +389,10 @@ func (h *Handler) UpdateAgentPatchInWorkspace(workspaceID, name string, patch Ag
 func (h *Handler) updateAgent(name, workspaceID string, patch AgentPatch) (fleet.Agent, error) {
 	if patch.Prompt != nil {
 		return fleet.Agent{}, &store.ErrValidation{Msg: "agent prompt bodies are import-only; use prompt_ref"}
+	}
+	if patch.PromptID != nil && patch.PromptRef != nil &&
+		strings.TrimSpace(*patch.PromptID) != "" && strings.TrimSpace(*patch.PromptRef) != "" {
+		return fleet.Agent{}, &store.ErrValidation{Msg: "prompt_id and prompt_ref are mutually exclusive"}
 	}
 	normalized := fleet.NormalizeAgentName(name)
 	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
