@@ -222,9 +222,10 @@ func ReplaceWorkspaceGuardrails(db *sql.DB, workspace string, refs []fleet.Works
 	return ReadWorkspaceGuardrails(db, workspaceID)
 }
 
-// ReadPrompts returns all global prompt catalog entries ordered by name.
+// ReadPrompts returns all prompt catalog entries ordered by visibility scope
+// and name.
 func ReadPrompts(db *sql.DB) ([]fleet.Prompt, error) {
-	rows, err := db.Query("SELECT id, name, description, content FROM prompts ORDER BY name")
+	rows, err := db.Query("SELECT id, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, description, content FROM prompts ORDER BY COALESCE(workspace_id, ''), COALESCE(repo, ''), name")
 	if err != nil {
 		return nil, fmt.Errorf("store: read prompts: %w", err)
 	}
@@ -233,7 +234,7 @@ func ReadPrompts(db *sql.DB) ([]fleet.Prompt, error) {
 	var out []fleet.Prompt
 	for rows.Next() {
 		var p fleet.Prompt
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Content); err != nil {
+		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content); err != nil {
 			return nil, fmt.Errorf("store: read prompts: %w", err)
 		}
 		out = append(out, p)

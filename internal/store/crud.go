@@ -357,10 +357,18 @@ func DeleteBackend(db *sql.DB, name string) error {
 // description are updated.
 func UpsertPrompt(db *sql.DB, p fleet.Prompt) (fleet.Prompt, error) {
 	p.Name = fleet.NormalizePromptName(p.Name)
+	p.WorkspaceID = strings.TrimSpace(p.WorkspaceID)
+	if p.WorkspaceID != "" {
+		p.WorkspaceID = fleet.NormalizeWorkspaceID(p.WorkspaceID)
+	}
+	p.Repo = fleet.NormalizeRepoName(p.Repo)
 	p.Description = strings.TrimSpace(p.Description)
 	p.Content = strings.TrimSpace(p.Content)
 	if p.Name == "" {
 		return fleet.Prompt{}, &ErrValidation{Msg: "prompt name is required"}
+	}
+	if p.WorkspaceID == "" && p.Repo != "" {
+		return fleet.Prompt{}, &ErrValidation{Msg: "prompt repo scope requires workspace_id"}
 	}
 	tx, err := db.Begin()
 	if err != nil {
@@ -369,14 +377,18 @@ func UpsertPrompt(db *sql.DB, p fleet.Prompt) (fleet.Prompt, error) {
 	defer tx.Rollback()
 
 	var existingID string
-	err = tx.QueryRow("SELECT id FROM prompts WHERE name=?", p.Name).Scan(&existingID)
+	if p.ID != "" {
+		err = tx.QueryRow("SELECT id FROM prompts WHERE id=?", p.ID).Scan(&existingID)
+	} else {
+		err = queryPromptByScopeName(tx, p.WorkspaceID, p.Repo, p.Name).Scan(&existingID)
+	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: read existing: %w", p.Name, err)
 	}
 	if existingID != "" {
 		p.ID = existingID
 	} else if p.ID == "" {
-		id, err := derivedEntityID("prompt_", p.Name)
+		id, err := derivedPromptID(p)
 		if err != nil {
 			return fleet.Prompt{}, &ErrValidation{Msg: fmt.Sprintf("prompt %q: %v", p.Name, err)}
 		}
@@ -386,17 +398,19 @@ func UpsertPrompt(db *sql.DB, p fleet.Prompt) (fleet.Prompt, error) {
 		return fleet.Prompt{}, &ErrValidation{Msg: fmt.Sprintf("prompt %q: %v", p.Name, err)}
 	}
 	if _, err := tx.Exec(`
-		INSERT INTO prompts (id, name, description, content, updated_at)
-		VALUES (?, ?, ?, ?, datetime('now'))
+		INSERT INTO prompts (id, workspace_id, repo, name, description, content, updated_at)
+		VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, datetime('now'))
 		ON CONFLICT(id) DO UPDATE SET
+			workspace_id = excluded.workspace_id,
+			repo = excluded.repo,
 			name = excluded.name,
 			description = excluded.description,
 			content = excluded.content,
 			updated_at = datetime('now')`,
-		p.ID, p.Name, p.Description, p.Content,
+		p.ID, p.WorkspaceID, p.Repo, p.Name, p.Description, p.Content,
 	); err != nil {
 		if isUniqueConstraint(err) {
-			return fleet.Prompt{}, &ErrConflict{Msg: fmt.Sprintf("prompt name %q is already used by another prompt id", p.Name)}
+			return fleet.Prompt{}, &ErrConflict{Msg: fmt.Sprintf("prompt name %q is already used by another prompt in that scope", p.Name)}
 		}
 		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: %w", p.Name, err)
 	}
@@ -421,7 +435,7 @@ func DeletePrompt(db *sql.DB, name string) error {
 	defer tx.Rollback()
 
 	var id string
-	err = tx.QueryRow("SELECT id FROM prompts WHERE name=?", name).Scan(&id)
+	err = queryPromptByScopeName(tx, "", "", name).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return &ErrNotFound{Msg: fmt.Sprintf("prompt %q not found", name)}
 	}

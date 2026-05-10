@@ -563,6 +563,8 @@ func (h *Handler) DeleteSkill(name string) error {
 
 type storePromptJSON struct {
 	ID          string `json:"id,omitempty"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Repo        string `json:"repo,omitempty"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Content     string `json:"content"`
@@ -587,6 +589,8 @@ func (p PromptPatch) apply(prompt *fleet.Prompt) {
 func promptToStoreJSON(p fleet.Prompt) storePromptJSON {
 	return storePromptJSON{
 		ID:          p.ID,
+		WorkspaceID: p.WorkspaceID,
+		Repo:        p.Repo,
 		Name:        p.Name,
 		Description: p.Description,
 		Content:     p.Content,
@@ -596,6 +600,8 @@ func promptToStoreJSON(p fleet.Prompt) storePromptJSON {
 func (j storePromptJSON) toConfig() fleet.Prompt {
 	return fleet.Prompt{
 		ID:          j.ID,
+		WorkspaceID: j.WorkspaceID,
+		Repo:        j.Repo,
 		Name:        j.Name,
 		Description: j.Description,
 		Content:     j.Content,

@@ -866,10 +866,12 @@ func agentJSON(a fleet.Agent) map[string]any {
 
 func promptJSON(p fleet.Prompt) map[string]any {
 	return map[string]any{
-		"id":          p.ID,
-		"name":        p.Name,
-		"description": p.Description,
-		"content":     p.Content,
+		"id":           p.ID,
+		"workspace_id": p.WorkspaceID,
+		"repo":         p.Repo,
+		"name":         p.Name,
+		"description":  p.Description,
+		"content":      p.Content,
 	}
 }
 

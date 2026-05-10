@@ -757,6 +757,62 @@ func TestAgentPromptRefMustExistWithoutInlinePrompt(t *testing.T) {
 	}
 }
 
+func TestAgentPromptRefRejectsAmbiguousVisiblePromptName(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = append(cfg.Workspaces, fleet.Workspace{ID: "team-a", Name: "Team A"})
+	cfg.Prompts = []fleet.Prompt{
+		{ID: "prompt_global_shared", Name: "shared", Content: "global"},
+		{ID: "prompt_team_shared", WorkspaceID: "team-a", Name: "shared", Content: "team"},
+	}
+	cfg.Agents[0].WorkspaceID = "team-a"
+	cfg.Agents[0].PromptRef = "shared"
+	cfg.Agents[0].Prompt = ""
+	cfg.Agents[1].WorkspaceID = "team-a"
+	cfg.Repos[0].WorkspaceID = "team-a"
+	err := store.Import(db, cfg)
+	if err == nil {
+		t.Fatal("Import succeeded, want ambiguous prompt_ref error")
+	}
+	if !strings.Contains(err.Error(), `ambiguous prompt_ref "shared" in workspace "team-a"; use prompt_id`) {
+		t.Fatalf("error = %v, want ambiguous prompt_ref validation", err)
+	}
+}
+
+func TestAgentPromptIDSelectsScopedPromptWithDuplicateNames(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = append(cfg.Workspaces, fleet.Workspace{ID: "team-a", Name: "Team A"})
+	cfg.Prompts = []fleet.Prompt{
+		{ID: "prompt_global_shared", Name: "shared", Content: "global"},
+		{ID: "prompt_team_shared", WorkspaceID: "team-a", Name: "shared", Content: "team"},
+	}
+	cfg.Agents[0].WorkspaceID = "team-a"
+	cfg.Agents[0].PromptID = "prompt_team_shared"
+	cfg.Agents[0].PromptRef = ""
+	cfg.Agents[0].Prompt = ""
+	cfg.Agents[1].WorkspaceID = "team-a"
+	cfg.Repos[0].WorkspaceID = "team-a"
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	idx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.WorkspaceID == "team-a" && a.Name == "coder" })
+	if idx < 0 {
+		t.Fatal("team-a coder agent not found after load")
+	}
+	if out.Agents[idx].Prompt != "team" || out.Agents[idx].PromptRef != "shared" {
+		t.Fatalf("resolved prompt = (%q, %q), want team/shared", out.Agents[idx].Prompt, out.Agents[idx].PromptRef)
+	}
+}
+
 func TestPromptRefDoesNotOverwritePromptCatalogContent(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)

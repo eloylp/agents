@@ -429,8 +429,17 @@ func workspaceNameFromID(id string) string {
 
 func importPrompts(tx *sql.Tx, prompts []fleet.Prompt) error {
 	for _, p := range prompts {
+		p.Name = fleet.NormalizePromptName(p.Name)
+		p.WorkspaceID = strings.TrimSpace(p.WorkspaceID)
+		if p.WorkspaceID != "" {
+			p.WorkspaceID = fleet.NormalizeWorkspaceID(p.WorkspaceID)
+		}
+		p.Repo = fleet.NormalizeRepoName(p.Repo)
+		if p.WorkspaceID == "" && p.Repo != "" {
+			return fmt.Errorf("store import: prompt %q repo scope requires workspace_id", p.Name)
+		}
 		if p.ID == "" {
-			id, err := derivedEntityID("prompt_", p.Name)
+			id, err := derivedPromptID(p)
 			if err != nil {
 				return fmt.Errorf("store import: prompt %q: %w", p.Name, err)
 			}
@@ -443,22 +452,35 @@ func importPrompts(tx *sql.Tx, prompts []fleet.Prompt) error {
 			return fmt.Errorf("store import: prompt %q: %w", p.Name, err)
 		}
 		if _, err := tx.Exec(`
-			INSERT INTO prompts (id, name, description, content, updated_at)
-			VALUES (?, ?, ?, ?, datetime('now'))
+			INSERT INTO prompts (id, workspace_id, repo, name, description, content, updated_at)
+			VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, datetime('now'))
 			ON CONFLICT(id) DO UPDATE SET
+				workspace_id = excluded.workspace_id,
+				repo = excluded.repo,
 				name = excluded.name,
 				description = excluded.description,
 				content = excluded.content,
 				updated_at = datetime('now')`,
-			p.ID, p.Name, p.Description, p.Content,
+			p.ID, p.WorkspaceID, p.Repo, p.Name, p.Description, p.Content,
 		); err != nil {
 			if isUniqueConstraint(err) {
-				return fmt.Errorf("store import: prompt name %q is already used by another prompt id", p.Name)
+				return fmt.Errorf("store import: prompt name %q is already used by another prompt in that scope", p.Name)
 			}
 			return fmt.Errorf("store import: upsert prompt %s: %w", p.Name, err)
 		}
 	}
 	return nil
+}
+
+func derivedPromptID(p fleet.Prompt) (string, error) {
+	scope := p.Name
+	if p.WorkspaceID != "" {
+		scope = p.WorkspaceID + "_" + scope
+	}
+	if p.Repo != "" {
+		scope = p.WorkspaceID + "_" + strings.ReplaceAll(p.Repo, "/", "_") + "_" + p.Name
+	}
+	return derivedEntityID("prompt_", scope)
 }
 
 func importAgents(tx *sql.Tx, agents []fleet.Agent, updatePromptContent bool) error {
@@ -534,19 +556,22 @@ func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent, updatePromptContent bool) (str
 	}
 	content := a.Prompt
 	if content == "" && a.PromptRef != "" {
-		var existingID string
-		err := tx.QueryRow("SELECT id FROM prompts WHERE name=?", name).Scan(&existingID)
+		scopeRepo := ""
+		if a.ScopeType == "repo" {
+			scopeRepo = a.ScopeRepo
+		}
+		existingID, err := resolveVisiblePromptByName(tx, name, a.WorkspaceID, scopeRepo)
 		if err == nil {
 			return existingID, nil
 		}
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", fmt.Errorf("store import: agent %s references unknown prompt_ref %q", a.Name, a.PromptRef)
 		}
-		return "", fmt.Errorf("store import: read prompt %s: %w", name, err)
+		return "", fmt.Errorf("store import: resolve prompt_ref %s for agent %s: %w", name, a.Name, err)
 	}
 	if !updatePromptContent && content != "" {
 		var existingID string
-		err := tx.QueryRow("SELECT id FROM prompts WHERE name=?", name).Scan(&existingID)
+		err := queryPromptByScopeName(tx, "", "", name).Scan(&existingID)
 		if err == nil {
 			return existingID, nil
 		}
@@ -561,7 +586,7 @@ func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent, updatePromptContent bool) (str
 	if _, err := tx.Exec(`
 		INSERT INTO prompts (id, name, description, content, updated_at)
 		VALUES (?, ?, ?, ?, datetime('now'))
-		ON CONFLICT(name) DO UPDATE SET
+		ON CONFLICT(id) DO UPDATE SET
 			content = CASE WHEN ? THEN excluded.content ELSE prompts.content END,
 			updated_at = CASE WHEN ? THEN datetime('now') ELSE prompts.updated_at END`,
 		id, name, "Migrated prompt for agent "+a.Name, content,
@@ -569,10 +594,69 @@ func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent, updatePromptContent bool) (str
 	); err != nil {
 		return "", fmt.Errorf("store import: upsert prompt %s for agent %s: %w", name, a.Name, err)
 	}
-	if err := tx.QueryRow("SELECT id FROM prompts WHERE name=?", name).Scan(&id); err != nil {
+	if err := queryPromptByScopeName(tx, "", "", name).Scan(&id); err != nil {
 		return "", fmt.Errorf("store import: read prompt %s id: %w", name, err)
 	}
 	return id, nil
+}
+
+func queryPromptByScopeName(q querier, workspaceID, repo, name string) *sql.Row {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID != "" {
+		workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	}
+	repo = fleet.NormalizeRepoName(repo)
+	if workspaceID == "" {
+		return q.QueryRow("SELECT id FROM prompts WHERE workspace_id IS NULL AND repo IS NULL AND name=?", name)
+	}
+	if repo == "" {
+		return q.QueryRow("SELECT id FROM prompts WHERE workspace_id=? AND repo IS NULL AND name=?", workspaceID, name)
+	}
+	return q.QueryRow("SELECT id FROM prompts WHERE workspace_id=? AND repo=? AND name=?", workspaceID, repo, name)
+}
+
+func resolveVisiblePromptByName(q querier, name, workspaceID, repo string) (string, error) {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	repo = fleet.NormalizeRepoName(repo)
+	rows, err := q.Query(`
+		SELECT id
+		FROM prompts
+		WHERE name = ?
+		  AND (
+			(workspace_id IS NULL AND repo IS NULL)
+			OR (workspace_id = ? AND repo IS NULL)
+			OR (? <> '' AND workspace_id = ? AND repo = ?)
+		  )
+		ORDER BY
+			CASE
+				WHEN workspace_id IS NULL THEN 0
+				WHEN repo IS NULL THEN 1
+				ELSE 2
+			END`,
+		name, workspaceID, repo, workspaceID, repo,
+	)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return "", err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if len(ids) == 0 {
+		return "", sql.ErrNoRows
+	}
+	if len(ids) > 1 {
+		return "", fmt.Errorf("ambiguous prompt_ref %q in workspace %q; use prompt_id", name, workspaceID)
+	}
+	return ids[0], nil
 }
 
 func derivedEntityID(prefix, name string) (string, error) {
@@ -807,14 +891,14 @@ func loadWorkspaces(db querier, cfg *config.Config) error {
 }
 
 func loadPrompts(db querier, cfg *config.Config) error {
-	rows, err := db.Query("SELECT id,name,description,content FROM prompts ORDER BY name")
+	rows, err := db.Query("SELECT id,COALESCE(workspace_id, ''),COALESCE(repo, ''),name,description,content FROM prompts ORDER BY COALESCE(workspace_id, ''), COALESCE(repo, ''), name")
 	if err != nil {
 		return fmt.Errorf("store load: query prompts: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var p fleet.Prompt
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Content); err != nil {
+		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content); err != nil {
 			return fmt.Errorf("store load: scan prompt: %w", err)
 		}
 		cfg.Prompts = append(cfg.Prompts, p)
