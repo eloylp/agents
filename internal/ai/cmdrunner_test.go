@@ -575,11 +575,8 @@ func TestBuildDeliveryClaudeAndCodexSameTruncationBoundary(t *testing.T) {
 
 			// Reconstruct the logical combined prompt from the claude delivery.
 			claudeSystemArg := ""
-			for i, a := range claudeArgs {
-				if a == "--append-system-prompt" && i+1 < len(claudeArgs) {
-					claudeSystemArg = claudeArgs[i+1]
-					break
-				}
+			if i := slices.Index(claudeArgs, "--append-system-prompt"); i >= 0 && i+1 < len(claudeArgs) {
+				claudeSystemArg = claudeArgs[i+1]
 			}
 			var claudeCombined string
 			if claudeStdin != "" {
