@@ -15,8 +15,8 @@
 //	defaults.go, applyDefaults, normalize, setDefault helpers
 //	secrets.go, secret env-var resolution
 //	validate.go, internal validate* tree called from Config.validate()
-//	validate_entities.go, exported ValidateCrossRefs / ValidateEntities for the
-//	                        SQLite CRUD layer (entity-level checks, no daemon section)
+//	validate_entities.go, exported ValidateEntities for the SQLite CRUD layer
+//	                        (entity-level checks, no daemon section)
 package config
 
 import (
