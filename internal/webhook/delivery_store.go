@@ -30,11 +30,15 @@ func (s *DeliveryStore) Run(ctx context.Context) error {
 	}
 	ticker := time.NewTicker(s.ttl / 4)
 	defer ticker.Stop()
+	return s.run(ctx, ticker.C)
+}
+
+func (s *DeliveryStore) run(ctx context.Context, ticks <-chan time.Time) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case now := <-ticker.C:
+		case now := <-ticks:
 			s.evict(now)
 		}
 	}
