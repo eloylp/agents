@@ -580,7 +580,11 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent, updatePromptContent bool) er
 		if err != nil {
 			return err
 		}
-		skills, err := json.Marshal(a.Skills)
+		skillRefs, err := resolveAgentSkillRefs(tx, a, workspaceID, scopeType)
+		if err != nil {
+			return err
+		}
+		skills, err := json.Marshal(skillRefs)
 		if err != nil {
 			return fmt.Errorf("store import: marshal agent %s skills: %w", a.Name, err)
 		}
@@ -616,6 +620,47 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent, updatePromptContent bool) er
 		}
 	}
 	return nil
+}
+
+func resolveAgentSkillRefs(tx *sql.Tx, a fleet.Agent, workspaceID, scopeType string) ([]string, error) {
+	repo := ""
+	if scopeType == "repo" {
+		repo = a.ScopeRepo
+	}
+	refs := make([]string, 0, len(a.Skills))
+	for _, raw := range a.Skills {
+		ref := fleet.NormalizeSkillName(raw)
+		id, err := resolveVisibleCatalogRef(tx, "skills", ref, workspaceID, repo)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				if skill, ok, readErr := readSkillScopeByID(tx, ref); readErr != nil {
+					return nil, fmt.Errorf("store import: read skill %s for agent %s: %w", ref, a.Name, readErr)
+				} else if ok {
+					if skill.Repo != "" && repo == "" {
+						return nil, fmt.Errorf("workspace-scoped agent %q references repo-scoped skill %q without repo context", a.Name, ref)
+					}
+					return nil, fmt.Errorf("agent %q references skill %q outside its visible catalog scope", a.Name, ref)
+				}
+				return nil, fmt.Errorf("store import: agent %s references unknown skill %q", a.Name, ref)
+			}
+			return nil, fmt.Errorf("store import: resolve skill %s for agent %s: %w", ref, a.Name, err)
+		}
+		refs = append(refs, id)
+	}
+	return refs, nil
+}
+
+func readSkillScopeByID(q querier, id string) (fleet.Skill, bool, error) {
+	var skill fleet.Skill
+	err := q.QueryRow("SELECT id, COALESCE(workspace_id, ''), COALESCE(repo, ''), name FROM skills WHERE id = ?", id).
+		Scan(&skill.ID, &skill.WorkspaceID, &skill.Repo, &skill.Name)
+	if err == nil {
+		return skill, true, nil
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return fleet.Skill{}, false, nil
+	}
+	return fleet.Skill{}, false, err
 }
 
 func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent, updatePromptContent bool) (string, error) {
@@ -702,11 +747,47 @@ func queryCatalogIDByScopeName(q querier, table, workspaceID, repo, name string)
 }
 
 func resolveVisiblePromptByName(q querier, name, workspaceID, repo string) (string, error) {
+	return resolveVisibleCatalogName(q, "prompts", "prompt_ref", "prompt_id", name, workspaceID, repo)
+}
+
+func resolveVisibleCatalogRef(q querier, table, ref, workspaceID, repo string) (string, error) {
 	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	repo = fleet.NormalizeRepoName(repo)
 	rows, err := q.Query(`
 		SELECT id
-		FROM prompts
+		FROM `+table+`
+		WHERE id = ?
+		  AND (
+			(workspace_id IS NULL AND repo IS NULL)
+			OR (workspace_id = ? AND repo IS NULL)
+			OR (? <> '' AND workspace_id = ? AND repo = ?)
+		  )
+		LIMIT 1`,
+		ref, workspaceID, repo, workspaceID, repo,
+	)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return "", err
+		}
+		return id, rows.Err()
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return resolveVisibleCatalogName(q, table, strings.TrimSuffix(table, "s"), strings.TrimSuffix(table, "s")+" id", ref, workspaceID, repo)
+}
+
+func resolveVisibleCatalogName(q querier, table, label, idHint, name, workspaceID, repo string) (string, error) {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	repo = fleet.NormalizeRepoName(repo)
+	rows, err := q.Query(`
+		SELECT id
+		FROM `+table+`
 		WHERE name = ?
 		  AND (
 			(workspace_id IS NULL AND repo IS NULL)
@@ -740,19 +821,21 @@ func resolveVisiblePromptByName(q querier, name, workspaceID, repo string) (stri
 		return "", sql.ErrNoRows
 	}
 	if len(ids) > 1 {
-		return "", fmt.Errorf("ambiguous prompt_ref %q in workspace %q; use prompt_id", name, workspaceID)
+		return "", fmt.Errorf("ambiguous %s %q in workspace %q; use %s", label, name, workspaceID, idHint)
 	}
 	return ids[0], nil
 }
 
 func derivedCatalogID(prefix, workspaceID, repo, name string) (string, error) {
-	scope := name
+	parts := []string{}
 	if workspaceID != "" {
-		scope = workspaceID + "_" + scope
+		parts = append(parts, workspaceID)
 	}
 	if repo != "" {
-		scope = workspaceID + "_" + strings.ReplaceAll(repo, "/", "_") + "_" + name
+		parts = append(parts, strings.ReplaceAll(repo, "/", "_"))
 	}
+	parts = append(parts, name)
+	scope := strings.Join(parts, "_")
 	return derivedEntityID(prefix, scope)
 }
 

@@ -57,10 +57,11 @@ backends:
 # ──────────────────────────────────────────────
 # skills, reusable guidance blocks
 #
-# Each skill is a named chunk of guidance. Agents reference skills by
-# name; at runtime the guidance is concatenated into the agent's prompt.
-# Skill prompts are inline strings, keep them in this YAML file or let
-# the daemon manage them through the CRUD API / UI / MCP after import.
+# Each map key is the stable skill id agents should reference. The optional
+# name field is display text and may repeat across global, workspace, and repo
+# scopes; imports accept display-name references only when visible and
+# unambiguous. Skill prompts are inline strings, keep them in this YAML file or
+# let the daemon manage them through the CRUD API / UI / MCP after import.
 # ──────────────────────────────────────────────
 skills:
   architect:

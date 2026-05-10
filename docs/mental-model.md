@@ -4,7 +4,7 @@ How the daemon thinks about agents, what gets composed into every prompt, and th
 
 ## Agents are pure capability definitions
 
-An agent is a backend, a list of skills, a prompt, and a few flags (`allow_prs`, `allow_dispatch`, `can_dispatch`). It does not run by itself. Agents only execute when a binding wires them to a trigger on a repo.
+An agent is a workspace-local backend selection, a list of stable skill references, a prompt reference, a scope, and a few flags (`allow_prs`, `allow_dispatch`, `can_dispatch`). It does not run by itself. Agents only execute when a binding wires them to a trigger on a repo in the same workspace.
 
 ## How an agent fires
 
@@ -46,10 +46,10 @@ Any agent can invoke another at runtime by returning a `dispatch` array in its r
 
 Every run, the daemon assembles the prompt from these pieces, in this order:
 
-1. **Operator guardrails.** Every row from the `guardrails` table where `enabled = true`, ordered by `position ASC, name ASC`, prepended verbatim. Shipped built-ins include `security` (indirect prompt injection, secret exfiltration, out-of-tree filesystem/network access), `discretion` (public-action conservatism), `memory-scope` (only daemon-provided memory for the current `(agent, repo)` pair; ignore CLI-native memory), and `mcp-tool-usage` (use GitHub MCP tools first, authenticated `gh` fallback only when MCP is insufficient or a local checkout/test loop is required). Operators can edit, disable, replace, or add their own via the Guardrails tab in `/ui/config`. See [security.md](security.md) for the threat model and what prompt-level controls do *not* close.
+1. **Workspace guardrails.** Mandatory dynamic workspace/repository boundary guidance plus the selected workspace guardrail references, ordered by workspace reference position. Shipped built-ins include `security` (indirect prompt injection, secret exfiltration, out-of-tree filesystem/network access), `discretion` (public-action conservatism), `memory-scope` (only daemon-provided memory for the current `(agent, repo)` pair; ignore CLI-native memory), and `mcp-tool-usage` (use GitHub MCP tools first, authenticated `gh` fallback only when MCP is insufficient or a local checkout/test loop is required). Operators can edit the reusable catalog and choose per-workspace references via the Guardrails tab in `/ui/config`. See [security.md](security.md) for the threat model and what prompt-level controls do *not* close.
 2. **Hard agent-flag guards.** Code-level clauses inserted based on the agent's flags. The most visible example: when `allow_prs: false`, a clause forbidding the agent from opening pull requests is inserted before the skills, so the gate is code-level rather than relying on the agent's prompt remembering it.
 3. **Composed skills.** Every skill in the agent's `skills:` list, concatenated. Skills are reusable guidance blocks (architecture, testing, security, ...) that compose orthogonally.
-4. **The agent's own prompt.** The agent-specific instructions you wrote in `prompt:`.
+4. **The selected prompt.** The reusable prompt catalog content selected by `prompt_id` or unambiguous `prompt_ref`.
 5. **Available experts roster.** When the agent has valid dispatch targets in `can_dispatch:`, the daemon injects an `## Available experts` section listing targets that exist and have `allow_dispatch: true`. Every agent has a required `description`, and dispatchable targets use it as routing context in the roster.
 6. **Runtime context.** A `## Runtime context` block carrying event details: `Event` kind, `Actor` (the GitHub login that triggered it), an issue or PR number where applicable, and the payload fields documented per event kind in [events.md](events.md).
 7. **Memory.** When the agent has `allow_memory: true` (the default), the daemon reads its persisted memory before the run and appends it to the prompt; the response's `memory` field is persisted back after a successful run. This applies uniformly across every trigger surface: cron, webhook events, dispatch, `POST /run`, and the `trigger_agent` MCP tool. Setting `allow_memory: false` skips both the load and the persist regardless of how the run was triggered. CLI-native memory is not part of the daemon contract; the built-in `memory-scope` guardrail tells agents to ignore it and use only the daemon-rendered `Existing memory:` section.

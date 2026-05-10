@@ -56,9 +56,9 @@ internal/ai/response-schema.json # embedded JSON schema for structured output (c
 ## Conceptual model
 
 - **Workspace**, the top-level operational context for repos, agents, memory, graph layout, runners, traces, events, dispatches, and workspace-scoped budgets. `default` is the compatibility workspace for existing installs.
-- **Prompt**, a global reusable catalog asset. Workspace-local agents reference prompts through `prompt_ref`; legacy inline prompt imports are migrated into the catalog.
+- **Prompt**, a reusable catalog asset that may be global, workspace-scoped, or repo-scoped. Workspace-local agents reference prompts through stable `prompt_id` or unambiguous `prompt_ref`; legacy inline prompt imports are migrated into the catalog.
 - **Agent**, a workspace-local capability: `backend` + `skills: []` + `prompt_ref` + scope. An agent is a pure definition. It does not run by itself.
-- **Skill**, a reusable chunk of guidance referenced by name in multiple agents. Skill text is concatenated before the agent's own prompt at render time.
+- **Skill**, a reusable chunk of guidance referenced by stable id in agents. Display names may repeat across global, workspace, and repo scopes; skill text is concatenated before the agent's own prompt at render time.
 - **Binding**, `repos[*].use[*]`: pairs one agent with exactly one trigger (`labels:`, `events:`, or `cron:`). The same agent can have multiple bindings on the same repo with different triggers.
 - **Backend**, explicit backend selection per agent (no `auto`). Built-ins are `claude` and `codex`; additional named local backends are supported via `local_model_url`.
 - **Proxy**, optional in-daemon Anthropic↔OpenAI translator mounted at `/v1/messages` and `/v1/models`. Disabled by default. When enabled, set `local_model_url` on the backend entry to the proxy's URL; the daemon injects `ANTHROPIC_BASE_URL` for that backend automatically.

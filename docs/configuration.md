@@ -9,9 +9,9 @@ runtime wiring:
 
 ```yaml
 backends:    # AI CLI/runtime definitions agents can use
-prompts:     # global reusable prompt catalog entries
-skills:      # reusable guidance blocks, keyed by name
-guardrails:  # global reusable policy catalog entries
+prompts:     # reusable prompt catalog entries, optionally scoped
+skills:      # reusable guidance blocks, keyed by stable id
+guardrails:  # reusable policy catalog entries, optionally scoped
 workspaces:  # selected guardrails plus workspace-local agents, repos, and budgets
 ```
 
@@ -85,11 +85,14 @@ prompts:
       Run focused tests before opening a pull request.
 ```
 
-Prompts are global reusable assets. Agents reference them by name through
-`prompt_ref`; editing a prompt updates every agent that references it. Legacy
-imports may still provide inline agent `prompt` text, which the store migrates
-into a prompt catalog entry, but exports prefer `prompt_ref` and do not emit
-inline agent prompt bodies.
+Prompts are reusable assets. Empty `workspace_id` and `repo` make a prompt
+globally visible; `workspace_id` with empty `repo` makes it visible only inside
+that workspace; `workspace_id` plus `repo` makes it visible only to repo-scoped
+agents for that repo. Agents may reference prompts by stable `prompt_id`, or by
+`prompt_ref` when the visible prompt name is unambiguous. Legacy imports may
+still provide inline agent `prompt` text, which the store migrates into a prompt
+catalog entry, but exports prefer references and do not emit inline agent prompt
+bodies.
 
 ## `skills`
 
@@ -104,8 +107,12 @@ skills:
       Focus on authn/authz, secrets exposure, injection vectors, and unsafe defaults.
 ```
 
-Skills are referenced by name from agents. Skill text remains a global reusable
-guidance block, separate from the prompt catalog.
+Skills are keyed by stable id. For compatibility, agents may reference a visible
+skill by display `name` when that name is unambiguous; import stores the stable
+id so later duplicate names across global, workspace, and repo scopes remain
+deterministic. Like prompts, empty `workspace_id` and `repo` mean globally
+visible, workspace-only rows are visible only in that workspace, and repo rows
+are visible only to repo-scoped agents for that repo.
 
 ## `workspaces`
 
@@ -146,12 +153,13 @@ layout, runs, traces, events, dispatches, and workspace-scoped budgets. New
 workspaces inherit built-in guardrail references; exports show the selected
 references in render order so operators can remove, re-order, or add them.
 
-Each agent is a workspace-local capability definition: backend + skills +
-`prompt_ref` + scope + dispatch wiring. Agents don't run until a repo in the
-same workspace binds them to a trigger.
+Each agent is a workspace-local capability definition: backend + stable skill
+references + prompt reference + scope + dispatch wiring. Agents don't run until
+a repo in the same workspace binds them to a trigger.
 
 - `backend` must match an entry in `backends` (e.g. `claude`, `codex`, or any custom local-backend name). There is no `auto` selection; every agent must name a backend explicitly.
-- `prompt_ref` must name a prompt visible to the agent's workspace and repo scope. Agent config should not include inline prompt bodies.
+- `prompt_id` is the stable prompt reference. `prompt_ref` may be used when the visible prompt name is unambiguous. Agent config should not include inline prompt bodies.
+- `skills` should contain stable skill ids. A visible skill display name is accepted only when unambiguous, and import/export resolves it to the stable id.
 - `scope_type` is `workspace` or `repo`. `repo` scope also requires `scope_repo`, and the daemon rejects runs outside that repo.
 - Agent names must be unique inside a workspace.
 - `allow_prs` (default `false`): when `false`, the scheduler prepends a hard instruction forbidding the agent from opening pull requests, regardless of what the prompt says. Set `allow_prs: true` only on agents that are explicitly meant to author PRs (e.g. coders, refactorers). Reviewer-only agents should leave this unset.
@@ -218,10 +226,10 @@ Rules:
 
 ## `guardrails`
 
-Operator-defined global policy catalog entries that workspaces can reference.
+Operator-defined policy catalog entries that workspaces can reference.
 At render time the daemon builds one guardrails section from mandatory dynamic
 workspace/repository boundary text plus the selected workspace guardrails, ahead
-of skills and the selected global prompt content. Four built-ins ship by
+of skills and the selected prompt content. Four built-ins ship by
 default:
 
 - **`security`** (position 0, seeded by migration 010): pushes back on indirect prompt injection, secret exfiltration, and out-of-tree filesystem or network access. See [security.md](security.md) for the threat model and what the recommendation does *not* close.
@@ -252,6 +260,12 @@ guardrails:
     enabled: true
     position: 50
 ```
+
+Guardrails use the same catalog visibility fields as prompts and skills:
+globally visible rows leave `workspace_id` and `repo` empty, workspace-scoped
+rows set only `workspace_id`, and repo-scoped rows set both. Workspace guardrail
+references store stable guardrail ids; imports may use a visible display name
+when it is unambiguous.
 
 Rules:
 

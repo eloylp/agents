@@ -31,16 +31,16 @@ See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a re
 - **Discovery and diagnostics**: the daemon detects backends and tools, validates CLI health, and persists discovery snapshots.
 - **[Local-model support](docs/local-models.md)**: run any agent through `llama.cpp`, Ollama, vLLM, or any OpenAI-compatible endpoint. The daemon ships a built-in Anthropic-to-OpenAI translation proxy so the existing `claude` CLI works unchanged against your own LLM (experimental).
 - **One agent model, many triggers**: label events, cron schedules, [GitHub event subscriptions](docs/events.md), on-demand API calls. Same agent, wired however you want.
-- **Composable skills**: reusable guidance blocks (architecture, security, testing, DX, ...) composed into any agent.
+- **Composable skills**: reusable guidance blocks (architecture, security, testing, DX, ...) composed into agents by stable catalog reference.
 - **[Reactive inter-agent dispatch](docs/dispatch.md)**: agents invoke each other at runtime with depth, fanout, and dedup safety limits.
 - **Token budgets and leaderboard**: per-scope (global, backend, or agent) daily/weekly/monthly UTC calendar token caps enforced before each run. NavBar alert banner when any budget crosses its alert threshold. Per-agent leaderboard tracks total and average token consumption per run. Full CRUD via dashboard, REST, and MCP.
-- **SQLite-backed**: state lives in a SQLite database, managed through the three interfaces above. [config.yaml](docs/configuration.md) is an optional export/import format for global prompts/skills/guardrails and workspace-local agents/repos, not a runtime dependency.
+- **SQLite-backed**: state lives in a SQLite database, managed through the three interfaces above. [config.yaml](docs/configuration.md) is an optional export/import format for reusable prompts/skills/guardrails and workspace-local agents/repos, not a runtime dependency.
 
 ## How it works
 
 Every run, regardless of trigger, goes through the same pipeline:
 
-1. **Compose the prompt**: guardrails + skills + agent prompt + runtime context + memory.
+1. **Compose the prompt**: workspace guardrails + skills + selected prompt + runtime context + memory.
 2. **Spawn the AI CLI** (`claude`, `codex`, or your local model) with JSON-schema-enforced output and repository tools available inside the container.
 3. **Parse the structured response**: artifacts, dispatch requests, updated memory.
 4. **Persist the trace**, fan out any dispatches, write back memory.

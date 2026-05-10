@@ -2,6 +2,9 @@
 -- global catalog items whose stable id matches the old name, preserving every
 -- existing agent skill reference and workspace guardrail reference.
 
+-- Normal migrations already have skills from migration 001. The compatibility
+-- create keeps older migration tests that seed from later snapshots able to
+-- apply this migration in isolation.
 CREATE TABLE IF NOT EXISTS skills (
     name   TEXT PRIMARY KEY,
     prompt TEXT NOT NULL
@@ -74,6 +77,8 @@ CREATE INDEX idx_guardrails_scope ON guardrails(workspace_id, repo, name);
 
 CREATE TABLE workspace_guardrails_new (
     workspace_id   TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    -- guardrail_name stores guardrails.id after this migration. The legacy
+    -- column name is kept to avoid a second table-wide rename in this PR.
     guardrail_name TEXT NOT NULL REFERENCES guardrails(id) ON DELETE CASCADE,
     position       INTEGER NOT NULL DEFAULT 0,
     enabled        INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),

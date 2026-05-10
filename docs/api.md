@@ -104,12 +104,12 @@ These routes are always mounted and backed by the SQLite database.
 | `POST` | `/guardrails/{name}/reset` | Copy a built-in guardrail's `default_content` back into its `content`. Returns 400 for operator-added rows (no default to fall back to). |
 | `GET` | `/workspaces/{workspace}/guardrails` | List the selected guardrail references for one workspace in render order. |
 | `PUT` | `/workspaces/{workspace}/guardrails` | Replace the selected guardrail references for one workspace. |
-| `GET` | `/export` | Export full fleet config as workspace-aware YAML, including global prompts, global guardrails, and workspace-local agents/repos/budgets. |
+| `GET` | `/export` | Export full fleet config as workspace-aware YAML, including reusable prompts, skills, guardrails, and workspace-local agents/repos/budgets. |
 | `POST` | `/import` | Import workspace-aware YAML into the SQLite store. Legacy top-level agents/repos remain accepted into `default`. |
 
 ### Guardrails
 
-Guardrails are global policy catalog entries; workspaces choose which catalog entries to render. Catalog wire shape: `{name, description, content, default_content, is_builtin, enabled, position}`. Workspace references use `{workspace_id, guardrail_name, position, enabled}`. PATCH covers catalog `description`, `content`, `enabled`, `position` only; `is_builtin` and `default_content` are migration-managed and not editable from the API. The renderer combines mandatory dynamic workspace/repository boundary guidance with the selected workspace references in one guardrails section. See [security.md](security.md) for the threat model and what the default does, and does not, close.
+Guardrails are reusable policy catalog entries; workspaces choose which visible catalog entries to render. Catalog wire shape: `{id, workspace_id, repo, name, description, content, default_content, is_builtin, enabled, position}`. Empty `workspace_id` and `repo` means global visibility; `workspace_id` with empty `repo` is workspace-only; both fields set is repo-scoped. Workspace references use `{workspace_id, guardrail_name, position, enabled}`, where `guardrail_name` carries the stable guardrail id after scoped-catalog migration. PATCH covers catalog `description`, `content`, `enabled`, `position` only; `is_builtin` and `default_content` are migration-managed and not editable from the API. The renderer combines mandatory dynamic workspace/repository boundary guidance with the selected workspace references in one guardrails section. See [security.md](security.md) for the threat model and what the default does, and does not, close.
 
 Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL cache.
 

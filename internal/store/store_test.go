@@ -860,6 +860,60 @@ func TestRepoScopedAgentMayUseRepoScopedSkill(t *testing.T) {
 	}
 }
 
+func TestAgentSkillDisplayNameResolvesToStableScopedID(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Skills["skill_default_scoped_security"] = fleet.Skill{
+		WorkspaceID: "default",
+		Name:        "scoped-security",
+		Prompt:      "Scoped security guidance.",
+	}
+	cfg.Agents[0].Skills = append(cfg.Agents[0].Skills, "scoped-security")
+	if err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil); err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	idx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.WorkspaceID == "default" && a.Name == "coder" })
+	if idx < 0 {
+		t.Fatal("default coder agent not found after load")
+	}
+	if !slices.Contains(out.Agents[idx].Skills, "skill_default_scoped_security") {
+		t.Fatalf("coder skills = %v, want stable scoped skill id", out.Agents[idx].Skills)
+	}
+}
+
+func TestAgentSkillDisplayNameRejectsAmbiguousVisibleName(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Skills["skill_global_shared"] = fleet.Skill{
+		Name:   "shared",
+		Prompt: "Global shared guidance.",
+	}
+	cfg.Skills["skill_team_shared"] = fleet.Skill{
+		WorkspaceID: "team-a",
+		Name:        "shared",
+		Prompt:      "Team shared guidance.",
+	}
+	cfg.Agents[0].WorkspaceID = "team-a"
+	cfg.Agents[0].Skills = append(cfg.Agents[0].Skills, "shared")
+	cfg.Agents[1].WorkspaceID = "team-a"
+	cfg.Repos[0].WorkspaceID = "team-a"
+	err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil)
+	if err == nil {
+		t.Fatal("ImportAll succeeded, want ambiguous skill validation error")
+	}
+	if !strings.Contains(err.Error(), `ambiguous skill "shared" in workspace "team-a"; use skill id`) {
+		t.Fatalf("error = %v, want ambiguous skill validation", err)
+	}
+}
+
 func TestWorkspaceGuardrailReferenceCanUseVisibleDisplayName(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
