@@ -142,7 +142,7 @@ func DeleteWorkspace(db *sql.DB, workspace string) error {
 	return nil
 }
 
-// ReadWorkspaceGuardrails returns a workspace's selected global guardrail
+// ReadWorkspaceGuardrails returns a workspace's selected guardrail
 // references in render order.
 func ReadWorkspaceGuardrails(db *sql.DB, workspace string) ([]fleet.WorkspaceGuardrailRef, error) {
 	workspaceID, err := ResolveWorkspaceID(db, workspace)
@@ -176,7 +176,8 @@ func readWorkspaceGuardrails(db querier, workspaceID string) ([]fleet.WorkspaceG
 }
 
 // ReplaceWorkspaceGuardrails replaces the workspace's selected guardrail
-// references after validating each reference points at the global catalog.
+// references after validating each reference points at a global or
+// workspace-visible catalog entry.
 func ReplaceWorkspaceGuardrails(db *sql.DB, workspace string, refs []fleet.WorkspaceGuardrailRef) ([]fleet.WorkspaceGuardrailRef, error) {
 	workspaceID, err := ResolveWorkspaceID(db, workspace)
 	if err != nil {
@@ -200,8 +201,7 @@ func ReplaceWorkspaceGuardrails(db *sql.DB, workspace string, refs []fleet.Works
 			return nil, &ErrValidation{Msg: fmt.Sprintf("workspace %q references guardrail %q more than once", workspaceID, name)}
 		}
 		seen[name] = struct{}{}
-		var exists int
-		err := tx.QueryRow("SELECT 1 FROM guardrails WHERE name=?", name).Scan(&exists)
+		id, err := resolveWorkspaceGuardrailRef(tx, workspaceID, name)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, &ErrValidation{Msg: fmt.Sprintf("workspace %q references unknown guardrail %q", workspaceID, name)}
 		}
@@ -211,7 +211,7 @@ func ReplaceWorkspaceGuardrails(db *sql.DB, workspace string, refs []fleet.Works
 		if _, err := tx.Exec(`
 			INSERT INTO workspace_guardrails (workspace_id, guardrail_name, position, enabled)
 			VALUES (?, ?, ?, ?)`,
-			workspaceID, name, ref.Position, boolToInt(ref.Enabled),
+			workspaceID, id, ref.Position, boolToInt(ref.Enabled),
 		); err != nil {
 			return nil, fmt.Errorf("store: replace workspace %s guardrails: insert %s: %w", workspaceID, name, err)
 		}

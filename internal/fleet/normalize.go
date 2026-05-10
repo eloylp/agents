@@ -74,6 +74,12 @@ func NormalizeAgent(a *Agent) {
 // NormalizeSkill applies the same field normalization that the YAML loader
 // performs on skill values: trims Prompt.
 func NormalizeSkill(s *Skill) {
+	s.WorkspaceID = strings.TrimSpace(s.WorkspaceID)
+	if s.WorkspaceID != "" {
+		s.WorkspaceID = NormalizeWorkspaceID(s.WorkspaceID)
+	}
+	s.Repo = NormalizeRepoName(s.Repo)
+	s.Name = NormalizeSkillName(s.Name)
 	s.Prompt = strings.TrimSpace(s.Prompt)
 }
 

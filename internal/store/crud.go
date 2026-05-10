@@ -82,7 +82,45 @@ func validateFleet(q querier) error {
 	if skills == nil {
 		skills = map[string]fleet.Skill{}
 	}
-	return config.ValidateEntities(cfg.Agents, cfg.Repos, skills, backends)
+	if err := config.ValidateEntities(cfg.Agents, cfg.Repos, skills, backends); err != nil {
+		return err
+	}
+	return validateAgentCatalogVisibility(cfg.Agents, skills)
+}
+
+func validateAgentCatalogVisibility(agents []fleet.Agent, skills map[string]fleet.Skill) error {
+	for _, a := range agents {
+		workspaceID := fleet.NormalizeWorkspaceID(a.WorkspaceID)
+		repo := ""
+		if a.ScopeType == "repo" {
+			repo = fleet.NormalizeRepoName(a.ScopeRepo)
+		}
+		for _, skillID := range a.Skills {
+			skill, ok := skills[skillID]
+			if !ok {
+				continue
+			}
+			if skill.Repo != "" && repo == "" {
+				return fmt.Errorf("workspace-scoped agent %q references repo-scoped skill %q without repo context", a.Name, skillID)
+			}
+			if !catalogVisibleToAgent(skill.WorkspaceID, skill.Repo, workspaceID, repo) {
+				return fmt.Errorf("agent %q references skill %q outside its visible catalog scope", a.Name, skillID)
+			}
+		}
+	}
+	return nil
+}
+
+func catalogVisibleToAgent(itemWorkspace, itemRepo, agentWorkspace, agentRepo string) bool {
+	itemWorkspace = strings.TrimSpace(itemWorkspace)
+	itemRepo = strings.TrimSpace(itemRepo)
+	if itemWorkspace == "" && itemRepo == "" {
+		return true
+	}
+	if itemWorkspace != agentWorkspace {
+		return false
+	}
+	return itemRepo == "" || (agentRepo != "" && itemRepo == agentRepo)
 }
 
 // requireAtLeastOne fails if the COUNT query returns 0. entity names the table
@@ -257,6 +295,9 @@ func ReadSkills(db *sql.DB) (map[string]fleet.Skill, error) {
 func UpsertSkill(db *sql.DB, name string, s fleet.Skill) error {
 	name = fleet.NormalizeSkillName(name)
 	fleet.NormalizeSkill(&s)
+	if s.Name == "" {
+		s.Name = name
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert skill %s: begin: %w", name, err)
@@ -274,12 +315,13 @@ func UpsertSkill(db *sql.DB, name string, s fleet.Skill) error {
 // DeleteSkill removes the skill with the given name. Returns an error if any
 // agent still references the skill.
 func DeleteSkill(db *sql.DB, name string) error {
+	name = fleet.NormalizeSkillName(name)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: delete skill %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec("DELETE FROM skills WHERE name=?", name); err != nil {
+	if _, err := tx.Exec("DELETE FROM skills WHERE id=?", name); err != nil {
 		return fmt.Errorf("store: delete skill %s: %w", name, err)
 	}
 	if err := validateFleet(tx); err != nil {

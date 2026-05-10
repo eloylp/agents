@@ -8,6 +8,9 @@ import "strings"
 // can add their own (code style, deployment safety, project norms, etc.)
 // without touching code.
 type Guardrail struct {
+	ID          string `yaml:"id,omitempty" json:"id,omitempty"`
+	WorkspaceID string `yaml:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	Repo        string `yaml:"repo,omitempty" json:"repo,omitempty"`
 	// Name is operator-controlled except for "workspace-boundary", which is
 	// reserved for the mandatory runtime-generated workspace/repo guardrail.
 	Name        string `yaml:"name"`
@@ -44,6 +47,11 @@ func NormalizeGuardrailName(name string) string {
 // NormalizeGuardrail trims fields in place ahead of persistence so the
 // stored values are already in canonical form.
 func NormalizeGuardrail(g *Guardrail) {
+	g.WorkspaceID = strings.TrimSpace(g.WorkspaceID)
+	if g.WorkspaceID != "" {
+		g.WorkspaceID = NormalizeWorkspaceID(g.WorkspaceID)
+	}
+	g.Repo = NormalizeRepoName(g.Repo)
 	g.Name = NormalizeGuardrailName(g.Name)
 	g.Description = strings.TrimSpace(g.Description)
 	g.Content = strings.TrimSpace(g.Content)

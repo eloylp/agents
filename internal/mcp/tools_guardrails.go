@@ -15,6 +15,9 @@ import (
 // identical payloads.
 func guardrailJSON(g fleet.Guardrail) map[string]any {
 	return map[string]any{
+		"id":              g.ID,
+		"workspace_id":    g.WorkspaceID,
+		"repo":            g.Repo,
 		"name":            g.Name,
 		"description":     g.Description,
 		"content":         g.Content,
@@ -64,6 +67,9 @@ func toolCreateGuardrail(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		g := fleet.Guardrail{
+			ID:          req.GetString("id", ""),
+			WorkspaceID: req.GetString("workspace_id", ""),
+			Repo:        req.GetString("repo", ""),
 			Name:        name,
 			Description: req.GetString("description", ""),
 			Content:     req.GetString("content", ""),

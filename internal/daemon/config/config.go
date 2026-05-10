@@ -99,7 +99,11 @@ type apiAIBackendConfigJSON struct {
 }
 
 type apiSkillJSON struct {
-	Prompt string `json:"prompt,omitempty"`
+	ID          string `json:"id,omitempty"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Repo        string `json:"repo,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Prompt      string `json:"prompt,omitempty"`
 }
 
 type apiAgentConfigJSON struct {
@@ -150,7 +154,13 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 
 	skills := make(map[string]apiSkillJSON, len(storedSkills))
 	for name, skill := range storedSkills {
-		skills[name] = apiSkillJSON{Prompt: skill.Prompt}
+		skills[name] = apiSkillJSON{
+			ID:          skill.ID,
+			WorkspaceID: skill.WorkspaceID,
+			Repo:        skill.Repo,
+			Name:        skill.Name,
+			Prompt:      skill.Prompt,
+		}
 	}
 
 	agents := make([]apiAgentConfigJSON, 0, len(storedAgents))

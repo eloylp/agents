@@ -813,6 +813,91 @@ func TestAgentPromptIDSelectsScopedPromptWithDuplicateNames(t *testing.T) {
 	}
 }
 
+func TestAgentSkillRejectsInvisibleRepoScopedCatalogItem(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Skills["repo-only"] = fleet.Skill{
+		WorkspaceID: "default",
+		Repo:        "owner/repo",
+		Name:        "repo-only",
+		Prompt:      "Repo-specific guidance.",
+	}
+	cfg.Agents[0].Skills = append(cfg.Agents[0].Skills, "repo-only")
+	err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil)
+	if err == nil {
+		t.Fatal("ImportAll succeeded, want repo-scoped skill validation error")
+	}
+	if !strings.Contains(err.Error(), `workspace-scoped agent "coder" references repo-scoped skill "repo-only" without repo context`) {
+		t.Fatalf("error = %v, want repo-scoped skill validation", err)
+	}
+}
+
+func TestRepoScopedAgentMayUseRepoScopedSkill(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Skills["repo-only"] = fleet.Skill{
+		WorkspaceID: "default",
+		Repo:        "owner/repo",
+		Name:        "repo-only",
+		Prompt:      "Repo-specific guidance.",
+	}
+	cfg.Agents[0].ScopeType = "repo"
+	cfg.Agents[0].ScopeRepo = "owner/repo"
+	cfg.Agents[0].Skills = append(cfg.Agents[0].Skills, "repo-only")
+	if err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil); err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := out.Skills["repo-only"]; got.WorkspaceID != "default" || got.Repo != "owner/repo" || got.Name != "repo-only" {
+		t.Fatalf("repo-only skill = %+v, want scoped catalog row", got)
+	}
+}
+
+func TestWorkspaceGuardrailReferenceCanUseVisibleDisplayName(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = []fleet.Workspace{{
+		ID:   "team-a",
+		Name: "Team A",
+		Guardrails: []fleet.WorkspaceGuardrailRef{{
+			GuardrailName: "team-policy",
+			Enabled:       true,
+		}},
+	}}
+	cfg.Guardrails = []fleet.Guardrail{{
+		ID:          "guardrail_team_policy",
+		WorkspaceID: "team-a",
+		Name:        "team-policy",
+		Content:     "Team policy.",
+		Enabled:     true,
+	}}
+	cfg.Agents[0].WorkspaceID = "team-a"
+	cfg.Agents[1].WorkspaceID = "team-a"
+	cfg.Repos[0].WorkspaceID = "team-a"
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	guardrails, err := store.ReadWorkspacePromptGuardrails(db, "team-a")
+	if err != nil {
+		t.Fatalf("ReadWorkspacePromptGuardrails: %v", err)
+	}
+	if len(guardrails) != 1 {
+		t.Fatalf("guardrails len = %d, want 1: %+v", len(guardrails), guardrails)
+	}
+	if guardrails[0].ID != "guardrail_team_policy" || guardrails[0].Name != "team-policy" {
+		t.Fatalf("guardrail = %+v, want scoped team policy", guardrails[0])
+	}
+}
+
 func TestPromptRefDoesNotOverwritePromptCatalogContent(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)

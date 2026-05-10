@@ -200,24 +200,52 @@ func Import(db *sql.DB, cfg *config.Config) error {
 func importGuardrails(tx *sql.Tx, guardrails []fleet.Guardrail) error {
 	for _, g := range guardrails {
 		fleet.NormalizeGuardrail(&g)
+		if g.WorkspaceID == "" && g.Repo != "" {
+			return fmt.Errorf("store import: guardrail %q repo scope requires workspace_id", g.Name)
+		}
+		if g.ID == "" {
+			var existingID string
+			err := queryCatalogIDByScopeName(tx, "guardrails", g.WorkspaceID, g.Repo, g.Name).Scan(&existingID)
+			if err == nil {
+				g.ID = existingID
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("store import: read guardrail %s: %w", g.Name, err)
+			}
+		}
+		if g.ID == "" {
+			id, err := derivedCatalogID("guardrail_", g.WorkspaceID, g.Repo, g.Name)
+			if err != nil {
+				return fmt.Errorf("store import: guardrail %q: %w", g.Name, err)
+			}
+			g.ID = id
+		}
 		if g.Name == "" || g.Content == "" {
 			return fmt.Errorf("store import: guardrail requires name and content (got name=%q)", g.Name)
+		}
+		if err := validateEntityID(g.ID); err != nil {
+			return fmt.Errorf("store import: guardrail %q: %w", g.Name, err)
 		}
 		if isReservedGuardrailName(g.Name) {
 			return fmt.Errorf("store import: guardrail name %q is reserved for runtime-generated policy", g.Name)
 		}
 		enabled := boolToInt(g.Enabled)
 		if _, err := tx.Exec(`
-			INSERT INTO guardrails (name, description, content, enabled, position, updated_at)
-			VALUES (?, ?, ?, ?, ?, datetime('now'))
-			ON CONFLICT(name) DO UPDATE SET
+			INSERT INTO guardrails (id, workspace_id, repo, name, description, content, enabled, position, updated_at)
+			VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, datetime('now'))
+			ON CONFLICT(id) DO UPDATE SET
+				workspace_id = excluded.workspace_id,
+				repo = excluded.repo,
+				name = excluded.name,
 				description = excluded.description,
 				content     = excluded.content,
 				enabled     = excluded.enabled,
 				position    = excluded.position,
 				updated_at  = datetime('now')`,
-			g.Name, g.Description, g.Content, enabled, g.Position,
+			g.ID, g.WorkspaceID, g.Repo, g.Name, g.Description, g.Content, enabled, g.Position,
 		); err != nil {
+			if isUniqueConstraint(err) {
+				return fmt.Errorf("store import: guardrail name %q is already used by another guardrail in that scope", g.Name)
+			}
 			return fmt.Errorf("store import: upsert guardrail %s: %w", g.Name, err)
 		}
 	}
@@ -246,12 +274,35 @@ func importBackends(tx *sql.Tx, backends map[string]fleet.Backend) error {
 }
 
 func importSkills(tx *sql.Tx, skills map[string]fleet.Skill) error {
-	for name, s := range skills {
-		if _, err := tx.Exec(
-			"INSERT OR REPLACE INTO skills(name,prompt) VALUES(?,?)",
-			name, s.Prompt,
+	for id, s := range skills {
+		id = fleet.NormalizeSkillName(id)
+		fleet.NormalizeSkill(&s)
+		if s.Name == "" {
+			s.Name = id
+		}
+		if s.WorkspaceID == "" && s.Repo != "" {
+			return fmt.Errorf("store import: skill %q repo scope requires workspace_id", id)
+		}
+		if id == "" || s.Name == "" {
+			return fmt.Errorf("store import: skill requires id and name")
+		}
+		if err := validateEntityID(id); err != nil {
+			return fmt.Errorf("store import: skill %q: %w", id, err)
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO skills (id, workspace_id, repo, name, prompt)
+			VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, ?)
+			ON CONFLICT(id) DO UPDATE SET
+				workspace_id = excluded.workspace_id,
+				repo = excluded.repo,
+				name = excluded.name,
+				prompt = excluded.prompt`,
+			id, s.WorkspaceID, s.Repo, s.Name, s.Prompt,
 		); err != nil {
-			return fmt.Errorf("store import: upsert skill %s: %w", name, err)
+			if isUniqueConstraint(err) {
+				return fmt.Errorf("store import: skill name %q is already used by another skill in that scope", s.Name)
+			}
+			return fmt.Errorf("store import: upsert skill %s: %w", id, err)
 		}
 	}
 	return nil
@@ -302,9 +353,9 @@ func importWorkspaces(tx *sql.Tx, workspaces []fleet.Workspace) error {
 func seedWorkspaceGuardrails(tx *sql.Tx, workspaceID string) error {
 	if _, err := tx.Exec(`
 		INSERT OR IGNORE INTO workspace_guardrails (workspace_id, guardrail_name, position, enabled)
-		SELECT ?, name, position, enabled
+		SELECT ?, id, position, enabled
 		FROM guardrails
-		WHERE is_builtin = 1`,
+		WHERE is_builtin = 1 AND workspace_id IS NULL AND repo IS NULL`,
 		workspaceID,
 	); err != nil {
 		return fmt.Errorf("store import: seed workspace %s guardrails: %w", workspaceID, err)
@@ -357,12 +408,12 @@ func replaceWorkspaceGuardrailsTx(tx *sql.Tx, workspaceID string, refs []fleet.W
 			return &ErrValidation{Msg: fmt.Sprintf("workspace %q references guardrail %q more than once", workspaceID, name)}
 		}
 		seen[name] = struct{}{}
-		var guardrailExists bool
-		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM guardrails WHERE name = ?)`, name).Scan(&guardrailExists); err != nil {
+		id, err := resolveWorkspaceGuardrailRef(tx, workspaceID, name)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return &ErrValidation{Msg: fmt.Sprintf("workspace %q references unknown guardrail %q", workspaceID, name)}
+			}
 			return fmt.Errorf("store import: validate workspace %s guardrail %s: %w", workspaceID, name, err)
-		}
-		if !guardrailExists {
-			return &ErrValidation{Msg: fmt.Sprintf("workspace %q references unknown guardrail %q", workspaceID, name)}
 		}
 		position := ref.Position
 		if position == 0 {
@@ -371,12 +422,50 @@ func replaceWorkspaceGuardrailsTx(tx *sql.Tx, workspaceID string, refs []fleet.W
 		if _, err := tx.Exec(`
 			INSERT INTO workspace_guardrails (workspace_id, guardrail_name, position, enabled)
 			VALUES (?, ?, ?, ?)`,
-			workspaceID, name, position, boolToInt(ref.Enabled),
+			workspaceID, id, position, boolToInt(ref.Enabled),
 		); err != nil {
 			return fmt.Errorf("store import: insert workspace %s guardrail %s: %w", workspaceID, name, err)
 		}
 	}
 	return nil
+}
+
+func resolveWorkspaceGuardrailRef(q querier, workspaceID, ref string) (string, error) {
+	ref = fleet.NormalizeGuardrailName(ref)
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	rows, err := q.Query(`
+		SELECT id
+		FROM guardrails
+		WHERE repo IS NULL
+		  AND (id = ? OR name = ?)
+		  AND (workspace_id IS NULL OR workspace_id = ?)
+		ORDER BY
+			CASE WHEN id = ? THEN 0 ELSE 1 END,
+			CASE WHEN workspace_id IS NULL THEN 0 ELSE 1 END`,
+		ref, ref, workspaceID, ref,
+	)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return "", err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if len(ids) == 0 {
+		return "", sql.ErrNoRows
+	}
+	if len(ids) > 1 && ids[0] != ref {
+		return "", fmt.Errorf("ambiguous guardrail %q in workspace %q; use guardrail id", ref, workspaceID)
+	}
+	return ids[0], nil
 }
 
 func importReferencedWorkspaces(tx *sql.Tx, agents []fleet.Agent, repos []fleet.Repo) error {
@@ -473,14 +562,7 @@ func importPrompts(tx *sql.Tx, prompts []fleet.Prompt) error {
 }
 
 func derivedPromptID(p fleet.Prompt) (string, error) {
-	scope := p.Name
-	if p.WorkspaceID != "" {
-		scope = p.WorkspaceID + "_" + scope
-	}
-	if p.Repo != "" {
-		scope = p.WorkspaceID + "_" + strings.ReplaceAll(p.Repo, "/", "_") + "_" + p.Name
-	}
-	return derivedEntityID("prompt_", scope)
+	return derivedCatalogID("prompt_", p.WorkspaceID, p.Repo, p.Name)
 }
 
 func importAgents(tx *sql.Tx, agents []fleet.Agent, updatePromptContent bool) error {
@@ -601,18 +683,22 @@ func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent, updatePromptContent bool) (str
 }
 
 func queryPromptByScopeName(q querier, workspaceID, repo, name string) *sql.Row {
+	return queryCatalogIDByScopeName(q, "prompts", workspaceID, repo, name)
+}
+
+func queryCatalogIDByScopeName(q querier, table, workspaceID, repo, name string) *sql.Row {
 	workspaceID = strings.TrimSpace(workspaceID)
 	if workspaceID != "" {
 		workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	}
 	repo = fleet.NormalizeRepoName(repo)
 	if workspaceID == "" {
-		return q.QueryRow("SELECT id FROM prompts WHERE workspace_id IS NULL AND repo IS NULL AND name=?", name)
+		return q.QueryRow("SELECT id FROM "+table+" WHERE workspace_id IS NULL AND repo IS NULL AND name=?", name)
 	}
 	if repo == "" {
-		return q.QueryRow("SELECT id FROM prompts WHERE workspace_id=? AND repo IS NULL AND name=?", workspaceID, name)
+		return q.QueryRow("SELECT id FROM "+table+" WHERE workspace_id=? AND repo IS NULL AND name=?", workspaceID, name)
 	}
-	return q.QueryRow("SELECT id FROM prompts WHERE workspace_id=? AND repo=? AND name=?", workspaceID, repo, name)
+	return q.QueryRow("SELECT id FROM "+table+" WHERE workspace_id=? AND repo=? AND name=?", workspaceID, repo, name)
 }
 
 func resolveVisiblePromptByName(q querier, name, workspaceID, repo string) (string, error) {
@@ -657,6 +743,17 @@ func resolveVisiblePromptByName(q querier, name, workspaceID, repo string) (stri
 		return "", fmt.Errorf("ambiguous prompt_ref %q in workspace %q; use prompt_id", name, workspaceID)
 	}
 	return ids[0], nil
+}
+
+func derivedCatalogID(prefix, workspaceID, repo, name string) (string, error) {
+	scope := name
+	if workspaceID != "" {
+		scope = workspaceID + "_" + scope
+	}
+	if repo != "" {
+		scope = workspaceID + "_" + strings.ReplaceAll(repo, "/", "_") + "_" + name
+	}
+	return derivedEntityID(prefix, scope)
 }
 
 func derivedEntityID(prefix, name string) (string, error) {
@@ -838,7 +935,7 @@ func loadBackends(db querier, cfg *config.Config) error {
 }
 
 func loadSkills(db querier, cfg *config.Config) error {
-	rows, err := db.Query("SELECT name,prompt FROM skills")
+	rows, err := db.Query("SELECT id,COALESCE(workspace_id, ''),COALESCE(repo, ''),name,prompt FROM skills")
 	if err != nil {
 		return fmt.Errorf("store load: query skills: %w", err)
 	}
@@ -846,11 +943,13 @@ func loadSkills(db querier, cfg *config.Config) error {
 
 	skills := make(map[string]fleet.Skill)
 	for rows.Next() {
-		var name, prompt string
-		if err := rows.Scan(&name, &prompt); err != nil {
+		var id string
+		var skill fleet.Skill
+		if err := rows.Scan(&id, &skill.WorkspaceID, &skill.Repo, &skill.Name, &skill.Prompt); err != nil {
 			return fmt.Errorf("store load: scan skill: %w", err)
 		}
-		skills[name] = fleet.Skill{Prompt: prompt}
+		skill.ID = id
+		skills[id] = skill
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("store load: iterate skills: %w", err)

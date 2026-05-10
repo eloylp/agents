@@ -4,15 +4,14 @@
 
 CREATE TABLE prompts_new (
     id           TEXT PRIMARY KEY,
-    workspace_id TEXT DEFAULT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    workspace_id TEXT DEFAULT NULL,
     repo         TEXT DEFAULT NULL,
     name         TEXT NOT NULL,
     description  TEXT NOT NULL DEFAULT '',
     content      TEXT NOT NULL,
     created_at   TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
-    CHECK (workspace_id IS NOT NULL OR repo IS NULL),
-    FOREIGN KEY (workspace_id, repo) REFERENCES repos(workspace_id, name) ON DELETE CASCADE
+    CHECK (workspace_id IS NOT NULL OR repo IS NULL)
 );
 
 INSERT INTO prompts_new (id, workspace_id, repo, name, description, content, created_at, updated_at)
