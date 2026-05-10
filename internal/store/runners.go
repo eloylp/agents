@@ -215,13 +215,7 @@ func runnerStatusFilter(status RunnerStatus) (string, []any) {
 	return "", nil
 }
 
-// scanner is satisfied by both *sql.Row and *sql.Rows so scanRunnerRow
-// can serve GetRunner and ListRunners from one helper.
-type scanner interface {
-	Scan(dest ...any) error
-}
-
-func scanRunnerRow(s scanner) (RunnerRecord, error) {
+func scanRunnerRow(s rowScanner) (RunnerRecord, error) {
 	var (
 		id              int64
 		blob            string
