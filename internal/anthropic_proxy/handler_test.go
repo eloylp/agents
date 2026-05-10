@@ -21,7 +21,9 @@ type fakeUpstream struct {
 	lastBody []byte
 }
 
-func newFakeUpstream(status int, body string) *fakeUpstream {
+func newFakeUpstream(t *testing.T, status int, body string) *fakeUpstream {
+	t.Helper()
+
 	f := &fakeUpstream{status: status, body: body}
 	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.lastBody, _ = io.ReadAll(r.Body)
@@ -29,6 +31,7 @@ func newFakeUpstream(status int, body string) *fakeUpstream {
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
 	}))
+	t.Cleanup(f.Close)
 	return f
 }
 
@@ -51,8 +54,7 @@ const oaiTextResp = `{
 
 func TestHandler_TextRequest(t *testing.T) {
 	t.Parallel()
-	up := newFakeUpstream(http.StatusOK, oaiTextResp)
-	defer up.Close()
+	up := newFakeUpstream(t, http.StatusOK, oaiTextResp)
 
 	h := newHandler(up, nil)
 	body := `{"model":"claude","max_tokens":100,"messages":[{"role":"user","content":"Hello!"}]}`
@@ -78,8 +80,7 @@ func TestHandler_TextRequest(t *testing.T) {
 
 func TestHandler_TranslationApplied(t *testing.T) {
 	t.Parallel()
-	up := newFakeUpstream(http.StatusOK, oaiTextResp)
-	defer up.Close()
+	up := newFakeUpstream(t, http.StatusOK, oaiTextResp)
 
 	h := newHandler(up, nil)
 	body := `{
@@ -113,8 +114,7 @@ func TestHandler_TranslationApplied(t *testing.T) {
 
 func TestHandler_ExtraBodyInjected(t *testing.T) {
 	t.Parallel()
-	up := newFakeUpstream(http.StatusOK, oaiTextResp)
-	defer up.Close()
+	up := newFakeUpstream(t, http.StatusOK, oaiTextResp)
 
 	extra := map[string]any{
 		"chat_template_kwargs": map[string]any{"enable_thinking": false},
@@ -141,8 +141,7 @@ func TestHandler_ExtraBodyInjected(t *testing.T) {
 
 func TestHandler_Upstream500ReturnsBadGateway(t *testing.T) {
 	t.Parallel()
-	up := newFakeUpstream(http.StatusInternalServerError, `{"error":"server error"}`)
-	defer up.Close()
+	up := newFakeUpstream(t, http.StatusInternalServerError, `{"error":"server error"}`)
 
 	h := newHandler(up, nil)
 	body := `{"model":"claude","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`
@@ -164,8 +163,7 @@ func TestHandler_Upstream500ReturnsBadGateway(t *testing.T) {
 
 func TestHandler_MalformedRequest(t *testing.T) {
 	t.Parallel()
-	up := newFakeUpstream(http.StatusOK, oaiTextResp)
-	defer up.Close()
+	up := newFakeUpstream(t, http.StatusOK, oaiTextResp)
 
 	h := newHandler(up, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`not json`))
@@ -186,8 +184,7 @@ func TestHandler_MalformedRequest(t *testing.T) {
 
 func TestHandler_MissingMaxTokensReturns400(t *testing.T) {
 	t.Parallel()
-	up := newFakeUpstream(http.StatusOK, oaiTextResp)
-	defer up.Close()
+	up := newFakeUpstream(t, http.StatusOK, oaiTextResp)
 
 	h := newHandler(up, nil)
 	// max_tokens omitted (zero value)
@@ -203,8 +200,7 @@ func TestHandler_MissingMaxTokensReturns400(t *testing.T) {
 
 func TestHandler_StreamingResponse(t *testing.T) {
 	t.Parallel()
-	up := newFakeUpstream(http.StatusOK, oaiTextResp)
-	defer up.Close()
+	up := newFakeUpstream(t, http.StatusOK, oaiTextResp)
 
 	h := newHandler(up, nil)
 	body := `{"model":"claude","max_tokens":100,"stream":true,"messages":[{"role":"user","content":"Hello"}]}`
@@ -236,8 +232,7 @@ func TestHandler_StreamingResponse(t *testing.T) {
 
 func TestHandler_ModelsEndpoint(t *testing.T) {
 	t.Parallel()
-	up := newFakeUpstream(http.StatusOK, oaiTextResp)
-	defer up.Close()
+	up := newFakeUpstream(t, http.StatusOK, oaiTextResp)
 
 	h := newHandler(up, nil)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
