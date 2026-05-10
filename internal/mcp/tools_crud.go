@@ -41,6 +41,7 @@ func toolCreateAgent(deps Deps) server.ToolHandlerFunc {
 			Name:          name,
 			Backend:       req.GetString("backend", ""),
 			Model:         req.GetString("model", ""),
+			PromptID:      req.GetString("prompt_id", ""),
 			PromptRef:     req.GetString("prompt_ref", ""),
 			ScopeType:     req.GetString("scope_type", ""),
 			ScopeRepo:     req.GetString("scope_repo", ""),
@@ -90,6 +91,9 @@ func toolUpdateAgent(deps Deps) server.ToolHandlerFunc {
 		}
 		if v, ok := stringPtrArg(args, "prompt_ref"); ok {
 			patch.PromptRef = v
+		}
+		if v, ok := stringPtrArg(args, "prompt_id"); ok {
+			patch.PromptID = v
 		}
 		if v, ok := stringPtrArg(args, "scope_type"); ok {
 			patch.ScopeType = v
@@ -354,6 +358,8 @@ func toolCreatePrompt(deps Deps) server.ToolHandlerFunc {
 		}
 		prompt := fleet.Prompt{
 			ID:          req.GetString("id", ""),
+			WorkspaceID: req.GetString("workspace_id", ""),
+			Repo:        req.GetString("repo", ""),
 			Name:        name,
 			Description: req.GetString("description", ""),
 			Content:     req.GetString("content", ""),

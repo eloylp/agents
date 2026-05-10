@@ -16,10 +16,11 @@ describe('<AgentForm />', () => {
       <AgentForm
         initial={baseAgent}
         isNew
+        workspace="default"
         backends={[{ name: 'claude', detected: true }]}
-        skillNames={[]}
+        skillOptions={[]}
         agentNames={[]}
-        promptNames={['approved']}
+        promptOptions={[{ name: 'approved' }]}
         repoNames={[]}
         onSave={vi.fn()}
         onCancel={vi.fn()}
@@ -37,10 +38,11 @@ describe('<AgentForm />', () => {
       <AgentForm
         initial={{ ...baseAgent, prompt_ref: 'approved' }}
         isNew
+        workspace="default"
         backends={[{ name: 'claude', detected: true }]}
-        skillNames={[]}
+        skillOptions={[]}
         agentNames={[]}
-        promptNames={['approved']}
+        promptOptions={[{ name: 'approved' }]}
         repoNames={[]}
         onSave={vi.fn()}
         onCancel={vi.fn()}

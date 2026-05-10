@@ -8,6 +8,13 @@ export interface Workspace {
   description?: string
 }
 
+export interface CatalogItem {
+  id?: string
+  workspace_id?: string
+  repo?: string
+  name: string
+}
+
 const storageKey = 'agents.workspace'
 export const defaultWorkspaceID = 'default'
 
@@ -19,6 +26,28 @@ export function workspaceQuery(workspace: string): string {
 export function withWorkspace(path: string, workspace: string): string {
   const separator = path.includes('?') ? '&' : '?'
   return `${path}${separator}${workspaceQuery(workspace)}`
+}
+
+export function visibleCatalogItems<T extends CatalogItem>(items: T[], workspace: string, repo = ''): T[] {
+  const workspaceID = (workspace || defaultWorkspaceID).trim()
+  const repoName = repo.trim()
+  return items.filter(item => {
+    const itemWorkspace = (item.workspace_id ?? '').trim()
+    const itemRepo = (item.repo ?? '').trim()
+    if (!itemWorkspace && !itemRepo) return true
+    if (itemWorkspace !== workspaceID) return false
+    return !itemRepo || (repoName !== '' && itemRepo === repoName)
+  })
+}
+
+export function catalogValue(item: CatalogItem): string {
+  return item.id || item.name
+}
+
+export function catalogLabel(item: CatalogItem): string {
+  const value = catalogValue(item)
+  const scope = item.repo ? item.repo : item.workspace_id ? item.workspace_id : 'global'
+  return value === item.name ? `${item.name} (${scope})` : `${item.name} (${value}, ${scope})`
 }
 
 export function useSelectedWorkspace() {

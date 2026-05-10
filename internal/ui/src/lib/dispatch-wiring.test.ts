@@ -46,6 +46,7 @@ describe('validateConnection', () => {
       model: '',
       skills: ['go-testing'],
       prompt: '',
+      prompt_id: '',
       prompt_ref: '',
       scope_type: 'workspace',
       scope_repo: '',

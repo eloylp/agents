@@ -24,7 +24,7 @@ import Card from '@/components/Card'
 import AgentForm, { emptyAgentForm, type BackendOption } from '@/components/AgentForm'
 import BadgePicker from '@/components/BadgePicker'
 import RunButton from '@/components/RunButton'
-import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
+import { useSelectedWorkspace, withWorkspace, type CatalogItem } from '@/lib/workspace'
 import { type Binding } from '@/lib/bindings'
 import { fmtDuration } from '@/lib/format'
 import {
@@ -70,6 +70,7 @@ interface AgentInfo {
   allow_dispatch?: boolean
   allow_prs?: boolean
   allow_memory?: boolean
+  prompt_id?: string
   prompt_ref?: string
   scope_type?: string
   scope_repo?: string
@@ -314,9 +315,9 @@ export default function GraphPage() {
   const [wiringError, setWiringError] = useState('')
   const [wiringBusy, setWiringBusy] = useState(false)
   const [backendOptions, setBackendOptions] = useState<BackendOption[]>([])
-  const [skillNames, setSkillNames] = useState<string[]>([])
+  const [skillOptions, setSkillOptions] = useState<CatalogItem[]>([])
   const [agentNames, setAgentNames] = useState<string[]>([])
-  const [promptNames, setPromptNames] = useState<string[]>([])
+  const [promptOptions, setPromptOptions] = useState<CatalogItem[]>([])
   const [panelMode, setPanelMode] = useState<'details' | 'edge' | 'create' | 'edit' | null>(null)
   const [agentForm, setAgentForm] = useState<StoreAgent>(emptyAgentForm)
   const [agentSaving, setAgentSaving] = useState(false)
@@ -355,7 +356,7 @@ export default function GraphPage() {
       .catch(() => {})
     fetch('/skills')
       .then(r => r.ok ? r.json() : [])
-      .then((data: { name: string }[]) => setSkillNames(data.map(s => s.name)))
+      .then((data: CatalogItem[]) => setSkillOptions(data ?? []))
       .catch(() => {})
     fetch(withWorkspace('/agents', workspace))
       .then(r => r.ok ? r.json() : [])
@@ -363,7 +364,7 @@ export default function GraphPage() {
       .catch(() => {})
     fetch('/prompts')
       .then(r => r.ok ? r.json() : [])
-      .then((data: { name: string }[]) => setPromptNames(data.map(p => p.name)))
+      .then((data: CatalogItem[]) => setPromptOptions(data ?? []))
       .catch(() => {})
   }, [workspace])
 
@@ -722,6 +723,7 @@ export default function GraphPage() {
       backend: agent?.backend ?? '',
       model: agent?.model ?? '',
       skills: agent?.skills ?? [],
+      prompt_id: agent?.prompt_id ?? '',
       prompt_ref: agent?.prompt_ref ?? '',
       scope_type: agent?.scope_type ?? 'workspace',
       scope_repo: agent?.scope_repo ?? '',
@@ -938,10 +940,11 @@ export default function GraphPage() {
               key={`${panelMode}:${agentForm.name}`}
               initial={agentForm}
               isNew={panelMode === 'create'}
+              workspace={workspace}
               backends={backendOptions}
-              skillNames={skillNames}
+              skillOptions={skillOptions}
               agentNames={agentNames}
-              promptNames={promptNames}
+              promptOptions={promptOptions}
               repoNames={repos.map(r => r.name)}
               onSave={saveAgent}
               onCancel={closePanel}

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import BadgePicker from '@/components/BadgePicker'
 import type { StoreAgent } from '@/lib/dispatch-wiring'
+import { catalogLabel, catalogValue, visibleCatalogItems, type CatalogItem } from '@/lib/workspace'
 
 export type { StoreAgent }
 
@@ -13,26 +14,30 @@ export interface BackendOption {
 }
 
 export interface PromptOption {
+  id?: string
+  workspace_id?: string
+  repo?: string
   name: string
 }
 
 // allow_memory defaults to true so newly created agents preserve the
 // historical behaviour where autonomous runs persist memory by default.
 export const emptyAgentForm: StoreAgent = {
-  name: '', backend: '', model: '', skills: [], prompt_ref: '', scope_type: 'workspace', scope_repo: '',
+  name: '', backend: '', model: '', skills: [], prompt_id: '', prompt_ref: '', scope_type: 'workspace', scope_repo: '',
   allow_prs: false, allow_dispatch: false, allow_memory: true,
   can_dispatch: [], description: '',
 }
 
 export default function AgentForm({
-  initial, isNew, backends, skillNames, agentNames, promptNames, repoNames, onSave, onCancel, saving, error,
+  initial, isNew, workspace, backends, skillOptions, agentNames, promptOptions, repoNames, onSave, onCancel, saving, error,
 }: {
   initial: StoreAgent
   isNew: boolean
+  workspace: string
   backends: BackendOption[]
-  skillNames: string[]
+  skillOptions: CatalogItem[]
   agentNames: string[]
-  promptNames: string[]
+  promptOptions: PromptOption[]
   repoNames: string[]
   onSave: (a: StoreAgent) => void
   onCancel: () => void
@@ -55,11 +60,25 @@ export default function AgentForm({
 
   const backendOptions = backends.filter(b => b.detected !== false)
   const modelsForBackend = backendOptions.find(b => b.name === form.backend)?.models ?? []
-  const promptRef = form.prompt_ref.trim()
-  const promptRefMissing = promptRef !== '' && !promptNames.includes(promptRef)
   const scopeRepo = form.scope_repo.trim()
+  const catalogRepo = form.scope_type === 'repo' ? scopeRepo : ''
+  const visiblePrompts = visibleCatalogItems(promptOptions, workspace, catalogRepo)
+  const visibleSkills = visibleCatalogItems(skillOptions, workspace, catalogRepo)
+  const promptValues = visiblePrompts.map(catalogValue)
+  const skillValues = visibleSkills.map(catalogValue)
+  const selectedPrompt = (form.prompt_id || form.prompt_ref).trim()
+  const promptRefMissing = selectedPrompt !== '' && !promptValues.includes(selectedPrompt)
   const canSave = !saving && form.name.trim() !== '' && form.backend.trim() !== '' && form.description.trim() !== '' &&
-    promptRef !== '' && !promptRefMissing && (form.scope_type !== 'repo' || scopeRepo !== '')
+    selectedPrompt !== '' && !promptRefMissing && (form.scope_type !== 'repo' || scopeRepo !== '')
+
+  const setPrompt = (value: string) => {
+    const prompt = visiblePrompts.find(p => catalogValue(p) === value)
+    setForm(f => ({
+      ...f,
+      prompt_id: prompt?.id && prompt.id !== prompt.name ? prompt.id : '',
+      prompt_ref: prompt?.id && prompt.id !== prompt.name ? '' : value,
+    }))
+  }
 
   useEffect(() => {
     if (!form.model) return
@@ -91,7 +110,7 @@ export default function AgentForm({
       </div>
       <div>
         <label style={labelStyle}>Skills</label>
-        <BadgePicker options={skillNames} selected={form.skills} onChange={v => set('skills', v)} placeholder="Add skill..." />
+        <BadgePicker options={skillValues} selected={form.skills.filter(s => skillValues.includes(s))} onChange={v => set('skills', v)} placeholder="Add skill..." />
       </div>
       <div>
         <label style={labelStyle}>Description *</label>
@@ -104,10 +123,10 @@ export default function AgentForm({
       </div>
       <div>
         <label style={labelStyle}>Prompt *</label>
-        <select style={inputStyle} value={form.prompt_ref} onChange={e => set('prompt_ref', e.target.value)}>
+        <select style={inputStyle} value={selectedPrompt} onChange={e => setPrompt(e.target.value)}>
           <option value="">Select prompt...</option>
-          {promptRefMissing && <option value={form.prompt_ref}>{form.prompt_ref} (missing)</option>}
-          {promptNames.map(name => <option key={name} value={name}>{name}</option>)}
+          {promptRefMissing && <option value={selectedPrompt}>{selectedPrompt} (not visible)</option>}
+          {visiblePrompts.map(prompt => <option key={catalogValue(prompt)} value={catalogValue(prompt)}>{catalogLabel(prompt)}</option>)}
         </select>
         {promptRefMissing && (
           <div role="alert" style={{ marginTop: '4px', fontSize: '0.78rem', color: 'var(--text-danger)' }}>
@@ -121,7 +140,7 @@ export default function AgentForm({
           <select
             style={inputStyle}
             value={form.scope_type || 'workspace'}
-            onChange={e => setForm(f => ({ ...f, scope_type: e.target.value, scope_repo: e.target.value === 'repo' ? f.scope_repo : '' }))}
+            onChange={e => setForm(f => ({ ...f, scope_type: e.target.value, scope_repo: e.target.value === 'repo' ? f.scope_repo : '', prompt_id: '', prompt_ref: '', skills: [] }))}
           >
             <option value="workspace">Workspace</option>
             <option value="repo">Repo</option>

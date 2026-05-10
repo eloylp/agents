@@ -7,7 +7,7 @@ import Link from 'next/link'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 import RunButton from '@/components/RunButton'
 import AgentForm, { emptyAgentForm, type BackendOption, type StoreAgent } from '@/components/AgentForm'
-import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
+import { useSelectedWorkspace, withWorkspace, type CatalogItem } from '@/lib/workspace'
 
 interface Binding {
   repo: string
@@ -33,6 +33,7 @@ interface Agent {
   allow_prs: boolean
   allow_memory?: boolean
   prompt_ref?: string
+  prompt_id?: string
   scope_type?: string
   scope_repo?: string
   current_status: string
@@ -121,9 +122,9 @@ export default function FleetPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [backendOptions, setBackendOptions] = useState<BackendOption[]>([])
-  const [skillNames, setSkillNames] = useState<string[]>([])
+  const [skillOptions, setSkillOptions] = useState<CatalogItem[]>([])
   const [agentNames, setAgentNames] = useState<string[]>([])
-  const [promptNames, setPromptNames] = useState<string[]>([])
+  const [promptOptions, setPromptOptions] = useState<CatalogItem[]>([])
   const [repoNames, setRepoNames] = useState<string[]>([])
   const [repoFilter, setRepoFilter] = useRepoFilter()
   const { workspace } = useSelectedWorkspace()
@@ -142,7 +143,7 @@ export default function FleetPage() {
       .catch(() => {})
     fetch('/skills')
       .then(r => r.ok ? r.json() : [])
-      .then((data: { name: string }[]) => setSkillNames(data.map(s => s.name)))
+      .then((data: CatalogItem[]) => setSkillOptions(data ?? []))
       .catch(() => {})
     fetch(withWorkspace('/agents', workspace))
       .then(r => r.ok ? r.json() : [])
@@ -150,7 +151,7 @@ export default function FleetPage() {
       .catch(() => {})
     fetch('/prompts')
       .then(r => r.ok ? r.json() : [])
-      .then((data: { name: string }[]) => setPromptNames(data.map(p => p.name)))
+      .then((data: CatalogItem[]) => setPromptOptions(data ?? []))
       .catch(() => {})
     fetch(withWorkspace('/repos', workspace))
       .then(r => r.ok ? r.json() : [])
@@ -182,6 +183,7 @@ export default function FleetPage() {
       backend: a?.backend ?? '',
       model: a?.model ?? '',
       skills: a?.skills ?? [],
+      prompt_id: a?.prompt_id ?? '',
       prompt_ref: a?.prompt_ref ?? '',
       scope_type: a?.scope_type ?? 'workspace',
       scope_repo: a?.scope_repo ?? '',
@@ -204,6 +206,7 @@ export default function FleetPage() {
           model: data.model ?? '',
           skills: data.skills ?? [],
           prompt_ref: data.prompt_ref ?? '',
+          prompt_id: data.prompt_id ?? '',
           scope_type: data.scope_type ?? 'workspace',
           scope_repo: data.scope_repo ?? '',
           can_dispatch: data.can_dispatch ?? [],
@@ -336,10 +339,11 @@ export default function FleetPage() {
             key={`${modal}:${selected.name}`}
             initial={selected}
             isNew={modal === 'create'}
+            workspace={workspace}
             backends={backendOptions}
-            skillNames={skillNames}
+            skillOptions={skillOptions}
             agentNames={agentNames}
-            promptNames={promptNames}
+            promptOptions={promptOptions}
             repoNames={repoNames}
             onSave={saveAgent}
             onCancel={() => setModal(null)}

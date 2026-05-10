@@ -8,6 +8,7 @@ export interface StoreAgent {
   model: string
   skills: string[]
   prompt?: string
+  prompt_id?: string
   prompt_ref: string
   scope_type: 'workspace' | 'repo' | string
   scope_repo: string
@@ -38,6 +39,7 @@ export function storeAgentFromResponse(data: Partial<StoreAgent>, fallbackName: 
     model: data.model ?? '',
     skills: data.skills ?? [],
     prompt: data.prompt ?? '',
+    prompt_id: data.prompt_id ?? '',
     prompt_ref: data.prompt_ref ?? '',
     scope_type: data.scope_type ?? 'workspace',
     scope_repo: data.scope_repo ?? '',

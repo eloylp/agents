@@ -138,6 +138,7 @@ type storeAgentJSON struct {
 	Model         string   `json:"model,omitempty"`
 	Skills        []string `json:"skills"`
 	Prompt        string   `json:"prompt,omitempty"`
+	PromptID      string   `json:"prompt_id,omitempty"`
 	PromptRef     string   `json:"prompt_ref,omitempty"`
 	ScopeType     string   `json:"scope_type,omitempty"`
 	ScopeRepo     string   `json:"scope_repo,omitempty"`
@@ -161,6 +162,7 @@ func agentToStoreJSON(a fleet.Agent) storeAgentJSON {
 		Backend:       a.Backend,
 		Model:         a.Model,
 		Skills:        nilSafeStrings(a.Skills),
+		PromptID:      a.PromptID,
 		PromptRef:     a.PromptRef,
 		ScopeType:     a.ScopeType,
 		ScopeRepo:     a.ScopeRepo,
@@ -180,6 +182,7 @@ func (j storeAgentJSON) toConfig() fleet.Agent {
 		Model:         j.Model,
 		Skills:        nilSafeStrings(j.Skills),
 		Prompt:        j.Prompt,
+		PromptID:      j.PromptID,
 		PromptRef:     j.PromptRef,
 		ScopeType:     j.ScopeType,
 		ScopeRepo:     j.ScopeRepo,
@@ -203,6 +206,7 @@ type AgentPatch struct {
 	Model         *string   `json:"model,omitempty"`
 	Skills        *[]string `json:"skills,omitempty"`
 	Prompt        *string   `json:"prompt,omitempty"`
+	PromptID      *string   `json:"prompt_id,omitempty"`
 	PromptRef     *string   `json:"prompt_ref,omitempty"`
 	ScopeType     *string   `json:"scope_type,omitempty"`
 	ScopeRepo     *string   `json:"scope_repo,omitempty"`
@@ -217,7 +221,7 @@ type AgentPatch struct {
 // both the REST PATCH handler and the MCP update_agent tool to reject empty
 // payloads before hitting the store.
 func (p AgentPatch) AnyFieldSet() bool {
-	return p.WorkspaceID != nil || p.Backend != nil || p.Model != nil || p.Skills != nil || p.Prompt != nil ||
+	return p.WorkspaceID != nil || p.Backend != nil || p.Model != nil || p.Skills != nil || p.Prompt != nil || p.PromptID != nil ||
 		p.PromptRef != nil || p.ScopeType != nil || p.ScopeRepo != nil ||
 		p.AllowPRs != nil || p.AllowDispatch != nil || p.CanDispatch != nil ||
 		p.Description != nil || p.AllowMemory != nil
@@ -239,8 +243,17 @@ func (p AgentPatch) apply(a *fleet.Agent) {
 	if p.Prompt != nil {
 		a.Prompt = *p.Prompt
 	}
+	if p.PromptID != nil {
+		a.PromptID = *p.PromptID
+		if strings.TrimSpace(*p.PromptID) != "" {
+			a.PromptRef = ""
+		}
+	}
 	if p.PromptRef != nil {
 		a.PromptRef = *p.PromptRef
+		if strings.TrimSpace(*p.PromptRef) != "" {
+			a.PromptID = ""
+		}
 	}
 	if p.ScopeType != nil {
 		a.ScopeType = *p.ScopeType
@@ -416,8 +429,21 @@ func (h *Handler) DeleteAgentInWorkspace(workspaceID, name string, cascade bool)
 // ── Skill wire types ────────────────────────────────────────────────────────────────────────────────────
 
 type storeSkillJSON struct {
-	Name   string `json:"name"`
-	Prompt string `json:"prompt"`
+	ID          string `json:"id,omitempty"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Repo        string `json:"repo,omitempty"`
+	Name        string `json:"name"`
+	Prompt      string `json:"prompt"`
+}
+
+func skillToStoreJSON(id string, sk fleet.Skill) storeSkillJSON {
+	return storeSkillJSON{
+		ID:          id,
+		WorkspaceID: sk.WorkspaceID,
+		Repo:        sk.Repo,
+		Name:        sk.Name,
+		Prompt:      sk.Prompt,
+	}
 }
 
 // SkillPatch is the partial-update shape for a skill. Used by both the REST
@@ -447,8 +473,8 @@ func (h *Handler) handleSkillsList(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	out := make([]storeSkillJSON, 0, len(skills))
-	for name, sk := range skills {
-		out = append(out, storeSkillJSON{Name: name, Prompt: sk.Prompt})
+	for id, sk := range skills {
+		out = append(out, skillToStoreJSON(id, sk))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -458,12 +484,16 @@ func (h *Handler) handleSkillCreate(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, h.maxBodyBytes, &req) {
 		return
 	}
-	name, sk, err := h.UpsertSkill(req.Name, fleet.Skill{Prompt: req.Prompt})
+	id := req.ID
+	if id == "" {
+		id = req.Name
+	}
+	name, sk, err := h.UpsertSkill(id, fleet.Skill{ID: id, WorkspaceID: req.WorkspaceID, Repo: req.Repo, Name: req.Name, Prompt: req.Prompt})
 	if err != nil {
 		h.writeErr(w, err, "skill upsert or cron reload")
 		return
 	}
-	writeJSON(w, http.StatusOK, storeSkillJSON{Name: name, Prompt: sk.Prompt})
+	writeJSON(w, http.StatusOK, skillToStoreJSON(name, sk))
 }
 
 func (h *Handler) handleSkillGet(w http.ResponseWriter, r *http.Request) {
@@ -478,7 +508,7 @@ func (h *Handler) handleSkillGet(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	writeJSON(w, http.StatusOK, storeSkillJSON{Name: name, Prompt: sk.Prompt})
+	writeJSON(w, http.StatusOK, skillToStoreJSON(name, sk))
 }
 
 func (h *Handler) handleSkillPatchByName(w http.ResponseWriter, r *http.Request) {
@@ -509,7 +539,7 @@ func (h *Handler) handleSkillPatch(w http.ResponseWriter, r *http.Request, name 
 		h.writeErr(w, err, "skill patch or cron reload")
 		return
 	}
-	writeJSON(w, http.StatusOK, storeSkillJSON{Name: canonicalName, Prompt: canonical.Prompt})
+	writeJSON(w, http.StatusOK, skillToStoreJSON(canonicalName, canonical))
 }
 
 // ── Skill methods (exposed for MCP) ───────────────────────────────────────────────────────────────────────────────
