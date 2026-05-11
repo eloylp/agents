@@ -394,9 +394,8 @@ func DeleteBackend(db *sql.DB, name string) error {
 
 // ──── Prompts ───────────────────────────────────────────────────────────────────────────────────────
 
-// UpsertPrompt inserts or replaces one global prompt catalog entry. Prompt
-// names are globally unique; existing rows keep their id while content and
-// description are updated.
+// UpsertPrompt inserts or replaces one prompt catalog entry. Existing rows keep
+// their stable id while content, description, and scope fields are updated.
 func UpsertPrompt(db *sql.DB, p fleet.Prompt) (fleet.Prompt, error) {
 	p.Name = fleet.NormalizePromptName(p.Name)
 	p.WorkspaceID = strings.TrimSpace(p.WorkspaceID)
@@ -462,37 +461,76 @@ func UpsertPrompt(db *sql.DB, p fleet.Prompt) (fleet.Prompt, error) {
 	return p, nil
 }
 
-// DeletePrompt removes one global prompt by name. A prompt referenced by any
-// agent cannot be deleted because agents must always point at existing global
-// prompt content.
-func DeletePrompt(db *sql.DB, name string) error {
-	name = fleet.NormalizePromptName(name)
-	if name == "" {
-		return &ErrValidation{Msg: "prompt name is required"}
+// ReadPrompt resolves a prompt by stable id first, then by legacy global display
+// name. Scoped prompts may share names, so callers that need deterministic
+// addressing must pass the stable id.
+func ReadPrompt(db *sql.DB, ref string) (fleet.Prompt, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return fleet.Prompt{}, &ErrValidation{Msg: "prompt id is required"}
+	}
+	var p fleet.Prompt
+	row := db.QueryRow(`
+		SELECT id, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, description, content
+		FROM prompts
+		WHERE id=?`, ref)
+	err := row.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content)
+	if err == nil {
+		return p, nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fleet.Prompt{}, fmt.Errorf("store: read prompt %s by id: %w", ref, err)
+	}
+	name := fleet.NormalizePromptName(ref)
+	row = db.QueryRow(`
+		SELECT id, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, description, content
+		FROM prompts
+		WHERE workspace_id IS NULL AND repo IS NULL AND name=?`, name)
+	err = row.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fleet.Prompt{}, &ErrNotFound{Msg: fmt.Sprintf("prompt %q not found", ref)}
+	}
+	if err != nil {
+		return fleet.Prompt{}, fmt.Errorf("store: read prompt %s by global name: %w", ref, err)
+	}
+	return p, nil
+}
+
+// DeletePrompt removes one prompt addressed by stable id, with a compatibility
+// fallback for legacy global display names. A prompt referenced by any agent
+// cannot be deleted because agents must always point at existing prompt content.
+func DeletePrompt(db *sql.DB, ref string) error {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return &ErrValidation{Msg: "prompt id is required"}
 	}
 	tx, err := db.Begin()
 	if err != nil {
-		return fmt.Errorf("store: delete prompt %s: begin: %w", name, err)
+		return fmt.Errorf("store: delete prompt %s: begin: %w", ref, err)
 	}
 	defer tx.Rollback()
 
 	var id string
-	err = queryPromptByScopeName(tx, "", "", name).Scan(&id)
+	err = tx.QueryRow("SELECT id FROM prompts WHERE id=?", ref).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return &ErrNotFound{Msg: fmt.Sprintf("prompt %q not found", name)}
+		name := fleet.NormalizePromptName(ref)
+		err = queryPromptByScopeName(tx, "", "", name).Scan(&id)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return &ErrNotFound{Msg: fmt.Sprintf("prompt %q not found", ref)}
 	}
 	if err != nil {
-		return fmt.Errorf("store: delete prompt %s: lookup: %w", name, err)
+		return fmt.Errorf("store: delete prompt %s: lookup: %w", ref, err)
 	}
 	var refs int
 	if err := tx.QueryRow("SELECT COUNT(*) FROM agents WHERE prompt_id=?", id).Scan(&refs); err != nil {
-		return fmt.Errorf("store: delete prompt %s: count agents: %w", name, err)
+		return fmt.Errorf("store: delete prompt %s: count agents: %w", ref, err)
 	}
 	if refs > 0 {
-		return &ErrConflict{Msg: fmt.Sprintf("prompt %q is referenced by %d agent(s)", name, refs)}
+		return &ErrConflict{Msg: fmt.Sprintf("prompt %q is referenced by %d agent(s)", ref, refs)}
 	}
 	if _, err := tx.Exec("DELETE FROM prompts WHERE id=?", id); err != nil {
-		return fmt.Errorf("store: delete prompt %s: %w", name, err)
+		return fmt.Errorf("store: delete prompt %s: %w", ref, err)
 	}
 	return tx.Commit()
 }
@@ -705,8 +743,8 @@ func ReplaceAll(
 }
 
 // ImportConfig upserts the workspace-aware YAML import/export shape in a
-// single transaction. It includes global prompts and workspace guardrail
-// references in addition to the legacy fleet sections.
+// single transaction. It includes prompt catalog entries and workspace
+// guardrail references in addition to the legacy fleet sections.
 func ImportConfig(db *sql.DB, cfg *config.Config, budgets []TokenBudget) error {
 	return importConfig(db, cfg, budgets, false)
 }

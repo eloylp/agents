@@ -389,9 +389,13 @@ func TestHandleAPIConfigOmitsDaemonRuntimeConfig(t *testing.T) {
 			t.Errorf("daemon secret %q must not appear in fleet config response", s)
 		}
 	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(body), &keys); err != nil {
+		t.Fatalf("decode config response: %v", err)
+	}
 	for _, key := range []string{"daemon", "http", "processor", "proxy", "webhook_secret_env", "api_key_env"} {
-		if strings.Contains(body, key) {
-			t.Errorf("daemon runtime key %q must not appear in fleet config response: %s", key, body)
+		if _, ok := keys[key]; ok {
+			t.Errorf("daemon runtime key %q must not appear as a top-level fleet config key: %s", key, body)
 		}
 	}
 	if !strings.Contains(body, "backends") {

@@ -28,6 +28,8 @@ type storeSkillJSON struct {
 
 type storePromptJSON struct {
 	ID          string `json:"id,omitempty"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Repo        string `json:"repo,omitempty"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Content     string `json:"content"`

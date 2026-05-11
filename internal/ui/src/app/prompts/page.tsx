@@ -7,6 +7,8 @@ import MarkdownEditor from '@/components/MarkdownEditor'
 
 interface Prompt {
   id?: string
+  workspace_id?: string
+  repo?: string
   name: string
   description: string
   content: string
@@ -36,7 +38,7 @@ export default function PromptsPage() {
     setSaving(true)
     setError('')
     const isNew = modal === 'create'
-    const url = isNew ? '/prompts' : `/prompts/${encodeURIComponent(selected.name)}`
+    const url = isNew ? '/prompts' : `/prompts/${encodeURIComponent(selected.id || selected.name)}`
     const body = isNew
       ? selected
       : { description: selected.description, content: selected.content }
@@ -63,7 +65,7 @@ export default function PromptsPage() {
     setSaving(true)
     setError('')
     try {
-      const res = await fetch(`/prompts/${encodeURIComponent(selected.name)}`, { method: 'DELETE' })
+      const res = await fetch(`/prompts/${encodeURIComponent(selected.id || selected.name)}`, { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         setError(await res.text() || 'Delete failed')
         setSaving(false)
@@ -89,7 +91,7 @@ export default function PromptsPage() {
         <div>
           <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-heading)' }}>Prompt Catalog</h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: 4 }}>
-            {prompts.length} global prompt{prompts.length === 1 ? '' : 's'}
+            {prompts.length} prompt catalog entr{prompts.length === 1 ? 'y' : 'ies'}
           </p>
         </div>
         <button
@@ -104,9 +106,12 @@ export default function PromptsPage() {
       {!loading && prompts.length === 0 && <p style={{ color: 'var(--text-muted)' }}>No prompts configured.</p>}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
         {prompts.map(p => (
-          <Card key={p.name} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          <Card key={p.id || p.name} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             <div>
               <div style={{ fontWeight: 700, color: 'var(--text-heading)' }}>{p.name}</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginTop: 2 }}>
+                {p.repo ? `${p.workspace_id || 'default'} / ${p.repo}` : p.workspace_id ? `${p.workspace_id} workspace` : 'Global'}
+              </div>
               {p.description && <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: 2 }}>{p.description}</div>}
             </div>
             <pre style={{ whiteSpace: 'pre-wrap', overflow: 'hidden', color: 'var(--text-muted)', fontSize: '0.78rem', lineHeight: 1.4, maxHeight: 110, margin: 0 }}>

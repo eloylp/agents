@@ -13,24 +13,24 @@ type Guardrail struct {
 	Repo        string `yaml:"repo,omitempty" json:"repo,omitempty"`
 	// Name is operator-controlled except for "workspace-boundary", which is
 	// reserved for the mandatory runtime-generated workspace/repo guardrail.
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	Content     string `yaml:"content"`
+	Name        string `yaml:"name" json:"name"`
+	Description string `yaml:"description" json:"description"`
+	Content     string `yaml:"content" json:"content"`
 	// Enabled gates rendering. A disabled guardrail stays in the database
 	// (so the operator can re-enable later) but is skipped by the renderer.
-	Enabled bool `yaml:"enabled"`
+	Enabled bool `yaml:"enabled" json:"enabled"`
 	// Position orders rendering. Lower first; ties broken by Name.
-	Position int `yaml:"position"`
+	Position int `yaml:"position" json:"position"`
 	// DefaultContent is set only on built-in guardrails shipped with the
 	// daemon. The dashboard's "Reset to default" affordance copies it back
 	// into Content. Excluded from the YAML import/export shape, the
 	// migration is the sole source of truth for built-in defaults, and a
 	// re-import must not be able to mutate them.
-	DefaultContent string `yaml:"-"`
+	DefaultContent string `yaml:"-" json:"default_content,omitempty"`
 	// IsBuiltin marks rows that ship with the daemon. Future migrations may
 	// update their DefaultContent; operator-added rows are never touched
 	// by migrations. Excluded from YAML for the same reason as DefaultContent.
-	IsBuiltin bool `yaml:"-"`
+	IsBuiltin bool `yaml:"-" json:"is_builtin"`
 }
 
 // NormalizeGuardrailName canonicalises operator-supplied names: lowercase,

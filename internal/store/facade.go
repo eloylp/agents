@@ -85,7 +85,8 @@ func (s *Store) ReplaceWorkspaceGuardrails(workspace string, refs []fleet.Worksp
 func (s *Store) UpsertPrompt(p fleet.Prompt) (fleet.Prompt, error) {
 	return UpsertPrompt(s.db, p)
 }
-func (s *Store) DeletePrompt(name string) error { return DeletePrompt(s.db, name) }
+func (s *Store) ReadPrompt(ref string) (fleet.Prompt, error) { return ReadPrompt(s.db, ref) }
+func (s *Store) DeletePrompt(ref string) error               { return DeletePrompt(s.db, ref) }
 
 // ── Skills ──────────────────────────────────────────────────────────────
 

@@ -140,19 +140,15 @@ func toolListWorkspaceGuardrails(deps Deps) server.ToolHandlerFunc {
 
 func toolGetPrompt(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		name, ok := trimmedString(req, "name")
+		ref, ok := promptRefArg(req)
 		if !ok {
-			return mcpgo.NewToolResultError("name is required"), nil
+			return mcpgo.NewToolResultError("id or name is required"), nil
 		}
-		prompts, err := deps.Store.ReadPrompts()
+		prompt, err := deps.Store.ReadPrompt(ref)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get prompt", err), nil
 		}
-		key := fleet.NormalizePromptName(name)
-		if idx := slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == key }); idx != -1 {
-			return jsonResult(promptJSON(prompts[idx]))
-		}
-		return mcpgo.NewToolResultErrorf("prompt %q not found", name), nil
+		return jsonResult(promptJSON(prompt))
 	}
 }
 

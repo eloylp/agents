@@ -374,9 +374,9 @@ func toolCreatePrompt(deps Deps) server.ToolHandlerFunc {
 
 func toolUpdatePrompt(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		name, err := req.RequireString("name")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
+		ref, ok := promptRefArg(req)
+		if !ok {
+			return mcpgo.NewToolResultError("id or name is required"), nil
 		}
 		args := req.GetArguments()
 		var patch daemonfleet.PromptPatch
@@ -389,7 +389,7 @@ func toolUpdatePrompt(deps Deps) server.ToolHandlerFunc {
 		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
-		canonical, uerr := deps.Fleet.UpdatePromptPatch(fleet.NormalizePromptName(name), patch)
+		canonical, uerr := deps.Fleet.UpdatePromptPatch(ref, patch)
 		if uerr != nil {
 			return mcpgo.NewToolResultErrorFromErr("update prompt", uerr), nil
 		}
@@ -399,19 +399,33 @@ func toolUpdatePrompt(deps Deps) server.ToolHandlerFunc {
 
 func toolDeletePrompt(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		name, ok := trimmedString(req, "name")
+		ref, ok := promptRefArg(req)
 		if !ok {
-			return mcpgo.NewToolResultError("name is required"), nil
+			return mcpgo.NewToolResultError("id or name is required"), nil
 		}
-		canonical := fleet.NormalizePromptName(name)
-		if err := deps.Fleet.DeletePrompt(canonical); err != nil {
+		prompt, err := deps.Store.ReadPrompt(ref)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("read prompt before delete", err), nil
+		}
+		if err := deps.Fleet.DeletePrompt(prompt.ID); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete prompt", err), nil
 		}
 		return jsonResult(map[string]any{
 			"status": "deleted",
-			"name":   canonical,
+			"id":     prompt.ID,
+			"name":   prompt.Name,
 		})
 	}
+}
+
+func promptRefArg(req mcpgo.CallToolRequest) (string, bool) {
+	if id, ok := trimmedString(req, "id"); ok {
+		return id, true
+	}
+	if name, ok := trimmedString(req, "name"); ok {
+		return name, true
+	}
+	return "", false
 }
 
 // toolCreateBackend upserts a backend definition through the same path as

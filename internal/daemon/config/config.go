@@ -61,12 +61,16 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 
 // ── /config ─────────────────────────────────────────────────────────────────
 
-// apiConfigJSON is the fleet-only wire shape for /config.
+// apiConfigJSON is the workspace-aware fleet-only wire shape for /config.
 type apiConfigJSON struct {
-	Backends map[string]apiAIBackendConfigJSON `json:"backends,omitempty"`
-	Skills   map[string]apiSkillJSON           `json:"skills,omitempty"`
-	Agents   []apiAgentConfigJSON              `json:"agents,omitempty"`
-	Repos    []apiRepoConfigJSON               `json:"repos,omitempty"`
+	Backends     map[string]apiAIBackendConfigJSON `json:"backends,omitempty"`
+	Prompts      []fleet.Prompt                    `json:"prompts,omitempty"`
+	Skills       map[string]apiSkillJSON           `json:"skills,omitempty"`
+	Guardrails   []fleet.Guardrail                 `json:"guardrails,omitempty"`
+	Workspaces   []apiWorkspaceConfigJSON          `json:"workspaces,omitempty"`
+	Agents       []apiAgentConfigJSON              `json:"agents,omitempty"`
+	Repos        []apiRepoConfigJSON               `json:"repos,omitempty"`
+	TokenBudgets []store.TokenBudget               `json:"token_budgets,omitempty"`
 }
 
 // apiBindingConfigJSON is the wire shape for a repo binding in /config.
@@ -82,9 +86,10 @@ type apiBindingConfigJSON struct {
 
 // apiRepoConfigJSON is the wire shape for one repo in /config.
 type apiRepoConfigJSON struct {
-	Name     string                 `json:"name"`
-	Enabled  bool                   `json:"enabled"`
-	Bindings []apiBindingConfigJSON `json:"bindings,omitempty"`
+	WorkspaceID string                 `json:"workspace_id,omitempty"`
+	Name        string                 `json:"name"`
+	Enabled     bool                   `json:"enabled"`
+	Bindings    []apiBindingConfigJSON `json:"bindings,omitempty"`
 }
 
 type apiAIBackendConfigJSON struct {
@@ -106,12 +111,24 @@ type apiSkillJSON struct {
 	Prompt      string `json:"prompt,omitempty"`
 }
 
+type apiWorkspaceConfigJSON struct {
+	ID          string                        `json:"id"`
+	Name        string                        `json:"name"`
+	Description string                        `json:"description,omitempty"`
+	Guardrails  []fleet.WorkspaceGuardrailRef `json:"guardrails,omitempty"`
+}
+
 type apiAgentConfigJSON struct {
+	ID            string   `json:"id,omitempty"`
+	WorkspaceID   string   `json:"workspace_id,omitempty"`
 	Name          string   `json:"name"`
 	Backend       string   `json:"backend,omitempty"`
 	Model         string   `json:"model,omitempty"`
 	Skills        []string `json:"skills,omitempty"`
-	Prompt        string   `json:"prompt,omitempty"`
+	PromptID      string   `json:"prompt_id,omitempty"`
+	PromptRef     string   `json:"prompt_ref,omitempty"`
+	ScopeType     string   `json:"scope_type,omitempty"`
+	ScopeRepo     string   `json:"scope_repo,omitempty"`
 	Description   string   `json:"description,omitempty"`
 	AllowPRs      bool     `json:"allow_prs"`
 	AllowDispatch bool     `json:"allow_dispatch"`
@@ -134,12 +151,16 @@ func (h *Handler) HandleConfig(w http.ResponseWriter, _ *http.Request) {
 // so surfaces beyond HTTP (e.g. the MCP get_config tool) can reuse the exact
 // same wire shape without going through the router.
 func (h *Handler) ConfigJSON() ([]byte, error) {
-	storedAgents, storedRepos, storedSkills, storedBackends, err := h.store.ReadSnapshot()
+	cfg, err := h.store.Load()
 	if err != nil {
-		return nil, fmt.Errorf("read snapshot: %w", err)
+		return nil, fmt.Errorf("load config: %w", err)
 	}
-	backends := make(map[string]apiAIBackendConfigJSON, len(storedBackends))
-	for name, b := range storedBackends {
+	budgets, err := h.store.ListTokenBudgets()
+	if err != nil {
+		return nil, fmt.Errorf("list token budgets: %w", err)
+	}
+	backends := make(map[string]apiAIBackendConfigJSON, len(cfg.Backends))
+	for name, b := range cfg.Backends {
 		backends[name] = apiAIBackendConfigJSON{
 			Command:        b.Command,
 			Version:        b.Version,
@@ -152,8 +173,8 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 		}
 	}
 
-	skills := make(map[string]apiSkillJSON, len(storedSkills))
-	for name, skill := range storedSkills {
+	skills := make(map[string]apiSkillJSON, len(cfg.Skills))
+	for name, skill := range cfg.Skills {
 		skills[name] = apiSkillJSON{
 			ID:          skill.ID,
 			WorkspaceID: skill.WorkspaceID,
@@ -163,14 +184,29 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 		}
 	}
 
-	agents := make([]apiAgentConfigJSON, 0, len(storedAgents))
-	for _, a := range storedAgents {
+	workspaces := make([]apiWorkspaceConfigJSON, 0, len(cfg.Workspaces))
+	for _, w := range cfg.Workspaces {
+		workspaces = append(workspaces, apiWorkspaceConfigJSON{
+			ID:          w.ID,
+			Name:        w.Name,
+			Description: w.Description,
+			Guardrails:  w.Guardrails,
+		})
+	}
+
+	agents := make([]apiAgentConfigJSON, 0, len(cfg.Agents))
+	for _, a := range cfg.Agents {
 		agents = append(agents, apiAgentConfigJSON{
+			ID:            a.ID,
+			WorkspaceID:   a.WorkspaceID,
 			Name:          a.Name,
 			Backend:       a.Backend,
 			Model:         a.Model,
 			Skills:        a.Skills,
-			Prompt:        a.Prompt,
+			PromptID:      a.PromptID,
+			PromptRef:     a.PromptRef,
+			ScopeType:     a.ScopeType,
+			ScopeRepo:     a.ScopeRepo,
 			Description:   a.Description,
 			AllowPRs:      a.AllowPRs,
 			AllowDispatch: a.AllowDispatch,
@@ -179,8 +215,8 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 		})
 	}
 
-	repos := make([]apiRepoConfigJSON, 0, len(storedRepos))
-	for _, r := range storedRepos {
+	repos := make([]apiRepoConfigJSON, 0, len(cfg.Repos))
+	for _, r := range cfg.Repos {
 		bindings := make([]apiBindingConfigJSON, 0, len(r.Use))
 		for _, b := range r.Use {
 			bindings = append(bindings, apiBindingConfigJSON{
@@ -192,17 +228,22 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 			})
 		}
 		repos = append(repos, apiRepoConfigJSON{
-			Name:     r.Name,
-			Enabled:  r.Enabled,
-			Bindings: bindings,
+			WorkspaceID: r.WorkspaceID,
+			Name:        r.Name,
+			Enabled:     r.Enabled,
+			Bindings:    bindings,
 		})
 	}
 
 	resp := apiConfigJSON{
-		Backends: backends,
-		Skills:   skills,
-		Agents:   agents,
-		Repos:    repos,
+		Backends:     backends,
+		Prompts:      cfg.Prompts,
+		Skills:       skills,
+		Guardrails:   cfg.Guardrails,
+		Workspaces:   workspaces,
+		Agents:       agents,
+		Repos:        repos,
+		TokenBudgets: budgets,
 	}
 
 	return json.Marshal(resp)

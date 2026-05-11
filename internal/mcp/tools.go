@@ -45,7 +45,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 	)
 	srv.AddTool(
 		mcpgo.NewTool("list_prompts",
-			mcpgo.WithDescription("List every global prompt catalog entry. Prompts are reusable task/personality contracts referenced by workspace-local agents."),
+			mcpgo.WithDescription("List every prompt catalog entry. Prompts are reusable task/personality contracts that may be global, workspace-scoped, or repo-scoped."),
 		),
 		toolListPrompts(deps),
 	)
@@ -67,10 +67,12 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 	)
 	srv.AddTool(
 		mcpgo.NewTool("get_prompt",
-			mcpgo.WithDescription("Fetch one global prompt catalog entry by name."),
+			mcpgo.WithDescription("Fetch one prompt catalog entry by stable id. Legacy global display-name lookup is also accepted."),
+			mcpgo.WithString("id",
+				mcpgo.Description("Stable prompt id. Preferred, and required for scoped prompts that may share display names."),
+			),
 			mcpgo.WithString("name",
-				mcpgo.Required(),
-				mcpgo.Description("Prompt name."),
+				mcpgo.Description("Legacy global prompt display name fallback."),
 			),
 		),
 		toolGetPrompt(deps),
@@ -406,10 +408,12 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("update_prompt",
-				mcpgo.WithDescription("Partially update a prompt by name. Same path as PATCH /prompts/{name}."),
+				mcpgo.WithDescription("Partially update a prompt by stable id. Legacy global display-name lookup is also accepted. Same path as PATCH /prompts/{id}."),
+				mcpgo.WithString("id",
+					mcpgo.Description("Stable prompt id. Preferred, and required for scoped prompts that may share display names."),
+				),
 				mcpgo.WithString("name",
-					mcpgo.Required(),
-					mcpgo.Description("Prompt name."),
+					mcpgo.Description("Legacy global prompt display name fallback."),
 				),
 				mcpgo.WithString("description",
 					mcpgo.Description("New prompt description. Omit to leave unchanged."),
@@ -422,10 +426,12 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("delete_prompt",
-				mcpgo.WithDescription("Delete a global prompt by name. Fails while any agent references it. Same path as DELETE /prompts/{name}."),
+				mcpgo.WithDescription("Delete a prompt by stable id. Legacy global display-name lookup is also accepted. Fails while any agent references it. Same path as DELETE /prompts/{id}."),
+				mcpgo.WithString("id",
+					mcpgo.Description("Stable prompt id. Preferred, and required for scoped prompts that may share display names."),
+				),
 				mcpgo.WithString("name",
-					mcpgo.Required(),
-					mcpgo.Description("Prompt name."),
+					mcpgo.Description("Legacy global prompt display name fallback."),
 				),
 			),
 			toolDeletePrompt(deps),

@@ -17,6 +17,7 @@
 //   - get_config, export_config, import_config, config snapshots / write
 //   - create_agent, update_agent, delete_agent, agent CRUD writes
 //   - create_skill, update_skill, delete_skill, skill CRUD writes
+//   - create_prompt, update_prompt, delete_prompt, prompt catalog CRUD writes
 //   - create_workspace, update_workspace, delete_workspace, update_workspace_guardrails, workspace writes
 //   - create_backend, update_backend, delete_backend, backend CRUD writes
 //   - create_repo, update_repo, delete_repo, repo CRUD writes

@@ -43,6 +43,18 @@ The same pattern works for Cursor, Cline, and any other MCP-compatible client; c
 | `create_skill` | Create or update a skill (full replace). |
 | `update_skill` | Partially update a skill by name. |
 | `delete_skill` | Delete a skill. |
+| `list_prompts` | List all prompt catalog entries, including global, workspace-scoped, and repo-scoped prompts. |
+| `get_prompt` | Fetch one prompt by stable id; legacy global display-name lookup is accepted as a fallback. |
+| `create_prompt` | Create or update a prompt catalog entry. |
+| `update_prompt` | Partially update a prompt by stable id; legacy global display-name lookup is accepted as a fallback. |
+| `delete_prompt` | Delete a prompt by stable id; legacy global display-name lookup is accepted as a fallback. |
+| `list_workspaces` | List all workspaces. |
+| `get_workspace` | Fetch one workspace by id or display name. |
+| `create_workspace` | Create or update a workspace. |
+| `update_workspace` | Partially update a workspace. |
+| `delete_workspace` | Delete an unused non-default workspace. |
+| `list_workspace_guardrails` | List selected guardrail references for one workspace. |
+| `update_workspace_guardrails` | Replace selected guardrail references for one workspace. |
 | `list_backends` | List all AI backends with models and health. |
 | `get_backend` | Fetch one backend by name. |
 | `create_backend` | Create or update a backend (full replace). |

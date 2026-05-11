@@ -441,7 +441,7 @@ func TestToolPromptCRUDNormalizesNames(t *testing.T) {
 		t.Fatalf("created prompt = %+v, want canonical release-notes", created)
 	}
 
-	req.Params.Arguments = map[string]any{"name": "RELEASE-NOTES", "content": "Updated"}
+	req.Params.Arguments = map[string]any{"id": created["id"], "content": "Updated"}
 	res, err = toolUpdatePrompt(deps)(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -452,7 +452,7 @@ func TestToolPromptCRUDNormalizesNames(t *testing.T) {
 		t.Fatalf("updated prompt = %+v, want same id and canonical name", updated)
 	}
 
-	req.Params.Arguments = map[string]any{"name": "Release-Notes"}
+	req.Params.Arguments = map[string]any{"id": created["id"]}
 	res, err = toolGetPrompt(deps)(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -472,6 +472,47 @@ func TestToolPromptCRUDNormalizesNames(t *testing.T) {
 	decodeText(t, res, &deleted)
 	if deleted["name"] != "release-notes" {
 		t.Fatalf("deleted prompt = %+v, want canonical name", deleted)
+	}
+}
+
+func TestToolPromptScopedDuplicatesUseStableID(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	for _, args := range []map[string]any{
+		{"workspace_id": "team-a", "name": "shared", "content": "Team prompt."},
+		{"workspace_id": "team-b", "name": "shared", "content": "Other prompt."},
+	} {
+		req := mcpgo.CallToolRequest{}
+		req.Params.Arguments = args
+		res, err := toolCreatePrompt(deps)(context.Background(), req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("create prompt returned error: %+v", res.Content)
+		}
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"id": "prompt_team-b_shared", "content": "Updated other prompt."}
+	res, err := toolUpdatePrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var updated map[string]any
+	decodeText(t, res, &updated)
+	if updated["id"] != "prompt_team-b_shared" || updated["workspace_id"] != "team-b" || updated["content"] != "Updated other prompt." {
+		t.Fatalf("updated prompt = %+v, want team-b by stable id", updated)
+	}
+
+	req.Params.Arguments = map[string]any{"id": "prompt_team-a_shared"}
+	res, err = toolDeletePrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("delete prompt returned error: %+v", res.Content)
 	}
 }
 
@@ -1164,7 +1205,7 @@ func TestToolGetConfigReturnsRedactedJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(textOf(t, res)), &got); err != nil {
 		t.Fatalf("config body is not valid JSON: %v", err)
 	}
-	for _, key := range []string{"backends", "agents", "skills", "repos"} {
+	for _, key := range []string{"backends", "prompts", "agents", "skills", "repos", "workspaces"} {
 		if _, ok := got[key]; !ok {
 			t.Errorf("config JSON missing %q: %+v", key, got)
 		}

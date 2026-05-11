@@ -1034,7 +1034,7 @@ func TestPromptCRUD(t *testing.T) {
 		t.Fatalf("updated prompt name = %q, want canonical release-notes", prompts[idx].Name)
 	}
 
-	if err := store.DeletePrompt(db, "Release-Notes"); err != nil {
+	if err := store.DeletePrompt(db, created.ID); err != nil {
 		t.Fatalf("DeletePrompt: %v", err)
 	}
 	prompts, err = store.ReadPrompts(db)
@@ -1043,6 +1043,45 @@ func TestPromptCRUD(t *testing.T) {
 	}
 	if slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == "release-notes" }) >= 0 {
 		t.Fatal("release-notes prompt still present after delete")
+	}
+}
+
+func TestPromptCRUDScopedDuplicatesUseStableID(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	teamA, err := store.UpsertPrompt(db, fleet.Prompt{WorkspaceID: "team-a", Name: "Shared", Content: "Team A"})
+	if err != nil {
+		t.Fatalf("UpsertPrompt team A: %v", err)
+	}
+	teamB, err := store.UpsertPrompt(db, fleet.Prompt{WorkspaceID: "team-b", Name: "Shared", Content: "Team B"})
+	if err != nil {
+		t.Fatalf("UpsertPrompt team B: %v", err)
+	}
+	if teamA.ID == teamB.ID || teamA.Name != teamB.Name {
+		t.Fatalf("scoped prompts = %+v / %+v, want same name and distinct ids", teamA, teamB)
+	}
+
+	got, err := store.ReadPrompt(db, teamB.ID)
+	if err != nil {
+		t.Fatalf("ReadPrompt by id: %v", err)
+	}
+	if got.ID != teamB.ID || got.WorkspaceID != "team-b" {
+		t.Fatalf("ReadPrompt by id = %+v, want team B", got)
+	}
+
+	if err := store.DeletePrompt(db, teamA.ID); err != nil {
+		t.Fatalf("DeletePrompt by id: %v", err)
+	}
+	if _, err := store.ReadPrompt(db, teamA.ID); err == nil {
+		t.Fatal("ReadPrompt for deleted prompt succeeded")
+	}
+	got, err = store.ReadPrompt(db, teamB.ID)
+	if err != nil {
+		t.Fatalf("ReadPrompt remaining prompt: %v", err)
+	}
+	if got.ID != teamB.ID {
+		t.Fatalf("remaining prompt = %+v, want team B", got)
 	}
 }
 

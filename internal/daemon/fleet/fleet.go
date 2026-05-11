@@ -91,9 +91,9 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 
 	r.Handle("/prompts", withTimeout(http.HandlerFunc(h.handlePromptsList))).Methods(http.MethodGet)
 	r.Handle("/prompts", withTimeout(http.HandlerFunc(h.handlePromptCreate))).Methods(http.MethodPost)
-	r.Handle("/prompts/{name}", withTimeout(http.HandlerFunc(h.handlePromptGet))).Methods(http.MethodGet)
-	r.Handle("/prompts/{name}", withTimeout(http.HandlerFunc(h.handlePromptPatchByName))).Methods(http.MethodPatch)
-	r.Handle("/prompts/{name}", withTimeout(http.HandlerFunc(h.handlePromptDelete))).Methods(http.MethodDelete)
+	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptGet))).Methods(http.MethodGet)
+	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptPatchByID))).Methods(http.MethodPatch)
+	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptDelete))).Methods(http.MethodDelete)
 
 	r.Handle("/backends", withTimeout(http.HandlerFunc(h.handleBackendsList))).Methods(http.MethodGet)
 	r.Handle("/backends", withTimeout(http.HandlerFunc(h.handleBackendCreate))).Methods(http.MethodPost)
@@ -672,22 +672,17 @@ func (h *Handler) handlePromptCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handlePromptGet(w http.ResponseWriter, r *http.Request) {
-	name := fleet.NormalizePromptName(mux.Vars(r)["name"])
-	prompts, err := h.store.ReadPrompts()
+	ref := mux.Vars(r)["id"]
+	prompt, err := h.store.ReadPrompt(ref)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("read prompts: %v", err), http.StatusInternalServerError)
+		h.writeErr(w, err, "prompt get")
 		return
 	}
-	idx := slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == name })
-	if idx < 0 {
-		http.NotFound(w, r)
-		return
-	}
-	writeJSON(w, http.StatusOK, promptToStoreJSON(prompts[idx]))
+	writeJSON(w, http.StatusOK, promptToStoreJSON(prompt))
 }
 
-func (h *Handler) handlePromptPatchByName(w http.ResponseWriter, r *http.Request) {
-	name := fleet.NormalizePromptName(mux.Vars(r)["name"])
+func (h *Handler) handlePromptPatchByID(w http.ResponseWriter, r *http.Request) {
+	ref := mux.Vars(r)["id"]
 	var req PromptPatch
 	if !decodeBody(w, r, h.maxBodyBytes, &req) {
 		return
@@ -696,7 +691,7 @@ func (h *Handler) handlePromptPatchByName(w http.ResponseWriter, r *http.Request
 		http.Error(w, "at least one field is required", http.StatusBadRequest)
 		return
 	}
-	prompt, err := h.updatePrompt(name, req)
+	prompt, err := h.updatePrompt(ref, req)
 	if err != nil {
 		h.writeErr(w, err, "prompt patch")
 		return
@@ -705,8 +700,8 @@ func (h *Handler) handlePromptPatchByName(w http.ResponseWriter, r *http.Request
 }
 
 func (h *Handler) handlePromptDelete(w http.ResponseWriter, r *http.Request) {
-	name := fleet.NormalizePromptName(mux.Vars(r)["name"])
-	if err := h.DeletePrompt(name); err != nil {
+	ref := mux.Vars(r)["id"]
+	if err := h.DeletePrompt(ref); err != nil {
 		h.writeErr(w, err, "prompt delete")
 		return
 	}
@@ -717,27 +712,22 @@ func (h *Handler) UpsertPrompt(p fleet.Prompt) (fleet.Prompt, error) {
 	return h.store.UpsertPrompt(p)
 }
 
-func (h *Handler) UpdatePromptPatch(name string, patch PromptPatch) (fleet.Prompt, error) {
-	return h.updatePrompt(name, patch)
+func (h *Handler) UpdatePromptPatch(ref string, patch PromptPatch) (fleet.Prompt, error) {
+	return h.updatePrompt(ref, patch)
 }
 
-func (h *Handler) updatePrompt(name string, patch PromptPatch) (fleet.Prompt, error) {
-	name = fleet.NormalizePromptName(name)
-	prompts, err := h.store.ReadPrompts()
+func (h *Handler) updatePrompt(ref string, patch PromptPatch) (fleet.Prompt, error) {
+	prompt, err := h.store.ReadPrompt(ref)
 	if err != nil {
 		return fleet.Prompt{}, err
 	}
-	idx := slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == name })
-	if idx < 0 {
-		return fleet.Prompt{}, &store.ErrNotFound{Msg: fmt.Sprintf("prompt %q not found", name)}
-	}
-	merged := prompts[idx]
+	merged := prompt
 	patch.apply(&merged)
 	return h.store.UpsertPrompt(merged)
 }
 
-func (h *Handler) DeletePrompt(name string) error {
-	return h.store.DeletePrompt(name)
+func (h *Handler) DeletePrompt(ref string) error {
+	return h.store.DeletePrompt(ref)
 }
 
 // ── Backend wire types ──────────────────────────────────────────────────────────────────────────────────

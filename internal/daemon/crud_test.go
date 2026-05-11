@@ -481,7 +481,7 @@ func TestStoreCRUDPromptCreatePatchDelete(t *testing.T) {
 		t.Fatalf("created ID = %q, want prompt_release-notes", created.ID)
 	}
 
-	rr = doCRUDRequest(t, s, http.MethodPatch, "/prompts/Release-Notes", map[string]any{
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/prompts/"+created.ID, map[string]any{
 		"description": "Updated",
 		"content":     "Write concise release notes.",
 	})
@@ -499,18 +499,64 @@ func TestStoreCRUDPromptCreatePatchDelete(t *testing.T) {
 		t.Fatalf("patched prompt name = %q, want canonical release-notes", patched.Name)
 	}
 
-	rr = doCRUDRequest(t, s, http.MethodGet, "/prompts/Release-Notes", nil)
+	rr = doCRUDRequest(t, s, http.MethodGet, "/prompts/"+created.ID, nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET prompt: got %d", rr.Code)
 	}
 
-	rr = doCRUDRequest(t, s, http.MethodDelete, "/prompts/Release-Notes", nil)
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/prompts/"+created.ID, nil)
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("DELETE prompt: got %d, %s", rr.Code, rr.Body.String())
 	}
 	rr = doCRUDRequest(t, s, http.MethodGet, "/prompts/release-notes", nil)
 	if rr.Code != http.StatusNotFound {
 		t.Errorf("GET after delete: got %d, want 404", rr.Code)
+	}
+}
+
+func TestStoreCRUDPromptScopedDuplicatesUseStableID(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	for _, body := range []map[string]any{
+		{"workspace_id": "team-a", "name": "shared", "content": "Team prompt."},
+		{"workspace_id": "team-b", "name": "shared", "content": "Other prompt."},
+	} {
+		rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", body)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("POST prompt: got %d, %s", rr.Code, rr.Body.String())
+		}
+	}
+	rr := doCRUDRequest(t, s, http.MethodGet, "/prompts/prompt_team-a_shared", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET scoped prompt by id: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var got storePromptJSON
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode prompt: %v", err)
+	}
+	if got.WorkspaceID != "team-a" || got.Name != "shared" {
+		t.Fatalf("prompt by id = %+v, want team-a/shared", got)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/prompts/prompt_team-b_shared", map[string]any{"content": "Updated other prompt."})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH scoped prompt by id: got %d, %s", rr.Code, rr.Body.String())
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode patched prompt: %v", err)
+	}
+	if got.WorkspaceID != "team-b" || got.Content != "Updated other prompt." {
+		t.Fatalf("patched prompt = %+v, want team-b updated", got)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/prompts/prompt_team-a_shared", nil)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("DELETE scoped prompt by id: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodGet, "/prompts/prompt_team-b_shared", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET remaining scoped prompt: got %d", rr.Code)
 	}
 }
 
