@@ -44,10 +44,10 @@ The same pattern works for Cursor, Cline, and any other MCP-compatible client; c
 | `update_skill` | Partially update a skill by stable id; legacy global display-name lookup is accepted as a fallback. |
 | `delete_skill` | Delete a skill by stable id; legacy global display-name lookup is accepted as a fallback. |
 | `list_prompts` | List all prompt catalog entries, including global, workspace-scoped, and repo-scoped prompts. |
-| `get_prompt` | Fetch one prompt by stable id; legacy global display-name lookup is accepted as a fallback. |
+| `get_prompt` | Fetch one prompt by stable id, or by `name` plus optional `workspace_id` / `repo` when unambiguous. |
 | `create_prompt` | Create or update a prompt catalog entry. |
-| `update_prompt` | Partially update a prompt by stable id; legacy global display-name lookup is accepted as a fallback. |
-| `delete_prompt` | Delete a prompt by stable id; legacy global display-name lookup is accepted as a fallback. |
+| `update_prompt` | Partially update a prompt by stable id, or by `name` plus optional `workspace_id` / `repo` when unambiguous. |
+| `delete_prompt` | Delete a prompt by stable id, or by `name` plus optional `workspace_id` / `repo` when unambiguous. |
 | `list_workspaces` | List all workspaces. |
 | `get_workspace` | Fetch one workspace by id or display name. |
 | `create_workspace` | Create or update a workspace. |

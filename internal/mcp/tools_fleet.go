@@ -136,9 +136,9 @@ func toolListWorkspaceGuardrails(deps Deps) server.ToolHandlerFunc {
 
 func toolGetPrompt(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		ref, ok := promptRefArg(req)
-		if !ok {
-			return mcpgo.NewToolResultError("id or name is required"), nil
+		ref, err := resolvePromptRef(deps, req)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("resolve prompt", err), nil
 		}
 		prompt, err := deps.Store.ReadPrompt(ref)
 		if err != nil {

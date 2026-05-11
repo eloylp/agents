@@ -495,7 +495,7 @@ func TestToolPromptScopedDuplicatesUseStableID(t *testing.T) {
 	}
 
 	req := mcpgo.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"id": "prompt_team-b_shared", "content": "Updated other prompt."}
+	req.Params.Arguments = map[string]any{"name": "shared", "workspace_id": "team-b", "content": "Updated other prompt."}
 	res, err := toolUpdatePrompt(deps)(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -503,16 +503,36 @@ func TestToolPromptScopedDuplicatesUseStableID(t *testing.T) {
 	var updated map[string]any
 	decodeText(t, res, &updated)
 	if updated["id"] != "prompt_team-b_shared" || updated["workspace_id"] != "team-b" || updated["content"] != "Updated other prompt." {
-		t.Fatalf("updated prompt = %+v, want team-b by stable id", updated)
+		t.Fatalf("updated prompt = %+v, want team-b by name and workspace", updated)
 	}
 
-	req.Params.Arguments = map[string]any{"id": "prompt_team-a_shared"}
+	req.Params.Arguments = map[string]any{"name": "shared", "content": "Ambiguous"}
+	res, err = toolUpdatePrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected ambiguous name error, got %+v", res.Content)
+	}
+
+	req.Params.Arguments = map[string]any{"name": "shared", "workspace_id": "team-a"}
 	res, err = toolDeletePrompt(deps)(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("delete prompt returned error: %+v", res.Content)
+	}
+
+	req.Params.Arguments = map[string]any{"name": "shared"}
+	res, err = toolGetPrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got map[string]any
+	decodeText(t, res, &got)
+	if got["id"] != "prompt_team-b_shared" || got["workspace_id"] != "team-b" {
+		t.Fatalf("get prompt after disambiguating delete = %+v, want remaining team-b prompt", got)
 	}
 }
 

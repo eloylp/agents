@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -390,9 +391,9 @@ func toolCreatePrompt(deps Deps) server.ToolHandlerFunc {
 
 func toolUpdatePrompt(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		ref, ok := promptRefArg(req)
-		if !ok {
-			return mcpgo.NewToolResultError("id or name is required"), nil
+		ref, err := resolvePromptRef(deps, req)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("resolve prompt", err), nil
 		}
 		args := req.GetArguments()
 		var patch daemonfleet.PromptPatch
@@ -415,9 +416,9 @@ func toolUpdatePrompt(deps Deps) server.ToolHandlerFunc {
 
 func toolDeletePrompt(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		ref, ok := promptRefArg(req)
-		if !ok {
-			return mcpgo.NewToolResultError("id or name is required"), nil
+		ref, err := resolvePromptRef(deps, req)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("resolve prompt", err), nil
 		}
 		prompt, err := deps.Store.ReadPrompt(ref)
 		if err != nil {
@@ -434,14 +435,56 @@ func toolDeletePrompt(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
-func promptRefArg(req mcpgo.CallToolRequest) (string, bool) {
+func resolvePromptRef(deps Deps, req mcpgo.CallToolRequest) (string, error) {
 	if id, ok := trimmedString(req, "id"); ok {
-		return id, true
+		return id, nil
 	}
 	if name, ok := trimmedString(req, "name"); ok {
-		return name, true
+		return resolvePromptName(deps, req, name)
 	}
-	return "", false
+	return "", fmt.Errorf("id or name is required")
+}
+
+func resolvePromptName(deps Deps, req mcpgo.CallToolRequest, name string) (string, error) {
+	targetName := fleet.NormalizePromptName(name)
+	workspaceID, hasWorkspace := trimmedStringOptional(req, "workspace_id")
+	repo, hasRepo := trimmedStringOptional(req, "repo")
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID != "" {
+		workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	}
+	repo = fleet.NormalizeRepoName(repo)
+	if hasRepo && repo != "" && workspaceID == "" {
+		return "", fmt.Errorf("repo requires workspace_id when resolving prompt %q", targetName)
+	}
+
+	prompts, err := deps.Store.ReadPrompts()
+	if err != nil {
+		return "", err
+	}
+	var matches []fleet.Prompt
+	for _, p := range prompts {
+		if p.Name != targetName {
+			continue
+		}
+		if hasWorkspace || hasRepo {
+			if p.WorkspaceID == workspaceID && p.Repo == repo {
+				matches = append(matches, p)
+			}
+			continue
+		}
+		matches = append(matches, p)
+	}
+	if len(matches) == 0 {
+		if hasWorkspace || hasRepo {
+			return "", fmt.Errorf("prompt %q not found in workspace %q repo %q", targetName, workspaceID, repo)
+		}
+		return "", fmt.Errorf("prompt %q not found", targetName)
+	}
+	if len(matches) > 1 {
+		return "", fmt.Errorf("ambiguous prompt name %q; pass id or workspace_id/repo", targetName)
+	}
+	return matches[0].ID, nil
 }
 
 // toolCreateBackend upserts a backend definition through the same path as
