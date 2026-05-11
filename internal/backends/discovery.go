@@ -504,9 +504,8 @@ func parseModels(raw string) []string {
 	}
 
 	// Plain-text fallback: one model per line, skip headers and decorators.
-	lines := strings.Split(raw, "\n")
-	names := make([]string, 0, len(lines))
-	for _, line := range lines {
+	var names []string
+	for line := range strings.SplitSeq(raw, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "|") || strings.HasPrefix(line, "*") || strings.HasPrefix(line, "#") {
 			continue
