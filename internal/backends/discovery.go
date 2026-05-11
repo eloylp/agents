@@ -592,8 +592,7 @@ func mergeEnv(base []string, override map[string]string) []string {
 	if len(override) == 0 {
 		return base
 	}
-	out := make([]string, 0, len(base)+len(override))
-	out = append(out, base...)
+	out := slices.Grow(slices.Clone(base), len(override))
 	for k, v := range override {
 		out = append(out, k+"="+v)
 	}
