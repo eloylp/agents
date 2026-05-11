@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/eloylp/agents/internal/fleet"
@@ -86,10 +85,10 @@ func (p TokenBudgetPatch) AnyFieldSet() bool {
 
 func validateBudget(b TokenBudget) error {
 	b = normalizeBudget(b)
-	if !slices.Contains([]string{"global", "workspace", "repo", "agent", "workspace+repo", "workspace+agent", "workspace+repo+agent", "backend", "workspace+backend"}, b.ScopeKind) {
+	if !validBudgetScopeKind(b.ScopeKind) {
 		return &ErrValidation{Msg: fmt.Sprintf("invalid scope_kind %q", b.ScopeKind)}
 	}
-	if !slices.Contains([]string{"daily", "weekly", "monthly"}, b.Period) {
+	if !validBudgetPeriod(b.Period) {
 		return &ErrValidation{Msg: fmt.Sprintf("invalid period %q: must be one of daily, weekly, monthly", b.Period)}
 	}
 	switch b.ScopeKind {
@@ -197,6 +196,22 @@ func normalizeBudget(b TokenBudget) TokenBudget {
 		b.ScopeName = ""
 	}
 	return b
+}
+
+func validBudgetScopeKind(kind string) bool {
+	switch kind {
+	case "global", "workspace", "repo", "agent", "workspace+repo", "workspace+agent", "workspace+repo+agent", "backend", "workspace+backend":
+		return true
+	}
+	return false
+}
+
+func validBudgetPeriod(period string) bool {
+	switch period {
+	case "daily", "weekly", "monthly":
+		return true
+	}
+	return false
 }
 
 func scanTokenBudget(s rowScanner) (TokenBudget, error) {
