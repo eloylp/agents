@@ -2731,7 +2731,7 @@ func TestStoreCRUDAgentPatchHonorsWorkspaceQuery(t *testing.T) {
 	}
 }
 
-// ── PATCH /skills/{name} ────────────────────────────────────────────
+// ── PATCH /skills/{id} ──────────────────────────────────────────────
 
 func TestStoreCRUDSkillPatchPrompt(t *testing.T) {
 	t.Parallel()

@@ -176,25 +176,34 @@ func toolCreateSkill(deps Deps) server.ToolHandlerFunc {
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
-		sk := fleet.Skill{Prompt: req.GetString("prompt", "")}
-		canonicalName, canonical, err := deps.Fleet.UpsertSkill(name, sk)
+		id := req.GetString("id", "")
+		workspaceID := req.GetString("workspace_id", "")
+		repo := req.GetString("repo", "")
+		if id == "" && workspaceID == "" && repo == "" {
+			id = name
+		}
+		sk := fleet.Skill{
+			ID:          id,
+			WorkspaceID: workspaceID,
+			Repo:        repo,
+			Name:        name,
+			Prompt:      req.GetString("prompt", ""),
+		}
+		canonicalName, canonical, err := deps.Fleet.UpsertSkill(id, sk)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("create skill", err), nil
 		}
-		return jsonResult(map[string]any{
-			"name":   canonicalName,
-			"prompt": canonical.Prompt,
-		})
+		return jsonResult(skillJSON(canonicalName, canonical))
 	}
 }
 
 // toolUpdateSkill partially updates a skill through the same path as PATCH
-// /skills/{name}. Only fields the caller passes are modified.
+// /skills/{id}. Only fields the caller passes are modified.
 func toolUpdateSkill(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		name, err := req.RequireString("name")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
+		ref, ok := skillRefArg(req)
+		if !ok {
+			return mcpgo.NewToolResultError("id or name is required"), nil
 		}
 		args := req.GetArguments()
 		var patch daemonfleet.SkillPatch
@@ -204,27 +213,24 @@ func toolUpdateSkill(deps Deps) server.ToolHandlerFunc {
 		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
-		canonicalName, canonical, uerr := deps.Fleet.UpdateSkillPatch(name, patch)
+		canonicalName, canonical, uerr := deps.Fleet.UpdateSkillPatch(ref, patch)
 		if uerr != nil {
 			return mcpgo.NewToolResultErrorFromErr("update skill", uerr), nil
 		}
-		return jsonResult(map[string]any{
-			"name":   canonicalName,
-			"prompt": canonical.Prompt,
-		})
+		return jsonResult(skillJSON(canonicalName, canonical))
 	}
 }
 
 // toolDeleteSkill removes a skill through the same path as DELETE
-// /skills/{name}. If any agent still references the skill the store surfaces a
+// /skills/{id}. If any agent still references the skill the store surfaces a
 // *store.ErrConflict, which the caller sees as a user-actionable error.
 func toolDeleteSkill(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		name, ok := trimmedString(req, "name")
+		ref, ok := skillRefArg(req)
 		if !ok {
-			return mcpgo.NewToolResultError("name is required"), nil
+			return mcpgo.NewToolResultError("id or name is required"), nil
 		}
-		canonical := fleet.NormalizeSkillName(name)
+		canonical := fleet.NormalizeSkillName(ref)
 		if err := deps.Fleet.DeleteSkill(canonical); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete skill", err), nil
 		}
@@ -233,6 +239,16 @@ func toolDeleteSkill(deps Deps) server.ToolHandlerFunc {
 			"name":   canonical,
 		})
 	}
+}
+
+func skillRefArg(req mcpgo.CallToolRequest) (string, bool) {
+	if id, ok := trimmedString(req, "id"); ok {
+		return id, true
+	}
+	if name, ok := trimmedString(req, "name"); ok {
+		return name, true
+	}
+	return "", false
 }
 
 func toolCreateWorkspace(deps Deps) server.ToolHandlerFunc {

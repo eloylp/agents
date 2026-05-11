@@ -276,7 +276,7 @@ type workspaceYAML struct {
 }
 
 // HandleExport serves GET /export, returning the workspace-aware config.yaml
-// fragment for global catalog assets and workspace-local fleet wiring.
+// fragment for reusable catalog assets and workspace-local fleet wiring.
 func (h *Handler) HandleExport(w http.ResponseWriter, _ *http.Request) {
 	b, err := h.ExportYAML()
 	if err != nil {

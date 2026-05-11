@@ -298,6 +298,30 @@ func UpsertSkill(db *sql.DB, name string, s fleet.Skill) error {
 	if s.Name == "" {
 		s.Name = name
 	}
+	if s.WorkspaceID == "" && s.Repo != "" {
+		return &ErrValidation{Msg: fmt.Sprintf("store: skill %q repo scope requires workspace_id", name)}
+	}
+	if name == "" {
+		var existingID string
+		err := queryCatalogIDByScopeName(db, "skills", s.WorkspaceID, s.Repo, s.Name).Scan(&existingID)
+		if err == nil {
+			name = existingID
+		} else if errors.Is(err, sql.ErrNoRows) {
+			id, derr := derivedCatalogID("skill_", s.WorkspaceID, s.Repo, s.Name)
+			if derr != nil {
+				return &ErrValidation{Msg: fmt.Sprintf("store: skill %q: %v", s.Name, derr)}
+			}
+			name = id
+		} else {
+			return fmt.Errorf("store: upsert skill %q: read existing: %w", s.Name, err)
+		}
+	}
+	if name == "" || s.Name == "" {
+		return &ErrValidation{Msg: "store: skill requires id and name"}
+	}
+	if err := validateEntityID(name); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: skill %q: %v", s.Name, err)}
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert skill %s: begin: %w", name, err)

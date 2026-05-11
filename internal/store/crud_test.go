@@ -429,6 +429,40 @@ func TestUpsertAndReadSkills(t *testing.T) {
 	}
 }
 
+func TestUpsertScopedSkillDerivesStableID(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	s := fleet.Skill{
+		WorkspaceID: "Platform",
+		Repo:        "EloyLP/Agents",
+		Name:        "Review",
+		Prompt:      "p",
+	}
+	if err := store.UpsertSkill(db, "", s); err != nil {
+		t.Fatalf("UpsertSkill scoped without id: %v", err)
+	}
+	if err := store.UpsertSkill(db, "", fleet.Skill{
+		WorkspaceID: "platform",
+		Repo:        "eloylp/agents",
+		Name:        "review",
+		Prompt:      "updated",
+	}); err != nil {
+		t.Fatalf("UpsertSkill scoped update without id: %v", err)
+	}
+	skills, err := store.ReadSkills(db)
+	if err != nil {
+		t.Fatalf("ReadSkills: %v", err)
+	}
+	got, ok := skills["skill_platform_eloylp_agents_review"]
+	if !ok {
+		t.Fatalf("derived scoped skill missing; keys=%v", slices.Collect(maps.Keys(skills)))
+	}
+	if got.WorkspaceID != "platform" || got.Repo != "eloylp/agents" || got.Name != "review" || got.Prompt != "updated" {
+		t.Fatalf("scoped skill = %+v, want normalized updated skill", got)
+	}
+}
+
 func TestDeleteSkill(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)

@@ -38,11 +38,11 @@ The same pattern works for Cursor, Cline, and any other MCP-compatible client; c
 | `create_agent` | Create or update an agent (upsert, full replace). |
 | `update_agent` | Partially update an agent by name (only supplied fields are changed). |
 | `delete_agent` | Delete an agent. `cascade=true` also removes repo bindings. |
-| `list_skills` | List all skills with prompt content. |
-| `get_skill` | Fetch one skill by name. |
-| `create_skill` | Create or update a skill (full replace). |
-| `update_skill` | Partially update a skill by name. |
-| `delete_skill` | Delete a skill. |
+| `list_skills` | List all skill catalog entries with prompt content, including global, workspace-scoped, and repo-scoped skills. |
+| `get_skill` | Fetch one skill by stable id; legacy global display-name lookup is accepted as a fallback. |
+| `create_skill` | Create or update a skill catalog entry. |
+| `update_skill` | Partially update a skill by stable id; legacy global display-name lookup is accepted as a fallback. |
+| `delete_skill` | Delete a skill by stable id; legacy global display-name lookup is accepted as a fallback. |
 | `list_prompts` | List all prompt catalog entries, including global, workspace-scoped, and repo-scoped prompts. |
 | `get_prompt` | Fetch one prompt by stable id; legacy global display-name lookup is accepted as a fallback. |
 | `create_prompt` | Create or update a prompt catalog entry. |
@@ -69,12 +69,12 @@ The same pattern works for Cursor, Cline, and any other MCP-compatible client; c
 | `get_binding` | Fetch one binding by ID, scoped to a repo. |
 | `update_binding` | Replace all fields of a binding by ID. |
 | `delete_binding` | Delete a binding by ID. |
-| `list_guardrails` | List every prompt guardrail (built-in + operator-added) in render order. |
-| `get_guardrail` | Fetch one guardrail by name. |
+| `list_guardrails` | List every guardrail catalog entry, including built-ins and scoped operator-added guardrails. |
+| `get_guardrail` | Fetch one guardrail by stable id; legacy global display-name lookup is accepted as a fallback. |
 | `create_guardrail` | Create or update an operator-defined guardrail. Built-in flags (`is_builtin`, `default_content`) are migration-managed and ignored on the wire. |
-| `update_guardrail` | Partially update a guardrail by name. Patchable: `description`, `content`, `enabled`, `position`. |
-| `delete_guardrail` | Delete a guardrail. Built-ins can be deleted from the MCP path; the dashboard double-confirms in the UI. |
-| `reset_guardrail` | Copy a built-in guardrail's `default_content` back into its `content`. Returns a validation error on operator-added rows. |
+| `update_guardrail` | Partially update a guardrail by stable id. Patchable: `description`, `content`, `enabled`, `position`. |
+| `delete_guardrail` | Delete a guardrail by stable id. Built-ins can be deleted from the MCP path; the dashboard double-confirms in the UI. |
+| `reset_guardrail` | Copy a built-in guardrail's `default_content` back into its `content` by stable id. Returns a validation error on operator-added rows. |
 
 ### Operations
 

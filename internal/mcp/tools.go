@@ -57,10 +57,12 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 	)
 	srv.AddTool(
 		mcpgo.NewTool("get_skill",
-			mcpgo.WithDescription("Fetch one skill's full prompt body by name."),
+			mcpgo.WithDescription("Fetch one skill's full prompt body by stable id. Legacy global display-name lookup is also accepted."),
+			mcpgo.WithString("id",
+				mcpgo.Description("Stable skill id. Preferred, and required for scoped skills that may share display names."),
+			),
 			mcpgo.WithString("name",
-				mcpgo.Required(),
-				mcpgo.Description("Skill name (case-insensitive)."),
+				mcpgo.Description("Legacy global skill display name fallback."),
 			),
 		),
 		toolGetSkill(deps),
@@ -283,10 +285,19 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 	if deps.Fleet != nil {
 		srv.AddTool(
 			mcpgo.NewTool("create_skill",
-				mcpgo.WithDescription("Create or update a skill. Upsert semantics: a write to an existing name overwrites it. Returns the canonical (normalized) skill persisted by the store. Same path as POST /skills."),
+				mcpgo.WithDescription("Create or update a skill. Upsert semantics: a write to an existing id overwrites it. Returns the canonical skill persisted by the store. Same path as POST /skills."),
+				mcpgo.WithString("id",
+					mcpgo.Description("Optional stable skill id. Omit to use the normalized name for global skills or derive a scoped id from workspace/repo/name."),
+				),
+				mcpgo.WithString("workspace_id",
+					mcpgo.Description("Optional workspace id for workspace- or repo-scoped skill visibility. Omit for global."),
+				),
+				mcpgo.WithString("repo",
+					mcpgo.Description("Optional repo name for repo-scoped skill visibility. Requires workspace_id."),
+				),
 				mcpgo.WithString("name",
 					mcpgo.Required(),
-					mcpgo.Description("Skill name. Lowercased and trimmed by the store."),
+					mcpgo.Description("User-facing skill display name. Lowercased and trimmed by the store."),
 				),
 				mcpgo.WithString("prompt",
 					mcpgo.Description("Skill prompt body (reusable guidance injected into composing agents' system prompt)."),
@@ -296,10 +307,12 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("update_skill",
-				mcpgo.WithDescription("Partially update a skill by name. Only fields present in the call are modified; everything else is preserved. Same path as PATCH /skills/{name}."),
+				mcpgo.WithDescription("Partially update a skill by stable id. Legacy global display-name lookup is also accepted. Only fields present in the call are modified. Same path as PATCH /skills/{id}."),
+				mcpgo.WithString("id",
+					mcpgo.Description("Stable skill id. Preferred, and required for scoped skills that may share display names."),
+				),
 				mcpgo.WithString("name",
-					mcpgo.Required(),
-					mcpgo.Description("Skill name (case-insensitive; matched after lowercasing)."),
+					mcpgo.Description("Legacy global skill display name fallback."),
 				),
 				mcpgo.WithString("prompt",
 					mcpgo.Description("New skill prompt body. Omit to leave unchanged."),
@@ -309,10 +322,12 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("delete_skill",
-				mcpgo.WithDescription("Delete a skill by name. Fails with a conflict error if any agent still references the skill. Same path as DELETE /skills/{name}."),
+				mcpgo.WithDescription("Delete a skill by stable id. Legacy global display-name lookup is also accepted. Fails if any agent still references the skill. Same path as DELETE /skills/{id}."),
+				mcpgo.WithString("id",
+					mcpgo.Description("Stable skill id. Preferred, and required for scoped skills that may share display names."),
+				),
 				mcpgo.WithString("name",
-					mcpgo.Required(),
-					mcpgo.Description("Skill name (case-insensitive; matched after lowercasing)."),
+					mcpgo.Description("Legacy global skill display name fallback."),
 				),
 			),
 			toolDeleteSkill(deps),
@@ -361,7 +376,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("update_workspace_guardrails",
-				mcpgo.WithDescription("Replace a workspace's selected global guardrail references. Same path as PUT /workspaces/{workspace}/guardrails."),
+				mcpgo.WithDescription("Replace a workspace's selected guardrail references. Same path as PUT /workspaces/{workspace}/guardrails."),
 				mcpgo.WithString("workspace",
 					mcpgo.Description("Workspace id or display name. Defaults to default."),
 				),
@@ -371,7 +386,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 					mcpgo.Items(map[string]any{
 						"type": "object",
 						"properties": map[string]any{
-							"guardrail_name": map[string]any{"type": "string", "description": "Global guardrail catalog name."},
+							"guardrail_name": map[string]any{"type": "string", "description": "Stable guardrail id. Legacy global display names are also accepted when unambiguous."},
 							"position":       map[string]any{"type": "integer", "description": "Render order. Lower renders first."},
 							"enabled":        map[string]any{"type": "boolean", "description": "Whether this workspace reference is active."},
 						},
@@ -469,10 +484,12 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("update_guardrail",
-				mcpgo.WithDescription("Partially update a guardrail by name. Only fields present in the call are modified; everything else is preserved. is_builtin and default_content are migration-managed and cannot be patched. Same path as PATCH /guardrails/{name}."),
+				mcpgo.WithDescription("Partially update a guardrail by stable id. Legacy global display-name lookup is also accepted. is_builtin and default_content are migration-managed and cannot be patched. Same path as PATCH /guardrails/{id}."),
+				mcpgo.WithString("id",
+					mcpgo.Description("Stable guardrail id. Preferred, and required for scoped guardrails that may share display names."),
+				),
 				mcpgo.WithString("name",
-					mcpgo.Required(),
-					mcpgo.Description("Guardrail name (case-insensitive; matched after lowercasing)."),
+					mcpgo.Description("Legacy global guardrail display name fallback."),
 				),
 				mcpgo.WithString("description",
 					mcpgo.Description("New description. Omit to leave unchanged."),
@@ -491,20 +508,24 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("delete_guardrail",
-				mcpgo.WithDescription("Delete a guardrail by name. Built-ins (e.g. 'security') can be deleted too, the dashboard double-confirms in the UI; the MCP path does not. Same path as DELETE /guardrails/{name}."),
+				mcpgo.WithDescription("Delete a guardrail by stable id. Legacy global display-name lookup is also accepted. Built-ins can be deleted too; the dashboard double-confirms in the UI. Same path as DELETE /guardrails/{id}."),
+				mcpgo.WithString("id",
+					mcpgo.Description("Stable guardrail id. Preferred, and required for scoped guardrails that may share display names."),
+				),
 				mcpgo.WithString("name",
-					mcpgo.Required(),
-					mcpgo.Description("Guardrail name (case-insensitive; matched after lowercasing)."),
+					mcpgo.Description("Legacy global guardrail display name fallback."),
 				),
 			),
 			toolDeleteGuardrail(deps),
 		)
 		srv.AddTool(
 			mcpgo.NewTool("reset_guardrail",
-				mcpgo.WithDescription("Reset a built-in guardrail's content back to its migration-seeded default_content. Returns a validation error when called on an operator-added row (no default to fall back to). Same path as POST /guardrails/{name}/reset."),
+				mcpgo.WithDescription("Reset a built-in guardrail's content back to its migration-seeded default_content by stable id. Legacy global display-name lookup is also accepted. Same path as POST /guardrails/{id}/reset."),
+				mcpgo.WithString("id",
+					mcpgo.Description("Stable guardrail id. Preferred, and required for scoped guardrails that may share display names."),
+				),
 				mcpgo.WithString("name",
-					mcpgo.Required(),
-					mcpgo.Description("Guardrail name (case-insensitive; matched after lowercasing). Must be a built-in."),
+					mcpgo.Description("Legacy global guardrail display name fallback. Must identify a built-in."),
 				),
 			),
 			toolResetGuardrail(deps),
@@ -900,6 +921,16 @@ func promptJSON(p fleet.Prompt) map[string]any {
 		"name":         p.Name,
 		"description":  p.Description,
 		"content":      p.Content,
+	}
+}
+
+func skillJSON(id string, s fleet.Skill) map[string]any {
+	return map[string]any{
+		"id":           id,
+		"workspace_id": s.WorkspaceID,
+		"repo":         s.Repo,
+		"name":         s.Name,
+		"prompt":       s.Prompt,
 	}
 }
 

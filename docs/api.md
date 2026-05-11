@@ -91,17 +91,17 @@ These routes are always mounted and backed by the SQLite database.
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/{resource}` | List all entries for a resource type (`workspaces`, `prompts`, `skills`, `backends`, `repos`, `guardrails`). Note: `GET /agents` is the workspace-filterable fleet snapshot above, not the CRUD list. |
-| `GET` | `/{resource}/{name-or-id}` | Fetch one entry. Repos use two path segments: `/repos/{owner}/{repo}`. Prompt routes use stable prompt IDs; legacy global prompt names are accepted as a compatibility fallback. |
+| `GET` | `/{resource}/{name-or-id}` | Fetch one entry. Repos use two path segments: `/repos/{owner}/{repo}`. Catalog routes (`prompts`, `skills`, `guardrails`) use stable IDs; legacy global names are accepted as a compatibility fallback. |
 | `POST` | `/{resource}` | Create or replace an entry. Resources: `workspaces`, `prompts`, `agents`, `skills`, `backends`, `repos`, `guardrails`. |
-| `PATCH` | `/{resource}/{name-or-id}` | Partial update of an entry. Only fields present in the JSON body are applied; unset fields are preserved. At least one field required. Resources: `workspaces`, `prompts`, `agents`, `skills`, `backends`, `guardrails`. Prompt routes use stable prompt IDs; legacy global prompt names are accepted as a compatibility fallback. |
+| `PATCH` | `/{resource}/{name-or-id}` | Partial update of an entry. Only fields present in the JSON body are applied; unset fields are preserved. At least one field required. Resources: `workspaces`, `prompts`, `agents`, `skills`, `backends`, `guardrails`. Catalog routes (`prompts`, `skills`, `guardrails`) use stable IDs; legacy global names are accepted as a compatibility fallback. |
 | `PATCH` | `/repos/{owner}/{repo}` | Toggle a repo's `enabled` flag. Only `enabled` is patchable; binding edits go through `/repos/{owner}/{repo}/bindings/{id}`, and full repo replacement (including bindings) goes through `POST /repos`. |
-| `DELETE` | `/{resource}/{name-or-id}` | Remove an entry. Prompt routes use stable prompt IDs; legacy global prompt names are accepted as a compatibility fallback. |
+| `DELETE` | `/{resource}/{name-or-id}` | Remove an entry. Catalog routes (`prompts`, `skills`, `guardrails`) use stable IDs; legacy global names are accepted as a compatibility fallback. |
 | `DELETE` | `/agents/{name}` | Same as the generic delete, plus a `cascade` query param. By default returns `409 Conflict` with the list of repos still binding the agent; pass `?cascade=true` to also drop those bindings in the same transaction. |
 | `POST` | `/repos/{owner}/{repo}/bindings` | Create one binding on a repo. Returns the persisted binding with its generated ID. |
 | `GET` | `/repos/{owner}/{repo}/bindings/{id}` | Fetch one binding by ID. |
 | `PATCH` | `/repos/{owner}/{repo}/bindings/{id}` | Replace all fields of a binding by ID. |
 | `DELETE` | `/repos/{owner}/{repo}/bindings/{id}` | Remove a binding by ID. |
-| `POST` | `/guardrails/{name}/reset` | Copy a built-in guardrail's `default_content` back into its `content`. Returns 400 for operator-added rows (no default to fall back to). |
+| `POST` | `/guardrails/{id}/reset` | Copy a built-in guardrail's `default_content` back into its `content`. Legacy global names are accepted as a compatibility fallback. Returns 400 for operator-added rows (no default to fall back to). |
 | `GET` | `/workspaces/{workspace}/guardrails` | List the selected guardrail references for one workspace in render order. |
 | `PUT` | `/workspaces/{workspace}/guardrails` | Replace the selected guardrail references for one workspace. |
 | `GET` | `/export` | Export full fleet config as workspace-aware YAML, including reusable prompts, skills, guardrails, and workspace-local agents/repos/budgets. |

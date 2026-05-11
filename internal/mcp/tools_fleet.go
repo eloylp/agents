@@ -67,11 +67,7 @@ func toolListSkills(deps Deps) server.ToolHandlerFunc {
 		names := slices.Sorted(maps.Keys(skills))
 		out := make([]map[string]any, 0, len(names))
 		for _, n := range names {
-			s := skills[n]
-			out = append(out, map[string]any{
-				"name":   n,
-				"prompt": s.Prompt,
-			})
+			out = append(out, skillJSON(n, skills[n]))
 		}
 		return jsonResult(out)
 	}
@@ -152,28 +148,24 @@ func toolGetPrompt(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
-// toolGetSkill fetches one skill by its map key. Map lookup is
-// case-insensitive via fleet.NormalizeSkillName so agents can reference
-// skills without worrying about casing.
+// toolGetSkill fetches one skill by stable id, with a legacy global-name
+// fallback because old global skill IDs match their display names.
 func toolGetSkill(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		name, ok := trimmedString(req, "name")
+		ref, ok := skillRefArg(req)
 		if !ok {
-			return mcpgo.NewToolResultError("name is required"), nil
+			return mcpgo.NewToolResultError("id or name is required"), nil
 		}
 		skills, err := deps.Store.ReadSkills()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get skill", err), nil
 		}
-		key := fleet.NormalizeSkillName(name)
+		key := fleet.NormalizeSkillName(ref)
 		s, found := skills[key]
 		if !found {
-			return mcpgo.NewToolResultErrorf("skill %q not found", name), nil
+			return mcpgo.NewToolResultErrorf("skill %q not found", ref), nil
 		}
-		return jsonResult(map[string]any{
-			"name":   key,
-			"prompt": s.Prompt,
-		})
+		return jsonResult(skillJSON(key, s))
 	}
 }
 

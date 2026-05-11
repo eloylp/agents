@@ -42,7 +42,7 @@ func guardrailToJSON(g fleet.Guardrail) storeGuardrailJSON {
 }
 
 // GuardrailPatch is the partial-update shape for a guardrail. Used by both
-// the REST PATCH /guardrails/{name} handler and the MCP update_guardrail
+// the REST PATCH /guardrails/{id} handler and the MCP update_guardrail
 // tool. A nil field means "don't touch". The is_builtin and
 // default_content fields are deliberately not patchable, built-in
 // status is set by the migration; default_content is reset territory.
@@ -116,7 +116,7 @@ func (h *Handler) handleGuardrailCreate(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) handleGuardrailGet(w http.ResponseWriter, r *http.Request) {
-	name := fleet.NormalizeGuardrailName(mux.Vars(r)["name"])
+	name := fleet.NormalizeGuardrailName(mux.Vars(r)["id"])
 	g, err := h.store.GetGuardrail(name)
 	if err != nil {
 		h.writeErr(w, err, "guardrail get")
@@ -126,12 +126,12 @@ func (h *Handler) handleGuardrailGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleGuardrailPatchByName(w http.ResponseWriter, r *http.Request) {
-	name := fleet.NormalizeGuardrailName(mux.Vars(r)["name"])
+	name := fleet.NormalizeGuardrailName(mux.Vars(r)["id"])
 	h.handleGuardrailPatch(w, r, name)
 }
 
 func (h *Handler) handleGuardrailDelete(w http.ResponseWriter, r *http.Request) {
-	name := fleet.NormalizeGuardrailName(mux.Vars(r)["name"])
+	name := fleet.NormalizeGuardrailName(mux.Vars(r)["id"])
 	if err := h.DeleteGuardrail(name); err != nil {
 		h.writeErr(w, err, "guardrail delete")
 		return
@@ -157,7 +157,7 @@ func (h *Handler) handleGuardrailPatch(w http.ResponseWriter, r *http.Request, n
 }
 
 func (h *Handler) handleGuardrailReset(w http.ResponseWriter, r *http.Request) {
-	name := fleet.NormalizeGuardrailName(mux.Vars(r)["name"])
+	name := fleet.NormalizeGuardrailName(mux.Vars(r)["id"])
 	g, err := h.ResetGuardrail(name)
 	if err != nil {
 		h.writeErr(w, err, "guardrail reset")
@@ -201,7 +201,7 @@ func (h *Handler) UpsertGuardrail(g fleet.Guardrail) (fleet.Guardrail, error) {
 	return fleet.Guardrail{}, &store.ErrNotFound{Msg: fmt.Sprintf("guardrail %q not found after upsert", g.Name)}
 }
 
-// UpdateGuardrailPatch applies a partial patch to the named guardrail.
+// UpdateGuardrailPatch applies a partial patch to the addressed guardrail.
 // Returns *store.ErrNotFound when the row does not exist. Used by both
 // the REST PATCH handler and the MCP update_guardrail tool.
 func (h *Handler) UpdateGuardrailPatch(name string, patch GuardrailPatch) (fleet.Guardrail, error) {
@@ -217,7 +217,7 @@ func (h *Handler) UpdateGuardrailPatch(name string, patch GuardrailPatch) (fleet
 	return h.store.GetGuardrail(normalized)
 }
 
-// DeleteGuardrail removes the named guardrail. Returns *store.ErrNotFound
+// DeleteGuardrail removes the addressed guardrail. Returns *store.ErrNotFound
 // when the row does not exist.
 func (h *Handler) DeleteGuardrail(name string) error {
 	return h.store.DeleteGuardrail(name)
@@ -226,7 +226,7 @@ func (h *Handler) DeleteGuardrail(name string) error {
 // ResetGuardrail copies a built-in guardrail's default_content back into
 // its content. Returns *store.ErrValidation when the row has no default
 // (i.e., it is operator-added) and *store.ErrNotFound when the row does
-// not exist. Used by both POST /guardrails/{name}/reset and the MCP
+// not exist. Used by both POST /guardrails/{id}/reset and the MCP
 // reset_guardrail tool.
 func (h *Handler) ResetGuardrail(name string) (fleet.Guardrail, error) {
 	if err := h.store.ResetGuardrail(name); err != nil {

@@ -5,6 +5,9 @@ import Modal from '@/components/Modal'
 import MarkdownEditor from '@/components/MarkdownEditor'
 
 interface Skill {
+  id?: string
+  workspace_id?: string
+  repo?: string
   name: string
   prompt: string
 }
@@ -74,7 +77,7 @@ export default function SkillsPage() {
 
   const [modal, setModal] = useState<'create' | 'edit' | 'delete' | null>(null)
   const [selected, setSelected] = useState<Skill>(emptyForm)
-  const [deleteTarget, setDeleteTarget] = useState('')
+  const [deleteTarget, setDeleteTarget] = useState<Skill | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
 
@@ -82,8 +85,8 @@ export default function SkillsPage() {
     setLoading(true)
     fetch('/skills')
       .then(r => r.json())
-      .then((data: { name: string; prompt: string }[]) => {
-        setSkills(data.map(s => ({ name: s.name, prompt: s.prompt })))
+      .then((data: Skill[]) => {
+        setSkills((data ?? []).map(s => ({ ...s, id: s.id || s.name })))
         setLoading(false)
       })
       .catch(e => { setError(String(e)); setLoading(false) })
@@ -107,10 +110,11 @@ export default function SkillsPage() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch('/skills', {
-        method: 'POST',
+      const isNew = modal === 'create'
+      const res = await fetch(isNew ? '/skills' : `/skills/${encodeURIComponent(form.id || form.name)}`, {
+        method: isNew ? 'POST' : 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: form.name, prompt: form.prompt }),
+        body: JSON.stringify(isNew ? { name: form.name, prompt: form.prompt } : { prompt: form.prompt }),
       })
       if (!res.ok) {
         setSaveError((await res.text()) || 'Save failed')
@@ -125,16 +129,17 @@ export default function SkillsPage() {
     setSaving(false)
   }
 
-  const confirmDelete = (name: string) => {
-    setDeleteTarget(name)
+  const confirmDelete = (skill: Skill) => {
+    setDeleteTarget(skill)
     setSaveError('')
     setModal('delete')
   }
 
   const deleteSkill = async () => {
+    if (!deleteTarget) return
     setSaving(true)
     try {
-      const res = await fetch(`/skills/${encodeURIComponent(deleteTarget)}`, { method: 'DELETE' })
+      const res = await fetch(`/skills/${encodeURIComponent(deleteTarget.id || deleteTarget.name)}`, { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         setSaveError((await res.text()) || 'Delete failed')
         setSaving(false)
@@ -146,6 +151,12 @@ export default function SkillsPage() {
       setSaveError(String(e))
     }
     setSaving(false)
+  }
+
+  const scopeLabel = (sk: Skill) => {
+    if (sk.repo) return `${sk.workspace_id || 'default'} / ${sk.repo}`
+    if (sk.workspace_id) return `${sk.workspace_id} workspace`
+    return 'Global'
   }
 
   return (
@@ -178,10 +189,11 @@ export default function SkillsPage() {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
         {skills.map(sk => (
-          <Card key={sk.name}>
+          <Card key={sk.id || sk.name}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, color: 'var(--text-heading)', marginBottom: '0.35rem' }}>{sk.name}</div>
+                <div style={{ fontWeight: 700, color: 'var(--text-heading)', marginBottom: '0.2rem' }}>{sk.name}</div>
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginBottom: '0.35rem' }}>{scopeLabel(sk)}</div>
                 <pre style={{
                   fontSize: '0.78rem', color: 'var(--text-faint)', background: 'var(--bg)',
                   border: '1px solid var(--border-subtle)', borderRadius: '4px', padding: '0.5rem',
@@ -193,7 +205,7 @@ export default function SkillsPage() {
               </div>
               <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
                 <button onClick={() => openEdit(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--accent)' }}>Edit</button>
-                <button onClick={() => confirmDelete(sk.name)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--text-danger)' }}>Delete</button>
+                <button onClick={() => confirmDelete(sk)} style={{ padding: '3px 10px', borderRadius: '5px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--text-danger)' }}>Delete</button>
               </div>
             </div>
           </Card>
@@ -216,7 +228,7 @@ export default function SkillsPage() {
       {modal === 'delete' && (
         <Modal title="Delete skill" onClose={() => setModal(null)}>
           <p style={{ color: 'var(--text)', fontSize: '0.9rem', marginBottom: '1.25rem' }}>
-            Delete skill <strong>{deleteTarget}</strong>? This cannot be undone.
+            Delete skill <strong>{deleteTarget?.name}</strong>? This cannot be undone.
           </p>
           {saveError && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>{saveError}</p>}
           <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>

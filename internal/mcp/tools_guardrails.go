@@ -44,11 +44,11 @@ func toolListGuardrails(deps Deps) server.ToolHandlerFunc {
 
 func toolGetGuardrail(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		name, ok := trimmedString(req, "name")
+		ref, ok := guardrailRefArg(req)
 		if !ok {
-			return mcpgo.NewToolResultError("name is required"), nil
+			return mcpgo.NewToolResultError("id or name is required"), nil
 		}
-		g, err := deps.Store.GetGuardrail(name)
+		g, err := deps.Store.GetGuardrail(ref)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get guardrail", err), nil
 		}
@@ -86,9 +86,9 @@ func toolCreateGuardrail(deps Deps) server.ToolHandlerFunc {
 
 func toolUpdateGuardrail(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		name, err := req.RequireString("name")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
+		ref, ok := guardrailRefArg(req)
+		if !ok {
+			return mcpgo.NewToolResultError("id or name is required"), nil
 		}
 		args := req.GetArguments()
 		var patch daemonfleet.GuardrailPatch
@@ -116,7 +116,7 @@ func toolUpdateGuardrail(deps Deps) server.ToolHandlerFunc {
 		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
-		canonical, err := deps.Fleet.UpdateGuardrailPatch(name, patch)
+		canonical, err := deps.Fleet.UpdateGuardrailPatch(ref, patch)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("update guardrail", err), nil
 		}
@@ -126,28 +126,43 @@ func toolUpdateGuardrail(deps Deps) server.ToolHandlerFunc {
 
 func toolDeleteGuardrail(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		name, ok := trimmedString(req, "name")
+		ref, ok := guardrailRefArg(req)
 		if !ok {
-			return mcpgo.NewToolResultError("name is required"), nil
+			return mcpgo.NewToolResultError("id or name is required"), nil
 		}
-		canonical := fleet.NormalizeGuardrailName(name)
+		g, err := deps.Store.GetGuardrail(ref)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("read guardrail before delete", err), nil
+		}
+		canonical := g.ID
 		if err := deps.Fleet.DeleteGuardrail(canonical); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete guardrail", err), nil
 		}
 		return jsonResult(map[string]any{
 			"status": "deleted",
-			"name":   canonical,
+			"id":     g.ID,
+			"name":   g.Name,
 		})
 	}
 }
 
+func guardrailRefArg(req mcpgo.CallToolRequest) (string, bool) {
+	if id, ok := trimmedString(req, "id"); ok {
+		return id, true
+	}
+	if name, ok := trimmedString(req, "name"); ok {
+		return name, true
+	}
+	return "", false
+}
+
 func toolResetGuardrail(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		name, ok := trimmedString(req, "name")
+		ref, ok := guardrailRefArg(req)
 		if !ok {
-			return mcpgo.NewToolResultError("name is required"), nil
+			return mcpgo.NewToolResultError("id or name is required"), nil
 		}
-		g, err := deps.Fleet.ResetGuardrail(name)
+		g, err := deps.Fleet.ResetGuardrail(ref)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("reset guardrail", err), nil
 		}

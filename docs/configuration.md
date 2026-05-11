@@ -4,7 +4,7 @@ The agent fleet lives in a SQLite database that the daemon boots from. You manag
 
 This page documents the schema, using YAML examples for clarity. Every field shown here also exists as a column in the SQLite store and as a JSON field on the CRUD endpoints; the three surfaces are interchangeable.
 
-The import/export schema is split into global catalog domains and workspace-local
+The import/export schema is split into reusable catalog domains and workspace-local
 runtime wiring:
 
 ```yaml
@@ -271,8 +271,8 @@ Rules:
 
 - `name` is a stable identifier, normalised to lowercase + dash-joined.
 - `content` is the text the agent sees, prepended verbatim to the System portion of its prompt.
-- `enabled` on the global catalog records the default state copied into new workspace references. The workspace reference's `enabled` flag controls whether that workspace renders it.
-- `position` on the global catalog is the default order copied into new workspace references. Workspace references carry their own order.
+- `enabled` on the catalog record stores the default state copied into new workspace references. The workspace reference's `enabled` flag controls whether that workspace renders it.
+- `position` on the catalog record stores the default order copied into new workspace references. Workspace references carry their own order.
 - `is_builtin` and `default_content` are migration-managed and intentionally not part of the YAML schema. A re-import that includes the `security` row updates `content` / `description` / `enabled` / `position` only; the seeded `default_content` is preserved so the dashboard's **Reset to default** button keeps working.
 
 ## Environment variables
@@ -297,4 +297,4 @@ curl -s http://localhost:8080/export > fleet.yaml
 curl -X POST http://localhost:8080/import --data-binary @fleet.yaml
 ```
 
-The CRUD endpoints for `/workspaces`, `/prompts`, `/agents`, `/skills`, `/backends`, `/repos`, and `/guardrails` are always mounted and backed by the SQLite database. Workspace-scoped endpoints accept `?workspace=<id>` and default to `default` for compatibility. `agents`, `skills`, `backends`, `prompts`, and `guardrails` support partial update routes where documented; `PATCH /repos/{owner}/{repo}` is enabled-only; binding edits go through `/repos/{owner}/{repo}/bindings/{id}`, and full repo replacement goes through `POST /repos`. Prompt item routes use stable prompt IDs because scoped prompts may share display names; legacy global prompt names remain accepted as a compatibility fallback. Guardrails additionally support `POST /guardrails/{name}/reset` for built-ins. The daemon auto-reloads cron schedules after writes that affect runnable fleet state. Agent memory is stored in the same SQLite database and is scoped by workspace.
+The CRUD endpoints for `/workspaces`, `/prompts`, `/agents`, `/skills`, `/backends`, `/repos`, and `/guardrails` are always mounted and backed by the SQLite database. Workspace-scoped endpoints accept `?workspace=<id>` and default to `default` for compatibility. `agents`, `skills`, `backends`, `prompts`, and `guardrails` support partial update routes where documented; `PATCH /repos/{owner}/{repo}` is enabled-only; binding edits go through `/repos/{owner}/{repo}/bindings/{id}`, and full repo replacement goes through `POST /repos`. Catalog item routes (`/prompts/{id}`, `/skills/{id}`, `/guardrails/{id}`) use stable IDs because scoped catalog entries may share display names; legacy global names remain accepted as a compatibility fallback. Guardrails additionally support `POST /guardrails/{id}/reset` for built-ins. The daemon auto-reloads cron schedules after writes that affect runnable fleet state. Agent memory is stored in the same SQLite database and is scoped by workspace.

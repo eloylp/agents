@@ -78,16 +78,16 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 
 	r.Handle("/skills", withTimeout(http.HandlerFunc(h.handleSkillsList))).Methods(http.MethodGet)
 	r.Handle("/skills", withTimeout(http.HandlerFunc(h.handleSkillCreate))).Methods(http.MethodPost)
-	r.Handle("/skills/{name}", withTimeout(http.HandlerFunc(h.handleSkillGet))).Methods(http.MethodGet)
-	r.Handle("/skills/{name}", withTimeout(http.HandlerFunc(h.handleSkillPatchByName))).Methods(http.MethodPatch)
-	r.Handle("/skills/{name}", withTimeout(http.HandlerFunc(h.handleSkillDelete))).Methods(http.MethodDelete)
+	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillGet))).Methods(http.MethodGet)
+	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillPatchByName))).Methods(http.MethodPatch)
+	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillDelete))).Methods(http.MethodDelete)
 
 	r.Handle("/guardrails", withTimeout(http.HandlerFunc(h.handleGuardrailsList))).Methods(http.MethodGet)
 	r.Handle("/guardrails", withTimeout(http.HandlerFunc(h.handleGuardrailCreate))).Methods(http.MethodPost)
-	r.Handle("/guardrails/{name}", withTimeout(http.HandlerFunc(h.handleGuardrailGet))).Methods(http.MethodGet)
-	r.Handle("/guardrails/{name}", withTimeout(http.HandlerFunc(h.handleGuardrailPatchByName))).Methods(http.MethodPatch)
-	r.Handle("/guardrails/{name}", withTimeout(http.HandlerFunc(h.handleGuardrailDelete))).Methods(http.MethodDelete)
-	r.Handle("/guardrails/{name}/reset", withTimeout(http.HandlerFunc(h.handleGuardrailReset))).Methods(http.MethodPost)
+	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailGet))).Methods(http.MethodGet)
+	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailPatchByName))).Methods(http.MethodPatch)
+	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailDelete))).Methods(http.MethodDelete)
+	r.Handle("/guardrails/{id}/reset", withTimeout(http.HandlerFunc(h.handleGuardrailReset))).Methods(http.MethodPost)
 
 	r.Handle("/prompts", withTimeout(http.HandlerFunc(h.handlePromptsList))).Methods(http.MethodGet)
 	r.Handle("/prompts", withTimeout(http.HandlerFunc(h.handlePromptCreate))).Methods(http.MethodPost)
@@ -454,8 +454,8 @@ func skillToStoreJSON(id string, sk fleet.Skill) storeSkillJSON {
 }
 
 // SkillPatch is the partial-update shape for a skill. Used by both the REST
-// PATCH /skills/{name} handler and the MCP update_skill tool. A nil Prompt
-// means "don't touch".
+// PATCH /skills/{id} handler and the MCP update_skill tool. A nil Prompt means
+// "don't touch".
 type SkillPatch struct {
 	Prompt *string `json:"prompt,omitempty"`
 }
@@ -492,7 +492,7 @@ func (h *Handler) handleSkillCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := req.ID
-	if id == "" {
+	if id == "" && req.WorkspaceID == "" && req.Repo == "" {
 		id = req.Name
 	}
 	name, sk, err := h.UpsertSkill(id, fleet.Skill{ID: id, WorkspaceID: req.WorkspaceID, Repo: req.Repo, Name: req.Name, Prompt: req.Prompt})
@@ -504,7 +504,7 @@ func (h *Handler) handleSkillCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleSkillGet(w http.ResponseWriter, r *http.Request) {
-	name := fleet.NormalizeSkillName(mux.Vars(r)["name"])
+	name := fleet.NormalizeSkillName(mux.Vars(r)["id"])
 	skills, err := h.store.ReadSkills()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read skills: %v", err), http.StatusInternalServerError)
@@ -519,12 +519,12 @@ func (h *Handler) handleSkillGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleSkillPatchByName(w http.ResponseWriter, r *http.Request) {
-	name := fleet.NormalizeSkillName(mux.Vars(r)["name"])
+	name := fleet.NormalizeSkillName(mux.Vars(r)["id"])
 	h.handleSkillPatch(w, r, name)
 }
 
 func (h *Handler) handleSkillDelete(w http.ResponseWriter, r *http.Request) {
-	name := fleet.NormalizeSkillName(mux.Vars(r)["name"])
+	name := fleet.NormalizeSkillName(mux.Vars(r)["id"])
 	if err := h.DeleteSkill(name); err != nil {
 		h.writeErr(w, err, "skill delete or cron reload")
 		return
@@ -552,17 +552,33 @@ func (h *Handler) handleSkillPatch(w http.ResponseWriter, r *http.Request, name 
 // ── Skill methods (exposed for MCP) ───────────────────────────────────────────────────────────────────────────────
 
 // UpsertSkill writes a single skill into the store and reloads the cron
-// scheduler. Returns the canonical (normalized) name and Skill that were
-// persisted. Empty/whitespace names are rejected as *store.ErrValidation.
+// scheduler. Returns the canonical stable id and Skill that were persisted.
+// Empty id is accepted when the Skill carries a name, allowing scoped skill
+// creates to derive the same stable id shape as imports.
 func (h *Handler) UpsertSkill(name string, sk fleet.Skill) (string, fleet.Skill, error) {
-	if strings.TrimSpace(name) == "" {
+	if strings.TrimSpace(name) == "" && strings.TrimSpace(sk.Name) == "" {
 		return "", fleet.Skill{}, &store.ErrValidation{Msg: "name is required"}
 	}
 	if err := h.store.UpsertSkill(name, sk); err != nil {
 		return "", fleet.Skill{}, err
 	}
+	skills, err := h.store.ReadSkills()
+	if err != nil {
+		return "", fleet.Skill{}, err
+	}
+	normalizedID := fleet.NormalizeSkillName(name)
+	if normalizedID != "" {
+		if persisted, ok := skills[normalizedID]; ok {
+			return normalizedID, persisted, nil
+		}
+	}
 	fleet.NormalizeSkill(&sk)
-	return fleet.NormalizeSkillName(name), sk, nil
+	for id, persisted := range skills {
+		if persisted.WorkspaceID == sk.WorkspaceID && persisted.Repo == sk.Repo && persisted.Name == sk.Name {
+			return id, persisted, nil
+		}
+	}
+	return "", fleet.Skill{}, &store.ErrNotFound{Msg: fmt.Sprintf("skill %q not found after upsert", sk.Name)}
 }
 
 // UpdateSkillPatch applies a partial patch to the named skill. Returns
