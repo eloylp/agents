@@ -4,6 +4,7 @@ import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import FullscreenModal from '@/components/FullscreenModal'
 import MarkdownEditor from '@/components/MarkdownEditor'
+import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { useSelectedWorkspace } from '@/lib/workspace'
 
 interface Guardrail {
@@ -389,6 +390,9 @@ export default function GuardrailsManager() {
     <div>
       <Card title={`Workspace guardrails: ${workspaceLabel}`} style={{ marginBottom: '1rem' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <WorkspaceSelect compact />
+          </div>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', margin: 0 }}>
             Selected guardrails render for this workspace in the order shown. The reusable catalog below controls the guardrail text.
           </p>

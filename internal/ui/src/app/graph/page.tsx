@@ -10,6 +10,7 @@ import {
   Position,
   BaseEdge,
   EdgeLabelRenderer,
+  ViewportPortal,
   type Node,
   type Edge,
   type NodeProps,
@@ -24,6 +25,7 @@ import Card from '@/components/Card'
 import AgentForm, { emptyAgentForm, type BackendOption } from '@/components/AgentForm'
 import BadgePicker from '@/components/BadgePicker'
 import RunButton from '@/components/RunButton'
+import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { useSelectedWorkspace, withWorkspace, type CatalogItem } from '@/lib/workspace'
 import { type Binding } from '@/lib/bindings'
 import { fmtDuration } from '@/lib/format'
@@ -91,7 +93,7 @@ interface RunnerRow {
   kind: string
   repo: string
   number: number
-  status: 'enqueued' | 'running' | 'success' | 'error'
+  status: 'enqueued' | 'running' | 'success' | 'error' | 'skipped'
   agent?: string
   target_agent?: string
   span_id?: string
@@ -122,6 +124,25 @@ type DispatchEdgeData = {
   onOpen?: (edge: DispatchEdgeData) => void
 }
 
+type RepoBoundary = {
+  repo: string
+  x: number
+  y: number
+  width: number
+  height: number
+  count: number
+}
+
+type BindingEdgeData = {
+  agent: string
+  repo: string
+}
+
+const AGENT_NODE_WIDTH = 220
+const AGENT_NODE_HEIGHT = 105
+const REPO_BOUNDARY_PADDING = 52
+const REPO_BOUNDARY_HEADER = 26
+
 const SUPPORTED_EVENTS = [
   'issues.labeled', 'issues.opened', 'issues.edited', 'issues.reopened', 'issues.closed',
   'pull_request.labeled', 'pull_request.opened', 'pull_request.synchronize',
@@ -135,6 +156,10 @@ function repoPath(name: string): string {
   const [owner, ...rest] = name.split('/')
   const repo = rest.join('/')
   return `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
+}
+
+function repoNodeID(repo: string): string {
+  return `repo-anchor:${encodeURIComponent(repo)}`
 }
 
 function bindingTrigger(b: Binding): string {
@@ -217,6 +242,32 @@ function DispatchEdge(props: EdgeProps) {
   )
 }
 
+function BindingEdge(props: EdgeProps) {
+  const data = props.data as BindingEdgeData
+  const [edgePath] = getBezierPath({
+    sourceX: props.sourceX,
+    sourceY: props.sourceY,
+    sourcePosition: props.sourcePosition,
+    targetX: props.targetX,
+    targetY: props.targetY,
+    targetPosition: props.targetPosition,
+  })
+  return (
+    <BaseEdge
+      id={props.id}
+      path={edgePath}
+      interactionWidth={8}
+      style={{
+        stroke: 'rgba(148,163,184,0.42)',
+        strokeWidth: 1,
+        strokeDasharray: '2 5',
+        pointerEvents: 'none',
+      }}
+      aria-label={`${data.agent} is bound to ${data.repo}`}
+    />
+  )
+}
+
 function AgentNode({ data }: NodeProps) {
   const d = data as { label: string; status: string; description: string; dispatchable: boolean; skills: string[]; highlight?: 'source' | 'target' | 'selected' }
   const statusColors: Record<string, { bg: string; border: string; icon: string }> = {
@@ -283,8 +334,30 @@ function AgentNode({ data }: NodeProps) {
   )
 }
 
-const nodeTypes = { agent: AgentNode }
-const edgeTypes = { dispatch: DispatchEdge }
+function RepoNode({ data }: NodeProps) {
+  const d = data as { label: string; enabled: boolean; bindingCount: number }
+  return (
+    <div style={{
+      minWidth: 180,
+      maxWidth: 240,
+      padding: '8px 12px',
+      background: 'var(--bg)',
+      border: '1px dashed rgba(148,163,184,0.65)',
+      color: d.enabled ? 'var(--text-muted)' : 'var(--text-faint)',
+      fontSize: '0.72rem',
+      boxShadow: '0 2px 6px rgba(0,0,0,0.18)',
+      opacity: d.enabled ? 1 : 0.62,
+    }}>
+      <div style={{ fontWeight: 700, color: d.enabled ? 'var(--text)' : 'var(--text-faint)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {d.label}
+      </div>
+      <div style={{ marginTop: 2 }}>{d.bindingCount} binding{d.bindingCount === 1 ? '' : 's'}</div>
+    </div>
+  )
+}
+
+const nodeTypes = { agent: AgentNode, repo: RepoNode }
+const edgeTypes = { dispatch: DispatchEdge, binding: BindingEdge }
 
 function layoutGraph(nodes: Node[], edges: Edge[]): Node[] {
   const g = new dagre.graphlib.Graph()
@@ -448,17 +521,15 @@ export default function GraphPage() {
     setPanelMode('edge')
   }, [])
 
-  const { flowNodes, flowEdges, wiringInfo } = useMemo(() => {
+  const { flowNodes, flowEdges, repoBoundaries, wiringInfo } = useMemo(() => {
     const visibleAgents = repoFilter
       ? agents.filter(a => (a.bindings ?? []).some(b => b.repo === repoFilter))
       : agents
     const visibleNames = new Set(visibleAgents.map(a => a.name))
     const idByName = new Map(visibleAgents.map(a => [a.name, a.id || a.name]))
 
-    // Build combined edge set
     const allEdges: Array<{ from: string; to: string; isActive: boolean; count: number; dispatches: DispatchRecord[] }> = []
     const seen = new Set<string>()
-
     visibleAgents.forEach(a => {
       (a.can_dispatch ?? []).forEach(target => {
         if (!visibleNames.has(target)) return
@@ -468,7 +539,6 @@ export default function GraphPage() {
         allEdges.push({ from: a.name, to: target, isActive: !!active, count: active?.count ?? 0, dispatches: active?.dispatches ?? [] })
       })
     })
-
     graphData.edges.forEach(e => {
       const key = `${e.from}->${e.to}`
       const active = activeEdgeMap.get(key)
@@ -477,9 +547,7 @@ export default function GraphPage() {
       }
     })
 
-    // Build nodes from visible agents
     const highlightedEdge = selectedEdge ?? hoveredEdge
-
     const nodes: Node[] = visibleAgents.map(a => {
       const highlight = highlightedEdge?.from === a.name
         ? 'source'
@@ -505,8 +573,7 @@ export default function GraphPage() {
       }
     })
 
-    // Build edges
-    const edges: Edge[] = allEdges.map((e, i) => {
+    const dispatchEdges: Edge[] = allEdges.map(e => {
       const key = `${e.from}->${e.to}`
       const selected = key === selectedEdgeKey
       const hovered = key === hoveredEdgeKey
@@ -536,24 +603,118 @@ export default function GraphPage() {
       }
     })
 
-    const laid = layoutGraph(nodes, edges).map(n => {
+    const repoRows = repos
+      .filter(repo => !repoFilter || repo.name === repoFilter)
+      .map(repo => ({
+        repo,
+        bindingCount: (repo.bindings ?? []).filter(b => visibleNames.has(b.agent)).length,
+      }))
+      .filter(row => row.bindingCount > 0)
+      .sort((a, b) => a.repo.name.localeCompare(b.repo.name))
+
+    const laidAgents = layoutGraph(nodes, dispatchEdges).map(n => {
       const saved = layoutPositions[n.id]
       return saved ? { ...n, position: saved } : n
     })
+    const maxAgentX = laidAgents.length > 0
+      ? Math.max(...laidAgents.map(n => n.position.x + AGENT_NODE_WIDTH))
+      : 0
+    const repoNodes: Node[] = repoRows.map((row, index) => ({
+      id: repoNodeID(row.repo.name),
+      type: 'repo',
+      position: { x: maxAgentX + 260, y: index * 112 + 30 },
+      draggable: false,
+      selectable: false,
+      data: {
+        label: row.repo.name,
+        enabled: row.repo.enabled,
+        bindingCount: row.bindingCount,
+      },
+    }))
+    const bindingEdgeKeys = new Set<string>()
+    const bindingEdges: Edge[] = []
+    repoRows.forEach(row => {
+      (row.repo.bindings ?? []).forEach(b => {
+        if (!visibleNames.has(b.agent)) return
+        const key = `${b.agent}->${row.repo.name}`
+        if (bindingEdgeKeys.has(key)) return
+        bindingEdgeKeys.add(key)
+        bindingEdges.push({
+          id: `binding:${key}`,
+          source: idByName.get(b.agent) ?? b.agent,
+          target: repoNodeID(row.repo.name),
+          type: 'binding',
+          selectable: false,
+          focusable: false,
+          animated: false,
+          zIndex: 0,
+          data: { agent: b.agent, repo: row.repo.name },
+        })
+      })
+    })
+
+    const laid = [...laidAgents, ...repoNodes]
+    const nodeByAgent = new Map<string, Node>()
+    laidAgents.forEach(node => {
+      const data = node.data as { name?: string }
+      if (data.name) nodeByAgent.set(data.name, node)
+    })
+    const scopeGroups = new Map<string, { label: string; names: string[] }>()
+    visibleAgents.forEach(agent => {
+      const repoScope = agent.scope_type === 'repo' && agent.scope_repo ? agent.scope_repo : ''
+      if (!repoScope) return
+      const key = `repo:${repoScope}`
+      const label = `${repoScope} scope`
+      const existing = scopeGroups.get(key) ?? { label, names: [] }
+      existing.names.push(agent.name)
+      scopeGroups.set(key, existing)
+    })
+    const boundaries: RepoBoundary[] = Array.from(scopeGroups.values())
+      .map(group => {
+        const names = group.names.filter(name => nodeByAgent.has(name)).sort()
+        if (names.length === 0) return null
+        const boxes = names.map(name => {
+          const pos = nodeByAgent.get(name)!.position
+          return {
+            minX: pos.x,
+            minY: pos.y,
+            maxX: pos.x + AGENT_NODE_WIDTH,
+            maxY: pos.y + AGENT_NODE_HEIGHT,
+          }
+        })
+        const minX = Math.min(...boxes.map(b => b.minX))
+        const minY = Math.min(...boxes.map(b => b.minY))
+        const maxX = Math.max(...boxes.map(b => b.maxX))
+        const maxY = Math.max(...boxes.map(b => b.maxY))
+        return {
+          repo: group.label,
+          x: minX - REPO_BOUNDARY_PADDING,
+          y: minY - REPO_BOUNDARY_PADDING - REPO_BOUNDARY_HEADER,
+          width: maxX - minX + REPO_BOUNDARY_PADDING * 2,
+          height: maxY - minY + REPO_BOUNDARY_PADDING * 2 + REPO_BOUNDARY_HEADER,
+          count: names.length,
+        }
+      })
+      .filter((b): b is RepoBoundary => b !== null)
+      .sort((a, b) => a.repo.localeCompare(b.repo))
 
     return {
       flowNodes: laid,
-      flowEdges: edges,
+      flowEdges: [...bindingEdges, ...dispatchEdges],
+      repoBoundaries: boundaries,
       wiringInfo: { active: allEdges.filter(e => e.isActive).length, total: allEdges.length },
     }
-  }, [agents, graphData.edges, activeEdgeMap, repoFilter, selectedEdge, selectedEdgeKey, hoveredEdge, hoveredEdgeKey, selectedNodeName, layoutPositions, openEdge])
+  }, [agents, repos, graphData.edges, activeEdgeMap, repoFilter, selectedEdge, selectedEdgeKey, hoveredEdge, hoveredEdgeKey, selectedNodeName, layoutPositions, openEdge])
 
   const onEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
     openEdge(edge.data as DispatchEdgeData)
   }, [openEdge])
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
-    const agent = agents.find(a => (a.id || a.name) === node.id)
+    const data = node.data as { name?: string }
+    if (!data.name) return
+    const agentName = data.name
+    const agent = agents.find(a => a.name === agentName || (a.id || a.name) === node.id)
     if (agent) {
       setSelectedNodeName(agent.name)
       setSelectedEdge(null)
@@ -565,6 +726,7 @@ export default function GraphPage() {
     const nodeID = node.id
     const next = { x: node.position.x, y: node.position.y }
     setLayoutPositions(prev => ({ ...prev, [nodeID]: next }))
+    if (nodeID.startsWith('repo-anchor:')) return
     fetch(withWorkspace('/graph/layout', workspace), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -891,6 +1053,7 @@ export default function GraphPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <WorkspaceSelect compact />
           <RepoFilter selected={repoFilter} onChange={setRepoFilter} workspace={workspace} />
           <button onClick={openCreateAgent} style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>
             + Create agent
@@ -1300,6 +1463,41 @@ export default function GraphPage() {
                 minZoom={0.3}
                 maxZoom={2}
               >
+                <ViewportPortal>
+                  {repoBoundaries.map(boundary => (
+                    <div
+                      key={boundary.repo}
+                      style={{
+                        position: 'absolute',
+                        transform: `translate(${boundary.x}px, ${boundary.y}px)`,
+                        width: boundary.width,
+                        height: boundary.height,
+                        border: '1px dashed rgba(148,163,184,0.48)',
+                        borderRadius: 0,
+                        background: 'rgba(15,23,42,0.06)',
+                        pointerEvents: 'none',
+                        zIndex: -1,
+                      }}
+                    >
+                      <div style={{
+                        position: 'absolute',
+                        top: 8,
+                        left: 10,
+                        padding: '2px 7px',
+                        border: '1px dashed rgba(148,163,184,0.58)',
+                        background: 'var(--bg-card)',
+                        color: 'var(--text-muted)',
+                        fontSize: '0.68rem',
+                        fontWeight: 700,
+                        letterSpacing: '0.03em',
+                        textTransform: 'uppercase',
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {boundary.repo} · {boundary.count}
+                      </div>
+                    </div>
+                  ))}
+                </ViewportPortal>
                 <Background color="#334155" gap={20} size={0.5} />
                 <Controls showInteractive={false} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '6px' }} />
               </ReactFlow>
@@ -1307,6 +1505,8 @@ export default function GraphPage() {
             <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border-subtle)', display: 'flex', gap: '1.5rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
               <span>━ active dispatch</span>
               <span>╌ wired (can_dispatch)</span>
+              <span style={{ border: '1px dashed rgba(148,163,184,0.7)', padding: '0 6px' }}>repo-scope boundary</span>
+              <span>outside boundary = workspace scope</span>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
                 <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: 'var(--btn-primary-bg)', color: '#fff', fontSize: '8px', lineHeight: '12px', textAlign: 'center', fontWeight: 700 }}>D</span>
                 dispatchable

@@ -6,6 +6,7 @@ import Modal from '@/components/Modal'
 import Link from 'next/link'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 import RunButton from '@/components/RunButton'
+import WorkspaceSelect from '@/components/WorkspaceSelect'
 import AgentForm, { emptyAgentForm, type BackendOption, type StoreAgent } from '@/components/AgentForm'
 import { useSelectedWorkspace, withWorkspace, type CatalogItem } from '@/lib/workspace'
 
@@ -302,6 +303,7 @@ export default function FleetPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          <WorkspaceSelect compact />
           <RepoFilter selected={repoFilter} onChange={setRepoFilter} workspace={workspace} />
           <Link href="/traces/" style={{ fontSize: '0.875rem', color: 'var(--accent)' }}>View traces →</Link>
           <button

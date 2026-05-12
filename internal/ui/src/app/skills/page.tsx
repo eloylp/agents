@@ -12,7 +12,22 @@ interface Skill {
   prompt: string
 }
 
+interface Workspace {
+  id: string
+  name: string
+}
+
+interface Repo {
+  name: string
+}
+
 const emptyForm: Skill = { name: '', prompt: '' }
+
+function scopeType(item: { workspace_id?: string; repo?: string }): 'global' | 'workspace' | 'repo' {
+  if (item.repo) return 'repo'
+  if (item.workspace_id) return 'workspace'
+  return 'global'
+}
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: '6px',
@@ -21,16 +36,30 @@ const inputStyle: React.CSSProperties = {
 const labelStyle: React.CSSProperties = { fontSize: '0.8rem', color: 'var(--text-muted)', display: 'block', marginBottom: '3px' }
 
 function SkillForm({
-  initial, isNew, onSave, onCancel, saving, error,
+  initial, isNew, workspaces, onSave, onCancel, saving, error,
 }: {
   initial: Skill
   isNew: boolean
+  workspaces: Workspace[]
   onSave: (s: Skill) => void
   onCancel: () => void
   saving: boolean
   error: string
 }) {
   const [form, setForm] = useState<Skill>(initial)
+  const [selectedScope, setSelectedScope] = useState<'global' | 'workspace' | 'repo'>(scopeType(initial))
+  const [repoOptions, setRepoOptions] = useState<Repo[]>([])
+
+  useEffect(() => {
+    if (selectedScope !== 'repo' || !form.workspace_id) {
+      setRepoOptions([])
+      return
+    }
+    fetch(`/repos?workspace=${encodeURIComponent(form.workspace_id)}`, { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : [])
+      .then((data: Repo[]) => setRepoOptions(data ?? []))
+      .catch(() => setRepoOptions([]))
+  }, [selectedScope, form.workspace_id])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
@@ -43,6 +72,53 @@ function SkillForm({
           placeholder="skill-name"
           disabled={!isNew}
         />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: selectedScope === 'repo' ? '1fr 1fr 1fr' : selectedScope === 'workspace' ? '1fr 1fr' : '1fr', gap: '0.75rem' }}>
+        <div>
+          <label style={labelStyle}>Scope</label>
+          <select
+            style={inputStyle}
+            value={selectedScope}
+            disabled={!isNew}
+            onChange={e => {
+              const next = e.target.value as 'global' | 'workspace' | 'repo'
+              setSelectedScope(next)
+              setForm(f => ({ ...f, workspace_id: next === 'global' ? '' : f.workspace_id, repo: next === 'repo' ? f.repo : '' }))
+            }}
+          >
+            <option value="global">Global</option>
+            <option value="workspace">Workspace</option>
+            <option value="repo">Repo</option>
+          </select>
+        </div>
+        {selectedScope !== 'global' && (
+          <div>
+            <label style={labelStyle}>Workspace *</label>
+            <select
+              style={inputStyle}
+              value={form.workspace_id || ''}
+              disabled={!isNew}
+              onChange={e => setForm(f => ({ ...f, workspace_id: e.target.value, repo: '' }))}
+            >
+              <option value="">Select workspace...</option>
+              {workspaces.map(w => <option key={w.id} value={w.id}>{w.name || w.id}</option>)}
+            </select>
+          </div>
+        )}
+        {selectedScope === 'repo' && (
+          <div>
+            <label style={labelStyle}>Repo *</label>
+            <select
+              style={inputStyle}
+              value={form.repo || ''}
+              disabled={!isNew || !form.workspace_id}
+              onChange={e => setForm(f => ({ ...f, repo: e.target.value }))}
+            >
+              <option value="">Select repo...</option>
+              {repoOptions.map(r => <option key={r.name} value={r.name}>{r.name}</option>)}
+            </select>
+          </div>
+        )}
       </div>
       <div>
         <label style={labelStyle}>Prompt</label>
@@ -60,7 +136,7 @@ function SkillForm({
         </button>
         <button
           onClick={() => onSave(form)}
-          disabled={saving || !form.name.trim()}
+          disabled={saving || !form.name.trim() || (selectedScope !== 'global' && !form.workspace_id) || (selectedScope === 'repo' && !form.repo)}
           style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
           {saving ? 'Saving…' : 'Save'}
@@ -72,6 +148,11 @@ function SkillForm({
 
 export default function SkillsPage() {
   const [skills, setSkills] = useState<Skill[]>([])
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [filterScope, setFilterScope] = useState<'all' | 'global' | 'workspace' | 'repo'>('all')
+  const [filterWorkspace, setFilterWorkspace] = useState('')
+  const [filterRepo, setFilterRepo] = useState('')
+  const [filterRepos, setFilterRepos] = useState<Repo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -92,7 +173,24 @@ export default function SkillsPage() {
       .catch(e => { setError(String(e)); setLoading(false) })
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    fetch('/workspaces', { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : [])
+      .then((data: Workspace[]) => setWorkspaces(data ?? []))
+      .catch(() => setWorkspaces([]))
+  }, [])
+
+  useEffect(() => {
+    if (filterScope !== 'repo' || !filterWorkspace) {
+      setFilterRepos([])
+      return
+    }
+    fetch(`/repos?workspace=${encodeURIComponent(filterWorkspace)}`, { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : [])
+      .then((data: Repo[]) => setFilterRepos(data ?? []))
+      .catch(() => setFilterRepos([]))
+  }, [filterScope, filterWorkspace])
 
   const openEdit = (skill: Skill) => {
     setSaveError('')
@@ -114,7 +212,12 @@ export default function SkillsPage() {
       const res = await fetch(isNew ? '/skills' : `/skills/${encodeURIComponent(form.id || form.name)}`, {
         method: isNew ? 'POST' : 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(isNew ? { name: form.name, prompt: form.prompt } : { prompt: form.prompt }),
+        body: JSON.stringify(isNew ? {
+          name: form.name,
+          workspace_id: form.workspace_id || '',
+          repo: form.repo || '',
+          prompt: form.prompt,
+        } : { prompt: form.prompt }),
       })
       if (!res.ok) {
         setSaveError((await res.text()) || 'Save failed')
@@ -159,16 +262,63 @@ export default function SkillsPage() {
     return 'Global'
   }
 
+  const visibleSkills = skills.filter(sk => {
+    const type = scopeType(sk)
+    if (filterScope !== 'all' && type !== filterScope) return false
+    if ((filterScope === 'workspace' || filterScope === 'repo') && filterWorkspace && sk.workspace_id !== filterWorkspace) return false
+    if (filterScope === 'repo' && filterRepo && sk.repo !== filterRepo) return false
+    return true
+  })
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
           <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-heading)' }}>Skills</h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '4px' }}>
-            {skills.length} skill{skills.length !== 1 ? 's' : ''} configured
+            {visibleSkills.length} of {skills.length} skill{skills.length !== 1 ? 's' : ''} configured
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <select
+            value={filterScope}
+            onChange={e => {
+              const next = e.target.value as typeof filterScope
+              setFilterScope(next)
+              if (next === 'all' || next === 'global') {
+                setFilterWorkspace('')
+                setFilterRepo('')
+              }
+              if (next === 'workspace') setFilterRepo('')
+            }}
+            style={{ ...inputStyle, width: '130px' }}
+          >
+            <option value="all">All scopes</option>
+            <option value="global">Global</option>
+            <option value="workspace">Workspace</option>
+            <option value="repo">Repo</option>
+          </select>
+          {(filterScope === 'workspace' || filterScope === 'repo') && (
+            <select
+              value={filterWorkspace}
+              onChange={e => { setFilterWorkspace(e.target.value); setFilterRepo('') }}
+              style={{ ...inputStyle, width: '150px' }}
+            >
+              <option value="">All workspaces</option>
+              {workspaces.map(w => <option key={w.id} value={w.id}>{w.name || w.id}</option>)}
+            </select>
+          )}
+          {filterScope === 'repo' && (
+            <select
+              value={filterRepo}
+              onChange={e => setFilterRepo(e.target.value)}
+              disabled={!filterWorkspace}
+              style={{ ...inputStyle, width: '180px' }}
+            >
+              <option value="">All repos</option>
+              {filterRepos.map(r => <option key={r.name} value={r.name}>{r.name}</option>)}
+            </select>
+          )}
           <button
             onClick={openCreate}
             style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
@@ -188,7 +338,7 @@ export default function SkillsPage() {
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        {skills.map(sk => (
+        {visibleSkills.map(sk => (
           <Card key={sk.id || sk.name}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -217,6 +367,7 @@ export default function SkillsPage() {
           <SkillForm
             initial={selected}
             isNew={modal === 'create'}
+            workspaces={workspaces}
             onSave={saveSkill}
             onCancel={() => setModal(null)}
             saving={saving}

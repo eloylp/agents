@@ -7,6 +7,8 @@ vi.mock('@/lib/workspace', () => ({
   useSelectedWorkspace: () => ({
     workspace: 'team-a',
     workspaces: [{ id: 'team-a', name: 'Team A' }],
+    workspaceNotice: '',
+    setWorkspace: vi.fn(),
   }),
 }))
 

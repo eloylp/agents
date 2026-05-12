@@ -4,6 +4,7 @@ import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import GuardrailsManager from '@/components/GuardrailsManager'
 import RepoFilter from '@/components/RepoFilter'
+import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { AuthTokenSettings } from '@/lib/auth'
 import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
@@ -1083,6 +1084,9 @@ export default function ConfigPage() {
 
       {tab === 'tokens' && (
         <Card style={{ borderTopLeftRadius: 0 }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
+            <WorkspaceSelect compact label="Budget workspace" />
+          </div>
           <div style={{ marginBottom: '2rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
               <div>

@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
 import Card from '@/components/Card'
+import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { openAuthenticatedSSE } from '@/lib/sse'
 import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
@@ -105,6 +106,7 @@ export default function MemoryPage() {
             Read-only view of agent memory · {streaming ? '🟢 watching for changes' : '🔴 disconnected'}
           </p>
         </div>
+        <WorkspaceSelect compact />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: '1rem', alignItems: 'start' }}>

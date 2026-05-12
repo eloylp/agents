@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import Card from '@/components/Card'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
+import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { openAuthenticatedSSE } from '@/lib/sse'
 import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
@@ -182,6 +183,7 @@ export default function EventsPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <WorkspaceSelect compact />
           {Object.keys(timeRanges).map(r => (
             <button key={r} onClick={() => setTimeRange(r)} style={{
               background: timeRange === r ? 'var(--btn-primary-bg)' : 'var(--bg-card)',

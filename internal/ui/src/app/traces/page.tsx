@@ -5,6 +5,7 @@ import Card from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 import Link from 'next/link'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
+import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { StreamCard, TranscriptFilter, allStreamCardKinds, stepToCardEntries, type PersistedStep, type StreamCardKind } from '@/components/StreamCard'
 import { fmtDuration } from '@/lib/format'
 import { openAuthenticatedSSE } from '@/lib/sse'
@@ -434,7 +435,8 @@ function TracesContent() {
             {rootIds.length} trace{rootIds.length !== 1 ? 's' : ''} · {streaming ? '🟢 live' : '🔴 disconnected'}
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <WorkspaceSelect compact />
           <RepoFilter selected={repoFilter} onChange={setRepoFilter} workspace={workspace} />
           <input
             placeholder="Filter by agent, repo, or ID…"

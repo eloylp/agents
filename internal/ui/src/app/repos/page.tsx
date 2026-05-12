@@ -4,6 +4,7 @@ import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import BadgePicker from '@/components/BadgePicker'
 import RunButton from '@/components/RunButton'
+import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { Binding, groupByAgent, bindingsEqual } from '@/lib/bindings'
 import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
@@ -533,7 +534,8 @@ export default function ReposPage() {
             {repos.length} repo{repos.length !== 1 ? 's' : ''} configured
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          <WorkspaceSelect compact />
           <button
             onClick={openCreate}
             style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 14px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
