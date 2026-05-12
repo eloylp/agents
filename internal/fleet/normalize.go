@@ -45,6 +45,13 @@ func NormalizeRepoName(name string) string {
 	return normalize(name)
 }
 
+// NormalizePromptName returns the canonical form of a prompt name
+// (lowercase, trimmed). Prompt CRUD follows the same case-insensitive naming
+// convention as agents, skills, backends, repos, and guardrails.
+func NormalizePromptName(name string) string {
+	return normalize(name)
+}
+
 // NormalizeAgent applies the same name/field normalization that the YAML
 // loader performs at startup (lowercase + trim on names, backend, skills,
 // can_dispatch, plus trim on free-text fields). CRUD callers must invoke this
@@ -55,6 +62,13 @@ func NormalizeAgent(a *Agent) {
 	a.Backend = NormalizeBackendName(a.Backend)
 	a.Model = strings.TrimSpace(a.Model)
 	a.Prompt = strings.TrimSpace(a.Prompt)
+	a.PromptID = strings.TrimSpace(a.PromptID)
+	a.PromptRef = NormalizePromptName(a.PromptRef)
+	if workspaceID, repo, explicit := ParseCatalogScopePath(a.PromptScope); explicit {
+		a.PromptScope = CatalogScopePath(workspaceID, repo)
+	} else {
+		a.PromptScope = strings.TrimSpace(a.PromptScope)
+	}
 	a.Description = strings.TrimSpace(a.Description)
 	for i := range a.Skills {
 		a.Skills[i] = NormalizeSkillName(a.Skills[i])
@@ -67,6 +81,12 @@ func NormalizeAgent(a *Agent) {
 // NormalizeSkill applies the same field normalization that the YAML loader
 // performs on skill values: trims Prompt.
 func NormalizeSkill(s *Skill) {
+	s.WorkspaceID = strings.TrimSpace(s.WorkspaceID)
+	if s.WorkspaceID != "" {
+		s.WorkspaceID = NormalizeWorkspaceID(s.WorkspaceID)
+	}
+	s.Repo = NormalizeRepoName(s.Repo)
+	s.Name = NormalizeSkillName(s.Name)
 	s.Prompt = strings.TrimSpace(s.Prompt)
 }
 

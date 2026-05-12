@@ -10,6 +10,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/eloylp/agents/internal/ai"
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // mcpGraphNode mirrors the node payload used by GET /graph so consumers
@@ -191,7 +192,8 @@ func toolGetMemory(deps Deps) server.ToolHandlerFunc {
 		if isTraversalComponent(agent) || isTraversalComponent(repo) {
 			return mcpgo.NewToolResultError("invalid agent or repo path"), nil
 		}
-		content, found, mtime, err := deps.Store.ReadMemoryRaw(ai.NormalizeToken(agent), ai.NormalizeToken(repo))
+		workspace, _ := trimmedString(req, "workspace")
+		content, found, mtime, err := deps.Store.ReadWorkspaceMemoryRaw(workspace, ai.NormalizeToken(agent), ai.NormalizeToken(repo))
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("read memory", err), nil
 		}
@@ -199,9 +201,10 @@ func toolGetMemory(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultErrorf("memory for %s/%s not found", agent, repo), nil
 		}
 		out := map[string]any{
-			"agent":   agent,
-			"repo":    repo,
-			"content": content,
+			"workspace": fleet.NormalizeWorkspaceID(workspace),
+			"agent":     agent,
+			"repo":      repo,
+			"content":   content,
 		}
 		if !mtime.IsZero() {
 			out["mtime"] = mtime.UTC().Format(time.RFC3339)

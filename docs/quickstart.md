@@ -43,7 +43,7 @@ docker compose exec -it agents agents-setup
 5. refreshes the daemon's backend discovery so the fleet sees the freshly authenticated tooling,
 6. prints diagnostics from `/status`, `/backends/status`, `/agents/orphans/status`.
 
-Once it finishes, the daemon has working backends and tools. **Fleet configuration (agents, skills, repos, bindings, webhooks) lives in the dashboard**, open `http://localhost:8080/`, sign in or bootstrap the first user, and configure from there. Those tasks are graphical-shaped and don't fit a bash prompt loop.
+Once it finishes, the daemon has working backends and tools. **Fleet configuration (workspaces, agents, prompts, skills, repos, bindings, webhooks) lives in the dashboard**, open `http://localhost:8080/`, sign in or bootstrap the first user, and configure from there. Those tasks are graphical-shaped and don't fit a bash prompt loop.
 
 ## Production essentials
 
@@ -94,7 +94,7 @@ The `agents-data` volume is the only piece of state worth backing up regularly, 
 ## Next steps
 
 - [Mental model](mental-model.md), how the daemon composes prompts and what an agent must return. Read this before writing your first prompt.
-- [Configuration](configuration.md), full schema (skills, agents, repos, backends, guardrails).
+- [Configuration](configuration.md), full schema (workspaces, prompts, skills, agents, repos, backends, guardrails).
 - [Web dashboard](ui.md), the management UI you will spend most of your time in.
 - [Local models](local-models.md), running the fleet on your own LLM.
 - [Security](security.md), threat model, recommendations, reverse-proxy routing.

@@ -21,7 +21,7 @@ func TestToolCreateAgentForwardsAllowMemoryFalse(t *testing.T) {
 	req.Params.Arguments = map[string]any{
 		"name":         "linter",
 		"backend":      "claude",
-		"prompt":       "audit",
+		"prompt_ref":   "coder",
 		"description":  "Audits code",
 		"allow_memory": false,
 	}
@@ -53,7 +53,7 @@ func TestToolCreateAgentLeavesAllowMemoryNilWhenAbsent(t *testing.T) {
 	req.Params.Arguments = map[string]any{
 		"name":        "linter",
 		"backend":     "claude",
-		"prompt":      "audit",
+		"prompt_ref":  "coder",
 		"description": "Audits code",
 	}
 

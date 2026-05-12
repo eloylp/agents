@@ -116,19 +116,31 @@ backends:
 ### 3. Pick which agents use local
 
 ```yaml
-agents:
+prompts:
   - name: pr-reviewer
-    backend: claude_local                 # Qwen-backed
-    skills: [architect, testing, security]
-    prompt: |
+    content: |
       Review the pull request for correctness, regressions, and risky behavior.
-
   - name: coder
-    backend: claude                       # hosted Anthropic (see caveats below)
-    skills: [architect, testing]
-    prompt: |
+    content: |
       Implement the requested change end-to-end and open a pull request when ready.
-    allow_prs: true
+
+workspaces:
+  - id: default
+    agents:
+      - name: pr-reviewer
+        description: "Reviews pull requests for correctness and regressions"
+        backend: claude_local             # Qwen-backed
+        skills: [architect, testing, security]
+        prompt_ref: pr-reviewer
+        scope_type: workspace
+
+      - name: coder
+        description: "Implements changes and opens pull requests"
+        backend: claude                   # hosted Anthropic (see caveats below)
+        skills: [architect, testing]
+        prompt_ref: coder
+        scope_type: workspace
+        allow_prs: true
 ```
 
 Restart the daemon. Done.

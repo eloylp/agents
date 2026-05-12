@@ -30,6 +30,7 @@ var labeledKinds = []string{"issues.labeled", "pull_request.labeled"}
 // type local mirrors how the engine treats every other recorder.
 type SpanInput struct {
 	SpanID, RootEventID, ParentSpanID string
+	WorkspaceID                       string
 	Agent, Backend, Repo              string
 	EventKind, InvokedBy              string
 	Number, DispatchDepth             int
@@ -68,14 +69,14 @@ type RunStreamPublisher interface {
 
 // BeginRunInput is the call shape for RunStreamPublisher.BeginRun.
 type BeginRunInput struct {
-	SpanID, EventID, Agent, Backend, Repo, EventKind string
-	StartedAt                                        time.Time
+	SpanID, EventID, WorkspaceID, Agent, Backend, Repo, EventKind string
+	StartedAt                                                     time.Time
 }
 
 // GraphRecorder is an optional observer that the Engine calls when a dispatch
 // is issued. Implementations must be safe for concurrent use.
 type GraphRecorder interface {
-	RecordDispatch(from, to, repo string, number int, reason string)
+	RecordDispatch(workspaceID, from, to, repo string, number int, reason string)
 }
 
 // StepRecorder is an optional observer that the Engine calls as an agent run
@@ -96,15 +97,15 @@ type StepRecorder interface {
 // TraceRecorder), so workflow cannot import autonomous to reference the
 // concrete type. Implementations must be safe for concurrent use.
 type LastRunRecorder interface {
-	RecordLastRun(agent, repo string, at time.Time, status string)
+	RecordLastRun(workspaceID, agent, repo string, at time.Time, status string)
 }
 
-// runLocks serializes concurrent runAgent calls for the same (agent, repo)
-// pair, preventing the lost-update race where two overlapping runs both read
-// the same old memory and whichever finishes last silently clobbers the
-// other's state. The cron path used to own this serialization; with cron
-// runs now flowing through the engine queue alongside webhook/dispatch/run
-// events, the engine owns it for every kind.
+// runLocks serializes concurrent runAgent calls for the same workspace, agent,
+// and repo, preventing the lost-update race where two overlapping runs both
+// read the same old memory and whichever finishes last silently clobbers the
+// other's state. The cron path used to own this serialization; with cron runs
+// now flowing through the engine queue alongside webhook/dispatch/run events,
+// the engine owns it for every kind.
 type runLocks struct {
 	m sync.Map // key: string -> *sync.Mutex
 }
@@ -132,8 +133,8 @@ func (r *runLocks) release(key string) {
 // implementation can satisfy both surfaces. Defined here as a small local
 // interface so the workflow package does not depend on scheduler.
 type MemoryBackend interface {
-	ReadMemory(agent, repo string) (string, error)
-	WriteMemory(agent, repo, content string) error
+	ReadMemory(workspace, agent, repo string) (string, error)
+	WriteMemory(workspace, agent, repo, content string) error
 }
 
 type Engine struct {
@@ -346,6 +347,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 	if targetName == "" {
 		return fmt.Errorf("agent.dispatch event missing target_agent in payload")
 	}
+	workspaceID := eventWorkspaceID(ev)
 
 	// Read the four entity sets fresh from SQLite for this event. The
 	// returned cfg is a per-event snapshot, no caching across events, no
@@ -356,15 +358,18 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		return err
 	}
 
-	repo, ok := cfg.RepoByName(ev.Repo.FullName)
+	repo, ok := cfg.RepoByNameInWorkspace(ev.Repo.FullName, workspaceID)
 	if !ok || !repo.Enabled {
 		e.logger.Warn().Str("repo", ev.Repo.FullName).Msg("dispatch event for disabled or unknown repo, skipping")
 		return nil
 	}
 
-	agent, ok := cfg.AgentByName(targetName)
+	agent, ok := cfg.AgentByNameInWorkspace(targetName, workspaceID)
 	if !ok {
-		return fmt.Errorf("dispatch: target agent %q not found", targetName)
+		return fmt.Errorf("dispatch: target agent %q not found in workspace %q", targetName, workspaceID)
+	}
+	if !agentScopeAllowsRepo(agent, repo) {
+		return fmt.Errorf("dispatch: target agent %q scope does not allow repo %q in workspace %q", targetName, repo.Name, workspaceID)
 	}
 
 	// agents.run events arrive from the HTTP /agents/run endpoint with no prior
@@ -376,7 +381,8 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 	// the committed entry and self-suppress every dispatched run. The enqueue-side
 	// claim is the authoritative gate; handleDispatchEvent only executes it.
 	if ev.Kind == "agents.run" && e.dispatcher != nil {
-		if !e.dispatcher.dedup.TryClaimForDispatch(targetName, repo.Name, ev.Number, time.Now()) {
+		dedupRepo := dedupRepoKey(workspaceID, repo.Name)
+		if !e.dispatcher.dedup.TryClaimForDispatch(targetName, dedupRepo, ev.Number, time.Now()) {
 			e.logger.Info().
 				Str("repo", ev.Repo.FullName).
 				Str("target", targetName).
@@ -384,16 +390,16 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 			e.runsDeduped.Add(1)
 			return nil
 		}
-		e.dispatcher.dedup.MarkWebhookRunInFlight(targetName, repo.Name, ev.Number)
+		e.dispatcher.dedup.MarkWebhookRunInFlight(targetName, dedupRepo, ev.Number)
 	}
 
-	// Autonomous (cron-fired) runs use the cron-namespace dedup window so a
+	// Autonomous (cron-fired) runs use the cron bucket dedup window so a
 	// cron tick that fires moments after a dispatch already claimed the slot
 	// self-suppresses (matches the old scheduler.executeAgentRun behavior).
 	// Rollback on error so the slot is freed for the next tick; finalize on
 	// success so the dedup window is preserved.
 	if ev.Kind == "cron" && e.dispatcher != nil {
-		if !e.dispatcher.TryMarkAutonomousRun(targetName, repo.Name, time.Now()) {
+		if !e.dispatcher.TryMarkAutonomousRun(workspaceID, targetName, repo.Name, time.Now()) {
 			e.logger.Info().
 				Str("repo", ev.Repo.FullName).
 				Str("target", targetName).
@@ -415,18 +421,19 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 
 	// Release the on-demand claim taken above for agents.run.
 	if ev.Kind == "agents.run" && e.dispatcher != nil {
+		dedupRepo := dedupRepoKey(workspaceID, repo.Name)
 		if runErr != nil {
-			e.dispatcher.dedup.AbandonWebhookRun(targetName, repo.Name, ev.Number)
+			e.dispatcher.dedup.AbandonWebhookRun(targetName, dedupRepo, ev.Number)
 		} else {
-			e.dispatcher.dedup.FinalizeWebhookRun(targetName, repo.Name, ev.Number)
+			e.dispatcher.dedup.FinalizeWebhookRun(targetName, dedupRepo, ev.Number)
 		}
 	}
-	// Release the cron-namespace mark taken above for autonomous runs.
+	// Release the cron bucket mark taken above for autonomous runs.
 	if ev.Kind == "cron" && e.dispatcher != nil {
 		if runErr != nil {
-			e.dispatcher.RollbackAutonomousRun(targetName, repo.Name)
+			e.dispatcher.RollbackAutonomousRun(workspaceID, targetName, repo.Name)
 		} else {
-			e.dispatcher.FinalizeAutonomousRun(targetName, repo.Name)
+			e.dispatcher.FinalizeAutonomousRun(workspaceID, targetName, repo.Name)
 		}
 	}
 	// Notify the autonomous scheduler so its lastRuns map (which drives the
@@ -438,7 +445,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		if runErr != nil {
 			status = "error"
 		}
-		e.lastRunRec.RecordLastRun(targetName, repo.Name, time.Now(), status)
+		e.lastRunRec.RecordLastRun(workspaceID, targetName, repo.Name, time.Now(), status)
 	}
 	return runErr
 }
@@ -482,6 +489,7 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 		go func(a fleet.Agent) {
 			defer wg.Done()
 			defer sem.Release(1)
+			dedupRepo := dedupRepoKey(eventWorkspaceID(ev), ev.Repo.FullName)
 
 			// Gate through the dedup store when configured, but only for
 			// item-scoped events (number > 0).  Repo-level events such as
@@ -489,7 +497,7 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 			// a distinct event with a different head_sha, so two quick pushes
 			// to the same repo should both trigger their bound agents.
 			if e.dispatcher != nil && ev.Number > 0 {
-				if !e.dispatcher.dedup.TryClaimForDispatch(a.Name, ev.Repo.FullName, ev.Number, time.Now()) {
+				if !e.dispatcher.dedup.TryClaimForDispatch(a.Name, dedupRepo, ev.Number, time.Now()) {
 					e.logger.Debug().
 						Str("agent", a.Name).
 						Str("repo", ev.Repo.FullName).
@@ -503,7 +511,7 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 				// a long-running agent (> dedup_window_seconds) would allow a
 				// second identical event to pass the TTL check and start a
 				// concurrent duplicate run.
-				e.dispatcher.dedup.MarkWebhookRunInFlight(a.Name, ev.Repo.FullName, ev.Number)
+				e.dispatcher.dedup.MarkWebhookRunInFlight(a.Name, dedupRepo, ev.Number)
 			}
 
 			// Abandon the in-flight marker and pending claim on panic so that
@@ -511,7 +519,7 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 			defer func() {
 				if r := recover(); r != nil {
 					if e.dispatcher != nil && ev.Number > 0 {
-						e.dispatcher.dedup.AbandonWebhookRun(a.Name, ev.Repo.FullName, ev.Number)
+						e.dispatcher.dedup.AbandonWebhookRun(a.Name, dedupRepo, ev.Number)
 					}
 					e.logger.Error().
 						Interface("panic", r).
@@ -527,7 +535,7 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 				// Abandon on failure so that a retry or a subsequent event can
 				// claim the slot and attempt the run again.
 				if e.dispatcher != nil && ev.Number > 0 {
-					e.dispatcher.dedup.AbandonWebhookRun(a.Name, ev.Repo.FullName, ev.Number)
+					e.dispatcher.dedup.AbandonWebhookRun(a.Name, dedupRepo, ev.Number)
 				}
 				mu.Lock()
 				errs = append(errs, err)
@@ -539,8 +547,8 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 				// the TTL entry, together they suppress duplicate runs until
 				// the window expires without blocking new events after it does.
 				if e.dispatcher != nil && ev.Number > 0 {
-					e.dispatcher.dedup.CommitClaim(a.Name, ev.Repo.FullName, ev.Number)
-					e.dispatcher.dedup.FinalizeWebhookRun(a.Name, ev.Repo.FullName, ev.Number)
+					e.dispatcher.dedup.CommitClaim(a.Name, dedupRepo, ev.Number)
+					e.dispatcher.dedup.FinalizeWebhookRun(a.Name, dedupRepo, ev.Number)
 				}
 			}
 		}(agent)
@@ -556,7 +564,8 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 // cfg must be a snapshot already held by the caller to ensure a single
 // consistent epoch across the lookup and the subsequent runAgent calls.
 func (e *Engine) agentsForEvent(cfg *config.Config, ev Event) []fleet.Agent {
-	repo, ok := cfg.RepoByName(ev.Repo.FullName)
+	workspaceID := eventWorkspaceID(ev)
+	repo, ok := cfg.RepoByNameInWorkspace(ev.Repo.FullName, workspaceID)
 	if !ok || !repo.Enabled {
 		return nil
 	}
@@ -588,8 +597,8 @@ func (e *Engine) agentsForEvent(cfg *config.Config, ev Event) []fleet.Agent {
 		if _, dup := seen[b.Agent]; dup {
 			continue
 		}
-		agent, ok := cfg.AgentByName(b.Agent)
-		if !ok {
+		agent, ok := cfg.AgentByNameInWorkspace(b.Agent, workspaceID)
+		if !ok || !agentScopeAllowsRepo(agent, repo) {
 			continue
 		}
 		seen[b.Agent] = struct{}{}
@@ -601,19 +610,20 @@ func (e *Engine) agentsForEvent(cfg *config.Config, ev Event) []fleet.Agent {
 // BuildRoster constructs the dispatch target roster for the current agent.
 // Dispatch wiring is the authority: only agents in currentAgent.CanDispatch
 // that exist, opt in, and have a description are visible.
-func BuildRoster(cfg *config.Config, repoName, currentAgentName string) []ai.RosterEntry {
-	if _, ok := cfg.RepoByName(repoName); !ok {
+func BuildRoster(cfg *config.Config, workspaceID, repoName, currentAgentName string) []ai.RosterEntry {
+	repo, ok := cfg.RepoByNameInWorkspace(repoName, workspaceID)
+	if !ok {
 		return nil
 	}
-	currentAgent, ok := cfg.AgentByName(currentAgentName)
+	currentAgent, ok := cfg.AgentByNameInWorkspace(currentAgentName, workspaceID)
 	if !ok {
 		return nil
 	}
 
 	var roster []ai.RosterEntry
 	for _, targetName := range currentAgent.CanDispatch {
-		target, ok := cfg.AgentByName(targetName)
-		if !ok || !target.AllowDispatch || target.Description == "" {
+		target, ok := cfg.AgentByNameInWorkspace(targetName, workspaceID)
+		if !ok || !target.AllowDispatch || target.Description == "" || !agentScopeAllowsRepo(target, repo) {
 			continue
 		}
 		roster = append(roster, ai.RosterEntry{
@@ -649,6 +659,7 @@ func extractDispatchContext(ev Event) (rootEventID string, depth int) {
 // here from that same snapshot, so the agent's backend, prompt, skills,
 // and runner configuration all come from one consistent read.
 func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg *config.Config) error {
+	workspaceID := eventWorkspaceID(ev)
 	backend := cfg.ResolveBackend(agent.Backend)
 	if backend == "" {
 		return fmt.Errorf("agent %q: no runner available for backend %q", agent.Name, agent.Backend)
@@ -684,12 +695,12 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	// Held across the entire read/run/write sequence even when memory is
 	// disabled so concurrent runs of the same (agent, repo) still serialise
 	// on dispatch and trace recording.
-	runKey := agent.Name + "\x00" + ev.Repo.FullName
+	runKey := workspaceID + "\x00" + agent.Name + "\x00" + ev.Repo.FullName
 	e.runLock.acquire(runKey)
 	defer e.runLock.release(runKey)
 
 	// Build the roster of peer agents for this repo.
-	roster := BuildRoster(cfg, ev.Repo.FullName, agent.Name)
+	roster := BuildRoster(cfg, workspaceID, ev.Repo.FullName, agent.Name)
 
 	promptPayload := ev.Payload
 
@@ -700,17 +711,18 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	memoryEnabled := agent.IsAllowMemory() && e.memory != nil
 	var existingMemory string
 	if memoryEnabled {
-		mem, err := e.memory.ReadMemory(agent.Name, ev.Repo.FullName)
+		mem, err := e.memory.ReadMemory(workspaceID, agent.Name, ev.Repo.FullName)
 		if err != nil {
 			return fmt.Errorf("agent %q: read memory: %w", agent.Name, err)
 		}
 		existingMemory = mem
 	}
 
-	guardrails, err := e.store.ReadEnabledGuardrails()
+	guardrails, err := e.store.ReadWorkspacePromptGuardrails(workspaceID)
 	if err != nil {
 		return fmt.Errorf("agent %q: load guardrails: %w", agent.Name, err)
 	}
+	guardrails = slices.Insert(guardrails, 0, dynamicWorkspaceGuardrail(workspaceID, agent, cfg.Repos))
 
 	rendered, err := ai.RenderAgentPrompt(agent, cfg.Skills, guardrails, ai.PromptContext{
 		Repo:          ev.Repo.FullName,
@@ -754,7 +766,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	}
 
 	if e.budgetStore != nil {
-		if err := e.budgetStore.CheckBudgetsWithLogger(backend, agent.Name, logger); err != nil {
+		if err := e.budgetStore.CheckBudgetsWithLogger(workspaceID, ev.Repo.FullName, backend, agent.Name, logger); err != nil {
 			spanEnd := time.Now()
 			var queueWaitMs int64
 			if !ev.EnqueuedAt.IsZero() {
@@ -768,6 +780,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 				}
 				e.traceRec.RecordSpan(SpanInput{
 					SpanID:        spanID,
+					WorkspaceID:   workspaceID,
 					RootEventID:   rootEventID,
 					ParentSpanID:  parentSpanID,
 					Agent:         agent.Name,
@@ -806,13 +819,14 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	var onLine func([]byte)
 	if e.streamPub != nil {
 		e.streamPub.BeginRun(BeginRunInput{
-			SpanID:    spanID,
-			EventID:   ev.ID,
-			Agent:     agent.Name,
-			Backend:   backend,
-			Repo:      ev.Repo.FullName,
-			EventKind: ev.Kind,
-			StartedAt: spanStart,
+			SpanID:      spanID,
+			EventID:     ev.ID,
+			WorkspaceID: workspaceID,
+			Agent:       agent.Name,
+			Backend:     backend,
+			Repo:        ev.Repo.FullName,
+			EventKind:   ev.Kind,
+			StartedAt:   spanStart,
 		})
 		defer e.streamPub.EndRun(spanID)
 	}
@@ -859,6 +873,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		}
 		e.traceRec.RecordSpan(SpanInput{
 			SpanID:           spanID,
+			WorkspaceID:      workspaceID,
 			RootEventID:      rootEventID,
 			ParentSpanID:     parentSpanID,
 			Agent:            agent.Name,
@@ -908,7 +923,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	// stale state is naturally observable; if persistence is consistently
 	// failing the operator will see it in logs.
 	if memoryEnabled && resp.Memory != "" {
-		if err := e.memory.WriteMemory(agent.Name, ev.Repo.FullName, resp.Memory); err != nil {
+		if err := e.memory.WriteMemory(workspaceID, agent.Name, ev.Repo.FullName, resp.Memory); err != nil {
 			logger.Error().Err(err).Msg("agent run completed but memory write failed")
 		}
 	}
@@ -929,4 +944,87 @@ func containsNormalized(haystack []string, needle string) bool {
 	return slices.ContainsFunc(haystack, func(s string) bool {
 		return strings.ToLower(strings.TrimSpace(s)) == needle
 	})
+}
+
+func eventWorkspaceID(ev Event) string {
+	return fleet.NormalizeWorkspaceID(ev.WorkspaceID)
+}
+
+func dedupRepoKey(workspaceID, repo string) string {
+	return fleet.NormalizeWorkspaceID(workspaceID) + "\x00" + repo
+}
+
+func agentScopeAllowsRepo(agent fleet.Agent, repo fleet.Repo) bool {
+	agentWorkspace := fleet.NormalizeWorkspaceID(agent.WorkspaceID)
+	repoWorkspace := fleet.NormalizeWorkspaceID(repo.WorkspaceID)
+	if agentWorkspace != repoWorkspace {
+		return false
+	}
+
+	scopeType := strings.TrimSpace(agent.ScopeType)
+	if scopeType == "" {
+		scopeType = "workspace"
+	}
+	switch scopeType {
+	case "workspace":
+		return strings.TrimSpace(agent.ScopeRepo) == ""
+	case "repo":
+		return fleet.NormalizeRepoName(agent.ScopeRepo) == repo.Name
+	default:
+		return false
+	}
+}
+
+const dynamicWorkspaceGuardrailName = "workspace-boundary"
+
+func dynamicWorkspaceGuardrail(workspaceID string, agent fleet.Agent, repos []fleet.Repo) fleet.Guardrail {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	allowed := allowedReposForAgent(workspaceID, agent, repos)
+	var b strings.Builder
+	b.WriteString("## Workspace and repository boundaries\n\n")
+	fmt.Fprintf(&b, "You are running inside workspace: %s.\n\n", workspaceID)
+	b.WriteString("Allowed repositories for this run:\n")
+	if len(allowed) == 0 {
+		b.WriteString("- (none)\n")
+	} else {
+		for _, repo := range allowed {
+			fmt.Fprintf(&b, "- %s\n", repo)
+		}
+	}
+	b.WriteString("\nYou must not read, write, inspect, clone, modify, comment on, or open pull requests against repositories outside this allow-list.\n\n")
+	b.WriteString("If the task appears to require a repository outside this allow-list, abort and explain that the requested repository is outside your workspace/scope boundary.")
+	return fleet.Guardrail{
+		Name:    dynamicWorkspaceGuardrailName,
+		Content: b.String(),
+		Enabled: true,
+		// The renderer preserves input order today; keep the negative
+		// position as a defensive marker if guardrails are sorted later.
+		Position: -1,
+	}
+}
+
+func allowedReposForAgent(workspaceID string, agent fleet.Agent, repos []fleet.Repo) []string {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	scopeType := strings.TrimSpace(agent.ScopeType)
+	if scopeType == "" {
+		scopeType = "workspace"
+	}
+	switch scopeType {
+	case "workspace", "repo":
+	default:
+		return nil
+	}
+	var allowed []string
+	for _, repo := range repos {
+		repoWorkspace := fleet.NormalizeWorkspaceID(repo.WorkspaceID)
+		if repoWorkspace != workspaceID || !repo.Enabled {
+			continue
+		}
+		if scopeType == "repo" && fleet.NormalizeRepoName(agent.ScopeRepo) != repo.Name {
+			continue
+		}
+		allowed = append(allowed, repo.Name)
+	}
+	slices.Sort(allowed)
+	return slices.Compact(allowed)
 }

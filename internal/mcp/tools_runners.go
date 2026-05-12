@@ -26,6 +26,9 @@ func registerRunnersTools(srv *server.MCPServer, deps Deps) {
 			mcpgo.WithString("status",
 				mcpgo.Description("Optional filter on the underlying event_queue row state: \"enqueued\", \"running\", or \"completed\". Empty returns every state."),
 			),
+			mcpgo.WithString("workspace",
+				mcpgo.Description("Optional workspace id/name. Defaults to Default."),
+			),
 			mcpgo.WithNumber("limit",
 				mcpgo.Description("Maximum events to return. Output rows can exceed this when events fan out to multiple agents. Defaults to 100."),
 			),
@@ -60,9 +63,10 @@ func registerRunnersTools(srv *server.MCPServer, deps Deps) {
 func toolListRunners(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		status, _ := trimmedStringOptional(req, "status")
+		workspace, _ := trimmedStringOptional(req, "workspace")
 		limit := mcpInt(req, "limit", 0)
 		offset := mcpInt(req, "offset", 0)
-		resp, err := deps.RunnersH.List(status, limit, offset)
+		resp, err := deps.RunnersH.List(workspace, status, limit, offset)
 		if err != nil {
 			return mcpgo.NewToolResultErrorf("list runners: %v", err), nil
 		}

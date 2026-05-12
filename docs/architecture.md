@@ -23,7 +23,7 @@ The packages stack like this:
 cmd/agents/main.go              entry point, daemon.LoadConfig, daemon.New, d.Run
 
 internal/
-├─ fleet/                       domain entities, Agent, Repo, Skill, Backend, Binding
+├─ fleet/                       domain entities, Workspace, Agent, Prompt, Skill, Guardrail, Repo, Backend, Binding
 ├─ config/                      *Config + YAML loader + cross-entity validators
 ├─ store/                       SQLite schema, migrations, *store.Store facade,
 │                                 event_queue, memory, CRUD primitives
@@ -116,7 +116,7 @@ The MCP `Deps` struct holds **concrete pointers**, not interfaces. Coupling is f
 
 | Surface | Push site | Event Kind | Pre-run dedup gate |
 |---|---|---|---|
-| Cron tick | `scheduler.makeCronJob` | `cron` | `Dispatcher.TryMarkAutonomousRun` (cron-namespace) |
+| Cron tick | `scheduler.makeCronJob` | `cron` | `Dispatcher.TryMarkAutonomousRun` (cron bucket) |
 | GitHub webhook | `webhook.Handler.ServeHTTP` | `issues.*`, `pull_request.*`, `push`, … | per-(agent, repo, number) `TryClaimForDispatch` (in `fanOut`) |
 | `POST /run` | `daemon.handleAgentsRun` | `agents.run` | per-(agent, repo, 0) `TryClaimForDispatch` |
 | MCP `trigger_agent` | `mcp/tools_fleet.go: toolTriggerAgent` | `agents.run` | same as `POST /run` |
@@ -149,7 +149,7 @@ The DB is the source of truth; the channel is just a notification. On a clean sh
 
 A consumer-tier cleanup loop ticks hourly and deletes rows whose `completed_at` is older than 7 days. The table stays bounded regardless of throughput.
 
-`internal/daemon/runners` exposes the table as a per-runner view through `GET /runners`, `DELETE /runners/{id}`, and `POST /runners/{id}/retry`. Each event_queue row is JOINed with `observe.traces` so a completed event that fanned out to N agents shows up as N rows on the wire (one per trace span). In-flight events with no spans recorded yet appear as a single row with `agent: null` and `status: enqueued|running`, that's the "what's running right now" surface. Retry copies the source row's blob into a fresh row and pushes onto the channel, the source row stays as audit history; the same operations are wired as MCP tools.
+`internal/daemon/runners` exposes the table as a per-runner view through `GET /runners`, `DELETE /runners/{id}`, and `POST /runners/{id}/retry`. Each event_queue row is JOINed with `observe.traces` so a completed event that fanned out to N agents shows up as N rows on the wire (one per trace span). Completed events with no matching trace appear as one `skipped` row. In-flight events with no spans recorded yet appear as a single row with `agent: null` and `status: enqueued|running`, that's the "what's running right now" surface. Retry copies the source row's blob into a fresh row and pushes onto the channel, the source row stays as audit history; the same operations are wired as MCP tools.
 
 ## Structured concurrency, startup and shutdown
 
@@ -200,7 +200,7 @@ mux router
 async on a worker goroutine:
   workflow.Processor → workflow.Engine.HandleEvent
     → fanOut (label binding match)
-        → runAgent (per-(agent, repo) runLock acquired)
+        → runAgent (per-(workspace, agent, repo) runLock acquired)
             → memory load (when allow_memory)
             → ai.Runner.Run launches the claude/codex CLI subprocess
             → traceRec.RecordSpan + stepRec.RecordSteps (transcript)
@@ -221,7 +221,7 @@ robfig/cron fires the closure registered by scheduler.registerJobs
 async on a worker goroutine:
   workflow.Processor → workflow.Engine.HandleEvent
     → handleDispatchEvent
-        → Dispatcher.TryMarkAutonomousRun (cron-namespace dedup)
+        → Dispatcher.TryMarkAutonomousRun (cron bucket dedup)
         → runAgent (same path as everything else)
         → on completion: dispatcher.FinalizeAutonomousRun
                        + lastRunRec.RecordLastRun
@@ -255,8 +255,8 @@ REST and MCP converge at the handler layer, one set of methods, one persistence 
 
 ## Race-prevention invariants
 
-1. **Memory races on (agent, repo)**, `Engine.runLock` (per-key `*sync.Mutex`, lazily created) is held across the read-run-write sequence in `runAgent`. Single process means no second writer; the legacy CLI execution mode was removed precisely because it created a second-process race surface the run-lock can't close.
-2. **Duplicate-fire dedup**, `Dispatcher.dedup` keyed by namespace × (agent, repo, number). Three claim contexts: webhook + on-demand share a "dispatch" namespace (`TryClaimForDispatch`); cron has a separate "autonomous" namespace (`TryMarkAutonomousRun`); inter-agent dispatch is claimed at enqueue, not re-claimed at handle. A near-simultaneous webhook and cron tick for the same target both consult the cross-namespace state at gate time, so one self-suppresses.
+1. **Memory races on (workspace, agent, repo)**, `Engine.runLock` (per-key `*sync.Mutex`, lazily created) is held across the read-run-write sequence in `runAgent`. Single process means no second writer; the legacy CLI execution mode was removed precisely because it created a second-process race surface the run-lock can't close.
+2. **Duplicate-fire dedup**, `Dispatcher.dedup` keyed by dedup bucket × (workspace, agent, repo, number). Three claim contexts: webhook + on-demand share a "dispatch" bucket (`TryClaimForDispatch`); cron has a separate "autonomous" bucket (`TryMarkAutonomousRun`); inter-agent dispatch is claimed at enqueue, not re-claimed at handle. A near-simultaneous webhook and cron tick for the same target both consult the cross-bucket state at gate time, so one self-suppresses.
 3. **Durable enqueue / channel coherence**, `PushEvent` inserts into `event_queue` *before* sending on the channel, and rolls back the row if the channel push fails. There is no window where a row sits in SQLite but never reaches a worker, and no window where the channel holds a `QueuedEvent` whose row was never persisted.
 4. **Replay idempotency boundary**, replay only re-pushes rows whose `completed_at` is `NULL`. Workers stamp `completed_at` regardless of the agent's success, so a deterministically-failing event is removed from the queue's view (it appears in `/traces` instead of replaying forever).
 5. **Cron schedule view freshness**, `Engine.runAgent` calls `lastRunRec.RecordLastRun` after every `Kind=="cron"` event; scheduler's `lastRuns` map carries the latest outcome to `AgentStatuses()`, which feeds `/agents`.

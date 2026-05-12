@@ -28,7 +28,7 @@ The supported runtime is Docker Compose, there is no local-binary workflow. On-d
 ```
 cmd/agents/main.go              # daemon entrypoint + --db / --import flags
 internal/
-  fleet/                        # domain entities: Agent, Repo, Skill, Backend, Binding (zero deps)
+  fleet/                        # domain entities: Workspace, Agent, Prompt, Skill, Guardrail, Repo, Backend, Binding (zero deps)
   config/                       # YAML parsing, defaults, validation (uses fleet)
   ai/                           # prompt composition + CLI runner (hardcoded backend args + schema enforcement)
   anthropic_proxy/              # built-in Anthropic Messages ↔ OpenAI Chat Completions translation
@@ -55,13 +55,15 @@ internal/ai/response-schema.json # embedded JSON schema for structured output (c
 
 ## Conceptual model
 
-- **Agent**, a named capability: `backend` + `skills: []` + `prompt`. An agent is a pure definition. It does not run by itself. Prompts are stored in SQLite (seeded via `--import` from YAML, or created directly in the UI).
-- **Skill**, a reusable chunk of guidance referenced by name in multiple agents. Skill text is concatenated before the agent's own prompt at render time.
+- **Workspace**, the top-level operational context for repos, agents, memory, graph layout, runners, traces, events, dispatches, and workspace-scoped budgets. `default` is the compatibility workspace for existing installs.
+- **Prompt**, a reusable catalog asset that may be global, workspace-scoped, or repo-scoped. Agents persist the stable `prompt_id`; human-facing inputs may use `prompt_ref` plus optional `prompt_scope` (`global`, `workspace`, or `workspace/owner/repo`, case-insensitive) and the daemon resolves that selector to `prompt_id`. Legacy inline prompt imports are migrated into the catalog.
+- **Agent**, a workspace-local capability: `backend` + `skills: []` + `prompt_ref` + scope. An agent is a pure definition. It does not run by itself.
+- **Skill**, a reusable chunk of guidance referenced by stable id in agents. Display names may repeat across global, workspace, and repo scopes; skill text is concatenated before the agent's own prompt at render time.
 - **Binding**, `repos[*].use[*]`: pairs one agent with exactly one trigger (`labels:`, `events:`, or `cron:`). The same agent can have multiple bindings on the same repo with different triggers.
 - **Backend**, explicit backend selection per agent (no `auto`). Built-ins are `claude` and `codex`; additional named local backends are supported via `local_model_url`.
 - **Proxy**, optional in-daemon Anthropic↔OpenAI translator mounted at `/v1/messages` and `/v1/models`. Disabled by default. When enabled, set `local_model_url` on the backend entry to the proxy's URL; the daemon injects `ANTHROPIC_BASE_URL` for that backend automatically.
 - **Dispatcher**, the runtime mechanism by which agents invoke each other. See "Reactive dispatch" below.
-- **Graph workflow designer**, the dashboard's primary visual workflow surface. It uses stable agent database IDs for node identity/layout, edits agents through the shared agent form, manages repo trigger bindings through the repo binding API, and edits dispatch edges through `can_dispatch` / `allow_dispatch`.
+- **Graph workflow designer**, the dashboard's primary visual workflow surface. It uses stable agent database IDs for node identity/layout, edits agents through the shared agent form, shows repo-scoped agents inside dashed repo boundaries, shows workspace-scoped agents outside those boundaries, draws thin binding lines to passive repo anchors for trigger bindings, and edits dispatch edges through `can_dispatch` / `allow_dispatch`.
 - **Trace steps**, the durable transcript source for `/traces/{span_id}/steps` and `/traces/{span_id}/stream`. AI CLI stdout is parsed incrementally into `TraceStep` rows, persisted to SQLite, replayed to stream subscribers on connect, and live-tailed through in-memory notifications until `event: end`.
 
 ## Reactive dispatch: the model you must keep in mind
@@ -70,7 +72,7 @@ internal/ai/response-schema.json # embedded JSON schema for structured output (c
 - Each agent's YAML may declare `allow_dispatch: true` (opt-in as a target) and `can_dispatch: [name, ...]` (whitelist of targets). Dispatchable targets are rendered into the originating agent's prompt as part of an `## Available experts` roster when another agent lists them in `can_dispatch`.
 - Dispatch wiring authorizes runtime handoffs. Repo bindings only decide how agents start independently; a dispatch-only target does not need a fake repo binding.
 - An agent's response JSON may include a `dispatch: []` array. Each element names a target and a reason.
-- The dispatcher validates every request against: whitelist match, target's opt-in, chain depth, fan-out per run, and a dedup window keyed on `(target_agent, repo, number)`. Safety limits are process-owned daemon settings configured by `AGENTS_DISPATCH_MAX_DEPTH`, `AGENTS_DISPATCH_MAX_FANOUT`, and `AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS`; all three must be positive integers.
+- The dispatcher validates every request against: whitelist match, target's opt-in, chain depth, fan-out per run, and a dedup window keyed on `(workspace, target_agent, repo, number)`. Safety limits are process-owned daemon settings configured by `AGENTS_DISPATCH_MAX_DEPTH`, `AGENTS_DISPATCH_MAX_FANOUT`, and `AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS`; all three must be positive integers.
 - Accepted requests are enqueued as synthetic `agent.dispatch` events with payload fields `target_agent`, `reason`, `invoked_by`, `root_event_id`, `dispatch_depth`, `parent_span_id`. They flow through the same single event queue as webhook events and cron-fired events.
 - Rejection modes log at `WARN` (whitelist/opt-in/depth/fanout breaches) or `DEBUG` (dedup skip).
 
@@ -129,7 +131,7 @@ When making common classes of changes, update all of these at once:
 - **Backend discovery lifecycle.** Startup auto-discovery runs only when the backends table is empty. Manual refresh is explicit via `POST /backends/discover`; `GET /backends/status` is diagnostics-only.
 - **Runtime toolchain.** The Docker image includes `git`, authenticated `gh`, Go, Rust/Cargo, Node/npm, and TypeScript so agents can establish a safe local checkout/test loop when MCP alone is insufficient. `agents-setup` authenticates `gh` with `GITHUB_TOKEN`; `/backends/status` reports tool health.
 - **Orphan visibility.** `GET /agents/orphans/status` and `/status` (`orphaned_agents.count`) expose model/backend drift requiring user remediation.
-- **Agent memory** is stored in SQLite (in the `memory` table), keyed by `(agent, repo)`. It's the agent's job to return updated memory in its response; the daemon writes it back to the store unchanged. Load/persist is gated by `allow_memory` (default `true`) and applies uniformly across cron, webhook, dispatch, `POST /run`, and `trigger_agent`. The built-in `memory-scope` guardrail tells agents to ignore CLI-native/global/session memory and use only the daemon-rendered `Existing memory:` section for the current `(agent, repo)`.
+- **Agent memory** is stored in SQLite (in the `memory` table), keyed by `(workspace, agent, repo)`. It's the agent's job to return updated memory in its response; the daemon writes it back to the store unchanged. Load/persist is gated by `allow_memory` (default `true`) and applies uniformly across cron, webhook, dispatch, `POST /run`, and `trigger_agent`. The built-in `memory-scope` guardrail tells agents to ignore CLI-native/global/session memory and use only the daemon-rendered `Existing memory:` section for the current workspace/repo/agent.
 - **The event queue is durable.** Every `PushEvent` persists the event to the SQLite `event_queue` table before signalling workers via the in-memory channel. Rows whose `completed_at` is still `NULL` at startup are replayed onto the channel, events buffered at shutdown, or runs interrupted mid-prompt, get a second chance instead of vanishing. Completed rows older than 7 days are pruned by an hourly cleanup loop. Inspect / delete / retry rows through the `/runners` REST surface, the matching MCP tools, or the UI's Runners page.
 - **Dispatch dedup is process-local and in-memory.** It's shared across cron-fired runs, event-fired runs, dispatched runs, and on-demand triggers (`POST /run` / `trigger_agent`) within one process. Restarting the daemon clears the dedup state.
 - **Avoid `--no-verify` on commits.** Pre-commit hooks exist for a reason. If a hook fails, fix the underlying issue.

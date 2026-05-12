@@ -11,9 +11,9 @@
 //     out; we don't yet know which agents will run.
 //   - event_queue.completed_at IS NOT NULL → query traces for the
 //     event id. Emit 1 row per trace span (status=success|error,
-//     agent populated). Events that completed with 0 traces (webhook
-//     with no matching binding) are skipped, nothing actually ran,
-//     so listing them on a "runners" page would be misleading.
+//     agent populated). Events that completed with 0 traces emit one
+//     status=skipped row so pagination totals and visible rows stay
+//     consistent for deduped/manual events and no-op webhook events.
 //
 // Retry / delete operate on the underlying event_queue row, not on a
 // specific trace. Retry copies the event blob into a new row and
@@ -74,9 +74,11 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 // populated). Status is the unified lifecycle:
 //   - "enqueued" / "running": event is in flight, no trace yet
 //   - "success" / "error":     trace exists, run finished with that outcome
+//   - "skipped":               event completed without producing a trace span
 type RunnerRow struct {
 	ID          int64           `json:"id"`
 	EventID     string          `json:"event_id"`
+	WorkspaceID string          `json:"workspace_id"`
 	Kind        string          `json:"kind"`
 	Repo        string          `json:"repo"`
 	Number      int             `json:"number,omitempty"`
@@ -125,20 +127,20 @@ var ErrRunnerRunning = errors.New("runners: cannot retry running event")
 // "completed", these gate the underlying event_queue rows. Other
 // values return an error.
 //
-// Each event_queue row produces 0..N output rows depending on whether
+// Each event_queue row produces 1..N output rows depending on whether
 // traces have been recorded for it (see package doc).
-func (h *Handler) List(status string, limit, offset int) (ListResponse, error) {
+func (h *Handler) List(workspace, status string, limit, offset int) (ListResponse, error) {
 	st := store.RunnerStatus(status)
 	switch st {
 	case "", store.RunnerEnqueued, store.RunnerRunning, store.RunnerCompleted:
 	default:
 		return ListResponse{}, fmt.Errorf("invalid status %q", status)
 	}
-	events, err := h.store.ListRunners(st, limit, offset)
+	events, err := h.store.ListWorkspaceRunners(workspace, st, limit, offset)
 	if err != nil {
 		return ListResponse{}, err
 	}
-	total, err := h.store.CountRunners(st)
+	total, err := h.store.CountWorkspaceRunners(workspace, st)
 	if err != nil {
 		return ListResponse{}, err
 	}
@@ -155,12 +157,13 @@ func (h *Handler) List(status string, limit, offset int) (ListResponse, error) {
 	return ListResponse{Runners: rows, Total: total, Limit: limit, Offset: offset}, nil
 }
 
-// expand turns one event_queue row into 0..N RunnerRows by JOINing
+// expand turns one event_queue row into 1..N RunnerRows by JOINing
 // with the traces store. See package doc for the rule.
 func (h *Handler) expand(ev store.RunnerRecord) []RunnerRow {
 	base := RunnerRow{
 		ID:          ev.ID,
 		EventID:     ev.EventID,
+		WorkspaceID: ev.WorkspaceID,
 		Kind:        ev.Kind,
 		Repo:        ev.Repo,
 		Number:      ev.Number,
@@ -186,6 +189,7 @@ func (h *Handler) expand(ev store.RunnerRecord) []RunnerRow {
 					row := base
 					row.Agent = a.Agent
 					row.SpanID = a.SpanID
+					row.WorkspaceID = a.WorkspaceID
 					row.Status = "running"
 					out = append(out, row)
 				}
@@ -198,12 +202,10 @@ func (h *Handler) expand(ev store.RunnerRecord) []RunnerRow {
 	if h.traces == nil || ev.EventID == "" {
 		return nil
 	}
-	spans := h.traces.TracesByRootEventID(ev.EventID)
+	spans := h.traces.TracesByRootEventIDForWorkspace(ev.WorkspaceID, ev.EventID)
 	if len(spans) == 0 {
-		// Event completed without spawning any runner (e.g. webhook with no
-		// matching binding). Skip, listing it under "runners" would be
-		// misleading.
-		return nil
+		base.Status = "skipped"
+		return []RunnerRow{base}
 	}
 	out := make([]RunnerRow, 0, len(spans))
 	for _, sp := range spans {
@@ -267,7 +269,7 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	offset, _ := strconv.Atoi(q.Get("offset"))
-	resp, err := h.List(q.Get("status"), limit, offset)
+	resp, err := h.List(q.Get("workspace"), q.Get("status"), limit, offset)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return

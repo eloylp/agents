@@ -314,7 +314,7 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 		{"coder", "pr-reviewer", "acme/widgets", "PR ready for review", 138, 45 * time.Minute},
 		{"scout", "coder", "acme/control-plane", "small fix worth doing now", 91, 5 * time.Minute},
 	} {
-		obs.RecordDispatch(d.from, d.to, d.repo, d.number, d.reason)
+		obs.RecordDispatch("default", d.from, d.to, d.repo, d.number, d.reason)
 		_ = d.ago
 	}
 

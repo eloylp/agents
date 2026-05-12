@@ -15,6 +15,7 @@ import (
 // OrphanedAgent describes an agent whose pinned model no longer exists in
 // the backend model catalog stored in the database.
 type OrphanedAgent struct {
+	WorkspaceID     string   `json:"workspace_id"`
 	Name            string   `json:"name"`
 	Backend         string   `json:"backend"`
 	Model           string   `json:"model"`
@@ -75,11 +76,12 @@ func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
 	// bindings.
 	reposByAgent := make(map[string]map[string]struct{})
 	for _, repo := range cfg.Repos {
+		workspaceID := fleet.NormalizeWorkspaceID(repo.WorkspaceID)
 		for _, binding := range repo.Use {
-			set := reposByAgent[binding.Agent]
+			set := reposByAgent[workspaceAgentKey(workspaceID, binding.Agent)]
 			if set == nil {
 				set = make(map[string]struct{})
-				reposByAgent[binding.Agent] = set
+				reposByAgent[workspaceAgentKey(workspaceID, binding.Agent)] = set
 			}
 			set[repo.Name] = struct{}{}
 		}
@@ -87,6 +89,7 @@ func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
 
 	orphan := make([]OrphanedAgent, 0)
 	for _, agent := range cfg.Agents {
+		workspaceID := fleet.NormalizeWorkspaceID(agent.WorkspaceID)
 		backendName := cfg.ResolveBackend(agent.Backend)
 		if backendName == "" {
 			continue
@@ -96,21 +99,29 @@ func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
 			continue
 		}
 		orphan = append(orphan, OrphanedAgent{
+			WorkspaceID:     workspaceID,
 			Name:            agent.Name,
 			Backend:         backendName,
 			Model:           strings.TrimSpace(agent.Model),
-			Repos:           slices.Sorted(maps.Keys(reposByAgent[agent.Name])),
+			Repos:           slices.Sorted(maps.Keys(reposByAgent[workspaceAgentKey(workspaceID, agent.Name)])),
 			AvailableModels: canonicalModels(backend.Models),
 		})
 	}
 
 	slices.SortFunc(orphan, func(a, b OrphanedAgent) int {
+		if c := strings.Compare(a.WorkspaceID, b.WorkspaceID); c != 0 {
+			return c
+		}
 		if c := strings.Compare(a.Backend, b.Backend); c != 0 {
 			return c
 		}
 		return strings.Compare(a.Name, b.Name)
 	})
 	return orphan
+}
+
+func workspaceAgentKey(workspaceID, agentName string) string {
+	return fleet.NormalizeWorkspaceID(workspaceID) + "\x00" + fleet.NormalizeAgentName(agentName)
 }
 
 func canonicalModels(models []string) []string {

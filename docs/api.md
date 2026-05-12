@@ -44,7 +44,7 @@ The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 
 | `GET` | `/traces/{span_id}/steps` | Tool-loop transcript for a completed agent span |
 | `GET` | `/traces/{span_id}/prompt` | Composed prompt the daemon sent to the AI CLI for this run. Stored gzipped on the trace row; this endpoint decompresses on the fly and returns `text/plain`. `404` when no prompt was recorded (pre-009-migration spans). Operator-grade, keep behind your auth proxy. |
 | `GET` | `/traces/{span_id}/stream` | Server-Sent Events stream of persisted `TraceStep` rows (one JSON object per `data:` line) for a span. The daemon parses AI CLI stdout incrementally through the same backend parser used for `/traces/{span_id}/steps`, writes each step to `trace_steps`, replays existing rows on connect, then live-tails newly committed rows until the run ends or the client disconnects. Emits a final `event: end` SSE message when the run finishes. `404` when the span has no active stream and no persisted steps. |
-| `GET` | `/graph` | Agent interaction graph (dispatch edges) |
+| `GET` | `/graph` | Workspace-scoped agent graph data: agent nodes plus dispatch edges. The UI overlays repo-scope boundaries and passive repo binding anchors from the agents/repos payloads. |
 | `GET` | `/dispatches` | Dispatch dedup store contents + counters |
 | `GET` | `/memory/{agent}/{repo}` | Raw agent memory markdown. `{repo}` uses `owner_repo` format (underscore-separated) |
 | `GET` | `/memory/stream` | Memory file change notifications (SSE) |
@@ -52,11 +52,11 @@ The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 
 
 ## Runners management
 
-The daemon's event queue is durable: every `PushEvent` writes to the SQLite `event_queue` table before signalling workers. Rows whose `completed_at` is `NULL` are replayed on startup; completed rows are pruned after 7 days. The `/runners` surface presents this table as a per-runner view: each event_queue row is JOINed with `observe.traces` so an event that fanned out to N agents shows up as N rows on the wire (one per trace span). Events still in flight (no spans yet) appear as a single row with `agent: null`.
+The daemon's event queue is durable: every `PushEvent` writes to the SQLite `event_queue` table before signalling workers. Rows whose `completed_at` is `NULL` are replayed on startup; completed rows are pruned after 7 days. The `/runners` surface presents this table as a per-runner view: each event_queue row is JOINed with `observe.traces` so an event that fanned out to N agents shows up as N rows on the wire (one per trace span). Completed events with no matching trace appear as one `skipped` row so operators can distinguish "matched no runnable agent" from missing data. Events still in flight (no spans yet) appear as a single row with `agent: null`.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/runners` | Paginated listing, newest first. Each row carries event-level fields (`id`, `event_id`, `kind`, `repo`, `number`, `actor`, `target_agent`, `enqueued_at`, `started_at`, `completed_at`, `payload`) plus per-run fields when a trace exists (`agent`, `span_id`, `run_duration_ms`, `summary`, `prompt_size`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`). The composed prompt body is fetched separately via `GET /traces/{span_id}/prompt`. The `status` field is the unified lifecycle: `enqueued`/`running` (in-flight) or `success`/`error` (from the trace). Query params: `status` (filter on the event_queue lifecycle, accepts `enqueued`/`running`/`completed`), `limit` (default 100, applies to events not output rows), `offset`. Completed events with no traces (webhook with no matching binding) are skipped, listing them would be misleading. |
+| `GET` | `/runners` | Paginated listing, newest first. Each row carries event-level fields (`id`, `event_id`, `kind`, `repo`, `number`, `actor`, `target_agent`, `enqueued_at`, `started_at`, `completed_at`, `payload`) plus per-run fields when a trace exists (`agent`, `span_id`, `run_duration_ms`, `summary`, `prompt_size`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`). The composed prompt body is fetched separately via `GET /traces/{span_id}/prompt`. The `status` field is the unified lifecycle: `enqueued`/`running` (in-flight), `success`/`error` (from the trace), or `skipped` for completed queue rows that produced no trace. Query params: `status` (filter on the event_queue lifecycle, accepts `enqueued`/`running`/`completed`), `limit` (default 100, applies to events not output rows), `offset`. |
 | `DELETE` | `/runners/{id}` | Remove one event_queue row. **Best-effort:** if a worker has already received the `QueuedEvent` from the in-memory channel buffer, it will still run; the row simply won't appear in subsequent listings. Affects every fanned-out agent for this event since the action is event-level. Returns `404` for unknown ids. |
 | `POST` | `/runners/{id}/retry` | Re-enqueue an event by copying its blob into a fresh `event_queue` row and pushing onto the channel. Re-runs every fanned-out agent for the event (event-level retry). The original row stays as audit history. The response body is `{"new_id": <id>}`. Returns `409` when the source row is in `running` state, `404` when missing, `503` when the in-memory channel is full or closed. |
 
@@ -88,26 +88,32 @@ These are only mounted when `AGENTS_PROXY_ENABLED=true` is set in the daemon env
 
 These routes are always mounted and backed by the SQLite database.
 
+Workspace-local resources accept `?workspace=<id-or-name>` and default to `default` when omitted. This applies to fleet snapshots, agents, repos, bindings, graph layout, runners, events, traces, memory, and workspace-scoped token leaderboard queries. Catalog resources (`prompts`, `skills`, `guardrails`) are reusable assets: each row exposes `workspace_id` and `repo` to express global, workspace-scoped, or repo-scoped visibility.
+
+Prompt catalog rows expose a stable `id` plus a display `name`. Agents persist `prompt_id`; human-facing REST writes may provide `prompt_ref` plus optional `prompt_scope` instead. `prompt_scope` is case-insensitive and accepts `global`, `workspace`, or `workspace/owner/repo`, for example `default/eloylp/agents`.
+
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/{resource}` | List all entries for a resource type (`skills`, `backends`, `repos`, `guardrails`). Note: `GET /agents` is the fleet snapshot above, not the CRUD list. |
-| `GET` | `/{resource}/{name}` | Fetch one entry. Repos use two path segments: `/repos/{owner}/{repo}`. |
-| `POST` | `/{resource}` | Create or replace an entry. Resources: `agents`, `skills`, `backends`, `repos`, `guardrails`. |
-| `PATCH` | `/{resource}/{name}` | Partial update of an entry. Only fields present in the JSON body are applied; unset fields are preserved. At least one field required. Resources: `agents`, `skills`, `backends`, `guardrails`. |
+| `GET` | `/{resource}` | List all entries for a resource type (`workspaces`, `prompts`, `skills`, `backends`, `repos`, `guardrails`). Note: `GET /agents` is the workspace-filterable fleet snapshot above, not the CRUD list. |
+| `GET` | `/{resource}/{name-or-id}` | Fetch one entry. Repos use two path segments: `/repos/{owner}/{repo}`. Catalog routes (`prompts`, `skills`, `guardrails`) use stable IDs; legacy global names are accepted as a compatibility fallback. |
+| `POST` | `/{resource}` | Create or replace an entry. Resources: `workspaces`, `prompts`, `agents`, `skills`, `backends`, `repos`, `guardrails`. |
+| `PATCH` | `/{resource}/{name-or-id}` | Partial update of an entry. Only fields present in the JSON body are applied; unset fields are preserved. At least one field required. Resources: `workspaces`, `prompts`, `agents`, `skills`, `backends`, `guardrails`. Catalog routes (`prompts`, `skills`, `guardrails`) use stable IDs; legacy global names are accepted as a compatibility fallback. |
 | `PATCH` | `/repos/{owner}/{repo}` | Toggle a repo's `enabled` flag. Only `enabled` is patchable; binding edits go through `/repos/{owner}/{repo}/bindings/{id}`, and full repo replacement (including bindings) goes through `POST /repos`. |
-| `DELETE` | `/{resource}/{name}` | Remove an entry. |
+| `DELETE` | `/{resource}/{name-or-id}` | Remove an entry. Catalog routes (`prompts`, `skills`, `guardrails`) use stable IDs; legacy global names are accepted as a compatibility fallback. |
 | `DELETE` | `/agents/{name}` | Same as the generic delete, plus a `cascade` query param. By default returns `409 Conflict` with the list of repos still binding the agent; pass `?cascade=true` to also drop those bindings in the same transaction. |
 | `POST` | `/repos/{owner}/{repo}/bindings` | Create one binding on a repo. Returns the persisted binding with its generated ID. |
 | `GET` | `/repos/{owner}/{repo}/bindings/{id}` | Fetch one binding by ID. |
 | `PATCH` | `/repos/{owner}/{repo}/bindings/{id}` | Replace all fields of a binding by ID. |
 | `DELETE` | `/repos/{owner}/{repo}/bindings/{id}` | Remove a binding by ID. |
-| `POST` | `/guardrails/{name}/reset` | Copy a built-in guardrail's `default_content` back into its `content`. Returns 400 for operator-added rows (no default to fall back to). |
-| `GET` | `/export` | Export full fleet config as YAML. |
-| `POST` | `/import` | Import a YAML config into the SQLite store. |
+| `POST` | `/guardrails/{id}/reset` | Copy a built-in guardrail's `default_content` back into its `content`. Legacy global names are accepted as a compatibility fallback. Returns 400 for operator-added rows (no default to fall back to). |
+| `GET` | `/workspaces/{workspace}/guardrails` | List the selected guardrail references for one workspace in render order. |
+| `PUT` | `/workspaces/{workspace}/guardrails` | Replace the selected guardrail references for one workspace. |
+| `GET` | `/export` | Export full fleet config as workspace-aware YAML, including reusable prompts, skills, guardrails, and workspace-local agents/repos/budgets. |
+| `POST` | `/import` | Import workspace-aware YAML into the SQLite store. Legacy top-level agents/repos remain accepted into `default`. |
 
 ### Guardrails
 
-Guardrails are operator-defined policy blocks the renderer prepends to every agent's composed prompt. Wire shape: `{name, description, content, default_content, is_builtin, enabled, position}`. PATCH covers `description`, `content`, `enabled`, `position` only, `is_builtin` and `default_content` are migration-managed and not editable from the API. The shipped 'security' guardrail is seeded by migration 010 with `is_builtin = true` and a non-empty `default_content`; operator-added rows have `is_builtin = false` and empty `default_content`. The renderer uses `SELECT * FROM guardrails WHERE enabled = 1 ORDER BY position ASC, name ASC` and concatenates `content` blocks at the very top of the System portion of the prompt. See [security.md](security.md) for the threat model and what the default does, and does not, close.
+Guardrails are reusable policy catalog entries; workspaces choose which visible catalog entries to render. Catalog wire shape: `{id, workspace_id, repo, name, description, content, default_content, is_builtin, enabled, position}`. Empty `workspace_id` and `repo` means global visibility; `workspace_id` with empty `repo` is workspace-only; both fields set is repo-scoped. Workspace references use `{workspace_id, guardrail_name, position, enabled}`, where `guardrail_name` carries the stable guardrail id after scoped-catalog migration. PATCH covers catalog `description`, `content`, `enabled`, `position` only; `is_builtin` and `default_content` are migration-managed and not editable from the API. The renderer combines mandatory dynamic workspace/repository boundary guidance with the selected workspace references in one guardrails section. See [security.md](security.md) for the threat model and what the default does, and does not, close.
 
 Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL cache.
 

@@ -134,6 +134,74 @@ func TestUpsertAgentIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestAgentsAndReposAreUniquePerWorkspace(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	seedBackend(t, db, "claude")
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+
+	defaultAgent := fleet.Agent{Name: "coder", Backend: "claude", Prompt: "default prompt", Description: "Default coder"}
+	teamAgent := fleet.Agent{WorkspaceID: "team-a", Name: "coder", Backend: "claude", Prompt: "team prompt", Description: "Team coder"}
+	if err := store.UpsertAgent(db, defaultAgent); err != nil {
+		t.Fatalf("UpsertAgent default: %v", err)
+	}
+	if err := store.UpsertAgent(db, teamAgent); err != nil {
+		t.Fatalf("UpsertAgent team: %v", err)
+	}
+
+	if err := store.UpsertRepo(db, fleet.Repo{
+		Name:    "owner/repo",
+		Enabled: true,
+		Use:     []fleet.Binding{{Agent: "coder", Labels: []string{"ai:default"}}},
+	}); err != nil {
+		t.Fatalf("UpsertRepo default: %v", err)
+	}
+	if err := store.UpsertRepo(db, fleet.Repo{
+		WorkspaceID: "team-a",
+		Name:        "owner/repo",
+		Enabled:     true,
+		Use:         []fleet.Binding{{Agent: "coder", Labels: []string{"ai:team"}}},
+	}); err != nil {
+		t.Fatalf("UpsertRepo team: %v", err)
+	}
+
+	agents, err := store.ReadAgents(db)
+	if err != nil {
+		t.Fatalf("ReadAgents: %v", err)
+	}
+	var defaultID, teamID string
+	for _, a := range agents {
+		if a.Name != "coder" {
+			continue
+		}
+		switch a.WorkspaceID {
+		case fleet.DefaultWorkspaceID:
+			defaultID = a.ID
+		case "team-a":
+			teamID = a.ID
+		}
+	}
+	if defaultID == "" || teamID == "" || defaultID == teamID {
+		t.Fatalf("agent ids: default=%q team=%q, want distinct non-empty ids", defaultID, teamID)
+	}
+
+	repos, err := store.ReadRepos(db)
+	if err != nil {
+		t.Fatalf("ReadRepos: %v", err)
+	}
+	labelsByWorkspace := map[string]string{}
+	for _, r := range repos {
+		if r.Name == "owner/repo" && len(r.Use) == 1 && len(r.Use[0].Labels) == 1 {
+			labelsByWorkspace[r.WorkspaceID] = r.Use[0].Labels[0]
+		}
+	}
+	if labelsByWorkspace[fleet.DefaultWorkspaceID] != "ai:default" || labelsByWorkspace["team-a"] != "ai:team" {
+		t.Fatalf("repo bindings by workspace = %+v, want isolated default/team bindings", labelsByWorkspace)
+	}
+}
+
 func TestUpsertAgentIgnoresCallerProvidedID(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
@@ -207,6 +275,58 @@ func TestGraphLayoutPersistsByStableAgentID(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].NodeID != id {
 		t.Fatalf("layout after agent update = %+v, want node id %s preserved", got, id)
+	}
+}
+
+func TestGraphLayoutIsWorkspaceScoped(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	seedBackend(t, db, "claude")
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+	for _, agent := range []fleet.Agent{
+		{Name: "default-coder", Backend: "claude", Prompt: "p", Description: "default coder", WorkspaceID: fleet.DefaultWorkspaceID, Skills: []string{}, CanDispatch: []string{}},
+		{Name: "team-coder", Backend: "claude", Prompt: "p", Description: "team coder", WorkspaceID: "team-a", Skills: []string{}, CanDispatch: []string{}},
+	} {
+		if err := store.UpsertAgent(db, agent); err != nil {
+			t.Fatalf("UpsertAgent %s: %v", agent.Name, err)
+		}
+	}
+	agents, err := store.ReadAgents(db)
+	if err != nil {
+		t.Fatalf("ReadAgents: %v", err)
+	}
+	ids := map[string]string{}
+	for _, a := range agents {
+		ids[a.Name] = a.ID
+	}
+
+	if err := store.UpsertWorkspaceGraphLayout(db, fleet.DefaultWorkspaceID, []store.GraphNodePosition{{NodeID: ids["default-coder"], X: 1, Y: 2}}); err != nil {
+		t.Fatalf("UpsertWorkspaceGraphLayout default: %v", err)
+	}
+	if err := store.UpsertWorkspaceGraphLayout(db, "team-a", []store.GraphNodePosition{{NodeID: ids["team-coder"], X: 3, Y: 4}}); err != nil {
+		t.Fatalf("UpsertWorkspaceGraphLayout team-a: %v", err)
+	}
+
+	defaultLayout, err := store.ReadWorkspaceGraphLayout(db, fleet.DefaultWorkspaceID)
+	if err != nil {
+		t.Fatalf("ReadWorkspaceGraphLayout default: %v", err)
+	}
+	if len(defaultLayout) != 1 || defaultLayout[0].NodeID != ids["default-coder"] {
+		t.Fatalf("default layout = %+v, want default-coder only", defaultLayout)
+	}
+	teamLayout, err := store.ReadWorkspaceGraphLayout(db, "team-a")
+	if err != nil {
+		t.Fatalf("ReadWorkspaceGraphLayout team-a: %v", err)
+	}
+	if len(teamLayout) != 1 || teamLayout[0].NodeID != ids["team-coder"] {
+		t.Fatalf("team layout = %+v, want team-coder only", teamLayout)
+	}
+
+	if err := store.UpsertWorkspaceGraphLayout(db, "team-a", []store.GraphNodePosition{{NodeID: ids["default-coder"], X: 9, Y: 9}}); err == nil {
+		t.Fatal("UpsertWorkspaceGraphLayout accepted agent from another workspace")
 	}
 }
 
@@ -306,6 +426,40 @@ func TestUpsertAndReadSkills(t *testing.T) {
 	}
 	if skills["architect"].Prompt != "Focus on architecture." {
 		t.Errorf("Prompt: got %q", skills["architect"].Prompt)
+	}
+}
+
+func TestUpsertScopedSkillDerivesStableID(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	s := fleet.Skill{
+		WorkspaceID: "Platform",
+		Repo:        "EloyLP/Agents",
+		Name:        "Review",
+		Prompt:      "p",
+	}
+	if err := store.UpsertSkill(db, "", s); err != nil {
+		t.Fatalf("UpsertSkill scoped without id: %v", err)
+	}
+	if err := store.UpsertSkill(db, "", fleet.Skill{
+		WorkspaceID: "platform",
+		Repo:        "eloylp/agents",
+		Name:        "review",
+		Prompt:      "updated",
+	}); err != nil {
+		t.Fatalf("UpsertSkill scoped update without id: %v", err)
+	}
+	skills, err := store.ReadSkills(db)
+	if err != nil {
+		t.Fatalf("ReadSkills: %v", err)
+	}
+	got, ok := skills["skill_platform_eloylp_agents_review"]
+	if !ok {
+		t.Fatalf("derived scoped skill missing; keys=%v", slices.Collect(maps.Keys(skills)))
+	}
+	if got.WorkspaceID != "platform" || got.Repo != "eloylp/agents" || got.Name != "review" || got.Prompt != "updated" {
+		t.Fatalf("scoped skill = %+v, want normalized updated skill", got)
 	}
 }
 
@@ -721,7 +875,7 @@ func TestDeleteSkillRejectedWhenAgentReferences(t *testing.T) {
 	if err == nil {
 		t.Fatal("DeleteSkill still referenced by agent: want error, got nil")
 	}
-	if !strings.Contains(err.Error(), "unknown skill") {
+	if !strings.Contains(err.Error(), `skill "architect" is referenced by 1 agent(s): default/coder`) {
 		t.Errorf("unexpected error message: %v", err)
 	}
 
@@ -1147,7 +1301,7 @@ func TestDeleteRepoAllowsLastEnabled(t *testing.T) {
 // ──── Normalization ───────────────────────────────────────────────────────────
 
 // TestUpsertNormalizesNames verifies that UpsertAgent, UpsertSkill,
-// UpsertBackend, and UpsertRepo all lowercase+trim entity keys before writing
+// UpsertBackend, UpsertPrompt, and UpsertRepo all lowercase+trim entity keys before writing
 // to SQLite. This ensures the stored form matches what FinishLoad would
 // produce at startup, so AgentByName lookups and registerJobs cron bindings
 // never silently diverge from the persisted rows after a live CRUD write.
@@ -1170,6 +1324,21 @@ func TestUpsertNormalizesNames(t *testing.T) {
 	}
 	if _, bad := backends["Claude"]; bad {
 		t.Error("original mixed-case key 'Claude' should not be present after normalisation")
+	}
+
+	// Prompt, mixed-case name should be stored lowercase.
+	if _, err := store.UpsertPrompt(db, fleet.Prompt{Name: "Release-Notes", Content: "p"}); err != nil {
+		t.Fatalf("UpsertPrompt: %v", err)
+	}
+	prompts, err := store.ReadPrompts(db)
+	if err != nil {
+		t.Fatalf("ReadPrompts: %v", err)
+	}
+	if !slices.ContainsFunc(prompts, func(p fleet.Prompt) bool { return p.Name == "release-notes" }) {
+		t.Errorf("prompt name not normalised: got %+v, want release-notes", prompts)
+	}
+	if slices.ContainsFunc(prompts, func(p fleet.Prompt) bool { return p.Name == "Release-Notes" }) {
+		t.Error("original mixed-case prompt name 'Release-Notes' should not be present after normalisation")
 	}
 
 	// Skill, mixed-case key should be stored lowercase.

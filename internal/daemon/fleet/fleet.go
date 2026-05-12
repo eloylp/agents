@@ -68,18 +68,32 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/graph/layout", withTimeout(http.HandlerFunc(h.handleGraphLayoutPut))).Methods(http.MethodPut)
 	r.Handle("/graph/layout", withTimeout(http.HandlerFunc(h.handleGraphLayoutDelete))).Methods(http.MethodDelete)
 
+	r.Handle("/workspaces", withTimeout(http.HandlerFunc(h.handleWorkspacesList))).Methods(http.MethodGet)
+	r.Handle("/workspaces", withTimeout(http.HandlerFunc(h.handleWorkspaceCreate))).Methods(http.MethodPost)
+	r.Handle("/workspaces/{workspace}", withTimeout(http.HandlerFunc(h.handleWorkspaceGet))).Methods(http.MethodGet)
+	r.Handle("/workspaces/{workspace}", withTimeout(http.HandlerFunc(h.handleWorkspacePatch))).Methods(http.MethodPatch)
+	r.Handle("/workspaces/{workspace}", withTimeout(http.HandlerFunc(h.handleWorkspaceDelete))).Methods(http.MethodDelete)
+	r.Handle("/workspaces/{workspace}/guardrails", withTimeout(http.HandlerFunc(h.handleWorkspaceGuardrailsGet))).Methods(http.MethodGet)
+	r.Handle("/workspaces/{workspace}/guardrails", withTimeout(http.HandlerFunc(h.handleWorkspaceGuardrailsPut))).Methods(http.MethodPut)
+
 	r.Handle("/skills", withTimeout(http.HandlerFunc(h.handleSkillsList))).Methods(http.MethodGet)
 	r.Handle("/skills", withTimeout(http.HandlerFunc(h.handleSkillCreate))).Methods(http.MethodPost)
-	r.Handle("/skills/{name}", withTimeout(http.HandlerFunc(h.handleSkillGet))).Methods(http.MethodGet)
-	r.Handle("/skills/{name}", withTimeout(http.HandlerFunc(h.handleSkillPatchByName))).Methods(http.MethodPatch)
-	r.Handle("/skills/{name}", withTimeout(http.HandlerFunc(h.handleSkillDelete))).Methods(http.MethodDelete)
+	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillGet))).Methods(http.MethodGet)
+	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillPatchByName))).Methods(http.MethodPatch)
+	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillDelete))).Methods(http.MethodDelete)
 
 	r.Handle("/guardrails", withTimeout(http.HandlerFunc(h.handleGuardrailsList))).Methods(http.MethodGet)
 	r.Handle("/guardrails", withTimeout(http.HandlerFunc(h.handleGuardrailCreate))).Methods(http.MethodPost)
-	r.Handle("/guardrails/{name}", withTimeout(http.HandlerFunc(h.handleGuardrailGet))).Methods(http.MethodGet)
-	r.Handle("/guardrails/{name}", withTimeout(http.HandlerFunc(h.handleGuardrailPatchByName))).Methods(http.MethodPatch)
-	r.Handle("/guardrails/{name}", withTimeout(http.HandlerFunc(h.handleGuardrailDelete))).Methods(http.MethodDelete)
-	r.Handle("/guardrails/{name}/reset", withTimeout(http.HandlerFunc(h.handleGuardrailReset))).Methods(http.MethodPost)
+	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailGet))).Methods(http.MethodGet)
+	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailPatchByName))).Methods(http.MethodPatch)
+	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailDelete))).Methods(http.MethodDelete)
+	r.Handle("/guardrails/{id}/reset", withTimeout(http.HandlerFunc(h.handleGuardrailReset))).Methods(http.MethodPost)
+
+	r.Handle("/prompts", withTimeout(http.HandlerFunc(h.handlePromptsList))).Methods(http.MethodGet)
+	r.Handle("/prompts", withTimeout(http.HandlerFunc(h.handlePromptCreate))).Methods(http.MethodPost)
+	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptGet))).Methods(http.MethodGet)
+	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptPatchByID))).Methods(http.MethodPatch)
+	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptDelete))).Methods(http.MethodDelete)
 
 	r.Handle("/backends", withTimeout(http.HandlerFunc(h.handleBackendsList))).Methods(http.MethodGet)
 	r.Handle("/backends", withTimeout(http.HandlerFunc(h.handleBackendCreate))).Methods(http.MethodPost)
@@ -103,6 +117,9 @@ func (h *Handler) HandleAgentsCreate(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, h.maxBodyBytes, &req) {
 		return
 	}
+	if req.WorkspaceID == "" {
+		req.WorkspaceID = fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
+	}
 	canonical, err := h.UpsertAgent(req.toConfig())
 	if err != nil {
 		h.writeErr(w, err, "agent upsert or cron reload")
@@ -115,11 +132,17 @@ func (h *Handler) HandleAgentsCreate(w http.ResponseWriter, r *http.Request) {
 
 type storeAgentJSON struct {
 	ID            string   `json:"id,omitempty"`
+	WorkspaceID   string   `json:"workspace_id,omitempty"`
 	Name          string   `json:"name"`
 	Backend       string   `json:"backend"`
 	Model         string   `json:"model,omitempty"`
 	Skills        []string `json:"skills"`
-	Prompt        string   `json:"prompt"`
+	Prompt        string   `json:"prompt,omitempty"`
+	PromptID      string   `json:"prompt_id,omitempty"`
+	PromptRef     string   `json:"prompt_ref,omitempty"`
+	PromptScope   string   `json:"prompt_scope,omitempty"`
+	ScopeType     string   `json:"scope_type,omitempty"`
+	ScopeRepo     string   `json:"scope_repo,omitempty"`
 	AllowPRs      bool     `json:"allow_prs"`
 	AllowDispatch bool     `json:"allow_dispatch"`
 	CanDispatch   []string `json:"can_dispatch"`
@@ -135,11 +158,16 @@ func agentToStoreJSON(a fleet.Agent) storeAgentJSON {
 	allowMem := a.IsAllowMemory()
 	return storeAgentJSON{
 		ID:            a.ID,
+		WorkspaceID:   a.WorkspaceID,
 		Name:          a.Name,
 		Backend:       a.Backend,
 		Model:         a.Model,
 		Skills:        nilSafeStrings(a.Skills),
-		Prompt:        a.Prompt,
+		PromptID:      a.PromptID,
+		PromptRef:     a.PromptRef,
+		PromptScope:   a.PromptScope,
+		ScopeType:     a.ScopeType,
+		ScopeRepo:     a.ScopeRepo,
 		AllowPRs:      a.AllowPRs,
 		AllowDispatch: a.AllowDispatch,
 		CanDispatch:   nilSafeStrings(a.CanDispatch),
@@ -150,11 +178,17 @@ func agentToStoreJSON(a fleet.Agent) storeAgentJSON {
 
 func (j storeAgentJSON) toConfig() fleet.Agent {
 	return fleet.Agent{
+		WorkspaceID:   j.WorkspaceID,
 		Name:          j.Name,
 		Backend:       j.Backend,
 		Model:         j.Model,
 		Skills:        nilSafeStrings(j.Skills),
 		Prompt:        j.Prompt,
+		PromptID:      j.PromptID,
+		PromptRef:     j.PromptRef,
+		PromptScope:   j.PromptScope,
+		ScopeType:     j.ScopeType,
+		ScopeRepo:     j.ScopeRepo,
 		AllowPRs:      j.AllowPRs,
 		AllowDispatch: j.AllowDispatch,
 		CanDispatch:   nilSafeStrings(j.CanDispatch),
@@ -170,10 +204,16 @@ func (j storeAgentJSON) toConfig() fleet.Agent {
 // record, then runs the merged entity through UpsertAgent so the same
 // validation and cron-reload paths apply.
 type AgentPatch struct {
+	WorkspaceID   *string   `json:"workspace_id,omitempty"`
 	Backend       *string   `json:"backend,omitempty"`
 	Model         *string   `json:"model,omitempty"`
 	Skills        *[]string `json:"skills,omitempty"`
 	Prompt        *string   `json:"prompt,omitempty"`
+	PromptID      *string   `json:"prompt_id,omitempty"`
+	PromptRef     *string   `json:"prompt_ref,omitempty"`
+	PromptScope   *string   `json:"prompt_scope,omitempty"`
+	ScopeType     *string   `json:"scope_type,omitempty"`
+	ScopeRepo     *string   `json:"scope_repo,omitempty"`
 	AllowPRs      *bool     `json:"allow_prs,omitempty"`
 	AllowDispatch *bool     `json:"allow_dispatch,omitempty"`
 	CanDispatch   *[]string `json:"can_dispatch,omitempty"`
@@ -185,12 +225,16 @@ type AgentPatch struct {
 // both the REST PATCH handler and the MCP update_agent tool to reject empty
 // payloads before hitting the store.
 func (p AgentPatch) AnyFieldSet() bool {
-	return p.Backend != nil || p.Model != nil || p.Skills != nil || p.Prompt != nil ||
+	return p.WorkspaceID != nil || p.Backend != nil || p.Model != nil || p.Skills != nil || p.Prompt != nil || p.PromptID != nil ||
+		p.PromptRef != nil || p.PromptScope != nil || p.ScopeType != nil || p.ScopeRepo != nil ||
 		p.AllowPRs != nil || p.AllowDispatch != nil || p.CanDispatch != nil ||
 		p.Description != nil || p.AllowMemory != nil
 }
 
 func (p AgentPatch) apply(a *fleet.Agent) {
+	if p.WorkspaceID != nil {
+		a.WorkspaceID = *p.WorkspaceID
+	}
 	if p.Backend != nil {
 		a.Backend = *p.Backend
 	}
@@ -202,6 +246,28 @@ func (p AgentPatch) apply(a *fleet.Agent) {
 	}
 	if p.Prompt != nil {
 		a.Prompt = *p.Prompt
+	}
+	if p.PromptRef != nil {
+		a.PromptRef = *p.PromptRef
+		if strings.TrimSpace(*p.PromptRef) != "" {
+			a.PromptID = ""
+		}
+	}
+	if p.PromptScope != nil {
+		a.PromptScope = *p.PromptScope
+	}
+	if p.PromptID != nil {
+		a.PromptID = *p.PromptID
+		if strings.TrimSpace(*p.PromptID) != "" {
+			a.PromptRef = ""
+			a.PromptScope = ""
+		}
+	}
+	if p.ScopeType != nil {
+		a.ScopeType = *p.ScopeType
+	}
+	if p.ScopeRepo != nil {
+		a.ScopeRepo = *p.ScopeRepo
 	}
 	if p.AllowPRs != nil {
 		a.AllowPRs = *p.AllowPRs
@@ -225,12 +291,15 @@ func (p AgentPatch) apply(a *fleet.Agent) {
 
 func (h *Handler) handleAgentGet(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeAgentName(mux.Vars(r)["name"])
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	agents, err := h.store.ReadAgents()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read agents: %v", err), http.StatusInternalServerError)
 		return
 	}
-	idx := slices.IndexFunc(agents, func(a fleet.Agent) bool { return a.Name == name })
+	idx := slices.IndexFunc(agents, func(a fleet.Agent) bool {
+		return a.Name == name && fleet.NormalizeWorkspaceID(a.WorkspaceID) == workspaceID
+	})
 	if idx < 0 {
 		http.NotFound(w, r)
 		return
@@ -245,8 +314,9 @@ func (h *Handler) handleAgentPatchByName(w http.ResponseWriter, r *http.Request)
 
 func (h *Handler) handleAgentDelete(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeAgentName(mux.Vars(r)["name"])
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	cascade := r.URL.Query().Get("cascade") == "true"
-	if err := h.DeleteAgent(name, cascade); err != nil {
+	if err := h.DeleteAgentInWorkspace(workspaceID, name, cascade); err != nil {
 		h.writeErr(w, err, "agent delete or cron reload")
 		return
 	}
@@ -262,7 +332,12 @@ func (h *Handler) handleAgentPatch(w http.ResponseWriter, r *http.Request, name 
 		http.Error(w, "at least one field is required", http.StatusBadRequest)
 		return
 	}
-	canonical, err := h.updateAgent(name, req)
+	if req.Prompt != nil {
+		http.Error(w, "agent prompt bodies are import-only; use prompt_ref", http.StatusBadRequest)
+		return
+	}
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
+	canonical, err := h.updateAgent(name, workspaceID, req)
 	if err != nil {
 		h.writeErr(w, err, "agent patch or cron reload")
 		return
@@ -279,6 +354,18 @@ func (h *Handler) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 	if strings.TrimSpace(a.Name) == "" {
 		return fleet.Agent{}, &store.ErrValidation{Msg: "name is required"}
 	}
+	if strings.TrimSpace(a.Prompt) != "" {
+		return fleet.Agent{}, &store.ErrValidation{Msg: "agent prompt bodies are import-only; use prompt_ref"}
+	}
+	if strings.TrimSpace(a.PromptID) != "" {
+		// prompt_id is the only persisted reference. prompt_ref/prompt_scope are
+		// human-facing selectors and may be echoed by read-modify-write clients.
+		a.PromptRef = ""
+		a.PromptScope = ""
+	}
+	if strings.TrimSpace(a.PromptRef) == "" && strings.TrimSpace(a.PromptID) == "" {
+		return fleet.Agent{}, &store.ErrValidation{Msg: "prompt_id or prompt_ref is required"}
+	}
 	normalizedName := fleet.NormalizeAgentName(a.Name)
 	if err := h.store.UpsertAgent(a); err != nil {
 		return fleet.Agent{}, err
@@ -287,7 +374,10 @@ func (h *Handler) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 	if err != nil {
 		return fleet.Agent{}, err
 	}
-	idx := slices.IndexFunc(agents, func(agent fleet.Agent) bool { return agent.Name == normalizedName })
+	workspaceID := fleet.NormalizeWorkspaceID(a.WorkspaceID)
+	idx := slices.IndexFunc(agents, func(agent fleet.Agent) bool {
+		return agent.Name == normalizedName && fleet.NormalizeWorkspaceID(agent.WorkspaceID) == workspaceID
+	})
 	if idx < 0 {
 		return fleet.Agent{}, fmt.Errorf("agent %q not found after upsert", normalizedName)
 	}
@@ -298,26 +388,50 @@ func (h *Handler) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 // *store.ErrNotFound when the agent does not exist. Used by both the REST
 // PATCH handler and the MCP update_agent tool.
 func (h *Handler) UpdateAgentPatch(name string, patch AgentPatch) (fleet.Agent, error) {
-	return h.updateAgent(name, patch)
+	return h.UpdateAgentPatchInWorkspace(fleet.DefaultWorkspaceID, name, patch)
 }
 
-func (h *Handler) updateAgent(name string, patch AgentPatch) (fleet.Agent, error) {
+// UpdateAgentPatchInWorkspace applies a partial patch to the named agent in
+// workspace. Empty workspace keeps the default-workspace compatibility path.
+func (h *Handler) UpdateAgentPatchInWorkspace(workspaceID, name string, patch AgentPatch) (fleet.Agent, error) {
+	return h.updateAgent(name, workspaceID, patch)
+}
+
+func (h *Handler) updateAgent(name, workspaceID string, patch AgentPatch) (fleet.Agent, error) {
+	if patch.Prompt != nil {
+		return fleet.Agent{}, &store.ErrValidation{Msg: "agent prompt bodies are import-only; use prompt_ref"}
+	}
 	normalized := fleet.NormalizeAgentName(name)
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	agents, err := h.store.ReadAgents()
 	if err != nil {
 		return fleet.Agent{}, err
 	}
-	idx := slices.IndexFunc(agents, func(a fleet.Agent) bool { return a.Name == normalized })
+	idx := slices.IndexFunc(agents, func(a fleet.Agent) bool {
+		return a.Name == normalized && fleet.NormalizeWorkspaceID(a.WorkspaceID) == workspaceID
+	})
 	if idx < 0 {
-		return fleet.Agent{}, &store.ErrNotFound{Msg: fmt.Sprintf("agent %q not found", normalized)}
+		return fleet.Agent{}, &store.ErrNotFound{Msg: fmt.Sprintf("agent %q not found in workspace %q", normalized, workspaceID)}
 	}
 	merged := agents[idx]
+	if patch.WorkspaceID != nil && fleet.NormalizeWorkspaceID(*patch.WorkspaceID) != fleet.NormalizeWorkspaceID(merged.WorkspaceID) {
+		return fleet.Agent{}, &store.ErrValidation{Msg: "workspace_id cannot be changed with PATCH; create the agent in the target workspace instead"}
+	}
 	patch.apply(&merged)
 	if err := h.store.UpsertAgent(merged); err != nil {
 		return fleet.Agent{}, err
 	}
-	fleet.NormalizeAgent(&merged)
-	return merged, nil
+	agents, err = h.store.ReadAgents()
+	if err != nil {
+		return fleet.Agent{}, err
+	}
+	idx = slices.IndexFunc(agents, func(a fleet.Agent) bool {
+		return a.Name == normalized && fleet.NormalizeWorkspaceID(a.WorkspaceID) == workspaceID
+	})
+	if idx < 0 {
+		return fleet.Agent{}, fmt.Errorf("agent %q not found after patch", normalized)
+	}
+	return agents[idx], nil
 }
 
 // DeleteAgent removes an agent from the store. When cascade is true, repo
@@ -325,22 +439,39 @@ func (h *Handler) updateAgent(name string, patch AgentPatch) (fleet.Agent, error
 // *store.ErrConflict is returned if any binding still references the
 // agent.
 func (h *Handler) DeleteAgent(name string, cascade bool) error {
+	return h.DeleteAgentInWorkspace(fleet.DefaultWorkspaceID, name, cascade)
+}
+
+func (h *Handler) DeleteAgentInWorkspace(workspaceID, name string, cascade bool) error {
 	if cascade {
-		return h.store.DeleteAgentCascade(name)
+		return h.store.DeleteWorkspaceAgentCascade(workspaceID, name)
 	}
-	return h.store.DeleteAgent(name)
+	return h.store.DeleteWorkspaceAgent(workspaceID, name)
 }
 
 // ── Skill wire types ────────────────────────────────────────────────────────────────────────────────────
 
 type storeSkillJSON struct {
-	Name   string `json:"name"`
-	Prompt string `json:"prompt"`
+	ID          string `json:"id,omitempty"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Repo        string `json:"repo,omitempty"`
+	Name        string `json:"name"`
+	Prompt      string `json:"prompt"`
+}
+
+func skillToStoreJSON(id string, sk fleet.Skill) storeSkillJSON {
+	return storeSkillJSON{
+		ID:          id,
+		WorkspaceID: sk.WorkspaceID,
+		Repo:        sk.Repo,
+		Name:        sk.Name,
+		Prompt:      sk.Prompt,
+	}
 }
 
 // SkillPatch is the partial-update shape for a skill. Used by both the REST
-// PATCH /skills/{name} handler and the MCP update_skill tool. A nil Prompt
-// means "don't touch".
+// PATCH /skills/{id} handler and the MCP update_skill tool. A nil Prompt means
+// "don't touch".
 type SkillPatch struct {
 	Prompt *string `json:"prompt,omitempty"`
 }
@@ -365,8 +496,8 @@ func (h *Handler) handleSkillsList(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	out := make([]storeSkillJSON, 0, len(skills))
-	for name, sk := range skills {
-		out = append(out, storeSkillJSON{Name: name, Prompt: sk.Prompt})
+	for id, sk := range skills {
+		out = append(out, skillToStoreJSON(id, sk))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -376,16 +507,20 @@ func (h *Handler) handleSkillCreate(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, h.maxBodyBytes, &req) {
 		return
 	}
-	name, sk, err := h.UpsertSkill(req.Name, fleet.Skill{Prompt: req.Prompt})
+	id := req.ID
+	if id == "" && req.WorkspaceID == "" && req.Repo == "" {
+		id = req.Name
+	}
+	name, sk, err := h.UpsertSkill(id, fleet.Skill{ID: id, WorkspaceID: req.WorkspaceID, Repo: req.Repo, Name: req.Name, Prompt: req.Prompt})
 	if err != nil {
 		h.writeErr(w, err, "skill upsert or cron reload")
 		return
 	}
-	writeJSON(w, http.StatusOK, storeSkillJSON{Name: name, Prompt: sk.Prompt})
+	writeJSON(w, http.StatusOK, skillToStoreJSON(name, sk))
 }
 
 func (h *Handler) handleSkillGet(w http.ResponseWriter, r *http.Request) {
-	name := fleet.NormalizeSkillName(mux.Vars(r)["name"])
+	name := fleet.NormalizeSkillName(mux.Vars(r)["id"])
 	skills, err := h.store.ReadSkills()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("read skills: %v", err), http.StatusInternalServerError)
@@ -396,16 +531,16 @@ func (h *Handler) handleSkillGet(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	writeJSON(w, http.StatusOK, storeSkillJSON{Name: name, Prompt: sk.Prompt})
+	writeJSON(w, http.StatusOK, skillToStoreJSON(name, sk))
 }
 
 func (h *Handler) handleSkillPatchByName(w http.ResponseWriter, r *http.Request) {
-	name := fleet.NormalizeSkillName(mux.Vars(r)["name"])
+	name := fleet.NormalizeSkillName(mux.Vars(r)["id"])
 	h.handleSkillPatch(w, r, name)
 }
 
 func (h *Handler) handleSkillDelete(w http.ResponseWriter, r *http.Request) {
-	name := fleet.NormalizeSkillName(mux.Vars(r)["name"])
+	name := fleet.NormalizeSkillName(mux.Vars(r)["id"])
 	if err := h.DeleteSkill(name); err != nil {
 		h.writeErr(w, err, "skill delete or cron reload")
 		return
@@ -427,23 +562,39 @@ func (h *Handler) handleSkillPatch(w http.ResponseWriter, r *http.Request, name 
 		h.writeErr(w, err, "skill patch or cron reload")
 		return
 	}
-	writeJSON(w, http.StatusOK, storeSkillJSON{Name: canonicalName, Prompt: canonical.Prompt})
+	writeJSON(w, http.StatusOK, skillToStoreJSON(canonicalName, canonical))
 }
 
 // ── Skill methods (exposed for MCP) ───────────────────────────────────────────────────────────────────────────────
 
 // UpsertSkill writes a single skill into the store and reloads the cron
-// scheduler. Returns the canonical (normalized) name and Skill that were
-// persisted. Empty/whitespace names are rejected as *store.ErrValidation.
+// scheduler. Returns the canonical stable id and Skill that were persisted.
+// Empty id is accepted when the Skill carries a name, allowing scoped skill
+// creates to derive the same stable id shape as imports.
 func (h *Handler) UpsertSkill(name string, sk fleet.Skill) (string, fleet.Skill, error) {
-	if strings.TrimSpace(name) == "" {
+	if strings.TrimSpace(name) == "" && strings.TrimSpace(sk.Name) == "" {
 		return "", fleet.Skill{}, &store.ErrValidation{Msg: "name is required"}
 	}
 	if err := h.store.UpsertSkill(name, sk); err != nil {
 		return "", fleet.Skill{}, err
 	}
+	skills, err := h.store.ReadSkills()
+	if err != nil {
+		return "", fleet.Skill{}, err
+	}
+	normalizedID := fleet.NormalizeSkillName(name)
+	if normalizedID != "" {
+		if persisted, ok := skills[normalizedID]; ok {
+			return normalizedID, persisted, nil
+		}
+	}
 	fleet.NormalizeSkill(&sk)
-	return fleet.NormalizeSkillName(name), sk, nil
+	for id, persisted := range skills {
+		if persisted.WorkspaceID == sk.WorkspaceID && persisted.Repo == sk.Repo && persisted.Name == sk.Name {
+			return id, persisted, nil
+		}
+	}
+	return "", fleet.Skill{}, &store.ErrNotFound{Msg: fmt.Sprintf("skill %q not found after upsert", sk.Name)}
 }
 
 // UpdateSkillPatch applies a partial patch to the named skill. Returns
@@ -475,6 +626,148 @@ func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skil
 // *store.ErrConflict if any agent still references the skill.
 func (h *Handler) DeleteSkill(name string) error {
 	return h.store.DeleteSkill(name)
+}
+
+// ── Prompt wire types ────────────────────────────────────────────────────────────────────────────────────
+
+type storePromptJSON struct {
+	ID          string `json:"id,omitempty"`
+	Scope       string `json:"scope,omitempty"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Repo        string `json:"repo,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Content     string `json:"content"`
+}
+
+type PromptPatch struct {
+	Description *string `json:"description,omitempty"`
+	Content     *string `json:"content,omitempty"`
+}
+
+func (p PromptPatch) AnyFieldSet() bool { return p.Description != nil || p.Content != nil }
+
+func (p PromptPatch) apply(prompt *fleet.Prompt) {
+	if p.Description != nil {
+		prompt.Description = *p.Description
+	}
+	if p.Content != nil {
+		prompt.Content = *p.Content
+	}
+}
+
+func promptToStoreJSON(p fleet.Prompt) storePromptJSON {
+	return storePromptJSON{
+		ID:          p.ID,
+		Scope:       fleet.CatalogScopePath(p.WorkspaceID, p.Repo),
+		WorkspaceID: p.WorkspaceID,
+		Repo:        p.Repo,
+		Name:        p.Name,
+		Description: p.Description,
+		Content:     p.Content,
+	}
+}
+
+func (j storePromptJSON) toConfig() fleet.Prompt {
+	workspaceID := j.WorkspaceID
+	repo := j.Repo
+	if workspace, scopedRepo, explicit := fleet.ParseCatalogScopePath(j.Scope); explicit {
+		workspaceID = workspace
+		repo = scopedRepo
+	}
+	return fleet.Prompt{
+		ID:          j.ID,
+		WorkspaceID: workspaceID,
+		Repo:        repo,
+		Name:        j.Name,
+		Description: j.Description,
+		Content:     j.Content,
+	}
+}
+
+func (h *Handler) handlePromptsList(w http.ResponseWriter, _ *http.Request) {
+	prompts, err := h.store.ReadPrompts()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read prompts: %v", err), http.StatusInternalServerError)
+		return
+	}
+	out := make([]storePromptJSON, 0, len(prompts))
+	for _, p := range prompts {
+		out = append(out, promptToStoreJSON(p))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) handlePromptCreate(w http.ResponseWriter, r *http.Request) {
+	var req storePromptJSON
+	if !decodeBody(w, r, h.maxBodyBytes, &req) {
+		return
+	}
+	prompt, err := h.UpsertPrompt(req.toConfig())
+	if err != nil {
+		h.writeErr(w, err, "prompt upsert")
+		return
+	}
+	writeJSON(w, http.StatusOK, promptToStoreJSON(prompt))
+}
+
+func (h *Handler) handlePromptGet(w http.ResponseWriter, r *http.Request) {
+	ref := mux.Vars(r)["id"]
+	prompt, err := h.store.ReadPrompt(ref)
+	if err != nil {
+		h.writeErr(w, err, "prompt get")
+		return
+	}
+	writeJSON(w, http.StatusOK, promptToStoreJSON(prompt))
+}
+
+func (h *Handler) handlePromptPatchByID(w http.ResponseWriter, r *http.Request) {
+	ref := mux.Vars(r)["id"]
+	var req PromptPatch
+	if !decodeBody(w, r, h.maxBodyBytes, &req) {
+		return
+	}
+	if !req.AnyFieldSet() {
+		http.Error(w, "at least one field is required", http.StatusBadRequest)
+		return
+	}
+	prompt, err := h.updatePrompt(ref, req)
+	if err != nil {
+		h.writeErr(w, err, "prompt patch")
+		return
+	}
+	writeJSON(w, http.StatusOK, promptToStoreJSON(prompt))
+}
+
+func (h *Handler) handlePromptDelete(w http.ResponseWriter, r *http.Request) {
+	ref := mux.Vars(r)["id"]
+	if err := h.DeletePrompt(ref); err != nil {
+		h.writeErr(w, err, "prompt delete")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) UpsertPrompt(p fleet.Prompt) (fleet.Prompt, error) {
+	return h.store.UpsertPrompt(p)
+}
+
+func (h *Handler) UpdatePromptPatch(ref string, patch PromptPatch) (fleet.Prompt, error) {
+	return h.updatePrompt(ref, patch)
+}
+
+func (h *Handler) updatePrompt(ref string, patch PromptPatch) (fleet.Prompt, error) {
+	prompt, err := h.store.ReadPrompt(ref)
+	if err != nil {
+		return fleet.Prompt{}, err
+	}
+	merged := prompt
+	patch.apply(&merged)
+	return h.store.UpsertPrompt(merged)
+}
+
+func (h *Handler) DeletePrompt(ref string) error {
+	return h.store.DeletePrompt(ref)
 }
 
 // ── Backend wire types ──────────────────────────────────────────────────────────────────────────────────

@@ -1,7 +1,9 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
 import Card from '@/components/Card'
+import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { openAuthenticatedSSE } from '@/lib/sse'
+import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
 interface Agent {
   name: string
@@ -21,21 +23,27 @@ export default function MemoryPage() {
   const [file, setFile] = useState<MemoryFile | null>(null)
   const [loading, setLoading] = useState(false)
   const [streaming, setStreaming] = useState(false)
+  const { workspace } = useSelectedWorkspace()
 
   useEffect(() => {
-    fetch('/agents')
+    fetch(withWorkspace('/agents', workspace))
       .then(r => r.json())
       .then(data => setAgents(data ?? []))
       .catch(() => {})
-  }, [])
+  }, [workspace])
+
+  useEffect(() => {
+    setSelected(null)
+    setFile(null)
+  }, [workspace])
 
   // Watch memory stream for change notifications
   useEffect(() => {
-    const stream = openAuthenticatedSSE('/memory/stream', {
+    const stream = openAuthenticatedSSE(withWorkspace('/memory/stream', workspace), {
       onOpen: () => setStreaming(true),
       onMessage: data => {
         try {
-          const msg: { agent: string; repo: string } = JSON.parse(data)
+          const msg: { agent: string; repo: string; workspace_id?: string; workspace?: string } = JSON.parse(data)
           if (selected && msg.agent === selected.agent && msg.repo === selected.repoKey) {
             loadFile(selected.agent, selected.repoKey)
           }
@@ -44,11 +52,11 @@ export default function MemoryPage() {
       onError: () => setStreaming(false),
     })
     return () => stream.close()
-  }, [selected]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selected, workspace]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadFile = (agent: string, repoKey: string) => {
     setLoading(true)
-    fetch(`/memory/${encodeURIComponent(agent)}/${encodeURIComponent(repoKey)}`)
+    fetch(withWorkspace(`/memory/${encodeURIComponent(agent)}/${encodeURIComponent(repoKey)}`, workspace))
       .then(async r => {
         if (!r.ok) throw new Error(`${r.status}`)
         const text = await r.text()
@@ -98,6 +106,7 @@ export default function MemoryPage() {
             Read-only view of agent memory · {streaming ? '🟢 watching for changes' : '🔴 disconnected'}
           </p>
         </div>
+        <WorkspaceSelect compact />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: '1rem', alignItems: 'start' }}>

@@ -34,6 +34,8 @@ import (
 type Config struct {
 	Daemon     DaemonConfig             `yaml:"-"`
 	Backends   map[string]fleet.Backend `yaml:"backends,omitempty"`
+	Workspaces []fleet.Workspace        `yaml:"workspaces,omitempty"`
+	Prompts    []fleet.Prompt           `yaml:"prompts,omitempty"`
 	Skills     map[string]fleet.Skill   `yaml:"skills"`
 	Agents     []fleet.Agent            `yaml:"agents"`
 	Repos      []fleet.Repo             `yaml:"repos"`
@@ -162,8 +164,24 @@ func Load(path string) (*Config, error) {
 // RepoByName returns the repo definition with the given full name
 // (case-insensitive).
 func (c *Config) RepoByName(name string) (fleet.Repo, bool) {
+	return c.RepoByNameInWorkspace(name, fleet.DefaultWorkspaceID)
+}
+
+// RepoByNameInWorkspace returns the repo definition with the given full name
+// in workspace. Empty workspace means Default for migration compatibility.
+func (c *Config) RepoByNameInWorkspace(name, workspace string) (fleet.Repo, bool) {
 	name = strings.ToLower(strings.TrimSpace(name))
-	if i := slices.IndexFunc(c.Repos, func(r fleet.Repo) bool { return r.Name == name }); i >= 0 {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		workspace = fleet.DefaultWorkspaceID
+	}
+	if i := slices.IndexFunc(c.Repos, func(r fleet.Repo) bool {
+		repoWorkspace := r.WorkspaceID
+		if repoWorkspace == "" {
+			repoWorkspace = fleet.DefaultWorkspaceID
+		}
+		return r.Name == name && repoWorkspace == workspace
+	}); i >= 0 {
 		return c.Repos[i], true
 	}
 	return fleet.Repo{}, false
@@ -172,8 +190,24 @@ func (c *Config) RepoByName(name string) (fleet.Repo, bool) {
 // AgentByName returns the agent definition with the given name
 // (case-insensitive).
 func (c *Config) AgentByName(name string) (fleet.Agent, bool) {
+	return c.AgentByNameInWorkspace(name, fleet.DefaultWorkspaceID)
+}
+
+// AgentByNameInWorkspace returns the named agent inside workspace. Empty
+// workspace means Default for migration compatibility.
+func (c *Config) AgentByNameInWorkspace(name, workspace string) (fleet.Agent, bool) {
 	name = strings.ToLower(strings.TrimSpace(name))
-	if i := slices.IndexFunc(c.Agents, func(a fleet.Agent) bool { return a.Name == name }); i >= 0 {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		workspace = fleet.DefaultWorkspaceID
+	}
+	if i := slices.IndexFunc(c.Agents, func(a fleet.Agent) bool {
+		agentWorkspace := a.WorkspaceID
+		if agentWorkspace == "" {
+			agentWorkspace = fleet.DefaultWorkspaceID
+		}
+		return a.Name == name && agentWorkspace == workspace
+	}); i >= 0 {
 		return c.Agents[i], true
 	}
 	return fleet.Agent{}, false

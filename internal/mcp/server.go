@@ -8,8 +8,8 @@
 // The current tool inventory covers fleet reads, on-demand runs, the
 // read-only observability surface, and config snapshots / import:
 //
-//   - list_agents, list_skills, list_backends, list_repos, fleet lists
-//   - get_agent, get_skill, get_backend, get_repo, per-item reads
+//   - list_agents, list_skills, list_prompts, list_workspaces, list_backends, list_repos, fleet lists
+//   - get_agent, get_skill, get_prompt, get_workspace, get_backend, get_repo, per-item reads
 //   - get_status, health snapshot
 //   - trigger_agent, on-demand run
 //   - list_events, list_traces, get_trace, get_trace_steps, get_trace_prompt, agent activity
@@ -17,6 +17,8 @@
 //   - get_config, export_config, import_config, config snapshots / write
 //   - create_agent, update_agent, delete_agent, agent CRUD writes
 //   - create_skill, update_skill, delete_skill, skill CRUD writes
+//   - create_prompt, update_prompt, delete_prompt, prompt catalog CRUD writes
+//   - create_workspace, update_workspace, delete_workspace, update_workspace_guardrails, workspace writes
 //   - create_backend, update_backend, delete_backend, backend CRUD writes
 //   - create_repo, update_repo, delete_repo, repo CRUD writes
 //   - create_binding, get_binding, update_binding, delete_binding, atomic binding CRUD

@@ -15,38 +15,38 @@ import (
 // stubMemory is a minimal MemoryBackend implementation for tests. It records
 // every Read/Write call so assertions can pin both load and persist behaviour.
 type stubMemory struct {
-	mu    sync.Mutex
-	store map[string]string
-	reads []string
-	writes []memoryWrite
+	mu       sync.Mutex
+	store    map[string]string
+	reads    []string
+	writes   []memoryWrite
 	readErr  error
 	writeErr error
 }
 
 type memoryWrite struct {
-	agent, repo, content string
+	workspace, agent, repo, content string
 }
 
 func newStubMemory() *stubMemory { return &stubMemory{store: map[string]string{}} }
 
-func (m *stubMemory) ReadMemory(agent, repo string) (string, error) {
+func (m *stubMemory) ReadMemory(workspace, agent, repo string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.reads = append(m.reads, agent+"/"+repo)
+	m.reads = append(m.reads, workspace+"/"+agent+"/"+repo)
 	if m.readErr != nil {
 		return "", m.readErr
 	}
-	return m.store[agent+"/"+repo], nil
+	return m.store[workspace+"/"+agent+"/"+repo], nil
 }
 
-func (m *stubMemory) WriteMemory(agent, repo, content string) error {
+func (m *stubMemory) WriteMemory(workspace, agent, repo, content string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.writes = append(m.writes, memoryWrite{agent: agent, repo: repo, content: content})
+	m.writes = append(m.writes, memoryWrite{workspace: workspace, agent: agent, repo: repo, content: content})
 	if m.writeErr != nil {
 		return m.writeErr
 	}
-	m.store[agent+"/"+repo] = content
+	m.store[workspace+"/"+agent+"/"+repo] = content
 	return nil
 }
 
@@ -73,7 +73,7 @@ func (m *stubMemory) writeCount() int {
 func TestEngineLoadsAndPersistsMemoryWhenAllowed(t *testing.T) {
 	t.Parallel()
 	mem := newStubMemory()
-	mem.store["arch-reviewer/owner/repo"] = "## prior-knowledge\n- last reviewed PR #41"
+	mem.store["default/arch-reviewer/owner/repo"] = "## prior-knowledge\n- last reviewed PR #41"
 
 	runner := &stubRunner{runFn: func(req ai.Request) error {
 		// Sanity: the previously stored memory must reach the prompt.
@@ -103,8 +103,8 @@ func TestEngineLoadsAndPersistsMemoryWhenAllowed(t *testing.T) {
 		t.Fatalf("WriteMemory call count = %d, want 1", mem.writeCount())
 	}
 	got := mem.writes[0]
-	if got.agent != "arch-reviewer" || got.repo != "owner/repo" {
-		t.Errorf("WriteMemory key = %s/%s, want arch-reviewer/owner/repo", got.agent, got.repo)
+	if got.workspace != "default" || got.agent != "arch-reviewer" || got.repo != "owner/repo" {
+		t.Errorf("WriteMemory key = %s/%s/%s, want default/arch-reviewer/owner/repo", got.workspace, got.agent, got.repo)
 	}
 	if !strings.Contains(got.content, "reviewed PR #42") {
 		t.Errorf("WriteMemory content missing updated memory; got %q", got.content)
@@ -117,7 +117,7 @@ func TestEngineLoadsAndPersistsMemoryWhenAllowed(t *testing.T) {
 func TestEngineSkipsMemoryWhenAllowMemoryFalse(t *testing.T) {
 	t.Parallel()
 	mem := newStubMemory()
-	mem.store["arch-reviewer/owner/repo"] = "## stale\n- this should not reach the prompt"
+	mem.store["default/arch-reviewer/owner/repo"] = "## stale\n- this should not reach the prompt"
 
 	runner := &stubRunner{runFn: func(req ai.Request) error {
 		if strings.Contains(req.User, "this should not reach the prompt") {
@@ -146,8 +146,8 @@ func TestEngineSkipsMemoryWhenAllowMemoryFalse(t *testing.T) {
 		t.Errorf("WriteMemory should not be called when AllowMemory=false; got %d calls", mem.writeCount())
 	}
 	// Confirm the previously stored memory is preserved (not clobbered).
-	if mem.store["arch-reviewer/owner/repo"] != "## stale\n- this should not reach the prompt" {
-		t.Errorf("pre-existing memory was overwritten despite AllowMemory=false: %q", mem.store["arch-reviewer/owner/repo"])
+	if mem.store["default/arch-reviewer/owner/repo"] != "## stale\n- this should not reach the prompt" {
+		t.Errorf("pre-existing memory was overwritten despite AllowMemory=false: %q", mem.store["default/arch-reviewer/owner/repo"])
 	}
 }
 

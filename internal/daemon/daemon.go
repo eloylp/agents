@@ -563,8 +563,9 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, _ *http.Request) {
 // ── /run ─────────────────────────────────────────────────────────────────
 
 type agentsRunRequest struct {
-	Agent string `json:"agent"`
-	Repo  string `json:"repo"`
+	Workspace string `json:"workspace,omitempty"`
+	Agent     string `json:"agent"`
+	Repo      string `json:"repo"`
 }
 
 func (d *Daemon) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
@@ -584,8 +585,12 @@ func (d *Daemon) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	workspaceID := fleet.NormalizeWorkspaceID(req.Workspace)
 	want := fleet.NormalizeRepoName(req.Repo)
-	idx := slices.IndexFunc(repos, func(r fleet.Repo) bool { return r.Name == want })
+	idx := slices.IndexFunc(repos, func(r fleet.Repo) bool {
+		repoWorkspace := fleet.NormalizeWorkspaceID(r.WorkspaceID)
+		return r.Name == want && repoWorkspace == workspaceID
+	})
 	if idx < 0 || !repos[idx].Enabled {
 		http.Error(w, "repo not found or disabled", http.StatusNotFound)
 		return
@@ -593,10 +598,11 @@ func (d *Daemon) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 	repo := repos[idx]
 
 	ev := workflow.Event{
-		ID:    workflow.GenEventID(),
-		Repo:  workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
-		Kind:  "agents.run",
-		Actor: "human",
+		ID:          workflow.GenEventID(),
+		WorkspaceID: workspaceID,
+		Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+		Kind:        "agents.run",
+		Actor:       "human",
 		Payload: map[string]any{
 			"target_agent": req.Agent,
 		},

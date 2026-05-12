@@ -404,6 +404,127 @@ func TestOpenAndMigrate(t *testing.T) {
 	db2.Close()
 }
 
+func TestWorkspacePromptMigrationBackfillsExistingAgents(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "agents.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
+		CREATE TABLE agents (
+			name TEXT PRIMARY KEY,
+			backend TEXT NOT NULL DEFAULT 'auto',
+			model TEXT NOT NULL DEFAULT '',
+			skills TEXT NOT NULL DEFAULT '[]',
+			prompt TEXT NOT NULL,
+			allow_prs INTEGER NOT NULL DEFAULT 0,
+			allow_dispatch INTEGER NOT NULL DEFAULT 0,
+			can_dispatch TEXT NOT NULL DEFAULT '[]',
+			description TEXT NOT NULL DEFAULT '',
+			allow_memory INTEGER NOT NULL DEFAULT 1,
+			id TEXT
+		);
+		CREATE TABLE repos (name TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1);
+		CREATE TABLE bindings (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			repo TEXT NOT NULL REFERENCES repos(name),
+			agent TEXT NOT NULL REFERENCES agents(name),
+			labels TEXT NOT NULL DEFAULT '[]',
+			events TEXT NOT NULL DEFAULT '[]',
+			cron TEXT NOT NULL DEFAULT '',
+			enabled INTEGER NOT NULL DEFAULT 1
+		);
+		CREATE TABLE guardrails (
+			name TEXT PRIMARY KEY,
+			description TEXT NOT NULL DEFAULT '',
+			content TEXT NOT NULL DEFAULT '',
+			default_content TEXT,
+			is_builtin INTEGER NOT NULL DEFAULT 0,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			position INTEGER NOT NULL DEFAULT 0,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+		INSERT INTO agents (name, backend, prompt, description, id) VALUES
+			('coder', 'claude', 'You write code.', 'Implements fixes', 'agent_coder'),
+			('empty', 'claude', '', 'Empty legacy prompt', 'agent_empty');
+		INSERT INTO repos (name, enabled) VALUES ('owner/repo', 1);
+		INSERT INTO guardrails (name, is_builtin, enabled, position) VALUES
+			('security', 1, 1, 0),
+			('discretion', 1, 0, 5),
+			('operator', 0, 1, 50);
+	`); err != nil {
+		t.Fatalf("seed pre-021 schema: %v", err)
+	}
+	for _, name := range []string{
+		"001_init.sql",
+		"002_observability_and_memory.sql",
+		"003_memory_cascade.sql",
+		"004_drop_unused_tables.sql",
+		"005_trace_steps.sql",
+		"006_backend_metadata_and_agent_model.sql",
+		"007_agent_allow_memory.sql",
+		"008_event_queue.sql",
+		"009_traces_prompt_tokens.sql",
+		"010_guardrails.sql",
+		"011_trace_steps_kind.sql",
+		"012_mcp_tool_usage_guardrail.sql",
+		"013_discretion_guardrail.sql",
+		"014_token_budgets.sql",
+		"015_remove_daemon_config.sql",
+		"016_memory_scope_guardrail.sql",
+		"017_repository_tool_fallback_guardrail.sql",
+		"018_security_guardrail_gh_fallback.sql",
+		"019_auth.sql",
+		"020_agent_ids_and_graph_layouts.sql",
+	} {
+		if _, err := db.Exec("INSERT INTO schema_migrations(name) VALUES(?)", name); err != nil {
+			t.Fatalf("mark migration %s applied: %v", name, err)
+		}
+	}
+	db.Close()
+
+	db, err = store.Open(path)
+	if err != nil {
+		t.Fatalf("Open after pre-021 seed: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	var promptID, promptContent string
+	if err := db.QueryRow("SELECT prompt_id FROM agents WHERE name='coder'").Scan(&promptID); err != nil {
+		t.Fatalf("coder prompt_id: %v", err)
+	}
+	if promptID != "prompt_coder" {
+		t.Fatalf("coder prompt_id = %q, want prompt_coder", promptID)
+	}
+	if err := db.QueryRow("SELECT content FROM prompts WHERE id='prompt_coder'").Scan(&promptContent); err != nil {
+		t.Fatalf("coder prompt content: %v", err)
+	}
+	if promptContent != "You write code." {
+		t.Fatalf("coder prompt content = %q, want inline prompt", promptContent)
+	}
+	if err := db.QueryRow("SELECT prompt_id FROM agents WHERE name='empty'").Scan(&promptID); err != nil {
+		t.Fatalf("empty prompt_id: %v", err)
+	}
+	if promptID != "" {
+		t.Fatalf("empty prompt_id = %q, want empty", promptID)
+	}
+	var guardrailCount, disabledCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM workspace_guardrails").Scan(&guardrailCount); err != nil {
+		t.Fatalf("workspace guardrail count: %v", err)
+	}
+	if guardrailCount != 2 {
+		t.Fatalf("workspace guardrails = %d, want 2 built-ins", guardrailCount)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM workspace_guardrails WHERE guardrail_name='discretion' AND enabled=0").Scan(&disabledCount); err != nil {
+		t.Fatalf("disabled built-in count: %v", err)
+	}
+	if disabledCount != 1 {
+		t.Fatalf("disabled built-in copies = %d, want 1", disabledCount)
+	}
+}
+
 // TestImportLoad verifies the full round-trip: Import writes a config into the
 // database, Load reads it back, and the resulting *config.Config matches the
 // original on all fields that are persisted.
@@ -443,6 +564,12 @@ func TestImportLoad(t *testing.T) {
 	if out.Skills["architect"].Prompt != "Focus on architecture." {
 		t.Errorf("skill architect prompt: got %q", out.Skills["architect"].Prompt)
 	}
+	if len(out.Workspaces) != 1 || out.Workspaces[0].ID != fleet.DefaultWorkspaceID {
+		t.Fatalf("workspaces on config load: got %+v, want Default", out.Workspaces)
+	}
+	if len(out.Prompts) != 2 {
+		t.Fatalf("prompts on config load: got %d, want 2", len(out.Prompts))
+	}
 
 	// Agents.
 	if len(out.Agents) != 2 {
@@ -453,6 +580,23 @@ func TestImportLoad(t *testing.T) {
 		t.Fatal("coder agent not found after load")
 	}
 	coder := out.Agents[idx]
+	if coder.WorkspaceID != fleet.DefaultWorkspaceID {
+		t.Errorf("coder.workspace_id: got %q, want %q", coder.WorkspaceID, fleet.DefaultWorkspaceID)
+	}
+	if coder.PromptID == "" {
+		t.Error("coder.prompt_id is empty")
+	} else if coder.PromptID != "prompt_coder" {
+		t.Errorf("coder.prompt_id: got %q, want prompt_coder", coder.PromptID)
+	}
+	if coder.PromptRef != "coder" {
+		t.Errorf("coder.prompt_ref: got %q, want coder", coder.PromptRef)
+	}
+	if coder.ScopeType != "workspace" {
+		t.Errorf("coder.scope_type: got %q, want workspace", coder.ScopeType)
+	}
+	if coder.ScopeRepo != "" {
+		t.Errorf("coder.scope_repo: got %q, want empty", coder.ScopeRepo)
+	}
 	if !coder.AllowPRs {
 		t.Error("coder.allow_prs: want true")
 	}
@@ -470,6 +614,9 @@ func TestImportLoad(t *testing.T) {
 	repo := out.Repos[0]
 	if repo.Name != "owner/repo" {
 		t.Errorf("repo name: got %q, want %q", repo.Name, "owner/repo")
+	}
+	if repo.WorkspaceID != fleet.DefaultWorkspaceID {
+		t.Errorf("repo.workspace_id: got %q, want %q", repo.WorkspaceID, fleet.DefaultWorkspaceID)
 	}
 	if !repo.Enabled {
 		t.Error("repo.enabled: want true")
@@ -507,6 +654,780 @@ func TestImportLoad(t *testing.T) {
 	if !b2.IsEnabled() {
 		t.Error("binding[2]: nil enabled should mean enabled")
 	}
+
+	workspaces, err := store.ReadWorkspaces(db)
+	if err != nil {
+		t.Fatalf("ReadWorkspaces: %v", err)
+	}
+	if len(workspaces) != 1 || workspaces[0].ID != fleet.DefaultWorkspaceID || workspaces[0].Name != "Default" {
+		t.Fatalf("workspaces: got %+v, want Default workspace", workspaces)
+	}
+	prompts, err := store.ReadPrompts(db)
+	if err != nil {
+		t.Fatalf("ReadPrompts: %v", err)
+	}
+	if len(prompts) != 2 {
+		t.Fatalf("prompts: got %d, want 2", len(prompts))
+	}
+	if i := slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == "coder" }); i < 0 {
+		t.Fatal("coder prompt not found")
+	} else if prompts[i].Content != "You write code." {
+		t.Errorf("coder prompt content: got %q", prompts[i].Content)
+	}
+	if coder.Prompt != "You write code." {
+		t.Errorf("coder.prompt resolved from prompt catalog: got %q, want %q", coder.Prompt, "You write code.")
+	}
+}
+
+func TestRepoScopedAgentRequiresRepoInSameWorkspace(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Agents[0].ScopeType = "repo"
+	cfg.Agents[0].ScopeRepo = "owner/missing"
+	err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil)
+	if err == nil {
+		t.Fatal("ImportAll succeeded, want validation error")
+	}
+	if !strings.Contains(err.Error(), `scope_repo "owner/missing" is not a repo in workspace "default"`) {
+		t.Fatalf("error = %v, want scope repo validation", err)
+	}
+}
+
+func TestWorkspaceScopedAgentRejectsScopeRepo(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Agents[0].ScopeType = "workspace"
+	cfg.Agents[0].ScopeRepo = "owner/repo"
+	err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil)
+	if err == nil {
+		t.Fatal("ImportAll succeeded, want validation error")
+	}
+	if !strings.Contains(err.Error(), "scope_repo must be empty for workspace scope") {
+		t.Fatalf("error = %v, want workspace scope_repo validation", err)
+	}
+}
+
+func TestUnsupportedAgentScopeTypeRejected(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Agents[0].ScopeType = "team"
+	err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil)
+	if err == nil {
+		t.Fatal("ImportAll succeeded, want validation error")
+	}
+	if !strings.Contains(err.Error(), `unsupported scope_type "team"`) {
+		t.Fatalf("error = %v, want unsupported scope_type validation", err)
+	}
+}
+
+func TestAgentPromptIDMustExist(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Agents[0].PromptID = "missing-prompt"
+	err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil)
+	if err == nil {
+		t.Fatal("ImportAll succeeded, want missing prompt_id error")
+	}
+	if !strings.Contains(err.Error(), `references unknown prompt_id "missing-prompt"`) {
+		t.Fatalf("error = %v, want missing prompt_id validation", err)
+	}
+}
+
+func TestAgentPromptRefMustExistWithoutInlinePrompt(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Agents[0].PromptRef = "missing-prompt"
+	cfg.Agents[0].Prompt = ""
+	err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil)
+	if err == nil {
+		t.Fatal("ImportAll succeeded, want missing prompt_ref error")
+	}
+	if !strings.Contains(err.Error(), `references unknown prompt_ref "missing-prompt"`) {
+		t.Fatalf("error = %v, want missing prompt_ref validation", err)
+	}
+}
+
+func TestAgentPromptRefRejectsAmbiguousVisiblePromptName(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = append(cfg.Workspaces, fleet.Workspace{ID: "team-a", Name: "Team A"})
+	cfg.Prompts = []fleet.Prompt{
+		{ID: "prompt_global_shared", Name: "shared", Content: "global"},
+		{ID: "prompt_team_shared", WorkspaceID: "team-a", Name: "shared", Content: "team"},
+	}
+	cfg.Agents[0].WorkspaceID = "team-a"
+	cfg.Agents[0].PromptRef = "shared"
+	cfg.Agents[0].Prompt = ""
+	cfg.Agents[1].WorkspaceID = "team-a"
+	cfg.Repos[0].WorkspaceID = "team-a"
+	err := store.Import(db, cfg)
+	if err == nil {
+		t.Fatal("Import succeeded, want ambiguous prompt_ref error")
+	}
+	if !strings.Contains(err.Error(), `ambiguous prompt_ref "shared" in workspace "team-a"; use prompt_id`) {
+		t.Fatalf("error = %v, want ambiguous prompt_ref validation", err)
+	}
+}
+
+func TestAgentPromptIDSelectsScopedPromptWithDuplicateNames(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = append(cfg.Workspaces, fleet.Workspace{ID: "team-a", Name: "Team A"})
+	cfg.Prompts = []fleet.Prompt{
+		{ID: "prompt_global_shared", Name: "shared", Content: "global"},
+		{ID: "prompt_team_shared", WorkspaceID: "team-a", Name: "shared", Content: "team"},
+	}
+	cfg.Agents[0].WorkspaceID = "team-a"
+	cfg.Agents[0].PromptID = "prompt_team_shared"
+	cfg.Agents[0].PromptRef = ""
+	cfg.Agents[0].Prompt = ""
+	cfg.Agents[1].WorkspaceID = "team-a"
+	cfg.Repos[0].WorkspaceID = "team-a"
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	idx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.WorkspaceID == "team-a" && a.Name == "coder" })
+	if idx < 0 {
+		t.Fatal("team-a coder agent not found after load")
+	}
+	if out.Agents[idx].Prompt != "team" || out.Agents[idx].PromptRef != "shared" {
+		t.Fatalf("resolved prompt = (%q, %q), want team/shared", out.Agents[idx].Prompt, out.Agents[idx].PromptRef)
+	}
+}
+
+func TestAgentPromptIDRejectsInvisibleScopedPrompt(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = append(cfg.Workspaces, fleet.Workspace{ID: "team-a", Name: "Team A"})
+	cfg.Prompts = []fleet.Prompt{
+		{ID: "prompt_team_shared", WorkspaceID: "team-a", Name: "shared", Content: "team"},
+	}
+	cfg.Agents[0].WorkspaceID = fleet.DefaultWorkspaceID
+	cfg.Agents[0].PromptID = "prompt_team_shared"
+	cfg.Agents[0].PromptRef = ""
+	cfg.Agents[0].Prompt = ""
+
+	err := store.Import(db, cfg)
+	if err == nil {
+		t.Fatal("Import succeeded, want invisible prompt_id validation error")
+	}
+	if !strings.Contains(err.Error(), `references unknown prompt_id "prompt_team_shared"`) {
+		t.Fatalf("error = %v, want invisible prompt_id validation", err)
+	}
+}
+
+func TestAgentPromptIDRequiresStableIDNotDisplayName(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Prompts = []fleet.Prompt{
+		{ID: "prompt_shared", Name: "shared", Content: "global"},
+	}
+	cfg.Agents[0].PromptID = "shared"
+	cfg.Agents[0].PromptRef = ""
+	cfg.Agents[0].Prompt = ""
+
+	err := store.Import(db, cfg)
+	if err == nil {
+		t.Fatal("Import succeeded, want display-name prompt_id validation error")
+	}
+	if !strings.Contains(err.Error(), `references unknown prompt_id "shared"`) {
+		t.Fatalf("error = %v, want prompt_id to require stable id", err)
+	}
+}
+
+func TestAgentPromptScopeSelectsScopedPromptWithDuplicateNames(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = append(cfg.Workspaces, fleet.Workspace{ID: "team-a", Name: "Team A"})
+	cfg.Prompts = []fleet.Prompt{
+		{ID: "prompt_global_shared", Name: "shared", Content: "global"},
+		{ID: "prompt_team_shared", WorkspaceID: "team-a", Name: "shared", Content: "team"},
+		{ID: "prompt_team_repo_shared", WorkspaceID: "team-a", Repo: "owner/repo", Name: "shared", Content: "repo"},
+	}
+	cfg.Agents[0].WorkspaceID = "team-a"
+	cfg.Agents[0].PromptRef = "shared"
+	cfg.Agents[0].PromptScope = "TEAM-A/OWNER/REPO"
+	cfg.Agents[0].Prompt = ""
+	cfg.Agents[0].ScopeType = "repo"
+	cfg.Agents[0].ScopeRepo = "owner/repo"
+	cfg.Agents[1].WorkspaceID = "team-a"
+	cfg.Repos[0].WorkspaceID = "team-a"
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	idx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.WorkspaceID == "team-a" && a.Name == "coder" })
+	if idx < 0 {
+		t.Fatal("team-a coder agent not found after load")
+	}
+	if out.Agents[idx].Prompt != "repo" || out.Agents[idx].PromptRef != "shared" || out.Agents[idx].PromptScope != "team-a/owner/repo" {
+		t.Fatalf("resolved prompt = (%q, %q, %q), want repo/shared/team-a/owner/repo",
+			out.Agents[idx].Prompt, out.Agents[idx].PromptRef, out.Agents[idx].PromptScope)
+	}
+}
+
+func TestAgentPromptScopeRejectsInvisiblePrompt(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = append(cfg.Workspaces, fleet.Workspace{ID: "team-a", Name: "Team A"})
+	cfg.Prompts = []fleet.Prompt{
+		{ID: "prompt_team_shared", WorkspaceID: "team-a", Name: "shared", Content: "team"},
+		{ID: "prompt_default_other_shared", WorkspaceID: fleet.DefaultWorkspaceID, Repo: "owner/other", Name: "shared", Content: "other repo"},
+	}
+	cfg.Agents[0].PromptRef = "shared"
+	cfg.Agents[0].Prompt = ""
+	cfg.Agents[0].PromptScope = "team-a"
+
+	err := store.Import(db, cfg)
+	if err == nil {
+		t.Fatal("Import succeeded, want cross-workspace prompt_scope validation error")
+	}
+	if !strings.Contains(err.Error(), `references unknown prompt_ref "shared"`) {
+		t.Fatalf("error = %v, want cross-workspace prompt_scope validation", err)
+	}
+
+	db = openTestDB(t)
+	cfg = minimalCfg()
+	cfg.Prompts = []fleet.Prompt{
+		{ID: "prompt_default_other_shared", WorkspaceID: fleet.DefaultWorkspaceID, Repo: "owner/other", Name: "shared", Content: "other repo"},
+	}
+	cfg.Agents[0].PromptRef = "shared"
+	cfg.Agents[0].Prompt = ""
+	cfg.Agents[0].PromptScope = "default/owner/other"
+	cfg.Agents[0].ScopeType = "repo"
+	cfg.Agents[0].ScopeRepo = "owner/repo"
+
+	err = store.Import(db, cfg)
+	if err == nil {
+		t.Fatal("Import succeeded, want cross-repo prompt_scope validation error")
+	}
+	if !strings.Contains(err.Error(), `references unknown prompt_ref "shared"`) {
+		t.Fatalf("error = %v, want cross-repo prompt_scope validation", err)
+	}
+}
+
+func TestAgentSkillRejectsInvisibleRepoScopedCatalogItem(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Skills["repo-only"] = fleet.Skill{
+		WorkspaceID: "default",
+		Repo:        "owner/repo",
+		Name:        "repo-only",
+		Prompt:      "Repo-specific guidance.",
+	}
+	cfg.Agents[0].Skills = append(cfg.Agents[0].Skills, "repo-only")
+	err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil)
+	if err == nil {
+		t.Fatal("ImportAll succeeded, want repo-scoped skill validation error")
+	}
+	if !strings.Contains(err.Error(), `workspace-scoped agent "coder" references repo-scoped skill "repo-only" without repo context`) {
+		t.Fatalf("error = %v, want repo-scoped skill validation", err)
+	}
+}
+
+func TestRepoScopedAgentMayUseRepoScopedSkill(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Skills["repo-only"] = fleet.Skill{
+		WorkspaceID: "default",
+		Repo:        "owner/repo",
+		Name:        "repo-only",
+		Prompt:      "Repo-specific guidance.",
+	}
+	cfg.Agents[0].ScopeType = "repo"
+	cfg.Agents[0].ScopeRepo = "owner/repo"
+	cfg.Agents[0].Skills = append(cfg.Agents[0].Skills, "repo-only")
+	if err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil); err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := out.Skills["repo-only"]; got.WorkspaceID != "default" || got.Repo != "owner/repo" || got.Name != "repo-only" {
+		t.Fatalf("repo-only skill = %+v, want scoped catalog row", got)
+	}
+}
+
+func TestAgentSkillDisplayNameResolvesToStableScopedID(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Skills["skill_default_scoped_security"] = fleet.Skill{
+		WorkspaceID: "default",
+		Name:        "scoped-security",
+		Prompt:      "Scoped security guidance.",
+	}
+	cfg.Agents[0].Skills = append(cfg.Agents[0].Skills, "scoped-security")
+	if err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil); err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	idx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.WorkspaceID == "default" && a.Name == "coder" })
+	if idx < 0 {
+		t.Fatal("default coder agent not found after load")
+	}
+	if !slices.Contains(out.Agents[idx].Skills, "skill_default_scoped_security") {
+		t.Fatalf("coder skills = %v, want stable scoped skill id", out.Agents[idx].Skills)
+	}
+}
+
+func TestAgentSkillDisplayNameRejectsAmbiguousVisibleName(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Skills["skill_global_shared"] = fleet.Skill{
+		Name:   "shared",
+		Prompt: "Global shared guidance.",
+	}
+	cfg.Skills["skill_team_shared"] = fleet.Skill{
+		WorkspaceID: "team-a",
+		Name:        "shared",
+		Prompt:      "Team shared guidance.",
+	}
+	cfg.Agents[0].WorkspaceID = "team-a"
+	cfg.Agents[0].Skills = append(cfg.Agents[0].Skills, "shared")
+	cfg.Agents[1].WorkspaceID = "team-a"
+	cfg.Repos[0].WorkspaceID = "team-a"
+	err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil)
+	if err == nil {
+		t.Fatal("ImportAll succeeded, want ambiguous skill validation error")
+	}
+	if !strings.Contains(err.Error(), `ambiguous skill "shared" in workspace "team-a"; use skill id`) {
+		t.Fatalf("error = %v, want ambiguous skill validation", err)
+	}
+}
+
+func TestWorkspaceGuardrailReferenceCanUseVisibleDisplayName(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = []fleet.Workspace{{
+		ID:   "team-a",
+		Name: "Team A",
+		Guardrails: []fleet.WorkspaceGuardrailRef{{
+			GuardrailName: "team-policy",
+			Enabled:       true,
+		}},
+	}}
+	cfg.Guardrails = []fleet.Guardrail{{
+		ID:          "guardrail_team_policy",
+		WorkspaceID: "team-a",
+		Name:        "team-policy",
+		Content:     "Team policy.",
+		Enabled:     true,
+	}}
+	cfg.Agents[0].WorkspaceID = "team-a"
+	cfg.Agents[1].WorkspaceID = "team-a"
+	cfg.Repos[0].WorkspaceID = "team-a"
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	guardrails, err := store.ReadWorkspacePromptGuardrails(db, "team-a")
+	if err != nil {
+		t.Fatalf("ReadWorkspacePromptGuardrails: %v", err)
+	}
+	if len(guardrails) != 1 {
+		t.Fatalf("guardrails len = %d, want 1: %+v", len(guardrails), guardrails)
+	}
+	if guardrails[0].ID != "guardrail_team_policy" || guardrails[0].Name != "team-policy" {
+		t.Fatalf("guardrail = %+v, want scoped team policy", guardrails[0])
+	}
+}
+
+func TestPromptRefDoesNotOverwritePromptCatalogContent(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Prompts = []fleet.Prompt{{
+		ID:      "shared-prompt",
+		Name:    "shared",
+		Content: "operator-edited prompt",
+	}}
+	cfg.Agents[0].PromptRef = "shared"
+	cfg.Agents[0].Prompt = "legacy inline prompt"
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	idx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.Name == "coder" })
+	if idx < 0 {
+		t.Fatal("coder agent not found after load")
+	}
+	if out.Agents[idx].Prompt != "operator-edited prompt" {
+		t.Fatalf("loaded prompt = %q, want catalog content", out.Agents[idx].Prompt)
+	}
+	prompts, err := store.ReadPrompts(db)
+	if err != nil {
+		t.Fatalf("ReadPrompts: %v", err)
+	}
+	idx = slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == "shared" })
+	if idx < 0 {
+		t.Fatal("shared prompt not found")
+	}
+	if prompts[idx].Content != "operator-edited prompt" {
+		t.Fatalf("prompt catalog content = %q, want operator-edited prompt", prompts[idx].Content)
+	}
+}
+
+func TestPromptCRUD(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	created, err := store.UpsertPrompt(db, fleet.Prompt{
+		Name:        "release-notes",
+		Description: "Drafts release notes",
+		Content:     "Summarize merged changes.",
+	})
+	if err != nil {
+		t.Fatalf("UpsertPrompt create: %v", err)
+	}
+	if created.ID != "prompt_release-notes" {
+		t.Fatalf("created ID = %q, want prompt_release-notes", created.ID)
+	}
+
+	updated, err := store.UpsertPrompt(db, fleet.Prompt{
+		Name:        "Release-Notes",
+		Description: "Updated",
+		Content:     "Write concise notes.",
+	})
+	if err != nil {
+		t.Fatalf("UpsertPrompt update: %v", err)
+	}
+	if updated.ID != created.ID {
+		t.Fatalf("updated ID = %q, want existing id %q", updated.ID, created.ID)
+	}
+	prompts, err := store.ReadPrompts(db)
+	if err != nil {
+		t.Fatalf("ReadPrompts: %v", err)
+	}
+	idx := slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == "release-notes" })
+	if idx < 0 {
+		t.Fatal("release-notes prompt not found")
+	}
+	if prompts[idx].Content != "Write concise notes." || prompts[idx].Description != "Updated" {
+		t.Fatalf("updated prompt = %+v, want updated description/content", prompts[idx])
+	}
+	if prompts[idx].Name != "release-notes" {
+		t.Fatalf("updated prompt name = %q, want canonical release-notes", prompts[idx].Name)
+	}
+
+	if err := store.DeletePrompt(db, created.ID); err != nil {
+		t.Fatalf("DeletePrompt: %v", err)
+	}
+	prompts, err = store.ReadPrompts(db)
+	if err != nil {
+		t.Fatalf("ReadPrompts after delete: %v", err)
+	}
+	if slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == "release-notes" }) >= 0 {
+		t.Fatal("release-notes prompt still present after delete")
+	}
+}
+
+func TestPromptCRUDScopedDuplicatesUseStableID(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	teamA, err := store.UpsertPrompt(db, fleet.Prompt{WorkspaceID: "team-a", Name: "Shared", Content: "Team A"})
+	if err != nil {
+		t.Fatalf("UpsertPrompt team A: %v", err)
+	}
+	teamB, err := store.UpsertPrompt(db, fleet.Prompt{WorkspaceID: "team-b", Name: "Shared", Content: "Team B"})
+	if err != nil {
+		t.Fatalf("UpsertPrompt team B: %v", err)
+	}
+	if teamA.ID == teamB.ID || teamA.Name != teamB.Name {
+		t.Fatalf("scoped prompts = %+v / %+v, want same name and distinct ids", teamA, teamB)
+	}
+
+	got, err := store.ReadPrompt(db, teamB.ID)
+	if err != nil {
+		t.Fatalf("ReadPrompt by id: %v", err)
+	}
+	if got.ID != teamB.ID || got.WorkspaceID != "team-b" {
+		t.Fatalf("ReadPrompt by id = %+v, want team B", got)
+	}
+
+	if err := store.DeletePrompt(db, teamA.ID); err != nil {
+		t.Fatalf("DeletePrompt by id: %v", err)
+	}
+	if _, err := store.ReadPrompt(db, teamA.ID); err == nil {
+		t.Fatal("ReadPrompt for deleted prompt succeeded")
+	}
+	got, err = store.ReadPrompt(db, teamB.ID)
+	if err != nil {
+		t.Fatalf("ReadPrompt remaining prompt: %v", err)
+	}
+	if got.ID != teamB.ID {
+		t.Fatalf("remaining prompt = %+v, want team B", got)
+	}
+}
+
+func TestReadWorkspacePrefersIDOverNameCollision(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "foo", Name: "Zulu"}); err != nil {
+		t.Fatalf("UpsertWorkspace foo: %v", err)
+	}
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "bar", Name: "foo"}); err != nil {
+		t.Fatalf("UpsertWorkspace bar: %v", err)
+	}
+	w, err := store.ReadWorkspace(db, "foo")
+	if err != nil {
+		t.Fatalf("ReadWorkspace: %v", err)
+	}
+	if w.ID != "foo" || w.Name != "Zulu" {
+		t.Fatalf("ReadWorkspace(foo) = %+v, want id match foo/Zulu", w)
+	}
+	id, err := store.ResolveWorkspaceID(db, "foo")
+	if err != nil {
+		t.Fatalf("ResolveWorkspaceID: %v", err)
+	}
+	if id != "foo" {
+		t.Fatalf("ResolveWorkspaceID(foo) = %q, want foo", id)
+	}
+}
+
+func TestDeletePromptReferencedByAgentRejected(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	err := store.DeletePrompt(db, "coder")
+	if err == nil {
+		t.Fatal("DeletePrompt succeeded, want referenced-prompt conflict")
+	}
+	var conflict *store.ErrConflict
+	if !errors.As(err, &conflict) {
+		t.Fatalf("DeletePrompt error = %T %[1]v, want ErrConflict", err)
+	}
+	if !strings.Contains(err.Error(), `prompt "coder" is referenced by 1 agent(s): default/coder`) {
+		t.Fatalf("error = %v, want referenced prompt message", err)
+	}
+}
+
+func TestDerivedWorkspaceAndPromptIDsMustBeURLSafe(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = []fleet.Workspace{{Name: "Project/A&B"}}
+	err := store.Import(db, cfg)
+	if err == nil {
+		t.Fatal("Import succeeded, want invalid workspace id error")
+	}
+	if !strings.Contains(err.Error(), "not URL-safe") {
+		t.Fatalf("workspace error = %v, want URL-safe guidance", err)
+	}
+
+	db = openTestDB(t)
+	cfg = minimalCfg()
+	cfg.Prompts = []fleet.Prompt{{Name: "Project/A&B", Content: "Prompt"}}
+	err = store.Import(db, cfg)
+	if err == nil {
+		t.Fatal("Import succeeded, want invalid prompt id error")
+	}
+	if !strings.Contains(err.Error(), "not URL-safe") {
+		t.Fatalf("prompt error = %v, want URL-safe guidance", err)
+	}
+}
+
+func TestDuplicateWorkspaceNameReportsClearError(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = []fleet.Workspace{{ID: "another-default", Name: "Default"}}
+	err := store.Import(db, cfg)
+	if err == nil {
+		t.Fatal("Import succeeded, want duplicate workspace name error")
+	}
+	if !strings.Contains(err.Error(), `workspace name "Default" is already used`) {
+		t.Fatalf("error = %v, want clear duplicate workspace name error", err)
+	}
+}
+
+func TestImportedWorkspaceInheritsBuiltInGuardrails(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = []fleet.Workspace{{ID: "team-a", Name: "Team A"}}
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	var builtIns, inherited, catalogEnabled, workspaceEnabled int
+	if err := db.QueryRow("SELECT COUNT(*) FROM guardrails WHERE is_builtin = 1").Scan(&builtIns); err != nil {
+		t.Fatalf("count built-in guardrails: %v", err)
+	}
+	if err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM workspace_guardrails
+		WHERE workspace_id = 'team-a'`).Scan(&inherited); err != nil {
+		t.Fatalf("count inherited guardrails: %v", err)
+	}
+	if inherited != builtIns {
+		t.Fatalf("team-a workspace guardrails = %d, want %d built-ins", inherited, builtIns)
+	}
+	if err := db.QueryRow("SELECT enabled FROM guardrails WHERE name = 'discretion'").Scan(&catalogEnabled); err != nil {
+		t.Fatalf("read catalog discretion guardrail: %v", err)
+	}
+	if err := db.QueryRow(`
+		SELECT enabled
+		FROM workspace_guardrails
+		WHERE workspace_id = 'team-a' AND guardrail_name = 'discretion'`).Scan(&workspaceEnabled); err != nil {
+		t.Fatalf("read inherited discretion guardrail: %v", err)
+	}
+	if workspaceEnabled != catalogEnabled {
+		t.Fatalf("inherited discretion enabled = %d, want catalog value %d", workspaceEnabled, catalogEnabled)
+	}
+}
+
+func TestReferencedWorkspaceIsCreatedBeforeAgentImport(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = nil
+	cfg.Agents[0].WorkspaceID = "team-a"
+	cfg.Agents[1].WorkspaceID = "team-a"
+	cfg.Repos[0].WorkspaceID = "team-a"
+	cfg.Repos[0].Use = []fleet.Binding{
+		{Agent: "coder", Events: []string{"issues.labeled"}},
+	}
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	var name string
+	if err := db.QueryRow("SELECT name FROM workspaces WHERE id = 'team-a'").Scan(&name); err != nil {
+		t.Fatalf("read auto-created workspace: %v", err)
+	}
+	if name != "team-a" {
+		t.Fatalf("workspace name = %q, want team-a", name)
+	}
+	var refs int
+	if err := db.QueryRow("SELECT COUNT(*) FROM workspace_guardrails WHERE workspace_id = 'team-a'").Scan(&refs); err != nil {
+		t.Fatalf("count auto-created workspace guardrails: %v", err)
+	}
+	if refs == 0 {
+		t.Fatal("auto-created workspace guardrails = 0, want inherited built-ins")
+	}
+}
+
+func TestReadWorkspacePromptGuardrailsUsesWorkspaceReferences(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{
+		Name:     "workspace-only",
+		Content:  "Apply only in Team A.",
+		Enabled:  false,
+		Position: 99,
+	}); err != nil {
+		t.Fatalf("UpsertGuardrail: %v", err)
+	}
+	refs := []fleet.WorkspaceGuardrailRef{
+		{GuardrailName: "workspace-only", Position: 0, Enabled: true},
+		{GuardrailName: "security", Position: 1, Enabled: false},
+	}
+	if _, err := store.ReplaceWorkspaceGuardrails(db, "team-a", refs); err != nil {
+		t.Fatalf("ReplaceWorkspaceGuardrails: %v", err)
+	}
+
+	guardrails, err := store.ReadWorkspacePromptGuardrails(db, "team-a")
+	if err != nil {
+		t.Fatalf("ReadWorkspacePromptGuardrails: %v", err)
+	}
+	if len(guardrails) != 1 {
+		t.Fatalf("guardrails len = %d, want 1: %+v", len(guardrails), guardrails)
+	}
+	if guardrails[0].Name != "workspace-only" || !guardrails[0].Enabled || guardrails[0].Position != 0 {
+		t.Fatalf("guardrail = %+v, want enabled workspace-only from workspace reference", guardrails[0])
+	}
+}
+
+func TestWorkspaceBoundaryGuardrailNameIsReserved(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	err := store.UpsertGuardrail(db, fleet.Guardrail{
+		Name:    "workspace-boundary",
+		Content: "Operator override",
+		Enabled: true,
+	})
+	if err == nil {
+		t.Fatal("UpsertGuardrail succeeded, want reserved-name validation error")
+	}
+	if !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("UpsertGuardrail error = %v, want reserved-name guidance", err)
+	}
+
+	cfg := minimalCfg()
+	cfg.Guardrails = []fleet.Guardrail{{
+		Name:    "workspace-boundary",
+		Content: "Operator override",
+		Enabled: true,
+	}}
+	err = store.Import(db, cfg)
+	if err == nil {
+		t.Fatal("Import succeeded, want reserved-name validation error")
+	}
+	if !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("Import error = %v, want reserved-name guidance", err)
+	}
 }
 
 // TestImportIsIdempotent verifies that calling Import twice on the same config
@@ -532,6 +1453,21 @@ func TestImportIsIdempotent(t *testing.T) {
 	}
 	if counts.Bindings != 3 {
 		t.Errorf("bindings: got %d, want 3 after idempotent import (duplicate rows indicate non-idempotent import)", counts.Bindings)
+	}
+	for _, table := range []struct {
+		name string
+		want int
+	}{
+		{"workspaces", 1},
+		{"prompts", 2},
+	} {
+		var got int
+		if err := db.QueryRow("SELECT COUNT(*) FROM " + table.name).Scan(&got); err != nil {
+			t.Fatalf("count %s: %v", table.name, err)
+		}
+		if got != table.want {
+			t.Errorf("%s: got %d, want %d after idempotent import", table.name, got, table.want)
+		}
 	}
 }
 
@@ -635,7 +1571,7 @@ func TestReadWriteMemory(t *testing.T) {
 	seedAgent(t, db, "coder")
 
 	// Non-existent agent/repo returns not-found (found=false).
-	content, found, mtime, err := store.ReadMemory(db, "coder", "owner/repo")
+	content, found, mtime, err := store.ReadMemory(db, fleet.DefaultWorkspaceID, "coder", "owner/repo")
 	if err != nil {
 		t.Fatalf("ReadMemory missing row: %v", err)
 	}
@@ -651,10 +1587,10 @@ func TestReadWriteMemory(t *testing.T) {
 
 	// Write and read back; updated_at should be a recent non-zero time.
 	before := time.Now().UTC().Add(-time.Second)
-	if err := store.WriteMemory(db, "coder", "owner/repo", "## Active PRs\n- PR #1"); err != nil {
+	if err := store.WriteMemory(db, fleet.DefaultWorkspaceID, "coder", "owner/repo", "## Active PRs\n- PR #1"); err != nil {
 		t.Fatalf("WriteMemory: %v", err)
 	}
-	content, found, mtime, err = store.ReadMemory(db, "coder", "owner/repo")
+	content, found, mtime, err = store.ReadMemory(db, fleet.DefaultWorkspaceID, "coder", "owner/repo")
 	if err != nil {
 		t.Fatalf("ReadMemory after write: %v", err)
 	}
@@ -672,10 +1608,10 @@ func TestReadWriteMemory(t *testing.T) {
 	}
 
 	// Overwrite with empty string to clear: row still exists (found=true) but content is "".
-	if err := store.WriteMemory(db, "coder", "owner/repo", ""); err != nil {
+	if err := store.WriteMemory(db, fleet.DefaultWorkspaceID, "coder", "owner/repo", ""); err != nil {
 		t.Fatalf("WriteMemory clear: %v", err)
 	}
-	content, found, mtime, err = store.ReadMemory(db, "coder", "owner/repo")
+	content, found, mtime, err = store.ReadMemory(db, fleet.DefaultWorkspaceID, "coder", "owner/repo")
 	if err != nil {
 		t.Fatalf("ReadMemory after clear: %v", err)
 	}
@@ -690,22 +1626,28 @@ func TestReadWriteMemory(t *testing.T) {
 	}
 }
 
-// TestReadWriteMemoryIsolation verifies that different agent/repo combinations
-// are stored independently.
+// TestReadWriteMemoryIsolation verifies that different workspace/agent/repo
+// combinations are stored independently.
 func TestReadWriteMemoryIsolation(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 	seedAgent(t, db, "agent-a")
 	seedAgent(t, db, "agent-b")
 
-	if err := store.WriteMemory(db, "agent-a", "repo", "mem-A"); err != nil {
+	if err := store.WriteMemory(db, fleet.DefaultWorkspaceID, "agent-a", "repo", "mem-A"); err != nil {
 		t.Fatalf("WriteMemory A: %v", err)
 	}
-	if err := store.WriteMemory(db, "agent-b", "repo", "mem-B"); err != nil {
+	if err := store.WriteMemory(db, fleet.DefaultWorkspaceID, "agent-b", "repo", "mem-B"); err != nil {
 		t.Fatalf("WriteMemory B: %v", err)
 	}
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+	if err := store.WriteMemory(db, "team-a", "agent-a", "repo", "mem-team"); err != nil {
+		t.Fatalf("WriteMemory workspace: %v", err)
+	}
 
-	a, _, _, err := store.ReadMemory(db, "agent-a", "repo")
+	a, _, _, err := store.ReadMemory(db, fleet.DefaultWorkspaceID, "agent-a", "repo")
 	if err != nil {
 		t.Fatalf("ReadMemory A: %v", err)
 	}
@@ -713,11 +1655,49 @@ func TestReadWriteMemoryIsolation(t *testing.T) {
 		t.Errorf("agent-a: got %q, want %q", a, "mem-A")
 	}
 
-	b, _, _, err := store.ReadMemory(db, "agent-b", "repo")
+	b, _, _, err := store.ReadMemory(db, fleet.DefaultWorkspaceID, "agent-b", "repo")
 	if err != nil {
 		t.Fatalf("ReadMemory B: %v", err)
 	}
 	if b != "mem-B" {
 		t.Errorf("agent-b: got %q, want %q", b, "mem-B")
+	}
+
+	team, _, _, err := store.ReadMemory(db, "team-a", "agent-a", "repo")
+	if err != nil {
+		t.Fatalf("ReadMemory workspace: %v", err)
+	}
+	if team != "mem-team" {
+		t.Errorf("team-a/agent-a: got %q, want %q", team, "mem-team")
+	}
+}
+
+func TestMemoryBackendNotifierIncludesWorkspace(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	seedAgent(t, db, "coder")
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+
+	backend := store.New(db).NewMemoryBackend()
+	var gotWorkspace, gotAgent, gotRepo string
+	backend.SetChangeNotifier(func(workspace, agent, repo string) {
+		gotWorkspace = workspace
+		gotAgent = agent
+		gotRepo = repo
+	})
+
+	if err := backend.WriteMemory(" team-a ", "Coder", "Owner/Repo", "memory"); err != nil {
+		t.Fatalf("WriteMemory: %v", err)
+	}
+	if gotWorkspace != "team-a" {
+		t.Errorf("workspace: got %q, want %q", gotWorkspace, "team-a")
+	}
+	if gotAgent != "coder" {
+		t.Errorf("agent: got %q, want %q", gotAgent, "coder")
+	}
+	if gotRepo != "owner_repo" {
+		t.Errorf("repo: got %q, want %q", gotRepo, "owner_repo")
 	}
 }

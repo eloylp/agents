@@ -10,16 +10,19 @@
 package observe
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
 
+	"github.com/eloylp/agents/internal/fleet"
 	obstore "github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
 	"github.com/eloylp/agents/internal/store"
@@ -97,14 +100,15 @@ func (h *Handler) HandleDispatches(w http.ResponseWriter, _ *http.Request) {
 // agent names that ran (or are running) for it. Empty for events that
 // have not yet fanned out, or webhooks that matched no binding.
 type eventJSON struct {
-	At      string         `json:"at"`
-	ID      string         `json:"id"`
-	Repo    string         `json:"repo"`
-	Kind    string         `json:"kind"`
-	Number  int            `json:"number"`
-	Actor   string         `json:"actor"`
-	Payload map[string]any `json:"payload,omitempty"`
-	Agents  []string       `json:"agents,omitempty"`
+	At          string         `json:"at"`
+	ID          string         `json:"id"`
+	WorkspaceID string         `json:"workspace_id"`
+	Repo        string         `json:"repo"`
+	Kind        string         `json:"kind"`
+	Number      int            `json:"number"`
+	Actor       string         `json:"actor"`
+	Payload     map[string]any `json:"payload,omitempty"`
+	Agents      []string       `json:"agents,omitempty"`
 }
 
 // HandleEvents serves GET /events, recent event history.
@@ -118,18 +122,20 @@ func (h *Handler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	events := h.events.ListEvents(since)
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
+	events := h.events.ListEventsForWorkspace(workspaceID, since)
 	out := make([]eventJSON, 0, len(events))
 	for _, e := range events {
 		out = append(out, eventJSON{
-			At:      e.At.UTC().Format(time.RFC3339Nano),
-			ID:      e.ID,
-			Repo:    e.Repo,
-			Kind:    e.Kind,
-			Number:  e.Number,
-			Actor:   e.Actor,
-			Payload: e.Payload,
-			Agents:  agentsForEvent(h.events, e.ID),
+			At:          e.At.UTC().Format(time.RFC3339Nano),
+			ID:          e.ID,
+			WorkspaceID: e.WorkspaceID,
+			Repo:        e.Repo,
+			Kind:        e.Kind,
+			Number:      e.Number,
+			Actor:       e.Actor,
+			Payload:     e.Payload,
+			Agents:      agentsForEvent(h.events, workspaceID, e.ID),
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -139,7 +145,7 @@ func (h *Handler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 // HandleEventsStream serves GET /events/stream as a Server-Sent Events
 // stream. Each new event is pushed as a "data: <json>\n\n" message.
 func (h *Handler) HandleEventsStream(w http.ResponseWriter, r *http.Request) {
-	serveSSE(w, r, h.events.EventsSSE)
+	serveWorkspaceSSE(w, r, h.events.EventsSSE)
 }
 
 // agentsForEvent resolves the set of agents that ran (or are running)
@@ -147,11 +153,11 @@ func (h *Handler) HandleEventsStream(w http.ResponseWriter, r *http.Request) {
 // span has been recorded yet, either the event hasn't been picked up,
 // or its run hasn't reached the recording site, or no binding matched.
 // De-duplicated; preserves trace insertion order.
-func agentsForEvent(s *obstore.Store, eventID string) []string {
+func agentsForEvent(s *obstore.Store, workspaceID, eventID string) []string {
 	if s == nil || eventID == "" {
 		return nil
 	}
-	spans := s.TracesByRootEventID(eventID)
+	spans := s.TracesByRootEventIDForWorkspace(workspaceID, eventID)
 	if len(spans) == 0 {
 		return nil
 	}
@@ -173,8 +179,8 @@ func agentsForEvent(s *obstore.Store, eventID string) []string {
 // ── /traces ────────────────────────────────────────────────────────────────
 
 // HandleTraces serves GET /traces, the most recent agent run spans.
-func (h *Handler) HandleTraces(w http.ResponseWriter, _ *http.Request) {
-	spans := h.events.ListTraces()
+func (h *Handler) HandleTraces(w http.ResponseWriter, r *http.Request) {
+	spans := h.events.ListTracesForWorkspace(r.URL.Query().Get("workspace"))
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(spans)
 }
@@ -182,7 +188,7 @@ func (h *Handler) HandleTraces(w http.ResponseWriter, _ *http.Request) {
 // HandleTrace serves GET /traces/{root_event_id}, all spans for one root.
 func (h *Handler) HandleTrace(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["root_event_id"]
-	spans := h.events.TracesByRootEventID(id)
+	spans := h.events.TracesByRootEventIDForWorkspace(r.URL.Query().Get("workspace"), id)
 	if len(spans) == 0 {
 		http.Error(w, "trace not found", http.StatusNotFound)
 		return
@@ -194,7 +200,7 @@ func (h *Handler) HandleTrace(w http.ResponseWriter, r *http.Request) {
 // HandleTracesStream serves GET /traces/stream as a Server-Sent Events
 // stream. Each completed span is pushed as a "data: <json>\n\n" message.
 func (h *Handler) HandleTracesStream(w http.ResponseWriter, r *http.Request) {
-	serveSSE(w, r, h.events.TracesSSE)
+	serveWorkspaceSSE(w, r, h.events.TracesSSE)
 }
 
 // HandleTraceSteps serves GET /traces/{span_id}/steps, the tool-loop
@@ -348,15 +354,16 @@ type dispatchRecord struct {
 // Nodes are seeded from the configured fleet (issue #151: "Nodes = agents")
 // and any edge endpoints not already covered by the current config (e.g.
 // agents removed from config but with recorded dispatch history).
-func (h *Handler) HandleGraph(w http.ResponseWriter, _ *http.Request) {
-	edges := h.events.ListEdges()
+func (h *Handler) HandleGraph(w http.ResponseWriter, r *http.Request) {
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
+	edges := h.events.ListEdgesForWorkspace(workspaceID)
 
 	// Build a map of the last cron error status for each agent so idle
 	// agents that last exited with an error are flagged in the response.
 	lastErrorByAgent := make(map[string]bool)
 	if h.sched != nil {
 		for _, as := range h.sched.AgentStatuses() {
-			if as.LastStatus == "error" {
+			if fleet.NormalizeWorkspaceID(as.WorkspaceID) == workspaceID && as.LastStatus == "error" {
 				lastErrorByAgent[as.Name] = true
 			}
 		}
@@ -373,10 +380,28 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	seen := make(map[string]struct{})
+	configuredEdges := make(map[string]graphEdge)
 	if h.store != nil {
 		if agents, err := h.store.ReadAgents(); err == nil {
+			agentNames := make(map[string]struct{})
 			for _, a := range agents {
+				if fleet.NormalizeWorkspaceID(a.WorkspaceID) != workspaceID {
+					continue
+				}
 				seen[a.Name] = struct{}{}
+				agentNames[a.Name] = struct{}{}
+			}
+			for _, a := range agents {
+				if fleet.NormalizeWorkspaceID(a.WorkspaceID) != workspaceID {
+					continue
+				}
+				for _, target := range a.CanDispatch {
+					if _, ok := agentNames[target]; !ok {
+						continue
+					}
+					key := graphEdgeKey(a.Name, target)
+					configuredEdges[key] = graphEdge{From: a.Name, To: target, Dispatches: []dispatchRecord{}}
+				}
 			}
 		} else {
 			h.logger.Warn().Err(err).Msg("graph: read agents failed; node list will only include those with dispatch edges")
@@ -390,8 +415,12 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, _ *http.Request) {
 	for id := range seen {
 		nodes = append(nodes, graphNode{ID: id, Status: nodeStatus(id)})
 	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 
-	wireEdges := make([]graphEdge, 0, len(edges))
+	edgeByKey := make(map[string]graphEdge, len(edges)+len(configuredEdges))
+	for key, e := range configuredEdges {
+		edgeByKey[key] = e
+	}
 	for _, e := range edges {
 		recs := make([]dispatchRecord, 0, len(e.Dispatches))
 		for _, d := range e.Dispatches {
@@ -402,16 +431,33 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, _ *http.Request) {
 				Reason: d.Reason,
 			})
 		}
-		wireEdges = append(wireEdges, graphEdge{
+		edgeByKey[graphEdgeKey(e.From, e.To)] = graphEdge{
 			From:       e.From,
 			To:         e.To,
 			Count:      e.Count,
 			Dispatches: recs,
-		})
+		}
 	}
+	wireEdges := make([]graphEdge, 0, len(edgeByKey))
+	for _, e := range edgeByKey {
+		if e.Dispatches == nil {
+			e.Dispatches = []dispatchRecord{}
+		}
+		wireEdges = append(wireEdges, e)
+	}
+	sort.Slice(wireEdges, func(i, j int) bool {
+		if wireEdges[i].From == wireEdges[j].From {
+			return wireEdges[i].To < wireEdges[j].To
+		}
+		return wireEdges[i].From < wireEdges[j].From
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(graphJSON{Nodes: nodes, Edges: wireEdges})
+}
+
+func graphEdgeKey(from, to string) string {
+	return from + "\x00" + to
 }
 
 // ── /memory ────────────────────────────────────────────────────────────────
@@ -420,11 +466,13 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, _ *http.Request) {
 // content of the agent's memory for the given repo. The {repo} path segment
 // is expected in the format "owner_repo" (underscore separator), matching
 // both the filesystem layout and the normalised key in the SQLite memory
-// store. Returns 503 when no memory reader is configured.
+// store. The optional workspace query parameter defaults to Default. Returns
+// 503 when no memory reader is configured.
 func (h *Handler) HandleMemory(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	agent := filepath.Clean(vars["agent"])
 	repo := filepath.Clean(vars["repo"])
+	workspace := r.URL.Query().Get("workspace")
 
 	// Reject path traversal attempts.
 	if agent == "." || repo == "." || agent == ".." || repo == ".." {
@@ -437,7 +485,7 @@ func (h *Handler) HandleMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	content, mtime, err := h.memReader.ReadMemory(agent, repo)
+	content, mtime, err := h.memReader.ReadMemory(workspace, agent, repo)
 	if errors.Is(err, store.ErrMemoryNotFound) {
 		http.Error(w, "memory not found", http.StatusNotFound)
 		return
@@ -482,6 +530,21 @@ func serveSSE(w http.ResponseWriter, r *http.Request, hub SSEHub) {
 	ServeSSEWithInterval(w, r, hub, defaultSSEHeartbeatInterval)
 }
 
+func serveWorkspaceSSE(w http.ResponseWriter, r *http.Request, hub SSEHub) {
+	raw, ok := r.URL.Query()["workspace"]
+	if !ok {
+		serveSSE(w, r, hub)
+		return
+	}
+	workspaceID := fleet.NormalizeWorkspaceID("")
+	if len(raw) > 0 {
+		workspaceID = fleet.NormalizeWorkspaceID(raw[0])
+	}
+	ServeSSEWithIntervalFiltered(w, r, hub, defaultSSEHeartbeatInterval, func(msg []byte) bool {
+		return workspaceFromSSEMessage(msg) == workspaceID
+	})
+}
+
 // ServeSSEWithInterval is the testable core of serveSSE; callers that need a
 // different heartbeat period (e.g. tests) use this directly.
 //
@@ -491,6 +554,13 @@ func serveSSE(w http.ResponseWriter, r *http.Request, hub SSEHub) {
 // allowed to write indefinitely, so we remove the deadline here without
 // affecting other connections.
 func ServeSSEWithInterval(w http.ResponseWriter, r *http.Request, hub SSEHub, heartbeatInterval time.Duration) {
+	ServeSSEWithIntervalFiltered(w, r, hub, heartbeatInterval, nil)
+}
+
+// ServeSSEWithIntervalFiltered is ServeSSEWithInterval with an optional
+// per-message predicate. Heartbeats and connection setup comments are never
+// filtered.
+func ServeSSEWithIntervalFiltered(w http.ResponseWriter, r *http.Request, hub SSEHub, heartbeatInterval time.Duration, filter func([]byte) bool) {
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 
 	flusher, ok := w.(http.Flusher)
@@ -530,6 +600,9 @@ func ServeSSEWithInterval(w http.ResponseWriter, r *http.Request, hub SSEHub, he
 			if !ok {
 				return
 			}
+			if filter != nil && !filter(msg) {
+				continue
+			}
 			_, err := w.Write(msg)
 			if err != nil {
 				return
@@ -537,4 +610,29 @@ func ServeSSEWithInterval(w http.ResponseWriter, r *http.Request, hub SSEHub, he
 			flusher.Flush()
 		}
 	}
+}
+
+func workspaceFromSSEMessage(msg []byte) string {
+	for _, line := range bytes.Split(msg, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		var payload struct {
+			WorkspaceID string `json:"workspace_id"`
+			Workspace   string `json:"workspace"`
+		}
+		data := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+		if err := json.Unmarshal(data, &payload); err != nil {
+			return ""
+		}
+		if payload.WorkspaceID != "" {
+			return fleet.NormalizeWorkspaceID(payload.WorkspaceID)
+		}
+		if payload.Workspace != "" {
+			return fleet.NormalizeWorkspaceID(payload.Workspace)
+		}
+		return ""
+	}
+	return ""
 }

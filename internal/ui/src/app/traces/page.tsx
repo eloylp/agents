@@ -5,9 +5,11 @@ import Card from '@/components/Card'
 import StatusBadge from '@/components/StatusBadge'
 import Link from 'next/link'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
+import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { StreamCard, TranscriptFilter, allStreamCardKinds, stepToCardEntries, type PersistedStep, type StreamCardKind } from '@/components/StreamCard'
 import { fmtDuration } from '@/lib/format'
 import { openAuthenticatedSSE } from '@/lib/sse'
+import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
 type TraceStep = PersistedStep
 
@@ -378,10 +380,11 @@ function TracesContent() {
   const [loading, setLoading] = useState(true)
   const [streaming, setStreaming] = useState(false)
   const [repoFilter, setRepoFilter] = useRepoFilter()
+  const { workspace } = useSelectedWorkspace()
 
   const load = () => {
     setLoading(true)
-    fetch('/traces')
+    fetch(withWorkspace('/traces', workspace))
       .then(r => r.json())
       .then(data => { setSpans(data ?? []); setLoading(false) })
       .catch(() => setLoading(false))
@@ -389,7 +392,7 @@ function TracesContent() {
 
   useEffect(() => {
     load()
-    const stream = openAuthenticatedSSE('/traces/stream', {
+    const stream = openAuthenticatedSSE(withWorkspace('/traces/stream', workspace), {
       onOpen: () => setStreaming(true),
       onMessage: data => {
         try {
@@ -400,7 +403,7 @@ function TracesContent() {
       onError: () => setStreaming(false),
     })
     return () => stream.close()
-  }, [])
+  }, [workspace])
 
   const handleSelect = (id: string) => {
     router.push(`/traces/?id=${encodeURIComponent(id)}`)
@@ -432,8 +435,9 @@ function TracesContent() {
             {rootIds.length} trace{rootIds.length !== 1 ? 's' : ''} · {streaming ? '🟢 live' : '🔴 disconnected'}
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <RepoFilter selected={repoFilter} onChange={setRepoFilter} />
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <WorkspaceSelect compact />
+          <RepoFilter selected={repoFilter} onChange={setRepoFilter} workspace={workspace} />
           <input
             placeholder="Filter by agent, repo, or ID…"
             value={filter}

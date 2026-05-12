@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/eloylp/agents/internal/fleet"
 	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // toolCreateAgent upserts an agent definition through the same path as POST
@@ -33,11 +34,19 @@ func toolCreateAgent(deps Deps) server.ToolHandlerFunc {
 		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
+		if _, ok := args["prompt"]; ok {
+			return mcpgo.NewToolResultError("agent prompt bodies are import-only; use prompt_ref"), nil
+		}
 		a := fleet.Agent{
+			WorkspaceID:   req.GetString("workspace", fleet.DefaultWorkspaceID),
 			Name:          name,
 			Backend:       req.GetString("backend", ""),
 			Model:         req.GetString("model", ""),
-			Prompt:        req.GetString("prompt", ""),
+			PromptID:      req.GetString("prompt_id", ""),
+			PromptRef:     req.GetString("prompt_ref", ""),
+			PromptScope:   req.GetString("prompt_scope", ""),
+			ScopeType:     req.GetString("scope_type", ""),
+			ScopeRepo:     req.GetString("scope_repo", ""),
 			Description:   req.GetString("description", ""),
 			Skills:        skills,
 			CanDispatch:   canDispatch,
@@ -79,8 +88,23 @@ func toolUpdateAgent(deps Deps) server.ToolHandlerFunc {
 		if v, ok := stringPtrArg(args, "model"); ok {
 			patch.Model = v
 		}
-		if v, ok := stringPtrArg(args, "prompt"); ok {
-			patch.Prompt = v
+		if _, ok := args["prompt"]; ok {
+			return mcpgo.NewToolResultError("agent prompt bodies are import-only; use prompt_ref"), nil
+		}
+		if v, ok := stringPtrArg(args, "prompt_ref"); ok {
+			patch.PromptRef = v
+		}
+		if v, ok := stringPtrArg(args, "prompt_scope"); ok {
+			patch.PromptScope = v
+		}
+		if v, ok := stringPtrArg(args, "prompt_id"); ok {
+			patch.PromptID = v
+		}
+		if v, ok := stringPtrArg(args, "scope_type"); ok {
+			patch.ScopeType = v
+		}
+		if v, ok := stringPtrArg(args, "scope_repo"); ok {
+			patch.ScopeRepo = v
 		}
 		if v, ok := stringPtrArg(args, "description"); ok {
 			patch.Description = v
@@ -113,7 +137,8 @@ func toolUpdateAgent(deps Deps) server.ToolHandlerFunc {
 		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
-		canonical, uerr := deps.Fleet.UpdateAgentPatch(name, patch)
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		canonical, uerr := deps.Fleet.UpdateAgentPatchInWorkspace(workspace, name, patch)
 		if uerr != nil {
 			return mcpgo.NewToolResultErrorFromErr("update agent", uerr), nil
 		}
@@ -133,13 +158,15 @@ func toolDeleteAgent(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
 		cascade := req.GetBool("cascade", false)
-		if err := deps.Fleet.DeleteAgent(fleet.NormalizeAgentName(name), cascade); err != nil {
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		if err := deps.Fleet.DeleteAgentInWorkspace(workspace, fleet.NormalizeAgentName(name), cascade); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete agent", err), nil
 		}
 		return jsonResult(map[string]any{
-			"status":  "deleted",
-			"name":    fleet.NormalizeAgentName(name),
-			"cascade": cascade,
+			"status":    "deleted",
+			"workspace": fleet.NormalizeWorkspaceID(workspace),
+			"name":      fleet.NormalizeAgentName(name),
+			"cascade":   cascade,
 		})
 	}
 }
@@ -154,25 +181,34 @@ func toolCreateSkill(deps Deps) server.ToolHandlerFunc {
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
-		sk := fleet.Skill{Prompt: req.GetString("prompt", "")}
-		canonicalName, canonical, err := deps.Fleet.UpsertSkill(name, sk)
+		id := req.GetString("id", "")
+		workspaceID := req.GetString("workspace_id", "")
+		repo := req.GetString("repo", "")
+		if id == "" && workspaceID == "" && repo == "" {
+			id = name
+		}
+		sk := fleet.Skill{
+			ID:          id,
+			WorkspaceID: workspaceID,
+			Repo:        repo,
+			Name:        name,
+			Prompt:      req.GetString("prompt", ""),
+		}
+		canonicalName, canonical, err := deps.Fleet.UpsertSkill(id, sk)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("create skill", err), nil
 		}
-		return jsonResult(map[string]any{
-			"name":   canonicalName,
-			"prompt": canonical.Prompt,
-		})
+		return jsonResult(skillJSON(canonicalName, canonical))
 	}
 }
 
 // toolUpdateSkill partially updates a skill through the same path as PATCH
-// /skills/{name}. Only fields the caller passes are modified.
+// /skills/{id}. Only fields the caller passes are modified.
 func toolUpdateSkill(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		name, err := req.RequireString("name")
-		if err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
+		ref, ok := skillRefArg(req)
+		if !ok {
+			return mcpgo.NewToolResultError("id or name is required"), nil
 		}
 		args := req.GetArguments()
 		var patch daemonfleet.SkillPatch
@@ -182,27 +218,24 @@ func toolUpdateSkill(deps Deps) server.ToolHandlerFunc {
 		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
-		canonicalName, canonical, uerr := deps.Fleet.UpdateSkillPatch(name, patch)
+		canonicalName, canonical, uerr := deps.Fleet.UpdateSkillPatch(ref, patch)
 		if uerr != nil {
 			return mcpgo.NewToolResultErrorFromErr("update skill", uerr), nil
 		}
-		return jsonResult(map[string]any{
-			"name":   canonicalName,
-			"prompt": canonical.Prompt,
-		})
+		return jsonResult(skillJSON(canonicalName, canonical))
 	}
 }
 
 // toolDeleteSkill removes a skill through the same path as DELETE
-// /skills/{name}. If any agent still references the skill the store surfaces a
+// /skills/{id}. If any agent still references the skill the store surfaces a
 // *store.ErrConflict, which the caller sees as a user-actionable error.
 func toolDeleteSkill(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		name, ok := trimmedString(req, "name")
+		ref, ok := skillRefArg(req)
 		if !ok {
-			return mcpgo.NewToolResultError("name is required"), nil
+			return mcpgo.NewToolResultError("id or name is required"), nil
 		}
-		canonical := fleet.NormalizeSkillName(name)
+		canonical := fleet.NormalizeSkillName(ref)
 		if err := deps.Fleet.DeleteSkill(canonical); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete skill", err), nil
 		}
@@ -211,6 +244,261 @@ func toolDeleteSkill(deps Deps) server.ToolHandlerFunc {
 			"name":   canonical,
 		})
 	}
+}
+
+func skillRefArg(req mcpgo.CallToolRequest) (string, bool) {
+	if id, ok := trimmedString(req, "id"); ok {
+		return id, true
+	}
+	if name, ok := trimmedString(req, "name"); ok {
+		return name, true
+	}
+	return "", false
+}
+
+func toolCreateWorkspace(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, err := req.RequireString("name")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		workspace := fleet.Workspace{
+			ID:          req.GetString("id", ""),
+			Name:        name,
+			Description: req.GetString("description", ""),
+		}
+		canonical, err := deps.Fleet.UpsertWorkspace(workspace)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("create workspace", err), nil
+		}
+		return jsonResult(workspaceJSON(canonical))
+	}
+}
+
+func toolUpdateWorkspace(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace, ok := trimmedStringOptional(req, "workspace")
+		if !ok || workspace == "" {
+			workspace = fleet.DefaultWorkspaceID
+		}
+		args := req.GetArguments()
+		var patch daemonfleet.WorkspacePatch
+		if v, ok := stringPtrArg(args, "name"); ok {
+			patch.Name = v
+		}
+		if v, ok := stringPtrArg(args, "description"); ok {
+			patch.Description = v
+		}
+		if !patch.AnyFieldSet() {
+			return mcpgo.NewToolResultError("at least one field is required"), nil
+		}
+		canonical, err := deps.Fleet.UpdateWorkspacePatch(workspace, patch)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("update workspace", err), nil
+		}
+		return jsonResult(workspaceJSON(canonical))
+	}
+}
+
+func toolDeleteWorkspace(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace, ok := trimmedStringOptional(req, "workspace")
+		if !ok || workspace == "" {
+			workspace = fleet.DefaultWorkspaceID
+		}
+		if err := deps.Fleet.DeleteWorkspace(workspace); err != nil {
+			return mcpgo.NewToolResultErrorFromErr("delete workspace", err), nil
+		}
+		return jsonResult(map[string]any{
+			"status":    "deleted",
+			"workspace": workspace,
+		})
+	}
+}
+
+func toolUpdateWorkspaceGuardrails(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace, ok := trimmedStringOptional(req, "workspace")
+		if !ok || workspace == "" {
+			workspace = fleet.DefaultWorkspaceID
+		}
+		raw, errMsg := arrayOfAny(req.GetArguments()["guardrails"], "guardrails")
+		if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		}
+		refs := make([]fleet.WorkspaceGuardrailRef, 0, len(raw))
+		for i, item := range raw {
+			m, ok := item.(map[string]any)
+			if !ok {
+				return mcpgo.NewToolResultErrorf("guardrails[%d] must be an object", i), nil
+			}
+			name, ok := m["guardrail_name"].(string)
+			if !ok || name == "" {
+				return mcpgo.NewToolResultErrorf("guardrails[%d].guardrail_name is required", i), nil
+			}
+			ref := fleet.WorkspaceGuardrailRef{GuardrailName: name, Position: i}
+			if v, ok := m["position"]; ok && v != nil {
+				switch n := v.(type) {
+				case float64:
+					if n != float64(int(n)) {
+						return mcpgo.NewToolResultErrorf("guardrails[%d].position must be an integer", i), nil
+					}
+					ref.Position = int(n)
+				case int:
+					ref.Position = n
+				default:
+					return mcpgo.NewToolResultErrorf("guardrails[%d].position must be a number", i), nil
+				}
+			}
+			if v, ok := m["enabled"]; ok && v != nil {
+				enabled, ok := v.(bool)
+				if !ok {
+					return mcpgo.NewToolResultErrorf("guardrails[%d].enabled must be a boolean", i), nil
+				}
+				ref.Enabled = enabled
+			}
+			refs = append(refs, ref)
+		}
+		updated, err := deps.Store.ReplaceWorkspaceGuardrails(workspace, refs)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("update workspace guardrails", err), nil
+		}
+		out := make([]map[string]any, 0, len(updated))
+		for _, ref := range updated {
+			out = append(out, workspaceGuardrailJSON(ref))
+		}
+		return jsonResult(out)
+	}
+}
+
+func toolCreatePrompt(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		name, err := req.RequireString("name")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		workspaceID := req.GetString("workspace_id", "")
+		repo := req.GetString("repo", "")
+		if scope, ok := trimmedString(req, "scope"); ok {
+			workspaceID, repo, _ = fleet.ParseCatalogScopePath(scope)
+		}
+		prompt := fleet.Prompt{
+			ID:          req.GetString("id", ""),
+			WorkspaceID: workspaceID,
+			Repo:        repo,
+			Name:        name,
+			Description: req.GetString("description", ""),
+			Content:     req.GetString("content", ""),
+		}
+		canonical, err := deps.Fleet.UpsertPrompt(prompt)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("create prompt", err), nil
+		}
+		return jsonResult(promptJSON(canonical))
+	}
+}
+
+func toolUpdatePrompt(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		ref, err := resolvePromptRef(deps, req)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("resolve prompt", err), nil
+		}
+		args := req.GetArguments()
+		var patch daemonfleet.PromptPatch
+		if v, ok := stringPtrArg(args, "description"); ok {
+			patch.Description = v
+		}
+		if v, ok := stringPtrArg(args, "content"); ok {
+			patch.Content = v
+		}
+		if !patch.AnyFieldSet() {
+			return mcpgo.NewToolResultError("at least one field is required"), nil
+		}
+		canonical, uerr := deps.Fleet.UpdatePromptPatch(ref, patch)
+		if uerr != nil {
+			return mcpgo.NewToolResultErrorFromErr("update prompt", uerr), nil
+		}
+		return jsonResult(promptJSON(canonical))
+	}
+}
+
+func toolDeletePrompt(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		ref, err := resolvePromptRef(deps, req)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("resolve prompt", err), nil
+		}
+		prompt, err := deps.Store.ReadPrompt(ref)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("read prompt before delete", err), nil
+		}
+		if err := deps.Fleet.DeletePrompt(prompt.ID); err != nil {
+			return mcpgo.NewToolResultErrorFromErr("delete prompt", err), nil
+		}
+		return jsonResult(map[string]any{
+			"status": "deleted",
+			"id":     prompt.ID,
+			"name":   prompt.Name,
+		})
+	}
+}
+
+func resolvePromptRef(deps Deps, req mcpgo.CallToolRequest) (string, error) {
+	if id, ok := trimmedString(req, "id"); ok {
+		return id, nil
+	}
+	if name, ok := trimmedString(req, "name"); ok {
+		return resolvePromptName(deps, req, name)
+	}
+	return "", fmt.Errorf("id or name is required")
+}
+
+func resolvePromptName(deps Deps, req mcpgo.CallToolRequest, name string) (string, error) {
+	targetName := fleet.NormalizePromptName(name)
+	workspaceID, hasWorkspace := trimmedStringOptional(req, "workspace_id")
+	repo, hasRepo := trimmedStringOptional(req, "repo")
+	if scope, ok := trimmedString(req, "scope"); ok {
+		workspaceID, repo, _ = fleet.ParseCatalogScopePath(scope)
+		hasWorkspace = true
+		hasRepo = repo != ""
+	}
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID != "" {
+		workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	}
+	repo = fleet.NormalizeRepoName(repo)
+	if hasRepo && repo != "" && workspaceID == "" {
+		return "", fmt.Errorf("repo requires workspace_id when resolving prompt %q", targetName)
+	}
+
+	prompts, err := deps.Store.ReadPrompts()
+	if err != nil {
+		return "", err
+	}
+	var matches []fleet.Prompt
+	for _, p := range prompts {
+		if p.Name != targetName {
+			continue
+		}
+		if hasWorkspace || hasRepo {
+			if p.WorkspaceID == workspaceID && p.Repo == repo {
+				matches = append(matches, p)
+			}
+			continue
+		}
+		matches = append(matches, p)
+	}
+	if len(matches) == 0 {
+		if hasWorkspace || hasRepo {
+			return "", fmt.Errorf("prompt %q not found in workspace %q repo %q", targetName, workspaceID, repo)
+		}
+		return "", fmt.Errorf("prompt %q not found", targetName)
+	}
+	if len(matches) > 1 {
+		return "", fmt.Errorf("ambiguous prompt name %q; pass id or workspace_id/repo", targetName)
+	}
+	return matches[0].ID, nil
 }
 
 // toolCreateBackend upserts a backend definition through the same path as
@@ -344,9 +632,10 @@ func toolCreateRepo(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError(bErr), nil
 		}
 		r := fleet.Repo{
-			Name:    name,
-			Enabled: req.GetBool("enabled", false),
-			Use:     bindings,
+			WorkspaceID: req.GetString("workspace", fleet.DefaultWorkspaceID),
+			Name:        name,
+			Enabled:     req.GetBool("enabled", false),
+			Use:         bindings,
 		}
 		canonical, err := deps.Repos.UpsertRepo(r)
 		if err != nil {
@@ -375,7 +664,8 @@ func toolUpdateRepo(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
-		canonical, err := deps.Repos.PatchRepo(fleet.NormalizeRepoName(name), *enabledPtr)
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		canonical, err := deps.Repos.PatchRepoInWorkspace(workspace, fleet.NormalizeRepoName(name), *enabledPtr)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("update repo", err), nil
 		}
@@ -395,12 +685,14 @@ func toolDeleteRepo(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError("name is required"), nil
 		}
 		canonical := fleet.NormalizeRepoName(name)
-		if err := deps.Repos.DeleteRepo(canonical); err != nil {
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		if err := deps.Repos.DeleteRepoInWorkspace(workspace, canonical); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete repo", err), nil
 		}
 		return jsonResult(map[string]any{
-			"status": "deleted",
-			"name":   canonical,
+			"status":    "deleted",
+			"workspace": fleet.NormalizeWorkspaceID(workspace),
+			"name":      canonical,
 		})
 	}
 }
@@ -424,7 +716,8 @@ func toolCreateBinding(deps Deps) server.ToolHandlerFunc {
 		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
-		persisted, err := deps.Repos.CreateBinding(repo, b)
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		persisted, err := deps.Repos.CreateBindingInWorkspace(workspace, repo, b)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("create binding", err), nil
 		}
@@ -450,7 +743,8 @@ func toolUpdateBinding(deps Deps) server.ToolHandlerFunc {
 		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
-		updated, uerr := deps.Repos.UpdateBinding(repo, int64(id), b)
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		updated, uerr := deps.Repos.UpdateBindingInWorkspace(workspace, repo, int64(id), b)
 		if uerr != nil {
 			return mcpgo.NewToolResultErrorFromErr("update binding", uerr), nil
 		}
@@ -466,7 +760,8 @@ func toolGetBinding(deps Deps) server.ToolHandlerFunc {
 		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
-		b, err := deps.Repos.ReadBinding(repo, int64(id))
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		b, err := deps.Repos.ReadBindingInWorkspace(workspace, repo, int64(id))
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get binding", err), nil
 		}
@@ -482,13 +777,15 @@ func toolDeleteBinding(deps Deps) server.ToolHandlerFunc {
 		if errMsg != "" {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
-		if err := deps.Repos.DeleteBinding(repo, int64(id)); err != nil {
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		if err := deps.Repos.DeleteBindingInWorkspace(workspace, repo, int64(id)); err != nil {
 			return mcpgo.NewToolResultErrorFromErr("delete binding", err), nil
 		}
 		return jsonResult(map[string]any{
-			"status": "deleted",
-			"id":     id,
-			"repo":   fleet.NormalizeRepoName(repo),
+			"status":    "deleted",
+			"workspace": fleet.NormalizeWorkspaceID(workspace),
+			"id":        id,
+			"repo":      fleet.NormalizeRepoName(repo),
 		})
 	}
 }
@@ -529,9 +826,10 @@ func repoJSON(r fleet.Repo) map[string]any {
 		bindings = append(bindings, bindingJSON(b))
 	}
 	return map[string]any{
-		"name":     r.Name,
-		"enabled":  r.Enabled,
-		"bindings": bindings,
+		"workspace_id": fleet.NormalizeWorkspaceID(r.WorkspaceID),
+		"name":         r.Name,
+		"enabled":      r.Enabled,
+		"bindings":     bindings,
 	}
 }
 
@@ -695,7 +993,7 @@ func stringSlicePtrArg(args map[string]any, key string) (*[]string, bool, string
 //   - a JSON-encoded array string (e.g. `["a","b"]`)
 //
 // The JSON-string path exists because some MCP clients, observed with
-// mark3labs/mcp-go when batching tool calls into a single JSON-RPC message , 
+// mark3labs/mcp-go when batching tool calls into a single JSON-RPC message ,
 // stringify array parameters at the transport boundary. Decoding here keeps
 // the server permissive without requiring clients to know about the quirk.
 //

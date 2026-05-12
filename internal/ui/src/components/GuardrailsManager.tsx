@@ -1,11 +1,16 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import FullscreenModal from '@/components/FullscreenModal'
 import MarkdownEditor from '@/components/MarkdownEditor'
+import WorkspaceSelect from '@/components/WorkspaceSelect'
+import { useSelectedWorkspace } from '@/lib/workspace'
 
 interface Guardrail {
+  id?: string
+  workspace_id?: string
+  repo?: string
   name: string
   description: string
   content: string
@@ -13,6 +18,13 @@ interface Guardrail {
   is_builtin: boolean
   enabled: boolean
   position: number
+}
+
+interface WorkspaceGuardrailRef {
+  workspace_id?: string
+  guardrail_name: string
+  position: number
+  enabled: boolean
 }
 
 const emptyForm: Guardrail = {
@@ -144,7 +156,10 @@ function GuardrailForm({
 }
 
 export default function GuardrailsManager() {
+  const { workspace, workspaces } = useSelectedWorkspace()
+  const currentWorkspaceRef = useRef(workspace)
   const [guardrails, setGuardrails] = useState<Guardrail[]>([])
+  const [workspaceRefs, setWorkspaceRefs] = useState<WorkspaceGuardrailRef[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
 
@@ -153,18 +168,112 @@ export default function GuardrailsManager() {
   const [confirmStep, setConfirmStep] = useState(0)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [workspaceSaveError, setWorkspaceSaveError] = useState('')
 
-  const load = () => {
+  useEffect(() => {
+    currentWorkspaceRef.current = workspace
+  }, [workspace])
+
+  const load = (isCancelled: () => boolean = () => false) => {
+    const targetWorkspace = workspace
     setLoading(true)
-    fetch('/guardrails')
-      .then(r => r.json())
-      .then((data: Guardrail[]) => {
-        setGuardrails(data ?? [])
+    setLoadError('')
+    Promise.all([
+      fetch('/guardrails').then(r => {
+        if (!r.ok) throw new Error(`load guardrails: ${r.status}`)
+        return r.json()
+      }),
+      fetch(`/workspaces/${encodeURIComponent(workspace)}/guardrails`).then(r => {
+        if (!r.ok) throw new Error(`load workspace guardrails: ${r.status}`)
+        return r.json()
+      }),
+    ])
+      .then(([catalog, refs]: [Guardrail[], WorkspaceGuardrailRef[]]) => {
+        if (isCancelled() || currentWorkspaceRef.current !== targetWorkspace) return
+        setGuardrails(catalog ?? [])
+        setWorkspaceRefs((refs ?? []).slice().sort((a, b) => a.position - b.position || a.guardrail_name.localeCompare(b.guardrail_name)))
         setLoading(false)
       })
-      .catch(e => { setLoadError(String(e)); setLoading(false) })
+      .catch(e => {
+        if (isCancelled() || currentWorkspaceRef.current !== targetWorkspace) return
+        setLoadError(String(e))
+        setLoading(false)
+      })
   }
-  useEffect(load, [])
+  useEffect(() => {
+    let cancelled = false
+    load(() => cancelled)
+    return () => { cancelled = true }
+  }, [workspace])
+
+  const selectedWorkspace = workspaces.find(w => w.id === workspace)
+  const workspaceLabel = selectedWorkspace?.name || workspace
+  const guardrailID = (g: Guardrail) => g.id || g.name
+  const guardrailScope = (g: Guardrail) => {
+    if (g.repo) return `${g.workspace_id || 'default'} / ${g.repo}`
+    if (g.workspace_id) return `${g.workspace_id} workspace`
+    return 'Global'
+  }
+  const workspaceRefIDs = new Set(workspaceRefs.map(r => r.guardrail_name))
+  const workspaceRefByID = new Map(workspaceRefs.map(r => [r.guardrail_name, r]))
+  const guardrailByID = new Map(guardrails.map(g => [guardrailID(g), g]))
+  const selectedWorkspaceRows = workspaceRefs.map((ref, index) => ({
+    ref,
+    index,
+    guardrail: guardrailByID.get(ref.guardrail_name),
+  }))
+  const unselectedGuardrails = guardrails.filter(g => !workspaceRefIDs.has(guardrailID(g)))
+
+  const saveWorkspaceRefs = async (nextRefs: WorkspaceGuardrailRef[]) => {
+    const targetWorkspace = workspace
+    setSaving(true)
+    setWorkspaceSaveError('')
+    try {
+      const body = nextRefs.map((ref, index) => ({
+        guardrail_name: ref.guardrail_name,
+        position: index,
+        enabled: ref.enabled,
+      }))
+      const res = await fetch(`/workspaces/${encodeURIComponent(workspace)}/guardrails`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        if (currentWorkspaceRef.current !== targetWorkspace) return
+        setWorkspaceSaveError((await res.text()) || 'Save workspace guardrails failed')
+        return
+      }
+      const saved = await res.json() as WorkspaceGuardrailRef[]
+      if (currentWorkspaceRef.current !== targetWorkspace) return
+      setWorkspaceRefs(saved.slice().sort((a, b) => a.position - b.position || a.guardrail_name.localeCompare(b.guardrail_name)))
+    } catch (e) {
+      if (currentWorkspaceRef.current !== targetWorkspace) return
+      setWorkspaceSaveError(String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const toggleWorkspaceRef = (id: string, checked: boolean) => {
+    const next = checked
+      ? [...workspaceRefs, { guardrail_name: id, position: workspaceRefs.length, enabled: true }]
+      : workspaceRefs.filter(ref => ref.guardrail_name !== id)
+    void saveWorkspaceRefs(next)
+  }
+
+  const setWorkspaceRefEnabled = (id: string, enabled: boolean) => {
+    void saveWorkspaceRefs(workspaceRefs.map(ref => ref.guardrail_name === id ? { ...ref, enabled } : ref))
+  }
+
+  const moveWorkspaceRef = (id: string, direction: -1 | 1) => {
+    const idx = workspaceRefs.findIndex(ref => ref.guardrail_name === id)
+    const swap = idx + direction
+    if (idx < 0 || swap < 0 || swap >= workspaceRefs.length) return
+    const next = workspaceRefs.slice()
+    ;[next[idx], next[swap]] = [next[swap], next[idx]]
+    void saveWorkspaceRefs(next)
+  }
 
   const closeModal = () => {
     setModal(null)
@@ -178,10 +287,10 @@ export default function GuardrailsManager() {
     setSaveError('')
     try {
       const isNew = modal === 'create'
-      const url = isNew ? '/guardrails' : `/guardrails/${encodeURIComponent(g.name)}`
+      const url = isNew ? '/guardrails' : `/guardrails/${encodeURIComponent(guardrailID(g))}`
       const method = isNew ? 'POST' : 'PATCH'
       const body = isNew
-        ? { name: g.name, description: g.description, content: g.content, enabled: g.enabled, position: g.position }
+        ? { name: g.name, workspace_id: g.workspace_id, repo: g.repo, description: g.description, content: g.content, enabled: g.enabled, position: g.position }
         : { description: g.description, content: g.content, enabled: g.enabled, position: g.position }
       // Disabling a guardrail (especially a built-in) is sensitive, bounce
       // through a confirm modal before posting.
@@ -214,7 +323,7 @@ export default function GuardrailsManager() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch(`/guardrails/${encodeURIComponent(selected.name)}`, {
+      const res = await fetch(`/guardrails/${encodeURIComponent(guardrailID(selected))}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -240,7 +349,7 @@ export default function GuardrailsManager() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch(`/guardrails/${encodeURIComponent(selected.name)}/reset`, { method: 'POST' })
+      const res = await fetch(`/guardrails/${encodeURIComponent(guardrailID(selected))}/reset`, { method: 'POST' })
       if (!res.ok) {
         setSaveError((await res.text()) || 'Reset failed')
         setSaving(false)
@@ -259,7 +368,7 @@ export default function GuardrailsManager() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch(`/guardrails/${encodeURIComponent(selected.name)}`, { method: 'DELETE' })
+      const res = await fetch(`/guardrails/${encodeURIComponent(guardrailID(selected))}`, { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         setSaveError((await res.text()) || 'Delete failed')
         setSaving(false)
@@ -279,9 +388,114 @@ export default function GuardrailsManager() {
 
   return (
     <div>
+      <Card title={`Workspace guardrails: ${workspaceLabel}`} style={{ marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <WorkspaceSelect compact />
+          </div>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', margin: 0 }}>
+            Selected guardrails render for this workspace in the order shown. The reusable catalog below controls the guardrail text.
+          </p>
+          {workspaceSaveError && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', margin: 0 }}>{workspaceSaveError}</p>}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+            {selectedWorkspaceRows.map(({ ref, index, guardrail }) => {
+              const id = ref.guardrail_name
+              const name = guardrail?.name || id
+              return (
+                <div
+                  key={`workspace-selected-${id}`}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'auto minmax(160px, 1fr) auto auto',
+                    gap: '0.5rem',
+                    alignItems: 'center',
+                    padding: '0.55rem 0.65rem',
+                    border: '1px solid var(--border)',
+                    borderRadius: '8px',
+                    background: ref.enabled ? 'var(--bg-card)' : 'var(--bg-input)',
+                    opacity: ref.enabled ? 1 : 0.72,
+                  }}
+                >
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-faint)', minWidth: '2.5rem' }}>#{index + 1}</span>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked
+                      aria-label={`Remove ${name} from workspace`}
+                      disabled={saving}
+                      onChange={e => toggleWorkspaceRef(id, e.target.checked)}
+                    />
+                    <span style={{ color: 'var(--text-heading)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
+                    {!guardrail && <span style={{ color: 'var(--text-danger)', fontSize: '0.75rem' }}>missing from catalog</span>}
+                  </label>
+                  <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={ref.enabled}
+                      disabled={saving}
+                      onChange={e => setWorkspaceRefEnabled(id, e.target.checked)}
+                    />
+                    Enabled
+                  </label>
+                  <div style={{ display: 'flex', gap: '0.35rem', justifyContent: 'flex-end' }}>
+                    <button
+                      disabled={saving || index <= 0}
+                      onClick={() => moveWorkspaceRef(id, -1)}
+                      style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)', cursor: saving || index <= 0 ? 'not-allowed' : 'pointer' }}
+                    >
+                      Up
+                    </button>
+                    <button
+                      disabled={saving || index >= workspaceRefs.length - 1}
+                      onClick={() => moveWorkspaceRef(id, 1)}
+                      style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)', cursor: saving || index >= workspaceRefs.length - 1 ? 'not-allowed' : 'pointer' }}
+                    >
+                      Down
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+            {selectedWorkspaceRows.length === 0 && (
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', margin: '0.25rem 0' }}>No guardrails selected for this workspace.</p>
+            )}
+            {unselectedGuardrails.length > 0 && (
+              <p style={{ color: 'var(--text-faint)', fontSize: '0.75rem', margin: '0.45rem 0 0' }}>Available catalog guardrails</p>
+            )}
+            {unselectedGuardrails.map(g => (
+              <div
+                key={`workspace-available-${guardrailID(g)}`}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(160px, 1fr) auto',
+                  gap: '0.5rem',
+                  alignItems: 'center',
+                  padding: '0.55rem 0.65rem',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  background: 'transparent',
+                }}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={false}
+                    aria-label={`Add ${g.name} to workspace`}
+                    disabled={saving}
+                    onChange={e => toggleWorkspaceRef(guardrailID(g), e.target.checked)}
+                  />
+                  <span style={{ color: 'var(--text-heading)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{g.name}</span>
+                </label>
+                <span style={{ color: 'var(--text-faint)', fontSize: '0.8rem', textAlign: 'right' }}>not selected</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </Card>
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-          {guardrails.length} guardrail{guardrails.length === 1 ? '' : 's'}, prepended to every agent's composed prompt in render order.
+          {guardrails.length} guardrail catalog entr{guardrails.length === 1 ? 'y' : 'ies'}.
         </span>
         <button
           onClick={() => { setSelected(emptyForm); setModal('create') }}
@@ -294,7 +508,7 @@ export default function GuardrailsManager() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
         {guardrails.map(g => (
           <div
-            key={g.name}
+            key={guardrailID(g)}
             onClick={() => { setSelected(g); setModal('edit') }}
             style={{
               background: 'var(--bg-card)', border: '1px solid var(--border)',
@@ -305,6 +519,11 @@ export default function GuardrailsManager() {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                 <span style={{ fontWeight: 600, color: 'var(--text-heading)' }}>{g.name}</span>
+                {workspaceRefByID.has(guardrailID(g)) && (
+                  <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'var(--bg-input)', color: workspaceRefByID.get(guardrailID(g))?.enabled ? 'var(--accent)' : 'var(--text-muted)', border: `1px solid ${workspaceRefByID.get(guardrailID(g))?.enabled ? 'var(--accent)' : 'var(--border)'}` }}>
+                    {workspaceRefByID.get(guardrailID(g))?.enabled ? 'selected' : 'selected (disabled)'}
+                  </span>
+                )}
                 {g.is_builtin && (
                   <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'var(--accent)', color: 'var(--bg-card)' }}>built-in</span>
                 )}
@@ -312,6 +531,7 @@ export default function GuardrailsManager() {
                   <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'var(--bg-input)', color: 'var(--text-danger)', border: '1px solid var(--text-danger)' }}>disabled</span>
                 )}
                 <span style={{ fontSize: '0.7rem', color: 'var(--text-faint)' }}>position {g.position}</span>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-faint)' }}>{guardrailScope(g)}</span>
               </div>
               {g.description && (
                 <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>{g.description}</p>

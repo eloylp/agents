@@ -4,6 +4,7 @@ import (
 	"context"
 	"maps"
 	"slices"
+	"strings"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -16,13 +17,17 @@ import (
 // snake_case wire shape as GET /agents so MCP consumers and REST consumers
 // see identical data.
 func toolListAgents(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace := strings.TrimSpace(req.GetString("workspace", ""))
 		agents, err := deps.Store.ReadAgents()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list agents", err), nil
 		}
 		out := make([]map[string]any, 0, len(agents))
 		for _, a := range agents {
+			if workspace != "" && fleet.NormalizeWorkspaceID(a.WorkspaceID) != fleet.NormalizeWorkspaceID(workspace) {
+				continue
+			}
 			out = append(out, agentJSON(a))
 		}
 		return jsonResult(out)
@@ -43,10 +48,13 @@ func toolGetAgent(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultErrorFromErr("get agent", err), nil
 		}
 		key := fleet.NormalizeAgentName(name)
-		if idx := slices.IndexFunc(agents, func(a fleet.Agent) bool { return a.Name == key }); idx != -1 {
+		workspace := fleet.NormalizeWorkspaceID(req.GetString("workspace", fleet.DefaultWorkspaceID))
+		if idx := slices.IndexFunc(agents, func(a fleet.Agent) bool {
+			return a.Name == key && fleet.NormalizeWorkspaceID(a.WorkspaceID) == workspace
+		}); idx != -1 {
 			return jsonResult(agentJSON(agents[idx]))
 		}
-		return mcpgo.NewToolResultErrorf("agent %q not found", name), nil
+		return mcpgo.NewToolResultErrorf("agent %q not found in workspace %q", name, workspace), nil
 	}
 }
 
@@ -59,38 +67,105 @@ func toolListSkills(deps Deps) server.ToolHandlerFunc {
 		names := slices.Sorted(maps.Keys(skills))
 		out := make([]map[string]any, 0, len(names))
 		for _, n := range names {
-			s := skills[n]
-			out = append(out, map[string]any{
-				"name":   n,
-				"prompt": s.Prompt,
-			})
+			out = append(out, skillJSON(n, skills[n]))
 		}
 		return jsonResult(out)
 	}
 }
 
-// toolGetSkill fetches one skill by its map key. Map lookup is
-// case-insensitive via fleet.NormalizeSkillName so agents can reference
-// skills without worrying about casing.
+func toolListPrompts(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		prompts, err := deps.Store.ReadPrompts()
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("list prompts", err), nil
+		}
+		out := make([]map[string]any, 0, len(prompts))
+		for _, p := range prompts {
+			out = append(out, promptJSON(p))
+		}
+		return jsonResult(out)
+	}
+}
+
+func toolListWorkspaces(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspaces, err := deps.Store.ReadWorkspaces()
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("list workspaces", err), nil
+		}
+		out := make([]map[string]any, 0, len(workspaces))
+		for _, w := range workspaces {
+			out = append(out, workspaceJSON(w))
+		}
+		return jsonResult(out)
+	}
+}
+
+func toolGetWorkspace(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace := req.GetString("workspace", fleet.DefaultWorkspaceID)
+		workspace = strings.TrimSpace(workspace)
+		if workspace == "" {
+			workspace = fleet.DefaultWorkspaceID
+		}
+		w, err := deps.Store.ReadWorkspace(workspace)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("get workspace", err), nil
+		}
+		return jsonResult(workspaceJSON(w))
+	}
+}
+
+func toolListWorkspaceGuardrails(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace, ok := trimmedStringOptional(req, "workspace")
+		if !ok || workspace == "" {
+			workspace = fleet.DefaultWorkspaceID
+		}
+		refs, err := deps.Store.ReadWorkspaceGuardrails(workspace)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("list workspace guardrails", err), nil
+		}
+		out := make([]map[string]any, 0, len(refs))
+		for _, ref := range refs {
+			out = append(out, workspaceGuardrailJSON(ref))
+		}
+		return jsonResult(out)
+	}
+}
+
+func toolGetPrompt(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		ref, err := resolvePromptRef(deps, req)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("resolve prompt", err), nil
+		}
+		prompt, err := deps.Store.ReadPrompt(ref)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("get prompt", err), nil
+		}
+		return jsonResult(promptJSON(prompt))
+	}
+}
+
+// toolGetSkill fetches one skill by stable id, with a legacy global-name
+// fallback because old global skill IDs match their display names.
 func toolGetSkill(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		name, ok := trimmedString(req, "name")
+		ref, ok := skillRefArg(req)
 		if !ok {
-			return mcpgo.NewToolResultError("name is required"), nil
+			return mcpgo.NewToolResultError("id or name is required"), nil
 		}
 		skills, err := deps.Store.ReadSkills()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get skill", err), nil
 		}
-		key := fleet.NormalizeSkillName(name)
+		key := fleet.NormalizeSkillName(ref)
 		s, found := skills[key]
 		if !found {
-			return mcpgo.NewToolResultErrorf("skill %q not found", name), nil
+			return mcpgo.NewToolResultErrorf("skill %q not found", ref), nil
 		}
-		return jsonResult(map[string]any{
-			"name":   key,
-			"prompt": s.Prompt,
-		})
+		return jsonResult(skillJSON(key, s))
 	}
 }
 
@@ -131,13 +206,17 @@ func toolGetBackend(deps Deps) server.ToolHandlerFunc {
 }
 
 func toolListRepos(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace := strings.TrimSpace(req.GetString("workspace", ""))
 		repos, err := deps.Store.ReadRepos()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("list repos", err), nil
 		}
 		out := make([]map[string]any, 0, len(repos))
 		for _, r := range repos {
+			if workspace != "" && fleet.NormalizeWorkspaceID(r.WorkspaceID) != fleet.NormalizeWorkspaceID(workspace) {
+				continue
+			}
 			out = append(out, repoJSON(r))
 		}
 		return jsonResult(out)
@@ -157,10 +236,13 @@ func toolGetRepo(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultErrorFromErr("get repo", err), nil
 		}
 		key := fleet.NormalizeRepoName(name)
-		if idx := slices.IndexFunc(repos, func(r fleet.Repo) bool { return r.Name == key }); idx != -1 {
+		workspace := fleet.NormalizeWorkspaceID(req.GetString("workspace", fleet.DefaultWorkspaceID))
+		if idx := slices.IndexFunc(repos, func(r fleet.Repo) bool {
+			return r.Name == key && fleet.NormalizeWorkspaceID(r.WorkspaceID) == workspace
+		}); idx != -1 {
 			return jsonResult(repoJSON(repos[idx]))
 		}
-		return mcpgo.NewToolResultErrorf("repo %q not found", name), nil
+		return mcpgo.NewToolResultErrorf("repo %q not found in workspace %q", name, workspace), nil
 	}
 }
 
@@ -190,23 +272,28 @@ func toolTriggerAgent(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("repo is required"), nil
 		}
+		workspaceID := fleet.NormalizeWorkspaceID(req.GetString("workspace", fleet.DefaultWorkspaceID))
 
 		repos, err := deps.Store.ReadRepos()
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("read repos", err), nil
 		}
 		want := fleet.NormalizeRepoName(repoName)
-		idx := slices.IndexFunc(repos, func(r fleet.Repo) bool { return r.Name == want })
+		idx := slices.IndexFunc(repos, func(r fleet.Repo) bool {
+			repoWorkspace := fleet.NormalizeWorkspaceID(r.WorkspaceID)
+			return r.Name == want && repoWorkspace == workspaceID
+		})
 		if idx < 0 || !repos[idx].Enabled {
 			return mcpgo.NewToolResultErrorf("repo %q not found or disabled", repoName), nil
 		}
 		repo := repos[idx]
 
 		ev := workflow.Event{
-			ID:    workflow.GenEventID(),
-			Repo:  workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
-			Kind:  "agents.run",
-			Actor: "mcp",
+			ID:          workflow.GenEventID(),
+			WorkspaceID: workspaceID,
+			Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+			Kind:        "agents.run",
+			Actor:       "mcp",
 			Payload: map[string]any{
 				"target_agent": agent,
 			},

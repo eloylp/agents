@@ -152,11 +152,12 @@ func TestList_CompletedEventFannedOutToTwoAgentsShowsTwoRows(t *testing.T) {
 	}
 }
 
-func TestList_CompletedEventWithNoTracesIsHidden(t *testing.T) {
+func TestList_CompletedEventWithNoTracesShowsSkippedRow(t *testing.T) {
 	t.Parallel()
 	fx := newFixture(t, 16)
 	// Webhook with no matching binding → event flows through, completes,
-	// but no spans recorded. Should not appear in /runners.
+	// but no spans recorded. It should still appear so Total and visible
+	// rows stay consistent.
 	id, _ := fx.channels.PushEvent(context.Background(), workflow.Event{
 		ID: "ev-empty", Kind: "issues.opened",
 	})
@@ -169,11 +170,12 @@ func TestList_CompletedEventWithNoTracesIsHidden(t *testing.T) {
 	fx.router.ServeHTTP(rec, req)
 	var resp runners.ListResponse
 	_ = json.NewDecoder(rec.Body).Decode(&resp)
-	if len(resp.Runners) != 0 {
-		t.Fatalf("rows = %+v, want 0 (completed event with no traces should be hidden)", resp.Runners)
+	if len(resp.Runners) != 1 {
+		t.Fatalf("rows = %+v, want 1 skipped row", resp.Runners)
 	}
-	// But the queue row itself is still counted in Total, paging is on
-	// event rows, not output rows.
+	if resp.Runners[0].Status != "skipped" {
+		t.Fatalf("status = %q, want skipped", resp.Runners[0].Status)
+	}
 	if resp.Total != 1 {
 		t.Errorf("total = %d, want 1", resp.Total)
 	}
@@ -194,13 +196,14 @@ func TestList_FilterByStatus(t *testing.T) {
 	fx.router.ServeHTTP(rec, req)
 	var resp runners.ListResponse
 	_ = json.NewDecoder(rec.Body).Decode(&resp)
-	// idDone has no traces → 0 rows returned, but Total = 1 (event_queue
-	// rows in completed state). Operator paging is on events.
 	if resp.Total != 1 {
 		t.Errorf("total = %d, want 1", resp.Total)
 	}
-	if len(resp.Runners) != 0 {
-		t.Errorf("rows = %d, want 0 (completed event with no traces hidden)", len(resp.Runners))
+	if len(resp.Runners) != 1 {
+		t.Fatalf("rows = %d, want 1 skipped row", len(resp.Runners))
+	}
+	if resp.Runners[0].Status != "skipped" {
+		t.Errorf("status = %q, want skipped", resp.Runners[0].Status)
 	}
 }
 

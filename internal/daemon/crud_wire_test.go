@@ -7,11 +7,15 @@ package daemon_test
 // integration tests assert on response bodies without that churn.
 type storeAgentJSON struct {
 	ID            string   `json:"id,omitempty"`
+	WorkspaceID   string   `json:"workspace_id,omitempty"`
 	Name          string   `json:"name"`
 	Backend       string   `json:"backend"`
 	Model         string   `json:"model,omitempty"`
 	Skills        []string `json:"skills"`
 	Prompt        string   `json:"prompt"`
+	PromptID      string   `json:"prompt_id,omitempty"`
+	PromptRef     string   `json:"prompt_ref,omitempty"`
+	PromptScope   string   `json:"prompt_scope,omitempty"`
 	AllowPRs      bool     `json:"allow_prs"`
 	AllowDispatch bool     `json:"allow_dispatch"`
 	CanDispatch   []string `json:"can_dispatch"`
@@ -22,6 +26,44 @@ type storeAgentJSON struct {
 type storeSkillJSON struct {
 	Name   string `json:"name"`
 	Prompt string `json:"prompt"`
+}
+
+type storePromptJSON struct {
+	ID          string `json:"id,omitempty"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Repo        string `json:"repo,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Content     string `json:"content"`
+}
+
+type storeWorkspaceJSON struct {
+	ID          string `json:"id,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+type workspaceGuardrailJSON struct {
+	WorkspaceID   string `json:"workspace_id"`
+	GuardrailName string `json:"guardrail_name"`
+	Position      int    `json:"position"`
+	Enabled       bool   `json:"enabled"`
+}
+
+type storeRepoJSON struct {
+	WorkspaceID string             `json:"workspace_id,omitempty"`
+	Name        string             `json:"name"`
+	Enabled     bool               `json:"enabled"`
+	Bindings    []storeBindingJSON `json:"bindings"`
+}
+
+type storeBindingJSON struct {
+	ID      int64    `json:"id,omitempty"`
+	Agent   string   `json:"agent"`
+	Labels  []string `json:"labels,omitempty"`
+	Events  []string `json:"events,omitempty"`
+	Cron    string   `json:"cron,omitempty"`
+	Enabled *bool    `json:"enabled,omitempty"`
 }
 
 type storeBackendJSON struct {
@@ -57,6 +99,7 @@ type viewBindingJSON struct {
 }
 
 type viewAgentJSON struct {
+	WorkspaceID   string            `json:"workspace_id"`
 	Name          string            `json:"name"`
 	Backend       string            `json:"backend"`
 	Model         string            `json:"model,omitempty"`

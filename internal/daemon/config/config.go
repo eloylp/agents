@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
@@ -60,12 +61,16 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 
 // ── /config ─────────────────────────────────────────────────────────────────
 
-// apiConfigJSON is the fleet-only wire shape for /config.
+// apiConfigJSON is the workspace-aware fleet-only wire shape for /config.
 type apiConfigJSON struct {
-	Backends map[string]apiAIBackendConfigJSON `json:"backends,omitempty"`
-	Skills   map[string]apiSkillJSON           `json:"skills,omitempty"`
-	Agents   []apiAgentConfigJSON              `json:"agents,omitempty"`
-	Repos    []apiRepoConfigJSON               `json:"repos,omitempty"`
+	Backends     map[string]apiAIBackendConfigJSON `json:"backends,omitempty"`
+	Prompts      []fleet.Prompt                    `json:"prompts,omitempty"`
+	Skills       map[string]apiSkillJSON           `json:"skills,omitempty"`
+	Guardrails   []fleet.Guardrail                 `json:"guardrails,omitempty"`
+	Workspaces   []apiWorkspaceConfigJSON          `json:"workspaces,omitempty"`
+	Agents       []apiAgentConfigJSON              `json:"agents,omitempty"`
+	Repos        []apiRepoConfigJSON               `json:"repos,omitempty"`
+	TokenBudgets []store.TokenBudget               `json:"token_budgets,omitempty"`
 }
 
 // apiBindingConfigJSON is the wire shape for a repo binding in /config.
@@ -81,9 +86,10 @@ type apiBindingConfigJSON struct {
 
 // apiRepoConfigJSON is the wire shape for one repo in /config.
 type apiRepoConfigJSON struct {
-	Name     string                 `json:"name"`
-	Enabled  bool                   `json:"enabled"`
-	Bindings []apiBindingConfigJSON `json:"bindings,omitempty"`
+	WorkspaceID string                 `json:"workspace_id,omitempty"`
+	Name        string                 `json:"name"`
+	Enabled     bool                   `json:"enabled"`
+	Bindings    []apiBindingConfigJSON `json:"bindings,omitempty"`
 }
 
 type apiAIBackendConfigJSON struct {
@@ -98,15 +104,32 @@ type apiAIBackendConfigJSON struct {
 }
 
 type apiSkillJSON struct {
-	Prompt string `json:"prompt,omitempty"`
+	ID          string `json:"id,omitempty"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Repo        string `json:"repo,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Prompt      string `json:"prompt,omitempty"`
+}
+
+type apiWorkspaceConfigJSON struct {
+	ID          string                        `json:"id"`
+	Name        string                        `json:"name"`
+	Description string                        `json:"description,omitempty"`
+	Guardrails  []fleet.WorkspaceGuardrailRef `json:"guardrails,omitempty"`
 }
 
 type apiAgentConfigJSON struct {
+	ID            string   `json:"id,omitempty"`
+	WorkspaceID   string   `json:"workspace_id,omitempty"`
 	Name          string   `json:"name"`
 	Backend       string   `json:"backend,omitempty"`
 	Model         string   `json:"model,omitempty"`
 	Skills        []string `json:"skills,omitempty"`
-	Prompt        string   `json:"prompt,omitempty"`
+	PromptID      string   `json:"prompt_id,omitempty"`
+	PromptRef     string   `json:"prompt_ref,omitempty"`
+	PromptScope   string   `json:"prompt_scope,omitempty"`
+	ScopeType     string   `json:"scope_type,omitempty"`
+	ScopeRepo     string   `json:"scope_repo,omitempty"`
 	Description   string   `json:"description,omitempty"`
 	AllowPRs      bool     `json:"allow_prs"`
 	AllowDispatch bool     `json:"allow_dispatch"`
@@ -129,12 +152,16 @@ func (h *Handler) HandleConfig(w http.ResponseWriter, _ *http.Request) {
 // so surfaces beyond HTTP (e.g. the MCP get_config tool) can reuse the exact
 // same wire shape without going through the router.
 func (h *Handler) ConfigJSON() ([]byte, error) {
-	storedAgents, storedRepos, storedSkills, storedBackends, err := h.store.ReadSnapshot()
+	cfg, err := h.store.Load()
 	if err != nil {
-		return nil, fmt.Errorf("read snapshot: %w", err)
+		return nil, fmt.Errorf("load config: %w", err)
 	}
-	backends := make(map[string]apiAIBackendConfigJSON, len(storedBackends))
-	for name, b := range storedBackends {
+	budgets, err := h.store.ListTokenBudgets()
+	if err != nil {
+		return nil, fmt.Errorf("list token budgets: %w", err)
+	}
+	backends := make(map[string]apiAIBackendConfigJSON, len(cfg.Backends))
+	for name, b := range cfg.Backends {
 		backends[name] = apiAIBackendConfigJSON{
 			Command:        b.Command,
 			Version:        b.Version,
@@ -147,19 +174,41 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 		}
 	}
 
-	skills := make(map[string]apiSkillJSON, len(storedSkills))
-	for name, skill := range storedSkills {
-		skills[name] = apiSkillJSON{Prompt: skill.Prompt}
+	skills := make(map[string]apiSkillJSON, len(cfg.Skills))
+	for name, skill := range cfg.Skills {
+		skills[name] = apiSkillJSON{
+			ID:          skill.ID,
+			WorkspaceID: skill.WorkspaceID,
+			Repo:        skill.Repo,
+			Name:        skill.Name,
+			Prompt:      skill.Prompt,
+		}
 	}
 
-	agents := make([]apiAgentConfigJSON, 0, len(storedAgents))
-	for _, a := range storedAgents {
+	workspaces := make([]apiWorkspaceConfigJSON, 0, len(cfg.Workspaces))
+	for _, w := range cfg.Workspaces {
+		workspaces = append(workspaces, apiWorkspaceConfigJSON{
+			ID:          w.ID,
+			Name:        w.Name,
+			Description: w.Description,
+			Guardrails:  w.Guardrails,
+		})
+	}
+
+	agents := make([]apiAgentConfigJSON, 0, len(cfg.Agents))
+	for _, a := range cfg.Agents {
 		agents = append(agents, apiAgentConfigJSON{
+			ID:            a.ID,
+			WorkspaceID:   a.WorkspaceID,
 			Name:          a.Name,
 			Backend:       a.Backend,
 			Model:         a.Model,
 			Skills:        a.Skills,
-			Prompt:        a.Prompt,
+			PromptID:      a.PromptID,
+			PromptRef:     a.PromptRef,
+			PromptScope:   a.PromptScope,
+			ScopeType:     a.ScopeType,
+			ScopeRepo:     a.ScopeRepo,
 			Description:   a.Description,
 			AllowPRs:      a.AllowPRs,
 			AllowDispatch: a.AllowDispatch,
@@ -168,8 +217,8 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 		})
 	}
 
-	repos := make([]apiRepoConfigJSON, 0, len(storedRepos))
-	for _, r := range storedRepos {
+	repos := make([]apiRepoConfigJSON, 0, len(cfg.Repos))
+	for _, r := range cfg.Repos {
 		bindings := make([]apiBindingConfigJSON, 0, len(r.Use))
 		for _, b := range r.Use {
 			bindings = append(bindings, apiBindingConfigJSON{
@@ -181,17 +230,22 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 			})
 		}
 		repos = append(repos, apiRepoConfigJSON{
-			Name:     r.Name,
-			Enabled:  r.Enabled,
-			Bindings: bindings,
+			WorkspaceID: r.WorkspaceID,
+			Name:        r.Name,
+			Enabled:     r.Enabled,
+			Bindings:    bindings,
 		})
 	}
 
 	resp := apiConfigJSON{
-		Backends: backends,
-		Skills:   skills,
-		Agents:   agents,
-		Repos:    repos,
+		Backends:     backends,
+		Prompts:      cfg.Prompts,
+		Skills:       skills,
+		Guardrails:   cfg.Guardrails,
+		Workspaces:   workspaces,
+		Agents:       agents,
+		Repos:        repos,
+		TokenBudgets: budgets,
 	}
 
 	return json.Marshal(resp)
@@ -204,16 +258,27 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 // intentionally excluded, it is not managed by the write API.
 type exportYAML struct {
 	Backends     map[string]fleet.Backend `yaml:"backends,omitempty"`
+	Prompts      []fleet.Prompt           `yaml:"prompts,omitempty"`
 	Skills       map[string]fleet.Skill   `yaml:"skills,omitempty"`
-	Agents       []fleet.Agent            `yaml:"agents,omitempty"`
-	Repos        []fleet.Repo             `yaml:"repos,omitempty"`
 	Guardrails   []fleet.Guardrail        `yaml:"guardrails,omitempty"`
-	TokenBudgets []store.TokenBudget      `yaml:"token_budgets,omitempty"`
+	Workspaces   []workspaceYAML          `yaml:"workspaces,omitempty"`
+	Agents       []fleet.Agent            `yaml:"agents,omitempty"`        // legacy top-level import
+	Repos        []fleet.Repo             `yaml:"repos,omitempty"`         // legacy top-level import
+	TokenBudgets []store.TokenBudget      `yaml:"token_budgets,omitempty"` // legacy top-level import
 }
 
-// HandleExport serves GET /export, returns a config.yaml fragment covering
-// the CRUD-mutable sections (backends, skills, agents, repos,
-// guardrails, token_budgets).
+type workspaceYAML struct {
+	ID           string                        `yaml:"id,omitempty"`
+	Name         string                        `yaml:"name"`
+	Description  string                        `yaml:"description,omitempty"`
+	Guardrails   []fleet.WorkspaceGuardrailRef `yaml:"guardrails,omitempty"`
+	Agents       []fleet.Agent                 `yaml:"agents,omitempty"`
+	Repos        []fleet.Repo                  `yaml:"repos,omitempty"`
+	TokenBudgets []store.TokenBudget           `yaml:"token_budgets,omitempty"`
+}
+
+// HandleExport serves GET /export, returning the workspace-aware config.yaml
+// fragment for reusable catalog assets and workspace-local fleet wiring.
 func (h *Handler) HandleExport(w http.ResponseWriter, _ *http.Request) {
 	b, err := h.ExportYAML()
 	if err != nil {
@@ -229,25 +294,69 @@ func (h *Handler) HandleExport(w http.ResponseWriter, _ *http.Request) {
 // ExportYAML returns the CRUD-mutable sections of the store as a YAML
 // fragment matching the GET /export response body.
 func (h *Handler) ExportYAML() ([]byte, error) {
-	agents, repos, skills, backends, err := h.store.ReadSnapshot()
+	cfg, err := h.store.Load()
 	if err != nil {
-		return nil, fmt.Errorf("read snapshot: %w", err)
-	}
-	guardrails, err := h.store.ReadAllGuardrails()
-	if err != nil {
-		return nil, fmt.Errorf("read guardrails: %w", err)
+		return nil, fmt.Errorf("load config: %w", err)
 	}
 	budgets, err := h.store.ListTokenBudgets()
 	if err != nil {
 		return nil, fmt.Errorf("list token budgets: %w", err)
 	}
+
+	workspaces := make([]workspaceYAML, 0, len(cfg.Workspaces))
+	byWorkspace := make(map[string]int, len(cfg.Workspaces))
+	for _, w := range cfg.Workspaces {
+		workspaceID := fleet.NormalizeWorkspaceID(w.ID)
+		byWorkspace[workspaceID] = len(workspaces)
+		workspaces = append(workspaces, workspaceYAML{
+			ID:          workspaceID,
+			Name:        w.Name,
+			Description: w.Description,
+			Guardrails:  w.Guardrails,
+		})
+	}
+	ensureWorkspace := func(workspaceID string) int {
+		workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+		if idx, ok := byWorkspace[workspaceID]; ok {
+			return idx
+		}
+		byWorkspace[workspaceID] = len(workspaces)
+		workspaces = append(workspaces, workspaceYAML{ID: workspaceID, Name: workspaceID})
+		return len(workspaces) - 1
+	}
+	for _, a := range cfg.Agents {
+		idx := ensureWorkspace(a.WorkspaceID)
+		a.WorkspaceID = ""
+		a.Prompt = ""
+		a.PromptID = ""
+		workspaces[idx].Agents = append(workspaces[idx].Agents, a)
+	}
+	for _, r := range cfg.Repos {
+		idx := ensureWorkspace(r.WorkspaceID)
+		r.WorkspaceID = ""
+		workspaces[idx].Repos = append(workspaces[idx].Repos, r)
+	}
+	for _, b := range budgets {
+		if b.WorkspaceID == "" {
+			continue
+		}
+		idx := ensureWorkspace(b.WorkspaceID)
+		b.WorkspaceID = ""
+		workspaces[idx].TokenBudgets = append(workspaces[idx].TokenBudgets, b)
+	}
+	var globalBudgets []store.TokenBudget
+	for _, b := range budgets {
+		if b.WorkspaceID == "" {
+			globalBudgets = append(globalBudgets, b)
+		}
+	}
 	out := exportYAML{
-		Backends:     backends,
-		Skills:       skills,
-		Agents:       agents,
-		Repos:        repos,
-		Guardrails:   guardrails,
-		TokenBudgets: budgets,
+		Backends:     cfg.Backends,
+		Prompts:      cfg.Prompts,
+		Skills:       cfg.Skills,
+		Guardrails:   cfg.Guardrails,
+		Workspaces:   workspaces,
+		TokenBudgets: globalBudgets,
 	}
 	b, err := yaml.Marshal(out)
 	if err != nil {
@@ -282,11 +391,8 @@ func (h *Handler) HandleImport(w http.ResponseWriter, r *http.Request) {
 }
 
 // ImportYAML parses a YAML payload in HandleExport's format and writes it to
-// the store atomically. mode controls upsert semantics: empty or "merge"
-// preserves existing records, "replace" prunes anything not present in the
-// payload. All sections — agents, repos, skills, backends, guardrails, and
-// token budgets — are written in a single transaction so a failure in any
-// section rolls back the entire import.
+// the store atomically. Legacy top-level agents/repos/token_budgets are still
+// accepted and imported into their explicit workspace_id or Default.
 //
 // On success it returns the per-section counts.
 func (h *Handler) ImportYAML(body []byte, mode string) (map[string]int, error) {
@@ -298,24 +404,83 @@ func (h *Handler) ImportYAML(body []byte, mode string) (map[string]int, error) {
 		return nil, &store.ErrValidation{Msg: fmt.Sprintf("parse yaml: %v", err)}
 	}
 
+	cfg := payload.toConfig()
+	budgets := payload.flattenTokenBudgets()
 	var err error
 	if mode == "replace" {
-		err = h.store.ReplaceAll(payload.Agents, payload.Repos, payload.Skills, payload.Backends, payload.Guardrails, payload.TokenBudgets)
+		err = h.store.ReplaceConfig(cfg, budgets)
 	} else {
-		err = h.store.ImportAll(payload.Agents, payload.Repos, payload.Skills, payload.Backends, payload.Guardrails, payload.TokenBudgets)
+		err = h.store.ImportConfig(cfg, budgets)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("import: %w", err)
 	}
 
 	return map[string]int{
-		"agents":        len(payload.Agents),
-		"skills":        len(payload.Skills),
-		"repos":         len(payload.Repos),
-		"backends":      len(payload.Backends),
-		"guardrails":    len(payload.Guardrails),
-		"token_budgets": len(payload.TokenBudgets),
+		"agents":        len(cfg.Agents),
+		"workspaces":    len(cfg.Workspaces),
+		"prompts":       len(cfg.Prompts),
+		"skills":        len(cfg.Skills),
+		"repos":         len(cfg.Repos),
+		"backends":      len(cfg.Backends),
+		"guardrails":    len(cfg.Guardrails),
+		"token_budgets": len(budgets),
 	}, nil
+}
+
+func (p exportYAML) toConfig() *config.Config {
+	cfg := &config.Config{
+		Backends:   p.Backends,
+		Prompts:    p.Prompts,
+		Skills:     p.Skills,
+		Guardrails: p.Guardrails,
+		Agents:     append([]fleet.Agent{}, p.Agents...),
+		Repos:      append([]fleet.Repo{}, p.Repos...),
+	}
+	for _, w := range p.Workspaces {
+		workspaceID := workspaceYAMLID(w)
+		cfg.Workspaces = append(cfg.Workspaces, fleet.Workspace{
+			ID:          workspaceID,
+			Name:        w.Name,
+			Description: w.Description,
+			Guardrails:  w.Guardrails,
+		})
+		for _, a := range w.Agents {
+			if a.WorkspaceID == "" {
+				a.WorkspaceID = workspaceID
+			}
+			cfg.Agents = append(cfg.Agents, a)
+		}
+		for _, r := range w.Repos {
+			if r.WorkspaceID == "" {
+				r.WorkspaceID = workspaceID
+			}
+			cfg.Repos = append(cfg.Repos, r)
+		}
+	}
+	return cfg
+}
+
+func (p exportYAML) flattenTokenBudgets() []store.TokenBudget {
+	budgets := append([]store.TokenBudget{}, p.TokenBudgets...)
+	for _, w := range p.Workspaces {
+		workspaceID := workspaceYAMLID(w)
+		for _, b := range w.TokenBudgets {
+			if b.WorkspaceID == "" {
+				b.WorkspaceID = workspaceID
+			}
+			budgets = append(budgets, b)
+		}
+	}
+	return budgets
+}
+
+func workspaceYAMLID(w workspaceYAML) string {
+	if strings.TrimSpace(w.ID) != "" {
+		return fleet.NormalizeWorkspaceID(w.ID)
+	}
+	id := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(w.Name), " ", "-"))
+	return fleet.NormalizeWorkspaceID(id)
 }
 
 // storeErrStatus maps a store error to an HTTP status. Validation and

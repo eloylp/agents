@@ -125,7 +125,11 @@ func newSchedulerWithStatuses(t *testing.T, statuses []scheduler.AgentStatus) *s
 		if st.LastRun != nil {
 			ts = *st.LastRun
 		}
-		sched.RecordLastRun(st.Name, st.Repo, ts, st.LastStatus)
+		workspaceID := st.WorkspaceID
+		if workspaceID == "" {
+			workspaceID = fleet.DefaultWorkspaceID
+		}
+		sched.RecordLastRun(workspaceID, st.Name, st.Repo, ts, st.LastStatus)
 	}
 	return sched
 }
@@ -164,9 +168,14 @@ func seedMemoryReader(t *testing.T, db *sql.DB, content map[string]string, mtime
 	seenAgent := map[string]bool{}
 	seenRepo := map[string]bool{}
 	for key, body := range content {
-		agent, repo, _ := strings.Cut(key, "\x00")
+		workspace, agent, repo := parseSeedMemoryKey(key)
 		agent = ai.NormalizeToken(agent)
 		repo = ai.NormalizeToken(repo)
+		if workspace != fleet.DefaultWorkspaceID {
+			if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: workspace, Name: workspace}); err != nil {
+				t.Fatalf("seed workspace %s: %v", workspace, err)
+			}
+		}
 		if !seenAgent[agent] {
 			if err := store.UpsertAgent(db, fleet.Agent{Name: agent, Backend: "claude", Prompt: "p", Description: agent + " agent"}); err != nil {
 				t.Fatalf("seed agent %s: %v", agent, err)
@@ -179,19 +188,30 @@ func seedMemoryReader(t *testing.T, db *sql.DB, content map[string]string, mtime
 			}
 			seenRepo[repo] = true
 		}
-		if err := store.WriteMemory(db, agent, repo, body); err != nil {
+		if err := store.WriteMemory(db, workspace, agent, repo, body); err != nil {
 			t.Fatalf("seed memory %s/%s: %v", agent, repo, err)
 		}
 		if ts, ok := mtimes[key]; ok && !ts.IsZero() {
 			if _, err := db.Exec(
-				"UPDATE memory SET updated_at = ? WHERE agent = ? AND repo = ?",
-				ts.UTC().Format(time.RFC3339Nano), agent, repo,
+				"UPDATE memory SET updated_at = ? WHERE workspace_id = ? AND agent = ? AND repo = ?",
+				ts.UTC().Format(time.RFC3339Nano), workspace, agent, repo,
 			); err != nil {
 				t.Fatalf("override mtime: %v", err)
 			}
 		}
 	}
 	return store.NewMemoryReader(db)
+}
+
+func parseSeedMemoryKey(key string) (workspace, agent, repo string) {
+	workspace = fleet.DefaultWorkspaceID
+	agent, repo, _ = strings.Cut(key, "\x00")
+	if first, rest, ok := strings.Cut(repo, "\x00"); ok {
+		workspace = agent
+		agent = first
+		repo = rest
+	}
+	return workspace, agent, repo
 }
 
 // newRouter mounts h on a fresh router with an identity timeout wrapper so
@@ -421,6 +441,66 @@ func TestHandleSSEStreams(t *testing.T) {
 	}
 }
 
+func TestHandleWorkspaceSSEStreamsFilterByWorkspace(t *testing.T) {
+	t.Parallel()
+
+	obs := newTestEvents(t)
+	h := newHandlerOnStore(t, obs)
+
+	tests := []struct {
+		name    string
+		handler func(http.ResponseWriter, *http.Request)
+		publish func(msg []byte)
+	}{
+		{
+			name:    "events/stream",
+			handler: h.HandleEventsStream,
+			publish: obs.EventsSSE.Publish,
+		},
+		{
+			name:    "traces/stream",
+			handler: h.HandleTracesStream,
+			publish: obs.TracesSSE.Publish,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			cap := newSSECapture()
+			req := httptest.NewRequest(http.MethodGet, "/"+tc.name+"?workspace=team-a", nil).WithContext(ctx)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				tc.handler(cap, req)
+			}()
+
+			if got := mustReadSSEMsg(t, cap.writes, 2*time.Second); got != ": connected\n\n" {
+				t.Fatalf("want connected comment, got %q", got)
+			}
+
+			skipped := `data: {"id":"default","workspace_id":"default"}` + "\n\n"
+			delivered := `data: {"id":"team","workspace_id":"team-a"}` + "\n\n"
+			tc.publish([]byte(skipped))
+			tc.publish([]byte(delivered))
+			if got := mustReadSSEMsg(t, cap.writes, 2*time.Second); got != delivered {
+				t.Fatalf("workspace-filtered stream delivered %q, want %q", got, delivered)
+			}
+
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Error("handler did not exit after context cancellation")
+			}
+		})
+	}
+}
+
 // ── /traces ──────────────────────────────────────────────────────────────────────────────
 
 func TestHandleTracesReturnsStoredSpans(t *testing.T) {
@@ -567,6 +647,57 @@ func TestHandleGraphIncludesConfiguredAgentWithNoDispatches(t *testing.T) {
 	}
 	if len(g.Edges) != 0 {
 		t.Fatalf("want 0 edges, got %d", len(g.Edges))
+	}
+}
+
+func TestHandleGraphIsWorkspaceScopedAndIncludesConfiguredDispatchWiring(t *testing.T) {
+	t.Parallel()
+	cfg := minimalCfg()
+	cfg.Agents = []fleet.Agent{
+		{Name: "webhook-smoke", WorkspaceID: fleet.DefaultWorkspaceID, Backend: "claude", Prompt: "p", Description: "default agent"},
+		{Name: "coder", WorkspaceID: "team-a", Backend: "claude", Prompt: "p", Description: "team coder", CanDispatch: []string{"reviewer"}},
+		{Name: "reviewer", WorkspaceID: "team-a", Backend: "claude", Prompt: "p", Description: "team reviewer", AllowDispatch: true},
+		{Name: "coder", WorkspaceID: "team-b", Backend: "claude", Prompt: "p", Description: "other coder"},
+	}
+	fx := newFixture(t, cfg)
+	h := New(fx.events, fx.store, nil, nil, nil, zerolog.Nop())
+	if _, err := fx.db.Exec(
+		`INSERT INTO dispatch_history (workspace_id, from_agent, to_agent, repo, number, reason) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`,
+		"team-a", "coder", "reviewer", "owner/repo", 10, "needs review",
+		fleet.DefaultWorkspaceID, "webhook-smoke", "coder", "owner/repo", 11, "default dispatch",
+	); err != nil {
+		t.Fatalf("seed dispatches: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/graph?workspace=team-a", nil)
+	rec := httptest.NewRecorder()
+	h.HandleGraph(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var g graphJSON
+	if err := json.NewDecoder(rec.Body).Decode(&g); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(g.Nodes) != 2 {
+		t.Fatalf("nodes = %+v, want only team-a coder/reviewer", g.Nodes)
+	}
+	nodeSeen := map[string]bool{}
+	for _, n := range g.Nodes {
+		nodeSeen[n.ID] = true
+	}
+	if !nodeSeen["coder"] || !nodeSeen["reviewer"] || nodeSeen["webhook-smoke"] {
+		t.Fatalf("nodes = %+v, want team-a nodes only", g.Nodes)
+	}
+	if len(g.Edges) != 1 {
+		t.Fatalf("edges = %+v, want coder->reviewer only", g.Edges)
+	}
+	if g.Edges[0].From != "coder" || g.Edges[0].To != "reviewer" {
+		t.Fatalf("edge = %+v, want coder->reviewer", g.Edges[0])
+	}
+	if g.Edges[0].Count != 1 || len(g.Edges[0].Dispatches) != 1 {
+		t.Fatalf("edge history = %+v, want one observed dispatch on configured edge", g.Edges[0])
 	}
 }
 
@@ -730,6 +861,7 @@ func TestHandleMemorySQLiteMode(t *testing.T) {
 
 	tests := []struct {
 		name      string
+		workspace string
 		agent     string
 		repo      string
 		stored    map[string]string
@@ -771,6 +903,15 @@ func TestHandleMemorySQLiteMode(t *testing.T) {
 			wantBody:  "# memory",
 			wantMtime: fixedTime.UTC().Format(time.RFC3339),
 		},
+		{
+			name:      "workspace query isolates memory",
+			workspace: "team-a",
+			agent:     "coder",
+			repo:      "owner_repo",
+			stored:    map[string]string{"default\x00coder\x00owner_repo": "# default memory", "team-a\x00coder\x00owner_repo": "# team memory"},
+			wantCode:  http.StatusOK,
+			wantBody:  "# team memory",
+		},
 	}
 
 	for _, tc := range tests {
@@ -782,6 +923,9 @@ func TestHandleMemorySQLiteMode(t *testing.T) {
 
 			router := newRouter(h)
 			req := httptest.NewRequest(http.MethodGet, "/memory/"+tc.agent+"/"+tc.repo, nil)
+			if tc.workspace != "" {
+				req = httptest.NewRequest(http.MethodGet, "/memory/"+tc.agent+"/"+tc.repo+"?workspace="+tc.workspace, nil)
+			}
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, req)
 

@@ -82,7 +82,45 @@ func validateFleet(q querier) error {
 	if skills == nil {
 		skills = map[string]fleet.Skill{}
 	}
-	return config.ValidateEntities(cfg.Agents, cfg.Repos, skills, backends)
+	if err := config.ValidateEntities(cfg.Agents, cfg.Repos, skills, backends); err != nil {
+		return err
+	}
+	return validateAgentCatalogVisibility(cfg.Agents, skills)
+}
+
+func validateAgentCatalogVisibility(agents []fleet.Agent, skills map[string]fleet.Skill) error {
+	for _, a := range agents {
+		workspaceID := fleet.NormalizeWorkspaceID(a.WorkspaceID)
+		repo := ""
+		if a.ScopeType == "repo" {
+			repo = fleet.NormalizeRepoName(a.ScopeRepo)
+		}
+		for _, skillID := range a.Skills {
+			skill, ok := skills[skillID]
+			if !ok {
+				continue
+			}
+			if skill.Repo != "" && repo == "" {
+				return fmt.Errorf("workspace-scoped agent %q references repo-scoped skill %q without repo context", a.Name, skillID)
+			}
+			if !catalogVisibleToAgent(skill.WorkspaceID, skill.Repo, workspaceID, repo) {
+				return fmt.Errorf("agent %q references skill %q outside its visible catalog scope", a.Name, skillID)
+			}
+		}
+	}
+	return nil
+}
+
+func catalogVisibleToAgent(itemWorkspace, itemRepo, agentWorkspace, agentRepo string) bool {
+	itemWorkspace = strings.TrimSpace(itemWorkspace)
+	itemRepo = strings.TrimSpace(itemRepo)
+	if itemWorkspace == "" && itemRepo == "" {
+		return true
+	}
+	if itemWorkspace != agentWorkspace {
+		return false
+	}
+	return itemRepo == "" || (agentRepo != "" && itemRepo == agentRepo)
 }
 
 // requireAtLeastOne fails if the COUNT query returns 0. entity names the table
@@ -143,7 +181,7 @@ func UpsertAgent(db *sql.DB, a fleet.Agent) error {
 		return fmt.Errorf("store: upsert agent %s: begin: %w", a.Name, err)
 	}
 	defer tx.Rollback()
-	if err := importAgents(tx, []fleet.Agent{a}); err != nil {
+	if err := importAgents(tx, []fleet.Agent{a}, true); err != nil {
 		return err
 	}
 	if err := validateFleet(tx); err != nil {
@@ -156,7 +194,7 @@ func UpsertAgent(db *sql.DB, a fleet.Agent) error {
 // delete a name that does not exist. Returns an error if the agent is still
 // referenced by any repo binding or can_dispatch list, or if it is the last agent.
 func DeleteAgent(db *sql.DB, name string) error {
-	return deleteAgent(db, name, false)
+	return DeleteWorkspaceAgent(db, fleet.DefaultWorkspaceID, name)
 }
 
 // DeleteAgentCascade removes the agent and all repo bindings that reference it
@@ -165,20 +203,29 @@ func DeleteAgent(db *sql.DB, name string) error {
 // (cascading across agent relationships would silently reshape the dispatch
 // graph; the user should opt in explicitly).
 func DeleteAgentCascade(db *sql.DB, name string) error {
-	return deleteAgent(db, name, true)
+	return DeleteWorkspaceAgentCascade(db, fleet.DefaultWorkspaceID, name)
 }
 
-func deleteAgent(db *sql.DB, name string, cascade bool) error {
+func DeleteWorkspaceAgent(db *sql.DB, workspaceID, name string) error {
+	return deleteAgent(db, workspaceID, name, false)
+}
+
+func DeleteWorkspaceAgentCascade(db *sql.DB, workspaceID, name string) error {
+	return deleteAgent(db, workspaceID, name, true)
+}
+
+func deleteAgent(db *sql.DB, workspaceID, name string, cascade bool) error {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: delete agent %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
 	if cascade {
-		if _, err := tx.Exec("DELETE FROM bindings WHERE agent=?", name); err != nil {
+		if _, err := tx.Exec("DELETE FROM bindings WHERE workspace_id=? AND agent=?", workspaceID, name); err != nil {
 			return fmt.Errorf("store: delete agent %s: cascade bindings: %w", name, err)
 		}
-	} else if refs, err := bindingsReferencing(tx, name); err != nil {
+	} else if refs, err := bindingsReferencing(tx, workspaceID, name); err != nil {
 		return fmt.Errorf("store: delete agent %s: check bindings: %w", name, err)
 	} else if len(refs) > 0 {
 		// Surface this as an ErrConflict rather than letting the raw FK
@@ -191,7 +238,7 @@ func deleteAgent(db *sql.DB, name string, cascade bool) error {
 		}
 		return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: still referenced by %d binding(s) across %d repo(s) (%s); use cascade to remove them", name, len(refs), len(distinct), list)}
 	}
-	res, err := tx.Exec("DELETE FROM agents WHERE name=?", name)
+	res, err := tx.Exec("DELETE FROM agents WHERE workspace_id=? AND name=?", workspaceID, name)
 	if err != nil {
 		return fmt.Errorf("store: delete agent %s: %w", name, err)
 	}
@@ -209,8 +256,8 @@ func deleteAgent(db *sql.DB, name string, cascade bool) error {
 // bindingsReferencing returns the repo names of every binding that points at
 // the given agent. Used by the non-cascade delete path to produce a typed
 // conflict error instead of a raw FK failure.
-func bindingsReferencing(q querier, agentName string) ([]string, error) {
-	rows, err := q.Query("SELECT repo FROM bindings WHERE agent=?", agentName)
+func bindingsReferencing(q querier, workspaceID, agentName string) ([]string, error) {
+	rows, err := q.Query("SELECT repo FROM bindings WHERE workspace_id=? AND agent=?", workspaceID, agentName)
 	if err != nil {
 		return nil, err
 	}
@@ -248,6 +295,33 @@ func ReadSkills(db *sql.DB) (map[string]fleet.Skill, error) {
 func UpsertSkill(db *sql.DB, name string, s fleet.Skill) error {
 	name = fleet.NormalizeSkillName(name)
 	fleet.NormalizeSkill(&s)
+	if s.Name == "" {
+		s.Name = name
+	}
+	if s.WorkspaceID == "" && s.Repo != "" {
+		return &ErrValidation{Msg: fmt.Sprintf("store: skill %q repo scope requires workspace_id", name)}
+	}
+	if name == "" {
+		var existingID string
+		err := queryCatalogIDByScopeName(db, "skills", s.WorkspaceID, s.Repo, s.Name).Scan(&existingID)
+		if err == nil {
+			name = existingID
+		} else if errors.Is(err, sql.ErrNoRows) {
+			id, derr := derivedCatalogID("skill_", s.WorkspaceID, s.Repo, s.Name)
+			if derr != nil {
+				return &ErrValidation{Msg: fmt.Sprintf("store: skill %q: %v", s.Name, derr)}
+			}
+			name = id
+		} else {
+			return fmt.Errorf("store: upsert skill %q: read existing: %w", s.Name, err)
+		}
+	}
+	if name == "" || s.Name == "" {
+		return &ErrValidation{Msg: "store: skill requires id and name"}
+	}
+	if err := validateEntityID(name); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: skill %q: %v", s.Name, err)}
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert skill %s: begin: %w", name, err)
@@ -265,12 +339,20 @@ func UpsertSkill(db *sql.DB, name string, s fleet.Skill) error {
 // DeleteSkill removes the skill with the given name. Returns an error if any
 // agent still references the skill.
 func DeleteSkill(db *sql.DB, name string) error {
+	name = fleet.NormalizeSkillName(name)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: delete skill %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec("DELETE FROM skills WHERE name=?", name); err != nil {
+	refs, err := agentsReferencingSkill(tx, name)
+	if err != nil {
+		return fmt.Errorf("store: delete skill %s: check agents: %w", name, err)
+	}
+	if len(refs) > 0 {
+		return &ErrConflict{Msg: fmt.Sprintf("skill %q is referenced by %d agent(s): %s", name, len(refs), formatReferenceList(refs))}
+	}
+	if _, err := tx.Exec("DELETE FROM skills WHERE id=?", name); err != nil {
 		return fmt.Errorf("store: delete skill %s: %w", name, err)
 	}
 	if err := validateFleet(tx); err != nil {
@@ -339,6 +421,208 @@ func DeleteBackend(db *sql.DB, name string) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// ──── Prompts ───────────────────────────────────────────────────────────────────────────────────────
+
+// UpsertPrompt inserts or replaces one prompt catalog entry. Existing rows keep
+// their stable id while content, description, and scope fields are updated.
+func UpsertPrompt(db *sql.DB, p fleet.Prompt) (fleet.Prompt, error) {
+	p.Name = fleet.NormalizePromptName(p.Name)
+	p.WorkspaceID = strings.TrimSpace(p.WorkspaceID)
+	if p.WorkspaceID != "" {
+		p.WorkspaceID = fleet.NormalizeWorkspaceID(p.WorkspaceID)
+	}
+	p.Repo = fleet.NormalizeRepoName(p.Repo)
+	p.Description = strings.TrimSpace(p.Description)
+	p.Content = strings.TrimSpace(p.Content)
+	if p.Name == "" {
+		return fleet.Prompt{}, &ErrValidation{Msg: "prompt name is required"}
+	}
+	if p.WorkspaceID == "" && p.Repo != "" {
+		return fleet.Prompt{}, &ErrValidation{Msg: "prompt repo scope requires workspace_id"}
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: begin: %w", p.Name, err)
+	}
+	defer tx.Rollback()
+
+	var existingID string
+	if p.ID != "" {
+		err = tx.QueryRow("SELECT id FROM prompts WHERE id=?", p.ID).Scan(&existingID)
+	} else {
+		err = queryPromptByScopeName(tx, p.WorkspaceID, p.Repo, p.Name).Scan(&existingID)
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: read existing: %w", p.Name, err)
+	}
+	if existingID != "" {
+		p.ID = existingID
+	} else if p.ID == "" {
+		id, err := derivedPromptID(p)
+		if err != nil {
+			return fleet.Prompt{}, &ErrValidation{Msg: fmt.Sprintf("prompt %q: %v", p.Name, err)}
+		}
+		p.ID = id
+	}
+	if err := validateEntityID(p.ID); err != nil {
+		return fleet.Prompt{}, &ErrValidation{Msg: fmt.Sprintf("prompt %q: %v", p.Name, err)}
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO prompts (id, workspace_id, repo, name, description, content, updated_at)
+		VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, datetime('now'))
+		ON CONFLICT(id) DO UPDATE SET
+			workspace_id = excluded.workspace_id,
+			repo = excluded.repo,
+			name = excluded.name,
+			description = excluded.description,
+			content = excluded.content,
+			updated_at = datetime('now')`,
+		p.ID, p.WorkspaceID, p.Repo, p.Name, p.Description, p.Content,
+	); err != nil {
+		if isUniqueConstraint(err) {
+			return fleet.Prompt{}, &ErrConflict{Msg: fmt.Sprintf("prompt name %q is already used by another prompt in that scope", p.Name)}
+		}
+		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: %w", p.Name, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: commit: %w", p.Name, err)
+	}
+	return p, nil
+}
+
+// ReadPrompt resolves a prompt by stable id first, then by legacy global display
+// name. Scoped prompts may share names, so callers that need deterministic
+// addressing must pass the stable id.
+func ReadPrompt(db *sql.DB, ref string) (fleet.Prompt, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return fleet.Prompt{}, &ErrValidation{Msg: "prompt id is required"}
+	}
+	var p fleet.Prompt
+	row := db.QueryRow(`
+		SELECT id, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, description, content
+		FROM prompts
+		WHERE id=?`, ref)
+	err := row.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content)
+	if err == nil {
+		return p, nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fleet.Prompt{}, fmt.Errorf("store: read prompt %s by id: %w", ref, err)
+	}
+	name := fleet.NormalizePromptName(ref)
+	row = db.QueryRow(`
+		SELECT id, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, description, content
+		FROM prompts
+		WHERE workspace_id IS NULL AND repo IS NULL AND name=?`, name)
+	err = row.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fleet.Prompt{}, &ErrNotFound{Msg: fmt.Sprintf("prompt %q not found", ref)}
+	}
+	if err != nil {
+		return fleet.Prompt{}, fmt.Errorf("store: read prompt %s by global name: %w", ref, err)
+	}
+	return p, nil
+}
+
+// DeletePrompt removes one prompt addressed by stable id, with a compatibility
+// fallback for legacy global display names. A prompt referenced by any agent
+// cannot be deleted because agents must always point at existing prompt content.
+func DeletePrompt(db *sql.DB, ref string) error {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return &ErrValidation{Msg: "prompt id is required"}
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: delete prompt %s: begin: %w", ref, err)
+	}
+	defer tx.Rollback()
+
+	var id string
+	err = tx.QueryRow("SELECT id FROM prompts WHERE id=?", ref).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		name := fleet.NormalizePromptName(ref)
+		err = queryPromptByScopeName(tx, "", "", name).Scan(&id)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return &ErrNotFound{Msg: fmt.Sprintf("prompt %q not found", ref)}
+	}
+	if err != nil {
+		return fmt.Errorf("store: delete prompt %s: lookup: %w", ref, err)
+	}
+	refs, err := agentsReferencingPrompt(tx, id)
+	if err != nil {
+		return fmt.Errorf("store: delete prompt %s: check agents: %w", ref, err)
+	}
+	if len(refs) > 0 {
+		return &ErrConflict{Msg: fmt.Sprintf("prompt %q is referenced by %d agent(s): %s", ref, len(refs), formatReferenceList(refs))}
+	}
+	if _, err := tx.Exec("DELETE FROM prompts WHERE id=?", id); err != nil {
+		return fmt.Errorf("store: delete prompt %s: %w", ref, err)
+	}
+	return tx.Commit()
+}
+
+func agentsReferencingPrompt(q querier, promptID string) ([]string, error) {
+	rows, err := q.Query("SELECT workspace_id, name FROM agents WHERE prompt_id=? ORDER BY workspace_id, name", promptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var refs []string
+	for rows.Next() {
+		var workspaceID, name string
+		if err := rows.Scan(&workspaceID, &name); err != nil {
+			return nil, err
+		}
+		refs = append(refs, workspaceAgentRef(workspaceID, name))
+	}
+	return refs, rows.Err()
+}
+
+func agentsReferencingSkill(q querier, skillID string) ([]string, error) {
+	rows, err := q.Query("SELECT workspace_id, name, skills FROM agents ORDER BY workspace_id, name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var refs []string
+	for rows.Next() {
+		var workspaceID, name, skillsJSON string
+		if err := rows.Scan(&workspaceID, &name, &skillsJSON); err != nil {
+			return nil, err
+		}
+		var skills []string
+		if err := json.Unmarshal([]byte(skillsJSON), &skills); err != nil {
+			return nil, fmt.Errorf("parse agent %s skills: %w", name, err)
+		}
+		for _, skill := range skills {
+			if fleet.NormalizeSkillName(skill) == skillID {
+				refs = append(refs, workspaceAgentRef(workspaceID, name))
+				break
+			}
+		}
+	}
+	return refs, rows.Err()
+}
+
+func workspaceAgentRef(workspaceID, name string) string {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	if workspaceID == "" {
+		workspaceID = fleet.DefaultWorkspaceID
+	}
+	return workspaceID + "/" + name
+}
+
+func formatReferenceList(refs []string) string {
+	refs = slices.Compact(slices.Sorted(slices.Values(refs)))
+	if len(refs) <= 8 {
+		return strings.Join(refs, ", ")
+	}
+	return strings.Join(refs[:8], ", ") + fmt.Sprintf(", and %d more", len(refs)-8)
 }
 
 // ReadSnapshot returns agents, repos, skills, and backends as a consistent
@@ -457,19 +741,22 @@ func ImportAll(
 		return fmt.Errorf("store: import: begin: %w", err)
 	}
 	defer tx.Rollback()
-	if err := importAgents(tx, agents); err != nil {
-		return err
-	}
 	if err := importSkills(tx, normalizedSkills); err != nil {
-		return err
-	}
-	if err := importRepos(tx, repos); err != nil {
 		return err
 	}
 	if err := importBackends(tx, normalizedBackends); err != nil {
 		return err
 	}
 	if err := importGuardrails(tx, guardrails); err != nil {
+		return err
+	}
+	if err := importReferencedWorkspaces(tx, agents, repos); err != nil {
+		return err
+	}
+	if err := importAgents(tx, agents, true); err != nil {
+		return err
+	}
+	if err := importRepos(tx, repos); err != nil {
 		return err
 	}
 	if err := importTokenBudgetsTx(tx, budgets, false); err != nil {
@@ -518,13 +805,7 @@ func ReplaceAll(
 		return fmt.Errorf("store: replace: truncate operator guardrails: %w", err)
 	}
 
-	if err := importAgents(tx, agents); err != nil {
-		return err
-	}
 	if err := importSkills(tx, normalizedSkills); err != nil {
-		return err
-	}
-	if err := importRepos(tx, repos); err != nil {
 		return err
 	}
 	if err := importBackends(tx, normalizedBackends); err != nil {
@@ -533,10 +814,106 @@ func ReplaceAll(
 	if err := importGuardrails(tx, guardrails); err != nil {
 		return err
 	}
+	if err := importReferencedWorkspaces(tx, agents, repos); err != nil {
+		return err
+	}
+	if err := importAgents(tx, agents, false); err != nil {
+		return err
+	}
+	if err := importRepos(tx, repos); err != nil {
+		return err
+	}
 	if err := importTokenBudgetsTx(tx, budgets, true); err != nil {
 		return err
 	}
 	if err := validateFleetConstraints(tx, "replace", repos); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ImportConfig upserts the workspace-aware YAML import/export shape in a
+// single transaction. It includes prompt catalog entries and workspace
+// guardrail references in addition to the legacy fleet sections.
+func ImportConfig(db *sql.DB, cfg *config.Config, budgets []TokenBudget) error {
+	return importConfig(db, cfg, budgets, false)
+}
+
+// ReplaceConfig replaces the workspace-aware YAML import/export shape in a
+// single transaction. The default workspace row is retained as the compatibility
+// fallback, but all dependent mutable fleet rows are pruned before import.
+func ReplaceConfig(db *sql.DB, cfg *config.Config, budgets []TokenBudget) error {
+	return importConfig(db, cfg, budgets, true)
+}
+
+func importConfig(db *sql.DB, cfg *config.Config, budgets []TokenBudget, replace bool) error {
+	normalizedSkills, normalizedBackends := normalizeFleet(cfg.Agents, cfg.Repos, cfg.Skills, cfg.Backends)
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: import config: begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	if replace {
+		for _, tbl := range []string{"bindings", "repos", "agents", "token_budgets"} {
+			if _, err := tx.Exec("DELETE FROM " + tbl); err != nil {
+				return fmt.Errorf("store: replace config: truncate %s: %w", tbl, err)
+			}
+		}
+		if _, err := tx.Exec("DELETE FROM prompts"); err != nil {
+			return fmt.Errorf("store: replace config: truncate prompts: %w", err)
+		}
+		if _, err := tx.Exec("DELETE FROM workspace_guardrails"); err != nil {
+			return fmt.Errorf("store: replace config: truncate workspace guardrails: %w", err)
+		}
+		if err := seedWorkspaceGuardrails(tx, fleet.DefaultWorkspaceID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("DELETE FROM workspaces WHERE id <> ?", fleet.DefaultWorkspaceID); err != nil {
+			return fmt.Errorf("store: replace config: truncate workspaces: %w", err)
+		}
+		for _, tbl := range []string{"skills", "backends"} {
+			if _, err := tx.Exec("DELETE FROM " + tbl); err != nil {
+				return fmt.Errorf("store: replace config: truncate %s: %w", tbl, err)
+			}
+		}
+		if _, err := tx.Exec("DELETE FROM guardrails WHERE is_builtin = 0"); err != nil {
+			return fmt.Errorf("store: replace config: truncate operator guardrails: %w", err)
+		}
+	}
+
+	if err := importSkills(tx, normalizedSkills); err != nil {
+		return err
+	}
+	if err := importBackends(tx, normalizedBackends); err != nil {
+		return err
+	}
+	if err := importGuardrails(tx, cfg.Guardrails); err != nil {
+		return err
+	}
+	if err := importWorkspaces(tx, cfg.Workspaces); err != nil {
+		return err
+	}
+	if err := importWorkspaceGuardrails(tx, cfg.Workspaces); err != nil {
+		return err
+	}
+	if err := importPrompts(tx, cfg.Prompts); err != nil {
+		return err
+	}
+	if err := importReferencedWorkspaces(tx, cfg.Agents, cfg.Repos); err != nil {
+		return err
+	}
+	if err := importAgents(tx, cfg.Agents, true); err != nil {
+		return err
+	}
+	if err := importRepos(tx, cfg.Repos); err != nil {
+		return err
+	}
+	if err := importTokenBudgetsTx(tx, budgets, replace); err != nil {
+		return err
+	}
+	if err := validateFleetConstraints(tx, "import", cfg.Repos); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -585,6 +962,11 @@ func normalizeBinding(b *fleet.Binding) {
 // references surface as *ErrNotFound (HTTP 404). The caller is responsible for
 // holding the store mutex and reloading cron schedules after success.
 func CreateBinding(db *sql.DB, repoName string, b fleet.Binding) (int64, fleet.Binding, error) {
+	return CreateWorkspaceBinding(db, fleet.DefaultWorkspaceID, repoName, b)
+}
+
+func CreateWorkspaceBinding(db *sql.DB, workspaceID, repoName string, b fleet.Binding) (int64, fleet.Binding, error) {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	repoName = fleet.NormalizeRepoName(repoName)
 	normalizeBinding(&b)
 	if err := validateBindingShape(b); err != nil {
@@ -598,14 +980,14 @@ func CreateBinding(db *sql.DB, repoName string, b fleet.Binding) (int64, fleet.B
 
 	// Verify the repo exists so the FK violation surfaces as a typed error.
 	var repoExists bool
-	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM repos WHERE name=?)", repoName).Scan(&repoExists); err != nil {
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM repos WHERE workspace_id=? AND name=?)", workspaceID, repoName).Scan(&repoExists); err != nil {
 		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: lookup repo: %w", err)
 	}
 	if !repoExists {
 		return 0, fleet.Binding{}, &ErrNotFound{Msg: fmt.Sprintf("repo %q not found", repoName)}
 	}
 	var agentExists bool
-	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM agents WHERE name=?)", b.Agent).Scan(&agentExists); err != nil {
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM agents WHERE workspace_id=? AND name=?)", workspaceID, b.Agent).Scan(&agentExists); err != nil {
 		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: lookup agent: %w", err)
 	}
 	if !agentExists {
@@ -622,8 +1004,8 @@ func CreateBinding(db *sql.DB, repoName string, b fleet.Binding) (int64, fleet.B
 	}
 	enabled := bindingEnabledInt(b.Enabled)
 	res, err := tx.Exec(
-		`INSERT INTO bindings(repo,agent,labels,events,cron,enabled) VALUES (?,?,?,?,?,?)`,
-		repoName, b.Agent, string(labels), string(events), b.Cron, enabled,
+		`INSERT INTO bindings(workspace_id,repo,agent,labels,events,cron,enabled) VALUES (?,?,?,?,?,?,?)`,
+		workspaceID, repoName, b.Agent, string(labels), string(events), b.Cron, enabled,
 	)
 	if err != nil {
 		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: insert: %w", err)
@@ -659,8 +1041,15 @@ func UpdateBinding(db *sql.DB, id int64, b fleet.Binding) (fleet.Binding, error)
 	}
 	defer tx.Rollback()
 
+	var workspaceID string
+	if err := tx.QueryRow("SELECT workspace_id FROM bindings WHERE id=?", id).Scan(&workspaceID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fleet.Binding{}, &ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found", id)}
+		}
+		return fleet.Binding{}, fmt.Errorf("store: update binding: lookup workspace: %w", err)
+	}
 	var agentExists bool
-	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM agents WHERE name=?)", b.Agent).Scan(&agentExists); err != nil {
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM agents WHERE workspace_id=? AND name=?)", workspaceID, b.Agent).Scan(&agentExists); err != nil {
 		return fleet.Binding{}, fmt.Errorf("store: update binding: lookup agent: %w", err)
 	}
 	if !agentExists {
@@ -738,24 +1127,29 @@ func DeleteBinding(db *sql.DB, id int64) error {
 // Returns found=false when the row does not exist; errors only reflect
 // unexpected I/O failures.
 func ReadBinding(db *sql.DB, id int64) (repoName string, b fleet.Binding, found bool, err error) {
+	_, repoName, b, found, err = ReadWorkspaceBinding(db, id)
+	return repoName, b, found, err
+}
+
+func ReadWorkspaceBinding(db *sql.DB, id int64) (workspaceID, repoName string, b fleet.Binding, found bool, err error) {
 	var labelsJSON, eventsJSON, cron, agent string
 	var enabled int
 	err = db.QueryRow(
-		"SELECT repo,agent,labels,events,cron,enabled FROM bindings WHERE id=?", id,
-	).Scan(&repoName, &agent, &labelsJSON, &eventsJSON, &cron, &enabled)
+		"SELECT workspace_id,repo,agent,labels,events,cron,enabled FROM bindings WHERE id=?", id,
+	).Scan(&workspaceID, &repoName, &agent, &labelsJSON, &eventsJSON, &cron, &enabled)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", fleet.Binding{}, false, nil
+		return "", "", fleet.Binding{}, false, nil
 	}
 	if err != nil {
-		return "", fleet.Binding{}, false, fmt.Errorf("store: read binding %d: %w", id, err)
+		return "", "", fleet.Binding{}, false, fmt.Errorf("store: read binding %d: %w", id, err)
 	}
 	var labels []string
 	if err := json.Unmarshal([]byte(labelsJSON), &labels); err != nil {
-		return "", fleet.Binding{}, false, fmt.Errorf("store: read binding %d: parse labels: %w", id, err)
+		return "", "", fleet.Binding{}, false, fmt.Errorf("store: read binding %d: parse labels: %w", id, err)
 	}
 	var events []string
 	if err := json.Unmarshal([]byte(eventsJSON), &events); err != nil {
-		return "", fleet.Binding{}, false, fmt.Errorf("store: read binding %d: parse events: %w", id, err)
+		return "", "", fleet.Binding{}, false, fmt.Errorf("store: read binding %d: parse events: %w", id, err)
 	}
 	b = fleet.Binding{
 		ID:     id,
@@ -768,7 +1162,7 @@ func ReadBinding(db *sql.DB, id int64) (repoName string, b fleet.Binding, found 
 		f := false
 		b.Enabled = &f
 	}
-	return repoName, b, true, nil
+	return workspaceID, repoName, b, true, nil
 }
 
 // nilSafeStrings normalises nil to empty slices so JSON marshalling stays
@@ -785,15 +1179,20 @@ func nilSafeStrings(s []string) []string {
 // (or only) repo is allowed, see issue #302; the daemon runs cleanly with zero
 // enabled repos.
 func DeleteRepo(db *sql.DB, name string) error {
+	return DeleteWorkspaceRepo(db, fleet.DefaultWorkspaceID, name)
+}
+
+func DeleteWorkspaceRepo(db *sql.DB, workspaceID, name string) error {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: delete repo %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec("DELETE FROM bindings WHERE repo=?", name); err != nil {
+	if _, err := tx.Exec("DELETE FROM bindings WHERE workspace_id=? AND repo=?", workspaceID, name); err != nil {
 		return fmt.Errorf("store: delete bindings for repo %s: %w", name, err)
 	}
-	if _, err := tx.Exec("DELETE FROM repos WHERE name=?", name); err != nil {
+	if _, err := tx.Exec("DELETE FROM repos WHERE workspace_id=? AND name=?", workspaceID, name); err != nil {
 		return fmt.Errorf("store: delete repo %s: %w", name, err)
 	}
 	return tx.Commit()

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -134,12 +135,12 @@ func (s *DispatchDedupStore) evict(now time.Time) {
 	}
 }
 
-// dispatchStoreKey builds the map key for a dispatch-namespace entry.
+// dispatchStoreKey builds the map key for a dispatch bucket entry.
 func dispatchStoreKey(agent, repo string, number int) string {
 	return fmt.Sprintf("%s\x00%s\x00%d", agent, repo, number)
 }
 
-// cronStoreKey builds the map key for a cron-namespace entry.
+// cronStoreKey builds the map key for a cron bucket entry.
 func cronStoreKey(agent, repo string, number int) string {
 	return fmt.Sprintf("cron\x00%s\x00%s\x00%d", agent, repo, number)
 }
@@ -215,7 +216,7 @@ func (s *DispatchDedupStore) AbandonClaim(target, repo string, number int) {
 }
 
 // MarkWebhookRunInFlight increments the in-flight reference count for the
-// dispatch-namespace entry (agent, repo, number). It must be called immediately
+// dispatch bucket entry (agent, repo, number). It must be called immediately
 // after a successful TryClaimForDispatch in the webhook/fanOut path so that the
 // claim survives past the TTL window while the agent run is still executing.
 // Callers must follow with FinalizeWebhookRun (success) or AbandonWebhookRun
@@ -228,7 +229,7 @@ func (s *DispatchDedupStore) MarkWebhookRunInFlight(agent, repo string, number i
 }
 
 // FinalizeWebhookRun decrements the in-flight reference count for the
-// dispatch-namespace entry (agent, repo, number) after a successful run.
+// dispatch bucket entry (agent, repo, number) after a successful run.
 // The TTL entry is preserved so TryClaimForDispatch continues to suppress
 // duplicates until the dedup_window_seconds elapses. Once the refcount reaches
 // zero, the evict() loop is free to remove the entry when expiresAt passes.
@@ -245,7 +246,7 @@ func (s *DispatchDedupStore) FinalizeWebhookRun(agent, repo string, number int) 
 }
 
 // AbandonWebhookRun decrements the in-flight reference count and removes the
-// dispatch-namespace entry for (agent, repo, number) after a failed run. Used
+// dispatch bucket entry for (agent, repo, number) after a failed run. Used
 // by the error and panic paths in fanOut so that a retry or a subsequent event
 // for the same item can claim the slot and attempt the run again.
 func (s *DispatchDedupStore) AbandonWebhookRun(agent, repo string, number int) {
@@ -262,7 +263,7 @@ func (s *DispatchDedupStore) AbandonWebhookRun(agent, repo string, number int) {
 
 // MarkCronRun records that a cron-fired execution has started
 // for (agent, repo, number). The mark persists for the full TTL window and lives
-// in a separate key namespace ("cron\x00…") from dispatch entries so that
+// in a separate key bucket ("cron\x00…") from dispatch entries so that
 // repeated cron runs are never suppressed by this mark, only dispatches are.
 // Autonomous runs always pass number=0 because they are not tied to a specific
 // issue or PR; this scoping ensures that a cron run for a repo-level context
@@ -279,7 +280,7 @@ func (s *DispatchDedupStore) MarkCronRun(agent, repo string, number int, now tim
 	s.cronRefCounts[key]++
 }
 
-// RemoveCronMark decrements the in-flight reference count for the cron-namespace
+// RemoveCronMark decrements the in-flight reference count for the cron bucket
 // entry (agent, repo, number) and deletes the entry from the store so that
 // future dispatches are no longer suppressed. It is used by the rollback path
 // (run failed before completing). When the count reaches zero, the entry is
@@ -297,7 +298,7 @@ func (s *DispatchDedupStore) RemoveCronMark(agent, repo string, number int) {
 	}
 }
 
-// FinalizeCronMark decrements the in-flight reference count for the cron-namespace
+// FinalizeCronMark decrements the in-flight reference count for the cron bucket
 // entry (agent, repo, number) without deleting the entry. It is used by the
 // success path after a cron/manual run completes: the entry's expiresAt is kept
 // in place so that TryClaimForDispatch continues to suppress autonomous-context
@@ -329,7 +330,7 @@ func (s *DispatchDedupStore) SeenCronRun(agent, repo string, number int, now tim
 }
 
 // TryClaimForCron atomically checks whether a dispatch has already claimed
-// the (agent, repo, number) slot and, if not, writes a cron-namespace mark.
+// the (agent, repo, number) slot and, if not, writes a cron bucket mark.
 // Returns true if the mark was written (caller may proceed with the run).
 // Returns false if a dispatch claim, pending or committed, exists within
 // the TTL window (caller should skip the run; dispatch-first ordering).
@@ -441,13 +442,23 @@ func (d *Dispatcher) WithGraphRecorder(r GraphRecorder) {
 // lookupAgent returns the named agent from SQLite, or false when no row
 // matches. Called on every dispatch to check the target's allow_dispatch
 // flag.
-func (d *Dispatcher) lookupAgent(name string) (fleet.Agent, bool) {
+func (d *Dispatcher) lookupAgent(name, workspaceID string) (fleet.Agent, bool) {
 	agents, err := d.store.ReadAgents()
 	if err != nil {
 		d.logger.Error().Err(err).Msg("dispatcher: read agents")
 		return fleet.Agent{}, false
 	}
-	idx := slices.IndexFunc(agents, func(a fleet.Agent) bool { return a.Name == name })
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		workspaceID = fleet.DefaultWorkspaceID
+	}
+	idx := slices.IndexFunc(agents, func(a fleet.Agent) bool {
+		agentWorkspace := a.WorkspaceID
+		if agentWorkspace == "" {
+			agentWorkspace = fleet.DefaultWorkspaceID
+		}
+		return a.Name == name && agentWorkspace == workspaceID
+	})
 	if idx < 0 {
 		return fleet.Agent{}, false
 	}
@@ -471,6 +482,8 @@ func (d *Dispatcher) ProcessDispatches(
 ) error {
 	var errs []error
 	fanout := 0
+	workspaceID := eventWorkspaceID(ev)
+	repo, repoOK := d.lookupRepo(ev.Repo.FullName, workspaceID)
 	for _, req := range requests {
 		req.Agent = fleet.NormalizeAgentName(req.Agent)
 		d.counters.requestedTotal.Add(1)
@@ -507,8 +520,8 @@ func (d *Dispatcher) ProcessDispatches(
 		// Opt-in check: target must be visible in the originator's roster.
 		// Config validation requires descriptions for all agents; keep the
 		// runtime gate in sync for live DB changes and belt-and-braces protection.
-		target, ok := d.lookupAgent(req.Agent)
-		if !ok || !target.AllowDispatch || target.Description == "" {
+		target, ok := d.lookupAgent(req.Agent, workspaceID)
+		if !ok || !target.AllowDispatch || target.Description == "" || !repoOK || !agentScopeAllowsRepo(target, repo) {
 			logBase.Warn().Msg("dispatch dropped: target is not dispatchable")
 			d.counters.droppedNoOptin.Add(1)
 			continue
@@ -530,8 +543,8 @@ func (d *Dispatcher) ProcessDispatches(
 		}
 
 		// Atomic cron-and-dispatch dedup: TryClaimForDispatch checks the cron
-		// namespace (any active cron/manual run for this item context) and the
-		// dispatch namespace (any existing dispatch claim) in a single mutex
+		// bucket (any active cron/manual run for this item context) and the
+		// dispatch bucket (any existing dispatch claim) in a single mutex
 		// acquisition, then reserves a pending dispatch slot. This eliminates
 		// the TOCTOU race that existed when SeenCronRun and TryClaim were
 		// separate operations: the old sequence allowed a concurrent cron path
@@ -540,18 +553,20 @@ func (d *Dispatcher) ProcessDispatches(
 		//
 		// On success, CommitClaim (after PushEvent) or AbandonClaim (on failure)
 		// finalises the reservation.
-		if !d.dedup.TryClaimForDispatch(req.Agent, ev.Repo.FullName, number, time.Now()) {
+		dedupRepo := dedupRepoKey(workspaceID, ev.Repo.FullName)
+		if !d.dedup.TryClaimForDispatch(req.Agent, dedupRepo, number, time.Now()) {
 			logBase.Debug().Msg("dispatch deduped: active cron run or existing dispatch claim within window")
 			d.counters.deduped.Add(1)
 			continue
 		}
 
 		dispatchEv := Event{
-			ID:     GenEventID(),
-			Repo:   ev.Repo,
-			Kind:   "agent.dispatch",
-			Number: number,
-			Actor:  originator.Name,
+			ID:          GenEventID(),
+			WorkspaceID: workspaceID,
+			Repo:        ev.Repo,
+			Kind:        "agent.dispatch",
+			Number:      number,
+			Actor:       originator.Name,
 			Payload: map[string]any{
 				"target_agent":   req.Agent,
 				"reason":         req.Reason,
@@ -565,7 +580,7 @@ func (d *Dispatcher) ProcessDispatches(
 		if _, err := d.queue.PushEvent(ctx, dispatchEv); err != nil {
 			// Release the pending claim so future retries are not blocked and
 			// the dedup store never keeps a phantom committed slot.
-			d.dedup.AbandonClaim(req.Agent, ev.Repo.FullName, number)
+			d.dedup.AbandonClaim(req.Agent, dedupRepo, number)
 			logBase.Error().Err(err).Msg("failed to enqueue dispatch event")
 			errs = append(errs, fmt.Errorf("dispatch %q: %w", req.Agent, err))
 			continue
@@ -573,11 +588,11 @@ func (d *Dispatcher) ProcessDispatches(
 
 		// Enqueue succeeded, commit the claim so the dedup window suppresses
 		// duplicate dispatches for this target.
-		d.dedup.CommitClaim(req.Agent, ev.Repo.FullName, number)
+		d.dedup.CommitClaim(req.Agent, dedupRepo, number)
 
 		// Record the dispatch edge in the interaction graph if an observer is set.
 		if d.graphRec != nil {
-			d.graphRec.RecordDispatch(originator.Name, req.Agent, ev.Repo.FullName, number, req.Reason)
+			d.graphRec.RecordDispatch(workspaceID, originator.Name, req.Agent, ev.Repo.FullName, number, req.Reason)
 		}
 
 		fanout++
@@ -588,35 +603,35 @@ func (d *Dispatcher) ProcessDispatches(
 }
 
 // TryMarkAutonomousRun atomically checks whether a dispatch has already
-// claimed the (agentName, repo, 0) slot and, if not, writes a cron-namespace
-// mark. Returns true if the mark was written and the caller may proceed with
-// the run. Returns false if a dispatch claim exists (caller should return
-// ErrDispatchSkipped).
+// claimed the (workspaceID, agentName, repo, 0) slot and, if not, writes a
+// cron bucket mark. Returns true if the mark was written and the caller may
+// proceed with the run. Returns false if a dispatch claim exists (caller should
+// return ErrDispatchSkipped).
 //
 // This single-lock operation closes the TOCTOU race between the dispatch and
 // autonomous-run paths.
 //
 // If the run fails before completing, call RollbackAutonomousRun to remove the
 // mark so that future dispatches are not spuriously suppressed.
-func (d *Dispatcher) TryMarkAutonomousRun(agentName, repo string, now time.Time) bool {
-	return d.dedup.TryClaimForCron(agentName, repo, 0, now)
+func (d *Dispatcher) TryMarkAutonomousRun(workspaceID, agentName, repo string, now time.Time) bool {
+	return d.dedup.TryClaimForCron(agentName, dedupRepoKey(workspaceID, repo), 0, now)
 }
 
-// RollbackAutonomousRun removes the cron-namespace mark written by
+// RollbackAutonomousRun removes the cron bucket mark written by
 // TryMarkAutonomousRun. It must be called when a run fails so that the stale
 // mark does not suppress autonomous-context dispatches for the full
 // dedup_window_seconds.
-func (d *Dispatcher) RollbackAutonomousRun(agentName, repo string) {
-	d.dedup.RemoveCronMark(agentName, repo, 0)
+func (d *Dispatcher) RollbackAutonomousRun(workspaceID, agentName, repo string) {
+	d.dedup.RemoveCronMark(agentName, dedupRepoKey(workspaceID, repo), 0)
 }
 
-// FinalizeAutonomousRun decrements the cron-namespace refcount for
-// (agentName, repo, 0) after a run completes successfully. Unlike
+// FinalizeAutonomousRun decrements the cron bucket refcount for
+// (workspaceID, agentName, repo, 0) after a run completes successfully. Unlike
 // RollbackAutonomousRun it preserves the cron entry so that
 // TryClaimForDispatch continues to suppress autonomous-context dispatches
 // until the full dedup_window_seconds window expires naturally.
-func (d *Dispatcher) FinalizeAutonomousRun(agentName, repo string) {
-	d.dedup.FinalizeCronMark(agentName, repo, 0)
+func (d *Dispatcher) FinalizeAutonomousRun(workspaceID, agentName, repo string) {
+	d.dedup.FinalizeCronMark(agentName, dedupRepoKey(workspaceID, repo), 0)
 }
 
 // Stats returns a snapshot of the current dispatch counters.
@@ -630,4 +645,28 @@ func GenEventID() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+func (d *Dispatcher) lookupRepo(name, workspaceID string) (fleet.Repo, bool) {
+	name = fleet.NormalizeRepoName(name)
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		workspaceID = fleet.DefaultWorkspaceID
+	}
+	repos, err := d.store.ReadRepos()
+	if err != nil {
+		d.logger.Error().Err(err).Msg("dispatcher: read repos")
+		return fleet.Repo{}, false
+	}
+	idx := slices.IndexFunc(repos, func(r fleet.Repo) bool {
+		repoWorkspace := r.WorkspaceID
+		if repoWorkspace == "" {
+			repoWorkspace = fleet.DefaultWorkspaceID
+		}
+		return r.Name == name && repoWorkspace == workspaceID
+	})
+	if idx < 0 {
+		return fleet.Repo{}, false
+	}
+	return repos[idx], true
 }

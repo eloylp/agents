@@ -5,9 +5,11 @@ import Link from 'next/link'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import RepoFilter from '@/components/RepoFilter'
+import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { StreamCard, TranscriptFilter, allStreamCardKinds, stepToCardEntries, type PersistedStep, type StreamCardEntry, type StreamCardKind } from '@/components/StreamCard'
 import { fmtDuration } from '@/lib/format'
 import { openAuthenticatedSSE } from '@/lib/sse'
+import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
 interface RunnerRow {
   id: number
@@ -17,7 +19,7 @@ interface RunnerRow {
   number: number
   actor?: string
   target_agent?: string
-  status: 'enqueued' | 'running' | 'success' | 'error'
+  status: 'enqueued' | 'running' | 'success' | 'error' | 'skipped'
   enqueued_at: string
   started_at?: string
   completed_at?: string
@@ -59,6 +61,7 @@ const statusStyle: Record<string, { bg: string; text: string; border: string }> 
   running:  { bg: 'rgba(245,158,11,0.15)',  text: '#fcd34d', border: '#78350f' },
   success:  { bg: 'var(--success-bg)',       text: 'var(--success)', border: 'var(--success-border)' },
   error:    { bg: 'var(--bg-danger)',        text: 'var(--text-danger)', border: 'var(--border-danger)' },
+  skipped:  { bg: 'rgba(100,116,139,0.15)',  text: 'var(--text-muted)', border: 'var(--border-subtle)' },
 }
 
 const POLL_MS = 2000
@@ -215,6 +218,7 @@ function RunnersInner() {
   const router = useRouter()
   const focusEvent = params.get('event') ?? ''
   const repoParam = params.get('repo') ?? ''
+  const { workspace } = useSelectedWorkspace()
 
   const setRepoFilter = (repo: string) => {
     const p = new URLSearchParams(params.toString())
@@ -235,7 +239,7 @@ function RunnersInner() {
 
   const load = async () => {
     try {
-      const url = `/runners?limit=200${status ? `&status=${status}` : ''}`
+      const url = withWorkspace(`/runners?limit=200${status ? `&status=${status}` : ''}`, workspace)
       const res = await fetch(url, { cache: 'no-store' })
       if (!res.ok) throw new Error(`status ${res.status}`)
       const data: ListResponse = await res.json()
@@ -253,7 +257,7 @@ function RunnersInner() {
     load()
     const id = window.setInterval(load, POLL_MS)
     return () => window.clearInterval(id)
-  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [status, workspace]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Trigger highlight pulse when arriving with ?event=X. Wait until
   // the first batch of rows lands, otherwise the animation runs while
@@ -349,11 +353,12 @@ function RunnersInner() {
             {focusEvent ? (
               <>Showing event <code style={{ color: 'var(--accent)' }}>{focusEvent}</code> · {filtered.length} row{filtered.length !== 1 ? 's' : ''}</>
             ) : (
-              <>{total} event{total !== 1 ? 's' : ''} matching filter · {filtered.length} runner row{filtered.length !== 1 ? 's' : ''} · enqueued {counts.enqueued ?? 0} · running {counts.running ?? 0} · success {counts.success ?? 0} · error {counts.error ?? 0}</>
+              <>{total} event{total !== 1 ? 's' : ''} matching filter · {filtered.length} runner row{filtered.length !== 1 ? 's' : ''} · enqueued {counts.enqueued ?? 0} · running {counts.running ?? 0} · success {counts.success ?? 0} · error {counts.error ?? 0} · skipped {counts.skipped ?? 0}</>
             )}
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <WorkspaceSelect compact />
           {focusEvent && (
             <Link
               href={repoParam ? `/runners?repo=${encodeURIComponent(repoParam)}` : '/runners/'}
@@ -364,7 +369,7 @@ function RunnersInner() {
               }}
             >Clear filter</Link>
           )}
-          <RepoFilter selected={repoParam} onChange={setRepoFilter} />
+          <RepoFilter selected={repoParam} onChange={setRepoFilter} workspace={workspace} />
           {(['', 'enqueued', 'running', 'completed'] as const).map(s => (
             <button key={s || 'all'} onClick={() => setStatus(s)} style={{
               background: status === s ? 'var(--btn-primary-bg)' : 'var(--bg-card)',

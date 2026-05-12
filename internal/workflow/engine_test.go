@@ -155,6 +155,62 @@ func TestEngineSkipsUnmatchedLabel(t *testing.T) {
 	}
 }
 
+func TestEngineSkipsAgentOutsideEventWorkspace(t *testing.T) {
+	t.Parallel()
+	e, runner := newTestEngine(t, func(c *config.Config) {
+		c.Agents = []fleet.Agent{
+			{Name: "team-reviewer", WorkspaceID: "team-a", Backend: "claude", Prompt: "Review team workspace."},
+			{Name: "default-reviewer", WorkspaceID: "team-a", Backend: "claude", Prompt: "Review other repo.", ScopeType: "repo", ScopeRepo: "owner/other"},
+		}
+		c.Repos = []fleet.Repo{
+			{
+				WorkspaceID: "team-a",
+				Name:        "owner/repo",
+				Enabled:     true,
+				Use: []fleet.Binding{
+					{Agent: "team-reviewer", Labels: []string{"ai:review"}},
+					{Agent: "default-reviewer", Labels: []string{"ai:review"}},
+				},
+			},
+			{WorkspaceID: "team-a", Name: "owner/other", Enabled: true},
+		}
+	})
+	ev := labelEvent("issues.labeled", "owner/repo", "ai:review", 7)
+	ev.WorkspaceID = "team-a"
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if runner.callCount() != 1 {
+		t.Fatalf("callCount = %d, want only the team workspace agent", runner.callCount())
+	}
+}
+
+func TestEngineRejectsRepoScopedAgentOutsideRepo(t *testing.T) {
+	t.Parallel()
+	e, runner := newTestEngine(t, func(c *config.Config) {
+		c.Agents = []fleet.Agent{{
+			Name:        "repo-reviewer",
+			WorkspaceID: "team-a",
+			Backend:     "claude",
+			Prompt:      "Review repo.",
+			ScopeType:   "repo",
+			ScopeRepo:   "owner/other",
+		}}
+		c.Repos = []fleet.Repo{
+			{WorkspaceID: "team-a", Name: "owner/repo", Enabled: true, Use: []fleet.Binding{{Agent: "repo-reviewer", Labels: []string{"ai:review"}}}},
+			{WorkspaceID: "team-a", Name: "owner/other", Enabled: true},
+		}
+	})
+	ev := labelEvent("issues.labeled", "owner/repo", "ai:review", 7)
+	ev.WorkspaceID = "team-a"
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if runner.callCount() != 0 {
+		t.Fatalf("callCount = %d, want repo-scoped agent skipped", runner.callCount())
+	}
+}
+
 func TestEngineSkipsDisabledBinding(t *testing.T) {
 	t.Parallel()
 	f := false
@@ -359,7 +415,7 @@ func TestBuildRosterUsesDispatchWiring(t *testing.T) {
 		},
 	}
 
-	roster := BuildRoster(cfg, "owner/repo", "coder")
+	roster := BuildRoster(cfg, fleet.DefaultWorkspaceID, "owner/repo", "coder")
 	if len(roster) != 1 {
 		t.Fatalf("len(roster) = %d, want 1: %+v", len(roster), roster)
 	}
@@ -417,6 +473,113 @@ func TestEngineAllowPRsFalseInjectsNoPRGuard(t *testing.T) {
 			hasGuard := strings.Contains(runner.lastSystem(), noPRGuard)
 			if hasGuard != tc.wantGuard {
 				t.Errorf("no-PR guard present=%v, want %v\nsystem: %q", hasGuard, tc.wantGuard, runner.lastSystem())
+			}
+		})
+	}
+}
+
+func TestEnginePromptUsesWorkspaceGuardrailsAndBoundary(t *testing.T) {
+	t.Parallel()
+	e, runner := newTestEngine(t, func(c *config.Config) {
+		c.Agents[0].ScopeType = "repo"
+		c.Agents[0].ScopeRepo = "owner/repo"
+		c.Repos = append(c.Repos, fleet.Repo{Name: "owner/other", Enabled: true})
+	})
+	if err := e.store.UpsertGuardrail(fleet.Guardrail{
+		Name:     "workspace-only",
+		Content:  "STATIC_WORKSPACE_GUARDRAIL",
+		Enabled:  false,
+		Position: 50,
+	}); err != nil {
+		t.Fatalf("UpsertGuardrail: %v", err)
+	}
+	if _, err := e.store.ReplaceWorkspaceGuardrails(fleet.DefaultWorkspaceID, []fleet.WorkspaceGuardrailRef{
+		{GuardrailName: "workspace-only", Position: 5, Enabled: true},
+	}); err != nil {
+		t.Fatalf("ReplaceWorkspaceGuardrails: %v", err)
+	}
+
+	ev := labelEvent("issues.labeled", "owner/repo", "ai:review:arch-reviewer", 1)
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if runner.callCount() != 1 {
+		t.Fatalf("expected 1 run, got %d", runner.callCount())
+	}
+	system := runner.lastSystem()
+	if !strings.HasPrefix(system, "## Workspace and repository boundaries") {
+		t.Fatalf("system prompt must start with dynamic workspace boundary guardrail:\n%s", system)
+	}
+	if !strings.Contains(system, "You are running inside workspace: default.") {
+		t.Fatalf("system prompt missing workspace boundary:\n%s", system)
+	}
+	if !strings.Contains(system, "- owner/repo") {
+		t.Fatalf("system prompt missing allowed repo:\n%s", system)
+	}
+	if strings.Contains(system, "owner/other") {
+		t.Fatalf("repo-scoped boundary must not allow owner/other:\n%s", system)
+	}
+	staticIdx := strings.Index(system, "STATIC_WORKSPACE_GUARDRAIL")
+	promptIdx := strings.Index(system, "Review architecture.")
+	if staticIdx < 0 || promptIdx < 0 || staticIdx > promptIdx {
+		t.Fatalf("workspace static guardrail must precede prompt body; static=%d prompt=%d\n%s", staticIdx, promptIdx, system)
+	}
+}
+
+func TestDynamicWorkspaceGuardrailAllowsWorkspaceScopeRepos(t *testing.T) {
+	t.Parallel()
+	g := dynamicWorkspaceGuardrail("", fleet.Agent{
+		WorkspaceID: fleet.DefaultWorkspaceID,
+		ScopeType:   "workspace",
+	}, []fleet.Repo{
+		{Name: "owner/repo", WorkspaceID: fleet.DefaultWorkspaceID, Enabled: true},
+		{Name: "owner/other", WorkspaceID: fleet.DefaultWorkspaceID, Enabled: true},
+		{Name: "owner/disabled", WorkspaceID: fleet.DefaultWorkspaceID, Enabled: false},
+		{Name: "owner/team", WorkspaceID: "team-a", Enabled: true},
+	})
+
+	if !strings.Contains(g.Content, "You are running inside workspace: default.") {
+		t.Fatalf("guardrail content missing normalized default workspace:\n%s", g.Content)
+	}
+	for _, want := range []string{"- owner/other", "- owner/repo"} {
+		if !strings.Contains(g.Content, want) {
+			t.Fatalf("guardrail content missing allowed repo %q:\n%s", want, g.Content)
+		}
+	}
+	for _, notWant := range []string{"owner/disabled", "owner/team", "- (none)"} {
+		if strings.Contains(g.Content, notWant) {
+			t.Fatalf("guardrail content contains %q, want excluded:\n%s", notWant, g.Content)
+		}
+	}
+}
+
+func TestDynamicWorkspaceGuardrailFailsClosedForUnknownScopeAndEmptyRepos(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		agent fleet.Agent
+		repos []fleet.Repo
+	}{
+		{
+			name:  "unknown scope",
+			agent: fleet.Agent{WorkspaceID: fleet.DefaultWorkspaceID, ScopeType: "team"},
+			repos: []fleet.Repo{{Name: "owner/repo", WorkspaceID: fleet.DefaultWorkspaceID, Enabled: true}},
+		},
+		{
+			name:  "empty repos",
+			agent: fleet.Agent{WorkspaceID: fleet.DefaultWorkspaceID, ScopeType: "workspace"},
+			repos: nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			g := dynamicWorkspaceGuardrail(fleet.DefaultWorkspaceID, tc.agent, tc.repos)
+			if !strings.Contains(g.Content, "- (none)") {
+				t.Fatalf("guardrail content should render explicit empty allow-list:\n%s", g.Content)
+			}
+			if strings.Contains(g.Content, "- owner/repo") {
+				t.Fatalf("guardrail content allowed repo for fail-closed case:\n%s", g.Content)
 			}
 		})
 	}
@@ -866,19 +1029,19 @@ func TestEngineConcurrentReadsAreRaceFree(t *testing.T) {
 type stubLastRunRecorder struct {
 	mu    sync.Mutex
 	calls []struct {
-		agent, repo, status string
+		workspaceID, agent, repo, status string
 	}
 }
 
-func (s *stubLastRunRecorder) RecordLastRun(agent, repo string, _ time.Time, status string) {
+func (s *stubLastRunRecorder) RecordLastRun(workspaceID, agent, repo string, _ time.Time, status string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, struct {
-		agent, repo, status string
-	}{agent, repo, status})
+		workspaceID, agent, repo, status string
+	}{workspaceID, agent, repo, status})
 }
 
-func (s *stubLastRunRecorder) snapshot() []struct{ agent, repo, status string } {
+func (s *stubLastRunRecorder) snapshot() []struct{ workspaceID, agent, repo, status string } {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.calls)
@@ -933,7 +1096,7 @@ func TestHandleEventAutonomousFiresLastRunRecorder(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("LastRunRecorder calls = %d, want 1: %+v", len(calls), calls)
 	}
-	if calls[0].agent != "arch-reviewer" || calls[0].repo != "owner/repo" || calls[0].status != "success" {
+	if calls[0].workspaceID != fleet.DefaultWorkspaceID || calls[0].agent != "arch-reviewer" || calls[0].repo != "owner/repo" || calls[0].status != "success" {
 		t.Errorf("unexpected last-run record: %+v", calls[0])
 	}
 }

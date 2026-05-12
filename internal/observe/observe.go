@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -27,18 +28,20 @@ import (
 // at /api/events produce an identical wire shape that the dashboard can parse
 // with the same client-side interface.
 type TimestampedEvent struct {
-	At      time.Time      `json:"at"`
-	ID      string         `json:"id"`
-	Repo    string         `json:"repo"`
-	Kind    string         `json:"kind"`
-	Number  int            `json:"number"`
-	Actor   string         `json:"actor"`
-	Payload map[string]any `json:"payload,omitempty"`
+	At          time.Time      `json:"at"`
+	ID          string         `json:"id"`
+	WorkspaceID string         `json:"workspace_id"`
+	Repo        string         `json:"repo"`
+	Kind        string         `json:"kind"`
+	Number      int            `json:"number"`
+	Actor       string         `json:"actor"`
+	Payload     map[string]any `json:"payload,omitempty"`
 }
 
 // Span records the timing and outcome of a single agent run.
 type Span struct {
 	SpanID         string    `json:"span_id"`
+	WorkspaceID    string    `json:"workspace_id"`
 	RootEventID    string    `json:"root_event_id"`
 	ParentSpanID   string    `json:"parent_span_id,omitempty"`
 	Agent          string    `json:"agent"`
@@ -74,10 +77,11 @@ type Span struct {
 
 // DispatchRecord is one observed inter-agent dispatch.
 type DispatchRecord struct {
-	At     time.Time `json:"at"`
-	Repo   string    `json:"repo"`
-	Number int       `json:"number"`
-	Reason string    `json:"reason"`
+	At          time.Time `json:"at"`
+	WorkspaceID string    `json:"workspace_id"`
+	Repo        string    `json:"repo"`
+	Number      int       `json:"number"`
+	Reason      string    `json:"reason"`
 }
 
 // Edge connects two agents in the interaction graph.
@@ -197,13 +201,14 @@ func (a *ActiveRuns) IsRunning(agentName string) bool {
 // Lives only in memory by design, once the run completes, the canonical
 // trace row in SQLite supersedes it.
 type ActiveRun struct {
-	SpanID    string
-	EventID   string
-	Agent     string
-	Backend   string
-	Repo      string
-	EventKind string
-	StartedAt time.Time
+	SpanID      string
+	EventID     string
+	WorkspaceID string
+	Agent       string
+	Backend     string
+	Repo        string
+	EventKind   string
+	StartedAt   time.Time
 }
 
 // runStream is the per-span pub/sub hub for live persisted TraceStep rows.
@@ -413,16 +418,22 @@ func NewStore(db *sql.DB) *Store {
 // When since is non-zero, only events strictly after that time are returned.
 // Results are capped at 500 rows.
 func (s *Store) ListEvents(since time.Time) []TimestampedEvent {
+	return s.ListEventsForWorkspace("", since)
+}
+
+func (s *Store) ListEventsForWorkspace(workspaceID string, since time.Time) []TimestampedEvent {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	var rows *sql.Rows
 	var err error
 	if since.IsZero() {
 		rows, err = s.db.Query(
-			`SELECT id, at, repo, kind, number, actor, payload FROM events ORDER BY at ASC LIMIT 500`,
+			`SELECT id, workspace_id, at, repo, kind, number, actor, payload FROM events WHERE workspace_id = ? ORDER BY at ASC LIMIT 500`,
+			workspaceID,
 		)
 	} else {
 		rows, err = s.db.Query(
-			`SELECT id, at, repo, kind, number, actor, payload FROM events WHERE at > ? ORDER BY at ASC LIMIT 500`,
-			since,
+			`SELECT id, workspace_id, at, repo, kind, number, actor, payload FROM events WHERE workspace_id = ? AND at > ? ORDER BY at ASC LIMIT 500`,
+			workspaceID, since,
 		)
 	}
 	if err != nil {
@@ -434,7 +445,7 @@ func (s *Store) ListEvents(since time.Time) []TimestampedEvent {
 	for rows.Next() {
 		var te TimestampedEvent
 		var payloadStr string
-		if err := rows.Scan(&te.ID, &te.At, &te.Repo, &te.Kind, &te.Number, &te.Actor, &payloadStr); err != nil {
+		if err := rows.Scan(&te.ID, &te.WorkspaceID, &te.At, &te.Repo, &te.Kind, &te.Number, &te.Actor, &payloadStr); err != nil {
 			log.Printf("observe: scan event row: %v", err)
 			continue
 		}
@@ -450,7 +461,7 @@ func (s *Store) ListEvents(since time.Time) []TimestampedEvent {
 // one place so adding a new column means editing one line. The
 // prompt_gz blob is intentionally excluded; bodies are fetched on
 // demand via PromptForSpan to keep listings small.
-const spanColumns = `span_id, root_event_id, parent_span_id, agent, backend, repo, number,
+const spanColumns = `span_id, workspace_id, root_event_id, parent_span_id, agent, backend, repo, number,
 	event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary,
 	started_at, finished_at, duration_ms, status, error,
 	prompt_size, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens`
@@ -458,8 +469,14 @@ const spanColumns = `span_id, root_event_id, parent_span_id, agent, backend, rep
 // ListTraces returns stored spans ordered by started_at descending (newest
 // first). Results are capped at 200 rows.
 func (s *Store) ListTraces() []Span {
+	return s.ListTracesForWorkspace("")
+}
+
+func (s *Store) ListTracesForWorkspace(workspaceID string) []Span {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	rows, err := s.db.Query(
-		`SELECT ` + spanColumns + ` FROM traces ORDER BY started_at DESC LIMIT 200`,
+		`SELECT `+spanColumns+` FROM traces WHERE workspace_id = ? ORDER BY started_at DESC LIMIT 200`,
+		workspaceID,
 	)
 	if err != nil {
 		log.Printf("observe: list traces: %v", err)
@@ -471,9 +488,14 @@ func (s *Store) ListTraces() []Span {
 
 // TracesByRootEventID returns all spans whose root_event_id matches id.
 func (s *Store) TracesByRootEventID(id string) []Span {
+	return s.TracesByRootEventIDForWorkspace("", id)
+}
+
+func (s *Store) TracesByRootEventIDForWorkspace(workspaceID, id string) []Span {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	rows, err := s.db.Query(
-		`SELECT `+spanColumns+` FROM traces WHERE root_event_id = ?`,
-		id,
+		`SELECT `+spanColumns+` FROM traces WHERE workspace_id = ? AND root_event_id = ?`,
+		workspaceID, id,
 	)
 	if err != nil {
 		log.Printf("observe: traces by root event %s: %v", id, err)
@@ -518,7 +540,7 @@ func scanSpans(rows *sql.Rows) []Span {
 		var sp Span
 		var promptSize, inTok, outTok, cacheR, cacheW sql.NullInt64
 		if err := rows.Scan(
-			&sp.SpanID, &sp.RootEventID, &sp.ParentSpanID,
+			&sp.SpanID, &sp.WorkspaceID, &sp.RootEventID, &sp.ParentSpanID,
 			&sp.Agent, &sp.Backend, &sp.Repo, &sp.Number,
 			&sp.EventKind, &sp.InvokedBy, &sp.DispatchDepth,
 			&sp.QueueWaitMs, &sp.ArtifactsCount, &sp.Summary,
@@ -542,8 +564,14 @@ func scanSpans(rows *sql.Rows) []Span {
 // ListEdges returns the dispatch interaction graph by grouping rows from
 // dispatch_history by (from_agent, to_agent) into Edge structs.
 func (s *Store) ListEdges() []Edge {
+	return s.ListEdgesForWorkspace("")
+}
+
+func (s *Store) ListEdgesForWorkspace(workspaceID string) []Edge {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	rows, err := s.db.Query(
-		`SELECT from_agent, to_agent, repo, number, reason, at FROM dispatch_history ORDER BY at ASC`,
+		`SELECT from_agent, to_agent, repo, number, reason, at FROM dispatch_history WHERE workspace_id = ? ORDER BY at ASC`,
+		workspaceID,
 	)
 	if err != nil {
 		log.Printf("observe: list edges: %v", err)
@@ -567,7 +595,7 @@ func (s *Store) ListEdges() []Edge {
 			edges[key] = e
 		}
 		e.Count++
-		e.Dispatches = append(e.Dispatches, DispatchRecord{At: at, Repo: repo, Number: number, Reason: reason})
+		e.Dispatches = append(e.Dispatches, DispatchRecord{At: at, WorkspaceID: workspaceID, Repo: repo, Number: number, Reason: reason})
 	}
 
 	out := make([]Edge, 0, len(edges))
@@ -592,13 +620,14 @@ func (s *Store) IsRunning(agentName string) bool {
 // RunRegistry so the runners view can surface in-flight rows.
 func (s *Store) BeginRun(in workflow.BeginRunInput) {
 	s.Runs.BeginRun(ActiveRun{
-		SpanID:    in.SpanID,
-		EventID:   in.EventID,
-		Agent:     in.Agent,
-		Backend:   in.Backend,
-		Repo:      in.Repo,
-		EventKind: in.EventKind,
-		StartedAt: in.StartedAt,
+		SpanID:      in.SpanID,
+		EventID:     in.EventID,
+		WorkspaceID: fleet.NormalizeWorkspaceID(in.WorkspaceID),
+		Agent:       in.Agent,
+		Backend:     in.Backend,
+		Repo:        in.Repo,
+		EventKind:   in.EventKind,
+		StartedAt:   in.StartedAt,
 	})
 }
 
@@ -612,20 +641,21 @@ func (s *Store) EndRun(spanID string) {
 // SQLite and fans it out to SSE subscribers.
 func (s *Store) RecordEvent(at time.Time, ev workflow.Event) {
 	te := TimestampedEvent{
-		At:      at,
-		ID:      ev.ID,
-		Repo:    ev.Repo.FullName,
-		Kind:    ev.Kind,
-		Number:  ev.Number,
-		Actor:   ev.Actor,
-		Payload: ev.Payload,
+		At:          at,
+		ID:          ev.ID,
+		WorkspaceID: fleet.NormalizeWorkspaceID(ev.WorkspaceID),
+		Repo:        ev.Repo.FullName,
+		Kind:        ev.Kind,
+		Number:      ev.Number,
+		Actor:       ev.Actor,
+		Payload:     ev.Payload,
 	}
 	if s.db != nil {
 		go func() {
 			payload, _ := json.Marshal(te.Payload)
 			_, err := s.db.Exec(
-				`INSERT OR IGNORE INTO events (id, at, repo, kind, number, actor, payload) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				te.ID, te.At, te.Repo, te.Kind, te.Number, te.Actor, string(payload),
+				`INSERT OR IGNORE INTO events (id, workspace_id, at, repo, kind, number, actor, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				te.ID, te.WorkspaceID, te.At, te.Repo, te.Kind, te.Number, te.Actor, string(payload),
 			)
 			if err != nil {
 				log.Printf("observe: persist event %s: %v", te.ID, err)
@@ -643,6 +673,7 @@ func (s *Store) RecordEvent(at time.Time, ev workflow.Event) {
 func (s *Store) RecordSpan(in workflow.SpanInput) {
 	sp := Span{
 		SpanID:           in.SpanID,
+		WorkspaceID:      fleet.NormalizeWorkspaceID(in.WorkspaceID),
 		RootEventID:      in.RootEventID,
 		ParentSpanID:     in.ParentSpanID,
 		Agent:            in.Agent,
@@ -681,8 +712,8 @@ func (s *Store) RecordSpan(in workflow.SpanInput) {
 	if s.db != nil {
 		go func() {
 			_, err := s.db.Exec(
-				`INSERT OR IGNORE INTO traces (span_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error, prompt_gz, prompt_size, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-				sp.SpanID, sp.RootEventID, sp.ParentSpanID,
+				`INSERT OR IGNORE INTO traces (span_id, workspace_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error, prompt_gz, prompt_size, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				sp.SpanID, sp.WorkspaceID, sp.RootEventID, sp.ParentSpanID,
 				sp.Agent, sp.Backend, sp.Repo, sp.Number,
 				sp.EventKind, sp.InvokedBy, sp.DispatchDepth,
 				sp.QueueWaitMs, sp.ArtifactsCount, sp.Summary,
@@ -702,12 +733,13 @@ func (s *Store) RecordSpan(in workflow.SpanInput) {
 }
 
 // RecordDispatch implements workflow.GraphRecorder.
-func (s *Store) RecordDispatch(from, to, repo string, number int, reason string) {
+func (s *Store) RecordDispatch(workspaceID, from, to, repo string, number int, reason string) {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	if s.db != nil {
 		go func() {
 			_, err := s.db.Exec(
-				`INSERT INTO dispatch_history (from_agent, to_agent, repo, number, reason) VALUES (?,?,?,?,?)`,
-				from, to, repo, number, reason,
+				`INSERT INTO dispatch_history (workspace_id, from_agent, to_agent, repo, number, reason) VALUES (?,?,?,?,?,?)`,
+				workspaceID, from, to, repo, number, reason,
 			)
 			if err != nil {
 				log.Printf("observe: persist dispatch %s->%s: %v", from, to, err)
@@ -827,10 +859,11 @@ func (s *Store) SubscribeSteps(spanID string) ([]workflow.TraceStep, chan workfl
 }
 
 // PublishMemoryChange emits a MemoryChangeEvent to the MemorySSE hub for the
-// given agent and repo. Called by the SQLite memory backend after each write so
-// the UI SSE stream stays live when the daemon runs in --db mode.
-func (s *Store) PublishMemoryChange(agent, repo string) {
-	ev := MemoryChangeEvent{Agent: agent, Repo: repo, Path: agent + "/" + repo}
+// given workspace, agent, and repo. Called by the SQLite memory backend after
+// each write so the UI SSE stream stays live when the daemon runs in --db mode.
+func (s *Store) PublishMemoryChange(workspace, agent, repo string) {
+	workspace = fleet.NormalizeWorkspaceID(workspace)
+	ev := MemoryChangeEvent{Workspace: workspace, Agent: agent, Repo: repo, Path: workspace + "/" + agent + "/" + repo}
 	if b, err := sseData(ev); err == nil {
 		s.MemorySSE.Publish(b)
 	}

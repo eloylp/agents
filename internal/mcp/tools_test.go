@@ -152,13 +152,19 @@ func testFixtureWithConfig(t *testing.T, cfg *config.Config) Deps {
 // write tests to verify that the tool persisted the expected fields.
 func agentByName(t *testing.T, st *store.Store, name string) (fleet.Agent, bool) {
 	t.Helper()
+	return agentByNameInWorkspace(t, st, name, fleet.DefaultWorkspaceID)
+}
+
+func agentByNameInWorkspace(t *testing.T, st *store.Store, name, workspace string) (fleet.Agent, bool) {
+	t.Helper()
 	agents, err := st.ReadAgents()
 	if err != nil {
 		t.Fatalf("read agents: %v", err)
 	}
 	key := fleet.NormalizeAgentName(name)
+	workspace = fleet.NormalizeWorkspaceID(workspace)
 	for _, a := range agents {
-		if a.Name == key {
+		if a.Name == key && fleet.NormalizeWorkspaceID(a.WorkspaceID) == workspace {
 			return a, true
 		}
 	}
@@ -344,6 +350,203 @@ func TestToolGetSkill(t *testing.T) {
 	}
 }
 
+func TestToolWorkspaceCRUDAndGuardrails(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "Team A", "description": "Product workspace"}
+	res, err := toolCreateWorkspace(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var created map[string]any
+	decodeText(t, res, &created)
+	if created["id"] != "team-a" || created["name"] != "Team A" {
+		t.Fatalf("created workspace = %+v, want team-a", created)
+	}
+
+	req.Params.Arguments = map[string]any{}
+	res, err = toolGetWorkspace(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var defaultWorkspace map[string]any
+	decodeText(t, res, &defaultWorkspace)
+	if defaultWorkspace["id"] != "default" {
+		t.Fatalf("default workspace = %+v, want default id", defaultWorkspace)
+	}
+
+	req.Params.Arguments = map[string]any{"workspace": "team-a", "description": "Updated"}
+	res, err = toolUpdateWorkspace(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var patched map[string]any
+	decodeText(t, res, &patched)
+	if patched["description"] != "Updated" {
+		t.Fatalf("patched workspace = %+v, want updated description", patched)
+	}
+
+	req.Params.Arguments = map[string]any{
+		"workspace": "team-a",
+		"guardrails": []any{
+			map[string]any{"guardrail_name": "security", "position": float64(10), "enabled": true},
+			map[string]any{"guardrail_name": "memory-scope", "position": float64(0), "enabled": false},
+		},
+	}
+	res, err = toolUpdateWorkspaceGuardrails(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var guardrails []map[string]any
+	decodeText(t, res, &guardrails)
+	if len(guardrails) != 2 {
+		t.Fatalf("workspace guardrails len = %d, want 2", len(guardrails))
+	}
+	if guardrails[0]["guardrail_name"] != "memory-scope" || guardrails[0]["position"] != float64(0) || guardrails[0]["enabled"] != false {
+		t.Fatalf("guardrails[0] = %+v, want disabled memory-scope at explicit position 0", guardrails[0])
+	}
+	if guardrails[1]["guardrail_name"] != "security" || guardrails[1]["position"] != float64(10) || guardrails[1]["enabled"] != true {
+		t.Fatalf("guardrails[1] = %+v, want enabled security at position 10", guardrails[1])
+	}
+
+	req.Params.Arguments = map[string]any{"workspace": "team-a"}
+	res, err = toolDeleteWorkspace(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("delete workspace returned error result: %+v", res.Content)
+	}
+}
+
+func TestToolPromptCRUDNormalizesNames(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":        "Release-Notes",
+		"description": "Drafts releases",
+		"content":     "Summarize work",
+	}
+	res, err := toolCreatePrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var created map[string]any
+	decodeText(t, res, &created)
+	if created["id"] != "prompt_release-notes" || created["name"] != "release-notes" {
+		t.Fatalf("created prompt = %+v, want canonical release-notes", created)
+	}
+
+	req.Params.Arguments = map[string]any{"id": created["id"], "content": "Updated"}
+	res, err = toolUpdatePrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var updated map[string]any
+	decodeText(t, res, &updated)
+	if updated["id"] != created["id"] || updated["name"] != "release-notes" || updated["content"] != "Updated" {
+		t.Fatalf("updated prompt = %+v, want same id and canonical name", updated)
+	}
+
+	req.Params.Arguments = map[string]any{"id": created["id"]}
+	res, err = toolGetPrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("get prompt returned error result: %+v", res.Content)
+	}
+
+	res, err = toolDeletePrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("delete prompt returned error result: %+v", res.Content)
+	}
+	var deleted map[string]any
+	decodeText(t, res, &deleted)
+	if deleted["name"] != "release-notes" {
+		t.Fatalf("deleted prompt = %+v, want canonical name", deleted)
+	}
+}
+
+func TestToolPromptScopedDuplicatesUseStableID(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	for _, args := range []map[string]any{
+		{"workspace_id": "team-a", "name": "shared", "content": "Team prompt."},
+		{"workspace_id": "team-b", "name": "shared", "content": "Other prompt."},
+	} {
+		req := mcpgo.CallToolRequest{}
+		req.Params.Arguments = args
+		res, err := toolCreatePrompt(deps)(context.Background(), req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("create prompt returned error: %+v", res.Content)
+		}
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "shared", "workspace_id": "team-b", "content": "Updated other prompt."}
+	res, err := toolUpdatePrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var updated map[string]any
+	decodeText(t, res, &updated)
+	if updated["id"] != "prompt_team-b_shared" || updated["workspace_id"] != "team-b" || updated["content"] != "Updated other prompt." {
+		t.Fatalf("updated prompt = %+v, want team-b by name and workspace", updated)
+	}
+
+	req.Params.Arguments = map[string]any{"name": "shared", "scope": "TEAM-B"}
+	res, err = toolGetPrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var scoped map[string]any
+	decodeText(t, res, &scoped)
+	if scoped["id"] != "prompt_team-b_shared" || scoped["scope"] != "team-b" {
+		t.Fatalf("scoped get prompt = %+v, want team-b prompt by case-insensitive scope", scoped)
+	}
+
+	req.Params.Arguments = map[string]any{"name": "shared", "content": "Ambiguous"}
+	res, err = toolUpdatePrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected ambiguous name error, got %+v", res.Content)
+	}
+
+	req.Params.Arguments = map[string]any{"name": "shared", "workspace_id": "team-a"}
+	res, err = toolDeletePrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("delete prompt returned error: %+v", res.Content)
+	}
+
+	req.Params.Arguments = map[string]any{"name": "shared"}
+	res, err = toolGetPrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got map[string]any
+	decodeText(t, res, &got)
+	if got["id"] != "prompt_team-b_shared" || got["workspace_id"] != "team-b" {
+		t.Fatalf("get prompt after disambiguating delete = %+v, want remaining team-b prompt", got)
+	}
+}
+
 func TestToolListBackendsSorted(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
@@ -526,6 +729,40 @@ func TestToolTriggerAgentSuccess(t *testing.T) {
 	}
 	if target, _ := ev.Payload["target_agent"].(string); target != "coder" {
 		t.Fatalf("expected target_agent=coder, got %+v", ev.Payload)
+	}
+}
+
+func TestToolTriggerAgentNormalizesWorkspace(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	if _, err := deps.Fleet.UpsertWorkspace(fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{
+		WorkspaceID: "team-a", Name: "coder", Backend: "claude", PromptRef: "coder",
+		Description: "team coder", Skills: []string{}, CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("seed team agent: %v", err)
+	}
+	if _, err := deps.Repos.UpsertRepo(fleet.Repo{WorkspaceID: "team-a", Name: "owner/team", Enabled: true}); err != nil {
+		t.Fatalf("seed team repo: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"workspace": "Team-A", "agent": "coder", "repo": "OWNER/TEAM"}
+	res, err := toolTriggerAgent(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", textOf(t, res))
+	}
+	events := drainQueue(t, deps.Channels, 1)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 queued event, got %d", len(events))
+	}
+	if events[0].WorkspaceID != "team-a" || events[0].Repo.FullName != "owner/team" {
+		t.Fatalf("event scope = %q/%q, want team-a/owner/team", events[0].WorkspaceID, events[0].Repo.FullName)
 	}
 }
 
@@ -911,23 +1148,52 @@ func TestToolGetDispatches(t *testing.T) {
 func TestToolGetMemorySuccess(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
-	if err := deps.Store.WriteMemoryRaw("coder", "owner_one", "# hello\n"); err != nil {
-		t.Fatalf("seed memory: %v", err)
+	if _, err := deps.Store.UpsertWorkspace(fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if err := deps.Store.WriteWorkspaceMemoryRaw("team-a", "coder", "owner_one", "# hello\n"); err != nil {
+		t.Fatalf("seed team memory: %v", err)
+	}
+	if err := deps.Store.WriteWorkspaceMemoryRaw(fleet.DefaultWorkspaceID, "coder", "owner_one", "# default\n"); err != nil {
+		t.Fatalf("seed default memory: %v", err)
 	}
 
-	req := mcpgo.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"agent": "coder", "repo": "owner_one"}
-	res, err := toolGetMemory(deps)(context.Background(), req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	tests := []struct {
+		name          string
+		args          map[string]any
+		wantWorkspace string
+		wantContent   string
+	}{
+		{
+			name:          "explicit workspace",
+			args:          map[string]any{"workspace": "team-a", "agent": "coder", "repo": "owner_one"},
+			wantWorkspace: "team-a",
+			wantContent:   "# hello\n",
+		},
+		{
+			name:          "omitted workspace defaults to default",
+			args:          map[string]any{"agent": "coder", "repo": "owner_one"},
+			wantWorkspace: fleet.DefaultWorkspaceID,
+			wantContent:   "# default\n",
+		},
 	}
-	var got map[string]any
-	decodeText(t, res, &got)
-	if got["agent"] != "coder" || got["repo"] != "owner_one" || got["content"] != "# hello\n" {
-		t.Fatalf("unexpected memory payload: %+v", got)
-	}
-	if got["mtime"] == nil {
-		t.Fatalf("expected mtime field, got %+v", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := mcpgo.CallToolRequest{}
+			req.Params.Arguments = tt.args
+			res, err := toolGetMemory(deps)(context.Background(), req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			var got map[string]any
+			decodeText(t, res, &got)
+			if got["workspace"] != tt.wantWorkspace || got["agent"] != "coder" || got["repo"] != "owner_one" || got["content"] != tt.wantContent {
+				t.Fatalf("unexpected memory payload: %+v", got)
+			}
+			if got["mtime"] == nil {
+				t.Fatalf("expected mtime field, got %+v", got)
+			}
+		})
 	}
 }
 
@@ -1004,7 +1270,7 @@ func TestToolGetConfigReturnsRedactedJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(textOf(t, res)), &got); err != nil {
 		t.Fatalf("config body is not valid JSON: %v", err)
 	}
-	for _, key := range []string{"backends", "agents", "skills", "repos"} {
+	for _, key := range []string{"backends", "prompts", "agents", "skills", "repos", "workspaces"} {
 		if _, ok := got[key]; !ok {
 			t.Errorf("config JSON missing %q: %+v", key, got)
 		}
@@ -1137,13 +1403,19 @@ func backendByName(t *testing.T, st *store.Store, name string) (fleet.Backend, b
 
 func repoByName(t *testing.T, st *store.Store, name string) (fleet.Repo, bool) {
 	t.Helper()
+	return repoByWorkspaceName(t, st, fleet.DefaultWorkspaceID, name)
+}
+
+func repoByWorkspaceName(t *testing.T, st *store.Store, workspace, name string) (fleet.Repo, bool) {
+	t.Helper()
 	repos, err := st.ReadRepos()
 	if err != nil {
 		t.Fatalf("read repos: %v", err)
 	}
 	key := fleet.NormalizeRepoName(name)
+	workspace = fleet.NormalizeWorkspaceID(workspace)
 	for _, r := range repos {
-		if r.Name == key {
+		if r.Name == key && fleet.NormalizeWorkspaceID(r.WorkspaceID) == workspace {
 			return r, true
 		}
 	}
@@ -1160,7 +1432,7 @@ func TestToolCreateAgentForwardsAndReturnsCanonical(t *testing.T) {
 	req.Params.Arguments = map[string]any{
 		"name":           "Linter",
 		"backend":        "claude",
-		"prompt":         "audit",
+		"prompt_ref":     "coder",
 		"description":    "audits code",
 		"skills":         []any{"security"},
 		"can_dispatch":   []any{"coder"},
@@ -1180,7 +1452,7 @@ func TestToolCreateAgentForwardsAndReturnsCanonical(t *testing.T) {
 	if !ok {
 		t.Fatal("linter not found in store after create_agent")
 	}
-	if persisted.Backend != "claude" || persisted.Prompt != "audit" {
+	if persisted.Backend != "claude" || persisted.PromptRef != "coder" {
 		t.Errorf("persisted agent missing fields: %+v", persisted)
 	}
 	if !persisted.AllowDispatch || len(persisted.CanDispatch) != 1 || persisted.CanDispatch[0] != "coder" {
@@ -1217,6 +1489,56 @@ func TestToolCreateAgentRequiresName(t *testing.T) {
 	}
 }
 
+func TestToolCreateAgentRejectsInlinePrompt(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":        "linter",
+		"backend":     "claude",
+		"prompt":      "audit",
+		"description": "audits code",
+	}
+
+	res, err := toolCreateAgent(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(textOf(t, res), "prompt bodies are import-only") {
+		t.Fatalf("expected inline prompt rejection, got error=%v body=%s", res.IsError, textOf(t, res))
+	}
+}
+
+func TestToolCreateAgentAcceptsPromptIDWithDerivedRef(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":        "linter",
+		"backend":     "claude",
+		"prompt_id":   "prompt_coder",
+		"prompt_ref":  "coder",
+		"description": "audits code",
+	}
+
+	res, err := toolCreateAgent(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected prompt id plus derived ref to be accepted, got body=%s", textOf(t, res))
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(textOf(t, res)), &got); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if got["prompt_ref"] != "coder" {
+		t.Fatalf("prompt_ref = %v, want coder", got["prompt_ref"])
+	}
+}
+
 func TestToolCreateAgentPropagatesError(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
@@ -1242,7 +1564,7 @@ func TestToolDeleteAgentNormalizesAndForwardsCascade(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
 	// Seed an extra agent that has no bindings, we can delete it without cascade.
-	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{Name: "linter", Backend: "claude", Prompt: "x", Description: "lints code"}); err != nil {
+	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{Name: "linter", Backend: "claude", PromptRef: "coder", Description: "lints code"}); err != nil {
 		t.Fatalf("seed linter: %v", err)
 	}
 
@@ -1639,6 +1961,48 @@ func TestToolCreateRepoForwardsAndReturnsCanonical(t *testing.T) {
 	}
 }
 
+func TestToolCreateRepoUsesWorkspace(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	if _, err := deps.Fleet.UpsertWorkspace(fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{
+		WorkspaceID: "team-a", Name: "coder", Backend: "claude", PromptRef: "coder",
+		Description: "team coder", Skills: []string{}, CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("seed team agent: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"workspace": "team-a",
+		"name":      "OWNER/Repo",
+		"enabled":   true,
+		"bindings": []any{
+			map[string]any{"agent": "coder", "labels": []any{"ready"}},
+		},
+	}
+	res, err := toolCreateRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", textOf(t, res))
+	}
+	if _, ok := repoByWorkspaceName(t, deps.Store, "team-a", "owner/repo"); !ok {
+		t.Fatal("team-a owner/repo missing after create")
+	}
+	if _, ok := repoByWorkspaceName(t, deps.Store, fleet.DefaultWorkspaceID, "owner/repo"); ok {
+		t.Fatal("default owner/repo should not be created by team-a request")
+	}
+	var got map[string]any
+	decodeText(t, res, &got)
+	if got["workspace_id"] != "team-a" {
+		t.Fatalf("response workspace_id = %v, want team-a", got["workspace_id"])
+	}
+}
+
 func TestToolCreateRepoRequiresName(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
@@ -1886,6 +2250,47 @@ func TestToolUpdateRepoTogglesEnabledPreservingBindings(t *testing.T) {
 	}
 }
 
+func TestToolUpdateRepoUsesWorkspace(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	if _, err := deps.Fleet.UpsertWorkspace(fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{
+		WorkspaceID: "team-a", Name: "coder", Backend: "claude", PromptRef: "coder",
+		Description: "team coder", Skills: []string{}, CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("seed team agent: %v", err)
+	}
+	if _, err := deps.Repos.UpsertRepo(fleet.Repo{WorkspaceID: "team-a", Name: "owner/one", Enabled: true}); err != nil {
+		t.Fatalf("seed team repo: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"workspace": "team-a", "name": "owner/one", "enabled": false}
+	res, err := toolUpdateRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", textOf(t, res))
+	}
+	teamRepo, ok := repoByWorkspaceName(t, deps.Store, "team-a", "owner/one")
+	if !ok {
+		t.Fatal("team-a owner/one missing")
+	}
+	if teamRepo.Enabled {
+		t.Fatal("team-a repo should be disabled")
+	}
+	defaultRepo, ok := repoByWorkspaceName(t, deps.Store, fleet.DefaultWorkspaceID, "owner/one")
+	if !ok {
+		t.Fatal("default owner/one missing")
+	}
+	if !defaultRepo.Enabled {
+		t.Fatal("default repo should remain enabled")
+	}
+}
+
 func TestToolUpdateRepoRequiresName(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
@@ -2044,6 +2449,66 @@ func TestToolCreateBindingForwardsAndReturnsID(t *testing.T) {
 	}
 }
 
+func TestToolBindingOperationsUseWorkspace(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	if _, err := deps.Fleet.UpsertWorkspace(fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{
+		WorkspaceID: "team-a", Name: "coder", Backend: "claude", PromptRef: "coder",
+		Description: "team coder", Skills: []string{}, CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("seed team agent: %v", err)
+	}
+	if _, err := deps.Repos.UpsertRepo(fleet.Repo{WorkspaceID: "team-a", Name: "owner/one", Enabled: true}); err != nil {
+		t.Fatalf("seed team repo: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"workspace": "team-a",
+		"repo":      "owner/one",
+		"agent":     "coder",
+		"labels":    []any{"team-ready"},
+	}
+	res, err := toolCreateBinding(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected create error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected create success, got error: %s", textOf(t, res))
+	}
+	teamRepo, ok := repoByWorkspaceName(t, deps.Store, "team-a", "owner/one")
+	if !ok {
+		t.Fatal("team-a owner/one missing")
+	}
+	if len(teamRepo.Use) != 1 {
+		t.Fatalf("team-a bindings = %d, want 1", len(teamRepo.Use))
+	}
+	id := teamRepo.Use[0].ID
+
+	getReq := mcpgo.CallToolRequest{}
+	getReq.Params.Arguments = map[string]any{"workspace": "team-a", "repo": "owner/one", "id": float64(id)}
+	res, err = toolGetBinding(deps)(context.Background(), getReq)
+	if err != nil {
+		t.Fatalf("unexpected get error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected get success, got error: %s", textOf(t, res))
+	}
+
+	wrongWorkspace := mcpgo.CallToolRequest{}
+	wrongWorkspace.Params.Arguments = map[string]any{"repo": "owner/one", "id": float64(id)}
+	res, err = toolGetBinding(deps)(context.Background(), wrongWorkspace)
+	if err != nil {
+		t.Fatalf("unexpected wrong-workspace get error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected wrong-workspace get to fail, got %+v", res)
+	}
+}
+
 func TestToolCreateBindingRequiresRepoAndAgent(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
@@ -2156,6 +2621,125 @@ func TestToolUpdateAgentForwardsPatch(t *testing.T) {
 	// Fields not in payload are preserved (description was set in seed).
 	if updated.Description != "writes code" {
 		t.Errorf("description should be preserved, got %q", updated.Description)
+	}
+}
+
+func TestToolUpdateAgentRejectsInlinePrompt(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":   "coder",
+		"prompt": "new body",
+	}
+	res, err := toolUpdateAgent(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(textOf(t, res), "prompt bodies are import-only") {
+		t.Fatalf("expected inline prompt rejection, got error=%v body=%s", res.IsError, textOf(t, res))
+	}
+}
+
+func TestToolUpdateAgentAcceptsPromptIDWithDerivedRef(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":       "coder",
+		"prompt_id":  "prompt_coder",
+		"prompt_ref": "coder",
+	}
+	res, err := toolUpdateAgent(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected prompt id plus derived ref to be accepted, got body=%s", textOf(t, res))
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(textOf(t, res)), &got); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if got["prompt_ref"] != "coder" {
+		t.Fatalf("prompt_ref = %v, want coder", got["prompt_ref"])
+	}
+}
+
+func TestToolUpdateAgentHonorsWorkspace(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	if _, err := deps.Fleet.UpsertWorkspace(fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{
+		WorkspaceID: "team-a",
+		Name:        "coder",
+		Backend:     "claude",
+		PromptRef:   "coder",
+		Description: "team coder",
+	}); err != nil {
+		t.Fatalf("seed team agent: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"workspace":   "team-a",
+		"name":        "coder",
+		"description": "team coder patched",
+	}
+	res, err := toolUpdateAgent(deps)(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("update_agent failed: err=%v body=%s", err, textOf(t, res))
+	}
+	team, ok := agentByNameInWorkspace(t, deps.Store, "coder", "team-a")
+	if !ok {
+		t.Fatal("team coder missing after update")
+	}
+	if team.Description != "team coder patched" {
+		t.Fatalf("team coder description = %q, want patched", team.Description)
+	}
+	def, ok := agentByNameInWorkspace(t, deps.Store, "coder", fleet.DefaultWorkspaceID)
+	if !ok {
+		t.Fatal("default coder missing after team update")
+	}
+	if def.Description != "writes code" {
+		t.Fatalf("default coder description = %q, want unchanged", def.Description)
+	}
+}
+
+func TestToolGetAgentHonorsWorkspace(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	if _, err := deps.Fleet.UpsertWorkspace(fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{
+		WorkspaceID: "team-a",
+		Name:        "coder",
+		Backend:     "claude",
+		PromptRef:   "coder",
+		Description: "team coder",
+	}); err != nil {
+		t.Fatalf("seed team agent: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"workspace": "team-a", "name": "coder"}
+	res, err := toolGetAgent(deps)(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("get_agent failed: err=%v body=%s", err, textOf(t, res))
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(textOf(t, res)), &got); err != nil {
+		t.Fatalf("decode get_agent response: %v", err)
+	}
+	if got["workspace_id"] != "team-a" || got["description"] != "team coder" {
+		t.Fatalf("get_agent response = %+v, want team-a coder", got)
 	}
 }
 

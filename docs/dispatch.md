@@ -43,7 +43,7 @@ The dispatched agent receives an `agent.dispatch` event with these payload field
 |-------|---------|----------|
 | `AGENTS_DISPATCH_MAX_DEPTH` | 3 | Maximum dispatch chain length. Requests that would exceed this are dropped with a warning. |
 | `AGENTS_DISPATCH_MAX_FANOUT` | 4 | Maximum number of dispatches a single agent run may enqueue. Additional requests are dropped. |
-| `AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS` | 300 | Suppress duplicate `(target, repo, number)` dispatch requests within this window (seconds). |
+| `AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS` | 300 | Suppress duplicate `(workspace, target, repo, number)` dispatch requests within this window (seconds). |
 
 All three fields must be positive integers; the daemon rejects non-positive values at startup.
 
@@ -58,7 +58,7 @@ Dispatcher checks:
   2. B has allow_dispatch: true
   3. B has a non-empty description
   4. depth <= max_depth, fanout <= max_fanout
-  5. (B, repo, 42) not seen within dedup_window_seconds
+  5. (workspace, B, repo, 42) not seen within dedup_window_seconds
     |
     v
 agent.dispatch event enqueued -> Agent B runs with inherited repo context and full payload
@@ -69,19 +69,28 @@ Dispatch chains work across both event-driven and cron paths, and the shared ded
 ## Config wiring
 
 ```yaml
-agents:
+prompts:
   - name: pr-reviewer
-    backend: claude
-    can_dispatch: [sec-reviewer]       # whitelist of targets
-    prompt: |
+    content: |
       Review the pull request for correctness and escalate specialist concerns when needed.
-
   - name: sec-reviewer
-    description: "Deep-dive security reviewer"
-    backend: claude
-    allow_dispatch: true               # opt-in to being dispatched
-    prompt: |
+    content: |
       Review the change for security risks and unsafe assumptions.
+
+workspaces:
+  - id: default
+    agents:
+      - name: pr-reviewer
+        description: "Reviews pull requests and escalates specialist concerns"
+        backend: claude
+        prompt_ref: pr-reviewer
+        can_dispatch: [sec-reviewer]   # whitelist of targets
+
+      - name: sec-reviewer
+        description: "Deep-dive security reviewer"
+        backend: claude
+        prompt_ref: sec-reviewer
+        allow_dispatch: true           # opt-in to being dispatched
 ```
 
 ## UI wiring editor

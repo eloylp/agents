@@ -6,7 +6,9 @@ import Modal from '@/components/Modal'
 import Link from 'next/link'
 import RepoFilter, { useRepoFilter } from '@/components/RepoFilter'
 import RunButton from '@/components/RunButton'
+import WorkspaceSelect from '@/components/WorkspaceSelect'
 import AgentForm, { emptyAgentForm, type BackendOption, type StoreAgent } from '@/components/AgentForm'
+import { useSelectedWorkspace, withWorkspace, type CatalogItem } from '@/lib/workspace'
 
 interface Binding {
   repo: string
@@ -31,6 +33,11 @@ interface Agent {
   can_dispatch?: string[]
   allow_prs: boolean
   allow_memory?: boolean
+  prompt_ref?: string
+  prompt_id?: string
+  prompt_scope?: string
+  scope_type?: string
+  scope_repo?: string
   current_status: string
   bindings?: Binding[]
 }
@@ -117,9 +124,12 @@ export default function FleetPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [backendOptions, setBackendOptions] = useState<BackendOption[]>([])
-  const [skillNames, setSkillNames] = useState<string[]>([])
+  const [skillOptions, setSkillOptions] = useState<CatalogItem[]>([])
   const [agentNames, setAgentNames] = useState<string[]>([])
+  const [promptOptions, setPromptOptions] = useState<CatalogItem[]>([])
+  const [repoNames, setRepoNames] = useState<string[]>([])
   const [repoFilter, setRepoFilter] = useRepoFilter()
+  const { workspace } = useSelectedWorkspace()
 
   const [modal, setModal] = useState<'create' | 'edit' | 'delete' | null>(null)
   const [selected, setSelected] = useState<StoreAgent>(emptyAgentForm)
@@ -135,18 +145,26 @@ export default function FleetPage() {
       .catch(() => {})
     fetch('/skills')
       .then(r => r.ok ? r.json() : [])
-      .then((data: { name: string }[]) => setSkillNames(data.map(s => s.name)))
+      .then((data: CatalogItem[]) => setSkillOptions(data ?? []))
       .catch(() => {})
-    fetch('/agents')
+    fetch(withWorkspace('/agents', workspace))
       .then(r => r.ok ? r.json() : [])
       .then((data: { name: string }[]) => setAgentNames(data.map(a => a.name)))
+      .catch(() => {})
+    fetch('/prompts')
+      .then(r => r.ok ? r.json() : [])
+      .then((data: CatalogItem[]) => setPromptOptions(data ?? []))
+      .catch(() => {})
+    fetch(withWorkspace('/repos', workspace))
+      .then(r => r.ok ? r.json() : [])
+      .then((data: { name: string }[]) => setRepoNames(data.map(r => r.name)))
       .catch(() => {})
   }
 
   const load = () => {
     if (!loadRef.current) setLoading(true)
     loadRef.current = true
-    fetch('/agents')
+    fetch(withWorkspace('/agents', workspace))
       .then(r => r.json())
       .then(data => { setAgents(data); setLoading(false) })
       .catch(e => { setError(String(e)); setLoading(false) })
@@ -157,7 +175,7 @@ export default function FleetPage() {
     loadLookups()
     const interval = setInterval(load, 5000)
     return () => clearInterval(interval)
-  }, [])
+  }, [workspace])
 
   const openEdit = async (agentName: string) => {
     setSaveError('')
@@ -167,7 +185,11 @@ export default function FleetPage() {
       backend: a?.backend ?? '',
       model: a?.model ?? '',
       skills: a?.skills ?? [],
-      prompt: '',
+      prompt_id: a?.prompt_id ?? '',
+      prompt_ref: a?.prompt_ref ?? '',
+      prompt_scope: a?.prompt_scope ?? '',
+      scope_type: a?.scope_type ?? 'workspace',
+      scope_repo: a?.scope_repo ?? '',
       allow_prs: a?.allow_prs ?? false,
       allow_dispatch: a?.allow_dispatch ?? false,
       allow_memory: a?.allow_memory ?? true,
@@ -176,7 +198,7 @@ export default function FleetPage() {
     })
     setModal('edit')
     try {
-      const res = await fetch(`/agents/${encodeURIComponent(agentName)}`)
+      const res = await fetch(withWorkspace(`/agents/${encodeURIComponent(agentName)}`, workspace))
       if (res.ok) {
         const data = await res.json() as Partial<StoreAgent>
         setSelected({
@@ -186,6 +208,11 @@ export default function FleetPage() {
           backend: data.backend ?? '',
           model: data.model ?? '',
           skills: data.skills ?? [],
+          prompt_ref: data.prompt_ref ?? '',
+          prompt_id: data.prompt_id ?? '',
+          prompt_scope: data.prompt_scope ?? '',
+          scope_type: data.scope_type ?? 'workspace',
+          scope_repo: data.scope_repo ?? '',
           can_dispatch: data.can_dispatch ?? [],
           // Treat absent/null as the documented default-true rather than
           // letting the spread above flip the toggle off in the form.
@@ -207,10 +234,10 @@ export default function FleetPage() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch('/agents', {
+      const res = await fetch(withWorkspace('/agents', workspace), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, workspace_id: workspace }),
       })
       if (!res.ok) {
         const msg = await res.text()
@@ -238,7 +265,7 @@ export default function FleetPage() {
     setSaving(true)
     try {
       const cascade = deleteTarget.bindings.length > 0
-      const url = `/agents/${encodeURIComponent(deleteTarget.name)}${cascade ? '?cascade=true' : ''}`
+      const url = withWorkspace(`/agents/${encodeURIComponent(deleteTarget.name)}${cascade ? '?cascade=true' : ''}`, workspace)
       const res = await fetch(url, { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         const msg = await res.text()
@@ -276,7 +303,8 @@ export default function FleetPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          <RepoFilter selected={repoFilter} onChange={setRepoFilter} />
+          <WorkspaceSelect compact />
+          <RepoFilter selected={repoFilter} onChange={setRepoFilter} workspace={workspace} />
           <Link href="/traces/" style={{ fontSize: '0.875rem', color: 'var(--accent)' }}>View traces →</Link>
           <button
             onClick={openCreate}
@@ -316,9 +344,12 @@ export default function FleetPage() {
             key={`${modal}:${selected.name}`}
             initial={selected}
             isNew={modal === 'create'}
+            workspace={workspace}
             backends={backendOptions}
-            skillNames={skillNames}
+            skillOptions={skillOptions}
             agentNames={agentNames}
+            promptOptions={promptOptions}
+            repoNames={repoNames}
             onSave={saveAgent}
             onCancel={() => setModal(null)}
             saving={saving}

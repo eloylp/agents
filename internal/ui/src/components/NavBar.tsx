@@ -15,6 +15,7 @@ const links = [
   { href: '/events/',  label: 'Events',  flow: true },
   { href: '/runners/', label: 'Runners', flow: true },
   { href: '/traces/',  label: 'Traces',  flow: true },
+  { href: '/prompts/', label: 'Prompts' },
   { href: '/skills/',  label: 'Skills' },
   { href: '/memory/',  label: 'Memory' },
   { href: '/repos/',   label: 'Repos' },

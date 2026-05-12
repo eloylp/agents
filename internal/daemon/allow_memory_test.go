@@ -95,8 +95,8 @@ func TestStoreCRUDAgentPatchAllowMemoryFlipsWithoutAffectingOtherFields(t *testi
 		t.Errorf("AllowMemory after patch: got %v, want non-nil &false", out.AllowMemory)
 	}
 	// Other fields must be preserved, patching one toggle should not
-	// disturb prompt, model, description, or backend.
-	if out.Backend != "claude" || out.Model != "opus" || out.Prompt != "p" || out.Description != "d" {
+	// disturb prompt_ref, model, description, or backend.
+	if out.Backend != "claude" || out.Model != "opus" || out.Prompt != "" || out.PromptRef != "coder" || out.Description != "d" {
 		t.Errorf("non-patched fields drifted: %+v", out)
 	}
 }

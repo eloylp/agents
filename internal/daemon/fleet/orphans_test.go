@@ -68,6 +68,9 @@ func TestComputeOrphanedAgents(t *testing.T) {
 	if orphans[0].Name != "coder" {
 		t.Fatalf("orphan name = %q, want %q", orphans[0].Name, "coder")
 	}
+	if orphans[0].WorkspaceID != fleet.DefaultWorkspaceID {
+		t.Fatalf("orphan workspace = %q, want %q", orphans[0].WorkspaceID, fleet.DefaultWorkspaceID)
+	}
 	if orphans[0].Backend != "claude" {
 		t.Fatalf("orphan backend = %q, want %q", orphans[0].Backend, "claude")
 	}
@@ -134,5 +137,49 @@ func TestComputeOrphanedAgentsIncludesDisabledRefs(t *testing.T) {
 	wantRepos := []string{"owner/active", "owner/halfway", "owner/paused"}
 	if !slices.Equal(orphans[0].Repos, wantRepos) {
 		t.Fatalf("repos = %v, want %v (all references including disabled)", orphans[0].Repos, wantRepos)
+	}
+}
+
+func TestComputeOrphanedAgentsScopesDuplicateNamesByWorkspace(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Daemon: config.DaemonConfig{
+			AIBackends: map[string]fleet.Backend{
+				"claude": {
+					Command: "claude",
+					Models:  []string{"claude-4"},
+				},
+			},
+		},
+		Agents: []fleet.Agent{
+			{Name: "coder", WorkspaceID: fleet.DefaultWorkspaceID, Backend: "claude", Model: "claude-3.5", Prompt: "default"},
+			{Name: "coder", WorkspaceID: "team-a", Backend: "claude", Model: "claude-3.5", Prompt: "team"},
+		},
+		Repos: []fleet.Repo{
+			{
+				Name:        "owner/default",
+				WorkspaceID: fleet.DefaultWorkspaceID,
+				Enabled:     true,
+				Use:         []fleet.Binding{{Agent: "coder", Labels: []string{"ai ready"}}},
+			},
+			{
+				Name:        "owner/team",
+				WorkspaceID: "team-a",
+				Enabled:     true,
+				Use:         []fleet.Binding{{Agent: "coder", Labels: []string{"ai ready"}}},
+			},
+		},
+	}
+
+	orphans := computeOrphanedAgents(cfg)
+	if len(orphans) != 2 {
+		t.Fatalf("len(orphans) = %d, want 2", len(orphans))
+	}
+	if orphans[0].WorkspaceID != fleet.DefaultWorkspaceID || !slices.Equal(orphans[0].Repos, []string{"owner/default"}) {
+		t.Fatalf("default orphan = %+v, want default workspace with owner/default only", orphans[0])
+	}
+	if orphans[1].WorkspaceID != "team-a" || !slices.Equal(orphans[1].Repos, []string{"owner/team"}) {
+		t.Fatalf("team orphan = %+v, want team-a workspace with owner/team only", orphans[1])
 	}
 }

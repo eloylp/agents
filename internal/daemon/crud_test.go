@@ -42,6 +42,13 @@ func seedStoreSkill(t *testing.T, s *daemon.Daemon, name string) {
 	}
 }
 
+func seedStorePrompt(t *testing.T, s *daemon.Daemon, name string) {
+	t.Helper()
+	if _, err := s.Store().UpsertPrompt(fleet.Prompt{Name: name, Content: "prompt body"}); err != nil {
+		t.Fatalf("seedStorePrompt %s: %v", name, err)
+	}
+}
+
 func doCRUDRequest(t *testing.T, s *daemon.Daemon, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	if method == http.MethodPost && path == "/agents" {
@@ -49,8 +56,32 @@ func doCRUDRequest(t *testing.T, s *daemon.Daemon, method, path string, body any
 			if _, exists := m["description"]; !exists {
 				m["description"] = "test agent"
 			}
+			if prompt, ok := m["prompt"].(string); ok && prompt != "" {
+				ref, _ := m["prompt_ref"].(string)
+				if ref == "" {
+					ref, _ = m["name"].(string)
+					ref = fleet.NormalizePromptName(ref)
+					m["prompt_ref"] = ref
+				}
+				seedStorePrompt(t, s, ref)
+				delete(m, "prompt")
+			}
 		}
 	}
+	var buf bytes.Buffer
+	if body != nil {
+		if err := json.NewEncoder(&buf).Encode(body); err != nil {
+			t.Fatalf("encode body: %v", err)
+		}
+	}
+	req := httptest.NewRequest(method, path, &buf)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	return rr
+}
+
+func doRawCRUDRequest(t *testing.T, s *daemon.Daemon, method, path string, body any) *httptest.ResponseRecorder {
+	t.Helper()
 	var buf bytes.Buffer
 	if body != nil {
 		if err := json.NewEncoder(&buf).Encode(body); err != nil {
@@ -162,6 +193,82 @@ func TestStoreCRUDAgentCreateAndGet(t *testing.T) {
 	rr = doCRUDRequest(t, s, http.MethodGet, "/agents/coder", nil)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET /agents/coder: got %d", rr.Code)
+	}
+}
+
+func TestStoreCRUDAgentCreateRejectsInlinePrompt(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+
+	rr := doRawCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "p",
+		"description": "coding agent", "skills": []string{}, "can_dispatch": []string{},
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("POST /agents inline prompt: got %d, want 400, %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "prompt bodies are import-only") {
+		t.Fatalf("error body = %q, want inline prompt rejection", rr.Body.String())
+	}
+}
+
+func TestStoreCRUDAgentCreateAcceptsPromptIDWithDerivedRef(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+	seedStorePrompt(t, s, "coder")
+
+	rr := doRawCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt_id": "prompt_coder", "prompt_ref": "coder",
+		"description": "coding agent", "skills": []string{}, "can_dispatch": []string{},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST /agents prompt id plus derived ref: got %d, want 200, %s", rr.Code, rr.Body.String())
+	}
+	var out storeAgentJSON
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode agent: %v", err)
+	}
+	if out.PromptRef != "coder" {
+		t.Fatalf("prompt_ref = %q, want derived coder", out.PromptRef)
+	}
+}
+
+func TestStoreCRUDAgentsListFiltersByWorkspace(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	seedStoreBackend(t, s, "claude")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/workspaces", map[string]any{
+		"id": "team-a", "name": "Team A",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	for _, body := range []map[string]any{
+		{"name": "default-reviewer", "backend": "claude", "prompt": "review default", "description": "default reviewer", "skills": []string{}, "can_dispatch": []string{}},
+		{"workspace_id": "team-a", "name": "team-reviewer", "backend": "claude", "prompt": "review team", "description": "team reviewer", "skills": []string{}, "can_dispatch": []string{}},
+	} {
+		if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", body); rr.Code != http.StatusOK {
+			t.Fatalf("seed agent %+v: got %d, %s", body, rr.Code, rr.Body.String())
+		}
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodGet, "/agents?workspace=team-a", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET team agents: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var agents []viewAgentJSON
+	if err := json.NewDecoder(rr.Body).Decode(&agents); err != nil {
+		t.Fatalf("decode agents: %v", err)
+	}
+	if len(agents) != 1 || agents[0].Name != "team-reviewer" || agents[0].WorkspaceID != "team-a" {
+		t.Fatalf("team agents = %+v, want only team-reviewer", agents)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodGet, "/agents/team-reviewer?workspace=default", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("GET team agent from default workspace: got %d, want 404", rr.Code)
 	}
 }
 
@@ -353,6 +460,345 @@ func TestStoreCRUDSkillCreateAndDelete(t *testing.T) {
 	rr = doCRUDRequest(t, s, http.MethodGet, "/skills/architect", nil)
 	if rr.Code != http.StatusNotFound {
 		t.Errorf("GET after delete: got %d, want 404", rr.Code)
+	}
+}
+
+// ── /prompts ────────────────────────────────────────────────────────
+
+func TestStoreCRUDPromptCreatePatchDelete(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
+		"name":        "release-notes",
+		"description": "Drafts releases",
+		"content":     "Summarize merged work.",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST prompt: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var created storePromptJSON
+	if err := json.NewDecoder(rr.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created: %v", err)
+	}
+	if created.ID != "prompt_release-notes" {
+		t.Fatalf("created ID = %q, want prompt_release-notes", created.ID)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/prompts/"+created.ID, map[string]any{
+		"description": "Updated",
+		"content":     "Write concise release notes.",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH prompt: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var patched storePromptJSON
+	if err := json.NewDecoder(rr.Body).Decode(&patched); err != nil {
+		t.Fatalf("decode patched: %v", err)
+	}
+	if patched.ID != created.ID || patched.Description != "Updated" || patched.Content != "Write concise release notes." {
+		t.Fatalf("patched prompt = %+v, want same id and updated fields", patched)
+	}
+	if patched.Name != "release-notes" {
+		t.Fatalf("patched prompt name = %q, want canonical release-notes", patched.Name)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodGet, "/prompts/"+created.ID, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET prompt: got %d", rr.Code)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/prompts/"+created.ID, nil)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("DELETE prompt: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodGet, "/prompts/release-notes", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("GET after delete: got %d, want 404", rr.Code)
+	}
+}
+
+func TestStoreCRUDPromptScopedDuplicatesUseStableID(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	for _, body := range []map[string]any{
+		{"workspace_id": "team-a", "name": "shared", "content": "Team prompt."},
+		{"workspace_id": "team-b", "name": "shared", "content": "Other prompt."},
+	} {
+		rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", body)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("POST prompt: got %d, %s", rr.Code, rr.Body.String())
+		}
+	}
+	rr := doCRUDRequest(t, s, http.MethodGet, "/prompts/prompt_team-a_shared", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET scoped prompt by id: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var got storePromptJSON
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode prompt: %v", err)
+	}
+	if got.WorkspaceID != "team-a" || got.Name != "shared" {
+		t.Fatalf("prompt by id = %+v, want team-a/shared", got)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/prompts/prompt_team-b_shared", map[string]any{"content": "Updated other prompt."})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH scoped prompt by id: got %d, %s", rr.Code, rr.Body.String())
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode patched prompt: %v", err)
+	}
+	if got.WorkspaceID != "team-b" || got.Content != "Updated other prompt." {
+		t.Fatalf("patched prompt = %+v, want team-b updated", got)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/prompts/prompt_team-a_shared", nil)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("DELETE scoped prompt by id: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodGet, "/prompts/prompt_team-b_shared", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET remaining scoped prompt: got %d", rr.Code)
+	}
+}
+
+func TestStoreCRUDPromptDeleteReferencedByAgent(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	seedStoreBackend(t, s, "claude")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "p",
+		"description": "coding agent", "skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed agent: got %d, %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodDelete, "/prompts/coder", nil)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("DELETE referenced prompt: got %d, want 409, %s", rr.Code, rr.Body.String())
+	}
+}
+
+// ── /workspaces ────────────────────────────────────────────────────────
+
+func TestStoreCRUDWorkspaceCreatePatchDelete(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	rr := doCRUDRequest(t, s, http.MethodPost, "/workspaces", map[string]any{
+		"name":        "Team A",
+		"description": "Product workspace",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var created storeWorkspaceJSON
+	if err := json.NewDecoder(rr.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created workspace: %v", err)
+	}
+	if created.ID != "team-a" || created.Name != "Team A" || created.Description != "Product workspace" {
+		t.Fatalf("created workspace = %+v, want derived id and fields", created)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/workspaces/team-a", map[string]any{
+		"description": "Updated",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var patched storeWorkspaceJSON
+	if err := json.NewDecoder(rr.Body).Decode(&patched); err != nil {
+		t.Fatalf("decode patched workspace: %v", err)
+	}
+	if patched.ID != created.ID || patched.Description != "Updated" {
+		t.Fatalf("patched workspace = %+v, want same id and updated description", patched)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodGet, "/workspaces/Team%20A", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET workspace by name: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodDelete, "/workspaces/team-a", nil)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("DELETE workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodGet, "/workspaces/team-a", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("GET deleted workspace: got %d, want 404", rr.Code)
+	}
+}
+
+func TestStoreCRUDWorkspaceDeleteDefaultRejected(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	rr := doCRUDRequest(t, s, http.MethodDelete, "/workspaces/default", nil)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("DELETE default workspace: got %d, want 409, %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestStoreCRUDWorkspaceLookupPrefersIDOverNameCollision(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	for _, body := range []map[string]any{
+		{"id": "foo", "name": "Zulu"},
+		{"id": "bar", "name": "foo"},
+	} {
+		if rr := doCRUDRequest(t, s, http.MethodPost, "/workspaces", body); rr.Code != http.StatusOK {
+			t.Fatalf("seed workspace %+v: got %d, %s", body, rr.Code, rr.Body.String())
+		}
+	}
+	rr := doCRUDRequest(t, s, http.MethodGet, "/workspaces/foo", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /workspaces/foo: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var got storeWorkspaceJSON
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode workspace: %v", err)
+	}
+	if got.ID != "foo" || got.Name != "Zulu" {
+		t.Fatalf("GET /workspaces/foo = %+v, want id match foo/Zulu", got)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodGet, "/workspaces/foo/guardrails", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /workspaces/foo/guardrails: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var refs []workspaceGuardrailJSON
+	if err := json.NewDecoder(rr.Body).Decode(&refs); err != nil {
+		t.Fatalf("decode guardrails: %v", err)
+	}
+	if len(refs) == 0 || refs[0].WorkspaceID != "foo" {
+		t.Fatalf("guardrails workspace = %+v, want workspace_id foo", refs)
+	}
+}
+
+func TestStoreCRUDWorkspaceGuardrailsReplace(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/workspaces", map[string]any{
+		"id":   "team-a",
+		"name": "Team A",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodGet, "/workspaces/team-a/guardrails", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET inherited workspace guardrails: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var inherited []workspaceGuardrailJSON
+	if err := json.NewDecoder(rr.Body).Decode(&inherited); err != nil {
+		t.Fatalf("decode inherited guardrails: %v", err)
+	}
+	if len(inherited) == 0 {
+		t.Fatal("inherited guardrails are empty, want built-in references")
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPut, "/workspaces/team-a/guardrails", []map[string]any{
+		{"guardrail_name": "security", "position": 10, "enabled": true},
+		{"guardrail_name": "memory-scope", "position": 20, "enabled": false},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PUT workspace guardrails: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var updated []workspaceGuardrailJSON
+	if err := json.NewDecoder(rr.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode updated guardrails: %v", err)
+	}
+	if len(updated) != 2 {
+		t.Fatalf("updated guardrails len = %d, want 2", len(updated))
+	}
+	if updated[0].GuardrailName != "security" || updated[0].Position != 10 || !updated[0].Enabled {
+		t.Fatalf("updated[0] = %+v, want enabled security at position 10", updated[0])
+	}
+	if updated[1].GuardrailName != "memory-scope" || updated[1].Position != 20 || updated[1].Enabled {
+		t.Fatalf("updated[1] = %+v, want disabled memory-scope at position 20", updated[1])
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPut, "/workspaces/team-a/guardrails", []map[string]any{
+		{"guardrail_name": "missing", "enabled": true},
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("PUT unknown workspace guardrail: got %d, want 400, %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestStoreCRUDWorkspaceGuardrailsPreserveExplicitZeroPosition(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/workspaces", map[string]any{
+		"id":   "team-a",
+		"name": "Team A",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr := doCRUDRequest(t, s, http.MethodPut, "/workspaces/team-a/guardrails", []map[string]any{
+		{"guardrail_name": "security", "position": 5, "enabled": true},
+		{"guardrail_name": "memory-scope", "position": 0, "enabled": true},
+		{"guardrail_name": "mcp-tool-usage", "enabled": true},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PUT workspace guardrails: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var refs []workspaceGuardrailJSON
+	if err := json.NewDecoder(rr.Body).Decode(&refs); err != nil {
+		t.Fatalf("decode guardrails: %v", err)
+	}
+	if len(refs) != 3 {
+		t.Fatalf("guardrails len = %d, want 3", len(refs))
+	}
+	if refs[0].GuardrailName != "memory-scope" || refs[0].Position != 0 {
+		t.Fatalf("refs[0] = %+v, want explicit position 0 memory-scope", refs[0])
+	}
+	if refs[1].GuardrailName != "mcp-tool-usage" || refs[1].Position != 2 {
+		t.Fatalf("refs[1] = %+v, want omitted position defaulted to request index 2", refs[1])
+	}
+	if refs[2].GuardrailName != "security" || refs[2].Position != 5 {
+		t.Fatalf("refs[2] = %+v, want security at position 5", refs[2])
+	}
+}
+
+func TestStoreCRUDReposListFiltersByWorkspace(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/workspaces", map[string]any{
+		"id": "team-a", "name": "Team A",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	for _, body := range []map[string]any{
+		{"name": "owner/default", "enabled": true, "bindings": []map[string]any{}},
+		{"workspace_id": "team-a", "name": "owner/team", "enabled": true, "bindings": []map[string]any{}},
+	} {
+		if rr := doCRUDRequest(t, s, http.MethodPost, "/repos", body); rr.Code != http.StatusOK {
+			t.Fatalf("seed repo %+v: got %d, %s", body, rr.Code, rr.Body.String())
+		}
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodGet, "/repos?workspace=team-a", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET team repos: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var repos []storeRepoJSON
+	if err := json.NewDecoder(rr.Body).Decode(&repos); err != nil {
+		t.Fatalf("decode repos: %v", err)
+	}
+	if len(repos) != 1 || repos[0].Name != "owner/team" || repos[0].WorkspaceID != "team-a" {
+		t.Fatalf("team repos = %+v, want only owner/team", repos)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodGet, "/repos/owner/team?workspace=default", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("GET team repo from default workspace: got %d, want 404", rr.Code)
 	}
 }
 
@@ -1481,7 +1927,7 @@ func TestStoreCRUDPostReturnsCanonicalForm(t *testing.T) {
 	}
 	// ── agent ────────────────────────────────────────────────────────────────
 	// POST with mixed-case name and extra whitespace; response must have
-	// lowercase name and trimmed prompt.
+	// lowercase name and an explicit prompt_ref.
 	rr = doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
 		"name":    "  Coder  ",
 		"backend": "claude",
@@ -1497,8 +1943,11 @@ func TestStoreCRUDPostReturnsCanonicalForm(t *testing.T) {
 	if agent["name"] != "coder" {
 		t.Errorf("agent name: got %q, want %q", agent["name"], "coder")
 	}
-	if agent["prompt"] != "You write code." {
-		t.Errorf("agent prompt not trimmed: got %q", agent["prompt"])
+	if prompt, ok := agent["prompt"].(string); ok && prompt != "" {
+		t.Errorf("agent prompt field: got %q, want omitted or empty", prompt)
+	}
+	if agent["prompt_ref"] != "coder" {
+		t.Errorf("agent prompt fields: got prompt=%q prompt_ref=%q, want empty prompt and coder ref", agent["prompt"], agent["prompt_ref"])
 	}
 
 	// ── skill ────────────────────────────────────────────────────────────────
@@ -1699,8 +2148,13 @@ func TestStoreExportReturnsYAML(t *testing.T) {
 		t.Fatalf("export: got %d, %s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	if !strings.Contains(body, "coder") {
-		t.Errorf("export YAML missing agent name: %s", body)
+	for _, want := range []string{"prompts:", "workspaces:", "prompt_ref: coder", "guardrails:", "coder"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("export YAML missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "agents:\n    -") && strings.Contains(body, "prompt: help") {
+		t.Errorf("export nested agent includes inline prompt content: %s", body)
 	}
 	if !strings.Contains(body, "owner/repo") {
 		t.Errorf("export YAML missing repo name: %s", body)
@@ -1708,6 +2162,80 @@ func TestStoreExportReturnsYAML(t *testing.T) {
 	ct := rr.Header().Get("Content-Type")
 	if !strings.Contains(ct, "yaml") {
 		t.Errorf("export Content-Type want yaml, got %q", ct)
+	}
+}
+
+func TestStoreImportWorkspaceShape(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	yamlBody := `backends:
+  claude:
+    command: claude
+prompts:
+  - name: imported-prompt
+    content: imported prompt
+skills: {}
+workspaces:
+  - id: team-a
+    name: Team A
+    guardrails:
+      - guardrail_name: security
+        enabled: true
+    agents:
+      - name: imported-agent
+        backend: claude
+        prompt_ref: imported-prompt
+        description: imported agent
+        skills: []
+        can_dispatch: []
+        scope_type: repo
+        scope_repo: owner/new-repo
+    repos:
+      - name: owner/new-repo
+        enabled: true
+        use:
+          - agent: imported-agent
+            labels: [ai:run]
+    token_budgets:
+      - scope_kind: workspace+agent
+        agent: imported-agent
+        period: monthly
+        cap_tokens: 100000
+        alert_at_pct: 80
+        enabled: true
+`
+	req := httptest.NewRequest(http.MethodPost, "/import?mode=replace", strings.NewReader(yamlBody))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("workspace import: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var summary map[string]int
+	if err := json.NewDecoder(rr.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if summary["workspaces"] != 1 || summary["prompts"] != 1 || summary["agents"] != 1 || summary["repos"] != 1 || summary["token_budgets"] != 1 {
+		t.Fatalf("summary = %+v, want one imported workspace/prompt/agent/repo/budget", summary)
+	}
+
+	agents := doCRUDRequest(t, s, http.MethodGet, "/agents?workspace=team-a", nil)
+	if !strings.Contains(agents.Body.String(), "imported-agent") || !strings.Contains(agents.Body.String(), "imported-prompt") {
+		t.Fatalf("workspace agent missing after import: %s", agents.Body.String())
+	}
+	defaultAgents := doCRUDRequest(t, s, http.MethodGet, "/agents", nil)
+	if strings.Contains(defaultAgents.Body.String(), "imported-agent") {
+		t.Fatalf("workspace agent leaked into default workspace listing: %s", defaultAgents.Body.String())
+	}
+	exported := doCRUDRequest(t, s, http.MethodGet, "/export", nil)
+	if exported.Code != http.StatusOK {
+		t.Fatalf("export after workspace import: got %d, %s", exported.Code, exported.Body.String())
+	}
+	for _, want := range []string{"workspaces:", "id: team-a", "prompts:", "prompt_ref: imported-prompt", "workspace+agent"} {
+		if !strings.Contains(exported.Body.String(), want) {
+			t.Errorf("export after import missing %q: %s", want, exported.Body.String())
+		}
 	}
 }
 
@@ -2049,7 +2577,7 @@ func TestStoreCRUDAgentPatchSingleField(t *testing.T) {
 	if out.Backend != "codex" {
 		t.Fatalf("backend: got %q, want %q", out.Backend, "codex")
 	}
-	if out.Model != "opus" || out.Prompt != "p" || out.Description != "d" {
+	if out.Model != "opus" || out.Prompt != "" || out.PromptRef != "coder" || out.Description != "d" {
 		t.Fatalf("non-patched fields drifted: %+v", out)
 	}
 }
@@ -2073,9 +2601,60 @@ func TestStoreCRUDAgentPatchNotFound(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 	if rr := doCRUDRequest(t, s, http.MethodPatch, "/agents/missing", map[string]any{
-		"prompt": "new",
+		"description": "new",
 	}); rr.Code != http.StatusNotFound {
 		t.Fatalf("PATCH missing: got %d, want 404", rr.Code)
+	}
+}
+
+func TestStoreCRUDAgentPatchRejectsInlinePrompt(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+	seedStorePrompt(t, s, "coder")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt_ref": "coder",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed: %s", rr.Body.String())
+	}
+
+	rr := doRawCRUDRequest(t, s, http.MethodPatch, "/agents/coder", map[string]any{
+		"prompt": "new body",
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH /agents/coder inline prompt: got %d, want 400, %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "prompt bodies are import-only") {
+		t.Fatalf("error body = %q, want inline prompt rejection", rr.Body.String())
+	}
+}
+
+func TestStoreCRUDAgentPatchAcceptsPromptIDWithDerivedRef(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+	seedStorePrompt(t, s, "coder")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt_ref": "coder",
+		"skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed: %s", rr.Body.String())
+	}
+
+	rr := doRawCRUDRequest(t, s, http.MethodPatch, "/agents/coder", map[string]any{
+		"prompt_id":  "prompt_coder",
+		"prompt_ref": "coder",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH /agents/coder prompt id plus derived ref: got %d, want 200, %s", rr.Code, rr.Body.String())
+	}
+	var out storeAgentJSON
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode agent: %v", err)
+	}
+	if out.PromptRef != "coder" {
+		t.Fatalf("prompt_ref = %q, want derived coder", out.PromptRef)
 	}
 }
 
@@ -2098,7 +2677,69 @@ func TestStoreCRUDAgentPatchValidationFailsFast(t *testing.T) {
 	}
 }
 
-// ── PATCH /skills/{name} ────────────────────────────────────────────
+func TestStoreCRUDAgentPatchRejectsWorkspaceMove(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/workspaces", map[string]any{
+		"id": "team-a", "name": "Team A",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"name": "coder", "backend": "claude", "prompt": "p",
+		"description": "default coder", "skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed agent: got %d, %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodPatch, "/agents/coder", map[string]any{
+		"workspace_id": "team-a",
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("workspace move patch: got %d, want 400, %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestStoreCRUDAgentPatchHonorsWorkspaceQuery(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/workspaces", map[string]any{
+		"id": "team-a", "name": "Team A",
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	if rr := doCRUDRequest(t, s, http.MethodPost, "/agents", map[string]any{
+		"workspace_id": "team-a", "name": "team-coder", "backend": "claude", "prompt": "p",
+		"description": "team coder", "skills": []string{}, "can_dispatch": []string{},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("seed team agent: got %d, %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodPatch, "/agents/team-coder?workspace=default", map[string]any{
+		"description": "wrong workspace",
+	})
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("patch from wrong workspace: got %d, want 404, %s", rr.Code, rr.Body.String())
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/agents/team-coder?workspace=team-a", map[string]any{
+		"description": "updated team coder",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("patch from matching workspace: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var out storeAgentJSON
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.WorkspaceID != "team-a" || out.Description != "updated team coder" {
+		t.Fatalf("patched agent = %+v, want team-a updated description", out)
+	}
+}
+
+// ── PATCH /skills/{id} ──────────────────────────────────────────────
 
 func TestStoreCRUDSkillPatchPrompt(t *testing.T) {
 	t.Parallel()

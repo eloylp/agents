@@ -1,0 +1,112 @@
+'use client'
+
+import { useEffect, useMemo, useState } from 'react'
+
+export interface Workspace {
+  id: string
+  name: string
+  description?: string
+}
+
+export interface CatalogItem {
+  id?: string
+  scope?: string
+  workspace_id?: string
+  repo?: string
+  name: string
+}
+
+const storageKey = 'agents.workspace'
+export const defaultWorkspaceID = 'default'
+
+export function workspaceQuery(workspace: string): string {
+  const id = workspace.trim() || defaultWorkspaceID
+  return `workspace=${encodeURIComponent(id)}`
+}
+
+export function withWorkspace(path: string, workspace: string): string {
+  const separator = path.includes('?') ? '&' : '?'
+  return `${path}${separator}${workspaceQuery(workspace)}`
+}
+
+export function visibleCatalogItems<T extends CatalogItem>(items: T[], workspace: string, repo = ''): T[] {
+  const workspaceID = (workspace || defaultWorkspaceID).trim()
+  const repoName = repo.trim()
+  return items.filter(item => {
+    const itemWorkspace = (item.workspace_id ?? '').trim()
+    const itemRepo = (item.repo ?? '').trim()
+    if (!itemWorkspace && !itemRepo) return true
+    if (itemWorkspace !== workspaceID) return false
+    return !itemRepo || (repoName !== '' && itemRepo === repoName)
+  })
+}
+
+export function catalogValue(item: CatalogItem): string {
+  return item.id || item.name
+}
+
+export function catalogScope(item: CatalogItem): string {
+  if (item.scope) return item.scope
+  if (item.repo) return `${item.workspace_id || defaultWorkspaceID}/${item.repo}`
+  return item.workspace_id || 'global'
+}
+
+export function catalogLabel(item: CatalogItem): string {
+  const value = catalogValue(item)
+  const scope = catalogScope(item)
+  return value === item.name ? `${item.name} (${scope})` : `${item.name} (${value}, ${scope})`
+}
+
+export function useSelectedWorkspace() {
+  const [workspace, setWorkspaceState] = useState(defaultWorkspaceID)
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [workspaceNotice, setWorkspaceNotice] = useState('')
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem(storageKey)
+    if (stored) setWorkspaceState(stored)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/workspaces', { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : [])
+      .then((data: Workspace[]) => {
+        if (cancelled) return
+        const rows = data ?? []
+        setWorkspaces(rows)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    if (workspaces.length === 0 || workspaces.some(w => w.id === workspace)) {
+      return
+    }
+    const next = workspaces[0].id
+    setWorkspaceNotice(`Workspace ${workspace} is no longer available. Switched to ${workspaces[0].name}.`)
+    setWorkspaceState(next)
+    window.localStorage.setItem(storageKey, next)
+    window.dispatchEvent(new CustomEvent('agents:workspace', { detail: next }))
+  }, [workspace, workspaces])
+
+  const setWorkspace = (next: string) => {
+    const id = next || defaultWorkspaceID
+    setWorkspaceNotice('')
+    setWorkspaceState(id)
+    window.localStorage.setItem(storageKey, id)
+    window.dispatchEvent(new CustomEvent('agents:workspace', { detail: id }))
+  }
+
+  useEffect(() => {
+    const onChange = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail
+      if (detail) setWorkspaceState(detail)
+    }
+    window.addEventListener('agents:workspace', onChange)
+    return () => window.removeEventListener('agents:workspace', onChange)
+  }, [])
+
+  return useMemo(() => ({ workspace, workspaces, workspaceNotice, setWorkspace }), [workspace, workspaces, workspaceNotice])
+}

@@ -4,7 +4,9 @@ import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import GuardrailsManager from '@/components/GuardrailsManager'
 import RepoFilter from '@/components/RepoFilter'
+import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { AuthTokenSettings } from '@/lib/auth'
+import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
 type Config = Record<string, unknown>
 
@@ -38,6 +40,7 @@ interface ToolStatus {
 }
 
 interface OrphanedAgent {
+  workspace_id: string
   name: string
   backend: string
   model: string
@@ -55,10 +58,18 @@ interface Agent {
   backend?: string
 }
 
+interface Repo {
+  name: string
+}
+
 interface TokenBudget {
   id: number
   scope_kind: string
   scope_name: string
+  workspace_id?: string
+  repo?: string
+  agent?: string
+  backend?: string
   period: string
   cap_tokens: number
   alert_at_pct: number
@@ -163,6 +174,45 @@ const toolDisplayName = (name: string) => {
   }
 }
 
+const newBudgetForm = (workspace: string) => ({
+  scope_kind: 'global',
+  workspace_id: workspace,
+  repo: '',
+  agent: '',
+  backend: '',
+  period: 'daily',
+  cap_tokens: 100000,
+  alert_at_pct: 80,
+  enabled: true,
+})
+
+const budgetScopeLabel = (b: TokenBudget) => {
+  switch (b.scope_kind) {
+    case 'global':
+      return 'Global'
+    case 'workspace':
+      return `workspace: ${b.workspace_id || b.scope_name}`
+    case 'repo':
+      return `repo: ${b.repo || b.scope_name}`
+    case 'agent':
+      return `agent: ${b.agent || b.scope_name}`
+    case 'backend':
+      return `backend: ${b.backend || b.scope_name}`
+    case 'workspace+repo':
+      return `${b.workspace_id} / ${b.repo}`
+    case 'workspace+agent':
+      return `${b.workspace_id} / ${b.agent}`
+    case 'workspace+backend':
+      return `${b.workspace_id} / ${b.backend}`
+    case 'workspace+repo+agent':
+      return `${b.workspace_id} / ${b.repo} / ${b.agent}`
+    default:
+      return b.scope_name ? `${b.scope_kind}: ${b.scope_name}` : b.scope_kind
+  }
+}
+
+const orphanKey = (orphan: OrphanedAgent) => `${orphan.workspace_id || 'default'}:${orphan.name}`
+
 function JsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
   if (value === null) return <span style={{ color: 'var(--text-muted)' }}>null</span>
   if (typeof value === 'boolean') return <span style={{ color: '#f59e0b' }}>{String(value)}</span>
@@ -209,6 +259,7 @@ function JsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
 }
 
 export default function ConfigPage() {
+  const { workspace } = useSelectedWorkspace()
   const [orphanFocus, setOrphanFocus] = useState(false)
   const [config, setConfig] = useState<Config | null>(null)
   const [loading, setLoading] = useState(true)
@@ -219,6 +270,7 @@ export default function ConfigPage() {
   const [backends, setBackends] = useState<Backend[]>([])
   const [tools, setTools] = useState<ToolStatus[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
+  const [repos, setRepos] = useState<Repo[]>([])
   const [backendsLoading, setBackendsLoading] = useState(false)
   const [backendDriftWarnings, setBackendDriftWarnings] = useState<string[]>([])
   const [orphanedAgents, setOrphanedAgents] = useState<OrphanedAgent[]>([])
@@ -252,7 +304,7 @@ export default function ConfigPage() {
   const [editBudget, setEditBudget] = useState<TokenBudget | null>(null)
   const [deleteBudgetTarget, setDeleteBudgetTarget] = useState<TokenBudget | null>(null)
   const [budgetSaving, setBudgetSaving] = useState(false)
-  const [budgetForm, setBudgetForm] = useState({ scope_kind: 'global', scope_name: '', period: 'daily', cap_tokens: 100000, alert_at_pct: 80, enabled: true })
+  const [budgetForm, setBudgetForm] = useState({ scope_kind: 'global', workspace_id: workspace, repo: '', agent: '', backend: '', period: 'daily', cap_tokens: 100000, alert_at_pct: 80, enabled: true })
 
   const sortBackends = (list: Backend[]) => {
     const rank = (name: string) => {
@@ -316,7 +368,7 @@ export default function ConfigPage() {
           const next: Record<string, string> = {}
           for (const orphan of orphanAgents) {
             const suggested = orphan.available_models?.[0] ?? ''
-            next[orphan.name] = prev[orphan.name] ?? suggested
+            next[orphanKey(orphan)] = prev[orphanKey(orphan)] ?? suggested
           }
           return next
         })
@@ -453,34 +505,36 @@ export default function ConfigPage() {
     setSaving(false)
   }
 
-  const upsertAgentModel = async (agentName: string, model: string) => {
-    const readRes = await fetch(`/agents/${encodeURIComponent(agentName)}`)
+  const upsertAgentModel = async (orphan: OrphanedAgent, model: string) => {
+    const targetWorkspace = orphan.workspace_id || 'default'
+    const readRes = await fetch(withWorkspace(`/agents/${encodeURIComponent(orphan.name)}`, targetWorkspace))
     if (!readRes.ok) {
-      throw new Error((await readRes.text()) || `Failed to load agent ${agentName}`)
+      throw new Error((await readRes.text()) || `Failed to load agent ${orphan.name} in ${targetWorkspace}`)
     }
     const agent = await readRes.json() as Record<string, unknown>
     agent.model = model
+    agent.workspace_id = targetWorkspace
 
-    const writeRes = await fetch('/agents', {
+    const writeRes = await fetch(withWorkspace('/agents', targetWorkspace), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(agent),
     })
     if (!writeRes.ok) {
-      throw new Error((await writeRes.text()) || `Failed to update agent ${agentName}`)
+      throw new Error((await writeRes.text()) || `Failed to update agent ${orphan.name} in ${targetWorkspace}`)
     }
   }
 
-  const saveOrphanModel = async (agentName: string) => {
-    const model = (orphanModelSelection[agentName] ?? '').trim()
+  const saveOrphanModel = async (orphan: OrphanedAgent) => {
+    const model = (orphanModelSelection[orphanKey(orphan)] ?? '').trim()
     if (!model) {
-      setSaveError(`Select a model for ${agentName} first`)
+      setSaveError(`Select a model for ${orphan.name} first`)
       return
     }
     setSaving(true)
     setSaveError('')
     try {
-      await upsertAgentModel(agentName, model)
+      await upsertAgentModel(orphan, model)
       loadBackends()
     } catch (e) {
       setSaveError(String(e))
@@ -488,11 +542,11 @@ export default function ConfigPage() {
     setSaving(false)
   }
 
-  const clearOrphanModel = async (agentName: string) => {
+  const clearOrphanModel = async (orphan: OrphanedAgent) => {
     setSaving(true)
     setSaveError('')
     try {
-      await upsertAgentModel(agentName, '')
+      await upsertAgentModel(orphan, '')
       loadBackends()
     } catch (e) {
       setSaveError(String(e))
@@ -505,7 +559,7 @@ export default function ConfigPage() {
     setSaving(true)
     setSaveError('')
     try {
-      const results = await Promise.allSettled(orphanedAgents.map(orphan => upsertAgentModel(orphan.name, '')))
+      const results = await Promise.allSettled(orphanedAgents.map(orphan => upsertAgentModel(orphan, '')))
       const failed = results.filter(r => r.status === 'rejected')
       if (failed.length > 0) {
         setSaveError(`Cleared ${orphanedAgents.length - failed.length}/${orphanedAgents.length} orphaned agents. Some updates failed.`)
@@ -569,7 +623,7 @@ export default function ConfigPage() {
     try {
       const params = new URLSearchParams({ period })
       if (repo) params.set('repo', repo)
-      const res = await fetch(`/token_leaderboard?${params}`)
+      const res = await fetch(withWorkspace(`/token_leaderboard?${params}`, workspace))
       if (!res.ok) throw new Error((await res.text()) || 'Failed to load leaderboard')
       const data = await res.json() as LeaderboardEntry[] | null
       setLeaderboard(data ?? [])
@@ -581,7 +635,7 @@ export default function ConfigPage() {
 
   const loadBudgetScopeOptions = async () => {
     try {
-      const [backendRes, agentRes] = await Promise.all([fetch('/backends'), fetch('/agents')])
+      const [backendRes, agentRes, repoRes] = await Promise.all([fetch('/backends'), fetch(withWorkspace('/agents', workspace)), fetch(withWorkspace('/repos', workspace))])
       if (backendRes.ok) {
         const backendData = await backendRes.json() as Backend[] | null
         setBackends(sortBackends(backendData ?? []))
@@ -589,6 +643,10 @@ export default function ConfigPage() {
       if (agentRes.ok) {
         const agentData = await agentRes.json() as Agent[] | null
         setAgents((agentData ?? []).slice().sort((a, b) => a.name.localeCompare(b.name)))
+      }
+      if (repoRes.ok) {
+        const repoData = await repoRes.json() as Repo[] | null
+        setRepos((repoData ?? []).slice().sort((a, b) => a.name.localeCompare(b.name)))
       }
     } catch {
       // Keep any already-loaded options; validation still happens server-side.
@@ -601,7 +659,11 @@ export default function ConfigPage() {
     try {
       const body = JSON.stringify({
         ...budgetForm,
-        scope_name: budgetForm.scope_kind === 'global' ? '' : budgetForm.scope_name.trim(),
+        workspace_id: budgetForm.scope_kind.includes('workspace') ? budgetForm.workspace_id.trim() : '',
+        repo: budgetForm.scope_kind.includes('repo') ? budgetForm.repo.trim() : '',
+        agent: budgetForm.scope_kind.includes('agent') ? budgetForm.agent.trim() : '',
+        backend: budgetForm.scope_kind.includes('backend') ? budgetForm.backend.trim() : '',
+        scope_name: '',
         cap_tokens: Number(budgetForm.cap_tokens),
         alert_at_pct: Number(budgetForm.alert_at_pct),
       })
@@ -622,7 +684,7 @@ export default function ConfigPage() {
       if (!res.ok) throw new Error((await res.text()) || 'Failed to save budget')
       setCreateBudgetOpen(false)
       setEditBudget(null)
-      setBudgetForm({ scope_kind: 'global', scope_name: '', period: 'daily', cap_tokens: 100000, alert_at_pct: 80, enabled: true })
+      setBudgetForm(newBudgetForm(workspace))
       await loadBudgets()
     } catch (e) {
       setBudgetError(String(e))
@@ -651,11 +713,11 @@ export default function ConfigPage() {
       loadLeaderboard(lbPeriod, lbRepo)
       loadBudgetScopeOptions()
     }
-  }, [tab])
+  }, [tab, workspace])
 
   useEffect(() => {
     if (tab === 'tokens') loadLeaderboard(lbPeriod, lbRepo)
-  }, [lbPeriod, lbRepo])
+  }, [lbPeriod, lbRepo, workspace])
 
   const tabStyle = (t: string): React.CSSProperties => ({
     padding: '6px 16px', borderRadius: '6px 6px 0 0', cursor: 'pointer', fontSize: '0.875rem',
@@ -666,16 +728,21 @@ export default function ConfigPage() {
     marginBottom: '-1px',
   })
 
-  const budgetScopeOptions = budgetForm.scope_kind === 'backend'
-    ? backends.map(b => b.name)
-    : budgetForm.scope_kind === 'agent'
-      ? agents.map(a => a.name)
-      : []
-  const budgetScopeOptionsWithCurrent = budgetForm.scope_name && !budgetScopeOptions.includes(budgetForm.scope_name)
-    ? [budgetForm.scope_name, ...budgetScopeOptions]
-    : budgetScopeOptions
-  const budgetNeedsScope = budgetForm.scope_kind !== 'global'
-  const budgetCanSave = !budgetSaving && (!budgetNeedsScope || budgetForm.scope_name.trim() !== '')
+  const budgetNeedsWorkspace = budgetForm.scope_kind.includes('workspace')
+  const budgetNeedsRepo = budgetForm.scope_kind.includes('repo')
+  const budgetNeedsAgent = budgetForm.scope_kind.includes('agent')
+  const budgetNeedsBackend = budgetForm.scope_kind.includes('backend')
+  const repoNames = repos.map(r => r.name)
+  const agentNames = agents.map(a => a.name)
+  const backendNames = backends.map(b => b.name)
+  const repoOptionsWithCurrent = budgetForm.repo && !repoNames.includes(budgetForm.repo) ? [budgetForm.repo, ...repoNames] : repoNames
+  const agentOptionsWithCurrent = budgetForm.agent && !agentNames.includes(budgetForm.agent) ? [budgetForm.agent, ...agentNames] : agentNames
+  const backendOptionsWithCurrent = budgetForm.backend && !backendNames.includes(budgetForm.backend) ? [budgetForm.backend, ...backendNames] : backendNames
+  const budgetCanSave = !budgetSaving &&
+    (!budgetNeedsWorkspace || budgetForm.workspace_id.trim() !== '') &&
+    (!budgetNeedsRepo || budgetForm.repo.trim() !== '') &&
+    (!budgetNeedsAgent || budgetForm.agent.trim() !== '') &&
+    (!budgetNeedsBackend || budgetForm.backend.trim() !== '')
 
   return (
     <div>
@@ -782,14 +849,14 @@ export default function ConfigPage() {
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
                 {orphanedAgents.map(orphan => (
-                  <div key={orphan.name} style={{ border: '1px solid var(--border-danger)', borderRadius: '6px', padding: '0.55rem', background: 'var(--bg-card)' }}>
+                  <div key={orphanKey(orphan)} style={{ border: '1px solid var(--border-danger)', borderRadius: '6px', padding: '0.55rem', background: 'var(--bg-card)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.75rem' }}>
                       <div style={{ minWidth: 0, flex: 1 }}>
                         <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-heading)' }}>
                           {orphan.name}
                         </div>
                         <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                          backend: {orphan.backend} · missing model: {orphan.model}
+                          workspace: {orphan.workspace_id || 'default'} · backend: {orphan.backend} · missing model: {orphan.model}
                         </div>
                         {!!(orphan.repos && orphan.repos.length > 0) && (
                           <div style={{ fontSize: '0.74rem', color: 'var(--text-faint)', marginTop: '2px' }}>
@@ -799,8 +866,8 @@ export default function ConfigPage() {
                       </div>
                       <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
                         <select
-                          value={orphanModelSelection[orphan.name] ?? ''}
-                          onChange={e => setOrphanModelSelection(prev => ({ ...prev, [orphan.name]: e.target.value }))}
+                          value={orphanModelSelection[orphanKey(orphan)] ?? ''}
+                          onChange={e => setOrphanModelSelection(prev => ({ ...prev, [orphanKey(orphan)]: e.target.value }))}
                           style={{ ...inputStyle, width: '200px', fontSize: '0.76rem' }}
                         >
                           <option value="">Select replacement model</option>
@@ -809,14 +876,14 @@ export default function ConfigPage() {
                           ))}
                         </select>
                         <button
-                          onClick={() => saveOrphanModel(orphan.name)}
+                          onClick={() => saveOrphanModel(orphan)}
                           disabled={saving}
                           style={{ padding: '5px 9px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
                         >
                           Remap
                         </button>
                         <button
-                          onClick={() => clearOrphanModel(orphan.name)}
+                          onClick={() => clearOrphanModel(orphan)}
                           disabled={saving}
                           style={{ padding: '5px 9px', borderRadius: '6px', border: '1px solid var(--border-danger)', background: 'var(--bg-card)', color: 'var(--text-danger)', cursor: saving ? 'wait' : 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
                         >
@@ -1017,6 +1084,9 @@ export default function ConfigPage() {
 
       {tab === 'tokens' && (
         <Card style={{ borderTopLeftRadius: 0 }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
+            <WorkspaceSelect compact label="Budget workspace" />
+          </div>
           <div style={{ marginBottom: '2rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
               <div>
@@ -1026,7 +1096,7 @@ export default function ConfigPage() {
                 </p>
               </div>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                <RepoFilter selected={lbRepo} onChange={setLbRepo} />
+                <RepoFilter selected={lbRepo} onChange={setLbRepo} workspace={workspace} />
                 <select
                   style={{ ...inputStyle, width: '120px', fontSize: '0.8rem' }}
                   value={lbPeriod}
@@ -1082,7 +1152,7 @@ export default function ConfigPage() {
               <button
                 onClick={() => {
                   setBudgetError('')
-                  setBudgetForm({ scope_kind: 'global', scope_name: '', period: 'daily', cap_tokens: 100000, alert_at_pct: 80, enabled: true })
+                  setBudgetForm(newBudgetForm(workspace))
                   setCreateBudgetOpen(true)
                 }}
                 style={{ padding: '5px 12px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
@@ -1091,7 +1161,7 @@ export default function ConfigPage() {
               </button>
             </div>
             <p style={{ color: 'var(--text-faint)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
-              Budgets enforce token caps per scope (global, backend, or agent) over UTC calendar periods. Daily resets at 00:00 UTC, weekly resets Sunday 00:00 UTC, and monthly resets on the first day at 00:00 UTC.
+              Budgets enforce token caps per global, workspace, repo, agent, backend, or combined workspace scopes over UTC calendar periods. Daily resets at 00:00 UTC, weekly resets Sunday 00:00 UTC, and monthly resets on the first day at 00:00 UTC.
             </p>
             {budgetsLoading ? (
               <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading…</p>
@@ -1103,7 +1173,7 @@ export default function ConfigPage() {
                   <div key={b.id} style={{ border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '0.65rem 0.75rem', background: 'var(--bg)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-heading)' }}>
-                        {b.scope_kind === 'global' ? 'Global' : `${b.scope_kind}: ${b.scope_name}`}
+                        {budgetScopeLabel(b)}
                         {' · '}
                         <span style={{ color: 'var(--text-muted)' }}>{b.period}</span>
                       </div>
@@ -1118,7 +1188,10 @@ export default function ConfigPage() {
                           setBudgetError('')
                           setBudgetForm({
                             scope_kind: b.scope_kind,
-                            scope_name: b.scope_name,
+                            workspace_id: b.workspace_id || (b.scope_kind === 'workspace' ? b.scope_name : b.scope_kind.includes('workspace') ? workspace : ''),
+                            repo: b.repo || (b.scope_kind === 'repo' ? b.scope_name : ''),
+                            agent: b.agent || (b.scope_kind === 'agent' ? b.scope_name : ''),
+                            backend: b.backend || (b.scope_kind === 'backend' ? b.scope_name : ''),
                             period: b.period,
                             cap_tokens: b.cap_tokens,
                             alert_at_pct: b.alert_at_pct,
@@ -1311,42 +1384,103 @@ export default function ConfigPage() {
                 value={budgetForm.scope_kind}
                 onChange={e => {
                   const nextKind = e.target.value
-                  const nextOptions = nextKind === 'backend'
-                    ? backends.map(b => b.name)
-                    : nextKind === 'agent'
-                      ? agents.map(a => a.name)
-                      : []
                   setBudgetForm(f => ({
                     ...f,
                     scope_kind: nextKind,
-                    scope_name: nextKind === 'global' ? '' : nextOptions[0] ?? '',
+                    workspace_id: nextKind.includes('workspace') ? (f.workspace_id || workspace) : '',
+                    repo: nextKind.includes('repo') ? (f.repo || repoNames[0] || '') : '',
+                    agent: nextKind.includes('agent') ? (f.agent || agentNames[0] || '') : '',
+                    backend: nextKind.includes('backend') ? (f.backend || backendNames[0] || '') : '',
                   }))
                 }}
               >
                 <option value="global">Global (all agents and backends)</option>
+                <option value="workspace">Workspace</option>
+                <option value="repo">Repo</option>
                 <option value="backend">Backend</option>
                 <option value="agent">Agent</option>
+                <option value="workspace+repo">Workspace + repo</option>
+                <option value="workspace+agent">Workspace + agent</option>
+                <option value="workspace+backend">Workspace + backend</option>
+                <option value="workspace+repo+agent">Workspace + repo + agent</option>
               </select>
             </div>
-            {budgetForm.scope_kind !== 'global' && (
+            {budgetNeedsWorkspace && (
               <div>
-                <label style={labelStyle}>{budgetForm.scope_kind === 'backend' ? 'Backend' : 'Agent'}</label>
+                <label style={labelStyle}>Workspace</label>
+                <input
+                  style={inputStyle}
+                  value={budgetForm.workspace_id}
+                  onChange={e => setBudgetForm(f => ({ ...f, workspace_id: e.target.value }))}
+                  placeholder={workspace}
+                />
+              </div>
+            )}
+            {budgetNeedsRepo && (
+              <div>
+                <label style={labelStyle}>Repo</label>
                 <select
                   style={inputStyle}
-                  value={budgetForm.scope_name}
-                  onChange={e => setBudgetForm(f => ({ ...f, scope_name: e.target.value }))}
-                  disabled={budgetScopeOptionsWithCurrent.length === 0}
+                  value={budgetForm.repo}
+                  onChange={e => setBudgetForm(f => ({ ...f, repo: e.target.value }))}
+                  disabled={repoOptionsWithCurrent.length === 0}
                 >
-                  {budgetScopeOptionsWithCurrent.length === 0 && (
-                    <option value="">No {budgetForm.scope_kind === 'backend' ? 'backends' : 'agents'} available</option>
+                  {repoOptionsWithCurrent.length === 0 && (
+                    <option value="">No repos available</option>
                   )}
-                  {budgetScopeOptionsWithCurrent.map(name => (
+                  {repoOptionsWithCurrent.map(name => (
                     <option key={name} value={name}>{name}</option>
                   ))}
                 </select>
-                {budgetScopeOptionsWithCurrent.length === 0 && (
+                {repoOptionsWithCurrent.length === 0 && (
                   <p style={{ color: 'var(--text-faint)', fontSize: '0.76rem', margin: '0.35rem 0 0' }}>
-                    No {budgetForm.scope_kind === 'backend' ? 'backends' : 'agents'} are configured yet.
+                    No repos are configured in the selected workspace yet.
+                  </p>
+                )}
+              </div>
+            )}
+            {budgetNeedsAgent && (
+              <div>
+                <label style={labelStyle}>Agent</label>
+                <select
+                  style={inputStyle}
+                  value={budgetForm.agent}
+                  onChange={e => setBudgetForm(f => ({ ...f, agent: e.target.value }))}
+                  disabled={agentOptionsWithCurrent.length === 0}
+                >
+                  {agentOptionsWithCurrent.length === 0 && (
+                    <option value="">No agents available</option>
+                  )}
+                  {agentOptionsWithCurrent.map(name => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+                {agentOptionsWithCurrent.length === 0 && (
+                  <p style={{ color: 'var(--text-faint)', fontSize: '0.76rem', margin: '0.35rem 0 0' }}>
+                    No agents are configured in the selected workspace yet.
+                  </p>
+                )}
+              </div>
+            )}
+            {budgetNeedsBackend && (
+              <div>
+                <label style={labelStyle}>Backend</label>
+                <select
+                  style={inputStyle}
+                  value={budgetForm.backend}
+                  onChange={e => setBudgetForm(f => ({ ...f, backend: e.target.value }))}
+                  disabled={backendOptionsWithCurrent.length === 0}
+                >
+                  {backendOptionsWithCurrent.length === 0 && (
+                    <option value="">No backends available</option>
+                  )}
+                  {backendOptionsWithCurrent.map(name => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+                {backendOptionsWithCurrent.length === 0 && (
+                  <p style={{ color: 'var(--text-faint)', fontSize: '0.76rem', margin: '0.35rem 0 0' }}>
+                    No backends are configured yet.
                   </p>
                 )}
               </div>
@@ -1416,7 +1550,7 @@ export default function ConfigPage() {
         <Modal title="Delete Token Budget" onClose={() => setDeleteBudgetTarget(null)}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
             <p style={{ color: 'var(--text)', fontSize: '0.9rem', margin: 0 }}>
-              Delete the {deleteBudgetTarget.scope_kind === 'global' ? 'global' : `${deleteBudgetTarget.scope_kind} “${deleteBudgetTarget.scope_name}”`} {deleteBudgetTarget.period} budget?
+              Delete the {budgetScopeLabel(deleteBudgetTarget)} {deleteBudgetTarget.period} budget?
             </p>
             {budgetError && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', margin: 0 }}>{budgetError}</p>}
             <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>

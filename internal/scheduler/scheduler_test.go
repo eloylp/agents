@@ -163,7 +163,7 @@ func TestRecordLastRunUpdatesAgentStatuses(t *testing.T) {
 		t.Fatalf("NewScheduler: %v", err)
 	}
 	at := time.Date(2026, 4, 28, 10, 0, 0, 0, time.UTC)
-	s.RecordLastRun("reviewer", "owner/repo", at, "success")
+	s.RecordLastRun(fleet.DefaultWorkspaceID, "reviewer", "owner/repo", at, "success")
 
 	statuses := s.AgentStatuses()
 	if len(statuses) != 1 {
@@ -172,9 +172,59 @@ func TestRecordLastRunUpdatesAgentStatuses(t *testing.T) {
 	if statuses[0].LastStatus != "success" {
 		t.Errorf("LastStatus = %q, want success", statuses[0].LastStatus)
 	}
+	if statuses[0].WorkspaceID != fleet.DefaultWorkspaceID {
+		t.Errorf("WorkspaceID = %q, want %q", statuses[0].WorkspaceID, fleet.DefaultWorkspaceID)
+	}
 	if statuses[0].LastRun == nil || !statuses[0].LastRun.Equal(at) {
 		t.Errorf("LastRun = %v, want %v", statuses[0].LastRun, at)
 	}
+}
+
+func TestRecordLastRunKeepsWorkspaceBindingsSeparate(t *testing.T) {
+	t.Parallel()
+	st := seedStore(t, defaultRepos())
+	s, err := NewScheduler(st, time.Hour, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewScheduler: %v", err)
+	}
+	if len(s.agentEntries) != 1 {
+		t.Fatalf("agentEntries = %d, want 1", len(s.agentEntries))
+	}
+	cronID := s.agentEntries[0].cronID
+	s.bindMu.Lock()
+	s.agentEntries = []agentEntry{
+		{workspaceID: "default", name: "reviewer", repo: "owner/repo", spec: "* * * * *", cronID: cronID},
+		{workspaceID: "team-a", name: "reviewer", repo: "owner/repo", spec: "* * * * *", cronID: cronID},
+	}
+	s.bindMu.Unlock()
+
+	defaultRun := time.Date(2026, 4, 28, 10, 0, 0, 0, time.UTC)
+	teamRun := defaultRun.Add(time.Minute)
+	s.RecordLastRun("default", "reviewer", "owner/repo", defaultRun, "success")
+	s.RecordLastRun("team-a", "reviewer", "owner/repo", teamRun, "error")
+
+	statuses := s.AgentStatuses()
+	if len(statuses) != 2 {
+		t.Fatalf("statuses = %d, want 2", len(statuses))
+	}
+	got := map[string]schedulerStatus{}
+	for _, st := range statuses {
+		if st.LastRun == nil {
+			t.Fatalf("%s LastRun = nil, want timestamp", st.WorkspaceID)
+		}
+		got[st.WorkspaceID] = schedulerStatus{lastRun: *st.LastRun, status: st.LastStatus}
+	}
+	if got["default"].status != "success" || !got["default"].lastRun.Equal(defaultRun) {
+		t.Errorf("default status = %+v, want success at %v", got["default"], defaultRun)
+	}
+	if got["team-a"].status != "error" || !got["team-a"].lastRun.Equal(teamRun) {
+		t.Errorf("team-a status = %+v, want error at %v", got["team-a"], teamRun)
+	}
+}
+
+type schedulerStatus struct {
+	lastRun time.Time
+	status  string
 }
 
 // TestReconcilePicksUpAddedBinding verifies that a cron binding added to
