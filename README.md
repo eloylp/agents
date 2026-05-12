@@ -9,7 +9,7 @@
 
 **A self-hosted, observable agent orchestrator for running multi-agent workflows on your repos.**
 
-Build and take ownership your agentic universe. Create your agents and compose them with skills, memory, and triggers: repo events/labels, cron, or inter-agent dispatch. 
+Build and take ownership of your agentic universe. Create your agents and compose them with skills, memory, and triggers: repo events/labels, cron, or inter-agent dispatch.
 
 The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), or your own local LLM) and lets it work through your repo host's native primitives: issues, PRs, reviews, comments. GitHub MCP tools are preferred; authenticated `gh` is available as fallback for complex local checkout/test/PR loops. GitHub today; [GitLab](https://github.com/eloylp/agents/issues/359) under discussion.
 
@@ -20,10 +20,10 @@ See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a re
 ## Features
 
 - **Three ways to interact with your agent fleet**:
-  - **[Web dashboard](docs/ui.md)**: graphical. Design the fleet from the graph-first workflow designer, manage agents, skills, repos, and bindings; watch the live event firehose, agent traces with tool-loop transcripts, and memory viewer.
+  - **[Web dashboard](docs/ui.md)**: graphical. Design the fleet from the graph-first workflow designer, manage agents, prompts, skills, repos, dispatch edges, and trigger bindings; watch the live event firehose, agent traces with tool-loop transcripts, and memory viewer.
   - **[MCP server](docs/mcp.md)**: conversational. Control agents and trigger runs straight from Claude Code in your terminal (or Cursor, Cline, or any MCP client).
   - **[REST API](docs/api.md)**: programmatic. Scriptable from any HTTP client; the dashboard itself runs on top of it.
-- **Observable**: See the full event chain in realtime from the [UI](docs/ui.md), from events to runners to traces that will facilitate your prompt tunning journey.
+- **Observable**: See the full event chain in realtime from the [UI](docs/ui.md), from events to runners to traces that will facilitate your prompt tuning journey.
 - **[Self-hosted](docs/quickstart.md)**: your code and prompts stay on your infrastructure. No SaaS dependency.
 - **[Security recommendations](docs/security.md)**: ships built-in guardrails prepended to every agent prompt for indirect prompt-injection resistance, public-action discretion, daemon-only memory scope, and GitHub repository tool usage (MCP first, gh fallback).
 - **Daemon auth**: create the first local admin user from the root login page, use an `HttpOnly` browser session for UI access, manage additional users, and create revocable named bearer tokens for MCP/API clients.
@@ -32,9 +32,9 @@ See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a re
 - **[Local-model support](docs/local-models.md)**: run any agent through `llama.cpp`, Ollama, vLLM, or any OpenAI-compatible endpoint. The daemon ships a built-in Anthropic-to-OpenAI translation proxy so the existing `claude` CLI works unchanged against your own LLM (experimental).
 - **One agent model, many triggers**: label events, cron schedules, [GitHub event subscriptions](docs/events.md), on-demand API calls. Same agent, wired however you want.
 - **Composable skills**: reusable guidance blocks (architecture, security, testing, DX, ...) composed into agents by stable catalog reference.
-- **Scoped prompt catalog**: prompts can be global, workspace-scoped, or repo-scoped. Agents persist stable prompt IDs, while humans can select prompts with readable scope paths such as `global`, `default`, or `default/eloylp/agents`.
+- **Scoped reusable catalogs**: prompts, skills, and guardrails can be global, workspace-scoped, or repo-scoped. Agents persist stable prompt IDs and skill IDs, while humans can select prompts with readable scope paths such as `global`, `default`, or `default/eloylp/agents`.
 - **[Reactive inter-agent dispatch](docs/dispatch.md)**: agents invoke each other at runtime with depth, fanout, and dedup safety limits.
-- **Token budgets and leaderboard**: per-scope (global, backend, or agent) daily/weekly/monthly UTC calendar token caps enforced before each run. NavBar alert banner when any budget crosses its alert threshold. Per-agent leaderboard tracks total and average token consumption per run. Full CRUD via dashboard, REST, and MCP.
+- **Token budgets and leaderboard**: daily/weekly/monthly UTC calendar token caps for global, workspace, repo, agent, backend, and workspace-combined scopes, enforced before each run. NavBar alert banner when any budget crosses its alert threshold. Per-agent leaderboard tracks total and average token consumption per run. Full CRUD via dashboard, REST, and MCP.
 - **SQLite-backed**: state lives in a SQLite database, managed through the three interfaces above. [config.yaml](docs/configuration.md) is an optional export/import format for reusable prompts/skills/guardrails and workspace-local agents/repos, not a runtime dependency.
 
 ## How it works

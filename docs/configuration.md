@@ -10,7 +10,7 @@ runtime wiring:
 ```yaml
 backends:    # AI CLI/runtime definitions agents can use
 prompts:     # reusable prompt catalog entries, optionally scoped
-skills:      # reusable guidance blocks, keyed by stable id
+skills:      # reusable guidance catalog entries, keyed by stable id and optionally scoped
 guardrails:  # reusable policy catalog entries, optionally scoped
 workspaces:  # selected guardrails plus workspace-local agents, repos, and budgets
 ```
@@ -236,7 +236,7 @@ default:
 
 - **`security`** (position 0, seeded by migration 010): pushes back on indirect prompt injection, secret exfiltration, and out-of-tree filesystem or network access. See [security.md](security.md) for the threat model and what the recommendation does *not* close.
 - **`discretion`** (position 5, seeded by migration 013): conservative behaviour policy for public actions. No `@`-mention or assignment of GitHub users outside the current thread, no cross-repo writes, no speculation about contributors or maintainers, no linking to private or tracking resources.
-- **`memory-scope`** (position 7, seeded by migration 016): tells agents to use only daemon-provided memory from the `Existing memory:` section for the current `(agent, repo)` pair, ignore CLI-native/session/global memory, and stay bound to the repository named in the runtime context.
+- **`memory-scope`** (position 7, seeded by migration 016): tells agents to use only daemon-provided memory from the `Existing memory:` section for the current `(workspace, agent, repo)` key, ignore CLI-native/session/global memory, and stay bound to the repository named in the runtime context.
 - **`mcp-tool-usage`** (position 10, seeded by migration 012): tells every agent to use GitHub MCP tools first, fetch surrounding context (PR description, diff, prior comments, linked issue) when the trigger envelope is too thin, and fall back to authenticated `gh` only when MCP is insufficient or a safe local checkout/test/PR loop is required. Especially load-bearing for agents routed through local OpenAI-compatible models, see [local-models.md](local-models.md).
 
 ```yaml

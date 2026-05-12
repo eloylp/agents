@@ -28,7 +28,7 @@ The supported runtime is Docker Compose, there is no local-binary workflow. On-d
 ```
 cmd/agents/main.go              # daemon entrypoint + --db / --import flags
 internal/
-  fleet/                        # domain entities: Agent, Repo, Skill, Backend, Binding (zero deps)
+  fleet/                        # domain entities: Workspace, Agent, Prompt, Skill, Guardrail, Repo, Backend, Binding (zero deps)
   config/                       # YAML parsing, defaults, validation (uses fleet)
   ai/                           # prompt composition + CLI runner (hardcoded backend args + schema enforcement)
   anthropic_proxy/              # built-in Anthropic Messages ↔ OpenAI Chat Completions translation
@@ -63,7 +63,7 @@ internal/ai/response-schema.json # embedded JSON schema for structured output (c
 - **Backend**, explicit backend selection per agent (no `auto`). Built-ins are `claude` and `codex`; additional named local backends are supported via `local_model_url`.
 - **Proxy**, optional in-daemon Anthropic↔OpenAI translator mounted at `/v1/messages` and `/v1/models`. Disabled by default. When enabled, set `local_model_url` on the backend entry to the proxy's URL; the daemon injects `ANTHROPIC_BASE_URL` for that backend automatically.
 - **Dispatcher**, the runtime mechanism by which agents invoke each other. See "Reactive dispatch" below.
-- **Graph workflow designer**, the dashboard's primary visual workflow surface. It uses stable agent database IDs for node identity/layout, edits agents through the shared agent form, manages repo trigger bindings through the repo binding API, and edits dispatch edges through `can_dispatch` / `allow_dispatch`.
+- **Graph workflow designer**, the dashboard's primary visual workflow surface. It uses stable agent database IDs for node identity/layout, edits agents through the shared agent form, shows repo-scoped agents inside dashed repo boundaries, shows workspace-scoped agents outside those boundaries, draws thin binding lines to passive repo anchors for trigger bindings, and edits dispatch edges through `can_dispatch` / `allow_dispatch`.
 - **Trace steps**, the durable transcript source for `/traces/{span_id}/steps` and `/traces/{span_id}/stream`. AI CLI stdout is parsed incrementally into `TraceStep` rows, persisted to SQLite, replayed to stream subscribers on connect, and live-tailed through in-memory notifications until `event: end`.
 
 ## Reactive dispatch: the model you must keep in mind
@@ -72,7 +72,7 @@ internal/ai/response-schema.json # embedded JSON schema for structured output (c
 - Each agent's YAML may declare `allow_dispatch: true` (opt-in as a target) and `can_dispatch: [name, ...]` (whitelist of targets). Dispatchable targets are rendered into the originating agent's prompt as part of an `## Available experts` roster when another agent lists them in `can_dispatch`.
 - Dispatch wiring authorizes runtime handoffs. Repo bindings only decide how agents start independently; a dispatch-only target does not need a fake repo binding.
 - An agent's response JSON may include a `dispatch: []` array. Each element names a target and a reason.
-- The dispatcher validates every request against: whitelist match, target's opt-in, chain depth, fan-out per run, and a dedup window keyed on `(target_agent, repo, number)`. Safety limits are process-owned daemon settings configured by `AGENTS_DISPATCH_MAX_DEPTH`, `AGENTS_DISPATCH_MAX_FANOUT`, and `AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS`; all three must be positive integers.
+- The dispatcher validates every request against: whitelist match, target's opt-in, chain depth, fan-out per run, and a dedup window keyed on `(workspace, target_agent, repo, number)`. Safety limits are process-owned daemon settings configured by `AGENTS_DISPATCH_MAX_DEPTH`, `AGENTS_DISPATCH_MAX_FANOUT`, and `AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS`; all three must be positive integers.
 - Accepted requests are enqueued as synthetic `agent.dispatch` events with payload fields `target_agent`, `reason`, `invoked_by`, `root_event_id`, `dispatch_depth`, `parent_span_id`. They flow through the same single event queue as webhook events and cron-fired events.
 - Rejection modes log at `WARN` (whitelist/opt-in/depth/fanout breaches) or `DEBUG` (dedup skip).
 

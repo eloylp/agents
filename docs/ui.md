@@ -1,6 +1,6 @@
 # Web dashboard
 
-The daemon ships an embedded web dashboard at `/ui/`. The public root path `/` serves the login/bootstrap page and redirects authenticated browser sessions into `/ui/graph/`, the graph-first workflow designer. The dashboard is the primary interface for managing the agent fleet. Every CRUD operation (agents, skills, backends, repos, bindings) is available there alongside live monitoring.
+The daemon ships an embedded web dashboard at `/ui/`. The public root path `/` serves the login/bootstrap page and redirects authenticated browser sessions into `/ui/graph/`, the graph-first workflow designer. The dashboard is the primary interface for managing the agent fleet. Every CRUD operation (agents, prompts, skills, backends, repos, guardrails, bindings) is available there alongside live monitoring.
 
 ![Fleet dashboard](img/fleet.png)
 
@@ -25,7 +25,9 @@ Agent run traces with timing, status, and a drill-down to the tool-loop transcri
 
 ### Graph
 
-Primary workflow designer showing agents as draggable graph nodes and dispatch permissions as edges. Node identity is keyed by the agent's stable database ID, so saved positions survive mutable agent names. Manual layout is persisted globally; **Reset layout** clears saved positions and returns to the automatic graph layout.
+Primary workflow designer showing agents as draggable graph nodes and dispatch permissions as edges. Node identity is keyed by the agent's stable database ID, so saved positions survive mutable agent names. Manual layout is persisted per workspace; **Reset layout** clears saved positions and returns to the automatic graph layout.
+
+The graph deliberately keeps one node per real agent. Repo-scoped agents are grouped inside thin dashed repo boundaries; workspace-scoped agents sit outside those boundaries. Repo trigger bindings are visualised as thin lines from the agent to passive repo anchors, so the user can see where an agent runs without duplicating the agent into one node per repo. Dispatch wiring remains the editable agent-to-agent relationship.
 
 The right-side **Agent editor** is the graph's main editing surface. Click an agent to inspect or edit its definition, run it against bound repos, review recent runner rows / trace links, manage repo triggers, and add or remove dispatch wiring. Operators can create agents without leaving the designer.
 
@@ -42,9 +44,9 @@ Fleet snapshot with per-agent status, skills, bindings, dispatch wiring. Create,
 <!-- The Fleet page (above) is the agents page: same surface, same capture. -->
 ![Fleet / Agents page](img/fleet.png)
 
-### Skills
+### Prompts and Skills
 
-Manage the reusable guidance blocks composed into agent prompts. Create, edit, delete. The skill body editor has the same **⛶ Expand** affordance as the agent prompt, useful when a skill grows past a screenful.
+Manage reusable prompt contracts and reusable guidance blocks composed into agent prompts. Both catalogs can be global, workspace-scoped, or repo-scoped. The list pages show all catalog items by default and provide local workspace/repo filters where that helps selection. Create, edit, delete. Long-form content editors have the same **⛶ Expand** affordance as the agent prompt, useful when a prompt or skill grows past a screenful.
 
 ![Skills editor](img/skills.png)
 
@@ -56,7 +58,7 @@ Backend discovery status, including per-backend GitHub MCP connectivity, plus su
 
 ### Guardrails
 
-Tab inside the Config page. Lists every prompt guardrail prepended to every agent's composed prompt at render time, with built-in / disabled / position badges. Click a row to edit name, description, content (markdown editor with **⛶ Expand** affordance), enabled toggle, and position. **Reset to default** restores a built-in's seeded text. **Delete** asks for double confirmation, with a stronger warning when the row is built-in. Disabling the shipped 'security' guardrail surfaces an extra-stern confirm modal explaining what protection is removed. The shipped daemon arrives with built-in guardrails for security, public-action discretion, daemon-only memory scope, and repository tool usage (MCP first, gh fallback); operators can add code-style, deployment-policy, or any other policy block on top.
+Tab inside the Config page. Lists every prompt guardrail that can be selected for a workspace, with built-in / disabled / position badges. Click a row to edit name, description, content (markdown editor with **⛶ Expand** affordance), enabled toggle, and position. Guardrails can be global, workspace-scoped, or repo-scoped; each workspace chooses the visible guardrails it renders. **Reset to default** restores a built-in's seeded text. **Delete** asks for double confirmation, with a stronger warning when the row is built-in. Disabling the shipped `security` guardrail surfaces an extra-stern confirm modal explaining what protection is removed. The shipped daemon arrives with built-in guardrails for security, public-action discretion, daemon-only memory scope, and repository tool usage (MCP first, gh fallback); operators can add code-style, deployment-policy, or any other policy block on top.
 
 ### Repos
 
@@ -89,7 +91,7 @@ Arriving with `?event=<id>` (e.g. via the **View runners** link on the Events pa
 
 ### Memory
 
-Raw agent memory markdown per `(agent, repo)` pair. Useful for inspecting what an autonomous agent has learned across runs.
+Raw agent memory markdown per `(workspace, agent, repo)` key. Useful for inspecting what an autonomous agent has learned across runs.
 
 ![Agent memory entry](img/memory.png)
 

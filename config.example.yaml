@@ -162,8 +162,6 @@ workspaces:
         enabled: true
       - guardrail_name: mcp-tool-usage
         enabled: true
-      - guardrail_name: repository-tool-fallback
-        enabled: true
       - guardrail_name: discretion
         enabled: true
     agents:

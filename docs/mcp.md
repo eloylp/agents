@@ -1,6 +1,6 @@
 # MCP server
 
-The daemon exposes a [Model Context Protocol](https://modelcontextprotocol.io) server at `/mcp` over the Streamable HTTP transport. MCP-capable clients (Claude Code, Cursor, Cline, ...) register the endpoint once and then discover the available tools automatically. From there you can manage agents, skills, repos, and bindings, trigger runs, and inspect traces conversationally from your editor.
+The daemon exposes a [Model Context Protocol](https://modelcontextprotocol.io) server at `/mcp` over the Streamable HTTP transport. MCP-capable clients (Claude Code, Cursor, Cline, ...) register the endpoint once and then discover the available tools automatically. From there you can manage workspaces, agents, prompts, skills, guardrails, repos, and bindings, trigger runs, and inspect traces conversationally from your editor.
 
 The MCP surface mirrors the fleet-management REST API documented in [api.md](api.md). The difference is the wire protocol and the consumer: REST is for scripts and dashboards; MCP is for AI clients that can call tools. Dashboard user administration stays in the UI/REST auth surface so passwords are not sent through MCP clients.
 
@@ -96,7 +96,7 @@ Most fleet tools accept `workspace` for workspace-local resources and default to
 | `get_trace_prompt` | Composed prompt the daemon sent to the AI CLI for one span (gzipped on disk; decompressed on the fly). The "what did the agent see" debug artefact. Errors when no prompt is recorded (pre-009-migration spans). |
 
 The live stdout stream (`GET /traces/{span_id}/stream`) is intentionally not mirrored as an MCP tool, SSE is a long-lived streaming protocol that doesn't fit MCP's request/response contract. MCP clients that need the post-completion transcript use `get_trace_steps` instead.
-| `get_graph` | Agent interaction graph (dispatch edges). |
+| `get_graph` | Workspace-scoped agent interaction graph with dispatch edges. |
 | `get_dispatches` | Dispatch counters and drop reasons. |
 | `get_memory` | Agent memory for an agent/repo pair. |
 
@@ -106,7 +106,7 @@ These tools mirror the `/runners` REST surface; see [api.md](api.md#runners-mana
 
 | Tool | Description |
 |---|---|
-| `list_runners` | One row per (event, agent) once traces have been recorded; one row per event with `agent: null` while in-flight. Carries event metadata (kind, repo, number, actor, target_agent, payload, timestamps) plus trace fields (agent, span_id, run_duration_ms, summary, prompt_size, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) when present. Optional `status` filter on the event_queue lifecycle (`enqueued`/`running`/`completed`); `limit` (default 100); `offset`. |
+| `list_runners` | One row per (event, agent) once traces have been recorded, one `skipped` row for completed events that produced no trace, and one row per event with `agent: null` while in-flight. Carries event metadata (kind, repo, number, actor, target_agent, payload, timestamps) plus trace fields (agent, span_id, run_duration_ms, summary, prompt_size, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) when present. Optional `status` filter on the event_queue lifecycle (`enqueued`/`running`/`completed`); `limit` (default 100); `offset`. |
 | `delete_runner` | Remove an event_queue row by id. Best-effort, if a worker has already dequeued the QueuedEvent from the channel buffer it will still run. Event-level: affects every fanned-out agent for this event. |
 | `retry_runner` | Re-enqueue an event by copying its blob into a fresh row and pushing onto the channel. Re-runs every fanned-out agent (event-level retry). The original row stays as audit history. Errors when the source is in `running` state, when the channel is full, or when the queue has been closed. |
 
