@@ -140,6 +140,7 @@ type storeAgentJSON struct {
 	Prompt        string   `json:"prompt,omitempty"`
 	PromptID      string   `json:"prompt_id,omitempty"`
 	PromptRef     string   `json:"prompt_ref,omitempty"`
+	PromptScope   string   `json:"prompt_scope,omitempty"`
 	ScopeType     string   `json:"scope_type,omitempty"`
 	ScopeRepo     string   `json:"scope_repo,omitempty"`
 	AllowPRs      bool     `json:"allow_prs"`
@@ -164,6 +165,7 @@ func agentToStoreJSON(a fleet.Agent) storeAgentJSON {
 		Skills:        nilSafeStrings(a.Skills),
 		PromptID:      a.PromptID,
 		PromptRef:     a.PromptRef,
+		PromptScope:   a.PromptScope,
 		ScopeType:     a.ScopeType,
 		ScopeRepo:     a.ScopeRepo,
 		AllowPRs:      a.AllowPRs,
@@ -184,6 +186,7 @@ func (j storeAgentJSON) toConfig() fleet.Agent {
 		Prompt:        j.Prompt,
 		PromptID:      j.PromptID,
 		PromptRef:     j.PromptRef,
+		PromptScope:   j.PromptScope,
 		ScopeType:     j.ScopeType,
 		ScopeRepo:     j.ScopeRepo,
 		AllowPRs:      j.AllowPRs,
@@ -208,6 +211,7 @@ type AgentPatch struct {
 	Prompt        *string   `json:"prompt,omitempty"`
 	PromptID      *string   `json:"prompt_id,omitempty"`
 	PromptRef     *string   `json:"prompt_ref,omitempty"`
+	PromptScope   *string   `json:"prompt_scope,omitempty"`
 	ScopeType     *string   `json:"scope_type,omitempty"`
 	ScopeRepo     *string   `json:"scope_repo,omitempty"`
 	AllowPRs      *bool     `json:"allow_prs,omitempty"`
@@ -222,7 +226,7 @@ type AgentPatch struct {
 // payloads before hitting the store.
 func (p AgentPatch) AnyFieldSet() bool {
 	return p.WorkspaceID != nil || p.Backend != nil || p.Model != nil || p.Skills != nil || p.Prompt != nil || p.PromptID != nil ||
-		p.PromptRef != nil || p.ScopeType != nil || p.ScopeRepo != nil ||
+		p.PromptRef != nil || p.PromptScope != nil || p.ScopeType != nil || p.ScopeRepo != nil ||
 		p.AllowPRs != nil || p.AllowDispatch != nil || p.CanDispatch != nil ||
 		p.Description != nil || p.AllowMemory != nil
 }
@@ -243,16 +247,20 @@ func (p AgentPatch) apply(a *fleet.Agent) {
 	if p.Prompt != nil {
 		a.Prompt = *p.Prompt
 	}
-	if p.PromptID != nil {
-		a.PromptID = *p.PromptID
-		if strings.TrimSpace(*p.PromptID) != "" {
-			a.PromptRef = ""
-		}
-	}
 	if p.PromptRef != nil {
 		a.PromptRef = *p.PromptRef
 		if strings.TrimSpace(*p.PromptRef) != "" {
 			a.PromptID = ""
+		}
+	}
+	if p.PromptScope != nil {
+		a.PromptScope = *p.PromptScope
+	}
+	if p.PromptID != nil {
+		a.PromptID = *p.PromptID
+		if strings.TrimSpace(*p.PromptID) != "" {
+			a.PromptRef = ""
+			a.PromptScope = ""
 		}
 	}
 	if p.ScopeType != nil {
@@ -349,11 +357,14 @@ func (h *Handler) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 	if strings.TrimSpace(a.Prompt) != "" {
 		return fleet.Agent{}, &store.ErrValidation{Msg: "agent prompt bodies are import-only; use prompt_ref"}
 	}
-	if strings.TrimSpace(a.PromptID) != "" && strings.TrimSpace(a.PromptRef) != "" {
-		return fleet.Agent{}, &store.ErrValidation{Msg: "prompt_id and prompt_ref are mutually exclusive"}
+	if strings.TrimSpace(a.PromptID) != "" {
+		// prompt_id is the only persisted reference. prompt_ref/prompt_scope are
+		// human-facing selectors and may be echoed by read-modify-write clients.
+		a.PromptRef = ""
+		a.PromptScope = ""
 	}
 	if strings.TrimSpace(a.PromptRef) == "" && strings.TrimSpace(a.PromptID) == "" {
-		return fleet.Agent{}, &store.ErrValidation{Msg: "prompt_ref is required"}
+		return fleet.Agent{}, &store.ErrValidation{Msg: "prompt_id or prompt_ref is required"}
 	}
 	normalizedName := fleet.NormalizeAgentName(a.Name)
 	if err := h.store.UpsertAgent(a); err != nil {
@@ -390,10 +401,6 @@ func (h *Handler) updateAgent(name, workspaceID string, patch AgentPatch) (fleet
 	if patch.Prompt != nil {
 		return fleet.Agent{}, &store.ErrValidation{Msg: "agent prompt bodies are import-only; use prompt_ref"}
 	}
-	if patch.PromptID != nil && patch.PromptRef != nil &&
-		strings.TrimSpace(*patch.PromptID) != "" && strings.TrimSpace(*patch.PromptRef) != "" {
-		return fleet.Agent{}, &store.ErrValidation{Msg: "prompt_id and prompt_ref are mutually exclusive"}
-	}
 	normalized := fleet.NormalizeAgentName(name)
 	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	agents, err := h.store.ReadAgents()
@@ -414,8 +421,17 @@ func (h *Handler) updateAgent(name, workspaceID string, patch AgentPatch) (fleet
 	if err := h.store.UpsertAgent(merged); err != nil {
 		return fleet.Agent{}, err
 	}
-	fleet.NormalizeAgent(&merged)
-	return merged, nil
+	agents, err = h.store.ReadAgents()
+	if err != nil {
+		return fleet.Agent{}, err
+	}
+	idx = slices.IndexFunc(agents, func(a fleet.Agent) bool {
+		return a.Name == normalized && fleet.NormalizeWorkspaceID(a.WorkspaceID) == workspaceID
+	})
+	if idx < 0 {
+		return fleet.Agent{}, fmt.Errorf("agent %q not found after patch", normalized)
+	}
+	return agents[idx], nil
 }
 
 // DeleteAgent removes an agent from the store. When cascade is true, repo
@@ -616,6 +632,7 @@ func (h *Handler) DeleteSkill(name string) error {
 
 type storePromptJSON struct {
 	ID          string `json:"id,omitempty"`
+	Scope       string `json:"scope,omitempty"`
 	WorkspaceID string `json:"workspace_id,omitempty"`
 	Repo        string `json:"repo,omitempty"`
 	Name        string `json:"name"`
@@ -642,6 +659,7 @@ func (p PromptPatch) apply(prompt *fleet.Prompt) {
 func promptToStoreJSON(p fleet.Prompt) storePromptJSON {
 	return storePromptJSON{
 		ID:          p.ID,
+		Scope:       fleet.CatalogScopePath(p.WorkspaceID, p.Repo),
 		WorkspaceID: p.WorkspaceID,
 		Repo:        p.Repo,
 		Name:        p.Name,
@@ -651,10 +669,16 @@ func promptToStoreJSON(p fleet.Prompt) storePromptJSON {
 }
 
 func (j storePromptJSON) toConfig() fleet.Prompt {
+	workspaceID := j.WorkspaceID
+	repo := j.Repo
+	if workspace, scopedRepo, explicit := fleet.ParseCatalogScopePath(j.Scope); explicit {
+		workspaceID = workspace
+		repo = scopedRepo
+	}
 	return fleet.Prompt{
 		ID:          j.ID,
-		WorkspaceID: j.WorkspaceID,
-		Repo:        j.Repo,
+		WorkspaceID: workspaceID,
+		Repo:        repo,
 		Name:        j.Name,
 		Description: j.Description,
 		Content:     j.Content,

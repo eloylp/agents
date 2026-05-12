@@ -95,8 +95,9 @@ describe('<AgentForm />', () => {
     expect(onSave).toHaveBeenCalledOnce()
     expect(onSave.mock.calls[0][0]).toMatchObject({
       scope_repo: 'owner/b',
-      prompt_id: 'prompt_owner_b_review',
-      prompt_ref: '',
+      prompt_id: '',
+      prompt_ref: 'review',
+      prompt_scope: 'default/owner/b',
       skills: [],
     })
   })

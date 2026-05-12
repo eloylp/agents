@@ -813,6 +813,128 @@ func TestAgentPromptIDSelectsScopedPromptWithDuplicateNames(t *testing.T) {
 	}
 }
 
+func TestAgentPromptIDRejectsInvisibleScopedPrompt(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = append(cfg.Workspaces, fleet.Workspace{ID: "team-a", Name: "Team A"})
+	cfg.Prompts = []fleet.Prompt{
+		{ID: "prompt_team_shared", WorkspaceID: "team-a", Name: "shared", Content: "team"},
+	}
+	cfg.Agents[0].WorkspaceID = fleet.DefaultWorkspaceID
+	cfg.Agents[0].PromptID = "prompt_team_shared"
+	cfg.Agents[0].PromptRef = ""
+	cfg.Agents[0].Prompt = ""
+
+	err := store.Import(db, cfg)
+	if err == nil {
+		t.Fatal("Import succeeded, want invisible prompt_id validation error")
+	}
+	if !strings.Contains(err.Error(), `references unknown prompt_id "prompt_team_shared"`) {
+		t.Fatalf("error = %v, want invisible prompt_id validation", err)
+	}
+}
+
+func TestAgentPromptIDRequiresStableIDNotDisplayName(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Prompts = []fleet.Prompt{
+		{ID: "prompt_shared", Name: "shared", Content: "global"},
+	}
+	cfg.Agents[0].PromptID = "shared"
+	cfg.Agents[0].PromptRef = ""
+	cfg.Agents[0].Prompt = ""
+
+	err := store.Import(db, cfg)
+	if err == nil {
+		t.Fatal("Import succeeded, want display-name prompt_id validation error")
+	}
+	if !strings.Contains(err.Error(), `references unknown prompt_id "shared"`) {
+		t.Fatalf("error = %v, want prompt_id to require stable id", err)
+	}
+}
+
+func TestAgentPromptScopeSelectsScopedPromptWithDuplicateNames(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = append(cfg.Workspaces, fleet.Workspace{ID: "team-a", Name: "Team A"})
+	cfg.Prompts = []fleet.Prompt{
+		{ID: "prompt_global_shared", Name: "shared", Content: "global"},
+		{ID: "prompt_team_shared", WorkspaceID: "team-a", Name: "shared", Content: "team"},
+		{ID: "prompt_team_repo_shared", WorkspaceID: "team-a", Repo: "owner/repo", Name: "shared", Content: "repo"},
+	}
+	cfg.Agents[0].WorkspaceID = "team-a"
+	cfg.Agents[0].PromptRef = "shared"
+	cfg.Agents[0].PromptScope = "TEAM-A/OWNER/REPO"
+	cfg.Agents[0].Prompt = ""
+	cfg.Agents[0].ScopeType = "repo"
+	cfg.Agents[0].ScopeRepo = "owner/repo"
+	cfg.Agents[1].WorkspaceID = "team-a"
+	cfg.Repos[0].WorkspaceID = "team-a"
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	out, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	idx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.WorkspaceID == "team-a" && a.Name == "coder" })
+	if idx < 0 {
+		t.Fatal("team-a coder agent not found after load")
+	}
+	if out.Agents[idx].Prompt != "repo" || out.Agents[idx].PromptRef != "shared" || out.Agents[idx].PromptScope != "team-a/owner/repo" {
+		t.Fatalf("resolved prompt = (%q, %q, %q), want repo/shared/team-a/owner/repo",
+			out.Agents[idx].Prompt, out.Agents[idx].PromptRef, out.Agents[idx].PromptScope)
+	}
+}
+
+func TestAgentPromptScopeRejectsInvisiblePrompt(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	cfg.Workspaces = append(cfg.Workspaces, fleet.Workspace{ID: "team-a", Name: "Team A"})
+	cfg.Prompts = []fleet.Prompt{
+		{ID: "prompt_team_shared", WorkspaceID: "team-a", Name: "shared", Content: "team"},
+		{ID: "prompt_default_other_shared", WorkspaceID: fleet.DefaultWorkspaceID, Repo: "owner/other", Name: "shared", Content: "other repo"},
+	}
+	cfg.Agents[0].PromptRef = "shared"
+	cfg.Agents[0].Prompt = ""
+	cfg.Agents[0].PromptScope = "team-a"
+
+	err := store.Import(db, cfg)
+	if err == nil {
+		t.Fatal("Import succeeded, want cross-workspace prompt_scope validation error")
+	}
+	if !strings.Contains(err.Error(), `references unknown prompt_ref "shared"`) {
+		t.Fatalf("error = %v, want cross-workspace prompt_scope validation", err)
+	}
+
+	db = openTestDB(t)
+	cfg = minimalCfg()
+	cfg.Prompts = []fleet.Prompt{
+		{ID: "prompt_default_other_shared", WorkspaceID: fleet.DefaultWorkspaceID, Repo: "owner/other", Name: "shared", Content: "other repo"},
+	}
+	cfg.Agents[0].PromptRef = "shared"
+	cfg.Agents[0].Prompt = ""
+	cfg.Agents[0].PromptScope = "default/owner/other"
+	cfg.Agents[0].ScopeType = "repo"
+	cfg.Agents[0].ScopeRepo = "owner/repo"
+
+	err = store.Import(db, cfg)
+	if err == nil {
+		t.Fatal("Import succeeded, want cross-repo prompt_scope validation error")
+	}
+	if !strings.Contains(err.Error(), `references unknown prompt_ref "shared"`) {
+		t.Fatalf("error = %v, want cross-repo prompt_scope validation", err)
+	}
+}
+
 func TestAgentSkillRejectsInvisibleRepoScopedCatalogItem(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)

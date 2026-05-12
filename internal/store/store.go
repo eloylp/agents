@@ -665,8 +665,11 @@ func readSkillScopeByID(q querier, id string) (fleet.Skill, bool, error) {
 
 func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent, updatePromptContent bool) (string, error) {
 	if a.PromptID != "" {
-		var id string
-		if err := tx.QueryRow("SELECT id FROM prompts WHERE id=?", a.PromptID).Scan(&id); err != nil {
+		scopeRepo := ""
+		if a.ScopeType == "repo" {
+			scopeRepo = a.ScopeRepo
+		}
+		if _, err := resolveVisibleCatalogID(tx, "prompts", a.PromptID, a.WorkspaceID, scopeRepo); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return "", fmt.Errorf("store import: agent %s references unknown prompt_id %q", a.Name, a.PromptID)
 			}
@@ -687,7 +690,7 @@ func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent, updatePromptContent bool) (str
 		if a.ScopeType == "repo" {
 			scopeRepo = a.ScopeRepo
 		}
-		existingID, err := resolveVisiblePromptByName(tx, name, a.WorkspaceID, scopeRepo)
+		existingID, err := resolveAgentPromptRef(tx, name, a.PromptScope, a.WorkspaceID, scopeRepo)
 		if err == nil {
 			return existingID, nil
 		}
@@ -750,7 +753,49 @@ func resolveVisiblePromptByName(q querier, name, workspaceID, repo string) (stri
 	return resolveVisibleCatalogName(q, "prompts", "prompt_ref", "prompt_id", name, workspaceID, repo)
 }
 
+func resolveAgentPromptRef(q querier, name, promptScope, agentWorkspaceID, agentRepo string) (string, error) {
+	if workspaceID, repo, explicit := fleet.ParseCatalogScopePath(promptScope); explicit {
+		if !catalogScopeVisibleToAgent(workspaceID, repo, agentWorkspaceID, agentRepo) {
+			return "", sql.ErrNoRows
+		}
+		var id string
+		if err := queryPromptByScopeName(q, workspaceID, repo, name).Scan(&id); err != nil {
+			return "", err
+		}
+		return id, nil
+	}
+	return resolveVisiblePromptByName(q, name, agentWorkspaceID, agentRepo)
+}
+
+func catalogScopeVisibleToAgent(scopeWorkspaceID, scopeRepo, agentWorkspaceID, agentRepo string) bool {
+	scopeWorkspaceID = strings.TrimSpace(scopeWorkspaceID)
+	if scopeWorkspaceID != "" {
+		scopeWorkspaceID = fleet.NormalizeWorkspaceID(scopeWorkspaceID)
+	}
+	scopeRepo = fleet.NormalizeRepoName(scopeRepo)
+	agentWorkspaceID = fleet.NormalizeWorkspaceID(agentWorkspaceID)
+	agentRepo = fleet.NormalizeRepoName(agentRepo)
+	if scopeWorkspaceID == "" && scopeRepo == "" {
+		return true
+	}
+	if scopeWorkspaceID != agentWorkspaceID {
+		return false
+	}
+	return scopeRepo == "" || (agentRepo != "" && scopeRepo == agentRepo)
+}
+
 func resolveVisibleCatalogRef(q querier, table, ref, workspaceID, repo string) (string, error) {
+	id, err := resolveVisibleCatalogID(q, table, ref, workspaceID, repo)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	return resolveVisibleCatalogName(q, table, strings.TrimSuffix(table, "s"), strings.TrimSuffix(table, "s")+" id", ref, workspaceID, repo)
+}
+
+func resolveVisibleCatalogID(q querier, table, id, workspaceID, repo string) (string, error) {
 	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	repo = fleet.NormalizeRepoName(repo)
 	rows, err := q.Query(`
@@ -761,9 +806,9 @@ func resolveVisibleCatalogRef(q querier, table, ref, workspaceID, repo string) (
 			(workspace_id IS NULL AND repo IS NULL)
 			OR (workspace_id = ? AND repo IS NULL)
 			OR (? <> '' AND workspace_id = ? AND repo = ?)
-		  )
+		)
 		LIMIT 1`,
-		ref, workspaceID, repo, workspaceID, repo,
+		id, workspaceID, repo, workspaceID, repo,
 	)
 	if err != nil {
 		return "", err
@@ -779,7 +824,7 @@ func resolveVisibleCatalogRef(q querier, table, ref, workspaceID, repo string) (
 	if err := rows.Err(); err != nil {
 		return "", err
 	}
-	return resolveVisibleCatalogName(q, table, strings.TrimSuffix(table, "s"), strings.TrimSuffix(table, "s")+" id", ref, workspaceID, repo)
+	return "", sql.ErrNoRows
 }
 
 func resolveVisibleCatalogName(q querier, table, label, idHint, name, workspaceID, repo string) (string, error) {
@@ -1090,7 +1135,7 @@ func loadPrompts(db querier, cfg *config.Config) error {
 
 func loadAgents(db querier, cfg *config.Config) error {
 	rows, err := db.Query(`
-		SELECT a.id,a.workspace_id,a.name,a.backend,a.model,a.skills,COALESCE(p.content, a.prompt),a.prompt_id,COALESCE(p.name, ''),a.scope_type,a.scope_repo,a.allow_prs,a.allow_dispatch,a.can_dispatch,a.description,a.allow_memory
+		SELECT a.id,a.workspace_id,a.name,a.backend,a.model,a.skills,COALESCE(p.content, a.prompt),a.prompt_id,COALESCE(p.name, ''),COALESCE(p.workspace_id, ''),COALESCE(p.repo, ''),a.scope_type,a.scope_repo,a.allow_prs,a.allow_dispatch,a.can_dispatch,a.description,a.allow_memory
 		FROM agents a
 		LEFT JOIN prompts p ON p.id = a.prompt_id
 		ORDER BY a.name`)
@@ -1101,10 +1146,10 @@ func loadAgents(db querier, cfg *config.Config) error {
 
 	var agents []fleet.Agent
 	for rows.Next() {
-		var id, workspaceID, name, backend, model, skillsJSON, prompt, promptID, promptRef, scopeType, scopeRepo, canDispatchJSON, description string
+		var id, workspaceID, name, backend, model, skillsJSON, prompt, promptID, promptRef, promptWorkspace, promptRepo, scopeType, scopeRepo, canDispatchJSON, description string
 		var allowPRs, allowDispatch, allowMemory int
 		if err := rows.Scan(
-			&id, &workspaceID, &name, &backend, &model, &skillsJSON, &prompt, &promptID, &promptRef, &scopeType, &scopeRepo,
+			&id, &workspaceID, &name, &backend, &model, &skillsJSON, &prompt, &promptID, &promptRef, &promptWorkspace, &promptRepo, &scopeType, &scopeRepo,
 			&allowPRs, &allowDispatch, &canDispatchJSON, &description, &allowMemory,
 		); err != nil {
 			return fmt.Errorf("store load: scan agent: %w", err)
@@ -1121,6 +1166,10 @@ func loadAgents(db querier, cfg *config.Config) error {
 		// readers see a concrete bool reflecting the stored row, not the
 		// "absent" sentinel that nil represents on inbound YAML/JSON paths.
 		allowMem := intToBool(allowMemory)
+		promptScope := ""
+		if promptID != "" {
+			promptScope = fleet.CatalogScopePath(promptWorkspace, promptRepo)
+		}
 		agents = append(agents, fleet.Agent{
 			ID:            id,
 			WorkspaceID:   workspaceID,
@@ -1131,6 +1180,7 @@ func loadAgents(db querier, cfg *config.Config) error {
 			Prompt:        prompt,
 			PromptID:      promptID,
 			PromptRef:     promptRef,
+			PromptScope:   promptScope,
 			ScopeType:     scopeType,
 			ScopeRepo:     scopeRepo,
 			AllowPRs:      intToBool(allowPRs),

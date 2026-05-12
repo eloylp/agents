@@ -32,7 +32,6 @@ import (
 	"io/fs"
 	"net/http"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -586,16 +585,10 @@ func (d *Daemon) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	workspaceID := strings.TrimSpace(req.Workspace)
-	if workspaceID == "" {
-		workspaceID = fleet.DefaultWorkspaceID
-	}
+	workspaceID := fleet.NormalizeWorkspaceID(req.Workspace)
 	want := fleet.NormalizeRepoName(req.Repo)
 	idx := slices.IndexFunc(repos, func(r fleet.Repo) bool {
-		repoWorkspace := r.WorkspaceID
-		if repoWorkspace == "" {
-			repoWorkspace = fleet.DefaultWorkspaceID
-		}
+		repoWorkspace := fleet.NormalizeWorkspaceID(r.WorkspaceID)
 		return r.Name == want && repoWorkspace == workspaceID
 	})
 	if idx < 0 || !repos[idx].Enabled {

@@ -506,6 +506,17 @@ func TestToolPromptScopedDuplicatesUseStableID(t *testing.T) {
 		t.Fatalf("updated prompt = %+v, want team-b by name and workspace", updated)
 	}
 
+	req.Params.Arguments = map[string]any{"name": "shared", "scope": "TEAM-B"}
+	res, err = toolGetPrompt(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var scoped map[string]any
+	decodeText(t, res, &scoped)
+	if scoped["id"] != "prompt_team-b_shared" || scoped["scope"] != "team-b" {
+		t.Fatalf("scoped get prompt = %+v, want team-b prompt by case-insensitive scope", scoped)
+	}
+
 	req.Params.Arguments = map[string]any{"name": "shared", "content": "Ambiguous"}
 	res, err = toolUpdatePrompt(deps)(context.Background(), req)
 	if err != nil {
@@ -718,6 +729,40 @@ func TestToolTriggerAgentSuccess(t *testing.T) {
 	}
 	if target, _ := ev.Payload["target_agent"].(string); target != "coder" {
 		t.Fatalf("expected target_agent=coder, got %+v", ev.Payload)
+	}
+}
+
+func TestToolTriggerAgentNormalizesWorkspace(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	if _, err := deps.Fleet.UpsertWorkspace(fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err := deps.Fleet.UpsertAgent(fleet.Agent{
+		WorkspaceID: "team-a", Name: "coder", Backend: "claude", PromptRef: "coder",
+		Description: "team coder", Skills: []string{}, CanDispatch: []string{},
+	}); err != nil {
+		t.Fatalf("seed team agent: %v", err)
+	}
+	if _, err := deps.Repos.UpsertRepo(fleet.Repo{WorkspaceID: "team-a", Name: "owner/team", Enabled: true}); err != nil {
+		t.Fatalf("seed team repo: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"workspace": "Team-A", "agent": "coder", "repo": "OWNER/TEAM"}
+	res, err := toolTriggerAgent(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", textOf(t, res))
+	}
+	events := drainQueue(t, deps.Channels, 1)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 queued event, got %d", len(events))
+	}
+	if events[0].WorkspaceID != "team-a" || events[0].Repo.FullName != "owner/team" {
+		t.Fatalf("event scope = %q/%q, want team-a/owner/team", events[0].WorkspaceID, events[0].Repo.FullName)
 	}
 }
 
@@ -1465,7 +1510,7 @@ func TestToolCreateAgentRejectsInlinePrompt(t *testing.T) {
 	}
 }
 
-func TestToolCreateAgentRejectsConflictingPromptRefs(t *testing.T) {
+func TestToolCreateAgentAcceptsPromptIDWithDerivedRef(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
 
@@ -1482,8 +1527,15 @@ func TestToolCreateAgentRejectsConflictingPromptRefs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !res.IsError || !strings.Contains(textOf(t, res), "prompt_id and prompt_ref are mutually exclusive") {
-		t.Fatalf("expected prompt ref conflict rejection, got error=%v body=%s", res.IsError, textOf(t, res))
+	if res.IsError {
+		t.Fatalf("expected prompt id plus derived ref to be accepted, got body=%s", textOf(t, res))
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(textOf(t, res)), &got); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if got["prompt_ref"] != "coder" {
+		t.Fatalf("prompt_ref = %v, want coder", got["prompt_ref"])
 	}
 }
 
@@ -2590,7 +2642,7 @@ func TestToolUpdateAgentRejectsInlinePrompt(t *testing.T) {
 	}
 }
 
-func TestToolUpdateAgentRejectsConflictingPromptRefs(t *testing.T) {
+func TestToolUpdateAgentAcceptsPromptIDWithDerivedRef(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
 
@@ -2604,8 +2656,15 @@ func TestToolUpdateAgentRejectsConflictingPromptRefs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !res.IsError || !strings.Contains(textOf(t, res), "prompt_id and prompt_ref are mutually exclusive") {
-		t.Fatalf("expected prompt ref conflict rejection, got error=%v body=%s", res.IsError, textOf(t, res))
+	if res.IsError {
+		t.Fatalf("expected prompt id plus derived ref to be accepted, got body=%s", textOf(t, res))
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(textOf(t, res)), &got); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if got["prompt_ref"] != "coder" {
+		t.Fatalf("prompt_ref = %v, want coder", got["prompt_ref"])
 	}
 }
 

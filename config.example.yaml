@@ -137,12 +137,14 @@ prompts:
 # workspaces, workspace-local agents and repo wiring
 #
 # Each agent is a workspace-local capability definition: a name, a backend,
-# reusable skills, a prompt_ref, and scope. Agents don't run on their own;
+# reusable skills, a prompt_ref, optional prompt_scope, and operating scope.
+# Agents don't run on their own;
 # repos below decide when and where they run.
 #
 # backend: claude | codex | claude_local
-# prompt_ref: reusable prompt catalog entry
-# scope_type: workspace | repo
+# prompt_ref: reusable prompt catalog entry. Use prompt_scope when names repeat.
+# prompt_scope: global | workspace | workspace/owner/repo (case-insensitive)
+# scope_type: workspace | repo (agent operating boundary)
 # allow_prs: false (default) | true
 #   When false the scheduler prepends a hard "do not open PRs" instruction.
 # description: short human-readable summary of the agent's role.

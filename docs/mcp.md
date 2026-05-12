@@ -29,6 +29,8 @@ The same pattern works for Cursor, Cline, and any other MCP-compatible client; c
 
 ## Available tools
 
+Most fleet tools accept `workspace` for workspace-local resources and default to `Default` when omitted. Prompt catalog tools expose stable prompt ids, and agent tools accept either `prompt_id` or the human selector `prompt_ref` plus optional `prompt_scope`. `prompt_scope` is case-insensitive and accepts `global`, `workspace`, or `workspace/owner/repo`, for example `default/eloylp/agents`.
+
 ### Fleet management
 
 | Tool | Description |

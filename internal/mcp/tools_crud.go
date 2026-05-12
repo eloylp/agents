@@ -44,6 +44,7 @@ func toolCreateAgent(deps Deps) server.ToolHandlerFunc {
 			Model:         req.GetString("model", ""),
 			PromptID:      req.GetString("prompt_id", ""),
 			PromptRef:     req.GetString("prompt_ref", ""),
+			PromptScope:   req.GetString("prompt_scope", ""),
 			ScopeType:     req.GetString("scope_type", ""),
 			ScopeRepo:     req.GetString("scope_repo", ""),
 			Description:   req.GetString("description", ""),
@@ -92,6 +93,9 @@ func toolUpdateAgent(deps Deps) server.ToolHandlerFunc {
 		}
 		if v, ok := stringPtrArg(args, "prompt_ref"); ok {
 			patch.PromptRef = v
+		}
+		if v, ok := stringPtrArg(args, "prompt_scope"); ok {
+			patch.PromptScope = v
 		}
 		if v, ok := stringPtrArg(args, "prompt_id"); ok {
 			patch.PromptID = v
@@ -373,10 +377,15 @@ func toolCreatePrompt(deps Deps) server.ToolHandlerFunc {
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
+		workspaceID := req.GetString("workspace_id", "")
+		repo := req.GetString("repo", "")
+		if scope, ok := trimmedString(req, "scope"); ok {
+			workspaceID, repo, _ = fleet.ParseCatalogScopePath(scope)
+		}
 		prompt := fleet.Prompt{
 			ID:          req.GetString("id", ""),
-			WorkspaceID: req.GetString("workspace_id", ""),
-			Repo:        req.GetString("repo", ""),
+			WorkspaceID: workspaceID,
+			Repo:        repo,
 			Name:        name,
 			Description: req.GetString("description", ""),
 			Content:     req.GetString("content", ""),
@@ -449,6 +458,11 @@ func resolvePromptName(deps Deps, req mcpgo.CallToolRequest, name string) (strin
 	targetName := fleet.NormalizePromptName(name)
 	workspaceID, hasWorkspace := trimmedStringOptional(req, "workspace_id")
 	repo, hasRepo := trimmedStringOptional(req, "repo")
+	if scope, ok := trimmedString(req, "scope"); ok {
+		workspaceID, repo, _ = fleet.ParseCatalogScopePath(scope)
+		hasWorkspace = true
+		hasRepo = repo != ""
+	}
 	workspaceID = strings.TrimSpace(workspaceID)
 	if workspaceID != "" {
 		workspaceID = fleet.NormalizeWorkspaceID(workspaceID)

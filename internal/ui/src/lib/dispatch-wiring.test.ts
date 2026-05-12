@@ -48,6 +48,7 @@ describe('validateConnection', () => {
       prompt: '',
       prompt_id: '',
       prompt_ref: '',
+      prompt_scope: '',
       scope_type: 'workspace',
       scope_repo: '',
       allow_prs: false,

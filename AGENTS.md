@@ -56,7 +56,7 @@ internal/ai/response-schema.json # embedded JSON schema for structured output (c
 ## Conceptual model
 
 - **Workspace**, the top-level operational context for repos, agents, memory, graph layout, runners, traces, events, dispatches, and workspace-scoped budgets. `default` is the compatibility workspace for existing installs.
-- **Prompt**, a reusable catalog asset that may be global, workspace-scoped, or repo-scoped. Workspace-local agents reference prompts through stable `prompt_id` or unambiguous `prompt_ref`; legacy inline prompt imports are migrated into the catalog.
+- **Prompt**, a reusable catalog asset that may be global, workspace-scoped, or repo-scoped. Agents persist the stable `prompt_id`; human-facing inputs may use `prompt_ref` plus optional `prompt_scope` (`global`, `workspace`, or `workspace/owner/repo`, case-insensitive) and the daemon resolves that selector to `prompt_id`. Legacy inline prompt imports are migrated into the catalog.
 - **Agent**, a workspace-local capability: `backend` + `skills: []` + `prompt_ref` + scope. An agent is a pure definition. It does not run by itself.
 - **Skill**, a reusable chunk of guidance referenced by stable id in agents. Display names may repeat across global, workspace, and repo scopes; skill text is concatenated before the agent's own prompt at render time.
 - **Binding**, `repos[*].use[*]`: pairs one agent with exactly one trigger (`labels:`, `events:`, or `cron:`). The same agent can have multiple bindings on the same repo with different triggers.

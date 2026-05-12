@@ -10,6 +10,7 @@ export interface Workspace {
 
 export interface CatalogItem {
   id?: string
+  scope?: string
   workspace_id?: string
   repo?: string
   name: string
@@ -44,9 +45,15 @@ export function catalogValue(item: CatalogItem): string {
   return item.id || item.name
 }
 
+export function catalogScope(item: CatalogItem): string {
+  if (item.scope) return item.scope
+  if (item.repo) return `${item.workspace_id || defaultWorkspaceID}/${item.repo}`
+  return item.workspace_id || 'global'
+}
+
 export function catalogLabel(item: CatalogItem): string {
   const value = catalogValue(item)
-  const scope = item.repo ? item.repo : item.workspace_id ? item.workspace_id : 'global'
+  const scope = catalogScope(item)
   return value === item.name ? `${item.name} (${scope})` : `${item.name} (${value}, ${scope})`
 }
 

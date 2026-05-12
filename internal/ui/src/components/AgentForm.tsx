@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import BadgePicker from '@/components/BadgePicker'
 import type { StoreAgent } from '@/lib/dispatch-wiring'
-import { catalogLabel, catalogValue, visibleCatalogItems, type CatalogItem } from '@/lib/workspace'
+import { catalogLabel, catalogScope, catalogValue, visibleCatalogItems, type CatalogItem } from '@/lib/workspace'
 
 export type { StoreAgent }
 
@@ -23,7 +23,7 @@ export interface PromptOption {
 // allow_memory defaults to true so newly created agents preserve the
 // historical behaviour where autonomous runs persist memory by default.
 export const emptyAgentForm: StoreAgent = {
-  name: '', backend: '', model: '', skills: [], prompt_id: '', prompt_ref: '', scope_type: 'workspace', scope_repo: '',
+  name: '', backend: '', model: '', skills: [], prompt_id: '', prompt_ref: '', prompt_scope: '', scope_type: 'workspace', scope_repo: '',
   allow_prs: false, allow_dispatch: false, allow_memory: true,
   can_dispatch: [], description: '',
 }
@@ -66,7 +66,9 @@ export default function AgentForm({
   const visibleSkills = visibleCatalogItems(skillOptions, workspace, catalogRepo)
   const promptValues = visiblePrompts.map(catalogValue)
   const skillValues = visibleSkills.map(catalogValue)
-  const selectedPrompt = (form.prompt_id || form.prompt_ref).trim()
+  const promptScopeKeys = visiblePrompts.map(p => `${catalogValue(p)}:${p.name}:${catalogScope(p)}`).join('|')
+  const selectedPromptByRef = visiblePrompts.find(p => p.name === form.prompt_ref && catalogScope(p) === form.prompt_scope)
+  const selectedPrompt = (form.prompt_id || (selectedPromptByRef ? catalogValue(selectedPromptByRef) : form.prompt_ref)).trim()
   const promptRefMissing = selectedPrompt !== '' && !promptValues.includes(selectedPrompt)
   const canSave = !saving && form.name.trim() !== '' && form.backend.trim() !== '' && form.description.trim() !== '' &&
     selectedPrompt !== '' && !promptRefMissing && (form.scope_type !== 'repo' || scopeRepo !== '')
@@ -75,14 +77,16 @@ export default function AgentForm({
     const prompt = visiblePrompts.find(p => catalogValue(p) === value)
     setForm(f => ({
       ...f,
-      prompt_id: prompt?.id && prompt.id !== prompt.name ? prompt.id : '',
-      prompt_ref: prompt?.id && prompt.id !== prompt.name ? '' : value,
+      prompt_id: '',
+      prompt_ref: prompt?.name ?? value,
+      prompt_scope: prompt ? catalogScope(prompt) : '',
     }))
   }
 
   useEffect(() => {
     setForm(f => {
-      const selected = (f.prompt_id || f.prompt_ref).trim()
+      const selectedByRef = visiblePrompts.find(p => p.name === f.prompt_ref && catalogScope(p) === f.prompt_scope)
+      const selected = (f.prompt_id || (selectedByRef ? catalogValue(selectedByRef) : f.prompt_ref)).trim()
       const nextSkills = f.skills.filter(s => skillValues.includes(s))
       const promptVisible = selected === '' || promptValues.includes(selected)
       if (promptVisible && nextSkills.length === f.skills.length) return f
@@ -91,9 +95,10 @@ export default function AgentForm({
         skills: nextSkills,
         prompt_id: promptVisible ? f.prompt_id : '',
         prompt_ref: promptVisible ? f.prompt_ref : '',
+        prompt_scope: promptVisible ? f.prompt_scope : '',
       }
     })
-  }, [workspace, catalogRepo, promptValues.join('|'), skillValues.join('|')])
+  }, [workspace, catalogRepo, promptScopeKeys, promptValues.join('|'), skillValues.join('|')])
 
   useEffect(() => {
     if (!form.model) return
@@ -155,7 +160,7 @@ export default function AgentForm({
           <select
             style={inputStyle}
             value={form.scope_type || 'workspace'}
-            onChange={e => setForm(f => ({ ...f, scope_type: e.target.value, scope_repo: e.target.value === 'repo' ? f.scope_repo : '', prompt_id: '', prompt_ref: '', skills: [] }))}
+            onChange={e => setForm(f => ({ ...f, scope_type: e.target.value, scope_repo: e.target.value === 'repo' ? f.scope_repo : '', prompt_id: '', prompt_ref: '', prompt_scope: '', skills: [] }))}
           >
             <option value="workspace">Workspace</option>
             <option value="repo">Repo</option>
@@ -164,7 +169,7 @@ export default function AgentForm({
         {form.scope_type === 'repo' && (
           <div>
             <label style={labelStyle}>Scoped repo *</label>
-            <select style={inputStyle} value={form.scope_repo} onChange={e => setForm(f => ({ ...f, scope_repo: e.target.value, prompt_id: '', prompt_ref: '', skills: [] }))}>
+            <select style={inputStyle} value={form.scope_repo} onChange={e => setForm(f => ({ ...f, scope_repo: e.target.value, prompt_id: '', prompt_ref: '', prompt_scope: '', skills: [] }))}>
               <option value="">Select repo...</option>
               {repoNames.map(name => <option key={name} value={name}>{name}</option>)}
             </select>

@@ -39,6 +39,7 @@ interface ToolStatus {
 }
 
 interface OrphanedAgent {
+  workspace_id: string
   name: string
   backend: string
   model: string
@@ -209,6 +210,8 @@ const budgetScopeLabel = (b: TokenBudget) => {
   }
 }
 
+const orphanKey = (orphan: OrphanedAgent) => `${orphan.workspace_id || 'default'}:${orphan.name}`
+
 function JsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
   if (value === null) return <span style={{ color: 'var(--text-muted)' }}>null</span>
   if (typeof value === 'boolean') return <span style={{ color: '#f59e0b' }}>{String(value)}</span>
@@ -364,7 +367,7 @@ export default function ConfigPage() {
           const next: Record<string, string> = {}
           for (const orphan of orphanAgents) {
             const suggested = orphan.available_models?.[0] ?? ''
-            next[orphan.name] = prev[orphan.name] ?? suggested
+            next[orphanKey(orphan)] = prev[orphanKey(orphan)] ?? suggested
           }
           return next
         })
@@ -501,34 +504,36 @@ export default function ConfigPage() {
     setSaving(false)
   }
 
-  const upsertAgentModel = async (agentName: string, model: string) => {
-    const readRes = await fetch(`/agents/${encodeURIComponent(agentName)}`)
+  const upsertAgentModel = async (orphan: OrphanedAgent, model: string) => {
+    const targetWorkspace = orphan.workspace_id || 'default'
+    const readRes = await fetch(withWorkspace(`/agents/${encodeURIComponent(orphan.name)}`, targetWorkspace))
     if (!readRes.ok) {
-      throw new Error((await readRes.text()) || `Failed to load agent ${agentName}`)
+      throw new Error((await readRes.text()) || `Failed to load agent ${orphan.name} in ${targetWorkspace}`)
     }
     const agent = await readRes.json() as Record<string, unknown>
     agent.model = model
+    agent.workspace_id = targetWorkspace
 
-    const writeRes = await fetch('/agents', {
+    const writeRes = await fetch(withWorkspace('/agents', targetWorkspace), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(agent),
     })
     if (!writeRes.ok) {
-      throw new Error((await writeRes.text()) || `Failed to update agent ${agentName}`)
+      throw new Error((await writeRes.text()) || `Failed to update agent ${orphan.name} in ${targetWorkspace}`)
     }
   }
 
-  const saveOrphanModel = async (agentName: string) => {
-    const model = (orphanModelSelection[agentName] ?? '').trim()
+  const saveOrphanModel = async (orphan: OrphanedAgent) => {
+    const model = (orphanModelSelection[orphanKey(orphan)] ?? '').trim()
     if (!model) {
-      setSaveError(`Select a model for ${agentName} first`)
+      setSaveError(`Select a model for ${orphan.name} first`)
       return
     }
     setSaving(true)
     setSaveError('')
     try {
-      await upsertAgentModel(agentName, model)
+      await upsertAgentModel(orphan, model)
       loadBackends()
     } catch (e) {
       setSaveError(String(e))
@@ -536,11 +541,11 @@ export default function ConfigPage() {
     setSaving(false)
   }
 
-  const clearOrphanModel = async (agentName: string) => {
+  const clearOrphanModel = async (orphan: OrphanedAgent) => {
     setSaving(true)
     setSaveError('')
     try {
-      await upsertAgentModel(agentName, '')
+      await upsertAgentModel(orphan, '')
       loadBackends()
     } catch (e) {
       setSaveError(String(e))
@@ -553,7 +558,7 @@ export default function ConfigPage() {
     setSaving(true)
     setSaveError('')
     try {
-      const results = await Promise.allSettled(orphanedAgents.map(orphan => upsertAgentModel(orphan.name, '')))
+      const results = await Promise.allSettled(orphanedAgents.map(orphan => upsertAgentModel(orphan, '')))
       const failed = results.filter(r => r.status === 'rejected')
       if (failed.length > 0) {
         setSaveError(`Cleared ${orphanedAgents.length - failed.length}/${orphanedAgents.length} orphaned agents. Some updates failed.`)
@@ -843,14 +848,14 @@ export default function ConfigPage() {
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
                 {orphanedAgents.map(orphan => (
-                  <div key={orphan.name} style={{ border: '1px solid var(--border-danger)', borderRadius: '6px', padding: '0.55rem', background: 'var(--bg-card)' }}>
+                  <div key={orphanKey(orphan)} style={{ border: '1px solid var(--border-danger)', borderRadius: '6px', padding: '0.55rem', background: 'var(--bg-card)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.75rem' }}>
                       <div style={{ minWidth: 0, flex: 1 }}>
                         <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-heading)' }}>
                           {orphan.name}
                         </div>
                         <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                          backend: {orphan.backend} · missing model: {orphan.model}
+                          workspace: {orphan.workspace_id || 'default'} · backend: {orphan.backend} · missing model: {orphan.model}
                         </div>
                         {!!(orphan.repos && orphan.repos.length > 0) && (
                           <div style={{ fontSize: '0.74rem', color: 'var(--text-faint)', marginTop: '2px' }}>
@@ -860,8 +865,8 @@ export default function ConfigPage() {
                       </div>
                       <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
                         <select
-                          value={orphanModelSelection[orphan.name] ?? ''}
-                          onChange={e => setOrphanModelSelection(prev => ({ ...prev, [orphan.name]: e.target.value }))}
+                          value={orphanModelSelection[orphanKey(orphan)] ?? ''}
+                          onChange={e => setOrphanModelSelection(prev => ({ ...prev, [orphanKey(orphan)]: e.target.value }))}
                           style={{ ...inputStyle, width: '200px', fontSize: '0.76rem' }}
                         >
                           <option value="">Select replacement model</option>
@@ -870,14 +875,14 @@ export default function ConfigPage() {
                           ))}
                         </select>
                         <button
-                          onClick={() => saveOrphanModel(orphan.name)}
+                          onClick={() => saveOrphanModel(orphan)}
                           disabled={saving}
                           style={{ padding: '5px 9px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
                         >
                           Remap
                         </button>
                         <button
-                          onClick={() => clearOrphanModel(orphan.name)}
+                          onClick={() => clearOrphanModel(orphan)}
                           disabled={saving}
                           style={{ padding: '5px 9px', borderRadius: '6px', border: '1px solid var(--border-danger)', background: 'var(--bg-card)', color: 'var(--text-danger)', cursor: saving ? 'wait' : 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
                         >
@@ -1087,7 +1092,7 @@ export default function ConfigPage() {
                 </p>
               </div>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                <RepoFilter selected={lbRepo} onChange={setLbRepo} />
+                <RepoFilter selected={lbRepo} onChange={setLbRepo} workspace={workspace} />
                 <select
                   style={{ ...inputStyle, width: '120px', fontSize: '0.8rem' }}
                   value={lbPeriod}

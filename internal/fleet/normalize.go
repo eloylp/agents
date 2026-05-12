@@ -62,6 +62,13 @@ func NormalizeAgent(a *Agent) {
 	a.Backend = NormalizeBackendName(a.Backend)
 	a.Model = strings.TrimSpace(a.Model)
 	a.Prompt = strings.TrimSpace(a.Prompt)
+	a.PromptID = strings.TrimSpace(a.PromptID)
+	a.PromptRef = NormalizePromptName(a.PromptRef)
+	if workspaceID, repo, explicit := ParseCatalogScopePath(a.PromptScope); explicit {
+		a.PromptScope = CatalogScopePath(workspaceID, repo)
+	} else {
+		a.PromptScope = strings.TrimSpace(a.PromptScope)
+	}
 	a.Description = strings.TrimSpace(a.Description)
 	for i := range a.Skills {
 		a.Skills[i] = NormalizeSkillName(a.Skills[i])

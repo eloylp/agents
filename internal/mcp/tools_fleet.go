@@ -272,10 +272,7 @@ func toolTriggerAgent(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("repo is required"), nil
 		}
-		workspaceID := strings.TrimSpace(req.GetString("workspace", fleet.DefaultWorkspaceID))
-		if workspaceID == "" {
-			workspaceID = fleet.DefaultWorkspaceID
-		}
+		workspaceID := fleet.NormalizeWorkspaceID(req.GetString("workspace", fleet.DefaultWorkspaceID))
 
 		repos, err := deps.Store.ReadRepos()
 		if err != nil {
@@ -283,10 +280,7 @@ func toolTriggerAgent(deps Deps) server.ToolHandlerFunc {
 		}
 		want := fleet.NormalizeRepoName(repoName)
 		idx := slices.IndexFunc(repos, func(r fleet.Repo) bool {
-			repoWorkspace := r.WorkspaceID
-			if repoWorkspace == "" {
-				repoWorkspace = fleet.DefaultWorkspaceID
-			}
+			repoWorkspace := fleet.NormalizeWorkspaceID(r.WorkspaceID)
 			return r.Name == want && repoWorkspace == workspaceID
 		})
 		if idx < 0 || !repos[idx].Enabled {

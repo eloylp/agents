@@ -94,7 +94,7 @@ func TestTokenBudgetCompositeScopesClearUnusedFields(t *testing.T) {
 			name: "workspace repo clears agent and backend",
 			in: store.TokenBudget{
 				ScopeKind:   "workspace+repo",
-				WorkspaceID: "Team-A",
+				WorkspaceID: "team-a",
 				Repo:        "Owner/Repo",
 				Agent:       "stale-agent",
 				Backend:     "stale-backend",
@@ -102,13 +102,13 @@ func TestTokenBudgetCompositeScopesClearUnusedFields(t *testing.T) {
 				CapTokens:   100,
 				Enabled:     true,
 			},
-			want: store.TokenBudget{WorkspaceID: "Team-A", Repo: "owner/repo"},
+			want: store.TokenBudget{WorkspaceID: "team-a", Repo: "owner/repo"},
 		},
 		{
 			name: "workspace agent clears repo and backend",
 			in: store.TokenBudget{
 				ScopeKind:   "workspace+agent",
-				WorkspaceID: "Team-A",
+				WorkspaceID: "team-a",
 				Repo:        "stale/repo",
 				Agent:       "Coder",
 				Backend:     "stale-backend",
@@ -116,13 +116,13 @@ func TestTokenBudgetCompositeScopesClearUnusedFields(t *testing.T) {
 				CapTokens:   100,
 				Enabled:     true,
 			},
-			want: store.TokenBudget{WorkspaceID: "Team-A", Agent: "coder"},
+			want: store.TokenBudget{WorkspaceID: "team-a", Agent: "coder"},
 		},
 		{
 			name: "workspace backend clears repo and agent",
 			in: store.TokenBudget{
 				ScopeKind:   "workspace+backend",
-				WorkspaceID: "Team-A",
+				WorkspaceID: "team-a",
 				Repo:        "stale/repo",
 				Agent:       "stale-agent",
 				Backend:     "Claude",
@@ -130,13 +130,13 @@ func TestTokenBudgetCompositeScopesClearUnusedFields(t *testing.T) {
 				CapTokens:   100,
 				Enabled:     true,
 			},
-			want: store.TokenBudget{WorkspaceID: "Team-A", Backend: "claude"},
+			want: store.TokenBudget{WorkspaceID: "team-a", Backend: "claude"},
 		},
 		{
 			name: "workspace repo agent clears backend",
 			in: store.TokenBudget{
 				ScopeKind:   "workspace+repo+agent",
-				WorkspaceID: "Team-A",
+				WorkspaceID: "team-a",
 				Repo:        "Owner/Repo",
 				Agent:       "Coder",
 				Backend:     "stale-backend",
@@ -144,7 +144,7 @@ func TestTokenBudgetCompositeScopesClearUnusedFields(t *testing.T) {
 				CapTokens:   100,
 				Enabled:     true,
 			},
-			want: store.TokenBudget{WorkspaceID: "Team-A", Repo: "owner/repo", Agent: "coder"},
+			want: store.TokenBudget{WorkspaceID: "team-a", Repo: "owner/repo", Agent: "coder"},
 		},
 	}
 

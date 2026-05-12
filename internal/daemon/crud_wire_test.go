@@ -13,7 +13,9 @@ type storeAgentJSON struct {
 	Model         string   `json:"model,omitempty"`
 	Skills        []string `json:"skills"`
 	Prompt        string   `json:"prompt"`
+	PromptID      string   `json:"prompt_id,omitempty"`
 	PromptRef     string   `json:"prompt_ref,omitempty"`
+	PromptScope   string   `json:"prompt_scope,omitempty"`
 	AllowPRs      bool     `json:"allow_prs"`
 	AllowDispatch bool     `json:"allow_dispatch"`
 	CanDispatch   []string `json:"can_dispatch"`

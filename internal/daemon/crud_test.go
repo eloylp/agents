@@ -213,7 +213,7 @@ func TestStoreCRUDAgentCreateRejectsInlinePrompt(t *testing.T) {
 	}
 }
 
-func TestStoreCRUDAgentCreateRejectsConflictingPromptRefs(t *testing.T) {
+func TestStoreCRUDAgentCreateAcceptsPromptIDWithDerivedRef(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 	seedStoreBackend(t, s, "claude")
@@ -223,11 +223,15 @@ func TestStoreCRUDAgentCreateRejectsConflictingPromptRefs(t *testing.T) {
 		"name": "coder", "backend": "claude", "prompt_id": "prompt_coder", "prompt_ref": "coder",
 		"description": "coding agent", "skills": []string{}, "can_dispatch": []string{},
 	})
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("POST /agents conflicting prompt refs: got %d, want 400, %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST /agents prompt id plus derived ref: got %d, want 200, %s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), "prompt_id and prompt_ref are mutually exclusive") {
-		t.Fatalf("error body = %q, want prompt ref conflict rejection", rr.Body.String())
+	var out storeAgentJSON
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode agent: %v", err)
+	}
+	if out.PromptRef != "coder" {
+		t.Fatalf("prompt_ref = %q, want derived coder", out.PromptRef)
 	}
 }
 
@@ -2626,7 +2630,7 @@ func TestStoreCRUDAgentPatchRejectsInlinePrompt(t *testing.T) {
 	}
 }
 
-func TestStoreCRUDAgentPatchRejectsConflictingPromptRefs(t *testing.T) {
+func TestStoreCRUDAgentPatchAcceptsPromptIDWithDerivedRef(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
 	seedStoreBackend(t, s, "claude")
@@ -2642,11 +2646,15 @@ func TestStoreCRUDAgentPatchRejectsConflictingPromptRefs(t *testing.T) {
 		"prompt_id":  "prompt_coder",
 		"prompt_ref": "coder",
 	})
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("PATCH /agents/coder conflicting prompt refs: got %d, want 400, %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH /agents/coder prompt id plus derived ref: got %d, want 200, %s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), "prompt_id and prompt_ref are mutually exclusive") {
-		t.Fatalf("error body = %q, want prompt ref conflict rejection", rr.Body.String())
+	var out storeAgentJSON
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode agent: %v", err)
+	}
+	if out.PromptRef != "coder" {
+		t.Fatalf("prompt_ref = %q, want derived coder", out.PromptRef)
 	}
 }
 

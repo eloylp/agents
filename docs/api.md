@@ -88,6 +88,10 @@ These are only mounted when `AGENTS_PROXY_ENABLED=true` is set in the daemon env
 
 These routes are always mounted and backed by the SQLite database.
 
+Workspace-local resources accept `?workspace=<id-or-name>` and default to `default` when omitted. This applies to fleet snapshots, agents, repos, bindings, graph layout, runners, events, traces, memory, and workspace-scoped token leaderboard queries. Catalog resources (`prompts`, `skills`, `guardrails`) are reusable assets: each row exposes `workspace_id` and `repo` to express global, workspace-scoped, or repo-scoped visibility.
+
+Prompt catalog rows expose a stable `id` plus a display `name`. Agents persist `prompt_id`; human-facing REST writes may provide `prompt_ref` plus optional `prompt_scope` instead. `prompt_scope` is case-insensitive and accepts `global`, `workspace`, or `workspace/owner/repo`, for example `default/eloylp/agents`.
+
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/{resource}` | List all entries for a resource type (`workspaces`, `prompts`, `skills`, `backends`, `repos`, `guardrails`). Note: `GET /agents` is the workspace-filterable fleet snapshot above, not the CRUD list. |

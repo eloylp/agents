@@ -34,6 +34,7 @@ interface Agent {
   allow_memory?: boolean
   prompt_ref?: string
   prompt_id?: string
+  prompt_scope?: string
   scope_type?: string
   scope_repo?: string
   current_status: string
@@ -185,6 +186,7 @@ export default function FleetPage() {
       skills: a?.skills ?? [],
       prompt_id: a?.prompt_id ?? '',
       prompt_ref: a?.prompt_ref ?? '',
+      prompt_scope: a?.prompt_scope ?? '',
       scope_type: a?.scope_type ?? 'workspace',
       scope_repo: a?.scope_repo ?? '',
       allow_prs: a?.allow_prs ?? false,
@@ -207,6 +209,7 @@ export default function FleetPage() {
           skills: data.skills ?? [],
           prompt_ref: data.prompt_ref ?? '',
           prompt_id: data.prompt_id ?? '',
+          prompt_scope: data.prompt_scope ?? '',
           scope_type: data.scope_type ?? 'workspace',
           scope_repo: data.scope_repo ?? '',
           can_dispatch: data.can_dispatch ?? [],
@@ -261,7 +264,7 @@ export default function FleetPage() {
     setSaving(true)
     try {
       const cascade = deleteTarget.bindings.length > 0
-      const url = `/agents/${encodeURIComponent(deleteTarget.name)}${cascade ? '?cascade=true' : ''}`
+      const url = withWorkspace(`/agents/${encodeURIComponent(deleteTarget.name)}${cascade ? '?cascade=true' : ''}`, workspace)
       const res = await fetch(url, { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         const msg = await res.text()
@@ -299,7 +302,7 @@ export default function FleetPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          <RepoFilter selected={repoFilter} onChange={setRepoFilter} />
+          <RepoFilter selected={repoFilter} onChange={setRepoFilter} workspace={workspace} />
           <Link href="/traces/" style={{ fontSize: '0.875rem', color: 'var(--accent)' }}>View traces →</Link>
           <button
             onClick={openCreate}

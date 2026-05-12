@@ -18,6 +18,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/daemon"
 	"github.com/eloylp/agents/internal/daemon/daemontest"
+	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/workflow"
 )
 
@@ -714,6 +715,39 @@ func TestHandleAgentsRunEnqueuesEvent(t *testing.T) {
 	}
 	if resp["event_id"] == "" {
 		t.Fatal("expected non-empty event_id")
+	}
+}
+
+func TestHandleAgentsRunNormalizesWorkspace(t *testing.T) {
+	t.Parallel()
+	cfg := testCfg(func(c *config.Config) {
+		c.Workspaces = append(c.Workspaces, fleet.Workspace{ID: "team-a", Name: "Team A"})
+		c.Agents = append(c.Agents, fleet.Agent{
+			WorkspaceID: "team-a",
+			Name:        "coder",
+			Backend:     "claude",
+			Prompt:      "team coder",
+			Description: "team coder",
+		})
+		c.Repos = append(c.Repos, fleet.Repo{
+			WorkspaceID: "team-a",
+			Name:        "owner/team",
+			Enabled:     true,
+		})
+	})
+	server, dc := newTestServer(t, cfg)
+
+	req := newRequest(http.MethodPost, "/run", `{"agent":"coder","repo":"OWNER/TEAM","workspace":"Team-A"}`)
+	req.AddCookie(bootstrapSessionCookie(t, server))
+	rr := httptest.NewRecorder()
+	server.AuthHandler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected %d, got %d: %s", http.StatusAccepted, rr.Code, rr.Body.String())
+	}
+	ev := drainEvent(t, dc)
+	if ev.WorkspaceID != "team-a" || ev.Repo.FullName != "owner/team" {
+		t.Fatalf("event scope = %q/%q, want team-a/owner/team", ev.WorkspaceID, ev.Repo.FullName)
 	}
 }
 

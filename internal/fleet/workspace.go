@@ -6,10 +6,12 @@ import "strings"
 // predate workspace-aware storage and APIs.
 const DefaultWorkspaceID = "default"
 
-// NormalizeWorkspaceID trims an optional workspace id and returns Default when
-// callers omit it for compatibility with pre-workspace API surfaces.
+// NormalizeWorkspaceID trims and lowercases an optional workspace id and
+// returns Default when callers omit it for compatibility with pre-workspace
+// API surfaces. Persisted workspace ids are URL-safe lowercase identifiers;
+// normalizing lookup input keeps REST/MCP/UI/runtime comparisons consistent.
 func NormalizeWorkspaceID(id string) string {
-	id = strings.TrimSpace(id)
+	id = strings.ToLower(strings.TrimSpace(id))
 	if id == "" {
 		return DefaultWorkspaceID
 	}

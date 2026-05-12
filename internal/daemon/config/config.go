@@ -127,6 +127,7 @@ type apiAgentConfigJSON struct {
 	Skills        []string `json:"skills,omitempty"`
 	PromptID      string   `json:"prompt_id,omitempty"`
 	PromptRef     string   `json:"prompt_ref,omitempty"`
+	PromptScope   string   `json:"prompt_scope,omitempty"`
 	ScopeType     string   `json:"scope_type,omitempty"`
 	ScopeRepo     string   `json:"scope_repo,omitempty"`
 	Description   string   `json:"description,omitempty"`
@@ -205,6 +206,7 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 			Skills:        a.Skills,
 			PromptID:      a.PromptID,
 			PromptRef:     a.PromptRef,
+			PromptScope:   a.PromptScope,
 			ScopeType:     a.ScopeType,
 			ScopeRepo:     a.ScopeRepo,
 			Description:   a.Description,

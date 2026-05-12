@@ -88,11 +88,13 @@ prompts:
 Prompts are reusable assets. Empty `workspace_id` and `repo` make a prompt
 globally visible; `workspace_id` with empty `repo` makes it visible only inside
 that workspace; `workspace_id` plus `repo` makes it visible only to repo-scoped
-agents for that repo. Agents may reference prompts by stable `prompt_id`, or by
-`prompt_ref` when the visible prompt name is unambiguous. Legacy imports may
-still provide inline agent `prompt` text, which the store migrates into a prompt
-catalog entry, but exports prefer references and do not emit inline agent prompt
-bodies.
+agents for that repo. Agents persist stable `prompt_id` references. Human-facing
+config may use `prompt_ref` plus optional `prompt_scope`, where scope is a
+case-insensitive path: `global`, `workspace`, or `workspace/owner/repo`
+(for example `default/eloylp/agents`). The daemon resolves that selector to the
+stable `prompt_id`. Legacy imports may still provide inline agent `prompt` text,
+which the store migrates into a prompt catalog entry, but exports prefer
+references and do not emit inline agent prompt bodies.
 
 ## `skills`
 
@@ -158,7 +160,7 @@ references + prompt reference + scope + dispatch wiring. Agents don't run until
 a repo in the same workspace binds them to a trigger.
 
 - `backend` must match an entry in `backends` (e.g. `claude`, `codex`, or any custom local-backend name). There is no `auto` selection; every agent must name a backend explicitly.
-- `prompt_id` is the stable prompt reference. `prompt_ref` may be used when the visible prompt name is unambiguous. Agent config should not include inline prompt bodies.
+- `prompt_id` is the stable prompt reference persisted by the daemon. `prompt_ref` plus optional `prompt_scope` is the human selector; `prompt_scope` accepts `global`, `workspace`, or `workspace/owner/repo` and is case-insensitive. Agent config should not include inline prompt bodies.
 - `skills` should contain stable skill ids. A visible skill display name is accepted only when unambiguous, and import/export resolves it to the stable id.
 - `scope_type` is `workspace` or `repo`. `repo` scope also requires `scope_repo`, and the daemon rejects runs outside that repo.
 - Agent names must be unique inside a workspace.

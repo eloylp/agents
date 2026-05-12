@@ -20,9 +20,10 @@ type Agent struct {
 	PromptID string `yaml:"prompt_id,omitempty" json:"prompt_id,omitempty"`
 	// PromptRef is explicit on export once an agent resolves through the prompt
 	// catalog, including legacy inline prompts migrated under the agent name.
-	PromptRef string `yaml:"prompt_ref,omitempty"`
-	ScopeType string `yaml:"scope_type,omitempty"`
-	ScopeRepo string `yaml:"scope_repo,omitempty"`
+	PromptRef   string `yaml:"prompt_ref,omitempty"`
+	PromptScope string `yaml:"prompt_scope,omitempty" json:"prompt_scope,omitempty"`
+	ScopeType   string `yaml:"scope_type,omitempty"`
+	ScopeRepo   string `yaml:"scope_repo,omitempty"`
 	// AllowPRs controls whether the agent is permitted to open pull requests.
 	// Defaults to false; the scheduler prepends a hard no-PR instruction when
 	// false so the gate is code-level rather than relying on prompt wording.

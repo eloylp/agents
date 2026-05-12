@@ -10,6 +10,7 @@ export interface StoreAgent {
   prompt?: string
   prompt_id?: string
   prompt_ref: string
+  prompt_scope?: string
   scope_type: 'workspace' | 'repo' | string
   scope_repo: string
   allow_prs: boolean
@@ -41,6 +42,7 @@ export function storeAgentFromResponse(data: Partial<StoreAgent>, fallbackName: 
     prompt: data.prompt ?? '',
     prompt_id: data.prompt_id ?? '',
     prompt_ref: data.prompt_ref ?? '',
+    prompt_scope: data.prompt_scope ?? '',
     scope_type: data.scope_type ?? 'workspace',
     scope_repo: data.scope_repo ?? '',
     allow_prs: data.allow_prs ?? false,

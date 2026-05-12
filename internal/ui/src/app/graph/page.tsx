@@ -72,6 +72,7 @@ interface AgentInfo {
   allow_memory?: boolean
   prompt_id?: string
   prompt_ref?: string
+  prompt_scope?: string
   scope_type?: string
   scope_repo?: string
   skills?: string[]
@@ -725,6 +726,7 @@ export default function GraphPage() {
       skills: agent?.skills ?? [],
       prompt_id: agent?.prompt_id ?? '',
       prompt_ref: agent?.prompt_ref ?? '',
+      prompt_scope: agent?.prompt_scope ?? '',
       scope_type: agent?.scope_type ?? 'workspace',
       scope_repo: agent?.scope_repo ?? '',
       allow_prs: agent?.allow_prs ?? false,
@@ -794,7 +796,7 @@ export default function GraphPage() {
     setBindingSaving(true)
     setBindingError('')
     try {
-      const res = await fetch(`${repoPath(draft.repo)}/bindings`, {
+      const res = await fetch(withWorkspace(`${repoPath(draft.repo)}/bindings`, workspace), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(bindingFromDraft(agent, draft)),
@@ -810,14 +812,14 @@ export default function GraphPage() {
     } finally {
       setBindingSaving(false)
     }
-  }, [bindingDraft, load, selectedNodeName])
+  }, [bindingDraft, load, selectedNodeName, workspace])
 
   const toggleBinding = useCallback(async (repo: string, binding: Binding, enabled: boolean) => {
     if (typeof binding.id !== 'number') return
     setBindingSaving(true)
     setBindingError('')
     try {
-      const res = await fetch(`${repoPath(repo)}/bindings/${binding.id}`, {
+      const res = await fetch(withWorkspace(`${repoPath(repo)}/bindings/${binding.id}`, workspace), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...binding, enabled }),
@@ -832,14 +834,14 @@ export default function GraphPage() {
     } finally {
       setBindingSaving(false)
     }
-  }, [load])
+  }, [load, workspace])
 
   const deleteBinding = useCallback(async (repo: string, binding: Binding) => {
     if (typeof binding.id !== 'number') return
     setBindingSaving(true)
     setBindingError('')
     try {
-      const res = await fetch(`${repoPath(repo)}/bindings/${binding.id}`, { method: 'DELETE' })
+      const res = await fetch(withWorkspace(`${repoPath(repo)}/bindings/${binding.id}`, workspace), { method: 'DELETE' })
       if (!res.ok && res.status !== 204) {
         setBindingError((await res.text()) || 'Binding delete failed')
         return
@@ -850,7 +852,7 @@ export default function GraphPage() {
     } finally {
       setBindingSaving(false)
     }
-  }, [load])
+  }, [load, workspace])
 
   const closePanel = useCallback(() => {
     setPanelMode(null)
@@ -889,7 +891,7 @@ export default function GraphPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-          <RepoFilter selected={repoFilter} onChange={setRepoFilter} />
+          <RepoFilter selected={repoFilter} onChange={setRepoFilter} workspace={workspace} />
           <button onClick={openCreateAgent} style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>
             + Create agent
           </button>

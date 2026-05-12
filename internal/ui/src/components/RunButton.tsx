@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useSelectedWorkspace } from '@/lib/workspace'
 
 const ALL_REPOS = '__all__'
 
@@ -11,6 +12,7 @@ const ALL_REPOS = '__all__'
 // button per agent, repos = the agent's bindings) and the Repos view
 // (one button per agent listed under each repo, repos = [repo.name]).
 export default function RunButton({ agent, repos }: { agent: string; repos: string[] }) {
+  const { workspace } = useSelectedWorkspace()
   // Dedupe (an agent may be bound to the same repo via multiple triggers).
   const uniqueRepos = Array.from(new Set(repos.filter(Boolean)))
   const [state, setState] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
@@ -40,7 +42,7 @@ export default function RunButton({ agent, repos }: { agent: string; repos: stri
         const res = await fetch('/run', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agent, repo }),
+          body: JSON.stringify({ agent, repo, workspace }),
         })
         if (res.status === 202) {
           const data = await res.json()
