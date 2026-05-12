@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -353,15 +354,16 @@ type dispatchRecord struct {
 // Nodes are seeded from the configured fleet (issue #151: "Nodes = agents")
 // and any edge endpoints not already covered by the current config (e.g.
 // agents removed from config but with recorded dispatch history).
-func (h *Handler) HandleGraph(w http.ResponseWriter, _ *http.Request) {
-	edges := h.events.ListEdges()
+func (h *Handler) HandleGraph(w http.ResponseWriter, r *http.Request) {
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
+	edges := h.events.ListEdgesForWorkspace(workspaceID)
 
 	// Build a map of the last cron error status for each agent so idle
 	// agents that last exited with an error are flagged in the response.
 	lastErrorByAgent := make(map[string]bool)
 	if h.sched != nil {
 		for _, as := range h.sched.AgentStatuses() {
-			if as.LastStatus == "error" {
+			if fleet.NormalizeWorkspaceID(as.WorkspaceID) == workspaceID && as.LastStatus == "error" {
 				lastErrorByAgent[as.Name] = true
 			}
 		}
@@ -378,10 +380,28 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	seen := make(map[string]struct{})
+	configuredEdges := make(map[string]graphEdge)
 	if h.store != nil {
 		if agents, err := h.store.ReadAgents(); err == nil {
+			agentNames := make(map[string]struct{})
 			for _, a := range agents {
+				if fleet.NormalizeWorkspaceID(a.WorkspaceID) != workspaceID {
+					continue
+				}
 				seen[a.Name] = struct{}{}
+				agentNames[a.Name] = struct{}{}
+			}
+			for _, a := range agents {
+				if fleet.NormalizeWorkspaceID(a.WorkspaceID) != workspaceID {
+					continue
+				}
+				for _, target := range a.CanDispatch {
+					if _, ok := agentNames[target]; !ok {
+						continue
+					}
+					key := graphEdgeKey(a.Name, target)
+					configuredEdges[key] = graphEdge{From: a.Name, To: target, Dispatches: []dispatchRecord{}}
+				}
 			}
 		} else {
 			h.logger.Warn().Err(err).Msg("graph: read agents failed; node list will only include those with dispatch edges")
@@ -395,8 +415,12 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, _ *http.Request) {
 	for id := range seen {
 		nodes = append(nodes, graphNode{ID: id, Status: nodeStatus(id)})
 	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 
-	wireEdges := make([]graphEdge, 0, len(edges))
+	edgeByKey := make(map[string]graphEdge, len(edges)+len(configuredEdges))
+	for key, e := range configuredEdges {
+		edgeByKey[key] = e
+	}
 	for _, e := range edges {
 		recs := make([]dispatchRecord, 0, len(e.Dispatches))
 		for _, d := range e.Dispatches {
@@ -407,16 +431,33 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, _ *http.Request) {
 				Reason: d.Reason,
 			})
 		}
-		wireEdges = append(wireEdges, graphEdge{
+		edgeByKey[graphEdgeKey(e.From, e.To)] = graphEdge{
 			From:       e.From,
 			To:         e.To,
 			Count:      e.Count,
 			Dispatches: recs,
-		})
+		}
 	}
+	wireEdges := make([]graphEdge, 0, len(edgeByKey))
+	for _, e := range edgeByKey {
+		if e.Dispatches == nil {
+			e.Dispatches = []dispatchRecord{}
+		}
+		wireEdges = append(wireEdges, e)
+	}
+	sort.Slice(wireEdges, func(i, j int) bool {
+		if wireEdges[i].From == wireEdges[j].From {
+			return wireEdges[i].To < wireEdges[j].To
+		}
+		return wireEdges[i].From < wireEdges[j].From
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(graphJSON{Nodes: nodes, Edges: wireEdges})
+}
+
+func graphEdgeKey(from, to string) string {
+	return from + "\x00" + to
 }
 
 // ── /memory ────────────────────────────────────────────────────────────────

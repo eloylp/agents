@@ -345,6 +345,13 @@ func DeleteSkill(db *sql.DB, name string) error {
 		return fmt.Errorf("store: delete skill %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
+	refs, err := agentsReferencingSkill(tx, name)
+	if err != nil {
+		return fmt.Errorf("store: delete skill %s: check agents: %w", name, err)
+	}
+	if len(refs) > 0 {
+		return &ErrConflict{Msg: fmt.Sprintf("skill %q is referenced by %d agent(s): %s", name, len(refs), formatReferenceList(refs))}
+	}
 	if _, err := tx.Exec("DELETE FROM skills WHERE id=?", name); err != nil {
 		return fmt.Errorf("store: delete skill %s: %w", name, err)
 	}
@@ -546,17 +553,76 @@ func DeletePrompt(db *sql.DB, ref string) error {
 	if err != nil {
 		return fmt.Errorf("store: delete prompt %s: lookup: %w", ref, err)
 	}
-	var refs int
-	if err := tx.QueryRow("SELECT COUNT(*) FROM agents WHERE prompt_id=?", id).Scan(&refs); err != nil {
-		return fmt.Errorf("store: delete prompt %s: count agents: %w", ref, err)
+	refs, err := agentsReferencingPrompt(tx, id)
+	if err != nil {
+		return fmt.Errorf("store: delete prompt %s: check agents: %w", ref, err)
 	}
-	if refs > 0 {
-		return &ErrConflict{Msg: fmt.Sprintf("prompt %q is referenced by %d agent(s)", ref, refs)}
+	if len(refs) > 0 {
+		return &ErrConflict{Msg: fmt.Sprintf("prompt %q is referenced by %d agent(s): %s", ref, len(refs), formatReferenceList(refs))}
 	}
 	if _, err := tx.Exec("DELETE FROM prompts WHERE id=?", id); err != nil {
 		return fmt.Errorf("store: delete prompt %s: %w", ref, err)
 	}
 	return tx.Commit()
+}
+
+func agentsReferencingPrompt(q querier, promptID string) ([]string, error) {
+	rows, err := q.Query("SELECT workspace_id, name FROM agents WHERE prompt_id=? ORDER BY workspace_id, name", promptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var refs []string
+	for rows.Next() {
+		var workspaceID, name string
+		if err := rows.Scan(&workspaceID, &name); err != nil {
+			return nil, err
+		}
+		refs = append(refs, workspaceAgentRef(workspaceID, name))
+	}
+	return refs, rows.Err()
+}
+
+func agentsReferencingSkill(q querier, skillID string) ([]string, error) {
+	rows, err := q.Query("SELECT workspace_id, name, skills FROM agents ORDER BY workspace_id, name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var refs []string
+	for rows.Next() {
+		var workspaceID, name, skillsJSON string
+		if err := rows.Scan(&workspaceID, &name, &skillsJSON); err != nil {
+			return nil, err
+		}
+		var skills []string
+		if err := json.Unmarshal([]byte(skillsJSON), &skills); err != nil {
+			return nil, fmt.Errorf("parse agent %s skills: %w", name, err)
+		}
+		for _, skill := range skills {
+			if fleet.NormalizeSkillName(skill) == skillID {
+				refs = append(refs, workspaceAgentRef(workspaceID, name))
+				break
+			}
+		}
+	}
+	return refs, rows.Err()
+}
+
+func workspaceAgentRef(workspaceID, name string) string {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	if workspaceID == "" {
+		workspaceID = fleet.DefaultWorkspaceID
+	}
+	return workspaceID + "/" + name
+}
+
+func formatReferenceList(refs []string) string {
+	refs = slices.Compact(slices.Sorted(slices.Values(refs)))
+	if len(refs) <= 8 {
+		return strings.Join(refs, ", ")
+	}
+	return strings.Join(refs[:8], ", ") + fmt.Sprintf(", and %d more", len(refs)-8)
 }
 
 // ReadSnapshot returns agents, repos, skills, and backends as a consistent

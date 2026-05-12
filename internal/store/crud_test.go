@@ -875,7 +875,7 @@ func TestDeleteSkillRejectedWhenAgentReferences(t *testing.T) {
 	if err == nil {
 		t.Fatal("DeleteSkill still referenced by agent: want error, got nil")
 	}
-	if !strings.Contains(err.Error(), "unknown skill") {
+	if !strings.Contains(err.Error(), `skill "architect" is referenced by 1 agent(s): default/coder`) {
 		t.Errorf("unexpected error message: %v", err)
 	}
 

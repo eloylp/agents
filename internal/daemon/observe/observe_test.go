@@ -650,6 +650,57 @@ func TestHandleGraphIncludesConfiguredAgentWithNoDispatches(t *testing.T) {
 	}
 }
 
+func TestHandleGraphIsWorkspaceScopedAndIncludesConfiguredDispatchWiring(t *testing.T) {
+	t.Parallel()
+	cfg := minimalCfg()
+	cfg.Agents = []fleet.Agent{
+		{Name: "webhook-smoke", WorkspaceID: fleet.DefaultWorkspaceID, Backend: "claude", Prompt: "p", Description: "default agent"},
+		{Name: "coder", WorkspaceID: "team-a", Backend: "claude", Prompt: "p", Description: "team coder", CanDispatch: []string{"reviewer"}},
+		{Name: "reviewer", WorkspaceID: "team-a", Backend: "claude", Prompt: "p", Description: "team reviewer", AllowDispatch: true},
+		{Name: "coder", WorkspaceID: "team-b", Backend: "claude", Prompt: "p", Description: "other coder"},
+	}
+	fx := newFixture(t, cfg)
+	h := New(fx.events, fx.store, nil, nil, nil, zerolog.Nop())
+	if _, err := fx.db.Exec(
+		`INSERT INTO dispatch_history (workspace_id, from_agent, to_agent, repo, number, reason) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`,
+		"team-a", "coder", "reviewer", "owner/repo", 10, "needs review",
+		fleet.DefaultWorkspaceID, "webhook-smoke", "coder", "owner/repo", 11, "default dispatch",
+	); err != nil {
+		t.Fatalf("seed dispatches: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/graph?workspace=team-a", nil)
+	rec := httptest.NewRecorder()
+	h.HandleGraph(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var g graphJSON
+	if err := json.NewDecoder(rec.Body).Decode(&g); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(g.Nodes) != 2 {
+		t.Fatalf("nodes = %+v, want only team-a coder/reviewer", g.Nodes)
+	}
+	nodeSeen := map[string]bool{}
+	for _, n := range g.Nodes {
+		nodeSeen[n.ID] = true
+	}
+	if !nodeSeen["coder"] || !nodeSeen["reviewer"] || nodeSeen["webhook-smoke"] {
+		t.Fatalf("nodes = %+v, want team-a nodes only", g.Nodes)
+	}
+	if len(g.Edges) != 1 {
+		t.Fatalf("edges = %+v, want coder->reviewer only", g.Edges)
+	}
+	if g.Edges[0].From != "coder" || g.Edges[0].To != "reviewer" {
+		t.Fatalf("edge = %+v, want coder->reviewer", g.Edges[0])
+	}
+	if g.Edges[0].Count != 1 || len(g.Edges[0].Dispatches) != 1 {
+		t.Fatalf("edge history = %+v, want one observed dispatch on configured edge", g.Edges[0])
+	}
+}
+
 func TestHandleGraphNodeStatusReflectsRuntimeState(t *testing.T) {
 	t.Parallel()
 	cfg := minimalCfg()

@@ -11,9 +11,9 @@
 //     out; we don't yet know which agents will run.
 //   - event_queue.completed_at IS NOT NULL → query traces for the
 //     event id. Emit 1 row per trace span (status=success|error,
-//     agent populated). Events that completed with 0 traces (webhook
-//     with no matching binding) are skipped, nothing actually ran,
-//     so listing them on a "runners" page would be misleading.
+//     agent populated). Events that completed with 0 traces emit one
+//     status=skipped row so pagination totals and visible rows stay
+//     consistent for deduped/manual events and no-op webhook events.
 //
 // Retry / delete operate on the underlying event_queue row, not on a
 // specific trace. Retry copies the event blob into a new row and
@@ -74,6 +74,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 // populated). Status is the unified lifecycle:
 //   - "enqueued" / "running": event is in flight, no trace yet
 //   - "success" / "error":     trace exists, run finished with that outcome
+//   - "skipped":               event completed without producing a trace span
 type RunnerRow struct {
 	ID          int64           `json:"id"`
 	EventID     string          `json:"event_id"`
@@ -126,7 +127,7 @@ var ErrRunnerRunning = errors.New("runners: cannot retry running event")
 // "completed", these gate the underlying event_queue rows. Other
 // values return an error.
 //
-// Each event_queue row produces 0..N output rows depending on whether
+// Each event_queue row produces 1..N output rows depending on whether
 // traces have been recorded for it (see package doc).
 func (h *Handler) List(workspace, status string, limit, offset int) (ListResponse, error) {
 	st := store.RunnerStatus(status)
@@ -156,7 +157,7 @@ func (h *Handler) List(workspace, status string, limit, offset int) (ListRespons
 	return ListResponse{Runners: rows, Total: total, Limit: limit, Offset: offset}, nil
 }
 
-// expand turns one event_queue row into 0..N RunnerRows by JOINing
+// expand turns one event_queue row into 1..N RunnerRows by JOINing
 // with the traces store. See package doc for the rule.
 func (h *Handler) expand(ev store.RunnerRecord) []RunnerRow {
 	base := RunnerRow{
@@ -203,10 +204,8 @@ func (h *Handler) expand(ev store.RunnerRecord) []RunnerRow {
 	}
 	spans := h.traces.TracesByRootEventIDForWorkspace(ev.WorkspaceID, ev.EventID)
 	if len(spans) == 0 {
-		// Event completed without spawning any runner (e.g. webhook with no
-		// matching binding). Skip, listing it under "runners" would be
-		// misleading.
-		return nil
+		base.Status = "skipped"
+		return []RunnerRow{base}
 	}
 	out := make([]RunnerRow, 0, len(spans))
 	for _, sp := range spans {

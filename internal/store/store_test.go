@@ -1249,7 +1249,7 @@ func TestDeletePromptReferencedByAgentRejected(t *testing.T) {
 	if !errors.As(err, &conflict) {
 		t.Fatalf("DeletePrompt error = %T %[1]v, want ErrConflict", err)
 	}
-	if !strings.Contains(err.Error(), `prompt "coder" is referenced`) {
+	if !strings.Contains(err.Error(), `prompt "coder" is referenced by 1 agent(s): default/coder`) {
 		t.Fatalf("error = %v, want referenced prompt message", err)
 	}
 }
