@@ -199,7 +199,7 @@ func (s *Scheduler) reconcile() error {
 
 	// Build the desired set of (agent, repo, spec) entries.
 	type want struct{ workspaceID, name, repo, spec string }
-	desired := map[want]bool{}
+	desired := map[want]struct{}{}
 	for _, repo := range repos {
 		if !repo.Enabled {
 			continue
@@ -213,7 +213,7 @@ func (s *Scheduler) reconcile() error {
 				s.logger.Warn().Str("repo", repo.Name).Str("agent", b.Agent).Msg("scheduler reconcile: skipping binding to unknown agent")
 				continue
 			}
-			desired[want{workspaceID: repoWorkspace, name: b.Agent, repo: repo.Name, spec: b.Cron}] = true
+			desired[want{workspaceID: repoWorkspace, name: b.Agent, repo: repo.Name, spec: b.Cron}] = struct{}{}
 		}
 	}
 
@@ -224,7 +224,7 @@ func (s *Scheduler) reconcile() error {
 	kept := s.agentEntries[:0]
 	for _, e := range s.agentEntries {
 		key := want{workspaceID: e.workspaceID, name: e.name, repo: e.repo, spec: e.spec}
-		if desired[key] {
+		if _, ok := desired[key]; ok {
 			delete(desired, key) // mark as already registered
 			kept = append(kept, e)
 			continue
