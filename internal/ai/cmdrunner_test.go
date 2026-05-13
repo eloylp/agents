@@ -394,16 +394,12 @@ func TestBuildDeliveryClaudeUsesAppendSystemPrompt(t *testing.T) {
 
 			if tc.wantFlag {
 				// System must be the value immediately after the flag.
-				for i, a := range args {
-					if a == "--append-system-prompt" {
-						if i+1 >= len(args) {
-							t.Fatalf("--append-system-prompt has no following value in args=%v", args)
-						}
-						if args[i+1] != tc.system {
-							t.Errorf("--append-system-prompt value = %q, want %q", args[i+1], tc.system)
-						}
-						break
-					}
+				i := slices.Index(args, "--append-system-prompt")
+				if i < 0 || i+1 >= len(args) {
+					t.Fatalf("--append-system-prompt has no following value in args=%v", args)
+				}
+				if args[i+1] != tc.system {
+					t.Errorf("--append-system-prompt value = %q, want %q", args[i+1], tc.system)
 				}
 				// User content goes on stdin (maxPromptChars=0 means no truncation).
 				if stdin != tc.user {
@@ -511,11 +507,8 @@ func TestBuildDeliveryRespectsTotalBudget(t *testing.T) {
 			}
 			if tc.wantSystemArg != "" {
 				found := ""
-				for i, a := range args {
-					if a == "--append-system-prompt" && i+1 < len(args) {
-						found = args[i+1]
-						break
-					}
+				if i := slices.Index(args, "--append-system-prompt"); i >= 0 && i+1 < len(args) {
+					found = args[i+1]
 				}
 				if found != tc.wantSystemArg {
 					t.Errorf("--append-system-prompt = %q, want %q", found, tc.wantSystemArg)
@@ -582,11 +575,8 @@ func TestBuildDeliveryClaudeAndCodexSameTruncationBoundary(t *testing.T) {
 
 			// Reconstruct the logical combined prompt from the claude delivery.
 			claudeSystemArg := ""
-			for i, a := range claudeArgs {
-				if a == "--append-system-prompt" && i+1 < len(claudeArgs) {
-					claudeSystemArg = claudeArgs[i+1]
-					break
-				}
+			if i := slices.Index(claudeArgs, "--append-system-prompt"); i >= 0 && i+1 < len(claudeArgs) {
+				claudeSystemArg = claudeArgs[i+1]
 			}
 			var claudeCombined string
 			if claudeStdin != "" {
