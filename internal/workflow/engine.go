@@ -270,6 +270,22 @@ func (e *Engine) dockerRuntime() (runtimeexec.Runner, error) {
 	return runner, nil
 }
 
+func (e *Engine) Close() error {
+	e.dockerMu.Lock()
+	defer e.dockerMu.Unlock()
+	if e.dockerRunner == nil {
+		return nil
+	}
+	closer, ok := e.dockerRunner.(interface{ Close() error })
+	if !ok {
+		e.dockerRunner = nil
+		return nil
+	}
+	err := closer.Close()
+	e.dockerRunner = nil
+	return err
+}
+
 type errorRunner struct {
 	err error
 }

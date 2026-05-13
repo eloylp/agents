@@ -331,6 +331,9 @@ func (d *Daemon) Run(parentCtx context.Context) error {
 	stopConsumers()
 	consumerErr := consumers.Wait()
 	log.Info().Msg("consumers stopped; queue drained")
+	if err := d.engine.Close(); err != nil {
+		log.Warn().Err(err).Msg("close workflow engine")
+	}
 	log.Info().Msg("agents daemon stopped")
 
 	if producerErr != nil && !errors.Is(producerErr, context.Canceled) {

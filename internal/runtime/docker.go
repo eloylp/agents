@@ -33,6 +33,10 @@ func NewDocker(logger zerolog.Logger) (*Docker, error) {
 	return &Docker{client: cli, logger: logger}, nil
 }
 
+func (d *Docker) Close() error {
+	return d.client.Close()
+}
+
 func (d *Docker) EnsureImage(ctx context.Context, ref string) error {
 	if strings.TrimSpace(ref) == "" {
 		return errors.New("runner image is required")
@@ -140,8 +144,21 @@ func (d *Docker) Run(ctx context.Context, spec ContainerSpec) (ExitStatus, error
 		_, err := stdcopy.StdCopy(stdout, stderr, attach.Reader)
 		copyDone <- err
 	}()
+	waitForCopy := func() error {
+		if err := <-copyDone; err != nil && !errors.Is(err, io.EOF) {
+			return fmt.Errorf("copy runner output: %w", err)
+		}
+		return nil
+	}
+	closeAndWaitForCopy := func() {
+		attach.Close()
+		if err := waitForCopy(); err != nil {
+			d.logger.Debug().Err(err).Str("container", containerID).Msg("copy runner output")
+		}
+	}
 
 	if err := d.client.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
+		closeAndWaitForCopy()
 		return ExitStatus{}, fmt.Errorf("start runner container: %w", err)
 	}
 	waitCh, errCh := d.client.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
@@ -151,15 +168,17 @@ func (d *Docker) Run(ctx context.Context, spec ContainerSpec) (ExitStatus, error
 		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = d.client.ContainerStop(stopCtx, containerID, container.StopOptions{})
+		closeAndWaitForCopy()
 		return ExitStatus{}, ctx.Err()
 	case err := <-errCh:
 		if err != nil {
+			closeAndWaitForCopy()
 			return ExitStatus{}, fmt.Errorf("wait runner container: %w", err)
 		}
 	case status = <-waitCh:
 	}
-	if err := <-copyDone; err != nil && !errors.Is(err, io.EOF) {
-		return ExitStatus{}, fmt.Errorf("copy runner output: %w", err)
+	if err := waitForCopy(); err != nil {
+		return ExitStatus{}, err
 	}
 	return ExitStatus{Code: int(status.StatusCode)}, nil
 }
