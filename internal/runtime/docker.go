@@ -11,7 +11,6 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
@@ -189,34 +188,6 @@ func hostConfig(spec ContainerSpec) (*container.HostConfig, error) {
 	}
 	if spec.Policy.NetworkMode == "" {
 		cfg.NetworkMode = "bridge"
-	}
-	filesystem := strings.ToLower(strings.TrimSpace(spec.Policy.Filesystem))
-	switch filesystem {
-	case "", "workspace-tmp":
-	case "readonly-root", "workspace-ro":
-		cfg.ReadonlyRootfs = true
-	default:
-		return nil, fmt.Errorf("unsupported filesystem policy %q", spec.Policy.Filesystem)
-	}
-	for _, m := range spec.Mounts {
-		readOnly := m.ReadOnly || filesystem == "workspace-ro"
-		if m.Target == RunnerTempMount {
-			readOnly = false
-		}
-		if m.Tmpfs || m.Source == "" {
-			cfg.Mounts = append(cfg.Mounts, mount.Mount{
-				Type:     mount.TypeTmpfs,
-				Target:   m.Target,
-				ReadOnly: readOnly,
-			})
-			continue
-		}
-		cfg.Mounts = append(cfg.Mounts, mount.Mount{
-			Type:     mount.TypeBind,
-			Source:   m.Source,
-			Target:   m.Target,
-			ReadOnly: readOnly,
-		})
 	}
 	if spec.Policy.PidsLimit > 0 {
 		cfg.Resources.PidsLimit = &spec.Policy.PidsLimit

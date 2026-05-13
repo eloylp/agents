@@ -85,12 +85,11 @@ runtime:
     pids_limit: 256
     timeout_seconds: 900
     network_mode: bridge
-    filesystem: workspace-tmp
 ```
 
 Runtime settings are fleet state because operators may need to switch runner images or constraints without rebuilding the daemon. They are stored in SQLite, returned by `/config`, included in import/export, and editable through Config -> Runtime, REST, and MCP. They are not startup env overrides; use the database-backed surfaces for runner image and container policy changes.
 
-The global runner image applies to every run unless a workspace sets `runner_image`. Constraints are passed to Docker where supported: CPU, memory, PID limit, timeout, network mode, and the filesystem policy descriptor. Advanced egress filtering is not part of the v1 runtime settings.
+The global runner image applies to every run unless a workspace sets `runner_image`. Constraints are passed to Docker where supported: CPU, memory, PID limit, timeout, and network mode. Advanced egress filtering is not part of the v1 runtime settings.
 
 ## `backends`
 

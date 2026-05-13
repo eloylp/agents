@@ -660,10 +660,6 @@ func runShellInRuntime(ctx context.Context, runner runtimeexec.Runner, settings 
 	var stderr bytes.Buffer
 	policy := settings.Constraints
 	policy.TimeoutSeconds = 0
-	// Tool discovery validates the configured runner image and network/auth
-	// environment. It does not mount a workspace, and its setup script creates
-	// scratch directories, so force a writable rootfs for this diagnostic.
-	policy.Filesystem = "workspace-tmp"
 	status, err := runner.Run(runCtx, runtimeexec.ContainerSpec{
 		Image:      settings.RunnerImage,
 		Command:    []string{"/bin/sh", "-lc", "mkdir -p " + shellQuote(diagnosticHome) + " " + shellQuote(diagnosticConfigHome) + " " + shellQuote(diagnosticCodexHome) + " && " + script},

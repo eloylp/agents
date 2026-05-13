@@ -6,54 +6,30 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 )
 
-func TestHostConfigAppliesFilesystemPolicies(t *testing.T) {
+func TestHostConfigAppliesRuntimeConstraints(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name            string
-		policy          string
-		wantRootRO      bool
-		wantWorkspaceRO bool
-		wantTempRO      bool
-		wantErr         bool
-	}{
-		{name: "default keeps mounts writable"},
-		{name: "documented workspace temp policy", policy: "workspace-tmp"},
-		{name: "workspace readonly", policy: "workspace-ro", wantRootRO: true, wantWorkspaceRO: true},
-		{name: "readonly root policy", policy: "readonly-root", wantRootRO: true},
-		{name: "rejects readonly alias", policy: "readonly", wantErr: true},
-		{name: "rejects unknown", policy: "surprise", wantErr: true},
+	cfg, err := hostConfig(ContainerSpec{
+		Policy: fleet.RuntimeConstraints{
+			CPUs:        "0.5",
+			Memory:      "512m",
+			PidsLimit:   128,
+			NetworkMode: "none",
+		},
+	})
+	if err != nil {
+		t.Fatalf("hostConfig: %v", err)
 	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			cfg, err := hostConfig(ContainerSpec{
-				Policy: fleet.RuntimeConstraints{Filesystem: tc.policy},
-				Mounts: []Mount{
-					{Source: "/host/work", Target: "/workspace"},
-					{Source: "/host/tmp", Target: "/tmp/agents-run"},
-				},
-			})
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("hostConfig error = nil, want error")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("hostConfig: %v", err)
-			}
-			if cfg.ReadonlyRootfs != tc.wantRootRO {
-				t.Fatalf("ReadonlyRootfs = %v, want %v", cfg.ReadonlyRootfs, tc.wantRootRO)
-			}
-			if got := cfg.Mounts[0].ReadOnly; got != tc.wantWorkspaceRO {
-				t.Fatalf("workspace ReadOnly = %v, want %v", got, tc.wantWorkspaceRO)
-			}
-			if got := cfg.Mounts[1].ReadOnly; got != tc.wantTempRO {
-				t.Fatalf("temp ReadOnly = %v, want %v", got, tc.wantTempRO)
-			}
-		})
+	if string(cfg.NetworkMode) != "none" {
+		t.Fatalf("NetworkMode = %q, want none", cfg.NetworkMode)
+	}
+	if cfg.Resources.NanoCPUs != 500_000_000 {
+		t.Fatalf("NanoCPUs = %d, want 500000000", cfg.Resources.NanoCPUs)
+	}
+	if cfg.Resources.Memory == 0 {
+		t.Fatal("Memory = 0, want parsed memory limit")
+	}
+	if cfg.Resources.PidsLimit == nil || *cfg.Resources.PidsLimit != 128 {
+		t.Fatalf("PidsLimit = %v, want 128", cfg.Resources.PidsLimit)
 	}
 }

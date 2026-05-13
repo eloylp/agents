@@ -33,7 +33,6 @@ func TestRuntimeSettingsRoundTrip(t *testing.T) {
 			PidsLimit:      256,
 			TimeoutSeconds: 900,
 			NetworkMode:    "bridge",
-			Filesystem:     "workspace-tmp",
 		},
 	})
 	if err != nil {

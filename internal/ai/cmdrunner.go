@@ -140,10 +140,6 @@ func (r *CommandRunner) runContainerCommand(ctx context.Context, args []string, 
 	spec.Command = command
 	spec.WorkingDir = containerWorkspaceDir
 	spec.Env = env
-	spec.Mounts = append(slices.Clone(spec.Mounts),
-		runtimeexec.Mount{Target: containerWorkspaceDir, Tmpfs: true},
-		runtimeexec.Mount{Target: containerRunDir, Tmpfs: true},
-	)
 	spec.Stdin = bytes.NewBufferString(stdin)
 	spec.Stdout = writer
 	spec.Stderr = &stderr

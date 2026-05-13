@@ -20,7 +20,6 @@ type RuntimeConstraints struct {
 	PidsLimit      int64  `yaml:"pids_limit,omitempty" json:"pids_limit,omitempty"`
 	TimeoutSeconds int    `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty"`
 	NetworkMode    string `yaml:"network_mode,omitempty" json:"network_mode,omitempty"`
-	Filesystem     string `yaml:"filesystem,omitempty" json:"filesystem,omitempty"`
 }
 
 func NormalizeRuntimeSettings(s *RuntimeSettings) {
@@ -31,5 +30,4 @@ func NormalizeRuntimeSettings(s *RuntimeSettings) {
 	s.Constraints.CPUs = strings.TrimSpace(s.Constraints.CPUs)
 	s.Constraints.Memory = strings.TrimSpace(s.Constraints.Memory)
 	s.Constraints.NetworkMode = strings.TrimSpace(s.Constraints.NetworkMode)
-	s.Constraints.Filesystem = strings.TrimSpace(s.Constraints.Filesystem)
 }

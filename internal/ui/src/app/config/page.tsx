@@ -77,7 +77,6 @@ interface RuntimeConstraints {
   pids_limit?: number
   timeout_seconds?: number
   network_mode?: string
-  filesystem?: string
 }
 
 interface RuntimeSettings {
@@ -993,14 +992,6 @@ export default function ConfigPage() {
                     <option value="bridge">bridge</option>
                     <option value="none">none</option>
                     <option value="host">host</option>
-                  </select>
-                </label>
-                <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
-                  Filesystem policy
-                  <select value={runtimeForm.constraints?.filesystem ?? ''} onChange={e => updateRuntimeConstraint('filesystem', e.target.value)} style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text)', padding: '8px' }}>
-                    <option value="">Default</option>
-                    <option value="workspace-tmp">workspace-tmp</option>
-                    <option value="readonly-root">readonly-root</option>
                   </select>
                 </label>
               </div>

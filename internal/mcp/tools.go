@@ -305,7 +305,6 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				mcpgo.WithNumber("pids_limit", mcpgo.Description("Optional process limit for runner containers.")),
 				mcpgo.WithNumber("timeout_seconds", mcpgo.Description("Optional maximum runner lifetime in seconds.")),
 				mcpgo.WithString("network_mode", mcpgo.Description("Optional Docker network mode, such as bridge, none, or host.")),
-				mcpgo.WithString("filesystem", mcpgo.Description("Optional filesystem policy descriptor for the runtime implementation.")),
 			),
 			toolUpdateRuntime(deps),
 		)

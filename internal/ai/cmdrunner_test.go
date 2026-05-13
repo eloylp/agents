@@ -184,15 +184,6 @@ func TestContainerCommandRunnerUsesRuntimeAndParsesOutput(t *testing.T) {
 	if len(lines) != 1 || string(lines[0]) == "" {
 		t.Fatalf("OnLine lines = %q, want one JSON line", lines)
 	}
-	if len(fake.spec.Mounts) != 2 {
-		t.Fatalf("mounts = %+v, want workspace and temp mounts", fake.spec.Mounts)
-	}
-	if fake.spec.Mounts[0].Target != "/workspace" || fake.spec.Mounts[1].Target != "/tmp/agents-run" {
-		t.Fatalf("mount targets = %+v, want /workspace and /tmp/agents-run", fake.spec.Mounts)
-	}
-	if !fake.spec.Mounts[0].Tmpfs || !fake.spec.Mounts[1].Tmpfs {
-		t.Fatalf("mounts = %+v, want Docker-managed tmpfs mounts", fake.spec.Mounts)
-	}
 }
 
 func TestContainerCommandRunnerMaterializesClaudeMCPConfig(t *testing.T) {
@@ -281,31 +272,6 @@ func TestContainerCommandRunnerOverridesHostHomeEnv(t *testing.T) {
 	}
 	if len(fake.spec.Command) < 5 || fake.spec.Command[0] != "/bin/sh" {
 		t.Fatalf("command = %v, want shell entrypoint", fake.spec.Command)
-	}
-}
-
-func TestContainerCommandRunnerClonesPolicyMounts(t *testing.T) {
-	fake := &fakeContainerRunner{}
-	policy := runtimeexec.ContainerSpec{
-		Mounts: []runtimeexec.Mount{{Source: "/host/ca", Target: "/etc/ssl/certs", ReadOnly: true}},
-	}
-	r := NewContainerCommandRunner(
-		"openai_compatible", "custom-cli", nil,
-		10, 4000, fake, "ghcr.io/example/runner:test",
-		policy,
-		zerolog.Nop(),
-	)
-	if _, err := r.Run(context.Background(), Request{System: "system", User: "user"}); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if len(policy.Mounts) != 1 {
-		t.Fatalf("policy mounts mutated: %+v", policy.Mounts)
-	}
-	if len(fake.spec.Mounts) != 3 {
-		t.Fatalf("mounts = %+v, want policy mount plus workspace/temp", fake.spec.Mounts)
-	}
-	if fake.spec.Mounts[0].Target != "/etc/ssl/certs" {
-		t.Fatalf("first mount = %+v, want policy mount preserved", fake.spec.Mounts[0])
 	}
 }
 

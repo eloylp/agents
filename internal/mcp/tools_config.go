@@ -76,9 +76,6 @@ func runtimeSettingsFromRequest(req mcpgo.CallToolRequest) (fleet.RuntimeSetting
 	if network, ok := trimmedStringOptional(req, "network_mode"); ok {
 		current.Constraints.NetworkMode = network
 	}
-	if fs, ok := trimmedStringOptional(req, "filesystem"); ok {
-		current.Constraints.Filesystem = fs
-	}
 	if pids := req.GetInt("pids_limit", 0); pids > 0 {
 		current.Constraints.PidsLimit = int64(pids)
 	}

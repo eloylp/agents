@@ -18,18 +18,10 @@ type ContainerSpec struct {
 	WorkingDir string
 	Env        []string
 	Labels     map[string]string
-	Mounts     []Mount
 	Stdin      io.Reader
 	Stdout     io.Writer
 	Stderr     io.Writer
 	Policy     fleet.RuntimeConstraints
-}
-
-type Mount struct {
-	Source   string
-	Target   string
-	ReadOnly bool
-	Tmpfs    bool
 }
 
 type ExitStatus struct {
