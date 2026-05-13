@@ -40,8 +40,6 @@ Production runs are env-driven. Put credentials in `.env`; they are injected int
 
 Then open `http://localhost:8080/`, bootstrap the first admin user, and use Config -> Runtime / Backends diagnostics to verify the runner image, credentials, and backend readiness. Fleet configuration (workspaces, agents, prompts, skills, repos, bindings, webhooks) lives in the dashboard.
 
-`agents-setup` remains in the runner image as a legacy development helper, but it is not the production setup path and production runs must not depend on browser-login CLI caches or a persistent home volume.
-
 ## Production essentials
 
 Before exposing the daemon publicly, open the root login page and create the first local user, then create named API tokens for MCP/REST clients from Config -> Authentication. Configure your reverse proxy for TLS/routing: see [security.md → Daemon auth](security.md#daemon-auth) and [Reverse-proxy routing](security.md#reverse-proxy-routing).

@@ -140,6 +140,29 @@ func TestLoadAppliesDaemonEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadDoesNotApplyRuntimeSettingsEnvOverrides(t *testing.T) {
+	t.Setenv("AGENTS_RUNNER_IMAGE", "ghcr.io/example/env-runner:v2")
+	t.Setenv("AGENTS_RUNNER_TIMEOUT_SECONDS", "999")
+	path := writeConfig(t, `
+runtime:
+  runner_image: ghcr.io/example/db-runner:v1
+  constraints:
+    timeout_seconds: 321
+`+minimalYAML(""))
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if got := cfg.Runtime.RunnerImage; got != "ghcr.io/example/db-runner:v1" {
+		t.Fatalf("runtime runner image = %q, want database-backed config value", got)
+	}
+	if got := cfg.Runtime.Constraints.TimeoutSeconds; got != 321 {
+		t.Fatalf("runtime timeout = %d, want database-backed config value", got)
+	}
+}
+
 func TestLoadRejectsInvalidDaemonEnvOverride(t *testing.T) {
 	t.Setenv("AGENTS_HTTP_READ_TIMEOUT_SECONDS", "not-a-number")
 	path := writeConfig(t, minimalYAML(""))
