@@ -29,7 +29,7 @@ func CatalogScopePath(workspaceID, repo string) string {
 	if workspaceID == "" {
 		workspaceID = DefaultWorkspaceID
 	}
-	workspaceID = strings.ToLower(NormalizeWorkspaceID(workspaceID))
+	workspaceID = NormalizeWorkspaceID(workspaceID)
 	if repo == "" {
 		return workspaceID
 	}
@@ -49,7 +49,7 @@ func ParseCatalogScopePath(scope string) (workspaceID, repo string, explicit boo
 		return "", "", true
 	}
 	workspaceID, repo, found := strings.Cut(lower, "/")
-	workspaceID = strings.ToLower(NormalizeWorkspaceID(workspaceID))
+	workspaceID = NormalizeWorkspaceID(workspaceID)
 	if !found {
 		return workspaceID, "", true
 	}
