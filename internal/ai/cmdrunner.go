@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -121,7 +122,7 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 			}
 		}
 		if err != nil {
-			if err != io.EOF {
+			if !errors.Is(err, io.EOF) {
 				logger.Warn().Err(err).Msgf("read %s stdout", r.backendName)
 			}
 			break
