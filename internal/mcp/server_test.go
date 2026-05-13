@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 )
 
@@ -58,9 +59,9 @@ func TestHandlerInitializeAndListTools(t *testing.T) {
 	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("unmarshal tools/list body %q: %v", body, err)
 	}
-	got := make(map[string]bool, len(resp.Result.Tools))
+	got := make([]string, 0, len(resp.Result.Tools))
 	for _, tl := range resp.Result.Tools {
-		got[tl.Name] = true
+		got = append(got, tl.Name)
 	}
 	want := []string{
 		"list_agents",
@@ -75,7 +76,7 @@ func TestHandlerInitializeAndListTools(t *testing.T) {
 		"trigger_agent",
 	}
 	for _, name := range want {
-		if !got[name] {
+		if !slices.Contains(got, name) {
 			t.Errorf("tools/list missing tool %q (got %+v)", name, got)
 		}
 	}
