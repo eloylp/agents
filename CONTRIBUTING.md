@@ -52,6 +52,13 @@ If you'd rather implement it yourself, just say so in the issue or open a PR dir
 - A description that explains the *why*, not just the *what*. The diff already shows the *what*.
 - Link to a related issue if one exists, but PRs without issues are equally welcome.
 
+### Test expectations
+
+- Run `go test ./...` during normal PR iteration.
+- Run targeted `go test ./internal/<pkg> -race` when changing concurrent code such as workflow processing, dispatch, scheduler, observe, or store.
+- Pull request CI runs the normal suite so contributors and agents get faster feedback.
+- The full `go test ./... -race` suite runs on `main` after merge; release tags should only be cut from a healthy `main`.
+
 ## Feedback on agent work
 
 If an AI-implemented PR misses the mark, comment on it. The coder reads comments on its next run and iterates. This is normal: agents sometimes need guidance, the same way human contributors do.

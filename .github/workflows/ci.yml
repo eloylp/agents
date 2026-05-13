@@ -28,4 +28,9 @@ jobs:
         run: go vet ./...
 
       - name: go test
+        if: github.event_name == 'pull_request'
+        run: go test ./... -count=1
+
+      - name: go test race
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: go test ./... -race -count=1
