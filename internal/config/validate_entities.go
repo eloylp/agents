@@ -12,74 +12,12 @@ func workspaceNameKey(workspaceID, name string) string {
 	return fleet.NormalizeWorkspaceID(workspaceID) + "\x00" + strings.ToLower(strings.TrimSpace(name))
 }
 
-// ValidateCrossRefs checks cross-entity reference consistency across the four
-// mutable entity sets. It is called by the SQLite CRUD layer after each write
-// (within the same transaction) so that invalid fleet configurations cannot be
-// committed to the database.
-//
-// Specifically it verifies:
-//   - every agent references a known backend and known skills
-//   - every agent has a description
-//   - dispatch wiring (can_dispatch) references existing dispatchable agents
-//   - every repo binding references a known agent
-func ValidateCrossRefs(agents []fleet.Agent, repos []fleet.Repo, skills map[string]fleet.Skill, backends map[string]fleet.Backend) error {
-	agentByWorkspaceName := make(map[string]fleet.Agent, len(agents))
-	for _, a := range agents {
-		agentByWorkspaceName[workspaceNameKey(a.WorkspaceID, a.Name)] = a
-	}
-
-	// Validate agent → backend and skill references.
-	for _, a := range agents {
-		if a.Backend == "" {
-			return fmt.Errorf("config: agent %q: backend is required", a.Name)
-		}
-		if _, ok := backends[a.Backend]; !ok {
-			return fmt.Errorf("config: agent %q: unknown backend %q", a.Name, a.Backend)
-		}
-		for _, s := range a.Skills {
-			if _, ok := skills[s]; !ok {
-				return fmt.Errorf("config: agent %q: unknown skill %q", a.Name, s)
-			}
-		}
-		if a.Description == "" {
-			return fmt.Errorf("config: agent %q: description is required (used for agent identification and inter-agent conversations)", a.Name)
-		}
-	}
-
-	// Validate can_dispatch wiring.
-	for _, a := range agents {
-		for _, t := range a.CanDispatch {
-			target, ok := agentByWorkspaceName[workspaceNameKey(a.WorkspaceID, t)]
-			if !ok {
-				return fmt.Errorf("config: agent %q: can_dispatch references unknown agent %q", a.Name, t)
-			}
-			if t == a.Name {
-				return fmt.Errorf("config: agent %q: can_dispatch must not include itself", a.Name)
-			}
-			if !target.AllowDispatch {
-				return fmt.Errorf("config: agent %q: can_dispatch target %q has allow_dispatch disabled", a.Name, t)
-			}
-		}
-	}
-
-	// Validate repo binding → agent references.
-	for _, r := range repos {
-		for i, b := range r.Use {
-			if _, ok := agentByWorkspaceName[workspaceNameKey(r.WorkspaceID, b.Agent)]; !ok {
-				return fmt.Errorf("config: repo %q: binding #%d references unknown agent %q", r.Name, i, b.Agent)
-			}
-		}
-	}
-
-	return nil
-}
-
 // ValidateEntities runs entity-level (non-daemon) invariants on the four
-// mutable entity sets. It is a superset of ValidateCrossRefs: it additionally
-// checks field-level constraints (non-empty prompts, valid backend names,
-// binding trigger types) but does NOT enforce aggregate minimums ("at least one
-// agent/repo/backend required"), those are enforced separately on DELETE paths
-// so that incremental UPSERT builds remain possible.
+// mutable entity sets. It checks field-level constraints (non-empty prompts,
+// valid backend names, binding trigger types) and cross-entity references, but
+// does NOT enforce aggregate minimums ("at least one agent/repo/backend
+// required"), those are enforced separately on DELETE paths so that incremental
+// UPSERT builds remain possible.
 //
 // The intent is that every CRUD write on the SQLite store passes ValidateEntities
 // so that SQLite is never left in a state that would fail LoadAndValidate on
