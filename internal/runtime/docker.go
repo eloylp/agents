@@ -172,8 +172,8 @@ func hostConfig(spec ContainerSpec) (*container.HostConfig, error) {
 	}
 	filesystem := strings.ToLower(strings.TrimSpace(spec.Policy.Filesystem))
 	switch filesystem {
-	case "", "workspace", "workspace-rw", "readwrite":
-	case "workspace-ro", "readonly":
+	case "", "workspace-tmp", "workspace", "workspace-rw", "readwrite":
+	case "readonly-root", "workspace-ro", "readonly":
 		cfg.ReadonlyRootfs = true
 	case "tmpfs":
 		cfg.ReadonlyRootfs = true

@@ -18,7 +18,9 @@ func TestHostConfigAppliesFilesystemPolicies(t *testing.T) {
 		wantErr         bool
 	}{
 		{name: "default keeps mounts writable"},
+		{name: "documented workspace temp policy", policy: "workspace-tmp"},
 		{name: "workspace readonly", policy: "workspace-ro", wantRootRO: true, wantWorkspaceRO: true},
+		{name: "readonly root policy", policy: "readonly-root", wantRootRO: true},
 		{name: "readonly alias", policy: "readonly", wantRootRO: true, wantWorkspaceRO: true},
 		{name: "rejects unknown", policy: "surprise", wantErr: true},
 	}
