@@ -115,11 +115,15 @@ type blockingProcessorHandler struct {
 	calls      int
 	peak       int
 	active     int
+	started    chan struct{}
 	blockUntil chan struct{}
 }
 
-func newBlockingProcessorHandler() *blockingProcessorHandler {
-	return &blockingProcessorHandler{blockUntil: make(chan struct{})}
+func newBlockingProcessorHandler(starts int) *blockingProcessorHandler {
+	return &blockingProcessorHandler{
+		started:    make(chan struct{}, starts),
+		blockUntil: make(chan struct{}),
+	}
 }
 
 func (b *blockingProcessorHandler) HandleEvent(_ context.Context, _ Event) error {
@@ -130,6 +134,7 @@ func (b *blockingProcessorHandler) HandleEvent(_ context.Context, _ Event) error
 		b.peak = b.active
 	}
 	b.mu.Unlock()
+	b.started <- struct{}{}
 	<-b.blockUntil
 	b.mu.Lock()
 	b.active--
@@ -146,7 +151,7 @@ func TestProcessorWorkerPoolAllowsConcurrentProcessing(t *testing.T) {
 	const events = workers // saturate the pool
 
 	dataChannels := NewDataChannels(events*2, newTempStore(t))
-	handler := newBlockingProcessorHandler()
+	handler := newBlockingProcessorHandler(events)
 	processor := NewProcessor(dataChannels, handler, workers, 5*time.Second, zerolog.Nop())
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -170,15 +175,12 @@ func TestProcessorWorkerPoolAllowsConcurrentProcessing(t *testing.T) {
 	}
 
 	// Wait until all worker slots are occupied.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		handler.mu.Lock()
-		c := handler.calls
-		handler.mu.Unlock()
-		if c >= workers {
-			break
+	for range workers {
+		select {
+		case <-handler.started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("processor workers did not start before timeout")
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 
 	handler.mu.Lock()
