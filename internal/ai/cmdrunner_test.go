@@ -9,16 +9,33 @@ import (
 	"testing"
 	"time"
 
+	runtimeexec "github.com/eloylp/agents/internal/runtime"
 	"github.com/rs/zerolog"
 )
+
+type fakeContainerRunner struct {
+	spec runtimeexec.ContainerSpec
+	code int
+	err  error
+}
+
+func (f *fakeContainerRunner) EnsureImage(context.Context, string) error { return nil }
+
+func (f *fakeContainerRunner) Run(_ context.Context, spec runtimeexec.ContainerSpec) (runtimeexec.ExitStatus, error) {
+	f.spec = spec
+	if spec.Stdout != nil {
+		_, _ = spec.Stdout.Write([]byte(`{"summary":"container ok","artifacts":[],"memory":"","dispatch":[]}` + "\n"))
+	}
+	return runtimeexec.ExitStatus{Code: f.code}, f.err
+}
 
 func TestBuildCommandEnvDaemonNumber(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name           string
-		number         int
-		wantNumberVar  bool
+		name          string
+		number        int
+		wantNumberVar bool
 	}{
 		{
 			name:          "numbered-workflow-sets-AI_DAEMON_NUMBER",
@@ -98,6 +115,60 @@ func TestBuildCommandEnvBackendOverride(t *testing.T) {
 	}
 	if env[keyIndices[1]] != "ANTHROPIC_API_KEY=proxy-key" {
 		t.Errorf("last ANTHROPIC_API_KEY entry must be the override; got %q", env[keyIndices[1]])
+	}
+}
+
+func TestContainerCommandRunnerUsesRuntimeAndParsesOutput(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeContainerRunner{}
+	r := NewContainerCommandRunner(
+		"claude", "command", "claude", map[string]string{"ANTHROPIC_BASE_URL": "http://proxy"},
+		10, 4000, fake, "ghcr.io/example/runner:test",
+		runtimeexec.ContainerSpec{},
+		zerolog.Nop(),
+	)
+
+	var lines [][]byte
+	got, err := r.Run(context.Background(), Request{
+		Workflow: "claude:coder",
+		Repo:     "owner/repo",
+		Number:   7,
+		System:   "system",
+		User:     "user",
+		OnLine: func(line []byte) {
+			lines = append(lines, append([]byte(nil), line...))
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got.Summary != "container ok" {
+		t.Fatalf("Summary = %q, want container ok", got.Summary)
+	}
+	if fake.spec.Image != "ghcr.io/example/runner:test" {
+		t.Fatalf("container image = %q", fake.spec.Image)
+	}
+	if len(fake.spec.Command) == 0 || fake.spec.Command[0] != "claude" {
+		t.Fatalf("command = %v, want claude first", fake.spec.Command)
+	}
+	if fake.spec.WorkingDir != "/workspace" {
+		t.Fatalf("WorkingDir = %q, want /workspace", fake.spec.WorkingDir)
+	}
+	for _, want := range []string{
+		"AI_DAEMON_WORKFLOW=claude:coder",
+		"AI_DAEMON_REPO=owner/repo",
+		"AI_DAEMON_NUMBER=7",
+		"HOME=/home/agents",
+		"XDG_CONFIG_HOME=/tmp/agents-run/config",
+		"ANTHROPIC_BASE_URL=http://proxy",
+	} {
+		if !slices.Contains(fake.spec.Env, want) {
+			t.Fatalf("expected env %q in %v", want, fake.spec.Env)
+		}
+	}
+	if len(lines) != 1 || string(lines[0]) == "" {
+		t.Fatalf("OnLine lines = %q, want one JSON line", lines)
 	}
 }
 
@@ -618,7 +689,6 @@ func TestCombineSystemUser(t *testing.T) {
 	}
 }
 
-
 func TestParseClaudeSteps(t *testing.T) {
 	t.Parallel()
 
@@ -661,10 +731,10 @@ func TestParseClaudeSteps(t *testing.T) {
 	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	tests := []struct {
-		name        string
-		input       []byte
-		lineStep    time.Duration
-		wantNames   []string
+		name         string
+		input        []byte
+		lineStep     time.Duration
+		wantNames    []string
 		wantMinDurMs int64 // minimum DurationMs for the first step (0 = don't check)
 	}{
 		{

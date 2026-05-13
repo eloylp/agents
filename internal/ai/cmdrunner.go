@@ -5,9 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,18 +13,24 @@ import (
 	"time"
 	"unicode/utf8"
 
+	runtimeexec "github.com/eloylp/agents/internal/runtime"
 	"github.com/rs/zerolog"
 )
 
 type CommandRunner struct {
-	backendName    string
-	mode           string
-	command        string
-	env            map[string]string
-	timeout        time.Duration
-	maxPromptChars int
-	logger         zerolog.Logger
+	backendName     string
+	mode            string
+	command         string
+	env             map[string]string
+	timeout         time.Duration
+	maxPromptChars  int
+	logger          zerolog.Logger
+	container       runtimeexec.Runner
+	containerImage  string
+	containerPolicy runtimeexecPolicy
 }
+
+type runtimeexecPolicy = runtimeexec.ContainerSpec
 
 func NewCommandRunner(backendName string, mode string, command string, env map[string]string, timeoutSeconds int, maxPromptChars int, logger zerolog.Logger) *CommandRunner {
 	return &CommandRunner{
@@ -38,6 +42,14 @@ func NewCommandRunner(backendName string, mode string, command string, env map[s
 		maxPromptChars: maxPromptChars,
 		logger:         logger,
 	}
+}
+
+func NewContainerCommandRunner(backendName string, mode string, command string, env map[string]string, timeoutSeconds int, maxPromptChars int, runner runtimeexec.Runner, image string, policy runtimeexecPolicy, logger zerolog.Logger) *CommandRunner {
+	r := NewCommandRunner(backendName, mode, command, env, timeoutSeconds, maxPromptChars, logger)
+	r.container = runner
+	r.containerImage = image
+	r.containerPolicy = policy
+	return r
 }
 
 func (r *CommandRunner) Run(ctx context.Context, req Request) (Response, error) {
@@ -87,8 +99,19 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	// Build the final arg list and stdin content for this request.
 	args, stdin := r.buildDelivery(req)
 
-	cmd := exec.CommandContext(cmdCtx, r.command, args...)
-	cmd.Env = buildCommandEnv(req, r.env)
+	env := buildCommandEnv(req, r.env)
+	if r.container != nil {
+		stdoutCap, stderr, cmdErr := r.runContainerCommand(cmdCtx, args, stdin, env, req.OnLine)
+		return r.parseCommandResponse(logger, stdoutCap, stderr, cmdErr)
+	}
+
+	stdoutCap, stderr, cmdErr := r.runLocalCommand(cmdCtx, args, stdin, env, req.OnLine)
+	return r.parseCommandResponse(logger, stdoutCap, stderr, cmdErr)
+}
+
+func (r *CommandRunner) runLocalCommand(ctx context.Context, args []string, stdin string, env []string, onLine func([]byte)) (lineCapture, string, error) {
+	cmd := exec.CommandContext(ctx, r.command, args...)
+	cmd.Env = env
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -96,10 +119,10 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 
 	stdoutPipe, pipeErr := cmd.StdoutPipe()
 	if pipeErr != nil {
-		return Response{}, fmt.Errorf("stdout pipe: %w", pipeErr)
+		return lineCapture{}, stderr.String(), fmt.Errorf("stdout pipe: %w", pipeErr)
 	}
 	if err := cmd.Start(); err != nil {
-		return Response{}, fmt.Errorf("start %s: %w", r.backendName, err)
+		return lineCapture{}, stderr.String(), fmt.Errorf("start %s: %w", r.backendName, err)
 	}
 
 	// Read stdout line by line using ReadBytes so there is no per-line size cap
@@ -117,20 +140,56 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 			// Live publish: hand the line to the engine-supplied
 			// callback as soon as it lands. Empty lines are still
 			// forwarded so the UI can render blank separators verbatim.
-			if req.OnLine != nil {
-				req.OnLine(stripped)
+			if onLine != nil {
+				onLine(stripped)
 			}
 		}
 		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				logger.Warn().Err(err).Msgf("read %s stdout", r.backendName)
-			}
 			break
 		}
 	}
 
 	cmdErr := cmd.Wait()
+	return stdoutCap, stderr.String(), cmdErr
+}
 
+func (r *CommandRunner) runContainerCommand(ctx context.Context, args []string, stdin string, env []string, onLine func([]byte)) (lineCapture, string, error) {
+	writer := &captureWriter{onLine: onLine}
+	var stderr bytes.Buffer
+	env = append(env,
+		"HOME=/home/agents",
+		"TMPDIR=/tmp/agents-run",
+		"XDG_CONFIG_HOME=/tmp/agents-run/config",
+		"XDG_CACHE_HOME=/tmp/agents-run/cache",
+		"XDG_DATA_HOME=/tmp/agents-run/data",
+	)
+	if getEnv(env, "GITHUB_TOKEN") != "" && getEnv(env, "GH_TOKEN") == "" {
+		env = append(env, "GH_TOKEN="+getEnv(env, "GITHUB_TOKEN"))
+	}
+	spec := r.containerPolicy
+	spec.Image = r.containerImage
+	spec.Command = append([]string{r.command}, args...)
+	spec.WorkingDir = "/workspace"
+	spec.Env = env
+	spec.Stdin = bytes.NewBufferString(stdin)
+	spec.Stdout = writer
+	spec.Stderr = &stderr
+	spec.Labels = map[string]string{
+		"org.opencontainers.image.title": "agents-runner",
+		"agents.backend":                 r.backendName,
+	}
+	status, err := r.container.Run(ctx, spec)
+	writer.flush()
+	if err != nil {
+		return writer.capture, stderr.String(), err
+	}
+	if status.Code != 0 {
+		return writer.capture, stderr.String(), fmt.Errorf("runner container exited with status %d", status.Code)
+	}
+	return writer.capture, stderr.String(), nil
+}
+
+func (r *CommandRunner) parseCommandResponse(logger zerolog.Logger, stdoutCap lineCapture, stderr string, cmdErr error) (Response, error) {
 	rawOut := stdoutCap.all.String()
 	logger.Debug().Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("%s raw output", r.backendName)
 
@@ -139,7 +198,7 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	// some AI CLIs emit non-zero exit codes even on a successful run (e.g.
 	// after posting a GitHub comment via MCP tools).
 	if cmdErr != nil && stdoutCap.all.Len() == 0 {
-		logger.Error().Err(cmdErr).Str("stderr", truncateString(stderr.String(), 2000)).Msgf("%s command failed", r.backendName)
+		logger.Error().Err(cmdErr).Str("stderr", truncateString(stderr, 2000)).Msgf("%s command failed", r.backendName)
 		return Response{}, fmt.Errorf("%s command failed: %w", r.backendName, cmdErr)
 	}
 
@@ -213,7 +272,7 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 		return Response{}, fmt.Errorf("parse %s response: empty response (no fields populated)", r.backendName)
 	}
 	if cmdErr != nil {
-		logger.Warn().Err(cmdErr).Str("stderr", truncateString(stderr.String(), 2000)).Msgf("%s command exited non-zero but produced valid output", r.backendName)
+		logger.Warn().Err(cmdErr).Str("stderr", truncateString(stderr, 2000)).Msgf("%s command exited non-zero but produced valid output", r.backendName)
 	}
 	logger.Info().
 		Int("artifacts", len(response.Artifacts)).
@@ -221,6 +280,40 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 		Int("summary_len", len(response.Summary)).
 		Msgf("%s command completed", r.backendName)
 	return response, nil
+}
+
+type captureWriter struct {
+	capture lineCapture
+	onLine  func([]byte)
+	pending []byte
+}
+
+func (w *captureWriter) Write(p []byte) (int, error) {
+	w.pending = append(w.pending, p...)
+	for {
+		idx := bytes.IndexByte(w.pending, '\n')
+		if idx < 0 {
+			return len(p), nil
+		}
+		line := bytes.TrimRight(w.pending[:idx], "\r")
+		w.capture.addLine(line)
+		if w.onLine != nil {
+			w.onLine(line)
+		}
+		w.pending = w.pending[idx+1:]
+	}
+}
+
+func (w *captureWriter) flush() {
+	if len(w.pending) == 0 {
+		return
+	}
+	line := bytes.TrimRight(w.pending, "\r")
+	w.capture.addLine(line)
+	if w.onLine != nil {
+		w.onLine(line)
+	}
+	w.pending = nil
 }
 
 // separatorRunes is the rune-count of the "\n\n" separator inserted between
@@ -654,9 +747,19 @@ func extractToolResultText(raw json.RawMessage) string {
 // locale) are permitted; everything else is excluded.
 func allowCommandEnvKey(key string) bool {
 	switch key {
-	case "PATH", "HOME", "USER", "SHELL", "TMPDIR", "TMP", "TEMP", "LANG", "TERM", "NO_COLOR", "COLORTERM", "EDITOR", "VISUAL", "PAGER", "SSH_AUTH_SOCK", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "GITHUB_TOKEN", "GH_TOKEN", "GH_HOST", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "GITHUB_API_URL":
+	case "PATH", "HOME", "USER", "SHELL", "TMPDIR", "TMP", "TEMP", "LANG", "TERM", "NO_COLOR", "COLORTERM", "EDITOR", "VISUAL", "PAGER", "SSH_AUTH_SOCK", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "GITHUB_TOKEN", "GH_TOKEN", "GH_HOST", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "GITHUB_API_URL":
 		return true
 	default:
 		return strings.HasPrefix(key, "LC_")
 	}
+}
+
+func getEnv(env []string, key string) string {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			return strings.TrimPrefix(env[i], prefix)
+		}
+	}
+	return ""
 }

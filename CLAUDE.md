@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**agents** is a self-hosted Go daemon that dispatches AI CLIs (Claude, Codex) to work on GitHub repos. Agents are configured declaratively in YAML and bound to repos via labels, GitHub event subscriptions (event-driven), and/or cron schedules (autonomous). GitHub operations happen through the AI backend: GitHub MCP tools are preferred, with authenticated `gh` available as fallback for complex local checkout/test/PR loops. The daemon itself is read-only against GitHub. The daemon also ships a built-in Anthropic↔OpenAI translation proxy so the `claude` CLI can be routed through any OpenAI-compatible backend (local `llama.cpp`, hosted Qwen, vLLM, etc.), see [`docs/local-models.md`](docs/local-models.md). Agents can additionally invoke each other at runtime via the reactive inter-agent dispatcher (see Architecture Notes).
+**agents** is a self-hosted Go daemon that dispatches AI CLIs (Claude, Codex) to work on GitHub repos. Agents are configured declaratively in YAML and bound to repos via labels, GitHub event subscriptions (event-driven), and/or cron schedules (autonomous). GitHub operations happen through the AI backend inside a fresh runner container: GitHub MCP tools are preferred, with `gh` available as fallback for complex local checkout/test/PR loops. The daemon itself is read-only against GitHub. The daemon also ships a built-in Anthropic↔OpenAI translation proxy so the `claude` CLI can be routed through any OpenAI-compatible backend (local `llama.cpp`, hosted Qwen, vLLM, etc.), see [`docs/local-models.md`](docs/local-models.md). Agents can additionally invoke each other at runtime via the reactive inter-agent dispatcher (see Architecture Notes).
 
 ## Directory Structure
 
@@ -61,16 +61,18 @@ docker compose pull
 docker compose up -d
 ```
 
-The default compose file pulls the published `ghcr.io/eloylp/agents:latest` image. `latest` is release-only; main-branch builds are explicit `dev-<short_sha>` tags. The image is built from the multi-stage Dockerfile and includes Claude Code, Codex, git, GitHub CLI, Go, Rust/Cargo, Node/npm, TypeScript, and the daemon. Runs as non-root `agents` user. Default CMD is `--db /var/lib/agents/agents.db`. Compose mounts:
+The default compose file pulls the published `ghcr.io/eloylp/agents:latest` daemon image. `latest` is release-only; main-branch builds are explicit `dev-<short_sha>` tags. The Dockerfile also builds `ghcr.io/eloylp/agents-runner`, which contains Claude Code, Codex, git, GitHub CLI, Go, Rust/Cargo, Node/npm, TypeScript, and runner tools. The daemon image is the minimal control plane. Default CMD is `--db /var/lib/agents/agents.db`. Compose mounts:
 - `agents-data` named volume → `/var/lib/agents` (SQLite database persistence)
-- `agents-home` named volume → `/home/agents` (Claude / Codex auth, MCP config, and gh auth; populated by `docker compose exec -it agents agents-setup` once during setup, no host bind-mount of `~/.claude.json` etc.). GitHub access should flow through MCP first; authenticated gh is kept as fallback for complex workflows that need a local checkout/test/PR loop.
+- `/var/run/docker.sock` → `/var/run/docker.sock` so the daemon can create ephemeral runner containers. This is root-equivalent access to the Docker host and must be treated as a serious deployment boundary.
 
 YAML config is import/export only, not a runtime input. To seed an empty fleet, POST a YAML payload at `/import`.
 
 ## Environment Variables
 
 - `GITHUB_WEBHOOK_SECRET`, HMAC shared secret for the webhook receiver.
-- `GITHUB_TOKEN`, Personal Access Token used by the GitHub MCP server inside the container, by the `gh` CLI fallback, and forwarded into AI backend subprocesses through the env allowlist (`internal/ai/cmdrunner.go`). Required by `scripts/setup.sh` (hard-fails if unset). `repo` scope minimum; add `workflow` if agents touch CI. Codex resolves it at runtime; Claude stores it in `~/.claude.json`; `gh auth login --with-token` runs during setup so agents have a working CLI fallback when GitHub MCP tools fail to register. All credentials live on the `agents-home` volume.
+- `GITHUB_TOKEN`, Personal Access Token injected into runner containers for GitHub MCP and `gh` fallback. `repo` scope minimum; add `workflow` if agents touch CI.
+- Claude credentials: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN`.
+- Codex credentials: `OPENAI_API_KEY` or `CODEX_ACCESS_TOKEN`.
 - Daemon runtime settings can be overridden at startup with `AGENTS_*` env vars for log, HTTP, processor, and dispatch fields. See `docs/configuration.md` for the full mapping. Empty env vars are ignored, and changes still require a process/container restart.
 
 ## Architecture Notes

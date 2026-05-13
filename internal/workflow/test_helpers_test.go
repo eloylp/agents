@@ -58,7 +58,7 @@ func newEngineFromCfg(t *testing.T, cfg *config.Config, runners map[string]ai.Ru
 	st := seedStoreFromCfg(t, cfg)
 	e := NewEngine(st, cfg.Daemon.Processor, queue, zerolog.Nop())
 	if len(runners) > 0 {
-		e.WithRunnerBuilder(func(name string, _ fleet.Backend) ai.Runner {
+		e.WithRunnerBuilder(func(_ string, name string, _ fleet.Backend) ai.Runner {
 			if r, ok := runners[name]; ok {
 				return r
 			}
@@ -78,7 +78,7 @@ func updateRuntimeConfig(t *testing.T, e *Engine, cfg *config.Config, runners ma
 		t.Fatalf("replace: %v", err)
 	}
 	if len(runners) > 0 {
-		e.WithRunnerBuilder(func(name string, _ fleet.Backend) ai.Runner {
+		e.WithRunnerBuilder(func(_ string, name string, _ fleet.Backend) ai.Runner {
 			if r, ok := runners[name]; ok {
 				return r
 			}

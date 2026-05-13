@@ -11,7 +11,7 @@
 
 Build and take ownership of your agentic universe. Create your agents and compose them with skills, memory, and triggers: repo events/labels, cron, or inter-agent dispatch.
 
-The daemon dispatches each agent via an AI CLI ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), or your own local LLM) and lets it work through your repo host's native primitives: issues, PRs, reviews, comments. GitHub MCP tools are preferred; authenticated `gh` is available as fallback for complex local checkout/test/PR loops. GitHub today; [GitLab](https://github.com/eloylp/agents/issues/359) under discussion.
+The daemon schedules each agent and runs the AI CLI ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), or your own local LLM) inside a fresh ephemeral runner container. Agents work through your repo host's native primitives: issues, PRs, reviews, comments. GitHub MCP tools are preferred; `gh` is available in the runner as fallback for complex local checkout/test/PR loops. GitHub today; [GitLab](https://github.com/eloylp/agents/issues/359) under discussion.
 
 ## Get started
 
@@ -42,7 +42,7 @@ See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a re
 Every run, regardless of trigger, goes through the same pipeline:
 
 1. **Compose the prompt**: workspace guardrails + skills + selected prompt + runtime context + memory.
-2. **Spawn the AI CLI** (`claude`, `codex`, or your local model) with JSON-schema-enforced output and repository tools available inside the container.
+2. **Start a runner container** from the configured `agents-runner` image and spawn the AI CLI (`claude`, `codex`, or your local model) with JSON-schema-enforced output and repository tools available inside that container.
 3. **Parse the structured response**: artifacts, dispatch requests, updated memory.
 4. **Persist the trace**, fan out any dispatches, write back memory.
 

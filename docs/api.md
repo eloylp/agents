@@ -117,6 +117,16 @@ Guardrails are reusable policy catalog entries; workspaces choose which visible 
 
 Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL cache.
 
+## Runtime settings
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/runtime` | Read global runner image and container constraints. |
+| `PUT/PATCH` | `/runtime` | Replace global runner image and constraints. Secret values are not accepted here. |
+| `PUT/PATCH` | `/workspaces/{workspace}/runtime` | Set or clear the selected workspace's runner image override. |
+
+Runtime settings are also included in `/config`, `/export`, and `/import`. Credentials are daemon environment variables and are never returned by these routes.
+
 ## AI runner contract
 
-The contract between the daemon and the AI CLI subprocess (prompt composition, structured JSON output, schema enforcement) is documented in [mental-model.md](mental-model.md).
+The contract between the daemon and the AI CLI subprocess inside the ephemeral runner container (prompt composition, structured JSON output, schema enforcement) is documented in [mental-model.md](mental-model.md).

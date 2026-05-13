@@ -82,7 +82,7 @@ func run() error {
 	// Replace the real runner factory with a blocking stub so events
 	// the workflow processor picks up stay in flight indefinitely. We
 	// want the runners page to show "running" rows for the screenshot.
-	d.Engine().WithRunnerBuilder(func(name string, _ fleet.Backend) ai.Runner {
+	d.Engine().WithRunnerBuilder(func(_ string, name string, _ fleet.Backend) ai.Runner {
 		return &blockingRunner{name: name}
 	})
 
