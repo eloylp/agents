@@ -10,6 +10,8 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 )
 
+const RunnerTempMount = "/tmp/agents-run"
+
 type ContainerSpec struct {
 	Image      string
 	Command    []string

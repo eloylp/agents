@@ -25,6 +25,16 @@ func ResponseSchemaString() string {
 	return string(responseSchema)
 }
 
+// WriteResponseSchema writes the embedded schema to path. Containerized Codex
+// runs use this to place the schema inside the per-run bind mount, then pass
+// the container-visible path to codex.
+func WriteResponseSchema(path string) error {
+	if err := os.WriteFile(path, responseSchema, 0o600); err != nil {
+		return fmt.Errorf("write response schema: %w", err)
+	}
+	return nil
+}
+
 var (
 	schemaOnce sync.Once
 	schemaPath string

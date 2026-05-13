@@ -291,8 +291,15 @@ func persistDiagnostics(st *store.Store, existing map[string]fleet.Backend, diag
 	for _, b := range diag.Backends {
 		prev, hadPrev := existing[b.Name]
 		if !b.Detected && !hadPrev {
-			// No newly detected command and no prior record to update.
-			continue
+			if !slices.Contains(builtinBackendNames, b.Name) {
+				// No newly detected command and no prior record to update.
+				continue
+			}
+			// The daemon image is intentionally minimal, so startup discovery may
+			// not see backend CLIs on the daemon PATH. Still seed built-ins so the
+			// configured runner image, not daemon-local PATH, owns run-time tool
+			// availability.
+			b.Command = b.Name
 		}
 
 		next := prev

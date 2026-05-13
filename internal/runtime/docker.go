@@ -14,6 +14,7 @@ import (
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-units"
 	"github.com/rs/zerolog"
@@ -35,6 +36,11 @@ func NewDocker(logger zerolog.Logger) (*Docker, error) {
 func (d *Docker) EnsureImage(ctx context.Context, ref string) error {
 	if strings.TrimSpace(ref) == "" {
 		return errors.New("runner image is required")
+	}
+	if _, _, err := d.client.ImageInspectWithRaw(ctx, ref); err == nil {
+		return nil
+	} else if !errdefs.IsNotFound(err) {
+		return fmt.Errorf("inspect runner image %q: %w", ref, err)
 	}
 	rc, err := d.client.ImagePull(ctx, ref, image.PullOptions{})
 	if err != nil {
@@ -182,7 +188,7 @@ func hostConfig(spec ContainerSpec) (*container.HostConfig, error) {
 	}
 	for _, m := range spec.Mounts {
 		readOnly := m.ReadOnly || filesystem == "workspace-ro" || filesystem == "readonly"
-		if m.Target == "/tmp/agents-run" {
+		if m.Target == RunnerTempMount {
 			readOnly = false
 		}
 		cfg.Mounts = append(cfg.Mounts, mount.Mount{

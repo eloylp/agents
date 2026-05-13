@@ -154,6 +154,8 @@ type Engine struct {
 	budgetStore   *store.Store    // optional; gates runs by token budget caps
 	runLock       runLocks        // serializes (agent, repo) runs across kinds
 	runsDeduped   atomic.Int64
+	dockerMu      sync.Mutex
+	dockerRunner  runtimeexec.Runner
 }
 
 // WithMemory attaches a memory backend so the engine can load and persist
@@ -229,18 +231,16 @@ func (e *Engine) defaultRunnerFor(workspaceID string, name string, b fleet.Backe
 	}
 	settings, err := e.store.ReadRuntimeSettings()
 	if err != nil {
-		e.logger.Warn().Err(err).Msg("read runtime settings; falling back to local command runner")
-		return e.localRunnerFor(name, b, env)
+		return errorRunner{err: fmt.Errorf("read runtime settings: %w", err)}
 	}
 	if workspace, err := e.store.ReadWorkspace(workspaceID); err == nil && strings.TrimSpace(workspace.RunnerImage) != "" {
 		settings.RunnerImage = strings.TrimSpace(workspace.RunnerImage)
 	} else if err != nil {
 		e.logger.Debug().Err(err).Str("workspace", workspaceID).Msg("read workspace runner override")
 	}
-	dockerRunner, err := runtimeexec.NewDocker(e.logger)
+	dockerRunner, err := e.dockerRuntime()
 	if err != nil {
-		e.logger.Warn().Err(err).Msg("create docker runtime; falling back to local command runner")
-		return e.localRunnerFor(name, b, env)
+		return errorRunner{err: fmt.Errorf("create docker runtime: %w", err)}
 	}
 	policy := runtimeexec.ContainerSpec{Policy: settings.Constraints}
 	if policy.Policy.TimeoutSeconds == 0 {
@@ -254,12 +254,26 @@ func (e *Engine) defaultRunnerFor(workspaceID string, name string, b fleet.Backe
 	)
 }
 
-func (e *Engine) localRunnerFor(name string, b fleet.Backend, env map[string]string) ai.Runner {
-	return ai.NewCommandRunner(
-		name, "command", b.Command, env,
-		b.TimeoutSeconds, b.MaxPromptChars,
-		e.logger,
-	)
+func (e *Engine) dockerRuntime() (runtimeexec.Runner, error) {
+	e.dockerMu.Lock()
+	defer e.dockerMu.Unlock()
+	if e.dockerRunner != nil {
+		return e.dockerRunner, nil
+	}
+	runner, err := runtimeexec.NewDocker(e.logger)
+	if err != nil {
+		return nil, err
+	}
+	e.dockerRunner = runner
+	return runner, nil
+}
+
+type errorRunner struct {
+	err error
+}
+
+func (r errorRunner) Run(context.Context, ai.Request) (ai.Response, error) {
+	return ai.Response{}, r.err
 }
 
 // WithRunnerBuilder overrides the runner factory the engine uses to

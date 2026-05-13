@@ -45,7 +45,5 @@ RUN adduser -D -h /home/agents -s /bin/bash agents \
     && chown -R agents:agents /home/agents /workspace /tmp/agents-run
 ENV HOME=/home/agents
 
-COPY scripts/setup.sh /usr/local/bin/agents-setup
-RUN chmod +x /usr/local/bin/agents-setup
 USER agents
 WORKDIR /workspace

@@ -149,11 +149,14 @@ func TestContainerCommandRunnerUsesRuntimeAndParsesOutput(t *testing.T) {
 	if fake.spec.Image != "ghcr.io/example/runner:test" {
 		t.Fatalf("container image = %q", fake.spec.Image)
 	}
-	if len(fake.spec.Command) == 0 || fake.spec.Command[0] != "claude" {
-		t.Fatalf("command = %v, want claude first", fake.spec.Command)
-	}
 	if fake.spec.WorkingDir != "/workspace" {
 		t.Fatalf("WorkingDir = %q, want /workspace", fake.spec.WorkingDir)
+	}
+	if len(fake.spec.Command) < 5 || fake.spec.Command[0] != "/bin/sh" {
+		t.Fatalf("command = %v, want shell entrypoint", fake.spec.Command)
+	}
+	if !slices.Contains(fake.spec.Command, "claude") {
+		t.Fatalf("command = %v, want claude payload", fake.spec.Command)
 	}
 	for _, want := range []string{
 		"AI_DAEMON_WORKFLOW=claude:coder",
@@ -213,11 +216,76 @@ func TestContainerCommandRunnerMaterializesCodexHome(t *testing.T) {
 	if _, err := r.Run(context.Background(), Request{System: "system", User: "user"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(fake.spec.Command) < 6 || fake.spec.Command[0] != "/bin/sh" {
+	if len(fake.spec.Command) < 5 || fake.spec.Command[0] != "/bin/sh" {
 		t.Fatalf("command = %v, want shell entrypoint", fake.spec.Command)
 	}
 	if !slices.Contains(fake.spec.Env, "CODEX_HOME=/tmp/agents-run/codex") {
 		t.Fatalf("env = %v, want CODEX_HOME", fake.spec.Env)
+	}
+	if !slices.Contains(fake.spec.Command, "--output-schema") || !slices.Contains(fake.spec.Command, "/tmp/agents-run/response-schema.json") {
+		t.Fatalf("command = %v, want container-visible output schema", fake.spec.Command)
+	}
+}
+
+func TestContainerCommandRunnerOverridesHostHomeEnv(t *testing.T) {
+	t.Setenv("HOME", "/host/home")
+	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", "/host/config")
+
+	fake := &fakeContainerRunner{}
+	r := NewContainerCommandRunner(
+		"openai_compatible", "command", "custom-cli", nil,
+		10, 4000, fake, "ghcr.io/example/runner:test",
+		runtimeexec.ContainerSpec{},
+		zerolog.Nop(),
+	)
+	if _, err := r.Run(context.Background(), Request{System: "system", User: "user"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, blocked := range []string{
+		"HOME=/host/home",
+		"XDG_CONFIG_HOME=/host/config",
+	} {
+		if slices.Contains(fake.spec.Env, blocked) {
+			t.Fatalf("env = %v, should not contain stale %q", fake.spec.Env, blocked)
+		}
+	}
+	for _, want := range []string{
+		"HOME=/tmp/agents-run/home",
+		"TMPDIR=/tmp/agents-run",
+		"XDG_CONFIG_HOME=/tmp/agents-run/config",
+	} {
+		if !slices.Contains(fake.spec.Env, want) {
+			t.Fatalf("env = %v, want %q", fake.spec.Env, want)
+		}
+	}
+	if len(fake.spec.Command) < 5 || fake.spec.Command[0] != "/bin/sh" {
+		t.Fatalf("command = %v, want shell entrypoint", fake.spec.Command)
+	}
+}
+
+func TestContainerCommandRunnerClonesPolicyMounts(t *testing.T) {
+	fake := &fakeContainerRunner{}
+	policy := runtimeexec.ContainerSpec{
+		Mounts: []runtimeexec.Mount{{Source: "/host/ca", Target: "/etc/ssl/certs", ReadOnly: true}},
+	}
+	r := NewContainerCommandRunner(
+		"openai_compatible", "command", "custom-cli", nil,
+		10, 4000, fake, "ghcr.io/example/runner:test",
+		policy,
+		zerolog.Nop(),
+	)
+	if _, err := r.Run(context.Background(), Request{System: "system", User: "user"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(policy.Mounts) != 1 {
+		t.Fatalf("policy mounts mutated: %+v", policy.Mounts)
+	}
+	if len(fake.spec.Mounts) != 3 {
+		t.Fatalf("mounts = %+v, want policy mount plus workspace/temp", fake.spec.Mounts)
+	}
+	if fake.spec.Mounts[0].Target != "/etc/ssl/certs" {
+		t.Fatalf("first mount = %+v, want policy mount preserved", fake.spec.Mounts[0])
 	}
 }
 

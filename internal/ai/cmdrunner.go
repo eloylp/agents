@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -31,6 +32,19 @@ type CommandRunner struct {
 }
 
 type runtimeexecPolicy = runtimeexec.ContainerSpec
+
+const (
+	containerRunDir            = runtimeexec.RunnerTempMount
+	containerWorkspaceDir      = "/workspace"
+	containerResponseSchema    = containerRunDir + "/response-schema.json"
+	containerHomeDir           = containerRunDir + "/home"
+	containerXDGConfigDir      = containerRunDir + "/config"
+	containerXDGCacheDir       = containerRunDir + "/cache"
+	containerXDGDataDir        = containerRunDir + "/data"
+	containerCodexHomeDir      = containerRunDir + "/codex"
+	containerClaudeMCPPath     = containerRunDir + "/claude-mcp.json"
+	containerResponseSchemaRel = "response-schema.json"
+)
 
 func NewCommandRunner(backendName string, mode string, command string, env map[string]string, timeoutSeconds int, maxPromptChars int, logger zerolog.Logger) *CommandRunner {
 	return &CommandRunner{
@@ -167,13 +181,21 @@ func (r *CommandRunner) runContainerCommand(ctx context.Context, args []string, 
 	}
 	defer os.RemoveAll(runDir)
 
-	env = append(env,
-		"HOME=/tmp/agents-run/home",
-		"TMPDIR=/tmp/agents-run",
-		"XDG_CONFIG_HOME=/tmp/agents-run/config",
-		"XDG_CACHE_HOME=/tmp/agents-run/cache",
-		"XDG_DATA_HOME=/tmp/agents-run/data",
-		"CODEX_HOME=/tmp/agents-run/codex",
+	if r.isCodexBackend() {
+		var schemaErr error
+		args, schemaErr = materializeContainerResponseSchema(args, filepath.Join(runDir, containerResponseSchemaRel))
+		if schemaErr != nil {
+			return lineCapture{}, "", schemaErr
+		}
+	}
+
+	env = setEnvValues(env,
+		"HOME", containerHomeDir,
+		"TMPDIR", containerRunDir,
+		"XDG_CONFIG_HOME", containerXDGConfigDir,
+		"XDG_CACHE_HOME", containerXDGCacheDir,
+		"XDG_DATA_HOME", containerXDGDataDir,
+		"CODEX_HOME", containerCodexHomeDir,
 	)
 	if getEnv(env, "GITHUB_TOKEN") != "" && getEnv(env, "GH_TOKEN") == "" {
 		env = append(env, "GH_TOKEN="+getEnv(env, "GITHUB_TOKEN"))
@@ -183,11 +205,11 @@ func (r *CommandRunner) runContainerCommand(ctx context.Context, args []string, 
 	spec := r.containerPolicy
 	spec.Image = r.containerImage
 	spec.Command = command
-	spec.WorkingDir = "/workspace"
+	spec.WorkingDir = containerWorkspaceDir
 	spec.Env = env
-	spec.Mounts = append(spec.Mounts,
-		runtimeexec.Mount{Source: workspaceDir, Target: "/workspace"},
-		runtimeexec.Mount{Source: runDir, Target: "/tmp/agents-run"},
+	spec.Mounts = append(slices.Clone(spec.Mounts),
+		runtimeexec.Mount{Source: workspaceDir, Target: containerWorkspaceDir},
+		runtimeexec.Mount{Source: runDir, Target: containerRunDir},
 	)
 	spec.Stdin = bytes.NewBufferString(stdin)
 	spec.Stdout = writer
@@ -213,12 +235,12 @@ func (r *CommandRunner) containerEntrypoint(command []string, env []string) []st
 	}
 	switch {
 	case r.isClaudeBackend() && getEnv(env, "GITHUB_TOKEN") != "" && !hasArg(command[1:], "--mcp-config"):
-		command = append(command[:1], append([]string{"--mcp-config", "/tmp/agents-run/claude-mcp.json"}, command[1:]...)...)
-		return shellEntrypoint(command, claudeContainerSetup)
+		command = append(command[:1], append([]string{"--mcp-config", containerClaudeMCPPath}, command[1:]...)...)
+		return shellEntrypoint(command, baseContainerSetup+claudeContainerSetup)
 	case r.isCodexBackend():
-		return shellEntrypoint(command, codexContainerSetup)
+		return shellEntrypoint(command, baseContainerSetup+codexContainerSetup)
 	default:
-		return command
+		return shellEntrypoint(command, baseContainerSetup)
 	}
 }
 
@@ -231,17 +253,18 @@ exec "$cmd" "$@"
 	return append(out, command...)
 }
 
-const claudeContainerSetup = `
+const baseContainerSetup = `
 set -eu
-mkdir -p /tmp/agents-run/home /tmp/agents-run/config /tmp/agents-run/cache /tmp/agents-run/data
+mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$CODEX_HOME"
+`
+
+const claudeContainerSetup = `
 if [ -n "${GITHUB_TOKEN:-}" ]; then
   printf '{"mcpServers":{"github":{"type":"http","url":"https://api.githubcopilot.com/mcp/","headers":{"Authorization":"Bearer %s"}}}}\n' "$GITHUB_TOKEN" > /tmp/agents-run/claude-mcp.json
 fi
 `
 
 const codexContainerSetup = `
-set -eu
-mkdir -p "$CODEX_HOME" /tmp/agents-run/home /tmp/agents-run/config /tmp/agents-run/cache /tmp/agents-run/data
 if [ -n "${GITHUB_TOKEN:-}" ]; then
   cat > "$CODEX_HOME/config.toml" <<'TOML'
 [mcp_servers.github]
@@ -250,9 +273,9 @@ bearer_token_env_var = "GITHUB_TOKEN"
 TOML
 fi
 if [ -n "${OPENAI_API_KEY:-}" ]; then
-  printf '%s' "$OPENAI_API_KEY" | "$1" login --with-api-key >/dev/null 2>&1 || true
+  printf '%s' "$OPENAI_API_KEY" | "$1" login --with-api-key >/dev/null || echo "codex login failed" >&2
 elif [ -n "${CODEX_ACCESS_TOKEN:-}" ]; then
-  printf '%s' "$CODEX_ACCESS_TOKEN" | "$1" login --with-access-token >/dev/null 2>&1 || true
+  printf '%s' "$CODEX_ACCESS_TOKEN" | "$1" login --with-access-token >/dev/null || echo "codex login failed" >&2
 fi
 `
 
@@ -263,6 +286,48 @@ func hasArg(args []string, arg string) bool {
 		}
 	}
 	return false
+}
+
+func materializeContainerResponseSchema(args []string, hostPath string) ([]string, error) {
+	if !slices.Contains(args, "--output-schema") {
+		return args, nil
+	}
+	if err := WriteResponseSchema(hostPath); err != nil {
+		return nil, fmt.Errorf("write container response schema: %w", err)
+	}
+	out := slices.Clone(args)
+	for i := 0; i < len(out)-1; i++ {
+		if out[i] == "--output-schema" {
+			out[i+1] = containerResponseSchema
+			return out, nil
+		}
+	}
+	return nil, fmt.Errorf("codex output schema flag missing path")
+}
+
+func setEnvValues(env []string, kvs ...string) []string {
+	if len(kvs)%2 != 0 {
+		panic("setEnvValues requires key/value pairs")
+	}
+	keys := make(map[string]string, len(kvs)/2)
+	for i := 0; i < len(kvs); i += 2 {
+		keys[kvs[i]] = kvs[i+1]
+	}
+	out := env[:0]
+	for _, entry := range env {
+		key, _, found := strings.Cut(entry, "=")
+		if !found {
+			continue
+		}
+		if _, replace := keys[key]; replace {
+			continue
+		}
+		out = append(out, entry)
+	}
+	for i := 0; i < len(kvs); i += 2 {
+		out = append(out, kvs[i]+"="+kvs[i+1])
+	}
+	return out
 }
 
 func (r *CommandRunner) parseCommandResponse(logger zerolog.Logger, stdoutCap lineCapture, stderr string, cmdErr error) (Response, error) {
