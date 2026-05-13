@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -136,10 +138,7 @@ func (h *SSEHub) Unsubscribe(ch chan []byte) {
 // immediately have their oldest pending message dropped before msg is sent.
 func (h *SSEHub) Publish(msg []byte) {
 	h.mu.Lock()
-	subs := make([]chan []byte, 0, len(h.subs))
-	for ch := range h.subs {
-		subs = append(subs, ch)
-	}
+	subs := slices.Collect(maps.Keys(h.subs))
 	h.mu.Unlock()
 	for _, ch := range subs {
 		select {
