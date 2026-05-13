@@ -484,11 +484,7 @@ func randomBytes(n int) ([]byte, error) {
 	return b, nil
 }
 
-type tokenScanner interface {
-	Scan(dest ...any) error
-}
-
-func scanUser(row tokenScanner) (User, error) {
+func scanUser(row rowScanner) (User, error) {
 	var user User
 	var isAdmin int
 	var created, updated, lastLogin, disabled sql.NullString
@@ -503,7 +499,7 @@ func scanUser(row tokenScanner) (User, error) {
 	return user, nil
 }
 
-func scanAuthToken(row tokenScanner) (AuthToken, error) {
+func scanAuthToken(row rowScanner) (AuthToken, error) {
 	var tok AuthToken
 	var created, expires, lastUsed, revoked sql.NullString
 	if err := row.Scan(&tok.ID, &tok.UserID, &tok.Kind, &tok.Name, &tok.Prefix, &created, &expires, &lastUsed, &revoked); err != nil {
@@ -516,7 +512,7 @@ func scanAuthToken(row tokenScanner) (AuthToken, error) {
 	return tok, nil
 }
 
-func scanAuthIdentity(row tokenScanner) (AuthIdentity, error) {
+func scanAuthIdentity(row rowScanner) (AuthIdentity, error) {
 	var ident AuthIdentity
 	var isAdmin int
 	var userCreated, userUpdated, lastLogin, disabled sql.NullString
