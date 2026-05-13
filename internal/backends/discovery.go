@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"slices"
 	"strings"
@@ -114,74 +113,6 @@ func DiscoverAndPersist(ctx context.Context, st *store.Store) (Diagnostics, erro
 		return Diagnostics{}, err
 	}
 	return diag, nil
-}
-
-// RunDiagnostics executes live discovery checks without mutating the store.
-func RunDiagnostics(ctx context.Context, existing map[string]fleet.Backend) Diagnostics {
-	diag := Diagnostics{GeneratedAt: time.Now().UTC()}
-	type backendTarget struct {
-		name             string
-		commandName      string
-		preferredCommand string
-		localURL         string
-	}
-	targets := make([]backendTarget, 0, len(existing)+len(builtinBackendNames))
-	for _, name := range builtinBackendNames {
-		cfg := existing[name]
-		targets = append(targets, backendTarget{
-			name:             name,
-			commandName:      name,
-			preferredCommand: cfg.Command,
-			localURL:         "",
-		})
-	}
-	for name, cfg := range existing {
-		if slices.Contains(builtinBackendNames, name) || strings.TrimSpace(cfg.LocalModelURL) == "" {
-			continue
-		}
-		targets = append(targets, backendTarget{
-			name:             name,
-			commandName:      ClaudeName,
-			preferredCommand: cfg.Command,
-			localURL:         cfg.LocalModelURL,
-		})
-	}
-
-	backendsOut := make([]BackendStatus, 0, len(targets))
-	var outMu sync.Mutex
-	var toolsOut []ToolStatus
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		toolsOut = diagnoseTools(ctx)
-	}()
-	for _, target := range targets {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			status := diagnoseBackend(ctx, target.name, target.commandName, target.preferredCommand, target.localURL)
-			outMu.Lock()
-			backendsOut = append(backendsOut, status)
-			outMu.Unlock()
-		}()
-	}
-	wg.Wait()
-
-	diag.Backends = backendsOut
-	slices.SortFunc(diag.Backends, func(a, b BackendStatus) int {
-		return strings.Compare(a.Name, b.Name)
-	})
-	diag.Tools = toolsOut
-	for i := range diag.Tools {
-		if diag.Tools[i].Name == "github_cli" {
-			gh := diag.Tools[i]
-			diag.GitHubCLI = &gh
-			break
-		}
-	}
-	return diag
 }
 
 func RunDiagnosticsWithRuntime(ctx context.Context, existing map[string]fleet.Backend, settings fleet.RuntimeSettings) Diagnostics {
@@ -292,91 +223,6 @@ func fillRuntimeUnavailable(diag *Diagnostics, existing map[string]fleet.Backend
 			break
 		}
 	}
-}
-
-func diagnoseTools(ctx context.Context) []ToolStatus {
-	tools := []ToolStatus{
-		diagnoseGitHubCLI(ctx),
-		diagnoseVersionedTool(ctx, "git", "git", []string{"--version"}),
-		diagnoseVersionedTool(ctx, "go", "go", []string{"version"}),
-		diagnoseVersionedTool(ctx, "rustc", "rustc", []string{"--version"}),
-		diagnoseVersionedTool(ctx, "cargo", "cargo", []string{"--version"}),
-		diagnoseVersionedTool(ctx, "node", "node", []string{"--version"}),
-		diagnoseVersionedTool(ctx, "npm", "npm", []string{"--version"}),
-		diagnoseVersionedTool(ctx, "typescript", "tsc", []string{"--version"}),
-	}
-	slices.SortFunc(tools, func(a, b ToolStatus) int {
-		return strings.Compare(a.Name, b.Name)
-	})
-	return tools
-}
-
-func diagnoseVersionedTool(ctx context.Context, name, command string, args []string) ToolStatus {
-	path, detected := resolveCommand(command, "")
-	status := ToolStatus{
-		Name:     name,
-		Detected: detected,
-		Command:  path,
-	}
-	if !detected {
-		status.Detail = command + " binary not found on PATH"
-		return status
-	}
-	stdout, stderr, err := runToolCommand(ctx, path, args, nil)
-	status.Version = firstNonEmptyLine(stdout, stderr)
-	status.Healthy = err == nil
-	if err != nil {
-		status.Detail = "version check failed: " + firstNonEmptyLine(stderr, stdout, err.Error())
-	} else if status.Version != "" {
-		status.Detail = "version: " + status.Version
-	} else {
-		status.Detail = "version: ok"
-	}
-	return status
-}
-
-func diagnoseGitHubCLI(ctx context.Context) ToolStatus {
-	path, detected := resolveCommand("gh", "")
-	status := ToolStatus{
-		Name:     "github_cli",
-		Detected: detected,
-		Command:  path,
-	}
-	if !detected {
-		status.Detail = "gh binary not found on PATH"
-		return status
-	}
-
-	versionOut, versionErr, versionRunErr := runToolCommand(ctx, path, []string{"--version"}, nil)
-	status.Version = firstNonEmptyLine(versionOut, versionErr)
-
-	authOut, authErr, authRunErr := runToolCommand(ctx, path, []string{"auth", "status", "--hostname", "github.com"}, nil)
-	authDetail := firstNonEmptyLine(authOut, authErr)
-	if authDetail == "" {
-		authDetail = firstNonEmptyLine(authRunErrString(authRunErr))
-	}
-	status.Authenticated = authRunErr == nil
-	status.Healthy = versionRunErr == nil && authRunErr == nil
-
-	details := make([]string, 0, 2)
-	if versionRunErr == nil {
-		if status.Version != "" {
-			details = append(details, "version: "+status.Version)
-		} else {
-			details = append(details, "version: ok")
-		}
-	} else {
-		details = append(details, "version check failed: "+firstNonEmptyLine(versionErr, versionOut, versionRunErr.Error()))
-	}
-	if status.Authenticated {
-		details = append(details, "auth: authenticated")
-	} else if authDetail != "" {
-		details = append(details, "auth failed: "+authDetail)
-	} else {
-		details = append(details, "auth failed")
-	}
-	status.Detail = strings.Join(details, " | ")
-	return status
 }
 
 func diagnoseToolsInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings) []ToolStatus {
@@ -601,84 +447,6 @@ func persistDiagnostics(st *store.Store, existing map[string]fleet.Backend, diag
 	return nil
 }
 
-func diagnoseBackend(ctx context.Context, backendName, commandName, preferredCommand, localURL string) BackendStatus {
-	path, detected := resolveCommand(commandName, preferredCommand)
-	status := BackendStatus{
-		Name:          backendName,
-		Detected:      detected,
-		Command:       path,
-		LocalModelURL: localURL,
-	}
-	if !detected {
-		status.Healthy = false
-		status.HealthDetail = fmt.Sprintf("%s binary not found on PATH", commandName)
-		return status
-	}
-
-	env := map[string]string{}
-	if localURL != "" {
-		env["ANTHROPIC_BASE_URL"] = localURL
-	}
-
-	versionOut, versionErr, versionRunErr := runToolCommand(ctx, path, []string{"--version"}, env)
-	versionOK := versionRunErr == nil
-	status.Version = firstNonEmptyLine(versionOut, versionErr)
-
-	models, modelsDetail := discoverModels(ctx, commandName, path, env)
-	status.Models = models
-
-	mcpDetail := checkGitHubMCP(ctx, path, env)
-	status.Healthy = versionOK
-
-	details := make([]string, 0, 3)
-	if versionOK {
-		if status.Version != "" {
-			details = append(details, "version: "+status.Version)
-		} else {
-			details = append(details, "version: ok")
-		}
-	} else {
-		details = append(details, "version check failed: "+firstNonEmptyLine(versionErr, versionOut))
-	}
-	if mcpDetail != "" {
-		details = append(details, mcpDetail)
-	}
-	if modelsDetail != "" {
-		details = append(details, modelsDetail)
-	}
-	status.HealthDetail = strings.Join(details, " | ")
-	return status
-}
-
-func discoverModels(ctx context.Context, backendName, command string, env map[string]string) ([]string, string) {
-	commands := modelCommands(backendName)
-	if len(commands) == 0 {
-		return nil, "models discovery not supported"
-	}
-	failures := make([]string, 0, len(commands))
-	for _, args := range commands {
-		stdout, stderr, err := runToolCommand(ctx, command, args, env)
-		if err != nil {
-			detail := firstNonEmptyLine(stderr, stdout, err.Error())
-			if detail == "" {
-				detail = "command failed"
-			}
-			failures = append(failures, fmt.Sprintf("%s: %s", strings.Join(args, " "), detail))
-			continue
-		}
-		models := parseModels(stdout)
-		if len(models) == 0 {
-			failures = append(failures, fmt.Sprintf("%s: no models in output", strings.Join(args, " ")))
-			continue
-		}
-		return models, fmt.Sprintf("models: %d discovered", len(models))
-	}
-	if len(failures) == 0 {
-		return nil, "models discovery failed"
-	}
-	return nil, "models discovery failed: " + failures[0]
-}
-
 func modelCommands(name string) [][]string {
 	switch {
 	case strings.HasPrefix(name, "claude"):
@@ -697,25 +465,6 @@ func modelCommands(name string) [][]string {
 			{"models", "list"},
 		}
 	}
-}
-
-func checkGitHubMCP(ctx context.Context, command string, env map[string]string) string {
-	stdout, stderr, err := runToolCommand(ctx, command, []string{"mcp", "list"}, env)
-	if err != nil {
-		detail := firstNonEmptyLine(stderr, stdout)
-		if detail == "" {
-			detail = err.Error()
-		}
-		return "mcp check failed: " + detail
-	}
-	hasGitHub, connected := parseGitHubMCPStatus(stdout + "\n" + stderr)
-	if connected {
-		return "github MCP: connected"
-	}
-	if hasGitHub {
-		return "github MCP: found but disconnected"
-	}
-	return "github MCP: not configured"
 }
 
 func parseGitHubMCPStatus(output string) (hasGitHub bool, connected bool) {
@@ -861,20 +610,6 @@ func dedupeSorted(in []string) []string {
 	return out
 }
 
-func resolveCommand(defaultName, preferred string) (string, bool) {
-	preferred = strings.TrimSpace(preferred)
-	if preferred != "" {
-		if p, err := exec.LookPath(preferred); err == nil {
-			return p, true
-		}
-	}
-	p, err := exec.LookPath(defaultName)
-	if err != nil {
-		return "", false
-	}
-	return p, true
-}
-
 func resolveCommandInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings, defaultName, preferred string) (string, bool) {
 	preferred = strings.TrimSpace(preferred)
 	if preferred != "" {
@@ -913,23 +648,6 @@ func firstNonEmptyLine(values ...string) string {
 	return ""
 }
 
-func runToolCommand(ctx context.Context, command string, args []string, env map[string]string) (string, string, error) {
-	runCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(runCtx, command, args...)
-	cmd.Env = mergeEnv(os.Environ(), env)
-	if home, err := os.UserHomeDir(); err == nil {
-		cmd.Dir = home
-	}
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	return strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), err
-}
-
 func runToolCommandInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings, command string, args []string, env map[string]string) (string, string, error) {
 	return runShellInRuntime(ctx, runner, settings, "exec "+shellJoin(command, args), env)
 }
@@ -943,8 +661,8 @@ func runShellInRuntime(ctx context.Context, runner runtimeexec.Runner, settings 
 	policy := settings.Constraints
 	policy.TimeoutSeconds = 0
 	// Tool discovery validates the configured runner image and network/auth
-	// environment. It does not mount a workspace, so avoid applying
-	// workspace-specific read-only filesystem policies here.
+	// environment. It does not mount a workspace, and its setup script creates
+	// scratch directories, so force a writable rootfs for this diagnostic.
 	policy.Filesystem = "workspace-tmp"
 	status, err := runner.Run(runCtx, runtimeexec.ContainerSpec{
 		Image:      settings.RunnerImage,
@@ -1084,15 +802,4 @@ func shellQuote(s string) string {
 		return "''"
 	}
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
-}
-
-func mergeEnv(base []string, override map[string]string) []string {
-	if len(override) == 0 {
-		return base
-	}
-	out := slices.Grow(slices.Clone(base), len(override))
-	for k, v := range override {
-		out = append(out, k+"="+v)
-	}
-	return out
 }

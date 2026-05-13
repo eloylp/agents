@@ -1,13 +1,11 @@
 package ai
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -20,7 +18,6 @@ import (
 
 type CommandRunner struct {
 	backendName    string
-	mode           string
 	command        string
 	env            map[string]string
 	timeout        time.Duration
@@ -46,10 +43,9 @@ const (
 	containerResponseSchemaEnv = "AGENTS_RESPONSE_SCHEMA"
 )
 
-func NewCommandRunner(backendName string, mode string, command string, env map[string]string, timeoutSeconds int, maxPromptChars int, logger zerolog.Logger) *CommandRunner {
+func newCommandRunner(backendName string, command string, env map[string]string, timeoutSeconds int, maxPromptChars int, logger zerolog.Logger) *CommandRunner {
 	return &CommandRunner{
 		backendName:    backendName,
-		mode:           mode,
 		command:        command,
 		env:            env,
 		timeout:        time.Duration(timeoutSeconds) * time.Second,
@@ -59,7 +55,7 @@ func NewCommandRunner(backendName string, mode string, command string, env map[s
 }
 
 func NewContainerCommandRunner(backendName string, mode string, command string, env map[string]string, timeoutSeconds int, maxPromptChars int, runner runtimeexec.Runner, image string, spec runtimeexecSpec, logger zerolog.Logger) *CommandRunner {
-	r := NewCommandRunner(backendName, mode, command, env, timeoutSeconds, maxPromptChars, logger)
+	r := newCommandRunner(backendName, command, env, timeoutSeconds, maxPromptChars, logger)
 	r.container = runner
 	r.containerImage = image
 	r.containerSpec = spec
@@ -79,19 +75,14 @@ func (r *CommandRunner) Run(ctx context.Context, req Request) (Response, error) 
 		Int("prompt_chars", len([]rune(combined))).
 		Logger()
 
-	switch r.mode {
-	case "noop":
-		logger.Info().Msgf("%s runner noop", r.backendName)
-		return Response{}, nil
-	case "command":
-		if r.command == "" {
-			return Response{}, fmt.Errorf("%s command is required when mode=command", r.backendName)
-		}
-		logger.Info().Str("command", r.command).Msgf("executing %s command", r.backendName)
-		return r.runCommand(ctx, logger, req)
-	default:
-		return Response{}, fmt.Errorf("unknown %s mode: %s", r.backendName, r.mode)
+	if r.container == nil {
+		return Response{}, fmt.Errorf("%s runner requires container runtime", r.backendName)
 	}
+	if r.command == "" {
+		return Response{}, fmt.Errorf("%s command is required", r.backendName)
+	}
+	logger.Info().Str("command", r.command).Msgf("executing %s command", r.backendName)
+	return r.runCommand(ctx, logger, req)
 }
 
 // runCommand executes the backend CLI. For the claude backend the system
@@ -114,72 +105,13 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	args, stdin := r.buildDelivery(req)
 
 	env := buildCommandEnv(req, r.env)
-	if r.container != nil {
-		stdoutCap, stderr, cmdErr := r.runContainerCommand(cmdCtx, args, stdin, env, req.OnLine)
-		return r.parseCommandResponse(logger, stdoutCap, stderr, cmdErr)
-	}
-
-	stdoutCap, stderr, cmdErr := r.runLocalCommand(cmdCtx, args, stdin, env, req.OnLine)
+	stdoutCap, stderr, cmdErr := r.runContainerCommand(cmdCtx, args, stdin, env, req.OnLine)
 	return r.parseCommandResponse(logger, stdoutCap, stderr, cmdErr)
-}
-
-func (r *CommandRunner) runLocalCommand(ctx context.Context, args []string, stdin string, env []string, onLine func([]byte)) (lineCapture, string, error) {
-	cmd := exec.CommandContext(ctx, r.command, args...)
-	cmd.Env = env
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	cmd.Stdin = bytes.NewBufferString(stdin)
-
-	stdoutPipe, pipeErr := cmd.StdoutPipe()
-	if pipeErr != nil {
-		return lineCapture{}, stderr.String(), fmt.Errorf("stdout pipe: %w", pipeErr)
-	}
-	if err := cmd.Start(); err != nil {
-		return lineCapture{}, stderr.String(), fmt.Errorf("start %s: %w", r.backendName, err)
-	}
-
-	// Read stdout line by line using ReadBytes so there is no per-line size cap
-	// (unlike bufio.Scanner which silently truncates at its buffer limit).
-	// ReadBytes blocks until a complete newline-delimited line arrives from the
-	// pipe, so time.Now() inside addLine reflects when that specific line was
-	// received, not when a larger pipe-read chunk happened to land.
-	var stdoutCap lineCapture
-	reader := bufio.NewReader(stdoutPipe)
-	for {
-		line, err := reader.ReadBytes('\n')
-		if len(line) > 0 {
-			stripped := bytes.TrimRight(line, "\n")
-			stdoutCap.addLine(stripped)
-			// Live publish: hand the line to the engine-supplied
-			// callback as soon as it lands. Empty lines are still
-			// forwarded so the UI can render blank separators verbatim.
-			if onLine != nil {
-				onLine(stripped)
-			}
-		}
-		if err != nil {
-			break
-		}
-	}
-
-	cmdErr := cmd.Wait()
-	return stdoutCap, stderr.String(), cmdErr
 }
 
 func (r *CommandRunner) runContainerCommand(ctx context.Context, args []string, stdin string, env []string, onLine func([]byte)) (lineCapture, string, error) {
 	writer := &captureWriter{onLine: onLine}
 	var stderr bytes.Buffer
-	workspaceDir, err := os.MkdirTemp("", "agents-workspace-*")
-	if err != nil {
-		return lineCapture{}, "", fmt.Errorf("create runner workspace: %w", err)
-	}
-	defer os.RemoveAll(workspaceDir)
-	runDir, err := os.MkdirTemp("", "agents-run-*")
-	if err != nil {
-		return lineCapture{}, "", fmt.Errorf("create runner temp dir: %w", err)
-	}
-	defer os.RemoveAll(runDir)
 
 	if r.isCodexBackend() {
 		var schemaErr error
@@ -209,8 +141,8 @@ func (r *CommandRunner) runContainerCommand(ctx context.Context, args []string, 
 	spec.WorkingDir = containerWorkspaceDir
 	spec.Env = env
 	spec.Mounts = append(slices.Clone(spec.Mounts),
-		runtimeexec.Mount{Source: workspaceDir, Target: containerWorkspaceDir},
-		runtimeexec.Mount{Source: runDir, Target: containerRunDir},
+		runtimeexec.Mount{Target: containerWorkspaceDir, Tmpfs: true},
+		runtimeexec.Mount{Target: containerRunDir, Tmpfs: true},
 	)
 	spec.Stdin = bytes.NewBufferString(stdin)
 	spec.Stdout = writer
@@ -540,7 +472,7 @@ func (r *CommandRunner) buildClaudeDelivery(req Request) (args []string, stdin s
 }
 
 // buildCodexDelivery concatenates system + user on stdin and appends
-// --output-schema pointing to the embedded response schema temp file.
+// --output-schema pointing to the runner-visible response schema path.
 // --json makes codex emit one event per JSONL line on stdout so the
 // daemon can reconstruct the tool-loop transcript (parseCodexSteps).
 func (r *CommandRunner) buildCodexDelivery(req Request) (args []string, stdin string) {
@@ -554,12 +486,7 @@ func (r *CommandRunner) buildCodexDelivery(req Request) (args []string, stdin st
 	if req.Model != "" {
 		args = append(args, "--model", req.Model)
 	}
-	schemaPath, err := ResponseSchemaPath()
-	if err != nil {
-		r.logger.Error().Err(err).Msg("failed to materialize embedded response schema")
-		return args, combinedStdin
-	}
-	args = append(args, "--output-schema", schemaPath)
+	args = append(args, "--output-schema", containerResponseSchema)
 	return args, combinedStdin
 }
 

@@ -310,7 +310,7 @@ export default function ConfigPage() {
   const [errorDialog, setErrorDialog] = useState<{ title: string; message: string } | null>(null)
   const [localBackendModalOpen, setLocalBackendModalOpen] = useState(false)
   const [localBackendName, setLocalBackendName] = useState('claude_local')
-  const [localBackendURL, setLocalBackendURL] = useState('http://localhost:8080/v1/messages')
+  const [localBackendURL, setLocalBackendURL] = useState('http://anthropic-bridge:8080/v1/messages')
   const [deleteTarget, setDeleteTarget] = useState<Backend | null>(null)
   const [settingsTarget, setSettingsTarget] = useState<Backend | null>(null)
   const [settingsTimeout, setSettingsTimeout] = useState('600')
@@ -1058,7 +1058,7 @@ export default function ConfigPage() {
                 onClick={() => {
                   setSaveError('')
                   setLocalBackendName('claude_local')
-                  setLocalBackendURL('http://localhost:8080/v1/messages')
+                  setLocalBackendURL('http://anthropic-bridge:8080/v1/messages')
                   setLocalBackendModalOpen(true)
                 }}
                 style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)', padding: '5px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem' }}
@@ -1498,7 +1498,7 @@ export default function ConfigPage() {
                 style={inputStyle}
                 value={localBackendURL}
                 onChange={e => setLocalBackendURL(e.target.value)}
-                placeholder="http://localhost:8080/v1/messages"
+                placeholder="http://anthropic-bridge:8080/v1/messages"
               />
             </div>
             <div style={{ border: '1px solid var(--border-subtle)', borderRadius: '6px', background: 'var(--bg)', padding: '0.7rem' }}>
@@ -1506,7 +1506,7 @@ export default function ConfigPage() {
               <ul style={{ margin: 0, paddingLeft: '1rem', color: 'var(--text-faint)', fontSize: '0.78rem', lineHeight: 1.45 }}>
                 <li>Strong fit today: reviewer/scout specialists. Action-heavy coder flows can be more conservative with write tools.</li>
                 <li>Local models can hallucinate templated facts (for example SHAs/statuses). Prompt for live verification before posting results.</li>
-                <li>This backend reuses your discovered Claude CLI and routes it to your local OpenAI-compatible endpoint.</li>
+                <li>This backend reuses the runner image's Claude CLI and routes it to an Anthropic-compatible endpoint reachable from the runner container.</li>
                 <li>Structured JSON schema is still enforced by the daemon, but output quality still depends on model capability.</li>
                 <li>If runs are long, raise timeouts (proxy/backend) so tool loops do not fail mid-run.</li>
               </ul>
@@ -1591,7 +1591,7 @@ export default function ConfigPage() {
                   type="url"
                   value={settingsLocalModelURL}
                   onChange={e => setSettingsLocalModelURL(e.target.value)}
-                  placeholder="http://localhost:8080/v1/messages"
+                  placeholder="http://anthropic-bridge:8080/v1/messages"
                 />
               </div>
             )}

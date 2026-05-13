@@ -184,6 +184,14 @@ func hostConfig(spec ContainerSpec) (*container.HostConfig, error) {
 		if m.Target == RunnerTempMount {
 			readOnly = false
 		}
+		if m.Tmpfs || m.Source == "" {
+			cfg.Mounts = append(cfg.Mounts, mount.Mount{
+				Type:     mount.TypeTmpfs,
+				Target:   m.Target,
+				ReadOnly: readOnly,
+			})
+			continue
+		}
 		cfg.Mounts = append(cfg.Mounts, mount.Mount{
 			Type:     mount.TypeBind,
 			Source:   m.Source,

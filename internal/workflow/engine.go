@@ -280,7 +280,7 @@ func (r errorRunner) Run(context.Context, ai.Request) (ai.Response, error) {
 
 // WithRunnerBuilder overrides the runner factory the engine uses to
 // resolve a backend to an ai.Runner on each dispatch. Production wires
-// the default that constructs an ai.NewCommandRunner; tests inject stub
+// the default that constructs a container-backed AI runner; tests inject stub
 // runners so they can observe the request the engine produced.
 func (e *Engine) WithRunnerBuilder(fn func(workspaceID string, name string, b fleet.Backend) ai.Runner) {
 	e.runnerBuilder = fn

@@ -963,11 +963,16 @@ func (h *Handler) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
 	local.Command = base.Command
 	local.LocalModelURL = req.URL
 
+	settings, err := h.store.ReadRuntimeSettings()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read runtime settings: %v", err), http.StatusInternalServerError)
+		return
+	}
 	diagMap := map[string]fleet.Backend{
 		backends.ClaudeName: base,
 		name:                local,
 	}
-	diag := backends.RunDiagnostics(r.Context(), diagMap)
+	diag := backends.RunDiagnosticsWithRuntime(r.Context(), diagMap, settings)
 	for _, b := range diag.Backends {
 		if b.Name != name {
 			continue

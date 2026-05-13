@@ -29,7 +29,7 @@ Use your reverse proxy for TLS and routing. The proxy does not need to provide b
 |---|---|---|---|
 | **Daemon** | all paths | session cookie or daemon API token on sensitive routes | `/mcp`, `/run`, API, observability, config, runners; `/ui/` shell loads publicly but data calls require auth |
 | **Public** | `/`, `/status`, `/webhooks/github`, `/auth/status`, `/auth/login`, `/auth/bootstrap`, `/ui/*` shell/assets | none at proxy | GitHub cannot send auth on webhooks; `/status` must stay reachable for liveness probes; `/` hosts the login/bootstrap page and redirects authenticated sessions to `/ui/`; `/ui/*` must render before the browser has a session. |
-| **Local proxy** | `/v1/messages`, `/v1/models` when proxy is enabled | no daemon auth only for loopback clients; remote clients need daemon auth | Backend CLI subprocesses run on the daemon host/container and call the proxy locally. Do not expose the proxy as an unauthenticated public route. |
+| **Local proxy** | `/v1/messages`, `/v1/models` when proxy is enabled | no daemon auth only for loopback clients; remote clients need daemon auth | Runner containers are separate network peers, so they do not get loopback bypass. Use a runner-reachable authenticated URL if a local backend routes through the daemon proxy. Do not expose the proxy as an unauthenticated public route. |
 
 `/webhooks/github` is safe to expose publicly because every request is HMAC-verified against `GITHUB_WEBHOOK_SECRET` before it is accepted. `/run` is protected once daemon auth is initialized.
 

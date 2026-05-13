@@ -29,6 +29,7 @@ type Mount struct {
 	Source   string
 	Target   string
 	ReadOnly bool
+	Tmpfs    bool
 }
 
 type ExitStatus struct {

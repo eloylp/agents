@@ -29,6 +29,17 @@ func (f *fakeContainerRunner) Run(_ context.Context, spec runtimeexec.ContainerS
 	return runtimeexec.ExitStatus{Code: f.code}, f.err
 }
 
+type silentContainerRunner struct {
+	spec runtimeexec.ContainerSpec
+}
+
+func (f *silentContainerRunner) EnsureImage(context.Context, string) error { return nil }
+
+func (f *silentContainerRunner) Run(_ context.Context, spec runtimeexec.ContainerSpec) (runtimeexec.ExitStatus, error) {
+	f.spec = spec
+	return runtimeexec.ExitStatus{}, nil
+}
+
 func TestBuildCommandEnvDaemonNumber(t *testing.T) {
 	t.Parallel()
 
@@ -178,6 +189,9 @@ func TestContainerCommandRunnerUsesRuntimeAndParsesOutput(t *testing.T) {
 	}
 	if fake.spec.Mounts[0].Target != "/workspace" || fake.spec.Mounts[1].Target != "/tmp/agents-run" {
 		t.Fatalf("mount targets = %+v, want /workspace and /tmp/agents-run", fake.spec.Mounts)
+	}
+	if !fake.spec.Mounts[0].Tmpfs || !fake.spec.Mounts[1].Tmpfs {
+		t.Fatalf("mounts = %+v, want Docker-managed tmpfs mounts", fake.spec.Mounts)
 	}
 }
 
@@ -442,8 +456,13 @@ func TestResponseDispatchOmittedWhenEmpty(t *testing.T) {
 // silent success with an empty Response.
 func TestCommandRunnerEmptyStdoutIsError(t *testing.T) {
 	t.Parallel()
-	// "true" exits 0 with no stdout, the canonical empty-output case.
-	r := NewCommandRunner("test", "command", "true", nil, 10, 4000, zerolog.Nop())
+	fake := &silentContainerRunner{}
+	r := NewContainerCommandRunner(
+		"test", "command", "test-cli", nil,
+		10, 4000, fake, "ghcr.io/example/runner:test",
+		runtimeexec.ContainerSpec{},
+		zerolog.Nop(),
+	)
 	_, err := r.Run(context.Background(), Request{Workflow: "wf", Repo: "owner/repo"})
 	if err == nil {
 		t.Fatal("expected error for empty stdout, got nil")
@@ -578,7 +597,7 @@ func TestBuildDeliveryClaudeUsesAppendSystemPrompt(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			r := NewCommandRunner(tc.backendName, "command", "true", nil, 10, 0, zerolog.Nop())
+			r := newCommandRunner(tc.backendName, "test-cli", nil, 10, 0, zerolog.Nop())
 			args, stdin := r.buildDelivery(Request{System: tc.system, User: tc.user})
 
 			hasFlag := slices.Contains(args, "--append-system-prompt")
@@ -694,7 +713,7 @@ func TestBuildDeliveryRespectsTotalBudget(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			r := NewCommandRunner(tc.backendName, "command", "true", nil, 10, tc.maxChars, zerolog.Nop())
+			r := newCommandRunner(tc.backendName, "test-cli", nil, 10, tc.maxChars, zerolog.Nop())
 			args, stdin := r.buildDelivery(Request{System: tc.system, User: tc.user})
 			if stdin != tc.wantStdin {
 				t.Errorf("stdin = %q, want %q", stdin, tc.wantStdin)
@@ -761,8 +780,8 @@ func TestBuildDeliveryClaudeAndCodexSameTruncationBoundary(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			claude := NewCommandRunner("claude", "command", "true", nil, 10, tc.maxChars, zerolog.Nop())
-			codex := NewCommandRunner("codex", "command", "true", nil, 10, tc.maxChars, zerolog.Nop())
+			claude := newCommandRunner("claude", "test-cli", nil, 10, tc.maxChars, zerolog.Nop())
+			codex := newCommandRunner("codex", "test-cli", nil, 10, tc.maxChars, zerolog.Nop())
 
 			claudeArgs, claudeStdin := claude.buildDelivery(Request{System: tc.system, User: tc.user})
 			_, codexStdin := codex.buildDelivery(Request{System: tc.system, User: tc.user})
