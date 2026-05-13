@@ -613,7 +613,7 @@ func ServeSSEWithIntervalFiltered(w http.ResponseWriter, r *http.Request, hub SS
 }
 
 func workspaceFromSSEMessage(msg []byte) string {
-	for _, line := range bytes.Split(msg, []byte("\n")) {
+	for line := range bytes.Lines(msg) {
 		line = bytes.TrimSpace(line)
 		if !bytes.HasPrefix(line, []byte("data:")) {
 			continue
