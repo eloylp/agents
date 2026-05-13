@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -178,14 +179,9 @@ func TestStoreCRUDAgentCreateAndGet(t *testing.T) {
 	if err := json.NewDecoder(rr.Body).Decode(&agents); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
-	var found bool
-	for _, a := range agents {
-		if a["name"] == "coder" {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(agents, func(a map[string]any) bool {
+		return a["name"] == "coder"
+	}) {
 		t.Errorf("coder not found in agent list: %v", agents)
 	}
 
