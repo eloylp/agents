@@ -478,6 +478,7 @@ export default function GraphPage() {
       if (!res.ok) throw new Error(`runners ${res.status}`)
       const data = await res.json() as { runners?: RunnerRow[] }
       const rows = (data.runners ?? [])
+        .filter(r => r.status !== 'skipped')
         .filter(r => r.agent === agentName || r.target_agent === agentName)
         .slice(0, 8)
       setAgentRuns(rows)
