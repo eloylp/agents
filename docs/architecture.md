@@ -46,7 +46,7 @@ internal/
 ├─ webhook/                     /webhooks/github only, HMAC, delivery dedup, event parsing
 ├─ mcp/                         MCP server; one Deps struct of concrete pointers
 ├─ ui/                          embedded Next.js dist/, served at /ui/
-└─ logging/, setup/             zerolog wiring, interactive setup
+└─ logging/                     zerolog wiring
 ```
 
 The tiers, from bottom to top:

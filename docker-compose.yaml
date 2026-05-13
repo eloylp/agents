@@ -13,8 +13,17 @@ services:
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - OPENAI_MODEL=${OPENAI_MODEL}
       - CODEX_ACCESS_TOKEN=${CODEX_ACCESS_TOKEN}
+      - CODEX_API_KEY=${CODEX_API_KEY}
+      - GH_TOKEN=${GH_TOKEN}
+      - GH_HOST=${GH_HOST}
+      - GITHUB_API_URL=${GITHUB_API_URL}
+      - SSH_AUTH_SOCK=${SSH_AUTH_SOCK}
     volumes:
       # SQLite database (fleet config + agent memory + observability).
       - agents-data:/var/lib/agents

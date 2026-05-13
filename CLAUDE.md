@@ -27,7 +27,6 @@ internal/
   webhook/                  # GitHub webhook receiver only: HMAC verification, delivery dedupe, /webhooks/github event parsing
   mcp/                      # MCP server exposing fleet-management tools at /mcp
   ui/                       # Embedded Next.js web dashboard (served at /ui/)
-  setup/                    # Interactive first-time setup command
   logging/                  # zerolog setup
 docs/                       # Long-form docs: configuration, events, dispatch, API, docker, local-models, security
 ```

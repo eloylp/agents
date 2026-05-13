@@ -47,7 +47,6 @@ internal/
   webhook/                      # GitHub webhook receiver only: HMAC signature verification, delivery dedupe, /webhooks/github event parsing
   mcp/                          # MCP server exposing fleet-management tools at /mcp
   ui/                           # embedded Next.js web dashboard (static assets served at /ui/)
-  setup/                        # interactive first-time setup command
   logging/                      # zerolog configuration
 docs/local-models.md            # full recipe for running the fleet on a local LLM
 config.example.yaml             # shipping example, kept in sync with config schema

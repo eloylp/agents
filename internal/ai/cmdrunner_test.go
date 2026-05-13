@@ -134,7 +134,7 @@ func TestContainerCommandRunnerUsesRuntimeAndParsesOutput(t *testing.T) {
 
 	fake := &fakeContainerRunner{}
 	r := NewContainerCommandRunner(
-		"claude", "command", "claude", map[string]string{"ANTHROPIC_BASE_URL": "http://proxy"},
+		"claude", "claude", map[string]string{"ANTHROPIC_BASE_URL": "http://proxy"},
 		10, 4000, fake, "ghcr.io/example/runner:test",
 		runtimeexec.ContainerSpec{},
 		zerolog.Nop(),
@@ -200,7 +200,7 @@ func TestContainerCommandRunnerMaterializesClaudeMCPConfig(t *testing.T) {
 
 	fake := &fakeContainerRunner{}
 	r := NewContainerCommandRunner(
-		"claude", "command", "claude", nil,
+		"claude", "claude", nil,
 		10, 4000, fake, "ghcr.io/example/runner:test",
 		runtimeexec.ContainerSpec{},
 		zerolog.Nop(),
@@ -222,7 +222,7 @@ func TestContainerCommandRunnerMaterializesCodexHome(t *testing.T) {
 
 	fake := &fakeContainerRunner{}
 	r := NewContainerCommandRunner(
-		"codex", "command", "codex", nil,
+		"codex", "codex", nil,
 		10, 4000, fake, "ghcr.io/example/runner:test",
 		runtimeexec.ContainerSpec{},
 		zerolog.Nop(),
@@ -254,7 +254,7 @@ func TestContainerCommandRunnerOverridesHostHomeEnv(t *testing.T) {
 
 	fake := &fakeContainerRunner{}
 	r := NewContainerCommandRunner(
-		"openai_compatible", "command", "custom-cli", nil,
+		"openai_compatible", "custom-cli", nil,
 		10, 4000, fake, "ghcr.io/example/runner:test",
 		runtimeexec.ContainerSpec{},
 		zerolog.Nop(),
@@ -290,7 +290,7 @@ func TestContainerCommandRunnerClonesPolicyMounts(t *testing.T) {
 		Mounts: []runtimeexec.Mount{{Source: "/host/ca", Target: "/etc/ssl/certs", ReadOnly: true}},
 	}
 	r := NewContainerCommandRunner(
-		"openai_compatible", "command", "custom-cli", nil,
+		"openai_compatible", "custom-cli", nil,
 		10, 4000, fake, "ghcr.io/example/runner:test",
 		policy,
 		zerolog.Nop(),
@@ -458,7 +458,7 @@ func TestCommandRunnerEmptyStdoutIsError(t *testing.T) {
 	t.Parallel()
 	fake := &silentContainerRunner{}
 	r := NewContainerCommandRunner(
-		"test", "command", "test-cli", nil,
+		"test", "test-cli", nil,
 		10, 4000, fake, "ghcr.io/example/runner:test",
 		runtimeexec.ContainerSpec{},
 		zerolog.Nop(),

@@ -54,7 +54,7 @@ func newCommandRunner(backendName string, command string, env map[string]string,
 	}
 }
 
-func NewContainerCommandRunner(backendName string, mode string, command string, env map[string]string, timeoutSeconds int, maxPromptChars int, runner runtimeexec.Runner, image string, spec runtimeexecSpec, logger zerolog.Logger) *CommandRunner {
+func NewContainerCommandRunner(backendName string, command string, env map[string]string, timeoutSeconds int, maxPromptChars int, runner runtimeexec.Runner, image string, spec runtimeexecSpec, logger zerolog.Logger) *CommandRunner {
 	r := newCommandRunner(backendName, command, env, timeoutSeconds, maxPromptChars, logger)
 	r.container = runner
 	r.containerImage = image

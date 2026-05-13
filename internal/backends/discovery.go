@@ -686,11 +686,19 @@ func diagnosticEnv(override map[string]string) []string {
 	keys := []string{
 		"GITHUB_TOKEN",
 		"GH_TOKEN",
+		"GH_HOST",
+		"GITHUB_API_URL",
 		"CLAUDE_CODE_OAUTH_TOKEN",
 		"ANTHROPIC_API_KEY",
 		"ANTHROPIC_AUTH_TOKEN",
+		"ANTHROPIC_BASE_URL",
+		"ANTHROPIC_MODEL",
 		"OPENAI_API_KEY",
+		"OPENAI_BASE_URL",
+		"OPENAI_MODEL",
 		"CODEX_ACCESS_TOKEN",
+		"CODEX_API_KEY",
+		"SSH_AUTH_SOCK",
 	}
 	out := []string{
 		"HOME=" + diagnosticHome,

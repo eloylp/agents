@@ -249,7 +249,7 @@ func (e *Engine) defaultRunnerFor(workspaceID string, name string, b fleet.Backe
 		timeoutSeconds = b.TimeoutSeconds
 	}
 	return ai.NewContainerCommandRunner(
-		name, "command", b.Command, env,
+		name, b.Command, env,
 		timeoutSeconds, b.MaxPromptChars,
 		dockerRunner, settings.RunnerImage, policy,
 		e.logger,
