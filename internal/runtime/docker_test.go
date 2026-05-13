@@ -21,7 +21,7 @@ func TestHostConfigAppliesFilesystemPolicies(t *testing.T) {
 		{name: "documented workspace temp policy", policy: "workspace-tmp"},
 		{name: "workspace readonly", policy: "workspace-ro", wantRootRO: true, wantWorkspaceRO: true},
 		{name: "readonly root policy", policy: "readonly-root", wantRootRO: true},
-		{name: "readonly alias", policy: "readonly", wantRootRO: true, wantWorkspaceRO: true},
+		{name: "rejects readonly alias", policy: "readonly", wantErr: true},
 		{name: "rejects unknown", policy: "surprise", wantErr: true},
 	}
 

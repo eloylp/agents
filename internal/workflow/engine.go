@@ -243,12 +243,14 @@ func (e *Engine) defaultRunnerFor(workspaceID string, name string, b fleet.Backe
 		return errorRunner{err: fmt.Errorf("create docker runtime: %w", err)}
 	}
 	policy := runtimeexec.ContainerSpec{Policy: settings.Constraints}
-	if policy.Policy.TimeoutSeconds == 0 {
-		policy.Policy.TimeoutSeconds = b.TimeoutSeconds
+	timeoutSeconds := policy.Policy.TimeoutSeconds
+	policy.Policy.TimeoutSeconds = 0
+	if timeoutSeconds == 0 {
+		timeoutSeconds = b.TimeoutSeconds
 	}
 	return ai.NewContainerCommandRunner(
 		name, "command", b.Command, env,
-		b.TimeoutSeconds, b.MaxPromptChars,
+		timeoutSeconds, b.MaxPromptChars,
 		dockerRunner, settings.RunnerImage, policy,
 		e.logger,
 	)

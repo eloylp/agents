@@ -78,11 +78,6 @@ func (d *Docker) Run(ctx context.Context, spec ContainerSpec) (ExitStatus, error
 	if len(spec.Command) == 0 {
 		return ExitStatus{}, errors.New("runner command is required")
 	}
-	if spec.Policy.TimeoutSeconds > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(spec.Policy.TimeoutSeconds)*time.Second)
-		defer cancel()
-	}
 	if err := d.EnsureImage(ctx, spec.Image); err != nil {
 		return ExitStatus{}, err
 	}
@@ -178,16 +173,14 @@ func hostConfig(spec ContainerSpec) (*container.HostConfig, error) {
 	}
 	filesystem := strings.ToLower(strings.TrimSpace(spec.Policy.Filesystem))
 	switch filesystem {
-	case "", "workspace-tmp", "workspace", "workspace-rw", "readwrite":
-	case "readonly-root", "workspace-ro", "readonly":
-		cfg.ReadonlyRootfs = true
-	case "tmpfs":
+	case "", "workspace-tmp":
+	case "readonly-root", "workspace-ro":
 		cfg.ReadonlyRootfs = true
 	default:
 		return nil, fmt.Errorf("unsupported filesystem policy %q", spec.Policy.Filesystem)
 	}
 	for _, m := range spec.Mounts {
-		readOnly := m.ReadOnly || filesystem == "workspace-ro" || filesystem == "readonly"
+		readOnly := m.ReadOnly || filesystem == "workspace-ro"
 		if m.Target == RunnerTempMount {
 			readOnly = false
 		}

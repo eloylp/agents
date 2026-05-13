@@ -19,19 +19,19 @@ import (
 )
 
 type CommandRunner struct {
-	backendName     string
-	mode            string
-	command         string
-	env             map[string]string
-	timeout         time.Duration
-	maxPromptChars  int
-	logger          zerolog.Logger
-	container       runtimeexec.Runner
-	containerImage  string
-	containerPolicy runtimeexecPolicy
+	backendName    string
+	mode           string
+	command        string
+	env            map[string]string
+	timeout        time.Duration
+	maxPromptChars int
+	logger         zerolog.Logger
+	container      runtimeexec.Runner
+	containerImage string
+	containerSpec  runtimeexecSpec
 }
 
-type runtimeexecPolicy = runtimeexec.ContainerSpec
+type runtimeexecSpec = runtimeexec.ContainerSpec
 
 const (
 	containerRunDir            = runtimeexec.RunnerTempMount
@@ -58,11 +58,11 @@ func NewCommandRunner(backendName string, mode string, command string, env map[s
 	}
 }
 
-func NewContainerCommandRunner(backendName string, mode string, command string, env map[string]string, timeoutSeconds int, maxPromptChars int, runner runtimeexec.Runner, image string, policy runtimeexecPolicy, logger zerolog.Logger) *CommandRunner {
+func NewContainerCommandRunner(backendName string, mode string, command string, env map[string]string, timeoutSeconds int, maxPromptChars int, runner runtimeexec.Runner, image string, spec runtimeexecSpec, logger zerolog.Logger) *CommandRunner {
 	r := NewCommandRunner(backendName, mode, command, env, timeoutSeconds, maxPromptChars, logger)
 	r.container = runner
 	r.containerImage = image
-	r.containerPolicy = policy
+	r.containerSpec = spec
 	return r
 }
 
@@ -202,7 +202,7 @@ func (r *CommandRunner) runContainerCommand(ctx context.Context, args []string, 
 	}
 	command := append([]string{r.command}, args...)
 	command = r.containerEntrypoint(command, env)
-	spec := r.containerPolicy
+	spec := r.containerSpec
 	spec.Image = r.containerImage
 	spec.Command = command
 	spec.WorkingDir = containerWorkspaceDir
