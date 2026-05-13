@@ -1,6 +1,15 @@
 package backends
 
-import "testing"
+import (
+	"context"
+	"io"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/eloylp/agents/internal/fleet"
+	runtimeexec "github.com/eloylp/agents/internal/runtime"
+)
 
 func TestParseGitHubMCPStatus(t *testing.T) {
 	t.Parallel()
@@ -100,4 +109,87 @@ For building AI applications, default to the latest capable model.`
 			t.Fatalf("parseModels()[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
+}
+
+func TestDiagnoseGitHubCLIInRuntimeUsesRunnerContainer(t *testing.T) {
+	oldGH, hadGH := os.LookupEnv("GH_TOKEN")
+	t.Cleanup(func() {
+		if hadGH {
+			_ = os.Setenv("GH_TOKEN", oldGH)
+		} else {
+			_ = os.Unsetenv("GH_TOKEN")
+		}
+	})
+	_ = os.Unsetenv("GH_TOKEN")
+	t.Setenv("GITHUB_TOKEN", "test-token")
+
+	var specs []runtimeexec.ContainerSpec
+	runner := fakeRuntimeRunner{run: func(spec runtimeexec.ContainerSpec) (int, string, string, error) {
+		specs = append(specs, spec)
+		script := strings.Join(spec.Command, " ")
+		switch {
+		case strings.Contains(script, "command -v 'gh'"):
+			return 0, "/usr/bin/gh\n", "", nil
+		case strings.Contains(script, "'/usr/bin/gh' '--version'"):
+			return 0, "gh version 2.71.0\n", "", nil
+		case strings.Contains(script, "'/usr/bin/gh' 'auth' 'status' '--hostname' 'github.com'"):
+			return 0, "Logged in to github.com\n", "", nil
+		default:
+			t.Fatalf("unexpected runner command: %v", spec.Command)
+			return 1, "", "", nil
+		}
+	}}
+
+	status := diagnoseGitHubCLIInRuntime(context.Background(), runner, fleet.RuntimeSettings{RunnerImage: "runner:test"})
+	if !status.Detected {
+		t.Fatal("Detected = false, want true")
+	}
+	if !status.Authenticated {
+		t.Fatal("Authenticated = false, want true")
+	}
+	if !status.Healthy {
+		t.Fatal("Healthy = false, want true")
+	}
+	if status.Command != "/usr/bin/gh" {
+		t.Fatalf("Command = %q, want /usr/bin/gh", status.Command)
+	}
+	if len(specs) != 3 {
+		t.Fatalf("runner calls = %d, want 3", len(specs))
+	}
+	for _, spec := range specs {
+		if spec.Image != "runner:test" {
+			t.Fatalf("Image = %q, want runner:test", spec.Image)
+		}
+		if !envContains(spec.Env, "GH_TOKEN=test-token") {
+			t.Fatalf("Env missing GH_TOKEN fallback: %v", spec.Env)
+		}
+	}
+}
+
+type fakeRuntimeRunner struct {
+	run func(runtimeexec.ContainerSpec) (code int, stdout string, stderr string, err error)
+}
+
+func (f fakeRuntimeRunner) EnsureImage(context.Context, string) error {
+	return nil
+}
+
+func (f fakeRuntimeRunner) Run(_ context.Context, spec runtimeexec.ContainerSpec) (runtimeexec.ExitStatus, error) {
+	code, stdout, stderr, err := f.run(spec)
+	if spec.Stdout != nil && stdout != "" {
+		_, _ = io.WriteString(spec.Stdout, stdout)
+	}
+	if spec.Stderr != nil && stderr != "" {
+		_, _ = io.WriteString(spec.Stderr, stderr)
+	}
+	return runtimeexec.ExitStatus{Code: code}, err
+}
+
+func envContains(env []string, want string) bool {
+	for _, entry := range env {
+		if entry == want {
+			return true
+		}
+	}
+	return false
 }

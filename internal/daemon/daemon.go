@@ -667,7 +667,7 @@ func LoadConfig(ctx context.Context, dbPath, importPath string, msg io.Writer) (
 		return nil, nil, fmt.Errorf("auto-discover backends: %w", err)
 	}
 	if autoDiscovered && msg != nil {
-		fmt.Fprintln(msg, "startup: discovered AI backends from local CLI tools")
+		fmt.Fprintln(msg, "startup: discovered AI backends from configured runner image")
 	}
 	cfg, err := st.LoadAndValidate()
 	if err != nil {

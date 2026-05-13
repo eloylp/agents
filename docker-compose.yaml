@@ -1,6 +1,10 @@
 services:
   agents:
     image: ghcr.io/eloylp/agents:latest
+    # The daemon needs Docker socket access so it can create per-run containers.
+    # The published image defaults to the non-root agents user; Compose runs it
+    # as root because host docker.sock group IDs are not portable.
+    user: "0:0"
     ports:
       - "8080:8080"
     environment:

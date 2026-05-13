@@ -65,6 +65,8 @@ The default compose file pulls the published `ghcr.io/eloylp/agents:latest` daem
 - `agents-data` named volume → `/var/lib/agents` (SQLite database persistence)
 - `/var/run/docker.sock` → `/var/run/docker.sock` so the daemon can create ephemeral runner containers. This is root-equivalent access to the Docker host and must be treated as a serious deployment boundary.
 
+The daemon image itself defaults to the non-root `agents` user, but the shipped Compose file sets `user: "0:0"` so Docker socket access works on hosts where `/var/run/docker.sock` belongs to a host-specific `docker` group ID. Operators who replace this with a group-based setup must ensure the daemon can create and remove runner containers before enabling scheduled runs.
+
 YAML config is import/export only, not a runtime input. To seed an empty fleet, POST a YAML payload at `/import`.
 
 ## Environment Variables

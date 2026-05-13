@@ -11,7 +11,7 @@ Agents can also invoke each other at runtime via the **reactive inter-agent disp
 Key numbers:
 - Language: **Go 1.25** (check `go.mod`).
 - Binary entrypoint: `cmd/agents/main.go`.
-- Single-binary deployment; the image includes the AI CLIs plus git, gh, Go, Rust/Cargo, Node/npm, and TypeScript; GitHub access flows through MCP first, with gh as fallback.
+- Single-binary daemon deployment; the daemon image is the control plane, while the separate runner image includes the AI CLIs plus git, gh, Go, Rust/Cargo, Node/npm, and TypeScript. GitHub access flows through MCP first, with gh as fallback.
 
 ## Quick commands
 
@@ -132,6 +132,7 @@ When making common classes of changes, update all of these at once:
 - **Config is loaded from SQLite at startup.** Seed an empty SQLite store via `POST /import`; YAML is import/export only, not a runtime input. Manage subsequent changes via the CRUD API or the web dashboard. Prompt and skill content is stored in the database; changes via the API or UI take effect on the next agent run without a restart.
 - **Backend discovery lifecycle.** Startup auto-discovery runs only when the backends table is empty. Manual refresh is explicit via `POST /backends/discover`; `GET /backends/status` is diagnostics-only.
 - **Runtime toolchain.** The `agents` Docker image is the control plane and stays minimal. The `agents-runner` image contains Claude Code, Codex, `gh`, git, Go, Rust/Cargo, Node/npm, TypeScript, and runtime tools. The daemon starts one fresh runner container per run through the Docker Engine API and injects allowlisted env credentials (`GITHUB_TOKEN`, Claude/Codex vars) from its own environment.
+- **Docker socket access.** The default Compose file runs the daemon container as `root` so it can use the mounted host Docker socket across Linux hosts with different `docker` group IDs. Treat this as host-root-equivalent access and put the daemon behind strong authentication and network controls.
 - **Orphan visibility.** `GET /agents/orphans/status` and `/status` (`orphaned_agents.count`) expose model/backend drift requiring user remediation.
 - **Agent memory** is stored in SQLite (in the `memory` table), keyed by `(workspace, agent, repo)`. It's the agent's job to return updated memory in its response; the daemon writes it back to the store unchanged. Load/persist is gated by `allow_memory` (default `true`) and applies uniformly across cron, webhook, dispatch, `POST /run`, and `trigger_agent`. The built-in `memory-scope` guardrail tells agents to ignore CLI-native/global/session memory and use only the daemon-rendered `Existing memory:` section for the current workspace/repo/agent.
 - **The event queue is durable.** Every `PushEvent` persists the event to the SQLite `event_queue` table before signalling workers via the in-memory channel. Rows whose `completed_at` is still `NULL` at startup are replayed onto the channel, events buffered at shutdown, or runs interrupted mid-prompt, get a second chance instead of vanishing. Completed rows older than 7 days are pruned by an hourly cleanup loop. Inspect / delete / retry rows through the `/runners` REST surface, the matching MCP tools, or the UI's Runners page.
