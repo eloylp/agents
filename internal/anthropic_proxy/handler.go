@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"time"
 
@@ -258,9 +259,7 @@ func (h *Handler) marshalWithExtraBody(req ChatRequest) ([]byte, error) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		return nil, err
 	}
-	for k, v := range h.upstream.ExtraBody {
-		m[k] = v
-	}
+	maps.Copy(m, h.upstream.ExtraBody)
 	return json.Marshal(m)
 }
 
