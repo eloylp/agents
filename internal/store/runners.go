@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/eloylp/agents/internal/fleet"
@@ -166,7 +167,7 @@ func (s *Store) ListWorkspaceRunners(workspaceID string, status RunnerStatus, li
 	}
 	where, args := runnerStatusFilter(status)
 	where = appendRunnerWorkspaceFilter(where)
-	args = append([]any{workspaceID}, args...)
+	args = slices.Concat([]any{workspaceID}, args)
 	q := "SELECT id, workspace_id, event_blob, enqueued_at, started_at, completed_at FROM event_queue " +
 		where + " ORDER BY id DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
@@ -196,7 +197,7 @@ func (s *Store) CountWorkspaceRunners(workspaceID string, status RunnerStatus) (
 	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	where, args := runnerStatusFilter(status)
 	where = appendRunnerWorkspaceFilter(where)
-	args = append([]any{workspaceID}, args...)
+	args = slices.Concat([]any{workspaceID}, args)
 	q := "SELECT COUNT(*) FROM event_queue " + where
 	var n int
 	if err := s.db.QueryRow(q, args...).Scan(&n); err != nil {
