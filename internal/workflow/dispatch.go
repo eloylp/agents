@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -123,16 +124,14 @@ func (s *DispatchDedupStore) Run(ctx context.Context) error {
 func (s *DispatchDedupStore) evict(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for key, entry := range s.entries {
+	maps.DeleteFunc(s.entries, func(key string, entry dispatchEntry) bool {
 		// Do not evict entries whose run is still in flight: the refcount
 		// tracks active callers that called MarkCronRun/MarkWebhookRunInFlight
 		// but have not yet called the corresponding finalize/abandon method.
 		// Evicting such an entry would allow TryClaimForDispatch to proceed
 		// even though the run is still executing.
-		if now.After(entry.expiresAt) && s.cronRefCounts[key] == 0 && s.webhookRefCounts[key] == 0 {
-			delete(s.entries, key)
-		}
-	}
+		return now.After(entry.expiresAt) && s.cronRefCounts[key] == 0 && s.webhookRefCounts[key] == 0
+	})
 }
 
 // dispatchStoreKey builds the map key for a dispatch bucket entry.
