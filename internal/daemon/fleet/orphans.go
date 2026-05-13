@@ -78,10 +78,11 @@ func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
 	for _, repo := range cfg.Repos {
 		workspaceID := fleet.NormalizeWorkspaceID(repo.WorkspaceID)
 		for _, binding := range repo.Use {
-			set := reposByAgent[workspaceAgentKey(workspaceID, binding.Agent)]
+			key := workspaceAgentKey(workspaceID, binding.Agent)
+			set := reposByAgent[key]
 			if set == nil {
 				set = make(map[string]struct{})
-				reposByAgent[workspaceAgentKey(workspaceID, binding.Agent)] = set
+				reposByAgent[key] = set
 			}
 			set[repo.Name] = struct{}{}
 		}
