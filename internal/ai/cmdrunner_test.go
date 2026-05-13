@@ -225,6 +225,12 @@ func TestContainerCommandRunnerMaterializesCodexHome(t *testing.T) {
 	if !slices.Contains(fake.spec.Command, "--output-schema") || !slices.Contains(fake.spec.Command, "/tmp/agents-run/response-schema.json") {
 		t.Fatalf("command = %v, want container-visible output schema", fake.spec.Command)
 	}
+	if !slices.Contains(fake.spec.Env, "AGENTS_RESPONSE_SCHEMA="+ResponseSchemaString()) {
+		t.Fatalf("env missing embedded response schema")
+	}
+	if !strings.Contains(fake.spec.Command[2], `printf '%s' "$AGENTS_RESPONSE_SCHEMA" > /tmp/agents-run/response-schema.json`) {
+		t.Fatalf("setup script = %q, want container-side response schema materialization", fake.spec.Command[2])
+	}
 }
 
 func TestContainerCommandRunnerOverridesHostHomeEnv(t *testing.T) {

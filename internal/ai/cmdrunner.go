@@ -43,7 +43,7 @@ const (
 	containerXDGDataDir        = containerRunDir + "/data"
 	containerCodexHomeDir      = containerRunDir + "/codex"
 	containerClaudeMCPPath     = containerRunDir + "/claude-mcp.json"
-	containerResponseSchemaRel = "response-schema.json"
+	containerResponseSchemaEnv = "AGENTS_RESPONSE_SCHEMA"
 )
 
 func NewCommandRunner(backendName string, mode string, command string, env map[string]string, timeoutSeconds int, maxPromptChars int, logger zerolog.Logger) *CommandRunner {
@@ -183,10 +183,11 @@ func (r *CommandRunner) runContainerCommand(ctx context.Context, args []string, 
 
 	if r.isCodexBackend() {
 		var schemaErr error
-		args, schemaErr = materializeContainerResponseSchema(args, filepath.Join(runDir, containerResponseSchemaRel))
+		args, schemaErr = rewriteContainerResponseSchemaArg(args)
 		if schemaErr != nil {
 			return lineCapture{}, "", schemaErr
 		}
+		env = setEnvValues(env, containerResponseSchemaEnv, ResponseSchemaString())
 	}
 
 	env = setEnvValues(env,
@@ -265,6 +266,9 @@ fi
 `
 
 const codexContainerSetup = `
+if [ -n "${AGENTS_RESPONSE_SCHEMA:-}" ]; then
+  printf '%s' "$AGENTS_RESPONSE_SCHEMA" > /tmp/agents-run/response-schema.json
+fi
 if [ -n "${GITHUB_TOKEN:-}" ]; then
   cat > "$CODEX_HOME/config.toml" <<'TOML'
 [mcp_servers.github]
@@ -288,12 +292,9 @@ func hasArg(args []string, arg string) bool {
 	return false
 }
 
-func materializeContainerResponseSchema(args []string, hostPath string) ([]string, error) {
+func rewriteContainerResponseSchemaArg(args []string) ([]string, error) {
 	if !slices.Contains(args, "--output-schema") {
 		return args, nil
-	}
-	if err := WriteResponseSchema(hostPath); err != nil {
-		return nil, fmt.Errorf("write container response schema: %w", err)
 	}
 	out := slices.Clone(args)
 	for i := 0; i < len(out)-1; i++ {
