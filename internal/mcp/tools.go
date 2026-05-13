@@ -290,6 +290,33 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			),
 			toolImportConfig(deps),
 		)
+		srv.AddTool(
+			mcpgo.NewTool("get_runtime",
+				mcpgo.WithDescription("Return global runner runtime settings: default runner image and basic container constraints. Secrets are never returned."),
+			),
+			toolGetRuntime(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("update_runtime",
+				mcpgo.WithDescription("Update global runner runtime settings. Credentials are not accepted here; runner auth comes from daemon environment at execution time."),
+				mcpgo.WithString("runner_image", mcpgo.Description("Default runner image for agent runs, for example ghcr.io/eloylp/agents-runner:latest.")),
+				mcpgo.WithString("cpus", mcpgo.Description("Optional Docker CPU quota expression, such as 2 or 0.5.")),
+				mcpgo.WithString("memory", mcpgo.Description("Optional memory limit, such as 2g or 512m.")),
+				mcpgo.WithNumber("pids_limit", mcpgo.Description("Optional process limit for runner containers.")),
+				mcpgo.WithNumber("timeout_seconds", mcpgo.Description("Optional maximum runner lifetime in seconds.")),
+				mcpgo.WithString("network_mode", mcpgo.Description("Optional Docker network mode, such as bridge, none, or host.")),
+				mcpgo.WithString("filesystem", mcpgo.Description("Optional filesystem policy descriptor for the runtime implementation.")),
+			),
+			toolUpdateRuntime(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("update_workspace_runtime",
+				mcpgo.WithDescription("Set or clear the runner image override for one workspace."),
+				mcpgo.WithString("workspace", mcpgo.Required(), mcpgo.Description("Workspace id or display name.")),
+				mcpgo.WithString("runner_image", mcpgo.Description("Workspace runner image override. Empty clears the override.")),
+			),
+			toolUpdateWorkspaceRuntime(deps),
+		)
 	}
 	if deps.Fleet != nil {
 		srv.AddTool(

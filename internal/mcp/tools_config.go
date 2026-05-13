@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 
+	"github.com/eloylp/agents/internal/fleet"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -19,6 +21,72 @@ func toolGetConfig(deps Deps) server.ToolHandlerFunc {
 		}
 		return mcpgo.NewToolResultText(string(body)), nil
 	}
+}
+
+func toolGetRuntime(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		settings, err := deps.Store.ReadRuntimeSettings()
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("runtime settings", err), nil
+		}
+		return jsonResult(settings)
+	}
+}
+
+func toolUpdateRuntime(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		settings, err := runtimeSettingsFromRequest(req)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		updated, err := deps.Store.WriteRuntimeSettings(settings)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("update runtime settings", err), nil
+		}
+		return jsonResult(updated)
+	}
+}
+
+func toolUpdateWorkspaceRuntime(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace, err := req.RequireString("workspace")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		image, _ := trimmedStringOptional(req, "runner_image")
+		updated, err := deps.Store.SetWorkspaceRunnerImage(workspace, image)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("update workspace runtime", err), nil
+		}
+		return jsonResult(updated)
+	}
+}
+
+func runtimeSettingsFromRequest(req mcpgo.CallToolRequest) (fleet.RuntimeSettings, error) {
+	current := fleet.RuntimeSettings{}
+	if image, ok := trimmedStringOptional(req, "runner_image"); ok {
+		current.RunnerImage = image
+	}
+	if cpus, ok := trimmedStringOptional(req, "cpus"); ok {
+		current.Constraints.CPUs = cpus
+	}
+	if memory, ok := trimmedStringOptional(req, "memory"); ok {
+		current.Constraints.Memory = memory
+	}
+	if network, ok := trimmedStringOptional(req, "network_mode"); ok {
+		current.Constraints.NetworkMode = network
+	}
+	if fs, ok := trimmedStringOptional(req, "filesystem"); ok {
+		current.Constraints.Filesystem = fs
+	}
+	if pids := req.GetInt("pids_limit", 0); pids > 0 {
+		current.Constraints.PidsLimit = int64(pids)
+	}
+	if timeout := req.GetInt("timeout_seconds", 0); timeout > 0 {
+		current.Constraints.TimeoutSeconds = timeout
+	}
+	fleet.NormalizeRuntimeSettings(&current)
+	return current, nil
 }
 
 // toolExportConfig returns the CRUD-mutable sections of the fleet config as a

@@ -34,6 +34,14 @@ const (
 	envProxyUpstreamModel          = "AGENTS_PROXY_UPSTREAM_MODEL"
 	envProxyUpstreamAPIKeyEnv      = "AGENTS_PROXY_UPSTREAM_API_KEY_ENV"
 	envProxyUpstreamTimeoutSeconds = "AGENTS_PROXY_UPSTREAM_TIMEOUT_SECONDS"
+
+	envRunnerImage            = "AGENTS_RUNNER_IMAGE"
+	envRunnerCPUs             = "AGENTS_RUNNER_CPUS"
+	envRunnerMemory           = "AGENTS_RUNNER_MEMORY"
+	envRunnerPidsLimit        = "AGENTS_RUNNER_PIDS_LIMIT"
+	envRunnerTimeoutSeconds   = "AGENTS_RUNNER_TIMEOUT_SECONDS"
+	envRunnerNetworkMode      = "AGENTS_RUNNER_NETWORK_MODE"
+	envRunnerFilesystemPolicy = "AGENTS_RUNNER_FILESYSTEM"
 )
 
 // applyEnvOverrides applies startup-only daemon runtime overrides. Empty env
@@ -96,6 +104,17 @@ func (c *Config) applyEnvOverrides() error {
 	if err := applyPositiveIntEnv(envProxyUpstreamTimeoutSeconds, &c.Daemon.Proxy.Upstream.TimeoutSeconds); err != nil {
 		return err
 	}
+	applyStringEnv(envRunnerImage, &c.Runtime.RunnerImage)
+	applyStringEnv(envRunnerCPUs, &c.Runtime.Constraints.CPUs)
+	applyStringEnv(envRunnerMemory, &c.Runtime.Constraints.Memory)
+	if err := applyPositiveInt64Env(envRunnerPidsLimit, &c.Runtime.Constraints.PidsLimit); err != nil {
+		return err
+	}
+	if err := applyPositiveIntEnv(envRunnerTimeoutSeconds, &c.Runtime.Constraints.TimeoutSeconds); err != nil {
+		return err
+	}
+	applyStringEnv(envRunnerNetworkMode, &c.Runtime.Constraints.NetworkMode)
+	applyStringEnv(envRunnerFilesystemPolicy, &c.Runtime.Constraints.Filesystem)
 	return nil
 }
 

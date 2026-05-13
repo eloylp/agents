@@ -6,19 +6,21 @@ services:
     environment:
       - HOME=/home/agents
       - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CODEX_ACCESS_TOKEN=${CODEX_ACCESS_TOKEN}
+      - AGENTS_RUNNER_IMAGE=${AGENTS_RUNNER_IMAGE:-ghcr.io/eloylp/agents-runner:latest}
     volumes:
       # SQLite database (fleet config + agent memory + observability).
       - agents-data:/var/lib/agents
-      # Claude Code / Codex auth, GitHub MCP config, and gh CLI auth.
-      # Populate once via `docker compose exec -it agents agents-setup`.
-      # Kept separate from agents-data so operators can rotate auth
-      # (rm + re-run setup) without touching fleet state, and back up
-      # fleet state without copying tokens.
-      - agents-home:/home/agents
+      # Docker socket lets the daemon create one ephemeral runner container
+      # per agent run. This is root-equivalent access to the Docker host.
+      - /var/run/docker.sock:/var/run/docker.sock
     env_file:
       - .env
     restart: unless-stopped
 
 volumes:
   agents-data:
-  agents-home:

@@ -17,23 +17,35 @@ COPY --from=ui-builder /ui/dist internal/ui/dist
 ARG TARGETOS TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /agents ./cmd/agents
 
-FROM node:22-alpine
+FROM alpine:3.22 AS daemon
 
-RUN apk add --no-cache bash build-base cargo curl git github-cli go jq rust \
-    && npm install -g @anthropic-ai/claude-code @openai/codex typescript \
-    && npm cache clean --force
+RUN apk add --no-cache ca-certificates
 
-SHELL ["/bin/bash", "-c"]
-
-RUN adduser -D -h /home/agents -s /bin/bash agents \
+RUN adduser -D -h /home/agents -s /bin/sh agents \
     && mkdir -p /var/lib/agents/memory \
     && chown -R agents:agents /var/lib/agents
 ENV HOME=/home/agents
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /agents /usr/local/bin/agents
-COPY scripts/setup.sh /usr/local/bin/agents-setup
-RUN chmod +x /usr/local/bin/agents-setup
 USER agents
 ENTRYPOINT ["agents"]
 CMD ["--db", "/var/lib/agents/agents.db"]
+
+FROM node:22-alpine AS runner
+
+RUN apk add --no-cache bash build-base ca-certificates cargo curl git github-cli go jq rust \
+    && npm install -g @anthropic-ai/claude-code @openai/codex typescript \
+    && npm cache clean --force
+
+SHELL ["/bin/bash", "-c"]
+
+RUN adduser -D -h /home/agents -s /bin/bash agents \
+    && mkdir -p /workspace /tmp/agents-run \
+    && chown -R agents:agents /home/agents /workspace /tmp/agents-run
+ENV HOME=/home/agents
+
+COPY scripts/setup.sh /usr/local/bin/agents-setup
+RUN chmod +x /usr/local/bin/agents-setup
+USER agents
+WORKDIR /workspace

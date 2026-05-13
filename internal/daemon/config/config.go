@@ -48,6 +48,9 @@ func New(st *store.Store, daemonCfg config.DaemonConfig, logger zerolog.Logger) 
 // RegisterRoutes mounts the config endpoints on r.
 func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) http.Handler) {
 	r.Handle("/config", withTimeout(http.HandlerFunc(h.HandleConfig))).Methods(http.MethodGet)
+	r.Handle("/runtime", withTimeout(http.HandlerFunc(h.HandleRuntime))).Methods(http.MethodGet)
+	r.Handle("/runtime", withTimeout(http.HandlerFunc(h.HandleUpdateRuntime))).Methods(http.MethodPut, http.MethodPatch)
+	r.Handle("/workspaces/{workspace}/runtime", withTimeout(http.HandlerFunc(h.HandleUpdateWorkspaceRuntime))).Methods(http.MethodPut, http.MethodPatch)
 	r.Handle("/export", withTimeout(http.HandlerFunc(h.HandleExport))).Methods(http.MethodGet)
 	r.Handle("/import", withTimeout(http.HandlerFunc(h.HandleImport))).Methods(http.MethodPost)
 	r.Handle("/token_budgets", withTimeout(http.HandlerFunc(h.listTokenBudgets))).Methods(http.MethodGet)
@@ -59,11 +62,62 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/token_leaderboard", withTimeout(http.HandlerFunc(h.handleTokenLeaderboard))).Methods(http.MethodGet)
 }
 
+// HandleRuntime serves GET /runtime with the global runner settings.
+func (h *Handler) HandleRuntime(w http.ResponseWriter, _ *http.Request) {
+	settings, err := h.store.ReadRuntimeSettings()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read runtime settings: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(settings)
+}
+
+// HandleUpdateRuntime serves PUT/PATCH /runtime. Secret values are not part of
+// this shape; credentials are injected from daemon environment at run time.
+func (h *Handler) HandleUpdateRuntime(w http.ResponseWriter, r *http.Request) {
+	var settings fleet.RuntimeSettings
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, h.daemonCfg.HTTP.MaxBodyBytes)).Decode(&settings); err != nil {
+		http.Error(w, fmt.Sprintf("parse runtime settings: %v", err), http.StatusBadRequest)
+		return
+	}
+	updated, err := h.store.WriteRuntimeSettings(settings)
+	if err != nil {
+		http.Error(w, err.Error(), storeErrStatus(err))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(updated)
+}
+
+type workspaceRuntimePatch struct {
+	RunnerImage string `json:"runner_image"`
+}
+
+// HandleUpdateWorkspaceRuntime serves PUT/PATCH /workspaces/{workspace}/runtime
+// for the optional per-workspace runner image override.
+func (h *Handler) HandleUpdateWorkspaceRuntime(w http.ResponseWriter, r *http.Request) {
+	workspace := mux.Vars(r)["workspace"]
+	var payload workspaceRuntimePatch
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, h.daemonCfg.HTTP.MaxBodyBytes)).Decode(&payload); err != nil {
+		http.Error(w, fmt.Sprintf("parse workspace runtime settings: %v", err), http.StatusBadRequest)
+		return
+	}
+	updated, err := h.store.SetWorkspaceRunnerImage(workspace, payload.RunnerImage)
+	if err != nil {
+		http.Error(w, err.Error(), storeErrStatus(err))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(updated)
+}
+
 // ── /config ─────────────────────────────────────────────────────────────────
 
 // apiConfigJSON is the workspace-aware fleet-only wire shape for /config.
 type apiConfigJSON struct {
 	Backends     map[string]apiAIBackendConfigJSON `json:"backends,omitempty"`
+	Runtime      fleet.RuntimeSettings             `json:"runtime"`
 	Prompts      []fleet.Prompt                    `json:"prompts,omitempty"`
 	Skills       map[string]apiSkillJSON           `json:"skills,omitempty"`
 	Guardrails   []fleet.Guardrail                 `json:"guardrails,omitempty"`
@@ -115,6 +169,7 @@ type apiWorkspaceConfigJSON struct {
 	ID          string                        `json:"id"`
 	Name        string                        `json:"name"`
 	Description string                        `json:"description,omitempty"`
+	RunnerImage string                        `json:"runner_image,omitempty"`
 	Guardrails  []fleet.WorkspaceGuardrailRef `json:"guardrails,omitempty"`
 }
 
@@ -191,6 +246,7 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 			ID:          w.ID,
 			Name:        w.Name,
 			Description: w.Description,
+			RunnerImage: w.RunnerImage,
 			Guardrails:  w.Guardrails,
 		})
 	}
@@ -239,6 +295,7 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 
 	resp := apiConfigJSON{
 		Backends:     backends,
+		Runtime:      cfg.Runtime,
 		Prompts:      cfg.Prompts,
 		Skills:       skills,
 		Guardrails:   cfg.Guardrails,
@@ -258,6 +315,7 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 // intentionally excluded, it is not managed by the write API.
 type exportYAML struct {
 	Backends     map[string]fleet.Backend `yaml:"backends,omitempty"`
+	Runtime      fleet.RuntimeSettings    `yaml:"runtime,omitempty"`
 	Prompts      []fleet.Prompt           `yaml:"prompts,omitempty"`
 	Skills       map[string]fleet.Skill   `yaml:"skills,omitempty"`
 	Guardrails   []fleet.Guardrail        `yaml:"guardrails,omitempty"`
@@ -271,6 +329,7 @@ type workspaceYAML struct {
 	ID           string                        `yaml:"id,omitempty"`
 	Name         string                        `yaml:"name"`
 	Description  string                        `yaml:"description,omitempty"`
+	RunnerImage  string                        `yaml:"runner_image,omitempty"`
 	Guardrails   []fleet.WorkspaceGuardrailRef `yaml:"guardrails,omitempty"`
 	Agents       []fleet.Agent                 `yaml:"agents,omitempty"`
 	Repos        []fleet.Repo                  `yaml:"repos,omitempty"`
@@ -312,6 +371,7 @@ func (h *Handler) ExportYAML() ([]byte, error) {
 			ID:          workspaceID,
 			Name:        w.Name,
 			Description: w.Description,
+			RunnerImage: w.RunnerImage,
 			Guardrails:  w.Guardrails,
 		})
 	}
@@ -352,6 +412,7 @@ func (h *Handler) ExportYAML() ([]byte, error) {
 	}
 	out := exportYAML{
 		Backends:     cfg.Backends,
+		Runtime:      cfg.Runtime,
 		Prompts:      cfg.Prompts,
 		Skills:       cfg.Skills,
 		Guardrails:   cfg.Guardrails,
@@ -431,6 +492,7 @@ func (h *Handler) ImportYAML(body []byte, mode string) (map[string]int, error) {
 func (p exportYAML) toConfig() *config.Config {
 	cfg := &config.Config{
 		Backends:   p.Backends,
+		Runtime:    p.Runtime,
 		Prompts:    p.Prompts,
 		Skills:     p.Skills,
 		Guardrails: p.Guardrails,
@@ -443,6 +505,7 @@ func (p exportYAML) toConfig() *config.Config {
 			ID:          workspaceID,
 			Name:        w.Name,
 			Description: w.Description,
+			RunnerImage: strings.TrimSpace(w.RunnerImage),
 			Guardrails:  w.Guardrails,
 		})
 		for _, a := range w.Agents {

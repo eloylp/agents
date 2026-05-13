@@ -164,6 +164,9 @@ func Import(db *sql.DB, cfg *config.Config) error {
 	if err := importBackends(tx, backends); err != nil {
 		return err
 	}
+	if err := importRuntimeSettings(tx, cfg.Runtime); err != nil {
+		return err
+	}
 	if err := importSkills(tx, cfg.Skills); err != nil {
 		return err
 	}
@@ -328,13 +331,14 @@ func importWorkspaces(tx *sql.Tx, workspaces []fleet.Workspace) error {
 			return fmt.Errorf("store import: check workspace %s: %w", w.ID, err)
 		}
 		if _, err := tx.Exec(`
-			INSERT INTO workspaces (id, name, description, updated_at)
-			VALUES (?, ?, ?, datetime('now'))
+			INSERT INTO workspaces (id, name, description, runner_image, updated_at)
+			VALUES (?, ?, ?, ?, datetime('now'))
 			ON CONFLICT(id) DO UPDATE SET
 				name = excluded.name,
 				description = excluded.description,
+				runner_image = excluded.runner_image,
 				updated_at = datetime('now')`,
-			w.ID, w.Name, w.Description,
+			w.ID, w.Name, w.Description, strings.TrimSpace(w.RunnerImage),
 		); err != nil {
 			if isUniqueConstraint(err) {
 				return fmt.Errorf("store import: workspace name %q is already used by another workspace id", w.Name)
@@ -491,8 +495,8 @@ func importReferencedWorkspaces(tx *sql.Tx, agents []fleet.Agent, repos []fleet.
 			return fmt.Errorf("store import: workspace %q: %w", id, err)
 		}
 		res, err := tx.Exec(`
-			INSERT OR IGNORE INTO workspaces (id, name, description, updated_at)
-			VALUES (?, ?, '', datetime('now'))`,
+			INSERT OR IGNORE INTO workspaces (id, name, description, runner_image, updated_at)
+			VALUES (?, ?, '', '', datetime('now'))`,
 			id, workspaceNameFromID(id),
 		)
 		if err != nil {
@@ -992,6 +996,9 @@ func Load(db *sql.DB) (*config.Config, error) {
 	if err := loadBackends(db, cfg); err != nil {
 		return nil, err
 	}
+	if err := loadRuntimeSettings(db, cfg); err != nil {
+		return nil, err
+	}
 	if err := loadSkills(db, cfg); err != nil {
 		return nil, err
 	}
@@ -1062,6 +1069,35 @@ func loadBackends(db querier, cfg *config.Config) error {
 	return nil
 }
 
+func loadRuntimeSettings(db querier, cfg *config.Config) error {
+	settings, err := ReadRuntimeSettings(db)
+	if err != nil {
+		return err
+	}
+	cfg.Runtime = settings
+	return nil
+}
+
+func importRuntimeSettings(tx *sql.Tx, settings fleet.RuntimeSettings) error {
+	fleet.NormalizeRuntimeSettings(&settings)
+	if err := validateRuntimeSettings(settings); err != nil {
+		return err
+	}
+	body, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("store import: marshal runtime settings: %w", err)
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO config (key, value)
+		VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		runtimeConfigKey, string(body),
+	); err != nil {
+		return fmt.Errorf("store import: upsert runtime settings: %w", err)
+	}
+	return nil
+}
+
 func loadSkills(db querier, cfg *config.Config) error {
 	rows, err := db.Query("SELECT id,COALESCE(workspace_id, ''),COALESCE(repo, ''),name,prompt FROM skills")
 	if err != nil {
@@ -1087,7 +1123,7 @@ func loadSkills(db querier, cfg *config.Config) error {
 }
 
 func loadWorkspaces(db querier, cfg *config.Config) error {
-	rows, err := db.Query("SELECT id,name,description FROM workspaces ORDER BY name")
+	rows, err := db.Query("SELECT id,name,description,runner_image FROM workspaces ORDER BY name")
 	if err != nil {
 		return fmt.Errorf("store load: query workspaces: %w", err)
 	}
@@ -1095,7 +1131,7 @@ func loadWorkspaces(db querier, cfg *config.Config) error {
 	var workspaces []fleet.Workspace
 	for rows.Next() {
 		var w fleet.Workspace
-		if err := rows.Scan(&w.ID, &w.Name, &w.Description); err != nil {
+		if err := rows.Scan(&w.ID, &w.Name, &w.Description, &w.RunnerImage); err != nil {
 			return fmt.Errorf("store load: scan workspace: %w", err)
 		}
 		workspaces = append(workspaces, w)

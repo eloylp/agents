@@ -24,6 +24,7 @@ type Workspace struct {
 	ID          string                  `yaml:"id,omitempty" json:"id"`
 	Name        string                  `yaml:"name" json:"name"`
 	Description string                  `yaml:"description,omitempty" json:"description"`
+	RunnerImage string                  `yaml:"runner_image,omitempty" json:"runner_image,omitempty"`
 	Guardrails  []WorkspaceGuardrailRef `yaml:"guardrails,omitempty" json:"-"`
 }
 

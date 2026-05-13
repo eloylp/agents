@@ -60,6 +60,8 @@ func (c *Config) applyDefaults() {
 	setDefault(&c.Daemon.Proxy.Path, defaultProxyPath)
 	setDefaultInt(&c.Daemon.Proxy.Upstream.TimeoutSeconds, defaultProxyTimeoutSeconds)
 
+	fleet.NormalizeRuntimeSettings(&c.Runtime)
+
 	// backend defaults
 	for name, backend := range c.Daemon.AIBackends {
 		fleet.ApplyBackendDefaults(&backend)
