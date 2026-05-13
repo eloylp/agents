@@ -156,21 +156,39 @@ func (r *CommandRunner) runLocalCommand(ctx context.Context, args []string, stdi
 func (r *CommandRunner) runContainerCommand(ctx context.Context, args []string, stdin string, env []string, onLine func([]byte)) (lineCapture, string, error) {
 	writer := &captureWriter{onLine: onLine}
 	var stderr bytes.Buffer
+	workspaceDir, err := os.MkdirTemp("", "agents-workspace-*")
+	if err != nil {
+		return lineCapture{}, "", fmt.Errorf("create runner workspace: %w", err)
+	}
+	defer os.RemoveAll(workspaceDir)
+	runDir, err := os.MkdirTemp("", "agents-run-*")
+	if err != nil {
+		return lineCapture{}, "", fmt.Errorf("create runner temp dir: %w", err)
+	}
+	defer os.RemoveAll(runDir)
+
 	env = append(env,
-		"HOME=/home/agents",
+		"HOME=/tmp/agents-run/home",
 		"TMPDIR=/tmp/agents-run",
 		"XDG_CONFIG_HOME=/tmp/agents-run/config",
 		"XDG_CACHE_HOME=/tmp/agents-run/cache",
 		"XDG_DATA_HOME=/tmp/agents-run/data",
+		"CODEX_HOME=/tmp/agents-run/codex",
 	)
 	if getEnv(env, "GITHUB_TOKEN") != "" && getEnv(env, "GH_TOKEN") == "" {
 		env = append(env, "GH_TOKEN="+getEnv(env, "GITHUB_TOKEN"))
 	}
+	command := append([]string{r.command}, args...)
+	command = r.containerEntrypoint(command, env)
 	spec := r.containerPolicy
 	spec.Image = r.containerImage
-	spec.Command = append([]string{r.command}, args...)
+	spec.Command = command
 	spec.WorkingDir = "/workspace"
 	spec.Env = env
+	spec.Mounts = append(spec.Mounts,
+		runtimeexec.Mount{Source: workspaceDir, Target: "/workspace"},
+		runtimeexec.Mount{Source: runDir, Target: "/tmp/agents-run"},
+	)
 	spec.Stdin = bytes.NewBufferString(stdin)
 	spec.Stdout = writer
 	spec.Stderr = &stderr
@@ -187,6 +205,64 @@ func (r *CommandRunner) runContainerCommand(ctx context.Context, args []string, 
 		return writer.capture, stderr.String(), fmt.Errorf("runner container exited with status %d", status.Code)
 	}
 	return writer.capture, stderr.String(), nil
+}
+
+func (r *CommandRunner) containerEntrypoint(command []string, env []string) []string {
+	if len(command) == 0 {
+		return command
+	}
+	switch {
+	case r.isClaudeBackend() && getEnv(env, "GITHUB_TOKEN") != "" && !hasArg(command[1:], "--mcp-config"):
+		command = append(command[:1], append([]string{"--mcp-config", "/tmp/agents-run/claude-mcp.json"}, command[1:]...)...)
+		return shellEntrypoint(command, claudeContainerSetup)
+	case r.isCodexBackend():
+		return shellEntrypoint(command, codexContainerSetup)
+	default:
+		return command
+	}
+}
+
+func shellEntrypoint(command []string, setup string) []string {
+	out := []string{"/bin/sh", "-lc", setup + `
+cmd=$1
+shift
+exec "$cmd" "$@"
+`, "agents-runner"}
+	return append(out, command...)
+}
+
+const claudeContainerSetup = `
+set -eu
+mkdir -p /tmp/agents-run/home /tmp/agents-run/config /tmp/agents-run/cache /tmp/agents-run/data
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  printf '{"mcpServers":{"github":{"type":"http","url":"https://api.githubcopilot.com/mcp/","headers":{"Authorization":"Bearer %s"}}}}\n' "$GITHUB_TOKEN" > /tmp/agents-run/claude-mcp.json
+fi
+`
+
+const codexContainerSetup = `
+set -eu
+mkdir -p "$CODEX_HOME" /tmp/agents-run/home /tmp/agents-run/config /tmp/agents-run/cache /tmp/agents-run/data
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  cat > "$CODEX_HOME/config.toml" <<'TOML'
+[mcp_servers.github]
+url = "https://api.githubcopilot.com/mcp/"
+bearer_token_env_var = "GITHUB_TOKEN"
+TOML
+fi
+if [ -n "${OPENAI_API_KEY:-}" ]; then
+  printf '%s' "$OPENAI_API_KEY" | "$1" login --with-api-key >/dev/null 2>&1 || true
+elif [ -n "${CODEX_ACCESS_TOKEN:-}" ]; then
+  printf '%s' "$CODEX_ACCESS_TOKEN" | "$1" login --with-access-token >/dev/null 2>&1 || true
+fi
+`
+
+func hasArg(args []string, arg string) bool {
+	for _, a := range args {
+		if a == arg {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *CommandRunner) parseCommandResponse(logger zerolog.Logger, stdoutCap lineCapture, stderr string, cmdErr error) (Response, error) {

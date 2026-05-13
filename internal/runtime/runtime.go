@@ -37,3 +37,9 @@ type Runner interface {
 	EnsureImage(ctx context.Context, image string) error
 	Run(ctx context.Context, spec ContainerSpec) (ExitStatus, error)
 }
+
+type Diagnostic struct {
+	DockerAvailable bool
+	ImageAvailable  bool
+	Detail          string
+}

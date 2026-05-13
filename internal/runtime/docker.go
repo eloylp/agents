@@ -19,8 +19,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-var ErrDockerRunNotImplemented = errors.New("docker runtime run is not wired yet")
-
 type Docker struct {
 	client *client.Client
 	logger zerolog.Logger
@@ -47,6 +45,24 @@ func (d *Docker) EnsureImage(ctx context.Context, ref string) error {
 		return fmt.Errorf("read runner image pull stream %q: %w", ref, err)
 	}
 	return nil
+}
+
+func (d *Docker) Diagnose(ctx context.Context, ref string) Diagnostic {
+	if _, err := d.client.Ping(ctx); err != nil {
+		return Diagnostic{Detail: "docker unavailable: " + err.Error()}
+	}
+	out := Diagnostic{DockerAvailable: true, Detail: "docker available"}
+	if strings.TrimSpace(ref) == "" {
+		out.Detail = "runner image is required"
+		return out
+	}
+	if _, _, err := d.client.ImageInspectWithRaw(ctx, ref); err != nil {
+		out.Detail = fmt.Sprintf("runner image %q not present locally: %v", ref, err)
+		return out
+	}
+	out.ImageAvailable = true
+	out.Detail = fmt.Sprintf("runner image %q present locally", ref)
+	return out
 }
 
 func (d *Docker) Run(ctx context.Context, spec ContainerSpec) (ExitStatus, error) {
@@ -154,12 +170,26 @@ func hostConfig(spec ContainerSpec) (*container.HostConfig, error) {
 	if spec.Policy.NetworkMode == "" {
 		cfg.NetworkMode = "bridge"
 	}
+	filesystem := strings.ToLower(strings.TrimSpace(spec.Policy.Filesystem))
+	switch filesystem {
+	case "", "workspace", "workspace-rw", "readwrite":
+	case "workspace-ro", "readonly":
+		cfg.ReadonlyRootfs = true
+	case "tmpfs":
+		cfg.ReadonlyRootfs = true
+	default:
+		return nil, fmt.Errorf("unsupported filesystem policy %q", spec.Policy.Filesystem)
+	}
 	for _, m := range spec.Mounts {
+		readOnly := m.ReadOnly || filesystem == "workspace-ro" || filesystem == "readonly"
+		if m.Target == "/tmp/agents-run" {
+			readOnly = false
+		}
 		cfg.Mounts = append(cfg.Mounts, mount.Mount{
 			Type:     mount.TypeBind,
 			Source:   m.Source,
 			Target:   m.Target,
-			ReadOnly: m.ReadOnly,
+			ReadOnly: readOnly,
 		})
 	}
 	if spec.Policy.PidsLimit > 0 {

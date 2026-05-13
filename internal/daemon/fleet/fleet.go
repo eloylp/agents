@@ -901,7 +901,12 @@ func (h *Handler) handleBackendsStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("read backends: %v", err), http.StatusInternalServerError)
 		return
 	}
-	diag := backends.RunDiagnostics(r.Context(), existing)
+	settings, err := h.store.ReadRuntimeSettings()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read runtime settings: %v", err), http.StatusInternalServerError)
+		return
+	}
+	diag := backends.RunDiagnosticsWithRuntime(r.Context(), existing, settings)
 	writeJSON(w, http.StatusOK, diag)
 }
 

@@ -119,7 +119,7 @@ func TestBuildCommandEnvBackendOverride(t *testing.T) {
 }
 
 func TestContainerCommandRunnerUsesRuntimeAndParsesOutput(t *testing.T) {
-	t.Parallel()
+	t.Setenv("GITHUB_TOKEN", "")
 
 	fake := &fakeContainerRunner{}
 	r := NewContainerCommandRunner(
@@ -159,7 +159,7 @@ func TestContainerCommandRunnerUsesRuntimeAndParsesOutput(t *testing.T) {
 		"AI_DAEMON_WORKFLOW=claude:coder",
 		"AI_DAEMON_REPO=owner/repo",
 		"AI_DAEMON_NUMBER=7",
-		"HOME=/home/agents",
+		"HOME=/tmp/agents-run/home",
 		"XDG_CONFIG_HOME=/tmp/agents-run/config",
 		"ANTHROPIC_BASE_URL=http://proxy",
 	} {
@@ -169,6 +169,55 @@ func TestContainerCommandRunnerUsesRuntimeAndParsesOutput(t *testing.T) {
 	}
 	if len(lines) != 1 || string(lines[0]) == "" {
 		t.Fatalf("OnLine lines = %q, want one JSON line", lines)
+	}
+	if len(fake.spec.Mounts) != 2 {
+		t.Fatalf("mounts = %+v, want workspace and temp mounts", fake.spec.Mounts)
+	}
+	if fake.spec.Mounts[0].Target != "/workspace" || fake.spec.Mounts[1].Target != "/tmp/agents-run" {
+		t.Fatalf("mount targets = %+v, want /workspace and /tmp/agents-run", fake.spec.Mounts)
+	}
+}
+
+func TestContainerCommandRunnerMaterializesClaudeMCPConfig(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "token-for-test")
+
+	fake := &fakeContainerRunner{}
+	r := NewContainerCommandRunner(
+		"claude", "command", "claude", nil,
+		10, 4000, fake, "ghcr.io/example/runner:test",
+		runtimeexec.ContainerSpec{},
+		zerolog.Nop(),
+	)
+	if _, err := r.Run(context.Background(), Request{System: "system", User: "user"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fake.spec.Command) < 8 || fake.spec.Command[0] != "/bin/sh" {
+		t.Fatalf("command = %v, want shell entrypoint", fake.spec.Command)
+	}
+	if !slices.Contains(fake.spec.Command, "--mcp-config") || !slices.Contains(fake.spec.Command, "/tmp/agents-run/claude-mcp.json") {
+		t.Fatalf("command = %v, want claude --mcp-config", fake.spec.Command)
+	}
+}
+
+func TestContainerCommandRunnerMaterializesCodexHome(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv("GITHUB_TOKEN", "token-for-test")
+
+	fake := &fakeContainerRunner{}
+	r := NewContainerCommandRunner(
+		"codex", "command", "codex", nil,
+		10, 4000, fake, "ghcr.io/example/runner:test",
+		runtimeexec.ContainerSpec{},
+		zerolog.Nop(),
+	)
+	if _, err := r.Run(context.Background(), Request{System: "system", User: "user"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fake.spec.Command) < 6 || fake.spec.Command[0] != "/bin/sh" {
+		t.Fatalf("command = %v, want shell entrypoint", fake.spec.Command)
+	}
+	if !slices.Contains(fake.spec.Env, "CODEX_HOME=/tmp/agents-run/codex") {
+		t.Fatalf("env = %v, want CODEX_HOME", fake.spec.Env)
 	}
 }
 

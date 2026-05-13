@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/eloylp/agents/internal/fleet"
+	runtimeexec "github.com/eloylp/agents/internal/runtime"
 	"github.com/eloylp/agents/internal/store"
+	"github.com/rs/zerolog"
 )
 
 const (
@@ -61,9 +63,18 @@ type Diagnostics struct {
 	GeneratedAt time.Time       `json:"generated_at"`
 	Backends    []BackendStatus `json:"backends"`
 	Tools       []ToolStatus    `json:"tools"`
+	Runtime     *RuntimeStatus  `json:"runtime,omitempty"`
 	// GitHubCLI is kept as a compatibility alias for older UI/client code that
 	// read the pre-tools diagnostic field directly.
 	GitHubCLI *ToolStatus `json:"github_cli,omitempty"`
+}
+
+type RuntimeStatus struct {
+	RunnerImage     string `json:"runner_image"`
+	DockerAvailable bool   `json:"docker_available"`
+	ImageAvailable  bool   `json:"image_available"`
+	Healthy         bool   `json:"healthy"`
+	Detail          string `json:"detail,omitempty"`
 }
 
 // AutoDiscoverIfBackendsMissing runs discovery and persists results only
@@ -162,6 +173,25 @@ func RunDiagnostics(ctx context.Context, existing map[string]fleet.Backend) Diag
 			break
 		}
 	}
+	return diag
+}
+
+func RunDiagnosticsWithRuntime(ctx context.Context, existing map[string]fleet.Backend, settings fleet.RuntimeSettings) Diagnostics {
+	diag := RunDiagnostics(ctx, existing)
+	fleet.NormalizeRuntimeSettings(&settings)
+	status := RuntimeStatus{RunnerImage: settings.RunnerImage}
+	dockerRunner, err := runtimeexec.NewDocker(zerolog.Nop())
+	if err != nil {
+		status.Detail = "docker unavailable: " + err.Error()
+		diag.Runtime = &status
+		return diag
+	}
+	runtimeDiag := dockerRunner.Diagnose(ctx, settings.RunnerImage)
+	status.DockerAvailable = runtimeDiag.DockerAvailable
+	status.ImageAvailable = runtimeDiag.ImageAvailable
+	status.Healthy = runtimeDiag.DockerAvailable && runtimeDiag.ImageAvailable
+	status.Detail = runtimeDiag.Detail
+	diag.Runtime = &status
 	return diag
 }
 

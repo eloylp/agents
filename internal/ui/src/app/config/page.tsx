@@ -27,6 +27,7 @@ interface BackendsDiscoveryResponse {
   backends?: Backend[]
   tools?: ToolStatus[]
   github_cli?: ToolStatus
+  runtime?: RuntimeDiagnostic
 }
 
 interface ToolStatus {
@@ -35,6 +36,14 @@ interface ToolStatus {
   command?: string
   version?: string
   authenticated?: boolean
+  healthy?: boolean
+  detail?: string
+}
+
+interface RuntimeDiagnostic {
+  runner_image: string
+  docker_available?: boolean
+  image_available?: boolean
   healthy?: boolean
   detail?: string
 }
@@ -314,6 +323,7 @@ export default function ConfigPage() {
   const [runtimeSaving, setRuntimeSaving] = useState(false)
   const [runtimeError, setRuntimeError] = useState('')
   const [runtimeStatus, setRuntimeStatus] = useState('')
+  const [backendRuntime, setBackendRuntime] = useState<RuntimeDiagnostic | null>(null)
 
   const [importStatus, setImportStatus] = useState('')
   const [importError, setImportError] = useState('')
@@ -389,6 +399,7 @@ export default function ConfigPage() {
 
         setBackends(dbData)
         setTools(diagTools)
+        setBackendRuntime(diagData.runtime ?? null)
         setBackendDriftWarnings(buildBackendDriftWarnings(dbData, diagBackends))
         setOrphanedAgents(orphanAgents)
         setOrphanModelSelection(prev => {
@@ -1221,6 +1232,21 @@ export default function ConfigPage() {
             </div>
 
             <div style={{ flex: '1 1 320px', minWidth: '280px' }}>
+              {backendRuntime && (
+                <div style={{ border: `1px solid ${backendRuntime.healthy ? 'var(--border-subtle)' : 'var(--border-danger)'}`, borderRadius: '6px', padding: '0.75rem', background: 'var(--bg)', marginBottom: '0.75rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                    <div style={{ fontWeight: 700, color: 'var(--text-heading)' }}>Runner runtime</div>
+                    <span style={healthBadgeStyle(backendRuntime.healthy)}>{backendRuntime.healthy ? 'healthy' : 'failed'}</span>
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px', overflowWrap: 'anywhere' }}>
+                    {backendRuntime.runner_image || 'runner image not configured'}
+                  </div>
+                  <div style={{ fontSize: '0.74rem', color: backendRuntime.docker_available ? 'var(--success)' : 'var(--text-danger)', marginTop: '2px' }}>
+                    Docker {backendRuntime.docker_available ? 'available' : 'unavailable'} · Image {backendRuntime.image_available ? 'present' : 'not present locally'}
+                  </div>
+                  {backendRuntime.detail && <div style={{ fontSize: '0.74rem', color: backendRuntime.healthy ? 'var(--text-faint)' : 'var(--text-danger)', marginTop: '2px', overflowWrap: 'anywhere' }}>{backendRuntime.detail}</div>}
+                </div>
+              )}
               <div style={{ border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '0.75rem', background: 'var(--bg)' }}>
                 <div style={{ fontWeight: 700, color: 'var(--text-heading)', marginBottom: '0.4rem' }}>Tools</div>
                 <p style={{ color: 'var(--text-faint)', fontSize: '0.78rem', marginTop: 0, marginBottom: '0.65rem' }}>
