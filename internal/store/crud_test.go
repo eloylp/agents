@@ -1693,14 +1693,16 @@ func TestReadBindingExposesIDViaLoadRepos(t *testing.T) {
 	r := &repos[idx]
 	// First binding was seeded by seedRepoWithAgent; the two additions we
 	// expect as id1/id2 below it.
-	seen := map[int64]bool{}
+	seen := map[int64]struct{}{}
 	for _, b := range r.Use {
 		if b.ID == 0 {
 			t.Errorf("binding has zero id: %+v", b)
 		}
-		seen[b.ID] = true
+		seen[b.ID] = struct{}{}
 	}
-	if !seen[id1] || !seen[id2] {
+	_, ok1 := seen[id1]
+	_, ok2 := seen[id2]
+	if !ok1 || !ok2 {
 		t.Errorf("created ids not surfaced: got %v, want ids %d + %d", seen, id1, id2)
 	}
 }
