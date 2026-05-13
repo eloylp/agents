@@ -102,8 +102,16 @@ func TestDeliveryStore_BackgroundEviction(t *testing.T) {
 	s := NewDeliveryStore(ttl)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = s.Run(ctx) }()
+	ticks := make(chan time.Time)
+	done := make(chan struct{})
+	go func() {
+		_ = s.run(ctx, ticks)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 
 	now := time.Now()
 	s.SeenOrAdd("abc", now)
@@ -113,9 +121,8 @@ func TestDeliveryStore_BackgroundEviction(t *testing.T) {
 		t.Fatal("expected entry to be seen immediately after insertion")
 	}
 
-	// Wait longer than one eviction interval (ttl/4) plus one TTL so the entry expires
-	// and the background ticker has had a chance to evict it.
-	time.Sleep(ttl + ttl/4 + 20*time.Millisecond)
+	ticks <- now.Add(ttl + time.Millisecond)
+	ticks <- now.Add(ttl + time.Millisecond)
 
 	s.mu.Lock()
 	count := len(s.deliveries)
