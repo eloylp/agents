@@ -50,7 +50,7 @@ No framework prompt templates. Each agent owns its full prompt; skill guidance i
 
 ## Build & Run
 
-The supported runtime is Docker Compose, see the Docker section below. For development, `go test ./... -race` runs the full suite; the multi-stage Dockerfile handles `go build` during image build, no local-binary workflow.
+The supported runtime is Docker Compose, see the Docker section below. For development and PR iteration, run `go test ./...`; use targeted `go test ./internal/<pkg> -race` when changing concurrent code. Agents should not run full `go test ./... -race` locally unless explicitly asked; GitHub PR CI runs the normal suite, and `main` CI runs the full race suite after merge. The multi-stage Dockerfile handles `go build` during image build, no local-binary workflow.
 
 On-demand runs go through the running daemon: `POST /run` (HTTP) or the `trigger_agent` MCP tool. There is no separate CLI mode for ad-hoc execution, it would be a second runtime that doesn't share the daemon's run-lock or dispatch dedup, opening a memory-write race window.
 

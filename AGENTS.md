@@ -16,7 +16,8 @@ Key numbers:
 ## Quick commands
 
 ```bash
-go test ./... -race    # run all tests
+go test ./...          # normal development / PR test loop
+go test ./... -race    # full race pass, normally left to main-branch CI
 docker compose pull    # pull the published image
 docker compose up -d   # run the daemon
 ```
@@ -115,7 +116,8 @@ When making common classes of changes, update all of these at once:
 
 ## Testing expectations
 
-- **Run `go test ./... -race` before every commit.** Race detection is cheap and catches real bugs in the concurrent event processing and dispatch paths.
+- **Run `go test ./...` before commits and PR updates.** Do not run full `go test ./... -race` locally as an agent unless the user explicitly asks; GitHub PR CI runs the normal suite, and `main` CI runs the full race suite after merge.
+- **Use targeted race tests for concurrency changes.** If you touch event processing, dispatch, scheduler, observe, store, or other shared-state code, run the relevant package with `-race` locally, for example `go test ./internal/workflow -race`.
 - **Table-driven tests** for anything with more than two interesting input shapes (config validation, label parsing, event decoding, translation, dispatch rejection reasons). `t.Parallel()` where independent; **not** when using `t.Setenv`.
 - **Use `httptest.Server` for HTTP integration tests.** See `internal/daemon/daemon_test.go` and `internal/daemon/observe/observe_test.go` for the patterns.
 - **No `-short` or skipped tests on main.** If a test needs external services, gate it behind a build tag or an explicit env var check.
