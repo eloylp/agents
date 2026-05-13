@@ -67,6 +67,10 @@ const statusStyle: Record<string, { bg: string; text: string; border: string }> 
 const POLL_MS = 2000
 const HIGHLIGHT_MS = 4000
 
+function isRunnerExecution(row: RunnerRow) {
+  return row.status !== 'skipped'
+}
+
 function fmtTime(s?: string) {
   if (!s) return '-'
   return new Date(s).toLocaleTimeString()
@@ -228,7 +232,6 @@ function RunnersInner() {
   }
 
   const [rows, setRows] = useState<RunnerRow[]>([])
-  const [total, setTotal] = useState(0)
   const [status, setStatus] = useState<'' | 'enqueued' | 'running' | 'completed'>('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -244,7 +247,6 @@ function RunnersInner() {
       if (!res.ok) throw new Error(`status ${res.status}`)
       const data: ListResponse = await res.json()
       setRows(data.runners ?? [])
-      setTotal(data.total)
       setError(null)
     } catch (e) {
       setError((e as Error).message)
@@ -279,7 +281,7 @@ function RunnersInner() {
   }, [focusEvent, rows.length, highlighted])
 
   const filtered = useMemo(() => {
-    let result = rows
+    let result = rows.filter(isRunnerExecution)
     if (focusEvent) result = result.filter(r => r.event_id === focusEvent)
     if (repoParam) result = result.filter(r => r.repo === repoParam)
     return result
@@ -353,7 +355,7 @@ function RunnersInner() {
             {focusEvent ? (
               <>Showing event <code style={{ color: 'var(--accent)' }}>{focusEvent}</code> · {filtered.length} row{filtered.length !== 1 ? 's' : ''}</>
             ) : (
-              <>{total} event{total !== 1 ? 's' : ''} matching filter · {filtered.length} runner row{filtered.length !== 1 ? 's' : ''} · enqueued {counts.enqueued ?? 0} · running {counts.running ?? 0} · success {counts.success ?? 0} · error {counts.error ?? 0} · skipped {counts.skipped ?? 0}</>
+              <>{filtered.length} runner execution{filtered.length !== 1 ? 's' : ''} · enqueued {counts.enqueued ?? 0} · running {counts.running ?? 0} · success {counts.success ?? 0} · error {counts.error ?? 0} · skipped/no-op events live in Events</>
             )}
           </p>
         </div>
@@ -410,7 +412,11 @@ function RunnersInner() {
         </div>
 
         {loading && filtered.length === 0 && <p style={{ color: 'var(--text-muted)', padding: '0.5rem 0' }}>Loading...</p>}
-        {!loading && filtered.length === 0 && <p style={{ color: 'var(--text-muted)', padding: '0.5rem 0' }}>No runners.</p>}
+        {!loading && filtered.length === 0 && (
+          <p style={{ color: 'var(--text-muted)', padding: '0.5rem 0' }}>
+            {focusEvent ? 'No runner execution for this event. It may have been skipped; Events keeps the full audit log.' : 'No runner executions.'}
+          </p>
+        )}
 
         <div style={{ maxHeight: '600px', overflowY: 'auto' }}>
           {filtered.map((r, idx) => {
