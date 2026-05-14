@@ -29,9 +29,9 @@ Primary workflow designer showing agents as draggable graph nodes and dispatch p
 
 The graph deliberately keeps one node per real agent. Repo-scoped agents are grouped inside thin dashed repo boundaries; workspace-scoped agents sit outside those boundaries. Repo trigger bindings are visualised as thin lines from the agent to passive repo anchors, so the user can see where an agent runs without duplicating the agent into one node per repo. Dispatch wiring remains the editable agent-to-agent relationship.
 
-The right-side **Agent editor** is the graph's main editing surface. Click an agent to inspect or edit its definition, run it against bound repos, review recent runner rows / trace links, manage repo triggers, and add or remove dispatch wiring. Operators can create agents without leaving the designer.
+The right-side **Agent editor** is the graph's main editing surface. Click an agent to inspect or edit its definition, run it against bound repos, manage repo triggers, add or remove dispatch wiring, and review recent runner rows / trace links. The editor is tabbed by concept: Overview, Settings, Triggers, Dispatch, and Activity. Operators can create agents without leaving the designer.
 
-Dispatch wiring is always editable: drag from one agent to another to add a connection, or click an edge to inspect runtime dispatch history and remove the wiring from the Agent editor. Dispatch changes write back to the source agent's `can_dispatch` list and the target's `allow_dispatch` flag.
+Dispatch wiring is always editable: drag from one agent to another to add a connection, or click an edge to inspect its Overview, History, and Danger tabs. Dispatch changes write back to the source agent's `can_dispatch` list and the target's `allow_dispatch` flag.
 
 ![Agent interaction graph](img/graph.png)
 
@@ -104,6 +104,8 @@ Current fleet config snapshot. Includes YAML import/export for shareable fleet s
 ## Authentication
 
 The root login page supports first-user setup and username/password login before redirecting authenticated browsers to `/ui/`. Inside the dashboard, Config -> Authentication supports logout, admin-only user creation/removal, and named API token management. The first bootstrapped user is the admin user and cannot be removed. Browser sessions use an opaque DB-backed token in an `HttpOnly` cookie. MCP and REST clients use API tokens created in the dashboard and sent as `Authorization: Bearer <token>`.
+
+The authenticated dashboard uses a left-side navigation shell on desktop and a hamburger drawer on small screens. The shell owns global alerts for orphaned agents and token-budget thresholds; individual pages keep their own operational state.
 
 Use your reverse proxy for TLS/routing, not as the primary API auth layer. See [security.md → Daemon auth](security.md#daemon-auth) and [Reverse-proxy routing](security.md#reverse-proxy-routing).
 

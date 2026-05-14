@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import NavBar from '@/components/NavBar'
+import DashboardShell from '@/components/DashboardShell'
 import { AuthProvider } from '@/lib/auth'
 import { ThemeProvider } from '@/lib/theme'
 
@@ -108,10 +108,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <ThemeProvider>
           <AuthProvider>
-            <NavBar />
-            <main style={{ padding: '1.5rem', maxWidth: '1400px', margin: '0 auto' }}>
-              {children}
-            </main>
+            <DashboardShell>{children}</DashboardShell>
           </AuthProvider>
         </ThemeProvider>
       </body>
