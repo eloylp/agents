@@ -142,6 +142,8 @@ const AGENT_NODE_WIDTH = 220
 const AGENT_NODE_HEIGHT = 105
 const REPO_BOUNDARY_PADDING = 52
 const REPO_BOUNDARY_HEADER = 26
+type AgentPanelTab = 'overview' | 'settings' | 'triggers' | 'dispatch' | 'activity'
+type EdgePanelTab = 'overview' | 'history' | 'danger'
 
 const SUPPORTED_EVENTS = [
   'issues.labeled', 'issues.opened', 'issues.edited', 'issues.reopened', 'issues.closed',
@@ -151,6 +153,34 @@ const SUPPORTED_EVENTS = [
   'pull_request_review.submitted', 'pull_request_review_comment.created',
   'push',
 ]
+
+function PanelTabs<T extends string>({ tabs, active, onChange }: { tabs: Array<{ id: T; label: string }>; active: T; onChange: (id: T) => void }) {
+  return (
+    <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.7rem', marginBottom: '1rem' }}>
+      {tabs.map(tab => {
+        const selected = tab.id === active
+        return (
+          <button
+            key={tab.id}
+            onClick={() => onChange(tab.id)}
+            style={{
+              padding: '6px 10px',
+              borderRadius: 0,
+              border: `1px solid ${selected ? 'var(--btn-primary-border)' : 'var(--border-subtle)'}`,
+              background: selected ? 'var(--accent-bg)' : 'var(--bg)',
+              color: selected ? 'var(--accent)' : 'var(--text-muted)',
+              cursor: 'pointer',
+              fontSize: '0.76rem',
+              fontWeight: selected ? 700 : 500,
+            }}
+          >
+            {tab.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
 
 function repoPath(name: string): string {
   const [owner, ...rest] = name.split('/')
@@ -393,6 +423,8 @@ export default function GraphPage() {
   const [agentNames, setAgentNames] = useState<string[]>([])
   const [promptOptions, setPromptOptions] = useState<CatalogItem[]>([])
   const [panelMode, setPanelMode] = useState<'details' | 'edge' | 'create' | 'edit' | null>(null)
+  const [agentPanelTab, setAgentPanelTab] = useState<AgentPanelTab>('overview')
+  const [edgePanelTab, setEdgePanelTab] = useState<EdgePanelTab>('overview')
   const [agentForm, setAgentForm] = useState<StoreAgent>(emptyAgentForm)
   const [agentSaving, setAgentSaving] = useState(false)
   const [agentSaveError, setAgentSaveError] = useState('')
@@ -416,6 +448,7 @@ export default function GraphPage() {
     setAddTargetName('')
     setBindingDraft(emptyBindingDraft)
     setBindingError('')
+    setAgentPanelTab('overview')
   }, [selectedNodeName])
 
   useEffect(() => {
@@ -490,10 +523,10 @@ export default function GraphPage() {
   }, [workspace])
 
   useEffect(() => {
-    if (panelMode === 'details' && selectedNodeName) {
+    if (panelMode === 'details' && agentPanelTab === 'activity' && selectedNodeName) {
       loadAgentActivity(selectedNodeName)
     }
-  }, [panelMode, selectedNodeName, loadAgentActivity])
+  }, [agentPanelTab, panelMode, selectedNodeName, loadAgentActivity])
 
   const activeEdgeMap = useMemo(() => {
     const m = new Map<string, GraphEdge>()
@@ -519,6 +552,7 @@ export default function GraphPage() {
       isActive: edge.isActive,
     })
     setSelectedNodeName(null)
+    setEdgePanelTab('overview')
     setPanelMode('edge')
   }, [])
 
@@ -751,6 +785,32 @@ export default function GraphPage() {
     const data = await res.json() as Partial<StoreAgent>
     return storeAgentFromResponse(data, name)
   }, [workspace])
+
+  useEffect(() => {
+    if (panelMode !== 'details' || agentPanelTab !== 'settings' || !selectedNodeName) return
+    const agent = agents.find(a => a.name === selectedNodeName)
+    setAgentForm({
+      ...emptyAgentForm,
+      name: selectedNodeName,
+      backend: agent?.backend ?? '',
+      model: agent?.model ?? '',
+      skills: agent?.skills ?? [],
+      prompt_id: agent?.prompt_id ?? '',
+      prompt_ref: agent?.prompt_ref ?? '',
+      prompt_scope: agent?.prompt_scope ?? '',
+      scope_type: agent?.scope_type ?? 'workspace',
+      scope_repo: agent?.scope_repo ?? '',
+      allow_prs: agent?.allow_prs ?? false,
+      allow_dispatch: agent?.allow_dispatch ?? false,
+      allow_memory: agent?.allow_memory ?? true,
+      can_dispatch: agent?.can_dispatch ?? [],
+      description: agent?.description ?? '',
+    })
+    fetchStoreAgent(selectedNodeName)
+      .then(full => setAgentForm({ ...emptyAgentForm, ...full, allow_memory: full.allow_memory ?? true }))
+      .catch(() => {})
+    loadLookups()
+  }, [agentPanelTab, agents, fetchStoreAgent, loadLookups, panelMode, selectedNodeName])
 
   const postStoreAgent = useCallback(async (a: StoreAgent): Promise<void> => {
     const res = await fetch(withWorkspace('/agents', workspace), {
@@ -1121,67 +1181,99 @@ export default function GraphPage() {
 
           {panelMode === 'edge' && selectedEdge && (
             <div style={{ display: 'grid', gap: '1rem' }}>
-              <div style={{
-                display: 'inline-block', justifySelf: 'start', padding: '2px 8px', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 500,
-                background: selectedEdge.isActive ? 'var(--accent-bg)' : 'rgba(100,116,139,0.15)',
-                color: selectedEdge.isActive ? 'var(--accent)' : 'var(--text-muted)',
-                border: `1px solid ${selectedEdge.isActive ? 'var(--btn-primary-border)' : 'var(--border-subtle)'}`,
-              }}>
-                {selectedEdge.isActive ? `${selectedEdge.count} dispatch${selectedEdge.count !== 1 ? 'es' : ''}` : 'wired, no dispatches yet'}
-              </div>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                <strong style={{ color: 'var(--text)' }}>{selectedEdge.from}</strong> can dispatch{' '}
-                <strong style={{ color: 'var(--text)' }}>{selectedEdge.to}</strong>.
-              </p>
-              <div style={{ background: 'var(--bg)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '10px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                <div style={{ color: 'var(--text-faint)', marginBottom: '4px' }}>Remove config change</div>
-                <code>{selectedEdge.from}.can_dispatch -= [&quot;{selectedEdge.to}&quot;]</code>
-              </div>
-              {wiringError && (
-                <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem' }}>{wiringError}</p>
-              )}
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                <button
-                  onClick={() => openAgent(selectedEdge.from)}
-                  style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.8rem' }}
-                >
-                  Open source
-                </button>
-                <button
-                  onClick={() => openAgent(selectedEdge.to)}
-                  style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.8rem' }}
-                >
-                  Open target
-                </button>
-                <button
-                  onClick={() => removeEdge(selectedEdge.from, selectedEdge.to)}
-                  disabled={wiringBusy}
-                  style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', color: 'var(--text-danger)', cursor: wiringBusy ? 'wait' : 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
-                >
-                  {wiringBusy ? 'Removing...' : 'Remove wiring'}
-                </button>
-              </div>
-              <div>
-                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Recent dispatches</div>
-                {selectedEdge.dispatches.length === 0 ? (
-                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No runtime dispatches recorded for this edge yet.</p>
-                ) : (
-                  <div style={{ display: 'grid', gap: '0.5rem' }}>
-                    {selectedEdge.dispatches.slice().reverse().map((d, i) => (
-                      <div key={i} style={{ background: 'var(--bg)', borderRadius: '6px', padding: '10px', fontSize: '0.8rem', border: '1px solid var(--border-subtle)' }}>
-                        <div style={{ color: 'var(--text)', fontWeight: 500 }}>{fmtTime(d.at)}</div>
-                        <div style={{ color: 'var(--text-muted)' }}>{d.repo} #{d.number}</div>
-                        {d.reason && <div style={{ color: 'var(--text-faint)', fontStyle: 'italic', marginTop: '4px' }}>{d.reason}</div>}
-                      </div>
-                    ))}
+              <PanelTabs
+                active={edgePanelTab}
+                onChange={setEdgePanelTab}
+                tabs={[
+                  { id: 'overview', label: 'Overview' },
+                  { id: 'history', label: 'History' },
+                  { id: 'danger', label: 'Danger' },
+                ]}
+              />
+              {edgePanelTab === 'overview' && (
+                <>
+                  <div style={{
+                    display: 'inline-block', justifySelf: 'start', padding: '2px 8px', borderRadius: 0, fontSize: '0.75rem', fontWeight: 500,
+                    background: selectedEdge.isActive ? 'var(--accent-bg)' : 'rgba(100,116,139,0.15)',
+                    color: selectedEdge.isActive ? 'var(--accent)' : 'var(--text-muted)',
+                    border: `1px solid ${selectedEdge.isActive ? 'var(--btn-primary-border)' : 'var(--border-subtle)'}`,
+                  }}>
+                    {selectedEdge.isActive ? `${selectedEdge.count} dispatch${selectedEdge.count !== 1 ? 'es' : ''}` : 'wired, no dispatches yet'}
                   </div>
-                )}
-              </div>
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                    <strong style={{ color: 'var(--text)' }}>{selectedEdge.from}</strong> can dispatch{' '}
+                    <strong style={{ color: 'var(--text)' }}>{selectedEdge.to}</strong>.
+                  </p>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() => openAgent(selectedEdge.from)}
+                      style={{ padding: '6px 12px', borderRadius: 0, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.8rem' }}
+                    >
+                      Open source
+                    </button>
+                    <button
+                      onClick={() => openAgent(selectedEdge.to)}
+                      style={{ padding: '6px 12px', borderRadius: 0, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.8rem' }}
+                    >
+                      Open target
+                    </button>
+                  </div>
+                </>
+              )}
+              {edgePanelTab === 'history' && (
+                <div>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Recent dispatches</div>
+                  {selectedEdge.dispatches.length === 0 ? (
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No runtime dispatches recorded for this edge yet.</p>
+                  ) : (
+                    <div style={{ display: 'grid', gap: '0.5rem' }}>
+                      {selectedEdge.dispatches.slice().reverse().map((d, i) => (
+                        <div key={i} style={{ background: 'var(--bg)', borderRadius: 0, padding: '10px', fontSize: '0.8rem', border: '1px solid var(--border-subtle)' }}>
+                          <div style={{ color: 'var(--text)', fontWeight: 500 }}>{fmtTime(d.at)}</div>
+                          <div style={{ color: 'var(--text-muted)' }}>{d.repo} #{d.number}</div>
+                          {d.reason && <div style={{ color: 'var(--text-faint)', fontStyle: 'italic', marginTop: '4px' }}>{d.reason}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {edgePanelTab === 'danger' && (
+                <>
+                  <div style={{ background: 'var(--bg)', border: '1px solid var(--border-subtle)', borderRadius: 0, padding: '10px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    <div style={{ color: 'var(--text-faint)', marginBottom: '4px' }}>Remove config change</div>
+                    <code>{selectedEdge.from}.can_dispatch -= [&quot;{selectedEdge.to}&quot;]</code>
+                  </div>
+                  {wiringError && (
+                    <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem' }}>{wiringError}</p>
+                  )}
+                  <button
+                    onClick={() => removeEdge(selectedEdge.from, selectedEdge.to)}
+                    disabled={wiringBusy}
+                    style={{ justifySelf: 'start', padding: '6px 12px', borderRadius: 0, border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', color: 'var(--text-danger)', cursor: wiringBusy ? 'wait' : 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+                  >
+                    {wiringBusy ? 'Removing...' : 'Remove wiring'}
+                  </button>
+                </>
+              )}
             </div>
           )}
 
           {panelMode === 'details' && selectedNode && (
             <div style={{ display: 'grid', gap: '1rem' }}>
+              <PanelTabs
+                active={agentPanelTab}
+                onChange={setAgentPanelTab}
+                tabs={[
+                  { id: 'overview', label: 'Overview' },
+                  { id: 'settings', label: 'Settings' },
+                  { id: 'triggers', label: 'Triggers' },
+                  { id: 'dispatch', label: 'Dispatch' },
+                  { id: 'activity', label: 'Activity' },
+                ]}
+              />
+              {agentPanelTab === 'overview' && (
+                <>
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                 <span style={{ background: 'var(--accent-bg)', border: '1px solid var(--btn-primary-border)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: 'var(--accent)' }}>
                   {selectedNode.current_status}
@@ -1209,7 +1301,28 @@ export default function GraphPage() {
                   </div>
                 </div>
               )}
+                </>
+              )}
 
+              {agentPanelTab === 'settings' && (
+                <AgentForm
+                  key={`details-settings:${agentForm.name || selectedNode.name}`}
+                  initial={agentForm.name ? agentForm : storeAgentFromResponse(selectedNode, selectedNode.name)}
+                  isNew={false}
+                  workspace={workspace}
+                  backends={backendOptions}
+                  skillOptions={skillOptions}
+                  agentNames={agentNames}
+                  promptOptions={promptOptions}
+                  repoNames={repos.map(r => r.name)}
+                  onSave={saveAgent}
+                  onCancel={() => setAgentPanelTab('overview')}
+                  saving={agentSaving}
+                  error={agentSaveError}
+                />
+              )}
+
+              {agentPanelTab === 'triggers' && (
               <div>
                 <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Repo triggers</div>
                 {selectedNodeBindings.length === 0 ? (
@@ -1298,7 +1411,10 @@ export default function GraphPage() {
                   )}
                 </div>
               </div>
+              )}
 
+              {agentPanelTab === 'dispatch' && (
+                <>
               <div>
                 <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Outgoing dispatch targets</div>
                 {selectedNodeOutgoing.length === 0 ? (
@@ -1382,7 +1498,10 @@ export default function GraphPage() {
                   <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem', marginTop: '0.5rem' }}>{wiringError}</p>
                 )}
               </div>
+                </>
+              )}
 
+              {agentPanelTab === 'activity' && (
               <div>
                 <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Latest runs and traces</div>
                 {agentActivityLoading && <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Loading recent runs...</p>}
@@ -1415,6 +1534,7 @@ export default function GraphPage() {
                   </div>
                 )}
               </div>
+              )}
             </div>
           )}
         </aside>
