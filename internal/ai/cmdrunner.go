@@ -31,16 +31,8 @@ type CommandRunner struct {
 type runtimeexecSpec = runtimeexec.ContainerSpec
 
 const (
-	containerRunDir            = runtimeexec.RunnerTempMount
-	containerWorkspaceDir      = "/workspace"
-	containerResponseSchema    = containerRunDir + "/response-schema.json"
-	containerHomeDir           = containerRunDir + "/home"
-	containerXDGConfigDir      = containerRunDir + "/config"
-	containerXDGCacheDir       = containerRunDir + "/cache"
-	containerXDGDataDir        = containerRunDir + "/data"
-	containerCodexHomeDir      = containerRunDir + "/codex"
-	containerClaudeMCPPath     = containerRunDir + "/claude-mcp.json"
-	containerResponseSchemaEnv = "AGENTS_RESPONSE_SCHEMA"
+	containerWorkspaceDir   = runtimeexec.RunnerWorkspaceDir
+	containerResponseSchema = runtimeexec.RunnerResponseSchema
 )
 
 func newCommandRunner(backendName string, command string, env map[string]string, timeoutSeconds int, maxPromptChars int, logger zerolog.Logger) *CommandRunner {
@@ -113,28 +105,18 @@ func (r *CommandRunner) runContainerCommand(ctx context.Context, args []string, 
 	writer := &captureWriter{onLine: onLine}
 	var stderr bytes.Buffer
 
+	setup := runtimeexec.BackendSetupOptions{}
 	if r.isCodexBackend() {
 		var schemaErr error
 		args, schemaErr = rewriteContainerResponseSchemaArg(args)
 		if schemaErr != nil {
 			return lineCapture{}, "", schemaErr
 		}
-		env = setEnvValues(env, containerResponseSchemaEnv, ResponseSchemaString())
+		setup.ResponseSchema = ResponseSchemaString()
 	}
 
-	env = setEnvValues(env,
-		"HOME", containerHomeDir,
-		"TMPDIR", containerRunDir,
-		"XDG_CONFIG_HOME", containerXDGConfigDir,
-		"XDG_CACHE_HOME", containerXDGCacheDir,
-		"XDG_DATA_HOME", containerXDGDataDir,
-		"CODEX_HOME", containerCodexHomeDir,
-	)
-	if getEnv(env, "GITHUB_TOKEN") != "" && getEnv(env, "GH_TOKEN") == "" {
-		env = append(env, "GH_TOKEN="+getEnv(env, "GITHUB_TOKEN"))
-	}
 	command := append([]string{r.command}, args...)
-	command = r.containerEntrypoint(command, env)
+	command, env = runtimeexec.WrapBackendCommand(r.backendName, command, env, setup)
 	spec := r.containerSpec
 	spec.Image = r.containerImage
 	spec.Command = command
@@ -158,68 +140,6 @@ func (r *CommandRunner) runContainerCommand(ctx context.Context, args []string, 
 	return writer.capture, stderr.String(), nil
 }
 
-func (r *CommandRunner) containerEntrypoint(command []string, env []string) []string {
-	if len(command) == 0 {
-		return command
-	}
-	switch {
-	case r.isClaudeBackend() && getEnv(env, "GITHUB_TOKEN") != "" && !hasArg(command[1:], "--mcp-config"):
-		command = append(command[:1], append([]string{"--mcp-config", containerClaudeMCPPath}, command[1:]...)...)
-		return shellEntrypoint(command, baseContainerSetup+claudeContainerSetup)
-	case r.isCodexBackend():
-		return shellEntrypoint(command, baseContainerSetup+codexContainerSetup)
-	default:
-		return shellEntrypoint(command, baseContainerSetup)
-	}
-}
-
-func shellEntrypoint(command []string, setup string) []string {
-	out := []string{"/bin/sh", "-lc", setup + `
-cmd=$1
-shift
-exec "$cmd" "$@"
-`, "agents-runner"}
-	return append(out, command...)
-}
-
-const baseContainerSetup = `
-set -eu
-mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$CODEX_HOME"
-`
-
-const claudeContainerSetup = `
-if [ -n "${GITHUB_TOKEN:-}" ]; then
-  printf '{"mcpServers":{"github":{"type":"http","url":"https://api.githubcopilot.com/mcp/","headers":{"Authorization":"Bearer %s"}}}}\n' "$GITHUB_TOKEN" > /tmp/agents-run/claude-mcp.json
-fi
-`
-
-const codexContainerSetup = `
-if [ -n "${AGENTS_RESPONSE_SCHEMA:-}" ]; then
-  printf '%s' "$AGENTS_RESPONSE_SCHEMA" > /tmp/agents-run/response-schema.json
-fi
-if [ -n "${GITHUB_TOKEN:-}" ]; then
-  cat > "$CODEX_HOME/config.toml" <<'TOML'
-[mcp_servers.github]
-url = "https://api.githubcopilot.com/mcp/"
-bearer_token_env_var = "GITHUB_TOKEN"
-TOML
-fi
-if [ -n "${OPENAI_API_KEY:-}" ]; then
-  printf '%s' "$OPENAI_API_KEY" | "$1" login --with-api-key >/dev/null || echo "codex login failed" >&2
-elif [ -n "${CODEX_ACCESS_TOKEN:-}" ]; then
-  printf '%s' "$CODEX_ACCESS_TOKEN" | "$1" login --with-access-token >/dev/null || echo "codex login failed" >&2
-fi
-`
-
-func hasArg(args []string, arg string) bool {
-	for _, a := range args {
-		if a == arg {
-			return true
-		}
-	}
-	return false
-}
-
 func rewriteContainerResponseSchemaArg(args []string) ([]string, error) {
 	if !slices.Contains(args, "--output-schema") {
 		return args, nil
@@ -232,31 +152,6 @@ func rewriteContainerResponseSchemaArg(args []string) ([]string, error) {
 		}
 	}
 	return nil, fmt.Errorf("codex output schema flag missing path")
-}
-
-func setEnvValues(env []string, kvs ...string) []string {
-	if len(kvs)%2 != 0 {
-		panic("setEnvValues requires key/value pairs")
-	}
-	keys := make(map[string]string, len(kvs)/2)
-	for i := 0; i < len(kvs); i += 2 {
-		keys[kvs[i]] = kvs[i+1]
-	}
-	out := env[:0]
-	for _, entry := range env {
-		key, _, found := strings.Cut(entry, "=")
-		if !found {
-			continue
-		}
-		if _, replace := keys[key]; replace {
-			continue
-		}
-		out = append(out, entry)
-	}
-	for i := 0; i < len(kvs); i += 2 {
-		out = append(out, kvs[i]+"="+kvs[i+1])
-	}
-	return out
 }
 
 func (r *CommandRunner) parseCommandResponse(logger zerolog.Logger, stdoutCap lineCapture, stderr string, cmdErr error) (Response, error) {
@@ -817,14 +712,4 @@ func allowCommandEnvKey(key string) bool {
 	default:
 		return strings.HasPrefix(key, "LC_")
 	}
-}
-
-func getEnv(env []string, key string) string {
-	prefix := key + "="
-	for i := len(env) - 1; i >= 0; i-- {
-		if strings.HasPrefix(env[i], prefix) {
-			return strings.TrimPrefix(env[i], prefix)
-		}
-	}
-	return ""
 }

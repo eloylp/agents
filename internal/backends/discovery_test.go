@@ -166,6 +166,28 @@ func TestDiagnoseGitHubCLIInRuntimeUsesRunnerContainer(t *testing.T) {
 	}
 }
 
+func TestCheckGitHubMCPInRuntimeUsesBackendSetup(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+
+	var got runtimeexec.ContainerSpec
+	runner := fakeRuntimeRunner{run: func(spec runtimeexec.ContainerSpec) (int, string, string, error) {
+		got = spec
+		script := strings.Join(spec.Command, " ")
+		if !strings.Contains(script, "/workspace/.mcp.json") {
+			t.Fatalf("runner command = %v, want shared claude MCP setup", spec.Command)
+		}
+		return 0, `github: https://api.githubcopilot.com/mcp (HTTP) - ✓ Connected`, "", nil
+	}}
+
+	detail := checkGitHubMCPInRuntime(context.Background(), runner, fleet.RuntimeSettings{RunnerImage: "runner:test"}, "claude", "claude", nil)
+	if detail != "github MCP: connected" {
+		t.Fatalf("detail = %q, want connected", detail)
+	}
+	if !envContains(got.Env, "GH_TOKEN=test-token") {
+		t.Fatalf("Env missing GH_TOKEN fallback: %v", got.Env)
+	}
+}
+
 type fakeRuntimeRunner struct {
 	run func(runtimeexec.ContainerSpec) (code int, stdout string, stderr string, err error)
 }

@@ -23,9 +23,9 @@ const (
 	CodexName       = "codex"
 	ClaudeLocalName = "claude_local"
 
-	diagnosticHome       = runtimeexec.RunnerTempMount + "/home"
-	diagnosticConfigHome = runtimeexec.RunnerTempMount + "/config"
-	diagnosticCodexHome  = runtimeexec.RunnerTempMount + "/codex"
+	diagnosticHome       = runtimeexec.RunnerHomeDir
+	diagnosticConfigHome = runtimeexec.RunnerXDGConfigDir
+	diagnosticCodexHome  = runtimeexec.RunnerCodexHomeDir
 )
 
 var (
@@ -253,7 +253,7 @@ func diagnoseVersionedToolInRuntime(ctx context.Context, runner runtimeexec.Runn
 		status.Detail = command + " binary not found in runner image"
 		return status
 	}
-	stdout, stderr, err := runToolCommandInRuntime(ctx, runner, settings, path, args, nil)
+	stdout, stderr, err := runToolCommandInRuntime(ctx, runner, settings, "", path, args, nil)
 	status.Version = firstNonEmptyLine(stdout, stderr)
 	status.Healthy = err == nil
 	if err != nil {
@@ -278,10 +278,10 @@ func diagnoseGitHubCLIInRuntime(ctx context.Context, runner runtimeexec.Runner, 
 		return status
 	}
 
-	versionOut, versionErr, versionRunErr := runToolCommandInRuntime(ctx, runner, settings, path, []string{"--version"}, nil)
+	versionOut, versionErr, versionRunErr := runToolCommandInRuntime(ctx, runner, settings, "", path, []string{"--version"}, nil)
 	status.Version = firstNonEmptyLine(versionOut, versionErr)
 
-	authOut, authErr, authRunErr := runToolCommandInRuntime(ctx, runner, settings, path, []string{"auth", "status", "--hostname", "github.com"}, nil)
+	authOut, authErr, authRunErr := runToolCommandInRuntime(ctx, runner, settings, "", path, []string{"auth", "status", "--hostname", "github.com"}, nil)
 	authDetail := firstNonEmptyLine(authOut, authErr)
 	if authDetail == "" {
 		authDetail = firstNonEmptyLine(authRunErrString(authRunErr))
@@ -329,14 +329,14 @@ func diagnoseBackendInRuntime(ctx context.Context, runner runtimeexec.Runner, se
 		env["ANTHROPIC_BASE_URL"] = localURL
 	}
 
-	versionOut, versionErr, versionRunErr := runToolCommandInRuntime(ctx, runner, settings, path, []string{"--version"}, env)
+	versionOut, versionErr, versionRunErr := runToolCommandInRuntime(ctx, runner, settings, backendName, path, []string{"--version"}, env)
 	versionOK := versionRunErr == nil
 	status.Version = firstNonEmptyLine(versionOut, versionErr)
 
 	models, modelsDetail := discoverModelsInRuntime(ctx, runner, settings, commandName, path, env)
 	status.Models = models
 
-	mcpDetail := checkGitHubMCPInRuntime(ctx, runner, settings, path, env)
+	mcpDetail := checkGitHubMCPInRuntime(ctx, runner, settings, backendName, path, env)
 	status.Healthy = versionOK
 
 	details := make([]string, 0, 3)
@@ -366,7 +366,7 @@ func discoverModelsInRuntime(ctx context.Context, runner runtimeexec.Runner, set
 	}
 	failures := make([]string, 0, len(commands))
 	for _, args := range commands {
-		stdout, stderr, err := runToolCommandInRuntime(ctx, runner, settings, command, args, env)
+		stdout, stderr, err := runToolCommandInRuntime(ctx, runner, settings, backendName, command, args, env)
 		if err != nil {
 			detail := firstNonEmptyLine(stderr, stdout, err.Error())
 			if detail == "" {
@@ -388,8 +388,8 @@ func discoverModelsInRuntime(ctx context.Context, runner runtimeexec.Runner, set
 	return nil, "models discovery failed: " + failures[0]
 }
 
-func checkGitHubMCPInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings, command string, env map[string]string) string {
-	stdout, stderr, err := runToolCommandInRuntime(ctx, runner, settings, command, []string{"mcp", "list"}, env)
+func checkGitHubMCPInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings, backendName string, command string, env map[string]string) string {
+	stdout, stderr, err := runToolCommandInRuntime(ctx, runner, settings, backendName, command, []string{"mcp", "list"}, env)
 	if err != nil {
 		detail := firstNonEmptyLine(stderr, stdout)
 		if detail == "" {
@@ -625,7 +625,7 @@ func commandPathInRuntime(ctx context.Context, runner runtimeexec.Runner, settin
 	if command == "" {
 		return "", false
 	}
-	stdout, _, err := runShellInRuntime(ctx, runner, settings, "command -v "+shellQuote(command), nil)
+	stdout, _, err := runShellInRuntime(ctx, runner, settings, "", "", "command -v "+shellQuote(command), nil)
 	if err != nil {
 		return "", false
 	}
@@ -648,11 +648,11 @@ func firstNonEmptyLine(values ...string) string {
 	return ""
 }
 
-func runToolCommandInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings, command string, args []string, env map[string]string) (string, string, error) {
-	return runShellInRuntime(ctx, runner, settings, "exec "+shellJoin(command, args), env)
+func runToolCommandInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings, backendName string, command string, args []string, env map[string]string) (string, string, error) {
+	return runShellInRuntime(ctx, runner, settings, backendName, command, "exec "+shellJoin(command, args), env)
 }
 
-func runShellInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings, script string, env map[string]string) (string, string, error) {
+func runShellInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings, backendName string, backendCommand string, script string, env map[string]string) (string, string, error) {
 	runCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
@@ -660,11 +660,15 @@ func runShellInRuntime(ctx context.Context, runner runtimeexec.Runner, settings 
 	var stderr bytes.Buffer
 	policy := settings.Constraints
 	policy.TimeoutSeconds = 0
+	diagnosticEnv := diagnosticEnv(env)
+	setupOptions := runtimeexec.BackendSetupOptions{BackendCommand: backendCommand}
+	diagnosticEnv = runtimeexec.PrepareBackendEnv(diagnosticEnv, setupOptions)
+	setup := runtimeexec.BackendSetupScript(backendName, setupOptions)
 	status, err := runner.Run(runCtx, runtimeexec.ContainerSpec{
 		Image:      settings.RunnerImage,
-		Command:    []string{"/bin/sh", "-lc", "mkdir -p " + shellQuote(diagnosticHome) + " " + shellQuote(diagnosticConfigHome) + " " + shellQuote(diagnosticCodexHome) + " && " + script},
-		WorkingDir: "/workspace",
-		Env:        diagnosticEnv(env),
+		Command:    []string{"/bin/sh", "-lc", setup + script},
+		WorkingDir: runtimeexec.RunnerWorkspaceDir,
+		Env:        diagnosticEnv,
 		Stdout:     &stdout,
 		Stderr:     &stderr,
 		Policy:     policy,
