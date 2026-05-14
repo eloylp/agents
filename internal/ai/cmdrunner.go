@@ -115,7 +115,7 @@ func (r *CommandRunner) runContainerCommand(ctx context.Context, args []string, 
 		setup.ResponseSchema = ResponseSchemaString()
 	}
 
-	command := append([]string{r.command}, args...)
+	command := slices.Concat([]string{r.command}, args)
 	command, env = runtimeexec.WrapBackendCommand(r.backendName, command, env, setup)
 	spec := r.containerSpec
 	spec.Image = r.containerImage
