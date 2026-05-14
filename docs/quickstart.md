@@ -10,11 +10,7 @@ The daemon dispatches AI CLIs (`claude`, `codex`) with sandbox-bypass flags so a
 mkdir agents && cd agents
 curl -fsSLO https://raw.githubusercontent.com/eloylp/agents/main/docker-compose.yaml
 curl -fsSLO https://raw.githubusercontent.com/eloylp/agents/main/.env.sample
-# .env holds runtime secrets (loaded automatically by compose).
-# Webhook secret: random per install. PAT: from https://github.com/settings/tokens with repo scope.
-cp .env.sample .env
-sed -i.bak "s/^GITHUB_WEBHOOK_SECRET=.*/GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)/" .env && rm .env.bak
-# Edit GITHUB_TOKEN and at least one AI credential in .env before continuing.
+curl -fsSL https://raw.githubusercontent.com/eloylp/agents/main/scripts/init-env.sh | sh
 docker compose up -d
 ```
 
@@ -35,8 +31,39 @@ curl -s http://localhost:8080/status | jq
 Production runs are env-driven. Put credentials in `.env`; they are injected into each short-lived runner container and are not exported through UI, REST, MCP, or fleet YAML.
 
 - `GITHUB_TOKEN`: used for GitHub MCP and `gh` fallback. Use `repo` scope minimum; add `workflow` if agents touch CI.
-- Claude: set one of `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN`.
-- Codex: set `OPENAI_API_KEY` or `CODEX_ACCESS_TOKEN`.
+- Claude: preferred path, run `claude setup-token` locally and set the returned value as `CLAUDE_CODE_OAUTH_TOKEN`. API-key deployments may instead set `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`.
+- Codex: preferred for ChatGPT/Plus/Pro subscription access, run `codex login` locally with file-based credential storage and set `CODEX_AUTH_JSON_BASE64` from `~/.codex/auth.json`; alternatively set `OPENAI_API_KEY` for OpenAI Platform API-billed usage.
+
+The one-liner above runs [`scripts/init-env.sh`](../scripts/init-env.sh), which generates `GITHUB_WEBHOOK_SECRET`, explains each credential, and prompts for the values interactively. To rerun it later after rotating credentials:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/eloylp/agents/main/scripts/init-env.sh | sh
+docker compose restart agents
+```
+
+For Claude subscription auth:
+
+```bash
+claude setup-token
+# Paste the returned value when the script asks for CLAUDE_CODE_OAUTH_TOKEN.
+```
+
+For Codex subscription auth, make sure the local CLI writes a portable auth file:
+
+```toml
+# ~/.codex/config.toml
+cli_auth_credentials_store = "file"
+```
+
+Then run:
+
+```bash
+codex login
+test -f ~/.codex/auth.json
+CODEX_AUTH_JSON_BASE64="$(base64 < ~/.codex/auth.json | tr -d '\n')"
+```
+
+Copy that value into `.env`. Treat it like a password; it contains refreshable Codex credentials. The daemon does not mount your home directory or any Codex volume into runner containers. It passes the base64 value through the runner environment and materializes `auth.json` only inside each ephemeral runner container.
 
 Then open `http://localhost:8080/`, bootstrap the first admin user, and use Config -> Runtime / Backends diagnostics to verify the runner image, credentials, and backend readiness. Fleet configuration (workspaces, agents, prompts, skills, repos, bindings, webhooks) lives in the dashboard.
 

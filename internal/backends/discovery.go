@@ -693,11 +693,10 @@ func diagnosticEnv(override map[string]string) []string {
 		"ANTHROPIC_AUTH_TOKEN",
 		"ANTHROPIC_BASE_URL",
 		"ANTHROPIC_MODEL",
+		"CODEX_AUTH_JSON_BASE64",
 		"OPENAI_API_KEY",
 		"OPENAI_BASE_URL",
 		"OPENAI_MODEL",
-		"CODEX_ACCESS_TOKEN",
-		"CODEX_API_KEY",
 		"SSH_AUTH_SOCK",
 	}
 	out := []string{

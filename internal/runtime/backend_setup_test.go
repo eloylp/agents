@@ -24,15 +24,15 @@ func TestWrapBackendCommandMaterializesClaudeMCP(t *testing.T) {
 func TestWrapBackendCommandMaterializesCodexAuthAndSchema(t *testing.T) {
 	t.Parallel()
 
-	command, env := WrapBackendCommand("codex", []string{"codex", "exec"}, []string{"OPENAI_API_KEY=sk-test"}, BackendSetupOptions{ResponseSchema: `{"type":"object"}`})
+	command, env := WrapBackendCommand("codex", []string{"codex", "exec"}, []string{"CODEX_AUTH_JSON_BASE64=e30=", "OPENAI_API_KEY=sk-test"}, BackendSetupOptions{ResponseSchema: `{"type":"object"}`})
 	if !envContains(env, ResponseSchemaEnv+`={"type":"object"}`) {
 		t.Fatalf("env = %v, want response schema env", env)
 	}
 	if !envContains(env, "AGENTS_BACKEND_COMMAND=codex") {
 		t.Fatalf("env = %v, want backend command env", env)
 	}
-	if !strings.Contains(command[2], RunnerResponseSchema) || !strings.Contains(command[2], "$codex_cmd\" login --with-api-key") {
-		t.Fatalf("setup script = %q, want codex schema and login materialization", command[2])
+	if !strings.Contains(command[2], RunnerResponseSchema) || !strings.Contains(command[2], "CODEX_AUTH_JSON_BASE64") || !strings.Contains(command[2], "$codex_cmd\" login --with-api-key") {
+		t.Fatalf("setup script = %q, want codex schema and auth materialization", command[2])
 	}
 }
 
