@@ -126,15 +126,14 @@ func workspaceAgentKey(workspaceID, agentName string) string {
 }
 
 func canonicalModels(models []string) []string {
-	out := make([]string, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
 	for _, m := range models {
 		if m = strings.TrimSpace(m); m != "" {
-			out = append(out, m)
+			seen[m] = struct{}{}
 		}
 	}
-	if len(out) == 0 {
+	if len(seen) == 0 {
 		return nil
 	}
-	slices.Sort(out)
-	return slices.Compact(out)
+	return slices.Sorted(maps.Keys(seen))
 }
