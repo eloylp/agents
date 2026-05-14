@@ -9,16 +9,44 @@ import (
 	"testing"
 	"time"
 
+	runtimeexec "github.com/eloylp/agents/internal/runtime"
 	"github.com/rs/zerolog"
 )
+
+type fakeContainerRunner struct {
+	spec runtimeexec.ContainerSpec
+	code int
+	err  error
+}
+
+func (f *fakeContainerRunner) EnsureImage(context.Context, string) error { return nil }
+
+func (f *fakeContainerRunner) Run(_ context.Context, spec runtimeexec.ContainerSpec) (runtimeexec.ExitStatus, error) {
+	f.spec = spec
+	if spec.Stdout != nil {
+		_, _ = spec.Stdout.Write([]byte(`{"summary":"container ok","artifacts":[],"memory":"","dispatch":[]}` + "\n"))
+	}
+	return runtimeexec.ExitStatus{Code: f.code}, f.err
+}
+
+type silentContainerRunner struct {
+	spec runtimeexec.ContainerSpec
+}
+
+func (f *silentContainerRunner) EnsureImage(context.Context, string) error { return nil }
+
+func (f *silentContainerRunner) Run(_ context.Context, spec runtimeexec.ContainerSpec) (runtimeexec.ExitStatus, error) {
+	f.spec = spec
+	return runtimeexec.ExitStatus{}, nil
+}
 
 func TestBuildCommandEnvDaemonNumber(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name           string
-		number         int
-		wantNumberVar  bool
+		name          string
+		number        int
+		wantNumberVar bool
 	}{
 		{
 			name:          "numbered-workflow-sets-AI_DAEMON_NUMBER",
@@ -98,6 +126,152 @@ func TestBuildCommandEnvBackendOverride(t *testing.T) {
 	}
 	if env[keyIndices[1]] != "ANTHROPIC_API_KEY=proxy-key" {
 		t.Errorf("last ANTHROPIC_API_KEY entry must be the override; got %q", env[keyIndices[1]])
+	}
+}
+
+func TestContainerCommandRunnerUsesRuntimeAndParsesOutput(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+
+	fake := &fakeContainerRunner{}
+	r := NewContainerCommandRunner(
+		"claude", "claude", map[string]string{"ANTHROPIC_BASE_URL": "http://proxy"},
+		10, 4000, fake, "ghcr.io/example/runner:test",
+		runtimeexec.ContainerSpec{},
+		zerolog.Nop(),
+	)
+
+	var lines [][]byte
+	got, err := r.Run(context.Background(), Request{
+		Workflow: "claude:coder",
+		Repo:     "owner/repo",
+		Number:   7,
+		System:   "system",
+		User:     "user",
+		OnLine: func(line []byte) {
+			lines = append(lines, append([]byte(nil), line...))
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got.Summary != "container ok" {
+		t.Fatalf("Summary = %q, want container ok", got.Summary)
+	}
+	if fake.spec.Image != "ghcr.io/example/runner:test" {
+		t.Fatalf("container image = %q", fake.spec.Image)
+	}
+	if fake.spec.WorkingDir != "/workspace" {
+		t.Fatalf("WorkingDir = %q, want /workspace", fake.spec.WorkingDir)
+	}
+	if len(fake.spec.Command) < 5 || fake.spec.Command[0] != "/bin/sh" {
+		t.Fatalf("command = %v, want shell entrypoint", fake.spec.Command)
+	}
+	if !slices.Contains(fake.spec.Command, "claude") {
+		t.Fatalf("command = %v, want claude payload", fake.spec.Command)
+	}
+	for _, want := range []string{
+		"AI_DAEMON_WORKFLOW=claude:coder",
+		"AI_DAEMON_REPO=owner/repo",
+		"AI_DAEMON_NUMBER=7",
+		"HOME=/tmp/agents-run/home",
+		"XDG_CONFIG_HOME=/tmp/agents-run/config",
+		"ANTHROPIC_BASE_URL=http://proxy",
+	} {
+		if !slices.Contains(fake.spec.Env, want) {
+			t.Fatalf("expected env %q in %v", want, fake.spec.Env)
+		}
+	}
+	if len(lines) != 1 || string(lines[0]) == "" {
+		t.Fatalf("OnLine lines = %q, want one JSON line", lines)
+	}
+}
+
+func TestContainerCommandRunnerMaterializesClaudeMCPConfig(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "token-for-test")
+
+	fake := &fakeContainerRunner{}
+	r := NewContainerCommandRunner(
+		"claude", "claude", nil,
+		10, 4000, fake, "ghcr.io/example/runner:test",
+		runtimeexec.ContainerSpec{},
+		zerolog.Nop(),
+	)
+	if _, err := r.Run(context.Background(), Request{System: "system", User: "user"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fake.spec.Command) < 8 || fake.spec.Command[0] != "/bin/sh" {
+		t.Fatalf("command = %v, want shell entrypoint", fake.spec.Command)
+	}
+	if !slices.Contains(fake.spec.Command, "--mcp-config") || !slices.Contains(fake.spec.Command, "/tmp/agents-run/claude-mcp.json") {
+		t.Fatalf("command = %v, want claude --mcp-config", fake.spec.Command)
+	}
+}
+
+func TestContainerCommandRunnerMaterializesCodexHome(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv("GITHUB_TOKEN", "token-for-test")
+
+	fake := &fakeContainerRunner{}
+	r := NewContainerCommandRunner(
+		"codex", "codex", nil,
+		10, 4000, fake, "ghcr.io/example/runner:test",
+		runtimeexec.ContainerSpec{},
+		zerolog.Nop(),
+	)
+	if _, err := r.Run(context.Background(), Request{System: "system", User: "user"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fake.spec.Command) < 5 || fake.spec.Command[0] != "/bin/sh" {
+		t.Fatalf("command = %v, want shell entrypoint", fake.spec.Command)
+	}
+	if !slices.Contains(fake.spec.Env, "CODEX_HOME=/tmp/agents-run/codex") {
+		t.Fatalf("env = %v, want CODEX_HOME", fake.spec.Env)
+	}
+	if !slices.Contains(fake.spec.Command, "--output-schema") || !slices.Contains(fake.spec.Command, "/tmp/agents-run/response-schema.json") {
+		t.Fatalf("command = %v, want container-visible output schema", fake.spec.Command)
+	}
+	if !slices.Contains(fake.spec.Env, "AGENTS_RESPONSE_SCHEMA="+ResponseSchemaString()) {
+		t.Fatalf("env missing embedded response schema")
+	}
+	if !strings.Contains(fake.spec.Command[2], `printf '%s' "$AGENTS_RESPONSE_SCHEMA" > /tmp/agents-run/response-schema.json`) {
+		t.Fatalf("setup script = %q, want container-side response schema materialization", fake.spec.Command[2])
+	}
+}
+
+func TestContainerCommandRunnerOverridesHostHomeEnv(t *testing.T) {
+	t.Setenv("HOME", "/host/home")
+	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", "/host/config")
+
+	fake := &fakeContainerRunner{}
+	r := NewContainerCommandRunner(
+		"openai_compatible", "custom-cli", nil,
+		10, 4000, fake, "ghcr.io/example/runner:test",
+		runtimeexec.ContainerSpec{},
+		zerolog.Nop(),
+	)
+	if _, err := r.Run(context.Background(), Request{System: "system", User: "user"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, blocked := range []string{
+		"HOME=/host/home",
+		"XDG_CONFIG_HOME=/host/config",
+	} {
+		if slices.Contains(fake.spec.Env, blocked) {
+			t.Fatalf("env = %v, should not contain stale %q", fake.spec.Env, blocked)
+		}
+	}
+	for _, want := range []string{
+		"HOME=/tmp/agents-run/home",
+		"TMPDIR=/tmp/agents-run",
+		"XDG_CONFIG_HOME=/tmp/agents-run/config",
+	} {
+		if !slices.Contains(fake.spec.Env, want) {
+			t.Fatalf("env = %v, want %q", fake.spec.Env, want)
+		}
+	}
+	if len(fake.spec.Command) < 5 || fake.spec.Command[0] != "/bin/sh" {
+		t.Fatalf("command = %v, want shell entrypoint", fake.spec.Command)
 	}
 }
 
@@ -248,8 +422,13 @@ func TestResponseDispatchOmittedWhenEmpty(t *testing.T) {
 // silent success with an empty Response.
 func TestCommandRunnerEmptyStdoutIsError(t *testing.T) {
 	t.Parallel()
-	// "true" exits 0 with no stdout, the canonical empty-output case.
-	r := NewCommandRunner("test", "command", "true", nil, 10, 4000, zerolog.Nop())
+	fake := &silentContainerRunner{}
+	r := NewContainerCommandRunner(
+		"test", "test-cli", nil,
+		10, 4000, fake, "ghcr.io/example/runner:test",
+		runtimeexec.ContainerSpec{},
+		zerolog.Nop(),
+	)
 	_, err := r.Run(context.Background(), Request{Workflow: "wf", Repo: "owner/repo"})
 	if err == nil {
 		t.Fatal("expected error for empty stdout, got nil")
@@ -384,7 +563,7 @@ func TestBuildDeliveryClaudeUsesAppendSystemPrompt(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			r := NewCommandRunner(tc.backendName, "command", "true", nil, 10, 0, zerolog.Nop())
+			r := newCommandRunner(tc.backendName, "test-cli", nil, 10, 0, zerolog.Nop())
 			args, stdin := r.buildDelivery(Request{System: tc.system, User: tc.user})
 
 			hasFlag := slices.Contains(args, "--append-system-prompt")
@@ -500,7 +679,7 @@ func TestBuildDeliveryRespectsTotalBudget(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			r := NewCommandRunner(tc.backendName, "command", "true", nil, 10, tc.maxChars, zerolog.Nop())
+			r := newCommandRunner(tc.backendName, "test-cli", nil, 10, tc.maxChars, zerolog.Nop())
 			args, stdin := r.buildDelivery(Request{System: tc.system, User: tc.user})
 			if stdin != tc.wantStdin {
 				t.Errorf("stdin = %q, want %q", stdin, tc.wantStdin)
@@ -567,8 +746,8 @@ func TestBuildDeliveryClaudeAndCodexSameTruncationBoundary(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			claude := NewCommandRunner("claude", "command", "true", nil, 10, tc.maxChars, zerolog.Nop())
-			codex := NewCommandRunner("codex", "command", "true", nil, 10, tc.maxChars, zerolog.Nop())
+			claude := newCommandRunner("claude", "test-cli", nil, 10, tc.maxChars, zerolog.Nop())
+			codex := newCommandRunner("codex", "test-cli", nil, 10, tc.maxChars, zerolog.Nop())
 
 			claudeArgs, claudeStdin := claude.buildDelivery(Request{System: tc.system, User: tc.user})
 			_, codexStdin := codex.buildDelivery(Request{System: tc.system, User: tc.user})
@@ -618,7 +797,6 @@ func TestCombineSystemUser(t *testing.T) {
 	}
 }
 
-
 func TestParseClaudeSteps(t *testing.T) {
 	t.Parallel()
 
@@ -661,10 +839,10 @@ func TestParseClaudeSteps(t *testing.T) {
 	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	tests := []struct {
-		name        string
-		input       []byte
-		lineStep    time.Duration
-		wantNames   []string
+		name         string
+		input        []byte
+		lineStep     time.Duration
+		wantNames    []string
 		wantMinDurMs int64 // minimum DurationMs for the first step (0 = don't check)
 	}{
 		{

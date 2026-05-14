@@ -4,14 +4,14 @@ Repo-specific guidance for any coding agent (Claude Code, Codex, Cursor, Aider, 
 
 ## What this repo is
 
-**agents** is a self-hosted Go daemon that dispatches AI CLIs (Claude Code, Codex, or any CLI pointed at a local LLM via the built-in proxy) to work on GitHub repos. Agents are declared in YAML, bound to repos via **labels**, **GitHub event subscriptions**, or **cron schedules**, and execute inside the AI CLI, which in turn uses GitHub MCP tools first and an authenticated `gh` CLI fallback for complex local checkout/test/PR loops. The daemon itself is strictly read-only against GitHub.
+**agents** is a self-hosted Go daemon that dispatches AI CLIs (Claude Code, Codex, or any CLI pointed at a local LLM via the built-in proxy) to work on GitHub repos. Agents are declared in YAML, bound to repos via **labels**, **GitHub event subscriptions**, or **cron schedules**, and execute inside fresh ephemeral runner containers, which in turn use GitHub MCP tools first and `gh` fallback for complex local checkout/test/PR loops. The daemon itself is strictly read-only against GitHub.
 
 Agents can also invoke each other at runtime via the **reactive inter-agent dispatcher**: an agent returns `dispatch: [{agent, number, reason}]` in its response JSON, the daemon validates against per-agent whitelists and safety limits, then enqueues a synthetic `agent.dispatch` event that runs the target agent.
 
 Key numbers:
 - Language: **Go 1.25** (check `go.mod`).
 - Binary entrypoint: `cmd/agents/main.go`.
-- Single-binary deployment; the image includes the AI CLIs plus git, gh, Go, Rust/Cargo, Node/npm, and TypeScript; GitHub access flows through MCP first, with gh as fallback.
+- Single-binary daemon deployment; the daemon image is the control plane, while the separate runner image includes the AI CLIs plus git, gh, Go, Rust/Cargo, Node/npm, and TypeScript. GitHub access flows through MCP first, with gh as fallback.
 
 ## Quick commands
 
@@ -47,7 +47,6 @@ internal/
   webhook/                      # GitHub webhook receiver only: HMAC signature verification, delivery dedupe, /webhooks/github event parsing
   mcp/                          # MCP server exposing fleet-management tools at /mcp
   ui/                           # embedded Next.js web dashboard (static assets served at /ui/)
-  setup/                        # interactive first-time setup command
   logging/                      # zerolog configuration
 docs/local-models.md            # full recipe for running the fleet on a local LLM
 config.example.yaml             # shipping example, kept in sync with config schema
@@ -62,7 +61,7 @@ internal/ai/response-schema.json # embedded JSON schema for structured output (c
 - **Skill**, a reusable chunk of guidance referenced by stable id in agents. Display names may repeat across global, workspace, and repo scopes; skill text is concatenated before the agent's own prompt at render time.
 - **Binding**, `repos[*].use[*]`: pairs one agent with exactly one trigger (`labels:`, `events:`, or `cron:`). The same agent can have multiple bindings on the same repo with different triggers.
 - **Backend**, explicit backend selection per agent (no `auto`). Built-ins are `claude` and `codex`; additional named local backends are supported via `local_model_url`.
-- **Proxy**, optional in-daemon Anthropic↔OpenAI translator mounted at `/v1/messages` and `/v1/models`. Disabled by default. When enabled, set `local_model_url` on the backend entry to the proxy's URL; the daemon injects `ANTHROPIC_BASE_URL` for that backend automatically.
+- **Proxy**, optional in-daemon Anthropic↔OpenAI translator mounted at `/v1/messages` and `/v1/models`. Disabled by default. Agent CLIs run in runner containers, so `local_model_url` must be reachable from the runner container; `localhost` points at the runner, not the daemon.
 - **Dispatcher**, the runtime mechanism by which agents invoke each other. See "Reactive dispatch" below.
 - **Graph workflow designer**, the dashboard's primary visual workflow surface. It uses stable agent database IDs for node identity/layout, edits agents through the shared agent form, shows repo-scoped agents inside dashed repo boundaries, shows workspace-scoped agents outside those boundaries, draws thin binding lines to passive repo anchors for trigger bindings, and edits dispatch edges through `can_dispatch` / `allow_dispatch`.
 - **Trace steps**, the durable transcript source for `/traces/{span_id}/steps` and `/traces/{span_id}/stream`. AI CLI stdout is parsed incrementally into `TraceStep` rows, persisted to SQLite, replayed to stream subscribers on connect, and live-tailed through in-memory notifications until `event: end`.
@@ -129,9 +128,10 @@ When making common classes of changes, update all of these at once:
 
 - **`.env` is auto-loaded on startup** (`godotenv.Load()`). Required runtime secret: `GITHUB_WEBHOOK_SECRET`. Daemon auth is DB-backed users, browser sessions, and named API tokens. The public root path `/` serves login/bootstrap and redirects authenticated browser sessions into `/ui/`. The first bootstrapped dashboard user is the admin user, is returned with `is_admin=true`, can create/remove additional users through the UI/REST auth surface, and cannot be removed. Non-admin users can sign in, manage fleet configuration, and create their own API tokens, but cannot create or remove users. MCP clients authenticate with dashboard-created API bearer tokens; user/password administration is intentionally not exposed as MCP tools. Daemon runtime settings can be overridden at startup with `AGENTS_*` env vars for log, HTTP, processor, and dispatch fields; see `docs/configuration.md` for the full mapping. Empty env vars are ignored, and changes still require a process/container restart.
 - **Published Docker images live at `ghcr.io/eloylp/agents`.** The default compose file pulls `latest`, and `latest` must remain release-only. Pushes to `main` publish explicit `dev-<short_sha>` images for maintainer testing; version tags publish `latest`, `X.Y.Z`, `vX.Y.Z`, and `X.Y`. Do not document local image builds as the default user setup path.
-- **Config is loaded from SQLite at startup.** Seed an empty SQLite store via `POST /import` or the `agents-setup` script; YAML is import/export only, not a runtime input. Manage subsequent changes via the CRUD API or the web dashboard. Prompt and skill content is stored in the database; changes via the API or UI take effect on the next agent run without a restart.
+- **Config is loaded from SQLite at startup.** Seed an empty SQLite store via `POST /import`; YAML is import/export only, not a runtime input. Manage subsequent changes via the CRUD API or the web dashboard. Prompt and skill content is stored in the database; changes via the API or UI take effect on the next agent run without a restart.
 - **Backend discovery lifecycle.** Startup auto-discovery runs only when the backends table is empty. Manual refresh is explicit via `POST /backends/discover`; `GET /backends/status` is diagnostics-only.
-- **Runtime toolchain.** The Docker image includes `git`, authenticated `gh`, Go, Rust/Cargo, Node/npm, and TypeScript so agents can establish a safe local checkout/test loop when MCP alone is insufficient. `agents-setup` authenticates `gh` with `GITHUB_TOKEN`; `/backends/status` reports tool health.
+- **Runtime toolchain.** The `agents` Docker image is the control plane and stays minimal. The `agents-runner` image contains Claude Code, Codex, `gh`, git, Go, Rust/Cargo, Node/npm, TypeScript, and runtime tools. The daemon starts one fresh runner container per run through the Docker Engine API and injects allowlisted env credentials (`GITHUB_TOKEN`, Claude/Codex vars) from its own environment.
+- **Docker socket access.** The default Compose file runs the daemon container as `root` so it can use the mounted host Docker socket across Linux hosts with different `docker` group IDs. Treat this as host-root-equivalent access and put the daemon behind strong authentication and network controls.
 - **Orphan visibility.** `GET /agents/orphans/status` and `/status` (`orphaned_agents.count`) expose model/backend drift requiring user remediation.
 - **Agent memory** is stored in SQLite (in the `memory` table), keyed by `(workspace, agent, repo)`. It's the agent's job to return updated memory in its response; the daemon writes it back to the store unchanged. Load/persist is gated by `allow_memory` (default `true`) and applies uniformly across cron, webhook, dispatch, `POST /run`, and `trigger_agent`. The built-in `memory-scope` guardrail tells agents to ignore CLI-native/global/session memory and use only the daemon-rendered `Existing memory:` section for the current workspace/repo/agent.
 - **The event queue is durable.** Every `PushEvent` persists the event to the SQLite `event_queue` table before signalling workers via the in-memory channel. Rows whose `completed_at` is still `NULL` at startup are replayed onto the channel, events buffered at shutdown, or runs interrupted mid-prompt, get a second chance instead of vanishing. Completed rows older than 7 days are pruned by an hourly cleanup loop. Inspect / delete / retry rows through the `/runners` REST surface, the matching MCP tools, or the UI's Runners page.

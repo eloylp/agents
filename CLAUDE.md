@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**agents** is a self-hosted Go daemon that dispatches AI CLIs (Claude, Codex) to work on GitHub repos. Agents are configured declaratively in YAML and bound to repos via labels, GitHub event subscriptions (event-driven), and/or cron schedules (autonomous). GitHub operations happen through the AI backend: GitHub MCP tools are preferred, with authenticated `gh` available as fallback for complex local checkout/test/PR loops. The daemon itself is read-only against GitHub. The daemon also ships a built-in Anthropic↔OpenAI translation proxy so the `claude` CLI can be routed through any OpenAI-compatible backend (local `llama.cpp`, hosted Qwen, vLLM, etc.), see [`docs/local-models.md`](docs/local-models.md). Agents can additionally invoke each other at runtime via the reactive inter-agent dispatcher (see Architecture Notes).
+**agents** is a self-hosted Go daemon that dispatches AI CLIs (Claude, Codex) to work on GitHub repos. Agents are configured declaratively in YAML and bound to repos via labels, GitHub event subscriptions (event-driven), and/or cron schedules (autonomous). GitHub operations happen through the AI backend inside a fresh runner container: GitHub MCP tools are preferred, with `gh` available as fallback for complex local checkout/test/PR loops. The daemon itself is read-only against GitHub. The daemon also ships a built-in Anthropic↔OpenAI translation proxy so the `claude` CLI can be routed through any OpenAI-compatible backend (local `llama.cpp`, hosted Qwen, vLLM, etc.), see [`docs/local-models.md`](docs/local-models.md). Agents can additionally invoke each other at runtime via the reactive inter-agent dispatcher (see Architecture Notes).
 
 ## Directory Structure
 
@@ -27,7 +27,6 @@ internal/
   webhook/                  # GitHub webhook receiver only: HMAC verification, delivery dedupe, /webhooks/github event parsing
   mcp/                      # MCP server exposing fleet-management tools at /mcp
   ui/                       # Embedded Next.js web dashboard (served at /ui/)
-  setup/                    # Interactive first-time setup command
   logging/                  # zerolog setup
 docs/                       # Long-form docs: configuration, events, dispatch, API, docker, local-models, security
 ```
@@ -61,16 +60,20 @@ docker compose pull
 docker compose up -d
 ```
 
-The default compose file pulls the published `ghcr.io/eloylp/agents:latest` image. `latest` is release-only; main-branch builds are explicit `dev-<short_sha>` tags. The image is built from the multi-stage Dockerfile and includes Claude Code, Codex, git, GitHub CLI, Go, Rust/Cargo, Node/npm, TypeScript, and the daemon. Runs as non-root `agents` user. Default CMD is `--db /var/lib/agents/agents.db`. Compose mounts:
+The default compose file pulls the published `ghcr.io/eloylp/agents:latest` daemon image. `latest` is release-only; main-branch builds are explicit `dev-<short_sha>` tags. The Dockerfile also builds `ghcr.io/eloylp/agents-runner`, which contains Claude Code, Codex, git, GitHub CLI, Go, Rust/Cargo, Node/npm, TypeScript, and runner tools. The daemon image is the minimal control plane. Default CMD is `--db /var/lib/agents/agents.db`. Compose mounts:
 - `agents-data` named volume → `/var/lib/agents` (SQLite database persistence)
-- `agents-home` named volume → `/home/agents` (Claude / Codex auth, MCP config, and gh auth; populated by `docker compose exec -it agents agents-setup` once during setup, no host bind-mount of `~/.claude.json` etc.). GitHub access should flow through MCP first; authenticated gh is kept as fallback for complex workflows that need a local checkout/test/PR loop.
+- `/var/run/docker.sock` → `/var/run/docker.sock` so the daemon can create ephemeral runner containers. This is root-equivalent access to the Docker host and must be treated as a serious deployment boundary.
+
+The daemon image itself defaults to the non-root `agents` user, but the shipped Compose file sets `user: "0:0"` so Docker socket access works on hosts where `/var/run/docker.sock` belongs to a host-specific `docker` group ID. Operators who replace this with a group-based setup must ensure the daemon can create and remove runner containers before enabling scheduled runs.
 
 YAML config is import/export only, not a runtime input. To seed an empty fleet, POST a YAML payload at `/import`.
 
 ## Environment Variables
 
 - `GITHUB_WEBHOOK_SECRET`, HMAC shared secret for the webhook receiver.
-- `GITHUB_TOKEN`, Personal Access Token used by the GitHub MCP server inside the container, by the `gh` CLI fallback, and forwarded into AI backend subprocesses through the env allowlist (`internal/ai/cmdrunner.go`). Required by `scripts/setup.sh` (hard-fails if unset). `repo` scope minimum; add `workflow` if agents touch CI. Codex resolves it at runtime; Claude stores it in `~/.claude.json`; `gh auth login --with-token` runs during setup so agents have a working CLI fallback when GitHub MCP tools fail to register. All credentials live on the `agents-home` volume.
+- `GITHUB_TOKEN`, Personal Access Token injected into runner containers for GitHub MCP and `gh` fallback. `repo` scope minimum; add `workflow` if agents touch CI.
+- Claude credentials: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN`.
+- Codex credentials: `OPENAI_API_KEY` or `CODEX_ACCESS_TOKEN`.
 - Daemon runtime settings can be overridden at startup with `AGENTS_*` env vars for log, HTTP, processor, and dispatch fields. See `docs/configuration.md` for the full mapping. Empty env vars are ignored, and changes still require a process/container restart.
 
 ## Architecture Notes
@@ -117,7 +120,7 @@ YAML config is import/export only, not a runtime input. To seed an empty fleet, 
 - Backend resolution: agents must explicitly name a backend (no `auto` behavior). Built-ins are `claude` and `codex`; additional local backends are named entries with `local_model_url`.
 - Startup auto-discovery runs only when the backends table is empty. Manual refresh is explicit via `POST /backends/discover`.
 - Runtime guardrail: if an agent pins a model not present in its backend's DB model catalog, the run fails fast with an actionable error (and the agent appears in orphan reports).
-- Local-model routing is configured via `local_model_url`; the daemon injects `ANTHROPIC_BASE_URL` for that backend at runtime. See [`docs/local-models.md`](docs/local-models.md).
+- Local-model routing is configured via `local_model_url`; the daemon injects `ANTHROPIC_BASE_URL` into the runner container for that backend at runtime. The URL must be reachable from the runner container. See [`docs/local-models.md`](docs/local-models.md).
 - **Reactive inter-agent dispatch**: agents can return a `dispatch: [{agent, number, reason}]` array in their JSON response to invoke other agents. Enqueued as synthetic `agent.dispatch` events. Target must opt in via `allow_dispatch: true`; originator must whitelist targets in `can_dispatch: [...]`. Safety limits are process-owned daemon settings configured by `AGENTS_DISPATCH_MAX_DEPTH`, `AGENTS_DISPATCH_MAX_FANOUT`, and `AGENTS_DISPATCH_DEDUP_WINDOW_SECONDS`. The originating agent's prompt receives an `## Available experts` roster listing dispatchable targets.
 - **Prompt guardrails**: the `guardrails` table holds reusable policy blocks, and `workspace_guardrails` selects the ordered subset rendered for each workspace. The renderer combines mandatory dynamic workspace/repository boundary guidance and selected workspace guardrails in one guardrails section ahead of skills and selected prompt content. Operators can edit the reusable catalog and manage selected workspace references via the `Guardrails` tab in `/ui/config`, the REST surface, or the MCP tools.
 - **Token budgets**: token caps over daily/weekly/monthly UTC calendar periods for global, workspace, repo, agent, backend, and workspace-combined scopes (`workspace+repo`, `workspace+agent`, `workspace+backend`, `workspace+repo+agent`). Checked before each agent run through the concrete SQLite store; fail-open with error logging so a broken `token_budgets` table never blocks runs. Alert thresholds (0 = disabled, 1-100 = percentage of cap) drive the NavBar danger banner. Token leaderboard aggregates per-agent usage from the `traces` table, including total tokens, run count, and average tokens per run. Budget CRUD is exposed at `/token_budgets` (REST) and via the `list_token_budgets`, `create_token_budget`, `update_token_budget`, `delete_token_budget` MCP tools. `PATCH /token_budgets/{id}` and `update_token_budget` are partial-update surfaces. The `get_token_leaderboard` MCP tool and `GET /token_leaderboard` endpoint aggregate per-agent usage. Budgets are included in `/export` and `/import` round-trips.

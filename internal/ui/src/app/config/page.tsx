@@ -27,6 +27,7 @@ interface BackendsDiscoveryResponse {
   backends?: Backend[]
   tools?: ToolStatus[]
   github_cli?: ToolStatus
+  runtime?: RuntimeDiagnostic
 }
 
 interface ToolStatus {
@@ -35,6 +36,14 @@ interface ToolStatus {
   command?: string
   version?: string
   authenticated?: boolean
+  healthy?: boolean
+  detail?: string
+}
+
+interface RuntimeDiagnostic {
+  runner_image: string
+  docker_available?: boolean
+  image_available?: boolean
   healthy?: boolean
   detail?: string
 }
@@ -60,6 +69,25 @@ interface Agent {
 
 interface Repo {
   name: string
+}
+
+interface RuntimeConstraints {
+  cpus?: string
+  memory?: string
+  pids_limit?: number
+  timeout_seconds?: number
+  network_mode?: string
+}
+
+interface RuntimeSettings {
+  runner_image: string
+  constraints: RuntimeConstraints
+}
+
+interface WorkspaceRuntime {
+  id: string
+  name: string
+  runner_image?: string
 }
 
 interface TokenBudget {
@@ -265,7 +293,7 @@ export default function ConfigPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [raw, setRaw] = useState(false)
-  const [tab, setTab] = useState<'inspector' | 'authentication' | 'backends' | 'guardrails' | 'import-export' | 'tokens'>('inspector')
+  const [tab, setTab] = useState<'inspector' | 'authentication' | 'runtime' | 'backends' | 'guardrails' | 'import-export' | 'tokens'>('inspector')
 
   const [backends, setBackends] = useState<Backend[]>([])
   const [tools, setTools] = useState<ToolStatus[]>([])
@@ -281,12 +309,20 @@ export default function ConfigPage() {
   const [errorDialog, setErrorDialog] = useState<{ title: string; message: string } | null>(null)
   const [localBackendModalOpen, setLocalBackendModalOpen] = useState(false)
   const [localBackendName, setLocalBackendName] = useState('claude_local')
-  const [localBackendURL, setLocalBackendURL] = useState('http://localhost:8080/v1/messages')
+  const [localBackendURL, setLocalBackendURL] = useState('http://anthropic-bridge:8080/v1/messages')
   const [deleteTarget, setDeleteTarget] = useState<Backend | null>(null)
   const [settingsTarget, setSettingsTarget] = useState<Backend | null>(null)
   const [settingsTimeout, setSettingsTimeout] = useState('600')
   const [settingsMaxPromptChars, setSettingsMaxPromptChars] = useState('12000')
   const [settingsLocalModelURL, setSettingsLocalModelURL] = useState('')
+  const [runtime, setRuntime] = useState<RuntimeSettings | null>(null)
+  const [runtimeForm, setRuntimeForm] = useState<RuntimeSettings>({ runner_image: '', constraints: {} })
+  const [workspaceRunnerImage, setWorkspaceRunnerImage] = useState('')
+  const [runtimeLoading, setRuntimeLoading] = useState(false)
+  const [runtimeSaving, setRuntimeSaving] = useState(false)
+  const [runtimeError, setRuntimeError] = useState('')
+  const [runtimeStatus, setRuntimeStatus] = useState('')
+  const [backendRuntime, setBackendRuntime] = useState<RuntimeDiagnostic | null>(null)
 
   const [importStatus, setImportStatus] = useState('')
   const [importError, setImportError] = useState('')
@@ -329,7 +365,7 @@ export default function ConfigPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const requestedTab = params.get('tab')
-    if (requestedTab === 'inspector' || requestedTab === 'backends' || requestedTab === 'guardrails' || requestedTab === 'import-export' || requestedTab === 'tokens') {
+    if (requestedTab === 'inspector' || requestedTab === 'authentication' || requestedTab === 'runtime' || requestedTab === 'backends' || requestedTab === 'guardrails' || requestedTab === 'import-export' || requestedTab === 'tokens') {
       setTab(requestedTab)
     }
     setLbRepo(params.get('repo') ?? '')
@@ -362,6 +398,7 @@ export default function ConfigPage() {
 
         setBackends(dbData)
         setTools(diagTools)
+        setBackendRuntime(diagData.runtime ?? null)
         setBackendDriftWarnings(buildBackendDriftWarnings(dbData, diagBackends))
         setOrphanedAgents(orphanAgents)
         setOrphanModelSelection(prev => {
@@ -382,6 +419,109 @@ export default function ConfigPage() {
         setBackends([])
         setTools([])
         setBackendsLoading(false)
+      })
+  }
+
+  const workspaces = ((config?.workspaces as WorkspaceRuntime[] | undefined) ?? [])
+  const selectedWorkspaceRuntime = workspaces.find(w => w.id === workspace)
+
+  const loadRuntime = () => {
+    setRuntimeLoading(true)
+    setRuntimeError('')
+    fetch('/runtime')
+      .then(async r => {
+        if (!r.ok) throw new Error((await r.text()) || 'Failed to load runtime settings')
+        return r.json()
+      })
+      .then((data: RuntimeSettings) => {
+        const normalized = { ...data, constraints: data.constraints ?? {} }
+        setRuntime(normalized)
+        setRuntimeForm(normalized)
+        setWorkspaceRunnerImage(selectedWorkspaceRuntime?.runner_image ?? '')
+        setRuntimeLoading(false)
+      })
+      .catch((e: unknown) => {
+        setRuntimeError(String(e))
+        setRuntimeLoading(false)
+      })
+  }
+
+  useEffect(() => {
+    if (tab === 'runtime' && !runtime && !runtimeLoading) {
+      loadRuntime()
+    }
+  }, [tab, runtime, runtimeLoading])
+
+  useEffect(() => {
+    setWorkspaceRunnerImage(selectedWorkspaceRuntime?.runner_image ?? '')
+  }, [workspace, selectedWorkspaceRuntime?.runner_image])
+
+  const updateRuntimeConstraint = (key: keyof RuntimeConstraints, value: string) => {
+    setRuntimeForm(prev => {
+      const constraints = { ...prev.constraints }
+      if (key === 'pids_limit' || key === 'timeout_seconds') {
+        const trimmed = value.trim()
+        if (trimmed === '') delete constraints[key]
+        else constraints[key] = Number(trimmed)
+      } else {
+        constraints[key] = value
+      }
+      return { ...prev, constraints }
+    })
+  }
+
+  const saveRuntime = () => {
+    setRuntimeSaving(true)
+    setRuntimeError('')
+    setRuntimeStatus('')
+    fetch('/runtime', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(runtimeForm),
+    })
+      .then(async r => {
+        if (!r.ok) throw new Error((await r.text()) || 'Failed to save runtime settings')
+        return r.json()
+      })
+      .then((data: RuntimeSettings) => {
+        const normalized = { ...data, constraints: data.constraints ?? {} }
+        setRuntime(normalized)
+        setRuntimeForm(normalized)
+        setRuntimeStatus('Runtime settings saved.')
+        setRuntimeSaving(false)
+      })
+      .catch((e: unknown) => {
+        setRuntimeError(String(e))
+        setRuntimeSaving(false)
+      })
+  }
+
+  const saveWorkspaceRuntime = () => {
+    setRuntimeSaving(true)
+    setRuntimeError('')
+    setRuntimeStatus('')
+    fetch(`/workspaces/${encodeURIComponent(workspace)}/runtime`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runner_image: workspaceRunnerImage }),
+    })
+      .then(async r => {
+        if (!r.ok) throw new Error((await r.text()) || 'Failed to save workspace runtime settings')
+        return r.json()
+      })
+      .then((data: WorkspaceRuntime) => {
+        setConfig(prev => {
+          if (!prev) return prev
+          const current = ((prev.workspaces as WorkspaceRuntime[] | undefined) ?? [])
+          return { ...prev, workspaces: current.map(w => w.id === data.id ? data : w) }
+        })
+        setWorkspaceRunnerImage(data.runner_image ?? '')
+        setRuntimeStatus('Workspace runner override saved.')
+        setRuntimeSaving(false)
+      })
+      .catch((e: unknown) => {
+        setRuntimeError(String(e))
+        setRuntimeSaving(false)
       })
   }
 
@@ -763,6 +903,7 @@ export default function ConfigPage() {
       <div style={{ display: 'flex', gap: '0', marginBottom: '0', borderBottom: '1px solid var(--border)' }}>
         <button style={tabStyle('inspector')} onClick={() => setTab('inspector')}>Inspector</button>
         <button style={tabStyle('authentication')} onClick={() => setTab('authentication')}>Authentication</button>
+        <button style={tabStyle('runtime')} onClick={() => setTab('runtime')}>Runtime</button>
         <button style={tabStyle('backends')} onClick={() => setTab('backends')}>Backends and tools</button>
         <button style={tabStyle('guardrails')} onClick={() => setTab('guardrails')}>Guardrails</button>
         <button style={tabStyle('import-export')} onClick={() => setTab('import-export')}>Import / Export</button>
@@ -795,6 +936,102 @@ export default function ConfigPage() {
         </Card>
       )}
 
+      {tab === 'runtime' && (
+        <Card style={{ borderTopLeftRadius: 0 }}>
+          <div style={{ display: 'grid', gap: '1rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+              <div>
+                <h2 style={{ fontSize: '1rem', color: 'var(--text-heading)', marginBottom: '0.25rem' }}>Runner containers</h2>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                  Agent runs execute in fresh containers from the configured runner image.
+                </p>
+              </div>
+              <button
+                onClick={loadRuntime}
+                disabled={runtimeLoading}
+                style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)', padding: '6px 12px', borderRadius: '6px', cursor: runtimeLoading ? 'default' : 'pointer', fontSize: '0.8rem' }}
+              >
+                {runtimeLoading ? 'Loading…' : 'Refresh'}
+              </button>
+            </div>
+
+            {runtimeError && <div style={{ color: 'var(--text-danger)', fontSize: '0.875rem' }}>{runtimeError}</div>}
+            {runtimeStatus && <div style={{ color: 'var(--text-success)', fontSize: '0.875rem' }}>{runtimeStatus}</div>}
+
+            <div style={{ display: 'grid', gap: '0.75rem', maxWidth: '720px' }}>
+              <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
+                Global runner image
+                <input
+                  value={runtimeForm.runner_image}
+                  onChange={e => setRuntimeForm(prev => ({ ...prev, runner_image: e.target.value }))}
+                  placeholder="ghcr.io/eloylp/agents-runner:latest"
+                  style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text)', padding: '8px' }}
+                />
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.75rem' }}>
+                <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
+                  CPU limit
+                  <input value={runtimeForm.constraints?.cpus ?? ''} onChange={e => updateRuntimeConstraint('cpus', e.target.value)} placeholder="2 or 0.5" style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text)', padding: '8px' }} />
+                </label>
+                <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
+                  Memory
+                  <input value={runtimeForm.constraints?.memory ?? ''} onChange={e => updateRuntimeConstraint('memory', e.target.value)} placeholder="2g" style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text)', padding: '8px' }} />
+                </label>
+                <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
+                  PIDs
+                  <input type="number" min="0" value={runtimeForm.constraints?.pids_limit ?? ''} onChange={e => updateRuntimeConstraint('pids_limit', e.target.value)} placeholder="256" style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text)', padding: '8px' }} />
+                </label>
+                <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
+                  Timeout seconds
+                  <input type="number" min="0" value={runtimeForm.constraints?.timeout_seconds ?? ''} onChange={e => updateRuntimeConstraint('timeout_seconds', e.target.value)} placeholder="600" style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text)', padding: '8px' }} />
+                </label>
+                <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
+                  Network
+                  <select value={runtimeForm.constraints?.network_mode ?? ''} onChange={e => updateRuntimeConstraint('network_mode', e.target.value)} style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text)', padding: '8px' }}>
+                    <option value="">Default bridge</option>
+                    <option value="bridge">bridge</option>
+                    <option value="none">none</option>
+                    <option value="host">host</option>
+                  </select>
+                </label>
+              </div>
+              <button
+                onClick={saveRuntime}
+                disabled={runtimeSaving || runtimeLoading}
+                style={{ justifySelf: 'start', background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '7px 14px', borderRadius: '6px', cursor: runtimeSaving ? 'default' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+              >
+                {runtimeSaving ? 'Saving…' : 'Save runtime'}
+              </button>
+            </div>
+
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: '1rem', display: 'grid', gap: '0.75rem', maxWidth: '720px' }}>
+              <div>
+                <h3 style={{ fontSize: '0.95rem', color: 'var(--text-heading)', marginBottom: '0.25rem' }}>Workspace override</h3>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.825rem' }}>
+                  {selectedWorkspaceRuntime?.name ?? workspace} uses the global runner image unless an override is set.
+                </p>
+              </div>
+              <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
+                Runner image for this workspace
+                <input
+                  value={workspaceRunnerImage}
+                  onChange={e => setWorkspaceRunnerImage(e.target.value)}
+                  placeholder={runtime?.runner_image || 'Use global runner image'}
+                  style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text)', padding: '8px' }}
+                />
+              </label>
+              <button
+                onClick={saveWorkspaceRuntime}
+                disabled={runtimeSaving || runtimeLoading}
+                style={{ justifySelf: 'start', background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)', padding: '7px 14px', borderRadius: '6px', cursor: runtimeSaving ? 'default' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
+              >
+                Save workspace override
+              </button>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {tab === 'backends' && (
         <Card style={{ borderTopLeftRadius: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
@@ -812,7 +1049,7 @@ export default function ConfigPage() {
                 onClick={() => {
                   setSaveError('')
                   setLocalBackendName('claude_local')
-                  setLocalBackendURL('http://localhost:8080/v1/messages')
+                  setLocalBackendURL('http://anthropic-bridge:8080/v1/messages')
                   setLocalBackendModalOpen(true)
                 }}
                 style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)', padding: '5px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem' }}
@@ -986,6 +1223,21 @@ export default function ConfigPage() {
             </div>
 
             <div style={{ flex: '1 1 320px', minWidth: '280px' }}>
+              {backendRuntime && (
+                <div style={{ border: `1px solid ${backendRuntime.healthy ? 'var(--border-subtle)' : 'var(--border-danger)'}`, borderRadius: '6px', padding: '0.75rem', background: 'var(--bg)', marginBottom: '0.75rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                    <div style={{ fontWeight: 700, color: 'var(--text-heading)' }}>Runner runtime</div>
+                    <span style={healthBadgeStyle(backendRuntime.healthy)}>{backendRuntime.healthy ? 'healthy' : 'failed'}</span>
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px', overflowWrap: 'anywhere' }}>
+                    {backendRuntime.runner_image || 'runner image not configured'}
+                  </div>
+                  <div style={{ fontSize: '0.74rem', color: backendRuntime.docker_available ? 'var(--success)' : 'var(--text-danger)', marginTop: '2px' }}>
+                    Docker {backendRuntime.docker_available ? 'available' : 'unavailable'} · Image {backendRuntime.image_available ? 'present' : 'not present locally'}
+                  </div>
+                  {backendRuntime.detail && <div style={{ fontSize: '0.74rem', color: backendRuntime.healthy ? 'var(--text-faint)' : 'var(--text-danger)', marginTop: '2px', overflowWrap: 'anywhere' }}>{backendRuntime.detail}</div>}
+                </div>
+              )}
               <div style={{ border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '0.75rem', background: 'var(--bg)' }}>
                 <div style={{ fontWeight: 700, color: 'var(--text-heading)', marginBottom: '0.4rem' }}>Tools</div>
                 <p style={{ color: 'var(--text-faint)', fontSize: '0.78rem', marginTop: 0, marginBottom: '0.65rem' }}>
@@ -1237,7 +1489,7 @@ export default function ConfigPage() {
                 style={inputStyle}
                 value={localBackendURL}
                 onChange={e => setLocalBackendURL(e.target.value)}
-                placeholder="http://localhost:8080/v1/messages"
+                placeholder="http://anthropic-bridge:8080/v1/messages"
               />
             </div>
             <div style={{ border: '1px solid var(--border-subtle)', borderRadius: '6px', background: 'var(--bg)', padding: '0.7rem' }}>
@@ -1245,7 +1497,7 @@ export default function ConfigPage() {
               <ul style={{ margin: 0, paddingLeft: '1rem', color: 'var(--text-faint)', fontSize: '0.78rem', lineHeight: 1.45 }}>
                 <li>Strong fit today: reviewer/scout specialists. Action-heavy coder flows can be more conservative with write tools.</li>
                 <li>Local models can hallucinate templated facts (for example SHAs/statuses). Prompt for live verification before posting results.</li>
-                <li>This backend reuses your discovered Claude CLI and routes it to your local OpenAI-compatible endpoint.</li>
+                <li>This backend reuses the runner image's Claude CLI and routes it to an Anthropic-compatible endpoint reachable from the runner container.</li>
                 <li>Structured JSON schema is still enforced by the daemon, but output quality still depends on model capability.</li>
                 <li>If runs are long, raise timeouts (proxy/backend) so tool loops do not fail mid-run.</li>
               </ul>
@@ -1330,7 +1582,7 @@ export default function ConfigPage() {
                   type="url"
                   value={settingsLocalModelURL}
                   onChange={e => setSettingsLocalModelURL(e.target.value)}
-                  placeholder="http://localhost:8080/v1/messages"
+                  placeholder="http://anthropic-bridge:8080/v1/messages"
                 />
               </div>
             )}

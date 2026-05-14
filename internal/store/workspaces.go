@@ -11,7 +11,7 @@ import (
 
 // ReadWorkspaces returns all workspaces ordered by name.
 func ReadWorkspaces(db *sql.DB) ([]fleet.Workspace, error) {
-	rows, err := db.Query("SELECT id, name, description FROM workspaces ORDER BY name")
+	rows, err := db.Query("SELECT id, name, description, runner_image FROM workspaces ORDER BY name")
 	if err != nil {
 		return nil, fmt.Errorf("store: read workspaces: %w", err)
 	}
@@ -20,7 +20,7 @@ func ReadWorkspaces(db *sql.DB) ([]fleet.Workspace, error) {
 	var out []fleet.Workspace
 	for rows.Next() {
 		var w fleet.Workspace
-		if err := rows.Scan(&w.ID, &w.Name, &w.Description); err != nil {
+		if err := rows.Scan(&w.ID, &w.Name, &w.Description, &w.RunnerImage); err != nil {
 			return nil, fmt.Errorf("store: read workspaces: %w", err)
 		}
 		out = append(out, w)
@@ -46,14 +46,14 @@ func ReadWorkspace(db *sql.DB, workspace string) (fleet.Workspace, error) {
 		workspace = fleet.DefaultWorkspaceID
 	}
 	var w fleet.Workspace
-	err := db.QueryRow("SELECT id, name, description FROM workspaces WHERE id=?", workspace).Scan(&w.ID, &w.Name, &w.Description)
+	err := db.QueryRow("SELECT id, name, description, runner_image FROM workspaces WHERE id=?", workspace).Scan(&w.ID, &w.Name, &w.Description, &w.RunnerImage)
 	if err == nil {
 		return w, nil
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fleet.Workspace{}, fmt.Errorf("store: read workspace %q by id: %w", workspace, err)
 	}
-	err = db.QueryRow("SELECT id, name, description FROM workspaces WHERE name=?", workspace).Scan(&w.ID, &w.Name, &w.Description)
+	err = db.QueryRow("SELECT id, name, description, runner_image FROM workspaces WHERE name=?", workspace).Scan(&w.ID, &w.Name, &w.Description, &w.RunnerImage)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fleet.Workspace{}, &ErrNotFound{Msg: fmt.Sprintf("workspace %q not found", workspace)}
 	}
@@ -69,6 +69,7 @@ func UpsertWorkspace(db *sql.DB, w fleet.Workspace) (fleet.Workspace, error) {
 	w.ID = strings.TrimSpace(w.ID)
 	w.Name = strings.TrimSpace(w.Name)
 	w.Description = strings.TrimSpace(w.Description)
+	w.RunnerImage = strings.TrimSpace(w.RunnerImage)
 	if w.ID == "" {
 		id, err := derivedEntityID("", w.Name)
 		if err != nil {
@@ -88,13 +89,14 @@ func UpsertWorkspace(db *sql.DB, w fleet.Workspace) (fleet.Workspace, error) {
 	}
 	defer tx.Rollback()
 	if _, err := tx.Exec(`
-		INSERT INTO workspaces (id, name, description, updated_at)
-		VALUES (?, ?, ?, datetime('now'))
+		INSERT INTO workspaces (id, name, description, runner_image, updated_at)
+		VALUES (?, ?, ?, ?, datetime('now'))
 		ON CONFLICT(id) DO UPDATE SET
 			name = excluded.name,
 			description = excluded.description,
+			runner_image = excluded.runner_image,
 			updated_at = datetime('now')`,
-		w.ID, w.Name, w.Description,
+		w.ID, w.Name, w.Description, w.RunnerImage,
 	); err != nil {
 		if isUniqueConstraint(err) {
 			return fleet.Workspace{}, &ErrConflict{Msg: fmt.Sprintf("workspace name %q is already used by another workspace id", w.Name)}

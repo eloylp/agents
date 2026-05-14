@@ -46,14 +46,14 @@ internal/
 ├─ webhook/                     /webhooks/github only, HMAC, delivery dedup, event parsing
 ├─ mcp/                         MCP server; one Deps struct of concrete pointers
 ├─ ui/                          embedded Next.js dist/, served at /ui/
-└─ logging/, setup/             zerolog wiring, interactive setup
+└─ logging/                     zerolog wiring
 ```
 
 The tiers, from bottom to top:
 
 **Domain (zero or near-zero deps):** `fleet`, `config`, `store`, `logging`. Pure data shapes and persistence. `fleet` has no transitive deps at all, it's structs and pure functions like `NormalizeAgent`. `config` and `store` import `fleet`. `*store.Store` wraps the bare `*sql.DB`; runtime components hold the facade, not the connection.
 
-**Runtime engine:** `workflow`, `scheduler`, `ai`, `backends`, `anthropic_proxy`, `observe`. The actual fleet runtime. An event arrives on the queue, the processor pulls it, the engine looks up the right binding (or resolves the target agent from the payload), the AI runner invokes the CLI, the response is parsed, traces and steps are recorded, and any returned `dispatch` array is enqueued as new events.
+**Runtime engine:** `workflow`, `scheduler`, `ai`, `runtime`, `backends`, `anthropic_proxy`, `observe`. The actual fleet runtime. An event arrives on the queue, the processor pulls it, the engine looks up the right binding (or resolves the target agent from the payload), the AI runner starts a fresh execution container through the runtime abstraction, the CLI response is parsed, traces and steps are recorded, and any returned `dispatch` array is enqueued as new events.
 
 **HTTP layer:** `internal/daemon` and its sub-packages, plus `webhook` and `mcp`. Each domain handler is a small package with a constructor that takes its dependencies as concrete pointers and a `RegisterRoutes(router, withTimeout)` method. The composing root is `internal/daemon/daemon.go`, which constructs every component, holds them as fields on the `*Daemon` value, and registers all routes from one place.
 
@@ -150,6 +150,8 @@ The DB is the source of truth; the channel is just a notification. On a clean sh
 A consumer-tier cleanup loop ticks hourly and deletes rows whose `completed_at` is older than 7 days. The table stays bounded regardless of throughput.
 
 `internal/daemon/runners` exposes the table as a per-runner view through `GET /runners`, `DELETE /runners/{id}`, and `POST /runners/{id}/retry`. Each event_queue row is JOINed with `observe.traces` so a completed event that fanned out to N agents shows up as N rows on the wire (one per trace span). Completed events with no matching trace appear as one `skipped` row. In-flight events with no spans recorded yet appear as a single row with `agent: null` and `status: enqueued|running`, that's the "what's running right now" surface. Retry copies the source row's blob into a fresh row and pushes onto the channel, the source row stays as audit history; the same operations are wired as MCP tools.
+
+`internal/runtime` owns the execution-plane boundary. `workflow.Engine` resolves global runtime settings plus the workspace runner-image override, then builds an `ai.CommandRunner` backed by that runtime. The Docker implementation uses the Engine API through `/var/run/docker.sock`; workflow code depends only on repo-owned types (`ContainerSpec`, `Runner`, `ExitStatus`) and never imports Docker SDK types directly.
 
 ## Structured concurrency, startup and shutdown
 

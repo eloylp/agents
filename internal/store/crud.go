@@ -889,6 +889,9 @@ func importConfig(db *sql.DB, cfg *config.Config, budgets []TokenBudget, replace
 	if err := importBackends(tx, normalizedBackends); err != nil {
 		return err
 	}
+	if err := importRuntimeSettings(tx, cfg.Runtime); err != nil {
+		return err
+	}
 	if err := importGuardrails(tx, cfg.Guardrails); err != nil {
 		return err
 	}

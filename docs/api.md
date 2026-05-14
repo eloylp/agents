@@ -2,7 +2,7 @@
 
 This page documents the REST endpoints exposed by the daemon. The MCP (Model Context Protocol) server at `/mcp` has its own reference in [mcp.md](mcp.md).
 
-Sensitive endpoints require daemon auth. Browser clients use the `agents_session` `HttpOnly` cookie; REST and MCP clients send a DB-backed API token with `Authorization: Bearer <token>`. `/`, `/status`, `/webhooks/github`, `/auth/status`, `/auth/login`, `/auth/bootstrap`, and UI static assets remain public where applicable. The local-model proxy accepts unauthenticated loopback calls from backend subprocesses; remote proxy callers need daemon auth.
+Sensitive endpoints require daemon auth. Browser clients use the `agents_session` `HttpOnly` cookie; REST and MCP clients send a DB-backed API token with `Authorization: Bearer <token>`. `/`, `/status`, `/webhooks/github`, `/auth/status`, `/auth/login`, `/auth/bootstrap`, and UI static assets remain public where applicable. The local-model proxy accepts unauthenticated loopback calls only from direct daemon-host clients; runner containers are remote peers and need daemon auth if they call the proxy.
 
 ## Core endpoints
 
@@ -117,6 +117,16 @@ Guardrails are reusable policy catalog entries; workspaces choose which visible 
 
 Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL cache.
 
+## Runtime settings
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/runtime` | Read global runner image and container constraints. |
+| `PUT/PATCH` | `/runtime` | Replace global runner image and constraints. Secret values are not accepted here. |
+| `PUT/PATCH` | `/workspaces/{workspace}/runtime` | Set or clear the selected workspace's runner image override. |
+
+Runtime settings are also included in `/config`, `/export`, and `/import`. Credentials are daemon environment variables and are never returned by these routes.
+
 ## AI runner contract
 
-The contract between the daemon and the AI CLI subprocess (prompt composition, structured JSON output, schema enforcement) is documented in [mental-model.md](mental-model.md).
+The contract between the daemon and the AI CLI subprocess inside the ephemeral runner container (prompt composition, structured JSON output, schema enforcement) is documented in [mental-model.md](mental-model.md).

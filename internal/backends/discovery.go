@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"slices"
 	"strings"
@@ -14,13 +13,19 @@ import (
 	"time"
 
 	"github.com/eloylp/agents/internal/fleet"
+	runtimeexec "github.com/eloylp/agents/internal/runtime"
 	"github.com/eloylp/agents/internal/store"
+	"github.com/rs/zerolog"
 )
 
 const (
 	ClaudeName      = "claude"
 	CodexName       = "codex"
 	ClaudeLocalName = "claude_local"
+
+	diagnosticHome       = runtimeexec.RunnerTempMount + "/home"
+	diagnosticConfigHome = runtimeexec.RunnerTempMount + "/config"
+	diagnosticCodexHome  = runtimeexec.RunnerTempMount + "/codex"
 )
 
 var (
@@ -61,9 +66,18 @@ type Diagnostics struct {
 	GeneratedAt time.Time       `json:"generated_at"`
 	Backends    []BackendStatus `json:"backends"`
 	Tools       []ToolStatus    `json:"tools"`
+	Runtime     *RuntimeStatus  `json:"runtime,omitempty"`
 	// GitHubCLI is kept as a compatibility alias for older UI/client code that
 	// read the pre-tools diagnostic field directly.
 	GitHubCLI *ToolStatus `json:"github_cli,omitempty"`
+}
+
+type RuntimeStatus struct {
+	RunnerImage     string `json:"runner_image"`
+	DockerAvailable bool   `json:"docker_available"`
+	ImageAvailable  bool   `json:"image_available"`
+	Healthy         bool   `json:"healthy"`
+	Detail          string `json:"detail,omitempty"`
 }
 
 // AutoDiscoverIfBackendsMissing runs discovery and persists results only
@@ -90,16 +104,52 @@ func DiscoverAndPersist(ctx context.Context, st *store.Store) (Diagnostics, erro
 	if err != nil {
 		return Diagnostics{}, err
 	}
-	diag := RunDiagnostics(ctx, existing)
+	settings, err := st.ReadRuntimeSettings()
+	if err != nil {
+		return Diagnostics{}, err
+	}
+	diag := RunDiagnosticsWithRuntime(ctx, existing, settings)
 	if err := persistDiagnostics(st, existing, diag); err != nil {
 		return Diagnostics{}, err
 	}
 	return diag, nil
 }
 
-// RunDiagnostics executes live discovery checks without mutating the store.
-func RunDiagnostics(ctx context.Context, existing map[string]fleet.Backend) Diagnostics {
+func RunDiagnosticsWithRuntime(ctx context.Context, existing map[string]fleet.Backend, settings fleet.RuntimeSettings) Diagnostics {
 	diag := Diagnostics{GeneratedAt: time.Now().UTC()}
+	fleet.NormalizeRuntimeSettings(&settings)
+	status := RuntimeStatus{RunnerImage: settings.RunnerImage}
+	dockerRunner, err := runtimeexec.NewDocker(zerolog.Nop())
+	if err != nil {
+		status.Detail = "docker unavailable: " + err.Error()
+		diag.Runtime = &status
+		fillRuntimeUnavailable(&diag, existing, status.Detail)
+		return diag
+	}
+	if err := dockerRunner.EnsureImage(ctx, settings.RunnerImage); err != nil {
+		runtimeDiag := dockerRunner.Diagnose(ctx, settings.RunnerImage)
+		status.DockerAvailable = runtimeDiag.DockerAvailable
+		status.ImageAvailable = runtimeDiag.ImageAvailable
+		status.Detail = err.Error()
+		diag.Runtime = &status
+		fillRuntimeUnavailable(&diag, existing, status.Detail)
+		return diag
+	}
+	runtimeDiag := dockerRunner.Diagnose(ctx, settings.RunnerImage)
+	status.DockerAvailable = runtimeDiag.DockerAvailable
+	status.ImageAvailable = runtimeDiag.ImageAvailable
+	status.Healthy = runtimeDiag.DockerAvailable && runtimeDiag.ImageAvailable
+	status.Detail = runtimeDiag.Detail
+	diag.Runtime = &status
+	if status.Healthy {
+		fillRuntimeDiagnostics(ctx, &diag, dockerRunner, existing, settings)
+	} else {
+		fillRuntimeUnavailable(&diag, existing, status.Detail)
+	}
+	return diag
+}
+
+func fillRuntimeDiagnostics(ctx context.Context, diag *Diagnostics, runner runtimeexec.Runner, existing map[string]fleet.Backend, settings fleet.RuntimeSettings) {
 	type backendTarget struct {
 		name             string
 		commandName      string
@@ -113,7 +163,6 @@ func RunDiagnostics(ctx context.Context, existing map[string]fleet.Backend) Diag
 			name:             name,
 			commandName:      name,
 			preferredCommand: cfg.Command,
-			localURL:         "",
 		})
 	}
 	for name, cfg := range existing {
@@ -136,13 +185,13 @@ func RunDiagnostics(ctx context.Context, existing map[string]fleet.Backend) Diag
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		toolsOut = diagnoseTools(ctx)
+		toolsOut = diagnoseToolsInRuntime(ctx, runner, settings)
 	}()
 	for _, target := range targets {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			status := diagnoseBackend(ctx, target.name, target.commandName, target.preferredCommand, target.localURL)
+			status := diagnoseBackendInRuntime(ctx, runner, settings, target.name, target.commandName, target.preferredCommand, target.localURL)
 			outMu.Lock()
 			backendsOut = append(backendsOut, status)
 			outMu.Unlock()
@@ -162,19 +211,30 @@ func RunDiagnostics(ctx context.Context, existing map[string]fleet.Backend) Diag
 			break
 		}
 	}
-	return diag
 }
 
-func diagnoseTools(ctx context.Context) []ToolStatus {
+func fillRuntimeUnavailable(diag *Diagnostics, existing map[string]fleet.Backend, detail string) {
+	diag.Backends = unavailableBackendStatuses(existing, detail)
+	diag.Tools = unavailableToolStatuses(detail)
+	for i := range diag.Tools {
+		if diag.Tools[i].Name == "github_cli" {
+			gh := diag.Tools[i]
+			diag.GitHubCLI = &gh
+			break
+		}
+	}
+}
+
+func diagnoseToolsInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings) []ToolStatus {
 	tools := []ToolStatus{
-		diagnoseGitHubCLI(ctx),
-		diagnoseVersionedTool(ctx, "git", "git", []string{"--version"}),
-		diagnoseVersionedTool(ctx, "go", "go", []string{"version"}),
-		diagnoseVersionedTool(ctx, "rustc", "rustc", []string{"--version"}),
-		diagnoseVersionedTool(ctx, "cargo", "cargo", []string{"--version"}),
-		diagnoseVersionedTool(ctx, "node", "node", []string{"--version"}),
-		diagnoseVersionedTool(ctx, "npm", "npm", []string{"--version"}),
-		diagnoseVersionedTool(ctx, "typescript", "tsc", []string{"--version"}),
+		diagnoseGitHubCLIInRuntime(ctx, runner, settings),
+		diagnoseVersionedToolInRuntime(ctx, runner, settings, "git", "git", []string{"--version"}),
+		diagnoseVersionedToolInRuntime(ctx, runner, settings, "go", "go", []string{"version"}),
+		diagnoseVersionedToolInRuntime(ctx, runner, settings, "rustc", "rustc", []string{"--version"}),
+		diagnoseVersionedToolInRuntime(ctx, runner, settings, "cargo", "cargo", []string{"--version"}),
+		diagnoseVersionedToolInRuntime(ctx, runner, settings, "node", "node", []string{"--version"}),
+		diagnoseVersionedToolInRuntime(ctx, runner, settings, "npm", "npm", []string{"--version"}),
+		diagnoseVersionedToolInRuntime(ctx, runner, settings, "typescript", "tsc", []string{"--version"}),
 	}
 	slices.SortFunc(tools, func(a, b ToolStatus) int {
 		return strings.Compare(a.Name, b.Name)
@@ -182,22 +242,22 @@ func diagnoseTools(ctx context.Context) []ToolStatus {
 	return tools
 }
 
-func diagnoseVersionedTool(ctx context.Context, name, command string, args []string) ToolStatus {
-	path, detected := resolveCommand(command, "")
+func diagnoseVersionedToolInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings, name, command string, args []string) ToolStatus {
+	path, detected := resolveCommandInRuntime(ctx, runner, settings, command, "")
 	status := ToolStatus{
 		Name:     name,
 		Detected: detected,
 		Command:  path,
 	}
 	if !detected {
-		status.Detail = command + " binary not found on PATH"
+		status.Detail = command + " binary not found in runner image"
 		return status
 	}
-	stdout, stderr, err := runToolCommand(ctx, path, args, nil)
+	stdout, stderr, err := runToolCommandInRuntime(ctx, runner, settings, path, args, nil)
 	status.Version = firstNonEmptyLine(stdout, stderr)
 	status.Healthy = err == nil
 	if err != nil {
-		status.Detail = "version check failed: " + firstNonEmptyLine(stderr, stdout, err.Error())
+		status.Detail = "runner version check failed: " + firstNonEmptyLine(stderr, stdout, err.Error())
 	} else if status.Version != "" {
 		status.Detail = "version: " + status.Version
 	} else {
@@ -206,22 +266,22 @@ func diagnoseVersionedTool(ctx context.Context, name, command string, args []str
 	return status
 }
 
-func diagnoseGitHubCLI(ctx context.Context) ToolStatus {
-	path, detected := resolveCommand("gh", "")
+func diagnoseGitHubCLIInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings) ToolStatus {
+	path, detected := resolveCommandInRuntime(ctx, runner, settings, "gh", "")
 	status := ToolStatus{
 		Name:     "github_cli",
 		Detected: detected,
 		Command:  path,
 	}
 	if !detected {
-		status.Detail = "gh binary not found on PATH"
+		status.Detail = "gh binary not found in runner image"
 		return status
 	}
 
-	versionOut, versionErr, versionRunErr := runToolCommand(ctx, path, []string{"--version"}, nil)
+	versionOut, versionErr, versionRunErr := runToolCommandInRuntime(ctx, runner, settings, path, []string{"--version"}, nil)
 	status.Version = firstNonEmptyLine(versionOut, versionErr)
 
-	authOut, authErr, authRunErr := runToolCommand(ctx, path, []string{"auth", "status", "--hostname", "github.com"}, nil)
+	authOut, authErr, authRunErr := runToolCommandInRuntime(ctx, runner, settings, path, []string{"auth", "status", "--hostname", "github.com"}, nil)
 	authDetail := firstNonEmptyLine(authOut, authErr)
 	if authDetail == "" {
 		authDetail = firstNonEmptyLine(authRunErrString(authRunErr))
@@ -237,7 +297,7 @@ func diagnoseGitHubCLI(ctx context.Context) ToolStatus {
 			details = append(details, "version: ok")
 		}
 	} else {
-		details = append(details, "version check failed: "+firstNonEmptyLine(versionErr, versionOut, versionRunErr.Error()))
+		details = append(details, "runner version check failed: "+firstNonEmptyLine(versionErr, versionOut, versionRunErr.Error()))
 	}
 	if status.Authenticated {
 		details = append(details, "auth: authenticated")
@@ -250,42 +310,8 @@ func diagnoseGitHubCLI(ctx context.Context) ToolStatus {
 	return status
 }
 
-func authRunErrString(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
-}
-
-func persistDiagnostics(st *store.Store, existing map[string]fleet.Backend, diag Diagnostics) error {
-	for _, b := range diag.Backends {
-		prev, hadPrev := existing[b.Name]
-		if !b.Detected && !hadPrev {
-			// No newly detected command and no prior record to update.
-			continue
-		}
-
-		next := prev
-		if b.Command != "" {
-			next.Command = b.Command
-		}
-		next.Version = b.Version
-		next.Models = b.Models
-		next.Healthy = b.Healthy
-		next.HealthDetail = b.HealthDetail
-		next.LocalModelURL = b.LocalModelURL
-		fleet.ApplyBackendDefaults(&next)
-		fleet.NormalizeBackend(&next)
-
-		if err := st.UpsertBackend(b.Name, next); err != nil {
-			return fmt.Errorf("persist backend %s: %w", b.Name, err)
-		}
-	}
-	return nil
-}
-
-func diagnoseBackend(ctx context.Context, backendName, commandName, preferredCommand, localURL string) BackendStatus {
-	path, detected := resolveCommand(commandName, preferredCommand)
+func diagnoseBackendInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings, backendName, commandName, preferredCommand, localURL string) BackendStatus {
+	path, detected := resolveCommandInRuntime(ctx, runner, settings, commandName, preferredCommand)
 	status := BackendStatus{
 		Name:          backendName,
 		Detected:      detected,
@@ -294,7 +320,7 @@ func diagnoseBackend(ctx context.Context, backendName, commandName, preferredCom
 	}
 	if !detected {
 		status.Healthy = false
-		status.HealthDetail = fmt.Sprintf("%s binary not found on PATH", commandName)
+		status.HealthDetail = fmt.Sprintf("%s binary not found in runner image", commandName)
 		return status
 	}
 
@@ -303,14 +329,14 @@ func diagnoseBackend(ctx context.Context, backendName, commandName, preferredCom
 		env["ANTHROPIC_BASE_URL"] = localURL
 	}
 
-	versionOut, versionErr, versionRunErr := runToolCommand(ctx, path, []string{"--version"}, env)
+	versionOut, versionErr, versionRunErr := runToolCommandInRuntime(ctx, runner, settings, path, []string{"--version"}, env)
 	versionOK := versionRunErr == nil
 	status.Version = firstNonEmptyLine(versionOut, versionErr)
 
-	models, modelsDetail := discoverModels(ctx, commandName, path, env)
+	models, modelsDetail := discoverModelsInRuntime(ctx, runner, settings, commandName, path, env)
 	status.Models = models
 
-	mcpDetail := checkGitHubMCP(ctx, path, env)
+	mcpDetail := checkGitHubMCPInRuntime(ctx, runner, settings, path, env)
 	status.Healthy = versionOK
 
 	details := make([]string, 0, 3)
@@ -321,7 +347,7 @@ func diagnoseBackend(ctx context.Context, backendName, commandName, preferredCom
 			details = append(details, "version: ok")
 		}
 	} else {
-		details = append(details, "version check failed: "+firstNonEmptyLine(versionErr, versionOut))
+		details = append(details, "runner version check failed: "+firstNonEmptyLine(versionErr, versionOut))
 	}
 	if mcpDetail != "" {
 		details = append(details, mcpDetail)
@@ -333,14 +359,14 @@ func diagnoseBackend(ctx context.Context, backendName, commandName, preferredCom
 	return status
 }
 
-func discoverModels(ctx context.Context, backendName, command string, env map[string]string) ([]string, string) {
+func discoverModelsInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings, backendName, command string, env map[string]string) ([]string, string) {
 	commands := modelCommands(backendName)
 	if len(commands) == 0 {
 		return nil, "models discovery not supported"
 	}
 	failures := make([]string, 0, len(commands))
 	for _, args := range commands {
-		stdout, stderr, err := runToolCommand(ctx, command, args, env)
+		stdout, stderr, err := runToolCommandInRuntime(ctx, runner, settings, command, args, env)
 		if err != nil {
 			detail := firstNonEmptyLine(stderr, stdout, err.Error())
 			if detail == "" {
@@ -362,6 +388,65 @@ func discoverModels(ctx context.Context, backendName, command string, env map[st
 	return nil, "models discovery failed: " + failures[0]
 }
 
+func checkGitHubMCPInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings, command string, env map[string]string) string {
+	stdout, stderr, err := runToolCommandInRuntime(ctx, runner, settings, command, []string{"mcp", "list"}, env)
+	if err != nil {
+		detail := firstNonEmptyLine(stderr, stdout)
+		if detail == "" {
+			detail = err.Error()
+		}
+		return "mcp check failed in runner: " + detail
+	}
+	hasGitHub, connected := parseGitHubMCPStatus(stdout + "\n" + stderr)
+	if connected {
+		return "github MCP: connected"
+	}
+	if hasGitHub {
+		return "github MCP: found but disconnected"
+	}
+	return "github MCP: not configured"
+}
+
+func authRunErrString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func persistDiagnostics(st *store.Store, existing map[string]fleet.Backend, diag Diagnostics) error {
+	for _, b := range diag.Backends {
+		prev, hadPrev := existing[b.Name]
+		if !b.Detected && !hadPrev {
+			if !slices.Contains(builtinBackendNames, b.Name) {
+				// No newly detected command and no prior record to update.
+				continue
+			}
+			// Keep built-in backend rows available even when runner diagnostics
+			// cannot prove availability yet. The configured runner image remains
+			// the authority on whether those commands are healthy.
+			b.Command = b.Name
+		}
+
+		next := prev
+		if b.Command != "" {
+			next.Command = b.Command
+		}
+		next.Version = b.Version
+		next.Models = b.Models
+		next.Healthy = b.Healthy
+		next.HealthDetail = b.HealthDetail
+		next.LocalModelURL = b.LocalModelURL
+		fleet.ApplyBackendDefaults(&next)
+		fleet.NormalizeBackend(&next)
+
+		if err := st.UpsertBackend(b.Name, next); err != nil {
+			return fmt.Errorf("persist backend %s: %w", b.Name, err)
+		}
+	}
+	return nil
+}
+
 func modelCommands(name string) [][]string {
 	switch {
 	case strings.HasPrefix(name, "claude"):
@@ -380,25 +465,6 @@ func modelCommands(name string) [][]string {
 			{"models", "list"},
 		}
 	}
-}
-
-func checkGitHubMCP(ctx context.Context, command string, env map[string]string) string {
-	stdout, stderr, err := runToolCommand(ctx, command, []string{"mcp", "list"}, env)
-	if err != nil {
-		detail := firstNonEmptyLine(stderr, stdout)
-		if detail == "" {
-			detail = err.Error()
-		}
-		return "mcp check failed: " + detail
-	}
-	hasGitHub, connected := parseGitHubMCPStatus(stdout + "\n" + stderr)
-	if connected {
-		return "github MCP: connected"
-	}
-	if hasGitHub {
-		return "github MCP: found but disconnected"
-	}
-	return "github MCP: not configured"
 }
 
 func parseGitHubMCPStatus(output string) (hasGitHub bool, connected bool) {
@@ -544,18 +610,30 @@ func dedupeSorted(in []string) []string {
 	return out
 }
 
-func resolveCommand(defaultName, preferred string) (string, bool) {
+func resolveCommandInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings, defaultName, preferred string) (string, bool) {
 	preferred = strings.TrimSpace(preferred)
 	if preferred != "" {
-		if p, err := exec.LookPath(preferred); err == nil {
-			return p, true
+		if path, ok := commandPathInRuntime(ctx, runner, settings, preferred); ok {
+			return path, true
 		}
 	}
-	p, err := exec.LookPath(defaultName)
+	return commandPathInRuntime(ctx, runner, settings, defaultName)
+}
+
+func commandPathInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings, command string) (string, bool) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return "", false
+	}
+	stdout, _, err := runShellInRuntime(ctx, runner, settings, "command -v "+shellQuote(command), nil)
 	if err != nil {
 		return "", false
 	}
-	return p, true
+	path := firstNonEmptyLine(stdout)
+	if path == "" {
+		return "", false
+	}
+	return path, true
 }
 
 func firstNonEmptyLine(values ...string) string {
@@ -570,30 +648,162 @@ func firstNonEmptyLine(values ...string) string {
 	return ""
 }
 
-func runToolCommand(ctx context.Context, command string, args []string, env map[string]string) (string, string, error) {
+func runToolCommandInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings, command string, args []string, env map[string]string) (string, string, error) {
+	return runShellInRuntime(ctx, runner, settings, "exec "+shellJoin(command, args), env)
+}
+
+func runShellInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings, script string, env map[string]string) (string, string, error) {
 	runCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, command, args...)
-	cmd.Env = mergeEnv(os.Environ(), env)
-	if home, err := os.UserHomeDir(); err == nil {
-		cmd.Dir = home
-	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	return strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), err
+	policy := settings.Constraints
+	policy.TimeoutSeconds = 0
+	status, err := runner.Run(runCtx, runtimeexec.ContainerSpec{
+		Image:      settings.RunnerImage,
+		Command:    []string{"/bin/sh", "-lc", "mkdir -p " + shellQuote(diagnosticHome) + " " + shellQuote(diagnosticConfigHome) + " " + shellQuote(diagnosticCodexHome) + " && " + script},
+		WorkingDir: "/workspace",
+		Env:        diagnosticEnv(env),
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+		Policy:     policy,
+	})
+	if err != nil {
+		return strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), err
+	}
+	if status.Code != 0 {
+		return strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), fmt.Errorf("runner command exited with status %d", status.Code)
+	}
+	return strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), nil
 }
 
-func mergeEnv(base []string, override map[string]string) []string {
-	if len(override) == 0 {
-		return base
+func diagnosticEnv(override map[string]string) []string {
+	keys := []string{
+		"GITHUB_TOKEN",
+		"GH_TOKEN",
+		"GH_HOST",
+		"GITHUB_API_URL",
+		"CLAUDE_CODE_OAUTH_TOKEN",
+		"ANTHROPIC_API_KEY",
+		"ANTHROPIC_AUTH_TOKEN",
+		"ANTHROPIC_BASE_URL",
+		"ANTHROPIC_MODEL",
+		"OPENAI_API_KEY",
+		"OPENAI_BASE_URL",
+		"OPENAI_MODEL",
+		"CODEX_ACCESS_TOKEN",
+		"CODEX_API_KEY",
+		"SSH_AUTH_SOCK",
 	}
-	out := slices.Grow(slices.Clone(base), len(override))
-	for k, v := range override {
-		out = append(out, k+"="+v)
+	out := []string{
+		"HOME=" + diagnosticHome,
+		"TMPDIR=" + runtimeexec.RunnerTempMount,
+		"XDG_CONFIG_HOME=" + diagnosticConfigHome,
+		"CODEX_HOME=" + diagnosticCodexHome,
+	}
+	seen := map[string]struct{}{
+		"HOME":            {},
+		"TMPDIR":          {},
+		"XDG_CONFIG_HOME": {},
+		"CODEX_HOME":      {},
+	}
+	for _, key := range keys {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		if value, ok := os.LookupEnv(key); ok {
+			out = append(out, key+"="+value)
+			seen[key] = struct{}{}
+		}
+	}
+	if _, hasGH := seen["GH_TOKEN"]; !hasGH {
+		if value, ok := os.LookupEnv("GITHUB_TOKEN"); ok {
+			out = append(out, "GH_TOKEN="+value)
+			seen["GH_TOKEN"] = struct{}{}
+		}
+	}
+	for key, value := range override {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			for i := range out {
+				if strings.HasPrefix(out[i], key+"=") {
+					out[i] = key + "=" + value
+					break
+				}
+			}
+			continue
+		}
+		out = append(out, key+"="+value)
+		seen[key] = struct{}{}
 	}
 	return out
+}
+
+func unavailableBackendStatuses(existing map[string]fleet.Backend, detail string) []BackendStatus {
+	names := make([]string, 0, len(existing)+len(builtinBackendNames))
+	seen := make(map[string]struct{}, len(existing)+len(builtinBackendNames))
+	for _, name := range builtinBackendNames {
+		names = append(names, name)
+		seen[name] = struct{}{}
+	}
+	for name := range existing {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	out := make([]BackendStatus, 0, len(names))
+	for _, name := range names {
+		cfg := existing[name]
+		command := cfg.Command
+		if command == "" && slices.Contains(builtinBackendNames, name) {
+			command = name
+		}
+		out = append(out, BackendStatus{
+			Name:          name,
+			Command:       command,
+			LocalModelURL: cfg.LocalModelURL,
+			HealthDetail:  "runner diagnostics unavailable: " + detail,
+		})
+	}
+	return out
+}
+
+func unavailableToolStatuses(detail string) []ToolStatus {
+	tools := []string{"cargo", "git", "github_cli", "go", "node", "npm", "rustc", "typescript"}
+	out := make([]ToolStatus, 0, len(tools))
+	for _, name := range tools {
+		command := name
+		if name == "github_cli" {
+			command = "gh"
+		} else if name == "typescript" {
+			command = "tsc"
+		}
+		out = append(out, ToolStatus{
+			Name:    name,
+			Command: command,
+			Detail:  "runner diagnostics unavailable: " + detail,
+		})
+	}
+	return out
+}
+
+func shellJoin(command string, args []string) string {
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, shellQuote(command))
+	for _, arg := range args {
+		parts = append(parts, shellQuote(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }

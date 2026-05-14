@@ -97,7 +97,7 @@ Raw agent memory markdown per `(workspace, agent, repo)` key. Useful for inspect
 
 ### Config
 
-Current fleet config snapshot. Includes YAML import/export for shareable fleet strategy.
+Current fleet config snapshot. Includes YAML import/export for shareable fleet strategy. The Runtime tab controls the global runner image, basic Docker constraints, and the selected workspace's optional runner image override. Secret values are not shown in the dashboard; Claude, Codex, GitHub MCP, and `gh` credentials come from daemon environment variables and are injected into each ephemeral runner container.
 
 ![Config inspector, webhook_secret rendered as `[redacted]`](img/config.png)
 

@@ -9,6 +9,7 @@ runtime wiring:
 
 ```yaml
 backends:    # AI CLI/runtime definitions agents can use
+runtime:     # global runner image and container constraints
 prompts:     # reusable prompt catalog entries, optionally scoped
 skills:      # reusable guidance catalog entries, keyed by stable id and optionally scoped
 guardrails:  # reusable policy catalog entries, optionally scoped
@@ -54,8 +55,41 @@ Secrets keep their integration-specific names:
 
 ```bash
 GITHUB_WEBHOOK_SECRET=... # HMAC shared secret for /webhooks/github
-GITHUB_TOKEN=...          # GitHub MCP server and gh CLI fallback
+GITHUB_TOKEN=...          # GitHub MCP server and gh CLI fallback in runner containers
+CLAUDE_CODE_OAUTH_TOKEN=...
+ANTHROPIC_API_KEY=...
+ANTHROPIC_AUTH_TOKEN=...
+ANTHROPIC_BASE_URL=...
+ANTHROPIC_MODEL=...
+OPENAI_API_KEY=...
+OPENAI_BASE_URL=...
+OPENAI_MODEL=...
+CODEX_ACCESS_TOKEN=...
+CODEX_API_KEY=...
+GH_TOKEN=...
+GH_HOST=...
+GITHUB_API_URL=...
+SSH_AUTH_SOCK=...
 ```
+
+AI and GitHub credentials are injected from the daemon environment into each ephemeral runner container. They are never part of `/config`, `/export`, MCP responses, or UI payloads.
+
+## `runtime`
+
+```yaml
+runtime:
+  runner_image: ghcr.io/eloylp/agents-runner:latest
+  constraints:
+    cpus: "2"
+    memory: 2g
+    pids_limit: 256
+    timeout_seconds: 900
+    network_mode: bridge
+```
+
+Runtime settings are fleet state because operators may need to switch runner images or constraints without rebuilding the daemon. They are stored in SQLite, returned by `/config`, included in import/export, and editable through Config -> Runtime, REST, and MCP. They are not startup env overrides; use the database-backed surfaces for runner image and container policy changes.
+
+The global runner image applies to every run unless a workspace sets `runner_image`. Constraints are passed to Docker where supported: CPU, memory, PID limit, timeout, and network mode. Advanced egress filtering is not part of the v1 runtime settings.
 
 ## `backends`
 

@@ -7,7 +7,7 @@ Run your agent fleet against a self-hosted or OpenAI-compatible LLM backend, wit
 - **Swap models by changing one config line.** Ollama today, vLLM tomorrow, hosted Qwen on Together next week. Nothing in your agents changes.
 - **Predictable cost.** A rented RTX 5090 runs at roughly `$0.40–0.80/hr`. For a fleet doing tens of runs per hour that's break-even at low traffic and considerably cheaper than per-token pricing once you're at meaningful volume.
 - **Run on infrastructure you control.** Regulated, air-gapped, or privacy-conscious setups can keep the whole pipeline on hardware you own.
-- **Keep the Claude Code tool surface.** The daemon routes the existing `claude` CLI through its built-in Anthropic-to-OpenAI translation proxy, so you inherit Claude Code's full tool stack (bash, file ops, MCP) on top of whatever model you point it at.
+- **Keep the Claude Code tool surface.** The runner container routes the existing `claude` CLI through an Anthropic-compatible bridge, so you inherit Claude Code's full tool stack (bash, file ops, MCP) on top of whatever model you point it at.
 
 This doc walks through the complete setup: the architecture, a working recipe against `llama.cpp`, model choice by VRAM budget, recommended llama.cpp tuning, cost math, and honest caveats from our own Phase 0.5 validation.
 
@@ -16,21 +16,13 @@ This doc walks through the complete setup: the architecture, a working recipe ag
 ## Architecture
 
 ```
-┌──────────────────┐                                  
-│ agents daemon    │   (your repo, runs cron + webhook routing)
-│                  │                                  
-│ ┌──────────────┐ │                                  
-│ │ claude CLI   │ │   spawned per agent run, sends prompt on stdin
-│ └──────┬───────┘ │                                  
-│        │ ANTHROPIC_BASE_URL=http://localhost:8080
-│        ▼                                            
-│ ┌──────────────┐ │                                  
-│ │  /v1/messages│ │   built-in Anthropic↔OpenAI proxy (Go, single binary)
-│ │  /v1/models  │ │, translates tool_use, system, streaming
-│ └──────┬───────┘ │                                  
-└────────┼─────────┘                                  
-         │                                            
-         ▼                                            
+┌──────────────────┐          ┌──────────────────┐
+│ agents daemon    │          │ runner container │
+│ control plane    │ creates  │ claude CLI       │
+│                  ├─────────►│ ANTHROPIC_BASE_URL=<runner-reachable URL>
+│ optional proxy   │          └────────┬─────────┘
+│ /v1/messages     │                   │
+└──────────────────┘                   ▼
 ┌──────────────────┐                                  
 │ llama.cpp /      │                                  
 │ vLLM / Ollama /  │   OpenAI-compatible /v1/chat/completions
@@ -39,11 +31,11 @@ This doc walks through the complete setup: the architecture, a working recipe ag
 └──────────────────┘                                  
 ```
 
-Two moving pieces inside the daemon:
+Two moving pieces:
 
-1. **The proxy** (`internal/anthropic_proxy/`), an HTTP handler mounted on the daemon's existing server at `/v1/messages` and `/v1/models`. Accepts Anthropic Messages format, translates to OpenAI Chat Completions, forwards to your configured upstream, translates the response back. Text, system messages, tool-use / tool-result round-trips, streaming (fake-streaming via SSE, token-by-token streaming coming). Unauthenticated access is loopback-only for backend subprocesses; remote callers need daemon auth. Covered by unit tests.
+1. **The proxy** (`internal/anthropic_proxy/`), an optional HTTP handler mounted on the daemon's existing server at `/v1/messages` and `/v1/models`. Accepts Anthropic Messages format, translates to OpenAI Chat Completions, forwards to your configured upstream, translates the response back. Text, system messages, tool-use / tool-result round-trips, streaming (fake-streaming via SSE, token-by-token streaming coming). Loopback-only unauthenticated access is for direct daemon-host clients; runner containers are separate network peers and do not get loopback bypass. Until runner-to-daemon proxy auth is wired, do not point production runner backends at the daemon proxy.
 
-2. **Per-backend `local_model_url`** (`AIBackendConfig.local_model_url`), set this on a backend entry and the daemon injects `ANTHROPIC_BASE_URL=<url>` into the subprocess environment, routing that backend's `claude` CLI through the local proxy. You can have two backends that both run `claude`, one hitting hosted Anthropic (no `local_model_url`), one hitting the proxy. You pick per-agent.
+2. **Per-backend `local_model_url`** (`AIBackendConfig.local_model_url`), set this on a backend entry and the daemon injects `ANTHROPIC_BASE_URL=<url>` into the runner container environment. The URL must be an Anthropic-compatible endpoint resolved from inside the runner container, so `localhost` means the runner itself, not the daemon or the host. Use a Docker-network service name, `host.docker.internal` where available, or another URL that the runner can reach. You can have two backends that both run `claude`, one hitting hosted Anthropic (no `local_model_url`), one hitting a local Anthropic-compatible bridge. You pick per-agent.
 
 Nothing else changes. Same agents, same prompts, same config.
 
@@ -85,9 +77,11 @@ Key flags explained:
 | `--parallel 1` | One concurrent request per worker. Bump up if you're running many agents in parallel and have spare VRAM. |
 | `--flash-attn on` | Explicit FlashAttention. Usually on by default on recent builds. |
 
-### 2. Configure daemon proxy env and fleet backends
+### 2. Configure a runner-reachable Anthropic endpoint
 
-The proxy is daemon runtime configuration, so set it through environment variables:
+The runner executes the `claude` CLI in its own container. For agent runs, `local_model_url` must point at an Anthropic-compatible endpoint reachable from that container. If your model server only speaks OpenAI Chat Completions, put a small Anthropic-compatible bridge on the same Docker network and point `local_model_url` at that bridge.
+
+The daemon's built-in proxy can still be enabled for direct API testing from the daemon host:
 
 ```env
 AGENTS_PROXY_ENABLED=true
@@ -97,7 +91,7 @@ AGENTS_PROXY_UPSTREAM_MODEL=qwen
 AGENTS_PROXY_UPSTREAM_TIMEOUT_SECONDS=3600
 ```
 
-Then define the backends in your fleet YAML:
+Then define the runner backend in your fleet YAML:
 
 ```yaml
 backends:
@@ -106,9 +100,9 @@ backends:
     timeout_seconds: 3600
     max_prompt_chars: 12000
 
-  claude_local:                           # same binary, routed through the daemon proxy
+  claude_local:                           # same binary, routed from the runner
     command: claude
-    local_model_url: http://localhost:8080      # daemon injects ANTHROPIC_BASE_URL
+    local_model_url: http://anthropic-bridge:8080/v1/messages
     timeout_seconds: 3600
     max_prompt_chars: 12000
 ```

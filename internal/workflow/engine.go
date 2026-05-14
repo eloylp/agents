@@ -16,6 +16,7 @@ import (
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
+	runtimeexec "github.com/eloylp/agents/internal/runtime"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -139,7 +140,7 @@ type MemoryBackend interface {
 
 type Engine struct {
 	store         *store.Store
-	runnerBuilder func(name string, b fleet.Backend) ai.Runner
+	runnerBuilder func(workspaceID string, name string, b fleet.Backend) ai.Runner
 	dispatcher    *Dispatcher
 	memory        MemoryBackend
 	maxConcurrent int
@@ -153,6 +154,8 @@ type Engine struct {
 	budgetStore   *store.Store    // optional; gates runs by token budget caps
 	runLock       runLocks        // serializes (agent, repo) runs across kinds
 	runsDeduped   atomic.Int64
+	dockerMu      sync.Mutex
+	dockerRunner  runtimeexec.Runner
 }
 
 // WithMemory attaches a memory backend so the engine can load and persist
@@ -221,23 +224,81 @@ func (e *Engine) loadCfg() (*config.Config, error) {
 //
 // Tests override the runner via WithRunnerBuilder so they can observe
 // what the engine asked the runner to do without spawning a real CLI.
-func (e *Engine) defaultRunnerFor(name string, b fleet.Backend) ai.Runner {
+func (e *Engine) defaultRunnerFor(workspaceID string, name string, b fleet.Backend) ai.Runner {
 	var env map[string]string
 	if b.LocalModelURL != "" {
 		env = map[string]string{"ANTHROPIC_BASE_URL": b.LocalModelURL}
 	}
-	return ai.NewCommandRunner(
-		name, "command", b.Command, env,
-		b.TimeoutSeconds, b.MaxPromptChars,
+	settings, err := e.store.ReadRuntimeSettings()
+	if err != nil {
+		return errorRunner{err: fmt.Errorf("read runtime settings: %w", err)}
+	}
+	if workspace, err := e.store.ReadWorkspace(workspaceID); err == nil && strings.TrimSpace(workspace.RunnerImage) != "" {
+		settings.RunnerImage = strings.TrimSpace(workspace.RunnerImage)
+	} else if err != nil {
+		e.logger.Debug().Err(err).Str("workspace", workspaceID).Msg("read workspace runner override")
+	}
+	dockerRunner, err := e.dockerRuntime()
+	if err != nil {
+		return errorRunner{err: fmt.Errorf("create docker runtime: %w", err)}
+	}
+	policy := runtimeexec.ContainerSpec{Policy: settings.Constraints}
+	timeoutSeconds := policy.Policy.TimeoutSeconds
+	policy.Policy.TimeoutSeconds = 0
+	if timeoutSeconds == 0 {
+		timeoutSeconds = b.TimeoutSeconds
+	}
+	return ai.NewContainerCommandRunner(
+		name, b.Command, env,
+		timeoutSeconds, b.MaxPromptChars,
+		dockerRunner, settings.RunnerImage, policy,
 		e.logger,
 	)
 }
 
+func (e *Engine) dockerRuntime() (runtimeexec.Runner, error) {
+	e.dockerMu.Lock()
+	defer e.dockerMu.Unlock()
+	if e.dockerRunner != nil {
+		return e.dockerRunner, nil
+	}
+	runner, err := runtimeexec.NewDocker(e.logger)
+	if err != nil {
+		return nil, err
+	}
+	e.dockerRunner = runner
+	return runner, nil
+}
+
+func (e *Engine) Close() error {
+	e.dockerMu.Lock()
+	defer e.dockerMu.Unlock()
+	if e.dockerRunner == nil {
+		return nil
+	}
+	closer, ok := e.dockerRunner.(interface{ Close() error })
+	if !ok {
+		e.dockerRunner = nil
+		return nil
+	}
+	err := closer.Close()
+	e.dockerRunner = nil
+	return err
+}
+
+type errorRunner struct {
+	err error
+}
+
+func (r errorRunner) Run(context.Context, ai.Request) (ai.Response, error) {
+	return ai.Response{}, r.err
+}
+
 // WithRunnerBuilder overrides the runner factory the engine uses to
 // resolve a backend to an ai.Runner on each dispatch. Production wires
-// the default that constructs an ai.NewCommandRunner; tests inject stub
+// the default that constructs a container-backed AI runner; tests inject stub
 // runners so they can observe the request the engine produced.
-func (e *Engine) WithRunnerBuilder(fn func(name string, b fleet.Backend) ai.Runner) {
+func (e *Engine) WithRunnerBuilder(fn func(workspaceID string, name string, b fleet.Backend) ai.Runner) {
 	e.runnerBuilder = fn
 }
 
@@ -810,7 +871,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		defer e.runTracker.FinishRun(agent.Name)
 	}
 
-	runner := e.runnerBuilder(backend, backendCfg)
+	runner := e.runnerBuilder(workspaceID, backend, backendCfg)
 
 	// Live-stream registration: announce the run to the publisher so the
 	// runners view can show an in-flight row with this span_id. The stream

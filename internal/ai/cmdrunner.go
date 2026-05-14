@@ -1,43 +1,65 @@
 package ai
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	runtimeexec "github.com/eloylp/agents/internal/runtime"
 	"github.com/rs/zerolog"
 )
 
 type CommandRunner struct {
 	backendName    string
-	mode           string
 	command        string
 	env            map[string]string
 	timeout        time.Duration
 	maxPromptChars int
 	logger         zerolog.Logger
+	container      runtimeexec.Runner
+	containerImage string
+	containerSpec  runtimeexecSpec
 }
 
-func NewCommandRunner(backendName string, mode string, command string, env map[string]string, timeoutSeconds int, maxPromptChars int, logger zerolog.Logger) *CommandRunner {
+type runtimeexecSpec = runtimeexec.ContainerSpec
+
+const (
+	containerRunDir            = runtimeexec.RunnerTempMount
+	containerWorkspaceDir      = "/workspace"
+	containerResponseSchema    = containerRunDir + "/response-schema.json"
+	containerHomeDir           = containerRunDir + "/home"
+	containerXDGConfigDir      = containerRunDir + "/config"
+	containerXDGCacheDir       = containerRunDir + "/cache"
+	containerXDGDataDir        = containerRunDir + "/data"
+	containerCodexHomeDir      = containerRunDir + "/codex"
+	containerClaudeMCPPath     = containerRunDir + "/claude-mcp.json"
+	containerResponseSchemaEnv = "AGENTS_RESPONSE_SCHEMA"
+)
+
+func newCommandRunner(backendName string, command string, env map[string]string, timeoutSeconds int, maxPromptChars int, logger zerolog.Logger) *CommandRunner {
 	return &CommandRunner{
 		backendName:    backendName,
-		mode:           mode,
 		command:        command,
 		env:            env,
 		timeout:        time.Duration(timeoutSeconds) * time.Second,
 		maxPromptChars: maxPromptChars,
 		logger:         logger,
 	}
+}
+
+func NewContainerCommandRunner(backendName string, command string, env map[string]string, timeoutSeconds int, maxPromptChars int, runner runtimeexec.Runner, image string, spec runtimeexecSpec, logger zerolog.Logger) *CommandRunner {
+	r := newCommandRunner(backendName, command, env, timeoutSeconds, maxPromptChars, logger)
+	r.container = runner
+	r.containerImage = image
+	r.containerSpec = spec
+	return r
 }
 
 func (r *CommandRunner) Run(ctx context.Context, req Request) (Response, error) {
@@ -53,19 +75,14 @@ func (r *CommandRunner) Run(ctx context.Context, req Request) (Response, error) 
 		Int("prompt_chars", len([]rune(combined))).
 		Logger()
 
-	switch r.mode {
-	case "noop":
-		logger.Info().Msgf("%s runner noop", r.backendName)
-		return Response{}, nil
-	case "command":
-		if r.command == "" {
-			return Response{}, fmt.Errorf("%s command is required when mode=command", r.backendName)
-		}
-		logger.Info().Str("command", r.command).Msgf("executing %s command", r.backendName)
-		return r.runCommand(ctx, logger, req)
-	default:
-		return Response{}, fmt.Errorf("unknown %s mode: %s", r.backendName, r.mode)
+	if r.container == nil {
+		return Response{}, fmt.Errorf("%s runner requires container runtime", r.backendName)
 	}
+	if r.command == "" {
+		return Response{}, fmt.Errorf("%s command is required", r.backendName)
+	}
+	logger.Info().Str("command", r.command).Msgf("executing %s command", r.backendName)
+	return r.runCommand(ctx, logger, req)
 }
 
 // runCommand executes the backend CLI. For the claude backend the system
@@ -87,50 +104,162 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	// Build the final arg list and stdin content for this request.
 	args, stdin := r.buildDelivery(req)
 
-	cmd := exec.CommandContext(cmdCtx, r.command, args...)
-	cmd.Env = buildCommandEnv(req, r.env)
+	env := buildCommandEnv(req, r.env)
+	stdoutCap, stderr, cmdErr := r.runContainerCommand(cmdCtx, args, stdin, env, req.OnLine)
+	return r.parseCommandResponse(logger, stdoutCap, stderr, cmdErr)
+}
 
+func (r *CommandRunner) runContainerCommand(ctx context.Context, args []string, stdin string, env []string, onLine func([]byte)) (lineCapture, string, error) {
+	writer := &captureWriter{onLine: onLine}
 	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	cmd.Stdin = bytes.NewBufferString(stdin)
 
-	stdoutPipe, pipeErr := cmd.StdoutPipe()
-	if pipeErr != nil {
-		return Response{}, fmt.Errorf("stdout pipe: %w", pipeErr)
-	}
-	if err := cmd.Start(); err != nil {
-		return Response{}, fmt.Errorf("start %s: %w", r.backendName, err)
-	}
-
-	// Read stdout line by line using ReadBytes so there is no per-line size cap
-	// (unlike bufio.Scanner which silently truncates at its buffer limit).
-	// ReadBytes blocks until a complete newline-delimited line arrives from the
-	// pipe, so time.Now() inside addLine reflects when that specific line was
-	// received, not when a larger pipe-read chunk happened to land.
-	var stdoutCap lineCapture
-	reader := bufio.NewReader(stdoutPipe)
-	for {
-		line, err := reader.ReadBytes('\n')
-		if len(line) > 0 {
-			stripped := bytes.TrimRight(line, "\n")
-			stdoutCap.addLine(stripped)
-			// Live publish: hand the line to the engine-supplied
-			// callback as soon as it lands. Empty lines are still
-			// forwarded so the UI can render blank separators verbatim.
-			if req.OnLine != nil {
-				req.OnLine(stripped)
-			}
+	if r.isCodexBackend() {
+		var schemaErr error
+		args, schemaErr = rewriteContainerResponseSchemaArg(args)
+		if schemaErr != nil {
+			return lineCapture{}, "", schemaErr
 		}
-		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				logger.Warn().Err(err).Msgf("read %s stdout", r.backendName)
-			}
-			break
-		}
+		env = setEnvValues(env, containerResponseSchemaEnv, ResponseSchemaString())
 	}
 
-	cmdErr := cmd.Wait()
+	env = setEnvValues(env,
+		"HOME", containerHomeDir,
+		"TMPDIR", containerRunDir,
+		"XDG_CONFIG_HOME", containerXDGConfigDir,
+		"XDG_CACHE_HOME", containerXDGCacheDir,
+		"XDG_DATA_HOME", containerXDGDataDir,
+		"CODEX_HOME", containerCodexHomeDir,
+	)
+	if getEnv(env, "GITHUB_TOKEN") != "" && getEnv(env, "GH_TOKEN") == "" {
+		env = append(env, "GH_TOKEN="+getEnv(env, "GITHUB_TOKEN"))
+	}
+	command := append([]string{r.command}, args...)
+	command = r.containerEntrypoint(command, env)
+	spec := r.containerSpec
+	spec.Image = r.containerImage
+	spec.Command = command
+	spec.WorkingDir = containerWorkspaceDir
+	spec.Env = env
+	spec.Stdin = bytes.NewBufferString(stdin)
+	spec.Stdout = writer
+	spec.Stderr = &stderr
+	spec.Labels = map[string]string{
+		"org.opencontainers.image.title": "agents-runner",
+		"agents.backend":                 r.backendName,
+	}
+	status, err := r.container.Run(ctx, spec)
+	writer.flush()
+	if err != nil {
+		return writer.capture, stderr.String(), err
+	}
+	if status.Code != 0 {
+		return writer.capture, stderr.String(), fmt.Errorf("runner container exited with status %d", status.Code)
+	}
+	return writer.capture, stderr.String(), nil
+}
 
+func (r *CommandRunner) containerEntrypoint(command []string, env []string) []string {
+	if len(command) == 0 {
+		return command
+	}
+	switch {
+	case r.isClaudeBackend() && getEnv(env, "GITHUB_TOKEN") != "" && !hasArg(command[1:], "--mcp-config"):
+		command = append(command[:1], append([]string{"--mcp-config", containerClaudeMCPPath}, command[1:]...)...)
+		return shellEntrypoint(command, baseContainerSetup+claudeContainerSetup)
+	case r.isCodexBackend():
+		return shellEntrypoint(command, baseContainerSetup+codexContainerSetup)
+	default:
+		return shellEntrypoint(command, baseContainerSetup)
+	}
+}
+
+func shellEntrypoint(command []string, setup string) []string {
+	out := []string{"/bin/sh", "-lc", setup + `
+cmd=$1
+shift
+exec "$cmd" "$@"
+`, "agents-runner"}
+	return append(out, command...)
+}
+
+const baseContainerSetup = `
+set -eu
+mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$CODEX_HOME"
+`
+
+const claudeContainerSetup = `
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  printf '{"mcpServers":{"github":{"type":"http","url":"https://api.githubcopilot.com/mcp/","headers":{"Authorization":"Bearer %s"}}}}\n' "$GITHUB_TOKEN" > /tmp/agents-run/claude-mcp.json
+fi
+`
+
+const codexContainerSetup = `
+if [ -n "${AGENTS_RESPONSE_SCHEMA:-}" ]; then
+  printf '%s' "$AGENTS_RESPONSE_SCHEMA" > /tmp/agents-run/response-schema.json
+fi
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  cat > "$CODEX_HOME/config.toml" <<'TOML'
+[mcp_servers.github]
+url = "https://api.githubcopilot.com/mcp/"
+bearer_token_env_var = "GITHUB_TOKEN"
+TOML
+fi
+if [ -n "${OPENAI_API_KEY:-}" ]; then
+  printf '%s' "$OPENAI_API_KEY" | "$1" login --with-api-key >/dev/null || echo "codex login failed" >&2
+elif [ -n "${CODEX_ACCESS_TOKEN:-}" ]; then
+  printf '%s' "$CODEX_ACCESS_TOKEN" | "$1" login --with-access-token >/dev/null || echo "codex login failed" >&2
+fi
+`
+
+func hasArg(args []string, arg string) bool {
+	for _, a := range args {
+		if a == arg {
+			return true
+		}
+	}
+	return false
+}
+
+func rewriteContainerResponseSchemaArg(args []string) ([]string, error) {
+	if !slices.Contains(args, "--output-schema") {
+		return args, nil
+	}
+	out := slices.Clone(args)
+	for i := 0; i < len(out)-1; i++ {
+		if out[i] == "--output-schema" {
+			out[i+1] = containerResponseSchema
+			return out, nil
+		}
+	}
+	return nil, fmt.Errorf("codex output schema flag missing path")
+}
+
+func setEnvValues(env []string, kvs ...string) []string {
+	if len(kvs)%2 != 0 {
+		panic("setEnvValues requires key/value pairs")
+	}
+	keys := make(map[string]string, len(kvs)/2)
+	for i := 0; i < len(kvs); i += 2 {
+		keys[kvs[i]] = kvs[i+1]
+	}
+	out := env[:0]
+	for _, entry := range env {
+		key, _, found := strings.Cut(entry, "=")
+		if !found {
+			continue
+		}
+		if _, replace := keys[key]; replace {
+			continue
+		}
+		out = append(out, entry)
+	}
+	for i := 0; i < len(kvs); i += 2 {
+		out = append(out, kvs[i]+"="+kvs[i+1])
+	}
+	return out
+}
+
+func (r *CommandRunner) parseCommandResponse(logger zerolog.Logger, stdoutCap lineCapture, stderr string, cmdErr error) (Response, error) {
 	rawOut := stdoutCap.all.String()
 	logger.Debug().Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("%s raw output", r.backendName)
 
@@ -139,7 +268,7 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	// some AI CLIs emit non-zero exit codes even on a successful run (e.g.
 	// after posting a GitHub comment via MCP tools).
 	if cmdErr != nil && stdoutCap.all.Len() == 0 {
-		logger.Error().Err(cmdErr).Str("stderr", truncateString(stderr.String(), 2000)).Msgf("%s command failed", r.backendName)
+		logger.Error().Err(cmdErr).Str("stderr", truncateString(stderr, 2000)).Msgf("%s command failed", r.backendName)
 		return Response{}, fmt.Errorf("%s command failed: %w", r.backendName, cmdErr)
 	}
 
@@ -213,7 +342,7 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 		return Response{}, fmt.Errorf("parse %s response: empty response (no fields populated)", r.backendName)
 	}
 	if cmdErr != nil {
-		logger.Warn().Err(cmdErr).Str("stderr", truncateString(stderr.String(), 2000)).Msgf("%s command exited non-zero but produced valid output", r.backendName)
+		logger.Warn().Err(cmdErr).Str("stderr", truncateString(stderr, 2000)).Msgf("%s command exited non-zero but produced valid output", r.backendName)
 	}
 	logger.Info().
 		Int("artifacts", len(response.Artifacts)).
@@ -221,6 +350,40 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 		Int("summary_len", len(response.Summary)).
 		Msgf("%s command completed", r.backendName)
 	return response, nil
+}
+
+type captureWriter struct {
+	capture lineCapture
+	onLine  func([]byte)
+	pending []byte
+}
+
+func (w *captureWriter) Write(p []byte) (int, error) {
+	w.pending = append(w.pending, p...)
+	for {
+		idx := bytes.IndexByte(w.pending, '\n')
+		if idx < 0 {
+			return len(p), nil
+		}
+		line := bytes.TrimRight(w.pending[:idx], "\r")
+		w.capture.addLine(line)
+		if w.onLine != nil {
+			w.onLine(line)
+		}
+		w.pending = w.pending[idx+1:]
+	}
+}
+
+func (w *captureWriter) flush() {
+	if len(w.pending) == 0 {
+		return
+	}
+	line := bytes.TrimRight(w.pending, "\r")
+	w.capture.addLine(line)
+	if w.onLine != nil {
+		w.onLine(line)
+	}
+	w.pending = nil
 }
 
 // separatorRunes is the rune-count of the "\n\n" separator inserted between
@@ -305,7 +468,7 @@ func (r *CommandRunner) buildClaudeDelivery(req Request) (args []string, stdin s
 }
 
 // buildCodexDelivery concatenates system + user on stdin and appends
-// --output-schema pointing to the embedded response schema temp file.
+// --output-schema pointing to the runner-visible response schema path.
 // --json makes codex emit one event per JSONL line on stdout so the
 // daemon can reconstruct the tool-loop transcript (parseCodexSteps).
 func (r *CommandRunner) buildCodexDelivery(req Request) (args []string, stdin string) {
@@ -319,12 +482,7 @@ func (r *CommandRunner) buildCodexDelivery(req Request) (args []string, stdin st
 	if req.Model != "" {
 		args = append(args, "--model", req.Model)
 	}
-	schemaPath, err := ResponseSchemaPath()
-	if err != nil {
-		r.logger.Error().Err(err).Msg("failed to materialize embedded response schema")
-		return args, combinedStdin
-	}
-	args = append(args, "--output-schema", schemaPath)
+	args = append(args, "--output-schema", containerResponseSchema)
 	return args, combinedStdin
 }
 
@@ -654,9 +812,19 @@ func extractToolResultText(raw json.RawMessage) string {
 // locale) are permitted; everything else is excluded.
 func allowCommandEnvKey(key string) bool {
 	switch key {
-	case "PATH", "HOME", "USER", "SHELL", "TMPDIR", "TMP", "TEMP", "LANG", "TERM", "NO_COLOR", "COLORTERM", "EDITOR", "VISUAL", "PAGER", "SSH_AUTH_SOCK", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "GITHUB_TOKEN", "GH_TOKEN", "GH_HOST", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "GITHUB_API_URL":
+	case "PATH", "HOME", "USER", "SHELL", "TMPDIR", "TMP", "TEMP", "LANG", "TERM", "NO_COLOR", "COLORTERM", "EDITOR", "VISUAL", "PAGER", "SSH_AUTH_SOCK", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "GITHUB_TOKEN", "GH_TOKEN", "GH_HOST", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "GITHUB_API_URL":
 		return true
 	default:
 		return strings.HasPrefix(key, "LC_")
 	}
+}
+
+func getEnv(env []string, key string) string {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			return strings.TrimPrefix(env[i], prefix)
+		}
+	}
+	return ""
 }

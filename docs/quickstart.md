@@ -14,11 +14,13 @@ curl -fsSLO https://raw.githubusercontent.com/eloylp/agents/main/.env.sample
 # Webhook secret: random per install. PAT: from https://github.com/settings/tokens with repo scope.
 cp .env.sample .env
 sed -i.bak "s/^GITHUB_WEBHOOK_SECRET=.*/GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)/" .env && rm .env.bak
-# Edit GITHUB_TOKEN in .env before continuing.
+# Edit GITHUB_TOKEN and at least one AI credential in .env before continuing.
 docker compose up -d
 ```
 
-The shipped [`docker-compose.yaml`](../docker-compose.yaml) is the source of truth for what gets mounted and exposed. Two named volumes back the runtime: `agents-data` (SQLite store) and `agents-home` (Claude / Codex auth, MCP config, and `gh` auth). The image includes the AI CLIs plus `git`, `gh`, Go, Rust/Cargo, Node/npm, and TypeScript so agents can run local checkout/test loops when MCP alone is not enough. The daemon boots against an empty database with built-in defaults, no YAML seed is required.
+The shipped [`docker-compose.yaml`](../docker-compose.yaml) is the source of truth for what gets mounted and exposed. The daemon image (`ghcr.io/eloylp/agents`) is the control plane: UI, REST/MCP, scheduler, queue, traces, and SQLite. Agent work runs in fresh ephemeral containers from the runner image (`ghcr.io/eloylp/agents-runner`), which contains Claude Code, Codex, `gh`, git, Go, Rust/Cargo, Node/npm, TypeScript, and the other execution tools. The daemon boots against an empty database with built-in defaults, no YAML seed is required.
+
+Compose mounts `/var/run/docker.sock` into the daemon so it can start runner containers. The shipped Compose file runs the daemon process as root inside the container because Docker socket group IDs vary by host; Docker socket access is root-equivalent on the host, so treat it as a production security boundary.
 
 > **First-run note.** The compose file pulls `ghcr.io/eloylp/agents:latest`, which is only updated from version tags. Main-branch builds are published separately as `ghcr.io/eloylp/agents:dev-<short_sha>` so users do not accidentally pull development images.
 
@@ -28,22 +30,17 @@ Verify the daemon is healthy:
 curl -s http://localhost:8080/status | jq
 ```
 
-## Authenticate the AI CLIs
+## Configure credentials
 
-```bash
-docker compose exec -it agents agents-setup
-```
+Production runs are env-driven. Put credentials in `.env`; they are injected into each short-lived runner container and are not exported through UI, REST, MCP, or fleet YAML.
 
-`agents-setup` is a small bash script (see [`scripts/setup.sh`](../scripts/setup.sh)) that does only what genuinely needs interactive shell access:
+- `GITHUB_TOKEN`: used for GitHub MCP and `gh` fallback. Use `repo` scope minimum; add `workflow` if agents touch CI.
+- Claude: set one of `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN`.
+- Codex: set `OPENAI_API_KEY` or `CODEX_ACCESS_TOKEN`.
 
-1. picks which AI backend(s) you want, claude, codex, or both,
-2. runs `claude auth login` and `codex login --device-auth` against your terminal so you can complete the OAuth flow in your browser,
-3. registers the GitHub MCP server on each authenticated CLI,
-4. authenticates the `gh` CLI with the same `GITHUB_TOKEN` for fallback local checkout/test/PR flows,
-5. refreshes the daemon's backend discovery so the fleet sees the freshly authenticated tooling,
-6. prints diagnostics from `/status`, `/backends/status`, `/agents/orphans/status`.
+Then open `http://localhost:8080/`, bootstrap the first admin user, and use Config -> Runtime / Backends diagnostics to verify the runner image, credentials, and backend readiness. Fleet configuration (workspaces, agents, prompts, skills, repos, bindings, webhooks) lives in the dashboard.
 
-Once it finishes, the daemon has working backends and tools. **Fleet configuration (workspaces, agents, prompts, skills, repos, bindings, webhooks) lives in the dashboard**, open `http://localhost:8080/`, sign in or bootstrap the first user, and configure from there. Those tasks are graphical-shaped and don't fit a bash prompt loop.
+Before enabling scheduled runs, perform a smoke test from the dashboard or REST API: run a trivial agent against a test repository and confirm the run creates a fresh runner container, streams trace steps while in flight, persists the final trace, and removes the runner container afterward. This proves the mounted Docker socket and configured runner image work in your environment.
 
 ## Production essentials
 
@@ -71,7 +68,7 @@ docker compose pull agents && docker compose up -d agents
 # To test an unreleased main-branch build, explicitly use:
 # image: ghcr.io/eloylp/agents:dev-<short_sha>
 
-# Re-run backend discovery (after rotating auth or adding a CLI).
+# Re-run backend discovery (after rotating env credentials or changing runner image).
 curl -X POST http://localhost:8080/backends/discover
 
 # Snapshot the SQLite store while the daemon runs (the agents image
@@ -89,7 +86,7 @@ curl -X POST -H 'Content-Type: application/x-yaml' \
   --data-binary @fleet.yaml http://localhost:8080/import
 ```
 
-The `agents-data` volume is the only piece of state worth backing up regularly, `agents-home` holds OAuth tokens and is meant to be re-populated via `agents-setup` rather than backed up.
+The `agents-data` volume is the only piece of state worth backing up regularly. Runtime secrets should live in your environment, compose secret management, or a future secret store, not in config exports.
 
 ## Next steps
 

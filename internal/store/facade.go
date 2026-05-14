@@ -69,6 +69,12 @@ func (s *Store) ClearWorkspaceGraphLayout(workspace string) error {
 
 func (s *Store) ReadWorkspaces() ([]fleet.Workspace, error) { return ReadWorkspaces(s.db) }
 func (s *Store) ReadPrompts() ([]fleet.Prompt, error)       { return ReadPrompts(s.db) }
+func (s *Store) ReadRuntimeSettings() (fleet.RuntimeSettings, error) {
+	return ReadRuntimeSettings(s.db)
+}
+func (s *Store) WriteRuntimeSettings(settings fleet.RuntimeSettings) (fleet.RuntimeSettings, error) {
+	return WriteRuntimeSettings(s.db, settings)
+}
 func (s *Store) ReadWorkspace(workspace string) (fleet.Workspace, error) {
 	return ReadWorkspace(s.db, workspace)
 }
@@ -76,6 +82,9 @@ func (s *Store) UpsertWorkspace(w fleet.Workspace) (fleet.Workspace, error) {
 	return UpsertWorkspace(s.db, w)
 }
 func (s *Store) DeleteWorkspace(workspace string) error { return DeleteWorkspace(s.db, workspace) }
+func (s *Store) SetWorkspaceRunnerImage(workspace, image string) (fleet.Workspace, error) {
+	return SetWorkspaceRunnerImage(s.db, workspace, image)
+}
 func (s *Store) ReadWorkspaceGuardrails(workspace string) ([]fleet.WorkspaceGuardrailRef, error) {
 	return ReadWorkspaceGuardrails(s.db, workspace)
 }

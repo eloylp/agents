@@ -87,6 +87,32 @@ func newTestEvents(t *testing.T) *obstore.Store {
 	return newFixture(t, nil).events
 }
 
+func waitForEvents(t *testing.T, h *Handler, path string, want int) []eventJSON {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	var events []eventJSON
+	for {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		h.HandleEvents(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("want 200, got %d", rec.Code)
+		}
+		events = nil
+		if err := json.NewDecoder(rec.Body).Decode(&events); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(events) == want {
+			return events
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("want %d events, got %d", want, len(events))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // newSchedulerWithStatuses builds a scheduler whose AgentStatuses()
 // returns the supplied entries. The scheduler reconciles cron bindings
 // from a tempdir SQLite seeded with one cron binding per (agent, repo)
@@ -316,22 +342,7 @@ func TestHandleEventsReturnsStoredEvents(t *testing.T) {
 	now := time.Now().UTC()
 	obs.RecordEvent(now, workflow.Event{ID: "evt-1", Kind: "issues.labeled", Repo: workflow.RepoRef{FullName: "owner/repo"}, Number: 42, Actor: "user"})
 	obs.RecordEvent(now.Add(time.Second), workflow.Event{ID: "evt-2", Kind: "push", Repo: workflow.RepoRef{FullName: "owner/repo"}, Actor: "bot"})
-	time.Sleep(50 * time.Millisecond) // wait for async DB writes
-
-	req := httptest.NewRequest(http.MethodGet, "/events", nil)
-	rec := httptest.NewRecorder()
-	h.HandleEvents(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	var events []eventJSON
-	if err := json.NewDecoder(rec.Body).Decode(&events); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(events) != 2 {
-		t.Fatalf("want 2 events, got %d", len(events))
-	}
+	events := waitForEvents(t, h, "/events", 2)
 	if events[0].ID != "evt-1" || events[1].ID != "evt-2" {
 		t.Fatalf("unexpected event IDs: %v %v", events[0].ID, events[1].ID)
 	}
@@ -345,15 +356,9 @@ func TestHandleEventsSinceFilter(t *testing.T) {
 	base := time.Now().UTC()
 	obs.RecordEvent(base, workflow.Event{ID: "old", Kind: "push"})
 	obs.RecordEvent(base.Add(2*time.Second), workflow.Event{ID: "new", Kind: "push"})
-	time.Sleep(50 * time.Millisecond)
 
 	since := base.Add(time.Second).Format(time.RFC3339)
-	req := httptest.NewRequest(http.MethodGet, "/events?since="+since, nil)
-	rec := httptest.NewRecorder()
-	h.HandleEvents(rec, req)
-
-	var events []eventJSON
-	_ = json.NewDecoder(rec.Body).Decode(&events)
+	events := waitForEvents(t, h, "/events?since="+since, 1)
 	if len(events) != 1 || events[0].ID != "new" {
 		t.Fatalf("want only 'new' event after filter, got %v", events)
 	}
