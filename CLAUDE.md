@@ -15,6 +15,7 @@ internal/
   anthropic_proxy/          # Built-in Anthropic↔OpenAI Chat Completions translation proxy
   observe/                  # Observability store: events, traces, dispatch graph, SSE hubs
   scheduler/                # Cron scheduler + agent memory (SQLite-backed)
+  runtime/                  # Runner interface + ContainerSpec/ExitStatus types, Docker implementation, per-backend container setup (env, scripts, paths)
   backends/                 # Backend discovery: CLI probing, GitHub MCP health checks, tool diagnostics, orphan detection
   store/                    # SQLite-backed config + event_queue store: Open, Import, Load, CRUD; *store.Store facade hides the *sql.DB
   workflow/                 # Event routing engine, durable event queue (persist-on-push + replay), processor, dispatcher

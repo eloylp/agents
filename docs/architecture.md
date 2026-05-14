@@ -31,6 +31,7 @@ internal/
 ├─ workflow/                    Engine, Processor, Dispatcher, DataChannels, dispatch dedup
 ├─ scheduler/                   cron registration + event producer
 ├─ ai/                          prompt composition, CLI runner (stdin in, JSON out)
+├─ runtime/                     execution-plane abstraction: Runner interface, ContainerSpec/ExitStatus types, Docker implementation, per-backend container setup
 ├─ backends/                    backend discovery (CLI probing, MCP health, tool diagnostics, model catalog)
 ├─ anthropic_proxy/             Anthropic↔OpenAI translation proxy
 ├─ observe/                     events/traces/spans/steps/memory persistence + SSE hubs
