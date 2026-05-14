@@ -92,18 +92,28 @@ const codexContainerSetup = `
 if [ -n "${AGENTS_RESPONSE_SCHEMA:-}" ]; then
   printf '%s' "$AGENTS_RESPONSE_SCHEMA" > ` + RunnerResponseSchema + `
 fi
+cat > "$CODEX_HOME/config.toml" <<'TOML'
+cli_auth_credentials_store = "file"
+TOML
 if [ -n "${GITHUB_TOKEN:-}" ]; then
-  cat > "$CODEX_HOME/config.toml" <<'TOML'
+  cat >> "$CODEX_HOME/config.toml" <<'TOML'
 [mcp_servers.github]
 url = "https://api.githubcopilot.com/mcp/"
 bearer_token_env_var = "GITHUB_TOKEN"
 TOML
 fi
+if [ -n "${CODEX_AUTH_JSON_BASE64:-}" ]; then
+  printf '%s' "$CODEX_AUTH_JSON_BASE64" | base64 -d > "$CODEX_HOME/auth.json" || {
+    echo "codex auth cache decode failed" >&2
+    exit 1
+  }
+  chmod 600 "$CODEX_HOME/auth.json"
+fi
 codex_cmd="${AGENTS_BACKEND_COMMAND:-codex}"
-if [ -n "${OPENAI_API_KEY:-}" ]; then
+if [ -n "${CODEX_AUTH_JSON_BASE64:-}" ]; then
+  :
+elif [ -n "${OPENAI_API_KEY:-}" ]; then
   printf '%s' "$OPENAI_API_KEY" | "$codex_cmd" login --with-api-key >/dev/null || echo "codex login failed" >&2
-elif [ -n "${CODEX_ACCESS_TOKEN:-}" ]; then
-  printf '%s' "$CODEX_ACCESS_TOKEN" | "$codex_cmd" login --with-access-token >/dev/null || echo "codex login failed" >&2
 fi
 `
 

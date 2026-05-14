@@ -73,7 +73,7 @@ YAML config is import/export only, not a runtime input. To seed an empty fleet, 
 - `GITHUB_WEBHOOK_SECRET`, HMAC shared secret for the webhook receiver.
 - `GITHUB_TOKEN`, Personal Access Token injected into runner containers for GitHub MCP and `gh` fallback. `repo` scope minimum; add `workflow` if agents touch CI.
 - Claude credentials: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN`.
-- Codex credentials: `OPENAI_API_KEY` or `CODEX_ACCESS_TOKEN`.
+- Codex credentials: `CODEX_AUTH_JSON_BASE64` for ChatGPT/Plus/Pro CLI subscription auth, or `OPENAI_API_KEY` for OpenAI Platform API-billed usage.
 - Daemon runtime settings can be overridden at startup with `AGENTS_*` env vars for log, HTTP, processor, and dispatch fields. See `docs/configuration.md` for the full mapping. Empty env vars are ignored, and changes still require a process/container restart.
 
 ## Architecture Notes

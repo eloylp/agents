@@ -36,7 +36,24 @@ Production runs are env-driven. Put credentials in `.env`; they are injected int
 
 - `GITHUB_TOKEN`: used for GitHub MCP and `gh` fallback. Use `repo` scope minimum; add `workflow` if agents touch CI.
 - Claude: set one of `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN`.
-- Codex: set `OPENAI_API_KEY` or `CODEX_ACCESS_TOKEN`.
+- Codex: preferred for ChatGPT/Plus/Pro subscription access, run `codex login` locally with file-based credential storage and set `CODEX_AUTH_JSON_BASE64` from `~/.codex/auth.json`; alternatively set `OPENAI_API_KEY` for OpenAI Platform API-billed usage.
+
+For Codex subscription auth, make sure the local CLI writes a portable auth file:
+
+```toml
+# ~/.codex/config.toml
+cli_auth_credentials_store = "file"
+```
+
+Then run:
+
+```bash
+codex login
+test -f ~/.codex/auth.json
+CODEX_AUTH_JSON_BASE64="$(base64 < ~/.codex/auth.json | tr -d '\n')"
+```
+
+Copy that value into `.env`. Treat it like a password; it contains refreshable Codex credentials. The daemon does not mount your home directory or any Codex volume into runner containers. It passes the base64 value through the runner environment and materializes `auth.json` only inside each ephemeral runner container.
 
 Then open `http://localhost:8080/`, bootstrap the first admin user, and use Config -> Runtime / Backends diagnostics to verify the runner image, credentials, and backend readiness. Fleet configuration (workspaces, agents, prompts, skills, repos, bindings, webhooks) lives in the dashboard.
 
