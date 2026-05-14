@@ -456,7 +456,7 @@ func TestUpsertScopedSkillDerivesStableID(t *testing.T) {
 	}
 	got, ok := skills["skill_platform_eloylp_agents_review"]
 	if !ok {
-		t.Fatalf("derived scoped skill missing; keys=%v", slices.Collect(maps.Keys(skills)))
+		t.Fatalf("derived scoped skill missing; keys=%v", slices.Sorted(maps.Keys(skills)))
 	}
 	if got.WorkspaceID != "platform" || got.Repo != "eloylp/agents" || got.Name != "review" || got.Prompt != "updated" {
 		t.Fatalf("scoped skill = %+v, want normalized updated skill", got)
@@ -1320,7 +1320,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 		t.Fatalf("ReadBackends: %v", err)
 	}
 	if _, ok := backends["claude"]; !ok {
-		t.Errorf("backend name not normalised: got keys %v, want 'claude'", slices.Collect(maps.Keys(backends)))
+		t.Errorf("backend name not normalised: got keys %v, want 'claude'", slices.Sorted(maps.Keys(backends)))
 	}
 	if _, bad := backends["Claude"]; bad {
 		t.Error("original mixed-case key 'Claude' should not be present after normalisation")
@@ -1350,7 +1350,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 		t.Fatalf("ReadSkills: %v", err)
 	}
 	if _, ok := skills["architect"]; !ok {
-		t.Errorf("skill name not normalised: got keys %v, want 'architect'", slices.Collect(maps.Keys(skills)))
+		t.Errorf("skill name not normalised: got keys %v, want 'architect'", slices.Sorted(maps.Keys(skills)))
 	}
 
 	// Agent, mixed-case name, backend, and skill reference should be stored lowercase.
