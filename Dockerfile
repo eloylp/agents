@@ -32,7 +32,7 @@ USER agents
 ENTRYPOINT ["agents"]
 CMD ["--db", "/var/lib/agents/agents.db"]
 
-FROM node:22-alpine AS runner
+FROM node:24-alpine3.23 AS runner
 
 RUN apk add --no-cache bash build-base ca-certificates cargo curl git github-cli go jq rust \
     && npm install -g @anthropic-ai/claude-code @openai/codex typescript \
