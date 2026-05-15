@@ -1154,7 +1154,12 @@ func TestHandleEventRunnerErrorRecordsPartialSummaryAsError(t *testing.T) {
 	rec := &traceRecorderStub{}
 	e.WithTraceRecorder(rec)
 	runner.run = func(ai.Request) (ai.Response, error) {
-		return ai.Response{Summary: "partial checkpoint"}, errors.New("codex command timed out after 1s")
+		return ai.Response{Summary: "partial checkpoint"}, ai.CommandInterruptedError{
+			Backend: "codex",
+			Kind:    ai.CommandInterruptedTimeout,
+			Timeout: time.Second,
+			Err:     context.DeadlineExceeded,
+		}
 	}
 
 	err := e.HandleEvent(context.Background(), labelEvent("issues.labeled", "owner/repo", "ai:review:arch-reviewer", 1))

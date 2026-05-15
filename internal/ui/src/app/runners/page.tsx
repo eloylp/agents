@@ -8,6 +8,7 @@ import RepoFilter from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { StreamCard, TranscriptFilter, allStreamCardKinds, stepToCardEntries, type PersistedStep, type StreamCardEntry, type StreamCardKind } from '@/components/StreamCard'
 import { fmtDuration } from '@/lib/format'
+import { newRunnerTimeoutTracker, observeRunnerTimeouts } from '@/lib/runner-timeouts'
 import { openAuthenticatedSSE } from '@/lib/sse'
 import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
@@ -241,7 +242,7 @@ function RunnersInner() {
   const [highlightUntil, setHighlightUntil] = useState<number | null>(null)
   const [streamSpan, setStreamSpan] = useState<{ id: string; agent: string; repo: string; kind: string } | null>(null)
   const [timeoutToast, setTimeoutToast] = useState<RunnerRow | null>(null)
-  const seenTimeouts = useRef<Set<string>>(new Set())
+  const timeoutTracker = useRef(newRunnerTimeoutTracker())
 
   const load = async () => {
     try {
@@ -250,16 +251,8 @@ function RunnersInner() {
       if (!res.ok) throw new Error(`status ${res.status}`)
       const data: ListResponse = await res.json()
       const nextRows = data.runners ?? []
-      const newTimeout = nextRows.find(r => {
-        const key = r.span_id || `${r.id}:${r.agent || ''}`
-        const isTimeout = r.status === 'error' && /timed out|timeout/i.test(r.error || '')
-        return isTimeout && !seenTimeouts.current.has(key)
-      })
-      if (newTimeout) {
-        const key = newTimeout.span_id || `${newTimeout.id}:${newTimeout.agent || ''}`
-        seenTimeouts.current.add(key)
-        setTimeoutToast(newTimeout)
-      }
+      const newTimeout = observeRunnerTimeouts(nextRows, timeoutTracker.current)
+      if (newTimeout) setTimeoutToast(newTimeout)
       setRows(nextRows)
       setError(null)
     } catch (e) {
@@ -270,6 +263,7 @@ function RunnersInner() {
   }
 
   useEffect(() => {
+    timeoutTracker.current = newRunnerTimeoutTracker()
     load()
     const id = window.setInterval(load, POLL_MS)
     return () => window.clearInterval(id)

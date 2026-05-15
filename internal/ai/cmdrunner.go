@@ -104,14 +104,14 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 		case errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
 			cmdErr = CommandInterruptedError{
 				Backend: r.backendName,
-				Kind:    "timeout",
+				Kind:    CommandInterruptedTimeout,
 				Timeout: r.timeout,
 				Err:     cmdErr,
 			}
 		case errors.Is(cmdCtx.Err(), context.Canceled):
 			cmdErr = CommandInterruptedError{
 				Backend: r.backendName,
-				Kind:    "canceled",
+				Kind:    CommandInterruptedCanceled,
 				Err:     cmdErr,
 			}
 		}
@@ -252,6 +252,9 @@ func (r *CommandRunner) parseCommandResponse(logger zerolog.Logger, stdoutCap li
 	response.Usage = extractUsage(stdoutCap.all.Bytes())
 	if response.Summary == "" && len(response.Artifacts) == 0 && len(response.Dispatch) == 0 {
 		logger.Error().Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("%s response is empty (no summary, artifacts, or dispatch)", r.backendName)
+		if cmdErr != nil {
+			return Response{}, fmt.Errorf("%s command failed: %w", r.backendName, cmdErr)
+		}
 		return Response{}, fmt.Errorf("parse %s response: empty response (no fields populated)", r.backendName)
 	}
 	if cmdErr != nil {

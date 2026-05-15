@@ -10,23 +10,30 @@ type Runner interface {
 	Run(ctx context.Context, req Request) (Response, error)
 }
 
+type CommandInterruptionKind string
+
+const (
+	CommandInterruptedTimeout  CommandInterruptionKind = "timeout"
+	CommandInterruptedCanceled CommandInterruptionKind = "canceled"
+)
+
 // CommandInterruptedError marks backend command cancellation/timeout as a hard
 // run failure even when the CLI emitted a parseable partial response first.
 type CommandInterruptedError struct {
 	Backend string
-	Kind    string
+	Kind    CommandInterruptionKind
 	Timeout time.Duration
 	Err     error
 }
 
 func (e CommandInterruptedError) Error() string {
 	switch e.Kind {
-	case "timeout":
+	case CommandInterruptedTimeout:
 		if e.Timeout > 0 {
 			return fmt.Sprintf("%s command timed out after %s", e.Backend, e.Timeout)
 		}
 		return fmt.Sprintf("%s command timed out", e.Backend)
-	case "canceled":
+	case CommandInterruptedCanceled:
 		return fmt.Sprintf("%s command canceled", e.Backend)
 	default:
 		return fmt.Sprintf("%s command interrupted", e.Backend)

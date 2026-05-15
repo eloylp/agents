@@ -42,9 +42,9 @@ func (f *silentContainerRunner) Run(_ context.Context, spec runtimeexec.Containe
 }
 
 type timeoutContainerRunner struct {
-	spec        runtimeexec.ContainerSpec
-	writeJSON   bool
-	writeSignal chan struct{}
+	spec      runtimeexec.ContainerSpec
+	writeJSON bool
+	stdout    string
 }
 
 func (f *timeoutContainerRunner) EnsureImage(context.Context, string) error { return nil }
@@ -52,10 +52,11 @@ func (f *timeoutContainerRunner) EnsureImage(context.Context, string) error { re
 func (f *timeoutContainerRunner) Run(ctx context.Context, spec runtimeexec.ContainerSpec) (runtimeexec.ExitStatus, error) {
 	f.spec = spec
 	if f.writeJSON && spec.Stdout != nil {
-		_, _ = spec.Stdout.Write([]byte(`{"summary":"partial checkpoint","artifacts":[],"memory":"","dispatch":[]}` + "\n"))
-	}
-	if f.writeSignal != nil {
-		close(f.writeSignal)
+		stdout := f.stdout
+		if stdout == "" {
+			stdout = `{"summary":"partial checkpoint","artifacts":[],"memory":"","dispatch":[]}`
+		}
+		_, _ = spec.Stdout.Write([]byte(stdout + "\n"))
 	}
 	<-ctx.Done()
 	return runtimeexec.ExitStatus{}, ctx.Err()
@@ -461,7 +462,7 @@ func TestCommandRunnerEmptyStdoutIsError(t *testing.T) {
 
 func TestCommandRunnerTimeoutWithPartialOutputReturnsErrorAndResponse(t *testing.T) {
 	t.Parallel()
-	fake := &timeoutContainerRunner{writeJSON: true, writeSignal: make(chan struct{})}
+	fake := &timeoutContainerRunner{writeJSON: true}
 	r := NewContainerCommandRunner(
 		"codex", "codex", nil,
 		1, 4000, fake, "ghcr.io/example/runner:test",
@@ -476,11 +477,42 @@ func TestCommandRunnerTimeoutWithPartialOutputReturnsErrorAndResponse(t *testing
 	if !errors.As(err, &interrupted) {
 		t.Fatalf("Run error = %T %v, want CommandInterruptedError", err, err)
 	}
-	if interrupted.Kind != "timeout" {
+	if interrupted.Kind != CommandInterruptedTimeout {
 		t.Fatalf("interruption kind = %q, want timeout", interrupted.Kind)
 	}
 	if got.Summary != "partial checkpoint" {
 		t.Fatalf("summary = %q, want partial checkpoint", got.Summary)
+	}
+}
+
+func TestCommandRunnerTimeoutWithEmptyPartialOutputPreservesTimeoutError(t *testing.T) {
+	t.Parallel()
+	fake := &timeoutContainerRunner{
+		writeJSON: true,
+		stdout:    `{"summary":"","artifacts":[],"memory":"","dispatch":[]}`,
+	}
+	r := NewContainerCommandRunner(
+		"codex", "codex", nil,
+		1, 4000, fake, "ghcr.io/example/runner:test",
+		runtimeexec.ContainerSpec{},
+		zerolog.Nop(),
+	)
+	got, err := r.Run(context.Background(), Request{Workflow: "wf", Repo: "owner/repo"})
+	if err == nil {
+		t.Fatal("Run error = nil, want timeout error")
+	}
+	var interrupted CommandInterruptedError
+	if !errors.As(err, &interrupted) {
+		t.Fatalf("Run error = %T %v, want CommandInterruptedError", err, err)
+	}
+	if interrupted.Kind != CommandInterruptedTimeout {
+		t.Fatalf("interruption kind = %q, want timeout", interrupted.Kind)
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("Run error = %q, want timeout detail", err.Error())
+	}
+	if got.Summary != "" {
+		t.Fatalf("summary = %q, want empty response", got.Summary)
 	}
 }
 
