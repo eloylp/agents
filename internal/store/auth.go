@@ -74,7 +74,7 @@ func (s *Store) UserCount(ctx context.Context) (int, error) {
 
 func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id,username,created_at,updated_at,last_login_at,disabled_at,id=(SELECT MIN(id) FROM users)
+		SELECT id,username,created_at,updated_at,last_login_at,disabled_at,is_admin
 		FROM users ORDER BY username ASC, id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("auth: list users: %w", err)
@@ -121,7 +121,7 @@ func (s *Store) CreateUser(ctx context.Context, username, password string) (User
 
 func (s *Store) GetUser(ctx context.Context, id int64) (User, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id,username,created_at,updated_at,last_login_at,disabled_at,id=(SELECT MIN(id) FROM users)
+		SELECT id,username,created_at,updated_at,last_login_at,disabled_at,is_admin
 		FROM users WHERE id=?`, id)
 	user, err := scanUser(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -143,12 +143,20 @@ func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 	}
 	defer tx.Rollback()
 
-	var adminID int64
-	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MIN(id), 0) FROM users").Scan(&adminID); err != nil {
-		return fmt.Errorf("auth: admin lookup: %w", err)
+	var isAdmin int
+	if err := tx.QueryRowContext(ctx, "SELECT is_admin FROM users WHERE id=?", id).Scan(&isAdmin); errors.Is(err, sql.ErrNoRows) {
+		return ErrAuthNotFound
+	} else if err != nil {
+		return fmt.Errorf("auth: lookup delete user: %w", err)
 	}
-	if adminID == id {
-		return ErrAuthForbidden
+	if isAdmin != 0 {
+		var adminCount int
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE is_admin != 0 AND disabled_at IS NULL").Scan(&adminCount); err != nil {
+			return fmt.Errorf("auth: count admins: %w", err)
+		}
+		if adminCount <= 1 {
+			return ErrAuthForbidden
+		}
 	}
 	res, err := tx.ExecContext(ctx, "DELETE FROM users WHERE id=?", id)
 	if err != nil {
@@ -190,8 +198,8 @@ func (s *Store) BootstrapUser(ctx context.Context, username, password string, se
 		return CreatedAuthToken{}, err
 	}
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO users(username,password_hash,created_at,updated_at)
-		VALUES(?,?,datetime('now'),datetime('now'))`, username, hash)
+		INSERT INTO users(username,password_hash,is_admin,created_at,updated_at)
+		VALUES(?,?,1,datetime('now'),datetime('now'))`, username, hash)
 	if err != nil {
 		return CreatedAuthToken{}, fmt.Errorf("auth: create user: %w", err)
 	}
@@ -348,7 +356,7 @@ func (s *Store) AuthenticateToken(ctx context.Context, token, kind string) (Auth
 	hash := hashToken(token)
 	row := s.db.QueryRowContext(ctx, `
 		SELECT
-			u.id,u.username,u.created_at,u.updated_at,u.last_login_at,u.disabled_at,u.id=(SELECT MIN(id) FROM users),
+			u.id,u.username,u.created_at,u.updated_at,u.last_login_at,u.disabled_at,u.is_admin,
 			t.id,t.user_id,t.kind,t.name,t.prefix,t.created_at,t.expires_at,t.last_used_at,t.revoked_at
 		FROM auth_tokens t
 		JOIN users u ON u.id = t.user_id
