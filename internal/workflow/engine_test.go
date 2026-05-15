@@ -48,6 +48,65 @@ func (s *stubRunner) callCount() int {
 	return len(s.calls)
 }
 
+func TestExtractDispatchContextPreservesDispatchDepth(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		payload   map[string]any
+		wantDepth int
+	}{
+		{
+			name: "in-memory int depth",
+			payload: map[string]any{
+				"root_event_id":  "root-123",
+				"dispatch_depth": 2,
+			},
+			wantDepth: 2,
+		},
+		{
+			name: "json replay float64 depth",
+			payload: map[string]any{
+				"root_event_id":  "root-123",
+				"dispatch_depth": float64(2),
+			},
+			wantDepth: 2,
+		},
+		{
+			name: "missing depth falls back to zero",
+			payload: map[string]any{
+				"root_event_id": "root-123",
+			},
+			wantDepth: 0,
+		},
+		{
+			name: "malformed depth falls back to zero",
+			payload: map[string]any{
+				"root_event_id":  "root-123",
+				"dispatch_depth": 2.5,
+			},
+			wantDepth: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rootEventID, depth := extractDispatchContext(Event{
+				Kind:    "agent.dispatch",
+				Payload: tt.payload,
+			})
+			if rootEventID != "root-123" {
+				t.Fatalf("rootEventID = %q, want %q", rootEventID, "root-123")
+			}
+			if depth != tt.wantDepth {
+				t.Fatalf("depth = %d, want %d", depth, tt.wantDepth)
+			}
+		})
+	}
+}
+
 func (s *stubRunner) lastSystem() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

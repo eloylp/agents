@@ -2,7 +2,10 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"time"
 )
 
@@ -122,7 +125,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 func extractDispatchContext(ev Event) (rootEventID string, depth int) {
 	if ev.Kind == "agent.dispatch" {
 		rootEventID, _ = ev.Payload["root_event_id"].(string)
-		if d, ok := ev.Payload["dispatch_depth"].(int); ok {
+		if d, ok := parseDispatchDepth(ev.Payload["dispatch_depth"]); ok {
 			depth = d
 		}
 		return rootEventID, depth
@@ -132,4 +135,39 @@ func extractDispatchContext(ev Event) (rootEventID string, depth int) {
 		return ev.ID, 0
 	}
 	return GenEventID(), 0
+}
+
+func parseDispatchDepth(value any) (int, bool) {
+	switch d := value.(type) {
+	case int:
+		return d, true
+	case int64:
+		return intFromInt64(d)
+	case float64:
+		if math.Trunc(d) != d || d < float64(math.MinInt) || d > float64(math.MaxInt) {
+			return 0, false
+		}
+		return int(d), true
+	case json.Number:
+		parsed, err := d.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return intFromInt64(parsed)
+	case string:
+		parsed, err := strconv.ParseInt(d, 10, 0)
+		if err != nil {
+			return 0, false
+		}
+		return int(parsed), true
+	default:
+		return 0, false
+	}
+}
+
+func intFromInt64(value int64) (int, bool) {
+	if value < int64(math.MinInt) || value > int64(math.MaxInt) {
+		return 0, false
+	}
+	return int(value), true
 }
