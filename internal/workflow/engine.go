@@ -1086,6 +1086,5 @@ func allowedReposForAgent(workspaceID string, agent fleet.Agent, repos []fleet.R
 		}
 		allowed = append(allowed, repo.Name)
 	}
-	slices.Sort(allowed)
-	return slices.Compact(allowed)
+	return slices.Compact(slices.Sorted(slices.Values(allowed)))
 }
