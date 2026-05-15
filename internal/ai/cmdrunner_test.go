@@ -41,6 +41,26 @@ func (f *silentContainerRunner) Run(_ context.Context, spec runtimeexec.Containe
 	return runtimeexec.ExitStatus{}, nil
 }
 
+type outputContainerRunner struct {
+	spec   runtimeexec.ContainerSpec
+	code   int
+	stdout string
+	stderr string
+}
+
+func (f *outputContainerRunner) EnsureImage(context.Context, string) error { return nil }
+
+func (f *outputContainerRunner) Run(_ context.Context, spec runtimeexec.ContainerSpec) (runtimeexec.ExitStatus, error) {
+	f.spec = spec
+	if spec.Stdout != nil && f.stdout != "" {
+		_, _ = spec.Stdout.Write([]byte(f.stdout))
+	}
+	if spec.Stderr != nil && f.stderr != "" {
+		_, _ = spec.Stderr.Write([]byte(f.stderr))
+	}
+	return runtimeexec.ExitStatus{Code: f.code}, nil
+}
+
 type timeoutContainerRunner struct {
 	spec      runtimeexec.ContainerSpec
 	writeJSON bool
@@ -457,6 +477,64 @@ func TestCommandRunnerEmptyStdoutIsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "empty response") {
 		t.Errorf("expected 'empty response' in error, got: %v", err)
+	}
+}
+
+func TestCommandRunnerCodexErrorEventReturnsSanitizedFailureMetadata(t *testing.T) {
+	t.Parallel()
+	fake := &outputContainerRunner{
+		stdout: `{"type":"error","message":"Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again. OPENAI_API_KEY=fake-secret-value"}` + "\n",
+	}
+	r := NewContainerCommandRunner(
+		"codex", "codex", nil,
+		10, 4000, fake, "ghcr.io/example/runner:test",
+		runtimeexec.ContainerSpec{},
+		zerolog.Nop(),
+	)
+	_, err := r.Run(context.Background(), Request{Workflow: "wf", Repo: "owner/repo"})
+	if err == nil {
+		t.Fatal("Run error = nil, want codex failure")
+	}
+	kind, detail, ok := FailureMetadata(err)
+	if !ok {
+		t.Fatalf("FailureMetadata ok = false for %T %v", err, err)
+	}
+	if kind != FailureKindBackendAuth {
+		t.Fatalf("kind = %q, want %q", kind, FailureKindBackendAuth)
+	}
+	if !strings.Contains(detail, "refresh token was already used") {
+		t.Fatalf("detail = %q, want auth refresh message", detail)
+	}
+	if strings.Contains(detail, "fake-secret-value") {
+		t.Fatalf("detail leaked secret: %q", detail)
+	}
+}
+
+func TestCommandRunnerStderrFailureMetadataRedactsBearerToken(t *testing.T) {
+	t.Parallel()
+	fake := &outputContainerRunner{
+		code:   1,
+		stderr: "backend failed: Authorization: Bearer abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO\n",
+	}
+	r := NewContainerCommandRunner(
+		"codex", "codex", nil,
+		10, 4000, fake, "ghcr.io/example/runner:test",
+		runtimeexec.ContainerSpec{},
+		zerolog.Nop(),
+	)
+	_, err := r.Run(context.Background(), Request{Workflow: "wf", Repo: "owner/repo"})
+	if err == nil {
+		t.Fatal("Run error = nil, want command failure")
+	}
+	kind, detail, ok := FailureMetadata(err)
+	if !ok {
+		t.Fatalf("FailureMetadata ok = false for %T %v", err, err)
+	}
+	if kind != FailureKindBackendAuth {
+		t.Fatalf("kind = %q, want %q", kind, FailureKindBackendAuth)
+	}
+	if strings.Contains(detail, "abcdefghijklmnopqrstuvwxyz") || !strings.Contains(detail, "[REDACTED]") {
+		t.Fatalf("detail redaction = %q, want redacted bearer token", detail)
 	}
 }
 

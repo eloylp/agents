@@ -225,10 +225,14 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	// observe store gzips it before persistence. Token usage comes
 	// from the runner's CLI parser.
 	if e.traceRec != nil {
-		status, errMsg := "success", ""
+		status, errMsg, errorKind, errorDetail := "success", "", "", ""
 		if runErr != nil {
 			status = "error"
 			errMsg = runErr.Error()
+			if kind, detail, ok := ai.FailureMetadata(runErr); ok {
+				errorKind = string(kind)
+				errorDetail = detail
+			}
 		}
 		e.traceRec.RecordSpan(SpanInput{
 			SpanID:           spanID,
@@ -249,6 +253,8 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 			FinishedAt:       spanEnd,
 			Status:           status,
 			ErrorMsg:         errMsg,
+			ErrorKind:        errorKind,
+			ErrorDetail:      errorDetail,
 			Prompt:           composedPrompt,
 			InputTokens:      resp.Usage.InputTokens,
 			OutputTokens:     resp.Usage.OutputTokens,

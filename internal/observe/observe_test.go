@@ -568,7 +568,8 @@ func TestStoreRecordSpanPersistsAndPublishesToSSE(t *testing.T) {
 		Repo: "owner/repo", EventKind: "issues.labeled",
 		Number: 7, QueueWaitMs: 50, ArtifactsCount: 3, Summary: "all done",
 		StartedAt: start, FinishedAt: end,
-		Status: "success",
+		Status: "error", ErrorMsg: "parse codex response: empty response (no fields populated)",
+		ErrorKind: "backend_auth", ErrorDetail: "refresh token was already used",
 	})
 
 	// Verify SQLite via ListTraces.
@@ -586,8 +587,14 @@ func TestStoreRecordSpanPersistsAndPublishesToSSE(t *testing.T) {
 	if sp.DurationMs != 5000 {
 		t.Errorf("DurationMs = %d, want 5000", sp.DurationMs)
 	}
-	if sp.Status != "success" {
-		t.Errorf("Status = %q, want %q", sp.Status, "success")
+	if sp.Status != "error" {
+		t.Errorf("Status = %q, want %q", sp.Status, "error")
+	}
+	if sp.ErrorKind != "backend_auth" {
+		t.Errorf("ErrorKind = %q, want backend_auth", sp.ErrorKind)
+	}
+	if sp.ErrorDetail != "refresh token was already used" {
+		t.Errorf("ErrorDetail = %q, want backend detail", sp.ErrorDetail)
 	}
 
 	// Verify SSE fan-out.

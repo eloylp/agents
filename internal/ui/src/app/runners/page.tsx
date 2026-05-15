@@ -30,6 +30,8 @@ interface RunnerRow {
   run_duration_ms?: number
   summary?: string
   error?: string
+  error_kind?: 'backend_auth' | 'backend_error' | 'runner_error' | 'timeout' | 'canceled' | 'parse_error' | 'unknown' | string
+  error_detail?: string
   prompt_size?: number
   input_tokens?: number
   output_tokens?: number
@@ -76,6 +78,22 @@ function isRunnerExecution(row: RunnerRow) {
 function fmtTime(s?: string) {
   if (!s) return '-'
   return new Date(s).toLocaleTimeString()
+}
+
+function runnerCause(row: RunnerRow) {
+  return row.error_detail || row.error || ''
+}
+
+function runnerKindLabel(kind?: string) {
+  switch (kind) {
+    case 'backend_auth': return 'Backend auth'
+    case 'backend_error': return 'Backend error'
+    case 'runner_error': return 'Runner error'
+    case 'timeout': return 'Timeout'
+    case 'canceled': return 'Canceled'
+    case 'parse_error': return 'Parser'
+    default: return kind || 'Failure'
+  }
 }
 
 export default function RunnersPage() {
@@ -242,7 +260,10 @@ function RunnersInner() {
   const [highlightUntil, setHighlightUntil] = useState<number | null>(null)
   const [streamSpan, setStreamSpan] = useState<{ id: string; agent: string; repo: string; kind: string } | null>(null)
   const [timeoutToast, setTimeoutToast] = useState<RunnerRow | null>(null)
+  const [failureToast, setFailureToast] = useState<RunnerRow | null>(null)
   const timeoutTracker = useRef(newRunnerTimeoutTracker())
+  const notifiedFailures = useRef<Set<string>>(new Set())
+  const failureToastReady = useRef(false)
 
   const load = async () => {
     try {
@@ -253,6 +274,15 @@ function RunnersInner() {
       const nextRows = data.runners ?? []
       const newTimeout = observeRunnerTimeouts(nextRows, timeoutTracker.current)
       if (newTimeout) setTimeoutToast(newTimeout)
+      const newFailure = nextRows.find(r => {
+        if (r.status !== 'error') return false
+        const key = `${r.id}:${r.span_id || ''}`
+        if (notifiedFailures.current.has(key)) return false
+        notifiedFailures.current.add(key)
+        return failureToastReady.current
+      })
+      if (newFailure) setFailureToast(newFailure)
+      failureToastReady.current = true
       setRows(nextRows)
       setError(null)
     } catch (e) {
@@ -264,6 +294,8 @@ function RunnersInner() {
 
   useEffect(() => {
     timeoutTracker.current = newRunnerTimeoutTracker()
+    notifiedFailures.current = new Set()
+    failureToastReady.current = false
     load()
     const id = window.setInterval(load, POLL_MS)
     return () => window.clearInterval(id)
@@ -404,6 +436,19 @@ function RunnersInner() {
             </span>
             <button
               onClick={() => setTimeoutToast(null)}
+              style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '4px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}
+            >Dismiss</button>
+          </div>
+        </Card>
+      )}
+      {failureToast && (
+        <Card style={{ marginBottom: '1rem', borderColor: 'var(--border-danger)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center' }}>
+            <span style={{ color: 'var(--text-danger)', fontSize: '0.85rem' }}>
+              Runner failed: {failureToast.agent || failureToast.target_agent || 'agent'} · {failureToast.repo || '-'} · {runnerKindLabel(failureToast.error_kind)}{runnerCause(failureToast) ? ` · ${runnerCause(failureToast)}` : ''}
+            </span>
+            <button
+              onClick={() => setFailureToast(null)}
               style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '4px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}
             >Dismiss</button>
           </div>
@@ -573,6 +618,14 @@ function RunnersInner() {
                       {r.error && (<>
                         <span style={{ color: 'var(--text-faint)' }}>Error</span>
                         <span style={{ color: 'var(--text-danger)' }}>{r.error}</span>
+                      </>)}
+                      {r.error_kind && (<>
+                        <span style={{ color: 'var(--text-faint)' }}>Failure kind</span>
+                        <span style={{ color: 'var(--text-danger)' }}>{runnerKindLabel(r.error_kind)}</span>
+                      </>)}
+                      {r.error_detail && (<>
+                        <span style={{ color: 'var(--text-faint)' }}>Backend detail</span>
+                        <span style={{ color: 'var(--text-danger)' }}>{r.error_detail}</span>
                       </>)}
                       {(r.input_tokens || r.output_tokens || r.cache_read_tokens || r.cache_write_tokens) ? (<>
                         <span style={{ color: 'var(--text-faint)' }}>Tokens</span>

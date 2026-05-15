@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -123,6 +124,49 @@ type Response struct {
 	// Not part of the agent schema. Cache fields are zero on backends that
 	// do not report them (e.g. Codex emits only input/output).
 	Usage Usage `json:"-"`
+}
+
+type FailureKind string
+
+const (
+	FailureKindBackendAuth  FailureKind = "backend_auth"
+	FailureKindBackendError FailureKind = "backend_error"
+	FailureKindRunnerError  FailureKind = "runner_error"
+	FailureKindTimeout      FailureKind = "timeout"
+	FailureKindCanceled     FailureKind = "canceled"
+	FailureKindParseError   FailureKind = "parse_error"
+	FailureKindUnknown      FailureKind = "unknown"
+)
+
+// RunFailureError carries sanitized, operator-facing failure metadata alongside
+// the strict runner error. The daemon persists these fields on traces/runners.
+type RunFailureError struct {
+	Backend string
+	Kind    FailureKind
+	Detail  string
+	Err     error
+}
+
+func (e RunFailureError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	if e.Detail != "" {
+		return e.Detail
+	}
+	return string(e.Kind)
+}
+
+func (e RunFailureError) Unwrap() error {
+	return e.Err
+}
+
+func FailureMetadata(err error) (FailureKind, string, bool) {
+	var failure RunFailureError
+	if errors.As(err, &failure) {
+		return failure.Kind, failure.Detail, true
+	}
+	return "", "", false
 }
 
 // Usage is the per-run token consumption reported by the AI CLI. Total

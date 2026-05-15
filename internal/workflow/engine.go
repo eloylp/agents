@@ -35,7 +35,8 @@ type SpanInput struct {
 	ArtifactsCount                    int
 	Summary                           string
 	StartedAt, FinishedAt             time.Time
-	Status, ErrorMsg                  string
+	Status, ErrorMsg, ErrorKind       string
+	ErrorDetail                       string
 	Prompt                            string
 	InputTokens, OutputTokens         int64
 	CacheReadTokens, CacheWriteTokens int64
