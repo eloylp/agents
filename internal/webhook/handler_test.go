@@ -41,11 +41,29 @@ func TestVerifySignature(t *testing.T) {
 
 func TestPushEventCarriesRepoWorkspace(t *testing.T) {
 	t.Parallel()
-	st := seedWebhookStore(t, fleet.Repo{
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
+
+	repo := fleet.Repo{
 		WorkspaceID: "team-a",
 		Name:        "owner/repo",
 		Enabled:     true,
-	})
+	}
+	agents := []fleet.Agent{{
+		Name:        "reviewer",
+		Backend:     "claude",
+		Prompt:      "Review events.",
+		Description: "Reviews repository events",
+	}}
+	backends := map[string]fleet.Backend{"claude": {Command: "claude"}}
+	if err := st.ImportAll(agents, []fleet.Repo{repo}, nil, backends, nil, nil); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+
 	dc := workflow.NewDataChannels(1, st)
 	h := NewHandler(NewDeliveryStore(10*time.Minute), dc, st, config.HTTPConfig{}, zerolog.Nop())
 	body := []byte(`{
@@ -69,26 +87,4 @@ func TestPushEventCarriesRepoWorkspace(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for queued event")
 	}
-}
-
-func seedWebhookStore(t *testing.T, repo fleet.Repo) *store.Store {
-	t.Helper()
-	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	st := store.New(db)
-	t.Cleanup(func() { st.Close() })
-
-	agents := []fleet.Agent{{
-		Name:        "reviewer",
-		Backend:     "claude",
-		Prompt:      "Review events.",
-		Description: "Reviews repository events",
-	}}
-	backends := map[string]fleet.Backend{"claude": {Command: "claude"}}
-	if err := st.ImportAll(agents, []fleet.Repo{repo}, nil, backends, nil, nil); err != nil {
-		t.Fatalf("seed store: %v", err)
-	}
-	return st
 }
