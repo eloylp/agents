@@ -1,6 +1,9 @@
 package runtime
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 const (
 	RunnerWorkspaceDir     = "/workspace"
@@ -61,7 +64,7 @@ func WrapBackendCommand(backendName string, command []string, env []string, opts
 	if len(command) == 0 {
 		return command, env
 	}
-	if strings.HasPrefix(backendName, "claude") && getEnv(env, "GITHUB_TOKEN") != "" && !hasArg(command[1:], "--mcp-config") {
+	if strings.HasPrefix(backendName, "claude") && getEnv(env, "GITHUB_TOKEN") != "" && !slices.Contains(command[1:], "--mcp-config") {
 		command = append(command[:1], append([]string{"--mcp-config", RunnerClaudeMCPPath}, command[1:]...)...)
 	}
 	return shellEntrypoint(command, BackendSetupScript(backendName, opts)), env
@@ -116,15 +119,6 @@ elif [ -n "${OPENAI_API_KEY:-}" ]; then
   printf '%s' "$OPENAI_API_KEY" | "$codex_cmd" login --with-api-key >/dev/null || echo "codex login failed" >&2
 fi
 `
-
-func hasArg(args []string, arg string) bool {
-	for _, a := range args {
-		if a == arg {
-			return true
-		}
-	}
-	return false
-}
 
 func setEnvValues(env []string, kvs ...string) []string {
 	if len(kvs)%2 != 0 {
