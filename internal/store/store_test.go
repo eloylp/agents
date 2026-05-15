@@ -413,6 +413,14 @@ func TestWorkspacePromptMigrationBackfillsExistingAgents(t *testing.T) {
 	}
 	if _, err := db.Exec(`
 		CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
+		CREATE TABLE config (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		);
+		CREATE TABLE skills (
+			name TEXT PRIMARY KEY,
+			prompt TEXT NOT NULL
+		);
 		CREATE TABLE agents (
 			name TEXT PRIMARY KEY,
 			backend TEXT NOT NULL DEFAULT 'auto',
@@ -435,6 +443,88 @@ func TestWorkspacePromptMigrationBackfillsExistingAgents(t *testing.T) {
 			events TEXT NOT NULL DEFAULT '[]',
 			cron TEXT NOT NULL DEFAULT '',
 			enabled INTEGER NOT NULL DEFAULT 1
+		);
+		CREATE TABLE memory (
+			agent TEXT NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
+			repo TEXT NOT NULL,
+			content TEXT NOT NULL DEFAULT '',
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (agent, repo)
+		);
+		CREATE TABLE traces (
+			span_id TEXT PRIMARY KEY,
+			root_event_id TEXT NOT NULL,
+			parent_span_id TEXT NOT NULL DEFAULT '',
+			agent TEXT NOT NULL,
+			backend TEXT NOT NULL,
+			repo TEXT NOT NULL,
+			number INTEGER NOT NULL DEFAULT 0,
+			event_kind TEXT NOT NULL,
+			invoked_by TEXT NOT NULL DEFAULT '',
+			dispatch_depth INTEGER NOT NULL DEFAULT 0,
+			queue_wait_ms INTEGER NOT NULL DEFAULT 0,
+			artifacts_count INTEGER NOT NULL DEFAULT 0,
+			summary TEXT NOT NULL DEFAULT '',
+			started_at TIMESTAMP NOT NULL,
+			finished_at TIMESTAMP NOT NULL,
+			duration_ms INTEGER NOT NULL,
+			status TEXT NOT NULL,
+			error TEXT NOT NULL DEFAULT '',
+			prompt_gz BLOB NULL,
+			prompt_size INTEGER NULL,
+			input_tokens INTEGER NULL,
+			output_tokens INTEGER NULL,
+			cache_read_tokens INTEGER NULL,
+			cache_write_tokens INTEGER NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE events (
+			id TEXT PRIMARY KEY,
+			at TIMESTAMP NOT NULL,
+			repo TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			number INTEGER NOT NULL DEFAULT 0,
+			actor TEXT NOT NULL DEFAULT '',
+			payload TEXT NOT NULL DEFAULT '{}'
+		);
+		CREATE TABLE event_queue (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			event_blob TEXT NOT NULL,
+			enqueued_at TEXT NOT NULL,
+			started_at TEXT NULL,
+			completed_at TEXT NULL
+		);
+		CREATE INDEX idx_event_queue_pending
+			ON event_queue(id)
+			WHERE completed_at IS NULL;
+		CREATE TABLE dispatch_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			from_agent TEXT NOT NULL,
+			to_agent TEXT NOT NULL,
+			repo TEXT NOT NULL,
+			number INTEGER NOT NULL DEFAULT 0,
+			reason TEXT NOT NULL DEFAULT '',
+			at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE token_budgets (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			scope_kind TEXT NOT NULL DEFAULT 'global',
+			scope_name TEXT NOT NULL DEFAULT '',
+			period TEXT NOT NULL DEFAULT 'daily',
+			cap_tokens INTEGER NOT NULL DEFAULT 0,
+			alert_at_pct INTEGER NOT NULL DEFAULT 80,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			UNIQUE(scope_kind, scope_name, period)
+		);
+		CREATE TABLE graph_layouts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			scope TEXT NOT NULL DEFAULT 'global',
+			node_kind TEXT NOT NULL,
+			node_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+			x REAL NOT NULL,
+			y REAL NOT NULL,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			UNIQUE(scope, node_kind, node_id)
 		);
 		CREATE TABLE guardrails (
 			name TEXT PRIMARY KEY,

@@ -1,16 +1,6 @@
 -- Scope daemon-managed agent memory by workspace. Existing memory rows belong
 -- to the migrated Default workspace.
 
--- Keep this compatibility definition aligned with 013_memory_store.sql; fresh
--- installs may reach this migration without a pre-existing memory table.
-CREATE TABLE IF NOT EXISTS memory (
-    agent      TEXT NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
-    repo       TEXT NOT NULL,
-    content    TEXT NOT NULL DEFAULT '',
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (agent, repo)
-);
-
 CREATE TABLE memory_new (
     workspace_id TEXT NOT NULL DEFAULT 'default' REFERENCES workspaces(id) ON DELETE CASCADE,
     agent        TEXT NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
