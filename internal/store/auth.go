@@ -62,8 +62,6 @@ const (
 	AuthTokenKindAPI     = "api"
 
 	randomTokenBytes = 32
-
-	legacyPBKDF2PasswordPrefix = "pbkdf2-sha256$"
 )
 
 func (s *Store) UserCount(ctx context.Context) (int, error) {
