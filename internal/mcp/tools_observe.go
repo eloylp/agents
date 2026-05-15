@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"cmp"
 	"context"
 	"maps"
 	"slices"
@@ -48,7 +49,8 @@ func toolListEvents(deps Deps) server.ToolHandlerFunc {
 				since = t
 			}
 		}
-		return jsonResult(nilSafe(deps.Observe.ListEvents(since)))
+		workspace, _ := trimmedStringOptional(req, "workspace")
+		return jsonResult(nilSafe(deps.Observe.ListEventsForWorkspace(workspace, since)))
 	}
 }
 
@@ -56,8 +58,9 @@ func toolListEvents(deps Deps) server.ToolHandlerFunc {
 // shape already matches GET /traces so clients can parse both surfaces with
 // the same decoder.
 func toolListTraces(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		return jsonResult(nilSafe(deps.Observe.ListTraces()))
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace, _ := trimmedStringOptional(req, "workspace")
+		return jsonResult(nilSafe(deps.Observe.ListTracesForWorkspace(workspace)))
 	}
 }
 
@@ -70,7 +73,8 @@ func toolGetTrace(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("root_event_id is required"), nil
 		}
-		spans := deps.Observe.TracesByRootEventID(id)
+		workspace, _ := trimmedStringOptional(req, "workspace")
+		spans := deps.Observe.TracesByRootEventIDForWorkspace(workspace, id)
 		if len(spans) == 0 {
 			return mcpgo.NewToolResultErrorf("trace %q not found", id), nil
 		}
@@ -120,8 +124,10 @@ func toolGetTracePrompt(deps Deps) server.ToolHandlerFunc {
 // edge endpoints not in the current config (e.g. agents removed after they
 // dispatched) are added so the graph stays self-consistent.
 func toolGetGraph(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		edges := deps.Observe.ListEdges()
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace, _ := trimmedStringOptional(req, "workspace")
+		workspaceID := fleet.NormalizeWorkspaceID(workspace)
+		edges := deps.Observe.ListEdgesForWorkspace(workspaceID)
 
 		agents, err := deps.Store.ReadAgents()
 		if err != nil {
@@ -129,8 +135,29 @@ func toolGetGraph(deps Deps) server.ToolHandlerFunc {
 		}
 
 		seen := make(map[string]struct{})
+		agentNames := make(map[string]struct{})
+		configuredEdges := make(map[string]mcpGraphEdge)
 		for _, a := range agents {
+			if fleet.NormalizeWorkspaceID(a.WorkspaceID) != workspaceID {
+				continue
+			}
 			seen[a.Name] = struct{}{}
+			agentNames[a.Name] = struct{}{}
+		}
+		for _, a := range agents {
+			if fleet.NormalizeWorkspaceID(a.WorkspaceID) != workspaceID {
+				continue
+			}
+			for _, target := range a.CanDispatch {
+				if _, ok := agentNames[target]; !ok {
+					continue
+				}
+				configuredEdges[mcpGraphEdgeKey(a.Name, target)] = mcpGraphEdge{
+					From:       a.Name,
+					To:         target,
+					Dispatches: []mcpGraphDispatch{},
+				}
+			}
 		}
 		for _, e := range edges {
 			seen[e.From] = struct{}{}
@@ -142,7 +169,10 @@ func toolGetGraph(deps Deps) server.ToolHandlerFunc {
 			nodes = append(nodes, mcpGraphNode{ID: name})
 		}
 
-		wireEdges := make([]mcpGraphEdge, 0, len(edges))
+		edgeByKey := make(map[string]mcpGraphEdge, len(edges)+len(configuredEdges))
+		for key, e := range configuredEdges {
+			edgeByKey[key] = e
+		}
 		for _, e := range edges {
 			recs := make([]mcpGraphDispatch, 0, len(e.Dispatches))
 			for _, d := range e.Dispatches {
@@ -153,19 +183,36 @@ func toolGetGraph(deps Deps) server.ToolHandlerFunc {
 					Reason: d.Reason,
 				})
 			}
-			wireEdges = append(wireEdges, mcpGraphEdge{
+			edgeByKey[mcpGraphEdgeKey(e.From, e.To)] = mcpGraphEdge{
 				From:       e.From,
 				To:         e.To,
 				Count:      e.Count,
 				Dispatches: recs,
-			})
+			}
 		}
+		wireEdges := make([]mcpGraphEdge, 0, len(edgeByKey))
+		for _, e := range edgeByKey {
+			if e.Dispatches == nil {
+				e.Dispatches = []mcpGraphDispatch{}
+			}
+			wireEdges = append(wireEdges, e)
+		}
+		slices.SortFunc(wireEdges, func(a, b mcpGraphEdge) int {
+			if byFrom := cmp.Compare(a.From, b.From); byFrom != 0 {
+				return byFrom
+			}
+			return cmp.Compare(a.To, b.To)
+		})
 
 		return jsonResult(map[string]any{
 			"nodes": nodes,
 			"edges": wireEdges,
 		})
 	}
+}
+
+func mcpGraphEdgeKey(from, to string) string {
+	return from + "\x00" + to
 }
 
 // toolGetDispatches returns the current dispatch counters.

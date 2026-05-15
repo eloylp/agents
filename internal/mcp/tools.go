@@ -187,7 +187,10 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 	if deps.Observe != nil {
 		srv.AddTool(
 			mcpgo.NewTool("list_events",
-				mcpgo.WithDescription("List recent events (GitHub webhook deliveries, cron firings, on-demand runs, dispatches). Ordered oldest→newest, capped at 500."),
+				mcpgo.WithDescription("List recent events (GitHub webhook deliveries, cron firings, on-demand runs, dispatches) for one workspace. Ordered oldest→newest, capped at 500. Omitted workspace defaults to default."),
+				mcpgo.WithString("workspace",
+					mcpgo.Description("Optional workspace id or display name. Defaults to default."),
+				),
 				mcpgo.WithString("since",
 					mcpgo.Description("Optional RFC3339 timestamp; return only events strictly after this time."),
 				),
@@ -196,13 +199,19 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("list_traces",
-				mcpgo.WithDescription("List recent agent run spans. Ordered newest→oldest, capped at 200. Each span records backend, repo, status, duration, and summary."),
+				mcpgo.WithDescription("List recent agent run spans for one workspace. Ordered newest→oldest, capped at 200. Each span records backend, repo, status, duration, and summary. Omitted workspace defaults to default."),
+				mcpgo.WithString("workspace",
+					mcpgo.Description("Optional workspace id or display name. Defaults to default."),
+				),
 			),
 			toolListTraces(deps),
 		)
 		srv.AddTool(
 			mcpgo.NewTool("get_trace",
 				mcpgo.WithDescription("Fetch every span in a single trace by root event ID. Returns the full dispatch chain rooted at the originating event."),
+				mcpgo.WithString("workspace",
+					mcpgo.Description("Optional workspace id or display name. Defaults to default."),
+				),
 				mcpgo.WithString("root_event_id",
 					mcpgo.Required(),
 					mcpgo.Description("Root event ID of the trace (e.g. from list_events or list_traces)."),
@@ -232,7 +241,10 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("get_graph",
-				mcpgo.WithDescription("Return the agent interaction graph: every configured agent as a node plus observed inter-agent dispatch edges with counts and individual dispatch records."),
+				mcpgo.WithDescription("Return one workspace's agent interaction graph: configured agents as nodes plus observed and configured inter-agent dispatch edges. Omitted workspace defaults to default."),
+				mcpgo.WithString("workspace",
+					mcpgo.Description("Optional workspace id or display name. Defaults to default."),
+				),
 			),
 			toolGetGraph(deps),
 		)
