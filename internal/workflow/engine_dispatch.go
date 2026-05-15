@@ -46,6 +46,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 	// committed the dedup slot before enqueuing the event. Re-claiming would see
 	// the committed entry and self-suppress every dispatched run. The enqueue-side
 	// claim is the authoritative gate; handleDispatchEvent only executes it.
+	agentsRunClaimed := false
 	if ev.Kind == "agents.run" && e.dispatcher != nil {
 		dedupRepo := dedupRepoKey(workspaceID, repo.Name)
 		if !e.dispatcher.dedup.TryClaimForDispatch(targetName, dedupRepo, ev.Number, time.Now()) {
@@ -57,6 +58,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 			return nil
 		}
 		e.dispatcher.dedup.MarkWebhookRunInFlight(targetName, dedupRepo, ev.Number)
+		agentsRunClaimed = true
 	}
 
 	// Autonomous (cron-fired) runs use the cron bucket dedup window so a
@@ -64,6 +66,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 	// self-suppresses (matches the old scheduler.executeAgentRun behavior).
 	// Rollback on error so the slot is freed for the next tick; finalize on
 	// success so the dedup window is preserved.
+	cronClaimed := false
 	if ev.Kind == "cron" && e.dispatcher != nil {
 		if !e.dispatcher.TryMarkAutonomousRun(workspaceID, targetName, repo.Name, time.Now()) {
 			e.logger.Info().
@@ -73,6 +76,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 			e.runsDeduped.Add(1)
 			return nil
 		}
+		cronClaimed = true
 	}
 
 	e.logger.Info().
@@ -83,36 +87,61 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 		Str("kind", ev.Kind).
 		Msg("running dispatched agent")
 
-	runErr := e.runAgent(ctx, ev, agent, cfg)
+	var runErr error
+	runSucceeded := false
+	defer func() {
+		if r := recover(); r != nil {
+			if agentsRunClaimed {
+				dedupRepo := dedupRepoKey(workspaceID, repo.Name)
+				e.dispatcher.dedup.AbandonWebhookRun(targetName, dedupRepo, ev.Number)
+			}
+			if cronClaimed {
+				e.dispatcher.RollbackAutonomousRun(workspaceID, targetName, repo.Name)
+			}
+			if ev.Kind == "cron" && e.lastRunRec != nil {
+				e.lastRunRec.RecordLastRun(workspaceID, targetName, repo.Name, time.Now(), "error")
+			}
+			e.logger.Error().
+				Interface("panic", r).
+				Str("workspace", workspaceID).
+				Str("repo", ev.Repo.FullName).
+				Str("target", targetName).
+				Str("kind", ev.Kind).
+				Int("number", ev.Number).
+				Msg("panic in direct agent run; cleanup completed")
+			panic(r)
+		}
 
-	// Release the on-demand claim taken above for agents.run.
-	if ev.Kind == "agents.run" && e.dispatcher != nil {
-		dedupRepo := dedupRepoKey(workspaceID, repo.Name)
-		if runErr != nil {
-			e.dispatcher.dedup.AbandonWebhookRun(targetName, dedupRepo, ev.Number)
-		} else {
-			e.dispatcher.dedup.FinalizeWebhookRun(targetName, dedupRepo, ev.Number)
+		if agentsRunClaimed {
+			dedupRepo := dedupRepoKey(workspaceID, repo.Name)
+			if runSucceeded {
+				e.dispatcher.dedup.FinalizeWebhookRun(targetName, dedupRepo, ev.Number)
+			} else {
+				e.dispatcher.dedup.AbandonWebhookRun(targetName, dedupRepo, ev.Number)
+			}
 		}
-	}
-	// Release the cron bucket mark taken above for autonomous runs.
-	if ev.Kind == "cron" && e.dispatcher != nil {
-		if runErr != nil {
-			e.dispatcher.RollbackAutonomousRun(workspaceID, targetName, repo.Name)
-		} else {
-			e.dispatcher.FinalizeAutonomousRun(workspaceID, targetName, repo.Name)
+		if cronClaimed {
+			if runSucceeded {
+				e.dispatcher.FinalizeAutonomousRun(workspaceID, targetName, repo.Name)
+			} else {
+				e.dispatcher.RollbackAutonomousRun(workspaceID, targetName, repo.Name)
+			}
 		}
-	}
-	// Notify the autonomous scheduler so its lastRuns map (which drives the
-	// per-binding schedule display in /agents) reflects this run's outcome.
-	// Fired only for autonomous events, webhook/agents.run/dispatch runs
-	// have their own provenance and don't update the cron schedule view.
-	if ev.Kind == "cron" && e.lastRunRec != nil {
-		status := "success"
-		if runErr != nil {
-			status = "error"
+		// Notify the autonomous scheduler so its lastRuns map (which drives the
+		// per-binding schedule display in /agents) reflects this run's outcome.
+		// Fired only for autonomous events, webhook/agents.run/dispatch runs
+		// have their own provenance and don't update the cron schedule view.
+		if ev.Kind == "cron" && e.lastRunRec != nil {
+			status := "success"
+			if !runSucceeded {
+				status = "error"
+			}
+			e.lastRunRec.RecordLastRun(workspaceID, targetName, repo.Name, time.Now(), status)
 		}
-		e.lastRunRec.RecordLastRun(workspaceID, targetName, repo.Name, time.Now(), status)
-	}
+	}()
+
+	runErr = e.runAgent(ctx, ev, agent, cfg)
+	runSucceeded = runErr == nil
 	return runErr
 }
 
