@@ -525,6 +525,96 @@ func TestWorkspacePromptMigrationBackfillsExistingAgents(t *testing.T) {
 	}
 }
 
+func TestAuthAdminMigrationBackfillsFirstExistingUser(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "agents.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
+		CREATE TABLE users (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			username      TEXT NOT NULL UNIQUE,
+			password_hash TEXT NOT NULL,
+			created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+			last_login_at TEXT,
+			disabled_at   TEXT
+		);
+		CREATE TABLE auth_tokens (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			kind         TEXT NOT NULL CHECK (kind IN ('session', 'api')),
+			name         TEXT NOT NULL,
+			token_hash   TEXT NOT NULL UNIQUE,
+			prefix       TEXT NOT NULL,
+			created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+			expires_at   TEXT,
+			last_used_at TEXT,
+			revoked_at   TEXT,
+			scopes       TEXT
+		);
+		INSERT INTO users(username, password_hash) VALUES ('first', 'hash'), ('second', 'hash');
+	`); err != nil {
+		t.Fatalf("seed pre-029 auth schema: %v", err)
+	}
+	for _, name := range []string{
+		"001_init.sql",
+		"002_observability_and_memory.sql",
+		"003_memory_cascade.sql",
+		"004_drop_unused_tables.sql",
+		"005_trace_steps.sql",
+		"006_backend_metadata_and_agent_model.sql",
+		"007_agent_allow_memory.sql",
+		"008_event_queue.sql",
+		"009_traces_prompt_tokens.sql",
+		"010_guardrails.sql",
+		"011_trace_steps_kind.sql",
+		"012_mcp_tool_usage_guardrail.sql",
+		"013_discretion_guardrail.sql",
+		"014_token_budgets.sql",
+		"015_remove_daemon_config.sql",
+		"016_memory_scope_guardrail.sql",
+		"017_repository_tool_fallback_guardrail.sql",
+		"018_security_guardrail_gh_fallback.sql",
+		"019_auth.sql",
+		"020_agent_ids_and_graph_layouts.sql",
+		"021_workspaces_prompts.sql",
+		"022_workspace_memory.sql",
+		"023_workspace_graph_layouts.sql",
+		"024_workspace_observe_budgets.sql",
+		"025_workspace_entity_identity.sql",
+		"026_scoped_prompts.sql",
+		"027_scoped_skills_guardrails.sql",
+		"028_runtime_settings.sql",
+	} {
+		if _, err := db.Exec("INSERT INTO schema_migrations(name) VALUES(?)", name); err != nil {
+			t.Fatalf("mark migration %s applied: %v", name, err)
+		}
+	}
+	db.Close()
+
+	db, err = store.Open(path)
+	if err != nil {
+		t.Fatalf("Open after pre-029 seed: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	var firstAdmin, secondAdmin int
+	if err := db.QueryRow("SELECT is_admin FROM users WHERE username='first'").Scan(&firstAdmin); err != nil {
+		t.Fatalf("first is_admin: %v", err)
+	}
+	if err := db.QueryRow("SELECT is_admin FROM users WHERE username='second'").Scan(&secondAdmin); err != nil {
+		t.Fatalf("second is_admin: %v", err)
+	}
+	if firstAdmin != 1 || secondAdmin != 0 {
+		t.Fatalf("admin flags first=%d second=%d, want first=1 second=0", firstAdmin, secondAdmin)
+	}
+}
+
 // TestImportLoad verifies the full round-trip: Import writes a config into the
 // database, Load reads it back, and the resulting *config.Config matches the
 // original on all fields that are persisted.

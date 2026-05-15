@@ -86,6 +86,9 @@ func TestAuthBootstrapLoginAndAPITokenLifecycle(t *testing.T) {
 	if identity.User.Username != "admin" {
 		t.Fatalf("authenticated username = %q, want admin", identity.User.Username)
 	}
+	if !identity.User.IsAdmin {
+		t.Fatal("AuthenticateToken(session) user is not marked admin")
+	}
 
 	api, err := st.CreateAPIToken(ctx, identity.User.ID, "Codex MCP", nil)
 	if err != nil {
@@ -115,6 +118,95 @@ func TestAuthBootstrapLoginAndAPITokenLifecycle(t *testing.T) {
 	}
 	if _, err := st.AuthenticateToken(ctx, api.Token, store.AuthTokenKindAPI); !errors.Is(err, store.ErrAuthInvalid) {
 		t.Fatalf("AuthenticateToken(revoked api) error = %v, want %v", err, store.ErrAuthInvalid)
+	}
+}
+
+func TestAuthAdminStatusComesFromDatabase(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	st := store.New(db)
+	ctx := context.Background()
+
+	created, err := st.BootstrapUser(ctx, "bootstrap", "correct horse battery staple", 0)
+	if err != nil {
+		t.Fatalf("BootstrapUser() error = %v", err)
+	}
+	other, err := st.CreateUser(ctx, "operator", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+	if _, err := db.Exec("UPDATE users SET is_admin = CASE WHEN id = ? THEN 1 ELSE 0 END", other.ID); err != nil {
+		t.Fatalf("update admin flags: %v", err)
+	}
+
+	users, err := st.ListUsers(ctx)
+	if err != nil {
+		t.Fatalf("ListUsers() error = %v", err)
+	}
+	for _, user := range users {
+		switch user.ID {
+		case created.UserID:
+			if user.IsAdmin {
+				t.Fatalf("bootstrap user IsAdmin = true after DB flag cleared")
+			}
+		case other.ID:
+			if !user.IsAdmin {
+				t.Fatalf("operator IsAdmin = false after DB flag set")
+			}
+		}
+	}
+	got, err := st.GetUser(ctx, other.ID)
+	if err != nil {
+		t.Fatalf("GetUser(operator) error = %v", err)
+	}
+	if !got.IsAdmin {
+		t.Fatal("GetUser(operator) IsAdmin = false, want true")
+	}
+	session, err := st.Login(ctx, "operator", "correct horse battery staple", 0)
+	if err != nil {
+		t.Fatalf("Login(operator) error = %v", err)
+	}
+	identity, err := st.AuthenticateToken(ctx, session.Token, store.AuthTokenKindSession)
+	if err != nil {
+		t.Fatalf("AuthenticateToken(operator) error = %v", err)
+	}
+	if !identity.User.IsAdmin {
+		t.Fatal("AuthenticateToken(operator) IsAdmin = false, want true")
+	}
+}
+
+func TestAuthDeleteAdminAllowsAnotherAdmin(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	st := store.New(db)
+	ctx := context.Background()
+
+	created, err := st.BootstrapUser(ctx, "admin", "correct horse battery staple", 0)
+	if err != nil {
+		t.Fatalf("BootstrapUser() error = %v", err)
+	}
+	other, err := st.CreateUser(ctx, "second-admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+	if _, err := db.Exec("UPDATE users SET is_admin = 1 WHERE id = ?", other.ID); err != nil {
+		t.Fatalf("promote second admin: %v", err)
+	}
+
+	if err := st.DeleteUser(ctx, created.UserID); err != nil {
+		t.Fatalf("DeleteUser(first admin) error = %v", err)
+	}
+	users, err := st.ListUsers(ctx)
+	if err != nil {
+		t.Fatalf("ListUsers() error = %v", err)
+	}
+	if len(users) != 1 || users[0].ID != other.ID || !users[0].IsAdmin {
+		t.Fatalf("remaining users = %+v, want only second admin", users)
+	}
+	if err := st.DeleteUser(ctx, other.ID); !errors.Is(err, store.ErrAuthForbidden) {
+		t.Fatalf("DeleteUser(last admin) error = %v, want %v", err, store.ErrAuthForbidden)
 	}
 }
 
