@@ -15,16 +15,16 @@ func registerBudgetTools(srv *server.MCPServer, deps Deps) {
 	}
 	srv.AddTool(
 		mcpgo.NewTool("list_token_budgets",
-			mcpgo.WithDescription("List all token budgets. Each budget caps token usage for a scope (global, workspace, repo, agent, backend, or workspace combinations) over a UTC calendar period (daily, weekly, monthly)."),
+			mcpgo.WithDescription("List all token budgets. Each budget caps token usage over a UTC calendar period: daily starts 00:00 UTC, weekly starts Sunday 00:00 UTC, and monthly starts on the first day at 00:00 UTC. Simple repo, agent, and backend scopes are global across workspaces; use workspace+repo, workspace+agent, or workspace+backend for workspace isolation."),
 		),
 		toolListTokenBudgets(deps),
 	)
 	srv.AddTool(
 		mcpgo.NewTool("create_token_budget",
-			mcpgo.WithDescription("Create a token budget. scope_kind supports global, workspace, repo, agent, backend, workspace+repo, workspace+agent, workspace+backend, and workspace+repo+agent. Periods are UTC calendar windows: daily, weekly (Sunday start), monthly. alert_at_pct (0-100) triggers the NavBar banner when usage reaches that percentage of cap_tokens; 0 disables alerts."),
+			mcpgo.WithDescription("Create a token budget. scope_kind supports global, workspace, repo, agent, backend, workspace+repo, workspace+agent, workspace+backend, and workspace+repo+agent. Simple repo, agent, and backend scopes apply globally across workspaces by name; choose workspace+* scopes when the cap should be isolated to one workspace. Periods are UTC calendar windows: daily starts 00:00 UTC, weekly starts Sunday 00:00 UTC, monthly starts on the first day at 00:00 UTC. alert_at_pct (0-100) triggers the NavBar banner when usage reaches that percentage of cap_tokens; 0 disables alerts."),
 			mcpgo.WithString("scope_kind",
 				mcpgo.Required(),
-				mcpgo.Description(`"global", "workspace", "repo", "agent", "backend", "workspace+repo", "workspace+agent", "workspace+backend", or "workspace+repo+agent".`),
+				mcpgo.Description(`"global", "workspace", "repo", "agent", "backend", "workspace+repo", "workspace+agent", "workspace+backend", or "workspace+repo+agent". Simple repo/agent/backend are global across workspaces.`),
 			),
 			mcpgo.WithString("scope_name",
 				mcpgo.Description("Legacy name for simple workspace, repo, agent, or backend scopes. Prefer workspace/repo/agent/backend fields for composite scopes."),
@@ -60,13 +60,13 @@ func registerBudgetTools(srv *server.MCPServer, deps Deps) {
 	)
 	srv.AddTool(
 		mcpgo.NewTool("update_token_budget",
-			mcpgo.WithDescription("Partially update a token budget by ID. Only supplied fields are changed; omitted fields are preserved."),
+			mcpgo.WithDescription("Partially update a token budget by ID. Only supplied fields are changed; omitted fields are preserved. Simple repo, agent, and backend scopes apply globally across workspaces by name; use workspace+* scopes for workspace isolation."),
 			mcpgo.WithNumber("id",
 				mcpgo.Required(),
 				mcpgo.Description("Budget ID (from list_token_budgets)."),
 			),
 			mcpgo.WithString("scope_kind",
-				mcpgo.Description(`"global", "workspace", "repo", "agent", "backend", "workspace+repo", "workspace+agent", "workspace+backend", or "workspace+repo+agent".`),
+				mcpgo.Description(`"global", "workspace", "repo", "agent", "backend", "workspace+repo", "workspace+agent", "workspace+backend", or "workspace+repo+agent". Simple repo/agent/backend are global across workspaces.`),
 			),
 			mcpgo.WithString("scope_name",
 				mcpgo.Description("Legacy name for simple workspace, repo, agent, or backend scopes. Prefer workspace/repo/agent/backend fields for composite scopes."),

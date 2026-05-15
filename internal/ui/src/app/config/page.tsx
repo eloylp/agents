@@ -6,6 +6,7 @@ import GuardrailsManager from '@/components/GuardrailsManager'
 import RepoFilter from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { AuthTokenSettings } from '@/lib/auth'
+import { budgetScopeDescription, budgetScopeLabel, budgetScopeOptions, isGlobalSimpleBudgetScope } from '@/lib/budget-copy'
 import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
 type Config = Record<string, unknown>
@@ -213,31 +214,6 @@ const newBudgetForm = (workspace: string) => ({
   alert_at_pct: 80,
   enabled: true,
 })
-
-const budgetScopeLabel = (b: TokenBudget) => {
-  switch (b.scope_kind) {
-    case 'global':
-      return 'Global'
-    case 'workspace':
-      return `workspace: ${b.workspace_id || b.scope_name}`
-    case 'repo':
-      return `repo: ${b.repo || b.scope_name}`
-    case 'agent':
-      return `agent: ${b.agent || b.scope_name}`
-    case 'backend':
-      return `backend: ${b.backend || b.scope_name}`
-    case 'workspace+repo':
-      return `${b.workspace_id} / ${b.repo}`
-    case 'workspace+agent':
-      return `${b.workspace_id} / ${b.agent}`
-    case 'workspace+backend':
-      return `${b.workspace_id} / ${b.backend}`
-    case 'workspace+repo+agent':
-      return `${b.workspace_id} / ${b.repo} / ${b.agent}`
-    default:
-      return b.scope_name ? `${b.scope_kind}: ${b.scope_name}` : b.scope_kind
-  }
-}
 
 const orphanKey = (orphan: OrphanedAgent) => `${orphan.workspace_id || 'default'}:${orphan.name}`
 
@@ -1413,7 +1389,7 @@ export default function ConfigPage() {
               </button>
             </div>
             <p style={{ color: 'var(--text-faint)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
-              Budgets enforce token caps per global, workspace, repo, agent, backend, or combined workspace scopes over UTC calendar periods. Daily resets at 00:00 UTC, weekly resets Sunday 00:00 UTC, and monthly resets on the first day at 00:00 UTC.
+              Budgets enforce token caps over UTC calendar periods. Simple repo, agent, and backend scopes are global across workspaces; choose workspace + repo, workspace + agent, or workspace + backend for workspace-isolated caps. Daily resets at 00:00 UTC, weekly resets Sunday 00:00 UTC, and monthly resets on the first day at 00:00 UTC.
             </p>
             {budgetsLoading ? (
               <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading…</p>
@@ -1646,16 +1622,13 @@ export default function ConfigPage() {
                   }))
                 }}
               >
-                <option value="global">Global (all agents and backends)</option>
-                <option value="workspace">Workspace</option>
-                <option value="repo">Repo</option>
-                <option value="backend">Backend</option>
-                <option value="agent">Agent</option>
-                <option value="workspace+repo">Workspace + repo</option>
-                <option value="workspace+agent">Workspace + agent</option>
-                <option value="workspace+backend">Workspace + backend</option>
-                <option value="workspace+repo+agent">Workspace + repo + agent</option>
+                {budgetScopeOptions.map(option => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
               </select>
+              <p style={{ color: isGlobalSimpleBudgetScope(budgetForm.scope_kind) ? '#b45309' : 'var(--text-faint)', fontSize: '0.76rem', margin: '0.35rem 0 0' }}>
+                {budgetScopeDescription(budgetForm.scope_kind)}
+              </p>
             </div>
             {budgetNeedsWorkspace && (
               <div>

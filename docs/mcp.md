@@ -120,3 +120,16 @@ These tools mirror the `/runners` REST surface; see [api.md](api.md#runners-mana
 | `update_workspace_runtime` | Set or clear one workspace's runner image override. |
 | `export_config` | Fleet config as YAML (round-trippable via `import_config`). |
 | `import_config` | Import YAML config. `mode=replace` prunes missing entries. |
+
+### Token budgets
+
+Token budget tools keep the REST enforcement model unchanged. Periods are UTC
+calendar windows: `daily` starts at 00:00 UTC, `weekly` starts Sunday 00:00 UTC,
+and `monthly` starts on the first day of the month at 00:00 UTC.
+
+Scope kinds are explicit about global versus workspace-isolated coverage:
+`global` covers all workspaces, `workspace` covers one workspace, and simple
+`repo`, `agent`, and `backend` scopes apply globally across workspaces by name.
+For workspace isolation, use `workspace+repo`, `workspace+agent`, or
+`workspace+backend`; use `workspace+repo+agent` for one agent/repo pair inside
+one workspace.

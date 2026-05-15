@@ -111,6 +111,20 @@ Prompt catalog rows expose a stable `id` plus a display `name`. Agents persist `
 | `GET` | `/export` | Export full fleet config as workspace-aware YAML, including reusable prompts, skills, guardrails, and workspace-local agents/repos/budgets. |
 | `POST` | `/import` | Import workspace-aware YAML into the SQLite store. Legacy top-level agents/repos remain accepted into `default`. |
 
+### Token budgets
+
+Token budget periods use UTC calendar boundaries: `daily` starts at 00:00 UTC,
+`weekly` starts Sunday 00:00 UTC, and `monthly` starts on the first day of the
+month at 00:00 UTC.
+
+Budget scopes preserve their current enforcement semantics. `global` covers all
+workspaces. `workspace` covers one workspace. Simple `repo`, `agent`, and
+`backend` scopes are global by name across all workspaces. Use
+`workspace+repo`, `workspace+agent`, or `workspace+backend` for workspace
+isolation, and `workspace+repo+agent` for one agent/repo pair inside one
+workspace. REST wire shapes are unchanged; `PATCH /token_budgets/{id}` is a
+partial update and omitted fields are preserved.
+
 ### Guardrails
 
 Guardrails are reusable policy catalog entries; workspaces choose which visible catalog entries to render. Catalog wire shape: `{id, workspace_id, repo, name, description, content, default_content, is_builtin, enabled, position}`. Empty `workspace_id` and `repo` means global visibility; `workspace_id` with empty `repo` is workspace-only; both fields set is repo-scoped. Workspace references use `{workspace_id, guardrail_name, position, enabled}`, where `guardrail_name` carries the stable guardrail id after scoped-catalog migration. PATCH covers catalog `description`, `content`, `enabled`, `position` only; `is_builtin` and `default_content` are migration-managed and not editable from the API. The renderer combines mandatory dynamic workspace/repository boundary guidance with the selected workspace references in one guardrails section. See [security.md](security.md) for the threat model and what the default does, and does not, close.
