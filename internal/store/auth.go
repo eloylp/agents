@@ -61,9 +61,7 @@ const (
 	AuthTokenKindSession = "session"
 	AuthTokenKindAPI     = "api"
 
-	passwordHashIterations = 210000
-	passwordHashBytes      = 32
-	randomTokenBytes       = 32
+	randomTokenBytes = 32
 
 	legacyPBKDF2PasswordPrefix = "pbkdf2-sha256$"
 )
@@ -378,11 +376,16 @@ func (s *Store) AuthenticateToken(ctx context.Context, token, kind string) (Auth
 }
 
 func hashPassword(password string) (string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword(bcryptPasswordInput(password), bcrypt.DefaultCost)
 	if err != nil {
 		return "", err
 	}
 	return string(hash), nil
+}
+
+func bcryptPasswordInput(password string) []byte {
+	sum := sha256.Sum256([]byte(password))
+	return sum[:]
 }
 
 func pbkdf2SHA256WithIter(password string, salt []byte, iter, keyLen int) ([]byte, error) {
@@ -391,10 +394,7 @@ func pbkdf2SHA256WithIter(password string, salt []byte, iter, keyLen int) ([]byt
 
 func verifyPassword(password, encoded string) (verified bool, needsRehash bool) {
 	if strings.HasPrefix(encoded, "$2a$") || strings.HasPrefix(encoded, "$2b$") || strings.HasPrefix(encoded, "$2y$") {
-		return bcrypt.CompareHashAndPassword([]byte(encoded), []byte(password)) == nil, false
-	}
-	if !strings.HasPrefix(encoded, legacyPBKDF2PasswordPrefix) {
-		return false, false
+		return bcrypt.CompareHashAndPassword([]byte(encoded), bcryptPasswordInput(password)) == nil, false
 	}
 	algorithm, rest, ok := strings.Cut(encoded, "$")
 	if !ok || algorithm != "pbkdf2-sha256" {

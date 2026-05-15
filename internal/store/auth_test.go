@@ -137,7 +137,7 @@ func TestAuthNewUsersStoreBcryptHashes(t *testing.T) {
 	if _, err := bcrypt.Cost([]byte(hash)); err != nil {
 		t.Fatalf("bcrypt.Cost() error = %v", err)
 	}
-	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte("correct horse battery staple")); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), bcryptPasswordInput("correct horse battery staple")); err != nil {
 		t.Fatalf("bcrypt password verification error = %v", err)
 	}
 
@@ -146,6 +146,28 @@ func TestAuthNewUsersStoreBcryptHashes(t *testing.T) {
 	}
 	if got := passwordHashForUser(t, db, user.ID); got != hash {
 		t.Fatalf("password hash changed after bcrypt login: got %q, want %q", got, hash)
+	}
+}
+
+func TestAuthLongPasswordsStoreAndLoginWithBcrypt(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	st := store.New(db)
+	ctx := context.Background()
+	password := strings.Repeat("long-password-", 8)
+
+	user, err := st.CreateUser(ctx, "long-bcrypt-user", password)
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+
+	hash := passwordHashForUser(t, db, user.ID)
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), bcryptPasswordInput(password)); err != nil {
+		t.Fatalf("bcrypt password verification error = %v", err)
+	}
+	if _, err := st.Login(ctx, "long-bcrypt-user", password, 0); err != nil {
+		t.Fatalf("Login() error = %v", err)
 	}
 }
 
@@ -170,8 +192,34 @@ func TestAuthLegacyPBKDF2LoginUpgradesToBcrypt(t *testing.T) {
 	if strings.HasPrefix(upgraded, "pbkdf2-sha256$") {
 		t.Fatalf("password hash still has legacy prefix: %q", upgraded)
 	}
-	if err := bcrypt.CompareHashAndPassword([]byte(upgraded), []byte(password)); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(upgraded), bcryptPasswordInput(password)); err != nil {
 		t.Fatalf("upgraded bcrypt verification error = %v", err)
+	}
+}
+
+func TestAuthLongLegacyPBKDF2LoginUpgradesToBcrypt(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	st := store.New(db)
+	ctx := context.Background()
+	password := strings.Repeat("legacy-long-password-", 5)
+	legacyHash := legacyPBKDF2Hash(t, password)
+	userID := insertUserWithPasswordHash(t, db, "legacy-long-user", legacyHash)
+
+	if _, err := st.Login(ctx, "legacy-long-user", password, 0); err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	upgraded := passwordHashForUser(t, db, userID)
+	if upgraded == legacyHash {
+		t.Fatal("password hash was not upgraded")
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(upgraded), bcryptPasswordInput(password)); err != nil {
+		t.Fatalf("upgraded bcrypt verification error = %v", err)
+	}
+	if _, err := st.Login(ctx, "legacy-long-user", password, 0); err != nil {
+		t.Fatalf("second Login() error = %v", err)
 	}
 }
 
@@ -212,6 +260,11 @@ func legacyPBKDF2Hash(t *testing.T, password string) string {
 		base64.RawStdEncoding.EncodeToString(salt),
 		base64.RawStdEncoding.EncodeToString(key),
 	)
+}
+
+func bcryptPasswordInput(password string) []byte {
+	sum := sha256.Sum256([]byte(password))
+	return sum[:]
 }
 
 func insertUserWithPasswordHash(t *testing.T, db *sql.DB, username, hash string) int64 {
