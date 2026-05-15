@@ -11,12 +11,13 @@ package observe
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -415,7 +416,7 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, r *http.Request) {
 	for id := range seen {
 		nodes = append(nodes, graphNode{ID: id, Status: nodeStatus(id)})
 	}
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	slices.SortFunc(nodes, func(a, b graphNode) int { return cmp.Compare(a.ID, b.ID) })
 
 	edgeByKey := make(map[string]graphEdge, len(edges)+len(configuredEdges))
 	for key, e := range configuredEdges {
@@ -445,11 +446,11 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, r *http.Request) {
 		}
 		wireEdges = append(wireEdges, e)
 	}
-	sort.Slice(wireEdges, func(i, j int) bool {
-		if wireEdges[i].From == wireEdges[j].From {
-			return wireEdges[i].To < wireEdges[j].To
+	slices.SortFunc(wireEdges, func(a, b graphEdge) int {
+		if byFrom := cmp.Compare(a.From, b.From); byFrom != 0 {
+			return byFrom
 		}
-		return wireEdges[i].From < wireEdges[j].From
+		return cmp.Compare(a.To, b.To)
 	})
 
 	w.Header().Set("Content-Type", "application/json")
