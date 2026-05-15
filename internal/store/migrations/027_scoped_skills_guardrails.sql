@@ -2,14 +2,6 @@
 -- global catalog items whose stable id matches the old name, preserving every
 -- existing agent skill reference and workspace guardrail reference.
 
--- Normal migrations already have skills from migration 001. The compatibility
--- create keeps older migration tests that seed from later snapshots able to
--- apply this migration in isolation.
-CREATE TABLE IF NOT EXISTS skills (
-    name   TEXT PRIMARY KEY,
-    prompt TEXT NOT NULL
-);
-
 CREATE TABLE skills_new (
     id           TEXT PRIMARY KEY,
     workspace_id TEXT DEFAULT NULL,
