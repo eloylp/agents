@@ -488,8 +488,7 @@ func importReferencedWorkspaces(tx *sql.Tx, agents []fleet.Agent, repos []fleet.
 		}
 		seen[id] = struct{}{}
 	}
-	ids := slices.Collect(maps.Keys(seen))
-	slices.Sort(ids)
+	ids := slices.Sorted(maps.Keys(seen))
 	for _, id := range ids {
 		if err := validateEntityID(id); err != nil {
 			return fmt.Errorf("store import: workspace %q: %w", id, err)
