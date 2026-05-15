@@ -65,7 +65,7 @@ func WrapBackendCommand(backendName string, command []string, env []string, opts
 		return command, env
 	}
 	if strings.HasPrefix(backendName, "claude") && getEnv(env, "GITHUB_TOKEN") != "" && !slices.Contains(command[1:], "--mcp-config") {
-		command = append(command[:1], append([]string{"--mcp-config", RunnerClaudeMCPPath}, command[1:]...)...)
+		command = slices.Insert(command, 1, "--mcp-config", RunnerClaudeMCPPath)
 	}
 	return shellEntrypoint(command, BackendSetupScript(backendName, opts)), env
 }
@@ -76,7 +76,7 @@ cmd=$1
 shift
 exec "$cmd" "$@"
 `, "agents-runner"}
-	return append(out, command...)
+	return slices.Concat(out, command)
 }
 
 const baseContainerSetup = `
