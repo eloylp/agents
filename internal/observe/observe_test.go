@@ -473,9 +473,6 @@ func TestStoreRecordEventPersistsAndPublishesToSSE(t *testing.T) {
 	}
 	s.RecordEvent(at, ev)
 
-	// Wait briefly for the async goroutine to persist.
-	time.Sleep(50 * time.Millisecond)
-
 	// Verify SQLite received the event via ListEvents.
 	stored := s.ListEvents(time.Time{})
 	if len(stored) != 1 {
@@ -574,9 +571,6 @@ func TestStoreRecordSpanPersistsAndPublishesToSSE(t *testing.T) {
 		Status: "success",
 	})
 
-	// Wait for async persistence.
-	time.Sleep(50 * time.Millisecond)
-
 	// Verify SQLite via ListTraces.
 	spans := s.ListTraces()
 	if len(spans) != 1 {
@@ -617,9 +611,6 @@ func TestStoreRecordDispatchPersistsToDB(t *testing.T) {
 
 	s.RecordDispatch("default", "coder", "reviewer", "owner/repo", 42, "needs review")
 
-	// Wait for async persistence.
-	time.Sleep(50 * time.Millisecond)
-
 	edges := s.ListEdges()
 	if len(edges) != 1 {
 		t.Fatalf("want 1 edge, got %d", len(edges))
@@ -650,9 +641,6 @@ func TestStoreListEventsSinceFilter(t *testing.T) {
 	s.RecordEvent(base, workflow.Event{ID: "old", Kind: "push"})
 	s.RecordEvent(base.Add(2*time.Second), workflow.Event{ID: "new", Kind: "push"})
 
-	// Wait for async persistence.
-	time.Sleep(50 * time.Millisecond)
-
 	events := s.ListEvents(base.Add(time.Second))
 	if len(events) != 1 {
 		t.Fatalf("want 1 event after filter, got %d", len(events))
@@ -673,16 +661,7 @@ func TestStoreTracesByRootEventID(t *testing.T) {
 	s.RecordSpan(workflow.SpanInput{SpanID: "s2", RootEventID: "root-B", Agent: "reviewer", Backend: "claude", Repo: "r", EventKind: "push", StartedAt: now, FinishedAt: now.Add(time.Second), Status: "success"})
 	s.RecordSpan(workflow.SpanInput{SpanID: "s3", RootEventID: "root-A", Agent: "coder", Backend: "claude", Repo: "r", EventKind: "agent.dispatch", Number: 1, DispatchDepth: 1, StartedAt: now.Add(time.Second), FinishedAt: now.Add(2 * time.Second), Status: "success"})
 
-	// Poll until both spans for root-A are persisted (RecordSpan is async).
-	deadline := time.Now().Add(500 * time.Millisecond)
-	var rootA []observe.Span
-	for time.Now().Before(deadline) {
-		rootA = s.TracesByRootEventID("root-A")
-		if len(rootA) == 2 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	rootA := s.TracesByRootEventID("root-A")
 	if len(rootA) != 2 {
 		t.Fatalf("want 2 spans for root-A, got %d", len(rootA))
 	}

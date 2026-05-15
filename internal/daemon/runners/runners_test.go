@@ -109,15 +109,6 @@ func TestList_CompletedEventFannedOutToTwoAgentsShowsTwoRows(t *testing.T) {
 		StartedAt: now, FinishedAt: now.Add(2 * time.Second),
 		Status: "error", ErrorMsg: "claude command timed out after 10m0s",
 	})
-	// RecordSpan persists asynchronously into SQLite; poll until both
-	// rows are visible before asking the handler to JOIN.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(fx.observe.TracesByRootEventID("ev-fan")) >= 2 {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
 	_ = fx.store.MarkEventCompleted(id)
 
 	req := httptest.NewRequest(http.MethodGet, "/runners", nil)

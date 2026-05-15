@@ -650,16 +650,14 @@ func (s *Store) RecordEvent(at time.Time, ev workflow.Event) {
 		Payload:     ev.Payload,
 	}
 	if s.db != nil {
-		go func() {
-			payload, _ := json.Marshal(te.Payload)
-			_, err := s.db.Exec(
-				`INSERT OR IGNORE INTO events (id, workspace_id, at, repo, kind, number, actor, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-				te.ID, te.WorkspaceID, te.At, te.Repo, te.Kind, te.Number, te.Actor, string(payload),
-			)
-			if err != nil {
-				log.Printf("observe: persist event %s: %v", te.ID, err)
-			}
-		}()
+		payload, _ := json.Marshal(te.Payload)
+		_, err := s.db.Exec(
+			`INSERT OR IGNORE INTO events (id, workspace_id, at, repo, kind, number, actor, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			te.ID, te.WorkspaceID, te.At, te.Repo, te.Kind, te.Number, te.Actor, string(payload),
+		)
+		if err != nil {
+			log.Printf("observe: persist event %s: %v", te.ID, err)
+		}
 	}
 	if b, err := sseData(te); err == nil {
 		s.EventsSSE.Publish(b)
@@ -709,22 +707,20 @@ func (s *Store) RecordSpan(in workflow.SpanInput) {
 		}
 	}
 	if s.db != nil {
-		go func() {
-			_, err := s.db.Exec(
-				`INSERT OR IGNORE INTO traces (span_id, workspace_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error, prompt_gz, prompt_size, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-				sp.SpanID, sp.WorkspaceID, sp.RootEventID, sp.ParentSpanID,
-				sp.Agent, sp.Backend, sp.Repo, sp.Number,
-				sp.EventKind, sp.InvokedBy, sp.DispatchDepth,
-				sp.QueueWaitMs, sp.ArtifactsCount, sp.Summary,
-				sp.StartedAt, sp.FinishedAt, sp.DurationMs,
-				sp.Status, sp.ErrorMsg,
-				promptGz, sp.PromptSize,
-				sp.InputTokens, sp.OutputTokens, sp.CacheReadTokens, sp.CacheWriteTokens,
-			)
-			if err != nil {
-				log.Printf("observe: persist trace %s: %v", sp.SpanID, err)
-			}
-		}()
+		_, err := s.db.Exec(
+			`INSERT OR IGNORE INTO traces (span_id, workspace_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error, prompt_gz, prompt_size, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			sp.SpanID, sp.WorkspaceID, sp.RootEventID, sp.ParentSpanID,
+			sp.Agent, sp.Backend, sp.Repo, sp.Number,
+			sp.EventKind, sp.InvokedBy, sp.DispatchDepth,
+			sp.QueueWaitMs, sp.ArtifactsCount, sp.Summary,
+			sp.StartedAt, sp.FinishedAt, sp.DurationMs,
+			sp.Status, sp.ErrorMsg,
+			promptGz, sp.PromptSize,
+			sp.InputTokens, sp.OutputTokens, sp.CacheReadTokens, sp.CacheWriteTokens,
+		)
+		if err != nil {
+			log.Printf("observe: persist trace %s: %v", sp.SpanID, err)
+		}
 	}
 	if b, err := sseData(sp); err == nil {
 		s.TracesSSE.Publish(b)
@@ -735,15 +731,13 @@ func (s *Store) RecordSpan(in workflow.SpanInput) {
 func (s *Store) RecordDispatch(workspaceID, from, to, repo string, number int, reason string) {
 	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	if s.db != nil {
-		go func() {
-			_, err := s.db.Exec(
-				`INSERT INTO dispatch_history (workspace_id, from_agent, to_agent, repo, number, reason) VALUES (?,?,?,?,?,?)`,
-				workspaceID, from, to, repo, number, reason,
-			)
-			if err != nil {
-				log.Printf("observe: persist dispatch %s->%s: %v", from, to, err)
-			}
-		}()
+		_, err := s.db.Exec(
+			`INSERT INTO dispatch_history (workspace_id, from_agent, to_agent, repo, number, reason) VALUES (?,?,?,?,?,?)`,
+			workspaceID, from, to, repo, number, reason,
+		)
+		if err != nil {
+			log.Printf("observe: persist dispatch %s->%s: %v", from, to, err)
+		}
 	}
 }
 

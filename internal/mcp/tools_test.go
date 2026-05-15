@@ -831,9 +831,7 @@ func TestToolTriggerAgentMissingArgs(t *testing.T) {
 }
 
 // seedEvent inserts an event row directly into the SQLite events table so
-// observe.Store.ListEvents reads it back deterministically. The Store's own
-// RecordEvent is async (goroutine), which would race with the immediate
-// ListEvents call our tool tests need.
+// observe.Store.ListEvents reads fixture rows back deterministically.
 func seedEvent(t *testing.T, db *sql.DB, ev observe.TimestampedEvent) {
 	t.Helper()
 	payload, _ := json.Marshal(ev.Payload)
@@ -847,7 +845,6 @@ func seedEvent(t *testing.T, db *sql.DB, ev observe.TimestampedEvent) {
 }
 
 // seedSpan inserts a trace span row directly into the SQLite traces table.
-// Same async-vs-sync rationale as seedEvent.
 func seedSpan(t *testing.T, db *sql.DB, sp observe.Span) {
 	t.Helper()
 	workspaceID := fleet.NormalizeWorkspaceID(sp.WorkspaceID)
@@ -1111,15 +1108,6 @@ func TestToolGetTracePromptReturnsBody(t *testing.T) {
 		Status: "success",
 		Prompt: "system: do the thing\n\nuser: please",
 	})
-	// RecordSpan persists asynchronously; poll briefly until visible.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if got, err := deps.Observe.PromptForSpan("sp-prompt"); err == nil && got != "" {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"span_id": "sp-prompt"}
 	res, err := toolGetTracePrompt(deps)(context.Background(), req)
