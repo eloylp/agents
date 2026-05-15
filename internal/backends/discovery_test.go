@@ -102,13 +102,8 @@ For building AI applications, default to the latest capable model.`
 
 	got := parseModels(raw)
 	want := []string{"claude-haiku-4-5-20251001", "claude-opus-4-7", "claude-sonnet-4-6"}
-	if len(got) != len(want) {
-		t.Fatalf("parseModels() length = %d, want %d (got=%v)", len(got), len(want), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("parseModels()[%d] = %q, want %q", i, got[i], want[i])
-		}
+	if !slices.Equal(got, want) {
+		t.Fatalf("parseModels() = %v, want %v", got, want)
 	}
 }
 
