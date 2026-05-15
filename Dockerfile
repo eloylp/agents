@@ -32,10 +32,37 @@ USER agents
 ENTRYPOINT ["agents"]
 CMD ["--db", "/var/lib/agents/agents.db"]
 
-FROM node:24-alpine3.23 AS runner
+FROM node:24.11.1-alpine3.23 AS runner
 
-RUN apk add --no-cache bash build-base ca-certificates cargo curl git github-cli go jq rust \
-    && npm install -g @anthropic-ai/claude-code @openai/codex typescript \
+ARG RUNNER_BASH_VERSION=5.3.3-r1
+ARG RUNNER_BUILD_BASE_VERSION=0.5-r3
+ARG RUNNER_CA_CERTIFICATES_VERSION=20260413-r0
+ARG RUNNER_CARGO_VERSION=1.91.1-r1
+ARG RUNNER_CURL_VERSION=8.17.0-r1
+ARG RUNNER_GIT_VERSION=2.52.0-r0
+ARG RUNNER_GITHUB_CLI_VERSION=2.83.0-r5
+ARG RUNNER_GO_VERSION=1.25.9-r0
+ARG RUNNER_JQ_VERSION=1.8.1-r0
+ARG RUNNER_RUST_VERSION=1.91.1-r1
+ARG RUNNER_CLAUDE_CODE_VERSION=2.1.141
+ARG RUNNER_CODEX_VERSION=0.130.0
+ARG RUNNER_TYPESCRIPT_VERSION=6.0.3
+
+RUN apk add --no-cache \
+        bash=${RUNNER_BASH_VERSION} \
+        build-base=${RUNNER_BUILD_BASE_VERSION} \
+        ca-certificates=${RUNNER_CA_CERTIFICATES_VERSION} \
+        cargo=${RUNNER_CARGO_VERSION} \
+        curl=${RUNNER_CURL_VERSION} \
+        git=${RUNNER_GIT_VERSION} \
+        github-cli=${RUNNER_GITHUB_CLI_VERSION} \
+        go=${RUNNER_GO_VERSION} \
+        jq=${RUNNER_JQ_VERSION} \
+        rust=${RUNNER_RUST_VERSION} \
+    && npm install -g \
+        @anthropic-ai/claude-code@${RUNNER_CLAUDE_CODE_VERSION} \
+        @openai/codex@${RUNNER_CODEX_VERSION} \
+        typescript@${RUNNER_TYPESCRIPT_VERSION} \
     && npm cache clean --force
 
 SHELL ["/bin/bash", "-c"]
