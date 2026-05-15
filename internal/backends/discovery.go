@@ -595,20 +595,14 @@ func dedupeSorted(in []string) []string {
 		return nil
 	}
 	seen := make(map[string]struct{}, len(in))
-	out := make([]string, 0, len(in))
 	for _, s := range in {
 		s = strings.TrimSpace(s)
 		if s == "" {
 			continue
 		}
-		if _, ok := seen[s]; ok {
-			continue
-		}
 		seen[s] = struct{}{}
-		out = append(out, s)
 	}
-	slices.Sort(out)
-	return out
+	return slices.Sorted(maps.Keys(seen))
 }
 
 func resolveCommandInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings, defaultName, preferred string) (string, bool) {
