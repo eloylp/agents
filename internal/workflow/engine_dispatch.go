@@ -9,12 +9,21 @@ import (
 	"time"
 )
 
-// handleDispatchEvent fires the target agent named in ev.Payload["target_agent"]
+type agentDispatchPayload struct {
+	TargetAgent   string
+	Reason        string
+	RootEventID   string
+	DispatchDepth int
+	InvokedBy     string
+	ParentSpanID  string
+}
+
+// handleDispatchEvent fires the target agent named in the event payload
 // directly, bypassing normal binding lookup.
 func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
-	targetName, _ := ev.Payload["target_agent"].(string)
-	if targetName == "" {
-		return fmt.Errorf("agent.dispatch event missing target_agent in payload")
+	targetName, err := eventTargetAgent(ev)
+	if err != nil {
+		return err
 	}
 	workspaceID := eventWorkspaceID(ev)
 
@@ -119,25 +128,108 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 	return runErr
 }
 
+func eventTargetAgent(ev Event) (string, error) {
+	if ev.Kind == "agent.dispatch" {
+		payload, err := decodeAgentDispatchPayload(ev)
+		if err != nil {
+			return "", err
+		}
+		return payload.TargetAgent, nil
+	}
+	targetName, _ := ev.Payload["target_agent"].(string)
+	if targetName == "" {
+		return "", fmt.Errorf("%s event missing target_agent in payload", ev.Kind)
+	}
+	return targetName, nil
+}
+
 // extractDispatchContext extracts root event ID and dispatch depth from ev.
 // For non-dispatch events, it generates a new root event ID using ev.ID if
 // set, or a fresh random ID.
-func extractDispatchContext(ev Event) (rootEventID string, depth int) {
+func extractDispatchContext(ev Event) (rootEventID string, depth int, err error) {
 	if ev.Kind == "agent.dispatch" {
-		rootEventID, _ = ev.Payload["root_event_id"].(string)
-		if d, ok := parseDispatchDepth(ev.Payload["dispatch_depth"]); ok {
-			depth = d
+		payload, err := decodeAgentDispatchPayload(ev)
+		if err != nil {
+			return "", 0, err
 		}
-		return rootEventID, depth
+		return payload.RootEventID, payload.DispatchDepth, nil
 	}
 	// Regular event: use event ID as root, depth 0.
 	if ev.ID != "" {
-		return ev.ID, 0
+		return ev.ID, 0, nil
 	}
-	return GenEventID(), 0
+	return GenEventID(), 0, nil
 }
 
-func parseDispatchDepth(value any) (int, bool) {
+func decodeAgentDispatchPayload(ev Event) (agentDispatchPayload, error) {
+	if ev.Kind != "agent.dispatch" {
+		return agentDispatchPayload{}, fmt.Errorf("decode agent.dispatch payload from %q event", ev.Kind)
+	}
+	targetAgent, err := payloadString(ev.Payload, "target_agent", true)
+	if err != nil {
+		return agentDispatchPayload{}, err
+	}
+	reason, err := payloadString(ev.Payload, "reason", false)
+	if err != nil {
+		return agentDispatchPayload{}, err
+	}
+	rootEventID, err := payloadString(ev.Payload, "root_event_id", false)
+	if err != nil {
+		return agentDispatchPayload{}, err
+	}
+	invokedBy, err := payloadString(ev.Payload, "invoked_by", false)
+	if err != nil {
+		return agentDispatchPayload{}, err
+	}
+	parentSpanID, err := payloadString(ev.Payload, "parent_span_id", false)
+	if err != nil {
+		return agentDispatchPayload{}, err
+	}
+	dispatchDepth, err := payloadInt(ev.Payload, "dispatch_depth")
+	if err != nil {
+		return agentDispatchPayload{}, err
+	}
+	return agentDispatchPayload{
+		TargetAgent:   targetAgent,
+		Reason:        reason,
+		RootEventID:   rootEventID,
+		DispatchDepth: dispatchDepth,
+		InvokedBy:     invokedBy,
+		ParentSpanID:  parentSpanID,
+	}, nil
+}
+
+func payloadString(payload map[string]any, key string, required bool) (string, error) {
+	value, ok := payload[key]
+	if !ok || value == nil {
+		if required {
+			return "", fmt.Errorf("agent.dispatch event missing %s in payload", key)
+		}
+		return "", nil
+	}
+	s, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("agent.dispatch event payload %s must be string, got %T", key, value)
+	}
+	if required && s == "" {
+		return "", fmt.Errorf("agent.dispatch event missing %s in payload", key)
+	}
+	return s, nil
+}
+
+func payloadInt(payload map[string]any, key string) (int, error) {
+	value, ok := payload[key]
+	if !ok || value == nil {
+		return 0, nil
+	}
+	parsed, ok := parsePayloadInt(value)
+	if !ok {
+		return 0, fmt.Errorf("agent.dispatch event payload %s must be an integer, got %T", key, value)
+	}
+	return parsed, nil
+}
+
+func parsePayloadInt(value any) (int, bool) {
 	switch d := value.(type) {
 	case int:
 		return d, true
