@@ -2,10 +2,17 @@ package store_test
 
 import (
 	"context"
+	"crypto/pbkdf2"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/base64"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/eloylp/agents/internal/store"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestAuthBootstrapLoginAndAPITokenLifecycle(t *testing.T) {
@@ -109,4 +116,181 @@ func TestAuthBootstrapLoginAndAPITokenLifecycle(t *testing.T) {
 	if _, err := st.AuthenticateToken(ctx, api.Token, store.AuthTokenKindAPI); !errors.Is(err, store.ErrAuthInvalid) {
 		t.Fatalf("AuthenticateToken(revoked api) error = %v, want %v", err, store.ErrAuthInvalid)
 	}
+}
+
+func TestAuthNewUsersStoreBcryptHashes(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	st := store.New(db)
+	ctx := context.Background()
+
+	user, err := st.CreateUser(ctx, "bcrypt-user", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+
+	hash := passwordHashForUser(t, db, user.ID)
+	if !strings.HasPrefix(hash, "$2") {
+		t.Fatalf("password hash prefix = %q, want bcrypt", hash)
+	}
+	if _, err := bcrypt.Cost([]byte(hash)); err != nil {
+		t.Fatalf("bcrypt.Cost() error = %v", err)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), bcryptPasswordInput("correct horse battery staple")); err != nil {
+		t.Fatalf("bcrypt password verification error = %v", err)
+	}
+
+	if _, err := st.Login(ctx, "bcrypt-user", "correct horse battery staple", 0); err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	if got := passwordHashForUser(t, db, user.ID); got != hash {
+		t.Fatalf("password hash changed after bcrypt login: got %q, want %q", got, hash)
+	}
+}
+
+func TestAuthLongPasswordsStoreAndLoginWithBcrypt(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	st := store.New(db)
+	ctx := context.Background()
+	password := strings.Repeat("long-password-", 8)
+
+	user, err := st.CreateUser(ctx, "long-bcrypt-user", password)
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+
+	hash := passwordHashForUser(t, db, user.ID)
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), bcryptPasswordInput(password)); err != nil {
+		t.Fatalf("bcrypt password verification error = %v", err)
+	}
+	if _, err := st.Login(ctx, "long-bcrypt-user", password, 0); err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+}
+
+func TestAuthLegacyPBKDF2LoginUpgradesToBcrypt(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	st := store.New(db)
+	ctx := context.Background()
+	const password = "legacy password"
+	legacyHash := legacyPBKDF2Hash(t, password)
+	userID := insertUserWithPasswordHash(t, db, "legacy-user", legacyHash)
+
+	if _, err := st.Login(ctx, "legacy-user", password, 0); err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	upgraded := passwordHashForUser(t, db, userID)
+	if upgraded == legacyHash {
+		t.Fatal("password hash was not upgraded")
+	}
+	if strings.HasPrefix(upgraded, "pbkdf2-sha256$") {
+		t.Fatalf("password hash still has legacy prefix: %q", upgraded)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(upgraded), bcryptPasswordInput(password)); err != nil {
+		t.Fatalf("upgraded bcrypt verification error = %v", err)
+	}
+}
+
+func TestAuthLongLegacyPBKDF2LoginUpgradesToBcrypt(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	st := store.New(db)
+	ctx := context.Background()
+	password := strings.Repeat("legacy-long-password-", 5)
+	legacyHash := legacyPBKDF2Hash(t, password)
+	userID := insertUserWithPasswordHash(t, db, "legacy-long-user", legacyHash)
+
+	if _, err := st.Login(ctx, "legacy-long-user", password, 0); err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	upgraded := passwordHashForUser(t, db, userID)
+	if upgraded == legacyHash {
+		t.Fatal("password hash was not upgraded")
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(upgraded), bcryptPasswordInput(password)); err != nil {
+		t.Fatalf("upgraded bcrypt verification error = %v", err)
+	}
+	if _, err := st.Login(ctx, "legacy-long-user", password, 0); err != nil {
+		t.Fatalf("second Login() error = %v", err)
+	}
+}
+
+func TestAuthInvalidAndUnknownPasswordHashesFailClosed(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	st := store.New(db)
+	ctx := context.Background()
+	legacyHash := legacyPBKDF2Hash(t, "correct password")
+	legacyID := insertUserWithPasswordHash(t, db, "legacy-invalid", legacyHash)
+	unknownID := insertUserWithPasswordHash(t, db, "unknown-format", "sha1$not-supported")
+
+	if _, err := st.Login(ctx, "legacy-invalid", "wrong password", 0); !errors.Is(err, store.ErrAuthInvalid) {
+		t.Fatalf("Login(wrong legacy password) error = %v, want %v", err, store.ErrAuthInvalid)
+	}
+	if got := passwordHashForUser(t, db, legacyID); got != legacyHash {
+		t.Fatalf("legacy hash changed after failed login: got %q, want %q", got, legacyHash)
+	}
+	if _, err := st.Login(ctx, "unknown-format", "correct password", 0); !errors.Is(err, store.ErrAuthInvalid) {
+		t.Fatalf("Login(unknown hash) error = %v, want %v", err, store.ErrAuthInvalid)
+	}
+	if got := passwordHashForUser(t, db, unknownID); got != "sha1$not-supported" {
+		t.Fatalf("unknown hash changed after failed login: got %q", got)
+	}
+}
+
+func legacyPBKDF2Hash(t *testing.T, password string) string {
+	t.Helper()
+
+	salt := []byte("fixed-test-salt!")
+	key, err := pbkdf2.Key(sha256.New, password, salt, 210000, 32)
+	if err != nil {
+		t.Fatalf("pbkdf2.Key() error = %v", err)
+	}
+	return fmt.Sprintf(
+		"pbkdf2-sha256$210000$%s$%s",
+		base64.RawStdEncoding.EncodeToString(salt),
+		base64.RawStdEncoding.EncodeToString(key),
+	)
+}
+
+func bcryptPasswordInput(password string) []byte {
+	sum := sha256.Sum256([]byte(password))
+	return sum[:]
+}
+
+func insertUserWithPasswordHash(t *testing.T, db *sql.DB, username, hash string) int64 {
+	t.Helper()
+
+	res, err := db.Exec(
+		"INSERT INTO users(username,password_hash,created_at,updated_at) VALUES(?,?,datetime('now'),datetime('now'))",
+		username,
+		hash,
+	)
+	if err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("LastInsertId() error = %v", err)
+	}
+	return id
+}
+
+func passwordHashForUser(t *testing.T, db *sql.DB, userID int64) string {
+	t.Helper()
+
+	var hash string
+	if err := db.QueryRow("SELECT password_hash FROM users WHERE id=?", userID).Scan(&hash); err != nil {
+		t.Fatalf("query password hash: %v", err)
+	}
+	return hash
 }

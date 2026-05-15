@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 var (
@@ -59,10 +61,7 @@ const (
 	AuthTokenKindSession = "session"
 	AuthTokenKindAPI     = "api"
 
-	passwordHashIterations = 210000
-	passwordHashBytes      = 32
-	passwordSaltBytes      = 16
-	randomTokenBytes       = 32
+	randomTokenBytes = 32
 )
 
 func (s *Store) UserCount(ctx context.Context) (int, error) {
@@ -233,11 +232,22 @@ func (s *Store) Login(ctx context.Context, username, password string, sessionTTL
 	if err != nil {
 		return CreatedAuthToken{}, fmt.Errorf("auth: lookup user: %w", err)
 	}
-	if disabled.Valid || !verifyPassword(password, stored) {
+	verified, needsRehash := verifyPassword(password, stored)
+	if disabled.Valid || !verified {
 		return CreatedAuthToken{}, ErrAuthInvalid
 	}
-	if _, err := tx.ExecContext(ctx, "UPDATE users SET last_login_at=datetime('now'), updated_at=datetime('now') WHERE id=?", userID); err != nil {
-		return CreatedAuthToken{}, fmt.Errorf("auth: update login: %w", err)
+	if needsRehash {
+		hash, err := hashPassword(password)
+		if err != nil {
+			return CreatedAuthToken{}, err
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE users SET password_hash=?, last_login_at=datetime('now'), updated_at=datetime('now') WHERE id=?", hash, userID); err != nil {
+			return CreatedAuthToken{}, fmt.Errorf("auth: update login: %w", err)
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx, "UPDATE users SET last_login_at=datetime('now'), updated_at=datetime('now') WHERE id=?", userID); err != nil {
+			return CreatedAuthToken{}, fmt.Errorf("auth: update login: %w", err)
+		}
 	}
 	created, err := createTokenTx(ctx, tx, userID, AuthTokenKindSession, "Web session", sessionTTL)
 	if err != nil {
@@ -364,51 +374,55 @@ func (s *Store) AuthenticateToken(ctx context.Context, token, kind string) (Auth
 }
 
 func hashPassword(password string) (string, error) {
-	salt, err := randomBytes(passwordSaltBytes)
+	hash, err := bcrypt.GenerateFromPassword(bcryptPasswordInput(password), bcrypt.DefaultCost)
 	if err != nil {
 		return "", err
 	}
-	key, err := pbkdf2SHA256WithIter(password, salt, passwordHashIterations, passwordHashBytes)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("pbkdf2-sha256$%d$%s$%s", passwordHashIterations, base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(key)), nil
+	return string(hash), nil
+}
+
+func bcryptPasswordInput(password string) []byte {
+	sum := sha256.Sum256([]byte(password))
+	return sum[:]
 }
 
 func pbkdf2SHA256WithIter(password string, salt []byte, iter, keyLen int) ([]byte, error) {
 	return pbkdf2.Key(sha256.New, password, salt, iter, keyLen)
 }
 
-func verifyPassword(password, encoded string) bool {
+func verifyPassword(password, encoded string) (verified bool, needsRehash bool) {
+	if strings.HasPrefix(encoded, "$2a$") || strings.HasPrefix(encoded, "$2b$") || strings.HasPrefix(encoded, "$2y$") {
+		return bcrypt.CompareHashAndPassword([]byte(encoded), bcryptPasswordInput(password)) == nil, false
+	}
 	algorithm, rest, ok := strings.Cut(encoded, "$")
 	if !ok || algorithm != "pbkdf2-sha256" {
-		return false
+		return false, false
 	}
 	iterRaw, rest, ok := strings.Cut(rest, "$")
 	if !ok {
-		return false
+		return false, false
 	}
 	saltRaw, keyRaw, ok := strings.Cut(rest, "$")
 	if !ok || strings.Contains(keyRaw, "$") {
-		return false
+		return false, false
 	}
 	var iter int
 	if _, err := fmt.Sscanf(iterRaw, "%d", &iter); err != nil || iter <= 0 {
-		return false
+		return false, false
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(saltRaw)
 	if err != nil {
-		return false
+		return false, false
 	}
 	want, err := base64.RawStdEncoding.DecodeString(keyRaw)
 	if err != nil {
-		return false
+		return false, false
 	}
 	got, err := pbkdf2SHA256WithIter(password, salt, iter, len(want))
 	if err != nil {
-		return false
+		return false, false
 	}
-	return subtle.ConstantTimeCompare(got, want) == 1
+	return subtle.ConstantTimeCompare(got, want) == 1, true
 }
 
 func createTokenTx(ctx context.Context, tx *sql.Tx, userID int64, kind, name string, ttl time.Duration) (CreatedAuthToken, error) {
