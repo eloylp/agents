@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -496,8 +497,8 @@ func (p exportYAML) toConfig() *config.Config {
 		Prompts:    p.Prompts,
 		Skills:     p.Skills,
 		Guardrails: p.Guardrails,
-		Agents:     append([]fleet.Agent{}, p.Agents...),
-		Repos:      append([]fleet.Repo{}, p.Repos...),
+		Agents:     slices.Clone(p.Agents),
+		Repos:      slices.Clone(p.Repos),
 	}
 	for _, w := range p.Workspaces {
 		workspaceID := workspaceYAMLID(w)
@@ -525,7 +526,7 @@ func (p exportYAML) toConfig() *config.Config {
 }
 
 func (p exportYAML) flattenTokenBudgets() []store.TokenBudget {
-	budgets := append([]store.TokenBudget{}, p.TokenBudgets...)
+	budgets := slices.Clone(p.TokenBudgets)
 	for _, w := range p.Workspaces {
 		workspaceID := workspaceYAMLID(w)
 		for _, b := range w.TokenBudgets {
