@@ -195,6 +195,31 @@ layout, runs, traces, events, dispatches, and workspace-scoped budgets. New
 workspaces inherit built-in guardrail references; exports show the selected
 references in render order so operators can remove, re-order, or add them.
 
+### Token budgets
+
+Token budgets cap recorded token usage over UTC calendar periods. `daily`
+starts at 00:00 UTC, `weekly` starts Sunday 00:00 UTC, and `monthly` starts on
+the first day of the month at 00:00 UTC.
+
+Budget scopes are deliberately split between global caps and workspace-isolated
+caps:
+
+| Scope kind | Coverage |
+|---|---|
+| `global` | All workspaces, repos, agents, and backends |
+| `workspace` | One workspace |
+| `repo` | One repo name globally across all workspaces |
+| `agent` | One agent name globally across all workspaces |
+| `backend` | One backend globally across all workspaces |
+| `workspace+repo` | One repo inside one workspace |
+| `workspace+agent` | One agent inside one workspace |
+| `workspace+backend` | One backend inside one workspace |
+| `workspace+repo+agent` | One agent/repo pair inside one workspace |
+
+Use simple `repo`, `agent`, or `backend` scopes for cross-workspace caps. Use
+`workspace+repo`, `workspace+agent`, or `workspace+backend` when the same repo,
+agent, or backend name should have separate caps per workspace.
+
 Each agent is a workspace-local capability definition: backend + stable skill
 references + prompt reference + scope + dispatch wiring. Agents don't run until
 a repo in the same workspace binds them to a trigger.
