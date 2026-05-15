@@ -1,9 +1,40 @@
 package ai
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"time"
+)
 
 type Runner interface {
 	Run(ctx context.Context, req Request) (Response, error)
+}
+
+// CommandInterruptedError marks backend command cancellation/timeout as a hard
+// run failure even when the CLI emitted a parseable partial response first.
+type CommandInterruptedError struct {
+	Backend string
+	Kind    string
+	Timeout time.Duration
+	Err     error
+}
+
+func (e CommandInterruptedError) Error() string {
+	switch e.Kind {
+	case "timeout":
+		if e.Timeout > 0 {
+			return fmt.Sprintf("%s command timed out after %s", e.Backend, e.Timeout)
+		}
+		return fmt.Sprintf("%s command timed out", e.Backend)
+	case "canceled":
+		return fmt.Sprintf("%s command canceled", e.Backend)
+	default:
+		return fmt.Sprintf("%s command interrupted", e.Backend)
+	}
+}
+
+func (e CommandInterruptedError) Unwrap() error {
+	return e.Err
 }
 
 // RenderedPrompt is the result of RenderAgentPrompt: stable system-level

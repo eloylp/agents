@@ -96,6 +96,7 @@ type RunnerRow struct {
 	SpanID           string `json:"span_id,omitempty"`
 	RunDuration      int64  `json:"run_duration_ms,omitempty"`
 	Summary          string `json:"summary,omitempty"`
+	Error            string `json:"error,omitempty"`
 	PromptSize       int64  `json:"prompt_size,omitempty"`
 	InputTokens      int64  `json:"input_tokens,omitempty"`
 	OutputTokens     int64  `json:"output_tokens,omitempty"`
@@ -214,6 +215,7 @@ func (h *Handler) expand(ev store.RunnerRecord) []RunnerRow {
 		row.SpanID = sp.SpanID
 		row.RunDuration = sp.DurationMs
 		row.Summary = sp.Summary
+		row.Error = sp.ErrorMsg
 		row.Status = sp.Status // "success" | "error"
 		row.PromptSize = sp.PromptSize
 		row.InputTokens = sp.InputTokens

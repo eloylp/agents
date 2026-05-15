@@ -17,6 +17,7 @@ import (
 type stubRunner struct {
 	mu     sync.Mutex
 	calls  []ai.Request
+	run    func(ai.Request) (ai.Response, error)
 	runFn  func(ai.Request) error
 	respFn func(ai.Request) ai.Response
 }
@@ -24,8 +25,12 @@ type stubRunner struct {
 func (s *stubRunner) Run(_ context.Context, req ai.Request) (ai.Response, error) {
 	s.mu.Lock()
 	s.calls = append(s.calls, req)
+	run := s.run
 	respFn := s.respFn
 	s.mu.Unlock()
+	if run != nil {
+		return run(req)
+	}
 	if s.runFn != nil {
 		if err := s.runFn(req); err != nil {
 			return ai.Response{}, err
@@ -1140,5 +1145,33 @@ func TestHandleEventAutonomousReportsErrorStatus(t *testing.T) {
 	calls := rec.snapshot()
 	if len(calls) != 1 || calls[0].status != "error" {
 		t.Fatalf("expected one error-status record, got %+v", calls)
+	}
+}
+
+func TestHandleEventRunnerErrorRecordsPartialSummaryAsError(t *testing.T) {
+	t.Parallel()
+	e, runner := newTestEngine(t, nil)
+	rec := &traceRecorderStub{}
+	e.WithTraceRecorder(rec)
+	runner.run = func(ai.Request) (ai.Response, error) {
+		return ai.Response{Summary: "partial checkpoint"}, errors.New("codex command timed out after 1s")
+	}
+
+	err := e.HandleEvent(context.Background(), labelEvent("issues.labeled", "owner/repo", "ai:review:arch-reviewer", 1))
+	if err == nil {
+		t.Fatal("HandleEvent error = nil, want runner error")
+	}
+	span, ok := rec.last()
+	if !ok {
+		t.Fatal("no trace span recorded")
+	}
+	if span.Status != "error" {
+		t.Fatalf("span status = %q, want error", span.Status)
+	}
+	if span.Summary != "partial checkpoint" {
+		t.Fatalf("span summary = %q, want partial checkpoint", span.Summary)
+	}
+	if !strings.Contains(span.ErrorMsg, "timed out") {
+		t.Fatalf("span error = %q, want timeout detail", span.ErrorMsg)
 	}
 }

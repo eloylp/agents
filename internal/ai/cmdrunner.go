@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -98,6 +99,23 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 
 	env := buildCommandEnv(req, r.env)
 	stdoutCap, stderr, cmdErr := r.runContainerCommand(cmdCtx, args, stdin, env, req.OnLine)
+	if cmdErr != nil {
+		switch {
+		case errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
+			cmdErr = CommandInterruptedError{
+				Backend: r.backendName,
+				Kind:    "timeout",
+				Timeout: r.timeout,
+				Err:     cmdErr,
+			}
+		case errors.Is(cmdCtx.Err(), context.Canceled):
+			cmdErr = CommandInterruptedError{
+				Backend: r.backendName,
+				Kind:    "canceled",
+				Err:     cmdErr,
+			}
+		}
+	}
 	return r.parseCommandResponse(logger, stdoutCap, stderr, cmdErr)
 }
 
@@ -237,6 +255,11 @@ func (r *CommandRunner) parseCommandResponse(logger zerolog.Logger, stdoutCap li
 		return Response{}, fmt.Errorf("parse %s response: empty response (no fields populated)", r.backendName)
 	}
 	if cmdErr != nil {
+		var interrupted CommandInterruptedError
+		if errors.As(cmdErr, &interrupted) {
+			logger.Error().Err(cmdErr).Str("stderr", truncateString(stderr, 2000)).Msgf("%s command interrupted after valid partial output", r.backendName)
+			return response, cmdErr
+		}
 		logger.Warn().Err(cmdErr).Str("stderr", truncateString(stderr, 2000)).Msgf("%s command exited non-zero but produced valid output", r.backendName)
 	}
 	logger.Info().

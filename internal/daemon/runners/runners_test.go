@@ -107,7 +107,7 @@ func TestList_CompletedEventFannedOutToTwoAgentsShowsTwoRows(t *testing.T) {
 		Agent: "reviewer", Backend: "claude", Repo: "a/r", EventKind: "issues.labeled",
 		Number: 7, Summary: "reviewer failed",
 		StartedAt: now, FinishedAt: now.Add(2 * time.Second),
-		Status: "error",
+		Status: "error", ErrorMsg: "claude command timed out after 10m0s",
 	})
 	// RecordSpan persists asynchronously into SQLite; poll until both
 	// rows are visible before asking the handler to JOIN.
@@ -143,6 +143,9 @@ func TestList_CompletedEventFannedOutToTwoAgentsShowsTwoRows(t *testing.T) {
 	}
 	if agents["reviewer"].Status != "error" {
 		t.Errorf("reviewer status = %q, want error", agents["reviewer"].Status)
+	}
+	if agents["reviewer"].Error != "claude command timed out after 10m0s" {
+		t.Errorf("reviewer error = %q, want timeout detail", agents["reviewer"].Error)
 	}
 	if agents["coder"].RunDuration != 1000 {
 		t.Errorf("coder duration = %d, want 1000", agents["coder"].RunDuration)

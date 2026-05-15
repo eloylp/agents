@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -38,6 +39,26 @@ func (f *silentContainerRunner) EnsureImage(context.Context, string) error { ret
 func (f *silentContainerRunner) Run(_ context.Context, spec runtimeexec.ContainerSpec) (runtimeexec.ExitStatus, error) {
 	f.spec = spec
 	return runtimeexec.ExitStatus{}, nil
+}
+
+type timeoutContainerRunner struct {
+	spec        runtimeexec.ContainerSpec
+	writeJSON   bool
+	writeSignal chan struct{}
+}
+
+func (f *timeoutContainerRunner) EnsureImage(context.Context, string) error { return nil }
+
+func (f *timeoutContainerRunner) Run(ctx context.Context, spec runtimeexec.ContainerSpec) (runtimeexec.ExitStatus, error) {
+	f.spec = spec
+	if f.writeJSON && spec.Stdout != nil {
+		_, _ = spec.Stdout.Write([]byte(`{"summary":"partial checkpoint","artifacts":[],"memory":"","dispatch":[]}` + "\n"))
+	}
+	if f.writeSignal != nil {
+		close(f.writeSignal)
+	}
+	<-ctx.Done()
+	return runtimeexec.ExitStatus{}, ctx.Err()
 }
 
 func TestBuildCommandEnvDaemonNumber(t *testing.T) {
@@ -435,6 +456,31 @@ func TestCommandRunnerEmptyStdoutIsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "empty response") {
 		t.Errorf("expected 'empty response' in error, got: %v", err)
+	}
+}
+
+func TestCommandRunnerTimeoutWithPartialOutputReturnsErrorAndResponse(t *testing.T) {
+	t.Parallel()
+	fake := &timeoutContainerRunner{writeJSON: true, writeSignal: make(chan struct{})}
+	r := NewContainerCommandRunner(
+		"codex", "codex", nil,
+		1, 4000, fake, "ghcr.io/example/runner:test",
+		runtimeexec.ContainerSpec{},
+		zerolog.Nop(),
+	)
+	got, err := r.Run(context.Background(), Request{Workflow: "wf", Repo: "owner/repo"})
+	if err == nil {
+		t.Fatal("Run error = nil, want timeout error")
+	}
+	var interrupted CommandInterruptedError
+	if !errors.As(err, &interrupted) {
+		t.Fatalf("Run error = %T %v, want CommandInterruptedError", err, err)
+	}
+	if interrupted.Kind != "timeout" {
+		t.Fatalf("interruption kind = %q, want timeout", interrupted.Kind)
+	}
+	if got.Summary != "partial checkpoint" {
+		t.Fatalf("summary = %q, want partial checkpoint", got.Summary)
 	}
 }
 
