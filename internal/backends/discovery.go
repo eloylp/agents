@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"regexp"
 	"slices"
@@ -746,19 +747,14 @@ func diagnosticEnv(override map[string]string) []string {
 }
 
 func unavailableBackendStatuses(existing map[string]fleet.Backend, detail string) []BackendStatus {
-	names := make([]string, 0, len(existing)+len(builtinBackendNames))
 	seen := make(map[string]struct{}, len(existing)+len(builtinBackendNames))
 	for _, name := range builtinBackendNames {
-		names = append(names, name)
 		seen[name] = struct{}{}
 	}
 	for name := range existing {
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		names = append(names, name)
+		seen[name] = struct{}{}
 	}
-	slices.Sort(names)
+	names := slices.Sorted(maps.Keys(seen))
 	out := make([]BackendStatus, 0, len(names))
 	for _, name := range names {
 		cfg := existing[name]
