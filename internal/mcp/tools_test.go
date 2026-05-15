@@ -837,9 +837,10 @@ func TestToolTriggerAgentMissingArgs(t *testing.T) {
 func seedEvent(t *testing.T, db *sql.DB, ev observe.TimestampedEvent) {
 	t.Helper()
 	payload, _ := json.Marshal(ev.Payload)
+	workspaceID := fleet.NormalizeWorkspaceID(ev.WorkspaceID)
 	if _, err := db.Exec(
-		`INSERT INTO events (id, at, repo, kind, number, actor, payload) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		ev.ID, ev.At, ev.Repo, ev.Kind, ev.Number, ev.Actor, string(payload),
+		`INSERT INTO events (id, workspace_id, at, repo, kind, number, actor, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		ev.ID, workspaceID, ev.At, ev.Repo, ev.Kind, ev.Number, ev.Actor, string(payload),
 	); err != nil {
 		t.Fatalf("seed event: %v", err)
 	}
@@ -849,13 +850,21 @@ func seedEvent(t *testing.T, db *sql.DB, ev observe.TimestampedEvent) {
 // Same async-vs-sync rationale as seedEvent.
 func seedSpan(t *testing.T, db *sql.DB, sp observe.Span) {
 	t.Helper()
+	workspaceID := fleet.NormalizeWorkspaceID(sp.WorkspaceID)
 	if _, err := db.Exec(
-		`INSERT INTO traces (span_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		sp.SpanID, sp.RootEventID, sp.ParentSpanID, sp.Agent, sp.Backend, sp.Repo, sp.Number,
+		`INSERT INTO traces (span_id, workspace_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		sp.SpanID, workspaceID, sp.RootEventID, sp.ParentSpanID, sp.Agent, sp.Backend, sp.Repo, sp.Number,
 		sp.EventKind, sp.InvokedBy, sp.DispatchDepth, sp.QueueWaitMs, sp.ArtifactsCount, sp.Summary,
 		sp.StartedAt, sp.FinishedAt, sp.DurationMs, sp.Status, sp.ErrorMsg,
 	); err != nil {
 		t.Fatalf("seed span: %v", err)
+	}
+}
+
+func seedWorkspace(t *testing.T, deps Deps, id string) {
+	t.Helper()
+	if _, err := deps.Store.UpsertWorkspace(fleet.Workspace{ID: id, Name: id}); err != nil {
+		t.Fatalf("upsert workspace %s: %v", id, err)
 	}
 }
 
@@ -908,6 +917,28 @@ func TestToolListEventsSinceFilter(t *testing.T) {
 	}
 }
 
+func TestToolListEventsFiltersWorkspace(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	seedWorkspace(t, deps, "team-a")
+	seedWorkspace(t, deps, "team-b")
+	seedEvent(t, deps.Store.DB(), observe.TimestampedEvent{ID: "default-event", At: time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC), Kind: "agents.run", Repo: "owner/one"})
+	seedEvent(t, deps.Store.DB(), observe.TimestampedEvent{ID: "team-a-event", WorkspaceID: "team-a", At: time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC), Kind: "agents.run", Repo: "owner/team-a"})
+	seedEvent(t, deps.Store.DB(), observe.TimestampedEvent{ID: "team-b-event", WorkspaceID: "team-b", At: time.Date(2026, 4, 20, 11, 0, 0, 0, time.UTC), Kind: "agents.run", Repo: "owner/team-b"})
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"workspace": "team-a"}
+	res, err := toolListEvents(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got []map[string]any
+	decodeText(t, res, &got)
+	if len(got) != 1 || got[0]["id"] != "team-a-event" {
+		t.Fatalf("workspace filter expected only team-a event, got %+v", got)
+	}
+}
+
 func TestToolListEventsNilSlice(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
@@ -942,6 +973,29 @@ func TestToolListTraces(t *testing.T) {
 	}
 }
 
+func TestToolListTracesFiltersWorkspace(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	seedWorkspace(t, deps, "team-a")
+	seedWorkspace(t, deps, "team-b")
+	now := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
+	seedSpan(t, deps.Store.DB(), observe.Span{SpanID: "default-span", Agent: "coder", Status: "success", StartedAt: now, FinishedAt: now.Add(time.Second)})
+	seedSpan(t, deps.Store.DB(), observe.Span{SpanID: "team-a-span", WorkspaceID: "team-a", Agent: "coder", Status: "success", StartedAt: now.Add(time.Minute), FinishedAt: now.Add(time.Minute + time.Second)})
+	seedSpan(t, deps.Store.DB(), observe.Span{SpanID: "team-b-span", WorkspaceID: "team-b", Agent: "coder", Status: "success", StartedAt: now.Add(2 * time.Minute), FinishedAt: now.Add(2*time.Minute + time.Second)})
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"workspace": "team-a"}
+	res, err := toolListTraces(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got []map[string]any
+	decodeText(t, res, &got)
+	if len(got) != 1 || got[0]["span_id"] != "team-a-span" {
+		t.Fatalf("workspace filter expected only team-a span, got %+v", got)
+	}
+}
+
 func TestToolGetTrace(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
@@ -967,6 +1021,36 @@ func TestToolGetTrace(t *testing.T) {
 	}
 	if !res.IsError {
 		t.Fatalf("expected IsError for missing trace, got %+v", res)
+	}
+}
+
+func TestToolGetTraceFiltersWorkspace(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	seedWorkspace(t, deps, "team-a")
+	seedWorkspace(t, deps, "team-b")
+	now := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
+	seedSpan(t, deps.Store.DB(), observe.Span{SpanID: "team-a-span", WorkspaceID: "team-a", RootEventID: "root-1", Agent: "coder", StartedAt: now, FinishedAt: now.Add(time.Second)})
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"workspace": "team-a", "root_event_id": "root-1"}
+	res, err := toolGetTrace(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got []map[string]any
+	decodeText(t, res, &got)
+	if len(got) != 1 || got[0]["span_id"] != "team-a-span" {
+		t.Fatalf("unexpected trace payload: %+v", got)
+	}
+
+	req.Params.Arguments = map[string]any{"workspace": "team-b", "root_event_id": "root-1"}
+	res, err = toolGetTrace(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected IsError for trace in wrong workspace, got %+v", res)
 	}
 }
 
@@ -1120,6 +1204,87 @@ func TestToolGetGraphSeedsNodesFromFleetAndEdges(t *testing.T) {
 	dispatches, ok := edge["dispatches"].([]any)
 	if !ok || len(dispatches) != 1 {
 		t.Fatalf("expected 1 dispatch record, got %+v", edge["dispatches"])
+	}
+}
+
+func TestToolGetGraphFiltersWorkspace(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	if _, err := deps.Store.UpsertWorkspace(fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("upsert workspace: %v", err)
+	}
+	if err := deps.Store.UpsertAgent(fleet.Agent{
+		WorkspaceID:   "team-a",
+		Name:          "team-reviewer",
+		Backend:       "claude",
+		Prompt:        "review",
+		Description:   "reviews team code",
+		AllowDispatch: true,
+		CanDispatch:   []string{},
+		AllowMemory:   nil,
+		Skills:        []string{},
+	}); err != nil {
+		t.Fatalf("upsert team reviewer: %v", err)
+	}
+	if err := deps.Store.UpsertAgent(fleet.Agent{
+		WorkspaceID:   "team-a",
+		Name:          "team-coder",
+		Backend:       "claude",
+		Prompt:        "code",
+		Description:   "writes team code",
+		AllowDispatch: true,
+		CanDispatch:   []string{"team-reviewer"},
+		AllowMemory:   nil,
+		Skills:        []string{},
+	}); err != nil {
+		t.Fatalf("upsert team coder: %v", err)
+	}
+	if _, err := deps.Store.DB().Exec(
+		`INSERT INTO dispatch_history (workspace_id, from_agent, to_agent, repo, number, reason) VALUES (?,?,?,?,?,?)`,
+		"team-a", "team-coder", "team-ghost", "owner/team", 7, "followup",
+	); err != nil {
+		t.Fatalf("seed team dispatch: %v", err)
+	}
+	if _, err := deps.Store.DB().Exec(
+		`INSERT INTO dispatch_history (workspace_id, from_agent, to_agent, repo, number, reason) VALUES (?,?,?,?,?,?)`,
+		fleet.DefaultWorkspaceID, "coder", "ghost", "owner/one", 8, "default followup",
+	); err != nil {
+		t.Fatalf("seed default dispatch: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"workspace": "team-a"}
+	res, err := toolGetGraph(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got struct {
+		Nodes []map[string]any `json:"nodes"`
+		Edges []map[string]any `json:"edges"`
+	}
+	decodeText(t, res, &got)
+	for _, want := range []string{"team-coder", "team-reviewer", "team-ghost"} {
+		if !slices.ContainsFunc(got.Nodes, func(n map[string]any) bool { return n["id"] == want }) {
+			t.Errorf("missing node %q in %+v", want, got.Nodes)
+		}
+	}
+	for _, notWant := range []string{"coder", "reviewer", "ghost"} {
+		if slices.ContainsFunc(got.Nodes, func(n map[string]any) bool { return n["id"] == notWant }) {
+			t.Errorf("unexpected node %q in %+v", notWant, got.Nodes)
+		}
+	}
+	if !slices.ContainsFunc(got.Edges, func(e map[string]any) bool {
+		return e["from"] == "team-coder" && e["to"] == "team-reviewer"
+	}) {
+		t.Fatalf("expected configured team edge in %+v", got.Edges)
+	}
+	if !slices.ContainsFunc(got.Edges, func(e map[string]any) bool {
+		return e["from"] == "team-coder" && e["to"] == "team-ghost" && e["count"].(float64) == 1
+	}) {
+		t.Fatalf("expected observed team edge in %+v", got.Edges)
+	}
+	if slices.ContainsFunc(got.Edges, func(e map[string]any) bool { return e["from"] == "coder" || e["to"] == "ghost" }) {
+		t.Fatalf("default workspace edge leaked into team graph: %+v", got.Edges)
 	}
 }
 
