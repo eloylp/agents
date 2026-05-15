@@ -1106,6 +1106,158 @@ func TestHandleEventAutonomousFiresLastRunRecorder(t *testing.T) {
 	}
 }
 
+func TestHandleDirectRunPanicReleasesClaims(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ev   Event
+	}{
+		{
+			name: "agents.run",
+			ev: Event{
+				Repo:    RepoRef{FullName: "owner/repo", Enabled: true},
+				Kind:    "agents.run",
+				Number:  7,
+				Payload: map[string]any{"target_agent": "arch-reviewer"},
+			},
+		},
+		{
+			name: "cron",
+			ev:   autonomousEvent("owner/repo", "arch-reviewer"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			e, runner := newDirectRunTestEngine(t)
+			rec := &stubLastRunRecorder{}
+			e.WithLastRunRecorder(rec)
+			runner.runFn = func(ai.Request) error {
+				if runner.callCount() == 1 {
+					panic("runner panic")
+				}
+				return nil
+			}
+
+			mustPanic(t, func() {
+				_ = e.HandleEvent(context.Background(), tt.ev)
+			})
+
+			if err := e.HandleEvent(context.Background(), tt.ev); err != nil {
+				t.Fatalf("second HandleEvent() error = %v", err)
+			}
+			if got := runner.callCount(); got != 2 {
+				t.Fatalf("runner calls = %d, want 2; stale claim likely blocked retry", got)
+			}
+			if tt.ev.Kind == "cron" {
+				calls := rec.snapshot()
+				if len(calls) != 2 {
+					t.Fatalf("LastRunRecorder calls = %d, want 2: %+v", len(calls), calls)
+				}
+				if calls[0].status != "error" || calls[1].status != "success" {
+					t.Fatalf("cron statuses = %q, %q; want error, success", calls[0].status, calls[1].status)
+				}
+			}
+		})
+	}
+}
+
+func TestHandleDirectRunErrorReleasesClaims(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ev   Event
+	}{
+		{
+			name: "agents.run",
+			ev: Event{
+				Repo:    RepoRef{FullName: "owner/repo", Enabled: true},
+				Kind:    "agents.run",
+				Number:  8,
+				Payload: map[string]any{"target_agent": "arch-reviewer"},
+			},
+		},
+		{
+			name: "cron",
+			ev:   autonomousEvent("owner/repo", "arch-reviewer"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			e, runner := newDirectRunTestEngine(t)
+			rec := &stubLastRunRecorder{}
+			e.WithLastRunRecorder(rec)
+			runner.runFn = func(ai.Request) error {
+				if runner.callCount() == 1 {
+					return errors.New("runner failed")
+				}
+				return nil
+			}
+
+			if err := e.HandleEvent(context.Background(), tt.ev); err == nil {
+				t.Fatal("first HandleEvent() error = nil, want error")
+			}
+			if err := e.HandleEvent(context.Background(), tt.ev); err != nil {
+				t.Fatalf("second HandleEvent() error = %v", err)
+			}
+			if got := runner.callCount(); got != 2 {
+				t.Fatalf("runner calls = %d, want 2; stale claim likely blocked retry", got)
+			}
+			if tt.ev.Kind == "cron" {
+				calls := rec.snapshot()
+				if len(calls) != 2 {
+					t.Fatalf("LastRunRecorder calls = %d, want 2: %+v", len(calls), calls)
+				}
+				if calls[0].status != "error" || calls[1].status != "success" {
+					t.Fatalf("cron statuses = %q, %q; want error, success", calls[0].status, calls[1].status)
+				}
+			}
+		})
+	}
+}
+
+func newDirectRunTestEngine(t *testing.T) (*Engine, *stubRunner) {
+	t.Helper()
+
+	runner := &stubRunner{}
+	cfg := &config.Config{
+		Daemon: config.DaemonConfig{
+			Processor: config.ProcessorConfig{
+				MaxConcurrentAgents: 4,
+				Dispatch:            testDispatchCfg(),
+			},
+			AIBackends: map[string]fleet.Backend{
+				"claude": {Command: "claude"},
+			},
+		},
+		Agents: []fleet.Agent{
+			{Name: "arch-reviewer", Backend: "claude", Prompt: "Review architecture."},
+		},
+		Repos: []fleet.Repo{
+			{Name: "owner/repo", Enabled: true},
+		},
+	}
+	return newEngineFromCfg(t, cfg, map[string]ai.Runner{"claude": runner}, &fakeQueue{}), runner
+}
+
+func mustPanic(t *testing.T, fn func()) {
+	t.Helper()
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("function did not panic")
+		}
+	}()
+	fn()
+}
+
 // TestHandleEventNonAutonomousSkipsLastRunRecorder verifies that label/event
 // driven runs (webhook path) do not fire the LastRunRecorder hook, only
 // autonomous runs update the cron schedule view.
