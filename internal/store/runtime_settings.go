@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,19 @@ import (
 )
 
 const runtimeConfigKey = "runtime"
+
+type RuntimeSettingsPatch struct {
+	RunnerImage *string                 `json:"runner_image,omitempty"`
+	Constraints RuntimeConstraintsPatch `json:"constraints,omitempty"`
+}
+
+type RuntimeConstraintsPatch struct {
+	CPUs           *string `json:"cpus,omitempty"`
+	Memory         *string `json:"memory,omitempty"`
+	PidsLimit      *int64  `json:"pids_limit,omitempty"`
+	TimeoutSeconds *int    `json:"timeout_seconds,omitempty"`
+	NetworkMode    *string `json:"network_mode,omitempty"`
+}
 
 func ReadRuntimeSettings(db querier) (fleet.RuntimeSettings, error) {
 	var raw string
@@ -31,7 +45,54 @@ func ReadRuntimeSettings(db querier) (fleet.RuntimeSettings, error) {
 	return settings, nil
 }
 
+func PatchRuntimeSettings(db *sql.DB, patch RuntimeSettingsPatch) (fleet.RuntimeSettings, error) {
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return fleet.RuntimeSettings{}, fmt.Errorf("store: begin patch runtime settings: %w", err)
+	}
+	defer tx.Rollback()
+
+	current, err := ReadRuntimeSettings(tx)
+	if err != nil {
+		return fleet.RuntimeSettings{}, err
+	}
+	if patch.RunnerImage != nil {
+		current.RunnerImage = *patch.RunnerImage
+	}
+	if patch.Constraints.CPUs != nil {
+		current.Constraints.CPUs = *patch.Constraints.CPUs
+	}
+	if patch.Constraints.Memory != nil {
+		current.Constraints.Memory = *patch.Constraints.Memory
+	}
+	if patch.Constraints.PidsLimit != nil {
+		current.Constraints.PidsLimit = *patch.Constraints.PidsLimit
+	}
+	if patch.Constraints.TimeoutSeconds != nil {
+		current.Constraints.TimeoutSeconds = *patch.Constraints.TimeoutSeconds
+	}
+	if patch.Constraints.NetworkMode != nil {
+		current.Constraints.NetworkMode = *patch.Constraints.NetworkMode
+	}
+	updated, err := writeRuntimeSettings(tx, current)
+	if err != nil {
+		return fleet.RuntimeSettings{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return fleet.RuntimeSettings{}, fmt.Errorf("store: commit patch runtime settings: %w", err)
+	}
+	return updated, nil
+}
+
 func WriteRuntimeSettings(db *sql.DB, settings fleet.RuntimeSettings) (fleet.RuntimeSettings, error) {
+	return writeRuntimeSettings(db, settings)
+}
+
+type runtimeSettingsWriter interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func writeRuntimeSettings(db runtimeSettingsWriter, settings fleet.RuntimeSettings) (fleet.RuntimeSettings, error) {
 	fleet.NormalizeRuntimeSettings(&settings)
 	if err := validateRuntimeSettings(settings); err != nil {
 		return fleet.RuntimeSettings{}, err

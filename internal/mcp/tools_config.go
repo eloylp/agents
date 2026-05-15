@@ -2,8 +2,13 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"math"
+	"strconv"
+	"strings"
 
-	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/store"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -35,11 +40,11 @@ func toolGetRuntime(deps Deps) server.ToolHandlerFunc {
 
 func toolUpdateRuntime(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		settings, err := runtimeSettingsFromRequest(req)
+		patch, err := runtimeSettingsPatchFromRequest(req)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
-		updated, err := deps.Store.WriteRuntimeSettings(settings)
+		updated, err := deps.Store.PatchRuntimeSettings(patch)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("update runtime settings", err), nil
 		}
@@ -62,28 +67,67 @@ func toolUpdateWorkspaceRuntime(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
-func runtimeSettingsFromRequest(req mcpgo.CallToolRequest) (fleet.RuntimeSettings, error) {
-	current := fleet.RuntimeSettings{}
+func runtimeSettingsPatchFromRequest(req mcpgo.CallToolRequest) (store.RuntimeSettingsPatch, error) {
+	var patch store.RuntimeSettingsPatch
 	if image, ok := trimmedStringOptional(req, "runner_image"); ok {
-		current.RunnerImage = image
+		patch.RunnerImage = &image
 	}
 	if cpus, ok := trimmedStringOptional(req, "cpus"); ok {
-		current.Constraints.CPUs = cpus
+		patch.Constraints.CPUs = &cpus
 	}
 	if memory, ok := trimmedStringOptional(req, "memory"); ok {
-		current.Constraints.Memory = memory
+		patch.Constraints.Memory = &memory
 	}
 	if network, ok := trimmedStringOptional(req, "network_mode"); ok {
-		current.Constraints.NetworkMode = network
+		patch.Constraints.NetworkMode = &network
 	}
-	if pids := req.GetInt("pids_limit", 0); pids > 0 {
-		current.Constraints.PidsLimit = int64(pids)
+	if pids, ok, err := optionalIntArg(req, "pids_limit"); err != nil {
+		return store.RuntimeSettingsPatch{}, err
+	} else if ok {
+		pids64 := int64(pids)
+		patch.Constraints.PidsLimit = &pids64
 	}
-	if timeout := req.GetInt("timeout_seconds", 0); timeout > 0 {
-		current.Constraints.TimeoutSeconds = timeout
+	if timeout, ok, err := optionalIntArg(req, "timeout_seconds"); err != nil {
+		return store.RuntimeSettingsPatch{}, err
+	} else if ok {
+		patch.Constraints.TimeoutSeconds = &timeout
 	}
-	fleet.NormalizeRuntimeSettings(&current)
-	return current, nil
+	return patch, nil
+}
+
+func optionalIntArg(req mcpgo.CallToolRequest, key string) (int, bool, error) {
+	raw, ok := req.GetArguments()[key]
+	if !ok || raw == nil {
+		return 0, false, nil
+	}
+	switch v := raw.(type) {
+	case int:
+		return v, true, nil
+	case int64:
+		if v < int64(math.MinInt) || v > int64(math.MaxInt) {
+			return 0, false, fmt.Errorf("%s is outside int range", key)
+		}
+		return int(v), true, nil
+	case float64:
+		if math.Trunc(v) != v || v < float64(math.MinInt) || v > float64(math.MaxInt) {
+			return 0, false, fmt.Errorf("%s must be an integer", key)
+		}
+		return int(v), true, nil
+	case json.Number:
+		i, err := strconv.ParseInt(v.String(), 10, 0)
+		if err != nil {
+			return 0, false, fmt.Errorf("%s must be an integer", key)
+		}
+		return int(i), true, nil
+	case string:
+		i, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return 0, false, fmt.Errorf("%s must be an integer", key)
+		}
+		return i, true, nil
+	default:
+		return 0, false, fmt.Errorf("%s must be an integer", key)
+	}
 }
 
 // toolExportConfig returns the CRUD-mutable sections of the fleet config as a

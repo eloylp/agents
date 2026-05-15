@@ -75,6 +75,11 @@ func (s *Store) ReadRuntimeSettings() (fleet.RuntimeSettings, error) {
 func (s *Store) WriteRuntimeSettings(settings fleet.RuntimeSettings) (fleet.RuntimeSettings, error) {
 	return WriteRuntimeSettings(s.db, settings)
 }
+
+func (s *Store) PatchRuntimeSettings(patch RuntimeSettingsPatch) (fleet.RuntimeSettings, error) {
+	return PatchRuntimeSettings(s.db, patch)
+}
+
 func (s *Store) ReadWorkspace(workspace string) (fleet.Workspace, error) {
 	return ReadWorkspace(s.db, workspace)
 }
