@@ -3042,6 +3042,7 @@ func TestToolUpdateRuntimePreservesOmittedFields(t *testing.T) {
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"timeout_seconds": float64(1200),
+		"pids_limit":      float64(0),
 	}
 	res, err := toolUpdateRuntime(deps)(context.Background(), req)
 	if err != nil || res.IsError {
@@ -3057,8 +3058,36 @@ func TestToolUpdateRuntimePreservesOmittedFields(t *testing.T) {
 	if got.Constraints.CPUs != "2" || got.Constraints.Memory != "4g" || got.Constraints.NetworkMode != "bridge" {
 		t.Fatalf("constraints not preserved: %+v", got.Constraints)
 	}
-	if got.Constraints.PidsLimit != 256 || got.Constraints.TimeoutSeconds != 1200 {
-		t.Fatalf("numeric constraints = %+v, want pids 256 timeout 1200", got.Constraints)
+	if got.Constraints.PidsLimit != 0 || got.Constraints.TimeoutSeconds != 1200 {
+		t.Fatalf("numeric constraints = %+v, want pids 0 timeout 1200", got.Constraints)
+	}
+}
+
+func TestToolUpdateRuntimeEmptyRunnerImageResetsDefault(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	_, err := deps.Store.WriteRuntimeSettings(fleet.RuntimeSettings{
+		RunnerImage: "ghcr.io/example/custom-runner:v1",
+	})
+	if err != nil {
+		t.Fatalf("WriteRuntimeSettings: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"runner_image": "",
+	}
+	res, err := toolUpdateRuntime(deps)(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("update_runtime failed: err=%v body=%s", err, textOf(t, res))
+	}
+	got, err := deps.Store.ReadRuntimeSettings()
+	if err != nil {
+		t.Fatalf("ReadRuntimeSettings: %v", err)
+	}
+	if got.RunnerImage != fleet.DefaultRunnerImage {
+		t.Fatalf("runner_image = %q, want default %q", got.RunnerImage, fleet.DefaultRunnerImage)
 	}
 }
 

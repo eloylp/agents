@@ -1076,8 +1076,10 @@ func TestStoreCRUDRuntimePatchPreservesOmittedFields(t *testing.T) {
 	}
 
 	rr := doCRUDRequest(t, s, http.MethodPatch, "/runtime", map[string]any{
+		"runner_image": "",
 		"constraints": map[string]any{
 			"cpus":            "",
+			"pids_limit":      0,
 			"timeout_seconds": 1200,
 		},
 	})
@@ -1088,8 +1090,8 @@ func TestStoreCRUDRuntimePatchPreservesOmittedFields(t *testing.T) {
 	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
 		t.Fatalf("decode patch response: %v", err)
 	}
-	if out.RunnerImage != "ghcr.io/example/custom-runner:v1" {
-		t.Fatalf("runner_image = %q, want custom image", out.RunnerImage)
+	if out.RunnerImage != fleet.DefaultRunnerImage {
+		t.Fatalf("runner_image = %q, want default %q", out.RunnerImage, fleet.DefaultRunnerImage)
 	}
 	if out.Constraints.CPUs != "" {
 		t.Fatalf("cpus = %q, want cleared", out.Constraints.CPUs)
@@ -1097,8 +1099,8 @@ func TestStoreCRUDRuntimePatchPreservesOmittedFields(t *testing.T) {
 	if out.Constraints.Memory != "4g" || out.Constraints.NetworkMode != "bridge" {
 		t.Fatalf("constraints not preserved: %+v", out.Constraints)
 	}
-	if out.Constraints.PidsLimit != 256 || out.Constraints.TimeoutSeconds != 1200 {
-		t.Fatalf("numeric constraints = %+v, want pids 256 timeout 1200", out.Constraints)
+	if out.Constraints.PidsLimit != 0 || out.Constraints.TimeoutSeconds != 1200 {
+		t.Fatalf("numeric constraints = %+v, want pids 0 timeout 1200", out.Constraints)
 	}
 }
 

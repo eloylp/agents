@@ -100,6 +100,32 @@ func TestPatchRuntimeSettingsPreservesOmittedFields(t *testing.T) {
 	}
 }
 
+func TestPatchRuntimeSettingsEmptyRunnerImageResetsDefault(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(filepath.Join(t.TempDir(), "runtime-patch-image.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	st := store.New(db)
+	_, err = st.WriteRuntimeSettings(fleet.RuntimeSettings{
+		RunnerImage: "ghcr.io/example/custom-runner:v1",
+	})
+	if err != nil {
+		t.Fatalf("WriteRuntimeSettings: %v", err)
+	}
+
+	image := ""
+	updated, err := st.PatchRuntimeSettings(store.RuntimeSettingsPatch{RunnerImage: &image})
+	if err != nil {
+		t.Fatalf("PatchRuntimeSettings: %v", err)
+	}
+	if updated.RunnerImage != fleet.DefaultRunnerImage {
+		t.Fatalf("runner_image = %q, want default %q", updated.RunnerImage, fleet.DefaultRunnerImage)
+	}
+}
+
 func TestWorkspaceRunnerImageRoundTrip(t *testing.T) {
 	t.Parallel()
 	db, err := store.Open(filepath.Join(t.TempDir(), "workspace-runtime.db"))

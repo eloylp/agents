@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -45,7 +46,13 @@ func ReadRuntimeSettings(db querier) (fleet.RuntimeSettings, error) {
 }
 
 func PatchRuntimeSettings(db *sql.DB, patch RuntimeSettingsPatch) (fleet.RuntimeSettings, error) {
-	current, err := ReadRuntimeSettings(db)
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return fleet.RuntimeSettings{}, fmt.Errorf("store: begin patch runtime settings: %w", err)
+	}
+	defer tx.Rollback()
+
+	current, err := ReadRuntimeSettings(tx)
 	if err != nil {
 		return fleet.RuntimeSettings{}, err
 	}
@@ -67,10 +74,25 @@ func PatchRuntimeSettings(db *sql.DB, patch RuntimeSettingsPatch) (fleet.Runtime
 	if patch.Constraints.NetworkMode != nil {
 		current.Constraints.NetworkMode = *patch.Constraints.NetworkMode
 	}
-	return WriteRuntimeSettings(db, current)
+	updated, err := writeRuntimeSettings(tx, current)
+	if err != nil {
+		return fleet.RuntimeSettings{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return fleet.RuntimeSettings{}, fmt.Errorf("store: commit patch runtime settings: %w", err)
+	}
+	return updated, nil
 }
 
 func WriteRuntimeSettings(db *sql.DB, settings fleet.RuntimeSettings) (fleet.RuntimeSettings, error) {
+	return writeRuntimeSettings(db, settings)
+}
+
+type runtimeSettingsWriter interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func writeRuntimeSettings(db runtimeSettingsWriter, settings fleet.RuntimeSettings) (fleet.RuntimeSettings, error) {
 	fleet.NormalizeRuntimeSettings(&settings)
 	if err := validateRuntimeSettings(settings); err != nil {
 		return fleet.RuntimeSettings{}, err

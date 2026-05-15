@@ -96,6 +96,7 @@ runtime:
 Runtime settings are fleet state because operators may need to switch runner images or constraints without rebuilding the daemon. They are stored in SQLite, returned by `/config`, included in import/export, and editable through Config -> Runtime, REST, and MCP. They are not startup env overrides; use the database-backed surfaces for runner image and container policy changes.
 
 The global runner image applies to every run unless a workspace sets `runner_image`. Constraints are passed to Docker where supported: CPU, memory, PID limit, timeout, and network mode. Advanced egress filtering is not part of the v1 runtime settings.
+When patching global runtime settings through REST or MCP, omitted fields are preserved. Empty string clears string constraints such as `cpus`, `memory`, and `network_mode`; empty `runner_image` resets to the built-in default because the global image cannot be unset.
 
 ## `backends`
 
