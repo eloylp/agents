@@ -914,6 +914,7 @@ func TestBuildHandlerAuthProtectsSensitiveRoutes(t *testing.T) {
 		{name: "orphans requires auth", method: http.MethodGet, path: "/agents/orphans/status", wantStatus: http.StatusUnauthorized},
 		{name: "auth users requires auth", method: http.MethodGet, path: "/auth/users", wantStatus: http.StatusUnauthorized},
 		{name: "auth me requires auth", method: http.MethodGet, path: "/auth/me", wantStatus: http.StatusUnauthorized},
+		{name: "change own password requires auth", method: http.MethodPost, path: "/auth/me/password", wantStatus: http.StatusUnauthorized},
 		{name: "logout requires auth", method: http.MethodPost, path: "/auth/logout", wantStatus: http.StatusUnauthorized},
 		{name: "create auth user requires auth", method: http.MethodPost, path: "/auth/users", wantStatus: http.StatusUnauthorized},
 		{name: "delete auth user requires auth", method: http.MethodDelete, path: "/auth/users/2", wantStatus: http.StatusUnauthorized},
@@ -1210,4 +1211,148 @@ func TestBuildHandlerDBAuthBootstrapLoginAndAPIToken(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("api token /config got %d, want %d", resp.StatusCode, http.StatusOK)
 	}
+}
+
+func TestBuildHandlerAuthChangeOwnPassword(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := newTestServer(t, testCfg(nil))
+	ts := httptest.NewServer(srv.AuthHandler())
+	t.Cleanup(ts.Close)
+
+	adminCookie := bootstrapViaHTTP(t, ts.URL, "admin", "correct horse battery staple")
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/auth/me/password", bytes.NewReader([]byte(`{"current_password":"wrong","new_password":"new admin password"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(adminCookie)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("wrong current password request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("wrong current password got %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+
+	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/auth/me/password", bytes.NewReader([]byte(`{"current_password":"correct horse battery staple","new_password":""}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(adminCookie)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("empty new password request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("empty new password got %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+
+	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/auth/me/password", bytes.NewReader([]byte(`{"current_password":"correct horse battery staple","new_password":"new admin password"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(adminCookie)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("change password request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("change password got %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	if got := loginStatus(t, ts.URL, "admin", "correct horse battery staple"); got != http.StatusUnauthorized {
+		t.Fatalf("old admin password login got %d, want %d", got, http.StatusUnauthorized)
+	}
+	if got := loginStatus(t, ts.URL, "admin", "new admin password"); got != http.StatusOK {
+		t.Fatalf("new admin password login got %d, want %d", got, http.StatusOK)
+	}
+}
+
+func TestBuildHandlerAuthNonAdminChangesOnlyOwnPassword(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := newTestServer(t, testCfg(nil))
+	ts := httptest.NewServer(srv.AuthHandler())
+	t.Cleanup(ts.Close)
+
+	adminCookie := bootstrapViaHTTP(t, ts.URL, "admin", "admin password")
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/auth/users", bytes.NewReader([]byte(`{"username":"operator","password":"operator password"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(adminCookie)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create operator request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create operator got %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+
+	operatorCookie := loginViaHTTP(t, ts.URL, "operator", "operator password")
+	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/auth/me/password", bytes.NewReader([]byte(`{"current_password":"operator password","new_password":"new operator password"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(operatorCookie)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("operator change password request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("operator change password got %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	if got := loginStatus(t, ts.URL, "operator", "operator password"); got != http.StatusUnauthorized {
+		t.Fatalf("old operator password login got %d, want %d", got, http.StatusUnauthorized)
+	}
+	if got := loginStatus(t, ts.URL, "operator", "new operator password"); got != http.StatusOK {
+		t.Fatalf("new operator password login got %d, want %d", got, http.StatusOK)
+	}
+	if got := loginStatus(t, ts.URL, "admin", "admin password"); got != http.StatusOK {
+		t.Fatalf("admin password login after operator change got %d, want %d", got, http.StatusOK)
+	}
+}
+
+func bootstrapViaHTTP(t *testing.T, baseURL, username, password string) *http.Cookie {
+	t.Helper()
+	resp, err := http.Post(baseURL+"/auth/bootstrap", "application/json", bytes.NewReader([]byte(`{"username":`+strconv.Quote(username)+`,"password":`+strconv.Quote(password)+`}`)))
+	if err != nil {
+		t.Fatalf("bootstrap request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("bootstrap got %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+	return sessionCookieFromResponse(t, resp)
+}
+
+func loginViaHTTP(t *testing.T, baseURL, username, password string) *http.Cookie {
+	t.Helper()
+	resp, err := http.Post(baseURL+"/auth/login", "application/json", bytes.NewReader([]byte(`{"username":`+strconv.Quote(username)+`,"password":`+strconv.Quote(password)+`}`)))
+	if err != nil {
+		t.Fatalf("login request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("login got %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	return sessionCookieFromResponse(t, resp)
+}
+
+func loginStatus(t *testing.T, baseURL, username, password string) int {
+	t.Helper()
+	resp, err := http.Post(baseURL+"/auth/login", "application/json", bytes.NewReader([]byte(`{"username":`+strconv.Quote(username)+`,"password":`+strconv.Quote(password)+`}`)))
+	if err != nil {
+		t.Fatalf("login request failed: %v", err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+func sessionCookieFromResponse(t *testing.T, resp *http.Response) *http.Cookie {
+	t.Helper()
+	for _, cookie := range resp.Cookies() {
+		if cookie.Name == "agents_session" {
+			return cookie
+		}
+	}
+	t.Fatal("response did not set agents_session cookie")
+	return nil
 }

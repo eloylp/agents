@@ -175,6 +175,42 @@ func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 	return nil
 }
 
+func (s *Store) ChangeUserPassword(ctx context.Context, userID int64, currentPassword, newPassword string) error {
+	if userID <= 0 || currentPassword == "" || newPassword == "" {
+		return ErrAuthInvalid
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("auth: begin change password: %w", err)
+	}
+	defer tx.Rollback()
+
+	var stored string
+	var disabled sql.NullString
+	err = tx.QueryRowContext(ctx, "SELECT password_hash,disabled_at FROM users WHERE id=?", userID).Scan(&stored, &disabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrAuthNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("auth: lookup change password user: %w", err)
+	}
+	verified, _ := verifyPassword(currentPassword, stored)
+	if disabled.Valid || !verified {
+		return ErrAuthInvalid
+	}
+	hash, err := hashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE users SET password_hash=?, updated_at=datetime('now') WHERE id=?", hash, userID); err != nil {
+		return fmt.Errorf("auth: update password: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("auth: commit change password: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) BootstrapUser(ctx context.Context, username, password string, sessionTTL time.Duration) (CreatedAuthToken, error) {
 	username = strings.TrimSpace(username)
 	if username == "" || password == "" {

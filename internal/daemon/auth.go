@@ -38,6 +38,11 @@ type createUserRequest struct {
 	Password string `json:"password"`
 }
 
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
 type createTokenRequest struct {
 	Name      string     `json:"name"`
 	ExpiresAt *time.Time `json:"expires_at"`
@@ -54,6 +59,7 @@ func (d *Daemon) registerAuthRoutes(router *mux.Router, withTimeout func(http.Ha
 	router.Handle("/auth/login", withTimeout(http.HandlerFunc(d.handleAuthLogin))).Methods(http.MethodPost)
 	router.Handle("/auth/logout", withTimeout(http.HandlerFunc(d.handleAuthLogout))).Methods(http.MethodPost)
 	router.Handle("/auth/me", withTimeout(http.HandlerFunc(d.handleAuthMe))).Methods(http.MethodGet)
+	router.Handle("/auth/me/password", withTimeout(http.HandlerFunc(d.handleAuthMePassword))).Methods(http.MethodPost)
 	router.Handle("/auth/users", withTimeout(http.HandlerFunc(d.handleAuthUsersList))).Methods(http.MethodGet)
 	router.Handle("/auth/users", withTimeout(http.HandlerFunc(d.handleAuthUsersCreate))).Methods(http.MethodPost)
 	router.Handle("/auth/users/{id}", withTimeout(http.HandlerFunc(d.handleAuthUserDelete))).Methods(http.MethodDelete)
@@ -217,6 +223,34 @@ func (d *Daemon) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, identity.User, http.StatusOK)
+}
+
+func (d *Daemon) handleAuthMePassword(w http.ResponseWriter, r *http.Request) {
+	identity, ok := d.currentIdentity(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req changePasswordRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, d.daemonCfg.HTTP.MaxBodyBytes)).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.CurrentPassword == "" || req.NewPassword == "" {
+		http.Error(w, "invalid password request", http.StatusBadRequest)
+		return
+	}
+	err := d.store.ChangeUserPassword(r.Context(), identity.User.ID, req.CurrentPassword, req.NewPassword)
+	if errors.Is(err, store.ErrAuthInvalid) || errors.Is(err, store.ErrAuthNotFound) {
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return
+	}
+	if err != nil {
+		d.logger.Error().Err(err).Msg("auth me: change password")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true}, http.StatusOK)
 }
 
 func (d *Daemon) handleAuthUsersList(w http.ResponseWriter, r *http.Request) {

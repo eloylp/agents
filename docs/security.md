@@ -12,7 +12,7 @@ This page describes the daemon's threat model and the recommendations shipped ag
 
 ## Daemon auth <a id="daemon-auth"></a>
 
-On a fresh database, open the root login page (`/`) and create the first user. That bootstrapped user is the admin user, can create or remove additional dashboard users from Config -> Authentication, and cannot be removed. Non-admin users can sign in, manage fleet configuration, and create their own API tokens, but they cannot create or remove users. The daemon stores password hashes and issues opaque session tokens in `HttpOnly` cookies. After at least one user exists, sensitive REST, MCP, `/run`, traces, runners, config, guardrails, repos, skills, agents, memory, graph, and event routes require one of:
+On a fresh database, open the root login page (`/`) and create the first user. That bootstrapped user is the admin user, can create or remove additional dashboard users from Config -> Authentication, and cannot be removed. Non-admin users can sign in, manage fleet configuration, change their own password, and create their own API tokens, but they cannot create or remove users. Passwords cannot be recovered; authenticated users can only replace their own password after entering the current password. The daemon stores password hashes and issues opaque session tokens in `HttpOnly` cookies. After at least one user exists, sensitive REST, MCP, `/run`, traces, runners, config, guardrails, repos, skills, agents, memory, graph, and event routes require one of:
 
 1. A valid browser session cookie.
 2. A valid DB-backed API token sent as `Authorization: Bearer <token>`.
