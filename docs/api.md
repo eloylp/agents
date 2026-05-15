@@ -136,7 +136,7 @@ Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL c
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/runtime` | Read global runner image and container constraints. |
-| `PUT/PATCH` | `/runtime` | Replace global runner image and constraints. Secret values are not accepted here. |
+| `PUT/PATCH` | `/runtime` | `PUT` replaces global runner image and constraints; `PATCH` updates only supplied fields and preserves omitted settings. Secret values are not accepted here. |
 | `PUT/PATCH` | `/workspaces/{workspace}/runtime` | Set or clear the selected workspace's runner image override. |
 
 Runtime settings are also included in `/config`, `/export`, and `/import`. Credentials are daemon environment variables and are never returned by these routes.

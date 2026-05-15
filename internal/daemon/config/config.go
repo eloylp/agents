@@ -77,6 +77,22 @@ func (h *Handler) HandleRuntime(w http.ResponseWriter, _ *http.Request) {
 // HandleUpdateRuntime serves PUT/PATCH /runtime. Secret values are not part of
 // this shape; credentials are injected from daemon environment at run time.
 func (h *Handler) HandleUpdateRuntime(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPatch {
+		var patch store.RuntimeSettingsPatch
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, h.daemonCfg.HTTP.MaxBodyBytes)).Decode(&patch); err != nil {
+			http.Error(w, fmt.Sprintf("parse runtime settings patch: %v", err), http.StatusBadRequest)
+			return
+		}
+		updated, err := h.store.PatchRuntimeSettings(patch)
+		if err != nil {
+			http.Error(w, err.Error(), storeErrStatus(err))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(updated)
+		return
+	}
+
 	var settings fleet.RuntimeSettings
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, h.daemonCfg.HTTP.MaxBodyBytes)).Decode(&settings); err != nil {
 		http.Error(w, fmt.Sprintf("parse runtime settings: %v", err), http.StatusBadRequest)

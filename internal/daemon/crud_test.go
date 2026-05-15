@@ -1058,6 +1058,90 @@ func TestStoreCRUDBackendPatchRuntimeSettingsValidation(t *testing.T) {
 	}
 }
 
+func TestStoreCRUDRuntimePatchPreservesOmittedFields(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	if rr := doCRUDRequest(t, s, http.MethodPut, "/runtime", map[string]any{
+		"runner_image": "ghcr.io/example/custom-runner:v1",
+		"constraints": map[string]any{
+			"cpus":            "2",
+			"memory":          "4g",
+			"pids_limit":      256,
+			"timeout_seconds": 900,
+			"network_mode":    "bridge",
+		},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("PUT /runtime: got %d, %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodPatch, "/runtime", map[string]any{
+		"constraints": map[string]any{
+			"cpus":            "",
+			"timeout_seconds": 1200,
+		},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH /runtime: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var out fleet.RuntimeSettings
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("decode patch response: %v", err)
+	}
+	if out.RunnerImage != "ghcr.io/example/custom-runner:v1" {
+		t.Fatalf("runner_image = %q, want custom image", out.RunnerImage)
+	}
+	if out.Constraints.CPUs != "" {
+		t.Fatalf("cpus = %q, want cleared", out.Constraints.CPUs)
+	}
+	if out.Constraints.Memory != "4g" || out.Constraints.NetworkMode != "bridge" {
+		t.Fatalf("constraints not preserved: %+v", out.Constraints)
+	}
+	if out.Constraints.PidsLimit != 256 || out.Constraints.TimeoutSeconds != 1200 {
+		t.Fatalf("numeric constraints = %+v, want pids 256 timeout 1200", out.Constraints)
+	}
+}
+
+func TestStoreCRUDRuntimePutRemainsFullReplacement(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	if rr := doCRUDRequest(t, s, http.MethodPut, "/runtime", map[string]any{
+		"runner_image": "ghcr.io/example/custom-runner:v1",
+		"constraints": map[string]any{
+			"cpus":            "2",
+			"memory":          "4g",
+			"pids_limit":      256,
+			"timeout_seconds": 900,
+			"network_mode":    "bridge",
+		},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("initial PUT /runtime: got %d, %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doCRUDRequest(t, s, http.MethodPut, "/runtime", map[string]any{
+		"constraints": map[string]any{
+			"timeout_seconds": 1200,
+		},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("replacement PUT /runtime: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var out fleet.RuntimeSettings
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatalf("decode put response: %v", err)
+	}
+	if out.RunnerImage != fleet.DefaultRunnerImage {
+		t.Fatalf("runner_image = %q, want default %q", out.RunnerImage, fleet.DefaultRunnerImage)
+	}
+	if out.Constraints.CPUs != "" || out.Constraints.Memory != "" || out.Constraints.NetworkMode != "" {
+		t.Fatalf("string constraints preserved during replacement: %+v", out.Constraints)
+	}
+	if out.Constraints.PidsLimit != 0 || out.Constraints.TimeoutSeconds != 1200 {
+		t.Fatalf("numeric constraints = %+v, want pids 0 timeout 1200", out.Constraints)
+	}
+}
+
 func TestBackendsLocalCreateNamedAndDelete(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)

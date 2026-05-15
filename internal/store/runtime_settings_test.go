@@ -48,6 +48,58 @@ func TestRuntimeSettingsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPatchRuntimeSettingsPreservesOmittedFields(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(filepath.Join(t.TempDir(), "runtime-patch.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	st := store.New(db)
+	_, err = st.WriteRuntimeSettings(fleet.RuntimeSettings{
+		RunnerImage: "ghcr.io/example/custom-runner:v1",
+		Constraints: fleet.RuntimeConstraints{
+			CPUs:           "2",
+			Memory:         "4g",
+			PidsLimit:      256,
+			TimeoutSeconds: 900,
+			NetworkMode:    "bridge",
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteRuntimeSettings: %v", err)
+	}
+
+	timeout := 1200
+	cpus := ""
+	network := ""
+	updated, err := st.PatchRuntimeSettings(store.RuntimeSettingsPatch{
+		Constraints: store.RuntimeConstraintsPatch{
+			CPUs:           &cpus,
+			TimeoutSeconds: &timeout,
+			NetworkMode:    &network,
+		},
+	})
+	if err != nil {
+		t.Fatalf("PatchRuntimeSettings: %v", err)
+	}
+
+	want := fleet.RuntimeSettings{
+		RunnerImage: "ghcr.io/example/custom-runner:v1",
+		Constraints: fleet.RuntimeConstraints{
+			CPUs:           "",
+			Memory:         "4g",
+			PidsLimit:      256,
+			TimeoutSeconds: 1200,
+			NetworkMode:    "",
+		},
+	}
+	if updated != want {
+		t.Fatalf("patched runtime settings = %+v, want %+v", updated, want)
+	}
+}
+
 func TestWorkspaceRunnerImageRoundTrip(t *testing.T) {
 	t.Parallel()
 	db, err := store.Open(filepath.Join(t.TempDir(), "workspace-runtime.db"))

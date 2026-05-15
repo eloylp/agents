@@ -12,6 +12,19 @@ import (
 
 const runtimeConfigKey = "runtime"
 
+type RuntimeSettingsPatch struct {
+	RunnerImage *string                 `json:"runner_image,omitempty"`
+	Constraints RuntimeConstraintsPatch `json:"constraints,omitempty"`
+}
+
+type RuntimeConstraintsPatch struct {
+	CPUs           *string `json:"cpus,omitempty"`
+	Memory         *string `json:"memory,omitempty"`
+	PidsLimit      *int64  `json:"pids_limit,omitempty"`
+	TimeoutSeconds *int    `json:"timeout_seconds,omitempty"`
+	NetworkMode    *string `json:"network_mode,omitempty"`
+}
+
 func ReadRuntimeSettings(db querier) (fleet.RuntimeSettings, error) {
 	var raw string
 	err := db.QueryRow("SELECT value FROM config WHERE key = ?", runtimeConfigKey).Scan(&raw)
@@ -29,6 +42,32 @@ func ReadRuntimeSettings(db querier) (fleet.RuntimeSettings, error) {
 	}
 	fleet.NormalizeRuntimeSettings(&settings)
 	return settings, nil
+}
+
+func PatchRuntimeSettings(db *sql.DB, patch RuntimeSettingsPatch) (fleet.RuntimeSettings, error) {
+	current, err := ReadRuntimeSettings(db)
+	if err != nil {
+		return fleet.RuntimeSettings{}, err
+	}
+	if patch.RunnerImage != nil {
+		current.RunnerImage = *patch.RunnerImage
+	}
+	if patch.Constraints.CPUs != nil {
+		current.Constraints.CPUs = *patch.Constraints.CPUs
+	}
+	if patch.Constraints.Memory != nil {
+		current.Constraints.Memory = *patch.Constraints.Memory
+	}
+	if patch.Constraints.PidsLimit != nil {
+		current.Constraints.PidsLimit = *patch.Constraints.PidsLimit
+	}
+	if patch.Constraints.TimeoutSeconds != nil {
+		current.Constraints.TimeoutSeconds = *patch.Constraints.TimeoutSeconds
+	}
+	if patch.Constraints.NetworkMode != nil {
+		current.Constraints.NetworkMode = *patch.Constraints.NetworkMode
+	}
+	return WriteRuntimeSettings(db, current)
 }
 
 func WriteRuntimeSettings(db *sql.DB, settings fleet.RuntimeSettings) (fleet.RuntimeSettings, error) {

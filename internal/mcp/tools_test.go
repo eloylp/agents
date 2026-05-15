@@ -3020,3 +3020,80 @@ func TestToolUpdateBackendEmptyPatchRejected(t *testing.T) {
 		t.Fatal("expected tool error for empty patch")
 	}
 }
+
+func TestToolUpdateRuntimePreservesOmittedFields(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	_, err := deps.Store.WriteRuntimeSettings(fleet.RuntimeSettings{
+		RunnerImage: "ghcr.io/example/custom-runner:v1",
+		Constraints: fleet.RuntimeConstraints{
+			CPUs:           "2",
+			Memory:         "4g",
+			PidsLimit:      256,
+			TimeoutSeconds: 900,
+			NetworkMode:    "bridge",
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteRuntimeSettings: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"timeout_seconds": float64(1200),
+	}
+	res, err := toolUpdateRuntime(deps)(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("update_runtime failed: err=%v body=%s", err, textOf(t, res))
+	}
+	got, err := deps.Store.ReadRuntimeSettings()
+	if err != nil {
+		t.Fatalf("ReadRuntimeSettings: %v", err)
+	}
+	if got.RunnerImage != "ghcr.io/example/custom-runner:v1" {
+		t.Fatalf("runner_image = %q, want custom image", got.RunnerImage)
+	}
+	if got.Constraints.CPUs != "2" || got.Constraints.Memory != "4g" || got.Constraints.NetworkMode != "bridge" {
+		t.Fatalf("constraints not preserved: %+v", got.Constraints)
+	}
+	if got.Constraints.PidsLimit != 256 || got.Constraints.TimeoutSeconds != 1200 {
+		t.Fatalf("numeric constraints = %+v, want pids 256 timeout 1200", got.Constraints)
+	}
+}
+
+func TestToolUpdateRuntimeClearsStringConstraint(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	_, err := deps.Store.WriteRuntimeSettings(fleet.RuntimeSettings{
+		RunnerImage: "ghcr.io/example/custom-runner:v1",
+		Constraints: fleet.RuntimeConstraints{
+			CPUs:        "2",
+			Memory:      "4g",
+			NetworkMode: "bridge",
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteRuntimeSettings: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"cpus": "",
+	}
+	res, err := toolUpdateRuntime(deps)(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("update_runtime failed: err=%v body=%s", err, textOf(t, res))
+	}
+	got, err := deps.Store.ReadRuntimeSettings()
+	if err != nil {
+		t.Fatalf("ReadRuntimeSettings: %v", err)
+	}
+	if got.Constraints.CPUs != "" {
+		t.Fatalf("cpus = %q, want cleared", got.Constraints.CPUs)
+	}
+	if got.RunnerImage != "ghcr.io/example/custom-runner:v1" || got.Constraints.Memory != "4g" || got.Constraints.NetworkMode != "bridge" {
+		t.Fatalf("omitted fields not preserved: %+v", got)
+	}
+}

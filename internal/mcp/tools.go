@@ -310,7 +310,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("update_runtime",
-				mcpgo.WithDescription("Update global runner runtime settings. Credentials are not accepted here; runner auth comes from daemon environment at execution time."),
+				mcpgo.WithDescription("Patch global runner runtime settings. Omitted fields are preserved. Credentials are not accepted here; runner auth comes from daemon environment at execution time."),
 				mcpgo.WithString("runner_image", mcpgo.Description("Default runner image for agent runs, for example ghcr.io/eloylp/agents-runner:latest.")),
 				mcpgo.WithString("cpus", mcpgo.Description("Optional Docker CPU quota expression, such as 2 or 0.5.")),
 				mcpgo.WithString("memory", mcpgo.Description("Optional memory limit, such as 2g or 512m.")),
