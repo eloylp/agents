@@ -8,6 +8,7 @@ import RepoFilter from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { StreamCard, TranscriptFilter, allStreamCardKinds, stepToCardEntries, type PersistedStep, type StreamCardEntry, type StreamCardKind } from '@/components/StreamCard'
 import { fmtDuration } from '@/lib/format'
+import { newRunnerTimeoutTracker, observeRunnerTimeouts } from '@/lib/runner-timeouts'
 import { openAuthenticatedSSE } from '@/lib/sse'
 import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
@@ -28,6 +29,7 @@ interface RunnerRow {
   span_id?: string
   run_duration_ms?: number
   summary?: string
+  error?: string
   prompt_size?: number
   input_tokens?: number
   output_tokens?: number
@@ -239,6 +241,8 @@ function RunnersInner() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [highlightUntil, setHighlightUntil] = useState<number | null>(null)
   const [streamSpan, setStreamSpan] = useState<{ id: string; agent: string; repo: string; kind: string } | null>(null)
+  const [timeoutToast, setTimeoutToast] = useState<RunnerRow | null>(null)
+  const timeoutTracker = useRef(newRunnerTimeoutTracker())
 
   const load = async () => {
     try {
@@ -246,7 +250,10 @@ function RunnersInner() {
       const res = await fetch(url, { cache: 'no-store' })
       if (!res.ok) throw new Error(`status ${res.status}`)
       const data: ListResponse = await res.json()
-      setRows(data.runners ?? [])
+      const nextRows = data.runners ?? []
+      const newTimeout = observeRunnerTimeouts(nextRows, timeoutTracker.current)
+      if (newTimeout) setTimeoutToast(newTimeout)
+      setRows(nextRows)
       setError(null)
     } catch (e) {
       setError((e as Error).message)
@@ -256,6 +263,7 @@ function RunnersInner() {
   }
 
   useEffect(() => {
+    timeoutTracker.current = newRunnerTimeoutTracker()
     load()
     const id = window.setInterval(load, POLL_MS)
     return () => window.clearInterval(id)
@@ -386,6 +394,19 @@ function RunnersInner() {
       {error && (
         <Card style={{ marginBottom: '1rem', borderColor: 'var(--border-danger)' }}>
           <span style={{ color: 'var(--text-danger)', fontSize: '0.85rem' }}>Error loading runners: {error}</span>
+        </Card>
+      )}
+      {timeoutToast && (
+        <Card style={{ marginBottom: '1rem', borderColor: 'var(--border-danger)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center' }}>
+            <span style={{ color: 'var(--text-danger)', fontSize: '0.85rem' }}>
+              Runner timed out: {timeoutToast.agent || timeoutToast.target_agent || 'agent'} · {timeoutToast.repo || '-'} · {timeoutToast.error}
+            </span>
+            <button
+              onClick={() => setTimeoutToast(null)}
+              style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '4px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}
+            >Dismiss</button>
+          </div>
         </Card>
       )}
 
@@ -548,6 +569,10 @@ function RunnersInner() {
                       {r.summary && (<>
                         <span style={{ color: 'var(--text-faint)' }}>Summary</span>
                         <span style={{ color: 'var(--text)' }}>{r.summary}</span>
+                      </>)}
+                      {r.error && (<>
+                        <span style={{ color: 'var(--text-faint)' }}>Error</span>
+                        <span style={{ color: 'var(--text-danger)' }}>{r.error}</span>
                       </>)}
                       {(r.input_tokens || r.output_tokens || r.cache_read_tokens || r.cache_write_tokens) ? (<>
                         <span style={{ color: 'var(--text-faint)' }}>Tokens</span>

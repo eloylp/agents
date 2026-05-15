@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"testing"
+	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
@@ -37,6 +38,56 @@ func TestToolListRunnersReturnsRows(t *testing.T) {
 	// agent empty, status=enqueued.
 	if len(got.Runners) != 2 || got.Runners[0].ID != id2 || got.Runners[1].ID != id1 {
 		t.Fatalf("runners = %+v, want newest-first [%d %d]", got.Runners, id2, id1)
+	}
+}
+
+func TestToolListRunnersIncludesTraceError(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	id, _ := deps.Channels.PushEvent(context.Background(), workflow.Event{
+		ID: "ev-timeout", Kind: "issues.labeled", Number: 3, Repo: workflow.RepoRef{FullName: "owner/one"},
+	})
+	<-deps.Channels.EventChan()
+	_ = deps.Store.MarkEventStarted(id)
+	now := time.Now()
+	deps.Observe.RecordSpan(workflow.SpanInput{
+		SpanID: "sp-timeout", RootEventID: "ev-timeout",
+		Agent: "coder", Backend: "codex", Repo: "owner/one", EventKind: "issues.labeled",
+		Number: 3, Summary: "partial checkpoint",
+		StartedAt: now, FinishedAt: now.Add(time.Second),
+		Status: "error", ErrorMsg: "codex command timed out after 10m0s",
+	})
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(deps.Observe.TracesByRootEventID("ev-timeout")) >= 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_ = deps.Store.MarkEventCompleted(id)
+
+	req := mcpgo.CallToolRequest{}
+	res, err := toolListRunners(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("tool error: %s", textOf(t, res))
+	}
+	var got daemonrunners.ListResponse
+	decodeText(t, res, &got)
+	if len(got.Runners) == 0 {
+		t.Fatal("no runners returned")
+	}
+	row := got.Runners[0]
+	if row.Status != "error" {
+		t.Fatalf("status = %q, want error", row.Status)
+	}
+	if row.Summary != "partial checkpoint" {
+		t.Fatalf("summary = %q, want partial checkpoint", row.Summary)
+	}
+	if row.Error != "codex command timed out after 10m0s" {
+		t.Fatalf("error = %q, want timeout detail", row.Error)
 	}
 }
 
