@@ -29,8 +29,3 @@ CREATE TABLE IF NOT EXISTS traces (
 
 ALTER TABLE traces ADD COLUMN error_kind TEXT NOT NULL DEFAULT '';
 ALTER TABLE traces ADD COLUMN error_detail TEXT NOT NULL DEFAULT '';
-
-CREATE INDEX IF NOT EXISTS idx_traces_root ON traces(root_event_id);
-CREATE INDEX IF NOT EXISTS idx_traces_agent ON traces(workspace_id, agent);
-CREATE INDEX IF NOT EXISTS idx_traces_started ON traces(workspace_id, started_at);
-CREATE INDEX IF NOT EXISTS idx_traces_workspace_repo ON traces(workspace_id, repo);

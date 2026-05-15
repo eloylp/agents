@@ -538,6 +538,54 @@ func TestCommandRunnerStderrFailureMetadataRedactsBearerToken(t *testing.T) {
 	}
 }
 
+func TestCommandFailureKindDoesNotTreatTokenAccountingAsAuth(t *testing.T) {
+	t.Parallel()
+	kind := commandFailureKind(errors.New("backend failed"), "max output tokens exceeded")
+	if kind != FailureKindBackendError {
+		t.Fatalf("kind = %q, want %q", kind, FailureKindBackendError)
+	}
+}
+
+func TestBackendFailureDetailPrefersErrorLineFromStderr(t *testing.T) {
+	t.Parallel()
+	got := backendFailureDetail(nil, "deprecated flag --x\nbackend failed: invalid request\n")
+	if got != "backend failed: invalid request" {
+		t.Fatalf("detail = %q, want error line", got)
+	}
+}
+
+func TestSanitizeFailureDetailRedactsBareBase62SecretButKeepsSHA(t *testing.T) {
+	t.Parallel()
+	secret := "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEf"
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	got := sanitizeFailureDetail("failed with " + secret + " after commit " + sha)
+	if strings.Contains(got, secret) {
+		t.Fatalf("detail leaked bare secret: %q", got)
+	}
+	if !strings.Contains(got, sha) {
+		t.Fatalf("detail = %q, want git sha preserved", got)
+	}
+}
+
+func TestSanitizeFailureDetailPreservesBearerContext(t *testing.T) {
+	t.Parallel()
+	got := sanitizeFailureDetail("backend failed: Authorization: Bearer abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO details")
+	if !strings.Contains(got, "Authorization=Bearer [REDACTED]") {
+		t.Fatalf("detail = %q, want bearer context preserved", got)
+	}
+	if strings.Contains(got, "abcdefghijklmnopqrstuvwxyz") {
+		t.Fatalf("detail leaked bearer token: %q", got)
+	}
+}
+
+func TestSanitizeFailureDetailDoesNotRedactAuthenticateInstruction(t *testing.T) {
+	t.Parallel()
+	got := sanitizeFailureDetail("please authenticate: try logging in again")
+	if got != "please authenticate: try logging in again" {
+		t.Fatalf("detail = %q, want context preserved", got)
+	}
+}
+
 func TestCommandRunnerTimeoutWithPartialOutputReturnsErrorAndResponse(t *testing.T) {
 	t.Parallel()
 	fake := &timeoutContainerRunner{writeJSON: true}

@@ -9,9 +9,12 @@ import (
 )
 
 var (
-	secretAssignmentRE = regexp.MustCompile(`(?i)\b([a-z0-9_]*(?:token|secret|password|passwd|apikey|api_key|authorization|auth)[a-z0-9_]*)\s*[:=]\s*("[^"]+"|'[^']+'|[^\s,;]+)`)
+	secretAssignmentRE = regexp.MustCompile(`(?i)\b([a-z0-9_]*(?:token|secret|password|passwd|apikey|api_key|authorization|credential)[a-z0-9_]*)\s*[:=]\s*("[^"]+"|'[^']+'|Bearer\s+[^\s,;]+|[^\s,;]+)`)
 	bearerTokenRE      = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/\-]+=*`)
 	longSecretRE       = regexp.MustCompile(`\b[A-Za-z0-9+/_-]{40,}={0,2}\b`)
+	authFailureRE      = regexp.MustCompile(`(?i)\b(unauthorized|unauthenticated|forbidden|authorization|bearer|invalid credentials?|missing credentials?|expired credentials?|invalid api key|invalid token|expired token|refresh token|access token|sign in|log in|login required|401|403)\b`)
+	errorLineRE        = regexp.MustCompile(`(?i)\b(error|failed|failure|fatal|unauthorized|forbidden)\b`)
+	hexRE              = regexp.MustCompile(`(?i)^[a-f0-9]{40,}$`)
 )
 
 func runnerFailure(backend string, kind FailureKind, detail string, err error) error {
@@ -53,6 +56,9 @@ func backendFailureDetail(lines []timedLine, stderr string) string {
 		if detail := backendFailureDetailFromJSON(line.data); detail != "" {
 			return detail
 		}
+	}
+	if line := firstErrorLine(stderr); line != "" {
+		return line
 	}
 	return firstNonEmptyLine(stderr)
 }
@@ -101,19 +107,29 @@ func firstNonEmptyLine(s string) string {
 	return ""
 }
 
+func firstErrorLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && errorLineRE.MatchString(trimmed) {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 func sanitizeFailureDetail(detail string) string {
 	detail = strings.TrimSpace(detail)
 	if detail == "" {
 		return ""
 	}
 	detail = strings.ReplaceAll(detail, "\x00", "")
+	detail = redactSecretAssignments(detail)
 	detail = bearerTokenRE.ReplaceAllString(detail, "Bearer [REDACTED]")
-	detail = secretAssignmentRE.ReplaceAllString(detail, "$1=[REDACTED]")
 	detail = longSecretRE.ReplaceAllStringFunc(detail, func(s string) string {
-		if strings.Contains(s, "/") || strings.Contains(s, "_") || strings.Contains(s, "-") || strings.Contains(s, "+") || strings.Contains(s, "=") {
-			return "[REDACTED]"
+		if hexRE.MatchString(s) {
+			return s
 		}
-		return s
+		return "[REDACTED]"
 	})
 	if len(detail) > 600 {
 		return fmt.Sprintf("%s...", strings.TrimSpace(detail[:600]))
@@ -121,12 +137,19 @@ func sanitizeFailureDetail(detail string) string {
 	return detail
 }
 
+func redactSecretAssignments(detail string) string {
+	return secretAssignmentRE.ReplaceAllStringFunc(detail, func(match string) string {
+		parts := secretAssignmentRE.FindStringSubmatch(match)
+		if len(parts) < 3 {
+			return match
+		}
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(parts[2])), "bearer ") {
+			return parts[1] + "=Bearer [REDACTED]"
+		}
+		return parts[1] + "=[REDACTED]"
+	})
+}
+
 func looksLikeAuthFailure(detail string) bool {
-	detail = strings.ToLower(detail)
-	return strings.Contains(detail, "auth") ||
-		strings.Contains(detail, "token") ||
-		strings.Contains(detail, "credential") ||
-		strings.Contains(detail, "log in") ||
-		strings.Contains(detail, "login") ||
-		strings.Contains(detail, "sign in")
+	return authFailureRE.MatchString(detail)
 }

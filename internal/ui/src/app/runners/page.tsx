@@ -274,12 +274,13 @@ function RunnersInner() {
       const nextRows = data.runners ?? []
       const newTimeout = observeRunnerTimeouts(nextRows, timeoutTracker.current)
       if (newTimeout) setTimeoutToast(newTimeout)
-      const newFailure = nextRows.find(r => {
-        if (r.status !== 'error') return false
+      let newFailure: RunnerRow | null = null
+      nextRows.forEach(r => {
+        if (r.status !== 'error') return
         const key = `${r.id}:${r.span_id || ''}`
-        if (notifiedFailures.current.has(key)) return false
+        if (notifiedFailures.current.has(key)) return
         notifiedFailures.current.add(key)
-        return failureToastReady.current
+        if (failureToastReady.current && !newFailure) newFailure = r
       })
       if (newFailure) setFailureToast(newFailure)
       failureToastReady.current = true
