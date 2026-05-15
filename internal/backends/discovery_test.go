@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -160,7 +161,7 @@ func TestDiagnoseGitHubCLIInRuntimeUsesRunnerContainer(t *testing.T) {
 		if spec.Image != "runner:test" {
 			t.Fatalf("Image = %q, want runner:test", spec.Image)
 		}
-		if !envContains(spec.Env, "GH_TOKEN=test-token") {
+		if !slices.Contains(spec.Env, "GH_TOKEN=test-token") {
 			t.Fatalf("Env missing GH_TOKEN fallback: %v", spec.Env)
 		}
 	}
@@ -183,7 +184,7 @@ func TestCheckGitHubMCPInRuntimeUsesBackendSetup(t *testing.T) {
 	if detail != "github MCP: connected" {
 		t.Fatalf("detail = %q, want connected", detail)
 	}
-	if !envContains(got.Env, "GH_TOKEN=test-token") {
+	if !slices.Contains(got.Env, "GH_TOKEN=test-token") {
 		t.Fatalf("Env missing GH_TOKEN fallback: %v", got.Env)
 	}
 }
@@ -205,13 +206,4 @@ func (f fakeRuntimeRunner) Run(_ context.Context, spec runtimeexec.ContainerSpec
 		_, _ = io.WriteString(spec.Stderr, stderr)
 	}
 	return runtimeexec.ExitStatus{Code: code}, err
-}
-
-func envContains(env []string, want string) bool {
-	for _, entry := range env {
-		if entry == want {
-			return true
-		}
-	}
-	return false
 }
