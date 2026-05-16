@@ -130,9 +130,7 @@ func (b *blockingProcessorHandler) HandleEvent(_ context.Context, _ Event) error
 	b.mu.Lock()
 	b.active++
 	b.calls++
-	if b.active > b.peak {
-		b.peak = b.active
-	}
+	b.peak = max(b.peak, b.active)
 	b.mu.Unlock()
 	b.started <- struct{}{}
 	<-b.blockUntil
