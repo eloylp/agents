@@ -36,14 +36,21 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		)
 	}
 
-	rootEventID, dispatchDepth := extractDispatchContext(ev)
+	rootEventID, dispatchDepth, err := extractDispatchContext(ev)
+	if err != nil {
+		return err
+	}
 
 	// Build dispatch context fields for dispatched agents.
 	var invokedBy, reason, parentSpanID string
 	if ev.Kind == "agent.dispatch" {
-		invokedBy, _ = ev.Payload["invoked_by"].(string)
-		reason, _ = ev.Payload["reason"].(string)
-		parentSpanID, _ = ev.Payload["parent_span_id"].(string)
+		payload, err := decodeAgentDispatchPayload(ev)
+		if err != nil {
+			return err
+		}
+		invokedBy = payload.InvokedBy
+		reason = payload.Reason
+		parentSpanID = payload.ParentSpanID
 	}
 
 	// Serialise the read/run/write sequence for this (agent, repo) pair to

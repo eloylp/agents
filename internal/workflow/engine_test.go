@@ -48,6 +48,79 @@ func (s *stubRunner) callCount() int {
 	return len(s.calls)
 }
 
+func TestExtractDispatchContextPreservesDispatchDepth(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		payload   map[string]any
+		wantDepth int
+		wantErr   bool
+	}{
+		{
+			name: "in-memory int depth",
+			payload: map[string]any{
+				"target_agent":   "pr-reviewer",
+				"root_event_id":  "root-123",
+				"dispatch_depth": 2,
+			},
+			wantDepth: 2,
+		},
+		{
+			name: "json replay float64 depth",
+			payload: map[string]any{
+				"target_agent":   "pr-reviewer",
+				"root_event_id":  "root-123",
+				"dispatch_depth": float64(2),
+			},
+			wantDepth: 2,
+		},
+		{
+			name: "missing depth falls back to zero",
+			payload: map[string]any{
+				"target_agent":  "pr-reviewer",
+				"root_event_id": "root-123",
+			},
+			wantDepth: 0,
+		},
+		{
+			name: "malformed depth is rejected",
+			payload: map[string]any{
+				"target_agent":   "pr-reviewer",
+				"root_event_id":  "root-123",
+				"dispatch_depth": 2.5,
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rootEventID, depth, err := extractDispatchContext(Event{
+				Kind:    "agent.dispatch",
+				Payload: tt.payload,
+			})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("extractDispatchContext error = nil, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("extractDispatchContext: %v", err)
+			}
+			if rootEventID != "root-123" {
+				t.Fatalf("rootEventID = %q, want %q", rootEventID, "root-123")
+			}
+			if depth != tt.wantDepth {
+				t.Fatalf("depth = %d, want %d", depth, tt.wantDepth)
+			}
+		})
+	}
+}
+
 func (s *stubRunner) lastSystem() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -395,6 +468,76 @@ func TestEngineDispatchEventPayloadPropagatedToPrompt(t *testing.T) {
 		if !strings.Contains(capturedUser, want) {
 			t.Errorf("User missing %q\nfull User:\n%s", want, capturedUser)
 		}
+	}
+}
+
+func TestEngineDispatchEventReplayDepthPropagatedToPrompt(t *testing.T) {
+	t.Parallel()
+	var capturedUser string
+	runner := &stubRunner{
+		runFn: func(req ai.Request) error {
+			capturedUser = req.User
+			return nil
+		},
+	}
+	cfg := &config.Config{
+		Daemon: config.DaemonConfig{
+			Processor: config.ProcessorConfig{
+				MaxConcurrentAgents: 4,
+				Dispatch:            config.DispatchConfig{MaxDepth: 3, MaxFanout: 4, DedupWindowSeconds: 300},
+			},
+			AIBackends: map[string]fleet.Backend{"claude": {Command: "claude"}},
+		},
+		Skills: map[string]fleet.Skill{},
+		Agents: []fleet.Agent{
+			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review code.", AllowDispatch: true},
+		},
+		Repos: []fleet.Repo{{Name: "owner/repo", Enabled: true}},
+	}
+	e := newEngineFromCfg(t, cfg, map[string]ai.Runner{"claude": runner}, nil)
+
+	ev := Event{
+		ID:     "dispatch-1",
+		Repo:   RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:   "agent.dispatch",
+		Number: 7,
+		Actor:  "coder",
+		Payload: map[string]any{
+			"target_agent":   "pr-reviewer",
+			"reason":         "please review",
+			"root_event_id":  "root-abc",
+			"dispatch_depth": float64(2),
+			"invoked_by":     "coder",
+		},
+	}
+
+	if err := e.HandleEvent(context.Background(), ev); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if !strings.Contains(capturedUser, "Dispatch depth: 2") {
+		t.Fatalf("User missing replayed dispatch depth\nfull User:\n%s", capturedUser)
+	}
+}
+
+func TestEngineDispatchEventRejectsMalformedReplayDepth(t *testing.T) {
+	t.Parallel()
+	e, runner := newTestEngine(t, nil)
+
+	err := e.HandleEvent(context.Background(), Event{
+		ID:    "dispatch-1",
+		Repo:  RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:  "agent.dispatch",
+		Actor: "coder",
+		Payload: map[string]any{
+			"target_agent":   "pr-reviewer",
+			"dispatch_depth": float64(2.5),
+		},
+	})
+	if err == nil {
+		t.Fatal("HandleEvent error = nil, want malformed dispatch_depth error")
+	}
+	if got := runner.callCount(); got != 0 {
+		t.Fatalf("runner calls = %d, want 0", got)
 	}
 }
 
