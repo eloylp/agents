@@ -23,6 +23,8 @@ import (
 	"github.com/eloylp/agents/internal/workflow"
 )
 
+const maxTraceSteps = 100
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 // TimestampedEvent is a workflow event with an ingestion timestamp attached.
@@ -756,7 +758,7 @@ func (s *Store) RecordStep(spanID string, step workflow.TraceStep) {
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM trace_steps WHERE span_id=?`, spanID).Scan(&idx)
 	if err != nil {
 		log.Printf("observe: count trace steps for %s: %v", spanID, err)
-	} else if idx < 100 {
+	} else if idx < maxTraceSteps {
 		_, err = s.db.Exec(
 			`INSERT INTO trace_steps (span_id, step_index, kind, tool_name, input_summary, output_summary, duration_ms) VALUES (?,?,?,?,?,?,?)`,
 			spanID, idx, step.Kind, step.ToolName, step.InputSummary, step.OutputSummary, step.DurationMs,
@@ -790,7 +792,7 @@ func (s *Store) RecordSteps(spanID string, steps []workflow.TraceStep) {
 		return
 	}
 	for i, step := range steps {
-		if i >= 100 {
+		if i >= maxTraceSteps {
 			break
 		}
 		kind := step.Kind
