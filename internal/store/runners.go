@@ -162,9 +162,7 @@ func (s *Store) ListWorkspaceRunners(workspaceID string, status RunnerStatus, li
 	if limit <= 0 {
 		limit = 100
 	}
-	if offset < 0 {
-		offset = 0
-	}
+	offset = max(offset, 0)
 	where, args := runnerStatusFilter(status)
 	where = appendRunnerWorkspaceFilter(where)
 	args = slices.Concat([]any{workspaceID}, args)
