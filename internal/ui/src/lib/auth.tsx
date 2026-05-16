@@ -114,6 +114,11 @@ export function AuthTokenSettings() {
   const [newPassword, setNewPassword] = useState('')
   const [userError, setUserError] = useState('')
   const [tokenError, setTokenError] = useState('')
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [ownNewPassword, setOwnNewPassword] = useState('')
+  const [ownConfirmPassword, setOwnConfirmPassword] = useState('')
+  const [passwordMessage, setPasswordMessage] = useState('')
+  const [passwordError, setPasswordError] = useState('')
 
   const refresh = async () => {
     const next = await loadAuthStatus()
@@ -176,6 +181,30 @@ export function AuthTokenSettings() {
     await refresh()
   }
 
+  const changePassword = async () => {
+    setPasswordMessage('')
+    setPasswordError('')
+    if (ownNewPassword !== ownConfirmPassword) {
+      setPasswordError('New passwords do not match.')
+      return
+    }
+    const res = await fetch('/auth/me/password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: currentPassword, new_password: ownNewPassword }),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      setPasswordError(text.trim() || 'Could not change password.')
+      return
+    }
+    setCurrentPassword('')
+    setOwnNewPassword('')
+    setOwnConfirmPassword('')
+    setPasswordMessage('Password changed.')
+    await refresh()
+  }
+
   const revoke = async (id: number) => {
     const res = await fetch(`/auth/tokens/${id}`, { method: 'DELETE' })
     if (res.ok) await refresh()
@@ -193,6 +222,21 @@ export function AuthTokenSettings() {
       </div>
       {status?.authenticated && (
         <>
+          <section style={sectionStyle}>
+            <div>
+              <h4 style={sectionTitleStyle}>Password</h4>
+              <p style={sectionHelpStyle}>Change the password for the signed-in dashboard user.</p>
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <input type="password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} placeholder="Current password" autoComplete="current-password" style={{ ...inputStyle, maxWidth: '240px' }} />
+              <input type="password" value={ownNewPassword} onChange={e => setOwnNewPassword(e.target.value)} placeholder="New password" autoComplete="new-password" style={{ ...inputStyle, maxWidth: '240px' }} />
+              <input type="password" value={ownConfirmPassword} onChange={e => setOwnConfirmPassword(e.target.value)} placeholder="Confirm new password" autoComplete="new-password" style={{ ...inputStyle, maxWidth: '240px' }} />
+              <button type="button" onClick={changePassword} style={primaryButtonStyle}>Change password</button>
+            </div>
+            {passwordError && <p style={{ color: 'var(--text-danger)', fontSize: '0.78rem' }}>{passwordError}</p>}
+            {passwordMessage && <p style={{ color: 'var(--text-success)', fontSize: '0.78rem' }}>{passwordMessage}</p>}
+          </section>
+
           <section style={sectionStyle}>
             <div>
               <h4 style={sectionTitleStyle}>Users</h4>

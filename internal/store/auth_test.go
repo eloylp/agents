@@ -121,6 +121,40 @@ func TestAuthBootstrapLoginAndAPITokenLifecycle(t *testing.T) {
 	}
 }
 
+func TestAuthChangeUserPassword(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	st := store.New(db)
+	ctx := context.Background()
+	user, err := st.CreateUser(ctx, "operator", "old password")
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+
+	if err := st.ChangeUserPassword(ctx, user.ID, "wrong password", "new password"); !errors.Is(err, store.ErrAuthInvalid) {
+		t.Fatalf("ChangeUserPassword(wrong current) error = %v, want %v", err, store.ErrAuthInvalid)
+	}
+	if err := st.ChangeUserPassword(ctx, user.ID, "old password", ""); !errors.Is(err, store.ErrAuthInvalid) {
+		t.Fatalf("ChangeUserPassword(empty new) error = %v, want %v", err, store.ErrAuthInvalid)
+	}
+
+	oldHash := passwordHashForUser(t, db, user.ID)
+	if err := st.ChangeUserPassword(ctx, user.ID, "old password", "new password"); err != nil {
+		t.Fatalf("ChangeUserPassword() error = %v", err)
+	}
+	newHash := passwordHashForUser(t, db, user.ID)
+	if newHash == oldHash {
+		t.Fatal("password hash did not change")
+	}
+	if _, err := st.Login(ctx, "operator", "old password", 0); !errors.Is(err, store.ErrAuthInvalid) {
+		t.Fatalf("Login(old password) error = %v, want %v", err, store.ErrAuthInvalid)
+	}
+	if _, err := st.Login(ctx, "operator", "new password", 0); err != nil {
+		t.Fatalf("Login(new password) error = %v", err)
+	}
+}
+
 func TestAuthAdminStatusComesFromDatabase(t *testing.T) {
 	t.Parallel()
 

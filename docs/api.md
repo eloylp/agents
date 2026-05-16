@@ -21,6 +21,7 @@ Sensitive endpoints require daemon auth. Browser clients use the `agents_session
 | `POST` | `/auth/login` | Exchange username/password for an `agents_session` cookie |
 | `POST` | `/auth/logout` | Revoke the current browser session and clear the session cookie |
 | `GET` | `/auth/me` | Current authenticated user |
+| `POST` | `/auth/me/password` | Change the current user's password with `{"current_password":"...","new_password":"..."}` |
 | `GET` | `/auth/users` | List dashboard users |
 | `POST` | `/auth/users` | Create an additional dashboard user with `{"username":"...","password":"..."}`. Admin-only |
 | `DELETE` | `/auth/users/{id}` | Remove a dashboard user. Admin-only; the bootstrapped admin user cannot be removed |
