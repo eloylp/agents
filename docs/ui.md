@@ -19,7 +19,7 @@ Agent run traces with timing, status, and a drill-down to the tool-loop transcri
 - **Token usage**, input / output / cache hit / cache write counts straight from the AI CLI's reported usage. Cache hit ratio shown inline; useful for spotting agents that bust the prompt cache and tuning their composition.
 - **Prompt**, the exact composed prompt the daemon sent to the AI CLI on this run. Gzipped on disk, lazy-fetched via `/traces/{span_id}/prompt` when expanded. This is the operator's "what did the agent see" debug surface.
 - **Tool-loop transcript**, ordered tool calls with input / output summaries and durations.
-- Summary, error message (when the run failed), Gantt position in the dispatch chain.
+- Summary, error message (when the run failed), sanitized backend failure detail when available, Gantt position in the dispatch chain.
 
 ![Trace detail with token usage and prompt panel expanded](img/traces.png)
 
@@ -86,6 +86,8 @@ Two per-row actions, both **event-level** (a single event_queue row drives multi
 Arriving with `?event=<id>` (e.g. via the **View runners** link on the Events page) filters to the runners for that event and pulses the matching rows for ~3s so the operator can spot them at a glance.
 
 **Live stream.** Rows in the `running` state with a known `span_id` show a `▶ Live` button. Clicking it opens a modal that subscribes to `/traces/{span_id}/stream` and renders persisted `TraceStep` rows as `🔧 tool call` cards, `💬 thinking` text, and `📤 tool result` payloads. Each card collapses to a one-line preview by default and expands to the full detail. Arriving mid-run replays the rows already committed to `trace_steps` before live-tailing newly committed rows. When the run ends, the modal shows a "✓ Run completed" footer with a link to the trace detail. The DB is the transcript source of truth during and after the run; the in-memory channel is only a notification path. The view auto-follows new entries as they arrive; if you scroll up to read older output, a **↓ Latest** pill appears that re-sticks scroll to the bottom on click.
+
+Failed runner rows show a short failure classification such as `Backend auth`, `Backend error`, `Runner error`, `Timeout`, or `Parser` in their expanded details. When a backend CLI emits a useful failure cause before producing the final structured response, the dashboard shows the sanitized backend detail alongside the parser-level error so operators can diagnose auth/runtime failures without reading daemon logs.
 
 ![Runners page, event #144 fanned out to coder and pr-reviewer, both in flight with the ▶ Live button visible](img/runners.png)
 
