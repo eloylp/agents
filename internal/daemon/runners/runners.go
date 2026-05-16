@@ -148,9 +148,7 @@ func (h *Handler) List(workspace, status string, limit, offset int) (ListRespons
 	if limit <= 0 {
 		limit = 100
 	}
-	if offset < 0 {
-		offset = 0
-	}
+	offset = max(offset, 0)
 	rows := make([]RunnerRow, 0, len(events))
 	for _, ev := range events {
 		rows = append(rows, h.expand(ev)...)
