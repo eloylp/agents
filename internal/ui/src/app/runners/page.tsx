@@ -30,7 +30,6 @@ interface RunnerRow {
   run_duration_ms?: number
   summary?: string
   error?: string
-  error_kind?: 'backend_auth' | 'backend_error' | 'runner_error' | 'timeout' | 'canceled' | 'parse_error' | 'unknown' | string
   error_detail?: string
   prompt_size?: number
   input_tokens?: number
@@ -82,18 +81,6 @@ function fmtTime(s?: string) {
 
 function runnerCause(row: RunnerRow) {
   return row.error_detail || row.error || ''
-}
-
-function runnerKindLabel(kind?: string) {
-  switch (kind) {
-    case 'backend_auth': return 'Backend auth'
-    case 'backend_error': return 'Backend error'
-    case 'runner_error': return 'Runner error'
-    case 'timeout': return 'Timeout'
-    case 'canceled': return 'Canceled'
-    case 'parse_error': return 'Parser'
-    default: return kind || 'Failure'
-  }
 }
 
 export default function RunnersPage() {
@@ -446,7 +433,7 @@ function RunnersInner() {
         <Card style={{ marginBottom: '1rem', borderColor: 'var(--border-danger)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center' }}>
             <span style={{ color: 'var(--text-danger)', fontSize: '0.85rem' }}>
-              Runner failed: {failureToast.agent || failureToast.target_agent || 'agent'} · {failureToast.repo || '-'} · {runnerKindLabel(failureToast.error_kind)}{runnerCause(failureToast) ? ` · ${runnerCause(failureToast)}` : ''}
+              Runner failed: {failureToast.agent || failureToast.target_agent || 'agent'} · {failureToast.repo || '-'}{runnerCause(failureToast) ? ` · ${runnerCause(failureToast)}` : ''}
             </span>
             <button
               onClick={() => setFailureToast(null)}
@@ -619,10 +606,6 @@ function RunnersInner() {
                       {r.error && (<>
                         <span style={{ color: 'var(--text-faint)' }}>Error</span>
                         <span style={{ color: 'var(--text-danger)' }}>{r.error}</span>
-                      </>)}
-                      {r.error_kind && (<>
-                        <span style={{ color: 'var(--text-faint)' }}>Failure kind</span>
-                        <span style={{ color: 'var(--text-danger)' }}>{runnerKindLabel(r.error_kind)}</span>
                       </>)}
                       {r.error_detail && (<>
                         <span style={{ color: 'var(--text-faint)' }}>Backend detail</span>

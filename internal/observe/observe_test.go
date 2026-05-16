@@ -569,7 +569,7 @@ func TestStoreRecordSpanPersistsAndPublishesToSSE(t *testing.T) {
 		Number: 7, QueueWaitMs: 50, ArtifactsCount: 3, Summary: "all done",
 		StartedAt: start, FinishedAt: end,
 		Status: "error", ErrorMsg: "parse codex response: empty response (no fields populated)",
-		ErrorKind: "backend_auth", ErrorDetail: "refresh token was already used",
+		ErrorDetail: "refresh token was already used",
 	})
 
 	// Verify SQLite via ListTraces.
@@ -589,9 +589,6 @@ func TestStoreRecordSpanPersistsAndPublishesToSSE(t *testing.T) {
 	}
 	if sp.Status != "error" {
 		t.Errorf("Status = %q, want %q", sp.Status, "error")
-	}
-	if sp.ErrorKind != "backend_auth" {
-		t.Errorf("ErrorKind = %q, want backend_auth", sp.ErrorKind)
 	}
 	if sp.ErrorDetail != "refresh token was already used" {
 		t.Errorf("ErrorDetail = %q, want backend detail", sp.ErrorDetail)

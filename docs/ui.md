@@ -19,7 +19,7 @@ Agent run traces with timing, status, and a drill-down to the tool-loop transcri
 - **Token usage**, input / output / cache hit / cache write counts straight from the AI CLI's reported usage. Cache hit ratio shown inline; useful for spotting agents that bust the prompt cache and tuning their composition.
 - **Prompt**, the exact composed prompt the daemon sent to the AI CLI on this run. Gzipped on disk, lazy-fetched via `/traces/{span_id}/prompt` when expanded. This is the operator's "what did the agent see" debug surface.
 - **Tool-loop transcript**, ordered tool calls with input / output summaries and durations.
-- Summary, error message (when the run failed), sanitized backend failure detail and failure kind when available, Gantt position in the dispatch chain.
+- Summary, error message (when the run failed), sanitized backend failure detail when available, Gantt position in the dispatch chain.
 
 ![Trace detail with token usage and prompt panel expanded](img/traces.png)
 

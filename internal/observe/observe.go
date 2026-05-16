@@ -61,7 +61,6 @@ type Span struct {
 	DurationMs     int64     `json:"duration_ms"`
 	Status         string    `json:"status"` // "success" | "error"
 	ErrorMsg       string    `json:"error,omitempty"`
-	ErrorKind      string    `json:"error_kind,omitempty"`
 	ErrorDetail    string    `json:"error_detail,omitempty"`
 
 	// PromptSize is the uncompressed byte count of the composed prompt.
@@ -464,7 +463,7 @@ func (s *Store) ListEventsForWorkspace(workspaceID string, since time.Time) []Ti
 // demand via PromptForSpan to keep listings small.
 const spanColumns = `span_id, workspace_id, root_event_id, parent_span_id, agent, backend, repo, number,
 	event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary,
-	started_at, finished_at, duration_ms, status, error, error_kind, error_detail,
+	started_at, finished_at, duration_ms, status, error, error_detail,
 	prompt_size, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens`
 
 // ListTraces returns stored spans ordered by started_at descending (newest
@@ -546,7 +545,7 @@ func scanSpans(rows *sql.Rows) []Span {
 			&sp.EventKind, &sp.InvokedBy, &sp.DispatchDepth,
 			&sp.QueueWaitMs, &sp.ArtifactsCount, &sp.Summary,
 			&sp.StartedAt, &sp.FinishedAt, &sp.DurationMs,
-			&sp.Status, &sp.ErrorMsg, &sp.ErrorKind, &sp.ErrorDetail,
+			&sp.Status, &sp.ErrorMsg, &sp.ErrorDetail,
 			&promptSize, &inTok, &outTok, &cacheR, &cacheW,
 		); err != nil {
 			log.Printf("observe: scan trace row: %v", err)
@@ -690,7 +689,6 @@ func (s *Store) RecordSpan(in workflow.SpanInput) {
 		DurationMs:       in.FinishedAt.Sub(in.StartedAt).Milliseconds(),
 		Status:           in.Status,
 		ErrorMsg:         in.ErrorMsg,
-		ErrorKind:        in.ErrorKind,
 		ErrorDetail:      in.ErrorDetail,
 		PromptSize:       int64(len(in.Prompt)),
 		InputTokens:      in.InputTokens,
@@ -712,13 +710,13 @@ func (s *Store) RecordSpan(in workflow.SpanInput) {
 	}
 	if s.db != nil {
 		_, err := s.db.Exec(
-			`INSERT OR IGNORE INTO traces (span_id, workspace_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error, error_kind, error_detail, prompt_gz, prompt_size, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			`INSERT OR IGNORE INTO traces (span_id, workspace_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error, error_detail, prompt_gz, prompt_size, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			sp.SpanID, sp.WorkspaceID, sp.RootEventID, sp.ParentSpanID,
 			sp.Agent, sp.Backend, sp.Repo, sp.Number,
 			sp.EventKind, sp.InvokedBy, sp.DispatchDepth,
 			sp.QueueWaitMs, sp.ArtifactsCount, sp.Summary,
 			sp.StartedAt, sp.FinishedAt, sp.DurationMs,
-			sp.Status, sp.ErrorMsg, sp.ErrorKind, sp.ErrorDetail,
+			sp.Status, sp.ErrorMsg, sp.ErrorDetail,
 			promptGz, sp.PromptSize,
 			sp.InputTokens, sp.OutputTokens, sp.CacheReadTokens, sp.CacheWriteTokens,
 		)

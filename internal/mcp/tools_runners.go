@@ -22,7 +22,7 @@ func registerRunnersTools(srv *server.MCPServer, deps Deps) {
 	}
 	srv.AddTool(
 		mcpgo.NewTool("list_runners",
-			mcpgo.WithDescription("List runner rows: each row is one event in the durable queue, expanded into per-agent rows once traces have been recorded for it. While an event is in-flight (no traces yet) one row appears with agent=null and status=enqueued|running. Once completed, one row per fanned-out agent appears with status=success|error and may include sanitized error_kind/error_detail failure metadata. Same path as GET /runners."),
+			mcpgo.WithDescription("List runner rows: each row is one event in the durable queue, expanded into per-agent rows once traces have been recorded for it. While an event is in-flight (no traces yet) one row appears with agent=null and status=enqueued|running. Once completed, one row per fanned-out agent appears with status=success|error and may include sanitized error_detail. Same path as GET /runners."),
 			mcpgo.WithString("status",
 				mcpgo.Description("Optional filter on the underlying event_queue row state: \"enqueued\", \"running\", or \"completed\". Empty returns every state."),
 			),

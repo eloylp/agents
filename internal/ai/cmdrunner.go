@@ -184,14 +184,14 @@ func (r *CommandRunner) parseCommandResponse(logger zerolog.Logger, stdoutCap li
 	if cmdErr != nil && stdoutCap.all.Len() == 0 {
 		logger.Error().Err(cmdErr).Str("stderr", truncateString(stderr, 2000)).Msgf("%s command failed", r.backendName)
 		err := fmt.Errorf("%s command failed: %w", r.backendName, cmdErr)
-		return Response{}, runnerFailure(r.backendName, commandFailureKind(cmdErr, backendDetail), backendDetail, err)
+		return Response{}, runnerFailure(r.backendName, backendDetail, err)
 	}
 
 	var response Response
 	if stdoutCap.all.Len() == 0 {
 		logger.Error().Msgf("%s command returned no output", r.backendName)
 		err := fmt.Errorf("parse %s response: empty response (no output)", r.backendName)
-		return Response{}, runnerFailure(r.backendName, FailureKindParseError, backendDetail, err)
+		return Response{}, runnerFailure(r.backendName, backendDetail, err)
 	}
 
 	// Codex with --json wraps the schema-constrained response inside the
@@ -215,7 +215,7 @@ func (r *CommandRunner) parseCommandResponse(logger zerolog.Logger, stdoutCap li
 		if err := json.Unmarshal(parsed, &response); err != nil {
 			logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s structured_output", r.backendName)
 			parseErr := fmt.Errorf("parse %s response: %w", r.backendName, err)
-			return Response{}, runnerFailure(r.backendName, FailureKindParseError, backendDetail, parseErr)
+			return Response{}, runnerFailure(r.backendName, backendDetail, parseErr)
 		}
 	} else {
 		// Fallback: find the last top-level JSON object in raw stdout. For
@@ -226,21 +226,21 @@ func (r *CommandRunner) parseCommandResponse(logger zerolog.Logger, stdoutCap li
 		if err != nil {
 			logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s response", r.backendName)
 			parseErr := fmt.Errorf("parse %s response: %w", r.backendName, err)
-			return Response{}, runnerFailure(r.backendName, FailureKindParseError, backendDetail, parseErr)
+			return Response{}, runnerFailure(r.backendName, backendDetail, parseErr)
 		}
 		// Try structured_output on the last JSON (handles stream-json result event).
 		if parsed2, ok2 := extractStructuredOutput(jsonBytes); ok2 {
 			if err := json.Unmarshal(parsed2, &response); err != nil {
 				logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s structured_output", r.backendName)
 				parseErr := fmt.Errorf("parse %s response: %w", r.backendName, err)
-				return Response{}, runnerFailure(r.backendName, FailureKindParseError, backendDetail, parseErr)
+				return Response{}, runnerFailure(r.backendName, backendDetail, parseErr)
 			}
 		} else {
 			// Legacy path: bare JSON response object with no envelope.
 			if err := json.Unmarshal(jsonBytes, &response); err != nil {
 				logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s response", r.backendName)
 				parseErr := fmt.Errorf("parse %s response: %w", r.backendName, err)
-				return Response{}, runnerFailure(r.backendName, FailureKindParseError, backendDetail, parseErr)
+				return Response{}, runnerFailure(r.backendName, backendDetail, parseErr)
 			}
 		}
 	}
@@ -261,20 +261,16 @@ func (r *CommandRunner) parseCommandResponse(logger zerolog.Logger, stdoutCap li
 		logger.Error().Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("%s response is empty (no summary, artifacts, or dispatch)", r.backendName)
 		if cmdErr != nil {
 			err := fmt.Errorf("%s command failed: %w", r.backendName, cmdErr)
-			return Response{}, runnerFailure(r.backendName, commandFailureKind(cmdErr, backendDetail), backendDetail, err)
+			return Response{}, runnerFailure(r.backendName, backendDetail, err)
 		}
 		err := fmt.Errorf("parse %s response: empty response (no fields populated)", r.backendName)
-		kind := FailureKindParseError
-		if backendDetail != "" {
-			kind = commandFailureKind(nil, backendDetail)
-		}
-		return Response{}, runnerFailure(r.backendName, kind, backendDetail, err)
+		return Response{}, runnerFailure(r.backendName, backendDetail, err)
 	}
 	if cmdErr != nil {
 		var interrupted CommandInterruptedError
 		if errors.As(cmdErr, &interrupted) {
 			logger.Error().Err(cmdErr).Str("stderr", truncateString(stderr, 2000)).Msgf("%s command interrupted after valid partial output", r.backendName)
-			return response, runnerFailure(r.backendName, commandFailureKind(cmdErr, backendDetail), backendDetail, cmdErr)
+			return response, runnerFailure(r.backendName, backendDetail, cmdErr)
 		}
 		logger.Warn().Err(cmdErr).Str("stderr", truncateString(stderr, 2000)).Msgf("%s command exited non-zero but produced valid output", r.backendName)
 	}

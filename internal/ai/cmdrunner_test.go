@@ -480,7 +480,7 @@ func TestCommandRunnerEmptyStdoutIsError(t *testing.T) {
 	}
 }
 
-func TestCommandRunnerCodexErrorEventReturnsSanitizedFailureMetadata(t *testing.T) {
+func TestCommandRunnerCodexErrorEventReturnsSanitizedFailureDetail(t *testing.T) {
 	t.Parallel()
 	fake := &outputContainerRunner{
 		stdout: `{"type":"error","message":"Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again. OPENAI_API_KEY=fake-secret-value"}` + "\n",
@@ -495,12 +495,9 @@ func TestCommandRunnerCodexErrorEventReturnsSanitizedFailureMetadata(t *testing.
 	if err == nil {
 		t.Fatal("Run error = nil, want codex failure")
 	}
-	kind, detail, ok := FailureMetadata(err)
+	detail, ok := FailureDetail(err)
 	if !ok {
-		t.Fatalf("FailureMetadata ok = false for %T %v", err, err)
-	}
-	if kind != FailureKindBackendAuth {
-		t.Fatalf("kind = %q, want %q", kind, FailureKindBackendAuth)
+		t.Fatalf("FailureDetail ok = false for %T %v", err, err)
 	}
 	if !strings.Contains(detail, "refresh token was already used") {
 		t.Fatalf("detail = %q, want auth refresh message", detail)
@@ -510,7 +507,7 @@ func TestCommandRunnerCodexErrorEventReturnsSanitizedFailureMetadata(t *testing.
 	}
 }
 
-func TestCommandRunnerStderrFailureMetadataRedactsBearerToken(t *testing.T) {
+func TestCommandRunnerStderrFailureDetailRedactsBearerToken(t *testing.T) {
 	t.Parallel()
 	fake := &outputContainerRunner{
 		code:   1,
@@ -526,23 +523,12 @@ func TestCommandRunnerStderrFailureMetadataRedactsBearerToken(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run error = nil, want command failure")
 	}
-	kind, detail, ok := FailureMetadata(err)
+	detail, ok := FailureDetail(err)
 	if !ok {
-		t.Fatalf("FailureMetadata ok = false for %T %v", err, err)
-	}
-	if kind != FailureKindBackendAuth {
-		t.Fatalf("kind = %q, want %q", kind, FailureKindBackendAuth)
+		t.Fatalf("FailureDetail ok = false for %T %v", err, err)
 	}
 	if strings.Contains(detail, "abcdefghijklmnopqrstuvwxyz") || !strings.Contains(detail, "[REDACTED]") {
 		t.Fatalf("detail redaction = %q, want redacted bearer token", detail)
-	}
-}
-
-func TestCommandFailureKindDoesNotTreatTokenAccountingAsAuth(t *testing.T) {
-	t.Parallel()
-	kind := commandFailureKind(errors.New("backend failed"), "max output tokens exceeded")
-	if kind != FailureKindBackendError {
-		t.Fatalf("kind = %q, want %q", kind, FailureKindBackendError)
 	}
 }
 

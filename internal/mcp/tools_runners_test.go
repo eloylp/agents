@@ -56,7 +56,7 @@ func TestToolListRunnersIncludesTraceError(t *testing.T) {
 		Number: 3, Summary: "partial checkpoint",
 		StartedAt: now, FinishedAt: now.Add(time.Second),
 		Status: "error", ErrorMsg: "parse codex response: empty response (no fields populated)",
-		ErrorKind: "backend_auth", ErrorDetail: "Codex auth refresh failed; sign in again",
+		ErrorDetail: "Codex auth refresh failed; sign in again",
 	})
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -89,9 +89,6 @@ func TestToolListRunnersIncludesTraceError(t *testing.T) {
 	}
 	if row.Error != "parse codex response: empty response (no fields populated)" {
 		t.Fatalf("error = %q, want parser detail", row.Error)
-	}
-	if row.ErrorKind != "backend_auth" {
-		t.Fatalf("error_kind = %q, want backend_auth", row.ErrorKind)
 	}
 	if row.ErrorDetail != "Codex auth refresh failed; sign in again" {
 		t.Fatalf("error_detail = %q, want backend detail", row.ErrorDetail)

@@ -108,7 +108,7 @@ func TestList_CompletedEventFannedOutToTwoAgentsShowsTwoRows(t *testing.T) {
 		Number: 7, Summary: "reviewer failed",
 		StartedAt: now, FinishedAt: now.Add(2 * time.Second),
 		Status: "error", ErrorMsg: "claude command timed out after 10m0s",
-		ErrorKind: "timeout", ErrorDetail: "runner exceeded configured timeout",
+		ErrorDetail: "runner exceeded configured timeout",
 	})
 	_ = fx.store.MarkEventCompleted(id)
 
@@ -138,9 +138,6 @@ func TestList_CompletedEventFannedOutToTwoAgentsShowsTwoRows(t *testing.T) {
 	}
 	if agents["reviewer"].Error != "claude command timed out after 10m0s" {
 		t.Errorf("reviewer error = %q, want timeout detail", agents["reviewer"].Error)
-	}
-	if agents["reviewer"].ErrorKind != "timeout" {
-		t.Errorf("reviewer error kind = %q, want timeout", agents["reviewer"].ErrorKind)
 	}
 	if agents["reviewer"].ErrorDetail != "runner exceeded configured timeout" {
 		t.Errorf("reviewer error detail = %q, want backend detail", agents["reviewer"].ErrorDetail)

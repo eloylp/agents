@@ -2,7 +2,6 @@ package ai
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -12,43 +11,16 @@ var (
 	secretAssignmentRE = regexp.MustCompile(`(?i)\b([a-z0-9_]*(?:token|secret|password|passwd|apikey|api_key|authorization|credential)[a-z0-9_]*)\s*[:=]\s*("[^"]+"|'[^']+'|Bearer\s+[^\s,;]+|[^\s,;]+)`)
 	bearerTokenRE      = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/\-]+=*`)
 	longSecretRE       = regexp.MustCompile(`\b[A-Za-z0-9+/_-]{40,}={0,2}\b`)
-	authFailureRE      = regexp.MustCompile(`(?i)\b(unauthorized|unauthenticated|forbidden|authorization|bearer|invalid credentials?|missing credentials?|expired credentials?|invalid api key|invalid token|expired token|refresh token|access token|sign in|log in|login required|401|403)\b`)
 	errorLineRE        = regexp.MustCompile(`(?i)\b(error|failed|failure|fatal|unauthorized|forbidden)\b`)
 	hexRE              = regexp.MustCompile(`(?i)^[a-f0-9]{40,}$`)
 )
 
-func runnerFailure(backend string, kind FailureKind, detail string, err error) error {
-	if kind == "" {
-		kind = FailureKindUnknown
-	}
+func runnerFailure(backend string, detail string, err error) error {
 	return RunFailureError{
 		Backend: backend,
-		Kind:    kind,
 		Detail:  sanitizeFailureDetail(detail),
 		Err:     err,
 	}
-}
-
-func commandFailureKind(cmdErr error, detail string) FailureKind {
-	var interrupted CommandInterruptedError
-	if errors.As(cmdErr, &interrupted) {
-		switch interrupted.Kind {
-		case CommandInterruptedTimeout:
-			return FailureKindTimeout
-		case CommandInterruptedCanceled:
-			return FailureKindCanceled
-		}
-	}
-	if looksLikeAuthFailure(detail) {
-		return FailureKindBackendAuth
-	}
-	if strings.TrimSpace(detail) != "" {
-		return FailureKindBackendError
-	}
-	if cmdErr != nil {
-		return FailureKindRunnerError
-	}
-	return FailureKindUnknown
 }
 
 func backendFailureDetail(lines []timedLine, stderr string) string {
@@ -148,8 +120,4 @@ func redactSecretAssignments(detail string) string {
 		}
 		return parts[1] + "=[REDACTED]"
 	})
-}
-
-func looksLikeAuthFailure(detail string) bool {
-	return authFailureRE.MatchString(detail)
 }
