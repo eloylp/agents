@@ -48,13 +48,8 @@ func TestStringSliceArgAcceptsShapes(t *testing.T) {
 			if tc.wantErr != "" {
 				return
 			}
-			if len(got) != len(tc.want) {
-				t.Fatalf("len = %d, want %d (got=%v)", len(got), len(tc.want), got)
-			}
-			for i := range got {
-				if got[i] != tc.want[i] {
-					t.Errorf("[%d] = %q, want %q", i, got[i], tc.want[i])
-				}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("got = %v, want %v", got, tc.want)
 			}
 		})
 	}
