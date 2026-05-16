@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -92,13 +93,13 @@ func (d *Daemon) isPublicRoute(r *http.Request) bool {
 	if path == d.daemonCfg.HTTP.WebhookPath {
 		return true
 	}
-	if path == "/auth/status" || path == "/auth/login" || path == "/auth/bootstrap" {
+	if slices.Contains([]string{"/auth/status", "/auth/login", "/auth/bootstrap"}, path) {
 		return true
 	}
-	if path == "/" || path == "/ui" || path == "/ui/" || strings.HasPrefix(path, "/ui/") {
+	if slices.Contains([]string{"/", "/ui", "/ui/"}, path) || strings.HasPrefix(path, "/ui/") {
 		return true
 	}
-	if d.proxy != nil && (path == d.daemonCfg.Proxy.Path || path == "/v1/models") && isLoopbackRequest(r) {
+	if d.proxy != nil && slices.Contains([]string{d.daemonCfg.Proxy.Path, "/v1/models"}, path) && isLoopbackRequest(r) {
 		return true
 	}
 	return false
