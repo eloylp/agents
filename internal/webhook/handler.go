@@ -485,7 +485,7 @@ func (h *Handler) enqueue(ctx context.Context, w http.ResponseWriter, ev workflo
 // hmac.Equal is used for the final comparison to avoid timing attacks that
 // could leak information about the expected value through execution time.
 func verifySignature(payload []byte, secret, signature string) bool {
-	signature = strings.TrimPrefix(strings.TrimSpace(signature), "sha256=")
+	signature, _ = strings.CutPrefix(strings.TrimSpace(signature), "sha256=")
 	if signature == "" || secret == "" {
 		return false
 	}
