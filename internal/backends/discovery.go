@@ -2,6 +2,7 @@ package backends
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -202,7 +203,7 @@ func fillRuntimeDiagnostics(ctx context.Context, diag *Diagnostics, runner runti
 
 	diag.Backends = backendsOut
 	slices.SortFunc(diag.Backends, func(a, b BackendStatus) int {
-		return strings.Compare(a.Name, b.Name)
+		return cmp.Compare(a.Name, b.Name)
 	})
 	diag.Tools = toolsOut
 	for i := range diag.Tools {
@@ -238,7 +239,7 @@ func diagnoseToolsInRuntime(ctx context.Context, runner runtimeexec.Runner, sett
 		diagnoseVersionedToolInRuntime(ctx, runner, settings, "typescript", "tsc", []string{"--version"}),
 	}
 	slices.SortFunc(tools, func(a, b ToolStatus) int {
-		return strings.Compare(a.Name, b.Name)
+		return cmp.Compare(a.Name, b.Name)
 	})
 	return tools
 }
