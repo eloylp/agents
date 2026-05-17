@@ -190,7 +190,7 @@ func TestContainerCommandRunnerUsesRuntimeAndParsesOutput(t *testing.T) {
 		System:   "system",
 		User:     "user",
 		OnLine: func(line []byte) {
-			lines = append(lines, append([]byte(nil), line...))
+			lines = append(lines, bytes.Clone(line))
 		},
 	})
 	if err != nil {
