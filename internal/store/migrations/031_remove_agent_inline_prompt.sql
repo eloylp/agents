@@ -1,9 +1,21 @@
 -- Remove the legacy inline agent prompt column. Prompt bodies now live only in
 -- the prompt catalog; agents keep prompt_id references.
 
+CREATE TABLE IF NOT EXISTS workspaces (
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL UNIQUE,
+    description  TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    runner_image TEXT NOT NULL DEFAULT ''
+);
+
+INSERT OR IGNORE INTO workspaces (id, name, description, runner_image)
+VALUES ('default', 'Default', 'Default operational workspace', '');
+
 CREATE TABLE IF NOT EXISTS agents (
     id             TEXT PRIMARY KEY,
-    workspace_id   TEXT NOT NULL DEFAULT 'default',
+    workspace_id   TEXT NOT NULL DEFAULT 'default' REFERENCES workspaces(id),
     name           TEXT NOT NULL,
     backend        TEXT NOT NULL DEFAULT 'auto',
     model          TEXT NOT NULL DEFAULT '',
@@ -22,7 +34,7 @@ CREATE TABLE IF NOT EXISTS agents (
 
 CREATE TABLE agents_new (
     id             TEXT PRIMARY KEY,
-    workspace_id   TEXT NOT NULL DEFAULT 'default',
+    workspace_id   TEXT NOT NULL DEFAULT 'default' REFERENCES workspaces(id),
     name           TEXT NOT NULL,
     backend        TEXT NOT NULL DEFAULT 'auto',
     model          TEXT NOT NULL DEFAULT '',

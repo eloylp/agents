@@ -31,10 +31,6 @@ import (
 	"github.com/eloylp/agents/internal/store"
 )
 
-func configInlinePromptUnsupported() string {
-	return agentconfig.InlineAgentPromptUnsupported
-}
-
 // Handler implements the /agents, /skills, and /backends HTTP surface plus
 // the methods exposed for the MCP agent / skill / backend writers. It also
 // owns the /agents/orphans/status endpoint and the read-only fleet snapshot
@@ -126,7 +122,7 @@ func (h *Handler) HandleAgentsCreate(w http.ResponseWriter, r *http.Request) {
 		req.WorkspaceID = fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	}
 	if req.Prompt != nil {
-		http.Error(w, configInlinePromptUnsupported(), http.StatusBadRequest)
+		http.Error(w, agentconfig.InlineAgentPromptUnsupported, http.StatusBadRequest)
 		return
 	}
 	canonical, err := h.UpsertAgent(req.toConfig())
@@ -338,7 +334,7 @@ func (h *Handler) handleAgentPatch(w http.ResponseWriter, r *http.Request, name 
 		return
 	}
 	if req.Prompt != nil {
-		http.Error(w, configInlinePromptUnsupported(), http.StatusBadRequest)
+		http.Error(w, agentconfig.InlineAgentPromptUnsupported, http.StatusBadRequest)
 		return
 	}
 	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
@@ -401,7 +397,7 @@ func (h *Handler) UpdateAgentPatchInWorkspace(workspaceID, name string, patch Ag
 
 func (h *Handler) updateAgent(name, workspaceID string, patch AgentPatch) (fleet.Agent, error) {
 	if patch.Prompt != nil {
-		return fleet.Agent{}, &store.ErrValidation{Msg: configInlinePromptUnsupported()}
+		return fleet.Agent{}, &store.ErrValidation{Msg: agentconfig.InlineAgentPromptUnsupported}
 	}
 	normalized := fleet.NormalizeAgentName(name)
 	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
