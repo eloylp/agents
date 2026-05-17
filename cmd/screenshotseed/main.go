@@ -153,6 +153,12 @@ func buildFixtureConfig() *config.Config {
 			"testing":   {Prompt: "## Testing discipline\n\nEvery behavioural change ships with a test. Table-driven for >2 input shapes. `t.Parallel()` when independent. Run `-race` before declaring done.\n"},
 			"dx":        {Prompt: "## Developer experience\n\nReadable error messages. Sensible defaults. Logs that an operator can grep without a manual.\n"},
 		},
+		Prompts: []fleet.Prompt{
+			{Name: "coder", Content: "You are the coder agent. Pick up the issue described in the runtime context, write the smallest viable change, ship a PR with a tight description and a test plan. Dispatch pr-reviewer once the PR is open.\n"},
+			{Name: "pr-reviewer", Content: "You are the pr-reviewer agent. Read the PR diff, check correctness against the linked issue, surface design concerns, verify test coverage, then either approve or request changes with concrete feedback.\n"},
+			{Name: "scout", Content: "You are the scout agent. Walk the repo on a schedule, surface drift between code and docs, file issues for follow-ups, and dispatch coder when the fix is small and obvious.\n"},
+			{Name: "refactorer", Content: "You are the refactorer. On every cron tick, find one piece of housekeeping work the codebase needs, do it, ship a PR. Always small, never speculative.\n"},
+		},
 		Agents: []fleet.Agent{
 			{
 				Name:          "coder",
@@ -163,7 +169,7 @@ func buildFixtureConfig() *config.Config {
 				AllowPRs:      true,
 				AllowDispatch: true,
 				CanDispatch:   []string{"pr-reviewer", "scout"},
-				Prompt:        "You are the coder agent. Pick up the issue described in the runtime context, write the smallest viable change, ship a PR with a tight description and a test plan. Dispatch pr-reviewer once the PR is open.\n",
+				PromptRef:     "coder",
 			},
 			{
 				Name:          "pr-reviewer",
@@ -173,7 +179,7 @@ func buildFixtureConfig() *config.Config {
 				Description:   "Reviews open PRs for correctness, design, and test coverage. Approves or requests changes.",
 				AllowPRs:      true,
 				AllowDispatch: true,
-				Prompt:        "You are the pr-reviewer agent. Read the PR diff, check correctness against the linked issue, surface design concerns, verify test coverage, then either approve or request changes with concrete feedback.\n",
+				PromptRef:     "pr-reviewer",
 			},
 			{
 				Name:          "scout",
@@ -183,7 +189,7 @@ func buildFixtureConfig() *config.Config {
 				Description:   "Sweeps the codebase weekly for stale TODOs, dead code, doc drift, and missed follow-ups.",
 				AllowDispatch: true,
 				CanDispatch:   []string{"coder"},
-				Prompt:        "You are the scout agent. Walk the repo on a schedule, surface drift between code and docs, file issues for follow-ups, and dispatch coder when the fix is small and obvious.\n",
+				PromptRef:     "scout",
 			},
 			{
 				Name:        "refactorer",
@@ -192,7 +198,7 @@ func buildFixtureConfig() *config.Config {
 				Skills:      []string{"architect"},
 				Description: "Cron-driven housekeeper: removes dead branches, migrates deprecated APIs, keeps tooling current.",
 				AllowPRs:    true,
-				Prompt:      "You are the refactorer. On every cron tick, find one piece of housekeeping work the codebase needs, do it, ship a PR. Always small, never speculative.\n",
+				PromptRef:   "refactorer",
 			},
 		},
 		Repos: []fleet.Repo{
