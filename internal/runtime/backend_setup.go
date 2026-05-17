@@ -148,8 +148,8 @@ func setEnvValues(env []string, kvs ...string) []string {
 func getEnv(env []string, key string) string {
 	prefix := key + "="
 	for _, entry := range env {
-		if strings.HasPrefix(entry, prefix) {
-			return strings.TrimPrefix(entry, prefix)
+		if value, ok := strings.CutPrefix(entry, prefix); ok {
+			return value
 		}
 	}
 	return ""
