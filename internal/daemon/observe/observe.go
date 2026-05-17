@@ -614,14 +614,15 @@ func ServeSSEWithIntervalFiltered(w http.ResponseWriter, r *http.Request, hub SS
 func workspaceFromSSEMessage(msg []byte) string {
 	for line := range bytes.Lines(msg) {
 		line = bytes.TrimSpace(line)
-		if !bytes.HasPrefix(line, []byte("data:")) {
+		data, ok := bytes.CutPrefix(line, []byte("data:"))
+		if !ok {
 			continue
 		}
 		var payload struct {
 			WorkspaceID string `json:"workspace_id"`
 			Workspace   string `json:"workspace"`
 		}
-		data := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+		data = bytes.TrimSpace(data)
 		if err := json.Unmarshal(data, &payload); err != nil {
 			return ""
 		}
