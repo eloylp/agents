@@ -84,13 +84,18 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		existingMemory = mem
 	}
 
+	promptBody, err := cfg.PromptContentForAgent(agent, ev.Repo.FullName)
+	if err != nil {
+		return fmt.Errorf("agent %q: resolve prompt: %w", agent.Name, err)
+	}
+
 	guardrails, err := e.store.ReadWorkspacePromptGuardrails(workspaceID)
 	if err != nil {
 		return fmt.Errorf("agent %q: load guardrails: %w", agent.Name, err)
 	}
 	guardrails = slices.Insert(guardrails, 0, dynamicWorkspaceGuardrail(workspaceID, agent, cfg.Repos))
 
-	rendered, err := ai.RenderAgentPrompt(agent, cfg.Skills, guardrails, ai.PromptContext{
+	rendered, err := ai.RenderAgentPrompt(agent, promptBody, cfg.Skills, guardrails, ai.PromptContext{
 		Repo:          ev.Repo.FullName,
 		Number:        ev.Number,
 		Backend:       backend,

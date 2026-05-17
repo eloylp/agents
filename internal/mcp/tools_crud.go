@@ -10,6 +10,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"github.com/eloylp/agents/internal/config"
 	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
 	"github.com/eloylp/agents/internal/fleet"
 )
@@ -35,7 +36,7 @@ func toolCreateAgent(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError(errMsg), nil
 		}
 		if _, ok := args["prompt"]; ok {
-			return mcpgo.NewToolResultError("agent prompt bodies are import-only; use prompt_ref"), nil
+			return mcpgo.NewToolResultError(config.InlineAgentPromptUnsupported), nil
 		}
 		a := fleet.Agent{
 			WorkspaceID:   req.GetString("workspace", fleet.DefaultWorkspaceID),
@@ -89,7 +90,7 @@ func toolUpdateAgent(deps Deps) server.ToolHandlerFunc {
 			patch.Model = v
 		}
 		if _, ok := args["prompt"]; ok {
-			return mcpgo.NewToolResultError("agent prompt bodies are import-only; use prompt_ref"), nil
+			return mcpgo.NewToolResultError(config.InlineAgentPromptUnsupported), nil
 		}
 		if v, ok := stringPtrArg(args, "prompt_ref"); ok {
 			patch.PromptRef = v

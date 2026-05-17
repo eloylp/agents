@@ -87,7 +87,7 @@ func TestUpsertAgentRoundTripsAllowMemoryFalse(t *testing.T) {
 	if err := store.UpsertAgent(db, fleet.Agent{
 		Name:        "coder",
 		Backend:     "claude",
-		Prompt:      "You write code.",
+		PromptRef:   "coder",
 		Description: "Writes code",
 		Skills:      []string{"architect"},
 		AllowMemory: &ff,

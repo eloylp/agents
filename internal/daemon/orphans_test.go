@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/eloylp/agents/internal/config"
-	"github.com/eloylp/agents/internal/fleet"
 	daemonfleet "github.com/eloylp/agents/internal/daemon/fleet"
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 func TestAgentsOrphansEndpointAndStatusSummary(t *testing.T) {
@@ -22,7 +22,7 @@ func TestAgentsOrphansEndpointAndStatusSummary(t *testing.T) {
 			},
 		}
 		c.Agents = []fleet.Agent{
-			{Name: "coder", Backend: "claude", Model: "claude-3.5", Prompt: "x"},
+			{Name: "coder", Backend: "claude", Model: "claude-3.5", PromptRef: "coder"},
 		}
 	})
 	srv, _ := newTestServer(t, cfg)

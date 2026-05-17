@@ -211,7 +211,7 @@ func newMemoryTestCfg(allowMemory *bool) *config.Config {
 			AIBackends: map[string]fleet.Backend{"claude": {Command: "claude"}},
 		},
 		Agents: []fleet.Agent{
-			{Name: "arch-reviewer", Backend: "claude", Prompt: "Review.", AllowMemory: allowMemory},
+			{Name: "arch-reviewer", Backend: "claude", PromptRef: "Review.", AllowMemory: allowMemory},
 		},
 		Repos: []fleet.Repo{
 			{Name: "owner/repo", Enabled: true, Use: []fleet.Binding{

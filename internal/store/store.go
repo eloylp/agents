@@ -79,9 +79,8 @@ func Open(path string) (*sql.DB, error) {
 }
 
 // Import writes cfg into the database, upserting every entity. Existing rows
-// are replaced (INSERT OR REPLACE). Prompts are stored inline, agents and
-// skills must carry their full prompt text in cfg.Prompt before calling
-// Import.
+// are replaced (INSERT OR REPLACE). Prompt content lives in prompts; agents
+// persist only prompt catalog references.
 //
 // Secrets (WebhookSecret) are NOT written, only the env-var name
 // (WebhookSecretEnv) is stored. The secret is re-resolved from the
@@ -510,15 +509,15 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent, updatePromptContent bool) er
 		if scopeType == "" {
 			scopeType = "workspace"
 		}
-		promptID, err := ensureAgentPrompt(tx, a, updatePromptContent)
-		if err != nil {
-			return err
-		}
 		id, err := stableAgentID(tx, workspaceID, a)
 		if err != nil {
 			return err
 		}
 		skillRefs, err := resolveAgentSkillRefs(tx, a, workspaceID, scopeType)
+		if err != nil {
+			return err
+		}
+		promptID, err := ensureAgentPrompt(tx, a)
 		if err != nil {
 			return err
 		}
@@ -535,14 +534,13 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent, updatePromptContent bool) er
 		allowMemory := bindingEnabledInt(a.AllowMemory)
 		if _, err := tx.Exec(`
 			INSERT INTO agents
-			  (id,workspace_id,name,backend,model,skills,prompt,prompt_id,scope_type,scope_repo,allow_prs,allow_dispatch,can_dispatch,description,allow_memory)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			  (id,workspace_id,name,backend,model,skills,prompt_id,scope_type,scope_repo,allow_prs,allow_dispatch,can_dispatch,description,allow_memory)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(workspace_id, name) DO UPDATE SET
 				id = excluded.id,
 				backend = excluded.backend,
 				model = excluded.model,
 				skills = excluded.skills,
-				prompt = excluded.prompt,
 				prompt_id = excluded.prompt_id,
 				scope_type = excluded.scope_type,
 				scope_repo = excluded.scope_repo,
@@ -551,7 +549,7 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent, updatePromptContent bool) er
 				can_dispatch = excluded.can_dispatch,
 				description = excluded.description,
 				allow_memory = excluded.allow_memory`,
-			id, workspaceID, a.Name, a.Backend, a.Model, string(skills), a.Prompt, promptID, scopeType, a.ScopeRepo,
+			id, workspaceID, a.Name, a.Backend, a.Model, string(skills), promptID, scopeType, a.ScopeRepo,
 			allowPRs, allowDispatch, string(canDispatch), a.Description, allowMemory,
 		); err != nil {
 			return fmt.Errorf("store import: upsert agent %s: %w", a.Name, err)
@@ -601,7 +599,7 @@ func readSkillScopeByID(q querier, id string) (fleet.Skill, bool, error) {
 	return fleet.Skill{}, false, err
 }
 
-func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent, updatePromptContent bool) (string, error) {
+func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent) (string, error) {
 	if a.PromptID != "" {
 		scopeRepo := ""
 		if a.ScopeType == "repo" {
@@ -615,57 +613,21 @@ func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent, updatePromptContent bool) (str
 		}
 		return a.PromptID, nil
 	}
-	name := a.PromptRef
-	if name == "" {
-		name = a.Name
+	if a.PromptRef == "" {
+		return "", fmt.Errorf("store import: agent %s: prompt_id or prompt_ref is required", a.Name)
 	}
-	if name == "" {
-		return "", fmt.Errorf("store import: agent prompt requires agent name or prompt_ref")
+	scopeRepo := ""
+	if a.ScopeType == "repo" {
+		scopeRepo = a.ScopeRepo
 	}
-	content := a.Prompt
-	if content == "" && a.PromptRef != "" {
-		scopeRepo := ""
-		if a.ScopeType == "repo" {
-			scopeRepo = a.ScopeRepo
-		}
-		existingID, err := resolveAgentPromptRef(tx, name, a.PromptScope, a.WorkspaceID, scopeRepo)
-		if err == nil {
-			return existingID, nil
-		}
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", fmt.Errorf("store import: agent %s references unknown prompt_ref %q", a.Name, a.PromptRef)
-		}
-		return "", fmt.Errorf("store import: resolve prompt_ref %s for agent %s: %w", name, a.Name, err)
+	existingID, err := resolveAgentPromptRef(tx, a.PromptRef, a.PromptScope, a.WorkspaceID, scopeRepo)
+	if err == nil {
+		return existingID, nil
 	}
-	if !updatePromptContent && content != "" {
-		var existingID string
-		err := queryPromptByScopeName(tx, "", "", name).Scan(&existingID)
-		if err == nil {
-			return existingID, nil
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return "", fmt.Errorf("store import: read prompt %s: %w", name, err)
-		}
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("store import: agent %s references unknown prompt_ref %q", a.Name, a.PromptRef)
 	}
-	id, err := derivedEntityID("prompt_", name)
-	if err != nil {
-		return "", fmt.Errorf("store import: prompt %q for agent %s: %w", name, a.Name, err)
-	}
-	if _, err := tx.Exec(`
-		INSERT INTO prompts (id, name, description, content, updated_at)
-		VALUES (?, ?, ?, ?, datetime('now'))
-		ON CONFLICT(id) DO UPDATE SET
-			content = CASE WHEN ? THEN excluded.content ELSE prompts.content END,
-			updated_at = CASE WHEN ? THEN datetime('now') ELSE prompts.updated_at END`,
-		id, name, "Migrated prompt for agent "+a.Name, content,
-		updatePromptContent, updatePromptContent,
-	); err != nil {
-		return "", fmt.Errorf("store import: upsert prompt %s for agent %s: %w", name, a.Name, err)
-	}
-	if err := queryPromptByScopeName(tx, "", "", name).Scan(&id); err != nil {
-		return "", fmt.Errorf("store import: read prompt %s id: %w", name, err)
-	}
-	return id, nil
+	return "", fmt.Errorf("store import: resolve prompt_ref %s for agent %s: %w", a.PromptRef, a.Name, err)
 }
 
 func queryPromptByScopeName(q querier, workspaceID, repo, name string) *sql.Row {
@@ -1105,7 +1067,7 @@ func loadPrompts(db querier, cfg *config.Config) error {
 
 func loadAgents(db querier, cfg *config.Config) error {
 	rows, err := db.Query(`
-		SELECT a.id,a.workspace_id,a.name,a.backend,a.model,a.skills,COALESCE(p.content, a.prompt),a.prompt_id,COALESCE(p.name, ''),COALESCE(p.workspace_id, ''),COALESCE(p.repo, ''),a.scope_type,a.scope_repo,a.allow_prs,a.allow_dispatch,a.can_dispatch,a.description,a.allow_memory
+		SELECT a.id,a.workspace_id,a.name,a.backend,a.model,a.skills,a.prompt_id,COALESCE(p.name, ''),COALESCE(p.workspace_id, ''),COALESCE(p.repo, ''),a.scope_type,a.scope_repo,a.allow_prs,a.allow_dispatch,a.can_dispatch,a.description,a.allow_memory
 		FROM agents a
 		LEFT JOIN prompts p ON p.id = a.prompt_id
 		ORDER BY a.name`)
@@ -1116,10 +1078,10 @@ func loadAgents(db querier, cfg *config.Config) error {
 
 	var agents []fleet.Agent
 	for rows.Next() {
-		var id, workspaceID, name, backend, model, skillsJSON, prompt, promptID, promptRef, promptWorkspace, promptRepo, scopeType, scopeRepo, canDispatchJSON, description string
+		var id, workspaceID, name, backend, model, skillsJSON, promptID, promptRef, promptWorkspace, promptRepo, scopeType, scopeRepo, canDispatchJSON, description string
 		var allowPRs, allowDispatch, allowMemory int
 		if err := rows.Scan(
-			&id, &workspaceID, &name, &backend, &model, &skillsJSON, &prompt, &promptID, &promptRef, &promptWorkspace, &promptRepo, &scopeType, &scopeRepo,
+			&id, &workspaceID, &name, &backend, &model, &skillsJSON, &promptID, &promptRef, &promptWorkspace, &promptRepo, &scopeType, &scopeRepo,
 			&allowPRs, &allowDispatch, &canDispatchJSON, &description, &allowMemory,
 		); err != nil {
 			return fmt.Errorf("store load: scan agent: %w", err)
@@ -1147,7 +1109,6 @@ func loadAgents(db querier, cfg *config.Config) error {
 			Backend:       backend,
 			Model:         model,
 			Skills:        skills,
-			Prompt:        prompt,
 			PromptID:      promptID,
 			PromptRef:     promptRef,
 			PromptScope:   promptScope,

@@ -20,6 +20,9 @@ func seedBackend(t *testing.T, db *sql.DB, name string) {
 	if err := store.UpsertBackend(db, name, b); err != nil {
 		t.Fatalf("seedBackend %s: %v", name, err)
 	}
+	if _, err := store.UpsertPrompt(db, fleet.Prompt{Name: "coder", Content: "test prompt"}); err != nil {
+		t.Fatalf("seed prompt: %v", err)
+	}
 }
 
 // seedSkill inserts a minimal skill into db so that agent upserts that
@@ -45,7 +48,7 @@ func TestUpsertAndReadAgents(t *testing.T) {
 	if err := store.UpsertAgent(db, fleet.Agent{
 		Name:          "pr-reviewer",
 		Backend:       "claude",
-		Prompt:        "review code",
+		PromptRef:     "coder",
 		Description:   "A code review agent",
 		AllowDispatch: true,
 		Skills:        []string{},
@@ -58,7 +61,7 @@ func TestUpsertAndReadAgents(t *testing.T) {
 		Name:          "coder",
 		Backend:       "claude",
 		Skills:        []string{"architect"},
-		Prompt:        "You write code.",
+		PromptRef:     "coder",
 		AllowPRs:      true,
 		AllowDispatch: true,
 		CanDispatch:   []string{"pr-reviewer"},
@@ -97,11 +100,11 @@ func TestUpsertAgentIsIdempotent(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 
-	a := fleet.Agent{Name: "coder", Backend: "claude", Prompt: "v1", Description: "coder agent", Skills: []string{}, CanDispatch: []string{}}
+	a := fleet.Agent{Name: "coder", Backend: "claude", PromptRef: "coder", Description: "coder agent", Skills: []string{}, CanDispatch: []string{}}
 	if err := store.UpsertAgent(db, a); err != nil {
 		t.Fatalf("first upsert: %v", err)
 	}
-	a.Prompt = "v2"
+	a.PromptRef = "coder"
 	if err := store.UpsertAgent(db, a); err != nil {
 		t.Fatalf("second upsert: %v", err)
 	}
@@ -113,15 +116,15 @@ func TestUpsertAgentIsIdempotent(t *testing.T) {
 	if len(agents) != 1 {
 		t.Fatalf("got %d agents, want 1", len(agents))
 	}
-	if agents[0].Prompt != "v2" {
-		t.Errorf("Prompt: got %q, want %q", agents[0].Prompt, "v2")
+	if agents[0].PromptRef != "coder" {
+		t.Errorf("PromptRef: got %q, want coder", agents[0].PromptRef)
 	}
 	if agents[0].ID == "" {
 		t.Fatal("ID is empty, want stable generated id")
 	}
 	firstID := agents[0].ID
 
-	a.Prompt = "v3"
+	a.PromptRef = "coder"
 	if err := store.UpsertAgent(db, a); err != nil {
 		t.Fatalf("third upsert: %v", err)
 	}
@@ -142,8 +145,8 @@ func TestAgentsAndReposAreUniquePerWorkspace(t *testing.T) {
 		t.Fatalf("UpsertWorkspace: %v", err)
 	}
 
-	defaultAgent := fleet.Agent{Name: "coder", Backend: "claude", Prompt: "default prompt", Description: "Default coder"}
-	teamAgent := fleet.Agent{WorkspaceID: "team-a", Name: "coder", Backend: "claude", Prompt: "team prompt", Description: "Team coder"}
+	defaultAgent := fleet.Agent{Name: "coder", Backend: "claude", PromptRef: "coder", Description: "Default coder"}
+	teamAgent := fleet.Agent{WorkspaceID: "team-a", Name: "coder", Backend: "claude", PromptRef: "coder", Description: "Team coder"}
 	if err := store.UpsertAgent(db, defaultAgent); err != nil {
 		t.Fatalf("UpsertAgent default: %v", err)
 	}
@@ -208,7 +211,7 @@ func TestUpsertAgentIgnoresCallerProvidedID(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 
-	a := fleet.Agent{ID: "client-id", Name: "coder", Backend: "claude", Prompt: "v1", Description: "coder agent", Skills: []string{}, CanDispatch: []string{}}
+	a := fleet.Agent{ID: "client-id", Name: "coder", Backend: "claude", PromptRef: "coder", Description: "coder agent", Skills: []string{}, CanDispatch: []string{}}
 	if err := store.UpsertAgent(db, a); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -225,7 +228,7 @@ func TestUpsertAgentIgnoresCallerProvidedID(t *testing.T) {
 	firstID := agents[0].ID
 
 	a.ID = "mutated-client-id"
-	a.Prompt = "v2"
+	a.PromptRef = "coder"
 	if err := store.UpsertAgent(db, a); err != nil {
 		t.Fatalf("UpsertAgent update: %v", err)
 	}
@@ -243,7 +246,7 @@ func TestGraphLayoutPersistsByStableAgentID(t *testing.T) {
 	db := openTestDB(t)
 
 	seedBackend(t, db, "claude")
-	if err := store.UpsertAgent(db, fleet.Agent{Name: "coder", Backend: "claude", Prompt: "p", Description: "coder agent", Skills: []string{}, CanDispatch: []string{}}); err != nil {
+	if err := store.UpsertAgent(db, fleet.Agent{Name: "coder", Backend: "claude", PromptRef: "coder", Description: "coder agent", Skills: []string{}, CanDispatch: []string{}}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
 	agents, err := store.ReadAgents(db)
@@ -266,7 +269,7 @@ func TestGraphLayoutPersistsByStableAgentID(t *testing.T) {
 		t.Fatalf("layout = %+v, want one position for %s", got, id)
 	}
 
-	if err := store.UpsertAgent(db, fleet.Agent{Name: "coder", Backend: "claude", Prompt: "updated", Description: "coder agent", Skills: []string{}, CanDispatch: []string{}}); err != nil {
+	if err := store.UpsertAgent(db, fleet.Agent{Name: "coder", Backend: "claude", PromptRef: "coder", Description: "coder agent", Skills: []string{}, CanDispatch: []string{}}); err != nil {
 		t.Fatalf("UpsertAgent rename-preserve simulation: %v", err)
 	}
 	got, err = store.ReadGraphLayout(db)
@@ -287,8 +290,8 @@ func TestGraphLayoutIsWorkspaceScoped(t *testing.T) {
 		t.Fatalf("UpsertWorkspace: %v", err)
 	}
 	for _, agent := range []fleet.Agent{
-		{Name: "default-coder", Backend: "claude", Prompt: "p", Description: "default coder", WorkspaceID: fleet.DefaultWorkspaceID, Skills: []string{}, CanDispatch: []string{}},
-		{Name: "team-coder", Backend: "claude", Prompt: "p", Description: "team coder", WorkspaceID: "team-a", Skills: []string{}, CanDispatch: []string{}},
+		{Name: "default-coder", Backend: "claude", PromptRef: "coder", Description: "default coder", WorkspaceID: fleet.DefaultWorkspaceID, Skills: []string{}, CanDispatch: []string{}},
+		{Name: "team-coder", Backend: "claude", PromptRef: "coder", Description: "team coder", WorkspaceID: "team-a", Skills: []string{}, CanDispatch: []string{}},
 	} {
 		if err := store.UpsertAgent(db, agent); err != nil {
 			t.Fatalf("UpsertAgent %s: %v", agent.Name, err)
@@ -336,7 +339,7 @@ func TestGraphLayoutDeletedWithAgent(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 	for _, name := range []string{"coder", "reviewer"} {
-		if err := store.UpsertAgent(db, fleet.Agent{Name: name, Backend: "claude", Prompt: "p", Description: name + " agent", Skills: []string{}, CanDispatch: []string{}}); err != nil {
+		if err := store.UpsertAgent(db, fleet.Agent{Name: name, Backend: "claude", PromptRef: "coder", Description: name + " agent", Skills: []string{}, CanDispatch: []string{}}); err != nil {
 			t.Fatalf("UpsertAgent %s: %v", name, err)
 		}
 	}
@@ -378,7 +381,7 @@ func TestDeleteAgent(t *testing.T) {
 	// Seed two agents so that deleting one still leaves the system valid.
 	for _, name := range []string{"coder", "reviewer"} {
 		if err := store.UpsertAgent(db, fleet.Agent{
-			Name: name, Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
+			Name: name, Backend: "claude", PromptRef: "coder", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 		}); err != nil {
 			t.Fatalf("UpsertAgent %s: %v", name, err)
 		}
@@ -574,7 +577,7 @@ func TestUpsertAndReadRepos(t *testing.T) {
 
 	// UpsertRepo requires the agents referenced by bindings to exist.
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "coder", Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
+		Name: "coder", Backend: "claude", PromptRef: "coder", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -623,7 +626,7 @@ func TestUpsertRepoReplacesBindings(t *testing.T) {
 	seedBackend(t, db, "claude")
 
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "coder", Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
+		Name: "coder", Backend: "claude", PromptRef: "coder", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -662,7 +665,7 @@ func TestDeleteRepo(t *testing.T) {
 	seedBackend(t, db, "claude")
 
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "coder", Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
+		Name: "coder", Backend: "claude", PromptRef: "coder", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -715,7 +718,7 @@ func TestReadSnapshot(t *testing.T) {
 		Name:        "coder",
 		Backend:     "claude",
 		Skills:      []string{},
-		Prompt:      "You write code.",
+		PromptRef:   "coder",
 		Description: "coder agent",
 	}
 	if err := store.UpsertAgent(db, a); err != nil {
@@ -765,13 +768,13 @@ func TestUpsertAgentCrossRefErrors(t *testing.T) {
 		{
 			name:    "unknown backend",
 			setup:   func(t *testing.T, db *sql.DB) { t.Helper() }, // no backend seeded
-			agent:   fleet.Agent{Name: "coder", Backend: "claude", Prompt: "p", Description: "coder agent", Skills: []string{}},
+			agent:   fleet.Agent{Name: "coder", Backend: "claude", PromptRef: "coder", Description: "coder agent", Skills: []string{}},
 			wantErr: "unknown backend",
 		},
 		{
 			name:    "unknown skill",
 			setup:   func(t *testing.T, db *sql.DB) { seedBackend(t, db, "claude") },
-			agent:   fleet.Agent{Name: "coder", Backend: "claude", Prompt: "p", Description: "coder agent", Skills: []string{"architect"}},
+			agent:   fleet.Agent{Name: "coder", Backend: "claude", PromptRef: "coder", Description: "coder agent", Skills: []string{"architect"}},
 			wantErr: "unknown skill",
 		},
 	}
@@ -828,7 +831,7 @@ func TestDeleteBackendRejectedWhenAgentReferences(t *testing.T) {
 	if err := store.UpsertAgent(db, fleet.Agent{
 		Name:        "coder",
 		Backend:     "claude",
-		Prompt:      "p",
+		PromptRef:   "coder",
 		Description: "coder agent",
 		Skills:      []string{},
 	}); err != nil {
@@ -863,7 +866,7 @@ func TestDeleteSkillRejectedWhenAgentReferences(t *testing.T) {
 	if err := store.UpsertAgent(db, fleet.Agent{
 		Name:        "coder",
 		Backend:     "claude",
-		Prompt:      "p",
+		PromptRef:   "coder",
 		Description: "coder agent",
 		Skills:      []string{"architect"},
 	}); err != nil {
@@ -896,7 +899,7 @@ func TestDeleteAgentRejectedWhenBindingReferences(t *testing.T) {
 	seedBackend(t, db, "claude")
 	for _, name := range []string{"coder", "reviewer"} {
 		if err := store.UpsertAgent(db, fleet.Agent{
-			Name: name, Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
+			Name: name, Backend: "claude", PromptRef: "coder", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 		}); err != nil {
 			t.Fatalf("UpsertAgent %s: %v", name, err)
 		}
@@ -942,7 +945,7 @@ func TestDeleteAgentCascadeRemovesBindings(t *testing.T) {
 	seedBackend(t, db, "claude")
 	for _, name := range []string{"coder", "reviewer"} {
 		if err := store.UpsertAgent(db, fleet.Agent{
-			Name: name, Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
+			Name: name, Backend: "claude", PromptRef: "coder", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 		}); err != nil {
 			t.Fatalf("UpsertAgent %s: %v", name, err)
 		}
@@ -995,7 +998,7 @@ func TestDeleteAgentCascadeStillRejectsLastAgent(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "coder", Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
+		Name: "coder", Backend: "claude", PromptRef: "coder", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -1015,13 +1018,13 @@ func TestDeleteAgentCascadeStillRejectsWhenInCanDispatch(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "target", Backend: "claude", Prompt: "p", Description: "a dispatchable target",
+		Name: "target", Backend: "claude", PromptRef: "coder", Description: "a dispatchable target",
 		AllowDispatch: true, Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent target: %v", err)
 	}
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "dispatcher", Backend: "claude", Prompt: "p",
+		Name: "dispatcher", Backend: "claude", PromptRef: "coder",
 		Description: "test agent",
 		Skills:      []string{}, CanDispatch: []string{"target"},
 	}); err != nil {
@@ -1046,7 +1049,7 @@ func TestDeleteAgentRejectedWhenDispatchListReferences(t *testing.T) {
 	if err := store.UpsertAgent(db, fleet.Agent{
 		Name:          "target",
 		Backend:       "claude",
-		Prompt:        "p",
+		PromptRef:     "coder",
 		Description:   "a dispatchable target",
 		AllowDispatch: true,
 		Skills:        []string{},
@@ -1057,7 +1060,7 @@ func TestDeleteAgentRejectedWhenDispatchListReferences(t *testing.T) {
 	if err := store.UpsertAgent(db, fleet.Agent{
 		Name:        "dispatcher",
 		Backend:     "claude",
-		Prompt:      "p",
+		PromptRef:   "coder",
 		Description: "dispatches work",
 		Skills:      []string{},
 		CanDispatch: []string{"target"},
@@ -1126,7 +1129,7 @@ func TestUpsertSkillRejectedWithEmptyPrompt(t *testing.T) {
 	}
 }
 
-func TestUpsertAgentRejectedWithEmptyPrompt(t *testing.T) {
+func TestUpsertAgentRejectedWithoutPromptRef(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
 
@@ -1134,13 +1137,12 @@ func TestUpsertAgentRejectedWithEmptyPrompt(t *testing.T) {
 	err := store.UpsertAgent(db, fleet.Agent{
 		Name:    "coder",
 		Backend: "claude",
-		Prompt:  "",
 		Skills:  []string{},
 	})
 	if err == nil {
-		t.Fatal("UpsertAgent with empty prompt: want error, got nil")
+		t.Fatal("UpsertAgent without prompt reference: want error, got nil")
 	}
-	if !strings.Contains(err.Error(), "prompt is empty") {
+	if !strings.Contains(err.Error(), "prompt_id or prompt_ref is required") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -1151,7 +1153,7 @@ func TestUpsertRepoRejectedWithNoTrigger(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "coder", Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
+		Name: "coder", Backend: "claude", PromptRef: "coder", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -1175,7 +1177,7 @@ func TestUpsertRepoRejectedWithMixedTriggers(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "coder", Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
+		Name: "coder", Backend: "claude", PromptRef: "coder", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -1203,7 +1205,7 @@ func TestDeleteAgentRejectedAsLast(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "coder", Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
+		Name: "coder", Backend: "claude", PromptRef: "coder", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -1264,7 +1266,7 @@ func TestDeleteRepoAllowsLastEnabled(t *testing.T) {
 
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "coder", Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
+		Name: "coder", Backend: "claude", PromptRef: "coder", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent: %v", err)
 	}
@@ -1357,7 +1359,7 @@ func TestUpsertNormalizesNames(t *testing.T) {
 	if err := store.UpsertAgent(db, fleet.Agent{
 		Name:        "Coder",
 		Backend:     "Claude",
-		Prompt:      "p",
+		PromptRef:   "coder",
 		Description: "coder agent",
 		Skills:      []string{"Architect"},
 		CanDispatch: []string{},
@@ -1477,7 +1479,7 @@ func seedRepoWithAgent(t *testing.T, db *sql.DB) {
 	t.Helper()
 	seedBackend(t, db, "claude")
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: "coder", Backend: "claude", Prompt: "p", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
+		Name: "coder", Backend: "claude", PromptRef: "coder", Description: "test agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("UpsertAgent coder: %v", err)
 	}

@@ -204,7 +204,7 @@ func TestStoreCRUDAgentCreateRejectsInlinePrompt(t *testing.T) {
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("POST /agents inline prompt: got %d, want 400, %s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), "prompt bodies are import-only") {
+	if !strings.Contains(rr.Body.String(), "inline prompt bodies are unsupported") {
 		t.Fatalf("error body = %q, want inline prompt rejection", rr.Body.String())
 	}
 }
@@ -2346,10 +2346,13 @@ func TestStoreImportRoundTrip(t *testing.T) {
 	yaml := `agents:
   - name: imported-agent
     backend: claude
-    prompt: imported prompt
+    prompt_ref: imported-agent
     description: imported agent
     skills: []
     can_dispatch: []
+prompts:
+  - name: imported-agent
+    content: imported prompt
 skills:
   imported-skill:
     prompt: imported skill prompt
@@ -2408,10 +2411,13 @@ backends:
 agents:
   - name: new-agent
     backend: claude
-    prompt: fresh
+    prompt_ref: new-agent
     description: new agent
     skills: []
     can_dispatch: []
+prompts:
+  - name: new-agent
+    content: fresh
 repos:
   - name: owner/new-repo
     enabled: true
@@ -2550,9 +2556,13 @@ backends:
 agents:
   - name: scout
     backend: claude
-    prompt: p
+    prompt_ref: scout
+    description: scout agent
     skills: []
     can_dispatch: []
+prompts:
+  - name: scout
+    content: p
 repos:
   - name: owner/existing-repo
     enabled: true
@@ -2601,9 +2611,13 @@ backends:
 agents:
   - name: scout
     backend: claude
-    prompt: p
+    prompt_ref: scout
+    description: scout agent
     skills: []
     can_dispatch: []
+prompts:
+  - name: scout
+    content: p
 repos:
   - name: owner/new-repo
     enabled: true
@@ -2707,7 +2721,7 @@ func TestStoreCRUDAgentPatchRejectsInlinePrompt(t *testing.T) {
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("PATCH /agents/coder inline prompt: got %d, want 400, %s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), "prompt bodies are import-only") {
+	if !strings.Contains(rr.Body.String(), "inline prompt bodies are unsupported") {
 		t.Fatalf("error body = %q, want inline prompt rejection", rr.Body.String())
 	}
 }

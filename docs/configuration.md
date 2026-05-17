@@ -133,9 +133,9 @@ agents for that repo. Agents persist stable `prompt_id` references. Human-facing
 config may use `prompt_ref` plus optional `prompt_scope`, where scope is a
 case-insensitive path: `global`, `workspace`, or `workspace/owner/repo`
 (for example `default/eloylp/agents`). The daemon resolves that selector to the
-stable `prompt_id`. Legacy imports may still provide inline agent `prompt` text,
-which the store migrates into a prompt catalog entry, but exports prefer
-references and do not emit inline agent prompt bodies.
+stable `prompt_id`. Inline `agents[].prompt` bodies are unsupported; define
+prompt content under `prompts:` or with prompt catalog CRUD, then reference the
+prompt catalog entry from the agent.
 
 ## `skills`
 

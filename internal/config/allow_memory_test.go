@@ -35,7 +35,7 @@ func TestLoadAllowMemoryFalseRoundTrips(t *testing.T) {
 	yaml := agentConfigYAML(`  - name: reviewer
     backend: claude
     skills: [architect]
-    prompt: "You review PRs."
+    prompt_ref: reviewer
     description: "Reviews pull requests"
     allow_memory: false`)
 	path := writeConfig(t, yaml)
@@ -85,7 +85,7 @@ func TestLoadAllowMemoryTrueExplicitlyHonoured(t *testing.T) {
 	yaml := agentConfigYAML(`  - name: reviewer
     backend: claude
     skills: [architect]
-    prompt: "You review PRs."
+    prompt_ref: reviewer
     description: "Reviews pull requests"
     allow_memory: true`)
 	path := writeConfig(t, yaml)
@@ -111,7 +111,7 @@ func TestLoadAllowMemoryRejectsNonBoolean(t *testing.T) {
 	yaml := agentConfigYAML(`  - name: reviewer
     backend: claude
     skills: [architect]
-    prompt: "You review PRs."
+    prompt_ref: reviewer
     allow_memory: maybe`)
 	path := writeConfig(t, yaml)
 	if _, err := Load(path); err == nil {

@@ -131,7 +131,7 @@ func TestToolGetAgentSurfacesAllowMemory(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
 	ff := false
-	if err := deps.Store.UpsertAgent(fleet.Agent{Name: "stateless", Backend: "claude", Prompt: "p", Description: "stateless agent", AllowMemory: &ff}); err != nil {
+	if err := deps.Store.UpsertAgent(fleet.Agent{Name: "stateless", Backend: "claude", PromptRef: "coder", Description: "stateless agent", AllowMemory: &ff}); err != nil {
 		t.Fatalf("seed stateless: %v", err)
 	}
 

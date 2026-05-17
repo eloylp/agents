@@ -56,7 +56,7 @@ func benchSeed(b *testing.B, fs fixtureSize) string {
 	for i := range fs.agents {
 		name := "agent-" + strconv.Itoa(i)
 		agents = append(agents, fleet.Agent{
-			Name: name, Backend: primaryBackend, Prompt: "do work " + strconv.Itoa(i),
+			Name: name, Backend: primaryBackend, PromptRef: "coder",
 			Description: "agent number " + strconv.Itoa(i),
 		})
 	}

@@ -39,7 +39,7 @@ Dispatch wiring is always editable: drag from one agent to another to add a conn
 
 ### Agents
 
-Fleet snapshot with per-agent status, skills, bindings, dispatch wiring. Create, edit, and delete agents from this page. Long-form fields like the agent prompt show an **⛶ Expand** affordance that pops the editor into a fullscreen modal, same `value` flows back into the form on close.
+Fleet snapshot with per-agent status, prompt reference, skills, bindings, dispatch wiring. Create, edit, and delete agents from this page; prompt content is managed through the prompt catalog and selected on agents by reference.
 
 <!-- The Fleet page (above) is the agents page: same surface, same capture. -->
 ![Fleet / Agents page](img/fleet.png)

@@ -53,12 +53,18 @@ func New(t *testing.T, cfg *config.Config) *daemon.Daemon {
 			backend = name
 			break
 		}
-		agents = []fleet.Agent{{Name: "coder", Backend: backend, Prompt: "code", Description: "Writes code"}}
+		agents = []fleet.Agent{{Name: "coder", Backend: backend, PromptRef: "coder", Description: "Writes code"}}
 		cfg.Agents = agents
 	}
 	for i := range agents {
 		if agents[i].Description == "" {
 			agents[i].Description = agents[i].Name + " agent"
+		}
+		if agents[i].PromptRef == "" && agents[i].PromptID == "" {
+			agents[i].PromptRef = agents[i].Name
+		}
+		if _, err := st.UpsertPrompt(fleet.Prompt{Name: agents[i].PromptRef, Content: "test prompt"}); err != nil {
+			t.Fatalf("seed prompt %s: %v", agents[i].PromptRef, err)
 		}
 	}
 
@@ -92,9 +98,9 @@ func MinimalCfg(mutator func(*config.Config)) *config.Config {
 				EventQueueBuffer:    16,
 				MaxConcurrentAgents: 1,
 				Dispatch: config.DispatchConfig{
-					MaxDepth:            2,
-					MaxFanout:           2,
-					DedupWindowSeconds:  60,
+					MaxDepth:           2,
+					MaxFanout:          2,
+					DedupWindowSeconds: 60,
 				},
 			},
 			AIBackends: map[string]fleet.Backend{

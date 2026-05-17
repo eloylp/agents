@@ -24,14 +24,14 @@ func TestHandleAPIAgentsReturnsConfiguredAgents(t *testing.T) {
 			{
 				Name:          "sec-reviewer",
 				Backend:       "claude",
-				Prompt:        "security review",
+				PromptRef:     "coder",
 				Description:   "Reviews PRs for security issues.",
 				AllowDispatch: true,
 			},
 			{
 				Name:          "reviewer",
 				Backend:       "claude",
-				Prompt:        "review PRs",
+				PromptRef:     "coder",
 				Skills:        []string{"testing"},
 				Description:   "Reviews PRs",
 				AllowDispatch: true,
@@ -86,7 +86,7 @@ func TestHandleAPIAgentsReturnsConfiguredAgents(t *testing.T) {
 func TestHandleAPIAgentsAttachesScheduleForCronBindings(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) {
-		c.Agents = []fleet.Agent{{Name: "worker", Backend: "claude", Prompt: "p"}}
+		c.Agents = []fleet.Agent{{Name: "worker", Backend: "claude", PromptRef: "coder"}}
 		c.Repos = []fleet.Repo{
 			{
 				Name:    "owner/repo",
@@ -133,7 +133,7 @@ func TestHandleAPIAgentsAttachesScheduleForCronBindings(t *testing.T) {
 func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) {
-		c.Agents = []fleet.Agent{{Name: "worker", Backend: "claude", Prompt: "p"}}
+		c.Agents = []fleet.Agent{{Name: "worker", Backend: "claude", PromptRef: "coder"}}
 		c.Repos = []fleet.Repo{
 			{
 				Name:    "owner/repo-a",
@@ -213,7 +213,7 @@ func TestHandleAPIAgentsMultiRepoSchedulePreserved(t *testing.T) {
 func TestHandleAPIAgentsIncludesDisabledRepoBindings(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) {
-		c.Agents = []fleet.Agent{{Name: "worker", Backend: "claude", Prompt: "p"}}
+		c.Agents = []fleet.Agent{{Name: "worker", Backend: "claude", PromptRef: "coder"}}
 		c.Repos = []fleet.Repo{
 			{
 				Name:    "owner/active-repo",
@@ -317,7 +317,7 @@ func TestHandleAPIAgentsCurrentStatusIdleWhenNotRunning(t *testing.T) {
 func TestHandleAPIAgentsCurrentStatusRunningWhenActive(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) {
-		c.Agents = []fleet.Agent{{Name: "coder", Backend: "claude", Prompt: "p"}}
+		c.Agents = []fleet.Agent{{Name: "coder", Backend: "claude", PromptRef: "coder"}}
 	})
 	srv, _ := newTestServer(t, cfg)
 	// Mark "coder" as running through the same hook the engine uses on a
@@ -477,7 +477,7 @@ func TestHandleAPIConfigContentType(t *testing.T) {
 func TestHandleAPIConfigRepoBindingDefaultEnabled(t *testing.T) {
 	t.Parallel()
 	cfg := testCfg(func(c *config.Config) {
-		c.Agents = []fleet.Agent{{Name: "worker", Backend: "claude", Prompt: "p"}}
+		c.Agents = []fleet.Agent{{Name: "worker", Backend: "claude", PromptRef: "coder"}}
 		c.Repos = []fleet.Repo{
 			{
 				Name:    "owner/repo",

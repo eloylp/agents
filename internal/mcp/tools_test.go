@@ -61,11 +61,16 @@ func testDB(t *testing.T) *sql.DB {
 		t.Fatalf("open test db: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
+	for _, p := range []fleet.Prompt{{Name: "coder", Content: "code"}, {Name: "reviewer", Content: "review"}, {Name: "team-reviewer", Content: "review"}, {Name: "team-coder", Content: "code"}} {
+		if _, err := store.UpsertPrompt(db, p); err != nil {
+			t.Fatalf("seed prompt %s: %v", p.Name, err)
+		}
+	}
 	if err := store.ImportAll(
 		db,
 		[]fleet.Agent{
-			{Name: "coder", Backend: "claude", Skills: []string{"testing"}, Prompt: "code", Description: "writes code", AllowDispatch: true, CanDispatch: []string{}},
-			{Name: "reviewer", Backend: "claude", Prompt: "review", AllowDispatch: true, Description: "reviews code", Skills: []string{}, CanDispatch: []string{}},
+			{Name: "coder", Backend: "claude", Skills: []string{"testing"}, PromptRef: "coder", Description: "writes code", AllowDispatch: true, CanDispatch: []string{}},
+			{Name: "reviewer", Backend: "claude", PromptRef: "reviewer", AllowDispatch: true, Description: "reviews code", Skills: []string{}, CanDispatch: []string{}},
 		},
 		[]fleet.Repo{
 			{Name: "owner/one", Enabled: true, Use: []fleet.Binding{
@@ -1205,7 +1210,7 @@ func TestToolGetGraphFiltersWorkspace(t *testing.T) {
 		WorkspaceID:   "team-a",
 		Name:          "team-reviewer",
 		Backend:       "claude",
-		Prompt:        "review",
+		PromptRef:     "team-reviewer",
 		Description:   "reviews team code",
 		AllowDispatch: true,
 		CanDispatch:   []string{},
@@ -1218,7 +1223,7 @@ func TestToolGetGraphFiltersWorkspace(t *testing.T) {
 		WorkspaceID:   "team-a",
 		Name:          "team-coder",
 		Backend:       "claude",
-		Prompt:        "code",
+		PromptRef:     "team-coder",
 		Description:   "writes team code",
 		AllowDispatch: true,
 		CanDispatch:   []string{"team-reviewer"},
@@ -1656,7 +1661,7 @@ func TestToolCreateAgentRejectsInlinePrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !res.IsError || !strings.Contains(textOf(t, res), "prompt bodies are import-only") {
+	if !res.IsError || !strings.Contains(textOf(t, res), "inline prompt bodies are unsupported") {
 		t.Fatalf("expected inline prompt rejection, got error=%v body=%s", res.IsError, textOf(t, res))
 	}
 }
@@ -2788,7 +2793,7 @@ func TestToolUpdateAgentRejectsInlinePrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !res.IsError || !strings.Contains(textOf(t, res), "prompt bodies are import-only") {
+	if !res.IsError || !strings.Contains(textOf(t, res), "inline prompt bodies are unsupported") {
 		t.Fatalf("expected inline prompt rejection, got error=%v body=%s", res.IsError, textOf(t, res))
 	}
 }

@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -42,11 +43,36 @@ func seedStoreFromCfg(t *testing.T, cfg *config.Config) *store.Store {
 		if cfg.Agents[i].Description == "" {
 			cfg.Agents[i].Description = cfg.Agents[i].Name + " agent"
 		}
+		if cfg.Agents[i].PromptRef == "" && cfg.Agents[i].PromptID == "" {
+			cfg.Agents[i].PromptRef = cfg.Agents[i].Name
+		}
+		if !testConfigHasPrompt(cfg, cfg.Agents[i].PromptRef) {
+			cfg.Prompts = append(cfg.Prompts, fleet.Prompt{Name: cfg.Agents[i].PromptRef, Content: "test prompt"})
+		}
+	}
+	for i, p := range cfg.Prompts {
+		if p.ID == "" {
+			p.ID = fmt.Sprintf("prompt_test_%d", i)
+		}
+		canonical, err := st.UpsertPrompt(p)
+		if err != nil {
+			t.Fatalf("seed prompt %s: %v", p.Name, err)
+		}
+		cfg.Prompts[i] = canonical
 	}
 	if err := st.ImportAll(cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, cfg.Guardrails, nil); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	return st
+}
+
+func testConfigHasPrompt(cfg *config.Config, name string) bool {
+	for _, p := range cfg.Prompts {
+		if p.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // newEngineFromCfg builds an Engine that reads from a tempdir SQLite

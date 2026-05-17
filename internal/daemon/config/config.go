@@ -404,7 +404,6 @@ func (h *Handler) ExportYAML() ([]byte, error) {
 	for _, a := range cfg.Agents {
 		idx := ensureWorkspace(a.WorkspaceID)
 		a.WorkspaceID = ""
-		a.Prompt = ""
 		a.PromptID = ""
 		workspaces[idx].Agents = append(workspaces[idx].Agents, a)
 	}

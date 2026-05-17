@@ -33,11 +33,15 @@ skills:
   architect:
     prompt: "Focus on architecture."
 
+prompts:
+  - name: reviewer
+    content: "You review PRs."
+
 agents:
   - name: reviewer
     backend: claude
     skills: [architect]
-    prompt: "You review PRs."
+    prompt_ref: reviewer
     description: "Reviews pull requests"
 ` + repoBlock
 }
@@ -66,8 +70,8 @@ func TestLoadMinimalConfig(t *testing.T) {
 	if len(cfg.Agents) != 1 || cfg.Agents[0].Name != "reviewer" {
 		t.Errorf("agents: got %+v", cfg.Agents)
 	}
-	if cfg.Agents[0].Prompt != "You review PRs." {
-		t.Errorf("agent prompt not preserved: got %q", cfg.Agents[0].Prompt)
+	if cfg.Agents[0].PromptRef != "reviewer" {
+		t.Errorf("agent prompt ref not preserved: got %q", cfg.Agents[0].PromptRef)
 	}
 }
 
@@ -201,6 +205,14 @@ backends:
 skills:
   architect: {prompt: "Focus on architecture."}
 
+prompts:
+  - name: reviewer
+    content: "You review PRs."
+  - name: coder
+    content: "Write code."
+  - name: pr-reviewer
+    content: "Review PRs."
+
 agents:
 ` + agentsBlock + `
 
@@ -225,7 +237,7 @@ func TestLoadRejectsInvalidAgentConfig(t *testing.T) {
 			agents: `  - name: reviewer
     backend: claude
     skills: [nosuch]
-    prompt: "You review PRs."`,
+    prompt_ref: reviewer`,
 			wantErrMsg: "unknown skill",
 		},
 		{
@@ -233,7 +245,7 @@ func TestLoadRejectsInvalidAgentConfig(t *testing.T) {
 			agents: `  - name: reviewer
     backend: codex
     skills: [architect]
-    prompt: "You review PRs."`,
+    prompt_ref: reviewer`,
 			wantErrMsg: "unknown backend",
 		},
 		{
@@ -241,12 +253,12 @@ func TestLoadRejectsInvalidAgentConfig(t *testing.T) {
 			agents: `  - name: reviewer
     backend: claude
     skills: [architect]
-    prompt: "A"
+    prompt_ref: reviewer
     description: "First reviewer"
   - name: reviewer
     backend: claude
     skills: [architect]
-    prompt: "B"
+    prompt_ref: reviewer
     description: "Second reviewer"`,
 			wantErrMsg: "duplicate agent",
 		},
@@ -464,11 +476,14 @@ backends:
 skills:
   architect:
     prompt: "Focus on architecture."
+prompts:
+  - name: reviewer
+    content: "You review PRs."
 agents:
   - name: reviewer
     backend: claude
     skills: [architect]
-    prompt: "You review PRs."
+    prompt_ref: reviewer
 repos:
   - name: "owner/repo"
     enabled: true
@@ -604,6 +619,12 @@ skills:
   architect:
     prompt: "Focus on architecture."
 
+prompts:
+  - name: coder
+    content: "Write code."
+  - name: pr-reviewer
+    content: "Review PRs."
+
 agents:
 %s
 
@@ -629,7 +650,7 @@ func TestDispatchWiringValidationErrors(t *testing.T) {
   - name: coder
     backend: claude
     skills: [architect]
-    prompt: "Write code."
+    prompt_ref: coder
     description: "Writes code"
     can_dispatch: [nonexistent-agent]
 `,
@@ -641,7 +662,7 @@ func TestDispatchWiringValidationErrors(t *testing.T) {
   - name: coder
     backend: claude
     skills: [architect]
-    prompt: "Write code."
+    prompt_ref: coder
     description: "Writes code"
     can_dispatch: [coder]
 `,
@@ -653,13 +674,13 @@ func TestDispatchWiringValidationErrors(t *testing.T) {
   - name: coder
     backend: claude
     skills: [architect]
-    prompt: "Write code."
+    prompt_ref: coder
     description: "Writes code"
     can_dispatch: [pr-reviewer]
   - name: pr-reviewer
     backend: claude
     skills: [architect]
-    prompt: "Review PRs."
+    prompt_ref: pr-reviewer
     allow_dispatch: true
 `,
 			errMsg: `agent "pr-reviewer": description is required`,
@@ -670,13 +691,13 @@ func TestDispatchWiringValidationErrors(t *testing.T) {
   - name: coder
     backend: claude
     skills: [architect]
-    prompt: "Write code."
+    prompt_ref: coder
     description: "Writes code"
     can_dispatch: [pr-reviewer]
   - name: pr-reviewer
     backend: claude
     skills: [architect]
-    prompt: "Review PRs."
+    prompt_ref: pr-reviewer
     description: "Reviews pull requests"
 `,
 			errMsg: `agent "coder": can_dispatch target "pr-reviewer" has allow_dispatch disabled`,
@@ -687,7 +708,7 @@ func TestDispatchWiringValidationErrors(t *testing.T) {
   - name: coder
     backend: claude
     skills: [architect]
-    prompt: "Write code."
+    prompt_ref: coder
 `,
 			errMsg: `agent "coder": description is required`,
 		},
@@ -713,13 +734,13 @@ func TestDispatchValidConfigAccepted(t *testing.T) {
   - name: coder
     backend: claude
     skills: [architect]
-    prompt: "Write code."
+    prompt_ref: coder
     description: "Writes code"
     can_dispatch: [pr-reviewer]
   - name: pr-reviewer
     backend: claude
     skills: [architect]
-    prompt: "Review PRs."
+    prompt_ref: pr-reviewer
     description: "Reviews pull requests for quality and correctness"
     allow_dispatch: true
 `)

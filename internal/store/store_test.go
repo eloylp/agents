@@ -64,12 +64,16 @@ func minimalCfg() *config.Config {
 			"architect": {Prompt: "Focus on architecture."},
 			"testing":   {Prompt: "Focus on testing."},
 		},
+		Prompts: []fleet.Prompt{
+			{Name: "coder", Content: "You write code."},
+			{Name: "pr-reviewer", Content: "You review PRs."},
+		},
 		Agents: []fleet.Agent{
 			{
 				Name:          "coder",
 				Backend:       "claude",
 				Skills:        []string{"architect", "testing"},
-				Prompt:        "You write code.",
+				PromptRef:     "coder",
 				AllowPRs:      true,
 				AllowDispatch: true,
 				CanDispatch:   []string{"pr-reviewer"},
@@ -79,7 +83,7 @@ func minimalCfg() *config.Config {
 				Name:          "pr-reviewer",
 				Backend:       "claude",
 				Skills:        []string{"architect"},
-				Prompt:        "You review PRs.",
+				PromptRef:     "pr-reviewer",
 				AllowPRs:      false,
 				AllowDispatch: true,
 				Description:   "Reviews pull requests",
@@ -106,6 +110,14 @@ func openTestDB(t *testing.T) *sql.DB {
 	db, err := store.Open(path)
 	if err != nil {
 		t.Fatalf("open: %v", err)
+	}
+	for _, p := range []fleet.Prompt{
+		{Name: "coder", Content: "test prompt"},
+		{Name: "pr-reviewer", Content: "test prompt"},
+	} {
+		if _, err := store.UpsertPrompt(db, p); err != nil {
+			t.Fatalf("seed prompt %s: %v", p.Name, err)
+		}
 	}
 	t.Cleanup(func() { db.Close() })
 	return db
@@ -882,9 +894,6 @@ func TestImportLoad(t *testing.T) {
 	} else if prompts[i].Content != "You write code." {
 		t.Errorf("coder prompt content: got %q", prompts[i].Content)
 	}
-	if coder.Prompt != "You write code." {
-		t.Errorf("coder.prompt resolved from prompt catalog: got %q, want %q", coder.Prompt, "You write code.")
-	}
 }
 
 func TestRepoScopedAgentRequiresRepoInSameWorkspace(t *testing.T) {
@@ -955,7 +964,6 @@ func TestAgentPromptRefMustExistWithoutInlinePrompt(t *testing.T) {
 
 	cfg := minimalCfg()
 	cfg.Agents[0].PromptRef = "missing-prompt"
-	cfg.Agents[0].Prompt = ""
 	err := store.ImportAll(db, cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, nil, nil)
 	if err == nil {
 		t.Fatal("ImportAll succeeded, want missing prompt_ref error")
@@ -977,7 +985,6 @@ func TestAgentPromptRefRejectsAmbiguousVisiblePromptName(t *testing.T) {
 	}
 	cfg.Agents[0].WorkspaceID = "team-a"
 	cfg.Agents[0].PromptRef = "shared"
-	cfg.Agents[0].Prompt = ""
 	cfg.Agents[1].WorkspaceID = "team-a"
 	cfg.Repos[0].WorkspaceID = "team-a"
 	err := store.Import(db, cfg)
@@ -1002,7 +1009,6 @@ func TestAgentPromptIDSelectsScopedPromptWithDuplicateNames(t *testing.T) {
 	cfg.Agents[0].WorkspaceID = "team-a"
 	cfg.Agents[0].PromptID = "prompt_team_shared"
 	cfg.Agents[0].PromptRef = ""
-	cfg.Agents[0].Prompt = ""
 	cfg.Agents[1].WorkspaceID = "team-a"
 	cfg.Repos[0].WorkspaceID = "team-a"
 	if err := store.Import(db, cfg); err != nil {
@@ -1016,8 +1022,8 @@ func TestAgentPromptIDSelectsScopedPromptWithDuplicateNames(t *testing.T) {
 	if idx < 0 {
 		t.Fatal("team-a coder agent not found after load")
 	}
-	if out.Agents[idx].Prompt != "team" || out.Agents[idx].PromptRef != "shared" {
-		t.Fatalf("resolved prompt = (%q, %q), want team/shared", out.Agents[idx].Prompt, out.Agents[idx].PromptRef)
+	if out.Agents[idx].PromptRef != "shared" {
+		t.Fatalf("resolved prompt ref = %q, want shared", out.Agents[idx].PromptRef)
 	}
 }
 
@@ -1033,7 +1039,6 @@ func TestAgentPromptIDRejectsInvisibleScopedPrompt(t *testing.T) {
 	cfg.Agents[0].WorkspaceID = fleet.DefaultWorkspaceID
 	cfg.Agents[0].PromptID = "prompt_team_shared"
 	cfg.Agents[0].PromptRef = ""
-	cfg.Agents[0].Prompt = ""
 
 	err := store.Import(db, cfg)
 	if err == nil {
@@ -1054,7 +1059,6 @@ func TestAgentPromptIDRequiresStableIDNotDisplayName(t *testing.T) {
 	}
 	cfg.Agents[0].PromptID = "shared"
 	cfg.Agents[0].PromptRef = ""
-	cfg.Agents[0].Prompt = ""
 
 	err := store.Import(db, cfg)
 	if err == nil {
@@ -1079,7 +1083,6 @@ func TestAgentPromptScopeSelectsScopedPromptWithDuplicateNames(t *testing.T) {
 	cfg.Agents[0].WorkspaceID = "team-a"
 	cfg.Agents[0].PromptRef = "shared"
 	cfg.Agents[0].PromptScope = "TEAM-A/OWNER/REPO"
-	cfg.Agents[0].Prompt = ""
 	cfg.Agents[0].ScopeType = "repo"
 	cfg.Agents[0].ScopeRepo = "owner/repo"
 	cfg.Agents[1].WorkspaceID = "team-a"
@@ -1095,9 +1098,9 @@ func TestAgentPromptScopeSelectsScopedPromptWithDuplicateNames(t *testing.T) {
 	if idx < 0 {
 		t.Fatal("team-a coder agent not found after load")
 	}
-	if out.Agents[idx].Prompt != "repo" || out.Agents[idx].PromptRef != "shared" || out.Agents[idx].PromptScope != "team-a/owner/repo" {
-		t.Fatalf("resolved prompt = (%q, %q, %q), want repo/shared/team-a/owner/repo",
-			out.Agents[idx].Prompt, out.Agents[idx].PromptRef, out.Agents[idx].PromptScope)
+	if out.Agents[idx].PromptRef != "shared" || out.Agents[idx].PromptScope != "team-a/owner/repo" {
+		t.Fatalf("resolved prompt = (%q, %q), want shared/team-a/owner/repo",
+			out.Agents[idx].PromptRef, out.Agents[idx].PromptScope)
 	}
 }
 
@@ -1112,7 +1115,6 @@ func TestAgentPromptScopeRejectsInvisiblePrompt(t *testing.T) {
 		{ID: "prompt_default_other_shared", WorkspaceID: fleet.DefaultWorkspaceID, Repo: "owner/other", Name: "shared", Content: "other repo"},
 	}
 	cfg.Agents[0].PromptRef = "shared"
-	cfg.Agents[0].Prompt = ""
 	cfg.Agents[0].PromptScope = "team-a"
 
 	err := store.Import(db, cfg)
@@ -1129,7 +1131,6 @@ func TestAgentPromptScopeRejectsInvisiblePrompt(t *testing.T) {
 		{ID: "prompt_default_other_shared", WorkspaceID: fleet.DefaultWorkspaceID, Repo: "owner/other", Name: "shared", Content: "other repo"},
 	}
 	cfg.Agents[0].PromptRef = "shared"
-	cfg.Agents[0].Prompt = ""
 	cfg.Agents[0].PromptScope = "default/owner/other"
 	cfg.Agents[0].ScopeType = "repo"
 	cfg.Agents[0].ScopeRepo = "owner/repo"
@@ -1293,7 +1294,6 @@ func TestPromptRefDoesNotOverwritePromptCatalogContent(t *testing.T) {
 		Content: "operator-edited prompt",
 	}}
 	cfg.Agents[0].PromptRef = "shared"
-	cfg.Agents[0].Prompt = "legacy inline prompt"
 	if err := store.Import(db, cfg); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -1305,9 +1305,6 @@ func TestPromptRefDoesNotOverwritePromptCatalogContent(t *testing.T) {
 	idx := slices.IndexFunc(out.Agents, func(a fleet.Agent) bool { return a.Name == "coder" })
 	if idx < 0 {
 		t.Fatal("coder agent not found after load")
-	}
-	if out.Agents[idx].Prompt != "operator-edited prompt" {
-		t.Fatalf("loaded prompt = %q, want catalog content", out.Agents[idx].Prompt)
 	}
 	prompts, err := store.ReadPrompts(db)
 	if err != nil {
@@ -1763,8 +1760,11 @@ func seedAgent(t *testing.T, db *sql.DB, name string) {
 	}); err != nil {
 		t.Fatalf("seedAgent backend: %v", err)
 	}
+	if _, err := store.UpsertPrompt(db, fleet.Prompt{Name: "coder", Content: "test prompt"}); err != nil {
+		t.Fatalf("seedAgent prompt: %v", err)
+	}
 	if err := store.UpsertAgent(db, fleet.Agent{
-		Name: name, Backend: "claude", Prompt: "p", Description: name + " agent", Skills: []string{}, CanDispatch: []string{},
+		Name: name, Backend: "claude", PromptRef: "coder", Description: name + " agent", Skills: []string{}, CanDispatch: []string{},
 	}); err != nil {
 		t.Fatalf("seedAgent %s: %v", name, err)
 	}

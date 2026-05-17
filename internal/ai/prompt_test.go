@@ -10,9 +10,9 @@ import (
 
 // renderSystem is a test helper that returns the System part of a rendered
 // prompt or fails the test if rendering fails.
-func renderSystem(t *testing.T, agent fleet.Agent, skills map[string]fleet.Skill, ctx ai.PromptContext) string {
+func renderSystem(t *testing.T, agent fleet.Agent, promptBody string, skills map[string]fleet.Skill, ctx ai.PromptContext) string {
 	t.Helper()
-	got, err := ai.RenderAgentPrompt(agent, skills, nil, ctx)
+	got, err := ai.RenderAgentPrompt(agent, promptBody, skills, nil, ctx)
 	if err != nil {
 		t.Fatalf("RenderAgentPrompt: %v", err)
 	}
@@ -21,9 +21,9 @@ func renderSystem(t *testing.T, agent fleet.Agent, skills map[string]fleet.Skill
 
 // renderUser is a test helper that returns the User part of a rendered prompt
 // or fails the test if rendering fails.
-func renderUser(t *testing.T, agent fleet.Agent, skills map[string]fleet.Skill, ctx ai.PromptContext) string {
+func renderUser(t *testing.T, agent fleet.Agent, promptBody string, skills map[string]fleet.Skill, ctx ai.PromptContext) string {
 	t.Helper()
-	got, err := ai.RenderAgentPrompt(agent, skills, nil, ctx)
+	got, err := ai.RenderAgentPrompt(agent, promptBody, skills, nil, ctx)
 	if err != nil {
 		t.Fatalf("RenderAgentPrompt: %v", err)
 	}
@@ -39,10 +39,9 @@ func TestRenderAgentPromptSkillsAndPromptInSystem(t *testing.T) {
 	agent := fleet.Agent{
 		Name:   "reviewer",
 		Skills: []string{"architect", "testing"},
-		Prompt: "You review PRs.",
 	}
 
-	got, err := ai.RenderAgentPrompt(agent, skills, nil, ai.PromptContext{Repo: "owner/repo", Number: 42})
+	got, err := ai.RenderAgentPrompt(agent, "You review PRs.", skills, nil, ai.PromptContext{Repo: "owner/repo", Number: 42})
 	if err != nil {
 		t.Fatalf("RenderAgentPrompt: %v", err)
 	}
@@ -79,8 +78,8 @@ func TestRenderAgentPromptSystemAndUserAreSeparate(t *testing.T) {
 	skills := map[string]fleet.Skill{
 		"sec": {Prompt: "Check security."},
 	}
-	agent := fleet.Agent{Name: "sec-reviewer", Skills: []string{"sec"}, Prompt: "Audit the code."}
-	got, err := ai.RenderAgentPrompt(agent, skills, nil, ai.PromptContext{
+	agent := fleet.Agent{Name: "sec-reviewer", Skills: []string{"sec"}}
+	got, err := ai.RenderAgentPrompt(agent, "Audit the code.", skills, nil, ai.PromptContext{
 		Repo: "owner/repo", Number: 7, EventKind: "issues.labeled", Actor: "bot",
 	})
 	if err != nil {
@@ -108,13 +107,12 @@ func TestRenderAgentPromptSystemAndUserAreSeparate(t *testing.T) {
 func TestRenderAgentPromptWithMemory(t *testing.T) {
 	t.Parallel()
 	agent := fleet.Agent{
-		Name:   "autonomous",
-		Prompt: "Do your job.",
+		Name: "autonomous",
 	}
-	usr := renderUser(t, agent, nil, ai.PromptContext{
-		Repo:         "owner/repo",
+	usr := renderUser(t, agent, "Do your job.", nil, ai.PromptContext{
+		Repo:      "owner/repo",
 		HasMemory: true,
-		Memory:       "Last run: fixed #42",
+		Memory:    "Last run: fixed #42",
 	})
 	if strings.Contains(usr, "Memory file:") {
 		t.Errorf("memory path should not appear in User:\n%s", usr)
@@ -126,9 +124,9 @@ func TestRenderAgentPromptWithMemory(t *testing.T) {
 
 func TestRenderAgentPromptEmptyMemoryFormattedExplicitly(t *testing.T) {
 	t.Parallel()
-	agent := fleet.Agent{Prompt: "Go."}
-	usr := renderUser(t, agent, nil, ai.PromptContext{
-		Repo:         "owner/repo",
+	agent := fleet.Agent{}
+	usr := renderUser(t, agent, "Go.", nil, ai.PromptContext{
+		Repo:      "owner/repo",
 		HasMemory: true,
 	})
 	if !strings.Contains(usr, "Existing memory: (empty)") {
@@ -138,8 +136,8 @@ func TestRenderAgentPromptEmptyMemoryFormattedExplicitly(t *testing.T) {
 
 func TestRenderAgentPromptMemoryOmittedForEventDrivenRuns(t *testing.T) {
 	t.Parallel()
-	agent := fleet.Agent{Prompt: "Review this PR."}
-	usr := renderUser(t, agent, nil, ai.PromptContext{
+	agent := fleet.Agent{}
+	usr := renderUser(t, agent, "Review this PR.", nil, ai.PromptContext{
 		Repo:   "owner/repo",
 		Number: 42,
 		// HasMemory is false, event-driven run, no memory section expected.
@@ -155,9 +153,8 @@ func TestRenderAgentPromptUnknownSkillErrors(t *testing.T) {
 	agent := fleet.Agent{
 		Name:   "bad",
 		Skills: []string{"missing"},
-		Prompt: "hi",
 	}
-	_, err := ai.RenderAgentPrompt(agent, map[string]fleet.Skill{}, nil, ai.PromptContext{})
+	_, err := ai.RenderAgentPrompt(agent, "hi", map[string]fleet.Skill{}, nil, ai.PromptContext{})
 	if err == nil || !strings.Contains(err.Error(), "unknown skill") {
 		t.Fatalf("expected unknown-skill error, got %v", err)
 	}
@@ -165,8 +162,8 @@ func TestRenderAgentPromptUnknownSkillErrors(t *testing.T) {
 
 func TestRenderAgentPromptOmitsUserWhenContextEmpty(t *testing.T) {
 	t.Parallel()
-	agent := fleet.Agent{Prompt: "Do X."}
-	got, err := ai.RenderAgentPrompt(agent, nil, nil, ai.PromptContext{})
+	agent := fleet.Agent{}
+	got, err := ai.RenderAgentPrompt(agent, "Do X.", nil, nil, ai.PromptContext{})
 	if err != nil {
 		t.Fatalf("RenderAgentPrompt: %v", err)
 	}
@@ -180,8 +177,8 @@ func TestRenderAgentPromptOmitsUserWhenContextEmpty(t *testing.T) {
 
 func TestRenderAgentPromptIncludesEventContextInUser(t *testing.T) {
 	t.Parallel()
-	agent := fleet.Agent{Prompt: "React to comments."}
-	usr := renderUser(t, agent, nil, ai.PromptContext{
+	agent := fleet.Agent{}
+	usr := renderUser(t, agent, "React to comments.", nil, ai.PromptContext{
 		Repo:      "owner/repo",
 		Number:    3,
 		EventKind: "issue_comment.created",
@@ -201,9 +198,9 @@ func TestRenderAgentPromptIncludesEventContextInUser(t *testing.T) {
 
 func TestRenderAgentPromptMultilinePayloadBodyIsIndented(t *testing.T) {
 	t.Parallel()
-	agent := fleet.Agent{Prompt: "React to comments."}
+	agent := fleet.Agent{}
 	body := "first line\nsecond line\nthird line"
-	usr := renderUser(t, agent, nil, ai.PromptContext{
+	usr := renderUser(t, agent, "React to comments.", nil, ai.PromptContext{
 		Repo:      "owner/repo",
 		Number:    7,
 		EventKind: "issue_comment.created",
@@ -221,7 +218,7 @@ func TestRenderAgentPromptMultilinePayloadBodyIsIndented(t *testing.T) {
 
 func TestRenderAgentPromptRosterInSystem(t *testing.T) {
 	t.Parallel()
-	agent := fleet.Agent{Prompt: "Do work.", AllowPRs: true}
+	agent := fleet.Agent{AllowPRs: true}
 	ctx := ai.PromptContext{
 		Repo: "owner/repo",
 		Roster: []ai.RosterEntry{
@@ -230,7 +227,7 @@ func TestRenderAgentPromptRosterInSystem(t *testing.T) {
 			{Name: "sec-reviewer", Description: "Reviews security", Skills: []string{"security"}, AllowDispatch: true},
 		},
 	}
-	got, err := ai.RenderAgentPrompt(agent, nil, nil, ctx)
+	got, err := ai.RenderAgentPrompt(agent, "Do work.", nil, nil, ctx)
 	if err != nil {
 		t.Fatalf("RenderAgentPrompt: %v", err)
 	}
@@ -258,14 +255,14 @@ func TestRenderAgentPromptRosterInSystem(t *testing.T) {
 
 func TestRenderAgentPromptRosterAppendsAfterAgentPrompt(t *testing.T) {
 	t.Parallel()
-	agent := fleet.Agent{Name: "coder", Prompt: "Write code.", AllowPRs: true}
+	agent := fleet.Agent{Name: "coder", AllowPRs: true}
 	ctx := ai.PromptContext{
 		Repo: "owner/repo",
 		Roster: []ai.RosterEntry{
 			{Name: "pr-reviewer", Description: "Reviews PRs"},
 		},
 	}
-	sys := renderSystem(t, agent, nil, ctx)
+	sys := renderSystem(t, agent, "Write code.", nil, ctx)
 	promptIdx := strings.Index(sys, "Write code.")
 	rosterIdx := strings.Index(sys, "## Available experts")
 	if promptIdx < 0 || rosterIdx < 0 {
@@ -278,8 +275,8 @@ func TestRenderAgentPromptRosterAppendsAfterAgentPrompt(t *testing.T) {
 
 func TestRenderAgentPromptRosterOmittedWhenEmpty(t *testing.T) {
 	t.Parallel()
-	agent := fleet.Agent{Prompt: "Do X.", AllowPRs: true}
-	got, err := ai.RenderAgentPrompt(agent, nil, nil, ai.PromptContext{Repo: "owner/repo"})
+	agent := fleet.Agent{AllowPRs: true}
+	got, err := ai.RenderAgentPrompt(agent, "Do X.", nil, nil, ai.PromptContext{Repo: "owner/repo"})
 	if err != nil {
 		t.Fatalf("RenderAgentPrompt: %v", err)
 	}
@@ -305,8 +302,8 @@ func TestRenderAgentPromptNoPRGuardInSystem(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			agent := fleet.Agent{Name: "reviewer", Prompt: "Review.", AllowPRs: tc.allowPRs}
-			got, err := ai.RenderAgentPrompt(agent, nil, nil, ai.PromptContext{Repo: "owner/repo"})
+			agent := fleet.Agent{Name: "reviewer", AllowPRs: tc.allowPRs}
+			got, err := ai.RenderAgentPrompt(agent, "Review.", nil, nil, ai.PromptContext{Repo: "owner/repo"})
 			if err != nil {
 				t.Fatalf("RenderAgentPrompt: %v", err)
 			}
@@ -335,7 +332,6 @@ func TestRenderAgentPromptSystemSectionOrdering(t *testing.T) {
 	agent := fleet.Agent{
 		Name:     "reviewer",
 		Skills:   []string{"testing"},
-		Prompt:   "You review PRs.",
 		AllowPRs: false,
 	}
 	ctx := ai.PromptContext{
@@ -344,7 +340,7 @@ func TestRenderAgentPromptSystemSectionOrdering(t *testing.T) {
 			{Name: "pr-reviewer", Description: "Reviews PRs", AllowDispatch: true},
 		},
 	}
-	sys := renderSystem(t, agent, skills, ctx)
+	sys := renderSystem(t, agent, "You review PRs.", skills, ctx)
 
 	guardIdx := strings.Index(sys, "Do not open or create pull requests")
 	skillsIdx := strings.Index(sys, "Focus on tests.")
@@ -366,11 +362,11 @@ func TestRenderAgentPromptSystemSectionOrdering(t *testing.T) {
 
 func TestRenderAgentPromptGuardrailsPrependedToSystem(t *testing.T) {
 	t.Parallel()
-	agent := fleet.Agent{Name: "coder", Prompt: "You implement features.", AllowPRs: true}
+	agent := fleet.Agent{Name: "coder", AllowPRs: true}
 	guardrails := []fleet.Guardrail{
 		{Name: "security", Content: "Do not read secrets.", Enabled: true, Position: 0},
 	}
-	got, err := ai.RenderAgentPrompt(agent, nil, guardrails, ai.PromptContext{Repo: "owner/repo"})
+	got, err := ai.RenderAgentPrompt(agent, "You implement features.", nil, guardrails, ai.PromptContext{Repo: "owner/repo"})
 	if err != nil {
 		t.Fatalf("RenderAgentPrompt: %v", err)
 	}
@@ -384,12 +380,12 @@ func TestRenderAgentPromptGuardrailsPrependedToSystem(t *testing.T) {
 
 func TestRenderAgentPromptMultipleGuardrailsConcatenatedInOrder(t *testing.T) {
 	t.Parallel()
-	agent := fleet.Agent{Name: "coder", Prompt: "Body.", AllowPRs: true}
+	agent := fleet.Agent{Name: "coder", AllowPRs: true}
 	guardrails := []fleet.Guardrail{
 		{Name: "security", Content: "FIRST_GUARDRAIL", Enabled: true, Position: 0},
 		{Name: "code-style", Content: "SECOND_GUARDRAIL", Enabled: true, Position: 50},
 	}
-	got, err := ai.RenderAgentPrompt(agent, nil, guardrails, ai.PromptContext{})
+	got, err := ai.RenderAgentPrompt(agent, "Body.", nil, guardrails, ai.PromptContext{})
 	if err != nil {
 		t.Fatalf("RenderAgentPrompt: %v", err)
 	}
@@ -408,11 +404,11 @@ func TestRenderAgentPromptMultipleGuardrailsConcatenatedInOrder(t *testing.T) {
 // is the precedence rule the security guardrail's text relies on.
 func TestRenderAgentPromptGuardrailsPrecedeNoPRGuard(t *testing.T) {
 	t.Parallel()
-	agent := fleet.Agent{Name: "reviewer", Prompt: "Review.", AllowPRs: false}
+	agent := fleet.Agent{Name: "reviewer", AllowPRs: false}
 	guardrails := []fleet.Guardrail{
 		{Name: "security", Content: "GUARD_BLOCK", Enabled: true, Position: 0},
 	}
-	got, err := ai.RenderAgentPrompt(agent, nil, guardrails, ai.PromptContext{})
+	got, err := ai.RenderAgentPrompt(agent, "Review.", nil, guardrails, ai.PromptContext{})
 	if err != nil {
 		t.Fatalf("RenderAgentPrompt: %v", err)
 	}
@@ -428,11 +424,11 @@ func TestRenderAgentPromptGuardrailsPrecedeNoPRGuard(t *testing.T) {
 
 func TestRenderAgentPromptEmptyGuardrailContentSkipped(t *testing.T) {
 	t.Parallel()
-	agent := fleet.Agent{Name: "coder", Prompt: "Body.", AllowPRs: true}
+	agent := fleet.Agent{Name: "coder", AllowPRs: true}
 	guardrails := []fleet.Guardrail{
 		{Name: "empty", Content: "   ", Enabled: true, Position: 0},
 	}
-	got, err := ai.RenderAgentPrompt(agent, nil, guardrails, ai.PromptContext{})
+	got, err := ai.RenderAgentPrompt(agent, "Body.", nil, guardrails, ai.PromptContext{})
 	if err != nil {
 		t.Fatalf("RenderAgentPrompt: %v", err)
 	}
@@ -443,8 +439,8 @@ func TestRenderAgentPromptEmptyGuardrailContentSkipped(t *testing.T) {
 
 func TestRenderAgentPromptDispatchContextInUser(t *testing.T) {
 	t.Parallel()
-	agent := fleet.Agent{Prompt: "React to dispatch."}
-	usr := renderUser(t, agent, nil, ai.PromptContext{
+	agent := fleet.Agent{}
+	usr := renderUser(t, agent, "React to dispatch.", nil, ai.PromptContext{
 		Repo:          "owner/repo",
 		InvokedBy:     "coder",
 		Reason:        "PR is ready for review",
@@ -465,8 +461,8 @@ func TestRenderAgentPromptDispatchContextInUser(t *testing.T) {
 
 func TestRenderAgentPromptDispatchContextOmittedWhenNotDispatched(t *testing.T) {
 	t.Parallel()
-	agent := fleet.Agent{Prompt: "Normal run."}
-	usr := renderUser(t, agent, nil, ai.PromptContext{Repo: "owner/repo"})
+	agent := fleet.Agent{}
+	usr := renderUser(t, agent, "Normal run.", nil, ai.PromptContext{Repo: "owner/repo"})
 	for _, unwanted := range []string{"Invoked by:", "Dispatch reason:", "Dispatch depth:"} {
 		if strings.Contains(usr, unwanted) {
 			t.Errorf("dispatch context should be omitted on non-dispatch run; found %q:\n%s", unwanted, usr)
@@ -502,14 +498,14 @@ func TestRenderAgentPromptTotalContentPreserved(t *testing.T) {
 	skills := map[string]fleet.Skill{
 		"arch": {Prompt: "Architecture guidance."},
 	}
-	agent := fleet.Agent{Name: "coder", Skills: []string{"arch"}, Prompt: "Write code."}
+	agent := fleet.Agent{Name: "coder", Skills: []string{"arch"}}
 	ctx := ai.PromptContext{
 		Repo:      "owner/repo",
 		Number:    5,
 		EventKind: "issues.labeled",
 		Actor:     "dev",
 	}
-	got, err := ai.RenderAgentPrompt(agent, skills, nil, ctx)
+	got, err := ai.RenderAgentPrompt(agent, "Write code.", skills, nil, ctx)
 	if err != nil {
 		t.Fatalf("RenderAgentPrompt: %v", err)
 	}

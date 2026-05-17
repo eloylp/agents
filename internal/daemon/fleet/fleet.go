@@ -24,11 +24,16 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/backends"
+	agentconfig "github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
 	"github.com/eloylp/agents/internal/store"
 )
+
+func configInlinePromptUnsupported() string {
+	return agentconfig.InlineAgentPromptUnsupported
+}
 
 // Handler implements the /agents, /skills, and /backends HTTP surface plus
 // the methods exposed for the MCP agent / skill / backend writers. It also
@@ -120,6 +125,10 @@ func (h *Handler) HandleAgentsCreate(w http.ResponseWriter, r *http.Request) {
 	if req.WorkspaceID == "" {
 		req.WorkspaceID = fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
 	}
+	if req.Prompt != nil {
+		http.Error(w, configInlinePromptUnsupported(), http.StatusBadRequest)
+		return
+	}
 	canonical, err := h.UpsertAgent(req.toConfig())
 	if err != nil {
 		h.writeErr(w, err, "agent upsert or cron reload")
@@ -137,7 +146,7 @@ type storeAgentJSON struct {
 	Backend       string   `json:"backend"`
 	Model         string   `json:"model,omitempty"`
 	Skills        []string `json:"skills"`
-	Prompt        string   `json:"prompt,omitempty"`
+	Prompt        *string  `json:"prompt,omitempty"`
 	PromptID      string   `json:"prompt_id,omitempty"`
 	PromptRef     string   `json:"prompt_ref,omitempty"`
 	PromptScope   string   `json:"prompt_scope,omitempty"`
@@ -183,7 +192,6 @@ func (j storeAgentJSON) toConfig() fleet.Agent {
 		Backend:       j.Backend,
 		Model:         j.Model,
 		Skills:        nilSafeStrings(j.Skills),
-		Prompt:        j.Prompt,
 		PromptID:      j.PromptID,
 		PromptRef:     j.PromptRef,
 		PromptScope:   j.PromptScope,
@@ -243,9 +251,6 @@ func (p AgentPatch) apply(a *fleet.Agent) {
 	}
 	if p.Skills != nil {
 		a.Skills = *p.Skills
-	}
-	if p.Prompt != nil {
-		a.Prompt = *p.Prompt
 	}
 	if p.PromptRef != nil {
 		a.PromptRef = *p.PromptRef
@@ -333,7 +338,7 @@ func (h *Handler) handleAgentPatch(w http.ResponseWriter, r *http.Request, name 
 		return
 	}
 	if req.Prompt != nil {
-		http.Error(w, "agent prompt bodies are import-only; use prompt_ref", http.StatusBadRequest)
+		http.Error(w, configInlinePromptUnsupported(), http.StatusBadRequest)
 		return
 	}
 	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
@@ -353,9 +358,6 @@ func (h *Handler) handleAgentPatch(w http.ResponseWriter, r *http.Request, name 
 func (h *Handler) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
 	if strings.TrimSpace(a.Name) == "" {
 		return fleet.Agent{}, &store.ErrValidation{Msg: "name is required"}
-	}
-	if strings.TrimSpace(a.Prompt) != "" {
-		return fleet.Agent{}, &store.ErrValidation{Msg: "agent prompt bodies are import-only; use prompt_ref"}
 	}
 	if strings.TrimSpace(a.PromptID) != "" {
 		// prompt_id is the only persisted reference. prompt_ref/prompt_scope are
@@ -399,7 +401,7 @@ func (h *Handler) UpdateAgentPatchInWorkspace(workspaceID, name string, patch Ag
 
 func (h *Handler) updateAgent(name, workspaceID string, patch AgentPatch) (fleet.Agent, error) {
 	if patch.Prompt != nil {
-		return fleet.Agent{}, &store.ErrValidation{Msg: "agent prompt bodies are import-only; use prompt_ref"}
+		return fleet.Agent{}, &store.ErrValidation{Msg: configInlinePromptUnsupported()}
 	}
 	normalized := fleet.NormalizeAgentName(name)
 	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
