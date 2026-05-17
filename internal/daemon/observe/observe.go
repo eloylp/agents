@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -418,10 +419,7 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, r *http.Request) {
 	}
 	slices.SortFunc(nodes, func(a, b graphNode) int { return cmp.Compare(a.ID, b.ID) })
 
-	edgeByKey := make(map[string]graphEdge, len(edges)+len(configuredEdges))
-	for key, e := range configuredEdges {
-		edgeByKey[key] = e
-	}
+	edgeByKey := maps.Clone(configuredEdges)
 	for _, e := range edges {
 		recs := make([]dispatchRecord, 0, len(e.Dispatches))
 		for _, d := range e.Dispatches {

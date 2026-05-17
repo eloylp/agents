@@ -169,10 +169,7 @@ func toolGetGraph(deps Deps) server.ToolHandlerFunc {
 			nodes = append(nodes, mcpGraphNode{ID: name})
 		}
 
-		edgeByKey := make(map[string]mcpGraphEdge, len(edges)+len(configuredEdges))
-		for key, e := range configuredEdges {
-			edgeByKey[key] = e
-		}
+		edgeByKey := maps.Clone(configuredEdges)
 		for _, e := range edges {
 			recs := make([]mcpGraphDispatch, 0, len(e.Dispatches))
 			for _, d := range e.Dispatches {
