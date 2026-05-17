@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -110,13 +111,11 @@ func computeOrphanedAgents(cfg *config.Config) []OrphanedAgent {
 	}
 
 	slices.SortFunc(orphan, func(a, b OrphanedAgent) int {
-		if c := strings.Compare(a.WorkspaceID, b.WorkspaceID); c != 0 {
-			return c
-		}
-		if c := strings.Compare(a.Backend, b.Backend); c != 0 {
-			return c
-		}
-		return strings.Compare(a.Name, b.Name)
+		return cmp.Or(
+			cmp.Compare(a.WorkspaceID, b.WorkspaceID),
+			cmp.Compare(a.Backend, b.Backend),
+			cmp.Compare(a.Name, b.Name),
+		)
 	})
 	return orphan
 }
