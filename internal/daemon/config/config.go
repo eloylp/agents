@@ -473,7 +473,7 @@ func (h *Handler) HandleImport(w http.ResponseWriter, r *http.Request) {
 //
 // On success it returns the per-section counts.
 func (h *Handler) ImportYAML(body []byte, mode string) (map[string]int, error) {
-	if mode != "" && mode != "merge" && mode != "replace" {
+	if !slices.Contains([]string{"", "merge", "replace"}, mode) {
 		return nil, &store.ErrValidation{Msg: fmt.Sprintf("invalid mode %q: must be empty, \"merge\", or \"replace\"", mode)}
 	}
 	var payload exportYAML
