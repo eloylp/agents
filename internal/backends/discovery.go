@@ -726,11 +726,10 @@ func diagnosticEnv(override map[string]string) []string {
 			continue
 		}
 		if _, ok := seen[key]; ok {
-			for i := range out {
-				if strings.HasPrefix(out[i], key+"=") {
-					out[i] = key + "=" + value
-					break
-				}
+			if i := slices.IndexFunc(out, func(entry string) bool {
+				return strings.HasPrefix(entry, key+"=")
+			}); i >= 0 {
+				out[i] = key + "=" + value
 			}
 			continue
 		}
