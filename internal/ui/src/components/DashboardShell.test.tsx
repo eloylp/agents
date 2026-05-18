@@ -37,6 +37,7 @@ describe('<DashboardShell />', () => {
     expect(button).toHaveAttribute('aria-label', 'Open navigation')
     expect(button).toHaveAttribute('title', 'Open navigation')
     expect(button).not.toHaveTextContent('Menu')
+    expect(button.querySelector('.shell-menu-icon')).toHaveAttribute('aria-hidden', 'true')
     expect(button.querySelectorAll('.shell-menu-icon span')).toHaveLength(3)
 
     fireEvent.click(button)
