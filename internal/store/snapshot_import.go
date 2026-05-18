@@ -204,6 +204,11 @@ func ReplaceAll(
 // ImportConfig upserts the workspace-aware YAML import/export shape in a
 // single transaction. It includes prompt catalog entries and workspace
 // guardrail references in addition to the legacy fleet sections.
+//
+// This non-Tx wrapper is retained for compatibility with store-level tests and
+// setup helpers. Production mutation paths should call internal/service, which
+// owns the transaction and complete-config validation, or use ImportConfigTx
+// inside a service-owned transaction.
 func ImportConfig(db *sql.DB, cfg *config.Config, budgets []TokenBudget) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -222,6 +227,11 @@ func ImportConfig(db *sql.DB, cfg *config.Config, budgets []TokenBudget) error {
 // ReplaceConfig replaces the workspace-aware YAML import/export shape in a
 // single transaction. The default workspace row is retained as the compatibility
 // fallback, but all dependent mutable fleet rows are pruned before import.
+//
+// This non-Tx wrapper is retained for compatibility with store-level tests and
+// setup helpers. Production mutation paths should call internal/service, which
+// owns the transaction and complete-config validation, or use ReplaceConfigTx
+// inside a service-owned transaction.
 func ReplaceConfig(db *sql.DB, cfg *config.Config, budgets []TokenBudget) error {
 	tx, err := db.Begin()
 	if err != nil {

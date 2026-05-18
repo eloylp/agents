@@ -27,6 +27,11 @@ func normalizeBinding(b *fleet.Binding) {
 // persisted. The binding must satisfy trigger-exclusivity, cron parseability,
 // and repo/agent reference checks; the repo and agent must both exist.
 //
+// This non-Tx wrapper is retained for compatibility with store-level tests and
+// setup helpers. Production mutation paths should call internal/service, which
+// owns the transaction and post-write fleet validation, or use
+// CreateWorkspaceBindingTx inside a service-owned transaction.
+//
 // Validation failures surface as *ErrValidation (HTTP 400). Missing repo/agent
 // references surface as *ErrNotFound (HTTP 404). The caller is responsible for
 // holding the store mutex and reloading cron schedules after success.
@@ -110,6 +115,11 @@ func CreateWorkspaceBindingTx(tx *sql.Tx, workspaceID, repoName string, b fleet.
 // Returns *ErrNotFound when no row matches, *ErrValidation for bad shapes or
 // unknown agent refs.
 //
+// This non-Tx wrapper is retained for compatibility with store-level tests and
+// setup helpers. Production mutation paths should call internal/service, which
+// owns the transaction and post-write fleet validation, or use UpdateBindingTx
+// inside a service-owned transaction.
+//
 // Callers hold the store mutex and reload cron afterwards.
 func UpdateBinding(db *sql.DB, id int64, b fleet.Binding) (fleet.Binding, error) {
 	shape := b
@@ -191,6 +201,11 @@ func UpdateBindingTx(tx *sql.Tx, id int64, b fleet.Binding) (fleet.Binding, erro
 // DeleteBinding removes the row with the given id. Returns *ErrNotFound if
 // no row matches. Post-delete validateFleet runs to catch any cross-entity
 // invariant violations.
+//
+// This non-Tx wrapper is retained for compatibility with store-level tests and
+// setup helpers. Production mutation paths should call internal/service, which
+// owns the transaction and post-delete fleet validation, or use DeleteBindingTx
+// inside a service-owned transaction.
 //
 // Callers hold the store mutex and reload cron afterwards.
 func DeleteBinding(db *sql.DB, id int64) error {

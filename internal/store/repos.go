@@ -140,6 +140,11 @@ func ReadRepos(db *sql.DB) ([]fleet.Repo, error) {
 // replaced wholesale: any existing bindings for the repo are removed before
 // the new list is written. The repo name and binding agents/events are
 // normalized (trimmed / lowercased) before writing.
+//
+// This non-Tx wrapper is retained for compatibility with store-level tests and
+// setup helpers. Production mutation paths should call internal/service, which
+// owns the transaction and post-write fleet validation, or use UpsertRepoTx
+// inside a service-owned transaction.
 func UpsertRepo(db *sql.DB, r fleet.Repo) error {
 	tx, err := db.Begin()
 	if err != nil {

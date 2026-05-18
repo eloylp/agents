@@ -224,6 +224,12 @@ func ReadAgents(db *sql.DB) ([]fleet.Agent, error) {
 }
 
 // UpsertAgent inserts or replaces a single agent definition.
+//
+// This non-Tx wrapper is retained for compatibility with store-level tests and
+// setup helpers. Production mutation paths should call internal/service, which
+// owns the transaction and post-write fleet validation, or use UpsertAgentTx
+// inside a service-owned transaction.
+//
 // The agent name and related fields are normalized (lowercase, trimmed) before
 // writing so the stored values match the canonical form that AgentByName and
 // registerJobs expect, keeping live behavior consistent with startup.

@@ -16,9 +16,11 @@ import (
 // daemon.LoadConfig where the connection is opened.
 //
 // The methods below are thin delegates over the package-level functions
-// (ReadAgents, UpsertAgent, …). The package-level functions remain so
-// internal helpers and test fixtures can keep using them without going
-// through the facade.
+// (ReadAgents, UpsertAgent, …). Mutating package-level functions and their
+// Store delegates remain for compatibility with existing tests and low-level
+// helpers; production REST/MCP mutation paths should go through
+// internal/service so use-case validation and transaction ownership have one
+// live implementation.
 
 // Store wraps a SQLite handle behind a typed surface.
 type Store struct {
