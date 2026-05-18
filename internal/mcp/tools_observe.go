@@ -195,10 +195,7 @@ func toolGetGraph(deps Deps) server.ToolHandlerFunc {
 			wireEdges = append(wireEdges, e)
 		}
 		slices.SortFunc(wireEdges, func(a, b mcpGraphEdge) int {
-			if byFrom := cmp.Compare(a.From, b.From); byFrom != 0 {
-				return byFrom
-			}
-			return cmp.Compare(a.To, b.To)
+			return cmp.Or(cmp.Compare(a.From, b.From), cmp.Compare(a.To, b.To))
 		})
 
 		return jsonResult(map[string]any{
