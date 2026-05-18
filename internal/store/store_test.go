@@ -713,6 +713,34 @@ func TestAuthAdminMigrationBackfillsFirstExistingUser(t *testing.T) {
 			allow_memory   INTEGER NOT NULL DEFAULT 1,
 			UNIQUE(workspace_id, name)
 		);
+		CREATE TABLE repos (
+			workspace_id TEXT NOT NULL DEFAULT 'default' REFERENCES workspaces(id),
+			name         TEXT NOT NULL,
+			enabled      INTEGER NOT NULL DEFAULT 1,
+			PRIMARY KEY(workspace_id, name)
+		);
+		CREATE TABLE bindings (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			workspace_id TEXT NOT NULL DEFAULT 'default',
+			repo         TEXT NOT NULL,
+			agent        TEXT NOT NULL,
+			labels       TEXT NOT NULL DEFAULT '[]',
+			events       TEXT NOT NULL DEFAULT '[]',
+			cron         TEXT NOT NULL DEFAULT '',
+			enabled      INTEGER NOT NULL DEFAULT 1,
+			FOREIGN KEY (workspace_id, repo) REFERENCES repos(workspace_id, name) ON DELETE CASCADE,
+			FOREIGN KEY (workspace_id, agent) REFERENCES agents(workspace_id, name)
+		);
+		CREATE TABLE graph_layouts (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			scope      TEXT NOT NULL DEFAULT 'workspace:default',
+			node_kind  TEXT NOT NULL,
+			node_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+			x          REAL NOT NULL,
+			y          REAL NOT NULL,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			UNIQUE(scope, node_kind, node_id)
+		);
 		INSERT INTO users(username, password_hash) VALUES ('first', 'hash'), ('second', 'hash');
 	`); err != nil {
 		t.Fatalf("seed pre-029 auth schema: %v", err)
@@ -768,6 +796,156 @@ func TestAuthAdminMigrationBackfillsFirstExistingUser(t *testing.T) {
 	}
 	if firstAdmin != 1 || secondAdmin != 0 {
 		t.Fatalf("admin flags first=%d second=%d, want first=1 second=0", firstAdmin, secondAdmin)
+	}
+}
+
+func TestRemoveAgentInlinePromptMigrationPreservesDependents(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "agents.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
+		CREATE TABLE workspaces (
+			id           TEXT PRIMARY KEY,
+			name         TEXT NOT NULL UNIQUE,
+			description  TEXT NOT NULL DEFAULT '',
+			created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+			runner_image TEXT NOT NULL DEFAULT ''
+		);
+		CREATE TABLE agents (
+			id             TEXT PRIMARY KEY,
+			workspace_id   TEXT NOT NULL DEFAULT 'default' REFERENCES workspaces(id),
+			name           TEXT NOT NULL,
+			backend        TEXT NOT NULL DEFAULT 'auto',
+			model          TEXT NOT NULL DEFAULT '',
+			skills         TEXT NOT NULL DEFAULT '[]',
+			prompt         TEXT NOT NULL DEFAULT '',
+			prompt_id      TEXT NOT NULL DEFAULT '',
+			scope_type     TEXT NOT NULL DEFAULT 'workspace',
+			scope_repo     TEXT NOT NULL DEFAULT '',
+			allow_prs      INTEGER NOT NULL DEFAULT 0,
+			allow_dispatch INTEGER NOT NULL DEFAULT 0,
+			can_dispatch   TEXT NOT NULL DEFAULT '[]',
+			description    TEXT NOT NULL DEFAULT '',
+			allow_memory   INTEGER NOT NULL DEFAULT 1,
+			UNIQUE(workspace_id, name)
+		);
+		CREATE TABLE repos (
+			workspace_id TEXT NOT NULL DEFAULT 'default' REFERENCES workspaces(id),
+			name         TEXT NOT NULL,
+			enabled      INTEGER NOT NULL DEFAULT 1,
+			PRIMARY KEY(workspace_id, name)
+		);
+		CREATE TABLE bindings (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			workspace_id TEXT NOT NULL DEFAULT 'default',
+			repo         TEXT NOT NULL,
+			agent        TEXT NOT NULL,
+			labels       TEXT NOT NULL DEFAULT '[]',
+			events       TEXT NOT NULL DEFAULT '[]',
+			cron         TEXT NOT NULL DEFAULT '',
+			enabled      INTEGER NOT NULL DEFAULT 1,
+			FOREIGN KEY (workspace_id, repo) REFERENCES repos(workspace_id, name) ON DELETE CASCADE,
+			FOREIGN KEY (workspace_id, agent) REFERENCES agents(workspace_id, name)
+		);
+		CREATE TABLE graph_layouts (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			scope      TEXT NOT NULL DEFAULT 'workspace:default',
+			node_kind  TEXT NOT NULL,
+			node_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+			x          REAL NOT NULL,
+			y          REAL NOT NULL,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			UNIQUE(scope, node_kind, node_id)
+		);
+		INSERT INTO workspaces (id, name) VALUES ('default', 'Default');
+		INSERT INTO agents (id, workspace_id, name, backend, prompt, prompt_id, description)
+			VALUES ('agent_coder', 'default', 'coder', 'claude', 'legacy inline prompt', 'prompt_coder', 'Writes code');
+		INSERT INTO repos (workspace_id, name, enabled) VALUES ('default', 'owner/repo', 1);
+		INSERT INTO bindings (workspace_id, repo, agent, labels, events, cron, enabled)
+			VALUES ('default', 'owner/repo', 'coder', '["ai ready"]', '[]', '', 1);
+		INSERT INTO graph_layouts (scope, node_kind, node_id, x, y)
+			VALUES ('workspace:default', 'agent', 'agent_coder', 10, 20);
+	`); err != nil {
+		t.Fatalf("seed pre-031 schema: %v", err)
+	}
+	for _, name := range []string{
+		"001_init.sql",
+		"002_observability_and_memory.sql",
+		"003_memory_cascade.sql",
+		"004_drop_unused_tables.sql",
+		"005_trace_steps.sql",
+		"006_backend_metadata_and_agent_model.sql",
+		"007_agent_allow_memory.sql",
+		"008_event_queue.sql",
+		"009_traces_prompt_tokens.sql",
+		"010_guardrails.sql",
+		"011_trace_steps_kind.sql",
+		"012_mcp_tool_usage_guardrail.sql",
+		"013_discretion_guardrail.sql",
+		"014_token_budgets.sql",
+		"015_remove_daemon_config.sql",
+		"016_memory_scope_guardrail.sql",
+		"017_repository_tool_fallback_guardrail.sql",
+		"018_security_guardrail_gh_fallback.sql",
+		"019_auth.sql",
+		"020_agent_ids_and_graph_layouts.sql",
+		"021_workspaces_prompts.sql",
+		"022_workspace_memory.sql",
+		"023_workspace_graph_layouts.sql",
+		"024_workspace_observe_budgets.sql",
+		"025_workspace_entity_identity.sql",
+		"026_scoped_prompts.sql",
+		"027_scoped_skills_guardrails.sql",
+		"028_runtime_settings.sql",
+		"029_auth_admin_role.sql",
+		"030_trace_error_metadata.sql",
+	} {
+		if _, err := db.Exec("INSERT INTO schema_migrations(name) VALUES(?)", name); err != nil {
+			t.Fatalf("mark migration %s applied: %v", name, err)
+		}
+	}
+	db.Close()
+
+	db, err = store.Open(path)
+	if err != nil {
+		t.Fatalf("Open after pre-031 seed: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	if rows, err := db.Query("PRAGMA foreign_key_check"); err != nil {
+		t.Fatalf("foreign_key_check: %v", err)
+	} else if rows.Next() {
+		rows.Close()
+		t.Fatal("foreign_key_check reported violations")
+	} else {
+		rows.Close()
+	}
+
+	var promptColumnCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='prompt'").Scan(&promptColumnCount); err != nil {
+		t.Fatalf("check prompt column: %v", err)
+	}
+	if promptColumnCount != 0 {
+		t.Fatalf("agents.prompt column still exists")
+	}
+	var bindings, layouts int
+	if err := db.QueryRow("SELECT COUNT(*) FROM bindings WHERE workspace_id='default' AND agent='coder'").Scan(&bindings); err != nil {
+		t.Fatalf("count bindings: %v", err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM graph_layouts WHERE node_id='agent_coder'").Scan(&layouts); err != nil {
+		t.Fatalf("count graph layouts: %v", err)
+	}
+	if bindings != 1 || layouts != 1 {
+		t.Fatalf("dependent rows bindings=%d layouts=%d, want 1 each", bindings, layouts)
 	}
 }
 
