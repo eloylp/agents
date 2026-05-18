@@ -44,7 +44,7 @@ func toolUpdateRuntime(deps Deps) server.ToolHandlerFunc {
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
-		updated, err := deps.Store.PatchRuntimeSettings(patch)
+		updated, err := deps.Config.PatchRuntimeSettings(patch)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("update runtime settings", err), nil
 		}
@@ -59,7 +59,7 @@ func toolUpdateWorkspaceRuntime(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		image, _ := trimmedStringOptional(req, "runner_image")
-		updated, err := deps.Store.SetWorkspaceRunnerImage(workspace, image)
+		updated, err := deps.Config.SetWorkspaceRunnerImage(workspace, image)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("update workspace runtime", err), nil
 		}

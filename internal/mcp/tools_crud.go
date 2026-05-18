@@ -360,7 +360,7 @@ func toolUpdateWorkspaceGuardrails(deps Deps) server.ToolHandlerFunc {
 			}
 			refs = append(refs, ref)
 		}
-		updated, err := deps.Store.ReplaceWorkspaceGuardrails(workspace, refs)
+		updated, err := deps.Fleet.ReplaceWorkspaceGuardrails(workspace, refs)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("update workspace guardrails", err), nil
 		}

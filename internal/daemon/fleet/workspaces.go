@@ -151,7 +151,7 @@ func (h *Handler) handleWorkspaceGuardrailsPut(w http.ResponseWriter, r *http.Re
 	for i, ref := range req {
 		refs = append(refs, ref.toConfig(i))
 	}
-	updated, err := h.store.ReplaceWorkspaceGuardrails(workspacePathValue(r), refs)
+	updated, err := h.ReplaceWorkspaceGuardrails(workspacePathValue(r), refs)
 	if err != nil {
 		h.writeErr(w, err, "workspace guardrails replace")
 		return
@@ -164,7 +164,7 @@ func (h *Handler) handleWorkspaceGuardrailsPut(w http.ResponseWriter, r *http.Re
 }
 
 func (h *Handler) UpsertWorkspace(w fleet.Workspace) (fleet.Workspace, error) {
-	return h.store.UpsertWorkspace(w)
+	return h.service.UpsertWorkspace(w)
 }
 
 func (h *Handler) UpdateWorkspacePatch(workspace string, patch WorkspacePatch) (fleet.Workspace, error) {
@@ -173,11 +173,15 @@ func (h *Handler) UpdateWorkspacePatch(workspace string, patch WorkspacePatch) (
 		return fleet.Workspace{}, err
 	}
 	patch.apply(&existing)
-	return h.store.UpsertWorkspace(existing)
+	return h.service.UpsertWorkspace(existing)
 }
 
 func (h *Handler) DeleteWorkspace(workspace string) error {
-	return h.store.DeleteWorkspace(workspace)
+	return h.service.DeleteWorkspace(workspace)
+}
+
+func (h *Handler) ReplaceWorkspaceGuardrails(workspace string, refs []fleet.WorkspaceGuardrailRef) ([]fleet.WorkspaceGuardrailRef, error) {
+	return h.service.ReplaceWorkspaceGuardrails(workspace, refs)
 }
 
 func (h *Handler) getWorkspace(workspace string) (fleet.Workspace, error) {

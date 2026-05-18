@@ -37,7 +37,8 @@ internal/
   scheduler/                    # cron scheduler + agent memory (SQLite-backed)
   runtime/                      # Runner interface + ContainerSpec/ExitStatus types, Docker implementation, per-backend container setup
   backends/                     # backend discovery: CLI probing, GitHub MCP health checks, tool diagnostics, orphan detection
-  store/                        # SQLite persistence boundary: migrations, config import/load, CRUD concept files, *store.Store facade
+  service/                      # mutable fleet/config use cases: validation orchestration, transaction-facing service facade
+  store/                        # SQLite persistence boundary: migrations, config import/load, CRUD persistence primitives, *store.Store facade
   workflow/                     # event routing engine, durable event queue (persist-on-push + replay), processor, dispatcher
   daemon/                       # owns the daemon as a single composed unit: lifecycle, router, /status, /run, proxy + UI + MCP mounts
   daemon/observe/               # observability HTTP handlers (events, traces, graph, dispatches, memory, SSE)
@@ -62,6 +63,7 @@ internal/ai/response-schema.json # embedded JSON schema for structured output (c
 - **Skill**, a reusable chunk of guidance referenced by stable id in agents. Display names may repeat across global, workspace, and repo scopes; skill text is concatenated before the selected catalog prompt at render time.
 - **Binding**, `repos[*].use[*]`: pairs one agent with exactly one trigger (`labels:`, `events:`, or `cron:`). The same agent can have multiple bindings on the same repo with different triggers.
 - **Backend**, explicit backend selection per agent (no `auto`). Built-ins are `claude` and `codex`; additional named local backends are supported via `local_model_url`.
+- **Service**, the mutable use-case layer. REST and MCP handlers decode wire shapes, call `internal/service`, and map typed errors; `internal/store` stays focused on SQLite execution, migrations, and DB-specific constraints.
 - **Proxy**, optional in-daemon Anthropic↔OpenAI translator mounted at `/v1/messages` and `/v1/models`. Disabled by default. Agent CLIs run in runner containers, so `local_model_url` must be reachable from the runner container; `localhost` points at the runner, not the daemon.
 - **Dispatcher**, the runtime mechanism by which agents invoke each other. See "Reactive dispatch" below.
 - **Graph workflow designer**, the dashboard's primary visual workflow surface. It uses stable agent database IDs for node identity/layout, edits agents through the shared agent form, shows repo-scoped agents inside dashed repo boundaries, shows workspace-scoped agents outside those boundaries, draws thin binding lines to passive repo anchors for trigger bindings, and edits dispatch edges through `can_dispatch` / `allow_dispatch`.
