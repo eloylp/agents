@@ -171,6 +171,23 @@ func TestBuildCommandEnvBackendOverride(t *testing.T) {
 	}
 }
 
+func TestBuildCommandEnvForwardsGitIdentity(t *testing.T) {
+	// No t.Parallel(), t.Setenv mutates the process env and can't coexist
+	// with parallel tests that read os.Environ.
+	t.Setenv("AGENTS_GIT_USER_NAME", "Agents Bot")
+	t.Setenv("AGENTS_GIT_USER_EMAIL", "agents@example.com")
+
+	env := buildCommandEnv(Request{Workflow: "w", Repo: "o/r"}, nil)
+	for _, want := range []string{
+		"AGENTS_GIT_USER_NAME=Agents Bot",
+		"AGENTS_GIT_USER_EMAIL=agents@example.com",
+	} {
+		if !slices.Contains(env, want) {
+			t.Fatalf("env = %v, want %q", env, want)
+		}
+	}
+}
+
 func TestContainerCommandRunnerUsesRuntimeAndParsesOutput(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 

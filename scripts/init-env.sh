@@ -111,6 +111,23 @@ say "Token page: https://github.com/settings/tokens"
 prompt_optional GITHUB_TOKEN "Paste GITHUB_TOKEN (blank to keep/skip): "
 
 say ""
+say "Git commit identity"
+say "These values are configured with 'git config --global user.name/user.email' inside each runner container."
+say "Set them explicitly so agents do not invent commit authors."
+current_name=$(get_env AGENTS_GIT_USER_NAME || true)
+if [ -z "$current_name" ]; then
+  set_env AGENTS_GIT_USER_NAME "Agents Bot"
+  say "Defaulted AGENTS_GIT_USER_NAME to Agents Bot."
+fi
+current_email=$(get_env AGENTS_GIT_USER_EMAIL || true)
+if [ -z "$current_email" ]; then
+  set_env AGENTS_GIT_USER_EMAIL "agents@example.com"
+  say "Defaulted AGENTS_GIT_USER_EMAIL to agents@example.com."
+fi
+prompt_optional AGENTS_GIT_USER_NAME "Paste AGENTS_GIT_USER_NAME (blank to keep default/current): "
+prompt_optional AGENTS_GIT_USER_EMAIL "Paste AGENTS_GIT_USER_EMAIL (blank to keep default/current): "
+
+say ""
 say "Claude credentials"
 say "Preferred path: run 'claude setup-token' locally and paste the returned token."
 say "This sets CLAUDE_CODE_OAUTH_TOKEN for runner containers."

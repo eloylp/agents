@@ -35,3 +35,19 @@ func TestWrapBackendCommandMaterializesCodexAuthAndSchema(t *testing.T) {
 		t.Fatalf("setup script = %q, want codex schema and auth materialization", command[2])
 	}
 }
+
+func TestWrapBackendCommandConfiguresGitIdentity(t *testing.T) {
+	t.Parallel()
+
+	command, env := WrapBackendCommand("claude", []string{"claude", "-p"}, []string{"AGENTS_GIT_USER_NAME=Agents Bot", "AGENTS_GIT_USER_EMAIL=agents@example.com"}, BackendSetupOptions{})
+	for _, want := range []string{"AGENTS_GIT_USER_NAME=Agents Bot", "AGENTS_GIT_USER_EMAIL=agents@example.com"} {
+		if !slices.Contains(env, want) {
+			t.Fatalf("env = %v, want %q", env, want)
+		}
+	}
+	for _, want := range []string{`git config --global user.name "$AGENTS_GIT_USER_NAME"`, `git config --global user.email "$AGENTS_GIT_USER_EMAIL"`} {
+		if !strings.Contains(command[2], want) {
+			t.Fatalf("setup script = %q, want %q", command[2], want)
+		}
+	}
+}
