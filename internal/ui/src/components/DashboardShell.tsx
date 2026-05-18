@@ -116,6 +116,16 @@ export default function DashboardShell({ children }: { children: React.ReactNode
         }
         .shell-content { padding: 1.25rem; max-width: 1480px; margin: 0 auto; }
         .shell-menu-button { display: none; }
+        .shell-menu-icon {
+          display: grid;
+          gap: 4px;
+          width: 18px;
+        }
+        .shell-menu-icon span {
+          display: block;
+          height: 2px;
+          background: currentColor;
+        }
         .shell-overlay { display: none; }
         .shell-nav-link:hover { text-decoration: none; background: var(--accent-bg); color: var(--accent); }
         @media (max-width: 860px) {
@@ -187,9 +197,14 @@ export default function DashboardShell({ children }: { children: React.ReactNode
             className="shell-menu-button"
             onClick={() => setSidebarOpen(true)}
             aria-label="Open navigation"
+            title="Open navigation"
             style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 0, padding: '5px 9px', cursor: 'pointer' }}
           >
-            Menu
+            <span className="shell-menu-icon" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
           </button>
           <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', fontWeight: 600 }}>
             {links.find(link => activePath(pathname, link.href))?.label ?? 'Agents'}
