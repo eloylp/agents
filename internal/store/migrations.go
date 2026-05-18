@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"database/sql"
 	"embed"
 	"fmt"
@@ -29,7 +30,7 @@ func migrate(db *sql.DB) error {
 		return fmt.Errorf("store: read migrations dir: %w", err)
 	}
 	slices.SortFunc(entries, func(a, b fs.DirEntry) int {
-		return strings.Compare(a.Name(), b.Name())
+		return cmp.Compare(a.Name(), b.Name())
 	})
 
 	for _, entry := range entries {
