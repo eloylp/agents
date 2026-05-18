@@ -84,7 +84,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		existingMemory = mem
 	}
 
-	promptBody, err := cfg.PromptContentForAgent(agent, ev.Repo.FullName)
+	promptBody, err := fleet.ResolvePromptContentForAgent(cfg.Prompts, agent, ev.Repo.FullName)
 	if err != nil {
 		return fmt.Errorf("agent %q: resolve prompt: %w", agent.Name, err)
 	}

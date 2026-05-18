@@ -172,7 +172,7 @@ func (c *Config) validateAgents() error {
 		if a.PromptID == "" && a.PromptRef == "" {
 			return fmt.Errorf("config: agent %q: prompt_id or prompt_ref is required", a.Name)
 		}
-		if _, err := c.PromptForAgent(a, a.ScopeRepo); err != nil {
+		if _, err := fleet.ResolvePromptForAgent(c.Prompts, a, a.ScopeRepo); err != nil {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
 		if a.Description == "" {
