@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -89,7 +90,7 @@ func dispatchTestStore(t *testing.T) *store.Store {
 }
 
 // seedAgentMap seeds an arbitrary agent map into a fresh tempdir SQLite,
-// filling in Backend / Prompt where missing so the store's validators
+// filling in Backend / PromptRef where missing so the store's validators
 // pass. Returns the live store.
 func seedAgentMap(t *testing.T, m map[string]fleet.Agent) *store.Store {
 	t.Helper()
@@ -104,8 +105,8 @@ func seedAgentMap(t *testing.T, m map[string]fleet.Agent) *store.Store {
 		if a.Backend == "" {
 			a.Backend = "claude"
 		}
-		if a.Prompt == "" {
-			a.Prompt = "test"
+		if a.PromptRef == "" && a.PromptID == "" {
+			a.PromptRef = a.Name
 		}
 		// Descriptions are required for every agent. seedAgentMap is
 		// permissive: fill in a default so focused dispatch tests don't need
@@ -114,6 +115,13 @@ func seedAgentMap(t *testing.T, m map[string]fleet.Agent) *store.Store {
 			a.Description = "test"
 		}
 		agents = append(agents, a)
+	}
+	for i, a := range agents {
+		if a.PromptRef != "" {
+			if _, err := st.UpsertPrompt(fleet.Prompt{ID: fmt.Sprintf("prompt_seed_%d", i), Name: a.PromptRef, Content: "test prompt"}); err != nil {
+				t.Fatalf("seed prompt %s: %v", a.PromptRef, err)
+			}
+		}
 	}
 	if err := st.ImportAll(agents, nil, map[string]fleet.Skill{}, map[string]fleet.Backend{"claude": {Command: "claude"}}, nil, nil); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -512,8 +520,8 @@ func TestEngineHandlesAgentDispatchEvent(t *testing.T) {
 		},
 		Skills: map[string]fleet.Skill{},
 		Agents: []fleet.Agent{
-			{Name: "coder", Backend: "claude", Prompt: "Write code.", AllowDispatch: true},
-			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review code.", AllowDispatch: true},
+			{Name: "coder", Backend: "claude", PromptRef: "Write code.", AllowDispatch: true},
+			{Name: "pr-reviewer", Backend: "claude", PromptRef: "Review code.", AllowDispatch: true},
 		},
 		Repos: []fleet.Repo{
 			{
@@ -566,8 +574,8 @@ func TestEngineDispatchEventRunsUnboundTarget(t *testing.T) {
 		},
 		Skills: map[string]fleet.Skill{},
 		Agents: []fleet.Agent{
-			{Name: "coder", Backend: "claude", Prompt: "Code."},
-			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review.", AllowDispatch: true, Description: "Reviews PRs"},
+			{Name: "coder", Backend: "claude", PromptRef: "Code."},
+			{Name: "pr-reviewer", Backend: "claude", PromptRef: "Review.", AllowDispatch: true, Description: "Reviews PRs"},
 		},
 		Repos: []fleet.Repo{
 			{
@@ -610,7 +618,7 @@ func TestEngineDispatchEventDisabledRepoSkipsTarget(t *testing.T) {
 		},
 		Skills: map[string]fleet.Skill{},
 		Agents: []fleet.Agent{
-			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review.", AllowDispatch: true, Description: "Reviews PRs"},
+			{Name: "pr-reviewer", Backend: "claude", PromptRef: "Review.", AllowDispatch: true, Description: "Reviews PRs"},
 		},
 		Repos: []fleet.Repo{{Name: "owner/repo", Enabled: false}},
 	}
@@ -1216,7 +1224,7 @@ func TestDispatcherReflectsLiveAllowlistChanges(t *testing.T) {
 
 	// Live update: flip sec-reviewer to allow dispatch by writing to SQLite.
 	if err := st.UpsertAgent(fleet.Agent{
-		Name: "sec-reviewer", Backend: "claude", Prompt: "review",
+		Name: "sec-reviewer", Backend: "claude", PromptRef: "sec-reviewer",
 		Description: "test", AllowDispatch: true,
 	}); err != nil {
 		t.Fatalf("update agent: %v", err)

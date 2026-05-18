@@ -671,7 +671,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("create_agent",
-				mcpgo.WithDescription("Create or update an agent. Upsert semantics: a write to an existing name overwrites it. Returns the canonical (normalized) agent persisted by the store. Same path as POST /agents."),
+				mcpgo.WithDescription("Create or update an agent. Prompt content must already exist in the prompt catalog: first create/select a prompt with create_prompt/list_prompts/get_prompt, then pass prompt_ref or prompt_id here. Upsert semantics: a write to an existing name overwrites it. Same path as POST /agents."),
 				mcpgo.WithString("name",
 					mcpgo.Required(),
 					mcpgo.Description("Agent name. Lowercased and trimmed by the store."),
@@ -686,13 +686,13 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 					mcpgo.Description("Optional model identifier; must be present in the backend's model catalog."),
 				),
 				mcpgo.WithString("prompt_ref",
-					mcpgo.Description("Prompt name to reference from this workspace-local agent. Pair with prompt_scope when names are ambiguous."),
+					mcpgo.Description("Existing prompt catalog name to reference. Required unless prompt_id is supplied. Pair with prompt_scope when names are ambiguous."),
 				),
 				mcpgo.WithString("prompt_scope",
 					mcpgo.Description("Optional case-insensitive prompt scope path: global, workspace, or workspace/owner/repo. Example: default/eloylp/agents."),
 				),
 				mcpgo.WithString("prompt_id",
-					mcpgo.Description("Stable prompt id to reference. Preferred when multiple visible prompts share a name."),
+					mcpgo.Description("Existing stable prompt id to reference. Required unless prompt_ref is supplied. Preferred when multiple visible prompts share a name."),
 				),
 				mcpgo.WithString("scope_type",
 					mcpgo.Description("Agent scope: workspace or repo. Defaults to workspace."),
@@ -725,7 +725,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("update_agent",
-				mcpgo.WithDescription("Partially update an agent by name. Only fields present in the call are modified; everything else is preserved. Use an empty array to clear a slice field. Same path as PATCH /agents/{name}."),
+				mcpgo.WithDescription("Partially update an agent by name. Prompt bodies are unsupported; create/select a prompt catalog entry first, then set prompt_ref or prompt_id. Only fields present in the call are modified; everything else is preserved. Same path as PATCH /agents/{name}."),
 				mcpgo.WithString("name",
 					mcpgo.Required(),
 					mcpgo.Description("Agent name (case-insensitive; matched after lowercasing)."),
@@ -974,7 +974,6 @@ func agentJSON(a fleet.Agent) map[string]any {
 		"backend":        a.Backend,
 		"model":          a.Model,
 		"skills":         nilSafe(a.Skills),
-		"prompt":         a.Prompt,
 		"prompt_id":      a.PromptID,
 		"prompt_ref":     a.PromptRef,
 		"prompt_scope":   a.PromptScope,

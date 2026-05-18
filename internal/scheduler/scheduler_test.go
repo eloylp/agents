@@ -44,10 +44,13 @@ func seedStore(t *testing.T, repos []fleet.Repo) *store.Store {
 	t.Cleanup(func() { st.Close() })
 
 	agents := []fleet.Agent{
-		{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Review PRs.", Description: "Reviews pull requests"},
+		{Name: "reviewer", Backend: "claude", Skills: []string{"architect"}, PromptRef: "reviewer", Description: "Reviews pull requests"},
 	}
 	skills := map[string]fleet.Skill{"architect": {Prompt: "Focus on architecture."}}
 	backends := map[string]fleet.Backend{"claude": {Command: "claude"}}
+	if _, err := store.UpsertPrompt(db, fleet.Prompt{Name: "reviewer", Content: "Review PRs."}); err != nil {
+		t.Fatalf("seed prompt: %v", err)
+	}
 	if err := st.ImportAll(agents, repos, skills, backends, nil, nil); err != nil {
 		t.Fatalf("seed: %v", err)
 	}

@@ -169,8 +169,11 @@ func (c *Config) validateAgents() error {
 				return fmt.Errorf("config: agent %q: unknown skill %q", a.Name, s)
 			}
 		}
-		if a.Prompt == "" {
-			return fmt.Errorf("config: agent %q: prompt is empty", a.Name)
+		if a.PromptID == "" && a.PromptRef == "" {
+			return fmt.Errorf("config: agent %q: prompt_id or prompt_ref is required", a.Name)
+		}
+		if _, err := fleet.ResolvePromptForAgent(c.Prompts, a, a.ScopeRepo); err != nil {
+			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
 		if a.Description == "" {
 			return fmt.Errorf("config: agent %q: description is required (used for agent identification and inter-agent conversations)", a.Name)

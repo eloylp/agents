@@ -726,7 +726,7 @@ func TestHandleAgentsRunNormalizesWorkspace(t *testing.T) {
 			WorkspaceID: "team-a",
 			Name:        "coder",
 			Backend:     "claude",
-			Prompt:      "team coder",
+			PromptRef:   "coder",
 			Description: "team coder",
 		})
 		c.Repos = append(c.Repos, fleet.Repo{

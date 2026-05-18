@@ -208,11 +208,16 @@ func (e *Engine) loadCfg() (*config.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("engine: load cfg snapshot: %w", err)
 	}
+	prompts, err := e.store.ReadPrompts()
+	if err != nil {
+		return nil, fmt.Errorf("engine: load prompts: %w", err)
+	}
 	cfg := &config.Config{
-		Agents: agents,
-		Repos:  repos,
-		Skills: skills,
-		Daemon: config.DaemonConfig{AIBackends: backends},
+		Agents:  agents,
+		Repos:   repos,
+		Skills:  skills,
+		Prompts: prompts,
+		Daemon:  config.DaemonConfig{AIBackends: backends},
 	}
 	return cfg, nil
 }

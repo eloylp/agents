@@ -29,7 +29,7 @@ The same pattern works for Cursor, Cline, and any other MCP-compatible client; c
 
 ## Available tools
 
-Most fleet tools accept `workspace` for workspace-local resources and default to `Default` when omitted. Prompt catalog tools expose stable prompt ids, and agent tools accept either `prompt_id` or the human selector `prompt_ref` plus optional `prompt_scope`. `prompt_scope` is case-insensitive and accepts `global`, `workspace`, or `workspace/owner/repo`, for example `default/eloylp/agents`.
+Most fleet tools accept `workspace` for workspace-local resources and default to `Default` when omitted. Prompt catalog tools expose stable prompt ids, and agent tools accept either `prompt_id` or the human selector `prompt_ref` plus optional `prompt_scope`. `prompt_scope` is case-insensitive and accepts `global`, `workspace`, or `workspace/owner/repo`, for example `default/eloylp/agents`. Agent creation is prompt-first: call `create_prompt` or select an existing prompt with `list_prompts`/`get_prompt`, then call `create_agent` with `prompt_ref` or `prompt_id`; inline agent prompt bodies are unsupported.
 
 ### Fleet management
 
@@ -37,7 +37,7 @@ Most fleet tools accept `workspace` for workspace-local resources and default to
 |---|---|
 | `list_agents` | List all agents with backend, model, skills, dispatch wiring. |
 | `get_agent` | Fetch one agent by name. |
-| `create_agent` | Create or update an agent (upsert, full replace). |
+| `create_agent` | Create or update an agent (upsert, full replace) using an existing `prompt_ref` or `prompt_id`. |
 | `update_agent` | Partially update an agent by name (only supplied fields are changed). |
 | `delete_agent` | Delete an agent. `cascade=true` also removes repo bindings. |
 | `list_skills` | List all skill catalog entries with prompt content, including global, workspace-scoped, and repo-scoped skills. |

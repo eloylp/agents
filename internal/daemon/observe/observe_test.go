@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -72,7 +73,34 @@ func newFixture(t *testing.T, cfg *config.Config) testFixture {
 		if skills == nil {
 			skills = map[string]fleet.Skill{}
 		}
-		if err := st.ImportAll(cfg.Agents, cfg.Repos, skills, backends, nil, nil); err != nil {
+		promptRefs := make(map[string]struct{}, len(cfg.Prompts))
+		for _, prompt := range cfg.Prompts {
+			if _, err := st.UpsertPrompt(prompt); err != nil {
+				t.Fatalf("seed prompt %s: %v", prompt.Name, err)
+			}
+			promptRefs[prompt.WorkspaceID+"/"+prompt.Name] = struct{}{}
+		}
+		agents := slices.Clone(cfg.Agents)
+		for i := range agents {
+			if agents[i].PromptID != "" {
+				continue
+			}
+			if agents[i].PromptRef == "" {
+				agents[i].PromptRef = agents[i].Name
+			}
+			if _, ok := promptRefs[agents[i].WorkspaceID+"/"+agents[i].PromptRef]; ok {
+				continue
+			}
+			if _, err := st.UpsertPrompt(fleet.Prompt{
+				WorkspaceID: agents[i].WorkspaceID,
+				Name:        agents[i].PromptRef,
+				Content:     "test prompt",
+			}); err != nil {
+				t.Fatalf("seed prompt %s: %v", agents[i].PromptRef, err)
+			}
+			promptRefs[agents[i].WorkspaceID+"/"+agents[i].PromptRef] = struct{}{}
+		}
+		if err := st.ImportAll(agents, cfg.Repos, skills, backends, nil, nil); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
@@ -134,11 +162,20 @@ func newSchedulerWithStatuses(t *testing.T, statuses []scheduler.AgentStatus) *s
 			Use: []fleet.Binding{{Agent: st.Name, Cron: "0 * * * *"}},
 		})
 		if _, ok := seenAgent[st.Name]; !ok {
-			agents = append(agents, fleet.Agent{Name: st.Name, Backend: "claude", Prompt: "p", Description: st.Name + " agent"})
+			agents = append(agents, fleet.Agent{Name: st.Name, Backend: "claude", PromptRef: st.Name, Description: st.Name + " agent"})
 			seenAgent[st.Name] = struct{}{}
 		}
 	}
 	st := store.New(db)
+	for _, agent := range agents {
+		if _, err := st.UpsertPrompt(fleet.Prompt{
+			WorkspaceID: agent.WorkspaceID,
+			Name:        agent.PromptRef,
+			Content:     "p",
+		}); err != nil {
+			t.Fatalf("seed prompt %s: %v", agent.PromptRef, err)
+		}
+	}
 	if err := st.ImportAll(agents, repos, map[string]fleet.Skill{}, map[string]fleet.Backend{"claude": {Command: "claude"}}, nil, nil); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -203,7 +240,10 @@ func seedMemoryReader(t *testing.T, db *sql.DB, content map[string]string, mtime
 			}
 		}
 		if _, ok := seenAgent[agent]; !ok {
-			if err := store.UpsertAgent(db, fleet.Agent{Name: agent, Backend: "claude", Prompt: "p", Description: agent + " agent"}); err != nil {
+			if _, err := store.UpsertPrompt(db, fleet.Prompt{Name: agent, Content: "p"}); err != nil {
+				t.Fatalf("seed prompt %s: %v", agent, err)
+			}
+			if err := store.UpsertAgent(db, fleet.Agent{Name: agent, Backend: "claude", PromptRef: agent, Description: agent + " agent"}); err != nil {
 				t.Fatalf("seed agent %s: %v", agent, err)
 			}
 			seenAgent[agent] = struct{}{}
@@ -629,7 +669,7 @@ func TestHandleGraphEmptyWhenNoDispatches(t *testing.T) {
 func TestHandleGraphIncludesConfiguredAgentWithNoDispatches(t *testing.T) {
 	t.Parallel()
 	cfg := minimalCfg()
-	cfg.Agents = []fleet.Agent{{Name: "solo-agent", Backend: "claude", Prompt: "p", Description: "solo agent"}}
+	cfg.Agents = []fleet.Agent{{Name: "solo-agent", Backend: "claude", PromptRef: "solo-agent", Description: "solo agent"}}
 	fx := newFixture(t, cfg)
 	h := New(fx.events, fx.store, nil, nil, nil, zerolog.Nop())
 
@@ -659,10 +699,10 @@ func TestHandleGraphIsWorkspaceScopedAndIncludesConfiguredDispatchWiring(t *test
 	t.Parallel()
 	cfg := minimalCfg()
 	cfg.Agents = []fleet.Agent{
-		{Name: "webhook-smoke", WorkspaceID: fleet.DefaultWorkspaceID, Backend: "claude", Prompt: "p", Description: "default agent"},
-		{Name: "coder", WorkspaceID: "team-a", Backend: "claude", Prompt: "p", Description: "team coder", CanDispatch: []string{"reviewer"}},
-		{Name: "reviewer", WorkspaceID: "team-a", Backend: "claude", Prompt: "p", Description: "team reviewer", AllowDispatch: true},
-		{Name: "coder", WorkspaceID: "team-b", Backend: "claude", Prompt: "p", Description: "other coder"},
+		{Name: "webhook-smoke", WorkspaceID: fleet.DefaultWorkspaceID, Backend: "claude", PromptRef: "webhook-smoke", Description: "default agent"},
+		{Name: "coder", WorkspaceID: "team-a", Backend: "claude", PromptRef: "coder", Description: "team coder", CanDispatch: []string{"reviewer"}},
+		{Name: "reviewer", WorkspaceID: "team-a", Backend: "claude", PromptRef: "reviewer", Description: "team reviewer", AllowDispatch: true},
+		{Name: "coder", WorkspaceID: "team-b", Backend: "claude", PromptRef: "coder", Description: "other coder"},
 	}
 	fx := newFixture(t, cfg)
 	h := New(fx.events, fx.store, nil, nil, nil, zerolog.Nop())
@@ -710,9 +750,9 @@ func TestHandleGraphNodeStatusReflectsRuntimeState(t *testing.T) {
 	t.Parallel()
 	cfg := minimalCfg()
 	cfg.Agents = []fleet.Agent{
-		{Name: "runner", Backend: "claude", Prompt: "p", Description: "runner agent"},
-		{Name: "idle-ok", Backend: "claude", Prompt: "p", Description: "idle ok agent"},
-		{Name: "idle-err", Backend: "claude", Prompt: "p", Description: "idle err agent"},
+		{Name: "runner", Backend: "claude", PromptRef: "runner", Description: "runner agent"},
+		{Name: "idle-ok", Backend: "claude", PromptRef: "idle-ok", Description: "idle ok agent"},
+		{Name: "idle-err", Backend: "claude", PromptRef: "idle-err", Description: "idle err agent"},
 	}
 	fx := newFixture(t, cfg)
 	// Mark "runner" as in-flight via the same hook the engine uses.

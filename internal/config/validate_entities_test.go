@@ -11,7 +11,7 @@ func TestValidateEntitiesNormalizesRepoScope(t *testing.T) {
 	agents := []fleet.Agent{{
 		Name:        "reviewer",
 		Backend:     "claude",
-		Prompt:      "Review changes.",
+		PromptRef:   "reviewer",
 		Description: "Reviews pull requests",
 		ScopeType:   "repo",
 		ScopeRepo:   "Owner/Repo",

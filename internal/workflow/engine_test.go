@@ -147,8 +147,12 @@ func newTestEngine(t *testing.T, cfgMutator func(*config.Config)) (*Engine, *stu
 			"security":  {Prompt: "Focus on security."},
 		},
 		Agents: []fleet.Agent{
-			{Name: "arch-reviewer", Backend: "claude", Skills: []string{"architect"}, Prompt: "Review architecture."},
-			{Name: "sec-reviewer", Backend: "claude", Skills: []string{"security"}, Prompt: "Review security."},
+			{Name: "arch-reviewer", Backend: "claude", Skills: []string{"architect"}, PromptRef: "arch-reviewer"},
+			{Name: "sec-reviewer", Backend: "claude", Skills: []string{"security"}, PromptRef: "sec-reviewer"},
+		},
+		Prompts: []fleet.Prompt{
+			{Name: "arch-reviewer", Content: "Review architecture."},
+			{Name: "sec-reviewer", Content: "Review security."},
 		},
 		Repos: []fleet.Repo{
 			{
@@ -180,7 +184,7 @@ func labelEvent(kind, repo, label string, number int) Event {
 func TestHandleEventIssueRunsMatchingLabelBinding(t *testing.T) {
 	t.Parallel()
 	e, runner := newTestEngine(t, func(c *config.Config) {
-		c.Agents = append(c.Agents, fleet.Agent{Name: "refiner", Backend: "claude", Prompt: "Refine the issue."})
+		c.Agents = append(c.Agents, fleet.Agent{Name: "refiner", Backend: "claude", PromptRef: "Refine the issue."})
 		c.Repos[0].Use = append(c.Repos[0].Use, fleet.Binding{Agent: "refiner", Labels: []string{"ai:refine"}})
 	})
 	err := e.HandleEvent(context.Background(), labelEvent("issues.labeled", "owner/repo", "ai:refine", 7))
@@ -237,8 +241,8 @@ func TestEngineSkipsAgentOutsideEventWorkspace(t *testing.T) {
 	t.Parallel()
 	e, runner := newTestEngine(t, func(c *config.Config) {
 		c.Agents = []fleet.Agent{
-			{Name: "team-reviewer", WorkspaceID: "team-a", Backend: "claude", Prompt: "Review team workspace."},
-			{Name: "default-reviewer", WorkspaceID: "team-a", Backend: "claude", Prompt: "Review other repo.", ScopeType: "repo", ScopeRepo: "owner/other"},
+			{Name: "team-reviewer", WorkspaceID: "team-a", Backend: "claude", PromptRef: "Review team workspace."},
+			{Name: "default-reviewer", WorkspaceID: "team-a", Backend: "claude", PromptRef: "Review other repo.", ScopeType: "repo", ScopeRepo: "owner/other"},
 		}
 		c.Repos = []fleet.Repo{
 			{
@@ -270,7 +274,7 @@ func TestEngineRejectsRepoScopedAgentOutsideRepo(t *testing.T) {
 			Name:        "repo-reviewer",
 			WorkspaceID: "team-a",
 			Backend:     "claude",
-			Prompt:      "Review repo.",
+			PromptRef:   "coder",
 			ScopeType:   "repo",
 			ScopeRepo:   "owner/other",
 		}}
@@ -366,7 +370,7 @@ func TestHandleEventEventBindings(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			e, runner := newTestEngine(t, func(c *config.Config) {
-				c.Agents = append(c.Agents, fleet.Agent{Name: "watcher", Backend: "claude", Prompt: "React to events."})
+				c.Agents = append(c.Agents, fleet.Agent{Name: "watcher", Backend: "claude", PromptRef: "React to events."})
 				c.Repos[0].Use = append(c.Repos[0].Use, fleet.Binding{Agent: "watcher", Events: []string{tc.bindEvent}})
 			})
 			ev := Event{
@@ -425,8 +429,8 @@ func TestEngineDispatchEventPayloadPropagatedToPrompt(t *testing.T) {
 		},
 		Skills: map[string]fleet.Skill{},
 		Agents: []fleet.Agent{
-			{Name: "coder", Backend: "claude", Prompt: "Write code.", AllowDispatch: true},
-			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review code.", AllowDispatch: true},
+			{Name: "coder", Backend: "claude", PromptRef: "Write code.", AllowDispatch: true},
+			{Name: "pr-reviewer", Backend: "claude", PromptRef: "Review code.", AllowDispatch: true},
 		},
 		Repos: []fleet.Repo{
 			{
@@ -490,7 +494,7 @@ func TestEngineDispatchEventReplayDepthPropagatedToPrompt(t *testing.T) {
 		},
 		Skills: map[string]fleet.Skill{},
 		Agents: []fleet.Agent{
-			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review code.", AllowDispatch: true},
+			{Name: "pr-reviewer", Backend: "claude", PromptRef: "Review code.", AllowDispatch: true},
 		},
 		Repos: []fleet.Repo{{Name: "owner/repo", Enabled: true}},
 	}
@@ -755,7 +759,7 @@ func newTestEngineWithDedup(t *testing.T, cfgMutator func(*config.Config)) (*Eng
 		},
 		Skills: map[string]fleet.Skill{},
 		Agents: []fleet.Agent{
-			{Name: "pr-reviewer", Backend: "claude", Prompt: "Review PR.", Description: "Reviews PRs", AllowDispatch: true},
+			{Name: "pr-reviewer", Backend: "claude", PromptRef: "Review PR.", Description: "Reviews PRs", AllowDispatch: true},
 		},
 		Repos: []fleet.Repo{
 			{
@@ -902,7 +906,7 @@ func TestFanOutClaimAbandonedOnRunFailure(t *testing.T) {
 func TestFanOutDoesNotDedupZeroNumberEvents(t *testing.T) {
 	t.Parallel()
 	e, runner, _ := newTestEngineWithDedup(t, func(c *config.Config) {
-		c.Agents = append(c.Agents, fleet.Agent{Name: "pusher", Backend: "claude", Prompt: "React to pushes."})
+		c.Agents = append(c.Agents, fleet.Agent{Name: "pusher", Backend: "claude", PromptRef: "React to pushes."})
 		c.Repos[0].Use = append(c.Repos[0].Use, fleet.Binding{Agent: "pusher", Events: []string{"push"}})
 	})
 
@@ -945,7 +949,7 @@ func TestDispatchEventRunsAfterEnqueue(t *testing.T) {
 		c.Agents = append(c.Agents, fleet.Agent{
 			Name:          "coder",
 			Backend:       "claude",
-			Prompt:        "Write code.",
+			PromptRef:     "coder",
 			AllowDispatch: true,
 			CanDispatch:   []string{"pr-reviewer"},
 		})
@@ -993,7 +997,7 @@ func TestDispatchDedupPreventsDoubleEnqueue(t *testing.T) {
 		c.Agents = append(c.Agents, fleet.Agent{
 			Name:          "coder",
 			Backend:       "claude",
-			Prompt:        "Write code.",
+			PromptRef:     "coder",
 			AllowDispatch: true,
 			CanDispatch:   []string{"pr-reviewer"},
 		})
@@ -1381,7 +1385,7 @@ func newDirectRunTestEngine(t *testing.T) (*Engine, *stubRunner) {
 			},
 		},
 		Agents: []fleet.Agent{
-			{Name: "arch-reviewer", Backend: "claude", Prompt: "Review architecture."},
+			{Name: "arch-reviewer", Backend: "claude", PromptRef: "Review architecture."},
 		},
 		Repos: []fleet.Repo{
 			{Name: "owner/repo", Enabled: true},

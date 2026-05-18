@@ -84,8 +84,8 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 				return fmt.Errorf("config: agent %q: unknown skill %q", a.Name, s)
 			}
 		}
-		if a.Prompt == "" {
-			return fmt.Errorf("config: agent %q: prompt is empty", a.Name)
+		if a.PromptID == "" && a.PromptRef == "" {
+			return fmt.Errorf("config: agent %q: prompt_id or prompt_ref is required", a.Name)
 		}
 		scopeType := a.ScopeType
 		if scopeType == "" {

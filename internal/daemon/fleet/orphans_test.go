@@ -46,9 +46,9 @@ func TestComputeOrphanedAgents(t *testing.T) {
 			},
 		},
 		Agents: []fleet.Agent{
-			{Name: "coder", Backend: "claude", Model: "claude-3.5", Prompt: "x"},
-			{Name: "reviewer", Backend: "claude", Model: "claude-4", Prompt: "x"},
-			{Name: "defaulted", Backend: "claude", Prompt: "x"},
+			{Name: "coder", Backend: "claude", Model: "claude-3.5", PromptRef: "x"},
+			{Name: "reviewer", Backend: "claude", Model: "claude-4", PromptRef: "x"},
+			{Name: "defaulted", Backend: "claude", PromptRef: "x"},
 		},
 		Repos: []fleet.Repo{
 			{
@@ -103,7 +103,7 @@ func TestComputeOrphanedAgentsIncludesDisabledRefs(t *testing.T) {
 			},
 		},
 		Agents: []fleet.Agent{
-			{Name: "coder", Backend: "claude", Model: "claude-3.5", Prompt: "x"},
+			{Name: "coder", Backend: "claude", Model: "claude-3.5", PromptRef: "x"},
 		},
 		Repos: []fleet.Repo{
 			{
@@ -153,8 +153,8 @@ func TestComputeOrphanedAgentsScopesDuplicateNamesByWorkspace(t *testing.T) {
 			},
 		},
 		Agents: []fleet.Agent{
-			{Name: "coder", WorkspaceID: fleet.DefaultWorkspaceID, Backend: "claude", Model: "claude-3.5", Prompt: "default"},
-			{Name: "coder", WorkspaceID: "team-a", Backend: "claude", Model: "claude-3.5", Prompt: "team"},
+			{Name: "coder", WorkspaceID: fleet.DefaultWorkspaceID, Backend: "claude", Model: "claude-3.5", PromptRef: "default"},
+			{Name: "coder", WorkspaceID: "team-a", Backend: "claude", Model: "claude-3.5", PromptRef: "team"},
 		},
 		Repos: []fleet.Repo{
 			{

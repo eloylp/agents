@@ -6,6 +6,17 @@ How the daemon thinks about agents, what gets composed into every prompt, and th
 
 An agent is a workspace-local backend selection, a list of stable skill references, a prompt reference, a scope, and a few flags (`allow_prs`, `allow_dispatch`, `can_dispatch`). It does not run by itself. Agents only execute when a binding wires them to a trigger on a repo in the same workspace.
 
+## Prompts are catalog entries, not agent fields
+
+Prompt text lives in the reusable prompt catalog. An agent stores only a reference to one catalog entry:
+
+- `prompt_id`, the stable persisted identifier, best for scripts and exact references.
+- `prompt_ref` plus optional `prompt_scope`, the human-facing selector used in YAML, REST, MCP, and the UI.
+
+`prompt_scope` accepts `global`, `workspace`, or `workspace/owner/repo`, case-insensitively. If a prompt name is ambiguous across visible scopes, use `prompt_id`. Inline `agents[].prompt` bodies are unsupported; create or select a catalog prompt first, then attach it to the agent by reference.
+
+At runtime the daemon resolves the agent's prompt reference to catalog content, then composes it with guardrails, skills, runtime context, and memory. Updating a prompt catalog entry affects later runs of every agent that references it, without editing the agent itself.
+
 ## How an agent fires
 
 There are four trigger paths. They all end in the same execution model: the daemon composes a prompt, hands it to the AI CLI, and the CLI reads / writes GitHub through MCP tools first. Authenticated `gh` is available inside the container as a fallback when a complex task needs a safe local checkout, test, and PR loop.
@@ -54,7 +65,7 @@ Every run, the daemon assembles the prompt from these pieces, in this order:
 6. **Runtime context.** A `## Runtime context` block carrying event details: `Event` kind, `Actor` (the GitHub login that triggered it), an issue or PR number where applicable, and the payload fields documented per event kind in [events.md](events.md).
 7. **Memory.** When the agent has `allow_memory: true` (the default), the daemon reads its persisted memory before the run and appends it to the prompt; the response's `memory` field is persisted back after a successful run. This applies uniformly across every trigger surface: cron, webhook events, dispatch, `POST /run`, and the `trigger_agent` MCP tool. Setting `allow_memory: false` skips both the load and the persist regardless of how the run was triggered. CLI-native memory is not part of the daemon contract; the built-in `memory-scope` guardrail tells agents to ignore it and use only the daemon-rendered `Existing memory:` section.
 
-The order matters: guardrails before everything (so untrusted text the agent reads later cannot retroactively unset them), skills before the agent's own prompt, runtime context last. The agent's prompt can reference its skills, and runtime details come pre-loaded so the prompt does not need to ask "what triggered this?"
+The order matters: guardrails before everything (so untrusted text the agent reads later cannot retroactively unset them), skills before the selected prompt, runtime context last. The selected prompt can reference its skills, and runtime details come pre-loaded so the prompt does not need to ask "what triggered this?"
 
 ### What it looks like assembled
 
@@ -103,7 +114,7 @@ Existing memory:
 
 Notes on the layout:
 - The two skill bodies (`discretion`, `pr_lifecycle`) are concatenated verbatim, separated by a blank line. The daemon does not edit them.
-- The agent's own prompt comes immediately after the last skill, with no separator headline.
+- The selected catalog prompt comes immediately after the last skill, with no separator headline.
 - The roster only appears when `can_dispatch` is non-empty.
 - Payload keys are sorted alphabetically; multi-line string values are indented.
 - Memory is appended last, with a literal `Existing memory:` label. An empty memory still shows the label so the agent knows to start fresh.

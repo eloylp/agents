@@ -24,14 +24,14 @@ type RosterEntry struct {
 // Fields are optional, zero values are simply omitted from the rendered
 // output.
 type PromptContext struct {
-	Repo        string // "owner/repo"
-	Number      int    // issue or PR number, 0 for runs with no GitHub item
-	Backend     string // resolved backend name (claude, codex, ...)
-	Memory      string // existing memory snapshot injected before each autonomous run
-	HasMemory    bool  // true when the caller is loading memory for this run; enables the memory section
-	EventKind   string         // e.g. "issues.labeled", "push", empty for autonomous runs
-	Actor       string         // GitHub login that triggered the event; empty for autonomous runs
-	Payload     map[string]any // kind-specific event fields; nil for autonomous runs
+	Repo      string         // "owner/repo"
+	Number    int            // issue or PR number, 0 for runs with no GitHub item
+	Backend   string         // resolved backend name (claude, codex, ...)
+	Memory    string         // existing memory snapshot injected before each autonomous run
+	HasMemory bool           // true when the caller is loading memory for this run; enables the memory section
+	EventKind string         // e.g. "issues.labeled", "push", empty for autonomous runs
+	Actor     string         // GitHub login that triggered the event; empty for autonomous runs
+	Payload   map[string]any // kind-specific event fields; nil for autonomous runs
 
 	// Roster is the list of peer agents available for dispatch on the same repo.
 	// The current agent is excluded. Only populated when dispatch is configured.
@@ -50,8 +50,8 @@ type PromptContext struct {
 //   - System: stable content that is identical across every run of the same
 //     agent on the same repo, operator-set guardrails (prepended at the very
 //     top so they precede everything else the model reads), the no-PR guard
-//     (when allow_prs=false), concatenated skill guidance, the agent's own
-//     prompt body, and the available-experts roster. Backends that support a
+//     (when allow_prs=false), concatenated skill guidance, the selected prompt
+//     catalog body, and the available-experts roster. Backends that support a
 //     native system channel (e.g. Claude's --append-system-prompt) can deliver
 //     this part separately to benefit from prompt caching.
 //
@@ -66,8 +66,9 @@ type PromptContext struct {
 // gate, so the renderer stays a pure text composer.
 //
 // No Go templates, no {{.Field}} substitution, just text composition. The
-// agent's prompt is expected to be self-contained.
-func RenderAgentPrompt(agent fleet.Agent, skills map[string]fleet.Skill, guardrails []fleet.Guardrail, ctx PromptContext) (RenderedPrompt, error) {
+// promptBody is the resolved prompt catalog content selected by the agent's
+// prompt_id or prompt_ref. It is expected to be self-contained.
+func RenderAgentPrompt(agent fleet.Agent, promptBody string, skills map[string]fleet.Skill, guardrails []fleet.Guardrail, ctx PromptContext) (RenderedPrompt, error) {
 	var sys strings.Builder
 
 	for _, g := range guardrails {
@@ -95,7 +96,7 @@ func RenderAgentPrompt(agent fleet.Agent, skills map[string]fleet.Skill, guardra
 		}
 	}
 
-	agentPrompt := strings.TrimSpace(agent.Prompt)
+	agentPrompt := strings.TrimSpace(promptBody)
 	if agentPrompt != "" {
 		sys.WriteString(agentPrompt)
 	}
