@@ -37,7 +37,7 @@ internal/
   scheduler/                    # cron scheduler + agent memory (SQLite-backed)
   runtime/                      # Runner interface + ContainerSpec/ExitStatus types, Docker implementation, per-backend container setup
   backends/                     # backend discovery: CLI probing, GitHub MCP health checks, tool diagnostics, orphan detection
-  store/                        # SQLite-backed config + event_queue store: Open, Import, Load, CRUD, *store.Store facade
+  store/                        # SQLite persistence boundary: migrations, config import/load, CRUD concept files, *store.Store facade
   workflow/                     # event routing engine, durable event queue (persist-on-push + replay), processor, dispatcher
   daemon/                       # owns the daemon as a single composed unit: lifecycle, router, /status, /run, proxy + UI + MCP mounts
   daemon/observe/               # observability HTTP handlers (events, traces, graph, dispatches, memory, SSE)
@@ -107,9 +107,9 @@ When making common classes of changes, update all of these at once:
 | New webhook event kind | Decoder in `internal/webhook/handler.go`, acceptance in `internal/workflow/engine.go`, README event table, validation in `internal/config/config.go` |
 | New AI backend behavior | `internal/ai/cmdrunner.go`, allowlist if new env vars, backend registration in `cmd/agents/main.go`, config example |
 | Agent prompt contract | Prompts in SQLite (edit via UI or CRUD API), runner parser in `internal/ai/cmdrunner.go`, `internal/ai/types.go`, `internal/ai/response-schema.json`, AGENTS.md runner-contract section, tests |
-| Memory contract | `internal/workflow/engine.go` (memory load/persist around runs), `internal/store/store.go` (SQLite path), agent prompts "Memory hygiene" sections, `internal/ai/types.go` |
+| Memory contract | `internal/workflow/engine.go` (memory load/persist around runs), `internal/store/memory*.go` (SQLite path), agent prompts "Memory hygiene" sections, `internal/ai/types.go` |
 | Dispatch semantics | `internal/workflow/dispatch.go` (runtime), `internal/config/config.go` (load-time validation), agent response schema in `internal/ai/types.go`, README dispatch section, all prompt "Response format" sections, tests on both paths |
-| SQLite store schema | `internal/store/migrations/`, `internal/store/store.go`, `internal/store/crud.go`, the per-domain handlers under `internal/daemon/{fleet,repos,config,queue}`, tests |
+| SQLite store schema | `internal/store/migrations/`, `internal/store/open.go`, `internal/store/snapshot_*.go`, `internal/store/*s.go` concept files, the per-domain handlers under `internal/daemon/{fleet,repos,config,queue}`, tests |
 | Proxy translation behavior | `internal/anthropic_proxy/{types,translate,handler}.go`, unit tests for the affected shape, `docs/local-models.md` if user-visible |
 | Token budget schema (`token_budgets` table) | `internal/store/migrations/`, `internal/store/budgets.go`, `internal/store/facade.go`, `internal/daemon/config/budgets.go`, `internal/daemon/config/config.go` (export/import), `internal/mcp/tools_budgets.go`, docs |
 | Anything in the README | Also check `CLAUDE.md`, `AGENTS.md`, `config.example.yaml`, these four should stay in sync |
