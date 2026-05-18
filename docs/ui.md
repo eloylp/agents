@@ -46,7 +46,7 @@ Fleet snapshot with per-agent status, prompt reference, skills, bindings, dispat
 
 ### Prompts and Skills
 
-Manage reusable prompt contracts and reusable guidance blocks composed into agent prompts. Both catalogs can be global, workspace-scoped, or repo-scoped. The list pages show all catalog items by default and provide local workspace/repo filters where that helps selection. Create, edit, delete. Long-form content editors have the same **⛶ Expand** affordance as the agent prompt, useful when a prompt or skill grows past a screenful.
+Manage reusable prompt contracts and reusable guidance blocks composed into agent prompts. Both catalogs can be global, workspace-scoped, or repo-scoped. The list pages show all catalog items by default and provide local workspace/repo filters where that helps selection. Create, edit, delete. Long-form content editors have the same **⛶ Expand** affordance across prompt and skill editors, useful when content grows past a screenful.
 
 ![Skills editor](img/skills.png)
 

@@ -27,7 +27,7 @@
 #               labels: [ai ready]
 #
 # Keep agents under workspaces and reference reusable prompt catalog entries
-# with prompt_ref. Inline agent prompt bodies are not part of the normal model.
+# with prompt_ref. Inline agent prompt bodies are unsupported.
 # After that, manage the fleet through the /ui/ dashboard, the CRUD
 # API, or the agents-fleet MCP tools.
 #
