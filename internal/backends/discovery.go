@@ -582,11 +582,10 @@ func parseModels(raw string) []string {
 		if strings.HasPrefix(lower, "model") || strings.HasPrefix(lower, "available") || strings.HasPrefix(lower, "current") || strings.HasPrefix(lower, "you") || strings.HasPrefix(lower, "for ") {
 			continue
 		}
-		fields := strings.Fields(line)
-		if len(fields) == 0 {
-			continue
+		for field := range strings.FieldsSeq(line) {
+			names = append(names, field)
+			break
 		}
-		names = append(names, fields[0])
 	}
 	return dedupeSorted(names)
 }
