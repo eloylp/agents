@@ -17,7 +17,7 @@ internal/
   scheduler/                # Cron scheduler + agent memory (SQLite-backed)
   runtime/                  # Runner interface + ContainerSpec/ExitStatus types, Docker implementation, per-backend container setup (env, scripts, paths)
   backends/                 # Backend discovery: CLI probing, GitHub MCP health checks, tool diagnostics, orphan detection
-  store/                    # SQLite-backed config + event_queue store: Open, Import, Load, CRUD; *store.Store facade hides the *sql.DB
+  store/                    # SQLite persistence boundary: migrations, config import/load, CRUD concept files; *store.Store facade hides the *sql.DB
   workflow/                 # Event routing engine, durable event queue (persist-on-push + replay), processor, dispatcher
   daemon/                   # Daemon as a single composed unit: lifecycle, router, /status, /run, proxy + UI + MCP mounts
   daemon/observe/           # Observability HTTP handlers (events, traces, graph, dispatches, memory, SSE)

@@ -26,7 +26,8 @@ internal/
 ├─ fleet/                       domain entities, Workspace, Agent, Prompt, Skill, Guardrail, Repo, Backend, Binding
 ├─ config/                      *Config + YAML loader + cross-entity validators
 ├─ store/                       SQLite schema, migrations, *store.Store facade,
-│                                 event_queue, memory, CRUD primitives
+│                                 snapshot import/load, concept CRUD primitives,
+│                                 event_queue, memory, runtime settings, budgets
 │
 ├─ workflow/                    Engine, Processor, Dispatcher, DataChannels, dispatch dedup
 ├─ scheduler/                   cron registration + event producer
