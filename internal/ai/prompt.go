@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -125,7 +126,7 @@ func renderRoster(roster []RosterEntry) string {
 	}
 	sorted := slices.Clone(roster)
 	slices.SortFunc(sorted, func(a, b RosterEntry) int {
-		return strings.Compare(a.Name, b.Name)
+		return cmp.Compare(a.Name, b.Name)
 	})
 	var b strings.Builder
 	b.WriteString("## Available experts\n\n")
