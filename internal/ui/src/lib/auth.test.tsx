@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { AuthTokenSettings } from './auth'
+import { AuthProvider, AuthTokenSettings } from './auth'
 
 function mockFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>) {
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -19,6 +19,27 @@ function jsonResponse(body: unknown, init?: ResponseInit) {
     ...init,
   })
 }
+
+describe('AuthProvider', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('renders the checking session screen without an image-backed background', () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})))
+
+    const { container } = render(
+      <AuthProvider>
+        <div>Authenticated app</div>
+      </AuthProvider>,
+    )
+
+    expect(screen.getByRole('heading', { name: 'Checking session' })).toBeInTheDocument()
+    const redirectScreen = container.firstElementChild as HTMLElement
+    expect(redirectScreen.style.background).not.toContain('agents.jpg')
+    expect(redirectScreen.style.background).not.toContain('url(')
+  })
+})
 
 describe('AuthTokenSettings', () => {
   afterEach(() => {
