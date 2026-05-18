@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -26,6 +28,20 @@ jobs:
 
       - name: go vet
         run: go vet ./...
+
+      - name: detect migration changes
+        id: migration-changes
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}" -- internal/store/migrations/ | grep -q .; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: migration compatibility tests
+        if: github.event_name == 'pull_request' && steps.migration-changes.outputs.changed == 'true'
+        run: go test ./internal/store -run 'Test(OpenAndMigrate|.*Migration.*)' -count=1
 
       - name: go test
         if: github.event_name == 'pull_request'
