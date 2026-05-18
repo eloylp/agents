@@ -228,19 +228,29 @@ func ReadAgents(db *sql.DB) ([]fleet.Agent, error) {
 // writing so the stored values match the canonical form that AgentByName and
 // registerJobs expect, keeping live behavior consistent with startup.
 func UpsertAgent(db *sql.DB, a fleet.Agent) error {
-	fleet.NormalizeAgent(&a)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert agent %s: begin: %w", a.Name, err)
 	}
 	defer tx.Rollback()
+	if err := UpsertAgentTx(tx, a); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// UpsertAgentTx persists one normalized agent inside an existing transaction.
+// Callers that own use-case orchestration should validate the post-write fleet
+// snapshot before committing.
+func UpsertAgentTx(tx *sql.Tx, a fleet.Agent) error {
+	fleet.NormalizeAgent(&a)
 	if err := importAgents(tx, []fleet.Agent{a}); err != nil {
 		return err
 	}
 	if err := validateFleet(tx); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: upsert agent %s: %v", a.Name, err)}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // DeleteAgent removes the agent with the given name. It is not an error to

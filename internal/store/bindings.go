@@ -57,10 +57,9 @@ func CreateBinding(db *sql.DB, repoName string, b fleet.Binding) (int64, fleet.B
 }
 
 func CreateWorkspaceBinding(db *sql.DB, workspaceID, repoName string, b fleet.Binding) (int64, fleet.Binding, error) {
-	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
-	repoName = fleet.NormalizeRepoName(repoName)
-	normalizeBinding(&b)
-	if err := validateBindingShape(b); err != nil {
+	shape := b
+	normalizeBinding(&shape)
+	if err := validateBindingShape(shape); err != nil {
 		return 0, fleet.Binding{}, err
 	}
 	tx, err := db.Begin()
@@ -68,6 +67,22 @@ func CreateWorkspaceBinding(db *sql.DB, workspaceID, repoName string, b fleet.Bi
 		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: begin: %w", err)
 	}
 	defer tx.Rollback()
+	id, created, err := CreateWorkspaceBindingTx(tx, workspaceID, repoName, b)
+	if err != nil {
+		return 0, fleet.Binding{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: commit: %w", err)
+	}
+	return id, created, nil
+}
+
+// CreateWorkspaceBindingTx inserts a binding inside an existing transaction.
+// Callers should validate the binding shape before calling this primitive.
+func CreateWorkspaceBindingTx(tx *sql.Tx, workspaceID, repoName string, b fleet.Binding) (int64, fleet.Binding, error) {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	repoName = fleet.NormalizeRepoName(repoName)
+	normalizeBinding(&b)
 
 	// Verify the repo exists so the FK violation surfaces as a typed error.
 	var repoExists bool
@@ -108,9 +123,6 @@ func CreateWorkspaceBinding(db *sql.DB, workspaceID, repoName string, b fleet.Bi
 	if err := validateFleet(tx); err != nil {
 		return 0, fleet.Binding{}, &ErrValidation{Msg: fmt.Sprintf("store: create binding: %v", err)}
 	}
-	if err := tx.Commit(); err != nil {
-		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: commit: %w", err)
-	}
 	b.ID = id
 	return id, b, nil
 }
@@ -122,8 +134,9 @@ func CreateWorkspaceBinding(db *sql.DB, workspaceID, repoName string, b fleet.Bi
 //
 // Callers hold the store mutex and reload cron afterwards.
 func UpdateBinding(db *sql.DB, id int64, b fleet.Binding) (fleet.Binding, error) {
-	normalizeBinding(&b)
-	if err := validateBindingShape(b); err != nil {
+	shape := b
+	normalizeBinding(&shape)
+	if err := validateBindingShape(shape); err != nil {
 		return fleet.Binding{}, err
 	}
 	tx, err := db.Begin()
@@ -131,6 +144,20 @@ func UpdateBinding(db *sql.DB, id int64, b fleet.Binding) (fleet.Binding, error)
 		return fleet.Binding{}, fmt.Errorf("store: update binding: begin: %w", err)
 	}
 	defer tx.Rollback()
+	updated, err := UpdateBindingTx(tx, id, b)
+	if err != nil {
+		return fleet.Binding{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return fleet.Binding{}, fmt.Errorf("store: update binding: commit: %w", err)
+	}
+	return updated, nil
+}
+
+// UpdateBindingTx replaces one binding inside an existing transaction. Callers
+// should validate the binding shape before calling this primitive.
+func UpdateBindingTx(tx *sql.Tx, id int64, b fleet.Binding) (fleet.Binding, error) {
+	normalizeBinding(&b)
 
 	var workspaceID string
 	if err := tx.QueryRow("SELECT workspace_id FROM bindings WHERE id=?", id).Scan(&workspaceID); err != nil {
@@ -178,9 +205,6 @@ func UpdateBinding(db *sql.DB, id int64, b fleet.Binding) (fleet.Binding, error)
 
 	if err := validateFleet(tx); err != nil {
 		return fleet.Binding{}, &ErrValidation{Msg: fmt.Sprintf("store: update binding: %v", err)}
-	}
-	if err := tx.Commit(); err != nil {
-		return fleet.Binding{}, fmt.Errorf("store: update binding: commit: %w", err)
 	}
 	b.ID = id
 	return b, nil

@@ -7,7 +7,11 @@
 package service
 
 import (
+	"database/sql"
+	"fmt"
 	"strings"
+
+	"github.com/robfig/cron/v3"
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
@@ -37,7 +41,9 @@ func (s *Service) UpsertAgent(a fleet.Agent) error {
 	if strings.TrimSpace(a.PromptRef) == "" && strings.TrimSpace(a.PromptID) == "" {
 		return &store.ErrValidation{Msg: "prompt_id or prompt_ref is required"}
 	}
-	return s.store.UpsertAgent(a)
+	return s.withTx("upsert agent", func(tx *sql.Tx) error {
+		return store.UpsertAgentTx(tx, a)
+	})
 }
 func (s *Service) DeleteWorkspaceAgent(workspace, name string) error {
 	return s.store.DeleteWorkspaceAgent(workspace, name)
@@ -93,7 +99,9 @@ func (s *Service) UpsertRepo(r fleet.Repo) error {
 	if err := fleet.ValidateRepoName(r.Name); err != nil {
 		return &store.ErrValidation{Msg: err.Error()}
 	}
-	return s.store.UpsertRepo(r)
+	return s.withTx("upsert repo", func(tx *sql.Tx) error {
+		return store.UpsertRepoTx(tx, r)
+	})
 }
 func (s *Service) EnableWorkspaceRepo(workspace, repo string, enabled bool) error {
 	return s.store.EnableWorkspaceRepo(workspace, repo, enabled)
@@ -102,10 +110,40 @@ func (s *Service) DeleteWorkspaceRepo(workspace, repo string) error {
 	return s.store.DeleteWorkspaceRepo(workspace, repo)
 }
 func (s *Service) CreateWorkspaceBinding(workspace, repo string, b fleet.Binding) (int64, fleet.Binding, error) {
-	return s.store.CreateWorkspaceBinding(workspace, repo, b)
+	if err := validateBindingShape(b); err != nil {
+		return 0, fleet.Binding{}, err
+	}
+	tx, err := s.store.DB().Begin()
+	if err != nil {
+		return 0, fleet.Binding{}, fmt.Errorf("service: create binding: begin: %w", err)
+	}
+	defer tx.Rollback()
+	id, created, err := store.CreateWorkspaceBindingTx(tx, workspace, repo, b)
+	if err != nil {
+		return 0, fleet.Binding{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fleet.Binding{}, fmt.Errorf("service: create binding: commit: %w", err)
+	}
+	return id, created, nil
 }
 func (s *Service) UpdateBinding(id int64, b fleet.Binding) (fleet.Binding, error) {
-	return s.store.UpdateBinding(id, b)
+	if err := validateBindingShape(b); err != nil {
+		return fleet.Binding{}, err
+	}
+	tx, err := s.store.DB().Begin()
+	if err != nil {
+		return fleet.Binding{}, fmt.Errorf("service: update binding: begin: %w", err)
+	}
+	defer tx.Rollback()
+	updated, err := store.UpdateBindingTx(tx, id, b)
+	if err != nil {
+		return fleet.Binding{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return fleet.Binding{}, fmt.Errorf("service: update binding: commit: %w", err)
+	}
+	return updated, nil
 }
 func (s *Service) DeleteBinding(id int64) error { return s.store.DeleteBinding(id) }
 
@@ -129,3 +167,39 @@ func (s *Service) PatchTokenBudget(id int64, patch store.TokenBudgetPatch) (stor
 	return s.store.PatchTokenBudget(id, patch)
 }
 func (s *Service) DeleteTokenBudget(id int64) error { return s.store.DeleteTokenBudget(id) }
+
+func (s *Service) withTx(op string, fn func(*sql.Tx) error) error {
+	tx, err := s.store.DB().Begin()
+	if err != nil {
+		return fmt.Errorf("service: %s: begin: %w", op, err)
+	}
+	defer tx.Rollback()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("service: %s: commit: %w", op, err)
+	}
+	return nil
+}
+
+var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+
+func validateBindingShape(b fleet.Binding) error {
+	if strings.TrimSpace(b.Agent) == "" {
+		return &store.ErrValidation{Msg: "agent is required"}
+	}
+	n := b.TriggerCount()
+	if n == 0 {
+		return &store.ErrValidation{Msg: "binding has no trigger (set cron, labels, or events)"}
+	}
+	if n > 1 {
+		return &store.ErrValidation{Msg: "binding mixes multiple trigger types (labels, events, cron); each binding must use exactly one trigger"}
+	}
+	if b.IsCron() {
+		if _, err := cronParser.Parse(b.Cron); err != nil {
+			return &store.ErrValidation{Msg: fmt.Sprintf("invalid cron expression %q: %v", b.Cron, err)}
+		}
+	}
+	return nil
+}

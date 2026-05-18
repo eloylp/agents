@@ -141,19 +141,31 @@ func ReadRepos(db *sql.DB) ([]fleet.Repo, error) {
 // the new list is written. The repo name and binding agents/events are
 // normalized (trimmed / lowercased) before writing.
 func UpsertRepo(db *sql.DB, r fleet.Repo) error {
-	fleet.NormalizeRepo(&r)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert repo %s: begin: %w", r.Name, err)
 	}
 	defer tx.Rollback()
+	if err := UpsertRepoTx(tx, r); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// UpsertRepoTx persists one normalized repo and replaces its bindings inside
+// an existing transaction. Callers own the surrounding commit.
+func UpsertRepoTx(tx *sql.Tx, r fleet.Repo) error {
+	fleet.NormalizeRepo(&r)
 	if err := importRepos(tx, []fleet.Repo{r}); err != nil {
 		return err
 	}
 	if err := validateFleet(tx); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: upsert repo %s: %v", r.Name, err)}
 	}
-	return tx.Commit()
+	if err := validateCronExpressions([]fleet.Repo{r}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // DeleteRepo removes a repo and all of its bindings. Deleting the last enabled
