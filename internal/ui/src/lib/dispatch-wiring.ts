@@ -7,7 +7,6 @@ export interface StoreAgent {
   backend: string
   model: string
   skills: string[]
-  prompt?: string
   prompt_id?: string
   prompt_ref: string
   prompt_scope?: string
@@ -39,7 +38,6 @@ export function storeAgentFromResponse(data: Partial<StoreAgent>, fallbackName: 
     backend: data.backend ?? '',
     model: data.model ?? '',
     skills: data.skills ?? [],
-    prompt: data.prompt ?? '',
     prompt_id: data.prompt_id ?? '',
     prompt_ref: data.prompt_ref ?? '',
     prompt_scope: data.prompt_scope ?? '',

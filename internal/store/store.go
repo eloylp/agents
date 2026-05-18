@@ -120,7 +120,7 @@ func Import(db *sql.DB, cfg *config.Config) error {
 	if err := importReferencedWorkspaces(tx, cfg.Agents, cfg.Repos); err != nil {
 		return err
 	}
-	if err := importAgents(tx, cfg.Agents, false); err != nil {
+	if err := importAgents(tx, cfg.Agents); err != nil {
 		return err
 	}
 	if err := importRepos(tx, cfg.Repos); err != nil {
@@ -502,7 +502,7 @@ func derivedPromptID(p fleet.Prompt) (string, error) {
 	return derivedCatalogID("prompt_", p.WorkspaceID, p.Repo, p.Name)
 }
 
-func importAgents(tx *sql.Tx, agents []fleet.Agent, updatePromptContent bool) error {
+func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
 	for _, a := range agents {
 		workspaceID := fleet.NormalizeWorkspaceID(a.WorkspaceID)
 		scopeType := a.ScopeType

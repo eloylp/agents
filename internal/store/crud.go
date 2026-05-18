@@ -181,7 +181,7 @@ func UpsertAgent(db *sql.DB, a fleet.Agent) error {
 		return fmt.Errorf("store: upsert agent %s: begin: %w", a.Name, err)
 	}
 	defer tx.Rollback()
-	if err := importAgents(tx, []fleet.Agent{a}, true); err != nil {
+	if err := importAgents(tx, []fleet.Agent{a}); err != nil {
 		return err
 	}
 	if err := validateFleet(tx); err != nil {
@@ -753,7 +753,7 @@ func ImportAll(
 	if err := importReferencedWorkspaces(tx, agents, repos); err != nil {
 		return err
 	}
-	if err := importAgents(tx, agents, true); err != nil {
+	if err := importAgents(tx, agents); err != nil {
 		return err
 	}
 	if err := importRepos(tx, repos); err != nil {
@@ -817,7 +817,7 @@ func ReplaceAll(
 	if err := importReferencedWorkspaces(tx, agents, repos); err != nil {
 		return err
 	}
-	if err := importAgents(tx, agents, false); err != nil {
+	if err := importAgents(tx, agents); err != nil {
 		return err
 	}
 	if err := importRepos(tx, repos); err != nil {
@@ -907,7 +907,7 @@ func importConfig(db *sql.DB, cfg *config.Config, budgets []TokenBudget, replace
 	if err := importReferencedWorkspaces(tx, cfg.Agents, cfg.Repos); err != nil {
 		return err
 	}
-	if err := importAgents(tx, cfg.Agents, true); err != nil {
+	if err := importAgents(tx, cfg.Agents); err != nil {
 		return err
 	}
 	if err := importRepos(tx, cfg.Repos); err != nil {

@@ -120,8 +120,8 @@ type DispatchConfig struct {
 
 // FinishLoad applies defaults, normalization, secret resolution, and
 // validation to a Config that was populated by means other than Load (e.g.
-// read from the SQLite store). All prompts are expected to be inline by
-// the time FinishLoad runs.
+// read from the SQLite store). Prompt catalog entries must already be loaded;
+// agents reference them by prompt_id or prompt_ref.
 func FinishLoad(cfg *Config) (*Config, error) {
 	cfg.syncBackendsIntoDaemon()
 	cfg.applyDefaults()
@@ -148,8 +148,8 @@ func (c *Config) syncBackendsFromDaemon() {
 }
 
 // Load reads, parses, validates, and resolves a YAML config file at the
-// given path. Prompts are expected inline; the loader does not read any
-// other files.
+// given path. Prompt catalog entries are read from the config file; the loader
+// does not read any other files.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

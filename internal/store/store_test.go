@@ -687,6 +687,32 @@ func TestAuthAdminMigrationBackfillsFirstExistingUser(t *testing.T) {
 			cache_write_tokens INTEGER NULL,
 			created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
+		CREATE TABLE workspaces (
+			id           TEXT PRIMARY KEY,
+			name         TEXT NOT NULL UNIQUE,
+			description  TEXT NOT NULL DEFAULT '',
+			created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+			runner_image TEXT NOT NULL DEFAULT ''
+		);
+		CREATE TABLE agents (
+			id             TEXT PRIMARY KEY,
+			workspace_id   TEXT NOT NULL DEFAULT 'default' REFERENCES workspaces(id),
+			name           TEXT NOT NULL,
+			backend        TEXT NOT NULL DEFAULT 'auto',
+			model          TEXT NOT NULL DEFAULT '',
+			skills         TEXT NOT NULL DEFAULT '[]',
+			prompt         TEXT NOT NULL DEFAULT '',
+			prompt_id      TEXT NOT NULL DEFAULT '',
+			scope_type     TEXT NOT NULL DEFAULT 'workspace',
+			scope_repo     TEXT NOT NULL DEFAULT '',
+			allow_prs      INTEGER NOT NULL DEFAULT 0,
+			allow_dispatch INTEGER NOT NULL DEFAULT 0,
+			can_dispatch   TEXT NOT NULL DEFAULT '[]',
+			description    TEXT NOT NULL DEFAULT '',
+			allow_memory   INTEGER NOT NULL DEFAULT 1,
+			UNIQUE(workspace_id, name)
+		);
 		INSERT INTO users(username, password_hash) VALUES ('first', 'hash'), ('second', 'hash');
 	`); err != nil {
 		t.Fatalf("seed pre-029 auth schema: %v", err)
