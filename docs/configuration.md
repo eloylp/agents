@@ -56,6 +56,8 @@ Secrets keep their integration-specific names:
 ```bash
 GITHUB_WEBHOOK_SECRET=... # HMAC shared secret for /webhooks/github
 GITHUB_TOKEN=...          # GitHub MCP server and gh CLI fallback in runner containers
+AGENTS_GIT_USER_NAME=...  # configured as git user.name inside runner containers
+AGENTS_GIT_USER_EMAIL=... # configured as git user.email inside runner containers
 CLAUDE_CODE_OAUTH_TOKEN=...
 ANTHROPIC_API_KEY=...
 ANTHROPIC_AUTH_TOKEN=...
@@ -72,6 +74,8 @@ SSH_AUTH_SOCK=...
 ```
 
 AI and GitHub credentials are injected from the daemon environment into each ephemeral runner container. They are never part of `/config`, `/export`, MCP responses, or UI payloads.
+
+`AGENTS_GIT_USER_NAME` and `AGENTS_GIT_USER_EMAIL` are not credentials, but they use the same env-driven runner setup path. When either is set, the runner setup runs `git config --global user.name "$AGENTS_GIT_USER_NAME"` and/or `git config --global user.email "$AGENTS_GIT_USER_EMAIL"` before starting the AI CLI. Set both explicitly so generated commits use a predictable author instead of letting agents invent one.
 
 Codex supports two auth modes:
 

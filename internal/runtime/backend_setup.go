@@ -82,6 +82,18 @@ exec "$cmd" "$@"
 const baseContainerSetup = `
 set -eu
 mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$CODEX_HOME" "` + RunnerWorkspaceDir + `"
+if [ -n "${AGENTS_GIT_USER_NAME:-}" ] || [ -n "${AGENTS_GIT_USER_EMAIL:-}" ]; then
+  if ! command -v git >/dev/null 2>&1; then
+    echo "git identity configured but git is not installed in the runner image" >&2
+    exit 1
+  fi
+  if [ -n "${AGENTS_GIT_USER_NAME:-}" ]; then
+    git config --global user.name "$AGENTS_GIT_USER_NAME"
+  fi
+  if [ -n "${AGENTS_GIT_USER_EMAIL:-}" ]; then
+    git config --global user.email "$AGENTS_GIT_USER_EMAIL"
+  fi
+fi
 `
 
 const claudeContainerSetup = `

@@ -31,6 +31,7 @@ curl -s http://localhost:8080/status | jq
 Production runs are env-driven. Put credentials in `.env`; they are injected into each short-lived runner container and are not exported through UI, REST, MCP, or fleet YAML.
 
 - `GITHUB_TOKEN`: used for GitHub MCP and `gh` fallback. Use `repo` scope minimum; add `workflow` if agents touch CI.
+- Git identity: set `AGENTS_GIT_USER_NAME` and `AGENTS_GIT_USER_EMAIL`; the runner configures them as `git config --global user.name/user.email` before each AI CLI starts.
 - Claude: preferred path, run `claude setup-token` locally and set the returned value as `CLAUDE_CODE_OAUTH_TOKEN`. API-key deployments may instead set `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`.
 - Codex: preferred for ChatGPT/Plus/Pro subscription access, run `codex login` locally with file-based credential storage and set `CODEX_AUTH_JSON_BASE64` from `~/.codex/auth.json`; alternatively set `OPENAI_API_KEY` for OpenAI Platform API-billed usage.
 

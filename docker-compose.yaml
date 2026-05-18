@@ -22,6 +22,8 @@ services:
       - GH_TOKEN=${GH_TOKEN}
       - GH_HOST=${GH_HOST}
       - GITHUB_API_URL=${GITHUB_API_URL}
+      - AGENTS_GIT_USER_NAME=${AGENTS_GIT_USER_NAME}
+      - AGENTS_GIT_USER_EMAIL=${AGENTS_GIT_USER_EMAIL}
       - SSH_AUTH_SOCK=${SSH_AUTH_SOCK}
     volumes:
       # SQLite database (fleet config + agent memory + observability).

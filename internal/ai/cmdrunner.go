@@ -739,10 +739,10 @@ func extractToolResultText(raw json.RawMessage) string {
 
 // allowCommandEnvKey reports whether key is safe to forward to the AI backend
 // subprocess. Only variables required for tool operation (auth tokens, paths,
-// locale) are permitted; everything else is excluded.
+// locale, git identity) are permitted; everything else is excluded.
 func allowCommandEnvKey(key string) bool {
 	switch key {
-	case "PATH", "HOME", "USER", "SHELL", "TMPDIR", "TMP", "TEMP", "LANG", "TERM", "NO_COLOR", "COLORTERM", "EDITOR", "VISUAL", "PAGER", "SSH_AUTH_SOCK", "CODEX_AUTH_JSON_BASE64", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "GITHUB_TOKEN", "GH_TOKEN", "GH_HOST", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "GITHUB_API_URL":
+	case "PATH", "HOME", "USER", "SHELL", "TMPDIR", "TMP", "TEMP", "LANG", "TERM", "NO_COLOR", "COLORTERM", "EDITOR", "VISUAL", "PAGER", "SSH_AUTH_SOCK", "CODEX_AUTH_JSON_BASE64", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "GITHUB_TOKEN", "GH_TOKEN", "GH_HOST", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "GITHUB_API_URL", "AGENTS_GIT_USER_NAME", "AGENTS_GIT_USER_EMAIL":
 		return true
 	default:
 		return strings.HasPrefix(key, "LC_")

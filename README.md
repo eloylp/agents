@@ -42,7 +42,7 @@ See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a re
 Every run, regardless of trigger, goes through the same pipeline:
 
 1. **Compose the prompt**: workspace guardrails + skills + selected prompt + runtime context + memory.
-2. **Start a runner container** from the configured `agents-runner` image and spawn the AI CLI (`claude`, `codex`, or your local model) with JSON-schema-enforced output and repository tools available inside that container.
+2. **Start a runner container** from the configured `agents-runner` image, configure the operator-provided git identity, and spawn the AI CLI (`claude`, `codex`, or your local model) with JSON-schema-enforced output and repository tools available inside that container.
 3. **Parse the structured response**: artifacts, dispatch requests, updated memory.
 4. **Persist the trace**, fan out any dispatches, write back memory.
 
