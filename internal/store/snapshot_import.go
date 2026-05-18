@@ -205,24 +205,48 @@ func ReplaceAll(
 // single transaction. It includes prompt catalog entries and workspace
 // guardrail references in addition to the legacy fleet sections.
 func ImportConfig(db *sql.DB, cfg *config.Config, budgets []TokenBudget) error {
-	return importConfig(db, cfg, budgets, false)
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: import config: begin: %w", err)
+	}
+	defer tx.Rollback()
+	if err := ImportConfigTx(tx, cfg, budgets); err != nil {
+		return err
+	}
+	if err := validateFleetConstraints(tx, "import", cfg.Repos); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ReplaceConfig replaces the workspace-aware YAML import/export shape in a
 // single transaction. The default workspace row is retained as the compatibility
 // fallback, but all dependent mutable fleet rows are pruned before import.
 func ReplaceConfig(db *sql.DB, cfg *config.Config, budgets []TokenBudget) error {
-	return importConfig(db, cfg, budgets, true)
-}
-
-func importConfig(db *sql.DB, cfg *config.Config, budgets []TokenBudget, replace bool) error {
-	normalizedSkills, normalizedBackends := normalizeFleet(cfg.Agents, cfg.Repos, cfg.Skills, cfg.Backends)
-
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: import config: begin: %w", err)
 	}
 	defer tx.Rollback()
+	if err := ReplaceConfigTx(tx, cfg, budgets); err != nil {
+		return err
+	}
+	if err := validateFleetConstraints(tx, "replace", cfg.Repos); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func ImportConfigTx(tx *sql.Tx, cfg *config.Config, budgets []TokenBudget) error {
+	return importConfigTx(tx, cfg, budgets, false)
+}
+
+func ReplaceConfigTx(tx *sql.Tx, cfg *config.Config, budgets []TokenBudget) error {
+	return importConfigTx(tx, cfg, budgets, true)
+}
+
+func importConfigTx(tx *sql.Tx, cfg *config.Config, budgets []TokenBudget, replace bool) error {
+	normalizedSkills, normalizedBackends := normalizeFleet(cfg.Agents, cfg.Repos, cfg.Skills, cfg.Backends)
 
 	if replace {
 		for _, tbl := range []string{"bindings", "repos", "agents", "token_budgets"} {
@@ -285,8 +309,5 @@ func importConfig(db *sql.DB, cfg *config.Config, budgets []TokenBudget, replace
 	if err := importTokenBudgetsTx(tx, budgets, replace); err != nil {
 		return err
 	}
-	if err := validateFleetConstraints(tx, "import", cfg.Repos); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return nil
 }

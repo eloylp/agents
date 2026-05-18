@@ -278,12 +278,35 @@ func DeleteWorkspaceAgentCascade(db *sql.DB, workspaceID, name string) error {
 }
 
 func deleteAgent(db *sql.DB, workspaceID, name string, cascade bool) error {
-	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: delete agent %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	var existed bool
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM agents WHERE workspace_id=? AND name=?)", workspaceID, name).Scan(&existed); err != nil {
+		return fmt.Errorf("store: delete agent %s: lookup: %w", name, err)
+	}
+	if err := DeleteWorkspaceAgentTx(tx, workspaceID, name, cascade); err != nil {
+		return err
+	}
+	if existed {
+		if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM agents", "agents", "config: at least one agent is required"); err != nil {
+			return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: %v", name, err)}
+		}
+		if err := validateFleet(tx); err != nil {
+			return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: %v", name, err)}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: delete agent %s: commit: %w", name, err)
+	}
+	return nil
+}
+
+func DeleteWorkspaceAgentTx(tx *sql.Tx, workspaceID, name string, cascade bool) error {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	if cascade {
 		if _, err := tx.Exec("DELETE FROM bindings WHERE workspace_id=? AND agent=?", workspaceID, name); err != nil {
 			return fmt.Errorf("store: delete agent %s: cascade bindings: %w", name, err)
@@ -306,14 +329,9 @@ func deleteAgent(db *sql.DB, workspaceID, name string, cascade bool) error {
 		return fmt.Errorf("store: delete agent %s: %w", name, err)
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
-		if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM agents", "agents", "config: at least one agent is required"); err != nil {
-			return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: %v", name, err)}
-		}
-		if err := validateFleet(tx); err != nil {
-			return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: %v", name, err)}
-		}
+		return nil
 	}
-	return tx.Commit()
+	return nil
 }
 
 // bindingsReferencing returns the repo names of every binding that points at

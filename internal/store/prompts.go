@@ -196,18 +196,27 @@ func ReadPrompt(db *sql.DB, ref string) (fleet.Prompt, error) {
 // fallback for legacy global display names. A prompt referenced by any agent
 // cannot be deleted because agents must always point at existing prompt content.
 func DeletePrompt(db *sql.DB, ref string) error {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return &ErrValidation{Msg: "prompt id is required"}
-	}
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: delete prompt %s: begin: %w", ref, err)
 	}
 	defer tx.Rollback()
+	if err := DeletePromptTx(tx, ref); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: delete prompt %s: commit: %w", ref, err)
+	}
+	return nil
+}
 
+func DeletePromptTx(tx *sql.Tx, ref string) error {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return &ErrValidation{Msg: "prompt id is required"}
+	}
 	var id string
-	err = tx.QueryRow("SELECT id FROM prompts WHERE id=?", ref).Scan(&id)
+	err := tx.QueryRow("SELECT id FROM prompts WHERE id=?", ref).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		name := fleet.NormalizePromptName(ref)
 		err = queryPromptByScopeName(tx, "", "", name).Scan(&id)
@@ -228,7 +237,7 @@ func DeletePrompt(db *sql.DB, ref string) error {
 	if _, err := tx.Exec("DELETE FROM prompts WHERE id=?", id); err != nil {
 		return fmt.Errorf("store: delete prompt %s: %w", ref, err)
 	}
-	return tx.Commit()
+	return nil
 }
 
 func agentsReferencingPrompt(q querier, promptID string) ([]string, error) {

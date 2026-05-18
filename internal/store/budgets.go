@@ -135,6 +135,14 @@ func validateBudget(b TokenBudget) error {
 	return nil
 }
 
+func ValidateTokenBudget(b TokenBudget) error {
+	return validateBudget(b)
+}
+
+func NormalizeTokenBudget(b TokenBudget) TokenBudget {
+	return normalizeBudget(b)
+}
+
 func normalizeBudget(b TokenBudget) TokenBudget {
 	b.ScopeKind = strings.TrimSpace(b.ScopeKind)
 	b.ScopeName = strings.TrimSpace(b.ScopeName)
@@ -244,6 +252,10 @@ func ListTokenBudgets(db *sql.DB) ([]TokenBudget, error) {
 
 // GetTokenBudget returns one budget by ID.
 func GetTokenBudget(db *sql.DB, id int64) (TokenBudget, error) {
+	return GetTokenBudgetFrom(db, id)
+}
+
+func GetTokenBudgetFrom(db querier, id int64) (TokenBudget, error) {
 	row := db.QueryRow(`SELECT id, scope_kind, scope_name, workspace_id, repo, agent, backend, period, cap_tokens, alert_at_pct, enabled FROM token_budgets WHERE id = ?`, id)
 	b, err := scanTokenBudget(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -254,6 +266,10 @@ func GetTokenBudget(db *sql.DB, id int64) (TokenBudget, error) {
 
 // CreateTokenBudget inserts a new budget and returns it with its generated ID.
 func CreateTokenBudget(db *sql.DB, b TokenBudget) (TokenBudget, error) {
+	return CreateTokenBudgetTx(db, b)
+}
+
+func CreateTokenBudgetTx(db sqlExec, b TokenBudget) (TokenBudget, error) {
 	b = normalizeBudget(b)
 	if err := validateBudget(b); err != nil {
 		return TokenBudget{}, err
@@ -282,6 +298,10 @@ func CreateTokenBudget(db *sql.DB, b TokenBudget) (TokenBudget, error) {
 
 // UpdateTokenBudget replaces all fields of an existing budget.
 func UpdateTokenBudget(db *sql.DB, id int64, b TokenBudget) (TokenBudget, error) {
+	return UpdateTokenBudgetTx(db, id, b)
+}
+
+func UpdateTokenBudgetTx(db sqlExec, id int64, b TokenBudget) (TokenBudget, error) {
 	b = normalizeBudget(b)
 	if err := validateBudget(b); err != nil {
 		return TokenBudget{}, err
@@ -315,10 +335,14 @@ func UpdateTokenBudget(db *sql.DB, id int64, b TokenBudget) (TokenBudget, error)
 // PatchTokenBudget partially updates an existing budget and returns the
 // canonical merged row.
 func PatchTokenBudget(db *sql.DB, id int64, patch TokenBudgetPatch) (TokenBudget, error) {
+	return PatchTokenBudgetTx(db, id, patch)
+}
+
+func PatchTokenBudgetTx(db sqlExec, id int64, patch TokenBudgetPatch) (TokenBudget, error) {
 	if !patch.AnyFieldSet() {
 		return TokenBudget{}, &ErrValidation{Msg: "at least one field is required"}
 	}
-	current, err := GetTokenBudget(db, id)
+	current, err := GetTokenBudgetFrom(db, id)
 	if err != nil {
 		return TokenBudget{}, err
 	}
@@ -352,11 +376,15 @@ func PatchTokenBudget(db *sql.DB, id int64, patch TokenBudgetPatch) (TokenBudget
 	if patch.Enabled != nil {
 		current.Enabled = *patch.Enabled
 	}
-	return UpdateTokenBudget(db, id, current)
+	return UpdateTokenBudgetTx(db, id, current)
 }
 
 // DeleteTokenBudget removes a budget by ID.
 func DeleteTokenBudget(db *sql.DB, id int64) error {
+	return DeleteTokenBudgetTx(db, id)
+}
+
+func DeleteTokenBudgetTx(db sqlExec, id int64) error {
 	res, err := db.Exec(`DELETE FROM token_budgets WHERE id=?`, id)
 	if err != nil {
 		return err

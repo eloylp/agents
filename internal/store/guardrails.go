@@ -54,6 +54,10 @@ func ReadAllGuardrails(db *sql.DB) ([]fleet.Guardrail, error) {
 // GetGuardrail returns the named guardrail. Returns *ErrNotFound when the
 // row does not exist.
 func GetGuardrail(db *sql.DB, name string) (fleet.Guardrail, error) {
+	return GetGuardrailFrom(db, name)
+}
+
+func GetGuardrailFrom(db querier, name string) (fleet.Guardrail, error) {
 	name = fleet.NormalizeGuardrailName(name)
 	const q = `
 		SELECT id, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, COALESCE(description, ''), content,
@@ -157,8 +161,12 @@ func isReservedGuardrailName(name string) bool {
 // deleted too, operators who really mean it can run a complete cleanup;
 // the dashboard double-confirms before letting them.
 func DeleteGuardrail(db *sql.DB, name string) error {
+	return DeleteGuardrailTx(db, name)
+}
+
+func DeleteGuardrailTx(db sqlExec, name string) error {
 	name = fleet.NormalizeGuardrailName(name)
-	g, err := GetGuardrail(db, name)
+	g, err := GetGuardrailFrom(db, name)
 	if err != nil {
 		return err
 	}
@@ -181,8 +189,12 @@ func DeleteGuardrail(db *sql.DB, name string) error {
 // *ErrValidation when the row has no default_content (i.e., it's an
 // operator-added rule with nothing to reset to).
 func ResetGuardrail(db *sql.DB, name string) error {
+	return ResetGuardrailTx(db, name)
+}
+
+func ResetGuardrailTx(db sqlExec, name string) error {
 	name = fleet.NormalizeGuardrailName(name)
-	g, err := GetGuardrail(db, name)
+	g, err := GetGuardrailFrom(db, name)
 	if err != nil {
 		return err
 	}

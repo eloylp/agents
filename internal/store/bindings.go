@@ -199,6 +199,16 @@ func DeleteBinding(db *sql.DB, id int64) error {
 		return fmt.Errorf("store: delete binding: begin: %w", err)
 	}
 	defer tx.Rollback()
+	if err := DeleteBindingTx(tx, id); err != nil {
+		return err
+	}
+	if err := validateFleet(tx); err != nil {
+		return &ErrConflict{Msg: fmt.Sprintf("store: delete binding: %v", err)}
+	}
+	return tx.Commit()
+}
+
+func DeleteBindingTx(tx *sql.Tx, id int64) error {
 	res, err := tx.Exec("DELETE FROM bindings WHERE id=?", id)
 	if err != nil {
 		return fmt.Errorf("store: delete binding: %w", err)
@@ -210,10 +220,7 @@ func DeleteBinding(db *sql.DB, id int64) error {
 	if n == 0 {
 		return &ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found", id)}
 	}
-	if err := validateFleet(tx); err != nil {
-		return &ErrConflict{Msg: fmt.Sprintf("store: delete binding: %v", err)}
-	}
-	return tx.Commit()
+	return nil
 }
 
 // ReadBinding fetches a single binding by ID along with its parent repo name.

@@ -124,17 +124,26 @@ func DeleteBackend(db *sql.DB, name string) error {
 		return fmt.Errorf("store: delete backend %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
+	if err := DeleteBackendTx(tx, name); err != nil {
+		return err
+	}
+	if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM backends", "backends", "config: at least one backend entry is required"); err != nil {
+		return &ErrConflict{Msg: fmt.Sprintf("store: delete backend %s: %v", name, err)}
+	}
+	if err := validateFleet(tx); err != nil {
+		return &ErrConflict{Msg: fmt.Sprintf("store: delete backend %s: %v", name, err)}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: delete backend %s: commit: %w", name, err)
+	}
+	return nil
+}
+
+func DeleteBackendTx(tx *sql.Tx, name string) error {
 	res, err := tx.Exec("DELETE FROM backends WHERE name=?", name)
 	if err != nil {
 		return fmt.Errorf("store: delete backend %s: %w", name, err)
 	}
-	if n, _ := res.RowsAffected(); n > 0 {
-		if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM backends", "backends", "config: at least one backend entry is required"); err != nil {
-			return &ErrConflict{Msg: fmt.Sprintf("store: delete backend %s: %v", name, err)}
-		}
-		if err := validateFleet(tx); err != nil {
-			return &ErrConflict{Msg: fmt.Sprintf("store: delete backend %s: %v", name, err)}
-		}
-	}
-	return tx.Commit()
+	_, _ = res.RowsAffected()
+	return nil
 }

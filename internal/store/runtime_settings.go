@@ -51,30 +51,7 @@ func PatchRuntimeSettings(db *sql.DB, patch RuntimeSettingsPatch) (fleet.Runtime
 		return fleet.RuntimeSettings{}, fmt.Errorf("store: begin patch runtime settings: %w", err)
 	}
 	defer tx.Rollback()
-
-	current, err := ReadRuntimeSettings(tx)
-	if err != nil {
-		return fleet.RuntimeSettings{}, err
-	}
-	if patch.RunnerImage != nil {
-		current.RunnerImage = *patch.RunnerImage
-	}
-	if patch.Constraints.CPUs != nil {
-		current.Constraints.CPUs = *patch.Constraints.CPUs
-	}
-	if patch.Constraints.Memory != nil {
-		current.Constraints.Memory = *patch.Constraints.Memory
-	}
-	if patch.Constraints.PidsLimit != nil {
-		current.Constraints.PidsLimit = *patch.Constraints.PidsLimit
-	}
-	if patch.Constraints.TimeoutSeconds != nil {
-		current.Constraints.TimeoutSeconds = *patch.Constraints.TimeoutSeconds
-	}
-	if patch.Constraints.NetworkMode != nil {
-		current.Constraints.NetworkMode = *patch.Constraints.NetworkMode
-	}
-	updated, err := writeRuntimeSettings(tx, current)
+	updated, err := PatchRuntimeSettingsTx(tx, patch)
 	if err != nil {
 		return fleet.RuntimeSettings{}, err
 	}
@@ -85,7 +62,7 @@ func PatchRuntimeSettings(db *sql.DB, patch RuntimeSettingsPatch) (fleet.Runtime
 }
 
 func WriteRuntimeSettings(db *sql.DB, settings fleet.RuntimeSettings) (fleet.RuntimeSettings, error) {
-	return writeRuntimeSettings(db, settings)
+	return WriteRuntimeSettingsTx(db, settings)
 }
 
 type runtimeSettingsWriter interface {
@@ -112,22 +89,62 @@ func writeRuntimeSettings(db runtimeSettingsWriter, settings fleet.RuntimeSettin
 	return settings, nil
 }
 
+func PatchRuntimeSettingsTx(tx *sql.Tx, patch RuntimeSettingsPatch) (fleet.RuntimeSettings, error) {
+	current, err := ReadRuntimeSettings(tx)
+	if err != nil {
+		return fleet.RuntimeSettings{}, err
+	}
+	if patch.RunnerImage != nil {
+		current.RunnerImage = *patch.RunnerImage
+	}
+	if patch.Constraints.CPUs != nil {
+		current.Constraints.CPUs = *patch.Constraints.CPUs
+	}
+	if patch.Constraints.Memory != nil {
+		current.Constraints.Memory = *patch.Constraints.Memory
+	}
+	if patch.Constraints.PidsLimit != nil {
+		current.Constraints.PidsLimit = *patch.Constraints.PidsLimit
+	}
+	if patch.Constraints.TimeoutSeconds != nil {
+		current.Constraints.TimeoutSeconds = *patch.Constraints.TimeoutSeconds
+	}
+	if patch.Constraints.NetworkMode != nil {
+		current.Constraints.NetworkMode = *patch.Constraints.NetworkMode
+	}
+	return WriteRuntimeSettingsTx(tx, current)
+}
+
+func WriteRuntimeSettingsTx(db runtimeSettingsWriter, settings fleet.RuntimeSettings) (fleet.RuntimeSettings, error) {
+	return writeRuntimeSettings(db, settings)
+}
+
 func SetWorkspaceRunnerImage(db *sql.DB, workspaceID, image string) (fleet.Workspace, error) {
+	if _, err := ReadWorkspace(db, workspaceID); err != nil {
+		return fleet.Workspace{}, err
+	}
+	if err := SetWorkspaceRunnerImageTx(db, workspaceID, image); err != nil {
+		return fleet.Workspace{}, err
+	}
+	return ReadWorkspace(db, workspaceID)
+}
+
+func SetWorkspaceRunnerImageTx(db sqlExec, workspaceID, image string) error {
 	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	image = strings.TrimSpace(image)
 	if image != "" && strings.ContainsAny(image, "\r\n\t ") {
-		return fleet.Workspace{}, &ErrValidation{Msg: "workspace runner image must not contain whitespace"}
+		return &ErrValidation{Msg: "workspace runner image must not contain whitespace"}
 	}
 	res, err := db.Exec("UPDATE workspaces SET runner_image = ?, updated_at = datetime('now') WHERE id = ?", image, workspaceID)
 	if err != nil {
-		return fleet.Workspace{}, fmt.Errorf("store: update workspace %s runner image: %w", workspaceID, err)
+		return fmt.Errorf("store: update workspace %s runner image: %w", workspaceID, err)
 	}
 	if n, err := res.RowsAffected(); err != nil {
-		return fleet.Workspace{}, fmt.Errorf("store: update workspace %s runner image rows: %w", workspaceID, err)
+		return fmt.Errorf("store: update workspace %s runner image rows: %w", workspaceID, err)
 	} else if n == 0 {
-		return fleet.Workspace{}, &ErrNotFound{Msg: fmt.Sprintf("workspace %q not found", workspaceID)}
+		return &ErrNotFound{Msg: fmt.Sprintf("workspace %q not found", workspaceID)}
 	}
-	return ReadWorkspace(db, workspaceID)
+	return nil
 }
 
 func validateRuntimeSettings(settings fleet.RuntimeSettings) error {
