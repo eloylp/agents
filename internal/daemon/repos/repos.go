@@ -1,10 +1,9 @@
 // Package repos implements the repos and per-binding HTTP CRUD surface.
 // Handlers and the methods exposed for the MCP fleet-management tools live
-// together in this package so that the wire format, the validation gate,
-// and the storage path stay in sync.
+// together in this package so that the wire format stays in sync.
 //
 // The handler reads from SQLite on every request and writes through the
-// store package's per-call transactions. The static MaxBodyBytes limit is
+// service layer. The static MaxBodyBytes limit is
 // captured at construction since it never mutates via CRUD.
 package repos
 
@@ -22,6 +21,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/service"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -29,6 +29,7 @@ import (
 // surface plus the methods exposed for the MCP repo and binding tools.
 type Handler struct {
 	store        *store.Store
+	service      *service.Service
 	maxBodyBytes int64
 	logger       zerolog.Logger
 }
@@ -38,6 +39,7 @@ type Handler struct {
 func New(st *store.Store, maxBodyBytes int64, logger zerolog.Logger) *Handler {
 	return &Handler{
 		store:        st,
+		service:      service.New(st),
 		maxBodyBytes: maxBodyBytes,
 		logger:       logger.With().Str("component", "server_repos").Logger(),
 	}
@@ -278,19 +280,13 @@ func (h *Handler) handleDeleteBinding(w http.ResponseWriter, r *http.Request) {
 
 // ── Methods exposed for non-HTTP callers (MCP tools) ─────────────────────────────────────────────
 
-// UpsertRepo writes a single repo definition (and its bindings) into the store
-// and reloads the cron scheduler. Returns the canonical (normalized) form so
-// callers can surface the exact shape REST clients see in the POST /repos
-// response, lowercase repo name, lowercased binding agents, trimmed cron, and
-// lowercased events.
-//
-// Empty/whitespace names are rejected as *store.ErrValidation so callers can
-// map them to HTTP 400 / MCP user errors.
+// UpsertRepo writes a single repo definition (and its bindings) through the
+// service layer. Returns the canonical (normalized) form so callers can
+// surface the exact shape REST clients see in the POST /repos response:
+// lowercase repo name, lowercased binding agents, trimmed cron, and lowercased
+// events.
 func (h *Handler) UpsertRepo(r fleet.Repo) (fleet.Repo, error) {
-	if err := fleet.ValidateRepoName(r.Name); err != nil {
-		return fleet.Repo{}, &store.ErrValidation{Msg: err.Error()}
-	}
-	if err := h.store.UpsertRepo(r); err != nil {
+	if err := h.service.UpsertRepo(r); err != nil {
 		return fleet.Repo{}, err
 	}
 	fleet.NormalizeRepo(&r)
@@ -323,7 +319,7 @@ func (h *Handler) PatchRepoInWorkspace(workspaceID, repoName string, enabled boo
 	}
 	// Flip the enabled flag via a direct UPDATE so we don't re-run the
 	// delete+insert cycle that UpsertRepo performs on bindings.
-	if err := h.store.EnableWorkspaceRepo(workspaceID, repoName, enabled); err != nil {
+	if err := h.service.EnableWorkspaceRepo(workspaceID, repoName, enabled); err != nil {
 		return fleet.Repo{}, fmt.Errorf("patch repo %s: %w", repoName, err)
 	}
 	existing.Enabled = enabled
@@ -337,7 +333,7 @@ func (h *Handler) DeleteRepo(name string) error {
 }
 
 func (h *Handler) DeleteRepoInWorkspace(workspaceID, name string) error {
-	return h.store.DeleteWorkspaceRepo(workspaceID, name)
+	return h.service.DeleteWorkspaceRepo(workspaceID, name)
 }
 
 // CreateBinding persists a new binding on repoName.
@@ -346,7 +342,7 @@ func (h *Handler) CreateBinding(repoName string, b fleet.Binding) (fleet.Binding
 }
 
 func (h *Handler) CreateBindingInWorkspace(workspaceID, repoName string, b fleet.Binding) (fleet.Binding, error) {
-	_, persisted, err := h.store.CreateWorkspaceBinding(workspaceID, repoName, b)
+	_, persisted, err := h.service.CreateWorkspaceBinding(workspaceID, repoName, b)
 	if err != nil {
 		return fleet.Binding{}, err
 	}
@@ -366,7 +362,7 @@ func (h *Handler) UpdateBindingInWorkspace(workspaceID, repoName string, id int6
 	if !found || existingRepo != repoName || fleet.NormalizeWorkspaceID(bindingWorkspace) != fleet.NormalizeWorkspaceID(workspaceID) {
 		return fleet.Binding{}, &store.ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found for repo %q", id, repoName)}
 	}
-	return h.store.UpdateBinding(id, b)
+	return h.service.UpdateBinding(id, b)
 }
 
 // ReadBinding fetches one binding by ID, verifying it belongs to repoName.
@@ -398,7 +394,7 @@ func (h *Handler) DeleteBindingInWorkspace(workspaceID, repoName string, id int6
 	if !found || existingRepo != repoName || fleet.NormalizeWorkspaceID(bindingWorkspace) != fleet.NormalizeWorkspaceID(workspaceID) {
 		return &store.ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found for repo %q", id, repoName)}
 	}
-	return h.store.DeleteBinding(id)
+	return h.service.DeleteBinding(id)
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────────────

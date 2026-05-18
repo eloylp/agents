@@ -140,20 +140,37 @@ func ReadRepos(db *sql.DB) ([]fleet.Repo, error) {
 // replaced wholesale: any existing bindings for the repo are removed before
 // the new list is written. The repo name and binding agents/events are
 // normalized (trimmed / lowercased) before writing.
+//
+// This non-Tx wrapper is retained for compatibility with store-level tests and
+// setup helpers. Production mutation paths should call internal/service, which
+// owns the transaction and post-write fleet validation, or use UpsertRepoTx
+// inside a service-owned transaction.
 func UpsertRepo(db *sql.DB, r fleet.Repo) error {
-	fleet.NormalizeRepo(&r)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert repo %s: begin: %w", r.Name, err)
 	}
 	defer tx.Rollback()
-	if err := importRepos(tx, []fleet.Repo{r}); err != nil {
+	if err := UpsertRepoTx(tx, r); err != nil {
 		return err
 	}
 	if err := validateFleet(tx); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: upsert repo %s: %v", r.Name, err)}
 	}
+	if err := validateCronExpressions([]fleet.Repo{r}); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+// UpsertRepoTx persists one normalized repo and replaces its bindings inside
+// an existing transaction. Callers own the surrounding commit.
+func UpsertRepoTx(tx *sql.Tx, r fleet.Repo) error {
+	fleet.NormalizeRepo(&r)
+	if err := importRepos(tx, []fleet.Repo{r}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // DeleteRepo removes a repo and all of its bindings. Deleting the last enabled
@@ -164,17 +181,37 @@ func DeleteRepo(db *sql.DB, name string) error {
 }
 
 func DeleteWorkspaceRepo(db *sql.DB, workspaceID, name string) error {
-	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: delete repo %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
+	if err := DeleteWorkspaceRepoTx(tx, workspaceID, name); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func DeleteWorkspaceRepoTx(tx *sql.Tx, workspaceID, name string) error {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	if _, err := tx.Exec("DELETE FROM bindings WHERE workspace_id=? AND repo=?", workspaceID, name); err != nil {
 		return fmt.Errorf("store: delete bindings for repo %s: %w", name, err)
 	}
 	if _, err := tx.Exec("DELETE FROM repos WHERE workspace_id=? AND name=?", workspaceID, name); err != nil {
 		return fmt.Errorf("store: delete repo %s: %w", name, err)
 	}
-	return tx.Commit()
+	return nil
+}
+
+func EnableWorkspaceRepoTx(tx *sql.Tx, workspace, name string, enabled bool) error {
+	res, err := tx.Exec("UPDATE repos SET enabled=? WHERE workspace_id=? AND name=?", boolToInt(enabled), fleet.NormalizeWorkspaceID(workspace), fleet.NormalizeRepoName(name))
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return &ErrNotFound{Msg: fmt.Sprintf("repo %q not found", name)}
+	}
+	return nil
 }

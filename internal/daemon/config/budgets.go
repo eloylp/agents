@@ -91,7 +91,7 @@ func (h *Handler) createTokenBudget(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, h.daemonCfg.HTTP.MaxBodyBytes, &b) {
 		return
 	}
-	created, err := h.store.CreateTokenBudget(b)
+	created, err := h.CreateTokenBudget(b)
 	if err != nil {
 		http.Error(w, err.Error(), storeErrStatus(err))
 		return
@@ -116,7 +116,7 @@ func (h *Handler) updateTokenBudget(w http.ResponseWriter, r *http.Request, id i
 	if !decodeBody(w, r, h.daemonCfg.HTTP.MaxBodyBytes, &req) {
 		return
 	}
-	updated, err := h.store.PatchTokenBudget(id, req.toStorePatch())
+	updated, err := h.PatchTokenBudget(id, req.toStorePatch())
 	if err != nil {
 		http.Error(w, err.Error(), storeErrStatus(err))
 		return
@@ -126,11 +126,23 @@ func (h *Handler) updateTokenBudget(w http.ResponseWriter, r *http.Request, id i
 }
 
 func (h *Handler) deleteTokenBudget(w http.ResponseWriter, _ *http.Request, id int64) {
-	if err := h.store.DeleteTokenBudget(id); err != nil {
+	if err := h.DeleteTokenBudget(id); err != nil {
 		http.Error(w, err.Error(), storeErrStatus(err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) CreateTokenBudget(b store.TokenBudget) (store.TokenBudget, error) {
+	return h.service.CreateTokenBudget(b)
+}
+
+func (h *Handler) PatchTokenBudget(id int64, patch store.TokenBudgetPatch) (store.TokenBudget, error) {
+	return h.service.PatchTokenBudget(id, patch)
+}
+
+func (h *Handler) DeleteTokenBudget(id int64) error {
+	return h.service.DeleteTokenBudget(id)
 }
 
 // handleTokenBudgetAlerts serves GET /token_budgets/alerts.

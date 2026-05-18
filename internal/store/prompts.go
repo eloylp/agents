@@ -84,6 +84,22 @@ func loadPrompts(db querier, cfg *config.Config) error {
 // UpsertPrompt inserts or replaces one prompt catalog entry. Existing rows keep
 // their stable id while content, description, and scope fields are updated.
 func UpsertPrompt(db *sql.DB, p fleet.Prompt) (fleet.Prompt, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: begin: %w", p.Name, err)
+	}
+	defer tx.Rollback()
+	p, err = UpsertPromptTx(tx, p)
+	if err != nil {
+		return fleet.Prompt{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: commit: %w", p.Name, err)
+	}
+	return p, nil
+}
+
+func UpsertPromptTx(tx *sql.Tx, p fleet.Prompt) (fleet.Prompt, error) {
 	p.Name = fleet.NormalizePromptName(p.Name)
 	p.WorkspaceID = strings.TrimSpace(p.WorkspaceID)
 	if p.WorkspaceID != "" {
@@ -98,13 +114,9 @@ func UpsertPrompt(db *sql.DB, p fleet.Prompt) (fleet.Prompt, error) {
 	if p.WorkspaceID == "" && p.Repo != "" {
 		return fleet.Prompt{}, &ErrValidation{Msg: "prompt repo scope requires workspace_id"}
 	}
-	tx, err := db.Begin()
-	if err != nil {
-		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: begin: %w", p.Name, err)
-	}
-	defer tx.Rollback()
 
 	var existingID string
+	var err error
 	if p.ID != "" {
 		err = tx.QueryRow("SELECT id FROM prompts WHERE id=?", p.ID).Scan(&existingID)
 	} else {
@@ -141,9 +153,6 @@ func UpsertPrompt(db *sql.DB, p fleet.Prompt) (fleet.Prompt, error) {
 			return fleet.Prompt{}, &ErrConflict{Msg: fmt.Sprintf("prompt name %q is already used by another prompt in that scope", p.Name)}
 		}
 		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: %w", p.Name, err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: commit: %w", p.Name, err)
 	}
 	return p, nil
 }
@@ -187,18 +196,27 @@ func ReadPrompt(db *sql.DB, ref string) (fleet.Prompt, error) {
 // fallback for legacy global display names. A prompt referenced by any agent
 // cannot be deleted because agents must always point at existing prompt content.
 func DeletePrompt(db *sql.DB, ref string) error {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return &ErrValidation{Msg: "prompt id is required"}
-	}
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: delete prompt %s: begin: %w", ref, err)
 	}
 	defer tx.Rollback()
+	if err := DeletePromptTx(tx, ref); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: delete prompt %s: commit: %w", ref, err)
+	}
+	return nil
+}
 
+func DeletePromptTx(tx *sql.Tx, ref string) error {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return &ErrValidation{Msg: "prompt id is required"}
+	}
 	var id string
-	err = tx.QueryRow("SELECT id FROM prompts WHERE id=?", ref).Scan(&id)
+	err := tx.QueryRow("SELECT id FROM prompts WHERE id=?", ref).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		name := fleet.NormalizePromptName(ref)
 		err = queryPromptByScopeName(tx, "", "", name).Scan(&id)
@@ -219,7 +237,7 @@ func DeletePrompt(db *sql.DB, ref string) error {
 	if _, err := tx.Exec("DELETE FROM prompts WHERE id=?", id); err != nil {
 		return fmt.Errorf("store: delete prompt %s: %w", ref, err)
 	}
-	return tx.Commit()
+	return nil
 }
 
 func agentsReferencingPrompt(q querier, promptID string) ([]string, error) {

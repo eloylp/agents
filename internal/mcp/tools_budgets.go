@@ -167,7 +167,7 @@ func toolCreateTokenBudget(deps Deps) server.ToolHandlerFunc {
 			AlertAtPct:  int(alertAtPct),
 			Enabled:     enabled,
 		}
-		created, err := deps.Store.CreateTokenBudget(b)
+		created, err := deps.Config.CreateTokenBudget(b)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
@@ -223,7 +223,7 @@ func toolUpdateTokenBudget(deps Deps) server.ToolHandlerFunc {
 		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil
 		}
-		updated, err := deps.Store.PatchTokenBudget(id, patch)
+		updated, err := deps.Config.PatchTokenBudget(id, patch)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
@@ -236,7 +236,7 @@ func toolDeleteTokenBudget(deps Deps) server.ToolHandlerFunc {
 		args := req.GetArguments()
 		idF, _ := args["id"].(float64)
 		id := int64(idF)
-		if err := deps.Store.DeleteTokenBudget(id); err != nil {
+		if err := deps.Config.DeleteTokenBudget(id); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		return mcpgo.NewToolResultText("deleted"), nil

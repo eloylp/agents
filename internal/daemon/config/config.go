@@ -4,7 +4,8 @@
 // apiConfigJSON tree for /config; the exportYAML fragment for /export +
 // /import) so REST and MCP clients see identical payloads.
 //
-// The handler reads CRUD-mutable fleet entities from SQLite on every request.
+// The handler reads CRUD-mutable fleet entities from SQLite on every request
+// and sends mutable use cases through internal/service.
 // Daemon runtime config is process-owned and is not exposed by /config,
 // /export, or /import.
 package config
@@ -24,6 +25,7 @@ import (
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/service"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -31,6 +33,7 @@ import (
 // methods exposed for the MCP config tools.
 type Handler struct {
 	store     *store.Store
+	service   *service.Service
 	daemonCfg config.DaemonConfig
 	logger    zerolog.Logger
 }
@@ -41,6 +44,7 @@ type Handler struct {
 func New(st *store.Store, daemonCfg config.DaemonConfig, logger zerolog.Logger) *Handler {
 	return &Handler{
 		store:     st,
+		service:   service.New(st),
 		daemonCfg: daemonCfg,
 		logger:    logger.With().Str("component", "server_config").Logger(),
 	}
@@ -74,6 +78,14 @@ func (h *Handler) HandleRuntime(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(settings)
 }
 
+func (h *Handler) PatchRuntimeSettings(patch store.RuntimeSettingsPatch) (fleet.RuntimeSettings, error) {
+	return h.service.PatchRuntimeSettings(patch)
+}
+
+func (h *Handler) SetWorkspaceRunnerImage(workspace, image string) (fleet.Workspace, error) {
+	return h.service.SetWorkspaceRunnerImage(workspace, image)
+}
+
 // HandleUpdateRuntime serves PUT/PATCH /runtime. Secret values are not part of
 // this shape; credentials are injected from daemon environment at run time.
 func (h *Handler) HandleUpdateRuntime(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +95,7 @@ func (h *Handler) HandleUpdateRuntime(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("parse runtime settings patch: %v", err), http.StatusBadRequest)
 			return
 		}
-		updated, err := h.store.PatchRuntimeSettings(patch)
+		updated, err := h.PatchRuntimeSettings(patch)
 		if err != nil {
 			http.Error(w, err.Error(), storeErrStatus(err))
 			return
@@ -98,7 +110,7 @@ func (h *Handler) HandleUpdateRuntime(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("parse runtime settings: %v", err), http.StatusBadRequest)
 		return
 	}
-	updated, err := h.store.WriteRuntimeSettings(settings)
+	updated, err := h.service.WriteRuntimeSettings(settings)
 	if err != nil {
 		http.Error(w, err.Error(), storeErrStatus(err))
 		return
@@ -120,7 +132,7 @@ func (h *Handler) HandleUpdateWorkspaceRuntime(w http.ResponseWriter, r *http.Re
 		http.Error(w, fmt.Sprintf("parse workspace runtime settings: %v", err), http.StatusBadRequest)
 		return
 	}
-	updated, err := h.store.SetWorkspaceRunnerImage(workspace, payload.RunnerImage)
+	updated, err := h.SetWorkspaceRunnerImage(workspace, payload.RunnerImage)
 	if err != nil {
 		http.Error(w, err.Error(), storeErrStatus(err))
 		return
@@ -485,9 +497,9 @@ func (h *Handler) ImportYAML(body []byte, mode string) (map[string]int, error) {
 	budgets := payload.flattenTokenBudgets()
 	var err error
 	if mode == "replace" {
-		err = h.store.ReplaceConfig(cfg, budgets)
+		err = h.service.ReplaceConfig(cfg, budgets)
 	} else {
-		err = h.store.ImportConfig(cfg, budgets)
+		err = h.service.ImportConfig(cfg, budgets)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("import: %w", err)

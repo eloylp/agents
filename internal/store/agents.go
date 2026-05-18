@@ -224,23 +224,39 @@ func ReadAgents(db *sql.DB) ([]fleet.Agent, error) {
 }
 
 // UpsertAgent inserts or replaces a single agent definition.
+//
+// This non-Tx wrapper is retained for compatibility with store-level tests and
+// setup helpers. Production mutation paths should call internal/service, which
+// owns the transaction and post-write fleet validation, or use UpsertAgentTx
+// inside a service-owned transaction.
+//
 // The agent name and related fields are normalized (lowercase, trimmed) before
 // writing so the stored values match the canonical form that AgentByName and
 // registerJobs expect, keeping live behavior consistent with startup.
 func UpsertAgent(db *sql.DB, a fleet.Agent) error {
-	fleet.NormalizeAgent(&a)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert agent %s: begin: %w", a.Name, err)
 	}
 	defer tx.Rollback()
-	if err := importAgents(tx, []fleet.Agent{a}); err != nil {
+	if err := UpsertAgentTx(tx, a); err != nil {
 		return err
 	}
 	if err := validateFleet(tx); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: upsert agent %s: %v", a.Name, err)}
 	}
 	return tx.Commit()
+}
+
+// UpsertAgentTx persists one normalized agent inside an existing transaction.
+// Callers that own use-case orchestration should validate the post-write fleet
+// snapshot before committing.
+func UpsertAgentTx(tx *sql.Tx, a fleet.Agent) error {
+	fleet.NormalizeAgent(&a)
+	if err := importAgents(tx, []fleet.Agent{a}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // DeleteAgent removes the agent with the given name. It is not an error to
@@ -268,12 +284,35 @@ func DeleteWorkspaceAgentCascade(db *sql.DB, workspaceID, name string) error {
 }
 
 func deleteAgent(db *sql.DB, workspaceID, name string, cascade bool) error {
-	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: delete agent %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	var existed bool
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM agents WHERE workspace_id=? AND name=?)", workspaceID, name).Scan(&existed); err != nil {
+		return fmt.Errorf("store: delete agent %s: lookup: %w", name, err)
+	}
+	if err := DeleteWorkspaceAgentTx(tx, workspaceID, name, cascade); err != nil {
+		return err
+	}
+	if existed {
+		if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM agents", "agents", "config: at least one agent is required"); err != nil {
+			return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: %v", name, err)}
+		}
+		if err := validateFleet(tx); err != nil {
+			return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: %v", name, err)}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: delete agent %s: commit: %w", name, err)
+	}
+	return nil
+}
+
+func DeleteWorkspaceAgentTx(tx *sql.Tx, workspaceID, name string, cascade bool) error {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	if cascade {
 		if _, err := tx.Exec("DELETE FROM bindings WHERE workspace_id=? AND agent=?", workspaceID, name); err != nil {
 			return fmt.Errorf("store: delete agent %s: cascade bindings: %w", name, err)
@@ -296,14 +335,9 @@ func deleteAgent(db *sql.DB, workspaceID, name string, cascade bool) error {
 		return fmt.Errorf("store: delete agent %s: %w", name, err)
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
-		if err := requireAtLeastOne(tx, "SELECT COUNT(*) FROM agents", "agents", "config: at least one agent is required"); err != nil {
-			return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: %v", name, err)}
-		}
-		if err := validateFleet(tx); err != nil {
-			return &ErrConflict{Msg: fmt.Sprintf("store: delete agent %s: %v", name, err)}
-		}
+		return nil
 	}
-	return tx.Commit()
+	return nil
 }
 
 // bindingsReferencing returns the repo names of every binding that points at

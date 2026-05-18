@@ -168,16 +168,12 @@ func (h *Handler) handleGuardrailReset(w http.ResponseWriter, r *http.Request) {
 
 // ── Guardrail methods (exposed for MCP) ──────────────────────────────────────
 
-// UpsertGuardrail writes or updates a guardrail. The Name is normalised
-// before persistence; an empty name is rejected as *store.ErrValidation.
+// UpsertGuardrail writes or updates a guardrail through the service layer.
 // Returns the canonical row as it sits in the database after the write
 // (so the caller sees the post-normalisation form including the
 // preserved is_builtin / default_content flags).
 func (h *Handler) UpsertGuardrail(g fleet.Guardrail) (fleet.Guardrail, error) {
-	if strings.TrimSpace(g.Name) == "" {
-		return fleet.Guardrail{}, &store.ErrValidation{Msg: "name is required"}
-	}
-	if err := h.store.UpsertGuardrail(g); err != nil {
+	if err := h.service.UpsertGuardrail(g); err != nil {
 		return fleet.Guardrail{}, err
 	}
 	if g.ID != "" {
@@ -211,7 +207,7 @@ func (h *Handler) UpdateGuardrailPatch(name string, patch GuardrailPatch) (fleet
 		return fleet.Guardrail{}, err
 	}
 	patch.apply(&existing)
-	if err := h.store.UpsertGuardrail(existing); err != nil {
+	if err := h.service.UpsertGuardrail(existing); err != nil {
 		return fleet.Guardrail{}, err
 	}
 	return h.store.GetGuardrail(normalized)
@@ -220,7 +216,7 @@ func (h *Handler) UpdateGuardrailPatch(name string, patch GuardrailPatch) (fleet
 // DeleteGuardrail removes the addressed guardrail. Returns *store.ErrNotFound
 // when the row does not exist.
 func (h *Handler) DeleteGuardrail(name string) error {
-	return h.store.DeleteGuardrail(name)
+	return h.service.DeleteGuardrail(name)
 }
 
 // ResetGuardrail copies a built-in guardrail's default_content back into
@@ -229,7 +225,7 @@ func (h *Handler) DeleteGuardrail(name string) error {
 // not exist. Used by both POST /guardrails/{id}/reset and the MCP
 // reset_guardrail tool.
 func (h *Handler) ResetGuardrail(name string) (fleet.Guardrail, error) {
-	if err := h.store.ResetGuardrail(name); err != nil {
+	if err := h.service.ResetGuardrail(name); err != nil {
 		return fleet.Guardrail{}, err
 	}
 	return h.store.GetGuardrail(name)

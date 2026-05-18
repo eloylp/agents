@@ -12,28 +12,6 @@ import (
 
 // ──── Bindings (atomic per-item CRUD) ────────────────────────────────────────────
 
-// validateBindingShape checks the trigger-exclusivity and event-kind invariants
-// for a single binding, without requiring a full repo context. Returns an
-// *ErrValidation on failure so HTTP handlers can map it to 400 Bad Request.
-func validateBindingShape(b fleet.Binding) error {
-	if strings.TrimSpace(b.Agent) == "" {
-		return &ErrValidation{Msg: "agent is required"}
-	}
-	n := b.TriggerCount()
-	if n == 0 {
-		return &ErrValidation{Msg: "binding has no trigger (set cron, labels, or events)"}
-	}
-	if n > 1 {
-		return &ErrValidation{Msg: "binding mixes multiple trigger types (labels, events, cron); each binding must use exactly one trigger"}
-	}
-	if b.IsCron() {
-		if _, err := cronParser.Parse(b.Cron); err != nil {
-			return &ErrValidation{Msg: fmt.Sprintf("invalid cron expression %q: %v", b.Cron, err)}
-		}
-	}
-	return nil
-}
-
 // normalizeBinding lowercases/trims agent and event names so writes match the
 // canonical form the daemon derives at boot (see normalize() in config.go).
 func normalizeBinding(b *fleet.Binding) {
@@ -49,6 +27,11 @@ func normalizeBinding(b *fleet.Binding) {
 // persisted. The binding must satisfy trigger-exclusivity, cron parseability,
 // and repo/agent reference checks; the repo and agent must both exist.
 //
+// This non-Tx wrapper is retained for compatibility with store-level tests and
+// setup helpers. Production mutation paths should call internal/service, which
+// owns the transaction and post-write fleet validation, or use
+// CreateWorkspaceBindingTx inside a service-owned transaction.
+//
 // Validation failures surface as *ErrValidation (HTTP 400). Missing repo/agent
 // references surface as *ErrNotFound (HTTP 404). The caller is responsible for
 // holding the store mutex and reloading cron schedules after success.
@@ -57,17 +40,35 @@ func CreateBinding(db *sql.DB, repoName string, b fleet.Binding) (int64, fleet.B
 }
 
 func CreateWorkspaceBinding(db *sql.DB, workspaceID, repoName string, b fleet.Binding) (int64, fleet.Binding, error) {
-	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
-	repoName = fleet.NormalizeRepoName(repoName)
-	normalizeBinding(&b)
-	if err := validateBindingShape(b); err != nil {
-		return 0, fleet.Binding{}, err
+	shape := b
+	normalizeBinding(&shape)
+	if err := fleet.ValidateBindingShape(shape); err != nil {
+		return 0, fleet.Binding{}, &ErrValidation{Msg: err.Error()}
 	}
 	tx, err := db.Begin()
 	if err != nil {
 		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: begin: %w", err)
 	}
 	defer tx.Rollback()
+	id, created, err := CreateWorkspaceBindingTx(tx, workspaceID, repoName, b)
+	if err != nil {
+		return 0, fleet.Binding{}, err
+	}
+	if err := validateFleet(tx); err != nil {
+		return 0, fleet.Binding{}, &ErrValidation{Msg: fmt.Sprintf("store: create binding: %v", err)}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: commit: %w", err)
+	}
+	return id, created, nil
+}
+
+// CreateWorkspaceBindingTx inserts a binding inside an existing transaction.
+// Callers should validate the binding shape before calling this primitive.
+func CreateWorkspaceBindingTx(tx *sql.Tx, workspaceID, repoName string, b fleet.Binding) (int64, fleet.Binding, error) {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	repoName = fleet.NormalizeRepoName(repoName)
+	normalizeBinding(&b)
 
 	// Verify the repo exists so the FK violation surfaces as a typed error.
 	var repoExists bool
@@ -105,12 +106,6 @@ func CreateWorkspaceBinding(db *sql.DB, workspaceID, repoName string, b fleet.Bi
 	if err != nil {
 		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: last insert id: %w", err)
 	}
-	if err := validateFleet(tx); err != nil {
-		return 0, fleet.Binding{}, &ErrValidation{Msg: fmt.Sprintf("store: create binding: %v", err)}
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: commit: %w", err)
-	}
 	b.ID = id
 	return id, b, nil
 }
@@ -120,17 +115,40 @@ func CreateWorkspaceBinding(db *sql.DB, workspaceID, repoName string, b fleet.Bi
 // Returns *ErrNotFound when no row matches, *ErrValidation for bad shapes or
 // unknown agent refs.
 //
+// This non-Tx wrapper is retained for compatibility with store-level tests and
+// setup helpers. Production mutation paths should call internal/service, which
+// owns the transaction and post-write fleet validation, or use UpdateBindingTx
+// inside a service-owned transaction.
+//
 // Callers hold the store mutex and reload cron afterwards.
 func UpdateBinding(db *sql.DB, id int64, b fleet.Binding) (fleet.Binding, error) {
-	normalizeBinding(&b)
-	if err := validateBindingShape(b); err != nil {
-		return fleet.Binding{}, err
+	shape := b
+	normalizeBinding(&shape)
+	if err := fleet.ValidateBindingShape(shape); err != nil {
+		return fleet.Binding{}, &ErrValidation{Msg: err.Error()}
 	}
 	tx, err := db.Begin()
 	if err != nil {
 		return fleet.Binding{}, fmt.Errorf("store: update binding: begin: %w", err)
 	}
 	defer tx.Rollback()
+	updated, err := UpdateBindingTx(tx, id, b)
+	if err != nil {
+		return fleet.Binding{}, err
+	}
+	if err := validateFleet(tx); err != nil {
+		return fleet.Binding{}, &ErrValidation{Msg: fmt.Sprintf("store: update binding: %v", err)}
+	}
+	if err := tx.Commit(); err != nil {
+		return fleet.Binding{}, fmt.Errorf("store: update binding: commit: %w", err)
+	}
+	return updated, nil
+}
+
+// UpdateBindingTx replaces one binding inside an existing transaction. Callers
+// should validate the binding shape before calling this primitive.
+func UpdateBindingTx(tx *sql.Tx, id int64, b fleet.Binding) (fleet.Binding, error) {
+	normalizeBinding(&b)
 
 	var workspaceID string
 	if err := tx.QueryRow("SELECT workspace_id FROM bindings WHERE id=?", id).Scan(&workspaceID); err != nil {
@@ -176,12 +194,6 @@ func UpdateBinding(db *sql.DB, id int64, b fleet.Binding) (fleet.Binding, error)
 		return fleet.Binding{}, fmt.Errorf("store: update binding: lookup repo: %w", err)
 	}
 
-	if err := validateFleet(tx); err != nil {
-		return fleet.Binding{}, &ErrValidation{Msg: fmt.Sprintf("store: update binding: %v", err)}
-	}
-	if err := tx.Commit(); err != nil {
-		return fleet.Binding{}, fmt.Errorf("store: update binding: commit: %w", err)
-	}
 	b.ID = id
 	return b, nil
 }
@@ -190,6 +202,11 @@ func UpdateBinding(db *sql.DB, id int64, b fleet.Binding) (fleet.Binding, error)
 // no row matches. Post-delete validateFleet runs to catch any cross-entity
 // invariant violations.
 //
+// This non-Tx wrapper is retained for compatibility with store-level tests and
+// setup helpers. Production mutation paths should call internal/service, which
+// owns the transaction and post-delete fleet validation, or use DeleteBindingTx
+// inside a service-owned transaction.
+//
 // Callers hold the store mutex and reload cron afterwards.
 func DeleteBinding(db *sql.DB, id int64) error {
 	tx, err := db.Begin()
@@ -197,6 +214,16 @@ func DeleteBinding(db *sql.DB, id int64) error {
 		return fmt.Errorf("store: delete binding: begin: %w", err)
 	}
 	defer tx.Rollback()
+	if err := DeleteBindingTx(tx, id); err != nil {
+		return err
+	}
+	if err := validateFleet(tx); err != nil {
+		return &ErrConflict{Msg: fmt.Sprintf("store: delete binding: %v", err)}
+	}
+	return tx.Commit()
+}
+
+func DeleteBindingTx(tx *sql.Tx, id int64) error {
 	res, err := tx.Exec("DELETE FROM bindings WHERE id=?", id)
 	if err != nil {
 		return fmt.Errorf("store: delete binding: %w", err)
@@ -208,10 +235,7 @@ func DeleteBinding(db *sql.DB, id int64) error {
 	if n == 0 {
 		return &ErrNotFound{Msg: fmt.Sprintf("binding id=%d not found", id)}
 	}
-	if err := validateFleet(tx); err != nil {
-		return &ErrConflict{Msg: fmt.Sprintf("store: delete binding: %v", err)}
-	}
-	return tx.Commit()
+	return nil
 }
 
 // ReadBinding fetches a single binding by ID along with its parent repo name.

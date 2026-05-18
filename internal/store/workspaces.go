@@ -40,7 +40,7 @@ func ResolveWorkspaceID(db *sql.DB, workspace string) (string, error) {
 
 // ReadWorkspace resolves either a workspace id or display name. IDs are the
 // stable URL contract, so an exact id match wins over a display-name collision.
-func ReadWorkspace(db *sql.DB, workspace string) (fleet.Workspace, error) {
+func ReadWorkspace(db querier, workspace string) (fleet.Workspace, error) {
 	workspace = strings.TrimSpace(workspace)
 	if workspace == "" {
 		workspace = fleet.DefaultWorkspaceID
@@ -66,6 +66,22 @@ func ReadWorkspace(db *sql.DB, workspace string) (fleet.Workspace, error) {
 // UpsertWorkspace creates or updates a workspace and seeds built-in guardrail
 // references for newly-created rows.
 func UpsertWorkspace(db *sql.DB, w fleet.Workspace) (fleet.Workspace, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return fleet.Workspace{}, fmt.Errorf("store: upsert workspace %s: begin: %w", w.ID, err)
+	}
+	defer tx.Rollback()
+	w, err = UpsertWorkspaceTx(tx, w)
+	if err != nil {
+		return fleet.Workspace{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return fleet.Workspace{}, fmt.Errorf("store: upsert workspace %s: commit: %w", w.ID, err)
+	}
+	return w, nil
+}
+
+func UpsertWorkspaceTx(tx *sql.Tx, w fleet.Workspace) (fleet.Workspace, error) {
 	w.ID = strings.TrimSpace(w.ID)
 	w.Name = strings.TrimSpace(w.Name)
 	w.Description = strings.TrimSpace(w.Description)
@@ -83,11 +99,6 @@ func UpsertWorkspace(db *sql.DB, w fleet.Workspace) (fleet.Workspace, error) {
 	if err := validateEntityID(w.ID); err != nil {
 		return fleet.Workspace{}, &ErrValidation{Msg: fmt.Sprintf("workspace %q: %v", w.Name, err)}
 	}
-	tx, err := db.Begin()
-	if err != nil {
-		return fleet.Workspace{}, fmt.Errorf("store: upsert workspace %s: begin: %w", w.ID, err)
-	}
-	defer tx.Rollback()
 	if _, err := tx.Exec(`
 		INSERT INTO workspaces (id, name, description, runner_image, updated_at)
 		VALUES (?, ?, ?, ?, datetime('now'))
@@ -106,33 +117,43 @@ func UpsertWorkspace(db *sql.DB, w fleet.Workspace) (fleet.Workspace, error) {
 	if err := seedWorkspaceGuardrails(tx, w.ID); err != nil {
 		return fleet.Workspace{}, err
 	}
-	if err := tx.Commit(); err != nil {
-		return fleet.Workspace{}, fmt.Errorf("store: upsert workspace %s: commit: %w", w.ID, err)
-	}
 	return w, nil
 }
 
 // DeleteWorkspace removes a workspace only when no agents or repos still
 // belong to it. The compatibility default workspace is retained.
 func DeleteWorkspace(db *sql.DB, workspace string) error {
-	id, err := ResolveWorkspaceID(db, workspace)
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: delete workspace %s: begin: %w", workspace, err)
+	}
+	defer tx.Rollback()
+	if err := DeleteWorkspaceTx(tx, workspace); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func DeleteWorkspaceTx(tx *sql.Tx, workspace string) error {
+	w, err := ReadWorkspace(tx, workspace)
 	if err != nil {
 		return err
 	}
+	id := w.ID
 	if id == fleet.DefaultWorkspaceID {
 		return &ErrConflict{Msg: "default workspace cannot be deleted"}
 	}
 	var agents, repos int
-	if err := db.QueryRow("SELECT COUNT(*) FROM agents WHERE workspace_id=?", id).Scan(&agents); err != nil {
+	if err := tx.QueryRow("SELECT COUNT(*) FROM agents WHERE workspace_id=?", id).Scan(&agents); err != nil {
 		return fmt.Errorf("store: delete workspace %s: count agents: %w", id, err)
 	}
-	if err := db.QueryRow("SELECT COUNT(*) FROM repos WHERE workspace_id=?", id).Scan(&repos); err != nil {
+	if err := tx.QueryRow("SELECT COUNT(*) FROM repos WHERE workspace_id=?", id).Scan(&repos); err != nil {
 		return fmt.Errorf("store: delete workspace %s: count repos: %w", id, err)
 	}
 	if agents > 0 || repos > 0 {
 		return &ErrConflict{Msg: fmt.Sprintf("workspace %q is referenced by %d agent(s) and %d repo(s)", id, agents, repos)}
 	}
-	res, err := db.Exec("DELETE FROM workspaces WHERE id=?", id)
+	res, err := tx.Exec("DELETE FROM workspaces WHERE id=?", id)
 	if err != nil {
 		return fmt.Errorf("store: delete workspace %s: %w", id, err)
 	}
@@ -222,6 +243,43 @@ func ReplaceWorkspaceGuardrails(db *sql.DB, workspace string, refs []fleet.Works
 		return nil, fmt.Errorf("store: replace workspace %s guardrails: commit: %w", workspaceID, err)
 	}
 	return ReadWorkspaceGuardrails(db, workspaceID)
+}
+
+func ReplaceWorkspaceGuardrailsTx(tx *sql.Tx, workspace string, refs []fleet.WorkspaceGuardrailRef) ([]fleet.WorkspaceGuardrailRef, error) {
+	w, err := ReadWorkspace(tx, workspace)
+	if err != nil {
+		return nil, err
+	}
+	workspaceID := w.ID
+	if _, err := tx.Exec("DELETE FROM workspace_guardrails WHERE workspace_id=?", workspaceID); err != nil {
+		return nil, fmt.Errorf("store: replace workspace %s guardrails: clear: %w", workspaceID, err)
+	}
+	seen := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		name := fleet.NormalizeGuardrailName(ref.GuardrailName)
+		if name == "" {
+			return nil, &ErrValidation{Msg: "guardrail_name is required"}
+		}
+		if _, ok := seen[name]; ok {
+			return nil, &ErrValidation{Msg: fmt.Sprintf("workspace %q references guardrail %q more than once", workspaceID, name)}
+		}
+		seen[name] = struct{}{}
+		id, err := resolveWorkspaceGuardrailRef(tx, workspaceID, name)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, &ErrValidation{Msg: fmt.Sprintf("workspace %q references unknown guardrail %q", workspaceID, name)}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("store: replace workspace %s guardrails: validate %s: %w", workspaceID, name, err)
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO workspace_guardrails (workspace_id, guardrail_name, position, enabled)
+			VALUES (?, ?, ?, ?)`,
+			workspaceID, id, ref.Position, boolToInt(ref.Enabled),
+		); err != nil {
+			return nil, fmt.Errorf("store: replace workspace %s guardrails: insert %s: %w", workspaceID, name, err)
+		}
+	}
+	return readWorkspaceGuardrails(tx, workspaceID)
 }
 
 // ReadPrompts returns all prompt catalog entries ordered by visibility scope

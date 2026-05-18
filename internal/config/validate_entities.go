@@ -155,3 +155,40 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 	}
 	return nil
 }
+
+// ValidateAgentCatalogVisibility checks that repo-scoped catalog references
+// used by agents are visible from the agent scope.
+func ValidateAgentCatalogVisibility(agents []fleet.Agent, skills map[string]fleet.Skill) error {
+	for _, a := range agents {
+		workspaceID := fleet.NormalizeWorkspaceID(a.WorkspaceID)
+		repo := ""
+		if a.ScopeType == "repo" {
+			repo = fleet.NormalizeRepoName(a.ScopeRepo)
+		}
+		for _, skillID := range a.Skills {
+			skill, ok := skills[skillID]
+			if !ok {
+				continue
+			}
+			if skill.Repo != "" && repo == "" {
+				return fmt.Errorf("workspace-scoped agent %q references repo-scoped skill %q without repo context", a.Name, skillID)
+			}
+			if !catalogVisibleToAgent(skill.WorkspaceID, skill.Repo, workspaceID, repo) {
+				return fmt.Errorf("agent %q references skill %q outside its visible catalog scope", a.Name, skillID)
+			}
+		}
+	}
+	return nil
+}
+
+func catalogVisibleToAgent(itemWorkspace, itemRepo, agentWorkspace, agentRepo string) bool {
+	itemWorkspace = strings.TrimSpace(itemWorkspace)
+	itemRepo = strings.TrimSpace(itemRepo)
+	if itemWorkspace == "" && itemRepo == "" {
+		return true
+	}
+	if itemWorkspace != agentWorkspace {
+		return false
+	}
+	return itemRepo == "" || (agentRepo != "" && itemRepo == agentRepo)
+}

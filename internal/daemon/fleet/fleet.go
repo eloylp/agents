@@ -1,10 +1,10 @@
 // Package fleet implements the agent, skill, and backend HTTP CRUD surface
-// plus the methods the MCP fleet-management tools call directly. Wire types,
-// validation, and storage paths live together so the REST and MCP surfaces
-// stay in lock-step.
+// plus the methods the MCP fleet-management tools call directly. Wire types
+// live here so REST and MCP surfaces stay in lock-step; mutable use cases go
+// through internal/service.
 //
 // The handler reads from SQLite on every request and writes through the
-// store package's per-call transactions. The /agents snapshot view also
+// service layer. The /agents snapshot view also
 // pulls scheduling and runtime status from the scheduler and the observe
 // store; those are concrete pointers because the daemon ships as a single
 // composed binary.
@@ -28,6 +28,7 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/scheduler"
+	"github.com/eloylp/agents/internal/service"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -37,6 +38,7 @@ import (
 // view served at GET /agents.
 type Handler struct {
 	store        *store.Store
+	service      *service.Service
 	maxBodyBytes int64
 	sched        *scheduler.Scheduler // schedule + last-run state for the /agents view
 	obs          *observe.Store       // running/idle state for the /agents view
@@ -47,6 +49,7 @@ type Handler struct {
 func New(st *store.Store, maxBodyBytes int64, sched *scheduler.Scheduler, obs *observe.Store, logger zerolog.Logger) *Handler {
 	return &Handler{
 		store:        st,
+		service:      service.New(st),
 		maxBodyBytes: maxBodyBytes,
 		sched:        sched,
 		obs:          obs,
@@ -348,24 +351,11 @@ func (h *Handler) handleAgentPatch(w http.ResponseWriter, r *http.Request, name 
 
 // ── Agent methods (exposed for MCP) ───────────────────────────────────────────────────────────────────────────────
 
-// UpsertAgent writes a single agent definition into the store and reloads the
-// cron scheduler. Returns the canonical (normalized) form that was persisted.
-// Empty/whitespace names are rejected as *store.ErrValidation.
+// UpsertAgent writes a single agent definition through the service layer.
+// Returns the canonical (normalized) form that was persisted.
 func (h *Handler) UpsertAgent(a fleet.Agent) (fleet.Agent, error) {
-	if strings.TrimSpace(a.Name) == "" {
-		return fleet.Agent{}, &store.ErrValidation{Msg: "name is required"}
-	}
-	if strings.TrimSpace(a.PromptID) != "" {
-		// prompt_id is the only persisted reference. prompt_ref/prompt_scope are
-		// human-facing selectors and may be echoed by read-modify-write clients.
-		a.PromptRef = ""
-		a.PromptScope = ""
-	}
-	if strings.TrimSpace(a.PromptRef) == "" && strings.TrimSpace(a.PromptID) == "" {
-		return fleet.Agent{}, &store.ErrValidation{Msg: "prompt_id or prompt_ref is required"}
-	}
 	normalizedName := fleet.NormalizeAgentName(a.Name)
-	if err := h.store.UpsertAgent(a); err != nil {
+	if err := h.service.UpsertAgent(a); err != nil {
 		return fleet.Agent{}, err
 	}
 	agents, err := h.store.ReadAgents()
@@ -416,7 +406,7 @@ func (h *Handler) updateAgent(name, workspaceID string, patch AgentPatch) (fleet
 		return fleet.Agent{}, &store.ErrValidation{Msg: "workspace_id cannot be changed with PATCH; create the agent in the target workspace instead"}
 	}
 	patch.apply(&merged)
-	if err := h.store.UpsertAgent(merged); err != nil {
+	if err := h.service.UpsertAgent(merged); err != nil {
 		return fleet.Agent{}, err
 	}
 	agents, err = h.store.ReadAgents()
@@ -442,9 +432,9 @@ func (h *Handler) DeleteAgent(name string, cascade bool) error {
 
 func (h *Handler) DeleteAgentInWorkspace(workspaceID, name string, cascade bool) error {
 	if cascade {
-		return h.store.DeleteWorkspaceAgentCascade(workspaceID, name)
+		return h.service.DeleteWorkspaceAgentCascade(workspaceID, name)
 	}
-	return h.store.DeleteWorkspaceAgent(workspaceID, name)
+	return h.service.DeleteWorkspaceAgent(workspaceID, name)
 }
 
 // ── Skill wire types ────────────────────────────────────────────────────────────────────────────────────
@@ -565,15 +555,12 @@ func (h *Handler) handleSkillPatch(w http.ResponseWriter, r *http.Request, name 
 
 // ── Skill methods (exposed for MCP) ───────────────────────────────────────────────────────────────────────────────
 
-// UpsertSkill writes a single skill into the store and reloads the cron
-// scheduler. Returns the canonical stable id and Skill that were persisted.
+// UpsertSkill writes a single skill through the service layer. Returns the
+// canonical stable id and Skill that were persisted.
 // Empty id is accepted when the Skill carries a name, allowing scoped skill
 // creates to derive the same stable id shape as imports.
 func (h *Handler) UpsertSkill(name string, sk fleet.Skill) (string, fleet.Skill, error) {
-	if strings.TrimSpace(name) == "" && strings.TrimSpace(sk.Name) == "" {
-		return "", fleet.Skill{}, &store.ErrValidation{Msg: "name is required"}
-	}
-	if err := h.store.UpsertSkill(name, sk); err != nil {
+	if err := h.service.UpsertSkill(name, sk); err != nil {
 		return "", fleet.Skill{}, err
 	}
 	skills, err := h.store.ReadSkills()
@@ -613,7 +600,7 @@ func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skil
 		return "", fleet.Skill{}, &store.ErrNotFound{Msg: fmt.Sprintf("skill %q not found", normalized)}
 	}
 	patch.apply(&existing)
-	if err := h.store.UpsertSkill(normalized, existing); err != nil {
+	if err := h.service.UpsertSkill(normalized, existing); err != nil {
 		return "", fleet.Skill{}, err
 	}
 	fleet.NormalizeSkill(&existing)
@@ -623,7 +610,7 @@ func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skil
 // DeleteSkill removes the named skill from the store. Returns
 // *store.ErrConflict if any agent still references the skill.
 func (h *Handler) DeleteSkill(name string) error {
-	return h.store.DeleteSkill(name)
+	return h.service.DeleteSkill(name)
 }
 
 // ── Prompt wire types ────────────────────────────────────────────────────────────────────────────────────
@@ -747,7 +734,7 @@ func (h *Handler) handlePromptDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpsertPrompt(p fleet.Prompt) (fleet.Prompt, error) {
-	return h.store.UpsertPrompt(p)
+	return h.service.UpsertPrompt(p)
 }
 
 func (h *Handler) UpdatePromptPatch(ref string, patch PromptPatch) (fleet.Prompt, error) {
@@ -761,11 +748,11 @@ func (h *Handler) updatePrompt(ref string, patch PromptPatch) (fleet.Prompt, err
 	}
 	merged := prompt
 	patch.apply(&merged)
-	return h.store.UpsertPrompt(merged)
+	return h.service.UpsertPrompt(merged)
 }
 
 func (h *Handler) DeletePrompt(ref string) error {
-	return h.store.DeletePrompt(ref)
+	return h.service.DeletePrompt(ref)
 }
 
 // ── Backend wire types ──────────────────────────────────────────────────────────────────────────────────
@@ -984,7 +971,7 @@ func (h *Handler) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
 		break
 	}
 
-	if err := h.store.UpsertBackend(name, local); err != nil {
+	if err := h.service.UpsertBackend(name, local); err != nil {
 		status := storeErrStatus(err)
 		h.logger.Error().Err(err).Msg("local backend upsert failed")
 		http.Error(w, fmt.Sprintf("local backend upsert: %v", err), status)
@@ -1049,14 +1036,10 @@ func (h *Handler) handleBackendDelete(w http.ResponseWriter, r *http.Request) {
 
 // ── Backend methods (exposed for MCP) ────────────────────────────────────────────────────────────────────────────
 
-// UpsertBackend writes a single backend definition into the store and reloads
-// the cron scheduler. Returns the canonical (normalized) name and config that
-// were persisted. Empty/whitespace names are rejected as *store.ErrValidation.
+// UpsertBackend writes a single backend definition through the service layer.
+// Returns the canonical (normalized) name and config that were persisted.
 func (h *Handler) UpsertBackend(name string, b fleet.Backend) (string, fleet.Backend, error) {
-	if strings.TrimSpace(name) == "" {
-		return "", fleet.Backend{}, &store.ErrValidation{Msg: "name is required"}
-	}
-	if err := h.store.UpsertBackend(name, b); err != nil {
+	if err := h.service.UpsertBackend(name, b); err != nil {
 		return "", fleet.Backend{}, err
 	}
 	fleet.NormalizeBackend(&b)
@@ -1082,7 +1065,7 @@ func (h *Handler) updateBackend(name string, patch BackendPatch) (string, fleet.
 		return "", fleet.Backend{}, &store.ErrNotFound{Msg: fmt.Sprintf("backend %q not found", normalized)}
 	}
 	patch.apply(&existing)
-	if err := h.store.UpsertBackend(normalized, existing); err != nil {
+	if err := h.service.UpsertBackend(normalized, existing); err != nil {
 		return "", fleet.Backend{}, err
 	}
 	fleet.NormalizeBackend(&existing)
@@ -1093,7 +1076,7 @@ func (h *Handler) updateBackend(name string, patch BackendPatch) (string, fleet.
 // DeleteBackend removes the named backend from the store. Returns
 // *store.ErrConflict if any agent still references the backend.
 func (h *Handler) DeleteBackend(name string) error {
-	return h.store.DeleteBackend(name)
+	return h.service.DeleteBackend(name)
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────────────────────────────

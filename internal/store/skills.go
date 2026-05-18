@@ -102,6 +102,21 @@ func ReadSkills(db *sql.DB) (map[string]fleet.Skill, error) {
 // normalize() so that the stored values are already in canonical form and
 // validation sees the same shape as after a restart.
 func UpsertSkill(db *sql.DB, name string, s fleet.Skill) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: upsert skill %s: begin: %w", name, err)
+	}
+	defer tx.Rollback()
+	if err := UpsertSkillTx(tx, name, s); err != nil {
+		return err
+	}
+	if err := validateFleet(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: upsert skill %s: %v", name, err)}
+	}
+	return tx.Commit()
+}
+
+func UpsertSkillTx(tx *sql.Tx, name string, s fleet.Skill) error {
 	name = fleet.NormalizeSkillName(name)
 	fleet.NormalizeSkill(&s)
 	if s.Name == "" {
@@ -112,7 +127,7 @@ func UpsertSkill(db *sql.DB, name string, s fleet.Skill) error {
 	}
 	if name == "" {
 		var existingID string
-		err := queryCatalogIDByScopeName(db, "skills", s.WorkspaceID, s.Repo, s.Name).Scan(&existingID)
+		err := queryCatalogIDByScopeName(tx, "skills", s.WorkspaceID, s.Repo, s.Name).Scan(&existingID)
 		if err == nil {
 			name = existingID
 		} else if errors.Is(err, sql.ErrNoRows) {
@@ -131,29 +146,31 @@ func UpsertSkill(db *sql.DB, name string, s fleet.Skill) error {
 	if err := validateEntityID(name); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: skill %q: %v", s.Name, err)}
 	}
-	tx, err := db.Begin()
-	if err != nil {
-		return fmt.Errorf("store: upsert skill %s: begin: %w", name, err)
-	}
-	defer tx.Rollback()
 	if err := importSkills(tx, map[string]fleet.Skill{name: s}); err != nil {
 		return err
 	}
-	if err := validateFleet(tx); err != nil {
-		return &ErrValidation{Msg: fmt.Sprintf("store: upsert skill %s: %v", name, err)}
-	}
-	return tx.Commit()
+	return nil
 }
 
 // DeleteSkill removes the skill with the given name. Returns an error if any
 // agent still references the skill.
 func DeleteSkill(db *sql.DB, name string) error {
-	name = fleet.NormalizeSkillName(name)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: delete skill %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
+	if err := DeleteSkillTx(tx, name); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: delete skill %s: commit: %w", name, err)
+	}
+	return nil
+}
+
+func DeleteSkillTx(tx *sql.Tx, name string) error {
+	name = fleet.NormalizeSkillName(name)
 	refs, err := agentsReferencingSkill(tx, name)
 	if err != nil {
 		return fmt.Errorf("store: delete skill %s: check agents: %w", name, err)
@@ -164,10 +181,7 @@ func DeleteSkill(db *sql.DB, name string) error {
 	if _, err := tx.Exec("DELETE FROM skills WHERE id=?", name); err != nil {
 		return fmt.Errorf("store: delete skill %s: %w", name, err)
 	}
-	if err := validateFleet(tx); err != nil {
-		return &ErrConflict{Msg: fmt.Sprintf("store: delete skill %s: %v", name, err)}
-	}
-	return tx.Commit()
+	return nil
 }
 
 func agentsReferencingSkill(q querier, skillID string) ([]string, error) {

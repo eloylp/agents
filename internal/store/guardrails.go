@@ -54,6 +54,10 @@ func ReadAllGuardrails(db *sql.DB) ([]fleet.Guardrail, error) {
 // GetGuardrail returns the named guardrail. Returns *ErrNotFound when the
 // row does not exist.
 func GetGuardrail(db *sql.DB, name string) (fleet.Guardrail, error) {
+	return GetGuardrailFrom(db, name)
+}
+
+func GetGuardrailFrom(db querier, name string) (fleet.Guardrail, error) {
 	name = fleet.NormalizeGuardrailName(name)
 	const q = `
 		SELECT id, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, COALESCE(description, ''), content,
@@ -78,6 +82,10 @@ func GetGuardrail(db *sql.DB, name string) (fleet.Guardrail, error) {
 // even when the operator edits Content. Operator-added rows have empty
 // DefaultContent and IsBuiltin = false.
 func UpsertGuardrail(db *sql.DB, g fleet.Guardrail) error {
+	return UpsertGuardrailTx(db, g)
+}
+
+func UpsertGuardrailTx(exec sqlExec, g fleet.Guardrail) error {
 	fleet.NormalizeGuardrail(&g)
 	if g.Name == "" {
 		return &ErrValidation{Msg: "store: guardrail name is required"}
@@ -87,7 +95,7 @@ func UpsertGuardrail(db *sql.DB, g fleet.Guardrail) error {
 	}
 	if g.ID == "" {
 		var existingID string
-		err := queryCatalogIDByScopeName(db, "guardrails", g.WorkspaceID, g.Repo, g.Name).Scan(&existingID)
+		err := queryCatalogIDByScopeName(exec, "guardrails", g.WorkspaceID, g.Repo, g.Name).Scan(&existingID)
 		if err == nil {
 			g.ID = existingID
 		} else if !errors.Is(err, sql.ErrNoRows) {
@@ -134,7 +142,7 @@ func UpsertGuardrail(db *sql.DB, g fleet.Guardrail) error {
 			enabled     = excluded.enabled,
 			position    = excluded.position,
 			updated_at  = datetime('now')`
-	if _, err := db.Exec(q,
+	if _, err := exec.Exec(q,
 		g.ID, g.WorkspaceID, g.Repo, g.Name, g.Description, g.Content, defaultContent, isBuiltin, enabled, g.Position,
 	); err != nil {
 		if isUniqueConstraint(err) {
@@ -153,8 +161,12 @@ func isReservedGuardrailName(name string) bool {
 // deleted too, operators who really mean it can run a complete cleanup;
 // the dashboard double-confirms before letting them.
 func DeleteGuardrail(db *sql.DB, name string) error {
+	return DeleteGuardrailTx(db, name)
+}
+
+func DeleteGuardrailTx(db sqlExec, name string) error {
 	name = fleet.NormalizeGuardrailName(name)
-	g, err := GetGuardrail(db, name)
+	g, err := GetGuardrailFrom(db, name)
 	if err != nil {
 		return err
 	}
@@ -177,8 +189,12 @@ func DeleteGuardrail(db *sql.DB, name string) error {
 // *ErrValidation when the row has no default_content (i.e., it's an
 // operator-added rule with nothing to reset to).
 func ResetGuardrail(db *sql.DB, name string) error {
+	return ResetGuardrailTx(db, name)
+}
+
+func ResetGuardrailTx(db sqlExec, name string) error {
 	name = fleet.NormalizeGuardrailName(name)
-	g, err := GetGuardrail(db, name)
+	g, err := GetGuardrailFrom(db, name)
 	if err != nil {
 		return err
 	}
