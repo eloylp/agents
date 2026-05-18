@@ -17,9 +17,9 @@ import (
 
 // toolCreateAgent upserts an agent definition through the same path as POST
 // /agents. Returns the canonical (normalized) form so callers see the agent
-// the way the store actually persisted it. Empty names, unknown backends, and
-// model/skill validation failures surface as tool errors via the store's
-// *ErrValidation / *ErrConflict types.
+// the way the service/store path actually persisted it. Empty names, unknown
+// backends, and model/skill validation failures surface as tool errors via the
+// shared *ErrValidation / *ErrConflict types.
 func toolCreateAgent(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		name, err := req.RequireString("name")
@@ -701,8 +701,8 @@ func toolDeleteRepo(deps Deps) server.ToolHandlerFunc {
 // toolCreateBinding inserts a new binding row for the named repo through the
 // same path as POST /repos/{owner}/{repo}/bindings. Returns the persisted
 // binding with its generated ID. Trigger validation and agent-reference
-// checks happen in the store layer, surfacing as *ErrValidation (user error)
-// or *ErrNotFound (user error).
+// checks happen in the shared service path, surfacing as *ErrValidation (user
+// error) or *ErrNotFound (user error).
 func toolCreateBinding(deps Deps) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		repo, ok := trimmedString(req, "repo")

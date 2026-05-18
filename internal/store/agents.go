@@ -236,6 +236,9 @@ func UpsertAgent(db *sql.DB, a fleet.Agent) error {
 	if err := UpsertAgentTx(tx, a); err != nil {
 		return err
 	}
+	if err := validateFleet(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: upsert agent %s: %v", a.Name, err)}
+	}
 	return tx.Commit()
 }
 
@@ -246,9 +249,6 @@ func UpsertAgentTx(tx *sql.Tx, a fleet.Agent) error {
 	fleet.NormalizeAgent(&a)
 	if err := importAgents(tx, []fleet.Agent{a}); err != nil {
 		return err
-	}
-	if err := validateFleet(tx); err != nil {
-		return &ErrValidation{Msg: fmt.Sprintf("store: upsert agent %s: %v", a.Name, err)}
 	}
 	return nil
 }

@@ -1,11 +1,9 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
-
-	"github.com/robfig/cron/v3"
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
@@ -32,22 +30,12 @@ type ErrNotFound struct{ Msg string }
 
 func (e *ErrNotFound) Error() string { return e.Msg }
 
-// cronParser is the same 5-field parser used by the autonomous scheduler.
-var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
-
 // validateCronExpressions checks that every cron binding in repos can be
 // parsed by the same parser the autonomous scheduler uses. Returns an
 // ErrValidation if any expression is malformed.
 func validateCronExpressions(repos []fleet.Repo) error {
-	for _, r := range repos {
-		for _, b := range r.Use {
-			if !b.IsCron() {
-				continue
-			}
-			if _, err := cronParser.Parse(b.Cron); err != nil {
-				return &ErrValidation{Msg: fmt.Sprintf("store: invalid cron expression %q for repo %q: %v", b.Cron, r.Name, err)}
-			}
-		}
+	if err := fleet.ValidateRepoCronExpressions(repos); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: %v", err)}
 	}
 	return nil
 }
@@ -59,17 +47,8 @@ func validateCronExpressions(repos []fleet.Repo) error {
 // least one agent/repo/backend required") are NOT checked here; DELETE paths
 // enforce those separately with requireAtLeastOne below.
 func validateFleet(q querier) error {
-	var cfg config.Config
-	if err := loadBackends(q, &cfg); err != nil {
-		return err
-	}
-	if err := loadSkills(q, &cfg); err != nil {
-		return err
-	}
-	if err := loadAgents(q, &cfg); err != nil {
-		return err
-	}
-	if err := loadRepos(q, &cfg); err != nil {
+	cfg, err := LoadFleetConfig(q)
+	if err != nil {
 		return err
 	}
 	backends := cfg.Daemon.AIBackends
@@ -83,42 +62,31 @@ func validateFleet(q querier) error {
 	if err := config.ValidateEntities(cfg.Agents, cfg.Repos, skills, backends); err != nil {
 		return err
 	}
-	return validateAgentCatalogVisibility(cfg.Agents, skills)
+	return config.ValidateAgentCatalogVisibility(cfg.Agents, skills)
 }
 
-func validateAgentCatalogVisibility(agents []fleet.Agent, skills map[string]fleet.Skill) error {
-	for _, a := range agents {
-		workspaceID := fleet.NormalizeWorkspaceID(a.WorkspaceID)
-		repo := ""
-		if a.ScopeType == "repo" {
-			repo = fleet.NormalizeRepoName(a.ScopeRepo)
-		}
-		for _, skillID := range a.Skills {
-			skill, ok := skills[skillID]
-			if !ok {
-				continue
-			}
-			if skill.Repo != "" && repo == "" {
-				return fmt.Errorf("workspace-scoped agent %q references repo-scoped skill %q without repo context", a.Name, skillID)
-			}
-			if !catalogVisibleToAgent(skill.WorkspaceID, skill.Repo, workspaceID, repo) {
-				return fmt.Errorf("agent %q references skill %q outside its visible catalog scope", a.Name, skillID)
-			}
-		}
+// LoadFleetConfig reads the mutable fleet snapshot through q. Service uses
+// this against an open transaction so validation sees pending writes before
+// commit while store remains responsible only for SQL loading.
+func LoadFleetConfig(q querier) (*config.Config, error) {
+	var cfg config.Config
+	if err := loadBackends(q, &cfg); err != nil {
+		return nil, err
 	}
-	return nil
+	if err := loadSkills(q, &cfg); err != nil {
+		return nil, err
+	}
+	if err := loadAgents(q, &cfg); err != nil {
+		return nil, err
+	}
+	if err := loadRepos(q, &cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
 }
 
-func catalogVisibleToAgent(itemWorkspace, itemRepo, agentWorkspace, agentRepo string) bool {
-	itemWorkspace = strings.TrimSpace(itemWorkspace)
-	itemRepo = strings.TrimSpace(itemRepo)
-	if itemWorkspace == "" && itemRepo == "" {
-		return true
-	}
-	if itemWorkspace != agentWorkspace {
-		return false
-	}
-	return itemRepo == "" || (agentRepo != "" && itemRepo == agentRepo)
+func LoadFleetConfigTx(tx *sql.Tx) (*config.Config, error) {
+	return LoadFleetConfig(tx)
 }
 
 // requireAtLeastOne fails if the COUNT query returns 0. entity names the table

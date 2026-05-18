@@ -149,6 +149,12 @@ func UpsertRepo(db *sql.DB, r fleet.Repo) error {
 	if err := UpsertRepoTx(tx, r); err != nil {
 		return err
 	}
+	if err := validateFleet(tx); err != nil {
+		return &ErrValidation{Msg: fmt.Sprintf("store: upsert repo %s: %v", r.Name, err)}
+	}
+	if err := validateCronExpressions([]fleet.Repo{r}); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -157,12 +163,6 @@ func UpsertRepo(db *sql.DB, r fleet.Repo) error {
 func UpsertRepoTx(tx *sql.Tx, r fleet.Repo) error {
 	fleet.NormalizeRepo(&r)
 	if err := importRepos(tx, []fleet.Repo{r}); err != nil {
-		return err
-	}
-	if err := validateFleet(tx); err != nil {
-		return &ErrValidation{Msg: fmt.Sprintf("store: upsert repo %s: %v", r.Name, err)}
-	}
-	if err := validateCronExpressions([]fleet.Repo{r}); err != nil {
 		return err
 	}
 	return nil

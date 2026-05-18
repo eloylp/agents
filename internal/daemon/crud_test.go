@@ -2764,7 +2764,7 @@ func TestStoreCRUDAgentPatchValidationFailsFast(t *testing.T) {
 	}); rr.Code != http.StatusOK {
 		t.Fatalf("seed: %s", rr.Body.String())
 	}
-	// Unknown backend must surface as a store validation error (400 via storeErrStatus).
+	// Unknown backend must surface as a validation error (400 via storeErrStatus).
 	rr := doCRUDRequest(t, s, http.MethodPatch, "/agents/coder", map[string]any{
 		"backend": "nope",
 	})

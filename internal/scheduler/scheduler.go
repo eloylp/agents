@@ -125,10 +125,9 @@ func NewScheduler(st *store.Store, reconcileInterval time.Duration, logger zerol
 	if reconcileInterval == 0 {
 		reconcileInterval = DefaultReconcileInterval
 	}
-	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	cronLogger := zerologCronLogger{logger: logger.With().Str("component", "scheduler").Logger()}
 	c := cron.New(
-		cron.WithParser(parser),
+		cron.WithParser(fleet.CronParser),
 		cron.WithChain(cron.SkipIfStillRunning(cronLogger)),
 	)
 	s := &Scheduler{

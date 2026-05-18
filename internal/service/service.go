@@ -11,8 +11,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/robfig/cron/v3"
-
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
@@ -56,12 +54,20 @@ func (s *Service) UpsertSkill(name string, sk fleet.Skill) error {
 	if strings.TrimSpace(name) == "" && strings.TrimSpace(sk.Name) == "" {
 		return &store.ErrValidation{Msg: "name is required"}
 	}
-	return s.store.UpsertSkill(name, sk)
+	return s.withTx("upsert skill", func(tx *sql.Tx) error {
+		return store.UpsertSkillTx(tx, name, sk)
+	})
 }
 func (s *Service) DeleteSkill(name string) error { return s.store.DeleteSkill(name) }
 
 func (s *Service) UpsertPrompt(p fleet.Prompt) (fleet.Prompt, error) {
-	return s.store.UpsertPrompt(p)
+	var saved fleet.Prompt
+	err := s.withTx("upsert prompt", func(tx *sql.Tx) error {
+		var err error
+		saved, err = store.UpsertPromptTx(tx, p)
+		return err
+	})
+	return saved, err
 }
 func (s *Service) DeletePrompt(ref string) error { return s.store.DeletePrompt(ref) }
 
@@ -69,7 +75,9 @@ func (s *Service) UpsertBackend(name string, b fleet.Backend) error {
 	if strings.TrimSpace(name) == "" {
 		return &store.ErrValidation{Msg: "name is required"}
 	}
-	return s.store.UpsertBackend(name, b)
+	return s.withTx("upsert backend", func(tx *sql.Tx) error {
+		return store.UpsertBackendTx(tx, name, b)
+	})
 }
 func (s *Service) DeleteBackend(name string) error { return s.store.DeleteBackend(name) }
 
@@ -77,7 +85,9 @@ func (s *Service) UpsertGuardrail(g fleet.Guardrail) error {
 	if strings.TrimSpace(g.Name) == "" {
 		return &store.ErrValidation{Msg: "name is required"}
 	}
-	return s.store.UpsertGuardrail(g)
+	return s.withTx("upsert guardrail", func(tx *sql.Tx) error {
+		return store.UpsertGuardrailTx(tx, g)
+	})
 }
 func (s *Service) DeleteGuardrail(name string) error { return s.store.DeleteGuardrail(name) }
 func (s *Service) ResetGuardrail(name string) error  { return s.store.ResetGuardrail(name) }
@@ -122,6 +132,9 @@ func (s *Service) CreateWorkspaceBinding(workspace, repo string, b fleet.Binding
 	if err != nil {
 		return 0, fleet.Binding{}, err
 	}
+	if err := validateFleetTx(tx); err != nil {
+		return 0, fleet.Binding{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, fleet.Binding{}, fmt.Errorf("service: create binding: commit: %w", err)
 	}
@@ -138,6 +151,9 @@ func (s *Service) UpdateBinding(id int64, b fleet.Binding) (fleet.Binding, error
 	defer tx.Rollback()
 	updated, err := store.UpdateBindingTx(tx, id, b)
 	if err != nil {
+		return fleet.Binding{}, err
+	}
+	if err := validateFleetTx(tx); err != nil {
 		return fleet.Binding{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -177,29 +193,43 @@ func (s *Service) withTx(op string, fn func(*sql.Tx) error) error {
 	if err := fn(tx); err != nil {
 		return err
 	}
+	if err := validateFleetTx(tx); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("service: %s: commit: %w", op, err)
 	}
 	return nil
 }
 
-var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+func validateFleetTx(tx *sql.Tx) error {
+	cfg, err := store.LoadFleetConfigTx(tx)
+	if err != nil {
+		return err
+	}
+	backends := cfg.Daemon.AIBackends
+	if backends == nil {
+		backends = map[string]fleet.Backend{}
+	}
+	skills := cfg.Skills
+	if skills == nil {
+		skills = map[string]fleet.Skill{}
+	}
+	if err := config.ValidateEntities(cfg.Agents, cfg.Repos, skills, backends); err != nil {
+		return &store.ErrValidation{Msg: fmt.Sprintf("service: validate fleet: %v", err)}
+	}
+	if err := config.ValidateAgentCatalogVisibility(cfg.Agents, skills); err != nil {
+		return &store.ErrValidation{Msg: fmt.Sprintf("service: validate fleet: %v", err)}
+	}
+	if err := fleet.ValidateRepoCronExpressions(cfg.Repos); err != nil {
+		return &store.ErrValidation{Msg: fmt.Sprintf("service: validate fleet: %v", err)}
+	}
+	return nil
+}
 
 func validateBindingShape(b fleet.Binding) error {
-	if strings.TrimSpace(b.Agent) == "" {
-		return &store.ErrValidation{Msg: "agent is required"}
-	}
-	n := b.TriggerCount()
-	if n == 0 {
-		return &store.ErrValidation{Msg: "binding has no trigger (set cron, labels, or events)"}
-	}
-	if n > 1 {
-		return &store.ErrValidation{Msg: "binding mixes multiple trigger types (labels, events, cron); each binding must use exactly one trigger"}
-	}
-	if b.IsCron() {
-		if _, err := cronParser.Parse(b.Cron); err != nil {
-			return &store.ErrValidation{Msg: fmt.Sprintf("invalid cron expression %q: %v", b.Cron, err)}
-		}
+	if err := fleet.ValidateBindingShape(b); err != nil {
+		return &store.ErrValidation{Msg: err.Error()}
 	}
 	return nil
 }

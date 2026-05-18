@@ -78,6 +78,10 @@ func GetGuardrail(db *sql.DB, name string) (fleet.Guardrail, error) {
 // even when the operator edits Content. Operator-added rows have empty
 // DefaultContent and IsBuiltin = false.
 func UpsertGuardrail(db *sql.DB, g fleet.Guardrail) error {
+	return UpsertGuardrailTx(db, g)
+}
+
+func UpsertGuardrailTx(exec sqlExec, g fleet.Guardrail) error {
 	fleet.NormalizeGuardrail(&g)
 	if g.Name == "" {
 		return &ErrValidation{Msg: "store: guardrail name is required"}
@@ -87,7 +91,7 @@ func UpsertGuardrail(db *sql.DB, g fleet.Guardrail) error {
 	}
 	if g.ID == "" {
 		var existingID string
-		err := queryCatalogIDByScopeName(db, "guardrails", g.WorkspaceID, g.Repo, g.Name).Scan(&existingID)
+		err := queryCatalogIDByScopeName(exec, "guardrails", g.WorkspaceID, g.Repo, g.Name).Scan(&existingID)
 		if err == nil {
 			g.ID = existingID
 		} else if !errors.Is(err, sql.ErrNoRows) {
@@ -134,7 +138,7 @@ func UpsertGuardrail(db *sql.DB, g fleet.Guardrail) error {
 			enabled     = excluded.enabled,
 			position    = excluded.position,
 			updated_at  = datetime('now')`
-	if _, err := db.Exec(q,
+	if _, err := exec.Exec(q,
 		g.ID, g.WorkspaceID, g.Repo, g.Name, g.Description, g.Content, defaultContent, isBuiltin, enabled, g.Position,
 	); err != nil {
 		if isUniqueConstraint(err) {

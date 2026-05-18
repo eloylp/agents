@@ -12,28 +12,6 @@ import (
 
 // ──── Bindings (atomic per-item CRUD) ────────────────────────────────────────────
 
-// validateBindingShape checks the trigger-exclusivity and event-kind invariants
-// for a single binding, without requiring a full repo context. Returns an
-// *ErrValidation on failure so HTTP handlers can map it to 400 Bad Request.
-func validateBindingShape(b fleet.Binding) error {
-	if strings.TrimSpace(b.Agent) == "" {
-		return &ErrValidation{Msg: "agent is required"}
-	}
-	n := b.TriggerCount()
-	if n == 0 {
-		return &ErrValidation{Msg: "binding has no trigger (set cron, labels, or events)"}
-	}
-	if n > 1 {
-		return &ErrValidation{Msg: "binding mixes multiple trigger types (labels, events, cron); each binding must use exactly one trigger"}
-	}
-	if b.IsCron() {
-		if _, err := cronParser.Parse(b.Cron); err != nil {
-			return &ErrValidation{Msg: fmt.Sprintf("invalid cron expression %q: %v", b.Cron, err)}
-		}
-	}
-	return nil
-}
-
 // normalizeBinding lowercases/trims agent and event names so writes match the
 // canonical form the daemon derives at boot (see normalize() in config.go).
 func normalizeBinding(b *fleet.Binding) {
@@ -59,8 +37,8 @@ func CreateBinding(db *sql.DB, repoName string, b fleet.Binding) (int64, fleet.B
 func CreateWorkspaceBinding(db *sql.DB, workspaceID, repoName string, b fleet.Binding) (int64, fleet.Binding, error) {
 	shape := b
 	normalizeBinding(&shape)
-	if err := validateBindingShape(shape); err != nil {
-		return 0, fleet.Binding{}, err
+	if err := fleet.ValidateBindingShape(shape); err != nil {
+		return 0, fleet.Binding{}, &ErrValidation{Msg: err.Error()}
 	}
 	tx, err := db.Begin()
 	if err != nil {
@@ -70,6 +48,9 @@ func CreateWorkspaceBinding(db *sql.DB, workspaceID, repoName string, b fleet.Bi
 	id, created, err := CreateWorkspaceBindingTx(tx, workspaceID, repoName, b)
 	if err != nil {
 		return 0, fleet.Binding{}, err
+	}
+	if err := validateFleet(tx); err != nil {
+		return 0, fleet.Binding{}, &ErrValidation{Msg: fmt.Sprintf("store: create binding: %v", err)}
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: commit: %w", err)
@@ -120,9 +101,6 @@ func CreateWorkspaceBindingTx(tx *sql.Tx, workspaceID, repoName string, b fleet.
 	if err != nil {
 		return 0, fleet.Binding{}, fmt.Errorf("store: create binding: last insert id: %w", err)
 	}
-	if err := validateFleet(tx); err != nil {
-		return 0, fleet.Binding{}, &ErrValidation{Msg: fmt.Sprintf("store: create binding: %v", err)}
-	}
 	b.ID = id
 	return id, b, nil
 }
@@ -136,8 +114,8 @@ func CreateWorkspaceBindingTx(tx *sql.Tx, workspaceID, repoName string, b fleet.
 func UpdateBinding(db *sql.DB, id int64, b fleet.Binding) (fleet.Binding, error) {
 	shape := b
 	normalizeBinding(&shape)
-	if err := validateBindingShape(shape); err != nil {
-		return fleet.Binding{}, err
+	if err := fleet.ValidateBindingShape(shape); err != nil {
+		return fleet.Binding{}, &ErrValidation{Msg: err.Error()}
 	}
 	tx, err := db.Begin()
 	if err != nil {
@@ -147,6 +125,9 @@ func UpdateBinding(db *sql.DB, id int64, b fleet.Binding) (fleet.Binding, error)
 	updated, err := UpdateBindingTx(tx, id, b)
 	if err != nil {
 		return fleet.Binding{}, err
+	}
+	if err := validateFleet(tx); err != nil {
+		return fleet.Binding{}, &ErrValidation{Msg: fmt.Sprintf("store: update binding: %v", err)}
 	}
 	if err := tx.Commit(); err != nil {
 		return fleet.Binding{}, fmt.Errorf("store: update binding: commit: %w", err)
@@ -203,9 +184,6 @@ func UpdateBindingTx(tx *sql.Tx, id int64, b fleet.Binding) (fleet.Binding, erro
 		return fleet.Binding{}, fmt.Errorf("store: update binding: lookup repo: %w", err)
 	}
 
-	if err := validateFleet(tx); err != nil {
-		return fleet.Binding{}, &ErrValidation{Msg: fmt.Sprintf("store: update binding: %v", err)}
-	}
 	b.ID = id
 	return b, nil
 }

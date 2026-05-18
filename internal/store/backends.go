@@ -92,21 +92,28 @@ func ReadBackends(db *sql.DB) (map[string]fleet.Backend, error) {
 // ensures the stored values are already in canonical form so that live
 // behavior never diverges from a post-restart load.
 func UpsertBackend(db *sql.DB, name string, b fleet.Backend) error {
-	name = fleet.NormalizeBackendName(name)
-	fleet.NormalizeBackend(&b)
-	fleet.ApplyBackendDefaults(&b)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert backend %s: begin: %w", name, err)
 	}
 	defer tx.Rollback()
-	if err := importBackends(tx, map[string]fleet.Backend{name: b}); err != nil {
+	if err := UpsertBackendTx(tx, name, b); err != nil {
 		return err
 	}
 	if err := validateFleet(tx); err != nil {
 		return &ErrValidation{Msg: fmt.Sprintf("store: upsert backend %s: %v", name, err)}
 	}
 	return tx.Commit()
+}
+
+func UpsertBackendTx(tx *sql.Tx, name string, b fleet.Backend) error {
+	name = fleet.NormalizeBackendName(name)
+	fleet.NormalizeBackend(&b)
+	fleet.ApplyBackendDefaults(&b)
+	if err := importBackends(tx, map[string]fleet.Backend{name: b}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // DeleteBackend removes the backend with the given name. Returns an error if

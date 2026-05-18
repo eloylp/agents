@@ -2605,6 +2605,55 @@ func TestToolCreateBindingForwardsAndReturnsID(t *testing.T) {
 	}
 }
 
+func TestRESTAndMCPRepoMutationValidationParity(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	badRepo := fleet.Repo{
+		Name:    "owner/one",
+		Enabled: true,
+		Use: []fleet.Binding{{
+			Agent: "coder",
+			Cron:  "not a cron",
+		}},
+	}
+	_, restErr := deps.Repos.UpsertRepo(badRepo)
+	if restErr == nil {
+		t.Fatal("REST repo upsert unexpectedly accepted invalid cron")
+	}
+	if !strings.Contains(restErr.Error(), "invalid cron expression") {
+		t.Fatalf("REST error = %q, want invalid cron expression", restErr.Error())
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":    "owner/one",
+		"enabled": true,
+		"bindings": []any{map[string]any{
+			"agent": "coder",
+			"cron":  "not a cron",
+		}},
+	}
+	res, err := toolCreateRepo(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("MCP create_repo returned transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("MCP create_repo unexpectedly succeeded: %+v", res)
+	}
+	if !strings.Contains(textOf(t, res), "invalid cron expression") {
+		t.Fatalf("MCP error = %q, want invalid cron expression", textOf(t, res))
+	}
+
+	r, ok := repoByName(t, deps.Store, "owner/one")
+	if !ok {
+		t.Fatal("owner/one missing after rejected writes")
+	}
+	if len(r.Use) != 2 {
+		t.Fatalf("owner/one bindings = %d, want original 2", len(r.Use))
+	}
+}
+
 func TestToolBindingOperationsUseWorkspace(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
