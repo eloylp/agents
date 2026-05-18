@@ -1274,33 +1274,38 @@ export default function GraphPage() {
               />
               {agentPanelTab === 'overview' && (
                 <>
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                <span style={{ background: 'var(--accent-bg)', border: '1px solid var(--btn-primary-border)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: 'var(--accent)' }}>
-                  {selectedNode.current_status}
-                </span>
-                {selectedNode.allow_dispatch && (
-                  <span style={{ background: 'var(--accent-bg)', border: '1px solid var(--btn-primary-border)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: 'var(--accent)' }}>dispatchable</span>
-                )}
-              </div>
-              <button
-                onClick={() => openEditAgent(selectedNode.name)}
-                style={{ justifySelf: 'start', padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
-              >
-                Edit agent
-              </button>
-              {selectedNodeRepos.length > 0 && (
-                <RunButton agent={selectedNode.name} repos={selectedNodeRepos} />
-              )}
-              {(selectedNode.skills ?? []).length > 0 && (
-                <div>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Skills</div>
-                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                    {selectedNode.skills!.map(s => (
-                      <span key={s} style={{ background: 'rgba(100,116,139,0.15)', border: '1px solid var(--border-subtle)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: 'var(--text-faint)' }}>{s}</span>
-                    ))}
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <button
+                      onClick={() => openEditAgent(selectedNode.name)}
+                      style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+                    >
+                      Edit agent
+                    </button>
+                    {selectedNodeRepos.length > 0 && (
+                      <RunButton agent={selectedNode.name} repos={selectedNodeRepos} />
+                    )}
                   </div>
-                </div>
-              )}
+                  <div>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Options</div>
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <span style={{ background: 'var(--accent-bg)', border: '1px solid var(--btn-primary-border)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: 'var(--accent)' }}>
+                        {selectedNode.current_status}
+                      </span>
+                      {selectedNode.allow_dispatch && (
+                        <span style={{ background: 'var(--accent-bg)', border: '1px solid var(--btn-primary-border)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: 'var(--accent)' }}>dispatchable</span>
+                      )}
+                    </div>
+                  </div>
+                  {(selectedNode.skills ?? []).length > 0 && (
+                    <div>
+                      <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Skills</div>
+                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        {selectedNode.skills!.map(s => (
+                          <span key={s} style={{ background: 'rgba(100,116,139,0.15)', border: '1px solid var(--border-subtle)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', color: 'var(--text-faint)' }}>{s}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
 
