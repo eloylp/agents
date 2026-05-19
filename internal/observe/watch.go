@@ -100,7 +100,7 @@ func buildMemoryChangeEvent(rel string) MemoryChangeEvent {
 	agent, repoPath, ok := strings.Cut(rel, string(filepath.Separator))
 	if ok {
 		ev.Agent = agent
-		ev.Repo = strings.TrimSuffix(repoPath, ".md")
+		ev.Repo, _ = strings.CutSuffix(repoPath, ".md")
 	}
 	return ev
 }
