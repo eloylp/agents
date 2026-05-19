@@ -24,11 +24,14 @@ import dagre from 'dagre'
 import Card from '@/components/Card'
 import AgentForm, { emptyAgentForm, type BackendOption } from '@/components/AgentForm'
 import BadgePicker from '@/components/BadgePicker'
+import LiveTraceModal, { type LiveTraceSpan } from '@/components/LiveTraceModal'
+import MarkdownEditor from '@/components/MarkdownEditor'
 import RunButton from '@/components/RunButton'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { useSelectedWorkspace, withWorkspace, type CatalogItem } from '@/lib/workspace'
 import { type Binding } from '@/lib/bindings'
 import { fmtDuration } from '@/lib/format'
+import { graphPromptIdentifier, resolveGraphPrompt, type GraphPromptItem } from '@/lib/graph-prompt'
 import {
   addCanDispatch,
   availableDispatchTargets,
@@ -142,7 +145,7 @@ const AGENT_NODE_WIDTH = 220
 const AGENT_NODE_HEIGHT = 105
 const REPO_BOUNDARY_PADDING = 52
 const REPO_BOUNDARY_HEADER = 26
-type AgentPanelTab = 'overview' | 'settings' | 'triggers' | 'dispatch' | 'activity'
+type AgentPanelTab = 'overview' | 'settings' | 'prompt' | 'triggers' | 'dispatch' | 'activity'
 type EdgePanelTab = 'overview' | 'history' | 'danger'
 
 const SUPPORTED_EVENTS = [
@@ -421,7 +424,7 @@ export default function GraphPage() {
   const [backendOptions, setBackendOptions] = useState<BackendOption[]>([])
   const [skillOptions, setSkillOptions] = useState<CatalogItem[]>([])
   const [agentNames, setAgentNames] = useState<string[]>([])
-  const [promptOptions, setPromptOptions] = useState<CatalogItem[]>([])
+  const [promptOptions, setPromptOptions] = useState<GraphPromptItem[]>([])
   const [panelMode, setPanelMode] = useState<'details' | 'edge' | 'create' | 'edit' | null>(null)
   const [agentPanelTab, setAgentPanelTab] = useState<AgentPanelTab>('overview')
   const [edgePanelTab, setEdgePanelTab] = useState<EdgePanelTab>('overview')
@@ -430,6 +433,10 @@ export default function GraphPage() {
   const [agentSaveError, setAgentSaveError] = useState('')
   const [agentRuns, setAgentRuns] = useState<RunnerRow[]>([])
   const [agentActivityLoading, setAgentActivityLoading] = useState(false)
+  const [promptDraft, setPromptDraft] = useState('')
+  const [promptSaving, setPromptSaving] = useState(false)
+  const [promptSaveError, setPromptSaveError] = useState('')
+  const [streamSpan, setStreamSpan] = useState<LiveTraceSpan | null>(null)
   const [bindingDraft, setBindingDraft] = useState<BindingDraft>(emptyBindingDraft)
   const [bindingSaving, setBindingSaving] = useState(false)
   const [bindingError, setBindingError] = useState('')
@@ -471,7 +478,7 @@ export default function GraphPage() {
       .catch(() => {})
     fetch('/prompts')
       .then(r => r.ok ? r.json() : [])
-      .then((data: CatalogItem[]) => setPromptOptions(data ?? []))
+      .then((data: GraphPromptItem[]) => setPromptOptions(data ?? []))
       .catch(() => {})
   }, [workspace])
 
@@ -1086,6 +1093,8 @@ export default function GraphPage() {
   }, [])
 
   const selectedNode = selectedNodeName ? agents.find(a => a.name === selectedNodeName) ?? null : null
+  const selectedPrompt = selectedNode ? resolveGraphPrompt(selectedNode, promptOptions, workspace) : null
+  const selectedPromptID = selectedPrompt ? graphPromptIdentifier(selectedPrompt) : ''
   const selectedNodeOutgoing = selectedNode ? outgoingDispatchTargets(selectedNode, relationshipAgents) : []
   const selectedNodeIncoming = selectedNode ? incomingDispatchSources(selectedNode.name, relationshipAgents) : []
   const selectedNodeTargets = selectedNode ? availableDispatchTargets(selectedNode.name, selectedNode.can_dispatch ?? [], relationshipAgents) : []
@@ -1103,6 +1112,33 @@ export default function GraphPage() {
     }
     return Array.from(set).sort()
   }, [repos])
+
+  useEffect(() => {
+    setPromptDraft(selectedPrompt?.content ?? '')
+    setPromptSaveError('')
+  }, [selectedPromptID, selectedPrompt?.content])
+
+  const saveSelectedPrompt = useCallback(async () => {
+    if (!selectedPrompt) return
+    setPromptSaving(true)
+    setPromptSaveError('')
+    try {
+      const res = await fetch(`/prompts/${encodeURIComponent(graphPromptIdentifier(selectedPrompt))}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: selectedPrompt.description ?? '', content: promptDraft }),
+      })
+      if (!res.ok) {
+        setPromptSaveError(await res.text() || 'Prompt save failed')
+        return
+      }
+      loadLookups()
+    } catch (e) {
+      setPromptSaveError(String(e))
+    } finally {
+      setPromptSaving(false)
+    }
+  }, [loadLookups, promptDraft, selectedPrompt])
 
   return (
     <div>
@@ -1267,6 +1303,7 @@ export default function GraphPage() {
                 tabs={[
                   { id: 'overview', label: 'Overview' },
                   { id: 'settings', label: 'Settings' },
+                  { id: 'prompt', label: 'Prompt' },
                   { id: 'triggers', label: 'Triggers' },
                   { id: 'dispatch', label: 'Dispatch' },
                   { id: 'activity', label: 'Activity' },
@@ -1320,6 +1357,45 @@ export default function GraphPage() {
                   saving={agentSaving}
                   error={agentSaveError}
                 />
+              )}
+
+              {agentPanelTab === 'prompt' && (
+                <div style={{ display: 'grid', gap: '0.85rem' }}>
+                  {!selectedPrompt ? (
+                    <div style={{ background: 'var(--bg)', border: '1px solid var(--border-danger)', borderRadius: 0, padding: '10px', color: 'var(--text-danger)', fontSize: '0.8rem' }}>
+                      No visible catalog prompt matches this agent&apos;s prompt reference. Open Settings and choose a prompt from the visible catalog before editing content here.
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ background: 'var(--bg)', border: '1px solid var(--border-subtle)', borderRadius: 0, padding: '10px', display: 'grid', gap: '6px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center' }}>
+                          <div>
+                            <div style={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.85rem' }}>{selectedPrompt.name}</div>
+                            <div style={{ color: 'var(--text-faint)', fontSize: '0.75rem' }}>
+                              {selectedPrompt.repo ? `${selectedPrompt.workspace_id || 'default'} / ${selectedPrompt.repo}` : selectedPrompt.workspace_id ? `${selectedPrompt.workspace_id} workspace` : 'Global'} · <code>{selectedPromptID}</code>
+                            </div>
+                          </div>
+                          <Link href="/prompts/" style={{ color: 'var(--accent)', fontSize: '0.75rem', textDecoration: 'none' }}>Open catalog →</Link>
+                        </div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                          Saving updates the shared catalog prompt used by every agent that references it.
+                        </div>
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Prompt content</label>
+                        <MarkdownEditor value={promptDraft} onChange={setPromptDraft} minHeight={300} />
+                      </div>
+                      {promptSaveError && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem' }}>{promptSaveError}</p>}
+                      <button
+                        onClick={saveSelectedPrompt}
+                        disabled={promptSaving || !promptDraft.trim() || promptDraft === (selectedPrompt.content ?? '')}
+                        style={{ justifySelf: 'start', padding: '6px 12px', borderRadius: 0, border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: promptSaving ? 'wait' : 'pointer', fontSize: '0.8rem', fontWeight: 600, opacity: promptSaving || !promptDraft.trim() || promptDraft === (selectedPrompt.content ?? '') ? 0.65 : 1 }}
+                      >
+                        {promptSaving ? 'Saving...' : 'Save prompt'}
+                      </button>
+                    </>
+                  )}
+                </div>
               )}
 
               {agentPanelTab === 'triggers' && (
@@ -1524,10 +1600,22 @@ export default function GraphPage() {
                           {run.kind || '-'} · {fmtTime(run.started_at ?? run.completed_at)} · {fmtDuration(run.run_duration_ms)}
                         </div>
                         {run.summary && <div style={{ color: 'var(--text-faint)', fontSize: '0.75rem', fontStyle: 'italic' }}>{run.summary}</div>}
-                        {run.event_id && (
-                          <Link href={`/traces/?id=${encodeURIComponent(run.event_id)}`} style={{ color: 'var(--accent)', fontSize: '0.75rem', textDecoration: 'none' }}>
-                            Open trace →
-                          </Link>
+                        {(run.span_id || run.event_id) && (
+                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                            {run.span_id && (
+                              <button
+                                onClick={() => setStreamSpan({ id: run.span_id!, agent: run.agent || run.target_agent || selectedNode.name, repo: run.repo, kind: run.kind, rootEventId: run.event_id })}
+                                style={{ background: 'var(--bg-card)', border: '1px solid var(--accent)', color: 'var(--accent)', padding: '3px 10px', borderRadius: 0, cursor: 'pointer', fontSize: '0.75rem' }}
+                              >
+                                Open transcript
+                              </button>
+                            )}
+                            {run.event_id && (
+                              <Link href={`/traces/?id=${encodeURIComponent(run.event_id)}`} style={{ color: 'var(--accent)', fontSize: '0.75rem', textDecoration: 'none' }}>
+                                Open trace →
+                              </Link>
+                            )}
+                          </div>
                         )}
                       </div>
                     ))}
@@ -1635,6 +1723,7 @@ export default function GraphPage() {
             </div>
           </Card>
       )}
+      {streamSpan && <LiveTraceModal span={streamSpan} onClose={() => setStreamSpan(null)} />}
     </div>
   )
 }

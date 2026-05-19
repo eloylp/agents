@@ -29,7 +29,9 @@ Primary workflow designer showing agents as draggable graph nodes and dispatch p
 
 The graph deliberately keeps one node per real agent. Repo-scoped agents are grouped inside thin dashed repo boundaries; workspace-scoped agents sit outside those boundaries. Repo trigger bindings are visualised as thin lines from the agent to passive repo anchors, so the user can see where an agent runs without duplicating the agent into one node per repo. Dispatch wiring remains the editable agent-to-agent relationship.
 
-The right-side **Agent editor** is the graph's main editing surface. Click an agent to inspect or edit its definition, run it against bound repos, manage repo triggers, add or remove dispatch wiring, and review recent runner rows / trace links. The editor is tabbed by concept: Overview, Settings, Triggers, Dispatch, and Activity. Operators can create agents without leaving the designer.
+The right-side **Agent editor** is the graph's main editing surface. Click an agent to inspect or edit its definition, run it against bound repos, manage repo triggers, add or remove dispatch wiring, edit the referenced catalog prompt, and review recent runner rows / trace links. The editor is tabbed by concept: Overview, Settings, Prompt, Triggers, Dispatch, and Activity. The Prompt tab updates the same reusable prompt catalog entry selected by the agent and calls out that shared ownership before saving. Operators can create agents without leaving the designer.
+
+The Activity tab can open the same live transcript modal used by the Runners page. In-flight spans stream from `/traces/{span_id}/stream`; completed spans replay the persisted `trace_steps` rows through the same surface, with a link back to the full trace detail.
 
 Dispatch wiring is always editable: drag from one agent to another to add a connection, or click an edge to inspect its Overview, History, and Danger tabs. Dispatch changes write back to the source agent's `can_dispatch` list and the target's `allow_dispatch` flag.
 
