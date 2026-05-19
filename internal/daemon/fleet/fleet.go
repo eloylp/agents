@@ -915,7 +915,7 @@ func (h *Handler) handleBackendsLocal(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = backends.ClaudeLocalName
 	}
-	if name == backends.ClaudeName || name == backends.CodexName {
+	if slices.Contains([]string{backends.ClaudeName, backends.CodexName}, name) {
 		http.Error(w, "name is reserved for built-in backends", http.StatusBadRequest)
 		return
 	}
