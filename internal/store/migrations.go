@@ -35,7 +35,7 @@ func migrate(db *sql.DB) error {
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if !strings.HasSuffix(name, ".sql") {
+		if _, ok := strings.CutSuffix(name, ".sql"); !ok {
 			continue
 		}
 
