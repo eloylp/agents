@@ -30,6 +30,7 @@ export const emptyAgentForm: StoreAgent = {
 
 export default function AgentForm({
   initial, isNew, workspace, backends, skillOptions, agentNames, promptOptions, repoNames, onSave, onCancel, saving, error,
+  promptOptionsLoaded = true,
 }: {
   initial: StoreAgent
   isNew: boolean
@@ -38,6 +39,7 @@ export default function AgentForm({
   skillOptions: CatalogItem[]
   agentNames: string[]
   promptOptions: PromptOption[]
+  promptOptionsLoaded?: boolean
   repoNames: string[]
   onSave: (a: StoreAgent) => void
   onCancel: () => void
@@ -66,12 +68,12 @@ export default function AgentForm({
   const visibleSkills = visibleCatalogItems(skillOptions, workspace, catalogRepo)
   const promptValues = visiblePrompts.map(catalogValue)
   const skillValues = visibleSkills.map(catalogValue)
-  const promptScopeKeys = visiblePrompts.map(p => `${catalogValue(p)}:${p.name}:${catalogScope(p)}`).join('|')
   const selectedPromptByRef = visiblePrompts.find(p => p.name === form.prompt_ref && catalogScope(p) === form.prompt_scope)
   const selectedPrompt = (form.prompt_id || (selectedPromptByRef ? catalogValue(selectedPromptByRef) : form.prompt_ref)).trim()
-  const promptRefMissing = selectedPrompt !== '' && !promptValues.includes(selectedPrompt)
+  const promptRefHidden = selectedPrompt !== '' && !promptValues.includes(selectedPrompt)
+  const promptRefMissing = promptOptionsLoaded && promptRefHidden
   const canSave = !saving && form.name.trim() !== '' && form.backend.trim() !== '' && form.description.trim() !== '' &&
-    selectedPrompt !== '' && !promptRefMissing && (form.scope_type !== 'repo' || scopeRepo !== '')
+    selectedPrompt !== '' && promptOptionsLoaded && !promptRefMissing && (form.scope_type !== 'repo' || scopeRepo !== '')
 
   const setPrompt = (value: string) => {
     const prompt = visiblePrompts.find(p => catalogValue(p) === value)
@@ -85,20 +87,14 @@ export default function AgentForm({
 
   useEffect(() => {
     setForm(f => {
-      const selectedByRef = visiblePrompts.find(p => p.name === f.prompt_ref && catalogScope(p) === f.prompt_scope)
-      const selected = (f.prompt_id || (selectedByRef ? catalogValue(selectedByRef) : f.prompt_ref)).trim()
       const nextSkills = f.skills.filter(s => skillValues.includes(s))
-      const promptVisible = selected === '' || promptValues.includes(selected)
-      if (promptVisible && nextSkills.length === f.skills.length) return f
+      if (nextSkills.length === f.skills.length) return f
       return {
         ...f,
         skills: nextSkills,
-        prompt_id: promptVisible ? f.prompt_id : '',
-        prompt_ref: promptVisible ? f.prompt_ref : '',
-        prompt_scope: promptVisible ? f.prompt_scope : '',
       }
     })
-  }, [workspace, catalogRepo, promptScopeKeys, promptValues.join('|'), skillValues.join('|')])
+  }, [skillValues.join('|')])
 
   useEffect(() => {
     if (!form.model) return
@@ -145,7 +141,7 @@ export default function AgentForm({
         <label style={labelStyle}>Prompt *</label>
         <select style={inputStyle} value={selectedPrompt} onChange={e => setPrompt(e.target.value)}>
           <option value="">Select prompt...</option>
-          {promptRefMissing && <option value={selectedPrompt}>{selectedPrompt} (not visible)</option>}
+          {promptRefHidden && <option value={selectedPrompt}>{selectedPrompt}{promptRefMissing ? ' (not visible)' : ''}</option>}
           {visiblePrompts.map(prompt => <option key={catalogValue(prompt)} value={catalogValue(prompt)}>{catalogLabel(prompt)}</option>)}
         </select>
         {promptRefMissing && (
