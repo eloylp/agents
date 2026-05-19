@@ -11,7 +11,72 @@ const baseAgent = {
 }
 
 describe('<AgentForm />', () => {
-  it('clears prompt_ref when it is no longer visible in the prompt catalog', async () => {
+  it('does not show a missing prompt error before prompt lookups load', () => {
+    render(
+      <AgentForm
+        initial={baseAgent}
+        isNew
+        workspace="default"
+        backends={[{ name: 'claude', detected: true }]}
+        skillOptions={[]}
+        agentNames={[]}
+        promptOptions={[]}
+        promptOptionsLoaded={false}
+        repoNames={[]}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        saving={false}
+        error=""
+      />,
+    )
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByDisplayValue('missing')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+  })
+
+  it('keeps the selected prompt while lookups are loading', () => {
+    const { rerender } = render(
+      <AgentForm
+        initial={baseAgent}
+        isNew
+        workspace="default"
+        backends={[{ name: 'claude', detected: true }]}
+        skillOptions={[]}
+        agentNames={[]}
+        promptOptions={[]}
+        promptOptionsLoaded={false}
+        repoNames={[]}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        saving={false}
+        error=""
+      />,
+    )
+
+    rerender(
+      <AgentForm
+        initial={baseAgent}
+        isNew
+        workspace="default"
+        backends={[{ name: 'claude', detected: true }]}
+        skillOptions={[]}
+        agentNames={[]}
+        promptOptions={[{ name: 'missing' }]}
+        promptOptionsLoaded
+        repoNames={[]}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        saving={false}
+        error=""
+      />,
+    )
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+  })
+
+  it('keeps a missing prompt selected after prompt lookups load', async () => {
     render(
       <AgentForm
         initial={baseAgent}
@@ -30,8 +95,32 @@ describe('<AgentForm />', () => {
     )
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue('Select prompt...')).toBeInTheDocument()
+      expect(screen.getByDisplayValue('missing (not visible)')).toBeInTheDocument()
     })
+    expect(screen.getByRole('alert')).toHaveTextContent('Selected prompt is no longer in the catalog.')
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+  })
+
+  it('shows a missing prompt error after prompt lookups load', () => {
+    render(
+      <AgentForm
+        initial={baseAgent}
+        isNew
+        workspace="default"
+        backends={[{ name: 'claude', detected: true }]}
+        skillOptions={[]}
+        agentNames={[]}
+        promptOptions={[{ name: 'approved' }]}
+        promptOptionsLoaded
+        repoNames={[]}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+        saving={false}
+        error=""
+      />,
+    )
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Selected prompt is no longer in the catalog.')
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
   })
 

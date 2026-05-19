@@ -426,6 +426,7 @@ export default function GraphPage() {
   const [skillOptions, setSkillOptions] = useState<CatalogItem[]>([])
   const [agentNames, setAgentNames] = useState<string[]>([])
   const [promptOptions, setPromptOptions] = useState<GraphPromptItem[]>([])
+  const [promptOptionsLoaded, setPromptOptionsLoaded] = useState(false)
   const [panelMode, setPanelMode] = useState<'details' | 'edge' | 'create' | null>(null)
   const [agentPanelTab, setAgentPanelTab] = useState<AgentPanelTab>('overview')
   const [edgePanelTab, setEdgePanelTab] = useState<EdgePanelTab>('overview')
@@ -479,8 +480,11 @@ export default function GraphPage() {
       .catch(() => {})
     fetch('/prompts')
       .then(r => r.ok ? r.json() : [])
-      .then((data: GraphPromptItem[]) => setPromptOptions(data ?? []))
-      .catch(() => {})
+      .then((data: GraphPromptItem[]) => {
+        setPromptOptions(data ?? [])
+        setPromptOptionsLoaded(true)
+      })
+      .catch(() => setPromptOptionsLoaded(true))
   }, [workspace])
 
   const load = useCallback(() => {
@@ -818,7 +822,7 @@ export default function GraphPage() {
       .then(full => setAgentForm({ ...emptyAgentForm, ...full, allow_memory: full.allow_memory ?? true }))
       .catch(() => {})
     loadLookups()
-  }, [agentPanelTab, agents, fetchStoreAgent, loadLookups, panelMode, selectedNodeName])
+  }, [agentPanelTab, fetchStoreAgent, loadLookups, panelMode, selectedNodeName])
 
   const postStoreAgent = useCallback(async (a: StoreAgent): Promise<void> => {
     const res = await fetch(withWorkspace('/agents', workspace), {
@@ -1180,6 +1184,7 @@ export default function GraphPage() {
               skillOptions={skillOptions}
               agentNames={agentNames}
               promptOptions={promptOptions}
+              promptOptionsLoaded={promptOptionsLoaded}
               repoNames={repos.map(r => r.name)}
               onSave={saveAgent}
               onCancel={closePanel}
@@ -1323,6 +1328,7 @@ export default function GraphPage() {
                   skillOptions={skillOptions}
                   agentNames={agentNames}
                   promptOptions={promptOptions}
+                  promptOptionsLoaded={promptOptionsLoaded}
                   repoNames={repos.map(r => r.name)}
                   onSave={saveAgent}
                   onCancel={() => setAgentPanelTab('overview')}
