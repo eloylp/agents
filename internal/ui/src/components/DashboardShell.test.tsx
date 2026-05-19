@@ -24,23 +24,60 @@ function mockShellFetch() {
   }))
 }
 
+function mockViewport(matches: boolean) {
+  vi.stubGlobal('matchMedia', vi.fn(() => ({
+    matches,
+    media: '(max-width: 860px)',
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })))
+}
+
 describe('<DashboardShell />', () => {
   afterEach(() => {
+    window.localStorage.clear()
     vi.unstubAllGlobals()
   })
 
   it('renders the collapsed navigation toggle as an accessible hamburger icon', () => {
     mockShellFetch()
+    mockViewport(false)
     const { container } = render(<DashboardShell><div>Content</div></DashboardShell>)
 
-    const button = screen.getByTitle('Open navigation')
-    expect(button).toHaveAttribute('aria-label', 'Open navigation')
-    expect(button).toHaveAttribute('title', 'Open navigation')
+    const button = screen.getByTitle('Collapse navigation')
+    expect(button).toHaveAttribute('aria-label', 'Collapse navigation')
+    expect(button).toHaveAttribute('title', 'Collapse navigation')
     expect(button).not.toHaveTextContent('Menu')
     expect(button.querySelector('.shell-menu-icon')).toHaveAttribute('aria-hidden', 'true')
     expect(button.querySelectorAll('.shell-menu-icon span')).toHaveLength(3)
 
     fireEvent.click(button)
+    expect(container.querySelector('.dashboard-shell.nav-collapsed')).toBeInTheDocument()
+    expect(button).toHaveAttribute('aria-label', 'Open navigation')
+  })
+
+  it('persists desktop navigation collapse and responds to graph focus events', () => {
+    mockShellFetch()
+    mockViewport(false)
+    const { container } = render(<DashboardShell><div>Content</div></DashboardShell>)
+
+    fireEvent(window, new Event('agents:shell-collapse-sidebar'))
+
+    expect(container.querySelector('.dashboard-shell.nav-collapsed')).toBeInTheDocument()
+    expect(window.localStorage.getItem('agents.sidebarCollapsed')).toBe('true')
+  })
+
+  it('keeps the hamburger opening mobile navigation', () => {
+    mockShellFetch()
+    mockViewport(true)
+    const { container } = render(<DashboardShell><div>Content</div></DashboardShell>)
+
+    fireEvent.click(screen.getByTitle('Open navigation'))
+
     expect(container.querySelector('.shell-sidebar.open')).toBeInTheDocument()
   })
 })
