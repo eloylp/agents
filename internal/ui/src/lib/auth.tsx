@@ -310,7 +310,7 @@ export function AuthTokenSettings() {
 
 function AuthRedirectScreen({ loading }: { loading: boolean }) {
   return (
-    <div style={authPageStyle}>
+    <div style={authRedirectPageStyle}>
       <div style={authBackdropStyle} />
       <div style={authCardStyle}>
         <p style={authEyebrowStyle}>Agents dashboard</p>
@@ -374,7 +374,7 @@ const pillStyle: React.CSSProperties = {
   padding: '0.15rem 0.45rem',
 }
 
-const authPageStyle: React.CSSProperties = {
+const authRedirectPageStyle: React.CSSProperties = {
   minHeight: '100vh',
   display: 'flex',
   alignItems: 'center',
@@ -383,7 +383,7 @@ const authPageStyle: React.CSSProperties = {
   overflow: 'hidden',
   padding: '1.25rem',
   background:
-    'linear-gradient(135deg, rgba(7,17,31,0.82), rgba(13,34,55,0.58) 44%, rgba(238,246,255,0.18)), url("/ui/agents.jpg") center / cover no-repeat, linear-gradient(135deg, #07111f 0%, #0d2237 48%, #eef6ff 100%)',
+    'linear-gradient(135deg, rgba(7,17,31,0.92), rgba(13,34,55,0.74) 48%, rgba(238,246,255,0.28)), linear-gradient(135deg, #07111f 0%, #0d2237 48%, #eef6ff 100%)',
 }
 
 const authBackdropStyle: React.CSSProperties = {
