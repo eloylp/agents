@@ -2,7 +2,10 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
+import { SIDEBAR_COLLAPSE_EVENT } from '@/lib/shell-events'
 import { useTheme } from '@/lib/theme'
+
+const SIDEBAR_COLLAPSED_KEY = 'agents.sidebarCollapsed'
 
 const links = [
   { href: '/graph/', label: 'Graph', group: 'Design' },
@@ -25,6 +28,9 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   const pathname = usePathname()
   const { theme, toggle } = useTheme()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarPreferenceLoaded, setSidebarPreferenceLoaded] = useState(false)
+  const [mobileViewport, setMobileViewport] = useState(false)
   const [orphanCount, setOrphanCount] = useState(0)
   const [budgetAlertCount, setBudgetAlertCount] = useState(0)
 
@@ -36,6 +42,33 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   useEffect(() => {
     setSidebarOpen(false)
   }, [pathname])
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 860px)')
+    const sync = () => setMobileViewport(media.matches)
+    sync()
+    media.addEventListener('change', sync)
+    return () => media.removeEventListener('change', sync)
+  }, [])
+
+  useEffect(() => {
+    setSidebarCollapsed(window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true')
+    setSidebarPreferenceLoaded(true)
+  }, [])
+
+  useEffect(() => {
+    if (!sidebarPreferenceLoaded) return
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed))
+  }, [sidebarCollapsed, sidebarPreferenceLoaded])
+
+  useEffect(() => {
+    const collapse = () => {
+      setSidebarCollapsed(true)
+      setSidebarOpen(false)
+    }
+    window.addEventListener(SIDEBAR_COLLAPSE_EVENT, collapse)
+    return () => window.removeEventListener(SIDEBAR_COLLAPSE_EVENT, collapse)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -82,9 +115,10 @@ export default function DashboardShell({ children }: { children: React.ReactNode
     acc[link.group].push(link)
     return acc
   }, {})
+  const navToggleLabel = sidebarCollapsed || mobileViewport ? 'Open navigation' : 'Collapse navigation'
 
   return (
-    <div className="dashboard-shell">
+    <div className={`dashboard-shell ${sidebarCollapsed ? 'nav-collapsed' : ''}`}>
       <style jsx global>{`
         .dashboard-shell { min-height: 100vh; }
         .shell-sidebar {
@@ -101,6 +135,8 @@ export default function DashboardShell({ children }: { children: React.ReactNode
           box-shadow: 10px 0 28px rgba(15,23,42,0.08);
         }
         .shell-main { margin-left: 244px; min-height: 100vh; }
+        .dashboard-shell.nav-collapsed .shell-sidebar { transform: translateX(-102%); visibility: hidden; }
+        .dashboard-shell.nav-collapsed .shell-main { margin-left: 0; }
         .shell-topbar {
           min-height: 50px;
           display: flex;
@@ -115,7 +151,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
           z-index: 500;
         }
         .shell-content { padding: 1.25rem; max-width: 1480px; margin: 0 auto; }
-        .shell-menu-button { display: none; }
+        .shell-menu-button { display: inline-flex; }
         .shell-menu-icon {
           display: grid;
           gap: 4px;
@@ -131,8 +167,8 @@ export default function DashboardShell({ children }: { children: React.ReactNode
         @media (max-width: 860px) {
           .shell-sidebar { transform: translateX(-102%); transition: transform 160ms ease; }
           .shell-sidebar.open { transform: translateX(0); }
+          .dashboard-shell.nav-collapsed .shell-sidebar.open { transform: translateX(0); visibility: visible; }
           .shell-main { margin-left: 0; }
-          .shell-menu-button { display: inline-flex; }
           .shell-overlay.open {
             display: block;
             position: fixed;
@@ -195,9 +231,18 @@ export default function DashboardShell({ children }: { children: React.ReactNode
         <header className="shell-topbar">
           <button
             className="shell-menu-button"
-            onClick={() => setSidebarOpen(true)}
-            aria-label="Open navigation"
-            title="Open navigation"
+            onClick={() => {
+              if (sidebarCollapsed) {
+                setSidebarCollapsed(false)
+                if (mobileViewport) setSidebarOpen(true)
+              } else if (mobileViewport) {
+                setSidebarOpen(true)
+              } else {
+                setSidebarCollapsed(true)
+              }
+            }}
+            aria-label={navToggleLabel}
+            title={navToggleLabel}
             style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 0, padding: '5px 9px', cursor: 'pointer' }}
           >
             <span className="shell-menu-icon" aria-hidden="true">

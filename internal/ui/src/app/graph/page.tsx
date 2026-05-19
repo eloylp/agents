@@ -32,6 +32,7 @@ import { useSelectedWorkspace, withWorkspace, type CatalogItem } from '@/lib/wor
 import { type Binding } from '@/lib/bindings'
 import { fmtDuration } from '@/lib/format'
 import { graphPromptIdentifier, resolveGraphPrompt, type GraphPromptItem } from '@/lib/graph-prompt'
+import { SIDEBAR_COLLAPSE_EVENT } from '@/lib/shell-events'
 import {
   addCanDispatch,
   availableDispatchTargets,
@@ -1107,6 +1108,10 @@ export default function GraphPage() {
     }
   }, [loadLookups, promptDraft, selectedPrompt])
 
+  const enterFocusMode = useCallback(() => {
+    window.dispatchEvent(new Event(SIDEBAR_COLLAPSE_EVENT))
+  }, [])
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
@@ -1119,6 +1124,9 @@ export default function GraphPage() {
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <WorkspaceSelect compact />
           <RepoFilter selected={repoFilter} onChange={setRepoFilter} workspace={workspace} />
+          <button onClick={enterFocusMode} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--accent)', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500 }}>
+            Focus
+          </button>
           <button onClick={openCreateAgent} style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}>
             + Create agent
           </button>
