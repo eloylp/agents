@@ -281,6 +281,7 @@ export default function ConfigPage() {
   const [orphanModelSelection, setOrphanModelSelection] = useState<Record<string, string>>({})
 
   const [saving, setSaving] = useState(false)
+  const [discoveryRunning, setDiscoveryRunning] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [errorDialog, setErrorDialog] = useState<{ title: string; message: string } | null>(null)
   const [localBackendModalOpen, setLocalBackendModalOpen] = useState(false)
@@ -506,20 +507,20 @@ export default function ConfigPage() {
   }, [tab])
 
   const runDiscovery = async () => {
-    setSaving(true)
+    setDiscoveryRunning(true)
     setSaveError('')
     try {
       const res = await fetch('/backends/discover', { method: 'POST' })
       if (!res.ok) {
         setSaveError((await res.text()) || 'Discovery failed')
-        setSaving(false)
         return
       }
       loadBackends()
     } catch (e) {
       setSaveError(String(e))
+    } finally {
+      setDiscoveryRunning(false)
     }
-    setSaving(false)
   }
 
   const addLocalBackend = async () => {
@@ -1010,16 +1011,24 @@ export default function ConfigPage() {
 
       {tab === 'backends' && (
         <Card style={{ borderTopLeftRadius: 0 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-              {backendsLoading ? 'Loading backends…' : `${backends.length} backend${backends.length !== 1 ? 's' : ''} configured`}
-            </span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+            <div style={{ display: 'grid', gap: '0.25rem' }}>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                {backendsLoading ? 'Checking backend and tool diagnostics…' : `${backends.length} backend${backends.length !== 1 ? 's' : ''} configured`}
+              </span>
+              {backendsLoading && (
+                <span style={{ color: 'var(--text-faint)', fontSize: '0.78rem' }}>
+                  Inspecting runner image, backend CLIs, GitHub MCP, and gh authentication.
+                </span>
+              )}
+            </div>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
               <button
                 onClick={runDiscovery}
-                style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
+                disabled={discoveryRunning}
+                style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '5px 12px', borderRadius: '6px', cursor: discoveryRunning ? 'wait' : 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
               >
-                {saving ? 'Running…' : 'Run discovery'}
+                {discoveryRunning ? 'Running discovery…' : 'Run discovery'}
               </button>
               <button
                 onClick={() => {
