@@ -32,6 +32,7 @@ import { useSelectedWorkspace, withWorkspace, type CatalogItem } from '@/lib/wor
 import { type Binding } from '@/lib/bindings'
 import { fmtDuration } from '@/lib/format'
 import { graphPromptIdentifier, resolveGraphPrompt, type GraphPromptItem } from '@/lib/graph-prompt'
+import { SIDEBAR_COLLAPSE_EVENT } from '@/lib/shell-events'
 import {
   addCanDispatch,
   availableDispatchTargets,
@@ -1141,7 +1142,7 @@ export default function GraphPage() {
   }, [loadLookups, promptDraft, selectedPrompt])
 
   const enterFocusMode = useCallback(() => {
-    window.dispatchEvent(new Event('agents:shell-collapse-sidebar'))
+    window.dispatchEvent(new Event(SIDEBAR_COLLAPSE_EVENT))
   }, [])
 
   return (

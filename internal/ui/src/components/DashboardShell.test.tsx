@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { SIDEBAR_COLLAPSE_EVENT } from '@/lib/shell-events'
 import DashboardShell from './DashboardShell'
 
 vi.mock('next/navigation', () => ({
@@ -65,9 +66,22 @@ describe('<DashboardShell />', () => {
     mockViewport(false)
     const { container } = render(<DashboardShell><div>Content</div></DashboardShell>)
 
-    fireEvent(window, new Event('agents:shell-collapse-sidebar'))
+    fireEvent(window, new Event(SIDEBAR_COLLAPSE_EVENT))
 
     expect(container.querySelector('.dashboard-shell.nav-collapsed')).toBeInTheDocument()
+    expect(window.localStorage.getItem('agents.sidebarCollapsed')).toBe('true')
+  })
+
+  it('restores collapsed desktop navigation after reload', async () => {
+    window.localStorage.setItem('agents.sidebarCollapsed', 'true')
+    mockShellFetch()
+    mockViewport(false)
+    const { container } = render(<DashboardShell><div>Content</div></DashboardShell>)
+
+    await waitFor(() => {
+      expect(container.querySelector('.dashboard-shell.nav-collapsed')).toBeInTheDocument()
+    })
+    expect(screen.getByTitle('Open navigation')).toBeInTheDocument()
     expect(window.localStorage.getItem('agents.sidebarCollapsed')).toBe('true')
   })
 

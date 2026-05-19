@@ -2,10 +2,10 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
+import { SIDEBAR_COLLAPSE_EVENT } from '@/lib/shell-events'
 import { useTheme } from '@/lib/theme'
 
 const SIDEBAR_COLLAPSED_KEY = 'agents.sidebarCollapsed'
-const SIDEBAR_COLLAPSE_EVENT = 'agents:shell-collapse-sidebar'
 
 const links = [
   { href: '/graph/', label: 'Graph', group: 'Design' },
@@ -28,10 +28,8 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   const pathname = usePathname()
   const { theme, toggle } = useTheme()
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    if (typeof window === 'undefined') return false
-    return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true'
-  })
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarPreferenceLoaded, setSidebarPreferenceLoaded] = useState(false)
   const [mobileViewport, setMobileViewport] = useState(false)
   const [orphanCount, setOrphanCount] = useState(0)
   const [budgetAlertCount, setBudgetAlertCount] = useState(0)
@@ -54,8 +52,14 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   }, [])
 
   useEffect(() => {
+    setSidebarCollapsed(window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true')
+    setSidebarPreferenceLoaded(true)
+  }, [])
+
+  useEffect(() => {
+    if (!sidebarPreferenceLoaded) return
     window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed))
-  }, [sidebarCollapsed])
+  }, [sidebarCollapsed, sidebarPreferenceLoaded])
 
   useEffect(() => {
     const collapse = () => {
