@@ -1,9 +1,11 @@
 package config
 
 import (
-	"github.com/eloylp/agents/internal/fleet"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/eloylp/agents/internal/fleet"
 )
 
 // TestAgentIsAllowMemoryDefaultsTrue confirms that an fleet.Agent with no
@@ -116,7 +118,9 @@ func TestLoadAllowMemoryRejectsNonBoolean(t *testing.T) {
 	path := writeConfig(t, yaml)
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected YAML parse error for non-boolean allow_memory, got nil")
-	} else if !strings.Contains(err.Error(), "parse") && !strings.Contains(err.Error(), "bool") && !strings.Contains(err.Error(), "yaml") {
+	} else if !slices.ContainsFunc([]string{"parse", "bool", "yaml"}, func(fragment string) bool {
+		return strings.Contains(err.Error(), fragment)
+	}) {
 		t.Logf("error message: %v", err)
 	}
 }
