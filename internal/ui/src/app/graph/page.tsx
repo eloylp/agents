@@ -425,7 +425,7 @@ export default function GraphPage() {
   const [skillOptions, setSkillOptions] = useState<CatalogItem[]>([])
   const [agentNames, setAgentNames] = useState<string[]>([])
   const [promptOptions, setPromptOptions] = useState<GraphPromptItem[]>([])
-  const [panelMode, setPanelMode] = useState<'details' | 'edge' | 'create' | 'edit' | null>(null)
+  const [panelMode, setPanelMode] = useState<'details' | 'edge' | 'create' | null>(null)
   const [agentPanelTab, setAgentPanelTab] = useState<AgentPanelTab>('overview')
   const [edgePanelTab, setEdgePanelTab] = useState<EdgePanelTab>('overview')
   const [agentForm, setAgentForm] = useState<StoreAgent>(emptyAgentForm)
@@ -943,39 +943,6 @@ export default function GraphPage() {
     loadLookups()
   }, [loadLookups])
 
-  const openEditAgent = useCallback(async (agentName: string) => {
-    const agent = agents.find(a => a.name === agentName)
-    setSelectedEdge(null)
-    setSelectedNodeName(agentName)
-    setAgentSaveError('')
-    setAgentForm({
-      ...emptyAgentForm,
-      name: agentName,
-      backend: agent?.backend ?? '',
-      model: agent?.model ?? '',
-      skills: agent?.skills ?? [],
-      prompt_id: agent?.prompt_id ?? '',
-      prompt_ref: agent?.prompt_ref ?? '',
-      prompt_scope: agent?.prompt_scope ?? '',
-      scope_type: agent?.scope_type ?? 'workspace',
-      scope_repo: agent?.scope_repo ?? '',
-      allow_prs: agent?.allow_prs ?? false,
-      allow_dispatch: agent?.allow_dispatch ?? false,
-      allow_memory: agent?.allow_memory ?? true,
-      can_dispatch: agent?.can_dispatch ?? [],
-      description: agent?.description ?? '',
-    })
-    setPanelMode('edit')
-    loadLookups()
-    try {
-      const full = await fetchStoreAgent(agentName)
-      setAgentForm({ ...emptyAgentForm, ...full, allow_memory: full.allow_memory ?? true })
-    } catch {
-      // The panel keeps the graph snapshot data so editing can still recover
-      // if the detail fetch succeeds on the next save attempt.
-    }
-  }, [agents, fetchStoreAgent, loadLookups])
-
   const saveAgent = useCallback(async (form: StoreAgent) => {
     setAgentSaving(true)
     setAgentSaveError('')
@@ -1184,11 +1151,9 @@ export default function GraphPage() {
               <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-heading)' }}>
                 {panelMode === 'create'
                   ? 'Create agent'
-                  : panelMode === 'edit'
-                    ? `Edit ${agentForm.name}`
-                    : panelMode === 'edge' && selectedEdge
-                      ? `${selectedEdge.from} -> ${selectedEdge.to}`
-                      : selectedNode?.name}
+                  : panelMode === 'edge' && selectedEdge
+                    ? `${selectedEdge.from} -> ${selectedEdge.to}`
+                    : selectedNode?.name}
               </h2>
               {panelMode === 'details' && selectedNode?.description && (
                 <p style={{ color: 'var(--text-faint)', fontSize: '0.875rem', marginTop: '0.25rem' }}>{selectedNode.description}</p>
@@ -1197,11 +1162,11 @@ export default function GraphPage() {
             <button onClick={closePanel} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--text-faint)' }}>x</button>
           </div>
 
-          {(panelMode === 'create' || panelMode === 'edit') && (
+          {panelMode === 'create' && (
             <AgentForm
-              key={`${panelMode}:${agentForm.name}`}
+              key={`create:${agentForm.name}`}
               initial={agentForm}
-              isNew={panelMode === 'create'}
+              isNew={true}
               workspace={workspace}
               backends={backendOptions}
               skillOptions={skillOptions}
@@ -1332,17 +1297,11 @@ export default function GraphPage() {
                       </div>
                     </div>
                   )}
-                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-                    <button
-                      onClick={() => openEditAgent(selectedNode.name)}
-                      style={{ padding: '6px 12px', borderRadius: 0, border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}
-                    >
-                      Edit agent
-                    </button>
-                    {selectedNodeRepos.length > 0 && (
+                  {selectedNodeRepos.length > 0 && (
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
                       <RunButton agent={selectedNode.name} repos={selectedNodeRepos} />
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </>
               )}
 
