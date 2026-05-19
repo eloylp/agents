@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -60,9 +61,9 @@ func backendFailureDetailFromJSON(line []byte) string {
 func isErrorEvent(obj map[string]any) bool {
 	typ := strings.ToLower(stringField(obj, "type"))
 	level := strings.ToLower(stringField(obj, "level"))
-	return strings.Contains(typ, "error") ||
-		strings.Contains(typ, "failed") ||
-		level == "error"
+	return slices.ContainsFunc([]string{"error", "failed"}, func(token string) bool {
+		return strings.Contains(typ, token)
+	}) || level == "error"
 }
 
 func stringField(obj map[string]any, key string) string {
