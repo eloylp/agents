@@ -87,7 +87,7 @@ func (h *Handler) HandleAgentsView(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		currentStatus := "idle"
-		if h.obs != nil && h.obs.IsRunning(a.Name) {
+		if h.obs != nil && h.obs.IsRunningInWorkspace(workspaceID, a.Name) {
 			currentStatus = "running"
 		}
 		entry := apiAgentJSON{
