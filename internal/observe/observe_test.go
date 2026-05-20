@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -496,7 +495,7 @@ func TestStoreRecordEventPersistsAndPublishesToSSE(t *testing.T) {
 	// SSEHub.Publish sends synchronously to the buffered subscriber channels.
 	select {
 	case msg := <-ch:
-		if !strings.HasPrefix(string(msg), "data: ") {
+		if !bytes.HasPrefix(msg, []byte("data: ")) {
 			t.Fatalf("SSE message should start with \"data: \", got %q", msg)
 		}
 	default:
@@ -597,7 +596,7 @@ func TestStoreRecordSpanPersistsAndPublishesToSSE(t *testing.T) {
 	// Verify SSE fan-out.
 	select {
 	case msg := <-ch:
-		if !strings.HasPrefix(string(msg), "data: ") {
+		if !bytes.HasPrefix(msg, []byte("data: ")) {
 			t.Fatalf("SSE message should start with \"data: \", got %q", msg)
 		}
 	default:
