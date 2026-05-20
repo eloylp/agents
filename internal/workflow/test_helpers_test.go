@@ -3,6 +3,7 @@ package workflow
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -46,7 +47,9 @@ func seedStoreFromCfg(t *testing.T, cfg *config.Config) *store.Store {
 		if cfg.Agents[i].PromptRef == "" && cfg.Agents[i].PromptID == "" {
 			cfg.Agents[i].PromptRef = cfg.Agents[i].Name
 		}
-		if !testConfigHasPrompt(cfg, cfg.Agents[i].PromptRef) {
+		if !slices.ContainsFunc(cfg.Prompts, func(p fleet.Prompt) bool {
+			return p.Name == cfg.Agents[i].PromptRef
+		}) {
 			cfg.Prompts = append(cfg.Prompts, fleet.Prompt{Name: cfg.Agents[i].PromptRef, Content: "test prompt"})
 		}
 	}
@@ -64,15 +67,6 @@ func seedStoreFromCfg(t *testing.T, cfg *config.Config) *store.Store {
 		t.Fatalf("seed: %v", err)
 	}
 	return st
-}
-
-func testConfigHasPrompt(cfg *config.Config, name string) bool {
-	for _, p := range cfg.Prompts {
-		if p.Name == name {
-			return true
-		}
-	}
-	return false
 }
 
 // newEngineFromCfg builds an Engine that reads from a tempdir SQLite
