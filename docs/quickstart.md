@@ -10,7 +10,7 @@ The daemon dispatches AI CLIs (`claude`, `codex`) with sandbox-bypass flags so a
 mkdir agents && cd agents
 curl -fsSLO https://raw.githubusercontent.com/eloylp/agents/main/docker-compose.yaml
 curl -fsSLO https://raw.githubusercontent.com/eloylp/agents/main/.env.sample
-curl -fsSL https://raw.githubusercontent.com/eloylp/agents/main/scripts/init-env.sh | sh
+curl -fsSL https://raw.githubusercontent.com/eloylp/agents/main/scripts/init-env.sh | sh ## This will guide you adding credentials
 docker compose up -d
 ```
 
