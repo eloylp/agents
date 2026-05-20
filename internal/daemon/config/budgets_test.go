@@ -21,6 +21,13 @@ func budgetHandler(t *testing.T, maxBody int64) (*Handler, *store.Store) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	if _, err := db.Exec(`
+		INSERT INTO backends(name, command, models, healthy, timeout_seconds, max_prompt_chars)
+			VALUES('claude', 'claude', '[]', 1, 600, 12000)
+			ON CONFLICT(name) DO NOTHING;
+	`); err != nil {
+		t.Fatalf("seed backend: %v", err)
+	}
 	t.Cleanup(func() { db.Close() })
 	st := store.New(db)
 	h := New(st, rootconfig.DaemonConfig{

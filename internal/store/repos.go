@@ -4,12 +4,20 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 )
 
 func importRepos(tx *sql.Tx, repos []fleet.Repo) error {
+	if err := importRepoRows(tx, repos); err != nil {
+		return err
+	}
+	return importRepoBindings(tx, repos)
+}
+
+func importRepoRows(tx *sql.Tx, repos []fleet.Repo) error {
 	for _, r := range repos {
 		workspaceID := fleet.NormalizeWorkspaceID(r.WorkspaceID)
 		enabled := boolToInt(r.Enabled)
@@ -27,6 +35,13 @@ func importRepos(tx *sql.Tx, repos []fleet.Repo) error {
 		if _, err := tx.Exec("DELETE FROM bindings WHERE workspace_id=? AND repo=?", workspaceID, r.Name); err != nil {
 			return fmt.Errorf("store import: clear bindings for repo %s: %w", r.Name, err)
 		}
+	}
+	return nil
+}
+
+func importRepoBindings(tx *sql.Tx, repos []fleet.Repo) error {
+	for _, r := range repos {
+		workspaceID := fleet.NormalizeWorkspaceID(r.WorkspaceID)
 		for _, b := range r.Use {
 			labels, err := json.Marshal(b.Labels)
 			if err != nil {
@@ -194,6 +209,12 @@ func DeleteWorkspaceRepo(db *sql.DB, workspaceID, name string) error {
 
 func DeleteWorkspaceRepoTx(tx *sql.Tx, workspaceID, name string) error {
 	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	name = fleet.NormalizeRepoName(name)
+	if refs, err := repoConfigReferences(tx, workspaceID, name); err != nil {
+		return err
+	} else if len(refs) > 0 {
+		return &ErrConflict{Msg: fmt.Sprintf("repo %q in workspace %q is referenced by %s", name, workspaceID, strings.Join(refs, ", "))}
+	}
 	if _, err := tx.Exec("DELETE FROM bindings WHERE workspace_id=? AND repo=?", workspaceID, name); err != nil {
 		return fmt.Errorf("store: delete bindings for repo %s: %w", name, err)
 	}
@@ -201,6 +222,31 @@ func DeleteWorkspaceRepoTx(tx *sql.Tx, workspaceID, name string) error {
 		return fmt.Errorf("store: delete repo %s: %w", name, err)
 	}
 	return nil
+}
+
+func repoConfigReferences(q querier, workspaceID, repo string) ([]string, error) {
+	checks := []struct {
+		label string
+		sql   string
+		args  []any
+	}{
+		{"repo-scoped agents", "SELECT COUNT(*) FROM agents WHERE workspace_id=? AND scope_type='repo' AND scope_repo=?", []any{workspaceID, repo}},
+		{"prompts", "SELECT COUNT(*) FROM prompts WHERE workspace_id=? AND repo=?", []any{workspaceID, repo}},
+		{"skills", "SELECT COUNT(*) FROM skills WHERE workspace_id=? AND repo=?", []any{workspaceID, repo}},
+		{"guardrails", "SELECT COUNT(*) FROM guardrails WHERE workspace_id=? AND repo=?", []any{workspaceID, repo}},
+		{"token budgets", "SELECT COUNT(*) FROM token_budgets WHERE workspace_id=? AND repo=?", []any{workspaceID, repo}},
+	}
+	var refs []string
+	for _, check := range checks {
+		var n int
+		if err := q.QueryRow(check.sql, check.args...).Scan(&n); err != nil {
+			return nil, fmt.Errorf("store: check repo %s references: %w", check.label, err)
+		}
+		if n > 0 {
+			refs = append(refs, fmt.Sprintf("%d %s", n, check.label))
+		}
+	}
+	return refs, nil
 }
 
 func EnableWorkspaceRepoTx(tx *sql.Tx, workspace, name string, enabled bool) error {

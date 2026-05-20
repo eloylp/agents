@@ -27,10 +27,10 @@ func ReadWorkspaceGraphLayout(db *sql.DB, workspace string) ([]GraphNodePosition
 		SELECT gl.node_id, gl.x, gl.y
 		FROM graph_layouts gl
 		JOIN agents a ON a.id = gl.node_id
-		WHERE gl.scope = ? AND gl.node_kind = 'agent'
+		WHERE gl.workspace_id = ? AND gl.node_kind = 'agent'
 			AND COALESCE(NULLIF(a.workspace_id, ''), ?) = ?
 		ORDER BY gl.node_id`,
-		graphLayoutScope(workspace), fleet.DefaultWorkspaceID, fleet.NormalizeWorkspaceID(workspace))
+		fleet.NormalizeWorkspaceID(workspace), fleet.DefaultWorkspaceID, fleet.NormalizeWorkspaceID(workspace))
 	if err != nil {
 		return nil, fmt.Errorf("store: read graph layout: %w", err)
 	}
@@ -60,7 +60,6 @@ func UpsertGraphLayout(db *sql.DB, positions []GraphNodePosition) error {
 // stable agent ID.
 func UpsertWorkspaceGraphLayout(db *sql.DB, workspace string, positions []GraphNodePosition) error {
 	workspace = fleet.NormalizeWorkspaceID(workspace)
-	scope := graphLayoutScope(workspace)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: upsert graph layout: begin: %w", err)
@@ -83,13 +82,13 @@ func UpsertWorkspaceGraphLayout(db *sql.DB, workspace string, positions []GraphN
 			return &ErrValidation{Msg: fmt.Sprintf("store: upsert graph layout: unknown agent id %q in workspace %q", p.NodeID, workspace)}
 		}
 		if _, err := tx.Exec(`
-			INSERT INTO graph_layouts(scope, node_kind, node_id, x, y, updated_at)
+			INSERT INTO graph_layouts(workspace_id, node_kind, node_id, x, y, updated_at)
 			VALUES (?, 'agent', ?, ?, ?, datetime('now'))
-			ON CONFLICT(scope, node_kind, node_id) DO UPDATE SET
+			ON CONFLICT(workspace_id, node_kind, node_id) DO UPDATE SET
 				x = excluded.x,
 				y = excluded.y,
 				updated_at = datetime('now')`,
-			scope, p.NodeID, p.X, p.Y,
+			workspace, p.NodeID, p.X, p.Y,
 		); err != nil {
 			return fmt.Errorf("store: upsert graph layout: save %s: %w", p.NodeID, err)
 		}
@@ -106,12 +105,8 @@ func ClearGraphLayout(db *sql.DB) error {
 
 // ClearWorkspaceGraphLayout removes a workspace-scoped agent-node layout.
 func ClearWorkspaceGraphLayout(db *sql.DB, workspace string) error {
-	if _, err := db.Exec("DELETE FROM graph_layouts WHERE scope = ? AND node_kind = 'agent'", graphLayoutScope(workspace)); err != nil {
+	if _, err := db.Exec("DELETE FROM graph_layouts WHERE workspace_id = ? AND node_kind = 'agent'", fleet.NormalizeWorkspaceID(workspace)); err != nil {
 		return fmt.Errorf("store: clear graph layout: %w", err)
 	}
 	return nil
-}
-
-func graphLayoutScope(workspace string) string {
-	return "workspace:" + fleet.NormalizeWorkspaceID(workspace)
 }

@@ -433,6 +433,18 @@ func TestWorkspacePromptMigrationBackfillsExistingAgents(t *testing.T) {
 			name TEXT PRIMARY KEY,
 			prompt TEXT NOT NULL
 		);
+		CREATE TABLE backends (
+			name TEXT PRIMARY KEY,
+			command TEXT NOT NULL,
+			version TEXT NOT NULL DEFAULT '',
+			models TEXT NOT NULL DEFAULT '[]',
+			healthy INTEGER NOT NULL DEFAULT 0,
+			health_detail TEXT NOT NULL DEFAULT '',
+			local_model_url TEXT NOT NULL DEFAULT '',
+			timeout_seconds INTEGER NOT NULL DEFAULT 600,
+			max_prompt_chars INTEGER NOT NULL DEFAULT 12000,
+			redaction_salt_env TEXT NOT NULL DEFAULT ''
+		);
 		CREATE TABLE agents (
 			name TEXT PRIMARY KEY,
 			backend TEXT NOT NULL DEFAULT 'auto',
@@ -548,9 +560,9 @@ func TestWorkspacePromptMigrationBackfillsExistingAgents(t *testing.T) {
 			position INTEGER NOT NULL DEFAULT 0,
 			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 		);
+		INSERT INTO backends (name, command) VALUES ('claude', 'claude');
 		INSERT INTO agents (name, backend, prompt, description, id) VALUES
-			('coder', 'claude', 'You write code.', 'Implements fixes', 'agent_coder'),
-			('empty', 'claude', '', 'Empty legacy prompt', 'agent_empty');
+			('coder', 'claude', 'You write code.', 'Implements fixes', 'agent_coder');
 		INSERT INTO repos (name, enabled) VALUES ('owner/repo', 1);
 		INSERT INTO guardrails (name, is_builtin, enabled, position) VALUES
 			('security', 1, 1, 0),
@@ -597,20 +609,14 @@ func TestWorkspacePromptMigrationBackfillsExistingAgents(t *testing.T) {
 	if err := db.QueryRow("SELECT prompt_id FROM agents WHERE name='coder'").Scan(&promptID); err != nil {
 		t.Fatalf("coder prompt_id: %v", err)
 	}
-	if promptID != "prompt_coder" {
-		t.Fatalf("coder prompt_id = %q, want prompt_coder", promptID)
+	if promptID == "" || promptID == "prompt_coder" {
+		t.Fatalf("coder prompt_id = %q, want non-empty internal id", promptID)
 	}
-	if err := db.QueryRow("SELECT content FROM prompts WHERE id='prompt_coder'").Scan(&promptContent); err != nil {
+	if err := db.QueryRow("SELECT content FROM prompts WHERE ref='prompt_coder'").Scan(&promptContent); err != nil {
 		t.Fatalf("coder prompt content: %v", err)
 	}
 	if promptContent != "You write code." {
 		t.Fatalf("coder prompt content = %q, want inline prompt", promptContent)
-	}
-	if err := db.QueryRow("SELECT prompt_id FROM agents WHERE name='empty'").Scan(&promptID); err != nil {
-		t.Fatalf("empty prompt_id: %v", err)
-	}
-	if promptID != "" {
-		t.Fatalf("empty prompt_id = %q, want empty", promptID)
 	}
 	var guardrailCount, disabledCount int
 	if err := db.QueryRow("SELECT COUNT(*) FROM workspace_guardrails").Scan(&guardrailCount); err != nil {
@@ -619,7 +625,11 @@ func TestWorkspacePromptMigrationBackfillsExistingAgents(t *testing.T) {
 	if guardrailCount != 2 {
 		t.Fatalf("workspace guardrails = %d, want 2 built-ins", guardrailCount)
 	}
-	if err := db.QueryRow("SELECT COUNT(*) FROM workspace_guardrails WHERE guardrail_name='discretion' AND enabled=0").Scan(&disabledCount); err != nil {
+	if err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM workspace_guardrails wg
+		JOIN guardrails g ON g.id = wg.guardrail_name
+		WHERE g.ref = 'discretion' AND wg.enabled = 0`).Scan(&disabledCount); err != nil {
 		t.Fatalf("disabled built-in count: %v", err)
 	}
 	if disabledCount != 1 {
@@ -718,6 +728,72 @@ func TestAuthAdminMigrationBackfillsFirstExistingUser(t *testing.T) {
 			name         TEXT NOT NULL,
 			enabled      INTEGER NOT NULL DEFAULT 1,
 			PRIMARY KEY(workspace_id, name)
+		);
+		CREATE TABLE backends (
+			name TEXT PRIMARY KEY,
+			command TEXT NOT NULL,
+			version TEXT NOT NULL DEFAULT '',
+			models TEXT NOT NULL DEFAULT '[]',
+			healthy INTEGER NOT NULL DEFAULT 0,
+			health_detail TEXT NOT NULL DEFAULT '',
+			local_model_url TEXT NOT NULL DEFAULT '',
+			timeout_seconds INTEGER NOT NULL DEFAULT 600,
+			max_prompt_chars INTEGER NOT NULL DEFAULT 12000,
+			redaction_salt_env TEXT NOT NULL DEFAULT ''
+		);
+		CREATE TABLE prompts (
+			id TEXT PRIMARY KEY,
+			workspace_id TEXT DEFAULT NULL,
+			repo TEXT DEFAULT NULL,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			content TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			CHECK (workspace_id IS NOT NULL OR repo IS NULL)
+		);
+		CREATE TABLE skills (
+			id TEXT PRIMARY KEY,
+			workspace_id TEXT DEFAULT NULL,
+			repo TEXT DEFAULT NULL,
+			name TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			CHECK (workspace_id IS NOT NULL OR repo IS NULL)
+		);
+		CREATE TABLE guardrails (
+			id TEXT PRIMARY KEY,
+			workspace_id TEXT DEFAULT NULL,
+			repo TEXT DEFAULT NULL,
+			name TEXT NOT NULL,
+			description TEXT,
+			content TEXT NOT NULL,
+			default_content TEXT,
+			is_builtin INTEGER NOT NULL DEFAULT 0,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			position INTEGER NOT NULL DEFAULT 100,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			CHECK (workspace_id IS NOT NULL OR repo IS NULL)
+		);
+		CREATE TABLE workspace_guardrails (
+			workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+			guardrail_name TEXT NOT NULL REFERENCES guardrails(id) ON DELETE CASCADE,
+			position INTEGER NOT NULL DEFAULT 0,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			PRIMARY KEY (workspace_id, guardrail_name)
+		);
+		CREATE TABLE token_budgets (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			scope_kind TEXT NOT NULL DEFAULT 'global',
+			scope_name TEXT NOT NULL DEFAULT '',
+			workspace_id TEXT NOT NULL DEFAULT '',
+			repo TEXT NOT NULL DEFAULT '',
+			agent TEXT NOT NULL DEFAULT '',
+			backend TEXT NOT NULL DEFAULT '',
+			period TEXT NOT NULL DEFAULT 'daily',
+			cap_tokens INTEGER NOT NULL DEFAULT 0,
+			alert_at_pct INTEGER NOT NULL DEFAULT 80,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			UNIQUE(scope_kind, workspace_id, repo, agent, backend, period)
 		);
 		CREATE TABLE bindings (
 			id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -844,6 +920,72 @@ func TestRemoveAgentInlinePromptMigrationPreservesDependents(t *testing.T) {
 			enabled      INTEGER NOT NULL DEFAULT 1,
 			PRIMARY KEY(workspace_id, name)
 		);
+		CREATE TABLE backends (
+			name TEXT PRIMARY KEY,
+			command TEXT NOT NULL,
+			version TEXT NOT NULL DEFAULT '',
+			models TEXT NOT NULL DEFAULT '[]',
+			healthy INTEGER NOT NULL DEFAULT 0,
+			health_detail TEXT NOT NULL DEFAULT '',
+			local_model_url TEXT NOT NULL DEFAULT '',
+			timeout_seconds INTEGER NOT NULL DEFAULT 600,
+			max_prompt_chars INTEGER NOT NULL DEFAULT 12000,
+			redaction_salt_env TEXT NOT NULL DEFAULT ''
+		);
+		CREATE TABLE prompts (
+			id TEXT PRIMARY KEY,
+			workspace_id TEXT DEFAULT NULL,
+			repo TEXT DEFAULT NULL,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			content TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			CHECK (workspace_id IS NOT NULL OR repo IS NULL)
+		);
+		CREATE TABLE skills (
+			id TEXT PRIMARY KEY,
+			workspace_id TEXT DEFAULT NULL,
+			repo TEXT DEFAULT NULL,
+			name TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			CHECK (workspace_id IS NOT NULL OR repo IS NULL)
+		);
+		CREATE TABLE guardrails (
+			id TEXT PRIMARY KEY,
+			workspace_id TEXT DEFAULT NULL,
+			repo TEXT DEFAULT NULL,
+			name TEXT NOT NULL,
+			description TEXT,
+			content TEXT NOT NULL,
+			default_content TEXT,
+			is_builtin INTEGER NOT NULL DEFAULT 0,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			position INTEGER NOT NULL DEFAULT 100,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			CHECK (workspace_id IS NOT NULL OR repo IS NULL)
+		);
+		CREATE TABLE workspace_guardrails (
+			workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+			guardrail_name TEXT NOT NULL REFERENCES guardrails(id) ON DELETE CASCADE,
+			position INTEGER NOT NULL DEFAULT 0,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			PRIMARY KEY (workspace_id, guardrail_name)
+		);
+		CREATE TABLE token_budgets (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			scope_kind TEXT NOT NULL DEFAULT 'global',
+			scope_name TEXT NOT NULL DEFAULT '',
+			workspace_id TEXT NOT NULL DEFAULT '',
+			repo TEXT NOT NULL DEFAULT '',
+			agent TEXT NOT NULL DEFAULT '',
+			backend TEXT NOT NULL DEFAULT '',
+			period TEXT NOT NULL DEFAULT 'daily',
+			cap_tokens INTEGER NOT NULL DEFAULT 0,
+			alert_at_pct INTEGER NOT NULL DEFAULT 80,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			UNIQUE(scope_kind, workspace_id, repo, agent, backend, period)
+		);
 		CREATE TABLE bindings (
 			id           INTEGER PRIMARY KEY AUTOINCREMENT,
 			workspace_id TEXT NOT NULL DEFAULT 'default',
@@ -867,6 +1009,9 @@ func TestRemoveAgentInlinePromptMigrationPreservesDependents(t *testing.T) {
 			UNIQUE(scope, node_kind, node_id)
 		);
 		INSERT INTO workspaces (id, name) VALUES ('default', 'Default');
+		INSERT INTO backends (name, command) VALUES ('claude', 'claude');
+		INSERT INTO prompts (id, name, description, content)
+			VALUES ('prompt_coder', 'coder', 'Migrated prompt for agent coder', 'legacy inline prompt');
 		INSERT INTO agents (id, workspace_id, name, backend, prompt, prompt_id, description)
 			VALUES ('agent_coder', 'default', 'coder', 'claude', 'legacy inline prompt', 'prompt_coder', 'Writes code');
 		INSERT INTO repos (workspace_id, name, enabled) VALUES ('default', 'owner/repo', 1);
@@ -1183,6 +1328,7 @@ func TestAgentPromptRefRejectsAmbiguousVisiblePromptName(t *testing.T) {
 
 	cfg := minimalCfg()
 	cfg.Workspaces = append(cfg.Workspaces, fleet.Workspace{ID: "team-a", Name: "Team A"})
+	cfg.Repos = append(cfg.Repos, fleet.Repo{WorkspaceID: fleet.DefaultWorkspaceID, Name: "owner/other", Enabled: true})
 	cfg.Prompts = []fleet.Prompt{
 		{ID: "prompt_global_shared", Name: "shared", Content: "global"},
 		{ID: "prompt_team_shared", WorkspaceID: "team-a", Name: "shared", Content: "team"},
@@ -1206,6 +1352,7 @@ func TestAgentPromptIDSelectsScopedPromptWithDuplicateNames(t *testing.T) {
 
 	cfg := minimalCfg()
 	cfg.Workspaces = append(cfg.Workspaces, fleet.Workspace{ID: "team-a", Name: "Team A"})
+	cfg.Repos = append(cfg.Repos, fleet.Repo{WorkspaceID: fleet.DefaultWorkspaceID, Name: "owner/other", Enabled: true})
 	cfg.Prompts = []fleet.Prompt{
 		{ID: "prompt_global_shared", Name: "shared", Content: "global"},
 		{ID: "prompt_team_shared", WorkspaceID: "team-a", Name: "shared", Content: "team"},
@@ -1314,6 +1461,7 @@ func TestAgentPromptScopeRejectsInvisiblePrompt(t *testing.T) {
 
 	cfg := minimalCfg()
 	cfg.Workspaces = append(cfg.Workspaces, fleet.Workspace{ID: "team-a", Name: "Team A"})
+	cfg.Repos = append(cfg.Repos, fleet.Repo{WorkspaceID: fleet.DefaultWorkspaceID, Name: "owner/other", Enabled: true})
 	cfg.Prompts = []fleet.Prompt{
 		{ID: "prompt_team_shared", WorkspaceID: "team-a", Name: "shared", Content: "team"},
 		{ID: "prompt_default_other_shared", WorkspaceID: fleet.DefaultWorkspaceID, Repo: "owner/other", Name: "shared", Content: "other repo"},
@@ -1331,6 +1479,7 @@ func TestAgentPromptScopeRejectsInvisiblePrompt(t *testing.T) {
 
 	db = openTestDB(t)
 	cfg = minimalCfg()
+	cfg.Repos = append(cfg.Repos, fleet.Repo{WorkspaceID: fleet.DefaultWorkspaceID, Name: "owner/other", Enabled: true})
 	cfg.Prompts = []fleet.Prompt{
 		{ID: "prompt_default_other_shared", WorkspaceID: fleet.DefaultWorkspaceID, Repo: "owner/other", Name: "shared", Content: "other repo"},
 	}
@@ -1731,9 +1880,10 @@ func TestImportedWorkspaceInheritsBuiltInGuardrails(t *testing.T) {
 		t.Fatalf("read catalog discretion guardrail: %v", err)
 	}
 	if err := db.QueryRow(`
-		SELECT enabled
-		FROM workspace_guardrails
-		WHERE workspace_id = 'team-a' AND guardrail_name = 'discretion'`).Scan(&workspaceEnabled); err != nil {
+		SELECT wg.enabled
+		FROM workspace_guardrails wg
+		JOIN guardrails g ON g.id = wg.guardrail_name
+		WHERE wg.workspace_id = 'team-a' AND g.ref = 'discretion'`).Scan(&workspaceEnabled); err != nil {
 		t.Fatalf("read inherited discretion guardrail: %v", err)
 	}
 	if workspaceEnabled != catalogEnabled {

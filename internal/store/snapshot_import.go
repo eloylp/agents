@@ -32,13 +32,22 @@ func Import(db *sql.DB, cfg *config.Config) error {
 	if err := importRuntimeSettings(tx, cfg.Runtime); err != nil {
 		return err
 	}
+	if err := importWorkspaces(tx, cfg.Workspaces); err != nil {
+		return err
+	}
+	if err := importReferencedWorkspaces(tx, cfg.Agents, cfg.Repos); err != nil {
+		return err
+	}
+	if err := importReferencedCatalogWorkspaces(tx, cfg.Prompts, cfg.Skills, cfg.Guardrails); err != nil {
+		return err
+	}
+	if err := importRepoRows(tx, cfg.Repos); err != nil {
+		return err
+	}
 	if err := importSkills(tx, cfg.Skills); err != nil {
 		return err
 	}
 	if err := importGuardrails(tx, cfg.Guardrails); err != nil {
-		return err
-	}
-	if err := importWorkspaces(tx, cfg.Workspaces); err != nil {
 		return err
 	}
 	if err := importWorkspaceGuardrails(tx, cfg.Workspaces); err != nil {
@@ -47,13 +56,10 @@ func Import(db *sql.DB, cfg *config.Config) error {
 	if err := importPrompts(tx, cfg.Prompts); err != nil {
 		return err
 	}
-	if err := importReferencedWorkspaces(tx, cfg.Agents, cfg.Repos); err != nil {
-		return err
-	}
 	if err := importAgents(tx, cfg.Agents); err != nil {
 		return err
 	}
-	if err := importRepos(tx, cfg.Repos); err != nil {
+	if err := importRepoBindings(tx, cfg.Repos); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -110,22 +116,28 @@ func ImportAll(
 		return fmt.Errorf("store: import: begin: %w", err)
 	}
 	defer tx.Rollback()
-	if err := importSkills(tx, normalizedSkills); err != nil {
-		return err
-	}
 	if err := importBackends(tx, normalizedBackends); err != nil {
-		return err
-	}
-	if err := importGuardrails(tx, guardrails); err != nil {
 		return err
 	}
 	if err := importReferencedWorkspaces(tx, agents, repos); err != nil {
 		return err
 	}
+	if err := importReferencedCatalogWorkspaces(tx, nil, normalizedSkills, guardrails); err != nil {
+		return err
+	}
+	if err := importRepoRows(tx, repos); err != nil {
+		return err
+	}
+	if err := importSkills(tx, normalizedSkills); err != nil {
+		return err
+	}
+	if err := importGuardrails(tx, guardrails); err != nil {
+		return err
+	}
 	if err := importAgents(tx, agents); err != nil {
 		return err
 	}
-	if err := importRepos(tx, repos); err != nil {
+	if err := importRepoBindings(tx, repos); err != nil {
 		return err
 	}
 	if err := importTokenBudgetsTx(tx, budgets, false); err != nil {
@@ -162,8 +174,9 @@ func ReplaceAll(
 	}
 	defer tx.Rollback()
 
-	// Delete in dependency order: bindings reference repos and agents.
-	for _, tbl := range []string{"bindings", "repos", "agents", "skills", "backends"} {
+	// Delete in dependency order: join tables and bindings reference agents,
+	// scoped catalog rows may reference repos, and agents reference backends.
+	for _, tbl := range []string{"agent_dispatches", "agent_skills", "bindings", "graph_layouts", "agents", "skills"} {
 		if _, err := tx.Exec("DELETE FROM " + tbl); err != nil {
 			return fmt.Errorf("store: replace: truncate %s: %w", tbl, err)
 		}
@@ -173,23 +186,34 @@ func ReplaceAll(
 	if _, err := tx.Exec("DELETE FROM guardrails WHERE is_builtin = 0"); err != nil {
 		return fmt.Errorf("store: replace: truncate operator guardrails: %w", err)
 	}
+	for _, tbl := range []string{"repos", "backends"} {
+		if _, err := tx.Exec("DELETE FROM " + tbl); err != nil {
+			return fmt.Errorf("store: replace: truncate %s: %w", tbl, err)
+		}
+	}
 
-	if err := importSkills(tx, normalizedSkills); err != nil {
-		return err
-	}
 	if err := importBackends(tx, normalizedBackends); err != nil {
-		return err
-	}
-	if err := importGuardrails(tx, guardrails); err != nil {
 		return err
 	}
 	if err := importReferencedWorkspaces(tx, agents, repos); err != nil {
 		return err
 	}
+	if err := importReferencedCatalogWorkspaces(tx, nil, normalizedSkills, guardrails); err != nil {
+		return err
+	}
+	if err := importRepoRows(tx, repos); err != nil {
+		return err
+	}
+	if err := importSkills(tx, normalizedSkills); err != nil {
+		return err
+	}
+	if err := importGuardrails(tx, guardrails); err != nil {
+		return err
+	}
 	if err := importAgents(tx, agents); err != nil {
 		return err
 	}
-	if err := importRepos(tx, repos); err != nil {
+	if err := importRepoBindings(tx, repos); err != nil {
 		return err
 	}
 	if err := importTokenBudgetsTx(tx, budgets, true); err != nil {
@@ -259,16 +283,19 @@ func importConfigTx(tx *sql.Tx, cfg *config.Config, budgets []TokenBudget, repla
 	normalizedSkills, normalizedBackends := normalizeFleet(cfg.Agents, cfg.Repos, cfg.Skills, cfg.Backends)
 
 	if replace {
-		for _, tbl := range []string{"bindings", "repos", "agents", "token_budgets"} {
+		for _, tbl := range []string{"agent_dispatches", "agent_skills", "bindings", "graph_layouts", "agents", "token_budgets", "prompts", "skills"} {
 			if _, err := tx.Exec("DELETE FROM " + tbl); err != nil {
 				return fmt.Errorf("store: replace config: truncate %s: %w", tbl, err)
 			}
 		}
-		if _, err := tx.Exec("DELETE FROM prompts"); err != nil {
-			return fmt.Errorf("store: replace config: truncate prompts: %w", err)
-		}
 		if _, err := tx.Exec("DELETE FROM workspace_guardrails"); err != nil {
 			return fmt.Errorf("store: replace config: truncate workspace guardrails: %w", err)
+		}
+		if _, err := tx.Exec("DELETE FROM guardrails WHERE is_builtin = 0"); err != nil {
+			return fmt.Errorf("store: replace config: truncate operator guardrails: %w", err)
+		}
+		if _, err := tx.Exec("DELETE FROM repos"); err != nil {
+			return fmt.Errorf("store: replace config: truncate repos: %w", err)
 		}
 		if err := seedWorkspaceGuardrails(tx, fleet.DefaultWorkspaceID); err != nil {
 			return err
@@ -276,29 +303,35 @@ func importConfigTx(tx *sql.Tx, cfg *config.Config, budgets []TokenBudget, repla
 		if _, err := tx.Exec("DELETE FROM workspaces WHERE id <> ?", fleet.DefaultWorkspaceID); err != nil {
 			return fmt.Errorf("store: replace config: truncate workspaces: %w", err)
 		}
-		for _, tbl := range []string{"skills", "backends"} {
+		for _, tbl := range []string{"backends"} {
 			if _, err := tx.Exec("DELETE FROM " + tbl); err != nil {
 				return fmt.Errorf("store: replace config: truncate %s: %w", tbl, err)
 			}
 		}
-		if _, err := tx.Exec("DELETE FROM guardrails WHERE is_builtin = 0"); err != nil {
-			return fmt.Errorf("store: replace config: truncate operator guardrails: %w", err)
-		}
 	}
 
-	if err := importSkills(tx, normalizedSkills); err != nil {
-		return err
-	}
 	if err := importBackends(tx, normalizedBackends); err != nil {
 		return err
 	}
 	if err := importRuntimeSettings(tx, cfg.Runtime); err != nil {
 		return err
 	}
-	if err := importGuardrails(tx, cfg.Guardrails); err != nil {
+	if err := importWorkspaces(tx, cfg.Workspaces); err != nil {
 		return err
 	}
-	if err := importWorkspaces(tx, cfg.Workspaces); err != nil {
+	if err := importReferencedWorkspaces(tx, cfg.Agents, cfg.Repos); err != nil {
+		return err
+	}
+	if err := importReferencedCatalogWorkspaces(tx, cfg.Prompts, normalizedSkills, cfg.Guardrails); err != nil {
+		return err
+	}
+	if err := importRepoRows(tx, cfg.Repos); err != nil {
+		return err
+	}
+	if err := importSkills(tx, normalizedSkills); err != nil {
+		return err
+	}
+	if err := importGuardrails(tx, cfg.Guardrails); err != nil {
 		return err
 	}
 	if err := importWorkspaceGuardrails(tx, cfg.Workspaces); err != nil {
@@ -307,13 +340,10 @@ func importConfigTx(tx *sql.Tx, cfg *config.Config, budgets []TokenBudget, repla
 	if err := importPrompts(tx, cfg.Prompts); err != nil {
 		return err
 	}
-	if err := importReferencedWorkspaces(tx, cfg.Agents, cfg.Repos); err != nil {
-		return err
-	}
 	if err := importAgents(tx, cfg.Agents); err != nil {
 		return err
 	}
-	if err := importRepos(tx, cfg.Repos); err != nil {
+	if err := importRepoBindings(tx, cfg.Repos); err != nil {
 		return err
 	}
 	if err := importTokenBudgetsTx(tx, budgets, replace); err != nil {

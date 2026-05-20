@@ -435,6 +435,12 @@ func TestUpsertAndReadSkills(t *testing.T) {
 func TestUpsertScopedSkillDerivesStableID(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
+	if _, err := db.Exec(`
+		INSERT OR IGNORE INTO workspaces(id, name) VALUES('platform', 'Platform');
+		INSERT OR IGNORE INTO repos(workspace_id, name, enabled) VALUES('platform', 'eloylp/agents', 1);
+	`); err != nil {
+		t.Fatalf("seed repo scope: %v", err)
+	}
 
 	s := fleet.Skill{
 		WorkspaceID: "Platform",
@@ -843,7 +849,7 @@ func TestDeleteBackendRejectedWhenAgentReferences(t *testing.T) {
 	if err == nil {
 		t.Fatal("DeleteBackend still referenced by agent: want error, got nil")
 	}
-	if !strings.Contains(err.Error(), "unknown backend") {
+	if !strings.Contains(err.Error(), `backend "claude" is referenced by 1 agent(s): default/coder`) {
 		t.Errorf("unexpected error message: %v", err)
 	}
 

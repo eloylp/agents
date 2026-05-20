@@ -2,7 +2,6 @@ package store
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -20,21 +19,31 @@ func importSkills(tx *sql.Tx, skills map[string]fleet.Skill) error {
 		if s.WorkspaceID == "" && s.Repo != "" {
 			return fmt.Errorf("store import: skill %q repo scope requires workspace_id", id)
 		}
+		if err := ensureCatalogScope(tx, "skill", s.WorkspaceID, s.Repo); err != nil {
+			return err
+		}
 		if id == "" || s.Name == "" {
 			return fmt.Errorf("store import: skill requires id and name")
 		}
 		if err := validateEntityID(id); err != nil {
 			return fmt.Errorf("store import: skill %q: %w", id, err)
 		}
+		internalID, _, err := resolveCatalogID(tx, "skills", id)
+		if errors.Is(err, sql.ErrNoRows) {
+			internalID, err = newCatalogInternalID("skill_")
+		}
+		if err != nil {
+			return fmt.Errorf("store import: skill %q: resolve id: %w", id, err)
+		}
 		if _, err := tx.Exec(`
-			INSERT INTO skills (id, workspace_id, repo, name, prompt)
-			VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, ?)
-			ON CONFLICT(id) DO UPDATE SET
+			INSERT INTO skills (id, ref, workspace_id, repo, name, prompt)
+			VALUES (?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?)
+			ON CONFLICT(ref) DO UPDATE SET
 				workspace_id = excluded.workspace_id,
 				repo = excluded.repo,
 				name = excluded.name,
 				prompt = excluded.prompt`,
-			id, s.WorkspaceID, s.Repo, s.Name, s.Prompt,
+			internalID, id, s.WorkspaceID, s.Repo, s.Name, s.Prompt,
 		); err != nil {
 			if isUniqueConstraint(err) {
 				return fmt.Errorf("store import: skill name %q is already used by another skill in that scope", s.Name)
@@ -46,7 +55,7 @@ func importSkills(tx *sql.Tx, skills map[string]fleet.Skill) error {
 }
 
 func loadSkills(db querier, cfg *config.Config) error {
-	rows, err := db.Query("SELECT id,COALESCE(workspace_id, ''),COALESCE(repo, ''),name,prompt FROM skills")
+	rows, err := db.Query("SELECT ref,COALESCE(workspace_id, ''),COALESCE(repo, ''),name,prompt FROM skills")
 	if err != nil {
 		return fmt.Errorf("store load: query skills: %w", err)
 	}
@@ -71,7 +80,7 @@ func loadSkills(db querier, cfg *config.Config) error {
 
 func readSkillScopeByID(q querier, id string) (fleet.Skill, bool, error) {
 	var skill fleet.Skill
-	err := q.QueryRow("SELECT id, COALESCE(workspace_id, ''), COALESCE(repo, ''), name FROM skills WHERE id = ?", id).
+	err := q.QueryRow("SELECT ref, COALESCE(workspace_id, ''), COALESCE(repo, ''), name FROM skills WHERE id = ? OR ref = ?", id, id).
 		Scan(&skill.ID, &skill.WorkspaceID, &skill.Repo, &skill.Name)
 	if err == nil {
 		return skill, true, nil
@@ -125,11 +134,14 @@ func UpsertSkillTx(tx *sql.Tx, name string, s fleet.Skill) error {
 	if s.WorkspaceID == "" && s.Repo != "" {
 		return &ErrValidation{Msg: fmt.Sprintf("store: skill %q repo scope requires workspace_id", name)}
 	}
+	if err := ensureCatalogScope(tx, "skill", s.WorkspaceID, s.Repo); err != nil {
+		return err
+	}
 	if name == "" {
-		var existingID string
-		err := queryCatalogIDByScopeName(tx, "skills", s.WorkspaceID, s.Repo, s.Name).Scan(&existingID)
+		var existingID, existingRef string
+		err := queryCatalogRefByScopeName(tx, "skills", s.WorkspaceID, s.Repo, s.Name).Scan(&existingID, &existingRef)
 		if err == nil {
-			name = existingID
+			name = existingRef
 		} else if errors.Is(err, sql.ErrNoRows) {
 			id, derr := derivedCatalogID("skill_", s.WorkspaceID, s.Repo, s.Name)
 			if derr != nil {
@@ -171,41 +183,44 @@ func DeleteSkill(db *sql.DB, name string) error {
 
 func DeleteSkillTx(tx *sql.Tx, name string) error {
 	name = fleet.NormalizeSkillName(name)
-	refs, err := agentsReferencingSkill(tx, name)
+	id, _, err := resolveCatalogID(tx, "skills", name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return &ErrNotFound{Msg: fmt.Sprintf("skill %q not found", name)}
+	}
+	if err != nil {
+		return fmt.Errorf("store: delete skill %s: lookup: %w", name, err)
+	}
+	refs, err := agentsReferencingSkill(tx, id)
 	if err != nil {
 		return fmt.Errorf("store: delete skill %s: check agents: %w", name, err)
 	}
 	if len(refs) > 0 {
 		return &ErrConflict{Msg: fmt.Sprintf("skill %q is referenced by %d agent(s): %s", name, len(refs), formatReferenceList(refs))}
 	}
-	if _, err := tx.Exec("DELETE FROM skills WHERE id=?", name); err != nil {
+	if _, err := tx.Exec("DELETE FROM skills WHERE id=?", id); err != nil {
 		return fmt.Errorf("store: delete skill %s: %w", name, err)
 	}
 	return nil
 }
 
 func agentsReferencingSkill(q querier, skillID string) ([]string, error) {
-	rows, err := q.Query("SELECT workspace_id, name, skills FROM agents ORDER BY workspace_id, name")
+	rows, err := q.Query(`
+		SELECT a.workspace_id, a.name
+		FROM agent_skills ask
+		JOIN agents a ON a.id = ask.agent_id
+		WHERE ask.skill_id=?
+		ORDER BY a.workspace_id, a.name`, skillID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var refs []string
 	for rows.Next() {
-		var workspaceID, name, skillsJSON string
-		if err := rows.Scan(&workspaceID, &name, &skillsJSON); err != nil {
+		var workspaceID, name string
+		if err := rows.Scan(&workspaceID, &name); err != nil {
 			return nil, err
 		}
-		var skills []string
-		if err := json.Unmarshal([]byte(skillsJSON), &skills); err != nil {
-			return nil, fmt.Errorf("parse agent %s skills: %w", name, err)
-		}
-		for _, skill := range skills {
-			if fleet.NormalizeSkillName(skill) == skillID {
-				refs = append(refs, workspaceAgentRef(workspaceID, name))
-				break
-			}
-		}
+		refs = append(refs, workspaceAgentRef(workspaceID, name))
 	}
 	return refs, rows.Err()
 }

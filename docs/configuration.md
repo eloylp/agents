@@ -11,7 +11,7 @@ runtime wiring:
 backends:    # AI CLI/runtime definitions agents can use
 runtime:     # global runner image and container constraints
 prompts:     # reusable prompt catalog entries, optionally scoped
-skills:      # reusable guidance catalog entries, keyed by stable id and optionally scoped
+skills:      # reusable guidance catalog entries, keyed by stable public ref and optionally scoped
 guardrails:  # reusable policy catalog entries, optionally scoped
 workspaces:  # selected guardrails plus workspace-local agents, repos, and budgets
 ```
@@ -133,13 +133,13 @@ prompts:
 Prompts are reusable assets. Empty `workspace_id` and `repo` make a prompt
 globally visible; `workspace_id` with empty `repo` makes it visible only inside
 that workspace; `workspace_id` plus `repo` makes it visible only to repo-scoped
-agents for that repo. Agents persist stable `prompt_id` references. Human-facing
+agents for that repo. Agents use stable public `prompt_id` refs. Human-facing
 config may use `prompt_ref` plus optional `prompt_scope`, where scope is a
 case-insensitive path: `global`, `workspace`, or `workspace/owner/repo`
-(for example `default/eloylp/agents`). The daemon resolves that selector to the
-stable `prompt_id`. Inline `agents[].prompt` bodies are unsupported; define
-prompt content under `prompts:` or with prompt catalog CRUD, then reference the
-prompt catalog entry from the agent.
+(for example `default/eloylp/agents`). The daemon resolves that selector to an
+opaque internal prompt key before writing SQLite FKs. Inline `agents[].prompt`
+bodies are unsupported; define prompt content under `prompts:` or with prompt
+catalog CRUD, then reference the prompt catalog entry from the agent.
 
 ## `skills`
 
@@ -154,12 +154,13 @@ skills:
       Focus on authn/authz, secrets exposure, injection vectors, and unsafe defaults.
 ```
 
-Skills are keyed by stable id. For compatibility, agents may reference a visible
+Skills are keyed by stable public ref. For compatibility, agents may reference a visible
 skill by display `name` when that name is unambiguous; import stores the stable
-id so later duplicate names across global, workspace, and repo scopes remain
-deterministic. Like prompts, empty `workspace_id` and `repo` mean globally
-visible, workspace-only rows are visible only in that workspace, and repo rows
-are visible only to repo-scoped agents for that repo.
+ref so later duplicate names across global, workspace, and repo scopes remain
+deterministic. SQLite stores opaque internal IDs behind those refs for FK
+integrity. Like prompts, empty `workspace_id` and `repo` mean globally visible,
+workspace-only rows are visible only in that workspace, and repo rows are
+visible only to repo-scoped agents for that repo.
 
 ## `workspaces`
 
@@ -225,13 +226,13 @@ Use simple `repo`, `agent`, or `backend` scopes for cross-workspace caps. Use
 `workspace+repo`, `workspace+agent`, or `workspace+backend` when the same repo,
 agent, or backend name should have separate caps per workspace.
 
-Each agent is a workspace-local capability definition: backend + stable skill
+Each agent is a workspace-local capability definition: backend + stable public skill
 references + prompt reference + scope + dispatch wiring. Agents don't run until
 a repo in the same workspace binds them to a trigger.
 
 - `backend` must match an entry in `backends` (e.g. `claude`, `codex`, or any custom local-backend name). There is no `auto` selection; every agent must name a backend explicitly.
-- `prompt_id` is the stable prompt reference persisted by the daemon. `prompt_ref` plus optional `prompt_scope` is the human selector; `prompt_scope` accepts `global`, `workspace`, or `workspace/owner/repo` and is case-insensitive. Agent config should not include inline prompt bodies.
-- `skills` should contain stable skill ids. A visible skill display name is accepted only when unambiguous, and import/export resolves it to the stable id.
+- `prompt_id` is the stable public prompt ref accepted by import/export/API callers. The daemon resolves it to an internal DB key before persistence. `prompt_ref` plus optional `prompt_scope` is the human selector; `prompt_scope` accepts `global`, `workspace`, or `workspace/owner/repo` and is case-insensitive. Agent config should not include inline prompt bodies.
+- `skills` should contain stable public skill refs. A visible skill display name is accepted only when unambiguous, and import/export resolves it to the stable ref.
 - `scope_type` is `workspace` or `repo`. `repo` scope also requires `scope_repo`, and the daemon rejects runs outside that repo.
 - Agent names must be unique inside a workspace.
 - `allow_prs` (default `false`): when `false`, the scheduler prepends a hard instruction forbidding the agent from opening pull requests, regardless of what the prompt says. Set `allow_prs: true` only on agents that are explicitly meant to author PRs (e.g. coders, refactorers). Reviewer-only agents should leave this unset.
@@ -336,7 +337,7 @@ guardrails:
 Guardrails use the same catalog visibility fields as prompts and skills:
 globally visible rows leave `workspace_id` and `repo` empty, workspace-scoped
 rows set only `workspace_id`, and repo-scoped rows set both. Workspace guardrail
-references store stable guardrail ids; imports may use a visible display name
+references store stable public guardrail refs; imports may use a visible display name
 when it is unambiguous.
 
 Rules:
@@ -372,4 +373,4 @@ curl -H "Authorization: Bearer $AGENTS_API_TOKEN" \
   --data-binary @fleet.yaml http://localhost:8080/import
 ```
 
-The CRUD endpoints for `/workspaces`, `/prompts`, `/agents`, `/skills`, `/backends`, `/repos`, and `/guardrails` are always mounted and backed by the SQLite database. Workspace-scoped endpoints accept `?workspace=<id>` and default to `default` for compatibility. `agents`, `skills`, `backends`, `prompts`, and `guardrails` support partial update routes where documented; `PATCH /repos/{owner}/{repo}` is enabled-only; binding edits go through `/repos/{owner}/{repo}/bindings/{id}`, and full repo replacement goes through `POST /repos`. Catalog item routes (`/prompts/{id}`, `/skills/{id}`, `/guardrails/{id}`) use stable IDs because scoped catalog entries may share display names; legacy global names remain accepted as a compatibility fallback. Guardrails additionally support `POST /guardrails/{id}/reset` for built-ins. The daemon auto-reloads cron schedules after writes that affect runnable fleet state. Agent memory is stored in the same SQLite database and is scoped by workspace.
+The CRUD endpoints for `/workspaces`, `/prompts`, `/agents`, `/skills`, `/backends`, `/repos`, and `/guardrails` are always mounted and backed by the SQLite database. Workspace-scoped endpoints accept `?workspace=<id>` and default to `default` for compatibility. `agents`, `skills`, `backends`, `prompts`, and `guardrails` support partial update routes where documented; `PATCH /repos/{owner}/{repo}` is enabled-only; binding edits go through `/repos/{owner}/{repo}/bindings/{id}`, and full repo replacement goes through `POST /repos`. Catalog item routes (`/prompts/{id}`, `/skills/{id}`, `/guardrails/{id}`) use stable public refs because scoped catalog entries may share display names; legacy global names remain accepted as a compatibility fallback. The SQLite primary keys behind those refs are internal only. Guardrails additionally support `POST /guardrails/{id}/reset` for built-ins. The daemon auto-reloads cron schedules after writes that affect runnable fleet state. Agent memory is stored in the same SQLite database and is scoped by workspace.

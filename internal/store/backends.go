@@ -17,9 +17,18 @@ func importBackends(tx *sql.Tx, backends map[string]fleet.Backend) error {
 		}
 		healthy := boolToInt(b.Healthy)
 		if _, err := tx.Exec(`
-			INSERT OR REPLACE INTO backends
+			INSERT INTO backends
 			  (name,command,version,models,healthy,health_detail,local_model_url,timeout_seconds,max_prompt_chars)
-			VALUES (?,?,?,?,?,?,?,?,?)`,
+			VALUES (?,?,?,?,?,?,?,?,?)
+			ON CONFLICT(name) DO UPDATE SET
+				command = excluded.command,
+				version = excluded.version,
+				models = excluded.models,
+				healthy = excluded.healthy,
+				health_detail = excluded.health_detail,
+				local_model_url = excluded.local_model_url,
+				timeout_seconds = excluded.timeout_seconds,
+				max_prompt_chars = excluded.max_prompt_chars`,
 			name, b.Command,
 			b.Version, string(models), healthy, b.HealthDetail, b.LocalModelURL,
 			b.TimeoutSeconds, b.MaxPromptChars,
@@ -140,10 +149,41 @@ func DeleteBackend(db *sql.DB, name string) error {
 }
 
 func DeleteBackendTx(tx *sql.Tx, name string) error {
+	refs, err := agentsReferencingBackend(tx, name)
+	if err != nil {
+		return fmt.Errorf("store: delete backend %s: check agents: %w", name, err)
+	}
+	if len(refs) > 0 {
+		return &ErrConflict{Msg: fmt.Sprintf("backend %q is referenced by %d agent(s): %s", name, len(refs), formatReferenceList(refs))}
+	}
+	var budgets int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM token_budgets WHERE backend=?", name).Scan(&budgets); err != nil {
+		return fmt.Errorf("store: delete backend %s: check budgets: %w", name, err)
+	}
+	if budgets > 0 {
+		return &ErrConflict{Msg: fmt.Sprintf("backend %q is referenced by %d token budget(s)", name, budgets)}
+	}
 	res, err := tx.Exec("DELETE FROM backends WHERE name=?", name)
 	if err != nil {
 		return fmt.Errorf("store: delete backend %s: %w", name, err)
 	}
 	_, _ = res.RowsAffected()
 	return nil
+}
+
+func agentsReferencingBackend(q querier, backend string) ([]string, error) {
+	rows, err := q.Query("SELECT workspace_id, name FROM agents WHERE backend=? ORDER BY workspace_id, name", backend)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var refs []string
+	for rows.Next() {
+		var workspaceID, name string
+		if err := rows.Scan(&workspaceID, &name); err != nil {
+			return nil, err
+		}
+		refs = append(refs, workspaceAgentRef(workspaceID, name))
+	}
+	return refs, rows.Err()
 }
