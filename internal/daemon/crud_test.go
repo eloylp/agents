@@ -2383,6 +2383,55 @@ skills:
 	}
 }
 
+func TestImportYAMLPreservesRuntimeWhenOmitted(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	seedStoreBackend(t, s, "claude")
+
+	if rr := doCRUDRequest(t, s, http.MethodPatch, "/runtime", map[string]any{
+		"runner_image": "ghcr.io/example/custom-runner:v1",
+		"constraints":  map[string]any{"timeout_seconds": 1800},
+	}); rr.Code != http.StatusOK {
+		t.Fatalf("patch runtime: got %d, %s", rr.Code, rr.Body.String())
+	}
+
+	yamlBody := `backends:
+  claude:
+    command: claude
+prompts:
+  - name: imported-agent
+    content: imported prompt
+agents:
+  - name: imported-agent
+    backend: claude
+    prompt_ref: imported-agent
+    description: imported agent
+    skills: []
+repos:
+  - name: owner/imported-repo
+    enabled: true
+`
+	req := httptest.NewRequest(http.MethodPost, "/import", strings.NewReader(yamlBody))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("import without runtime: got %d, %s", rr.Code, rr.Body.String())
+	}
+
+	runtimeRR := doCRUDRequest(t, s, http.MethodGet, "/runtime", nil)
+	if runtimeRR.Code != http.StatusOK {
+		t.Fatalf("get runtime: got %d, %s", runtimeRR.Code, runtimeRR.Body.String())
+	}
+	var got fleet.RuntimeSettings
+	if err := json.NewDecoder(runtimeRR.Body).Decode(&got); err != nil {
+		t.Fatalf("decode runtime: %v", err)
+	}
+	if got.RunnerImage != "ghcr.io/example/custom-runner:v1" || got.Constraints.TimeoutSeconds != 1800 {
+		t.Fatalf("runtime after import = %+v, want existing custom runtime preserved", got)
+	}
+}
+
 func TestStoreImportReplacePrunesExistingRecords(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)

@@ -991,7 +991,7 @@ export default function ConfigPage() {
                 </label>
                 <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
                   Timeout seconds
-                  <input type="number" min="0" value={runtimeForm.constraints?.timeout_seconds ?? ''} onChange={e => updateRuntimeConstraint('timeout_seconds', e.target.value)} placeholder="600" style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text)', padding: '8px' }} />
+                  <input type="number" min="0" value={runtimeForm.constraints?.timeout_seconds ?? ''} onChange={e => updateRuntimeConstraint('timeout_seconds', e.target.value)} placeholder="3600" style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text)', padding: '8px' }} />
                 </label>
                 <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
                   Network

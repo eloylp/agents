@@ -476,16 +476,17 @@ func createTokenTx(ctx context.Context, tx *sql.Tx, userID int64, kind, name str
 	}
 	prefix := tokenPrefix(plaintext)
 	hash := hashToken(plaintext)
+	createdAt := time.Now().UTC()
 	var expires any
 	var expiresPtr *time.Time
 	if ttl > 0 {
-		t := time.Now().UTC().Add(ttl)
+		t := createdAt.Add(ttl)
 		expires = t.Format(time.RFC3339)
 		expiresPtr = &t
 	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO auth_tokens(user_id,kind,name,token_hash,prefix,expires_at,created_at)
-		VALUES(?,?,?,?,?,?,datetime('now'))`, userID, kind, name, hash, prefix, expires)
+		VALUES(?,?,?,?,?,?,?)`, userID, kind, name, hash, prefix, expires, createdAt.Format(time.RFC3339))
 	if err != nil {
 		return CreatedAuthToken{}, fmt.Errorf("auth: create token: %w", err)
 	}
@@ -494,7 +495,7 @@ func createTokenTx(ctx context.Context, tx *sql.Tx, userID int64, kind, name str
 		return CreatedAuthToken{}, fmt.Errorf("auth: token id: %w", err)
 	}
 	return CreatedAuthToken{
-		AuthToken: AuthToken{ID: id, UserID: userID, Kind: kind, Name: name, Prefix: prefix, ExpiresAt: expiresPtr},
+		AuthToken: AuthToken{ID: id, UserID: userID, Kind: kind, Name: name, Prefix: prefix, CreatedAt: createdAt, ExpiresAt: expiresPtr},
 		Token:     plaintext,
 	}, nil
 }
