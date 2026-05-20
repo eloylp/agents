@@ -116,27 +116,57 @@ export default function DashboardShell({ children }: { children: React.ReactNode
     return acc
   }, {})
   const navToggleLabel = sidebarCollapsed || mobileViewport ? 'Open navigation' : 'Collapse navigation'
+  const toggleNavigation = () => {
+    if (sidebarCollapsed) {
+      setSidebarCollapsed(false)
+      if (mobileViewport) setSidebarOpen(true)
+    } else if (mobileViewport) {
+      setSidebarOpen(true)
+    } else {
+      setSidebarCollapsed(true)
+    }
+  }
+  const renderMenuButton = () => (
+    <button
+      className="shell-menu-button"
+      onClick={toggleNavigation}
+      aria-label={navToggleLabel}
+      title={navToggleLabel}
+      style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 0, padding: '5px 9px', cursor: 'pointer' }}
+    >
+      <span className="shell-menu-icon" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </span>
+    </button>
+  )
 
   return (
     <div className={`dashboard-shell ${sidebarCollapsed ? 'nav-collapsed' : ''}`}>
       <style jsx global>{`
+        .dashboard-shell { --sidebar-width: 244px; --sidebar-rail-width: 52px; }
         .dashboard-shell { min-height: 100vh; }
         .shell-sidebar {
           position: fixed;
           top: 0;
           left: 0;
           bottom: 0;
-          width: 244px;
+          width: var(--sidebar-width);
           background: var(--bg-nav);
           border-right: 2px solid var(--border-nav);
           z-index: 900;
           display: flex;
           flex-direction: column;
           box-shadow: 10px 0 28px rgba(15,23,42,0.08);
+          transition: width 160ms ease, transform 160ms ease;
         }
-        .shell-main { margin-left: 244px; min-height: 100vh; }
-        .dashboard-shell.nav-collapsed .shell-sidebar { transform: translateX(-102%); visibility: hidden; }
-        .dashboard-shell.nav-collapsed .shell-main { margin-left: 0; }
+        .shell-main { margin-left: var(--sidebar-width); min-height: 100vh; }
+        .dashboard-shell.nav-collapsed .shell-sidebar { width: var(--sidebar-rail-width); visibility: visible; transform: none; }
+        .dashboard-shell.nav-collapsed .shell-main { margin-left: var(--sidebar-rail-width); }
+        .dashboard-shell.nav-collapsed .shell-brand-text,
+        .dashboard-shell.nav-collapsed .shell-nav,
+        .dashboard-shell.nav-collapsed .shell-sidebar-footer { display: none; }
         .shell-topbar {
           min-height: 50px;
           display: flex;
@@ -151,7 +181,21 @@ export default function DashboardShell({ children }: { children: React.ReactNode
           z-index: 500;
         }
         .shell-content { padding: 1.25rem; max-width: 1480px; margin: 0 auto; }
-        .shell-menu-button { display: inline-flex; }
+        .shell-menu-button { display: inline-flex; align-items: center; justify-content: center; min-width: 34px; min-height: 30px; }
+        .shell-topbar .shell-menu-button { display: none; }
+        .shell-sidebar-header {
+          padding: 1.2rem 1rem 0.9rem;
+          border-bottom: 1px solid var(--border-subtle);
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 0.75rem;
+        }
+        .dashboard-shell.nav-collapsed .shell-sidebar-header {
+          padding: 0.75rem 0;
+          justify-content: center;
+        }
+        .shell-sidebar-footer { display: grid; }
         .shell-menu-icon {
           display: grid;
           gap: 4px;
@@ -165,9 +209,15 @@ export default function DashboardShell({ children }: { children: React.ReactNode
         .shell-overlay { display: none; }
         .shell-nav-link:hover { text-decoration: none; background: var(--accent-bg); color: var(--accent); }
         @media (max-width: 860px) {
-          .shell-sidebar { transform: translateX(-102%); transition: transform 160ms ease; }
+          .shell-sidebar { width: var(--sidebar-width); transform: translateX(-102%); transition: transform 160ms ease; }
           .shell-sidebar.open { transform: translateX(0); }
-          .dashboard-shell.nav-collapsed .shell-sidebar.open { transform: translateX(0); visibility: visible; }
+          .dashboard-shell.nav-collapsed .shell-sidebar { width: var(--sidebar-width); visibility: visible; }
+          .dashboard-shell.nav-collapsed .shell-sidebar.open { transform: translateX(0); }
+          .dashboard-shell.nav-collapsed .shell-brand-text,
+          .dashboard-shell.nav-collapsed .shell-nav { display: block; }
+          .dashboard-shell.nav-collapsed .shell-sidebar-footer { display: grid; }
+          .shell-sidebar .shell-menu-button { display: none; }
+          .shell-topbar .shell-menu-button { display: inline-flex; }
           .shell-main { margin-left: 0; }
           .shell-overlay.open {
             display: block;
@@ -181,11 +231,14 @@ export default function DashboardShell({ children }: { children: React.ReactNode
       `}</style>
       <div className={`shell-overlay ${sidebarOpen ? 'open' : ''}`} onClick={() => setSidebarOpen(false)} />
       <aside className={`shell-sidebar ${sidebarOpen ? 'open' : ''}`}>
-        <div style={{ padding: '1.2rem 1rem 0.9rem', borderBottom: '1px solid var(--border-subtle)' }}>
-          <div style={{ fontWeight: 800, color: 'var(--accent)', letterSpacing: '0.08em', fontSize: '1rem' }}>AGENTS</div>
-          <div style={{ color: 'var(--text-faint)', fontSize: '0.72rem', marginTop: 4 }}>workflow studio</div>
+        <div className="shell-sidebar-header">
+          <div className="shell-brand-text">
+            <div style={{ fontWeight: 800, color: 'var(--accent)', letterSpacing: '0.08em', fontSize: '1rem' }}>AGENTS</div>
+            <div style={{ color: 'var(--text-faint)', fontSize: '0.72rem', marginTop: 4 }}>workflow studio</div>
+          </div>
+          {!mobileViewport && renderMenuButton()}
         </div>
-        <nav style={{ flex: 1, overflowY: 'auto', padding: '0.85rem' }}>
+        <nav className="shell-nav" style={{ flex: 1, overflowY: 'auto', padding: '0.85rem' }}>
           {Object.entries(grouped).map(([group, items]) => (
             <div key={group} style={{ marginBottom: '1rem' }}>
               <div style={{ color: 'var(--text-faint)', fontSize: '0.68rem', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', margin: '0 0 0.35rem 0.35rem' }}>{group}</div>
@@ -218,7 +271,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
             </div>
           ))}
         </nav>
-        <div style={{ borderTop: '1px solid var(--border-subtle)', padding: '0.85rem', display: 'grid', gap: '0.5rem' }}>
+        <div className="shell-sidebar-footer" style={{ borderTop: '1px solid var(--border-subtle)', padding: '0.85rem', gap: '0.5rem' }}>
           <button onClick={toggle} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 0, padding: '7px 10px', cursor: 'pointer', fontSize: '0.78rem', color: 'var(--text-muted)', textAlign: 'left' }}>
             {theme === 'light' ? 'Dark mode' : 'Light mode'}
           </button>
@@ -229,28 +282,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
       </aside>
       <div className="shell-main">
         <header className="shell-topbar">
-          <button
-            className="shell-menu-button"
-            onClick={() => {
-              if (sidebarCollapsed) {
-                setSidebarCollapsed(false)
-                if (mobileViewport) setSidebarOpen(true)
-              } else if (mobileViewport) {
-                setSidebarOpen(true)
-              } else {
-                setSidebarCollapsed(true)
-              }
-            }}
-            aria-label={navToggleLabel}
-            title={navToggleLabel}
-            style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 0, padding: '5px 9px', cursor: 'pointer' }}
-          >
-            <span className="shell-menu-icon" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </span>
-          </button>
+          {mobileViewport && renderMenuButton()}
           <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', fontWeight: 600 }}>
             {links.find(link => activePath(pathname, link.href))?.label ?? 'Agents'}
           </div>
