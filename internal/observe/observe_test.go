@@ -451,6 +451,34 @@ func TestStoreIsRunningDelegates(t *testing.T) {
 	}
 }
 
+func TestStoreIsRunningInWorkspaceUsesActiveSpans(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+
+	s.BeginRun(workflow.BeginRunInput{
+		SpanID:      "span-team",
+		EventID:     "event-team",
+		WorkspaceID: "team-a",
+		Agent:       "coder",
+		Repo:        "owner/repo",
+		StartedAt:   time.Now(),
+	})
+	if !s.IsRunningInWorkspace("team-a", "coder") {
+		t.Fatal("want coder running in team-a")
+	}
+	if s.IsRunningInWorkspace(fleet.DefaultWorkspaceID, "coder") {
+		t.Fatal("want coder not running in default workspace")
+	}
+	if s.IsRunningInWorkspace("team-a", "reviewer") {
+		t.Fatal("want reviewer not running in team-a")
+	}
+
+	s.EndRun("span-team")
+	if s.IsRunningInWorkspace("team-a", "coder") {
+		t.Fatal("want coder not running after EndRun")
+	}
+}
+
 // ─── Store.RecordEvent ────────────────────────────────────────────────────────
 
 // TestStoreRecordEventPersistsAndPublishesToSSE verifies that RecordEvent

@@ -343,6 +343,21 @@ func (r *RunRegistry) EndRun(spanID string) {
 	}
 }
 
+// IsRunningInWorkspace reports whether agentName has at least one active span
+// in workspaceID. Agent names are workspace-local, so workspace-filtered views
+// must not use the legacy global ActiveRuns counter.
+func (r *RunRegistry) IsRunningInWorkspace(workspaceID, agentName string) bool {
+	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, run := range r.active {
+		if fleet.NormalizeWorkspaceID(run.WorkspaceID) == workspaceID && run.Agent == agentName {
+			return true
+		}
+	}
+	return false
+}
+
 // ListActive returns the currently-running spans matching eventID, in
 // arbitrary order. Used by the runners handler to surface in-flight
 // rows (one per agent that's currently fanned out for this event).
@@ -612,6 +627,16 @@ func (s *Store) ListEdgesForWorkspace(workspaceID string) []Edge {
 // /graph view.
 func (s *Store) IsRunning(agentName string) bool {
 	return s.ActiveRuns.IsRunning(agentName)
+}
+
+// IsRunningInWorkspace returns true when the named workspace-local agent has
+// at least one active span. This is the correct status source for workspace
+// scoped UI surfaces where agent names may repeat across workspaces.
+func (s *Store) IsRunningInWorkspace(workspaceID, agentName string) bool {
+	if s.Runs == nil {
+		return false
+	}
+	return s.Runs.IsRunningInWorkspace(workspaceID, agentName)
 }
 
 // ─── workflow interface implementations ──────────────────────────────────────

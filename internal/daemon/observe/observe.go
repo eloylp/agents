@@ -372,7 +372,7 @@ func (h *Handler) HandleGraph(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nodeStatus := func(name string) string {
-		if h.events != nil && h.events.IsRunning(name) {
+		if h.events != nil && h.events.IsRunningInWorkspace(workspaceID, name) {
 			return "running"
 		}
 		if _, ok := lastErrorByAgent[name]; ok {

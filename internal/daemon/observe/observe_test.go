@@ -755,8 +755,15 @@ func TestHandleGraphNodeStatusReflectsRuntimeState(t *testing.T) {
 		{Name: "idle-err", Backend: "claude", PromptRef: "idle-err", Description: "idle err agent"},
 	}
 	fx := newFixture(t, cfg)
-	// Mark "runner" as in-flight via the same hook the engine uses.
-	fx.events.ActiveRuns.StartRun("runner")
+	// Mark "runner" as in-flight via the live span hook the engine uses.
+	fx.events.BeginRun(workflow.BeginRunInput{
+		SpanID:      "span-runner",
+		EventID:     "event-runner",
+		WorkspaceID: fleet.DefaultWorkspaceID,
+		Agent:       "runner",
+		Repo:        "owner/r",
+		StartedAt:   time.Now(),
+	})
 	// Seed the scheduler so "idle-err" has a recorded last_status="error".
 	sched := newSchedulerWithStatuses(t, []scheduler.AgentStatus{
 		{Name: "idle-err", Repo: "owner/r", LastStatus: "error"},
@@ -786,6 +793,55 @@ func TestHandleGraphNodeStatusReflectsRuntimeState(t *testing.T) {
 	}
 	if statusByID["idle-ok"] != "" {
 		t.Errorf("idle-ok agent: want empty status, got %q", statusByID["idle-ok"])
+	}
+}
+
+func TestHandleGraphRunningStatusIsWorkspaceScoped(t *testing.T) {
+	t.Parallel()
+	cfg := minimalCfg()
+	cfg.Agents = []fleet.Agent{
+		{Name: "coder", WorkspaceID: fleet.DefaultWorkspaceID, Backend: "claude", PromptRef: "coder", Description: "default coder"},
+		{Name: "coder", WorkspaceID: "team-a", Backend: "claude", PromptRef: "coder", Description: "team coder"},
+	}
+	fx := newFixture(t, cfg)
+	fx.events.BeginRun(workflow.BeginRunInput{
+		SpanID:      "span-team-coder",
+		EventID:     "event-team",
+		WorkspaceID: "team-a",
+		Agent:       "coder",
+		Repo:        "owner/repo",
+		StartedAt:   time.Now(),
+	})
+	h := New(fx.events, fx.store, nil, nil, nil, zerolog.Nop())
+
+	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
+	rec := httptest.NewRecorder()
+	h.HandleGraph(rec, req)
+
+	var defaultGraph graphJSON
+	if err := json.NewDecoder(rec.Body).Decode(&defaultGraph); err != nil {
+		t.Fatalf("decode default graph: %v", err)
+	}
+	if len(defaultGraph.Nodes) != 1 || defaultGraph.Nodes[0].ID != "coder" {
+		t.Fatalf("default nodes = %+v, want only coder", defaultGraph.Nodes)
+	}
+	if defaultGraph.Nodes[0].Status == "running" {
+		t.Fatalf("default coder leaked running status from team-a: %+v", defaultGraph.Nodes[0])
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/graph?workspace=team-a", nil)
+	rec = httptest.NewRecorder()
+	h.HandleGraph(rec, req)
+
+	var teamGraph graphJSON
+	if err := json.NewDecoder(rec.Body).Decode(&teamGraph); err != nil {
+		t.Fatalf("decode team graph: %v", err)
+	}
+	if len(teamGraph.Nodes) != 1 || teamGraph.Nodes[0].ID != "coder" {
+		t.Fatalf("team nodes = %+v, want only coder", teamGraph.Nodes)
+	}
+	if teamGraph.Nodes[0].Status != "running" {
+		t.Fatalf("team coder status = %q, want running", teamGraph.Nodes[0].Status)
 	}
 }
 
