@@ -175,6 +175,65 @@ func TestCheckGitHubMCPInRuntimeUsesBackendSetup(t *testing.T) {
 	}
 }
 
+func TestDiagnoseBackendInRuntimeRequiresBackendCredentials(t *testing.T) {
+	t.Setenv("CODEX_AUTH_JSON_BASE64", "")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	runner := fakeRuntimeRunner{run: func(spec runtimeexec.ContainerSpec) (int, string, string, error) {
+		script := strings.Join(spec.Command, " ")
+		switch {
+		case strings.Contains(script, "command -v 'codex'"):
+			return 0, "/usr/local/bin/codex\n", "", nil
+		case strings.Contains(script, "'/usr/local/bin/codex' '--version'"):
+			return 0, "codex-cli 0.130.0\n", "", nil
+		case strings.Contains(script, "'/usr/local/bin/codex' 'debug' 'models'"):
+			return 0, `{"models":[{"slug":"gpt-5.5"}]}`, "", nil
+		case strings.Contains(script, "'/usr/local/bin/codex' 'mcp' 'list'"):
+			return 0, "", "", nil
+		default:
+			t.Fatalf("unexpected runner command: %v", spec.Command)
+			return 1, "", "", nil
+		}
+	}}
+
+	status := diagnoseBackendInRuntime(context.Background(), runner, fleet.RuntimeSettings{RunnerImage: "runner:test"}, "codex", "codex", "", "")
+	if status.Healthy {
+		t.Fatalf("Healthy = true, want false without codex credentials: %+v", status)
+	}
+	if !strings.Contains(status.HealthDetail, "auth failed: set CODEX_AUTH_JSON_BASE64 or OPENAI_API_KEY") {
+		t.Fatalf("HealthDetail missing auth failure: %q", status.HealthDetail)
+	}
+}
+
+func TestDiagnoseBackendInRuntimeMarksModelDiscoveryFailureUnhealthy(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+
+	runner := fakeRuntimeRunner{run: func(spec runtimeexec.ContainerSpec) (int, string, string, error) {
+		script := strings.Join(spec.Command, " ")
+		switch {
+		case strings.Contains(script, "command -v 'claude'"):
+			return 0, "/usr/local/bin/claude\n", "", nil
+		case strings.Contains(script, "'/usr/local/bin/claude' '--version'"):
+			return 0, "2.1.141 (Claude Code)\n", "", nil
+		case strings.Contains(script, "'/usr/local/bin/claude' 'models' 'list'"):
+			return 1, "", "Not logged in · Please run /login\n", nil
+		case strings.Contains(script, "'/usr/local/bin/claude' 'mcp' 'list'"):
+			return 0, "", "", nil
+		default:
+			t.Fatalf("unexpected runner command: %v", spec.Command)
+			return 1, "", "", nil
+		}
+	}}
+
+	status := diagnoseBackendInRuntime(context.Background(), runner, fleet.RuntimeSettings{RunnerImage: "runner:test"}, "claude", "claude", "", "")
+	if status.Healthy {
+		t.Fatalf("Healthy = true, want false on model discovery failure: %+v", status)
+	}
+	if !strings.Contains(status.HealthDetail, "models discovery failed") {
+		t.Fatalf("HealthDetail missing models failure: %q", status.HealthDetail)
+	}
+}
+
 func setGitHubTokenFallbackEnv(t *testing.T) {
 	t.Helper()
 	oldGH, hadGH := os.LookupEnv("GH_TOKEN")

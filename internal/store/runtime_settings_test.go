@@ -24,6 +24,9 @@ func TestRuntimeSettingsRoundTrip(t *testing.T) {
 	if initial.RunnerImage != fleet.DefaultRunnerImage {
 		t.Fatalf("initial runner image = %q, want %q", initial.RunnerImage, fleet.DefaultRunnerImage)
 	}
+	if initial.Constraints.TimeoutSeconds != fleet.DefaultRunnerTimeoutSeconds {
+		t.Fatalf("initial timeout_seconds = %d, want %d", initial.Constraints.TimeoutSeconds, fleet.DefaultRunnerTimeoutSeconds)
+	}
 
 	updated, err := st.WriteRuntimeSettings(fleet.RuntimeSettings{
 		RunnerImage: "ghcr.io/example/custom-runner:v1",

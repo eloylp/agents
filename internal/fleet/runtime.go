@@ -2,7 +2,10 @@ package fleet
 
 import "strings"
 
-const DefaultRunnerImage = "ghcr.io/eloylp/agents-runner:latest"
+const (
+	DefaultRunnerImage          = "ghcr.io/eloylp/agents-runner:latest"
+	DefaultRunnerTimeoutSeconds = 3600
+)
 
 // RuntimeSettings describes how the daemon starts ephemeral agent runner
 // containers. It is mutable fleet state because operators need to change the
@@ -26,6 +29,9 @@ func NormalizeRuntimeSettings(s *RuntimeSettings) {
 	s.RunnerImage = strings.TrimSpace(s.RunnerImage)
 	if s.RunnerImage == "" {
 		s.RunnerImage = DefaultRunnerImage
+	}
+	if s.Constraints.TimeoutSeconds == 0 {
+		s.Constraints.TimeoutSeconds = DefaultRunnerTimeoutSeconds
 	}
 	s.Constraints.CPUs = strings.TrimSpace(s.Constraints.CPUs)
 	s.Constraints.Memory = strings.TrimSpace(s.Constraints.Memory)

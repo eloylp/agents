@@ -101,9 +101,12 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 
 	r.Handle("/backends", withTimeout(http.HandlerFunc(h.handleBackendsList))).Methods(http.MethodGet)
 	r.Handle("/backends", withTimeout(http.HandlerFunc(h.handleBackendCreate))).Methods(http.MethodPost)
-	r.Handle("/backends/status", withTimeout(http.HandlerFunc(h.handleBackendsStatus))).Methods(http.MethodGet)
-	r.Handle("/backends/discover", withTimeout(http.HandlerFunc(h.handleBackendsDiscover))).Methods(http.MethodPost)
-	r.Handle("/backends/local", withTimeout(http.HandlerFunc(h.handleBackendsLocal))).Methods(http.MethodPost)
+	// Runner diagnostics may need to pull a large runner image before probing
+	// tools. Do not wrap them in the normal HTTP write timeout; the diagnostic
+	// subprocesses still have their own per-probe bounds.
+	r.Handle("/backends/status", http.HandlerFunc(h.handleBackendsStatus)).Methods(http.MethodGet)
+	r.Handle("/backends/discover", http.HandlerFunc(h.handleBackendsDiscover)).Methods(http.MethodPost)
+	r.Handle("/backends/local", http.HandlerFunc(h.handleBackendsLocal)).Methods(http.MethodPost)
 	r.Handle("/backends/{name}", withTimeout(http.HandlerFunc(h.handleBackendGet))).Methods(http.MethodGet)
 	r.Handle("/backends/{name}", withTimeout(http.HandlerFunc(h.handleBackendPatch))).Methods(http.MethodPatch)
 	r.Handle("/backends/{name}", withTimeout(http.HandlerFunc(h.handleBackendDelete))).Methods(http.MethodDelete)

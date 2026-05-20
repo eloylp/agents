@@ -97,6 +97,9 @@ func TestAuthBootstrapLoginAndAPITokenLifecycle(t *testing.T) {
 	if api.Token == "" || api.Prefix == "" {
 		t.Fatalf("CreateAPIToken() token=%q prefix=%q, want both set", api.Token, api.Prefix)
 	}
+	if api.CreatedAt.IsZero() {
+		t.Fatal("CreateAPIToken() CreatedAt is zero")
+	}
 	tokens, err := st.ListAuthTokens(ctx, identity.User.ID)
 	if err != nil {
 		t.Fatalf("ListAuthTokens() error = %v", err)

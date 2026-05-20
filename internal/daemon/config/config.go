@@ -344,7 +344,7 @@ func (h *Handler) ConfigJSON() ([]byte, error) {
 // intentionally excluded, it is not managed by the write API.
 type exportYAML struct {
 	Backends     map[string]fleet.Backend `yaml:"backends,omitempty"`
-	Runtime      fleet.RuntimeSettings    `yaml:"runtime,omitempty"`
+	Runtime      *fleet.RuntimeSettings   `yaml:"runtime,omitempty"`
 	Prompts      []fleet.Prompt           `yaml:"prompts,omitempty"`
 	Skills       map[string]fleet.Skill   `yaml:"skills,omitempty"`
 	Guardrails   []fleet.Guardrail        `yaml:"guardrails,omitempty"`
@@ -440,7 +440,7 @@ func (h *Handler) ExportYAML() ([]byte, error) {
 	}
 	out := exportYAML{
 		Backends:     cfg.Backends,
-		Runtime:      cfg.Runtime,
+		Runtime:      &cfg.Runtime,
 		Prompts:      cfg.Prompts,
 		Skills:       cfg.Skills,
 		Guardrails:   cfg.Guardrails,
@@ -494,6 +494,13 @@ func (h *Handler) ImportYAML(body []byte, mode string) (map[string]int, error) {
 	}
 
 	cfg := payload.toConfig()
+	if payload.Runtime == nil {
+		runtimeSettings, err := h.store.ReadRuntimeSettings()
+		if err != nil {
+			return nil, fmt.Errorf("read runtime settings: %w", err)
+		}
+		cfg.Runtime = runtimeSettings
+	}
 	budgets := payload.flattenTokenBudgets()
 	var err error
 	if mode == "replace" {
@@ -520,12 +527,14 @@ func (h *Handler) ImportYAML(body []byte, mode string) (map[string]int, error) {
 func (p exportYAML) toConfig() *config.Config {
 	cfg := &config.Config{
 		Backends:   p.Backends,
-		Runtime:    p.Runtime,
 		Prompts:    p.Prompts,
 		Skills:     p.Skills,
 		Guardrails: p.Guardrails,
 		Agents:     slices.Clone(p.Agents),
 		Repos:      slices.Clone(p.Repos),
+	}
+	if p.Runtime != nil {
+		cfg.Runtime = *p.Runtime
 	}
 	for _, w := range p.Workspaces {
 		workspaceID := workspaceYAMLID(w)

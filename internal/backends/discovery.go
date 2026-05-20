@@ -339,7 +339,9 @@ func diagnoseBackendInRuntime(ctx context.Context, runner runtimeexec.Runner, se
 	status.Models = models
 
 	mcpDetail := checkGitHubMCPInRuntime(ctx, runner, settings, backendName, path, env)
-	status.Healthy = versionOK
+	authDetail := backendAuthDetail(commandName)
+	modelsOK := !strings.HasPrefix(modelsDetail, "models discovery failed")
+	status.Healthy = versionOK && modelsOK && authDetail == ""
 
 	details := make([]string, 0, 3)
 	if versionOK {
@@ -354,11 +356,40 @@ func diagnoseBackendInRuntime(ctx context.Context, runner runtimeexec.Runner, se
 	if mcpDetail != "" {
 		details = append(details, mcpDetail)
 	}
+	if authDetail != "" {
+		details = append(details, authDetail)
+	}
 	if modelsDetail != "" {
 		details = append(details, modelsDetail)
 	}
 	status.HealthDetail = strings.Join(details, " | ")
 	return status
+}
+
+func backendAuthDetail(commandName string) string {
+	switch commandName {
+	case ClaudeName:
+		if anyEnvSet("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN") {
+			return ""
+		}
+		return "auth failed: set CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, or ANTHROPIC_AUTH_TOKEN"
+	case CodexName:
+		if anyEnvSet("CODEX_AUTH_JSON_BASE64", "OPENAI_API_KEY") {
+			return ""
+		}
+		return "auth failed: set CODEX_AUTH_JSON_BASE64 or OPENAI_API_KEY"
+	default:
+		return ""
+	}
+}
+
+func anyEnvSet(keys ...string) bool {
+	for _, key := range keys {
+		if strings.TrimSpace(os.Getenv(key)) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func discoverModelsInRuntime(ctx context.Context, runner runtimeexec.Runner, settings fleet.RuntimeSettings, backendName, command string, env map[string]string) ([]string, string) {

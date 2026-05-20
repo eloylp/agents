@@ -65,7 +65,7 @@ The daemon's event queue is durable: every `PushEvent` writes to the SQLite `eve
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/backends/status` | Health snapshot for every configured backend (CLI version, model catalog, GitHub MCP probe result) plus supporting tool diagnostics (`tools[]`) for GitHub CLI authentication, git, Go, Rust/Cargo, Node/npm, and TypeScript. `github_cli` is kept as a compatibility alias for the GitHub CLI tool row. |
+| `GET` | `/backends/status` | Health snapshot for every configured backend (CLI version, auth/env readiness, model catalog, GitHub MCP probe result) plus supporting tool diagnostics (`tools[]`) for GitHub CLI authentication, git, Go, Rust/Cargo, Node/npm, and TypeScript. `github_cli` is kept as a compatibility alias for the GitHub CLI tool row. |
 | `POST` | `/backends/discover` | Trigger an explicit re-probe of every backend's CLI and update the stored model catalog. |
 | `POST` | `/backends/local` | Probe one local OpenAI-compatible base URL and return its advertised models without persisting. Useful for dry-running a `local_model_url` setting before saving it. |
 
@@ -144,7 +144,7 @@ Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL c
 | `PUT/PATCH` | `/workspaces/{workspace}/runtime` | Set or clear the selected workspace's runner image override. |
 
 Runtime settings are also included in `/config`, `/export`, and `/import`. Credentials are daemon environment variables and are never returned by these routes.
-For global `/runtime`, empty string clears string constraints such as `cpus`, `memory`, and `network_mode`; empty `runner_image` resets to the built-in default because the field cannot be unset.
+For global `/runtime`, empty string clears string constraints such as `cpus`, `memory`, and `network_mode`; empty `runner_image` resets to the built-in default because the field cannot be unset. Omitted runtime fields are preserved on PATCH; the default runner execution timeout is 3600 seconds.
 
 ## AI runner contract
 
