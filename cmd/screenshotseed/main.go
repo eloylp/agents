@@ -41,7 +41,7 @@ import (
 // down. Without this, the screenshot of the runners page would only
 // show completed rows because the real claude/codex binaries aren't
 // available on the screenshotting host.
-type blockingRunner struct{ name string }
+type blockingRunner struct{}
 
 func (b *blockingRunner) Run(ctx context.Context, _ ai.Request) (ai.Response, error) {
 	<-ctx.Done()
@@ -82,8 +82,8 @@ func run() error {
 	// Replace the real runner factory with a blocking stub so events
 	// the workflow processor picks up stay in flight indefinitely. We
 	// want the runners page to show "running" rows for the screenshot.
-	d.Engine().WithRunnerBuilder(func(_ string, name string, _ fleet.Backend) ai.Runner {
-		return &blockingRunner{name: name}
+	d.Engine().WithRunnerBuilder(func(_ string, _ string, _ fleet.Backend) ai.Runner {
+		return &blockingRunner{}
 	})
 
 	// Seed observability + an in-flight run AFTER daemon.New so we use
