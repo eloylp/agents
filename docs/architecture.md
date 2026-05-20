@@ -28,6 +28,8 @@ internal/
 ├─ store/                       SQLite schema, migrations, *store.Store facade,
 │                                 snapshot import/load, concept CRUD primitives,
 │                                 event_queue, memory, runtime settings, budgets
+├─ service/                     mutable fleet/config use cases shared by REST and MCP,
+│                                 transaction orchestration and domain validation
 │
 ├─ workflow/                    Engine, Processor, Dispatcher, DataChannels, dispatch dedup
 ├─ scheduler/                   cron registration + event producer
@@ -39,7 +41,8 @@ internal/
 │
 ├─ daemon/                      daemon as a single composed unit: lifecycle, router,
 │   │                             /status, /run, proxy/UI/MCP mounts
-│   ├─ fleet/                   /agents (CRUD + view + orphans), /skills, /backends
+│   ├─ fleet/                   /agents (CRUD + view + orphans), /workspaces,
+│   │                             /prompts, /skills, /guardrails, /backends
 │   ├─ repos/                   /repos, /repos/{}/bindings
 │   ├─ config/                  /config snapshot, /export, /import
 │   ├─ observe/                 /events, /traces, /graph, /dispatches, /memory + SSE
@@ -53,11 +56,13 @@ internal/
 
 The tiers, from bottom to top:
 
-**Domain (zero or near-zero deps):** `fleet`, `config`, `store`, `logging`. Pure data shapes and persistence. `fleet` has no transitive deps at all, it's structs and pure functions like `NormalizeAgent`. `config` and `store` import `fleet`. `*store.Store` wraps the bare `*sql.DB`; runtime components hold the facade, not the connection.
+**Domain and persistence:** `fleet`, `config`, `store`, `logging`. `fleet` has no transitive deps at all, it's structs and pure functions like `NormalizeAgent`. `config` owns normalized runtime config types and validation. `store` owns SQLite migrations, load/import helpers, and tx-aware persistence primitives. `*store.Store` wraps the bare `*sql.DB`; runtime components hold the facade, not the connection.
+
+**Use-case layer:** `service` imports `store`, `config`, and `fleet`. REST and MCP handlers decode wire shapes and delegate mutable operations here so transaction boundaries and domain validations stay shared across surfaces.
 
 **Runtime engine:** `workflow`, `scheduler`, `ai`, `runtime`, `backends`, `anthropic_proxy`, `observe`. The actual fleet runtime. An event arrives on the queue, the processor pulls it, the engine looks up the right binding (or resolves the target agent from the payload), the AI runner starts a fresh execution container through the runtime abstraction, the CLI response is parsed, traces and steps are recorded, and any returned `dispatch` array is enqueued as new events.
 
-**HTTP layer:** `internal/daemon` and its sub-packages, plus `webhook` and `mcp`. Each domain handler is a small package with a constructor that takes its dependencies as concrete pointers and a `RegisterRoutes(router, withTimeout)` method. The composing root is `internal/daemon/daemon.go`, which constructs every component, holds them as fields on the `*Daemon` value, and registers all routes from one place.
+**HTTP layer:** `internal/daemon` and its sub-packages, plus `webhook` and `mcp`. Each domain handler is a small package with a constructor that takes its dependencies as concrete pointers and a `RegisterRoutes(router, withTimeout)` method. Handlers stay thin: decode/encode HTTP or MCP, call `service` for mutable use cases, and map typed errors. The composing root is `internal/daemon/daemon.go`, which constructs every component, holds them as fields on the `*Daemon` value, and registers all routes from one place.
 
 **Entry:** `cmd/agents/main.go` is six lines of real work, load config, build a logger, call `daemon.New`, call `d.Run(ctx)`. Everything else is in the daemon package.
 
@@ -79,12 +84,14 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
     engine.WithGraphRecorder(obs)
     engine.WithRunTracker(obs.ActiveRuns)
     engine.WithStepRecorder(obs)
+    engine.WithRunStreamPublisher(obs)
     memBackend.SetChangeNotifier(obs.PublishMemoryChange)
 
     // 2. scheduler is a cron event producer; engine notifies it on completion
     sched, _ := scheduler.NewScheduler(st, scheduler.DefaultReconcileInterval, logger)
     sched.WithEventQueue(channels)
     engine.WithLastRunRecorder(sched)
+    engine.WithBudgetStore(st)
 
     // 3. domain HTTP handlers, concrete pointers, no With-pattern wiring
     fleetH   := daemonfleet.New(st, cfg.Daemon.HTTP.MaxBodyBytes, sched, obs, logger)
@@ -239,7 +246,8 @@ async on a worker goroutine:
 mux router
   → daemonfleet.Handler.HandleAgentsCreate
       h.UpsertAgent(req.toConfig())
-        → store.UpsertAgent       single SQLite UPSERT
+        → service.UpsertAgent     transaction + validation
+          → store.UpsertAgentTx   SQLite write primitive
       ← canonical agent JSON
   ← canonical agent JSON
 ```
@@ -251,7 +259,8 @@ There is no reload step. The runtime reads from SQLite on every event, no in-mem
 ```
 mcp/server → toolUpdateAgent
   → deps.Fleet.UpdateAgentPatch     (same *daemonfleet.Handler the REST surface uses)
-  → store.UpsertAgent
+  → service.UpdateAgentPatch
+    → store.UpsertAgentTx
   ← same canonical shape as REST
 ```
 

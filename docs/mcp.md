@@ -94,11 +94,11 @@ Most fleet tools accept `workspace` for workspace-local resources and default to
 | `get_trace` | Full dispatch chain by root event ID. |
 | `get_trace_steps` | Tool-loop transcript for one span. |
 | `get_trace_prompt` | Composed prompt the daemon sent to the AI CLI for one span (gzipped on disk; decompressed on the fly). The "what did the agent see" debug artefact. Errors when no prompt is recorded (pre-009-migration spans). |
-
-The live stdout stream (`GET /traces/{span_id}/stream`) is intentionally not mirrored as an MCP tool, SSE is a long-lived streaming protocol that doesn't fit MCP's request/response contract. MCP clients that need the post-completion transcript use `get_trace_steps` instead.
 | `get_graph` | Workspace-scoped agent interaction graph with dispatch edges. |
 | `get_dispatches` | Dispatch counters and drop reasons. |
 | `get_memory` | Agent memory for an agent/repo pair. |
+
+The live stdout stream (`GET /traces/{span_id}/stream`) is intentionally not mirrored as an MCP tool, SSE is a long-lived streaming protocol that doesn't fit MCP's request/response contract. MCP clients that need the post-completion transcript use `get_trace_steps` instead.
 
 ### Runners
 
@@ -133,3 +133,11 @@ Scope kinds are explicit about global versus workspace-isolated coverage:
 For workspace isolation, use `workspace+repo`, `workspace+agent`, or
 `workspace+backend`; use `workspace+repo+agent` for one agent/repo pair inside
 one workspace.
+
+| Tool | Description |
+|---|---|
+| `list_token_budgets` | List all token budgets. |
+| `create_token_budget` | Create a token budget for one of the supported scope kinds. |
+| `update_token_budget` | Partially update a token budget by ID; omitted fields are preserved. |
+| `delete_token_budget` | Delete a token budget by ID. |
+| `get_token_leaderboard` | Return per-agent usage for a UTC period, including total tokens, run count, and average tokens per run. |

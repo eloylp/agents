@@ -8,7 +8,7 @@ The daemon ships an embedded web dashboard at `/ui/`. The public root path `/` s
 
 ### Events
 
-Live event firehose with SSE streaming. Every kind of event flows through here: webhooks (`issues.*`, `pull_request.*`, `push`, ...), cron ticks (`cron`), on-demand triggers (`agents.run`), and inter-agent dispatches (`agent.dispatch`). Each row carries time, kind, repo, number, actor, an **agents** column with badges for every agent that ran (or is running) for that event, each badge links to the Fleet page, and a **View runners** link that opens the Runners page filtered to the event id with the matching rows pulsing on arrival.
+Live event firehose with SSE streaming. Every kind of event flows through here: webhooks (`issues.*`, `pull_request.*`, `push`, ...), cron ticks (`cron`), on-demand triggers (`agents.run`), and inter-agent dispatches (`agent.dispatch`). Each row carries time, kind, repo, number, actor, an **agents** column with badges for every agent that ran (or is running) for that event, each badge focuses that agent in the graph-first dashboard, and a **View runners** link that opens the Runners page filtered to the event id with the matching rows pulsing on arrival.
 
 ![Events firehose](img/events.png)
 
@@ -41,7 +41,7 @@ Dispatch wiring is always editable: drag from one agent to another to add a conn
 
 Fleet snapshot with per-agent status, prompt reference, skills, bindings, dispatch wiring. Create, edit, and delete agents from this page; prompt content is managed through the prompt catalog and selected on agents by reference.
 
-<!-- The Fleet page (above) is the agents page: same surface, same capture. -->
+<!-- The Agents page uses the same fleet snapshot capture. -->
 ![Fleet / Agents page](img/fleet.png)
 
 ### Prompts and Skills
@@ -54,7 +54,7 @@ Manage reusable prompt contracts and reusable guidance blocks composed into agen
 
 Backend discovery status, including per-backend GitHub MCP connectivity, plus supporting tool health for `gh`, `git`, Go, Rust/Cargo, Node/npm, and TypeScript. The Tools column shows whether GitHub CLI is authenticated, because agents prefer MCP but may fall back to `gh` for complex local checkout/test/PR loops. Manage runtime limits (timeout, max prompt chars), local-backend URLs, and orphaned-model remediation. Lives as a tab inside the Config page.
 
-![Config page, Backends and tools tab is one of three tabs at the top](img/config.png)
+![Config page, Backends and tools tab](img/config.png)
 
 ### Guardrails
 
@@ -76,7 +76,7 @@ Operator view of the work that's running and recently ran. Each row is one runne
 
 The page combines two sources: the durable `event_queue` table for in-flight lifecycle (so freshly queued and currently fanning-out events stay visible), plus per-agent trace spans for completed runs. Once the event_queue row is pruned (>7 days), the trace alone is the source of truth.
 
-Each row carries: event id, queue lifecycle status (`enqueued` / `running`) or trace status (`success` / `error`), agent badge (links to the Fleet page), repo, kind, started at, duration. Click any row to expand: actor, payload, and a **View trace detail** link to `/ui/traces/<event_id>`.
+Each row carries: event id, queue lifecycle status (`enqueued` / `running`) or trace status (`success` / `error`), agent badge (focuses that agent in the graph-first dashboard), repo, kind, started at, duration. Click any row to expand: actor, payload, and a **View trace detail** link to `/ui/traces/?id=<event_id>`.
 
 Two per-row actions, both **event-level** (a single event_queue row drives multiple displayed rows after fan-out, so the actions affect every fanned-out agent for that event, the confirm dialog says so explicitly):
 

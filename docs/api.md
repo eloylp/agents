@@ -109,6 +109,9 @@ Prompt catalog rows expose a stable `id` plus a display `name`. Agents persist `
 | `POST` | `/guardrails/{id}/reset` | Copy a built-in guardrail's `default_content` back into its `content`. Legacy global names are accepted as a compatibility fallback. Returns 400 for operator-added rows (no default to fall back to). |
 | `GET` | `/workspaces/{workspace}/guardrails` | List the selected guardrail references for one workspace in render order. |
 | `PUT` | `/workspaces/{workspace}/guardrails` | Replace the selected guardrail references for one workspace. |
+| `GET` | `/graph/layout` | Read saved graph node positions for a workspace. |
+| `PUT` | `/graph/layout` | Replace saved graph node positions for a workspace. |
+| `DELETE` | `/graph/layout` | Clear saved graph node positions for a workspace so the UI falls back to automatic layout. |
 | `GET` | `/export` | Export full fleet config as workspace-aware YAML, including reusable prompts, skills, guardrails, and workspace-local agents/repos/budgets. |
 | `POST` | `/import` | Import workspace-aware YAML into the SQLite store. Legacy top-level agents/repos remain accepted into `default`. |
 

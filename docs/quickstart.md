@@ -97,7 +97,9 @@ docker compose pull agents && docker compose up -d agents
 # image: ghcr.io/eloylp/agents:dev-<short_sha>
 
 # Re-run backend discovery (after rotating env credentials or changing runner image).
-curl -X POST http://localhost:8080/backends/discover
+# Create AGENTS_API_TOKEN in Config -> Authentication first.
+curl -H "Authorization: Bearer $AGENTS_API_TOKEN" \
+  -X POST http://localhost:8080/backends/discover
 
 # Snapshot the SQLite store while the daemon runs (the agents image
 # does not ship sqlite3, use a one-shot Alpine sidecar against the
@@ -109,8 +111,10 @@ docker run --rm \
     sqlite3 /src/agents.db ".backup /dst/agents-$(date +%F).db"'
 
 # Export / re-import the fleet as YAML.
-curl -s http://localhost:8080/export > fleet.yaml
-curl -X POST -H 'Content-Type: application/x-yaml' \
+curl -s -H "Authorization: Bearer $AGENTS_API_TOKEN" \
+  http://localhost:8080/export > fleet.yaml
+curl -H "Authorization: Bearer $AGENTS_API_TOKEN" \
+  -X POST -H 'Content-Type: application/x-yaml' \
   --data-binary @fleet.yaml http://localhost:8080/import
 ```
 

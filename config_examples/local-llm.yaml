@@ -1,23 +1,21 @@
-# local-llm.yaml, fleet pinned to a local OpenAI-compatible LLM
+# local-llm.yaml, fleet pinned to a local Anthropic-compatible LLM endpoint
 #
-# Adds a custom backend with `local_model_url` and enables the built-
-# in Anthropic↔OpenAI translation proxy, so the unmodified `claude`
-# CLI talks to llama.cpp, Ollama, vLLM, or anything else that speaks
-# OpenAI Chat Completions.
+# Adds a custom backend with `local_model_url`, so the unmodified `claude` CLI
+# in the runner container talks to a runner-reachable local model bridge.
+# If your model server only speaks OpenAI Chat Completions, run an
+# Anthropic-compatible bridge on the same Docker network and point
+# `local_model_url` at that bridge.
 #
 # How the routing works at runtime:
-#   1. The agent invokes the `claude` CLI.
-#   2. The daemon injects ANTHROPIC_BASE_URL pointing at its own
-#      proxy endpoint (default `/v1/messages` on the daemon).
-#   3. The proxy translates the Anthropic request shape into OpenAI
-#      Chat Completions and forwards it to `upstream.url`.
-#   4. The OpenAI response is translated back into Anthropic shape.
+#   1. The agent invokes the `claude` CLI inside an ephemeral runner container.
+#   2. The daemon injects ANTHROPIC_BASE_URL from `local_model_url` into that
+#      container for this backend only.
+#   3. The URL must be reachable from the runner container; localhost means the
+#      runner itself, not the daemon or host.
 #
-# See docs/local-models.md for verification steps and how to point
-# `claude_local` at a different upstream (Ollama on :11434, vLLM on
-# :8000, llama.cpp on :8080 etc.).
+# See docs/local-models.md for verification steps and production caveats.
 #
-# Import: curl -X POST -H 'Content-Type: application/x-yaml' --data-binary @local-llm.yaml http://localhost:8080/import
+# Import: curl -H "Authorization: Bearer $AGENTS_API_TOKEN" -X POST -H 'Content-Type: application/x-yaml' --data-binary @local-llm.yaml http://localhost:8080/import
 
 backends:
   claude:
@@ -25,21 +23,11 @@ backends:
     timeout_seconds: 1500
     max_prompt_chars: 12000
 
-  # Custom backend: same `claude` CLI, but routed at runtime to the
-  # local upstream below. The presence of `local_model_url` is what
-  # marks this as a local backend.
   claude_local:
     command: claude
-    local_model_url: http://local-llm:18000/v1
+    local_model_url: http://anthropic-bridge:8080/v1/messages
     timeout_seconds: 3600
     max_prompt_chars: 8000
-
-# Built-in translation proxy settings are daemon runtime env vars, not YAML.
-# For this example, set:
-# AGENTS_PROXY_ENABLED=true
-# AGENTS_PROXY_UPSTREAM_URL=http://local-llm:18000/v1
-# AGENTS_PROXY_UPSTREAM_MODEL=qwen3-coder
-# AGENTS_PROXY_UPSTREAM_TIMEOUT_SECONDS=3600
 
 skills:
   architect:
@@ -49,19 +37,26 @@ skills:
     prompt: |
       Focus on behavioral regressions, missing tests, and weak assertions.
 
-agents:
+prompts:
   - name: refactorer
-    backend: claude_local            # routed through the local LLM
-    description: "Cleans up code style and small refactors using the local model"
-    skills: [architect, testing]
-    prompt: |
+    content: |
       Refactor code for clarity and maintainability without changing behavior.
       Leave the repo in a state where tests still pass.
-    allow_prs: true
 
-repos:
-  - name: "owner/repo"
-    enabled: true
-    use:
-      - agent: refactorer
-        labels: ["refactor:run"]
+workspaces:
+  - id: default
+    name: Default
+    agents:
+      - name: refactorer
+        backend: claude_local
+        description: "Cleans up code style and small refactors using the local model"
+        skills: [architect, testing]
+        prompt_ref: refactorer
+        scope_type: workspace
+        allow_prs: true
+    repos:
+      - name: "owner/repo"
+        enabled: true
+        use:
+          - agent: refactorer
+            labels: ["refactor:run"]

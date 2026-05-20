@@ -1,17 +1,17 @@
 # multi-repo.yaml, same agents, several repos, mixed triggers
 #
-# Demonstrates that agent definitions are independent of where they
-# run. Three agents are defined once and bound to three different
-# repos with different triggers per repo:
+# Demonstrates that agent definitions are independent of where they run.
+# Three agents are defined once and bound to three different repos with
+# different triggers per repo:
 #
 #   - service-a: label-triggered coder + cron-scheduled refactorer
 #   - service-b: label-triggered coder + PR-event-triggered reviewer
 #   - service-c: PR-event-triggered reviewer only
 #
-# Adding a new repo to the fleet means adding another `repos:`
-# entry and binding the agents it needs, no agent duplication.
+# Adding a new repo to the fleet means adding another `repos:` entry inside the
+# workspace and binding the agents it needs, no agent duplication.
 #
-# Import: curl -X POST -H 'Content-Type: application/x-yaml' --data-binary @multi-repo.yaml http://localhost:8080/import
+# Import: curl -H "Authorization: Bearer $AGENTS_API_TOKEN" -X POST -H 'Content-Type: application/x-yaml' --data-binary @multi-repo.yaml http://localhost:8080/import
 
 backends:
   claude:
@@ -34,55 +34,65 @@ skills:
     prompt: |
       Focus on onboarding friction, naming, docs drift, and actionable errors.
 
-agents:
+prompts:
   - name: coder
-    backend: claude
-    description: "Implements fixes and features; opens pull requests"
-    skills: [architect, testing]
-    prompt: |
+    content: |
       Implement the requested change end-to-end.
       Run the narrowest meaningful tests and open a pull request when the work is ready.
-    allow_prs: true
-
   - name: refactorer
-    backend: claude
-    description: "Refactors existing code for readability and maintainability"
-    skills: [architect, testing, dx]
-    prompt: |
+    content: |
       Refactor code for clarity and maintainability without changing behavior.
       Leave the repo in a state where tests still pass.
-    allow_prs: true
-
   - name: pr-reviewer
-    backend: codex
-    description: "Reviews pull requests for correctness, regressions, and missing tests"
-    skills: [architect, testing]
-    prompt: |
+    content: |
       Review pull requests for correctness, regressions, and missing tests.
       Prefer concrete findings over broad summaries.
 
-repos:
-  # service-a: feature work + nightly tidy-up.
-  - name: "owner/service-a"
-    enabled: true
-    use:
-      - agent: coder
-        labels: ["coder:run"]
-      - agent: refactorer
-        cron: "0 3 * * *"
+workspaces:
+  - id: default
+    name: Default
+    agents:
+      - name: coder
+        backend: claude
+        description: "Implements fixes and features; opens pull requests"
+        skills: [architect, testing]
+        prompt_ref: coder
+        scope_type: workspace
+        allow_prs: true
 
-  # service-b: feature work + automated review on every PR.
-  - name: "owner/service-b"
-    enabled: true
-    use:
-      - agent: coder
-        labels: ["coder:run"]
-      - agent: pr-reviewer
-        events: ["pull_request.opened", "pull_request.synchronize"]
+      - name: refactorer
+        backend: claude
+        description: "Refactors existing code for readability and maintainability"
+        skills: [architect, testing, dx]
+        prompt_ref: refactorer
+        scope_type: workspace
+        allow_prs: true
 
-  # service-c: review-only, no agents authoring code here.
-  - name: "owner/service-c"
-    enabled: true
-    use:
-      - agent: pr-reviewer
-        events: ["pull_request.opened", "pull_request.synchronize"]
+      - name: pr-reviewer
+        backend: codex
+        description: "Reviews pull requests for correctness, regressions, and missing tests"
+        skills: [architect, testing]
+        prompt_ref: pr-reviewer
+        scope_type: workspace
+    repos:
+      - name: "owner/service-a"
+        enabled: true
+        use:
+          - agent: coder
+            labels: ["coder:run"]
+          - agent: refactorer
+            cron: "0 3 * * *"
+
+      - name: "owner/service-b"
+        enabled: true
+        use:
+          - agent: coder
+            labels: ["coder:run"]
+          - agent: pr-reviewer
+            events: ["pull_request.opened", "pull_request.synchronize"]
+
+      - name: "owner/service-c"
+        enabled: true
+        use:
+          - agent: pr-reviewer
+            events: ["pull_request.opened", "pull_request.synchronize"]

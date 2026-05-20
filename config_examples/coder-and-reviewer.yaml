@@ -1,17 +1,14 @@
 # coder-and-reviewer.yaml, minimal dispatch protocol
 #
-# Two agents wired so the coder can hand off to the reviewer when
-# its PR is ready, and the reviewer can dispatch back to the coder
-# on REQUEST_CHANGES. Smallest config that demonstrates the
-# `can_dispatch` / `allow_dispatch` handshake.
+# Two agents wired so the coder can hand off to the reviewer when its PR is
+# ready, and the reviewer can dispatch back to the coder on REQUEST_CHANGES.
+# Smallest config that demonstrates the `can_dispatch` / `allow_dispatch`
+# handshake.
 #
-# coder, implements changes from labelled issues; opens PRs.
-# pr-reviewer, reviews PR opens/syncs and approves or requests changes.
+# The coder uses Claude (good at implementation), the pr-reviewer uses Codex
+# (good at fresh-eyes review). Switch backends to taste.
 #
-# The coder uses Claude (good at implementation), the pr-reviewer
-# uses Codex (good at fresh-eyes review). Switch backends to taste.
-#
-# Import: curl -X POST -H 'Content-Type: application/x-yaml' --data-binary @coder-and-reviewer.yaml http://localhost:8080/import
+# Import: curl -H "Authorization: Bearer $AGENTS_API_TOKEN" -X POST -H 'Content-Type: application/x-yaml' --data-binary @coder-and-reviewer.yaml http://localhost:8080/import
 
 backends:
   claude:
@@ -31,33 +28,43 @@ skills:
     prompt: |
       Focus on behavioral regressions, missing tests, and weak assertions.
 
-agents:
+prompts:
   - name: coder
-    backend: claude
-    description: "Implements fixes and features; opens pull requests"
-    skills: [architect, testing]
-    prompt: |
+    content: |
       Implement the requested change end-to-end.
       Run the narrowest meaningful tests and open a pull request when the work is ready.
-    allow_prs: true
-    allow_dispatch: true            # pr-reviewer dispatches back here on REQUEST_CHANGES
-    can_dispatch: [pr-reviewer]     # coder dispatches the reviewer when the PR is ready
-
   - name: pr-reviewer
-    backend: codex
-    description: "Reviews pull requests for quality, test coverage, and correctness"
-    skills: [architect, testing]
-    prompt: |
+    content: |
       Review pull requests for correctness, regressions, and missing tests.
       Prefer concrete findings over broad summaries.
-    allow_dispatch: true            # coder dispatches the reviewer when its PR is ready
-    can_dispatch: [coder]           # reviewer dispatches the coder back on REQUEST_CHANGES
 
-repos:
-  - name: "owner/repo"
-    enabled: true
-    use:
-      - agent: coder
-        labels: ["coder:run"]
-      - agent: pr-reviewer
-        events: ["pull_request.opened", "pull_request.synchronize"]
+workspaces:
+  - id: default
+    name: Default
+    agents:
+      - name: coder
+        backend: claude
+        description: "Implements fixes and features; opens pull requests"
+        skills: [architect, testing]
+        prompt_ref: coder
+        scope_type: workspace
+        allow_prs: true
+        allow_dispatch: true
+        can_dispatch: [pr-reviewer]
+
+      - name: pr-reviewer
+        backend: codex
+        description: "Reviews pull requests for quality, test coverage, and correctness"
+        skills: [architect, testing]
+        prompt_ref: pr-reviewer
+        scope_type: workspace
+        allow_dispatch: true
+        can_dispatch: [coder]
+    repos:
+      - name: "owner/repo"
+        enabled: true
+        use:
+          - agent: coder
+            labels: ["coder:run"]
+          - agent: pr-reviewer
+            events: ["pull_request.opened", "pull_request.synchronize"]

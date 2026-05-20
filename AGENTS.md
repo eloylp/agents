@@ -4,7 +4,7 @@ Repo-specific guidance for any coding agent (Claude Code, Codex, Cursor, Aider, 
 
 ## What this repo is
 
-**agents** is a self-hosted Go daemon that dispatches AI CLIs (Claude Code, Codex, or any CLI pointed at a local LLM via the built-in proxy) to work on GitHub repos. Agents are declared in YAML, bound to repos via **labels**, **GitHub event subscriptions**, or **cron schedules**, and execute inside fresh ephemeral runner containers, which in turn use GitHub MCP tools first and `gh` fallback for complex local checkout/test/PR loops. The daemon itself is strictly read-only against GitHub.
+**agents** is a self-hosted Go daemon that dispatches AI CLIs (Claude Code, Codex, or any CLI pointed at a local LLM via the built-in proxy) to work on GitHub repos. The fleet lives in SQLite and is managed through the dashboard, REST, MCP, or YAML import/export. Agents are bound to repos via **labels**, **GitHub event subscriptions**, or **cron schedules**, and execute inside fresh ephemeral runner containers, which in turn use GitHub MCP tools first and `gh` fallback for complex local checkout/test/PR loops. The daemon itself is strictly read-only against GitHub.
 
 Agents can also invoke each other at runtime via the **reactive inter-agent dispatcher**: an agent returns `dispatch: [{agent, number, reason}]` in its response JSON, the daemon validates against per-agent whitelists and safety limits, then enqueues a synthetic `agent.dispatch` event that runs the target agent.
 
@@ -27,7 +27,7 @@ The supported runtime is Docker Compose, there is no local-binary workflow. On-d
 ## Code map (current)
 
 ```
-cmd/agents/main.go              # daemon entrypoint + --db / --import flags
+cmd/agents/main.go              # daemon entrypoint + --db / legacy --import flags
 internal/
   fleet/                        # domain entities: Workspace, Agent, Prompt, Skill, Guardrail, Repo, Backend, Binding (zero deps)
   config/                       # YAML parsing, defaults, validation (uses fleet)

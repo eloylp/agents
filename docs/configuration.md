@@ -2,7 +2,7 @@
 
 The agent fleet lives in a SQLite database that the daemon boots from. You manage it through the web dashboard at `/ui/` and the CRUD API. **`config.yaml` is optional**: it is a portable serialization of shareable fleet strategy, useful for one-time seeding, version-controlled fleet definitions, or moving a fleet between environments. The example file [`config.example.yaml`](../config.example.yaml) shows the shape.
 
-This page documents the schema, using YAML examples for clarity. Every field shown here also exists as a column in the SQLite store and as a JSON field on the CRUD endpoints; the three surfaces are interchangeable.
+This page documents the schema, using YAML examples for clarity. The same concepts are persisted in SQLite and exposed through JSON CRUD endpoints; field names are kept aligned where the wire shapes overlap.
 
 The import/export schema is split into reusable catalog domains and workspace-local
 runtime wiring:
@@ -363,10 +363,13 @@ The daemon always boots from the SQLite database. YAML is an optional import / e
 
 ```bash
 # Export the current fleet back to YAML at any time.
-curl -s http://localhost:8080/export > fleet.yaml
+curl -s -H "Authorization: Bearer $AGENTS_API_TOKEN" \
+  http://localhost:8080/export > fleet.yaml
 
 # Import a YAML payload into a running daemon (merges into the SQLite store).
-curl -X POST http://localhost:8080/import --data-binary @fleet.yaml
+curl -H "Authorization: Bearer $AGENTS_API_TOKEN" \
+  -X POST -H 'Content-Type: application/x-yaml' \
+  --data-binary @fleet.yaml http://localhost:8080/import
 ```
 
 The CRUD endpoints for `/workspaces`, `/prompts`, `/agents`, `/skills`, `/backends`, `/repos`, and `/guardrails` are always mounted and backed by the SQLite database. Workspace-scoped endpoints accept `?workspace=<id>` and default to `default` for compatibility. `agents`, `skills`, `backends`, `prompts`, and `guardrails` support partial update routes where documented; `PATCH /repos/{owner}/{repo}` is enabled-only; binding edits go through `/repos/{owner}/{repo}/bindings/{id}`, and full repo replacement goes through `POST /repos`. Catalog item routes (`/prompts/{id}`, `/skills/{id}`, `/guardrails/{id}`) use stable IDs because scoped catalog entries may share display names; legacy global names remain accepted as a compatibility fallback. Guardrails additionally support `POST /guardrails/{id}/reset` for built-ins. The daemon auto-reloads cron schedules after writes that affect runnable fleet state. Agent memory is stored in the same SQLite database and is scoped by workspace.

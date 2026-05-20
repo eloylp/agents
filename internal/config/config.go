@@ -1,11 +1,20 @@
 // Package config defines the agents daemon configuration schema and loader.
 //
-// The import/export config file is structured in fleet-owned top-level sections:
+// The startup Config type is the normalized in-memory shape the daemon runtime
+// consumes after importing from SQLite or a legacy top-level YAML file. The
+// public /export and /import HTTP/MCP surfaces use a workspace-aware YAML shape
+// owned by internal/daemon/config and then flatten it into this runtime shape.
+//
+// The normalized fleet-owned sections are:
 //
 //	backends, AI CLI/runtime definitions used by agents
+//	runtime, global runner image and container constraints
+//	workspaces, operational contexts and selected guardrails
+//	prompts, reusable prompt catalog entries
 //	skills, reusable guidance blocks referenced by agents
-//	agents, named capabilities (backend + skills + prompt)
-//	repos, wiring: which agents run on which repo, and when
+//	guardrails, reusable policy blocks selected by workspaces
+//	agents, workspace-local capabilities (backend + skills + prompt ref)
+//	repos, workspace-local wiring: which agents run on which repo, and when
 //
 // See config.example.yaml for a complete annotated example.
 //
@@ -30,7 +39,7 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 )
 
-// Config is the root configuration loaded from YAML.
+// Config is the root normalized runtime configuration.
 type Config struct {
 	Daemon     DaemonConfig             `yaml:"-"`
 	Backends   map[string]fleet.Backend `yaml:"backends,omitempty"`
@@ -80,7 +89,8 @@ type LogConfig struct {
 	Format string `yaml:"format"`
 }
 
-// HTTPConfig controls the daemon's HTTP server (webhooks + /status + /agents/run).
+// HTTPConfig controls the daemon's HTTP server: status, webhooks, auth, REST,
+// MCP, optional proxy, and the embedded UI.
 type HTTPConfig struct {
 	ListenAddr             string `yaml:"listen_addr"`
 	StatusPath             string `yaml:"status_path"`

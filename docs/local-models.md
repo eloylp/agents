@@ -231,9 +231,11 @@ Neither is a proxy bug. Both are Qwen-family disposition issues vs Claude. The g
 
 If your model runs on a separate box reached via Tailscale, userspace-networking mode relays through DERP and adds ~500 ms per request. Fine for agent workloads (the run is 5–30 s end-to-end anyway) but noticeable if you compare raw latency to local loopback.
 
-### `OAuth in ~/.claude.json` does NOT override `ANTHROPIC_BASE_URL`
+### Claude credentials do NOT override `ANTHROPIC_BASE_URL`
 
-We initially thought we needed `--bare` to skip OAuth and force env-based routing. Empirically, the current claude CLI honours `ANTHROPIC_BASE_URL` cleanly even when OAuth credentials are present in the mounted `~/.claude.json`. You get the full tool surface (32 tools) without `--bare`. Keep your arg list clean.
+We initially thought we needed `--bare` to skip OAuth and force env-based routing. Empirically, the current claude CLI honours `ANTHROPIC_BASE_URL` cleanly when the daemon injects it into the runner container for a backend with `local_model_url`. You get the full tool surface without `--bare`.
+
+The daemon does not mount host Claude home directories into runners. Provide Claude credentials through the daemon environment (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN`) and let the runner receive them per invocation.
 
 ### Long sub-agent tool loops can hit the proxy timeout
 
@@ -254,13 +256,15 @@ The Anthropic `cache_control: {type: "ephemeral"}` markers the `claude` CLI emit
 
 ### "Invalid API key" on every run
 
-`ANTHROPIC_BASE_URL` is not reaching the subprocess. Check that `local_model_url` is set on the `claude_local` backend in your fleet config, the daemon injects `ANTHROPIC_BASE_URL` from that field. `ANTHROPIC_API_KEY` must still be present in the container environment (any non-empty value works; the local endpoint ignores it). Set it in your `.env` file or compose `environment:` block.
+`ANTHROPIC_BASE_URL` is not reaching the subprocess. Check that `local_model_url` is set on the `claude_local` backend in your fleet config; the daemon injects `ANTHROPIC_BASE_URL` from that field into the ephemeral runner container. `ANTHROPIC_API_KEY` or another Claude credential must still be present in the daemon environment so it can be allowlisted into the runner.
 
-Verify with:
+Verify the daemon-side environment with:
 
 ```bash
 docker compose exec agents env | grep ANTHROPIC_
 ```
+
+Then run backend diagnostics from Config -> Backends and tools, or `POST /backends/discover`; diagnostics execute probes inside the configured runner image and catch missing runner-side env/setup.
 
 ### Model responds in `<think>...</think>` blocks and burns all tokens before producing output
 
