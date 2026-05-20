@@ -82,7 +82,9 @@ Codex supports two auth modes:
 - `CODEX_AUTH_JSON_BASE64`, preferred when you want Codex CLI usage to follow a ChatGPT/Plus/Pro/Enterprise subscription. Generate it from a machine where `codex login` works: configure `cli_auth_credentials_store = "file"` in `~/.codex/config.toml`, run `codex login`, then set `CODEX_AUTH_JSON_BASE64="$(base64 < ~/.codex/auth.json | tr -d '\n')"`.
 - `OPENAI_API_KEY`, for OpenAI Platform API-billed usage.
 
-The daemon does not mount `~/.codex` or any Codex credential volume. For each run, it passes allowlisted env vars into a fresh runner container; the runner setup decodes `CODEX_AUTH_JSON_BASE64` into `$CODEX_HOME/auth.json` when present, otherwise it logs in with `OPENAI_API_KEY`.
+When both variables are set, `CODEX_AUTH_JSON_BASE64` takes precedence for Codex runs and `OPENAI_API_KEY` is not used for `codex login`. The daemon does not mount `~/.codex` or any Codex credential volume. For each run, it passes allowlisted env vars into a fresh runner container; the runner setup decodes `CODEX_AUTH_JSON_BASE64` into `$CODEX_HOME/auth.json` when present, otherwise it logs in with `OPENAI_API_KEY`.
+
+`CODEX_AUTH_JSON_BASE64` is an env-based import of a mutable Codex session, not a daemon-managed credential store. If Codex refreshes `auth.json` inside a runner, the refreshed file is discarded when the ephemeral container exits. A later run may need a fresh `codex login` and regenerated `CODEX_AUTH_JSON_BASE64`, especially if Codex reports that the refresh token was already used. Concurrent Codex runs sharing the same imported auth file can also race on the same refresh chain. Use `OPENAI_API_KEY` when you need API-billed, stateless, parallel Codex automation; use `CODEX_AUTH_JSON_BASE64` when you explicitly want ChatGPT/Codex subscription auth and accept the refresh caveats.
 
 ## `runtime`
 
