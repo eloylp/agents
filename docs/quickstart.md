@@ -33,7 +33,7 @@ Production runs are env-driven. Put credentials in `.env`; they are injected int
 - `GITHUB_TOKEN`: used for GitHub MCP and `gh` fallback. Use `repo` scope minimum; add `workflow` if agents touch CI.
 - Git identity: set `AGENTS_GIT_USER_NAME` and `AGENTS_GIT_USER_EMAIL`; the runner configures them as `git config --global user.name/user.email` before each AI CLI starts.
 - Claude: preferred path, run `claude setup-token` locally and set the returned value as `CLAUDE_CODE_OAUTH_TOKEN`. API-key deployments may instead set `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`.
-- Codex: preferred for ChatGPT/Plus/Pro subscription access, run `codex login` locally with file-based credential storage and set `CODEX_AUTH_JSON_BASE64` from `~/.codex/auth.json`; alternatively set `OPENAI_API_KEY` for OpenAI Platform API-billed usage.
+- Codex: for ChatGPT/Plus/Pro subscription access, run `codex login` locally with file-based credential storage and set `CODEX_AUTH_JSON_BASE64` from `~/.codex/auth.json`; alternatively set `OPENAI_API_KEY` for OpenAI Platform API-billed usage. When both are set, `CODEX_AUTH_JSON_BASE64` wins for Codex runs.
 
 The one-liner above runs [`scripts/init-env.sh`](../scripts/init-env.sh), which generates `GITHUB_WEBHOOK_SECRET`, explains each credential, and prompts for the values interactively. To rerun it later after rotating credentials:
 
@@ -64,7 +64,9 @@ test -f ~/.codex/auth.json
 CODEX_AUTH_JSON_BASE64="$(base64 < ~/.codex/auth.json | tr -d '\n')"
 ```
 
-Copy that value into `.env`. Treat it like a password; it contains refreshable Codex credentials. The daemon does not mount your home directory or any Codex volume into runner containers. It passes the base64 value through the runner environment and materializes `auth.json` only inside each ephemeral runner container.
+Copy that value into `.env`. Treat it like a password; it contains Codex session credentials. The daemon does not mount your home directory or any Codex volume into runner containers. It passes the base64 value through the runner environment and materializes `auth.json` only inside each ephemeral runner container.
+
+Important caveat: Codex may refresh and rotate the auth file during a run. Because runner containers are ephemeral, the refreshed `auth.json` is discarded when the run ends. If a later run reports that the refresh token was already used, run `codex login` again, regenerate `CODEX_AUTH_JSON_BASE64`, update `.env`, and restart the daemon. Concurrent Codex runs that share the same `CODEX_AUTH_JSON_BASE64` can also race on the same refresh chain; use `OPENAI_API_KEY` for API-billed automation when you need parallel Codex runs without ChatGPT-session refresh caveats.
 
 Then open `http://localhost:8080/`, bootstrap the first admin user, and use Config -> Runtime / Backends diagnostics to verify the runner image, credentials, and backend readiness. Fleet configuration (workspaces, agents, prompts, skills, repos, bindings, webhooks) lives in the dashboard.
 
