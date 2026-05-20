@@ -2,15 +2,15 @@
 
 ## Project Overview
 
-**agents** is a self-hosted Go daemon that dispatches AI CLIs (Claude, Codex) to work on GitHub repos. Agents are configured declaratively in YAML and bound to repos via labels, GitHub event subscriptions (event-driven), and/or cron schedules (autonomous). GitHub operations happen through the AI backend inside a fresh runner container: GitHub MCP tools are preferred, with `gh` available as fallback for complex local checkout/test/PR loops. The daemon itself is read-only against GitHub. The daemon also ships a built-in Anthropic↔OpenAI translation proxy so the `claude` CLI can be routed through any OpenAI-compatible backend (local `llama.cpp`, hosted Qwen, vLLM, etc.), see [`docs/local-models.md`](docs/local-models.md). Agents can additionally invoke each other at runtime via the reactive inter-agent dispatcher (see Architecture Notes).
+**agents** is a self-hosted Go daemon that dispatches AI CLIs (Claude, Codex) to work on GitHub repos. The fleet lives in SQLite and is managed through the dashboard, REST, MCP, or YAML import/export; YAML is a portable strategy format, not the only configuration path. Agents are bound to repos via labels, GitHub event subscriptions (event-driven), and/or cron schedules (autonomous). GitHub operations happen through the AI backend inside a fresh runner container: GitHub MCP tools are preferred, with `gh` available as fallback for complex local checkout/test/PR loops. The daemon itself is read-only against GitHub. The daemon also ships a built-in Anthropic↔OpenAI translation proxy so the `claude` CLI can be routed through any OpenAI-compatible backend (local `llama.cpp`, hosted Qwen, vLLM, etc.), see [`docs/local-models.md`](docs/local-models.md). Agents can additionally invoke each other at runtime via the reactive inter-agent dispatcher (see Architecture Notes).
 
 ## Directory Structure
 
 ```
-cmd/agents/main.go          # Daemon entry point + --db / --import flags
+cmd/agents/main.go          # Daemon entry point + --db / legacy --import flags
 internal/
   fleet/                    # Domain entities: Workspace, Agent, Prompt, Skill, Guardrail, Repo, Backend, Binding (zero deps)
-  config/                   # YAML parsing, prompt/skill file resolution, validation (uses fleet)
+  config/                   # Normalized runtime config types, YAML parsing, defaults, validation (uses fleet)
   ai/                       # Prompt composition + command-based CLI runner (per-backend env)
   anthropic_proxy/          # Built-in Anthropic↔OpenAI Chat Completions translation proxy
   observe/                  # Observability store: events, traces, dispatch graph, SSE hubs

@@ -28,7 +28,7 @@ func run() error {
 	_ = godotenv.Load()
 
 	dbPath := flag.String("db", "agents.db", "path to SQLite database file")
-	importPath := flag.String("import", "", "YAML config file to import into the database")
+	importPath := flag.String("import", "", "legacy normalized YAML config file to import into the database; prefer POST /import for workspace-aware exports")
 	flag.Parse()
 
 	cfg, st, err := daemon.LoadConfig(ctx, *dbPath, *importPath, os.Stderr)

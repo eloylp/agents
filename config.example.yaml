@@ -33,7 +33,7 @@
 #
 # To re-seed a running daemon, POST this file at /import:
 #
-#   curl -X POST -H 'Content-Type: application/x-yaml' \
+#   curl -H "Authorization: Bearer $AGENTS_API_TOKEN" -X POST -H 'Content-Type: application/x-yaml' \
 #     --data-binary @config.yaml http://localhost:8080/import
 #
 # This example is intentionally small enough to read in one pass. Start here,

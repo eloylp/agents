@@ -629,11 +629,13 @@ func (d *Daemon) handleAgentsRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // LoadConfig is the daemon's startup config-load helper. It opens the
-// SQLite database, optionally imports a YAML file into it, runs auto-
-// discovery for AI backends if none are configured, and returns the
-// validated *config.Config plus the data-access store. The caller owns
-// and closes the store. Status / import progress messages are written
-// to msg (typically os.Stderr); pass nil to silence them.
+// SQLite database, optionally imports a legacy normalized YAML file into it,
+// runs auto-discovery for AI backends if none are configured, and returns the
+// validated *config.Config plus the data-access store. The public
+// workspace-aware export/import shape is handled by internal/daemon/config
+// after startup via POST /import or MCP import_config. The caller owns and
+// closes the store. Status / import progress messages are written to msg
+// (typically os.Stderr); pass nil to silence them.
 //
 // An empty database boots cleanly with built-in defaults, no YAML
 // import is required. Operators configure the fleet through the
