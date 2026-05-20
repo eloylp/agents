@@ -7,7 +7,7 @@ import RepoFilter from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { AuthTokenSettings } from '@/lib/auth'
 import { budgetScopeDescription, budgetScopeLabel, budgetScopeOptions, isGlobalSimpleBudgetScope } from '@/lib/budget-copy'
-import { useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
+import { defaultWorkspaceID, useSelectedWorkspace, withWorkspace } from '@/lib/workspace'
 
 type Config = Record<string, unknown>
 
@@ -263,7 +263,7 @@ function JsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
 }
 
 export default function ConfigPage() {
-  const { workspace } = useSelectedWorkspace()
+  const { workspace, workspaces: workspaceCatalog } = useSelectedWorkspace()
   const [orphanFocus, setOrphanFocus] = useState(false)
   const [config, setConfig] = useState<Config | null>(null)
   const [loading, setLoading] = useState(true)
@@ -294,6 +294,8 @@ export default function ConfigPage() {
   const [settingsLocalModelURL, setSettingsLocalModelURL] = useState('')
   const [runtime, setRuntime] = useState<RuntimeSettings | null>(null)
   const [runtimeForm, setRuntimeForm] = useState<RuntimeSettings>({ runner_image: '', constraints: {} })
+  const [selectedRuntimeWorkspace, setSelectedRuntimeWorkspace] = useState('')
+  const [runtimeWorkspaceNotice, setRuntimeWorkspaceNotice] = useState('')
   const [workspaceRunnerImage, setWorkspaceRunnerImage] = useState('')
   const [runtimeLoading, setRuntimeLoading] = useState(false)
   const [runtimeSaving, setRuntimeSaving] = useState(false)
@@ -399,8 +401,34 @@ export default function ConfigPage() {
       })
   }
 
-  const workspaces = ((config?.workspaces as WorkspaceRuntime[] | undefined) ?? [])
-  const selectedWorkspaceRuntime = workspaces.find(w => w.id === workspace)
+  const configWorkspaces = ((config?.workspaces as WorkspaceRuntime[] | undefined) ?? [])
+  const runtimeWorkspaces = configWorkspaces.length > 0 ? configWorkspaces : (workspaceCatalog as WorkspaceRuntime[])
+  const selectedWorkspaceRuntime = runtimeWorkspaces.find(w => w.id === selectedRuntimeWorkspace)
+  const selectedRuntimeWorkspaceLabel = selectedWorkspaceRuntime?.name || selectedRuntimeWorkspace || defaultWorkspaceID
+
+  useEffect(() => {
+    if (runtimeWorkspaces.length === 0) {
+      if (!selectedRuntimeWorkspace) {
+        setSelectedRuntimeWorkspace(workspace || defaultWorkspaceID)
+      }
+      return
+    }
+
+    const hasSelection = runtimeWorkspaces.some(w => w.id === selectedRuntimeWorkspace)
+    if (hasSelection) return
+
+    if (selectedRuntimeWorkspace) {
+      const next = runtimeWorkspaces[0]
+      setSelectedRuntimeWorkspace(next.id)
+      setRuntimeWorkspaceNotice(`Workspace ${selectedRuntimeWorkspace} is no longer available. Switched to ${next.name || next.id}.`)
+      return
+    }
+
+    const persisted = runtimeWorkspaces.find(w => w.id === workspace)
+    const defaultWorkspace = runtimeWorkspaces.find(w => w.id === defaultWorkspaceID)
+    const next = persisted ?? defaultWorkspace ?? runtimeWorkspaces[0]
+    setSelectedRuntimeWorkspace(next.id)
+  }, [runtimeWorkspaces, selectedRuntimeWorkspace, workspace])
 
   const loadRuntime = () => {
     setRuntimeLoading(true)
@@ -431,7 +459,7 @@ export default function ConfigPage() {
 
   useEffect(() => {
     setWorkspaceRunnerImage(selectedWorkspaceRuntime?.runner_image ?? '')
-  }, [workspace, selectedWorkspaceRuntime?.runner_image])
+  }, [selectedRuntimeWorkspace, selectedWorkspaceRuntime?.runner_image])
 
   const updateRuntimeConstraint = (key: keyof RuntimeConstraints, value: string) => {
     setRuntimeForm(prev => {
@@ -477,7 +505,7 @@ export default function ConfigPage() {
     setRuntimeSaving(true)
     setRuntimeError('')
     setRuntimeStatus('')
-    fetch(`/workspaces/${encodeURIComponent(workspace)}/runtime`, {
+    fetch(`/workspaces/${encodeURIComponent(selectedRuntimeWorkspace)}/runtime`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ runner_image: workspaceRunnerImage }),
@@ -490,10 +518,13 @@ export default function ConfigPage() {
         setConfig(prev => {
           if (!prev) return prev
           const current = ((prev.workspaces as WorkspaceRuntime[] | undefined) ?? [])
-          return { ...prev, workspaces: current.map(w => w.id === data.id ? data : w) }
+          const next = current.some(w => w.id === data.id)
+            ? current.map(w => w.id === data.id ? data : w)
+            : current.concat(data)
+          return { ...prev, workspaces: next }
         })
         setWorkspaceRunnerImage(data.runner_image ?? '')
-        setRuntimeStatus('Workspace runner override saved.')
+        setRuntimeStatus(`Workspace runner override saved for ${data.name || data.id}.`)
         setRuntimeSaving(false)
       })
       .catch((e: unknown) => {
@@ -985,11 +1016,30 @@ export default function ConfigPage() {
               <div>
                 <h3 style={{ fontSize: '0.95rem', color: 'var(--text-heading)', marginBottom: '0.25rem' }}>Workspace override</h3>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.825rem' }}>
-                  {selectedWorkspaceRuntime?.name ?? workspace} uses the global runner image unless an override is set.
+                  {selectedRuntimeWorkspaceLabel} uses the global runner image unless an override is set.
                 </p>
               </div>
+              {runtimeWorkspaceNotice && <div style={{ color: 'var(--text-muted)', fontSize: '0.825rem' }}>{runtimeWorkspaceNotice}</div>}
               <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
-                Runner image for this workspace
+                Workspace
+                <select
+                  value={selectedRuntimeWorkspace}
+                  onChange={e => {
+                    setRuntimeWorkspaceNotice('')
+                    setSelectedRuntimeWorkspace(e.target.value)
+                  }}
+                  disabled={runtimeWorkspaces.length === 0}
+                  style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text)', padding: '8px' }}
+                >
+                  {runtimeWorkspaces.length === 0 && <option value={selectedRuntimeWorkspace}>{selectedRuntimeWorkspace || defaultWorkspaceID}</option>}
+                  {runtimeWorkspaces.map(w => <option key={w.id} value={w.id}>{w.name || w.id}</option>)}
+                </select>
+              </label>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: 0 }}>
+                Empty uses {runtime?.runner_image || 'the global runner image'} for {selectedRuntimeWorkspaceLabel}.
+              </p>
+              <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text)', fontSize: '0.875rem' }}>
+                Runner image for {selectedRuntimeWorkspaceLabel}
                 <input
                   value={workspaceRunnerImage}
                   onChange={e => setWorkspaceRunnerImage(e.target.value)}
@@ -999,10 +1049,10 @@ export default function ConfigPage() {
               </label>
               <button
                 onClick={saveWorkspaceRuntime}
-                disabled={runtimeSaving || runtimeLoading}
+                disabled={runtimeSaving || runtimeLoading || !selectedRuntimeWorkspace}
                 style={{ justifySelf: 'start', background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text)', padding: '7px 14px', borderRadius: '6px', cursor: runtimeSaving ? 'default' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
               >
-                Save workspace override
+                Save override for {selectedRuntimeWorkspaceLabel}
               </button>
             </div>
           </div>
