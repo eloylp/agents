@@ -126,4 +126,4 @@ describe('<DashboardShell />', () => {
 
     expect(container.querySelector('.shell-sidebar.open')).toBeInTheDocument()
   })
-}
+})

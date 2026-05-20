@@ -209,6 +209,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
         .shell-overlay { display: none; }
         .shell-nav-link:hover { text-decoration: none; background: var(--accent-bg); color: var(--accent); }
         @media (max-width: 860px) {
+          /* Mobile uses the topbar menu button; desktop keeps the control in the sidebar rail. */
           .shell-sidebar { width: var(--sidebar-width); transform: translateX(-102%); transition: transform 160ms ease; }
           .shell-sidebar.open { transform: translateX(0); }
           .dashboard-shell.nav-collapsed .shell-sidebar { width: var(--sidebar-width); visibility: visible; }
