@@ -108,16 +108,7 @@ For building AI applications, default to the latest capable model.`
 }
 
 func TestDiagnoseGitHubCLIInRuntimeUsesRunnerContainer(t *testing.T) {
-	oldGH, hadGH := os.LookupEnv("GH_TOKEN")
-	t.Cleanup(func() {
-		if hadGH {
-			_ = os.Setenv("GH_TOKEN", oldGH)
-		} else {
-			_ = os.Unsetenv("GH_TOKEN")
-		}
-	})
-	_ = os.Unsetenv("GH_TOKEN")
-	t.Setenv("GITHUB_TOKEN", "test-token")
+	setGitHubTokenFallbackEnv(t)
 
 	var specs []runtimeexec.ContainerSpec
 	runner := fakeRuntimeRunner{run: func(spec runtimeexec.ContainerSpec) (int, string, string, error) {
@@ -163,7 +154,7 @@ func TestDiagnoseGitHubCLIInRuntimeUsesRunnerContainer(t *testing.T) {
 }
 
 func TestCheckGitHubMCPInRuntimeUsesBackendSetup(t *testing.T) {
-	t.Setenv("GITHUB_TOKEN", "test-token")
+	setGitHubTokenFallbackEnv(t)
 
 	var got runtimeexec.ContainerSpec
 	runner := fakeRuntimeRunner{run: func(spec runtimeexec.ContainerSpec) (int, string, string, error) {
@@ -182,6 +173,20 @@ func TestCheckGitHubMCPInRuntimeUsesBackendSetup(t *testing.T) {
 	if !slices.Contains(got.Env, "GH_TOKEN=test-token") {
 		t.Fatalf("Env missing GH_TOKEN fallback: %v", got.Env)
 	}
+}
+
+func setGitHubTokenFallbackEnv(t *testing.T) {
+	t.Helper()
+	oldGH, hadGH := os.LookupEnv("GH_TOKEN")
+	t.Cleanup(func() {
+		if hadGH {
+			_ = os.Setenv("GH_TOKEN", oldGH)
+		} else {
+			_ = os.Unsetenv("GH_TOKEN")
+		}
+	})
+	_ = os.Unsetenv("GH_TOKEN")
+	t.Setenv("GITHUB_TOKEN", "test-token")
 }
 
 type fakeRuntimeRunner struct {
