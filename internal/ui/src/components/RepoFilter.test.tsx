@@ -68,6 +68,13 @@ describe('<RepoFilter />', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
+  it('evicts a stale selected value when there are zero repos', async () => {
+    mockReposResponse([])
+    const onChange = vi.fn()
+    render(<RepoFilter selected="owner/old" onChange={onChange} />)
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(''))
+  })
+
   it('renders nothing when there is a single repo (no meaningful choice to offer)', async () => {
     mockReposResponse(['owner/solo'])
     const onChange = vi.fn()

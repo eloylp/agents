@@ -23,20 +23,27 @@ export function useRepoFilter(): [string, (r: string) => void] {
 
 export default function RepoFilter({ selected, onChange, workspace }: { selected: string; onChange: (r: string) => void; workspace?: string }) {
   const [repos, setRepos] = useState<string[]>([])
+  const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
+    setLoaded(false)
     fetch(workspace ? withWorkspace('/repos', workspace) : '/repos')
       .then(r => r.ok ? r.json() : [])
-      .then((data: { name: string }[]) => setRepos((data ?? []).map(r => r.name)))
-      .catch(() => {})
+      .then((data: { name: string }[]) => {
+        setRepos((data ?? []).map(r => r.name))
+        setLoaded(true)
+      })
+      .catch(() => setLoaded(true))
   }, [workspace])
 
-  // Evict stale localStorage value when the stored repo no longer exists
+  // Evict stale localStorage values after the workspace repo list loads. This
+  // matters when switching to a workspace with no repos: the filter is hidden,
+  // but a stale selected repo would still filter every graph node out.
   useEffect(() => {
-    if (repos.length > 0 && selected && !repos.includes(selected)) {
+    if (loaded && selected && !repos.includes(selected)) {
       onChange('')
     }
-  }, [repos, selected, onChange])
+  }, [loaded, repos, selected, onChange])
 
   // Hide the filter when there's nothing to choose between (0 or 1 repos).
   // Single-repo installs shouldn't carry extra chrome for a filter that has no effect.
