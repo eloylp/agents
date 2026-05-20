@@ -139,38 +139,48 @@ func resolveWorkspaceGuardrailRef(q querier, workspaceID, ref string) (string, e
 	ref = fleet.NormalizeGuardrailName(ref)
 	workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
 	rows, err := q.Query(`
-		SELECT id
+		SELECT id, ref, name
 		FROM guardrails
 		WHERE repo IS NULL
-		  AND (id = ? OR name = ?)
+		  AND (id = ? OR ref = ? OR name = ?)
 		  AND (workspace_id IS NULL OR workspace_id = ?)
 		ORDER BY
-			CASE WHEN id = ? THEN 0 ELSE 1 END,
+			CASE WHEN id = ? OR ref = ? THEN 0 ELSE 1 END,
 			CASE WHEN workspace_id IS NULL THEN 0 ELSE 1 END`,
-		ref, ref, workspaceID, ref,
+		ref, ref, ref, workspaceID, ref, ref,
 	)
 	if err != nil {
 		return "", err
 	}
 	defer rows.Close()
-	var ids []string
+	type match struct {
+		id    string
+		ref   string
+		name  string
+		exact bool
+	}
+	var matches []match
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var m match
+		if err := rows.Scan(&m.id, &m.ref, &m.name); err != nil {
 			return "", err
 		}
-		ids = append(ids, id)
+		m.exact = m.id == ref || m.ref == ref
+		matches = append(matches, m)
 	}
 	if err := rows.Err(); err != nil {
 		return "", err
 	}
-	if len(ids) == 0 {
+	if len(matches) == 0 {
 		return "", sql.ErrNoRows
 	}
-	if len(ids) > 1 && ids[0] != ref {
+	if matches[0].exact {
+		return matches[0].id, nil
+	}
+	if len(matches) > 1 {
 		return "", fmt.Errorf("ambiguous guardrail %q in workspace %q; use guardrail id", ref, workspaceID)
 	}
-	return ids[0], nil
+	return matches[0].id, nil
 }
 
 func importReferencedWorkspaces(tx *sql.Tx, agents []fleet.Agent, repos []fleet.Repo) error {
@@ -203,6 +213,46 @@ func importReferencedWorkspaces(tx *sql.Tx, agents []fleet.Agent, repos []fleet.
 		}
 		if inserted, err := res.RowsAffected(); err != nil {
 			return fmt.Errorf("store import: check workspace %s insert result: %w", id, err)
+		} else if inserted > 0 {
+			if err := seedWorkspaceGuardrails(tx, id); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func importReferencedCatalogWorkspaces(tx *sql.Tx, prompts []fleet.Prompt, skills map[string]fleet.Skill, guardrails []fleet.Guardrail) error {
+	seen := map[string]struct{}{}
+	for _, p := range prompts {
+		if id := strings.TrimSpace(p.WorkspaceID); id != "" {
+			seen[fleet.NormalizeWorkspaceID(id)] = struct{}{}
+		}
+	}
+	for _, s := range skills {
+		if id := strings.TrimSpace(s.WorkspaceID); id != "" {
+			seen[fleet.NormalizeWorkspaceID(id)] = struct{}{}
+		}
+	}
+	for _, g := range guardrails {
+		if id := strings.TrimSpace(g.WorkspaceID); id != "" {
+			seen[fleet.NormalizeWorkspaceID(id)] = struct{}{}
+		}
+	}
+	for _, id := range slices.Sorted(maps.Keys(seen)) {
+		if err := validateEntityID(id); err != nil {
+			return fmt.Errorf("store import: workspace %q: %w", id, err)
+		}
+		res, err := tx.Exec(`
+			INSERT OR IGNORE INTO workspaces (id, name, description, runner_image, updated_at)
+			VALUES (?, ?, '', '', datetime('now'))`,
+			id, workspaceNameFromID(id),
+		)
+		if err != nil {
+			return fmt.Errorf("store import: ensure catalog workspace %s: %w", id, err)
+		}
+		if inserted, err := res.RowsAffected(); err != nil {
+			return fmt.Errorf("store import: check catalog workspace %s insert result: %w", id, err)
 		} else if inserted > 0 {
 			if err := seedWorkspaceGuardrails(tx, id); err != nil {
 				return err

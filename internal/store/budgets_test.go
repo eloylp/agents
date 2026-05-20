@@ -15,6 +15,21 @@ func budgetTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	if _, err := db.Exec(`
+		INSERT OR IGNORE INTO workspaces(id, name) VALUES('team-a', 'Team A');
+		INSERT INTO backends(name, command, models, healthy, timeout_seconds, max_prompt_chars)
+			VALUES('claude', 'claude', '[]', 1, 600, 12000)
+			ON CONFLICT(name) DO NOTHING;
+		INSERT OR IGNORE INTO prompts(id, ref, name, content) VALUES('prompt_internal_coder', 'prompt_coder', 'coder', 'test prompt');
+		INSERT OR IGNORE INTO repos(workspace_id, name, enabled) VALUES('default', 'owner/repo', 1);
+		INSERT OR IGNORE INTO repos(workspace_id, name, enabled) VALUES('team-a', 'owner/repo', 1);
+		INSERT OR IGNORE INTO agents(id, workspace_id, name, backend, prompt_id, description)
+			VALUES('agent_default_coder', 'default', 'coder', 'claude', 'prompt_internal_coder', 'coder');
+		INSERT OR IGNORE INTO agents(id, workspace_id, name, backend, prompt_id, description)
+			VALUES('agent_team_coder', 'team-a', 'coder', 'claude', 'prompt_internal_coder', 'coder');
+	`); err != nil {
+		t.Fatalf("seed budget refs: %v", err)
+	}
 	t.Cleanup(func() { db.Close() })
 	return db
 }
@@ -43,7 +58,7 @@ func insertWorkspaceTraceUsage(t *testing.T, db *sql.DB, workspaceID, spanID, ag
 func TestWorkspaceBudgetsAndLeaderboardFilter(t *testing.T) {
 	t.Parallel()
 	db := budgetTestDB(t)
-	if _, err := db.Exec(`INSERT INTO workspaces(id, name) VALUES('team-a', 'Team A')`); err != nil {
+	if _, err := db.Exec(`INSERT OR IGNORE INTO workspaces(id, name) VALUES('team-a', 'Team A')`); err != nil {
 		t.Fatalf("insert workspace: %v", err)
 	}
 	if _, err := store.CreateTokenBudget(db, store.TokenBudget{

@@ -57,7 +57,7 @@ backends:
 # ──────────────────────────────────────────────
 # skills, reusable guidance blocks
 #
-# Each map key is the stable skill id agents should reference. The optional
+# Each map key is the stable public skill ref agents should reference. The optional
 # name field is display text and may repeat across global, workspace, and repo
 # scopes; imports accept display-name references only when visible and
 # unambiguous. Skill prompts are inline strings, keep them in this YAML file or

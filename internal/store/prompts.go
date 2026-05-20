@@ -21,8 +21,11 @@ func importPrompts(tx *sql.Tx, prompts []fleet.Prompt) error {
 		if p.WorkspaceID == "" && p.Repo != "" {
 			return fmt.Errorf("store import: prompt %q repo scope requires workspace_id", p.Name)
 		}
+		if err := ensureCatalogScope(tx, "prompt", p.WorkspaceID, p.Repo); err != nil {
+			return err
+		}
 		if p.ID == "" {
-			id, err := derivedPromptID(p)
+			id, err := derivedPromptRef(p)
 			if err != nil {
 				return fmt.Errorf("store import: prompt %q: %w", p.Name, err)
 			}
@@ -34,17 +37,24 @@ func importPrompts(tx *sql.Tx, prompts []fleet.Prompt) error {
 		if err := validateEntityID(p.ID); err != nil {
 			return fmt.Errorf("store import: prompt %q: %w", p.Name, err)
 		}
+		internalID, _, err := resolveCatalogID(tx, "prompts", p.ID)
+		if errors.Is(err, sql.ErrNoRows) {
+			internalID, err = newCatalogInternalID("prompt_")
+		}
+		if err != nil {
+			return fmt.Errorf("store import: prompt %q: resolve id: %w", p.Name, err)
+		}
 		if _, err := tx.Exec(`
-			INSERT INTO prompts (id, workspace_id, repo, name, description, content, updated_at)
-			VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, datetime('now'))
-			ON CONFLICT(id) DO UPDATE SET
+			INSERT INTO prompts (id, ref, workspace_id, repo, name, description, content, updated_at)
+			VALUES (?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, datetime('now'))
+			ON CONFLICT(ref) DO UPDATE SET
 				workspace_id = excluded.workspace_id,
 				repo = excluded.repo,
 				name = excluded.name,
 				description = excluded.description,
 				content = excluded.content,
 				updated_at = datetime('now')`,
-			p.ID, p.WorkspaceID, p.Repo, p.Name, p.Description, p.Content,
+			internalID, p.ID, p.WorkspaceID, p.Repo, p.Name, p.Description, p.Content,
 		); err != nil {
 			if isUniqueConstraint(err) {
 				return fmt.Errorf("store import: prompt name %q is already used by another prompt in that scope", p.Name)
@@ -55,7 +65,7 @@ func importPrompts(tx *sql.Tx, prompts []fleet.Prompt) error {
 	return nil
 }
 
-func derivedPromptID(p fleet.Prompt) (string, error) {
+func derivedPromptRef(p fleet.Prompt) (string, error) {
 	return derivedCatalogID("prompt_", p.WorkspaceID, p.Repo, p.Name)
 }
 
@@ -64,7 +74,7 @@ func queryPromptByScopeName(q querier, workspaceID, repo, name string) *sql.Row 
 }
 
 func loadPrompts(db querier, cfg *config.Config) error {
-	rows, err := db.Query("SELECT id,COALESCE(workspace_id, ''),COALESCE(repo, ''),name,description,content FROM prompts ORDER BY COALESCE(workspace_id, ''), COALESCE(repo, ''), name")
+	rows, err := db.Query("SELECT ref,COALESCE(workspace_id, ''),COALESCE(repo, ''),name,description,content FROM prompts ORDER BY COALESCE(workspace_id, ''), COALESCE(repo, ''), name")
 	if err != nil {
 		return fmt.Errorf("store load: query prompts: %w", err)
 	}
@@ -81,8 +91,8 @@ func loadPrompts(db querier, cfg *config.Config) error {
 
 // ──── Prompts ───────────────────────────────────────────────────────────────────────────────────────
 
-// UpsertPrompt inserts or replaces one prompt catalog entry. Existing rows keep
-// their stable id while content, description, and scope fields are updated.
+// UpsertPrompt inserts or replaces one prompt catalog entry. Prompt.ID is the
+// public ref; the database primary key is an opaque internal id.
 func UpsertPrompt(db *sql.DB, p fleet.Prompt) (fleet.Prompt, error) {
 	tx, err := db.Begin()
 	if err != nil {
@@ -114,40 +124,49 @@ func UpsertPromptTx(tx *sql.Tx, p fleet.Prompt) (fleet.Prompt, error) {
 	if p.WorkspaceID == "" && p.Repo != "" {
 		return fleet.Prompt{}, &ErrValidation{Msg: "prompt repo scope requires workspace_id"}
 	}
+	if err := ensureCatalogScope(tx, "prompt", p.WorkspaceID, p.Repo); err != nil {
+		return fleet.Prompt{}, err
+	}
 
-	var existingID string
+	var internalID, publicRef string
 	var err error
 	if p.ID != "" {
-		err = tx.QueryRow("SELECT id FROM prompts WHERE id=?", p.ID).Scan(&existingID)
+		internalID, publicRef, err = resolveCatalogID(tx, "prompts", p.ID)
 	} else {
-		err = queryPromptByScopeName(tx, p.WorkspaceID, p.Repo, p.Name).Scan(&existingID)
+		err = queryCatalogRefByScopeName(tx, "prompts", p.WorkspaceID, p.Repo, p.Name).Scan(&internalID, &publicRef)
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: read existing: %w", p.Name, err)
 	}
-	if existingID != "" {
-		p.ID = existingID
+	if publicRef != "" {
+		p.ID = publicRef
 	} else if p.ID == "" {
-		id, err := derivedPromptID(p)
+		id, err := derivedPromptRef(p)
 		if err != nil {
 			return fleet.Prompt{}, &ErrValidation{Msg: fmt.Sprintf("prompt %q: %v", p.Name, err)}
 		}
 		p.ID = id
 	}
+	if internalID == "" {
+		internalID, err = newCatalogInternalID("prompt_")
+		if err != nil {
+			return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: %w", p.Name, err)
+		}
+	}
 	if err := validateEntityID(p.ID); err != nil {
 		return fleet.Prompt{}, &ErrValidation{Msg: fmt.Sprintf("prompt %q: %v", p.Name, err)}
 	}
 	if _, err := tx.Exec(`
-		INSERT INTO prompts (id, workspace_id, repo, name, description, content, updated_at)
-		VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, datetime('now'))
-		ON CONFLICT(id) DO UPDATE SET
+		INSERT INTO prompts (id, ref, workspace_id, repo, name, description, content, updated_at)
+		VALUES (?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, datetime('now'))
+		ON CONFLICT(ref) DO UPDATE SET
 			workspace_id = excluded.workspace_id,
 			repo = excluded.repo,
 			name = excluded.name,
 			description = excluded.description,
 			content = excluded.content,
 			updated_at = datetime('now')`,
-		p.ID, p.WorkspaceID, p.Repo, p.Name, p.Description, p.Content,
+		internalID, p.ID, p.WorkspaceID, p.Repo, p.Name, p.Description, p.Content,
 	); err != nil {
 		if isUniqueConstraint(err) {
 			return fleet.Prompt{}, &ErrConflict{Msg: fmt.Sprintf("prompt name %q is already used by another prompt in that scope", p.Name)}
@@ -167,9 +186,9 @@ func ReadPrompt(db *sql.DB, ref string) (fleet.Prompt, error) {
 	}
 	var p fleet.Prompt
 	row := db.QueryRow(`
-		SELECT id, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, description, content
+		SELECT ref, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, description, content
 		FROM prompts
-		WHERE id=?`, ref)
+		WHERE id=? OR ref=?`, ref, ref)
 	err := row.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content)
 	if err == nil {
 		return p, nil
@@ -179,7 +198,7 @@ func ReadPrompt(db *sql.DB, ref string) (fleet.Prompt, error) {
 	}
 	name := fleet.NormalizePromptName(ref)
 	row = db.QueryRow(`
-		SELECT id, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, description, content
+		SELECT ref, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, description, content
 		FROM prompts
 		WHERE workspace_id IS NULL AND repo IS NULL AND name=?`, name)
 	err = row.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content)
@@ -216,7 +235,7 @@ func DeletePromptTx(tx *sql.Tx, ref string) error {
 		return &ErrValidation{Msg: "prompt id is required"}
 	}
 	var id string
-	err := tx.QueryRow("SELECT id FROM prompts WHERE id=?", ref).Scan(&id)
+	err := tx.QueryRow("SELECT id FROM prompts WHERE id=? OR ref=?", ref, ref).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		name := fleet.NormalizePromptName(ref)
 		err = queryPromptByScopeName(tx, "", "", name).Scan(&id)

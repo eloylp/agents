@@ -153,6 +153,11 @@ func DeleteWorkspaceTx(tx *sql.Tx, workspace string) error {
 	if agents > 0 || repos > 0 {
 		return &ErrConflict{Msg: fmt.Sprintf("workspace %q is referenced by %d agent(s) and %d repo(s)", id, agents, repos)}
 	}
+	if refs, err := workspaceConfigReferences(tx, id); err != nil {
+		return err
+	} else if len(refs) > 0 {
+		return &ErrConflict{Msg: fmt.Sprintf("workspace %q is referenced by %s", id, strings.Join(refs, ", "))}
+	}
 	res, err := tx.Exec("DELETE FROM workspaces WHERE id=?", id)
 	if err != nil {
 		return fmt.Errorf("store: delete workspace %s: %w", id, err)
@@ -163,6 +168,29 @@ func DeleteWorkspaceTx(tx *sql.Tx, workspace string) error {
 		return &ErrNotFound{Msg: fmt.Sprintf("workspace %q not found", workspace)}
 	}
 	return nil
+}
+
+func workspaceConfigReferences(q querier, workspaceID string) ([]string, error) {
+	checks := []struct {
+		label string
+		sql   string
+	}{
+		{"prompts", "SELECT COUNT(*) FROM prompts WHERE workspace_id=?"},
+		{"skills", "SELECT COUNT(*) FROM skills WHERE workspace_id=?"},
+		{"guardrails", "SELECT COUNT(*) FROM guardrails WHERE workspace_id=?"},
+		{"token budgets", "SELECT COUNT(*) FROM token_budgets WHERE workspace_id=?"},
+	}
+	var refs []string
+	for _, check := range checks {
+		var n int
+		if err := q.QueryRow(check.sql, workspaceID).Scan(&n); err != nil {
+			return nil, fmt.Errorf("store: check workspace %s references: %w", check.label, err)
+		}
+		if n > 0 {
+			refs = append(refs, fmt.Sprintf("%d %s", n, check.label))
+		}
+	}
+	return refs, nil
 }
 
 // ReadWorkspaceGuardrails returns a workspace's selected guardrail
@@ -177,10 +205,11 @@ func ReadWorkspaceGuardrails(db *sql.DB, workspace string) ([]fleet.WorkspaceGua
 
 func readWorkspaceGuardrails(db querier, workspaceID string) ([]fleet.WorkspaceGuardrailRef, error) {
 	rows, err := db.Query(`
-		SELECT workspace_id, guardrail_name, position, enabled
-		FROM workspace_guardrails
-		WHERE workspace_id = ?
-		ORDER BY position ASC, guardrail_name ASC`, workspaceID)
+		SELECT wg.workspace_id, g.ref, wg.position, wg.enabled
+		FROM workspace_guardrails wg
+		JOIN guardrails g ON g.id = wg.guardrail_name
+		WHERE wg.workspace_id = ?
+		ORDER BY wg.position ASC, g.ref ASC`, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("store: read workspace %s guardrails: %w", workspaceID, err)
 	}
@@ -285,7 +314,7 @@ func ReplaceWorkspaceGuardrailsTx(tx *sql.Tx, workspace string, refs []fleet.Wor
 // ReadPrompts returns all prompt catalog entries ordered by visibility scope
 // and name.
 func ReadPrompts(db *sql.DB) ([]fleet.Prompt, error) {
-	rows, err := db.Query("SELECT id, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, description, content FROM prompts ORDER BY COALESCE(workspace_id, ''), COALESCE(repo, ''), name")
+	rows, err := db.Query("SELECT ref, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, description, content FROM prompts ORDER BY COALESCE(workspace_id, ''), COALESCE(repo, ''), name")
 	if err != nil {
 		return nil, fmt.Errorf("store: read prompts: %w", err)
 	}

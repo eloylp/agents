@@ -135,6 +135,46 @@ func validateBudget(b TokenBudget) error {
 	return nil
 }
 
+func validateBudgetRefs(q querier, b TokenBudget) error {
+	if b.WorkspaceID != "" {
+		var exists bool
+		if err := q.QueryRow("SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=?)", b.WorkspaceID).Scan(&exists); err != nil {
+			return fmt.Errorf("validate token budget workspace %s: %w", b.WorkspaceID, err)
+		}
+		if !exists {
+			return &ErrValidation{Msg: fmt.Sprintf("workspace %q not found", b.WorkspaceID)}
+		}
+	}
+	if b.WorkspaceID != "" && b.Repo != "" {
+		var exists bool
+		if err := q.QueryRow("SELECT EXISTS(SELECT 1 FROM repos WHERE workspace_id=? AND name=?)", b.WorkspaceID, b.Repo).Scan(&exists); err != nil {
+			return fmt.Errorf("validate token budget repo %s/%s: %w", b.WorkspaceID, b.Repo, err)
+		}
+		if !exists {
+			return &ErrValidation{Msg: fmt.Sprintf("repo %q not found in workspace %q", b.Repo, b.WorkspaceID)}
+		}
+	}
+	if b.WorkspaceID != "" && b.Agent != "" {
+		var exists bool
+		if err := q.QueryRow("SELECT EXISTS(SELECT 1 FROM agents WHERE workspace_id=? AND name=?)", b.WorkspaceID, b.Agent).Scan(&exists); err != nil {
+			return fmt.Errorf("validate token budget agent %s/%s: %w", b.WorkspaceID, b.Agent, err)
+		}
+		if !exists {
+			return &ErrValidation{Msg: fmt.Sprintf("agent %q not found in workspace %q", b.Agent, b.WorkspaceID)}
+		}
+	}
+	if b.Backend != "" {
+		var exists bool
+		if err := q.QueryRow("SELECT EXISTS(SELECT 1 FROM backends WHERE name=?)", b.Backend).Scan(&exists); err != nil {
+			return fmt.Errorf("validate token budget backend %s: %w", b.Backend, err)
+		}
+		if !exists {
+			return &ErrValidation{Msg: fmt.Sprintf("backend %q not found", b.Backend)}
+		}
+	}
+	return nil
+}
+
 func ValidateTokenBudget(b TokenBudget) error {
 	return validateBudget(b)
 }
@@ -274,6 +314,9 @@ func CreateTokenBudgetTx(db sqlExec, b TokenBudget) (TokenBudget, error) {
 	if err := validateBudget(b); err != nil {
 		return TokenBudget{}, err
 	}
+	if err := validateBudgetRefs(db, b); err != nil {
+		return TokenBudget{}, err
+	}
 	var exists bool
 	if err := db.QueryRow(
 		`SELECT EXISTS(SELECT 1 FROM token_budgets WHERE scope_kind=? AND workspace_id=? AND repo=? AND agent=? AND backend=? AND period=?)`,
@@ -304,6 +347,9 @@ func UpdateTokenBudget(db *sql.DB, id int64, b TokenBudget) (TokenBudget, error)
 func UpdateTokenBudgetTx(db sqlExec, id int64, b TokenBudget) (TokenBudget, error) {
 	b = normalizeBudget(b)
 	if err := validateBudget(b); err != nil {
+		return TokenBudget{}, err
+	}
+	if err := validateBudgetRefs(db, b); err != nil {
 		return TokenBudget{}, err
 	}
 	var conflictID int64

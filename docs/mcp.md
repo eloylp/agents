@@ -29,7 +29,7 @@ The same pattern works for Cursor, Cline, and any other MCP-compatible client; c
 
 ## Available tools
 
-Most fleet tools accept `workspace` for workspace-local resources and default to `Default` when omitted. Prompt catalog tools expose stable prompt ids, and agent tools accept either `prompt_id` or the human selector `prompt_ref` plus optional `prompt_scope`. `prompt_scope` is case-insensitive and accepts `global`, `workspace`, or `workspace/owner/repo`, for example `default/eloylp/agents`. Agent creation is prompt-first: call `create_prompt` or select an existing prompt with `list_prompts`/`get_prompt`, then call `create_agent` with `prompt_ref` or `prompt_id`; inline agent prompt bodies are unsupported.
+Most fleet tools accept `workspace` for workspace-local resources and default to `Default` when omitted. Prompt catalog tools expose stable public prompt refs as `id`, and agent tools accept either `prompt_id` or the human selector `prompt_ref` plus optional `prompt_scope`. `prompt_scope` is case-insensitive and accepts `global`, `workspace`, or `workspace/owner/repo`, for example `default/eloylp/agents`. Agent creation is prompt-first: call `create_prompt` or select an existing prompt with `list_prompts`/`get_prompt`, then call `create_agent` with `prompt_ref` or `prompt_id`; inline agent prompt bodies are unsupported.
 
 ### Fleet management
 
@@ -41,15 +41,15 @@ Most fleet tools accept `workspace` for workspace-local resources and default to
 | `update_agent` | Partially update an agent by name (only supplied fields are changed). |
 | `delete_agent` | Delete an agent. `cascade=true` also removes repo bindings. |
 | `list_skills` | List all skill catalog entries with prompt content, including global, workspace-scoped, and repo-scoped skills. |
-| `get_skill` | Fetch one skill by stable id; legacy global display-name lookup is accepted as a fallback. |
+| `get_skill` | Fetch one skill by stable public ref; legacy global display-name lookup is accepted as a fallback. |
 | `create_skill` | Create or update a skill catalog entry. |
-| `update_skill` | Partially update a skill by stable id; legacy global display-name lookup is accepted as a fallback. |
-| `delete_skill` | Delete a skill by stable id; legacy global display-name lookup is accepted as a fallback. |
+| `update_skill` | Partially update a skill by stable public ref; legacy global display-name lookup is accepted as a fallback. |
+| `delete_skill` | Delete a skill by stable public ref; legacy global display-name lookup is accepted as a fallback. |
 | `list_prompts` | List all prompt catalog entries, including global, workspace-scoped, and repo-scoped prompts. |
-| `get_prompt` | Fetch one prompt by stable id, or by `name` plus optional `workspace_id` / `repo` when unambiguous. |
+| `get_prompt` | Fetch one prompt by stable public ref, or by `name` plus optional `workspace_id` / `repo` when unambiguous. |
 | `create_prompt` | Create or update a prompt catalog entry. |
-| `update_prompt` | Partially update a prompt by stable id, or by `name` plus optional `workspace_id` / `repo` when unambiguous. |
-| `delete_prompt` | Delete a prompt by stable id, or by `name` plus optional `workspace_id` / `repo` when unambiguous. |
+| `update_prompt` | Partially update a prompt by stable public ref, or by `name` plus optional `workspace_id` / `repo` when unambiguous. |
+| `delete_prompt` | Delete a prompt by stable public ref, or by `name` plus optional `workspace_id` / `repo` when unambiguous. |
 | `list_workspaces` | List all workspaces. |
 | `get_workspace` | Fetch one workspace by id or display name. |
 | `create_workspace` | Create or update a workspace. |
@@ -72,11 +72,11 @@ Most fleet tools accept `workspace` for workspace-local resources and default to
 | `update_binding` | Replace all fields of a binding by ID. |
 | `delete_binding` | Delete a binding by ID. |
 | `list_guardrails` | List every guardrail catalog entry, including built-ins and scoped operator-added guardrails. |
-| `get_guardrail` | Fetch one guardrail by stable id; legacy global display-name lookup is accepted as a fallback. |
+| `get_guardrail` | Fetch one guardrail by stable public ref; legacy global display-name lookup is accepted as a fallback. |
 | `create_guardrail` | Create or update an operator-defined guardrail. Built-in flags (`is_builtin`, `default_content`) are migration-managed and ignored on the wire. |
-| `update_guardrail` | Partially update a guardrail by stable id. Patchable: `description`, `content`, `enabled`, `position`. |
-| `delete_guardrail` | Delete a guardrail by stable id. Built-ins can be deleted from the MCP path; the dashboard double-confirms in the UI. |
-| `reset_guardrail` | Copy a built-in guardrail's `default_content` back into its `content` by stable id. Returns a validation error on operator-added rows. |
+| `update_guardrail` | Partially update a guardrail by stable public ref. Patchable: `description`, `content`, `enabled`, `position`. |
+| `delete_guardrail` | Delete a guardrail by stable public ref. Built-ins can be deleted from the MCP path; the dashboard double-confirms in the UI. |
+| `reset_guardrail` | Copy a built-in guardrail's `default_content` back into its `content` by stable public ref. Returns a validation error on operator-added rows. |
 
 ### Operations
 

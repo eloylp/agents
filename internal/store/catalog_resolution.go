@@ -1,7 +1,9 @@
 package store
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -22,6 +24,21 @@ func queryCatalogIDByScopeName(q querier, table, workspaceID, repo, name string)
 		return q.QueryRow("SELECT id FROM "+table+" WHERE workspace_id=? AND repo IS NULL AND name=?", workspaceID, name)
 	}
 	return q.QueryRow("SELECT id FROM "+table+" WHERE workspace_id=? AND repo=? AND name=?", workspaceID, repo, name)
+}
+
+func queryCatalogRefByScopeName(q querier, table, workspaceID, repo, name string) *sql.Row {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID != "" {
+		workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	}
+	repo = fleet.NormalizeRepoName(repo)
+	if workspaceID == "" {
+		return q.QueryRow("SELECT id, ref FROM "+table+" WHERE workspace_id IS NULL AND repo IS NULL AND name=?", name)
+	}
+	if repo == "" {
+		return q.QueryRow("SELECT id, ref FROM "+table+" WHERE workspace_id=? AND repo IS NULL AND name=?", workspaceID, name)
+	}
+	return q.QueryRow("SELECT id, ref FROM "+table+" WHERE workspace_id=? AND repo=? AND name=?", workspaceID, repo, name)
 }
 
 func resolveVisiblePromptByName(q querier, name, workspaceID, repo string) (string, error) {
@@ -59,6 +76,43 @@ func catalogScopeVisibleToAgent(scopeWorkspaceID, scopeRepo, agentWorkspaceID, a
 	return scopeRepo == "" || (agentRepo != "" && scopeRepo == agentRepo)
 }
 
+func ensureCatalogScope(tx *sql.Tx, kind, workspaceID, repo string) error {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID != "" {
+		workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	}
+	repo = fleet.NormalizeRepoName(repo)
+	if workspaceID == "" {
+		return nil
+	}
+	res, err := tx.Exec(`
+		INSERT OR IGNORE INTO workspaces (id, name, description, runner_image, updated_at)
+		VALUES (?, ?, '', '', datetime('now'))`,
+		workspaceID, workspaceNameFromID(workspaceID),
+	)
+	if err != nil {
+		return fmt.Errorf("store: ensure %s workspace %s: %w", kind, workspaceID, err)
+	}
+	if inserted, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("store: check %s workspace %s insert result: %w", kind, workspaceID, err)
+	} else if inserted > 0 {
+		if err := seedWorkspaceGuardrails(tx, workspaceID); err != nil {
+			return err
+		}
+	}
+	if repo == "" {
+		return nil
+	}
+	var exists bool
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM repos WHERE workspace_id=? AND name=?)", workspaceID, repo).Scan(&exists); err != nil {
+		return fmt.Errorf("store: check %s repo scope %s/%s: %w", kind, workspaceID, repo, err)
+	}
+	if !exists {
+		return &ErrValidation{Msg: fmt.Sprintf("%s repo scope %q requires an existing repo in workspace %q", kind, repo, workspaceID)}
+	}
+	return nil
+}
+
 func resolveVisibleCatalogRef(q querier, table, ref, workspaceID, repo string) (string, error) {
 	id, err := resolveVisibleCatalogID(q, table, ref, workspaceID, repo)
 	if err == nil {
@@ -76,14 +130,14 @@ func resolveVisibleCatalogID(q querier, table, id, workspaceID, repo string) (st
 	rows, err := q.Query(`
 		SELECT id
 		FROM `+table+`
-		WHERE id = ?
+		WHERE (id = ? OR ref = ?)
 		  AND (
 			(workspace_id IS NULL AND repo IS NULL)
 			OR (workspace_id = ? AND repo IS NULL)
 			OR (? <> '' AND workspace_id = ? AND repo = ?)
 		)
 		LIMIT 1`,
-		id, workspaceID, repo, workspaceID, repo,
+		id, id, workspaceID, repo, workspaceID, repo,
 	)
 	if err != nil {
 		return "", err
@@ -100,6 +154,21 @@ func resolveVisibleCatalogID(q querier, table, id, workspaceID, repo string) (st
 		return "", err
 	}
 	return "", sql.ErrNoRows
+}
+
+func resolveCatalogID(q querier, table, ref string) (string, string, error) {
+	ref = strings.TrimSpace(ref)
+	var id, publicRef string
+	err := q.QueryRow("SELECT id, ref FROM "+table+" WHERE id=? OR ref=?", ref, ref).Scan(&id, &publicRef)
+	return id, publicRef, err
+}
+
+func newCatalogInternalID(prefix string) (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generate catalog id: %w", err)
+	}
+	return prefix + hex.EncodeToString(b[:]), nil
 }
 
 func resolveVisibleCatalogName(q querier, table, label, idHint, name, workspaceID, repo string) (string, error) {
