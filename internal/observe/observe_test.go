@@ -309,7 +309,7 @@ func TestExtractSSEData(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := extractSSEData(tc.in)
-			if string(got) != string(tc.want) {
+			if !bytes.Equal(got, tc.want) {
 				t.Errorf("extractSSEData(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
