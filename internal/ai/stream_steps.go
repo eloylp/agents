@@ -269,7 +269,7 @@ func codexOutput(result, output json.RawMessage) string {
 // quoted strings to their textual content. Empty / null values become "".
 func rawJSONString(raw json.RawMessage) string {
 	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || string(trimmed) == "null" {
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return ""
 	}
 	if trimmed[0] == '"' {
