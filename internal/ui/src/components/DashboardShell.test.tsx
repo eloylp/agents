@@ -38,18 +38,26 @@ function mockViewport(matches: boolean) {
   })))
 }
 
+function renderedCSS() {
+  return Array.from(document.querySelectorAll('style'))
+    .map(style => style.textContent ?? '')
+    .join('\n')
+}
+
 describe('<DashboardShell />', () => {
   afterEach(() => {
     window.localStorage.clear()
     vi.unstubAllGlobals()
   })
 
-  it('renders the collapsed navigation toggle as an accessible hamburger icon', () => {
+  it('renders the desktop navigation toggle inside the sidebar', () => {
     mockShellFetch()
     mockViewport(false)
     const { container } = render(<DashboardShell><div>Content</div></DashboardShell>)
 
     const button = screen.getByTitle('Collapse navigation')
+    expect(container.querySelector('.shell-sidebar .shell-menu-button')).toBe(button)
+    expect(container.querySelector('.shell-topbar .shell-menu-button')).not.toBeInTheDocument()
     expect(button).toHaveAttribute('aria-label', 'Collapse navigation')
     expect(button).toHaveAttribute('title', 'Collapse navigation')
     expect(button).not.toHaveTextContent('Menu')
@@ -59,6 +67,23 @@ describe('<DashboardShell />', () => {
     fireEvent.click(button)
     expect(container.querySelector('.dashboard-shell.nav-collapsed')).toBeInTheDocument()
     expect(button).toHaveAttribute('aria-label', 'Open navigation')
+  })
+
+  it('keeps collapsed desktop navigation as a narrow rail', () => {
+    mockShellFetch()
+    mockViewport(false)
+    const { container } = render(<DashboardShell><div>Content</div></DashboardShell>)
+
+    fireEvent.click(screen.getByTitle('Collapse navigation'))
+
+    const css = renderedCSS()
+    expect(container.querySelector('.dashboard-shell.nav-collapsed')).toBeInTheDocument()
+    expect(css).toContain('--sidebar-rail-width: 52px')
+    expect(css).toContain('.dashboard-shell.nav-collapsed .shell-sidebar { width: var(--sidebar-rail-width); visibility: visible; transform: none; }')
+    expect(css).toContain('.dashboard-shell.nav-collapsed .shell-main { margin-left: var(--sidebar-rail-width); }')
+    expect(css).toContain('.dashboard-shell.nav-collapsed .shell-brand-text')
+    expect(css).toContain('.dashboard-shell.nav-collapsed .shell-nav')
+    expect(css).toContain('.dashboard-shell.nav-collapsed .shell-sidebar-footer { display: none; }')
   })
 
   it('persists desktop navigation collapse and responds to graph focus events', () => {
@@ -85,12 +110,19 @@ describe('<DashboardShell />', () => {
     expect(window.localStorage.getItem('agents.sidebarCollapsed')).toBe('true')
   })
 
-  it('keeps the hamburger opening mobile navigation', () => {
+  it('keeps the topbar hamburger opening mobile navigation', async () => {
     mockShellFetch()
     mockViewport(true)
     const { container } = render(<DashboardShell><div>Content</div></DashboardShell>)
 
-    fireEvent.click(screen.getByTitle('Open navigation'))
+    await waitFor(() => {
+      expect(container.querySelector('.shell-topbar .shell-menu-button')).toBeInTheDocument()
+    })
+    const button = screen.getByTitle('Open navigation')
+    expect(container.querySelector('.shell-topbar .shell-menu-button')).toBe(button)
+    expect(container.querySelector('.shell-sidebar .shell-menu-button')).not.toBeInTheDocument()
+
+    fireEvent.click(button)
 
     expect(container.querySelector('.shell-sidebar.open')).toBeInTheDocument()
   })
