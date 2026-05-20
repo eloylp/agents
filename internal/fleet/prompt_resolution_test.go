@@ -72,7 +72,6 @@ func TestResolvePromptForAgentRejectsUnresolvablePromptRefs(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
