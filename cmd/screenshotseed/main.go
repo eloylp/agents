@@ -312,14 +312,12 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 	for _, d := range []struct {
 		from, to, repo, reason string
 		number                 int
-		ago                    time.Duration
 	}{
-		{"coder", "pr-reviewer", "acme/widgets", "PR ready for review", 143, 17 * time.Minute},
-		{"coder", "pr-reviewer", "acme/widgets", "PR ready for review", 138, 45 * time.Minute},
-		{"scout", "coder", "acme/control-plane", "small fix worth doing now", 91, 5 * time.Minute},
+		{"coder", "pr-reviewer", "acme/widgets", "PR ready for review", 143},
+		{"coder", "pr-reviewer", "acme/widgets", "PR ready for review", 138},
+		{"scout", "coder", "acme/control-plane", "small fix worth doing now", 91},
 	} {
 		obs.RecordDispatch("default", d.from, d.to, d.repo, d.number, d.reason)
-		_ = d.ago
 	}
 
 	// Memory entry so the memory page renders something interesting.
