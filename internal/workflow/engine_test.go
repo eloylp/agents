@@ -866,6 +866,41 @@ func TestFanOutDifferentNumbersAreNotDeduped(t *testing.T) {
 	}
 }
 
+func TestFanOutDifferentEventKindsAreNotDeduped(t *testing.T) {
+	t.Parallel()
+	e, runner, _ := newTestEngineWithDedup(t, func(c *config.Config) {
+		c.Repos[0].Use = []fleet.Binding{
+			{Agent: "pr-reviewer", Events: []string{"issue_comment.created", "issues.labeled"}},
+		}
+	})
+	comment := Event{
+		Repo:    RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:    "issue_comment.created",
+		Number:  42,
+		Payload: map[string]any{"body": "ready when labelled"},
+	}
+	label := Event{
+		Repo:    RepoRef{FullName: "owner/repo", Enabled: true},
+		Kind:    "issues.labeled",
+		Number:  42,
+		Payload: map[string]any{"label": "ai ready"},
+	}
+
+	if err := e.HandleEvent(context.Background(), comment); err != nil {
+		t.Fatalf("comment event: %v", err)
+	}
+	if err := e.HandleEvent(context.Background(), label); err != nil {
+		t.Fatalf("label event: %v", err)
+	}
+
+	if got := runner.callCount(); got != 2 {
+		t.Errorf("expected 2 runs for distinct event kinds on same issue, got %d", got)
+	}
+	if stats := e.DispatchStats(); stats.RunsDeduped != 0 {
+		t.Errorf("expected RunsDeduped=0, got %d", stats.RunsDeduped)
+	}
+}
+
 // TestFanOutClaimAbandonedOnRunFailure verifies that a failed agent run
 // releases the pending dedup claim so that a subsequent event for the same
 // (agent, repo, number) is allowed to proceed.

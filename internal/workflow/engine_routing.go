@@ -16,9 +16,10 @@ import (
 
 // fanOut runs all agents matched for ev in parallel, capped by e.maxConcurrent.
 // When a dedup store is configured, each agent run is gated through a
-// TryClaim/CommitClaim/AbandonClaim sequence keyed on (agent, repo, number) so
-// that concurrent or near-simultaneous events for the same item do not produce
-// duplicate runs within the dedup window.
+// TryClaim/CommitClaim/AbandonClaim sequence keyed on
+// (agent, workspace, repo, event kind, label, number) so repeated deliveries of
+// the same intent are suppressed without collapsing distinct issue transitions
+// such as issue_comment.created followed by issues.labeled(ai ready).
 // A failing agent does not abort the others; all errors are joined and returned.
 func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 	// Read the four entity sets from SQLite for this event. The cfg
@@ -53,7 +54,7 @@ func (e *Engine) fanOut(ctx context.Context, ev Event) error {
 		go func(a fleet.Agent) {
 			defer wg.Done()
 			defer sem.Release(1)
-			dedupRepo := dedupRepoKey(eventWorkspaceID(ev), ev.Repo.FullName)
+			dedupRepo := eventDedupRepoKey(ev)
 
 			// Gate through the dedup store when configured, but only for
 			// item-scoped events (number > 0).  Repo-level events such as
