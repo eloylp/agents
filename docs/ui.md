@@ -1,5 +1,7 @@
 # Web dashboard
 
+[![Graph demo: create an agent, wire it into the fleet, inspect activity, and review agent activity](img/graph-edit.gif)](https://github.com/user-attachments/assets/3520d5b4-a57a-4c22-b390-b0a78b1ab2c1)
+
 The daemon ships an embedded web dashboard at `/ui/`. The public root path `/` serves the login/bootstrap page and redirects authenticated browser sessions into `/ui/graph/`, the graph-first workflow designer. The dashboard is the primary interface for managing the agent fleet. Every CRUD operation (agents, prompts, skills, backends, repos, guardrails, bindings) is available there alongside live monitoring.
 
 ![Fleet dashboard](img/fleet.png)
@@ -36,8 +38,6 @@ The Activity tab can open the same live transcript modal used by the Runners pag
 Dispatch wiring is always editable: drag from one agent to another to add a connection, or click an edge to inspect its Overview, History, and Danger tabs. Dispatch changes write back to the source agent's `can_dispatch` list and the target's `allow_dispatch` flag.
 
 ![Agent interaction graph](img/graph.png)
-
-[![Graph demo: create an agent, wire it into the fleet, inspect activity, and review agent activity](img/graph-edit.gif)](https://github.com/user-attachments/assets/3520d5b4-a57a-4c22-b390-b0a78b1ab2c1)
 
 ### Agents
 
