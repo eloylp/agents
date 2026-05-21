@@ -2798,6 +2798,10 @@ func TestToolDeleteBindingForwardsID(t *testing.T) {
 func TestToolUpdateAgentForwardsPatch(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
+	before, ok := agentByName(t, deps.Store, "coder")
+	if !ok {
+		t.Fatal("coder missing before update")
+	}
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
@@ -2820,12 +2824,36 @@ func TestToolUpdateAgentForwardsPatch(t *testing.T) {
 	if !updated.AllowPRs {
 		t.Errorf("allow_prs not patched")
 	}
+	if updated.ID != before.ID {
+		t.Errorf("agent id changed: got %q, want %q", updated.ID, before.ID)
+	}
 	if len(updated.Skills) != 1 || updated.Skills[0] != "testing" {
 		t.Errorf("skills not patched: %+v", updated.Skills)
 	}
 	// Fields not in payload are preserved (description was set in seed).
 	if updated.Description != "writes code" {
 		t.Errorf("description should be preserved, got %q", updated.Description)
+	}
+}
+
+func TestToolUpdateAgentMissingTargetRejected(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":        "missing",
+		"description": "should not create",
+	}
+	res, err := toolUpdateAgent(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(textOf(t, res), "not found") {
+		t.Fatalf("expected not-found tool error, got error=%v body=%s", res.IsError, textOf(t, res))
+	}
+	if _, ok := agentByName(t, deps.Store, "missing"); ok {
+		t.Fatal("update_agent created a missing agent")
 	}
 }
 

@@ -31,6 +31,8 @@ The same pattern works for Cursor, Cline, and any other MCP-compatible client; c
 
 Most fleet tools accept `workspace` for workspace-local resources and default to `Default` when omitted. Prompt catalog tools expose stable public prompt refs as `id`, and agent tools accept either `prompt_id` or the human selector `prompt_ref` plus optional `prompt_scope`. `prompt_scope` is case-insensitive and accepts `global`, `workspace`, or `workspace/owner/repo`, for example `default/eloylp/agents`. Agent creation is prompt-first: call `create_prompt` or select an existing prompt with `list_prompts`/`get_prompt`, then call `create_agent` with `prompt_ref` or `prompt_id`; inline agent prompt bodies are unsupported.
 
+For agent lifecycle changes, use `create_agent` when adding a new agent or intentionally importing an upserted full definition. Use `update_agent` when changing an existing agent's backend, model, prompt reference, skills, dispatch permissions, PR permission, memory setting, scope, or description. `update_agent` patches only the supplied fields, preserves the stable agent ID, and returns a not-found error when the target agent does not exist.
+
 ### Fleet management
 
 | Tool | Description |
