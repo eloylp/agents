@@ -92,9 +92,9 @@ docker compose restart agents
 docker compose pull agents && docker compose up -d agents
 
 # To pin a tagged release, edit docker-compose.yaml to use either:
-# image: ghcr.io/eloylp/agents:0.2.0
+# image: ghcr.io/eloylp/agents:0.3.0
 # or:
-# image: ghcr.io/eloylp/agents:v0.2.0
+# image: ghcr.io/eloylp/agents:v0.3.0
 # then run:
 # docker compose pull agents && docker compose up -d agents
 
