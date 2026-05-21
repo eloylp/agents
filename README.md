@@ -1,6 +1,6 @@
 # Agents
 
-![agents](docs/agents.jpg)
+[![Agents dashboard demo](docs/img/graph-edit.gif)](https://github.com/user-attachments/assets/3520d5b4-a57a-4c22-b390-b0a78b1ab2c1)
 
 [![CI](https://img.shields.io/github/actions/workflow/status/eloylp/agents/ci.yml?label=CI)](https://github.com/eloylp/agents/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/github/go-mod/go-version/eloylp/agents)](go.mod)
