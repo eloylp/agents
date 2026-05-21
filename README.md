@@ -1,6 +1,6 @@
 # Agents
 
-[![Agents dashboard demo](docs/img/graph-edit.gif)](https://github.com/user-attachments/assets/3520d5b4-a57a-4c22-b390-b0a78b1ab2c1)
+![agents](docs/agents.jpg)
 
 [![CI](https://img.shields.io/github/actions/workflow/status/eloylp/agents/ci.yml?label=CI)](https://github.com/eloylp/agents/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/github/go-mod/go-version/eloylp/agents)](go.mod)
@@ -20,7 +20,7 @@ See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a re
 ## Features
 
 - **Three ways to interact with your agent fleet**:
-  - **[Web dashboard](docs/ui.md)**: graphical. Design the fleet from the graph-first workflow designer, manage agents, prompts, skills, repos, dispatch edges, and trigger bindings; watch the live event firehose, agent traces with tool-loop transcripts, and memory viewer.
+  - **[Web dashboard](docs/ui.md)**: graphical. Design the fleet from the [graph-first workflow designer](docs/ui.md#graph), manage agents, prompts, skills, repos, dispatch edges, and trigger bindings; watch the live event firehose, agent traces with tool-loop transcripts, and memory viewer.
   - **[MCP server](docs/mcp.md)**: conversational. Control agents and trigger runs straight from Claude Code in your terminal (or Cursor, Cline, or any MCP client).
   - **[REST API](docs/api.md)**: programmatic. Scriptable from any HTTP client; the dashboard itself runs on top of it.
 - **Observable**: See the full event chain in realtime from the [UI](docs/ui.md), from events to runners to traces that will facilitate your prompt tuning journey.
