@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/eloylp/agents/internal/fleet"
 )
@@ -13,7 +14,7 @@ import (
 // prepends to every agent's composed prompt.
 func ReadEnabledGuardrails(db *sql.DB) ([]fleet.Guardrail, error) {
 	const q = `
-		SELECT ref, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, COALESCE(description, ''), content,
+		SELECT ref, COALESCE(workspace_id, ''), name, COALESCE(description, ''), content,
 		       COALESCE(default_content, ''), is_builtin, enabled, position
 		FROM guardrails
 		WHERE enabled = 1
@@ -30,7 +31,7 @@ func ReadWorkspacePromptGuardrails(db *sql.DB, workspace string) ([]fleet.Guardr
 		return nil, err
 	}
 	const q = `
-		SELECT g.ref, COALESCE(g.workspace_id, ''), COALESCE(g.repo, ''), g.name, COALESCE(g.description, ''), g.content,
+		SELECT g.ref, COALESCE(g.workspace_id, ''), g.name, COALESCE(g.description, ''), g.content,
 		       COALESCE(g.default_content, ''), g.is_builtin, wg.enabled, wg.position
 		FROM workspace_guardrails wg
 		JOIN guardrails g ON g.id = wg.guardrail_name
@@ -44,7 +45,7 @@ func ReadWorkspacePromptGuardrails(db *sql.DB, workspace string) ([]fleet.Guardr
 // surfaces to expose the full list.
 func ReadAllGuardrails(db *sql.DB) ([]fleet.Guardrail, error) {
 	const q = `
-		SELECT ref, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, COALESCE(description, ''), content,
+		SELECT ref, COALESCE(workspace_id, ''), name, COALESCE(description, ''), content,
 		       COALESCE(default_content, ''), is_builtin, enabled, position
 		FROM guardrails
 		ORDER BY position ASC, name ASC`
@@ -60,10 +61,10 @@ func GetGuardrail(db *sql.DB, name string) (fleet.Guardrail, error) {
 func GetGuardrailFrom(db querier, name string) (fleet.Guardrail, error) {
 	name = fleet.NormalizeGuardrailName(name)
 	const q = `
-		SELECT ref, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, COALESCE(description, ''), content,
+		SELECT ref, COALESCE(workspace_id, ''), name, COALESCE(description, ''), content,
 		       COALESCE(default_content, ''), is_builtin, enabled, position
 		FROM guardrails
-		WHERE id = ? OR ref = ? OR (workspace_id IS NULL AND repo IS NULL AND name = ?)
+		WHERE id = ? OR ref = ? OR (workspace_id IS NULL AND name = ?)
 		ORDER BY CASE WHEN id = ? OR ref = ? THEN 0 ELSE 1 END
 		LIMIT 1`
 	g, err := scanGuardrailRow(db.QueryRow(q, name, name, name, name, name))
@@ -90,12 +91,9 @@ func UpsertGuardrailTx(exec sqlExec, g fleet.Guardrail) error {
 	if g.Name == "" {
 		return &ErrValidation{Msg: "store: guardrail name is required"}
 	}
-	if g.WorkspaceID == "" && g.Repo != "" {
-		return &ErrValidation{Msg: "store: guardrail repo scope requires workspace_id"}
-	}
 	if g.ID == "" {
 		var existingID, existingRef string
-		err := queryCatalogRefByScopeName(exec, "guardrails", g.WorkspaceID, g.Repo, g.Name).Scan(&existingID, &existingRef)
+		err := queryGuardrailRefByScopeName(exec, g.WorkspaceID, g.Name).Scan(&existingID, &existingRef)
 		if err == nil {
 			g.ID = existingRef
 		} else if !errors.Is(err, sql.ErrNoRows) {
@@ -103,7 +101,7 @@ func UpsertGuardrailTx(exec sqlExec, g fleet.Guardrail) error {
 		}
 	}
 	if g.ID == "" {
-		id, err := derivedCatalogID("guardrail_", g.WorkspaceID, g.Repo, g.Name)
+		id, err := derivedCatalogID("guardrail_", g.WorkspaceID, "", g.Name)
 		if err != nil {
 			return &ErrValidation{Msg: fmt.Sprintf("store: guardrail %q: %v", g.Name, err)}
 		}
@@ -138,11 +136,10 @@ func UpsertGuardrailTx(exec sqlExec, g fleet.Guardrail) error {
 	// inbound JSON.
 	const q = `
 		INSERT INTO guardrails
-			(id, ref, workspace_id, repo, name, description, content, default_content, is_builtin, enabled, position, updated_at)
-		VALUES (?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+			(id, ref, workspace_id, name, description, content, default_content, is_builtin, enabled, position, updated_at)
+		VALUES (?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, datetime('now'))
 		ON CONFLICT(ref) DO UPDATE SET
 			workspace_id = excluded.workspace_id,
-			repo         = excluded.repo,
 			name         = excluded.name,
 			description = excluded.description,
 			content     = excluded.content,
@@ -150,7 +147,7 @@ func UpsertGuardrailTx(exec sqlExec, g fleet.Guardrail) error {
 			position    = excluded.position,
 			updated_at  = datetime('now')`
 	if _, err := exec.Exec(q,
-		internalID, g.ID, g.WorkspaceID, g.Repo, g.Name, g.Description, g.Content, defaultContent, isBuiltin, enabled, g.Position,
+		internalID, g.ID, g.WorkspaceID, g.Name, g.Description, g.Content, defaultContent, isBuiltin, enabled, g.Position,
 	); err != nil {
 		if isUniqueConstraint(err) {
 			return &ErrConflict{Msg: fmt.Sprintf("guardrail name %q is already used by another guardrail in that scope", g.Name)}
@@ -162,6 +159,17 @@ func UpsertGuardrailTx(exec sqlExec, g fleet.Guardrail) error {
 
 func isReservedGuardrailName(name string) bool {
 	return name == "workspace-boundary"
+}
+
+func queryGuardrailRefByScopeName(q querier, workspaceID, name string) *sql.Row {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID != "" {
+		workspaceID = fleet.NormalizeWorkspaceID(workspaceID)
+	}
+	if workspaceID == "" {
+		return q.QueryRow("SELECT id, ref FROM guardrails WHERE workspace_id IS NULL AND name=?", name)
+	}
+	return q.QueryRow("SELECT id, ref FROM guardrails WHERE workspace_id=? AND name=?", workspaceID, name)
 }
 
 // DeleteGuardrail removes the named guardrail. Built-in rows can be
@@ -230,7 +238,7 @@ func resolveGuardrailInternalID(q querier, ref string) (string, error) {
 	err := q.QueryRow(`
 		SELECT id
 		FROM guardrails
-		WHERE id = ? OR ref = ? OR (workspace_id IS NULL AND repo IS NULL AND name = ?)
+		WHERE id = ? OR ref = ? OR (workspace_id IS NULL AND name = ?)
 		ORDER BY CASE WHEN id = ? OR ref = ? THEN 0 ELSE 1 END
 		LIMIT 1`, ref, ref, ref, ref, ref).Scan(&id)
 	return id, err
@@ -262,7 +270,7 @@ func scanGuardrailRow(r rowScanner) (fleet.Guardrail, error) {
 		g                  fleet.Guardrail
 		isBuiltin, enabled int
 	)
-	if err := r.Scan(&g.ID, &g.WorkspaceID, &g.Repo, &g.Name, &g.Description, &g.Content, &g.DefaultContent, &isBuiltin, &enabled, &g.Position); err != nil {
+	if err := r.Scan(&g.ID, &g.WorkspaceID, &g.Name, &g.Description, &g.Content, &g.DefaultContent, &isBuiltin, &enabled, &g.Position); err != nil {
 		return fleet.Guardrail{}, err
 	}
 	g.IsBuiltin = intToBool(isBuiltin)

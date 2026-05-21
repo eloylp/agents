@@ -10,7 +10,6 @@ import { useSelectedWorkspace } from '@/lib/workspace'
 interface Guardrail {
   id?: string
   workspace_id?: string
-  repo?: string
   name: string
   description: string
   content: string
@@ -210,7 +209,6 @@ export default function GuardrailsManager() {
   const workspaceLabel = selectedWorkspace?.name || workspace
   const guardrailID = (g: Guardrail) => g.id || g.name
   const guardrailScope = (g: Guardrail) => {
-    if (g.repo) return `${g.workspace_id || 'default'} / ${g.repo}`
     if (g.workspace_id) return `${g.workspace_id} workspace`
     return 'Global'
   }
@@ -290,7 +288,7 @@ export default function GuardrailsManager() {
       const url = isNew ? '/guardrails' : `/guardrails/${encodeURIComponent(guardrailID(g))}`
       const method = isNew ? 'POST' : 'PATCH'
       const body = isNew
-        ? { name: g.name, workspace_id: g.workspace_id, repo: g.repo, description: g.description, content: g.content, enabled: g.enabled, position: g.position }
+        ? { name: g.name, workspace_id: g.workspace_id, description: g.description, content: g.content, enabled: g.enabled, position: g.position }
         : { description: g.description, content: g.content, enabled: g.enabled, position: g.position }
       // Disabling a guardrail (especially a built-in) is sensitive, bounce
       // through a confirm modal before posting.

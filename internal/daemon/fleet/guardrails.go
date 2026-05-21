@@ -16,7 +16,6 @@ import (
 type storeGuardrailJSON struct {
 	ID             string `json:"id,omitempty"`
 	WorkspaceID    string `json:"workspace_id,omitempty"`
-	Repo           string `json:"repo,omitempty"`
 	Name           string `json:"name"`
 	Description    string `json:"description"`
 	Content        string `json:"content"`
@@ -31,7 +30,6 @@ func guardrailToJSON(g fleet.Guardrail) storeGuardrailJSON {
 		Name:           g.Name,
 		ID:             g.ID,
 		WorkspaceID:    g.WorkspaceID,
-		Repo:           g.Repo,
 		Description:    g.Description,
 		Content:        g.Content,
 		DefaultContent: g.DefaultContent,
@@ -102,7 +100,6 @@ func (h *Handler) handleGuardrailCreate(w http.ResponseWriter, r *http.Request) 
 		Name:        req.Name,
 		ID:          req.ID,
 		WorkspaceID: req.WorkspaceID,
-		Repo:        req.Repo,
 		Description: req.Description,
 		Content:     req.Content,
 		Enabled:     req.Enabled,
@@ -187,10 +184,9 @@ func (h *Handler) UpsertGuardrail(g fleet.Guardrail) (fleet.Guardrail, error) {
 	if g.WorkspaceID != "" {
 		g.WorkspaceID = fleet.NormalizeWorkspaceID(g.WorkspaceID)
 	}
-	g.Repo = fleet.NormalizeRepoName(g.Repo)
 	g.Name = fleet.NormalizeGuardrailName(g.Name)
 	for _, row := range all {
-		if row.WorkspaceID == g.WorkspaceID && row.Repo == g.Repo && row.Name == g.Name {
+		if row.WorkspaceID == g.WorkspaceID && row.Name == g.Name {
 			return row, nil
 		}
 	}

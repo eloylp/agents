@@ -233,7 +233,6 @@ func repoConfigReferences(q querier, workspaceID, repo string) ([]string, error)
 		{"repo-scoped agents", "SELECT COUNT(*) FROM agents WHERE workspace_id=? AND scope_type='repo' AND scope_repo=?", []any{workspaceID, repo}},
 		{"prompts", "SELECT COUNT(*) FROM prompts WHERE workspace_id=? AND repo=?", []any{workspaceID, repo}},
 		{"skills", "SELECT COUNT(*) FROM skills WHERE workspace_id=? AND repo=?", []any{workspaceID, repo}},
-		{"guardrails", "SELECT COUNT(*) FROM guardrails WHERE workspace_id=? AND repo=?", []any{workspaceID, repo}},
 		{"token budgets", "SELECT COUNT(*) FROM token_budgets WHERE workspace_id=? AND repo=?", []any{workspaceID, repo}},
 	}
 	var refs []string

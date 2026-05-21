@@ -336,11 +336,11 @@ guardrails:
     position: 50
 ```
 
-Guardrails use the same catalog visibility fields as prompts and skills:
-globally visible rows leave `workspace_id` and `repo` empty, workspace-scoped
-rows set only `workspace_id`, and repo-scoped rows set both. Workspace guardrail
-references store stable public guardrail refs; imports may use a visible display name
-when it is unambiguous.
+Guardrails are global or workspace-scoped only. Globally visible rows leave
+`workspace_id` empty; workspace-scoped rows set `workspace_id`. Repo-scoped
+guardrails are intentionally unsupported because workspaces, not repositories,
+own policy selection. Workspace guardrail references store stable public
+guardrail refs; imports may use a visible display name when it is unambiguous.
 
 Rules:
 

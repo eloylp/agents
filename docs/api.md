@@ -89,7 +89,7 @@ These are only mounted when `AGENTS_PROXY_ENABLED=true` is set in the daemon env
 
 These routes are always mounted and backed by the SQLite database.
 
-Workspace-local resources accept `?workspace=<id-or-name>` and default to `default` when omitted. This applies to fleet snapshots, agents, repos, bindings, graph layout, runners, events, traces, memory, and workspace-scoped token leaderboard queries. Catalog resources (`prompts`, `skills`, `guardrails`) are reusable assets: each row exposes `workspace_id` and `repo` to express global, workspace-scoped, or repo-scoped visibility.
+Workspace-local resources accept `?workspace=<id-or-name>` and default to `default` when omitted. This applies to fleet snapshots, agents, repos, bindings, graph layout, runners, events, traces, memory, and workspace-scoped token leaderboard queries. Prompt and skill catalog rows expose `workspace_id` and `repo` to express global, workspace-scoped, or repo-scoped visibility. Guardrail catalog rows expose only `workspace_id`: empty means global, set means workspace-scoped.
 
 Prompt catalog rows expose a stable public `id` plus a display `name`; the SQLite primary key behind that ref is internal. Agents accept `prompt_id`; human-facing REST writes may provide `prompt_ref` plus optional `prompt_scope` instead. `prompt_scope` is case-insensitive and accepts `global`, `workspace`, or `workspace/owner/repo`, for example `default/eloylp/agents`.
 
@@ -131,7 +131,7 @@ partial update and omitted fields are preserved.
 
 ### Guardrails
 
-Guardrails are reusable policy catalog entries; workspaces choose which visible catalog entries to render. Catalog wire shape: `{id, workspace_id, repo, name, description, content, default_content, is_builtin, enabled, position}`, where `id` is the stable public ref. Empty `workspace_id` and `repo` means global visibility; `workspace_id` with empty `repo` is workspace-only; both fields set is repo-scoped. Workspace references use `{workspace_id, guardrail_name, position, enabled}`, where `guardrail_name` carries the stable public guardrail ref. PATCH covers catalog `description`, `content`, `enabled`, `position` only; `is_builtin` and `default_content` are migration-managed and not editable from the API. The renderer combines mandatory dynamic workspace/repository boundary guidance with the selected workspace references in one guardrails section. See [security.md](security.md) for the threat model and what the default does, and does not, close.
+Guardrails are reusable policy catalog entries; workspaces choose which visible catalog entries to render. Catalog wire shape: `{id, workspace_id, name, description, content, default_content, is_builtin, enabled, position}`, where `id` is the stable public ref. Empty `workspace_id` means global visibility; a set `workspace_id` means workspace-only. Workspace references use `{workspace_id, guardrail_name, position, enabled}`, where `guardrail_name` carries the stable public guardrail ref. PATCH covers catalog `description`, `content`, `enabled`, `position` only; `is_builtin` and `default_content` are migration-managed and not editable from the API. The renderer combines mandatory dynamic workspace/repository boundary guidance with the selected workspace references in one guardrails section. See [security.md](security.md) for the threat model and what the default does, and does not, close.
 
 Duplicate webhook deliveries are suppressed via `X-GitHub-Delivery` with a TTL cache.
 
