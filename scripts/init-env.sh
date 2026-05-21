@@ -4,24 +4,56 @@ set -eu
 ENV_FILE=${AGENTS_ENV_FILE:-.env}
 SAMPLE_FILE=${AGENTS_ENV_SAMPLE:-.env.sample}
 
+if [ -t 1 ] && command -v tput >/dev/null 2>&1; then
+  BOLD=$(tput bold 2>/dev/null || true)
+  DIM=$(tput dim 2>/dev/null || true)
+  RESET=$(tput sgr0 2>/dev/null || true)
+  CYAN=$(tput setaf 6 2>/dev/null || true)
+  GREEN=$(tput setaf 2 2>/dev/null || true)
+else
+  BOLD=
+  DIM=
+  RESET=
+  CYAN=
+  GREEN=
+fi
+
 say() {
   printf '%s\n' "$*"
 }
 
-read_secret() {
-  prompt=$1
+section() {
+  say ""
+  printf '%s%s%s\n' "$BOLD$CYAN" "$*" "$RESET"
+  say ""
+}
+
+ok() {
+  printf '%sOK%s %s\n' "$GREEN" "$RESET" "$*"
+}
+
+prompt() {
+  printf '%s? %s%s' "$BOLD" "$*" "$RESET" >&2
+}
+
+read_answer() {
+  message=$1
+  secret=${2:-false}
+  value=
+
+  prompt "$message"
   if [ -t 0 ]; then
-    printf '%s' "$prompt"
-    if stty -echo 2>/dev/null; then
+    if [ "$secret" = "true" ] && stty -echo 2>/dev/null; then
       IFS= read -r value || value=
       stty echo 2>/dev/null || true
-      printf '\n'
+      printf '\n' >&2
     else
       IFS= read -r value || value=
     fi
   else
     IFS= read -r value || value=
   fi
+
   printf '%s' "$value"
 }
 
@@ -84,70 +116,121 @@ ensure_env_file() {
 
 prompt_optional() {
   key=$1
-  prompt=$2
+  message=$2
+  secret=${3:-true}
   current=$(get_env "$key" || true)
   if [ -n "$current" ]; then
-    say "$key is already set. Leave blank to keep it."
+    say "${DIM}$key is already set. Leave blank to keep it.${RESET}"
   fi
-  value=$(read_secret "$prompt")
+  value=$(read_answer "$message" "$secret")
   if [ -n "$value" ]; then
     set_env "$key" "$value"
+    ok "Saved $key"
   fi
+}
+
+prompt_choice() {
+  message=$1
+  while :; do
+    choice=$(read_answer "$message" false)
+    case "$choice" in
+      ""|1|2|3) printf '%s' "$choice"; return 0 ;;
+      *)
+        printf '%s\n' "Please enter 1, 2, or 3." >&2
+        if [ ! -t 0 ]; then
+          printf '3'
+          return 0
+        fi
+        ;;
+    esac
+  done
 }
 
 ensure_env_file
 
+section "Webhook secret"
 if [ -z "$(get_env GITHUB_WEBHOOK_SECRET || true)" ]; then
   set_env GITHUB_WEBHOOK_SECRET "$(generate_secret)"
-  say "Generated GITHUB_WEBHOOK_SECRET."
+  ok "Generated GITHUB_WEBHOOK_SECRET"
 else
-  say "GITHUB_WEBHOOK_SECRET is already set."
+  ok "GITHUB_WEBHOOK_SECRET is already set"
 fi
 
-say ""
-say "GitHub token"
+section "GitHub access"
 say "Create a GitHub token with repo scope. Add workflow scope if agents will touch CI."
 say "Token page: https://github.com/settings/tokens"
-prompt_optional GITHUB_TOKEN "Paste GITHUB_TOKEN (blank to keep/skip): "
-
 say ""
-say "Git commit identity"
-say "These values are configured with 'git config --global user.name/user.email' inside each runner container."
+prompt_optional GITHUB_TOKEN "Paste GITHUB_TOKEN and press Enter (input hidden; blank to skip): " true
+
+section "Git commit identity"
+say "These values are configured inside each runner container before the AI CLI starts."
 say "Set them explicitly so agents do not invent commit authors."
+say ""
+
 current_name=$(get_env AGENTS_GIT_USER_NAME || true)
 if [ -z "$current_name" ]; then
   set_env AGENTS_GIT_USER_NAME "Agents Bot"
-  say "Defaulted AGENTS_GIT_USER_NAME to Agents Bot."
+  ok "Defaulted AGENTS_GIT_USER_NAME to Agents Bot"
 fi
+
 current_email=$(get_env AGENTS_GIT_USER_EMAIL || true)
 if [ -z "$current_email" ]; then
   set_env AGENTS_GIT_USER_EMAIL "agents@example.com"
-  say "Defaulted AGENTS_GIT_USER_EMAIL to agents@example.com."
+  ok "Defaulted AGENTS_GIT_USER_EMAIL to agents@example.com"
 fi
-prompt_optional AGENTS_GIT_USER_NAME "Paste AGENTS_GIT_USER_NAME (blank to keep default/current): "
-prompt_optional AGENTS_GIT_USER_EMAIL "Paste AGENTS_GIT_USER_EMAIL (blank to keep default/current): "
 
-say ""
-say "Claude credentials"
+prompt_optional AGENTS_GIT_USER_NAME "Type git user name and press Enter (blank to keep current): " false
+prompt_optional AGENTS_GIT_USER_EMAIL "Type git user email and press Enter (blank to keep current): " false
+
+section "Claude credentials"
 say "Preferred path: run 'claude setup-token' locally and paste the returned token."
 say "This sets CLAUDE_CODE_OAUTH_TOKEN for runner containers."
-prompt_optional CLAUDE_CODE_OAUTH_TOKEN "Paste CLAUDE_CODE_OAUTH_TOKEN (blank to keep/skip): "
+say ""
+prompt_optional CLAUDE_CODE_OAUTH_TOKEN "Paste CLAUDE_CODE_OAUTH_TOKEN and press Enter (input hidden; blank to skip): " true
+
+section "Codex credentials"
+say "Select one Codex authentication mode:"
+say "  1. ChatGPT/Codex subscription auth (CODEX_AUTH_JSON_BASE64)."
+say "     Uses ~/.codex/auth.json. Caveat: refreshed session state is not persisted out of ephemeral runners."
+say "  2. OpenAI Platform API billing (OPENAI_API_KEY)."
+say "     Better for stateless, parallel automation."
+say "  3. Skip Codex credentials for now."
+say ""
+codex_choice=$(prompt_choice "Type 1, 2, or 3 and press Enter (blank to keep/skip): ")
+
+case "$codex_choice" in
+  1)
+    say ""
+    say "Prepare this value with:"
+    say "  1. Add 'cli_auth_credentials_store = \"file\"' to ~/.codex/config.toml"
+    say "  2. Run 'codex login' locally"
+    say "  3. Run: base64 < ~/.codex/auth.json | tr -d '\\n'"
+    say ""
+    say "Paste the base64 value below. It is secret-equivalent to a password."
+    if [ -n "$(get_env OPENAI_API_KEY || true)" ]; then
+      set_env OPENAI_API_KEY ""
+      ok "Cleared OPENAI_API_KEY so CODEX_AUTH_JSON_BASE64 can be used"
+    fi
+    say ""
+    prompt_optional CODEX_AUTH_JSON_BASE64 "Paste CODEX_AUTH_JSON_BASE64 and press Enter (input hidden; blank to skip): " true
+    ;;
+  2)
+    say ""
+    say "This stores your OpenAI Platform API credential as OPENAI_API_KEY."
+    if [ -n "$(get_env CODEX_AUTH_JSON_BASE64 || true)" ]; then
+      set_env CODEX_AUTH_JSON_BASE64 ""
+      ok "Cleared CODEX_AUTH_JSON_BASE64 so OPENAI_API_KEY can be used"
+    fi
+    say ""
+    prompt_optional OPENAI_API_KEY "Paste OPENAI_API_KEY and press Enter (input hidden; blank to skip): " true
+    ;;
+  3)
+    ok "Skipped Codex credentials"
+    ;;
+  "")
+    ok "Kept existing Codex credential settings"
+    ;;
+esac
 
 say ""
-say "Codex credentials"
-say "Preferred path for ChatGPT/Plus/Pro subscription usage:"
-say "  1. Add 'cli_auth_credentials_store = \"file\"' to ~/.codex/config.toml"
-say "  2. Run 'codex login' locally"
-say "  3. Run: base64 < ~/.codex/auth.json | tr -d '\\n'"
-say "Paste that value below. It is secret-equivalent to a password."
-prompt_optional CODEX_AUTH_JSON_BASE64 "Paste CODEX_AUTH_JSON_BASE64 (blank to keep/skip): "
-
-if [ -z "$(get_env CODEX_AUTH_JSON_BASE64 || true)" ]; then
-  say ""
-  say "Optional Codex API fallback"
-  say "Use OPENAI_API_KEY only when you want OpenAI Platform API-billed Codex usage."
-  prompt_optional OPENAI_API_KEY "Paste OPENAI_API_KEY (blank to keep/skip): "
-fi
-
-say ""
-say "Wrote $ENV_FILE. Review it, then start the daemon with: docker compose up -d"
+ok "Wrote $ENV_FILE"
