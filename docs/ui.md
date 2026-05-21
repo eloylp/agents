@@ -37,7 +37,7 @@ Dispatch wiring is always editable: drag from one agent to another to add a conn
 
 ![Agent interaction graph](img/graph.png)
 
-![Graph edit mode, dragging between nodes to wire a dispatch edge](img/graph-edit.gif)
+[![Graph demo: create an agent, wire it into the fleet, inspect activity, and review agent activity](https://github.com/user-attachments/assets/935cfccb-918e-4fc4-9870-d0ae30aa3764)](https://github.com/user-attachments/assets/3520d5b4-a57a-4c22-b390-b0a78b1ab2c1)
 
 ### Agents
 
@@ -61,6 +61,8 @@ Backend discovery status, including per-backend GitHub MCP connectivity, plus su
 ### Guardrails
 
 Tab inside the Config page. Lists every prompt guardrail that can be selected for a workspace, with built-in / disabled / position badges. Click a row to edit name, description, content (markdown editor with **⛶ Expand** affordance), enabled toggle, and position. Guardrails can be global or workspace-scoped; each workspace chooses the visible guardrails it renders. **Reset to default** restores a built-in's seeded text. **Delete** asks for double confirmation, with a stronger warning when the row is built-in. Disabling the shipped `security` guardrail surfaces an extra-stern confirm modal explaining what protection is removed. The shipped daemon arrives with built-in guardrails for security, public-action discretion, daemon-only memory scope, and repository tool usage (MCP first, gh fallback); operators can add code-style, deployment-policy, or any other policy block on top.
+
+![Config page, Guardrails tab](img/guardrails.png)
 
 ### Repos
 
@@ -115,7 +117,7 @@ Use your reverse proxy for TLS/routing, not as the primary API auth layer. See [
 
 ## Regenerating these screenshots
 
-The images in `docs/img/` are generated from a synthetic fixture so the
+The images in `docs/img/` can be generated from the synthetic fixture so
 content stays neutral and reproducible. Regenerate after a UI change:
 
 ```bash
@@ -127,9 +129,20 @@ cd internal/ui
 node scripts/screenshots.mjs
 ```
 
+To capture a live workspace instead, point the same script at the daemon
+and provide a dashboard API token:
+
+```bash
+cd internal/ui
+AGENTS_BASE_URL=https://agents.example.com \
+AGENTS_WORKSPACE=readme-driven \
+AGENTS_TOKEN_FILE=/path/to/api-token.txt \
+node scripts/screenshots.mjs
+```
+
 `cmd/screenshotseed` builds a tempdir SQLite, imports a fictional fleet
-(`acme/widgets`, `acme/control-plane`), seeds events / traces / dispatch
-history, registers an in-flight `pr-reviewer` run on event #144, and
+in the `readme-driven` workspace, seeds events / traces / dispatch
+history, registers in-flight runner rows, and
 swaps the AI runner for a stub that blocks forever, so the runners
 page shows live rows for the screenshot rather than completed-but-failed
 ones (the screenshotting host has no real `claude` / `codex` binary).

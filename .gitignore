@@ -1,5 +1,8 @@
 .env
 .local/
+docs/img/graph-edit.gif
+docs/img/graph-flow-full.mp4
+docs/img/graph-flow-full.webm
 .publish-checklist.md
 .launch/
 config.yaml
