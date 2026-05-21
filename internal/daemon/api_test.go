@@ -12,6 +12,7 @@ import (
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/workflow"
 )
 
 // ── /api/agents ────────────────────────────────────────────────────────────
@@ -322,7 +323,16 @@ func TestHandleAPIAgentsCurrentStatusRunningWhenActive(t *testing.T) {
 	srv, _ := newTestServer(t, cfg)
 	// Mark "coder" as running through the same hook the engine uses on a
 	// real run start.
-	srv.Observe().ActiveRuns.StartRun("coder")
+	srv.Observe().BeginRun(workflow.BeginRunInput{
+		SpanID:      "span-coder",
+		EventID:     "event-coder",
+		WorkspaceID: fleet.DefaultWorkspaceID,
+		Agent:       "coder",
+		Backend:     "claude",
+		Repo:        "owner/repo",
+		EventKind:   "test",
+		StartedAt:   time.Now(),
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
