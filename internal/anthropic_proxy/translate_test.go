@@ -1,6 +1,7 @@
 package anthropicproxy
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 )
@@ -371,7 +372,7 @@ func TestToAnthropic_ToolCalls(t *testing.T) {
 	if block.Type != "tool_use" || block.ID != "call_1" || block.Name != "get_weather" {
 		t.Errorf("tool_use block: %+v", block)
 	}
-	if string(block.Input) != `{"location":"Tokyo"}` {
+	if !bytes.Equal(block.Input, []byte(`{"location":"Tokyo"}`)) {
 		t.Errorf("input: got %s, want %s", block.Input, `{"location":"Tokyo"}`)
 	}
 }
