@@ -47,6 +47,16 @@ func dedupRepoKey(workspaceID, repo string) string {
 	return fleet.NormalizeWorkspaceID(workspaceID) + "\x00" + repo
 }
 
+func eventDedupRepoKey(ev Event) string {
+	key := dedupRepoKey(eventWorkspaceID(ev), ev.Repo.FullName) + "\x00" + ev.Kind
+	if slices.Contains(labeledKinds, ev.Kind) {
+		if label, _ := ev.Payload["label"].(string); strings.TrimSpace(label) != "" {
+			key += "\x00" + strings.ToLower(strings.TrimSpace(label))
+		}
+	}
+	return key
+}
+
 func agentScopeAllowsRepo(agent fleet.Agent, repo fleet.Repo) bool {
 	agentWorkspace := fleet.NormalizeWorkspaceID(agent.WorkspaceID)
 	repoWorkspace := fleet.NormalizeWorkspaceID(repo.WorkspaceID)
