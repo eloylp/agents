@@ -18,15 +18,12 @@ import (
 func importGuardrails(tx *sql.Tx, guardrails []fleet.Guardrail) error {
 	for _, g := range guardrails {
 		fleet.NormalizeGuardrail(&g)
-		if g.WorkspaceID == "" && g.Repo != "" {
-			return fmt.Errorf("store import: guardrail %q repo scope requires workspace_id", g.Name)
-		}
-		if err := ensureCatalogScope(tx, "guardrail", g.WorkspaceID, g.Repo); err != nil {
+		if err := ensureCatalogScope(tx, "guardrail", g.WorkspaceID, ""); err != nil {
 			return err
 		}
 		if g.ID == "" {
 			var existingID, existingRef string
-			err := queryCatalogRefByScopeName(tx, "guardrails", g.WorkspaceID, g.Repo, g.Name).Scan(&existingID, &existingRef)
+			err := queryGuardrailRefByScopeName(tx, g.WorkspaceID, g.Name).Scan(&existingID, &existingRef)
 			if err == nil {
 				g.ID = existingRef
 			} else if !errors.Is(err, sql.ErrNoRows) {
@@ -34,7 +31,7 @@ func importGuardrails(tx *sql.Tx, guardrails []fleet.Guardrail) error {
 			}
 		}
 		if g.ID == "" {
-			id, err := derivedCatalogID("guardrail_", g.WorkspaceID, g.Repo, g.Name)
+			id, err := derivedCatalogID("guardrail_", g.WorkspaceID, "", g.Name)
 			if err != nil {
 				return fmt.Errorf("store import: guardrail %q: %w", g.Name, err)
 			}
@@ -58,18 +55,17 @@ func importGuardrails(tx *sql.Tx, guardrails []fleet.Guardrail) error {
 		}
 		enabled := boolToInt(g.Enabled)
 		if _, err := tx.Exec(`
-			INSERT INTO guardrails (id, ref, workspace_id, repo, name, description, content, enabled, position, updated_at)
-			VALUES (?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, datetime('now'))
+			INSERT INTO guardrails (id, ref, workspace_id, name, description, content, enabled, position, updated_at)
+			VALUES (?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, datetime('now'))
 			ON CONFLICT(ref) DO UPDATE SET
 				workspace_id = excluded.workspace_id,
-				repo = excluded.repo,
 				name = excluded.name,
 				description = excluded.description,
 				content     = excluded.content,
 				enabled     = excluded.enabled,
 				position    = excluded.position,
 				updated_at  = datetime('now')`,
-			internalID, g.ID, g.WorkspaceID, g.Repo, g.Name, g.Description, g.Content, enabled, g.Position,
+			internalID, g.ID, g.WorkspaceID, g.Name, g.Description, g.Content, enabled, g.Position,
 		); err != nil {
 			if isUniqueConstraint(err) {
 				return fmt.Errorf("store import: guardrail name %q is already used by another guardrail in that scope", g.Name)

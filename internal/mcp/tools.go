@@ -521,15 +521,12 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("create_guardrail",
-				mcpgo.WithDescription("Create or update an operator-defined prompt guardrail. Guardrails may be global, workspace-scoped, or repo-scoped. Upsert semantics preserve built-in flags (is_builtin / default_content). Same path as POST /guardrails."),
+				mcpgo.WithDescription("Create or update an operator-defined prompt guardrail. Guardrails may be global or workspace-scoped. Upsert semantics preserve built-in flags (is_builtin / default_content). Same path as POST /guardrails."),
 				mcpgo.WithString("id",
 					mcpgo.Description("Stable guardrail id. Optional; derived from scope and name when omitted."),
 				),
 				mcpgo.WithString("workspace_id",
-					mcpgo.Description("Optional workspace visibility scope. Required when repo is set."),
-				),
-				mcpgo.WithString("repo",
-					mcpgo.Description("Optional repo visibility scope inside workspace_id."),
+					mcpgo.Description("Optional workspace visibility scope. Omit for global guardrails."),
 				),
 				mcpgo.WithString("name",
 					mcpgo.Required(),

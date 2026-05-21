@@ -60,7 +60,7 @@ func seedWorkspaceGuardrails(tx *sql.Tx, workspaceID string) error {
 		INSERT OR IGNORE INTO workspace_guardrails (workspace_id, guardrail_name, position, enabled)
 		SELECT ?, id, position, enabled
 		FROM guardrails
-		WHERE is_builtin = 1 AND workspace_id IS NULL AND repo IS NULL`,
+		WHERE is_builtin = 1 AND workspace_id IS NULL`,
 		workspaceID,
 	); err != nil {
 		return fmt.Errorf("store import: seed workspace %s guardrails: %w", workspaceID, err)
@@ -141,8 +141,7 @@ func resolveWorkspaceGuardrailRef(q querier, workspaceID, ref string) (string, e
 	rows, err := q.Query(`
 		SELECT id, ref, name
 		FROM guardrails
-		WHERE repo IS NULL
-		  AND (id = ? OR ref = ? OR name = ?)
+		WHERE (id = ? OR ref = ? OR name = ?)
 		  AND (workspace_id IS NULL OR workspace_id = ?)
 		ORDER BY
 			CASE WHEN id = ? OR ref = ? THEN 0 ELSE 1 END,

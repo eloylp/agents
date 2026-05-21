@@ -40,7 +40,7 @@ The import/export config file is a fleet strategy document with reusable catalog
 - `backends`, AI CLI/runtime definitions agents can use
 - `prompts`, reusable prompt catalog entries, optionally scoped by workspace/repo
 - `skills`, reusable guidance catalog entries, keyed by stable public ref and optionally scoped by workspace/repo
-- `guardrails`, reusable policy catalog entries, optionally scoped by workspace/repo
+- `guardrails`, reusable policy catalog entries, global or optionally scoped by workspace
 - `workspaces`, operational contexts with selected guardrails, workspace-local agents, repos, and token budgets
 
 An agent is a workspace-local capability definition, it doesn't run until a repo in the same workspace binds it. Agents accept stable public `prompt_id` refs; human-facing inputs may use `prompt_ref` plus optional `prompt_scope` (`global`, `workspace`, or `workspace/owner/repo`, case-insensitive), which is resolved to an internal prompt FK at the API boundary. Inline agent prompt bodies are unsupported; create or select a prompt catalog entry first, then create the agent with `prompt_ref` or `prompt_id`. Skills are stored as stable public refs so duplicate display names across catalog scopes stay deterministic, while SQLite uses opaque internal IDs for FK integrity. A binding sets exactly one trigger: `labels: [...]`, `events: [...]`, or `cron: "..."`. The same agent can have multiple bindings on the same repo with different triggers.

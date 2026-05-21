@@ -10,7 +10,6 @@ import "strings"
 type Guardrail struct {
 	ID          string `yaml:"id,omitempty" json:"id,omitempty"`
 	WorkspaceID string `yaml:"workspace_id,omitempty" json:"workspace_id,omitempty"`
-	Repo        string `yaml:"repo,omitempty" json:"repo,omitempty"`
 	// Name is operator-controlled except for "workspace-boundary", which is
 	// reserved for the mandatory runtime-generated workspace/repo guardrail.
 	Name        string `yaml:"name" json:"name"`
@@ -51,7 +50,6 @@ func NormalizeGuardrail(g *Guardrail) {
 	if g.WorkspaceID != "" {
 		g.WorkspaceID = NormalizeWorkspaceID(g.WorkspaceID)
 	}
-	g.Repo = NormalizeRepoName(g.Repo)
 	g.Name = NormalizeGuardrailName(g.Name)
 	g.Description = strings.TrimSpace(g.Description)
 	g.Content = strings.TrimSpace(g.Content)
