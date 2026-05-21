@@ -41,7 +41,7 @@ func TestSSEHubPublishDelivers(t *testing.T) {
 
 	select {
 	case msg := <-ch:
-		if string(msg) != "hello" {
+		if !bytes.Equal(msg, []byte("hello")) {
 			t.Fatalf("want 'hello', got %q", string(msg))
 		}
 	default:
@@ -59,7 +59,7 @@ func TestSSEHubSlowSubscriberDropsOldest(t *testing.T) {
 	h.Publish([]byte("second")) // should drop "first" and place "second"
 
 	msg := <-ch
-	if string(msg) != "second" {
+	if !bytes.Equal(msg, []byte("second")) {
 		t.Fatalf("want 'second' (oldest dropped), got %q", string(msg))
 	}
 }
