@@ -91,3 +91,115 @@ func TestPushEventCarriesRepoWorkspace(t *testing.T) {
 		t.Fatal("timed out waiting for queued event")
 	}
 }
+
+func TestWebhookRepoPrefersEnabledWorkspaceOverDisabledDefault(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
+
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if err := st.UpsertRepo(fleet.Repo{
+		WorkspaceID: fleet.DefaultWorkspaceID,
+		Name:        "owner/repo",
+		Enabled:     false,
+	}); err != nil {
+		t.Fatalf("seed default repo: %v", err)
+	}
+	if err := st.UpsertRepo(fleet.Repo{
+		WorkspaceID: "team-a",
+		Name:        "owner/repo",
+		Enabled:     true,
+	}); err != nil {
+		t.Fatalf("seed team repo: %v", err)
+	}
+
+	dc := workflow.NewDataChannels(1, st)
+	h := NewHandler(NewDeliveryStore(10*time.Minute), dc, st, config.HTTPConfig{}, zerolog.Nop())
+	body := []byte(`{
+		"action":"created",
+		"comment":{"body":"continue"},
+		"issue":{"number":7},
+		"repository":{"full_name":"owner/repo"},
+		"sender":{"login":"maintainer"}
+	}`)
+	w := httptest.NewRecorder()
+
+	h.handleIssueCommentEvent(context.Background(), w, body, "delivery-1")
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusAccepted)
+	}
+	select {
+	case queued := <-dc.EventChan():
+		if queued.Event.WorkspaceID != "team-a" {
+			t.Fatalf("WorkspaceID = %q, want team-a", queued.Event.WorkspaceID)
+		}
+		if queued.Event.Kind != "issue_comment.created" || queued.Event.Number != 7 {
+			t.Fatalf("event = %+v, want issue_comment.created #7", queued.Event)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for queued event")
+	}
+}
+
+func TestWebhookFansOutToEveryEnabledWorkspaceRepo(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
+
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	for _, repo := range []fleet.Repo{
+		{WorkspaceID: fleet.DefaultWorkspaceID, Name: "owner/repo", Enabled: true},
+		{WorkspaceID: "team-a", Name: "owner/repo", Enabled: true},
+	} {
+		if err := st.UpsertRepo(repo); err != nil {
+			t.Fatalf("seed repo %s/%s: %v", repo.WorkspaceID, repo.Name, err)
+		}
+	}
+
+	dc := workflow.NewDataChannels(2, st)
+	h := NewHandler(NewDeliveryStore(10*time.Minute), dc, st, config.HTTPConfig{}, zerolog.Nop())
+	body := []byte(`{
+		"action":"created",
+		"comment":{"body":"continue"},
+		"issue":{"number":7},
+		"repository":{"full_name":"owner/repo"},
+		"sender":{"login":"maintainer"}
+	}`)
+	w := httptest.NewRecorder()
+
+	h.handleIssueCommentEvent(context.Background(), w, body, "delivery-1")
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusAccepted)
+	}
+	got := map[string]bool{}
+	for range 2 {
+		select {
+		case queued := <-dc.EventChan():
+			got[queued.Event.WorkspaceID] = true
+			if queued.Event.Kind != "issue_comment.created" || queued.Event.Number != 7 {
+				t.Fatalf("event = %+v, want issue_comment.created #7", queued.Event)
+			}
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("timed out waiting for queued event")
+		}
+	}
+	for _, workspaceID := range []string{fleet.DefaultWorkspaceID, "team-a"} {
+		if !got[workspaceID] {
+			t.Fatalf("missing queued event for workspace %q; got %+v", workspaceID, got)
+		}
+	}
+}

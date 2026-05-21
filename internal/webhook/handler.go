@@ -9,7 +9,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -55,27 +54,61 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle(h.httpCfg.WebhookPath, withTimeout(http.HandlerFunc(h.handleGitHubWebhook))).Methods(http.MethodPost)
 }
 
-// repoByName returns the named repo from SQLite, or false if not present.
-func (h *Handler) repoByName(name string) (fleet.Repo, bool) {
+// reposByName returns every configured workspace repo matching name.
+func (h *Handler) reposByName(name string) ([]fleet.Repo, bool) {
 	repos, err := h.store.ReadRepos()
 	if err != nil {
 		h.logger.Error().Err(err).Msg("webhook: read repos")
-		return fleet.Repo{}, false
+		return nil, false
 	}
 	want := fleet.NormalizeRepoName(name)
-	i := slices.IndexFunc(repos, func(r fleet.Repo) bool {
-		return r.Name == want && fleet.NormalizeWorkspaceID(r.WorkspaceID) == fleet.DefaultWorkspaceID
-	})
-	if i >= 0 {
-		return repos[i], true
+
+	var matches []fleet.Repo
+	for _, repo := range repos {
+		if repo.Name != want {
+			continue
+		}
+		matches = append(matches, repo)
 	}
-	// GitHub webhooks do not carry workspace identity. Until repo names stop
-	// being globally unique, prefer the default workspace when present and
-	// otherwise fall back to the deterministic ReadRepos ordering.
-	if i := slices.IndexFunc(repos, func(r fleet.Repo) bool { return r.Name == want }); i >= 0 {
-		return repos[i], true
+	return matches, len(matches) > 0
+}
+
+func (h *Handler) webhookRepos(name, event, action, deliveryID string) []fleet.Repo {
+	repos, ok := h.reposByName(name)
+	if !ok {
+		h.logger.Info().
+			Str("delivery_id", deliveryID).
+			Str("event", event).
+			Str("action", action).
+			Str("repo", fleet.NormalizeRepoName(name)).
+			Msg("webhook skipped, repo not configured")
+		return nil
 	}
-	return fleet.Repo{}, false
+
+	active := make([]fleet.Repo, 0, len(repos))
+	for _, repo := range repos {
+		if !repo.Enabled {
+			h.logger.Info().
+				Str("delivery_id", deliveryID).
+				Str("event", event).
+				Str("action", action).
+				Str("workspace", fleet.NormalizeWorkspaceID(repo.WorkspaceID)).
+				Str("repo", repo.Name).
+				Msg("webhook skipped, repo disabled")
+			continue
+		}
+		active = append(active, repo)
+	}
+	return active
+}
+
+func (h *Handler) skipWebhookLog(deliveryID string, repo fleet.Repo, event, action string) *zerolog.Event {
+	return h.logger.Info().
+		Str("delivery_id", deliveryID).
+		Str("event", event).
+		Str("action", action).
+		Str("workspace", fleet.NormalizeWorkspaceID(repo.WorkspaceID)).
+		Str("repo", repo.Name)
 }
 
 func (h *Handler) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +131,7 @@ func (h *Handler) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	// Delivery dedup is checked only after signature verification so
 	// unauthenticated requests cannot poison the dedupe cache.
 	if h.delivery.SeenOrAdd(deliveryID, time.Now()) {
+		h.logger.Info().Str("delivery_id", deliveryID).Msg("webhook skipped, duplicate delivery")
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
@@ -181,49 +215,62 @@ func (h *Handler) handleIssuesEvent(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 
-	repo, ok := h.repoByName(payload.Repository.FullName)
-	if !ok || !repo.Enabled {
+	repos := h.webhookRepos(payload.Repository.FullName, "issues", payload.Action, deliveryID)
+	if len(repos) == 0 {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
-	repoRef := workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled}
-	workspaceID := fleet.NormalizeWorkspaceID(repo.WorkspaceID)
-
 	if payload.Issue.PullRequest != nil {
+		for _, repo := range repos {
+			h.skipWebhookLog(deliveryID, repo, "issues", payload.Action).
+				Int("number", payload.Issue.Number).
+				Msg("webhook skipped, issue is backed by pull request")
+		}
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
 	switch payload.Action {
 	case "labeled":
-		ev := workflow.Event{
-			ID:          deliveryID,
-			WorkspaceID: workspaceID,
-			Repo:        repoRef,
-			Kind:        "issues.labeled",
-			Number:      payload.Issue.Number,
-			Actor:       payload.Sender.Login,
-			Payload: map[string]any{
-				"label": payload.Label.Name,
-			},
+		events := make([]workflow.Event, 0, len(repos))
+		for _, repo := range repos {
+			events = append(events, workflow.Event{
+				ID:          deliveryID,
+				WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
+				Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+				Kind:        "issues.labeled",
+				Number:      payload.Issue.Number,
+				Actor:       payload.Sender.Login,
+				Payload: map[string]any{
+					"label": payload.Label.Name,
+				},
+			})
 		}
-		h.enqueue(ctx, w, ev, deliveryID)
+		h.enqueueEvents(ctx, w, events, deliveryID)
 	case "opened", "edited", "reopened", "closed":
-		ev := workflow.Event{
-			ID:          deliveryID,
-			WorkspaceID: workspaceID,
-			Repo:        repoRef,
-			Kind:        "issues." + payload.Action,
-			Number:      payload.Issue.Number,
-			Actor:       payload.Sender.Login,
-			Payload: map[string]any{
-				"title": payload.Issue.Title,
-				"body":  payload.Issue.Body,
-			},
+		events := make([]workflow.Event, 0, len(repos))
+		for _, repo := range repos {
+			events = append(events, workflow.Event{
+				ID:          deliveryID,
+				WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
+				Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+				Kind:        "issues." + payload.Action,
+				Number:      payload.Issue.Number,
+				Actor:       payload.Sender.Login,
+				Payload: map[string]any{
+					"title": payload.Issue.Title,
+					"body":  payload.Issue.Body,
+				},
+			})
 		}
-		h.enqueue(ctx, w, ev, deliveryID)
+		h.enqueueEvents(ctx, w, events, deliveryID)
 	default:
+		for _, repo := range repos {
+			h.skipWebhookLog(deliveryID, repo, "issues", payload.Action).
+				Int("number", payload.Issue.Number).
+				Msg("webhook skipped, ignored issue action")
+		}
 		w.WriteHeader(http.StatusAccepted)
 	}
 }
@@ -245,34 +292,38 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, w http.ResponseWri
 		return
 	}
 
-	repo, ok := h.repoByName(payload.Repository.FullName)
-	if !ok || !repo.Enabled {
+	repos := h.webhookRepos(payload.Repository.FullName, "pull_request", payload.Action, deliveryID)
+	if len(repos) == 0 {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
-	repoRef := workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled}
-	workspaceID := fleet.NormalizeWorkspaceID(repo.WorkspaceID)
-
 	switch payload.Action {
 	case "labeled":
 		if payload.PullRequest.Draft {
-			h.logger.Info().Str("repo", repo.Name).Int("number", payload.PullRequest.Number).Msg("pull request skipped, draft")
+			for _, repo := range repos {
+				h.skipWebhookLog(deliveryID, repo, "pull_request", payload.Action).
+					Int("number", payload.PullRequest.Number).
+					Msg("webhook skipped, pull request is draft")
+			}
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
-		ev := workflow.Event{
-			ID:          deliveryID,
-			WorkspaceID: workspaceID,
-			Repo:        repoRef,
-			Kind:        "pull_request.labeled",
-			Number:      payload.PullRequest.Number,
-			Actor:       payload.Sender.Login,
-			Payload: map[string]any{
-				"label": payload.Label.Name,
-			},
+		events := make([]workflow.Event, 0, len(repos))
+		for _, repo := range repos {
+			events = append(events, workflow.Event{
+				ID:          deliveryID,
+				WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
+				Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+				Kind:        "pull_request.labeled",
+				Number:      payload.PullRequest.Number,
+				Actor:       payload.Sender.Login,
+				Payload: map[string]any{
+					"label": payload.Label.Name,
+				},
+			})
 		}
-		h.enqueue(ctx, w, ev, deliveryID)
+		h.enqueueEvents(ctx, w, events, deliveryID)
 	case "opened", "synchronize", "ready_for_review", "closed":
 		eventPayload := map[string]any{
 			"title": payload.PullRequest.Title,
@@ -281,17 +332,25 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, w http.ResponseWri
 		if payload.Action == "closed" {
 			eventPayload["merged"] = payload.PullRequest.Merged
 		}
-		ev := workflow.Event{
-			ID:          deliveryID,
-			WorkspaceID: workspaceID,
-			Repo:        repoRef,
-			Kind:        "pull_request." + payload.Action,
-			Number:      payload.PullRequest.Number,
-			Actor:       payload.Sender.Login,
-			Payload:     eventPayload,
+		events := make([]workflow.Event, 0, len(repos))
+		for _, repo := range repos {
+			events = append(events, workflow.Event{
+				ID:          deliveryID,
+				WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
+				Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+				Kind:        "pull_request." + payload.Action,
+				Number:      payload.PullRequest.Number,
+				Actor:       payload.Sender.Login,
+				Payload:     eventPayload,
+			})
 		}
-		h.enqueue(ctx, w, ev, deliveryID)
+		h.enqueueEvents(ctx, w, events, deliveryID)
 	default:
+		for _, repo := range repos {
+			h.skipWebhookLog(deliveryID, repo, "pull_request", payload.Action).
+				Int("number", payload.PullRequest.Number).
+				Msg("webhook skipped, ignored pull request action")
+		}
 		w.WriteHeader(http.StatusAccepted)
 	}
 }
@@ -311,29 +370,36 @@ func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWr
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
+	repos := h.webhookRepos(payload.Repository.FullName, "issue_comment", payload.Action, deliveryID)
+	if len(repos) == 0 {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
 	if payload.Action != "created" {
+		for _, repo := range repos {
+			h.skipWebhookLog(deliveryID, repo, "issue_comment", payload.Action).
+				Int("number", payload.Issue.Number).
+				Msg("webhook skipped, ignored issue comment action")
+		}
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
-	repo, ok := h.repoByName(payload.Repository.FullName)
-	if !ok || !repo.Enabled {
-		w.WriteHeader(http.StatusAccepted)
-		return
+	events := make([]workflow.Event, 0, len(repos))
+	for _, repo := range repos {
+		events = append(events, workflow.Event{
+			ID:          deliveryID,
+			WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
+			Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+			Kind:        "issue_comment.created",
+			Number:      payload.Issue.Number,
+			Actor:       payload.Sender.Login,
+			Payload: map[string]any{
+				"body": payload.Comment.Body,
+			},
+		})
 	}
-
-	ev := workflow.Event{
-		ID:          deliveryID,
-		WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
-		Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
-		Kind:        "issue_comment.created",
-		Number:      payload.Issue.Number,
-		Actor:       payload.Sender.Login,
-		Payload: map[string]any{
-			"body": payload.Comment.Body,
-		},
-	}
-	h.enqueue(ctx, w, ev, deliveryID)
+	h.enqueueEvents(ctx, w, events, deliveryID)
 }
 
 // handlePullRequestReviewEvent handles X-GitHub-Event: pull_request_review.
@@ -351,30 +417,37 @@ func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, w http.Respo
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
+	repos := h.webhookRepos(payload.Repository.FullName, "pull_request_review", payload.Action, deliveryID)
+	if len(repos) == 0 {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
 	if payload.Action != "submitted" {
+		for _, repo := range repos {
+			h.skipWebhookLog(deliveryID, repo, "pull_request_review", payload.Action).
+				Int("number", payload.PullRequest.Number).
+				Msg("webhook skipped, ignored pull request review action")
+		}
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
-	repo, ok := h.repoByName(payload.Repository.FullName)
-	if !ok || !repo.Enabled {
-		w.WriteHeader(http.StatusAccepted)
-		return
+	events := make([]workflow.Event, 0, len(repos))
+	for _, repo := range repos {
+		events = append(events, workflow.Event{
+			ID:          deliveryID,
+			WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
+			Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+			Kind:        "pull_request_review.submitted",
+			Number:      payload.PullRequest.Number,
+			Actor:       payload.Sender.Login,
+			Payload: map[string]any{
+				"state": payload.Review.State,
+				"body":  payload.Review.Body,
+			},
+		})
 	}
-
-	ev := workflow.Event{
-		ID:          deliveryID,
-		WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
-		Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
-		Kind:        "pull_request_review.submitted",
-		Number:      payload.PullRequest.Number,
-		Actor:       payload.Sender.Login,
-		Payload: map[string]any{
-			"state": payload.Review.State,
-			"body":  payload.Review.Body,
-		},
-	}
-	h.enqueue(ctx, w, ev, deliveryID)
+	h.enqueueEvents(ctx, w, events, deliveryID)
 }
 
 // handlePullRequestReviewCommentEvent handles X-GitHub-Event:
@@ -393,29 +466,36 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
+	repos := h.webhookRepos(payload.Repository.FullName, "pull_request_review_comment", payload.Action, deliveryID)
+	if len(repos) == 0 {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
 	if payload.Action != "created" {
+		for _, repo := range repos {
+			h.skipWebhookLog(deliveryID, repo, "pull_request_review_comment", payload.Action).
+				Int("number", payload.PullRequest.Number).
+				Msg("webhook skipped, ignored pull request review comment action")
+		}
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
-	repo, ok := h.repoByName(payload.Repository.FullName)
-	if !ok || !repo.Enabled {
-		w.WriteHeader(http.StatusAccepted)
-		return
+	events := make([]workflow.Event, 0, len(repos))
+	for _, repo := range repos {
+		events = append(events, workflow.Event{
+			ID:          deliveryID,
+			WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
+			Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+			Kind:        "pull_request_review_comment.created",
+			Number:      payload.PullRequest.Number,
+			Actor:       payload.Sender.Login,
+			Payload: map[string]any{
+				"body": payload.Comment.Body,
+			},
+		})
 	}
-
-	ev := workflow.Event{
-		ID:          deliveryID,
-		WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
-		Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
-		Kind:        "pull_request_review_comment.created",
-		Number:      payload.PullRequest.Number,
-		Actor:       payload.Sender.Login,
-		Payload: map[string]any{
-			"body": payload.Comment.Body,
-		},
-	}
-	h.enqueue(ctx, w, ev, deliveryID)
+	h.enqueueEvents(ctx, w, events, deliveryID)
 }
 
 // handlePushEvent handles X-GitHub-Event: push.
@@ -432,8 +512,8 @@ func (h *Handler) handlePushEvent(ctx context.Context, w http.ResponseWriter, bo
 		return
 	}
 
-	repo, ok := h.repoByName(payload.Repository.FullName)
-	if !ok || !repo.Enabled {
+	repos := h.webhookRepos(payload.Repository.FullName, "push", "", deliveryID)
+	if len(repos) == 0 {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
@@ -442,43 +522,58 @@ func (h *Handler) handlePushEvent(ctx context.Context, w http.ResponseWriter, bo
 	// (tags, notes). Only "new commit pushed to a branch" maps to push events.
 	const deletedSHA = "0000000000000000000000000000000000000000"
 	if payload.After == deletedSHA || !strings.HasPrefix(payload.Ref, "refs/heads/") {
+		for _, repo := range repos {
+			h.skipWebhookLog(deliveryID, repo, "push", "").
+				Str("ref", payload.Ref).
+				Str("head_sha", payload.After).
+				Msg("webhook skipped, ignored push ref")
+		}
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
-	ev := workflow.Event{
-		ID:          deliveryID,
-		WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
-		Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
-		Kind:        "push",
-		Actor:       payload.Sender.Login,
-		Payload: map[string]any{
-			"ref":      payload.Ref,
-			"head_sha": payload.After,
-		},
+	events := make([]workflow.Event, 0, len(repos))
+	for _, repo := range repos {
+		events = append(events, workflow.Event{
+			ID:          deliveryID,
+			WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
+			Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+			Kind:        "push",
+			Actor:       payload.Sender.Login,
+			Payload: map[string]any{
+				"ref":      payload.Ref,
+				"head_sha": payload.After,
+			},
+		})
 	}
-	h.enqueue(ctx, w, ev, deliveryID)
+	h.enqueueEvents(ctx, w, events, deliveryID)
 }
 
-// enqueue pushes ev onto the event queue, handling all error cases.
-func (h *Handler) enqueue(ctx context.Context, w http.ResponseWriter, ev workflow.Event, deliveryID string) {
-	if _, err := h.channels.PushEvent(ctx, ev); err != nil {
-		if errors.Is(err, workflow.ErrEventQueueFull) {
-			h.delivery.Delete(deliveryID)
-			h.logger.Warn().Str("repo", ev.Repo.FullName).Str("kind", ev.Kind).Msg("event queue full, dropping webhook")
-			http.Error(w, "event queue full, retry later", http.StatusServiceUnavailable)
+// enqueueEvents pushes events onto the durable queue and writes one response.
+func (h *Handler) enqueueEvents(ctx context.Context, w http.ResponseWriter, events []workflow.Event, deliveryID string) {
+	for _, ev := range events {
+		if _, err := h.channels.PushEvent(ctx, ev); err != nil {
+			h.handleEnqueueError(w, ev, deliveryID, err)
 			return
 		}
-		if errors.Is(err, workflow.ErrQueueClosed) {
-			h.logger.Warn().Str("repo", ev.Repo.FullName).Msg("queue closed during shutdown, dropping webhook")
-			http.Error(w, "shutting down, retry later", http.StatusServiceUnavailable)
-			return
-		}
-		h.delivery.Delete(deliveryID)
-		http.Error(w, "request cancelled", http.StatusRequestTimeout)
-		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *Handler) handleEnqueueError(w http.ResponseWriter, ev workflow.Event, deliveryID string, err error) {
+	if errors.Is(err, workflow.ErrEventQueueFull) {
+		h.delivery.Delete(deliveryID)
+		h.logger.Warn().Str("repo", ev.Repo.FullName).Str("kind", ev.Kind).Msg("event queue full, dropping webhook")
+		http.Error(w, "event queue full, retry later", http.StatusServiceUnavailable)
+		return
+	}
+	if errors.Is(err, workflow.ErrQueueClosed) {
+		h.logger.Warn().Str("repo", ev.Repo.FullName).Msg("queue closed during shutdown, dropping webhook")
+		http.Error(w, "shutting down, retry later", http.StatusServiceUnavailable)
+		return
+	}
+	h.delivery.Delete(deliveryID)
+	http.Error(w, "request cancelled", http.StatusRequestTimeout)
 }
 
 // verifySignature checks the HMAC-SHA256 signature from X-Hub-Signature-256.
