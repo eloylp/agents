@@ -34,6 +34,8 @@ import (
 	"github.com/eloylp/agents/internal/workflow"
 )
 
+const fixtureWorkspace = "readme-driven"
+
 // blockingRunner satisfies ai.Runner but never returns. The screenshot
 // seeder uses this so events the workflow processor picks up stay
 // in-flight (event_queue.completed_at stays NULL, the engine's
@@ -70,8 +72,11 @@ func run() error {
 	st := store.New(db)
 
 	cfg := buildFixtureConfig()
-	if err := st.ImportAll(cfg.Agents, cfg.Repos, cfg.Skills, cfg.Daemon.AIBackends, cfg.Guardrails, nil); err != nil {
+	if err := store.ImportConfig(st.DB(), cfg, nil); err != nil {
 		return fmt.Errorf("import seed: %w", err)
+	}
+	if err := seedScreenshotAuth(st); err != nil {
+		return err
 	}
 
 	logger := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr, NoColor: true}).Level(zerolog.WarnLevel)
@@ -96,12 +101,38 @@ func run() error {
 	return d.Run(ctx)
 }
 
+func seedScreenshotAuth(st *store.Store) error {
+	ctx := context.Background()
+	session, err := st.BootstrapUser(ctx, "screenshot-admin", "screenshot-password", 12*time.Hour)
+	if err != nil {
+		return fmt.Errorf("bootstrap screenshot auth: %w", err)
+	}
+	identity, err := st.AuthenticateToken(ctx, session.Token, store.AuthTokenKindSession)
+	if err != nil {
+		return fmt.Errorf("authenticate screenshot session: %w", err)
+	}
+	api, err := st.CreateAPIToken(ctx, identity.User.ID, "Documentation screenshots", nil)
+	if err != nil {
+		return fmt.Errorf("create screenshot api token: %w", err)
+	}
+	tokenPath := filepath.Join(".local", "screenshot-api-token.txt")
+	if err := os.MkdirAll(filepath.Dir(tokenPath), 0o700); err != nil {
+		return fmt.Errorf("create screenshot token dir: %w", err)
+	}
+	if err := os.WriteFile(tokenPath, []byte(api.Token), 0o600); err != nil {
+		return fmt.Errorf("write screenshot api token: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "screenshotseed: API token written to %s\n", tokenPath)
+	return nil
+}
+
 // buildFixtureConfig assembles a small but realistic fleet so screenshots
 // have rich content, multiple agents with descriptions, two backends
 // with one healthy / one with a discovery warning, a couple of repos
 // with mixed binding shapes (labels + cron).
 func buildFixtureConfig() *config.Config {
 	enabled := true
+	allowMemory := true
 
 	cfg := &config.Config{
 		Daemon: config.DaemonConfig{
@@ -147,20 +178,33 @@ func buildFixtureConfig() *config.Config {
 				},
 			},
 		},
+		Workspaces: []fleet.Workspace{
+			{
+				ID:          fixtureWorkspace,
+				Name:        "README Driven",
+				Description: "Synthetic workspace used to record dashboard screenshots and the README demo flow.",
+			},
+		},
 		Skills: map[string]fleet.Skill{
-			"architect": {Prompt: "## Architect mindset\n\nFavour boring solutions. Write down the trade-offs you considered. Reject premature abstractions; three similar lines beats a clever helper.\n\nThink about reversibility, destructive actions need a confirmation gate.\n"},
-			"security":  {Prompt: "## Security review\n\nThink about: input validation, authn/authz boundaries, secrets handling, injection vectors (SQL, command, prompt), supply-chain (dependency pinning), and the OWASP top 10.\n\nFlag risks in the response summary; do not mention them on PR comments without an explicit operator request.\n"},
-			"testing":   {Prompt: "## Testing discipline\n\nEvery behavioural change ships with a test. Table-driven for >2 input shapes. `t.Parallel()` when independent. Run `-race` before declaring done.\n"},
-			"dx":        {Prompt: "## Developer experience\n\nReadable error messages. Sensible defaults. Logs that an operator can grep without a manual.\n"},
+			"architect":     {Prompt: "## Architect mindset\n\nFavour boring solutions. Write down the trade-offs you considered. Reject premature abstractions; three similar lines beats a clever helper.\n\nThink about reversibility, destructive actions need a confirmation gate.\n"},
+			"security":      {Prompt: "## Security review\n\nThink about: input validation, authn/authz boundaries, secrets handling, injection vectors (SQL, command, prompt), supply-chain (dependency pinning), and the OWASP top 10.\n\nFlag risks in the response summary; do not mention them on PR comments without an explicit operator request.\n"},
+			"testing":       {Prompt: "## Testing discipline\n\nEvery behavioural change ships with a test. Table-driven for >2 input shapes. `t.Parallel()` when independent. Run `-race` before declaring done.\n"},
+			"dx":            {Prompt: "## Developer experience\n\nReadable error messages. Sensible defaults. Logs that an operator can grep without a manual.\n"},
+			"dev-exp":       {Prompt: "## Developer experience\n\nKeep workflows obvious, defaults useful, and diagnostics concrete enough for an operator to act on without reading source.\n"},
+			"documentation": {Prompt: "## Documentation\n\nKeep docs tied to product behavior. Prefer short examples, current screenshots, and clear maintenance notes over aspirational descriptions.\n"},
 		},
 		Prompts: []fleet.Prompt{
-			{Name: "coder", Content: "You are the coder agent. Pick up the issue described in the runtime context, write the smallest viable change, ship a PR with a tight description and a test plan. Dispatch pr-reviewer once the PR is open.\n"},
-			{Name: "pr-reviewer", Content: "You are the pr-reviewer agent. Read the PR diff, check correctness against the linked issue, surface design concerns, verify test coverage, then either approve or request changes with concrete feedback.\n"},
-			{Name: "scout", Content: "You are the scout agent. Walk the repo on a schedule, surface drift between code and docs, file issues for follow-ups, and dispatch coder when the fix is small and obvious.\n"},
-			{Name: "refactorer", Content: "You are the refactorer. On every cron tick, find one piece of housekeeping work the codebase needs, do it, ship a PR. Always small, never speculative.\n"},
+			{ID: "coder", Name: "coder", Description: "Implementation agent contract", Content: "You are the coder agent. Pick up the issue described in the runtime context, write the smallest viable change, ship a PR with a tight description and a test plan. Dispatch pr-reviewer once the PR is open.\n"},
+			{ID: "pr-reviewer", Name: "pr-reviewer", Description: "Pull request review contract", Content: "You are the pr-reviewer agent. Read the PR diff, check correctness against the linked issue, surface design concerns, verify test coverage, then either approve or request changes with concrete feedback.\n"},
+			{ID: "scout", Name: "scout", Description: "Repository scouting contract", Content: "You are the scout agent. Walk the repo on a schedule, surface drift between code and docs, file issues for follow-ups, and dispatch coder when the fix is small and obvious.\n"},
+			{ID: "refactorer", Name: "refactorer", Description: "Housekeeping contract", Content: "You are the refactorer. On every cron tick, find one piece of housekeeping work the codebase needs, do it, ship a PR. Always small, never speculative.\n"},
+			{ID: "product-strategist", Name: "product-strategist", Description: "Product strategy and prioritization contract", Content: "You are the product-strategist agent. Translate customer signals, roadmap pressure, and support themes into focused implementation proposals. Dispatch coder only when the next step is concrete.\n"},
+			{ID: "document-writer", Name: "document-writer", Description: "Documentation authoring contract", Content: "You are the document-writer agent. Turn accepted product behavior into README-ready examples, release notes, and operator-facing docs. Dispatch release-scribe for changelog synthesis when needed.\n"},
+			{ID: "release-scribe", Name: "release-scribe", Description: "Release note and documentation summary contract", Content: "You are the release-scribe agent. Turn completed PRs, trace summaries, and dispatch history into release-note drafts and README-ready documentation snippets. Dispatch scout when the documentation claims need another repo sweep.\n"},
 		},
 		Agents: []fleet.Agent{
 			{
+				WorkspaceID:   fixtureWorkspace,
 				Name:          "coder",
 				Backend:       "claude",
 				Model:         "claude-opus-4-7",
@@ -169,9 +213,11 @@ func buildFixtureConfig() *config.Config {
 				AllowPRs:      true,
 				AllowDispatch: true,
 				CanDispatch:   []string{"pr-reviewer", "scout"},
-				PromptRef:     "coder",
+				PromptID:      "coder",
+				AllowMemory:   &allowMemory,
 			},
 			{
+				WorkspaceID:   fixtureWorkspace,
 				Name:          "pr-reviewer",
 				Backend:       "claude",
 				Model:         "claude-sonnet-4-6",
@@ -179,9 +225,11 @@ func buildFixtureConfig() *config.Config {
 				Description:   "Reviews open PRs for correctness, design, and test coverage. Approves or requests changes.",
 				AllowPRs:      true,
 				AllowDispatch: true,
-				PromptRef:     "pr-reviewer",
+				PromptID:      "pr-reviewer",
+				AllowMemory:   &allowMemory,
 			},
 			{
+				WorkspaceID:   fixtureWorkspace,
 				Name:          "scout",
 				Backend:       "claude",
 				Model:         "claude-haiku-4-5",
@@ -189,22 +237,50 @@ func buildFixtureConfig() *config.Config {
 				Description:   "Sweeps the codebase weekly for stale TODOs, dead code, doc drift, and missed follow-ups.",
 				AllowDispatch: true,
 				CanDispatch:   []string{"coder"},
-				PromptRef:     "scout",
+				PromptID:      "scout",
+				AllowMemory:   &allowMemory,
 			},
 			{
+				WorkspaceID: fixtureWorkspace,
 				Name:        "refactorer",
 				Backend:     "local-qwen",
 				Model:       "qwen3-coder-480b",
 				Skills:      []string{"architect"},
 				Description: "Cron-driven housekeeper: removes dead branches, migrates deprecated APIs, keeps tooling current.",
 				AllowPRs:    true,
-				PromptRef:   "refactorer",
+				PromptID:    "refactorer",
+				AllowMemory: &allowMemory,
+			},
+			{
+				WorkspaceID:   fixtureWorkspace,
+				Name:          "product-strategist",
+				Backend:       "local-qwen",
+				Model:         "qwen3-coder-480b",
+				Skills:        []string{"architect", "documentation"},
+				Description:   "Turns roadmap signals and review findings into focused implementation proposals.",
+				AllowDispatch: true,
+				CanDispatch:   []string{"coder", "document-writer"},
+				PromptID:      "product-strategist",
+				AllowMemory:   &allowMemory,
+			},
+			{
+				WorkspaceID:   fixtureWorkspace,
+				Name:          "document-writer",
+				Backend:       "claude",
+				Model:         "claude-sonnet-4-6",
+				Skills:        []string{"documentation", "dev-exp"},
+				Description:   "Maintains README examples, release notes, and operator-facing documentation.",
+				AllowPRs:      true,
+				AllowDispatch: true,
+				PromptID:      "document-writer",
+				AllowMemory:   &allowMemory,
 			},
 		},
 		Repos: []fleet.Repo{
 			{
-				Name:    "acme/widgets",
-				Enabled: true,
+				WorkspaceID: fixtureWorkspace,
+				Name:        "acme/widgets",
+				Enabled:     true,
 				Use: []fleet.Binding{
 					{ID: 1, Agent: "coder", Labels: []string{"ai:fix", "ai:feature"}, Enabled: &enabled},
 					{ID: 2, Agent: "pr-reviewer", Events: []string{"pull_request.opened", "pull_request.synchronize"}, Enabled: &enabled},
@@ -212,20 +288,23 @@ func buildFixtureConfig() *config.Config {
 				},
 			},
 			{
-				Name:    "acme/control-plane",
-				Enabled: true,
+				WorkspaceID: fixtureWorkspace,
+				Name:        "acme/control-plane",
+				Enabled:     true,
 				Use: []fleet.Binding{
 					{ID: 4, Agent: "pr-reviewer", Events: []string{"pull_request.opened"}, Enabled: &enabled},
 					{ID: 5, Agent: "scout", Cron: "0 7 * * *", Enabled: &enabled},
 				},
 			},
 			{
-				Name:    "acme/playground",
-				Enabled: false,
-				Use:     []fleet.Binding{},
+				WorkspaceID: fixtureWorkspace,
+				Name:        "acme/playground",
+				Enabled:     false,
+				Use:         []fleet.Binding{},
 			},
 		},
 	}
+	cfg.Backends = cfg.Daemon.AIBackends
 	return cfg
 }
 
@@ -238,15 +317,15 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 
 	// Recent events firehose
 	events := []workflow.Event{
-		{ID: "evt-001", Repo: workflow.RepoRef{FullName: "acme/widgets", Enabled: true}, Kind: "issues.labeled", Number: 142, Actor: "alice", Payload: map[string]any{"label": "ai:fix"}},
-		{ID: "evt-002", Repo: workflow.RepoRef{FullName: "acme/widgets", Enabled: true}, Kind: "pull_request.opened", Number: 143, Actor: "coder", Payload: map[string]any{"title": "fix: handle empty cart in checkout", "draft": false}},
-		{ID: "evt-003", Repo: workflow.RepoRef{FullName: "acme/widgets", Enabled: true}, Kind: "pull_request.synchronize", Number: 143, Actor: "coder", Payload: map[string]any{"title": "fix: handle empty cart in checkout"}},
-		{ID: "evt-004", Repo: workflow.RepoRef{FullName: "acme/control-plane", Enabled: true}, Kind: "pull_request.opened", Number: 88, Actor: "bob", Payload: map[string]any{"title": "add: rate limiter for /run", "draft": false}},
-		{ID: "evt-005", Repo: workflow.RepoRef{FullName: "acme/widgets", Enabled: true}, Kind: "agent.dispatch", Number: 143, Actor: "coder", Payload: map[string]any{"target_agent": "pr-reviewer", "reason": "PR ready for review", "invoked_by": "coder"}},
-		{ID: "evt-006", Repo: workflow.RepoRef{FullName: "acme/control-plane", Enabled: true}, Kind: "cron", Number: 0, Actor: "scout", Payload: map[string]any{"target_agent": "scout"}},
-		{ID: "evt-007", Repo: workflow.RepoRef{FullName: "acme/widgets", Enabled: true}, Kind: "issue_comment.created", Number: 142, Actor: "carol", Payload: map[string]any{"body": "Could you also handle the multi-currency case?"}},
-		{ID: "evt-008", Repo: workflow.RepoRef{FullName: "acme/widgets", Enabled: true}, Kind: "pull_request.closed", Number: 138, Actor: "alice", Payload: map[string]any{"title": "chore: bump go to 1.25", "merged": true}},
-		{ID: "evt-009", Repo: workflow.RepoRef{FullName: "acme/control-plane", Enabled: true}, Kind: "agents.run", Number: 0, Actor: "mcp", Payload: map[string]any{"target_agent": "scout"}},
+		{ID: "evt-001", WorkspaceID: fixtureWorkspace, Repo: workflow.RepoRef{FullName: "acme/widgets", Enabled: true}, Kind: "issues.labeled", Number: 142, Actor: "alice", Payload: map[string]any{"label": "ai:fix"}},
+		{ID: "evt-002", WorkspaceID: fixtureWorkspace, Repo: workflow.RepoRef{FullName: "acme/widgets", Enabled: true}, Kind: "pull_request.opened", Number: 143, Actor: "coder", Payload: map[string]any{"title": "fix: handle empty cart in checkout", "draft": false}},
+		{ID: "evt-003", WorkspaceID: fixtureWorkspace, Repo: workflow.RepoRef{FullName: "acme/widgets", Enabled: true}, Kind: "pull_request.synchronize", Number: 143, Actor: "coder", Payload: map[string]any{"title": "fix: handle empty cart in checkout"}},
+		{ID: "evt-004", WorkspaceID: fixtureWorkspace, Repo: workflow.RepoRef{FullName: "acme/control-plane", Enabled: true}, Kind: "pull_request.opened", Number: 88, Actor: "bob", Payload: map[string]any{"title": "add: rate limiter for /run", "draft": false}},
+		{ID: "evt-005", WorkspaceID: fixtureWorkspace, Repo: workflow.RepoRef{FullName: "acme/widgets", Enabled: true}, Kind: "agent.dispatch", Number: 143, Actor: "coder", Payload: map[string]any{"target_agent": "pr-reviewer", "reason": "PR ready for review", "invoked_by": "coder"}},
+		{ID: "evt-006", WorkspaceID: fixtureWorkspace, Repo: workflow.RepoRef{FullName: "acme/control-plane", Enabled: true}, Kind: "cron", Number: 0, Actor: "scout", Payload: map[string]any{"target_agent": "scout"}},
+		{ID: "evt-007", WorkspaceID: fixtureWorkspace, Repo: workflow.RepoRef{FullName: "acme/widgets", Enabled: true}, Kind: "issue_comment.created", Number: 142, Actor: "carol", Payload: map[string]any{"body": "Could you also handle the multi-currency case?"}},
+		{ID: "evt-008", WorkspaceID: fixtureWorkspace, Repo: workflow.RepoRef{FullName: "acme/widgets", Enabled: true}, Kind: "pull_request.closed", Number: 138, Actor: "alice", Payload: map[string]any{"title": "chore: bump go to 1.25", "merged": true}},
+		{ID: "evt-009", WorkspaceID: fixtureWorkspace, Repo: workflow.RepoRef{FullName: "acme/control-plane", Enabled: true}, Kind: "agents.run", Number: 0, Actor: "mcp", Payload: map[string]any{"target_agent": "scout"}},
 	}
 	// Stagger over the last 30 minutes so the time-bucket histogram has shape.
 	for i, ev := range events {
@@ -257,7 +336,7 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 	// Trace spans, both completed and one in-flight (registered separately).
 	completed := []workflow.SpanInput{
 		{
-			SpanID: "span-001", RootEventID: "evt-001",
+			SpanID: "span-001", WorkspaceID: fixtureWorkspace, RootEventID: "evt-001",
 			Agent: "coder", Backend: "claude", Repo: "acme/widgets",
 			Number: 142, EventKind: "issues.labeled",
 			Summary:   "Implemented checkout fix; opened PR #143 with two regression tests",
@@ -268,7 +347,7 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 			ArtifactsCount: 1,
 		},
 		{
-			SpanID: "span-002", RootEventID: "evt-005", ParentSpanID: "span-001",
+			SpanID: "span-002", WorkspaceID: fixtureWorkspace, RootEventID: "evt-005", ParentSpanID: "span-001",
 			Agent: "pr-reviewer", Backend: "claude", Repo: "acme/widgets",
 			Number: 143, EventKind: "agent.dispatch", InvokedBy: "coder", DispatchDepth: 1,
 			Summary:   "Approved with one nit: missing edge case for negative totals",
@@ -278,7 +357,7 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 			InputTokens: 5210, OutputTokens: 920, CacheReadTokens: 11800, CacheWriteTokens: 1500,
 		},
 		{
-			SpanID: "span-003", RootEventID: "evt-004",
+			SpanID: "span-003", WorkspaceID: fixtureWorkspace, RootEventID: "evt-004",
 			Agent: "pr-reviewer", Backend: "claude", Repo: "acme/control-plane",
 			Number: 88, EventKind: "pull_request.opened",
 			Summary:   "Requested changes: rate limiter algorithm choice doesn't account for the cron-tick burst pattern",
@@ -287,7 +366,7 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 			InputTokens: 6100, OutputTokens: 1340, CacheReadTokens: 9800, CacheWriteTokens: 1100,
 		},
 		{
-			SpanID: "span-004", RootEventID: "evt-006",
+			SpanID: "span-004", WorkspaceID: fixtureWorkspace, RootEventID: "evt-006",
 			Agent: "scout", Backend: "claude", Repo: "acme/control-plane",
 			Number: 0, EventKind: "cron",
 			Summary:   "Found 3 stale TODOs in internal/limiter; filed issue #91",
@@ -296,7 +375,7 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 			InputTokens: 2200, OutputTokens: 410, CacheReadTokens: 8200, CacheWriteTokens: 800,
 		},
 		{
-			SpanID: "span-005", RootEventID: "evt-008",
+			SpanID: "span-005", WorkspaceID: fixtureWorkspace, RootEventID: "evt-008",
 			Agent: "pr-reviewer", Backend: "claude", Repo: "acme/widgets",
 			Number: 138, EventKind: "pull_request.opened",
 			Summary:   "Approved",
@@ -317,13 +396,13 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 		{"coder", "pr-reviewer", "acme/widgets", "PR ready for review", 138},
 		{"scout", "coder", "acme/control-plane", "small fix worth doing now", 91},
 	} {
-		obs.RecordDispatch("default", d.from, d.to, d.repo, d.number, d.reason)
+		obs.RecordDispatch(fixtureWorkspace, d.from, d.to, d.repo, d.number, d.reason)
 	}
 
 	// Memory entry so the memory page renders something interesting.
 	if _, err := st.DB().Exec(
-		`INSERT OR REPLACE INTO memory (agent, repo, content, updated_at) VALUES (?, ?, ?, ?)`,
-		"refactorer", "acme/widgets",
+		`INSERT OR REPLACE INTO memory (workspace_id, agent, repo, content, updated_at) VALUES (?, ?, ?, ?, ?)`,
+		fixtureWorkspace, "refactorer", "acme/widgets",
 		"# refactorer notes, acme/widgets\n\n## Recent sweeps\n\n- 2026-04-29: removed three unused helpers in `internal/checkout/`. PR #129 merged.\n- 2026-04-22: migrated 12 call sites off the deprecated `db.Tx{}` shape. PR #117 merged.\n\n## Known follow-ups\n\n- The `pricing.Strategy` interface has only one impl. Worth collapsing; not urgent.\n- `internal/audit/` has a `// TODO(coder): index by tenant` comment that's been there for two months.\n\n## Style decisions I've absorbed\n\n- Repo prefers concrete types over interfaces unless 2+ impls exist.\n- Tests next to code, not in `_test/` subdirs.\n- Error wrapping uses `fmt.Errorf(\"x: %w\", err)`, never `errors.Wrap`.\n",
 		now.UTC().Format(time.RFC3339Nano),
 	); err != nil {
@@ -359,7 +438,7 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 	// One in-flight event with a registered ActiveRun → the runners
 	// page renders a live row with the ▶ Live button.
 	live := workflow.Event{
-		ID: "evt-live", Repo: workflow.RepoRef{FullName: "acme/widgets", Enabled: true},
+		ID: "evt-live", WorkspaceID: fixtureWorkspace, Repo: workflow.RepoRef{FullName: "acme/widgets", Enabled: true},
 		Kind: "issues.labeled", Number: 144, Actor: "alice",
 		Payload: map[string]any{"label": "ai:feature"},
 	}
@@ -374,7 +453,8 @@ func seedActivity(obs *observe.Store, st *store.Store) {
 	// `pr-reviewer` here so two different agent names show up live.
 	obs.Runs.BeginRun(observe.ActiveRun{
 		SpanID: "span-live-1", EventID: "evt-live",
-		Agent: "pr-reviewer", Backend: "claude",
+		WorkspaceID: fixtureWorkspace,
+		Agent:       "pr-reviewer", Backend: "claude",
 		Repo: "acme/widgets", EventKind: "issues.labeled",
 		StartedAt: now.Add(-30 * time.Second),
 	})
