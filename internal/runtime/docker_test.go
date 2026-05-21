@@ -20,7 +20,7 @@ func TestHostConfigAppliesRuntimeConstraints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hostConfig: %v", err)
 	}
-	if string(cfg.NetworkMode) != "none" {
+	if cfg.NetworkMode != "none" {
 		t.Fatalf("NetworkMode = %q, want none", cfg.NetworkMode)
 	}
 	if cfg.Resources.NanoCPUs != 500_000_000 {
