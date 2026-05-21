@@ -23,6 +23,7 @@ See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a re
   - **[Web dashboard](docs/ui.md)**: graphical. [Design the fleet from the graph-first workflow designer](docs/ui.md), manage agents, prompts, skills, repos, dispatch edges, and trigger bindings; watch the live event firehose, agent traces with tool-loop transcripts, and memory viewer.
   - **[MCP server](docs/mcp.md)**: conversational. Control agents and trigger runs straight from Claude Code in your terminal (or Cursor, Cline, or any MCP client).
   - **[REST API](docs/api.md)**: programmatic. Scriptable from any HTTP client; the dashboard itself runs on top of it.
+- **[Reactive inter-agent dispatch](docs/dispatch.md)**: agents invoke each other at runtime with depth, fanout, and dedup safety limits.
 - **Observable**: See the full event chain in realtime from the [UI](docs/ui.md), from events to runners to traces that will facilitate your prompt tuning journey.
 - **[Self-hosted](docs/quickstart.md)**: your code and prompts stay on your infrastructure. No SaaS dependency.
 - **[Security recommendations](docs/security.md)**: ships built-in guardrails prepended to every agent prompt for indirect prompt-injection resistance, public-action discretion, daemon-only memory scope, and GitHub repository tool usage (MCP first, gh fallback).
@@ -33,7 +34,6 @@ See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a re
 - **One agent model, many triggers**: label events, cron schedules, [GitHub event subscriptions](docs/events.md), on-demand API calls. Same agent, wired however you want.
 - **Composable skills**: reusable guidance blocks (architecture, security, testing, DX, ...) composed into agents by stable public catalog reference.
 - **Scoped reusable catalogs**: prompts and skills can be global, workspace-scoped, or repo-scoped; guardrails are global or workspace-scoped and are selected per workspace. APIs and imports expose stable public refs, while SQLite uses opaque internal IDs for FK integrity. Humans can select prompts with readable scope paths such as `global`, `default`, or `default/eloylp/agents`.
-- **[Reactive inter-agent dispatch](docs/dispatch.md)**: agents invoke each other at runtime with depth, fanout, and dedup safety limits.
 - **Token budgets and leaderboard**: daily/weekly/monthly UTC calendar token caps, enforced before each run. Global scopes cover all workspaces; simple `repo`, `agent`, and `backend` scopes apply across workspaces by name, while `workspace+repo`, `workspace+agent`, and `workspace+backend` isolate caps to one workspace. NavBar alert banner when any budget crosses its alert threshold. Per-agent leaderboard tracks total and average token consumption per run. Full CRUD via dashboard, REST, and MCP.
 - **SQLite-backed**: state lives in a SQLite database, managed through the three interfaces above. [config.yaml](docs/configuration.md) is an optional export/import format for reusable prompts/skills/guardrails and workspace-local agents/repos, not a runtime dependency.
 
