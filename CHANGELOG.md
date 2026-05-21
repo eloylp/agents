@@ -7,26 +7,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-22
+
+### Added
+
+- Fresh ephemeral Docker runner containers for every agent run. The daemon image
+  is now the control plane, while agent work runs in a separate
+  `ghcr.io/eloylp/agents-runner` container with Claude Code, Codex, GitHub CLI,
+  git, Go, Rust/Cargo, Node/npm, TypeScript, and runtime tools.
+- A Docker runtime boundary with runner image diagnostics, container constraints,
+  backend setup scripts, runner image pull/inspection, and one container per
+  run created through the Docker Engine API.
+- Workspaces as a first-class scope for agents, repos, triggers, memory,
+  observability, runners, graph layout, token budgets, prompt catalogs, skill
+  catalogs, and repo-local agents.
+- Scoped prompt and skill catalogs with stable public refs, plus prompt
+  resolution by `prompt_ref` / `prompt_scope`.
+- Multi-user daemon auth administration: admin-only user creation/removal,
+  current-user password changes, named API token management, and a root
+  login/bootstrap flow that redirects authenticated browser sessions into the
+  dashboard.
+- Graph workflow improvements: stable agent-ID layout persistence, dispatch
+  wiring controls, repo boundary grouping, graph prompt editing, transcript
+  links, and a persistent sidebar focus mode.
+- Trace-step persistence and streaming so live tool-loop transcripts are stored
+  durably, replayed to subscribers, and surfaced from trace detail endpoints.
+- Codex auth cache injection through `CODEX_AUTH_JSON_BASE64`, OpenAI API-key
+  fallback setup, and explicit runner git identity configuration from
+  `AGENTS_GIT_USER_NAME` / `AGENTS_GIT_USER_EMAIL`.
+- Authenticated `gh` fallback tooling inside runner containers for complex local
+  checkout/test/PR loops when GitHub MCP tools are insufficient.
+- A one-line quickstart installer script that downloads the Compose bundle,
+  guides credential setup, asks for Codex auth mode, and starts the daemon.
+
+### Changed
+
+- The shipped Compose file now pulls `ghcr.io/eloylp/agents:latest`, mounts the
+  Docker socket, and runs the daemon container as root for portable Docker
+  socket access. `latest` is release-only; `main` publishes explicit
+  `dev-<short_sha>` images.
+- Docker builds now publish separate daemon and runner images on `main` and
+  version tags, including `latest`, `X.Y.Z`, `vX.Y.Z`, and `X.Y` for releases.
+- Daemon runtime settings are split from runner runtime settings. Runner image
+  and constraints live in SQLite runtime settings, with dashboard, REST, and MCP
+  surfaces for inspection and updates.
+- Fleet mutations now flow through the service layer, while the store package is
+  split by responsibility and backed by stronger SQLite integrity constraints.
+- Guardrails are workspace-scoped selections, with refreshed dashboard
+  management and documentation.
+- Prompt bodies now live in the prompt catalog. Agents reference prompt catalog
+  entries instead of carrying inline prompt bodies.
+- Fleet import/export, config examples, REST, MCP tools, and the dashboard were
+  updated for workspaces, scoped catalogs, runtime settings, and stable internal
+  database IDs.
+- Dashboard navigation, auth flow, graph overview, backend diagnostics, runners,
+  screenshots, and operator docs were refreshed for the current runtime model.
+- Runner and backend failures now surface clearer diagnostic detail, including
+  backend timeouts and startup/setup failures.
+- Testing policy now keeps full `go test ./... -race` on main-branch CI and uses
+  normal `go test ./...` plus targeted race tests for local/PR iteration.
+
+### Fixed
+
+- Dispatch authorization now checks runtime wiring as well as config-time
+  validation.
+- Scoped webhook routing, running status, MCP observability, runner lists, memory
+  views, and dispatch dedup by workspace/event intent so multi-workspace fleets
+  do not cross-contaminate state.
+- Preserved replayed dispatch depth and ensured direct runs clean up after
+  panics.
+- Persisted observability records synchronously to avoid missing events/traces
+  during live views and retries.
+- Preserved omitted runtime settings on imports so fleet-only imports do not
+  reset runner image or container constraints.
+- Fixed prompt migration foreign-key handling and graph prompt edit/error
+  flicker paths.
+- Fixed stale graph repo filters, collapsed desktop sidebar behavior, graph
+  dispatch affordances, and backend diagnostics loading states.
+- Switched password hashing to bcrypt and persisted the explicit admin role.
+- Relaxed runner package pins and refreshed the runner base image to reduce
+  setup breakage.
+
 ### Removed
 
 - Removed the legacy `AGENTS_AUTH_BEARER_TOKEN_HASH` auth model. Daemon auth is
   now only DB-backed browser sessions and named API bearer tokens.
-
-### Changed
-
-- Moved dashboard auth management into a dedicated Config -> Authentication tab
-  with admin-only user creation/removal and current-user API token management.
-- The dashboard now stays behind an authentication-required screen until the
-  browser has an active session, instead of rendering the app shell behind the
-  login modal.
-- Added a dedicated public root login/bootstrap page that redirects
-  authenticated browser sessions into `/ui/`.
-- Root login now confirms the browser session before redirecting and uses
-  square-corner controls.
-- Moved sign out to the top-right dashboard navigation.
-- Publish Docker images to GitHub Container Registry on `main` and version tags,
-  with release-only `latest` tags and explicit `dev-<short_sha>` tags for main.
-  The default Compose file pulls `ghcr.io/eloylp/agents:latest`.
+- Removed `scripts/setup.sh`, the in-container `agents-setup` flow, and the
+  `agents-home` persistent CLI-auth volume. Credentials are now injected into
+  fresh runner containers from `.env`.
+- Removed legacy inline agent prompt compatibility.
 
 ## [0.2.0] - 2026-05-05
 
@@ -215,6 +284,7 @@ calls, or runtime inter-agent dispatch. Everything below ships in this release.
   are expected as issues, with the autonomous fleet implementing
   `ai ready`-labelled work. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-[Unreleased]: https://github.com/eloylp/agents/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/eloylp/agents/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/eloylp/agents/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/eloylp/agents/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/eloylp/agents/releases/tag/v0.1.0
