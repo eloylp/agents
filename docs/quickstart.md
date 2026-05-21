@@ -6,13 +6,15 @@ The daemon dispatches AI CLIs (`claude`, `codex`) with sandbox-bypass flags so a
 
 ## Bring up the daemon
 
-The quickstart script will ask for credentials while it runs. Have a GitHub token ready if you want agents to access repositories immediately; Claude and Codex credentials can be left blank and added later.
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/eloylp/agents/main/scripts/quickstart.sh | bash
 ```
 
-This requires Bash, `curl`, Docker, and Docker Compose v2. The one-liner creates `./agents`, downloads the shipped [`docker-compose.yaml`](../docker-compose.yaml), `.env.sample`, and credential helper, guides you through credentials, then runs `docker compose up -d`. Your shell stays in its original directory after the script exits, so run later `docker compose` commands from `./agents`. The Compose file is the source of truth for what gets mounted and exposed. The daemon image (`ghcr.io/eloylp/agents`) is the control plane: UI, REST/MCP, scheduler, queue, traces, and SQLite. Agent work runs in fresh ephemeral containers from the runner image (`ghcr.io/eloylp/agents-runner`), which contains Claude Code, Codex, `gh`, git, Go, Rust/Cargo, Node/npm, TypeScript, and the other execution tools. The daemon boots against an empty database with built-in defaults, no YAML seed is required.
+The script will download the docker-compose file and help you configure the .env file in an interactive way. Note that at least codex or claude should be configured for the agent runs. It ends up bringing up 
+
+This requires Bash, `curl`, Docker, and Docker Compose v2.
+
+The daemon image (`ghcr.io/eloylp/agents`) is the control plane: UI, REST/MCP, scheduler, queue, traces, and SQLite. Agent work runs in fresh ephemeral containers from the runner image (`ghcr.io/eloylp/agents-runner`), which contains Claude Code, Codex, `gh`, git, Go, Rust/Cargo, Node/npm, TypeScript, and the other execution tools. The daemon boots against an empty database with built-in defaults, no YAML seed is required.
 
 Compose mounts `/var/run/docker.sock` into the daemon so it can start runner containers. The shipped Compose file runs the daemon process as root inside the container because Docker socket group IDs vary by host; Docker socket access is root-equivalent on the host, so treat it as a production security boundary.
 
