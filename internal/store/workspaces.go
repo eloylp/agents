@@ -314,7 +314,12 @@ func ReplaceWorkspaceGuardrailsTx(tx *sql.Tx, workspace string, refs []fleet.Wor
 // ReadPrompts returns all prompt catalog entries ordered by visibility scope
 // and name.
 func ReadPrompts(db *sql.DB) ([]fleet.Prompt, error) {
-	rows, err := db.Query("SELECT ref, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, description, content FROM prompts ORDER BY COALESCE(workspace_id, ''), COALESCE(repo, ''), name")
+	rows, err := db.Query(`
+		SELECT p.ref, COALESCE(p.workspace_id, ''), COALESCE(p.repo, ''), p.name, p.description, p.content,
+		       COALESCE(pv.id, ''), COALESCE(pv.version_number, 0)
+		FROM prompts p
+		LEFT JOIN prompt_versions pv ON pv.id = p.current_version_id
+		ORDER BY COALESCE(p.workspace_id, ''), COALESCE(p.repo, ''), p.name`)
 	if err != nil {
 		return nil, fmt.Errorf("store: read prompts: %w", err)
 	}
@@ -323,7 +328,7 @@ func ReadPrompts(db *sql.DB) ([]fleet.Prompt, error) {
 	var out []fleet.Prompt
 	for rows.Next() {
 		var p fleet.Prompt
-		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content); err != nil {
+		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content, &p.VersionID, &p.Version); err != nil {
 			return nil, fmt.Errorf("store: read prompts: %w", err)
 		}
 		out = append(out, p)

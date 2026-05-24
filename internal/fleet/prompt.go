@@ -15,6 +15,23 @@ type Prompt struct {
 	Name        string `yaml:"name" json:"name"`
 	Description string `yaml:"description,omitempty" json:"description"`
 	Content     string `yaml:"content" json:"content"`
+	VersionID   string `yaml:"version_id,omitempty" json:"version_id,omitempty"`
+	Version     int    `yaml:"version,omitempty" json:"version,omitempty"`
+}
+
+type CatalogVersion struct {
+	ID            string `json:"id" yaml:"id,omitempty"`
+	AssetID       string `json:"asset_id" yaml:"asset_id,omitempty"`
+	Version       int    `json:"version" yaml:"version"`
+	State         string `json:"state" yaml:"state"`
+	SourceType    string `json:"source_type,omitempty" yaml:"source_type,omitempty"`
+	SourceRef     string `json:"source_ref,omitempty" yaml:"source_ref,omitempty"`
+	Author        string `json:"author,omitempty" yaml:"author,omitempty"`
+	Changelog     string `json:"changelog,omitempty" yaml:"changelog,omitempty"`
+	BaseVersionID string `json:"base_version_id,omitempty" yaml:"base_version_id,omitempty"`
+	BodyHash      string `json:"body_hash,omitempty" yaml:"body_hash,omitempty"`
+	CreatedAt     string `json:"created_at,omitempty" yaml:"created_at,omitempty"`
+	PublishedAt   string `json:"published_at,omitempty" yaml:"published_at,omitempty"`
 }
 
 // CatalogScopePath is the human-facing selector path for a reusable catalog

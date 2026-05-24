@@ -12,6 +12,8 @@ interface Prompt {
   name: string
   description: string
   content: string
+  version_id?: string
+  version?: number
 }
 
 interface Workspace {
@@ -214,6 +216,7 @@ export default function PromptsPage() {
               <div style={{ fontWeight: 700, color: 'var(--text-heading)' }}>{p.name}</div>
               <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginTop: 2 }}>
                 {p.repo ? `${p.workspace_id || 'default'} / ${p.repo}` : p.workspace_id ? `${p.workspace_id} workspace` : 'Global'}
+                {p.version ? ` · v${p.version}` : ''}
               </div>
               {p.description && <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: 2 }}>{p.description}</div>}
             </div>

@@ -23,6 +23,8 @@ type storeGuardrailJSON struct {
 	IsBuiltin      bool   `json:"is_builtin"`
 	Enabled        bool   `json:"enabled"`
 	Position       int    `json:"position"`
+	VersionID      string `json:"version_id,omitempty"`
+	Version        int    `json:"version,omitempty"`
 }
 
 func guardrailToJSON(g fleet.Guardrail) storeGuardrailJSON {
@@ -36,6 +38,8 @@ func guardrailToJSON(g fleet.Guardrail) storeGuardrailJSON {
 		IsBuiltin:      g.IsBuiltin,
 		Enabled:        g.Enabled,
 		Position:       g.Position,
+		VersionID:      g.VersionID,
+		Version:        g.Version,
 	}
 }
 

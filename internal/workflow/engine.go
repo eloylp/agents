@@ -41,6 +41,9 @@ type SpanInput struct {
 	StartedAt, FinishedAt             time.Time
 	Status, ErrorMsg, ErrorDetail     string
 	Prompt                            string
+	PromptVersionID                   string
+	SkillVersionIDs                   []string
+	GuardrailVersionIDs               []string
 	InputTokens, OutputTokens         int64
 	CacheReadTokens, CacheWriteTokens int64
 }

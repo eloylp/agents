@@ -10,6 +10,8 @@ interface Skill {
   repo?: string
   name: string
   prompt: string
+  version_id?: string
+  version?: number
 }
 
 interface Workspace {
@@ -343,7 +345,9 @@ export default function SkillsPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700, color: 'var(--text-heading)', marginBottom: '0.2rem' }}>{sk.name}</div>
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginBottom: '0.35rem' }}>{scopeLabel(sk)}</div>
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginBottom: '0.35rem' }}>
+                  {scopeLabel(sk)}{sk.version ? ` · v${sk.version}` : ''}
+                </div>
                 <pre style={{
                   fontSize: '0.78rem', color: 'var(--text-faint)', background: 'var(--bg)',
                   border: '1px solid var(--border-subtle)', borderRadius: '4px', padding: '0.5rem',

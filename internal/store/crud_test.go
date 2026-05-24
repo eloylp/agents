@@ -430,6 +430,51 @@ func TestUpsertAndReadSkills(t *testing.T) {
 	if skills["architect"].Prompt != "Focus on architecture." {
 		t.Errorf("Prompt: got %q", skills["architect"].Prompt)
 	}
+	if skills["architect"].Version != 1 || skills["architect"].VersionID == "" {
+		t.Fatalf("skill version = (%q, %d), want published v1", skills["architect"].VersionID, skills["architect"].Version)
+	}
+}
+
+func TestCatalogUpsertsPublishImmutableVersions(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "versioned-coder", Description: "first", Content: "body v1"})
+	if err != nil {
+		t.Fatalf("UpsertPrompt v1: %v", err)
+	}
+	if prompt.Version != 1 || prompt.VersionID == "" {
+		t.Fatalf("prompt v1 = (%q, %d), want version id and number 1", prompt.VersionID, prompt.Version)
+	}
+	prompt.Content = "body v2"
+	prompt, err = store.UpsertPrompt(db, prompt)
+	if err != nil {
+		t.Fatalf("UpsertPrompt v2: %v", err)
+	}
+	if prompt.Version != 2 || prompt.VersionID == "" {
+		t.Fatalf("prompt v2 = (%q, %d), want version id and number 2", prompt.VersionID, prompt.Version)
+	}
+	var versions int
+	if err := db.QueryRow("SELECT COUNT(*) FROM prompt_versions WHERE prompt_id=(SELECT id FROM prompts WHERE ref=?)", prompt.ID).Scan(&versions); err != nil {
+		t.Fatalf("count prompt_versions: %v", err)
+	}
+	if versions != 2 {
+		t.Fatalf("prompt_versions count = %d, want 2", versions)
+	}
+
+	if err := store.UpsertSkill(db, "architect", fleet.Skill{Prompt: "skill v1"}); err != nil {
+		t.Fatalf("UpsertSkill v1: %v", err)
+	}
+	if err := store.UpsertSkill(db, "architect", fleet.Skill{Prompt: "skill v2"}); err != nil {
+		t.Fatalf("UpsertSkill v2: %v", err)
+	}
+	skills, err := store.ReadSkills(db)
+	if err != nil {
+		t.Fatalf("ReadSkills: %v", err)
+	}
+	if got := skills["architect"].Version; got != 2 {
+		t.Fatalf("skill version = %d, want 2", got)
+	}
 }
 
 func TestUpsertScopedSkillDerivesStableID(t *testing.T) {

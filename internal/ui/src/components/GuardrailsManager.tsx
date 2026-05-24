@@ -17,6 +17,8 @@ interface Guardrail {
   is_builtin: boolean
   enabled: boolean
   position: number
+  version_id?: string
+  version?: number
 }
 
 interface WorkspaceGuardrailRef {
@@ -529,6 +531,7 @@ export default function GuardrailsManager() {
                   <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: 'var(--bg-input)', color: 'var(--text-danger)', border: '1px solid var(--text-danger)' }}>disabled</span>
                 )}
                 <span style={{ fontSize: '0.7rem', color: 'var(--text-faint)' }}>position {g.position}</span>
+                {g.version && <span style={{ fontSize: '0.7rem', color: 'var(--text-faint)' }}>v{g.version}</span>}
                 <span style={{ fontSize: '0.7rem', color: 'var(--text-faint)' }}>{guardrailScope(g)}</span>
               </div>
               {g.description && (

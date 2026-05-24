@@ -16,6 +16,7 @@ import (
 	"log"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,7 +69,10 @@ type Span struct {
 	// PromptSize is the uncompressed byte count of the composed prompt.
 	// Surfaced on listings so the UI can show "32 KB prompt"; the body
 	// is gzipped on disk and fetched lazily via /traces/{span_id}/prompt.
-	PromptSize int64 `json:"prompt_size,omitempty"`
+	PromptSize          int64    `json:"prompt_size,omitempty"`
+	PromptVersionID     string   `json:"prompt_version_id,omitempty"`
+	SkillVersionIDs     []string `json:"skill_version_ids,omitempty"`
+	GuardrailVersionIDs []string `json:"guardrail_version_ids,omitempty"`
 
 	// Token usage as reported by the AI CLI. Anthropic / Claude Code
 	// emits four fields; OpenAI / Codex emits two, cache fields are
@@ -481,7 +485,8 @@ func (s *Store) ListEventsForWorkspace(workspaceID string, since time.Time) []Ti
 const spanColumns = `span_id, workspace_id, root_event_id, parent_span_id, agent, backend, repo, number,
 	event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary,
 	started_at, finished_at, duration_ms, status, error, error_detail,
-	prompt_size, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens`
+	prompt_size, prompt_version_id, skill_version_ids, guardrail_version_ids,
+	input_tokens, output_tokens, cache_read_tokens, cache_write_tokens`
 
 // ListTraces returns stored spans ordered by started_at descending (newest
 // first). Results are capped at 200 rows.
@@ -556,6 +561,7 @@ func scanSpans(rows *sql.Rows) []Span {
 	for rows.Next() {
 		var sp Span
 		var promptSize, inTok, outTok, cacheR, cacheW sql.NullInt64
+		var promptVersionID, skillVersionIDs, guardrailVersionIDs string
 		if err := rows.Scan(
 			&sp.SpanID, &sp.WorkspaceID, &sp.RootEventID, &sp.ParentSpanID,
 			&sp.Agent, &sp.Backend, &sp.Repo, &sp.Number,
@@ -563,17 +569,35 @@ func scanSpans(rows *sql.Rows) []Span {
 			&sp.QueueWaitMs, &sp.ArtifactsCount, &sp.Summary,
 			&sp.StartedAt, &sp.FinishedAt, &sp.DurationMs,
 			&sp.Status, &sp.ErrorMsg, &sp.ErrorDetail,
-			&promptSize, &inTok, &outTok, &cacheR, &cacheW,
+			&promptSize, &promptVersionID, &skillVersionIDs, &guardrailVersionIDs,
+			&inTok, &outTok, &cacheR, &cacheW,
 		); err != nil {
 			log.Printf("observe: scan trace row: %v", err)
 			continue
 		}
 		sp.PromptSize = promptSize.Int64
+		sp.PromptVersionID = promptVersionID
+		sp.SkillVersionIDs = splitCatalogVersionIDs(skillVersionIDs)
+		sp.GuardrailVersionIDs = splitCatalogVersionIDs(guardrailVersionIDs)
 		sp.InputTokens = inTok.Int64
 		sp.OutputTokens = outTok.Int64
 		sp.CacheReadTokens = cacheR.Int64
 		sp.CacheWriteTokens = cacheW.Int64
 		out = append(out, sp)
+	}
+	return out
+}
+
+func splitCatalogVersionIDs(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
 	}
 	return out
 }
@@ -697,31 +721,34 @@ func (s *Store) RecordEvent(at time.Time, ev workflow.Event) {
 // summary out to SSE subscribers.
 func (s *Store) RecordSpan(in workflow.SpanInput) {
 	sp := Span{
-		SpanID:           in.SpanID,
-		WorkspaceID:      fleet.NormalizeWorkspaceID(in.WorkspaceID),
-		RootEventID:      in.RootEventID,
-		ParentSpanID:     in.ParentSpanID,
-		Agent:            in.Agent,
-		Backend:          in.Backend,
-		Repo:             in.Repo,
-		EventKind:        in.EventKind,
-		InvokedBy:        in.InvokedBy,
-		Number:           in.Number,
-		DispatchDepth:    in.DispatchDepth,
-		QueueWaitMs:      in.QueueWaitMs,
-		ArtifactsCount:   in.ArtifactsCount,
-		Summary:          in.Summary,
-		StartedAt:        in.StartedAt,
-		FinishedAt:       in.FinishedAt,
-		DurationMs:       in.FinishedAt.Sub(in.StartedAt).Milliseconds(),
-		Status:           in.Status,
-		ErrorMsg:         in.ErrorMsg,
-		ErrorDetail:      in.ErrorDetail,
-		PromptSize:       int64(len(in.Prompt)),
-		InputTokens:      in.InputTokens,
-		OutputTokens:     in.OutputTokens,
-		CacheReadTokens:  in.CacheReadTokens,
-		CacheWriteTokens: in.CacheWriteTokens,
+		SpanID:              in.SpanID,
+		WorkspaceID:         fleet.NormalizeWorkspaceID(in.WorkspaceID),
+		RootEventID:         in.RootEventID,
+		ParentSpanID:        in.ParentSpanID,
+		Agent:               in.Agent,
+		Backend:             in.Backend,
+		Repo:                in.Repo,
+		EventKind:           in.EventKind,
+		InvokedBy:           in.InvokedBy,
+		Number:              in.Number,
+		DispatchDepth:       in.DispatchDepth,
+		QueueWaitMs:         in.QueueWaitMs,
+		ArtifactsCount:      in.ArtifactsCount,
+		Summary:             in.Summary,
+		StartedAt:           in.StartedAt,
+		FinishedAt:          in.FinishedAt,
+		DurationMs:          in.FinishedAt.Sub(in.StartedAt).Milliseconds(),
+		Status:              in.Status,
+		ErrorMsg:            in.ErrorMsg,
+		ErrorDetail:         in.ErrorDetail,
+		PromptSize:          int64(len(in.Prompt)),
+		PromptVersionID:     in.PromptVersionID,
+		SkillVersionIDs:     append([]string(nil), in.SkillVersionIDs...),
+		GuardrailVersionIDs: append([]string(nil), in.GuardrailVersionIDs...),
+		InputTokens:         in.InputTokens,
+		OutputTokens:        in.OutputTokens,
+		CacheReadTokens:     in.CacheReadTokens,
+		CacheWriteTokens:    in.CacheWriteTokens,
 	}
 	var promptGz []byte
 	if in.Prompt != "" {
@@ -737,7 +764,7 @@ func (s *Store) RecordSpan(in workflow.SpanInput) {
 	}
 	if s.db != nil {
 		_, err := s.db.Exec(
-			`INSERT OR IGNORE INTO traces (span_id, workspace_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error, error_detail, prompt_gz, prompt_size, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			`INSERT OR IGNORE INTO traces (span_id, workspace_id, root_event_id, parent_span_id, agent, backend, repo, number, event_kind, invoked_by, dispatch_depth, queue_wait_ms, artifacts_count, summary, started_at, finished_at, duration_ms, status, error, error_detail, prompt_gz, prompt_size, prompt_version_id, skill_version_ids, guardrail_version_ids, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			sp.SpanID, sp.WorkspaceID, sp.RootEventID, sp.ParentSpanID,
 			sp.Agent, sp.Backend, sp.Repo, sp.Number,
 			sp.EventKind, sp.InvokedBy, sp.DispatchDepth,
@@ -745,6 +772,7 @@ func (s *Store) RecordSpan(in workflow.SpanInput) {
 			sp.StartedAt, sp.FinishedAt, sp.DurationMs,
 			sp.Status, sp.ErrorMsg, sp.ErrorDetail,
 			promptGz, sp.PromptSize,
+			sp.PromptVersionID, strings.Join(sp.SkillVersionIDs, ","), strings.Join(sp.GuardrailVersionIDs, ","),
 			sp.InputTokens, sp.OutputTokens, sp.CacheReadTokens, sp.CacheWriteTokens,
 		)
 		if err != nil {

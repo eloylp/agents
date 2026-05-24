@@ -10,4 +10,6 @@ type Skill struct {
 	Repo        string `yaml:"repo,omitempty" json:"repo,omitempty"`
 	Name        string `yaml:"name,omitempty" json:"name,omitempty"`
 	Prompt      string `yaml:"prompt" json:"prompt"`
+	VersionID   string `yaml:"version_id,omitempty" json:"version_id,omitempty"`
+	Version     int    `yaml:"version,omitempty" json:"version,omitempty"`
 }

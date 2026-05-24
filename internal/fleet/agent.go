@@ -19,8 +19,11 @@ type Agent struct {
 	// human-facing selector used by YAML/API callers.
 	PromptRef   string `yaml:"prompt_ref,omitempty"`
 	PromptScope string `yaml:"prompt_scope,omitempty" json:"prompt_scope,omitempty"`
-	ScopeType   string `yaml:"scope_type,omitempty"`
-	ScopeRepo   string `yaml:"scope_repo,omitempty"`
+	// PromptVersionID optionally pins the agent to an exact immutable prompt
+	// version. Empty means track the prompt asset's current published version.
+	PromptVersionID string `yaml:"prompt_version_id,omitempty" json:"prompt_version_id,omitempty"`
+	ScopeType       string `yaml:"scope_type,omitempty"`
+	ScopeRepo       string `yaml:"scope_repo,omitempty"`
 	// AllowPRs controls whether the agent is permitted to open pull requests.
 	// Defaults to false; the scheduler prepends a hard no-PR instruction when
 	// false so the gate is code-level rather than relying on prompt wording.

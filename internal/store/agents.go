@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
@@ -42,25 +43,30 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
 		if err != nil {
 			return err
 		}
+		promptVersionID, err := resolvePromptVersionPin(tx, promptID, a.PromptVersionID)
+		if err != nil {
+			return fmt.Errorf("store import: agent %s: %w", a.Name, err)
+		}
 		allowPRs := boolToInt(a.AllowPRs)
 		allowDispatch := boolToInt(a.AllowDispatch)
 		allowMemory := bindingEnabledInt(a.AllowMemory)
 		if _, err := tx.Exec(`
 			INSERT INTO agents
-			  (id,workspace_id,name,backend,model,prompt_id,scope_type,scope_repo,allow_prs,allow_dispatch,description,allow_memory)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+			  (id,workspace_id,name,backend,model,prompt_id,prompt_version_id,scope_type,scope_repo,allow_prs,allow_dispatch,description,allow_memory)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(workspace_id, name) DO UPDATE SET
 				id = excluded.id,
 				backend = excluded.backend,
 				model = excluded.model,
 				prompt_id = excluded.prompt_id,
+				prompt_version_id = excluded.prompt_version_id,
 				scope_type = excluded.scope_type,
 				scope_repo = excluded.scope_repo,
 				allow_prs = excluded.allow_prs,
 				allow_dispatch = excluded.allow_dispatch,
 				description = excluded.description,
 				allow_memory = excluded.allow_memory`,
-			id, workspaceID, a.Name, a.Backend, a.Model, promptID, scopeType, a.ScopeRepo,
+			id, workspaceID, a.Name, a.Backend, a.Model, promptID, promptVersionID, scopeType, a.ScopeRepo,
 			allowPRs, allowDispatch, a.Description, allowMemory,
 		); err != nil {
 			return fmt.Errorf("store import: upsert agent %s: %w", a.Name, err)
@@ -144,6 +150,22 @@ func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent) (string, error) {
 	return "", fmt.Errorf("store import: resolve prompt_ref %s for agent %s: %w", a.PromptRef, a.Name, err)
 }
 
+func resolvePromptVersionPin(q querier, promptID, versionID string) (string, error) {
+	versionID = strings.TrimSpace(versionID)
+	if versionID == "" {
+		return "", nil
+	}
+	var id string
+	err := q.QueryRow("SELECT id FROM prompt_versions WHERE id=? AND prompt_id=? AND state='published'", versionID, promptID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", &ErrValidation{Msg: fmt.Sprintf("prompt_version_id %q is not a published version of the selected prompt", versionID)}
+	}
+	if err != nil {
+		return "", fmt.Errorf("read prompt_version_id %q: %w", versionID, err)
+	}
+	return id, nil
+}
+
 func stableAgentID(q querier, workspaceID string, a fleet.Agent) (string, error) {
 	var existing string
 	err := q.QueryRow("SELECT COALESCE(id, '') FROM agents WHERE workspace_id=? AND name=?", workspaceID, a.Name).Scan(&existing)
@@ -166,7 +188,7 @@ func newAgentID() (string, error) {
 
 func loadAgents(db querier, cfg *config.Config) error {
 	rows, err := db.Query(`
-		SELECT a.id,a.workspace_id,a.name,a.backend,a.model,COALESCE(p.ref, ''),COALESCE(p.name, ''),COALESCE(p.workspace_id, ''),COALESCE(p.repo, ''),a.scope_type,a.scope_repo,a.allow_prs,a.allow_dispatch,a.description,a.allow_memory
+		SELECT a.id,a.workspace_id,a.name,a.backend,a.model,COALESCE(p.ref, ''),COALESCE(p.name, ''),COALESCE(p.workspace_id, ''),COALESCE(p.repo, ''),COALESCE(a.prompt_version_id, ''),a.scope_type,a.scope_repo,a.allow_prs,a.allow_dispatch,a.description,a.allow_memory
 		FROM agents a
 		LEFT JOIN prompts p ON p.id = a.prompt_id
 		ORDER BY a.name`)
@@ -178,10 +200,10 @@ func loadAgents(db querier, cfg *config.Config) error {
 	var agents []fleet.Agent
 	var agentIDs []string
 	for rows.Next() {
-		var id, workspaceID, name, backend, model, promptID, promptRef, promptWorkspace, promptRepo, scopeType, scopeRepo, description string
+		var id, workspaceID, name, backend, model, promptID, promptRef, promptWorkspace, promptRepo, promptVersionID, scopeType, scopeRepo, description string
 		var allowPRs, allowDispatch, allowMemory int
 		if err := rows.Scan(
-			&id, &workspaceID, &name, &backend, &model, &promptID, &promptRef, &promptWorkspace, &promptRepo, &scopeType, &scopeRepo,
+			&id, &workspaceID, &name, &backend, &model, &promptID, &promptRef, &promptWorkspace, &promptRepo, &promptVersionID, &scopeType, &scopeRepo,
 			&allowPRs, &allowDispatch, &description, &allowMemory,
 		); err != nil {
 			return fmt.Errorf("store load: scan agent: %w", err)
@@ -195,20 +217,21 @@ func loadAgents(db querier, cfg *config.Config) error {
 			promptScope = fleet.CatalogScopePath(promptWorkspace, promptRepo)
 		}
 		agents = append(agents, fleet.Agent{
-			ID:            id,
-			WorkspaceID:   workspaceID,
-			Name:          name,
-			Backend:       backend,
-			Model:         model,
-			PromptID:      promptID,
-			PromptRef:     promptRef,
-			PromptScope:   promptScope,
-			ScopeType:     scopeType,
-			ScopeRepo:     scopeRepo,
-			AllowPRs:      intToBool(allowPRs),
-			AllowDispatch: intToBool(allowDispatch),
-			Description:   description,
-			AllowMemory:   &allowMem,
+			ID:              id,
+			WorkspaceID:     workspaceID,
+			Name:            name,
+			Backend:         backend,
+			Model:           model,
+			PromptID:        promptID,
+			PromptRef:       promptRef,
+			PromptScope:     promptScope,
+			PromptVersionID: promptVersionID,
+			ScopeType:       scopeType,
+			ScopeRepo:       scopeRepo,
+			AllowPRs:        intToBool(allowPRs),
+			AllowDispatch:   intToBool(allowDispatch),
+			Description:     description,
+			AllowMemory:     &allowMem,
 		})
 		agentIDs = append(agentIDs, id)
 	}

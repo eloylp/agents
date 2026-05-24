@@ -50,12 +50,23 @@ func importSkills(tx *sql.Tx, skills map[string]fleet.Skill) error {
 			}
 			return fmt.Errorf("store import: upsert skill %s: %w", id, err)
 		}
+		version, err := publishSkillVersionTx(tx, internalID, s.Prompt)
+		if err != nil {
+			return fmt.Errorf("store import: publish skill %s version: %w", id, err)
+		}
+		if _, err := tx.Exec("UPDATE skills SET current_version_id=? WHERE id=?", version.ID, internalID); err != nil {
+			return fmt.Errorf("store import: update skill %s current version: %w", id, err)
+		}
 	}
 	return nil
 }
 
 func loadSkills(db querier, cfg *config.Config) error {
-	rows, err := db.Query("SELECT ref,COALESCE(workspace_id, ''),COALESCE(repo, ''),name,prompt FROM skills")
+	rows, err := db.Query(`
+		SELECT s.ref, COALESCE(s.workspace_id, ''), COALESCE(s.repo, ''), s.name, s.prompt,
+		       COALESCE(sv.id, ''), COALESCE(sv.version_number, 0)
+		FROM skills s
+		LEFT JOIN skill_versions sv ON sv.id = s.current_version_id`)
 	if err != nil {
 		return fmt.Errorf("store load: query skills: %w", err)
 	}
@@ -65,7 +76,7 @@ func loadSkills(db querier, cfg *config.Config) error {
 	for rows.Next() {
 		var id string
 		var skill fleet.Skill
-		if err := rows.Scan(&id, &skill.WorkspaceID, &skill.Repo, &skill.Name, &skill.Prompt); err != nil {
+		if err := rows.Scan(&id, &skill.WorkspaceID, &skill.Repo, &skill.Name, &skill.Prompt, &skill.VersionID, &skill.Version); err != nil {
 			return fmt.Errorf("store load: scan skill: %w", err)
 		}
 		skill.ID = id

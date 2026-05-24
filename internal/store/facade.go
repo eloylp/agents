@@ -102,7 +102,10 @@ func (s *Store) UpsertPrompt(p fleet.Prompt) (fleet.Prompt, error) {
 	return UpsertPrompt(s.db, p)
 }
 func (s *Store) ReadPrompt(ref string) (fleet.Prompt, error) { return ReadPrompt(s.db, ref) }
-func (s *Store) DeletePrompt(ref string) error               { return DeletePrompt(s.db, ref) }
+func (s *Store) ReadPromptVersion(versionID string) (fleet.Prompt, error) {
+	return ReadPromptVersion(s.db, versionID)
+}
+func (s *Store) DeletePrompt(ref string) error { return DeletePrompt(s.db, ref) }
 
 // ── Skills ──────────────────────────────────────────────────────────────
 

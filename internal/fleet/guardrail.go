@@ -29,7 +29,9 @@ type Guardrail struct {
 	// IsBuiltin marks rows that ship with the daemon. Future migrations may
 	// update their DefaultContent; operator-added rows are never touched
 	// by migrations. Excluded from YAML for the same reason as DefaultContent.
-	IsBuiltin bool `yaml:"-" json:"is_builtin"`
+	IsBuiltin bool   `yaml:"-" json:"is_builtin"`
+	VersionID string `yaml:"version_id,omitempty" json:"version_id,omitempty"`
+	Version   int    `yaml:"version,omitempty" json:"version,omitempty"`
 }
 
 // NormalizeGuardrailName canonicalises operator-supplied names: lowercase,
