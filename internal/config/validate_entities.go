@@ -81,7 +81,13 @@ func ValidateEntities(agents []fleet.Agent, repos []fleet.Repo, skills map[strin
 		}
 		for _, s := range a.Skills {
 			if _, ok := skills[s]; !ok {
-				return fmt.Errorf("config: agent %q: unknown skill %q", a.Name, s)
+				base, _, found := strings.Cut(s, "@")
+				if found {
+					_, ok = skills[strings.TrimSpace(base)]
+				}
+				if !ok {
+					return fmt.Errorf("config: agent %q: unknown skill %q", a.Name, s)
+				}
 			}
 		}
 		if a.PromptID == "" && a.PromptRef == "" {
@@ -167,6 +173,11 @@ func ValidateAgentCatalogVisibility(agents []fleet.Agent, skills map[string]flee
 		}
 		for _, skillID := range a.Skills {
 			skill, ok := skills[skillID]
+			if !ok {
+				if base, _, found := strings.Cut(skillID, "@"); found {
+					skill, ok = skills[strings.TrimSpace(base)]
+				}
+			}
 			if !ok {
 				continue
 			}

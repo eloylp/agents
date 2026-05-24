@@ -338,6 +338,9 @@ func toolUpdateWorkspaceGuardrails(deps Deps) server.ToolHandlerFunc {
 				return mcpgo.NewToolResultErrorf("guardrails[%d].guardrail_name is required", i), nil
 			}
 			ref := fleet.WorkspaceGuardrailRef{GuardrailName: name, Position: i}
+			if v, ok := m["guardrail_version_id"].(string); ok {
+				ref.GuardrailVersionID = strings.TrimSpace(v)
+			}
 			if v, ok := m["position"]; ok && v != nil {
 				switch n := v.(type) {
 				case float64:

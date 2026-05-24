@@ -87,6 +87,11 @@ func RenderAgentPrompt(agent fleet.Agent, promptBody string, skills map[string]f
 	for _, skillName := range agent.Skills {
 		skill, ok := skills[skillName]
 		if !ok {
+			if base, _, found := strings.Cut(skillName, "@"); found {
+				skill, ok = skills[strings.TrimSpace(base)]
+			}
+		}
+		if !ok {
 			return RenderedPrompt{}, fmt.Errorf("agent %q references unknown skill %q", agent.Name, skillName)
 		}
 		guidance := strings.TrimSpace(skill.Prompt)

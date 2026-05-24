@@ -30,7 +30,10 @@ func publishPromptVersionTx(tx *sql.Tx, promptID, description, content string) (
 	if err != nil {
 		return fleet.CatalogVersion{}, err
 	}
-	baseID := currentVersionID(tx, "prompts", promptID)
+	baseID, err := currentVersionID(tx, "prompts", promptID)
+	if err != nil {
+		return fleet.CatalogVersion{}, err
+	}
 	if _, err := tx.Exec(`
 		INSERT INTO prompt_versions
 			(id, prompt_id, version_number, state, description, content, source_type, base_version_id, body_hash, created_at, published_at)
@@ -51,7 +54,10 @@ func publishSkillVersionTx(tx *sql.Tx, skillID, prompt string) (fleet.CatalogVer
 	if err != nil {
 		return fleet.CatalogVersion{}, err
 	}
-	baseID := currentVersionID(tx, "skills", skillID)
+	baseID, err := currentVersionID(tx, "skills", skillID)
+	if err != nil {
+		return fleet.CatalogVersion{}, err
+	}
 	if _, err := tx.Exec(`
 		INSERT INTO skill_versions
 			(id, skill_id, version_number, state, prompt, source_type, base_version_id, body_hash, created_at, published_at)
@@ -72,7 +78,10 @@ func publishGuardrailVersionTx(exec sqlExec, guardrailID string, g fleet.Guardra
 	if err != nil {
 		return fleet.CatalogVersion{}, err
 	}
-	baseID := currentVersionID(exec, "guardrails", guardrailID)
+	baseID, err := currentVersionID(exec, "guardrails", guardrailID)
+	if err != nil {
+		return fleet.CatalogVersion{}, err
+	}
 	hash := catalogBodyHash(g.Description, g.Content, fmt.Sprint(g.Enabled), fmt.Sprint(g.Position))
 	if _, err := exec.Exec(`
 		INSERT INTO guardrail_versions
@@ -96,11 +105,13 @@ func nextCatalogVersion(q querier, table, column, assetID string) (int, error) {
 	return int(max.Int64) + 1, nil
 }
 
-func currentVersionID(q querier, table, id string) string {
+func currentVersionID(q querier, table, id string) (string, error) {
 	var current sql.NullString
-	_ = q.QueryRow("SELECT COALESCE(current_version_id, '') FROM "+table+" WHERE id=?", id).Scan(&current)
-	if current.Valid {
-		return strings.TrimSpace(current.String)
+	if err := q.QueryRow("SELECT COALESCE(current_version_id, '') FROM "+table+" WHERE id=?", id).Scan(&current); err != nil {
+		return "", fmt.Errorf("store: read current version for %s %s: %w", table, id, err)
 	}
-	return ""
+	if current.Valid {
+		return strings.TrimSpace(current.String), nil
+	}
+	return "", nil
 }

@@ -33,7 +33,7 @@ func ReadWorkspacePromptGuardrails(db *sql.DB, workspace string) ([]fleet.Guardr
 		return nil, err
 	}
 	const q = `
-		SELECT g.ref, COALESCE(g.workspace_id, ''), g.name, COALESCE(g.description, ''), g.content,
+		SELECT g.ref, COALESCE(g.workspace_id, ''), g.name, COALESCE(gv.description, g.description, ''), COALESCE(gv.content, g.content),
 		       COALESCE(g.default_content, ''), g.is_builtin, wg.enabled, wg.position,
 		       COALESCE(gv.id, ''), COALESCE(gv.version_number, 0)
 		FROM workspace_guardrails wg

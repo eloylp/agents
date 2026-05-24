@@ -205,7 +205,7 @@ func ReadWorkspaceGuardrails(db *sql.DB, workspace string) ([]fleet.WorkspaceGua
 
 func readWorkspaceGuardrails(db querier, workspaceID string) ([]fleet.WorkspaceGuardrailRef, error) {
 	rows, err := db.Query(`
-		SELECT wg.workspace_id, g.ref, wg.position, wg.enabled
+		SELECT wg.workspace_id, g.ref, COALESCE(wg.guardrail_version_id, ''), wg.position, wg.enabled
 		FROM workspace_guardrails wg
 		JOIN guardrails g ON g.id = wg.guardrail_name
 		WHERE wg.workspace_id = ?
@@ -218,7 +218,7 @@ func readWorkspaceGuardrails(db querier, workspaceID string) ([]fleet.WorkspaceG
 	for rows.Next() {
 		var ref fleet.WorkspaceGuardrailRef
 		var enabled int
-		if err := rows.Scan(&ref.WorkspaceID, &ref.GuardrailName, &ref.Position, &enabled); err != nil {
+		if err := rows.Scan(&ref.WorkspaceID, &ref.GuardrailName, &ref.GuardrailVersionID, &ref.Position, &enabled); err != nil {
 			return nil, fmt.Errorf("store: read workspace %s guardrails: %w", workspaceID, err)
 		}
 		ref.Enabled = intToBool(enabled)
@@ -260,10 +260,14 @@ func ReplaceWorkspaceGuardrails(db *sql.DB, workspace string, refs []fleet.Works
 		if err != nil {
 			return nil, fmt.Errorf("store: replace workspace %s guardrails: validate %s: %w", workspaceID, name, err)
 		}
+		versionID, err := resolveGuardrailVersionPin(tx, id, ref.GuardrailVersionID)
+		if err != nil {
+			return nil, fmt.Errorf("store: replace workspace %s guardrails: validate %s version: %w", workspaceID, name, err)
+		}
 		if _, err := tx.Exec(`
-			INSERT INTO workspace_guardrails (workspace_id, guardrail_name, position, enabled)
-			VALUES (?, ?, ?, ?)`,
-			workspaceID, id, ref.Position, boolToInt(ref.Enabled),
+			INSERT INTO workspace_guardrails (workspace_id, guardrail_name, guardrail_version_id, position, enabled)
+			VALUES (?, ?, NULLIF(?, ''), ?, ?)`,
+			workspaceID, id, versionID, ref.Position, boolToInt(ref.Enabled),
 		); err != nil {
 			return nil, fmt.Errorf("store: replace workspace %s guardrails: insert %s: %w", workspaceID, name, err)
 		}
@@ -300,15 +304,35 @@ func ReplaceWorkspaceGuardrailsTx(tx *sql.Tx, workspace string, refs []fleet.Wor
 		if err != nil {
 			return nil, fmt.Errorf("store: replace workspace %s guardrails: validate %s: %w", workspaceID, name, err)
 		}
+		versionID, err := resolveGuardrailVersionPin(tx, id, ref.GuardrailVersionID)
+		if err != nil {
+			return nil, fmt.Errorf("store: replace workspace %s guardrails: validate %s version: %w", workspaceID, name, err)
+		}
 		if _, err := tx.Exec(`
-			INSERT INTO workspace_guardrails (workspace_id, guardrail_name, position, enabled)
-			VALUES (?, ?, ?, ?)`,
-			workspaceID, id, ref.Position, boolToInt(ref.Enabled),
+			INSERT INTO workspace_guardrails (workspace_id, guardrail_name, guardrail_version_id, position, enabled)
+			VALUES (?, ?, NULLIF(?, ''), ?, ?)`,
+			workspaceID, id, versionID, ref.Position, boolToInt(ref.Enabled),
 		); err != nil {
 			return nil, fmt.Errorf("store: replace workspace %s guardrails: insert %s: %w", workspaceID, name, err)
 		}
 	}
 	return readWorkspaceGuardrails(tx, workspaceID)
+}
+
+func resolveGuardrailVersionPin(q querier, guardrailID, versionID string) (string, error) {
+	versionID = strings.TrimSpace(versionID)
+	if versionID == "" {
+		return "", nil
+	}
+	var id string
+	err := q.QueryRow("SELECT id FROM guardrail_versions WHERE id=? AND guardrail_id=? AND state='published'", versionID, guardrailID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", &ErrValidation{Msg: fmt.Sprintf("guardrail_version_id %q is not a published version of the selected guardrail", versionID)}
+	}
+	if err != nil {
+		return "", fmt.Errorf("read guardrail_version_id %q: %w", versionID, err)
+	}
+	return id, nil
 }
 
 // ReadPrompts returns all prompt catalog entries ordered by visibility scope

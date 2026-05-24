@@ -13,7 +13,10 @@ type Agent struct {
 	Backend     string   `yaml:"backend"`
 	Model       string   `yaml:"model"`
 	Skills      []string `yaml:"skills"`
-	PromptID    string   `yaml:"prompt_id,omitempty" json:"prompt_id,omitempty"`
+	// SkillVersionIDs pins individual skill refs to immutable skill_versions
+	// rows. It is internal runtime state; YAML exact pins use skill@version.
+	SkillVersionIDs map[string]string `yaml:"-" json:"-"`
+	PromptID        string            `yaml:"prompt_id,omitempty" json:"prompt_id,omitempty"`
 	// PromptRef names a prompt catalog entry visible to this agent. PromptID is
 	// authoritative when present; PromptRef plus optional PromptScope is the
 	// human-facing selector used by YAML/API callers.

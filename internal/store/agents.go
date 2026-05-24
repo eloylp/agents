@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/eloylp/agents/internal/config"
@@ -18,7 +19,7 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
 		id          string
 		workspaceID string
 		name        string
-		skills      []string
+		skills      []agentSkillRef
 		canDispatch []string
 	}
 	refs := make([]agentRefs, 0, len(agents))
@@ -90,14 +91,22 @@ func importAgents(tx *sql.Tx, agents []fleet.Agent) error {
 	return nil
 }
 
-func resolveAgentSkillRefs(tx *sql.Tx, a fleet.Agent, workspaceID, scopeType string) ([]string, error) {
+type agentSkillRef struct {
+	skillID        string
+	skillVersionID string
+}
+
+func resolveAgentSkillRefs(tx *sql.Tx, a fleet.Agent, workspaceID, scopeType string) ([]agentSkillRef, error) {
 	repo := ""
 	if scopeType == "repo" {
 		repo = a.ScopeRepo
 	}
-	refs := make([]string, 0, len(a.Skills))
+	refs := make([]agentSkillRef, 0, len(a.Skills))
 	for _, raw := range a.Skills {
-		ref := fleet.NormalizeSkillName(raw)
+		ref, version, err := parseSkillVersionRef(raw)
+		if err != nil {
+			return nil, fmt.Errorf("store import: agent %s skill %q: %w", a.Name, raw, err)
+		}
 		id, err := resolveVisibleCatalogRef(tx, "skills", ref, workspaceID, repo)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -113,9 +122,31 @@ func resolveAgentSkillRefs(tx *sql.Tx, a fleet.Agent, workspaceID, scopeType str
 			}
 			return nil, fmt.Errorf("store import: resolve skill %s for agent %s: %w", ref, a.Name, err)
 		}
-		refs = append(refs, id)
+		versionID, err := resolveSkillVersionPin(tx, id, version)
+		if err != nil {
+			return nil, fmt.Errorf("store import: agent %s skill %s: %w", a.Name, ref, err)
+		}
+		refs = append(refs, agentSkillRef{skillID: id, skillVersionID: versionID})
 	}
 	return refs, nil
+}
+
+func parseSkillVersionRef(raw string) (string, int, error) {
+	raw = strings.TrimSpace(raw)
+	ref, versionRaw, found := strings.Cut(raw, "@")
+	ref = fleet.NormalizeSkillName(ref)
+	if !found {
+		return ref, 0, nil
+	}
+	versionRaw = strings.TrimSpace(versionRaw)
+	if versionRaw == "" {
+		return "", 0, &ErrValidation{Msg: "skill version is required after @"}
+	}
+	version, err := strconv.Atoi(versionRaw)
+	if err != nil || version <= 0 {
+		return "", 0, &ErrValidation{Msg: fmt.Sprintf("invalid skill version %q", versionRaw)}
+	}
+	return ref, version, nil
 }
 
 func ensureAgentPrompt(tx *sql.Tx, a fleet.Agent) (string, error) {
@@ -162,6 +193,21 @@ func resolvePromptVersionPin(q querier, promptID, versionID string) (string, err
 	}
 	if err != nil {
 		return "", fmt.Errorf("read prompt_version_id %q: %w", versionID, err)
+	}
+	return id, nil
+}
+
+func resolveSkillVersionPin(q querier, skillID string, version int) (string, error) {
+	if version == 0 {
+		return "", nil
+	}
+	var id string
+	err := q.QueryRow("SELECT id FROM skill_versions WHERE skill_id=? AND version_number=? AND state='published'", skillID, version).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", &ErrValidation{Msg: fmt.Sprintf("skill version %d is not a published version of the selected skill", version)}
+	}
+	if err != nil {
+		return "", fmt.Errorf("read skill version %d: %w", version, err)
 	}
 	return id, nil
 }
@@ -239,7 +285,7 @@ func loadAgents(db querier, cfg *config.Config) error {
 		return fmt.Errorf("store load: iterate agents: %w", err)
 	}
 	for i, id := range agentIDs {
-		skills, err := loadAgentSkillRefs(db, id)
+		skills, skillPins, err := loadAgentSkillRefs(db, id)
 		if err != nil {
 			return fmt.Errorf("store load: load agent %s skills: %w", agents[i].Name, err)
 		}
@@ -248,6 +294,7 @@ func loadAgents(db querier, cfg *config.Config) error {
 			return fmt.Errorf("store load: load agent %s can_dispatch: %w", agents[i].Name, err)
 		}
 		agents[i].Skills = skills
+		agents[i].SkillVersionIDs = skillPins
 		agents[i].CanDispatch = canDispatch
 	}
 	cfg.Agents = agents
@@ -442,16 +489,16 @@ func validateAgentScalarRefs(q querier, a fleet.Agent, workspaceID, scopeType st
 	return nil
 }
 
-func replaceAgentSkills(tx *sql.Tx, agentID, agentName string, skills []string) error {
+func replaceAgentSkills(tx *sql.Tx, agentID, agentName string, skills []agentSkillRef) error {
 	if _, err := tx.Exec("DELETE FROM agent_skills WHERE agent_id=?", agentID); err != nil {
 		return fmt.Errorf("store import: clear agent %s skills: %w", agentName, err)
 	}
-	for i, skillID := range skills {
+	for i, skill := range skills {
 		if _, err := tx.Exec(
-			"INSERT INTO agent_skills(agent_id, skill_id, position) VALUES(?,?,?)",
-			agentID, skillID, i,
+			"INSERT INTO agent_skills(agent_id, skill_id, skill_version_id, position) VALUES(?,?,NULLIF(?, ''),?)",
+			agentID, skill.skillID, skill.skillVersionID, i,
 		); err != nil {
-			return fmt.Errorf("store import: insert agent %s skill %s: %w", agentName, skillID, err)
+			return fmt.Errorf("store import: insert agent %s skill %s: %w", agentName, skill.skillID, err)
 		}
 	}
 	return nil
@@ -481,26 +528,34 @@ func replaceAgentDispatches(tx *sql.Tx, agentID, workspaceID, agentName string, 
 	return nil
 }
 
-func loadAgentSkillRefs(q querier, agentID string) ([]string, error) {
+func loadAgentSkillRefs(q querier, agentID string) ([]string, map[string]string, error) {
 	rows, err := q.Query(`
-		SELECT s.ref
+		SELECT s.ref, COALESCE(ask.skill_version_id, '')
 		FROM agent_skills ask
 		JOIN skills s ON s.id = ask.skill_id
 		WHERE ask.agent_id=?
 		ORDER BY ask.position, s.ref`, agentID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
 	var out []string
+	pins := map[string]string{}
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+		var versionID string
+		if err := rows.Scan(&id, &versionID); err != nil {
+			return nil, nil, err
+		}
+		if versionID != "" {
+			pins[id] = versionID
 		}
 		out = append(out, id)
 	}
-	return out, rows.Err()
+	if len(pins) == 0 {
+		pins = nil
+	}
+	return out, pins, rows.Err()
 }
 
 func loadAgentDispatchRefs(q querier, agentID string) ([]string, error) {

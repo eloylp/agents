@@ -1016,10 +1016,11 @@ func workspaceJSON(w fleet.Workspace) map[string]any {
 
 func workspaceGuardrailJSON(ref fleet.WorkspaceGuardrailRef) map[string]any {
 	return map[string]any{
-		"workspace_id":   ref.WorkspaceID,
-		"guardrail_name": ref.GuardrailName,
-		"position":       ref.Position,
-		"enabled":        ref.Enabled,
+		"workspace_id":         ref.WorkspaceID,
+		"guardrail_name":       ref.GuardrailName,
+		"guardrail_version_id": ref.GuardrailVersionID,
+		"position":             ref.Position,
+		"enabled":              ref.Enabled,
 	}
 }
 

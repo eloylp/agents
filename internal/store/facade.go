@@ -109,7 +109,10 @@ func (s *Store) DeletePrompt(ref string) error { return DeletePrompt(s.db, ref) 
 
 // ── Skills ──────────────────────────────────────────────────────────────
 
-func (s *Store) ReadSkills() (map[string]fleet.Skill, error)   { return ReadSkills(s.db) }
+func (s *Store) ReadSkills() (map[string]fleet.Skill, error) { return ReadSkills(s.db) }
+func (s *Store) ReadSkillVersion(versionID string) (fleet.Skill, error) {
+	return ReadSkillVersion(s.db, versionID)
+}
 func (s *Store) UpsertSkill(name string, sk fleet.Skill) error { return UpsertSkill(s.db, name, sk) }
 func (s *Store) DeleteSkill(name string) error                 { return DeleteSkill(s.db, name) }
 

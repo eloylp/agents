@@ -109,10 +109,14 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		return fmt.Errorf("agent %q: load guardrails: %w", agent.Name, err)
 	}
 	guardrails = slices.Insert(guardrails, 0, dynamicWorkspaceGuardrail(workspaceID, agent, cfg.Repos))
-	skillVersionIDs := catalogSkillVersionIDs(cfg.Skills, agent.Skills)
+	skillsForRun, err := e.resolveAgentSkills(cfg.Skills, agent)
+	if err != nil {
+		return err
+	}
+	skillVersionIDs := catalogSkillVersionIDs(skillsForRun, agent.Skills)
 	guardrailVersionIDs := catalogGuardrailVersionIDs(guardrails)
 
-	rendered, err := ai.RenderAgentPrompt(agent, promptBody, cfg.Skills, guardrails, ai.PromptContext{
+	rendered, err := ai.RenderAgentPrompt(agent, promptBody, skillsForRun, guardrails, ai.PromptContext{
 		Repo:          ev.Repo.FullName,
 		Number:        ev.Number,
 		Backend:       backend,
@@ -337,10 +341,37 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	return nil
 }
 
+func (e *Engine) resolveAgentSkills(skills map[string]fleet.Skill, agent fleet.Agent) (map[string]fleet.Skill, error) {
+	if len(agent.SkillVersionIDs) == 0 {
+		return skills, nil
+	}
+	resolved := make(map[string]fleet.Skill, len(skills))
+	for k, v := range skills {
+		resolved[k] = v
+	}
+	for ref, versionID := range agent.SkillVersionIDs {
+		skill, err := e.store.ReadSkillVersion(versionID)
+		if err != nil {
+			return nil, fmt.Errorf("agent %q: resolve skill %s version: %w", agent.Name, ref, err)
+		}
+		if skill.ID != ref {
+			return nil, fmt.Errorf("agent %q: skill_version_id %q does not belong to skill %q", agent.Name, versionID, ref)
+		}
+		resolved[ref] = skill
+	}
+	return resolved, nil
+}
+
 func catalogSkillVersionIDs(skills map[string]fleet.Skill, refs []string) []string {
 	out := make([]string, 0, len(refs))
 	for _, ref := range refs {
-		if sk, ok := skills[ref]; ok && strings.TrimSpace(sk.VersionID) != "" {
+		sk, ok := skills[ref]
+		if !ok {
+			if base, _, found := strings.Cut(ref, "@"); found {
+				sk, ok = skills[strings.TrimSpace(base)]
+			}
+		}
+		if ok && strings.TrimSpace(sk.VersionID) != "" {
 			out = append(out, sk.VersionID)
 		}
 	}

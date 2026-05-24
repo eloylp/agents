@@ -166,7 +166,13 @@ func (c *Config) validateAgents() error {
 		}
 		for _, s := range a.Skills {
 			if _, ok := c.Skills[s]; !ok {
-				return fmt.Errorf("config: agent %q: unknown skill %q", a.Name, s)
+				base, _, found := strings.Cut(s, "@")
+				if found {
+					_, ok = c.Skills[strings.TrimSpace(base)]
+				}
+				if !ok {
+					return fmt.Errorf("config: agent %q: unknown skill %q", a.Name, s)
+				}
 			}
 		}
 		if a.PromptID == "" && a.PromptRef == "" {
