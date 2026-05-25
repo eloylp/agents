@@ -541,6 +541,203 @@ func TestPromptDraftDoesNotAffectCurrentUntilPublished(t *testing.T) {
 	}
 }
 
+func TestCatalogDraftPublishPaths(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		createAsset   func(*testing.T, *sql.DB) string
+		createDraft   func(*testing.T, *sql.Tx, string) fleet.CatalogVersion
+		publishDraft  func(*testing.T, *sql.Tx, string)
+		readCurrent   func(*testing.T, *sql.DB, string) (string, string)
+		currentBody   string
+		publishedBody string
+	}{
+		{
+			name: "skill",
+			createAsset: func(t *testing.T, db *sql.DB) string {
+				t.Helper()
+				if err := store.UpsertSkill(db, "architect", fleet.Skill{Prompt: "skill v1"}); err != nil {
+					t.Fatalf("UpsertSkill: %v", err)
+				}
+				return "architect"
+			},
+			createDraft: func(t *testing.T, tx *sql.Tx, ref string) fleet.CatalogVersion {
+				t.Helper()
+				draft, err := store.CreateSkillDraftTx(tx, ref, "skill v2")
+				if err != nil {
+					t.Fatalf("CreateSkillDraftTx: %v", err)
+				}
+				return draft
+			},
+			publishDraft: func(t *testing.T, tx *sql.Tx, versionID string) {
+				t.Helper()
+				if _, _, err := store.PublishSkillVersionTx(tx, versionID); err != nil {
+					t.Fatalf("PublishSkillVersionTx: %v", err)
+				}
+			},
+			readCurrent: func(t *testing.T, db *sql.DB, ref string) (string, string) {
+				t.Helper()
+				skills, err := store.ReadSkills(db)
+				if err != nil {
+					t.Fatalf("ReadSkills: %v", err)
+				}
+				return skills[ref].VersionID, skills[ref].Prompt
+			},
+			currentBody:   "skill v1",
+			publishedBody: "skill v2",
+		},
+		{
+			name: "guardrail",
+			createAsset: func(t *testing.T, db *sql.DB) string {
+				t.Helper()
+				g := fleet.Guardrail{Name: "security-review", Description: "v1", Content: "guardrail v1", Enabled: true, Position: 10}
+				if err := store.UpsertGuardrail(db, g); err != nil {
+					t.Fatalf("UpsertGuardrail: %v", err)
+				}
+				return "security-review"
+			},
+			createDraft: func(t *testing.T, tx *sql.Tx, ref string) fleet.CatalogVersion {
+				t.Helper()
+				g := fleet.Guardrail{Name: ref, Description: "v2", Content: "guardrail v2", Enabled: true, Position: 20}
+				draft, err := store.CreateGuardrailDraftTx(tx, ref, g)
+				if err != nil {
+					t.Fatalf("CreateGuardrailDraftTx: %v", err)
+				}
+				return draft
+			},
+			publishDraft: func(t *testing.T, tx *sql.Tx, versionID string) {
+				t.Helper()
+				if _, err := store.PublishGuardrailVersionTx(tx, versionID); err != nil {
+					t.Fatalf("PublishGuardrailVersionTx: %v", err)
+				}
+			},
+			readCurrent: func(t *testing.T, db *sql.DB, ref string) (string, string) {
+				t.Helper()
+				g, err := store.GetGuardrail(db, ref)
+				if err != nil {
+					t.Fatalf("GetGuardrail: %v", err)
+				}
+				return g.VersionID, g.Content
+			},
+			currentBody:   "guardrail v1",
+			publishedBody: "guardrail v2",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			db := openTestDB(t)
+			ref := tc.createAsset(t, db)
+			originalVersionID, body := tc.readCurrent(t, db, ref)
+			if body != tc.currentBody {
+				t.Fatalf("initial body = %q, want %q", body, tc.currentBody)
+			}
+
+			tx, err := db.Begin()
+			if err != nil {
+				t.Fatalf("begin draft: %v", err)
+			}
+			draft := tc.createDraft(t, tx, ref)
+			if err := tx.Commit(); err != nil {
+				t.Fatalf("commit draft: %v", err)
+			}
+			if draft.State != "draft" || draft.Version != 2 || draft.ID == "" {
+				t.Fatalf("draft = (%q, %d, %q), want draft v2 with id", draft.State, draft.Version, draft.ID)
+			}
+			versionID, body := tc.readCurrent(t, db, ref)
+			if versionID != originalVersionID || body != tc.currentBody {
+				t.Fatalf("current after draft = (%q, %q), want original (%q, %q)", versionID, body, originalVersionID, tc.currentBody)
+			}
+
+			tx, err = db.Begin()
+			if err != nil {
+				t.Fatalf("begin publish: %v", err)
+			}
+			tc.publishDraft(t, tx, draft.ID)
+			if err := tx.Commit(); err != nil {
+				t.Fatalf("commit publish: %v", err)
+			}
+			versionID, body = tc.readCurrent(t, db, ref)
+			if versionID != draft.ID || body != tc.publishedBody {
+				t.Fatalf("current after publish = (%q, %q), want draft (%q, %q)", versionID, body, draft.ID, tc.publishedBody)
+			}
+		})
+	}
+}
+
+func TestPublishCatalogVersionRejectsAlreadyPublished(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "already-published", Description: "first", Content: "body v1"})
+	if err != nil {
+		t.Fatalf("UpsertPrompt: %v", err)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin publish: %v", err)
+	}
+	_, err = store.PublishPromptVersionTx(tx, prompt.VersionID)
+	if rollbackErr := tx.Rollback(); rollbackErr != nil {
+		t.Fatalf("rollback publish: %v", rollbackErr)
+	}
+	var validationErr *store.ErrValidation
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("PublishPromptVersionTx already-published error = %v, want ErrValidation", err)
+	}
+}
+
+func TestPublishCatalogVersionRejectsStaleDraft(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "stale-draft", Description: "first", Content: "body v1"})
+	if err != nil {
+		t.Fatalf("UpsertPrompt v1: %v", err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin draft: %v", err)
+	}
+	draft, err := store.CreatePromptDraftTx(tx, prompt.ID, "draft", "body v2")
+	if err != nil {
+		tx.Rollback()
+		t.Fatalf("CreatePromptDraftTx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit draft: %v", err)
+	}
+	prompt.Content = "body v3"
+	if _, err := store.UpsertPrompt(db, prompt); err != nil {
+		t.Fatalf("UpsertPrompt v3: %v", err)
+	}
+
+	tx, err = db.Begin()
+	if err != nil {
+		t.Fatalf("begin stale publish: %v", err)
+	}
+	_, err = store.PublishPromptVersionTx(tx, draft.ID)
+	if rollbackErr := tx.Rollback(); rollbackErr != nil {
+		t.Fatalf("rollback stale publish: %v", rollbackErr)
+	}
+	var validationErr *store.ErrValidation
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("PublishPromptVersionTx stale error = %v, want ErrValidation", err)
+	}
+
+	current, err := store.ReadPrompt(db, prompt.ID)
+	if err != nil {
+		t.Fatalf("ReadPrompt: %v", err)
+	}
+	if current.Content != "body v3" || current.Version != 3 {
+		t.Fatalf("current after stale publish = v%d %q, want v3 body", current.Version, current.Content)
+	}
+}
+
 func TestUpsertScopedSkillDerivesStableID(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)

@@ -270,18 +270,22 @@ func PublishPromptVersionTx(tx *sql.Tx, versionID string) (fleet.Prompt, error) 
 	versionID = strings.TrimSpace(versionID)
 	var p fleet.Prompt
 	var promptID, state string
+	var baseVersionID, currentVersionID sql.NullString
 	err := tx.QueryRow(`
 		SELECT p.id, p.ref, COALESCE(p.workspace_id, ''), COALESCE(p.repo, ''), p.name,
-		       pv.description, pv.content, pv.state, pv.version_number
+		       pv.description, pv.content, pv.state, pv.version_number, pv.base_version_id, p.current_version_id
 		FROM prompt_versions pv
 		JOIN prompts p ON p.id = pv.prompt_id
 		WHERE pv.id=?`, versionID).
-		Scan(&promptID, &p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content, &state, &p.Version)
+		Scan(&promptID, &p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content, &state, &p.Version, &baseVersionID, &currentVersionID)
 	if err != nil {
 		return fleet.Prompt{}, versionReadErr("prompt", versionID, err)
 	}
 	if state != "draft" && state != "proposal" {
 		return fleet.Prompt{}, &ErrValidation{Msg: "only draft or proposal prompt versions can be published"}
+	}
+	if staleCatalogDraft(baseVersionID, currentVersionID) {
+		return fleet.Prompt{}, &ErrValidation{Msg: "prompt version is stale; refresh from the current published version before publishing"}
 	}
 	if _, err := tx.Exec("UPDATE prompt_versions SET state='published', published_at=datetime('now') WHERE id=?", versionID); err != nil {
 		return fleet.Prompt{}, fmt.Errorf("store: publish prompt version %s: %w", versionID, err)
@@ -297,23 +301,27 @@ func PublishSkillVersionTx(tx *sql.Tx, versionID string) (string, fleet.Skill, e
 	versionID = strings.TrimSpace(versionID)
 	var sk fleet.Skill
 	var skillID, state, ref string
+	var baseVersionID, currentVersionID sql.NullString
 	err := tx.QueryRow(`
 		SELECT s.id, s.ref, COALESCE(s.workspace_id, ''), COALESCE(s.repo, ''), s.name,
-		       sv.prompt, sv.state, sv.version_number
+		       sv.prompt, sv.state, sv.version_number, sv.base_version_id, s.current_version_id
 		FROM skill_versions sv
 		JOIN skills s ON s.id = sv.skill_id
 		WHERE sv.id=?`, versionID).
-		Scan(&skillID, &ref, &sk.WorkspaceID, &sk.Repo, &sk.Name, &sk.Prompt, &state, &sk.Version)
+		Scan(&skillID, &ref, &sk.WorkspaceID, &sk.Repo, &sk.Name, &sk.Prompt, &state, &sk.Version, &baseVersionID, &currentVersionID)
 	if err != nil {
 		return "", fleet.Skill{}, versionReadErr("skill", versionID, err)
 	}
 	if state != "draft" && state != "proposal" {
 		return "", fleet.Skill{}, &ErrValidation{Msg: "only draft or proposal skill versions can be published"}
 	}
+	if staleCatalogDraft(baseVersionID, currentVersionID) {
+		return "", fleet.Skill{}, &ErrValidation{Msg: "skill version is stale; refresh from the current published version before publishing"}
+	}
 	if _, err := tx.Exec("UPDATE skill_versions SET state='published', published_at=datetime('now') WHERE id=?", versionID); err != nil {
 		return "", fleet.Skill{}, fmt.Errorf("store: publish skill version %s: %w", versionID, err)
 	}
-	if _, err := tx.Exec("UPDATE skills SET prompt=?, current_version_id=?, updated_at=datetime('now') WHERE id=?", sk.Prompt, versionID, skillID); err != nil {
+	if _, err := tx.Exec("UPDATE skills SET prompt=?, current_version_id=? WHERE id=?", sk.Prompt, versionID, skillID); err != nil {
 		return "", fleet.Skill{}, fmt.Errorf("store: publish skill version %s current: %w", versionID, err)
 	}
 	sk.ID = ref
@@ -326,18 +334,22 @@ func PublishGuardrailVersionTx(tx *sql.Tx, versionID string) (fleet.Guardrail, e
 	var g fleet.Guardrail
 	var guardrailID, state string
 	var enabled int
+	var baseVersionID, currentVersionID sql.NullString
 	err := tx.QueryRow(`
 		SELECT g.id, COALESCE(g.workspace_id, ''), g.name, gv.description, gv.content, gv.enabled, gv.position,
-		       gv.state, gv.version_number
+		       gv.state, gv.version_number, gv.base_version_id, g.current_version_id
 		FROM guardrail_versions gv
 		JOIN guardrails g ON g.id = gv.guardrail_id
 		WHERE gv.id=?`, versionID).
-		Scan(&guardrailID, &g.WorkspaceID, &g.Name, &g.Description, &g.Content, &enabled, &g.Position, &state, &g.Version)
+		Scan(&guardrailID, &g.WorkspaceID, &g.Name, &g.Description, &g.Content, &enabled, &g.Position, &state, &g.Version, &baseVersionID, &currentVersionID)
 	if err != nil {
 		return fleet.Guardrail{}, versionReadErr("guardrail", versionID, err)
 	}
 	if state != "draft" && state != "proposal" {
 		return fleet.Guardrail{}, &ErrValidation{Msg: "only draft or proposal guardrail versions can be published"}
+	}
+	if staleCatalogDraft(baseVersionID, currentVersionID) {
+		return fleet.Guardrail{}, &ErrValidation{Msg: "guardrail version is stale; refresh from the current published version before publishing"}
 	}
 	if _, err := tx.Exec("UPDATE guardrail_versions SET state='published', published_at=datetime('now') WHERE id=?", versionID); err != nil {
 		return fleet.Guardrail{}, fmt.Errorf("store: publish guardrail version %s: %w", versionID, err)
@@ -352,6 +364,10 @@ func PublishGuardrailVersionTx(tx *sql.Tx, versionID string) (fleet.Guardrail, e
 	g.Enabled = enabled != 0
 	g.VersionID = versionID
 	return g, nil
+}
+
+func staleCatalogDraft(baseVersionID, currentVersionID sql.NullString) bool {
+	return baseVersionID.Valid && currentVersionID.Valid && baseVersionID.String != currentVersionID.String
 }
 
 func promptInternalID(q querier, ref string) (string, error) {

@@ -2924,6 +2924,107 @@ func TestStoreCRUDSkillPatchNotFound(t *testing.T) {
 	}
 }
 
+func TestStoreCRUDCatalogVersionPublishRejectsWrongAsset(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
+		"name": "coder-a", "description": "a", "content": "prompt a v1",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST coder-a prompt: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
+		"name": "coder-b", "description": "b", "content": "prompt b v1",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST coder-b prompt: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var promptB storePromptJSON
+	if err := json.NewDecoder(rr.Body).Decode(&promptB); err != nil {
+		t.Fatalf("decode coder-b prompt: %v", err)
+	}
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/prompts/"+promptB.ID, map[string]any{
+		"content": "prompt b v2", "publish": false,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH coder-b draft: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var promptDraft storePromptJSON
+	if err := json.NewDecoder(rr.Body).Decode(&promptDraft); err != nil {
+		t.Fatalf("decode draft prompt: %v", err)
+	}
+	if promptDraft.VersionID == "" || promptDraft.Version != 2 {
+		t.Fatalf("draft prompt version = (%q, %d), want draft v2", promptDraft.VersionID, promptDraft.Version)
+	}
+	rr = doCRUDRequest(t, s, http.MethodPost, "/prompts/prompt_coder-a/versions/"+promptDraft.VersionID+"/publish", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("POST wrong prompt publish: got %d, want 404, %s", rr.Code, rr.Body.String())
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
+		"name": "architect", "prompt": "architecture v1",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST architect skill: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
+		"name": "reviewer", "prompt": "review v1",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST reviewer skill: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/skills/reviewer", map[string]any{
+		"prompt": "review v2", "publish": false,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH reviewer draft: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var draft storeSkillJSON
+	if err := json.NewDecoder(rr.Body).Decode(&draft); err != nil {
+		t.Fatalf("decode draft skill: %v", err)
+	}
+	if draft.VersionID == "" || draft.Version != 2 {
+		t.Fatalf("draft skill version = (%q, %d), want draft v2", draft.VersionID, draft.Version)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPost, "/skills/architect/versions/"+draft.VersionID+"/publish", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("POST wrong skill publish: got %d, want 404, %s", rr.Code, rr.Body.String())
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPost, "/guardrails", map[string]any{
+		"name": "Guardrail A", "description": "a", "content": "guardrail a v1", "enabled": true, "position": 10,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST guardrail-a: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodPost, "/guardrails", map[string]any{
+		"name": "Guardrail B", "description": "b", "content": "guardrail b v1", "enabled": true, "position": 20,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST guardrail-b: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/guardrails/guardrail-b", map[string]any{
+		"content": "guardrail b v2", "publish": false,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH guardrail-b draft: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var guardrailDraft map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&guardrailDraft); err != nil {
+		t.Fatalf("decode draft guardrail: %v", err)
+	}
+	guardrailVersionID, _ := guardrailDraft["version_id"].(string)
+	if guardrailVersionID == "" || guardrailDraft["version"] != float64(2) {
+		t.Fatalf("draft guardrail version = (%q, %v), want draft v2", guardrailVersionID, guardrailDraft["version"])
+	}
+	rr = doCRUDRequest(t, s, http.MethodPost, "/guardrails/guardrail-a/versions/"+guardrailVersionID+"/publish", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("POST wrong guardrail publish: got %d, want 404, %s", rr.Code, rr.Body.String())
+	}
+}
+
 // ── PATCH /backends/{name}, superset shape ─────────────────────────
 
 func TestStoreCRUDBackendPatchFullShape(t *testing.T) {
