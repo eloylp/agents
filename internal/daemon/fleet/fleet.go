@@ -83,20 +83,26 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/skills", withTimeout(http.HandlerFunc(h.handleSkillsList))).Methods(http.MethodGet)
 	r.Handle("/skills", withTimeout(http.HandlerFunc(h.handleSkillCreate))).Methods(http.MethodPost)
 	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillGet))).Methods(http.MethodGet)
+	r.Handle("/skills/{id}/versions", withTimeout(http.HandlerFunc(h.handleSkillVersionsList))).Methods(http.MethodGet)
 	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillPatchByName))).Methods(http.MethodPatch)
+	r.Handle("/skills/{id}/versions/{version_id}/publish", withTimeout(http.HandlerFunc(h.handleSkillVersionPublish))).Methods(http.MethodPost)
 	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillDelete))).Methods(http.MethodDelete)
 
 	r.Handle("/guardrails", withTimeout(http.HandlerFunc(h.handleGuardrailsList))).Methods(http.MethodGet)
 	r.Handle("/guardrails", withTimeout(http.HandlerFunc(h.handleGuardrailCreate))).Methods(http.MethodPost)
 	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailGet))).Methods(http.MethodGet)
+	r.Handle("/guardrails/{id}/versions", withTimeout(http.HandlerFunc(h.handleGuardrailVersionsList))).Methods(http.MethodGet)
 	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailPatchByName))).Methods(http.MethodPatch)
+	r.Handle("/guardrails/{id}/versions/{version_id}/publish", withTimeout(http.HandlerFunc(h.handleGuardrailVersionPublish))).Methods(http.MethodPost)
 	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailDelete))).Methods(http.MethodDelete)
 	r.Handle("/guardrails/{id}/reset", withTimeout(http.HandlerFunc(h.handleGuardrailReset))).Methods(http.MethodPost)
 
 	r.Handle("/prompts", withTimeout(http.HandlerFunc(h.handlePromptsList))).Methods(http.MethodGet)
 	r.Handle("/prompts", withTimeout(http.HandlerFunc(h.handlePromptCreate))).Methods(http.MethodPost)
 	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptGet))).Methods(http.MethodGet)
+	r.Handle("/prompts/{id}/versions", withTimeout(http.HandlerFunc(h.handlePromptVersionsList))).Methods(http.MethodGet)
 	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptPatchByID))).Methods(http.MethodPatch)
+	r.Handle("/prompts/{id}/versions/{version_id}/publish", withTimeout(http.HandlerFunc(h.handlePromptVersionPublish))).Methods(http.MethodPost)
 	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptDelete))).Methods(http.MethodDelete)
 
 	r.Handle("/backends", withTimeout(http.HandlerFunc(h.handleBackendsList))).Methods(http.MethodGet)
@@ -481,13 +487,14 @@ func skillToStoreJSON(id string, sk fleet.Skill) storeSkillJSON {
 // PATCH /skills/{id} handler and the MCP update_skill tool. A nil Prompt means
 // "don't touch".
 type SkillPatch struct {
-	Prompt *string `json:"prompt,omitempty"`
+	Prompt  *string `json:"prompt,omitempty"`
+	Publish *bool   `json:"publish,omitempty"`
 }
 
 // AnyFieldSet reports whether at least one patch field is non-nil. Used by
 // both the REST PATCH handler and the MCP update_skill tool to reject empty
 // payloads before hitting the store.
-func (p SkillPatch) AnyFieldSet() bool { return p.Prompt != nil }
+func (p SkillPatch) AnyFieldSet() bool { return p.Prompt != nil || p.Publish != nil }
 
 func (p SkillPatch) apply(s *fleet.Skill) {
 	if p.Prompt != nil {
@@ -542,6 +549,16 @@ func (h *Handler) handleSkillGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, skillToStoreJSON(name, sk))
 }
 
+func (h *Handler) handleSkillVersionsList(w http.ResponseWriter, r *http.Request) {
+	name := fleet.NormalizeSkillName(mux.Vars(r)["id"])
+	versions, err := h.store.ListSkillVersions(name)
+	if err != nil {
+		h.writeErr(w, err, "skill versions")
+		return
+	}
+	writeJSON(w, http.StatusOK, versions)
+}
+
 func (h *Handler) handleSkillPatchByName(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeSkillName(mux.Vars(r)["id"])
 	h.handleSkillPatch(w, r, name)
@@ -554,6 +571,32 @@ func (h *Handler) handleSkillDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) handleSkillVersionPublish(w http.ResponseWriter, r *http.Request) {
+	name := fleet.NormalizeSkillName(mux.Vars(r)["id"])
+	versionID := mux.Vars(r)["version_id"]
+	if err := h.ensureSkillVersionBelongsToRef(name, versionID); err != nil {
+		h.writeErr(w, err, "skill version publish")
+		return
+	}
+	name, skill, err := h.service.PublishSkillVersion(versionID)
+	if err != nil {
+		h.writeErr(w, err, "skill version publish")
+		return
+	}
+	writeJSON(w, http.StatusOK, skillToStoreJSON(name, skill))
+}
+
+func (h *Handler) ensureSkillVersionBelongsToRef(ref, versionID string) error {
+	versions, err := h.store.ListSkillVersions(ref)
+	if err != nil {
+		return err
+	}
+	if !catalogVersionsInclude(versions, versionID) {
+		return &store.ErrNotFound{Msg: fmt.Sprintf("skill version %q not found for %q", versionID, ref)}
+	}
+	return nil
 }
 
 func (h *Handler) handleSkillPatch(w http.ResponseWriter, r *http.Request, name string) {
@@ -620,6 +663,15 @@ func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skil
 		return "", fleet.Skill{}, &store.ErrNotFound{Msg: fmt.Sprintf("skill %q not found", normalized)}
 	}
 	patch.apply(&existing)
+	if patch.Publish != nil && !*patch.Publish {
+		version, err := h.service.CreateSkillDraft(normalized, existing)
+		if err != nil {
+			return "", fleet.Skill{}, err
+		}
+		existing.VersionID = version.ID
+		existing.Version = version.Version
+		return normalized, existing, nil
+	}
 	if err := h.service.UpsertSkill(normalized, existing); err != nil {
 		return "", fleet.Skill{}, err
 	}
@@ -650,9 +702,12 @@ type storePromptJSON struct {
 type PromptPatch struct {
 	Description *string `json:"description,omitempty"`
 	Content     *string `json:"content,omitempty"`
+	Publish     *bool   `json:"publish,omitempty"`
 }
 
-func (p PromptPatch) AnyFieldSet() bool { return p.Description != nil || p.Content != nil }
+func (p PromptPatch) AnyFieldSet() bool {
+	return p.Description != nil || p.Content != nil || p.Publish != nil
+}
 
 func (p PromptPatch) apply(prompt *fleet.Prompt) {
 	if p.Description != nil {
@@ -730,6 +785,16 @@ func (h *Handler) handlePromptGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, promptToStoreJSON(prompt))
 }
 
+func (h *Handler) handlePromptVersionsList(w http.ResponseWriter, r *http.Request) {
+	ref := mux.Vars(r)["id"]
+	versions, err := h.store.ListPromptVersions(ref)
+	if err != nil {
+		h.writeErr(w, err, "prompt versions")
+		return
+	}
+	writeJSON(w, http.StatusOK, versions)
+}
+
 func (h *Handler) handlePromptPatchByID(w http.ResponseWriter, r *http.Request) {
 	ref := mux.Vars(r)["id"]
 	var req PromptPatch
@@ -746,6 +811,41 @@ func (h *Handler) handlePromptPatchByID(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, promptToStoreJSON(prompt))
+}
+
+func (h *Handler) handlePromptVersionPublish(w http.ResponseWriter, r *http.Request) {
+	ref := mux.Vars(r)["id"]
+	versionID := mux.Vars(r)["version_id"]
+	if err := h.ensurePromptVersionBelongsToRef(ref, versionID); err != nil {
+		h.writeErr(w, err, "prompt version publish")
+		return
+	}
+	prompt, err := h.service.PublishPromptVersion(versionID)
+	if err != nil {
+		h.writeErr(w, err, "prompt version publish")
+		return
+	}
+	writeJSON(w, http.StatusOK, promptToStoreJSON(prompt))
+}
+
+func (h *Handler) ensurePromptVersionBelongsToRef(ref, versionID string) error {
+	versions, err := h.store.ListPromptVersions(ref)
+	if err != nil {
+		return err
+	}
+	if !catalogVersionsInclude(versions, versionID) {
+		return &store.ErrNotFound{Msg: fmt.Sprintf("prompt version %q not found for %q", versionID, ref)}
+	}
+	return nil
+}
+
+func catalogVersionsInclude(versions []fleet.CatalogVersion, versionID string) bool {
+	for _, version := range versions {
+		if version.ID == versionID {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) handlePromptDelete(w http.ResponseWriter, r *http.Request) {
@@ -772,6 +872,15 @@ func (h *Handler) updatePrompt(ref string, patch PromptPatch) (fleet.Prompt, err
 	}
 	merged := prompt
 	patch.apply(&merged)
+	if patch.Publish != nil && !*patch.Publish {
+		version, err := h.service.CreatePromptDraft(ref, merged)
+		if err != nil {
+			return fleet.Prompt{}, err
+		}
+		merged.VersionID = version.ID
+		merged.Version = version.Version
+		return merged, nil
+	}
 	return h.service.UpsertPrompt(merged)
 }
 

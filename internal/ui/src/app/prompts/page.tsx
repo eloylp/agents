@@ -47,6 +47,7 @@ export default function PromptsPage() {
   const [filterRepos, setFilterRepos] = useState<Repo[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [publish, setPublish] = useState(true)
 
   const load = () => {
     setLoading(true)
@@ -97,7 +98,7 @@ export default function PromptsPage() {
           workspace_id: selectedScope === 'global' ? '' : selected.workspace_id,
           repo: selectedScope === 'repo' ? selected.repo : '',
         }
-      : { description: selected.description, content: selected.content }
+      : { description: selected.description, content: selected.content, publish }
     try {
       const res = await fetch(url, {
         method: isNew ? 'POST' : 'PATCH',
@@ -199,7 +200,7 @@ export default function PromptsPage() {
             </select>
           )}
           <button
-            onClick={() => { setSelected(emptyPrompt); setSelectedScope('global'); setError(''); setModal('create') }}
+            onClick={() => { setSelected(emptyPrompt); setSelectedScope('global'); setPublish(true); setError(''); setModal('create') }}
             style={{ background: 'var(--btn-primary-bg)', border: '1px solid var(--btn-primary-border)', color: '#fff', padding: '6px 14px', borderRadius: 6, cursor: 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
           >
             + New prompt
@@ -224,7 +225,7 @@ export default function PromptsPage() {
               {p.content || '-'}
             </pre>
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: 'auto' }}>
-              <button onClick={() => { setSelected(p); setSelectedScope(scopeType(p)); setError(''); setModal('edit') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', color: 'var(--accent)' }}>Edit</button>
+              <button onClick={() => { setSelected(p); setSelectedScope(scopeType(p)); setPublish(true); setError(''); setModal('edit') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', color: 'var(--accent)' }}>Edit</button>
               <button onClick={() => { setSelected(p); setError(''); setModal('delete') }} style={{ padding: '4px 10px', borderRadius: 5, border: '1px solid var(--border-danger)', background: 'var(--bg-danger)', cursor: 'pointer', color: 'var(--text-danger)' }}>Delete</button>
             </div>
           </Card>
@@ -293,6 +294,22 @@ export default function PromptsPage() {
               <label style={labelStyle}>Content *</label>
               <MarkdownEditor value={selected.content} onChange={content => setSelected(p => ({ ...p, content }))} minHeight={260} />
             </div>
+            {modal === 'edit' && (
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.55rem', color: 'var(--text)', fontSize: '0.85rem' }}>
+                <input
+                  type="checkbox"
+                  checked={publish}
+                  onChange={e => setPublish(e.target.checked)}
+                  style={{ marginTop: 2 }}
+                />
+                <span>
+                  <strong>Publish</strong>
+                  <span style={{ display: 'block', color: 'var(--text-muted)', marginTop: 2 }}>
+                    Agents tracking this prompt will use the new published version on their next run. If unchecked, the edit is saved as a draft.
+                  </span>
+                </span>
+              </label>
+            )}
             {error && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem' }}>{error}</p>}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
               <button onClick={() => setModal(null)} style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-muted)' }}>Cancel</button>

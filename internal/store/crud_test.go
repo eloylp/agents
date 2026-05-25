@@ -477,6 +477,70 @@ func TestCatalogUpsertsPublishImmutableVersions(t *testing.T) {
 	}
 }
 
+func TestPromptDraftDoesNotAffectCurrentUntilPublished(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "draftable", Description: "first", Content: "body v1"})
+	if err != nil {
+		t.Fatalf("UpsertPrompt: %v", err)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin draft: %v", err)
+	}
+	draft, err := store.CreatePromptDraftTx(tx, prompt.ID, "draft", "body v2")
+	if err != nil {
+		tx.Rollback()
+		t.Fatalf("CreatePromptDraftTx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit draft: %v", err)
+	}
+	if draft.State != "draft" || draft.Version != 2 || draft.ID == "" {
+		t.Fatalf("draft = (%q, %d, %q), want draft v2 with id", draft.State, draft.Version, draft.ID)
+	}
+
+	current, err := store.ReadPrompt(db, prompt.ID)
+	if err != nil {
+		t.Fatalf("ReadPrompt before publish: %v", err)
+	}
+	if current.Content != "body v1" || current.Version != 1 {
+		t.Fatalf("current before publish = v%d %q, want v1 body", current.Version, current.Content)
+	}
+
+	tx, err = db.Begin()
+	if err != nil {
+		t.Fatalf("begin publish: %v", err)
+	}
+	published, err := store.PublishPromptVersionTx(tx, draft.ID)
+	if err != nil {
+		tx.Rollback()
+		t.Fatalf("PublishPromptVersionTx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit publish: %v", err)
+	}
+	if published.Content != "body v2" || published.Version != 2 || published.VersionID != draft.ID {
+		t.Fatalf("published = v%d id=%q content=%q, want draft promoted", published.Version, published.VersionID, published.Content)
+	}
+	current, err = store.ReadPrompt(db, prompt.ID)
+	if err != nil {
+		t.Fatalf("ReadPrompt after publish: %v", err)
+	}
+	if current.Content != "body v2" || current.VersionID != draft.ID {
+		t.Fatalf("current after publish = id=%q content=%q, want draft current", current.VersionID, current.Content)
+	}
+	versions, err := store.ListPromptVersions(db, prompt.ID)
+	if err != nil {
+		t.Fatalf("ListPromptVersions: %v", err)
+	}
+	if len(versions) != 2 || versions[0].ID != draft.ID || versions[0].State != "published" || versions[1].Version != 1 {
+		t.Fatalf("versions = %#v, want published draft first and original second", versions)
+	}
+}
+
 func TestUpsertScopedSkillDerivesStableID(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)

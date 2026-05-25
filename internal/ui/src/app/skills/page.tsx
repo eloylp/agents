@@ -10,6 +10,7 @@ interface Skill {
   repo?: string
   name: string
   prompt: string
+  publish?: boolean
   version_id?: string
   version?: number
 }
@@ -51,6 +52,7 @@ function SkillForm({
   const [form, setForm] = useState<Skill>(initial)
   const [selectedScope, setSelectedScope] = useState<'global' | 'workspace' | 'repo'>(scopeType(initial))
   const [repoOptions, setRepoOptions] = useState<Repo[]>([])
+  const [publish, setPublish] = useState(true)
 
   useEffect(() => {
     if (selectedScope !== 'repo' || !form.workspace_id) {
@@ -131,13 +133,29 @@ function SkillForm({
           minHeight={200}
         />
       </div>
+      {!isNew && (
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.55rem', color: 'var(--text)', fontSize: '0.85rem' }}>
+          <input
+            type="checkbox"
+            checked={publish}
+            onChange={e => setPublish(e.target.checked)}
+            style={{ marginTop: 2 }}
+          />
+          <span>
+            <strong>Publish</strong>
+            <span style={{ display: 'block', color: 'var(--text-muted)', marginTop: 2 }}>
+              Agents using this skill through current tracking will use the new published version on their next run. If unchecked, the edit is saved as a draft.
+            </span>
+          </span>
+        </label>
+      )}
       {error && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem' }}>{error}</p>}
       <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
         <button onClick={onCancel} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', cursor: 'pointer', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
           Cancel
         </button>
         <button
-          onClick={() => onSave(form)}
+          onClick={() => onSave({ ...form, publish })}
           disabled={saving || !form.name.trim() || (selectedScope !== 'global' && !form.workspace_id) || (selectedScope === 'repo' && !form.repo)}
           style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
@@ -219,7 +237,7 @@ export default function SkillsPage() {
           workspace_id: form.workspace_id || '',
           repo: form.repo || '',
           prompt: form.prompt,
-        } : { prompt: form.prompt }),
+        } : { prompt: form.prompt, publish: form.publish ?? true }),
       })
       if (!res.ok) {
         setSaveError((await res.text()) || 'Save failed')
