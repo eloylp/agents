@@ -65,6 +65,12 @@ func importPrompts(tx *sql.Tx, prompts []fleet.Prompt) error {
 		if err != nil {
 			return fmt.Errorf("store import: publish prompt %s version: %w", p.Name, err)
 		}
+		if len(p.Versions) > 0 {
+			version, err = replacePromptVersionSnapshotsTx(tx, internalID, p.Versions)
+			if err != nil {
+				return fmt.Errorf("store import: replace prompt %s versions: %w", p.Name, err)
+			}
+		}
 		if _, err := tx.Exec("UPDATE prompts SET current_version_id=?, updated_at=datetime('now') WHERE id=?", version.ID, internalID); err != nil {
 			return fmt.Errorf("store import: update prompt %s current version: %w", p.Name, err)
 		}

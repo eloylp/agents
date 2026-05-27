@@ -14,6 +14,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/daemon"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/store"
 )
 
 // openCRUDTestServer creates a test server backed by a tempdir SQLite via
@@ -2380,6 +2381,175 @@ skills:
 	rr2 := doCRUDRequest(t, s, http.MethodGet, "/agents", nil)
 	if !strings.Contains(rr2.Body.String(), "imported-agent") {
 		t.Errorf("imported agent not in agent list: %s", rr2.Body.String())
+	}
+}
+
+func TestStoreImportYAMLPreservesCatalogVersions(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	yamlBody := `backends:
+  claude:
+    command: claude
+prompts:
+  - id: prompt_catalog
+    name: catalog
+    content: current prompt
+    versions:
+      - id: promptver_one
+        version: 1
+        state: published
+        content: original prompt
+        source_type: manual
+        published_at: "2026-01-01T00:00:00Z"
+      - id: promptver_two
+        version: 2
+        state: published
+        content: current prompt
+        source_type: manual
+        base_version_id: promptver_one
+        published_at: "2026-01-02T00:00:00Z"
+skills:
+  imported-skill:
+    prompt: current skill
+    versions:
+      - id: skillver_one
+        version: 1
+        state: published
+        prompt: original skill
+        source_type: manual
+        published_at: "2026-01-01T00:00:00Z"
+      - id: skillver_two
+        version: 2
+        state: published
+        prompt: current skill
+        source_type: manual
+        base_version_id: skillver_one
+        published_at: "2026-01-02T00:00:00Z"
+guardrails:
+  - id: guardrail_policy
+    name: policy
+    description: current policy
+    content: current guardrail
+    enabled: true
+    position: 10
+    versions:
+      - id: guardrailver_one
+        version: 1
+        state: published
+        description: original policy
+        content: original guardrail
+        enabled: true
+        position: 10
+        source_type: manual
+        published_at: "2026-01-01T00:00:00Z"
+      - id: guardrailver_two
+        version: 2
+        state: published
+        description: current policy
+        content: current guardrail
+        enabled: true
+        position: 10
+        source_type: manual
+        base_version_id: guardrailver_one
+        published_at: "2026-01-02T00:00:00Z"
+workspaces:
+  - id: default
+    name: Default
+    guardrails:
+      - guardrail_name: policy
+        guardrail_version_id: guardrailver_one
+        enabled: true
+        position: 1
+    agents:
+      - name: coder
+        backend: claude
+        prompt_ref: catalog
+        prompt_version_id: promptver_one
+        description: imported agent
+        skills: [imported-skill@1]
+        can_dispatch: []
+    repos:
+      - name: owner/repo
+        enabled: true
+        use:
+          - agent: coder
+            labels: [ai:run]
+`
+	req := httptest.NewRequest(http.MethodPost, "/import?mode=replace", strings.NewReader(yamlBody))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("import versioned catalog: got %d, %s", rr.Code, rr.Body.String())
+	}
+
+	promptVersions, err := store.ListPromptVersionSnapshots(s.Store().DB(), "prompt_catalog")
+	if err != nil {
+		t.Fatalf("list prompt versions: %v", err)
+	}
+	if got, want := len(promptVersions), 2; got != want {
+		t.Fatalf("prompt versions len = %d, want %d: %+v", got, want, promptVersions)
+	}
+	if got, want := promptVersions[0].ID, "promptver_one"; got != want {
+		t.Fatalf("prompt version[0].ID = %q, want %q", got, want)
+	}
+	prompt, err := s.Store().ReadPrompt("prompt_catalog")
+	if err != nil {
+		t.Fatalf("read prompt: %v", err)
+	}
+	if got, want := prompt.VersionID, "promptver_two"; got != want {
+		t.Fatalf("prompt current version = %q, want %q", got, want)
+	}
+
+	skillVersions, err := store.ListSkillVersionSnapshots(s.Store().DB(), "imported-skill")
+	if err != nil {
+		t.Fatalf("list skill versions: %v", err)
+	}
+	if got, want := len(skillVersions), 2; got != want {
+		t.Fatalf("skill versions len = %d, want %d: %+v", got, want, skillVersions)
+	}
+	if got, want := skillVersions[1].ID, "skillver_two"; got != want {
+		t.Fatalf("skill version[1].ID = %q, want %q", got, want)
+	}
+
+	guardrailVersions, err := store.ListGuardrailVersionSnapshots(s.Store().DB(), "guardrail_policy")
+	if err != nil {
+		t.Fatalf("list guardrail versions: %v", err)
+	}
+	if got, want := len(guardrailVersions), 2; got != want {
+		t.Fatalf("guardrail versions len = %d, want %d: %+v", got, want, guardrailVersions)
+	}
+	if got, want := guardrailVersions[0].ID, "guardrailver_one"; got != want {
+		t.Fatalf("guardrail version[0].ID = %q, want %q", got, want)
+	}
+
+	agents, err := s.Store().ReadAgents()
+	if err != nil {
+		t.Fatalf("read agents: %v", err)
+	}
+	if got, want := agents[0].PromptVersionID, "promptver_one"; got != want {
+		t.Fatalf("agent prompt pin = %q, want %q", got, want)
+	}
+	if got, want := agents[0].SkillVersionIDs["imported-skill"], "skillver_one"; got != want {
+		t.Fatalf("agent skill pin = %q, want %q", got, want)
+	}
+	guardrails, err := s.Store().ReadWorkspaceGuardrails("default")
+	if err != nil {
+		t.Fatalf("read workspace guardrails: %v", err)
+	}
+	if got, want := guardrails[0].GuardrailVersionID, "guardrailver_one"; got != want {
+		t.Fatalf("workspace guardrail pin = %q, want %q", got, want)
+	}
+
+	exported := doCRUDRequest(t, s, http.MethodGet, "/export", nil)
+	if exported.Code != http.StatusOK {
+		t.Fatalf("export versioned catalog: got %d, %s", exported.Code, exported.Body.String())
+	}
+	for _, want := range []string{"versions:", "id: promptver_one", "id: skillver_two", "id: guardrailver_one", "prompt_version_id: promptver_one", "guardrail_version_id: guardrailver_one"} {
+		if !strings.Contains(exported.Body.String(), want) {
+			t.Fatalf("export missing %q: %s", want, exported.Body.String())
+		}
 	}
 }
 

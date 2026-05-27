@@ -5,11 +5,12 @@ package fleet
 // visible only in that workspace; WorkspaceID plus Repo means visible only for
 // that repo in the workspace.
 type Skill struct {
-	ID          string `yaml:"id,omitempty" json:"id,omitempty"`
-	WorkspaceID string `yaml:"workspace_id,omitempty" json:"workspace_id,omitempty"`
-	Repo        string `yaml:"repo,omitempty" json:"repo,omitempty"`
-	Name        string `yaml:"name,omitempty" json:"name,omitempty"`
-	Prompt      string `yaml:"prompt" json:"prompt"`
-	VersionID   string `yaml:"version_id,omitempty" json:"version_id,omitempty"`
-	Version     int    `yaml:"version,omitempty" json:"version,omitempty"`
+	ID          string           `yaml:"id,omitempty" json:"id,omitempty"`
+	WorkspaceID string           `yaml:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	Repo        string           `yaml:"repo,omitempty" json:"repo,omitempty"`
+	Name        string           `yaml:"name,omitempty" json:"name,omitempty"`
+	Prompt      string           `yaml:"prompt" json:"prompt"`
+	VersionID   string           `yaml:"version_id,omitempty" json:"version_id,omitempty"`
+	Version     int              `yaml:"version,omitempty" json:"version,omitempty"`
+	Versions    []CatalogVersion `yaml:"versions,omitempty" json:"versions,omitempty"`
 }

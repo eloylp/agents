@@ -9,14 +9,15 @@ const GlobalCatalogScope = "global"
 // empty Repo means visible only in that workspace; WorkspaceID plus Repo means
 // visible only for that repo in the workspace.
 type Prompt struct {
-	ID          string `yaml:"id,omitempty" json:"id"`
-	WorkspaceID string `yaml:"workspace_id,omitempty" json:"workspace_id,omitempty"`
-	Repo        string `yaml:"repo,omitempty" json:"repo,omitempty"`
-	Name        string `yaml:"name" json:"name"`
-	Description string `yaml:"description,omitempty" json:"description"`
-	Content     string `yaml:"content" json:"content"`
-	VersionID   string `yaml:"version_id,omitempty" json:"version_id,omitempty"`
-	Version     int    `yaml:"version,omitempty" json:"version,omitempty"`
+	ID          string           `yaml:"id,omitempty" json:"id"`
+	WorkspaceID string           `yaml:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	Repo        string           `yaml:"repo,omitempty" json:"repo,omitempty"`
+	Name        string           `yaml:"name" json:"name"`
+	Description string           `yaml:"description,omitempty" json:"description"`
+	Content     string           `yaml:"content" json:"content"`
+	VersionID   string           `yaml:"version_id,omitempty" json:"version_id,omitempty"`
+	Version     int              `yaml:"version,omitempty" json:"version,omitempty"`
+	Versions    []CatalogVersion `yaml:"versions,omitempty" json:"versions,omitempty"`
 }
 
 type CatalogVersion struct {
@@ -24,6 +25,11 @@ type CatalogVersion struct {
 	AssetID       string `json:"asset_id" yaml:"asset_id,omitempty"`
 	Version       int    `json:"version" yaml:"version"`
 	State         string `json:"state" yaml:"state"`
+	Description   string `json:"description,omitempty" yaml:"description,omitempty"`
+	Content       string `json:"content,omitempty" yaml:"content,omitempty"`
+	Prompt        string `json:"prompt,omitempty" yaml:"prompt,omitempty"`
+	Enabled       bool   `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Position      int    `json:"position,omitempty" yaml:"position,omitempty"`
 	SourceType    string `json:"source_type,omitempty" yaml:"source_type,omitempty"`
 	SourceRef     string `json:"source_ref,omitempty" yaml:"source_ref,omitempty"`
 	Author        string `json:"author,omitempty" yaml:"author,omitempty"`

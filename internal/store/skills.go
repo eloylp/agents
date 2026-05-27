@@ -55,6 +55,12 @@ func importSkills(tx *sql.Tx, skills map[string]fleet.Skill) error {
 		if err != nil {
 			return fmt.Errorf("store import: publish skill %s version: %w", id, err)
 		}
+		if len(s.Versions) > 0 {
+			version, err = replaceSkillVersionSnapshotsTx(tx, internalID, s.Versions)
+			if err != nil {
+				return fmt.Errorf("store import: replace skill %s versions: %w", id, err)
+			}
+		}
 		if _, err := tx.Exec("UPDATE skills SET current_version_id=? WHERE id=?", version.ID, internalID); err != nil {
 			return fmt.Errorf("store import: update skill %s current version: %w", id, err)
 		}
