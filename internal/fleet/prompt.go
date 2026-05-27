@@ -42,6 +42,7 @@ type CatalogVersionReference struct {
 	WorkspaceID string `json:"workspace_id,omitempty"`
 	Name        string `json:"name"`
 	Reference   string `json:"reference"`
+	VersionID   string `json:"version_id"`
 	Tracking    bool   `json:"tracking"`
 }
 

@@ -8,11 +8,17 @@ import (
 )
 
 func ListPromptVersionReferences(db *sql.DB, ref, versionID string) ([]fleet.CatalogVersionReference, error) {
-	promptID, currentVersionID, err := promptVersionAsset(db, ref, versionID)
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("store: list prompt version references: %w", err)
+	}
+	defer tx.Rollback()
+
+	promptID, currentVersionID, err := promptVersionAsset(tx, ref, versionID)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.Query(`
+	rows, err := tx.Query(`
 		SELECT COALESCE(workspace_id, ''), name, prompt_version_id
 		FROM agents
 		WHERE prompt_id=? AND (prompt_version_id=? OR (NULLIF(prompt_version_id, '') IS NULL AND ?=?))
@@ -21,16 +27,31 @@ func ListPromptVersionReferences(db *sql.DB, ref, versionID string) ([]fleet.Cat
 	if err != nil {
 		return nil, fmt.Errorf("store: list prompt version references: %w", err)
 	}
-	defer rows.Close()
-	return scanCatalogVersionReferences(rows, "agent", "prompt")
-}
-
-func ListSkillVersionReferences(db *sql.DB, ref, versionID string) ([]fleet.CatalogVersionReference, error) {
-	skillID, currentVersionID, err := skillVersionAsset(db, ref, versionID)
+	refs, err := scanCatalogVersionReferences(rows, "agent", "prompt", versionID)
+	if closeErr := rows.Close(); closeErr != nil && err == nil {
+		err = fmt.Errorf("store: list prompt version references: %w", closeErr)
+	}
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.Query(`
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("store: list prompt version references: %w", err)
+	}
+	return refs, nil
+}
+
+func ListSkillVersionReferences(db *sql.DB, ref, versionID string) ([]fleet.CatalogVersionReference, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("store: list skill version references: %w", err)
+	}
+	defer tx.Rollback()
+
+	skillID, currentVersionID, err := skillVersionAsset(tx, ref, versionID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(`
 		SELECT COALESCE(a.workspace_id, ''), a.name, ask.skill_version_id
 		FROM agent_skills ask
 		JOIN agents a ON a.id = ask.agent_id
@@ -40,16 +61,31 @@ func ListSkillVersionReferences(db *sql.DB, ref, versionID string) ([]fleet.Cata
 	if err != nil {
 		return nil, fmt.Errorf("store: list skill version references: %w", err)
 	}
-	defer rows.Close()
-	return scanCatalogVersionReferences(rows, "agent", "skill")
-}
-
-func ListGuardrailVersionReferences(db *sql.DB, ref, versionID string) ([]fleet.CatalogVersionReference, error) {
-	guardrailID, currentVersionID, err := guardrailVersionAsset(db, ref, versionID)
+	refs, err := scanCatalogVersionReferences(rows, "agent", "skill", versionID)
+	if closeErr := rows.Close(); closeErr != nil && err == nil {
+		err = fmt.Errorf("store: list skill version references: %w", closeErr)
+	}
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.Query(`
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("store: list skill version references: %w", err)
+	}
+	return refs, nil
+}
+
+func ListGuardrailVersionReferences(db *sql.DB, ref, versionID string) ([]fleet.CatalogVersionReference, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("store: list guardrail version references: %w", err)
+	}
+	defer tx.Rollback()
+
+	guardrailID, currentVersionID, err := guardrailVersionAsset(tx, ref, versionID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(`
 		SELECT workspace_id, workspace_id, guardrail_version_id
 		FROM workspace_guardrails
 		WHERE guardrail_name=? AND (guardrail_version_id=? OR (NULLIF(guardrail_version_id, '') IS NULL AND ?=?))
@@ -58,21 +94,31 @@ func ListGuardrailVersionReferences(db *sql.DB, ref, versionID string) ([]fleet.
 	if err != nil {
 		return nil, fmt.Errorf("store: list guardrail version references: %w", err)
 	}
-	defer rows.Close()
-	return scanCatalogVersionReferences(rows, "workspace", "guardrail")
+	refs, err := scanCatalogVersionReferences(rows, "workspace", "guardrail", versionID)
+	if closeErr := rows.Close(); closeErr != nil && err == nil {
+		err = fmt.Errorf("store: list guardrail version references: %w", closeErr)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("store: list guardrail version references: %w", err)
+	}
+	return refs, nil
 }
 
-func scanCatalogVersionReferences(rows *sql.Rows, kind, reference string) ([]fleet.CatalogVersionReference, error) {
-	var refs []fleet.CatalogVersionReference
+func scanCatalogVersionReferences(rows *sql.Rows, kind, reference, versionID string) ([]fleet.CatalogVersionReference, error) {
+	refs := []fleet.CatalogVersionReference{}
 	for rows.Next() {
 		var ref fleet.CatalogVersionReference
-		var versionID sql.NullString
-		if err := rows.Scan(&ref.WorkspaceID, &ref.Name, &versionID); err != nil {
+		var referencedVersionID sql.NullString
+		if err := rows.Scan(&ref.WorkspaceID, &ref.Name, &referencedVersionID); err != nil {
 			return nil, fmt.Errorf("store: scan catalog version reference: %w", err)
 		}
 		ref.Kind = kind
 		ref.Reference = reference
-		ref.Tracking = !versionID.Valid || versionID.String == ""
+		ref.VersionID = versionID
+		ref.Tracking = !referencedVersionID.Valid || referencedVersionID.String == ""
 		refs = append(refs, ref)
 	}
 	return refs, rows.Err()

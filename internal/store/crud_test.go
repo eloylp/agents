@@ -715,23 +715,107 @@ func TestCatalogVersionReferences(t *testing.T) {
 	}
 
 	assertVersionRefs(t, "prompt v1", mustPromptRefs(t, db, promptRef, promptV1), []fleet.CatalogVersionReference{{
-		Kind: "agent", WorkspaceID: fleet.DefaultWorkspaceID, Name: "pinned-agent", Reference: "prompt", Tracking: false,
+		Kind: "agent", WorkspaceID: fleet.DefaultWorkspaceID, Name: "pinned-agent", Reference: "prompt", VersionID: promptV1, Tracking: false,
 	}})
 	assertVersionRefs(t, "prompt v2", mustPromptRefs(t, db, promptRef, promptV2), []fleet.CatalogVersionReference{{
-		Kind: "agent", WorkspaceID: fleet.DefaultWorkspaceID, Name: "tracking-agent", Reference: "prompt", Tracking: true,
+		Kind: "agent", WorkspaceID: fleet.DefaultWorkspaceID, Name: "tracking-agent", Reference: "prompt", VersionID: promptV2, Tracking: true,
 	}})
 	assertVersionRefs(t, "skill v1", mustSkillRefs(t, db, "architect", skillV1), []fleet.CatalogVersionReference{{
-		Kind: "agent", WorkspaceID: fleet.DefaultWorkspaceID, Name: "pinned-agent", Reference: "skill", Tracking: false,
+		Kind: "agent", WorkspaceID: fleet.DefaultWorkspaceID, Name: "pinned-agent", Reference: "skill", VersionID: skillV1, Tracking: false,
 	}})
 	assertVersionRefs(t, "skill v2", mustSkillRefs(t, db, "architect", skillV2), []fleet.CatalogVersionReference{{
-		Kind: "agent", WorkspaceID: fleet.DefaultWorkspaceID, Name: "tracking-agent", Reference: "skill", Tracking: true,
+		Kind: "agent", WorkspaceID: fleet.DefaultWorkspaceID, Name: "tracking-agent", Reference: "skill", VersionID: skillV2, Tracking: true,
 	}})
 	assertVersionRefs(t, "guardrail v1", mustGuardrailRefs(t, db, "security-review", guardrailV1), []fleet.CatalogVersionReference{{
-		Kind: "workspace", WorkspaceID: "team-a", Name: "team-a", Reference: "guardrail", Tracking: false,
+		Kind: "workspace", WorkspaceID: "team-a", Name: "team-a", Reference: "guardrail", VersionID: guardrailV1, Tracking: false,
 	}})
 	assertVersionRefs(t, "guardrail v2", mustGuardrailRefs(t, db, "security-review", guardrailV2), []fleet.CatalogVersionReference{{
-		Kind: "workspace", WorkspaceID: fleet.DefaultWorkspaceID, Name: fleet.DefaultWorkspaceID, Reference: "guardrail", Tracking: true,
+		Kind: "workspace", WorkspaceID: fleet.DefaultWorkspaceID, Name: fleet.DefaultWorkspaceID, Reference: "guardrail", VersionID: guardrailV2, Tracking: true,
 	}})
+}
+
+func TestCatalogVersionReferencesRejectUnknownOrWrongAsset(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	promptA, err := store.UpsertPrompt(db, fleet.Prompt{Name: "prompt-a", Content: "a"})
+	if err != nil {
+		t.Fatalf("UpsertPrompt prompt-a: %v", err)
+	}
+	promptB, err := store.UpsertPrompt(db, fleet.Prompt{Name: "prompt-b", Content: "b"})
+	if err != nil {
+		t.Fatalf("UpsertPrompt prompt-b: %v", err)
+	}
+	if err := store.UpsertSkill(db, "skill-a", fleet.Skill{Prompt: "a"}); err != nil {
+		t.Fatalf("UpsertSkill skill-a: %v", err)
+	}
+	if err := store.UpsertSkill(db, "skill-b", fleet.Skill{Prompt: "b"}); err != nil {
+		t.Fatalf("UpsertSkill skill-b: %v", err)
+	}
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "guardrail-a", Description: "a", Content: "a", Enabled: true, Position: 10}); err != nil {
+		t.Fatalf("UpsertGuardrail guardrail-a: %v", err)
+	}
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "guardrail-b", Description: "b", Content: "b", Enabled: true, Position: 20}); err != nil {
+		t.Fatalf("UpsertGuardrail guardrail-b: %v", err)
+	}
+
+	skillBVersionID := currentSkillVersionID(t, db, "skill-b")
+	guardrailBVersionID := currentGuardrailVersionID(t, db, "guardrail-b")
+	tests := []struct {
+		name string
+		list func() error
+	}{
+		{
+			name: "unknown prompt version",
+			list: func() error {
+				_, err := store.ListPromptVersionReferences(db, promptA.ID, "missing-version")
+				return err
+			},
+		},
+		{
+			name: "wrong prompt asset",
+			list: func() error {
+				_, err := store.ListPromptVersionReferences(db, promptA.ID, promptB.VersionID)
+				return err
+			},
+		},
+		{
+			name: "unknown skill version",
+			list: func() error {
+				_, err := store.ListSkillVersionReferences(db, "skill-a", "missing-version")
+				return err
+			},
+		},
+		{
+			name: "wrong skill asset",
+			list: func() error {
+				_, err := store.ListSkillVersionReferences(db, "skill-a", skillBVersionID)
+				return err
+			},
+		},
+		{
+			name: "unknown guardrail version",
+			list: func() error {
+				_, err := store.ListGuardrailVersionReferences(db, "guardrail-a", "missing-version")
+				return err
+			},
+		},
+		{
+			name: "wrong guardrail asset",
+			list: func() error {
+				_, err := store.ListGuardrailVersionReferences(db, "guardrail-a", guardrailBVersionID)
+				return err
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var notFound *store.ErrNotFound
+			if err := tc.list(); !errors.As(err, &notFound) {
+				t.Fatalf("error = %v, want ErrNotFound", err)
+			}
+		})
+	}
 }
 
 func currentPromptVersionID(t *testing.T, db *sql.DB, ref string) string {
