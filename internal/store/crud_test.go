@@ -668,6 +668,190 @@ func TestCatalogDraftPublishPaths(t *testing.T) {
 	}
 }
 
+func TestCatalogVersionReferences(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	seedBackend(t, db, "claude")
+	if err := store.UpsertSkill(db, "architect", fleet.Skill{Prompt: "skill v1"}); err != nil {
+		t.Fatalf("UpsertSkill: %v", err)
+	}
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "security-review", Description: "v1", Content: "guardrail v1", Enabled: true, Position: 10}); err != nil {
+		t.Fatalf("UpsertGuardrail: %v", err)
+	}
+
+	promptRef := "prompt_coder"
+	promptV1 := currentPromptVersionID(t, db, promptRef)
+	skillV1 := currentSkillVersionID(t, db, "architect")
+	guardrailV1 := currentGuardrailVersionID(t, db, "security-review")
+
+	if err := store.UpsertAgent(db, fleet.Agent{
+		Name: "tracking-agent", Backend: "claude", PromptRef: "coder", Skills: []string{"architect"}, Description: "tracks current",
+	}); err != nil {
+		t.Fatalf("UpsertAgent tracking-agent: %v", err)
+	}
+	if _, err := store.ReplaceWorkspaceGuardrails(db, fleet.DefaultWorkspaceID, []fleet.WorkspaceGuardrailRef{{
+		GuardrailName: "security-review", Position: 10, Enabled: true,
+	}}); err != nil {
+		t.Fatalf("ReplaceWorkspaceGuardrails default: %v", err)
+	}
+
+	promptV2 := publishPromptDraft(t, db, promptRef, "v2", "prompt v2")
+	skillV2 := publishSkillDraft(t, db, "architect", "skill v2")
+	guardrailV2 := publishGuardrailDraft(t, db, "security-review", fleet.Guardrail{Name: "security-review", Description: "v2", Content: "guardrail v2", Enabled: true, Position: 20})
+
+	if err := store.UpsertAgent(db, fleet.Agent{
+		Name: "pinned-agent", Backend: "claude", PromptRef: "coder", PromptVersionID: promptV1, Skills: []string{"architect@1"}, Description: "pins old versions",
+	}); err != nil {
+		t.Fatalf("UpsertAgent pinned-agent: %v", err)
+	}
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+	if _, err := store.ReplaceWorkspaceGuardrails(db, "team-a", []fleet.WorkspaceGuardrailRef{{
+		GuardrailName: "security-review", GuardrailVersionID: guardrailV1, Position: 10, Enabled: true,
+	}}); err != nil {
+		t.Fatalf("ReplaceWorkspaceGuardrails team-a: %v", err)
+	}
+
+	assertVersionRefs(t, "prompt v1", mustPromptRefs(t, db, promptRef, promptV1), []fleet.CatalogVersionReference{{
+		Kind: "agent", WorkspaceID: fleet.DefaultWorkspaceID, Name: "pinned-agent", Reference: "prompt", Tracking: false,
+	}})
+	assertVersionRefs(t, "prompt v2", mustPromptRefs(t, db, promptRef, promptV2), []fleet.CatalogVersionReference{{
+		Kind: "agent", WorkspaceID: fleet.DefaultWorkspaceID, Name: "tracking-agent", Reference: "prompt", Tracking: true,
+	}})
+	assertVersionRefs(t, "skill v1", mustSkillRefs(t, db, "architect", skillV1), []fleet.CatalogVersionReference{{
+		Kind: "agent", WorkspaceID: fleet.DefaultWorkspaceID, Name: "pinned-agent", Reference: "skill", Tracking: false,
+	}})
+	assertVersionRefs(t, "skill v2", mustSkillRefs(t, db, "architect", skillV2), []fleet.CatalogVersionReference{{
+		Kind: "agent", WorkspaceID: fleet.DefaultWorkspaceID, Name: "tracking-agent", Reference: "skill", Tracking: true,
+	}})
+	assertVersionRefs(t, "guardrail v1", mustGuardrailRefs(t, db, "security-review", guardrailV1), []fleet.CatalogVersionReference{{
+		Kind: "workspace", WorkspaceID: "team-a", Name: "team-a", Reference: "guardrail", Tracking: false,
+	}})
+	assertVersionRefs(t, "guardrail v2", mustGuardrailRefs(t, db, "security-review", guardrailV2), []fleet.CatalogVersionReference{{
+		Kind: "workspace", WorkspaceID: fleet.DefaultWorkspaceID, Name: fleet.DefaultWorkspaceID, Reference: "guardrail", Tracking: true,
+	}})
+}
+
+func currentPromptVersionID(t *testing.T, db *sql.DB, ref string) string {
+	t.Helper()
+	prompt, err := store.ReadPrompt(db, ref)
+	if err != nil {
+		t.Fatalf("ReadPrompt %s: %v", ref, err)
+	}
+	return prompt.VersionID
+}
+
+func currentSkillVersionID(t *testing.T, db *sql.DB, ref string) string {
+	t.Helper()
+	skills, err := store.ReadSkills(db)
+	if err != nil {
+		t.Fatalf("ReadSkills: %v", err)
+	}
+	return skills[ref].VersionID
+}
+
+func currentGuardrailVersionID(t *testing.T, db *sql.DB, ref string) string {
+	t.Helper()
+	guardrail, err := store.GetGuardrail(db, ref)
+	if err != nil {
+		t.Fatalf("GetGuardrail %s: %v", ref, err)
+	}
+	return guardrail.VersionID
+}
+
+func publishPromptDraft(t *testing.T, db *sql.DB, ref, description, content string) string {
+	t.Helper()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin prompt draft: %v", err)
+	}
+	draft, err := store.CreatePromptDraftTx(tx, ref, description, content)
+	if err != nil {
+		t.Fatalf("CreatePromptDraftTx: %v", err)
+	}
+	if _, err := store.PublishPromptVersionTx(tx, draft.ID); err != nil {
+		t.Fatalf("PublishPromptVersionTx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit prompt draft: %v", err)
+	}
+	return draft.ID
+}
+
+func publishSkillDraft(t *testing.T, db *sql.DB, ref, prompt string) string {
+	t.Helper()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin skill draft: %v", err)
+	}
+	draft, err := store.CreateSkillDraftTx(tx, ref, prompt)
+	if err != nil {
+		t.Fatalf("CreateSkillDraftTx: %v", err)
+	}
+	if _, _, err := store.PublishSkillVersionTx(tx, draft.ID); err != nil {
+		t.Fatalf("PublishSkillVersionTx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit skill draft: %v", err)
+	}
+	return draft.ID
+}
+
+func publishGuardrailDraft(t *testing.T, db *sql.DB, ref string, guardrail fleet.Guardrail) string {
+	t.Helper()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin guardrail draft: %v", err)
+	}
+	draft, err := store.CreateGuardrailDraftTx(tx, ref, guardrail)
+	if err != nil {
+		t.Fatalf("CreateGuardrailDraftTx: %v", err)
+	}
+	if _, err := store.PublishGuardrailVersionTx(tx, draft.ID); err != nil {
+		t.Fatalf("PublishGuardrailVersionTx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit guardrail draft: %v", err)
+	}
+	return draft.ID
+}
+
+func mustPromptRefs(t *testing.T, db *sql.DB, ref, versionID string) []fleet.CatalogVersionReference {
+	t.Helper()
+	refs, err := store.ListPromptVersionReferences(db, ref, versionID)
+	if err != nil {
+		t.Fatalf("ListPromptVersionReferences: %v", err)
+	}
+	return refs
+}
+
+func mustSkillRefs(t *testing.T, db *sql.DB, ref, versionID string) []fleet.CatalogVersionReference {
+	t.Helper()
+	refs, err := store.ListSkillVersionReferences(db, ref, versionID)
+	if err != nil {
+		t.Fatalf("ListSkillVersionReferences: %v", err)
+	}
+	return refs
+}
+
+func mustGuardrailRefs(t *testing.T, db *sql.DB, ref, versionID string) []fleet.CatalogVersionReference {
+	t.Helper()
+	refs, err := store.ListGuardrailVersionReferences(db, ref, versionID)
+	if err != nil {
+		t.Fatalf("ListGuardrailVersionReferences: %v", err)
+	}
+	return refs
+}
+
+func assertVersionRefs(t *testing.T, name string, got, want []fleet.CatalogVersionReference) {
+	t.Helper()
+	if !slices.Equal(got, want) {
+		t.Fatalf("%s refs = %#v, want %#v", name, got, want)
+	}
+}
+
 func TestPublishCatalogVersionRejectsAlreadyPublished(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)

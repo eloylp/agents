@@ -34,6 +34,17 @@ type CatalogVersion struct {
 	PublishedAt   string `json:"published_at,omitempty" yaml:"published_at,omitempty"`
 }
 
+// CatalogVersionReference names a live fleet reference that resolves to a
+// catalog version. Exact references are pinned directly to the version id;
+// tracking references resolve to the asset's current published version.
+type CatalogVersionReference struct {
+	Kind        string `json:"kind"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Name        string `json:"name"`
+	Reference   string `json:"reference"`
+	Tracking    bool   `json:"tracking"`
+}
+
 // CatalogScopePath is the human-facing selector path for a reusable catalog
 // item. Empty workspace/repo means "global"; workspace only means the item is
 // visible at workspace level; workspace plus repo means the repo-scoped item.

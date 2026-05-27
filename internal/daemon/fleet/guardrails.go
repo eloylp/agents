@@ -137,6 +137,17 @@ func (h *Handler) handleGuardrailVersionsList(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, versions)
 }
 
+func (h *Handler) handleGuardrailVersionReferences(w http.ResponseWriter, r *http.Request) {
+	name := fleet.NormalizeGuardrailName(mux.Vars(r)["id"])
+	versionID := mux.Vars(r)["version_id"]
+	refs, err := h.store.ListGuardrailVersionReferences(name, versionID)
+	if err != nil {
+		h.writeErr(w, err, "guardrail version references")
+		return
+	}
+	writeJSON(w, http.StatusOK, refs)
+}
+
 func (h *Handler) handleGuardrailPatchByName(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeGuardrailName(mux.Vars(r)["id"])
 	h.handleGuardrailPatch(w, r, name)

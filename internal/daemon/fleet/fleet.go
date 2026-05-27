@@ -84,6 +84,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/skills", withTimeout(http.HandlerFunc(h.handleSkillCreate))).Methods(http.MethodPost)
 	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillGet))).Methods(http.MethodGet)
 	r.Handle("/skills/{id}/versions", withTimeout(http.HandlerFunc(h.handleSkillVersionsList))).Methods(http.MethodGet)
+	r.Handle("/skills/{id}/versions/{version_id}/references", withTimeout(http.HandlerFunc(h.handleSkillVersionReferences))).Methods(http.MethodGet)
 	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillPatchByName))).Methods(http.MethodPatch)
 	r.Handle("/skills/{id}/versions/{version_id}/publish", withTimeout(http.HandlerFunc(h.handleSkillVersionPublish))).Methods(http.MethodPost)
 	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillDelete))).Methods(http.MethodDelete)
@@ -92,6 +93,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/guardrails", withTimeout(http.HandlerFunc(h.handleGuardrailCreate))).Methods(http.MethodPost)
 	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailGet))).Methods(http.MethodGet)
 	r.Handle("/guardrails/{id}/versions", withTimeout(http.HandlerFunc(h.handleGuardrailVersionsList))).Methods(http.MethodGet)
+	r.Handle("/guardrails/{id}/versions/{version_id}/references", withTimeout(http.HandlerFunc(h.handleGuardrailVersionReferences))).Methods(http.MethodGet)
 	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailPatchByName))).Methods(http.MethodPatch)
 	r.Handle("/guardrails/{id}/versions/{version_id}/publish", withTimeout(http.HandlerFunc(h.handleGuardrailVersionPublish))).Methods(http.MethodPost)
 	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailDelete))).Methods(http.MethodDelete)
@@ -101,6 +103,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/prompts", withTimeout(http.HandlerFunc(h.handlePromptCreate))).Methods(http.MethodPost)
 	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptGet))).Methods(http.MethodGet)
 	r.Handle("/prompts/{id}/versions", withTimeout(http.HandlerFunc(h.handlePromptVersionsList))).Methods(http.MethodGet)
+	r.Handle("/prompts/{id}/versions/{version_id}/references", withTimeout(http.HandlerFunc(h.handlePromptVersionReferences))).Methods(http.MethodGet)
 	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptPatchByID))).Methods(http.MethodPatch)
 	r.Handle("/prompts/{id}/versions/{version_id}/publish", withTimeout(http.HandlerFunc(h.handlePromptVersionPublish))).Methods(http.MethodPost)
 	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptDelete))).Methods(http.MethodDelete)
@@ -559,6 +562,17 @@ func (h *Handler) handleSkillVersionsList(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, versions)
 }
 
+func (h *Handler) handleSkillVersionReferences(w http.ResponseWriter, r *http.Request) {
+	name := fleet.NormalizeSkillName(mux.Vars(r)["id"])
+	versionID := mux.Vars(r)["version_id"]
+	refs, err := h.store.ListSkillVersionReferences(name, versionID)
+	if err != nil {
+		h.writeErr(w, err, "skill version references")
+		return
+	}
+	writeJSON(w, http.StatusOK, refs)
+}
+
 func (h *Handler) handleSkillPatchByName(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeSkillName(mux.Vars(r)["id"])
 	h.handleSkillPatch(w, r, name)
@@ -793,6 +807,17 @@ func (h *Handler) handlePromptVersionsList(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, versions)
+}
+
+func (h *Handler) handlePromptVersionReferences(w http.ResponseWriter, r *http.Request) {
+	ref := mux.Vars(r)["id"]
+	versionID := mux.Vars(r)["version_id"]
+	refs, err := h.store.ListPromptVersionReferences(ref, versionID)
+	if err != nil {
+		h.writeErr(w, err, "prompt version references")
+		return
+	}
+	writeJSON(w, http.StatusOK, refs)
 }
 
 func (h *Handler) handlePromptPatchByID(w http.ResponseWriter, r *http.Request) {

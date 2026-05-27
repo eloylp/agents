@@ -108,6 +108,9 @@ func (s *Store) ReadPromptVersion(versionID string) (fleet.Prompt, error) {
 func (s *Store) ListPromptVersions(ref string) ([]fleet.CatalogVersion, error) {
 	return ListPromptVersions(s.db, ref)
 }
+func (s *Store) ListPromptVersionReferences(ref, versionID string) ([]fleet.CatalogVersionReference, error) {
+	return ListPromptVersionReferences(s.db, ref, versionID)
+}
 func (s *Store) DeletePrompt(ref string) error { return DeletePrompt(s.db, ref) }
 
 // ── Skills ──────────────────────────────────────────────────────────────
@@ -118,6 +121,9 @@ func (s *Store) ReadSkillVersion(versionID string) (fleet.Skill, error) {
 }
 func (s *Store) ListSkillVersions(ref string) ([]fleet.CatalogVersion, error) {
 	return ListSkillVersions(s.db, ref)
+}
+func (s *Store) ListSkillVersionReferences(ref, versionID string) ([]fleet.CatalogVersionReference, error) {
+	return ListSkillVersionReferences(s.db, ref, versionID)
 }
 func (s *Store) UpsertSkill(name string, sk fleet.Skill) error { return UpsertSkill(s.db, name, sk) }
 func (s *Store) DeleteSkill(name string) error                 { return DeleteSkill(s.db, name) }
@@ -179,6 +185,9 @@ func (s *Store) ReadAllGuardrails() ([]fleet.Guardrail, error)     { return Read
 func (s *Store) GetGuardrail(name string) (fleet.Guardrail, error) { return GetGuardrail(s.db, name) }
 func (s *Store) ListGuardrailVersions(ref string) ([]fleet.CatalogVersion, error) {
 	return ListGuardrailVersions(s.db, ref)
+}
+func (s *Store) ListGuardrailVersionReferences(ref, versionID string) ([]fleet.CatalogVersionReference, error) {
+	return ListGuardrailVersionReferences(s.db, ref, versionID)
 }
 func (s *Store) UpsertGuardrail(g fleet.Guardrail) error { return UpsertGuardrail(s.db, g) }
 func (s *Store) DeleteGuardrail(name string) error       { return DeleteGuardrail(s.db, name) }
