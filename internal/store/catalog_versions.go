@@ -257,8 +257,12 @@ func replacePromptVersionSnapshotsTx(tx *sql.Tx, promptID string, versions []fle
 		return fleet.CatalogVersion{}, fmt.Errorf("store: replace prompt versions: %w", err)
 	}
 	var current fleet.CatalogVersion
+	seenVersions := make(map[int]struct{}, len(versions))
 	for _, version := range orderedCatalogVersionSnapshots(versions) {
 		if err := normalizeCatalogVersionSnapshot(&version, "promptver_", catalogBodyHash(version.Description, version.Content)); err != nil {
+			return fleet.CatalogVersion{}, err
+		}
+		if err := checkDuplicateCatalogVersionNumber(seenVersions, version.Version); err != nil {
 			return fleet.CatalogVersion{}, err
 		}
 		if version.Content == "" {
@@ -296,8 +300,12 @@ func replaceSkillVersionSnapshotsTx(tx *sql.Tx, skillID string, versions []fleet
 		return fleet.CatalogVersion{}, fmt.Errorf("store: replace skill versions: %w", err)
 	}
 	var current fleet.CatalogVersion
+	seenVersions := make(map[int]struct{}, len(versions))
 	for _, version := range orderedCatalogVersionSnapshots(versions) {
 		if err := normalizeCatalogVersionSnapshot(&version, "skillver_", catalogBodyHash(version.Prompt)); err != nil {
+			return fleet.CatalogVersion{}, err
+		}
+		if err := checkDuplicateCatalogVersionNumber(seenVersions, version.Version); err != nil {
 			return fleet.CatalogVersion{}, err
 		}
 		if version.Prompt == "" {
@@ -334,9 +342,13 @@ func replaceGuardrailVersionSnapshotsTx(tx *sql.Tx, guardrailID string, versions
 		return fleet.CatalogVersion{}, fmt.Errorf("store: replace guardrail versions: %w", err)
 	}
 	var current fleet.CatalogVersion
+	seenVersions := make(map[int]struct{}, len(versions))
 	for _, version := range orderedCatalogVersionSnapshots(versions) {
 		hash := catalogBodyHash(version.Description, version.Content, fmt.Sprint(version.Enabled), fmt.Sprint(version.Position))
 		if err := normalizeCatalogVersionSnapshot(&version, "guardrailver_", hash); err != nil {
+			return fleet.CatalogVersion{}, err
+		}
+		if err := checkDuplicateCatalogVersionNumber(seenVersions, version.Version); err != nil {
 			return fleet.CatalogVersion{}, err
 		}
 		if version.Content == "" {
@@ -401,6 +413,14 @@ func normalizeCatalogVersionSnapshot(version *fleet.CatalogVersion, prefix, hash
 	if version.BodyHash == "" {
 		version.BodyHash = hash
 	}
+	return nil
+}
+
+func checkDuplicateCatalogVersionNumber(seen map[int]struct{}, version int) error {
+	if _, ok := seen[version]; ok {
+		return &ErrValidation{Msg: fmt.Sprintf("duplicate catalog version number %d", version)}
+	}
+	seen[version] = struct{}{}
 	return nil
 }
 

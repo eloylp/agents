@@ -2553,6 +2553,198 @@ workspaces:
 	}
 }
 
+func TestStoreImportYAMLRejectsInvalidCatalogVersions(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		body     string
+		wantBody string
+	}{
+		{
+			name: "non-positive version",
+			body: `prompts:
+  - id: prompt_bad
+    name: bad
+    content: current prompt
+    versions:
+      - id: promptver_bad
+        version: 0
+        state: published
+        content: current prompt
+`,
+			wantBody: "catalog version number must be positive",
+		},
+		{
+			name: "invalid state",
+			body: `skills:
+  bad-skill:
+    prompt: current skill
+    versions:
+      - id: skillver_bad
+        version: 1
+        state: archived
+        prompt: current skill
+`,
+			wantBody: `invalid catalog version state "archived"`,
+		},
+		{
+			name: "empty asset body",
+			body: `guardrails:
+  - id: guardrail_bad
+    name: bad
+    content: current guardrail
+    enabled: true
+    versions:
+      - id: guardrailver_bad
+        version: 1
+        state: published
+        enabled: true
+`,
+			wantBody: "guardrail version content is required",
+		},
+		{
+			name: "no published version",
+			body: `prompts:
+  - id: prompt_bad
+    name: bad
+    content: current prompt
+    versions:
+      - id: promptver_bad
+        version: 1
+        state: draft
+        content: draft prompt
+`,
+			wantBody: "prompt versions require at least one published version",
+		},
+		{
+			name: "duplicate version number",
+			body: `skills:
+  bad-skill:
+    prompt: current skill
+    versions:
+      - id: skillver_one
+        version: 1
+        state: published
+        prompt: original skill
+      - id: skillver_two
+        version: 1
+        state: published
+        prompt: current skill
+`,
+			wantBody: "duplicate catalog version number 1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := openCRUDTestServer(t)
+			req := httptest.NewRequest(http.MethodPost, "/import?mode=replace", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/x-yaml")
+			rr := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rr, req)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("import invalid catalog versions: got %d, %s", rr.Code, rr.Body.String())
+			}
+			if !strings.Contains(rr.Body.String(), tt.wantBody) {
+				t.Fatalf("import error = %q, want substring %q", rr.Body.String(), tt.wantBody)
+			}
+		})
+	}
+}
+
+func TestStoreImportYAMLCatalogVersionsIsIdempotent(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	yamlBody := `prompts:
+  - id: prompt_catalog
+    name: catalog
+    content: current prompt
+    versions:
+      - id: promptver_one
+        version: 1
+        state: published
+        content: original prompt
+      - id: promptver_two
+        version: 2
+        state: published
+        content: current prompt
+skills:
+  imported-skill:
+    prompt: current skill
+    versions:
+      - id: skillver_one
+        version: 1
+        state: published
+        prompt: original skill
+      - id: skillver_two
+        version: 2
+        state: published
+        prompt: current skill
+guardrails:
+  - id: guardrail_policy
+    name: policy
+    content: current guardrail
+    enabled: true
+    versions:
+      - id: guardrailver_one
+        version: 1
+        state: published
+        content: original guardrail
+        enabled: true
+      - id: guardrailver_two
+        version: 2
+        state: published
+        content: current guardrail
+        enabled: true
+`
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/import", strings.NewReader(yamlBody))
+		req.Header.Set("Content-Type", "application/x-yaml")
+		rr := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("import iteration %d: got %d, %s", i+1, rr.Code, rr.Body.String())
+		}
+	}
+
+	promptVersions, err := store.ListPromptVersionSnapshots(s.Store().DB(), "prompt_catalog")
+	if err != nil {
+		t.Fatalf("list prompt versions: %v", err)
+	}
+	assertCatalogVersionIDs(t, "prompt", promptVersions, []string{"promptver_one", "promptver_two"})
+	prompt, err := s.Store().ReadPrompt("prompt_catalog")
+	if err != nil {
+		t.Fatalf("read prompt: %v", err)
+	}
+	if got, want := prompt.VersionID, "promptver_two"; got != want {
+		t.Fatalf("prompt current version = %q, want %q", got, want)
+	}
+
+	skillVersions, err := store.ListSkillVersionSnapshots(s.Store().DB(), "imported-skill")
+	if err != nil {
+		t.Fatalf("list skill versions: %v", err)
+	}
+	assertCatalogVersionIDs(t, "skill", skillVersions, []string{"skillver_one", "skillver_two"})
+
+	guardrailVersions, err := store.ListGuardrailVersionSnapshots(s.Store().DB(), "guardrail_policy")
+	if err != nil {
+		t.Fatalf("list guardrail versions: %v", err)
+	}
+	assertCatalogVersionIDs(t, "guardrail", guardrailVersions, []string{"guardrailver_one", "guardrailver_two"})
+}
+
+func assertCatalogVersionIDs(t *testing.T, name string, got []fleet.CatalogVersion, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("%s versions len = %d, want %d: %+v", name, len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i].ID != want[i] {
+			t.Fatalf("%s version[%d].ID = %q, want %q", name, i, got[i].ID, want[i])
+		}
+	}
+}
+
 func TestImportYAMLPreservesRuntimeWhenOmitted(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
