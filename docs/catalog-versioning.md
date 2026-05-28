@@ -127,6 +127,11 @@ current published version. The UI exposes the same action as "Upgrade N exact
 pins to vX" after you inspect a version's live references, and warns when a
 version has multiple live references.
 
+The request must include a non-empty `to_version_id`; otherwise the endpoint
+returns `400 Bad Request`. If `from_version_id` and `to_version_id` are the
+same published version, the endpoint validates the asset relationship and
+returns `updated: 0` without rewriting any references.
+
 ## Import And Export
 
 YAML import/export includes catalog version histories and exact agent skill,

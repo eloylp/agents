@@ -67,13 +67,22 @@ describe('<CatalogVersionsPanel />', () => {
     })
   })
 
-  it('surfaces reference loading failures instead of hiding them as empty refs', async () => {
+  it('surfaces reference loading failures while keeping successful references', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input)
       if (url === '/skills/architect/versions') {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve([{ id: 'skillv1', version: 1, state: 'published', prompt: 'body' }]),
+          json: () => Promise.resolve([
+            { id: 'skillv2', version: 2, state: 'published', prompt: 'body v2' },
+            { id: 'skillv1', version: 1, state: 'published', prompt: 'body v1' },
+          ]),
+        } as Response)
+      }
+      if (url === '/skills/architect/versions/skillv2/references') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([{ kind: 'agent', workspace_id: 'default', name: 'tracker', tracking: true }]),
         } as Response)
       }
       if (url === '/skills/architect/versions/skillv1/references') {
@@ -86,5 +95,6 @@ describe('<CatalogVersionsPanel />', () => {
     render(<CatalogVersionsPanel type="skill" assetID="architect" currentVersionID="skillv1" />)
 
     expect(await screen.findByText('Error: load references: 500')).toBeInTheDocument()
+    expect(await screen.findByText('default/tracker · tracking')).toBeInTheDocument()
   })
 })

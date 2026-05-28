@@ -108,10 +108,18 @@ export default function CatalogVersionsPanel({
               if (!r.ok) throw new Error(`load references: ${r.status}`)
               return r.json()
             })
-            .then((refs: CatalogVersionReference[]) => [v.id, refs ?? []] as const)
+            .then((refs: CatalogVersionReference[]) => ({ id: v.id, refs: refs ?? [], error: '' }))
+            .catch(e => {
+              if (e instanceof DOMException && e.name === 'AbortError') throw e
+              return { id: v.id, refs: [], error: String(e) }
+            })
         ))
       })
-      .then(entries => setReferences(Object.fromEntries(entries)))
+      .then(entries => {
+        setReferences(Object.fromEntries(entries.map(entry => [entry.id, entry.refs])))
+        const failures = entries.map(entry => entry.error).filter(Boolean)
+        if (failures.length > 0) setError(failures.join('; '))
+      })
       .catch(e => {
         if (e instanceof DOMException && e.name === 'AbortError') return
         setError(String(e))
