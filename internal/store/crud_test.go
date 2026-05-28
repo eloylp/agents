@@ -771,6 +771,7 @@ func TestUpgradeCatalogVersionReferences(t *testing.T) {
 	tests := []struct {
 		name    string
 		upgrade func() (fleet.CatalogVersionRolloutResult, error)
+		noop    func() (fleet.CatalogVersionRolloutResult, error)
 		oldRefs func() []fleet.CatalogVersionReference
 		newRefs func() []fleet.CatalogVersionReference
 	}{
@@ -778,6 +779,9 @@ func TestUpgradeCatalogVersionReferences(t *testing.T) {
 			name: "prompt",
 			upgrade: func() (fleet.CatalogVersionRolloutResult, error) {
 				return store.UpgradePromptVersionReferences(db, promptRef, promptV1, promptV2)
+			},
+			noop: func() (fleet.CatalogVersionRolloutResult, error) {
+				return store.UpgradePromptVersionReferences(db, promptRef, promptV2, promptV2)
 			},
 			oldRefs: func() []fleet.CatalogVersionReference { return mustPromptRefs(t, db, promptRef, promptV1) },
 			newRefs: func() []fleet.CatalogVersionReference { return mustPromptRefs(t, db, promptRef, promptV2) },
@@ -787,6 +791,9 @@ func TestUpgradeCatalogVersionReferences(t *testing.T) {
 			upgrade: func() (fleet.CatalogVersionRolloutResult, error) {
 				return store.UpgradeSkillVersionReferences(db, "architect", skillV1, skillV2)
 			},
+			noop: func() (fleet.CatalogVersionRolloutResult, error) {
+				return store.UpgradeSkillVersionReferences(db, "architect", skillV2, skillV2)
+			},
 			oldRefs: func() []fleet.CatalogVersionReference { return mustSkillRefs(t, db, "architect", skillV1) },
 			newRefs: func() []fleet.CatalogVersionReference { return mustSkillRefs(t, db, "architect", skillV2) },
 		},
@@ -794,6 +801,9 @@ func TestUpgradeCatalogVersionReferences(t *testing.T) {
 			name: "guardrail",
 			upgrade: func() (fleet.CatalogVersionRolloutResult, error) {
 				return store.UpgradeGuardrailVersionReferences(db, "security-review", guardrailV1, guardrailV2)
+			},
+			noop: func() (fleet.CatalogVersionRolloutResult, error) {
+				return store.UpgradeGuardrailVersionReferences(db, "security-review", guardrailV2, guardrailV2)
 			},
 			oldRefs: func() []fleet.CatalogVersionReference {
 				return mustGuardrailRefs(t, db, "security-review", guardrailV1)
@@ -820,6 +830,166 @@ func TestUpgradeCatalogVersionReferences(t *testing.T) {
 			})
 			if !exact {
 				t.Fatalf("new refs after upgrade have no exact pin")
+			}
+			result, err = tc.noop()
+			if err != nil {
+				t.Fatalf("noop upgrade %s refs: %v", tc.name, err)
+			}
+			if result.Updated != 0 {
+				t.Fatalf("noop updated = %d, want 0", result.Updated)
+			}
+		})
+	}
+}
+
+func TestUpgradeCatalogVersionReferencesRejectUnknownWrongOrUnpublished(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	promptA, err := store.UpsertPrompt(db, fleet.Prompt{Name: "prompt-a", Content: "a"})
+	if err != nil {
+		t.Fatalf("UpsertPrompt prompt-a: %v", err)
+	}
+	promptB, err := store.UpsertPrompt(db, fleet.Prompt{Name: "prompt-b", Content: "b"})
+	if err != nil {
+		t.Fatalf("UpsertPrompt prompt-b: %v", err)
+	}
+	if err := store.UpsertSkill(db, "skill-a", fleet.Skill{Prompt: "a"}); err != nil {
+		t.Fatalf("UpsertSkill skill-a: %v", err)
+	}
+	if err := store.UpsertSkill(db, "skill-b", fleet.Skill{Prompt: "b"}); err != nil {
+		t.Fatalf("UpsertSkill skill-b: %v", err)
+	}
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "guardrail-a", Description: "a", Content: "a", Enabled: true, Position: 10}); err != nil {
+		t.Fatalf("UpsertGuardrail guardrail-a: %v", err)
+	}
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "guardrail-b", Description: "b", Content: "b", Enabled: true, Position: 20}); err != nil {
+		t.Fatalf("UpsertGuardrail guardrail-b: %v", err)
+	}
+
+	promptADraft := createPromptDraft(t, db, promptA.ID, "draft", "draft")
+	skillADraft := createSkillDraft(t, db, "skill-a", "draft")
+	guardrailADraft := createGuardrailDraft(t, db, "guardrail-a", fleet.Guardrail{Name: "guardrail-a", Description: "draft", Content: "draft", Enabled: true, Position: 30})
+	skillAV1 := currentSkillVersionID(t, db, "skill-a")
+	skillBV1 := currentSkillVersionID(t, db, "skill-b")
+	guardrailAV1 := currentGuardrailVersionID(t, db, "guardrail-a")
+	guardrailBV1 := currentGuardrailVersionID(t, db, "guardrail-b")
+
+	tests := []struct {
+		name    string
+		upgrade func() error
+	}{
+		{
+			name: "unknown prompt from version",
+			upgrade: func() error {
+				_, err := store.UpgradePromptVersionReferences(db, promptA.ID, "missing-version", promptA.VersionID)
+				return err
+			},
+		},
+		{
+			name: "unknown prompt to version",
+			upgrade: func() error {
+				_, err := store.UpgradePromptVersionReferences(db, promptA.ID, promptA.VersionID, "missing-version")
+				return err
+			},
+		},
+		{
+			name: "wrong prompt from asset",
+			upgrade: func() error {
+				_, err := store.UpgradePromptVersionReferences(db, promptA.ID, promptB.VersionID, promptA.VersionID)
+				return err
+			},
+		},
+		{
+			name: "wrong prompt to asset",
+			upgrade: func() error {
+				_, err := store.UpgradePromptVersionReferences(db, promptA.ID, promptA.VersionID, promptB.VersionID)
+				return err
+			},
+		},
+		{
+			name: "unpublished prompt target",
+			upgrade: func() error {
+				_, err := store.UpgradePromptVersionReferences(db, promptA.ID, promptA.VersionID, promptADraft)
+				return err
+			},
+		},
+		{
+			name: "unknown skill from version",
+			upgrade: func() error {
+				_, err := store.UpgradeSkillVersionReferences(db, "skill-a", "missing-version", skillAV1)
+				return err
+			},
+		},
+		{
+			name: "unknown skill to version",
+			upgrade: func() error {
+				_, err := store.UpgradeSkillVersionReferences(db, "skill-a", skillAV1, "missing-version")
+				return err
+			},
+		},
+		{
+			name: "wrong skill from asset",
+			upgrade: func() error {
+				_, err := store.UpgradeSkillVersionReferences(db, "skill-a", skillBV1, skillAV1)
+				return err
+			},
+		},
+		{
+			name: "wrong skill to asset",
+			upgrade: func() error {
+				_, err := store.UpgradeSkillVersionReferences(db, "skill-a", skillAV1, skillBV1)
+				return err
+			},
+		},
+		{
+			name: "unpublished skill target",
+			upgrade: func() error {
+				_, err := store.UpgradeSkillVersionReferences(db, "skill-a", skillAV1, skillADraft)
+				return err
+			},
+		},
+		{
+			name: "unknown guardrail from version",
+			upgrade: func() error {
+				_, err := store.UpgradeGuardrailVersionReferences(db, "guardrail-a", "missing-version", guardrailAV1)
+				return err
+			},
+		},
+		{
+			name: "unknown guardrail to version",
+			upgrade: func() error {
+				_, err := store.UpgradeGuardrailVersionReferences(db, "guardrail-a", guardrailAV1, "missing-version")
+				return err
+			},
+		},
+		{
+			name: "wrong guardrail from asset",
+			upgrade: func() error {
+				_, err := store.UpgradeGuardrailVersionReferences(db, "guardrail-a", guardrailBV1, guardrailAV1)
+				return err
+			},
+		},
+		{
+			name: "wrong guardrail to asset",
+			upgrade: func() error {
+				_, err := store.UpgradeGuardrailVersionReferences(db, "guardrail-a", guardrailAV1, guardrailBV1)
+				return err
+			},
+		},
+		{
+			name: "unpublished guardrail target",
+			upgrade: func() error {
+				_, err := store.UpgradeGuardrailVersionReferences(db, "guardrail-a", guardrailAV1, guardrailADraft)
+				return err
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var notFound *store.ErrNotFound
+			if err := tc.upgrade(); !errors.As(err, &notFound) {
+				t.Fatalf("error = %v, want ErrNotFound", err)
 			}
 		})
 	}
@@ -955,6 +1125,22 @@ func publishPromptDraft(t *testing.T, db *sql.DB, ref, description, content stri
 	return draft.ID
 }
 
+func createPromptDraft(t *testing.T, db *sql.DB, ref, description, content string) string {
+	t.Helper()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin prompt draft: %v", err)
+	}
+	draft, err := store.CreatePromptDraftTx(tx, ref, description, content)
+	if err != nil {
+		t.Fatalf("CreatePromptDraftTx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit prompt draft: %v", err)
+	}
+	return draft.ID
+}
+
 func publishSkillDraft(t *testing.T, db *sql.DB, ref, prompt string) string {
 	t.Helper()
 	tx, err := db.Begin()
@@ -974,6 +1160,22 @@ func publishSkillDraft(t *testing.T, db *sql.DB, ref, prompt string) string {
 	return draft.ID
 }
 
+func createSkillDraft(t *testing.T, db *sql.DB, ref, prompt string) string {
+	t.Helper()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin skill draft: %v", err)
+	}
+	draft, err := store.CreateSkillDraftTx(tx, ref, prompt)
+	if err != nil {
+		t.Fatalf("CreateSkillDraftTx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit skill draft: %v", err)
+	}
+	return draft.ID
+}
+
 func publishGuardrailDraft(t *testing.T, db *sql.DB, ref string, guardrail fleet.Guardrail) string {
 	t.Helper()
 	tx, err := db.Begin()
@@ -986,6 +1188,22 @@ func publishGuardrailDraft(t *testing.T, db *sql.DB, ref string, guardrail fleet
 	}
 	if _, err := store.PublishGuardrailVersionTx(tx, draft.ID); err != nil {
 		t.Fatalf("PublishGuardrailVersionTx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit guardrail draft: %v", err)
+	}
+	return draft.ID
+}
+
+func createGuardrailDraft(t *testing.T, db *sql.DB, ref string, guardrail fleet.Guardrail) string {
+	t.Helper()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin guardrail draft: %v", err)
+	}
+	draft, err := store.CreateGuardrailDraftTx(tx, ref, guardrail)
+	if err != nil {
+		t.Fatalf("CreateGuardrailDraftTx: %v", err)
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatalf("commit guardrail draft: %v", err)

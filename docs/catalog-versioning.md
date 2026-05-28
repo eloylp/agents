@@ -107,9 +107,28 @@ Use this before publishing shared catalog changes. A tracking reference to the
 current version means the next publish will affect that agent or workspace on
 its next run; a pinned reference will not move until explicitly changed.
 
+Upgrade exact pins from one version to another:
+
+```http
+POST /prompts/{id}/versions/{from_version_id}/rollout
+POST /skills/{id}/versions/{from_version_id}/rollout
+POST /guardrails/{id}/versions/{from_version_id}/rollout
+```
+
+```json
+{
+  "to_version_id": "promptver_current"
+}
+```
+
+The rollout target must be a published version for the same prompt, skill, or
+guardrail. Tracking references are left alone because they already follow the
+current published version. The UI exposes the same action as "Upgrade N exact
+pins to vX" after you inspect a version's live references, and warns when a
+version has multiple live references.
+
 ## Import And Export
 
-YAML import/export includes the current catalog body and exact agent skill,
-prompt, and workspace guardrail pins. Full historical version export is not
-yet implemented; keep the SQLite database as the source of truth for complete
-audit history until that export shape lands.
+YAML import/export includes catalog version histories and exact agent skill,
+prompt, and workspace guardrail pins. Imported histories preserve version IDs
+so pinned references continue to resolve after a round trip.

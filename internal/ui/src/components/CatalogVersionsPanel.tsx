@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 type AssetType = 'prompt' | 'skill' | 'guardrail'
 
@@ -43,17 +43,33 @@ function versionBody(type: AssetType, version: CatalogVersion) {
 function diffLines(oldText: string, newText: string) {
   const oldLines = oldText.split('\n')
   const newLines = newText.split('\n')
-  const max = Math.max(oldLines.length, newLines.length)
-  const rows: { kind: 'same' | 'add' | 'del'; text: string }[] = []
-  for (let i = 0; i < max; i += 1) {
-    const oldLine = oldLines[i]
-    const newLine = newLines[i]
-    if (oldLine === newLine) {
-      if (oldLine !== undefined) rows.push({ kind: 'same', text: ` ${oldLine}` })
-      continue
+  const lengths = Array.from({ length: oldLines.length + 1 }, () => Array(newLines.length + 1).fill(0) as number[])
+  for (let i = oldLines.length - 1; i >= 0; i -= 1) {
+    for (let j = newLines.length - 1; j >= 0; j -= 1) {
+      lengths[i][j] = oldLines[i] === newLines[j] ? lengths[i + 1][j + 1] + 1 : Math.max(lengths[i + 1][j], lengths[i][j + 1])
     }
-    if (oldLine !== undefined) rows.push({ kind: 'del', text: `-${oldLine}` })
-    if (newLine !== undefined) rows.push({ kind: 'add', text: `+${newLine}` })
+  }
+  const rows: { kind: 'same' | 'add' | 'del'; text: string }[] = []
+  let i = 0
+  let j = 0
+  while (i < oldLines.length && j < newLines.length) {
+    if (oldLines[i] === newLines[j]) {
+      rows.push({ kind: 'same', text: ` ${oldLines[i]}` })
+      i += 1
+      j += 1
+    } else if (lengths[i + 1][j] >= lengths[i][j + 1]) {
+      rows.push({ kind: 'del', text: `-${oldLines[i]}` })
+      i += 1
+    } else {
+      rows.push({ kind: 'add', text: `+${newLines[j]}` })
+      j += 1
+    }
+  }
+  for (; i < oldLines.length; i += 1) {
+    rows.push({ kind: 'del', text: `-${oldLines[i]}` })
+  }
+  for (; j < newLines.length; j += 1) {
+    rows.push({ kind: 'add', text: `+${newLines[j]}` })
   }
   return rows
 }
@@ -74,10 +90,10 @@ export default function CatalogVersionsPanel({
 
   const current = useMemo(() => versions.find(v => v.id === currentVersionID) || versions.find(v => v.state === 'published'), [versions, currentVersionID])
 
-  const load = () => {
+  const load = useCallback((signal?: AbortSignal) => {
     if (!assetID) return
     setError('')
-    fetch(`/${assetPath(type)}/${encodeURIComponent(assetID)}/versions`, { cache: 'no-store' })
+    fetch(`/${assetPath(type)}/${encodeURIComponent(assetID)}/versions`, { cache: 'no-store', signal })
       .then(r => {
         if (!r.ok) throw new Error(`load versions: ${r.status}`)
         return r.json()
@@ -87,16 +103,26 @@ export default function CatalogVersionsPanel({
         setVersions(next)
         setExpanded(e => e || next[0]?.id || '')
         return Promise.all(next.map(v =>
-          fetch(`/${assetPath(type)}/${encodeURIComponent(assetID)}/versions/${encodeURIComponent(v.id)}/references`, { cache: 'no-store' })
-            .then(r => r.ok ? r.json() : [])
+          fetch(`/${assetPath(type)}/${encodeURIComponent(assetID)}/versions/${encodeURIComponent(v.id)}/references`, { cache: 'no-store', signal })
+            .then(r => {
+              if (!r.ok) throw new Error(`load references: ${r.status}`)
+              return r.json()
+            })
             .then((refs: CatalogVersionReference[]) => [v.id, refs ?? []] as const)
         ))
       })
       .then(entries => setReferences(Object.fromEntries(entries)))
-      .catch(e => setError(String(e)))
-  }
+      .catch(e => {
+        if (e instanceof DOMException && e.name === 'AbortError') return
+        setError(String(e))
+      })
+  }, [assetID, type])
 
-  useEffect(load, [type, assetID])
+  useEffect(() => {
+    const controller = new AbortController()
+    load(controller.signal)
+    return () => controller.abort()
+  }, [load])
 
   const publish = async (versionID: string) => {
     setBusy(versionID)

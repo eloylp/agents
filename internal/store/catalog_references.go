@@ -183,6 +183,12 @@ func upgradeCatalogVersionReferences(db *sql.DB, ref, fromVersionID, toVersionID
 	if err := ensureCatalogVersionBelongsToAsset(tx, spec, assetID, toVersionID, true); err != nil {
 		return fleet.CatalogVersionRolloutResult{}, err
 	}
+	if fromVersionID == toVersionID {
+		if err := tx.Commit(); err != nil {
+			return fleet.CatalogVersionRolloutResult{}, fmt.Errorf("store: upgrade catalog version references: %w", err)
+		}
+		return fleet.CatalogVersionRolloutResult{Updated: 0}, nil
+	}
 	res, err := tx.Exec(`
 		UPDATE `+spec.refTable+`
 		SET `+spec.pinColumn+`=?
