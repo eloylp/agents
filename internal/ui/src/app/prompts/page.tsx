@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import MarkdownEditor from '@/components/MarkdownEditor'
+import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
 
 interface Prompt {
   id?: string
@@ -294,6 +295,14 @@ export default function PromptsPage() {
               <label style={labelStyle}>Content *</label>
               <MarkdownEditor value={selected.content} onChange={content => setSelected(p => ({ ...p, content }))} minHeight={260} />
             </div>
+            {modal === 'edit' && (
+              <CatalogVersionsPanel
+                type="prompt"
+                assetID={selected.id || selected.name}
+                currentVersionID={selected.version_id}
+                onChanged={load}
+              />
+            )}
             {modal === 'edit' && (
               <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.55rem', color: 'var(--text)', fontSize: '0.85rem' }}>
                 <input

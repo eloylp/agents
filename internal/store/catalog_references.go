@@ -40,6 +40,17 @@ func ListPromptVersionReferences(db *sql.DB, ref, versionID string) ([]fleet.Cat
 	return refs, nil
 }
 
+func UpgradePromptVersionReferences(db *sql.DB, ref, fromVersionID, toVersionID string) (fleet.CatalogVersionRolloutResult, error) {
+	return upgradeCatalogVersionReferences(db, ref, fromVersionID, toVersionID, catalogVersionRolloutSpec{
+		versionTable: "prompt_versions",
+		assetColumn:  "prompt_id",
+		assetTable:   "prompts",
+		refTable:     "agents",
+		refColumn:    "prompt_id",
+		pinColumn:    "prompt_version_id",
+	})
+}
+
 func ListSkillVersionReferences(db *sql.DB, ref, versionID string) ([]fleet.CatalogVersionReference, error) {
 	tx, err := db.Begin()
 	if err != nil {
@@ -72,6 +83,17 @@ func ListSkillVersionReferences(db *sql.DB, ref, versionID string) ([]fleet.Cata
 		return nil, fmt.Errorf("store: list skill version references: %w", err)
 	}
 	return refs, nil
+}
+
+func UpgradeSkillVersionReferences(db *sql.DB, ref, fromVersionID, toVersionID string) (fleet.CatalogVersionRolloutResult, error) {
+	return upgradeCatalogVersionReferences(db, ref, fromVersionID, toVersionID, catalogVersionRolloutSpec{
+		versionTable: "skill_versions",
+		assetColumn:  "skill_id",
+		assetTable:   "skills",
+		refTable:     "agent_skills",
+		refColumn:    "skill_id",
+		pinColumn:    "skill_version_id",
+	})
 }
 
 func ListGuardrailVersionReferences(db *sql.DB, ref, versionID string) ([]fleet.CatalogVersionReference, error) {
@@ -107,6 +129,17 @@ func ListGuardrailVersionReferences(db *sql.DB, ref, versionID string) ([]fleet.
 	return refs, nil
 }
 
+func UpgradeGuardrailVersionReferences(db *sql.DB, ref, fromVersionID, toVersionID string) (fleet.CatalogVersionRolloutResult, error) {
+	return upgradeCatalogVersionReferences(db, ref, fromVersionID, toVersionID, catalogVersionRolloutSpec{
+		versionTable: "guardrail_versions",
+		assetColumn:  "guardrail_id",
+		assetTable:   "guardrails",
+		refTable:     "workspace_guardrails",
+		refColumn:    "guardrail_name",
+		pinColumn:    "guardrail_version_id",
+	})
+}
+
 func scanCatalogVersionReferences(rows *sql.Rows, kind, reference, versionID string) ([]fleet.CatalogVersionReference, error) {
 	refs := []fleet.CatalogVersionReference{}
 	for rows.Next() {
@@ -122,6 +155,79 @@ func scanCatalogVersionReferences(rows *sql.Rows, kind, reference, versionID str
 		refs = append(refs, ref)
 	}
 	return refs, rows.Err()
+}
+
+type catalogVersionRolloutSpec struct {
+	versionTable string
+	assetColumn  string
+	assetTable   string
+	refTable     string
+	refColumn    string
+	pinColumn    string
+}
+
+func upgradeCatalogVersionReferences(db *sql.DB, ref, fromVersionID, toVersionID string, spec catalogVersionRolloutSpec) (fleet.CatalogVersionRolloutResult, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return fleet.CatalogVersionRolloutResult{}, fmt.Errorf("store: upgrade catalog version references: %w", err)
+	}
+	defer tx.Rollback()
+
+	assetID, err := catalogAssetInternalID(tx, spec.assetTable, ref)
+	if err != nil {
+		return fleet.CatalogVersionRolloutResult{}, err
+	}
+	if err := ensureCatalogVersionBelongsToAsset(tx, spec, assetID, fromVersionID, false); err != nil {
+		return fleet.CatalogVersionRolloutResult{}, err
+	}
+	if err := ensureCatalogVersionBelongsToAsset(tx, spec, assetID, toVersionID, true); err != nil {
+		return fleet.CatalogVersionRolloutResult{}, err
+	}
+	res, err := tx.Exec(`
+		UPDATE `+spec.refTable+`
+		SET `+spec.pinColumn+`=?
+		WHERE `+spec.refColumn+`=? AND `+spec.pinColumn+`=?`,
+		toVersionID, assetID, fromVersionID)
+	if err != nil {
+		return fleet.CatalogVersionRolloutResult{}, fmt.Errorf("store: upgrade catalog version references: %w", err)
+	}
+	updated, err := res.RowsAffected()
+	if err != nil {
+		return fleet.CatalogVersionRolloutResult{}, fmt.Errorf("store: upgrade catalog version references: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fleet.CatalogVersionRolloutResult{}, fmt.Errorf("store: upgrade catalog version references: %w", err)
+	}
+	return fleet.CatalogVersionRolloutResult{Updated: updated}, nil
+}
+
+func catalogAssetInternalID(q querier, assetTable, ref string) (string, error) {
+	switch assetTable {
+	case "prompts":
+		return promptInternalID(q, ref)
+	case "skills":
+		return skillInternalID(q, ref)
+	case "guardrails":
+		return guardrailInternalID(q, ref)
+	default:
+		return "", &ErrValidation{Msg: "unknown catalog asset type"}
+	}
+}
+
+func ensureCatalogVersionBelongsToAsset(q querier, spec catalogVersionRolloutSpec, assetID, versionID string, requirePublished bool) error {
+	query := `SELECT ` + spec.assetColumn + ` FROM ` + spec.versionTable + ` WHERE id=?`
+	if requirePublished {
+		query += ` AND state='published'`
+	}
+	var got string
+	err := q.QueryRow(query, versionID).Scan(&got)
+	if err != nil {
+		return versionReadErr("catalog", versionID, err)
+	}
+	if got != assetID {
+		return &ErrNotFound{Msg: fmt.Sprintf("catalog version %q not found for %q", versionID, assetID)}
+	}
+	return nil
 }
 
 func promptVersionAsset(q querier, ref, versionID string) (assetID, currentVersionID string, err error) {

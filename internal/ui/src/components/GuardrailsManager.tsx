@@ -5,6 +5,7 @@ import Modal from '@/components/Modal'
 import FullscreenModal from '@/components/FullscreenModal'
 import MarkdownEditor from '@/components/MarkdownEditor'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
+import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
 import { useSelectedWorkspace } from '@/lib/workspace'
 
 interface Guardrail {
@@ -25,6 +26,7 @@ interface Guardrail {
 interface WorkspaceGuardrailRef {
   workspace_id?: string
   guardrail_name: string
+  guardrail_version_id?: string
   position: number
   enabled: boolean
 }
@@ -48,7 +50,7 @@ const labelStyle: React.CSSProperties = {
 }
 
 function GuardrailForm({
-  initial, isNew, onSave, onCancel, onReset, onDelete, saving, error,
+  initial, isNew, onSave, onCancel, onReset, onDelete, onVersionsChanged, saving, error,
 }: {
   initial: Guardrail
   isNew: boolean
@@ -56,6 +58,7 @@ function GuardrailForm({
   onCancel: () => void
   onReset?: () => void
   onDelete?: () => void
+  onVersionsChanged: () => void
   saving: boolean
   error: string
 }) {
@@ -117,6 +120,14 @@ function GuardrailForm({
           expandTitle={isNew ? 'New guardrail' : `Edit ${form.name}`}
         />
       </div>
+      {!isNew && (
+        <CatalogVersionsPanel
+          type="guardrail"
+          assetID={form.id || form.name}
+          currentVersionID={form.version_id}
+          onChanged={onVersionsChanged}
+        />
+      )}
       {!isNew && (
         <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.55rem', color: 'var(--text)', fontSize: '0.85rem' }}>
           <input
@@ -249,6 +260,7 @@ export default function GuardrailsManager() {
     try {
       const body = nextRefs.map((ref, index) => ({
         guardrail_name: ref.guardrail_name,
+        guardrail_version_id: ref.guardrail_version_id || '',
         position: index,
         enabled: ref.enabled,
       }))
@@ -576,6 +588,7 @@ export default function GuardrailsManager() {
             onCancel={closeModal}
             onReset={selected.is_builtin ? handleReset : undefined}
             onDelete={() => { setConfirmStep(0); setModal('delete-confirm') }}
+            onVersionsChanged={load}
             saving={saving}
             error={saveError}
           />

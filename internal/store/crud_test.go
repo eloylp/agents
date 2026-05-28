@@ -734,6 +734,97 @@ func TestCatalogVersionReferences(t *testing.T) {
 	}})
 }
 
+func TestUpgradeCatalogVersionReferences(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	seedBackend(t, db, "claude")
+	if err := store.UpsertSkill(db, "architect", fleet.Skill{Prompt: "skill v1"}); err != nil {
+		t.Fatalf("UpsertSkill: %v", err)
+	}
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "security-review", Description: "v1", Content: "guardrail v1", Enabled: true, Position: 10}); err != nil {
+		t.Fatalf("UpsertGuardrail: %v", err)
+	}
+
+	promptRef := "prompt_coder"
+	promptV1 := currentPromptVersionID(t, db, promptRef)
+	skillV1 := currentSkillVersionID(t, db, "architect")
+	guardrailV1 := currentGuardrailVersionID(t, db, "security-review")
+	promptV2 := publishPromptDraft(t, db, promptRef, "v2", "prompt v2")
+	skillV2 := publishSkillDraft(t, db, "architect", "skill v2")
+	guardrailV2 := publishGuardrailDraft(t, db, "security-review", fleet.Guardrail{Name: "security-review", Description: "v2", Content: "guardrail v2", Enabled: true, Position: 20})
+
+	if err := store.UpsertAgent(db, fleet.Agent{
+		Name: "pinned-agent", Backend: "claude", PromptRef: "coder", PromptVersionID: promptV1, Skills: []string{"architect@1"}, Description: "pins old versions",
+	}); err != nil {
+		t.Fatalf("UpsertAgent pinned-agent: %v", err)
+	}
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+	if _, err := store.ReplaceWorkspaceGuardrails(db, "team-a", []fleet.WorkspaceGuardrailRef{{
+		GuardrailName: "security-review", GuardrailVersionID: guardrailV1, Position: 10, Enabled: true,
+	}}); err != nil {
+		t.Fatalf("ReplaceWorkspaceGuardrails: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		upgrade func() (fleet.CatalogVersionRolloutResult, error)
+		oldRefs func() []fleet.CatalogVersionReference
+		newRefs func() []fleet.CatalogVersionReference
+	}{
+		{
+			name: "prompt",
+			upgrade: func() (fleet.CatalogVersionRolloutResult, error) {
+				return store.UpgradePromptVersionReferences(db, promptRef, promptV1, promptV2)
+			},
+			oldRefs: func() []fleet.CatalogVersionReference { return mustPromptRefs(t, db, promptRef, promptV1) },
+			newRefs: func() []fleet.CatalogVersionReference { return mustPromptRefs(t, db, promptRef, promptV2) },
+		},
+		{
+			name: "skill",
+			upgrade: func() (fleet.CatalogVersionRolloutResult, error) {
+				return store.UpgradeSkillVersionReferences(db, "architect", skillV1, skillV2)
+			},
+			oldRefs: func() []fleet.CatalogVersionReference { return mustSkillRefs(t, db, "architect", skillV1) },
+			newRefs: func() []fleet.CatalogVersionReference { return mustSkillRefs(t, db, "architect", skillV2) },
+		},
+		{
+			name: "guardrail",
+			upgrade: func() (fleet.CatalogVersionRolloutResult, error) {
+				return store.UpgradeGuardrailVersionReferences(db, "security-review", guardrailV1, guardrailV2)
+			},
+			oldRefs: func() []fleet.CatalogVersionReference {
+				return mustGuardrailRefs(t, db, "security-review", guardrailV1)
+			},
+			newRefs: func() []fleet.CatalogVersionReference {
+				return mustGuardrailRefs(t, db, "security-review", guardrailV2)
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := tc.upgrade()
+			if err != nil {
+				t.Fatalf("upgrade %s refs: %v", tc.name, err)
+			}
+			if result.Updated != 1 {
+				t.Fatalf("updated = %d, want 1", result.Updated)
+			}
+			if refs := tc.oldRefs(); len(refs) != 0 {
+				t.Fatalf("old refs after upgrade = %#v, want none", refs)
+			}
+			exact := slices.ContainsFunc(tc.newRefs(), func(ref fleet.CatalogVersionReference) bool {
+				return !ref.Tracking
+			})
+			if !exact {
+				t.Fatalf("new refs after upgrade have no exact pin")
+			}
+		})
+	}
+}
+
 func TestCatalogVersionReferencesRejectUnknownOrWrongAsset(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)

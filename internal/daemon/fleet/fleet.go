@@ -85,6 +85,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillGet))).Methods(http.MethodGet)
 	r.Handle("/skills/{id}/versions", withTimeout(http.HandlerFunc(h.handleSkillVersionsList))).Methods(http.MethodGet)
 	r.Handle("/skills/{id}/versions/{version_id}/references", withTimeout(http.HandlerFunc(h.handleSkillVersionReferences))).Methods(http.MethodGet)
+	r.Handle("/skills/{id}/versions/{version_id}/rollout", withTimeout(http.HandlerFunc(h.handleSkillVersionRollout))).Methods(http.MethodPost)
 	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillPatchByName))).Methods(http.MethodPatch)
 	r.Handle("/skills/{id}/versions/{version_id}/publish", withTimeout(http.HandlerFunc(h.handleSkillVersionPublish))).Methods(http.MethodPost)
 	r.Handle("/skills/{id}", withTimeout(http.HandlerFunc(h.handleSkillDelete))).Methods(http.MethodDelete)
@@ -94,6 +95,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailGet))).Methods(http.MethodGet)
 	r.Handle("/guardrails/{id}/versions", withTimeout(http.HandlerFunc(h.handleGuardrailVersionsList))).Methods(http.MethodGet)
 	r.Handle("/guardrails/{id}/versions/{version_id}/references", withTimeout(http.HandlerFunc(h.handleGuardrailVersionReferences))).Methods(http.MethodGet)
+	r.Handle("/guardrails/{id}/versions/{version_id}/rollout", withTimeout(http.HandlerFunc(h.handleGuardrailVersionRollout))).Methods(http.MethodPost)
 	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailPatchByName))).Methods(http.MethodPatch)
 	r.Handle("/guardrails/{id}/versions/{version_id}/publish", withTimeout(http.HandlerFunc(h.handleGuardrailVersionPublish))).Methods(http.MethodPost)
 	r.Handle("/guardrails/{id}", withTimeout(http.HandlerFunc(h.handleGuardrailDelete))).Methods(http.MethodDelete)
@@ -104,6 +106,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptGet))).Methods(http.MethodGet)
 	r.Handle("/prompts/{id}/versions", withTimeout(http.HandlerFunc(h.handlePromptVersionsList))).Methods(http.MethodGet)
 	r.Handle("/prompts/{id}/versions/{version_id}/references", withTimeout(http.HandlerFunc(h.handlePromptVersionReferences))).Methods(http.MethodGet)
+	r.Handle("/prompts/{id}/versions/{version_id}/rollout", withTimeout(http.HandlerFunc(h.handlePromptVersionRollout))).Methods(http.MethodPost)
 	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptPatchByID))).Methods(http.MethodPatch)
 	r.Handle("/prompts/{id}/versions/{version_id}/publish", withTimeout(http.HandlerFunc(h.handlePromptVersionPublish))).Methods(http.MethodPost)
 	r.Handle("/prompts/{id}", withTimeout(http.HandlerFunc(h.handlePromptDelete))).Methods(http.MethodDelete)
@@ -573,6 +576,25 @@ func (h *Handler) handleSkillVersionReferences(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, refs)
 }
 
+func (h *Handler) handleSkillVersionRollout(w http.ResponseWriter, r *http.Request) {
+	name := fleet.NormalizeSkillName(mux.Vars(r)["id"])
+	fromVersionID := mux.Vars(r)["version_id"]
+	var req catalogVersionRolloutRequest
+	if !decodeBody(w, r, h.maxBodyBytes, &req) {
+		return
+	}
+	if req.ToVersionID == "" {
+		http.Error(w, "to_version_id is required", http.StatusBadRequest)
+		return
+	}
+	result, err := h.store.UpgradeSkillVersionReferences(name, fromVersionID, req.ToVersionID)
+	if err != nil {
+		h.writeErr(w, err, "skill version rollout")
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (h *Handler) handleSkillPatchByName(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeSkillName(mux.Vars(r)["id"])
 	h.handleSkillPatch(w, r, name)
@@ -719,6 +741,10 @@ type PromptPatch struct {
 	Publish     *bool   `json:"publish,omitempty"`
 }
 
+type catalogVersionRolloutRequest struct {
+	ToVersionID string `json:"to_version_id"`
+}
+
 func (p PromptPatch) AnyFieldSet() bool {
 	return p.Description != nil || p.Content != nil || p.Publish != nil
 }
@@ -818,6 +844,25 @@ func (h *Handler) handlePromptVersionReferences(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeJSON(w, http.StatusOK, refs)
+}
+
+func (h *Handler) handlePromptVersionRollout(w http.ResponseWriter, r *http.Request) {
+	ref := mux.Vars(r)["id"]
+	fromVersionID := mux.Vars(r)["version_id"]
+	var req catalogVersionRolloutRequest
+	if !decodeBody(w, r, h.maxBodyBytes, &req) {
+		return
+	}
+	if req.ToVersionID == "" {
+		http.Error(w, "to_version_id is required", http.StatusBadRequest)
+		return
+	}
+	result, err := h.store.UpgradePromptVersionReferences(ref, fromVersionID, req.ToVersionID)
+	if err != nil {
+		h.writeErr(w, err, "prompt version rollout")
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) handlePromptPatchByID(w http.ResponseWriter, r *http.Request) {

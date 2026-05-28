@@ -52,6 +52,10 @@ type CatalogVersionReference struct {
 	Tracking    bool   `json:"tracking"`
 }
 
+type CatalogVersionRolloutResult struct {
+	Updated int64 `json:"updated"`
+}
+
 // CatalogScopePath is the human-facing selector path for a reusable catalog
 // item. Empty workspace/repo means "global"; workspace only means the item is
 // visible at workspace level; workspace plus repo means the repo-scoped item.

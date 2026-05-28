@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import MarkdownEditor from '@/components/MarkdownEditor'
+import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
 
 interface Skill {
   id?: string
@@ -39,13 +40,14 @@ const inputStyle: React.CSSProperties = {
 const labelStyle: React.CSSProperties = { fontSize: '0.8rem', color: 'var(--text-muted)', display: 'block', marginBottom: '3px' }
 
 function SkillForm({
-  initial, isNew, workspaces, onSave, onCancel, saving, error,
+  initial, isNew, workspaces, onSave, onCancel, onVersionsChanged, saving, error,
 }: {
   initial: Skill
   isNew: boolean
   workspaces: Workspace[]
   onSave: (s: Skill) => void
   onCancel: () => void
+  onVersionsChanged: () => void
   saving: boolean
   error: string
 }) {
@@ -133,6 +135,14 @@ function SkillForm({
           minHeight={200}
         />
       </div>
+      {!isNew && (
+        <CatalogVersionsPanel
+          type="skill"
+          assetID={form.id || form.name}
+          currentVersionID={form.version_id}
+          onChanged={onVersionsChanged}
+        />
+      )}
       {!isNew && (
         <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.55rem', color: 'var(--text)', fontSize: '0.85rem' }}>
           <input
@@ -392,6 +402,7 @@ export default function SkillsPage() {
             workspaces={workspaces}
             onSave={saveSkill}
             onCancel={() => setModal(null)}
+            onVersionsChanged={load}
             saving={saving}
             error={saveError}
           />
