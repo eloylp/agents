@@ -280,10 +280,3 @@ func firstNonZero64(a, b int64) int64 {
 	}
 	return b
 }
-
-func boolInt(v bool) int {
-	if v {
-		return 1
-	}
-	return 0
-}
