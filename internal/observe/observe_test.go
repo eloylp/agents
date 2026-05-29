@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -629,6 +630,97 @@ func TestStoreRecordSpanPersistsAndPublishesToSSE(t *testing.T) {
 		}
 	default:
 		t.Fatal("want SSE message on TracesSSE, got nothing")
+	}
+}
+
+func TestResolveRunAttributionExactMetadata(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+	start := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	s.RecordSpan(workflow.SpanInput{
+		SpanID: "span-exact", WorkspaceID: "default", Agent: "coder", Backend: "codex",
+		Repo: "owner/repo", Number: 42, EventKind: "issues.labeled", StartedAt: start, FinishedAt: start.Add(time.Second), Status: "success",
+		Attribution: workflow.RunAttribution{
+			WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 42,
+			SpanID: "span-exact", AgentName: "coder", BackendName: "codex", PromptRef: "coder",
+		},
+	})
+
+	got := s.ResolveRunAttribution(observe.AttributionQuery{
+		Body: `body <!-- agents-run: {"workspace":"default","span_id":"span-exact","agent_id":"agent-1"} -->`,
+	})
+	if got.Confidence != observe.AttributionExact {
+		t.Fatalf("Confidence = %q, want %q (%s)", got.Confidence, observe.AttributionExact, got.Diagnostic)
+	}
+	if got.Snapshot == nil || got.Snapshot.SpanID != "span-exact" {
+		t.Fatalf("Snapshot = %+v, want span-exact", got.Snapshot)
+	}
+}
+
+func TestResolveRunAttributionExactCommitTrailer(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+	start := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	s.RecordSpan(workflow.SpanInput{
+		SpanID: "span-trailer", Agent: "coder", Backend: "codex", Repo: "owner/repo", Number: 42,
+		EventKind: "issues.labeled", StartedAt: start, FinishedAt: start.Add(time.Second), Status: "success",
+	})
+
+	got := s.ResolveRunAttribution(observe.AttributionQuery{
+		CommitMessage: "fix: thing\n\nAgents-Run: span-trailer\nAgents-Agent: coder\n",
+	})
+	if got.Confidence != observe.AttributionExact {
+		t.Fatalf("Confidence = %q, want %q (%s)", got.Confidence, observe.AttributionExact, got.Diagnostic)
+	}
+	if got.Snapshot == nil || got.Snapshot.SpanID != "span-trailer" {
+		t.Fatalf("Snapshot = %+v, want span-trailer", got.Snapshot)
+	}
+}
+
+func TestResolveRunAttributionInferredAmbiguousAndUnresolved(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+	base := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	record := func(span string, number int, at time.Time, sha string) {
+		t.Helper()
+		s.RecordSpan(workflow.SpanInput{
+			SpanID: span, Agent: "coder", Backend: "codex", Repo: "owner/repo", Number: number,
+			EventKind: "pull_request.labeled", StartedAt: at, FinishedAt: at.Add(time.Second), Status: "success",
+			Attribution: workflow.RunAttribution{
+				WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: number,
+				SpanID: span, AgentName: "coder", BackendName: "codex", HeadSHA: sha,
+			},
+		})
+	}
+	record("span-a", 7, base, "abc")
+	record("span-b", 8, base.Add(time.Minute), "def")
+	record("span-c", 8, base.Add(2*time.Minute), "def")
+
+	inferred := s.ResolveRunAttribution(observe.AttributionQuery{
+		WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 7,
+		HeadSHA: "abc", At: base.Add(30 * time.Second), Window: 2 * time.Minute,
+	})
+	if inferred.Confidence != observe.AttributionInferred {
+		t.Fatalf("inferred Confidence = %q, want %q (%s)", inferred.Confidence, observe.AttributionInferred, inferred.Diagnostic)
+	}
+	if inferred.Snapshot == nil || inferred.Snapshot.SpanID != "span-a" {
+		t.Fatalf("inferred Snapshot = %+v, want span-a", inferred.Snapshot)
+	}
+
+	ambiguous := s.ResolveRunAttribution(observe.AttributionQuery{
+		WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 8,
+		HeadSHA: "def", At: base.Add(time.Minute), Window: 5 * time.Minute,
+	})
+	if ambiguous.Confidence != observe.AttributionUnresolved || !strings.Contains(ambiguous.Diagnostic, "ambiguous") {
+		t.Fatalf("ambiguous result = %+v, want unresolved ambiguous", ambiguous)
+	}
+
+	unresolved := s.ResolveRunAttribution(observe.AttributionQuery{
+		WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 99,
+		At: base, Window: time.Minute,
+	})
+	if unresolved.Confidence != observe.AttributionUnresolved {
+		t.Fatalf("unresolved Confidence = %q, want %q", unresolved.Confidence, observe.AttributionUnresolved)
 	}
 }
 

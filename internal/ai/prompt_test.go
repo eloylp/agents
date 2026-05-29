@@ -104,6 +104,24 @@ func TestRenderAgentPromptSystemAndUserAreSeparate(t *testing.T) {
 	}
 }
 
+func TestRenderAgentPromptIncludesRunAttributionContract(t *testing.T) {
+	t.Parallel()
+	comment := `<!-- agents-run: {"workspace":"default","span_id":"span-1","agent_id":"agent-1"} -->`
+	got := renderUser(t, fleet.Agent{Name: "coder"}, "Build.", nil, ai.PromptContext{
+		Repo: "owner/repo", Number: 42, RunAttributionComment: comment,
+	})
+	for _, want := range []string{
+		"Run attribution metadata: " + comment,
+		"include that exact hidden HTML comment",
+		"Agents-Run: <span_id>",
+		"Agents-Agent: <agent_name>",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("User prompt missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestRenderAgentPromptWithMemory(t *testing.T) {
 	t.Parallel()
 	agent := fleet.Agent{

@@ -34,7 +34,9 @@ type SpanInput struct {
 	WorkspaceID                       string
 	Agent, Backend, Repo              string
 	EventKind, InvokedBy              string
+	Attribution                       RunAttribution
 	Number, DispatchDepth             int
+	EventQueueID                      int64
 	QueueWaitMs                       int64
 	ArtifactsCount                    int
 	Summary                           string
