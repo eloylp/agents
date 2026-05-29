@@ -637,6 +637,11 @@ func TestResolveRunAttributionExactMetadata(t *testing.T) {
 	t.Parallel()
 	s := testDB(t)
 	start := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	comment := workflow.RunAttribution{
+		WorkspaceID: "default",
+		SpanID:      "span-exact",
+		AgentID:     "agent-1",
+	}.HiddenComment()
 	s.RecordSpan(workflow.SpanInput{
 		SpanID: "span-exact", WorkspaceID: "default", Agent: "coder", Backend: "codex",
 		Repo: "owner/repo", Number: 42, EventKind: "issues.labeled", StartedAt: start, FinishedAt: start.Add(time.Second), Status: "success",
@@ -647,13 +652,42 @@ func TestResolveRunAttributionExactMetadata(t *testing.T) {
 	})
 
 	got := s.ResolveRunAttribution(observe.AttributionQuery{
-		Body: `body <!-- agents-run: {"workspace":"default","span_id":"span-exact","agent_id":"agent-1"} -->`,
+		WorkspaceID: "default",
+		Body:        "body " + comment,
 	})
 	if got.Confidence != observe.AttributionExact {
 		t.Fatalf("Confidence = %q, want %q (%s)", got.Confidence, observe.AttributionExact, got.Diagnostic)
 	}
 	if got.Snapshot == nil || got.Snapshot.SpanID != "span-exact" {
 		t.Fatalf("Snapshot = %+v, want span-exact", got.Snapshot)
+	}
+}
+
+func TestResolveRunAttributionExactMetadataRequiresWorkspaceMatch(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+	start := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	s.RecordSpan(workflow.SpanInput{
+		SpanID: "span-workspace-a", WorkspaceID: "workspace-a", Agent: "coder", Backend: "codex",
+		Repo: "owner/repo", Number: 42, EventKind: "issues.labeled", StartedAt: start, FinishedAt: start.Add(time.Second), Status: "success",
+		Attribution: workflow.RunAttribution{
+			WorkspaceID: "workspace-a", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 42,
+			SpanID: "span-workspace-a", AgentName: "coder", BackendName: "codex",
+		},
+	})
+
+	got := s.ResolveRunAttribution(observe.AttributionQuery{
+		WorkspaceID: "workspace-b",
+		Body:        `<!-- agents-run: {"workspace":"workspace-a","span_id":"span-workspace-a","agent_id":"agent-1"} -->`,
+	})
+	if got.Confidence != observe.AttributionUnresolved {
+		t.Fatalf("Confidence = %q, want %q", got.Confidence, observe.AttributionUnresolved)
+	}
+	if got.Snapshot != nil {
+		t.Fatalf("Snapshot = %+v, want nil", got.Snapshot)
+	}
+	if !strings.Contains(got.Diagnostic, `metadata names unknown span "span-workspace-a"`) {
+		t.Fatalf("Diagnostic = %q, want unknown span", got.Diagnostic)
 	}
 }
 
@@ -667,6 +701,7 @@ func TestResolveRunAttributionExactCommitTrailer(t *testing.T) {
 	})
 
 	got := s.ResolveRunAttribution(observe.AttributionQuery{
+		WorkspaceID:   "default",
 		CommitMessage: "fix: thing\n\nAgents-Run: span-trailer\nAgents-Agent: coder\n",
 	})
 	if got.Confidence != observe.AttributionExact {
@@ -674,6 +709,42 @@ func TestResolveRunAttributionExactCommitTrailer(t *testing.T) {
 	}
 	if got.Snapshot == nil || got.Snapshot.SpanID != "span-trailer" {
 		t.Fatalf("Snapshot = %+v, want span-trailer", got.Snapshot)
+	}
+}
+
+func TestResolveRunAttributionExactUnknownSpanDiagnostics(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+
+	for _, tc := range []struct {
+		name       string
+		query      observe.AttributionQuery
+		diagnostic string
+	}{
+		{
+			name:       "metadata",
+			query:      observe.AttributionQuery{WorkspaceID: "default", Body: `<!-- agents-run: {"workspace":"default","span_id":"missing-span"} -->`},
+			diagnostic: `metadata names unknown span "missing-span"`,
+		},
+		{
+			name:       "commit trailer",
+			query:      observe.AttributionQuery{WorkspaceID: "default", CommitMessage: "fix: thing\n\nAgents-Run: missing-span\n"},
+			diagnostic: `commit trailer names unknown span "missing-span"`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := s.ResolveRunAttribution(tc.query)
+			if got.Confidence != observe.AttributionUnresolved {
+				t.Fatalf("Confidence = %q, want %q", got.Confidence, observe.AttributionUnresolved)
+			}
+			if got.Mode != "exact" {
+				t.Fatalf("Mode = %q, want exact", got.Mode)
+			}
+			if got.Diagnostic != tc.diagnostic {
+				t.Fatalf("Diagnostic = %q, want %q", got.Diagnostic, tc.diagnostic)
+			}
+		})
 	}
 }
 

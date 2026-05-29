@@ -7,9 +7,9 @@ import (
 	"github.com/eloylp/agents/internal/fleet"
 )
 
-// RunAttribution is the compact, public-safe identity for one agent run.
-// It is persisted privately and rendered into prompts as the hidden metadata
-// contract agents should copy into GitHub PR bodies and comments they author.
+// RunAttribution is the private identity for one agent run. It is persisted as
+// a snapshot, while HiddenComment renders a smaller public lookup token for
+// GitHub PR bodies and comments agents author.
 type RunAttribution struct {
 	WorkspaceID         string   `json:"workspace"`
 	RepoOwner           string   `json:"repo_owner"`
@@ -31,11 +31,21 @@ type RunAttribution struct {
 }
 
 func (a RunAttribution) HiddenComment() string {
-	b, err := json.Marshal(a)
+	b, err := json.Marshal(publicRunAttribution{
+		WorkspaceID: a.WorkspaceID,
+		SpanID:      a.SpanID,
+		AgentID:     a.AgentID,
+	})
 	if err != nil {
 		return ""
 	}
 	return "<!-- agents-run: " + string(b) + " -->"
+}
+
+type publicRunAttribution struct {
+	WorkspaceID string `json:"workspace"`
+	SpanID      string `json:"span_id"`
+	AgentID     string `json:"agent_id,omitempty"`
 }
 
 func buildRunAttribution(ev Event, agent fleet.Agent, backend, spanID string) RunAttribution {

@@ -3,11 +3,12 @@
 Agent runs persist a compact attribution snapshot so later feedback can be
 linked back to the run that produced a PR, comment, or commit.
 
-The snapshot is stored in `run_attributions` and includes workspace, repository,
-issue or PR number, event id, event queue row, trace span id, agent/backend
-identity, prompt reference, nullable catalog version ids, head SHA, branch, and
-creation time. Public metadata must never include prompt bodies, secrets, token
-values, trace content, or other sensitive runtime details.
+The private snapshot is stored in `run_attributions` and includes workspace,
+repository, issue or PR number, event id, event queue row, trace span id,
+agent/backend identity, prompt reference, nullable catalog version ids, head SHA,
+branch, and creation time. Public metadata is a smaller lookup token and must
+never include prompt bodies, secrets, token values, trace content, event queue
+ids, or other sensitive runtime details.
 
 When an agent creates or updates GitHub content, the runtime prompt asks it to
 include a hidden HTML comment:
@@ -26,6 +27,10 @@ Agents-Agent: <agent_name>
 The daemon does not rewrite PR bodies, comments, or commits to add this data.
 Metadata is supplied through the agent workflow contract so repository writes
 remain owned by the normal agent action path.
+
+Exact resolver lookups are scoped to the query workspace. Inferred resolver
+lookups also require repository, issue/PR number, and a non-zero event time; a
+zero event time fails closed instead of searching all historical snapshots.
 
 The resolver uses three outcomes:
 

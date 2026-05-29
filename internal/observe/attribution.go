@@ -64,13 +64,13 @@ var agentsRunCommentRE = regexp.MustCompile(`(?s)<!--\s*agents-run:\s*(\{.*?\})\
 func (s *Store) ResolveRunAttribution(q AttributionQuery) AttributionResolution {
 	workspaceID := fleet.NormalizeWorkspaceID(q.WorkspaceID)
 	if spanID := spanIDFromBody(q.Body); spanID != "" {
-		if snap, ok := s.runAttributionBySpan(spanID); ok {
+		if snap, ok := s.runAttributionBySpan(workspaceID, spanID); ok {
 			return AttributionResolution{Confidence: AttributionExact, Mode: "exact", Snapshot: &snap}
 		}
 		return AttributionResolution{Confidence: AttributionUnresolved, Mode: "exact", Diagnostic: fmt.Sprintf("metadata names unknown span %q", spanID)}
 	}
 	if spanID := spanIDFromCommitTrailers(q.CommitMessage); spanID != "" {
-		if snap, ok := s.runAttributionBySpan(spanID); ok {
+		if snap, ok := s.runAttributionBySpan(workspaceID, spanID); ok {
 			return AttributionResolution{Confidence: AttributionExact, Mode: "exact", Snapshot: &snap}
 		}
 		return AttributionResolution{Confidence: AttributionUnresolved, Mode: "exact", Diagnostic: fmt.Sprintf("commit trailer names unknown span %q", spanID)}
@@ -165,14 +165,20 @@ func attributionSnapshotFromSpan(in workflow.SpanInput, createdAt time.Time) Att
 	return out
 }
 
-func (s *Store) runAttributionBySpan(spanID string) (AttributionSnapshot, bool) {
-	row := s.db.QueryRow(`SELECT workspace_id, repo_owner, repo_name, issue_or_pr_number, event_id, event_queue_id, span_id, agent_id, agent_name, backend_id, backend_name, COALESCE(prompt_version_id, ''), prompt_ref, skill_version_ids, guardrail_version_ids, head_sha, branch, created_at FROM run_attributions WHERE span_id=?`, spanID)
+func (s *Store) runAttributionBySpan(workspaceID, spanID string) (AttributionSnapshot, bool) {
+	if s.db == nil {
+		return AttributionSnapshot{}, false
+	}
+	row := s.db.QueryRow(`SELECT workspace_id, repo_owner, repo_name, issue_or_pr_number, event_id, event_queue_id, span_id, agent_id, agent_name, backend_id, backend_name, COALESCE(prompt_version_id, ''), prompt_ref, skill_version_ids, guardrail_version_ids, head_sha, branch, created_at FROM run_attributions WHERE workspace_id=? AND span_id=?`, workspaceID, spanID)
 	snap, err := scanAttribution(row)
 	return snap, err == nil
 }
 
 func (s *Store) inferRunAttributions(workspaceID string, q AttributionQuery) []AttributionSnapshot {
 	if s.db == nil || q.RepoOwner == "" || q.RepoName == "" {
+		return nil
+	}
+	if q.At.IsZero() {
 		return nil
 	}
 	window := q.Window
@@ -186,11 +192,11 @@ func (s *Store) inferRunAttributions(workspaceID string, q AttributionQuery) []A
 		FROM run_attributions
 		WHERE workspace_id=? AND repo_owner=? AND repo_name=? AND issue_or_pr_number=?
 		  AND (?='' OR head_sha=?)
-		  AND (?=1 OR created_at BETWEEN ? AND ?)
+		  AND created_at BETWEEN ? AND ?
 		ORDER BY created_at DESC`,
 		workspaceID, q.RepoOwner, q.RepoName, q.IssueOrPRNumber,
 		strings.TrimSpace(q.HeadSHA), strings.TrimSpace(q.HeadSHA),
-		boolInt(q.At.IsZero()), from, to,
+		from, to,
 	)
 	if err != nil {
 		return nil
