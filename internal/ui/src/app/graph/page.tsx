@@ -1075,7 +1075,6 @@ export default function GraphPage() {
     .filter(binding => binding.agent === selectedNode.name)
     .map(binding => ({ repo, binding }))) : []
   const selectedNodeRepos = Array.from(new Set(selectedNodeBindings.map(({ repo }) => repo.name)))
-  const selectedNodeRunRepos = selectedNodeRepos.length > 0 ? selectedNodeRepos : repos.filter(repo => repo.enabled).map(repo => repo.name)
   const knownLabels = useMemo(() => {
     const set = new Set<string>()
     for (const repo of repos) {
@@ -1311,9 +1310,11 @@ export default function GraphPage() {
                       </div>
                     </div>
                   )}
-                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-                    <RunButton agent={selectedNode.name} repos={selectedNodeRunRepos} />
-                  </div>
+                  {selectedNodeRepos.length > 0 && (
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                      <RunButton agent={selectedNode.name} repos={selectedNodeRepos} />
+                    </div>
+                  )}
                 </>
               )}
 
