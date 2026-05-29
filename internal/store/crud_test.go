@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
 	"github.com/eloylp/agents/internal/store"
 )
@@ -477,6 +478,41 @@ func TestCatalogUpsertsPublishImmutableVersions(t *testing.T) {
 	}
 }
 
+func TestCatalogUpsertsSkipUnchangedVersions(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "unchanged-prompt", Description: "first", Content: "body v1"})
+	if err != nil {
+		t.Fatalf("UpsertPrompt v1: %v", err)
+	}
+	prompt, err = store.UpsertPrompt(db, prompt)
+	if err != nil {
+		t.Fatalf("UpsertPrompt unchanged: %v", err)
+	}
+	if prompt.Version != 1 {
+		t.Fatalf("unchanged prompt version = %d, want 1", prompt.Version)
+	}
+	assertTableCount(t, db, "prompt_versions", "prompt_id=(SELECT id FROM prompts WHERE ref=?)", prompt.ID, 1)
+
+	if err := store.UpsertSkill(db, "unchanged-skill", fleet.Skill{Prompt: "skill v1"}); err != nil {
+		t.Fatalf("UpsertSkill v1: %v", err)
+	}
+	if err := store.UpsertSkill(db, "unchanged-skill", fleet.Skill{Name: "unchanged-skill", Prompt: "skill v1"}); err != nil {
+		t.Fatalf("UpsertSkill unchanged: %v", err)
+	}
+	assertTableCount(t, db, "skill_versions", "skill_id=(SELECT id FROM skills WHERE ref=?)", "unchanged-skill", 1)
+
+	guardrail := fleet.Guardrail{Name: "unchanged-guardrail", Description: "first", Content: "guardrail v1", Enabled: true, Position: 10}
+	if err := store.UpsertGuardrail(db, guardrail); err != nil {
+		t.Fatalf("UpsertGuardrail v1: %v", err)
+	}
+	if err := store.UpsertGuardrail(db, guardrail); err != nil {
+		t.Fatalf("UpsertGuardrail unchanged: %v", err)
+	}
+	assertTableCount(t, db, "guardrail_versions", "guardrail_id=(SELECT id FROM guardrails WHERE ref=?)", "guardrail_unchanged-guardrail", 1)
+}
+
 func TestPromptDraftDoesNotAffectCurrentUntilPublished(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
@@ -666,6 +702,92 @@ func TestCatalogDraftPublishPaths(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCatalogCurrentSnapshotMirrorsCurrentVersion(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "mirror-prompt", Description: "first", Content: "prompt v1"})
+	if err != nil {
+		t.Fatalf("UpsertPrompt v1: %v", err)
+	}
+	prompt.Content = "prompt v2"
+	prompt.Description = "second"
+	if _, err := store.UpsertPrompt(db, prompt); err != nil {
+		t.Fatalf("UpsertPrompt v2: %v", err)
+	}
+	assertPromptCurrentSnapshot(t, db, prompt.ID)
+	promptV3 := publishPromptDraft(t, db, prompt.ID, "third", "prompt v3")
+	if promptV3 == "" {
+		t.Fatal("published prompt draft id is empty")
+	}
+	assertPromptCurrentSnapshot(t, db, prompt.ID)
+
+	if err := store.UpsertSkill(db, "mirror-skill", fleet.Skill{Prompt: "skill v1"}); err != nil {
+		t.Fatalf("UpsertSkill v1: %v", err)
+	}
+	if err := store.UpsertSkill(db, "mirror-skill", fleet.Skill{Prompt: "skill v2"}); err != nil {
+		t.Fatalf("UpsertSkill v2: %v", err)
+	}
+	assertSkillCurrentSnapshot(t, db, "mirror-skill")
+	skillV3 := publishSkillDraft(t, db, "mirror-skill", "skill v3")
+	if skillV3 == "" {
+		t.Fatal("published skill draft id is empty")
+	}
+	assertSkillCurrentSnapshot(t, db, "mirror-skill")
+
+	guardrail := fleet.Guardrail{Name: "mirror-guardrail", Description: "first", Content: "guardrail v1", DefaultContent: "guardrail default", Enabled: true, Position: 10}
+	if err := store.UpsertGuardrail(db, guardrail); err != nil {
+		t.Fatalf("UpsertGuardrail v1: %v", err)
+	}
+	guardrail.Description = "second"
+	guardrail.Content = "guardrail v2"
+	guardrail.Position = 20
+	if err := store.UpsertGuardrail(db, guardrail); err != nil {
+		t.Fatalf("UpsertGuardrail v2: %v", err)
+	}
+	assertGuardrailCurrentSnapshot(t, db, "guardrail_mirror-guardrail")
+	guardrailV3 := publishGuardrailDraft(t, db, "mirror-guardrail", fleet.Guardrail{Name: "mirror-guardrail", Description: "third", Content: "guardrail v3", Enabled: false, Position: 30})
+	if guardrailV3 == "" {
+		t.Fatal("published guardrail draft id is empty")
+	}
+	assertGuardrailCurrentSnapshot(t, db, "guardrail_mirror-guardrail")
+	if err := store.ResetGuardrail(db, "mirror-guardrail"); err != nil {
+		t.Fatalf("ResetGuardrail: %v", err)
+	}
+	assertGuardrailCurrentSnapshot(t, db, "guardrail_mirror-guardrail")
+
+	if err := store.Import(db, &config.Config{
+		Prompts: []fleet.Prompt{{
+			ID: "imported-prompt", Name: "imported", Content: "imported current",
+			Versions: []fleet.CatalogVersion{
+				{ID: "promptver_imported_one", Version: 1, State: "published", Content: "imported old"},
+				{ID: "promptver_imported_two", Version: 2, State: "published", Content: "imported current"},
+			},
+		}},
+		Skills: map[string]fleet.Skill{
+			"imported-skill": {
+				Prompt: "imported skill current",
+				Versions: []fleet.CatalogVersion{
+					{ID: "skillver_imported_one", Version: 1, State: "published", Prompt: "imported skill old"},
+					{ID: "skillver_imported_two", Version: 2, State: "published", Prompt: "imported skill current"},
+				},
+			},
+		},
+		Guardrails: []fleet.Guardrail{{
+			ID: "imported-guardrail", Name: "imported guardrail", Content: "imported guardrail current", Enabled: true, Position: 2,
+			Versions: []fleet.CatalogVersion{
+				{ID: "guardrailver_imported_one", Version: 1, State: "published", Content: "imported guardrail old", Enabled: true, Position: 1},
+				{ID: "guardrailver_imported_two", Version: 2, State: "published", Content: "imported guardrail current", Enabled: true, Position: 2},
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("Import versioned catalog: %v", err)
+	}
+	assertPromptCurrentSnapshot(t, db, "imported-prompt")
+	assertSkillCurrentSnapshot(t, db, "imported-skill")
+	assertGuardrailCurrentSnapshot(t, db, "imported-guardrail")
 }
 
 func TestCatalogVersionReferences(t *testing.T) {
@@ -1104,6 +1226,67 @@ func currentGuardrailVersionID(t *testing.T, db *sql.DB, ref string) string {
 		t.Fatalf("GetGuardrail %s: %v", ref, err)
 	}
 	return guardrail.VersionID
+}
+
+func assertTableCount(t *testing.T, db *sql.DB, table, where, arg string, want int) {
+	t.Helper()
+	var got int
+	if err := db.QueryRow("SELECT COUNT(*) FROM "+table+" WHERE "+where, arg).Scan(&got); err != nil {
+		t.Fatalf("count %s: %v", table, err)
+	}
+	if got != want {
+		t.Fatalf("%s count = %d, want %d", table, got, want)
+	}
+}
+
+func assertPromptCurrentSnapshot(t *testing.T, db *sql.DB, ref string) {
+	t.Helper()
+	var mismatches int
+	if err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM prompts p
+		JOIN prompt_versions pv ON pv.id = p.current_version_id
+		WHERE p.ref=? AND (p.description != pv.description OR p.content != pv.content)`, ref).Scan(&mismatches); err != nil {
+		t.Fatalf("check prompt current snapshot %s: %v", ref, err)
+	}
+	if mismatches != 0 {
+		t.Fatalf("prompt %s current snapshot does not match current version", ref)
+	}
+}
+
+func assertSkillCurrentSnapshot(t *testing.T, db *sql.DB, ref string) {
+	t.Helper()
+	var mismatches int
+	if err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM skills s
+		JOIN skill_versions sv ON sv.id = s.current_version_id
+		WHERE s.ref=? AND s.prompt != sv.prompt`, ref).Scan(&mismatches); err != nil {
+		t.Fatalf("check skill current snapshot %s: %v", ref, err)
+	}
+	if mismatches != 0 {
+		t.Fatalf("skill %s current snapshot does not match current version", ref)
+	}
+}
+
+func assertGuardrailCurrentSnapshot(t *testing.T, db *sql.DB, ref string) {
+	t.Helper()
+	var mismatches int
+	if err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM guardrails g
+		JOIN guardrail_versions gv ON gv.id = g.current_version_id
+		WHERE g.ref=? AND (
+			g.description != gv.description OR
+			g.content != gv.content OR
+			g.enabled != gv.enabled OR
+			g.position != gv.position
+		)`, ref).Scan(&mismatches); err != nil {
+		t.Fatalf("check guardrail current snapshot %s: %v", ref, err)
+	}
+	if mismatches != 0 {
+		t.Fatalf("guardrail %s current snapshot does not match current version", ref)
+	}
 }
 
 func publishPromptDraft(t *testing.T, db *sql.DB, ref, description, content string) string {

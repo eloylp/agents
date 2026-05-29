@@ -47,10 +47,12 @@ function fmt(iso?: string) {
   return new Date(iso).toLocaleString()
 }
 
-function AgentCard({ agent, onEdit, onDelete }: { agent: Agent; onEdit: () => void; onDelete: () => void }) {
+function AgentCard({ agent, repoNames, onEdit, onDelete }: { agent: Agent; repoNames: string[]; onEdit: () => void; onDelete: () => void }) {
   const scheduleStatuses = agent.bindings?.flatMap(b => b.schedule?.last_status ? [b.schedule.last_status] : []) ?? []
   const lastOutcome = scheduleStatuses.includes('error') ? 'error' : scheduleStatuses.includes('success') ? 'success' : 'idle'
   const currentStatus = agent.current_status === 'running' ? 'running' : lastOutcome
+  const runRepos = (agent.bindings ?? []).map(b => b.repo)
+  const availableRunRepos = runRepos.length > 0 ? runRepos : repoNames
 
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -113,7 +115,7 @@ function AgentCard({ agent, onEdit, onDelete }: { agent: Agent; onEdit: () => vo
           {agent.allow_memory === false && <span>✗ memory</span>}
           {(agent.can_dispatch ?? []).length > 0 && <span>→ {agent.can_dispatch!.join(', ')}</span>}
         </div>
-        <RunButton agent={agent.name} repos={(agent.bindings ?? []).map(b => b.repo)} />
+        <RunButton agent={agent.name} repos={availableRunRepos} />
       </div>
     </Card>
   )
@@ -157,7 +159,7 @@ export default function FleetPage() {
       .catch(() => {})
     fetch(withWorkspace('/repos', workspace))
       .then(r => r.ok ? r.json() : [])
-      .then((data: { name: string }[]) => setRepoNames(data.map(r => r.name)))
+      .then((data: { name: string; enabled?: boolean }[]) => setRepoNames(data.filter(r => r.enabled !== false).map(r => r.name)))
       .catch(() => {})
   }
 
@@ -332,6 +334,7 @@ export default function FleetPage() {
           <AgentCard
             key={a.name}
             agent={a}
+            repoNames={repoNames}
             onEdit={() => openEdit(a.name)}
             onDelete={() => confirmDelete(a.name)}
           />

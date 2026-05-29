@@ -71,7 +71,7 @@ func importPrompts(tx *sql.Tx, prompts []fleet.Prompt) error {
 				return fmt.Errorf("store import: replace prompt %s versions: %w", p.Name, err)
 			}
 		}
-		if _, err := tx.Exec("UPDATE prompts SET current_version_id=?, updated_at=datetime('now') WHERE id=?", version.ID, internalID); err != nil {
+		if err := applyPromptCurrentVersionTx(tx, internalID, version.ID); err != nil {
 			return fmt.Errorf("store import: update prompt %s current version: %w", p.Name, err)
 		}
 	}
@@ -195,7 +195,7 @@ func UpsertPromptTx(tx *sql.Tx, p fleet.Prompt) (fleet.Prompt, error) {
 	if err != nil {
 		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: %w", p.Name, err)
 	}
-	if _, err := tx.Exec("UPDATE prompts SET current_version_id=?, updated_at=datetime('now') WHERE id=?", version.ID, internalID); err != nil {
+	if err := applyPromptCurrentVersionTx(tx, internalID, version.ID); err != nil {
 		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: current version: %w", p.Name, err)
 	}
 	p.VersionID = version.ID

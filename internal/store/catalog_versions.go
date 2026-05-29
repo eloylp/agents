@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -23,6 +24,11 @@ func catalogBodyHash(parts ...string) string {
 }
 
 func publishPromptVersionTx(tx *sql.Tx, promptID, description, content string) (fleet.CatalogVersion, error) {
+	if version, ok, err := currentPromptVersionIfUnchanged(tx, promptID, description, content); err != nil {
+		return fleet.CatalogVersion{}, err
+	} else if ok {
+		return version, nil
+	}
 	version, err := nextCatalogVersion(tx, "prompt_versions", "prompt_id", promptID)
 	if err != nil {
 		return fleet.CatalogVersion{}, err
@@ -47,6 +53,11 @@ func publishPromptVersionTx(tx *sql.Tx, promptID, description, content string) (
 }
 
 func publishSkillVersionTx(tx *sql.Tx, skillID, prompt string) (fleet.CatalogVersion, error) {
+	if version, ok, err := currentSkillVersionIfUnchanged(tx, skillID, prompt); err != nil {
+		return fleet.CatalogVersion{}, err
+	} else if ok {
+		return version, nil
+	}
 	version, err := nextCatalogVersion(tx, "skill_versions", "skill_id", skillID)
 	if err != nil {
 		return fleet.CatalogVersion{}, err
@@ -71,6 +82,11 @@ func publishSkillVersionTx(tx *sql.Tx, skillID, prompt string) (fleet.CatalogVer
 }
 
 func publishGuardrailVersionTx(exec sqlExec, guardrailID string, g fleet.Guardrail) (fleet.CatalogVersion, error) {
+	if version, ok, err := currentGuardrailVersionIfUnchanged(exec, guardrailID, g); err != nil {
+		return fleet.CatalogVersion{}, err
+	} else if ok {
+		return version, nil
+	}
 	version, err := nextCatalogVersion(exec, "guardrail_versions", "guardrail_id", guardrailID)
 	if err != nil {
 		return fleet.CatalogVersion{}, err
@@ -286,8 +302,8 @@ func replacePromptVersionSnapshotsTx(tx *sql.Tx, promptID string, versions []fle
 	if current.ID == "" {
 		return fleet.CatalogVersion{}, &ErrValidation{Msg: "prompt versions require at least one published version"}
 	}
-	if _, err := tx.Exec("UPDATE prompts SET description=?, content=?, current_version_id=?, updated_at=datetime('now') WHERE id=?", current.Description, current.Content, current.ID, promptID); err != nil {
-		return fleet.CatalogVersion{}, fmt.Errorf("store: update prompt current version: %w", err)
+	if err := applyPromptCurrentVersionTx(tx, promptID, current.ID); err != nil {
+		return fleet.CatalogVersion{}, err
 	}
 	return current, nil
 }
@@ -328,8 +344,8 @@ func replaceSkillVersionSnapshotsTx(tx *sql.Tx, skillID string, versions []fleet
 	if current.ID == "" {
 		return fleet.CatalogVersion{}, &ErrValidation{Msg: "skill versions require at least one published version"}
 	}
-	if _, err := tx.Exec("UPDATE skills SET prompt=?, current_version_id=? WHERE id=?", current.Prompt, current.ID, skillID); err != nil {
-		return fleet.CatalogVersion{}, fmt.Errorf("store: update skill current version: %w", err)
+	if err := applySkillCurrentVersionTx(tx, skillID, current.ID); err != nil {
+		return fleet.CatalogVersion{}, err
 	}
 	return current, nil
 }
@@ -372,13 +388,8 @@ func replaceGuardrailVersionSnapshotsTx(tx *sql.Tx, guardrailID string, versions
 	if current.ID == "" {
 		return fleet.CatalogVersion{}, &ErrValidation{Msg: "guardrail versions require at least one published version"}
 	}
-	if _, err := tx.Exec(`
-		UPDATE guardrails
-		SET description=?, content=?, enabled=?, position=?, current_version_id=?, updated_at=datetime('now')
-		WHERE id=?`,
-		current.Description, current.Content, boolToInt(current.Enabled), current.Position, current.ID, guardrailID,
-	); err != nil {
-		return fleet.CatalogVersion{}, fmt.Errorf("store: update guardrail current version: %w", err)
+	if err := applyGuardrailCurrentVersionTx(tx, guardrailID, current.ID); err != nil {
+		return fleet.CatalogVersion{}, err
 	}
 	return current, nil
 }
@@ -559,7 +570,7 @@ func PublishPromptVersionTx(tx *sql.Tx, versionID string) (fleet.Prompt, error) 
 	if _, err := tx.Exec("UPDATE prompt_versions SET state='published', published_at=datetime('now') WHERE id=?", versionID); err != nil {
 		return fleet.Prompt{}, fmt.Errorf("store: publish prompt version %s: %w", versionID, err)
 	}
-	if _, err := tx.Exec("UPDATE prompts SET description=?, content=?, current_version_id=?, updated_at=datetime('now') WHERE id=?", p.Description, p.Content, versionID, promptID); err != nil {
+	if err := applyPromptCurrentVersionTx(tx, promptID, versionID); err != nil {
 		return fleet.Prompt{}, fmt.Errorf("store: publish prompt version %s current: %w", versionID, err)
 	}
 	p.VersionID = versionID
@@ -590,7 +601,7 @@ func PublishSkillVersionTx(tx *sql.Tx, versionID string) (string, fleet.Skill, e
 	if _, err := tx.Exec("UPDATE skill_versions SET state='published', published_at=datetime('now') WHERE id=?", versionID); err != nil {
 		return "", fleet.Skill{}, fmt.Errorf("store: publish skill version %s: %w", versionID, err)
 	}
-	if _, err := tx.Exec("UPDATE skills SET prompt=?, current_version_id=? WHERE id=?", sk.Prompt, versionID, skillID); err != nil {
+	if err := applySkillCurrentVersionTx(tx, skillID, versionID); err != nil {
 		return "", fleet.Skill{}, fmt.Errorf("store: publish skill version %s current: %w", versionID, err)
 	}
 	sk.ID = ref
@@ -623,10 +634,7 @@ func PublishGuardrailVersionTx(tx *sql.Tx, versionID string) (fleet.Guardrail, e
 	if _, err := tx.Exec("UPDATE guardrail_versions SET state='published', published_at=datetime('now') WHERE id=?", versionID); err != nil {
 		return fleet.Guardrail{}, fmt.Errorf("store: publish guardrail version %s: %w", versionID, err)
 	}
-	if _, err := tx.Exec(`
-		UPDATE guardrails
-		SET description=?, content=?, enabled=?, position=?, current_version_id=?, updated_at=datetime('now')
-		WHERE id=?`, g.Description, g.Content, enabled, g.Position, versionID, guardrailID); err != nil {
+	if err := applyGuardrailCurrentVersionTx(tx, guardrailID, versionID); err != nil {
 		return fleet.Guardrail{}, fmt.Errorf("store: publish guardrail version %s current: %w", versionID, err)
 	}
 	g.ID = g.Name
@@ -637,6 +645,122 @@ func PublishGuardrailVersionTx(tx *sql.Tx, versionID string) (fleet.Guardrail, e
 
 func staleCatalogDraft(baseVersionID, currentVersionID sql.NullString) bool {
 	return baseVersionID.Valid && currentVersionID.Valid && baseVersionID.String != currentVersionID.String
+}
+
+func currentPromptVersionIfUnchanged(q querier, promptID, description, content string) (fleet.CatalogVersion, bool, error) {
+	hash := catalogBodyHash(description, content)
+	var version fleet.CatalogVersion
+	err := q.QueryRow(`
+		SELECT pv.id, pv.prompt_id, pv.version_number, pv.state, pv.source_type, COALESCE(pv.base_version_id, ''), pv.body_hash
+		FROM prompts p
+		JOIN prompt_versions pv ON pv.id = p.current_version_id
+		WHERE p.id=? AND pv.description=? AND pv.content=? AND pv.body_hash=?`,
+		promptID, description, content, hash,
+	).Scan(&version.ID, &version.AssetID, &version.Version, &version.State, &version.SourceType, &version.BaseVersionID, &version.BodyHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fleet.CatalogVersion{}, false, nil
+	}
+	if err != nil {
+		return fleet.CatalogVersion{}, false, fmt.Errorf("store: read current prompt version for %s: %w", promptID, err)
+	}
+	return version, true, nil
+}
+
+func currentSkillVersionIfUnchanged(q querier, skillID, prompt string) (fleet.CatalogVersion, bool, error) {
+	hash := catalogBodyHash(prompt)
+	var version fleet.CatalogVersion
+	err := q.QueryRow(`
+		SELECT sv.id, sv.skill_id, sv.version_number, sv.state, sv.source_type, COALESCE(sv.base_version_id, ''), sv.body_hash
+		FROM skills s
+		JOIN skill_versions sv ON sv.id = s.current_version_id
+		WHERE s.id=? AND sv.prompt=? AND sv.body_hash=?`,
+		skillID, prompt, hash,
+	).Scan(&version.ID, &version.AssetID, &version.Version, &version.State, &version.SourceType, &version.BaseVersionID, &version.BodyHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fleet.CatalogVersion{}, false, nil
+	}
+	if err != nil {
+		return fleet.CatalogVersion{}, false, fmt.Errorf("store: read current skill version for %s: %w", skillID, err)
+	}
+	return version, true, nil
+}
+
+func currentGuardrailVersionIfUnchanged(q querier, guardrailID string, g fleet.Guardrail) (fleet.CatalogVersion, bool, error) {
+	hash := catalogBodyHash(g.Description, g.Content, fmt.Sprint(g.Enabled), fmt.Sprint(g.Position))
+	var version fleet.CatalogVersion
+	err := q.QueryRow(`
+		SELECT gv.id, gv.guardrail_id, gv.version_number, gv.state, gv.source_type, COALESCE(gv.base_version_id, ''), gv.body_hash
+		FROM guardrails gr
+		JOIN guardrail_versions gv ON gv.id = gr.current_version_id
+		WHERE gr.id=? AND gv.description=? AND gv.content=? AND gv.enabled=? AND gv.position=? AND gv.body_hash=?`,
+		guardrailID, g.Description, g.Content, boolToInt(g.Enabled), g.Position, hash,
+	).Scan(&version.ID, &version.AssetID, &version.Version, &version.State, &version.SourceType, &version.BaseVersionID, &version.BodyHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fleet.CatalogVersion{}, false, nil
+	}
+	if err != nil {
+		return fleet.CatalogVersion{}, false, fmt.Errorf("store: read current guardrail version for %s: %w", guardrailID, err)
+	}
+	return version, true, nil
+}
+
+func applyPromptCurrentVersionTx(exec sqlExec, promptID, versionID string) error {
+	res, err := exec.Exec(`
+		UPDATE prompts
+		SET description = (SELECT description FROM prompt_versions WHERE id=? AND prompt_id=?),
+		    content = (SELECT content FROM prompt_versions WHERE id=? AND prompt_id=?),
+		    current_version_id = ?,
+		    updated_at = datetime('now')
+		WHERE id=? AND EXISTS (SELECT 1 FROM prompt_versions WHERE id=? AND prompt_id=?)`,
+		versionID, promptID, versionID, promptID, versionID, promptID, versionID, promptID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: apply prompt current version: %w", err)
+	}
+	return requireRowsAffected(res, "store: apply prompt current version")
+}
+
+func applySkillCurrentVersionTx(exec sqlExec, skillID, versionID string) error {
+	res, err := exec.Exec(`
+		UPDATE skills
+		SET prompt = (SELECT prompt FROM skill_versions WHERE id=? AND skill_id=?),
+		    current_version_id = ?
+		WHERE id=? AND EXISTS (SELECT 1 FROM skill_versions WHERE id=? AND skill_id=?)`,
+		versionID, skillID, versionID, skillID, versionID, skillID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: apply skill current version: %w", err)
+	}
+	return requireRowsAffected(res, "store: apply skill current version")
+}
+
+func applyGuardrailCurrentVersionTx(exec sqlExec, guardrailID, versionID string) error {
+	res, err := exec.Exec(`
+		UPDATE guardrails
+		SET description = (SELECT description FROM guardrail_versions WHERE id=? AND guardrail_id=?),
+		    content = (SELECT content FROM guardrail_versions WHERE id=? AND guardrail_id=?),
+		    enabled = (SELECT enabled FROM guardrail_versions WHERE id=? AND guardrail_id=?),
+		    position = (SELECT position FROM guardrail_versions WHERE id=? AND guardrail_id=?),
+		    current_version_id = ?,
+		    updated_at = datetime('now')
+		WHERE id=? AND EXISTS (SELECT 1 FROM guardrail_versions WHERE id=? AND guardrail_id=?)`,
+		versionID, guardrailID, versionID, guardrailID, versionID, guardrailID, versionID, guardrailID, versionID, guardrailID, versionID, guardrailID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: apply guardrail current version: %w", err)
+	}
+	return requireRowsAffected(res, "store: apply guardrail current version")
+}
+
+func requireRowsAffected(res sql.Result, msg string) error {
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%s: rows affected: %w", msg, err)
+	}
+	if rows == 0 {
+		return &ErrNotFound{Msg: msg}
+	}
+	return nil
 }
 
 func promptInternalID(q querier, ref string) (string, error) {

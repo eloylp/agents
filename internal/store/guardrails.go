@@ -166,7 +166,7 @@ func UpsertGuardrailTx(exec sqlExec, g fleet.Guardrail) error {
 	if err != nil {
 		return fmt.Errorf("store: upsert guardrail %q: %w", g.Name, err)
 	}
-	if _, err := exec.Exec("UPDATE guardrails SET current_version_id=?, updated_at=datetime('now') WHERE id=?", version.ID, internalID); err != nil {
+	if err := applyGuardrailCurrentVersionTx(exec, internalID, version.ID); err != nil {
 		return fmt.Errorf("store: upsert guardrail %q: current version: %w", g.Name, err)
 	}
 	return nil
@@ -249,7 +249,7 @@ func ResetGuardrailTx(db sqlExec, name string) error {
 	if err != nil {
 		return fmt.Errorf("store: reset guardrail %q: %w", name, err)
 	}
-	if _, err := db.Exec("UPDATE guardrails SET current_version_id=?, updated_at=datetime('now') WHERE id=?", version.ID, id); err != nil {
+	if err := applyGuardrailCurrentVersionTx(db, id, version.ID); err != nil {
 		return fmt.Errorf("store: reset guardrail %q: current version: %w", name, err)
 	}
 	return nil

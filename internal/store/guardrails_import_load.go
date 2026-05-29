@@ -72,10 +72,18 @@ func importGuardrails(tx *sql.Tx, guardrails []fleet.Guardrail) error {
 			}
 			return fmt.Errorf("store import: upsert guardrail %s: %w", g.Name, err)
 		}
+		version, err := publishGuardrailVersionTx(tx, internalID, g)
+		if err != nil {
+			return fmt.Errorf("store import: publish guardrail %s version: %w", g.Name, err)
+		}
 		if len(g.Versions) > 0 {
-			if _, err := replaceGuardrailVersionSnapshotsTx(tx, internalID, g.Versions); err != nil {
+			version, err = replaceGuardrailVersionSnapshotsTx(tx, internalID, g.Versions)
+			if err != nil {
 				return fmt.Errorf("store import: replace guardrail %s versions: %w", g.Name, err)
 			}
+		}
+		if err := applyGuardrailCurrentVersionTx(tx, internalID, version.ID); err != nil {
+			return fmt.Errorf("store import: update guardrail %s current version: %w", g.Name, err)
 		}
 	}
 	return nil

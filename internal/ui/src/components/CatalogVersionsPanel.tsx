@@ -41,7 +41,14 @@ function assetPath(type: AssetType) {
 
 function versionBody(type: AssetType, version: CatalogVersion) {
   if (type === 'skill') return version.prompt || ''
-  if (type === 'guardrail') return version.content || ''
+  if (type === 'guardrail') {
+    return [
+      version.description ? `description: ${version.description}` : '',
+      version.content || '',
+      `enabled: ${version.enabled ? 'true' : 'false'}`,
+      `position: ${version.position ?? 0}`,
+    ].filter(Boolean).join('\n')
+  }
   return [version.description, version.content].filter(Boolean).join('\n\n')
 }
 
@@ -95,6 +102,12 @@ function countRefs(refs: CatalogVersionReference[]) {
     tracking: refs.filter(ref => ref.tracking).length,
     pinned: refs.filter(ref => !ref.tracking).length,
   }
+}
+
+function diffLabel(type: AssetType, base?: CatalogVersion) {
+  const subject = type === 'prompt' ? 'description and content' : type === 'skill' ? 'prompt' : 'content and settings'
+  if (!base) return `Diff: ${subject} from empty base`
+  return `Diff: ${subject} against v${base.version}`
 }
 
 function TimelineDot({ state }: { state: string }) {
@@ -280,7 +293,7 @@ export default function CatalogVersionsPanel({
                   <div>
                     <div style={{ color: 'var(--text-heading)', fontWeight: 700 }}>Version {v.version}</div>
                     <div style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                      {v.state}{v.source_type ? ` · ${v.source_type}` : ''}{v.published_at ? ` · published ${v.published_at}` : ''}
+                      {v.state}{v.source_type ? ` · ${v.source_type}` : ''}{v.published_at ? ` · published ${formatDate(v.published_at)}` : ''}
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -315,11 +328,32 @@ export default function CatalogVersionsPanel({
                     </div>
                   )}
                 </div>
-                <pre style={{ margin: 0, maxHeight: 260, overflow: 'auto', border: panelBorder, borderRadius: 6, background: 'var(--bg)', color: 'var(--text-muted)', fontSize: '0.75rem', lineHeight: 1.45, padding: '0.6rem' }}>
-                  {diff.map((row, i) => (
-                    <div key={i} style={{ color: row.kind === 'add' ? '#15803d' : row.kind === 'del' ? 'var(--text-danger)' : 'var(--text-muted)' }}>{row.text || ' '}</div>
-                  ))}
-                </pre>
+                <div style={{ border: panelBorder, borderRadius: 6, overflow: 'hidden', background: 'var(--bg)' }}>
+                  <div style={{ padding: '0.45rem 0.6rem', borderBottom: panelBorder, color: 'var(--text-heading)', fontSize: '0.78rem', fontWeight: 700 }}>
+                    {diffLabel(type, base)}
+                  </div>
+                  <div role="table" aria-label={diffLabel(type, base)} style={{ maxHeight: 300, overflow: 'auto', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '0.75rem', lineHeight: 1.45 }}>
+                    {diff.map((row, i) => {
+                      const add = row.kind === 'add'
+                      const del = row.kind === 'del'
+                      return (
+                        <div
+                          key={i}
+                          role="row"
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: '2.5rem minmax(0, 1fr)',
+                            background: add ? 'rgba(22, 163, 74, 0.09)' : del ? 'rgba(220, 38, 38, 0.08)' : 'transparent',
+                            color: add ? '#15803d' : del ? 'var(--text-danger)' : 'var(--text-muted)',
+                          }}
+                        >
+                          <span role="cell" style={{ userSelect: 'none', textAlign: 'right', padding: '0 0.5rem', color: 'var(--text-faint)', borderRight: panelBorder }}>{i + 1}</span>
+                          <span role="cell" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', padding: '0 0.55rem' }}>{row.text || ' '}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
               </div>
             )
           })}
