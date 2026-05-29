@@ -654,8 +654,8 @@ func currentPromptVersionIfUnchanged(q querier, promptID, description, content s
 		SELECT pv.id, pv.prompt_id, pv.version_number, pv.state, pv.source_type, COALESCE(pv.base_version_id, ''), pv.body_hash
 		FROM prompts p
 		JOIN prompt_versions pv ON pv.id = p.current_version_id
-		WHERE p.id=? AND pv.description=? AND pv.content=? AND pv.body_hash=?`,
-		promptID, description, content, hash,
+		WHERE p.id=? AND pv.body_hash=?`,
+		promptID, hash,
 	).Scan(&version.ID, &version.AssetID, &version.Version, &version.State, &version.SourceType, &version.BaseVersionID, &version.BodyHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fleet.CatalogVersion{}, false, nil
@@ -673,8 +673,8 @@ func currentSkillVersionIfUnchanged(q querier, skillID, prompt string) (fleet.Ca
 		SELECT sv.id, sv.skill_id, sv.version_number, sv.state, sv.source_type, COALESCE(sv.base_version_id, ''), sv.body_hash
 		FROM skills s
 		JOIN skill_versions sv ON sv.id = s.current_version_id
-		WHERE s.id=? AND sv.prompt=? AND sv.body_hash=?`,
-		skillID, prompt, hash,
+		WHERE s.id=? AND sv.body_hash=?`,
+		skillID, hash,
 	).Scan(&version.ID, &version.AssetID, &version.Version, &version.State, &version.SourceType, &version.BaseVersionID, &version.BodyHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fleet.CatalogVersion{}, false, nil
@@ -692,8 +692,8 @@ func currentGuardrailVersionIfUnchanged(q querier, guardrailID string, g fleet.G
 		SELECT gv.id, gv.guardrail_id, gv.version_number, gv.state, gv.source_type, COALESCE(gv.base_version_id, ''), gv.body_hash
 		FROM guardrails gr
 		JOIN guardrail_versions gv ON gv.id = gr.current_version_id
-		WHERE gr.id=? AND gv.description=? AND gv.content=? AND gv.enabled=? AND gv.position=? AND gv.body_hash=?`,
-		guardrailID, g.Description, g.Content, boolToInt(g.Enabled), g.Position, hash,
+		WHERE gr.id=? AND gv.body_hash=?`,
+		guardrailID, hash,
 	).Scan(&version.ID, &version.AssetID, &version.Version, &version.State, &version.SourceType, &version.BaseVersionID, &version.BodyHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fleet.CatalogVersion{}, false, nil

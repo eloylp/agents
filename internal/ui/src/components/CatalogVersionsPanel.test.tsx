@@ -97,4 +97,39 @@ describe('<CatalogVersionsPanel />', () => {
     expect(await screen.findByText('Error: load references: 500')).toBeInTheDocument()
     expect(await screen.findByText('default/tracker · tracking')).toBeInTheDocument()
   })
+
+  it('renders first guardrail versions with settings in the diff', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/guardrails/default%2Fguardrails%2Fsecurity/versions') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([
+            {
+              id: 'guardrailv1',
+              version: 1,
+              state: 'published',
+              description: 'Security checks',
+              content: 'Never expose secrets.',
+              enabled: false,
+              position: 7,
+            },
+          ]),
+        } as Response)
+      }
+      if (url === '/guardrails/default%2Fguardrails%2Fsecurity/versions/guardrailv1/references') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
+      }
+      return Promise.resolve({ ok: false, status: 404 } as Response)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<CatalogVersionsPanel type="guardrail" assetID="default/guardrails/security" currentVersionID="guardrailv1" />)
+
+    expect(await screen.findByText('Initial content and settings')).toBeInTheDocument()
+    expect(await screen.findByText('+description: Security checks')).toBeInTheDocument()
+    expect(screen.getByText('+Never expose secrets.')).toBeInTheDocument()
+    expect(screen.getByText('+enabled: false')).toBeInTheDocument()
+    expect(screen.getByText('+position: 7')).toBeInTheDocument()
+  })
 })

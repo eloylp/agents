@@ -106,7 +106,7 @@ function countRefs(refs: CatalogVersionReference[]) {
 
 function diffLabel(type: AssetType, base?: CatalogVersion) {
   const subject = type === 'prompt' ? 'description and content' : type === 'skill' ? 'prompt' : 'content and settings'
-  if (!base) return `Diff: ${subject} from empty base`
+  if (!base) return `Initial ${subject}`
   return `Diff: ${subject} against v${base.version}`
 }
 
