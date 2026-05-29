@@ -16,6 +16,7 @@ const links = [
   { href: '/prompts/', label: 'Prompts', group: 'Knowledge' },
   { href: '/skills/', label: 'Skills', group: 'Knowledge' },
   { href: '/memory/', label: 'Memory', group: 'Knowledge' },
+  { href: '/workspaces/', label: 'Workspaces', group: 'Config' },
   { href: '/repos/', label: 'Repos', group: 'Config' },
   { href: '/config/', label: 'Config', group: 'Config' },
 ]
