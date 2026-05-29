@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 
 type AssetType = 'prompt' | 'skill' | 'guardrail'
 
@@ -14,7 +15,11 @@ interface CatalogVersion {
   enabled?: boolean
   position?: number
   source_type?: string
+  source_ref?: string
+  author?: string
+  changelog?: string
   base_version_id?: string
+  body_hash?: string
   created_at?: string
   published_at?: string
 }
@@ -72,6 +77,52 @@ function diffLines(oldText: string, newText: string) {
     rows.push({ kind: 'add', text: `+${newLines[j]}` })
   }
   return rows
+}
+
+function shortHash(hash?: string) {
+  return hash ? hash.slice(0, 12) : ''
+}
+
+function formatDate(value?: string) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString()
+}
+
+function countRefs(refs: CatalogVersionReference[]) {
+  return {
+    tracking: refs.filter(ref => ref.tracking).length,
+    pinned: refs.filter(ref => !ref.tracking).length,
+  }
+}
+
+function TimelineDot({ state }: { state: string }) {
+  const published = state === 'published'
+  const proposal = state === 'proposal'
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        width: 12,
+        height: 12,
+        borderRadius: '50%',
+        border: proposal ? '2px dashed var(--accent)' : '2px solid var(--accent)',
+        background: published ? 'var(--accent)' : 'var(--bg-card)',
+        flex: '0 0 auto',
+        marginTop: 3,
+        boxSizing: 'border-box',
+      }}
+    />
+  )
+}
+
+function Badge({ children }: { children: ReactNode }) {
+  return (
+    <span style={{ border: panelBorder, borderRadius: 4, padding: '1px 5px', fontSize: '0.68rem', color: 'var(--text-muted)', background: 'var(--bg)' }}>
+      {children}
+    </span>
+  )
 }
 
 export default function CatalogVersionsPanel({
@@ -175,23 +226,43 @@ export default function CatalogVersionsPanel({
         <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>{versions.length} total</span>
       </div>
       {error && <p style={{ color: 'var(--text-danger)', margin: '0.65rem 0.75rem', fontSize: '0.8rem' }}>{error}</p>}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(150px, 220px) minmax(0, 1fr)', minHeight: 260 }}>
-        <div style={{ borderRight: panelBorder, background: 'var(--bg-card)' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(210px, 300px) minmax(0, 1fr)', minHeight: 260 }}>
+        <div style={{ borderRight: panelBorder, background: 'var(--bg-card)', padding: '0.5rem 0' }}>
           {versions.map(v => {
             const refs = references[v.id] || []
+            const counts = countRefs(refs)
+            const isCurrent = v.id === currentVersionID
             return (
               <button
                 key={v.id}
                 onClick={() => setExpanded(v.id)}
                 style={{
-                  width: '100%', textAlign: 'left', padding: '0.65rem 0.75rem', border: 0,
-                  borderBottom: '1px solid var(--border-subtle)', background: expanded === v.id ? 'var(--bg-input)' : 'transparent',
-                  color: 'var(--text)', cursor: 'pointer',
+                  width: '100%', textAlign: 'left', padding: '0.45rem 0.75rem', border: 0,
+                  background: expanded === v.id ? 'var(--bg-input)' : 'transparent',
+                  color: 'var(--text)', cursor: 'pointer', display: 'grid', gridTemplateColumns: '22px minmax(0, 1fr)',
                 }}
               >
-                <span style={{ display: 'block', fontWeight: 700 }}>v{v.version}</span>
-                <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.75rem' }}>{v.state}{v.id === currentVersionID ? ' · current' : ''}</span>
-                {refs.length > 0 && <span style={{ display: 'block', color: 'var(--accent)', fontSize: '0.72rem', marginTop: 2 }}>{refs.length} reference{refs.length === 1 ? '' : 's'}</span>}
+                <span style={{ position: 'relative', display: 'flex', justifyContent: 'center' }}>
+                  <span style={{ position: 'absolute', top: -8, bottom: -8, width: 1, background: 'var(--border)', left: '50%' }} />
+                  <TimelineDot state={v.state} />
+                </span>
+                <span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontWeight: 700 }}>
+                    v{v.version}
+                    {isCurrent && <Badge>Current</Badge>}
+                    {v.state === 'draft' && <Badge>Draft</Badge>}
+                    {counts.tracking > 0 && <Badge>{counts.tracking} tracking</Badge>}
+                    {counts.pinned > 0 && <Badge>{counts.pinned} pinned</Badge>}
+                  </span>
+                  <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: 2 }}>{v.state} · {formatDate(v.created_at) || 'created time unknown'}</span>
+                  {v.published_at && <span style={{ display: 'block', color: 'var(--text-faint)', fontSize: '0.72rem', marginTop: 1 }}>published {formatDate(v.published_at)}</span>}
+                  {v.source_type && <span style={{ display: 'block', color: 'var(--text-faint)', fontSize: '0.72rem', marginTop: 1 }}>{v.source_type}{v.source_ref ? ` · ${v.source_ref}` : ''}</span>}
+                  {v.author && <span style={{ display: 'block', color: 'var(--text-faint)', fontSize: '0.72rem', marginTop: 1 }}>{v.author}</span>}
+                  {v.changelog && <span style={{ display: 'block', color: 'var(--text)', fontSize: '0.75rem', marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v.changelog}</span>}
+                  <span style={{ display: 'block', color: 'var(--text-faint)', fontSize: '0.72rem', marginTop: 3 }}>
+                    {v.base_version_id ? `base ${v.base_version_id}` : 'no base'}{shortHash(v.body_hash) ? ` · ${shortHash(v.body_hash)}` : ''}
+                  </span>
+                </span>
               </button>
             )
           })}

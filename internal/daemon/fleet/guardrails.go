@@ -289,6 +289,10 @@ func (h *Handler) UpdateGuardrailPatch(name string, patch GuardrailPatch) (fleet
 	return h.store.GetGuardrail(normalized)
 }
 
+func (h *Handler) PublishGuardrailVersion(versionID string) (fleet.Guardrail, error) {
+	return h.service.PublishGuardrailVersion(versionID)
+}
+
 // DeleteGuardrail removes the addressed guardrail. Returns *store.ErrNotFound
 // when the row does not exist.
 func (h *Handler) DeleteGuardrail(name string) error {

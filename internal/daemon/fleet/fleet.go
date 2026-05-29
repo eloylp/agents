@@ -688,6 +688,10 @@ func (h *Handler) UpdateSkillPatch(name string, patch SkillPatch) (string, fleet
 	return h.updateSkill(name, patch)
 }
 
+func (h *Handler) PublishSkillVersion(versionID string) (string, fleet.Skill, error) {
+	return h.service.PublishSkillVersion(versionID)
+}
+
 func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skill, error) {
 	normalized := fleet.NormalizeSkillName(name)
 	skills, err := h.store.ReadSkills()
@@ -933,6 +937,10 @@ func (h *Handler) UpsertPrompt(p fleet.Prompt) (fleet.Prompt, error) {
 
 func (h *Handler) UpdatePromptPatch(ref string, patch PromptPatch) (fleet.Prompt, error) {
 	return h.updatePrompt(ref, patch)
+}
+
+func (h *Handler) PublishPromptVersion(versionID string) (fleet.Prompt, error) {
+	return h.service.PublishPromptVersion(versionID)
 }
 
 func (h *Handler) updatePrompt(ref string, patch PromptPatch) (fleet.Prompt, error) {
