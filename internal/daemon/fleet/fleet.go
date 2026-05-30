@@ -32,6 +32,8 @@ import (
 	"github.com/eloylp/agents/internal/store"
 )
 
+const catalogVersionMetadataPublishError = "catalog version metadata (state, source_type, source_ref, author, changelog) is only allowed when creating a draft/proposal; set publish=false"
+
 // Handler implements the /agents, /skills, and /backends HTTP surface plus
 // the methods exposed for the MCP agent / skill / backend writers. It also
 // owns the /agents/orphans/status endpoint and the read-only fleet snapshot
@@ -721,7 +723,7 @@ func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skil
 		return "", fleet.Skill{}, &store.ErrNotFound{Msg: fmt.Sprintf("skill %q not found", normalized)}
 	}
 	if patch.hasVersionMetadata() && (patch.Publish == nil || *patch.Publish) {
-		return "", fleet.Skill{}, &store.ErrValidation{Msg: "catalog version metadata requires publish=false"}
+		return "", fleet.Skill{}, &store.ErrValidation{Msg: catalogVersionMetadataPublishError}
 	}
 	patch.apply(&existing)
 	if patch.Publish != nil && !*patch.Publish {
@@ -1004,7 +1006,7 @@ func (h *Handler) updatePrompt(ref string, patch PromptPatch) (fleet.Prompt, err
 		return fleet.Prompt{}, err
 	}
 	if patch.hasVersionMetadata() && (patch.Publish == nil || *patch.Publish) {
-		return fleet.Prompt{}, &store.ErrValidation{Msg: "catalog version metadata requires publish=false"}
+		return fleet.Prompt{}, &store.ErrValidation{Msg: catalogVersionMetadataPublishError}
 	}
 	merged := prompt
 	patch.apply(&merged)

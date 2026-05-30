@@ -17,11 +17,11 @@ func (s *Service) UpsertSkill(name string, sk fleet.Skill) error {
 	})
 }
 
-func (s *Service) CreateSkillDraft(ref string, sk fleet.Skill, metadata ...fleet.CatalogVersionMetadata) (fleet.CatalogVersion, error) {
+func (s *Service) CreateSkillDraft(ref string, sk fleet.Skill, meta fleet.CatalogVersionMetadata) (fleet.CatalogVersion, error) {
 	var version fleet.CatalogVersion
 	err := s.withTx("create skill draft", func(tx *sql.Tx) error {
 		var err error
-		version, err = store.CreateSkillDraftTx(tx, ref, sk.Prompt, metadata...)
+		version, err = store.CreateSkillDraftTx(tx, ref, sk.Prompt, meta)
 		return err
 	})
 	return version, err
@@ -54,11 +54,11 @@ func (s *Service) UpsertPrompt(p fleet.Prompt) (fleet.Prompt, error) {
 	return saved, err
 }
 
-func (s *Service) CreatePromptDraft(ref string, p fleet.Prompt, metadata ...fleet.CatalogVersionMetadata) (fleet.CatalogVersion, error) {
+func (s *Service) CreatePromptDraft(ref string, p fleet.Prompt, meta fleet.CatalogVersionMetadata) (fleet.CatalogVersion, error) {
 	var version fleet.CatalogVersion
 	err := s.withTx("create prompt draft", func(tx *sql.Tx) error {
 		var err error
-		version, err = store.CreatePromptDraftTx(tx, ref, p.Description, p.Content, metadata...)
+		version, err = store.CreatePromptDraftTx(tx, ref, p.Description, p.Content, meta)
 		return err
 	})
 	return version, err
@@ -104,11 +104,11 @@ func (s *Service) UpsertGuardrail(g fleet.Guardrail) error {
 	})
 }
 
-func (s *Service) CreateGuardrailDraft(ref string, g fleet.Guardrail, metadata ...fleet.CatalogVersionMetadata) (fleet.CatalogVersion, error) {
+func (s *Service) CreateGuardrailDraft(ref string, g fleet.Guardrail, meta fleet.CatalogVersionMetadata) (fleet.CatalogVersion, error) {
 	var version fleet.CatalogVersion
 	err := s.withTx("create guardrail draft", func(tx *sql.Tx) error {
 		var err error
-		version, err = store.CreateGuardrailDraftTx(tx, ref, g, metadata...)
+		version, err = store.CreateGuardrailDraftTx(tx, ref, g, meta)
 		return err
 	})
 	return version, err

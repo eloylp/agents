@@ -111,12 +111,12 @@ func publishGuardrailVersionTx(exec sqlExec, guardrailID string, g fleet.Guardra
 	return fleet.CatalogVersion{ID: id, AssetID: guardrailID, Version: version, State: "published", SourceType: "manual", BaseVersionID: baseID, BodyHash: hash}, nil
 }
 
-func CreatePromptDraftTx(tx *sql.Tx, ref, description, content string, metadata ...fleet.CatalogVersionMetadata) (fleet.CatalogVersion, error) {
+func CreatePromptDraftTx(tx *sql.Tx, ref, description, content string, meta fleet.CatalogVersionMetadata) (fleet.CatalogVersion, error) {
 	promptID, err := promptInternalID(tx, ref)
 	if err != nil {
 		return fleet.CatalogVersion{}, err
 	}
-	meta, err := normalizeNewCatalogVersionMetadata(firstCatalogVersionMetadata(metadata), "draft")
+	meta, err = normalizeNewCatalogVersionMetadata(meta, "draft")
 	if err != nil {
 		return fleet.CatalogVersion{}, err
 	}
@@ -448,12 +448,12 @@ func checkDuplicateCatalogVersionNumber(seen map[int]struct{}, version int) erro
 	return nil
 }
 
-func CreateSkillDraftTx(tx *sql.Tx, ref, prompt string, metadata ...fleet.CatalogVersionMetadata) (fleet.CatalogVersion, error) {
+func CreateSkillDraftTx(tx *sql.Tx, ref, prompt string, meta fleet.CatalogVersionMetadata) (fleet.CatalogVersion, error) {
 	skillID, err := skillInternalID(tx, ref)
 	if err != nil {
 		return fleet.CatalogVersion{}, err
 	}
-	meta, err := normalizeNewCatalogVersionMetadata(firstCatalogVersionMetadata(metadata), "draft")
+	meta, err = normalizeNewCatalogVersionMetadata(meta, "draft")
 	if err != nil {
 		return fleet.CatalogVersion{}, err
 	}
@@ -464,12 +464,12 @@ func CreateSkillDraftTx(tx *sql.Tx, ref, prompt string, metadata ...fleet.Catalo
 	return version, nil
 }
 
-func CreateGuardrailDraftTx(tx *sql.Tx, ref string, g fleet.Guardrail, metadata ...fleet.CatalogVersionMetadata) (fleet.CatalogVersion, error) {
+func CreateGuardrailDraftTx(tx *sql.Tx, ref string, g fleet.Guardrail, meta fleet.CatalogVersionMetadata) (fleet.CatalogVersion, error) {
 	guardrailID, err := guardrailInternalID(tx, ref)
 	if err != nil {
 		return fleet.CatalogVersion{}, err
 	}
-	meta, err := normalizeNewCatalogVersionMetadata(firstCatalogVersionMetadata(metadata), "draft")
+	meta, err = normalizeNewCatalogVersionMetadata(meta, "draft")
 	if err != nil {
 		return fleet.CatalogVersion{}, err
 	}
@@ -478,13 +478,6 @@ func CreateGuardrailDraftTx(tx *sql.Tx, ref string, g fleet.Guardrail, metadata 
 		return fleet.CatalogVersion{}, err
 	}
 	return version, nil
-}
-
-func firstCatalogVersionMetadata(metadata []fleet.CatalogVersionMetadata) fleet.CatalogVersionMetadata {
-	if len(metadata) == 0 {
-		return fleet.CatalogVersionMetadata{}
-	}
-	return metadata[0]
 }
 
 func normalizeNewCatalogVersionMetadata(meta fleet.CatalogVersionMetadata, defaultState string) (fleet.CatalogVersionMetadata, error) {

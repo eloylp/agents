@@ -288,7 +288,7 @@ func (h *Handler) UpdateGuardrailPatch(name string, patch GuardrailPatch) (fleet
 		return fleet.Guardrail{}, err
 	}
 	if patch.hasVersionMetadata() && (patch.Publish == nil || *patch.Publish) {
-		return fleet.Guardrail{}, &store.ErrValidation{Msg: "catalog version metadata requires publish=false"}
+		return fleet.Guardrail{}, &store.ErrValidation{Msg: catalogVersionMetadataPublishError}
 	}
 	patch.apply(&existing)
 	if patch.Publish != nil && !*patch.Publish {

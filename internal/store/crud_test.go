@@ -526,7 +526,7 @@ func TestPromptDraftDoesNotAffectCurrentUntilPublished(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin draft: %v", err)
 	}
-	draft, err := store.CreatePromptDraftTx(tx, prompt.ID, "draft", "body v2")
+	draft, err := store.CreatePromptDraftTx(tx, prompt.ID, "draft", "body v2", fleet.CatalogVersionMetadata{})
 	if err != nil {
 		tx.Rollback()
 		t.Fatalf("CreatePromptDraftTx: %v", err)
@@ -636,6 +636,47 @@ func TestCreateCatalogProposalVersionsRecordSourceMetadata(t *testing.T) {
 	}
 }
 
+func TestCreateCatalogDraftRejectsInvalidMetadata(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "invalid-proposal-prompt", Description: "first", Content: "body v1"})
+	if err != nil {
+		t.Fatalf("UpsertPrompt: %v", err)
+	}
+	tests := []struct {
+		name string
+		meta fleet.CatalogVersionMetadata
+		want string
+	}{
+		{
+			name: "state",
+			meta: fleet.CatalogVersionMetadata{State: "published"},
+			want: `invalid catalog version state "published"`,
+		},
+		{
+			name: "source type",
+			meta: fleet.CatalogVersionMetadata{SourceType: "robot"},
+			want: `invalid catalog version source_type "robot"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx, err := db.Begin()
+			if err != nil {
+				t.Fatalf("begin tx: %v", err)
+			}
+			t.Cleanup(func() { tx.Rollback() })
+
+			_, err = store.CreatePromptDraftTx(tx, prompt.ID, "second", "body v2", tt.meta)
+			var verr *store.ErrValidation
+			if !errors.As(err, &verr) || verr.Msg != tt.want {
+				t.Fatalf("CreatePromptDraftTx error = %v, want validation %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestCatalogDraftPublishPaths(t *testing.T) {
 	t.Parallel()
 
@@ -659,7 +700,7 @@ func TestCatalogDraftPublishPaths(t *testing.T) {
 			},
 			createDraft: func(t *testing.T, tx *sql.Tx, ref string) fleet.CatalogVersion {
 				t.Helper()
-				draft, err := store.CreateSkillDraftTx(tx, ref, "skill v2")
+				draft, err := store.CreateSkillDraftTx(tx, ref, "skill v2", fleet.CatalogVersionMetadata{})
 				if err != nil {
 					t.Fatalf("CreateSkillDraftTx: %v", err)
 				}
@@ -695,7 +736,7 @@ func TestCatalogDraftPublishPaths(t *testing.T) {
 			createDraft: func(t *testing.T, tx *sql.Tx, ref string) fleet.CatalogVersion {
 				t.Helper()
 				g := fleet.Guardrail{Name: ref, Description: "v2", Content: "guardrail v2", Enabled: true, Position: 20}
-				draft, err := store.CreateGuardrailDraftTx(tx, ref, g)
+				draft, err := store.CreateGuardrailDraftTx(tx, ref, g, fleet.CatalogVersionMetadata{})
 				if err != nil {
 					t.Fatalf("CreateGuardrailDraftTx: %v", err)
 				}
@@ -1354,7 +1395,7 @@ func publishPromptDraft(t *testing.T, db *sql.DB, ref, description, content stri
 	if err != nil {
 		t.Fatalf("begin prompt draft: %v", err)
 	}
-	draft, err := store.CreatePromptDraftTx(tx, ref, description, content)
+	draft, err := store.CreatePromptDraftTx(tx, ref, description, content, fleet.CatalogVersionMetadata{})
 	if err != nil {
 		t.Fatalf("CreatePromptDraftTx: %v", err)
 	}
@@ -1373,7 +1414,7 @@ func createPromptDraft(t *testing.T, db *sql.DB, ref, description, content strin
 	if err != nil {
 		t.Fatalf("begin prompt draft: %v", err)
 	}
-	draft, err := store.CreatePromptDraftTx(tx, ref, description, content)
+	draft, err := store.CreatePromptDraftTx(tx, ref, description, content, fleet.CatalogVersionMetadata{})
 	if err != nil {
 		t.Fatalf("CreatePromptDraftTx: %v", err)
 	}
@@ -1389,7 +1430,7 @@ func publishSkillDraft(t *testing.T, db *sql.DB, ref, prompt string) string {
 	if err != nil {
 		t.Fatalf("begin skill draft: %v", err)
 	}
-	draft, err := store.CreateSkillDraftTx(tx, ref, prompt)
+	draft, err := store.CreateSkillDraftTx(tx, ref, prompt, fleet.CatalogVersionMetadata{})
 	if err != nil {
 		t.Fatalf("CreateSkillDraftTx: %v", err)
 	}
@@ -1408,7 +1449,7 @@ func createSkillDraft(t *testing.T, db *sql.DB, ref, prompt string) string {
 	if err != nil {
 		t.Fatalf("begin skill draft: %v", err)
 	}
-	draft, err := store.CreateSkillDraftTx(tx, ref, prompt)
+	draft, err := store.CreateSkillDraftTx(tx, ref, prompt, fleet.CatalogVersionMetadata{})
 	if err != nil {
 		t.Fatalf("CreateSkillDraftTx: %v", err)
 	}
@@ -1424,7 +1465,7 @@ func publishGuardrailDraft(t *testing.T, db *sql.DB, ref string, guardrail fleet
 	if err != nil {
 		t.Fatalf("begin guardrail draft: %v", err)
 	}
-	draft, err := store.CreateGuardrailDraftTx(tx, ref, guardrail)
+	draft, err := store.CreateGuardrailDraftTx(tx, ref, guardrail, fleet.CatalogVersionMetadata{})
 	if err != nil {
 		t.Fatalf("CreateGuardrailDraftTx: %v", err)
 	}
@@ -1443,7 +1484,7 @@ func createGuardrailDraft(t *testing.T, db *sql.DB, ref string, guardrail fleet.
 	if err != nil {
 		t.Fatalf("begin guardrail draft: %v", err)
 	}
-	draft, err := store.CreateGuardrailDraftTx(tx, ref, guardrail)
+	draft, err := store.CreateGuardrailDraftTx(tx, ref, guardrail, fleet.CatalogVersionMetadata{})
 	if err != nil {
 		t.Fatalf("CreateGuardrailDraftTx: %v", err)
 	}
@@ -1522,7 +1563,7 @@ func TestPublishCatalogVersionRejectsStaleDraft(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin draft: %v", err)
 	}
-	draft, err := store.CreatePromptDraftTx(tx, prompt.ID, "draft", "body v2")
+	draft, err := store.CreatePromptDraftTx(tx, prompt.ID, "draft", "body v2", fleet.CatalogVersionMetadata{})
 	if err != nil {
 		tx.Rollback()
 		t.Fatalf("CreatePromptDraftTx: %v", err)
