@@ -40,6 +40,16 @@ type CatalogVersion struct {
 	PublishedAt   string `json:"published_at,omitempty" yaml:"published_at,omitempty"`
 }
 
+// CatalogVersionMetadata carries audit metadata for a newly created draft or
+// proposal version. Empty fields keep the default manual draft behavior.
+type CatalogVersionMetadata struct {
+	State      string `json:"state,omitempty" yaml:"state,omitempty"`
+	SourceType string `json:"source_type,omitempty" yaml:"source_type,omitempty"`
+	SourceRef  string `json:"source_ref,omitempty" yaml:"source_ref,omitempty"`
+	Author     string `json:"author,omitempty" yaml:"author,omitempty"`
+	Changelog  string `json:"changelog,omitempty" yaml:"changelog,omitempty"`
+}
+
 // CatalogVersionReference names a live fleet reference that resolves to a
 // catalog version. Exact references are pinned directly to the version id;
 // tracking references resolve to the asset's current published version.

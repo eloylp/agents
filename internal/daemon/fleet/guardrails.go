@@ -54,13 +54,19 @@ type GuardrailPatch struct {
 	Enabled     *bool   `json:"enabled,omitempty"`
 	Position    *int    `json:"position,omitempty"`
 	Publish     *bool   `json:"publish,omitempty"`
+	State       *string `json:"state,omitempty"`
+	SourceType  *string `json:"source_type,omitempty"`
+	SourceRef   *string `json:"source_ref,omitempty"`
+	Author      *string `json:"author,omitempty"`
+	Changelog   *string `json:"changelog,omitempty"`
 }
 
 // AnyFieldSet reports whether at least one patch field is non-nil. Used by
 // both the REST PATCH handler and the MCP update_guardrail tool to reject
 // empty payloads before hitting the store.
 func (p GuardrailPatch) AnyFieldSet() bool {
-	return p.Description != nil || p.Content != nil || p.Enabled != nil || p.Position != nil || p.Publish != nil
+	return p.Description != nil || p.Content != nil || p.Enabled != nil || p.Position != nil || p.Publish != nil ||
+		p.State != nil || p.SourceType != nil || p.SourceRef != nil || p.Author != nil || p.Changelog != nil
 }
 
 func (p GuardrailPatch) apply(g *fleet.Guardrail) {
@@ -76,6 +82,14 @@ func (p GuardrailPatch) apply(g *fleet.Guardrail) {
 	if p.Position != nil {
 		g.Position = *p.Position
 	}
+}
+
+func (p GuardrailPatch) versionMetadata() fleet.CatalogVersionMetadata {
+	return catalogVersionMetadata(p.State, p.SourceType, p.SourceRef, p.Author, p.Changelog)
+}
+
+func (p GuardrailPatch) hasVersionMetadata() bool {
+	return p.State != nil || p.SourceType != nil || p.SourceRef != nil || p.Author != nil || p.Changelog != nil
 }
 
 // ── Guardrail handlers ───────────────────────────────────────────────────────
@@ -273,9 +287,12 @@ func (h *Handler) UpdateGuardrailPatch(name string, patch GuardrailPatch) (fleet
 	if err != nil {
 		return fleet.Guardrail{}, err
 	}
+	if patch.hasVersionMetadata() && (patch.Publish == nil || *patch.Publish) {
+		return fleet.Guardrail{}, &store.ErrValidation{Msg: catalogVersionMetadataPublishError}
+	}
 	patch.apply(&existing)
 	if patch.Publish != nil && !*patch.Publish {
-		version, err := h.service.CreateGuardrailDraft(normalized, existing)
+		version, err := h.service.CreateGuardrailDraft(normalized, existing, patch.versionMetadata())
 		if err != nil {
 			return fleet.Guardrail{}, err
 		}

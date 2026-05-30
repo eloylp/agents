@@ -32,6 +32,8 @@ import (
 	"github.com/eloylp/agents/internal/store"
 )
 
+const catalogVersionMetadataPublishError = "catalog version metadata (state, source_type, source_ref, author, changelog) is only allowed when creating a draft/proposal; set publish=false"
+
 // Handler implements the /agents, /skills, and /backends HTTP surface plus
 // the methods exposed for the MCP agent / skill / backend writers. It also
 // owns the /agents/orphans/status endpoint and the read-only fleet snapshot
@@ -495,19 +497,35 @@ func skillToStoreJSON(id string, sk fleet.Skill) storeSkillJSON {
 // PATCH /skills/{id} handler and the MCP update_skill tool. A nil Prompt means
 // "don't touch".
 type SkillPatch struct {
-	Prompt  *string `json:"prompt,omitempty"`
-	Publish *bool   `json:"publish,omitempty"`
+	Prompt     *string `json:"prompt,omitempty"`
+	Publish    *bool   `json:"publish,omitempty"`
+	State      *string `json:"state,omitempty"`
+	SourceType *string `json:"source_type,omitempty"`
+	SourceRef  *string `json:"source_ref,omitempty"`
+	Author     *string `json:"author,omitempty"`
+	Changelog  *string `json:"changelog,omitempty"`
 }
 
 // AnyFieldSet reports whether at least one patch field is non-nil. Used by
 // both the REST PATCH handler and the MCP update_skill tool to reject empty
 // payloads before hitting the store.
-func (p SkillPatch) AnyFieldSet() bool { return p.Prompt != nil || p.Publish != nil }
+func (p SkillPatch) AnyFieldSet() bool {
+	return p.Prompt != nil || p.Publish != nil || p.State != nil || p.SourceType != nil ||
+		p.SourceRef != nil || p.Author != nil || p.Changelog != nil
+}
 
 func (p SkillPatch) apply(s *fleet.Skill) {
 	if p.Prompt != nil {
 		s.Prompt = *p.Prompt
 	}
+}
+
+func (p SkillPatch) versionMetadata() fleet.CatalogVersionMetadata {
+	return catalogVersionMetadata(p.State, p.SourceType, p.SourceRef, p.Author, p.Changelog)
+}
+
+func (p SkillPatch) hasVersionMetadata() bool {
+	return p.State != nil || p.SourceType != nil || p.SourceRef != nil || p.Author != nil || p.Changelog != nil
 }
 
 // ── Skill handlers ────────────────────────────────────────────────────────────────────────────────────
@@ -704,9 +722,12 @@ func (h *Handler) updateSkill(name string, patch SkillPatch) (string, fleet.Skil
 	if !ok {
 		return "", fleet.Skill{}, &store.ErrNotFound{Msg: fmt.Sprintf("skill %q not found", normalized)}
 	}
+	if patch.hasVersionMetadata() && (patch.Publish == nil || *patch.Publish) {
+		return "", fleet.Skill{}, &store.ErrValidation{Msg: catalogVersionMetadataPublishError}
+	}
 	patch.apply(&existing)
 	if patch.Publish != nil && !*patch.Publish {
-		version, err := h.service.CreateSkillDraft(normalized, existing)
+		version, err := h.service.CreateSkillDraft(normalized, existing, patch.versionMetadata())
 		if err != nil {
 			return "", fleet.Skill{}, err
 		}
@@ -745,6 +766,11 @@ type PromptPatch struct {
 	Description *string `json:"description,omitempty"`
 	Content     *string `json:"content,omitempty"`
 	Publish     *bool   `json:"publish,omitempty"`
+	State       *string `json:"state,omitempty"`
+	SourceType  *string `json:"source_type,omitempty"`
+	SourceRef   *string `json:"source_ref,omitempty"`
+	Author      *string `json:"author,omitempty"`
+	Changelog   *string `json:"changelog,omitempty"`
 }
 
 type catalogVersionRolloutRequest struct {
@@ -752,7 +778,8 @@ type catalogVersionRolloutRequest struct {
 }
 
 func (p PromptPatch) AnyFieldSet() bool {
-	return p.Description != nil || p.Content != nil || p.Publish != nil
+	return p.Description != nil || p.Content != nil || p.Publish != nil || p.State != nil ||
+		p.SourceType != nil || p.SourceRef != nil || p.Author != nil || p.Changelog != nil
 }
 
 func (p PromptPatch) apply(prompt *fleet.Prompt) {
@@ -762,6 +789,34 @@ func (p PromptPatch) apply(prompt *fleet.Prompt) {
 	if p.Content != nil {
 		prompt.Content = *p.Content
 	}
+}
+
+func (p PromptPatch) versionMetadata() fleet.CatalogVersionMetadata {
+	return catalogVersionMetadata(p.State, p.SourceType, p.SourceRef, p.Author, p.Changelog)
+}
+
+func (p PromptPatch) hasVersionMetadata() bool {
+	return p.State != nil || p.SourceType != nil || p.SourceRef != nil || p.Author != nil || p.Changelog != nil
+}
+
+func catalogVersionMetadata(state, sourceType, sourceRef, author, changelog *string) fleet.CatalogVersionMetadata {
+	var meta fleet.CatalogVersionMetadata
+	if state != nil {
+		meta.State = *state
+	}
+	if sourceType != nil {
+		meta.SourceType = *sourceType
+	}
+	if sourceRef != nil {
+		meta.SourceRef = *sourceRef
+	}
+	if author != nil {
+		meta.Author = *author
+	}
+	if changelog != nil {
+		meta.Changelog = *changelog
+	}
+	return meta
 }
 
 func promptToStoreJSON(p fleet.Prompt) storePromptJSON {
@@ -950,10 +1005,13 @@ func (h *Handler) updatePrompt(ref string, patch PromptPatch) (fleet.Prompt, err
 	if err != nil {
 		return fleet.Prompt{}, err
 	}
+	if patch.hasVersionMetadata() && (patch.Publish == nil || *patch.Publish) {
+		return fleet.Prompt{}, &store.ErrValidation{Msg: catalogVersionMetadataPublishError}
+	}
 	merged := prompt
 	patch.apply(&merged)
 	if patch.Publish != nil && !*patch.Publish {
-		version, err := h.service.CreatePromptDraft(ref, merged)
+		version, err := h.service.CreatePromptDraft(ref, merged, patch.versionMetadata())
 		if err != nil {
 			return fleet.Prompt{}, err
 		}

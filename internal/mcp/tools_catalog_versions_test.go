@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 )
 
 func TestToolPromptCatalogVersionLifecycleAndAgentPin(t *testing.T) {
@@ -137,5 +138,91 @@ func TestToolSkillAndGuardrailDraftPublishParity(t *testing.T) {
 	decodeText(t, res, &guardrail)
 	if guardrail["version_id"] != guardrailV2 || guardrail["version"] != float64(2) {
 		t.Fatalf("published guardrail = %+v, want version %s", guardrail, guardrailV2)
+	}
+}
+
+func TestToolUpdateCatalogAssetsPersistVersionMetadata(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+
+	createGuardrailReq := mcpgo.CallToolRequest{}
+	createGuardrailReq.Params.Arguments = map[string]any{
+		"name": "security", "description": "security checks", "content": "guardrail v1", "enabled": true, "position": 10,
+	}
+	if res, err := toolCreateGuardrail(deps)(context.Background(), createGuardrailReq); err != nil || res.IsError {
+		t.Fatalf("create guardrail: err=%v body=%s", err, textOf(t, res))
+	}
+
+	tests := []struct {
+		name       string
+		update     func(Deps) server.ToolHandlerFunc
+		list       func(Deps) server.ToolHandlerFunc
+		updateArgs map[string]any
+		listArgs   map[string]any
+	}{
+		{
+			name:   "prompt",
+			update: toolUpdatePrompt,
+			list:   toolListPromptVersions,
+			updateArgs: map[string]any{
+				"name": "coder", "content": "prompt v2",
+			},
+			listArgs: map[string]any{"name": "coder"},
+		},
+		{
+			name:   "skill",
+			update: toolUpdateSkill,
+			list:   toolListSkillVersions,
+			updateArgs: map[string]any{
+				"id": "testing", "prompt": "skill v2",
+			},
+			listArgs: map[string]any{"id": "testing"},
+		},
+		{
+			name:   "guardrail",
+			update: toolUpdateGuardrail,
+			list:   toolListGuardrailVersions,
+			updateArgs: map[string]any{
+				"name": "security", "content": "guardrail v2",
+			},
+			listArgs: map[string]any{"name": "security"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for k, v := range map[string]any{
+				"publish":     false,
+				"state":       "proposal",
+				"source_type": "feedback_recommendation",
+				"source_ref":  "rec_123",
+				"author":      "assistant",
+				"changelog":   "tighten guidance from review feedback",
+			} {
+				tt.updateArgs[k] = v
+			}
+			req := mcpgo.CallToolRequest{}
+			req.Params.Arguments = tt.updateArgs
+			res, err := tt.update(deps)(context.Background(), req)
+			if err != nil || res.IsError {
+				t.Fatalf("update %s: err=%v body=%s", tt.name, err, textOf(t, res))
+			}
+
+			req = mcpgo.CallToolRequest{}
+			req.Params.Arguments = tt.listArgs
+			res, err = tt.list(deps)(context.Background(), req)
+			if err != nil || res.IsError {
+				t.Fatalf("list %s versions: err=%v body=%s", tt.name, err, textOf(t, res))
+			}
+			var versions []map[string]any
+			decodeText(t, res, &versions)
+			if len(versions) == 0 {
+				t.Fatalf("%s versions empty", tt.name)
+			}
+			got := versions[0]
+			if got["state"] != "proposal" || got["source_type"] != "feedback_recommendation" || got["source_ref"] != "rec_123" ||
+				got["author"] != "assistant" || got["changelog"] != "tighten guidance from review feedback" {
+				t.Fatalf("%s version metadata = %+v", tt.name, got)
+			}
+		})
 	}
 }

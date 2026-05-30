@@ -111,12 +111,16 @@ func publishGuardrailVersionTx(exec sqlExec, guardrailID string, g fleet.Guardra
 	return fleet.CatalogVersion{ID: id, AssetID: guardrailID, Version: version, State: "published", SourceType: "manual", BaseVersionID: baseID, BodyHash: hash}, nil
 }
 
-func CreatePromptDraftTx(tx *sql.Tx, ref, description, content string) (fleet.CatalogVersion, error) {
+func CreatePromptDraftTx(tx *sql.Tx, ref, description, content string, meta fleet.CatalogVersionMetadata) (fleet.CatalogVersion, error) {
 	promptID, err := promptInternalID(tx, ref)
 	if err != nil {
 		return fleet.CatalogVersion{}, err
 	}
-	version, err := createPromptVersionTx(tx, promptID, "draft", description, content)
+	meta, err = normalizeNewCatalogVersionMetadata(meta, "draft")
+	if err != nil {
+		return fleet.CatalogVersion{}, err
+	}
+	version, err := createPromptVersionTx(tx, promptID, meta, description, content)
 	if err != nil {
 		return fleet.CatalogVersion{}, err
 	}
@@ -444,31 +448,64 @@ func checkDuplicateCatalogVersionNumber(seen map[int]struct{}, version int) erro
 	return nil
 }
 
-func CreateSkillDraftTx(tx *sql.Tx, ref, prompt string) (fleet.CatalogVersion, error) {
+func CreateSkillDraftTx(tx *sql.Tx, ref, prompt string, meta fleet.CatalogVersionMetadata) (fleet.CatalogVersion, error) {
 	skillID, err := skillInternalID(tx, ref)
 	if err != nil {
 		return fleet.CatalogVersion{}, err
 	}
-	version, err := createSkillVersionTx(tx, skillID, "draft", prompt)
+	meta, err = normalizeNewCatalogVersionMetadata(meta, "draft")
+	if err != nil {
+		return fleet.CatalogVersion{}, err
+	}
+	version, err := createSkillVersionTx(tx, skillID, meta, prompt)
 	if err != nil {
 		return fleet.CatalogVersion{}, err
 	}
 	return version, nil
 }
 
-func CreateGuardrailDraftTx(tx *sql.Tx, ref string, g fleet.Guardrail) (fleet.CatalogVersion, error) {
+func CreateGuardrailDraftTx(tx *sql.Tx, ref string, g fleet.Guardrail, meta fleet.CatalogVersionMetadata) (fleet.CatalogVersion, error) {
 	guardrailID, err := guardrailInternalID(tx, ref)
 	if err != nil {
 		return fleet.CatalogVersion{}, err
 	}
-	version, err := createGuardrailVersionTx(tx, guardrailID, "draft", g)
+	meta, err = normalizeNewCatalogVersionMetadata(meta, "draft")
+	if err != nil {
+		return fleet.CatalogVersion{}, err
+	}
+	version, err := createGuardrailVersionTx(tx, guardrailID, meta, g)
 	if err != nil {
 		return fleet.CatalogVersion{}, err
 	}
 	return version, nil
 }
 
-func createPromptVersionTx(tx *sql.Tx, promptID, state, description, content string) (fleet.CatalogVersion, error) {
+func normalizeNewCatalogVersionMetadata(meta fleet.CatalogVersionMetadata, defaultState string) (fleet.CatalogVersionMetadata, error) {
+	meta.State = strings.TrimSpace(meta.State)
+	if meta.State == "" {
+		meta.State = defaultState
+	}
+	switch meta.State {
+	case "draft", "proposal":
+	default:
+		return fleet.CatalogVersionMetadata{}, &ErrValidation{Msg: fmt.Sprintf("invalid catalog version state %q", meta.State)}
+	}
+	meta.SourceType = strings.TrimSpace(meta.SourceType)
+	if meta.SourceType == "" {
+		meta.SourceType = "manual"
+	}
+	switch meta.SourceType {
+	case "manual", "feedback_recommendation", "audit_recommendation":
+	default:
+		return fleet.CatalogVersionMetadata{}, &ErrValidation{Msg: fmt.Sprintf("invalid catalog version source_type %q", meta.SourceType)}
+	}
+	meta.SourceRef = strings.TrimSpace(meta.SourceRef)
+	meta.Author = strings.TrimSpace(meta.Author)
+	meta.Changelog = strings.TrimSpace(meta.Changelog)
+	return meta, nil
+}
+
+func createPromptVersionTx(tx *sql.Tx, promptID string, meta fleet.CatalogVersionMetadata, description, content string) (fleet.CatalogVersion, error) {
 	version, err := nextCatalogVersion(tx, "prompt_versions", "prompt_id", promptID)
 	if err != nil {
 		return fleet.CatalogVersion{}, err
@@ -483,21 +520,26 @@ func createPromptVersionTx(tx *sql.Tx, promptID, state, description, content str
 	}
 	hash := catalogBodyHash(description, content)
 	var publishedAt any
-	if state == "published" {
+	if meta.State == "published" {
 		publishedAt = "now"
 	}
 	if _, err := tx.Exec(`
 		INSERT INTO prompt_versions
-			(id, prompt_id, version_number, state, description, content, source_type, base_version_id, body_hash, created_at, published_at)
-		VALUES (?, ?, ?, ?, ?, ?, 'manual', NULLIF(?, ''), ?, datetime('now'), CASE WHEN ?='now' THEN datetime('now') ELSE NULL END)`,
-		id, promptID, version, state, description, content, baseID, hash, publishedAt,
+			(id, prompt_id, version_number, state, description, content, source_type, source_ref, author, changelog,
+			 base_version_id, body_hash, created_at, published_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, datetime('now'), CASE WHEN ?='now' THEN datetime('now') ELSE NULL END)`,
+		id, promptID, version, meta.State, description, content, meta.SourceType, meta.SourceRef, meta.Author, meta.Changelog,
+		baseID, hash, publishedAt,
 	); err != nil {
 		return fleet.CatalogVersion{}, fmt.Errorf("store: create prompt version: %w", err)
 	}
-	return fleet.CatalogVersion{ID: id, AssetID: promptID, Version: version, State: state, SourceType: "manual", BaseVersionID: baseID, BodyHash: hash}, nil
+	return fleet.CatalogVersion{
+		ID: id, AssetID: promptID, Version: version, State: meta.State, SourceType: meta.SourceType, SourceRef: meta.SourceRef,
+		Author: meta.Author, Changelog: meta.Changelog, BaseVersionID: baseID, BodyHash: hash,
+	}, nil
 }
 
-func createSkillVersionTx(tx *sql.Tx, skillID, state, prompt string) (fleet.CatalogVersion, error) {
+func createSkillVersionTx(tx *sql.Tx, skillID string, meta fleet.CatalogVersionMetadata, prompt string) (fleet.CatalogVersion, error) {
 	version, err := nextCatalogVersion(tx, "skill_versions", "skill_id", skillID)
 	if err != nil {
 		return fleet.CatalogVersion{}, err
@@ -512,21 +554,26 @@ func createSkillVersionTx(tx *sql.Tx, skillID, state, prompt string) (fleet.Cata
 	}
 	hash := catalogBodyHash(prompt)
 	var publishedAt any
-	if state == "published" {
+	if meta.State == "published" {
 		publishedAt = "now"
 	}
 	if _, err := tx.Exec(`
 		INSERT INTO skill_versions
-			(id, skill_id, version_number, state, prompt, source_type, base_version_id, body_hash, created_at, published_at)
-		VALUES (?, ?, ?, ?, ?, 'manual', NULLIF(?, ''), ?, datetime('now'), CASE WHEN ?='now' THEN datetime('now') ELSE NULL END)`,
-		id, skillID, version, state, prompt, baseID, hash, publishedAt,
+			(id, skill_id, version_number, state, prompt, source_type, source_ref, author, changelog,
+			 base_version_id, body_hash, created_at, published_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, datetime('now'), CASE WHEN ?='now' THEN datetime('now') ELSE NULL END)`,
+		id, skillID, version, meta.State, prompt, meta.SourceType, meta.SourceRef, meta.Author, meta.Changelog,
+		baseID, hash, publishedAt,
 	); err != nil {
 		return fleet.CatalogVersion{}, fmt.Errorf("store: create skill version: %w", err)
 	}
-	return fleet.CatalogVersion{ID: id, AssetID: skillID, Version: version, State: state, SourceType: "manual", BaseVersionID: baseID, BodyHash: hash}, nil
+	return fleet.CatalogVersion{
+		ID: id, AssetID: skillID, Version: version, State: meta.State, SourceType: meta.SourceType, SourceRef: meta.SourceRef,
+		Author: meta.Author, Changelog: meta.Changelog, BaseVersionID: baseID, BodyHash: hash,
+	}, nil
 }
 
-func createGuardrailVersionTx(tx *sql.Tx, guardrailID, state string, g fleet.Guardrail) (fleet.CatalogVersion, error) {
+func createGuardrailVersionTx(tx *sql.Tx, guardrailID string, meta fleet.CatalogVersionMetadata, g fleet.Guardrail) (fleet.CatalogVersion, error) {
 	version, err := nextCatalogVersion(tx, "guardrail_versions", "guardrail_id", guardrailID)
 	if err != nil {
 		return fleet.CatalogVersion{}, err
@@ -541,18 +588,23 @@ func createGuardrailVersionTx(tx *sql.Tx, guardrailID, state string, g fleet.Gua
 	}
 	hash := catalogBodyHash(g.Description, g.Content, fmt.Sprint(g.Enabled), fmt.Sprint(g.Position))
 	var publishedAt any
-	if state == "published" {
+	if meta.State == "published" {
 		publishedAt = "now"
 	}
 	if _, err := tx.Exec(`
 		INSERT INTO guardrail_versions
-			(id, guardrail_id, version_number, state, description, content, enabled, position, source_type, base_version_id, body_hash, created_at, published_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'manual', NULLIF(?, ''), ?, datetime('now'), CASE WHEN ?='now' THEN datetime('now') ELSE NULL END)`,
-		id, guardrailID, version, state, g.Description, g.Content, boolToInt(g.Enabled), g.Position, baseID, hash, publishedAt,
+			(id, guardrail_id, version_number, state, description, content, enabled, position, source_type, source_ref, author, changelog,
+			 base_version_id, body_hash, created_at, published_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, datetime('now'), CASE WHEN ?='now' THEN datetime('now') ELSE NULL END)`,
+		id, guardrailID, version, meta.State, g.Description, g.Content, boolToInt(g.Enabled), g.Position,
+		meta.SourceType, meta.SourceRef, meta.Author, meta.Changelog, baseID, hash, publishedAt,
 	); err != nil {
 		return fleet.CatalogVersion{}, fmt.Errorf("store: create guardrail version: %w", err)
 	}
-	return fleet.CatalogVersion{ID: id, AssetID: guardrailID, Version: version, State: state, SourceType: "manual", BaseVersionID: baseID, BodyHash: hash}, nil
+	return fleet.CatalogVersion{
+		ID: id, AssetID: guardrailID, Version: version, State: meta.State, SourceType: meta.SourceType, SourceRef: meta.SourceRef,
+		Author: meta.Author, Changelog: meta.Changelog, BaseVersionID: baseID, BodyHash: hash,
+	}, nil
 }
 
 func PublishPromptVersionTx(tx *sql.Tx, versionID string) (fleet.Prompt, error) {

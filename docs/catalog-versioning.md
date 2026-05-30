@@ -58,6 +58,27 @@ the live catalog asset and do not affect agents tracking the current version.
 }
 ```
 
+Recommendation and audit workflows can create attributed proposal versions
+through the same edit endpoints by setting `publish: false`,
+`state: "proposal"`, and source metadata:
+
+```json
+{
+  "content": "Updated prompt body",
+  "publish": false,
+  "state": "proposal",
+  "source_type": "feedback_recommendation",
+  "source_ref": "rec_123",
+  "author": "agents-assistant",
+  "changelog": "Proposed from repeated review feedback"
+}
+```
+
+Supported source types are `manual`, `feedback_recommendation`, and
+`audit_recommendation` for API-created versions. Migration-created seed
+versions use `migration`. Proposal versions are inert until a user explicitly
+publishes them.
+
 Publish a draft explicitly:
 
 ```http

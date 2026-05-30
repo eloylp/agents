@@ -3387,6 +3387,157 @@ func TestStoreCRUDCatalogVersionPublishRejectsWrongAsset(t *testing.T) {
 	}
 }
 
+func TestStoreCRUDPromptPatchCanCreateAttributedProposalVersion(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
+		"name": "coder", "description": "v1", "content": "prompt v1",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST prompt: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var prompt storePromptJSON
+	if err := json.NewDecoder(rr.Body).Decode(&prompt); err != nil {
+		t.Fatalf("decode prompt: %v", err)
+	}
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/prompts/"+prompt.ID, map[string]any{
+		"content":     "prompt v2",
+		"publish":     false,
+		"state":       "proposal",
+		"source_type": "feedback_recommendation",
+		"source_ref":  "rec_123",
+		"author":      "assistant",
+		"changelog":   "tighten guidance from review feedback",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH prompt proposal: got %d, %s", rr.Code, rr.Body.String())
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodGet, "/prompts/"+prompt.ID+"/versions", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET prompt versions: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var versions []fleet.CatalogVersion
+	if err := json.NewDecoder(rr.Body).Decode(&versions); err != nil {
+		t.Fatalf("decode versions: %v", err)
+	}
+	if len(versions) < 2 {
+		t.Fatalf("versions len = %d, want at least 2: %+v", len(versions), versions)
+	}
+	got := versions[0]
+	if got.State != "proposal" || got.SourceType != "feedback_recommendation" || got.SourceRef != "rec_123" ||
+		got.Author != "assistant" || got.Changelog != "tighten guidance from review feedback" {
+		t.Fatalf("proposal metadata = %+v", got)
+	}
+}
+
+func TestStoreCRUDPatchRejectsVersionMetadataUnlessDraft(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		seed   func(*testing.T, *daemon.Daemon) string
+		method string
+		body   map[string]any
+	}{
+		{
+			name: "prompt omitted publish",
+			seed: func(t *testing.T, s *daemon.Daemon) string {
+				t.Helper()
+				rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
+					"name": "coder", "description": "v1", "content": "prompt v1",
+				})
+				if rr.Code != http.StatusOK {
+					t.Fatalf("POST prompt: got %d, %s", rr.Code, rr.Body.String())
+				}
+				var prompt storePromptJSON
+				if err := json.NewDecoder(rr.Body).Decode(&prompt); err != nil {
+					t.Fatalf("decode prompt: %v", err)
+				}
+				return "/prompts/" + prompt.ID
+			},
+			method: http.MethodPatch,
+			body: map[string]any{
+				"content": "prompt v2",
+				"state":   "proposal",
+			},
+		},
+		{
+			name: "prompt publish true",
+			seed: func(t *testing.T, s *daemon.Daemon) string {
+				t.Helper()
+				rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
+					"name": "reviewer", "description": "v1", "content": "prompt v1",
+				})
+				if rr.Code != http.StatusOK {
+					t.Fatalf("POST prompt: got %d, %s", rr.Code, rr.Body.String())
+				}
+				var prompt storePromptJSON
+				if err := json.NewDecoder(rr.Body).Decode(&prompt); err != nil {
+					t.Fatalf("decode prompt: %v", err)
+				}
+				return "/prompts/" + prompt.ID
+			},
+			method: http.MethodPatch,
+			body: map[string]any{
+				"content": "prompt v2",
+				"publish": true,
+				"state":   "proposal",
+			},
+		},
+		{
+			name: "skill omitted publish",
+			seed: func(t *testing.T, s *daemon.Daemon) string {
+				t.Helper()
+				rr := doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
+					"name": "Security", "prompt": "skill v1",
+				})
+				if rr.Code != http.StatusOK {
+					t.Fatalf("POST skill: got %d, %s", rr.Code, rr.Body.String())
+				}
+				return "/skills/security"
+			},
+			method: http.MethodPatch,
+			body: map[string]any{
+				"prompt": "skill v2",
+				"state":  "proposal",
+			},
+		},
+		{
+			name: "guardrail omitted publish",
+			seed: func(t *testing.T, s *daemon.Daemon) string {
+				t.Helper()
+				rr := doCRUDRequest(t, s, http.MethodPost, "/guardrails", map[string]any{
+					"name": "Guardrail A", "description": "v1", "content": "guardrail v1", "enabled": true, "position": 10,
+				})
+				if rr.Code != http.StatusOK {
+					t.Fatalf("POST guardrail: got %d, %s", rr.Code, rr.Body.String())
+				}
+				return "/guardrails/guardrail-a"
+			},
+			method: http.MethodPatch,
+			body: map[string]any{
+				"content": "guardrail v2",
+				"state":   "proposal",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := openCRUDTestServer(t)
+			path := tt.seed(t, s)
+			rr := doCRUDRequest(t, s, tt.method, path, tt.body)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("PATCH with metadata: got %d, want 400, %s", rr.Code, rr.Body.String())
+			}
+			if !strings.Contains(rr.Body.String(), "catalog version metadata") || !strings.Contains(rr.Body.String(), "set publish=false") {
+				t.Fatalf("error body = %q, want actionable publish=false validation", rr.Body.String())
+			}
+		})
+	}
+}
+
 // ── PATCH /backends/{name}, superset shape ─────────────────────────
 
 func TestStoreCRUDBackendPatchFullShape(t *testing.T) {
