@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -70,6 +71,21 @@ type Request struct {
 	// reads stdout in a tight loop and the callback runs on that
 	// goroutine.
 	OnLine func(line []byte)
+}
+
+type JSONRequest struct {
+	Workflow string
+	Repo     string
+	Number   int
+	Model    string
+	System   string
+	User     string
+	Schema   string
+	OnLine   func(line []byte)
+}
+
+type JSONRunner interface {
+	RunJSON(ctx context.Context, req JSONRequest) (json.RawMessage, error)
 }
 
 type Artifact struct {

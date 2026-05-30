@@ -19,6 +19,14 @@ import (
 	"github.com/eloylp/agents/internal/workflow"
 )
 
+type fakeImprovementAnalyzer struct {
+	store *store.Store
+}
+
+func (f fakeImprovementAnalyzer) AnalyzeSelfImprovementFeedback(_ context.Context, feedback store.SelfImprovementFeedback) (store.SelfImprovementRecommendation, error) {
+	return f.store.UpsertSelfImprovementRecommendation(store.RecommendationFromFeedback(feedback))
+}
+
 // TestVerifySignature exercises the HMAC-SHA256 signature check that gates
 // every incoming GitHub webhook delivery.
 func TestVerifySignature(t *testing.T) {
@@ -229,6 +237,7 @@ func TestIssueCommentAIImprovementFeedbackStoredForAllowlistedAuthor(t *testing.
 		config.SelfImprovementConfig{FeedbackAuthorAllowlist: []string{"maintainer"}},
 		zerolog.Nop(),
 	)
+	h.WithImprovementAnalyzer(fakeImprovementAnalyzer{store: st})
 	body := []byte(`{
 		"action":"created",
 		"comment":{"id":123,"html_url":"https://github.com/owner/repo/issues/7#issuecomment-123","body":"Please remember this /agents improve","created_at":"2026-05-30T10:00:00Z","updated_at":"2026-05-30T10:00:00Z"},

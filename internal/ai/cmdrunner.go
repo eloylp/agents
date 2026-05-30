@@ -78,6 +78,25 @@ func (r *CommandRunner) Run(ctx context.Context, req Request) (Response, error) 
 	return r.runCommand(ctx, logger, req)
 }
 
+func (r *CommandRunner) RunJSON(ctx context.Context, req JSONRequest) (json.RawMessage, error) {
+	combined := truncateString(combineSystemUser(req.System, req.User), r.maxPromptChars)
+	logger := r.logger.With().
+		Str("workflow", req.Workflow).
+		Str("repo", req.Repo).
+		Int("number", req.Number).
+		Int("prompt_chars", len([]rune(combined))).
+		Logger()
+
+	if r.container == nil {
+		return nil, fmt.Errorf("%s runner requires container runtime", r.backendName)
+	}
+	if r.command == "" {
+		return nil, fmt.Errorf("%s command is required", r.backendName)
+	}
+	logger.Info().Str("command", r.command).Msgf("executing %s json command", r.backendName)
+	return r.runJSONCommand(ctx, logger, req)
+}
+
 // runCommand executes the backend CLI. For the claude backend the system
 // content is delivered via --append-system-prompt so Claude Code's built-in
 // tool definitions are preserved; the user content travels on stdin as before.
@@ -119,6 +138,37 @@ func (r *CommandRunner) runCommand(ctx context.Context, logger zerolog.Logger, r
 	return r.parseCommandResponse(logger, stdoutCap, stderr, cmdErr)
 }
 
+func (r *CommandRunner) runJSONCommand(ctx context.Context, logger zerolog.Logger, req JSONRequest) (json.RawMessage, error) {
+	var cmdCtx context.Context
+	var cancel context.CancelFunc
+	if r.timeout > 0 {
+		cmdCtx, cancel = context.WithTimeout(ctx, r.timeout)
+	} else {
+		cmdCtx, cancel = ctx, func() {}
+	}
+	defer cancel()
+
+	args, stdin := r.buildJSONDelivery(req)
+	env := buildCommandEnv(Request{
+		Workflow: req.Workflow,
+		Repo:     req.Repo,
+		Number:   req.Number,
+		Model:    req.Model,
+		System:   req.System,
+		User:     req.User,
+	}, r.env)
+	stdoutCap, stderr, cmdErr := r.runContainerJSONCommand(cmdCtx, args, stdin, env, req.Schema, req.OnLine)
+	if cmdErr != nil {
+		switch {
+		case errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
+			cmdErr = CommandInterruptedError{Backend: r.backendName, Kind: CommandInterruptedTimeout, Timeout: r.timeout, Err: cmdErr}
+		case errors.Is(cmdCtx.Err(), context.Canceled):
+			cmdErr = CommandInterruptedError{Backend: r.backendName, Kind: CommandInterruptedCanceled, Err: cmdErr}
+		}
+	}
+	return r.parseJSONCommandResponse(logger, stdoutCap, stderr, cmdErr)
+}
+
 func (r *CommandRunner) runContainerCommand(ctx context.Context, args []string, stdin string, env []string, onLine func([]byte)) (lineCapture, string, error) {
 	writer := &captureWriter{onLine: onLine}
 	var stderr bytes.Buffer
@@ -158,6 +208,45 @@ func (r *CommandRunner) runContainerCommand(ctx context.Context, args []string, 
 	return writer.capture, stderr.String(), nil
 }
 
+func (r *CommandRunner) runContainerJSONCommand(ctx context.Context, args []string, stdin string, env []string, schema string, onLine func([]byte)) (lineCapture, string, error) {
+	writer := &captureWriter{onLine: onLine}
+	var stderr bytes.Buffer
+
+	setup := runtimeexec.BackendSetupOptions{}
+	if r.isCodexBackend() {
+		var schemaErr error
+		args, schemaErr = rewriteContainerResponseSchemaArg(args)
+		if schemaErr != nil {
+			return lineCapture{}, "", schemaErr
+		}
+		setup.ResponseSchema = schema
+	}
+
+	command := slices.Concat([]string{r.command}, args)
+	command, env = runtimeexec.WrapBackendCommand(r.backendName, command, env, setup)
+	spec := r.containerSpec
+	spec.Image = r.containerImage
+	spec.Command = command
+	spec.WorkingDir = containerWorkspaceDir
+	spec.Env = env
+	spec.Stdin = bytes.NewBufferString(stdin)
+	spec.Stdout = writer
+	spec.Stderr = &stderr
+	spec.Labels = map[string]string{
+		"org.opencontainers.image.title": "agents-runner",
+		"agents.backend":                 r.backendName,
+	}
+	status, err := r.container.Run(ctx, spec)
+	writer.flush()
+	if err != nil {
+		return writer.capture, stderr.String(), err
+	}
+	if status.Code != 0 {
+		return writer.capture, stderr.String(), fmt.Errorf("runner container exited with status %d", status.Code)
+	}
+	return writer.capture, stderr.String(), nil
+}
+
 func rewriteContainerResponseSchemaArg(args []string) ([]string, error) {
 	if !slices.Contains(args, "--output-schema") {
 		return args, nil
@@ -170,6 +259,52 @@ func rewriteContainerResponseSchemaArg(args []string) ([]string, error) {
 		}
 	}
 	return nil, fmt.Errorf("codex output schema flag missing path")
+}
+
+func (r *CommandRunner) parseJSONCommandResponse(logger zerolog.Logger, stdoutCap lineCapture, stderr string, cmdErr error) (json.RawMessage, error) {
+	rawOut := stdoutCap.all.String()
+	backendDetail := backendFailureDetail(stdoutCap.lines, stderr)
+	if cmdErr != nil && stdoutCap.all.Len() == 0 {
+		logger.Error().Err(cmdErr).Str("stderr", truncateString(stderr, 2000)).Msgf("%s json command failed", r.backendName)
+		err := fmt.Errorf("%s command failed: %w", r.backendName, cmdErr)
+		return nil, runnerFailure(r.backendName, backendDetail, err)
+	}
+	if stdoutCap.all.Len() == 0 {
+		err := fmt.Errorf("parse %s json response: empty response (no output)", r.backendName)
+		return nil, runnerFailure(r.backendName, backendDetail, err)
+	}
+	stdoutForParse := stdoutCap.all.Bytes()
+	if r.isCodexBackend() {
+		if peeled, ok := extractCodexAgentMessageJSON(stdoutForParse); ok {
+			stdoutForParse = peeled
+		}
+	}
+	if parsed, ok := extractStructuredOutput(stdoutForParse); ok {
+		return append(json.RawMessage(nil), parsed...), nil
+	}
+	jsonBytes, err := extractJSON(stdoutForParse)
+	if err != nil {
+		logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s json response", r.backendName)
+		parseErr := fmt.Errorf("parse %s json response: %w", r.backendName, err)
+		return nil, runnerFailure(r.backendName, backendDetail, parseErr)
+	}
+	if parsed, ok := extractStructuredOutput(jsonBytes); ok {
+		jsonBytes = parsed
+	}
+	var probe map[string]any
+	if err := json.Unmarshal(jsonBytes, &probe); err != nil {
+		logger.Error().Err(err).Str("raw_stdout", truncateString(rawOut, 4000)).Msgf("invalid %s json response", r.backendName)
+		parseErr := fmt.Errorf("parse %s json response: %w", r.backendName, err)
+		return nil, runnerFailure(r.backendName, backendDetail, parseErr)
+	}
+	if len(probe) == 0 {
+		err := fmt.Errorf("parse %s json response: empty object", r.backendName)
+		return nil, runnerFailure(r.backendName, backendDetail, err)
+	}
+	if cmdErr != nil {
+		return append(json.RawMessage(nil), jsonBytes...), runnerFailure(r.backendName, backendDetail, cmdErr)
+	}
+	return append(json.RawMessage(nil), jsonBytes...), nil
 }
 
 func (r *CommandRunner) parseCommandResponse(logger zerolog.Logger, stdoutCap lineCapture, stderr string, cmdErr error) (Response, error) {
@@ -339,6 +474,31 @@ func (r *CommandRunner) buildDelivery(req Request) (args []string, stdin string)
 	}
 	if r.isCodexBackend() {
 		return r.buildCodexDelivery(req)
+	}
+	return nil, truncateString(combineSystemUser(req.System, req.User), r.maxPromptChars)
+}
+
+func (r *CommandRunner) buildJSONDelivery(req JSONRequest) (args []string, stdin string) {
+	base := Request{
+		Workflow: req.Workflow,
+		Repo:     req.Repo,
+		Number:   req.Number,
+		Model:    req.Model,
+		System:   req.System,
+		User:     req.User,
+	}
+	if r.isClaudeBackend() {
+		args, stdin = r.buildClaudeDelivery(base)
+		for i := 0; i < len(args)-1; i++ {
+			if args[i] == "--json-schema" {
+				args[i+1] = req.Schema
+				break
+			}
+		}
+		return args, stdin
+	}
+	if r.isCodexBackend() {
+		return r.buildCodexDelivery(base)
 	}
 	return nil, truncateString(combineSystemUser(req.System, req.User), r.maxPromptChars)
 }

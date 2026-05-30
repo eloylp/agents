@@ -184,6 +184,10 @@ func (s *Store) UpdateSelfImprovementRecommendationStatus(id, status string) (Se
 	return UpdateSelfImprovementRecommendationStatus(s.db, id, status)
 }
 
+func (s *Store) MarkSelfImprovementFeedbackFailed(id int64, cause string) error {
+	return MarkSelfImprovementFeedbackFailed(s.db, id, cause)
+}
+
 func UpsertSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) (SelfImprovementFeedback, error) {
 	workspaceID := fleet.NormalizeWorkspaceID(in.WorkspaceID)
 	tag := strings.TrimSpace(in.Tag)
@@ -584,6 +588,30 @@ func UpdateSelfImprovementRecommendationStatus(db *sql.DB, id, status string) (S
 		return SelfImprovementRecommendation{}, &ErrNotFound{Msg: fmt.Sprintf("recommendation %q not found", id)}
 	}
 	return GetSelfImprovementRecommendation(db, id)
+}
+
+func MarkSelfImprovementFeedbackFailed(db *sql.DB, id int64, cause string) error {
+	if id <= 0 {
+		return &ErrValidation{Msg: "feedback id is required"}
+	}
+	res, err := db.Exec(`UPDATE self_improvement_feedback SET status=? WHERE id=?`, FeedbackStatusFailed, id)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return &ErrNotFound{Msg: fmt.Sprintf("feedback %d not found", id)}
+	}
+	_, err = db.Exec(
+		`UPDATE self_improvement_recommendations
+		SET status=?, error=?, updated_at=datetime('now')
+		WHERE feedback_event_id=?`,
+		RecommendationStatusFailed, strings.TrimSpace(cause), id,
+	)
+	return err
 }
 
 func getSelfImprovementRecommendationByFeedback(db *sql.DB, workspaceID string, feedbackID int64) (SelfImprovementRecommendation, error) {

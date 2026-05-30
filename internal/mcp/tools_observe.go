@@ -12,7 +12,6 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/fleet"
-	"github.com/eloylp/agents/internal/store"
 )
 
 // mcpGraphNode mirrors the node payload used by GET /graph so consumers
@@ -94,7 +93,7 @@ func toolGetImprovementRecommendation(deps Deps) server.ToolHandlerFunc {
 }
 
 func toolAnalyzeImprovementFeedback(deps Deps) server.ToolHandlerFunc {
-	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		id, ok := mcpRequiredInt64(req, "feedback_event_id")
 		if !ok {
 			return mcpgo.NewToolResultError("feedback_event_id is required"), nil
@@ -103,14 +102,10 @@ func toolAnalyzeImprovementFeedback(deps Deps) server.ToolHandlerFunc {
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("get improvement feedback", err), nil
 		}
-		in := store.RecommendationFromFeedback(feedback)
-		if prompt, err := deps.Store.ReadPrompt("prompt_self-improvement-analyst"); err == nil {
-			in.AnalyzerPromptVersionID = prompt.VersionID
-			if in.StructuredOutput != nil {
-				in.StructuredOutput["analyzer_prompt_version"] = prompt.VersionID
-			}
+		if deps.Engine == nil {
+			return mcpgo.NewToolResultError("self-improvement analyzer is not configured"), nil
 		}
-		rec, err := deps.Store.UpsertSelfImprovementRecommendation(in)
+		rec, err := deps.Engine.AnalyzeSelfImprovementFeedback(ctx, feedback)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("analyze improvement feedback", err), nil
 		}

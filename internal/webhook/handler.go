@@ -34,9 +34,12 @@ type Handler struct {
 	channels *workflow.DataChannels
 	store    *store.Store
 	observe  *observe.Store
-	httpCfg  config.HTTPConfig
-	self     config.SelfImprovementConfig
-	logger   zerolog.Logger
+	analyzer interface {
+		AnalyzeSelfImprovementFeedback(context.Context, store.SelfImprovementFeedback) (store.SelfImprovementRecommendation, error)
+	}
+	httpCfg config.HTTPConfig
+	self    config.SelfImprovementConfig
+	logger  zerolog.Logger
 }
 
 // NewHandler constructs a Handler. delivery, channels, store, and httpCfg
@@ -52,6 +55,12 @@ func NewHandler(delivery *DeliveryStore, channels *workflow.DataChannels, st *st
 		self:     self,
 		logger:   logger.With().Str("component", "webhook").Logger(),
 	}
+}
+
+func (h *Handler) WithImprovementAnalyzer(analyzer interface {
+	AnalyzeSelfImprovementFeedback(context.Context, store.SelfImprovementFeedback) (store.SelfImprovementRecommendation, error)
+}) {
+	h.analyzer = analyzer
 }
 
 // RegisterRoutes mounts POST {httpCfg.WebhookPath} on r.
@@ -692,11 +701,17 @@ func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) {
 		return
 	}
 	if authorized && feedback.Status == store.FeedbackStatusNew {
-		if _, err := h.store.UpsertSelfImprovementRecommendation(store.RecommendationFromFeedback(feedback)); err != nil {
+		if h.analyzer == nil {
+			if err := h.store.MarkSelfImprovementFeedbackFailed(feedback.ID, "self-improvement analyzer is not configured"); err != nil {
+				h.logger.Error().Err(err).Int64("feedback_id", feedback.ID).Msg("webhook: mark self-improvement feedback failed")
+			}
+			return
+		}
+		if _, err := h.analyzer.AnalyzeSelfImprovementFeedback(context.Background(), feedback); err != nil {
 			h.logger.Error().Err(err).
 				Str("delivery_id", in.DeliveryID).
 				Int64("feedback_id", feedback.ID).
-				Msg("webhook: create self-improvement recommendation")
+				Msg("webhook: analyze self-improvement feedback")
 		}
 	}
 	h.logger.Info().

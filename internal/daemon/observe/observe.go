@@ -205,7 +205,11 @@ func (h *Handler) HandleAnalyzeImprovementFeedback(w http.ResponseWriter, r *htt
 		h.writeStoreError(w, err)
 		return
 	}
-	rec, err := h.store.UpsertSelfImprovementRecommendation(buildRecommendation(feedback, h.store))
+	if h.engine == nil {
+		http.Error(w, "self-improvement analyzer is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	rec, err := h.engine.AnalyzeSelfImprovementFeedback(r.Context(), feedback)
 	if err != nil {
 		h.writeStoreError(w, err)
 		return
