@@ -68,7 +68,7 @@ func TestPushEventCarriesRepoWorkspace(t *testing.T) {
 	}
 
 	dc := workflow.NewDataChannels(1, st)
-	h := NewHandler(NewDeliveryStore(10*time.Minute), dc, st, config.HTTPConfig{}, zerolog.Nop())
+	h := NewHandler(NewDeliveryStore(10*time.Minute), dc, st, nil, config.HTTPConfig{}, config.SelfImprovementConfig{}, zerolog.Nop())
 	body := []byte(`{
 		"ref":"refs/heads/main",
 		"after":"0123456789012345678901234567890123456789",
@@ -120,7 +120,7 @@ func TestWebhookRepoPrefersEnabledWorkspaceOverDisabledDefault(t *testing.T) {
 	}
 
 	dc := workflow.NewDataChannels(1, st)
-	h := NewHandler(NewDeliveryStore(10*time.Minute), dc, st, config.HTTPConfig{}, zerolog.Nop())
+	h := NewHandler(NewDeliveryStore(10*time.Minute), dc, st, nil, config.HTTPConfig{}, config.SelfImprovementConfig{}, zerolog.Nop())
 	body := []byte(`{
 		"action":"created",
 		"comment":{"body":"continue"},
@@ -170,7 +170,7 @@ func TestWebhookFansOutToEveryEnabledWorkspaceRepo(t *testing.T) {
 	}
 
 	dc := workflow.NewDataChannels(2, st)
-	h := NewHandler(NewDeliveryStore(10*time.Minute), dc, st, config.HTTPConfig{}, zerolog.Nop())
+	h := NewHandler(NewDeliveryStore(10*time.Minute), dc, st, nil, config.HTTPConfig{}, config.SelfImprovementConfig{}, zerolog.Nop())
 	body := []byte(`{
 		"action":"created",
 		"comment":{"body":"continue"},
@@ -201,5 +201,175 @@ func TestWebhookFansOutToEveryEnabledWorkspaceRepo(t *testing.T) {
 		if !got[workspaceID] {
 			t.Fatalf("missing queued event for workspace %q; got %+v", workspaceID, got)
 		}
+	}
+}
+
+func TestIssueCommentAIImprovementFeedbackStoredForAllowlistedAuthor(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if err := st.UpsertRepo(fleet.Repo{WorkspaceID: "team-a", Name: "owner/repo", Enabled: true}); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+
+	dc := workflow.NewDataChannels(1, st)
+	h := NewHandler(
+		NewDeliveryStore(10*time.Minute),
+		dc,
+		st,
+		nil,
+		config.HTTPConfig{},
+		config.SelfImprovementConfig{FeedbackAuthorAllowlist: []string{"maintainer"}},
+		zerolog.Nop(),
+	)
+	body := []byte(`{
+		"action":"created",
+		"comment":{"id":123,"html_url":"https://github.com/owner/repo/issues/7#issuecomment-123","body":"Please remember this /agents improve","created_at":"2026-05-30T10:00:00Z","updated_at":"2026-05-30T10:00:00Z"},
+		"issue":{"number":7},
+		"repository":{"full_name":"owner/repo"},
+		"sender":{"login":"maintainer"}
+	}`)
+	w := httptest.NewRecorder()
+
+	h.handleIssueCommentEvent(context.Background(), w, body, "delivery-1")
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusAccepted)
+	}
+	rows, err := st.ListSelfImprovementFeedback("team-a", "new", 10)
+	if err != nil {
+		t.Fatalf("list feedback: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("feedback count = %d, want 1", len(rows))
+	}
+	got := rows[0]
+	if got.SourceType != "issue_comment" || got.GitHubCommentID != 123 || !got.AuthorAuthorized || got.Status != "new" {
+		t.Fatalf("feedback = %+v, want authorized new issue comment 123", got)
+	}
+	if got.IssueNumber != 7 || got.PRNumber != 0 || got.LinkConfidence != "unresolved" {
+		t.Fatalf("feedback context = %+v, want issue #7 unresolved", got)
+	}
+}
+
+func TestAIImprovementFeedbackUnauthorizedAuthorIsIgnored(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
+	if err := st.UpsertRepo(fleet.Repo{Name: "owner/repo", Enabled: true}); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+
+	dc := workflow.NewDataChannels(1, st)
+	h := NewHandler(
+		NewDeliveryStore(10*time.Minute),
+		dc,
+		st,
+		nil,
+		config.HTTPConfig{},
+		config.SelfImprovementConfig{FeedbackAuthorAllowlist: []string{"maintainer"}},
+		zerolog.Nop(),
+	)
+	body := []byte(`{
+		"action":"created",
+		"comment":{"id":124,"body":"Please remember this /agents improve"},
+		"issue":{"number":7},
+		"repository":{"full_name":"owner/repo"},
+		"sender":{"login":"drive-by"}
+	}`)
+	w := httptest.NewRecorder()
+
+	h.handleIssueCommentEvent(context.Background(), w, body, "delivery-1")
+
+	rows, err := st.ListSelfImprovementFeedback("", "", 10)
+	if err != nil {
+		t.Fatalf("list feedback: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("feedback count = %d, want 1", len(rows))
+	}
+	if rows[0].AuthorAuthorized || rows[0].Status != "ignored" {
+		t.Fatalf("feedback = %+v, want unauthorized ignored", rows[0])
+	}
+}
+
+func TestEditedIssueCommentWithoutAIImprovementTagIgnoresExistingFeedback(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
+	if err := st.UpsertRepo(fleet.Repo{Name: "owner/repo", Enabled: true}); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+
+	dc := workflow.NewDataChannels(1, st)
+	h := NewHandler(
+		NewDeliveryStore(10*time.Minute),
+		dc,
+		st,
+		nil,
+		config.HTTPConfig{},
+		config.SelfImprovementConfig{FeedbackAuthorAllowlist: []string{"maintainer"}},
+		zerolog.Nop(),
+	)
+	created := []byte(`{
+		"action":"created",
+		"comment":{"id":125,"body":"Please remember this /agents improve"},
+		"issue":{"number":7},
+		"repository":{"full_name":"owner/repo"},
+		"sender":{"login":"maintainer"}
+	}`)
+	h.handleIssueCommentEvent(context.Background(), httptest.NewRecorder(), created, "delivery-1")
+
+	edited := []byte(`{
+		"action":"edited",
+		"comment":{"id":125,"body":"Please disregard this"},
+		"issue":{"number":7},
+		"repository":{"full_name":"owner/repo"},
+		"sender":{"login":"maintainer"}
+	}`)
+	w := httptest.NewRecorder()
+	h.handleIssueCommentEvent(context.Background(), w, edited, "delivery-2")
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusAccepted)
+	}
+	rows, err := st.ListSelfImprovementFeedback("", "", 10)
+	if err != nil {
+		t.Fatalf("list feedback: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("feedback count = %d, want 1", len(rows))
+	}
+	if rows[0].Status != store.FeedbackStatusIgnored || rows[0].RawBody != "Please disregard this" {
+		t.Fatalf("feedback = %+v, want ignored row with edited body", rows[0])
+	}
+}
+
+func TestImproveCommandIgnoresFencedCodeBlocks(t *testing.T) {
+	t.Parallel()
+	body := "```text\n/agents improve\n```\noutside"
+	if containsImproveCommand(body) {
+		t.Fatalf("command inside fenced code block should be ignored")
+	}
+	if !containsImproveCommand("outside /agents improve.") {
+		t.Fatalf("command outside code block should be detected")
+	}
+	if containsImproveCommand("outside /agents analyze") {
+		t.Fatalf("different slash command should not be detected")
 	}
 }

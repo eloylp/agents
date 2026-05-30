@@ -99,7 +99,7 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
     configH  := daemonconfig.New(st, cfg.Daemon, logger)
     observeH := daemonobserve.New(obs, st, sched, engine, st.NewMemoryReader(), logger)
     runnersH := daemonrunners.New(st, channels, obs, logger)
-    webhookH := webhook.NewHandler(deliveryStore, channels, st, cfg.Daemon.HTTP, logger)
+    webhookH := webhook.NewHandler(deliveryStore, channels, st, obs, cfg.Daemon.HTTP, cfg.Daemon.SelfImprovement, logger)
 
     // 4. processor over the queue
     processor := workflow.NewProcessor(channels, engine, workers, shutdown, logger)

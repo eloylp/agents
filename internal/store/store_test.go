@@ -123,6 +123,205 @@ func openTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
+func TestSelfImprovementFeedbackUpsertAndList(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
+
+	created := time.Date(2026, 5, 30, 10, 0, 0, 0, time.UTC)
+	first, err := st.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:               "team-a",
+		RepoOwner:                 "owner",
+		RepoName:                  "repo",
+		SourceType:                "issue_comment",
+		GitHubCommentID:           123,
+		GitHubDeliveryID:          "delivery-1",
+		SourceURL:                 "https://github.com/owner/repo/issues/7#issuecomment-123",
+		AuthorLogin:               "maintainer",
+		AuthorAuthorized:          true,
+		IssueNumber:               7,
+		RawBody:                   "first /agents improve",
+		GitHubCreatedAt:           &created,
+		LinkedSpanID:              "span-1",
+		LinkedEventID:             "event-1",
+		LinkedAgentID:             "agent-1",
+		LinkedAgentName:           "coder",
+		LinkedPromptVersionID:     "prompt-v1",
+		LinkedSkillVersionIDs:     []string{"skill-v1"},
+		LinkedGuardrailVersionIDs: []string{"guardrail-v1"},
+		LinkConfidence:            "exact",
+	})
+	if err != nil {
+		t.Fatalf("insert feedback: %v", err)
+	}
+	if first.ID == 0 || first.Status != "new" || !first.AuthorAuthorized {
+		t.Fatalf("inserted feedback = %+v, want new authorized row", first)
+	}
+
+	if _, err := st.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:      "team-a",
+		RepoOwner:        "owner",
+		RepoName:         "repo",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  123,
+		GitHubDeliveryID: "delivery-2",
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      7,
+		RawBody:          "edited /agents improve",
+		LinkConfidence:   "unresolved",
+		LinkDiagnostics:  "no matching run attribution snapshot",
+	}); err != nil {
+		t.Fatalf("update feedback: %v", err)
+	}
+
+	rows, err := st.ListSelfImprovementFeedback("team-a", "", 10)
+	if err != nil {
+		t.Fatalf("list feedback: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("feedback rows = %d, want 1", len(rows))
+	}
+	got := rows[0]
+	if got.ID != first.ID || got.RawBody != "edited /agents improve" || got.GitHubDeliveryID != "delivery-2" {
+		t.Fatalf("updated feedback = %+v, want same row with edited body", got)
+	}
+	if got.LinkedSpanID != "" || got.LinkConfidence != "unresolved" {
+		t.Fatalf("updated attribution = %+v, want unresolved with no linked span", got)
+	}
+}
+
+func TestSelfImprovementFeedbackUpsertPreservesStatusOnRedelivery(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
+
+	if _, err := st.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:      "team-a",
+		RepoOwner:        "owner",
+		RepoName:         "repo",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  123,
+		GitHubDeliveryID: "delivery-1",
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      7,
+		RawBody:          "first /agents improve",
+		Status:           "analyzed",
+	}); err != nil {
+		t.Fatalf("insert feedback: %v", err)
+	}
+	if _, err := st.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:      "team-a",
+		RepoOwner:        "owner",
+		RepoName:         "repo",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  123,
+		GitHubDeliveryID: "delivery-2",
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      7,
+		RawBody:          "first /agents improve",
+	}); err != nil {
+		t.Fatalf("redeliver feedback: %v", err)
+	}
+	rows, err := st.ListSelfImprovementFeedback("team-a", "", 10)
+	if err != nil {
+		t.Fatalf("list feedback: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("feedback rows = %d, want 1", len(rows))
+	}
+	if rows[0].Status != "analyzed" {
+		t.Fatalf("redelivered status = %q, want analyzed", rows[0].Status)
+	}
+
+	if _, err := st.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:      "team-a",
+		RepoOwner:        "owner",
+		RepoName:         "repo",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  123,
+		GitHubDeliveryID: "delivery-3",
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      7,
+		RawBody:          "edited /agents improve",
+	}); err != nil {
+		t.Fatalf("edit feedback: %v", err)
+	}
+	rows, err = st.ListSelfImprovementFeedback("team-a", "", 10)
+	if err != nil {
+		t.Fatalf("list edited feedback: %v", err)
+	}
+	if rows[0].Status != store.FeedbackStatusNew || rows[0].RawBody != "edited /agents improve" {
+		t.Fatalf("edited feedback = %+v, want new status with edited body", rows[0])
+	}
+}
+
+func TestIgnoreSelfImprovementFeedbackUpdatesExistingRowOnly(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
+
+	ignored, err := st.IgnoreSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:     "team-a",
+		SourceType:      "issue_comment",
+		GitHubCommentID: 123,
+		RawBody:         "no tag",
+	})
+	if err != nil {
+		t.Fatalf("ignore missing feedback: %v", err)
+	}
+	if ignored {
+		t.Fatalf("ignore missing feedback = true, want false")
+	}
+	if _, err := st.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:      "team-a",
+		RepoOwner:        "owner",
+		RepoName:         "repo",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  123,
+		GitHubDeliveryID: "delivery-1",
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      7,
+		RawBody:          "first /agents improve",
+		Status:           "analyzed",
+	}); err != nil {
+		t.Fatalf("insert feedback: %v", err)
+	}
+	ignored, err = st.IgnoreSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:      "team-a",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  123,
+		GitHubDeliveryID: "delivery-2",
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      7,
+		RawBody:          "tag removed",
+	})
+	if err != nil {
+		t.Fatalf("ignore feedback: %v", err)
+	}
+	if !ignored {
+		t.Fatalf("ignore feedback = false, want true")
+	}
+	rows, err := st.ListSelfImprovementFeedback("team-a", "", 10)
+	if err != nil {
+		t.Fatalf("list feedback: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("feedback rows = %d, want 1", len(rows))
+	}
+	if rows[0].Status != store.FeedbackStatusIgnored || rows[0].RawBody != "tag removed" {
+		t.Fatalf("ignored feedback = %+v, want ignored with edited body", rows[0])
+	}
+}
+
 // TestGuardrailsSeed verifies that migrations 010, 012, 013, and 016 created
 // the generic guardrails table and seeded the built-in rows with content
 // equal to default_content (so a "Reset to default" from the unedited

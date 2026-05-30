@@ -131,6 +131,7 @@ func TestBuildRouterRegistersExpectedRoutes(t *testing.T) {
 		{http.MethodGet, "/graph"},
 		{http.MethodGet, "/dispatches"},
 		{http.MethodGet, "/memory/coder/owner_repo"},
+		{http.MethodGet, "/improvements/feedback"},
 		{http.MethodGet, "/runners"},
 		{http.MethodDelete, "/runners/1"},
 		{http.MethodPost, "/runners/1/retry"},

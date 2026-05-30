@@ -198,6 +198,18 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolListEvents(deps),
 		)
 		srv.AddTool(
+			mcpgo.NewTool("list_improvement_feedback",
+				mcpgo.WithDescription("List stored /agents improve feedback events for one workspace. These are raw evidence records; recommendation generation is a later human-reviewed step."),
+				mcpgo.WithString("workspace",
+					mcpgo.Description("Optional workspace id or display name. Defaults to default."),
+				),
+				mcpgo.WithString("status",
+					mcpgo.Description("Optional status filter such as new or ignored."),
+				),
+			),
+			toolListImprovementFeedback(deps),
+		)
+		srv.AddTool(
 			mcpgo.NewTool("list_traces",
 				mcpgo.WithDescription("List recent agent run spans for one workspace. Ordered newest→oldest, capped at 200. Each span records backend, repo, status, duration, and summary. Omitted workspace defaults to default."),
 				mcpgo.WithString("workspace",

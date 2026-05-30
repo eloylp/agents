@@ -54,6 +54,18 @@ func toolListEvents(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
+func toolListImprovementFeedback(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace, _ := trimmedStringOptional(req, "workspace")
+		status, _ := trimmedStringOptional(req, "status")
+		rows, err := deps.Store.ListSelfImprovementFeedback(workspace, status, 100)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("list improvement feedback", err), nil
+		}
+		return jsonResult(nilSafe(rows))
+	}
+}
+
 // toolListTraces returns the 200 most recent spans verbatim. The Span JSON
 // shape already matches GET /traces so clients can parse both surfaces with
 // the same decoder.

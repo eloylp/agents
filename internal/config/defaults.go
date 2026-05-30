@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"slices"
 	"strings"
 
 	"github.com/eloylp/agents/internal/fleet"
@@ -60,6 +62,12 @@ func (c *Config) applyDefaults() {
 	setDefault(&c.Daemon.Proxy.Path, defaultProxyPath)
 	setDefaultInt(&c.Daemon.Proxy.Upstream.TimeoutSeconds, defaultProxyTimeoutSeconds)
 
+	if len(c.Daemon.SelfImprovement.FeedbackAuthorAllowlist) == 0 {
+		if actor := strings.TrimSpace(os.Getenv("GITHUB_ACTOR")); actor != "" {
+			c.Daemon.SelfImprovement.FeedbackAuthorAllowlist = []string{actor}
+		}
+	}
+
 	fleet.NormalizeRuntimeSettings(&c.Runtime)
 
 	// backend defaults
@@ -111,6 +119,11 @@ func (c *Config) normalize() {
 	// Log.
 	c.Daemon.Log.Level = strings.ToLower(strings.TrimSpace(c.Daemon.Log.Level))
 	c.Daemon.Log.Format = strings.ToLower(strings.TrimSpace(c.Daemon.Log.Format))
+
+	for i := range c.Daemon.SelfImprovement.FeedbackAuthorAllowlist {
+		c.Daemon.SelfImprovement.FeedbackAuthorAllowlist[i] = strings.ToLower(strings.TrimSpace(c.Daemon.SelfImprovement.FeedbackAuthorAllowlist[i]))
+	}
+	c.Daemon.SelfImprovement.FeedbackAuthorAllowlist = slices.Compact(c.Daemon.SelfImprovement.FeedbackAuthorAllowlist)
 }
 
 // setDefault writes def into *dst if *dst is empty (after trimming).
