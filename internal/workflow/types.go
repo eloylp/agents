@@ -32,6 +32,7 @@ type QueuedEvent struct {
 // before the event is enqueued.
 type Event struct {
 	ID          string // unique event identifier; delivery ID for webhook events
+	QueueID     int64  // event_queue row id, set by the processor before handling
 	WorkspaceID string // workspace that owns this run; empty means default for compatibility
 	Repo        RepoRef
 	Kind        string         // e.g. "issues.labeled", "pull_request.opened", "push", "agent.dispatch"

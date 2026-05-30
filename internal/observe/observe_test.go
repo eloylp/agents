@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -629,6 +630,168 @@ func TestStoreRecordSpanPersistsAndPublishesToSSE(t *testing.T) {
 		}
 	default:
 		t.Fatal("want SSE message on TracesSSE, got nothing")
+	}
+}
+
+func TestResolveRunAttributionExactMetadata(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+	start := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	comment := workflow.RunAttribution{
+		WorkspaceID: "default",
+		SpanID:      "span-exact",
+		AgentID:     "agent-1",
+	}.HiddenComment()
+	s.RecordSpan(workflow.SpanInput{
+		SpanID: "span-exact", WorkspaceID: "default", Agent: "coder", Backend: "codex",
+		Repo: "owner/repo", Number: 42, EventKind: "issues.labeled", StartedAt: start, FinishedAt: start.Add(time.Second), Status: "success",
+		Attribution: workflow.RunAttribution{
+			WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 42,
+			SpanID: "span-exact", AgentName: "coder", BackendName: "codex", PromptRef: "coder",
+		},
+	})
+
+	got := s.ResolveRunAttribution(observe.AttributionQuery{
+		WorkspaceID: "default",
+		Body:        "body " + comment,
+	})
+	if got.Confidence != observe.AttributionExact {
+		t.Fatalf("Confidence = %q, want %q (%s)", got.Confidence, observe.AttributionExact, got.Diagnostic)
+	}
+	if got.Snapshot == nil || got.Snapshot.SpanID != "span-exact" {
+		t.Fatalf("Snapshot = %+v, want span-exact", got.Snapshot)
+	}
+}
+
+func TestResolveRunAttributionExactMetadataRequiresWorkspaceMatch(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+	start := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	s.RecordSpan(workflow.SpanInput{
+		SpanID: "span-workspace-a", WorkspaceID: "workspace-a", Agent: "coder", Backend: "codex",
+		Repo: "owner/repo", Number: 42, EventKind: "issues.labeled", StartedAt: start, FinishedAt: start.Add(time.Second), Status: "success",
+		Attribution: workflow.RunAttribution{
+			WorkspaceID: "workspace-a", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 42,
+			SpanID: "span-workspace-a", AgentName: "coder", BackendName: "codex",
+		},
+	})
+
+	got := s.ResolveRunAttribution(observe.AttributionQuery{
+		WorkspaceID: "workspace-b",
+		Body:        `<!-- agents-run: {"workspace":"workspace-a","span_id":"span-workspace-a","agent_id":"agent-1"} -->`,
+	})
+	if got.Confidence != observe.AttributionUnresolved {
+		t.Fatalf("Confidence = %q, want %q", got.Confidence, observe.AttributionUnresolved)
+	}
+	if got.Snapshot != nil {
+		t.Fatalf("Snapshot = %+v, want nil", got.Snapshot)
+	}
+	if !strings.Contains(got.Diagnostic, `metadata names unknown span "span-workspace-a"`) {
+		t.Fatalf("Diagnostic = %q, want unknown span", got.Diagnostic)
+	}
+}
+
+func TestResolveRunAttributionExactCommitTrailer(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+	start := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	s.RecordSpan(workflow.SpanInput{
+		SpanID: "span-trailer", Agent: "coder", Backend: "codex", Repo: "owner/repo", Number: 42,
+		EventKind: "issues.labeled", StartedAt: start, FinishedAt: start.Add(time.Second), Status: "success",
+	})
+
+	got := s.ResolveRunAttribution(observe.AttributionQuery{
+		WorkspaceID:   "default",
+		CommitMessage: "fix: thing\n\nAgents-Run: span-trailer\nAgents-Agent: coder\n",
+	})
+	if got.Confidence != observe.AttributionExact {
+		t.Fatalf("Confidence = %q, want %q (%s)", got.Confidence, observe.AttributionExact, got.Diagnostic)
+	}
+	if got.Snapshot == nil || got.Snapshot.SpanID != "span-trailer" {
+		t.Fatalf("Snapshot = %+v, want span-trailer", got.Snapshot)
+	}
+}
+
+func TestResolveRunAttributionExactUnknownSpanDiagnostics(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+
+	for _, tc := range []struct {
+		name       string
+		query      observe.AttributionQuery
+		diagnostic string
+	}{
+		{
+			name:       "metadata",
+			query:      observe.AttributionQuery{WorkspaceID: "default", Body: `<!-- agents-run: {"workspace":"default","span_id":"missing-span"} -->`},
+			diagnostic: `metadata names unknown span "missing-span"`,
+		},
+		{
+			name:       "commit trailer",
+			query:      observe.AttributionQuery{WorkspaceID: "default", CommitMessage: "fix: thing\n\nAgents-Run: missing-span\n"},
+			diagnostic: `commit trailer names unknown span "missing-span"`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := s.ResolveRunAttribution(tc.query)
+			if got.Confidence != observe.AttributionUnresolved {
+				t.Fatalf("Confidence = %q, want %q", got.Confidence, observe.AttributionUnresolved)
+			}
+			if got.Mode != "exact" {
+				t.Fatalf("Mode = %q, want exact", got.Mode)
+			}
+			if got.Diagnostic != tc.diagnostic {
+				t.Fatalf("Diagnostic = %q, want %q", got.Diagnostic, tc.diagnostic)
+			}
+		})
+	}
+}
+
+func TestResolveRunAttributionInferredAmbiguousAndUnresolved(t *testing.T) {
+	t.Parallel()
+	s := testDB(t)
+	base := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	record := func(span string, number int, at time.Time, sha string) {
+		t.Helper()
+		s.RecordSpan(workflow.SpanInput{
+			SpanID: span, Agent: "coder", Backend: "codex", Repo: "owner/repo", Number: number,
+			EventKind: "pull_request.labeled", StartedAt: at, FinishedAt: at.Add(time.Second), Status: "success",
+			Attribution: workflow.RunAttribution{
+				WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: number,
+				SpanID: span, AgentName: "coder", BackendName: "codex", HeadSHA: sha,
+			},
+		})
+	}
+	record("span-a", 7, base, "abc")
+	record("span-b", 8, base.Add(time.Minute), "def")
+	record("span-c", 8, base.Add(2*time.Minute), "def")
+
+	inferred := s.ResolveRunAttribution(observe.AttributionQuery{
+		WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 7,
+		HeadSHA: "abc", At: base.Add(30 * time.Second), Window: 2 * time.Minute,
+	})
+	if inferred.Confidence != observe.AttributionInferred {
+		t.Fatalf("inferred Confidence = %q, want %q (%s)", inferred.Confidence, observe.AttributionInferred, inferred.Diagnostic)
+	}
+	if inferred.Snapshot == nil || inferred.Snapshot.SpanID != "span-a" {
+		t.Fatalf("inferred Snapshot = %+v, want span-a", inferred.Snapshot)
+	}
+
+	ambiguous := s.ResolveRunAttribution(observe.AttributionQuery{
+		WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 8,
+		HeadSHA: "def", At: base.Add(time.Minute), Window: 5 * time.Minute,
+	})
+	if ambiguous.Confidence != observe.AttributionUnresolved || !strings.Contains(ambiguous.Diagnostic, "ambiguous") {
+		t.Fatalf("ambiguous result = %+v, want unresolved ambiguous", ambiguous)
+	}
+
+	unresolved := s.ResolveRunAttribution(observe.AttributionQuery{
+		WorkspaceID: "default", RepoOwner: "owner", RepoName: "repo", IssueOrPRNumber: 99,
+		At: base, Window: time.Minute,
+	})
+	if unresolved.Confidence != observe.AttributionUnresolved {
+		t.Fatalf("unresolved Confidence = %q, want %q", unresolved.Confidence, observe.AttributionUnresolved)
 	}
 }
 

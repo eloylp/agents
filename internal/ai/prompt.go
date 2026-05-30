@@ -42,6 +42,10 @@ type PromptContext struct {
 	Reason        string // reason provided by the dispatching agent
 	RootEventID   string // ID of the root (non-dispatch) event that started the chain
 	DispatchDepth int    // 0 for direct triggers; increments with each dispatch hop
+
+	// RunAttributionComment is a public-safe hidden HTML comment identifying
+	// this run. Agents should include it in GitHub content they author.
+	RunAttributionComment string
 }
 
 // RenderAgentPrompt composes the prompt for an agent and returns it as a
@@ -176,6 +180,11 @@ func renderRuntimeContext(ctx PromptContext) string {
 			fmt.Fprintf(&b, "Root event ID: %s\n", ctx.RootEventID)
 		}
 		fmt.Fprintf(&b, "Dispatch depth: %d\n", ctx.DispatchDepth)
+	}
+	if ctx.RunAttributionComment != "" {
+		fmt.Fprintf(&b, "Run attribution metadata: %s\n", ctx.RunAttributionComment)
+		b.WriteString("When you create or update a GitHub pull request body or GitHub comment for this run, include that exact hidden HTML comment in the content when feasible.\n")
+		b.WriteString("For commits authored for this run, add commit trailers `Agents-Run: <span_id>` and `Agents-Agent: <agent_name>` using the values in the metadata.\n")
 	}
 	if len(ctx.Payload) > 0 {
 		// Sort keys for deterministic output.

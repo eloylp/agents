@@ -54,6 +54,9 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		parentSpanID = payload.ParentSpanID
 	}
 
+	spanID := GenEventID()
+	attribution := buildRunAttribution(ev, agent, backend, spanID)
+
 	// Serialise the read/run/write sequence for this (agent, repo) pair to
 	// prevent a lost-update race on memory. Without this lock two overlapping
 	// runs (cron tick + dispatch, two manual triggers, or any combination)
@@ -117,19 +120,20 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	guardrailVersionIDs := catalogGuardrailVersionIDs(guardrails)
 
 	rendered, err := ai.RenderAgentPrompt(agent, promptBody, skillsForRun, guardrails, ai.PromptContext{
-		Repo:          ev.Repo.FullName,
-		Number:        ev.Number,
-		Backend:       backend,
-		EventKind:     ev.Kind,
-		Actor:         ev.Actor,
-		Payload:       promptPayload,
-		Roster:        roster,
-		InvokedBy:     invokedBy,
-		Reason:        reason,
-		RootEventID:   rootEventID,
-		DispatchDepth: dispatchDepth,
-		Memory:        existingMemory,
-		HasMemory:     memoryEnabled,
+		Repo:                  ev.Repo.FullName,
+		Number:                ev.Number,
+		Backend:               backend,
+		EventKind:             ev.Kind,
+		Actor:                 ev.Actor,
+		Payload:               promptPayload,
+		Roster:                roster,
+		InvokedBy:             invokedBy,
+		Reason:                reason,
+		RootEventID:           rootEventID,
+		DispatchDepth:         dispatchDepth,
+		Memory:                existingMemory,
+		HasMemory:             memoryEnabled,
+		RunAttributionComment: attribution.HiddenComment(),
 	})
 	if err != nil {
 		return fmt.Errorf("agent %q: render prompt: %w", agent.Name, err)
@@ -148,7 +152,6 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	}
 
 	spanStart := time.Now()
-	spanID := GenEventID()
 	composedPrompt := rendered.System
 	if rendered.User != "" {
 		if composedPrompt != "" {
@@ -180,7 +183,9 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 					Repo:                ev.Repo.FullName,
 					EventKind:           ev.Kind,
 					InvokedBy:           invokedBy,
+					Attribution:         attribution,
 					Number:              ev.Number,
+					EventQueueID:        ev.QueueID,
 					DispatchDepth:       dispatchDepth,
 					QueueWaitMs:         queueWaitMs,
 					StartedAt:           spanStart,
@@ -279,7 +284,9 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 			Repo:                ev.Repo.FullName,
 			EventKind:           ev.Kind,
 			InvokedBy:           invokedBy,
+			Attribution:         attribution,
 			Number:              ev.Number,
+			EventQueueID:        ev.QueueID,
 			DispatchDepth:       dispatchDepth,
 			QueueWaitMs:         queueWaitMs,
 			ArtifactsCount:      len(resp.Artifacts),

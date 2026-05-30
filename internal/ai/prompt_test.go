@@ -6,6 +6,7 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/workflow"
 )
 
 // renderSystem is a test helper that returns the System part of a rendered
@@ -100,6 +101,44 @@ func TestRenderAgentPromptSystemAndUserAreSeparate(t *testing.T) {
 		}
 		if !strings.Contains(got.User, runtimeToken) {
 			t.Errorf("runtime token %q missing from User:\n%s", runtimeToken, got.User)
+		}
+	}
+}
+
+func TestRenderAgentPromptIncludesRunAttributionContract(t *testing.T) {
+	t.Parallel()
+	comment := workflow.RunAttribution{
+		WorkspaceID:     "default",
+		RepoOwner:       "owner",
+		RepoName:        "repo",
+		IssueOrPRNumber: 42,
+		EventID:         "event-1",
+		EventQueueID:    123,
+		SpanID:          "span-1",
+		AgentID:         "agent-1",
+		AgentName:       "coder",
+		BackendID:       "codex",
+		BackendName:     "codex",
+		PromptVersionID: "prompt-v1",
+		PromptRef:       "coder",
+		SkillVersionIDs: []string{"skill-v1"},
+		HeadSHA:         "abc123",
+		Branch:          "fix/example",
+	}.HiddenComment()
+	if want := `<!-- agents-run: {"workspace":"default","span_id":"span-1","agent_id":"agent-1"} -->`; comment != want {
+		t.Fatalf("HiddenComment() = %q, want %q", comment, want)
+	}
+	got := renderUser(t, fleet.Agent{Name: "coder"}, "Build.", nil, ai.PromptContext{
+		Repo: "owner/repo", Number: 42, RunAttributionComment: comment,
+	})
+	for _, want := range []string{
+		"Run attribution metadata: " + comment,
+		"include that exact hidden HTML comment",
+		"Agents-Run: <span_id>",
+		"Agents-Agent: <agent_name>",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("User prompt missing %q:\n%s", want, got)
 		}
 	}
 }

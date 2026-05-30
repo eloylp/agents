@@ -83,6 +83,7 @@ func (p *Processor) runWorker(ctx context.Context, wg *sync.WaitGroup) {
 	st := p.channels.Store()
 	for qe := range p.channels.EventChan() {
 		ev := qe.Event
+		ev.QueueID = qe.ID
 		if err := st.MarkEventStarted(qe.ID); err != nil {
 			p.logger.Warn().Err(err).Int64("event_id", qe.ID).Msg("mark event started failed")
 		}

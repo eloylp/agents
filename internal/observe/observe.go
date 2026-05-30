@@ -778,6 +778,7 @@ func (s *Store) RecordSpan(in workflow.SpanInput) {
 		if err != nil {
 			log.Printf("observe: persist trace %s: %v", sp.SpanID, err)
 		}
+		s.recordRunAttribution(in, sp.StartedAt)
 	}
 	if b, err := sseData(sp); err == nil {
 		s.TracesSSE.Publish(b)
