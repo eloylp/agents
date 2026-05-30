@@ -3387,6 +3387,51 @@ func TestStoreCRUDCatalogVersionPublishRejectsWrongAsset(t *testing.T) {
 	}
 }
 
+func TestStoreCRUDPromptPatchCanCreateAttributedProposalVersion(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
+		"name": "coder", "description": "v1", "content": "prompt v1",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST prompt: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var prompt storePromptJSON
+	if err := json.NewDecoder(rr.Body).Decode(&prompt); err != nil {
+		t.Fatalf("decode prompt: %v", err)
+	}
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/prompts/"+prompt.ID, map[string]any{
+		"content":     "prompt v2",
+		"publish":     false,
+		"state":       "proposal",
+		"source_type": "feedback_recommendation",
+		"source_ref":  "rec_123",
+		"author":      "assistant",
+		"changelog":   "tighten guidance from review feedback",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH prompt proposal: got %d, %s", rr.Code, rr.Body.String())
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodGet, "/prompts/"+prompt.ID+"/versions", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET prompt versions: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var versions []fleet.CatalogVersion
+	if err := json.NewDecoder(rr.Body).Decode(&versions); err != nil {
+		t.Fatalf("decode versions: %v", err)
+	}
+	if len(versions) < 2 {
+		t.Fatalf("versions len = %d, want at least 2: %+v", len(versions), versions)
+	}
+	got := versions[0]
+	if got.State != "proposal" || got.SourceType != "feedback_recommendation" || got.SourceRef != "rec_123" ||
+		got.Author != "assistant" || got.Changelog != "tighten guidance from review feedback" {
+		t.Fatalf("proposal metadata = %+v", got)
+	}
+}
+
 // ── PATCH /backends/{name}, superset shape ─────────────────────────
 
 func TestStoreCRUDBackendPatchFullShape(t *testing.T) {

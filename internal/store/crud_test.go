@@ -577,6 +577,65 @@ func TestPromptDraftDoesNotAffectCurrentUntilPublished(t *testing.T) {
 	}
 }
 
+func TestCreateCatalogProposalVersionsRecordSourceMetadata(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "proposal-prompt", Description: "first", Content: "body v1"})
+	if err != nil {
+		t.Fatalf("UpsertPrompt: %v", err)
+	}
+	if err := store.UpsertSkill(db, "proposal-skill", fleet.Skill{Name: "proposal-skill", Prompt: "skill v1"}); err != nil {
+		t.Fatalf("UpsertSkill: %v", err)
+	}
+	guardrail := fleet.Guardrail{Name: "proposal-guardrail", Description: "first", Content: "guardrail v1", Enabled: true, Position: 10}
+	if err := store.UpsertGuardrail(db, guardrail); err != nil {
+		t.Fatalf("UpsertGuardrail: %v", err)
+	}
+
+	meta := fleet.CatalogVersionMetadata{
+		State:      "proposal",
+		SourceType: "feedback_recommendation",
+		SourceRef:  "rec_123",
+		Author:     "assistant",
+		Changelog:  "tighten guidance from review feedback",
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin proposal tx: %v", err)
+	}
+	promptVersion, err := store.CreatePromptDraftTx(tx, prompt.ID, "second", "body v2", meta)
+	if err != nil {
+		tx.Rollback()
+		t.Fatalf("CreatePromptDraftTx: %v", err)
+	}
+	skillVersion, err := store.CreateSkillDraftTx(tx, "proposal-skill", "skill v2", meta)
+	if err != nil {
+		tx.Rollback()
+		t.Fatalf("CreateSkillDraftTx: %v", err)
+	}
+	guardrailVersion, err := store.CreateGuardrailDraftTx(tx, "guardrail_proposal-guardrail", fleet.Guardrail{
+		Description: "second",
+		Content:     "guardrail v2",
+		Enabled:     true,
+		Position:    11,
+	}, meta)
+	if err != nil {
+		tx.Rollback()
+		t.Fatalf("CreateGuardrailDraftTx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit proposal tx: %v", err)
+	}
+
+	for _, version := range []fleet.CatalogVersion{promptVersion, skillVersion, guardrailVersion} {
+		if version.State != "proposal" || version.SourceType != meta.SourceType || version.SourceRef != meta.SourceRef ||
+			version.Author != meta.Author || version.Changelog != meta.Changelog {
+			t.Fatalf("proposal metadata = %+v, want source metadata %+v", version, meta)
+		}
+	}
+}
+
 func TestCatalogDraftPublishPaths(t *testing.T) {
 	t.Parallel()
 
