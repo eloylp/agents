@@ -243,7 +243,7 @@ func TestIssueCommentAIImprovementFeedbackStoredForAllowlistedAuthor(t *testing.
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusAccepted)
 	}
-	rows, err := st.ListSelfImprovementFeedback("team-a", "new", 10)
+	rows, err := st.ListSelfImprovementFeedback("team-a", store.FeedbackStatusAnalyzed, 10)
 	if err != nil {
 		t.Fatalf("list feedback: %v", err)
 	}
@@ -251,11 +251,18 @@ func TestIssueCommentAIImprovementFeedbackStoredForAllowlistedAuthor(t *testing.
 		t.Fatalf("feedback count = %d, want 1", len(rows))
 	}
 	got := rows[0]
-	if got.SourceType != "issue_comment" || got.GitHubCommentID != 123 || !got.AuthorAuthorized || got.Status != "new" {
-		t.Fatalf("feedback = %+v, want authorized new issue comment 123", got)
+	if got.SourceType != "issue_comment" || got.GitHubCommentID != 123 || !got.AuthorAuthorized || got.Status != store.FeedbackStatusAnalyzed {
+		t.Fatalf("feedback = %+v, want authorized analyzed issue comment 123", got)
 	}
 	if got.IssueNumber != 7 || got.PRNumber != 0 || got.LinkConfidence != "unresolved" {
 		t.Fatalf("feedback context = %+v, want issue #7 unresolved", got)
+	}
+	recs, err := st.ListSelfImprovementRecommendations("team-a", "", 10)
+	if err != nil {
+		t.Fatalf("list recommendations: %v", err)
+	}
+	if len(recs) != 1 || recs[0].FeedbackEventID != got.ID || recs[0].Status != store.RecommendationStatusNeedsUserInput {
+		t.Fatalf("recommendations = %+v, want one review-only recommendation for feedback", recs)
 	}
 }
 

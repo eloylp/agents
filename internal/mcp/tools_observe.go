@@ -12,6 +12,7 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/store"
 )
 
 // mcpGraphNode mirrors the node payload used by GET /graph so consumers
@@ -63,6 +64,75 @@ func toolListImprovementFeedback(deps Deps) server.ToolHandlerFunc {
 			return mcpgo.NewToolResultErrorFromErr("list improvement feedback", err), nil
 		}
 		return jsonResult(nilSafe(rows))
+	}
+}
+
+func toolListImprovementRecommendations(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace, _ := trimmedStringOptional(req, "workspace")
+		status, _ := trimmedStringOptional(req, "status")
+		rows, err := deps.Store.ListSelfImprovementRecommendations(workspace, status, 100)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("list improvement recommendations", err), nil
+		}
+		return jsonResult(nilSafe(rows))
+	}
+}
+
+func toolGetImprovementRecommendation(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id, ok := trimmedString(req, "id")
+		if !ok {
+			return mcpgo.NewToolResultError("id is required"), nil
+		}
+		rec, err := deps.Store.GetSelfImprovementRecommendation(id)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("get improvement recommendation", err), nil
+		}
+		return jsonResult(rec)
+	}
+}
+
+func toolAnalyzeImprovementFeedback(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id, ok := mcpRequiredInt64(req, "feedback_event_id")
+		if !ok {
+			return mcpgo.NewToolResultError("feedback_event_id is required"), nil
+		}
+		feedback, err := deps.Store.GetSelfImprovementFeedback(id)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("get improvement feedback", err), nil
+		}
+		in := store.RecommendationFromFeedback(feedback)
+		if prompt, err := deps.Store.ReadPrompt("prompt_self-improvement-analyst"); err == nil {
+			in.AnalyzerPromptVersionID = prompt.VersionID
+			if in.StructuredOutput != nil {
+				in.StructuredOutput["analyzer_prompt_version"] = prompt.VersionID
+			}
+		}
+		rec, err := deps.Store.UpsertSelfImprovementRecommendation(in)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("analyze improvement feedback", err), nil
+		}
+		return jsonResult(rec)
+	}
+}
+
+func toolUpdateImprovementRecommendationStatus(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id, ok := trimmedString(req, "id")
+		if !ok {
+			return mcpgo.NewToolResultError("id is required"), nil
+		}
+		status, ok := trimmedString(req, "status")
+		if !ok {
+			return mcpgo.NewToolResultError("status is required"), nil
+		}
+		rec, err := deps.Store.UpdateSelfImprovementRecommendationStatus(id, status)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("update improvement recommendation status", err), nil
+		}
+		return jsonResult(rec)
 	}
 }
 

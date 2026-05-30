@@ -1,9 +1,10 @@
 # Self-Improvement Feedback
 
 The daemon can capture maintainer review lessons from GitHub comments marked
-with `/agents improve`. This issue implements only deterministic ingestion and
-inspection. It does not invoke AI, create recommendations, or publish catalog
-changes.
+with `/agents improve`, turn authorized feedback into a durable recommendation,
+and present that recommendation for human review. The flow stays gated:
+recommendations can be accepted, rejected, deferred, or marked duplicate, but
+they do not publish catalog changes or mutate runtime behavior.
 
 Supported webhook sources:
 
@@ -32,7 +33,15 @@ run attribution when it can be resolved. Exact attribution comes from the public
 infer from repo, PR/issue number, commit SHA, and time window. Unresolved
 feedback is still stored.
 
-Inspect feedback in the dashboard under **Improvements**, through
-`GET /improvements/feedback`, or through the MCP `list_improvement_feedback`
-tool. Later recommendation and proposal flows consume these records but remain
-separate human-gated steps.
+Authorized `status=new` feedback creates one review-only recommendation record.
+The built-in `self-improvement-analyst` prompt is seeded as a catalog-visible
+global prompt so operators can inspect and customize the analyst guidance. The
+hard safety contract remains enforced by code: feedback is evidence, not a
+command; the analyzer never auto-applies, publishes, or mutates agents,
+guardrails, prompts, skills, or dispatch wiring.
+
+Inspect the workflow in the dashboard under **Improvements**, through
+`GET /improvements/feedback` and `GET /improvements/recommendations`, or through
+the MCP `list_improvement_feedback` and `list_improvement_recommendations`
+tools. Accepted recommendations remain inert until a later proposal step turns
+them into catalog proposal versions for separate human publishing.
