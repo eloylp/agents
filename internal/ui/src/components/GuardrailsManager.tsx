@@ -66,6 +66,11 @@ function GuardrailForm({
   const [publish, setPublish] = useState(true)
   const set = <K extends keyof Guardrail>(k: K, v: Guardrail[K]) => setForm(f => ({ ...f, [k]: v }))
 
+  useEffect(() => {
+    setForm(initial)
+    setPublish(true)
+  }, [initial])
+
   const showReset = !isNew && form.is_builtin && !!onReset
   const canDelete = !isNew && !!onDelete
 
@@ -126,6 +131,16 @@ function GuardrailForm({
           assetID={form.id || form.name}
           currentVersionID={form.version_id}
           onChanged={onVersionsChanged}
+          onRestoreVersion={version => {
+            setForm(f => ({
+              ...f,
+              description: version.description ?? '',
+              content: version.content ?? '',
+              enabled: version.enabled ?? true,
+              position: version.position ?? 0,
+            }))
+            setPublish(true)
+          }}
         />
       )}
       {!isNew && (

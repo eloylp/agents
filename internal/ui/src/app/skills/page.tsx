@@ -57,6 +57,12 @@ function SkillForm({
   const [publish, setPublish] = useState(true)
 
   useEffect(() => {
+    setForm(initial)
+    setSelectedScope(scopeType(initial))
+    setPublish(true)
+  }, [initial])
+
+  useEffect(() => {
     if (selectedScope !== 'repo' || !form.workspace_id) {
       setRepoOptions([])
       return
@@ -141,6 +147,10 @@ function SkillForm({
           assetID={form.id || form.name}
           currentVersionID={form.version_id}
           onChanged={onVersionsChanged}
+          onRestoreVersion={version => {
+            setForm(f => ({ ...f, prompt: version.prompt ?? '' }))
+            setPublish(true)
+          }}
         />
       )}
       {!isNew && (
@@ -395,7 +405,7 @@ export default function SkillsPage() {
       </div>
 
       {(modal === 'create' || modal === 'edit') && (
-        <Modal title={modal === 'create' ? 'Create skill' : `Edit, ${selected.name}`} onClose={() => setModal(null)}>
+        <Modal title={modal === 'create' ? 'Create skill' : `Edit, ${selected.name}`} onClose={() => setModal(null)} maxWidth={modal === 'edit' ? '1100px' : undefined}>
           <SkillForm
             initial={selected}
             isNew={modal === 'create'}

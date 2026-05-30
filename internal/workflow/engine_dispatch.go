@@ -18,20 +18,19 @@ type agentDispatchPayload struct {
 	ParentSpanID  string
 }
 
-// handleDispatchEvent fires the target agent named in the event payload
+// handleDirectAgentRunEvent fires the target agent named in the event payload
 // directly, bypassing normal binding lookup.
-func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
+func (e *Engine) handleDirectAgentRunEvent(ctx context.Context, ev Event) error {
 	targetName, err := eventTargetAgent(ev)
 	if err != nil {
 		return err
 	}
 	workspaceID := eventWorkspaceID(ev)
 
-	// Read the four entity sets fresh from SQLite for this event. The
-	// returned cfg is a per-event snapshot, no caching across events, no
-	// reload chain. Cost is one SQLite snapshot read (~111µs for typical
-	// fleet sizes); irrelevant at this daemon's traffic.
-	cfg, err := e.loadCfg()
+	// Read the workflow snapshot fresh from SQLite for this event. There is no
+	// caching across events and no reload chain. Cost is one SQLite snapshot
+	// read (~111µs for typical fleet sizes); irrelevant at this daemon's traffic.
+	cfg, err := e.loadWorkflowSnapshot()
 	if err != nil {
 		return err
 	}
@@ -57,7 +56,7 @@ func (e *Engine) handleDispatchEvent(ctx context.Context, ev Event) error {
 	// agent.dispatch events skip this block: ProcessDispatches already claimed and
 	// committed the dedup slot before enqueuing the event. Re-claiming would see
 	// the committed entry and self-suppress every dispatched run. The enqueue-side
-	// claim is the authoritative gate; handleDispatchEvent only executes it.
+	// claim is the authoritative gate; handleDirectAgentRunEvent only executes it.
 	agentsRunClaimed := false
 	if ev.Kind == "agents.run" && e.dispatcher != nil {
 		dedupRepo := dedupRepoKey(workspaceID, repo.Name)

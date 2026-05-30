@@ -91,7 +91,7 @@ These routes are always mounted and backed by the SQLite database.
 
 Workspace-local resources accept `?workspace=<id-or-name>` and default to `default` when omitted. This applies to fleet snapshots, agents, repos, bindings, graph layout, runners, events, traces, memory, and workspace-scoped token leaderboard queries. Prompt and skill catalog rows expose `workspace_id` and `repo` to express global, workspace-scoped, or repo-scoped visibility. Guardrail catalog rows expose only `workspace_id`: empty means global, set means workspace-scoped.
 
-Prompt catalog rows expose a stable public `id` plus a display `name`; the SQLite primary key behind that ref is internal. Agents accept `prompt_id`; human-facing REST writes may provide `prompt_ref` plus optional `prompt_scope` instead. `prompt_scope` is case-insensitive and accepts `global`, `workspace`, or `workspace/owner/repo`, for example `default/eloylp/agents`.
+Prompt catalog rows expose a stable public `id` plus a display `name`; the SQLite primary key behind that ref is internal. Agents accept `prompt_id`; human-facing REST writes may provide `prompt_ref` plus optional `prompt_scope` instead. `prompt_scope` is case-insensitive and accepts `global`, `workspace`, or `workspace/owner/repo`, for example `default/eloylp/agents`. Agents track the latest published prompt and skill versions by default. Set `prompt_version_id` to pin a prompt exactly, and use `skills: ["skill@2"]` to pin a skill to a published immutable version. Agent responses include `prompt_version_id` and `skill_version_ids` so REST clients can distinguish exact pins from tracking references.
 
 | Method | Path | Description |
 |---|---|---|

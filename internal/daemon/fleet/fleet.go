@@ -154,23 +154,24 @@ func (h *Handler) HandleAgentsCreate(w http.ResponseWriter, r *http.Request) {
 // ── Agent wire types ────────────────────────────────────────────────────────────────────────────────────
 
 type storeAgentJSON struct {
-	ID              string   `json:"id,omitempty"`
-	WorkspaceID     string   `json:"workspace_id,omitempty"`
-	Name            string   `json:"name"`
-	Backend         string   `json:"backend"`
-	Model           string   `json:"model,omitempty"`
-	Skills          []string `json:"skills"`
-	Prompt          *string  `json:"prompt,omitempty"`
-	PromptID        string   `json:"prompt_id,omitempty"`
-	PromptRef       string   `json:"prompt_ref,omitempty"`
-	PromptScope     string   `json:"prompt_scope,omitempty"`
-	PromptVersionID string   `json:"prompt_version_id,omitempty"`
-	ScopeType       string   `json:"scope_type,omitempty"`
-	ScopeRepo       string   `json:"scope_repo,omitempty"`
-	AllowPRs        bool     `json:"allow_prs"`
-	AllowDispatch   bool     `json:"allow_dispatch"`
-	CanDispatch     []string `json:"can_dispatch"`
-	Description     string   `json:"description"`
+	ID              string            `json:"id,omitempty"`
+	WorkspaceID     string            `json:"workspace_id,omitempty"`
+	Name            string            `json:"name"`
+	Backend         string            `json:"backend"`
+	Model           string            `json:"model,omitempty"`
+	Skills          []string          `json:"skills"`
+	SkillVersionIDs map[string]string `json:"skill_version_ids,omitempty"`
+	Prompt          *string           `json:"prompt,omitempty"`
+	PromptID        string            `json:"prompt_id,omitempty"`
+	PromptRef       string            `json:"prompt_ref,omitempty"`
+	PromptScope     string            `json:"prompt_scope,omitempty"`
+	PromptVersionID string            `json:"prompt_version_id,omitempty"`
+	ScopeType       string            `json:"scope_type,omitempty"`
+	ScopeRepo       string            `json:"scope_repo,omitempty"`
+	AllowPRs        bool              `json:"allow_prs"`
+	AllowDispatch   bool              `json:"allow_dispatch"`
+	CanDispatch     []string          `json:"can_dispatch"`
+	Description     string            `json:"description"`
 	// AllowMemory is a *bool so POST clients that omit the field get the
 	// default-true semantics (`Agent.AllowMemory == nil` → IsAllowMemory()
 	// returns true). Responses always populate it (see agentToStoreJSON) so
@@ -187,6 +188,7 @@ func agentToStoreJSON(a fleet.Agent) storeAgentJSON {
 		Backend:         a.Backend,
 		Model:           a.Model,
 		Skills:          nilSafeStrings(a.Skills),
+		SkillVersionIDs: a.SkillVersionIDs,
 		PromptID:        a.PromptID,
 		PromptRef:       a.PromptRef,
 		PromptScope:     a.PromptScope,

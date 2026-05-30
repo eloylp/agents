@@ -15,6 +15,7 @@ const links = [
   { href: '/traces/', label: 'Traces', group: 'Runtime' },
   { href: '/prompts/', label: 'Prompts', group: 'Knowledge' },
   { href: '/skills/', label: 'Skills', group: 'Knowledge' },
+  { href: '/guardrails/', label: 'Guardrails', group: 'Knowledge' },
   { href: '/memory/', label: 'Memory', group: 'Knowledge' },
   { href: '/workspaces/', label: 'Workspaces', group: 'Config' },
   { href: '/repos/', label: 'Repos', group: 'Config' },

@@ -90,11 +90,27 @@ function shortHash(hash?: string) {
   return hash ? hash.slice(0, 12) : ''
 }
 
+function shortRef(ref?: string) {
+  if (!ref) return ''
+  const match = ref.match(/[0-9a-f]{40}/i)
+  if (!match) return ref
+  if (ref.length === 40) return ref.slice(0, 7)
+  return ref.replace(match[0], match[0].slice(0, 7))
+}
+
 function formatDate(value?: string) {
   if (!value) return ''
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleString()
+}
+
+function sameTimestamp(a?: string, b?: string) {
+  if (!a || !b) return false
+  const left = new Date(a).getTime()
+  const right = new Date(b).getTime()
+  if (Number.isNaN(left) || Number.isNaN(right)) return a === b
+  return Math.abs(left - right) < 1000
 }
 
 function countRefs(refs: CatalogVersionReference[]) {
@@ -108,6 +124,19 @@ function diffLabel(type: AssetType, base?: CatalogVersion) {
   const subject = type === 'prompt' ? 'description and content' : type === 'skill' ? 'prompt' : 'content and settings'
   if (!base) return `Initial ${subject}`
   return `Diff: ${subject} against v${base.version}`
+}
+
+function isStaleDraft(version: CatalogVersion, current?: CatalogVersion) {
+  if (version.state === 'published') return false
+  return !current || version.base_version_id !== current.id
+}
+
+function versionStateLabel(version: CatalogVersion, current?: CatalogVersion) {
+  if (isStaleDraft(version, current)) return 'Never published'
+  if (version.state === 'draft') return 'Draft'
+  if (version.state === 'proposal') return 'Proposal'
+  if (version.state === 'published') return 'Published'
+  return version.state
 }
 
 function TimelineDot({ state }: { state: string }) {
@@ -124,6 +153,8 @@ function TimelineDot({ state }: { state: string }) {
         background: published ? 'var(--accent)' : 'var(--bg-card)',
         flex: '0 0 auto',
         marginTop: 3,
+        position: 'relative',
+        zIndex: 1,
         boxSizing: 'border-box',
       }}
     />
@@ -139,12 +170,13 @@ function Badge({ children }: { children: ReactNode }) {
 }
 
 export default function CatalogVersionsPanel({
-  type, assetID, currentVersionID, onChanged,
+  type, assetID, currentVersionID, onChanged, onRestoreVersion,
 }: {
   type: AssetType
   assetID: string
   currentVersionID?: string
   onChanged?: () => void
+  onRestoreVersion?: (version: CatalogVersion) => void
 }) {
   const [versions, setVersions] = useState<CatalogVersion[]>([])
   const [references, setReferences] = useState<Record<string, CatalogVersionReference[]>>({})
@@ -239,12 +271,18 @@ export default function CatalogVersionsPanel({
         <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>{versions.length} total</span>
       </div>
       {error && <p style={{ color: 'var(--text-danger)', margin: '0.65rem 0.75rem', fontSize: '0.8rem' }}>{error}</p>}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(210px, 300px) minmax(0, 1fr)', minHeight: 260 }}>
-        <div style={{ borderRight: panelBorder, background: 'var(--bg-card)', padding: '0.5rem 0' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) minmax(0, 1fr)', minHeight: 220 }}>
+        <div style={{ borderRight: panelBorder, background: 'var(--bg-card)', padding: '0.5rem 0', maxHeight: 360, overflow: 'auto' }}>
           {versions.map(v => {
             const refs = references[v.id] || []
             const counts = countRefs(refs)
             const isCurrent = v.id === currentVersionID
+            const base = versions.find(candidate => candidate.id === v.base_version_id)
+            const staleDraft = isStaleDraft(v, current)
+            const label = versionStateLabel(v, current)
+            const createdLabel = formatDate(v.created_at) || 'created time unknown'
+            const publishedLabel = formatDate(v.published_at)
+            const showCreated = v.state !== 'published' || !v.published_at || !sameTimestamp(v.created_at, v.published_at)
             return (
               <button
                 key={v.id}
@@ -256,24 +294,31 @@ export default function CatalogVersionsPanel({
                 }}
               >
                 <span style={{ position: 'relative', display: 'flex', justifyContent: 'center' }}>
-                  <span style={{ position: 'absolute', top: -8, bottom: -8, width: 1, background: 'var(--border)', left: '50%' }} />
+                  <span style={{ position: 'absolute', top: -8, bottom: -8, width: 1, background: 'var(--border)', left: '50%', zIndex: 0 }} />
                   <TimelineDot state={v.state} />
                 </span>
                 <span>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontWeight: 700 }}>
                     v{v.version}
                     {isCurrent && <Badge>Current</Badge>}
-                    {v.state === 'draft' && <Badge>Draft</Badge>}
+                    {staleDraft && <Badge>Never published</Badge>}
+                    {!staleDraft && v.state === 'draft' && <Badge>Draft</Badge>}
                     {counts.tracking > 0 && <Badge>{counts.tracking} tracking</Badge>}
                     {counts.pinned > 0 && <Badge>{counts.pinned} pinned</Badge>}
                   </span>
-                  <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: 2 }}>{v.state} · {formatDate(v.created_at) || 'created time unknown'}</span>
-                  {v.published_at && <span style={{ display: 'block', color: 'var(--text-faint)', fontSize: '0.72rem', marginTop: 1 }}>published {formatDate(v.published_at)}</span>}
-                  {v.source_type && <span style={{ display: 'block', color: 'var(--text-faint)', fontSize: '0.72rem', marginTop: 1 }}>{v.source_type}{v.source_ref ? ` · ${v.source_ref}` : ''}</span>}
+                  <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: 2 }}>
+                    {label} · {v.state === 'published' && publishedLabel ? publishedLabel : createdLabel}
+                  </span>
+                  {v.published_at && showCreated && <span style={{ display: 'block', color: 'var(--text-faint)', fontSize: '0.72rem', marginTop: 1 }}>created {createdLabel}</span>}
+                  {(v.source_type || v.source_ref) && (
+                    <span title={v.source_ref || undefined} style={{ display: 'block', color: 'var(--text-faint)', fontSize: '0.72rem', marginTop: 1 }}>
+                      {v.source_type || 'source'}{v.source_ref ? ` · ${shortRef(v.source_ref)}` : ''}
+                    </span>
+                  )}
                   {v.author && <span style={{ display: 'block', color: 'var(--text-faint)', fontSize: '0.72rem', marginTop: 1 }}>{v.author}</span>}
                   {v.changelog && <span style={{ display: 'block', color: 'var(--text)', fontSize: '0.75rem', marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v.changelog}</span>}
                   <span style={{ display: 'block', color: 'var(--text-faint)', fontSize: '0.72rem', marginTop: 3 }}>
-                    {v.base_version_id ? `base ${v.base_version_id}` : 'no base'}{shortHash(v.body_hash) ? ` · ${shortHash(v.body_hash)}` : ''}
+                    {base ? `base v${base.version}` : v.base_version_id ? `base ${shortRef(v.base_version_id)}` : 'no base'}{shortHash(v.body_hash) ? ` · body ${shortHash(v.body_hash)}` : ''}
                   </span>
                 </span>
               </button>
@@ -286,18 +331,26 @@ export default function CatalogVersionsPanel({
             const refs = references[v.id] || []
             const exactRefs = refs.filter(ref => !ref.tracking)
             const canRollout = current && current.id !== v.id && exactRefs.length > 0
+            const staleDraft = isStaleDraft(v, current)
+            const canPublish = v.state !== 'published' && !staleDraft
+            const canRestore = !!onRestoreVersion && !!current && v.version < current.version
             const diff = diffLines(base ? versionBody(type, base) : '', versionBody(type, v))
             return (
               <div key={v.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
                   <div>
                     <div style={{ color: 'var(--text-heading)', fontWeight: 700 }}>Version {v.version}</div>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                      {v.state}{v.source_type ? ` · ${v.source_type}` : ''}{v.published_at ? ` · published ${formatDate(v.published_at)}` : ''}
+                    <div title={v.source_ref || undefined} style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                      {versionStateLabel(v, current)}{v.source_type ? ` · ${v.source_type}` : ''}{v.source_ref ? ` · ${shortRef(v.source_ref)}` : ''}{v.published_at ? ` · published ${formatDate(v.published_at)}` : ''}
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                    {v.state !== 'published' && (
+                    {canRestore && (
+                      <button disabled={busy === v.id} onClick={() => onRestoreVersion(v)} style={{ padding: '4px 9px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--accent)', cursor: 'pointer' }}>
+                        Rollback to this version
+                      </button>
+                    )}
+                    {canPublish && (
                       <button disabled={busy === v.id} onClick={() => publish(v.id)} style={{ padding: '4px 9px', borderRadius: 5, border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: 'pointer' }}>
                         Publish
                       </button>
@@ -328,36 +381,44 @@ export default function CatalogVersionsPanel({
                     </div>
                   )}
                 </div>
-                <div style={{ border: panelBorder, borderRadius: 6, overflow: 'hidden', background: 'var(--bg)' }}>
-                  <div style={{ padding: '0.45rem 0.6rem', borderBottom: panelBorder, color: 'var(--text-heading)', fontSize: '0.78rem', fontWeight: 700 }}>
-                    {diffLabel(type, base)}
-                  </div>
-                  <div role="table" aria-label={diffLabel(type, base)} style={{ maxHeight: 300, overflow: 'auto', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '0.75rem', lineHeight: 1.45 }}>
-                    {diff.map((row, i) => {
-                      const add = row.kind === 'add'
-                      const del = row.kind === 'del'
-                      return (
-                        <div
-                          key={i}
-                          role="row"
-                          style={{
-                            display: 'grid',
-                            gridTemplateColumns: '2.5rem minmax(0, 1fr)',
-                            background: add ? 'rgba(22, 163, 74, 0.09)' : del ? 'rgba(220, 38, 38, 0.08)' : 'transparent',
-                            color: add ? '#15803d' : del ? 'var(--text-danger)' : 'var(--text-muted)',
-                          }}
-                        >
-                          <span role="cell" style={{ userSelect: 'none', textAlign: 'right', padding: '0 0.5rem', color: 'var(--text-faint)', borderRight: panelBorder }}>{i + 1}</span>
-                          <span role="cell" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', padding: '0 0.55rem' }}>{row.text || ' '}</span>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
               </div>
             )
           })}
         </div>
+      </div>
+      <div style={{ borderTop: panelBorder, padding: '0.75rem', background: 'var(--bg-card)' }}>
+        {versions.filter(v => v.id === expanded).map(v => {
+          const base = versions.find(candidate => candidate.id === v.base_version_id) || versions.find(candidate => candidate.version === v.version - 1)
+          const diff = diffLines(base ? versionBody(type, base) : '', versionBody(type, v))
+          return (
+            <div key={v.id} style={{ border: panelBorder, borderRadius: 6, overflow: 'hidden', background: 'var(--bg)' }}>
+              <div style={{ padding: '0.5rem 0.65rem', borderBottom: panelBorder, color: 'var(--text-heading)', fontSize: '0.8rem', fontWeight: 700 }}>
+                {diffLabel(type, base)}
+              </div>
+              <div role="table" aria-label={diffLabel(type, base)} style={{ maxHeight: 'min(56vh, 620px)', overflow: 'auto', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '0.78rem', lineHeight: 1.5 }}>
+                {diff.map((row, i) => {
+                  const add = row.kind === 'add'
+                  const del = row.kind === 'del'
+                  return (
+                    <div
+                      key={i}
+                      role="row"
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '3rem minmax(0, 1fr)',
+                        background: add ? 'rgba(22, 163, 74, 0.09)' : del ? 'rgba(220, 38, 38, 0.08)' : 'transparent',
+                        color: add ? '#15803d' : del ? 'var(--text-danger)' : 'var(--text-muted)',
+                      }}
+                    >
+                      <span role="cell" style={{ userSelect: 'none', textAlign: 'right', padding: '0 0.55rem', color: 'var(--text-faint)', borderRight: panelBorder }}>{i + 1}</span>
+                      <span role="cell" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', padding: '0 0.65rem' }}>{row.text || ' '}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
       </div>
     </section>
   )

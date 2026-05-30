@@ -124,11 +124,12 @@ func CreatePromptDraftTx(tx *sql.Tx, ref, description, content string) (fleet.Ca
 }
 
 func ListPromptVersions(db *sql.DB, ref string) ([]fleet.CatalogVersion, error) {
-	promptID, err := promptInternalID(db, ref)
+	versions, err := ListPromptVersionSnapshots(db, ref)
 	if err != nil {
 		return nil, err
 	}
-	return listCatalogVersions(db, "prompt_versions", "prompt_id", promptID)
+	reverseCatalogVersions(versions)
+	return versions, nil
 }
 
 func ListPromptVersionSnapshots(q querier, ref string) ([]fleet.CatalogVersion, error) {
@@ -162,11 +163,12 @@ func ListPromptVersionSnapshots(q querier, ref string) ([]fleet.CatalogVersion, 
 }
 
 func ListSkillVersions(db *sql.DB, ref string) ([]fleet.CatalogVersion, error) {
-	skillID, err := skillInternalID(db, ref)
+	versions, err := ListSkillVersionSnapshots(db, ref)
 	if err != nil {
 		return nil, err
 	}
-	return listCatalogVersions(db, "skill_versions", "skill_id", skillID)
+	reverseCatalogVersions(versions)
+	return versions, nil
 }
 
 func ListSkillVersionSnapshots(q querier, ref string) ([]fleet.CatalogVersion, error) {
@@ -200,11 +202,12 @@ func ListSkillVersionSnapshots(q querier, ref string) ([]fleet.CatalogVersion, e
 }
 
 func ListGuardrailVersions(db *sql.DB, ref string) ([]fleet.CatalogVersion, error) {
-	guardrailID, err := guardrailInternalID(db, ref)
+	versions, err := ListGuardrailVersionSnapshots(db, ref)
 	if err != nil {
 		return nil, err
 	}
-	return listCatalogVersions(db, "guardrail_versions", "guardrail_id", guardrailID)
+	reverseCatalogVersions(versions)
+	return versions, nil
 }
 
 func ListGuardrailVersionSnapshots(q querier, ref string) ([]fleet.CatalogVersion, error) {
@@ -238,6 +241,12 @@ func ListGuardrailVersionSnapshots(q querier, ref string) ([]fleet.CatalogVersio
 		versions = append(versions, version)
 	}
 	return versions, rows.Err()
+}
+
+func reverseCatalogVersions(versions []fleet.CatalogVersion) {
+	for i, j := 0, len(versions)-1; i < j; i, j = i+1, j-1 {
+		versions[i], versions[j] = versions[j], versions[i]
+	}
 }
 
 func listCatalogVersions(q querier, table, column, assetID string) ([]fleet.CatalogVersion, error) {

@@ -234,7 +234,7 @@ export default function PromptsPage() {
       </div>
 
       {(modal === 'create' || modal === 'edit') && (
-        <Modal title={modal === 'create' ? 'New prompt' : `Edit ${selected.name}`} onClose={() => setModal(null)}>
+        <Modal title={modal === 'create' ? 'New prompt' : `Edit ${selected.name}`} onClose={() => setModal(null)} maxWidth={modal === 'edit' ? '1100px' : undefined}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
             <div>
               <label style={labelStyle}>Name *</label>
@@ -301,6 +301,14 @@ export default function PromptsPage() {
                 assetID={selected.id || selected.name}
                 currentVersionID={selected.version_id}
                 onChanged={load}
+                onRestoreVersion={version => {
+                  setSelected(p => ({
+                    ...p,
+                    description: version.description ?? '',
+                    content: version.content ?? '',
+                  }))
+                  setPublish(true)
+                }}
               />
             )}
             {modal === 'edit' && (

@@ -14,10 +14,10 @@ import (
 	"github.com/eloylp/agents/internal/store"
 )
 
-// runAgent executes agent using the per-event cfg snapshot the caller
-// loaded from SQLite. Backend resolution and runner construction happen
-// here from that same snapshot, so the agent's backend, prompt, skills,
-// and runner configuration all come from one consistent read.
+// runAgent executes agent using the per-event workflow snapshot the caller
+// loaded from SQLite. Backend resolution and runner construction happen here
+// from that same snapshot, so the agent's backend, prompt, skills, and runner
+// configuration all come from one consistent read.
 func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg *config.Config) error {
 	workspaceID := eventWorkspaceID(ev)
 	backend := cfg.ResolveBackend(agent.Backend)

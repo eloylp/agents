@@ -130,6 +130,12 @@ func (s *stubRunner) lastSystem() string {
 	return s.calls[len(s.calls)-1].System
 }
 
+func (s *stubRunner) callsSnapshot() []ai.Request {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.calls)
+}
+
 // newTestEngine builds an Engine with a canned agent set. The cfgMutator
 // hook lets tests override bindings, backends, etc.
 func newTestEngine(t *testing.T, cfgMutator func(*config.Config)) (*Engine, *stubRunner) {
@@ -205,6 +211,145 @@ func TestHandleEventPRRunsSingleLabelBinding(t *testing.T) {
 	}
 	if runner.callCount() != 1 {
 		t.Errorf("expected 1 run, got %d", runner.callCount())
+	}
+}
+
+func TestHandleEventResolvesCatalogVersionsBeforeEachRun(t *testing.T) {
+	t.Parallel()
+	runner := &stubRunner{}
+	cfg := &config.Config{
+		Daemon: config.DaemonConfig{
+			Processor: config.ProcessorConfig{MaxConcurrentAgents: 4},
+			AIBackends: map[string]fleet.Backend{
+				"claude": {Command: "claude"},
+			},
+		},
+		Prompts: []fleet.Prompt{{
+			ID: "prompt_coder", Name: "coder", Content: "prompt v1",
+		}},
+		Skills: map[string]fleet.Skill{
+			"architect": {Prompt: "skill v1"},
+		},
+		Guardrails: []fleet.Guardrail{{
+			Name: "policy", Content: "guardrail v1", Enabled: true, Position: 10,
+		}},
+		Agents: []fleet.Agent{{
+			Name: "coder", Backend: "claude", PromptRef: "coder", Skills: []string{"architect"}, Description: "writes code",
+		}},
+		Repos: []fleet.Repo{{
+			Name: "owner/repo", Enabled: true,
+		}},
+	}
+	e := newEngineFromCfg(t, cfg, map[string]ai.Runner{"claude": runner}, nil)
+	rec := &traceRecorderStub{}
+	e.WithTraceRecorder(rec)
+	if _, err := e.store.ReplaceWorkspaceGuardrails(fleet.DefaultWorkspaceID, []fleet.WorkspaceGuardrailRef{{
+		GuardrailName: "policy", Position: 10, Enabled: true,
+	}}); err != nil {
+		t.Fatalf("ReplaceWorkspaceGuardrails v1: %v", err)
+	}
+
+	run := func(id string) {
+		t.Helper()
+		err := e.HandleEvent(context.Background(), Event{
+			ID:      id,
+			Kind:    "agents.run",
+			Repo:    RepoRef{FullName: "owner/repo", Enabled: true},
+			Payload: map[string]any{"target_agent": "coder"},
+		})
+		if err != nil {
+			t.Fatalf("HandleEvent %s: %v", id, err)
+		}
+	}
+
+	run("evt-v1")
+	firstPrompt, err := e.store.ReadPrompt("prompt_coder")
+	if err != nil {
+		t.Fatalf("ReadPrompt v1: %v", err)
+	}
+	firstSkills, err := e.store.ReadSkills()
+	if err != nil {
+		t.Fatalf("ReadSkills v1: %v", err)
+	}
+	firstGuardrail, err := e.store.GetGuardrail("policy")
+	if err != nil {
+		t.Fatalf("GetGuardrail v1: %v", err)
+	}
+
+	if _, err := e.store.UpsertPrompt(fleet.Prompt{ID: "prompt_coder", Name: "coder", Content: "prompt v2"}); err != nil {
+		t.Fatalf("UpsertPrompt v2: %v", err)
+	}
+	if err := e.store.UpsertSkill("architect", fleet.Skill{Prompt: "skill v2"}); err != nil {
+		t.Fatalf("UpsertSkill v2: %v", err)
+	}
+	if err := e.store.UpsertGuardrail(fleet.Guardrail{Name: "policy", Content: "guardrail v2", Enabled: true, Position: 10}); err != nil {
+		t.Fatalf("UpsertGuardrail v2: %v", err)
+	}
+	secondPrompt, err := e.store.ReadPrompt("prompt_coder")
+	if err != nil {
+		t.Fatalf("ReadPrompt v2: %v", err)
+	}
+	secondSkills, err := e.store.ReadSkills()
+	if err != nil {
+		t.Fatalf("ReadSkills v2: %v", err)
+	}
+	secondGuardrail, err := e.store.GetGuardrail("policy")
+	if err != nil {
+		t.Fatalf("GetGuardrail v2: %v", err)
+	}
+	if secondPrompt.VersionID == firstPrompt.VersionID || secondSkills["architect"].VersionID == firstSkills["architect"].VersionID || secondGuardrail.VersionID == firstGuardrail.VersionID {
+		t.Fatal("catalog updates did not publish new version ids")
+	}
+
+	run("evt-v2")
+	calls := runner.callsSnapshot()
+	if len(calls) != 2 {
+		t.Fatalf("runner calls = %d, want 2", len(calls))
+	}
+	for _, want := range []string{"guardrail v1", "skill v1", "prompt v1"} {
+		if !strings.Contains(calls[0].System, want) {
+			t.Fatalf("first composed system missing %q:\n%s", want, calls[0].System)
+		}
+	}
+	for _, stale := range []string{"guardrail v2", "skill v2", "prompt v2"} {
+		if strings.Contains(calls[0].System, stale) {
+			t.Fatalf("first composed system unexpectedly contains %q:\n%s", stale, calls[0].System)
+		}
+	}
+	for _, want := range []string{"guardrail v2", "skill v2", "prompt v2"} {
+		if !strings.Contains(calls[1].System, want) {
+			t.Fatalf("second composed system missing %q:\n%s", want, calls[1].System)
+		}
+	}
+	for _, stale := range []string{"guardrail v1", "skill v1", "prompt v1"} {
+		if strings.Contains(calls[1].System, stale) {
+			t.Fatalf("second composed system unexpectedly contains %q:\n%s", stale, calls[1].System)
+		}
+	}
+
+	rec.mu.Lock()
+	spans := slices.Clone(rec.spans)
+	rec.mu.Unlock()
+	if len(spans) != 2 {
+		t.Fatalf("trace spans = %d, want 2", len(spans))
+	}
+	if spans[0].PromptVersionID != firstPrompt.VersionID {
+		t.Fatalf("first trace prompt_version_id = %q, want %q", spans[0].PromptVersionID, firstPrompt.VersionID)
+	}
+	if !slices.Equal(spans[0].SkillVersionIDs, []string{firstSkills["architect"].VersionID}) {
+		t.Fatalf("first trace skill_version_ids = %#v, want %#v", spans[0].SkillVersionIDs, []string{firstSkills["architect"].VersionID})
+	}
+	if !slices.Equal(spans[0].GuardrailVersionIDs, []string{firstGuardrail.VersionID}) {
+		t.Fatalf("first trace guardrail_version_ids = %#v, want %#v", spans[0].GuardrailVersionIDs, []string{firstGuardrail.VersionID})
+	}
+	if spans[1].PromptVersionID != secondPrompt.VersionID {
+		t.Fatalf("second trace prompt_version_id = %q, want %q", spans[1].PromptVersionID, secondPrompt.VersionID)
+	}
+	if !slices.Equal(spans[1].SkillVersionIDs, []string{secondSkills["architect"].VersionID}) {
+		t.Fatalf("second trace skill_version_ids = %#v, want %#v", spans[1].SkillVersionIDs, []string{secondSkills["architect"].VersionID})
+	}
+	if !slices.Equal(spans[1].GuardrailVersionIDs, []string{secondGuardrail.VersionID}) {
+		t.Fatalf("second trace guardrail_version_ids = %#v, want %#v", spans[1].GuardrailVersionIDs, []string{secondGuardrail.VersionID})
 	}
 }
 
@@ -975,8 +1120,8 @@ func TestFanOutDoesNotDedupZeroNumberEvents(t *testing.T) {
 
 // TestDispatchEventRunsAfterEnqueue is an end-to-end regression test for the
 // dispatch self-suppression bug: ProcessDispatches commits the dedup claim
-// before enqueuing, so handleDispatchEvent must NOT re-claim or the agent is
-// silently dropped. This test goes through the real enqueue→dequeue path.
+// before enqueuing, so handleDirectAgentRunEvent must NOT re-claim or the agent
+// is silently dropped. This test goes through the real enqueue→dequeue path.
 func TestDispatchEventRunsAfterEnqueue(t *testing.T) {
 	t.Parallel()
 	e, runner, q := newTestEngineWithDedup(t, func(c *config.Config) {
@@ -1133,8 +1278,9 @@ func TestFanOutDedupSurvivesTTLExpiry(t *testing.T) {
 // TestAgentsRunDeduplicatesDuplicateRequests is a regression test for the
 // fleet-wide dedup gap on the HTTP /agents/run path. Before the fix, two
 // near-simultaneous agents.run events for the same (agent, repo) both passed
-// handleDispatchEvent and launched duplicate runs because the function skipped
-// dedup unconditionally (valid only for pre-claimed agent.dispatch events).
+// handleDirectAgentRunEvent and launched duplicate runs because the function
+// skipped dedup unconditionally (valid only for pre-claimed agent.dispatch
+// events).
 func TestAgentsRunDeduplicatesDuplicateRequests(t *testing.T) {
 	t.Parallel()
 	e, runner, _ := newTestEngineWithDedup(t, nil)
