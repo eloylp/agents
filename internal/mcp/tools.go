@@ -199,7 +199,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("list_improvement_feedback",
-				mcpgo.WithDescription("List stored #ai_improvement feedback events for one workspace. These are raw evidence records; recommendation generation is a later human-reviewed step."),
+				mcpgo.WithDescription("List stored /agents improve feedback events for one workspace. These are raw evidence records; recommendation generation is a later human-reviewed step."),
 				mcpgo.WithString("workspace",
 					mcpgo.Description("Optional workspace id or display name. Defaults to default."),
 				),

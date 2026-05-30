@@ -1,7 +1,7 @@
 # Self-Improvement Feedback
 
-The daemon can capture maintainer review lessons from GitHub comments tagged
-with `#ai_improvement`. This issue implements only deterministic ingestion and
+The daemon can capture maintainer review lessons from GitHub comments marked
+with `/agents improve`. This issue implements only deterministic ingestion and
 inspection. It does not invoke AI, create recommendations, or publish catalog
 changes.
 
@@ -11,7 +11,7 @@ Supported webhook sources:
 - pull request review comments
 - pull request reviews
 
-The tag match is exact and case-sensitive. Fenced code blocks are ignored so
+The marker match is exact and case-sensitive. Fenced code blocks are ignored so
 examples do not create feedback records accidentally.
 
 Only trusted GitHub authors create actionable feedback. Configure them at
@@ -22,7 +22,7 @@ AGENTS_SELF_IMPROVEMENT_FEEDBACK_AUTHOR_ALLOWLIST=maintainer-login,agents-bot
 ```
 
 When the allowlist is omitted, `GITHUB_ACTOR` is used if available. If no
-trusted actor can be determined, tagged comments are stored with
+trusted actor can be determined, marked comments are stored with
 `status=ignored`.
 
 Stored feedback keeps the raw comment as source of truth, plus GitHub source

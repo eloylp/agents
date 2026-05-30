@@ -141,7 +141,7 @@ func TestSelfImprovementFeedbackUpsertAndList(t *testing.T) {
 		AuthorLogin:               "maintainer",
 		AuthorAuthorized:          true,
 		IssueNumber:               7,
-		RawBody:                   "first #ai_improvement",
+		RawBody:                   "first /agents improve",
 		GitHubCreatedAt:           &created,
 		LinkedSpanID:              "span-1",
 		LinkedEventID:             "event-1",
@@ -169,7 +169,7 @@ func TestSelfImprovementFeedbackUpsertAndList(t *testing.T) {
 		AuthorLogin:      "maintainer",
 		AuthorAuthorized: true,
 		IssueNumber:      7,
-		RawBody:          "edited #ai_improvement",
+		RawBody:          "edited /agents improve",
 		LinkConfidence:   "unresolved",
 		LinkDiagnostics:  "no matching run attribution snapshot",
 	}); err != nil {
@@ -184,7 +184,7 @@ func TestSelfImprovementFeedbackUpsertAndList(t *testing.T) {
 		t.Fatalf("feedback rows = %d, want 1", len(rows))
 	}
 	got := rows[0]
-	if got.ID != first.ID || got.RawBody != "edited #ai_improvement" || got.GitHubDeliveryID != "delivery-2" {
+	if got.ID != first.ID || got.RawBody != "edited /agents improve" || got.GitHubDeliveryID != "delivery-2" {
 		t.Fatalf("updated feedback = %+v, want same row with edited body", got)
 	}
 	if got.LinkedSpanID != "" || got.LinkConfidence != "unresolved" {
@@ -208,7 +208,7 @@ func TestSelfImprovementFeedbackUpsertPreservesStatusOnRedelivery(t *testing.T) 
 		AuthorLogin:      "maintainer",
 		AuthorAuthorized: true,
 		IssueNumber:      7,
-		RawBody:          "first #ai_improvement",
+		RawBody:          "first /agents improve",
 		Status:           "analyzed",
 	}); err != nil {
 		t.Fatalf("insert feedback: %v", err)
@@ -223,7 +223,7 @@ func TestSelfImprovementFeedbackUpsertPreservesStatusOnRedelivery(t *testing.T) 
 		AuthorLogin:      "maintainer",
 		AuthorAuthorized: true,
 		IssueNumber:      7,
-		RawBody:          "first #ai_improvement",
+		RawBody:          "first /agents improve",
 	}); err != nil {
 		t.Fatalf("redeliver feedback: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestSelfImprovementFeedbackUpsertPreservesStatusOnRedelivery(t *testing.T) 
 		AuthorLogin:      "maintainer",
 		AuthorAuthorized: true,
 		IssueNumber:      7,
-		RawBody:          "edited #ai_improvement",
+		RawBody:          "edited /agents improve",
 	}); err != nil {
 		t.Fatalf("edit feedback: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestSelfImprovementFeedbackUpsertPreservesStatusOnRedelivery(t *testing.T) 
 	if err != nil {
 		t.Fatalf("list edited feedback: %v", err)
 	}
-	if rows[0].Status != store.FeedbackStatusNew || rows[0].RawBody != "edited #ai_improvement" {
+	if rows[0].Status != store.FeedbackStatusNew || rows[0].RawBody != "edited /agents improve" {
 		t.Fatalf("edited feedback = %+v, want new status with edited body", rows[0])
 	}
 }
@@ -289,7 +289,7 @@ func TestIgnoreSelfImprovementFeedbackUpdatesExistingRowOnly(t *testing.T) {
 		AuthorLogin:      "maintainer",
 		AuthorAuthorized: true,
 		IssueNumber:      7,
-		RawBody:          "first #ai_improvement",
+		RawBody:          "first /agents improve",
 		Status:           "analyzed",
 	}); err != nil {
 		t.Fatalf("insert feedback: %v", err)

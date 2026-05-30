@@ -1,4 +1,4 @@
--- 037_self_improvement_feedback: immutable evidence records for tagged
+-- 037_self_improvement_feedback: immutable evidence records for marked
 -- maintainer feedback that later self-improvement recommendation runs analyze.
 
 CREATE TABLE IF NOT EXISTS self_improvement_feedback (
@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS self_improvement_feedback (
     issue_number               INTEGER NOT NULL DEFAULT 0,
     pr_number                  INTEGER NOT NULL DEFAULT 0,
     raw_body                   TEXT NOT NULL DEFAULT '',
-    tag                        TEXT NOT NULL DEFAULT '#ai_improvement',
+    tag                        TEXT NOT NULL DEFAULT '/agents improve',
     file_path                  TEXT NOT NULL DEFAULT '',
     line                       INTEGER NOT NULL DEFAULT 0,
     side                       TEXT NOT NULL DEFAULT '',

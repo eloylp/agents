@@ -969,7 +969,7 @@ func TestToolListImprovementFeedback(t *testing.T) {
 		AuthorLogin:      "maintainer",
 		AuthorAuthorized: true,
 		IssueNumber:      7,
-		RawBody:          "remember this #ai_improvement",
+		RawBody:          "remember this /agents improve",
 		LinkConfidence:   "unresolved",
 		Status:           "new",
 	}); err != nil {
@@ -984,7 +984,7 @@ func TestToolListImprovementFeedback(t *testing.T) {
 		AuthorLogin:      "stranger",
 		AuthorAuthorized: false,
 		IssueNumber:      7,
-		RawBody:          "ignored #ai_improvement",
+		RawBody:          "ignored /agents improve",
 		LinkConfidence:   "unresolved",
 		Status:           "ignored",
 	}); err != nil {

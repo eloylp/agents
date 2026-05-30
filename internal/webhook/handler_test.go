@@ -231,7 +231,7 @@ func TestIssueCommentAIImprovementFeedbackStoredForAllowlistedAuthor(t *testing.
 	)
 	body := []byte(`{
 		"action":"created",
-		"comment":{"id":123,"html_url":"https://github.com/owner/repo/issues/7#issuecomment-123","body":"Please remember this #ai_improvement","created_at":"2026-05-30T10:00:00Z","updated_at":"2026-05-30T10:00:00Z"},
+		"comment":{"id":123,"html_url":"https://github.com/owner/repo/issues/7#issuecomment-123","body":"Please remember this /agents improve","created_at":"2026-05-30T10:00:00Z","updated_at":"2026-05-30T10:00:00Z"},
 		"issue":{"number":7},
 		"repository":{"full_name":"owner/repo"},
 		"sender":{"login":"maintainer"}
@@ -283,7 +283,7 @@ func TestAIImprovementFeedbackUnauthorizedAuthorIsIgnored(t *testing.T) {
 	)
 	body := []byte(`{
 		"action":"created",
-		"comment":{"id":124,"body":"Please remember this #ai_improvement"},
+		"comment":{"id":124,"body":"Please remember this /agents improve"},
 		"issue":{"number":7},
 		"repository":{"full_name":"owner/repo"},
 		"sender":{"login":"drive-by"}
@@ -328,7 +328,7 @@ func TestEditedIssueCommentWithoutAIImprovementTagIgnoresExistingFeedback(t *tes
 	)
 	created := []byte(`{
 		"action":"created",
-		"comment":{"id":125,"body":"Please remember this #ai_improvement"},
+		"comment":{"id":125,"body":"Please remember this /agents improve"},
 		"issue":{"number":7},
 		"repository":{"full_name":"owner/repo"},
 		"sender":{"login":"maintainer"}
@@ -360,13 +360,16 @@ func TestEditedIssueCommentWithoutAIImprovementTagIgnoresExistingFeedback(t *tes
 	}
 }
 
-func TestAIImprovementTagIgnoresFencedCodeBlocks(t *testing.T) {
+func TestImproveCommandIgnoresFencedCodeBlocks(t *testing.T) {
 	t.Parallel()
-	body := "```text\n#ai_improvement\n```\noutside"
-	if containsAIImprovementTag(body) {
-		t.Fatalf("tag inside fenced code block should be ignored")
+	body := "```text\n/agents improve\n```\noutside"
+	if containsImproveCommand(body) {
+		t.Fatalf("command inside fenced code block should be ignored")
 	}
-	if !containsAIImprovementTag("outside #ai_improvement.") {
-		t.Fatalf("tag outside code block should be detected")
+	if !containsImproveCommand("outside /agents improve.") {
+		t.Fatalf("command outside code block should be detected")
+	}
+	if containsImproveCommand("outside /agents analyze") {
+		t.Fatalf("different slash command should not be detected")
 	}
 }

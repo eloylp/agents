@@ -11,6 +11,7 @@ import (
 const (
 	FeedbackStatusNew     = "new"
 	FeedbackStatusIgnored = "ignored"
+	FeedbackTag           = "/agents improve"
 )
 
 type SelfImprovementFeedback struct {
@@ -99,7 +100,7 @@ func UpsertSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) 
 	workspaceID := fleet.NormalizeWorkspaceID(in.WorkspaceID)
 	tag := strings.TrimSpace(in.Tag)
 	if tag == "" {
-		tag = "#ai_improvement"
+		tag = FeedbackTag
 	}
 	status := strings.TrimSpace(in.Status)
 	if status == "" {
@@ -176,7 +177,7 @@ func IgnoreSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) 
 	workspaceID := fleet.NormalizeWorkspaceID(in.WorkspaceID)
 	tag := strings.TrimSpace(in.Tag)
 	if tag == "" {
-		tag = "#ai_improvement"
+		tag = FeedbackTag
 	}
 	res, err := db.Exec(
 		`UPDATE self_improvement_feedback SET

@@ -622,7 +622,7 @@ type feedbackCapture struct {
 }
 
 func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) {
-	if !containsAIImprovementTag(in.Body) {
+	if !containsImproveCommand(in.Body) {
 		if in.Edited {
 			h.ignoreFeedback(repo, in)
 		}
@@ -660,7 +660,7 @@ func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) {
 		IssueNumber:      in.IssueNumber,
 		PRNumber:         in.PRNumber,
 		RawBody:          in.Body,
-		Tag:              "#ai_improvement",
+		Tag:              store.FeedbackTag,
 		FilePath:         in.FilePath,
 		Line:             in.Line,
 		Side:             in.Side,
@@ -717,7 +717,7 @@ func (h *Handler) ignoreFeedback(repo fleet.Repo, in feedbackCapture) {
 		IssueNumber:      in.IssueNumber,
 		PRNumber:         in.PRNumber,
 		RawBody:          in.Body,
-		Tag:              "#ai_improvement",
+		Tag:              store.FeedbackTag,
 		FilePath:         in.FilePath,
 		Line:             in.Line,
 		Side:             in.Side,
@@ -740,11 +740,11 @@ func (h *Handler) ignoreFeedback(repo fleet.Repo, in feedbackCapture) {
 			Str("workspace", fleet.NormalizeWorkspaceID(repo.WorkspaceID)).
 			Str("repo", repo.Name).
 			Str("source_type", in.SourceType).
-			Msg("webhook: ignored self-improvement feedback after tag removal")
+			Msg("webhook: ignored self-improvement feedback after marker removal")
 	}
 }
 
-func containsAIImprovementTag(body string) bool {
+func containsImproveCommand(body string) bool {
 	inCode := false
 	for _, line := range strings.Split(body, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "```") {
@@ -754,9 +754,11 @@ func containsAIImprovementTag(body string) bool {
 		if inCode {
 			continue
 		}
-		for _, field := range strings.Fields(line) {
-			field = strings.Trim(field, ".,;:!?)]}")
-			if field == "#ai_improvement" {
+		fields := strings.Fields(line)
+		for i := 0; i+1 < len(fields); i++ {
+			command := strings.Trim(fields[i], ".,;:!?([{")
+			action := strings.Trim(fields[i+1], ".,;:!?)]}")
+			if command == "/agents" && action == "improve" {
 				return true
 			}
 		}

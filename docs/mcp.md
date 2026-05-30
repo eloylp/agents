@@ -92,7 +92,7 @@ For agent lifecycle changes, use `create_agent` when adding a new agent or inten
 | Tool | Description |
 |---|---|
 | `list_events` | Recent events with optional `since` filter. |
-| `list_improvement_feedback` | Stored `#ai_improvement` feedback evidence for a workspace, optionally filtered by status. |
+| `list_improvement_feedback` | Stored `/agents improve` feedback evidence for a workspace, optionally filtered by status. |
 | `list_traces` | Recent agent run spans with timing, summary, and token usage (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `prompt_size`). The composed prompt body is fetched separately via the `/traces/{span_id}/prompt` REST endpoint, not an MCP tool, since it can be many KB. |
 | `get_trace` | Full dispatch chain by root event ID. |
 | `get_trace_steps` | Tool-loop transcript for one span. |
