@@ -49,7 +49,18 @@ The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 
 | `GET` | `/dispatches` | Dispatch dedup store contents + counters |
 | `GET` | `/memory/{agent}/{repo}` | Raw agent memory markdown. `{repo}` uses `owner_repo` format (underscore-separated) |
 | `GET` | `/memory/stream` | Memory file change notifications (SSE) |
+| `GET` | `/improvements/feedback` | Stored `#ai_improvement` feedback events. Query params: `workspace`, optional `status` (`new`, `ignored`, etc.). |
 | `GET` | `/config` | Current fleet config snapshot |
+
+## Self-Improvement Feedback
+
+GitHub `issue_comment`, `pull_request_review`, and `pull_request_review_comment` webhooks are scanned deterministically for the exact `#ai_improvement` tag outside fenced code blocks. Authorized tagged comments are stored as raw evidence in `status=new`; unauthorized tagged comments are retained as `status=ignored` audit rows and never become actionable recommendation input.
+
+Feedback events preserve the raw comment, source URL, repo/issue/PR/file context, delivery ids, author authorization, and any run attribution resolved from public hidden metadata or repo/PR/SHA/time context. The ingestion path does not call AI and does not mutate prompts, skills, guardrails, agents, or dispatch wiring.
+
+Configure trusted authors at startup with `AGENTS_SELF_IMPROVEMENT_FEEDBACK_AUTHOR_ALLOWLIST=maintainer-login,agents-bot`.
+
+When the allowlist is omitted, the daemon uses `GITHUB_ACTOR` if that environment variable is present. If no trusted author can be determined, tagged feedback is stored as ignored.
 
 ## Runners management
 

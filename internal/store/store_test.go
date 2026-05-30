@@ -123,6 +123,75 @@ func openTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
+func TestSelfImprovementFeedbackUpsertAndList(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
+
+	created := time.Date(2026, 5, 30, 10, 0, 0, 0, time.UTC)
+	first, err := st.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:               "team-a",
+		RepoOwner:                 "owner",
+		RepoName:                  "repo",
+		SourceType:                "issue_comment",
+		GitHubCommentID:           123,
+		GitHubDeliveryID:          "delivery-1",
+		SourceURL:                 "https://github.com/owner/repo/issues/7#issuecomment-123",
+		AuthorLogin:               "maintainer",
+		AuthorAuthorized:          true,
+		IssueNumber:               7,
+		RawBody:                   "first #ai_improvement",
+		GitHubCreatedAt:           &created,
+		LinkedSpanID:              "span-1",
+		LinkedEventID:             "event-1",
+		LinkedAgentID:             "agent-1",
+		LinkedAgentName:           "coder",
+		LinkedPromptVersionID:     "prompt-v1",
+		LinkedSkillVersionIDs:     []string{"skill-v1"},
+		LinkedGuardrailVersionIDs: []string{"guardrail-v1"},
+		LinkConfidence:            "exact",
+	})
+	if err != nil {
+		t.Fatalf("insert feedback: %v", err)
+	}
+	if first.ID == 0 || first.Status != "new" || !first.AuthorAuthorized {
+		t.Fatalf("inserted feedback = %+v, want new authorized row", first)
+	}
+
+	if _, err := st.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:      "team-a",
+		RepoOwner:        "owner",
+		RepoName:         "repo",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  123,
+		GitHubDeliveryID: "delivery-2",
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      7,
+		RawBody:          "edited #ai_improvement",
+		LinkConfidence:   "unresolved",
+		LinkDiagnostics:  "no matching run attribution snapshot",
+	}); err != nil {
+		t.Fatalf("update feedback: %v", err)
+	}
+
+	rows, err := st.ListSelfImprovementFeedback("team-a", "", 10)
+	if err != nil {
+		t.Fatalf("list feedback: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("feedback rows = %d, want 1", len(rows))
+	}
+	got := rows[0]
+	if got.ID != first.ID || got.RawBody != "edited #ai_improvement" || got.GitHubDeliveryID != "delivery-2" {
+		t.Fatalf("updated feedback = %+v, want same row with edited body", got)
+	}
+	if got.LinkedSpanID != "" || got.LinkConfidence != "unresolved" {
+		t.Fatalf("updated attribution = %+v, want unresolved with no linked span", got)
+	}
+}
+
 // TestGuardrailsSeed verifies that migrations 010, 012, 013, and 016 created
 // the generic guardrails table and seeded the built-in rows with content
 // equal to default_content (so a "Reset to default" from the unedited

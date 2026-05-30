@@ -17,6 +17,7 @@ import (
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/observe"
 	"github.com/eloylp/agents/internal/store"
 	"github.com/eloylp/agents/internal/workflow"
 )
@@ -32,19 +33,23 @@ type Handler struct {
 	delivery *DeliveryStore
 	channels *workflow.DataChannels
 	store    *store.Store
+	observe  *observe.Store
 	httpCfg  config.HTTPConfig
+	self     config.SelfImprovementConfig
 	logger   zerolog.Logger
 }
 
 // NewHandler constructs a Handler. delivery, channels, store, and httpCfg
 // are required; logger may be the daemon's root logger (the handler
 // scopes a sub-logger via the standard component label).
-func NewHandler(delivery *DeliveryStore, channels *workflow.DataChannels, st *store.Store, httpCfg config.HTTPConfig, logger zerolog.Logger) *Handler {
+func NewHandler(delivery *DeliveryStore, channels *workflow.DataChannels, st *store.Store, obs *observe.Store, httpCfg config.HTTPConfig, self config.SelfImprovementConfig, logger zerolog.Logger) *Handler {
 	return &Handler{
 		delivery: delivery,
 		channels: channels,
 		store:    st,
+		observe:  obs,
 		httpCfg:  httpCfg,
+		self:     self,
 		logger:   logger.With().Str("component", "webhook").Logger(),
 	}
 }
@@ -185,12 +190,25 @@ type webhookPullRequest struct {
 }
 
 type webhookComment struct {
-	Body string `json:"body"`
+	ID        int64     `json:"id"`
+	HTMLURL   string    `json:"html_url"`
+	Body      string    `json:"body"`
+	Path      string    `json:"path"`
+	Line      int       `json:"line"`
+	Side      string    `json:"side"`
+	DiffHunk  string    `json:"diff_hunk"`
+	CommitID  string    `json:"commit_id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type webhookReview struct {
-	Body  string `json:"body"`
-	State string `json:"state"`
+	ID        int64     `json:"id"`
+	HTMLURL   string    `json:"html_url"`
+	Body      string    `json:"body"`
+	State     string    `json:"state"`
+	CommitID  string    `json:"commit_id"`
+	Submitted time.Time `json:"submitted_at"`
 }
 
 // ─── event-type handlers ──────────────────────────────────────────────────────
@@ -356,7 +374,8 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, w http.ResponseWri
 }
 
 // handleIssueCommentEvent handles X-GitHub-Event: issue_comment.
-// Only "created" actions are forwarded as "issue_comment.created".
+// "created" actions are forwarded as "issue_comment.created"; "edited" can
+// refresh stored self-improvement feedback but does not enqueue agent work.
 func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
 
 	var payload struct {
@@ -375,7 +394,7 @@ func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWr
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	if payload.Action != "created" {
+	if payload.Action != "created" && payload.Action != "edited" {
 		for _, repo := range repos {
 			h.skipWebhookLog(deliveryID, repo, "issue_comment", payload.Action).
 				Int("number", payload.Issue.Number).
@@ -385,8 +404,39 @@ func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWr
 		return
 	}
 
+	if payload.Action == "edited" {
+		for _, repo := range repos {
+			h.captureFeedback(repo, feedbackCapture{
+				DeliveryID:      deliveryID,
+				SourceType:      "issue_comment",
+				Body:            payload.Comment.Body,
+				SourceURL:       payload.Comment.HTMLURL,
+				AuthorLogin:     payload.Sender.Login,
+				IssueNumber:     payload.Issue.Number,
+				PRNumber:        prNumber(payload.Issue),
+				CommentID:       payload.Comment.ID,
+				GitHubCreatedAt: zeroNil(payload.Comment.CreatedAt),
+				GitHubUpdatedAt: zeroNil(payload.Comment.UpdatedAt),
+			})
+		}
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
 	events := make([]workflow.Event, 0, len(repos))
 	for _, repo := range repos {
+		h.captureFeedback(repo, feedbackCapture{
+			DeliveryID:      deliveryID,
+			SourceType:      "issue_comment",
+			Body:            payload.Comment.Body,
+			SourceURL:       payload.Comment.HTMLURL,
+			AuthorLogin:     payload.Sender.Login,
+			IssueNumber:     payload.Issue.Number,
+			PRNumber:        prNumber(payload.Issue),
+			CommentID:       payload.Comment.ID,
+			GitHubCreatedAt: zeroNil(payload.Comment.CreatedAt),
+			GitHubUpdatedAt: zeroNil(payload.Comment.UpdatedAt),
+		})
 		events = append(events, workflow.Event{
 			ID:          deliveryID,
 			WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
@@ -434,6 +484,18 @@ func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, w http.Respo
 
 	events := make([]workflow.Event, 0, len(repos))
 	for _, repo := range repos {
+		h.captureFeedback(repo, feedbackCapture{
+			DeliveryID:      deliveryID,
+			SourceType:      "pull_request_review",
+			Body:            payload.Review.Body,
+			SourceURL:       payload.Review.HTMLURL,
+			AuthorLogin:     payload.Sender.Login,
+			PRNumber:        payload.PullRequest.Number,
+			ReviewID:        payload.Review.ID,
+			CommitSHA:       payload.Review.CommitID,
+			GitHubCreatedAt: zeroNil(payload.Review.Submitted),
+			GitHubUpdatedAt: zeroNil(payload.Review.Submitted),
+		})
 		events = append(events, workflow.Event{
 			ID:          deliveryID,
 			WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
@@ -451,8 +513,8 @@ func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, w http.Respo
 }
 
 // handlePullRequestReviewCommentEvent handles X-GitHub-Event:
-// pull_request_review_comment. Only "created" actions are forwarded as
-// "pull_request_review_comment.created".
+// pull_request_review_comment. "created" actions are forwarded as
+// "pull_request_review_comment.created"; "edited" can refresh stored feedback.
 func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w http.ResponseWriter, body []byte, deliveryID string) {
 
 	var payload struct {
@@ -471,7 +533,7 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	if payload.Action != "created" {
+	if payload.Action != "created" && payload.Action != "edited" {
 		for _, repo := range repos {
 			h.skipWebhookLog(deliveryID, repo, "pull_request_review_comment", payload.Action).
 				Int("number", payload.PullRequest.Number).
@@ -481,8 +543,47 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 		return
 	}
 
+	if payload.Action == "edited" {
+		for _, repo := range repos {
+			h.captureFeedback(repo, feedbackCapture{
+				DeliveryID:      deliveryID,
+				SourceType:      "pull_request_review_comment",
+				Body:            payload.Comment.Body,
+				SourceURL:       payload.Comment.HTMLURL,
+				AuthorLogin:     payload.Sender.Login,
+				PRNumber:        payload.PullRequest.Number,
+				CommentID:       payload.Comment.ID,
+				FilePath:        payload.Comment.Path,
+				Line:            payload.Comment.Line,
+				Side:            payload.Comment.Side,
+				DiffHunk:        payload.Comment.DiffHunk,
+				CommitSHA:       payload.Comment.CommitID,
+				GitHubCreatedAt: zeroNil(payload.Comment.CreatedAt),
+				GitHubUpdatedAt: zeroNil(payload.Comment.UpdatedAt),
+			})
+		}
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
 	events := make([]workflow.Event, 0, len(repos))
 	for _, repo := range repos {
+		h.captureFeedback(repo, feedbackCapture{
+			DeliveryID:      deliveryID,
+			SourceType:      "pull_request_review_comment",
+			Body:            payload.Comment.Body,
+			SourceURL:       payload.Comment.HTMLURL,
+			AuthorLogin:     payload.Sender.Login,
+			PRNumber:        payload.PullRequest.Number,
+			CommentID:       payload.Comment.ID,
+			FilePath:        payload.Comment.Path,
+			Line:            payload.Comment.Line,
+			Side:            payload.Comment.Side,
+			DiffHunk:        payload.Comment.DiffHunk,
+			CommitSHA:       payload.Comment.CommitID,
+			GitHubCreatedAt: zeroNil(payload.Comment.CreatedAt),
+			GitHubUpdatedAt: zeroNil(payload.Comment.UpdatedAt),
+		})
 		events = append(events, workflow.Event{
 			ID:          deliveryID,
 			WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
@@ -496,6 +597,174 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 		})
 	}
 	h.enqueueEvents(ctx, w, events, deliveryID)
+}
+
+type feedbackCapture struct {
+	DeliveryID      string
+	SourceType      string
+	Body            string
+	SourceURL       string
+	AuthorLogin     string
+	IssueNumber     int
+	PRNumber        int
+	CommentID       int64
+	ReviewID        int64
+	FilePath        string
+	Line            int
+	Side            string
+	DiffHunk        string
+	CommitSHA       string
+	GitHubCreatedAt *time.Time
+	GitHubUpdatedAt *time.Time
+}
+
+func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) {
+	if !containsAIImprovementTag(in.Body) {
+		return
+	}
+	authorized := h.feedbackAuthorAllowed(in.AuthorLogin)
+	status := store.FeedbackStatusNew
+	if !authorized {
+		status = store.FeedbackStatusIgnored
+	}
+	owner, name := splitRepo(repo.Name)
+	res := observe.AttributionResolution{Confidence: observe.AttributionUnresolved, Diagnostic: "run attribution resolver unavailable"}
+	if h.observe != nil {
+		res = h.observe.ResolveRunAttribution(observe.AttributionQuery{
+			Body:            in.Body,
+			WorkspaceID:     repo.WorkspaceID,
+			RepoOwner:       owner,
+			RepoName:        name,
+			IssueOrPRNumber: firstNonZero(in.PRNumber, in.IssueNumber),
+			HeadSHA:         in.CommitSHA,
+			At:              feedbackAt(in.GitHubUpdatedAt, in.GitHubCreatedAt),
+		})
+	}
+	input := store.SelfImprovementFeedbackInput{
+		WorkspaceID:      repo.WorkspaceID,
+		RepoOwner:        owner,
+		RepoName:         name,
+		SourceType:       in.SourceType,
+		GitHubCommentID:  in.CommentID,
+		GitHubReviewID:   in.ReviewID,
+		GitHubDeliveryID: in.DeliveryID,
+		SourceURL:        in.SourceURL,
+		AuthorLogin:      in.AuthorLogin,
+		AuthorAuthorized: authorized,
+		IssueNumber:      in.IssueNumber,
+		PRNumber:         in.PRNumber,
+		RawBody:          in.Body,
+		Tag:              "#ai_improvement",
+		FilePath:         in.FilePath,
+		Line:             in.Line,
+		Side:             in.Side,
+		DiffHunk:         in.DiffHunk,
+		CommitSHA:        in.CommitSHA,
+		GitHubCreatedAt:  in.GitHubCreatedAt,
+		GitHubUpdatedAt:  in.GitHubUpdatedAt,
+		LinkConfidence:   res.Confidence,
+		LinkDiagnostics:  res.Diagnostic,
+		Status:           status,
+	}
+	if res.Snapshot != nil {
+		input.LinkedSpanID = res.Snapshot.SpanID
+		input.LinkedEventID = res.Snapshot.EventID
+		input.LinkedAgentID = res.Snapshot.AgentID
+		input.LinkedAgentName = res.Snapshot.AgentName
+		input.LinkedPromptVersionID = res.Snapshot.PromptVersionID
+		input.LinkedSkillVersionIDs = res.Snapshot.SkillVersionIDs
+		input.LinkedGuardrailVersionIDs = res.Snapshot.GuardrailVersionIDs
+	}
+	if _, err := h.store.UpsertSelfImprovementFeedback(input); err != nil {
+		h.logger.Error().Err(err).
+			Str("delivery_id", in.DeliveryID).
+			Str("workspace", fleet.NormalizeWorkspaceID(repo.WorkspaceID)).
+			Str("repo", repo.Name).
+			Str("source_type", in.SourceType).
+			Msg("webhook: store self-improvement feedback")
+		return
+	}
+	h.logger.Info().
+		Str("delivery_id", in.DeliveryID).
+		Str("workspace", fleet.NormalizeWorkspaceID(repo.WorkspaceID)).
+		Str("repo", repo.Name).
+		Str("source_type", in.SourceType).
+		Bool("author_authorized", authorized).
+		Str("link_confidence", res.Confidence).
+		Msg("webhook: stored self-improvement feedback")
+}
+
+func containsAIImprovementTag(body string) bool {
+	inCode := false
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			inCode = !inCode
+			continue
+		}
+		if inCode {
+			continue
+		}
+		for _, field := range strings.Fields(line) {
+			field = strings.Trim(field, ".,;:!?)]}")
+			if field == "#ai_improvement" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (h *Handler) feedbackAuthorAllowed(login string) bool {
+	login = strings.ToLower(strings.TrimSpace(login))
+	if login == "" {
+		return false
+	}
+	for _, allowed := range h.self.FeedbackAuthorAllowlist {
+		if login == strings.ToLower(strings.TrimSpace(allowed)) {
+			return true
+		}
+	}
+	return false
+}
+
+func prNumber(issue webhookIssue) int {
+	if issue.PullRequest == nil {
+		return 0
+	}
+	return issue.Number
+}
+
+func zeroNil(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+func splitRepo(full string) (string, string) {
+	owner, name, ok := strings.Cut(fleet.NormalizeRepoName(full), "/")
+	if !ok {
+		return "", full
+	}
+	return owner, name
+}
+
+func feedbackAt(candidates ...*time.Time) time.Time {
+	for _, candidate := range candidates {
+		if candidate != nil && !candidate.IsZero() {
+			return *candidate
+		}
+	}
+	return time.Time{}
+}
+
+func firstNonZero(xs ...int) int {
+	for _, x := range xs {
+		if x != 0 {
+			return x
+		}
+	}
+	return 0
 }
 
 // handlePushEvent handles X-GitHub-Event: push.

@@ -34,6 +34,8 @@ const (
 	envProxyUpstreamModel          = "AGENTS_PROXY_UPSTREAM_MODEL"
 	envProxyUpstreamAPIKeyEnv      = "AGENTS_PROXY_UPSTREAM_API_KEY_ENV"
 	envProxyUpstreamTimeoutSeconds = "AGENTS_PROXY_UPSTREAM_TIMEOUT_SECONDS"
+
+	envSelfImprovementFeedbackAuthorAllowlist = "AGENTS_SELF_IMPROVEMENT_FEEDBACK_AUTHOR_ALLOWLIST"
 )
 
 // applyEnvOverrides applies startup-only daemon runtime overrides. Empty env
@@ -95,6 +97,9 @@ func (c *Config) applyEnvOverrides() error {
 	applyStringEnv(envProxyUpstreamAPIKeyEnv, &c.Daemon.Proxy.Upstream.APIKeyEnv)
 	if err := applyPositiveIntEnv(envProxyUpstreamTimeoutSeconds, &c.Daemon.Proxy.Upstream.TimeoutSeconds); err != nil {
 		return err
+	}
+	if value, ok := nonEmptyEnv(envSelfImprovementFeedbackAuthorAllowlist); ok {
+		c.Daemon.SelfImprovement.FeedbackAuthorAllowlist = splitCSVEnv(value)
 	}
 	return nil
 }
@@ -166,4 +171,16 @@ func nonEmptyEnv(name string) (string, bool) {
 		return "", false
 	}
 	return value, true
+}
+
+func splitCSVEnv(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

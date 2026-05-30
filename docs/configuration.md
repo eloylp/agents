@@ -50,6 +50,7 @@ See [`.env.sample`](../.env.sample) for a copy-pasteable list with current defau
 | `AGENTS_PROXY_UPSTREAM_MODEL` | upstream model name |
 | `AGENTS_PROXY_UPSTREAM_API_KEY_ENV` | env var name holding upstream API key |
 | `AGENTS_PROXY_UPSTREAM_TIMEOUT_SECONDS` | upstream request timeout |
+| `AGENTS_SELF_IMPROVEMENT_FEEDBACK_AUTHOR_ALLOWLIST` | comma-separated GitHub logins allowed to create actionable `#ai_improvement` feedback |
 
 Secrets keep their integration-specific names:
 
@@ -74,6 +75,8 @@ SSH_AUTH_SOCK=...
 ```
 
 AI and GitHub credentials are injected from the daemon environment into each ephemeral runner container. They are never part of `/config`, `/export`, MCP responses, or UI payloads.
+
+Self-improvement feedback ingestion has one startup-configured trust boundary. Set `AGENTS_SELF_IMPROVEMENT_FEEDBACK_AUTHOR_ALLOWLIST` to the GitHub logins allowed to create actionable `#ai_improvement` evidence. If the list is empty, the daemon falls back to `GITHUB_ACTOR` when present; otherwise tagged comments are stored as ignored audit rows instead of `new` feedback. Feedback memory here is not agent runtime memory: it stores raw, inspectable review evidence for later human-reviewed recommendation flows.
 
 `AGENTS_GIT_USER_NAME` and `AGENTS_GIT_USER_EMAIL` are not credentials, but they use the same env-driven runner setup path. When either is set, the runner setup runs `git config --global user.name "$AGENTS_GIT_USER_NAME"` and/or `git config --global user.email "$AGENTS_GIT_USER_EMAIL"` before starting the AI CLI. Set both explicitly so generated commits use a predictable author instead of letting agents invent one.
 

@@ -17,6 +17,7 @@ const links = [
   { href: '/skills/', label: 'Skills', group: 'Knowledge' },
   { href: '/guardrails/', label: 'Guardrails', group: 'Knowledge' },
   { href: '/memory/', label: 'Memory', group: 'Knowledge' },
+  { href: '/improvements/', label: 'Improvements', group: 'Knowledge' },
   { href: '/workspaces/', label: 'Workspaces', group: 'Config' },
   { href: '/repos/', label: 'Repos', group: 'Config' },
   { href: '/config/', label: 'Config', group: 'Config' },

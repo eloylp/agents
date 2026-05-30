@@ -55,11 +55,18 @@ type Config struct {
 // DaemonConfig holds infrastructure-level configuration for the running
 // daemon. Nothing here is specific to any particular agent or repo.
 type DaemonConfig struct {
-	Log        LogConfig                `yaml:"log"`
-	HTTP       HTTPConfig               `yaml:"http"`
-	Processor  ProcessorConfig          `yaml:"processor"`
-	AIBackends map[string]fleet.Backend `yaml:"-"`
-	Proxy      ProxyConfig              `yaml:"proxy"`
+	Log             LogConfig                `yaml:"log"`
+	HTTP            HTTPConfig               `yaml:"http"`
+	Processor       ProcessorConfig          `yaml:"processor"`
+	SelfImprovement SelfImprovementConfig    `yaml:"self_improvement"`
+	AIBackends      map[string]fleet.Backend `yaml:"-"`
+	Proxy           ProxyConfig              `yaml:"proxy"`
+}
+
+// SelfImprovementConfig controls deterministic capture of maintainer feedback
+// that later assistant runs can analyze. The ingestion path never calls AI.
+type SelfImprovementConfig struct {
+	FeedbackAuthorAllowlist []string `yaml:"feedback_author_allowlist"`
 }
 
 // ProxyConfig controls the built-in Anthropic↔OpenAI translation proxy.

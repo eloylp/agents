@@ -79,6 +79,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/dispatches", withTimeout(http.HandlerFunc(h.HandleDispatches))).Methods(http.MethodGet)
 	r.Handle("/memory/{agent}/{repo}", withTimeout(http.HandlerFunc(h.HandleMemory))).Methods(http.MethodGet)
 	r.HandleFunc("/memory/stream", h.HandleMemoryStream)
+	r.Handle("/improvements/feedback", withTimeout(http.HandlerFunc(h.HandleImprovementFeedback))).Methods(http.MethodGet)
 }
 
 // ── /dispatches ────────────────────────────────────────────────────────────
@@ -142,6 +143,24 @@ func (h *Handler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+// HandleImprovementFeedback serves GET /improvements/feedback, the durable
+// tagged feedback events that later recommendation runs consume.
+func (h *Handler) HandleImprovementFeedback(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	workspaceID := fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace"))
+	rows, err := h.store.ListSelfImprovementFeedback(workspaceID, r.URL.Query().Get("status"), limit)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("list self-improvement feedback")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if rows == nil {
+		rows = []store.SelfImprovementFeedback{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(rows)
 }
 
 // HandleEventsStream serves GET /events/stream as a Server-Sent Events

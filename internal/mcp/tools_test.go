@@ -957,6 +957,53 @@ func TestToolListEventsNilSlice(t *testing.T) {
 	}
 }
 
+func TestToolListImprovementFeedback(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	if _, err := deps.Store.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:      fleet.DefaultWorkspaceID,
+		RepoOwner:        "owner",
+		RepoName:         "one",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  101,
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      7,
+		RawBody:          "remember this #ai_improvement",
+		LinkConfidence:   "unresolved",
+		Status:           "new",
+	}); err != nil {
+		t.Fatalf("seed feedback: %v", err)
+	}
+	if _, err := deps.Store.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:      fleet.DefaultWorkspaceID,
+		RepoOwner:        "owner",
+		RepoName:         "one",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  102,
+		AuthorLogin:      "stranger",
+		AuthorAuthorized: false,
+		IssueNumber:      7,
+		RawBody:          "ignored #ai_improvement",
+		LinkConfidence:   "unresolved",
+		Status:           "ignored",
+	}); err != nil {
+		t.Fatalf("seed ignored feedback: %v", err)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"status": "new"}
+	res, err := toolListImprovementFeedback(deps)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got []map[string]any
+	decodeText(t, res, &got)
+	if len(got) != 1 || got[0]["github_comment_id"] != float64(101) || got[0]["status"] != "new" {
+		t.Fatalf("feedback filter returned %+v, want only comment 101", got)
+	}
+}
+
 func TestToolListTraces(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
