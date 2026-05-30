@@ -50,13 +50,19 @@ The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 
 | `GET` | `/memory/{agent}/{repo}` | Raw agent memory markdown. `{repo}` uses `owner_repo` format (underscore-separated) |
 | `GET` | `/memory/stream` | Memory file change notifications (SSE) |
 | `GET` | `/improvements/feedback` | Stored `/agents improve` feedback events. Query params: `workspace`, optional `status` (`new`, `ignored`, etc.). |
+| `GET` | `/improvements/recommendations` | Review-only self-improvement recommendations. Query params: `workspace`, optional recommendation `status`. |
+| `GET` | `/improvements/recommendations/{id}` | One recommendation with linked feedback evidence. |
+| `POST` | `/improvements/feedback/{id}/analyze` | Manually create or refresh the recommendation for one feedback event. |
+| `POST` | `/improvements/recommendations/{id}/status` | Update recommendation status (`accepted`, `rejected`, `deferred`, `duplicate`, etc.). |
 | `GET` | `/config` | Current fleet config snapshot |
 
 ## Self-Improvement Feedback
 
 GitHub `issue_comment`, `pull_request_review`, and `pull_request_review_comment` webhooks are scanned deterministically for the exact `/agents improve` marker outside fenced code blocks. Authorized marked comments are stored as raw evidence in `status=new`; unauthorized marked comments are retained as `status=ignored` audit rows and never become actionable recommendation input.
 
-Feedback events preserve the raw comment, source URL, repo/issue/PR/file context, delivery ids, author authorization, and any run attribution resolved from public hidden metadata or repo/PR/SHA/time context. The ingestion path does not call AI and does not mutate prompts, skills, guardrails, agents, or dispatch wiring.
+Feedback events preserve the raw comment, source URL, repo/issue/PR/file context, delivery ids, author authorization, and any run attribution resolved from public hidden metadata or repo/PR/SHA/time context.
+
+Authorized new feedback creates one durable recommendation linked back to the feedback event and source URL. Recommendations preserve attribution confidence, expose review status transitions, and remain inert: accepting one does not publish catalog versions or mutate prompts, skills, guardrails, agents, or dispatch wiring.
 
 Configure trusted authors at startup with `AGENTS_SELF_IMPROVEMENT_FEEDBACK_AUTHOR_ALLOWLIST=maintainer-login,agents-bot`.
 

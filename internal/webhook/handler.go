@@ -681,7 +681,8 @@ func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) {
 		input.LinkedSkillVersionIDs = res.Snapshot.SkillVersionIDs
 		input.LinkedGuardrailVersionIDs = res.Snapshot.GuardrailVersionIDs
 	}
-	if _, err := h.store.UpsertSelfImprovementFeedback(input); err != nil {
+	feedback, err := h.store.UpsertSelfImprovementFeedback(input)
+	if err != nil {
 		h.logger.Error().Err(err).
 			Str("delivery_id", in.DeliveryID).
 			Str("workspace", fleet.NormalizeWorkspaceID(repo.WorkspaceID)).
@@ -689,6 +690,14 @@ func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) {
 			Str("source_type", in.SourceType).
 			Msg("webhook: store self-improvement feedback")
 		return
+	}
+	if authorized && feedback.Status == store.FeedbackStatusNew {
+		if _, err := h.store.UpsertSelfImprovementRecommendation(store.RecommendationFromFeedback(feedback)); err != nil {
+			h.logger.Error().Err(err).
+				Str("delivery_id", in.DeliveryID).
+				Int64("feedback_id", feedback.ID).
+				Msg("webhook: create self-improvement recommendation")
+		}
 	}
 	h.logger.Info().
 		Str("delivery_id", in.DeliveryID).
