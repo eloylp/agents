@@ -304,6 +304,62 @@ func TestAIImprovementFeedbackUnauthorizedAuthorIsIgnored(t *testing.T) {
 	}
 }
 
+func TestEditedIssueCommentWithoutAIImprovementTagIgnoresExistingFeedback(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
+	if err := st.UpsertRepo(fleet.Repo{Name: "owner/repo", Enabled: true}); err != nil {
+		t.Fatalf("seed repo: %v", err)
+	}
+
+	dc := workflow.NewDataChannels(1, st)
+	h := NewHandler(
+		NewDeliveryStore(10*time.Minute),
+		dc,
+		st,
+		nil,
+		config.HTTPConfig{},
+		config.SelfImprovementConfig{FeedbackAuthorAllowlist: []string{"maintainer"}},
+		zerolog.Nop(),
+	)
+	created := []byte(`{
+		"action":"created",
+		"comment":{"id":125,"body":"Please remember this #ai_improvement"},
+		"issue":{"number":7},
+		"repository":{"full_name":"owner/repo"},
+		"sender":{"login":"maintainer"}
+	}`)
+	h.handleIssueCommentEvent(context.Background(), httptest.NewRecorder(), created, "delivery-1")
+
+	edited := []byte(`{
+		"action":"edited",
+		"comment":{"id":125,"body":"Please disregard this"},
+		"issue":{"number":7},
+		"repository":{"full_name":"owner/repo"},
+		"sender":{"login":"maintainer"}
+	}`)
+	w := httptest.NewRecorder()
+	h.handleIssueCommentEvent(context.Background(), w, edited, "delivery-2")
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusAccepted)
+	}
+	rows, err := st.ListSelfImprovementFeedback("", "", 10)
+	if err != nil {
+		t.Fatalf("list feedback: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("feedback count = %d, want 1", len(rows))
+	}
+	if rows[0].Status != store.FeedbackStatusIgnored || rows[0].RawBody != "Please disregard this" {
+		t.Fatalf("feedback = %+v, want ignored row with edited body", rows[0])
+	}
+}
+
 func TestAIImprovementTagIgnoresFencedCodeBlocks(t *testing.T) {
 	t.Parallel()
 	body := "```text\n#ai_improvement\n```\noutside"

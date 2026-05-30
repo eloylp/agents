@@ -87,6 +87,10 @@ func (s *Store) UpsertSelfImprovementFeedback(in SelfImprovementFeedbackInput) (
 	return UpsertSelfImprovementFeedback(s.db, in)
 }
 
+func (s *Store) IgnoreSelfImprovementFeedback(in SelfImprovementFeedbackInput) (bool, error) {
+	return IgnoreSelfImprovementFeedback(s.db, in)
+}
+
 func (s *Store) ListSelfImprovementFeedback(workspace, status string, limit int) ([]SelfImprovementFeedback, error) {
 	return ListSelfImprovementFeedback(s.db, workspace, status, limit)
 }
@@ -137,7 +141,11 @@ func UpsertSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) 
 			linked_guardrail_version_ids=excluded.linked_guardrail_version_ids,
 			link_confidence=excluded.link_confidence,
 			link_diagnostics=excluded.link_diagnostics,
-			status=excluded.status`,
+			status=CASE
+				WHEN excluded.status = 'ignored' THEN excluded.status
+				WHEN self_improvement_feedback.raw_body <> excluded.raw_body THEN excluded.status
+				ELSE self_improvement_feedback.status
+			END`,
 		workspaceID, strings.TrimSpace(in.RepoOwner), strings.TrimSpace(in.RepoName), strings.TrimSpace(in.SourceType),
 		in.GitHubCommentID, in.GitHubReviewID, strings.TrimSpace(in.GitHubDeliveryID), strings.TrimSpace(in.SourceURL),
 		strings.TrimSpace(in.AuthorLogin), boolInt(in.AuthorAuthorized), in.IssueNumber, in.PRNumber, in.RawBody, tag,
@@ -162,6 +170,44 @@ func UpsertSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) 
 		workspaceID, strings.TrimSpace(in.SourceType), in.GitHubCommentID, in.GitHubReviewID, tag,
 	)
 	return scanSelfImprovementFeedback(row)
+}
+
+func IgnoreSelfImprovementFeedback(db *sql.DB, in SelfImprovementFeedbackInput) (bool, error) {
+	workspaceID := fleet.NormalizeWorkspaceID(in.WorkspaceID)
+	tag := strings.TrimSpace(in.Tag)
+	if tag == "" {
+		tag = "#ai_improvement"
+	}
+	res, err := db.Exec(
+		`UPDATE self_improvement_feedback SET
+			github_delivery_id=?,
+			source_url=?,
+			author_login=?,
+			author_authorized=?,
+			issue_number=?,
+			pr_number=?,
+			raw_body=?,
+			file_path=?,
+			line=?,
+			side=?,
+			diff_hunk=?,
+			commit_sha=?,
+			github_updated_at=?,
+			status=?
+		WHERE workspace_id=? AND source_type=? AND github_comment_id=? AND github_review_id=? AND tag=?`,
+		strings.TrimSpace(in.GitHubDeliveryID), strings.TrimSpace(in.SourceURL), strings.TrimSpace(in.AuthorLogin),
+		boolInt(in.AuthorAuthorized), in.IssueNumber, in.PRNumber, in.RawBody, strings.TrimSpace(in.FilePath),
+		in.Line, strings.TrimSpace(in.Side), in.DiffHunk, strings.TrimSpace(in.CommitSHA), in.GitHubUpdatedAt,
+		FeedbackStatusIgnored, workspaceID, strings.TrimSpace(in.SourceType), in.GitHubCommentID, in.GitHubReviewID, tag,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
 }
 
 func ListSelfImprovementFeedback(db *sql.DB, workspace, status string, limit int) ([]SelfImprovementFeedback, error) {

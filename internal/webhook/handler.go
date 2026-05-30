@@ -409,6 +409,7 @@ func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWr
 			h.captureFeedback(repo, feedbackCapture{
 				DeliveryID:      deliveryID,
 				SourceType:      "issue_comment",
+				Edited:          true,
 				Body:            payload.Comment.Body,
 				SourceURL:       payload.Comment.HTMLURL,
 				AuthorLogin:     payload.Sender.Login,
@@ -548,6 +549,7 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 			h.captureFeedback(repo, feedbackCapture{
 				DeliveryID:      deliveryID,
 				SourceType:      "pull_request_review_comment",
+				Edited:          true,
 				Body:            payload.Comment.Body,
 				SourceURL:       payload.Comment.HTMLURL,
 				AuthorLogin:     payload.Sender.Login,
@@ -602,6 +604,7 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 type feedbackCapture struct {
 	DeliveryID      string
 	SourceType      string
+	Edited          bool
 	Body            string
 	SourceURL       string
 	AuthorLogin     string
@@ -620,6 +623,9 @@ type feedbackCapture struct {
 
 func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) {
 	if !containsAIImprovementTag(in.Body) {
+		if in.Edited {
+			h.ignoreFeedback(repo, in)
+		}
 		return
 	}
 	authorized := h.feedbackAuthorAllowed(in.AuthorLogin)
@@ -692,6 +698,50 @@ func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) {
 		Bool("author_authorized", authorized).
 		Str("link_confidence", res.Confidence).
 		Msg("webhook: stored self-improvement feedback")
+}
+
+func (h *Handler) ignoreFeedback(repo fleet.Repo, in feedbackCapture) {
+	owner, name := splitRepo(repo.Name)
+	authorized := h.feedbackAuthorAllowed(in.AuthorLogin)
+	ignored, err := h.store.IgnoreSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:      repo.WorkspaceID,
+		RepoOwner:        owner,
+		RepoName:         name,
+		SourceType:       in.SourceType,
+		GitHubCommentID:  in.CommentID,
+		GitHubReviewID:   in.ReviewID,
+		GitHubDeliveryID: in.DeliveryID,
+		SourceURL:        in.SourceURL,
+		AuthorLogin:      in.AuthorLogin,
+		AuthorAuthorized: authorized,
+		IssueNumber:      in.IssueNumber,
+		PRNumber:         in.PRNumber,
+		RawBody:          in.Body,
+		Tag:              "#ai_improvement",
+		FilePath:         in.FilePath,
+		Line:             in.Line,
+		Side:             in.Side,
+		DiffHunk:         in.DiffHunk,
+		CommitSHA:        in.CommitSHA,
+		GitHubUpdatedAt:  in.GitHubUpdatedAt,
+	})
+	if err != nil {
+		h.logger.Error().Err(err).
+			Str("delivery_id", in.DeliveryID).
+			Str("workspace", fleet.NormalizeWorkspaceID(repo.WorkspaceID)).
+			Str("repo", repo.Name).
+			Str("source_type", in.SourceType).
+			Msg("webhook: ignore self-improvement feedback")
+		return
+	}
+	if ignored {
+		h.logger.Info().
+			Str("delivery_id", in.DeliveryID).
+			Str("workspace", fleet.NormalizeWorkspaceID(repo.WorkspaceID)).
+			Str("repo", repo.Name).
+			Str("source_type", in.SourceType).
+			Msg("webhook: ignored self-improvement feedback after tag removal")
+	}
 }
 
 func containsAIImprovementTag(body string) bool {
