@@ -48,7 +48,7 @@ Fleet snapshot with per-agent status, prompt reference, skills, bindings, dispat
 
 ### Prompts and Skills
 
-Manage reusable prompt contracts and reusable guidance blocks composed into agent prompts. Both catalogs can be global, workspace-scoped, or repo-scoped. The list pages show all catalog items by default and provide local workspace/repo filters where that helps selection. Create, edit, delete. Long-form content editors have the same **⛶ Expand** affordance across prompt and skill editors, useful when content grows past a screenful.
+Manage reusable prompt contracts and reusable guidance blocks composed into agent prompts. Both catalogs can be global, workspace-scoped, or repo-scoped. Editing publishes a new immutable version while the stable catalog asset keeps the same id; agents track the current published version unless explicitly pinned by version id through API/import. The list pages show all catalog items by default, including the current version number, and provide local workspace/repo filters where that helps selection. Create, edit, delete. Long-form content editors have the same **⛶ Expand** affordance across prompt and skill editors, useful when content grows past a screenful.
 
 ![Skills editor](img/skills.png)
 
@@ -60,7 +60,7 @@ Backend discovery status, including per-backend GitHub MCP connectivity, plus su
 
 ### Guardrails
 
-Tab inside the Config page. Lists every prompt guardrail that can be selected for a workspace, with built-in / disabled / position badges. Click a row to edit name, description, content (markdown editor with **⛶ Expand** affordance), enabled toggle, and position. Guardrails can be global or workspace-scoped; each workspace chooses the visible guardrails it renders. **Reset to default** restores a built-in's seeded text. **Delete** asks for double confirmation, with a stronger warning when the row is built-in. Disabling the shipped `security` guardrail surfaces an extra-stern confirm modal explaining what protection is removed. The shipped daemon arrives with built-in guardrails for security, public-action discretion, daemon-only memory scope, and repository tool usage (MCP first, gh fallback); operators can add code-style, deployment-policy, or any other policy block on top.
+Main Knowledge page. Lists every prompt guardrail that can be selected for a workspace, with built-in / disabled / position / version badges. Click a row to edit name, description, content (markdown editor with **⛶ Expand** affordance), enabled toggle, position, version timeline, diff, and rollback controls. Edits publish immutable guardrail versions; workspace selections track the current version by default. Guardrails can be global or workspace-scoped; each workspace chooses the visible guardrails it renders. **Reset to default** restores a built-in's seeded text and publishes that reset as a new version. **Delete** asks for double confirmation, with a stronger warning when the row is built-in. Disabling the shipped `security` guardrail surfaces an extra-stern confirm modal explaining what protection is removed. The shipped daemon arrives with built-in guardrails for security, public-action discretion, daemon-only memory scope, and repository tool usage (MCP first, gh fallback); operators can add code-style, deployment-policy, or any other policy block on top.
 
 ![Config page, Guardrails tab](img/guardrails.png)
 

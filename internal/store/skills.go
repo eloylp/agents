@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
@@ -50,12 +51,29 @@ func importSkills(tx *sql.Tx, skills map[string]fleet.Skill) error {
 			}
 			return fmt.Errorf("store import: upsert skill %s: %w", id, err)
 		}
+		version, err := publishSkillVersionTx(tx, internalID, s.Prompt)
+		if err != nil {
+			return fmt.Errorf("store import: publish skill %s version: %w", id, err)
+		}
+		if len(s.Versions) > 0 {
+			version, err = replaceSkillVersionSnapshotsTx(tx, internalID, s.Versions)
+			if err != nil {
+				return fmt.Errorf("store import: replace skill %s versions: %w", id, err)
+			}
+		}
+		if err := applySkillCurrentVersionTx(tx, internalID, version.ID); err != nil {
+			return fmt.Errorf("store import: update skill %s current version: %w", id, err)
+		}
 	}
 	return nil
 }
 
 func loadSkills(db querier, cfg *config.Config) error {
-	rows, err := db.Query("SELECT ref,COALESCE(workspace_id, ''),COALESCE(repo, ''),name,prompt FROM skills")
+	rows, err := db.Query(`
+		SELECT s.ref, COALESCE(s.workspace_id, ''), COALESCE(s.repo, ''), s.name, s.prompt,
+		       COALESCE(sv.id, ''), COALESCE(sv.version_number, 0)
+		FROM skills s
+		LEFT JOIN skill_versions sv ON sv.id = s.current_version_id`)
 	if err != nil {
 		return fmt.Errorf("store load: query skills: %w", err)
 	}
@@ -65,7 +83,7 @@ func loadSkills(db querier, cfg *config.Config) error {
 	for rows.Next() {
 		var id string
 		var skill fleet.Skill
-		if err := rows.Scan(&id, &skill.WorkspaceID, &skill.Repo, &skill.Name, &skill.Prompt); err != nil {
+		if err := rows.Scan(&id, &skill.WorkspaceID, &skill.Repo, &skill.Name, &skill.Prompt, &skill.VersionID, &skill.Version); err != nil {
 			return fmt.Errorf("store load: scan skill: %w", err)
 		}
 		skill.ID = id
@@ -76,6 +94,28 @@ func loadSkills(db querier, cfg *config.Config) error {
 	}
 	cfg.Skills = skills
 	return nil
+}
+
+func ReadSkillVersion(db *sql.DB, versionID string) (fleet.Skill, error) {
+	versionID = strings.TrimSpace(versionID)
+	if versionID == "" {
+		return fleet.Skill{}, &ErrValidation{Msg: "skill version id is required"}
+	}
+	var skill fleet.Skill
+	row := db.QueryRow(`
+		SELECT s.ref, COALESCE(s.workspace_id, ''), COALESCE(s.repo, ''), s.name,
+		       sv.prompt, sv.id, sv.version_number
+		FROM skill_versions sv
+		JOIN skills s ON s.id = sv.skill_id
+		WHERE sv.id = ? AND sv.state = 'published'`, versionID)
+	err := row.Scan(&skill.ID, &skill.WorkspaceID, &skill.Repo, &skill.Name, &skill.Prompt, &skill.VersionID, &skill.Version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fleet.Skill{}, &ErrNotFound{Msg: fmt.Sprintf("skill version %q not found", versionID)}
+	}
+	if err != nil {
+		return fleet.Skill{}, fmt.Errorf("store: read skill version %s: %w", versionID, err)
+	}
+	return skill, nil
 }
 
 func readSkillScopeByID(q querier, id string) (fleet.Skill, bool, error) {

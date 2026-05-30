@@ -14,11 +14,13 @@ import (
 // prepends to every agent's composed prompt.
 func ReadEnabledGuardrails(db *sql.DB) ([]fleet.Guardrail, error) {
 	const q = `
-		SELECT ref, COALESCE(workspace_id, ''), name, COALESCE(description, ''), content,
-		       COALESCE(default_content, ''), is_builtin, enabled, position
-		FROM guardrails
-		WHERE enabled = 1
-		ORDER BY position ASC, name ASC`
+		SELECT g.ref, COALESCE(g.workspace_id, ''), g.name, COALESCE(g.description, ''), g.content,
+		       COALESCE(g.default_content, ''), g.is_builtin, g.enabled, g.position,
+		       COALESCE(gv.id, ''), COALESCE(gv.version_number, 0)
+		FROM guardrails g
+		LEFT JOIN guardrail_versions gv ON gv.id = g.current_version_id
+		WHERE g.enabled = 1
+		ORDER BY g.position ASC, g.name ASC`
 	return scanGuardrails(db, q)
 }
 
@@ -31,10 +33,12 @@ func ReadWorkspacePromptGuardrails(db *sql.DB, workspace string) ([]fleet.Guardr
 		return nil, err
 	}
 	const q = `
-		SELECT g.ref, COALESCE(g.workspace_id, ''), g.name, COALESCE(g.description, ''), g.content,
-		       COALESCE(g.default_content, ''), g.is_builtin, wg.enabled, wg.position
+		SELECT g.ref, COALESCE(g.workspace_id, ''), g.name, COALESCE(gv.description, g.description, ''), COALESCE(gv.content, g.content),
+		       COALESCE(g.default_content, ''), g.is_builtin, wg.enabled, wg.position,
+		       COALESCE(gv.id, ''), COALESCE(gv.version_number, 0)
 		FROM workspace_guardrails wg
 		JOIN guardrails g ON g.id = wg.guardrail_name
+		LEFT JOIN guardrail_versions gv ON gv.id = COALESCE(wg.guardrail_version_id, g.current_version_id)
 		WHERE wg.workspace_id = ? AND wg.enabled = 1
 		ORDER BY wg.position ASC, g.ref ASC`
 	return scanGuardrails(db, q, workspaceID)
@@ -45,10 +49,12 @@ func ReadWorkspacePromptGuardrails(db *sql.DB, workspace string) ([]fleet.Guardr
 // surfaces to expose the full list.
 func ReadAllGuardrails(db *sql.DB) ([]fleet.Guardrail, error) {
 	const q = `
-		SELECT ref, COALESCE(workspace_id, ''), name, COALESCE(description, ''), content,
-		       COALESCE(default_content, ''), is_builtin, enabled, position
-		FROM guardrails
-		ORDER BY position ASC, name ASC`
+		SELECT g.ref, COALESCE(g.workspace_id, ''), g.name, COALESCE(g.description, ''), g.content,
+		       COALESCE(g.default_content, ''), g.is_builtin, g.enabled, g.position,
+		       COALESCE(gv.id, ''), COALESCE(gv.version_number, 0)
+		FROM guardrails g
+		LEFT JOIN guardrail_versions gv ON gv.id = g.current_version_id
+		ORDER BY g.position ASC, g.name ASC`
 	return scanGuardrails(db, q)
 }
 
@@ -61,11 +67,13 @@ func GetGuardrail(db *sql.DB, name string) (fleet.Guardrail, error) {
 func GetGuardrailFrom(db querier, name string) (fleet.Guardrail, error) {
 	name = fleet.NormalizeGuardrailName(name)
 	const q = `
-		SELECT ref, COALESCE(workspace_id, ''), name, COALESCE(description, ''), content,
-		       COALESCE(default_content, ''), is_builtin, enabled, position
-		FROM guardrails
-		WHERE id = ? OR ref = ? OR (workspace_id IS NULL AND name = ?)
-		ORDER BY CASE WHEN id = ? OR ref = ? THEN 0 ELSE 1 END
+		SELECT g.ref, COALESCE(g.workspace_id, ''), g.name, COALESCE(g.description, ''), g.content,
+		       COALESCE(g.default_content, ''), g.is_builtin, g.enabled, g.position,
+		       COALESCE(gv.id, ''), COALESCE(gv.version_number, 0)
+		FROM guardrails g
+		LEFT JOIN guardrail_versions gv ON gv.id = g.current_version_id
+		WHERE g.id = ? OR g.ref = ? OR (g.workspace_id IS NULL AND g.name = ?)
+		ORDER BY CASE WHEN g.id = ? OR g.ref = ? THEN 0 ELSE 1 END
 		LIMIT 1`
 	g, err := scanGuardrailRow(db.QueryRow(q, name, name, name, name, name))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -154,6 +162,13 @@ func UpsertGuardrailTx(exec sqlExec, g fleet.Guardrail) error {
 		}
 		return fmt.Errorf("store: upsert guardrail %q: %w", g.Name, err)
 	}
+	version, err := publishGuardrailVersionTx(exec, internalID, g)
+	if err != nil {
+		return fmt.Errorf("store: upsert guardrail %q: %w", g.Name, err)
+	}
+	if err := applyGuardrailCurrentVersionTx(exec, internalID, version.ID); err != nil {
+		return fmt.Errorf("store: upsert guardrail %q: current version: %w", g.Name, err)
+	}
 	return nil
 }
 
@@ -229,6 +244,14 @@ func ResetGuardrailTx(db sqlExec, name string) error {
 	); err != nil {
 		return fmt.Errorf("store: reset guardrail %q: %w", name, err)
 	}
+	g.Content = g.DefaultContent
+	version, err := publishGuardrailVersionTx(db, id, g)
+	if err != nil {
+		return fmt.Errorf("store: reset guardrail %q: %w", name, err)
+	}
+	if err := applyGuardrailCurrentVersionTx(db, id, version.ID); err != nil {
+		return fmt.Errorf("store: reset guardrail %q: current version: %w", name, err)
+	}
 	return nil
 }
 
@@ -270,7 +293,7 @@ func scanGuardrailRow(r rowScanner) (fleet.Guardrail, error) {
 		g                  fleet.Guardrail
 		isBuiltin, enabled int
 	)
-	if err := r.Scan(&g.ID, &g.WorkspaceID, &g.Name, &g.Description, &g.Content, &g.DefaultContent, &isBuiltin, &enabled, &g.Position); err != nil {
+	if err := r.Scan(&g.ID, &g.WorkspaceID, &g.Name, &g.Description, &g.Content, &g.DefaultContent, &isBuiltin, &enabled, &g.Position, &g.VersionID, &g.Version); err != nil {
 		return fleet.Guardrail{}, err
 	}
 	g.IsBuiltin = intToBool(isBuiltin)

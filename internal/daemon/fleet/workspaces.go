@@ -41,19 +41,21 @@ func (j storeWorkspaceJSON) toConfig() fleet.Workspace {
 }
 
 type workspaceGuardrailJSON struct {
-	WorkspaceID   string `json:"workspace_id,omitempty"`
-	GuardrailName string `json:"guardrail_name"`
-	Position      *int   `json:"position"`
-	Enabled       bool   `json:"enabled"`
+	WorkspaceID        string `json:"workspace_id,omitempty"`
+	GuardrailName      string `json:"guardrail_name"`
+	GuardrailVersionID string `json:"guardrail_version_id,omitempty"`
+	Position           *int   `json:"position"`
+	Enabled            bool   `json:"enabled"`
 }
 
 func workspaceGuardrailToJSON(ref fleet.WorkspaceGuardrailRef) workspaceGuardrailJSON {
 	position := ref.Position
 	return workspaceGuardrailJSON{
-		WorkspaceID:   ref.WorkspaceID,
-		GuardrailName: ref.GuardrailName,
-		Position:      &position,
-		Enabled:       ref.Enabled,
+		WorkspaceID:        ref.WorkspaceID,
+		GuardrailName:      ref.GuardrailName,
+		GuardrailVersionID: ref.GuardrailVersionID,
+		Position:           &position,
+		Enabled:            ref.Enabled,
 	}
 }
 
@@ -63,9 +65,10 @@ func (j workspaceGuardrailJSON) toConfig(defaultPosition int) fleet.WorkspaceGua
 		position = *j.Position
 	}
 	return fleet.WorkspaceGuardrailRef{
-		GuardrailName: j.GuardrailName,
-		Position:      position,
-		Enabled:       j.Enabled,
+		GuardrailName:      j.GuardrailName,
+		GuardrailVersionID: j.GuardrailVersionID,
+		Position:           position,
+		Enabled:            j.Enabled,
 	}
 }
 

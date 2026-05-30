@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AgentForm, { emptyAgentForm } from './AgentForm'
 
 const baseAgent = {
@@ -11,6 +11,13 @@ const baseAgent = {
 }
 
 describe('<AgentForm />', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve([]),
+    })))
+  })
+
   it('does not show a missing prompt error before prompt lookups load', () => {
     render(
       <AgentForm
@@ -187,7 +194,53 @@ describe('<AgentForm />', () => {
       prompt_id: '',
       prompt_ref: 'review',
       prompt_scope: 'default/owner/b',
+      prompt_version_id: '',
       skills: [],
+      skill_version_ids: {},
+    })
+  })
+
+  it('saves prompt and skill exact version pins', async () => {
+    vi.mocked(fetch).mockImplementation((url: RequestInfo | URL) => {
+      const path = String(url)
+      const versions = path.includes('/skills/')
+        ? [{ id: 'skillver_security_2', version: 2, state: 'published' }]
+        : [{ id: 'promptver_review_3', version: 3, state: 'published' }]
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(versions),
+      } as Response)
+    })
+    const onSave = vi.fn()
+    render(
+      <AgentForm
+        initial={{ ...baseAgent, prompt_ref: 'review', skills: ['security'] }}
+        isNew
+        workspace="default"
+        backends={[{ name: 'claude', detected: true }]}
+        skillOptions={[{ name: 'security' }]}
+        agentNames={[]}
+        promptOptions={[{ name: 'review' }]}
+        repoNames={[]}
+        onSave={onSave}
+        onCancel={vi.fn()}
+        saving={false}
+        error=""
+      />,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: 'Pin v3' })).toBeInTheDocument()
+      expect(screen.getByRole('option', { name: 'Pin v2' })).toBeInTheDocument()
+    })
+    fireEvent.change(screen.getByLabelText('Prompt version'), { target: { value: 'promptver_review_3' } })
+    fireEvent.change(screen.getByLabelText('security version'), { target: { value: 'skillver_security_2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(onSave).toHaveBeenCalledOnce()
+    expect(onSave.mock.calls[0][0]).toMatchObject({
+      prompt_version_id: 'promptver_review_3',
+      skills: ['security@2'],
     })
   })
 })

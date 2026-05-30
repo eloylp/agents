@@ -23,6 +23,8 @@ type storeGuardrailJSON struct {
 	IsBuiltin      bool   `json:"is_builtin"`
 	Enabled        bool   `json:"enabled"`
 	Position       int    `json:"position"`
+	VersionID      string `json:"version_id,omitempty"`
+	Version        int    `json:"version,omitempty"`
 }
 
 func guardrailToJSON(g fleet.Guardrail) storeGuardrailJSON {
@@ -36,6 +38,8 @@ func guardrailToJSON(g fleet.Guardrail) storeGuardrailJSON {
 		IsBuiltin:      g.IsBuiltin,
 		Enabled:        g.Enabled,
 		Position:       g.Position,
+		VersionID:      g.VersionID,
+		Version:        g.Version,
 	}
 }
 
@@ -49,13 +53,14 @@ type GuardrailPatch struct {
 	Content     *string `json:"content,omitempty"`
 	Enabled     *bool   `json:"enabled,omitempty"`
 	Position    *int    `json:"position,omitempty"`
+	Publish     *bool   `json:"publish,omitempty"`
 }
 
 // AnyFieldSet reports whether at least one patch field is non-nil. Used by
 // both the REST PATCH handler and the MCP update_guardrail tool to reject
 // empty payloads before hitting the store.
 func (p GuardrailPatch) AnyFieldSet() bool {
-	return p.Description != nil || p.Content != nil || p.Enabled != nil || p.Position != nil
+	return p.Description != nil || p.Content != nil || p.Enabled != nil || p.Position != nil || p.Publish != nil
 }
 
 func (p GuardrailPatch) apply(g *fleet.Guardrail) {
@@ -122,6 +127,46 @@ func (h *Handler) handleGuardrailGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, guardrailToJSON(g))
 }
 
+func (h *Handler) handleGuardrailVersionsList(w http.ResponseWriter, r *http.Request) {
+	name := fleet.NormalizeGuardrailName(mux.Vars(r)["id"])
+	versions, err := h.store.ListGuardrailVersions(name)
+	if err != nil {
+		h.writeErr(w, err, "guardrail versions")
+		return
+	}
+	writeJSON(w, http.StatusOK, versions)
+}
+
+func (h *Handler) handleGuardrailVersionReferences(w http.ResponseWriter, r *http.Request) {
+	name := fleet.NormalizeGuardrailName(mux.Vars(r)["id"])
+	versionID := mux.Vars(r)["version_id"]
+	refs, err := h.store.ListGuardrailVersionReferences(name, versionID)
+	if err != nil {
+		h.writeErr(w, err, "guardrail version references")
+		return
+	}
+	writeJSON(w, http.StatusOK, refs)
+}
+
+func (h *Handler) handleGuardrailVersionRollout(w http.ResponseWriter, r *http.Request) {
+	name := fleet.NormalizeGuardrailName(mux.Vars(r)["id"])
+	fromVersionID := mux.Vars(r)["version_id"]
+	var req catalogVersionRolloutRequest
+	if !decodeBody(w, r, h.maxBodyBytes, &req) {
+		return
+	}
+	if req.ToVersionID == "" {
+		http.Error(w, "to_version_id is required", http.StatusBadRequest)
+		return
+	}
+	result, err := h.store.UpgradeGuardrailVersionReferences(name, fromVersionID, req.ToVersionID)
+	if err != nil {
+		h.writeErr(w, err, "guardrail version rollout")
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (h *Handler) handleGuardrailPatchByName(w http.ResponseWriter, r *http.Request) {
 	name := fleet.NormalizeGuardrailName(mux.Vars(r)["id"])
 	h.handleGuardrailPatch(w, r, name)
@@ -134,6 +179,32 @@ func (h *Handler) handleGuardrailDelete(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) handleGuardrailVersionPublish(w http.ResponseWriter, r *http.Request) {
+	name := fleet.NormalizeGuardrailName(mux.Vars(r)["id"])
+	versionID := mux.Vars(r)["version_id"]
+	if err := h.ensureGuardrailVersionBelongsToRef(name, versionID); err != nil {
+		h.writeErr(w, err, "guardrail version publish")
+		return
+	}
+	g, err := h.service.PublishGuardrailVersion(versionID)
+	if err != nil {
+		h.writeErr(w, err, "guardrail version publish")
+		return
+	}
+	writeJSON(w, http.StatusOK, guardrailToJSON(g))
+}
+
+func (h *Handler) ensureGuardrailVersionBelongsToRef(ref, versionID string) error {
+	versions, err := h.store.ListGuardrailVersions(ref)
+	if err != nil {
+		return err
+	}
+	if !catalogVersionsInclude(versions, versionID) {
+		return &store.ErrNotFound{Msg: fmt.Sprintf("guardrail version %q not found for %q", versionID, ref)}
+	}
+	return nil
 }
 
 func (h *Handler) handleGuardrailPatch(w http.ResponseWriter, r *http.Request, name string) {
@@ -203,10 +274,23 @@ func (h *Handler) UpdateGuardrailPatch(name string, patch GuardrailPatch) (fleet
 		return fleet.Guardrail{}, err
 	}
 	patch.apply(&existing)
+	if patch.Publish != nil && !*patch.Publish {
+		version, err := h.service.CreateGuardrailDraft(normalized, existing)
+		if err != nil {
+			return fleet.Guardrail{}, err
+		}
+		existing.VersionID = version.ID
+		existing.Version = version.Version
+		return existing, nil
+	}
 	if err := h.service.UpsertGuardrail(existing); err != nil {
 		return fleet.Guardrail{}, err
 	}
 	return h.store.GetGuardrail(normalized)
+}
+
+func (h *Handler) PublishGuardrailVersion(versionID string) (fleet.Guardrail, error) {
+	return h.service.PublishGuardrailVersion(versionID)
 }
 
 // DeleteGuardrail removes the addressed guardrail. Returns *store.ErrNotFound

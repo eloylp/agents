@@ -102,11 +102,35 @@ func (s *Store) UpsertPrompt(p fleet.Prompt) (fleet.Prompt, error) {
 	return UpsertPrompt(s.db, p)
 }
 func (s *Store) ReadPrompt(ref string) (fleet.Prompt, error) { return ReadPrompt(s.db, ref) }
-func (s *Store) DeletePrompt(ref string) error               { return DeletePrompt(s.db, ref) }
+func (s *Store) ReadPromptVersion(versionID string) (fleet.Prompt, error) {
+	return ReadPromptVersion(s.db, versionID)
+}
+func (s *Store) ListPromptVersions(ref string) ([]fleet.CatalogVersion, error) {
+	return ListPromptVersions(s.db, ref)
+}
+func (s *Store) ListPromptVersionReferences(ref, versionID string) ([]fleet.CatalogVersionReference, error) {
+	return ListPromptVersionReferences(s.db, ref, versionID)
+}
+func (s *Store) UpgradePromptVersionReferences(ref, fromVersionID, toVersionID string) (fleet.CatalogVersionRolloutResult, error) {
+	return UpgradePromptVersionReferences(s.db, ref, fromVersionID, toVersionID)
+}
+func (s *Store) DeletePrompt(ref string) error { return DeletePrompt(s.db, ref) }
 
 // ── Skills ──────────────────────────────────────────────────────────────
 
-func (s *Store) ReadSkills() (map[string]fleet.Skill, error)   { return ReadSkills(s.db) }
+func (s *Store) ReadSkills() (map[string]fleet.Skill, error) { return ReadSkills(s.db) }
+func (s *Store) ReadSkillVersion(versionID string) (fleet.Skill, error) {
+	return ReadSkillVersion(s.db, versionID)
+}
+func (s *Store) ListSkillVersions(ref string) ([]fleet.CatalogVersion, error) {
+	return ListSkillVersions(s.db, ref)
+}
+func (s *Store) ListSkillVersionReferences(ref, versionID string) ([]fleet.CatalogVersionReference, error) {
+	return ListSkillVersionReferences(s.db, ref, versionID)
+}
+func (s *Store) UpgradeSkillVersionReferences(ref, fromVersionID, toVersionID string) (fleet.CatalogVersionRolloutResult, error) {
+	return UpgradeSkillVersionReferences(s.db, ref, fromVersionID, toVersionID)
+}
 func (s *Store) UpsertSkill(name string, sk fleet.Skill) error { return UpsertSkill(s.db, name, sk) }
 func (s *Store) DeleteSkill(name string) error                 { return DeleteSkill(s.db, name) }
 
@@ -165,9 +189,18 @@ func (s *Store) ReadWorkspacePromptGuardrails(workspace string) ([]fleet.Guardra
 }
 func (s *Store) ReadAllGuardrails() ([]fleet.Guardrail, error)     { return ReadAllGuardrails(s.db) }
 func (s *Store) GetGuardrail(name string) (fleet.Guardrail, error) { return GetGuardrail(s.db, name) }
-func (s *Store) UpsertGuardrail(g fleet.Guardrail) error           { return UpsertGuardrail(s.db, g) }
-func (s *Store) DeleteGuardrail(name string) error                 { return DeleteGuardrail(s.db, name) }
-func (s *Store) ResetGuardrail(name string) error                  { return ResetGuardrail(s.db, name) }
+func (s *Store) ListGuardrailVersions(ref string) ([]fleet.CatalogVersion, error) {
+	return ListGuardrailVersions(s.db, ref)
+}
+func (s *Store) ListGuardrailVersionReferences(ref, versionID string) ([]fleet.CatalogVersionReference, error) {
+	return ListGuardrailVersionReferences(s.db, ref, versionID)
+}
+func (s *Store) UpgradeGuardrailVersionReferences(ref, fromVersionID, toVersionID string) (fleet.CatalogVersionRolloutResult, error) {
+	return UpgradeGuardrailVersionReferences(s.db, ref, fromVersionID, toVersionID)
+}
+func (s *Store) UpsertGuardrail(g fleet.Guardrail) error { return UpsertGuardrail(s.db, g) }
+func (s *Store) DeleteGuardrail(name string) error       { return DeleteGuardrail(s.db, name) }
+func (s *Store) ResetGuardrail(name string) error        { return ResetGuardrail(s.db, name) }
 
 // ── Memory ──────────────────────────────────────────────────────────────
 

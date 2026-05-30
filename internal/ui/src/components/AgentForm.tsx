@@ -20,6 +20,16 @@ export interface PromptOption {
   name: string
 }
 
+interface CatalogVersionOption {
+  id: string
+  version: number
+  state: string
+}
+
+const skillBaseRef = (value: string) => value.split('@')[0]
+
+const publishedVersionOptions = (versions: CatalogVersionOption[]) => versions.filter(v => v.state === 'published')
+
 // allow_memory defaults to true so newly created agents preserve the
 // historical behaviour where autonomous runs persist memory by default.
 export const emptyAgentForm: StoreAgent = {
@@ -47,6 +57,9 @@ export default function AgentForm({
   error: string
 }) {
   const [form, setForm] = useState<StoreAgent>(initial)
+  const [promptVersions, setPromptVersions] = useState<CatalogVersionOption[]>([])
+  const [skillVersions, setSkillVersions] = useState<Record<string, CatalogVersionOption[]>>({})
+  const [versionError, setVersionError] = useState('')
 
   const set = (k: keyof StoreAgent, v: unknown) => setForm(f => ({ ...f, [k]: v }))
 
@@ -68,12 +81,16 @@ export default function AgentForm({
   const visibleSkills = visibleCatalogItems(skillOptions, workspace, catalogRepo)
   const promptValues = visiblePrompts.map(catalogValue)
   const skillValues = visibleSkills.map(catalogValue)
+  const selectedSkillRefs = form.skills.map(skillBaseRef)
+  const unresolvedSkillPins = Object.entries(form.skill_version_ids ?? {}).some(([skill, versionID]) =>
+    versionID !== '' && selectedSkillRefs.includes(skill) && !(skillVersions[skill] ?? []).some(v => v.id === versionID),
+  )
   const selectedPromptByRef = visiblePrompts.find(p => p.name === form.prompt_ref && catalogScope(p) === form.prompt_scope)
   const selectedPrompt = (form.prompt_id || (selectedPromptByRef ? catalogValue(selectedPromptByRef) : form.prompt_ref)).trim()
   const promptRefHidden = selectedPrompt !== '' && !promptValues.includes(selectedPrompt)
   const promptRefMissing = promptOptionsLoaded && promptRefHidden
   const canSave = !saving && form.name.trim() !== '' && form.backend.trim() !== '' && form.description.trim() !== '' &&
-    selectedPrompt !== '' && promptOptionsLoaded && !promptRefMissing && (form.scope_type !== 'repo' || scopeRepo !== '')
+    selectedPrompt !== '' && promptOptionsLoaded && !promptRefMissing && !unresolvedSkillPins && (form.scope_type !== 'repo' || scopeRepo !== '')
 
   const setPrompt = (value: string) => {
     const prompt = visiblePrompts.find(p => catalogValue(p) === value)
@@ -82,19 +99,105 @@ export default function AgentForm({
       prompt_id: '',
       prompt_ref: prompt?.name ?? value,
       prompt_scope: prompt ? catalogScope(prompt) : '',
+      prompt_version_id: '',
     }))
+  }
+
+  const setSkills = (values: string[]) => {
+    setForm(f => {
+      const pins = f.skill_version_ids ?? {}
+      return {
+        ...f,
+        skills: values,
+        skill_version_ids: Object.fromEntries(values.filter(value => pins[value]).map(value => [value, pins[value]])),
+      }
+    })
+  }
+
+  const setSkillVersion = (skill: string, versionID: string) => {
+    setForm(f => {
+      const pins = { ...(f.skill_version_ids ?? {}) }
+      if (versionID) {
+        pins[skill] = versionID
+      } else {
+        delete pins[skill]
+      }
+      return { ...f, skill_version_ids: pins }
+    })
+  }
+
+  const saveForm = () => {
+    const pins = form.skill_version_ids ?? {}
+    const skills = form.skills.map(skill => {
+      const base = skillBaseRef(skill)
+      const pin = pins[base]
+      if (!pin) return base
+      const version = (skillVersions[base] ?? []).find(v => v.id === pin)
+      return version ? `${base}@${version.version}` : base
+    })
+    onSave({
+      ...form,
+      skills,
+      prompt_version_id: form.prompt_version_id || '',
+    })
   }
 
   useEffect(() => {
     setForm(f => {
-      const nextSkills = f.skills.filter(s => skillValues.includes(s))
-      if (nextSkills.length === f.skills.length) return f
+      const nextSkills = f.skills.map(skillBaseRef).filter(s => skillValues.includes(s))
+      if (nextSkills.length === f.skills.length && nextSkills.every((skill, i) => skill === f.skills[i])) return f
+      const pins = f.skill_version_ids ?? {}
       return {
         ...f,
         skills: nextSkills,
+        skill_version_ids: Object.fromEntries(nextSkills.filter(skill => pins[skill]).map(skill => [skill, pins[skill]])),
       }
     })
   }, [skillValues.join('|')])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setPromptVersions([])
+    if (!selectedPrompt || promptRefHidden) {
+      return () => controller.abort()
+    }
+    setVersionError('')
+    fetch(`/prompts/${encodeURIComponent(selectedPrompt)}/versions`, { cache: 'no-store', signal: controller.signal })
+      .then(r => {
+        if (!r.ok) throw new Error(`load prompt versions: ${r.status}`)
+        return r.json()
+      })
+      .then((data: CatalogVersionOption[]) => setPromptVersions(data ?? []))
+      .catch(e => {
+        if (e instanceof DOMException && e.name === 'AbortError') return
+        setVersionError(String(e))
+      })
+    return () => controller.abort()
+  }, [selectedPrompt, promptRefHidden])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const skills = Array.from(new Set(selectedSkillRefs.filter(skill => skillValues.includes(skill))))
+    if (skills.length === 0) {
+      setSkillVersions({})
+      return () => controller.abort()
+    }
+    setVersionError('')
+    Promise.all(skills.map(skill =>
+      fetch(`/skills/${encodeURIComponent(skill)}/versions`, { cache: 'no-store', signal: controller.signal })
+        .then(r => {
+          if (!r.ok) throw new Error(`load skill versions: ${skill}: ${r.status}`)
+          return r.json()
+        })
+        .then((data: CatalogVersionOption[]) => [skill, data ?? []] as const),
+    ))
+      .then(entries => setSkillVersions(Object.fromEntries(entries)))
+      .catch(e => {
+        if (e instanceof DOMException && e.name === 'AbortError') return
+        setVersionError(String(e))
+      })
+    return () => controller.abort()
+  }, [selectedSkillRefs.join('|'), skillValues.join('|')])
 
   useEffect(() => {
     if (!form.model) return
@@ -126,7 +229,28 @@ export default function AgentForm({
       </div>
       <div>
         <label style={labelStyle}>Skills</label>
-        <BadgePicker options={skillValues} selected={form.skills.filter(s => skillValues.includes(s))} onChange={v => set('skills', v)} placeholder="Add skill..." />
+        <BadgePicker options={skillValues} selected={selectedSkillRefs.filter(s => skillValues.includes(s))} onChange={setSkills} placeholder="Add skill..." />
+        {selectedSkillRefs.length > 0 && (
+          <div style={{ display: 'grid', gap: '0.45rem', marginTop: '0.5rem' }}>
+            {selectedSkillRefs.filter(skill => skillValues.includes(skill)).map(skill => {
+              const options = publishedVersionOptions(skillVersions[skill] ?? [])
+              return (
+                <div key={skill} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(170px, 220px)', gap: '0.5rem', alignItems: 'center' }}>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{skill}</span>
+                  <select
+                    aria-label={`${skill} version`}
+                    style={inputStyle}
+                    value={form.skill_version_ids?.[skill] ?? ''}
+                    onChange={e => setSkillVersion(skill, e.target.value)}
+                  >
+                    <option value="">Track latest published</option>
+                    {options.map(v => <option key={v.id} value={v.id}>Pin v{v.version}</option>)}
+                  </select>
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
       <div>
         <label style={labelStyle}>Description *</label>
@@ -149,6 +273,15 @@ export default function AgentForm({
             Selected prompt is no longer in the catalog.
           </div>
         )}
+        {selectedPrompt && !promptRefMissing && (
+          <div style={{ marginTop: '0.5rem' }}>
+            <label style={labelStyle}>Prompt version</label>
+            <select aria-label="Prompt version" style={inputStyle} value={form.prompt_version_id ?? ''} onChange={e => set('prompt_version_id', e.target.value)}>
+              <option value="">Track latest published</option>
+              {publishedVersionOptions(promptVersions).map(v => <option key={v.id} value={v.id}>Pin v{v.version}</option>)}
+            </select>
+          </div>
+        )}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: form.scope_type === 'repo' ? '1fr 1fr' : '1fr', gap: '0.75rem' }}>
         <div>
@@ -156,7 +289,7 @@ export default function AgentForm({
           <select
             style={inputStyle}
             value={form.scope_type || 'workspace'}
-            onChange={e => setForm(f => ({ ...f, scope_type: e.target.value, scope_repo: e.target.value === 'repo' ? f.scope_repo : '', prompt_id: '', prompt_ref: '', prompt_scope: '', skills: [] }))}
+            onChange={e => setForm(f => ({ ...f, scope_type: e.target.value, scope_repo: e.target.value === 'repo' ? f.scope_repo : '', prompt_id: '', prompt_ref: '', prompt_scope: '', prompt_version_id: '', skills: [], skill_version_ids: {} }))}
           >
             <option value="workspace">Workspace</option>
             <option value="repo">Repo</option>
@@ -165,7 +298,7 @@ export default function AgentForm({
         {form.scope_type === 'repo' && (
           <div>
             <label style={labelStyle}>Scoped repo *</label>
-            <select style={inputStyle} value={form.scope_repo} onChange={e => setForm(f => ({ ...f, scope_repo: e.target.value, prompt_id: '', prompt_ref: '', prompt_scope: '', skills: [] }))}>
+            <select style={inputStyle} value={form.scope_repo} onChange={e => setForm(f => ({ ...f, scope_repo: e.target.value, prompt_id: '', prompt_ref: '', prompt_scope: '', prompt_version_id: '', skills: [], skill_version_ids: {} }))}>
               <option value="">Select repo...</option>
               {repoNames.map(name => <option key={name} value={name}>{name}</option>)}
             </select>
@@ -190,13 +323,14 @@ export default function AgentForm({
           Allow memory
         </label>
       </div>
+      {versionError && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem' }}>{versionError}</p>}
       {error && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem' }}>{error}</p>}
       <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '0.25rem' }}>
         <button onClick={onCancel} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', cursor: 'pointer', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
           Cancel
         </button>
         <button
-          onClick={() => onSave(form)}
+          onClick={saveForm}
           disabled={!canSave}
           style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >

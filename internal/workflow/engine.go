@@ -41,6 +41,9 @@ type SpanInput struct {
 	StartedAt, FinishedAt             time.Time
 	Status, ErrorMsg, ErrorDetail     string
 	Prompt                            string
+	PromptVersionID                   string
+	SkillVersionIDs                   []string
+	GuardrailVersionIDs               []string
 	InputTokens, OutputTokens         int64
 	CacheReadTokens, CacheWriteTokens int64
 }
@@ -199,14 +202,14 @@ func NewEngine(st *store.Store, processorCfg config.ProcessorConfig, queue Event
 	return eng
 }
 
-// loadCfg reads the four entity sets from SQLite and returns a *config.Config
-// scoped to a single event. The returned snapshot has only the fields the
-// hot path looks at populated (agents, repos, skills, AIBackends); daemon-
-// level fields the engine doesn't read are left zero.
-func (e *Engine) loadCfg() (*config.Config, error) {
+// loadWorkflowSnapshot reads the fleet entities from SQLite and returns a
+// *config.Config scoped to one workflow event. The returned snapshot has only
+// the fields the hot path looks at populated (agents, repos, prompts, skills,
+// AIBackends); daemon-level fields the engine doesn't read are left zero.
+func (e *Engine) loadWorkflowSnapshot() (*config.Config, error) {
 	agents, repos, skills, backends, err := e.store.ReadSnapshot()
 	if err != nil {
-		return nil, fmt.Errorf("engine: load cfg snapshot: %w", err)
+		return nil, fmt.Errorf("engine: load workflow snapshot: %w", err)
 	}
 	prompts, err := e.store.ReadPrompts()
 	if err != nil {
@@ -324,7 +327,7 @@ func (e *Engine) HandleEvent(ctx context.Context, ev Event) error {
 	logBase.Msg("processing event")
 
 	if slices.Contains(directEventKinds, ev.Kind) {
-		return e.handleDispatchEvent(ctx, ev)
+		return e.handleDirectAgentRunEvent(ctx, ev)
 	}
 	return e.fanOut(ctx, ev)
 }

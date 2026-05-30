@@ -22,10 +22,10 @@ import (
 // such as issue_comment.created followed by issues.labeled(ai ready).
 // A failing agent does not abort the others; all errors are joined and returned.
 func (e *Engine) fanOut(ctx context.Context, ev Event) error {
-	// Read the four entity sets from SQLite for this event. The cfg
-	// snapshot scopes the agent lookup and the runAgent calls beneath it
-	// to a single consistent epoch.
-	cfg, err := e.loadCfg()
+	// Read the workflow snapshot from SQLite for this event. It scopes the
+	// agent lookup and the runAgent calls beneath it to a single consistent
+	// epoch.
+	cfg, err := e.loadWorkflowSnapshot()
 	if err != nil {
 		return err
 	}

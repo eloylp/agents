@@ -330,6 +330,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 	}
 	if deps.Fleet != nil {
+		registerCatalogVersionTools(srv, deps)
 		srv.AddTool(
 			mcpgo.NewTool("create_skill",
 				mcpgo.WithDescription("Create or update a skill. Upsert semantics: a write to an existing id overwrites it. Returns the canonical skill persisted by the store. Same path as POST /skills."),
@@ -363,6 +364,9 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				),
 				mcpgo.WithString("prompt",
 					mcpgo.Description("New skill prompt body. Omit to leave unchanged."),
+				),
+				mcpgo.WithBoolean("publish",
+					mcpgo.Description("Publish immediately when true or omitted. Set false to save a draft version without changing current runtime content."),
 				),
 			),
 			toolUpdateSkill(deps),
@@ -433,9 +437,10 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 					mcpgo.Items(map[string]any{
 						"type": "object",
 						"properties": map[string]any{
-							"guardrail_name": map[string]any{"type": "string", "description": "Stable guardrail id. Legacy global display names are also accepted when unambiguous."},
-							"position":       map[string]any{"type": "integer", "description": "Render order. Lower renders first."},
-							"enabled":        map[string]any{"type": "boolean", "description": "Whether this workspace reference is active."},
+							"guardrail_name":       map[string]any{"type": "string", "description": "Stable guardrail id. Legacy global display names are also accepted when unambiguous."},
+							"guardrail_version_id": map[string]any{"type": "string", "description": "Optional exact guardrail version pin. Omit to track current."},
+							"position":             map[string]any{"type": "integer", "description": "Render order. Lower renders first."},
+							"enabled":              map[string]any{"type": "boolean", "description": "Whether this workspace reference is active."},
 						},
 						"required": []any{"guardrail_name"},
 					}),
@@ -494,6 +499,9 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				),
 				mcpgo.WithString("content",
 					mcpgo.Description("New prompt content. Omit to leave unchanged."),
+				),
+				mcpgo.WithBoolean("publish",
+					mcpgo.Description("Publish immediately when true or omitted. Set false to save a draft version without changing current runtime content."),
 				),
 			),
 			toolUpdatePrompt(deps),
@@ -567,6 +575,9 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				),
 				mcpgo.WithNumber("position",
 					mcpgo.Description("New render position. Omit to leave unchanged."),
+				),
+				mcpgo.WithBoolean("publish",
+					mcpgo.Description("Publish immediately when true or omitted. Set false to save a draft version without changing current runtime content."),
 				),
 			),
 			toolUpdateGuardrail(deps),
@@ -691,6 +702,9 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				mcpgo.WithString("prompt_id",
 					mcpgo.Description("Existing stable prompt id to reference. Required unless prompt_ref is supplied. Preferred when multiple visible prompts share a name."),
 				),
+				mcpgo.WithString("prompt_version_id",
+					mcpgo.Description("Optional exact prompt version pin. Omit to track the prompt's current published version."),
+				),
 				mcpgo.WithString("scope_type",
 					mcpgo.Description("Agent scope: workspace or repo. Defaults to workspace."),
 				),
@@ -701,7 +715,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 					mcpgo.Description("Required short human-readable description used for identification and inter-agent routing context."),
 				),
 				mcpgo.WithArray("skills",
-					mcpgo.Description("Optional list of skill names to compose into the agent's system prompt."),
+					mcpgo.Description("Optional list of skill names to compose into the agent's system prompt. Use skill@version to pin one skill to a published immutable version; omit @version to track the latest published version."),
 					mcpgo.Items(map[string]any{"type": "string"}),
 				),
 				mcpgo.WithArray("can_dispatch",
@@ -745,6 +759,9 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				mcpgo.WithString("prompt_id",
 					mcpgo.Description("Stable prompt id. Omit to leave unchanged."),
 				),
+				mcpgo.WithString("prompt_version_id",
+					mcpgo.Description("Exact prompt version pin. Pass an empty string to clear and track current."),
+				),
 				mcpgo.WithString("scope_type",
 					mcpgo.Description("Agent scope: workspace or repo. Omit to leave unchanged."),
 				),
@@ -755,7 +772,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 					mcpgo.Description("Required short description. Omit to leave unchanged."),
 				),
 				mcpgo.WithArray("skills",
-					mcpgo.Description("List of skill names. Omit to leave unchanged; pass an empty array to clear."),
+					mcpgo.Description("List of skill names. Use skill@version to pin one skill to a published immutable version; omit @version to track the latest published version. Omit to leave unchanged; pass an empty array to clear."),
 					mcpgo.Items(map[string]any{"type": "string"}),
 				),
 				mcpgo.WithArray("can_dispatch",
@@ -965,22 +982,24 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 // the REST API, so the MCP and HTTP surfaces stay aligned.
 func agentJSON(a fleet.Agent) map[string]any {
 	return map[string]any{
-		"id":             a.ID,
-		"workspace_id":   fleet.NormalizeWorkspaceID(a.WorkspaceID),
-		"name":           a.Name,
-		"backend":        a.Backend,
-		"model":          a.Model,
-		"skills":         nilSafe(a.Skills),
-		"prompt_id":      a.PromptID,
-		"prompt_ref":     a.PromptRef,
-		"prompt_scope":   a.PromptScope,
-		"scope_type":     a.ScopeType,
-		"scope_repo":     a.ScopeRepo,
-		"description":    a.Description,
-		"allow_prs":      a.AllowPRs,
-		"allow_dispatch": a.AllowDispatch,
-		"allow_memory":   a.IsAllowMemory(),
-		"can_dispatch":   nilSafe(a.CanDispatch),
+		"id":                a.ID,
+		"workspace_id":      fleet.NormalizeWorkspaceID(a.WorkspaceID),
+		"name":              a.Name,
+		"backend":           a.Backend,
+		"model":             a.Model,
+		"skills":            nilSafe(a.Skills),
+		"skill_version_ids": a.SkillVersionIDs,
+		"prompt_id":         a.PromptID,
+		"prompt_ref":        a.PromptRef,
+		"prompt_scope":      a.PromptScope,
+		"prompt_version_id": a.PromptVersionID,
+		"scope_type":        a.ScopeType,
+		"scope_repo":        a.ScopeRepo,
+		"description":       a.Description,
+		"allow_prs":         a.AllowPRs,
+		"allow_dispatch":    a.AllowDispatch,
+		"allow_memory":      a.IsAllowMemory(),
+		"can_dispatch":      nilSafe(a.CanDispatch),
 	}
 }
 
@@ -993,6 +1012,8 @@ func promptJSON(p fleet.Prompt) map[string]any {
 		"name":         p.Name,
 		"description":  p.Description,
 		"content":      p.Content,
+		"version_id":   p.VersionID,
+		"version":      p.Version,
 	}
 }
 
@@ -1003,6 +1024,8 @@ func skillJSON(id string, s fleet.Skill) map[string]any {
 		"repo":         s.Repo,
 		"name":         s.Name,
 		"prompt":       s.Prompt,
+		"version_id":   s.VersionID,
+		"version":      s.Version,
 	}
 }
 
@@ -1016,10 +1039,11 @@ func workspaceJSON(w fleet.Workspace) map[string]any {
 
 func workspaceGuardrailJSON(ref fleet.WorkspaceGuardrailRef) map[string]any {
 	return map[string]any{
-		"workspace_id":   ref.WorkspaceID,
-		"guardrail_name": ref.GuardrailName,
-		"position":       ref.Position,
-		"enabled":        ref.Enabled,
+		"workspace_id":         ref.WorkspaceID,
+		"guardrail_name":       ref.GuardrailName,
+		"guardrail_version_id": ref.GuardrailVersionID,
+		"position":             ref.Position,
+		"enabled":              ref.Enabled,
 	}
 }
 

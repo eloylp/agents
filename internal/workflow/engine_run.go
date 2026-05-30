@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/eloylp/agents/internal/ai"
@@ -13,10 +14,10 @@ import (
 	"github.com/eloylp/agents/internal/store"
 )
 
-// runAgent executes agent using the per-event cfg snapshot the caller
-// loaded from SQLite. Backend resolution and runner construction happen
-// here from that same snapshot, so the agent's backend, prompt, skills,
-// and runner configuration all come from one consistent read.
+// runAgent executes agent using the per-event workflow snapshot the caller
+// loaded from SQLite. Backend resolution and runner construction happen here
+// from that same snapshot, so the agent's backend, prompt, skills, and runner
+// configuration all come from one consistent read.
 func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg *config.Config) error {
 	workspaceID := eventWorkspaceID(ev)
 	backend := cfg.ResolveBackend(agent.Backend)
@@ -84,18 +85,38 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		existingMemory = mem
 	}
 
-	promptBody, err := fleet.ResolvePromptContentForAgent(cfg.Prompts, agent, ev.Repo.FullName)
+	resolvedPrompt, err := fleet.ResolvePromptForAgent(cfg.Prompts, agent, ev.Repo.FullName)
 	if err != nil {
 		return fmt.Errorf("agent %q: resolve prompt: %w", agent.Name, err)
 	}
+	if strings.TrimSpace(agent.PromptVersionID) != "" {
+		pinned, err := e.store.ReadPromptVersion(agent.PromptVersionID)
+		if err != nil {
+			return fmt.Errorf("agent %q: resolve prompt version: %w", agent.Name, err)
+		}
+		if pinned.ID != resolvedPrompt.ID {
+			return fmt.Errorf("agent %q: prompt_version_id %q does not belong to prompt %q", agent.Name, agent.PromptVersionID, resolvedPrompt.ID)
+		}
+		resolvedPrompt = pinned
+	}
+	if strings.TrimSpace(resolvedPrompt.Content) == "" {
+		return fmt.Errorf("agent %q: resolve prompt: prompt %q is empty", agent.Name, resolvedPrompt.Name)
+	}
+	promptBody := resolvedPrompt.Content
 
 	guardrails, err := e.store.ReadWorkspacePromptGuardrails(workspaceID)
 	if err != nil {
 		return fmt.Errorf("agent %q: load guardrails: %w", agent.Name, err)
 	}
 	guardrails = slices.Insert(guardrails, 0, dynamicWorkspaceGuardrail(workspaceID, agent, cfg.Repos))
+	skillsForRun, err := e.resolveAgentSkills(cfg.Skills, agent)
+	if err != nil {
+		return err
+	}
+	skillVersionIDs := catalogSkillVersionIDs(skillsForRun, agent.Skills)
+	guardrailVersionIDs := catalogGuardrailVersionIDs(guardrails)
 
-	rendered, err := ai.RenderAgentPrompt(agent, promptBody, cfg.Skills, guardrails, ai.PromptContext{
+	rendered, err := ai.RenderAgentPrompt(agent, promptBody, skillsForRun, guardrails, ai.PromptContext{
 		Repo:          ev.Repo.FullName,
 		Number:        ev.Number,
 		Backend:       backend,
@@ -150,23 +171,26 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 					status = "budget_exceeded"
 				}
 				e.traceRec.RecordSpan(SpanInput{
-					SpanID:        spanID,
-					WorkspaceID:   workspaceID,
-					RootEventID:   rootEventID,
-					ParentSpanID:  parentSpanID,
-					Agent:         agent.Name,
-					Backend:       backend,
-					Repo:          ev.Repo.FullName,
-					EventKind:     ev.Kind,
-					InvokedBy:     invokedBy,
-					Number:        ev.Number,
-					DispatchDepth: dispatchDepth,
-					QueueWaitMs:   queueWaitMs,
-					StartedAt:     spanStart,
-					FinishedAt:    spanEnd,
-					Status:        status,
-					ErrorMsg:      err.Error(),
-					Prompt:        composedPrompt,
+					SpanID:              spanID,
+					WorkspaceID:         workspaceID,
+					RootEventID:         rootEventID,
+					ParentSpanID:        parentSpanID,
+					Agent:               agent.Name,
+					Backend:             backend,
+					Repo:                ev.Repo.FullName,
+					EventKind:           ev.Kind,
+					InvokedBy:           invokedBy,
+					Number:              ev.Number,
+					DispatchDepth:       dispatchDepth,
+					QueueWaitMs:         queueWaitMs,
+					StartedAt:           spanStart,
+					FinishedAt:          spanEnd,
+					Status:              status,
+					ErrorMsg:            err.Error(),
+					Prompt:              composedPrompt,
+					PromptVersionID:     resolvedPrompt.VersionID,
+					SkillVersionIDs:     skillVersionIDs,
+					GuardrailVersionIDs: guardrailVersionIDs,
 				})
 			}
 			logger.Warn().Err(err).Msg("agent run rejected by token budget")
@@ -246,30 +270,33 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 			}
 		}
 		e.traceRec.RecordSpan(SpanInput{
-			SpanID:           spanID,
-			WorkspaceID:      workspaceID,
-			RootEventID:      rootEventID,
-			ParentSpanID:     parentSpanID,
-			Agent:            agent.Name,
-			Backend:          backend,
-			Repo:             ev.Repo.FullName,
-			EventKind:        ev.Kind,
-			InvokedBy:        invokedBy,
-			Number:           ev.Number,
-			DispatchDepth:    dispatchDepth,
-			QueueWaitMs:      queueWaitMs,
-			ArtifactsCount:   len(resp.Artifacts),
-			Summary:          resp.Summary,
-			StartedAt:        spanStart,
-			FinishedAt:       spanEnd,
-			Status:           status,
-			ErrorMsg:         errMsg,
-			ErrorDetail:      errorDetail,
-			Prompt:           composedPrompt,
-			InputTokens:      resp.Usage.InputTokens,
-			OutputTokens:     resp.Usage.OutputTokens,
-			CacheReadTokens:  resp.Usage.CacheReadTokens,
-			CacheWriteTokens: resp.Usage.CacheWriteTokens,
+			SpanID:              spanID,
+			WorkspaceID:         workspaceID,
+			RootEventID:         rootEventID,
+			ParentSpanID:        parentSpanID,
+			Agent:               agent.Name,
+			Backend:             backend,
+			Repo:                ev.Repo.FullName,
+			EventKind:           ev.Kind,
+			InvokedBy:           invokedBy,
+			Number:              ev.Number,
+			DispatchDepth:       dispatchDepth,
+			QueueWaitMs:         queueWaitMs,
+			ArtifactsCount:      len(resp.Artifacts),
+			Summary:             resp.Summary,
+			StartedAt:           spanStart,
+			FinishedAt:          spanEnd,
+			Status:              status,
+			ErrorMsg:            errMsg,
+			ErrorDetail:         errorDetail,
+			Prompt:              composedPrompt,
+			PromptVersionID:     resolvedPrompt.VersionID,
+			SkillVersionIDs:     skillVersionIDs,
+			GuardrailVersionIDs: guardrailVersionIDs,
+			InputTokens:         resp.Usage.InputTokens,
+			OutputTokens:        resp.Usage.OutputTokens,
+			CacheReadTokens:     resp.Usage.CacheReadTokens,
+			CacheWriteTokens:    resp.Usage.CacheWriteTokens,
 		})
 	}
 
@@ -312,4 +339,51 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	}
 
 	return nil
+}
+
+func (e *Engine) resolveAgentSkills(skills map[string]fleet.Skill, agent fleet.Agent) (map[string]fleet.Skill, error) {
+	if len(agent.SkillVersionIDs) == 0 {
+		return skills, nil
+	}
+	resolved := make(map[string]fleet.Skill, len(skills))
+	for k, v := range skills {
+		resolved[k] = v
+	}
+	for ref, versionID := range agent.SkillVersionIDs {
+		skill, err := e.store.ReadSkillVersion(versionID)
+		if err != nil {
+			return nil, fmt.Errorf("agent %q: resolve skill %s version: %w", agent.Name, ref, err)
+		}
+		if skill.ID != ref {
+			return nil, fmt.Errorf("agent %q: skill_version_id %q does not belong to skill %q", agent.Name, versionID, ref)
+		}
+		resolved[ref] = skill
+	}
+	return resolved, nil
+}
+
+func catalogSkillVersionIDs(skills map[string]fleet.Skill, refs []string) []string {
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		sk, ok := skills[ref]
+		if !ok {
+			if base, _, found := strings.Cut(ref, "@"); found {
+				sk, ok = skills[strings.TrimSpace(base)]
+			}
+		}
+		if ok && strings.TrimSpace(sk.VersionID) != "" {
+			out = append(out, sk.VersionID)
+		}
+	}
+	return out
+}
+
+func catalogGuardrailVersionIDs(guardrails []fleet.Guardrail) []string {
+	out := make([]string, 0, len(guardrails))
+	for _, g := range guardrails {
+		if strings.TrimSpace(g.VersionID) != "" {
+			out = append(out, g.VersionID)
+		}
+	}
+	return out
 }

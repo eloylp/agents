@@ -124,10 +124,14 @@ func replaceWorkspaceGuardrailsTx(tx *sql.Tx, workspaceID string, refs []fleet.W
 		if position == 0 {
 			position = i
 		}
+		versionID, err := resolveGuardrailVersionPin(tx, id, ref.GuardrailVersionID)
+		if err != nil {
+			return fmt.Errorf("store import: validate workspace %s guardrail %s version: %w", workspaceID, name, err)
+		}
 		if _, err := tx.Exec(`
-			INSERT INTO workspace_guardrails (workspace_id, guardrail_name, position, enabled)
-			VALUES (?, ?, ?, ?)`,
-			workspaceID, id, position, boolToInt(ref.Enabled),
+			INSERT INTO workspace_guardrails (workspace_id, guardrail_name, guardrail_version_id, position, enabled)
+			VALUES (?, ?, NULLIF(?, ''), ?, ?)`,
+			workspaceID, id, versionID, position, boolToInt(ref.Enabled),
 		); err != nil {
 			return fmt.Errorf("store import: insert workspace %s guardrail %s: %w", workspaceID, name, err)
 		}

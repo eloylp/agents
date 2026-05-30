@@ -4,9 +4,10 @@ interface ModalProps {
   title: string
   onClose: () => void
   children: React.ReactNode
+  maxWidth?: number | string
 }
 
-export default function Modal({ title, onClose, children }: ModalProps) {
+export default function Modal({ title, onClose, children, maxWidth = '600px' }: ModalProps) {
   return (
     <div
       style={{
@@ -18,7 +19,7 @@ export default function Modal({ title, onClose, children }: ModalProps) {
     >
       <div style={{
         background: 'var(--bg-card)', borderRadius: '10px', border: '1px solid var(--border)',
-        boxShadow: '0 8px 32px rgba(0,0,0,0.2)', width: '100%', maxWidth: '600px',
+        boxShadow: '0 8px 32px rgba(0,0,0,0.2)', width: '100%', maxWidth,
         padding: '1.5rem',
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>

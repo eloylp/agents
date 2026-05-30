@@ -1261,6 +1261,43 @@ func TestRepoScopedAgentRequiresRepoInSameWorkspace(t *testing.T) {
 	}
 }
 
+func TestAgentSkillExactPinSurvivesImportLoad(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	cfg := minimalCfg()
+	if err := store.Import(db, cfg); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if err := store.UpsertSkill(db, "architect", fleet.Skill{Prompt: "skill v2"}); err != nil {
+		t.Fatalf("UpsertSkill v2: %v", err)
+	}
+	cfg.Agents[0].Skills = []string{"architect@1"}
+	cfg.Agents = cfg.Agents[:1]
+	if err := store.ImportAll(db, cfg.Agents, nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("ImportAll pinned agent: %v", err)
+	}
+
+	loaded, err := store.Load(db)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := loaded.Agents[0].Skills; !slices.Equal(got, []string{"architect"}) {
+		t.Fatalf("agent skills = %v, want base ref", got)
+	}
+	versionID := loaded.Agents[0].SkillVersionIDs["architect"]
+	if versionID == "" {
+		t.Fatal("loaded agent missing architect skill version pin")
+	}
+	skill, err := store.ReadSkillVersion(db, versionID)
+	if err != nil {
+		t.Fatalf("ReadSkillVersion: %v", err)
+	}
+	if skill.Version != 1 || skill.Prompt != "Focus on architecture." {
+		t.Fatalf("pinned skill = v%d %q, want original v1 prompt", skill.Version, skill.Prompt)
+	}
+}
+
 func TestWorkspaceScopedAgentRejectsScopeRepo(t *testing.T) {
 	t.Parallel()
 	db := openTestDB(t)
@@ -1955,6 +1992,53 @@ func TestReadWorkspacePromptGuardrailsUsesWorkspaceReferences(t *testing.T) {
 	}
 	if guardrails[0].Name != "workspace-only" || !guardrails[0].Enabled || guardrails[0].Position != 0 {
 		t.Fatalf("guardrail = %+v, want enabled workspace-only from workspace reference", guardrails[0])
+	}
+}
+
+func TestWorkspaceGuardrailExactPinUsesPinnedVersion(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "rollout", Content: "guardrail v1", Enabled: true, Position: 10}); err != nil {
+		t.Fatalf("UpsertGuardrail v1: %v", err)
+	}
+	all, err := store.ReadAllGuardrails(db)
+	if err != nil {
+		t.Fatalf("ReadAllGuardrails v1: %v", err)
+	}
+	i := slices.IndexFunc(all, func(g fleet.Guardrail) bool { return g.Name == "rollout" })
+	if i < 0 || all[i].VersionID == "" {
+		t.Fatalf("rollout v1 not found: %+v", all)
+	}
+	v1 := all[i].VersionID
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "rollout", Content: "guardrail v2", Enabled: true, Position: 10}); err != nil {
+		t.Fatalf("UpsertGuardrail v2: %v", err)
+	}
+	if _, err := store.ReplaceWorkspaceGuardrails(db, "team-a", []fleet.WorkspaceGuardrailRef{{
+		GuardrailName:      "rollout",
+		GuardrailVersionID: v1,
+		Position:           0,
+		Enabled:            true,
+	}}); err != nil {
+		t.Fatalf("ReplaceWorkspaceGuardrails: %v", err)
+	}
+
+	refs, err := store.ReadWorkspaceGuardrails(db, "team-a")
+	if err != nil {
+		t.Fatalf("ReadWorkspaceGuardrails: %v", err)
+	}
+	if len(refs) != 1 || refs[0].GuardrailVersionID != v1 {
+		t.Fatalf("workspace refs = %+v, want guardrail version %q", refs, v1)
+	}
+	guardrails, err := store.ReadWorkspacePromptGuardrails(db, "team-a")
+	if err != nil {
+		t.Fatalf("ReadWorkspacePromptGuardrails: %v", err)
+	}
+	if len(guardrails) != 1 || guardrails[0].Content != "guardrail v1" {
+		t.Fatalf("guardrails = %+v, want pinned v1 content", guardrails)
 	}
 }
 

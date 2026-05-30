@@ -2,7 +2,6 @@
 import { useState, useEffect, useRef } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
-import GuardrailsManager from '@/components/GuardrailsManager'
 import RepoFilter from '@/components/RepoFilter'
 import WorkspaceSelect from '@/components/WorkspaceSelect'
 import { AuthTokenSettings } from '@/lib/auth'
@@ -269,7 +268,7 @@ export default function ConfigPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [raw, setRaw] = useState(false)
-  const [tab, setTab] = useState<'inspector' | 'authentication' | 'runtime' | 'backends' | 'guardrails' | 'import-export' | 'tokens'>('inspector')
+  const [tab, setTab] = useState<'inspector' | 'authentication' | 'runtime' | 'backends' | 'import-export' | 'tokens'>('inspector')
 
   const [backends, setBackends] = useState<Backend[]>([])
   const [tools, setTools] = useState<ToolStatus[]>([])
@@ -344,7 +343,7 @@ export default function ConfigPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const requestedTab = params.get('tab')
-    if (requestedTab === 'inspector' || requestedTab === 'authentication' || requestedTab === 'runtime' || requestedTab === 'backends' || requestedTab === 'guardrails' || requestedTab === 'import-export' || requestedTab === 'tokens') {
+    if (requestedTab === 'inspector' || requestedTab === 'authentication' || requestedTab === 'runtime' || requestedTab === 'backends' || requestedTab === 'import-export' || requestedTab === 'tokens') {
       setTab(requestedTab)
     }
     setLbRepo(params.get('repo') ?? '')
@@ -913,7 +912,6 @@ export default function ConfigPage() {
         <button style={tabStyle('authentication')} onClick={() => setTab('authentication')}>Authentication</button>
         <button style={tabStyle('runtime')} onClick={() => setTab('runtime')}>Runtime</button>
         <button style={tabStyle('backends')} onClick={() => setTab('backends')}>Backends and tools</button>
-        <button style={tabStyle('guardrails')} onClick={() => setTab('guardrails')}>Guardrails</button>
         <button style={tabStyle('import-export')} onClick={() => setTab('import-export')}>Import / Export</button>
         <button style={tabStyle('tokens')} onClick={() => setTab('tokens')}>Token usage and limits</button>
       </div>
@@ -1305,12 +1303,6 @@ export default function ConfigPage() {
 
           </div>
           {saveError && <p style={{ color: 'var(--text-danger)', fontSize: '0.85rem', marginTop: '0.75rem' }}>{saveError}</p>}
-        </Card>
-      )}
-
-      {tab === 'guardrails' && (
-        <Card style={{ borderTopLeftRadius: 0 }}>
-          <GuardrailsManager />
         </Card>
       )}
 

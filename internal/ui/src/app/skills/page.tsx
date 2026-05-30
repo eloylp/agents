@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import Card from '@/components/Card'
 import Modal from '@/components/Modal'
 import MarkdownEditor from '@/components/MarkdownEditor'
+import CatalogVersionsPanel from '@/components/CatalogVersionsPanel'
 
 interface Skill {
   id?: string
@@ -10,6 +11,9 @@ interface Skill {
   repo?: string
   name: string
   prompt: string
+  publish?: boolean
+  version_id?: string
+  version?: number
 }
 
 interface Workspace {
@@ -36,19 +40,27 @@ const inputStyle: React.CSSProperties = {
 const labelStyle: React.CSSProperties = { fontSize: '0.8rem', color: 'var(--text-muted)', display: 'block', marginBottom: '3px' }
 
 function SkillForm({
-  initial, isNew, workspaces, onSave, onCancel, saving, error,
+  initial, isNew, workspaces, onSave, onCancel, onVersionsChanged, saving, error,
 }: {
   initial: Skill
   isNew: boolean
   workspaces: Workspace[]
   onSave: (s: Skill) => void
   onCancel: () => void
+  onVersionsChanged: () => void
   saving: boolean
   error: string
 }) {
   const [form, setForm] = useState<Skill>(initial)
   const [selectedScope, setSelectedScope] = useState<'global' | 'workspace' | 'repo'>(scopeType(initial))
   const [repoOptions, setRepoOptions] = useState<Repo[]>([])
+  const [publish, setPublish] = useState(true)
+
+  useEffect(() => {
+    setForm(initial)
+    setSelectedScope(scopeType(initial))
+    setPublish(true)
+  }, [initial])
 
   useEffect(() => {
     if (selectedScope !== 'repo' || !form.workspace_id) {
@@ -129,13 +141,41 @@ function SkillForm({
           minHeight={200}
         />
       </div>
+      {!isNew && (
+        <CatalogVersionsPanel
+          type="skill"
+          assetID={form.id || form.name}
+          currentVersionID={form.version_id}
+          onChanged={onVersionsChanged}
+          onRestoreVersion={version => {
+            setForm(f => ({ ...f, prompt: version.prompt ?? '' }))
+            setPublish(true)
+          }}
+        />
+      )}
+      {!isNew && (
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.55rem', color: 'var(--text)', fontSize: '0.85rem' }}>
+          <input
+            type="checkbox"
+            checked={publish}
+            onChange={e => setPublish(e.target.checked)}
+            style={{ marginTop: 2 }}
+          />
+          <span>
+            <strong>Publish</strong>
+            <span style={{ display: 'block', color: 'var(--text-muted)', marginTop: 2 }}>
+              Agents using this skill through current tracking will use the new published version on their next run. If unchecked, the edit is saved as a draft.
+            </span>
+          </span>
+        </label>
+      )}
       {error && <p style={{ color: 'var(--text-danger)', fontSize: '0.8rem' }}>{error}</p>}
       <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
         <button onClick={onCancel} style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-card)', cursor: 'pointer', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
           Cancel
         </button>
         <button
-          onClick={() => onSave(form)}
+          onClick={() => onSave({ ...form, publish })}
           disabled={saving || !form.name.trim() || (selectedScope !== 'global' && !form.workspace_id) || (selectedScope === 'repo' && !form.repo)}
           style={{ padding: '6px 16px', borderRadius: '6px', border: '1px solid var(--btn-primary-border)', background: 'var(--btn-primary-bg)', color: '#fff', cursor: saving ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: 600 }}
         >
@@ -217,7 +257,7 @@ export default function SkillsPage() {
           workspace_id: form.workspace_id || '',
           repo: form.repo || '',
           prompt: form.prompt,
-        } : { prompt: form.prompt }),
+        } : { prompt: form.prompt, publish: form.publish ?? true }),
       })
       if (!res.ok) {
         setSaveError((await res.text()) || 'Save failed')
@@ -343,7 +383,9 @@ export default function SkillsPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700, color: 'var(--text-heading)', marginBottom: '0.2rem' }}>{sk.name}</div>
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginBottom: '0.35rem' }}>{scopeLabel(sk)}</div>
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginBottom: '0.35rem' }}>
+                  {scopeLabel(sk)}{sk.version ? ` · v${sk.version}` : ''}
+                </div>
                 <pre style={{
                   fontSize: '0.78rem', color: 'var(--text-faint)', background: 'var(--bg)',
                   border: '1px solid var(--border-subtle)', borderRadius: '4px', padding: '0.5rem',
@@ -363,13 +405,14 @@ export default function SkillsPage() {
       </div>
 
       {(modal === 'create' || modal === 'edit') && (
-        <Modal title={modal === 'create' ? 'Create skill' : `Edit, ${selected.name}`} onClose={() => setModal(null)}>
+        <Modal title={modal === 'create' ? 'Create skill' : `Edit, ${selected.name}`} onClose={() => setModal(null)} maxWidth={modal === 'edit' ? '1100px' : undefined}>
           <SkillForm
             initial={selected}
             isNew={modal === 'create'}
             workspaces={workspaces}
             onSave={saveSkill}
             onCancel={() => setModal(null)}
+            onVersionsChanged={load}
             saving={saving}
             error={saveError}
           />

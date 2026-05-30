@@ -61,6 +61,19 @@ func importPrompts(tx *sql.Tx, prompts []fleet.Prompt) error {
 			}
 			return fmt.Errorf("store import: upsert prompt %s: %w", p.Name, err)
 		}
+		version, err := publishPromptVersionTx(tx, internalID, p.Description, p.Content)
+		if err != nil {
+			return fmt.Errorf("store import: publish prompt %s version: %w", p.Name, err)
+		}
+		if len(p.Versions) > 0 {
+			version, err = replacePromptVersionSnapshotsTx(tx, internalID, p.Versions)
+			if err != nil {
+				return fmt.Errorf("store import: replace prompt %s versions: %w", p.Name, err)
+			}
+		}
+		if err := applyPromptCurrentVersionTx(tx, internalID, version.ID); err != nil {
+			return fmt.Errorf("store import: update prompt %s current version: %w", p.Name, err)
+		}
 	}
 	return nil
 }
@@ -74,14 +87,19 @@ func queryPromptByScopeName(q querier, workspaceID, repo, name string) *sql.Row 
 }
 
 func loadPrompts(db querier, cfg *config.Config) error {
-	rows, err := db.Query("SELECT ref,COALESCE(workspace_id, ''),COALESCE(repo, ''),name,description,content FROM prompts ORDER BY COALESCE(workspace_id, ''), COALESCE(repo, ''), name")
+	rows, err := db.Query(`
+		SELECT p.ref, COALESCE(p.workspace_id, ''), COALESCE(p.repo, ''), p.name, p.description, p.content,
+		       COALESCE(pv.id, ''), COALESCE(pv.version_number, 0)
+		FROM prompts p
+		LEFT JOIN prompt_versions pv ON pv.id = p.current_version_id
+		ORDER BY COALESCE(p.workspace_id, ''), COALESCE(p.repo, ''), p.name`)
 	if err != nil {
 		return fmt.Errorf("store load: query prompts: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var p fleet.Prompt
-		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content); err != nil {
+		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content, &p.VersionID, &p.Version); err != nil {
 			return fmt.Errorf("store load: scan prompt: %w", err)
 		}
 		cfg.Prompts = append(cfg.Prompts, p)
@@ -173,6 +191,15 @@ func UpsertPromptTx(tx *sql.Tx, p fleet.Prompt) (fleet.Prompt, error) {
 		}
 		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: %w", p.Name, err)
 	}
+	version, err := publishPromptVersionTx(tx, internalID, p.Description, p.Content)
+	if err != nil {
+		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: %w", p.Name, err)
+	}
+	if err := applyPromptCurrentVersionTx(tx, internalID, version.ID); err != nil {
+		return fleet.Prompt{}, fmt.Errorf("store: upsert prompt %s: current version: %w", p.Name, err)
+	}
+	p.VersionID = version.ID
+	p.Version = version.Version
 	return p, nil
 }
 
@@ -186,10 +213,12 @@ func ReadPrompt(db *sql.DB, ref string) (fleet.Prompt, error) {
 	}
 	var p fleet.Prompt
 	row := db.QueryRow(`
-		SELECT ref, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, description, content
-		FROM prompts
-		WHERE id=? OR ref=?`, ref, ref)
-	err := row.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content)
+		SELECT p.ref, COALESCE(p.workspace_id, ''), COALESCE(p.repo, ''), p.name, p.description, p.content,
+		       COALESCE(pv.id, ''), COALESCE(pv.version_number, 0)
+		FROM prompts p
+		LEFT JOIN prompt_versions pv ON pv.id = p.current_version_id
+		WHERE p.id=? OR p.ref=?`, ref, ref)
+	err := row.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content, &p.VersionID, &p.Version)
 	if err == nil {
 		return p, nil
 	}
@@ -198,15 +227,39 @@ func ReadPrompt(db *sql.DB, ref string) (fleet.Prompt, error) {
 	}
 	name := fleet.NormalizePromptName(ref)
 	row = db.QueryRow(`
-		SELECT ref, COALESCE(workspace_id, ''), COALESCE(repo, ''), name, description, content
-		FROM prompts
-		WHERE workspace_id IS NULL AND repo IS NULL AND name=?`, name)
-	err = row.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content)
+		SELECT p.ref, COALESCE(p.workspace_id, ''), COALESCE(p.repo, ''), p.name, p.description, p.content,
+		       COALESCE(pv.id, ''), COALESCE(pv.version_number, 0)
+		FROM prompts p
+		LEFT JOIN prompt_versions pv ON pv.id = p.current_version_id
+		WHERE p.workspace_id IS NULL AND p.repo IS NULL AND p.name=?`, name)
+	err = row.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content, &p.VersionID, &p.Version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fleet.Prompt{}, &ErrNotFound{Msg: fmt.Sprintf("prompt %q not found", ref)}
 	}
 	if err != nil {
 		return fleet.Prompt{}, fmt.Errorf("store: read prompt %s by global name: %w", ref, err)
+	}
+	return p, nil
+}
+
+func ReadPromptVersion(db *sql.DB, versionID string) (fleet.Prompt, error) {
+	versionID = strings.TrimSpace(versionID)
+	if versionID == "" {
+		return fleet.Prompt{}, &ErrValidation{Msg: "prompt version id is required"}
+	}
+	var p fleet.Prompt
+	row := db.QueryRow(`
+		SELECT p.ref, COALESCE(p.workspace_id, ''), COALESCE(p.repo, ''), p.name,
+		       pv.description, pv.content, pv.id, pv.version_number
+		FROM prompt_versions pv
+		JOIN prompts p ON p.id = pv.prompt_id
+		WHERE pv.id = ? AND pv.state = 'published'`, versionID)
+	err := row.Scan(&p.ID, &p.WorkspaceID, &p.Repo, &p.Name, &p.Description, &p.Content, &p.VersionID, &p.Version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fleet.Prompt{}, &ErrNotFound{Msg: fmt.Sprintf("prompt version %q not found", versionID)}
+	}
+	if err != nil {
+		return fleet.Prompt{}, fmt.Errorf("store: read prompt version %s: %w", versionID, err)
 	}
 	return p, nil
 }

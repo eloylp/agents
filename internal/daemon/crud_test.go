@@ -14,6 +14,7 @@ import (
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/daemon"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/store"
 )
 
 // openCRUDTestServer creates a test server backed by a tempdir SQLite via
@@ -2383,6 +2384,367 @@ skills:
 	}
 }
 
+func TestStoreImportYAMLPreservesCatalogVersions(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	yamlBody := `backends:
+  claude:
+    command: claude
+prompts:
+  - id: prompt_catalog
+    name: catalog
+    content: current prompt
+    versions:
+      - id: promptver_one
+        version: 1
+        state: published
+        content: original prompt
+        source_type: manual
+        published_at: "2026-01-01T00:00:00Z"
+      - id: promptver_two
+        version: 2
+        state: published
+        content: current prompt
+        source_type: manual
+        base_version_id: promptver_one
+        published_at: "2026-01-02T00:00:00Z"
+skills:
+  imported-skill:
+    prompt: current skill
+    versions:
+      - id: skillver_one
+        version: 1
+        state: published
+        prompt: original skill
+        source_type: manual
+        published_at: "2026-01-01T00:00:00Z"
+      - id: skillver_two
+        version: 2
+        state: published
+        prompt: current skill
+        source_type: manual
+        base_version_id: skillver_one
+        published_at: "2026-01-02T00:00:00Z"
+guardrails:
+  - id: guardrail_policy
+    name: policy
+    description: current policy
+    content: current guardrail
+    enabled: true
+    position: 10
+    versions:
+      - id: guardrailver_one
+        version: 1
+        state: published
+        description: original policy
+        content: original guardrail
+        enabled: true
+        position: 10
+        source_type: manual
+        published_at: "2026-01-01T00:00:00Z"
+      - id: guardrailver_two
+        version: 2
+        state: published
+        description: current policy
+        content: current guardrail
+        enabled: true
+        position: 10
+        source_type: manual
+        base_version_id: guardrailver_one
+        published_at: "2026-01-02T00:00:00Z"
+workspaces:
+  - id: default
+    name: Default
+    guardrails:
+      - guardrail_name: policy
+        guardrail_version_id: guardrailver_one
+        enabled: true
+        position: 1
+    agents:
+      - name: coder
+        backend: claude
+        prompt_ref: catalog
+        prompt_version_id: promptver_one
+        description: imported agent
+        skills: [imported-skill@1]
+        can_dispatch: []
+    repos:
+      - name: owner/repo
+        enabled: true
+        use:
+          - agent: coder
+            labels: [ai:run]
+`
+	req := httptest.NewRequest(http.MethodPost, "/import?mode=replace", strings.NewReader(yamlBody))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("import versioned catalog: got %d, %s", rr.Code, rr.Body.String())
+	}
+
+	promptVersions, err := store.ListPromptVersionSnapshots(s.Store().DB(), "prompt_catalog")
+	if err != nil {
+		t.Fatalf("list prompt versions: %v", err)
+	}
+	if got, want := len(promptVersions), 2; got != want {
+		t.Fatalf("prompt versions len = %d, want %d: %+v", got, want, promptVersions)
+	}
+	if got, want := promptVersions[0].ID, "promptver_one"; got != want {
+		t.Fatalf("prompt version[0].ID = %q, want %q", got, want)
+	}
+	prompt, err := s.Store().ReadPrompt("prompt_catalog")
+	if err != nil {
+		t.Fatalf("read prompt: %v", err)
+	}
+	if got, want := prompt.VersionID, "promptver_two"; got != want {
+		t.Fatalf("prompt current version = %q, want %q", got, want)
+	}
+
+	skillVersions, err := store.ListSkillVersionSnapshots(s.Store().DB(), "imported-skill")
+	if err != nil {
+		t.Fatalf("list skill versions: %v", err)
+	}
+	if got, want := len(skillVersions), 2; got != want {
+		t.Fatalf("skill versions len = %d, want %d: %+v", got, want, skillVersions)
+	}
+	if got, want := skillVersions[1].ID, "skillver_two"; got != want {
+		t.Fatalf("skill version[1].ID = %q, want %q", got, want)
+	}
+
+	guardrailVersions, err := store.ListGuardrailVersionSnapshots(s.Store().DB(), "guardrail_policy")
+	if err != nil {
+		t.Fatalf("list guardrail versions: %v", err)
+	}
+	if got, want := len(guardrailVersions), 2; got != want {
+		t.Fatalf("guardrail versions len = %d, want %d: %+v", got, want, guardrailVersions)
+	}
+	if got, want := guardrailVersions[0].ID, "guardrailver_one"; got != want {
+		t.Fatalf("guardrail version[0].ID = %q, want %q", got, want)
+	}
+
+	agents, err := s.Store().ReadAgents()
+	if err != nil {
+		t.Fatalf("read agents: %v", err)
+	}
+	if got, want := agents[0].PromptVersionID, "promptver_one"; got != want {
+		t.Fatalf("agent prompt pin = %q, want %q", got, want)
+	}
+	if got, want := agents[0].SkillVersionIDs["imported-skill"], "skillver_one"; got != want {
+		t.Fatalf("agent skill pin = %q, want %q", got, want)
+	}
+	guardrails, err := s.Store().ReadWorkspaceGuardrails("default")
+	if err != nil {
+		t.Fatalf("read workspace guardrails: %v", err)
+	}
+	if got, want := guardrails[0].GuardrailVersionID, "guardrailver_one"; got != want {
+		t.Fatalf("workspace guardrail pin = %q, want %q", got, want)
+	}
+
+	exported := doCRUDRequest(t, s, http.MethodGet, "/export", nil)
+	if exported.Code != http.StatusOK {
+		t.Fatalf("export versioned catalog: got %d, %s", exported.Code, exported.Body.String())
+	}
+	for _, want := range []string{"versions:", "id: promptver_one", "id: skillver_two", "id: guardrailver_one", "prompt_version_id: promptver_one", "guardrail_version_id: guardrailver_one"} {
+		if !strings.Contains(exported.Body.String(), want) {
+			t.Fatalf("export missing %q: %s", want, exported.Body.String())
+		}
+	}
+}
+
+func TestStoreImportYAMLRejectsInvalidCatalogVersions(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		body     string
+		wantBody string
+	}{
+		{
+			name: "non-positive version",
+			body: `prompts:
+  - id: prompt_bad
+    name: bad
+    content: current prompt
+    versions:
+      - id: promptver_bad
+        version: 0
+        state: published
+        content: current prompt
+`,
+			wantBody: "catalog version number must be positive",
+		},
+		{
+			name: "invalid state",
+			body: `skills:
+  bad-skill:
+    prompt: current skill
+    versions:
+      - id: skillver_bad
+        version: 1
+        state: archived
+        prompt: current skill
+`,
+			wantBody: `invalid catalog version state "archived"`,
+		},
+		{
+			name: "empty asset body",
+			body: `guardrails:
+  - id: guardrail_bad
+    name: bad
+    content: current guardrail
+    enabled: true
+    versions:
+      - id: guardrailver_bad
+        version: 1
+        state: published
+        enabled: true
+`,
+			wantBody: "guardrail version content is required",
+		},
+		{
+			name: "no published version",
+			body: `prompts:
+  - id: prompt_bad
+    name: bad
+    content: current prompt
+    versions:
+      - id: promptver_bad
+        version: 1
+        state: draft
+        content: draft prompt
+`,
+			wantBody: "prompt versions require at least one published version",
+		},
+		{
+			name: "duplicate version number",
+			body: `skills:
+  bad-skill:
+    prompt: current skill
+    versions:
+      - id: skillver_one
+        version: 1
+        state: published
+        prompt: original skill
+      - id: skillver_two
+        version: 1
+        state: published
+        prompt: current skill
+`,
+			wantBody: "duplicate catalog version number 1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := openCRUDTestServer(t)
+			req := httptest.NewRequest(http.MethodPost, "/import?mode=replace", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/x-yaml")
+			rr := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rr, req)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("import invalid catalog versions: got %d, %s", rr.Code, rr.Body.String())
+			}
+			if !strings.Contains(rr.Body.String(), tt.wantBody) {
+				t.Fatalf("import error = %q, want substring %q", rr.Body.String(), tt.wantBody)
+			}
+		})
+	}
+}
+
+func TestStoreImportYAMLCatalogVersionsIsIdempotent(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+	yamlBody := `prompts:
+  - id: prompt_catalog
+    name: catalog
+    content: current prompt
+    versions:
+      - id: promptver_one
+        version: 1
+        state: published
+        content: original prompt
+      - id: promptver_two
+        version: 2
+        state: published
+        content: current prompt
+skills:
+  imported-skill:
+    prompt: current skill
+    versions:
+      - id: skillver_one
+        version: 1
+        state: published
+        prompt: original skill
+      - id: skillver_two
+        version: 2
+        state: published
+        prompt: current skill
+guardrails:
+  - id: guardrail_policy
+    name: policy
+    content: current guardrail
+    enabled: true
+    versions:
+      - id: guardrailver_one
+        version: 1
+        state: published
+        content: original guardrail
+        enabled: true
+      - id: guardrailver_two
+        version: 2
+        state: published
+        content: current guardrail
+        enabled: true
+`
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/import", strings.NewReader(yamlBody))
+		req.Header.Set("Content-Type", "application/x-yaml")
+		rr := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("import iteration %d: got %d, %s", i+1, rr.Code, rr.Body.String())
+		}
+	}
+
+	promptVersions, err := store.ListPromptVersionSnapshots(s.Store().DB(), "prompt_catalog")
+	if err != nil {
+		t.Fatalf("list prompt versions: %v", err)
+	}
+	assertCatalogVersionIDs(t, "prompt", promptVersions, []string{"promptver_one", "promptver_two"})
+	prompt, err := s.Store().ReadPrompt("prompt_catalog")
+	if err != nil {
+		t.Fatalf("read prompt: %v", err)
+	}
+	if got, want := prompt.VersionID, "promptver_two"; got != want {
+		t.Fatalf("prompt current version = %q, want %q", got, want)
+	}
+
+	skillVersions, err := store.ListSkillVersionSnapshots(s.Store().DB(), "imported-skill")
+	if err != nil {
+		t.Fatalf("list skill versions: %v", err)
+	}
+	assertCatalogVersionIDs(t, "skill", skillVersions, []string{"skillver_one", "skillver_two"})
+
+	guardrailVersions, err := store.ListGuardrailVersionSnapshots(s.Store().DB(), "guardrail_policy")
+	if err != nil {
+		t.Fatalf("list guardrail versions: %v", err)
+	}
+	assertCatalogVersionIDs(t, "guardrail", guardrailVersions, []string{"guardrailver_one", "guardrailver_two"})
+}
+
+func assertCatalogVersionIDs(t *testing.T, name string, got []fleet.CatalogVersion, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("%s versions len = %d, want %d: %+v", name, len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i].ID != want[i] {
+			t.Fatalf("%s version[%d].ID = %q, want %q", name, i, got[i].ID, want[i])
+		}
+	}
+}
+
 func TestImportYAMLPreservesRuntimeWhenOmitted(t *testing.T) {
 	t.Parallel()
 	s := openCRUDTestServer(t)
@@ -2921,6 +3283,107 @@ func TestStoreCRUDSkillPatchNotFound(t *testing.T) {
 		"prompt": "x",
 	}); rr.Code != http.StatusNotFound {
 		t.Fatalf("PATCH missing skill: got %d, want 404", rr.Code)
+	}
+}
+
+func TestStoreCRUDCatalogVersionPublishRejectsWrongAsset(t *testing.T) {
+	t.Parallel()
+	s := openCRUDTestServer(t)
+
+	rr := doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
+		"name": "coder-a", "description": "a", "content": "prompt a v1",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST coder-a prompt: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodPost, "/prompts", map[string]any{
+		"name": "coder-b", "description": "b", "content": "prompt b v1",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST coder-b prompt: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var promptB storePromptJSON
+	if err := json.NewDecoder(rr.Body).Decode(&promptB); err != nil {
+		t.Fatalf("decode coder-b prompt: %v", err)
+	}
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/prompts/"+promptB.ID, map[string]any{
+		"content": "prompt b v2", "publish": false,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH coder-b draft: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var promptDraft storePromptJSON
+	if err := json.NewDecoder(rr.Body).Decode(&promptDraft); err != nil {
+		t.Fatalf("decode draft prompt: %v", err)
+	}
+	if promptDraft.VersionID == "" || promptDraft.Version != 2 {
+		t.Fatalf("draft prompt version = (%q, %d), want draft v2", promptDraft.VersionID, promptDraft.Version)
+	}
+	rr = doCRUDRequest(t, s, http.MethodPost, "/prompts/prompt_coder-a/versions/"+promptDraft.VersionID+"/publish", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("POST wrong prompt publish: got %d, want 404, %s", rr.Code, rr.Body.String())
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
+		"name": "architect", "prompt": "architecture v1",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST architect skill: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodPost, "/skills", map[string]any{
+		"name": "reviewer", "prompt": "review v1",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST reviewer skill: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/skills/reviewer", map[string]any{
+		"prompt": "review v2", "publish": false,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH reviewer draft: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var draft storeSkillJSON
+	if err := json.NewDecoder(rr.Body).Decode(&draft); err != nil {
+		t.Fatalf("decode draft skill: %v", err)
+	}
+	if draft.VersionID == "" || draft.Version != 2 {
+		t.Fatalf("draft skill version = (%q, %d), want draft v2", draft.VersionID, draft.Version)
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPost, "/skills/architect/versions/"+draft.VersionID+"/publish", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("POST wrong skill publish: got %d, want 404, %s", rr.Code, rr.Body.String())
+	}
+
+	rr = doCRUDRequest(t, s, http.MethodPost, "/guardrails", map[string]any{
+		"name": "Guardrail A", "description": "a", "content": "guardrail a v1", "enabled": true, "position": 10,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST guardrail-a: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodPost, "/guardrails", map[string]any{
+		"name": "Guardrail B", "description": "b", "content": "guardrail b v1", "enabled": true, "position": 20,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST guardrail-b: got %d, %s", rr.Code, rr.Body.String())
+	}
+	rr = doCRUDRequest(t, s, http.MethodPatch, "/guardrails/guardrail-b", map[string]any{
+		"content": "guardrail b v2", "publish": false,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PATCH guardrail-b draft: got %d, %s", rr.Code, rr.Body.String())
+	}
+	var guardrailDraft map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&guardrailDraft); err != nil {
+		t.Fatalf("decode draft guardrail: %v", err)
+	}
+	guardrailVersionID, _ := guardrailDraft["version_id"].(string)
+	if guardrailVersionID == "" || guardrailDraft["version"] != float64(2) {
+		t.Fatalf("draft guardrail version = (%q, %v), want draft v2", guardrailVersionID, guardrailDraft["version"])
+	}
+	rr = doCRUDRequest(t, s, http.MethodPost, "/guardrails/guardrail-a/versions/"+guardrailVersionID+"/publish", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("POST wrong guardrail publish: got %d, want 404, %s", rr.Code, rr.Body.String())
 	}
 }
 

@@ -24,6 +24,8 @@ func guardrailJSON(g fleet.Guardrail) map[string]any {
 		"is_builtin":      g.IsBuiltin,
 		"enabled":         g.Enabled,
 		"position":        g.Position,
+		"version_id":      g.VersionID,
+		"version":         g.Version,
 	}
 }
 
@@ -110,6 +112,11 @@ func toolUpdateGuardrail(deps Deps) server.ToolHandlerFunc {
 			}
 			pos := int(n)
 			patch.Position = &pos
+		}
+		if v, ok, errMsg := boolPtrArg(args, "publish"); ok {
+			patch.Publish = v
+		} else if errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
 		}
 		if !patch.AnyFieldSet() {
 			return mcpgo.NewToolResultError("at least one field is required"), nil

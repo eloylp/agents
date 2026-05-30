@@ -28,6 +28,7 @@ interface Agent {
   backend: string
   model?: string
   skills?: string[]
+  skill_version_ids?: Record<string, string>
   description?: string
   allow_dispatch: boolean
   can_dispatch?: string[]
@@ -36,6 +37,7 @@ interface Agent {
   prompt_ref?: string
   prompt_id?: string
   prompt_scope?: string
+  prompt_version_id?: string
   scope_type?: string
   scope_repo?: string
   current_status: string
@@ -185,9 +187,11 @@ export default function FleetPage() {
       backend: a?.backend ?? '',
       model: a?.model ?? '',
       skills: a?.skills ?? [],
+      skill_version_ids: a?.skill_version_ids ?? {},
       prompt_id: a?.prompt_id ?? '',
       prompt_ref: a?.prompt_ref ?? '',
       prompt_scope: a?.prompt_scope ?? '',
+      prompt_version_id: a?.prompt_version_id ?? '',
       scope_type: a?.scope_type ?? 'workspace',
       scope_repo: a?.scope_repo ?? '',
       allow_prs: a?.allow_prs ?? false,
@@ -208,9 +212,11 @@ export default function FleetPage() {
           backend: data.backend ?? '',
           model: data.model ?? '',
           skills: data.skills ?? [],
+          skill_version_ids: data.skill_version_ids ?? {},
           prompt_ref: data.prompt_ref ?? '',
           prompt_id: data.prompt_id ?? '',
           prompt_scope: data.prompt_scope ?? '',
+          prompt_version_id: data.prompt_version_id ?? '',
           scope_type: data.scope_type ?? 'workspace',
           scope_repo: data.scope_repo ?? '',
           can_dispatch: data.can_dispatch ?? [],
