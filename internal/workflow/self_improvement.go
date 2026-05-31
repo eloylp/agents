@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -110,35 +111,74 @@ func (e *Engine) AnalyzeSelfImprovementFeedback(ctx context.Context, feedback st
 		_ = e.store.MarkSelfImprovementFeedbackFailed(feedback.ID, err.Error())
 		return store.SelfImprovementRecommendation{}, err
 	}
-	runner, ok := e.runnerBuilder(feedback.WorkspaceID, backendName, backend).(ai.JSONRunner)
-	if !ok {
-		err := fmt.Errorf("backend %q does not support structured JSON analysis", backendName)
-		_ = e.store.MarkSelfImprovementFeedbackFailed(feedback.ID, err.Error())
-		return store.SelfImprovementRecommendation{}, err
-	}
 	payload, err := json.MarshalIndent(selfImprovementAnalysisInput(feedback, e.currentCatalogVersions(feedback)), "", "  ")
 	if err != nil {
 		_ = e.store.MarkSelfImprovementFeedbackFailed(feedback.ID, err.Error())
 		return store.SelfImprovementRecommendation{}, err
 	}
-	raw, err := runner.RunJSON(ctx, ai.JSONRequest{
-		Workflow: "self-improvement-analysis",
-		Repo:     strings.Trim(feedback.RepoOwner+"/"+feedback.RepoName, "/"),
-		Number:   max(feedback.PRNumber, feedback.IssueNumber),
-		System:   selfImprovementSystemPrompt(prompt.Content),
-		User:     string(payload),
-		Schema:   selfImprovementRecommendationSchema,
-	})
+	resp, err := e.runSelfImprovementAnalyst(ctx, feedback, prompt, backendName, backend, string(payload))
 	if err != nil {
 		_ = e.store.MarkSelfImprovementFeedbackFailed(feedback.ID, err.Error())
 		return store.SelfImprovementRecommendation{}, err
 	}
-	in, err := recommendationInputFromAssistant(feedback, prompt.VersionID, raw)
+	in, err := recommendationInputFromAssistant(feedback, prompt.VersionID, json.RawMessage(resp.Summary))
 	if err != nil {
 		_ = e.store.MarkSelfImprovementFeedbackFailed(feedback.ID, err.Error())
 		return store.SelfImprovementRecommendation{}, err
 	}
 	return e.store.UpsertSelfImprovementRecommendation(in)
+}
+
+func (e *Engine) runSelfImprovementAnalyst(ctx context.Context, feedback store.SelfImprovementFeedback, prompt fleet.Prompt, backendName string, backend fleet.Backend, payload string) (ai.Response, error) {
+	allowMemory := false
+	agent := fleet.Agent{
+		WorkspaceID: feedback.WorkspaceID,
+		Name:        "self-improvement-analyst",
+		Backend:     backendName,
+		PromptID:    selfImprovementPromptRef,
+		ScopeType:   "repo",
+		ScopeRepo:   strings.Trim(feedback.RepoOwner+"/"+feedback.RepoName, "/"),
+		Description: "Analyzes stored feedback and creates improvement recommendations.",
+		AllowMemory: &allowMemory,
+	}
+	prompt.Content = selfImprovementSystemPrompt(prompt.Content)
+	cfg, err := e.loadWorkflowSnapshot()
+	if err != nil {
+		return ai.Response{}, err
+	}
+	cfg.Daemon.AIBackends[backendName] = backend
+	cfg.Agents = append(cfg.Agents, agent)
+	cfg.Prompts = replacePrompt(cfg.Prompts, prompt)
+	ev := Event{
+		ID:          fmt.Sprintf("self-improvement-%d", feedback.ID),
+		WorkspaceID: feedback.WorkspaceID,
+		Repo:        RepoRef{FullName: strings.Trim(feedback.RepoOwner+"/"+feedback.RepoName, "/"), Enabled: true},
+		Kind:        selfImprovementEventKind,
+		Number:      max(feedback.PRNumber, feedback.IssueNumber),
+		Actor:       feedback.AuthorLogin,
+		Payload: map[string]any{
+			"feedback_event_id":   feedback.ID,
+			"analysis_input_json": payload,
+			"structured_schema":   selfImprovementRecommendationSchema,
+			"target_agent":        agent.Name,
+			"source_url":          feedback.SourceURL,
+			"attribution_comment": "stored self-improvement feedback",
+			"no_auto_apply":       true,
+			"requested_output":    "structured self-improvement recommendation JSON",
+		},
+	}
+	return e.runAgentResult(ctx, ev, agent, cfg)
+}
+
+func replacePrompt(prompts []fleet.Prompt, prompt fleet.Prompt) []fleet.Prompt {
+	for i := range prompts {
+		if prompts[i].ID == prompt.ID {
+			out := slices.Clone(prompts)
+			out[i] = prompt
+			return out
+		}
+	}
+	return append(prompts, prompt)
 }
 
 func (e *Engine) handleSelfImprovementEvent(ctx context.Context, ev Event) error {

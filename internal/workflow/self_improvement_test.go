@@ -29,6 +29,19 @@ func (r *selfImprovementJSONRunner) RunJSON(_ context.Context, req ai.JSONReques
 	return r.raw, r.err
 }
 
+type selfImprovementStreamPublisher struct {
+	begin []BeginRunInput
+	end   []string
+}
+
+func (p *selfImprovementStreamPublisher) BeginRun(in BeginRunInput) {
+	p.begin = append(p.begin, in)
+}
+
+func (p *selfImprovementStreamPublisher) EndRun(spanID string) {
+	p.end = append(p.end, spanID)
+}
+
 func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	t.Parallel()
 
@@ -77,6 +90,10 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	}`)}
 	e := NewEngine(st, config.ProcessorConfig{}, nil, zerolog.Nop())
 	e.WithRunnerBuilder(func(_ string, _ string, _ fleet.Backend) ai.Runner { return runner })
+	traceRec := &traceRecorderStub{}
+	streamPub := &selfImprovementStreamPublisher{}
+	e.WithTraceRecorder(traceRec)
+	e.WithRunStreamPublisher(streamPub)
 
 	rec, err := e.AnalyzeSelfImprovementFeedback(context.Background(), feedback)
 	if err != nil {
@@ -98,8 +115,9 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	if !strings.Contains(runner.req.System, "Hard contract") || runner.req.Schema == "" {
 		t.Fatalf("assistant request missing hard contract/schema: %+v", runner.req)
 	}
+	inputJSON := renderedPayloadBlock(t, runner.req.User, "analysis_input_json")
 	var input selfImprovementInput
-	if err := json.Unmarshal([]byte(runner.req.User), &input); err != nil {
+	if err := json.Unmarshal([]byte(inputJSON), &input); err != nil {
 		t.Fatalf("assistant input json: %v", err)
 	}
 	if input.FeedbackEventID != feedback.ID || input.RawFeedbackBody != feedback.RawBody || len(input.RelevantCurrentCatalogVersions) != 1 {
@@ -108,6 +126,35 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	if got := input.RelevantCurrentCatalogVersions[0]; got.VersionID != feedback.LinkedPromptVersionID || got.Content == "" || got.IndexOnly {
 		t.Fatalf("catalog context = %+v, want linked prompt with full body", got)
 	}
+	span, ok := traceRec.last()
+	if !ok {
+		t.Fatal("self-improvement analyst run did not record a trace span")
+	}
+	if span.Agent != "self-improvement-analyst" || span.EventKind != selfImprovementEventKind || span.PromptVersionID != feedback.LinkedPromptVersionID {
+		t.Fatalf("trace span = %+v, want observable analyst run", span)
+	}
+	if len(streamPub.begin) != 1 || len(streamPub.end) != 1 || streamPub.begin[0].Agent != "self-improvement-analyst" {
+		t.Fatalf("stream lifecycle begin=%+v end=%+v, want analyst run lifecycle", streamPub.begin, streamPub.end)
+	}
+}
+
+func renderedPayloadBlock(t *testing.T, user, key string) string {
+	t.Helper()
+	prefix := key + ":\n"
+	start := strings.Index(user, prefix)
+	if start < 0 {
+		t.Fatalf("rendered user prompt missing %s block: %s", key, user)
+	}
+	block := user[start+len(prefix):]
+	var lines []string
+	for _, line := range strings.Split(block, "\n") {
+		if strings.HasPrefix(line, "  ") {
+			lines = append(lines, strings.TrimPrefix(line, "  "))
+			continue
+		}
+		break
+	}
+	return strings.Join(lines, "\n")
 }
 
 func TestAnalyzeSelfImprovementFeedbackMarksFailedWhenAssistantFails(t *testing.T) {

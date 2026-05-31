@@ -63,6 +63,10 @@ type Request struct {
 	Model    string // optional per-agent model override
 	System   string // stable system-level content (from RenderedPrompt.System)
 	User     string // per-run user content (from RenderedPrompt.User)
+	// StructuredSchema requests backend-native JSON output with this schema
+	// while preserving the normal agent run lifecycle. The raw JSON is returned
+	// in Response.Summary.
+	StructuredSchema string
 
 	// OnLine, when non-nil, is invoked synchronously for every line the
 	// AI CLI writes to stdout, with the trailing newline stripped. Used
