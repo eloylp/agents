@@ -58,7 +58,7 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	}
 	runner := &selfImprovementJSONRunner{raw: json.RawMessage(`{
 		"type":"patch_prompt",
-		"status":"recommended",
+		"status":"accepted",
 		"confidence":"medium",
 		"risk":"low",
 		"finding":"The feedback asks for a file-size guidance improvement.",
@@ -82,8 +82,11 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AnalyzeSelfImprovementFeedback: %v", err)
 	}
-	if rec.Status != store.RecommendationStatusRecommended || rec.AnalyzerPromptVersionID == "" {
-		t.Fatalf("recommendation = %+v, want recommended with analyzer prompt version", rec)
+	if rec.Status != store.RecommendationStatusNeedsUserInput || rec.AnalyzerPromptVersionID == "" {
+		t.Fatalf("recommendation = %+v, want machine-owned status with analyzer prompt version", rec)
+	}
+	if got := rec.StructuredOutput["status"]; got != store.RecommendationStatusNeedsUserInput {
+		t.Fatalf("structured status = %v, want clamped machine-owned status", got)
 	}
 	gotFeedback, err := st.GetSelfImprovementFeedback(feedback.ID)
 	if err != nil {
@@ -99,8 +102,11 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	if err := json.Unmarshal([]byte(runner.req.User), &input); err != nil {
 		t.Fatalf("assistant input json: %v", err)
 	}
-	if input.FeedbackEventID != feedback.ID || input.RawFeedbackBody != feedback.RawBody || len(input.RelevantCurrentCatalogVersions) == 0 {
-		t.Fatalf("assistant input = %+v, want feedback context and current catalog versions", input)
+	if input.FeedbackEventID != feedback.ID || input.RawFeedbackBody != feedback.RawBody || len(input.RelevantCurrentCatalogVersions) != 1 {
+		t.Fatalf("assistant input = %+v, want feedback context and only linked catalog target", input)
+	}
+	if got := input.RelevantCurrentCatalogVersions[0]; got.VersionID != feedback.LinkedPromptVersionID || got.Content == "" || got.IndexOnly {
+		t.Fatalf("catalog context = %+v, want linked prompt with full body", got)
 	}
 }
 

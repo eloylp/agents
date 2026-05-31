@@ -52,3 +52,26 @@ func TestSelfImprovementAnalystMigrationPreservesCustomizedCurrentVersion(t *tes
 		t.Fatalf("prompt after rerun = version %q body %q, want custom version %q", got.VersionID, got.Content, custom.ID)
 	}
 }
+
+func TestSelfImprovementAnalystMigrationUsesCanonicalBodyHash(t *testing.T) {
+	t.Parallel()
+
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	st := New(db)
+	t.Cleanup(func() { st.Close() })
+
+	prompt, err := st.ReadPrompt("prompt_self-improvement-analyst")
+	if err != nil {
+		t.Fatalf("read seeded prompt: %v", err)
+	}
+	var bodyHash string
+	if err := db.QueryRow(`SELECT body_hash FROM prompt_versions WHERE id = ?`, prompt.VersionID).Scan(&bodyHash); err != nil {
+		t.Fatalf("read body hash: %v", err)
+	}
+	if want := catalogBodyHash(prompt.Description, prompt.Content); bodyHash != want {
+		t.Fatalf("body_hash = %q, want canonical %q", bodyHash, want)
+	}
+}

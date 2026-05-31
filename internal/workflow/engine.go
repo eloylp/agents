@@ -20,8 +20,9 @@ import (
 // labeledKinds are the event kinds that trigger label-based bindings.
 var labeledKinds = []string{"issues.labeled", "pull_request.labeled"}
 
-// directEventKinds bypass binding fan-out and target a specific agent.
-var directEventKinds = []string{"agent.dispatch", "agents.run", "cron"}
+// directEventKinds bypass binding fan-out and target a specific internal
+// workflow or agent.
+var directEventKinds = []string{"agent.dispatch", "agents.run", "cron", selfImprovementEventKind}
 
 // SpanInput is the call shape for TraceRecorder.RecordSpan. Defined
 // here as well as in the observe package so the engine doesn't import
@@ -328,6 +329,9 @@ func (e *Engine) HandleEvent(ctx context.Context, ev Event) error {
 	}
 	logBase.Msg("processing event")
 
+	if ev.Kind == selfImprovementEventKind {
+		return e.handleSelfImprovementEvent(ctx, ev)
+	}
 	if slices.Contains(directEventKinds, ev.Kind) {
 		return e.handleDirectAgentRunEvent(ctx, ev)
 	}

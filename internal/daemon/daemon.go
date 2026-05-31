@@ -139,7 +139,6 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
 	webhookHandler := webhook.NewHandler(deliveryStore, channels, st, obs, cfg.Daemon.HTTP, cfg.Daemon.SelfImprovement, logger)
-	webhookHandler.WithImprovementAnalyzer(engine)
 
 	// Processor sits over the queue; event recorder writes into observe so
 	// /events shows the firehose.

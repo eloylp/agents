@@ -19,14 +19,6 @@ import (
 	"github.com/eloylp/agents/internal/workflow"
 )
 
-type fakeImprovementAnalyzer struct {
-	store *store.Store
-}
-
-func (f fakeImprovementAnalyzer) AnalyzeSelfImprovementFeedback(_ context.Context, feedback store.SelfImprovementFeedback) (store.SelfImprovementRecommendation, error) {
-	return f.store.UpsertSelfImprovementRecommendation(store.RecommendationFromFeedback(feedback))
-}
-
 // TestVerifySignature exercises the HMAC-SHA256 signature check that gates
 // every incoming GitHub webhook delivery.
 func TestVerifySignature(t *testing.T) {
@@ -227,7 +219,7 @@ func TestIssueCommentAIImprovementFeedbackStoredForAllowlistedAuthor(t *testing.
 		t.Fatalf("seed repo: %v", err)
 	}
 
-	dc := workflow.NewDataChannels(1, st)
+	dc := workflow.NewDataChannels(2, st)
 	h := NewHandler(
 		NewDeliveryStore(10*time.Minute),
 		dc,
@@ -237,7 +229,6 @@ func TestIssueCommentAIImprovementFeedbackStoredForAllowlistedAuthor(t *testing.
 		config.SelfImprovementConfig{FeedbackAuthorAllowlist: []string{"maintainer"}},
 		zerolog.Nop(),
 	)
-	h.WithImprovementAnalyzer(fakeImprovementAnalyzer{store: st})
 	body := []byte(`{
 		"action":"created",
 		"comment":{"id":123,"html_url":"https://github.com/owner/repo/issues/7#issuecomment-123","body":"Please remember this /agents improve","created_at":"2026-05-30T10:00:00Z","updated_at":"2026-05-30T10:00:00Z"},
@@ -252,7 +243,7 @@ func TestIssueCommentAIImprovementFeedbackStoredForAllowlistedAuthor(t *testing.
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusAccepted)
 	}
-	rows, err := st.ListSelfImprovementFeedback("team-a", store.FeedbackStatusAnalyzed, 10)
+	rows, err := st.ListSelfImprovementFeedback("team-a", store.FeedbackStatusNew, 10)
 	if err != nil {
 		t.Fatalf("list feedback: %v", err)
 	}
@@ -260,18 +251,28 @@ func TestIssueCommentAIImprovementFeedbackStoredForAllowlistedAuthor(t *testing.
 		t.Fatalf("feedback count = %d, want 1", len(rows))
 	}
 	got := rows[0]
-	if got.SourceType != "issue_comment" || got.GitHubCommentID != 123 || !got.AuthorAuthorized || got.Status != store.FeedbackStatusAnalyzed {
-		t.Fatalf("feedback = %+v, want authorized analyzed issue comment 123", got)
+	if got.SourceType != "issue_comment" || got.GitHubCommentID != 123 || !got.AuthorAuthorized || got.Status != store.FeedbackStatusNew {
+		t.Fatalf("feedback = %+v, want authorized new issue comment 123", got)
 	}
 	if got.IssueNumber != 7 || got.PRNumber != 0 || got.LinkConfidence != "unresolved" {
 		t.Fatalf("feedback context = %+v, want issue #7 unresolved", got)
 	}
-	recs, err := st.ListSelfImprovementRecommendations("team-a", "", 10)
-	if err != nil {
-		t.Fatalf("list recommendations: %v", err)
+	var gotImprovement bool
+	for i := 0; i < 2; i++ {
+		select {
+		case queued := <-dc.EventChan():
+			if queued.Event.Kind == "agents.improvement" {
+				gotImprovement = true
+				if queued.Event.Payload["feedback_event_id"] != got.ID {
+					t.Fatalf("feedback_event_id = %v, want %d", queued.Event.Payload["feedback_event_id"], got.ID)
+				}
+			}
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("timed out waiting for queued events")
+		}
 	}
-	if len(recs) != 1 || recs[0].FeedbackEventID != got.ID || recs[0].Status != store.RecommendationStatusNeedsUserInput {
-		t.Fatalf("recommendations = %+v, want one review-only recommendation for feedback", recs)
+	if !gotImprovement {
+		t.Fatal("agents.improvement event was not queued")
 	}
 }
 

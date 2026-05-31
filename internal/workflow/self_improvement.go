@@ -13,6 +13,7 @@ import (
 )
 
 const selfImprovementPromptRef = "prompt_self-improvement-analyst"
+const selfImprovementEventKind = "agents.improvement"
 
 const selfImprovementRecommendationSchema = `{
   "type": "object",
@@ -60,11 +61,15 @@ type selfImprovementOutput struct {
 }
 
 type selfImprovementCatalogVersion struct {
-	AssetType string `json:"asset_type"`
-	ID        string `json:"id"`
-	Scope     string `json:"scope"`
-	VersionID string `json:"version_id"`
-	Version   int    `json:"version"`
+	AssetType   string `json:"asset_type"`
+	ID          string `json:"id"`
+	Scope       string `json:"scope"`
+	VersionID   string `json:"version_id"`
+	Version     int    `json:"version"`
+	Description string `json:"description,omitempty"`
+	Content     string `json:"content,omitempty"`
+	Prompt      string `json:"prompt,omitempty"`
+	IndexOnly   bool   `json:"index_only,omitempty"`
 }
 
 type selfImprovementInput struct {
@@ -136,6 +141,19 @@ func (e *Engine) AnalyzeSelfImprovementFeedback(ctx context.Context, feedback st
 	return e.store.UpsertSelfImprovementRecommendation(in)
 }
 
+func (e *Engine) handleSelfImprovementEvent(ctx context.Context, ev Event) error {
+	feedbackID, ok := eventInt64Payload(ev, "feedback_event_id")
+	if !ok || feedbackID == 0 {
+		return fmt.Errorf("self-improvement event missing feedback_event_id")
+	}
+	feedback, err := e.store.GetSelfImprovementFeedback(feedbackID)
+	if err != nil {
+		return err
+	}
+	_, err = e.AnalyzeSelfImprovementFeedback(ctx, feedback)
+	return err
+}
+
 func (e *Engine) selfImprovementBackend() (string, fleet.Backend, error) {
 	backends, err := e.store.ReadBackends()
 	if err != nil {
@@ -195,28 +213,84 @@ func selfImprovementAnalysisInput(feedback store.SelfImprovementFeedback, versio
 
 func (e *Engine) currentCatalogVersions(feedback store.SelfImprovementFeedback) []selfImprovementCatalogVersion {
 	var out []selfImprovementCatalogVersion
+	linkedPromptIDs := stringSet(feedback.LinkedPromptVersionID)
+	linkedSkillIDs := stringSet(feedback.LinkedSkillVersionIDs...)
+	linkedGuardrailIDs := stringSet(feedback.LinkedGuardrailVersionIDs...)
+	hasLinkedTarget := len(linkedPromptIDs)+len(linkedSkillIDs)+len(linkedGuardrailIDs) > 0
+	seenVersionIDs := map[string]struct{}{}
+
 	if prompts, err := e.store.ReadPrompts(); err == nil {
 		for _, prompt := range prompts {
-			if feedback.LinkedPromptVersionID == "" && prompt.ID != selfImprovementPromptRef {
-				continue
+			version := catalogVersion("prompt", prompt.ID, prompt.WorkspaceID, prompt.Repo, prompt.VersionID, prompt.Version)
+			version.Description = prompt.Description
+			if hasLinkedTarget {
+				if _, ok := linkedPromptIDs[prompt.VersionID]; !ok {
+					continue
+				}
+				version.Content = prompt.Content
+			} else {
+				version.IndexOnly = true
 			}
-			out = append(out, catalogVersion("prompt", prompt.ID, prompt.WorkspaceID, prompt.Repo, prompt.VersionID, prompt.Version))
+			out = append(out, version)
+			seenVersionIDs[version.VersionID] = struct{}{}
 		}
+	}
+	for versionID := range linkedPromptIDs {
+		if _, ok := seenVersionIDs[versionID]; ok {
+			continue
+		}
+		prompt, err := e.store.ReadPromptVersion(versionID)
+		if err != nil {
+			continue
+		}
+		version := catalogVersion("prompt", prompt.ID, prompt.WorkspaceID, prompt.Repo, prompt.VersionID, prompt.Version)
+		version.Description = prompt.Description
+		version.Content = prompt.Content
+		out = append(out, version)
+		seenVersionIDs[version.VersionID] = struct{}{}
 	}
 	if skills, err := e.store.ReadSkills(); err == nil {
 		for _, skill := range skills {
-			if len(feedback.LinkedSkillVersionIDs) == 0 {
-				continue
+			version := catalogVersion("skill", skill.ID, skill.WorkspaceID, skill.Repo, skill.VersionID, skill.Version)
+			if hasLinkedTarget {
+				if _, ok := linkedSkillIDs[skill.VersionID]; !ok {
+					continue
+				}
+				version.Prompt = skill.Prompt
+			} else {
+				version.IndexOnly = true
 			}
-			out = append(out, catalogVersion("skill", skill.ID, skill.WorkspaceID, skill.Repo, skill.VersionID, skill.Version))
+			out = append(out, version)
+			seenVersionIDs[version.VersionID] = struct{}{}
 		}
+	}
+	for versionID := range linkedSkillIDs {
+		if _, ok := seenVersionIDs[versionID]; ok {
+			continue
+		}
+		skill, err := e.store.ReadSkillVersion(versionID)
+		if err != nil {
+			continue
+		}
+		version := catalogVersion("skill", skill.ID, skill.WorkspaceID, skill.Repo, skill.VersionID, skill.Version)
+		version.Prompt = skill.Prompt
+		out = append(out, version)
+		seenVersionIDs[version.VersionID] = struct{}{}
 	}
 	if guardrails, err := e.store.ReadAllGuardrails(); err == nil {
 		for _, guardrail := range guardrails {
-			if len(feedback.LinkedGuardrailVersionIDs) == 0 {
-				continue
+			version := catalogVersion("guardrail", guardrail.ID, guardrail.WorkspaceID, "", guardrail.VersionID, guardrail.Version)
+			version.Description = guardrail.Description
+			if hasLinkedTarget {
+				if _, ok := linkedGuardrailIDs[guardrail.VersionID]; !ok {
+					continue
+				}
+				version.Content = guardrail.Content
+			} else {
+				version.IndexOnly = true
 			}
-			out = append(out, catalogVersion("guardrail", guardrail.ID, guardrail.WorkspaceID, "", guardrail.VersionID, guardrail.Version))
+			out = append(out, version)
+			seenVersionIDs[version.VersionID] = struct{}{}
 		}
 	}
 	return out
@@ -252,11 +326,13 @@ func recommendationInputFromAssistant(feedback store.SelfImprovementFeedback, pr
 	if len(out.EvidenceSourceURLs) == 0 && feedback.SourceURL != "" {
 		out.EvidenceSourceURLs = []string{feedback.SourceURL}
 	}
+	status := machineRecommendationStatus(out.Status)
+	structured["status"] = status
 	return store.SelfImprovementRecommendationInput{
 		WorkspaceID:             feedback.WorkspaceID,
 		FeedbackEventID:         feedback.ID,
 		Type:                    out.Type,
-		Status:                  out.Status,
+		Status:                  status,
 		Confidence:              out.Confidence,
 		Risk:                    out.Risk,
 		Finding:                 out.Finding,
@@ -275,4 +351,44 @@ func recommendationInputFromAssistant(feedback store.SelfImprovementFeedback, pr
 		AnalyzerPromptVersionID: promptVersionID,
 		StructuredOutput:        structured,
 	}, nil
+}
+
+func machineRecommendationStatus(status string) string {
+	switch status {
+	case store.RecommendationStatusRecommended, store.RecommendationStatusNeedsUserInput:
+		return status
+	default:
+		return store.RecommendationStatusNeedsUserInput
+	}
+}
+
+func stringSet(values ...string) map[string]struct{} {
+	out := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out[value] = struct{}{}
+		}
+	}
+	return out
+}
+
+func eventInt64Payload(ev Event, key string) (int64, bool) {
+	value, ok := ev.Payload[key]
+	if !ok {
+		return 0, false
+	}
+	switch v := value.(type) {
+	case int64:
+		return v, true
+	case int:
+		return int64(v), true
+	case float64:
+		return int64(v), v == float64(int64(v))
+	case json.Number:
+		n, err := v.Int64()
+		return n, err == nil
+	default:
+		return 0, false
+	}
 }

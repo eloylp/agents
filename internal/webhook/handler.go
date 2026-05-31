@@ -34,12 +34,9 @@ type Handler struct {
 	channels *workflow.DataChannels
 	store    *store.Store
 	observe  *observe.Store
-	analyzer interface {
-		AnalyzeSelfImprovementFeedback(context.Context, store.SelfImprovementFeedback) (store.SelfImprovementRecommendation, error)
-	}
-	httpCfg config.HTTPConfig
-	self    config.SelfImprovementConfig
-	logger  zerolog.Logger
+	httpCfg  config.HTTPConfig
+	self     config.SelfImprovementConfig
+	logger   zerolog.Logger
 }
 
 // NewHandler constructs a Handler. delivery, channels, store, and httpCfg
@@ -55,12 +52,6 @@ func NewHandler(delivery *DeliveryStore, channels *workflow.DataChannels, st *st
 		self:     self,
 		logger:   logger.With().Str("component", "webhook").Logger(),
 	}
-}
-
-func (h *Handler) WithImprovementAnalyzer(analyzer interface {
-	AnalyzeSelfImprovementFeedback(context.Context, store.SelfImprovementFeedback) (store.SelfImprovementRecommendation, error)
-}) {
-	h.analyzer = analyzer
 }
 
 // RegisterRoutes mounts POST {httpCfg.WebhookPath} on r.
@@ -435,7 +426,7 @@ func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWr
 
 	events := make([]workflow.Event, 0, len(repos))
 	for _, repo := range repos {
-		h.captureFeedback(repo, feedbackCapture{
+		feedback, analyze := h.captureFeedback(repo, feedbackCapture{
 			DeliveryID:      deliveryID,
 			SourceType:      "issue_comment",
 			Body:            payload.Comment.Body,
@@ -458,6 +449,9 @@ func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWr
 				"body": payload.Comment.Body,
 			},
 		})
+		if analyze {
+			events = append(events, improvementEvent(deliveryID, repo, feedback))
+		}
 	}
 	h.enqueueEvents(ctx, w, events, deliveryID)
 }
@@ -494,7 +488,7 @@ func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, w http.Respo
 
 	events := make([]workflow.Event, 0, len(repos))
 	for _, repo := range repos {
-		h.captureFeedback(repo, feedbackCapture{
+		feedback, analyze := h.captureFeedback(repo, feedbackCapture{
 			DeliveryID:      deliveryID,
 			SourceType:      "pull_request_review",
 			Body:            payload.Review.Body,
@@ -518,6 +512,9 @@ func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, w http.Respo
 				"body":  payload.Review.Body,
 			},
 		})
+		if analyze {
+			events = append(events, improvementEvent(deliveryID, repo, feedback))
+		}
 	}
 	h.enqueueEvents(ctx, w, events, deliveryID)
 }
@@ -579,7 +576,7 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 
 	events := make([]workflow.Event, 0, len(repos))
 	for _, repo := range repos {
-		h.captureFeedback(repo, feedbackCapture{
+		feedback, analyze := h.captureFeedback(repo, feedbackCapture{
 			DeliveryID:      deliveryID,
 			SourceType:      "pull_request_review_comment",
 			Body:            payload.Comment.Body,
@@ -606,6 +603,9 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 				"body": payload.Comment.Body,
 			},
 		})
+		if analyze {
+			events = append(events, improvementEvent(deliveryID, repo, feedback))
+		}
 	}
 	h.enqueueEvents(ctx, w, events, deliveryID)
 }
@@ -630,12 +630,12 @@ type feedbackCapture struct {
 	GitHubUpdatedAt *time.Time
 }
 
-func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) {
+func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) (store.SelfImprovementFeedback, bool) {
 	if !containsImproveCommand(in.Body) {
 		if in.Edited {
 			h.ignoreFeedback(repo, in)
 		}
-		return
+		return store.SelfImprovementFeedback{}, false
 	}
 	authorized := h.feedbackAuthorAllowed(in.AuthorLogin)
 	status := store.FeedbackStatusNew
@@ -698,21 +698,7 @@ func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) {
 			Str("repo", repo.Name).
 			Str("source_type", in.SourceType).
 			Msg("webhook: store self-improvement feedback")
-		return
-	}
-	if authorized && feedback.Status == store.FeedbackStatusNew {
-		if h.analyzer == nil {
-			if err := h.store.MarkSelfImprovementFeedbackFailed(feedback.ID, "self-improvement analyzer is not configured"); err != nil {
-				h.logger.Error().Err(err).Int64("feedback_id", feedback.ID).Msg("webhook: mark self-improvement feedback failed")
-			}
-			return
-		}
-		if _, err := h.analyzer.AnalyzeSelfImprovementFeedback(context.Background(), feedback); err != nil {
-			h.logger.Error().Err(err).
-				Str("delivery_id", in.DeliveryID).
-				Int64("feedback_id", feedback.ID).
-				Msg("webhook: analyze self-improvement feedback")
-		}
+		return store.SelfImprovementFeedback{}, false
 	}
 	h.logger.Info().
 		Str("delivery_id", in.DeliveryID).
@@ -722,6 +708,21 @@ func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) {
 		Bool("author_authorized", authorized).
 		Str("link_confidence", res.Confidence).
 		Msg("webhook: stored self-improvement feedback")
+	return feedback, authorized && feedback.Status == store.FeedbackStatusNew
+}
+
+func improvementEvent(deliveryID string, repo fleet.Repo, feedback store.SelfImprovementFeedback) workflow.Event {
+	return workflow.Event{
+		ID:          deliveryID + ":improvement",
+		WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
+		Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+		Kind:        "agents.improvement",
+		Number:      firstNonZero(feedback.PRNumber, feedback.IssueNumber),
+		Actor:       feedback.AuthorLogin,
+		Payload: map[string]any{
+			"feedback_event_id": feedback.ID,
+		},
+	}
 }
 
 func (h *Handler) ignoreFeedback(repo fleet.Repo, in feedbackCapture) {

@@ -42,7 +42,7 @@ Return one structured JSON recommendation with: type, status, confidence, risk, 
     'system',
     'Seed built-in self-improvement analyst prompt',
     p.current_version_id,
-    'self-improvement-analyst-v1',
+    '6e4276443344fe41b37df86e5dc63b490dd8e3c56a33c9dd496b6f44cae4e993',
     datetime('now'),
     datetime('now')
 FROM prompts p
@@ -60,7 +60,7 @@ WHERE ref = 'prompt_self-improvement-analyst'
 
 CREATE TABLE IF NOT EXISTS self_improvement_recommendations (
     id                       TEXT PRIMARY KEY,
-    workspace_id             TEXT NOT NULL DEFAULT 'default' REFERENCES workspaces(id) ON DELETE CASCADE,
+    workspace_id             TEXT NOT NULL DEFAULT 'default',
     feedback_event_id         INTEGER NOT NULL REFERENCES self_improvement_feedback(id) ON DELETE CASCADE,
     type                     TEXT NOT NULL,
     status                   TEXT NOT NULL,
