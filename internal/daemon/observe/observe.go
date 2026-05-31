@@ -493,7 +493,7 @@ func (h *Handler) HandleMemory(w http.ResponseWriter, r *http.Request) {
 	workspace := r.URL.Query().Get("workspace")
 
 	// Reject path traversal attempts.
-	if agent == "." || repo == "." || agent == ".." || repo == ".." {
+	if slices.Contains([]string{".", ".."}, agent) || slices.Contains([]string{".", ".."}, repo) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
