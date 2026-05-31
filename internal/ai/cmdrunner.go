@@ -352,7 +352,9 @@ func (r *CommandRunner) isCodexBackend() bool  { return r.hasBackendPrefix("code
 func (r *CommandRunner) hasBackendPrefix(prefix string) bool {
 	name := strings.ToLower(strings.TrimSpace(r.backendName))
 	cmd := strings.ToLower(filepath.Base(strings.TrimSpace(r.command)))
-	return strings.HasPrefix(name, prefix) || strings.HasPrefix(cmd, prefix)
+	return slices.ContainsFunc([]string{name, cmd}, func(candidate string) bool {
+		return strings.HasPrefix(candidate, prefix)
+	})
 }
 
 // buildClaudeDelivery builds hardcoded Claude CLI args and delivers system
