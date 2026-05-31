@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -435,7 +436,9 @@ func pbkdf2SHA256WithIter(password string, salt []byte, iter, keyLen int) ([]byt
 }
 
 func verifyPassword(password, encoded string) (verified bool, needsRehash bool) {
-	if strings.HasPrefix(encoded, "$2a$") || strings.HasPrefix(encoded, "$2b$") || strings.HasPrefix(encoded, "$2y$") {
+	if slices.ContainsFunc([]string{"$2a$", "$2b$", "$2y$"}, func(prefix string) bool {
+		return strings.HasPrefix(encoded, prefix)
+	}) {
 		return bcrypt.CompareHashAndPassword([]byte(encoded), bcryptPasswordInput(password)) == nil, false
 	}
 	algorithm, rest, ok := strings.Cut(encoded, "$")
