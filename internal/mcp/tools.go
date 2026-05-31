@@ -1192,5 +1192,10 @@ func trimmedStringOptional(req mcpgo.CallToolRequest, key string) (string, bool)
 // canonicalised by ai.NormalizeToken downstream and cannot escape the store.
 func isTraversalComponent(s string) bool {
 	c := filepath.Clean(s)
-	return c == "." || c == ".."
+	switch c {
+	case ".", "..":
+		return true
+	default:
+		return false
+	}
 }
