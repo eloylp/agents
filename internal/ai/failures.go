@@ -116,7 +116,7 @@ func redactSecretAssignments(detail string) string {
 		if len(parts) < 3 {
 			return match
 		}
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(parts[2])), "bearer ") {
+		if _, ok := strings.CutPrefix(strings.ToLower(strings.TrimSpace(parts[2])), "bearer "); ok {
 			return parts[1] + "=Bearer [REDACTED]"
 		}
 		return parts[1] + "=[REDACTED]"
