@@ -316,12 +316,11 @@ func parseContent(raw json.RawMessage) (blocks []ContentBlock, text string, err 
 }
 
 func firstNonSpace(b []byte) byte {
-	for _, c := range b {
-		if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
-			return c
-		}
+	trimmed := bytes.TrimLeft(b, " \t\n\r")
+	if len(trimmed) == 0 {
+		return 0
 	}
-	return 0
+	return trimmed[0]
 }
 
 // toolResultContent extracts the string content from a tool_result block.
