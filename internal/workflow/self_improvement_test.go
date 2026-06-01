@@ -130,7 +130,7 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	if !ok {
 		t.Fatal("self-improvement analyst run did not record a trace span")
 	}
-	if span.Agent != "self-improvement-analyst" || span.EventKind != selfImprovementEventKind || span.PromptVersionID != feedback.LinkedPromptVersionID {
+	if span.Agent != "self-improvement-analyst" || span.EventKind != selfImprovementEventKind || span.PromptVersionID != rec.AnalyzerPromptVersionID {
 		t.Fatalf("trace span = %+v, want observable analyst run", span)
 	}
 	if len(streamPub.begin) != 1 || len(streamPub.end) != 1 || streamPub.begin[0].Agent != "self-improvement-analyst" {
