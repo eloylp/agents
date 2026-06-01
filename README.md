@@ -2,6 +2,17 @@
 
 ![agents](docs/agents.jpg)
 
+## See it in action
+
+<table>
+  <tr>
+    <td align="center">
+      <b>Agent workflow graph</b><br/>
+      <video src="https://github.com/user-attachments/assets/d85a5214-14e5-4ed2-9e7b-b8878c769985" controls></video>
+    </td>
+  </tr>
+</table>
+
 [![CI](https://img.shields.io/github/actions/workflow/status/eloylp/agents/ci.yml?label=CI)](https://github.com/eloylp/agents/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/github/go-mod/go-version/eloylp/agents)](go.mod)
 [![License](https://img.shields.io/github/license/eloylp/agents)](LICENSE)
