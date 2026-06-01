@@ -13,6 +13,17 @@ Build and take ownership of your agentic universe. Create your agents and compos
 
 The daemon schedules each agent and runs the AI CLI ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), or your own local LLM) inside a fresh ephemeral runner container. Agents work through your repo host's native primitives: issues, PRs, reviews, comments. GitHub MCP tools are preferred; `gh` is available in the runner as fallback for complex local checkout/test/PR loops. GitHub today; [GitLab](https://github.com/eloylp/agents/issues/359) under discussion.
 
+## See it in action
+
+<table>
+  <tr>
+    <td align="center">
+      <b>Agent workflow graph</b><br/>
+      <video src="https://github.com/user-attachments/assets/d85a5214-14e5-4ed2-9e7b-b8878c769985" controls></video>
+    </td>
+  </tr>
+</table>
+
 ## Get started
 
 See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a repo in a few minutes from the published `ghcr.io/eloylp/agents` image. For five import-ready fleet scenarios (solo coder, coder + reviewer, autonomous fleet, local LLM, multi-repo) see [`config_examples/`](config_examples/).
