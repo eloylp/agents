@@ -780,14 +780,14 @@ func ListSelfImprovementProposals(db *sql.DB, id string) ([]SelfImprovementPropo
 		return nil, &ErrValidation{Msg: "recommendation id is required"}
 	}
 	rows, err := db.Query(`
-		SELECT 'prompt', p.ref, pv.id, pv.prompt_id, pv.version_number, pv.state, pv.description, pv.content,
+		SELECT 'prompt', p.ref, pv.id, pv.prompt_id, pv.version_number, pv.state, pv.description, pv.content, 0, 0,
 		       pv.source_type, pv.source_ref, pv.author, pv.changelog, COALESCE(pv.base_version_id, ''),
 		       pv.body_hash, pv.created_at, COALESCE(pv.published_at, '')
 		FROM prompt_versions pv
 		JOIN prompts p ON p.id = pv.prompt_id
 		WHERE pv.source_type='feedback_recommendation' AND pv.source_ref=?
 		UNION ALL
-		SELECT 'skill', s.ref, sv.id, sv.skill_id, sv.version_number, sv.state, '', sv.prompt,
+		SELECT 'skill', s.ref, sv.id, sv.skill_id, sv.version_number, sv.state, '', sv.prompt, 0, 0,
 		       sv.source_type, sv.source_ref, sv.author, sv.changelog, COALESCE(sv.base_version_id, ''),
 		       sv.body_hash, sv.created_at, COALESCE(sv.published_at, '')
 		FROM skill_versions sv
@@ -795,6 +795,7 @@ func ListSelfImprovementProposals(db *sql.DB, id string) ([]SelfImprovementPropo
 		WHERE sv.source_type='feedback_recommendation' AND sv.source_ref=?
 		UNION ALL
 		SELECT 'guardrail', g.ref, gv.id, gv.guardrail_id, gv.version_number, gv.state, gv.description, gv.content,
+		       gv.enabled, gv.position,
 		       gv.source_type, gv.source_ref, gv.author, gv.changelog, COALESCE(gv.base_version_id, ''),
 		       gv.body_hash, gv.created_at, COALESCE(gv.published_at, '')
 		FROM guardrail_versions gv
@@ -807,11 +808,12 @@ func ListSelfImprovementProposals(db *sql.DB, id string) ([]SelfImprovementPropo
 	var out []SelfImprovementProposal
 	for rows.Next() {
 		var proposal SelfImprovementProposal
+		var enabled int
 		proposal.RecommendationID = id
 		if err := rows.Scan(
 			&proposal.TargetAssetType, &proposal.TargetAssetID, &proposal.Version.ID, &proposal.Version.AssetID,
 			&proposal.Version.Version, &proposal.Version.State, &proposal.Version.Description, &proposal.Version.Content,
-			&proposal.Version.SourceType, &proposal.Version.SourceRef, &proposal.Version.Author, &proposal.Version.Changelog,
+			&enabled, &proposal.Version.Position, &proposal.Version.SourceType, &proposal.Version.SourceRef, &proposal.Version.Author, &proposal.Version.Changelog,
 			&proposal.Version.BaseVersionID, &proposal.Version.BodyHash, &proposal.Version.CreatedAt, &proposal.Version.PublishedAt,
 		); err != nil {
 			return nil, fmt.Errorf("store: scan self-improvement proposal: %w", err)
@@ -819,6 +821,9 @@ func ListSelfImprovementProposals(db *sql.DB, id string) ([]SelfImprovementPropo
 		if proposal.TargetAssetType == "skill" {
 			proposal.Version.Prompt = proposal.Version.Content
 			proposal.Version.Content = ""
+		}
+		if proposal.TargetAssetType == "guardrail" {
+			proposal.Version.Enabled = enabled != 0
 		}
 		proposal.BaseVersionID = proposal.Version.BaseVersionID
 		out = append(out, proposal)
@@ -1095,7 +1100,7 @@ func recommendationProposalChangelog(rec SelfImprovementRecommendation) string {
 
 func ensureRecommendationBaseVersion(rec SelfImprovementRecommendation, currentVersionID string) error {
 	if rec.TargetBaseVersionID == "" {
-		return nil
+		return &ErrValidation{Msg: "recommendation base version is required; re-analyze feedback before creating a proposal"}
 	}
 	if rec.TargetBaseVersionID != currentVersionID {
 		return &ErrValidation{Msg: "recommendation base version is stale; re-analyze feedback before creating a proposal"}

@@ -514,6 +514,85 @@ func TestCreateSelfImprovementProposalRejectsUnsafeStatesAndTargets(t *testing.T
 	if _, err := store.CreateSelfImprovementProposal(db, accepted.ID); err == nil || !strings.Contains(err.Error(), "not proposal-convertible") {
 		t.Fatalf("CreateSelfImprovementProposal error = %v, want non-convertible validation", err)
 	}
+
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "missing-base-proposal-target", Description: "target desc", Content: "body v1"})
+	if err != nil {
+		t.Fatalf("UpsertPrompt: %v", err)
+	}
+	missingBase, err := store.UpsertSelfImprovementRecommendation(db, store.SelfImprovementRecommendationInput{
+		WorkspaceID:           "team-a",
+		FeedbackEventID:       feedback.ID,
+		Type:                  "prompt_guidance",
+		Status:                store.RecommendationStatusAccepted,
+		Finding:               "tighten prompt guidance",
+		TargetAssetType:       "prompt",
+		TargetAssetID:         prompt.ID,
+		ProposedNewBody:       "body v2",
+		AttributionConfidence: "exact",
+	})
+	if err != nil {
+		t.Fatalf("UpsertSelfImprovementRecommendation missing base: %v", err)
+	}
+	if _, err := store.CreateSelfImprovementProposal(db, missingBase.ID); err == nil || !strings.Contains(err.Error(), "base version is required") {
+		t.Fatalf("CreateSelfImprovementProposal error = %v, want missing base version validation", err)
+	}
+}
+
+func TestCreateSelfImprovementProposalListsGuardrailMetadata(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if err := store.UpsertGuardrail(db, fleet.Guardrail{
+		Name:        "proposal-guardrail-metadata",
+		Description: "guardrail desc",
+		Content:     "guardrail v1",
+		Enabled:     true,
+		Position:    11,
+	}); err != nil {
+		t.Fatalf("UpsertGuardrail: %v", err)
+	}
+	guardrail, err := store.GetGuardrail(db, "proposal-guardrail-metadata")
+	if err != nil {
+		t.Fatalf("GetGuardrail: %v", err)
+	}
+	feedback, err := storableFeedback(db, "team-a")
+	if err != nil {
+		t.Fatalf("storableFeedback: %v", err)
+	}
+	rec, err := store.UpsertSelfImprovementRecommendation(db, store.SelfImprovementRecommendationInput{
+		WorkspaceID:           "team-a",
+		FeedbackEventID:       feedback.ID,
+		Type:                  "guardrail_guidance",
+		Status:                store.RecommendationStatusAccepted,
+		Finding:               "tighten guardrail guidance",
+		TargetAssetType:       "guardrail",
+		TargetAssetID:         guardrail.ID,
+		TargetBaseVersionID:   guardrail.VersionID,
+		ProposedNewBody:       "guardrail v2",
+		AttributionConfidence: "exact",
+	})
+	if err != nil {
+		t.Fatalf("UpsertSelfImprovementRecommendation: %v", err)
+	}
+
+	if _, err := store.CreateSelfImprovementProposal(db, rec.ID); err != nil {
+		t.Fatalf("CreateSelfImprovementProposal: %v", err)
+	}
+	listed, err := store.ListSelfImprovementProposals(db, rec.ID)
+	if err != nil {
+		t.Fatalf("ListSelfImprovementProposals: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("proposals len = %d, want 1", len(listed))
+	}
+	if !listed[0].Version.Enabled || listed[0].Version.Position != 11 {
+		t.Fatalf("proposal guardrail metadata = enabled %v position %d, want enabled true position 11", listed[0].Version.Enabled, listed[0].Version.Position)
+	}
+	if listed[0].BaseVersion == nil || !listed[0].BaseVersion.Enabled || listed[0].BaseVersion.Position != 11 {
+		t.Fatalf("base guardrail metadata = %+v, want enabled true position 11", listed[0].BaseVersion)
+	}
 }
 
 func storableFeedback(db *sql.DB, workspace string) (store.SelfImprovementFeedback, error) {
