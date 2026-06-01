@@ -2,17 +2,6 @@
 
 ![agents](docs/agents.jpg)
 
-## See it in action
-
-<table>
-  <tr>
-    <td align="center">
-      <b>Agent workflow graph</b><br/>
-      <video src="https://github.com/user-attachments/assets/d85a5214-14e5-4ed2-9e7b-b8878c769985" controls></video>
-    </td>
-  </tr>
-</table>
-
 [![CI](https://img.shields.io/github/actions/workflow/status/eloylp/agents/ci.yml?label=CI)](https://github.com/eloylp/agents/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/github/go-mod/go-version/eloylp/agents)](go.mod)
 [![License](https://img.shields.io/github/license/eloylp/agents)](LICENSE)
@@ -23,6 +12,17 @@
 Build and take ownership of your agentic universe. Create your agents and compose them with skills, memory, and triggers: repo events/labels, cron, or inter-agent dispatch.
 
 The daemon schedules each agent and runs the AI CLI ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), or your own local LLM) inside a fresh ephemeral runner container. Agents work through your repo host's native primitives: issues, PRs, reviews, comments. GitHub MCP tools are preferred; `gh` is available in the runner as fallback for complex local checkout/test/PR loops. GitHub today; [GitLab](https://github.com/eloylp/agents/issues/359) under discussion.
+
+## See it in action
+
+<table>
+  <tr>
+    <td align="center">
+      <b>Agent workflow graph</b><br/>
+      <video src="https://github.com/user-attachments/assets/d85a5214-14e5-4ed2-9e7b-b8878c769985" controls></video>
+    </td>
+  </tr>
+</table>
 
 ## Get started
 
