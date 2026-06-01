@@ -30,23 +30,18 @@ See [`docs/quickstart.md`](docs/quickstart.md) to get the daemon running on a re
 
 ## Features
 
-- **Three ways to interact with your agent fleet**:
-  - **[Web dashboard](docs/ui.md)**: graphical. [Design the fleet from the graph-first workflow designer](docs/ui.md), manage agents, prompts, skills, repos, dispatch edges, and trigger bindings; watch the live event firehose, agent traces with tool-loop transcripts, and memory viewer.
-  - **[MCP server](docs/mcp.md)**: conversational. Control agents and trigger runs straight from Claude Code in your terminal (or Cursor, Cline, or any MCP client).
-  - **[REST API](docs/api.md)**: programmatic. Scriptable from any HTTP client; the dashboard itself runs on top of it.
+- **Three interfaces**: [web dashboard](docs/ui.md) (graph-first workflow designer, live event/trace/memory viewer), [MCP server](docs/mcp.md) (control the fleet from Claude Code, Cursor, Cline, or any MCP client), [REST API](docs/api.md) (scriptable; the dashboard runs on top of it).
 - **[Reactive inter-agent dispatch](docs/dispatch.md)**: agents invoke each other at runtime with depth, fanout, and dedup safety limits.
-- **Observable**: See the full event chain in realtime from the [UI](docs/ui.md), from events to runners to traces that will facilitate your prompt tuning journey.
-- **[Self-hosted](docs/quickstart.md)**: your code and prompts stay on your infrastructure. No SaaS dependency.
-- **[Security recommendations](docs/security.md)**: ships built-in guardrails prepended to every agent prompt for indirect prompt-injection resistance, public-action discretion, daemon-only memory scope, and GitHub repository tool usage (MCP first, gh fallback).
-- **Daemon auth**: create the first local admin user from the root login page, use an `HttpOnly` browser session for UI access, manage additional users, and create revocable named bearer tokens for MCP/API clients.
-- **Multi-backend**: pick Claude, Codex, or a custom backend per agent. Different agents in the same fleet can use different providers.
-- **Discovery and diagnostics**: the daemon detects backends and tools, validates CLI health, and persists discovery snapshots.
-- **[Local-model support](docs/local-models.md)**: run any agent through `llama.cpp`, Ollama, vLLM, or any OpenAI-compatible endpoint. The daemon ships a built-in Anthropic-to-OpenAI translation proxy so the existing `claude` CLI works unchanged against your own LLM (experimental).
-- **One agent model, many triggers**: label events, cron schedules, [GitHub event subscriptions](docs/events.md), on-demand API calls. Same agent, wired however you want.
-- **Composable skills**: reusable guidance blocks (architecture, security, testing, DX, ...) composed into agents by stable public catalog reference.
-- **Scoped, versioned reusable catalogs**: prompts and skills can be global, workspace-scoped, or repo-scoped; guardrails are global or workspace-scoped and are selected per workspace. APIs and imports expose stable public refs, while SQLite uses opaque internal IDs for FK integrity. Edits publish immutable versions so traces can record the exact prompt, skill, and guardrail text used for each run. Humans can select prompts with readable scope paths such as `global`, `default`, or `default/eloylp/agents`.
-- **Token budgets and leaderboard**: daily/weekly/monthly UTC calendar token caps, enforced before each run. Global scopes cover all workspaces; simple `repo`, `agent`, and `backend` scopes apply across workspaces by name, while `workspace+repo`, `workspace+agent`, and `workspace+backend` isolate caps to one workspace. NavBar alert banner when any budget crosses its alert threshold. Per-agent leaderboard tracks total and average token consumption per run. Full CRUD via dashboard, REST, and MCP.
-- **SQLite-backed**: state lives in a SQLite database, managed through the three interfaces above. [config.yaml](docs/configuration.md) is an optional export/import format for reusable prompts/skills/guardrails and workspace-local agents/repos, not a runtime dependency.
+- **[Observable](docs/ui.md)**: full event chain in realtime, from webhook receipt to runner to trace with tool-loop transcript, to facilitate prompt tuning.
+- **[Self-hosted](docs/quickstart.md)**: your code and prompts stay on your infrastructure.
+- **[Security guardrails](docs/security.md)**: built-in prompt guardrails for injection resistance, public-action discretion, daemon-only memory scope, and GitHub tool usage (MCP first, `gh` fallback).
+- **Daemon auth**: first-user bootstrap, `HttpOnly` browser sessions, additional user management, revocable named bearer tokens for API/MCP clients.
+- **Multi-backend**: pick Claude, Codex, or a [local model](docs/local-models.md) per agent; different agents in the same fleet can use different providers.
+- **[One agent, many triggers](docs/events.md)**: label events, cron schedules, GitHub event subscriptions, on-demand API/MCP calls -- same agent definition, wired however you want.
+- **Composable skills**: reusable guidance blocks (architecture, security, testing, ...) attached to agents by stable public catalog reference.
+- **[Scoped, versioned catalogs](docs/catalog-versioning.md)**: prompts, skills, and guardrails are global, workspace-, or repo-scoped; edits publish immutable versions so traces record the exact text used per run.
+- **Token budgets and leaderboard**: daily/weekly/monthly caps enforced before each run, scoped globally or by workspace/repo/agent/backend, with NavBar alert banner and per-agent usage leaderboard.
+- **[SQLite-backed](docs/configuration.md)**: single-file state, no external dependencies; YAML is an optional export/import format, not a runtime requirement.
 
 ## How it works
 
