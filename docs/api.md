@@ -54,6 +54,7 @@ The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 
 | `GET` | `/improvements/recommendations/{id}` | One recommendation with linked feedback evidence. |
 | `POST` | `/improvements/feedback/{id}/analyze` | Manually create or refresh the recommendation for one feedback event. |
 | `POST` | `/improvements/recommendations/{id}/status` | Update recommendation status (`accepted`, `rejected`, `deferred`, `duplicate`, etc.). |
+| `POST` | `/improvements/recommendations/{id}/clarification` | Replace the recommendation's editable maintainer clarification and enqueue a fresh `agents.improvement` analysis run. Body: `{ "body": "...", "author": "optional" }`. |
 | `GET` | `/config` | Current fleet config snapshot |
 
 ## Self-Improvement Feedback

@@ -378,6 +378,24 @@ func TestSelfImprovementRecommendationLifecycle(t *testing.T) {
 	if updated.Status != store.RecommendationStatusAccepted {
 		t.Fatalf("updated status = %q, want accepted", updated.Status)
 	}
+
+	clarified, err := st.UpsertSelfImprovementClarification(rec.ID, "dashboard", "Apply this only to the refactorer prompt.")
+	if err != nil {
+		t.Fatalf("clarify recommendation: %v", err)
+	}
+	if clarified.Status != store.RecommendationStatusNeedsUserInput {
+		t.Fatalf("clarified status = %q, want needs_user_input", clarified.Status)
+	}
+	if clarified.Clarification == nil || clarified.Clarification.Body != "Apply this only to the refactorer prompt." {
+		t.Fatalf("clarification = %+v, want stored body", clarified.Clarification)
+	}
+	clarified, err = st.UpsertSelfImprovementClarification(rec.ID, "dashboard", "Apply this to coder and refactorer prompts.")
+	if err != nil {
+		t.Fatalf("update clarification: %v", err)
+	}
+	if clarified.Clarification == nil || clarified.Clarification.Body != "Apply this to coder and refactorer prompts." {
+		t.Fatalf("updated clarification = %+v, want edited body", clarified.Clarification)
+	}
 }
 
 // TestGuardrailsSeed verifies that migrations 010, 012, 013, and 016 created

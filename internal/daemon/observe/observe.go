@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -39,6 +40,7 @@ type Handler struct {
 	store     *store.Store   // fleet data access (agents for graph nodes)
 	sched     *scheduler.Scheduler
 	engine    *workflow.Engine
+	channels  *workflow.DataChannels
 	memReader *store.MemoryReader
 	logger    zerolog.Logger
 }
@@ -50,6 +52,7 @@ func New(
 	st *store.Store,
 	sched *scheduler.Scheduler,
 	engine *workflow.Engine,
+	channels *workflow.DataChannels,
 	memReader *store.MemoryReader,
 	logger zerolog.Logger,
 ) *Handler {
@@ -58,6 +61,7 @@ func New(
 		store:     st,
 		sched:     sched,
 		engine:    engine,
+		channels:  channels,
 		memReader: memReader,
 		logger:    logger.With().Str("component", "server_observe").Logger(),
 	}
@@ -84,6 +88,7 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/improvements/recommendations", withTimeout(http.HandlerFunc(h.HandleImprovementRecommendations))).Methods(http.MethodGet)
 	r.Handle("/improvements/recommendations/{id}", withTimeout(http.HandlerFunc(h.HandleImprovementRecommendation))).Methods(http.MethodGet)
 	r.Handle("/improvements/recommendations/{id}/status", withTimeout(http.HandlerFunc(h.HandleUpdateImprovementRecommendationStatus))).Methods(http.MethodPost, http.MethodPatch)
+	r.Handle("/improvements/recommendations/{id}/clarification", withTimeout(http.HandlerFunc(h.HandleClarifyImprovementRecommendation))).Methods(http.MethodPost, http.MethodPatch)
 	r.Handle("/improvements/feedback/{id:[0-9]+}/analyze", withTimeout(http.HandlerFunc(h.HandleAnalyzeImprovementFeedback))).Methods(http.MethodPost)
 }
 
@@ -235,6 +240,66 @@ func (h *Handler) HandleUpdateImprovementRecommendationStatus(w http.ResponseWri
 	_ = json.NewEncoder(w).Encode(rec)
 }
 
+func (h *Handler) HandleClarifyImprovementRecommendation(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Body   string `json:"body"`
+		Author string `json:"author"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
+		return
+	}
+	author := req.Author
+	if author == "" {
+		author = "dashboard"
+	}
+	rec, err := h.store.UpsertSelfImprovementClarification(mux.Vars(r)["id"], author, req.Body)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	if h.channels == nil {
+		http.Error(w, "self-improvement queue is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if rec.Feedback == nil {
+		http.Error(w, "recommendation feedback is missing", http.StatusInternalServerError)
+		return
+	}
+	if _, err := h.channels.PushEvent(r.Context(), clarificationImprovementEvent(rec)); err != nil {
+		h.logger.Error().Err(err).Str("recommendation_id", rec.ID).Msg("enqueue clarification analysis")
+		http.Error(w, "enqueue analysis failed", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(rec)
+}
+
+func clarificationImprovementEvent(rec store.SelfImprovementRecommendation) workflow.Event {
+	feedback := rec.Feedback
+	repo := ""
+	number := 0
+	actor := "dashboard"
+	if feedback != nil {
+		repo = strings.Trim(feedback.RepoOwner+"/"+feedback.RepoName, "/")
+		number = firstNonZero(feedback.PRNumber, feedback.IssueNumber)
+		actor = feedback.AuthorLogin
+	}
+	return workflow.Event{
+		ID:          workflow.GenEventID(),
+		WorkspaceID: fleet.NormalizeWorkspaceID(rec.WorkspaceID),
+		Repo:        workflow.RepoRef{FullName: repo, Enabled: true},
+		Kind:        "agents.improvement",
+		Number:      number,
+		Actor:       actor,
+		Payload: map[string]any{
+			"feedback_event_id": rec.FeedbackEventID,
+			"recommendation_id": rec.ID,
+			"clarification":     true,
+		},
+	}
+}
+
 func (h *Handler) writeStoreError(w http.ResponseWriter, err error) {
 	var notFound *store.ErrNotFound
 	var validation *store.ErrValidation
@@ -251,6 +316,15 @@ func (h *Handler) writeStoreError(w http.ResponseWriter, err error) {
 
 func parseInt64(raw string) (int64, error) {
 	return strconv.ParseInt(raw, 10, 64)
+}
+
+func firstNonZero(values ...int) int {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 // HandleEventsStream serves GET /events/stream as a Server-Sent Events

@@ -120,6 +120,9 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	if err := json.Unmarshal([]byte(inputJSON), &input); err != nil {
 		t.Fatalf("assistant input json: %v", err)
 	}
+	if input.AnalysisMode != selfImprovementAnalysisModeInitial || input.ClarificationPresent {
+		t.Fatalf("assistant input mode = %q clarification_present=%v, want initial without clarification", input.AnalysisMode, input.ClarificationPresent)
+	}
 	if input.FeedbackEventID != feedback.ID || input.RawFeedbackBody != feedback.RawBody || len(input.RelevantCurrentCatalogVersions) != 1 {
 		t.Fatalf("assistant input = %+v, want feedback context and only linked catalog target", input)
 	}
@@ -135,6 +138,30 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	}
 	if len(streamPub.begin) != 1 || len(streamPub.end) != 1 || streamPub.begin[0].Agent != "self-improvement-analyst" {
 		t.Fatalf("stream lifecycle begin=%+v end=%+v, want analyst run lifecycle", streamPub.begin, streamPub.end)
+	}
+}
+
+func TestSelfImprovementAnalysisInputMarksClarificationMode(t *testing.T) {
+	t.Parallel()
+
+	feedback := store.SelfImprovementFeedback{
+		ID:          17,
+		WorkspaceID: "default",
+		RawBody:     "This guidance is too vague /agents improve",
+	}
+	prior := &store.SelfImprovementRecommendation{ID: "rec_17", FeedbackEventID: feedback.ID}
+	clarification := &store.SelfImprovementClarification{
+		RecommendationID: prior.ID,
+		Body:             "Scope it only to refactorer prompts.",
+	}
+
+	input := selfImprovementAnalysisInput(feedback, prior, clarification, nil)
+
+	if input.AnalysisMode != selfImprovementAnalysisModeClarification || !input.ClarificationPresent {
+		t.Fatalf("assistant input mode = %q clarification_present=%v, want clarification", input.AnalysisMode, input.ClarificationPresent)
+	}
+	if input.PriorRecommendation != prior || input.Clarification != clarification {
+		t.Fatalf("assistant input prior=%+v clarification=%+v, want provided objects", input.PriorRecommendation, input.Clarification)
 	}
 }
 

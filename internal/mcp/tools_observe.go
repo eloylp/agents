@@ -5,6 +5,7 @@ import (
 	"context"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/store"
+	"github.com/eloylp/agents/internal/workflow"
 )
 
 // mcpGraphNode mirrors the node payload used by GET /graph so consumers
@@ -129,6 +132,68 @@ func toolUpdateImprovementRecommendationStatus(deps Deps) server.ToolHandlerFunc
 		}
 		return jsonResult(rec)
 	}
+}
+
+func toolClarifyImprovementRecommendation(deps Deps) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id, ok := trimmedString(req, "id")
+		if !ok {
+			return mcpgo.NewToolResultError("id is required"), nil
+		}
+		body, ok := trimmedString(req, "body")
+		if !ok {
+			return mcpgo.NewToolResultError("body is required"), nil
+		}
+		author, _ := trimmedStringOptional(req, "author")
+		if author == "" {
+			author = "mcp"
+		}
+		rec, err := deps.Store.UpsertSelfImprovementClarification(id, author, body)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("clarify improvement recommendation", err), nil
+		}
+		if deps.Channels == nil {
+			return mcpgo.NewToolResultError("self-improvement queue is not configured"), nil
+		}
+		if _, err := deps.Channels.PushEvent(ctx, mcpClarificationImprovementEvent(rec)); err != nil {
+			return mcpgo.NewToolResultErrorFromErr("enqueue improvement analysis", err), nil
+		}
+		return jsonResult(rec)
+	}
+}
+
+func mcpClarificationImprovementEvent(rec store.SelfImprovementRecommendation) workflow.Event {
+	feedback := rec.Feedback
+	repo := ""
+	number := 0
+	actor := "mcp"
+	if feedback != nil {
+		repo = strings.Trim(feedback.RepoOwner+"/"+feedback.RepoName, "/")
+		number = mcpFirstNonZero(feedback.PRNumber, feedback.IssueNumber)
+		actor = feedback.AuthorLogin
+	}
+	return workflow.Event{
+		ID:          workflow.GenEventID(),
+		WorkspaceID: fleet.NormalizeWorkspaceID(rec.WorkspaceID),
+		Repo:        workflow.RepoRef{FullName: repo, Enabled: true},
+		Kind:        "agents.improvement",
+		Number:      number,
+		Actor:       actor,
+		Payload: map[string]any{
+			"feedback_event_id": rec.FeedbackEventID,
+			"recommendation_id": rec.ID,
+			"clarification":     true,
+		},
+	}
+}
+
+func mcpFirstNonZero(values ...int) int {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 // toolListTraces returns the 200 most recent spans verbatim. The Span JSON

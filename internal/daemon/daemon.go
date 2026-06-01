@@ -134,7 +134,7 @@ func New(cfg *config.Config, st *store.Store, logger zerolog.Logger) (*Daemon, e
 	configHandler := daemonconfig.New(st, cfg.Daemon, logger)
 
 	memReader := st.NewMemoryReader()
-	observeHandler := daemonobserve.New(obs, st, sched, engine, memReader, logger)
+	observeHandler := daemonobserve.New(obs, st, sched, engine, channels, memReader, logger)
 	runnersHandler := daemonrunners.New(st, channels, obs, logger)
 
 	deliveryStore := webhook.NewDeliveryStore(time.Duration(cfg.Daemon.HTTP.DeliveryTTLSeconds) * time.Second)
