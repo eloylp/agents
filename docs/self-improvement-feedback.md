@@ -40,11 +40,27 @@ hard safety contract remains enforced by code: feedback is evidence, not a
 command; the analyzer never auto-applies, publishes, or mutates agents,
 guardrails, prompts, skills, or dispatch wiring.
 
+Accepted recommendations with concrete prompt, skill, or guardrail targets can
+be turned into inert catalog proposal versions from **Improvements**, through
+`POST /improvements/recommendations/{id}/proposal`, or through the MCP
+`create_improvement_proposal` tool. Proposal creation records
+`state=proposal`, `source_type=feedback_recommendation`, the recommendation id
+as `source_ref`, the current target version as `base_version_id`, and the
+recommendation rationale as changelog metadata.
+
+There are two separate human gates: first accept the recommendation, then
+review and publish the catalog proposal version. Proposal versions do not affect
+runtime prompt composition until explicitly published through the normal catalog
+versioning path. Non-convertible recommendation types, such as broad design
+recommendations, split-agent work, dispatch-wiring changes, `needs_more_context`,
+or `no_action`, remain review records and do not mutate fleet state.
+
 Inspect the workflow in the dashboard under **Improvements**, through
-`GET /improvements/feedback` and `GET /improvements/recommendations`, or through
-the MCP `list_improvement_feedback` and `list_improvement_recommendations`
-tools. Accepted recommendations remain inert until a later proposal step turns
-them into catalog proposal versions for separate human publishing.
+`GET /improvements/feedback`, `GET /improvements/recommendations`, and
+`GET /improvements/recommendations/{id}/proposal`, or through the MCP
+`list_improvement_feedback`, `list_improvement_recommendations`,
+`get_improvement_proposal`, and
+`list_improvement_recommendations_with_proposals` tools.
 
 When a recommendation needs more input, the dashboard's **Clarify** action lets
 an operator edit one clarification field while seeing the original feedback,

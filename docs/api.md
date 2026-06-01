@@ -55,6 +55,8 @@ The `/run` body is `{"agent": "<name>", "repo": "owner/repo"}`. It returns `202 
 | `POST` | `/improvements/feedback/{id}/analyze` | Manually create or refresh the recommendation for one feedback event. |
 | `POST` | `/improvements/recommendations/{id}/status` | Update recommendation status (`accepted`, `rejected`, `deferred`, `duplicate`, etc.). |
 | `POST` | `/improvements/recommendations/{id}/clarification` | Replace the recommendation's editable maintainer clarification and enqueue a fresh `agents.improvement` analysis run. Body: `{ "body": "...", "author": "optional" }`. |
+| `GET` | `/improvements/recommendations/{id}/proposal` | Catalog proposal versions linked to a recommendation. |
+| `POST` | `/improvements/recommendations/{id}/proposal` | Create an inert catalog proposal version from an accepted recommendation. Does not publish or affect runtime composition. |
 | `GET` | `/config` | Current fleet config snapshot |
 
 ## Self-Improvement Feedback
@@ -63,7 +65,7 @@ GitHub `issue_comment`, `pull_request_review`, and `pull_request_review_comment`
 
 Feedback events preserve the raw comment, source URL, repo/issue/PR/file context, delivery ids, author authorization, and any run attribution resolved from public hidden metadata or repo/PR/SHA/time context.
 
-Authorized new feedback creates one durable recommendation linked back to the feedback event and source URL. Recommendations preserve attribution confidence, expose review status transitions, and remain inert: accepting one does not publish catalog versions or mutate prompts, skills, guardrails, agents, or dispatch wiring.
+Authorized new feedback creates one durable recommendation linked back to the feedback event and source URL. Recommendations preserve attribution confidence and expose review status transitions. Accepted recommendations with concrete prompt, skill, or guardrail targets can create `state=proposal` catalog versions with `source_type=feedback_recommendation`, but proposals remain inert until a human publishes them through the catalog versioning path. Non-convertible recommendations remain design records and do not mutate prompts, skills, guardrails, agents, or dispatch wiring.
 
 Configure trusted authors at startup with `AGENTS_SELF_IMPROVEMENT_FEEDBACK_AUTHOR_ALLOWLIST=maintainer-login,agents-bot`.
 

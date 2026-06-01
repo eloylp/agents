@@ -136,6 +136,15 @@ type SelfImprovementClarification struct {
 	UpdatedAt        string `json:"updated_at"`
 }
 
+type SelfImprovementProposal struct {
+	RecommendationID string                `json:"recommendation_id"`
+	TargetAssetType  string                `json:"target_asset_type"`
+	TargetAssetID    string                `json:"target_asset_id"`
+	BaseVersionID    string                `json:"base_version_id,omitempty"`
+	BaseVersion      *fleet.CatalogVersion `json:"base_version,omitempty"`
+	Version          fleet.CatalogVersion  `json:"version"`
+}
+
 type SelfImprovementRecommendationInput struct {
 	WorkspaceID             string
 	FeedbackEventID         int64
@@ -195,6 +204,18 @@ func (s *Store) UpdateSelfImprovementRecommendationStatus(id, status string) (Se
 
 func (s *Store) UpsertSelfImprovementClarification(recommendationID, author, body string) (SelfImprovementRecommendation, error) {
 	return UpsertSelfImprovementClarification(s.db, recommendationID, author, body)
+}
+
+func (s *Store) CreateSelfImprovementProposal(id string) (SelfImprovementProposal, error) {
+	return CreateSelfImprovementProposal(s.db, id)
+}
+
+func (s *Store) ListSelfImprovementProposals(id string) ([]SelfImprovementProposal, error) {
+	return ListSelfImprovementProposals(s.db, id)
+}
+
+func (s *Store) ListSelfImprovementRecommendationsWithProposals(workspace string, limit int) ([]SelfImprovementRecommendation, error) {
+	return ListSelfImprovementRecommendationsWithProposals(s.db, workspace, limit)
 }
 
 func (s *Store) MarkSelfImprovementFeedbackFailed(id int64, cause string) error {
@@ -647,6 +668,252 @@ func UpdateSelfImprovementRecommendationStatus(db *sql.DB, id, status string) (S
 	return GetSelfImprovementRecommendation(db, id)
 }
 
+func CreateSelfImprovementProposal(db *sql.DB, id string) (SelfImprovementProposal, error) {
+	rec, err := GetSelfImprovementRecommendation(db, id)
+	if err != nil {
+		return SelfImprovementProposal{}, err
+	}
+	if rec.Status != RecommendationStatusAccepted {
+		return SelfImprovementProposal{}, &ErrValidation{Msg: "recommendation must be accepted before creating a proposal"}
+	}
+	if nonConvertibleRecommendationType(rec.Type) {
+		return SelfImprovementProposal{}, &ErrValidation{Msg: fmt.Sprintf("recommendation type %q is not proposal-convertible", rec.Type)}
+	}
+	if existing, err := ListSelfImprovementProposals(db, rec.ID); err != nil {
+		return SelfImprovementProposal{}, err
+	} else if len(existing) > 0 {
+		return existing[0], nil
+	}
+	targetType := strings.TrimSpace(rec.TargetAssetType)
+	targetID := strings.TrimSpace(rec.TargetAssetID)
+	if targetID == "" {
+		return SelfImprovementProposal{}, &ErrValidation{Msg: "recommendation has no target catalog asset"}
+	}
+	if strings.TrimSpace(rec.ProposedNewBody) == "" {
+		return SelfImprovementProposal{}, &ErrValidation{Msg: "recommendation has no proposed catalog body"}
+	}
+	meta := fleet.CatalogVersionMetadata{
+		State:      "proposal",
+		SourceType: "feedback_recommendation",
+		SourceRef:  rec.ID,
+		Author:     "agents-assistant",
+		Changelog:  recommendationProposalChangelog(rec),
+	}
+	var version fleet.CatalogVersion
+	switch targetType {
+	case "prompt":
+		prompt, err := ReadPrompt(db, targetID)
+		if err != nil {
+			return SelfImprovementProposal{}, err
+		}
+		if err := ensureRecommendationBaseVersion(rec, prompt.VersionID); err != nil {
+			return SelfImprovementProposal{}, err
+		}
+		tx, err := db.Begin()
+		if err != nil {
+			return SelfImprovementProposal{}, fmt.Errorf("store: create self-improvement proposal: begin: %w", err)
+		}
+		defer tx.Rollback()
+		version, err = CreatePromptDraftTx(tx, prompt.ID, prompt.Description, rec.ProposedNewBody, meta)
+		if err != nil {
+			return SelfImprovementProposal{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return SelfImprovementProposal{}, fmt.Errorf("store: create self-improvement proposal: commit: %w", err)
+		}
+	case "skill":
+		skill, err := readSkill(db, targetID)
+		if err != nil {
+			return SelfImprovementProposal{}, err
+		}
+		if err := ensureRecommendationBaseVersion(rec, skill.VersionID); err != nil {
+			return SelfImprovementProposal{}, err
+		}
+		tx, err := db.Begin()
+		if err != nil {
+			return SelfImprovementProposal{}, fmt.Errorf("store: create self-improvement proposal: begin: %w", err)
+		}
+		defer tx.Rollback()
+		version, err = CreateSkillDraftTx(tx, skill.ID, rec.ProposedNewBody, meta)
+		if err != nil {
+			return SelfImprovementProposal{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return SelfImprovementProposal{}, fmt.Errorf("store: create self-improvement proposal: commit: %w", err)
+		}
+	case "guardrail":
+		guardrail, err := GetGuardrail(db, targetID)
+		if err != nil {
+			return SelfImprovementProposal{}, err
+		}
+		if err := ensureRecommendationBaseVersion(rec, guardrail.VersionID); err != nil {
+			return SelfImprovementProposal{}, err
+		}
+		guardrail.Content = rec.ProposedNewBody
+		tx, err := db.Begin()
+		if err != nil {
+			return SelfImprovementProposal{}, fmt.Errorf("store: create self-improvement proposal: begin: %w", err)
+		}
+		defer tx.Rollback()
+		version, err = CreateGuardrailDraftTx(tx, guardrail.ID, guardrail, meta)
+		if err != nil {
+			return SelfImprovementProposal{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return SelfImprovementProposal{}, fmt.Errorf("store: create self-improvement proposal: commit: %w", err)
+		}
+	default:
+		return SelfImprovementProposal{}, &ErrValidation{Msg: fmt.Sprintf("recommendation target type %q is not proposal-convertible", targetType)}
+	}
+	return SelfImprovementProposal{
+		RecommendationID: rec.ID,
+		TargetAssetType:  targetType,
+		TargetAssetID:    targetID,
+		BaseVersionID:    version.BaseVersionID,
+		Version:          version,
+	}, nil
+}
+
+func ListSelfImprovementProposals(db *sql.DB, id string) ([]SelfImprovementProposal, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, &ErrValidation{Msg: "recommendation id is required"}
+	}
+	rows, err := db.Query(`
+		SELECT 'prompt', p.ref, pv.id, pv.prompt_id, pv.version_number, pv.state, pv.description, pv.content,
+		       pv.source_type, pv.source_ref, pv.author, pv.changelog, COALESCE(pv.base_version_id, ''),
+		       pv.body_hash, pv.created_at, COALESCE(pv.published_at, '')
+		FROM prompt_versions pv
+		JOIN prompts p ON p.id = pv.prompt_id
+		WHERE pv.source_type='feedback_recommendation' AND pv.source_ref=?
+		UNION ALL
+		SELECT 'skill', s.ref, sv.id, sv.skill_id, sv.version_number, sv.state, '', sv.prompt,
+		       sv.source_type, sv.source_ref, sv.author, sv.changelog, COALESCE(sv.base_version_id, ''),
+		       sv.body_hash, sv.created_at, COALESCE(sv.published_at, '')
+		FROM skill_versions sv
+		JOIN skills s ON s.id = sv.skill_id
+		WHERE sv.source_type='feedback_recommendation' AND sv.source_ref=?
+		UNION ALL
+		SELECT 'guardrail', g.ref, gv.id, gv.guardrail_id, gv.version_number, gv.state, gv.description, gv.content,
+		       gv.source_type, gv.source_ref, gv.author, gv.changelog, COALESCE(gv.base_version_id, ''),
+		       gv.body_hash, gv.created_at, COALESCE(gv.published_at, '')
+		FROM guardrail_versions gv
+		JOIN guardrails g ON g.id = gv.guardrail_id
+		WHERE gv.source_type='feedback_recommendation' AND gv.source_ref=?
+		ORDER BY created_at DESC`, id, id, id)
+	if err != nil {
+		return nil, fmt.Errorf("store: list self-improvement proposals: %w", err)
+	}
+	var out []SelfImprovementProposal
+	for rows.Next() {
+		var proposal SelfImprovementProposal
+		proposal.RecommendationID = id
+		if err := rows.Scan(
+			&proposal.TargetAssetType, &proposal.TargetAssetID, &proposal.Version.ID, &proposal.Version.AssetID,
+			&proposal.Version.Version, &proposal.Version.State, &proposal.Version.Description, &proposal.Version.Content,
+			&proposal.Version.SourceType, &proposal.Version.SourceRef, &proposal.Version.Author, &proposal.Version.Changelog,
+			&proposal.Version.BaseVersionID, &proposal.Version.BodyHash, &proposal.Version.CreatedAt, &proposal.Version.PublishedAt,
+		); err != nil {
+			return nil, fmt.Errorf("store: scan self-improvement proposal: %w", err)
+		}
+		if proposal.TargetAssetType == "skill" {
+			proposal.Version.Prompt = proposal.Version.Content
+			proposal.Version.Content = ""
+		}
+		proposal.BaseVersionID = proposal.Version.BaseVersionID
+		out = append(out, proposal)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("store: close self-improvement proposals: %w", err)
+	}
+	for i := range out {
+		if out[i].BaseVersionID == "" {
+			continue
+		}
+		base, err := readSelfImprovementProposalBaseVersion(db, out[i].TargetAssetType, out[i].BaseVersionID)
+		if err != nil {
+			return nil, err
+		}
+		out[i].BaseVersion = &base
+	}
+	return out, nil
+}
+
+func readSelfImprovementProposalBaseVersion(q querier, targetType, versionID string) (fleet.CatalogVersion, error) {
+	var version fleet.CatalogVersion
+	var err error
+	switch targetType {
+	case "prompt":
+		err = q.QueryRow(`
+			SELECT id, prompt_id, version_number, state, description, content, source_type, source_ref, author, changelog,
+			       COALESCE(base_version_id, ''), body_hash, created_at, COALESCE(published_at, '')
+			FROM prompt_versions
+			WHERE id=?`, versionID).
+			Scan(&version.ID, &version.AssetID, &version.Version, &version.State, &version.Description, &version.Content,
+				&version.SourceType, &version.SourceRef, &version.Author, &version.Changelog,
+				&version.BaseVersionID, &version.BodyHash, &version.CreatedAt, &version.PublishedAt)
+	case "skill":
+		err = q.QueryRow(`
+			SELECT id, skill_id, version_number, state, prompt, source_type, source_ref, author, changelog,
+			       COALESCE(base_version_id, ''), body_hash, created_at, COALESCE(published_at, '')
+			FROM skill_versions
+			WHERE id=?`, versionID).
+			Scan(&version.ID, &version.AssetID, &version.Version, &version.State, &version.Prompt,
+				&version.SourceType, &version.SourceRef, &version.Author, &version.Changelog,
+				&version.BaseVersionID, &version.BodyHash, &version.CreatedAt, &version.PublishedAt)
+	case "guardrail":
+		var enabled int
+		err = q.QueryRow(`
+			SELECT id, guardrail_id, version_number, state, description, content, enabled, position, source_type, source_ref,
+			       author, changelog, COALESCE(base_version_id, ''), body_hash, created_at, COALESCE(published_at, '')
+			FROM guardrail_versions
+			WHERE id=?`, versionID).
+			Scan(&version.ID, &version.AssetID, &version.Version, &version.State, &version.Description, &version.Content,
+				&enabled, &version.Position, &version.SourceType, &version.SourceRef,
+				&version.Author, &version.Changelog, &version.BaseVersionID, &version.BodyHash, &version.CreatedAt, &version.PublishedAt)
+		version.Enabled = enabled != 0
+	default:
+		return fleet.CatalogVersion{}, &ErrValidation{Msg: fmt.Sprintf("recommendation target type %q is not proposal-convertible", targetType)}
+	}
+	if err != nil {
+		return fleet.CatalogVersion{}, versionReadErr(targetType, versionID, err)
+	}
+	return version, nil
+}
+
+func ListSelfImprovementRecommendationsWithProposals(db *sql.DB, workspace string, limit int) ([]SelfImprovementRecommendation, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	workspaceID := fleet.NormalizeWorkspaceID(workspace)
+	rows, err := db.Query(recommendationSelectSQL()+`
+		WHERE r.workspace_id=? AND EXISTS (
+			SELECT 1 FROM prompt_versions pv WHERE pv.source_type='feedback_recommendation' AND pv.source_ref=r.id
+			UNION ALL
+			SELECT 1 FROM skill_versions sv WHERE sv.source_type='feedback_recommendation' AND sv.source_ref=r.id
+			UNION ALL
+			SELECT 1 FROM guardrail_versions gv WHERE gv.source_type='feedback_recommendation' AND gv.source_ref=r.id
+		)
+		ORDER BY r.updated_at DESC, r.id DESC LIMIT ?`, workspaceID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SelfImprovementRecommendation
+	for rows.Next() {
+		rec, err := scanSelfImprovementRecommendation(rows, false)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
 func MarkSelfImprovementFeedbackFailed(db *sql.DB, id int64, cause string) error {
 	if id <= 0 {
 		return &ErrValidation{Msg: "feedback id is required"}
@@ -814,6 +1081,57 @@ func splitInt64CSV(s string) []int64 {
 		}
 	}
 	return out
+}
+
+func recommendationProposalChangelog(rec SelfImprovementRecommendation) string {
+	for _, value := range []string{rec.NormalizedLesson, rec.Rationale, rec.Finding} {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return "Self-improvement recommendation " + rec.ID
+}
+
+func ensureRecommendationBaseVersion(rec SelfImprovementRecommendation, currentVersionID string) error {
+	if rec.TargetBaseVersionID == "" {
+		return nil
+	}
+	if rec.TargetBaseVersionID != currentVersionID {
+		return &ErrValidation{Msg: "recommendation base version is stale; re-analyze feedback before creating a proposal"}
+	}
+	return nil
+}
+
+func nonConvertibleRecommendationType(typ string) bool {
+	switch strings.TrimSpace(typ) {
+	case "needs_more_context", "no_action", "split_agent", "change_dispatch_wiring":
+		return true
+	default:
+		return false
+	}
+}
+
+func readSkill(db *sql.DB, ref string) (fleet.Skill, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return fleet.Skill{}, &ErrValidation{Msg: "skill id is required"}
+	}
+	var skill fleet.Skill
+	err := db.QueryRow(`
+		SELECT s.ref, COALESCE(s.workspace_id, ''), COALESCE(s.repo, ''), s.name, s.prompt,
+		       COALESCE(sv.id, ''), COALESCE(sv.version_number, 0)
+		FROM skills s
+		LEFT JOIN skill_versions sv ON sv.id = s.current_version_id
+		WHERE s.id=? OR s.ref=?`, ref, ref).
+		Scan(&skill.ID, &skill.WorkspaceID, &skill.Repo, &skill.Name, &skill.Prompt, &skill.VersionID, &skill.Version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fleet.Skill{}, &ErrNotFound{Msg: fmt.Sprintf("skill %q not found", ref)}
+	}
+	if err != nil {
+		return fleet.Skill{}, fmt.Errorf("store: read skill %s: %w", ref, err)
+	}
+	return skill, nil
 }
 
 func validRecommendationStatus(status string) bool {

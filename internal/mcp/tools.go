@@ -273,6 +273,35 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolClarifyImprovementRecommendation(deps),
 		)
 		srv.AddTool(
+			mcpgo.NewTool("create_improvement_proposal",
+				mcpgo.WithDescription("Create an inert catalog proposal version from an accepted self-improvement recommendation. This does not publish or affect runtime prompt composition."),
+				mcpgo.WithString("recommendation_id",
+					mcpgo.Required(),
+					mcpgo.Description("Accepted recommendation id."),
+				),
+			),
+			toolCreateImprovementProposal(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("get_improvement_proposal",
+				mcpgo.WithDescription("Fetch catalog proposal versions linked to a self-improvement recommendation."),
+				mcpgo.WithString("recommendation_id",
+					mcpgo.Required(),
+					mcpgo.Description("Recommendation id."),
+				),
+			),
+			toolGetImprovementProposal(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("list_improvement_recommendations_with_proposals",
+				mcpgo.WithDescription("List self-improvement recommendations that already have linked catalog proposal versions."),
+				mcpgo.WithString("workspace",
+					mcpgo.Description("Optional workspace id or display name. Defaults to default."),
+				),
+			),
+			toolListImprovementRecommendationsWithProposals(deps),
+		)
+		srv.AddTool(
 			mcpgo.NewTool("list_traces",
 				mcpgo.WithDescription("List recent agent run spans for one workspace. Ordered newest→oldest, capped at 200. Each span records backend, repo, status, duration, and summary. Omitted workspace defaults to default."),
 				mcpgo.WithString("workspace",

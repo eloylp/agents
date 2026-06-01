@@ -196,6 +196,45 @@ func mcpFirstNonZero(values ...int) int {
 	return 0
 }
 
+func toolCreateImprovementProposal(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id, ok := trimmedString(req, "recommendation_id")
+		if !ok {
+			return mcpgo.NewToolResultError("recommendation_id is required"), nil
+		}
+		proposal, err := deps.Store.CreateSelfImprovementProposal(id)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("create improvement proposal", err), nil
+		}
+		return jsonResult(proposal)
+	}
+}
+
+func toolGetImprovementProposal(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id, ok := trimmedString(req, "recommendation_id")
+		if !ok {
+			return mcpgo.NewToolResultError("recommendation_id is required"), nil
+		}
+		proposals, err := deps.Store.ListSelfImprovementProposals(id)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("get improvement proposal", err), nil
+		}
+		return jsonResult(nilSafe(proposals))
+	}
+}
+
+func toolListImprovementRecommendationsWithProposals(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace, _ := trimmedStringOptional(req, "workspace")
+		rows, err := deps.Store.ListSelfImprovementRecommendationsWithProposals(workspace, 100)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("list improvement recommendations with proposals", err), nil
+		}
+		return jsonResult(nilSafe(rows))
+	}
+}
+
 // toolListTraces returns the 200 most recent spans verbatim. The Span JSON
 // shape already matches GET /traces so clients can parse both surfaces with
 // the same decoder.

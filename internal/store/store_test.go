@@ -398,6 +398,142 @@ func TestSelfImprovementRecommendationLifecycle(t *testing.T) {
 	}
 }
 
+func TestCreateSelfImprovementProposalFromAcceptedRecommendation(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "proposal-target", Description: "target desc", Content: "body v1"})
+	if err != nil {
+		t.Fatalf("UpsertPrompt: %v", err)
+	}
+	feedback, err := storableFeedback(db, "team-a")
+	if err != nil {
+		t.Fatalf("storableFeedback: %v", err)
+	}
+	rec, err := store.UpsertSelfImprovementRecommendation(db, store.SelfImprovementRecommendationInput{
+		WorkspaceID:           "team-a",
+		FeedbackEventID:       feedback.ID,
+		Type:                  "prompt_guidance",
+		Status:                store.RecommendationStatusAccepted,
+		Finding:               "tighten prompt guidance",
+		NormalizedLesson:      "Keep guidance concrete.",
+		Rationale:             "Feedback asked for a concrete prompt update.",
+		TargetAssetType:       "prompt",
+		TargetAssetID:         prompt.ID,
+		TargetBaseVersionID:   prompt.VersionID,
+		ProposedNewBody:       "body v2",
+		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
+		StructuredOutput:      map[string]any{"status": "recommended"},
+		AttributionConfidence: "exact",
+	})
+	if err != nil {
+		t.Fatalf("UpsertSelfImprovementRecommendation: %v", err)
+	}
+
+	proposal, err := store.CreateSelfImprovementProposal(db, rec.ID)
+	if err != nil {
+		t.Fatalf("CreateSelfImprovementProposal: %v", err)
+	}
+	if proposal.Version.State != "proposal" || proposal.Version.SourceType != "feedback_recommendation" ||
+		proposal.Version.SourceRef != rec.ID || proposal.Version.Author != "agents-assistant" {
+		t.Fatalf("proposal metadata = %+v, want inert feedback recommendation proposal", proposal.Version)
+	}
+	if proposal.Version.BaseVersionID != prompt.VersionID {
+		t.Fatalf("proposal base = %q, want %q", proposal.Version.BaseVersionID, prompt.VersionID)
+	}
+	listed, err := store.ListSelfImprovementProposals(db, rec.ID)
+	if err != nil {
+		t.Fatalf("ListSelfImprovementProposals: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("proposals len = %d, want 1", len(listed))
+	}
+	if listed[0].BaseVersion == nil || listed[0].BaseVersion.ID != prompt.VersionID || listed[0].BaseVersion.Content != "body v1" {
+		t.Fatalf("proposal base version = %+v, want prompt version %q with body v1", listed[0].BaseVersion, prompt.VersionID)
+	}
+	if listed[0].Version.Content != "body v2" {
+		t.Fatalf("proposal version content = %q, want body v2", listed[0].Version.Content)
+	}
+	current, err := store.ReadPrompt(db, prompt.ID)
+	if err != nil {
+		t.Fatalf("ReadPrompt: %v", err)
+	}
+	if current.Content != "body v1" || current.VersionID != prompt.VersionID {
+		t.Fatalf("current prompt = id %q body %q, want published version unchanged", current.VersionID, current.Content)
+	}
+	second, err := store.CreateSelfImprovementProposal(db, rec.ID)
+	if err != nil {
+		t.Fatalf("CreateSelfImprovementProposal second call: %v", err)
+	}
+	if second.Version.ID != proposal.Version.ID {
+		t.Fatalf("second proposal id = %q, want existing %q", second.Version.ID, proposal.Version.ID)
+	}
+	linked, err := store.ListSelfImprovementRecommendationsWithProposals(db, "team-a", 10)
+	if err != nil {
+		t.Fatalf("ListSelfImprovementRecommendationsWithProposals: %v", err)
+	}
+	if len(linked) != 1 || linked[0].ID != rec.ID {
+		t.Fatalf("linked recommendations = %+v, want %s", linked, rec.ID)
+	}
+}
+
+func TestCreateSelfImprovementProposalRejectsUnsafeStatesAndTargets(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	feedback, err := storableFeedback(db, "team-a")
+	if err != nil {
+		t.Fatalf("storableFeedback: %v", err)
+	}
+	rec, err := store.UpsertSelfImprovementRecommendation(db, store.SelfImprovementRecommendationInput{
+		WorkspaceID:           "team-a",
+		FeedbackEventID:       feedback.ID,
+		Type:                  "needs_more_context",
+		Status:                store.RecommendationStatusRecommended,
+		Finding:               "not accepted",
+		TargetAssetType:       "prompt",
+		TargetAssetID:         "prompt_missing",
+		TargetBaseVersionID:   "promptver_missing",
+		ProposedNewBody:       "body",
+		AttributionConfidence: "unresolved",
+	})
+	if err != nil {
+		t.Fatalf("UpsertSelfImprovementRecommendation: %v", err)
+	}
+	if _, err := store.CreateSelfImprovementProposal(db, rec.ID); err == nil || !strings.Contains(err.Error(), "must be accepted") {
+		t.Fatalf("CreateSelfImprovementProposal error = %v, want accepted-state validation", err)
+	}
+	accepted, err := store.UpdateSelfImprovementRecommendationStatus(db, rec.ID, store.RecommendationStatusAccepted)
+	if err != nil {
+		t.Fatalf("UpdateSelfImprovementRecommendationStatus: %v", err)
+	}
+	if _, err := store.CreateSelfImprovementProposal(db, accepted.ID); err == nil || !strings.Contains(err.Error(), "not proposal-convertible") {
+		t.Fatalf("CreateSelfImprovementProposal error = %v, want non-convertible validation", err)
+	}
+}
+
+func storableFeedback(db *sql.DB, workspace string) (store.SelfImprovementFeedback, error) {
+	return store.UpsertSelfImprovementFeedback(db, store.SelfImprovementFeedbackInput{
+		WorkspaceID:      workspace,
+		RepoOwner:        "acme",
+		RepoName:         "repo",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  time.Now().UnixNano(),
+		SourceURL:        "https://github.com/acme/repo/issues/1#issuecomment-1",
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      1,
+		RawBody:          "Please improve this prompt /agents improve",
+		Tag:              store.FeedbackTag,
+		LinkConfidence:   "exact",
+		Status:           store.FeedbackStatusNew,
+	})
+}
+
 // TestGuardrailsSeed verifies that migrations 010, 012, 013, and 016 created
 // the generic guardrails table and seeded the built-in rows with content
 // equal to default_content (so a "Reset to default" from the unedited
