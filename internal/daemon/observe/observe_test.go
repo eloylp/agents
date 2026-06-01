@@ -203,7 +203,7 @@ func newSchedulerWithStatuses(t *testing.T, statuses []scheduler.AgentStatus) *s
 func newPlainHandler(t *testing.T) *Handler {
 	t.Helper()
 	fx := newFixture(t, nil)
-	return New(fx.events, fx.store, nil, nil, nil, zerolog.Nop())
+	return New(fx.events, fx.store, nil, nil, nil, nil, zerolog.Nop())
 }
 
 // newHandlerOnStore is like newPlainHandler but reuses an existing
@@ -216,7 +216,7 @@ func newHandlerOnStore(t *testing.T, obs *obstore.Store) *Handler {
 		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	return New(obs, store.New(db), nil, nil, nil, zerolog.Nop())
+	return New(obs, store.New(db), nil, nil, nil, nil, zerolog.Nop())
 }
 
 // seedMemoryReader writes (agent, repo) → content rows into db so the
@@ -334,7 +334,7 @@ func TestHandleDispatchesReturnsEngineStats(t *testing.T) {
 	fx := newFixture(t, nil)
 	channels := workflow.NewDataChannels(1, fx.store)
 	engine := workflow.NewEngine(fx.store, minimalCfg().Daemon.Processor, channels, zerolog.Nop())
-	h := New(fx.events, fx.store, nil, engine, nil, zerolog.Nop())
+	h := New(fx.events, fx.store, nil, engine, nil, nil, zerolog.Nop())
 
 	req := httptest.NewRequest(http.MethodGet, "/dispatches", nil)
 	rec := httptest.NewRecorder()
@@ -349,6 +349,59 @@ func TestHandleDispatchesReturnsEngineStats(t *testing.T) {
 	}
 	if got != (workflow.DispatchStats{}) {
 		t.Errorf("want zero stats from a fresh engine, got %+v", got)
+	}
+}
+
+func TestHandleClarifyImprovementRecommendationStoresAndEnqueues(t *testing.T) {
+	t.Parallel()
+
+	fx := newFixture(t, nil)
+	feedback, err := fx.store.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:      "default",
+		RepoOwner:        "owner",
+		RepoName:         "repo",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  123,
+		SourceURL:        "https://github.com/owner/repo/issues/7#issuecomment-123",
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      7,
+		RawBody:          "Needs clearer file split guidance /agents improve",
+		LinkConfidence:   "unresolved",
+	})
+	if err != nil {
+		t.Fatalf("insert feedback: %v", err)
+	}
+	rec, err := fx.store.UpsertSelfImprovementRecommendation(store.RecommendationFromFeedback(feedback))
+	if err != nil {
+		t.Fatalf("insert recommendation: %v", err)
+	}
+	channels := workflow.NewDataChannels(1, fx.store)
+	h := New(fx.events, fx.store, nil, nil, channels, nil, zerolog.Nop())
+	router := newRouter(h)
+
+	req := httptest.NewRequest(http.MethodPost, "/improvements/recommendations/"+rec.ID+"/clarification", strings.NewReader(`{"body":"Apply this rule only to refactorer prompts."}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s, want 200", w.Code, w.Body.String())
+	}
+	var got store.SelfImprovementRecommendation
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Clarification == nil || got.Clarification.Body != "Apply this rule only to refactorer prompts." {
+		t.Fatalf("clarification = %+v, want stored clarification", got.Clarification)
+	}
+	select {
+	case qe := <-channels.EventChan():
+		if qe.Event.Kind != "agents.improvement" || qe.Event.Payload["recommendation_id"] != rec.ID || qe.Event.Payload["feedback_event_id"] != feedback.ID {
+			t.Fatalf("queued event = %+v, want agents.improvement for recommendation", qe.Event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for queued clarification analysis")
 	}
 }
 
@@ -619,7 +672,7 @@ func TestHandleTraceNotFound(t *testing.T) {
 func TestHandleGraphReturnsEdges(t *testing.T) {
 	t.Parallel()
 	fx := newFixture(t, nil)
-	h := New(fx.events, fx.store, nil, nil, nil, zerolog.Nop())
+	h := New(fx.events, fx.store, nil, nil, nil, nil, zerolog.Nop())
 	if _, err := fx.db.Exec(
 		`INSERT INTO dispatch_history (from_agent, to_agent, repo, number, reason) VALUES (?,?,?,?,?), (?,?,?,?,?)`,
 		"coder", "reviewer", "owner/repo", 10, "needs review",
@@ -671,7 +724,7 @@ func TestHandleGraphIncludesConfiguredAgentWithNoDispatches(t *testing.T) {
 	cfg := minimalCfg()
 	cfg.Agents = []fleet.Agent{{Name: "solo-agent", Backend: "claude", PromptRef: "solo-agent", Description: "solo agent"}}
 	fx := newFixture(t, cfg)
-	h := New(fx.events, fx.store, nil, nil, nil, zerolog.Nop())
+	h := New(fx.events, fx.store, nil, nil, nil, nil, zerolog.Nop())
 
 	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
 	rec := httptest.NewRecorder()
@@ -705,7 +758,7 @@ func TestHandleGraphIsWorkspaceScopedAndIncludesConfiguredDispatchWiring(t *test
 		{Name: "coder", WorkspaceID: "team-b", Backend: "claude", PromptRef: "coder", Description: "other coder"},
 	}
 	fx := newFixture(t, cfg)
-	h := New(fx.events, fx.store, nil, nil, nil, zerolog.Nop())
+	h := New(fx.events, fx.store, nil, nil, nil, nil, zerolog.Nop())
 	if _, err := fx.db.Exec(
 		`INSERT INTO dispatch_history (workspace_id, from_agent, to_agent, repo, number, reason) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`,
 		"team-a", "coder", "reviewer", "owner/repo", 10, "needs review",
@@ -768,7 +821,7 @@ func TestHandleGraphNodeStatusReflectsRuntimeState(t *testing.T) {
 	sched := newSchedulerWithStatuses(t, []scheduler.AgentStatus{
 		{Name: "idle-err", Repo: "owner/r", LastStatus: "error"},
 	})
-	h := New(fx.events, fx.store, sched, nil, nil, zerolog.Nop())
+	h := New(fx.events, fx.store, sched, nil, nil, nil, zerolog.Nop())
 
 	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
 	rec := httptest.NewRecorder()
@@ -812,7 +865,7 @@ func TestHandleGraphRunningStatusIsWorkspaceScoped(t *testing.T) {
 		Repo:        "owner/repo",
 		StartedAt:   time.Now(),
 	})
-	h := New(fx.events, fx.store, nil, nil, nil, zerolog.Nop())
+	h := New(fx.events, fx.store, nil, nil, nil, nil, zerolog.Nop())
 
 	req := httptest.NewRequest(http.MethodGet, "/graph", nil)
 	rec := httptest.NewRecorder()
@@ -1020,7 +1073,7 @@ func TestHandleMemorySQLiteMode(t *testing.T) {
 			t.Parallel()
 			fx := newFixture(t, nil)
 			memReader := seedMemoryReader(t, fx.db, tc.stored, tc.mtimes)
-			h := New(fx.events, fx.store, nil, nil, memReader, zerolog.Nop())
+			h := New(fx.events, fx.store, nil, nil, nil, memReader, zerolog.Nop())
 
 			router := newRouter(h)
 			req := httptest.NewRequest(http.MethodGet, "/memory/"+tc.agent+"/"+tc.repo, nil)

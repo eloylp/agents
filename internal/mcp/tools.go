@@ -256,6 +256,23 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 			toolUpdateImprovementRecommendationStatus(deps),
 		)
 		srv.AddTool(
+			mcpgo.NewTool("clarify_improvement_recommendation",
+				mcpgo.WithDescription("Upsert the editable maintainer clarification for one recommendation and enqueue a fresh self-improvement analysis run."),
+				mcpgo.WithString("id",
+					mcpgo.Required(),
+					mcpgo.Description("Recommendation id."),
+				),
+				mcpgo.WithString("body",
+					mcpgo.Required(),
+					mcpgo.Description("Latest clarification text. This replaces the previous clarification for the recommendation."),
+				),
+				mcpgo.WithString("author",
+					mcpgo.Description("Optional author label. Defaults to mcp."),
+				),
+			),
+			toolClarifyImprovementRecommendation(deps),
+		)
+		srv.AddTool(
 			mcpgo.NewTool("list_traces",
 				mcpgo.WithDescription("List recent agent run spans for one workspace. Ordered newest→oldest, capped at 200. Each span records backend, repo, status, duration, and summary. Omitted workspace defaults to default."),
 				mcpgo.WithString("workspace",

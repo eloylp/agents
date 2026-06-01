@@ -45,3 +45,11 @@ Inspect the workflow in the dashboard under **Improvements**, through
 the MCP `list_improvement_feedback` and `list_improvement_recommendations`
 tools. Accepted recommendations remain inert until a later proposal step turns
 them into catalog proposal versions for separate human publishing.
+
+When a recommendation needs more input, the dashboard's **Clarify** action lets
+an operator edit one clarification field while seeing the original feedback,
+attribution metadata, and proposed target. Saving the clarification stores the
+latest text and enqueues another `agents.improvement` run for the same
+recommendation. The analyst receives the original feedback, the prior
+recommendation, and the current clarification, then either moves the
+recommendation forward or keeps it in `needs_user_input`.
