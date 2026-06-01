@@ -111,9 +111,16 @@ export default function ImprovementsPage() {
     }
   }
 
-  const openClarification = (row: Recommendation) => {
-    setClarifying(row)
-    setClarificationBody(row.clarification?.body ?? '')
+  const openClarification = async (row: Recommendation) => {
+    try {
+      const res = await fetch(`/improvements/recommendations/${encodeURIComponent(row.id)}`, { cache: 'no-store' })
+      const detail = res.ok ? await res.json() : row
+      setClarifying(detail)
+      setClarificationBody(detail.clarification?.body ?? '')
+    } catch {
+      setClarifying(row)
+      setClarificationBody(row.clarification?.body ?? '')
+    }
   }
 
   const submitClarification = async () => {
