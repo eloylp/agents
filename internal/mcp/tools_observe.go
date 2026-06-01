@@ -66,6 +66,71 @@ func toolListImprovementFeedback(deps Deps) server.ToolHandlerFunc {
 	}
 }
 
+func toolListImprovementRecommendations(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		workspace, _ := trimmedStringOptional(req, "workspace")
+		status, _ := trimmedStringOptional(req, "status")
+		rows, err := deps.Store.ListSelfImprovementRecommendations(workspace, status, 100)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("list improvement recommendations", err), nil
+		}
+		return jsonResult(nilSafe(rows))
+	}
+}
+
+func toolGetImprovementRecommendation(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id, ok := trimmedString(req, "id")
+		if !ok {
+			return mcpgo.NewToolResultError("id is required"), nil
+		}
+		rec, err := deps.Store.GetSelfImprovementRecommendation(id)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("get improvement recommendation", err), nil
+		}
+		return jsonResult(rec)
+	}
+}
+
+func toolAnalyzeImprovementFeedback(deps Deps) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id, ok := mcpRequiredInt64(req, "feedback_event_id")
+		if !ok {
+			return mcpgo.NewToolResultError("feedback_event_id is required"), nil
+		}
+		feedback, err := deps.Store.GetSelfImprovementFeedback(id)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("get improvement feedback", err), nil
+		}
+		if deps.Engine == nil {
+			return mcpgo.NewToolResultError("self-improvement analyzer is not configured"), nil
+		}
+		rec, err := deps.Engine.AnalyzeSelfImprovementFeedback(ctx, feedback)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("analyze improvement feedback", err), nil
+		}
+		return jsonResult(rec)
+	}
+}
+
+func toolUpdateImprovementRecommendationStatus(deps Deps) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		id, ok := trimmedString(req, "id")
+		if !ok {
+			return mcpgo.NewToolResultError("id is required"), nil
+		}
+		status, ok := trimmedString(req, "status")
+		if !ok {
+			return mcpgo.NewToolResultError("status is required"), nil
+		}
+		rec, err := deps.Store.UpdateSelfImprovementRecommendationStatus(id, status)
+		if err != nil {
+			return mcpgo.NewToolResultErrorFromErr("update improvement recommendation status", err), nil
+		}
+		return jsonResult(rec)
+	}
+}
+
 // toolListTraces returns the 200 most recent spans verbatim. The Span JSON
 // shape already matches GET /traces so clients can parse both surfaces with
 // the same decoder.

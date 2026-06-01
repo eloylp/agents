@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -62,6 +63,10 @@ type Request struct {
 	Model    string // optional per-agent model override
 	System   string // stable system-level content (from RenderedPrompt.System)
 	User     string // per-run user content (from RenderedPrompt.User)
+	// StructuredSchema requests backend-native JSON output with this schema
+	// while preserving the normal agent run lifecycle. The raw JSON is returned
+	// in Response.Summary.
+	StructuredSchema string
 
 	// OnLine, when non-nil, is invoked synchronously for every line the
 	// AI CLI writes to stdout, with the trailing newline stripped. Used
@@ -70,6 +75,21 @@ type Request struct {
 	// reads stdout in a tight loop and the callback runs on that
 	// goroutine.
 	OnLine func(line []byte)
+}
+
+type JSONRequest struct {
+	Workflow string
+	Repo     string
+	Number   int
+	Model    string
+	System   string
+	User     string
+	Schema   string
+	OnLine   func(line []byte)
+}
+
+type JSONRunner interface {
+	RunJSON(ctx context.Context, req JSONRequest) (json.RawMessage, error)
 }
 
 type Artifact struct {

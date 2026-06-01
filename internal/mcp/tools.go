@@ -199,7 +199,7 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("list_improvement_feedback",
-				mcpgo.WithDescription("List stored /agents improve feedback events for one workspace. These are raw evidence records; recommendation generation is a later human-reviewed step."),
+				mcpgo.WithDescription("List stored /agents improve feedback events for one workspace. These are raw evidence records used by self-improvement recommendations."),
 				mcpgo.WithString("workspace",
 					mcpgo.Description("Optional workspace id or display name. Defaults to default."),
 				),
@@ -208,6 +208,52 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				),
 			),
 			toolListImprovementFeedback(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("list_improvement_recommendations",
+				mcpgo.WithDescription("List durable self-improvement recommendation records for one workspace. Recommendations are review-only and never publish catalog changes."),
+				mcpgo.WithString("workspace",
+					mcpgo.Description("Optional workspace id or display name. Defaults to default."),
+				),
+				mcpgo.WithString("status",
+					mcpgo.Description("Optional status filter such as recommended, needs_user_input, accepted, rejected, deferred, duplicate, or failed."),
+				),
+			),
+			toolListImprovementRecommendations(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("get_improvement_recommendation",
+				mcpgo.WithDescription("Fetch one self-improvement recommendation with its linked feedback evidence."),
+				mcpgo.WithString("id",
+					mcpgo.Required(),
+					mcpgo.Description("Recommendation id."),
+				),
+			),
+			toolGetImprovementRecommendation(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("analyze_improvement_feedback",
+				mcpgo.WithDescription("Manually create or refresh the review-only recommendation for one stored feedback event."),
+				mcpgo.WithNumber("feedback_event_id",
+					mcpgo.Required(),
+					mcpgo.Description("Stored feedback event id."),
+				),
+			),
+			toolAnalyzeImprovementFeedback(deps),
+		)
+		srv.AddTool(
+			mcpgo.NewTool("update_improvement_recommendation_status",
+				mcpgo.WithDescription("Accept, reject, defer, mark duplicate, or otherwise update one self-improvement recommendation status. This never publishes or applies catalog changes."),
+				mcpgo.WithString("id",
+					mcpgo.Required(),
+					mcpgo.Description("Recommendation id."),
+				),
+				mcpgo.WithString("status",
+					mcpgo.Required(),
+					mcpgo.Description("New status: recommended, needs_user_input, accepted, rejected, deferred, duplicate, or failed."),
+				),
+			),
+			toolUpdateImprovementRecommendationStatus(deps),
 		)
 		srv.AddTool(
 			mcpgo.NewTool("list_traces",

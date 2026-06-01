@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -80,6 +81,10 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/memory/{agent}/{repo}", withTimeout(http.HandlerFunc(h.HandleMemory))).Methods(http.MethodGet)
 	r.HandleFunc("/memory/stream", h.HandleMemoryStream)
 	r.Handle("/improvements/feedback", withTimeout(http.HandlerFunc(h.HandleImprovementFeedback))).Methods(http.MethodGet)
+	r.Handle("/improvements/recommendations", withTimeout(http.HandlerFunc(h.HandleImprovementRecommendations))).Methods(http.MethodGet)
+	r.Handle("/improvements/recommendations/{id}", withTimeout(http.HandlerFunc(h.HandleImprovementRecommendation))).Methods(http.MethodGet)
+	r.Handle("/improvements/recommendations/{id}/status", withTimeout(http.HandlerFunc(h.HandleUpdateImprovementRecommendationStatus))).Methods(http.MethodPost, http.MethodPatch)
+	r.Handle("/improvements/feedback/{id:[0-9]+}/analyze", withTimeout(http.HandlerFunc(h.HandleAnalyzeImprovementFeedback))).Methods(http.MethodPost)
 }
 
 // ── /dispatches ────────────────────────────────────────────────────────────
@@ -161,6 +166,91 @@ func (h *Handler) HandleImprovementFeedback(w http.ResponseWriter, r *http.Reque
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(rows)
+}
+
+// HandleImprovementRecommendations serves GET /improvements/recommendations,
+// the durable review inbox generated from stored feedback evidence.
+func (h *Handler) HandleImprovementRecommendations(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.store.ListSelfImprovementRecommendations(fleet.NormalizeWorkspaceID(r.URL.Query().Get("workspace")), r.URL.Query().Get("status"), 100)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("list self-improvement recommendations")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if rows == nil {
+		rows = []store.SelfImprovementRecommendation{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(rows)
+}
+
+func (h *Handler) HandleImprovementRecommendation(w http.ResponseWriter, r *http.Request) {
+	rec, err := h.store.GetSelfImprovementRecommendation(mux.Vars(r)["id"])
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(rec)
+}
+
+func (h *Handler) HandleAnalyzeImprovementFeedback(w http.ResponseWriter, r *http.Request) {
+	id, err := parseInt64(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "invalid feedback id", http.StatusBadRequest)
+		return
+	}
+	feedback, err := h.store.GetSelfImprovementFeedback(id)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	if h.engine == nil {
+		http.Error(w, "self-improvement analyzer is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	rec, err := h.engine.AnalyzeSelfImprovementFeedback(r.Context(), feedback)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(rec)
+}
+
+func (h *Handler) HandleUpdateImprovementRecommendationStatus(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("decode request: %v", err), http.StatusBadRequest)
+		return
+	}
+	rec, err := h.store.UpdateSelfImprovementRecommendationStatus(mux.Vars(r)["id"], req.Status)
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(rec)
+}
+
+func (h *Handler) writeStoreError(w http.ResponseWriter, err error) {
+	var notFound *store.ErrNotFound
+	var validation *store.ErrValidation
+	switch {
+	case errors.As(err, &notFound):
+		http.Error(w, notFound.Error(), http.StatusNotFound)
+	case errors.As(err, &validation):
+		http.Error(w, validation.Error(), http.StatusBadRequest)
+	default:
+		h.logger.Error().Err(err).Msg("self-improvement request")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
+}
+
+func parseInt64(raw string) (int64, error) {
+	return strconv.ParseInt(raw, 10, 64)
 }
 
 // HandleEventsStream serves GET /events/stream as a Server-Sent Events

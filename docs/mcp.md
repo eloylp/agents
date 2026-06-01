@@ -93,6 +93,10 @@ For agent lifecycle changes, use `create_agent` when adding a new agent or inten
 |---|---|
 | `list_events` | Recent events with optional `since` filter. |
 | `list_improvement_feedback` | Stored `/agents improve` feedback evidence for a workspace, optionally filtered by status. |
+| `list_improvement_recommendations` | Review-only self-improvement recommendations, optionally filtered by status. |
+| `get_improvement_recommendation` | Fetch one recommendation with linked feedback evidence. |
+| `analyze_improvement_feedback` | Manually create or refresh the recommendation for one feedback event. |
+| `update_improvement_recommendation_status` | Accept, reject, defer, mark duplicate, or otherwise update recommendation status without publishing catalog changes. |
 | `list_traces` | Recent agent run spans with timing, summary, and token usage (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `prompt_size`). The composed prompt body is fetched separately via the `/traces/{span_id}/prompt` REST endpoint, not an MCP tool, since it can be many KB. |
 | `get_trace` | Full dispatch chain by root event ID. |
 | `get_trace_steps` | Tool-loop transcript for one span. |

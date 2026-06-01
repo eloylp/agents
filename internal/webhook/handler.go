@@ -426,7 +426,7 @@ func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWr
 
 	events := make([]workflow.Event, 0, len(repos))
 	for _, repo := range repos {
-		h.captureFeedback(repo, feedbackCapture{
+		feedback, analyze := h.captureFeedback(repo, feedbackCapture{
 			DeliveryID:      deliveryID,
 			SourceType:      "issue_comment",
 			Body:            payload.Comment.Body,
@@ -449,6 +449,9 @@ func (h *Handler) handleIssueCommentEvent(ctx context.Context, w http.ResponseWr
 				"body": payload.Comment.Body,
 			},
 		})
+		if analyze {
+			events = append(events, improvementEvent(deliveryID, repo, feedback))
+		}
 	}
 	h.enqueueEvents(ctx, w, events, deliveryID)
 }
@@ -485,7 +488,7 @@ func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, w http.Respo
 
 	events := make([]workflow.Event, 0, len(repos))
 	for _, repo := range repos {
-		h.captureFeedback(repo, feedbackCapture{
+		feedback, analyze := h.captureFeedback(repo, feedbackCapture{
 			DeliveryID:      deliveryID,
 			SourceType:      "pull_request_review",
 			Body:            payload.Review.Body,
@@ -509,6 +512,9 @@ func (h *Handler) handlePullRequestReviewEvent(ctx context.Context, w http.Respo
 				"body":  payload.Review.Body,
 			},
 		})
+		if analyze {
+			events = append(events, improvementEvent(deliveryID, repo, feedback))
+		}
 	}
 	h.enqueueEvents(ctx, w, events, deliveryID)
 }
@@ -570,7 +576,7 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 
 	events := make([]workflow.Event, 0, len(repos))
 	for _, repo := range repos {
-		h.captureFeedback(repo, feedbackCapture{
+		feedback, analyze := h.captureFeedback(repo, feedbackCapture{
 			DeliveryID:      deliveryID,
 			SourceType:      "pull_request_review_comment",
 			Body:            payload.Comment.Body,
@@ -597,6 +603,9 @@ func (h *Handler) handlePullRequestReviewCommentEvent(ctx context.Context, w htt
 				"body": payload.Comment.Body,
 			},
 		})
+		if analyze {
+			events = append(events, improvementEvent(deliveryID, repo, feedback))
+		}
 	}
 	h.enqueueEvents(ctx, w, events, deliveryID)
 }
@@ -621,12 +630,12 @@ type feedbackCapture struct {
 	GitHubUpdatedAt *time.Time
 }
 
-func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) {
+func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) (store.SelfImprovementFeedback, bool) {
 	if !containsImproveCommand(in.Body) {
 		if in.Edited {
 			h.ignoreFeedback(repo, in)
 		}
-		return
+		return store.SelfImprovementFeedback{}, false
 	}
 	authorized := h.feedbackAuthorAllowed(in.AuthorLogin)
 	status := store.FeedbackStatusNew
@@ -681,14 +690,15 @@ func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) {
 		input.LinkedSkillVersionIDs = res.Snapshot.SkillVersionIDs
 		input.LinkedGuardrailVersionIDs = res.Snapshot.GuardrailVersionIDs
 	}
-	if _, err := h.store.UpsertSelfImprovementFeedback(input); err != nil {
+	feedback, err := h.store.UpsertSelfImprovementFeedback(input)
+	if err != nil {
 		h.logger.Error().Err(err).
 			Str("delivery_id", in.DeliveryID).
 			Str("workspace", fleet.NormalizeWorkspaceID(repo.WorkspaceID)).
 			Str("repo", repo.Name).
 			Str("source_type", in.SourceType).
 			Msg("webhook: store self-improvement feedback")
-		return
+		return store.SelfImprovementFeedback{}, false
 	}
 	h.logger.Info().
 		Str("delivery_id", in.DeliveryID).
@@ -698,6 +708,21 @@ func (h *Handler) captureFeedback(repo fleet.Repo, in feedbackCapture) {
 		Bool("author_authorized", authorized).
 		Str("link_confidence", res.Confidence).
 		Msg("webhook: stored self-improvement feedback")
+	return feedback, authorized && feedback.Status == store.FeedbackStatusNew
+}
+
+func improvementEvent(deliveryID string, repo fleet.Repo, feedback store.SelfImprovementFeedback) workflow.Event {
+	return workflow.Event{
+		ID:          deliveryID + ":improvement",
+		WorkspaceID: fleet.NormalizeWorkspaceID(repo.WorkspaceID),
+		Repo:        workflow.RepoRef{FullName: repo.Name, Enabled: repo.Enabled},
+		Kind:        "agents.improvement",
+		Number:      firstNonZero(feedback.PRNumber, feedback.IssueNumber),
+		Actor:       feedback.AuthorLogin,
+		Payload: map[string]any{
+			"feedback_event_id": feedback.ID,
+		},
+	}
 }
 
 func (h *Handler) ignoreFeedback(repo fleet.Repo, in feedbackCapture) {

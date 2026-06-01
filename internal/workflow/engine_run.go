@@ -19,17 +19,22 @@ import (
 // from that same snapshot, so the agent's backend, prompt, skills, and runner
 // configuration all come from one consistent read.
 func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg *config.Config) error {
+	_, err := e.runAgentResult(ctx, ev, agent, cfg)
+	return err
+}
+
+func (e *Engine) runAgentResult(ctx context.Context, ev Event, agent fleet.Agent, cfg *config.Config) (ai.Response, error) {
 	workspaceID := eventWorkspaceID(ev)
 	backend := cfg.ResolveBackend(agent.Backend)
 	if backend == "" {
-		return fmt.Errorf("agent %q: no runner available for backend %q", agent.Name, agent.Backend)
+		return ai.Response{}, fmt.Errorf("agent %q: no runner available for backend %q", agent.Name, agent.Backend)
 	}
 	backendCfg, ok := cfg.Daemon.AIBackends[backend]
 	if !ok {
-		return fmt.Errorf("agent %q: no runner for backend %q", agent.Name, backend)
+		return ai.Response{}, fmt.Errorf("agent %q: no runner for backend %q", agent.Name, backend)
 	}
 	if fleet.IsPinnedModelUnavailable(agent.Model, backendCfg) {
-		return fmt.Errorf(
+		return ai.Response{}, fmt.Errorf(
 			"agent %q: configured model %q is not available for backend %q; run backend discovery and update the agent model",
 			agent.Name,
 			agent.Model,
@@ -39,7 +44,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 
 	rootEventID, dispatchDepth, err := extractDispatchContext(ev)
 	if err != nil {
-		return err
+		return ai.Response{}, err
 	}
 
 	// Build dispatch context fields for dispatched agents.
@@ -47,7 +52,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	if ev.Kind == "agent.dispatch" {
 		payload, err := decodeAgentDispatchPayload(ev)
 		if err != nil {
-			return err
+			return ai.Response{}, err
 		}
 		invokedBy = payload.InvokedBy
 		reason = payload.Reason
@@ -73,6 +78,15 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	roster := BuildRoster(cfg, workspaceID, ev.Repo.FullName, agent.Name)
 
 	promptPayload := ev.Payload
+	structuredSchema, _ := ev.Payload["structured_schema"].(string)
+	if strings.TrimSpace(structuredSchema) != "" {
+		promptPayload = make(map[string]any, len(ev.Payload)-1)
+		for k, v := range ev.Payload {
+			if k != "structured_schema" {
+				promptPayload[k] = v
+			}
+		}
+	}
 
 	// Memory load is gated on the agent's AllowMemory flag and on a configured
 	// backend. The same gate applies to the persist path below, so an agent
@@ -83,38 +97,38 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	if memoryEnabled {
 		mem, err := e.memory.ReadMemory(workspaceID, agent.Name, ev.Repo.FullName)
 		if err != nil {
-			return fmt.Errorf("agent %q: read memory: %w", agent.Name, err)
+			return ai.Response{}, fmt.Errorf("agent %q: read memory: %w", agent.Name, err)
 		}
 		existingMemory = mem
 	}
 
 	resolvedPrompt, err := fleet.ResolvePromptForAgent(cfg.Prompts, agent, ev.Repo.FullName)
 	if err != nil {
-		return fmt.Errorf("agent %q: resolve prompt: %w", agent.Name, err)
+		return ai.Response{}, fmt.Errorf("agent %q: resolve prompt: %w", agent.Name, err)
 	}
 	if strings.TrimSpace(agent.PromptVersionID) != "" {
 		pinned, err := e.store.ReadPromptVersion(agent.PromptVersionID)
 		if err != nil {
-			return fmt.Errorf("agent %q: resolve prompt version: %w", agent.Name, err)
+			return ai.Response{}, fmt.Errorf("agent %q: resolve prompt version: %w", agent.Name, err)
 		}
 		if pinned.ID != resolvedPrompt.ID {
-			return fmt.Errorf("agent %q: prompt_version_id %q does not belong to prompt %q", agent.Name, agent.PromptVersionID, resolvedPrompt.ID)
+			return ai.Response{}, fmt.Errorf("agent %q: prompt_version_id %q does not belong to prompt %q", agent.Name, agent.PromptVersionID, resolvedPrompt.ID)
 		}
 		resolvedPrompt = pinned
 	}
 	if strings.TrimSpace(resolvedPrompt.Content) == "" {
-		return fmt.Errorf("agent %q: resolve prompt: prompt %q is empty", agent.Name, resolvedPrompt.Name)
+		return ai.Response{}, fmt.Errorf("agent %q: resolve prompt: prompt %q is empty", agent.Name, resolvedPrompt.Name)
 	}
 	promptBody := resolvedPrompt.Content
 
 	guardrails, err := e.store.ReadWorkspacePromptGuardrails(workspaceID)
 	if err != nil {
-		return fmt.Errorf("agent %q: load guardrails: %w", agent.Name, err)
+		return ai.Response{}, fmt.Errorf("agent %q: load guardrails: %w", agent.Name, err)
 	}
 	guardrails = slices.Insert(guardrails, 0, dynamicWorkspaceGuardrail(workspaceID, agent, cfg.Repos))
 	skillsForRun, err := e.resolveAgentSkills(cfg.Skills, agent)
 	if err != nil {
-		return err
+		return ai.Response{}, err
 	}
 	skillVersionIDs := catalogSkillVersionIDs(skillsForRun, agent.Skills)
 	guardrailVersionIDs := catalogGuardrailVersionIDs(guardrails)
@@ -136,7 +150,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		RunAttributionComment: attribution.HiddenComment(),
 	})
 	if err != nil {
-		return fmt.Errorf("agent %q: render prompt: %w", agent.Name, err)
+		return ai.Response{}, fmt.Errorf("agent %q: render prompt: %w", agent.Name, err)
 	}
 	workflow := fmt.Sprintf("%s:%s", backend, agent.Name)
 	logger := e.logger.With().
@@ -199,7 +213,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 				})
 			}
 			logger.Warn().Err(err).Msg("agent run rejected by token budget")
-			return fmt.Errorf("agent %q: %w", agent.Name, err)
+			return ai.Response{}, fmt.Errorf("agent %q: %w", agent.Name, err)
 		}
 	}
 
@@ -241,7 +255,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 			}
 		}
 	}
-	resp, runErr := runner.Run(ctx, ai.Request{
+	req := ai.Request{
 		Workflow: workflow,
 		Repo:     ev.Repo.FullName,
 		Number:   ev.Number,
@@ -249,7 +263,11 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 		System:   rendered.System,
 		User:     rendered.User,
 		OnLine:   onLine,
-	})
+	}
+	if strings.TrimSpace(structuredSchema) != "" {
+		req.StructuredSchema = structuredSchema
+	}
+	resp, runErr := runAgentRequest(ctx, runner, req)
 	spanEnd := time.Now()
 
 	// Compute queue-wait duration from when the event was enqueued to when
@@ -315,7 +333,7 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	}
 
 	if runErr != nil {
-		return fmt.Errorf("agent %q: %w", agent.Name, runErr)
+		return resp, fmt.Errorf("agent %q: %w", agent.Name, runErr)
 	}
 	logger.Info().Int("artifacts_stored", len(resp.Artifacts)).Msg("agent run completed")
 
@@ -341,11 +359,35 @@ func (e *Engine) runAgent(ctx context.Context, ev Event, agent fleet.Agent, cfg 
 	// current spanID so child runs can link back to their parent span.
 	if e.dispatcher != nil && len(resp.Dispatch) > 0 {
 		if err := e.dispatcher.ProcessDispatches(ctx, agent, ev, rootEventID, dispatchDepth, spanID, resp.Dispatch); err != nil {
-			return fmt.Errorf("agent %q: dispatch: %w", agent.Name, err)
+			return resp, fmt.Errorf("agent %q: dispatch: %w", agent.Name, err)
 		}
 	}
 
-	return nil
+	return resp, nil
+}
+
+func runAgentRequest(ctx context.Context, runner ai.Runner, req ai.Request) (ai.Response, error) {
+	if strings.TrimSpace(req.StructuredSchema) == "" {
+		return runner.Run(ctx, req)
+	}
+	jsonRunner, ok := runner.(ai.JSONRunner)
+	if !ok {
+		return ai.Response{}, fmt.Errorf("runner does not support structured JSON output")
+	}
+	raw, err := jsonRunner.RunJSON(ctx, ai.JSONRequest{
+		Workflow: req.Workflow,
+		Repo:     req.Repo,
+		Number:   req.Number,
+		Model:    req.Model,
+		System:   req.System,
+		User:     req.User,
+		Schema:   req.StructuredSchema,
+		OnLine:   req.OnLine,
+	})
+	if err != nil {
+		return ai.Response{}, err
+	}
+	return ai.Response{Summary: string(raw)}, nil
 }
 
 func (e *Engine) resolveAgentSkills(skills map[string]fleet.Skill, agent fleet.Agent) (map[string]fleet.Skill, error) {

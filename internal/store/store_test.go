@@ -128,6 +128,9 @@ func TestSelfImprovementFeedbackUpsertAndList(t *testing.T) {
 	db := openTestDB(t)
 	st := store.New(db)
 	t.Cleanup(func() { st.Close() })
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
 
 	created := time.Date(2026, 5, 30, 10, 0, 0, 0, time.UTC)
 	first, err := st.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
@@ -319,6 +322,61 @@ func TestIgnoreSelfImprovementFeedbackUpdatesExistingRowOnly(t *testing.T) {
 	}
 	if rows[0].Status != store.FeedbackStatusIgnored || rows[0].RawBody != "tag removed" {
 		t.Fatalf("ignored feedback = %+v, want ignored with edited body", rows[0])
+	}
+}
+
+func TestSelfImprovementRecommendationLifecycle(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	st := store.New(db)
+	t.Cleanup(func() { st.Close() })
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+
+	feedback, err := st.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:           "team-a",
+		RepoOwner:             "owner",
+		RepoName:              "repo",
+		SourceType:            "issue_comment",
+		GitHubCommentID:       123,
+		SourceURL:             "https://github.com/owner/repo/issues/7#issuecomment-123",
+		AuthorLogin:           "maintainer",
+		AuthorAuthorized:      true,
+		IssueNumber:           7,
+		RawBody:               "Prefer smaller prompts. /agents improve",
+		LinkedPromptVersionID: "promptver_1",
+		LinkConfidence:        "exact",
+	})
+	if err != nil {
+		t.Fatalf("insert feedback: %v", err)
+	}
+
+	rec, err := st.UpsertSelfImprovementRecommendation(store.RecommendationFromFeedback(feedback))
+	if err != nil {
+		t.Fatalf("insert recommendation: %v", err)
+	}
+	if rec.ID == "" || rec.Status != store.RecommendationStatusRecommended || rec.Type != "deduplicate_guidance" {
+		t.Fatalf("recommendation = %+v, want recommended deduplicate row", rec)
+	}
+	if rec.Feedback == nil || rec.Feedback.ID != feedback.ID || rec.EvidenceFeedbackIDs[0] != feedback.ID {
+		t.Fatalf("recommendation evidence = %+v feedback=%+v, want linked feedback", rec.EvidenceFeedbackIDs, rec.Feedback)
+	}
+
+	rows, err := st.ListSelfImprovementFeedback("team-a", store.FeedbackStatusAnalyzed, 10)
+	if err != nil {
+		t.Fatalf("list analyzed feedback: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != feedback.ID {
+		t.Fatalf("analyzed feedback rows = %+v, want feedback %d", rows, feedback.ID)
+	}
+
+	updated, err := st.UpdateSelfImprovementRecommendationStatus(rec.ID, store.RecommendationStatusAccepted)
+	if err != nil {
+		t.Fatalf("accept recommendation: %v", err)
+	}
+	if updated.Status != store.RecommendationStatusAccepted {
+		t.Fatalf("updated status = %q, want accepted", updated.Status)
 	}
 }
 
@@ -1335,8 +1393,8 @@ func TestImportLoad(t *testing.T) {
 	if len(out.Workspaces) != 1 || out.Workspaces[0].ID != fleet.DefaultWorkspaceID {
 		t.Fatalf("workspaces on config load: got %+v, want Default", out.Workspaces)
 	}
-	if len(out.Prompts) != 2 {
-		t.Fatalf("prompts on config load: got %d, want 2", len(out.Prompts))
+	if len(out.Prompts) != 3 {
+		t.Fatalf("prompts on config load: got %d, want 3", len(out.Prompts))
 	}
 
 	// Agents.
@@ -1434,8 +1492,8 @@ func TestImportLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadPrompts: %v", err)
 	}
-	if len(prompts) != 2 {
-		t.Fatalf("prompts: got %d, want 2", len(prompts))
+	if len(prompts) != 3 {
+		t.Fatalf("prompts: got %d, want 3", len(prompts))
 	}
 	if i := slices.IndexFunc(prompts, func(p fleet.Prompt) bool { return p.Name == "coder" }); i < 0 {
 		t.Fatal("coder prompt not found")
@@ -2301,7 +2359,7 @@ func TestImportIsIdempotent(t *testing.T) {
 		want int
 	}{
 		{"workspaces", 1},
-		{"prompts", 2},
+		{"prompts", 3},
 	} {
 		var got int
 		if err := db.QueryRow("SELECT COUNT(*) FROM " + table.name).Scan(&got); err != nil {
