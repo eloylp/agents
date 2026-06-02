@@ -95,6 +95,9 @@ interface ProposalBundleItem {
   proposed_name?: string
   proposed_scope?: string
   proposed_body: string
+  proposed_description?: string
+  proposed_enabled?: boolean
+  proposed_position?: number
   analyst_proposed_body: string
   duplicate_risk?: string
   rationale?: string
@@ -114,6 +117,16 @@ interface ProposalBundle {
 }
 
 type Tab = 'inbox' | 'recommendations' | 'history'
+
+interface BundleItemDraft {
+  proposed_ref: string
+  proposed_name: string
+  proposed_scope: string
+  proposed_body: string
+  proposed_description: string
+  proposed_enabled: boolean
+  proposed_position: number
+}
 
 const nonConvertibleTypes = ['needs_more_context', 'no_action', 'split_agent', 'change_dispatch_wiring']
 
@@ -170,13 +183,25 @@ function proposalReadiness(row: Recommendation) {
   return ''
 }
 
+function bundleItemDraft(item: ProposalBundleItem, drafts: Record<string, BundleItemDraft>): BundleItemDraft {
+  return drafts[item.id] ?? {
+    proposed_ref: item.proposed_ref ?? '',
+    proposed_name: item.proposed_name ?? '',
+    proposed_scope: item.proposed_scope ?? '',
+    proposed_body: item.proposed_body,
+    proposed_description: item.proposed_description ?? '',
+    proposed_enabled: item.proposed_enabled ?? true,
+    proposed_position: item.proposed_position ?? 100,
+  }
+}
+
 export default function ImprovementsPage() {
   const { workspace } = useSelectedWorkspace()
   const [feedback, setFeedback] = useState<FeedbackEvent[]>([])
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [proposals, setProposals] = useState<Record<string, ImprovementProposal[]>>({})
   const [bundles, setBundles] = useState<Record<string, ProposalBundle>>({})
-  const [itemDrafts, setItemDrafts] = useState<Record<string, string>>({})
+  const [itemDrafts, setItemDrafts] = useState<Record<string, BundleItemDraft>>({})
   const [tab, setTab] = useState<Tab>('inbox')
   const [status, setStatus] = useState('')
   const [loading, setLoading] = useState(true)
@@ -270,15 +295,18 @@ export default function ImprovementsPage() {
   }
 
   const editBundleItem = async (bundleID: string, item: ProposalBundleItem) => {
-    const body = itemDrafts[item.id] ?? item.proposed_body
+    const draft = bundleItemDraft(item, itemDrafts)
     const res = await fetch(`/improvements/proposal-bundles/${encodeURIComponent(bundleID)}/items/${encodeURIComponent(item.id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        proposed_body: body,
-        proposed_ref: item.proposed_ref,
-        proposed_name: item.proposed_name,
-        proposed_scope: item.proposed_scope,
+        proposed_body: draft.proposed_body,
+        proposed_ref: draft.proposed_ref,
+        proposed_name: draft.proposed_name,
+        proposed_scope: draft.proposed_scope,
+        proposed_description: draft.proposed_description,
+        proposed_enabled: draft.proposed_enabled,
+        proposed_position: draft.proposed_position,
       }),
     })
     if (res.ok) load()
@@ -406,7 +434,8 @@ export default function ImprovementsPage() {
                       )}
                     </div>
                     {(bundles[row.id].items ?? []).map(item => {
-                      const itemDiff = diffLines(versionBody(item.asset_type, item.base_version), itemDrafts[item.id] ?? item.proposed_body)
+                      const draft = bundleItemDraft(item, itemDrafts)
+                      const updateDraft = (next: Partial<BundleItemDraft>) => setItemDrafts(current => ({ ...current, [item.id]: { ...bundleItemDraft(item, current), ...next } }))
                       return (
                         <section key={item.id} style={{ display: 'grid', gap: 7, background: 'var(--bg)', border: '1px solid var(--border-subtle)', borderRadius: 6, padding: 8 }}>
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 5, color: 'var(--text-muted)' }}>
@@ -416,15 +445,31 @@ export default function ImprovementsPage() {
                             <span>{item.stale ? 'stale base' : `base ${item.base_version_id || 'new'}`}</span>
                             {item.duplicate_risk && <span>duplicate {item.duplicate_risk}</span>}
                           </div>
-                          {item.operation === 'create_new' && <div style={{ color: 'var(--text-muted)' }}>{item.proposed_name} · {item.proposed_scope}</div>}
+                          {item.operation === 'create_new' && (
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 6 }}>
+                              <input aria-label={`Bundle item ref for ${item.id}`} value={draft.proposed_ref} onChange={e => updateDraft({ proposed_ref: e.target.value })} style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: 7, font: 'inherit', fontSize: '0.78rem' }} />
+                              <input aria-label={`Bundle item name for ${item.id}`} value={draft.proposed_name} onChange={e => updateDraft({ proposed_name: e.target.value })} style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: 7, font: 'inherit', fontSize: '0.78rem' }} />
+                              <input aria-label={`Bundle item scope for ${item.id}`} value={draft.proposed_scope} onChange={e => updateDraft({ proposed_scope: e.target.value })} style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: 7, font: 'inherit', fontSize: '0.78rem' }} />
+                            </div>
+                          )}
+                          {item.operation === 'create_new' && item.asset_type === 'guardrail' && (
+                            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) 90px 110px', gap: 6, alignItems: 'center' }}>
+                              <input aria-label={`Bundle item guardrail description for ${item.id}`} value={draft.proposed_description} onChange={e => updateDraft({ proposed_description: e.target.value })} style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: 7, font: 'inherit', fontSize: '0.78rem' }} />
+                              <label style={{ display: 'flex', gap: 6, alignItems: 'center', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                                <input type="checkbox" checked={draft.proposed_enabled} onChange={e => updateDraft({ proposed_enabled: e.target.checked })} />
+                                Enabled
+                              </label>
+                              <input aria-label={`Bundle item guardrail position for ${item.id}`} type="number" value={draft.proposed_position} onChange={e => updateDraft({ proposed_position: Number(e.target.value) })} style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: 7, font: 'inherit', fontSize: '0.78rem' }} />
+                            </div>
+                          )}
                           <textarea
-                            value={itemDrafts[item.id] ?? item.proposed_body}
-                            onChange={e => setItemDrafts(current => ({ ...current, [item.id]: e.target.value }))}
+                            value={draft.proposed_body}
+                            onChange={e => updateDraft({ proposed_body: e.target.value })}
                             rows={5}
                             style={{ resize: 'vertical', minHeight: 120, background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: 8, font: 'inherit', fontSize: '0.78rem', lineHeight: 1.45 }}
                           />
                           <pre aria-label={`Bundle item diff for ${item.id}`} style={{ margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 240, overflow: 'auto', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 6, padding: 8, fontSize: '0.74rem', lineHeight: 1.45 }}>
-                            {itemDiff.map((line, i) => (
+                            {diffLines(versionBody(item.asset_type, item.base_version), draft.proposed_body).map((line, i) => (
                               <span key={`${i}-${line.kind}`} style={{ display: 'block', color: line.kind === 'add' ? 'var(--success)' : line.kind === 'del' ? 'var(--text-danger)' : 'var(--text-muted)' }}>{line.text || ' '}</span>
                             ))}
                           </pre>
@@ -433,7 +478,7 @@ export default function ImprovementsPage() {
                           {bundles[row.id].status === 'pending' && (
                             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                               <button onClick={() => editBundleItem(bundles[row.id].id!, item)} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Save Item</button>
-                              <button onClick={() => setItemDrafts(current => ({ ...current, [item.id]: item.analyst_proposed_body }))} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Reset</button>
+                              <button onClick={() => setItemDrafts(current => ({ ...current, [item.id]: { ...bundleItemDraft(item, current), proposed_body: item.analyst_proposed_body } }))} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Reset</button>
                               <button onClick={() => rejectBundleItem(bundles[row.id].id!, item.id)} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Reject</button>
                               {item.operation === 'create_new' && <button onClick={() => linkBundleItem(bundles[row.id].id!, item.id)} style={{ padding: '5px 7px', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', borderRadius: 6 }}>Link Existing</button>}
                             </div>

@@ -646,7 +646,7 @@ func TestSelfImprovementProposalBundleStagesAndPublishesAtomically(t *testing.T)
 				{"operation": "update_existing", "asset_type": "skill", "asset_id": "bundle-skill", "base_version_id": skillVersionID, "proposed_body": "skill v2"},
 				{"operation": "update_existing", "asset_type": "guardrail", "asset_id": "bundle-guardrail", "base_version_id": guardrailVersionID, "proposed_body": "guard v2"},
 				{"operation": "create_new", "asset_type": "skill", "proposed_ref": "skill_bundle_new", "proposed_name": "bundle-new", "proposed_scope": "workspace", "proposed_body": "new skill", "duplicate_risk": "low", "rationale": "no current skill covers it"},
-				{"operation": "create_new", "asset_type": "guardrail", "proposed_ref": "guardrail_bundle_new", "proposed_name": "bundle-new-guardrail", "proposed_scope": "workspace", "proposed_body": "new guardrail", "duplicate_risk": "medium"},
+				{"operation": "create_new", "asset_type": "guardrail", "proposed_ref": "guardrail_bundle_new", "proposed_name": "bundle-new-guardrail", "proposed_scope": "workspace", "proposed_body": "new guardrail", "proposed_description": "new guardrail description", "proposed_enabled": false, "proposed_position": 42, "duplicate_risk": "medium"},
 				{"operation": "create_new", "asset_type": "skill", "proposed_ref": "skill_bundle_link", "proposed_name": "bundle-link", "proposed_scope": "workspace", "proposed_body": "link me"},
 			},
 		},
@@ -673,8 +673,15 @@ func TestSelfImprovementProposalBundleStagesAndPublishesAtomically(t *testing.T)
 				t.Fatalf("edit bundle item: %v", err)
 			}
 		case item.AssetType == "guardrail" && item.Operation == store.ProposalBundleOperationCreateNew:
-			if _, err := store.RejectSelfImprovementProposalBundleItem(db, bundle.ID, item.ID, "too broad"); err != nil {
-				t.Fatalf("reject guardrail create item: %v", err)
+			if item.ProposedDescription != "new guardrail description" || item.ProposedEnabled || item.ProposedPosition != 42 {
+				t.Fatalf("guardrail metadata = (%q, %t, %d), want structured metadata", item.ProposedDescription, item.ProposedEnabled, item.ProposedPosition)
+			}
+			if _, err := store.UpdateSelfImprovementProposalBundleItem(db, bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{
+				ProposedRef: "guardrail_bundle_new_edited", ProposedName: "bundle-new-guardrail-edited", ProposedScope: "workspace",
+				ProposedBody: "new guardrail edited", ProposedDescription: "edited guardrail description",
+				ProposedEnabled: true, ProposedPosition: 7,
+			}); err != nil {
+				t.Fatalf("edit guardrail create item: %v", err)
 			}
 		case item.ProposedRef == "skill_bundle_link":
 			if _, err := store.LinkSelfImprovementProposalBundleItem(db, bundle.ID, item.ID, "existing-skill-link", "already exists"); err != nil {
@@ -705,8 +712,12 @@ func TestSelfImprovementProposalBundleStagesAndPublishesAtomically(t *testing.T)
 	if gotNew := skillPromptForTest(t, db, "skill_bundle_new"); gotNew != "new skill" {
 		t.Fatalf("new skill prompt = %q, want new skill", gotNew)
 	}
-	if _, err := store.GetGuardrail(db, "guardrail_bundle_new"); err == nil {
-		t.Fatalf("rejected guardrail was created")
+	gotNewGuard, err := store.GetGuardrail(db, "guardrail_bundle_new_edited")
+	if err != nil {
+		t.Fatalf("new guardrail was not created: %v", err)
+	}
+	if gotNewGuard.Description != "edited guardrail description" || gotNewGuard.Content != "new guardrail edited" || !gotNewGuard.Enabled || gotNewGuard.Position != 7 {
+		t.Fatalf("new guardrail = %+v, want edited metadata", gotNewGuard)
 	}
 }
 

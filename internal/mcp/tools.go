@@ -318,13 +318,16 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 		)
 		srv.AddTool(
 			mcpgo.NewTool("edit_improvement_proposal_bundle_item",
-				mcpgo.WithDescription("Edit one pending proposal bundle item. Existing-asset items allow body edits; create-new items also allow proposed ref/name/scope edits."),
+				mcpgo.WithDescription("Edit one pending proposal bundle item. Existing-asset items allow body edits; create-new items also allow proposed ref/name/scope edits, and guardrail create-new items allow description/enabled/position edits."),
 				mcpgo.WithString("bundle_id", mcpgo.Required(), mcpgo.Description("Proposal bundle id.")),
 				mcpgo.WithString("item_id", mcpgo.Required(), mcpgo.Description("Proposal bundle item id.")),
 				mcpgo.WithString("proposed_body", mcpgo.Required(), mcpgo.Description("Edited staged body.")),
 				mcpgo.WithString("proposed_ref", mcpgo.Description("Edited ref for create-new items.")),
 				mcpgo.WithString("proposed_name", mcpgo.Description("Edited display name for create-new items.")),
 				mcpgo.WithString("proposed_scope", mcpgo.Description("Edited scope for create-new items.")),
+				mcpgo.WithString("proposed_description", mcpgo.Description("Edited description for create-new guardrail items.")),
+				mcpgo.WithBoolean("proposed_enabled", mcpgo.Description("Edited enabled flag for create-new guardrail items.")),
+				mcpgo.WithNumber("proposed_position", mcpgo.Description("Edited render position for create-new guardrail items.")),
 			),
 			toolEditImprovementProposalBundleItem(deps),
 		)

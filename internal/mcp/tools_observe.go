@@ -283,8 +283,18 @@ func toolEditImprovementProposalBundleItem(deps Deps) server.ToolHandlerFunc {
 		ref, _ := trimmedStringOptional(req, "proposed_ref")
 		name, _ := trimmedStringOptional(req, "proposed_name")
 		scope, _ := trimmedStringOptional(req, "proposed_scope")
+		description, _ := trimmedStringOptional(req, "proposed_description")
+		enabled := true
+		if v, err := req.RequireBool("proposed_enabled"); err == nil {
+			enabled = v
+		}
+		var position int
+		if v, err := req.RequireFloat("proposed_position"); err == nil {
+			position = int(v)
+		}
 		bundle, err := deps.Store.UpdateSelfImprovementProposalBundleItem(bundleID, itemID, store.SelfImprovementBundleItemUpdate{
 			ProposedRef: ref, ProposedName: name, ProposedScope: scope, ProposedBody: body,
+			ProposedDescription: description, ProposedEnabled: enabled, ProposedPosition: position,
 		})
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("edit improvement proposal bundle item", err), nil
