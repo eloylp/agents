@@ -220,6 +220,10 @@ func (s *Store) GetSelfImprovementProposalBundleRow(id string) (SelfImprovementP
 	return GetSelfImprovementProposalBundleRow(s.db, id)
 }
 
+func GetSelfImprovementProposalBundleRowTx(tx *Tx, id string) (SelfImprovementProposalBundleRow, error) {
+	return getSelfImprovementProposalBundleRow(tx, id)
+}
+
 func (s *Store) ListSelfImprovementRecommendationsWithBundles(workspace string, limit int) ([]SelfImprovementRecommendation, error) {
 	return ListSelfImprovementRecommendationsWithBundles(s.db, workspace, limit)
 }

@@ -303,26 +303,13 @@ func getSelfImprovementProposalBundleFromStore(st *store.Store, id string) (Self
 	return bundle, nil
 }
 
-func getSelfImprovementProposalBundle(q querier, id string) (SelfImprovementProposalBundle, error) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "proposal bundle id or recommendation id is required"}
-	}
-	var bundle SelfImprovementProposalBundle
-	err := q.QueryRow(`
-		SELECT id, workspace_id, recommendation_id, recommendation_updated_at_snapshot,
-		       recommendation_snapshot_hash, status, created_at, updated_at
-		FROM self_improvement_proposal_bundles
-		WHERE id=? OR recommendation_id=?`, id, id).
-		Scan(&bundle.ID, &bundle.WorkspaceID, &bundle.RecommendationID, &bundle.RecommendationUpdatedAtSnapshot,
-			&bundle.RecommendationSnapshotHash, &bundle.Status, &bundle.CreatedAt, &bundle.UpdatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return SelfImprovementProposalBundle{}, &store.ErrNotFound{Msg: fmt.Sprintf("proposal bundle %q not found", id)}
-	}
+func getSelfImprovementProposalBundle(tx *store.Tx, id string) (SelfImprovementProposalBundle, error) {
+	row, err := store.GetSelfImprovementProposalBundleRowTx(tx, id)
 	if err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: get self-improvement proposal bundle: %w", err)
+		return SelfImprovementProposalBundle{}, err
 	}
-	rec, err := getSelfImprovementRecommendation(q, bundle.RecommendationID)
+	bundle := proposalBundleFromRow(row)
+	rec, err := getSelfImprovementRecommendation(tx, bundle.RecommendationID)
 	if err == nil {
 		hash, hashErr := recommendationSnapshotHash(rec)
 		if hashErr == nil {
@@ -330,11 +317,9 @@ func getSelfImprovementProposalBundle(q querier, id string) (SelfImprovementProp
 		}
 		bundle.Recommendation = &rec
 	}
-	items, err := listSelfImprovementProposalBundleItems(q, bundle.ID)
-	if err != nil {
+	if err := hydrateProposalBundleReadState(tx, &bundle); err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
-	bundle.Items = items
 	return bundle, nil
 }
 
@@ -591,47 +576,6 @@ func hydrateBundleItemMetadata(q querier, item SelfImprovementBundleItemInput) (
 		item.ProposedPosition = guardrail.Position
 	}
 	return item, nil
-}
-
-func listSelfImprovementProposalBundleItems(q querier, bundleID string) ([]SelfImprovementBundleItem, error) {
-	rows, err := q.Query(`
-		SELECT id, bundle_id, operation, asset_type, asset_id, base_version_id, proposed_ref, proposed_name,
-		       proposed_scope, proposed_body, proposed_description, proposed_enabled, proposed_position,
-		       analyst_proposed_body, duplicate_risk, rationale, decision,
-		       decision_reason, published_version_id, created_at, updated_at
-		FROM self_improvement_proposal_bundle_items
-		WHERE bundle_id=?
-		ORDER BY asset_type, id`, bundleID)
-	if err != nil {
-		return nil, fmt.Errorf("store: list proposal bundle items: %w", err)
-	}
-	var out []SelfImprovementBundleItem
-	for rows.Next() {
-		var item SelfImprovementBundleItem
-		var enabled int
-		if err := rows.Scan(
-			&item.ID, &item.BundleID, &item.Operation, &item.AssetType, &item.AssetID, &item.BaseVersionID,
-			&item.ProposedRef, &item.ProposedName, &item.ProposedScope, &item.ProposedBody,
-			&item.ProposedDescription, &enabled, &item.ProposedPosition, &item.AnalystProposedBody,
-			&item.DuplicateRisk, &item.Rationale, &item.Decision, &item.DecisionReason, &item.PublishedVersionID,
-			&item.CreatedAt, &item.UpdatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("store: scan proposal bundle item: %w", err)
-		}
-		item.ProposedEnabled = enabled != 0
-		out = append(out, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if err := rows.Close(); err != nil {
-		return nil, fmt.Errorf("store: close proposal bundle items: %w", err)
-	}
-	bundle := SelfImprovementProposalBundle{Items: out}
-	if err := hydrateProposalBundleReadState(q, &bundle); err != nil {
-		return nil, err
-	}
-	return bundle.Items, nil
 }
 
 func hydrateProposalBundleReadState(q querier, bundle *SelfImprovementProposalBundle) error {

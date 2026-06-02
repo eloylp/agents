@@ -78,13 +78,29 @@ func RecommendationFromFeedback(feedback store.SelfImprovementFeedback) SelfImpr
 }
 
 func (s *Service) RecordRecommendation(in SelfImprovementRecommendationInput) (SelfImprovementRecommendation, error) {
+	in.Type = strings.TrimSpace(in.Type)
+	if in.Type == "" {
+		in.Type = "needs_more_context"
+	}
 	if in.Status == "" {
 		in.Status = RecommendationStatusRecommended
 	}
 	if !validRecommendationStatus(in.Status) {
 		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: fmt.Sprintf("unsupported recommendation status %q", in.Status)}
 	}
-	return s.store.UpsertSelfImprovementRecommendation(in)
+	in.Confidence = defaultString(in.Confidence, "low")
+	in.Risk = defaultString(in.Risk, "low")
+	in.AttributionConfidence = defaultString(in.AttributionConfidence, "unresolved")
+	in.AnalyzerPromptRef = defaultString(in.AnalyzerPromptRef, "prompt_self-improvement-analyst")
+	if err := s.store.Transact(func(tx *store.Tx) error {
+		if err := store.UpsertSelfImprovementRecommendationRow(tx, in); err != nil {
+			return err
+		}
+		return store.UpdateSelfImprovementFeedbackStatusRow(tx, in.FeedbackEventID, store.FeedbackStatusAnalyzed)
+	}); err != nil {
+		return SelfImprovementRecommendation{}, err
+	}
+	return s.store.GetSelfImprovementRecommendationByFeedback(in.WorkspaceID, in.FeedbackEventID)
 }
 
 func (s *Service) UpdateRecommendationStatus(id, status string) (SelfImprovementRecommendation, error) {
@@ -92,11 +108,43 @@ func (s *Service) UpdateRecommendationStatus(id, status string) (SelfImprovement
 	if !validRecommendationStatus(status) {
 		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: fmt.Sprintf("unsupported recommendation status %q", status)}
 	}
-	return s.store.UpdateSelfImprovementRecommendationStatus(id, status)
+	if err := s.store.Transact(func(tx *store.Tx) error {
+		return store.UpdateSelfImprovementRecommendationStatusRow(tx, id, status)
+	}); err != nil {
+		return SelfImprovementRecommendation{}, err
+	}
+	return s.store.GetSelfImprovementRecommendation(id)
 }
 
 func (s *Service) UpsertClarification(recommendationID, author, body string) (SelfImprovementRecommendation, error) {
-	return s.store.UpsertSelfImprovementClarification(recommendationID, author, body)
+	recommendationID = strings.TrimSpace(recommendationID)
+	body = strings.TrimSpace(body)
+	if recommendationID == "" {
+		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: "recommendation id is required"}
+	}
+	if body == "" {
+		return SelfImprovementRecommendation{}, &store.ErrValidation{Msg: "clarification body is required"}
+	}
+	if _, err := s.store.GetSelfImprovementRecommendation(recommendationID); err != nil {
+		return SelfImprovementRecommendation{}, err
+	}
+	if err := s.store.Transact(func(tx *store.Tx) error {
+		if err := store.UpsertSelfImprovementClarificationRow(tx, recommendationID, author, body); err != nil {
+			return err
+		}
+		return store.UpdateSelfImprovementRecommendationStatusRow(tx, recommendationID, RecommendationStatusNeedsUserInput)
+	}); err != nil {
+		return SelfImprovementRecommendation{}, err
+	}
+	return s.store.GetSelfImprovementRecommendation(recommendationID)
+}
+
+func defaultString(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func recommendationTarget(feedback store.SelfImprovementFeedback) (assetType, assetID, versionID string) {

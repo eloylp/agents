@@ -190,6 +190,10 @@ func (s *Store) UpsertSelfImprovementRecommendation(in SelfImprovementRecommenda
 	return UpsertSelfImprovementRecommendation(s.db, in)
 }
 
+func (s *Store) GetSelfImprovementRecommendationByFeedback(workspaceID string, feedbackID int64) (SelfImprovementRecommendation, error) {
+	return getSelfImprovementRecommendationByFeedback(s.db, fleet.NormalizeWorkspaceID(workspaceID), feedbackID)
+}
+
 func (s *Store) ListSelfImprovementRecommendations(workspace, status string, limit int) ([]SelfImprovementRecommendation, error) {
 	return ListSelfImprovementRecommendations(s.db, workspace, status, limit)
 }
@@ -405,42 +409,28 @@ func GetSelfImprovementFeedback(db *sql.DB, id int64) (SelfImprovementFeedback, 
 }
 
 func UpsertSelfImprovementRecommendation(db *sql.DB, in SelfImprovementRecommendationInput) (SelfImprovementRecommendation, error) {
+	if err := UpsertSelfImprovementRecommendationRow(db, in); err != nil {
+		return SelfImprovementRecommendation{}, err
+	}
+	if err := UpdateSelfImprovementFeedbackStatusRow(db, in.FeedbackEventID, FeedbackStatusAnalyzed); err != nil {
+		return SelfImprovementRecommendation{}, err
+	}
+	return getSelfImprovementRecommendationByFeedback(db, fleet.NormalizeWorkspaceID(in.WorkspaceID), in.FeedbackEventID)
+}
+
+func UpsertSelfImprovementRecommendationRow(q sqlExec, in SelfImprovementRecommendationInput) error {
 	if in.FeedbackEventID <= 0 {
-		return SelfImprovementRecommendation{}, &ErrValidation{Msg: "feedback_event_id is required"}
+		return &ErrValidation{Msg: "feedback_event_id is required"}
 	}
 	workspaceID := fleet.NormalizeWorkspaceID(in.WorkspaceID)
-	typ := strings.TrimSpace(in.Type)
-	if typ == "" {
-		typ = "needs_more_context"
-	}
-	status := strings.TrimSpace(in.Status)
-	if status == "" {
-		status = RecommendationStatusRecommended
-	}
-	confidence := strings.TrimSpace(in.Confidence)
-	if confidence == "" {
-		confidence = "low"
-	}
-	risk := strings.TrimSpace(in.Risk)
-	if risk == "" {
-		risk = "low"
-	}
-	attribution := strings.TrimSpace(in.AttributionConfidence)
-	if attribution == "" {
-		attribution = "unresolved"
-	}
-	promptRef := strings.TrimSpace(in.AnalyzerPromptRef)
-	if promptRef == "" {
-		promptRef = "prompt_self-improvement-analyst"
-	}
 	structured, err := json.Marshal(in.StructuredOutput)
 	if err != nil {
-		return SelfImprovementRecommendation{}, &ErrValidation{Msg: fmt.Sprintf("structured output: %v", err)}
+		return &ErrValidation{Msg: fmt.Sprintf("structured output: %v", err)}
 	}
 	if string(structured) == "null" {
 		structured = []byte("{}")
 	}
-	_, err = db.Exec(
+	_, err = q.Exec(
 		`INSERT INTO self_improvement_recommendations (
 			id, workspace_id, feedback_event_id, type, status, confidence, risk, finding,
 			normalized_lesson, rationale, evidence_feedback_ids, evidence_source_urls,
@@ -470,20 +460,15 @@ func UpsertSelfImprovementRecommendation(db *sql.DB, in SelfImprovementRecommend
 			structured_output=excluded.structured_output,
 			error=excluded.error,
 			updated_at=datetime('now')`,
-		workspaceID, in.FeedbackEventID, typ, status, confidence, risk, strings.TrimSpace(in.Finding),
+		workspaceID, in.FeedbackEventID, strings.TrimSpace(in.Type), strings.TrimSpace(in.Status),
+		strings.TrimSpace(in.Confidence), strings.TrimSpace(in.Risk), strings.TrimSpace(in.Finding),
 		strings.TrimSpace(in.NormalizedLesson), strings.TrimSpace(in.Rationale), joinInt64s(in.EvidenceFeedbackIDs),
-		strings.Join(trimStrings(in.EvidenceSourceURLs), ","), attribution, strings.TrimSpace(in.TargetAssetType),
+		strings.Join(trimStrings(in.EvidenceSourceURLs), ","), strings.TrimSpace(in.AttributionConfidence), strings.TrimSpace(in.TargetAssetType),
 		strings.TrimSpace(in.TargetAssetID), strings.TrimSpace(in.TargetBaseVersionID), strings.TrimSpace(in.ProposedPatch),
-		strings.TrimSpace(in.ProposedNewBody), strings.TrimSpace(in.SuggestedRolloutScope), promptRef,
+		strings.TrimSpace(in.ProposedNewBody), strings.TrimSpace(in.SuggestedRolloutScope), strings.TrimSpace(in.AnalyzerPromptRef),
 		strings.TrimSpace(in.AnalyzerPromptVersionID), string(structured), strings.TrimSpace(in.Error),
 	)
-	if err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	if _, err := db.Exec(`UPDATE self_improvement_feedback SET status=? WHERE id=?`, FeedbackStatusAnalyzed, in.FeedbackEventID); err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	return getSelfImprovementRecommendationByFeedback(db, workspaceID, in.FeedbackEventID)
+	return err
 }
 
 func ListSelfImprovementRecommendations(db *sql.DB, workspace, status string, limit int) ([]SelfImprovementRecommendation, error) {
@@ -535,7 +520,25 @@ func UpsertSelfImprovementClarification(db *sql.DB, recommendationID, author, bo
 	if _, err := GetSelfImprovementRecommendation(db, recommendationID); err != nil {
 		return SelfImprovementRecommendation{}, err
 	}
-	_, err := db.Exec(
+	if err := UpsertSelfImprovementClarificationRow(db, recommendationID, author, body); err != nil {
+		return SelfImprovementRecommendation{}, err
+	}
+	if err := UpdateSelfImprovementRecommendationStatusRow(db, recommendationID, RecommendationStatusNeedsUserInput); err != nil {
+		return SelfImprovementRecommendation{}, err
+	}
+	return GetSelfImprovementRecommendation(db, recommendationID)
+}
+
+func UpsertSelfImprovementClarificationRow(q sqlExec, recommendationID, author, body string) error {
+	recommendationID = strings.TrimSpace(recommendationID)
+	body = strings.TrimSpace(body)
+	if recommendationID == "" {
+		return &ErrValidation{Msg: "recommendation id is required"}
+	}
+	if body == "" {
+		return &ErrValidation{Msg: "clarification body is required"}
+	}
+	_, err := q.Exec(
 		`INSERT INTO self_improvement_recommendation_clarifications (
 			recommendation_id, author, body
 		) VALUES (?,?,?)
@@ -545,26 +548,7 @@ func UpsertSelfImprovementClarification(db *sql.DB, recommendationID, author, bo
 			updated_at=datetime('now')`,
 		recommendationID, strings.TrimSpace(author), body,
 	)
-	if err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	res, err := db.Exec(
-		`UPDATE self_improvement_recommendations
-		SET status=?, updated_at=datetime('now')
-		WHERE id=?`,
-		RecommendationStatusNeedsUserInput, recommendationID,
-	)
-	if err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	if affected == 0 {
-		return SelfImprovementRecommendation{}, &ErrNotFound{Msg: fmt.Sprintf("recommendation %q not found", recommendationID)}
-	}
-	return GetSelfImprovementRecommendation(db, recommendationID)
+	return err
 }
 
 func UpdateSelfImprovementRecommendationStatus(db *sql.DB, id, status string) (SelfImprovementRecommendation, error) {
@@ -573,18 +557,48 @@ func UpdateSelfImprovementRecommendationStatus(db *sql.DB, id, status string) (S
 	if id == "" {
 		return SelfImprovementRecommendation{}, &ErrValidation{Msg: "recommendation id is required"}
 	}
-	res, err := db.Exec(`UPDATE self_improvement_recommendations SET status=?, updated_at=datetime('now') WHERE id=?`, status, id)
-	if err != nil {
+	if err := UpdateSelfImprovementRecommendationStatusRow(db, id, status); err != nil {
 		return SelfImprovementRecommendation{}, err
+	}
+	return GetSelfImprovementRecommendation(db, id)
+}
+
+func UpdateSelfImprovementRecommendationStatusRow(q sqlExec, id, status string) error {
+	id = strings.TrimSpace(id)
+	status = strings.TrimSpace(status)
+	if id == "" {
+		return &ErrValidation{Msg: "recommendation id is required"}
+	}
+	res, err := q.Exec(`UPDATE self_improvement_recommendations SET status=?, updated_at=datetime('now') WHERE id=?`, status, id)
+	if err != nil {
+		return err
 	}
 	affected, err := res.RowsAffected()
 	if err != nil {
-		return SelfImprovementRecommendation{}, err
+		return err
 	}
 	if affected == 0 {
-		return SelfImprovementRecommendation{}, &ErrNotFound{Msg: fmt.Sprintf("recommendation %q not found", id)}
+		return &ErrNotFound{Msg: fmt.Sprintf("recommendation %q not found", id)}
 	}
-	return GetSelfImprovementRecommendation(db, id)
+	return nil
+}
+
+func UpdateSelfImprovementFeedbackStatusRow(q sqlExec, id int64, status string) error {
+	if id <= 0 {
+		return &ErrValidation{Msg: "feedback id is required"}
+	}
+	res, err := q.Exec(`UPDATE self_improvement_feedback SET status=? WHERE id=?`, strings.TrimSpace(status), id)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return &ErrNotFound{Msg: fmt.Sprintf("feedback %d not found", id)}
+	}
+	return nil
 }
 
 func ListSelfImprovementProposals(db *sql.DB, id string) ([]SelfImprovementProposal, error) {
