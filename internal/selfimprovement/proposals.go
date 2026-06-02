@@ -15,7 +15,7 @@ func createSelfImprovementProposal(st *store.Store, id string) (SelfImprovementP
 	if err != nil {
 		return SelfImprovementProposal{}, err
 	}
-	if rec.Status != store.RecommendationStatusAccepted {
+	if rec.Status != RecommendationStatusAccepted {
 		return SelfImprovementProposal{}, &store.ErrValidation{Msg: "recommendation must be accepted before creating a proposal"}
 	}
 	if nonConvertibleRecommendationType(rec.Type) {
@@ -45,7 +45,7 @@ func createSelfImprovementProposal(st *store.Store, id string) (SelfImprovementP
 	switch targetType {
 	case "prompt":
 		if err := st.Transact(func(tx *store.Tx) error {
-			prompt, err := readPromptFrom(tx, targetID)
+			prompt, err := store.ReadSelfImprovementPrompt(tx, targetID)
 			if err != nil {
 				return err
 			}
@@ -59,7 +59,7 @@ func createSelfImprovementProposal(st *store.Store, id string) (SelfImprovementP
 		}
 	case "skill":
 		if err := st.Transact(func(tx *store.Tx) error {
-			skill, err := readSkill(tx, targetID)
+			skill, err := store.ReadSelfImprovementSkill(tx, targetID)
 			if err != nil {
 				return err
 			}
@@ -73,7 +73,7 @@ func createSelfImprovementProposal(st *store.Store, id string) (SelfImprovementP
 		}
 	case "guardrail":
 		if err := st.Transact(func(tx *store.Tx) error {
-			guardrail, err := getGuardrailFrom(tx, targetID)
+			guardrail, err := store.ReadSelfImprovementGuardrail(tx, targetID)
 			if err != nil {
 				return err
 			}

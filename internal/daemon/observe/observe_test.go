@@ -373,7 +373,7 @@ func TestHandleClarifyImprovementRecommendationStoresAndEnqueues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert feedback: %v", err)
 	}
-	rec, err := fx.store.UpsertSelfImprovementRecommendation(selfimprovement.RecommendationFromFeedback(feedback))
+	rec, err := selfimprovement.New(fx.store).RecordRecommendation(selfimprovement.RecommendationFromFeedback(feedback))
 	if err != nil {
 		t.Fatalf("insert recommendation: %v", err)
 	}

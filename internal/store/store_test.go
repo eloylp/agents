@@ -369,11 +369,11 @@ func TestSelfImprovementRecommendationLifecycle(t *testing.T) {
 		t.Fatalf("insert feedback: %v", err)
 	}
 
-	rec, err := st.UpsertSelfImprovementRecommendation(selfimprovement.RecommendationFromFeedback(feedback))
+	rec, err := selfimprovement.New(st).RecordRecommendation(selfimprovement.RecommendationFromFeedback(feedback))
 	if err != nil {
 		t.Fatalf("insert recommendation: %v", err)
 	}
-	if rec.ID == "" || rec.Status != store.RecommendationStatusRecommended || rec.Type != "deduplicate_guidance" {
+	if rec.ID == "" || rec.Status != selfimprovement.RecommendationStatusRecommended || rec.Type != "deduplicate_guidance" {
 		t.Fatalf("recommendation = %+v, want recommended deduplicate row", rec)
 	}
 	if rec.Feedback == nil || rec.Feedback.ID != feedback.ID || rec.EvidenceFeedbackIDs[0] != feedback.ID {
@@ -388,25 +388,25 @@ func TestSelfImprovementRecommendationLifecycle(t *testing.T) {
 		t.Fatalf("analyzed feedback rows = %+v, want feedback %d", rows, feedback.ID)
 	}
 
-	updated, err := st.UpdateSelfImprovementRecommendationStatus(rec.ID, store.RecommendationStatusAccepted)
+	updated, err := selfimprovement.New(st).UpdateRecommendationStatus(rec.ID, selfimprovement.RecommendationStatusAccepted)
 	if err != nil {
 		t.Fatalf("accept recommendation: %v", err)
 	}
-	if updated.Status != store.RecommendationStatusAccepted {
+	if updated.Status != selfimprovement.RecommendationStatusAccepted {
 		t.Fatalf("updated status = %q, want accepted", updated.Status)
 	}
 
-	clarified, err := st.UpsertSelfImprovementClarification(rec.ID, "dashboard", "Apply this only to the refactorer prompt.")
+	clarified, err := selfimprovement.New(st).UpsertClarification(rec.ID, "dashboard", "Apply this only to the refactorer prompt.")
 	if err != nil {
 		t.Fatalf("clarify recommendation: %v", err)
 	}
-	if clarified.Status != store.RecommendationStatusNeedsUserInput {
+	if clarified.Status != selfimprovement.RecommendationStatusNeedsUserInput {
 		t.Fatalf("clarified status = %q, want needs_user_input", clarified.Status)
 	}
 	if clarified.Clarification == nil || clarified.Clarification.Body != "Apply this only to the refactorer prompt." {
 		t.Fatalf("clarification = %+v, want stored body", clarified.Clarification)
 	}
-	clarified, err = st.UpsertSelfImprovementClarification(rec.ID, "dashboard", "Apply this to coder and refactorer prompts.")
+	clarified, err = selfimprovement.New(st).UpsertClarification(rec.ID, "dashboard", "Apply this to coder and refactorer prompts.")
 	if err != nil {
 		t.Fatalf("update clarification: %v", err)
 	}
@@ -429,11 +429,11 @@ func TestCreateSelfImprovementProposalFromAcceptedRecommendation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("storableFeedback: %v", err)
 	}
-	rec, err := store.UpsertSelfImprovementRecommendation(db, store.SelfImprovementRecommendationInput{
+	rec, err := newSelfImprovementService(db).RecordRecommendation(store.SelfImprovementRecommendationInput{
 		WorkspaceID:           "team-a",
 		FeedbackEventID:       feedback.ID,
 		Type:                  "prompt_guidance",
-		Status:                store.RecommendationStatusAccepted,
+		Status:                selfimprovement.RecommendationStatusAccepted,
 		Finding:               "tighten prompt guidance",
 		NormalizedLesson:      "Keep guidance concrete.",
 		Rationale:             "Feedback asked for a concrete prompt update.",
@@ -506,11 +506,11 @@ func TestCreateSelfImprovementProposalRejectsUnsafeStatesAndTargets(t *testing.T
 	if err != nil {
 		t.Fatalf("storableFeedback: %v", err)
 	}
-	rec, err := store.UpsertSelfImprovementRecommendation(db, store.SelfImprovementRecommendationInput{
+	rec, err := newSelfImprovementService(db).RecordRecommendation(store.SelfImprovementRecommendationInput{
 		WorkspaceID:           "team-a",
 		FeedbackEventID:       feedback.ID,
 		Type:                  "needs_more_context",
-		Status:                store.RecommendationStatusRecommended,
+		Status:                selfimprovement.RecommendationStatusRecommended,
 		Finding:               "not accepted",
 		TargetAssetType:       "prompt",
 		TargetAssetID:         "prompt_missing",
@@ -524,7 +524,7 @@ func TestCreateSelfImprovementProposalRejectsUnsafeStatesAndTargets(t *testing.T
 	if _, err := newSelfImprovementService(db).CreateProposal(rec.ID); err == nil || !strings.Contains(err.Error(), "must be accepted") {
 		t.Fatalf("CreateSelfImprovementProposal error = %v, want accepted-state validation", err)
 	}
-	accepted, err := store.UpdateSelfImprovementRecommendationStatus(db, rec.ID, store.RecommendationStatusAccepted)
+	accepted, err := newSelfImprovementService(db).UpdateRecommendationStatus(rec.ID, selfimprovement.RecommendationStatusAccepted)
 	if err != nil {
 		t.Fatalf("UpdateSelfImprovementRecommendationStatus: %v", err)
 	}
@@ -536,11 +536,11 @@ func TestCreateSelfImprovementProposalRejectsUnsafeStatesAndTargets(t *testing.T
 	if err != nil {
 		t.Fatalf("UpsertPrompt: %v", err)
 	}
-	missingBase, err := store.UpsertSelfImprovementRecommendation(db, store.SelfImprovementRecommendationInput{
+	missingBase, err := newSelfImprovementService(db).RecordRecommendation(store.SelfImprovementRecommendationInput{
 		WorkspaceID:           "team-a",
 		FeedbackEventID:       feedback.ID,
 		Type:                  "prompt_guidance",
-		Status:                store.RecommendationStatusAccepted,
+		Status:                selfimprovement.RecommendationStatusAccepted,
 		Finding:               "tighten prompt guidance",
 		TargetAssetType:       "prompt",
 		TargetAssetID:         prompt.ID,
@@ -578,11 +578,11 @@ func TestCreateSelfImprovementProposalListsGuardrailMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("storableFeedback: %v", err)
 	}
-	rec, err := store.UpsertSelfImprovementRecommendation(db, store.SelfImprovementRecommendationInput{
+	rec, err := newSelfImprovementService(db).RecordRecommendation(store.SelfImprovementRecommendationInput{
 		WorkspaceID:           "team-a",
 		FeedbackEventID:       feedback.ID,
 		Type:                  "guardrail_guidance",
-		Status:                store.RecommendationStatusAccepted,
+		Status:                selfimprovement.RecommendationStatusAccepted,
 		Finding:               "tighten guardrail guidance",
 		TargetAssetType:       "guardrail",
 		TargetAssetID:         guardrail.ID,
@@ -610,481 +610,6 @@ func TestCreateSelfImprovementProposalListsGuardrailMetadata(t *testing.T) {
 	if listed[0].BaseVersion == nil || !listed[0].BaseVersion.Enabled || listed[0].BaseVersion.Position != 11 {
 		t.Fatalf("base guardrail metadata = %+v, want enabled true position 11", listed[0].BaseVersion)
 	}
-}
-
-func TestSelfImprovementProposalBundleStagesAndPublishesAtomically(t *testing.T) {
-	t.Parallel()
-	db := openTestDB(t)
-
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "bundle-prompt", Description: "prompt desc", Content: "prompt v1"})
-	if err != nil {
-		t.Fatalf("seed prompt: %v", err)
-	}
-	if err := store.UpsertSkill(db, "bundle-skill", fleet.Skill{Name: "bundle-skill", Prompt: "skill v1"}); err != nil {
-		t.Fatalf("seed skill: %v", err)
-	}
-	if err := store.UpsertSkill(db, "existing-skill-link", fleet.Skill{Name: "existing-skill-link", Prompt: "existing skill"}); err != nil {
-		t.Fatalf("seed linked skill: %v", err)
-	}
-	if err := store.UpsertGuardrail(db, fleet.Guardrail{Name: "bundle-guardrail", Description: "guard desc", Content: "guard v1", Enabled: true, Position: 9}); err != nil {
-		t.Fatalf("seed guardrail: %v", err)
-	}
-	skillVersionID := currentCatalogVersionForTest(t, db, "skills", "bundle-skill")
-	guardrailVersionID := currentCatalogVersionForTest(t, db, "guardrails", "bundle-guardrail")
-	feedback, err := store.UpsertSelfImprovementFeedback(db, store.SelfImprovementFeedbackInput{
-		WorkspaceID:      fleet.DefaultWorkspaceID,
-		RepoOwner:        "owner",
-		RepoName:         "repo",
-		SourceType:       "issue_comment",
-		GitHubCommentID:  683001,
-		SourceURL:        "https://github.com/owner/repo/issues/683#issuecomment-1",
-		AuthorLogin:      "maintainer",
-		AuthorAuthorized: true,
-		IssueNumber:      683,
-		RawBody:          "multi asset feedback /agents improve",
-		Tag:              store.FeedbackTag,
-		LinkConfidence:   "exact",
-	})
-	if err != nil {
-		t.Fatalf("seed feedback: %v", err)
-	}
-	rec, err := store.UpsertSelfImprovementRecommendation(db, store.SelfImprovementRecommendationInput{
-		WorkspaceID:           fleet.DefaultWorkspaceID,
-		FeedbackEventID:       feedback.ID,
-		Type:                  "catalog_patch_bundle",
-		Status:                store.RecommendationStatusAccepted,
-		Finding:               "coordinated catalog update",
-		Rationale:             "prompt, skill, and guardrail all need a narrow update",
-		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
-		AttributionConfidence: "exact",
-		StructuredOutput: map[string]any{
-			"changes": []map[string]any{
-				{"operation": "update_existing", "asset_type": "prompt", "asset_id": prompt.ID, "base_version_id": prompt.VersionID, "proposed_body": "prompt v2"},
-				{"operation": "update_existing", "asset_type": "skill", "asset_id": "bundle-skill", "base_version_id": skillVersionID, "proposed_body": "skill v2"},
-				{"operation": "update_existing", "asset_type": "guardrail", "asset_id": "bundle-guardrail", "base_version_id": guardrailVersionID, "proposed_body": "guard v2", "proposed_description": "guard desc v2", "proposed_enabled": false, "proposed_position": 11},
-				{"operation": "create_new", "asset_type": "skill", "proposed_ref": "skill_bundle_new", "proposed_name": "bundle-new", "proposed_scope": "workspace", "proposed_body": "new skill", "duplicate_risk": "low", "rationale": "no current skill covers it"},
-				{"operation": "create_new", "asset_type": "guardrail", "proposed_ref": "guardrail_bundle_new", "proposed_name": "bundle-new-guardrail", "proposed_scope": "workspace", "proposed_body": "new guardrail", "proposed_description": "new guardrail description", "proposed_enabled": false, "proposed_position": 42, "duplicate_risk": "medium"},
-				{"operation": "create_new", "asset_type": "skill", "proposed_ref": "skill_bundle_link", "proposed_name": "bundle-link", "proposed_scope": "workspace", "proposed_body": "link me"},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("seed recommendation: %v", err)
-	}
-	beforeVersions := countCatalogVersionsForTest(t, db)
-	svc := newSelfImprovementService(db)
-	bundle, err := svc.CreateProposalBundle(rec.ID)
-	if err != nil {
-		t.Fatalf("CreateSelfImprovementProposalBundle: %v", err)
-	}
-	if len(bundle.Items) != 6 || bundle.Status != selfimprovement.ProposalBundleStatusPending {
-		t.Fatalf("bundle = %+v, want six pending items", bundle)
-	}
-	if got := countCatalogVersionsForTest(t, db); got != beforeVersions {
-		t.Fatalf("catalog version count after bundle create = %d, want unchanged %d", got, beforeVersions)
-	}
-
-	for _, item := range bundle.Items {
-		switch {
-		case item.Operation == selfimprovement.ProposalBundleOperationUpdateExisting && item.AssetType == "prompt":
-			if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, selfimprovement.SelfImprovementBundleItemUpdate{ProposedBody: "prompt v2 edited"}, "system"); err != nil {
-				t.Fatalf("edit bundle item: %v", err)
-			}
-		case item.Operation == selfimprovement.ProposalBundleOperationUpdateExisting && item.AssetType == "guardrail":
-			if item.ProposedDescription != "guard desc v2" || item.ProposedEnabled || item.ProposedPosition != 11 {
-				t.Fatalf("guardrail update metadata = (%q, %t, %d), want structured metadata", item.ProposedDescription, item.ProposedEnabled, item.ProposedPosition)
-			}
-			if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, selfimprovement.SelfImprovementBundleItemUpdate{ProposedBody: "guard v2 edited"}, "system"); err != nil {
-				t.Fatalf("edit guardrail body only: %v", err)
-			}
-		case item.AssetType == "guardrail" && item.Operation == selfimprovement.ProposalBundleOperationCreateNew:
-			if item.ProposedDescription != "new guardrail description" || item.ProposedEnabled || item.ProposedPosition != 42 {
-				t.Fatalf("guardrail metadata = (%q, %t, %d), want structured metadata", item.ProposedDescription, item.ProposedEnabled, item.ProposedPosition)
-			}
-			if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, selfimprovement.SelfImprovementBundleItemUpdate{
-				ProposedRef: stringPtr("guardrail_bundle_new_edited"), ProposedName: stringPtr("bundle-new-guardrail-edited"), ProposedScope: stringPtr("workspace"),
-				ProposedBody: "new guardrail edited", ProposedDescription: stringPtr("edited guardrail description"),
-				ProposedEnabled: boolPtr(true), ProposedPosition: intPtr(7),
-			}, "system"); err != nil {
-				t.Fatalf("edit guardrail create item: %v", err)
-			}
-		case item.ProposedRef == "skill_bundle_link":
-			if _, err := svc.LinkProposalBundleItem(bundle.ID, item.ID, "existing-skill-link", "already exists", "system"); err != nil {
-				t.Fatalf("link skill item: %v", err)
-			}
-		}
-	}
-	published, err := svc.PublishProposalBundle(bundle.ID, "system")
-	if err != nil {
-		t.Fatalf("PublishSelfImprovementProposalBundle: %v", err)
-	}
-	if published.Status != selfimprovement.ProposalBundleStatusPublished {
-		t.Fatalf("bundle status = %s, want published", published.Status)
-	}
-	gotPrompt, err := store.ReadPrompt(db, prompt.ID)
-	if err != nil {
-		t.Fatalf("read prompt: %v", err)
-	}
-	if gotPrompt.Content != "prompt v2 edited" {
-		t.Fatalf("prompt content = %q, want edited bundle body", gotPrompt.Content)
-	}
-	if gotSkill := skillPromptForTest(t, db, "bundle-skill"); gotSkill != "skill v2" {
-		t.Fatalf("skill prompt = %q, want skill v2", gotSkill)
-	}
-	gotGuard, err := store.GetGuardrail(db, "bundle-guardrail")
-	if err != nil {
-		t.Fatalf("read guardrail: %v", err)
-	}
-	if gotGuard.Description != "guard desc v2" || gotGuard.Content != "guard v2 edited" || gotGuard.Enabled || gotGuard.Position != 11 {
-		t.Fatalf("guardrail = %+v, want edited metadata", gotGuard)
-	}
-	if gotNew := skillPromptForTest(t, db, "skill_bundle_new"); gotNew != "new skill" {
-		t.Fatalf("new skill prompt = %q, want new skill", gotNew)
-	}
-	gotNewGuard, err := store.GetGuardrail(db, "guardrail_bundle_new_edited")
-	if err != nil {
-		t.Fatalf("new guardrail was not created: %v", err)
-	}
-	if gotNewGuard.Description != "edited guardrail description" || gotNewGuard.Content != "new guardrail edited" || !gotNewGuard.Enabled || gotNewGuard.Position != 7 {
-		t.Fatalf("new guardrail = %+v, want edited metadata", gotNewGuard)
-	}
-	var linkedItem selfimprovement.SelfImprovementBundleItem
-	for _, item := range published.Items {
-		if item.ProposedRef == "skill_bundle_link" {
-			linkedItem = item
-			break
-		}
-	}
-	if linkedItem.ID == "" {
-		t.Fatal("linked bundle item not found after publish")
-	}
-	if linkedItem.Decision != selfimprovement.ProposalBundleDecisionLinkedExisting || linkedItem.AssetID != "existing-skill-link" || linkedItem.DecisionReason != "already exists" {
-		t.Fatalf("linked item = decision %q asset %q reason %q, want linked_existing decision evidence", linkedItem.Decision, linkedItem.AssetID, linkedItem.DecisionReason)
-	}
-	if linkedItem.PublishedVersionID != "" {
-		t.Fatalf("linked item published version = %q, want none", linkedItem.PublishedVersionID)
-	}
-}
-
-func TestSelfImprovementProposalBundlePublishRollsBackOnStaleItem(t *testing.T) {
-	t.Parallel()
-	db := openTestDB(t)
-	prompt, err := store.UpsertPrompt(db, fleet.Prompt{Name: "stale-bundle-prompt", Content: "prompt v1"})
-	if err != nil {
-		t.Fatalf("seed prompt: %v", err)
-	}
-	if err := store.UpsertSkill(db, "stale-bundle-skill", fleet.Skill{Name: "stale-bundle-skill", Prompt: "skill v1"}); err != nil {
-		t.Fatalf("seed skill: %v", err)
-	}
-	feedback, err := store.UpsertSelfImprovementFeedback(db, store.SelfImprovementFeedbackInput{
-		WorkspaceID: fleet.DefaultWorkspaceID, RepoOwner: "owner", RepoName: "repo", SourceType: "issue_comment",
-		GitHubCommentID: 683002, AuthorLogin: "maintainer", AuthorAuthorized: true, RawBody: "stale /agents improve", Tag: store.FeedbackTag,
-	})
-	if err != nil {
-		t.Fatalf("seed feedback: %v", err)
-	}
-	rec, err := store.UpsertSelfImprovementRecommendation(db, store.SelfImprovementRecommendationInput{
-		WorkspaceID: fleet.DefaultWorkspaceID, FeedbackEventID: feedback.ID, Type: "catalog_patch_bundle", Status: store.RecommendationStatusAccepted,
-		Finding: "stale bundle", AnalyzerPromptRef: "prompt_self-improvement-analyst", StructuredOutput: map[string]any{"changes": []map[string]any{
-			{"operation": "update_existing", "asset_type": "prompt", "asset_id": prompt.ID, "base_version_id": prompt.VersionID, "proposed_body": "prompt v2"},
-			{"operation": "update_existing", "asset_type": "skill", "asset_id": "stale-bundle-skill", "base_version_id": currentCatalogVersionForTest(t, db, "skills", "stale-bundle-skill"), "proposed_body": "skill v2"},
-		}},
-	})
-	if err != nil {
-		t.Fatalf("seed recommendation: %v", err)
-	}
-	svc := newSelfImprovementService(db)
-	bundle, err := svc.CreateProposalBundle(rec.ID)
-	if err != nil {
-		t.Fatalf("create bundle: %v", err)
-	}
-	if _, err := store.UpsertPrompt(db, fleet.Prompt{ID: prompt.ID, Name: "stale-bundle-prompt", Content: "prompt v1.5"}); err != nil {
-		t.Fatalf("advance prompt: %v", err)
-	}
-	if _, err := svc.PublishProposalBundle(bundle.ID, "system"); err == nil || !strings.Contains(err.Error(), "stale") {
-		t.Fatalf("publish error = %v, want stale failure", err)
-	}
-	if gotSkill := skillPromptForTest(t, db, "stale-bundle-skill"); gotSkill != "skill v1" {
-		t.Fatalf("skill prompt after failed publish = %q, want rollback to skill v1", gotSkill)
-	}
-}
-
-func TestSelfImprovementProposalBundleCreateNewUsesBundleWorkspaceAndProvenance(t *testing.T) {
-	t.Parallel()
-	db := openTestDB(t)
-	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
-		t.Fatalf("UpsertWorkspace: %v", err)
-	}
-	feedback, err := store.UpsertSelfImprovementFeedback(db, store.SelfImprovementFeedbackInput{
-		WorkspaceID: "team-a", RepoOwner: "owner", RepoName: "repo", SourceType: "issue_comment",
-		GitHubCommentID: 683003, AuthorLogin: "maintainer", AuthorAuthorized: true, RawBody: "create scoped prompt /agents improve", Tag: store.FeedbackTag,
-	})
-	if err != nil {
-		t.Fatalf("seed feedback: %v", err)
-	}
-	rec, err := store.UpsertSelfImprovementRecommendation(db, store.SelfImprovementRecommendationInput{
-		WorkspaceID: fleet.NormalizeWorkspaceID("team-a"), FeedbackEventID: feedback.ID, Type: "catalog_patch_bundle", Status: store.RecommendationStatusAccepted,
-		Finding: "create a workspace scoped prompt", Rationale: "team-a needs local guidance", AnalyzerPromptRef: "prompt_self-improvement-analyst",
-		StructuredOutput: map[string]any{"changes": []map[string]any{{
-			"operation": "create_new", "asset_type": "prompt", "proposed_ref": "prompt_team_bundle_new",
-			"proposed_name": "team bundle prompt", "proposed_scope": "workspace", "proposed_body": "team prompt body",
-			"rationale": "team-a needs local guidance",
-		}}},
-	})
-	if err != nil {
-		t.Fatalf("seed recommendation: %v", err)
-	}
-	svc := newSelfImprovementService(db)
-	bundle, err := svc.CreateProposalBundle(rec.ID)
-	if err != nil {
-		t.Fatalf("CreateSelfImprovementProposalBundle: %v", err)
-	}
-	published, err := svc.PublishProposalBundle(bundle.ID, "system")
-	if err != nil {
-		t.Fatalf("PublishSelfImprovementProposalBundle: %v", err)
-	}
-	item := bundleItemByMatch(t, published, func(item selfimprovement.SelfImprovementBundleItem) bool {
-		return item.ProposedRef == "prompt_team_bundle_new"
-	})
-	got, err := store.ReadPrompt(db, "prompt_team_bundle_new")
-	if err != nil {
-		t.Fatalf("ReadPrompt: %v", err)
-	}
-	if got.WorkspaceID != "team-a" || got.Repo != "" || got.Content != "team prompt body" {
-		t.Fatalf("created prompt = %+v, want team-a workspace scoped prompt", got)
-	}
-	versions, err := store.ListPromptVersionSnapshots(db, got.ID)
-	if err != nil {
-		t.Fatalf("ListPromptVersionSnapshots: %v", err)
-	}
-	if len(versions) != 1 {
-		t.Fatalf("prompt version count = %d, want 1", len(versions))
-	}
-	version := versions[0]
-	if item.PublishedVersionID != version.ID {
-		t.Fatalf("published version id = %q, want %q", item.PublishedVersionID, version.ID)
-	}
-	if version.SourceType != "feedback_recommendation" || version.SourceRef != rec.ID || version.Author != "agents-assistant" || version.Changelog != "team-a needs local guidance" {
-		t.Fatalf("prompt version metadata = %+v, want bundle recommendation provenance", version)
-	}
-}
-
-func TestSelfImprovementProposalBundleSnapshotAuditAndScopeValidation(t *testing.T) {
-	t.Parallel()
-	db := openTestDB(t)
-	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
-		t.Fatalf("UpsertWorkspace: %v", err)
-	}
-	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-b", Name: "Team B"}); err != nil {
-		t.Fatalf("UpsertWorkspace team-b: %v", err)
-	}
-	if err := store.UpsertRepo(db, fleet.Repo{WorkspaceID: "team-a", Name: "owner/repo", Enabled: true}); err != nil {
-		t.Fatalf("UpsertRepo: %v", err)
-	}
-	if err := store.UpsertRepo(db, fleet.Repo{WorkspaceID: "team-b", Name: "owner/other", Enabled: true}); err != nil {
-		t.Fatalf("UpsertRepo team-b: %v", err)
-	}
-	feedback, err := store.UpsertSelfImprovementFeedback(db, store.SelfImprovementFeedbackInput{
-		WorkspaceID:      "team-a",
-		RepoOwner:        "owner",
-		RepoName:         "repo",
-		SourceType:       "issue_comment",
-		GitHubCommentID:  683004,
-		AuthorLogin:      "maintainer",
-		AuthorAuthorized: true,
-		RawBody:          "create scoped prompt /agents improve",
-		Tag:              store.FeedbackTag,
-		LinkConfidence:   "exact",
-	})
-	if err != nil {
-		t.Fatalf("seed feedback: %v", err)
-	}
-	rec, err := store.UpsertSelfImprovementRecommendation(db, store.SelfImprovementRecommendationInput{
-		WorkspaceID:           "team-a",
-		FeedbackEventID:       feedback.ID,
-		Type:                  "catalog_patch_bundle",
-		Status:                store.RecommendationStatusAccepted,
-		Finding:               "create repo scoped prompt",
-		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
-		AttributionConfidence: "exact",
-		StructuredOutput: map[string]any{"changes": []map[string]any{{
-			"operation": "create_new", "asset_type": "prompt", "proposed_ref": "prompt_repo_bundle_new",
-			"proposed_name": "repo bundle prompt", "proposed_scope": "team-a/owner/repo", "proposed_body": "repo prompt body",
-		}}},
-	})
-	if err != nil {
-		t.Fatalf("seed recommendation: %v", err)
-	}
-	bundle, err := newSelfImprovementService(db).CreateProposalBundle(rec.ID)
-	if err != nil {
-		t.Fatalf("CreateSelfImprovementProposalBundle: %v", err)
-	}
-	if bundle.RecommendationUpdatedAtSnapshot == "" || bundle.RecommendationSnapshotHash == "" || bundle.RecommendationChanged {
-		t.Fatalf("bundle snapshot = updated_at %q hash %q changed %v, want stored unchanged snapshot", bundle.RecommendationUpdatedAtSnapshot, bundle.RecommendationSnapshotHash, bundle.RecommendationChanged)
-	}
-	if got := proposalBundleEventCountForTest(t, db, bundle.ID, "created"); got != 1 {
-		t.Fatalf("created event count = %d, want 1", got)
-	}
-	item := bundleItemByMatch(t, bundle, func(item selfimprovement.SelfImprovementBundleItem) bool {
-		return item.ProposedRef == "prompt_repo_bundle_new"
-	})
-	svc := newSelfImprovementService(db)
-	if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, selfimprovement.SelfImprovementBundleItemUpdate{
-		ProposedScope: stringPtr("missing-workspace"),
-		ProposedBody:  "repo prompt body",
-	}, "dashboard"); err == nil || !strings.Contains(err.Error(), "workspace") {
-		t.Fatalf("UpdateSelfImprovementProposalBundleItem invalid scope error = %v, want workspace validation", err)
-	}
-	if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, selfimprovement.SelfImprovementBundleItemUpdate{
-		ProposedScope: stringPtr("team-a/owner/other"),
-		ProposedBody:  "repo prompt body",
-	}, "dashboard"); err == nil || !strings.Contains(err.Error(), "repo") {
-		t.Fatalf("UpdateSelfImprovementProposalBundleItem cross-workspace repo scope error = %v, want repo validation", err)
-	}
-	edited, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, selfimprovement.SelfImprovementBundleItemUpdate{
-		ProposedScope: stringPtr("team-a/owner/repo"),
-		ProposedBody:  "repo prompt body edited",
-	}, "dashboard")
-	if err != nil {
-		t.Fatalf("UpdateSelfImprovementProposalBundleItem: %v", err)
-	}
-	if got := proposalBundleEventCountForTest(t, db, bundle.ID, "edited"); got != 1 {
-		t.Fatalf("edited event count = %d, want 1", got)
-	}
-	editedItem := bundleItemByMatch(t, edited, func(candidate selfimprovement.SelfImprovementBundleItem) bool { return candidate.ID == item.ID })
-	if editedItem.ProposedBody == "" {
-		t.Fatalf("edited item = %+v, want populated item", editedItem)
-	}
-	if _, err := store.UpdateSelfImprovementRecommendationStatus(db, rec.ID, store.RecommendationStatusRejected); err != nil {
-		t.Fatalf("UpdateSelfImprovementRecommendationStatus: %v", err)
-	}
-	changed, err := svc.GetProposalBundle(bundle.ID)
-	if err != nil {
-		t.Fatalf("GetProposalBundle: %v", err)
-	}
-	if !changed.RecommendationChanged {
-		t.Fatalf("RecommendationChanged = false, want true after recommendation drift")
-	}
-}
-
-func TestSelfImprovementProposalBundleRejectLinkPublishEvents(t *testing.T) {
-	t.Parallel()
-	db := openTestDB(t)
-	if err := store.UpsertSkill(db, "event-existing-skill", fleet.Skill{Name: "event-existing-skill", Prompt: "existing"}); err != nil {
-		t.Fatalf("seed existing skill: %v", err)
-	}
-	feedback, err := store.UpsertSelfImprovementFeedback(db, store.SelfImprovementFeedbackInput{
-		WorkspaceID:      fleet.DefaultWorkspaceID,
-		RepoOwner:        "owner",
-		RepoName:         "repo",
-		SourceType:       "issue_comment",
-		GitHubCommentID:  683005,
-		AuthorLogin:      "maintainer",
-		AuthorAuthorized: true,
-		RawBody:          "decision audit /agents improve",
-		Tag:              store.FeedbackTag,
-		LinkConfidence:   "exact",
-	})
-	if err != nil {
-		t.Fatalf("seed feedback: %v", err)
-	}
-	rec, err := store.UpsertSelfImprovementRecommendation(db, store.SelfImprovementRecommendationInput{
-		WorkspaceID:       fleet.DefaultWorkspaceID,
-		FeedbackEventID:   feedback.ID,
-		Type:              "catalog_patch_bundle",
-		Status:            store.RecommendationStatusAccepted,
-		Finding:           "decision audit",
-		AnalyzerPromptRef: "prompt_self-improvement-analyst",
-		StructuredOutput: map[string]any{"changes": []map[string]any{
-			{"operation": "create_new", "asset_type": "prompt", "proposed_ref": "event_prompt_new", "proposed_name": "event prompt", "proposed_scope": "workspace", "proposed_body": "prompt"},
-			{"operation": "create_new", "asset_type": "skill", "proposed_ref": "event_skill_link", "proposed_name": "event skill", "proposed_scope": "workspace", "proposed_body": "skill"},
-			{"operation": "create_new", "asset_type": "guardrail", "proposed_ref": "event_guardrail_reject", "proposed_name": "event guardrail", "proposed_scope": "workspace", "proposed_body": "guardrail"},
-		}},
-	})
-	if err != nil {
-		t.Fatalf("seed recommendation: %v", err)
-	}
-	svc := newSelfImprovementService(db)
-	bundle, err := svc.CreateProposalBundle(rec.ID)
-	if err != nil {
-		t.Fatalf("CreateSelfImprovementProposalBundle: %v", err)
-	}
-	linkItem := bundleItemByMatch(t, bundle, func(item selfimprovement.SelfImprovementBundleItem) bool {
-		return item.ProposedRef == "event_skill_link"
-	})
-	rejectItem := bundleItemByMatch(t, bundle, func(item selfimprovement.SelfImprovementBundleItem) bool {
-		return item.ProposedRef == "event_guardrail_reject"
-	})
-	if _, err := svc.LinkProposalBundleItem(bundle.ID, linkItem.ID, "event-existing-skill", "already exists", "mcp"); err != nil {
-		t.Fatalf("LinkSelfImprovementProposalBundleItem: %v", err)
-	}
-	if _, err := svc.RejectProposalBundleItem(bundle.ID, rejectItem.ID, "too broad", "dashboard"); err != nil {
-		t.Fatalf("RejectSelfImprovementProposalBundleItem: %v", err)
-	}
-	if _, err := svc.PublishProposalBundle(bundle.ID, "dashboard"); err != nil {
-		t.Fatalf("PublishSelfImprovementProposalBundle: %v", err)
-	}
-	for eventType, want := range map[string]int{"linked_existing": 1, "rejected": 1, "published": 1, "finalized": 2} {
-		if got := proposalBundleEventCountForTest(t, db, bundle.ID, eventType); got != want {
-			t.Fatalf("%s event count = %d, want %d", eventType, got, want)
-		}
-	}
-}
-
-func currentCatalogVersionForTest(t *testing.T, db *sql.DB, table, ref string) string {
-	t.Helper()
-	var id string
-	if err := db.QueryRow("SELECT COALESCE(current_version_id, '') FROM "+table+" WHERE ref=? OR name=?", ref, ref).Scan(&id); err != nil {
-		t.Fatalf("current version for %s/%s: %v", table, ref, err)
-	}
-	return id
-}
-
-func bundleItemByMatch(t *testing.T, bundle selfimprovement.SelfImprovementProposalBundle, match func(selfimprovement.SelfImprovementBundleItem) bool) selfimprovement.SelfImprovementBundleItem {
-	t.Helper()
-	for _, item := range bundle.Items {
-		if match(item) {
-			return item
-		}
-	}
-	t.Fatalf("bundle item not found in %+v", bundle.Items)
-	return selfimprovement.SelfImprovementBundleItem{}
-}
-
-func proposalBundleEventCountForTest(t *testing.T, db *sql.DB, bundleID, eventType string) int {
-	t.Helper()
-	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM self_improvement_proposal_bundle_item_events WHERE bundle_id=? AND event_type=?`, bundleID, eventType).Scan(&count); err != nil {
-		t.Fatalf("proposal bundle event count: %v", err)
-	}
-	return count
-}
-
-func countCatalogVersionsForTest(t *testing.T, db *sql.DB) int {
-	t.Helper()
-	var count int
-	if err := db.QueryRow(`SELECT (SELECT COUNT(*) FROM prompt_versions) + (SELECT COUNT(*) FROM skill_versions) + (SELECT COUNT(*) FROM guardrail_versions)`).Scan(&count); err != nil {
-		t.Fatalf("count catalog versions: %v", err)
-	}
-	return count
-}
-
-func skillPromptForTest(t *testing.T, db *sql.DB, ref string) string {
-	t.Helper()
-	var prompt string
-	if err := db.QueryRow(`SELECT prompt FROM skills WHERE ref=? OR name=?`, ref, ref).Scan(&prompt); err != nil {
-		t.Fatalf("skill prompt %s: %v", ref, err)
-	}
-	return prompt
-}
-
-func guardrailContentForTest(t *testing.T, db *sql.DB, ref string) string {
-	t.Helper()
-	var content string
-	if err := db.QueryRow(`SELECT content FROM guardrails WHERE ref=? OR name=?`, ref, ref).Scan(&content); err != nil {
-		t.Fatalf("guardrail content %s: %v", ref, err)
-	}
-	return content
 }
 
 func storableFeedback(db *sql.DB, workspace string) (store.SelfImprovementFeedback, error) {

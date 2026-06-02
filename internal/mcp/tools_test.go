@@ -254,11 +254,11 @@ func TestToolImprovementProposalLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed feedback: %v", err)
 	}
-	rec, err := deps.Store.UpsertSelfImprovementRecommendation(store.SelfImprovementRecommendationInput{
+	rec, err := deps.Improvements.RecordRecommendation(store.SelfImprovementRecommendationInput{
 		WorkspaceID:           fleet.DefaultWorkspaceID,
 		FeedbackEventID:       feedback.ID,
 		Type:                  "prompt_guidance",
-		Status:                store.RecommendationStatusAccepted,
+		Status:                selfimprovement.RecommendationStatusAccepted,
 		Finding:               "tighten prompt guidance",
 		NormalizedLesson:      "Keep guidance concrete.",
 		Rationale:             "Feedback asked for a concrete prompt update.",
@@ -360,11 +360,11 @@ func TestToolImprovementProposalBundleLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed feedback: %v", err)
 	}
-	rec, err := deps.Store.UpsertSelfImprovementRecommendation(store.SelfImprovementRecommendationInput{
+	rec, err := deps.Improvements.RecordRecommendation(store.SelfImprovementRecommendationInput{
 		WorkspaceID:           fleet.DefaultWorkspaceID,
 		FeedbackEventID:       feedback.ID,
 		Type:                  "catalog_patch_bundle",
-		Status:                store.RecommendationStatusAccepted,
+		Status:                selfimprovement.RecommendationStatusAccepted,
 		Finding:               "tighten prompt and reuse an existing skill",
 		Rationale:             "Feedback spans more than one catalog item.",
 		AnalyzerPromptRef:     "prompt_self-improvement-analyst",

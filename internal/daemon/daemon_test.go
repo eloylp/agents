@@ -276,11 +276,11 @@ func seedProposalBundleRecommendation(t *testing.T, srv *daemon.Daemon, suffix s
 	if err != nil {
 		t.Fatalf("seed feedback: %v", err)
 	}
-	rec, err := st.UpsertSelfImprovementRecommendation(store.SelfImprovementRecommendationInput{
+	rec, err := selfimprovement.New(st).RecordRecommendation(store.SelfImprovementRecommendationInput{
 		WorkspaceID:           fleet.DefaultWorkspaceID,
 		FeedbackEventID:       feedback.ID,
 		Type:                  "catalog_patch_bundle",
-		Status:                store.RecommendationStatusAccepted,
+		Status:                selfimprovement.RecommendationStatusAccepted,
 		Finding:               "coordinated catalog update",
 		Rationale:             "prompt, skill, and guardrail need a narrow update",
 		AnalyzerPromptRef:     "prompt_self-improvement-analyst",

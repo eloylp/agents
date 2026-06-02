@@ -11,6 +11,7 @@ import (
 	"github.com/eloylp/agents/internal/ai"
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/selfimprovement"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -107,10 +108,10 @@ func TestAnalyzeSelfImprovementFeedbackRunsStructuredAssistant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AnalyzeSelfImprovementFeedback: %v", err)
 	}
-	if rec.Status != store.RecommendationStatusNeedsUserInput || rec.AnalyzerPromptVersionID == "" {
+	if rec.Status != selfimprovement.RecommendationStatusNeedsUserInput || rec.AnalyzerPromptVersionID == "" {
 		t.Fatalf("recommendation = %+v, want machine-owned status with analyzer prompt version", rec)
 	}
-	if got := rec.StructuredOutput["status"]; got != store.RecommendationStatusNeedsUserInput {
+	if got := rec.StructuredOutput["status"]; got != selfimprovement.RecommendationStatusNeedsUserInput {
 		t.Fatalf("structured status = %v, want clamped machine-owned status", got)
 	}
 	if changes, ok := rec.StructuredOutput["changes"].([]any); !ok || len(changes) != 1 {

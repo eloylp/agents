@@ -17,14 +17,6 @@ const (
 	FeedbackStatusAnalyzed = "analyzed"
 	FeedbackStatusFailed   = "failed"
 	FeedbackTag            = "/agents improve"
-
-	RecommendationStatusRecommended    = "recommended"
-	RecommendationStatusNeedsUserInput = "needs_user_input"
-	RecommendationStatusAccepted       = "accepted"
-	RecommendationStatusRejected       = "rejected"
-	RecommendationStatusDeferred       = "deferred"
-	RecommendationStatusDuplicate      = "duplicate"
-	RecommendationStatusFailed         = "failed"
 )
 
 type SelfImprovementFeedback struct {
@@ -186,10 +178,6 @@ func (s *Store) GetSelfImprovementFeedback(id int64) (SelfImprovementFeedback, e
 	return GetSelfImprovementFeedback(s.db, id)
 }
 
-func (s *Store) UpsertSelfImprovementRecommendation(in SelfImprovementRecommendationInput) (SelfImprovementRecommendation, error) {
-	return UpsertSelfImprovementRecommendation(s.db, in)
-}
-
 func (s *Store) GetSelfImprovementRecommendationByFeedback(workspaceID string, feedbackID int64) (SelfImprovementRecommendation, error) {
 	return getSelfImprovementRecommendationByFeedback(s.db, fleet.NormalizeWorkspaceID(workspaceID), feedbackID)
 }
@@ -200,14 +188,6 @@ func (s *Store) ListSelfImprovementRecommendations(workspace, status string, lim
 
 func (s *Store) GetSelfImprovementRecommendation(id string) (SelfImprovementRecommendation, error) {
 	return GetSelfImprovementRecommendation(s.db, id)
-}
-
-func (s *Store) UpdateSelfImprovementRecommendationStatus(id, status string) (SelfImprovementRecommendation, error) {
-	return UpdateSelfImprovementRecommendationStatus(s.db, id, status)
-}
-
-func (s *Store) UpsertSelfImprovementClarification(recommendationID, author, body string) (SelfImprovementRecommendation, error) {
-	return UpsertSelfImprovementClarification(s.db, recommendationID, author, body)
 }
 
 func (s *Store) ListSelfImprovementProposals(id string) ([]SelfImprovementProposal, error) {
@@ -408,16 +388,6 @@ func GetSelfImprovementFeedback(db *sql.DB, id int64) (SelfImprovementFeedback, 
 	return ev, err
 }
 
-func UpsertSelfImprovementRecommendation(db *sql.DB, in SelfImprovementRecommendationInput) (SelfImprovementRecommendation, error) {
-	if err := UpsertSelfImprovementRecommendationRow(db, in); err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	if err := UpdateSelfImprovementFeedbackStatusRow(db, in.FeedbackEventID, FeedbackStatusAnalyzed); err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	return getSelfImprovementRecommendationByFeedback(db, fleet.NormalizeWorkspaceID(in.WorkspaceID), in.FeedbackEventID)
-}
-
 func UpsertSelfImprovementRecommendationRow(q sqlExec, in SelfImprovementRecommendationInput) error {
 	if in.FeedbackEventID <= 0 {
 		return &ErrValidation{Msg: "feedback_event_id is required"}
@@ -500,33 +470,16 @@ func ListSelfImprovementRecommendations(db *sql.DB, workspace, status string, li
 }
 
 func GetSelfImprovementRecommendation(db *sql.DB, id string) (SelfImprovementRecommendation, error) {
-	row := db.QueryRow(recommendationSelectSQL()+` WHERE r.id=?`, strings.TrimSpace(id))
+	return GetSelfImprovementRecommendationFrom(db, id)
+}
+
+func GetSelfImprovementRecommendationFrom(q querier, id string) (SelfImprovementRecommendation, error) {
+	row := q.QueryRow(recommendationSelectSQL()+` WHERE r.id=?`, strings.TrimSpace(id))
 	rec, err := scanSelfImprovementRecommendation(row, true)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SelfImprovementRecommendation{}, &ErrNotFound{Msg: fmt.Sprintf("recommendation %q not found", id)}
 	}
 	return rec, err
-}
-
-func UpsertSelfImprovementClarification(db *sql.DB, recommendationID, author, body string) (SelfImprovementRecommendation, error) {
-	recommendationID = strings.TrimSpace(recommendationID)
-	body = strings.TrimSpace(body)
-	if recommendationID == "" {
-		return SelfImprovementRecommendation{}, &ErrValidation{Msg: "recommendation id is required"}
-	}
-	if body == "" {
-		return SelfImprovementRecommendation{}, &ErrValidation{Msg: "clarification body is required"}
-	}
-	if _, err := GetSelfImprovementRecommendation(db, recommendationID); err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	if err := UpsertSelfImprovementClarificationRow(db, recommendationID, author, body); err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	if err := UpdateSelfImprovementRecommendationStatusRow(db, recommendationID, RecommendationStatusNeedsUserInput); err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	return GetSelfImprovementRecommendation(db, recommendationID)
 }
 
 func UpsertSelfImprovementClarificationRow(q sqlExec, recommendationID, author, body string) error {
@@ -549,18 +502,6 @@ func UpsertSelfImprovementClarificationRow(q sqlExec, recommendationID, author, 
 		recommendationID, strings.TrimSpace(author), body,
 	)
 	return err
-}
-
-func UpdateSelfImprovementRecommendationStatus(db *sql.DB, id, status string) (SelfImprovementRecommendation, error) {
-	id = strings.TrimSpace(id)
-	status = strings.TrimSpace(status)
-	if id == "" {
-		return SelfImprovementRecommendation{}, &ErrValidation{Msg: "recommendation id is required"}
-	}
-	if err := UpdateSelfImprovementRecommendationStatusRow(db, id, status); err != nil {
-		return SelfImprovementRecommendation{}, err
-	}
-	return GetSelfImprovementRecommendation(db, id)
 }
 
 func UpdateSelfImprovementRecommendationStatusRow(q sqlExec, id, status string) error {
@@ -765,7 +706,7 @@ func MarkSelfImprovementFeedbackFailed(db *sql.DB, id int64, cause string) error
 		`UPDATE self_improvement_recommendations
 		SET status=?, error=?, updated_at=datetime('now')
 		WHERE feedback_event_id=?`,
-		RecommendationStatusFailed, strings.TrimSpace(cause), id,
+		"failed", strings.TrimSpace(cause), id,
 	)
 	return err
 }

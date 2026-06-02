@@ -466,10 +466,10 @@ func recommendationInputFromAssistant(feedback store.SelfImprovementFeedback, pr
 
 func machineRecommendationStatus(status string) string {
 	switch status {
-	case store.RecommendationStatusRecommended, store.RecommendationStatusNeedsUserInput:
+	case selfimprovement.RecommendationStatusRecommended, selfimprovement.RecommendationStatusNeedsUserInput:
 		return status
 	default:
-		return store.RecommendationStatusNeedsUserInput
+		return selfimprovement.RecommendationStatusNeedsUserInput
 	}
 }
 
