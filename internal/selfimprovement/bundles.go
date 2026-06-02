@@ -41,15 +41,15 @@ type querier interface {
 	QueryRow(query string, args ...any) *sql.Row
 }
 
-func CreateSelfImprovementProposalBundle(db *sql.DB, id string) (SelfImprovementProposalBundle, error) {
-	rec, err := store.GetSelfImprovementRecommendation(db, id)
+func createSelfImprovementProposalBundle(st *store.Store, id string) (SelfImprovementProposalBundle, error) {
+	rec, err := st.GetSelfImprovementRecommendation(id)
 	if err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
 	if rec.Status != store.RecommendationStatusAccepted {
 		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "recommendation must be accepted before creating a proposal bundle"}
 	}
-	if existing, err := GetSelfImprovementProposalBundle(db, rec.ID); err == nil {
+	if existing, err := st.GetSelfImprovementProposalBundle(rec.ID); err == nil {
 		return existing, nil
 	} else {
 		var nf *store.ErrNotFound
@@ -65,49 +65,46 @@ func CreateSelfImprovementProposalBundle(db *sql.DB, id string) (SelfImprovement
 	if err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
-	tx, err := db.Begin()
-	if err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: create self-improvement proposal bundle: begin: %w", err)
-	}
-	defer tx.Rollback()
 	bundleID := "bundle_" + randomHexID()
-	if _, err := tx.Exec(`
-		INSERT INTO self_improvement_proposal_bundles (
-			id, workspace_id, recommendation_id, recommendation_updated_at_snapshot, recommendation_snapshot_hash
-		) VALUES (?, ?, ?, ?, ?)`, bundleID, rec.WorkspaceID, rec.ID, rec.UpdatedAt, snapshotHash); err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: create self-improvement proposal bundle: %w", err)
-	}
-	for _, item := range items {
-		if err := validateBundleItemForCreate(tx, rec.WorkspaceID, item); err != nil {
-			return SelfImprovementProposalBundle{}, err
-		}
-		item, err = hydrateBundleItemMetadata(tx, item)
-		if err != nil {
-			return SelfImprovementProposalBundle{}, err
-		}
-		itemID := "bundleitem_" + randomHexID()
+	if err := st.Transact(func(tx *store.Tx) error {
 		if _, err := tx.Exec(`
-			INSERT INTO self_improvement_proposal_bundle_items (
-				id, bundle_id, operation, asset_type, asset_id, base_version_id, proposed_ref, proposed_name,
-				proposed_scope, proposed_body, proposed_description, proposed_enabled, proposed_position,
-				analyst_proposed_body, duplicate_risk, rationale, decision
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			itemID, bundleID, item.Operation, item.AssetType, item.AssetID, item.BaseVersionID,
-			item.ProposedRef, item.ProposedName, item.ProposedScope, item.ProposedBody, item.ProposedDescription,
-			boolToInt(bundleItemInputEnabled(item)), normalizedBundlePosition(item.ProposedPosition), item.ProposedBody,
-			item.DuplicateRisk, item.Rationale, ProposalBundleDecisionAccepted,
-		); err != nil {
-			return SelfImprovementProposalBundle{}, fmt.Errorf("store: create self-improvement proposal bundle item: %w", err)
+			INSERT INTO self_improvement_proposal_bundles (
+				id, workspace_id, recommendation_id, recommendation_updated_at_snapshot, recommendation_snapshot_hash
+			) VALUES (?, ?, ?, ?, ?)`, bundleID, rec.WorkspaceID, rec.ID, rec.UpdatedAt, snapshotHash); err != nil {
+			return fmt.Errorf("selfimprovement: create proposal bundle: %w", err)
 		}
-		after := bundleItemInputAuditSnapshot(bundleID, itemID, item)
-		if err := insertBundleItemEvent(tx, bundleID, itemID, "created", "system", "", nil, after); err != nil {
-			return SelfImprovementProposalBundle{}, err
+		for _, item := range items {
+			if err := validateBundleItemForCreate(tx, rec.WorkspaceID, item); err != nil {
+				return err
+			}
+			item, err = hydrateBundleItemMetadata(tx, item)
+			if err != nil {
+				return err
+			}
+			itemID := "bundleitem_" + randomHexID()
+			if _, err := tx.Exec(`
+				INSERT INTO self_improvement_proposal_bundle_items (
+					id, bundle_id, operation, asset_type, asset_id, base_version_id, proposed_ref, proposed_name,
+					proposed_scope, proposed_body, proposed_description, proposed_enabled, proposed_position,
+					analyst_proposed_body, duplicate_risk, rationale, decision
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				itemID, bundleID, item.Operation, item.AssetType, item.AssetID, item.BaseVersionID,
+				item.ProposedRef, item.ProposedName, item.ProposedScope, item.ProposedBody, item.ProposedDescription,
+				boolToInt(bundleItemInputEnabled(item)), normalizedBundlePosition(item.ProposedPosition), item.ProposedBody,
+				item.DuplicateRisk, item.Rationale, ProposalBundleDecisionAccepted,
+			); err != nil {
+				return fmt.Errorf("selfimprovement: create proposal bundle item: %w", err)
+			}
+			after := bundleItemInputAuditSnapshot(bundleID, itemID, item)
+			if err := insertBundleItemEvent(tx, bundleID, itemID, "created", "system", "", nil, after); err != nil {
+				return err
+			}
 		}
+		return nil
+	}); err != nil {
+		return SelfImprovementProposalBundle{}, err
 	}
-	if err := tx.Commit(); err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: create self-improvement proposal bundle: commit: %w", err)
-	}
-	return GetSelfImprovementProposalBundle(db, rec.ID)
+	return st.GetSelfImprovementProposalBundle(rec.ID)
 }
 
 func GetSelfImprovementProposalBundle(db *sql.DB, id string) (SelfImprovementProposalBundle, error) {
@@ -149,12 +146,8 @@ func getSelfImprovementProposalBundle(q querier, id string) (SelfImprovementProp
 	return bundle, nil
 }
 
-func UpdateSelfImprovementProposalBundleItem(db *sql.DB, bundleID, itemID string, in SelfImprovementBundleItemUpdate) (SelfImprovementProposalBundle, error) {
-	return UpdateSelfImprovementProposalBundleItemWithActor(db, bundleID, itemID, in, "system")
-}
-
-func UpdateSelfImprovementProposalBundleItemWithActor(db *sql.DB, bundleID, itemID string, in SelfImprovementBundleItemUpdate, actor string) (SelfImprovementProposalBundle, error) {
-	bundle, item, err := getBundleAndItem(db, bundleID, itemID)
+func updateSelfImprovementProposalBundleItemWithActor(st *store.Store, bundleID, itemID string, in SelfImprovementBundleItemUpdate, actor string) (SelfImprovementProposalBundle, error) {
+	bundle, item, err := getBundleAndItem(st, bundleID, itemID)
 	if err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
@@ -189,165 +182,140 @@ func UpdateSelfImprovementProposalBundleItemWithActor(db *sql.DB, bundleID, item
 			position = normalizedBundlePosition(*in.ProposedPosition)
 		}
 	}
-	if item.Operation == ProposalBundleOperationCreateNew {
-		if err := validateBundleCreateNew(db, bundle.WorkspaceID, SelfImprovementBundleItemInput{
-			Operation:           item.Operation,
-			AssetType:           item.AssetType,
-			ProposedRef:         ref,
-			ProposedName:        name,
-			ProposedScope:       scope,
-			ProposedBody:        body,
-			ProposedDescription: description,
-			ProposedPosition:    position,
-		}); err != nil {
-			return SelfImprovementProposalBundle{}, err
-		}
-	}
-	tx, err := db.Begin()
-	if err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: update proposal bundle item: begin: %w", err)
-	}
-	defer tx.Rollback()
-	_, err = tx.Exec(`
-		UPDATE self_improvement_proposal_bundle_items
-		SET proposed_ref=?, proposed_name=?, proposed_scope=?, proposed_body=?,
-		    proposed_description=?, proposed_enabled=?, proposed_position=?, updated_at=datetime('now')
-		WHERE id=? AND bundle_id=?`, ref, name, scope, body, description, boolToInt(enabled), position, itemID, bundle.ID)
-	if err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: update proposal bundle item: %w", err)
-	}
 	after := item
 	after.ProposedRef, after.ProposedName, after.ProposedScope = ref, name, scope
 	after.ProposedBody, after.ProposedDescription, after.ProposedEnabled, after.ProposedPosition = body, description, enabled, position
-	if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "edited", actor, "", bundleItemAuditSnapshot(item), bundleItemAuditSnapshot(after)); err != nil {
+	if err := st.Transact(func(tx *store.Tx) error {
+		if item.Operation == ProposalBundleOperationCreateNew {
+			if err := validateBundleCreateNew(tx, bundle.WorkspaceID, SelfImprovementBundleItemInput{
+				Operation:           item.Operation,
+				AssetType:           item.AssetType,
+				ProposedRef:         ref,
+				ProposedName:        name,
+				ProposedScope:       scope,
+				ProposedBody:        body,
+				ProposedDescription: description,
+				ProposedPosition:    position,
+			}); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(`
+			UPDATE self_improvement_proposal_bundle_items
+			SET proposed_ref=?, proposed_name=?, proposed_scope=?, proposed_body=?,
+			    proposed_description=?, proposed_enabled=?, proposed_position=?, updated_at=datetime('now')
+			WHERE id=? AND bundle_id=?`, ref, name, scope, body, description, boolToInt(enabled), position, itemID, bundle.ID); err != nil {
+			return fmt.Errorf("selfimprovement: update proposal bundle item: %w", err)
+		}
+		return insertBundleItemEvent(tx, bundle.ID, item.ID, "edited", actor, "", bundleItemAuditSnapshot(item), bundleItemAuditSnapshot(after))
+	}); err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
-	if err := tx.Commit(); err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: update proposal bundle item: commit: %w", err)
-	}
-	return GetSelfImprovementProposalBundle(db, bundle.ID)
+	return st.GetSelfImprovementProposalBundle(bundle.ID)
 }
 
-func RejectSelfImprovementProposalBundleItem(db *sql.DB, bundleID, itemID, reason string) (SelfImprovementProposalBundle, error) {
-	return RejectSelfImprovementProposalBundleItemWithActor(db, bundleID, itemID, reason, "system")
+func rejectSelfImprovementProposalBundleItemWithActor(st *store.Store, bundleID, itemID, reason, actor string) (SelfImprovementProposalBundle, error) {
+	return decideSelfImprovementProposalBundleItem(st, bundleID, itemID, ProposalBundleDecisionRejected, "", reason, actor)
 }
 
-func RejectSelfImprovementProposalBundleItemWithActor(db *sql.DB, bundleID, itemID, reason, actor string) (SelfImprovementProposalBundle, error) {
-	return decideSelfImprovementProposalBundleItem(db, bundleID, itemID, ProposalBundleDecisionRejected, "", reason, actor)
-}
-
-func LinkSelfImprovementProposalBundleItem(db *sql.DB, bundleID, itemID, assetID, reason string) (SelfImprovementProposalBundle, error) {
-	return LinkSelfImprovementProposalBundleItemWithActor(db, bundleID, itemID, assetID, reason, "system")
-}
-
-func LinkSelfImprovementProposalBundleItemWithActor(db *sql.DB, bundleID, itemID, assetID, reason, actor string) (SelfImprovementProposalBundle, error) {
+func linkSelfImprovementProposalBundleItemWithActor(st *store.Store, bundleID, itemID, assetID, reason, actor string) (SelfImprovementProposalBundle, error) {
 	assetID = strings.TrimSpace(assetID)
 	if assetID == "" {
 		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "linked asset id is required"}
 	}
-	return decideSelfImprovementProposalBundleItem(db, bundleID, itemID, ProposalBundleDecisionLinkedExisting, assetID, reason, actor)
+	return decideSelfImprovementProposalBundleItem(st, bundleID, itemID, ProposalBundleDecisionLinkedExisting, assetID, reason, actor)
 }
 
-func PublishSelfImprovementProposalBundle(db *sql.DB, bundleID string) (SelfImprovementProposalBundle, error) {
-	return PublishSelfImprovementProposalBundleWithActor(db, bundleID, "system")
-}
-
-func PublishSelfImprovementProposalBundleWithActor(db *sql.DB, bundleID, actor string) (SelfImprovementProposalBundle, error) {
-	tx, err := db.Begin()
-	if err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: publish proposal bundle: begin: %w", err)
-	}
-	defer tx.Rollback()
-	bundle, err := getSelfImprovementProposalBundle(tx, bundleID)
-	if err != nil {
-		return SelfImprovementProposalBundle{}, err
-	}
-	if bundle.Status != ProposalBundleStatusPending {
-		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "only pending proposal bundles can be published"}
-	}
-	for _, item := range bundle.Items {
-		before := bundleItemAuditSnapshot(item)
-		switch item.Decision {
-		case ProposalBundleDecisionRejected:
-			if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "finalized", actor, "bundle published", before, before); err != nil {
-				return SelfImprovementProposalBundle{}, err
-			}
-			continue
-		case ProposalBundleDecisionLinkedExisting:
-			if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "finalized", actor, "bundle published", before, before); err != nil {
-				return SelfImprovementProposalBundle{}, err
-			}
-			continue
-		case ProposalBundleDecisionAccepted, ProposalBundleDecisionPending:
-		default:
-			return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: fmt.Sprintf("unsupported proposal bundle item decision %q", item.Decision)}
-		}
-		versionID, err := publishBundleCatalogItem(tx, item, bundle.WorkspaceID, bundle.RecommendationID)
+func publishSelfImprovementProposalBundleWithActor(st *store.Store, bundleID, actor string) (SelfImprovementProposalBundle, error) {
+	var publishedID string
+	if err := st.Transact(func(tx *store.Tx) error {
+		bundle, err := getSelfImprovementProposalBundle(tx, bundleID)
 		if err != nil {
-			return SelfImprovementProposalBundle{}, err
+			return err
+		}
+		if bundle.Status != ProposalBundleStatusPending {
+			return &store.ErrValidation{Msg: "only pending proposal bundles can be published"}
+		}
+		for _, item := range bundle.Items {
+			before := bundleItemAuditSnapshot(item)
+			switch item.Decision {
+			case ProposalBundleDecisionRejected:
+				if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "finalized", actor, "bundle published", before, before); err != nil {
+					return err
+				}
+				continue
+			case ProposalBundleDecisionLinkedExisting:
+				if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "finalized", actor, "bundle published", before, before); err != nil {
+					return err
+				}
+				continue
+			case ProposalBundleDecisionAccepted, ProposalBundleDecisionPending:
+			default:
+				return &store.ErrValidation{Msg: fmt.Sprintf("unsupported proposal bundle item decision %q", item.Decision)}
+			}
+			versionID, err := publishBundleCatalogItem(tx, item, bundle.WorkspaceID, bundle.RecommendationID)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`
+				UPDATE self_improvement_proposal_bundle_items
+				SET decision=?, published_version_id=?, updated_at=datetime('now')
+				WHERE id=?`, ProposalBundleDecisionPublished, versionID, item.ID); err != nil {
+				return fmt.Errorf("selfimprovement: mark proposal bundle item published: %w", err)
+			}
+			after := item
+			after.Decision = ProposalBundleDecisionPublished
+			after.PublishedVersionID = versionID
+			if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "published", actor, "", before, bundleItemAuditSnapshot(after)); err != nil {
+				return err
+			}
 		}
 		if _, err := tx.Exec(`
-			UPDATE self_improvement_proposal_bundle_items
-			SET decision=?, published_version_id=?, updated_at=datetime('now')
-			WHERE id=?`, ProposalBundleDecisionPublished, versionID, item.ID); err != nil {
-			return SelfImprovementProposalBundle{}, fmt.Errorf("store: mark proposal bundle item published: %w", err)
+			UPDATE self_improvement_proposal_bundles
+			SET status=?, updated_at=datetime('now')
+			WHERE id=?`, ProposalBundleStatusPublished, bundle.ID); err != nil {
+			return fmt.Errorf("selfimprovement: mark proposal bundle published: %w", err)
 		}
-		after := item
-		after.Decision = ProposalBundleDecisionPublished
-		after.PublishedVersionID = versionID
-		if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "published", actor, "", before, bundleItemAuditSnapshot(after)); err != nil {
-			return SelfImprovementProposalBundle{}, err
-		}
-	}
-	if _, err := tx.Exec(`
-		UPDATE self_improvement_proposal_bundles
-		SET status=?, updated_at=datetime('now')
-		WHERE id=?`, ProposalBundleStatusPublished, bundle.ID); err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: mark proposal bundle published: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: publish proposal bundle: commit: %w", err)
-	}
-	return GetSelfImprovementProposalBundle(db, bundle.ID)
-}
-
-func DiscardSelfImprovementProposalBundle(db *sql.DB, bundleID string) (SelfImprovementProposalBundle, error) {
-	return DiscardSelfImprovementProposalBundleWithActor(db, bundleID, "system")
-}
-
-func DiscardSelfImprovementProposalBundleWithActor(db *sql.DB, bundleID, actor string) (SelfImprovementProposalBundle, error) {
-	tx, err := db.Begin()
-	if err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: discard proposal bundle: begin: %w", err)
-	}
-	defer tx.Rollback()
-	bundle, err := getSelfImprovementProposalBundle(tx, bundleID)
-	if err != nil {
+		publishedID = bundle.ID
+		return nil
+	}); err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
-	if bundle.Status != ProposalBundleStatusPending {
-		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "only pending proposal bundles can be discarded"}
-	}
-	if _, err := tx.Exec(`UPDATE self_improvement_proposal_bundles SET status=?, updated_at=datetime('now') WHERE id=?`, ProposalBundleStatusDiscarded, bundle.ID); err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: discard proposal bundle: %w", err)
-	}
-	if _, err := tx.Exec(`UPDATE self_improvement_proposal_bundle_items SET decision=?, updated_at=datetime('now') WHERE bundle_id=? AND decision IN ('pending', 'accepted')`, ProposalBundleDecisionDiscarded, bundle.ID); err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: discard proposal bundle items: %w", err)
-	}
-	for _, item := range bundle.Items {
-		before := bundleItemAuditSnapshot(item)
-		after := item
-		if item.Decision == ProposalBundleDecisionAccepted || item.Decision == ProposalBundleDecisionPending {
-			after.Decision = ProposalBundleDecisionDiscarded
+	return st.GetSelfImprovementProposalBundle(publishedID)
+}
+
+func discardSelfImprovementProposalBundleWithActor(st *store.Store, bundleID, actor string) (SelfImprovementProposalBundle, error) {
+	var discardedID string
+	if err := st.Transact(func(tx *store.Tx) error {
+		bundle, err := getSelfImprovementProposalBundle(tx, bundleID)
+		if err != nil {
+			return err
 		}
-		if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "discarded", actor, "bundle discarded", before, bundleItemAuditSnapshot(after)); err != nil {
-			return SelfImprovementProposalBundle{}, err
+		if bundle.Status != ProposalBundleStatusPending {
+			return &store.ErrValidation{Msg: "only pending proposal bundles can be discarded"}
 		}
+		if _, err := tx.Exec(`UPDATE self_improvement_proposal_bundles SET status=?, updated_at=datetime('now') WHERE id=?`, ProposalBundleStatusDiscarded, bundle.ID); err != nil {
+			return fmt.Errorf("selfimprovement: discard proposal bundle: %w", err)
+		}
+		if _, err := tx.Exec(`UPDATE self_improvement_proposal_bundle_items SET decision=?, updated_at=datetime('now') WHERE bundle_id=? AND decision IN ('pending', 'accepted')`, ProposalBundleDecisionDiscarded, bundle.ID); err != nil {
+			return fmt.Errorf("selfimprovement: discard proposal bundle items: %w", err)
+		}
+		for _, item := range bundle.Items {
+			before := bundleItemAuditSnapshot(item)
+			after := item
+			if item.Decision == ProposalBundleDecisionAccepted || item.Decision == ProposalBundleDecisionPending {
+				after.Decision = ProposalBundleDecisionDiscarded
+			}
+			if err := insertBundleItemEvent(tx, bundle.ID, item.ID, "discarded", actor, "bundle discarded", before, bundleItemAuditSnapshot(after)); err != nil {
+				return err
+			}
+		}
+		discardedID = bundle.ID
+		return nil
+	}); err != nil {
+		return SelfImprovementProposalBundle{}, err
 	}
-	if err := tx.Commit(); err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: discard proposal bundle: commit: %w", err)
-	}
-	return GetSelfImprovementProposalBundle(db, bundle.ID)
+	return st.GetSelfImprovementProposalBundle(discardedID)
 }
 
 func ListSelfImprovementRecommendationsWithBundles(db *sql.DB, workspace string, limit int) ([]SelfImprovementRecommendation, error) {
@@ -498,32 +466,13 @@ func listSelfImprovementProposalBundleItems(q querier, bundleID string) ([]SelfI
 	return out, nil
 }
 
-func decideSelfImprovementProposalBundleItem(db *sql.DB, bundleID, itemID, decision, linkedAssetID, reason, actor string) (SelfImprovementProposalBundle, error) {
-	bundle, item, err := getBundleAndItem(db, bundleID, itemID)
+func decideSelfImprovementProposalBundleItem(st *store.Store, bundleID, itemID, decision, linkedAssetID, reason, actor string) (SelfImprovementProposalBundle, error) {
+	bundle, item, err := getBundleAndItem(st, bundleID, itemID)
 	if err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
 	if bundle.Status != ProposalBundleStatusPending {
 		return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "only pending proposal bundle items can be changed"}
-	}
-	if decision == ProposalBundleDecisionLinkedExisting {
-		if item.Operation != ProposalBundleOperationCreateNew {
-			return SelfImprovementProposalBundle{}, &store.ErrValidation{Msg: "only create-new proposal bundle items can link existing assets"}
-		}
-		if _, err := currentCatalogVersionID(db, item.AssetType, linkedAssetID); err != nil {
-			return SelfImprovementProposalBundle{}, err
-		}
-	}
-	tx, err := db.Begin()
-	if err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: decide proposal bundle item: begin: %w", err)
-	}
-	defer tx.Rollback()
-	if _, err := tx.Exec(`
-		UPDATE self_improvement_proposal_bundle_items
-		SET decision=?, asset_id=CASE WHEN ? <> '' THEN ? ELSE asset_id END, decision_reason=?, updated_at=datetime('now')
-		WHERE id=? AND bundle_id=?`, decision, linkedAssetID, linkedAssetID, strings.TrimSpace(reason), item.ID, bundle.ID); err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: decide proposal bundle item: %w", err)
 	}
 	after := item
 	after.Decision = decision
@@ -535,17 +484,30 @@ func decideSelfImprovementProposalBundleItem(db *sql.DB, bundleID, itemID, decis
 	if decision == ProposalBundleDecisionLinkedExisting {
 		eventType = "linked_existing"
 	}
-	if err := insertBundleItemEvent(tx, bundle.ID, item.ID, eventType, actor, strings.TrimSpace(reason), bundleItemAuditSnapshot(item), bundleItemAuditSnapshot(after)); err != nil {
+	if err := st.Transact(func(tx *store.Tx) error {
+		if decision == ProposalBundleDecisionLinkedExisting {
+			if item.Operation != ProposalBundleOperationCreateNew {
+				return &store.ErrValidation{Msg: "only create-new proposal bundle items can link existing assets"}
+			}
+			if _, err := currentCatalogVersionID(tx, item.AssetType, linkedAssetID); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(`
+			UPDATE self_improvement_proposal_bundle_items
+			SET decision=?, asset_id=CASE WHEN ? <> '' THEN ? ELSE asset_id END, decision_reason=?, updated_at=datetime('now')
+			WHERE id=? AND bundle_id=?`, decision, linkedAssetID, linkedAssetID, strings.TrimSpace(reason), item.ID, bundle.ID); err != nil {
+			return fmt.Errorf("selfimprovement: decide proposal bundle item: %w", err)
+		}
+		return insertBundleItemEvent(tx, bundle.ID, item.ID, eventType, actor, strings.TrimSpace(reason), bundleItemAuditSnapshot(item), bundleItemAuditSnapshot(after))
+	}); err != nil {
 		return SelfImprovementProposalBundle{}, err
 	}
-	if err := tx.Commit(); err != nil {
-		return SelfImprovementProposalBundle{}, fmt.Errorf("store: decide proposal bundle item: commit: %w", err)
-	}
-	return GetSelfImprovementProposalBundle(db, bundle.ID)
+	return st.GetSelfImprovementProposalBundle(bundle.ID)
 }
 
-func getBundleAndItem(db *sql.DB, bundleID, itemID string) (SelfImprovementProposalBundle, SelfImprovementBundleItem, error) {
-	bundle, err := GetSelfImprovementProposalBundle(db, bundleID)
+func getBundleAndItem(st *store.Store, bundleID, itemID string) (SelfImprovementProposalBundle, SelfImprovementBundleItem, error) {
+	bundle, err := st.GetSelfImprovementProposalBundle(bundleID)
 	if err != nil {
 		return SelfImprovementProposalBundle{}, SelfImprovementBundleItem{}, err
 	}

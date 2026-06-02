@@ -15,29 +15,29 @@ func New(st *store.Store) *Service {
 }
 
 func (s *Service) CreateProposal(id string) (store.SelfImprovementProposal, error) {
-	return CreateSelfImprovementProposal(s.store.DB(), id)
+	return createSelfImprovementProposal(s.store, id)
 }
 
 func (s *Service) CreateProposalBundle(id string) (store.SelfImprovementProposalBundle, error) {
-	return CreateSelfImprovementProposalBundle(s.store.DB(), id)
+	return createSelfImprovementProposalBundle(s.store, id)
 }
 
 func (s *Service) UpdateProposalBundleItem(bundleID, itemID string, in store.SelfImprovementBundleItemUpdate, actor string) (store.SelfImprovementProposalBundle, error) {
-	return UpdateSelfImprovementProposalBundleItemWithActor(s.store.DB(), bundleID, itemID, in, actor)
+	return updateSelfImprovementProposalBundleItemWithActor(s.store, bundleID, itemID, in, actor)
 }
 
 func (s *Service) RejectProposalBundleItem(bundleID, itemID, reason, actor string) (store.SelfImprovementProposalBundle, error) {
-	return RejectSelfImprovementProposalBundleItemWithActor(s.store.DB(), bundleID, itemID, reason, actor)
+	return rejectSelfImprovementProposalBundleItemWithActor(s.store, bundleID, itemID, reason, actor)
 }
 
 func (s *Service) LinkProposalBundleItem(bundleID, itemID, assetID, reason, actor string) (store.SelfImprovementProposalBundle, error) {
-	return LinkSelfImprovementProposalBundleItemWithActor(s.store.DB(), bundleID, itemID, assetID, reason, actor)
+	return linkSelfImprovementProposalBundleItemWithActor(s.store, bundleID, itemID, assetID, reason, actor)
 }
 
 func (s *Service) PublishProposalBundle(bundleID, actor string) (store.SelfImprovementProposalBundle, error) {
-	return PublishSelfImprovementProposalBundleWithActor(s.store.DB(), bundleID, actor)
+	return publishSelfImprovementProposalBundleWithActor(s.store, bundleID, actor)
 }
 
 func (s *Service) DiscardProposalBundle(bundleID, actor string) (store.SelfImprovementProposalBundle, error) {
-	return DiscardSelfImprovementProposalBundleWithActor(s.store.DB(), bundleID, actor)
+	return discardSelfImprovementProposalBundleWithActor(s.store, bundleID, actor)
 }

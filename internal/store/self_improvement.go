@@ -99,33 +99,34 @@ type SelfImprovementFeedbackInput struct {
 }
 
 type SelfImprovementRecommendation struct {
-	ID                      string                        `json:"id"`
-	WorkspaceID             string                        `json:"workspace"`
-	FeedbackEventID         int64                         `json:"feedback_event_id"`
-	Type                    string                        `json:"type"`
-	Status                  string                        `json:"status"`
-	Confidence              string                        `json:"confidence"`
-	Risk                    string                        `json:"risk"`
-	Finding                 string                        `json:"finding"`
-	NormalizedLesson        string                        `json:"normalized_lesson"`
-	Rationale               string                        `json:"rationale"`
-	EvidenceFeedbackIDs     []int64                       `json:"evidence_feedback_ids"`
-	EvidenceSourceURLs      []string                      `json:"evidence_source_urls"`
-	AttributionConfidence   string                        `json:"attribution_confidence"`
-	TargetAssetType         string                        `json:"target_asset_type,omitempty"`
-	TargetAssetID           string                        `json:"target_asset_id,omitempty"`
-	TargetBaseVersionID     string                        `json:"target_base_version_id,omitempty"`
-	ProposedPatch           string                        `json:"proposed_patch,omitempty"`
-	ProposedNewBody         string                        `json:"proposed_new_body,omitempty"`
-	SuggestedRolloutScope   string                        `json:"suggested_rollout_scope,omitempty"`
-	AnalyzerPromptRef       string                        `json:"analyzer_prompt_ref"`
-	AnalyzerPromptVersionID string                        `json:"analyzer_prompt_version_id,omitempty"`
-	StructuredOutput        map[string]any                `json:"structured_output,omitempty"`
-	Error                   string                        `json:"error,omitempty"`
-	CreatedAt               string                        `json:"created_at"`
-	UpdatedAt               string                        `json:"updated_at"`
-	Feedback                *SelfImprovementFeedback      `json:"feedback,omitempty"`
-	Clarification           *SelfImprovementClarification `json:"clarification,omitempty"`
+	ID                      string                         `json:"id"`
+	WorkspaceID             string                         `json:"workspace"`
+	FeedbackEventID         int64                          `json:"feedback_event_id"`
+	Type                    string                         `json:"type"`
+	Status                  string                         `json:"status"`
+	Confidence              string                         `json:"confidence"`
+	Risk                    string                         `json:"risk"`
+	Finding                 string                         `json:"finding"`
+	NormalizedLesson        string                         `json:"normalized_lesson"`
+	Rationale               string                         `json:"rationale"`
+	EvidenceFeedbackIDs     []int64                        `json:"evidence_feedback_ids"`
+	EvidenceSourceURLs      []string                       `json:"evidence_source_urls"`
+	AttributionConfidence   string                         `json:"attribution_confidence"`
+	TargetAssetType         string                         `json:"target_asset_type,omitempty"`
+	TargetAssetID           string                         `json:"target_asset_id,omitempty"`
+	TargetBaseVersionID     string                         `json:"target_base_version_id,omitempty"`
+	ProposedPatch           string                         `json:"proposed_patch,omitempty"`
+	ProposedNewBody         string                         `json:"proposed_new_body,omitempty"`
+	SuggestedRolloutScope   string                         `json:"suggested_rollout_scope,omitempty"`
+	AnalyzerPromptRef       string                         `json:"analyzer_prompt_ref"`
+	AnalyzerPromptVersionID string                         `json:"analyzer_prompt_version_id,omitempty"`
+	StructuredOutput        map[string]any                 `json:"structured_output,omitempty"`
+	Error                   string                         `json:"error,omitempty"`
+	CreatedAt               string                         `json:"created_at"`
+	UpdatedAt               string                         `json:"updated_at"`
+	Feedback                *SelfImprovementFeedback       `json:"feedback,omitempty"`
+	Clarification           *SelfImprovementClarification  `json:"clarification,omitempty"`
+	ProposalBundle          *SelfImprovementProposalBundle `json:"proposal_bundle,omitempty"`
 }
 
 type SelfImprovementClarification struct {
@@ -662,112 +663,6 @@ func UpdateSelfImprovementRecommendationStatus(db *sql.DB, id, status string) (S
 		return SelfImprovementRecommendation{}, &ErrNotFound{Msg: fmt.Sprintf("recommendation %q not found", id)}
 	}
 	return GetSelfImprovementRecommendation(db, id)
-}
-
-func CreateSelfImprovementProposal(db *sql.DB, id string) (SelfImprovementProposal, error) {
-	rec, err := GetSelfImprovementRecommendation(db, id)
-	if err != nil {
-		return SelfImprovementProposal{}, err
-	}
-	if rec.Status != RecommendationStatusAccepted {
-		return SelfImprovementProposal{}, &ErrValidation{Msg: "recommendation must be accepted before creating a proposal"}
-	}
-	if nonConvertibleRecommendationType(rec.Type) {
-		return SelfImprovementProposal{}, &ErrValidation{Msg: fmt.Sprintf("recommendation type %q is not proposal-convertible", rec.Type)}
-	}
-	if existing, err := ListSelfImprovementProposals(db, rec.ID); err != nil {
-		return SelfImprovementProposal{}, err
-	} else if len(existing) > 0 {
-		return existing[0], nil
-	}
-	targetType := strings.TrimSpace(rec.TargetAssetType)
-	targetID := strings.TrimSpace(rec.TargetAssetID)
-	if targetID == "" {
-		return SelfImprovementProposal{}, &ErrValidation{Msg: "recommendation has no target catalog asset"}
-	}
-	if strings.TrimSpace(rec.ProposedNewBody) == "" {
-		return SelfImprovementProposal{}, &ErrValidation{Msg: "recommendation has no proposed catalog body"}
-	}
-	meta := fleet.CatalogVersionMetadata{
-		State:      "proposal",
-		SourceType: "feedback_recommendation",
-		SourceRef:  rec.ID,
-		Author:     "agents-assistant",
-		Changelog:  recommendationProposalChangelog(rec),
-	}
-	var version fleet.CatalogVersion
-	switch targetType {
-	case "prompt":
-		prompt, err := ReadPrompt(db, targetID)
-		if err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		if err := ensureRecommendationBaseVersion(rec, prompt.VersionID); err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		tx, err := db.Begin()
-		if err != nil {
-			return SelfImprovementProposal{}, fmt.Errorf("store: create self-improvement proposal: begin: %w", err)
-		}
-		defer tx.Rollback()
-		version, err = CreatePromptDraftTx(tx, prompt.ID, prompt.Description, rec.ProposedNewBody, meta)
-		if err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		if err := tx.Commit(); err != nil {
-			return SelfImprovementProposal{}, fmt.Errorf("store: create self-improvement proposal: commit: %w", err)
-		}
-	case "skill":
-		skill, err := readSkill(db, targetID)
-		if err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		if err := ensureRecommendationBaseVersion(rec, skill.VersionID); err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		tx, err := db.Begin()
-		if err != nil {
-			return SelfImprovementProposal{}, fmt.Errorf("store: create self-improvement proposal: begin: %w", err)
-		}
-		defer tx.Rollback()
-		version, err = CreateSkillDraftTx(tx, skill.ID, rec.ProposedNewBody, meta)
-		if err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		if err := tx.Commit(); err != nil {
-			return SelfImprovementProposal{}, fmt.Errorf("store: create self-improvement proposal: commit: %w", err)
-		}
-	case "guardrail":
-		guardrail, err := GetGuardrail(db, targetID)
-		if err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		if err := ensureRecommendationBaseVersion(rec, guardrail.VersionID); err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		guardrail.Content = rec.ProposedNewBody
-		tx, err := db.Begin()
-		if err != nil {
-			return SelfImprovementProposal{}, fmt.Errorf("store: create self-improvement proposal: begin: %w", err)
-		}
-		defer tx.Rollback()
-		version, err = CreateGuardrailDraftTx(tx, guardrail.ID, guardrail, meta)
-		if err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		if err := tx.Commit(); err != nil {
-			return SelfImprovementProposal{}, fmt.Errorf("store: create self-improvement proposal: commit: %w", err)
-		}
-	default:
-		return SelfImprovementProposal{}, &ErrValidation{Msg: fmt.Sprintf("recommendation target type %q is not proposal-convertible", targetType)}
-	}
-	return SelfImprovementProposal{
-		RecommendationID: rec.ID,
-		TargetAssetType:  targetType,
-		TargetAssetID:    targetID,
-		BaseVersionID:    version.BaseVersionID,
-		Version:          version,
-	}, nil
 }
 
 func ListSelfImprovementProposals(db *sql.DB, id string) ([]SelfImprovementProposal, error) {

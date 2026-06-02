@@ -11,6 +11,7 @@ import (
 
 	"github.com/eloylp/agents/internal/config"
 	"github.com/eloylp/agents/internal/fleet"
+	"github.com/eloylp/agents/internal/selfimprovement"
 	"github.com/eloylp/agents/internal/store"
 )
 
@@ -101,6 +102,10 @@ func minimalCfg() *config.Config {
 			},
 		},
 	}
+}
+
+func newSelfImprovementService(db *sql.DB) *selfimprovement.Service {
+	return selfimprovement.New(store.New(db))
 }
 
 func stringPtr(v string) *string {
@@ -444,7 +449,7 @@ func TestCreateSelfImprovementProposalFromAcceptedRecommendation(t *testing.T) {
 		t.Fatalf("UpsertSelfImprovementRecommendation: %v", err)
 	}
 
-	proposal, err := store.CreateSelfImprovementProposal(db, rec.ID)
+	proposal, err := newSelfImprovementService(db).CreateProposal(rec.ID)
 	if err != nil {
 		t.Fatalf("CreateSelfImprovementProposal: %v", err)
 	}
@@ -475,7 +480,7 @@ func TestCreateSelfImprovementProposalFromAcceptedRecommendation(t *testing.T) {
 	if current.Content != "body v1" || current.VersionID != prompt.VersionID {
 		t.Fatalf("current prompt = id %q body %q, want published version unchanged", current.VersionID, current.Content)
 	}
-	second, err := store.CreateSelfImprovementProposal(db, rec.ID)
+	second, err := newSelfImprovementService(db).CreateProposal(rec.ID)
 	if err != nil {
 		t.Fatalf("CreateSelfImprovementProposal second call: %v", err)
 	}
@@ -516,14 +521,14 @@ func TestCreateSelfImprovementProposalRejectsUnsafeStatesAndTargets(t *testing.T
 	if err != nil {
 		t.Fatalf("UpsertSelfImprovementRecommendation: %v", err)
 	}
-	if _, err := store.CreateSelfImprovementProposal(db, rec.ID); err == nil || !strings.Contains(err.Error(), "must be accepted") {
+	if _, err := newSelfImprovementService(db).CreateProposal(rec.ID); err == nil || !strings.Contains(err.Error(), "must be accepted") {
 		t.Fatalf("CreateSelfImprovementProposal error = %v, want accepted-state validation", err)
 	}
 	accepted, err := store.UpdateSelfImprovementRecommendationStatus(db, rec.ID, store.RecommendationStatusAccepted)
 	if err != nil {
 		t.Fatalf("UpdateSelfImprovementRecommendationStatus: %v", err)
 	}
-	if _, err := store.CreateSelfImprovementProposal(db, accepted.ID); err == nil || !strings.Contains(err.Error(), "not proposal-convertible") {
+	if _, err := newSelfImprovementService(db).CreateProposal(accepted.ID); err == nil || !strings.Contains(err.Error(), "not proposal-convertible") {
 		t.Fatalf("CreateSelfImprovementProposal error = %v, want non-convertible validation", err)
 	}
 
@@ -545,7 +550,7 @@ func TestCreateSelfImprovementProposalRejectsUnsafeStatesAndTargets(t *testing.T
 	if err != nil {
 		t.Fatalf("UpsertSelfImprovementRecommendation missing base: %v", err)
 	}
-	if _, err := store.CreateSelfImprovementProposal(db, missingBase.ID); err == nil || !strings.Contains(err.Error(), "base version is required") {
+	if _, err := newSelfImprovementService(db).CreateProposal(missingBase.ID); err == nil || !strings.Contains(err.Error(), "base version is required") {
 		t.Fatalf("CreateSelfImprovementProposal error = %v, want missing base version validation", err)
 	}
 }
@@ -589,7 +594,7 @@ func TestCreateSelfImprovementProposalListsGuardrailMetadata(t *testing.T) {
 		t.Fatalf("UpsertSelfImprovementRecommendation: %v", err)
 	}
 
-	if _, err := store.CreateSelfImprovementProposal(db, rec.ID); err != nil {
+	if _, err := newSelfImprovementService(db).CreateProposal(rec.ID); err != nil {
 		t.Fatalf("CreateSelfImprovementProposal: %v", err)
 	}
 	listed, err := store.ListSelfImprovementProposals(db, rec.ID)
@@ -667,7 +672,8 @@ func TestSelfImprovementProposalBundleStagesAndPublishesAtomically(t *testing.T)
 		t.Fatalf("seed recommendation: %v", err)
 	}
 	beforeVersions := countCatalogVersionsForTest(t, db)
-	bundle, err := store.CreateSelfImprovementProposalBundle(db, rec.ID)
+	svc := newSelfImprovementService(db)
+	bundle, err := svc.CreateProposalBundle(rec.ID)
 	if err != nil {
 		t.Fatalf("CreateSelfImprovementProposalBundle: %v", err)
 	}
@@ -681,34 +687,34 @@ func TestSelfImprovementProposalBundleStagesAndPublishesAtomically(t *testing.T)
 	for _, item := range bundle.Items {
 		switch {
 		case item.Operation == store.ProposalBundleOperationUpdateExisting && item.AssetType == "prompt":
-			if _, err := store.UpdateSelfImprovementProposalBundleItem(db, bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{ProposedBody: "prompt v2 edited"}); err != nil {
+			if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{ProposedBody: "prompt v2 edited"}, "system"); err != nil {
 				t.Fatalf("edit bundle item: %v", err)
 			}
 		case item.Operation == store.ProposalBundleOperationUpdateExisting && item.AssetType == "guardrail":
 			if item.ProposedDescription != "guard desc v2" || item.ProposedEnabled || item.ProposedPosition != 11 {
 				t.Fatalf("guardrail update metadata = (%q, %t, %d), want structured metadata", item.ProposedDescription, item.ProposedEnabled, item.ProposedPosition)
 			}
-			if _, err := store.UpdateSelfImprovementProposalBundleItem(db, bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{ProposedBody: "guard v2 edited"}); err != nil {
+			if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{ProposedBody: "guard v2 edited"}, "system"); err != nil {
 				t.Fatalf("edit guardrail body only: %v", err)
 			}
 		case item.AssetType == "guardrail" && item.Operation == store.ProposalBundleOperationCreateNew:
 			if item.ProposedDescription != "new guardrail description" || item.ProposedEnabled || item.ProposedPosition != 42 {
 				t.Fatalf("guardrail metadata = (%q, %t, %d), want structured metadata", item.ProposedDescription, item.ProposedEnabled, item.ProposedPosition)
 			}
-			if _, err := store.UpdateSelfImprovementProposalBundleItem(db, bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{
+			if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{
 				ProposedRef: stringPtr("guardrail_bundle_new_edited"), ProposedName: stringPtr("bundle-new-guardrail-edited"), ProposedScope: stringPtr("workspace"),
 				ProposedBody: "new guardrail edited", ProposedDescription: stringPtr("edited guardrail description"),
 				ProposedEnabled: boolPtr(true), ProposedPosition: intPtr(7),
-			}); err != nil {
+			}, "system"); err != nil {
 				t.Fatalf("edit guardrail create item: %v", err)
 			}
 		case item.ProposedRef == "skill_bundle_link":
-			if _, err := store.LinkSelfImprovementProposalBundleItem(db, bundle.ID, item.ID, "existing-skill-link", "already exists"); err != nil {
+			if _, err := svc.LinkProposalBundleItem(bundle.ID, item.ID, "existing-skill-link", "already exists", "system"); err != nil {
 				t.Fatalf("link skill item: %v", err)
 			}
 		}
 	}
-	published, err := store.PublishSelfImprovementProposalBundle(db, bundle.ID)
+	published, err := svc.PublishProposalBundle(bundle.ID, "system")
 	if err != nil {
 		t.Fatalf("PublishSelfImprovementProposalBundle: %v", err)
 	}
@@ -787,14 +793,15 @@ func TestSelfImprovementProposalBundlePublishRollsBackOnStaleItem(t *testing.T) 
 	if err != nil {
 		t.Fatalf("seed recommendation: %v", err)
 	}
-	bundle, err := store.CreateSelfImprovementProposalBundle(db, rec.ID)
+	svc := newSelfImprovementService(db)
+	bundle, err := svc.CreateProposalBundle(rec.ID)
 	if err != nil {
 		t.Fatalf("create bundle: %v", err)
 	}
 	if _, err := store.UpsertPrompt(db, fleet.Prompt{ID: prompt.ID, Name: "stale-bundle-prompt", Content: "prompt v1.5"}); err != nil {
 		t.Fatalf("advance prompt: %v", err)
 	}
-	if _, err := store.PublishSelfImprovementProposalBundle(db, bundle.ID); err == nil || !strings.Contains(err.Error(), "stale") {
+	if _, err := svc.PublishProposalBundle(bundle.ID, "system"); err == nil || !strings.Contains(err.Error(), "stale") {
 		t.Fatalf("publish error = %v, want stale failure", err)
 	}
 	if gotSkill := skillPromptForTest(t, db, "stale-bundle-skill"); gotSkill != "skill v1" {
@@ -827,11 +834,12 @@ func TestSelfImprovementProposalBundleCreateNewUsesBundleWorkspaceAndProvenance(
 	if err != nil {
 		t.Fatalf("seed recommendation: %v", err)
 	}
-	bundle, err := store.CreateSelfImprovementProposalBundle(db, rec.ID)
+	svc := newSelfImprovementService(db)
+	bundle, err := svc.CreateProposalBundle(rec.ID)
 	if err != nil {
 		t.Fatalf("CreateSelfImprovementProposalBundle: %v", err)
 	}
-	published, err := store.PublishSelfImprovementProposalBundle(db, bundle.ID)
+	published, err := svc.PublishProposalBundle(bundle.ID, "system")
 	if err != nil {
 		t.Fatalf("PublishSelfImprovementProposalBundle: %v", err)
 	}
@@ -907,7 +915,7 @@ func TestSelfImprovementProposalBundleSnapshotAuditAndScopeValidation(t *testing
 	if err != nil {
 		t.Fatalf("seed recommendation: %v", err)
 	}
-	bundle, err := store.CreateSelfImprovementProposalBundle(db, rec.ID)
+	bundle, err := newSelfImprovementService(db).CreateProposalBundle(rec.ID)
 	if err != nil {
 		t.Fatalf("CreateSelfImprovementProposalBundle: %v", err)
 	}
@@ -918,19 +926,20 @@ func TestSelfImprovementProposalBundleSnapshotAuditAndScopeValidation(t *testing
 		t.Fatalf("created event count = %d, want 1", got)
 	}
 	item := bundleItemByMatch(t, bundle, func(item store.SelfImprovementBundleItem) bool { return item.ProposedRef == "prompt_repo_bundle_new" })
-	if _, err := store.UpdateSelfImprovementProposalBundleItemWithActor(db, bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{
+	svc := newSelfImprovementService(db)
+	if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{
 		ProposedScope: stringPtr("missing-workspace"),
 		ProposedBody:  "repo prompt body",
 	}, "dashboard"); err == nil || !strings.Contains(err.Error(), "workspace") {
 		t.Fatalf("UpdateSelfImprovementProposalBundleItem invalid scope error = %v, want workspace validation", err)
 	}
-	if _, err := store.UpdateSelfImprovementProposalBundleItemWithActor(db, bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{
+	if _, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{
 		ProposedScope: stringPtr("team-a/owner/other"),
 		ProposedBody:  "repo prompt body",
 	}, "dashboard"); err == nil || !strings.Contains(err.Error(), "repo") {
 		t.Fatalf("UpdateSelfImprovementProposalBundleItem cross-workspace repo scope error = %v, want repo validation", err)
 	}
-	edited, err := store.UpdateSelfImprovementProposalBundleItemWithActor(db, bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{
+	edited, err := svc.UpdateProposalBundleItem(bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{
 		ProposedScope: stringPtr("team-a/owner/repo"),
 		ProposedBody:  "repo prompt body edited",
 	}, "dashboard")
@@ -993,19 +1002,20 @@ func TestSelfImprovementProposalBundleRejectLinkPublishEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed recommendation: %v", err)
 	}
-	bundle, err := store.CreateSelfImprovementProposalBundle(db, rec.ID)
+	svc := newSelfImprovementService(db)
+	bundle, err := svc.CreateProposalBundle(rec.ID)
 	if err != nil {
 		t.Fatalf("CreateSelfImprovementProposalBundle: %v", err)
 	}
 	linkItem := bundleItemByMatch(t, bundle, func(item store.SelfImprovementBundleItem) bool { return item.ProposedRef == "event_skill_link" })
 	rejectItem := bundleItemByMatch(t, bundle, func(item store.SelfImprovementBundleItem) bool { return item.ProposedRef == "event_guardrail_reject" })
-	if _, err := store.LinkSelfImprovementProposalBundleItemWithActor(db, bundle.ID, linkItem.ID, "event-existing-skill", "already exists", "mcp"); err != nil {
+	if _, err := svc.LinkProposalBundleItem(bundle.ID, linkItem.ID, "event-existing-skill", "already exists", "mcp"); err != nil {
 		t.Fatalf("LinkSelfImprovementProposalBundleItem: %v", err)
 	}
-	if _, err := store.RejectSelfImprovementProposalBundleItemWithActor(db, bundle.ID, rejectItem.ID, "too broad", "dashboard"); err != nil {
+	if _, err := svc.RejectProposalBundleItem(bundle.ID, rejectItem.ID, "too broad", "dashboard"); err != nil {
 		t.Fatalf("RejectSelfImprovementProposalBundleItem: %v", err)
 	}
-	if _, err := store.PublishSelfImprovementProposalBundleWithActor(db, bundle.ID, "dashboard"); err != nil {
+	if _, err := svc.PublishProposalBundle(bundle.ID, "dashboard"); err != nil {
 		t.Fatalf("PublishSelfImprovementProposalBundle: %v", err)
 	}
 	for eventType, want := range map[string]int{"linked_existing": 1, "rejected": 1, "published": 1, "finalized": 2} {

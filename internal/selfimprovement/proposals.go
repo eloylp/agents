@@ -1,7 +1,6 @@
 package selfimprovement
 
 import (
-	"database/sql"
 	"fmt"
 	"strings"
 
@@ -11,8 +10,8 @@ import (
 
 type SelfImprovementProposal = store.SelfImprovementProposal
 
-func CreateSelfImprovementProposal(db *sql.DB, id string) (SelfImprovementProposal, error) {
-	rec, err := store.GetSelfImprovementRecommendation(db, id)
+func createSelfImprovementProposal(st *store.Store, id string) (SelfImprovementProposal, error) {
+	rec, err := st.GetSelfImprovementRecommendation(id)
 	if err != nil {
 		return SelfImprovementProposal{}, err
 	}
@@ -22,7 +21,7 @@ func CreateSelfImprovementProposal(db *sql.DB, id string) (SelfImprovementPropos
 	if nonConvertibleRecommendationType(rec.Type) {
 		return SelfImprovementProposal{}, &store.ErrValidation{Msg: fmt.Sprintf("recommendation type %q is not proposal-convertible", rec.Type)}
 	}
-	if existing, err := store.ListSelfImprovementProposals(db, rec.ID); err != nil {
+	if existing, err := st.ListSelfImprovementProposals(rec.ID); err != nil {
 		return SelfImprovementProposal{}, err
 	} else if len(existing) > 0 {
 		return existing[0], nil
@@ -45,65 +44,47 @@ func CreateSelfImprovementProposal(db *sql.DB, id string) (SelfImprovementPropos
 	var version fleet.CatalogVersion
 	switch targetType {
 	case "prompt":
-		prompt, err := readPromptFrom(db, targetID)
-		if err != nil {
+		if err := st.Transact(func(tx *store.Tx) error {
+			prompt, err := readPromptFrom(tx, targetID)
+			if err != nil {
+				return err
+			}
+			if err := ensureRecommendationBaseVersion(rec, prompt.VersionID); err != nil {
+				return err
+			}
+			version, err = store.CreatePromptDraftTx(tx, prompt.ID, prompt.Description, rec.ProposedNewBody, meta)
+			return err
+		}); err != nil {
 			return SelfImprovementProposal{}, err
-		}
-		if err := ensureRecommendationBaseVersion(rec, prompt.VersionID); err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		tx, err := db.Begin()
-		if err != nil {
-			return SelfImprovementProposal{}, fmt.Errorf("selfimprovement: create proposal: begin: %w", err)
-		}
-		defer tx.Rollback()
-		version, err = store.CreatePromptDraftTx(tx, prompt.ID, prompt.Description, rec.ProposedNewBody, meta)
-		if err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		if err := tx.Commit(); err != nil {
-			return SelfImprovementProposal{}, fmt.Errorf("selfimprovement: create proposal: commit: %w", err)
 		}
 	case "skill":
-		skill, err := readSkill(db, targetID)
-		if err != nil {
+		if err := st.Transact(func(tx *store.Tx) error {
+			skill, err := readSkill(tx, targetID)
+			if err != nil {
+				return err
+			}
+			if err := ensureRecommendationBaseVersion(rec, skill.VersionID); err != nil {
+				return err
+			}
+			version, err = store.CreateSkillDraftTx(tx, skill.ID, rec.ProposedNewBody, meta)
+			return err
+		}); err != nil {
 			return SelfImprovementProposal{}, err
-		}
-		if err := ensureRecommendationBaseVersion(rec, skill.VersionID); err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		tx, err := db.Begin()
-		if err != nil {
-			return SelfImprovementProposal{}, fmt.Errorf("selfimprovement: create proposal: begin: %w", err)
-		}
-		defer tx.Rollback()
-		version, err = store.CreateSkillDraftTx(tx, skill.ID, rec.ProposedNewBody, meta)
-		if err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		if err := tx.Commit(); err != nil {
-			return SelfImprovementProposal{}, fmt.Errorf("selfimprovement: create proposal: commit: %w", err)
 		}
 	case "guardrail":
-		guardrail, err := getGuardrailFrom(db, targetID)
-		if err != nil {
+		if err := st.Transact(func(tx *store.Tx) error {
+			guardrail, err := getGuardrailFrom(tx, targetID)
+			if err != nil {
+				return err
+			}
+			if err := ensureRecommendationBaseVersion(rec, guardrail.VersionID); err != nil {
+				return err
+			}
+			guardrail.Content = rec.ProposedNewBody
+			version, err = store.CreateGuardrailDraftTx(tx, guardrail.ID, guardrail, meta)
+			return err
+		}); err != nil {
 			return SelfImprovementProposal{}, err
-		}
-		if err := ensureRecommendationBaseVersion(rec, guardrail.VersionID); err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		guardrail.Content = rec.ProposedNewBody
-		tx, err := db.Begin()
-		if err != nil {
-			return SelfImprovementProposal{}, fmt.Errorf("selfimprovement: create proposal: begin: %w", err)
-		}
-		defer tx.Rollback()
-		version, err = store.CreateGuardrailDraftTx(tx, guardrail.ID, guardrail, meta)
-		if err != nil {
-			return SelfImprovementProposal{}, err
-		}
-		if err := tx.Commit(); err != nil {
-			return SelfImprovementProposal{}, fmt.Errorf("selfimprovement: create proposal: commit: %w", err)
 		}
 	default:
 		return SelfImprovementProposal{}, &store.ErrValidation{Msg: fmt.Sprintf("recommendation target type %q is not proposal-convertible", targetType)}
