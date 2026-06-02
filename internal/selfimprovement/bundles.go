@@ -122,6 +122,11 @@ func getSelfImprovementProposalBundleFromStore(st *store.Store, id string) (Self
 	}
 	bundle.RecommendationChanged = rec.UpdatedAt != bundle.RecommendationUpdatedAtSnapshot || hash != bundle.RecommendationSnapshotHash
 	bundle.Recommendation = &rec
+	if err := st.Transact(func(tx *store.Tx) error {
+		return hydrateProposalBundleReadState(tx, &bundle)
+	}); err != nil {
+		return SelfImprovementProposalBundle{}, err
+	}
 	return bundle, nil
 }
 
@@ -459,21 +464,29 @@ func listSelfImprovementProposalBundleItems(q querier, bundleID string) ([]SelfI
 	if err := rows.Close(); err != nil {
 		return nil, fmt.Errorf("store: close proposal bundle items: %w", err)
 	}
-	for i := range out {
-		if out[i].BaseVersionID == "" {
+	bundle := SelfImprovementProposalBundle{Items: out}
+	if err := hydrateProposalBundleReadState(q, &bundle); err != nil {
+		return nil, err
+	}
+	return bundle.Items, nil
+}
+
+func hydrateProposalBundleReadState(q querier, bundle *SelfImprovementProposalBundle) error {
+	for i := range bundle.Items {
+		if bundle.Items[i].BaseVersionID == "" {
 			continue
 		}
-		base, err := readSelfImprovementProposalBaseVersion(q, out[i].AssetType, out[i].BaseVersionID)
+		base, err := readSelfImprovementProposalBaseVersion(q, bundle.Items[i].AssetType, bundle.Items[i].BaseVersionID)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		out[i].BaseVersion = &base
-		if current, err := currentCatalogVersionID(q, out[i].AssetType, out[i].AssetID); err == nil {
-			out[i].CurrentVersionID = current
-			out[i].Stale = current != out[i].BaseVersionID
+		bundle.Items[i].BaseVersion = &base
+		if current, err := currentCatalogVersionID(q, bundle.Items[i].AssetType, bundle.Items[i].AssetID); err == nil {
+			bundle.Items[i].CurrentVersionID = current
+			bundle.Items[i].Stale = current != bundle.Items[i].BaseVersionID
 		}
 	}
-	return out, nil
+	return nil
 }
 
 func decideSelfImprovementProposalBundleItem(st *store.Store, bundleID, itemID, decision, linkedAssetID, reason, actor string) (SelfImprovementProposalBundle, error) {

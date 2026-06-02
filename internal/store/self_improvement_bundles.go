@@ -163,43 +163,7 @@ func listSelfImprovementProposalBundleItems(q querier, bundleID string) ([]SelfI
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	for i := range out {
-		if out[i].BaseVersionID == "" {
-			continue
-		}
-		base, err := readSelfImprovementProposalBaseVersion(q, out[i].AssetType, out[i].BaseVersionID)
-		if err != nil {
-			return nil, err
-		}
-		out[i].BaseVersion = &base
-		if current, err := currentProposalBundleCatalogVersionID(q, out[i].AssetType, out[i].AssetID); err == nil {
-			out[i].CurrentVersionID = current
-			out[i].Stale = current != out[i].BaseVersionID
-		}
-	}
 	return out, nil
-}
-
-func currentProposalBundleCatalogVersionID(q querier, assetType, assetID string) (string, error) {
-	var id string
-	var err error
-	switch strings.TrimSpace(assetType) {
-	case "prompt":
-		err = q.QueryRow(`SELECT COALESCE(current_version_id, '') FROM prompts WHERE id=? OR ref=?`, assetID, assetID).Scan(&id)
-	case "skill":
-		err = q.QueryRow(`SELECT COALESCE(current_version_id, '') FROM skills WHERE id=? OR ref=? OR name=?`, assetID, assetID, fleet.NormalizeSkillName(assetID)).Scan(&id)
-	case "guardrail":
-		err = q.QueryRow(`SELECT COALESCE(current_version_id, '') FROM guardrails WHERE id=? OR ref=? OR name=?`, assetID, assetID, fleet.NormalizeGuardrailName(assetID)).Scan(&id)
-	default:
-		return "", &ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", assetType)}
-	}
-	if err != nil {
-		return "", catalogReadErr(assetType, assetID, err)
-	}
-	if id == "" {
-		return "", &ErrValidation{Msg: fmt.Sprintf("%s %q has no current version", assetType, assetID)}
-	}
-	return id, nil
 }
 
 func ListSelfImprovementRecommendationsWithBundles(db *sql.DB, workspace string, limit int) ([]SelfImprovementRecommendation, error) {
