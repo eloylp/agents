@@ -103,6 +103,18 @@ func minimalCfg() *config.Config {
 	}
 }
 
+func stringPtr(v string) *string {
+	return &v
+}
+
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func intPtr(v int) *int {
+	return &v
+}
+
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	dir := t.TempDir()
@@ -644,7 +656,7 @@ func TestSelfImprovementProposalBundleStagesAndPublishesAtomically(t *testing.T)
 			"changes": []map[string]any{
 				{"operation": "update_existing", "asset_type": "prompt", "asset_id": prompt.ID, "base_version_id": prompt.VersionID, "proposed_body": "prompt v2"},
 				{"operation": "update_existing", "asset_type": "skill", "asset_id": "bundle-skill", "base_version_id": skillVersionID, "proposed_body": "skill v2"},
-				{"operation": "update_existing", "asset_type": "guardrail", "asset_id": "bundle-guardrail", "base_version_id": guardrailVersionID, "proposed_body": "guard v2"},
+				{"operation": "update_existing", "asset_type": "guardrail", "asset_id": "bundle-guardrail", "base_version_id": guardrailVersionID, "proposed_body": "guard v2", "proposed_description": "guard desc v2", "proposed_enabled": false, "proposed_position": 11},
 				{"operation": "create_new", "asset_type": "skill", "proposed_ref": "skill_bundle_new", "proposed_name": "bundle-new", "proposed_scope": "workspace", "proposed_body": "new skill", "duplicate_risk": "low", "rationale": "no current skill covers it"},
 				{"operation": "create_new", "asset_type": "guardrail", "proposed_ref": "guardrail_bundle_new", "proposed_name": "bundle-new-guardrail", "proposed_scope": "workspace", "proposed_body": "new guardrail", "proposed_description": "new guardrail description", "proposed_enabled": false, "proposed_position": 42, "duplicate_risk": "medium"},
 				{"operation": "create_new", "asset_type": "skill", "proposed_ref": "skill_bundle_link", "proposed_name": "bundle-link", "proposed_scope": "workspace", "proposed_body": "link me"},
@@ -672,14 +684,21 @@ func TestSelfImprovementProposalBundleStagesAndPublishesAtomically(t *testing.T)
 			if _, err := store.UpdateSelfImprovementProposalBundleItem(db, bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{ProposedBody: "prompt v2 edited"}); err != nil {
 				t.Fatalf("edit bundle item: %v", err)
 			}
+		case item.Operation == store.ProposalBundleOperationUpdateExisting && item.AssetType == "guardrail":
+			if item.ProposedDescription != "guard desc v2" || item.ProposedEnabled || item.ProposedPosition != 11 {
+				t.Fatalf("guardrail update metadata = (%q, %t, %d), want structured metadata", item.ProposedDescription, item.ProposedEnabled, item.ProposedPosition)
+			}
+			if _, err := store.UpdateSelfImprovementProposalBundleItem(db, bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{ProposedBody: "guard v2 edited"}); err != nil {
+				t.Fatalf("edit guardrail body only: %v", err)
+			}
 		case item.AssetType == "guardrail" && item.Operation == store.ProposalBundleOperationCreateNew:
 			if item.ProposedDescription != "new guardrail description" || item.ProposedEnabled || item.ProposedPosition != 42 {
 				t.Fatalf("guardrail metadata = (%q, %t, %d), want structured metadata", item.ProposedDescription, item.ProposedEnabled, item.ProposedPosition)
 			}
 			if _, err := store.UpdateSelfImprovementProposalBundleItem(db, bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{
-				ProposedRef: "guardrail_bundle_new_edited", ProposedName: "bundle-new-guardrail-edited", ProposedScope: "workspace",
-				ProposedBody: "new guardrail edited", ProposedDescription: "edited guardrail description",
-				ProposedEnabled: true, ProposedPosition: 7,
+				ProposedRef: stringPtr("guardrail_bundle_new_edited"), ProposedName: stringPtr("bundle-new-guardrail-edited"), ProposedScope: stringPtr("workspace"),
+				ProposedBody: "new guardrail edited", ProposedDescription: stringPtr("edited guardrail description"),
+				ProposedEnabled: boolPtr(true), ProposedPosition: intPtr(7),
 			}); err != nil {
 				t.Fatalf("edit guardrail create item: %v", err)
 			}
@@ -706,8 +725,12 @@ func TestSelfImprovementProposalBundleStagesAndPublishesAtomically(t *testing.T)
 	if gotSkill := skillPromptForTest(t, db, "bundle-skill"); gotSkill != "skill v2" {
 		t.Fatalf("skill prompt = %q, want skill v2", gotSkill)
 	}
-	if gotGuard := guardrailContentForTest(t, db, "bundle-guardrail"); gotGuard != "guard v2" {
-		t.Fatalf("guardrail content = %q, want guard v2", gotGuard)
+	gotGuard, err := store.GetGuardrail(db, "bundle-guardrail")
+	if err != nil {
+		t.Fatalf("read guardrail: %v", err)
+	}
+	if gotGuard.Description != "guard desc v2" || gotGuard.Content != "guard v2 edited" || gotGuard.Enabled || gotGuard.Position != 11 {
+		t.Fatalf("guardrail = %+v, want edited metadata", gotGuard)
 	}
 	if gotNew := skillPromptForTest(t, db, "skill_bundle_new"); gotNew != "new skill" {
 		t.Fatalf("new skill prompt = %q, want new skill", gotNew)

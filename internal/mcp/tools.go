@@ -325,9 +325,9 @@ func registerTools(srv *server.MCPServer, deps Deps) {
 				mcpgo.WithString("proposed_ref", mcpgo.Description("Edited ref for create-new items.")),
 				mcpgo.WithString("proposed_name", mcpgo.Description("Edited display name for create-new items.")),
 				mcpgo.WithString("proposed_scope", mcpgo.Description("Edited scope for create-new items.")),
-				mcpgo.WithString("proposed_description", mcpgo.Description("Edited description for create-new guardrail items.")),
-				mcpgo.WithBoolean("proposed_enabled", mcpgo.Description("Edited enabled flag for create-new guardrail items.")),
-				mcpgo.WithNumber("proposed_position", mcpgo.Description("Edited render position for create-new guardrail items.")),
+				mcpgo.WithString("proposed_description", mcpgo.Description("Edited description for guardrail items.")),
+				mcpgo.WithBoolean("proposed_enabled", mcpgo.Description("Edited enabled flag for guardrail items.")),
+				mcpgo.WithNumber("proposed_position", mcpgo.Description("Edited render position for guardrail items.")),
 			),
 			toolEditImprovementProposalBundleItem(deps),
 		)

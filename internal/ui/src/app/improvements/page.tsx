@@ -195,6 +195,16 @@ function bundleItemDraft(item: ProposalBundleItem, drafts: Record<string, Bundle
   }
 }
 
+function bundleItemDraftBody(item: ProposalBundleItem, draft: BundleItemDraft) {
+  if (item.asset_type !== 'guardrail') return draft.proposed_body
+  return [
+    draft.proposed_description ? `description: ${draft.proposed_description}` : '',
+    draft.proposed_body,
+    `enabled: ${draft.proposed_enabled ? 'true' : 'false'}`,
+    `position: ${draft.proposed_position}`,
+  ].filter(Boolean).join('\n')
+}
+
 export default function ImprovementsPage() {
   const { workspace } = useSelectedWorkspace()
   const [feedback, setFeedback] = useState<FeedbackEvent[]>([])
@@ -452,7 +462,7 @@ export default function ImprovementsPage() {
                               <input aria-label={`Bundle item scope for ${item.id}`} value={draft.proposed_scope} onChange={e => updateDraft({ proposed_scope: e.target.value })} style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: 7, font: 'inherit', fontSize: '0.78rem' }} />
                             </div>
                           )}
-                          {item.operation === 'create_new' && item.asset_type === 'guardrail' && (
+                          {item.asset_type === 'guardrail' && (
                             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) 90px 110px', gap: 6, alignItems: 'center' }}>
                               <input aria-label={`Bundle item guardrail description for ${item.id}`} value={draft.proposed_description} onChange={e => updateDraft({ proposed_description: e.target.value })} style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: 7, font: 'inherit', fontSize: '0.78rem' }} />
                               <label style={{ display: 'flex', gap: 6, alignItems: 'center', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
@@ -469,7 +479,7 @@ export default function ImprovementsPage() {
                             style={{ resize: 'vertical', minHeight: 120, background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: 6, padding: 8, font: 'inherit', fontSize: '0.78rem', lineHeight: 1.45 }}
                           />
                           <pre aria-label={`Bundle item diff for ${item.id}`} style={{ margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 240, overflow: 'auto', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 6, padding: 8, fontSize: '0.74rem', lineHeight: 1.45 }}>
-                            {diffLines(versionBody(item.asset_type, item.base_version), draft.proposed_body).map((line, i) => (
+                            {diffLines(versionBody(item.asset_type, item.base_version), bundleItemDraftBody(item, draft)).map((line, i) => (
                               <span key={`${i}-${line.kind}`} style={{ display: 'block', color: line.kind === 'add' ? 'var(--success)' : line.kind === 'del' ? 'var(--text-danger)' : 'var(--text-muted)' }}>{line.text || ' '}</span>
                             ))}
                           </pre>

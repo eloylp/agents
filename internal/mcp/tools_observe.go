@@ -280,22 +280,35 @@ func toolEditImprovementProposalBundleItem(deps Deps) server.ToolHandlerFunc {
 		if !ok {
 			return mcpgo.NewToolResultError("proposed_body is required"), nil
 		}
-		ref, _ := trimmedStringOptional(req, "proposed_ref")
-		name, _ := trimmedStringOptional(req, "proposed_name")
-		scope, _ := trimmedStringOptional(req, "proposed_scope")
-		description, _ := trimmedStringOptional(req, "proposed_description")
-		enabled := true
-		if v, err := req.RequireBool("proposed_enabled"); err == nil {
-			enabled = v
+		args := req.GetArguments()
+		update := store.SelfImprovementBundleItemUpdate{ProposedBody: body}
+		if v, ok := stringPtrArg(args, "proposed_ref"); ok {
+			next := strings.TrimSpace(*v)
+			update.ProposedRef = &next
 		}
-		var position int
-		if v, err := req.RequireFloat("proposed_position"); err == nil {
-			position = int(v)
+		if v, ok := stringPtrArg(args, "proposed_name"); ok {
+			next := strings.TrimSpace(*v)
+			update.ProposedName = &next
 		}
-		bundle, err := deps.Store.UpdateSelfImprovementProposalBundleItem(bundleID, itemID, store.SelfImprovementBundleItemUpdate{
-			ProposedRef: ref, ProposedName: name, ProposedScope: scope, ProposedBody: body,
-			ProposedDescription: description, ProposedEnabled: enabled, ProposedPosition: position,
-		})
+		if v, ok := stringPtrArg(args, "proposed_scope"); ok {
+			next := strings.TrimSpace(*v)
+			update.ProposedScope = &next
+		}
+		if v, ok := stringPtrArg(args, "proposed_description"); ok {
+			next := strings.TrimSpace(*v)
+			update.ProposedDescription = &next
+		}
+		if v, _, errMsg := boolPtrArg(args, "proposed_enabled"); errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		} else {
+			update.ProposedEnabled = v
+		}
+		if v, _, errMsg := intPtrArg(args, "proposed_position"); errMsg != "" {
+			return mcpgo.NewToolResultError(errMsg), nil
+		} else {
+			update.ProposedPosition = v
+		}
+		bundle, err := deps.Store.UpdateSelfImprovementProposalBundleItem(bundleID, itemID, update)
 		if err != nil {
 			return mcpgo.NewToolResultErrorFromErr("edit improvement proposal bundle item", err), nil
 		}

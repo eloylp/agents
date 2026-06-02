@@ -82,13 +82,13 @@ type SelfImprovementBundleItemInput struct {
 }
 
 type SelfImprovementBundleItemUpdate struct {
-	ProposedRef         string `json:"proposed_ref"`
-	ProposedName        string `json:"proposed_name"`
-	ProposedScope       string `json:"proposed_scope"`
-	ProposedBody        string `json:"proposed_body"`
-	ProposedDescription string `json:"proposed_description"`
-	ProposedEnabled     bool   `json:"proposed_enabled"`
-	ProposedPosition    int    `json:"proposed_position"`
+	ProposedRef         *string `json:"proposed_ref"`
+	ProposedName        *string `json:"proposed_name"`
+	ProposedScope       *string `json:"proposed_scope"`
+	ProposedBody        string  `json:"proposed_body"`
+	ProposedDescription *string `json:"proposed_description"`
+	ProposedEnabled     *bool   `json:"proposed_enabled"`
+	ProposedPosition    *int    `json:"proposed_position"`
 }
 
 func (s *Store) CreateSelfImprovementProposalBundle(id string) (SelfImprovementProposalBundle, error) {
@@ -158,6 +158,10 @@ func CreateSelfImprovementProposalBundle(db *sql.DB, id string) (SelfImprovement
 		if err := validateBundleItemForCreate(tx, item); err != nil {
 			return SelfImprovementProposalBundle{}, err
 		}
+		item, err = hydrateBundleItemMetadata(tx, item)
+		if err != nil {
+			return SelfImprovementProposalBundle{}, err
+		}
 		if _, err := tx.Exec(`
 			INSERT INTO self_improvement_proposal_bundle_items (
 				id, bundle_id, operation, asset_type, asset_id, base_version_id, proposed_ref, proposed_name,
@@ -219,14 +223,29 @@ func UpdateSelfImprovementProposalBundleItem(db *sql.DB, bundleID, itemID string
 	if body == "" {
 		return SelfImprovementProposalBundle{}, &ErrValidation{Msg: "proposal bundle item body is required"}
 	}
-	ref, name, scope := strings.TrimSpace(in.ProposedRef), strings.TrimSpace(in.ProposedName), strings.TrimSpace(in.ProposedScope)
+	ref, name, scope := item.ProposedRef, item.ProposedName, item.ProposedScope
 	description, enabled, position := item.ProposedDescription, item.ProposedEnabled, item.ProposedPosition
-	if item.Operation != ProposalBundleOperationCreateNew {
-		ref, name, scope = item.ProposedRef, item.ProposedName, item.ProposedScope
-	} else if item.AssetType == "guardrail" {
-		description = strings.TrimSpace(in.ProposedDescription)
-		enabled = in.ProposedEnabled
-		position = normalizedBundlePosition(in.ProposedPosition)
+	if item.Operation == ProposalBundleOperationCreateNew {
+		if in.ProposedRef != nil {
+			ref = strings.TrimSpace(*in.ProposedRef)
+		}
+		if in.ProposedName != nil {
+			name = strings.TrimSpace(*in.ProposedName)
+		}
+		if in.ProposedScope != nil {
+			scope = strings.TrimSpace(*in.ProposedScope)
+		}
+	}
+	if item.AssetType == "guardrail" {
+		if in.ProposedDescription != nil {
+			description = strings.TrimSpace(*in.ProposedDescription)
+		}
+		if in.ProposedEnabled != nil {
+			enabled = *in.ProposedEnabled
+		}
+		if in.ProposedPosition != nil {
+			position = normalizedBundlePosition(*in.ProposedPosition)
+		}
 	}
 	if item.Operation == ProposalBundleOperationCreateNew {
 		if err := validateBundleCreateNew(SelfImprovementBundleItemInput{
@@ -437,6 +456,26 @@ func validateBundleCreateNew(item SelfImprovementBundleItemInput) error {
 	return nil
 }
 
+func hydrateBundleItemMetadata(q querier, item SelfImprovementBundleItemInput) (SelfImprovementBundleItemInput, error) {
+	if item.AssetType != "guardrail" || item.Operation != ProposalBundleOperationUpdateExisting {
+		return item, nil
+	}
+	guardrail, err := GetGuardrailFrom(q, item.AssetID)
+	if err != nil {
+		return item, err
+	}
+	if strings.TrimSpace(item.ProposedDescription) == "" {
+		item.ProposedDescription = guardrail.Description
+	}
+	if item.ProposedEnabled == nil {
+		item.ProposedEnabled = &guardrail.Enabled
+	}
+	if item.ProposedPosition == 0 {
+		item.ProposedPosition = guardrail.Position
+	}
+	return item, nil
+}
+
 func listSelfImprovementProposalBundleItems(db *sql.DB, bundleID string) ([]SelfImprovementBundleItem, error) {
 	rows, err := db.Query(`
 		SELECT id, bundle_id, operation, asset_type, asset_id, base_version_id, proposed_ref, proposed_name,
@@ -572,7 +611,10 @@ func publishBundleUpdateExisting(tx *sql.Tx, item SelfImprovementBundleItem, met
 		if err != nil {
 			return "", err
 		}
+		guardrail.Description = item.ProposedDescription
 		guardrail.Content = item.ProposedBody
+		guardrail.Enabled = item.ProposedEnabled
+		guardrail.Position = normalizedBundlePosition(item.ProposedPosition)
 		version, err = CreateGuardrailDraftTx(tx, guardrail.ID, guardrail, meta)
 	default:
 		return "", &ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", item.AssetType)}
