@@ -302,9 +302,6 @@ func PublishSelfImprovementProposalBundle(db *sql.DB, bundleID string) (SelfImpr
 		case ProposalBundleDecisionRejected:
 			continue
 		case ProposalBundleDecisionLinkedExisting:
-			if _, err := tx.Exec(`UPDATE self_improvement_proposal_bundle_items SET decision=?, updated_at=datetime('now') WHERE id=?`, ProposalBundleDecisionPublished, item.ID); err != nil {
-				return SelfImprovementProposalBundle{}, err
-			}
 			continue
 		case ProposalBundleDecisionAccepted, ProposalBundleDecisionPending:
 		default:

@@ -742,6 +742,22 @@ func TestSelfImprovementProposalBundleStagesAndPublishesAtomically(t *testing.T)
 	if gotNewGuard.Description != "edited guardrail description" || gotNewGuard.Content != "new guardrail edited" || !gotNewGuard.Enabled || gotNewGuard.Position != 7 {
 		t.Fatalf("new guardrail = %+v, want edited metadata", gotNewGuard)
 	}
+	var linkedItem store.SelfImprovementBundleItem
+	for _, item := range published.Items {
+		if item.ProposedRef == "skill_bundle_link" {
+			linkedItem = item
+			break
+		}
+	}
+	if linkedItem.ID == "" {
+		t.Fatal("linked bundle item not found after publish")
+	}
+	if linkedItem.Decision != store.ProposalBundleDecisionLinkedExisting || linkedItem.AssetID != "existing-skill-link" || linkedItem.DecisionReason != "already exists" {
+		t.Fatalf("linked item = decision %q asset %q reason %q, want linked_existing decision evidence", linkedItem.Decision, linkedItem.AssetID, linkedItem.DecisionReason)
+	}
+	if linkedItem.PublishedVersionID != "" {
+		t.Fatalf("linked item published version = %q, want none", linkedItem.PublishedVersionID)
+	}
 }
 
 func TestSelfImprovementProposalBundlePublishRollsBackOnStaleItem(t *testing.T) {
