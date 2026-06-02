@@ -98,6 +98,9 @@ For agent lifecycle changes, use `create_agent` when adding a new agent or inten
 | `analyze_improvement_feedback` | Manually create or refresh the recommendation for one feedback event. |
 | `update_improvement_recommendation_status` | Accept, reject, defer, mark duplicate, or otherwise update recommendation status without publishing catalog changes. |
 | `clarify_improvement_recommendation` | Replace the editable maintainer clarification for a recommendation and enqueue a fresh self-improvement analysis run. |
+| `create_improvement_proposal` | Create an inert catalog proposal version from an accepted recommendation. |
+| `get_improvement_proposal` | Fetch proposal versions linked to one recommendation. |
+| `list_improvement_recommendations_with_proposals` | List recommendations that already have linked proposal versions. |
 | `list_traces` | Recent agent run spans with timing, summary, and token usage (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `prompt_size`). The composed prompt body is fetched separately via the `/traces/{span_id}/prompt` REST endpoint, not an MCP tool, since it can be many KB. |
 | `get_trace` | Full dispatch chain by root event ID. |
 | `get_trace_steps` | Tool-loop transcript for one span. |

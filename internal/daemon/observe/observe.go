@@ -89,6 +89,8 @@ func (h *Handler) RegisterRoutes(r *mux.Router, withTimeout func(http.Handler) h
 	r.Handle("/improvements/recommendations/{id}", withTimeout(http.HandlerFunc(h.HandleImprovementRecommendation))).Methods(http.MethodGet)
 	r.Handle("/improvements/recommendations/{id}/status", withTimeout(http.HandlerFunc(h.HandleUpdateImprovementRecommendationStatus))).Methods(http.MethodPost, http.MethodPatch)
 	r.Handle("/improvements/recommendations/{id}/clarification", withTimeout(http.HandlerFunc(h.HandleClarifyImprovementRecommendation))).Methods(http.MethodPost, http.MethodPatch)
+	r.Handle("/improvements/recommendations/{id}/proposal", withTimeout(http.HandlerFunc(h.HandleCreateImprovementProposal))).Methods(http.MethodPost)
+	r.Handle("/improvements/recommendations/{id}/proposal", withTimeout(http.HandlerFunc(h.HandleImprovementProposal))).Methods(http.MethodGet)
 	r.Handle("/improvements/feedback/{id:[0-9]+}/analyze", withTimeout(http.HandlerFunc(h.HandleAnalyzeImprovementFeedback))).Methods(http.MethodPost)
 }
 
@@ -273,6 +275,29 @@ func (h *Handler) HandleClarifyImprovementRecommendation(w http.ResponseWriter, 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(rec)
+}
+
+func (h *Handler) HandleCreateImprovementProposal(w http.ResponseWriter, r *http.Request) {
+	proposal, err := h.store.CreateSelfImprovementProposal(mux.Vars(r)["id"])
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(proposal)
+}
+
+func (h *Handler) HandleImprovementProposal(w http.ResponseWriter, r *http.Request) {
+	proposals, err := h.store.ListSelfImprovementProposals(mux.Vars(r)["id"])
+	if err != nil {
+		h.writeStoreError(w, err)
+		return
+	}
+	if proposals == nil {
+		proposals = []store.SelfImprovementProposal{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(proposals)
 }
 
 func clarificationImprovementEvent(rec store.SelfImprovementRecommendation) workflow.Event {

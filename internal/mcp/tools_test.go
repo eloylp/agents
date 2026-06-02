@@ -226,6 +226,112 @@ func textOf(t *testing.T, res *mcpgo.CallToolResult) string {
 	return tc.Text
 }
 
+func TestToolImprovementProposalLifecycle(t *testing.T) {
+	t.Parallel()
+	deps := testFixture(t)
+	prompt, err := deps.Store.UpsertPrompt(fleet.Prompt{Name: "proposal-target", Description: "target desc", Content: "body v1"})
+	if err != nil {
+		t.Fatalf("seed prompt: %v", err)
+	}
+	feedback, err := deps.Store.UpsertSelfImprovementFeedback(store.SelfImprovementFeedbackInput{
+		WorkspaceID:      fleet.DefaultWorkspaceID,
+		RepoOwner:        "owner",
+		RepoName:         "one",
+		SourceType:       "issue_comment",
+		GitHubCommentID:  669001,
+		SourceURL:        "https://github.com/owner/one/issues/1#issuecomment-1",
+		AuthorLogin:      "maintainer",
+		AuthorAuthorized: true,
+		IssueNumber:      1,
+		RawBody:          "Please improve this prompt /agents improve",
+		Tag:              store.FeedbackTag,
+		LinkConfidence:   "exact",
+		Status:           store.FeedbackStatusNew,
+	})
+	if err != nil {
+		t.Fatalf("seed feedback: %v", err)
+	}
+	rec, err := deps.Store.UpsertSelfImprovementRecommendation(store.SelfImprovementRecommendationInput{
+		WorkspaceID:           fleet.DefaultWorkspaceID,
+		FeedbackEventID:       feedback.ID,
+		Type:                  "prompt_guidance",
+		Status:                store.RecommendationStatusAccepted,
+		Finding:               "tighten prompt guidance",
+		NormalizedLesson:      "Keep guidance concrete.",
+		Rationale:             "Feedback asked for a concrete prompt update.",
+		TargetAssetType:       "prompt",
+		TargetAssetID:         prompt.ID,
+		TargetBaseVersionID:   prompt.VersionID,
+		ProposedNewBody:       "body v2",
+		AnalyzerPromptRef:     "prompt_self-improvement-analyst",
+		StructuredOutput:      map[string]any{"status": "recommended"},
+		AttributionConfidence: "exact",
+	})
+	if err != nil {
+		t.Fatalf("seed recommendation: %v", err)
+	}
+
+	createReq := mcpgo.CallToolRequest{}
+	createReq.Params.Arguments = map[string]any{"recommendation_id": rec.ID}
+	res, err := toolCreateImprovementProposal(deps)(context.Background(), createReq)
+	if err != nil {
+		t.Fatalf("create proposal: %v", err)
+	}
+	var proposal map[string]any
+	decodeText(t, res, &proposal)
+	version, ok := proposal["version"].(map[string]any)
+	if !ok {
+		t.Fatalf("proposal version missing: %+v", proposal)
+	}
+	if proposal["recommendation_id"] != rec.ID || proposal["target_asset_type"] != "prompt" || proposal["target_asset_id"] != prompt.ID {
+		t.Fatalf("proposal linkage = %+v, want rec %s prompt %s", proposal, rec.ID, prompt.ID)
+	}
+	if version["state"] != "proposal" || version["source_type"] != "feedback_recommendation" || version["source_ref"] != rec.ID {
+		t.Fatalf("proposal version metadata = %+v, want inert recommendation proposal", version)
+	}
+	if version["base_version_id"] != prompt.VersionID {
+		t.Fatalf("proposal version base = %+v, want %s", version, prompt.VersionID)
+	}
+
+	getReq := mcpgo.CallToolRequest{}
+	getReq.Params.Arguments = map[string]any{"recommendation_id": rec.ID}
+	res, err = toolGetImprovementProposal(deps)(context.Background(), getReq)
+	if err != nil {
+		t.Fatalf("get proposal: %v", err)
+	}
+	var proposals []map[string]any
+	decodeText(t, res, &proposals)
+	if len(proposals) != 1 {
+		t.Fatalf("proposals len = %d, want 1: %+v", len(proposals), proposals)
+	}
+	base, ok := proposals[0]["base_version"].(map[string]any)
+	if !ok {
+		t.Fatalf("proposal base version missing: %+v", proposals[0])
+	}
+	if base["id"] != prompt.VersionID || base["content"] != "body v1" {
+		t.Fatalf("proposal base version = %+v, want %s body v1", base, prompt.VersionID)
+	}
+	fetchedVersion, ok := proposals[0]["version"].(map[string]any)
+	if !ok {
+		t.Fatalf("proposal version missing from fetched proposal: %+v", proposals[0])
+	}
+	if fetchedVersion["content"] != "body v2" {
+		t.Fatalf("fetched proposal version = %+v, want body v2", fetchedVersion)
+	}
+
+	listReq := mcpgo.CallToolRequest{}
+	listReq.Params.Arguments = map[string]any{"workspace": fleet.DefaultWorkspaceID}
+	res, err = toolListImprovementRecommendationsWithProposals(deps)(context.Background(), listReq)
+	if err != nil {
+		t.Fatalf("list recommendations with proposals: %v", err)
+	}
+	var linked []map[string]any
+	decodeText(t, res, &linked)
+	if len(linked) != 1 || linked[0]["id"] != rec.ID {
+		t.Fatalf("linked recommendations = %+v, want %s", linked, rec.ID)
+	}
+}
+
 func TestToolListAgents(t *testing.T) {
 	t.Parallel()
 	deps := testFixture(t)
