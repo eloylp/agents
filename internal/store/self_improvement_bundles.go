@@ -957,7 +957,7 @@ func validateBundleScope(q querier, raw, currentWorkspace string) error {
 	if len(strings.Split(raw, "/")) != 3 || repo == "" {
 		return &ErrValidation{Msg: fmt.Sprintf("proposal bundle repo scope %q is invalid", raw)}
 	}
-	if err := q.QueryRow(`SELECT EXISTS(SELECT 1 FROM repos WHERE name=?)`, repo).Scan(&exists); err != nil {
+	if err := q.QueryRow(`SELECT EXISTS(SELECT 1 FROM repos WHERE workspace_id=? AND name=?)`, workspace, repo).Scan(&exists); err != nil {
 		return fmt.Errorf("store: validate proposal bundle scope repo: %w", err)
 	}
 	if !exists {

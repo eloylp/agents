@@ -867,8 +867,14 @@ func TestSelfImprovementProposalBundleSnapshotAuditAndScopeValidation(t *testing
 	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
 		t.Fatalf("UpsertWorkspace: %v", err)
 	}
-	if err := store.UpsertRepo(db, fleet.Repo{Name: "owner/repo", Enabled: true}); err != nil {
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-b", Name: "Team B"}); err != nil {
+		t.Fatalf("UpsertWorkspace team-b: %v", err)
+	}
+	if err := store.UpsertRepo(db, fleet.Repo{WorkspaceID: "team-a", Name: "owner/repo", Enabled: true}); err != nil {
 		t.Fatalf("UpsertRepo: %v", err)
+	}
+	if err := store.UpsertRepo(db, fleet.Repo{WorkspaceID: "team-b", Name: "owner/other", Enabled: true}); err != nil {
+		t.Fatalf("UpsertRepo team-b: %v", err)
 	}
 	feedback, err := store.UpsertSelfImprovementFeedback(db, store.SelfImprovementFeedbackInput{
 		WorkspaceID:      "team-a",
@@ -917,6 +923,12 @@ func TestSelfImprovementProposalBundleSnapshotAuditAndScopeValidation(t *testing
 		ProposedBody:  "repo prompt body",
 	}, "dashboard"); err == nil || !strings.Contains(err.Error(), "workspace") {
 		t.Fatalf("UpdateSelfImprovementProposalBundleItem invalid scope error = %v, want workspace validation", err)
+	}
+	if _, err := store.UpdateSelfImprovementProposalBundleItemWithActor(db, bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{
+		ProposedScope: stringPtr("team-a/owner/other"),
+		ProposedBody:  "repo prompt body",
+	}, "dashboard"); err == nil || !strings.Contains(err.Error(), "repo") {
+		t.Fatalf("UpdateSelfImprovementProposalBundleItem cross-workspace repo scope error = %v, want repo validation", err)
 	}
 	edited, err := store.UpdateSelfImprovementProposalBundleItemWithActor(db, bundle.ID, item.ID, store.SelfImprovementBundleItemUpdate{
 		ProposedScope: stringPtr("team-a/owner/repo"),
