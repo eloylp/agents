@@ -802,6 +802,65 @@ func TestSelfImprovementProposalBundlePublishRollsBackOnStaleItem(t *testing.T) 
 	}
 }
 
+func TestSelfImprovementProposalBundleCreateNewUsesBundleWorkspaceAndProvenance(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	if _, err := store.UpsertWorkspace(db, fleet.Workspace{ID: "team-a", Name: "Team A"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+	feedback, err := store.UpsertSelfImprovementFeedback(db, store.SelfImprovementFeedbackInput{
+		WorkspaceID: "team-a", RepoOwner: "owner", RepoName: "repo", SourceType: "issue_comment",
+		GitHubCommentID: 683003, AuthorLogin: "maintainer", AuthorAuthorized: true, RawBody: "create scoped prompt /agents improve", Tag: store.FeedbackTag,
+	})
+	if err != nil {
+		t.Fatalf("seed feedback: %v", err)
+	}
+	rec, err := store.UpsertSelfImprovementRecommendation(db, store.SelfImprovementRecommendationInput{
+		WorkspaceID: fleet.NormalizeWorkspaceID("team-a"), FeedbackEventID: feedback.ID, Type: "catalog_patch_bundle", Status: store.RecommendationStatusAccepted,
+		Finding: "create a workspace scoped prompt", Rationale: "team-a needs local guidance", AnalyzerPromptRef: "prompt_self-improvement-analyst",
+		StructuredOutput: map[string]any{"changes": []map[string]any{{
+			"operation": "create_new", "asset_type": "prompt", "proposed_ref": "prompt_team_bundle_new",
+			"proposed_name": "team bundle prompt", "proposed_scope": "workspace", "proposed_body": "team prompt body",
+			"rationale": "team-a needs local guidance",
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("seed recommendation: %v", err)
+	}
+	bundle, err := store.CreateSelfImprovementProposalBundle(db, rec.ID)
+	if err != nil {
+		t.Fatalf("CreateSelfImprovementProposalBundle: %v", err)
+	}
+	published, err := store.PublishSelfImprovementProposalBundle(db, bundle.ID)
+	if err != nil {
+		t.Fatalf("PublishSelfImprovementProposalBundle: %v", err)
+	}
+	item := bundleItemByMatch(t, published, func(item store.SelfImprovementBundleItem) bool {
+		return item.ProposedRef == "prompt_team_bundle_new"
+	})
+	got, err := store.ReadPrompt(db, "prompt_team_bundle_new")
+	if err != nil {
+		t.Fatalf("ReadPrompt: %v", err)
+	}
+	if got.WorkspaceID != "team-a" || got.Repo != "" || got.Content != "team prompt body" {
+		t.Fatalf("created prompt = %+v, want team-a workspace scoped prompt", got)
+	}
+	versions, err := store.ListPromptVersionSnapshots(db, got.ID)
+	if err != nil {
+		t.Fatalf("ListPromptVersionSnapshots: %v", err)
+	}
+	if len(versions) != 1 {
+		t.Fatalf("prompt version count = %d, want 1", len(versions))
+	}
+	version := versions[0]
+	if item.PublishedVersionID != version.ID {
+		t.Fatalf("published version id = %q, want %q", item.PublishedVersionID, version.ID)
+	}
+	if version.SourceType != "feedback_recommendation" || version.SourceRef != rec.ID || version.Author != "agents-assistant" || version.Changelog != "team-a needs local guidance" {
+		t.Fatalf("prompt version metadata = %+v, want bundle recommendation provenance", version)
+	}
+}
+
 func currentCatalogVersionForTest(t *testing.T, db *sql.DB, table, ref string) string {
 	t.Helper()
 	var id string
@@ -809,6 +868,17 @@ func currentCatalogVersionForTest(t *testing.T, db *sql.DB, table, ref string) s
 		t.Fatalf("current version for %s/%s: %v", table, ref, err)
 	}
 	return id
+}
+
+func bundleItemByMatch(t *testing.T, bundle store.SelfImprovementProposalBundle, match func(store.SelfImprovementBundleItem) bool) store.SelfImprovementBundleItem {
+	t.Helper()
+	for _, item := range bundle.Items {
+		if match(item) {
+			return item
+		}
+	}
+	t.Fatalf("bundle item not found in %+v", bundle.Items)
+	return store.SelfImprovementBundleItem{}
 }
 
 func countCatalogVersionsForTest(t *testing.T, db *sql.DB) int {

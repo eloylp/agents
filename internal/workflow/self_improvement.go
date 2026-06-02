@@ -36,6 +36,29 @@ const selfImprovementRecommendationSchema = `{
     "target_base_version_id": {"type": "string"},
     "proposed_patch": {"type": "string"},
     "proposed_new_body": {"type": "string"},
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "operation": {"type": "string"},
+          "asset_type": {"type": "string"},
+          "asset_id": {"type": "string"},
+          "base_version_id": {"type": "string"},
+          "proposed_ref": {"type": "string"},
+          "proposed_name": {"type": "string"},
+          "proposed_scope": {"type": "string"},
+          "proposed_body": {"type": "string"},
+          "proposed_description": {"type": "string"},
+          "proposed_enabled": {"type": "boolean"},
+          "proposed_position": {"type": "integer"},
+          "duplicate_risk": {"type": "string"},
+          "rationale": {"type": "string"}
+        },
+        "required": ["operation", "asset_type", "proposed_body"],
+        "additionalProperties": false
+      }
+    },
     "suggested_rollout_scope": {"type": "string"},
     "no_auto_apply_confirmed": {"type": "boolean"}
   },
@@ -44,23 +67,40 @@ const selfImprovementRecommendationSchema = `{
 }`
 
 type selfImprovementOutput struct {
-	Type                  string   `json:"type"`
-	Status                string   `json:"status"`
-	Confidence            string   `json:"confidence"`
-	Risk                  string   `json:"risk"`
-	Finding               string   `json:"finding"`
-	NormalizedLesson      string   `json:"normalized_lesson"`
-	Rationale             string   `json:"rationale"`
-	EvidenceFeedbackIDs   []int64  `json:"evidence_feedback_ids"`
-	EvidenceSourceURLs    []string `json:"evidence_source_urls"`
-	AttributionConfidence string   `json:"attribution_confidence"`
-	TargetAssetType       string   `json:"target_asset_type"`
-	TargetAssetID         string   `json:"target_asset_id"`
-	TargetBaseVersionID   string   `json:"target_base_version_id"`
-	ProposedPatch         string   `json:"proposed_patch"`
-	ProposedNewBody       string   `json:"proposed_new_body"`
-	SuggestedRolloutScope string   `json:"suggested_rollout_scope"`
-	NoAutoApplyConfirmed  bool     `json:"no_auto_apply_confirmed"`
+	Type                  string                        `json:"type"`
+	Status                string                        `json:"status"`
+	Confidence            string                        `json:"confidence"`
+	Risk                  string                        `json:"risk"`
+	Finding               string                        `json:"finding"`
+	NormalizedLesson      string                        `json:"normalized_lesson"`
+	Rationale             string                        `json:"rationale"`
+	EvidenceFeedbackIDs   []int64                       `json:"evidence_feedback_ids"`
+	EvidenceSourceURLs    []string                      `json:"evidence_source_urls"`
+	AttributionConfidence string                        `json:"attribution_confidence"`
+	TargetAssetType       string                        `json:"target_asset_type"`
+	TargetAssetID         string                        `json:"target_asset_id"`
+	TargetBaseVersionID   string                        `json:"target_base_version_id"`
+	ProposedPatch         string                        `json:"proposed_patch"`
+	ProposedNewBody       string                        `json:"proposed_new_body"`
+	Changes               []selfImprovementOutputChange `json:"changes,omitempty"`
+	SuggestedRolloutScope string                        `json:"suggested_rollout_scope"`
+	NoAutoApplyConfirmed  bool                          `json:"no_auto_apply_confirmed"`
+}
+
+type selfImprovementOutputChange struct {
+	Operation           string `json:"operation"`
+	AssetType           string `json:"asset_type"`
+	AssetID             string `json:"asset_id,omitempty"`
+	BaseVersionID       string `json:"base_version_id,omitempty"`
+	ProposedRef         string `json:"proposed_ref,omitempty"`
+	ProposedName        string `json:"proposed_name,omitempty"`
+	ProposedScope       string `json:"proposed_scope,omitempty"`
+	ProposedBody        string `json:"proposed_body"`
+	ProposedDescription string `json:"proposed_description,omitempty"`
+	ProposedEnabled     *bool  `json:"proposed_enabled,omitempty"`
+	ProposedPosition    int    `json:"proposed_position,omitempty"`
+	DuplicateRisk       string `json:"duplicate_risk,omitempty"`
+	Rationale           string `json:"rationale,omitempty"`
 }
 
 type selfImprovementCatalogVersion struct {

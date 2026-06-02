@@ -307,7 +307,7 @@ func PublishSelfImprovementProposalBundle(db *sql.DB, bundleID string) (SelfImpr
 		default:
 			return SelfImprovementProposalBundle{}, &ErrValidation{Msg: fmt.Sprintf("unsupported proposal bundle item decision %q", item.Decision)}
 		}
-		versionID, err := publishBundleCatalogItem(tx, item, bundle.RecommendationID)
+		versionID, err := publishBundleCatalogItem(tx, item, bundle.WorkspaceID, bundle.RecommendationID)
 		if err != nil {
 			return SelfImprovementProposalBundle{}, err
 		}
@@ -562,7 +562,7 @@ func getBundleAndItem(db *sql.DB, bundleID, itemID string) (SelfImprovementPropo
 	return SelfImprovementProposalBundle{}, SelfImprovementBundleItem{}, &ErrNotFound{Msg: fmt.Sprintf("proposal bundle item %q not found", itemID)}
 }
 
-func publishBundleCatalogItem(tx *sql.Tx, item SelfImprovementBundleItem, recommendationID string) (string, error) {
+func publishBundleCatalogItem(tx *sql.Tx, item SelfImprovementBundleItem, workspaceID, recommendationID string) (string, error) {
 	meta := fleet.CatalogVersionMetadata{
 		State:      "draft",
 		SourceType: "feedback_recommendation",
@@ -584,7 +584,7 @@ func publishBundleCatalogItem(tx *sql.Tx, item SelfImprovementBundleItem, recomm
 		}
 		return publishBundleUpdateExisting(tx, item, meta)
 	case ProposalBundleOperationCreateNew:
-		return publishBundleCreateNew(tx, item)
+		return publishBundleCreateNew(tx, item, workspaceID, meta)
 	default:
 		return "", &ErrValidation{Msg: fmt.Sprintf("unsupported proposal bundle operation %q", item.Operation)}
 	}
@@ -630,8 +630,8 @@ func publishBundleUpdateExisting(tx *sql.Tx, item SelfImprovementBundleItem, met
 	return version.ID, err
 }
 
-func publishBundleCreateNew(tx *sql.Tx, item SelfImprovementBundleItem) (string, error) {
-	scope, repo := parseBundleScope(item.ProposedScope)
+func publishBundleCreateNew(tx *sql.Tx, item SelfImprovementBundleItem, workspaceID string, meta fleet.CatalogVersionMetadata) (string, error) {
+	scope, repo := parseBundleScope(item.ProposedScope, workspaceID)
 	if err := ensureBundleCreateNewRefAvailable(tx, item.AssetType, item.ProposedRef); err != nil {
 		return "", err
 	}
@@ -641,6 +641,9 @@ func publishBundleCreateNew(tx *sql.Tx, item SelfImprovementBundleItem) (string,
 		if err != nil {
 			return "", err
 		}
+		if err := updatePublishedCatalogVersionMetadata(tx, "prompt", prompt.VersionID, meta); err != nil {
+			return "", err
+		}
 		return prompt.VersionID, nil
 	case "skill":
 		if err := UpsertSkillTx(tx, item.ProposedRef, fleet.Skill{Name: item.ProposedName, WorkspaceID: scope, Repo: repo, Prompt: item.ProposedBody}); err != nil {
@@ -648,6 +651,9 @@ func publishBundleCreateNew(tx *sql.Tx, item SelfImprovementBundleItem) (string,
 		}
 		skill, err := readSkill(tx, item.ProposedRef)
 		if err != nil {
+			return "", err
+		}
+		if err := updatePublishedCatalogVersionMetadata(tx, "skill", skill.VersionID, meta); err != nil {
 			return "", err
 		}
 		return skill.VersionID, nil
@@ -663,10 +669,47 @@ func publishBundleCreateNew(tx *sql.Tx, item SelfImprovementBundleItem) (string,
 		if err != nil {
 			return "", err
 		}
+		if err := updatePublishedCatalogVersionMetadata(tx, "guardrail", guardrail.VersionID, meta); err != nil {
+			return "", err
+		}
 		return guardrail.VersionID, nil
 	default:
 		return "", &ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", item.AssetType)}
 	}
+}
+
+func updatePublishedCatalogVersionMetadata(tx *sql.Tx, assetType, versionID string, meta fleet.CatalogVersionMetadata) error {
+	meta.State = "proposal"
+	normalized, err := normalizeNewCatalogVersionMetadata(meta, "proposal")
+	if err != nil {
+		return err
+	}
+	var table string
+	switch assetType {
+	case "prompt":
+		table = "prompt_versions"
+	case "skill":
+		table = "skill_versions"
+	case "guardrail":
+		table = "guardrail_versions"
+	default:
+		return &ErrValidation{Msg: fmt.Sprintf("proposal bundle asset type %q is unsupported", assetType)}
+	}
+	res, err := tx.Exec(
+		fmt.Sprintf(`UPDATE %s SET source_type=?, source_ref=?, author=?, changelog=? WHERE id=? AND state='published'`, table),
+		normalized.SourceType, normalized.SourceRef, normalized.Author, normalized.Changelog, versionID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: update proposal bundle create-new version metadata: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: update proposal bundle create-new version metadata: %w", err)
+	}
+	if affected == 0 {
+		return &ErrNotFound{Msg: fmt.Sprintf("%s version %q not found", assetType, versionID)}
+	}
+	return nil
 }
 
 func normalizedBundlePosition(position int) int {
@@ -753,13 +796,13 @@ func readPromptFrom(q querier, ref string) (fleet.Prompt, error) {
 	return p, nil
 }
 
-func parseBundleScope(raw string) (workspace, repo string) {
+func parseBundleScope(raw, currentWorkspace string) (workspace, repo string) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "global" {
 		return "", ""
 	}
 	if raw == "workspace" {
-		return fleet.DefaultWorkspaceID, ""
+		return fleet.NormalizeWorkspaceID(currentWorkspace), ""
 	}
 	parts := strings.Split(raw, "/")
 	if len(parts) >= 3 {
